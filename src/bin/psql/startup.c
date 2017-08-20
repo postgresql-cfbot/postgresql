@@ -161,6 +161,8 @@ main(int argc, char *argv[])
 	EstablishVariableSpace();
 
 	SetVariable(pset.vars, "VERSION", PG_VERSION_STR);
+	SetVariable(pset.vars, "VERSION_NAME", PG_VERSION);
+	SetVariable(pset.vars, "VERSION_NUM", CppAsString2(PG_VERSION_NUM));
 
 	/* Default values for variables (that don't match the result of \unset) */
 	SetVariableBool(pset.vars, "AUTOCOMMIT");

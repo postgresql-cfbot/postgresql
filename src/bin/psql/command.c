@@ -3177,6 +3177,8 @@ checkWin32Codepage(void)
 void
 SyncVariables(void)
 {
+	char vbuf[32];
+
 	/* get stuff from connection */
 	pset.encoding = PQclientEncoding(pset.db);
 	pset.popt.topt.encoding = pset.encoding;
@@ -3187,6 +3189,12 @@ SyncVariables(void)
 	SetVariable(pset.vars, "HOST", PQhost(pset.db));
 	SetVariable(pset.vars, "PORT", PQport(pset.db));
 	SetVariable(pset.vars, "ENCODING", pg_encoding_to_char(pset.encoding));
+
+	/* server version information */
+	SetVariable(pset.vars, "SERVER_VERSION_NAME",
+				formatPGVersionNumber(pset.sversion, true, vbuf, sizeof(vbuf)));
+	snprintf(vbuf, sizeof(vbuf), "%d", pset.sversion);
+	SetVariable(pset.vars, "SERVER_VERSION_NUM", vbuf);
 
 	/* send stuff to it, too */
 	PQsetErrorVerbosity(pset.db, pset.verbosity);
@@ -3206,6 +3214,8 @@ UnsyncVariables(void)
 	SetVariable(pset.vars, "HOST", NULL);
 	SetVariable(pset.vars, "PORT", NULL);
 	SetVariable(pset.vars, "ENCODING", NULL);
+	SetVariable(pset.vars, "SERVER_VERSION_NAME", NULL);
+	SetVariable(pset.vars, "SERVER_VERSION_NUM", NULL);
 }
 
 

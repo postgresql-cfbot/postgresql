@@ -87,6 +87,15 @@ static DestReceiver spi_printtupDR = {
 	DestSPI
 };
 
+/*
+ * This is strictly a starting point for creating a callback. It should not
+ * actually be used.
+ */
+static DestReceiver spi_callbackDR = {
+	donothingReceive, donothingStartup, donothingCleanup, donothingCleanup,
+	DestSPICallback
+};
+
 /* Globally available receiver for DestNone */
 DestReceiver *None_Receiver = &donothingDR;
 
@@ -125,6 +134,9 @@ CreateDestReceiver(CommandDest dest)
 
 		case DestSPI:
 			return &spi_printtupDR;
+
+		case DestSPICallback:
+			return &spi_callbackDR;
 
 		case DestTuplestore:
 			return CreateTuplestoreDestReceiver();
@@ -172,6 +184,7 @@ EndCommand(const char *commandTag, CommandDest dest)
 		case DestNone:
 		case DestDebug:
 		case DestSPI:
+		case DestSPICallback:
 		case DestTuplestore:
 		case DestIntoRel:
 		case DestCopyOut:
@@ -216,6 +229,7 @@ NullCommand(CommandDest dest)
 		case DestNone:
 		case DestDebug:
 		case DestSPI:
+		case DestSPICallback:
 		case DestTuplestore:
 		case DestIntoRel:
 		case DestCopyOut:
@@ -262,6 +276,7 @@ ReadyForQuery(CommandDest dest)
 		case DestNone:
 		case DestDebug:
 		case DestSPI:
+		case DestSPICallback:
 		case DestTuplestore:
 		case DestIntoRel:
 		case DestCopyOut:

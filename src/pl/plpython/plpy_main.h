@@ -25,6 +25,9 @@ typedef struct PLyExecutionContext
 /* Get the current execution context */
 extern PLyExecutionContext *PLy_current_execution_context(void);
 
+/* Switch execution context (similar to MemoryContextSwitchTo */
+extern PLyExecutionContext *PLy_switch_execution_context(PLyExecutionContext *new);
+
 /* Get the scratch memory context for specified execution context */
 extern MemoryContext PLy_get_scratch_context(PLyExecutionContext *context);
 

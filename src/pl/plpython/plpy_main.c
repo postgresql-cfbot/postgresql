@@ -403,6 +403,19 @@ PLy_current_execution_context(void)
 	return PLy_execution_contexts;
 }
 
+PLyExecutionContext *
+PLy_switch_execution_context(PLyExecutionContext *new)
+{
+	PLyExecutionContext *last = PLy_execution_contexts;
+
+	if (PLy_execution_contexts == NULL)
+		elog(ERROR, "no Python function is currently executing");
+
+	PLy_execution_contexts = new;
+
+	return last;
+}
+
 MemoryContext
 PLy_get_scratch_context(PLyExecutionContext *context)
 {

@@ -3456,6 +3456,35 @@ bar
       </varlistentry>
 
       <varlistentry>
+       <term><varname>ERROR</varname></term>
+       <listitem>
+        <para>
+         Whether the last query failed, as a boolean.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>ERROR_CODE</varname></term>
+       <listitem>
+        <para>
+         The error code associated to the last query, or
+         <literal>00000</> if no error occured.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>ERROR_MESSAGE</varname></term>
+       <listitem>
+        <para>
+         If the last query failed, the associated error message,
+         otherwise an empty string.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><varname>FETCH_COUNT</varname></term>
         <listitem>
         <para>
@@ -3657,6 +3686,24 @@ bar
         endterm="APP-PSQL-prompting-title"> below.
         </para>
         </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>STATUS</varname></term>
+       <listitem>
+        <para>
+         Text status of the last query.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><varname>ROW_COUNT</varname></term>
+       <listitem>
+        <para>
+         How many rows were returned or affected by the last query.
+        </para>
+       </listitem>
       </varlistentry>
 
       <varlistentry>

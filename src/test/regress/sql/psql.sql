@@ -526,6 +526,46 @@ select \if false \\ (bogus \else \\ 42 \endif \\ forty_two;
 	\echo 'should print #8-1'
 \endif
 
+-- special result variables
+
+-- 2 rows select
+SELECT 1 AS stuff UNION SELECT 2;
+\if :ERROR
+  \echo 'MUST NOT SHOW'
+\else
+  \echo 'ERROR is FALSE as expected'
+\endif
+\echo 'status:' :STATUS
+\echo 'error code:' :ERROR_CODE
+\echo 'error message:' :ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- syntax error
+SELECT 1 UNION;
+\echo 'status:' :STATUS
+\if :ERROR
+  \echo 'ERROR is TRUE as expected'
+\else
+  \echo 'MUST NOT SHOW'
+\endif
+\echo 'error code:' :ERROR_CODE
+\echo 'error message:' :ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- empty query
+;
+\echo 'status:' :STATUS
+\echo 'error code:' :ERROR_CODE
+\echo 'error message:' :ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- other query error
+DROP TABLE this_table_does_not_exist;
+\echo 'status:' :STATUS
+\echo 'error code:' :ERROR_CODE
+\echo 'error message:' :ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
 -- SHOW_CONTEXT
 
 \set SHOW_CONTEXT never

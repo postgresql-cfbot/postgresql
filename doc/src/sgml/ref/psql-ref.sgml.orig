@@ -3688,6 +3688,18 @@ bar
       </varlistentry>
 
       <varlistentry>
+        <term><varname>SERVER_VERSION_NAME</varname></term>
+        <term><varname>SERVER_VERSION_NUM</varname></term>
+        <listitem>
+        <para>
+        These variables are set when connected to reflects the server's version
+        both in short name (eg "9.6.2", "10.0") and number (eg 90602, 100000).
+        They can be changed or unset.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><varname>SINGLELINE</varname></term>
         <listitem>
         <para>
@@ -3733,10 +3745,13 @@ bar
 
       <varlistentry>
         <term><varname>VERSION</varname></term>
+        <term><varname>VERSION_NAME</varname></term>
+        <term><varname>VERSION_NUM</varname></term>
         <listitem>
         <para>
-        This variable is set at program start-up to
-        reflect <application>psql</>'s version.  It can be changed or unset.
+        These variables are set at program start-up to reflect
+        <application>psql</>'s version in verbose, short name ("10.0")
+        and number (100000).  They can be changed or unset.
         </para>
         </listitem>
       </varlistentry>

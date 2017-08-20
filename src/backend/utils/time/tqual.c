@@ -49,6 +49,9 @@
  *		  visible unless part of interrupted vacuum, used for TOAST
  *	 HeapTupleSatisfiesAny()
  *		  all tuples are visible
+ *	 HeapTupleSatisfiesNonVacuumable()
+ *		  all non-vacuumable tuples are visible, i.e all tuples
+ *		  except known dead tuples
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -1391,6 +1394,24 @@ HeapTupleSatisfiesVacuum(HeapTuple htup, TransactionId OldestXmin,
 	/* Otherwise, it's dead and removable */
 	return HEAPTUPLE_DEAD;
 }
+
+
+/*
+ * HeapTupleSatisfiesNonVacuumable
+ *  False if tuple not visible to any transactionn, i.e. dead.
+ *  True in all other cases.
+ *
+ *  Use result of HeapTupleSatisfiesVacuum and return
+ *  corresponding boolean.
+ */
+bool
+HeapTupleSatisfiesNonVacuumable(HeapTuple htup, Snapshot snapshot,
+				Buffer buffer)
+{
+	return HeapTupleSatisfiesVacuum(htup, snapshot->xmin, buffer)
+			!= HEAPTUPLE_DEAD;
+}
+
 
 /*
  * HeapTupleIsSurelyDead

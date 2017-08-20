@@ -94,6 +94,11 @@ CREATE POLICY <replaceable class="parameter">name</replaceable> ON <replaceable 
    exist, a <quote>default deny</> policy is assumed, so that no rows will
    be visible or updatable.
   </para>
+
+  <para>
+   A summary of the application of policies to a command is found
+   in <xref linkend="SQL-CREATEPOLICY-SUMMARY">.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -389,6 +394,80 @@ CREATE POLICY <replaceable class="parameter">name</replaceable> ON <replaceable 
      </varlistentry>
 
    </variablelist>
+
+   <table id="SQL-CREATEPOLICY-SUMMARY"><title>Policies Applied During Statement</title>
+    <tgroup cols='6'>
+     <colspec colname="pol1">
+     <colspec colname="pol2">
+     <colspec colname="select">
+     <colspec colname="insert">
+     <colspec colname="update">
+     <colspec colname="delete">
+     <thead>
+      <row>
+       <entry namest="pol1" nameend="pol2">Policy</entry>
+       <entry><literal>SELECT</literal></entry>
+       <entry><literal>INSERT</literal></entry>
+       <entry><literal>UPDATE</literal></entry>
+       <entry><literal>DELETE</literal></entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry morerows="1"><literal>FOR ALL ...</literal></entry>
+       <entry><literal>USING</literal></entry>
+       <entry><literal>WHERE</literal> clause</entry>
+       <entry><literal>RETURNING</literal> clause</entry>
+       <entry><literal>WHERE</literal> and <literal>RETURNING</literal> clause</entry>
+       <entry><literal>WHERE</literal> and <literal>RETURNING</literal> clause</entry>
+      </row>
+      <row>
+       <entry><literal>WITH CHECK</literal></entry>
+       <entry></entry>
+       <entry>new tuple</entry>
+       <entry>new tuple</entry>
+       <entry>new tuple</entry>
+      </row>
+      <row>
+       <entry namest="pol1" nameend="pol2"><literal>FOR SELECT ... USING</literal></entry>
+       <entry><literal>WHERE</literal> clause</entry>
+       <entry><literal>RETURNING</literal> clause</entry>
+       <entry><literal>WHERE</literal> and <literal>RETURNING</literal> clause</entry>
+       <entry><literal>WHERE</literal> and <literal>RETURNING</literal> clause</entry>
+      </row>
+      <row>
+       <entry namest="pol1" nameend="pol2"><literal>FOR INSERT ... WITH CHECK</literal></entry>
+       <entry></entry>
+       <entry>new tuple</entry>
+       <entry></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry morerows="1"><literal>FOR UPDATE ...</literal></entry>
+       <entry><literal>USING</literal></entry>
+       <entry></entry>
+       <entry></entry>
+       <entry><literal>WHERE</literal> clause</entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>WITH CHECK</literal></entry>
+       <entry></entry>
+       <entry></entry>
+       <entry>new tuple</entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry namest="pol1" nameend="pol2"><literal>FOR DELETE ... USING</literal></entry>
+       <entry></entry>
+       <entry></entry>
+       <entry></entry>
+       <entry><literal>WHERE</literal> clause</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
   </refsect2>
  </refsect1>
 

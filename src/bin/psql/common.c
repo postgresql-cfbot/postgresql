@@ -492,6 +492,48 @@ ResetCancelConn(void)
 #endif
 }
 
+/*
+ * ResultIsSuccess
+ *
+ * Tell whether query result is a success.
+ */
+static bool
+ResultIsSuccess(const PGresult *result)
+{
+	bool success;
+	if (!result)
+		success = false;
+	else
+	{
+		ExecStatusType	restat = PQresultStatus(result);
+
+		/* check all possible PGRES_ */
+		switch (restat)
+		{
+			case PGRES_EMPTY_QUERY:
+			case PGRES_TUPLES_OK:
+			case PGRES_COMMAND_OK:
+			case PGRES_COPY_OUT:
+			case PGRES_COPY_IN:
+			case PGRES_COPY_BOTH:
+			case PGRES_SINGLE_TUPLE:
+				success = true;
+				break;
+			case PGRES_BAD_RESPONSE:
+			case PGRES_NONFATAL_ERROR:
+			case PGRES_FATAL_ERROR:
+				success = false;
+				break;
+			default:
+				/* dead code */
+				success = false;
+				psql_error("unexpected PQresultStatus: %d\n", restat);
+				break;
+		}
+	}
+
+	return success;
+}
 
 /*
  * AcceptResult
@@ -504,34 +546,7 @@ ResetCancelConn(void)
 static bool
 AcceptResult(const PGresult *result)
 {
-	bool		OK;
-
-	if (!result)
-		OK = false;
-	else
-		switch (PQresultStatus(result))
-		{
-			case PGRES_COMMAND_OK:
-			case PGRES_TUPLES_OK:
-			case PGRES_EMPTY_QUERY:
-			case PGRES_COPY_IN:
-			case PGRES_COPY_OUT:
-				/* Fine, do nothing */
-				OK = true;
-				break;
-
-			case PGRES_BAD_RESPONSE:
-			case PGRES_NONFATAL_ERROR:
-			case PGRES_FATAL_ERROR:
-				OK = false;
-				break;
-
-			default:
-				OK = false;
-				psql_error("unexpected PQresultStatus: %d\n",
-						   PQresultStatus(result));
-				break;
-		}
+	bool		OK = ResultIsSuccess(result);
 
 	if (!OK)
 	{
@@ -1213,6 +1228,38 @@ PrintQueryResults(PGresult *results)
 	return success;
 }
 
+/*
+ * Set special variables for "front door" queries
+ * - STATUS: last query status
+ * - ERROR: TRUE/FALSE, whether an error occurred
+ * - ERROR_CODE: code if an error occured, or "00000"
+ * - ERROR_MESSAGE: message if an error occured, or ""
+ * - ROW_COUNT: how many rows were returned or affected, or "0"
+ */
+static void
+SetResultVariables(PGresult *results)
+{
+	bool			success = ResultIsSuccess(results);
+	ExecStatusType	restat = PQresultStatus(results);
+	char 		   *code = PQresultErrorField(results, PG_DIAG_SQLSTATE);
+	char 		   *mesg = PQresultErrorField(results, PG_DIAG_MESSAGE_PRIMARY);
+
+	SetVariable(pset.vars, "STATUS", PQresStatus(restat) + strlen("PGRES_"));
+	SetVariable(pset.vars, "ERROR_CODE", code ? code : "00000");
+	SetVariable(pset.vars, "ERROR_MESSAGE", mesg ? mesg : "");
+
+	if (success)
+	{
+		char   *ntuples = PQcmdTuples(results);
+		SetVariable(pset.vars, "ROW_COUNT", *ntuples ? ntuples : "0");
+		SetVariable(pset.vars, "ERROR", "FALSE");
+	}
+	else
+	{
+		SetVariable(pset.vars, "ROW_COUNT", "0");
+		SetVariable(pset.vars, "ERROR", "TRUE");
+	}
+}
 
 /*
  * SendQuery: send the query string to the backend
@@ -1345,6 +1392,9 @@ SendQuery(const char *query)
 			INSTR_TIME_SUBTRACT(after, before);
 			elapsed_msec = INSTR_TIME_GET_MILLISEC(after);
 		}
+
+		/* set special variables to reflect the result status */
+		SetResultVariables(results);
 
 		/* but printing results isn't: */
 		if (OK && results)

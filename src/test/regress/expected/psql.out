@@ -2904,6 +2904,69 @@ bar 'bar' "bar"
 	\echo 'should print #8-1'
 should print #8-1
 \endif
+-- special result variables
+-- 2 rows select
+SELECT 1 AS stuff UNION SELECT 2;
+ stuff 
+-------
+     1
+     2
+(2 rows)
+
+\if :ERROR
+  \echo 'MUST NOT SHOW'
+\else
+  \echo 'ERROR is FALSE as expected'
+ERROR is FALSE as expected
+\endif
+\echo 'status:' :STATUS
+status: TUPLES_OK
+\echo 'error code:' :ERROR_CODE
+error code: 00000
+\echo 'error message:' :ERROR_MESSAGE
+error message: 
+\echo 'number of rows:' :ROW_COUNT
+number of rows: 2
+-- syntax error
+SELECT 1 UNION;
+ERROR:  syntax error at or near ";"
+LINE 1: SELECT 1 UNION;
+                      ^
+\echo 'status:' :STATUS
+status: FATAL_ERROR
+\if :ERROR
+  \echo 'ERROR is TRUE as expected'
+ERROR is TRUE as expected
+\else
+  \echo 'MUST NOT SHOW'
+\endif
+\echo 'error code:' :ERROR_CODE
+error code: 42601
+\echo 'error message:' :ERROR_MESSAGE
+error message: syntax error at or near ";"
+\echo 'number of rows:' :ROW_COUNT
+number of rows: 0
+-- empty query
+;
+\echo 'status:' :STATUS
+status: EMPTY_QUERY
+\echo 'error code:' :ERROR_CODE
+error code: 00000
+\echo 'error message:' :ERROR_MESSAGE
+error message: 
+\echo 'number of rows:' :ROW_COUNT
+number of rows: 0
+-- other query error
+DROP TABLE this_table_does_not_exist;
+ERROR:  table "this_table_does_not_exist" does not exist
+\echo 'status:' :STATUS
+status: FATAL_ERROR
+\echo 'error code:' :ERROR_CODE
+error code: 42P01
+\echo 'error message:' :ERROR_MESSAGE
+error message: table "this_table_does_not_exist" does not exist
+\echo 'number of rows:' :ROW_COUNT
+number of rows: 0
 -- SHOW_CONTEXT
 \set SHOW_CONTEXT never
 do $$

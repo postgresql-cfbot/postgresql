@@ -472,12 +472,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 							ListCell   *cell;
 							char	   *name = NULL;
 
-							if (!IsTransactionBlock())
-								ereport(ERROR,
-										(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
-										 /* translator: %s represents an SQL statement name */
-										 errmsg("%s can only be used in transaction blocks",
-					"SAVEPOINT")));
+							RequireTransactionChain(isTopLevel, "SAVEPOINT");
 
 							foreach(cell, stmt->options)
 							{
@@ -494,22 +489,12 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 						break;
 
 					case TRANS_STMT_RELEASE:
-						if (!IsTransactionBlock())
-							ereport(ERROR,
-									(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
-									 /* translator: %s represents an SQL statement name */
-									 errmsg("%s can only be used in transaction blocks",
-											"RELEASE SAVEPOINT")));
+						RequireTransactionChain(isTopLevel, "RELEASE SAVEPOINT");
 						ReleaseSavepoint(stmt->options);
 						break;
 
 					case TRANS_STMT_ROLLBACK_TO:
-						if (!IsTransactionBlock())
-							ereport(ERROR,
-									(errcode(ERRCODE_NO_ACTIVE_SQL_TRANSACTION),
-									 /* translator: %s represents an SQL statement name */
-									 errmsg("%s can only be used in transaction blocks",
-											"ROLLBACK TO SAVEPOINT")));
+						RequireTransactionChain(isTopLevel, "ROLLBACK TO SAVEPOINT");
 						RollbackToSavepoint(stmt->options);
 
 						/*

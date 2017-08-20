@@ -125,8 +125,6 @@ typedef struct RelationData
 	List	   *rd_fkeylist;	/* list of ForeignKeyCacheInfo (see below) */
 	bool		rd_fkeyvalid;	/* true if list has been computed */
 
-	bool        rd_projection;   /* relation contains functional index with non-injective function */
-
 	MemoryContext rd_partkeycxt;	/* private memory cxt for the below */
 	struct PartitionKeyData *rd_partkey;	/* partition key, or NULL */
 	MemoryContext rd_pdcxt;		/* private context for partdesc */

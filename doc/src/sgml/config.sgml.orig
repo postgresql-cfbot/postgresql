@@ -1311,22 +1311,6 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-allow_multiple_queries" xreflabel="allow_multiple_queries">
-      <term><varname>allow_multiple_queries</varname> (<type>boolean</type>)
-      <indexterm>
-       <primary><varname>allow_multiple_queries</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        When this parameter is on, the <productname>PostgreSQL</> server
-        allow multiple SQL commands without being a transaction block in the given string
-        in simple query protocol. setting this parameter off is use for  providing 
-        an additional defense against SQL-injection attacks.
-       </para>
-      </listitem>
-     </varlistentry>
-
     </variablelist>
     </sect2>
    </sect1>

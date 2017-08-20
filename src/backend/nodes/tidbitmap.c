@@ -1395,38 +1395,110 @@ tbm_lossify(TIDBitmap *tbm)
 	Assert(tbm->iterating == TBM_NOT_ITERATING);
 	Assert(tbm->status == TBM_HASH);
 
-	pagetable_start_iterate_at(tbm->pagetable, &i, tbm->lossify_start);
+	pagetable_start_iterate_at(tbm->pagetable, &i, 0);
 	while ((page = pagetable_iterate(tbm->pagetable, &i)) != NULL)
 	{
+		PagetableEntry chunk = {0};
+		BlockNumber chunk_pageno;
+		bitmapword	*words = NULL;
+		int			bitno;
+		int			bitnum;
+		int			wordnum;
+		int			npages;
+
 		if (page->ischunk)
 			continue;			/* already a chunk header */
 
-		/*
-		 * If the page would become a chunk header, we won't save anything by
-		 * converting it to lossy, so skip it.
-		 */
 		if ((page->blockno % PAGES_PER_CHUNK) == 0)
 			continue;
 
-		/* This does the dirty work ... */
-		tbm_mark_page_lossy(tbm, page->blockno);
+		/*
+		 * Find the chunk number in which this page will fall.  Find all the
+		 * pages in pagestable which will fall in the same chunk. if number
+		 * of pages in the chunk will be more than one then lossify all the
+		 * pages of this chunk.
+		 */
+		bitno = page->blockno % PAGES_PER_CHUNK;
+		chunk_pageno = page->blockno - bitno;
 
-		if (tbm->nentries <= tbm->maxentries / 2)
+		page = pagetable_lookup(tbm->pagetable, chunk_pageno);
+		if (page && page->ischunk)
+			words = page->words;
+
+		npages = 0;
+
+		for (bitno = 0; bitno < PAGES_PER_CHUNK; bitno++)
 		{
-			/*
-			 * We have made enough room. Remember where to start lossifying
-			 * next round, so we evenly iterate over the hashtable.
-			 */
-			tbm->lossify_start = i.cur;
-			break;
+			page = pagetable_lookup(tbm->pagetable, chunk_pageno + bitno);
+			if (page != NULL && !page->ischunk)
+			{
+				wordnum = WORDNUM(bitno);
+				bitnum = BITNUM(bitno);
+				chunk.words[wordnum] |= ((bitmapword) 1 << bitnum);
+				if (words)
+					words[wordnum] |= ((bitmapword) 1 << bitnum);
+				npages++;
+			}
 		}
 
-		/*
-		 * Note: tbm_mark_page_lossy may have inserted a lossy chunk into the
-		 * hashtable and may have deleted the non-lossy chunk.  We can
-		 * continue the same hash table scan, since failure to visit one
-		 * element or visiting the newly inserted element, isn't fatal.
-		 */
+		if (npages > 1)
+		{
+			int			schunkbit = 0;
+			bool		found;
+
+			while (npages-- > 0)
+			{
+				tbm_advance_schunkbit(&chunk, &schunkbit);
+				pagetable_delete(tbm->pagetable, chunk_pageno + schunkbit);
+				schunkbit++;
+				tbm->nentries--;
+				tbm->npages--;
+			}
+
+			/* Look up or create entry for chunk-header page */
+			page = pagetable_insert(tbm->pagetable, chunk_pageno, &found);
+
+			/* Initialize it if not present before */
+			if (!found)
+			{
+				char		oldstatus = page->status;
+
+				MemSet(page, 0, sizeof(PagetableEntry));
+
+				/* we assume it had some tuple bit(s) set, so mark it lossy */
+				memcpy(page->words, chunk.words, sizeof(page->words));
+
+				page->status = oldstatus;
+				page->blockno = chunk_pageno;
+				page->ischunk = true;
+
+				/* must count it too */
+				tbm->nentries++;
+				tbm->nchunks++;
+			}
+			else if (!page->ischunk)
+			{
+				char		oldstatus = page->status;
+
+				/* chunk header page was formerly non-lossy, make it lossy */
+				MemSet(page, 0, sizeof(PagetableEntry));
+				page->status = oldstatus;
+				page->blockno = chunk_pageno;
+				page->ischunk = true;
+
+				/* we assume it had some tuple bit(s) set, so mark it lossy */
+				memcpy(page->words, chunk.words, sizeof(page->words));
+				/* adjust counts */
+				tbm->nchunks++;
+				tbm->npages--;
+			}
+
+			if (tbm->nentries <= tbm->maxentries / 2)
+			{
+				/* We have made enough room. */
+				break;
+			}
+		}
 	}
 
 	/*

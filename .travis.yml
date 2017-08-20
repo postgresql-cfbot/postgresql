@@ -1,0 +1,3 @@
+
+language: c
+script: ./configure && make && make check && (cd src/test/isolation && make check)

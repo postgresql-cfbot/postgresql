@@ -10542,7 +10542,8 @@ SELECT xpath_exists('/my:a/text()', '<my:a xmlns:my="http://example.com">test</m
     <para>
      The optional <literal>XMLNAMESPACES</> clause is a comma-separated
      list of namespaces.  It specifies the XML namespaces used in
-     the document and their aliases.
+     the document and their aliases. A default namespace specification
+     is not currently supported.
     </para>
 
     <para>

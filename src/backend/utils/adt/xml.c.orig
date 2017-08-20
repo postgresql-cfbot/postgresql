@@ -90,7 +90,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/xml.h"
-#include "utils/xpath_parser.h"
+
 
 /* GUC variables */
 int			xmlbinary;
@@ -187,7 +187,6 @@ typedef struct XmlTableBuilderData
 	xmlXPathCompExprPtr xpathcomp;
 	xmlXPathObjectPtr xpathobj;
 	xmlXPathCompExprPtr *xpathscomp;
-	bool		with_default_ns;
 } XmlTableBuilderData;
 #endif
 
@@ -4193,7 +4192,6 @@ XmlTableInitOpaque(TableFuncScanState *state, int natts)
 	xtCxt->magic = XMLTABLE_CONTEXT_MAGIC;
 	xtCxt->natts = natts;
 	xtCxt->xpathscomp = palloc0(sizeof(xmlXPathCompExprPtr) * natts);
-	xtCxt->with_default_ns = false;
 
 	xmlerrcxt = pg_xml_init(PG_XML_STRICTNESS_ALL);
 
@@ -4286,8 +4284,6 @@ XmlTableSetDocument(TableFuncScanState *state, Datum value)
 #endif							/* not USE_LIBXML */
 }
 
-#define DEFAULT_NAMESPACE_NAME		"pgdefnamespace"
-
 /*
  * XmlTableSetNamespace
  *		Add a namespace declaration
@@ -4298,13 +4294,11 @@ XmlTableSetNamespace(TableFuncScanState *state, char *name, char *uri)
 #ifdef USE_LIBXML
 	XmlTableBuilderData *xtCxt;
 
-	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableSetNamespace");
-
 	if (name == NULL)
-	{
-		xtCxt->with_default_ns = true;
-		name = DEFAULT_NAMESPACE_NAME;
-	}
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("DEFAULT namespace is not supported")));
+	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableSetNamespace");
 
 	if (xmlXPathRegisterNs(xtCxt->xpathcxt,
 						   pg_xmlCharStrndup(name, strlen(name)),
@@ -4333,14 +4327,6 @@ XmlTableSetRowFilter(TableFuncScanState *state, char *path)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("row path filter must not be empty string")));
-
-	if (xtCxt->with_default_ns)
-	{
-		StringInfoData		str;
-
-		transformXPath(&str, path, DEFAULT_NAMESPACE_NAME);
-		path = str.data;
-	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 
@@ -4372,14 +4358,6 @@ XmlTableSetColumnFilter(TableFuncScanState *state, char *path, int colnum)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("column path filter must not be empty string")));
-
-	if (xtCxt->with_default_ns)
-	{
-		StringInfoData		str;
-
-		transformXPath(&str, path, DEFAULT_NAMESPACE_NAME);
-		path = str.data;
-	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 

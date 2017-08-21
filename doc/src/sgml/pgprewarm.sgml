@@ -10,7 +10,9 @@
  <para>
   The <filename>pg_prewarm</filename> module provides a convenient way
   to load relation data into either the operating system buffer cache
-  or the <productname>PostgreSQL</productname> buffer cache.
+  or the <productname>PostgreSQL</productname> buffer cache. Additionally, an
+  automatic prewarming of the server buffers is supported whenever the server
+  restarts.
  </para>
 
  <sect2>
@@ -55,6 +57,97 @@ pg_prewarm(regclass, mode text default 'buffer', fork text default 'main',
    cache. For these reasons, prewarming is typically most useful at startup,
    when caches are largely empty.
   </para>
+
+<synopsis>
+autoprewarm_start_worker() RETURNS void
+</synopsis>
+
+  <para>
+   This will start the <literal>autoprewarm</literal> worker which will dump
+   shared buffers to disk at the interval specified by
+   <varname>pg_prewarm.autoprewarm_interval</varname>.
+  </para>
+
+<synopsis>
+autoprewarm_dump_now() RETURNS int8
+</synopsis>
+
+  <para>
+   This will immediately dump shared buffers to disk.  The return value is
+   the number of blocks dumped.
+  </para>
+ </sect2>
+
+ <sect2>
+  <title>autoprewarm</title>
+
+  <para>
+  This is a background worker process which will automatically dump shared
+  buffers to disk before a shutdown and then prewarm shared buffers the
+  next time the server is started by loading blocks from disk back into
+  the buffer pool.
+  </para>
+
+  <para>
+  When the shared library <literal>pg_prewarm</literal> is preloaded via
+  <xref linkend="guc-shared-preload-libraries"> in <filename>postgresql.conf</>,
+  an <literal>autoprewarm</literal> background worker is launched immediately
+  after the server has reached a consistent state. The autoprewarm process will
+  start loading blocks recorded in
+  <filename>$PGDATA/autoprewarm.blocks</filename> until there is no free buffer
+  left in the buffer pool. This way we do not replace any new blocks which were
+  loaded either by the recovery process or the querying clients.
+  </para>
+
+  <para>
+  Once the <literal>autoprewarm</literal> process has finished loading buffers
+  from disk, it will periodically dump shared buffers to disk at the inverval
+  specified by <varname>pg_prewarm.autoprewarm_interval</varname>.  Upon the
+  next server restart, the autoprewarm process will prewarm shared buffers with
+  the blocks that were last dumped to disk.
+  </para>
+ </sect2>
+
+ <sect2>
+  <title>Configuration Parameters</title>
+
+ <variablelist>
+   <varlistentry>
+    <term>
+     <varname>pg_prewarm.autoprewarm</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>pg_prewarm.autoprewarm</> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Controls whether the server should run autoprewarm worker. This is on by
+      default. This parameter can only be set in the postgresql.conf file or on
+      the server command line
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <variablelist>
+   <varlistentry>
+   <term>
+     <varname>pg_prewarm.autoprewarm_interval</varname> (<type>int</type>)
+     <indexterm>
+      <primary><varname>pg_prewarm.autoprewarm_interval</> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      This is the minimum number of seconds after which autoprewarm dumps
+      shared buffers to disk. The default is 300 seconds. If set to 0,
+      shared buffers will not be dumped at regular intervals, but only when the
+      server shut down.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
  </sect2>
 
  <sect2>

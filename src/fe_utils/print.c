@@ -2784,6 +2784,52 @@ print_troff_ms_vertical(const printTableContent *cont, FILE *fout)
 }
 
 
+/*************************/
+/* RAW format		 */
+/*************************/
+
+static void
+print_raw_text(const printTableContent *cont, FILE *fout)
+{
+	unsigned int i;
+	const char *const *ptr;
+
+	if (cancel_pressed)
+		return;
+
+	if (cont->opt->column_header)
+	{
+		bool	is_first = true;
+
+		for (ptr = cont->headers; *ptr; ptr++)
+		{
+			if (!is_first)
+				fputc('\t', fout);
+			else
+				is_first = false;
+			fprintf(fout, "%s", *ptr);
+		}
+		fputc('\n', fout);
+	}
+
+	/* print cells */
+	for (i = 0, ptr = cont->cells; *ptr; i++, ptr++)
+	{
+		if (i % cont->ncolumns != 0)
+		{
+			if (cancel_pressed)
+				break;
+			fputc('\t', fout);
+		}
+
+		fprintf(fout, "%s", *ptr);
+
+		if ((i + 1) % cont->ncolumns == 0)
+			fputc('\n', fout);
+	}
+}
+
+
 /********************************/
 /* Public functions				*/
 /********************************/
@@ -3261,6 +3307,10 @@ printTable(const printTableContent *cont,
 				print_troff_ms_vertical(cont, fout);
 			else
 				print_troff_ms_text(cont, fout);
+			break;
+		case PRINT_RAW:
+			/* expanded mode is ignored in this format */
+			print_raw_text(cont, fout);
 			break;
 		default:
 			fprintf(stderr, _("invalid output format (internal error): %d"),

@@ -831,6 +831,12 @@ PrintQueryTuples(const PGresult *results)
 	/* one-shot expanded output requested via \gx */
 	if (pset.g_expanded)
 		my_popt.topt.expanded = 1;
+	else if (pset.g_raw || pset.g_raw_header)
+	{
+		my_popt.topt.format = PRINT_RAW;
+		my_popt.topt.tuples_only = true;
+		my_popt.topt.column_header = pset.g_raw_header;
+	}
 
 	/* write output to \g argument, if any */
 	if (pset.gfname)
@@ -858,6 +864,8 @@ PrintQueryTuples(const PGresult *results)
 
 	return true;
 }
+
+
 
 
 /*
@@ -1509,6 +1517,10 @@ sendquery_cleanup:
 
 	/* reset \gx's expanded-mode flag */
 	pset.g_expanded = false;
+
+	/* reset \graw flags */
+	pset.g_raw = false;
+	pset.g_raw_header = false;
 
 	/* reset \gset trigger */
 	if (pset.gset_prefix)

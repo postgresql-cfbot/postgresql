@@ -33,7 +33,8 @@ enum printFormat
 	PRINT_ASCIIDOC,
 	PRINT_LATEX,
 	PRINT_LATEX_LONGTABLE,
-	PRINT_TROFF_MS
+	PRINT_TROFF_MS,
+	PRINT_RAW
 	/* add your favourite output format here ... */
 };
 
@@ -108,6 +109,7 @@ typedef struct printTableOpt
 	bool		start_table;	/* print start decoration, eg <table> */
 	bool		stop_table;		/* print stop decoration, eg </table> */
 	bool		default_footer; /* allow "(xx rows)" default footer */
+	bool		column_header;	/* print column header in raw mode */
 	unsigned long prior_records;	/* start offset for record counters */
 	const printTextFormat *line_style;	/* line style (NULL for default) */
 	struct separator fieldSep;	/* field separator for unaligned text mode */

@@ -51,7 +51,8 @@ static bool static_std_strings = false;
 
 
 static PGEvent *dupEvents(PGEvent *events, int count);
-static bool pqAddTuple(PGresult *res, PGresAttValue *tup);
+static bool pqAddTuple(PGresult *res, PGresAttValue *tup,
+					   const char **errmsgp);
 static bool PQsendQueryStart(PGconn *conn);
 static int PQsendQueryGuts(PGconn *conn,
 				const char *command,
@@ -421,13 +422,27 @@ int
 PQsetvalue(PGresult *res, int tup_num, int field_num, char *value, int len)
 {
 	PGresAttValue *attval;
+	PQExpBufferData errorBuf;
+	const char *errmsg = NULL;	/* NULL means "out of memory" */
+
+	initPQExpBuffer(&errorBuf);
 
 	if (!check_field_number(res, field_num))
-		return FALSE;
+	{
+		printfPQExpBuffer(&errorBuf,
+				  libpq_gettext("column number %d is out of range 0..%d"),
+				  field_num, res->numAttributes - 1);
+		goto fail;
+	}
 
 	/* Invalid tup_num, must be <= ntups */
 	if (tup_num < 0 || tup_num > res->ntups)
-		return FALSE;
+	{
+		printfPQExpBuffer(&errorBuf,
+						  libpq_gettext("tuple number %d is out of range 0..%d"),
+						  tup_num, res->ntups);
+		goto fail;
+	}
 
 	/* need to allocate a new tuple? */
 	if (tup_num == res->ntups)
@@ -440,7 +455,7 @@ PQsetvalue(PGresult *res, int tup_num, int field_num, char *value, int len)
 						  TRUE);
 
 		if (!tup)
-			return FALSE;
+			goto fail;
 
 		/* initialize each column to NULL */
 		for (i = 0; i < res->numAttributes; i++)
@@ -450,8 +465,16 @@ PQsetvalue(PGresult *res, int tup_num, int field_num, char *value, int len)
 		}
 
 		/* add it to the array */
-		if (!pqAddTuple(res, tup))
-			return FALSE;
+		if (!pqAddTuple(res, tup, &errmsg))
+		{
+			/*
+			 * Note that pqAddTuple() has already applied libpq_gettext,
+			 * and that the error message is NULL on out-of-memory.
+			 */
+			if (errmsg)
+				appendPQExpBufferStr(&errorBuf, errmsg);
+			goto fail;
+		}
 	}
 
 	attval = &res->tuples[tup_num][field_num];
@@ -471,13 +494,23 @@ PQsetvalue(PGresult *res, int tup_num, int field_num, char *value, int len)
 	{
 		attval->value = (char *) pqResultAlloc(res, len + 1, TRUE);
 		if (!attval->value)
-			return FALSE;
+			goto fail;
 		attval->len = len;
 		memcpy(attval->value, value, len);
 		attval->value[len] = '\0';
 	}
 
+	termPQExpBuffer(&errorBuf);
 	return TRUE;
+
+fail:
+	/* save any error, nothing saved means "out of memory" */
+	if (errorBuf.len == 0)
+		printfPQExpBuffer(&errorBuf, libpq_gettext("out of memory"));
+
+	pqSetResultError(res, errorBuf.data);
+	termPQExpBuffer(&errorBuf);
+	return FALSE;
 }
 
 /*
@@ -847,10 +880,13 @@ pqInternalNotice(const PGNoticeHooks *hooks, const char *fmt,...)
 /*
  * pqAddTuple
  *	  add a row pointer to the PGresult structure, growing it if necessary
- *	  Returns TRUE if OK, FALSE if not enough memory to add the row
+ *	  Returns TRUE if OK, FALSE if an error happened when adding the row.
+ *
+ * On error, *errmsgp can be set to an error string to be returned. If it
+ * is left NULL, the error is presumed to be "out of memory".
  */
 static bool
-pqAddTuple(PGresult *res, PGresAttValue *tup)
+pqAddTuple(PGresult *res, PGresAttValue *tup, const char **errmsgp)
 {
 	if (res->ntups >= res->tupArrSize)
 	{
@@ -868,6 +904,31 @@ pqAddTuple(PGresult *res, PGresAttValue *tup)
 		int			newSize = (res->tupArrSize > 0) ? res->tupArrSize * 2 : 128;
 		PGresAttValue **newTuples;
 
+		/*
+		 * Do not let the array size grow higher than INT_MAX. If the new
+		 * size estimated is overflowing for the first time, enforce the
+		 * size to its maximum possible. If the maximum is already reached
+		 * when arriving at this point, just fail, there is nothing more to
+		 * do.
+		 */
+		if (res->tupArrSize == INT_MAX)
+		{
+			*errmsgp = libpq_gettext("already too many tuples for row addition");
+			return FALSE;
+		}
+		if (newSize < 0)
+			newSize = INT_MAX;
+
+		/*
+		 * This is more a safe-keeper particularly on 32-bit platforms where
+		 * things could overflow.
+		 */
+		if (newSize > SIZE_MAX / sizeof(PGresAttValue *))
+		{
+			*errmsgp = libpq_gettext("size overflow");
+			return FALSE;
+		}
+
 		if (res->tuples == NULL)
 			newTuples = (PGresAttValue **)
 				malloc(newSize * sizeof(PGresAttValue *));
@@ -875,7 +936,14 @@ pqAddTuple(PGresult *res, PGresAttValue *tup)
 			newTuples = (PGresAttValue **)
 				realloc(res->tuples, newSize * sizeof(PGresAttValue *));
 		if (!newTuples)
+		{
+			/*
+			 * malloc or realloc failed, let caller know about that
+			 * with a NULL error message.
+			 */
+			*errmsgp = NULL;
 			return FALSE;		/* malloc or realloc failed */
+		}
 		res->tupArrSize = newSize;
 		res->tuples = newTuples;
 	}
@@ -1093,7 +1161,8 @@ pqRowProcessor(PGconn *conn, const char **errmsgp)
 	}
 
 	/* And add the tuple to the PGresult's tuple array */
-	if (!pqAddTuple(res, tup))
+	*errmsgp = NULL;
+	if (!pqAddTuple(res, tup, errmsgp))
 		goto fail;
 
 	/*

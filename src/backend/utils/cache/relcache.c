@@ -3280,6 +3280,7 @@ RelationBuildLocalRelation(const char *relname,
 		Form_pg_attribute datt = TupleDescAttr(rel->rd_att, i);
 
 		datt->attidentity = satt->attidentity;
+		datt->attgenerated = satt->attgenerated;
 		datt->attnotnull = satt->attnotnull;
 		has_not_null |= satt->attnotnull;
 	}

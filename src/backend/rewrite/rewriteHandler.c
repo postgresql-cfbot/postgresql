@@ -20,6 +20,7 @@
  */
 #include "postgres.h"
 
+#include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_type.h"
@@ -37,6 +38,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 
 /* We use a list of these to detect recursion in RewriteQuery */
@@ -823,6 +825,13 @@ rewriteTargetListIU(List *targetList,
 
 			if (att_tup->attidentity == ATTRIBUTE_IDENTITY_BY_DEFAULT && override == OVERRIDING_USER_VALUE)
 				apply_default = true;
+
+			if (att_tup->attgenerated && !apply_default)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("cannot insert into column \"%s\"", NameStr(att_tup->attname)),
+						 errdetail("Column \"%s\" is a generated column.",
+								   NameStr(att_tup->attname))));
 		}
 
 		if (commandType == CMD_UPDATE)
@@ -833,9 +842,28 @@ rewriteTargetListIU(List *targetList,
 						 errmsg("column \"%s\" can only be updated to DEFAULT", NameStr(att_tup->attname)),
 						 errdetail("Column \"%s\" is an identity column defined as GENERATED ALWAYS.",
 								   NameStr(att_tup->attname))));
+
+			if (att_tup->attgenerated && new_tle && !apply_default)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("column \"%s\" can only be updated to DEFAULT", NameStr(att_tup->attname)),
+						 errdetail("Column \"%s\" is a generated column.",
+								   NameStr(att_tup->attname))));
 		}
 
-		if (apply_default)
+		if (att_tup->attgenerated)
+		{
+			/*
+			 * virtual generated column stores a null value
+			 */
+			new_tle = NULL;
+
+			if (att_tup->attgenerated == ATTRIBUTE_GENERATED_STORED)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("stored generated columns are not yet implemented")));
+		}
+		else if (apply_default)
 		{
 			Node	   *new_expr;
 
@@ -849,7 +877,7 @@ rewriteTargetListIU(List *targetList,
 				new_expr = (Node *) nve;
 			}
 			else
-				new_expr = build_column_default(target_relation, attrno);
+				new_expr = build_column_default(target_relation, attrno, true);
 
 			/*
 			 * If there is no default (ie, default is effectively NULL), we
@@ -1109,7 +1137,7 @@ get_assignment_input(Node *node)
  * If there is no default, return a NULL instead.
  */
 Node *
-build_column_default(Relation rel, int attrno)
+build_column_default(Relation rel, int attrno, bool allow_typdefault)
 {
 	TupleDesc	rd_att = rel->rd_att;
 	Form_pg_attribute att_tup = TupleDescAttr(rd_att, attrno - 1);
@@ -1139,7 +1167,7 @@ build_column_default(Relation rel, int attrno)
 		}
 	}
 
-	if (expr == NULL)
+	if (expr == NULL && allow_typdefault)
 	{
 		/*
 		 * No per-column default, so look for a default for the type itself.
@@ -1250,7 +1278,7 @@ rewriteValuesRTE(RangeTblEntry *rte, Relation target_relation, List *attrnos)
 				att_tup = TupleDescAttr(target_relation->rd_att, attrno - 1);
 
 				if (!att_tup->attisdropped)
-					new_expr = build_column_default(target_relation, attrno);
+					new_expr = build_column_default(target_relation, attrno, true);
 				else
 					new_expr = NULL;	/* force a NULL if dropped */
 
@@ -3563,6 +3591,75 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 }
 
 
+static Node *
+expand_generated_columns_in_expr_mutator(Node *node, Relation rel)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		Var *v = (Var *) node;
+		Oid			relid = RelationGetRelid(rel);
+		AttrNumber	attnum = v->varattno;
+
+		if (relid && attnum && get_attgenerated(relid, attnum) == ATTRIBUTE_GENERATED_VIRTUAL)
+		{
+			node = build_column_default(rel, attnum, false);
+			ChangeVarNodes(node, 1, v->varno, 0);
+		}
+
+		return node;
+	}
+	else
+		return expression_tree_mutator(node, expand_generated_columns_in_expr_mutator, rel);
+}
+
+
+Expr *
+expand_generated_columns_in_expr(Expr *expr, Relation rel)
+{
+	return (Expr *) expression_tree_mutator((Node *) expr,
+											expand_generated_columns_in_expr_mutator,
+											rel);
+}
+
+
+static Node *
+expand_generated_columns_in_query_mutator(Node *node, List *rtable)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		Var *v = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+
+		relid = getrelid(v->varno, rtable);
+		attnum = v->varattno;
+
+		if (!relid || !attnum)
+			return node;
+
+		if (get_attgenerated(relid, attnum) == ATTRIBUTE_GENERATED_VIRTUAL)
+		{
+			Relation rt_entry_relation = heap_open(relid, NoLock);
+
+			node = build_column_default(rt_entry_relation, attnum, false);
+			ChangeVarNodes(node, 1, v->varno, 0);
+
+			heap_close(rt_entry_relation, NoLock);
+		}
+
+		return node;
+	}
+	else
+		return expression_tree_mutator(node, expand_generated_columns_in_query_mutator, rtable);
+}
+
+
 /*
  * QueryRewrite -
  *	  Primary entry point to the query rewriter.
@@ -3617,6 +3714,21 @@ QueryRewrite(Query *parsetree)
 
 	/*
 	 * Step 3
+	 *
+	 * Expand generated columns.
+	 */
+	foreach(l, querylist)
+	{
+		Query	   *query = (Query *) lfirst(l);
+
+		query = query_tree_mutator(query,
+								   expand_generated_columns_in_query_mutator,
+								   query->rtable,
+								   QTW_DONT_COPY_QUERY);
+	}
+
+	/*
+	 * Step 4
 	 *
 	 * Determine which, if any, of the resulting queries is supposed to set
 	 * the command-result tag; and update the canSetTag fields accordingly.

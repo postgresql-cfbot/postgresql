@@ -3039,12 +3039,12 @@ BeginCopyFrom(ParseState *pstate,
 		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
 
 		/* Get default info if needed */
-		if (!list_member_int(cstate->attnumlist, attnum))
+		if (!list_member_int(cstate->attnumlist, attnum) && !att->attgenerated)
 		{
 			/* attribute is NOT to be copied from input */
 			/* use default value if one exists */
 			Expr	   *defexpr = (Expr *) build_column_default(cstate->rel,
-																attnum);
+																attnum, true);
 
 			if (defexpr != NULL)
 			{
@@ -4719,6 +4719,8 @@ CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist)
 		{
 			if (TupleDescAttr(tupDesc, i)->attisdropped)
 				continue;
+			if (TupleDescAttr(tupDesc, i)->attgenerated)
+				continue;		/* TODO: could be a COPY option */
 			attnums = lappend_int(attnums, i + 1);
 		}
 	}
@@ -4743,6 +4745,12 @@ CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist)
 					continue;
 				if (namestrcmp(&(att->attname), name) == 0)
 				{
+					if (att->attgenerated)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+								 errmsg("column \"%s\" is a generated column",
+										name),
+								 errdetail("Generated columns cannot be used in COPY.")));
 					attnum = att->attnum;
 					break;
 				}

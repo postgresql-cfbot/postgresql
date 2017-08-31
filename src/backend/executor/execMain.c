@@ -53,7 +53,7 @@
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "parser/parsetree.h"
-#include "rewrite/rewriteManip.h"
+#include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "tcop/utility.h"
@@ -1807,6 +1807,7 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 			Expr	   *checkconstr;
 
 			checkconstr = stringToNode(check[i].ccbin);
+			checkconstr = expand_generated_columns_in_expr(checkconstr, rel);
 			resultRelInfo->ri_ConstraintExprs[i] =
 				ExecPrepareExpr(checkconstr, estate);
 		}
@@ -2266,6 +2267,10 @@ ExecBuildSlotValueDescription(Oid reloid,
 
 		/* ignore dropped columns */
 		if (att->attisdropped)
+			continue;
+
+		/* ignore virtual generated columns; they are always null here */
+		if (att->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
 			continue;
 
 		if (!table_perm)

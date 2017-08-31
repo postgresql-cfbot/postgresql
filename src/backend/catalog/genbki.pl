@@ -446,6 +446,7 @@ sub emit_pgattr_row
 		atttypmod     => '-1',
 		atthasdef     => 'f',
 		attidentity   => '',
+		attgenerated  => '',
 		attisdropped  => 'f',
 		attislocal    => 't',
 		attinhcount   => '0',
@@ -475,12 +476,14 @@ sub emit_schemapg_row
 
 	# Replace empty string by zero char constant
 	$row->{attidentity} ||= '\0';
+	$row->{attgenerated} ||= '\0';
 
 	# Supply appropriate quoting for these fields.
 	$row->{attname}     = q|{"| . $row->{attname} . q|"}|;
 	$row->{attstorage}  = q|'| . $row->{attstorage} . q|'|;
 	$row->{attalign}    = q|'| . $row->{attalign} . q|'|;
 	$row->{attidentity} = q|'| . $row->{attidentity} . q|'|;
+	$row->{attgenerated} = q|'| . $row->{attgenerated} . q|'|;
 
 	# We don't emit initializers for the variable length fields at all.
 	# Only the fixed-size portions of the descriptors are ever used.

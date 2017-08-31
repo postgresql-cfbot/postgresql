@@ -103,13 +103,14 @@ extern List *AddRelationNewConstraints(Relation rel,
 						  bool is_internal);
 
 extern Oid StoreAttrDefault(Relation rel, AttrNumber attnum,
-				 Node *expr, bool is_internal);
+							Node *expr, bool is_internal, bool generated_col);
 
 extern Node *cookDefault(ParseState *pstate,
 			Node *raw_default,
 			Oid atttypid,
 			int32 atttypmod,
-			char *attname);
+			char *attname,
+			char attgenerated);
 
 extern void DeleteRelationTuple(Oid relid);
 extern void DeleteAttributeTuples(Oid relid);

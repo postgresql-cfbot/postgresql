@@ -22,12 +22,13 @@ extern void AcquireRewriteLocks(Query *parsetree,
 					bool forExecute,
 					bool forUpdatePushedDown);
 
-extern Node *build_column_default(Relation rel, int attrno);
+extern Node *build_column_default(Relation rel, int attrno, bool allow_typdefault);
 extern Query *get_view_query(Relation view);
 extern const char *view_query_is_auto_updatable(Query *viewquery,
 							 bool check_cols);
 extern int relation_is_updatable(Oid reloid,
 					  bool include_triggers,
 					  Bitmapset *include_cols);
+extern Expr *expand_generated_columns_in_expr(Expr *expr, Relation rel);
 
 #endif							/* REWRITEHANDLER_H */

@@ -253,7 +253,7 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 		if (rel->attrmap[attnum] >= 0)
 			continue;
 
-		defexpr = (Expr *) build_column_default(rel->localrel, attnum + 1);
+		defexpr = (Expr *) build_column_default(rel->localrel, attnum + 1, true);
 
 		if (defexpr != NULL)
 		{

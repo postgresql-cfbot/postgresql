@@ -102,12 +102,13 @@
 #include "replication/walreceiver.h"
 #include "replication/worker_internal.h"
 
-#include "utils/snapmgr.h"
 #include "storage/ipc.h"
+#include "storage/lmgr.h"
 
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 
 static bool table_states_valid = false;
 
@@ -211,10 +212,8 @@ wait_for_relation_state_change(Oid relid, char expected_state)
  * worker to the expected one.
  *
  * Used when transitioning from SYNCWAIT state to CATCHUP.
- *
- * Returns false if the apply worker has disappeared.
  */
-static bool
+static void
 wait_for_worker_state_change(char expected_state)
 {
 	int			rc;
@@ -230,7 +229,7 @@ wait_for_worker_state_change(char expected_state)
 		 * enough to not give a misleading answer if we do it with no lock.)
 		 */
 		if (MyLogicalRepWorker->relstate == expected_state)
-			return true;
+			return;
 
 		/*
 		 * Bail out if the apply worker has died, else signal it we're
@@ -243,7 +242,10 @@ wait_for_worker_state_change(char expected_state)
 			logicalrep_worker_wakeup_ptr(worker);
 		LWLockRelease(LogicalRepWorkerLock);
 		if (!worker)
-			break;
+			ereport(FATAL,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("terminating logical replication synchronization "
+							"worker due to subscription apply worker exit")));
 
 		/*
 		 * Wait.  We expect to get a latch signal back from the apply worker,
@@ -260,8 +262,6 @@ wait_for_worker_state_change(char expected_state)
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);
 	}
-
-	return false;
 }
 
 /*
@@ -298,11 +298,10 @@ process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 
 		SpinLockRelease(&MyLogicalRepWorker->relmutex);
 
-		SetSubscriptionRelState(MyLogicalRepWorker->subid,
-								MyLogicalRepWorker->relid,
-								MyLogicalRepWorker->relstate,
-								MyLogicalRepWorker->relstate_lsn,
-								true);
+		UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
+								   MyLogicalRepWorker->relid,
+								   MyLogicalRepWorker->relstate,
+								   MyLogicalRepWorker->relstate_lsn);
 
 		walrcv_endstreaming(wrconn, &tli);
 		finish_sync_worker();
@@ -347,6 +346,15 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 
 	Assert(!IsTransactionState());
 
+#define ensure_transaction_and_lock() \
+	if (!started_tx) \
+	{\
+		StartTransactionCommand(); \
+		LockSharedObject(SubscriptionRelationId, MySubscription->oid, 0, \
+						 AccessShareLock); \
+		started_tx = true; \
+	}
+
 	/* We need up-to-date sync state info for subscription tables here. */
 	if (!table_states_valid)
 	{
@@ -359,8 +367,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 		list_free_deep(table_states);
 		table_states = NIL;
 
-		StartTransactionCommand();
-		started_tx = true;
+		ensure_transaction_and_lock();
 
 		/* Fetch all non-ready tables. */
 		rstates = GetSubscriptionNotReadyRelations(MySubscription->oid);
@@ -422,14 +429,12 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 			{
 				rstate->state = SUBREL_STATE_READY;
 				rstate->lsn = current_lsn;
-				if (!started_tx)
-				{
-					StartTransactionCommand();
-					started_tx = true;
-				}
-				SetSubscriptionRelState(MyLogicalRepWorker->subid,
-										rstate->relid, rstate->state,
-										rstate->lsn, true);
+
+				ensure_transaction_and_lock();
+
+				UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
+										   rstate->relid, rstate->state,
+										   rstate->lsn);
 			}
 		}
 		else
@@ -476,12 +481,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 					 * Enter busy loop and wait for synchronization worker to
 					 * reach expected state (or die trying).
 					 */
-					if (!started_tx)
-					{
-						StartTransactionCommand();
-						started_tx = true;
-					}
-
+					ensure_transaction_and_lock();
 					wait_for_relation_state_change(rstate->relid,
 												   SUBREL_STATE_SYNCDONE);
 				}
@@ -495,8 +495,19 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				 * running sync workers for this subscription, while we have
 				 * the lock.
 				 */
-				int			nsyncworkers =
-				logicalrep_sync_worker_count(MyLogicalRepWorker->subid);
+				List	   *subworkers;
+				ListCell   *lc;
+				int			nsyncworkers = 0;
+
+				subworkers = logicalrep_workers_find(MySubscription->oid,
+														 false);
+				foreach (lc, subworkers)
+				{
+					LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
+					if (w->relid != InvalidOid)
+						nsyncworkers ++;
+				}
+				list_free(subworkers);
 
 				/* Now safe to release the LWLock */
 				LWLockRelease(LogicalRepWorkerLock);
@@ -518,10 +529,8 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 						TimestampDifferenceExceeds(hentry->last_start_time, now,
 												   wal_retrieve_retry_interval))
 					{
-						logicalrep_worker_launch(MyLogicalRepWorker->dbid,
-												 MySubscription->oid,
-												 MySubscription->name,
-												 MyLogicalRepWorker->userid,
+						ensure_transaction_and_lock();
+						logicalrep_worker_launch(MySubscription->oid,
 												 rstate->relid);
 						hentry->last_start_time = now;
 					}
@@ -870,11 +879,10 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 
 				/* Update the state and make it visible to others. */
 				StartTransactionCommand();
-				SetSubscriptionRelState(MyLogicalRepWorker->subid,
-										MyLogicalRepWorker->relid,
-										MyLogicalRepWorker->relstate,
-										MyLogicalRepWorker->relstate_lsn,
-										true);
+				UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
+										   MyLogicalRepWorker->relid,
+										   MyLogicalRepWorker->relstate,
+										   MyLogicalRepWorker->relstate_lsn);
 				CommitTransactionCommand();
 				pgstat_report_stat(false);
 
@@ -961,11 +969,10 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 					 * Update the new state in catalog.  No need to bother
 					 * with the shmem state as we are exiting for good.
 					 */
-					SetSubscriptionRelState(MyLogicalRepWorker->subid,
-											MyLogicalRepWorker->relid,
-											SUBREL_STATE_SYNCDONE,
-											*origin_startpos,
-											true);
+					UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
+											   MyLogicalRepWorker->relid,
+											   SUBREL_STATE_SYNCDONE,
+											   *origin_startpos);
 					finish_sync_worker();
 				}
 				break;

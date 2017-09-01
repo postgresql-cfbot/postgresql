@@ -984,8 +984,9 @@ include_dir 'conf.d'
         and client certificate verification is not performed.
        </para>
        <para>
-        In previous releases of PostgreSQL, the name of this file was
-        hard-coded as <filename>root.crt</filename>.
+        In earlier versions of PostgreSQL, the name of this file was
+        hard-coded as <filename>root.crt</filename>. As of
+        <productname>PostgreSQL</> 9.2 it is a configuration parameter.
        </para>
       </listitem>
      </varlistentry>
@@ -1023,8 +1024,9 @@ include_dir 'conf.d'
         The default is empty, meaning no CRL file is loaded.
        </para>
        <para>
-        In previous releases of PostgreSQL, the name of this file was
-        hard-coded as <filename>root.crl</filename>.
+        In earlier versions of PostgreSQL, the name of this file was
+        hard-coded as <filename>root.crl</filename>. As of
+        <productname>PostgreSQL</> 9.2 it is a configuration parameter.
        </para>
       </listitem>
      </varlistentry>

@@ -30,12 +30,16 @@
 #include <math.h>
 
 #include "access/htup_details.h"
+#include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "executor/nodeSubplan.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
+#include "storage/shmem.h"
 #include "utils/array.h"
+#include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
@@ -273,11 +277,13 @@ ExecScanSubPlan(SubPlanState *node,
 	forboth(l, subplan->parParam, pvar, node->args)
 	{
 		int			paramid = lfirst_int(l);
+		ExprState  *exprstate = (ExprState *) lfirst(pvar);
 		ParamExecData *prm = &(econtext->ecxt_param_exec_vals[paramid]);
 
-		prm->value = ExecEvalExprSwitchContext((ExprState *) lfirst(pvar),
+		prm->value = ExecEvalExprSwitchContext(exprstate,
 											   econtext,
 											   &(prm->isnull));
+		prm->ptype = exprType((Node *) exprstate->expr);
 		planstate->chgParam = bms_add_member(planstate->chgParam, paramid);
 	}
 
@@ -390,6 +396,7 @@ ExecScanSubPlan(SubPlanState *node,
 			prmdata = &(econtext->ecxt_param_exec_vals[paramid]);
 			Assert(prmdata->execPlan == NULL);
 			prmdata->value = slot_getattr(slot, col, &(prmdata->isnull));
+			prmdata->ptype = TupleDescAttr(tdesc, col - 1)->atttypid;
 			col++;
 		}
 
@@ -556,11 +563,13 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 		{
 			int			paramid = lfirst_int(plst);
 			ParamExecData *prmdata;
+			TupleDesc	tdesc = slot->tts_tupleDescriptor;
 
 			prmdata = &(innerecontext->ecxt_param_exec_vals[paramid]);
 			Assert(prmdata->execPlan == NULL);
 			prmdata->value = slot_getattr(slot, col,
 										  &(prmdata->isnull));
+			prmdata->ptype = TupleDescAttr(tdesc, col - 1)->atttypid;
 			col++;
 		}
 		slot = ExecProject(node->projRight);
@@ -924,12 +933,15 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 	ListCell   *l;
 	bool		found = false;
 	ArrayBuildStateAny *astate = NULL;
+	Oid			ptype;
 
 	if (subLinkType == ANY_SUBLINK ||
 		subLinkType == ALL_SUBLINK)
 		elog(ERROR, "ANY/ALL subselect unsupported as initplan");
 	if (subLinkType == CTE_SUBLINK)
 		elog(ERROR, "CTE subplans should not be executed via ExecSetParamPlan");
+
+	ptype = exprType((Node *) node->subplan);
 
 	/* Initialize ArrayBuildStateAny in caller's context, if needed */
 	if (subLinkType == ARRAY_SUBLINK)
@@ -953,11 +965,13 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 	forboth(l, subplan->parParam, pvar, node->args)
 	{
 		int			paramid = lfirst_int(l);
+		ExprState  *exprstate = (ExprState *) lfirst(pvar);
 		ParamExecData *prm = &(econtext->ecxt_param_exec_vals[paramid]);
 
-		prm->value = ExecEvalExprSwitchContext((ExprState *) lfirst(pvar),
+		prm->value = ExecEvalExprSwitchContext(exprstate,
 											   econtext,
 											   &(prm->isnull));
+		prm->ptype = exprType((Node *) exprstate->expr);
 		planstate->chgParam = bms_add_member(planstate->chgParam, paramid);
 	}
 
@@ -980,6 +994,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 
 			prm->execPlan = NULL;
 			prm->value = BoolGetDatum(true);
+			prm->ptype = ptype;
 			prm->isnull = false;
 			found = true;
 			break;
@@ -1031,6 +1046,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 			prm->execPlan = NULL;
 			prm->value = heap_getattr(node->curTuple, i, tdesc,
 									  &(prm->isnull));
+			prm->ptype = TupleDescAttr(tdesc, i - 1)->atttypid;
 			i++;
 		}
 	}
@@ -1053,6 +1069,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 											true);
 		prm->execPlan = NULL;
 		prm->value = node->curArray;
+		prm->ptype = ptype;
 		prm->isnull = false;
 	}
 	else if (!found)
@@ -1065,6 +1082,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 
 			prm->execPlan = NULL;
 			prm->value = BoolGetDatum(false);
+			prm->ptype = ptype;
 			prm->isnull = false;
 		}
 		else
@@ -1077,6 +1095,7 @@ ExecSetParamPlan(SubPlanState *node, ExprContext *econtext)
 
 				prm->execPlan = NULL;
 				prm->value = (Datum) 0;
+				prm->ptype = VOIDOID;
 				prm->isnull = true;
 			}
 		}
@@ -1206,4 +1225,134 @@ ExecAlternativeSubPlan(AlternativeSubPlanState *node,
 										   node->subplans, node->active);
 
 	return ExecSubPlan(activesp, econtext, isNull);
+}
+
+/*
+ * Estimate the amount of space required to serialize the InitPlan params.
+ */
+Size
+EstimateInitPlanParamsSpace(ParamExecData *paramExecVals, Bitmapset *params)
+{
+	int			paramid;
+	Size		sz = sizeof(int);
+	ParamExecData *prm;
+
+	if (params == NULL)
+		return sz;
+
+	paramid = -1;
+	while ((paramid = bms_next_member(params, paramid)) >= 0)
+	{
+		Oid			typeOid;
+		int16		typLen;
+		bool		typByVal;
+
+		prm = &(paramExecVals[paramid]);
+		typeOid = prm->ptype;
+
+		sz = add_size(sz, sizeof(int)); /* space for paramid */
+		sz = add_size(sz, sizeof(Oid)); /* space for type OID */
+
+		/* space for datum/isnull */
+		if (OidIsValid(typeOid))
+			get_typlenbyval(typeOid, &typLen, &typByVal);
+		else
+		{
+			/* If no type OID, assume by-value, like copyParamList does. */
+			typLen = sizeof(Datum);
+			typByVal = true;
+		}
+		sz = add_size(sz,
+					  datumEstimateSpace(prm->value, prm->isnull, typByVal, typLen));
+	}
+	return sz;
+}
+
+/*
+ * Serialize ParamExecData params corresponding to initplans.
+ *
+ * We write the number of parameters first, as a 4-byte integer, and then
+ * write details for each parameter in turn.  The details for each parameter
+ * consist of a 4-byte paramid (location of param in execution time internal
+ * parameter array), 4-byte type OID, and then the datum as serialized by
+ * datumSerialize().
+ *
+ * The above format is quite similar to the format used to serialize
+ * paramListInfo structure, so if we change either format, then consider to
+ * change at both the places.
+ */
+void
+SerializeInitPlanParams(ParamExecData *paramExecVals, Bitmapset *params,
+						char **start_address)
+{
+	int			nparams;
+	int			paramid;
+	ParamExecData *prm;
+
+	nparams = bms_num_members(params);
+	memcpy(*start_address, &nparams, sizeof(int));
+	*start_address += sizeof(int);
+
+	paramid = -1;
+	while ((paramid = bms_next_member(params, paramid)) >= 0)
+	{
+		Oid			typeOid;
+		int16		typLen;
+		bool		typByVal;
+
+		prm = &(paramExecVals[paramid]);
+		typeOid = prm->ptype;
+
+		/* Write paramid. */
+		memcpy(*start_address, &paramid, sizeof(int));
+		*start_address += sizeof(int);
+
+		/* Write OID. */
+		memcpy(*start_address, &typeOid, sizeof(Oid));
+		*start_address += sizeof(Oid);
+
+		/* space for datum/isnull */
+		if (OidIsValid(typeOid))
+			get_typlenbyval(typeOid, &typLen, &typByVal);
+		else
+		{
+			/* If no type OID, assume by-value, like copyParamList does. */
+			typLen = sizeof(Datum);
+			typByVal = true;
+		}
+		datumSerialize(prm->value, prm->isnull, typByVal, typLen,
+					   start_address);
+	}
+}
+
+/*
+ * Restore ParamExecData params corresponding to initplans.
+ */
+void
+RestoreInitPlanParams(char **start_address, ParamExecData *params)
+{
+	int			nparams;
+	int			i;
+	int			paramid;
+
+	memcpy(&nparams, *start_address, sizeof(int));
+	*start_address += sizeof(int);
+
+	for (i = 0; i < nparams; i++)
+	{
+		ParamExecData *prm;
+
+		/* Read paramid */
+		memcpy(&paramid, *start_address, sizeof(int));
+		*start_address += sizeof(int);
+		prm = &params[paramid];
+
+		/* Read type OID. */
+		memcpy(&prm->ptype, *start_address, sizeof(Oid));
+		*start_address += sizeof(Oid);
+
+		/* Read datum/isnull. */
+		prm->value = datumRestore(start_address, &prm->isnull);
+		prm->execPlan = NULL;
+	}
 }

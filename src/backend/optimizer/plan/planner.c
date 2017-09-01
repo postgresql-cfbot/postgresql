@@ -366,6 +366,14 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	{
 		Gather	   *gather = makeNode(Gather);
 
+		/*
+		 * If there are any initPlans attached to the formerly-top plan node,
+		 * move them up to the Gather node; same as we do for Material node in
+		 * materialize_finished_plan.
+		 */
+		gather->plan.initPlan = top_plan->initPlan;
+		top_plan->initPlan = NIL;
+
 		gather->plan.targetlist = top_plan->targetlist;
 		gather->plan.qual = NIL;
 		gather->plan.lefttree = top_plan;
@@ -3538,6 +3546,12 @@ create_grouping_paths(PlannerInfo *root,
 
 	ListCell   *lc;
 
+	/*
+	 * Don't parallelize the plan if there is an initplan below current query
+	 * level.  See generate_gather_paths() for detailed reason.
+	 */
+	(void) contains_parallel_unsafe_param(root, input_rel);
+
 	/* For now, do all work in the (GROUP_AGG, NULL) upperrel */
 	grouped_rel = fetch_upper_rel(root, UPPERREL_GROUP_AGG, NULL);
 
@@ -4899,6 +4913,12 @@ create_ordered_paths(PlannerInfo *root,
 	Path	   *cheapest_input_path = input_rel->cheapest_total_path;
 	RelOptInfo *ordered_rel;
 	ListCell   *lc;
+
+	/*
+	 * Don't parallelize the plan if there is an initplan below current query
+	 * level.  See generate_gather_paths() for detailed reason.
+	 */
+	(void) contains_parallel_unsafe_param(root, input_rel);
 
 	/* For now, do all work in the (ORDERED, NULL) upperrel */
 	ordered_rel = fetch_upper_rel(root, UPPERREL_ORDERED, NULL);

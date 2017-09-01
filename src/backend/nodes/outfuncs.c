@@ -482,6 +482,7 @@ _outGather(StringInfo str, const Gather *node)
 	WRITE_INT_FIELD(rescan_param);
 	WRITE_BOOL_FIELD(single_copy);
 	WRITE_BOOL_FIELD(invisible);
+	WRITE_BITMAPSET_FIELD(initParam);
 }
 
 static void
@@ -512,6 +513,8 @@ _outGatherMerge(StringInfo str, const GatherMerge *node)
 	appendStringInfoString(str, " :nullsFirst");
 	for (i = 0; i < node->numCols; i++)
 		appendStringInfo(str, " %s", booltostr(node->nullsFirst[i]));
+
+	WRITE_BITMAPSET_FIELD(initParam);
 }
 
 static void

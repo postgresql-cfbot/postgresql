@@ -159,6 +159,7 @@ ExecGather(PlanState *pstate)
 			if (!node->pei)
 				node->pei = ExecInitParallelPlan(node->ps.lefttree,
 												 estate,
+												 gather->initParam,
 												 gather->num_workers,
 												 node->tuples_needed);
 			else

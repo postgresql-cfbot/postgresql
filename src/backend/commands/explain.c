@@ -107,6 +107,7 @@ static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 static void show_instrumentation_count(const char *qlabel, int which,
 						   PlanState *planstate, ExplainState *es);
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
+static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
@@ -637,7 +638,17 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	 */
 	ps = queryDesc->planstate;
 	if (IsA(ps, GatherState) &&((Gather *) ps->plan)->invisible)
+	{
+		List	   *initPlanState = NULL;
+		PlanState  *save_ps;
+
+		/* initplans are always attached to the top node (cf standard_planner) */
+		save_ps = ps;
+		initPlanState = ps->initPlan;
 		ps = outerPlanState(ps);
+		ps->initPlan = initPlanState;
+		save_ps->initPlan = NIL;
+	}
 	ExplainNode(ps, NIL, NULL, NULL, es);
 }
 
@@ -1447,6 +1458,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 											   planstate, es);
 				ExplainPropertyInteger("Workers Planned",
 									   gather->num_workers, es);
+
+				/* Show params evaluated at gather node */
+				if (gather->initParam)
+					show_eval_params(gather->initParam, es);
+
 				if (es->analyze)
 				{
 					int			nworkers;
@@ -1469,6 +1485,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 											   planstate, es);
 				ExplainPropertyInteger("Workers Planned",
 									   gm->num_workers, es);
+
+				/* Show params evaluated at gather-merge node */
+				if (gm->initParam)
+					show_eval_params(gm->initParam, es);
+
 				if (es->analyze)
 				{
 					int			nworkers;
@@ -2491,6 +2512,29 @@ show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es)
 		if (fdwroutine->ExplainForeignScan != NULL)
 			fdwroutine->ExplainForeignScan(fsstate, es);
 	}
+}
+
+/*
+ * Show initplan params evaluated at gather or gather merge node.
+ */
+static void
+show_eval_params(Bitmapset *bms_params, ExplainState *es)
+{
+	int			paramid = -1;
+	List	   *params = NIL;
+
+	Assert(bms_params);
+
+	while ((paramid = bms_next_member(bms_params, paramid)) >= 0)
+	{
+		char		param[32];
+
+		snprintf(param, sizeof(param), "$%d", paramid);
+		params = lappend(params, pstrdup(param));
+	}
+
+	if (params)
+		ExplainPropertyList("Params Evaluated", params, es);
 }
 
 /*

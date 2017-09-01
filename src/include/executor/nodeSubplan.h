@@ -28,4 +28,10 @@ extern void ExecReScanSetParamPlan(SubPlanState *node, PlanState *parent);
 
 extern void ExecSetParamPlan(SubPlanState *node, ExprContext *econtext);
 
+extern Size EstimateInitPlanParamsSpace(ParamExecData *paramExecVals, Bitmapset *params);
+
+extern void SerializeInitPlanParams(ParamExecData *paramExecVals, Bitmapset *params, char **start_address);
+
+extern void RestoreInitPlanParams(char **start_address, ParamExecData *params);
+
 #endif							/* NODESUBPLAN_H */

@@ -98,6 +98,16 @@ typedef struct ParamExecData
 {
 	void	   *execPlan;		/* should be "SubPlanState *" */
 	Datum		value;
+
+	/*
+	 * parameter's datatype, or 0.  This is required so that datum value can
+	 * be read and used for other purposes like passing it to worker backend
+	 * via shared memory.  This is required only for initPlan's evaluation,
+	 * however for consistency we set this for Subplan as well.  We left it
+	 * for other cases like CTE or RecursiveUnion cases where this structure
+	 * is not used for evaluation of subplans.
+	 */
+	Oid			ptype;
 	bool		isnull;
 } ParamExecData;
 

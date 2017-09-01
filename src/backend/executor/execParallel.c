@@ -23,6 +23,7 @@
 
 #include "postgres.h"
 
+#include "executor/execExpr.h"
 #include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeBitmapHeapscan.h"
@@ -31,6 +32,7 @@
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeSeqscan.h"
+#include "executor/nodeSubplan.h"
 #include "executor/nodeSort.h"
 #include "executor/tqueue.h"
 #include "nodes/nodeFuncs.h"
@@ -56,6 +58,7 @@
 #define PARALLEL_KEY_INSTRUMENTATION	UINT64CONST(0xE000000000000006)
 #define PARALLEL_KEY_DSA				UINT64CONST(0xE000000000000007)
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
+#define PARALLEL_KEY_INITPLAN_PARAMS	UINT64CONST(0xE000000000000009)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -395,7 +398,8 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
  * execution and return results to the main backend.
  */
 ParallelExecutorInfo *
-ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers,
+ExecInitParallelPlan(PlanState *planstate, EState *estate,
+					 Bitmapset *initParam, int nworkers,
 					 int64 tuples_needed)
 {
 	ParallelExecutorInfo *pei;
@@ -406,10 +410,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers,
 	char	   *pstmt_data;
 	char	   *pstmt_space;
 	char	   *param_space;
+	char	   *initplan_param_space;
 	BufferUsage *bufusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	int			pstmt_len;
 	int			param_len;
+	int			initplan_param_len;
 	int			instrumentation_len = 0;
 	int			instrument_offset = 0;
 	Size		dsa_minsize = dsa_minimum_size();
@@ -420,6 +426,8 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers,
 	pei = palloc0(sizeof(ParallelExecutorInfo));
 	pei->finished = false;
 	pei->planstate = planstate;
+
+	ExecEvalParamExecParams(initParam, estate);
 
 	/* Fix up and serialize plan to be sent to workers. */
 	pstmt_data = ExecSerializePlan(planstate->plan, estate);
@@ -452,6 +460,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers,
 	/* Estimate space for serialized ParamListInfo. */
 	param_len = EstimateParamListSpace(estate->es_param_list_info);
 	shm_toc_estimate_chunk(&pcxt->estimator, param_len);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for initplan params. */
+	initplan_param_len = EstimateInitPlanParamsSpace(estate->es_param_exec_vals, initParam);
+	shm_toc_estimate_chunk(&pcxt->estimator, initplan_param_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/*
@@ -527,6 +540,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate, int nworkers,
 	param_space = shm_toc_allocate(pcxt->toc, param_len);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PARAMS, param_space);
 	SerializeParamList(estate->es_param_list_info, &param_space);
+
+	/* Store serialized initplan params. */
+	initplan_param_space = shm_toc_allocate(pcxt->toc, initplan_param_len);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_INITPLAN_PARAMS, initplan_param_space);
+	SerializeInitPlanParams(estate->es_param_exec_vals, initParam, &initplan_param_space);
 
 	/* Allocate space for each worker's BufferUsage; no need to initialize. */
 	bufusage_space = shm_toc_allocate(pcxt->toc,
@@ -801,6 +819,21 @@ ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc)
 }
 
 /*
+ * Copy the ParamExecData params corresponding to initplans from dynamic
+ * shared memory.  This has to be done once the params are allocated by
+ * executor; that is after ExecutorStart().
+ */
+static void
+ExecParallelInitializeInitPlanParams(shm_toc *toc, ParamExecData *params)
+{
+	char	   *paramspace;
+
+	/* Reconstruct initplan params. */
+	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_INITPLAN_PARAMS, false);
+	RestoreInitPlanParams(&paramspace, params);
+}
+
+/*
  * Create a QueryDesc for the PlannedStmt we are to execute, and return it.
  */
 static QueryDesc *
@@ -985,6 +1018,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Special executor initialization steps for parallel workers */
 	queryDesc->planstate->state->es_query_dsa = area;
+	ExecParallelInitializeInitPlanParams(toc, queryDesc->estate->es_param_exec_vals);
 	ExecParallelInitializeWorker(queryDesc->planstate, toc);
 
 	/* Pass down any tuple bound */

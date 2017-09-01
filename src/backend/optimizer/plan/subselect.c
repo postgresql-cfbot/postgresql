@@ -84,6 +84,7 @@ static Bitmapset *finalize_plan(PlannerInfo *root,
 			  Bitmapset *scan_params);
 static bool finalize_primnode(Node *node, finalize_primnode_context *context);
 static bool finalize_agg_primnode(Node *node, finalize_primnode_context *context);
+static bool is_initplan_is_below_current_query_level(PlannerInfo *root);
 
 
 /*
@@ -2136,13 +2137,11 @@ SS_identify_outer_params(PlannerInfo *root)
 }
 
 /*
- * SS_charge_for_initplans - account for initplans in Path costs & parallelism
+ * SS_charge_for_initplans - account for initplans in Path costs
  *
  * If any initPlans have been created in the current query level, they will
  * get attached to the Plan tree created from whichever Path we select from
- * the given rel.  Increment all that rel's Paths' costs to account for them,
- * and make sure the paths get marked as parallel-unsafe, since we can't
- * currently transmit initPlans to parallel workers.
+ * the given rel.  Increment all that rel's Paths' costs to account for them.
  *
  * This is separate from SS_attach_initplans because we might conditionally
  * create more initPlans during create_plan(), depending on which Path we
@@ -2174,7 +2173,7 @@ SS_charge_for_initplans(PlannerInfo *root, RelOptInfo *final_rel)
 	}
 
 	/*
-	 * Now adjust the costs and parallel_safe flags.
+	 * Now adjust the costs.
 	 */
 	foreach(lc, final_rel->pathlist)
 	{
@@ -2182,7 +2181,6 @@ SS_charge_for_initplans(PlannerInfo *root, RelOptInfo *final_rel)
 
 		path->startup_cost += initplan_cost;
 		path->total_cost += initplan_cost;
-		path->parallel_safe = false;
 	}
 
 	/* We needn't do set_cheapest() here, caller will do it */
@@ -2999,4 +2997,62 @@ SS_make_initplan_from_plan(PlannerInfo *root,
 
 	/* Set costs of SubPlan using info from the plan tree */
 	cost_subplan(subroot, node, plan);
+}
+
+/*
+ * is_initplan_below_current_query_level - is there any initplan present below
+ *		current query level.
+ */
+static bool
+is_initplan_is_below_current_query_level(PlannerInfo *root)
+{
+	ListCell   *lc;
+
+	/*
+	 * If the subplan corresponding to the subroot is an initPlan, it'll be
+	 * attached to its parent root.  Hence, we check the query level of its
+	 * parent root and if any init_plans are attached there.
+	 */
+	foreach(lc, root->glob->subroots)
+	{
+		PlannerInfo *subroot = (PlannerInfo *) lfirst(lc);
+		PlannerInfo *proot = subroot->parent_root;
+
+		if (proot->query_level > root->query_level && proot->init_plans)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * contains_parallel_unsafe_param - Check if there is any initplan present below
+ * current query level, mark all the partial and non-partial paths for a relation
+ * at this level as parallel-unsafe.
+ */
+bool
+contains_parallel_unsafe_param(PlannerInfo *root, RelOptInfo *rel)
+{
+	ListCell   *lc;
+
+	if (is_initplan_is_below_current_query_level(root))
+	{
+		foreach(lc, rel->partial_pathlist)
+		{
+			Path	   *subpath = (Path *) lfirst(lc);
+
+			subpath->parallel_safe = false;
+		}
+		foreach(lc, rel->pathlist)
+		{
+			Path	   *subpath = (Path *) lfirst(lc);
+
+			subpath->parallel_safe = false;
+		}
+		rel->consider_parallel = false;
+
+		return true;
+	}
+
+	return false;
 }

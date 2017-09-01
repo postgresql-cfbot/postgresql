@@ -6257,6 +6257,7 @@ make_gather(List *qptlist,
 	node->rescan_param = rescan_param;
 	node->single_copy = single_copy;
 	node->invisible = false;
+	node->initParam = NULL;
 
 	return node;
 }

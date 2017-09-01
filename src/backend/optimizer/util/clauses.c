@@ -91,6 +91,7 @@ typedef struct
 
 typedef struct
 {
+	PlannerInfo *root;
 	char		max_hazard;		/* worst proparallel hazard found so far */
 	char		max_interesting;	/* worst proparallel hazard of interest */
 	List	   *safe_param_ids; /* PARAM_EXEC Param IDs to treat as safe */
@@ -1069,6 +1070,7 @@ max_parallel_hazard(Query *parse)
 {
 	max_parallel_hazard_context context;
 
+	context.root = NULL;
 	context.max_hazard = PROPARALLEL_SAFE;
 	context.max_interesting = PROPARALLEL_UNSAFE;
 	context.safe_param_ids = NIL;
@@ -1098,6 +1100,7 @@ is_parallel_safe(PlannerInfo *root, Node *node)
 		root->glob->nParamExec == 0)
 		return true;
 	/* Else use max_parallel_hazard's search logic, but stop on RESTRICTED */
+	context.root = root;
 	context.max_hazard = PROPARALLEL_SAFE;
 	context.max_interesting = PROPARALLEL_RESTRICTED;
 	context.safe_param_ids = NIL;
@@ -1222,21 +1225,47 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	}
 
 	/*
-	 * We can't pass Params to workers at the moment either, so they are also
-	 * parallel-restricted, unless they are PARAM_EXEC Params listed in
+	 * As of now, we can only pass Params that refer to the same or parent
+	 * query level (see generate_gather_paths) or they are listed in
 	 * safe_param_ids, meaning they could be generated within the worker.
 	 */
 	else if (IsA(node, Param))
 	{
+		int			paramid;
+		PlannerInfo *root;
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind != PARAM_EXEC ||
-			!list_member_int(context->safe_param_ids, param->paramid))
+		if (list_member_int(context->safe_param_ids, param->paramid))
+			return false;
+
+		root = context->root;
+		paramid = ((Param *) node)->paramid;
+
+		if (root)
 		{
-			if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
-				return true;
+			PlannerInfo *proot;
+			ListCell   *l;
+
+			for (proot = root; proot != NULL; proot = proot->parent_root)
+			{
+				foreach(l, proot->init_plans)
+				{
+					SubPlan    *initsubplan = (SubPlan *) lfirst(l);
+					ListCell   *l2;
+
+					foreach(l2, initsubplan->setParam)
+					{
+						int			initparam = lfirst_int(l2);
+
+						if (paramid == initparam)
+							return false;
+					}
+				}
+			}
 		}
-		return false;			/* nothing to recurse to */
+
+		if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
+			return true;
 	}
 
 	/*

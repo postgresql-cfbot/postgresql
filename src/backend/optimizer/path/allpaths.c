@@ -38,6 +38,7 @@
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/parse_clause.h"
@@ -2201,6 +2202,14 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel)
 	Path	   *cheapest_partial_path;
 	Path	   *simple_gather_path;
 	ListCell   *lc;
+
+	/*
+	 * We don't want to generate gather or gather merge node if there are
+	 * initplans at some query level below the current query level as those
+	 * plans could be parallel-unsafe or undirect correlated plans.
+	 */
+	if (contains_parallel_unsafe_param(root, rel))
+		return;
 
 	/* If there are no partial paths, there's nothing to do here. */
 	if (rel->partial_pathlist == NIL)

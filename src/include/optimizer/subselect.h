@@ -35,6 +35,8 @@ extern Param *SS_make_initplan_output_param(PlannerInfo *root,
 extern void SS_make_initplan_from_plan(PlannerInfo *root,
 						   PlannerInfo *subroot, Plan *plan,
 						   Param *prm);
+extern bool initplan_is_below_current_query_level(PlannerInfo *root);
+extern bool contains_parallel_unsafe_param(PlannerInfo *root, RelOptInfo *rel);
 extern Param *assign_nestloop_param_var(PlannerInfo *root, Var *var);
 extern Param *assign_nestloop_param_placeholdervar(PlannerInfo *root,
 									 PlaceHolderVar *phv);

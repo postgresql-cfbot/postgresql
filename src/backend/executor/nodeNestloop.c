@@ -130,6 +130,7 @@ ExecNestLoop(PlanState *pstate)
 			{
 				NestLoopParam *nlp = (NestLoopParam *) lfirst(lc);
 				int			paramno = nlp->paramno;
+				TupleDesc	tdesc = outerTupleSlot->tts_tupleDescriptor;
 				ParamExecData *prm;
 
 				prm = &(econtext->ecxt_param_exec_vals[paramno]);
@@ -140,6 +141,7 @@ ExecNestLoop(PlanState *pstate)
 				prm->value = slot_getattr(outerTupleSlot,
 										  nlp->paramval->varattno,
 										  &(prm->isnull));
+				prm->ptype = TupleDescAttr(tdesc, nlp->paramval->varattno - 1)->atttypid;
 				/* Flag parameter value as changed */
 				innerPlan->chgParam = bms_add_member(innerPlan->chgParam,
 													 paramno);

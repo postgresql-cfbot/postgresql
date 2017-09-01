@@ -279,6 +279,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 	TupleTableSlot *innerslot;
 	TupleTableSlot *outerslot;
 	TupleTableSlot *scanslot;
+	MemoryContext oldContext;
 
 	/*
 	 * This array has to be in the same order as enum ExprEvalOp.
@@ -646,9 +647,40 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
 
-			fcinfo->isnull = false;
-			*op->resvalue = (op->d.func.fn_addr) (fcinfo);
-			*op->resnull = fcinfo->isnull;
+			if (!fcinfo->isVolatile && fcinfo->isExecuted)
+			{
+				/* use saved result */
+				fcinfo->isnull = fcinfo->nonVolatileResultIsNull;
+				*op->resvalue = fcinfo->nonVolatileResult;
+				*op->resnull = fcinfo->isnull;
+			}
+			else
+			{
+				/*
+				 * If function is not volatile then switch per-query memory
+				 * context. It is necessary to save result between all tuples.
+				 */
+				if (!fcinfo->isVolatile)
+					oldContext = MemoryContextSwitchTo(
+								econtext->ecxt_per_query_memory);
+
+				/* execute function as usual */
+				fcinfo->isnull = false;
+				*op->resvalue = (op->d.func.fn_addr) (fcinfo);
+				*op->resnull = fcinfo->isnull;
+
+				/*
+				 * Save result for nonvolatile functions and switch memory
+				 * context back.
+				 */
+				if (!fcinfo->isVolatile)
+				{
+					fcinfo->nonVolatileResultIsNull = fcinfo->isnull;
+					fcinfo->nonVolatileResult = *op->resvalue;
+					fcinfo->isExecuted = true;
+					MemoryContextSwitchTo(oldContext);
+				}	
+			}
 
 			EEO_NEXT();
 		}
@@ -659,18 +691,58 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			bool	   *argnull = fcinfo->argnull;
 			int			argno;
 
-			/* strict function, so check for NULL args */
-			for (argno = 0; argno < op->d.func.nargs; argno++)
+			if (!fcinfo->isVolatile && fcinfo->isExecuted)
 			{
-				if (argnull[argno])
-				{
-					*op->resnull = true;
-					goto strictfail;
-				}
+				/* use saved result */
+				fcinfo->isnull = fcinfo->nonVolatileResultIsNull;
+				if (!fcinfo->isnull)
+					*op->resvalue = fcinfo->nonVolatileResult;
+				*op->resnull = fcinfo->isnull;
 			}
-			fcinfo->isnull = false;
-			*op->resvalue = (op->d.func.fn_addr) (fcinfo);
-			*op->resnull = fcinfo->isnull;
+			else
+			{
+				/* strict function, so check for NULL args */
+				for (argno = 0; argno < op->d.func.nargs; argno++)
+				{
+					if (argnull[argno])
+					{
+						*op->resnull = true;
+
+						if (!fcinfo->isVolatile)
+						{
+							fcinfo->nonVolatileResultIsNull = *op->resnull;
+							fcinfo->isExecuted = true;
+						}
+
+						goto strictfail;
+					}
+				}
+
+				/*
+				 * If function is not volatile then switch per-query memory
+				 * context. It is necessary to save result between all tuples.
+				 */
+				if (!fcinfo->isVolatile)
+					oldContext = MemoryContextSwitchTo(
+								econtext->ecxt_per_query_memory);
+
+				/* execute function as usual */
+				fcinfo->isnull = false;
+				*op->resvalue = (op->d.func.fn_addr) (fcinfo);
+				*op->resnull = fcinfo->isnull;
+
+				/*
+				 * Save result for nonvolatile functions and switch memory
+				 * context back.
+				 */
+				if (!fcinfo->isVolatile)
+				{
+					fcinfo->nonVolatileResultIsNull = fcinfo->isnull;
+					fcinfo->nonVolatileResult = *op->resvalue;
+					fcinfo->isExecuted = true;
+					MemoryContextSwitchTo(oldContext);
+				}	
+			}
 
 	strictfail:
 			EEO_NEXT();
@@ -681,13 +753,44 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			FunctionCallInfo fcinfo = op->d.func.fcinfo_data;
 			PgStat_FunctionCallUsage fcusage;
 
-			pgstat_init_function_usage(fcinfo, &fcusage);
+			if (!fcinfo->isVolatile && fcinfo->isExecuted)
+			{
+				/* use saved result */
+				fcinfo->isnull = fcinfo->nonVolatileResultIsNull;
+				*op->resvalue = fcinfo->nonVolatileResult;
+				*op->resnull = fcinfo->isnull;
+			}
+			else
+			{
+				pgstat_init_function_usage(fcinfo, &fcusage);
 
-			fcinfo->isnull = false;
-			*op->resvalue = (op->d.func.fn_addr) (fcinfo);
-			*op->resnull = fcinfo->isnull;
+				/*
+				 * If function is not volatile then switch per-query memory
+				 * context. It is necessary to save result between all tuples.
+				 */
+				if (!fcinfo->isVolatile)
+					oldContext = MemoryContextSwitchTo(
+								econtext->ecxt_per_query_memory);
 
-			pgstat_end_function_usage(&fcusage, true);
+				/* execute function as usual */
+				fcinfo->isnull = false;
+				*op->resvalue = (op->d.func.fn_addr) (fcinfo);
+				*op->resnull = fcinfo->isnull;
+
+				/*
+				 * Save result for nonvolatile functions and switch memory
+				 * context back.
+				 */
+				if (!fcinfo->isVolatile)
+				{
+					fcinfo->nonVolatileResultIsNull = fcinfo->isnull;
+					fcinfo->nonVolatileResult = *op->resvalue;
+					fcinfo->isExecuted = true;
+					MemoryContextSwitchTo(oldContext);
+				}
+
+				pgstat_end_function_usage(&fcusage, true);
+			}
 
 			EEO_NEXT();
 		}
@@ -699,23 +802,62 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			bool	   *argnull = fcinfo->argnull;
 			int			argno;
 
-			/* strict function, so check for NULL args */
-			for (argno = 0; argno < op->d.func.nargs; argno++)
+			if (!fcinfo->isVolatile && fcinfo->isExecuted)
 			{
-				if (argnull[argno])
-				{
-					*op->resnull = true;
-					goto strictfail_fusage;
-				}
+				/* use saved result */
+				fcinfo->isnull = fcinfo->nonVolatileResultIsNull;
+				if (!fcinfo->isnull)
+					*op->resvalue = fcinfo->nonVolatileResult;
+				*op->resnull = fcinfo->isnull;
 			}
+			else
+			{
+				/* strict function, so check for NULL args */
+				for (argno = 0; argno < op->d.func.nargs; argno++)
+				{
+					if (argnull[argno])
+					{
+						*op->resnull = true;
 
-			pgstat_init_function_usage(fcinfo, &fcusage);
+						if (!fcinfo->isVolatile)
+						{
+							fcinfo->nonVolatileResultIsNull = *op->resnull;
+							fcinfo->isExecuted = true;
+						}
 
-			fcinfo->isnull = false;
-			*op->resvalue = (op->d.func.fn_addr) (fcinfo);
-			*op->resnull = fcinfo->isnull;
+						goto strictfail_fusage;
+					}
+				}
 
-			pgstat_end_function_usage(&fcusage, true);
+				pgstat_init_function_usage(fcinfo, &fcusage);
+
+				/*
+				 * If function is not volatile then switch per-query memory
+				 * context. It is necessary to save result between all tuples.
+				 */
+				if (!fcinfo->isVolatile)
+					oldContext = MemoryContextSwitchTo(
+								econtext->ecxt_per_query_memory);
+
+				/* execute function as usual */
+				fcinfo->isnull = false;
+				*op->resvalue = (op->d.func.fn_addr) (fcinfo);
+				*op->resnull = fcinfo->isnull;
+
+				/*
+				 * Save result for nonvolatile functions and switch memory
+				 * context back.
+				 */
+				if (!fcinfo->isVolatile)
+				{
+					fcinfo->nonVolatileResultIsNull = fcinfo->isnull;
+					fcinfo->nonVolatileResult = *op->resvalue;
+					fcinfo->isExecuted = true;
+					MemoryContextSwitchTo(oldContext);
+				}
+
+				pgstat_end_function_usage(&fcusage, true);
+			}
 
 	strictfail_fusage:
 			EEO_NEXT();

@@ -3574,87 +3574,11 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 	 */
 	if (IsA(node, FuncExpr))
 	{
-		/* firstly recurse into children */
-		bool		children_result = expression_tree_walker(node,
-													cost_qual_eval_walker,
-													(void *) context);
-		FuncExpr   *funcexpr = (FuncExpr *) node;
-		ListCell   *arg;
-		bool		has_nonconst_or_volatile_input = false;
-		double		func_cost = get_func_cost(funcexpr->funcid) *
-			cpu_operator_cost;
-		bool		func_returns_set = funcexpr->funcretset ||
-			expression_returns_set((Node *) funcexpr->args);
-
-		foreach(arg, funcexpr->args) {
-			void	   *arg_lfirst = lfirst(arg);
-			bool		arg_is_const = IsA(arg_lfirst, Const);
-			bool		arg_is_nonvolatile_function = IsA(arg_lfirst, FuncExpr) &&
-				!((const FuncExpr *) arg_lfirst)->isVolatile;
-			bool		arg_is_nonvolatile_operator = IsA(arg_lfirst, OpExpr) &&
-				!((const OpExpr *) arg_lfirst)->isVolatile;
-			if (!(arg_is_const ||
-				  arg_is_nonvolatile_function ||
-				  arg_is_nonvolatile_operator))
-				has_nonconst_or_volatile_input = true;
-		}
-
-		funcexpr->isVolatile = func_returns_set ||
-			has_nonconst_or_volatile_input ||
-			contain_volatile_functions((Node *) &funcexpr->xpr);
-
-		if (funcexpr->isVolatile)
-			context->total.per_tuple += func_cost;
-		else
-			context->total.startup += func_cost;
-
-		return children_result;
+		context->total.per_tuple +=
+			get_func_cost(((FuncExpr *) node)->funcid) * cpu_operator_cost;
 	}
-	else if (IsA(node, OpExpr))
-	{	
-		bool		children_result;
-		OpExpr     *opexpr = (OpExpr *) node;
-		ListCell   *arg;
-		bool		has_nonconst_or_volatile_input = false;
-		double		func_cost;
-		bool		op_returns_set;
-
-		/* rely on struct equivalence to treat these all alike */
-		set_opfuncid(opexpr);
-
-		/* firstly recurse into children */
-		children_result = expression_tree_walker(node, cost_qual_eval_walker,
-												 (void *) context);
-		op_returns_set = opexpr->opretset ||
-			expression_returns_set((Node *) opexpr->args);
-		
-		func_cost = get_func_cost(opexpr->opfuncid) * cpu_operator_cost;
-
-		foreach(arg, opexpr->args) {
-			void	   *arg_lfirst = lfirst(arg);
-			bool		arg_is_const = IsA(arg_lfirst, Const);
-			bool		arg_is_nonvolatile_function = IsA(arg_lfirst, FuncExpr) &&
-				!((const FuncExpr *) arg_lfirst)->isVolatile;
-			bool		arg_is_nonvolatile_operator = IsA(arg_lfirst, OpExpr) &&
-				!((const OpExpr *) arg_lfirst)->isVolatile;
-			if (!(arg_is_const ||
-				  arg_is_nonvolatile_function ||
-				  arg_is_nonvolatile_operator))
-				has_nonconst_or_volatile_input = true;
-		}
-
-		opexpr->isVolatile = op_returns_set ||
-			has_nonconst_or_volatile_input ||
-			contain_volatile_functions((Node *) &opexpr->xpr);
-
-		if (opexpr->isVolatile)
-			context->total.per_tuple += func_cost;
-		else
-			context->total.startup += func_cost;
-
-		return children_result;
-	}
-	else if (IsA(node, DistinctExpr) ||
+	else if (IsA(node, OpExpr) ||
+			 IsA(node, DistinctExpr) ||
 			 IsA(node, NullIfExpr))
 	{
 		/* rely on struct equivalence to treat these all alike */

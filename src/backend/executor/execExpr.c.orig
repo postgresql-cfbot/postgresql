@@ -2075,22 +2075,6 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 	int			argno;
 	ListCell   *lc;
 
-	/*
-	 * Function is not volatile if:
-	 * 1) it doesn't return set,
-	 * 2) it's not volatile itself,
-	 * 3) its arguments are constants or nonvolatile too (functions or
-	 * operators).
-	 * 
-	 * Operator is not volatile if:
-	 * 1) its function doesn't return set,
-	 * 1) its function is not volatile itself,
-	 * 3) its arguments are constants or nonvolatile too (functions or
-	 * operators).
-	 */
-	bool		is_volatile;
-	bool		has_nonconst_or_volatile_input = false;
-
 	/* Check permission to call function */
 	aclresult = pg_proc_aclcheck(funcid, GetUserId(), ACL_EXECUTE);
 	if (aclresult != ACLCHECK_OK)
@@ -2142,16 +2126,12 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 	foreach(lc, args)
 	{
 		Expr	   *arg = (Expr *) lfirst(lc);
-		bool		arg_is_nonvolatile_function,
-					arg_is_nonvolatile_operator;
 
 		if (IsA(arg, Const))
 		{
 			/*
 			 * Don't evaluate const arguments every round; especially
 			 * interesting for constants in comparisons.
-			 *
-			 * Const arg doesn't affect value of has_nonconst_or_volatile_input.
 			 */
 			Const	   *con = (Const *) arg;
 
@@ -2162,30 +2142,9 @@ ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args, Oid funcid,
 		{
 			ExecInitExprRec(arg, parent, state,
 							&fcinfo->arg[argno], &fcinfo->argnull[argno]);
-
-			/* arg is not const, but it may be volatile function or operator */
-			arg_is_nonvolatile_function = IsA(arg, FuncExpr) &&
-				!((const FuncExpr *) arg)->isVolatile;
-			arg_is_nonvolatile_operator = IsA(arg, OpExpr) &&
-				!((const OpExpr *) arg)->isVolatile;
-			if (!(arg_is_nonvolatile_function || arg_is_nonvolatile_operator))
-				has_nonconst_or_volatile_input = true;
 		}
 		argno++;
 	}
-
-	is_volatile = has_nonconst_or_volatile_input ||
-					contain_volatile_functions((Node *) node);
-	/* for recursive check of volatile functions or operators */
-	if (IsA(node, FuncExpr))
-		((FuncExpr *) node)->isVolatile = is_volatile;
-	else if (IsA(node, OpExpr))
-		((OpExpr *) node)->isVolatile = is_volatile;
-	/* for execution of this expression */
-	fcinfo->isVolatile = is_volatile;
-	fcinfo->isExecuted = false;
-	fcinfo->nonVolatileResultIsNull = false;
-	fcinfo->nonVolatileResult = (Datum) 0;
 
 	/* Insert appropriate opcode depending on strictness and stats level */
 	if (pgstat_track_functions <= flinfo->fn_stats)

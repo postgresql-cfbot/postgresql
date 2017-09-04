@@ -49,6 +49,10 @@ ifeq ($(with_systemd),yes)
 LIBS += -lsystemd
 endif
 
+ifeq ($(with_securetransport),yes)
+LDFLAGS += -framework CoreFoundation -framework Security
+endif
+
 ##########################################################################
 
 all: submake-libpgport submake-schemapg postgres $(POSTGRES_IMP)

@@ -50,7 +50,7 @@
 #ifndef _PG_SHA2_H_
 #define _PG_SHA2_H_
 
-#ifdef USE_SSL
+#if defined(USE_SSL) && defined(USE_OPENSSL)
 #include <openssl/sha.h>
 #endif
 
@@ -69,7 +69,7 @@
 #define PG_SHA512_DIGEST_STRING_LENGTH	(PG_SHA512_DIGEST_LENGTH * 2 + 1)
 
 /* Context Structures for SHA-1/224/256/384/512 */
-#ifdef USE_SSL
+#if defined(USE_SSL) && defined(USE_OPENSSL)
 typedef SHA256_CTX pg_sha256_ctx;
 typedef SHA512_CTX pg_sha512_ctx;
 typedef SHA256_CTX pg_sha224_ctx;

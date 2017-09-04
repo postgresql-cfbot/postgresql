@@ -85,6 +85,7 @@
 #ssl_key_file = 'server.key'
 #ssl_ca_file = ''
 #ssl_crl_file = ''
+#ssl_keychain_file = ''
 #password_encryption = md5		# md5, scram-sha-256, or plain
 #db_user_namespace = off
 #row_security = on

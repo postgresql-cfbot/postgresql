@@ -80,6 +80,9 @@ extern char *ssl_key_file;
 extern char *ssl_ca_file;
 extern char *ssl_crl_file;
 extern char *ssl_dh_params_file;
+#ifdef USE_SECURETRANSPORT
+extern char *ssl_keychain_file;
+#endif
 
 extern int	secure_initialize(bool isServerStart);
 extern bool secure_loaded_verify_locations(void);

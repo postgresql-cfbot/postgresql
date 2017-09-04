@@ -23,7 +23,7 @@ sub run_test_psql
 	my $logstring = $_[1];
 
 	my $cmd = [
-		'psql', '-X', '-A', '-t', '-c', "SELECT 'connected with $connstr'",
+		'psql', '-X', '-A', '-t', '-c', "SELECT \$\$connected with $connstr\$\$",
 		'-d', "$connstr" ];
 
 	my $result = run_log($cmd);
@@ -59,7 +59,7 @@ chmod 0600, "ssl/client_tmp.key";
 #### Part 0. Set up the server.
 
 note "setting up data directory";
-my $node = get_new_node('master');
+my $node = get_new_node('master', $ENV{SSLTEST_SERVER_BIN});
 $node->init;
 
 # PGHOST is enforced here to set up the node, subsequent connections

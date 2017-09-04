@@ -166,11 +166,15 @@
 
 /*
  * USE_SSL code should be compiled only when compiling with an SSL
- * implementation.  (Currently, only OpenSSL is supported, but we might add
- * more implementations in the future.)
+ * implementation.
  */
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL) || defined(USE_SECURETRANSPORT)
 #define USE_SSL
+#if defined(USE_OPENSSL)
+#define SSL_LIBRARY "OpenSSL"
+#elif defined(USE_SECURETRANSPORT)
+#define SSL_LIBRARY "Secure Transport"
+#endif
 #endif
 
 /*

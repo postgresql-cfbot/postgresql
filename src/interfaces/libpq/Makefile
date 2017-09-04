@@ -57,6 +57,11 @@ else
 OBJS += sha2.o
 endif
 
+ifeq ($(with_securetransport), yes)
+OBJS += fe-secure-securetransport.o
+override CFLAGS += -framework Security -framework CoreFoundation -fconstant-cfstrings
+endif
+
 ifeq ($(PORTNAME), cygwin)
 override shlib = cyg$(NAME)$(DLSUFFIX)
 endif
@@ -111,7 +116,6 @@ ip.c md5.c base64.c scram-common.c sha2.c sha2_openssl.c saslprep.c unicode_norm
 
 encnames.c wchar.c: % : $(backend_src)/utils/mb/%
 	rm -f $@ && $(LN_S) $< .
-
 
 distprep: libpq-dist.rc
 

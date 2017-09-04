@@ -2169,11 +2169,41 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   <para>
    <productname>PostgreSQL</> has native support for using
    <acronym>SSL</> connections to encrypt client/server communications
-   for increased security. This requires that
-   <productname>OpenSSL</productname> is installed on both client and
+   for increased security. This requires that a supported SSL library
+   is installed on both client and
    server systems and that support in <productname>PostgreSQL</> is
-   enabled at build time (see <xref linkend="installation">).
+   enabled at build time (see <xref linkend="installation">). Clients are
+   not required to use the same SSL library as the server, all supported
+   libraries are compatible.
+   Table <xref linkend="supported-ssl-libraries"> lists the supported SSL
+   libraries.
   </para>
+
+  <table id="supported-ssl-libraries">
+   <title>Supported SSL libraries</title>
+   <tgroup cols="2">
+    <thead>
+     <row>
+      <entry>Library</entry>
+      <entry>Platform</entry>
+     </row>
+    </thead>
+
+    <tbody>
+
+     <row>
+      <entry><productname>OpenSSL</productname></entry>
+      <entry>All platforms supported by <productname>PostgreSQL</productname></entry>
+     </row>
+
+     <row>
+      <entry><productname>Secure Transport</productname></entry>
+      <entry><productname>Apple macOS 10.11 El Capitan+</productname></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
 
   <para>
    With <acronym>SSL</> support compiled in, the
@@ -2189,41 +2219,13 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </para>
 
   <para>
-   <productname>PostgreSQL</productname> reads the system-wide
-   <productname>OpenSSL</productname> configuration file. By default, this
-   file is named <filename>openssl.cnf</filename> and is located in the
-   directory reported by <literal>openssl version -d</>.
-   This default can be overridden by setting environment variable
-   <envar>OPENSSL_CONF</envar> to the name of the desired configuration file.
-  </para>
-
-  <para>
-   <productname>OpenSSL</productname> supports a wide range of ciphers
-   and authentication algorithms, of varying strength.  While a list of
-   ciphers can be specified in the <productname>OpenSSL</productname>
-   configuration file, you can specify ciphers specifically for use by
-   the database server by modifying <xref linkend="guc-ssl-ciphers"> in
-   <filename>postgresql.conf</>.
-  </para>
-
-  <note>
-   <para>
-    It is possible to have authentication without encryption overhead by
-    using <literal>NULL-SHA</> or <literal>NULL-MD5</> ciphers.  However,
-    a man-in-the-middle could read and pass communications between client
-    and server.  Also, encryption overhead is minimal compared to the
-    overhead of authentication.  For these reasons NULL ciphers are not
-    recommended.
-   </para>
-  </note>
-
-  <para>
-   To start in <acronym>SSL</> mode, files containing the server certificate
-   and private key must exist.  By default, these files are expected to be
+   To start in <acronym>SSL</> mode, a server certificate
+   and private key must exist.  By default, these are expected to be in files
    named <filename>server.crt</> and <filename>server.key</>, respectively, in
    the server's data directory, but other names and locations can be specified
    using the configuration parameters <xref linkend="guc-ssl-cert-file">
-   and <xref linkend="guc-ssl-key-file">.
+   and <xref linkend="guc-ssl-key-file">. See the notes on the library used
+   for specifics on how certificates and keys can be specified.
   </para>
 
   <para>
@@ -2258,6 +2260,55 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    <filename>root.crt</filename> files.
   </para>
 
+  <note>
+   <para>
+    It is possible to have authentication without encryption overhead by
+    using NULL ciphers (<literal>NULL-SHA</> or <literal>NULL-MD5</> in
+    <productname>OpenSSL</productname> for example).  However,
+    a man-in-the-middle could read and pass communications between client
+    and server.  Also, encryption overhead is minimal compared to the
+    overhead of authentication.  For these reasons NULL ciphers are not
+    recommended.
+   </para>
+  </note>
+
+  <sect2 id="ssl-library-openssl">
+   <title>Using OpenSSL</title>
+
+  <para>
+   <productname>PostgreSQL</productname> reads the system-wide
+   <productname>OpenSSL</productname> configuration file. By default, this
+   file is named <filename>openssl.cnf</filename> and is located in the
+   directory reported by <literal>openssl version -d</>.
+   This default can be overridden by setting environment variable
+   <envar>OPENSSL_CONF</envar> to the name of the desired configuration file.
+  </para>
+
+  <para>
+   <productname>OpenSSL</productname> supports a wide range of ciphers
+   and authentication algorithms, of varying strength.  While a list of
+   ciphers can be specified in the <productname>OpenSSL</productname>
+   configuration file, you can specify ciphers specifically for use by
+   the database server by modifying <xref linkend="guc-ssl-ciphers"> in
+   <filename>postgresql.conf</>.
+  </para>
+  </sect2>
+
+  <sect2 id="ssl-library-secure-transport">
+   <title>Using Secure Transport</title>
+   
+  <para>
+   <productname>Secure Transport</productname> can use certificates and
+   keys either stored in files, or load them as an identity from a
+   <productname>Keychain</productname>. To load an identity, the default
+   <productname>Keychain</productname> as well as the
+   <productname>Keychain</productname> specified by the
+   <xref linkeend="guc-ssl-keychain-file"> parameter is searched. The identity
+   is specified by prefixing <xref linkend="guc-ssl-cert-file"> with
+   <literal>keychain:</> and specifying the common name of the certificate.
+  </para>
+  </sect2>
+  
   <sect2 id="ssl-client-certificates">
    <title>Using Client Certificates</title>
 
@@ -2361,6 +2412,12 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
       <entry><xref linkend="guc-ssl-crl-file"></entry>
       <entry>certificates revoked by certificate authorities</entry>
       <entry>client certificate must not be on this list</entry>
+     </row>
+
+     <row>
+      <entry><xref linkend="guc-ssl-keychain-file"></entry>
+      <entry>server identities</entry>
+      <entry>searched for server identities (certificate and key)</entry>
      </row>
 
     </tbody>

@@ -1038,26 +1038,6 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-ssl-keychain-file" xreflabel="ssl_keychain_file">
-      <term><varname>ssl_keychain_file</varname> (<type>string</type>)
-      <indexterm>
-       <primary><varname>ssl_keychain_file</> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Specifies the name of the file containing the a Keychain. Relative
-        paths are relative to the current users system Keychain folder
-        (typically <filename>Library/Keychains</>).
-        Absolute paths can be used to use a Keychain located elsewhere.
-        This parameter can only be set in the <filename>postgresql.conf</>
-        file or on the server command line.
-        This parameter is only available when the server has been configured
-        with support for Secure Transport.
-       </para>
-      </listitem>
-     </varlistentry>
-
      <varlistentry id="guc-ssl-ciphers" xreflabel="ssl_ciphers">
       <term><varname>ssl_ciphers</varname> (<type>string</type>)
       <indexterm>

@@ -11,6 +11,7 @@
 #ifndef PGBENCH_H
 #define PGBENCH_H
 
+#include "fe_utils/psqlscan_int.h"
 #include "fe_utils/psqlscan.h"
 
 /*

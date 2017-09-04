@@ -1663,6 +1663,14 @@ static bool
 _equalVacuumStmt(const VacuumStmt *a, const VacuumStmt *b)
 {
 	COMPARE_SCALAR_FIELD(options);
+	COMPARE_NODE_FIELD(relcols);
+
+	return true;
+}
+
+static bool
+_equalVacRelCols(const VacRelCols *a, const VacRelCols *b)
+{
 	COMPARE_NODE_FIELD(relation);
 	COMPARE_NODE_FIELD(va_cols);
 
@@ -3674,6 +3682,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
+			break;
+		case T_VacRelCols:
+			retval = _equalVacRelCols(a, b);
 			break;
 
 		default:

@@ -3090,12 +3090,18 @@ typedef enum VacuumOption
 	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7	/* don't skip any pages */
 } VacuumOption;
 
+typedef struct VacRelCols
+{
+	NodeTag		type;
+	RangeVar   *relation;		/* single table to process, or NULL */
+	List	   *va_cols;		/* list of column names, or NIL for all */
+} VacRelCols;
+
 typedef struct VacuumStmt
 {
 	NodeTag		type;
 	int			options;		/* OR of VacuumOption flags */
-	RangeVar   *relation;		/* single table to process, or NULL */
-	List	   *va_cols;		/* list of column names, or NIL for all */
+	List	   *relcols;		/* List of VacRelCols  */
 } VacuumStmt;
 
 /* ----------------------

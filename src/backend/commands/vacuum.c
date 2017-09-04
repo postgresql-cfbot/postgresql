@@ -85,12 +85,12 @@ void
 ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 {
 	VacuumParams params;
+	ListCell    *lc;
 
 	/* sanity checks on options */
 	Assert(vacstmt->options & (VACOPT_VACUUM | VACOPT_ANALYZE));
 	Assert((vacstmt->options & VACOPT_VACUUM) ||
 		   !(vacstmt->options & (VACOPT_FULL | VACOPT_FREEZE)));
-	Assert((vacstmt->options & VACOPT_ANALYZE) || vacstmt->va_cols == NIL);
 	Assert(!(vacstmt->options & VACOPT_SKIPTOAST));
 
 	/*
@@ -119,8 +119,20 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 	params.log_min_duration = -1;
 
 	/* Now go through the common routine */
-	vacuum(vacstmt->options, vacstmt->relation, InvalidOid, &params,
-		   vacstmt->va_cols, NULL, isTopLevel);
+	if (list_length(vacstmt->relcols) == 0)
+		vacuum(vacstmt->options, NULL, InvalidOid, &params,
+			   NIL, NULL, isTopLevel);
+	else
+	{
+		foreach (lc, vacstmt->relcols)
+		{
+			VacRelCols *relcol = (VacRelCols *) lfirst(lc);
+			Assert((vacstmt->options & VACOPT_ANALYZE) ||
+				   relcol->va_cols == NIL);
+			vacuum(vacstmt->options, relcol->relation, InvalidOid, &params,
+				   relcol->va_cols, NULL, isTopLevel);
+		}
+	}
 }
 
 /*

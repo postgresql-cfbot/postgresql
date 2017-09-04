@@ -187,6 +187,7 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
+static bool implies_analyze(List *relcols);
 
 %}
 
@@ -306,6 +307,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <ival>	opt_lock lock_type cast_context
 %type <ival>	vacuum_option_list vacuum_option_elem
+%type <node>	analyze_target_item
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
@@ -395,7 +397,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
-				publication_name_list
+				publication_name_list analyze_target_list
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -3848,6 +3850,11 @@ CreateStatsStmt:
 					$$ = (Node *)n;
 				}
 			;
+
+opt_name_list:
+			'(' name_list ')'						{ $$ = $2; }
+			| /*EMPTY*/								{ $$ = NIL; }
+		;
 
 /*****************************************************************************
  *
@@ -10128,11 +10135,10 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_FREEZE;
 					if ($4)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->relcols = NIL;
 					$$ = (Node *)n;
 				}
-			| VACUUM opt_full opt_freeze opt_verbose qualified_name
+			| VACUUM opt_full opt_freeze opt_verbose analyze_target_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM;
@@ -10142,8 +10148,9 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_FREEZE;
 					if ($4)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = $5;
-					n->va_cols = NIL;
+					if (implies_analyze($5))
+						n->options |= VACOPT_ANALYZE;
+					n->relcols = $5;
 					$$ = (Node *)n;
 				}
 			| VACUUM opt_full opt_freeze opt_verbose AnalyzeStmt
@@ -10162,18 +10169,16 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->relcols = NIL;
 					$$ = (Node *) n;
 				}
-			| VACUUM '(' vacuum_option_list ')' qualified_name opt_name_list
+			| VACUUM '(' vacuum_option_list ')' analyze_target_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
-					n->relation = $5;
-					n->va_cols = $6;
-					if (n->va_cols != NIL)	/* implies analyze */
+					if (implies_analyze($5))
 						n->options |= VACOPT_ANALYZE;
+					n->relcols = $5;
 					$$ = (Node *) n;
 				}
 		;
@@ -10207,18 +10212,16 @@ AnalyzeStmt:
 					n->options = VACOPT_ANALYZE;
 					if ($2)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->relcols = NIL;
 					$$ = (Node *)n;
 				}
-			| analyze_keyword opt_verbose qualified_name opt_name_list
+			| analyze_keyword opt_verbose analyze_target_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_ANALYZE;
 					if ($2)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = $3;
-					n->va_cols = $4;
+					n->relcols = $3;
 					$$ = (Node *)n;
 				}
 		;
@@ -10241,11 +10244,33 @@ opt_freeze: FREEZE									{ $$ = TRUE; }
 			| /*EMPTY*/								{ $$ = FALSE; }
 		;
 
-opt_name_list:
-			'(' name_list ')'						{ $$ = $2; }
-			| /*EMPTY*/								{ $$ = NIL; }
+analyze_target_list:
+			analyze_target_item
+				{
+					$$ = list_make1($1);
+				}
+			| analyze_target_list ',' analyze_target_item
+				{
+					$$ = lappend($1, $3);
+				}
 		;
 
+analyze_target_item:
+			qualified_name
+				{
+					VacRelCols *n = makeNode(VacRelCols);
+					n->relation = $1;
+					n->va_cols = NIL;
+					$$ = (Node *)n;
+				}
+			| qualified_name '(' name_list ')'
+				{
+					VacRelCols *n = makeNode(VacRelCols);
+					n->relation = $1;
+					n->va_cols = $3;
+					$$ = (Node *)n;
+				}
+		;
 
 /*****************************************************************************
  *
@@ -15901,6 +15926,26 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	s->fromClause = list_make1(makeRangeVar(NULL, relname, -1));
 
 	return (Node *) s;
+}
+
+/*
+ * Retuns true if relcols implies VACOPT_ANALYZE
+ */
+static bool
+implies_analyze(List *relcols)
+{
+	ListCell *lc;
+
+	foreach (lc, relcols)
+	{
+		VacRelCols *t = (VacRelCols *) lfirst(lc);
+		Assert(IsA(t, VacRelCols));
+
+		if (t->va_cols != NIL)	/* implies analyze */
+			return true;
+	}
+
+	return false;
 }
 
 /* parser_init()

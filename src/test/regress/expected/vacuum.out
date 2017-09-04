@@ -71,9 +71,7 @@ ANALYZE vaccluster;
 ERROR:  ANALYZE cannot be executed from VACUUM or ANALYZE
 CONTEXT:  SQL function "do_analyze" statement 1
 SQL function "wrap_do_analyze" statement 1
-VACUUM FULL pg_am;
-VACUUM FULL pg_class;
-VACUUM FULL pg_database;
+VACUUM FULL pg_am, pg_class, pg_database;
 VACUUM FULL vaccluster;
 ERROR:  ANALYZE cannot be executed from VACUUM or ANALYZE
 CONTEXT:  SQL function "do_analyze" statement 1

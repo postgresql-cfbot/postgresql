@@ -54,9 +54,7 @@ CREATE INDEX ON vaccluster(wrap_do_analyze(i));
 INSERT INTO vaccluster VALUES (1), (2);
 ANALYZE vaccluster;
 
-VACUUM FULL pg_am;
-VACUUM FULL pg_class;
-VACUUM FULL pg_database;
+VACUUM FULL pg_am, pg_class, pg_database;
 VACUUM FULL vaccluster;
 VACUUM FULL vactst;
 

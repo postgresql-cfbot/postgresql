@@ -411,7 +411,7 @@ helpVariables(unsigned short int pager)
 #endif
 
 	fprintf(output, _("  COLUMNS            number of columns for wrapped format\n"));
-	fprintf(output, _("  PAGER              name of external pager program\n"));
+	fprintf(output, _("  PSQL_PAGER, PAGER  name of external pager program\n"));
 	fprintf(output, _("  PGAPPNAME          same as the application_name connection parameter\n"));
 	fprintf(output, _("  PGDATABASE         same as the dbname connection parameter\n"));
 	fprintf(output, _("  PGHOST             same as the host connection parameter\n"));

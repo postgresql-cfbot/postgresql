@@ -4243,17 +4243,20 @@ $endif
    </varlistentry>
 
    <varlistentry>
+    <term><envar>PSQL_PAGER</envar></term>
     <term><envar>PAGER</envar></term>
 
     <listitem>
      <para>
       If the query results do not fit on the screen, they are piped
-      through this command.  Typical values are
-      <literal>more</literal> or <literal>less</literal>.  The default
-      is platform-dependent.  Use of the pager can be disabled by setting
-      <envar>PAGER</envar> to empty, or by using pager-related options of
-      the <command>\pset</command> command.
+      through this command. Typical values are <literal>more</literal>
+      or <literal>less</literal>. The default is platform-dependent.
+      Use of the pager can be disabled by setting <envar>PSQL_PAGER</envar>
+      or <envar>PAGER</envar> to empty string, or by using pager-related
+      options of the <command>\pset</command> command. These variables
+      are examined in the order listed; the first that is set is used.
      </para>
+
     </listitem>
    </varlistentry>
 

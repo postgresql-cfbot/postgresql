@@ -2228,14 +2228,6 @@ PGresult *PQexec(PGconn *conn, const char *command);
     of the last command executed from the string.  Should one of the
     commands fail, processing of the string stops with it and the returned
     <structname>PGresult</structname> describes the error condition.
-     <note>
-      <para>
-       The server may be configure to disallow multiple sql commands without being 
-       a transaction block to add an extra defense against SQL-injection attacks 
-       so it is always a good practice to add <command>BEGIN</command>/<command>COMMIT
-       </command> commands for multiple sql commands
-      </para>
-     </note>
    </para>
 
    <para>

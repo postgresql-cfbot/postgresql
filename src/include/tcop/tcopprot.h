@@ -47,6 +47,8 @@ typedef enum
 
 extern int	log_statement;
 
+extern bool	allow_multiple_queries;
+
 extern List *pg_parse_query(const char *query_string);
 extern List *pg_analyze_and_rewrite(RawStmt *parsetree,
 					   const char *query_string,

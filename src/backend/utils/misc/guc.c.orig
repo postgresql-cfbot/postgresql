@@ -1666,16 +1666,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"allow_multiple_queries", PGC_SUSET, CLIENT_CONN_OTHER,
-			gettext_noop("Allow multiple queries per query string."),
-			NULL
-		},
-		&allow_multiple_queries,
-		true,
-		NULL, NULL, NULL
-	},
-
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

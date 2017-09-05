@@ -59,5 +59,8 @@ clean distclean maintainer-clean:
 check:
 	$(prove_check)
 
+check-clean:
+	$(prove_clean)
+
 installcheck:
 	$(prove_installcheck)

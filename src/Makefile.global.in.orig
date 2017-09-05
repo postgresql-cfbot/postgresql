@@ -362,25 +362,18 @@ endef
 ifeq ($(enable_tap_tests),yes)
 
 define prove_installcheck
-rm -rf $(CURDIR)/tmp_check/
-mkir -p $(CURDIR)/tmp_check/
+rm -rf $(CURDIR)/tmp_check/log
 cd $(srcdir) && TESTDIR='$(CURDIR)' PATH="$(bindir):$$PATH" PGPORT='6$(DEF_PGPORT)' top_builddir='$(CURDIR)/$(top_builddir)' PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
 endef
 
 define prove_check
-rm -rf $(CURDIR)/tmp_check/
-mkdir -p $(CURDIR)/tmp_check/
+rm -rf $(CURDIR)/tmp_check/log
 cd $(srcdir) && TESTDIR='$(CURDIR)' $(with_temp_install) PGPORT='6$(DEF_PGPORT)' PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
-endef
-
-define prove_clean
-rm -rf $(CURDIR)/tmp_check/t_*_data
 endef
 
 else
 prove_installcheck = @echo "TAP tests not enabled"
 prove_check = $(prove_installcheck)
-prove_clean = $(prove_installcheck)
 endif
 
 # Installation.

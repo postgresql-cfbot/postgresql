@@ -610,3 +610,32 @@ UNION SELECT 5
 ORDER BY 1;
 \r
 \p
+
+-- gdesc tests
+SELECT
+    NULL AS zero,
+    1 AS one,
+    2.0 AS two,
+    'three' AS three,
+    $1 AS four,
+    sin($2) as five,
+    CURRENT_DATE AS now
+\gdesc
+
+PREPARE test AS SELECT 1 AS first;
+EXECUTE test \gdesc
+
+-- should fail - syntax error
+SELECT 1 + \gdesc
+
+-- empty results
+SELECT \gdesc
+CREATE TABLE bububu(a int)\gdesc
+
+-- one line
+SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty name" \gdesc \g
+
+-- query buffer should not be broken
+SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty name"
+\gdesc
+\g

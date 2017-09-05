@@ -1948,6 +1948,15 @@ Tue Oct 26 21:40:57 CEST 1999
         </listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><literal>\gdesc</literal></term>
+        <listitem>
+        <para>
+        Show the description of the result of the current query buffer without
+        actually executing it, by considering it a prepared statement.
+        </para>
+        </listitem>
+      </varlistentry>
 
       <varlistentry>
         <term><literal>\gexec</literal></term>

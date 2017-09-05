@@ -86,6 +86,7 @@ static backslashResult exec_command_errverbose(PsqlScanState scan_state, bool ac
 static backslashResult exec_command_f(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_g(PsqlScanState scan_state, bool active_branch,
 			   const char *cmd);
+static backslashResult exec_command_gdesc(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_gexec(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_gset(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_help(PsqlScanState scan_state, bool active_branch);
@@ -333,6 +334,8 @@ exec_command(const char *cmd,
 		status = exec_command_f(scan_state, active_branch);
 	else if (strcmp(cmd, "g") == 0 || strcmp(cmd, "gx") == 0)
 		status = exec_command_g(scan_state, active_branch, cmd);
+	else if (strcmp(cmd, "gdesc") == 0)
+		status = exec_command_gdesc(scan_state, active_branch);
 	else if (strcmp(cmd, "gexec") == 0)
 		status = exec_command_gexec(scan_state, active_branch);
 	else if (strcmp(cmd, "gset") == 0)
@@ -1245,6 +1248,25 @@ exec_command_g(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		free(fname);
 		if (strcmp(cmd, "gx") == 0)
 			pset.g_expanded = true;
+		status = PSQL_CMD_SEND;
+	}
+	else
+		ignore_slash_filepipe(scan_state);
+
+	return status;
+}
+
+/*
+ * \gdesc -- describe query result
+ */
+static backslashResult
+exec_command_gdesc(PsqlScanState scan_state, bool active_branch)
+{
+	backslashResult status = PSQL_CMD_SKIP_LINE;
+
+	if (active_branch)
+	{
+		pset.gdesc_flag = true;
 		status = PSQL_CMD_SEND;
 	}
 	else

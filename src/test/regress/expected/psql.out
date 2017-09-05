@@ -3052,3 +3052,73 @@ SELECT 3
 UNION SELECT 4 
 UNION SELECT 5
 ORDER BY 1;
+-- gdesc tests
+SELECT
+    NULL AS zero,
+    1 AS one,
+    2.0 AS two,
+    'three' AS three,
+    $1 AS four,
+    sin($2) as five,
+    CURRENT_DATE AS now
+\gdesc
+ Name  |       Type       
+-------+------------------
+ zero  | text
+ one   | integer
+ two   | numeric
+ three | text
+ four  | text
+ five  | double precision
+ now   | date
+(7 rows)
+
+PREPARE test AS SELECT 1 AS first;
+EXECUTE test \gdesc
+ Name  |  Type   
+-------+---------
+ first | integer
+(1 row)
+
+-- should fail - syntax error
+SELECT 1 + \gdesc
+ERROR:  syntax error at end of input
+LINE 1: SELECT 1 + 
+                   ^
+-- empty results
+SELECT \gdesc
+The result has no columns or the command has no result.
+CREATE TABLE bububu(a int)\gdesc
+The result has no columns or the command has no result.
+-- one line
+SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty name" \gdesc \g
+    Name    |  Type   
+------------+---------
+ x          | integer
+ ?column?   | text
+ y          | integer
+ dirty name | boolean
+(4 rows)
+
+ x | ?column? | y | dirty name 
+---+----------+---+------------
+ 1 | Hello    | 2 | t
+(1 row)
+
+-- query buffer should not be broken
+SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty name"
+\gdesc
+    Name    |  Type   
+------------+---------
+ x          | integer
+ ?column?   | text
+ y          | integer
+ dirty name | boolean
+(4 rows)
+
+\g
+ x | ?column? | y | dirty name 
+---+----------+---+------------
+ 1 | Hello    | 2 | t
+(1 row)
+

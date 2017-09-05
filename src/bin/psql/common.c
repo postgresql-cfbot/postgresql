@@ -1370,7 +1370,88 @@ SendQuery(const char *query)
 		}
 	}
 
-	if (pset.fetch_count <= 0 || pset.gexec_flag ||
+	if (pset.gdesc_flag)
+	{
+		/*
+		 * Unnamed prepared statement is used. Is not possible to
+		 * create any unnamed prepared statement from psql user space,
+		 * so there should not be any conflict. In this moment is not
+		 * possible to deallocate this prepared statement, so it should
+		 * to live to end of session or to another \gdesc call.
+		 */
+		results = PQprepare(pset.db, "", query, 0, NULL);
+		if (PQresultStatus(results) != PGRES_COMMAND_OK)
+		{
+			psql_error("%s", PQerrorMessage(pset.db));
+			ClearOrSaveResult(results);
+			ResetCancelConn();
+			goto sendquery_cleanup;
+		}
+		PQclear(results);
+
+		results = PQdescribePrepared(pset.db, "");
+		OK = ProcessResult(&results);
+		if (OK && results)
+		{
+			if (PQnfields(results) > 0)
+			{
+				PQExpBufferData		buf;
+				int		i;
+
+				initPQExpBuffer(&buf);
+
+				printfPQExpBuffer(&buf,
+					  "SELECT name AS \"%s\", pg_catalog.format_type(tp, tpm) AS \"%s\"\n"
+					  "FROM (VALUES",
+					  gettext_noop("Name"),
+					  gettext_noop("Type"));
+
+				for(i = 0; i< PQnfields(results); i++)
+				{
+					char	*name;
+					char	*escname;
+					size_t		name_length;
+
+					if (i > 0)
+						appendPQExpBufferStr(&buf, ",");
+
+					name = PQfname(results, i);
+					name_length = strlen(name);
+					escname = PQescapeLiteral(pset.db, name, name_length);
+
+					if (escname == NULL)
+					{
+						psql_error("%s", PQerrorMessage(pset.db));
+						PQclear(results);
+						termPQExpBuffer(&buf);
+						goto sendquery_cleanup;
+					}
+
+					appendPQExpBuffer(&buf, "(%s, %d, %d)",
+									  escname, PQftype(results,i), PQfmod(results,i));
+					PQfreemem(escname);
+				}
+
+				appendPQExpBuffer(&buf,") s (name, tp, tpm)");
+				PQclear(results);
+
+				results = PQexec(pset.db, buf.data);
+				OK = ProcessResult(&results);
+
+				if (OK && results)
+					OK = PrintQueryResults(results);
+
+				termPQExpBuffer(&buf);
+			}
+			else
+				fprintf(pset.queryFout, _("The result has no columns or the command has no result.\n"));
+		}
+
+		ClearOrSaveResult(results);
+		ResetCancelConn();
+		results = NULL;			/* PQclear(NULL) does nothing */
+	}
+	else if (pset.fetch_count <= 0 || pset.gexec_flag ||
 		pset.crosstab_flag || !is_select_command(query))
 	{
 		/* Default fetch-it-all-and-print mode */
@@ -1527,6 +1608,9 @@ sendquery_cleanup:
 		pg_free(pset.ctv_args[i]);
 		pset.ctv_args[i] = NULL;
 	}
+
+	/* reset \gdesc trigger */
+	pset.gdesc_flag = false;
 
 	return OK;
 }

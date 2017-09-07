@@ -16,7 +16,9 @@
 #define TQUAL_H
 
 #include "utils/snapshot.h"
+#include "utils/snapmgr.h"
 #include "access/xlogdefs.h"
+#include "catalog/catalog.h"
 
 
 /* Static variables representing various special snapshot semantics */
@@ -68,6 +70,8 @@ extern bool HeapTupleSatisfiesDirty(HeapTuple htup,
 						Snapshot snapshot, Buffer buffer);
 extern bool HeapTupleSatisfiesHistoricMVCC(HeapTuple htup,
 							   Snapshot snapshot, Buffer buffer);
+extern bool HeapTupleSatisfiesNonVacuumable(HeapTuple htup,
+						Snapshot snapshot, Buffer buffer);
 
 /* Special "satisfies" routines with different APIs */
 extern HTSU_Result HeapTupleSatisfiesUpdate(HeapTuple htup,
@@ -99,6 +103,24 @@ extern bool ResolveCminCmaxDuringDecoding(struct HTAB *tuplecid_data,
  */
 #define InitDirtySnapshot(snapshotdata)  \
 	((snapshotdata).satisfies = HeapTupleSatisfiesDirty)
+
+/*
+ * Similarly, some initialization is required for SnapshotNonVacuumable.
+ * We need to set xmin horizon for this relation. If it's a proper
+ * catalog relation or a user defined, additional, catalog relation, we
+ * need to use the horizon that includes slots, otherwise the data-only
+ * horizon can be used. Note that the toast relation of user defined
+ * relations are *not* considered catalog relations.
+ */
+#define InitNonVacuumableSnapshot(snapshotdata, relation)  \
+	do { \
+		if (IsCatalogRelation(relation) || \
+			RelationIsAccessibleInLogicalDecoding(relation)) \
+			(snapshotdata).xmin = RecentGlobalXmin; \
+		else \
+			(snapshotdata).xmin = RecentGlobalDataXmin; \
+		(snapshotdata).satisfies = HeapTupleSatisfiesNonVacuumable; \
+	} while(0)
 
 /*
  * Similarly, some initialization is required for SnapshotToast.  We need

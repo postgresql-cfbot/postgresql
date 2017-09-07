@@ -350,7 +350,7 @@ ProcessUtility(PlannedStmt *pstmt,
 	 * call standard_ProcessUtility().
 	 */
 	if (ProcessUtility_hook)
-		(*ProcessUtility_hook) (pstmt, queryString,
+		ProcessUtility_hook(pstmt, queryString,
 								context, params, queryEnv,
 								dest, completionTag);
 	else

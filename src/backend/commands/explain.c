@@ -353,7 +353,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 	/* if an advisor plugin is present, let it manage things */
 	if (ExplainOneQuery_hook)
-		(*ExplainOneQuery_hook) (query, cursorOptions, into, es,
+		ExplainOneQuery_hook(query, cursorOptions, into, es,
 								 queryString, params);
 	else
 	{
@@ -2505,7 +2505,7 @@ explain_get_index_name(Oid indexId)
 	const char *result;
 
 	if (explain_get_index_name_hook)
-		result = (*explain_get_index_name_hook) (indexId);
+		result = explain_get_index_name_hook(indexId);
 	else
 		result = NULL;
 	if (result == NULL)

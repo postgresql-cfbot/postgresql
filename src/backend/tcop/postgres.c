@@ -695,12 +695,12 @@ pg_analyze_and_rewrite_params(RawStmt *parsetree,
 	pstate = make_parsestate(NULL);
 	pstate->p_sourcetext = query_string;
 	pstate->p_queryEnv = queryEnv;
-	(*parserSetup) (pstate, parserSetupArg);
+	parserSetup(pstate, parserSetupArg);
 
 	query = transformTopLevelStmt(pstate, parsetree);
 
 	if (post_parse_analyze_hook)
-		(*post_parse_analyze_hook) (pstate, query);
+		post_parse_analyze_hook(pstate, query);
 
 	free_parsestate(pstate);
 
@@ -1114,7 +1114,7 @@ exec_simple_query(const char *query_string)
 						 receiver,
 						 completionTag);
 
-		(*receiver->rDestroy) (receiver);
+		receiver->rDestroy(receiver);
 
 		PortalDrop(portal, false);
 
@@ -2002,7 +2002,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 						  receiver,
 						  completionTag);
 
-	(*receiver->rDestroy) (receiver);
+	receiver->rDestroy(receiver);
 
 	if (completed)
 	{

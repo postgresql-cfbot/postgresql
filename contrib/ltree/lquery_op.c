@@ -70,7 +70,7 @@ bool
 				 lent == lenq ||
 				 (lent > lenq && anyend)
 				 ) &&
-				(*cmpptr) (qn, tn, lenq) == 0)
+				cmpptr(qn, tn, lenq) == 0)
 			{
 
 				isok = true;
@@ -123,7 +123,7 @@ checkLevel(lquery_level *curq, ltree_level *curt)
 				  curvar->len == curt->len ||
 				  (curt->len > curvar->len && (curvar->flag & LVAR_ANYEND))
 				  ) &&
-				 (*cmpptr) (curvar->name, curt->name, curvar->len) == 0)
+				 cmpptr(curvar->name, curt->name, curvar->len) == 0)
 		{
 
 			return true;

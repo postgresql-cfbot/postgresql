@@ -37,7 +37,7 @@ RunObjectPostCreateHook(Oid classId, Oid objectId, int subId,
 	memset(&pc_arg, 0, sizeof(ObjectAccessPostCreate));
 	pc_arg.is_internal = is_internal;
 
-	(*object_access_hook) (OAT_POST_CREATE,
+	object_access_hook(OAT_POST_CREATE,
 						   classId, objectId, subId,
 						   (void *) &pc_arg);
 }
@@ -59,7 +59,7 @@ RunObjectDropHook(Oid classId, Oid objectId, int subId,
 	memset(&drop_arg, 0, sizeof(ObjectAccessDrop));
 	drop_arg.dropflags = dropflags;
 
-	(*object_access_hook) (OAT_DROP,
+	object_access_hook(OAT_DROP,
 						   classId, objectId, subId,
 						   (void *) &drop_arg);
 }
@@ -82,7 +82,7 @@ RunObjectPostAlterHook(Oid classId, Oid objectId, int subId,
 	pa_arg.auxiliary_id = auxiliaryId;
 	pa_arg.is_internal = is_internal;
 
-	(*object_access_hook) (OAT_POST_ALTER,
+	object_access_hook(OAT_POST_ALTER,
 						   classId, objectId, subId,
 						   (void *) &pa_arg);
 }
@@ -104,7 +104,7 @@ RunNamespaceSearchHook(Oid objectId, bool ereport_on_violation)
 	ns_arg.ereport_on_violation = ereport_on_violation;
 	ns_arg.result = true;
 
-	(*object_access_hook) (OAT_NAMESPACE_SEARCH,
+	object_access_hook(OAT_NAMESPACE_SEARCH,
 						   NamespaceRelationId, objectId, 0,
 						   (void *) &ns_arg);
 
@@ -122,7 +122,7 @@ RunFunctionExecuteHook(Oid objectId)
 	/* caller should check, but just in case... */
 	Assert(object_access_hook != NULL);
 
-	(*object_access_hook) (OAT_FUNCTION_EXECUTE,
+	object_access_hook(OAT_FUNCTION_EXECUTE,
 						   ProcedureRelationId, objectId, 0,
 						   NULL);
 }

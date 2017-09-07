@@ -93,7 +93,7 @@ query_planner(PlannerInfo *root, List *tlist,
 		 * like "SELECT 2+2 ORDER BY 1".
 		 */
 		root->canon_pathkeys = NIL;
-		(*qp_callback) (root, qp_extra);
+		qp_callback(root, qp_extra);
 
 		return final_rel;
 	}
@@ -174,7 +174,7 @@ query_planner(PlannerInfo *root, List *tlist,
 	 * generate pathkeys in canonical form; so compute query_pathkeys and
 	 * other pathkeys fields in PlannerInfo.
 	 */
-	(*qp_callback) (root, qp_extra);
+	qp_callback(root, qp_extra);
 
 	/*
 	 * Examine any "placeholder" expressions generated during subquery pullup.

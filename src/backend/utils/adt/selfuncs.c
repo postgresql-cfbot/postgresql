@@ -4713,7 +4713,7 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 						 * decisions about what to do with partial indexes.
 						 */
 						if (get_index_stats_hook &&
-							(*get_index_stats_hook) (root, index->indexoid,
+							get_index_stats_hook(root, index->indexoid,
 													 pos + 1, vardata))
 						{
 							/*
@@ -4788,7 +4788,7 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 	Assert(IsA(rte, RangeTblEntry));
 
 	if (get_relation_stats_hook &&
-		(*get_relation_stats_hook) (root, rte, var->varattno, vardata))
+		get_relation_stats_hook(root, rte, var->varattno, vardata))
 	{
 		/*
 		 * The hook took control of acquiring a stats tuple.  If it did supply
@@ -6912,7 +6912,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		colnum = index->indexkeys[0];
 
 		if (get_relation_stats_hook &&
-			(*get_relation_stats_hook) (root, rte, colnum, &vardata))
+			get_relation_stats_hook(root, rte, colnum, &vardata))
 		{
 			/*
 			 * The hook took control of acquiring a stats tuple.  If it did
@@ -6938,7 +6938,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		colnum = 1;
 
 		if (get_index_stats_hook &&
-			(*get_index_stats_hook) (root, relid, colnum, &vardata))
+			get_index_stats_hook(root, relid, colnum, &vardata))
 		{
 			/*
 			 * The hook took control of acquiring a stats tuple.  If it did
@@ -7845,7 +7845,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		{
 			/* Simple variable -- look to stats for the underlying table */
 			if (get_relation_stats_hook &&
-				(*get_relation_stats_hook) (root, rte, attnum, &vardata))
+				get_relation_stats_hook(root, rte, attnum, &vardata))
 			{
 				/*
 				 * The hook took control of acquiring a stats tuple.  If it
@@ -7876,7 +7876,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			attnum = qinfo->indexcol + 1;
 
 			if (get_index_stats_hook &&
-				(*get_index_stats_hook) (root, index->indexoid, attnum, &vardata))
+				get_index_stats_hook(root, index->indexoid, attnum, &vardata))
 			{
 				/*
 				 * The hook took control of acquiring a stats tuple.  If it

@@ -593,7 +593,7 @@ ClientAuthentication(Port *port)
 	}
 
 	if (ClientAuthentication_hook)
-		(*ClientAuthentication_hook) (port, status);
+		ClientAuthentication_hook(port, status);
 
 	if (status == STATUS_OK)
 		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);

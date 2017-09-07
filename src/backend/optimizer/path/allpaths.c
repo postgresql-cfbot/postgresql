@@ -494,7 +494,7 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * add_path(), or delete or modify paths added by the core code.
 	 */
 	if (set_rel_pathlist_hook)
-		(*set_rel_pathlist_hook) (root, rel, rti, rte);
+		set_rel_pathlist_hook(root, rel, rti, rte);
 
 	/* Now find the cheapest of the paths for this rel */
 	set_cheapest(rel);

@@ -205,7 +205,7 @@ planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	PlannedStmt *result;
 
 	if (planner_hook)
-		result = (*planner_hook) (parse, cursorOptions, boundParams);
+		result = planner_hook(parse, cursorOptions, boundParams);
 	else
 		result = standard_planner(parse, cursorOptions, boundParams);
 	return result;
@@ -2071,7 +2071,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_FINAL,
+		create_upper_paths_hook(root, UPPERREL_FINAL,
 									current_rel, final_rel);
 
 	/* Note: currently, we leave it to callers to do set_cheapest() */
@@ -4127,7 +4127,7 @@ create_grouping_paths(PlannerInfo *root,
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_GROUP_AGG,
+		create_upper_paths_hook(root, UPPERREL_GROUP_AGG,
 									input_rel, grouped_rel);
 
 	/* Now choose the best path(s) */
@@ -4563,7 +4563,7 @@ create_window_paths(PlannerInfo *root,
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_WINDOW,
+		create_upper_paths_hook(root, UPPERREL_WINDOW,
 									input_rel, window_rel);
 
 	/* Now choose the best path(s) */
@@ -4867,7 +4867,7 @@ create_distinct_paths(PlannerInfo *root,
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_DISTINCT,
+		create_upper_paths_hook(root, UPPERREL_DISTINCT,
 									input_rel, distinct_rel);
 
 	/* Now choose the best path(s) */
@@ -5009,7 +5009,7 @@ create_ordered_paths(PlannerInfo *root,
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_ORDERED,
+		create_upper_paths_hook(root, UPPERREL_ORDERED,
 									input_rel, ordered_rel);
 
 	/*

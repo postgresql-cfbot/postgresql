@@ -112,7 +112,7 @@ parse_analyze(RawStmt *parseTree, const char *sourceText,
 	query = transformTopLevelStmt(pstate, parseTree);
 
 	if (post_parse_analyze_hook)
-		(*post_parse_analyze_hook) (pstate, query);
+		post_parse_analyze_hook(pstate, query);
 
 	free_parsestate(pstate);
 
@@ -145,7 +145,7 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 	check_variable_parameters(pstate, query);
 
 	if (post_parse_analyze_hook)
-		(*post_parse_analyze_hook) (pstate, query);
+		post_parse_analyze_hook(pstate, query);
 
 	free_parsestate(pstate);
 

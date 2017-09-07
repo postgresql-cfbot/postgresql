@@ -248,7 +248,7 @@ static void
 sepgsql_client_auth(Port *port, int status)
 {
 	if (next_client_auth_hook)
-		(*next_client_auth_hook) (port, status);
+		next_client_auth_hook(port, status);
 
 	/*
 	 * In the case when authentication failed, the supplied socket shall be
@@ -288,7 +288,7 @@ sepgsql_needs_fmgr_hook(Oid functionId)
 	ObjectAddress object;
 
 	if (next_needs_fmgr_hook &&
-		(*next_needs_fmgr_hook) (functionId))
+		next_needs_fmgr_hook(functionId))
 		return true;
 
 	/*
@@ -389,7 +389,7 @@ sepgsql_fmgr_hook(FmgrHookEventType event,
 				client_label_func = stack->new_label;
 			}
 			if (next_fmgr_hook)
-				(*next_fmgr_hook) (event, flinfo, &stack->next_private);
+				next_fmgr_hook(event, flinfo, &stack->next_private);
 			break;
 
 		case FHET_END:
@@ -397,7 +397,7 @@ sepgsql_fmgr_hook(FmgrHookEventType event,
 			stack = (void *) DatumGetPointer(*private);
 
 			if (next_fmgr_hook)
-				(*next_fmgr_hook) (event, flinfo, &stack->next_private);
+				next_fmgr_hook(event, flinfo, &stack->next_private);
 
 			if (stack->new_label)
 			{

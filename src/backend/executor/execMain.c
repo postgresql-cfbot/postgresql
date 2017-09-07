@@ -147,7 +147,7 @@ void
 ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	if (ExecutorStart_hook)
-		(*ExecutorStart_hook) (queryDesc, eflags);
+		ExecutorStart_hook(queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
 }
@@ -301,7 +301,7 @@ ExecutorRun(QueryDesc *queryDesc,
 			bool execute_once)
 {
 	if (ExecutorRun_hook)
-		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
+		ExecutorRun_hook(queryDesc, direction, count, execute_once);
 	else
 		standard_ExecutorRun(queryDesc, direction, count, execute_once);
 }
@@ -349,7 +349,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 				  queryDesc->plannedstmt->hasReturning);
 
 	if (sendTuples)
-		(*dest->rStartup) (dest, operation, queryDesc->tupDesc);
+		dest->rStartup(dest, operation, queryDesc->tupDesc);
 
 	/*
 	 * run plan
@@ -375,7 +375,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	 * shutdown tuple receiver, if we started it
 	 */
 	if (sendTuples)
-		(*dest->rShutdown) (dest);
+		dest->rShutdown(dest);
 
 	if (queryDesc->totaltime)
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
@@ -401,7 +401,7 @@ void
 ExecutorFinish(QueryDesc *queryDesc)
 {
 	if (ExecutorFinish_hook)
-		(*ExecutorFinish_hook) (queryDesc);
+		ExecutorFinish_hook(queryDesc);
 	else
 		standard_ExecutorFinish(queryDesc);
 }
@@ -461,7 +461,7 @@ void
 ExecutorEnd(QueryDesc *queryDesc)
 {
 	if (ExecutorEnd_hook)
-		(*ExecutorEnd_hook) (queryDesc);
+		ExecutorEnd_hook(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
 }
@@ -588,7 +588,7 @@ ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation)
 	}
 
 	if (ExecutorCheckPerms_hook)
-		result = (*ExecutorCheckPerms_hook) (rangeTable,
+		result = ExecutorCheckPerms_hook(rangeTable,
 											 ereport_on_violation);
 	return result;
 }
@@ -1745,7 +1745,7 @@ ExecutePlan(EState *estate,
 			 * has closed and no more tuples can be sent. If that's the case,
 			 * end the loop.
 			 */
-			if (!((*dest->receiveSlot) (slot, dest)))
+			if (!dest->receiveSlot(slot, dest))
 				break;
 		}
 

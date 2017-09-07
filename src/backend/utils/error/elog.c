@@ -435,7 +435,7 @@ errfinish(int dummy,...)
 	for (econtext = error_context_stack;
 		 econtext != NULL;
 		 econtext = econtext->previous)
-		(*econtext->callback) (econtext->arg);
+		econtext->callback(econtext->arg);
 
 	/*
 	 * If ERROR (not more nor less) we pass it off to the current handler.
@@ -1472,7 +1472,7 @@ EmitErrorReport(void)
 	 * detail, detail_log, hint and context text elements.
 	 */
 	if (edata->output_to_server && emit_log_hook)
-		(*emit_log_hook) (edata);
+		emit_log_hook(edata);
 
 	/* Send to server log, if enabled */
 	if (edata->output_to_server)
@@ -1837,7 +1837,7 @@ GetErrorContextStack(void)
 	for (econtext = error_context_stack;
 		 econtext != NULL;
 		 econtext = econtext->previous)
-		(*econtext->callback) (econtext->arg);
+		econtext->callback(econtext->arg);
 
 	/*
 	 * Clean ourselves off the stack, any allocations done should have been

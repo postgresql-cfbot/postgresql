@@ -1823,7 +1823,7 @@ PrepareToInvalidateCacheTuple(Relation relation,
 		hashvalue = CatalogCacheComputeTupleHashValue(ccp, tuple);
 		dbid = ccp->cc_relisshared ? (Oid) 0 : MyDatabaseId;
 
-		(*function) (ccp->id, hashvalue, dbid);
+		function(ccp->id, hashvalue, dbid);
 
 		if (newtuple)
 		{
@@ -1832,7 +1832,7 @@ PrepareToInvalidateCacheTuple(Relation relation,
 			newhashvalue = CatalogCacheComputeTupleHashValue(ccp, newtuple);
 
 			if (newhashvalue != hashvalue)
-				(*function) (ccp->id, newhashvalue, dbid);
+				function(ccp->id, newhashvalue, dbid);
 		}
 	}
 }

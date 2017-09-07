@@ -428,7 +428,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 * removing an index, or adding a hypothetical index to the indexlist.
 	 */
 	if (get_relation_info_hook)
-		(*get_relation_info_hook) (root, relationObjectId, inhparent, rel);
+		get_relation_info_hook(root, relationObjectId, inhparent, rel);
 }
 
 /*

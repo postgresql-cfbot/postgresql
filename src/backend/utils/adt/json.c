@@ -434,8 +434,8 @@ parse_scalar(JsonLexContext *lex, JsonSemAction *sem)
 			report_parse_error(JSON_PARSE_VALUE, lex);
 	}
 
-	if (sfunc != NULL)
-		(*sfunc) (sem->semstate, val, tok);
+	if (sfunc)
+		sfunc(sem->semstate, val, tok);
 }
 
 static void
@@ -465,8 +465,8 @@ parse_object_field(JsonLexContext *lex, JsonSemAction *sem)
 	tok = lex_peek(lex);
 	isnull = tok == JSON_TOKEN_NULL;
 
-	if (ostart != NULL)
-		(*ostart) (sem->semstate, fname, isnull);
+	if (ostart)
+		ostart(sem->semstate, fname, isnull);
 
 	switch (tok)
 	{
@@ -480,8 +480,8 @@ parse_object_field(JsonLexContext *lex, JsonSemAction *sem)
 			parse_scalar(lex, sem);
 	}
 
-	if (oend != NULL)
-		(*oend) (sem->semstate, fname, isnull);
+	if (oend)
+		oend(sem->semstate, fname, isnull);
 }
 
 static void
@@ -497,8 +497,8 @@ parse_object(JsonLexContext *lex, JsonSemAction *sem)
 
 	check_stack_depth();
 
-	if (ostart != NULL)
-		(*ostart) (sem->semstate);
+	if (ostart)
+		ostart(sem->semstate);
 
 	/*
 	 * Data inside an object is at a higher nesting level than the object
@@ -530,8 +530,8 @@ parse_object(JsonLexContext *lex, JsonSemAction *sem)
 
 	lex->lex_level--;
 
-	if (oend != NULL)
-		(*oend) (sem->semstate);
+	if (oend)
+		oend(sem->semstate);
 }
 
 static void
@@ -545,8 +545,8 @@ parse_array_element(JsonLexContext *lex, JsonSemAction *sem)
 
 	isnull = tok == JSON_TOKEN_NULL;
 
-	if (astart != NULL)
-		(*astart) (sem->semstate, isnull);
+	if (astart)
+		astart(sem->semstate, isnull);
 
 	/* an array element is any object, array or scalar */
 	switch (tok)
@@ -561,8 +561,8 @@ parse_array_element(JsonLexContext *lex, JsonSemAction *sem)
 			parse_scalar(lex, sem);
 	}
 
-	if (aend != NULL)
-		(*aend) (sem->semstate, isnull);
+	if (aend)
+		aend(sem->semstate, isnull);
 }
 
 static void
@@ -577,8 +577,8 @@ parse_array(JsonLexContext *lex, JsonSemAction *sem)
 
 	check_stack_depth();
 
-	if (astart != NULL)
-		(*astart) (sem->semstate);
+	if (astart)
+		astart(sem->semstate);
 
 	/*
 	 * Data inside an array is at a higher nesting level than the array
@@ -602,8 +602,8 @@ parse_array(JsonLexContext *lex, JsonSemAction *sem)
 
 	lex->lex_level--;
 
-	if (aend != NULL)
-		(*aend) (sem->semstate);
+	if (aend)
+		aend(sem->semstate);
 }
 
 /*

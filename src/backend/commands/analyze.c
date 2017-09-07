@@ -499,7 +499,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 												rows, targrows,
 												&totalrows, &totaldeadrows);
 	else
-		numrows = (*acquirefunc) (onerel, elevel,
+		numrows = acquirefunc(onerel, elevel,
 								  rows, targrows,
 								  &totalrows, &totaldeadrows);
 
@@ -526,7 +526,7 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 
 			stats->rows = rows;
 			stats->tupDesc = onerel->rd_att;
-			(*stats->compute_stats) (stats,
+			stats->compute_stats(stats,
 									 std_fetch_func,
 									 numrows,
 									 totalrows);
@@ -830,7 +830,7 @@ compute_index_stats(Relation onerel, double totalrows,
 				stats->exprvals = exprvals + i;
 				stats->exprnulls = exprnulls + i;
 				stats->rowstride = attr_cnt;
-				(*stats->compute_stats) (stats,
+				stats->compute_stats(stats,
 										 ind_fetch_func,
 										 numindexrows,
 										 totalindexrows);
@@ -1430,7 +1430,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 							tdrows;
 
 				/* Fetch a random sample of the child's rows */
-				childrows = (*acquirefunc) (childrel, elevel,
+				childrows = acquirefunc(childrel, elevel,
 											rows + numrows, childtargrows,
 											&trows, &tdrows);
 

@@ -245,7 +245,7 @@ internal_load_library(const char *libname)
 			pg_dlsym(file_scanner->handle, PG_MAGIC_FUNCTION_NAME_STRING);
 		if (magic_func)
 		{
-			const Pg_magic_struct *magic_data_ptr = (*magic_func) ();
+			const Pg_magic_struct *magic_data_ptr = magic_func();
 
 			if (magic_data_ptr->len != magic_data.len ||
 				memcmp(magic_data_ptr, &magic_data, magic_data.len) != 0)
@@ -278,7 +278,7 @@ internal_load_library(const char *libname)
 		 */
 		PG_init = (PG_init_t) pg_dlsym(file_scanner->handle, "_PG_init");
 		if (PG_init)
-			(*PG_init) ();
+			PG_init();
 
 		/* OK to link it into list */
 		if (file_list == NULL)
@@ -438,7 +438,7 @@ internal_unload_library(const char *libname)
 			 */
 			PG_fini = (PG_fini_t) pg_dlsym(file_scanner->handle, "_PG_fini");
 			if (PG_fini)
-				(*PG_fini) ();
+				PG_fini();
 
 			clear_external_function_hash(file_scanner->handle);
 			pg_dlclose(file_scanner->handle);

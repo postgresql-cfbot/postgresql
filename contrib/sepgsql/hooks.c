@@ -92,7 +92,7 @@ sepgsql_object_access(ObjectAccessType access,
 					  void *arg)
 {
 	if (next_object_access_hook)
-		(*next_object_access_hook) (access, classId, objectId, subId, arg);
+		next_object_access_hook(access, classId, objectId, subId, arg);
 
 	switch (access)
 	{
@@ -282,7 +282,7 @@ sepgsql_exec_check_perms(List *rangeTabls, bool abort)
 	 * least, we don't need to check any more.
 	 */
 	if (next_exec_check_perms_hook &&
-		!(*next_exec_check_perms_hook) (rangeTabls, abort))
+		!next_exec_check_perms_hook(rangeTabls, abort))
 		return false;
 
 	if (!sepgsql_dml_privileges(rangeTabls, abort))
@@ -365,7 +365,7 @@ sepgsql_utility_command(PlannedStmt *pstmt,
 		}
 
 		if (next_ProcessUtility_hook)
-			(*next_ProcessUtility_hook) (pstmt, queryString,
+			next_ProcessUtility_hook(pstmt, queryString,
 										 context, params, queryEnv,
 										 dest, completionTag);
 		else

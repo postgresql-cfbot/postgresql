@@ -4860,7 +4860,7 @@ iterate_string_values_scalar(void *state, char *token, JsonTokenType tokentype)
 	IterateJsonStringValuesState *_state = (IterateJsonStringValuesState *) state;
 
 	if (tokentype == JSON_TOKEN_STRING)
-		(*_state->action) (_state->action_state, token, strlen(token));
+		_state->action(_state->action_state, token, strlen(token));
 }
 
 /*

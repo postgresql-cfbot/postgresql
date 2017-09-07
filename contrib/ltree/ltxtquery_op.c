@@ -73,7 +73,7 @@ checkcondition_str(void *checkval, ITEM *val)
 				  val->length == level->len ||
 				  (level->len > val->length && (val->flag & LVAR_ANYEND))
 				  ) &&
-				 (*cmpptr) (op, level->name, val->length) == 0)
+				 cmpptr(op, level->name, val->length) == 0)
 			return true;
 
 		tlen--;

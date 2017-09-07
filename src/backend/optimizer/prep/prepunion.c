@@ -227,7 +227,7 @@ plan_set_operations(PlannerInfo *root)
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
-		(*create_upper_paths_hook) (root, UPPERREL_SETOP,
+		create_upper_paths_hook(root, UPPERREL_SETOP,
 									NULL, setop_rel);
 
 	/* Select cheapest path */

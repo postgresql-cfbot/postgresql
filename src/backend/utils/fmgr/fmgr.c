@@ -403,7 +403,7 @@ fetch_finfo_record(void *filehandle, const char *funcname)
 	}
 
 	/* Found, so call it */
-	inforec = (*infofunc) ();
+	inforec = infofunc();
 
 	/* Validate result as best we can */
 	if (inforec == NULL)
@@ -643,7 +643,7 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 
 	/* function manager hook */
 	if (fmgr_hook)
-		(*fmgr_hook) (FHET_START, &fcache->flinfo, &fcache->arg);
+		fmgr_hook(FHET_START, &fcache->flinfo, &fcache->arg);
 
 	/*
 	 * We don't need to restore GUC or userid settings on error, because the
@@ -674,7 +674,7 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 	{
 		fcinfo->flinfo = save_flinfo;
 		if (fmgr_hook)
-			(*fmgr_hook) (FHET_ABORT, &fcache->flinfo, &fcache->arg);
+			fmgr_hook(FHET_ABORT, &fcache->flinfo, &fcache->arg);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
@@ -686,7 +686,7 @@ fmgr_security_definer(PG_FUNCTION_ARGS)
 	if (OidIsValid(fcache->userid))
 		SetUserIdAndSecContext(save_userid, save_sec_context);
 	if (fmgr_hook)
-		(*fmgr_hook) (FHET_END, &fcache->flinfo, &fcache->arg);
+		fmgr_hook(FHET_END, &fcache->flinfo, &fcache->arg);
 
 	return result;
 }
@@ -714,7 +714,7 @@ DirectFunctionCall1Coll(PGFunction func, Oid collation, Datum arg1)
 	fcinfo.arg[0] = arg1;
 	fcinfo.argnull[0] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -736,7 +736,7 @@ DirectFunctionCall2Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2)
 	fcinfo.argnull[0] = false;
 	fcinfo.argnull[1] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -761,7 +761,7 @@ DirectFunctionCall3Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[1] = false;
 	fcinfo.argnull[2] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -788,7 +788,7 @@ DirectFunctionCall4Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[2] = false;
 	fcinfo.argnull[3] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -817,7 +817,7 @@ DirectFunctionCall5Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[3] = false;
 	fcinfo.argnull[4] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -849,7 +849,7 @@ DirectFunctionCall6Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[4] = false;
 	fcinfo.argnull[5] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -883,7 +883,7 @@ DirectFunctionCall7Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[5] = false;
 	fcinfo.argnull[6] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -919,7 +919,7 @@ DirectFunctionCall8Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[6] = false;
 	fcinfo.argnull[7] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -958,7 +958,7 @@ DirectFunctionCall9Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2,
 	fcinfo.argnull[7] = false;
 	fcinfo.argnull[8] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -987,7 +987,7 @@ CallerFInfoFunctionCall1(PGFunction func, FmgrInfo *flinfo, Oid collation, Datum
 	fcinfo.arg[0] = arg1;
 	fcinfo.argnull[0] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)
@@ -1009,7 +1009,7 @@ CallerFInfoFunctionCall2(PGFunction func, FmgrInfo *flinfo, Oid collation, Datum
 	fcinfo.argnull[0] = false;
 	fcinfo.argnull[1] = false;
 
-	result = (*func) (&fcinfo);
+	result = func(&fcinfo);
 
 	/* Check for null result, since caller is clearly not expecting one */
 	if (fcinfo.isnull)

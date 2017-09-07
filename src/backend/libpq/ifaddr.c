@@ -225,7 +225,7 @@ run_ifaddr_callback(PgIfAddrCallback callback, void *cb_data,
 		mask = (struct sockaddr *) &fullmask;
 	}
 
-	(*callback) (addr, mask, cb_data);
+	callback(addr, mask, cb_data);
 }
 
 #ifdef WIN32

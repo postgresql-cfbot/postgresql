@@ -3048,7 +3048,7 @@ walkdir(const char *path,
 		}
 
 		if (S_ISREG(fst.st_mode))
-			(*action) (subpath, false, elevel);
+			action(subpath, false, elevel);
 		else if (S_ISDIR(fst.st_mode))
 			walkdir(subpath, action, false, elevel);
 	}
@@ -3060,7 +3060,7 @@ walkdir(const char *path,
 	 * file fsyncs don't guarantee that the directory entry for the file is
 	 * synced.
 	 */
-	(*action) (path, true, elevel);
+	action(path, true, elevel);
 }
 
 

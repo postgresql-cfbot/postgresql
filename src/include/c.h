@@ -27,10 +27,10 @@
  *	  -------	------------------------------------------------
  *		0)		pg_config.h and standard system headers
  *		1)		hacks to cope with non-ANSI C compilers
- *		2)		bool, true, false, TRUE, FALSE
+ *		2)		bool, true, false, TRUE, FALSE, NULL
  *		3)		standard system types
  *		4)		IsValid macros for system types
- *		5)		offsetof, lengthof, alignment
+ *		5)		offsetof, lengthof, endof, alignment
  *		6)		assertions
  *		7)		widely useful macros
  *		8)		random stuff
@@ -184,7 +184,7 @@
 #endif
 
 /* ----------------------------------------------------------------
- *				Section 2:	bool, true, false, TRUE, FALSE
+ *				Section 2:	bool, true, false, TRUE, FALSE, NULL
  * ----------------------------------------------------------------
  */
 
@@ -219,6 +219,14 @@ typedef bool *BoolPtr;
 
 #ifndef FALSE
 #define FALSE	0
+#endif
+
+/*
+ * NULL
+ *		Null pointer.
+ */
+#ifndef NULL
+#define NULL	((void *) 0)
 #endif
 
 
@@ -537,7 +545,7 @@ typedef NameData *Name;
 
 
 /* ----------------------------------------------------------------
- *				Section 5:	offsetof, lengthof, alignment
+ *				Section 5:	offsetof, lengthof, endof, alignment
  * ----------------------------------------------------------------
  */
 /*
@@ -556,6 +564,12 @@ typedef NameData *Name;
  *		Number of elements in an array.
  */
 #define lengthof(array) (sizeof (array) / sizeof ((array)[0]))
+
+/*
+ * endof
+ *		Address of the element one past the last in an array.
+ */
+#define endof(array)	(&(array)[lengthof(array)])
 
 /* ----------------
  * Alignment macros: align a length or address appropriately for a given type.

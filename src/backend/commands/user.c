@@ -359,7 +359,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 * Call the password checking hook if there is one defined
 	 */
 	if (check_password_hook && password)
-		(*check_password_hook) (stmt->role,
+		check_password_hook(stmt->role,
 								password,
 								get_password_type(password),
 								validUntil_datum,
@@ -744,7 +744,7 @@ AlterRole(AlterRoleStmt *stmt)
 	 * Call the password checking hook if there is one defined
 	 */
 	if (check_password_hook && password)
-		(*check_password_hook) (rolename,
+		check_password_hook(rolename,
 								password,
 								get_password_type(password),
 								validUntil_datum,

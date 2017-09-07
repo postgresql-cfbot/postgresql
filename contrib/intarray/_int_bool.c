@@ -245,7 +245,7 @@ checkcondition_arr(void *checkval, ITEM *item)
 	{
 		StopMiddle = StopLow + (StopHigh - StopLow) / 2;
 		if (*StopMiddle == item->val)
-			return true;
+			return (true);
 		else if (*StopMiddle < item->val)
 			StopLow = StopMiddle + 1;
 		else

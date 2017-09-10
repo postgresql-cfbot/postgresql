@@ -195,6 +195,21 @@ rb_leftmost(RBTree *rb)
 	return NULL;
 }
 
+/*
+ * rb_root: fetch the root node.
+ * Returns RBNIL if tree is empty.
+ *
+ * This function has no great use in normal operation, since there's no
+ * particular semantic meaning to the current root node.  It's useful
+ * for testing purposes, though.
+ */
+RBNode *
+rb_root(RBTree *rb)
+{
+	return rb->root;
+}
+
+
 /**********************************************************************
  *							  Insertion								  *
  **********************************************************************/

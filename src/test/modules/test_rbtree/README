@@ -1,0 +1,28 @@
+test_rbtree is a test module for checking the correctness of red-black
+tree operations.
+
+These tests are performed on red-black trees that store integers.
+Since the rbtree logic treats the comparison function as a black
+box, it shouldn't be important exactly what the key type is.
+
+rbtree in postgres has 4 kinds of traversals: Left-Current-Right,
+Right-Current-Left, Current-Left-Right and Left-Right-Current.
+
+Checking the correctness of the first two types is based on the fact that
+red-black tree is a binary search tree, so the elements should be visited in
+increasing (for Left-Current-Right) or decreasing (for Right-Current-Left)
+order.
+
+In order to verify the last two strategies, we perform the traversal and
+then retrospectively see if the resulting sequence meets the constraints
+for a preorder or postorder binary tree, that is that we can recursively
+divide it into a root, a left subtree containing only values less than
+the root, and a right subtree containing only values greater than the root.
+We also do a manual tree descent and verify that it matches the results
+of the iterator.  (This manual descent requires knowing a bit more than
+we should about RBNodes: we have to touch the left and right sublinks,
+which rbtree.h says we should not, and we have to know how to identify
+empty leaf nodes.)
+
+Also, this module does some checks of the correctness of the find, delete
+and leftmost operations.

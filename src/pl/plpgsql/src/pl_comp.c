@@ -433,9 +433,14 @@ do_compile(FunctionCallInfo fcinfo,
 							 errmsg("PL/pgSQL functions cannot accept type %s",
 									format_type_be(argtypeid))));
 
-				/* Build variable and add to datum list */
-				argvariable = plpgsql_build_variable(buf, 0,
-													 argdtype, false);
+				/*
+				 * Build variable and add to datum list.  If there's a name for
+				 * the argument, then use that else use $n name.
+				 */
+				argvariable = plpgsql_build_variable((argnames != NULL &&
+													  argnames[i][0] != '\0') ?
+													 argnames[i] : buf,
+													 0, argdtype, false);
 
 				if (argvariable->dtype == PLPGSQL_DTYPE_VAR)
 				{
@@ -461,7 +466,7 @@ do_compile(FunctionCallInfo fcinfo,
 				add_parameter_name(argitemtype, argvariable->dno, buf);
 
 				/* If there's a name for the argument, make an alias */
-				if (argnames && argnames[i][0] != '\0')
+				if (argnames != NULL && argnames[i][0] != '\0')
 					add_parameter_name(argitemtype, argvariable->dno,
 									   argnames[i]);
 			}

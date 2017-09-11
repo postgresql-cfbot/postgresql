@@ -4811,3 +4811,17 @@ BEGIN
 END; $$ LANGUAGE plpgsql;
 
 SELECT * FROM list_partitioned_table() AS t;
+
+--
+-- Check argument name is used instead of $n
+--
+CREATE TYPE ct AS (a int, b int);
+
+-- Should fail, error message should contain argument name instead of $1
+CREATE OR REPLACE FUNCTION fx(x ct) RETURNS void AS $$
+BEGIN
+  GET DIAGNOSTICS x = ROW_COUNT;
+  RETURN;
+END; $$ LANGUAGE plpgsql;
+
+DROP TYPE ct;

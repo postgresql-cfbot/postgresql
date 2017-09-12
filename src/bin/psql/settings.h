@@ -77,6 +77,19 @@ enum trivalue
 	TRI_YES
 };
 
+typedef enum
+{
+	PSQL_SORT_SCHEMA_NAME,
+	PSQL_SORT_NAME_SCHEMA,
+	PSQL_SORT_SIZE,
+} PSQL_SORT_COLUMNS;
+
+typedef enum
+{
+	PSQL_SORT_ASC,
+	PSQL_SORT_DESC
+} PSQL_SORT_DIRECTION;
+
 typedef struct _psqlSettings
 {
 	PGconn	   *db;				/* connection to backend */
@@ -139,6 +152,8 @@ typedef struct _psqlSettings
 	const char *prompt3;
 	PGVerbosity verbosity;		/* current error verbosity level */
 	PGContextVisibility show_context;	/* current context display level */
+	PSQL_SORT_COLUMNS	verbose_sort_columns;	/* sort columns for describe verbose command */
+	PSQL_SORT_DIRECTION verbose_sort_direction;	/* sort direction for describe verbose command */
 } PsqlSettings;
 
 extern PsqlSettings pset;

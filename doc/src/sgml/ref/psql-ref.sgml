@@ -3796,6 +3796,27 @@ bar
       </varlistentry>
 
       <varlistentry>
+        <term><varname>VERBOSE_SORT_COLUMNS</varname></term>
+        <listitem>
+        <para>
+        This variable can be set to the values <literal>schema_name</>,
+        <literal>name_schema</> or <literal>size</> to control the 
+        order of content of decrible command.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>VERBOSE_SORT_DIRECTION</varname></term>
+        <listitem>
+        <para>
+        This variable can be set to the values <literal>asc</>,
+        or <literal>desc</> to control the order of content of decrible command.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><varname>VERBOSITY</varname></term>
         <listitem>
         <para>

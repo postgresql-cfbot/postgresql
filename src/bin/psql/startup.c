@@ -171,6 +171,9 @@ main(int argc, char *argv[])
 	SetVariable(pset.vars, "PROMPT2", DEFAULT_PROMPT2);
 	SetVariable(pset.vars, "PROMPT3", DEFAULT_PROMPT3);
 
+	SetVariable(pset.vars, "VERBOSE_SORT_COLUMNS", "schema_name");
+	SetVariable(pset.vars, "VERBOSE_SORT_DIRECTION", "asc");
+
 	parse_psql_options(argc, argv, &options);
 
 	/*
@@ -1078,6 +1081,60 @@ verbosity_hook(const char *newval)
 }
 
 static char *
+verbose_sort_columns_substitute_hook(char *newval)
+{
+	if (newval == NULL)
+		newval = pg_strdup("schema_name");
+	return newval;
+}
+
+static bool
+verbose_sort_columns_hook(const char *newval)
+{
+	Assert(newval != NULL);		/* else substitute hook messed up */
+	if (pg_strcasecmp(newval, "schema_name") == 0)
+		pset.verbose_sort_columns = PSQL_SORT_SCHEMA_NAME;
+	else if (pg_strcasecmp(newval, "name_schema") == 0)
+		pset.verbose_sort_columns = PSQL_SORT_NAME_SCHEMA;
+	else if (pg_strcasecmp(newval, "size") == 0)
+		pset.verbose_sort_columns = PSQL_SORT_SIZE;
+	else
+	{
+		PsqlVarEnumError("VERBOSE_SORT_COLUMNS", newval,
+						 "schema_name, name_schema, size");
+		return false;
+	}
+
+	return true;
+}
+
+static char *
+verbose_sort_direction_substitute_hook(char *newval)
+{
+	if (newval == NULL)
+		newval = pg_strdup("asc");
+	return newval;
+}
+
+static bool
+verbose_sort_direction_hook(const char *newval)
+{
+	Assert(newval != NULL);		/* else substitute hook messed up */
+	if (pg_strcasecmp(newval, "asc") == 0)
+		pset.verbose_sort_direction = PSQL_SORT_ASC;
+	else if (pg_strcasecmp(newval, "desc") == 0)
+		pset.verbose_sort_direction = PSQL_SORT_DESC;
+	else
+	{
+		PsqlVarEnumError("VERBOSE_SORT_DIRECTION", newval, "asc, desc");
+		return false;
+	}
+
+	return true;
+}
+
+
+static char *
 show_context_substitute_hook(char *newval)
 {
 	if (newval == NULL)
@@ -1166,6 +1223,12 @@ EstablishVariableSpace(void)
 	SetVariableHooks(pset.vars, "VERBOSITY",
 					 verbosity_substitute_hook,
 					 verbosity_hook);
+	SetVariableHooks(pset.vars, "VERBOSE_SORT_COLUMNS",
+					 verbose_sort_columns_substitute_hook,
+					 verbose_sort_columns_hook);
+	SetVariableHooks(pset.vars, "VERBOSE_SORT_DIRECTION",
+					 verbose_sort_direction_substitute_hook,
+					 verbose_sort_direction_hook);
 	SetVariableHooks(pset.vars, "SHOW_CONTEXT",
 					 show_context_substitute_hook,
 					 show_context_hook);

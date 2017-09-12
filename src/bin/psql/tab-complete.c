@@ -3567,6 +3567,10 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH_LIST_CS3("never", "errors", "always");
 		else if (TailMatchesCS1("VERBOSITY"))
 			COMPLETE_WITH_LIST_CS3("default", "verbose", "terse");
+		else if (TailMatchesCS1("VERBOSE_SORT_COLUMNS"))
+			COMPLETE_WITH_LIST_CS3("schema_name", "name_schema","size");
+		else if (TailMatchesCS1("VERBOSE_SORT_DIRECTION"))
+			COMPLETE_WITH_LIST_CS2("asc", "desc");
 	}
 	else if (TailMatchesCS1("\\sf*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_functions, NULL);

@@ -337,7 +337,7 @@ helpVariables(unsigned short int pager)
 	 * Windows builds currently print one more line than non-Windows builds.
 	 * Using the larger number is fine.
 	 */
-	output = PageOutput(147, pager ? &(pset.popt.topt) : NULL);
+	output = PageOutput(151, pager ? &(pset.popt.topt) : NULL);
 
 	fprintf(output, _("List of specially treated variables\n\n"));
 
@@ -401,6 +401,10 @@ helpVariables(unsigned short int pager)
 					  "    the currently connected database user\n"));
 	fprintf(output, _("  VERBOSITY\n"
 					  "    controls verbosity of error reports [default, verbose, terse]\n"));
+	fprintf(output, _("  VERBOSE_SORT_COLUMNS\n"
+					  "    controls sort of result in verbose mode [schema_name, name_schema, size]\n"));
+	fprintf(output, _("  VERBOSE_SORT_DIRECTION\n"
+					  "    controls direction of order of result in verbose mode [asc, desc]\n"));
 	fprintf(output, _("  VERSION\n"
 					  "  VERSION_NAME\n"
 					  "  VERSION_NUM\n"

@@ -200,8 +200,6 @@ describeAccessMethods(const char *pattern, bool verbose)
 	return true;
 }
 
-#define SORT_DIRECTION_STR(v)		((v) == PSQL_SORT_ASC ? "ASC" : "DESC")
-
 /*
  * \db
  * Takes an optional regexp to select particular tablespaces
@@ -270,18 +268,7 @@ describeTablespaces(const char *pattern, bool verbose)
 						  NULL, "spcname", NULL,
 						  NULL);
 
-
-	if (verbose && pset.sversion >= 90200)
-	{
-		if (pset.verbose_sort_columns == PSQL_SORT_SIZE)
-			appendPQExpBuffer(&buf,
-							  "ORDER BY pg_catalog.pg_tablespace_size(oid) %s, 1;",
-							  SORT_DIRECTION_STR(pset.verbose_sort_direction));
-		else
-			appendPQExpBufferStr(&buf, "ORDER BY 1;");
-	}
-	else
-		appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
@@ -843,19 +830,7 @@ listAllDbs(const char *pattern, bool verbose)
 		processSQLNamePattern(pset.db, &buf, pattern, false, false,
 							  NULL, "d.datname", NULL, NULL);
 
-	if (verbose && pset.sversion >= 80200)
-	{
-		if (pset.verbose_sort_columns == PSQL_SORT_SIZE)
-			appendPQExpBuffer(&buf,
-						  "ORDER BY CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')\n"
-						  "              THEN pg_catalog.pg_database_size(d.datname) END %s, 1;\n",
-						  SORT_DIRECTION_STR(pset.verbose_sort_direction));
-		else
-			appendPQExpBufferStr(&buf, "ORDER BY 1");
-	}
-	else
-		appendPQExpBufferStr(&buf, "ORDER BY 1");
-
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
 	if (!res)
@@ -3450,26 +3425,7 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 						  "n.nspname", "c.relname", NULL,
 						  "pg_catalog.pg_table_is_visible(c.oid)");
 
-	if (verbose && pset.sversion >= 80100)
-	{
-		if (pset.verbose_sort_columns == PSQL_SORT_SCHEMA_NAME)
-			appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
-		else if (pset.verbose_sort_columns == PSQL_SORT_NAME_SCHEMA)
-			appendPQExpBufferStr(&buf, "ORDER BY 2,1;");
-		else
-		{
-			if (pset.sversion >= 90000)
-				appendPQExpBuffer(&buf,
-					"ORDER BY pg_catalog.pg_table_size(c.oid) %s, 1,2",
-					SORT_DIRECTION_STR(pset.verbose_sort_direction));
-			else
-				appendPQExpBuffer(&buf,
-					"ORDER BY pg_catalog.pg_relation_size(c.oid) %s, 1,2",
-					SORT_DIRECTION_STR(pset.verbose_sort_direction));
-		}
-	}
-	else
-		appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+	appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);

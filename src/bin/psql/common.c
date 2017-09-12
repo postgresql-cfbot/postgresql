@@ -493,7 +493,6 @@ ResetCancelConn(void)
 #endif
 }
 
-
 /*
  * AcceptResult
  *
@@ -1107,6 +1106,35 @@ ProcessResult(PGresult **results)
 		first_cycle = false;
 	}
 
+	/*
+	 * Set special variables
+	 * - ERROR: TRUE/FALSE, whether an error occurred
+	 * - SQLSTATE: code of error, or "00000"
+	 * - LAST_ERROR_SQLSTATE: same for last error
+	 * - LAST_ERROR_MESSAGE: message of last error
+	 * - ROW_COUNT: how many rows were returned or affected, or "0"
+	*/
+	if (success)
+	{
+		char   *ntuples = PQcmdTuples(*results);
+		SetVariable(pset.vars, "ERROR", "FALSE");
+		SetVariable(pset.vars, "SQLSTATE", "00000");
+		SetVariable(pset.vars, "ROW_COUNT", *ntuples ? ntuples : "0");
+	}
+	else
+	{
+		char 		   *code = PQresultErrorField(*results, PG_DIAG_SQLSTATE);
+		char 		   *mesg = PQresultErrorField(*results, PG_DIAG_MESSAGE_PRIMARY);
+
+		SetVariable(pset.vars, "ERROR", "TRUE");
+		/* if an error was detected, it must have a code! */
+		Assert(code != NULL);
+		SetVariable(pset.vars, "SQLSTATE", code);
+		SetVariable(pset.vars, "LAST_ERROR_SQLSTATE", code);
+		SetVariable(pset.vars, "LAST_ERROR_MESSAGE", mesg ? mesg : "");
+		SetVariable(pset.vars, "ROW_COUNT", "0");
+	}
+
 	/* may need this to recover from conn loss during COPY */
 	if (!first_cycle && !CheckConnection())
 		return false;
@@ -1213,7 +1241,6 @@ PrintQueryResults(PGresult *results)
 
 	return success;
 }
-
 
 /*
  * SendQuery: send the query string to the backend

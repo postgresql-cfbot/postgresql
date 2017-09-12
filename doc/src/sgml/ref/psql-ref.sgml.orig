@@ -3518,16 +3518,6 @@ bar
       </varlistentry>
 
       <varlistentry>
-       <term><varname>ERROR</varname></term>
-       <listitem>
-        <para>
-         Whether the last query failed, as a boolean.
-         See also <varname>SQLSTATE</>.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
         <term><varname>FETCH_COUNT</varname></term>
         <listitem>
         <para>
@@ -3664,18 +3654,6 @@ bar
       </varlistentry>
 
       <varlistentry>
-       <term><varname>LAST_ERROR_SQLSTATE</varname></term>
-       <term><varname>LAST_ERROR_MESSAGE</varname></term>
-       <listitem>
-        <para>
-         The error code and associated error message of the last
-         error, or "00000" and empty strings if no error occured
-         since the beginning of the script.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
       <term>
        <varname>ON_ERROR_ROLLBACK</varname>
        <indexterm>
@@ -3741,25 +3719,6 @@ bar
         endterm="APP-PSQL-prompting-title"> below.
         </para>
         </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><varname>ROW_COUNT</varname></term>
-       <listitem>
-        <para>
-         How many rows were returned or affected by the last query.
-        </para>
-       </listitem>
-      </varlistentry>
-
-      <varlistentry>
-       <term><varname>SQLSTATE</varname></term>
-       <listitem>
-        <para>
-         The error code associated to the last query, or
-         <literal>00000</> if no error occured.
-        </para>
-       </listitem>
       </varlistentry>
 
       <varlistentry>

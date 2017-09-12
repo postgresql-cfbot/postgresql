@@ -21,6 +21,58 @@
 \unset ON_ERROR_ROLLBACK
 \echo :ON_ERROR_ROLLBACK
 
+-- special result variables
+-- these tests are performed early to check that for values after startup
+
+-- 3 unset variables
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'number of rows:' :ROW_COUNT
+
+-- variables with default values
+\echo 'last error code:' :LAST_ERROR_SQLSTATE
+\echo 'last error message:' :LAST_ERROR_MESSAGE
+
+-- first script query, 2 rows select
+SELECT 1 AS stuff UNION SELECT 2;
+\if :ERROR
+  \echo 'MUST NOT SHOW'
+\else
+  \echo 'ERROR is FALSE as expected'
+\endif
+\echo 'error code:' :SQLSTATE
+\echo 'last error code:' :LAST_ERROR_SQLSTATE
+\echo 'last error message:' :LAST_ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- syntax error
+SELECT 1 UNION;
+\if :ERROR
+  \echo 'ERROR is TRUE as expected'
+\else
+  \echo 'MUST NOT SHOW'
+\endif
+\echo 'error code:' :SQLSTATE
+\echo 'last error code:' :LAST_ERROR_SQLSTATE
+\echo 'error message:' :LAST_ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- empty query
+;
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'last error code:' :LAST_ERROR_SQLSTATE
+\echo 'error message:' :LAST_ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
+-- other query error
+DROP TABLE this_table_does_not_exist;
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'last error code:' :LAST_ERROR_SQLSTATE
+\echo 'error message:' :LAST_ERROR_MESSAGE
+\echo 'number of rows:' :ROW_COUNT
+
 -- \g and \gx
 
 SELECT 1 as one, 2 as two \g

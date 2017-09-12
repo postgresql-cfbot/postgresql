@@ -1,0 +1,16 @@
+src/test/ldap/README
+
+Tests for LDAP functionality
+============================
+
+This directory contains a test suite for LDAP functionality.  This
+requires a full OpenLDAP installation, including server and client
+tools, and is therefore kept separate and not run by default.
+
+
+Running the tests
+=================
+
+    make check
+
+NOTE: This requires the --enable-tap-tests argument to configure.

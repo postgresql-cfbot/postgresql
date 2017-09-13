@@ -393,6 +393,12 @@ SELECT * FROM test_cube ORDER BY c~>4 LIMIT 15; -- ascending by 2nd coordinate o
 SELECT * FROM test_cube ORDER BY c~>1 DESC LIMIT 15; -- descending by 1st coordinate of lower left corner
 SELECT * FROM test_cube ORDER BY c~>4 DESC LIMIT 15; -- descending by 2nd coordinate or upper right corner
 
+-- Test Index Only Scans
+SET ENABLE_BITMAPSCAN = FALSE;
+EXPLAIN (COSTS OFF) SELECT c FROM test_cube WHERE c <@ '(3000,1000),(0,0)';
+SELECT c FROM test_cube WHERE c <@ '(3000,1000),(0,0)';
+SET ENABLE_BITMAPSCAN = TRUE;
+
 -- same thing for index with points
 CREATE TABLE test_point(c cube);
 INSERT INTO test_point(SELECT cube(array[c->1,c->2,c->3,c->4]) FROM test_cube);

@@ -1701,6 +1701,25 @@ SELECT * FROM test_cube ORDER BY c~>4 DESC LIMIT 15; -- descending by 2nd coordi
  (46151, 49848),(46058, 49830)
 (15 rows)
 
+-- Test Index Only Scans
+SET ENABLE_BITMAPSCAN = FALSE;
+EXPLAIN (COSTS OFF) SELECT c FROM test_cube WHERE c <@ '(3000,1000),(0,0)';
+                    QUERY PLAN                    
+--------------------------------------------------
+ Index Only Scan using test_cube_ix on test_cube
+   Index Cond: (c <@ '(3000, 1000),(0, 0)'::cube)
+(2 rows)
+
+SELECT c FROM test_cube WHERE c <@ '(3000,1000),(0,0)';
+            c            
+-------------------------
+ (2424, 160),(2424, 81)
+ (759, 187),(662, 163)
+ (1444, 403),(1346, 344)
+ (337, 455),(240, 359)
+(4 rows)
+
+SET ENABLE_BITMAPSCAN = TRUE;
 -- same thing for index with points
 CREATE TABLE test_point(c cube);
 INSERT INTO test_point(SELECT cube(array[c->1,c->2,c->3,c->4]) FROM test_cube);

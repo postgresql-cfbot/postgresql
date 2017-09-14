@@ -65,8 +65,8 @@ CATALOG(pg_aggregate,2600) BKI_WITHOUT_OIDS
 	regproc		aggmtransfn;
 	regproc		aggminvtransfn;
 	regproc		aggmfinalfn;
-	bool		aggfinalextra;
-	bool		aggmfinalextra;
+	bool8		aggfinalextra;
+	bool8		aggmfinalextra;
 	Oid			aggsortop;
 	Oid			aggtranstype;
 	int32		aggtransspace;

@@ -31,8 +31,8 @@
 CATALOG(pg_pltemplate,1136) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 {
 	NameData	tmplname;		/* name of PL */
-	bool		tmpltrusted;	/* PL is trusted? */
-	bool		tmpldbacreate;	/* PL is installable by db owner? */
+	bool8		tmpltrusted;	/* PL is trusted? */
+	bool8		tmpldbacreate;	/* PL is installable by db owner? */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	text		tmplhandler BKI_FORCE_NOT_NULL; /* name of call handler

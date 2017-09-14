@@ -56,7 +56,7 @@ CATALOG(pg_opclass,2616)
 	Oid			opcowner;		/* opclass owner */
 	Oid			opcfamily;		/* containing operator family */
 	Oid			opcintype;		/* type of data indexed by opclass */
-	bool		opcdefault;		/* T if opclass is default for opcintype */
+	bool8		opcdefault;		/* T if opclass is default for opcintype */
 	Oid			opckeytype;		/* type of data in index, or InvalidOid */
 } FormData_pg_opclass;
 

@@ -45,13 +45,13 @@
 CATALOG(pg_authid,1260) BKI_SHARED_RELATION BKI_ROWTYPE_OID(2842) BKI_SCHEMA_MACRO
 {
 	NameData	rolname;		/* name of role */
-	bool		rolsuper;		/* read this field via superuser() only! */
-	bool		rolinherit;		/* inherit privileges from other roles? */
-	bool		rolcreaterole;	/* allowed to create more roles? */
-	bool		rolcreatedb;	/* allowed to create databases? */
-	bool		rolcanlogin;	/* allowed to log in as session user? */
-	bool		rolreplication; /* role used for streaming replication */
-	bool		rolbypassrls;	/* bypasses row level security? */
+	bool8		rolsuper;		/* read this field via superuser() only! */
+	bool8		rolinherit;		/* inherit privileges from other roles? */
+	bool8		rolcreaterole;	/* allowed to create more roles? */
+	bool8		rolcreatedb;	/* allowed to create databases? */
+	bool8		rolcanlogin;	/* allowed to log in as session user? */
+	bool8		rolreplication; /* role used for streaming replication */
+	bool8		rolbypassrls;	/* bypasses row level security? */
 	int32		rolconnlimit;	/* max connections allowed (-1=no limit) */
 
 	/* remaining fields may be null; use heap_getattr to read them! */

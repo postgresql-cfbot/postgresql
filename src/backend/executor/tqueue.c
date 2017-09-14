@@ -218,7 +218,7 @@ static TupleRemapInfo **BuildFieldRemapInfo(TupleDesc tupledesc,
 /*
  * Receive a tuple from a query, and send it to the designated shm_mq.
  *
- * Returns TRUE if successful, FALSE if shm_mq has been detached.
+ * Returns true if successful, false if shm_mq has been detached.
  */
 static bool
 tqueueReceiveSlot(TupleTableSlot *slot, DestReceiver *self)
@@ -806,7 +806,7 @@ TQRemapTuple(TupleQueueReader *reader,
 
 /*
  * Process the given datum and replace any transient record typmods
- * contained in it.  Set *changed to TRUE if we actually changed the datum.
+ * contained in it.  Set *changed to true if we actually changed the datum.
  *
  * remapinfo is previously-computed remapping info about the datum's type.
  *
@@ -838,7 +838,7 @@ TQRemap(TupleQueueReader *reader, TupleRemapInfo *remapinfo,
 
 /*
  * Process the given array datum and replace any transient record typmods
- * contained in it.  Set *changed to TRUE if we actually changed the datum.
+ * contained in it.  Set *changed to true if we actually changed the datum.
  */
 static Datum
 TQRemapArray(TupleQueueReader *reader, ArrayRemapInfo *remapinfo,
@@ -884,7 +884,7 @@ TQRemapArray(TupleQueueReader *reader, ArrayRemapInfo *remapinfo,
 
 /*
  * Process the given range datum and replace any transient record typmods
- * contained in it.  Set *changed to TRUE if we actually changed the datum.
+ * contained in it.  Set *changed to true if we actually changed the datum.
  */
 static Datum
 TQRemapRange(TupleQueueReader *reader, RangeRemapInfo *remapinfo,
@@ -925,7 +925,7 @@ TQRemapRange(TupleQueueReader *reader, RangeRemapInfo *remapinfo,
 
 /*
  * Process the given record datum and replace any transient record typmods
- * contained in it.  Set *changed to TRUE if we actually changed the datum.
+ * contained in it.  Set *changed to true if we actually changed the datum.
  */
 static Datum
 TQRemapRecord(TupleQueueReader *reader, RecordRemapInfo *remapinfo,

@@ -43,12 +43,12 @@ CATALOG(pg_proc,1255) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81) BKI_SCHEMA_MACRO
 	float4		prorows;		/* estimated # of rows out (if proretset) */
 	Oid			provariadic;	/* element type of variadic array, or 0 */
 	regproc		protransform;	/* transforms calls to it during planning */
-	bool		proisagg;		/* is it an aggregate? */
-	bool		proiswindow;	/* is it a window function? */
-	bool		prosecdef;		/* security definer */
-	bool		proleakproof;	/* is it a leak-proof function? */
-	bool		proisstrict;	/* strict with respect to NULLs? */
-	bool		proretset;		/* returns a set? */
+	bool8		proisagg;		/* is it an aggregate? */
+	bool8		proiswindow;	/* is it a window function? */
+	bool8		prosecdef;		/* security definer */
+	bool8		proleakproof;	/* is it a leak-proof function? */
+	bool8		proisstrict;	/* strict with respect to NULLs? */
+	bool8		proretset;		/* returns a set? */
 	char		provolatile;	/* see PROVOLATILE_ categories below */
 	char		proparallel;	/* see PROPARALLEL_ categories below */
 	int16		pronargs;		/* number of arguments */

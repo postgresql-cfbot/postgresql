@@ -584,7 +584,7 @@ pqParseInput2(PGconn *conn)
 					if (conn->result != NULL)
 					{
 						/* Read another tuple of a normal query response */
-						if (getAnotherTuple(conn, FALSE))
+						if (getAnotherTuple(conn, false))
 							return;
 						/* getAnotherTuple() moves inStart itself */
 						continue;
@@ -602,7 +602,7 @@ pqParseInput2(PGconn *conn)
 					if (conn->result != NULL)
 					{
 						/* Read another tuple of a normal query response */
-						if (getAnotherTuple(conn, TRUE))
+						if (getAnotherTuple(conn, true))
 							return;
 						/* getAnotherTuple() moves inStart itself */
 						continue;
@@ -680,7 +680,7 @@ getRowDescriptions(PGconn *conn)
 	if (nfields > 0)
 	{
 		result->attDescs = (PGresAttDesc *)
-			pqResultAlloc(result, nfields * sizeof(PGresAttDesc), TRUE);
+			pqResultAlloc(result, nfields * sizeof(PGresAttDesc), true);
 		if (!result->attDescs)
 		{
 			errmsg = NULL;		/* means "out of memory", see below */
@@ -1219,7 +1219,7 @@ nodata:
 		if (async)
 			return 0;
 		/* Need to load more data */
-		if (pqWait(TRUE, FALSE, conn) ||
+		if (pqWait(true, false, conn) ||
 			pqReadData(conn) < 0)
 			return -2;
 	}
@@ -1264,7 +1264,7 @@ pqGetline2(PGconn *conn, char *s, int maxlen)
 		else
 		{
 			/* need to load more data */
-			if (pqWait(TRUE, FALSE, conn) ||
+			if (pqWait(true, false, conn) ||
 				pqReadData(conn) < 0)
 			{
 				result = EOF;
@@ -1485,7 +1485,7 @@ pqFunctionCall2(PGconn *conn, Oid fnid,
 		if (needInput)
 		{
 			/* Wait for some data to arrive (or for the channel to close) */
-			if (pqWait(TRUE, FALSE, conn) ||
+			if (pqWait(true, false, conn) ||
 				pqReadData(conn) < 0)
 				break;
 		}

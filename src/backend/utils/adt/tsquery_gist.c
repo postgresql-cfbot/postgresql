@@ -37,7 +37,7 @@ gtsquery_compress(PG_FUNCTION_ARGS)
 
 		gistentryinit(*retval, TSQuerySignGetDatum(sign),
 					  entry->rel, entry->page,
-					  entry->offset, FALSE);
+					  entry->offset, false);
 	}
 
 	PG_RETURN_POINTER(retval);
@@ -80,7 +80,7 @@ gtsquery_consistent(PG_FUNCTION_ARGS)
 				retval = (key & sq) != 0;
 			break;
 		default:
-			retval = FALSE;
+			retval = false;
 	}
 	PG_RETURN_BOOL(retval);
 }

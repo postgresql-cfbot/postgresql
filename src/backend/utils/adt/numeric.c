@@ -5517,7 +5517,7 @@ zero_var(NumericVar *var)
 static const char *
 set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 {
-	bool		have_dp = FALSE;
+	bool		have_dp = false;
 	int			i;
 	unsigned char *decdigits;
 	int			sign = NUMERIC_POS;
@@ -5548,7 +5548,7 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 
 	if (*cp == '.')
 	{
-		have_dp = TRUE;
+		have_dp = true;
 		cp++;
 	}
 
@@ -5581,7 +5581,7 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 						 errmsg("invalid input syntax for type %s: \"%s\"",
 								"numeric", str)));
-			have_dp = TRUE;
+			have_dp = true;
 			cp++;
 		}
 		else
@@ -6150,7 +6150,7 @@ apply_typmod(NumericVar *var, int32 typmod)
 /*
  * Convert numeric to int8, rounding if needed.
  *
- * If overflow, return FALSE (no error is raised).  Return TRUE if okay.
+ * If overflow, return false (no error is raised).  Return true if okay.
  */
 static bool
 numericvar_to_int64(const NumericVar *var, int64 *result)
@@ -6269,7 +6269,7 @@ int64_to_numericvar(int64 val, NumericVar *var)
 /*
  * Convert numeric to int128, rounding if needed.
  *
- * If overflow, return FALSE (no error is raised).  Return TRUE if okay.
+ * If overflow, return false (no error is raised).  Return true if okay.
  */
 static bool
 numericvar_to_int128(const NumericVar *var, int128 *result)

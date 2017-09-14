@@ -32,8 +32,8 @@ CATALOG(pg_language,2612)
 {
 	NameData	lanname;		/* Language name */
 	Oid			lanowner;		/* Language's owner */
-	bool		lanispl;		/* Is a procedural language */
-	bool		lanpltrusted;	/* PL is trusted */
+	bool8		lanispl;		/* Is a procedural language */
+	bool8		lanpltrusted;	/* PL is trusted */
 	Oid			lanplcallfoid;	/* Call handler for PL */
 	Oid			laninline;		/* Optional anonymous-block handler function */
 	Oid			lanvalidator;	/* Optional validation function */

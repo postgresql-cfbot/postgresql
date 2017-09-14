@@ -104,7 +104,7 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 	 * attbyval is a copy of the typbyval field from pg_type for this
 	 * attribute.  See atttypid comments above.
 	 */
-	bool		attbyval;
+	bool8		attbyval;
 
 	/*----------
 	 * attstorage tells for VARLENA attributes, what the heap access
@@ -128,16 +128,16 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 	char		attalign;
 
 	/* This flag represents the "NOT NULL" constraint */
-	bool		attnotnull;
+	bool8		attnotnull;
 
 	/* Has DEFAULT value or not */
-	bool		atthasdef;
+	bool8		atthasdef;
 
 	/* One of the ATTRIBUTE_IDENTITY_* constants below, or '\0' */
 	char		attidentity;
 
 	/* Is dropped (ie, logically invisible) or not */
-	bool		attisdropped;
+	bool8		attisdropped;
 
 	/*
 	 * This flag specifies whether this column has ever had a local
@@ -148,7 +148,7 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 	 * not dropped by a parent's DROP COLUMN even if this causes the column's
 	 * attinhcount to become zero.
 	 */
-	bool		attislocal;
+	bool8		attislocal;
 
 	/* Number of times inherited from direct parent relation(s) */
 	int32		attinhcount;

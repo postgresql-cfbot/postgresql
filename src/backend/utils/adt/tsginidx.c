@@ -295,7 +295,7 @@ gin_tsquery_consistent(PG_FUNCTION_ARGS)
 	/* int32	nkeys = PG_GETARG_INT32(3); */
 	Pointer    *extra_data = (Pointer *) PG_GETARG_POINTER(4);
 	bool	   *recheck = (bool *) PG_GETARG_POINTER(5);
-	bool		res = FALSE;
+	bool		res = false;
 
 	/* Initially assume query doesn't require recheck */
 	*recheck = false;
@@ -309,7 +309,7 @@ gin_tsquery_consistent(PG_FUNCTION_ARGS)
 		 * query.
 		 */
 		gcv.first_item = GETQUERY(query);
-		gcv.check = check;
+		gcv.check = (GinTernaryValue *) check;
 		gcv.map_item_operand = (int *) (extra_data[0]);
 		gcv.need_recheck = recheck;
 

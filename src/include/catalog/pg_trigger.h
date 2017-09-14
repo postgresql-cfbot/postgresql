@@ -42,12 +42,12 @@ CATALOG(pg_trigger,2620)
 								 * ROW/STATEMENT; see below */
 	char		tgenabled;		/* trigger's firing configuration WRT
 								 * session_replication_role */
-	bool		tgisinternal;	/* trigger is system-generated */
+	bool8		tgisinternal;	/* trigger is system-generated */
 	Oid			tgconstrrelid;	/* constraint's FROM table, if any */
 	Oid			tgconstrindid;	/* constraint's supporting index, if any */
 	Oid			tgconstraint;	/* associated pg_constraint entry, if any */
-	bool		tgdeferrable;	/* constraint trigger is deferrable */
-	bool		tginitdeferred; /* constraint trigger is deferred initially */
+	bool8		tgdeferrable;	/* constraint trigger is deferrable */
+	bool8		tginitdeferred; /* constraint trigger is deferred initially */
 	int16		tgnargs;		/* # of extra arguments in tgargs */
 
 	/*

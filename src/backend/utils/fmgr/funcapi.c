@@ -396,8 +396,8 @@ internal_get_result_type(Oid funcid,
 /*
  * Given the result tuple descriptor for a function with OUT parameters,
  * replace any polymorphic columns (ANYELEMENT etc) with correct data types
- * deduced from the input arguments. Returns TRUE if able to deduce all types,
- * FALSE if not.
+ * deduced from the input arguments. Returns true if able to deduce all types,
+ * false if not.
  */
 static bool
 resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
@@ -589,7 +589,7 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 /*
  * Given the declared argument types and modes for a function, replace any
  * polymorphic types (ANYELEMENT etc) with correct data types deduced from the
- * input arguments.  Returns TRUE if able to deduce all types, FALSE if not.
+ * input arguments.  Returns true if able to deduce all types, false if not.
  * This is the same logic as resolve_polymorphic_tupdesc, but with a different
  * argument representation.
  *

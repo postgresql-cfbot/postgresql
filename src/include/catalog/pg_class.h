@@ -48,8 +48,8 @@ CATALOG(pg_class,1259) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83) BKI_SCHEMA_MACRO
 	int32		relallvisible;	/* # of all-visible blocks (not always
 								 * up-to-date) */
 	Oid			reltoastrelid;	/* OID of toast table; 0 if none */
-	bool		relhasindex;	/* T if has (or has had) any indexes */
-	bool		relisshared;	/* T if shared across databases */
+	bool8		relhasindex;	/* T if has (or has had) any indexes */
+	bool8		relisshared;	/* T if shared across databases */
 	char		relpersistence; /* see RELPERSISTENCE_xxx constants below */
 	char		relkind;		/* see RELKIND_xxx constants below */
 	int16		relnatts;		/* number of user attributes */
@@ -60,17 +60,17 @@ CATALOG(pg_class,1259) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83) BKI_SCHEMA_MACRO
 	 * contain entries with negative attnums for system attributes.
 	 */
 	int16		relchecks;		/* # of CHECK constraints for class */
-	bool		relhasoids;		/* T if we generate OIDs for rows of rel */
-	bool		relhaspkey;		/* has (or has had) PRIMARY KEY index */
-	bool		relhasrules;	/* has (or has had) any rules */
-	bool		relhastriggers; /* has (or has had) any TRIGGERs */
-	bool		relhassubclass; /* has (or has had) derived classes */
-	bool		relrowsecurity; /* row security is enabled or not */
-	bool		relforcerowsecurity;	/* row security forced for owners or
+	bool8		relhasoids;		/* T if we generate OIDs for rows of rel */
+	bool8		relhaspkey;		/* has (or has had) PRIMARY KEY index */
+	bool8		relhasrules;	/* has (or has had) any rules */
+	bool8		relhastriggers; /* has (or has had) any TRIGGERs */
+	bool8		relhassubclass; /* has (or has had) derived classes */
+	bool8		relrowsecurity; /* row security is enabled or not */
+	bool8		relforcerowsecurity;	/* row security forced for owners or
 										 * not */
-	bool		relispopulated; /* matview currently holds query results */
+	bool8		relispopulated; /* matview currently holds query results */
 	char		relreplident;	/* see REPLICA_IDENTITY_xxx constants  */
-	bool		relispartition; /* is relation a partition? */
+	bool8		relispartition; /* is relation a partition? */
 	TransactionId relfrozenxid; /* all Xids < this are frozen in this rel */
 	TransactionId relminmxid;	/* all multixacts in this rel are >= this.
 								 * this is really a MultiXactId */

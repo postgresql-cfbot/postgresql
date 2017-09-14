@@ -38,16 +38,16 @@ CATALOG(pg_publication,6104)
 	 * indicates that this is special publication which should encompass all
 	 * tables in the database (except for the unlogged and temp ones)
 	 */
-	bool		puballtables;
+	bool8		puballtables;
 
 	/* true if inserts are published */
-	bool		pubinsert;
+	bool8		pubinsert;
 
 	/* true if updates are published */
-	bool		pubupdate;
+	bool8		pubupdate;
 
 	/* true if deletes are published */
-	bool		pubdelete;
+	bool8		pubdelete;
 
 } FormData_pg_publication;
 

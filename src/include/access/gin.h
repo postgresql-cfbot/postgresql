@@ -51,14 +51,20 @@ typedef struct GinStatsData
 /*
  * A ternary value used by tri-consistent functions.
  *
- * For convenience, this is compatible with booleans. A boolean can be
+ * For convenience, this is compatible with bools. A bool can be
  * safely cast to a GinTernaryValue.
  */
+#if SIZEOF_BOOL == 1
 typedef char GinTernaryValue;
+#elif SIZEOF_BOOL == 4
+typedef int GinTernaryValue;
+#else
+#error unsupported SIZEOF_BOOL
+#endif
 
-#define GIN_FALSE		0		/* item is not present / does not match */
-#define GIN_TRUE		1		/* item is present / matches */
-#define GIN_MAYBE		2		/* don't know if item is present / don't know
+#define GIN_FALSE		((GinTernaryValue) 0)		/* item is not present / does not match */
+#define GIN_TRUE		((GinTernaryValue) 1)		/* item is present / matches */
+#define GIN_MAYBE		((GinTernaryValue) 2)		/* don't know if item is present / don't know
 								 * if matches */
 
 #define DatumGetGinTernaryValue(X) ((GinTernaryValue)(X))

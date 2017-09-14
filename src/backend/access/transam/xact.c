@@ -679,8 +679,8 @@ SubTransactionIsActive(SubTransactionId subxid)
 /*
  *	GetCurrentCommandId
  *
- * "used" must be TRUE if the caller intends to use the command ID to mark
- * inserted/updated/deleted tuples.  FALSE means the ID is being fetched
+ * "used" must be true if the caller intends to use the command ID to mark
+ * inserted/updated/deleted tuples.  false means the ID is being fetched
  * for read-only purposes (ie, as a snapshot validity cutoff).  See
  * CommandCounterIncrement() for discussion.
  */
@@ -3478,7 +3478,7 @@ BeginTransactionBlock(void)
  *		This executes a PREPARE command.
  *
  * Since PREPARE may actually do a ROLLBACK, the result indicates what
- * happened: TRUE for PREPARE, FALSE for ROLLBACK.
+ * happened: true for PREPARE, false for ROLLBACK.
  *
  * Note that we don't actually do anything here except change blockState.
  * The real work will be done in the upcoming PrepareTransaction().
@@ -3530,7 +3530,7 @@ PrepareTransactionBlock(char *gid)
  *		This executes a COMMIT command.
  *
  * Since COMMIT may actually do a ROLLBACK, the result indicates what
- * happened: TRUE for COMMIT, FALSE for ROLLBACK.
+ * happened: true for COMMIT, false for ROLLBACK.
  *
  * Note that we don't actually do anything here except change blockState.
  * The real work will be done in the upcoming CommitTransactionCommand().

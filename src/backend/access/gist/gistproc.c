@@ -105,7 +105,7 @@ box_penalty(const BOX *original, const BOX *new)
  * The GiST Consistent method for boxes
  *
  * Should return false if for all data items x below entry,
- * the predicate x op query must be FALSE, where op is the oper
+ * the predicate x op query must be false, where op is the oper
  * corresponding to strategy in the pg_amop table.
  */
 Datum
@@ -122,7 +122,7 @@ gist_box_consistent(PG_FUNCTION_ARGS)
 	*recheck = false;
 
 	if (DatumGetBoxP(entry->key) == NULL || query == NULL)
-		PG_RETURN_BOOL(FALSE);
+		PG_RETURN_BOOL(false);
 
 	/*
 	 * if entry is not leaf, use rtree_internal_consistent, else use
@@ -1084,7 +1084,7 @@ gist_poly_compress(PG_FUNCTION_ARGS)
 		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(r),
 					  entry->rel, entry->page,
-					  entry->offset, FALSE);
+					  entry->offset, false);
 	}
 	else
 		retval = entry;
@@ -1109,7 +1109,7 @@ gist_poly_consistent(PG_FUNCTION_ARGS)
 	*recheck = true;
 
 	if (DatumGetBoxP(entry->key) == NULL || query == NULL)
-		PG_RETURN_BOOL(FALSE);
+		PG_RETURN_BOOL(false);
 
 	/*
 	 * Since the operators require recheck anyway, we can just use
@@ -1152,7 +1152,7 @@ gist_circle_compress(PG_FUNCTION_ARGS)
 		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(r),
 					  entry->rel, entry->page,
-					  entry->offset, FALSE);
+					  entry->offset, false);
 	}
 	else
 		retval = entry;
@@ -1178,7 +1178,7 @@ gist_circle_consistent(PG_FUNCTION_ARGS)
 	*recheck = true;
 
 	if (DatumGetBoxP(entry->key) == NULL || query == NULL)
-		PG_RETURN_BOOL(FALSE);
+		PG_RETURN_BOOL(false);
 
 	/*
 	 * Since the operators require recheck anyway, we can just use
@@ -1214,7 +1214,7 @@ gist_point_compress(PG_FUNCTION_ARGS)
 		box->high = box->low = *point;
 
 		gistentryinit(*retval, BoxPGetDatum(box),
-					  entry->rel, entry->page, entry->offset, FALSE);
+					  entry->rel, entry->page, entry->offset, false);
 
 		PG_RETURN_POINTER(retval);
 	}
@@ -1243,7 +1243,7 @@ gist_point_fetch(PG_FUNCTION_ARGS)
 	r->y = in->high.y;
 	gistentryinit(*retval, PointerGetDatum(r),
 				  entry->rel, entry->page,
-				  entry->offset, FALSE);
+				  entry->offset, false);
 
 	PG_RETURN_POINTER(retval);
 }

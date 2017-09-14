@@ -42,9 +42,9 @@ CATALOG(pg_constraint,2606)
 	NameData	conname;		/* name of this constraint */
 	Oid			connamespace;	/* OID of namespace containing constraint */
 	char		contype;		/* constraint type; see codes below */
-	bool		condeferrable;	/* deferrable constraint? */
-	bool		condeferred;	/* deferred by default? */
-	bool		convalidated;	/* constraint has been validated? */
+	bool8		condeferrable;	/* deferrable constraint? */
+	bool8		condeferred;	/* deferred by default? */
+	bool8		convalidated;	/* constraint has been validated? */
 
 	/*
 	 * conrelid and conkey are only meaningful if the constraint applies to a
@@ -82,13 +82,13 @@ CATALOG(pg_constraint,2606)
 	char		confmatchtype;	/* foreign key's match type */
 
 	/* Has a local definition (hence, do not drop when coninhcount is 0) */
-	bool		conislocal;
+	bool8		conislocal;
 
 	/* Number of times inherited from direct parent relation(s) */
 	int32		coninhcount;
 
 	/* Has a local definition and cannot be inherited */
-	bool		connoinherit;
+	bool8		connoinherit;
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 

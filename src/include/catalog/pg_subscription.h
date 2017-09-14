@@ -37,7 +37,7 @@ CATALOG(pg_subscription,6100) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101) BKI_SCHE
 
 	Oid			subowner;		/* Owner of the subscription */
 
-	bool		subenabled;		/* True if the subscription is enabled (the
+	bool8		subenabled;		/* True if the subscription is enabled (the
 								 * worker should be running) */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */

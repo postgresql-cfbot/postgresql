@@ -33,16 +33,16 @@ CATALOG(pg_index,2610) BKI_WITHOUT_OIDS BKI_SCHEMA_MACRO
 	Oid			indexrelid;		/* OID of the index */
 	Oid			indrelid;		/* OID of the relation it indexes */
 	int16		indnatts;		/* number of columns in index */
-	bool		indisunique;	/* is this a unique index? */
-	bool		indisprimary;	/* is this index for primary key? */
-	bool		indisexclusion; /* is this index for exclusion constraint? */
-	bool		indimmediate;	/* is uniqueness enforced immediately? */
-	bool		indisclustered; /* is this the index last clustered by? */
-	bool		indisvalid;		/* is this index valid for use by queries? */
-	bool		indcheckxmin;	/* must we wait for xmin to be old? */
-	bool		indisready;		/* is this index ready for inserts? */
-	bool		indislive;		/* is this index alive at all? */
-	bool		indisreplident; /* is this index the identity for replication? */
+	bool8		indisunique;	/* is this a unique index? */
+	bool8		indisprimary;	/* is this index for primary key? */
+	bool8		indisexclusion; /* is this index for exclusion constraint? */
+	bool8		indimmediate;	/* is uniqueness enforced immediately? */
+	bool8		indisclustered; /* is this the index last clustered by? */
+	bool8		indisvalid;		/* is this index valid for use by queries? */
+	bool8		indcheckxmin;	/* must we wait for xmin to be old? */
+	bool8		indisready;		/* is this index ready for inserts? */
+	bool8		indislive;		/* is this index alive at all? */
+	bool8		indisreplident; /* is this index the identity for replication? */
 
 	/* variable-length fields start here, but we allow direct access to indkey */
 	int2vector	indkey;			/* column numbers of indexed cols, or 0 */

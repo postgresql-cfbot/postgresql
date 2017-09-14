@@ -658,7 +658,7 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 		needLock = !RELATION_IS_LOCAL(rel);
 
 		if (needLock)
-			LockRelationForExtension(rel, ExclusiveLock);
+			LockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 
 		buf = ReadBuffer(rel, P_NEW);
 
@@ -672,7 +672,7 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 		 * condition against btvacuumscan --- see comments therein.
 		 */
 		if (needLock)
-			UnlockRelationForExtension(rel, ExclusiveLock);
+			UnlockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 
 		/* Initialize the new page before returning it */
 		page = BufferGetPage(buf);

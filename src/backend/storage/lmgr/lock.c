@@ -45,6 +45,7 @@
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
+#include "storage/lmgr.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/resowner_private.h"
@@ -387,6 +388,10 @@ InitLocks(void)
 	 */
 	max_table_size = NLOCKENTS();
 	init_table_size = max_table_size / 2;
+
+
+	/* Initialize lock structure for relation extension lock */
+	InitRelExtLock(max_table_size);
 
 	/*
 	 * Allocate hash table for LOCK structs.  This stores per-locked-object
@@ -3366,6 +3371,7 @@ LockShmemSize(void)
 	/* lock hash table */
 	max_table_size = NLOCKENTS();
 	size = add_size(size, hash_estimate_size(max_table_size, sizeof(LOCK)));
+	size = add_size(size, hash_estimate_size(max_table_size, sizeof(LWLock)));
 
 	/* proclock hash table */
 	max_table_size *= 2;

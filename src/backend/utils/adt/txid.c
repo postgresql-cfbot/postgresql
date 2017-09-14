@@ -38,11 +38,6 @@
 /* txid will be signed int8 in database, so must limit to 63 bits */
 #define MAX_TXID   ((uint64) PG_INT64_MAX)
 
-/* Use unsigned variant internally */
-typedef uint64 txid;
-
-/* sprintf format code for uint64 */
-#define TXID_FMT UINT64_FORMAT
 
 /*
  * If defined, use bsearch() function for searching for txids in snapshots
@@ -61,126 +56,19 @@ typedef struct
 	 *
 	 * Explicit embedding is ok as we want always correct alignment anyway.
 	 */
-	int32		__varsz;
+	int32			__varsz;
 
-	uint32		nxip;			/* number of txids in xip array */
-	txid		xmin;
-	txid		xmax;
+	uint32			nxip;			/* number of txids in xip array */
+	TransactionId	xmin;
+	TransactionId	xmax;
 	/* in-progress txids, xmin <= xip[i] < xmax: */
-	txid		xip[FLEXIBLE_ARRAY_MEMBER];
+	TransactionId	xip[FLEXIBLE_ARRAY_MEMBER];
 } TxidSnapshot;
 
 #define TXID_SNAPSHOT_SIZE(nxip) \
-	(offsetof(TxidSnapshot, xip) + sizeof(txid) * (nxip))
+	(offsetof(TxidSnapshot, xip) + sizeof(TransactionId) * (nxip))
 #define TXID_SNAPSHOT_MAX_NXIP \
-	((MaxAllocSize - offsetof(TxidSnapshot, xip)) / sizeof(txid))
-
-/*
- * Epoch values from xact.c
- */
-typedef struct
-{
-	TransactionId last_xid;
-	uint32		epoch;
-} TxidEpoch;
-
-
-/*
- * Fetch epoch data from xact.c.
- */
-static void
-load_xid_epoch(TxidEpoch *state)
-{
-	GetNextXidAndEpoch(&state->last_xid, &state->epoch);
-}
-
-/*
- * Helper to get a TransactionId from a 64-bit xid with wraparound detection.
- *
- * It is an ERROR if the xid is in the future.  Otherwise, returns true if
- * the transaction is still new enough that we can determine whether it
- * committed and false otherwise.  If *extracted_xid is not NULL, it is set
- * to the low 32 bits of the transaction ID (i.e. the actual XID, without the
- * epoch).
- *
- * The caller must hold CLogTruncationLock since it's dealing with arbitrary
- * XIDs, and must continue to hold it until it's done with any clog lookups
- * relating to those XIDs.
- */
-static bool
-TransactionIdInRecentPast(uint64 xid_with_epoch, TransactionId *extracted_xid)
-{
-	uint32		xid_epoch = (uint32) (xid_with_epoch >> 32);
-	TransactionId xid = (TransactionId) xid_with_epoch;
-	uint32		now_epoch;
-	TransactionId now_epoch_last_xid;
-
-	GetNextXidAndEpoch(&now_epoch_last_xid, &now_epoch);
-
-	if (extracted_xid != NULL)
-		*extracted_xid = xid;
-
-	if (!TransactionIdIsValid(xid))
-		return false;
-
-	/* For non-normal transaction IDs, we can ignore the epoch. */
-	if (!TransactionIdIsNormal(xid))
-		return true;
-
-	/* If the transaction ID is in the future, throw an error. */
-	if (xid_epoch > now_epoch
-		|| (xid_epoch == now_epoch && xid > now_epoch_last_xid))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("transaction ID %s is in the future",
-						psprintf(UINT64_FORMAT, xid_with_epoch))));
-
-	/*
-	 * ShmemVariableCache->oldestClogXid is protected by CLogTruncationLock,
-	 * but we don't acquire that lock here.  Instead, we require the caller to
-	 * acquire it, because the caller is presumably going to look up the
-	 * returned XID.  If we took and released the lock within this function, a
-	 * CLOG truncation could occur before the caller finished with the XID.
-	 */
-	Assert(LWLockHeldByMe(CLogTruncationLock));
-
-	/*
-	 * If the transaction ID has wrapped around, it's definitely too old to
-	 * determine the commit status.  Otherwise, we can compare it to
-	 * ShmemVariableCache->oldestClogXid to determine whether the relevant
-	 * CLOG entry is guaranteed to still exist.
-	 */
-	if (xid_epoch + 1 < now_epoch
-		|| (xid_epoch + 1 == now_epoch && xid < now_epoch_last_xid)
-		|| TransactionIdPrecedes(xid, ShmemVariableCache->oldestClogXid))
-		return false;
-
-	return true;
-}
-
-/*
- * do a TransactionId -> txid conversion for an XID near the given epoch
- */
-static txid
-convert_xid(TransactionId xid, const TxidEpoch *state)
-{
-	uint64		epoch;
-
-	/* return special xid's as-is */
-	if (!TransactionIdIsNormal(xid))
-		return (txid) xid;
-
-	/* xid can be on either side when near wrap-around */
-	epoch = (uint64) state->epoch;
-	if (xid > state->last_xid &&
-		TransactionIdPrecedes(xid, state->last_xid))
-		epoch--;
-	else if (xid < state->last_xid &&
-			 TransactionIdFollows(xid, state->last_xid))
-		epoch++;
-
-	return (epoch << 32) | xid;
-}
+	((MaxAllocSize - offsetof(TxidSnapshot, xip)) / sizeof(TransactionId))
 
 /*
  * txid comparator for qsort/bsearch
@@ -188,8 +76,8 @@ convert_xid(TransactionId xid, const TxidEpoch *state)
 static int
 cmp_txid(const void *aa, const void *bb)
 {
-	txid		a = *(const txid *) aa;
-	txid		b = *(const txid *) bb;
+	TransactionId	a = *(const TransactionId *) aa;
+	TransactionId	b = *(const TransactionId *) bb;
 
 	if (a < b)
 		return -1;
@@ -208,14 +96,14 @@ cmp_txid(const void *aa, const void *bb)
 static void
 sort_snapshot(TxidSnapshot *snap)
 {
-	txid		last = 0;
-	int			nxip,
-				idx1,
-				idx2;
+	TransactionId	last = 0;
+	int				nxip,
+					idx1,
+					idx2;
 
 	if (snap->nxip > 1)
 	{
-		qsort(snap->xip, snap->nxip, sizeof(txid), cmp_txid);
+		qsort(snap->xip, snap->nxip, sizeof(TransactionId), cmp_txid);
 
 		/* remove duplicates */
 		nxip = snap->nxip;
@@ -235,7 +123,7 @@ sort_snapshot(TxidSnapshot *snap)
  * check txid visibility.
  */
 static bool
-is_visible_txid(txid value, const TxidSnapshot *snap)
+is_visible_txid(TransactionId value, const TxidSnapshot *snap)
 {
 	if (value < snap->xmin)
 		return true;
@@ -246,7 +134,7 @@ is_visible_txid(txid value, const TxidSnapshot *snap)
 	{
 		void	   *res;
 
-		res = bsearch(&value, snap->xip, snap->nxip, sizeof(txid), cmp_txid);
+		res = bsearch(&value, snap->xip, snap->nxip, sizeof(TransactionId), cmp_txid);
 		/* if found, transaction is still in progress */
 		return (res) ? false : true;
 	}
@@ -269,7 +157,7 @@ is_visible_txid(txid value, const TxidSnapshot *snap)
  */
 
 static StringInfo
-buf_init(txid xmin, txid xmax)
+buf_init(TransactionId xmin, TransactionId xmax)
 {
 	TxidSnapshot snap;
 	StringInfo	buf;
@@ -284,7 +172,7 @@ buf_init(txid xmin, txid xmax)
 }
 
 static void
-buf_add_txid(StringInfo buf, txid xid)
+buf_add_txid(StringInfo buf, TransactionId xid)
 {
 	TxidSnapshot *snap = (TxidSnapshot *) buf->data;
 
@@ -311,14 +199,14 @@ buf_finalize(StringInfo buf)
 /*
  * simple number parser.
  *
- * We return 0 on error, which is invalid value for txid.
+ * We return 0 on error, which is invalid value for TransactionId.
  */
-static txid
+static TransactionId
 str2txid(const char *s, const char **endp)
 {
-	txid		val = 0;
-	txid		cutoff = MAX_TXID / 10;
-	txid		cutlim = MAX_TXID % 10;
+	TransactionId		val = 0;
+	TransactionId		cutoff = MAX_TXID / 10;
+	TransactionId		cutlim = MAX_TXID % 10;
 
 	for (; *s; s++)
 	{
@@ -350,13 +238,13 @@ str2txid(const char *s, const char **endp)
 static TxidSnapshot *
 parse_snapshot(const char *str)
 {
-	txid		xmin;
-	txid		xmax;
-	txid		last_val = 0,
-				val;
-	const char *str_start = str;
-	const char *endp;
-	StringInfo	buf;
+	TransactionId	xmin;
+	TransactionId	xmax;
+	TransactionId	last_val = 0,
+					val;
+	const char	   *str_start = str;
+	const char	   *endp;
+	StringInfo		buf;
 
 	xmin = str2txid(str, &endp);
 	if (*endp != ':')
@@ -418,31 +306,12 @@ bad_format:
 /*
  * txid_current() returns int8
  *
- *	Return the current toplevel transaction ID as TXID
- *	If the current transaction does not have one, one is assigned.
- *
- *	This value has the epoch as the high 32 bits and the 32-bit xid
- *	as the low 32 bits.
+ *	Return the current toplevel transaction ID
  */
 Datum
 txid_current(PG_FUNCTION_ARGS)
 {
-	txid		val;
-	TxidEpoch	state;
-
-	/*
-	 * Must prevent during recovery because if an xid is not assigned we try
-	 * to assign one, which would fail. Programs already rely on this function
-	 * to always return a valid current xid, so we should not change this to
-	 * return NULL or similar invalid xid.
-	 */
-	PreventCommandDuringRecovery("txid_current()");
-
-	load_xid_epoch(&state);
-
-	val = convert_xid(GetTopTransactionId(), &state);
-
-	PG_RETURN_INT64(val);
+	PG_RETURN_INT64(GetTopTransactionId());
 }
 
 /*
@@ -452,18 +321,12 @@ txid_current(PG_FUNCTION_ARGS)
 Datum
 txid_current_if_assigned(PG_FUNCTION_ARGS)
 {
-	txid		val;
-	TxidEpoch	state;
-	TransactionId topxid = GetTopTransactionIdIfAny();
+	TransactionId xid = GetTopTransactionIdIfAny();
 
-	if (topxid == InvalidTransactionId)
+	if (TransactionIdIsValid(xid))
+		PG_RETURN_INT64(xid);
+	else
 		PG_RETURN_NULL();
-
-	load_xid_epoch(&state);
-
-	val = convert_xid(topxid, &state);
-
-	PG_RETURN_INT64(val);
 }
 
 /*
@@ -479,14 +342,11 @@ txid_current_snapshot(PG_FUNCTION_ARGS)
 	TxidSnapshot *snap;
 	uint32		nxip,
 				i;
-	TxidEpoch	state;
 	Snapshot	cur;
 
 	cur = GetActiveSnapshot();
 	if (cur == NULL)
 		elog(ERROR, "no active snapshot set");
-
-	load_xid_epoch(&state);
 
 	/*
 	 * Compile-time limits on the procarray (MAX_BACKENDS processes plus
@@ -500,11 +360,11 @@ txid_current_snapshot(PG_FUNCTION_ARGS)
 	snap = palloc(TXID_SNAPSHOT_SIZE(nxip));
 
 	/* fill */
-	snap->xmin = convert_xid(cur->xmin, &state);
-	snap->xmax = convert_xid(cur->xmax, &state);
+	snap->xmin = cur->xmin;
+	snap->xmax = cur->xmax;
 	snap->nxip = nxip;
 	for (i = 0; i < nxip; i++)
-		snap->xip[i] = convert_xid(cur->xip[i], &state);
+		snap->xip[i] = cur->xip[i];
 
 	/*
 	 * We want them guaranteed to be in ascending order.  This also removes
@@ -551,14 +411,14 @@ txid_snapshot_out(PG_FUNCTION_ARGS)
 
 	initStringInfo(&str);
 
-	appendStringInfo(&str, TXID_FMT ":", snap->xmin);
-	appendStringInfo(&str, TXID_FMT ":", snap->xmax);
+	appendStringInfo(&str, XID_FMT ":", snap->xmin);
+	appendStringInfo(&str, XID_FMT ":", snap->xmax);
 
 	for (i = 0; i < snap->nxip; i++)
 	{
 		if (i > 0)
 			appendStringInfoChar(&str, ',');
-		appendStringInfo(&str, TXID_FMT, snap->xip[i]);
+		appendStringInfo(&str, XID_FMT, snap->xip[i]);
 	}
 
 	PG_RETURN_CSTRING(str.data);
@@ -574,13 +434,13 @@ txid_snapshot_out(PG_FUNCTION_ARGS)
 Datum
 txid_snapshot_recv(PG_FUNCTION_ARGS)
 {
-	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
-	TxidSnapshot *snap;
-	txid		last = 0;
-	int			nxip;
-	int			i;
-	txid		xmin,
-				xmax;
+	StringInfo		buf = (StringInfo) PG_GETARG_POINTER(0);
+	TxidSnapshot   *snap;
+	TransactionId	last = 0;
+	int				nxip;
+	int				i;
+	TransactionId	xmin,
+					xmax;
 
 	/* load and validate nxip */
 	nxip = pq_getmsgint(buf, 4);
@@ -598,7 +458,7 @@ txid_snapshot_recv(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < nxip; i++)
 	{
-		txid		cur = pq_getmsgint64(buf);
+		TransactionId	cur = pq_getmsgint64(buf);
 
 		if (cur < last || cur < xmin || cur >= xmax)
 			goto bad_format;
@@ -656,8 +516,8 @@ txid_snapshot_send(PG_FUNCTION_ARGS)
 Datum
 txid_visible_in_snapshot(PG_FUNCTION_ARGS)
 {
-	txid		value = PG_GETARG_INT64(0);
-	TxidSnapshot *snap = (TxidSnapshot *) PG_GETARG_VARLENA_P(1);
+	TransactionId	value = PG_GETARG_INT64(0);
+	TxidSnapshot   *snap = (TxidSnapshot *) PG_GETARG_VARLENA_P(1);
 
 	PG_RETURN_BOOL(is_visible_txid(value, snap));
 }
@@ -697,8 +557,8 @@ Datum
 txid_snapshot_xip(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *fctx;
-	TxidSnapshot *snap;
-	txid		value;
+	TxidSnapshot   *snap;
+	TransactionId	value;
 
 	/* on first call initialize snap_state and get copy of snapshot */
 	if (SRF_IS_FIRSTCALL())
@@ -732,8 +592,7 @@ txid_snapshot_xip(PG_FUNCTION_ARGS)
  * Report the status of a recent transaction ID, or null for wrapped,
  * truncated away or otherwise too old XIDs.
  *
- * The passed epoch-qualified xid is treated as a normal xid, not a
- * multixact id.
+ * The passed xid is treated as a normal xid, not a multixact id.
  *
  * If it points to a committed subxact the result is the subxact status even
  * though the parent xact may still be in progress or may have aborted.
@@ -742,18 +601,29 @@ Datum
 txid_status(PG_FUNCTION_ARGS)
 {
 	const char *status;
-	uint64		xid_with_epoch = PG_GETARG_INT64(0);
-	TransactionId xid;
+	TransactionId xid = PG_GETARG_TRANSACTIONID(0);
 
 	/*
 	 * We must protect against concurrent truncation of clog entries to avoid
 	 * an I/O error on SLRU lookup.
 	 */
 	LWLockAcquire(CLogTruncationLock, LW_SHARED);
-	if (TransactionIdInRecentPast(xid_with_epoch, &xid))
-	{
-		Assert(TransactionIdIsValid(xid));
+	Assert(TransactionIdIsValid(xid));
 
+	if (TransactionIdIsNormal(xid) &&
+		TransactionIdPrecedes(xid, ShmemVariableCache->oldestClogXid))
+	{
+		status = NULL;
+	}
+	else if (TransactionIdPrecedesOrEquals(ReadNewTransactionId(), xid))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("transaction ID " XID_FMT " is in the future",
+						xid)));
+	}
+	else
+	{
 		if (TransactionIdIsCurrentTransactionId(xid))
 			status = "in progress";
 		else if (TransactionIdDidCommit(xid))
@@ -778,10 +648,6 @@ txid_status(PG_FUNCTION_ARGS)
 			else
 				status = "in progress";
 		}
-	}
-	else
-	{
-		status = NULL;
 	}
 	LWLockRelease(CLogTruncationLock);
 

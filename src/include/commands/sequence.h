@@ -45,6 +45,11 @@ typedef FormData_pg_sequence_data *Form_pg_sequence_data;
 /* XLOG stuff */
 #define XLOG_SEQ_LOG			0x00
 
+/*
+ * The "special area" of a sequence's buffer page looks like this.
+ */
+#define SEQ_MAGIC	  0x1717
+
 typedef struct xl_seq_rec
 {
 	RelFileNode node;

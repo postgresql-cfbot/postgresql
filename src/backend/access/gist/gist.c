@@ -641,6 +641,7 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace, GISTSTATE *giststate)
 
 		stack->page = (Page) BufferGetPage(stack->buffer);
 		stack->lsn = PageGetLSN(stack->page);
+		elog(LOG, "LSN = " UINT64_FORMAT, stack->lsn);
 		Assert(!RelationNeedsWAL(state.r) || !XLogRecPtrIsInvalid(stack->lsn));
 
 		/*

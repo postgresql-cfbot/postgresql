@@ -4052,6 +4052,7 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 						 &tuple->t_self, sizeof(ItemPointerData));
 	/* We don't currently bother to reconstruct t_tableOid */
 	tuple->t_tableOid = InvalidOid;
+	HeapTupleSetZeroBase(tuple);
 	/* Read in the tuple body */
 	LogicalTapeReadExact(state->tapeset, tapenum,
 						 tuple->t_data, tuple->t_len);

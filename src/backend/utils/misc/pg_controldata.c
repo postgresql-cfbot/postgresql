@@ -166,8 +166,7 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 	values[6] = BoolGetDatum(ControlFile->checkPointCopy.fullPageWrites);
 	nulls[6] = false;
 
-	values[7] = CStringGetTextDatum(psprintf("%u:%u",
-											 ControlFile->checkPointCopy.nextXidEpoch,
+	values[7] = CStringGetTextDatum(psprintf(XID_FMT,
 											 ControlFile->checkPointCopy.nextXid));
 	nulls[7] = false;
 

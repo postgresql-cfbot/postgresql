@@ -410,6 +410,7 @@ sub init
 	mkdir $self->archive_dir;
 
 	TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
+		'-x', '1249835483136', '-m', '2422361554944', '-o', '3594887626752',
 		@{ $params{extra} });
 	TestLib::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata);
 

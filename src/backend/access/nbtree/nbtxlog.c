@@ -16,6 +16,7 @@
 
 #include "access/bufmask.h"
 #include "access/heapam_xlog.h"
+#include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
 #include "access/transam.h"
@@ -628,9 +629,13 @@ btree_xlog_delete_get_latestRemovedXid(XLogReaderState *record)
 		 */
 		if (ItemIdHasStorage(hitemid))
 		{
-			htuphdr = (HeapTupleHeader) PageGetItem(hpage, hitemid);
+			HeapTupleData htup;
 
-			HeapTupleHeaderAdvanceLatestRemovedXid(htuphdr, &latestRemovedXid);
+			htuphdr = (HeapTupleHeader) PageGetItem(hpage, hitemid);
+			htup.t_data = htuphdr;
+			HeapTupleCopyBaseFromPage(&htup, hpage);
+
+			HeapTupleHeaderAdvanceLatestRemovedXid(&htup, &latestRemovedXid);
 		}
 		else if (ItemIdIsDead(hitemid))
 		{

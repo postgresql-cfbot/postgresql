@@ -71,7 +71,7 @@ check_safe_enum_use(HeapTuple enumval_tup)
 	 * Usually, a row would get hinted as committed when it's read or loaded
 	 * into syscache; but just in case not, let's check the xmin directly.
 	 */
-	xmin = HeapTupleHeaderGetXmin(enumval_tup->t_data);
+	xmin = HeapTupleGetXmin(enumval_tup);
 	if (!TransactionIdIsInProgress(xmin) &&
 		TransactionIdDidCommit(xmin))
 		return;
@@ -98,7 +98,7 @@ check_safe_enum_use(HeapTuple enumval_tup)
 	 * think it's too new and throw an unnecessary error, but we won't allow
 	 * an unsafe case.)
 	 */
-	if (xmin == HeapTupleHeaderGetXmin(enumtyp_tup->t_data) &&
+	if (xmin == HeapTupleGetXmin(enumtyp_tup) &&
 		!(enumtyp_tup->t_data->t_infomask & HEAP_UPDATED))
 	{
 		/* same (sub)transaction, so safe */

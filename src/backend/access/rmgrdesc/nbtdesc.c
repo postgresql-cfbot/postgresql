@@ -70,7 +70,7 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_unlink_page *xlrec = (xl_btree_unlink_page *) rec;
 
-				appendStringInfo(buf, "left %u; right %u; btpo_xact %u; ",
+				appendStringInfo(buf, "left %u; right %u; btpo_xact " XID_FMT "; ",
 								 xlrec->leftsib, xlrec->rightsib,
 								 xlrec->btpo_xact);
 				appendStringInfo(buf, "leafleft %u; leafright %u; topparent %u",
@@ -89,7 +89,7 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_reuse_page *xlrec = (xl_btree_reuse_page *) rec;
 
-				appendStringInfo(buf, "rel %u/%u/%u; latestRemovedXid %u",
+				appendStringInfo(buf, "rel %u/%u/%u; latestRemovedXid " XID_FMT,
 								 xlrec->node.spcNode, xlrec->node.dbNode,
 								 xlrec->node.relNode, xlrec->latestRemovedXid);
 				break;

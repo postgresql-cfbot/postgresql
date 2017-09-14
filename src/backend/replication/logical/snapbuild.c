@@ -837,7 +837,7 @@ SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 		if (!ReorderBufferXidHasBaseSnapshot(builder->reorder, txn->xid))
 			continue;
 
-		elog(DEBUG2, "adding a new snapshot to %u at %X/%X",
+		elog(DEBUG2, "adding a new snapshot to " XID_FMT " at %X/%X",
 			 txn->xid, (uint32) (lsn >> 32), (uint32) lsn);
 
 		/*
@@ -912,7 +912,7 @@ SnapBuildPurgeCommittedTxn(SnapBuild *builder)
 	memcpy(builder->committed.xip, workspace,
 		   surviving_xids * sizeof(TransactionId));
 
-	elog(DEBUG3, "purged committed transactions from %u to %u, xmin: %u, xmax: %u",
+	elog(DEBUG3, "purged committed transactions from %u to %u, xmin: " XID_FMT ", xmax: " XID_FMT,
 		 (uint32) builder->committed.xcnt, (uint32) surviving_xids,
 		 builder->xmin, builder->xmax);
 	builder->committed.xcnt = surviving_xids;
@@ -978,7 +978,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 			sub_needs_timetravel = true;
 			needs_snapshot = true;
 
-			elog(DEBUG1, "found subtransaction %u:%u with catalog changes",
+			elog(DEBUG1, "found subtransaction " XID_FMT ":" XID_FMT " with catalog changes",
 				 xid, subxid);
 
 			SnapBuildAddCommittedTxn(builder, subxid);
@@ -1004,7 +1004,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 	/* if top-level modified catalog, it'll need a snapshot */
 	if (ReorderBufferXidHasCatalogChanges(builder->reorder, xid))
 	{
-		elog(DEBUG2, "found top level transaction %u, with catalog changes",
+		elog(DEBUG2, "found top level transaction " XID_FMT ", with catalog changes",
 			 xid);
 		needs_snapshot = true;
 		needs_timetravel = true;
@@ -1017,7 +1017,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 	}
 	else if (needs_timetravel)
 	{
-		elog(DEBUG2, "forced transaction %u to do timetravel", xid);
+		elog(DEBUG2, "forced transaction " XID_FMT " to do timetravel", xid);
 
 		SnapBuildAddCommittedTxn(builder, xid);
 	}
@@ -1126,7 +1126,7 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 	/* Remove transactions we don't need to keep track off anymore */
 	SnapBuildPurgeCommittedTxn(builder);
 
-	elog(DEBUG3, "xmin: %u, xmax: %u, oldestrunning: %u",
+	elog(DEBUG3, "xmin: " XID_FMT ", xmax: " XID_FMT ", oldestrunning: " XID_FMT,
 		 builder->xmin, builder->xmax,
 		 running->oldestRunningXid);
 
@@ -1222,7 +1222,7 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 		ereport(DEBUG1,
 				(errmsg_internal("skipping snapshot at %X/%X while building logical decoding snapshot, xmin horizon too low",
 								 (uint32) (lsn >> 32), (uint32) lsn),
-				 errdetail_internal("initial xmin horizon of %u vs the snapshot's %u",
+				 errdetail_internal("initial xmin horizon of " XID_FMT " vs the snapshot's " XID_FMT,
 									builder->initial_xmin_horizon, running->oldestRunningXid)));
 
 
@@ -1305,7 +1305,7 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 		ereport(LOG,
 				(errmsg("logical decoding found initial starting point at %X/%X",
 						(uint32) (lsn >> 32), (uint32) lsn),
-				 errdetail("Waiting for transactions (approximately %d) older than %u to end.",
+				 errdetail("Waiting for transactions (approximately %d) older than " XID_FMT " to end.",
 						   running->xcnt, running->nextXid)));
 
 		SnapBuildWaitSnapshot(running, running->nextXid);
@@ -1329,7 +1329,7 @@ SnapBuildFindSnapshot(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *runn
 		ereport(LOG,
 				(errmsg("logical decoding found initial consistent point at %X/%X",
 						(uint32) (lsn >> 32), (uint32) lsn),
-				 errdetail("Waiting for transactions (approximately %d) older than %u to end.",
+				 errdetail("Waiting for transactions (approximately %d) older than " XID_FMT " to end.",
 						   running->xcnt, running->nextXid)));
 
 		SnapBuildWaitSnapshot(running, running->nextXid);

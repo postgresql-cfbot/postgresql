@@ -63,7 +63,7 @@ typedef struct xl_commit_ts_set
 
 typedef struct xl_commit_ts_truncate
 {
-	int			pageno;
+	int64		pageno;
 	TransactionId oldestXid;
 } xl_commit_ts_truncate;
 

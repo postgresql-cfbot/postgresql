@@ -3183,6 +3183,7 @@ ltrmark:;
 		tuple.t_len = ItemIdGetLength(lp);
 		tuple.t_self = *tid;
 		tuple.t_tableOid = RelationGetRelid(relation);
+		HeapTupleCopyBaseFromPage(&tuple, page);
 
 		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 	}

@@ -1971,12 +1971,6 @@ insert into extremely_skewed
   select 42 as id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
   from generate_series(1, 19000);
 
--- Make a relation that has 1000 rows for each value.
-create table skewed as
-  select generate_series(1, 5000) % 5 as id;
-alter table skewed set (parallel_workers = 2);
-analyze skewed;
-
 -- The "optimal" case: the hash table fits in memory; we plan for 1
 -- batch, we stick to that number, and peak memory usage stays within
 -- our work_mem budget
@@ -1991,15 +1985,6 @@ select count(*) from simple r join simple s using (id);
 -- parallel with parallel-oblivious hash join
 set max_parallel_workers_per_gather = 2;
 set work_mem = '4MB';
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-  select count(*) from simple r join simple s using (id);
-select count(*) from simple r join simple s using (id);
-
--- parallel with parallel-aware hash join
-set max_parallel_workers_per_gather = 2;
-set work_mem = '4MB';
-set parallel_synchronization_cost = 0;
 explain (costs off)
   select count(*) from simple r join simple s using (id);
 select count(*) from simple r join simple s using (id);
@@ -2018,15 +2003,6 @@ select count(*) from simple r join simple s using (id);
 -- parallel with parallel-oblivious hash join
 set max_parallel_workers_per_gather = 2;
 set work_mem = '128kB';
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-  select count(*) from simple r join simple s using (id);
-select count(*) from simple r join simple s using (id);
-
--- parallel with parallel-aware hash join
-set max_parallel_workers_per_gather = 2;
-set work_mem = '128kB';
-set parallel_synchronization_cost = 0;
 explain (costs off)
   select count(*) from simple r join simple s using (id);
 select count(*) from simple r join simple s using (id);
@@ -2046,15 +2022,6 @@ select count(*) FROM simple r JOIN bigger_than_it_looks s USING (id);
 -- parallel with parallel-oblivious hash join
 set max_parallel_workers_per_gather = 2;
 set work_mem = '128kB';
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-  select count(*) from simple r join bigger_than_it_looks s using (id);
-select count(*) from simple r join bigger_than_it_looks s using (id);
-
--- parallel with parallel-aware hash join
-set max_parallel_workers_per_gather = 2;
-set work_mem = '128kB';
-set parallel_synchronization_cost = 0;
 explain (costs off)
   select count(*) from simple r join bigger_than_it_looks s using (id);
 select count(*) from simple r join bigger_than_it_looks s using (id);
@@ -2075,44 +2042,9 @@ select count(*) from simple r join extremely_skewed s using (id);
 -- parallel with parallel-oblivious hash join
 set max_parallel_workers_per_gather = 2;
 set work_mem = '128kB';
-set parallel_synchronization_cost = 1000000000;
 explain (costs off)
   select count(*) from simple r join extremely_skewed s using (id);
 select count(*) from simple r join extremely_skewed s using (id);
-
--- parallel with parallel-aware hash join
-set max_parallel_workers_per_gather = 2;
-set work_mem = '64kB';
-set parallel_synchronization_cost = 0;
-explain (costs off)
-  select count(*) from simple r join extremely_skewed s using (id);
-select count(*) from simple r join extremely_skewed s using (id);
-
--- Test the skew hash table; exercise creation, then freeing a bucket
--- due to lack of space, then freeing the whole skew table.
-
--- non-parallel
-set max_parallel_workers_per_gather = 0;
-set work_mem = '64kB';
-explain (costs off)
-  select count(*) from skewed r join skewed s using (id);
-select count(*) from skewed r join skewed s using (id);
-
--- parallel with parallel-oblivious hash join
-set max_parallel_workers_per_gather = 1;
-set work_mem = '64kB';
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-  select count(*) from skewed r join skewed s using (id);
-select count(*) from skewed r join skewed s using (id);
-
--- parallel-aware
-set max_parallel_workers_per_gather = 1;
-set work_mem = '64kB';
-set parallel_synchronization_cost = 0;
-explain (costs off)
-  select count(*) from skewed r join skewed s using (id);
-select count(*) from skewed r join skewed s using (id);
 
 -- A couple of other hash join tests unrelated to work_mem management.
 
@@ -2128,14 +2060,6 @@ select  count(*) from simple r full outer join simple s using (id);
 
 -- parallelism not possible with parallel-oblivious outer hash join
 set max_parallel_workers_per_gather = 2;
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-     select  count(*) from simple r full outer join simple s using (id);
-select  count(*) from simple r full outer join simple s using (id);
-
--- parallel-aware
-set max_parallel_workers_per_gather = 2;
-set parallel_synchronization_cost = 0;
 explain (costs off)
      select  count(*) from simple r full outer join simple s using (id);
 select  count(*) from simple r full outer join simple s using (id);
@@ -2150,21 +2074,12 @@ select  count(*) from simple r full outer join simple s on (r.id = 0 - s.id);
 
 -- parallelism not possible with parallel-oblivious outer hash join
 set max_parallel_workers_per_gather = 2;
-set parallel_synchronization_cost = 1000000000;
-explain (costs off)
-     select  count(*) from simple r full outer join simple s on (r.id = 0 - s.id);
-select  count(*) from simple r full outer join simple s on (r.id = 0 - s.id);
-
--- parallel-aware
-set max_parallel_workers_per_gather = 2;
-set parallel_synchronization_cost = 0;
 explain (costs off)
      select  count(*) from simple r full outer join simple s on (r.id = 0 - s.id);
 select  count(*) from simple r full outer join simple s on (r.id = 0 - s.id);
 
 drop table bigger_than_it_looks;
 drop table extremely_skewed;
-drop table skewed;
 drop table simple;
 reset min_parallel_table_scan_size;
 reset parallel_setup_cost;

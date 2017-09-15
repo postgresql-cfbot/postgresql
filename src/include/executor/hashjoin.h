@@ -16,6 +16,11 @@
 
 #include "nodes/execnodes.h"
 #include "storage/buffile.h"
+#include "storage/barrier.h"
+#include "storage/lwlock.h"
+#include "utils/dsa.h"
+#include "utils/leader_gate.h"
+#include "utils/sharedtuplestore.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -63,7 +68,12 @@
 
 typedef struct HashJoinTupleData
 {
-	struct HashJoinTupleData *next; /* link to next tuple in same bucket */
+	/* link to next tuple in same bucket */
+	union
+	{
+		dsa_pointer shared;
+		struct HashJoinTupleData *unshared;
+	} next;
 	uint32		hashvalue;		/* tuple's hash code */
 	/* Tuple data, in MinimalTuple format, follows on a MAXALIGN boundary */
 }			HashJoinTupleData;
@@ -71,6 +81,18 @@ typedef struct HashJoinTupleData
 #define HJTUPLE_OVERHEAD  MAXALIGN(sizeof(HashJoinTupleData))
 #define HJTUPLE_MINTUPLE(hjtup)  \
 	((MinimalTuple) ((char *) (hjtup) + HJTUPLE_OVERHEAD))
+
+/*
+ * The head of the linked list of tuples in each bucket.  For shared hash
+ * tables, it allows for tuples to be inserted into the bucket with an atomic
+ * operation.  For unshared hash tables, it's a plain old pointer to the first
+ * tuple.
+ */
+typedef union HashJoinBucketHead
+{
+	dsa_pointer_atomic shared;
+	HashJoinTuple unshared;
+} HashJoinBucketHead;
 
 /*
  * If the outer relation's distribution is sufficiently nonuniform, we attempt
@@ -93,8 +115,9 @@ typedef struct HashJoinTupleData
  */
 typedef struct HashSkewBucket
 {
+	bool		active;			/* is this bucket active? */
 	uint32		hashvalue;		/* common hash value */
-	HashJoinTuple tuples;		/* linked list of inner-relation tuples */
+	HashJoinBucketHead tuples;	/* linked list of inner-relation tuples */
 } HashSkewBucket;
 
 #define SKEW_BUCKET_OVERHEAD  MAXALIGN(sizeof(HashSkewBucket))
@@ -103,8 +126,9 @@ typedef struct HashSkewBucket
 #define SKEW_MIN_OUTER_FRACTION  0.01
 
 /*
- * To reduce palloc overhead, the HashJoinTuples for the current batch are
- * packed in 32kB buffers instead of pallocing each tuple individually.
+ * To reduce palloc/dsa_allocate overhead, the HashJoinTuples for the current
+ * batch are packed in 32kB buffers instead of pallocing each tuple
+ * individually.
  */
 typedef struct HashMemoryChunkData
 {
@@ -112,8 +136,12 @@ typedef struct HashMemoryChunkData
 	size_t		maxlen;			/* size of the buffer holding the tuples */
 	size_t		used;			/* number of buffer bytes already used */
 
-	struct HashMemoryChunkData *next;	/* pointer to the next chunk (linked
-										 * list) */
+	/* pointer to the next chunk (linked list) */
+	union
+	{
+		dsa_pointer shared;
+		struct HashMemoryChunkData *unshared;
+	} next;
 
 	char		data[FLEXIBLE_ARRAY_MEMBER];	/* buffer allocated at the end */
 }			HashMemoryChunkData;
@@ -121,7 +149,46 @@ typedef struct HashMemoryChunkData
 typedef struct HashMemoryChunkData *HashMemoryChunk;
 
 #define HASH_CHUNK_SIZE			(32 * 1024L)
+#define HASH_CHUNK_HEADER_SIZE	(offsetof(HashMemoryChunkData, data))
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
+
+/*
+ * State for a shared hash join table.  Each backend participating in a hash
+ * join with a shared hash table also has a HashJoinTableData object in
+ * backend-private memory, which points to this shared state in the DSM
+ * segment.
+ */
+typedef struct SharedHashJoinTableData
+{
+	Barrier barrier;				/* synchronization for the hash join */
+	dsa_pointer buckets;			/* shared hash table buckets */
+	int nbuckets;
+	int log2_nbuckets;
+	int nbatch;
+	int planned_participants;		/* number of planned workers + leader */
+
+	dsa_pointer skew_buckets;		/* shared skew hash table buckets */
+	dsa_pointer skew_bucket_nums;	/* buckets numbers ordered by mvc */
+	Size		skew_space_used;	/* allowance given out to participants */
+	Size		skew_space_allowed;	/* total allowance (all participants) */
+	int			num_skew_buckets;	/* number of active skew buckets */
+	int			skew_bucket_len;	/* number of skew bucket slots */
+	int			current_skew_bucketno;	/* for unmatched scan */
+
+	LeaderGate leader_gate;			/* gate to avoid leader/worker deadlock */
+
+	Barrier shrink_barrier;			/* synchronization of hashtable shrink */
+	bool shrink_needed;				/* flag indicating all must help shrink */
+	long nfreed;					/* shared counter for hashtable shrink */
+	long ninmemory;					/* shared counter for hashtable shrink */
+	bool grow_enabled;				/* shared flag to prevent useless growth */
+
+	LWLock chunk_lock;				/* protects the following members */
+	dsa_pointer chunks;				/* chunks loaded for the current batch */
+	dsa_pointer chunk_work_queue;	/* next chunk for shared processing */
+	Size size;						/* size of buckets + chunks */
+	Size ntuples;
+} SharedHashJoinTableData;
 
 typedef struct HashJoinTableData
 {
@@ -133,13 +200,12 @@ typedef struct HashJoinTableData
 	int			log2_nbuckets_optimal;	/* log2(nbuckets_optimal) */
 
 	/* buckets[i] is head of list of tuples in i'th in-memory bucket */
-	struct HashJoinTupleData **buckets;
+	HashJoinBucketHead *buckets;
 	/* buckets array is per-batch storage, as are all the tuples */
 
 	bool		keepNulls;		/* true to store unmatchable NULL tuples */
 
-	bool		skewEnabled;	/* are we using skew optimization? */
-	HashSkewBucket **skewBucket;	/* hashtable of skew buckets */
+	HashSkewBucket *skewBucket;	/* hashtable of skew buckets */
 	int			skewBucketLen;	/* size of skewBucket array (a power of 2!) */
 	int			nSkewBuckets;	/* number of active skew buckets */
 	int		   *skewBucketNums; /* array indexes of active skew buckets */
@@ -152,7 +218,8 @@ typedef struct HashJoinTableData
 
 	bool		growEnabled;	/* flag to shut off nbatch increases */
 
-	double		totalTuples;	/* # tuples obtained from inner plan */
+	double		partialTuples;	/* # tuples obtained from inner plan by me */
+	double		totalTuples;	/* # tuples obtained from inner plan by all */
 	double		skewTuples;		/* # tuples inserted into skew tuples */
 
 	/*
@@ -174,7 +241,19 @@ typedef struct HashJoinTableData
 	FmgrInfo   *inner_hashfunctions;	/* lookup data for hash functions */
 	bool	   *hashStrict;		/* is each hash join operator strict? */
 
-	Size		spaceUsed;		/* memory space currently used by tuples */
+	/*
+	 * These variables track the space used by the main and skew hash tables,
+	 * so that work_mem can be respected.
+	 *
+	 * When running a parallel-aware, main hash table space tracking is done
+	 * in SharedHashJoinTableData when chunks are allocated and freed, not
+	 * here, but the final spaceUsed value is copied into here for the benefit
+	 * of EXPLAIN.  Skew table tuples are not managed with memory chunks, but
+	 * the same general approach is used: each backend has its own budget in
+	 * spaceAllowedSkew and asks for more from the shared memory counter only
+	 * when it runs out, to reduce contention.
+	 */
+	Size		spaceUsed;		/* memory space currently used by hashtable */
 	Size		spaceAllowed;	/* upper limit for space used */
 	Size		spacePeak;		/* peak space used */
 	Size		spaceUsedSkew;	/* skew hash table's current space usage */
@@ -185,6 +264,61 @@ typedef struct HashJoinTableData
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
+
+	/* used for scanning for unmatched tuples */
+	HashMemoryChunk unmatched_chunks;
+	HashMemoryChunk chunks_to_reinsert;
+
+	HashMemoryChunk current_chunk;
+	Size		current_chunk_index;
+
+	/* State for coordinating shared hash tables. */
+	dsa_area *area;
+	SharedHashJoinTableData *shared;	/* the shared state */
+	SharedTuplestoreAccessor *shared_inner_batches;
+	SharedTuplestoreAccessor *shared_outer_batches;
+	bool detached_early;				/* did we decide to detach early? */
+	dsa_pointer current_chunk_shared;	/* DSA pointer to 'current_chunk' */
+
 }			HashJoinTableData;
+
+/* Check if a HashJoinTable is shared by parallel workers. */
+#define HashJoinTableIsShared(table) ((table)->shared != NULL)
+
+/* The phases of a parallel hash join. */
+#define PHJ_PHASE_BEGINNING				0
+#define PHJ_PHASE_CREATING				1
+#define PHJ_PHASE_BUILDING				2
+#define PHJ_PHASE_RESIZING				3
+#define PHJ_PHASE_REINSERTING			4
+#define PHJ_PHASE_PROBING				5	/* PHJ_PHASE_PROBING_BATCH(0) */
+#define PHJ_PHASE_UNMATCHED				6	/* PHJ_PHASE_UNMATCHED_BATCH(0) */
+
+/* The subphases for batches. */
+#define PHJ_SUBPHASE_RESETTING			0
+#define PHJ_SUBPHASE_LOADING			1
+#define PHJ_SUBPHASE_PROBING			2
+#define PHJ_SUBPHASE_UNMATCHED			3
+
+/* The phases of parallel processing for batch(n). */
+#define PHJ_PHASE_RESETTING_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 3)
+#define PHJ_PHASE_LOADING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 2)
+#define PHJ_PHASE_PROBING_BATCH(n)		(PHJ_PHASE_UNMATCHED + (n) * 4 - 1)
+#define PHJ_PHASE_UNMATCHED_BATCH(n)	(PHJ_PHASE_UNMATCHED + (n) * 4 - 0)
+
+/* Phase number -> sub-phase within a batch. */
+#define PHJ_PHASE_TO_SUBPHASE(p)										\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) % 4)
+
+/* Phase number -> batch number. */
+#define PHJ_PHASE_TO_BATCHNO(p)											\
+	(((int)(p) - PHJ_PHASE_UNMATCHED + PHJ_SUBPHASE_UNMATCHED) / 4)
+
+/* The phases of ExecHashShrink. */
+#define PHJ_SHRINK_PHASE_BEGINNING		0
+#define PHJ_SHRINK_PHASE_CLEARING		1
+#define PHJ_SHRINK_PHASE_WORKING		2
+#define PHJ_SHRINK_PHASE_DECIDING		3
+#define PHJ_SHRINK_PHASE(n) (n % 4)
 
 #endif							/* HASHJOIN_H */

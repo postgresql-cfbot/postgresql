@@ -45,11 +45,26 @@ typedef struct ParallelContext
 	ParallelWorkerInfo *worker;
 } ParallelContext;
 
+typedef struct ParallelWorkerContext
+{
+	dsm_segment *seg;
+	shm_toc    *toc;
+} ParallelWorkerContext;
+
 extern volatile bool ParallelMessagePending;
 extern int	ParallelWorkerNumber;
 extern bool InitializingParallelWorker;
 
 #define		IsParallelWorker()		(ParallelWorkerNumber >= 0)
+
+/*
+ * Executor nodes normally use their plan node ID as a key for accessing a
+ * shared space in the DSM segment.  If a single node needs more than one TOC
+ * entry, it can instead use this macro to generate a unique key for up to
+ * 2^16 numbered TOC entries.
+ */
+#define PARALLEL_KEY_EXECUTOR_NODE_NTH(node_id, n) \
+	(AssertMacro((n) <= 0xffff), ((uint64) (n)) << 32 | (node_id))
 
 extern ParallelContext *CreateParallelContext(const char *library_name, const char *function_name, int nworkers);
 extern void InitializeParallelDSM(ParallelContext *pcxt);

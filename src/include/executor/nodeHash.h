@@ -21,9 +21,10 @@ extern Node *MultiExecHash(HashState *node);
 extern void ExecEndHash(HashState *node);
 extern void ExecReScanHash(HashState *node);
 
-extern HashJoinTable ExecHashTableCreate(Hash *node, List *hashOperators,
+extern HashJoinTable ExecHashTableCreate(HashState *state, List *hashOperators,
 					bool keepNulls);
 extern void ExecHashTableDestroy(HashJoinTable hashtable);
+extern void ExecHashTableDetach(HashJoinTable hashtable);
 extern void ExecHashTableInsert(HashJoinTable hashtable,
 					TupleTableSlot *slot,
 					uint32 hashvalue);
@@ -44,9 +45,12 @@ extern bool ExecScanHashTableForUnmatched(HashJoinState *hjstate,
 extern void ExecHashTableReset(HashJoinTable hashtable);
 extern void ExecHashTableResetMatchFlags(HashJoinTable hashtable);
 extern void ExecChooseHashTableSize(double ntuples, int tupwidth, bool useskew,
+						bool shared, int parallel_workers,
+						size_t *spaceAllowed,
 						int *numbuckets,
 						int *numbatches,
 						int *num_skew_mcvs);
 extern int	ExecHashGetSkewBucket(HashJoinTable hashtable, uint32 hashvalue);
+extern void ExecHashUpdate(HashJoinTable hashtable);
 
 #endif							/* NODEHASH_H */

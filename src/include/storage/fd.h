@@ -80,6 +80,13 @@ extern int	FileGetRawDesc(File file);
 extern int	FileGetRawFlags(File file);
 extern int	FileGetRawMode(File file);
 
+/* Operations used by buffile.c for named shared temporary files */
+extern void PathNameCreateTemporaryDir(FileName basedir, FileName directory);
+extern File PathNameCreateTemporaryFile(FileName filename);
+extern File PathNameOpenTemporaryFile(FileName filename);
+extern bool PathNameDeleteTemporaryFile(FileName filename, bool error_on_failure);
+extern void PathNameDeleteTemporaryDirRecursively(FileName filename);
+
 /* Operations that allow use of regular stdio --- USE WITH CAUTION */
 extern FILE *AllocateFile(const char *name, const char *mode);
 extern int	FreeFile(FILE *file);
@@ -123,8 +130,9 @@ extern int	durable_unlink(const char *fname, int loglevel);
 extern int	durable_link_or_rename(const char *oldfile, const char *newfile, int loglevel);
 extern void SyncDataDirectory(void);
 
-/* Filename components for OpenTemporaryFile */
+/* Filename components */
 #define PG_TEMP_FILES_DIR "pgsql_tmp"
 #define PG_TEMP_FILE_PREFIX "pgsql_tmp"
+#define PG_TEMP_FILE_SET_DIR_SUFFIX ".set"
 
 #endif							/* FD_H */

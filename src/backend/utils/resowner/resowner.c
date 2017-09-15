@@ -542,16 +542,6 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 				PrintRelCacheLeakWarning(res);
 			RelationClose(res);
 		}
-
-		/* Ditto for dynamic shared memory segments */
-		while (ResourceArrayGetAny(&(owner->dsmarr), &foundres))
-		{
-			dsm_segment *res = (dsm_segment *) DatumGetPointer(foundres);
-
-			if (isCommit)
-				PrintDSMLeakWarning(res);
-			dsm_detach(res);
-		}
 	}
 	else if (phase == RESOURCE_RELEASE_LOCKS)
 	{
@@ -667,6 +657,16 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			if (isCommit)
 				PrintFileLeakWarning(res);
 			FileClose(res);
+		}
+
+		/* Ditto for dynamic shared memory segments */
+		while (ResourceArrayGetAny(&(owner->dsmarr), &foundres))
+		{
+			dsm_segment *res = (dsm_segment *) DatumGetPointer(foundres);
+
+			if (isCommit)
+				PrintDSMLeakWarning(res);
+			dsm_detach(res);
 		}
 	}
 

@@ -39,6 +39,17 @@
  * for a long time, like relation files. It is the caller's responsibility
  * to close them, there is no automatic mechanism in fd.c for that.
  *
+ * PathNameCreateTemporaryFile, PathNameOpenTemporaryFile and
+ * PathNameDeleteTemporaryFile are used for temporary files that may be shared
+ * between backends.  A File created or opened with these functions is not
+ * automatically deleted when the file is closed, but it is automatically
+ * closed and end of transaction and counts agains the temporary file limit of
+ * the backend that created it.  Any File created this way must be explicitly
+ * deleted with PathNameDeleteTemporaryFile.  Automatic file deletion is not
+ * provided because this interface is designed for use by buffile.c and
+ * indirectly by sharedbuffile.c to implement temporary files with shared
+ * ownership and cleanup.
+ *
  * AllocateFile, AllocateDir, OpenPipeStream and OpenTransientFile are
  * wrappers around fopen(3), opendir(3), popen(3) and open(2), respectively.
  * They behave like the corresponding native functions, except that the handle
@@ -170,8 +181,9 @@ int			max_safe_fds = 32;	/* default if not changed */
 #define FilePosIsUnknown(pos) ((pos) < 0)
 
 /* these are the assigned bits in fdstate below: */
-#define FD_TEMPORARY		(1 << 0)	/* T = delete when closed */
-#define FD_XACT_TEMPORARY	(1 << 1)	/* T = delete at eoXact */
+#define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
+#define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
+#define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
 
 typedef struct vfd
 {
@@ -321,6 +333,7 @@ static void walkdir(const char *path,
 static void pre_sync_fname(const char *fname, bool isdir, int elevel);
 #endif
 static void datadir_fsync_fname(const char *fname, bool isdir, int elevel);
+static void unlink_if_exists_fname(const char *fname, bool isdir, int elevel);
 
 static int	fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel);
 static int	fsync_parent_path(const char *fname, int elevel);
@@ -1280,6 +1293,23 @@ FileAccess(File file)
 }
 
 /*
+ * Called whenever a temporary file is deleted to report its size.
+ */
+static void
+ReportTemporaryFileUsage(const char *path, off_t size)
+{
+	pgstat_report_tempfile(size);
+
+	if (log_temp_files >= 0)
+	{
+		if ((size / 1024) >= log_temp_files)
+			ereport(LOG,
+					(errmsg("temporary file: path \"%s\", size %lu",
+							path, (unsigned long) size)));
+	}
+}
+
+/*
  *	Called when we get a shared invalidation message on some relation.
  */
 #ifdef NOT_USED
@@ -1354,6 +1384,106 @@ PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 }
 
 /*
+ * Delete a file that was created with PathNameCreateTemporaryFile.
+ * Return true if the file existed, false if didn't.
+ */
+bool
+PathNameDeleteTemporaryFile(FileName fileName, bool error_on_failure)
+{
+	struct stat filestats;
+	int			stat_errno;
+
+	/* Get the final size for pgstat reporting. */
+	if (stat(fileName, &filestats) != 0)
+		stat_errno = errno;
+	else
+		stat_errno = 0;
+
+	/*
+	 * Unlike FileClose's automatic file deletion code, we tolerate
+	 * non-existence to support BufFileDeleteShared which doesn't know how
+	 * many segments it has to delete until it runs out.
+	 */
+	if (stat_errno == ENOENT)
+		return false;
+
+	if (unlink(fileName) < 0)
+	{
+		if (errno != ENOENT)
+			elog(error_on_failure ? ERROR : LOG,
+				 "cannot unlink temporary file \"%s\": %m", fileName);
+		return false;
+	}
+
+	if (stat_errno == 0)
+		ReportTemporaryFileUsage(fileName, filestats.st_size);
+	else
+	{
+		errno = stat_errno;
+		elog(LOG, "could not stat file \"%s\": %m", fileName);
+	}
+
+	return true;
+}
+
+/*
+ * Create directory 'directory'.  If necessary, create 'basedir', which must
+ * be the directory above it.  This is designed for creating the top-level
+ * temporary directory on demand before creating a directory underneath it.
+ * If necessary, delete a pre-existing directory of the same name, on the
+ * theory that crash-restarts can leave junk behind that we'll eventually
+ * crash into (see RemovePgTempFiles).
+ */
+void
+PathNameCreateTemporaryDir(FileName basedir, FileName directory)
+{
+	if (mkdir(directory, S_IRWXU) < 0)
+	{
+		/*
+		 * Failed.  Try to create basedir first in case it's missing.
+		 * Tolerate ENOENT to close a race against another process following
+		 * the same algorithm.
+		 */
+		if (mkdir(basedir, S_IRWXU) < 0 && errno != ENOENT)
+			elog(ERROR, "cannot create temporary directory \"%s\": %m",
+				 basedir);
+
+		/* Try again. */
+		if (mkdir(directory, S_IRWXU) < 0)
+		{
+			elog(LOG, "cannot create temporary subdirectory \"%s\": %m (will try to unlink and then try again)",
+				 directory);
+			/*
+			 * Failed again.  Perhaps there is a directory in the way that is
+			 * left-over from a crash-restart?  Try to delete it.
+			 */
+			PathNameDeleteTemporaryDirRecursively(directory);
+
+			/* Now try one more time. */
+			if (mkdir(directory, S_IRWXU) < 0)
+				elog(ERROR, "cannot create temporary subdirectory \"%s\": %m",
+					 directory);
+		}
+	}
+}
+
+/*
+ * Delete a directory and everything in it.
+ */
+void
+PathNameDeleteTemporaryDirRecursively(FileName dirname)
+{
+	/*
+	 * Currently, walkdir doesn't offer a way for our passed in function to
+	 * maintain state.  Perhaps it should, so that we could tell the caller
+	 * whether this operation succeeded or failed.  Since this operation is
+	 * used in a cleanup path, we wouldn't actually behave differently: we'll
+	 * just log failures.
+	 */
+	walkdir(dirname, unlink_if_exists_fname, false, LOG);
+}
+
+/*
  * Open a temporary file that will disappear when we close it.
  *
  * This routine takes care of generating an appropriate tempfile name.
@@ -1401,12 +1531,12 @@ OpenTemporaryFile(bool interXact)
 											 true);
 
 	/* Mark it for deletion at close */
-	VfdCache[file].fdstate |= FD_TEMPORARY;
+	VfdCache[file].fdstate |= FD_DELETE_AT_CLOSE;
 
 	/* Register it with the current resource owner */
 	if (!interXact)
 	{
-		VfdCache[file].fdstate |= FD_XACT_TEMPORARY;
+		VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
 
 		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
 		ResourceOwnerRememberFile(CurrentResourceOwner, file);
@@ -1487,6 +1617,82 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 }
 
 /*
+ * Create a new file.  The directory containing it must already exist.  Files
+ * created this way are subject to temp_file_limit and are automatically
+ * closed at end of transaction, but are not automatically deleted on close
+ * because they are intended to be shared between cooperating backends.
+ */
+File
+PathNameCreateTemporaryFile(char *tempfilepath)
+{
+	File file;
+
+	/*
+	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
+	 * temp file that can be reused.
+	 */
+	file = PathNameOpenFile(tempfilepath,
+							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
+							0600);
+	if (file <= 0)
+		elog(ERROR, "could not create temporary file \"%s\": %m",
+			 tempfilepath);
+
+	/* Mark it for temp_file_limit accounting. */
+	VfdCache[file].fdstate |= FD_TEMP_FILE_LIMIT;
+
+	/*
+	 * We don't set FD_DELETE_AT_CLOSE for files opened this way, but we
+	 * still want to make sure they get closed at end of xact.
+	 */
+	ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+	ResourceOwnerRememberFile(CurrentResourceOwner, file);
+	VfdCache[file].resowner = CurrentResourceOwner;
+
+	/* Backup mechanism for closing at end of xact. */
+	VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
+	have_xact_temporary_files = true;
+
+	return file;
+}
+
+/*
+ * Open a file that was created with PathNameCreateTemporaryFile in another
+ * backend.  Files opened this way don't count agains the temp_file_limit of
+ * the caller, are read-only and are automatically closed at the end of the
+ * transaction but are not deleted on close.
+ */
+File
+PathNameOpenTemporaryFile(char *tempfilepath)
+{
+	File file;
+
+	/* We open the file read-only. */
+	file = PathNameOpenFile(tempfilepath, O_RDONLY | PG_BINARY, 0);
+
+	/* If no such file, then we don't raise an error. */
+	if (file <= 0 && errno != ENOENT)
+		elog(ERROR, "could not open temporary file \"%s\": %m", tempfilepath);
+
+	if (file > 0)
+	{
+		/*
+		 * We don't set FD_DELETE_AT_CLOSE for files opened this way, but we
+		 * still want to make sure they get closed at end of xact.
+		 */
+		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+		ResourceOwnerRememberFile(CurrentResourceOwner, file);
+		VfdCache[file].resowner = CurrentResourceOwner;
+
+		/* Backup mechanism for closing at end of xact. */
+		VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
+		have_xact_temporary_files = true;
+	}
+
+	return file;
+}
+
+/*
  * close a file when done with it
  */
 void
@@ -1514,10 +1720,17 @@ FileClose(File file)
 		Delete(file);
 	}
 
+	if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
+	{
+		/* Subtract its size from current usage (do first in case of error) */
+		temporary_files_size -= vfdP->fileSize;
+		vfdP->fileSize = 0;
+	}
+
 	/*
 	 * Delete the file if it was temporary, and make a log entry if wanted
 	 */
-	if (vfdP->fdstate & FD_TEMPORARY)
+	if (vfdP->fdstate & FD_DELETE_AT_CLOSE)
 	{
 		struct stat filestats;
 		int			stat_errno;
@@ -1529,11 +1742,8 @@ FileClose(File file)
 		 * is arranged to ensure that the worst-case consequence is failing to
 		 * emit log message(s), not failing to attempt the unlink.
 		 */
-		vfdP->fdstate &= ~FD_TEMPORARY;
+		vfdP->fdstate &= ~FD_DELETE_AT_CLOSE;
 
-		/* Subtract its size from current usage (do first in case of error) */
-		temporary_files_size -= vfdP->fileSize;
-		vfdP->fileSize = 0;
 
 		/* first try the stat() */
 		if (stat(vfdP->fileName, &filestats))
@@ -1547,18 +1757,7 @@ FileClose(File file)
 
 		/* and last report the stat results */
 		if (stat_errno == 0)
-		{
-			pgstat_report_tempfile(filestats.st_size);
-
-			if (log_temp_files >= 0)
-			{
-				if ((filestats.st_size / 1024) >= log_temp_files)
-					ereport(LOG,
-							(errmsg("temporary file: path \"%s\", size %lu",
-									vfdP->fileName,
-									(unsigned long) filestats.st_size)));
-			}
-		}
+			ReportTemporaryFileUsage(vfdP->fileName, filestats.st_size);
 		else
 		{
 			errno = stat_errno;
@@ -1732,7 +1931,7 @@ FileWrite(File file, char *buffer, int amount, uint32 wait_event_info)
 	 * message if we do that.  All current callers would just throw error
 	 * immediately anyway, so this is safe at present.
 	 */
-	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMPORARY))
+	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
 	{
 		off_t		newPos;
 
@@ -1785,7 +1984,7 @@ retry:
 		 * get here in that state if we're not enforcing temporary_files_size,
 		 * so we don't care.
 		 */
-		if (vfdP->fdstate & FD_TEMPORARY)
+		if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 		{
 			off_t		newPos = vfdP->seekPos;
 
@@ -1956,7 +2155,7 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 	if (returnCode == 0 && VfdCache[file].fileSize > offset)
 	{
 		/* adjust our state for truncation of a temp file */
-		Assert(VfdCache[file].fdstate & FD_TEMPORARY);
+		Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
 		temporary_files_size -= VfdCache[file].fileSize - offset;
 		VfdCache[file].fileSize = offset;
 	}
@@ -2658,7 +2857,8 @@ CleanupTempFiles(bool isProcExit)
 		{
 			unsigned short fdstate = VfdCache[i].fdstate;
 
-			if ((fdstate & FD_TEMPORARY) && VfdCache[i].fileName != NULL)
+			if (((fdstate & FD_DELETE_AT_CLOSE) || (fdstate & FD_CLOSE_AT_EOXACT)) &&
+				VfdCache[i].fileName != NULL)
 			{
 				/*
 				 * If we're in the process of exiting a backend process, close
@@ -2669,7 +2869,7 @@ CleanupTempFiles(bool isProcExit)
 				 */
 				if (isProcExit)
 					FileClose(i);
-				else if (fdstate & FD_XACT_TEMPORARY)
+				else if (fdstate & FD_CLOSE_AT_EOXACT)
 				{
 					elog(WARNING,
 						 "temporary file %s not closed at end-of-transaction",
@@ -2778,7 +2978,20 @@ RemovePgTempFilesInDir(const char *tmpdirname)
 		if (strncmp(temp_de->d_name,
 					PG_TEMP_FILE_PREFIX,
 					strlen(PG_TEMP_FILE_PREFIX)) == 0)
-			unlink(rm_path);	/* note we ignore any error */
+		{
+			size_t name_len = strlen(temp_de->d_name);
+			size_t suffix_len = strlen(PG_TEMP_FILE_SET_DIR_SUFFIX);
+
+			if (name_len > suffix_len &&
+				strcmp(temp_de->d_name + name_len - suffix_len,
+					   PG_TEMP_FILE_SET_DIR_SUFFIX) == 0)
+			{
+				RemovePgTempFilesInDir(rm_path);
+				rmdir(rm_path);		/* note we ignore any error */
+			}
+			else
+				unlink(rm_path);	/* note we ignore any error */
+		}
 		else
 			elog(LOG,
 				 "unexpected file found in temporary-files directory: \"%s\"",
@@ -3112,6 +3325,21 @@ datadir_fsync_fname(const char *fname, bool isdir, int elevel)
 	 * desire on to fsync_fname_ext().
 	 */
 	fsync_fname_ext(fname, isdir, true, elevel);
+}
+
+static void
+unlink_if_exists_fname(const char *fname, bool isdir, int elevel)
+{
+	if (isdir)
+	{
+		if (rmdir(fname) != 0 && errno != ENOENT)
+			elog(elevel, "could not rmdir directory \"%s\": %m", fname);
+	}
+	else
+	{
+		/* Use PathNameDeleteTemporaryFile to report filesize */
+		PathNameDeleteTemporaryFile((FileName) fname, false);
+	}
 }
 
 /*

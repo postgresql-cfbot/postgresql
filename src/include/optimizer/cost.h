@@ -28,6 +28,7 @@
 #define DEFAULT_CPU_OPERATOR_COST  0.0025
 #define DEFAULT_PARALLEL_TUPLE_COST 0.1
 #define DEFAULT_PARALLEL_SETUP_COST  1000.0
+#define DEFAULT_PARALLEL_SYNCHRONIZATION_COST 250.0
 
 #define DEFAULT_EFFECTIVE_CACHE_SIZE  524288	/* measured in pages */
 
@@ -52,6 +53,7 @@ extern PGDLLIMPORT double cpu_index_tuple_cost;
 extern PGDLLIMPORT double cpu_operator_cost;
 extern PGDLLIMPORT double parallel_tuple_cost;
 extern PGDLLIMPORT double parallel_setup_cost;
+extern PGDLLIMPORT double parallel_synchronization_cost;
 extern PGDLLIMPORT int effective_cache_size;
 extern Cost disable_cost;
 extern int	max_parallel_workers_per_gather;
@@ -148,7 +150,8 @@ extern void initial_cost_hashjoin(PlannerInfo *root,
 					  JoinType jointype,
 					  List *hashclauses,
 					  Path *outer_path, Path *inner_path,
-					  JoinPathExtraData *extra);
+					  JoinPathExtraData *extra,
+					  bool parallel_hash);
 extern void final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 					JoinCostWorkspace *workspace,
 					JoinPathExtraData *extra);

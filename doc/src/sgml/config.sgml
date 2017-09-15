@@ -3902,6 +3902,21 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-parallel-synchronization-cost" xreflabel="parallel_synchronization_cost">
+      <term><varname>parallel_synchronization_cost</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>parallel_synchronization_cost</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the cost of waiting at synchronization
+        points for other processes while executing parallel queries.
+        The default is 250.0.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-min-parallel-table-scan-size" xreflabel="min_parallel_table_scan_size">
       <term><varname>min_parallel_table_scan_size</varname> (<type>integer</type>)
       <indexterm>

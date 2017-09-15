@@ -468,6 +468,10 @@ char	   *pgstat_temp_directory;
 
 char	   *application_name;
 
+#ifdef DEBUG_BARRIER
+char	   *barrier_attach_phases;
+#endif
+
 int			tcp_keepalives_idle;
 int			tcp_keepalives_interval;
 int			tcp_keepalives_count;
@@ -2965,6 +2969,17 @@ static struct config_real ConfigureNamesReal[] =
 		DEFAULT_PARALLEL_SETUP_COST, 0, DBL_MAX,
 		NULL, NULL, NULL
 	},
+	{
+		{"parallel_synchronization_cost", PGC_USERSET, QUERY_TUNING_COST,
+			gettext_noop("Sets the planner's estimate of the cost of "
+						 "waiting at a synchronization point for other "
+						 "parallel query participants."),
+			NULL
+		},
+		&parallel_synchronization_cost,
+		DEFAULT_PARALLEL_SYNCHRONIZATION_COST, -DBL_MAX, DBL_MAX,
+		NULL, NULL, NULL
+	},
 
 	{
 		{"cursor_tuple_fraction", PGC_USERSET, QUERY_TUNING_OTHER,
@@ -3065,6 +3080,19 @@ static struct config_string ConfigureNamesString[] =
 		"",
 		NULL, NULL, show_archive_command
 	},
+
+#ifdef BARRIER_DEBUG
+	{
+		{"barrier_attach_phases", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Controls the phases at which backends attach to barriers."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&barrier_attach_phases,
+		"",
+		NULL, NULL, NULL
+	},
+#endif
 
 	{
 		{"client_encoding", PGC_USERSET, CLIENT_CONN_LOCALE,

@@ -264,6 +264,10 @@ extern char *external_pid_file;
 
 extern char *application_name;
 
+#ifdef BARRIER_DEBUG
+extern char *barrier_attach_phases;
+#endif
+
 extern int	tcp_keepalives_idle;
 extern int	tcp_keepalives_interval;
 extern int	tcp_keepalives_count;

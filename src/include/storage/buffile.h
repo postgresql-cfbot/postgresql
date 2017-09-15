@@ -26,9 +26,12 @@
 #ifndef BUFFILE_H
 #define BUFFILE_H
 
-/* BufFile is an opaque type whose details are not known outside buffile.c. */
+#include "storage/dsm.h"
+
+/* Opaque types whose details are not known outside buffile.c. */
 
 typedef struct BufFile BufFile;
+typedef struct BufFileSet BufFileSet;
 
 /*
  * prototypes for functions in buffile.c
@@ -41,5 +44,13 @@ extern size_t BufFileWrite(BufFile *file, void *ptr, size_t size);
 extern int	BufFileSeek(BufFile *file, int fileno, off_t offset, int whence);
 extern void BufFileTell(BufFile *file, int *fileno, off_t *offset);
 extern int	BufFileSeekBlock(BufFile *file, long blknum);
+
+extern size_t BufFileSetEstimate(int stripes);
+extern void BufFileSetCreate(BufFileSet *set, dsm_segment *seg, int stripes);
+extern void BufFileSetAttach(BufFileSet *set, dsm_segment *seg);
+extern BufFile *BufFileCreateShared(const BufFileSet *set, const char *name, int stripe);
+extern void BufFileExportShared(BufFile *file);
+extern BufFile *BufFileOpenShared(const BufFileSet *set, const char *name, int stripe);
+extern void BufFileDeleteShared(const BufFileSet *set, const char *name, int stripe);
 
 #endif							/* BUFFILE_H */

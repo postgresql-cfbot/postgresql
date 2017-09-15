@@ -3582,6 +3582,51 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
 			break;
+		case WAIT_EVENT_HASH_BEGINNING:
+			event_name = "Hash/Beginning";
+			break;
+		case WAIT_EVENT_HASH_BUILDING:
+			event_name = "Hash/Building";
+			break;
+		case WAIT_EVENT_HASH_CREATING:
+			event_name = "Hash/Creating";
+			break;
+		case WAIT_EVENT_HASH_REINSERTING:
+			event_name = "Hash/Reinserting";
+			break;
+		case WAIT_EVENT_HASH_RESETTING:
+			event_name = "Hash/Resetting";
+			break;
+		case WAIT_EVENT_HASH_RESIZING:
+			event_name = "Hash/Resizing";
+			break;
+		case WAIT_EVENT_HASH_SHRINK_BEGINNING:
+			event_name = "Hash/Shrinking/Beginning";
+			break;
+		case WAIT_EVENT_HASH_SHRINK_CLEARING:
+			event_name = "Hash/Shrink/Clearing";
+			break;
+		case WAIT_EVENT_HASH_SHRINK_DECIDING:
+			event_name = "Hash/Shrink/Deciding";
+			break;
+		case WAIT_EVENT_HASH_SHRINK_WORKING:
+			event_name = "Hash/Shrink/Working";
+			break;
+		case WAIT_EVENT_HASH_UNMATCHED:
+			event_name = "Hash/Unmatched";
+			break;
+		case WAIT_EVENT_HASHJOIN_LOADING:
+			event_name = "HashJoin/Loading";
+			break;
+		case WAIT_EVENT_HASHJOIN_PROBING:
+			event_name = "HashJoin/Probing";
+			break;
+		case WAIT_EVENT_HASHJOIN_RESETTING:
+			event_name = "HashJoin/Resetting";
+			break;
+		case WAIT_EVENT_HASHJOIN_REWINDING:
+			event_name = "HashJoin/Rewinding";
+			break;
 		case WAIT_EVENT_LOGICAL_SYNC_DATA:
 			event_name = "LogicalSyncData";
 			break;

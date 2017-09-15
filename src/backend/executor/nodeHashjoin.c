@@ -6,9 +6,85 @@
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
  * IDENTIFICATION
  *	  src/backend/executor/nodeHashjoin.c
+ *
+ * NOTES:
+ *
+ * PARALLELISM
+ *
+ * Hash joins can participate in parallel query execution in two different
+ * ways: (1) parallel-oblivious mode, where each backend builds an identical
+ * hash table and then probes it with an outer relation that may or may not be
+ * partial, and (2) parallel-aware mode where there is a shared hash table
+ * that all participants help to build.  A parallel-aware hash join can save
+ * time and space by dividing the work up and sharing the result, but has
+ * extra communication overheads.
+ *
+ * Parallel-aware hash joins use the same state machine to track progress
+ * through the hash join algorithm as parallel-oblivious hash joins.  In a
+ * parallel-aware hash join, there is also a shared 'phase' which co-operating
+ * backends use to synchronize their local state machine and program counter
+ * with the multi-core join.  The phase is managed by a 'barrier' IPC
+ * primitive.  The only way for it to move forward is through the
+ * BarrierWait() primitive.  When all attached participants arrive at a
+ * BarrierWait() call, the phase advances and the participants are released.
+ *
+ * When a participant begins working on a parallel hash join, it must first
+ * figure out how much progress has already been made, because participants
+ * don't wait for each other to begin.  For this reason there are switch
+ * statements at key points in the code where we have to synchronize our local
+ * state machine with the phase, and then jump to the correct part of the
+ * algorithm so that we can get started.
+ *
+ * While running the algorithm, there are key points in the code where we must
+ * wait for all participants to reach the same point before we can continue,
+ * in the form of BarrierWait calls.  We cannot beginning building the hash
+ * table until it has been created, and we cannot begin probing it until it is
+ * entirely built.
+ *
+ * The phase is an integer which begins at zero and increments one by one, but
+ * in the code it is referred to by symbolic names as follows:
+ *
+ *   PHJ_PHASE_BEGINNING   -- initial phase, before any participant acts
+ *   PHJ_PHASE_CREATING	   -- one participant creates the shmem hash table
+ *   PHJ_PHASE_BUILDING	   -- all participants build the hash table
+ *   PHJ_PHASE_RESIZING	   -- one participant decides whether to expand buckets
+ *   PHJ_PHASE_REINSERTING -- all participants reinsert tuples if necessary
+ *   PHJ_PHASE_PROBING	   -- all participants probe the hash table
+ *   PHJ_PHASE_UNMATCHED   -- all participants scan for unmatched tuples
+ *
+ * Then follow phases for later batches, in the case where the hash table
+ * wouldn't fit in work_mem, so must be spilled to disk.  For each batch n,
+ * the phases are encoded into numbers which are represented with macros:
+ *
+ *   PHJ_PHASE_RESETTING_BATCH(n) -- one participant prepared the hash table
+ *   PHJ_PHASE_LOADING_BATCH(n)   -- all participants load the batch
+ *   PHJ_PHASE_PROBING_BATCH(n)   -- all participants probe the batch
+ *   PHJ_PHASE_UNMATCHED_BATCH(n) -- all participants scan for unmatched
+ *
+ * The only exception to the rule that the phase only travels in one direction
+ * one step at a time is the during a rescan.  In that case, there is a time
+ * when only the leader process is running, in between scans.  The leader is
+ * then able to reset the Barrier to its initial state safely.
+ *
+ * If it turns out that we run out of work_mem because the planner
+ * underestimated the number of batches required in order for each one to fit
+ * in work_mem, then we may need to increase the number of batches at
+ * execution time.  This can occur during PHJ_PHASE_BUILDING or
+ * PHJ_PHASE_LOADING_BATCH(n), because those are the phases when we are
+ * loading data into the hash table and we could discover that work_mem would
+ * be exceeded by inserting one more tuple.  In this case a second barrier is
+ * used to manage hash table shrinking.  Its phases are:
+ *
+ *   PHJ_SHRINK_PHASE_BEGINNING  -- initial phase
+ *   PHJ_SHRINK_PHASE_CLEARING   -- one participant clears the hash table
+ *   PHJ_SHRINK_PHASE_WORKING    -- all participants shrink the hash table
+ *   PHJ_SHRINK_PHASE_DECIDING   -- one participant checks for degenerate case
+ *
+ * The 'degenerate case' refers to the case where our attempt to shrink the
+ * hash table failed due to extreme skew that can't be helped by splitting
+ * buckets, and we shouldn't try again.
  *
  *-------------------------------------------------------------------------
  */
@@ -21,7 +97,10 @@
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
+#include "utils/probes.h"
+#include "utils/sharedtuplestore.h"
 
 
 /*
@@ -47,7 +126,7 @@ static TupleTableSlot *ExecHashJoinGetSavedTuple(HashJoinState *hjstate,
 						  uint32 *hashvalue,
 						  TupleTableSlot *tupleSlot);
 static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
-
+static void ExecHashJoinLoadBatch(HashJoinState *hjstate);
 
 /* ----------------------------------------------------------------
  *		ExecHashJoin
@@ -138,6 +217,14 @@ ExecHashJoin(PlanState *pstate)
 					/* no chance to not build the hash table */
 					node->hj_FirstOuterTupleSlot = NULL;
 				}
+				else if (hashNode->shared_table_data != NULL)
+				{
+					/*
+					 * The empty-outer optimization is not implemented for
+					 * shared hash tables yet.
+					 */
+					node->hj_FirstOuterTupleSlot = NULL;
+				}
 				else if (HJ_FILL_OUTER(node) ||
 						 (outerNode->plan->startup_cost < hashNode->ps.plan->total_cost &&
 						  !node->hj_OuterNotEmpty))
@@ -157,7 +244,7 @@ ExecHashJoin(PlanState *pstate)
 				/*
 				 * create the hash table
 				 */
-				hashtable = ExecHashTableCreate((Hash *) hashNode->ps.plan,
+				hashtable = ExecHashTableCreate(hashNode,
 												node->hj_HashOperators,
 												HJ_FILL_INNER(node));
 				node->hj_HashTable = hashtable;
@@ -168,10 +255,37 @@ ExecHashJoin(PlanState *pstate)
 				hashNode->hashtable = hashtable;
 				(void) MultiExecProcNode((PlanState *) hashNode);
 
+				if (HashJoinTableIsShared(hashtable))
+				{
+					Assert(BarrierPhase(&hashtable->shared->barrier) >=
+						   PHJ_PHASE_BUILDING);
+
+					/*
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
+					 *
+					 * In this case there can't be any batch files created by
+					 * us, because we missed the building phase, so there is
+					 * nothing to do but exit early.
+					 */
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+					{
+						BarrierDetach(&hashtable->shared->barrier);
+						hashtable->detached_early = true;
+						return NULL;
+					}
+				}
+
 				/*
 				 * If the inner relation is completely empty, and we're not
 				 * doing a left outer join, we can quit without scanning the
-				 * outer relation.
+				 * outer relation.  This is safe for shared hash joins because
+				 * MultiExecHash sums hashtable->totalTuples across
+				 * participants.
 				 */
 				if (hashtable->totalTuples == 0 && !HJ_FILL_OUTER(node))
 					return NULL;
@@ -189,11 +303,81 @@ ExecHashJoin(PlanState *pstate)
 				 */
 				node->hj_OuterNotEmpty = false;
 
-				node->hj_JoinState = HJ_NEED_NEW_OUTER;
+				if (HashJoinTableIsShared(hashtable))
+				{
+					Barrier *barrier = &hashtable->shared->barrier;
+					int phase = BarrierPhase(barrier);
+
+					/*
+					 * There is a deadlock avoidance check at the end of
+					 * probing.  It's unlikely, but we also need to check if
+					 * we're so late to start that probing has already
+					 * finished, so that it's already been determined whether
+					 * leader or workers can continue.
+					 */
+					if (BarrierPhase(&hashtable->shared->barrier) > PHJ_PHASE_PROBING &&
+						!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+					{
+						BarrierDetach(&hashtable->shared->barrier);
+						hashtable->detached_early = true;
+						return NULL;
+					}
+
+					/*
+					 * Map the current phase to the appropriate initial state
+					 * for this participant, so we can get started.
+					 * MultiExecHash made sure that the parallel hash join has
+					 * reached at least PHJ_PHASE_PROBING, but it's possible
+					 * that this participant joined the work later than that,
+					 * so we need another switch statement here to get our
+					 * local state machine in sync.
+					 */
+					Assert(BarrierPhase(barrier) >= PHJ_PHASE_PROBING);
+					switch (PHJ_PHASE_TO_SUBPHASE(phase))
+					{
+						case PHJ_SUBPHASE_RESETTING:
+							/* Wait for serial phase to finish. */
+							BarrierWait(barrier, WAIT_EVENT_HASHJOIN_RESETTING);
+							Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
+								   PHJ_SUBPHASE_LOADING);
+							/* fall through */
+						case PHJ_SUBPHASE_LOADING:
+							/* Help load the current batch. */
+							ExecHashUpdate(hashtable);
+							ExecHashJoinLoadBatch(node);
+							Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(barrier)) ==
+								   PHJ_SUBPHASE_PROBING);
+							/* fall through */
+						case PHJ_SUBPHASE_PROBING:
+							/* Help probe the hashtable. */
+							ExecHashUpdate(hashtable);
+							sts_begin_partial_scan(hashtable->shared_outer_batches,
+												   hashtable->curbatch);
+							node->hj_JoinState = HJ_NEED_NEW_OUTER;
+							break;
+						case PHJ_SUBPHASE_UNMATCHED:
+							/* Help scan for unmatched inner tuples. */
+							ExecHashUpdate(hashtable);
+							ExecPrepHashTableForUnmatched(node);
+							node->hj_JoinState = HJ_FILL_INNER_TUPLES;
+							break;
+					}
+					continue;
+				}
+				else
+					node->hj_JoinState = HJ_NEED_NEW_OUTER;
 
 				/* FALL THRU */
 
 			case HJ_NEED_NEW_OUTER:
+
+				if (HashJoinTableIsShared(hashtable))
+				{
+					Assert(PHJ_PHASE_TO_BATCHNO(BarrierPhase(&hashtable->shared->barrier)) ==
+						   hashtable->curbatch);
+					Assert(PHJ_PHASE_TO_SUBPHASE(BarrierPhase(&hashtable->shared->barrier)) ==
+						   PHJ_SUBPHASE_PROBING);
+				}
 
 				/*
 				 * We don't have an outer tuple, try to get the next one
@@ -204,6 +388,64 @@ ExecHashJoin(PlanState *pstate)
 				if (TupIsNull(outerTupleSlot))
 				{
 					/* end of batch, or maybe whole join */
+
+					if (HashJoinTableIsShared(hashtable))
+					{
+						/*
+						 * An important optimization: if this is a
+						 * single-batch join and not an outer join, there is
+						 * no reason to synchronize again when we've finished
+						 * probing.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
+						if (hashtable->nbatch == 1 && !HJ_FILL_INNER(node))
+							return NULL;	/* end of join */
+
+						/*
+						 * Check if we are a leader that can't go further than
+						 * probing the first batch, to avoid risk of deadlock
+						 * against workers.
+						 */
+						if (!LeaderGateCanContinue(&hashtable->shared->leader_gate))
+						{
+							/*
+							 * Other backends will need to handle all future
+							 * batches written by me.  We don't detach until
+							 * after we've finished writing to all batches so
+							 * that they are flushed, otherwise another
+							 * participant might try to read them too soon.
+							 */
+							sts_end_write_all_partitions(hashNode->shared_inner_batches);
+							sts_end_write_all_partitions(hashNode->shared_outer_batches);
+							BarrierDetach(&hashtable->shared->barrier);
+							hashtable->detached_early = true;
+							return NULL;
+						}
+
+						/*
+						 * We can't start searching for unmatched tuples until
+						 * all participants have finished probing, so we
+						 * synchronize here.
+						 */
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
+						if (BarrierWait(&hashtable->shared->barrier,
+										WAIT_EVENT_HASHJOIN_PROBING))
+						{
+							/* Serial phase: prepare for unmatched. */
+							if (HJ_FILL_INNER(node))
+							{
+								hashtable->shared->chunk_work_queue =
+									hashtable->shared->chunks;
+								hashtable->shared->chunks = InvalidDsaPointer;
+								hashtable->shared->current_skew_bucketno = 0;
+							}
+						}
+						Assert(BarrierPhase(&hashtable->shared->barrier) ==
+							   PHJ_PHASE_UNMATCHED_BATCH(hashtable->curbatch));
+					}
+
 					if (HJ_FILL_INNER(node))
 					{
 						/* set up to scan for unmatched inner tuples */
@@ -241,9 +483,14 @@ ExecHashJoin(PlanState *pstate)
 					 * Save it in the corresponding outer-batch file.
 					 */
 					Assert(batchno > hashtable->curbatch);
-					ExecHashJoinSaveTuple(ExecFetchSlotMinimalTuple(outerTupleSlot),
-										  hashvalue,
-										  &hashtable->outerBatchFile[batchno]);
+					if (HashJoinTableIsShared(hashtable))
+						sts_puttuple(hashtable->shared_outer_batches,
+									 batchno, &hashvalue,
+									 ExecFetchSlotMinimalTuple(outerTupleSlot));
+					else
+						ExecHashJoinSaveTuple(ExecFetchSlotMinimalTuple(outerTupleSlot),
+											  hashvalue,
+											  &hashtable->outerBatchFile[batchno]);
 					/* Loop around, staying in HJ_NEED_NEW_OUTER state */
 					continue;
 				}
@@ -364,6 +611,12 @@ ExecHashJoin(PlanState *pstate)
 				 */
 				if (!ExecHashJoinNewBatch(node))
 					return NULL;	/* end of join */
+
+				/* We'll need to read tuples from the outer batch. */
+				if (HashJoinTableIsShared(hashtable))
+					sts_begin_partial_scan(hashtable->shared_outer_batches,
+										   hashtable->curbatch);
+
 				node->hj_JoinState = HJ_NEED_NEW_OUTER;
 				break;
 
@@ -640,21 +893,39 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 	}
 	else if (curbatch < hashtable->nbatch)
 	{
-		BufFile    *file = hashtable->outerBatchFile[curbatch];
+		if (HashJoinTableIsShared(hashtable))
+		{
+			MinimalTuple tuple;
 
-		/*
-		 * In outer-join cases, we could get here even though the batch file
-		 * is empty.
-		 */
-		if (file == NULL)
-			return NULL;
+			tuple = sts_gettuple(hashtable->shared_outer_batches, hashvalue);
+			if (tuple != NULL)
+			{
+				slot = ExecStoreMinimalTuple(tuple,
+											 hjstate->hj_OuterTupleSlot,
+											 false);
+				return slot;
+			}
+			else
+				ExecClearTuple(hjstate->hj_OuterTupleSlot);
+		}
+		else
+		{
+			BufFile    *file = hashtable->outerBatchFile[curbatch];
 
-		slot = ExecHashJoinGetSavedTuple(hjstate,
-										 file,
-										 hashvalue,
-										 hjstate->hj_OuterTupleSlot);
-		if (!TupIsNull(slot))
-			return slot;
+			/*
+			 * In outer-join cases, we could get here even though the batch file
+			 * is empty.
+			 */
+			if (file == NULL)
+				return NULL;
+
+			slot = ExecHashJoinGetSavedTuple(hjstate,
+											 file,
+											 hashvalue,
+											 hjstate->hj_OuterTupleSlot);
+			if (!TupIsNull(slot))
+				return slot;
+		}
 	}
 
 	/* End of this batch */
@@ -673,22 +944,27 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	HashJoinTable hashtable = hjstate->hj_HashTable;
 	int			nbatch;
 	int			curbatch;
-	BufFile    *innerFile;
-	TupleTableSlot *slot;
-	uint32		hashvalue;
 
 	nbatch = hashtable->nbatch;
 	curbatch = hashtable->curbatch;
+
+	if (HashJoinTableIsShared(hashtable))
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_UNMATCHED_BATCH(curbatch));
 
 	if (curbatch > 0)
 	{
 		/*
 		 * We no longer need the previous outer batch file; close it right
-		 * away to free disk space.
+		 * away to free disk space.  SharedTuplestore will take care of this
+		 * for shared hash tables.
 		 */
-		if (hashtable->outerBatchFile[curbatch])
-			BufFileClose(hashtable->outerBatchFile[curbatch]);
-		hashtable->outerBatchFile[curbatch] = NULL;
+		if (!HashJoinTableIsShared(hashtable))
+		{
+			if (hashtable->outerBatchFile[curbatch])
+				BufFileClose(hashtable->outerBatchFile[curbatch]);
+			hashtable->outerBatchFile[curbatch] = NULL;
+		}
 	}
 	else						/* we just finished the first batch */
 	{
@@ -696,9 +972,9 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 		 * Reset some of the skew optimization state variables, since we no
 		 * longer need to consider skew tuples after the first batch. The
 		 * memory context reset we are about to do will release the skew
-		 * hashtable itself.
+		 * hashtable itself, unless it is shared.  The shared skew table
+		 * will be freed in ExecHashTableReset().
 		 */
-		hashtable->skewEnabled = false;
 		hashtable->skewBucket = NULL;
 		hashtable->skewBucketNums = NULL;
 		hashtable->nSkewBuckets = 0;
@@ -721,9 +997,13 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	 * 3. Similarly, if we have increased nbatch since starting the outer
 	 * scan, we have to rescan outer batches in case they contain tuples that
 	 * need to be reassigned.
+	 *
+	 * 4. In a join with a shared hash table, we can't immediately see if a
+	 * batch is empty, without trying to load it.
 	 */
 	curbatch++;
-	while (curbatch < nbatch &&
+	while (!HashJoinTableIsShared(hashtable) &&
+		   curbatch < nbatch &&
 		   (hashtable->outerBatchFile[curbatch] == NULL ||
 			hashtable->innerBatchFile[curbatch] == NULL))
 	{
@@ -755,52 +1035,74 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 
 	hashtable->curbatch = curbatch;
 
-	/*
-	 * Reload the hash table with the new inner batch (which could be empty)
-	 */
+	/* Clear the hash table and load the batch. */
 	ExecHashTableReset(hashtable);
+	ExecHashJoinLoadBatch(hjstate);
 
-	innerFile = hashtable->innerBatchFile[curbatch];
+	return true;
+}
 
-	if (innerFile != NULL)
+static void
+ExecHashJoinLoadBatch(HashJoinState *hjstate)
+{
+	HashJoinTable hashtable = hjstate->hj_HashTable;
+	int			curbatch = hashtable->curbatch;
+	TupleTableSlot *slot;
+	uint32		hashvalue;
+
+	/*
+	 * NOTE: some tuples may be sent to future batches.  Also, it is
+	 * possible for hashtable->nbatch to be increased here!
+	 */
+
+	if (HashJoinTableIsShared(hashtable))
 	{
-		if (BufFileSeek(innerFile, 0, 0L, SEEK_SET))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not rewind hash-join temporary file: %m")));
+		MinimalTuple tuple;
 
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+
+		/*
+		 * Shrinking may be triggered while loading if work_mem is exceeded.
+		 * We need to be attached to shrink_barrier so that we can coordinate
+		 * that among participants.
+		 */
+		BarrierAttach(&hashtable->shared->shrink_barrier);
+
+		sts_begin_partial_scan(hashtable->shared_inner_batches, curbatch);
+		while ((tuple = sts_gettuple(hashtable->shared_inner_batches,
+									 &hashvalue)))
+		{
+			slot = ExecStoreMinimalTuple(tuple, hjstate->hj_HashTupleSlot,
+										 false);
+			ExecHashTableInsert(hashtable, slot, hashvalue);
+		}
+		ExecClearTuple(hjstate->hj_HashTupleSlot);
+
+		BarrierDetach(&hashtable->shared->shrink_barrier);
+
+		/*
+		 * Wait until all participants have finished loading their portion of
+		 * the hash table.
+		 */
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_LOADING_BATCH(hashtable->curbatch));
+		BarrierWait(&hashtable->shared->barrier, WAIT_EVENT_HASHJOIN_LOADING);
+		Assert(BarrierPhase(&hashtable->shared->barrier) ==
+			   PHJ_PHASE_PROBING_BATCH(hashtable->curbatch));
+	}
+	else
+	{
+		BufFile    *innerFile;
+
+		/* The reset position was reset to the start in ExecHashTableReset. */
+		innerFile = hashtable->innerBatchFile[curbatch];
 		while ((slot = ExecHashJoinGetSavedTuple(hjstate,
 												 innerFile,
 												 &hashvalue,
 												 hjstate->hj_HashTupleSlot)))
-		{
-			/*
-			 * NOTE: some tuples may be sent to future batches.  Also, it is
-			 * possible for hashtable->nbatch to be increased here!
-			 */
 			ExecHashTableInsert(hashtable, slot, hashvalue);
-		}
-
-		/*
-		 * after we build the hash table, the inner batch file is no longer
-		 * needed
-		 */
-		BufFileClose(innerFile);
-		hashtable->innerBatchFile[curbatch] = NULL;
 	}
-
-	/*
-	 * Rewind outer batch file (if present), so that we can start reading it.
-	 */
-	if (hashtable->outerBatchFile[curbatch] != NULL)
-	{
-		if (BufFileSeek(hashtable->outerBatchFile[curbatch], 0, 0L, SEEK_SET))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not rewind hash-join temporary file: %m")));
-	}
-
-	return true;
 }
 
 /*
@@ -906,6 +1208,20 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->hj_HashTable != NULL)
 	{
+		if (HashJoinTableIsShared(node->hj_HashTable))
+		{
+			/*
+			 * Only the leader is running now, so we can reinitialize the
+			 * shared state.  It was originally initialized by
+			 * ExecHashJoinInitializeDSM.
+			 */
+			Assert(!IsParallelWorker());
+			BarrierInit(&node->hj_HashTable->shared->barrier, 0);
+			BarrierInit(&node->hj_HashTable->shared->shrink_barrier, 0);
+			node->hj_HashTable->shared->grow_enabled = true;
+			LeaderGateInit(&node->hj_HashTable->shared->leader_gate);
+		}
+
 		if (node->hj_HashTable->nbatch == 1 &&
 			node->js.ps.righttree->chgParam == NULL)
 		{
@@ -917,6 +1233,17 @@ ExecReScanHashJoin(HashJoinState *node)
 			 */
 			if (HJ_FILL_INNER(node))
 				ExecHashTableResetMatchFlags(node->hj_HashTable);
+
+			if (HashJoinTableIsShared(node->hj_HashTable))
+			{
+				/* Reattach and fast-forward to the probing phase. */
+				BarrierAttach(&node->hj_HashTable->shared->barrier);
+				while (BarrierPhase(&node->hj_HashTable->shared->barrier)
+					   < PHJ_PHASE_PROBING)
+					BarrierWait(&node->hj_HashTable->shared->barrier,
+								WAIT_EVENT_HASHJOIN_REWINDING);
+				LeaderGateAttach(&node->hj_HashTable->shared->leader_gate);
+			}
 
 			/*
 			 * Also, we need to reset our state about the emptiness of the
@@ -963,4 +1290,160 @@ ExecReScanHashJoin(HashJoinState *node)
 	 */
 	if (node->js.ps.lefttree->chgParam == NULL)
 		ExecReScan(node->js.ps.lefttree);
+}
+
+void
+ExecShutdownHashJoin(HashJoinState *node)
+{
+	/*
+	 * By the time ExecEndHashJoin runs in a worker, shared memory has been
+	 * destroyed.  So this is our last chance to do any shared memory cleanup.
+	 */
+	if (node->hj_HashTable)
+		ExecHashTableDetach(node->hj_HashTable);
+}
+
+void ExecHashJoinEstimate(HashJoinState *state, ParallelContext *pcxt)
+{
+	size_t size;
+
+	/* The shared hash table. */
+	size = sizeof(SharedHashJoinTableData);
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* The shared inner batches. */
+	size = sts_estimate(pcxt->nworkers + 1);
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* The shared outer batches. */
+	size = sts_estimate(pcxt->nworkers + 1);
+	shm_toc_estimate_chunk(&pcxt->estimator, size);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+}
+
+void
+ExecHashJoinInitializeDSM(HashJoinState *state, ParallelContext *pcxt)
+{
+	int plan_node_id = state->js.ps.plan->plan_node_id;
+	HashState *hashNode;
+	SharedHashJoinTable shared;
+	size_t size;
+	int planned_participants;
+	SharedTuplestore *inner_batches;
+	SharedTuplestore *outer_batches;
+	SharedTuplestoreAccessor *inner_batches_accessor;
+	SharedTuplestoreAccessor *outer_batches_accessor;
+
+	/*
+	 * Disable shared hash table mode if we failed to create a real DSM
+	 * segment, because that means that we don't have a DSA area to work
+	 * with.
+	 */
+	if (pcxt->seg == NULL)
+		return;
+
+	/*
+	 * Set up the state needed to coordinate access to the shared hash table,
+	 * using the plan node ID as the toc key.
+	 */
+	planned_participants = pcxt->nworkers + 1;	/* possible workers + leader */
+	size = sizeof(SharedHashJoinTableData);
+	shared = shm_toc_allocate(pcxt->toc, size);
+	BarrierInit(&shared->barrier, 0);
+	BarrierInit(&shared->shrink_barrier, 0);
+	shared->nbuckets = 0;
+	shared->planned_participants = planned_participants;
+	shared->skew_buckets = InvalidDsaPointer;
+	shared->skew_bucket_nums = InvalidDsaPointer;
+	shared->skew_space_used = 0;
+	shared->skew_space_allowed = 0;
+	shared->num_skew_buckets = 0;
+	shared->skew_bucket_len = 0;
+	shared->current_skew_bucketno = 0;
+	shared->buckets = InvalidDsaPointer;
+	shared->chunks = InvalidDsaPointer;
+	shared->chunk_work_queue = InvalidDsaPointer;
+	shared->size = 0;
+	shared->ntuples = 0;
+	shared->shrink_needed = false;
+	shared->grow_enabled = true;
+	shm_toc_insert(pcxt->toc, plan_node_id, shared);
+
+#ifdef BARRIER_DEBUG
+	BarrierEnableDebug(&shared->barrier, "HashJoin.barrier");
+	BarrierEnableDebug(&shared->shrink_barrier, "HashJoin.shrink_barrier");
+#endif
+
+	LWLockInitialize(&shared->chunk_lock, LWTRANCHE_PARALLEL_HASH_JOIN_CHUNK);
+
+	LeaderGateInit(&shared->leader_gate);
+
+	/*
+	 * We also need to create two variable-sized shared tuplestore objects,
+	 * for inner and outer batch files.  It's not convenient to put those
+	 * inside the SharedHashJoinTableData struct because we don't know their
+	 * sizes.  We'll use separate TOC entries.
+	 */
+
+	inner_batches = shm_toc_allocate(pcxt->toc, sts_estimate(planned_participants));
+	inner_batches_accessor =
+		sts_initialize(inner_batches, planned_participants, 0, sizeof(uint32),
+					   SHARED_TUPLESTORE_SINGLE_PASS, pcxt->seg);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1),
+				   inner_batches);
+
+	outer_batches = shm_toc_allocate(pcxt->toc, sts_estimate(planned_participants));
+	outer_batches_accessor =
+		sts_initialize(outer_batches, planned_participants, 0, sizeof(uint32),
+					   SHARED_TUPLESTORE_SINGLE_PASS, pcxt->seg);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2),
+				   outer_batches);
+
+	/*
+	 * Pass the SharedHashJoinTable to the hash node.  If the Gather node
+	 * running in the leader backend decides to execute the hash join, it
+	 * hasn't called ExecHashJoinInitializeWorker so it doesn't have
+	 * state->shared_table_data set up.  So we must do it here.
+	 */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = shared;
+	hashNode->shared_inner_batches = inner_batches_accessor;
+	hashNode->shared_outer_batches = outer_batches_accessor;
+}
+
+void
+ExecHashJoinInitializeWorker(HashJoinState *state,
+							 ParallelWorkerContext *pwcxt)
+{
+	HashState  *hashNode;
+	SharedTuplestore *inner_shared_batches;
+	SharedTuplestore *outer_shared_batches;
+	int plan_node_id = state->js.ps.plan->plan_node_id;
+
+	state->hj_sharedHashJoinTable = shm_toc_lookup(pwcxt->toc, plan_node_id,
+												   false);
+
+	/* Inject SharedHashJoinTable into the hash node. */
+	hashNode = (HashState *) innerPlanState(state);
+	hashNode->shared_table_data = state->hj_sharedHashJoinTable;
+	Assert(hashNode->shared_table_data != NULL);
+
+	/*
+	 * Attach to the ShareTupleStore objects that manage our shared inner and
+	 * outer batches.
+	 */
+	inner_shared_batches =
+		shm_toc_lookup(pwcxt->toc,
+					   PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 1), false);
+	hashNode->shared_inner_batches = sts_attach(inner_shared_batches,
+												ParallelWorkerNumber + 1,
+												pwcxt->seg);
+	outer_shared_batches =
+		shm_toc_lookup(pwcxt->toc,
+					   PARALLEL_KEY_EXECUTOR_NODE_NTH(plan_node_id, 2), false);
+	hashNode->shared_outer_batches = sts_attach(outer_shared_batches,
+												ParallelWorkerNumber + 1,
+												pwcxt->seg);
 }

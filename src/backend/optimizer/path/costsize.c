@@ -108,6 +108,7 @@ double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
 double		parallel_tuple_cost = DEFAULT_PARALLEL_TUPLE_COST;
 double		parallel_setup_cost = DEFAULT_PARALLEL_SETUP_COST;
+double		parallel_synchronization_cost = DEFAULT_PARALLEL_SYNCHRONIZATION_COST;
 
 int			effective_cache_size = DEFAULT_EFFECTIVE_CACHE_SIZE;
 
@@ -2921,16 +2922,19 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 					  JoinType jointype,
 					  List *hashclauses,
 					  Path *outer_path, Path *inner_path,
-					  JoinPathExtraData *extra)
+					  JoinPathExtraData *extra,
+					  bool parallel_hash)
 {
 	Cost		startup_cost = 0;
 	Cost		run_cost = 0;
 	double		outer_path_rows = outer_path->rows;
 	double		inner_path_rows = inner_path->rows;
+	double		inner_path_rows_total = inner_path_rows;
 	int			num_hashclauses = list_length(hashclauses);
 	int			numbuckets;
 	int			numbatches;
 	int			num_skew_mcvs;
+	size_t		space_allowed;		/* not used */
 
 	/* cost of source data */
 	startup_cost += outer_path->startup_cost;
@@ -2952,7 +2956,20 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	run_cost += cpu_operator_cost * num_hashclauses * outer_path_rows;
 
 	/*
+	 * If this is a parallel hash build, then the value we have for inner_rows
+	 * refers only to the rows returned by each participant.  For shared hash
+	 * table size estimation, we need the total number, so we need to undo the
+	 * division.
+	 */
+	if (parallel_hash)
+		inner_path_rows_total *= get_parallel_divisor(inner_path);
+
+	/*
 	 * Get hash table size that executor would use for inner relation.
+	 *
+	 * Shared hash tables are allowed to use the work_mem of all participants
+	 * combined to make up for the fact that there is only one copy shared by
+	 * all.
 	 *
 	 * XXX for the moment, always assume that skew optimization will be
 	 * performed.  As long as SKEW_WORK_MEM_PERCENT is small, it's not worth
@@ -2961,9 +2978,12 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	 * XXX at some point it might be interesting to try to account for skew
 	 * optimization in the cost estimate, but for now, we don't.
 	 */
-	ExecChooseHashTableSize(inner_path_rows,
+	ExecChooseHashTableSize(inner_path_rows_total,
 							inner_path->pathtarget->width,
 							true,	/* useskew */
+							parallel_hash,
+							outer_path->parallel_workers,
+							&space_allowed,
 							&numbuckets,
 							&numbatches,
 							&num_skew_mcvs);
@@ -2979,14 +2999,51 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	{
 		double		outerpages = page_size(outer_path_rows,
 										   outer_path->pathtarget->width);
-		double		innerpages = page_size(inner_path_rows,
+		double		innerpages = page_size(inner_path_rows_total,
 										   inner_path->pathtarget->width);
 
 		startup_cost += seq_page_cost * innerpages;
 		run_cost += seq_page_cost * (innerpages + 2 * outerpages);
 	}
 
-	/* CPU costs left for later */
+	/*
+	 * Parallel hashing incurs an extra cost by waiting at barriers.  This
+	 * represents the average time that we expect any participant to have to
+	 * wait for the slowest participant to complete.
+	 */
+	if (parallel_hash)
+	{
+		/*
+		 * We'll have to wait for the build to finish in all participants
+		 * before probing begins.
+		 */
+		startup_cost += parallel_synchronization_cost;
+
+		/*
+		 * For each batch, we'll have to synchronize after building, after
+		 * probing, and before building the next batch.  We can subtract three
+		 * because in the final batch we don't wait after probing and there is
+		 * no next batch, and we already accounted for one barrier above in
+		 * startup_cost.
+		 */
+		run_cost += (numbatches * 3 - 3) * parallel_synchronization_cost;
+
+		/*
+		 * For right/full outer joins, we'll also have to wait for all
+		 * participants to finish probing before scanning for unmatched
+		 * tuples, so charge per batch.
+		 */
+		if (jointype == JOIN_RIGHT || jointype == JOIN_FULL)
+			run_cost += numbatches * parallel_synchronization_cost;
+
+		/*
+		 * Ideally we'd account for the fact that the leader runs in the first
+		 * batch but not in the later batches, affecting the number of tuples
+		 * expected per participant, but it's not clear how to do that.
+		 */
+	}
+
+	/* Other CPU costs left for later */
 
 	/* Public result fields */
 	workspace->startup_cost = startup_cost;
@@ -2995,6 +3052,7 @@ initial_cost_hashjoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 	workspace->run_cost = run_cost;
 	workspace->numbuckets = numbuckets;
 	workspace->numbatches = numbatches;
+	workspace->inner_rows_total = inner_path_rows_total;
 }
 
 /*
@@ -3017,6 +3075,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	Path	   *inner_path = path->jpath.innerjoinpath;
 	double		outer_path_rows = outer_path->rows;
 	double		inner_path_rows = inner_path->rows;
+	double		inner_path_rows_total = workspace->inner_rows_total;
 	List	   *hashclauses = path->path_hashclauses;
 	Cost		startup_cost = workspace->startup_cost;
 	Cost		run_cost = workspace->run_cost;
@@ -3056,6 +3115,9 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 
 	/* mark the path with estimated # of batches */
 	path->num_batches = numbatches;
+
+	/* store the total number of tuples (sum of partial row estimates) */
+	path->inner_rows_total = inner_path_rows_total;
 
 	/* and compute the number of "virtual" buckets in the whole join */
 	virtualbuckets = (double) numbuckets * (double) numbatches;

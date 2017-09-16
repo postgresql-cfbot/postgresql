@@ -542,6 +542,13 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	qry->resultRelation = setTargetTable(pstate, stmt->relation,
 										 false, false, targetPerms);
 
+	/*
+	 * If the target table is a partitioned table, reset the inh flag to true.
+	 */
+	rte = pstate->p_target_rangetblentry;
+	if (rte->relkind == RELKIND_PARTITIONED_TABLE)
+		rte->inh = true;
+
 	/* Validate stmt->cols list, or build default list if no list given */
 	icolumns = checkInsertTargets(pstate, stmt->cols, &attrnos);
 	Assert(list_length(icolumns) == list_length(attrnos));

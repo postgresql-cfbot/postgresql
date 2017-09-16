@@ -182,6 +182,7 @@ extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
 				  Relation partition_root,
+				  Index partition_root_rtindex,
 				  int instrument_options);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecCleanUpTriggerState(EState *estate);
@@ -207,13 +208,18 @@ extern void EvalPlanQualSetTuple(EPQState *epqstate, Index rti,
 					 HeapTuple tuple);
 extern HeapTuple EvalPlanQualGetTuple(EPQState *epqstate, Index rti);
 extern void ExecSetupPartitionTupleRouting(Relation rel,
-							   Index resultRTindex,
-							   EState *estate,
 							   PartitionDispatch **pd,
+							   List **leaf_parts,
 							   ResultRelInfo **partitions,
 							   TupleConversionMap ***tup_conv_maps,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions);
+extern void ExecInitPartition(EState *estate,
+				  Oid partOid,
+				  Index partRTindex,
+				  ResultRelInfo *rootRelInfo,
+				  ResultRelInfo *partRelInfo,
+				  TupleConversionMap **partTupConvMap);
 extern int ExecFindPartition(ResultRelInfo *resultRelInfo,
 				  PartitionDispatch *pd,
 				  TupleTableSlot *slot,

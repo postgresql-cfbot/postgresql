@@ -7029,6 +7029,144 @@ NOTICE:  drop cascades to foreign table bar2
 drop table loct1;
 drop table loct2;
 -- ===================================================================
+-- test tuple routing to foreign-table partitions
+-- ===================================================================
+create table pt (a int, b int) partition by list (a);
+create table locp partition of pt for values in (1);
+create table locfoo (a int check (a in (2)), b int);
+create foreign table remp partition of pt for values in (2) server loopback options (table_name 'locfoo');
+explain (verbose, costs off)
+insert into pt values (1, 1), (2, 1);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+insert into pt values (1, 1), (2, 1);
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ remp     | 2 | 1
+(2 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+(1 row)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+(1 row)
+
+explain (verbose, costs off)
+insert into pt values (1, 2), (2, 2) returning *;
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Insert on public.pt
+   Output: pt.a, pt.b
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2) RETURNING a, b
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(7 rows)
+
+insert into pt values (1, 2), (2, 2) returning *;
+ a | b 
+---+---
+ 1 | 2
+ 2 | 2
+(2 rows)
+
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ remp     | 2 | 1
+ remp     | 2 | 2
+(4 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+(2 rows)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+ remp     | 2 | 2
+(2 rows)
+
+prepare q1 as insert into pt values (1, 3), (2, 3);
+explain (verbose, costs off) execute q1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+alter table locfoo rename to locbar;
+alter foreign table remp options (set table_name 'locbar');
+explain (verbose, costs off) execute q1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locbar(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+execute q1;
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ locp     | 1 | 3
+ remp     | 2 | 1
+ remp     | 2 | 2
+ remp     | 2 | 3
+(6 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ locp     | 1 | 3
+(3 rows)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+ remp     | 2 | 2
+ remp     | 2 | 3
+(3 rows)
+
+deallocate q1;
+drop table pt;
+drop table locbar;
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 CREATE SCHEMA import_source;

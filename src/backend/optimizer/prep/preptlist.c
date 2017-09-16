@@ -22,9 +22,9 @@
  * The fact that rewriteTargetListIU sorts non-resjunk tlist entries by column
  * position, which expand_targetlist depends on, violates the above comment
  * because the sorting is only valid for the parent relation.  In inherited
- * UPDATE cases, adjust_inherited_tlist runs in between to take care of fixing
- * the tlists for child tables to keep expand_targetlist happy.  We do it like
- * that because it's faster in typical non-inherited cases.
+ * INSERT/UPDATE cases, adjust_inherited_tlist runs in between to take care of
+ * fixing the tlists for child tables to keep expand_targetlist happy.  We do
+ * it like that because it's faster in typical non-inherited cases.
  *
  *
  * Portions Copyright (c) 1996-2017, PostgreSQL Global Development Group

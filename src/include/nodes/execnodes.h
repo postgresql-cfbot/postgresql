@@ -412,6 +412,12 @@ typedef struct ResultRelInfo
 
 	/* relation descriptor for root partitioned table */
 	Relation	ri_PartitionRoot;
+
+	/* range table index for root partitioned table */
+	Index		ri_PartitionRootRTindex;
+
+	/* true when partition is legal for tuple-routing */
+	bool		ri_PartitionIsValid;
 } ResultRelInfo;
 
 /* ----------------

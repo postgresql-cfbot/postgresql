@@ -114,7 +114,10 @@ static void ExecPartitionCheck(ResultRelInfo *resultRelInfo,
  * to be changed, however.
  */
 #define GetInsertedColumns(relinfo, estate) \
-	(rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table)->insertedCols)
+	(rt_fetch((relinfo)->ri_PartitionRoot ? \
+			  (relinfo)->ri_PartitionRootRTindex : \
+			  (relinfo)->ri_RangeTableIndex, \
+			  (estate)->es_range_table)->insertedCols)
 #define GetUpdatedColumns(relinfo, estate) \
 	(rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table)->updatedCols)
 
@@ -854,6 +857,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 							  resultRelation,
 							  resultRelationIndex,
 							  NULL,
+							  0,		/* dummy rangetable index */
 							  estate->es_instrument);
 			resultRelInfo++;
 		}
@@ -893,6 +897,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 								  resultRelDesc,
 								  lfirst_int(l),
 								  NULL,
+								  0,		/* dummy rangetable index */
 								  estate->es_instrument);
 				resultRelInfo++;
 			}
@@ -1102,12 +1107,15 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 	Relation	resultRel = resultRelInfo->ri_RelationDesc;
 	TriggerDesc *trigDesc = resultRel->trigdesc;
 	FdwRoutine *fdwroutine;
+	bool		is_valid;
 
 	switch (resultRel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
 			CheckCmdReplicaIdentity(resultRel, operation);
+			if (resultRelInfo->ri_PartitionRoot && operation == CMD_INSERT)
+				resultRelInfo->ri_PartitionIsValid = true;
 			break;
 		case RELKIND_SEQUENCE:
 			ereport(ERROR,
@@ -1174,23 +1182,28 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 			switch (operation)
 			{
 				case CMD_INSERT:
-					/*
-					 * If foreign partition to do tuple-routing for, skip the
-					 * check; it's disallowed elsewhere.
-					 */
-					if (resultRelInfo->ri_PartitionRoot)
-						break;
+					is_valid = true;
 					if (fdwroutine->ExecForeignInsert == NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot insert into foreign table \"%s\"",
-										RelationGetRelationName(resultRel))));
+					{
+						if (!resultRelInfo->ri_PartitionRoot)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot insert into foreign table \"%s\"",
+											RelationGetRelationName(resultRel))));
+						is_valid = false;
+					}
 					if (fdwroutine->IsForeignRelUpdatable != NULL &&
 						(fdwroutine->IsForeignRelUpdatable(resultRel) & (1 << CMD_INSERT)) == 0)
-						ereport(ERROR,
-								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-								 errmsg("foreign table \"%s\" does not allow inserts",
-										RelationGetRelationName(resultRel))));
+					{
+						if (!resultRelInfo->ri_PartitionRoot)
+							ereport(ERROR,
+									(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+									 errmsg("foreign table \"%s\" does not allow inserts",
+											RelationGetRelationName(resultRel))));
+						is_valid = false;
+					}
+					if (resultRelInfo->ri_PartitionRoot)
+						resultRelInfo->ri_PartitionIsValid = is_valid;
 					break;
 				case CMD_UPDATE:
 					if (fdwroutine->ExecForeignUpdate == NULL)
@@ -1308,6 +1321,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
 				  Relation partition_root,
+				  Index partition_root_rtindex,
 				  int instrument_options)
 {
 	List	   *partition_check = NIL;
@@ -1365,6 +1379,8 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 
 	resultRelInfo->ri_PartitionCheck = partition_check;
 	resultRelInfo->ri_PartitionRoot = partition_root;
+	resultRelInfo->ri_PartitionRootRTindex = partition_root_rtindex;
+	resultRelInfo->ri_PartitionIsValid = false;
 }
 
 /*
@@ -1447,6 +1463,7 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 					  rel,
 					  0,		/* dummy rangetable index */
 					  NULL,
+					  0,		/* dummy rangetable index */
 					  estate->es_instrument);
 	estate->es_trig_target_relations =
 		lappend(estate->es_trig_target_relations, rInfo);
@@ -3245,6 +3262,8 @@ EvalPlanQualEnd(EPQState *epqstate)
  * Output arguments:
  * 'pd' receives an array of PartitionDispatch objects with one entry for
  *		every partitioned table in the partition tree
+ * 'leaf_parts' receives a list of relation OIDs with one entry for every leaf
+ *		partition in the partition tree
  * 'partitions' receives an array of ResultRelInfo objects with one entry for
  *		every leaf partition in the partition tree
  * 'tup_conv_maps' receives an array of TupleConversionMap objects with one
@@ -3265,27 +3284,20 @@ EvalPlanQualEnd(EPQState *epqstate)
  */
 void
 ExecSetupPartitionTupleRouting(Relation rel,
-							   Index resultRTindex,
-							   EState *estate,
 							   PartitionDispatch **pd,
+							   List **leaf_parts,
 							   ResultRelInfo **partitions,
 							   TupleConversionMap ***tup_conv_maps,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions)
 {
-	TupleDesc	tupDesc = RelationGetDescr(rel);
-	List	   *leaf_parts;
-	ListCell   *cell;
-	int			i;
-	ResultRelInfo *leaf_part_rri;
-
 	/*
 	 * Get the information about the partition tree after locking all the
 	 * partitions.
 	 */
 	(void) find_all_inheritors(RelationGetRelid(rel), RowExclusiveLock, NULL);
-	*pd = RelationGetPartitionDispatchInfo(rel, num_parted, &leaf_parts);
-	*num_partitions = list_length(leaf_parts);
+	*pd = RelationGetPartitionDispatchInfo(rel, num_parted, leaf_parts);
+	*num_partitions = list_length(*leaf_parts);
 	*partitions = (ResultRelInfo *) palloc(*num_partitions *
 										   sizeof(ResultRelInfo));
 	*tup_conv_maps = (TupleConversionMap **) palloc0(*num_partitions *
@@ -3298,55 +3310,57 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	 * processing.
 	 */
 	*partition_tuple_slot = MakeTupleTableSlot();
+}
 
-	leaf_part_rri = *partitions;
-	i = 0;
-	foreach(cell, leaf_parts)
-	{
-		Relation	partrel;
-		TupleDesc	part_tupdesc;
+/*
+ * ExecInitPartition -- Prepare tuple conversion map and ResultRelInfo for
+ * the partition with OID 'partOid'
+ */
+void
+ExecInitPartition(EState *estate,
+				  Oid partOid,
+				  Index partRTindex,
+				  ResultRelInfo *rootRelInfo,
+				  ResultRelInfo *partRelInfo,
+				  TupleConversionMap **partTupConvMap)
+{
+	Relation	rootrel = rootRelInfo->ri_RelationDesc;
+	Relation	partrel;
 
-		/*
-		 * We locked all the partitions above including the leaf partitions.
-		 * Note that each of the relations in *partitions are eventually
-		 * closed by the caller.
-		 */
-		partrel = heap_open(lfirst_oid(cell), NoLock);
-		part_tupdesc = RelationGetDescr(partrel);
+	/*
+	 * We assume that ExecSetupPartitionTupleRouting() already locked the
+	 * partition, so we need no lock here.  The partition must be closed
+	 * by the caller.
+	 */
+	partrel = heap_open(partOid, NoLock);
 
-		/*
-		 * Save a tuple conversion map to convert a tuple routed to this
-		 * partition from the parent's type to the partition's.
-		 */
-		(*tup_conv_maps)[i] = convert_tuples_by_name(tupDesc, part_tupdesc,
-													 gettext_noop("could not convert row type"));
+	/*
+	 * Save a tuple conversion map to convert a tuple routed to the partition
+	 * from the parent's type to the partition's.
+	 */
+	*partTupConvMap = convert_tuples_by_name(RelationGetDescr(rootrel),
+											 RelationGetDescr(partrel),
+											 gettext_noop("could not convert row type"));
 
-		InitResultRelInfo(leaf_part_rri,
-						  partrel,
-						  resultRTindex,
-						  rel,
-						  estate->es_instrument);
+	/* Save a ResultRelInfo data for the partition. */
+	InitResultRelInfo(partRelInfo,
+					  partrel,
+					  partRTindex,
+					  rootrel,
+					  rootRelInfo->ri_RangeTableIndex,
+					  estate->es_instrument);
 
-		/*
-		 * Verify result relation is a valid target for INSERT.
-		 */
-		CheckValidResultRel(leaf_part_rri, CMD_INSERT);
+	/*
+	 * Open partition indices (remember we do not support ON CONFLICT in
+	 * case of partitioned tables, so we do not need support information
+	 * for speculative insertion)
+	 */
+	if (partRelInfo->ri_RelationDesc->rd_rel->relhasindex &&
+		partRelInfo->ri_IndexRelationDescs == NULL)
+		ExecOpenIndices(partRelInfo, false);
 
-		/*
-		 * Open partition indices (remember we do not support ON CONFLICT in
-		 * case of partitioned tables, so we do not need support information
-		 * for speculative insertion)
-		 */
-		if (leaf_part_rri->ri_RelationDesc->rd_rel->relhasindex &&
-			leaf_part_rri->ri_IndexRelationDescs == NULL)
-			ExecOpenIndices(leaf_part_rri, false);
-
-		estate->es_leaf_result_relations =
-			lappend(estate->es_leaf_result_relations, leaf_part_rri);
-
-		leaf_part_rri++;
-		i++;
-	}
+	estate->es_leaf_result_relations =
+		lappend(estate->es_leaf_result_relations, partRelInfo);
 }
 
 /*

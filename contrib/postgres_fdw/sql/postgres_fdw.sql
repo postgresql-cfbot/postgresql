@@ -1662,6 +1662,46 @@ drop table loct1;
 drop table loct2;
 
 -- ===================================================================
+-- test tuple routing to foreign-table partitions
+-- ===================================================================
+
+create table pt (a int, b int) partition by list (a);
+create table locp partition of pt for values in (1);
+create table locfoo (a int check (a in (2)), b int);
+create foreign table remp partition of pt for values in (2) server loopback options (table_name 'locfoo');
+
+explain (verbose, costs off)
+insert into pt values (1, 1), (2, 1);
+insert into pt values (1, 1), (2, 1);
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+explain (verbose, costs off)
+insert into pt values (1, 2), (2, 2) returning *;
+insert into pt values (1, 2), (2, 2) returning *;
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+prepare q1 as insert into pt values (1, 3), (2, 3);
+explain (verbose, costs off) execute q1;
+alter table locfoo rename to locbar;
+alter foreign table remp options (set table_name 'locbar');
+explain (verbose, costs off) execute q1;
+execute q1;
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+deallocate q1;
+drop table pt;
+drop table locbar;
+
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 

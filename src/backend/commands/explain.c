@@ -116,6 +116,10 @@ static void ExplainModifyTarget(ModifyTable *plan, ExplainState *es);
 static void ExplainTargetRel(Plan *plan, Index rti, ExplainState *es);
 static void show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 					  ExplainState *es);
+static void show_actual_target(ModifyTableState *mtstate, ModifyTable *node,
+				   ResultRelInfo *resultRelInfo, FdwRoutine *fdwroutine,
+				   bool main_target, int subplan_index,
+				   const char *operation, bool labeltarget, ExplainState *es);
 static void ExplainMemberNodes(List *plans, PlanState **planstates,
 				   List *ancestors, ExplainState *es);
 static void ExplainSubPlans(List *plans, List *ancestors,
@@ -834,6 +838,17 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 			if (((ModifyTable *) plan)->exclRelRTI)
 				*rels_used = bms_add_member(*rels_used,
 											((ModifyTable *) plan)->exclRelRTI);
+			if (((ModifyTable *) plan)->partition_rels)
+			{
+				ListCell   *lc;
+
+				foreach(lc, ((ModifyTable *) plan)->partition_rels)
+				{
+					Index		rti = lfirst_int(lc);
+
+					*rels_used = bms_add_member(*rels_used, rti);
+				}
+			}
 			break;
 		default:
 			break;
@@ -2856,61 +2871,49 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
+	/* Print main target(s) */
 	for (j = 0; j < mtstate->mt_nplans; j++)
 	{
 		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
 		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
 
-		if (labeltargets)
-		{
-			/* Open a group for this target */
-			ExplainOpenGroup("Target Table", NULL, true, es);
+		show_actual_target(mtstate, node, resultRelInfo, fdwroutine, true, j,
+						   fdwroutine ? foperation : operation, labeltargets,
+						   es);
+	}
 
-			/*
-			 * In text mode, decorate each target with operation type, so that
-			 * ExplainTargetRel's output of " on foo" will read nicely.
-			 */
-			if (es->format == EXPLAIN_FORMAT_TEXT)
+	/* If this is an INSERT into a partitioned table, print partitions */
+	for (j = 0; j < mtstate->mt_num_partitions; j++)
+	{
+		ResultRelInfo *resultRelInfo = mtstate->mt_partitions + j;
+		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
+
+		if (resultRelInfo->ri_PartitionIsValid)
+		{
+			Oid			partOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+			int			k;
+			ListCell   *cell;
+			bool		found;
+
+			/* First, find the subplan index for the partition */
+			found = false;
+			k = 0;
+			foreach(cell, node->partition_rels)
 			{
-				appendStringInfoSpaces(es->str, es->indent * 2);
-				appendStringInfoString(es->str,
-									   fdwroutine ? foperation : operation);
+				Index		partRTindex = lfirst_int(cell);
+
+				if (getrelid(partRTindex, es->rtable) == partOid)
+				{
+					found = true;
+					break;
+				}
+				k++;
 			}
+			if (!found)
+				elog(ERROR, "failed to find subplan index for relation %u", partOid);
 
-			/* Identify target */
-			ExplainTargetRel((Plan *) node,
-							 resultRelInfo->ri_RangeTableIndex,
-							 es);
-
-			if (es->format == EXPLAIN_FORMAT_TEXT)
-			{
-				appendStringInfoChar(es->str, '\n');
-				es->indent++;
-			}
-		}
-
-		/* Give FDW a chance if needed */
-		if (!resultRelInfo->ri_usesFdwDirectModify &&
-			fdwroutine != NULL &&
-			fdwroutine->ExplainForeignModify != NULL)
-		{
-			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, j);
-
-			fdwroutine->ExplainForeignModify(mtstate,
-											 resultRelInfo,
-											 fdw_private,
-											 j,
-											 es);
-		}
-
-		if (labeltargets)
-		{
-			/* Undo the indentation we added in text format */
-			if (es->format == EXPLAIN_FORMAT_TEXT)
-				es->indent--;
-
-			/* Close the group */
-			ExplainCloseGroup("Target Table", NULL, true, es);
+			show_actual_target(mtstate, node, resultRelInfo, fdwroutine, false, k,
+							   fdwroutine ? foperation : operation, true, es);
 		}
 	}
 
@@ -2965,6 +2968,72 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 
 	if (labeltargets)
 		ExplainCloseGroup("Target Tables", "Target Tables", false, es);
+}
+
+/*
+ * Show an actual target relation
+ */
+static void
+show_actual_target(ModifyTableState *mtstate, ModifyTable *node,
+				   ResultRelInfo *resultRelInfo, FdwRoutine *fdwroutine,
+				   bool main_target, int subplan_index,
+				   const char *operation, bool labeltarget, ExplainState *es)
+{
+	if (labeltarget)
+	{
+		/* Open a group for this target */
+		ExplainOpenGroup("Target Table", NULL, true, es);
+
+		/*
+		 * In text mode, decorate each target with operation type, so that
+		 * ExplainTargetRel's output of " on foo" will read nicely.
+		 */
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			appendStringInfoSpaces(es->str, es->indent * 2);
+			appendStringInfoString(es->str, operation);
+		}
+
+		/* Identify target */
+		ExplainTargetRel((Plan *) node,
+						 resultRelInfo->ri_RangeTableIndex,
+						 es);
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			appendStringInfoChar(es->str, '\n');
+			es->indent++;
+		}
+	}
+
+	/* Give FDW a chance if needed */
+	if (fdwroutine != NULL &&
+		fdwroutine->ExplainForeignModify != NULL &&
+		!resultRelInfo->ri_usesFdwDirectModify)
+	{
+		List	   *fdw_private;
+
+		if (main_target)
+			fdw_private = (List *) list_nth(node->fdwPrivLists, subplan_index);
+		else
+			fdw_private = (List *) list_nth(node->fdwPartitionPrivLists, subplan_index);
+
+		fdwroutine->ExplainForeignModify(mtstate,
+										 resultRelInfo,
+										 fdw_private,
+										 main_target ? subplan_index : 0,
+										 es);
+	}
+
+	if (labeltarget)
+	{
+		/* Undo the indentation we added in text format */
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			es->indent--;
+
+		/* Close the group */
+		ExplainCloseGroup("Target Table", NULL, true, es);
+	}
 }
 
 /*

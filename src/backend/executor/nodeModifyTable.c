@@ -305,11 +305,17 @@ ExecInsert(ModifyTableState *mtstate,
 		saved_resultRelInfo = resultRelInfo;
 		resultRelInfo = mtstate->mt_partitions + leaf_part_index;
 
-		/* We do not yet have a way to insert into a foreign partition */
-		if (resultRelInfo->ri_FdwRoutine)
+		if (!resultRelInfo->ri_PartitionIsValid)
+		{
+			/* Should be foreign */
+			Assert(resultRelInfo->ri_FdwRoutine);
+
+			/* We cannot insert into this foreign partition */
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot route inserted tuples to a foreign table")));
+					 errmsg("cannot route inserted tuples to foreign table \"%s\"",
+							RelationGetRelationName(resultRelInfo->ri_RelationDesc))));
+		}
 
 		/* For ExecInsertIndexTuples() to work on the partition's indexes */
 		estate->es_result_relation_info = resultRelInfo;
@@ -1912,16 +1918,18 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		PartitionDispatch *partition_dispatch_info;
+		List	   *partition_oids;
 		ResultRelInfo *partitions;
 		TupleConversionMap **partition_tupconv_maps;
 		TupleTableSlot *partition_tuple_slot;
 		int			num_parted,
 					num_partitions;
+		Index		rootRTindex;
+		ResultRelInfo *partRelInfo;
 
 		ExecSetupPartitionTupleRouting(rel,
-									   node->nominalRelation,
-									   estate,
 									   &partition_dispatch_info,
+									   &partition_oids,
 									   &partitions,
 									   &partition_tupconv_maps,
 									   &partition_tuple_slot,
@@ -1932,6 +1940,63 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		mtstate->mt_num_partitions = num_partitions;
 		mtstate->mt_partition_tupconv_maps = partition_tupconv_maps;
 		mtstate->mt_partition_tuple_slot = partition_tuple_slot;
+
+		rootRTindex = mtstate->resultRelInfo->ri_RangeTableIndex;
+		partRelInfo = partitions;
+		i = 0;
+		foreach(l, partition_oids)
+		{
+			Oid			partOid = lfirst_oid(l);
+			Index		partRTindex;
+			int			j;
+			ListCell   *cell;
+			bool		found;
+
+			/* First, find the RT index for the partition */
+			found = false;
+			j = 0;
+			foreach(cell, node->partition_rels)
+			{
+				partRTindex = lfirst_int(cell);
+
+				if (getrelid(partRTindex, estate->es_range_table) == partOid)
+				{
+					found = true;
+					break;
+				}
+				j++;
+			}
+			if (!found)
+				elog(ERROR, "failed to find range table index for relation %u", partOid);
+
+			/* Prepare map and ResultRelInfo for the partition */
+			ExecInitPartition(estate,
+							  partOid,
+							  partRTindex,
+							  mtstate->resultRelInfo,
+							  partRelInfo,
+							  &partition_tupconv_maps[i]);
+
+			/* Verify the partition is a valid target for INSERT */
+			CheckValidResultRel(partRelInfo, CMD_INSERT);
+
+			/* If so, let the FDW init itself for the partition */
+			if (partRelInfo->ri_PartitionIsValid &&
+				partRelInfo->ri_FdwRoutine != NULL &&
+				partRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
+			{
+				List	   *fdw_private = (List *) list_nth(node->fdwPartitionPrivLists, j);
+
+				partRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
+															   partRelInfo,
+															   fdw_private,
+															   0,
+															   eflags);
+			}
+
+			partRelInfo++;
+			i++;
+		}
 	}
 
 	/* Build state for collecting transition tuples */
@@ -2360,6 +2425,11 @@ ExecEndModifyTable(ModifyTableState *node)
 	for (i = 0; i < node->mt_num_partitions; i++)
 	{
 		ResultRelInfo *resultRelInfo = node->mt_partitions + i;
+
+		if (resultRelInfo->ri_FdwRoutine != NULL &&
+			resultRelInfo->ri_FdwRoutine->EndForeignModify != NULL)
+			resultRelInfo->ri_FdwRoutine->EndForeignModify(node->ps.state,
+														   resultRelInfo);
 
 		ExecCloseIndices(resultRelInfo);
 		heap_close(resultRelInfo->ri_RelationDesc, NoLock);

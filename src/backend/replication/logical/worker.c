@@ -198,7 +198,7 @@ create_estate_for_relation(LogicalRepRelMapEntry *rel)
 	estate->es_range_table = list_make1(rte);
 
 	resultRelInfo = makeNode(ResultRelInfo);
-	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0);
+	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0, 0);
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;

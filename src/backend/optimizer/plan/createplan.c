@@ -35,6 +35,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/predtest.h"
+#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
@@ -6412,6 +6413,7 @@ make_modifytable(PlannerInfo *root,
 	ModifyTable *node = makeNode(ModifyTable);
 	List	   *fdw_private_list;
 	Bitmapset  *direct_modify_plans;
+	List	   *partition_rels;
 	ListCell   *lc;
 	int			i;
 
@@ -6534,6 +6536,101 @@ make_modifytable(PlannerInfo *root,
 	}
 	node->fdwPrivLists = fdw_private_list;
 	node->fdwDirectModifyPlans = direct_modify_plans;
+
+	/*
+	 * Also, if this is an INSERT into a partitioned table, build a list of
+	 * RT indexes of partitions, and for each partition that is a foreign table,
+	 * allow the FDW to construct private plan data and accumulate it all into
+	 * another list.
+	 */
+	partition_rels = NIL;
+	fdw_private_list = NIL;
+	if (operation == CMD_INSERT)
+	{
+		Index		rti = linitial_int(resultRelations);
+
+		if (planner_rt_fetch(rti, root)->relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			Query	   *saved_query = root->parse;
+			Index		saved_nominalRelation = node->nominalRelation;
+			List	   *saved_resultRelations = node->resultRelations;
+			List	   *saved_withCheckOptionLists = node->withCheckOptionLists;
+			List	   *saved_returningLists = node->returningLists;
+			Plan	   *subplan = (Plan *) linitial(node->plans);
+			List	   *saved_tlist = subplan->targetlist;
+
+			foreach(lc, root->append_rel_list)
+			{
+				AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(lc);
+				Index		part_rti = appinfo->child_relid;
+				RangeTblEntry *part_rte;
+				FdwRoutine *fdwroutine = NULL;
+				List	   *fdw_private = NIL;
+
+				/* append_rel_list contains all append rels; ignore others */
+				if (appinfo->parent_relid != rti)
+					continue;
+
+				part_rte = planner_rt_fetch(part_rti, root);
+				Assert(part_rte->rtekind == RTE_RELATION);
+
+				if (part_rte->relkind == RELKIND_FOREIGN_TABLE)
+					fdwroutine = GetFdwRoutineByRelId(part_rte->relid);
+
+				if (fdwroutine != NULL &&
+					fdwroutine->PlanForeignModify != NULL)
+				{
+					List	   *tlist;
+
+					/*
+					 * Replace the Query node with the modified one that has
+					 * this partition as target.
+					 */
+					root->parse = (Query *)
+						adjust_appendrel_attrs(root,
+											   (Node *) root->parse,
+											   1, &appinfo);
+
+					/*
+					 * Likewise for the ModifyTable node.
+					 */
+					node->nominalRelation = part_rti;
+					node->resultRelations = list_make1_int(part_rti);
+					node->withCheckOptionLists =
+						list_make1(root->parse->withCheckOptions);
+					node->returningLists =
+						list_make1(root->parse->returningList);
+
+					/*
+					 * Adjust the subplan's tlist because the column list of
+					 * this partition might have a different column order
+					 * and/or a different set of dropped columns than the
+					 * partitioned table root.
+					 */
+					tlist = preprocess_targetlist(root,
+												  root->parse->targetList);
+					subplan->targetlist = tlist;
+
+					fdw_private = fdwroutine->PlanForeignModify(root,
+																node,
+																part_rti,
+																0);
+				}
+
+				partition_rels = lappend_int(partition_rels, part_rti);
+				fdw_private_list = lappend(fdw_private_list, fdw_private);
+			}
+
+			root->parse = saved_query;
+			node->nominalRelation = saved_nominalRelation;
+			node->resultRelations = saved_resultRelations;
+			node->withCheckOptionLists = saved_withCheckOptionLists;
+			node->returningLists = saved_returningLists;
+			subplan->targetlist = saved_tlist;
+		}
+	}
+	node->partition_rels = partition_rels;
+	node->fdwPartitionPrivLists = fdw_private_list;
 
 	return node;
 }

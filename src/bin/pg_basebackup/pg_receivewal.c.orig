@@ -711,7 +711,7 @@ main(int argc, char **argv)
 					_("%s: dropping replication slot \"%s\"\n"),
 					progname, replication_slot);
 
-		if (!DropReplicationSlot(conn, replication_slot, false))
+		if (!DropReplicationSlot(conn, replication_slot))
 			disconnect_and_exit(1);
 		disconnect_and_exit(0);
 	}

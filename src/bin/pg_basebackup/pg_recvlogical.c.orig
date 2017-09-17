@@ -33,8 +33,6 @@
 /* Time to sleep between reconnection attempts */
 #define RECONNECT_SLEEP_TIME 5
 
-#define ERRCODE_UNKNOWN_OBJECT "42704"
-
 /* Global Options */
 static char *outfile = NULL;
 static int	verbose = 0;
@@ -45,7 +43,6 @@ static XLogRecPtr startpos = InvalidXLogRecPtr;
 static XLogRecPtr endpos = InvalidXLogRecPtr;
 static bool do_create_slot = false;
 static bool slot_exists_ok = false;
-static bool slot_not_exists_ok = false;
 static bool do_start_slot = false;
 static bool do_drop_slot = false;
 static char *replication_slot = NULL;
@@ -88,7 +85,6 @@ usage(void)
 	printf(_("  -f, --file=FILE        receive log into this file, - for stdout\n"));
 	printf(_("  -F  --fsync-interval=SECS\n"
 			 "                         time between fsyncs to the output file (default: %d)\n"), (fsync_interval / 1000));
-	printf(_("      --if-exists        do not error if slot does not exist\n"));
 	printf(_("      --if-not-exists    do not error if slot already exists when creating a slot\n"));
 	printf(_("  -I, --startpos=LSN     where in an existing slot should the streaming start\n"));
 	printf(_("  -n, --no-loop          do not loop on connection lost\n"));
@@ -271,17 +267,6 @@ StreamLogicalLog(void)
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
 	{
-		const char* sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-
-		if (slot_not_exists_ok &&
-			sqlstate &&
-			strcmp(sqlstate, ERRCODE_UNKNOWN_OBJECT) == 0)
-		{
-			destroyPQExpBuffer(query);
-			PQclear(res);
-			disconnect_and_exit(0);
-		}
-
 		fprintf(stderr, _("%s: could not send replication command \"%s\": %s"),
 				progname, query->data, PQresultErrorMessage(res));
 		PQclear(res);
@@ -714,7 +699,6 @@ main(int argc, char **argv)
 		{"start", no_argument, NULL, 2},
 		{"drop-slot", no_argument, NULL, 3},
 		{"if-not-exists", no_argument, NULL, 4},
-		{"if-exists", no_argument, NULL, 5},
 		{NULL, 0, NULL, 0}
 	};
 	int			c;
@@ -859,9 +843,6 @@ main(int argc, char **argv)
 			case 4:
 				slot_exists_ok = true;
 				break;
-			case 5:
-				slot_not_exists_ok = true;
-				break;
 
 			default:
 
@@ -917,14 +898,6 @@ main(int argc, char **argv)
 	if (!do_drop_slot && !do_create_slot && !do_start_slot)
 	{
 		fprintf(stderr, _("%s: at least one action needs to be specified\n"), progname);
-		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
-				progname);
-		exit(1);
-	}
-
-	if (do_create_slot && slot_not_exists_ok)
-	{
-		fprintf(stderr, _("%s: cannot use --create-slot with --if-exists\n"), progname);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -994,7 +967,7 @@ main(int argc, char **argv)
 					_("%s: dropping replication slot \"%s\"\n"),
 					progname, replication_slot);
 
-		if (!DropReplicationSlot(conn, replication_slot, slot_not_exists_ok))
+		if (!DropReplicationSlot(conn, replication_slot))
 			disconnect_and_exit(1);
 	}
 

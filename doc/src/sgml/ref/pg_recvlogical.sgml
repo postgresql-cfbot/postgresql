@@ -199,6 +199,16 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--if-exists</option></term>
+      <listitem>
+       <para>
+        Do not error out when <option>--drop-slot</option> or <option>--start<option> are 
+        specified and a slot with the specified name does not exist.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-n</option></term>
       <term><option>--no-loop</option></term>
       <listitem>

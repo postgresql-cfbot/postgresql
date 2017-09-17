@@ -30,7 +30,6 @@
 #include "datatype/timestamp.h"
 
 #define ERRCODE_DUPLICATE_OBJECT  "42710"
-#define ERRCODE_UNKNOWN_OBJECT    "42704"
 
 const char *progname;
 char	   *connection_string = NULL;
@@ -393,7 +392,7 @@ CreateReplicationSlot(PGconn *conn, const char *slot_name, const char *plugin,
  * returns true in case of success.
  */
 bool
-DropReplicationSlot(PGconn *conn, const char *slot_name, bool slot_not_exists_ok)
+DropReplicationSlot(PGconn *conn, const char *slot_name)
 {
 	PQExpBuffer query;
 	PGresult   *res;
@@ -408,17 +407,6 @@ DropReplicationSlot(PGconn *conn, const char *slot_name, bool slot_not_exists_ok
 	res = PQexec(conn, query->data);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		const char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
-
-		if (slot_not_exists_ok &&
-			sqlstate &&
-			strcmp(sqlstate, ERRCODE_UNKNOWN_OBJECT) == 0)
-		{
-			destroyPQExpBuffer(query);
-			PQclear(res);
-			return true;
-		}
-
 		fprintf(stderr, _("%s: could not send replication command \"%s\": %s"),
 				progname, query->data, PQerrorMessage(conn));
 

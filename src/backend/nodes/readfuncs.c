@@ -467,6 +467,7 @@ _readTableFunc(void)
 {
 	READ_LOCALS(TableFunc);
 
+	READ_ENUM_FIELD(functype, TableFuncType);
 	READ_NODE_FIELD(ns_uris);
 	READ_NODE_FIELD(ns_names);
 	READ_NODE_FIELD(docexpr);
@@ -477,7 +478,9 @@ _readTableFunc(void)
 	READ_NODE_FIELD(colcollations);
 	READ_NODE_FIELD(colexprs);
 	READ_NODE_FIELD(coldefexprs);
+	READ_NODE_FIELD(colvalexprs);
 	READ_BITMAPSET_FIELD(notnulls);
+	READ_NODE_FIELD(plan);
 	READ_INT_FIELD(ordinalitycol);
 	READ_LOCATION_FIELD(location);
 
@@ -1313,6 +1316,69 @@ _readOnConflictExpr(void)
 	READ_NODE_FIELD(onConflictWhere);
 	READ_INT_FIELD(exclRelIndex);
 	READ_NODE_FIELD(exclRelTlist);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonExpr
+ */
+static JsonExpr *
+_readJsonExpr(void)
+{
+	READ_LOCALS(JsonExpr);
+
+	READ_ENUM_FIELD(op, JsonExprOp);
+	READ_NODE_FIELD(raw_expr);
+	READ_NODE_FIELD(formatted_expr);
+	READ_NODE_FIELD(result_expr);
+	READ_BOOL_FIELD(coerce_via_io);
+	READ_OID_FIELD(coerce_via_io_collation);
+	READ_ENUM_FIELD(format.type, JsonFormatType);
+	READ_ENUM_FIELD(format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(format.location);
+	READ_NODE_FIELD(path_spec);
+	READ_NODE_FIELD(passing.values);
+	READ_NODE_FIELD(passing.names);
+	READ_ENUM_FIELD(returning.format.type, JsonFormatType);
+	READ_ENUM_FIELD(returning.format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(returning.format.location);
+	READ_OID_FIELD(returning.typid);
+	READ_INT_FIELD(returning.typmod);
+	READ_ENUM_FIELD(on_error.btype, JsonBehaviorType);
+	READ_NODE_FIELD(on_error.default_expr);
+	READ_ENUM_FIELD(on_empty.btype, JsonBehaviorType);
+	READ_NODE_FIELD(on_empty.default_expr);
+	READ_ENUM_FIELD(wrapper, JsonWrapper);
+	READ_BOOL_FIELD(omit_quotes);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+static JsonTableParentNode *
+_readJsonTableParentNode(void)
+{
+	READ_LOCALS(JsonTableParentNode);
+
+	READ_NODE_FIELD(path);
+	READ_STRING_FIELD(name);
+	READ_NODE_FIELD(child);
+	READ_BOOL_FIELD(outerJoin);
+	READ_INT_FIELD(colMin);
+	READ_INT_FIELD(colMax);
+
+	READ_DONE();
+}
+
+static JsonTableSiblingNode *
+_readJsonTableSiblingNode(void)
+{
+	READ_LOCALS(JsonTableSiblingNode);
+
+	READ_NODE_FIELD(larg);
+	READ_NODE_FIELD(rarg);
+	READ_BOOL_FIELD(cross);
 
 	READ_DONE();
 }
@@ -2660,6 +2726,12 @@ parseNodeString(void)
 		return_value = _readPartitionBoundSpec();
 	else if (MATCH("PARTITIONRANGEDATUM", 19))
 		return_value = _readPartitionRangeDatum();
+	else if (MATCH("JSONEXPR", 8))
+		return_value = _readJsonExpr();
+	else if (MATCH("JSONTABPNODE", 12))
+		return_value = _readJsonTableParentNode();
+	else if (MATCH("JSONTABSNODE", 12))
+		return_value = _readJsonTableSiblingNode();
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);

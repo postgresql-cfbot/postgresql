@@ -15,6 +15,7 @@
 
 #include "access/hash.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
@@ -36,7 +37,6 @@
 static void fillJsonbValue(JsonbContainer *container, int index,
 			   char *base_addr, uint32 offset,
 			   JsonbValue *result);
-static bool equalsJsonbScalarValue(JsonbValue *a, JsonbValue *b);
 static int	compareJsonbScalarValue(JsonbValue *a, JsonbValue *b);
 static Jsonb *convertToJsonb(JsonbValue *val);
 static void convertJsonbValue(StringInfo buffer, JEntry *header, JsonbValue *val, int level);
@@ -55,12 +55,8 @@ static JsonbParseState *pushState(JsonbParseState **pstate);
 static void appendKey(JsonbParseState *pstate, JsonbValue *scalarVal);
 static void appendValue(JsonbParseState *pstate, JsonbValue *scalarVal);
 static void appendElement(JsonbParseState *pstate, JsonbValue *scalarVal);
-static int	lengthCompareJsonbStringValue(const void *a, const void *b);
 static int	lengthCompareJsonbPair(const void *a, const void *b, void *arg);
 static void uniqueifyJsonbObject(JsonbValue *object);
-static JsonbValue *pushJsonbValueScalar(JsonbParseState **pstate,
-					 JsonbIteratorToken seq,
-					 JsonbValue *scalarVal);
 
 /*
  * Turn an in-memory JsonbValue into a Jsonb for on-disk storage.
@@ -241,6 +237,7 @@ compareJsonbContainers(JsonbContainer *a, JsonbContainer *b)
 							res = (va.val.object.nPairs > vb.val.object.nPairs) ? 1 : -1;
 						break;
 					case jbvBinary:
+					case jbvDatetime:
 						elog(ERROR, "unexpected jbvBinary value");
 				}
 			}
@@ -542,7 +539,7 @@ pushJsonbValue(JsonbParseState **pstate, JsonbIteratorToken seq,
  * Do the actual pushing, with only scalar or pseudo-scalar-array values
  * accepted.
  */
-static JsonbValue *
+JsonbValue *
 pushJsonbValueScalar(JsonbParseState **pstate, JsonbIteratorToken seq,
 					 JsonbValue *scalarVal)
 {
@@ -580,6 +577,7 @@ pushJsonbValueScalar(JsonbParseState **pstate, JsonbIteratorToken seq,
 			(*pstate)->size = 4;
 			(*pstate)->contVal.val.object.pairs = palloc(sizeof(JsonbPair) *
 														 (*pstate)->size);
+			(*pstate)->contVal.val.object.uniquified = true;
 			break;
 		case WJB_KEY:
 			Assert(scalarVal->type == jbvString);
@@ -822,6 +820,7 @@ recurse:
 			/* Set v to object on first object call */
 			val->type = jbvObject;
 			val->val.object.nPairs = (*it)->nElems;
+			val->val.object.uniquified = true;
 
 			/*
 			 * v->val.object.pairs is not actually set, because we aren't
@@ -1295,7 +1294,7 @@ JsonbHashScalarValueExtended(const JsonbValue *scalarVal, uint64 *hash,
 /*
  * Are two scalar JsonbValues of the same type a and b equal?
  */
-static bool
+bool
 equalsJsonbScalarValue(JsonbValue *aScalar, JsonbValue *bScalar)
 {
 	if (aScalar->type == bScalar->type)
@@ -1741,6 +1740,44 @@ convertJsonbScalar(StringInfo buffer, JEntry *jentry, JsonbValue *scalarVal)
 				JENTRY_ISBOOL_TRUE : JENTRY_ISBOOL_FALSE;
 			break;
 
+		case jbvDatetime:
+			{
+				char	   *str;
+				PGFunction	typoutput;
+				int			len;
+
+				switch (scalarVal->val.datetime.typid)
+				{
+					case DATEOID:
+						typoutput = date_out;
+						break;
+					case TIMEOID:
+						typoutput = time_out;
+						break;
+					case TIMETZOID:
+						typoutput = timetz_out;
+						break;
+					case TIMESTAMPOID:
+						typoutput = timestamp_out;
+						break;
+					case TIMESTAMPTZOID:
+						typoutput = timestamptz_out;
+						break;
+					default:
+						elog(ERROR, "unknown jsonb value datetime type oid %d",
+							 scalarVal->val.datetime.typid);
+				}
+
+				str = DatumGetCString(DirectFunctionCall1(typoutput,
+												scalarVal->val.datetime.value));
+
+				len = strlen(str);
+
+				appendToBuffer(buffer, str, len);
+				*jentry = JENTRY_ISSTRING | len;
+			}
+			break;
+
 		default:
 			elog(ERROR, "invalid jsonb scalar type");
 	}
@@ -1758,7 +1795,7 @@ convertJsonbScalar(StringInfo buffer, JEntry *jentry, JsonbValue *scalarVal)
  * a and b are first sorted based on their length.  If a tie-breaker is
  * required, only then do we consider string binary equality.
  */
-static int
+int
 lengthCompareJsonbStringValue(const void *a, const void *b)
 {
 	const JsonbValue *va = (const JsonbValue *) a;
@@ -1822,6 +1859,9 @@ uniqueifyJsonbObject(JsonbValue *object)
 
 	Assert(object->type == jbvObject);
 
+	if (!object->val.object.uniquified)
+		return;
+
 	if (object->val.object.nPairs > 1)
 		qsort_arg(object->val.object.pairs, object->val.object.nPairs, sizeof(JsonbPair),
 				  lengthCompareJsonbPair, &hasNonUniq);
@@ -1845,4 +1885,134 @@ uniqueifyJsonbObject(JsonbValue *object)
 
 		object->val.object.nPairs = res + 1 - object->val.object.pairs;
 	}
+}
+
+bool
+JsonbValidate(const void *data, uint32 size)
+{
+	const JsonbContainer *jbc = data;
+	const JEntry *entries;
+	const char *base;
+	uint32		header;
+	uint32		nentries;
+	uint32		offset;
+	uint32		i;
+	uint32		nkeys = 0;
+
+	check_stack_depth();
+
+	/* check header size */
+	if (size < offsetof(JsonbContainer, children))
+		return false;
+
+	size -= offsetof(JsonbContainer, children);
+
+	/* read header */
+	header = jbc->header;
+	entries = &jbc->children[0];
+	nentries = header & JB_CMASK;
+
+	switch (header & ~JB_CMASK)
+	{
+		case JB_FOBJECT:
+			nkeys = nentries;
+			nentries *= 2;
+			break;
+
+		case JB_FARRAY | JB_FSCALAR:
+			if (nentries != 1)
+				/* scalar pseudo-array must have one element */
+				return false;
+			break;
+
+		case JB_FARRAY:
+			break;
+
+		default:
+			/* invalid container type */
+			return false;
+	}
+
+	/* check JEntry array size */
+	if (size < sizeof(JEntry) * nentries)
+		return false;
+
+	size -= sizeof(JEntry) * nentries;
+
+	base = (const char *) &entries[nentries];
+
+	for (i = 0, offset = 0; i < nentries; i++)
+	{
+		JEntry		entry = entries[i];
+		uint32		offlen = JBE_OFFLENFLD(entry);
+		uint32		length;
+		uint32		nextOffset;
+
+		if (JBE_HAS_OFF(entry))
+		{
+			nextOffset = offlen;
+			length = nextOffset - offset;
+		}
+		else
+		{
+			length = offlen;
+			nextOffset = offset + length;
+		}
+
+		if (nextOffset < offset || nextOffset > size)
+			return false;
+
+		/* check that object key is string */
+		if (i < nkeys && !JBE_ISSTRING(entry))
+			return false;
+
+		switch (entry & JENTRY_TYPEMASK)
+		{
+			case JENTRY_ISSTRING:
+				break;
+
+			case JENTRY_ISNUMERIC:
+				{
+					uint32		padding = INTALIGN(offset) - offset;
+
+					if (length < padding)
+						return false;
+
+					if (length - padding < sizeof(struct varlena))
+						return false;
+
+					/* TODO JsonValidateNumeric(); */
+					break;
+				}
+
+			case JENTRY_ISBOOL_FALSE:
+			case JENTRY_ISBOOL_TRUE:
+			case JENTRY_ISNULL:
+				if (length)
+					return false;
+
+				break;
+
+			case JENTRY_ISCONTAINER:
+				{
+					uint32		padding = INTALIGN(offset) - offset;
+
+					if (length < padding)
+						return false;
+
+					if (!JsonbValidate(&base[offset + padding],
+									   length - padding))
+						return false;
+
+					break;
+				}
+
+			default:
+				return false;
+		}
+
+		offset = nextOffset;
+	}
+
+	return true;
 }

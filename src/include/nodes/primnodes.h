@@ -73,12 +73,19 @@ typedef struct RangeVar
 	int			location;		/* token location, or -1 if unknown */
 } RangeVar;
 
+typedef enum TableFuncType
+{
+	TFT_XMLTABLE,
+	TFT_JSON_TABLE
+} TableFuncType;
+
 /*
  * TableFunc - node for a table function, such as XMLTABLE.
  */
 typedef struct TableFunc
 {
 	NodeTag		type;
+	TableFuncType functype;		/* XMLTABLE or JSON_TABLE */
 	List	   *ns_uris;		/* list of namespace uri */
 	List	   *ns_names;		/* list of namespace names */
 	Node	   *docexpr;		/* input document expression */
@@ -89,7 +96,9 @@ typedef struct TableFunc
 	List	   *colcollations;	/* OID list of column collation OIDs */
 	List	   *colexprs;		/* list of column filter expressions */
 	List	   *coldefexprs;	/* list of column default expressions */
+	List	   *colvalexprs;	/* list of column value expressions */
 	Bitmapset  *notnulls;		/* nullability flag for each output column */
+	Node	   *plan;			/* JSON_TABLE plan */
 	int			ordinalitycol;	/* counts from 0; -1 if none specified */
 	int			location;		/* token location, or -1 if unknown */
 } TableFunc;
@@ -1149,6 +1158,167 @@ typedef struct XmlExpr
 	int32		typmod;
 	int			location;		/* token location, or -1 if unknown */
 } XmlExpr;
+
+/*
+ * JsonExprOp -
+ *		enumeration of JSON functions using JSON path
+ */
+typedef enum JsonExprOp
+{
+	IS_JSON_VALUE,				/* JSON_VALUE() */
+	IS_JSON_QUERY,				/* JSON_QUERY() */
+	IS_JSON_EXISTS,				/* JSON_EXISTS() */
+	IS_JSON_TABLE				/* JSON_TABLE() */
+} JsonExprOp;
+
+/*
+ * JsonEncoding -
+ *		representation of JSON ENCODING clause
+ */
+typedef enum JsonEncoding
+{
+	JS_ENC_DEFAULT,				/* unspecified */
+	JS_ENC_UTF8,
+	JS_ENC_UTF16,
+	JS_ENC_UTF32,
+} JsonEncoding;
+
+/*
+ * JsonFormatType -
+ *		enumeration of JSON formats used in JSON FORMAT clause
+ */
+typedef enum JsonFormatType
+{
+	JS_FORMAT_DEFAULT,			/* unspecified */
+	JS_FORMAT_JSON,				/* FORMAT JSON [ENCODING ...] */
+	JS_FORMAT_JSONB				/* implicit internal format for RETURNING jsonb */
+} JsonFormatType;
+
+/*
+ * JsonBehaviorType -
+ *		enumeration of behavior types used in JSON ON ... BEHAVIOR clause
+ */
+typedef enum
+{
+	JSON_BEHAVIOR_NULL,
+	JSON_BEHAVIOR_ERROR,
+	JSON_BEHAVIOR_EMPTY,
+	JSON_BEHAVIOR_TRUE,
+	JSON_BEHAVIOR_FALSE,
+	JSON_BEHAVIOR_UNKNOWN,
+	JSON_BEHAVIOR_EMPTY_ARRAY,
+	JSON_BEHAVIOR_EMPTY_OBJECT,
+	JSON_BEHAVIOR_DEFAULT,
+} JsonBehaviorType;
+
+/*
+ * JsonWrapper -
+ *		representation of WRAPPER clause for JSON_QUERY()
+ */
+typedef enum JsonWrapper
+{
+	JSW_NONE,
+	JSW_CONDITIONAL,
+	JSW_UNCONDITIONAL,
+} JsonWrapper;
+
+/*
+ * JsonFormat -
+ *		representation of JSON FORMAT clause
+ */
+typedef struct JsonFormat
+{
+	JsonFormatType	type;		/* format type */
+	JsonEncoding	encoding;	/* JSON encoding */
+	int				location;	/* token location, or -1 if unknown */
+} JsonFormat;
+
+/*
+ * JsonReturning -
+ *		transformed representation of JSON RETURNING clause
+ */
+typedef struct JsonReturning
+{
+	JsonFormat	format;			/* output JSON format */
+	Oid			typid;			/* target type Oid */
+	int32		typmod;			/* target type modifier */
+} JsonReturning;
+
+/*
+ * JsonBehavior -
+ *		representation of JSON ON ... BEHAVIOR clause
+ */
+typedef struct JsonBehavior
+{
+	NodeTag		type;
+	JsonBehaviorType btype;		/* behavior type */
+	Node	   *default_expr;	/* default expression, if any */
+} JsonBehavior;
+
+/*
+ * JsonPassing -
+ *		representation of JSON PASSING clause
+ */
+typedef struct JsonPassing
+{
+	List	   *values;			/* list of PASSING argument expressions */
+	List	   *names;			/* parallel list of Value strings */
+} JsonPassing;
+
+
+/*
+ * JsonExpr -
+ *		transformed representation of JSON_VALUE(), JSON_QUERY(), JSON_EXISTS()
+ */
+typedef struct JsonExpr
+{
+	Expr		xpr;
+	JsonExprOp	op;				/* json function ID */
+	Node	   *raw_expr;		/* raw context item expression */
+	Node	   *formatted_expr;	/* formatted context item expression */
+	Node	   *result_expr;	/* resulting expression (coerced to RETURNING type) */
+	bool		coerce_via_populate; /* coerce result using json_populate_type() */
+	bool		coerce_via_io;	/* coerce result using type input function */
+	Oid			coerce_via_io_collation; /* collation for conversion through I/O */
+	JsonFormat	format;			/* context item format (JSON/JSONB) */
+	Const	   *path_spec;		/* JSON path specification */
+	JsonPassing	passing;		/* PASSING clause arguments */
+	JsonReturning returning;	/* RETURNING clause type/format info */
+	JsonBehavior on_empty;		/* ON EMPTY behavior */
+	JsonBehavior on_error;		/* ON ERROR behavior */
+	JsonWrapper	wrapper;		/* WRAPPER for JSON_QUERY */
+	bool		omit_quotes;	/* KEEP/OMIT QUOTES for JSON_QUERY */
+	int			location;		/* token location, or -1 if unknown */
+} JsonExpr;
+
+/*
+ * JsonTableParentNode -
+ *		transformed representation of parent JSON_TABLE plan node
+ */
+typedef struct JsonTableParentNode
+{
+	NodeTag		type;
+	Const	   *path;		/* jsonpath constant */
+	char	   *name;		/* path name */
+	JsonPassing	passing;	/* PASSING arguments */
+	Node	   *child;		/* nested columns, if any */
+	bool		outerJoin;	/* outer or inner join for nested columns? */
+	int			colMin;		/* min column index in the resulting column list */
+	int			colMax;		/* max column index in the resulting column list */
+	bool		errorOnError; /* ERROR/EMPTY ON ERROR behavior */
+} JsonTableParentNode;
+
+/*
+ * JsonTableSiblingNode -
+ *		transformed representation of joined sibling JSON_TABLE plan node
+ */
+typedef struct JsonTableSiblingNode
+{
+	NodeTag		type;
+	Node	   *larg;		/* left join node */
+	Node	   *rarg;		/* right join node */
+	bool		cross;		/* cross or union join? */
+} JsonTableSiblingNode;
 
 /* ----------------
  * NullTest

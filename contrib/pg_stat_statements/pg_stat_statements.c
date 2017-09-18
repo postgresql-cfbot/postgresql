@@ -2830,6 +2830,17 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 				JumbleExpr(jstate, (Node *) conf->exclRelTlist);
 			}
 			break;
+		case T_JsonExpr:
+			{
+				JsonExpr    *jexpr = (JsonExpr *) node;
+
+				APP_JUMB(jexpr->op);
+				JumbleExpr(jstate, jexpr->raw_expr);
+				JumbleExpr(jstate, (Node *) jexpr->passing.values);
+				JumbleExpr(jstate, jexpr->on_empty.default_expr);
+				JumbleExpr(jstate, jexpr->on_error.default_expr);
+			}
+			break;
 		case T_List:
 			foreach(temp, (List *) node)
 			{
@@ -2901,9 +2912,11 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 			{
 				TableFunc  *tablefunc = (TableFunc *) node;
 
+				APP_JUMB(tablefunc->functype);
 				JumbleExpr(jstate, tablefunc->docexpr);
 				JumbleExpr(jstate, tablefunc->rowexpr);
 				JumbleExpr(jstate, (Node *) tablefunc->colexprs);
+				JumbleExpr(jstate, (Node *) tablefunc->colvalexprs);
 			}
 			break;
 		case T_TableSampleClause:

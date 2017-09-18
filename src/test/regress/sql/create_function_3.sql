@@ -171,3 +171,15 @@ DROP FUNCTION functest_b_2;  -- error, ambiguous
 DROP SCHEMA temp_func_test CASCADE;
 DROP USER regress_unpriv_user;
 RESET search_path;
+
+
+-- Depends on
+CREATE FUNCTION dependency_func1() RETURNS INTEGER AS 'SELECT 1;' LANGUAGE SQL;
+CREATE FUNCTION dependency_func2() RETURNS INTEGER AS 'SELECT 1;' LANGUAGE SQL;
+CREATE FUNCTION dependency_func3() RETURNS INTEGER AS 'SELECT 1;' LANGUAGE SQL;
+CREATE FUNCTION complex_func1() RETURNS INTEGER AS 'SELECT 1;' LANGUAGE SQL DEPENDS ON dependency_func1;
+CREATE FUNCTION complex_func2() RETURNS INTEGER AS 'SELECT 1;' LANGUAGE SQL DEPENDS ON dependency_func2, dependency_func3;
+
+DROP FUNCTION dependency_func1;
+DROP FUNCTION dependency_func2;
+DROP FUNCTION dependency_func3;

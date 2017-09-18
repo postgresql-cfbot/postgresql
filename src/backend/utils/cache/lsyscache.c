@@ -3088,3 +3088,23 @@ get_range_subtype(Oid rangeOid)
 	else
 		return InvalidOid;
 }
+
+/*
+ * get_typsubsparse
+ *
+ *		Given the type OID, return the type's typsubsparse procedure, if any.
+ */
+RegProcedure
+get_typsubsparse(Oid typid)
+{
+	HeapTuple		tp;
+	RegProcedure	result = InvalidOid;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		result = ((Form_pg_type) GETSTRUCT(tp))->typsubsparse;
+		ReleaseSysCache(tp);
+	}
+	return result;
+}

@@ -94,6 +94,7 @@ static Oid	findTypeSendFunction(List *procname, Oid typeOid);
 static Oid	findTypeTypmodinFunction(List *procname);
 static Oid	findTypeTypmodoutFunction(List *procname);
 static Oid	findTypeAnalyzeFunction(List *procname, Oid typeOid);
+static Oid	findTypeSubscriptingFunction(List *procname);
 static Oid	findRangeSubOpclass(List *opcname, Oid subtype);
 static Oid	findRangeCanonicalFunction(List *procname, Oid typeOid);
 static Oid	findRangeSubtypeDiffFunction(List *procname, Oid subtype);
@@ -125,6 +126,7 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 	List	   *typmodinName = NIL;
 	List	   *typmodoutName = NIL;
 	List	   *analyzeName = NIL;
+	List	   *subscriptingName = NIL;
 	char		category = TYPCATEGORY_USER;
 	bool		preferred = false;
 	char		delimiter = DEFAULT_TYPDELIM;
@@ -143,6 +145,7 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 	DefElem    *typmodinNameEl = NULL;
 	DefElem    *typmodoutNameEl = NULL;
 	DefElem    *analyzeNameEl = NULL;
+	DefElem    *subscriptingNameEl = NULL;
 	DefElem    *categoryEl = NULL;
 	DefElem    *preferredEl = NULL;
 	DefElem    *delimiterEl = NULL;
@@ -165,6 +168,7 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 	Oid			resulttype;
 	ListCell   *pl;
 	ObjectAddress address;
+	Oid			subscriptingOid = InvalidOid;
 
 	/*
 	 * As of Postgres 8.4, we require superuser privilege to create a base
@@ -264,6 +268,9 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 		else if (pg_strcasecmp(defel->defname, "analyze") == 0 ||
 				 pg_strcasecmp(defel->defname, "analyse") == 0)
 			defelp = &analyzeNameEl;
+		else if (pg_strcasecmp(defel->defname, "subscripting") == 0 ||
+				 pg_strcasecmp(defel->defname, "subscripting") == 0)
+			defelp = &subscriptingNameEl;
 		else if (pg_strcasecmp(defel->defname, "category") == 0)
 			defelp = &categoryEl;
 		else if (pg_strcasecmp(defel->defname, "preferred") == 0)
@@ -334,6 +341,8 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 		typmodoutName = defGetQualifiedName(typmodoutNameEl);
 	if (analyzeNameEl)
 		analyzeName = defGetQualifiedName(analyzeNameEl);
+	if (subscriptingNameEl)
+		subscriptingName = defGetQualifiedName(subscriptingNameEl);
 	if (categoryEl)
 	{
 		char	   *p = defGetString(categoryEl);
@@ -515,6 +524,9 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 	if (analyzeName)
 		analyzeOid = findTypeAnalyzeFunction(analyzeName, typoid);
 
+	if (subscriptingName)
+		subscriptingOid = findTypeSubscriptingFunction(subscriptingName);
+
 	/*
 	 * Check permissions on functions.  We choose to require the creator/owner
 	 * of a type to also own the underlying functions.  Since creating a type
@@ -634,7 +646,8 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 				   -1,			/* typMod (Domains only) */
 				   0,			/* Array Dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
-				   collation);	/* type's collation */
+				   collation,	/* type's collation */
+				   subscriptingOid);	/* subscripting procedure */
 	Assert(typoid == address.objectId);
 
 	/*
@@ -675,7 +688,8 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 			   -1,				/* typMod (Domains only) */
 			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
-			   collation);		/* type's collation */
+			   collation,		/* type's collation */
+			   F_ARRAY_SUBSCRIPT_PARSE);
 
 	pfree(array_type);
 
@@ -737,6 +751,7 @@ DefineDomain(CreateDomainStmt *stmt)
 	Oid			receiveProcedure;
 	Oid			sendProcedure;
 	Oid			analyzeProcedure;
+	Oid			subscriptingProcedure;
 	bool		byValue;
 	char		category;
 	char		delimiter;
@@ -859,6 +874,9 @@ DefineDomain(CreateDomainStmt *stmt)
 
 	/* Analysis function */
 	analyzeProcedure = baseType->typanalyze;
+
+	/* Subscripting function */
+	subscriptingProcedure = baseType->typsubsparse;
 
 	/* Inherited default value */
 	datum = SysCacheGetAttr(TYPEOID, typeTup,
@@ -1061,7 +1079,8 @@ DefineDomain(CreateDomainStmt *stmt)
 				   basetypeMod, /* typeMod value */
 				   typNDims,	/* Array dimensions for base type */
 				   typNotNull,	/* Type NOT NULL */
-				   domaincoll); /* type's collation */
+				   domaincoll,  /* type's collation */
+				   subscriptingProcedure);	/* subscripting procedure */
 
 	/*
 	 * Process constraints which refer to the domain ID returned by TypeCreate
@@ -1173,7 +1192,8 @@ DefineEnum(CreateEnumStmt *stmt)
 				   -1,			/* typMod (Domains only) */
 				   0,			/* Array dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
-				   InvalidOid); /* type's collation */
+				   InvalidOid,  /* type's collation */
+				   InvalidOid);	/* typsubsparse - none */
 
 	/* Enter the enum's values into pg_enum */
 	EnumValuesCreate(enumTypeAddr.objectId, stmt->vals);
@@ -1213,7 +1233,8 @@ DefineEnum(CreateEnumStmt *stmt)
 			   -1,				/* typMod (Domains only) */
 			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
-			   InvalidOid);		/* type's collation */
+			   InvalidOid,		/* type's collation */
+			   F_ARRAY_SUBSCRIPT_PARSE);	/* array subscripting implementation */
 
 	pfree(enumArrayName);
 
@@ -1501,7 +1522,8 @@ DefineRange(CreateRangeStmt *stmt)
 				   -1,			/* typMod (Domains only) */
 				   0,			/* Array dimensions of typbasetype */
 				   false,		/* Type NOT NULL */
-				   InvalidOid); /* type's collation (ranges never have one) */
+				   InvalidOid,  /* type's collation (ranges never have one) */
+				   InvalidOid);	/* typsubsparse - none */
 	Assert(typoid == address.objectId);
 
 	/* Create the entry in pg_range */
@@ -1543,7 +1565,8 @@ DefineRange(CreateRangeStmt *stmt)
 			   -1,				/* typMod (Domains only) */
 			   0,				/* Array dimensions of typbasetype */
 			   false,			/* Type NOT NULL */
-			   InvalidOid);		/* typcollation */
+			   InvalidOid,		/* typcollation */
+			   F_ARRAY_SUBSCRIPT_PARSE);	/* array subscripting implementation */
 
 	pfree(rangeArrayName);
 
@@ -1883,6 +1906,33 @@ findTypeAnalyzeFunction(List *procname, Oid typeOid)
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 errmsg("type analyze function %s must return type %s",
 						NameListToString(procname), "boolean")));
+
+	return procOid;
+}
+
+static Oid
+findTypeSubscriptingFunction(List *procname)
+{
+	Oid			argList[1];
+	Oid			procOid;
+
+	/*
+	 * Subscripting functions always take one INTERNAL argument and return INTERNAL.
+	 */
+	argList[0] = INTERNALOID;
+
+	procOid = LookupFuncName(procname, 1, argList, true);
+	if (!OidIsValid(procOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("function %s does not exist",
+						func_signature_string(procname, 1, NIL, argList))));
+
+	if (get_func_rettype(procOid) != INTERNALOID)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("type subscripting function %s must return type %s",
+						NameListToString(procname), "internal")));
 
 	return procOid;
 }
@@ -2240,6 +2290,7 @@ AlterDomainDefault(List *names, Node *defaultRaw)
 							 false, /* a domain isn't an implicit array */
 							 typTup->typbasetype,
 							 typTup->typcollation,
+							 typTup->typsubsparse,
 							 defaultExpr,
 							 true); /* Rebuild is true */
 

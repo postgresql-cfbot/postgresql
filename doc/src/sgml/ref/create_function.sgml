@@ -27,6 +27,7 @@ CREATE [ OR REPLACE ] FUNCTION
   { LANGUAGE <replaceable class="parameter">lang_name</replaceable>
     | TRANSFORM { FOR TYPE <replaceable class="parameter">type_name</replaceable> } [, ... ]
     | WINDOW
+    | DEPENDS ON <replaceable class="parameter">func_name</replaceable> [, ... ]
     | IMMUTABLE | STABLE | VOLATILE | [ NOT ] LEAKPROOF
     | CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
     | [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
@@ -288,6 +289,17 @@ CREATE [ OR REPLACE ] FUNCTION
        This is currently only useful for functions written in C.
        The <literal>WINDOW</> attribute cannot be changed when
        replacing an existing function definition.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>DEPENDS ON</literal></term>
+
+     <listitem>
+      <para><literal>DEPENDS ON</literal> indicates that the function depends
+      on other functions. This is useful when you want to prevent this
+      function to be invalid because some of its dependencies were deleted.
       </para>
      </listitem>
     </varlistentry>

@@ -1,0 +1,102 @@
+<!-- doc/src/sgml/xsubscripting.sgml -->
+
+ <sect1 id="xsubscripting">
+  <title>User-defined subscripting procedure</title>
+
+  <indexterm zone="xsubscripting">
+    <primary>custom subscripting</primary>
+  </indexterm>
+  <para>
+  When you define a new base type, you can also specify a custom procedure
+  to handle subscripting expressions. It should contain logic for verification
+  and decide which function must be used for evaluation of this expression.
+  For instance:
+</para>
+<programlisting><![CDATA[
+typedef struct Custom
+{
+    int first;
+    int second;
+}   Custom;
+
+Datum
+custom_subscripting_extract(PG_FUNCTION_ARGS)
+{
+    Custom                      *result = (Custom *) sbsdata->containerSource;
+    ExprEvalStep                *step = (ExprEvalStep *) PG_GETARG_POINTER(1);
+
+    // Some assign logic based on sbsdata
+}
+
+Datum
+custom_subscripting_assign(PG_FUNCTION_ARGS)
+{
+    Custom                  *containerSource = (Custom *) PG_GETARG_DATUM(0);
+    ExprEvalStep            *step = (ExprEvalStep *) PG_GETARG_POINTER(1);
+
+    // Some extraction logic based on sbsdata
+}
+
+PG_FUNCTION_INFO_V1(custom_subscripting);
+
+Datum
+custom_subscript_parse(PG_FUNCTION_ARGS)
+{
+    bool                isAssignment = PG_GETARG_BOOL(0);
+    SubscriptingRef    *sbsref = (SubscriptingRef *) PG_GETARG_POINTER(0);
+    Datum               assign_proc = CStringGetTextDatum("custom_subscripting_assign");
+    Datum               extract_proc = CStringGetTextDatum("custom_subscripting_extract");
+
+    // Some verifications or type coersion
+
+    if (isAssignment)
+        sbsref->refevalfunc = DirectFunctionCall1(to_regproc, assign_proc);
+    else
+        sbsref->refevalfunc = DirectFunctionCall1(to_regproc, extract_proc);
+
+    PG_RETURN_POINTER(sbsref);
+}]]>
+</programlisting>
+
+<para>
+    Then you can define a subscripting procedure and a custom data type:
+</para>
+<programlisting>
+CREATE FUNCTION custom_subscript_parse(internal)
+    RETURNS internal
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE TYPE custom (
+   internallength = 4,
+   input = custom_in,
+   output = custom_out,
+   subscripting = custom_subscript_parse
+);
+</programlisting>
+
+<para>
+    and use it as usual:
+</para>
+<programlisting>
+CREATE TABLE test_subscripting (
+    data    custom
+);
+
+INSERT INTO test_subscripting VALUES ('(1, 2)');
+
+SELECT data[0] from test_subscripting;
+
+UPDATE test_subscripting SET data[1] = 3;
+</programlisting>
+
+
+  <para>
+   The examples of custom subscripting implementation can be found in
+   <filename>subscripting.sql</filename> and <filename>subscripting.c</filename>
+   in the <filename>src/tutorial</> directory of the source distribution.
+   See the <filename>README</> file in that directory for instructions
+   about running the examples.
+  </para>
+
+</sect1>

@@ -147,7 +147,7 @@ static void deparseExpr(Expr *expr, deparse_expr_cxt *context);
 static void deparseVar(Var *node, deparse_expr_cxt *context);
 static void deparseConst(Const *node, deparse_expr_cxt *context, int showtype);
 static void deparseParam(Param *node, deparse_expr_cxt *context);
-static void deparseArrayRef(ArrayRef *node, deparse_expr_cxt *context);
+static void deparseSubscriptingRef(SubscriptingRef *node, deparse_expr_cxt *context);
 static void deparseFuncExpr(FuncExpr *node, deparse_expr_cxt *context);
 static void deparseOpExpr(OpExpr *node, deparse_expr_cxt *context);
 static void deparseOperatorName(StringInfo buf, Form_pg_operator opform);
@@ -398,9 +398,9 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_UNSAFE;
 			}
 			break;
-		case T_ArrayRef:
+		case T_SubscriptingRef:
 			{
-				ArrayRef   *ar = (ArrayRef *) node;
+				SubscriptingRef   *ar = (SubscriptingRef *) node;
 
 				/* Assignment should not be in restrictions. */
 				if (ar->refassgnexpr != NULL)
@@ -2132,8 +2132,8 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_Param:
 			deparseParam((Param *) node, context);
 			break;
-		case T_ArrayRef:
-			deparseArrayRef((ArrayRef *) node, context);
+		case T_SubscriptingRef:
+			deparseSubscriptingRef((SubscriptingRef *) node, context);
 			break;
 		case T_FuncExpr:
 			deparseFuncExpr((FuncExpr *) node, context);
@@ -2382,7 +2382,7 @@ deparseParam(Param *node, deparse_expr_cxt *context)
  * Deparse an array subscript expression.
  */
 static void
-deparseArrayRef(ArrayRef *node, deparse_expr_cxt *context)
+deparseSubscriptingRef(SubscriptingRef *node, deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
 	ListCell   *lowlist_item;

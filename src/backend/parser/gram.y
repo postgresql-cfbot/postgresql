@@ -395,7 +395,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
-				publication_name_list
+				publication_name_list depends_on_func_list
+
+%type <defelt>	func_elem
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -7710,6 +7712,10 @@ createfunc_opt_item:
 				{
 					$$ = makeDefElem("window", (Node *)makeInteger(TRUE), @1);
 				}
+			| DEPENDS depends_on_func_list
+				{
+					$$ = makeDefElem("depends", (Node *)$2, @1);
+				}
 			| common_func_opt_item
 				{
 					$$ = $1;
@@ -7724,8 +7730,19 @@ func_as:	Sconst						{ $$ = list_make1(makeString($1)); }
 		;
 
 transform_type_list:
-			FOR TYPE_P Typename { $$ = list_make1($3); }
-			| transform_type_list ',' FOR TYPE_P Typename { $$ = lappend($1, $5); }
+											 FOR TYPE_P Typename { $$ = list_make1($3); }
+											 | transform_type_list ',' FOR TYPE_P Typename { $$ = lappend($1, $5); }
+							 ;
+
+depends_on_func_list:	ON func_elem													 { $$ = list_make1($2); }
+											 | depends_on_func_list ',' func_elem   { $$ = lappend($1, $3); }
+							 ;
+
+func_elem:
+			type_function_name
+				{
+					$$ = makeDefElem("func_name", (Node *)makeString($1), @1);
+				}
 		;
 
 opt_definition:

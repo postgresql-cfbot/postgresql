@@ -671,7 +671,6 @@ typedef struct WindowFuncExprState
 	int			wfuncno;		/* ID number for wfunc within its plan node */
 } WindowFuncExprState;
 
-
 /* ----------------
  *		SetExprState node
  *

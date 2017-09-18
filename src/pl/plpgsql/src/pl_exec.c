@@ -4716,7 +4716,7 @@ exec_assign_value(PLpgSQL_execstate *estate,
 
 				/*
 				 * Evaluate the subscripts, switch into left-to-right order.
-				 * Like the expression built by ExecInitArrayRef(), complain
+				 * Like the expression built by ExecInitSubscriptingRef(), complain
 				 * if any subscript is null.
 				 */
 				for (i = 0; i < nsubscripts; i++)
@@ -6459,7 +6459,6 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 
 	return cast_entry;
 }
-
 
 /* ----------
  * exec_simple_check_plan -		Check if a plan is simple enough to

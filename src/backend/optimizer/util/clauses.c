@@ -1319,12 +1319,10 @@ contain_nonstrict_functions_walker(Node *node, void *context)
 		/* a window function could return non-null with null input */
 		return true;
 	}
-	if (IsA(node, ArrayRef))
+	if (IsA(node, SubscriptingRef))
 	{
 		/* array assignment is nonstrict, but subscripting is strict */
-		if (((ArrayRef *) node)->refassgnexpr != NULL)
-			return true;
-		/* else fall through to check args */
+		return true;
 	}
 	if (IsA(node, DistinctExpr))
 	{
@@ -1500,7 +1498,6 @@ contain_leaked_vars_walker(Node *node, void *context)
 		case T_Var:
 		case T_Const:
 		case T_Param:
-		case T_ArrayRef:
 		case T_ArrayExpr:
 		case T_FieldSelect:
 		case T_FieldStore:
@@ -1531,6 +1528,7 @@ contain_leaked_vars_walker(Node *node, void *context)
 		case T_ScalarArrayOpExpr:
 		case T_CoerceViaIO:
 		case T_ArrayCoerceExpr:
+		case T_SubscriptingRef:
 
 			/*
 			 * If node contains a leaky function call, and there's any Var
@@ -3576,7 +3574,7 @@ eval_const_expressions_mutator(Node *node,
 	 * For any node type not handled above, we recurse using
 	 * expression_tree_mutator, which will copy the node unchanged but try to
 	 * simplify its arguments (if any) using this routine. For example: we
-	 * cannot eliminate an ArrayRef node, but we might be able to simplify
+	 * cannot eliminate an SubscriptingRef node, but we might be able to simplify
 	 * constant expressions in its subscripts.
 	 */
 	return expression_tree_mutator(node, eval_const_expressions_mutator,

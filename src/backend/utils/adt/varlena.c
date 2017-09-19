@@ -4734,6 +4734,38 @@ string_agg_finalfn(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Prepare cache with typeOutput fmgr info for any argument of
+ * concat like function.
+ */
+static FmgrInfo *
+build_concat_typcache(FunctionCallInfo fcinfo, int argidx)
+{
+	FmgrInfo *typcache;
+	int		i;
+
+	typcache = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
+										PG_NARGS() * sizeof(FmgrInfo));
+
+	for (i = argidx; i < PG_NARGS(); i++)
+	{
+		Oid			valtype;
+		Oid			typOutput;
+		bool		typIsVarlena;
+
+		valtype = get_fn_expr_argtype(fcinfo->flinfo, i);
+		if (!OidIsValid(valtype))
+			elog(ERROR, "could not determine data type of concat() input");
+
+		getTypeOutputInfo(valtype, &typOutput, &typIsVarlena);
+		fmgr_info_cxt(typOutput, &typcache[i-argidx], fcinfo->flinfo->fn_mcxt);
+	}
+
+	fcinfo->flinfo->fn_extra = typcache;
+
+	return typcache;
+}
+
+/*
  * Implementation of both concat() and concat_ws().
  *
  * sepstr is the separator string to place between values.
@@ -4748,6 +4780,7 @@ concat_internal(const char *sepstr, int argidx,
 	StringInfoData str;
 	bool		first_arg = true;
 	int			i;
+	FmgrInfo   *typcache;
 
 	/*
 	 * concat(VARIADIC some-array) is essentially equivalent to
@@ -4787,14 +4820,15 @@ concat_internal(const char *sepstr, int argidx,
 	/* Normal case without explicit VARIADIC marker */
 	initStringInfo(&str);
 
+	typcache = (FmgrInfo *) fcinfo->flinfo->fn_extra;
+	if (typcache == NULL)
+		typcache = build_concat_typcache(fcinfo, argidx);
+
 	for (i = argidx; i < PG_NARGS(); i++)
 	{
 		if (!PG_ARGISNULL(i))
 		{
 			Datum		value = PG_GETARG_DATUM(i);
-			Oid			valtype;
-			Oid			typOutput;
-			bool		typIsVarlena;
 
 			/* add separator if appropriate */
 			if (first_arg)
@@ -4802,13 +4836,8 @@ concat_internal(const char *sepstr, int argidx,
 			else
 				appendStringInfoString(&str, sepstr);
 
-			/* call the appropriate type output function, append the result */
-			valtype = get_fn_expr_argtype(fcinfo->flinfo, i);
-			if (!OidIsValid(valtype))
-				elog(ERROR, "could not determine data type of concat() input");
-			getTypeOutputInfo(valtype, &typOutput, &typIsVarlena);
 			appendStringInfoString(&str,
-								   OidOutputFunctionCall(typOutput, value));
+					OutputFunctionCall(&typcache[i-argidx], value));
 		}
 	}
 

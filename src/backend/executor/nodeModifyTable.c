@@ -708,13 +708,23 @@ ExecDelete(ModifyTableState *mtstate,
 	if (resultRelInfo->ri_TrigDesc &&
 		resultRelInfo->ri_TrigDesc->trig_delete_instead_row)
 	{
-		bool		dodelete;
+		/*
+		 * Store the heap tuple into the tuple table slot, making sure we have a
+		 * writable copy.  We can use the trigger tuple slot.
+		 */
+		slot = estate->es_trig_tuple_slot;
+		if (slot->tts_tupleDescriptor != RelationGetDescr(resultRelationDesc))
+			ExecSetSlotDescriptor(slot, RelationGetDescr(resultRelationDesc));
+		ExecStoreTuple(oldtuple, slot, InvalidBuffer, false);
+		oldtuple = ExecMaterializeSlot(slot);
 
-		Assert(oldtuple != NULL);
-		dodelete = ExecIRDeleteTriggers(estate, resultRelInfo, oldtuple);
+		slot = ExecIRDeleteTriggers(estate, resultRelInfo, oldtuple, slot);
 
-		if (!dodelete)			/* "do nothing" */
+		if (slot == NULL)			/* "do nothing" */
 			return NULL;
+
+		/* trigger might have changed tuple */
+		oldtuple = ExecMaterializeSlot(slot);
 	}
 	else if (resultRelInfo->ri_FdwRoutine)
 	{
@@ -855,14 +865,22 @@ ldelete:;
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
 	{
-		/*
-		 * We have to put the target tuple into a slot, which means first we
-		 * gotta fetch it.  We can use the trigger tuple slot.
-		 */
 		TupleTableSlot *rslot;
 		HeapTupleData deltuple;
 		Buffer		delbuffer;
 
+		/*
+		 * If we fired an INSTEAD OF trigger, we should use the tuple returned
+		 * from said trigger for the RETURNING projections.
+		 */
+		if (resultRelInfo->ri_TrigDesc &&
+			resultRelInfo->ri_TrigDesc->trig_delete_instead_row)
+			return ExecProcessReturning(resultRelInfo, slot, planSlot);
+
+		/*
+		 * Otherwise we have to to fetch the target tuple into a slot.  We can
+		 * use the trigger tuple slot here as well.
+		 */
 		if (resultRelInfo->ri_FdwRoutine)
 		{
 			/* FDW must have provided a slot containing the deleted row */

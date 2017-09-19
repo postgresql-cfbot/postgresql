@@ -206,7 +206,9 @@
     change the data returned by
     <command>INSERT RETURNING</> or <command>UPDATE RETURNING</>,
     and is useful when the view will not show exactly the same data
-    that was provided.
+    that was provided.  Likewise, for <command>DELETE</> operations the
+    <varname>OLD</> variable can be modified before returning it, and
+    the changes will be reflected in the output data.
    </para>
 
    <para>

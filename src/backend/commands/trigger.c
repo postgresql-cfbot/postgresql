@@ -2600,13 +2600,13 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 	}
 }
 
-bool
+TupleTableSlot *
 ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
-					 HeapTuple trigtuple)
+					 HeapTuple trigtuple, TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 	TriggerData LocTriggerData;
-	HeapTuple	rettuple;
+	HeapTuple	rettuple = trigtuple;
 	int			i;
 
 	LocTriggerData.type = T_TriggerData;
@@ -2640,11 +2640,27 @@ ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 									   relinfo->ri_TrigInstrument,
 									   GetPerTupleMemoryContext(estate));
 		if (rettuple == NULL)
-			return false;		/* Delete was suppressed */
-		if (rettuple != trigtuple)
-			heap_freetuple(rettuple);
+			return NULL;		/* Delete was suppressed */
 	}
-	return true;
+
+	if (rettuple != trigtuple)
+	{
+		/*
+		 * Return the modified tuple using the es_trig_tuple_slot.  We assume
+		 * the tuple was allocated in per-tuple memory context, and therefore
+		 * will go away by itself. The tuple table slot should not try to
+		 * clear it.
+		 */
+		TupleTableSlot *newslot = estate->es_trig_tuple_slot;
+		TupleDesc	tupdesc = RelationGetDescr(relinfo->ri_RelationDesc);
+
+		if (newslot->tts_tupleDescriptor != tupdesc)
+			ExecSetSlotDescriptor(newslot, tupdesc);
+		ExecStoreTuple(rettuple, newslot, InvalidBuffer, false);
+		slot = newslot;
+	}
+
+	return slot;
 }
 
 void

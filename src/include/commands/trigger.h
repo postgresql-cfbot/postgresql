@@ -211,9 +211,10 @@ extern void ExecARDeleteTriggers(EState *estate,
 					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
 					 TransitionCaptureState *transition_capture);
-extern bool ExecIRDeleteTriggers(EState *estate,
+extern TupleTableSlot *ExecIRDeleteTriggers(EState *estate,
 					 ResultRelInfo *relinfo,
-					 HeapTuple trigtuple);
+					 HeapTuple trigtuple,
+					 TupleTableSlot *slot);
 extern void ExecBSUpdateTriggers(EState *estate,
 					 ResultRelInfo *relinfo);
 extern void ExecASUpdateTriggers(EState *estate,

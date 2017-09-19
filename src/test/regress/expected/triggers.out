@@ -1309,6 +1309,33 @@ UPDATE 0
 DELETE FROM european_city_view;
 DELETE 0
 \set QUIET true
+-- modifying RETURNING from INSTEAD OF triggers on DELETEs
+CREATE VIEW instead_of_delete_returning AS SELECT 1 AS fff;
+CREATE FUNCTION instead_of_delete_returning_f() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER instead_of_delete_returning_t INSTEAD OF DELETE ON instead_of_delete_returning
+FOR EACH ROW EXECUTE PROCEDURE instead_of_delete_returning_f();
+DELETE FROM instead_of_delete_returning RETURNING *;
+ fff 
+-----
+(0 rows)
+
+CREATE OR REPLACE FUNCTION instead_of_delete_returning_f() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    OLD.fff := 3;
+    RETURN OLD;
+END;
+$$;
+DELETE FROM instead_of_delete_returning RETURNING *;
+ fff 
+-----
+   3
+(1 row)
+
+DROP VIEW instead_of_delete_returning CASCADE;
 -- rules bypassing no-op triggers
 CREATE RULE european_city_insert_rule AS ON INSERT TO european_city_view
 DO INSTEAD INSERT INTO city_view

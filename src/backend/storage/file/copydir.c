@@ -41,7 +41,7 @@ copydir(char *fromdir, char *todir, bool recurse)
 	char		fromfile[MAXPGPATH * 2];
 	char		tofile[MAXPGPATH * 2];
 
-	if (mkdir(todir, S_IRWXU) != 0)
+	if (MakeDirectory(todir) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not create directory \"%s\": %m", todir)));
@@ -148,14 +148,13 @@ copy_file(char *fromfile, char *tofile)
 	/*
 	 * Open the files
 	 */
-	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY, 0);
+	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
 	if (srcfd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", fromfile)));
 
-	dstfd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
-							  S_IRUSR | S_IWUSR);
+	dstfd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
 	if (dstfd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),

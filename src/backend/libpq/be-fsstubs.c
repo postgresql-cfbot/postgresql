@@ -462,7 +462,7 @@ lo_import_internal(text *filename, Oid lobjOid)
 	 * open the file to be read in
 	 */
 	text_to_cstring_buffer(filename, fnamebuf, sizeof(fnamebuf));
-	fd = OpenTransientFile(fnamebuf, O_RDONLY | PG_BINARY, S_IRWXU);
+	fd = OpenTransientFile(fnamebuf, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -531,16 +531,9 @@ be_lo_export(PG_FUNCTION_ARGS)
 
 	/*
 	 * open the file to be written to
-	 *
-	 * Note: we reduce backend's normal 077 umask to the slightly friendlier
-	 * 022. This code used to drop it all the way to 0, but creating
-	 * world-writable export files doesn't seem wise.
 	 */
 	text_to_cstring_buffer(filename, fnamebuf, sizeof(fnamebuf));
-	oumask = umask(S_IWGRP | S_IWOTH);
-	fd = OpenTransientFile(fnamebuf, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY,
-						   S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-	umask(oumask);
+	fd = OpenTransientFile(fnamebuf, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -562,6 +555,18 @@ be_lo_export(PG_FUNCTION_ARGS)
 
 	CloseTransientFile(fd);
 	inv_close(lobj);
+
+	/*
+	 * Allow group read.  This code used make export files world-writable but that
+	 * doesn't seem wise.
+	 */
+	if (chmod(fnamebuf, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) != 0)
+	{
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not set permissions on server file \"%s\": %m",
+							fnamebuf)));
+	}
 
 	PG_RETURN_INT32(1);
 }

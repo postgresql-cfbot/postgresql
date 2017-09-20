@@ -604,7 +604,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 	if (fsync_fname_ext(oldfile, false, false, elevel) != 0)
 		return -1;
 
-	fd = OpenTransientFile((char *) newfile, PG_BINARY | O_RDWR, 0);
+	fd = OpenTransientFile((char *) newfile, PG_BINARY | O_RDWR);
 	if (fd < 0)
 	{
 		if (errno != ENOENT)
@@ -917,6 +917,16 @@ set_max_safe_fds(void)
 }
 
 /*
+ * Open a file with BasicOpenFilePerm() and pass PG_FILE_MODE_DEFAULT to the
+ * fileMode parameter.
+ */
+int
+BasicOpenFile(FileName fileName, int fileFlags)
+{
+	return BasicOpenFilePerm(fileName, fileFlags, PG_FILE_MODE_DEFAULT);
+}
+
+/*
  * BasicOpenFile --- same as open(2) except can free other FDs if needed
  *
  * This is exported for use by places that really want a plain kernel FD,
@@ -933,7 +943,7 @@ set_max_safe_fds(void)
  * this module wouldn't have any open files to close at that point anyway.
  */
 int
-BasicOpenFile(FileName fileName, int fileFlags, int fileMode)
+BasicOpenFilePerm(FileName fileName, int fileFlags, int fileMode)
 {
 	int			fd;
 
@@ -1084,8 +1094,8 @@ LruInsert(File file)
 		 * overall system file table being full.  So, be prepared to release
 		 * another FD if necessary...
 		 */
-		vfdP->fd = BasicOpenFile(vfdP->fileName, vfdP->fileFlags,
-								 vfdP->fileMode);
+		vfdP->fd = BasicOpenFilePerm(vfdP->fileName, vfdP->fileFlags,
+									 vfdP->fileMode);
 		if (vfdP->fd < 0)
 		{
 			DO_DB(elog(LOG, "re-open failed: %m"));
@@ -1293,6 +1303,16 @@ FileInvalidate(File file)
 #endif
 
 /*
+ * Open a file with PathNameOpenFilePerm() and pass PG_FILE_MODE_DEFAULT to the
+ * fileMode parameter.
+ */
+File
+PathNameOpenFile(FileName fileName, int fileFlags)
+{
+	return PathNameOpenFilePerm(fileName, fileFlags, PG_FILE_MODE_DEFAULT);
+}
+
+/*
  * open a file in an arbitrary directory
  *
  * NB: if the passed pathname is relative (which it usually is),
@@ -1300,13 +1320,13 @@ FileInvalidate(File file)
  * (which should always be $PGDATA when this code is running).
  */
 File
-PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
+PathNameOpenFilePerm(FileName fileName, int fileFlags, int fileMode)
 {
 	char	   *fnamecopy;
 	File		file;
 	Vfd		   *vfdP;
 
-	DO_DB(elog(LOG, "PathNameOpenFile: %s %x %o",
+	DO_DB(elog(LOG, "PathNameOpenFilePerm: %s %x %o",
 			   fileName, fileFlags, fileMode));
 
 	/*
@@ -1324,7 +1344,7 @@ PathNameOpenFile(FileName fileName, int fileFlags, int fileMode)
 	/* Close excess kernel FDs. */
 	ReleaseLruFiles();
 
-	vfdP->fd = BasicOpenFile(fileName, fileFlags, fileMode);
+	vfdP->fd = BasicOpenFilePerm(fileName, fileFlags, fileMode);
 
 	if (vfdP->fd < 0)
 	{
@@ -1461,23 +1481,21 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 	 * temp file that can be reused.
 	 */
 	file = PathNameOpenFile(tempfilepath,
-							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
-							0600);
+							O_RDWR | O_CREAT | O_TRUNC | PG_BINARY);
 	if (file <= 0)
 	{
 		/*
 		 * We might need to create the tablespace's tempfile directory, if no
 		 * one has yet done so.
 		 *
-		 * Don't check for error from mkdir; it could fail if someone else
+		 * Don't check for error from MakeDirectory; it could fail if someone else
 		 * just did the same thing.  If it doesn't work then we'll bomb out on
 		 * the second create attempt, instead.
 		 */
-		mkdir(tempdirpath, S_IRWXU);
+		MakeDirectory(tempdirpath);
 
 		file = PathNameOpenFile(tempfilepath,
-								O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
-								0600);
+								O_RDWR | O_CREAT | O_TRUNC | PG_BINARY);
 		if (file <= 0 && rejectError)
 			elog(ERROR, "could not create temporary file \"%s\": %m",
 				 tempfilepath);
@@ -2136,12 +2154,21 @@ TryAgain:
 	return NULL;
 }
 
+/*
+ * Open a file with OpenTransientFilePerm() and pass PG_FILE_MODE_DEFAULT to
+ * the fileMode parameter.
+ */
+int
+OpenTransientFile(FileName fileName, int fileFlags)
+{
+	return OpenTransientFilePerm(fileName, fileFlags, PG_FILE_MODE_DEFAULT);
+}
 
 /*
  * Like AllocateFile, but returns an unbuffered fd like open(2)
  */
 int
-OpenTransientFile(FileName fileName, int fileFlags, int fileMode)
+OpenTransientFilePerm(FileName fileName, int fileFlags, int fileMode)
 {
 	int			fd;
 
@@ -2158,7 +2185,7 @@ OpenTransientFile(FileName fileName, int fileFlags, int fileMode)
 	/* Close excess kernel FDs. */
 	ReleaseLruFiles();
 
-	fd = BasicOpenFile(fileName, fileFlags, fileMode);
+	fd = BasicOpenFilePerm(fileName, fileFlags, fileMode);
 
 	if (fd >= 0)
 	{
@@ -3081,7 +3108,7 @@ pre_sync_fname(const char *fname, bool isdir, int elevel)
 	if (isdir)
 		return;
 
-	fd = OpenTransientFile((char *) fname, O_RDONLY | PG_BINARY, 0);
+	fd = OpenTransientFile((char *) fname, O_RDONLY | PG_BINARY);
 
 	if (fd < 0)
 	{
@@ -3141,7 +3168,7 @@ fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel)
 	else
 		flags |= O_RDONLY;
 
-	fd = OpenTransientFile((char *) fname, flags, 0);
+	fd = OpenTransientFile((char *) fname, flags);
 
 	/*
 	 * Some OSs don't allow us to open directories at all (Windows returns
@@ -3212,4 +3239,23 @@ fsync_parent_path(const char *fname, int elevel)
 		return -1;
 
 	return 0;
+}
+
+/*
+ * Create a directory with MakeDirectoryPerm() and pass PG_DIR_MODE_DEFAULT to
+ * the directoryMode parameter.
+ */
+int
+MakeDirectory(const char *directoryName)
+{
+	return MakeDirectoryPerm(directoryName, PG_DIR_MODE_DEFAULT);
+}
+
+/*
+ * Create a directory with the specified mode.
+ */
+int
+MakeDirectoryPerm(const char *directoryName, int directoryMode)
+{
+	return mkdir(directoryName, directoryMode);
 }

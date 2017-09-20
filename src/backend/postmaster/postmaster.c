@@ -4447,7 +4447,7 @@ internal_forkexec(int argc, char *argv[], Port *port)
 		 * As in OpenTemporaryFileInTablespace, try to make the temp-file
 		 * directory
 		 */
-		mkdir(PG_TEMP_FILES_DIR, S_IRWXU);
+		MakeDirectory(PG_TEMP_FILES_DIR);
 
 		fp = AllocateFile(tmpfilename, PG_BINARY_W);
 		if (!fp)

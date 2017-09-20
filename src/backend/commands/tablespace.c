@@ -151,7 +151,7 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 			else
 			{
 				/* Directory creation failed? */
-				if (mkdir(dir, S_IRWXU) < 0)
+				if (MakeDirectory(dir) < 0)
 				{
 					char	   *parentdir;
 
@@ -173,7 +173,7 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 					get_parent_directory(parentdir);
 					get_parent_directory(parentdir);
 					/* Can't create parent and it doesn't already exist? */
-					if (mkdir(parentdir, S_IRWXU) < 0 && errno != EEXIST)
+					if (MakeDirectory(parentdir) < 0 && errno != EEXIST)
 						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("could not create directory \"%s\": %m",
@@ -184,7 +184,7 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 					parentdir = pstrdup(dir);
 					get_parent_directory(parentdir);
 					/* Can't create parent and it doesn't already exist? */
-					if (mkdir(parentdir, S_IRWXU) < 0 && errno != EEXIST)
+					if (MakeDirectory(parentdir) < 0 && errno != EEXIST)
 						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("could not create directory \"%s\": %m",
@@ -192,7 +192,7 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 					pfree(parentdir);
 
 					/* Create database directory */
-					if (mkdir(dir, S_IRWXU) < 0)
+					if (MakeDirectory(dir) < 0)
 						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("could not create directory \"%s\": %m",
@@ -279,7 +279,7 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	/*
 	 * Check that location isn't too long. Remember that we're going to append
 	 * 'PG_XXX/<dboid>/<relid>_<fork>.<nnn>'.  FYI, we never actually
-	 * reference the whole path here, but mkdir() uses the first two parts.
+	 * reference the whole path here, but MakeDirectory() uses the first two parts.
 	 */
 	if (strlen(location) + 1 + strlen(TABLESPACE_VERSION_DIRECTORY) + 1 +
 		OIDCHARS + 1 + OIDCHARS + 1 + FORKNAMECHARS + 1 + OIDCHARS > MAXPGPATH)
@@ -574,7 +574,7 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 	 * Attempt to coerce target directory to safe permissions.  If this fails,
 	 * it doesn't exist or has the wrong owner.
 	 */
-	if (chmod(location, S_IRWXU) != 0)
+	if (chmod(location, PG_DIR_MODE_DEFAULT) != 0)
 	{
 		if (errno == ENOENT)
 			ereport(ERROR,
@@ -599,7 +599,7 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 		if (stat(location_with_version_dir, &st) == 0 && S_ISDIR(st.st_mode))
 		{
 			if (!rmtree(location_with_version_dir, true))
-				/* If this failed, mkdir() below is going to error. */
+				/* If this failed, MakeDirectory() below is going to error. */
 				ereport(WARNING,
 						(errmsg("some useless files may be left behind in old database directory \"%s\"",
 								location_with_version_dir)));
@@ -610,7 +610,7 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 	 * The creation of the version directory prevents more than one tablespace
 	 * in a single location.
 	 */
-	if (mkdir(location_with_version_dir, S_IRWXU) < 0)
+	if (MakeDirectory(location_with_version_dir) < 0)
 	{
 		if (errno == EEXIST)
 			ereport(ERROR,

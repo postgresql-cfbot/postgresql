@@ -22,7 +22,7 @@
  * Use them for all file activity...
  *
  *	File fd;
- *	fd = PathNameOpenFile("foo", O_RDONLY, 0600);
+ *	fd = PathNameOpenFile("foo", O_RDONLY);
  *
  *	AllocateFile();
  *	FreeFile();
@@ -59,13 +59,17 @@ extern int	max_files_per_process;
  */
 extern int	max_safe_fds;
 
+/* Define default file/directory modes. */
+#define PG_FILE_MODE_DEFAULT	(S_IRUSR | S_IWUSR)
+#define PG_DIR_MODE_DEFAULT		(S_IRWXU)
 
 /*
  * prototypes for functions in fd.c
  */
 
 /* Operations on virtual Files --- equivalent to Unix kernel file ops */
-extern File PathNameOpenFile(FileName fileName, int fileFlags, int fileMode);
+extern File PathNameOpenFile(FileName fileName, int fileFlags);
+extern File PathNameOpenFilePerm(FileName fileName, int fileFlags, int fileMode);
 extern File OpenTemporaryFile(bool interXact);
 extern void FileClose(File file);
 extern int	FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info);
@@ -94,11 +98,17 @@ extern struct dirent *ReadDir(DIR *dir, const char *dirname);
 extern int	FreeDir(DIR *dir);
 
 /* Operations to allow use of a plain kernel FD, with automatic cleanup */
-extern int	OpenTransientFile(FileName fileName, int fileFlags, int fileMode);
+extern int	OpenTransientFile(FileName fileName, int fileFlags);
+extern int	OpenTransientFilePerm(FileName fileName, int fileFlags, int fileMode);
 extern int	CloseTransientFile(int fd);
 
 /* If you've really really gotta have a plain kernel FD, use this */
-extern int	BasicOpenFile(FileName fileName, int fileFlags, int fileMode);
+extern int	BasicOpenFile(FileName fileName, int fileFlags);
+extern int	BasicOpenFilePerm(FileName fileName, int fileFlags, int fileMode);
+
+/* Operations to make directories */
+extern int MakeDirectory(const char *directoryName);
+extern int MakeDirectoryPerm(const char *directoryName, int directoryMode);
 
 /* Miscellaneous support routines */
 extern void InitFileAccess(void);

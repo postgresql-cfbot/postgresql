@@ -26,7 +26,6 @@
 #include <zlib.h>
 #endif
 
-#include "access/xlog_internal.h"
 #include "common/file_utils.h"
 #include "common/string.h"
 #include "fe_utils/string_utils.h"
@@ -556,7 +555,7 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier)
 	}
 	param->startptr = ((uint64) hi) << 32 | lo;
 	/* Round off to even segment position */
-	param->startptr -= XLogSegmentOffset(param->startptr, WalSegSz);
+	param->startptr -= param->startptr % XLOG_SEG_SIZE;
 
 #ifndef WIN32
 	/* Create our background pipe */
@@ -2397,10 +2396,6 @@ main(int argc, char **argv)
 		/* Error message already written in GetConnection() */
 		exit(1);
 	}
-
-	/* determine remote server's xlog segment size */
-	if (!RetrieveWalSegSize(conn))
-		disconnect_and_exit(1);
 
 	/* Create pg_wal symlink, if required */
 	if (xlog_dir)

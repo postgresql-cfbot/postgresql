@@ -654,8 +654,7 @@ XLogTruncateRelation(RelFileNode rnode, ForkNumber forkNum,
  * frontend).  Probably these should be merged at some point.
  */
 static void
-XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
-		 Size count)
+XLogRead(char *buf, TimeLineID tli, XLogRecPtr startptr, Size count)
 {
 	char	   *p;
 	XLogRecPtr	recptr;
@@ -667,8 +666,6 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 	static TimeLineID sendTLI = 0;
 	static uint32 sendOff = 0;
 
-	Assert(segsize == wal_segment_size);
-
 	p = buf;
 	recptr = startptr;
 	nbytes = count;
@@ -679,10 +676,10 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		int			segbytes;
 		int			readbytes;
 
-		startoff = XLogSegmentOffset(recptr, segsize);
+		startoff = recptr % XLogSegSize;
 
 		/* Do we need to switch to a different xlog segment? */
-		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, segsize) ||
+		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo) ||
 			sendTLI != tli)
 		{
 			char		path[MAXPGPATH];
@@ -690,9 +687,9 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 			if (sendFile >= 0)
 				close(sendFile);
 
-			XLByteToSeg(recptr, sendSegNo, segsize);
+			XLByteToSeg(recptr, sendSegNo);
 
-			XLogFilePath(path, tli, sendSegNo, segsize);
+			XLogFilePath(path, tli, sendSegNo);
 
 			sendFile = BasicOpenFile(path, O_RDONLY | PG_BINARY, 0);
 
@@ -720,7 +717,7 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 			{
 				char		path[MAXPGPATH];
 
-				XLogFilePath(path, tli, sendSegNo, segsize);
+				XLogFilePath(path, tli, sendSegNo);
 
 				ereport(ERROR,
 						(errcode_for_file_access(),
@@ -731,8 +728,8 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		}
 
 		/* How many bytes are within this segment? */
-		if (nbytes > (segsize - startoff))
-			segbytes = segsize - startoff;
+		if (nbytes > (XLogSegSize - startoff))
+			segbytes = XLogSegSize - startoff;
 		else
 			segbytes = nbytes;
 
@@ -743,7 +740,7 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		{
 			char		path[MAXPGPATH];
 
-			XLogFilePath(path, tli, sendSegNo, segsize);
+			XLogFilePath(path, tli, sendSegNo);
 
 			ereport(ERROR,
 					(errcode_for_file_access(),
@@ -801,8 +798,7 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 void
 XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wantLength)
 {
-	const XLogRecPtr lastReadPage = state->readSegNo *
-		state->wal_segment_size + state->readOff;
+	const XLogRecPtr lastReadPage = state->readSegNo * XLogSegSize + state->readOff;
 
 	Assert(wantPage != InvalidXLogRecPtr && wantPage % XLOG_BLCKSZ == 0);
 	Assert(wantLength <= XLOG_BLCKSZ);
@@ -846,8 +842,7 @@ XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wa
 	if (state->currTLIValidUntil != InvalidXLogRecPtr &&
 		state->currTLI != ThisTimeLineID &&
 		state->currTLI != 0 &&
-		((wantPage + wantLength) / state->wal_segment_size) <
-		(state->currTLIValidUntil / state->wal_segment_size))
+		(wantPage + wantLength) / XLogSegSize < state->currTLIValidUntil / XLogSegSize)
 		return;
 
 	/*
@@ -869,11 +864,9 @@ XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wa
 		 */
 		List	   *timelineHistory = readTimeLineHistory(ThisTimeLineID);
 
-		XLogRecPtr	endOfSegment = (((wantPage / state->wal_segment_size) + 1)
-									* state->wal_segment_size) - 1;
+		XLogRecPtr	endOfSegment = (((wantPage / XLogSegSize) + 1) * XLogSegSize) - 1;
 
-		Assert(wantPage / state->wal_segment_size ==
-			   endOfSegment / state->wal_segment_size);
+		Assert(wantPage / XLogSegSize == endOfSegment / XLogSegSize);
 
 		/*
 		 * Find the timeline of the last LSN on the segment containing
@@ -1021,8 +1014,7 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	 * as 'count', read the whole page anyway. It's guaranteed to be
 	 * zero-padded up to the page boundary if it's incomplete.
 	 */
-	XLogRead(cur_page, state->wal_segment_size, *pageTLI, targetPagePtr,
-			 XLOG_BLCKSZ);
+	XLogRead(cur_page, *pageTLI, targetPagePtr, XLOG_BLCKSZ);
 
 	/* number of valid bytes in the buffer */
 	return count;

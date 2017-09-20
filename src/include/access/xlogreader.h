@@ -74,11 +74,6 @@ struct XLogReaderState
 	 */
 
 	/*
-	 * Segment size of the to-be-parsed data (mandatory).
-	 */
-	int			wal_segment_size;
-
-	/*
 	 * Data input callback (mandatory).
 	 *
 	 * This callback shall read at least reqLen valid bytes of the xlog page
@@ -194,8 +189,7 @@ struct XLogReaderState
 };
 
 /* Get a new XLogReader */
-extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
-				   XLogPageReadCB pagereadfunc,
+extern XLogReaderState *XLogReaderAllocate(XLogPageReadCB pagereadfunc,
 				   void *private_data);
 
 /* Free an XLogReader */

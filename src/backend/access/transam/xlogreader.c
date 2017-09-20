@@ -64,8 +64,7 @@ report_invalid_record(XLogReaderState *state, const char *fmt,...)
  * Returns NULL if the xlogreader couldn't be allocated.
  */
 XLogReaderState *
-XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
-				   void *private_data)
+XLogReaderAllocate(XLogPageReadCB pagereadfunc, void *private_data)
 {
 	XLogReaderState *state;
 
@@ -92,7 +91,6 @@ XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
 		return NULL;
 	}
 
-	state->wal_segment_size = wal_segment_size;
 	state->read_page = pagereadfunc;
 	/* system_identifier initialized to zeroes above */
 	state->private_data = private_data;
@@ -468,8 +466,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 		(record->xl_info & ~XLR_INFO_MASK) == XLOG_SWITCH)
 	{
 		/* Pretend it extends to end of segment */
-		state->EndRecPtr += state->wal_segment_size - 1;
-		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->wal_segment_size);
+		state->EndRecPtr += XLogSegSize - 1;
+		state->EndRecPtr -= state->EndRecPtr % XLogSegSize;
 	}
 
 	if (DecodeXLogRecord(state, record, errormsg))
@@ -511,8 +509,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 	Assert((pageptr % XLOG_BLCKSZ) == 0);
 
-	XLByteToSeg(pageptr, targetSegNo, state->wal_segment_size);
-	targetPageOff = XLogSegmentOffset(pageptr, state->wal_segment_size);
+	XLByteToSeg(pageptr, targetSegNo);
+	targetPageOff = (pageptr % XLogSegSize);
 
 	/* check whether we have all the requested data already */
 	if (targetSegNo == state->readSegNo && targetPageOff == state->readOff &&
@@ -721,16 +719,16 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 
 	Assert((recptr % XLOG_BLCKSZ) == 0);
 
-	XLByteToSeg(recptr, segno, state->wal_segment_size);
-	offset = XLogSegmentOffset(recptr, state->wal_segment_size);
+	XLByteToSeg(recptr, segno);
+	offset = recptr % XLogSegSize;
 
-	XLogSegNoOffsetToRecPtr(segno, offset, recaddr, state->wal_segment_size);
+	XLogSegNoOffsetToRecPtr(segno, offset, recaddr);
 
 	if (hdr->xlp_magic != XLOG_PAGE_MAGIC)
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->readPageTLI, segno);
 
 		report_invalid_record(state,
 							  "invalid magic number %04X in log segment %s, offset %u",
@@ -744,7 +742,7 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->readPageTLI, segno);
 
 		report_invalid_record(state,
 							  "invalid info bits %04X in log segment %s, offset %u",
@@ -777,10 +775,10 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 								  fhdrident_str, sysident_str);
 			return false;
 		}
-		else if (longhdr->xlp_seg_size != state->wal_segment_size)
+		else if (longhdr->xlp_seg_size != XLogSegSize)
 		{
 			report_invalid_record(state,
-								  "WAL file is from different database system: incorrect segment size in page header");
+								  "WAL file is from different database system: incorrect XLOG_SEG_SIZE in page header");
 			return false;
 		}
 		else if (longhdr->xlp_xlog_blcksz != XLOG_BLCKSZ)
@@ -794,7 +792,7 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->readPageTLI, segno);
 
 		/* hmm, first page of file doesn't have a long header? */
 		report_invalid_record(state,
@@ -809,7 +807,7 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->readPageTLI, segno);
 
 		report_invalid_record(state,
 							  "unexpected pageaddr %X/%X in log segment %s, offset %u",
@@ -834,7 +832,7 @@ ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
 		{
 			char		fname[MAXFNAMELEN];
 
-			XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+			XLogFileName(fname, state->readPageTLI, segno);
 
 			report_invalid_record(state,
 								  "out-of-sequence timeline ID %u (after %u) in log segment %s, offset %u",

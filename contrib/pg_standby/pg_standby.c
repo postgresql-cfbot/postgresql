@@ -36,8 +36,6 @@
 
 const char *progname;
 
-int			WalSegSz = -1;
-
 /* Options and defaults */
 int			sleeptime = 5;		/* amount of time to sleep between file checks */
 int			waittime = -1;		/* how long we have been waiting, -1 no wait
@@ -101,10 +99,6 @@ int			nextWALFileType;
 	snprintf(restoreCommand, MAXPGPATH, cmd " \"%s\" \"%s\"", arg1, arg2)
 
 struct stat stat_buf;
-
-static bool SetWALFileNameForCleanup(void);
-static bool SetWALSegSize(void);
-
 
 /* =====================================================================
  *
@@ -182,35 +176,6 @@ CustomizableNextWALFileReady(void)
 	if (stat(WALFilePath, &stat_buf) == 0)
 	{
 		/*
-		 * If we've not seen any WAL segments, we don't know the WAL segment
-		 * size, which we need. If it looks like a WAL segment, determine size
-		 * of segments for the cluster.
-		 */
-		if (WalSegSz == -1 && IsXLogFileName(nextWALFileName))
-		{
-			if (SetWALSegSize())
-			{
-				/*
-				 * Successfully determined WAL segment size. Can compute
-				 * cleanup cutoff now.
-				 */
-				need_cleanup = SetWALFileNameForCleanup();
-				if (debug)
-				{
-					fprintf(stderr,
-							_("WAL segment size:     %d \n"), WalSegSz);
-					fprintf(stderr, "Keep archive history: ");
-
-					if (need_cleanup)
-						fprintf(stderr, "%s and later\n",
-								exclusiveCleanupFileName);
-					else
-						fprintf(stderr, "no cleanup required\n");
-				}
-			}
-		}
-
-		/*
 		 * If it's a backup file, return immediately. If it's a regular file
 		 * return only if it's the right size already.
 		 */
@@ -219,7 +184,7 @@ CustomizableNextWALFileReady(void)
 			nextWALFileType = XLOG_BACKUP_LABEL;
 			return true;
 		}
-		else if (WalSegSz > 0 && stat_buf.st_size == WalSegSz)
+		else if (stat_buf.st_size == XLOG_SEG_SIZE)
 		{
 #ifdef WIN32
 
@@ -239,7 +204,7 @@ CustomizableNextWALFileReady(void)
 		/*
 		 * If still too small, wait until it is the correct size
 		 */
-		if (WalSegSz > 0 && stat_buf.st_size > WalSegSz)
+		if (stat_buf.st_size > XLOG_SEG_SIZE)
 		{
 			if (debug)
 			{
@@ -252,6 +217,8 @@ CustomizableNextWALFileReady(void)
 
 	return false;
 }
+
+#define MaxSegmentsPerLogFile ( 0xFFFFFFFF / XLOG_SEG_SIZE )
 
 static void
 CustomizableCleanupPriorWALFiles(void)
@@ -348,7 +315,6 @@ SetWALFileNameForCleanup(void)
 	uint32		log_diff = 0,
 				seg_diff = 0;
 	bool		cleanup = false;
-	int			max_segments_per_logfile = (0xFFFFFFFF / WalSegSz);
 
 	if (restartWALFileName)
 	{
@@ -370,12 +336,12 @@ SetWALFileNameForCleanup(void)
 		sscanf(nextWALFileName, "%08X%08X%08X", &tli, &log, &seg);
 		if (tli > 0 && seg > 0)
 		{
-			log_diff = keepfiles / max_segments_per_logfile;
-			seg_diff = keepfiles % max_segments_per_logfile;
+			log_diff = keepfiles / MaxSegmentsPerLogFile;
+			seg_diff = keepfiles % MaxSegmentsPerLogFile;
 			if (seg_diff > seg)
 			{
 				log_diff++;
-				seg = max_segments_per_logfile - (seg_diff - seg);
+				seg = MaxSegmentsPerLogFile - (seg_diff - seg);
 			}
 			else
 				seg -= seg_diff;
@@ -396,66 +362,6 @@ SetWALFileNameForCleanup(void)
 	XLogFileNameById(exclusiveCleanupFileName, tli, log, seg);
 
 	return cleanup;
-}
-
-/*
- * Try to set the wal segment size from the WAL file specified by WALFilePath.
- *
- * Return true if size could be determined, false otherwise.
- */
-static bool
-SetWALSegSize(void)
-{
-	bool		ret_val = false;
-	int			fd;
-	char	   *buf = (char *) malloc(XLOG_BLCKSZ);
-
-	Assert(WalSegSz == -1);
-
-	if ((fd = open(WALFilePath, O_RDWR, 0)) < 0)
-	{
-		fprintf(stderr, "%s: couldn't open WAL file \"%s\"\n",
-				progname, WALFilePath);
-		return false;
-	}
-	if (read(fd, buf, XLOG_BLCKSZ) == XLOG_BLCKSZ)
-	{
-		XLogLongPageHeader longhdr = (XLogLongPageHeader) buf;
-
-		WalSegSz = longhdr->xlp_seg_size;
-
-		if (IsValidWalSegSize(WalSegSz))
-		{
-			/* successfully retrieved WAL segment size */
-			ret_val = true;
-		}
-		else
-			fprintf(stderr,
-					"%s: WAL segment size must be a power of two between 1MB and 1GB, but the WAL file header specifies %d bytes\n",
-					progname, WalSegSz);
-		close(fd);
-	}
-	else
-	{
-		/*
-		 * Don't complain loudly, this is to be expected for segments being
-		 * created.
-		 */
-		if (errno != 0)
-		{
-			if (debug)
-				fprintf(stderr, "could not read file \"%s\": %s",
-						WALFilePath, strerror(errno));
-		}
-		else
-		{
-			if (debug)
-				fprintf(stderr, "not enough data in file \"%s\"", WALFilePath);
-		}
-	}
-
-	fflush(stderr);
-	return ret_val;
 }
 
 /*
@@ -802,6 +708,8 @@ main(int argc, char **argv)
 
 	CustomizableInitialize();
 
+	need_cleanup = SetWALFileNameForCleanup();
+
 	if (debug)
 	{
 		fprintf(stderr, "Trigger file:         %s\n", triggerPath ? triggerPath : "<not set>");
@@ -813,6 +721,11 @@ main(int argc, char **argv)
 		fprintf(stderr, "Max wait interval:    %d %s\n",
 				maxwaittime, (maxwaittime > 0 ? "seconds" : "forever"));
 		fprintf(stderr, "Command for restore:  %s\n", restoreCommand);
+		fprintf(stderr, "Keep archive history: ");
+		if (need_cleanup)
+			fprintf(stderr, "%s and later\n", exclusiveCleanupFileName);
+		else
+			fprintf(stderr, "no cleanup required\n");
 		fflush(stderr);
 	}
 

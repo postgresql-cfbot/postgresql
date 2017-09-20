@@ -134,14 +134,13 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	if (cleanupEnabled)
 	{
 		GetOldestRestartPoint(&restartRedoPtr, &restartTli);
-		XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
-		XLogFileName(lastRestartPointFname, restartTli, restartSegNo,
-					 wal_segment_size);
+		XLByteToSeg(restartRedoPtr, restartSegNo);
+		XLogFileName(lastRestartPointFname, restartTli, restartSegNo);
 		/* we shouldn't need anything earlier than last restart point */
 		Assert(strcmp(lastRestartPointFname, xlogfname) <= 0);
 	}
 	else
-		XLogFileName(lastRestartPointFname, 0, 0L, wal_segment_size);
+		XLogFileName(lastRestartPointFname, 0, 0L);
 
 	/*
 	 * construct the command to be executed
@@ -348,9 +347,8 @@ ExecuteRecoveryCommand(char *command, char *commandName, bool failOnSignal)
 	 * archive, though there is no requirement to do so.
 	 */
 	GetOldestRestartPoint(&restartRedoPtr, &restartTli);
-	XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
-	XLogFileName(lastRestartPointFname, restartTli, restartSegNo,
-				 wal_segment_size);
+	XLByteToSeg(restartRedoPtr, restartSegNo);
+	XLogFileName(lastRestartPointFname, restartTli, restartSegNo);
 
 	/*
 	 * construct the command to be executed
@@ -549,7 +547,7 @@ XLogArchiveNotifySeg(XLogSegNo segno)
 {
 	char		xlog[MAXFNAMELEN];
 
-	XLogFileName(xlog, ThisTimeLineID, segno, wal_segment_size);
+	XLogFileName(xlog, ThisTimeLineID, segno);
 	XLogArchiveNotify(xlog);
 }
 

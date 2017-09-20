@@ -70,7 +70,6 @@ static MultiXactId set_mxid = 0;
 static MultiXactOffset set_mxoff = (MultiXactOffset) -1;
 static uint32 minXlogTli = 0;
 static XLogSegNo minXlogSegNo = 0;
-static int	WalSegSz;
 
 static void CheckDataVersion(void);
 static bool ReadControlFile(void);
@@ -95,7 +94,6 @@ main(int argc, char *argv[])
 	char	   *endptr;
 	char	   *endptr2;
 	char	   *DataDir = NULL;
-	char	   *log_fname = NULL;
 	int			fd;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_resetwal"));
@@ -267,12 +265,7 @@ main(int argc, char *argv[])
 					fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 					exit(1);
 				}
-
-				/*
-				 * XLogFromFileName requires wal segment size which is not yet
-				 * set. Hence wal details are set later on.
-				 */
-				log_fname = pg_strdup(optarg);
+				XLogFromFileName(optarg, &minXlogTli, &minXlogSegNo);
 				break;
 
 			default:
@@ -356,9 +349,6 @@ main(int argc, char *argv[])
 	 */
 	if (!ReadControlFile())
 		GuessControlValues();
-
-	if (log_fname != NULL)
-		XLogFromFileName(log_fname, &minXlogTli, &minXlogSegNo, WalSegSz);
 
 	/*
 	 * Also look at existing segment files to set up newXlogSegNo
@@ -583,27 +573,18 @@ ReadControlFile(void)
 					offsetof(ControlFileData, crc));
 		FIN_CRC32C(crc);
 
-		if (!EQ_CRC32C(crc, ((ControlFileData *) buffer)->crc))
+		if (EQ_CRC32C(crc, ((ControlFileData *) buffer)->crc))
 		{
-			/* We will use the data but treat it as guessed. */
-			fprintf(stderr,
-					_("%s: pg_control exists but has invalid CRC; proceed with caution\n"),
-					progname);
-			guessed = true;
+			/* Valid data... */
+			memcpy(&ControlFile, buffer, sizeof(ControlFile));
+			return true;
 		}
 
+		fprintf(stderr, _("%s: pg_control exists but has invalid CRC; proceed with caution\n"),
+				progname);
+		/* We will use the data anyway, but treat it as guessed. */
 		memcpy(&ControlFile, buffer, sizeof(ControlFile));
-		WalSegSz = ControlFile.xlog_seg_size;
-
-		/* return false if WalSegSz is not valid */
-		if (!IsValidWalSegSize(WalSegSz))
-		{
-			fprintf(stderr,
-					_("%s: pg_control specifies invalid WAL segment size (%d bytes); proceed with caution \n"),
-					progname, WalSegSz);
-			guessed = true;
-		}
-
+		guessed = true;
 		return true;
 	}
 
@@ -679,7 +660,7 @@ GuessControlValues(void)
 	ControlFile.blcksz = BLCKSZ;
 	ControlFile.relseg_size = RELSEG_SIZE;
 	ControlFile.xlog_blcksz = XLOG_BLCKSZ;
-	ControlFile.xlog_seg_size = DEFAULT_XLOG_SEG_SIZE;
+	ControlFile.xlog_seg_size = XLOG_SEG_SIZE;
 	ControlFile.nameDataLen = NAMEDATALEN;
 	ControlFile.indexMaxKeys = INDEX_MAX_KEYS;
 	ControlFile.toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
@@ -792,8 +773,7 @@ PrintNewControlValues(void)
 	/* This will be always printed in order to keep format same. */
 	printf(_("\n\nValues to be changed:\n\n"));
 
-	XLogFileName(fname, ControlFile.checkPointCopy.ThisTimeLineID,
-				 newXlogSegNo, WalSegSz);
+	XLogFileName(fname, ControlFile.checkPointCopy.ThisTimeLineID, newXlogSegNo);
 	printf(_("First log segment after reset:        %s\n"), fname);
 
 	if (set_mxid != 0)
@@ -870,7 +850,7 @@ RewriteControlFile(void)
 	 * newXlogSegNo.
 	 */
 	XLogSegNoOffsetToRecPtr(newXlogSegNo, SizeOfXLogLongPHD,
-							ControlFile.checkPointCopy.redo, WalSegSz);
+							ControlFile.checkPointCopy.redo);
 	ControlFile.checkPointCopy.time = (pg_time_t) time(NULL);
 
 	ControlFile.state = DB_SHUTDOWNED;
@@ -897,7 +877,7 @@ RewriteControlFile(void)
 	ControlFile.max_locks_per_xact = 64;
 
 	/* Now we can force the recorded xlog seg size to the right thing. */
-	ControlFile.xlog_seg_size = WalSegSz;
+	ControlFile.xlog_seg_size = XLogSegSize;
 
 	/* Contents are protected with a CRC */
 	INIT_CRC32C(ControlFile.crc);
@@ -1034,7 +1014,7 @@ FindEndOfXLOG(void)
 	 * are in virgin territory.
 	 */
 	xlogbytepos = newXlogSegNo * ControlFile.xlog_seg_size;
-	newXlogSegNo = (xlogbytepos + WalSegSz - 1) / WalSegSz;
+	newXlogSegNo = (xlogbytepos + XLogSegSize - 1) / XLogSegSize;
 	newXlogSegNo++;
 }
 
@@ -1171,7 +1151,7 @@ WriteEmptyXLOG(void)
 	page->xlp_pageaddr = ControlFile.checkPointCopy.redo - SizeOfXLogLongPHD;
 	longpage = (XLogLongPageHeader) page;
 	longpage->xlp_sysid = ControlFile.system_identifier;
-	longpage->xlp_seg_size = WalSegSz;
+	longpage->xlp_seg_size = XLogSegSize;
 	longpage->xlp_xlog_blcksz = XLOG_BLCKSZ;
 
 	/* Insert the initial checkpoint record */
@@ -1196,8 +1176,7 @@ WriteEmptyXLOG(void)
 	record->xl_crc = crc;
 
 	/* Write the first page */
-	XLogFilePath(path, ControlFile.checkPointCopy.ThisTimeLineID,
-				 newXlogSegNo, WalSegSz);
+	XLogFilePath(path, ControlFile.checkPointCopy.ThisTimeLineID, newXlogSegNo);
 
 	unlink(path);
 
@@ -1223,7 +1202,7 @@ WriteEmptyXLOG(void)
 
 	/* Fill the rest of the file with zeroes */
 	memset(buffer, 0, XLOG_BLCKSZ);
-	for (nbytes = XLOG_BLCKSZ; nbytes < WalSegSz; nbytes += XLOG_BLCKSZ)
+	for (nbytes = XLOG_BLCKSZ; nbytes < XLogSegSize; nbytes += XLOG_BLCKSZ)
 	{
 		errno = 0;
 		if (write(fd, buffer, XLOG_BLCKSZ) != XLOG_BLCKSZ)

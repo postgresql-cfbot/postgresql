@@ -44,7 +44,6 @@ static ControlFileData ControlFile_target;
 static ControlFileData ControlFile_source;
 
 const char *progname;
-int			WalSegSz;
 
 /* Configuration options */
 char	   *datadir_target = NULL;
@@ -573,8 +572,8 @@ createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli, XLogRecPtr checkpo
 	char		buf[1000];
 	int			len;
 
-	XLByteToSeg(startpoint, startsegno, WalSegSz);
-	XLogFileName(xlogfilename, starttli, startsegno, WalSegSz);
+	XLByteToSeg(startpoint, startsegno);
+	XLogFileName(xlogfilename, starttli, startsegno);
 
 	/*
 	 * Construct backup label file
@@ -631,13 +630,6 @@ digestControlFile(ControlFileData *ControlFile, char *src, size_t size)
 				 (int) size, PG_CONTROL_FILE_SIZE);
 
 	memcpy(ControlFile, src, sizeof(ControlFileData));
-
-	/* set and validate WalSegSz */
-	WalSegSz = ControlFile->xlog_seg_size;
-
-	if (!IsValidWalSegSize(WalSegSz))
-		pg_fatal("WAL segment size must be a power of two between 1MB and 1GB, but the control file specifies %d bytes\n",
-				 WalSegSz);
 
 	/* Additional checks on control file */
 	checkControlFile(ControlFile);

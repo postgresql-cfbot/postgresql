@@ -19,7 +19,6 @@
 
 #include "access/htup_details.h"
 #include "access/xact.h"
-#include "access/xlog_internal.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
@@ -223,7 +222,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -257,18 +256,6 @@ AuxiliaryProcessMain(int argc, char *argv[])
 				break;
 			case 'x':
 				MyAuxProcType = atoi(optarg);
-				break;
-			case 'X':
-				{
-					int			WalSegSz = strtoul(optarg, NULL, 0);
-
-					if (!IsValidWalSegSize(WalSegSz))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-								 errmsg("-X requires a power of 2 value between 1MB and 1GB")));
-					SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL,
-									PGC_S_OVERRIDE);
-				}
 				break;
 			case 'c':
 			case '-':

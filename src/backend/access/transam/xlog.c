@@ -10936,10 +10936,9 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	 * pg_control. This is harmless for current uses.
 	 *
 	 * XXX currently a backup history file is for informational and debug
-	 * purposes only. It's not essential for an online backup. Furthermore,
-	 * even if it's created, it will not be archived during recovery because
-	 * an archiver is not invoked. So it doesn't seem worthwhile to write a
-	 * backup history file during recovery.
+	 * purposes only. It's not essential for an online backup. It gets created
+	 * even during recovery as an archiver can be spawned in this case as
+	 * well.
 	 */
 	if (backup_started_in_recovery)
 	{
@@ -10984,49 +10983,48 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 		 * valid as soon as archiver moves out the current segment file.
 		 */
 		RequestXLogSwitch(false);
-
-		XLByteToPrevSeg(stoppoint, _logSegNo);
-		XLogFileName(stopxlogfilename, stoptli, _logSegNo);
-
-		/* Use the log timezone here, not the session timezone */
-		stamp_time = (pg_time_t) time(NULL);
-		pg_strftime(strfbuf, sizeof(strfbuf),
-					"%Y-%m-%d %H:%M:%S %Z",
-					pg_localtime(&stamp_time, log_timezone));
-
-		/*
-		 * Write the backup history file
-		 */
-		XLByteToSeg(startpoint, _logSegNo);
-		BackupHistoryFilePath(histfilepath, stoptli, _logSegNo,
-							  (uint32) (startpoint % XLogSegSize));
-		fp = AllocateFile(histfilepath, "w");
-		if (!fp)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not create file \"%s\": %m",
-							histfilepath)));
-		fprintf(fp, "START WAL LOCATION: %X/%X (file %s)\n",
-				(uint32) (startpoint >> 32), (uint32) startpoint, startxlogfilename);
-		fprintf(fp, "STOP WAL LOCATION: %X/%X (file %s)\n",
-				(uint32) (stoppoint >> 32), (uint32) stoppoint, stopxlogfilename);
-		/* transfer remaining lines from label to history file */
-		fprintf(fp, "%s", remaining);
-		fprintf(fp, "STOP TIME: %s\n", strfbuf);
-		if (fflush(fp) || ferror(fp) || FreeFile(fp))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write file \"%s\": %m",
-							histfilepath)));
-
-		/*
-		 * Clean out any no-longer-needed history files.  As a side effect,
-		 * this will post a .ready file for the newly created history file,
-		 * notifying the archiver that history file may be archived
-		 * immediately.
-		 */
-		CleanupBackupHistory();
 	}
+
+	/* Use the log timezone here, not the session timezone */
+	stamp_time = (pg_time_t) time(NULL);
+	pg_strftime(strfbuf, sizeof(strfbuf),
+				"%Y-%m-%d %H:%M:%S %Z",
+				pg_localtime(&stamp_time, log_timezone));
+
+	/*
+	 * Write the backup history file
+	 */
+	XLByteToPrevSeg(stoppoint, _logSegNo);
+	XLogFileName(stopxlogfilename, stoptli, _logSegNo);
+	XLByteToSeg(startpoint, _logSegNo);
+	BackupHistoryFilePath(histfilepath, stoptli, _logSegNo,
+						  (uint32) (startpoint % XLogSegSize));
+	fp = AllocateFile(histfilepath, "w");
+	if (!fp)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m",
+						histfilepath)));
+	fprintf(fp, "START WAL LOCATION: %X/%X (file %s)\n",
+			(uint32) (startpoint >> 32), (uint32) startpoint, startxlogfilename);
+	fprintf(fp, "STOP WAL LOCATION: %X/%X (file %s)\n",
+			(uint32) (stoppoint >> 32), (uint32) stoppoint, stopxlogfilename);
+	/* transfer remaining lines from label to history file */
+	fprintf(fp, "%s", remaining);
+	fprintf(fp, "STOP TIME: %s\n", strfbuf);
+	if (fflush(fp) || ferror(fp) || FreeFile(fp))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write file \"%s\": %m",
+						histfilepath)));
+
+	/*
+	 * Clean out any no-longer-needed history files.  As a side effect,
+	 * this will post a .ready file for the newly created history file,
+	 * notifying the archiver that history file may be archived
+	 * immediately.
+	 */
+	CleanupBackupHistory();
 
 	/*
 	 * If archiving is enabled, wait for all the required WAL files to be

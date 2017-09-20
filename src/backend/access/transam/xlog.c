@@ -105,6 +105,7 @@ int			wal_level = WAL_LEVEL_MINIMAL;
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
+int			max_slot_wal_keep_size_mb = 0;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -9365,6 +9366,85 @@ CreateRestartPoint(int flags)
 }
 
 /*
+ * Check if the record on the given lsn will be preserved at the next
+ * checkpoint.
+ *
+ * Returns true if it will be preserved. If distance is given, the distance
+ * from origin to the beginning of the first segment kept at the next
+ * checkpoint. It means margin when this function returns true and gap of lost
+ * records when false.
+ *
+ * This function should return the consistent result with KeepLogSeg.
+ */
+bool
+GetMarginToSlotSegmentLimit(XLogRecPtr restartLSN, uint64 *distance)
+{
+	XLogRecPtr currpos;
+	XLogRecPtr tailpos;
+	uint64 currSeg;
+	uint64 restByteInSeg;
+	uint64 restartSeg;
+	uint64 tailSeg;
+	uint64 keepSegs;
+
+	currpos = GetXLogWriteRecPtr();
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	tailpos = ControlFile->checkPointCopy.redo;
+	LWLockRelease(ControlFileLock);
+
+	/* Move the pointer to the beginning of the segment*/
+	XLByteToSeg(currpos, currSeg);
+	XLByteToSeg(restartLSN, restartSeg);
+	XLByteToSeg(tailpos, tailSeg);
+	restByteInSeg = 0;
+
+	Assert(wal_keep_segments >= 0);
+	Assert(max_slot_wal_keep_size_mb >= 0);
+
+	/*
+	 * WAL are removed by the unit of segment.
+	 */
+	keepSegs = wal_keep_segments + ConvertToXSegs(max_slot_wal_keep_size_mb);
+
+	/*
+	 * If the latest checkpoint's redo point is older than the current head
+	 * minus keep segments, the next checkpoint keeps the redo point's
+	 * segment. Elsewise use current head minus number of segments to keep.
+	 */
+	if (currSeg < tailSeg + keepSegs)
+	{
+		if (currSeg < keepSegs)
+			tailSeg = 0;
+		else
+			tailSeg = currSeg - keepSegs;
+
+		/* In this case, the margin will be the bytes to the next segment */
+		restByteInSeg = XLogSegSize - (currpos % XLogSegSize);
+	}
+
+	/* Required sements will be removed at the next checkpoint */
+	if (restartSeg < tailSeg)
+	{
+		/* Calculate how may bytes the slot have lost */
+		if (distance)
+		{
+			uint64 restbytes = (restartSeg + 1) * XLogSegSize - restartLSN;
+			*distance =
+				(tailSeg - restartSeg - 1) * XLogSegSize
+				+ restbytes;
+		}
+		return false;
+	}
+
+	/* Margin at the next checkpoint before the slot lose sync  */
+	if (distance)
+		*distance = (restartSeg - tailSeg) * XLogSegSize + restByteInSeg;
+
+	return true;
+}
+
+/*
  * Retreat *logSegNo to the last segment that we need to retain because of
  * either wal_keep_segments or replication slots.
  *
@@ -9395,8 +9475,31 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 	if (max_replication_slots > 0 && keep != InvalidXLogRecPtr)
 	{
 		XLogSegNo	slotSegNo;
+		int			slotlimitsegs = ConvertToXSegs(max_slot_wal_keep_size_mb);
 
 		XLByteToSeg(keep, slotSegNo);
+
+		/*
+		 * ignore slots if too many wal segments are kept.
+		 * max_slot_wal_keep_size is just accumulated on wal_keep_segments.
+		 */
+		if (max_slot_wal_keep_size_mb > 0 && slotSegNo + slotlimitsegs < segno)
+		{
+			segno = segno - slotlimitsegs; /* must be positive */
+
+			/*
+			 * warn only if the checkpoint flushes the required segment.
+			 * we assume here that *logSegNo is calculated keep location.
+			 */
+			if (slotSegNo < *logSegNo)
+				ereport(WARNING,
+					(errmsg ("restart LSN of replication slots is ignored by checkpoint"),
+					 errdetail("Some replication slots have lost required WAL segnents to continue by up to %ld segments.",
+					   (segno < *logSegNo ? segno : *logSegNo) - slotSegNo)));
+
+			/* emergency vent */
+			slotSegNo = segno;
+		}
 
 		if (slotSegNo <= 0)
 			segno = 1;

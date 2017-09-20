@@ -182,7 +182,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 11
+#define PG_GET_REPLICATION_SLOTS_COLS 13
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -303,6 +303,20 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 			values[i++] = LSNGetDatum(confirmed_flush_lsn);
 		else
 			nulls[i++] = true;
+
+		if (max_slot_wal_keep_size_mb > 0 && restart_lsn != InvalidXLogRecPtr)
+		{
+			uint64 distance;
+
+			values[i++] = BoolGetDatum(GetMarginToSlotSegmentLimit(restart_lsn,
+																   &distance));
+			values[i++] = Int64GetDatum(distance);
+		}
+		else
+		{
+			values[i++] = BoolGetDatum(true);
+			nulls[i++] = true;
+		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}

@@ -1403,21 +1403,35 @@ pgstat_report_autovac(Oid dboid)
  */
 void
 pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples)
+					 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					 int nindstats, PgStat_MsgVacuum_indstate *stats)
 {
-	PgStat_MsgVacuum msg;
+	PgStat_MsgVacuum *msg;
+	int i;
+	int msgsize;
 
 	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
 		return;
+	msgsize = offsetof(PgStat_MsgVacuum, m_indvacstates) +
+		MAXALIGN(sizeof(PgStat_MsgVacuum_indstate)) * nindstats;
 
-	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_VACUUM);
-	msg.m_databaseid = shared ? InvalidOid : MyDatabaseId;
-	msg.m_tableoid = tableoid;
-	msg.m_autovacuum = IsAutoVacuumWorkerProcess();
-	msg.m_vacuumtime = GetCurrentTimestamp();
-	msg.m_live_tuples = livetuples;
-	msg.m_dead_tuples = deadtuples;
-	pgstat_send(&msg, sizeof(msg));
+	msg = (PgStat_MsgVacuum *) palloc(msgsize);
+	pgstat_setheader(&msg->m_hdr, PGSTAT_MTYPE_VACUUM);
+	msg->m_databaseid = shared ? InvalidOid : MyDatabaseId;
+	msg->m_tableoid = tableoid;
+	msg->m_autovacuum = IsAutoVacuumWorkerProcess();
+	msg->m_vacuumtime = GetCurrentTimestamp();
+	msg->m_live_tuples = livetuples;
+	msg->m_dead_tuples = deadtuples;
+	msg->m_n_indvac_states = nindstats;
+
+	for (i = 0 ; i < nindstats ; i++)
+	{
+		msg->m_indvacstates[i].indexoid = stats[i].indexoid;
+		msg->m_indvacstates[i].vac_cleanup_needed = stats[i].vac_cleanup_needed;
+	}
+
+	pgstat_send(msg, msgsize);
 }
 
 /* --------
@@ -1535,7 +1549,13 @@ pgstat_report_tempfile(size_t filesize)
 	pgstat_send(&msg, sizeof(msg));
 }
 
-
+bool
+pgstat_live(void)
+{
+	if (pgStatSock == PGINVALID_SOCKET)
+		return false;
+	return true;
+}
 /* ----------
  * pgstat_ping() -
  *
@@ -4595,6 +4615,7 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->analyze_count = 0;
 		result->autovac_analyze_timestamp = 0;
 		result->autovac_analyze_count = 0;
+		result->needs_vacuum_cleanup = true;
 	}
 
 	return result;
@@ -5726,6 +5747,7 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->analyze_count = 0;
 			tabentry->autovac_analyze_timestamp = 0;
 			tabentry->autovac_analyze_count = 0;
+			tabentry->needs_vacuum_cleanup = true;
 		}
 		else
 		{
@@ -5971,6 +5993,7 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 {
 	PgStat_StatDBEntry *dbentry;
 	PgStat_StatTabEntry *tabentry;
+	int i;
 
 	/*
 	 * Store the data in the table's hashtable entry.
@@ -5991,6 +6014,17 @@ pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len)
 	{
 		tabentry->vacuum_timestamp = msg->m_vacuumtime;
 		tabentry->vacuum_count++;
+	}
+
+	/* store index vacuum stats */
+	for (i = 0 ; i < msg->m_n_indvac_states ; i++)
+	{
+		PgStat_StatTabEntry *indtabentry;
+		Oid indoid = msg->m_indvacstates[i].indexoid;
+		bool vac_cleanup_needed = msg->m_indvacstates[i].vac_cleanup_needed;
+
+		indtabentry = pgstat_get_tab_entry(dbentry, indoid, true);
+		indtabentry->needs_vacuum_cleanup = vac_cleanup_needed;
 	}
 }
 

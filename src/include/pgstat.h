@@ -360,6 +360,13 @@ typedef struct PgStat_MsgAutovacStart
  *								after VACUUM
  * ----------
  */
+typedef struct PgStat_MsgVacuum_indstate
+{
+	Oid		indexoid;
+	bool	vac_cleanup_needed;
+} PgStat_MsgVacuum_indstate;
+
+
 typedef struct PgStat_MsgVacuum
 {
 	PgStat_MsgHdr m_hdr;
@@ -369,8 +376,9 @@ typedef struct PgStat_MsgVacuum
 	TimestampTz m_vacuumtime;
 	PgStat_Counter m_live_tuples;
 	PgStat_Counter m_dead_tuples;
+	int			m_n_indvac_states;
+	PgStat_MsgVacuum_indstate m_indvacstates[FLEXIBLE_ARRAY_MEMBER];
 } PgStat_MsgVacuum;
-
 
 /* ----------
  * PgStat_MsgAnalyze			Sent by the backend or autovacuum daemon
@@ -641,6 +649,8 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;	/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
+
+	bool		 needs_vacuum_cleanup;	/* This index needs vac cleanup */
 } PgStat_StatTabEntry;
 
 
@@ -1165,8 +1175,9 @@ extern void pgstat_reset_single_counter(Oid objectid, PgStat_Single_Reset_Type t
 
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples);
-extern void pgstat_report_analyze(Relation rel,
+					 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					 int nindstats, PgStat_MsgVacuum_indstate *states);
+	extern void pgstat_report_analyze(Relation rel,
 					  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 					  bool resetcounter);
 
@@ -1178,6 +1189,7 @@ extern void pgstat_bestart(void);
 
 extern void pgstat_report_activity(BackendState state, const char *cmd_str);
 extern void pgstat_report_tempfile(size_t filesize);
+extern bool pgstat_live(void);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);

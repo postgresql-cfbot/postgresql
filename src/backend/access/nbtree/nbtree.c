@@ -63,6 +63,8 @@ typedef struct
 	BlockNumber lastBlockLocked;	/* highest blkno we've cleanup-locked */
 	BlockNumber totFreePages;	/* true total # of free pages */
 	MemoryContext pagedelcontext;
+	uint32		pages_notrecyclable;	/* # of not-yet-recyclable pages */
+	uint32		pages_halfdead;		/* # of half-dead pages */
 } BTVacState;
 
 /*
@@ -945,6 +947,8 @@ btbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 IndexBulkDeleteResult *
 btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 {
+	extern char *get_rel_name(Oid);
+
 	/* No-op in ANALYZE ONLY mode */
 	if (info->analyze_only)
 		return stats;
@@ -963,6 +967,11 @@ btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		stats = (IndexBulkDeleteResult *) palloc0(sizeof(IndexBulkDeleteResult));
 		btvacuumscan(info, stats, NULL, NULL, 0);
 	}
+	else
+		ereport(LOG,
+				(errmsg ("btvacuumcleanup on index %s is skipped since bulkdelete has run just before.",
+						 get_rel_name(info->index->rd_id)),
+				 errhidestmt (true)));
 
 	/* Finally, vacuum the FSM */
 	IndexFreeSpaceMapVacuum(info->index);
@@ -1004,6 +1013,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	BlockNumber num_pages;
 	BlockNumber blkno;
 	bool		needLock;
+	extern char *get_rel_name(Oid);
 
 	/*
 	 * Reset counts that will be incremented during the scan; needed in case
@@ -1022,6 +1032,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	vstate.lastBlockVacuumed = BTREE_METAPAGE;	/* Initialise at first block */
 	vstate.lastBlockLocked = BTREE_METAPAGE;
 	vstate.totFreePages = 0;
+	vstate.pages_notrecyclable = 0;
+	vstate.pages_halfdead = 0;
 
 	/* Create a temporary memory context to run _bt_pagedel in */
 	vstate.pagedelcontext = AllocSetContextCreate(CurrentMemoryContext,
@@ -1111,6 +1123,17 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	/* update statistics */
 	stats->num_pages = num_pages;
 	stats->pages_free = vstate.totFreePages;
+
+	/* check if we need no further clenaup */
+	if (vstate.pages_notrecyclable == 0 && vstate.pages_halfdead == 0)
+		stats->no_cleanup_needed = true;
+
+	ereport(LOG,
+			(errmsg ("btvacuumscan(%s) result: deleted = %d, notrecyclable = %d, hafldead = %d, no_cleanup_needed = %s",
+					 get_rel_name(rel->rd_id), stats->pages_deleted,
+					 vstate.pages_notrecyclable, vstate.pages_halfdead,
+					 stats->no_cleanup_needed ? "true":"false"),
+			 errhidestmt(true)));
 }
 
 /*
@@ -1190,6 +1213,7 @@ restart:
 	{
 		/* Already deleted, but can't recycle yet */
 		stats->pages_deleted++;
+		vstate->pages_notrecyclable++;
 	}
 	else if (P_ISHALFDEAD(opaque))
 	{
@@ -1359,6 +1383,8 @@ restart:
 		/* count only this page, else may double-count parent */
 		if (ndel)
 			stats->pages_deleted++;
+		else if (P_ISHALFDEAD(opaque))
+			vstate->pages_halfdead++;	/* Still half-dead */
 
 		MemoryContextSwitchTo(oldcontext);
 		/* pagedel released buffer, so we shouldn't */

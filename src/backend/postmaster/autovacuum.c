@@ -2791,6 +2791,13 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 							  effective_multixact_freeze_max_age,
 							  &dovacuum, &doanalyze, &wraparound);
 
+	/* force vacuum if any index on the rel is requesting cleanup scan */
+	if (!dovacuum)
+		dovacuum =
+			DatumGetBool(
+				DirectFunctionCall1(pg_stat_get_vac_cleanup_needed,
+									ObjectIdGetDatum(relid)));
+
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
 		doanalyze = false;
@@ -3045,6 +3052,13 @@ relation_needs_vacanalyze(Oid relid,
 		/* Determine if this table needs vacuum or analyze. */
 		*dovacuum = force_vacuum || (vactuples > vacthresh);
 		*doanalyze = (anltuples > anlthresh);
+
+		/* still force vacuum if index cleanup is requested */
+		if (!*dovacuum)
+			*dovacuum =
+				DatumGetBool(
+					DirectFunctionCall1(pg_stat_get_vac_cleanup_needed,
+										ObjectIdGetDatum(relid)));
 	}
 	else
 	{

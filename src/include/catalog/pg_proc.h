@@ -2871,6 +2871,8 @@ DATA(insert OID = 3054 ( pg_stat_get_vacuum_count PGNSP PGUID 12 1 0 0 0 f f f f
 DESCR("statistics: number of manual vacuums for a table");
 DATA(insert OID = 3055 ( pg_stat_get_autovacuum_count PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 20 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_autovacuum_count _null_ _null_ _null_ ));
 DESCR("statistics: number of auto vacuums for a table");
+DATA(insert OID = 3419 ( pg_stat_get_vac_cleanup_needed PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 16 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_vac_cleanup_needed _null_ _null_ _null_ ));
+DESCR("statistics: whether vacuum on a relation requires cleanup");
 DATA(insert OID = 3056 ( pg_stat_get_analyze_count PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 20 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_analyze_count _null_ _null_ _null_ ));
 DESCR("statistics: number of manual analyzes for a table");
 DATA(insert OID = 3057 ( pg_stat_get_autoanalyze_count PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 20 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_autoanalyze_count _null_ _null_ _null_ ));

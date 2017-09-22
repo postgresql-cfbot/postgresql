@@ -27,6 +27,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
@@ -325,6 +326,70 @@ pg_stat_get_autovacuum_count(PG_FUNCTION_ARGS)
 		result = (int64) (tabentry->autovac_vacuum_count);
 
 	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_vac_cleanup_needed(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	bool result;
+	PgStat_StatTabEntry *tabentry;
+	HeapTuple	reltup;
+	bool is_index = false;
+
+	if (!pgstat_live())
+		return true;
+
+	reltup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (HeapTupleIsValid(reltup))
+	{
+		if (((Form_pg_class) GETSTRUCT(reltup))->relkind == RELKIND_INDEX)
+			is_index = true;
+
+		ReleaseSysCache(reltup);
+	}
+
+	/*
+	 * If normal relaion is specified, return true if any index of the
+	 * relation is explicitly requesting cleanup.
+	 */
+	if (!is_index)
+	{
+		Relation indrel;
+		SysScanDesc indscan;
+		HeapTuple indtup;
+
+		result = false;
+		indrel = heap_open(IndexRelationId, AccessShareLock);
+		indscan = systable_beginscan(indrel, InvalidOid, false, NULL, 0, NULL);
+		while (HeapTupleIsValid(indtup = systable_getnext(indscan)) &&
+			   !result)
+		{
+			Form_pg_index ind = (Form_pg_index) GETSTRUCT(indtup);
+
+			if (ind->indrelid != relid)
+				continue;
+
+			if ((tabentry = pgstat_fetch_stat_tabentry(ind->indexrelid)))
+				result |= tabentry->needs_vacuum_cleanup;
+		}
+		systable_endscan(indscan);
+		heap_close(indrel, AccessShareLock);
+	}
+	else
+	{
+		/*
+		 * Elsewise reutrn the status of the index. As somewhat inconsistent
+		 * behavior with the normal relation case above, *true* is returned
+		 * for indexes with no stats here.
+		 */
+		if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+			result = true;
+		else
+			result = tabentry->needs_vacuum_cleanup;
+	}
+
+	PG_RETURN_BOOL(result);
 }
 
 Datum

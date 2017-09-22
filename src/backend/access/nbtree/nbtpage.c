@@ -1110,7 +1110,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 {
 	int			ndeleted = 0;
 	BlockNumber rightsib;
-	bool		rightsib_empty;
+	bool		rightsib_empty = false;
 	Page		page;
 	BTPageOpaque opaque;
 

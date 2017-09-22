@@ -56,6 +56,7 @@
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
+#include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
@@ -129,6 +130,8 @@ typedef struct LVRelStats
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
+	int			num_index_stats;
+	PgStat_MsgVacuum_indstate *indstats;
 } LVRelStats;
 
 
@@ -152,7 +155,7 @@ static void lazy_vacuum_index(Relation indrel,
 				  IndexBulkDeleteResult **stats,
 				  LVRelStats *vacrelstats);
 static void lazy_cleanup_index(Relation indrel,
-				   IndexBulkDeleteResult *stats,
+				   IndexBulkDeleteResult **stats,
 				   LVRelStats *vacrelstats);
 static int lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
@@ -342,7 +345,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	pgstat_report_vacuum(RelationGetRelid(onerel),
 						 onerel->rd_rel->relisshared,
 						 new_live_tuples,
-						 vacrelstats->new_dead_tuples);
+						 vacrelstats->new_dead_tuples,
+						 vacrelstats->num_index_stats, vacrelstats->indstats);
 	pgstat_progress_end_command();
 
 	/* and log the action if appropriate */
@@ -496,6 +500,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	indstats = (IndexBulkDeleteResult **)
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
+	vacrelstats->num_index_stats = nindexes;
+	vacrelstats->indstats = (PgStat_MsgVacuum_indstate *)
+		palloc0(nindexes * MAXALIGN(sizeof(PgStat_MsgVacuum_indstate)));
 
 	nblocks = RelationGetNumberOfBlocks(onerel);
 	vacrelstats->rel_pages = nblocks;
@@ -1320,7 +1327,18 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	/* Do post-vacuum cleanup and statistics update for each index */
 	for (i = 0; i < nindexes; i++)
-		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	{
+		lazy_cleanup_index(Irel[i], &indstats[i], vacrelstats);
+
+		/* update stats if indstats exists */
+		if (indstats[i])
+		{
+			/* prepare to record the result to stats */
+			vacrelstats->indstats[i].indexoid = Irel[i]->rd_id;
+			vacrelstats->indstats[i].vac_cleanup_needed =
+				!(indstats[i] && indstats[i]->no_cleanup_needed);
+		}
+	}
 
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
@@ -1622,11 +1640,13 @@ lazy_vacuum_index(Relation indrel,
  */
 static void
 lazy_cleanup_index(Relation indrel,
-				   IndexBulkDeleteResult *stats,
+				   IndexBulkDeleteResult **stats,
 				   LVRelStats *vacrelstats)
 {
 	IndexVacuumInfo ivinfo;
 	PGRUsage	ru0;
+	bool		run_cleanup = true;
+	extern char *get_rel_name(Oid);
 
 	pg_rusage_init(&ru0);
 
@@ -1637,19 +1657,40 @@ lazy_cleanup_index(Relation indrel,
 	ivinfo.num_heap_tuples = vacrelstats->new_rel_tuples;
 	ivinfo.strategy = vac_strategy;
 
-	stats = index_vacuum_cleanup(&ivinfo, stats);
+	/*
+	 * If lazy_vacuum_index tells me that no cleanup is required, or stats
+	 * tells so, skip cleanup.
+	 */
+	if (*stats)
+	{
+		if ((*stats)->no_cleanup_needed)
+			run_cleanup =false;
+	}
+	else
+		run_cleanup = DatumGetBool(
+			DirectFunctionCall1(pg_stat_get_vac_cleanup_needed,
+								ObjectIdGetDatum(indrel->rd_id)));
 
-	if (!stats)
+	ereport(LOG,
+			(errmsg ("Vacuum cleanup of index %s is %sskipped",
+					 get_rel_name(indrel->rd_id),
+					 run_cleanup ? "NOT ": ""),
+			 errhidestmt (true)));
+
+	if (run_cleanup)
+		*stats = index_vacuum_cleanup(&ivinfo, *stats);
+
+	if (!*stats)
 		return;
 
 	/*
 	 * Now update statistics in pg_class, but only if the index says the count
 	 * is accurate.
 	 */
-	if (!stats->estimated_count)
+	if (!(*stats)->estimated_count)
 		vac_update_relstats(indrel,
-							stats->num_pages,
-							stats->num_index_tuples,
+							(*stats)->num_pages,
+							(*stats)->num_index_tuples,
 							0,
 							false,
 							InvalidTransactionId,
@@ -1659,16 +1700,14 @@ lazy_cleanup_index(Relation indrel,
 	ereport(elevel,
 			(errmsg("index \"%s\" now contains %.0f row versions in %u pages",
 					RelationGetRelationName(indrel),
-					stats->num_index_tuples,
-					stats->num_pages),
+					(*stats)->num_index_tuples,
+					(*stats)->num_pages),
 			 errdetail("%.0f index row versions were removed.\n"
 					   "%u index pages have been deleted, %u are currently reusable.\n"
 					   "%s.",
-					   stats->tuples_removed,
-					   stats->pages_deleted, stats->pages_free,
+					   (*stats)->tuples_removed,
+					   (*stats)->pages_deleted, (*stats)->pages_free,
 					   pg_rusage_show(&ru0))));
-
-	pfree(stats);
 }
 
 /*

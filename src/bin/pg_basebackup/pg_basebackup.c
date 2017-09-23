@@ -93,6 +93,8 @@ static pg_time_t last_progress_report = 0;
 static int32 maxrate = 0;		/* no limit by default */
 static char *replication_slot = NULL;
 static bool temp_replication_slot = true;
+static bool create_slot = false;
+static bool no_slot = false;
 
 static bool success = false;
 static bool made_new_pgdata = false;
@@ -338,6 +340,7 @@ usage(void)
 			 "                         write recovery.conf for replication\n"));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
 	printf(_("      --no-slot          prevent creation of temporary replication slot\n"));
+	printf(_("  -C, --create-slot      create replication slot if not present already\n"));
 	printf(_("  -T, --tablespace-mapping=OLDDIR=NEWDIR\n"
 			 "                         relocate tablespace in OLDDIR to NEWDIR\n"));
 	printf(_("  -X, --wal-method=none|fetch|stream\n"
@@ -493,8 +496,6 @@ LogStreamerMain(logstreamer_param *param)
 	stream.partial_suffix = NULL;
 	stream.replication_slot = replication_slot;
 	stream.temp_slot = param->temp_slot;
-	if (stream.temp_slot && !stream.replication_slot)
-		stream.replication_slot = psprintf("pg_basebackup_%d", (int) PQbackendPID(param->bgconn));
 
 	if (format == 'p')
 		stream.walmethod = CreateWalDirectoryMethod(param->xlog, 0, do_sync);
@@ -586,6 +587,27 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier)
 		param->temp_slot = false;
 	else
 		param->temp_slot = temp_replication_slot;
+
+	/*
+	 * Create replication slot if one is needed.
+	 */
+	if (!no_slot && (temp_replication_slot || create_slot))
+	{
+		if (!replication_slot)
+			replication_slot = psprintf("pg_basebackup_%d", (int) PQbackendPID(param->bgconn));
+
+		if (!CreateReplicationSlot(param->bgconn, replication_slot, NULL, true,
+								   temp_replication_slot, false))
+			disconnect_and_exit(1);
+
+		if (verbose)
+			if (temp_replication_slot)
+				fprintf(stderr, _("%s: temporary replication slot \"%s\" created\n"),
+						progname, replication_slot);
+			else
+				fprintf(stderr, _("%s: replication slot \"%s\" created\n"),
+						progname, replication_slot);
+	}
 
 	if (format == 'p')
 	{
@@ -2100,12 +2122,12 @@ main(int argc, char **argv)
 		{"progress", no_argument, NULL, 'P'},
 		{"waldir", required_argument, NULL, 1},
 		{"no-slot", no_argument, NULL, 2},
+		{"create-slot", no_argument, NULL, 'C'},
 		{NULL, 0, NULL, 0}
 	};
 	int			c;
 
 	int			option_index;
-	bool		no_slot = false;
 
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
@@ -2127,7 +2149,7 @@ main(int argc, char **argv)
 
 	atexit(cleanup_directories_atexit);
 
-	while ((c = getopt_long(argc, argv, "D:F:r:RT:X:l:nNzZ:d:c:h:p:U:s:S:wWvP",
+	while ((c = getopt_long(argc, argv, "D:F:r:RS:CT:X:l:nNzZ:d:c:h:p:U:s:wWvP",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2162,6 +2184,9 @@ main(int argc, char **argv)
 				 */
 				replication_slot = pg_strdup(optarg);
 				temp_replication_slot = false;
+				break;
+			case 'C':
+				create_slot = true;
 				break;
 			case 2:
 				no_slot = true;
@@ -2346,6 +2371,29 @@ main(int argc, char **argv)
 			exit(1);
 		}
 		temp_replication_slot = false;
+	}
+
+	if (create_slot)
+	{
+		if (!replication_slot)
+		{
+			fprintf(stderr,
+					_("%s: creation of replication slots requires a slot name\n"),
+					progname);
+			fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+					progname);
+			exit(1);
+		}
+
+		if (no_slot)
+		{
+			fprintf(stderr,
+					_("%s: creation of replication slots requires a slot, but --no-slot was requested\n"),
+					progname);
+			fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+					progname);
+			exit(1);
+		}
 	}
 
 	if (xlog_dir)

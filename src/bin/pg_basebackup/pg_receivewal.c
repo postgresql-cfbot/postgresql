@@ -728,7 +728,7 @@ main(int argc, char **argv)
 					_("%s: creating replication slot \"%s\"\n"),
 					progname, replication_slot);
 
-		if (!CreateReplicationSlot(conn, replication_slot, NULL, true,
+		if (!CreateReplicationSlot(conn, replication_slot, NULL, true, false,
 								   slot_exists_ok))
 			disconnect_and_exit(1);
 		disconnect_and_exit(0);

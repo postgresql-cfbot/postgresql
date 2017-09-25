@@ -209,6 +209,8 @@ extern bool be_tls_get_compression(Port *port);
 extern void be_tls_get_version(Port *port, char *ptr, size_t len);
 extern void be_tls_get_cipher(Port *port, char *ptr, size_t len);
 extern void be_tls_get_peerdn_name(Port *port, char *ptr, size_t len);
+extern char *be_tls_get_peer_finish(Port *port, int *len);
+extern char *be_tls_get_certificate_hash(Port *port, int *len);
 #endif
 
 extern ProtocolVersion FrontendProtocol;

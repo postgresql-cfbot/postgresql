@@ -1461,10 +1461,11 @@ SELCT 1/0;
 
 <para>
 <firstterm>SASL</> is a framework for authentication in connection-oriented
-protocols. At the moment, <productname>PostgreSQL</> implements only one SASL
-authentication mechanism, SCRAM-SHA-256, but more might be added in the
-future. The below steps illustrate how SASL authentication is performed in
-general, while the next subsection gives more details on SCRAM-SHA-256.
+protocols. At the moment, <productname>PostgreSQL</> implements only two SASL
+authentication mechanisms, SCRAM-SHA-256 and SCRAM-SHA-256-PLUS, but more
+might be added in the future. The below steps illustrate how SASL
+authentication is performed in general, while the next subsection gives
+more details on SCRAM-SHA-256 and SCRAM-SHA-256-PLUS.
 </para>
 
 <procedure>
@@ -1547,7 +1548,10 @@ the password is in.
   </para>
 
   <para>
-<firstterm>Channel binding</> has not been implemented yet.
+<firstterm>Channel binding</> is supported in builds with SSL support, and
+uses as mechanism name <literal>SCRAM-SHA-256-PLUS</> for this purpose as
+defined per IANA. The channel binding types supported by the server
+are <literal>tls-unique</>, the default, and <literal>tls-server-end-point</>.
   </para>
 
 <procedure>
@@ -1556,14 +1560,18 @@ the password is in.
 <para>
   The server sends an AuthenticationSASL message. It includes a list of
   SASL authentication mechanisms that the server can accept.
+  <literal>SCRAM-SHA-256</> and <literal>SCRAM-SHA-256-PLUS</> are the
+  two mechanism names that the server lists in this message. Support for
+  channel binding is not included if the server is built without SSL
+  support and if the connection attempt is done without SSL.
 </para>
 </step>
 <step id="scram-client-first">
 <para>
   The client responds by sending a SASLInitialResponse message, which
-  indicates the chosen mechanism, <literal>SCRAM-SHA-256</>. In the Initial
-  Client response field, the message contains the SCRAM
-  <structname>client-first-message</>.
+  indicates the chosen mechanism, <literal>SCRAM-SHA-256</> or
+  <literal>SCRAM-SHA-256-PLUS</>. In the Initial Client response field,
+  the message contains the SCRAM <structname>client-first-message</>.
 </para>
 </step>
 <step id="scram-server-first">

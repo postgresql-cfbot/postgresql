@@ -393,6 +393,98 @@ pgtls_write(PGconn *conn, const void *ptr, size_t len)
 	return n;
 }
 
+/*
+ *	Get the TLS finish message sent during last handshake
+ *
+ * This information is useful for callers doing channel binding during
+ * authentication.
+ */
+char *
+pgtls_get_finish(PGconn *conn, int *len)
+{
+	char		dummy[1];
+	char	   *result;
+
+	/*
+	 * OpenSSL does not offer an API to get directly the length of the
+	 * TLS finish message sent, so first do a dummy call to grab this
+	 * information and then do an allocation with the correct size.
+	 */
+	*len = SSL_get_finished(conn->ssl, dummy, sizeof(dummy));
+	result = malloc(*len);
+	if (result == NULL)
+		return NULL;
+	(void) SSL_get_finished(conn->ssl, result, *len);
+	return result;
+}
+
+/*
+ *	Get the hash of the server certificate
+ *
+ * This information is useful for end-point channel binding, where
+ * the client certificate hash is used as a link, per RFC 5929.
+ */
+char *
+pgtls_get_peer_certificate_hash(PGconn *conn, int *len)
+{
+	char	   *cert_hash = NULL;
+
+	*len = 0;
+
+	if (conn->peer)
+	{
+		X509		   *peer_cert = conn->peer;
+		const EVP_MD   *algo_type = NULL;
+		char			hash[EVP_MAX_MD_SIZE];	/* size for SHA-512 */
+		unsigned int	hash_size;
+		int				algo_nid;
+
+		/*
+		 * Get the signature algorithm of the certificate to determine the
+		 * hash algorithm to use for the result.
+		 */
+		if (!OBJ_find_sigid_algs(X509_get_signature_nid(peer_cert),
+								 &algo_nid, NULL))
+			return NULL;
+
+		switch (algo_nid)
+		{
+			case NID_sha512:
+				algo_type = EVP_sha512();
+				break;
+
+			case NID_sha384:
+				algo_type = EVP_sha384();
+				break;
+
+			/*
+			 * Fallback to SHA-256 for weaker hashes, and keep them listed
+			 * here for reference.
+			 */
+			case NID_md5:
+			case NID_sha1:
+			case NID_sha224:
+			case NID_sha256:
+			default:
+				algo_type = EVP_sha256();
+				break;
+		}
+
+		if (!X509_digest(peer_cert, algo_type, (unsigned char *) hash,
+						 &hash_size))
+			return NULL;
+
+		/* save result */
+		cert_hash = (char *) malloc(hash_size);
+		if (cert_hash == NULL)
+			return NULL;
+		memcpy(cert_hash, hash, hash_size);
+		*len = hash_size;
+	}
+
+	return cert_hash;
+}
+
 /* ------------------------------------------------------------ */
 /*						OpenSSL specific code					*/
 /* ------------------------------------------------------------ */

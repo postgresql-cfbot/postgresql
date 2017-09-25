@@ -1216,6 +1216,99 @@ be_tls_get_peerdn_name(Port *port, char *ptr, size_t len)
 }
 
 /*
+ * Routine to get the expected TLS finish message information from the
+ * client, useful for authorization when doing channel binding.
+ *
+ * Result is a palloc'd copy of the TLS finish message with its size.
+ */
+char *
+be_tls_get_peer_finish(Port *port, int *len)
+{
+	char		dummy[1];
+	char	   *result;
+
+	/*
+	 * OpenSSL does not offer an API to get directly the length of the
+	 * expected TLS finish message, so just do a dummy call to grab this
+	 * information to allow caller to do an allocation with a correct size.
+	 */
+	*len = SSL_get_peer_finished(port->ssl, dummy, sizeof(dummy));
+	result = (char *) palloc(*len * sizeof(char));
+	(void) SSL_get_peer_finished(port->ssl, result, *len);
+
+	return result;
+}
+
+/*
+ * Get the server certificate hash for authentication purposes. Per
+ * RFC 5929 and tls-server-end-point, the TLS server's certificate bytes
+ * need to be hashed with SHA-256 if its signature algorithm is MD5 or
+ * SHA-1. If SHA-256 or something else is used, the same hash as the
+ * signature algorithm is used.
+ * The result is a palloc'd hash of the server certificate with its
+ * size, and NULL if there is nothing certificates available.
+ */
+char *
+be_tls_get_certificate_hash(Port *port, int *len)
+{
+	char	*cert_hash = NULL;
+	X509	*server_cert;
+
+	*len = 0;
+	server_cert = SSL_get_certificate(port->ssl);
+
+	if (server_cert != NULL)
+	{
+		const EVP_MD   *algo_type = NULL;
+		char			hash[EVP_MAX_MD_SIZE];	/* size for SHA-512 */
+		unsigned int	hash_size;
+		int				algo_nid;
+
+		/*
+		 * Get the signature algorithm of the certificate to determine the
+		 * hash algorithm to use for the result.
+		 */
+		if (!OBJ_find_sigid_algs(X509_get_signature_nid(server_cert),
+								 &algo_nid, NULL))
+			elog(ERROR, "could not find signature algorithm");
+
+		switch (algo_nid)
+		{
+			case NID_sha512:
+				algo_type = EVP_sha512();
+				break;
+
+			case NID_sha384:
+				algo_type = EVP_sha384();
+				break;
+
+			/*
+			 * Fallback to SHA-256 for weaker hashes, and keep them listed
+			 * here for reference.
+			 */
+			case NID_md5:
+			case NID_sha1:
+			case NID_sha224:
+			case NID_sha256:
+			default:
+				algo_type = EVP_sha256();
+				break;
+		}
+
+		/* generate and save the certificate hash */
+		if (!X509_digest(server_cert, algo_type, (unsigned char *) hash,
+						 &hash_size))
+			elog(ERROR, "could not generate server certificate hash");
+
+		cert_hash = (char *) palloc(hash_size);
+		memcpy(cert_hash, hash, hash_size);
+		*len = hash_size;
+	}
+
+	return cert_hash;
+}
+
+/*
  * Convert an X509 subject name to a cstring.
  *
  */

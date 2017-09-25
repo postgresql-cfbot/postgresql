@@ -859,10 +859,16 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	void	   *scram_opaq;
 	char	   *output = NULL;
 	int			outputlen = 0;
-	char	   *input;
+	char	   *input, *p;
+	char	   *sasl_mechs;
 	int			inputlen;
+	int			listlen = 0;
 	int			result;
 	bool		initial;
+	char	   *tls_finish = NULL;
+	int			tls_finish_len = 0;
+	char	   *certificate_bash = NULL;
+	int			certificate_bash_len = 0;
 
 	/*
 	 * SASL auth is not supported for protocol versions before 3, because it
@@ -879,12 +885,52 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 
 	/*
 	 * Send the SASL authentication request to user.  It includes the list of
-	 * authentication mechanisms (which is trivial, because we only support
-	 * SCRAM-SHA-256 at the moment).  The extra "\0" is for an empty string to
-	 * terminate the list.
+	 * authentication mechanisms that are supported:
+	 * - SCRAM-SHA-256, which is the mechanism with the same name.
+	 * - SCRAM-SHA-256-PLUS, which is SCRAM-SHA-256 with channel binding. This
+	 * is advertised to the client only if connection is attempted with SSL.
+	 * The order of mechanisms is advertised in decreasing order of importance.
+	 * The extra "\0" is for an empty string to terminate the list, and each
+	 * mechanism listed needs to be separated with "\0".
 	 */
-	sendAuthRequest(port, AUTH_REQ_SASL, SCRAM_SHA256_NAME "\0",
-					strlen(SCRAM_SHA256_NAME) + 2);
+	listlen = 0;
+	sasl_mechs = (char *) palloc(strlen(SCRAM_SHA256_PLUS_NAME) +
+								 strlen(SCRAM_SHA256_NAME) + 3);
+	p = sasl_mechs;
+
+	/* add SCRAM-SHA-256-PLUS, which depends on if SSL is in use */
+	if (port->ssl_in_use)
+	{
+		strcpy(p, SCRAM_SHA256_PLUS_NAME);
+		listlen += strlen(SCRAM_SHA256_PLUS_NAME) + 1;
+		p += strlen(SCRAM_SHA256_PLUS_NAME) + 1;
+	}
+
+	/* add generic SCRAM-SHA-256 */
+	strcpy(p, SCRAM_SHA256_NAME);
+	listlen += strlen(SCRAM_SHA256_NAME) + 1;
+	p += strlen(SCRAM_SHA256_NAME) + 1;
+
+	/* put "\0" to mark that list is finished */
+	p[0] = '\0';
+	listlen++;
+
+	sendAuthRequest(port, AUTH_REQ_SASL, sasl_mechs, listlen);
+	pfree(sasl_mechs);
+
+#ifdef USE_SSL
+	/*
+	 * Fetch the data related to the SSL finish message and the client
+	 * certificate (if any) to be used in the exchange.
+	 */
+	if (port->ssl_in_use)
+	{
+		tls_finish = be_tls_get_peer_finish(port, &tls_finish_len);
+		certificate_bash =
+			be_tls_get_certificate_hash(port,
+										&certificate_bash_len);
+	}
+#endif
 
 	/*
 	 * Initialize the status tracker for message exchanges.
@@ -897,7 +943,13 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	 * This is because we don't want to reveal to an attacker what usernames
 	 * are valid, nor which users have a valid password.
 	 */
-	scram_opaq = pg_be_scram_init(port->user_name, shadow_pass);
+	scram_opaq = pg_be_scram_init(port->user_name,
+								  shadow_pass,
+								  port->ssl_in_use,
+								  tls_finish,
+								  tls_finish_len,
+								  certificate_bash,
+								  certificate_bash_len);
 
 	/*
 	 * Loop through SASL message exchange.  This exchange can consist of
@@ -946,16 +998,35 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 			const char *selected_mech;
 
 			/*
-			 * We only support SCRAM-SHA-256 at the moment, so anything else
-			 * is an error.
+			 * We only support SCRAM-SHA-256 and SCRAM-SHA-256-PLUS at the
+			 * moment, so anything else is an error.
 			 */
 			selected_mech = pq_getmsgrawstring(&buf);
-			if (strcmp(selected_mech, SCRAM_SHA256_NAME) != 0)
+			if (strcmp(selected_mech, SCRAM_SHA256_NAME) != 0 &&
+				strcmp(selected_mech, SCRAM_SHA256_PLUS_NAME) != 0)
 			{
 				ereport(ERROR,
 						(errcode(ERRCODE_PROTOCOL_VIOLATION),
-						 errmsg("client selected an invalid SASL authentication mechanism")));
+						 errmsg("client selected an invalid SASL authentication mechanism"),
+						 errdetail("Incorrect SASL mechanism name specified")));
 			}
+
+#ifdef USE_SSL
+			/*
+			 * If an SSL connection is attempted, check for downgrade attacks.
+			 * A connection is not allowed to specify SCRAM-SHA-256 if its
+			 * -PLUS version has been submitted back to the client, which is
+			 * the default.
+			 */
+			if (port->ssl_in_use &&
+				strcmp(selected_mech, SCRAM_SHA256_NAME) == 0)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("client selected invalid SASL authentication mechanism"),
+						 errdetail("Channel binding published to client but not selected.")));
+			}
+#endif
 
 			inputlen = pq_getmsgint(&buf, 4);
 			if (inputlen == -1)

@@ -17,6 +17,7 @@
 #include "common/base64.h"
 #include "common/saslprep.h"
 #include "common/scram-common.h"
+#include "libpq/scram.h"
 #include "fe-auth.h"
 
 /* These are needed for getpid(), in the fallback implementation */
@@ -44,6 +45,13 @@ typedef struct
 	/* These are supplied by the user */
 	const char *username;
 	char	   *password;
+	bool		ssl_in_use;
+	char	   *tls_finish_message;
+	int			tls_finish_len;
+	char	   *certificate_hash;
+	int			certificate_hash_len;
+	/* enforceable user parameters */
+	char	   *saslchannelbinding;	/* name of channel binding to use */
 
 	/* We construct these */
 	uint8		SaltedPassword[SCRAM_KEY_LEN];
@@ -81,7 +89,14 @@ static bool pg_frontend_random(char *dst, int len);
  * Initialize SCRAM exchange status.
  */
 void *
-pg_fe_scram_init(const char *username, const char *password)
+pg_fe_scram_init(const char *username,
+				 const char *password,
+				 bool ssl_in_use,
+				 char *saslchannelbinding,
+				 char *tls_finish_message,
+				 int tls_finish_len,
+				 char *certificate_hash,
+				 int certificate_hash_len)
 {
 	fe_scram_state *state;
 	char	   *prep_password;
@@ -93,6 +108,20 @@ pg_fe_scram_init(const char *username, const char *password)
 	memset(state, 0, sizeof(fe_scram_state));
 	state->state = FE_SCRAM_INIT;
 	state->username = username;
+	state->ssl_in_use = ssl_in_use;
+	state->tls_finish_message = tls_finish_message;
+	state->tls_finish_len = tls_finish_len;
+	state->certificate_hash = certificate_hash;
+	state->certificate_hash_len = certificate_hash_len;
+
+	/*
+	 * If user has specified a channel binding to use, enforce the
+	 * channel binding sent to it.  The default is "tls-unique".
+	 */
+	if (saslchannelbinding && strlen(saslchannelbinding) > 0)
+		state->saslchannelbinding = strdup(saslchannelbinding);
+	else
+		state->saslchannelbinding = strdup(SCRAM_CHANNEL_TLS_UNIQUE);
 
 	/* Normalize the password with SASLprep, if possible */
 	rc = pg_saslprep(password, &prep_password);
@@ -125,6 +154,12 @@ pg_fe_scram_free(void *opaq)
 
 	if (state->password)
 		free(state->password);
+	if (state->tls_finish_message)
+		free(state->tls_finish_message);
+	if (state->certificate_hash)
+		free(state->certificate_hash);
+	if (state->saslchannelbinding)
+		free(state->saslchannelbinding);
 
 	/* client messages */
 	if (state->client_nonce)
@@ -297,9 +332,10 @@ static char *
 build_client_first_message(fe_scram_state *state, PQExpBuffer errormessage)
 {
 	char		raw_nonce[SCRAM_RAW_NONCE_LEN + 1];
-	char	   *buf;
-	char		buflen;
+	char	   *result;
+	int			channel_info_len;
 	int			encoded_len;
+	PQExpBufferData buf;
 
 	/*
 	 * Generate a "raw" nonce.  This is converted to ASCII-printable form by
@@ -328,26 +364,55 @@ build_client_first_message(fe_scram_state *state, PQExpBuffer errormessage)
 	 * prepared with SASLprep, the message parsing would fail if it includes
 	 * '=' or ',' characters.
 	 */
-	buflen = 8 + strlen(state->client_nonce) + 1;
-	buf = malloc(buflen);
-	if (buf == NULL)
-	{
-		printfPQExpBuffer(errormessage,
-						  libpq_gettext("out of memory\n"));
-		return NULL;
-	}
-	snprintf(buf, buflen, "n,,n=,r=%s", state->client_nonce);
+	initPQExpBuffer(&buf);
 
-	state->client_first_message_bare = strdup(buf + 3);
+	/*
+	 * First build the query field for channel binding. If the client is not
+	 * built with SSL support, it cannot support channel binding so it needs
+	 * to use "n" to let the server know. If built with SSL support, client
+	 * needs to use "y" to let the server know that client has such support
+	 * but that it is not using it as a non-SSL connection is requested.
+	 * Finally if a SSL connection is done, use p=cb-name, for which only
+	 * "tls-unique" is supported now.
+	 */
+#ifdef USE_SSL
+	if (state->ssl_in_use)
+		appendPQExpBuffer(&buf, "p=%s", state->saslchannelbinding);
+	else
+		appendPQExpBuffer(&buf, "y");
+#else
+	appendPQExpBuffer(&buf, "n");
+#endif
+
+	if (PQExpBufferDataBroken(buf))
+		goto oom_error;
+
+	channel_info_len = buf.len;
+
+	appendPQExpBuffer(&buf, ",,n=,r=%s", state->client_nonce);
+	if (PQExpBufferDataBroken(buf))
+		goto oom_error;
+
+	/*
+	 * The first message content needs to be saved without channel binding
+	 * information.
+	 */
+	state->client_first_message_bare = strdup(buf.data + channel_info_len + 2);
 	if (!state->client_first_message_bare)
-	{
-		free(buf);
-		printfPQExpBuffer(errormessage,
-						  libpq_gettext("out of memory\n"));
-		return NULL;
-	}
+		goto oom_error;
 
-	return buf;
+	result = strdup(buf.data);
+	if (result == NULL)
+		goto oom_error;
+
+	termPQExpBuffer(&buf);
+	return result;
+
+oom_error:
+	termPQExpBuffer(&buf);
+	printfPQExpBuffer(errormessage,
+					  libpq_gettext("out of memory\n"));
+	return NULL;
 }
 
 /*
@@ -365,8 +430,65 @@ build_client_final_message(fe_scram_state *state, PQExpBuffer errormessage)
 	/*
 	 * Construct client-final-message-without-proof.  We need to remember it
 	 * for verifying the server proof in the final step of authentication.
+	 * Client needs to provide a b64 encoded string of the TLS finish message
+	 * only if a SSL connection is attempted using "tls-unique" as channel
+	 * binding. For "tls-server-end-point", a hash of the client certificate
+	 * is sent instead.
 	 */
-	appendPQExpBuffer(&buf, "c=biws,r=%s", state->nonce);
+#ifdef USE_SSL
+	if (state->ssl_in_use)
+	{
+		char	   *raw_data;
+		int			raw_data_len;
+
+		if (strcmp(state->saslchannelbinding, SCRAM_CHANNEL_TLS_UNIQUE) == 0)
+		{
+			raw_data = state->tls_finish_message;
+			raw_data_len = state->tls_finish_len;
+		}
+		else if (strcmp(state->saslchannelbinding,
+						SCRAM_CHANNEL_TLS_ENDPOINT) == 0)
+		{
+			raw_data = state->certificate_hash;
+			raw_data_len = state->certificate_hash_len;
+		}
+		else
+		{
+			/* should not happen */
+			termPQExpBuffer(&buf);
+			printfPQExpBuffer(errormessage,
+							  libpq_gettext("incorrect channel binding name\n"));
+			return NULL;
+		}
+
+		/* should not happen, but better safe than sorry */
+		if (raw_data == NULL)
+		{
+			/* should not happen */
+			termPQExpBuffer(&buf);
+			printfPQExpBuffer(errormessage,
+							  libpq_gettext("empty binding data for channel name \"%s\"\n"),
+							  state->saslchannelbinding);
+			return NULL;
+		}
+
+		appendPQExpBuffer(&buf, "c=");
+
+		if (!enlargePQExpBuffer(&buf, pg_b64_enc_len(raw_data_len)))
+			goto oom_error;
+		buf.len += pg_b64_encode(raw_data, raw_data_len, buf.data + buf.len);
+		buf.data[buf.len] = '\0';
+	}
+	else
+		appendPQExpBuffer(&buf, "c=biws");
+#else
+	appendPQExpBuffer(&buf, "c=biws");
+#endif
+
+	if (PQExpBufferDataBroken(buf))
+		goto oom_error;
+
+	appendPQExpBuffer(&buf, ",r=%s", state->nonce);
 	if (PQExpBufferDataBroken(buf))
 		goto oom_error;
 

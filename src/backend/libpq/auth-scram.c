@@ -17,8 +17,6 @@
  *	 by the SASLprep profile, we skip the SASLprep pre-processing and use
  *	 the raw bytes in calculating the hash.
  *
- * - Channel binding is not supported yet.
- *
  *
  * The password stored in pg_authid consists of the iteration count, salt,
  * StoredKey and ServerKey.
@@ -112,6 +110,13 @@ typedef struct
 
 	const char *username;		/* username from startup packet */
 
+	bool		ssl_in_use;
+	char	   *tls_finish_message;
+	int			tls_finish_len;
+	char	   *certificate_hash;
+	int			certificate_hash_len;
+	char	   *channel_binding;
+
 	int			iterations;
 	char	   *salt;			/* base64-encoded */
 	uint8		StoredKey[SCRAM_KEY_LEN];
@@ -168,7 +173,13 @@ static char *scram_mock_salt(const char *username);
  * it will fail, as if an incorrect password was given.
  */
 void *
-pg_be_scram_init(const char *username, const char *shadow_pass)
+pg_be_scram_init(const char *username,
+				 const char *shadow_pass,
+				 bool ssl_in_use,
+				 char *tls_finish_message,
+				 int tls_finish_len,
+				 char *certificate_hash,
+				 int certificate_hash_len)
 {
 	scram_state *state;
 	bool		got_verifier;
@@ -176,6 +187,12 @@ pg_be_scram_init(const char *username, const char *shadow_pass)
 	state = (scram_state *) palloc0(sizeof(scram_state));
 	state->state = SCRAM_AUTH_INIT;
 	state->username = username;
+	state->ssl_in_use = ssl_in_use;
+	state->tls_finish_message = tls_finish_message;
+	state->tls_finish_len = tls_finish_len;
+	state->certificate_hash = certificate_hash;
+	state->certificate_hash_len = certificate_hash_len;
+	state->channel_binding = NULL;
 
 	/*
 	 * Parse the stored password verifier.
@@ -773,31 +790,97 @@ read_client_first_message(scram_state *state, char *input)
 	 *------
 	 */
 
-	/* read gs2-cbind-flag */
+	/*
+	 * Read gs2-cbind-flag. Server handles its value as described in RFC 5802,
+	 * section 6 dealing with channel binding.
+	 */
 	switch (*input)
 	{
 		case 'n':
-			/* Client does not support channel binding */
+			/*
+			 * Client does not support channel binding, this is authorized
+			 * only in builds not supporting SSL.  If SSL is supported, the
+			 * server cannot support this option either.
+			 */
+#ifdef USE_SSL
+			if (state->ssl_in_use)
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("client does not support SCRAM channel binding, but server needs it for SSL connections")));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("client does not support SCRAM channel binding, but server does")));
+#endif
+			input++;
+			if (*input != ',')
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("malformed SCRAM message"),
+						 errdetail("Comma expected, but found character \"%s\".",
+								   sanitize_char(*input))));
 			input++;
 			break;
 		case 'y':
-			/* Client supports channel binding, but we're not doing it today */
+			/*
+			 * Client supports channel binding, but we're not doing it today
+			 * in the context of a non-SSL connection.  Complain though if
+			 * the client is trying to trick the server in not doing channel
+			 * binding with a downgrade attack if a SSL connection is
+			 * attempted.
+			 */
+			if (state->ssl_in_use)
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("client support SCRAM channel binding, but server needs it for SSL connections")));
+			input++;
+			if (*input != ',')
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg("malformed SCRAM message"),
+						 errdetail("Comma expected, but found character \"%s\".",
+								   sanitize_char(*input))));
 			input++;
 			break;
 		case 'p':
+			{
+#ifdef USE_SSL
+				char *channel_name;
 
-			/*
-			 * Client requires channel binding.  We don't support it.
-			 *
-			 * RFC 5802 specifies a particular error code,
-			 * e=server-does-support-channel-binding, for this.  But it can
-			 * only be sent in the server-final message, and we don't want to
-			 * go through the motions of the authentication, knowing it will
-			 * fail, just to send that error message.
-			 */
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("client requires SCRAM channel binding, but it is not supported")));
+				if (!state->ssl_in_use)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg("client supports SCRAM channel binding, but server does not need it for non-SSL connections")));
+
+				/*
+				 * Read value provided by client, only tls-unique and
+				 * tls-server-end-point are supported for now.
+				 */
+				channel_name = read_attr_value(&input, 'p');
+				if (strcmp(channel_name, SCRAM_CHANNEL_TLS_UNIQUE) != 0 &&
+					strcmp(channel_name, SCRAM_CHANNEL_TLS_ENDPOINT) != 0)
+					ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 (errmsg("unexpected SCRAM channel-binding type"))));
+
+				/* Save the name for handling of subsequent messages */
+				state->channel_binding = pstrdup(channel_name);
+#else
+				/*
+				 * Client requires channel binding.  We don't support it.
+				 *
+				 * RFC 5802 specifies a particular error code,
+				 * e=server-does-support-channel-binding, for this.  But it
+				 * can only be sent in the server-final message, and we don't
+				 * want to go through the motions of the authentication,
+				 * knowing it will fail, just to send that error message.
+				 */
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("client requires SCRAM channel binding, but it is not supported")));
+#endif
+			}
+			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -805,13 +888,6 @@ read_client_first_message(scram_state *state, char *input)
 					 errdetail("Unexpected channel-binding flag \"%s\".",
 							   sanitize_char(*input))));
 	}
-	if (*input != ',')
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed SCRAM message"),
-				 errdetail("Comma expected, but found character \"%s\".",
-						   sanitize_char(*input))));
-	input++;
 
 	/*
 	 * Forbid optional authzid (authorization identity).  We don't support it.
@@ -1032,14 +1108,69 @@ read_client_final_message(scram_state *state, char *input)
 	 */
 
 	/*
-	 * Read channel-binding.  We don't support channel binding, so it's
-	 * expected to always be "biws", which is "n,,", base64-encoded.
+	 * Read channel-binding.  We don't support channel binding for builds
+	 * without SSL support, so it's expected to always be "biws" in this case,
+	 * which is "n,,", base64-encoded.  In builds supporting SSL, "biws" is
+	 * used for Non-SSL connection attempts, and for SSL connections the
+	 * client has to provide channel binding value.
 	 */
 	channel_binding = read_attr_value(&p, 'c');
+#ifdef USE_SSL
+	if (state->ssl_in_use)
+	{
+		char	   *b64_message, *raw_data;
+		int			b64_message_len, raw_data_len;
+
+		/* Fetch data for each channel binding type */
+		if (strcmp(state->channel_binding, SCRAM_CHANNEL_TLS_UNIQUE) == 0)
+		{
+			raw_data = state->tls_finish_message;
+			raw_data_len = state->tls_finish_len;
+		}
+		else if (strcmp(state->channel_binding,
+						SCRAM_CHANNEL_TLS_ENDPOINT) == 0)
+		{
+			raw_data = state->certificate_hash;
+			raw_data_len = state->certificate_hash_len;
+		}
+		else
+		{
+			/* should not happen */
+			elog(ERROR, "invalid channel binding type");
+		}
+
+		/* should not happen, but better safe than sorry */
+		if (raw_data == NULL)
+			elog(ERROR, "empty binding data for channel name \"%s\"",
+				 state->channel_binding);
+
+		b64_message = palloc(pg_b64_enc_len(raw_data_len) + 1);
+		b64_message_len = pg_b64_encode(raw_data, raw_data_len,
+										b64_message);
+		b64_message[b64_message_len] = '\0';
+
+		/*
+		 * Compare the value sent by the client with the value expected by
+		 * the server.
+		 */
+		if (strcmp(channel_binding, b64_message) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 (errmsg("no match for SCRAM channel-binding attribute in client-final-message"))));
+	}
+	else
+	{
+		if (strcmp(channel_binding, "biws") != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 (errmsg("unexpected SCRAM channel-binding attribute in client-final-message"))));
+	}
+#else
 	if (strcmp(channel_binding, "biws") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 (errmsg("unexpected SCRAM channel-binding attribute in client-final-message"))));
+#endif
 	state->client_final_nonce = read_attr_value(&p, 'r');
 
 	/* ignore optional extensions */

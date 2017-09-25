@@ -262,6 +262,15 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"TCP-Keepalives-Count", "", 10, /* strlen(INT32_MAX) == 10 */
 	offsetof(struct pg_conn, keepalives_count)},
 
+	/* Set of options proper to SASL */
+	{"saslname", NULL, NULL, NULL,
+		"SASL-Name", "", 21,	/* maximum name size per IANA == 21 */
+	offsetof(struct pg_conn, saslname)},
+
+	{"saslchannelbinding", NULL, NULL, NULL,
+		"SASL-Channel", "", 22,	/* sizeof("tls-unique-for-telnet") == 22 */
+	offsetof(struct pg_conn, saslchannelbinding)},
+
 	/*
 	 * ssl options are allowed even without client SSL support because the
 	 * client can still handle SSL modes "disable" and "allow". Other
@@ -3470,6 +3479,10 @@ freePGconn(PGconn *conn)
 		free(conn->keepalives_interval);
 	if (conn->keepalives_count)
 		free(conn->keepalives_count);
+	if (conn->saslname)
+		free(conn->saslname);
+	if (conn->saslchannelbinding)
+		free(conn->saslchannelbinding);
 	if (conn->sslmode)
 		free(conn->sslmode);
 	if (conn->sslcert)

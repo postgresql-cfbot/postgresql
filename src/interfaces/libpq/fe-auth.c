@@ -504,7 +504,8 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 	/*
 	 * Parse the list of SASL authentication mechanisms in the
 	 * AuthenticationSASL message, and select the best mechanism that we
-	 * support.  (Only SCRAM-SHA-256 is supported at the moment.)
+	 * support.  SCRAM-SHA-256 and SCRAM-SHA-256-PLUS are the only ones
+	 * supported at the moment.
 	 */
 	selected_mechanism = NULL;
 	for (;;)
@@ -532,9 +533,14 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 		/*
 		 * Do we support this mechanism?
 		 */
-		if (strcmp(mechanism_buf.data, SCRAM_SHA256_NAME) == 0)
+		if (strcmp(mechanism_buf.data, SCRAM_SHA256_NAME) == 0 ||
+			strcmp(mechanism_buf.data, SCRAM_SHA256_PLUS_NAME) == 0)
 		{
 			char	   *password;
+			char	   *tls_finish = NULL;
+			int			tls_finish_len = 0;
+			char	   *certificate_hash = NULL;
+			int			certificate_hash_len = 0;
 
 			conn->password_needed = true;
 			password = conn->connhost[conn->whichhost].password;
@@ -547,12 +553,63 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 				goto error;
 			}
 
-			conn->sasl_state = pg_fe_scram_init(conn->pguser, password);
+#ifdef USE_SSL
+			/*
+			 * Fetch information about the TLS finish message and client
+			 * certificate if any.
+			 */
+			if (conn->ssl_in_use)
+			{
+				tls_finish = pgtls_get_finish(conn, &tls_finish_len);
+				if (tls_finish == NULL)
+					goto oom_error;
+
+				certificate_hash =
+					pgtls_get_peer_certificate_hash(conn,
+													&certificate_hash_len);
+				if (certificate_hash == NULL)
+					goto oom_error;
+			}
+#endif
+
+			conn->sasl_state = pg_fe_scram_init(conn->pguser,
+												password,
+												conn->ssl_in_use,
+												conn->saslchannelbinding,
+												tls_finish,
+												tls_finish_len,
+												certificate_hash,
+												certificate_hash_len);
+
 			if (!conn->sasl_state)
 				goto oom_error;
-			selected_mechanism = SCRAM_SHA256_NAME;
+
+			/*
+			 * Select the mechanism to use by default. If SSL connection
+			 * is attempted, the server will expect the -PLUS mechanism.
+			 * If not, fallback to SCRAM-SHA-256.
+			 */
+#ifdef USE_SSL
+			if (conn->ssl_in_use &&
+				strcmp(mechanism_buf.data, SCRAM_SHA256_PLUS_NAME) == 0)
+				selected_mechanism = SCRAM_SHA256_PLUS_NAME;
+			else if (!conn->ssl_in_use &&
+					 strcmp(mechanism_buf.data, SCRAM_SHA256_NAME) == 0)
+				selected_mechanism = SCRAM_SHA256_NAME;
+#else
+			/* No channel binding can be selected without SSL support */
+			if (strcmp(mechanism_buf.data, SCRAM_SHA256_NAME) == 0)
+				selected_mechanism = SCRAM_SHA256_NAME;
+#endif
 		}
 	}
+
+	/*
+	 * If user has asked for a specific mechanism name, enforce the chosen
+	 * name to it.
+	 */
+	if (conn->saslname && strlen(conn->saslname) > 0)
+		selected_mechanism = conn->saslname;
 
 	if (!selected_mechanism)
 	{

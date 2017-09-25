@@ -225,6 +225,49 @@ dsm_impl_can_resize(void)
 
 #ifdef USE_DSM_POSIX
 /*
+ * Set the size of a virtual memory region associate with a file descriptor.
+ * On Linux, also ensure that virtual memory is actually allocated by the
+ * operating system to avoid nasty surprises later.
+ *
+ * Returns non-zero if either truncation or allocation fails, and sets errno.
+ */
+static int
+dsm_impl_posix_resize(int fd, off_t size)
+{
+		int rc;
+
+		/* Truncate (or extend) the file to the requested size. */
+		rc = ftruncate(fd, size);
+
+#ifdef HAVE_FALLOCATE
+#ifdef __linux__
+		/*
+		 * On Linux, a shm_open fd is backed by a tmpfs file.  After resizing
+		 * with ftruncate it may contain a hole.  Accessing memory backed by a
+		 * hole causes tmpfs to allocate pages, which fails with SIGBUS if
+		 * there is no virtual memory available.  So we ask tmpfs to allocate
+		 * pages here, so we can fail gracefully with ENOSPC now rather than
+		 * risking SIGBUS later.
+		 */
+		if (rc == 0)
+		{
+			do
+			{
+				rc = fallocate(fd, 0, 0, size);
+			} while (rc == -1 && errno == EINTR);
+			if (rc != 0 && errno == ENOSYS)
+			{
+				/* Kernel too old (< 2.6.23). */
+				rc = 0;
+			}
+		}
+#endif
+#endif
+
+		return rc;
+}
+
+/*
  * Operating system primitives to support POSIX shared memory.
  *
  * POSIX shared memory segments are created and attached using shm_open()
@@ -319,7 +362,8 @@ dsm_impl_posix(dsm_op op, dsm_handle handle, Size request_size,
 		}
 		request_size = st.st_size;
 	}
-	else if (*mapped_size != request_size && ftruncate(fd, request_size))
+	else if (*mapped_size != request_size &&
+			 dsm_impl_posix_resize(fd, request_size) != 0)
 	{
 		int			save_errno;
 

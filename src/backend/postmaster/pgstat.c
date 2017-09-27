@@ -3610,6 +3610,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_PARALLEL_BITMAP_SCAN:
 			event_name = "ParallelBitmapScan";
 			break;
+		case WAIT_EVENT_PARALLEL_VACUUM_PREPARE:
+			event_name = "ParallelVacuumPrepare";
+			break;
+		case WAIT_EVENT_PARALLEL_VACUUM_DONE:
+			event_name = "ParallelVacuumDone";
+			break;
 		case WAIT_EVENT_PROCARRAY_GROUP_UPDATE:
 			event_name = "ProcArrayGroupUpdate";
 			break;

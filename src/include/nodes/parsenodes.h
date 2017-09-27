@@ -3095,13 +3095,20 @@ typedef enum VacuumOption
 	VACOPT_FULL = 1 << 4,		/* FULL (non-concurrent) vacuum */
 	VACOPT_NOWAIT = 1 << 5,		/* don't wait to get lock (autovacuum only) */
 	VACOPT_SKIPTOAST = 1 << 6,	/* don't process the TOAST table, if any */
-	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7	/* don't skip any pages */
+	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7,	/* don't skip any pages */
+	VACOPT_PARALLEL = 1 << 8	/* do VACUUM parallelly */
 } VacuumOption;
+
+typedef struct VacuumOptions
+{
+	VacuumOption flags; /* OR of VacuumOption flags */
+	int nworkers; /* # of parallel vacuum workers */
+} VacuumOptions;
 
 typedef struct VacuumStmt
 {
 	NodeTag		type;
-	int			options;		/* OR of VacuumOption flags */
+	VacuumOptions	options;
 	RangeVar   *relation;		/* single table to process, or NULL */
 	List	   *va_cols;		/* list of column names, or NIL for all */
 } VacuumStmt;

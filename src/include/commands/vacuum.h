@@ -15,6 +15,8 @@
 #define VACUUM_H
 
 #include "access/htup.h"
+#include "access/heapam.h"
+#include "access/parallel.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_type.h"
 #include "nodes/parsenodes.h"
@@ -157,7 +159,7 @@ extern int	vacuum_multixact_freeze_table_age;
 
 /* in commands/vacuum.c */
 extern void ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel);
-extern void vacuum(int options, RangeVar *relation, Oid relid,
+extern void vacuum(VacuumOptions options, RangeVar *relation, Oid relid,
 	   VacuumParams *params, List *va_cols,
 	   BufferAccessStrategy bstrategy, bool isTopLevel);
 extern void vac_open_indexes(Relation relation, LOCKMODE lockmode,
@@ -188,8 +190,9 @@ extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 
 /* in commands/vacuumlazy.c */
-extern void lazy_vacuum_rel(Relation onerel, int options,
+extern void lazy_vacuum_rel(Relation onerel, VacuumOptions options,
 				VacuumParams *params, BufferAccessStrategy bstrategy);
+extern void LazyVacuumWorkerMain(dsm_segment *seg, shm_toc *toc);
 
 /* in commands/analyze.c */
 extern void analyze_rel(Oid relid, RangeVar *relation, int options,

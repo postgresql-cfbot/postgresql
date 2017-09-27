@@ -20,6 +20,7 @@
 #include "access/xlog.h"
 #include "catalog/namespace.h"
 #include "commands/async.h"
+#include "commands/vacuum.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -122,6 +123,9 @@ static const struct
 {
 	{
 		"ParallelQueryMain", ParallelQueryMain
+	},
+	{
+		"LazyVacuumWorkerMain", LazyVacuumWorkerMain
 	}
 };
 

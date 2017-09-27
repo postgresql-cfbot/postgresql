@@ -61,6 +61,7 @@ VACUUM FULL vaccluster;
 VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
+VACUUM (PARALLEL 2) vactst;
 
 DROP TABLE vaccluster;
 DROP TABLE vactst;

@@ -1552,8 +1552,8 @@ compute_semijoin_info(SpecialJoinInfo *sjinfo, List *clause)
 		if (all_btree)
 		{
 			/* oprcanmerge is considered a hint... */
-			if (!op_mergejoinable(opno, opinputtype) ||
-				get_mergejoin_opfamilies(opno) == NIL)
+			if (!op_mergejoinable_equality(opno, opinputtype) ||
+				get_equiv_opfamilies(opno) == NIL)
 				all_btree = false;
 		}
 		if (all_hash)
@@ -1957,9 +1957,9 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	 * fields of a mergejoinable clause, so that all possibly mergejoinable
 	 * expressions have representations in EquivalenceClasses.  If
 	 * process_equivalence is successful, it will take care of that;
-	 * otherwise, we have to call initialize_mergeclause_eclasses to do it.
+	 * otherwise, we have to call initialize_equivclause_eclasses to do it.
 	 */
-	if (restrictinfo->mergeopfamilies)
+	if (restrictinfo->equivopfamilies)
 	{
 		if (maybe_equivalence)
 		{
@@ -1967,13 +1967,13 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 				process_equivalence(root, restrictinfo, below_outer_join))
 				return;
 			/* EC rejected it, so set left_ec/right_ec the hard way ... */
-			initialize_mergeclause_eclasses(root, restrictinfo);
+			initialize_equivclause_eclasses(root, restrictinfo);
 			/* ... and fall through to distribute_restrictinfo_to_rels */
 		}
 		else if (maybe_outer_join && restrictinfo->can_join)
 		{
 			/* we need to set up left_ec/right_ec the hard way */
-			initialize_mergeclause_eclasses(root, restrictinfo);
+			initialize_equivclause_eclasses(root, restrictinfo);
 			/* now see if it should go to any outer-join lists */
 			if (bms_is_subset(restrictinfo->left_relids,
 							  outerjoin_nonnullable) &&
@@ -2007,7 +2007,21 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 		else
 		{
 			/* we still need to set up left_ec/right_ec */
-			initialize_mergeclause_eclasses(root, restrictinfo);
+			initialize_equivclause_eclasses(root, restrictinfo);
+		}
+	}
+	else if (restrictinfo->mergeopfamilies)
+	{
+		/* Not an equivalence clause, but maybe still mergejoinable? */
+		initialize_equivclause_eclasses(root, restrictinfo);
+
+		if (maybe_outer_join
+			&& jointype == JOIN_FULL
+			&& restrictinfo->can_join)
+		{
+			root->full_join_clauses = lappend(root->full_join_clauses,
+							  restrictinfo);
+			return;
 		}
 	}
 
@@ -2368,7 +2382,7 @@ process_implied_equality(PlannerInfo *root,
  * responsibility to make sure that the Relids parameters are fresh copies
  * not shared with other uses.
  *
- * Note: we do not do initialize_mergeclause_eclasses() here.  It is
+ * Note: we do not do initialize_equivclause_eclasses() here.  It is
  * caller's responsibility that left_ec/right_ec be set as necessary.
  */
 RestrictInfo *
@@ -2615,14 +2629,21 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 	opno = ((OpExpr *) clause)->opno;
 	leftarg = linitial(((OpExpr *) clause)->args);
 
-	if (op_mergejoinable(opno, exprType(leftarg)) &&
-		!contain_volatile_functions((Node *) clause))
-		restrictinfo->mergeopfamilies = get_mergejoin_opfamilies(opno);
+	if (!contain_volatile_functions((Node *) clause))
+	{
+		if (op_mergejoinable_equality(opno, exprType(leftarg)))
+		{
+			restrictinfo->equivopfamilies = get_equiv_opfamilies(opno);
+		}
+		restrictinfo->mergeopfamilies = list_concat(
+								list_copy(restrictinfo->equivopfamilies),
+								get_mergejoin_opfamilies(opno));
+	}
 
 	/*
-	 * Note: op_mergejoinable is just a hint; if we fail to find the operator
-	 * in any btree opfamilies, mergeopfamilies remains NIL and so the clause
-	 * is not treated as mergejoinable.
+	 * Note: op_mergejoinable_equality is just a hint; if we fail to find the
+	 * operator in any btree opfamilies, equivopfamilies remains NIL and so
+	 * the clause is not treated as mergejoinable.
 	 */
 }
 

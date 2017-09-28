@@ -2460,6 +2460,7 @@ _outRestrictInfo(StringInfo str, const RestrictInfo *node)
 	/* don't write parent_ec, leads to infinite recursion in plan tree dump */
 	WRITE_FLOAT_FIELD(norm_selec, "%.4f");
 	WRITE_FLOAT_FIELD(outer_selec, "%.4f");
+	WRITE_NODE_FIELD(equivopfamilies);
 	WRITE_NODE_FIELD(mergeopfamilies);
 	/* don't write left_ec, leads to infinite recursion in plan tree dump */
 	/* don't write right_ec, leads to infinite recursion in plan tree dump */

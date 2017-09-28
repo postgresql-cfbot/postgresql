@@ -722,19 +722,19 @@ get_useful_ecs_for_relation(PlannerInfo *root, RelOptInfo *rel)
 	{
 		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(lc);
 
-		/* Consider only mergejoinable clauses */
-		if (restrictinfo->mergeopfamilies == NIL)
+		/* Consider only mergejoinable equality clauses */
+		if (restrictinfo->equivopfamilies == NIL)
 			continue;
 
 		/* Make sure we've got canonical ECs. */
-		update_mergeclause_eclasses(root, restrictinfo);
+		update_equivclause_eclasses(root, restrictinfo);
 
 		/*
-		 * restrictinfo->mergeopfamilies != NIL is sufficient to guarantee
+		 * restrictinfo->equivopfamilies != NIL is sufficient to guarantee
 		 * that left_ec and right_ec will be initialized, per comments in
 		 * distribute_qual_to_rels.
 		 *
-		 * We want to identify which side of this merge-joinable clause
+		 * We want to identify which side of this merge-joinable equality clause
 		 * contains columns from the relation produced by this RelOptInfo. We
 		 * test for overlap, not containment, because there could be extra
 		 * relations on either side.  For example, suppose we've got something

@@ -2975,7 +2975,6 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 							   &op_strategy,
 							   &op_lefttype,
 							   &op_righttype);
-	Assert(op_strategy == BTEqualStrategyNumber);
 
 	/*
 	 * Look up the various operators we need.  If we don't find them all, it

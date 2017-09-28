@@ -1843,7 +1843,8 @@ typedef struct RestrictInfo
 								 * not yet set */
 
 	/* valid if clause is mergejoinable, else NIL */
-	List	   *mergeopfamilies;	/* opfamilies containing clause operator */
+	List	   *equivopfamilies;	/* opfamilies containing equality operator */
+	List	   *mergeopfamilies;    /* opfamilies containing comparison operator */
 
 	/* cache space for mergeclause processing; NULL if not yet set */
 	EquivalenceClass *left_ec;	/* EquivalenceClass containing lefthand */

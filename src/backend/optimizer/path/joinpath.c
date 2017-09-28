@@ -22,6 +22,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "utils/lsyscache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -461,6 +462,99 @@ try_partial_nestloop_path(PlannerInfo *root,
 }
 
 /*
+ * Check that we have at most one non-equality merge join clause.
+ * Otherwise, it may not be possible to create a sort order for
+ * mergejoin that maps all the qualifying tuples to a contiguous interval.
+ * For the list consisting of one non-equality clause and multiple equality clauses
+ * we could first sort by all equalities and then by non-equality,
+ * but we don't do this for now.
+ */
+static bool
+can_sort_for_mergejoin(List *mergeclauses)
+{
+	ListCell   *lc;
+	int			non_equality_clauses = 0;
+	int			all_clauses = 0;
+
+	foreach(lc, mergeclauses)
+	{
+		RestrictInfo *rinfo = castNode(RestrictInfo, lfirst(lc));
+
+		all_clauses++;
+		if (rinfo->equivopfamilies == NIL)
+		{
+			Assert(rinfo->mergeopfamilies != NIL);
+			non_equality_clauses++;
+		}
+		if (all_clauses > 1 && non_equality_clauses > 0)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
+ * Check whether the given sort order of the outer path is suitable to perform
+ * a merge join. A merge join executor can only choose inner values that are 
+ * "lesser" or "equal" according to the sort order. Assumes that we
+ * have at most one non-equality clause. 
+ */
+static bool
+outer_sort_suitable_for_mergejoin(List *mergeclauses, List *outerkeys)
+{
+	if (mergeclauses == NIL)
+	{
+		return true;
+	}
+
+	RestrictInfo *rinfo = castNode(RestrictInfo, linitial(mergeclauses));
+	PathKey    *key = castNode(PathKey, linitial(outerkeys));
+	Oid			orig_opno;
+	Oid			opno;
+	int			strategy;
+	Oid			lefttype;
+	Oid			righttype;
+
+	if (rinfo->equivopfamilies != NIL)
+	{
+		/*
+		 * Equality clauses do not care about sort order, and do not coexist
+		 * with inequality clauses, so we can accept any order now.
+		 */
+		return true;
+	}
+
+	/* We have a single inequality clause */
+	Assert(list_length(mergeclauses) == 1);
+	orig_opno = ((OpExpr *) rinfo->clause)->opno;
+	opno = rinfo->outer_is_left ? orig_opno : get_commutator(orig_opno);
+	get_op_opfamily_properties(opno, key->pk_opfamily,
+							   false /* ordering op */ , &strategy, &lefttype,
+							   &righttype);
+	switch (strategy)
+	{
+		case BTLessEqualStrategyNumber:
+		case BTLessStrategyNumber:
+			if (key->pk_strategy == BTLessStrategyNumber)
+			{
+				return false;
+			}
+			break;
+		case BTGreaterEqualStrategyNumber:
+		case BTGreaterStrategyNumber:
+			if (key->pk_strategy == BTGreaterStrategyNumber)
+			{
+				return false;
+			}
+			break;
+		default:
+			elog(ERROR, "unknown merge join clause strategy %d\n", strategy);
+	}
+	return true;
+}
+
+/*
  * try_mergejoin_path
  *	  Consider a merge join path; if it appears useful, push it into
  *	  the joinrel's pathlist via add_path().
@@ -493,6 +587,17 @@ try_mergejoin_path(PlannerInfo *root,
 								   innersortkeys,
 								   jointype,
 								   extra);
+		return;
+	}
+
+	if (!can_sort_for_mergejoin(mergeclauses))
+	{
+		return;
+	}
+
+	if (!outer_sort_suitable_for_mergejoin(mergeclauses, outersortkeys != NIL
+									 ? outersortkeys : outer_path->pathkeys))
+	{
 		return;
 	}
 
@@ -573,6 +678,14 @@ try_partial_mergejoin_path(PlannerInfo *root,
 						   JoinPathExtraData *extra)
 {
 	JoinCostWorkspace workspace;
+
+	if (!can_sort_for_mergejoin(mergeclauses))
+		return;
+
+	if (!outer_sort_suitable_for_mergejoin(mergeclauses, outersortkeys != NIL
+									 ? outersortkeys : outer_path->pathkeys))
+		return;
+
 
 	/*
 	 * See comments in try_partial_hashjoin_path().
@@ -897,7 +1010,8 @@ sort_inner_and_outer(PlannerInfo *root,
 	 */
 	all_pathkeys = select_outer_pathkeys_for_merge(root,
 												   extra->mergeclause_list,
-												   joinrel);
+												   joinrel,
+												   jointype);
 
 	foreach(l, all_pathkeys)
 	{
@@ -1882,7 +1996,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 		 * mergejoin is not really all that big a deal, and so it's not clear
 		 * that improving this is important.
 		 */
-		update_mergeclause_eclasses(root, restrictinfo);
+		update_equivclause_eclasses(root, restrictinfo);
 
 		if (EC_MUST_BE_REDUNDANT(restrictinfo->left_ec) ||
 			EC_MUST_BE_REDUNDANT(restrictinfo->right_ec))

@@ -199,7 +199,7 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 	if (!OidIsValid(equality_op))	/* shouldn't happen */
 		elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 			 BTEqualStrategyNumber, opcintype, opcintype, opfamily);
-	opfamilies = get_mergejoin_opfamilies(equality_op);
+	opfamilies = get_equiv_opfamilies(equality_op);
 	if (!opfamilies)			/* certainly should find some */
 		elog(ERROR, "could not find opfamilies for equality operator %u",
 			 equality_op);
@@ -897,7 +897,7 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
  ****************************************************************************/
 
 /*
- * initialize_mergeclause_eclasses
+ * initialize_equivclause_eclasses
  *		Set the EquivalenceClass links in a mergeclause restrictinfo.
  *
  * RestrictInfo contains fields in which we may cache pointers to
@@ -912,18 +912,21 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
  *
  * Note this is called before EC merging is complete, so the links won't
  * necessarily point to canonical ECs.  Before they are actually used for
- * anything, update_mergeclause_eclasses must be called to ensure that
+ * anything, update_equivclause_eclasses must be called to ensure that
  * they've been updated to point to canonical ECs.
  */
 void
-initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
+initialize_equivclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 {
 	Expr	   *clause = restrictinfo->clause;
 	Oid			lefttype,
 				righttype;
+	List	   *opfamilies = restrictinfo->mergeopfamilies
+			? restrictinfo->mergeopfamilies
+			: restrictinfo->equivopfamilies;
 
 	/* Should be a mergeclause ... */
-	Assert(restrictinfo->mergeopfamilies != NIL);
+	Assert(opfamilies != NIL);
 	/* ... with links not yet set */
 	Assert(restrictinfo->left_ec == NULL);
 	Assert(restrictinfo->right_ec == NULL);
@@ -936,7 +939,7 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 		get_eclass_for_sort_expr(root,
 								 (Expr *) get_leftop(clause),
 								 restrictinfo->nullable_relids,
-								 restrictinfo->mergeopfamilies,
+								 opfamilies,
 								 lefttype,
 								 ((OpExpr *) clause)->inputcollid,
 								 0,
@@ -946,7 +949,7 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 		get_eclass_for_sort_expr(root,
 								 (Expr *) get_rightop(clause),
 								 restrictinfo->nullable_relids,
-								 restrictinfo->mergeopfamilies,
+								 opfamilies,
 								 righttype,
 								 ((OpExpr *) clause)->inputcollid,
 								 0,
@@ -955,17 +958,17 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 }
 
 /*
- * update_mergeclause_eclasses
+ * update_equivclause_eclasses
  *		Make the cached EquivalenceClass links valid in a mergeclause
  *		restrictinfo.
  *
  * These pointers should have been set by process_equivalence or
- * initialize_mergeclause_eclasses, but they might have been set to
+ * initialize_equivclause_eclasses, but they might have been set to
  * non-canonical ECs that got merged later.  Chase up to the canonical
  * merged parent if so.
  */
 void
-update_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
+update_equivclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 {
 	/* Should be a merge clause ... */
 	Assert(restrictinfo->mergeopfamilies != NIL);
@@ -1013,7 +1016,7 @@ find_mergeclauses_for_pathkeys(PlannerInfo *root,
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(i);
 
-		update_mergeclause_eclasses(root, rinfo);
+		update_equivclause_eclasses(root, rinfo);
 	}
 
 	foreach(i, pathkeys)
@@ -1119,7 +1122,8 @@ find_mergeclauses_for_pathkeys(PlannerInfo *root,
 List *
 select_outer_pathkeys_for_merge(PlannerInfo *root,
 								List *mergeclauses,
-								RelOptInfo *joinrel)
+								RelOptInfo *joinrel,
+								JoinType jointype)
 {
 	List	   *pathkeys = NIL;
 	int			nClauses = list_length(mergeclauses);
@@ -1149,7 +1153,7 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		ListCell   *lc2;
 
 		/* get the outer eclass */
-		update_mergeclause_eclasses(root, rinfo);
+		update_equivclause_eclasses(root, rinfo);
 
 		if (rinfo->outer_is_left)
 			oeclass = rinfo->left_ec;
@@ -1186,8 +1190,14 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 	 * Find out if we have all the ECs mentioned in query_pathkeys; if so we
 	 * can generate a sort order that's also useful for final output. There is
 	 * no percentage in a partial match, though, so we have to have 'em all.
+	 *
+	 * Full joins on an inequality clause are performed as merge joins and
+	 * require a particular combination of merge clause, sort order, and
+	 * which relation is outer and which is inner. populate_joinrel_with_paths()
+	 * tries both relations as outer, so we should use the same sort order for them.
 	 */
-	if (root->query_pathkeys)
+
+	if (root->query_pathkeys && jointype != JOIN_FULL)
 	{
 		foreach(lc, root->query_pathkeys)
 		{
@@ -1310,7 +1320,7 @@ make_inner_pathkeys_for_merge(PlannerInfo *root,
 		EquivalenceClass *ieclass;
 		PathKey    *pathkey;
 
-		update_mergeclause_eclasses(root, rinfo);
+		update_equivclause_eclasses(root, rinfo);
 
 		if (rinfo->outer_is_left)
 		{
@@ -1426,7 +1436,7 @@ pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
 
 				if (restrictinfo->mergeopfamilies == NIL)
 					continue;
-				update_mergeclause_eclasses(root, restrictinfo);
+				update_equivclause_eclasses(root, restrictinfo);
 
 				if (pathkey->pk_eclass == restrictinfo->left_ec ||
 					pathkey->pk_eclass == restrictinfo->right_ec)

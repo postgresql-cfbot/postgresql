@@ -194,7 +194,7 @@ process_equivalence(PlannerInfo *root, RestrictInfo *restrictinfo,
 	 */
 	op_input_types(opno, &item1_type, &item2_type);
 
-	opfamilies = restrictinfo->mergeopfamilies;
+	opfamilies = restrictinfo->equivopfamilies;
 
 	/*
 	 * Sweep through the existing EquivalenceClasses looking for matches to
@@ -235,7 +235,7 @@ process_equivalence(PlannerInfo *root, RestrictInfo *restrictinfo,
 		/*
 		 * A "match" requires matching sets of btree opfamilies.  Use of
 		 * equal() for this test has implications discussed in the comments
-		 * for get_mergejoin_opfamilies().
+		 * for get_equiv_opfamilies().
 		 */
 		if (!equal(opfamilies, cur_ec->ec_opfamilies))
 			continue;
@@ -1697,7 +1697,7 @@ reconsider_outer_join_clause(PlannerInfo *root, RestrictInfo *rinfo,
 		/* It has to match the outer-join clause as to semantics, too */
 		if (collation != cur_ec->ec_collation)
 			continue;
-		if (!equal(rinfo->mergeopfamilies, cur_ec->ec_opfamilies))
+		if (!equal(rinfo->equivopfamilies, cur_ec->ec_opfamilies))
 			continue;
 		/* Does it contain a match to outervar? */
 		match = false;
@@ -1815,7 +1815,7 @@ reconsider_full_join_clause(PlannerInfo *root, RestrictInfo *rinfo)
 		/* It has to match the outer-join clause as to semantics, too */
 		if (collation != cur_ec->ec_collation)
 			continue;
-		if (!equal(rinfo->mergeopfamilies, cur_ec->ec_opfamilies))
+		if (!equal(rinfo->equivopfamilies, cur_ec->ec_opfamilies))
 			continue;
 
 		/*
@@ -2043,7 +2043,7 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
 				 * to test for member matches first.
 				 */
 				if (opfamilies == NIL)	/* compute if we didn't already */
-					opfamilies = get_mergejoin_opfamilies(eqop);
+					opfamilies = get_equiv_opfamilies(eqop);
 				if (equal(opfamilies, ec->ec_opfamilies))
 					return ec;
 				/* Otherwise, done with this EC, move on to the next */

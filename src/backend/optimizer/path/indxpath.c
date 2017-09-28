@@ -2979,10 +2979,10 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 
 		/*
 		 * Note: can_join won't be set for a restriction clause, but
-		 * mergeopfamilies will be if it has a mergejoinable operator and
+		 * equivopfamilies will be if it has a mergejoinable operator and
 		 * doesn't contain volatile functions.
 		 */
-		if (restrictinfo->mergeopfamilies == NIL)
+		if (restrictinfo->equivopfamilies == NIL)
 			continue;			/* not mergejoinable */
 
 		/*
@@ -3045,7 +3045,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 				 * equality behavior for this index.  We check this first
 				 * since it's probably cheaper than match_index_to_operand().
 				 */
-				if (!list_member_oid(rinfo->mergeopfamilies, ind->opfamily[c]))
+				if (!list_member_oid(rinfo->equivopfamilies, ind->opfamily[c]))
 					continue;
 
 				/*

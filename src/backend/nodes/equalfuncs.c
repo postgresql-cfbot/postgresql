@@ -909,6 +909,7 @@ _equalPartitionedChildRelInfo(const PartitionedChildRelInfo *a, const Partitione
 {
 	COMPARE_SCALAR_FIELD(parent_relid);
 	COMPARE_NODE_FIELD(child_rels);
+	COMPARE_BITMAPSET_FIELD(all_part_cols);
 
 	return true;
 }

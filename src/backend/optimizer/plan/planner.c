@@ -1060,6 +1060,7 @@ inheritance_planner(PlannerInfo *root)
 	Query	   *parent_parse;
 	Bitmapset  *parent_relids = bms_make_singleton(top_parentRTindex);
 	PlannerInfo **parent_roots = NULL;
+	bool		part_cols_updated = false;
 
 	Assert(parse->commandType != CMD_INSERT);
 
@@ -1130,10 +1131,16 @@ inheritance_planner(PlannerInfo *root)
 	parent_rte = rt_fetch(top_parentRTindex, root->parse->rtable);
 	if (parent_rte->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+		Bitmapset	*all_part_cols = NULL;
+
 		nominalRelation = top_parentRTindex;
-		partitioned_rels = get_partitioned_child_rels(root, top_parentRTindex);
+		partitioned_rels = get_partitioned_child_rels(root, top_parentRTindex,
+													  &all_part_cols);
 		/* The root partitioned table is included as a child rel */
 		Assert(list_length(partitioned_rels) >= 1);
+
+		if (bms_overlap(all_part_cols, parent_rte->updatedCols))
+			part_cols_updated = true;
 	}
 
 	/*
@@ -1471,6 +1478,7 @@ inheritance_planner(PlannerInfo *root)
 									 parse->canSetTag,
 									 nominalRelation,
 									 partitioned_rels,
+									 part_cols_updated,
 									 resultRelations,
 									 subpaths,
 									 subroots,
@@ -2088,6 +2096,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										parse->canSetTag,
 										parse->resultRelation,
 										NIL,
+										false,
 										list_make1_int(parse->resultRelation),
 										list_make1(path),
 										list_make1(root),
@@ -6118,11 +6127,16 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
  *		Returns a list of the RT indexes of the partitioned child relations
  *		with rti as the root parent RT index.
  *
+ * If all_part_cols_p is non-NULL, *all_part_cols_p is set to a bitmapset
+ * of all partitioning columns used by the partitioned table or any
+ * descendent.
+ *
  * Note: This function might get called even for range table entries that
  * are not partitioned tables; in such a case, it will simply return NIL.
  */
 List *
-get_partitioned_child_rels(PlannerInfo *root, Index rti)
+get_partitioned_child_rels(PlannerInfo *root, Index rti,
+						   Bitmapset **all_part_cols_p)
 {
 	List	   *result = NIL;
 	ListCell   *l;
@@ -6134,6 +6148,8 @@ get_partitioned_child_rels(PlannerInfo *root, Index rti)
 		if (pc->parent_relid == rti)
 		{
 			result = pc->child_rels;
+			if (all_part_cols_p)
+				*all_part_cols_p = pc->all_part_cols;
 			break;
 		}
 	}

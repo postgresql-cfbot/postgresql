@@ -1633,6 +1633,7 @@ typedef struct ModifyTablePath
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
 	/* RT indexes of non-leaf tables in a partition tree */
 	List	   *partitioned_rels;
+	bool		part_cols_updated;	/* some part col in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
@@ -2075,6 +2076,10 @@ typedef struct AppendRelInfo
  * The child_rels list must contain at least one element, because the parent
  * partitioned table is itself counted as a child.
  *
+ * all_part_cols contains all attribute numbers from the parent that are
+ * used as partitioning columns by the parent or some descendent which is
+ * itself partitioned.
+ *
  * These structs are kept in the PlannerInfo node's pcinfo_list.
  */
 typedef struct PartitionedChildRelInfo
@@ -2083,6 +2088,7 @@ typedef struct PartitionedChildRelInfo
 
 	Index		parent_relid;
 	List	   *child_rels;
+	Bitmapset  *all_part_cols;
 } PartitionedChildRelInfo;
 
 /*

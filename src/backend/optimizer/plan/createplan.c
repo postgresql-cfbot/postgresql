@@ -277,6 +277,7 @@ static ProjectSet *make_project_set(List *tlist, Plan *subplan);
 static ModifyTable *make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
 				 Index nominalRelation, List *partitioned_rels,
+				 bool part_cols_updated,
 				 List *resultRelations, List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
 				 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
@@ -2361,6 +2362,7 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 							best_path->canSetTag,
 							best_path->nominalRelation,
 							best_path->partitioned_rels,
+							best_path->part_cols_updated,
 							best_path->resultRelations,
 							subplans,
 							best_path->withCheckOptionLists,
@@ -6405,6 +6407,7 @@ static ModifyTable *
 make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
 				 Index nominalRelation, List *partitioned_rels,
+				 bool part_cols_updated,
 				 List *resultRelations, List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
 				 List *rowMarks, OnConflictExpr *onconflict, int epqParam)
@@ -6431,6 +6434,7 @@ make_modifytable(PlannerInfo *root,
 	node->canSetTag = canSetTag;
 	node->nominalRelation = nominalRelation;
 	node->partitioned_rels = partitioned_rels;
+	node->part_cols_updated = part_cols_updated;
 	node->resultRelations = resultRelations;
 	node->resultRelIndex = -1;	/* will be set correctly in setrefs.c */
 	node->rootResultRelIndex = -1;	/* will be set correctly in setrefs.c */

@@ -3162,6 +3162,8 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'partitioned_rels' is an integer list of RT indexes of non-leaf tables in
  *		the partition tree, if this is an UPDATE/DELETE to a partitioned table.
  *		Otherwise NIL.
+ * 'part_cols_updated' if any partitioning columns are being updated, either
+ *		from the named relation or a descendent partitione table.
  * 'resultRelations' is an integer list of actual RT indexes of target rel(s)
  * 'subpaths' is a list of Path(s) producing source data (one per rel)
  * 'subroots' is a list of PlannerInfo structs (one per rel)
@@ -3175,6 +3177,7 @@ ModifyTablePath *
 create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						CmdType operation, bool canSetTag,
 						Index nominalRelation, List *partitioned_rels,
+						bool part_cols_updated,
 						List *resultRelations, List *subpaths,
 						List *subroots,
 						List *withCheckOptionLists, List *returningLists,
@@ -3242,6 +3245,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->canSetTag = canSetTag;
 	pathnode->nominalRelation = nominalRelation;
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
+	pathnode->part_cols_updated = part_cols_updated;
 	pathnode->resultRelations = resultRelations;
 	pathnode->subpaths = subpaths;
 	pathnode->subroots = subroots;

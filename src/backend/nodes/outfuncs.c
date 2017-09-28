@@ -367,6 +367,7 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_BOOL_FIELD(canSetTag);
 	WRITE_UINT_FIELD(nominalRelation);
 	WRITE_NODE_FIELD(partitioned_rels);
+	WRITE_BOOL_FIELD(part_cols_updated);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_INT_FIELD(resultRelIndex);
 	WRITE_INT_FIELD(rootResultRelIndex);
@@ -2096,6 +2097,7 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_BOOL_FIELD(canSetTag);
 	WRITE_UINT_FIELD(nominalRelation);
 	WRITE_NODE_FIELD(partitioned_rels);
+	WRITE_BOOL_FIELD(part_cols_updated);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(subpaths);
 	WRITE_NODE_FIELD(subroots);
@@ -2518,6 +2520,7 @@ _outPartitionedChildRelInfo(StringInfo str, const PartitionedChildRelInfo *node)
 
 	WRITE_UINT_FIELD(parent_relid);
 	WRITE_NODE_FIELD(child_rels);
+	WRITE_BITMAPSET_FIELD(all_part_cols);
 }
 
 static void

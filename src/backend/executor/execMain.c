@@ -104,9 +104,6 @@ static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
 									 int maxfieldlen);
 static void EvalPlanQualStart(EPQState *epqstate, EState *parentestate,
 				  Plan *planTree);
-static void ExecPartitionCheck(ResultRelInfo *resultRelInfo,
-				   TupleTableSlot *slot, EState *estate);
-
 /*
  * Note that GetUpdatedColumns() also exists in commands/trigger.c.  There does
  * not appear to be any good header to put it into, given the structures that
@@ -1851,15 +1848,10 @@ ExecRelCheck(ResultRelInfo *resultRelInfo,
 /*
  * ExecPartitionCheck --- check that tuple meets the partition constraint.
  */
-static void
+bool
 ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 				   EState *estate)
 {
-	Relation	rel = resultRelInfo->ri_RelationDesc;
-	TupleDesc	tupdesc = RelationGetDescr(rel);
-	Bitmapset  *modifiedCols;
-	Bitmapset  *insertedCols;
-	Bitmapset  *updatedCols;
 	ExprContext *econtext;
 
 	/*
@@ -1887,52 +1879,66 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	 * As in case of the catalogued constraints, we treat a NULL result as
 	 * success here, not a failure.
 	 */
-	if (!ExecCheck(resultRelInfo->ri_PartitionCheckExpr, econtext))
+	return ExecCheck(resultRelInfo->ri_PartitionCheckExpr, econtext);
+}
+
+/*
+ * ExecPartitionCheckEmitError - Form and emit an error message after a failed
+ * partition constraint check.
+ */
+void
+ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
+							TupleTableSlot *slot,
+							EState *estate)
+{
+	Relation	rel = resultRelInfo->ri_RelationDesc;
+	Relation	orig_rel = rel;
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	char	   *val_desc;
+	Bitmapset  *modifiedCols;
+	Bitmapset  *insertedCols;
+	Bitmapset  *updatedCols;
+
+	/* See the comments in ExecConstraints. */
+	if (resultRelInfo->ri_PartitionRoot)
 	{
-		char	   *val_desc;
-		Relation	orig_rel = rel;
+		HeapTuple	tuple = ExecFetchSlotTuple(slot);
+		TupleDesc	old_tupdesc = RelationGetDescr(rel);
+		TupleConversionMap *map;
 
-		/* See the comment above. */
-		if (resultRelInfo->ri_PartitionRoot)
+		rel = resultRelInfo->ri_PartitionRoot;
+		tupdesc = RelationGetDescr(rel);
+		/* a reverse map */
+		map = convert_tuples_by_name(old_tupdesc, tupdesc,
+									 gettext_noop("could not convert row type"));
+		if (map != NULL)
 		{
-			HeapTuple	tuple = ExecFetchSlotTuple(slot);
-			TupleDesc	old_tupdesc = RelationGetDescr(rel);
-			TupleConversionMap *map;
-
-			rel = resultRelInfo->ri_PartitionRoot;
-			tupdesc = RelationGetDescr(rel);
-			/* a reverse map */
-			map = convert_tuples_by_name(old_tupdesc, tupdesc,
-										 gettext_noop("could not convert row type"));
-			if (map != NULL)
-			{
-				tuple = do_convert_tuple(tuple, map);
-				ExecSetSlotDescriptor(slot, tupdesc);
-				ExecStoreTuple(tuple, slot, InvalidBuffer, false);
-			}
+			tuple = do_convert_tuple(tuple, map);
+			ExecSetSlotDescriptor(slot, tupdesc);
+			ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 		}
-
-		insertedCols = GetInsertedColumns(resultRelInfo, estate);
-		updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-		modifiedCols = bms_union(insertedCols, updatedCols);
-		val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
-												 slot,
-												 tupdesc,
-												 modifiedCols,
-												 64);
-		ereport(ERROR,
-				(errcode(ERRCODE_CHECK_VIOLATION),
-				 errmsg("new row for relation \"%s\" violates partition constraint",
-						RelationGetRelationName(orig_rel)),
-				 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
 	}
+
+	insertedCols = GetInsertedColumns(resultRelInfo, estate);
+	updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+	modifiedCols = bms_union(insertedCols, updatedCols);
+	val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
+											 slot,
+											 tupdesc,
+											 modifiedCols,
+											 64);
+	ereport(ERROR,
+			(errcode(ERRCODE_CHECK_VIOLATION),
+			 errmsg("new row for relation \"%s\" violates partition constraint",
+					RelationGetRelationName(orig_rel)),
+			 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
 }
 
 /*
  * ExecConstraints - check constraints of the tuple in 'slot'
  *
- * This checks the traditional NOT NULL and check constraints, as well as
- * the partition constraint, if any.
+ * This checks the traditional NOT NULL and check constraints, and if requested,
+ * checks the partition constraint.
  *
  * Note: 'slot' contains the tuple to check the constraints of, which may
  * have been converted from the original input tuple after tuple routing.
@@ -1940,7 +1946,8 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
  */
 void
 ExecConstraints(ResultRelInfo *resultRelInfo,
-				TupleTableSlot *slot, EState *estate)
+				TupleTableSlot *slot, EState *estate,
+				bool check_partition_constraint)
 {
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	TupleDesc	tupdesc = RelationGetDescr(rel);
@@ -2056,8 +2063,9 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 		}
 	}
 
-	if (resultRelInfo->ri_PartitionCheck)
-		ExecPartitionCheck(resultRelInfo, slot, estate);
+	if (check_partition_constraint && resultRelInfo->ri_PartitionCheck &&
+		!ExecPartitionCheck(resultRelInfo, slot, estate))
+		ExecPartitionCheckEmitError(resultRelInfo, slot, estate);
 }
 
 
@@ -3243,34 +3251,40 @@ EvalPlanQualEnd(EPQState *epqstate)
  * ExecSetupPartitionTupleRouting - set up information needed during
  * tuple routing for partitioned tables
  *
+ * 'update_rri' has the UPDATE per-subplan result rels.
+ * 'num_update_rri' : number of UPDATE per-subplan result rels. For INSERT,
+ *      this is 0.
+ *
  * Output arguments:
  * 'pd' receives an array of PartitionDispatch objects with one entry for
  *		every partitioned table in the partition tree
- * 'partitions' receives an array of ResultRelInfo objects with one entry for
+ * 'partitions' receives an array of ResultRelInfo* objects with one entry for
  *		every leaf partition in the partition tree
- * 'tup_conv_maps' receives an array of TupleConversionMap objects with one
- *		entry for every leaf partition (required to convert input tuple based
- *		on the root table's rowtype to a leaf partition's rowtype after tuple
- *		routing is done)
+ * 'perleaf_parentchild_maps' receives an array of TupleConversionMap objects
+ *		with on entry for every leaf partition (required to convert input tuple
+ *		based on the root table's rowtype to a leaf partition's rowtype after
+ *		tuple routing is done)
  * 'partition_tuple_slot' receives a standalone TupleTableSlot to be used
  *		to manipulate any given leaf partition's rowtype after that partition
  *		is chosen by tuple-routing.
  * 'num_parted' receives the number of partitioned tables in the partition
  *		tree (= the number of entries in the 'pd' output array)
  * 'num_partitions' receives the number of leaf partitions in the partition
- *		tree (= the number of entries in the 'partitions' and 'tup_conv_maps'
- *		output arrays
+ *		tree (= the number of entries in the 'partitions' and
+ *		'perleaf_parentchild_maps' output arrays
  *
  * Note that all the relations in the partition tree are locked using the
  * RowExclusiveLock mode upon return from this function.
  */
 void
 ExecSetupPartitionTupleRouting(Relation rel,
+							   ResultRelInfo *update_rri,
+							   int num_update_rri,
 							   Index resultRTindex,
 							   EState *estate,
 							   PartitionDispatch **pd,
-							   ResultRelInfo **partitions,
-							   TupleConversionMap ***tup_conv_maps,
+							   ResultRelInfo ***partitions,
+							   TupleConversionMap ***perleaf_parentchild_maps,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions)
 {
@@ -3278,7 +3292,9 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	List	   *leaf_parts;
 	ListCell   *cell;
 	int			i;
-	ResultRelInfo *leaf_part_rri;
+	ResultRelInfo *leaf_part_arr;
+	ResultRelInfo *cur_update_rri;
+	Oid			cur_reloid = InvalidOid;
 
 	/*
 	 * Get the information about the partition tree after locking all the
@@ -3287,10 +3303,37 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	(void) find_all_inheritors(RelationGetRelid(rel), RowExclusiveLock, NULL);
 	*pd = RelationGetPartitionDispatchInfo(rel, num_parted, &leaf_parts);
 	*num_partitions = list_length(leaf_parts);
-	*partitions = (ResultRelInfo *) palloc(*num_partitions *
-										   sizeof(ResultRelInfo));
-	*tup_conv_maps = (TupleConversionMap **) palloc0(*num_partitions *
-													 sizeof(TupleConversionMap *));
+	*partitions = (ResultRelInfo **) palloc(*num_partitions *
+											sizeof(ResultRelInfo *));
+	*perleaf_parentchild_maps = (TupleConversionMap **) palloc0(*num_partitions *
+																sizeof(TupleConversionMap *));
+
+	if (num_update_rri != 0)
+	{
+		/*
+		 * For Updates, if the leaf partition is already present in the
+		 * per-subplan result rels, we re-use that rather than initialize a
+		 * new result rel. The per-subplan resultrels and the resultrels of
+		 * the leaf partitions are both in the same canonical order. So while
+		 * going through the leaf partition oids, we need to keep track of the
+		 * next per-subplan result rel to be looked for in the leaf partition
+		 * resultrels. So, set the position of cur_update_rri to the first
+		 * per-subplan result rel, and then shift it as we find them one by
+		 * one while scanning the leaf partition oids.
+		 */
+		cur_update_rri = update_rri;
+		cur_reloid = RelationGetRelid(cur_update_rri->ri_RelationDesc);
+	}
+	else
+	{
+		/*
+		 * For inserts, we need to create all new result rels, so avoid
+		 * repeated pallocs by allocating memory for all the result rels in
+		 * bulk.
+		 */
+		leaf_part_arr = (ResultRelInfo *) palloc0(*num_partitions *
+												  sizeof(ResultRelInfo));
+	}
 
 	/*
 	 * Initialize an empty slot that will be used to manipulate tuples of any
@@ -3300,36 +3343,83 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	 */
 	*partition_tuple_slot = MakeTupleTableSlot();
 
-	leaf_part_rri = *partitions;
 	i = 0;
 	foreach(cell, leaf_parts)
 	{
-		Relation	partrel;
+		ResultRelInfo *leaf_part_rri;
+		Relation	partrel = NULL;
 		TupleDesc	part_tupdesc;
+		Oid			leaf_oid = lfirst_oid(cell);
+
+		if (num_update_rri != 0)
+		{
+			/* Is this leaf partition present in the update resultrel ? */
+			if (cur_reloid == leaf_oid)
+			{
+				Assert(cur_update_rri <= update_rri + num_update_rri - 1);
+
+				leaf_part_rri = cur_update_rri;
+				partrel = leaf_part_rri->ri_RelationDesc;
+
+				/*
+				 * This is required when converting tuple as per root
+				 * partition tuple descriptor. When generating the update
+				 * plans, this was not set.
+				 */
+				leaf_part_rri->ri_PartitionRoot = rel;
+
+				cur_update_rri++;
+
+				/*
+				 * If this was the last UPDATE resultrel, indicate that by
+				 * invalidating the cur_reloid.
+				 */
+				if (cur_update_rri == update_rri + num_update_rri)
+					cur_reloid = InvalidOid;
+				else
+					cur_reloid = RelationGetRelid(cur_update_rri->ri_RelationDesc);
+			}
+			else
+				leaf_part_rri = (ResultRelInfo *) palloc0(sizeof(ResultRelInfo));
+		}
+		else
+		{
+			/* For INSERTs, we already have an array of result rels allocated */
+			leaf_part_rri = leaf_part_arr + i;
+		}
 
 		/*
-		 * We locked all the partitions above including the leaf partitions.
-		 * Note that each of the relations in *partitions are eventually
-		 * closed by the caller.
+		 * If we didn't open the partition rel, it means we haven't
+		 * initialized the result rel as well.
 		 */
-		partrel = heap_open(lfirst_oid(cell), NoLock);
+		if (!partrel)
+		{
+			/*
+			 * We locked all the partitions above including the leaf
+			 * partitions. Note that each of the newly opened relations in
+			 * *partitions are eventually closed by the caller.
+			 */
+			partrel = heap_open(leaf_oid, NoLock);
+			InitResultRelInfo(leaf_part_rri,
+							  partrel,
+							  resultRTindex,
+							  rel,
+							  estate->es_instrument);
+		}
+
 		part_tupdesc = RelationGetDescr(partrel);
 
 		/*
 		 * Save a tuple conversion map to convert a tuple routed to this
 		 * partition from the parent's type to the partition's.
 		 */
-		(*tup_conv_maps)[i] = convert_tuples_by_name(tupDesc, part_tupdesc,
-													 gettext_noop("could not convert row type"));
-
-		InitResultRelInfo(leaf_part_rri,
-						  partrel,
-						  resultRTindex,
-						  rel,
-						  estate->es_instrument);
+		(*perleaf_parentchild_maps)[i] = convert_tuples_by_name(tupDesc, part_tupdesc,
+																gettext_noop("could not convert row type"));
 
 		/*
-		 * Verify result relation is a valid target for INSERT.
+		 * Verify result relation is a valid target for insert operation. Even
+		 * for updates, we are doing this for tuple-routing, so again, we need
+		 * to check the validity for insert operation.
 		 */
 		CheckValidResultRel(leaf_part_rri, CMD_INSERT);
 
@@ -3345,9 +3435,18 @@ ExecSetupPartitionTupleRouting(Relation rel,
 		estate->es_leaf_result_relations =
 			lappend(estate->es_leaf_result_relations, leaf_part_rri);
 
-		leaf_part_rri++;
+		(*partitions)[i] = leaf_part_rri;
 		i++;
 	}
+
+	/*
+	 * For UPDATE, we should have found all the per-subplan resultrels in the
+	 * leaf partitions; so cur_update_rri should be positioned just next to
+	 * the last per-subplan resultrel.
+	 */
+	Assert(num_update_rri == 0 ||
+		   (cur_reloid == InvalidOid &&
+			cur_update_rri == update_rri + num_update_rri));
 }
 
 /*
@@ -3373,8 +3472,9 @@ ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 	 * First check the root table's partition constraint, if any.  No point in
 	 * routing the tuple if it doesn't belong in the root table itself.
 	 */
-	if (resultRelInfo->ri_PartitionCheck)
-		ExecPartitionCheck(resultRelInfo, slot, estate);
+	if (resultRelInfo->ri_PartitionCheck &&
+		!ExecPartitionCheck(resultRelInfo, slot, estate))
+		ExecPartitionCheckEmitError(resultRelInfo, slot, estate);
 
 	result = get_partition_for_tuple(pd, slot, estate,
 									 &failed_at, &failed_slot);

@@ -2993,6 +2993,11 @@ VALUES ('Albany', NULL, NULL, 'NY');
     foreign table partitions.
    </para>
 
+   <para>
+    Updating the partition key of a row might cause it to be moved into a
+    different partition where this row satisfies its partition constraint.
+   </para>
+
    <sect3 id="ddl-partitioning-declarative-example">
     <title>Example</title>
 
@@ -3285,9 +3290,20 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
      <listitem>
       <para>
-       An <command>UPDATE</> that causes a row to move from one partition to
-       another fails, because the new value of the row fails to satisfy the
-       implicit partition constraint of the original partition.
+       When an <command>UPDATE</> causes a row to move from one partition to
+       another, there is a chance that another concurrent <command>UPDATE</> or
+       <command>DELETE</> misses this row. Suppose, during the row movement,
+       the row is still visible for the concurrent session, and it is about to
+       do an <command>UPDATE</> or <command>DELETE</> operation on the same
+       row. This DML operation can silently miss this row if the row now gets
+       deleted from the partition by the first session as part of its
+       <command>UPDATE</> row movement. In such case, the concurrent
+       <command>UPDATE</>/<command>DELETE</>, being unaware of the row
+       movement, interprets that the row has just been deleted so there is
+       nothing to be done for this row. Whereas, in the usual case where the
+       table is not partitioned, or where there is no row movement, the second
+       session would have identified the newly updated row and carried
+       <command>UPDATE</>/<command>DELETE</> on this new row version.
       </para>
      </listitem>
 

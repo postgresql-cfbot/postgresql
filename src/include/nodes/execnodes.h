@@ -978,16 +978,33 @@ typedef struct ModifyTableState
 	int			mt_num_dispatch;	/* Number of entries in the above array */
 	int			mt_num_partitions;	/* Number of members in the following
 									 * arrays */
-	ResultRelInfo *mt_partitions;	/* Per partition result relation */
-	TupleConversionMap **mt_partition_tupconv_maps;
-	/* Per partition tuple conversion map */
+	ResultRelInfo **mt_partitions;	/* Per partition result relation pointers */
+
+	/*
+	 * Per partition conversion map to convert tuples from root to leaf
+	 * partition
+	 */
+	TupleConversionMap **mt_perleaf_parentchild_maps;
+
+	/*
+	 * Per partition conversion map to convert tuples from leaf partition to
+	 * root
+	 */
+	TupleConversionMap **mt_perleaf_childparent_maps;
+
+	/*
+	 * Per subplan conversion map to convert tuples from leaf partition to
+	 * root partitioned table
+	 */
+	TupleConversionMap **mt_persubplan_childparent_maps;
+
 	TupleTableSlot *mt_partition_tuple_slot;
+	TupleTableSlot *mt_rootpartition_tuple_slot;
+
 	struct TransitionCaptureState *mt_transition_capture;
 	/* controls transition table population for specified operation */
 	struct TransitionCaptureState *mt_oc_transition_capture;
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
-	TupleConversionMap **mt_transition_tupconv_maps;
-	/* Per plan/partition tuple conversion */
 } ModifyTableState;
 
 /* ----------------

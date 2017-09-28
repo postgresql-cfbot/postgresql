@@ -105,7 +105,8 @@ static void expand_partitioned_rtentry(PlannerInfo *root,
 						   RangeTblEntry *parentrte,
 						   Index parentRTindex, Relation parentrel,
 						   PlanRowMark *top_parentrc, LOCKMODE lockmode,
-						   List **appinfos, List **partitioned_child_rels);
+						   List **appinfos, Bitmapset **all_part_cols,
+						   List **partitioned_child_rels);
 static void expand_single_inheritance_child(PlannerInfo *root,
 								RangeTblEntry *parentrte,
 								Index parentRTindex, Relation parentrel,
@@ -1464,15 +1465,20 @@ expand_inherited_rtentry(PlannerInfo *root, RangeTblEntry *rte, Index rti)
 	if (RelationGetPartitionDesc(oldrelation) != NULL)
 	{
 		List	   *partitioned_child_rels = NIL;
+		Bitmapset  *all_part_cols = NULL;
 
 		Assert(rte->relkind == RELKIND_PARTITIONED_TABLE);
 
 		/*
 		 * If this table has partitions, recursively expand them in the order
-		 * in which they appear in the PartitionDesc.
+		 * in which they appear in the PartitionDesc. Also, extract the
+		 * partition key columns of the root partitioned table. Those of the
+		 * child partitions would be collected during recursive expansion.
 		 */
+		pull_child_partition_columns(&all_part_cols, oldrelation, oldrelation);
 		expand_partitioned_rtentry(root, rte, rti, oldrelation, oldrc,
 								   lockmode, &root->append_rel_list,
+								   &all_part_cols,
 								   &partitioned_child_rels);
 
 		/*
@@ -1490,6 +1496,7 @@ expand_inherited_rtentry(PlannerInfo *root, RangeTblEntry *rte, Index rti)
 			pcinfo = makeNode(PartitionedChildRelInfo);
 			pcinfo->parent_relid = rti;
 			pcinfo->child_rels = partitioned_child_rels;
+			pcinfo->all_part_cols = all_part_cols;
 			root->pcinfo_list = lappend(root->pcinfo_list, pcinfo);
 		}
 	}
@@ -1566,7 +1573,8 @@ static void
 expand_partitioned_rtentry(PlannerInfo *root, RangeTblEntry *parentrte,
 						   Index parentRTindex, Relation parentrel,
 						   PlanRowMark *top_parentrc, LOCKMODE lockmode,
-						   List **appinfos, List **partitioned_child_rels)
+						   List **appinfos, Bitmapset **all_part_cols,
+						   List **partitioned_child_rels)
 {
 	int			i;
 	RangeTblEntry *childrte;
@@ -1618,9 +1626,15 @@ expand_partitioned_rtentry(PlannerInfo *root, RangeTblEntry *parentrte,
 
 		/* If this child is itself partitioned, recurse */
 		if (childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			/* Also, collect the partition columns */
+			pull_child_partition_columns(all_part_cols, childrel, parentrel);
+
 			expand_partitioned_rtentry(root, childrte, childRTindex,
 									   childrel, top_parentrc, lockmode,
-									   appinfos, partitioned_child_rels);
+									   appinfos, all_part_cols,
+									   partitioned_child_rels);
+		}
 
 		/* Close child relation, but keep locks */
 		heap_close(childrel, NoLock);

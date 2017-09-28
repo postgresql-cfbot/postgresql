@@ -1105,7 +1105,8 @@ get_qual_from_partbound(Relation rel, Relation parent,
 
 /*
  * map_partition_varattnos - maps varattno of any Vars in expr from the
- * parent attno to partition attno.
+ * attno's of 'from_rel' partition to the attno's of 'to_rel' partition.
+ * The rels can be both leaf partition or a partitioned table.
  *
  * We must allow for cases where physical attnos of a partition can be
  * different from the parent's.
@@ -1118,8 +1119,8 @@ get_qual_from_partbound(Relation rel, Relation parent,
  * are working on Lists, so it's less messy to do the casts internally.
  */
 List *
-map_partition_varattnos(List *expr, int target_varno,
-						Relation partrel, Relation parent,
+map_partition_varattnos(List *expr, int fromrel_varno,
+						Relation to_rel, Relation from_rel,
 						bool *found_whole_row)
 {
 	bool		my_found_whole_row = false;
@@ -1128,14 +1129,14 @@ map_partition_varattnos(List *expr, int target_varno,
 	{
 		AttrNumber *part_attnos;
 
-		part_attnos = convert_tuples_by_name_map(RelationGetDescr(partrel),
-												 RelationGetDescr(parent),
+		part_attnos = convert_tuples_by_name_map(RelationGetDescr(to_rel),
+												 RelationGetDescr(from_rel),
 												 gettext_noop("could not convert row type"));
 		expr = (List *) map_variable_attnos((Node *) expr,
-											target_varno, 0,
+											fromrel_varno, 0,
 											part_attnos,
-											RelationGetDescr(parent)->natts,
-											RelationGetForm(partrel)->reltype,
+											RelationGetDescr(from_rel)->natts,
+											RelationGetForm(to_rel)->reltype,
 											&my_found_whole_row);
 	}
 
@@ -2436,6 +2437,77 @@ get_partition_for_tuple(PartitionDispatch *pd,
 error_exit:
 	ecxt->ecxt_scantuple = ecxt_scantuple_old;
 	return result;
+}
+
+/*
+ * For each column of rel which is in the partition key or which appears
+ * in an expression which is in the partition key, translate the attribute
+ * number of that column according to the given parent, and add the resulting
+ * column number to the bitmapset, offset as we frequently do by
+ * FirstLowInvalidHeapAttributeNumber.
+ */
+void
+pull_child_partition_columns(Bitmapset **bitmapset,
+							 Relation rel,
+							 Relation parent)
+{
+	PartitionKey key = RelationGetPartitionKey(rel);
+	int16		partnatts = get_partition_natts(key);
+	List	   *partexprs = get_partition_exprs(key);
+	ListCell   *lc;
+	Bitmapset  *child_keycols = NULL;
+	int			i;
+	AttrNumber *map;
+	int			child_keycol = -1;
+
+	/*
+	 * First, compute the complete set of partition columns for this rel. For
+	 * compatibility with the API exposed by pull_varattnos, we offset the
+	 * column numbers by FirstLowInvalidHeapAttributeNumber.
+	 */
+	for (i = 0; i < partnatts; i++)
+	{
+		AttrNumber	partattno = get_partition_col_attnum(key, i);
+
+		if (partattno != 0)
+			child_keycols =
+				bms_add_member(child_keycols,
+							   partattno - FirstLowInvalidHeapAttributeNumber);
+	}
+	foreach(lc, partexprs)
+	{
+		Node	   *expr = (Node *) lfirst(lc);
+
+		pull_varattnos(expr, 1, &child_keycols);
+	}
+
+	/*
+	 * Next, work out how to convert from the attribute numbers for the child
+	 * to the attribute numbers for the parent.
+	 */
+	map =
+		convert_tuples_by_name_map(RelationGetDescr(parent),
+								   RelationGetDescr(rel),
+								   gettext_noop("could not convert row type"));
+
+	/*
+	 * For each child key column we have identified, translate to the
+	 * corresponding parent key column.  Entry 0 in the map array corresponds
+	 * to attribute number 1, which corresponds to a bitmapset entry for 1 -
+	 * FirstLowInvalidHeapAttributeNumber.
+	 */
+	while ((child_keycol = bms_next_member(child_keycols, child_keycol)) >= 0)
+	{
+		int			kc = child_keycol + FirstLowInvalidHeapAttributeNumber;
+
+		Assert(kc > 0 && kc <= RelationGetNumberOfAttributes(rel));
+		*bitmapset =
+			bms_add_member(*bitmapset,
+						   map[kc - 1] - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	/* Release memory. */
+	pfree(map);
 }
 
 /*

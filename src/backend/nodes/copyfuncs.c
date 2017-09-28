@@ -204,6 +204,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_SCALAR_FIELD(canSetTag);
 	COPY_SCALAR_FIELD(nominalRelation);
 	COPY_NODE_FIELD(partitioned_rels);
+	COPY_SCALAR_FIELD(part_cols_updated);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_SCALAR_FIELD(resultRelIndex);
 	COPY_SCALAR_FIELD(rootResultRelIndex);
@@ -2260,6 +2261,7 @@ _copyPartitionedChildRelInfo(const PartitionedChildRelInfo *from)
 
 	COPY_SCALAR_FIELD(parent_relid);
 	COPY_NODE_FIELD(child_rels);
+	COPY_BITMAPSET_FIELD(all_part_cols);
 
 	return newnode;
 }

@@ -187,7 +187,10 @@ extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecCleanUpTriggerState(EState *estate);
 extern bool ExecContextForcesOids(PlanState *planstate, bool *hasoids);
 extern void ExecConstraints(ResultRelInfo *resultRelInfo,
-				TupleTableSlot *slot, EState *estate);
+				TupleTableSlot *slot, EState *estate,
+				bool check_partition_constraint);
+extern void ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
+									TupleTableSlot *slot, EState *estate);
 extern void ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 					 TupleTableSlot *slot, EState *estate);
 extern LockTupleMode ExecUpdateLockMode(EState *estate, ResultRelInfo *relinfo);
@@ -207,10 +210,12 @@ extern void EvalPlanQualSetTuple(EPQState *epqstate, Index rti,
 					 HeapTuple tuple);
 extern HeapTuple EvalPlanQualGetTuple(EPQState *epqstate, Index rti);
 extern void ExecSetupPartitionTupleRouting(Relation rel,
+							   ResultRelInfo *update_rri,
+							   int num_update_rri,
 							   Index resultRTindex,
 							   EState *estate,
 							   PartitionDispatch **pd,
-							   ResultRelInfo **partitions,
+							   ResultRelInfo ***partitions,
 							   TupleConversionMap ***tup_conv_maps,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions);
@@ -218,6 +223,8 @@ extern int ExecFindPartition(ResultRelInfo *resultRelInfo,
 				  PartitionDispatch *pd,
 				  TupleTableSlot *slot,
 				  EState *estate);
+extern bool ExecPartitionCheck(ResultRelInfo *resultRelInfo,
+							TupleTableSlot *slot, EState *estate);
 
 #define EvalPlanQualSetSlot(epqstate, slot)  ((epqstate)->origslot = (slot))
 extern void EvalPlanQualFetchRowMarks(EPQState *epqstate);

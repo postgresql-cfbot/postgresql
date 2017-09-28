@@ -168,7 +168,7 @@ typedef struct CopyStateData
 	PartitionDispatch *partition_dispatch_info;
 	int			num_dispatch;	/* Number of entries in the above array */
 	int			num_partitions; /* Number of members in the following arrays */
-	ResultRelInfo *partitions;	/* Per partition result relation */
+	ResultRelInfo **partitions;	/* Per partition result relation pointers */
 	TupleConversionMap **partition_tupconv_maps;
 	TupleTableSlot *partition_tuple_slot;
 	TransitionCaptureState *transition_capture;
@@ -2460,13 +2460,15 @@ CopyFrom(CopyState cstate)
 	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		PartitionDispatch *partition_dispatch_info;
-		ResultRelInfo *partitions;
+		ResultRelInfo **partitions;
 		TupleConversionMap **partition_tupconv_maps;
 		TupleTableSlot *partition_tuple_slot;
 		int			num_parted,
 					num_partitions;
 
 		ExecSetupPartitionTupleRouting(cstate->rel,
+									   NULL,
+									   0,
 									   1,
 									   estate,
 									   &partition_dispatch_info,
@@ -2496,7 +2498,7 @@ CopyFrom(CopyState cstate)
 			for (i = 0; i < cstate->num_partitions; ++i)
 			{
 				cstate->transition_tupconv_maps[i] =
-					convert_tuples_by_name(RelationGetDescr(cstate->partitions[i].ri_RelationDesc),
+					convert_tuples_by_name(RelationGetDescr(cstate->partitions[i]->ri_RelationDesc),
 										   RelationGetDescr(cstate->rel),
 										   gettext_noop("could not convert row type"));
 			}
@@ -2627,7 +2629,7 @@ CopyFrom(CopyState cstate)
 			 * to the selected partition.
 			 */
 			saved_resultRelInfo = resultRelInfo;
-			resultRelInfo = cstate->partitions + leaf_part_index;
+			resultRelInfo = cstate->partitions[leaf_part_index];
 
 			/* We do not yet have a way to insert into a foreign partition */
 			if (resultRelInfo->ri_FdwRoutine)
@@ -2737,7 +2739,7 @@ CopyFrom(CopyState cstate)
 
 				/* Check the constraints of the tuple */
 				if (cstate->rel->rd_att->constr || check_partition_constr)
-					ExecConstraints(resultRelInfo, slot, estate);
+					ExecConstraints(resultRelInfo, slot, estate, true);
 
 				if (useHeapMultiInsert)
 				{
@@ -2857,7 +2859,7 @@ CopyFrom(CopyState cstate)
 		}
 		for (i = 0; i < cstate->num_partitions; i++)
 		{
-			ResultRelInfo *resultRelInfo = cstate->partitions + i;
+			ResultRelInfo *resultRelInfo = cstate->partitions[i];
 
 			ExecCloseIndices(resultRelInfo);
 			heap_close(resultRelInfo->ri_RelationDesc, NoLock);

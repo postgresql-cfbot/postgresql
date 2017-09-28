@@ -17,6 +17,7 @@
 #include "access/clog.h"
 #include "access/xlogdefs.h"
 #include "lib/ilist.h"
+#include "utils/snapshot.h"
 #include "storage/latch.h"
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
@@ -267,6 +268,22 @@ typedef struct PROC_HDR
 	int			startupProcPid;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
+
+	/*
+	 * In GetSnapshotData we can reuse the previously snapshot computed if no
+	 * new transaction has committed or rolledback. Thus saving good amount of
+	 * computation cycle under GetSnapshotData where we need to iterate
+	 * through procArray every time we try to get the current snapshot. Below
+	 * members help us to save the previously computed snapshot in global
+	 * shared memory and any process which want to get current snapshot can
+	 * directly copy from them if it is still valid.
+	 */
+	SnapshotData cached_snapshot;	/* Previously saved snapshot */
+	volatile bool cached_snapshot_valid;	/* is above snapshot valid */
+	TransactionId cached_snapshot_globalxmin;	/* globalxmin when above
+												 * snapshot was computed */
+	LWLock		CachedSnapshotLock; /* A try lock to make sure only one
+									 * process write to cached_snapshot */
 } PROC_HDR;
 
 extern PROC_HDR *ProcGlobal;

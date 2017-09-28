@@ -118,6 +118,13 @@ ProcGlobalShmemSize(void)
 	size = add_size(size, mul_size(NUM_AUXILIARY_PROCS, sizeof(PGXACT)));
 	size = add_size(size, mul_size(max_prepared_xacts, sizeof(PGXACT)));
 
+	/* for the cached snapshot */
+#define PROCARRAY_MAXPROCS	(MaxBackends + max_prepared_xacts)
+	size = add_size(size, mul_size(sizeof(TransactionId), PROCARRAY_MAXPROCS));
+#define TOTAL_MAX_CACHED_SUBXIDS \
+	((PGPROC_MAX_CACHED_SUBXIDS + 1) * PROCARRAY_MAXPROCS)
+	size = add_size(size, mul_size(sizeof(TransactionId), TOTAL_MAX_CACHED_SUBXIDS));
+
 	return size;
 }
 
@@ -279,6 +286,15 @@ InitProcGlobal(void)
 	/* Create ProcStructLock spinlock, too */
 	ProcStructLock = (slock_t *) ShmemAlloc(sizeof(slock_t));
 	SpinLockInit(ProcStructLock);
+
+	/* Initialize structure for cached snapshot */
+	ProcGlobal->cached_snapshot_valid = false;
+	LWLockInitialize(&ProcGlobal->CachedSnapshotLock, LWTRANCHE_PROC);
+	ProcGlobal->cached_snapshot.xip =
+						ShmemAlloc(PROCARRAY_MAXPROCS * sizeof(TransactionId));
+	ProcGlobal->cached_snapshot.subxip =
+				ShmemAlloc(TOTAL_MAX_CACHED_SUBXIDS * sizeof(TransactionId));
+	ProcGlobal->cached_snapshot_globalxmin = InvalidTransactionId;
 }
 
 /*

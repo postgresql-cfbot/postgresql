@@ -3099,7 +3099,6 @@ static bool
 CleanupBackgroundWorker(int pid,
 						int exitstatus) /* child's exit status */
 {
-	char		namebuf[MAXPGPATH];
 	slist_mutable_iter iter;
 
 	slist_foreach_modify(iter, &BackgroundWorkerList)
@@ -3116,9 +3115,6 @@ CleanupBackgroundWorker(int pid,
 		if (exitstatus == ERROR_WAIT_NO_CHILDREN)
 			exitstatus = 0;
 #endif
-
-		snprintf(namebuf, MAXPGPATH, "%s: %s", _("worker process"),
-				 rw->rw_worker.bgw_name);
 
 		if (!EXIT_STATUS_0(exitstatus))
 		{
@@ -3141,7 +3137,7 @@ CleanupBackgroundWorker(int pid,
 		{
 			if (!EXIT_STATUS_0(exitstatus) && !EXIT_STATUS_1(exitstatus))
 			{
-				HandleChildCrash(pid, exitstatus, namebuf);
+				HandleChildCrash(pid, exitstatus, rw->rw_worker.bgw_name);
 				return true;
 			}
 		}
@@ -3154,7 +3150,7 @@ CleanupBackgroundWorker(int pid,
 		if (!ReleasePostmasterChildSlot(rw->rw_child_slot) &&
 			(rw->rw_worker.bgw_flags & BGWORKER_SHMEM_ACCESS) != 0)
 		{
-			HandleChildCrash(pid, exitstatus, namebuf);
+			HandleChildCrash(pid, exitstatus, rw->rw_worker.bgw_name);
 			return true;
 		}
 
@@ -3179,7 +3175,7 @@ CleanupBackgroundWorker(int pid,
 		ReportBackgroundWorkerExit(&iter);	/* report child death */
 
 		LogChildExit(EXIT_STATUS_0(exitstatus) ? DEBUG1 : LOG,
-					 namebuf, pid, exitstatus);
+					 rw->rw_worker.bgw_name, pid, exitstatus);
 
 		return true;
 	}

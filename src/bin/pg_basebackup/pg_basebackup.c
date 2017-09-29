@@ -1330,6 +1330,7 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 	pgoff_t		current_len_left = 0;
 	int			current_padding = 0;
 	bool		basetablespace;
+	bool            firstfile = 1;
 	char	   *copybuf = NULL;
 	FILE	   *file = NULL;
 
@@ -1423,7 +1424,15 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 					 * Directory
 					 */
 					filename[strlen(filename) - 1] = '\0';	/* Remove trailing slash */
-					if (mkdir(filename, S_IRWXU) != 0)
+					if (firstfile && !basetablespace)
+					{
+						/*
+						 * The first file in the tablespace is its main folder, whose name can not be guessed (PG_MAJORVER_CATVER)
+						 * So we must check here that this folder can be created or is empty.
+						 */
+						verify_dir_is_empty_or_create(filename, &made_tablespace_dirs, &found_tablespace_dirs);
+					}
+					else if (mkdir(filename, S_IRWXU) != 0)
 					{
 						/*
 						 * When streaming WAL, pg_wal (or pg_xlog for pre-9.6
@@ -1554,6 +1563,7 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 				continue;
 			}
 		}						/* continuing data in existing file */
+		firstfile = 0;					/* mark that we are done with the first file of the tarball */
 	}							/* loop over all data blocks */
 	progress_report(rownum, filename, true);
 
@@ -1868,18 +1878,6 @@ BaseBackup(void)
 	for (i = 0; i < PQntuples(res); i++)
 	{
 		totalsize += atol(PQgetvalue(res, i, 2));
-
-		/*
-		 * Verify tablespace directories are empty. Don't bother with the
-		 * first once since it can be relocated, and it will be checked before
-		 * we do anything anyway.
-		 */
-		if (format == 'p' && !PQgetisnull(res, i, 1))
-		{
-			char	   *path = (char *) get_tablespace_mapping(PQgetvalue(res, i, 1));
-
-			verify_dir_is_empty_or_create(path, &made_tablespace_dirs, &found_tablespace_dirs);
-		}
 	}
 
 	/*

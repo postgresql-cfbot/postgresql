@@ -21,6 +21,7 @@
 #include <limits.h>
 
 #include "access/heapam.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
@@ -354,7 +355,7 @@ currtid_byreloid(PG_FUNCTION_ARGS)
 	ItemPointerCopy(tid, result);
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	heap_get_latest_tid(rel, snapshot, result);
+	storage_get_latest_tid(rel, snapshot, result);
 	UnregisterSnapshot(snapshot);
 
 	heap_close(rel, AccessShareLock);
@@ -389,7 +390,7 @@ currtid_byrelname(PG_FUNCTION_ARGS)
 	ItemPointerCopy(tid, result);
 
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	heap_get_latest_tid(rel, snapshot, result);
+	storage_get_latest_tid(rel, snapshot, result);
 	UnregisterSnapshot(snapshot);
 
 	heap_close(rel, AccessShareLock);

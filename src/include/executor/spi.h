@@ -25,7 +25,7 @@ typedef struct SPITupleTable
 	uint64		alloced;		/* # of alloced vals */
 	uint64		free;			/* # of free vals */
 	TupleDesc	tupdesc;		/* tuple descriptor */
-	HeapTuple  *vals;			/* tuples */
+	StorageTuple  *vals;			/* tuples */
 	slist_node	next;			/* link for internal bookkeeping */
 	SubTransactionId subid;		/* subxact in which tuptable was created */
 } SPITupleTable;
@@ -117,9 +117,9 @@ extern const char *SPI_result_code_string(int code);
 extern List *SPI_plan_get_plan_sources(SPIPlanPtr plan);
 extern CachedPlan *SPI_plan_get_cached_plan(SPIPlanPtr plan);
 
-extern HeapTuple SPI_copytuple(HeapTuple tuple);
-extern HeapTupleHeader SPI_returntuple(HeapTuple tuple, TupleDesc tupdesc);
-extern HeapTuple SPI_modifytuple(Relation rel, HeapTuple tuple, int natts,
+extern StorageTuple SPI_copytuple(StorageTuple tuple);
+extern HeapTupleHeader SPI_returntuple(StorageTuple tuple, TupleDesc tupdesc);
+extern StorageTuple SPI_modifytuple(Relation rel, HeapTuple tuple, int natts,
 				int *attnum, Datum *Values, const char *Nulls);
 extern int	SPI_fnumber(TupleDesc tupdesc, const char *fname);
 extern char *SPI_fname(TupleDesc tupdesc, int fnumber);
@@ -133,7 +133,7 @@ extern void *SPI_palloc(Size size);
 extern void *SPI_repalloc(void *pointer, Size size);
 extern void SPI_pfree(void *pointer);
 extern Datum SPI_datumTransfer(Datum value, bool typByVal, int typLen);
-extern void SPI_freetuple(HeapTuple pointer);
+extern void SPI_freetuple(StorageTuple pointer);
 extern void SPI_freetuptable(SPITupleTable *tuptable);
 
 extern Portal SPI_cursor_open(const char *name, SPIPlanPtr plan,

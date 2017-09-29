@@ -45,7 +45,7 @@
 
 static TupleTableSlot *ExecGather(PlanState *pstate);
 static TupleTableSlot *gather_getnext(GatherState *gatherstate);
-static HeapTuple gather_readnext(GatherState *gatherstate);
+static StorageTuple gather_readnext(GatherState *gatherstate);
 static void ExecShutdownGatherWorkers(GatherState *node);
 
 
@@ -251,7 +251,7 @@ gather_getnext(GatherState *gatherstate)
 	TupleTableSlot *outerTupleSlot;
 	TupleTableSlot *fslot = gatherstate->funnel_slot;
 	MemoryContext tupleContext = gatherstate->ps.ps_ExprContext->ecxt_per_tuple_memory;
-	HeapTuple	tup;
+	StorageTuple	tup;
 
 	while (gatherstate->nreaders > 0 || gatherstate->need_to_scan_locally)
 	{
@@ -294,7 +294,7 @@ gather_getnext(GatherState *gatherstate)
 /*
  * Attempt to read a tuple from one of our parallel workers.
  */
-static HeapTuple
+static StorageTuple
 gather_readnext(GatherState *gatherstate)
 {
 	int			nvisited = 0;
@@ -302,7 +302,7 @@ gather_readnext(GatherState *gatherstate)
 	for (;;)
 	{
 		TupleQueueReader *reader;
-		HeapTuple	tup;
+		StorageTuple	tup;
 		bool		readerdone;
 
 		/* Check for async events, particularly messages from workers. */

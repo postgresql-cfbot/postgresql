@@ -181,7 +181,7 @@ static void sqlfunction_destroy(DestReceiver *self);
  * polymorphic arguments.
  */
 SQLFunctionParseInfoPtr
-prepare_sql_fn_parse_info(HeapTuple procedureTuple,
+prepare_sql_fn_parse_info(StorageTuple procedureTuple,
 						  Node *call_expr,
 						  Oid inputCollation)
 {
@@ -597,7 +597,7 @@ init_sql_fcache(FmgrInfo *finfo, Oid collation, bool lazyEvalOK)
 	MemoryContext fcontext;
 	MemoryContext oldcontext;
 	Oid			rettype;
-	HeapTuple	procedureTuple;
+	StorageTuple	procedureTuple;
 	Form_pg_proc procedureStruct;
 	SQLFunctionCachePtr fcache;
 	List	   *raw_parsetree_list;

@@ -34,6 +34,7 @@
 #include "access/multixact.h"
 #include "access/nbtree.h"
 #include "access/reloptions.h"
+#include "access/storageamapi.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -1368,10 +1369,26 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	}
 
 	/*
-	 * if it's an index, initialize index-related information
+	 * initialize access method information
 	 */
-	if (OidIsValid(relation->rd_rel->relam))
-		RelationInitIndexAccessInfo(relation);
+	switch (relation->rd_rel->relkind)
+	{
+		case RELKIND_INDEX:
+			Assert(relation->rd_rel->relkind != InvalidOid);
+			RelationInitIndexAccessInfo(relation);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW: /* Not exactly the storage, but underlying tuple access, it is required */
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			RelationInitStorageAccessInfo(relation);
+			break;
+		default:
+			/* nothing to do in other cases */
+			break;
+	}
 
 	/* extract reloptions if any */
 	RelationParseRelOptions(relation, pg_class_tuple);
@@ -1868,6 +1885,71 @@ LookupOpclassInfo(Oid operatorClassOid,
 	return opcentry;
 }
 
+/*
+ * Fill in the StorageAmRoutine for a relation
+ *
+ * relation's rd_amhandler and rd_indexcxt (XXX?) must be valid already.
+ */
+static void
+InitStorageAmRoutine(Relation relation)
+{
+	StorageAmRoutine *cached,
+					 *tmp;
+
+	/*
+	 * Call the amhandler in current, short-lived memory context, just in case
+	 * it leaks anything (it probably won't, but let's be paranoid).
+	 */
+	tmp = GetStorageAmRoutine(relation->rd_amhandler);
+
+	/* XXX do we need a separate memory context for this? */
+	/* OK, now transfer the data into cache context */
+	cached = (StorageAmRoutine *) MemoryContextAlloc(CacheMemoryContext,
+													 sizeof(StorageAmRoutine));
+	memcpy(cached, tmp, sizeof(StorageAmRoutine));
+	relation->rd_stamroutine = cached;
+
+	pfree(tmp);
+}
+
+/*
+ * Initialize storage-access-method support data for a heap relation
+ */
+void
+RelationInitStorageAccessInfo(Relation relation)
+{
+	HeapTuple	tuple;
+	Form_pg_am	aform;
+
+	/*
+	 * Relations that don't have a catalogued storage access method use the
+	 * standard heapam module; otherwise a catalog lookup is in order.
+	 */
+	if (!OidIsValid(relation->rd_rel->relam))
+	{
+		relation->rd_amhandler = HEAPAM_STORAGE_AM_HANDLER_OID;
+	}
+	else
+	{
+		/*
+		 * Look up the storage access method, save the OID of its handler
+		 * function.
+		 */
+		tuple = SearchSysCache1(AMOID,
+								ObjectIdGetDatum(relation->rd_rel->relam));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for access method %u",
+				 relation->rd_rel->relam);
+		aform = (Form_pg_am) GETSTRUCT(tuple);
+		relation->rd_amhandler = aform->amhandler;
+		ReleaseSysCache(tuple);
+	}
+
+	/*
+	 * Now we can fetch the storage AM's API struct
+	 */
+	InitStorageAmRoutine(relation);
+}
 
 /*
  *		formrdesc
@@ -2025,6 +2107,11 @@ formrdesc(const char *relationName, Oid relationReltype,
 	 * initialize physical addressing information for the relation
 	 */
 	RelationInitPhysicalAddr(relation);
+
+	/*
+	 * initialize the storage am handler
+	 */
+	relation->rd_stamroutine = GetHeapamStorageAmRoutine();
 
 	/*
 	 * initialize the rel-has-index flag, using hardwired knowledge
@@ -2354,6 +2441,8 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 		pfree(relation->rd_pubactions);
 	if (relation->rd_options)
 		pfree(relation->rd_options);
+	if (relation->rd_stamroutine)
+		pfree(relation->rd_stamroutine);
 	if (relation->rd_indextuple)
 		pfree(relation->rd_indextuple);
 	if (relation->rd_indexcxt)
@@ -3368,6 +3457,13 @@ RelationBuildLocalRelation(const char *relname,
 
 	RelationInitPhysicalAddr(rel);
 
+	if (relkind == RELKIND_RELATION ||
+		relkind == RELKIND_MATVIEW ||
+		relkind == RELKIND_VIEW || /* Not exactly the storage, but underlying tuple access, it is required */
+		relkind == RELKIND_PARTITIONED_TABLE ||
+		relkind == RELKIND_TOASTVALUE)
+		RelationInitStorageAccessInfo(rel);
+
 	/*
 	 * Okay to insert into the relcache hash table.
 	 *
@@ -3885,6 +3981,18 @@ RelationCacheInitializePhase3(void)
 		{
 			RelationBuildPartitionDesc(relation);
 			Assert(relation->rd_partdesc != NULL);
+
+			restart = true;
+		}
+
+		if (relation->rd_stamroutine == NULL &&
+			(relation->rd_rel->relkind == RELKIND_RELATION ||
+			relation->rd_rel->relkind == RELKIND_MATVIEW ||
+			relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ||
+			relation->rd_rel->relkind == RELKIND_TOASTVALUE))
+		{
+			RelationInitStorageAccessInfo(relation);
+			Assert (relation->rd_stamroutine != NULL);
 
 			restart = true;
 		}
@@ -5606,6 +5714,9 @@ load_relcache_init_file(bool shared)
 			/* Count nailed rels to ensure we have 'em all */
 			if (rel->rd_isnailed)
 				nailed_rels++;
+
+			/* Load storage AM stuff */
+			RelationInitStorageAccessInfo(rel);
 
 			Assert(rel->rd_index == NULL);
 			Assert(rel->rd_indextuple == NULL);

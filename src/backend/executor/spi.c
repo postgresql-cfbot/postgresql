@@ -627,11 +627,11 @@ SPI_freeplan(SPIPlanPtr plan)
 	return 0;
 }
 
-HeapTuple
-SPI_copytuple(HeapTuple tuple)
+StorageTuple
+SPI_copytuple(StorageTuple tuple)
 {
 	MemoryContext oldcxt;
-	HeapTuple	ctuple;
+	StorageTuple	ctuple;
 
 	if (tuple == NULL)
 	{
@@ -655,7 +655,7 @@ SPI_copytuple(HeapTuple tuple)
 }
 
 HeapTupleHeader
-SPI_returntuple(HeapTuple tuple, TupleDesc tupdesc)
+SPI_returntuple(StorageTuple tuple, TupleDesc tupdesc)
 {
 	MemoryContext oldcxt;
 	HeapTupleHeader dtup;
@@ -686,7 +686,7 @@ SPI_returntuple(HeapTuple tuple, TupleDesc tupdesc)
 	return dtup;
 }
 
-HeapTuple
+StorageTuple
 SPI_modifytuple(Relation rel, HeapTuple tuple, int natts, int *attnum,
 				Datum *Values, const char *Nulls)
 {
@@ -854,7 +854,7 @@ char *
 SPI_gettype(TupleDesc tupdesc, int fnumber)
 {
 	Oid			typoid;
-	HeapTuple	typeTuple;
+	StorageTuple	typeTuple;
 	char	   *result;
 
 	SPI_result = 0;
@@ -962,7 +962,7 @@ SPI_datumTransfer(Datum value, bool typByVal, int typLen)
 }
 
 void
-SPI_freetuple(HeapTuple tuple)
+SPI_freetuple(StorageTuple tuple)
 {
 	/* No longer need to worry which context tuple was in... */
 	heap_freetuple(tuple);
@@ -1683,7 +1683,7 @@ spi_dest_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 
 	/* set up initial allocations */
 	tuptable->alloced = tuptable->free = 128;
-	tuptable->vals = (HeapTuple *) palloc(tuptable->alloced * sizeof(HeapTuple));
+	tuptable->vals = (StorageTuple *) palloc(tuptable->alloced * sizeof(StorageTuple));
 	tuptable->tupdesc = CreateTupleDescCopy(typeinfo);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -1714,8 +1714,8 @@ spi_printtup(TupleTableSlot *slot, DestReceiver *self)
 		/* Double the size of the pointer array */
 		tuptable->free = tuptable->alloced;
 		tuptable->alloced += tuptable->free;
-		tuptable->vals = (HeapTuple *) repalloc_huge(tuptable->vals,
-													 tuptable->alloced * sizeof(HeapTuple));
+		tuptable->vals = (StorageTuple *) repalloc_huge(tuptable->vals,
+													 tuptable->alloced * sizeof(StorageTuple));
 	}
 
 	tuptable->vals[tuptable->alloced - tuptable->free] =

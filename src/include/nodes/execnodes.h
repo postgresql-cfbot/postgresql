@@ -16,6 +16,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/storageam.h"
 #include "access/tupconvert.h"
 #include "executor/instrument.h"
 #include "lib/pairingheap.h"
@@ -503,7 +504,7 @@ typedef struct EState
 	 * remember if the tuple has been returned already.  Arrays are of size
 	 * list_length(es_range_table) and are indexed by scan node scanrelid - 1.
 	 */
-	HeapTuple  *es_epqTuple;	/* array of EPQ substitute tuples */
+	StorageTuple  *es_epqTuple;	/* array of EPQ substitute tuples */
 	bool	   *es_epqTupleSet; /* true if EPQ tuple is provided */
 	bool	   *es_epqScanDone; /* true if EPQ tuple has been fetched */
 
@@ -1099,7 +1100,7 @@ typedef struct ScanState
 {
 	PlanState	ps;				/* its first field is NodeTag */
 	Relation	ss_currentRelation;
-	HeapScanDesc ss_currentScanDesc;
+	StorageScanDesc ss_currentScanDesc;
 	TupleTableSlot *ss_ScanTupleSlot;
 } ScanState;
 
@@ -1120,6 +1121,7 @@ typedef struct SeqScanState
 typedef struct SampleScanState
 {
 	ScanState	ss;
+	HeapPageScanDesc pagescan;
 	List	   *args;			/* expr states for TABLESAMPLE params */
 	ExprState  *repeatable;		/* expr state for REPEATABLE expr */
 	/* use struct pointer to avoid including tsmapi.h here */
@@ -1344,6 +1346,7 @@ typedef struct ParallelBitmapHeapState
 typedef struct BitmapHeapScanState
 {
 	ScanState	ss;				/* its first field is NodeTag */
+	HeapPageScanDesc pagescan;
 	ExprState  *bitmapqualorig;
 	TIDBitmap  *tbm;
 	TBMIterator *tbmiterator;
@@ -2023,7 +2026,7 @@ typedef struct LockRowsState
 	PlanState	ps;				/* its first field is NodeTag */
 	List	   *lr_arowMarks;	/* List of ExecAuxRowMarks */
 	EPQState	lr_epqstate;	/* for evaluating EvalPlanQual rechecks */
-	HeapTuple  *lr_curtuples;	/* locked tuples (one entry per RT entry) */
+	StorageTuple  *lr_curtuples;	/* locked tuples (one entry per RT entry) */
 	int			lr_ntables;		/* length of lr_curtuples[] array */
 } LockRowsState;
 

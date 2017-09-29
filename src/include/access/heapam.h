@@ -97,6 +97,8 @@ extern Relation heap_openrv_extended(const RangeVar *relation,
 #define heap_close(r,l)  relation_close(r,l)
 
 /* struct definitions appear in relscan.h */
+typedef struct HeapPageScanDescData *HeapPageScanDesc;
+typedef struct StorageScanDescData *StorageScanDesc;
 typedef struct HeapScanDescData *HeapScanDesc;
 typedef struct ParallelHeapScanDescData *ParallelHeapScanDesc;
 
@@ -106,70 +108,23 @@ typedef struct ParallelHeapScanDescData *ParallelHeapScanDesc;
  */
 #define HeapScanIsValid(scan) PointerIsValid(scan)
 
-extern HeapScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
-			   int nkeys, ScanKey key);
-extern HeapScanDesc heap_beginscan_catalog(Relation relation, int nkeys,
-					   ScanKey key);
-extern HeapScanDesc heap_beginscan_strat(Relation relation, Snapshot snapshot,
-					 int nkeys, ScanKey key,
-					 bool allow_strat, bool allow_sync);
-extern HeapScanDesc heap_beginscan_bm(Relation relation, Snapshot snapshot,
-				  int nkeys, ScanKey key);
-extern HeapScanDesc heap_beginscan_sampling(Relation relation,
-						Snapshot snapshot, int nkeys, ScanKey key,
-						bool allow_strat, bool allow_sync, bool allow_pagemode);
-extern void heap_setscanlimits(HeapScanDesc scan, BlockNumber startBlk,
-				   BlockNumber endBlk);
-extern void heapgetpage(HeapScanDesc scan, BlockNumber page);
-extern void heap_rescan(HeapScanDesc scan, ScanKey key);
-extern void heap_rescan_set_params(HeapScanDesc scan, ScanKey key,
-					   bool allow_strat, bool allow_sync, bool allow_pagemode);
-extern void heap_endscan(HeapScanDesc scan);
-extern HeapTuple heap_getnext(HeapScanDesc scan, ScanDirection direction);
+extern void heapgetpage(StorageScanDesc sscan, BlockNumber page);
 
 extern Size heap_parallelscan_estimate(Snapshot snapshot);
 extern void heap_parallelscan_initialize(ParallelHeapScanDesc target,
 							 Relation relation, Snapshot snapshot);
 extern void heap_parallelscan_reinitialize(ParallelHeapScanDesc parallel_scan);
-extern HeapScanDesc heap_beginscan_parallel(Relation, ParallelHeapScanDesc);
 
-extern bool heap_fetch(Relation relation, Snapshot snapshot,
-		   HeapTuple tuple, Buffer *userbuf, bool keep_buf,
-		   Relation stats_relation);
-extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
-					   Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
-					   bool *all_dead, bool first_call);
-extern bool heap_hot_search(ItemPointer tid, Relation relation,
-				Snapshot snapshot, bool *all_dead);
+extern Oid heap_insert(Relation relation, HeapTuple tup, CommandId cid,
+			int options, BulkInsertState bistate);
 
-extern void heap_get_latest_tid(Relation relation, Snapshot snapshot,
-					ItemPointer tid);
 extern void setLastTid(const ItemPointer tid);
 
 extern BulkInsertState GetBulkInsertState(void);
 extern void FreeBulkInsertState(BulkInsertState);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 
-extern Oid heap_insert(Relation relation, HeapTuple tup, CommandId cid,
-			int options, BulkInsertState bistate);
-extern void heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
-				  CommandId cid, int options, BulkInsertState bistate);
-extern HTSU_Result heap_delete(Relation relation, ItemPointer tid,
-			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd);
-extern void heap_finish_speculative(Relation relation, HeapTuple tuple);
-extern void heap_abort_speculative(Relation relation, HeapTuple tuple);
-extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
-			HeapTuple newtup,
-			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
-extern HTSU_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
-				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
-				bool follow_update,
-				Buffer *buffer, HeapUpdateFailureData *hufd);
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
-extern bool heap_freeze_tuple(HeapTupleHeader tuple, TransactionId cutoff_xid,
-				  TransactionId cutoff_multi);
 extern bool heap_tuple_needs_freeze(HeapTupleHeader tuple, TransactionId cutoff_xid,
 						MultiXactId cutoff_multi, Buffer buf);
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
@@ -178,9 +133,6 @@ extern Oid	simple_heap_insert(Relation relation, HeapTuple tup);
 extern void simple_heap_delete(Relation relation, ItemPointer tid);
 extern void simple_heap_update(Relation relation, ItemPointer otid,
 				   HeapTuple tup);
-
-extern void heap_sync(Relation relation);
-extern void heap_update_snapshot(HeapScanDesc scan, Snapshot snapshot);
 
 /* in heap/pruneheap.c */
 extern void heap_page_prune_opt(Relation relation, Buffer buffer);

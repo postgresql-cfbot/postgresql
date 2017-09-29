@@ -12,12 +12,13 @@
  */
 #include "postgres.h"
 
-#include "access/visibilitymap.h"
 #include "access/transam.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/multixact.h"
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
+#include "commands/vacuum.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -26,7 +27,7 @@
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/tqual.h"
-#include "commands/vacuum.h"
+
 
 PG_FUNCTION_INFO_V1(pgstattuple_approx);
 PG_FUNCTION_INFO_V1(pgstattuple_approx_v1_5);
@@ -156,7 +157,7 @@ statapprox_heap(Relation rel, output_type *stat)
 			 * We count live and dead tuples, but we also need to add up
 			 * others in order to feed vac_estimate_reltuples.
 			 */
-			switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
+			switch (rel->rd_stamroutine->snapshot_satisfiesVacuum(&tuple, OldestXmin, buf))
 			{
 				case HEAPTUPLE_RECENTLY_DEAD:
 					misc_count++;

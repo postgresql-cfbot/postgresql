@@ -1080,7 +1080,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 			targtuple.t_data = (HeapTupleHeader) PageGetItem(targpage, itemid);
 			targtuple.t_len = ItemIdGetLength(itemid);
 
-			switch (HeapTupleSatisfiesVacuum(&targtuple,
+			switch (onerel->rd_stamroutine->snapshot_satisfiesVacuum(&targtuple,
 											 OldestXmin,
 											 targbuffer))
 			{

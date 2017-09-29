@@ -18,9 +18,25 @@
 #include "access/tupdesc.h"
 #include "storage/buf.h"
 
+/*
+ * Forward declare StorageAmRoutine to avoid including storageamapi.h here
+ */
+struct StorageSlotAmRoutine;
+
+/*
+ * Forward declare StorageTuple to avoid including storageamapi.h here
+ */
+typedef void *StorageTuple;
+
 /*----------
  * The executor stores tuples in a "tuple table" which is a List of
- * independent TupleTableSlots.  There are several cases we need to handle:
+ * independent TupleTableSlots.
+ *
+ * XXX The "html-commented out" text below no longer reflects reality, as
+ * physical tuples are now responsibility of storage AMs.  But we have kept
+ * "minimal tuples".  Adjust this comment!
+ *
+ * <!-- There are several cases we need to handle:
  *		1. physical tuple in a disk buffer page
  *		2. physical tuple constructed in palloc'ed memory
  *		3. "minimal" physical tuple constructed in palloc'ed memory
@@ -56,6 +72,7 @@
  * had the fatal defect of invalidating any pass-by-reference Datums pointing
  * into the existing slot contents.)  Both copies must contain identical data
  * payloads when this is the case.
+ * -->
  *
  * The Datum/isnull arrays of a TupleTableSlot serve double duty.  When the
  * slot contains a virtual tuple, they are the authoritative data.  When the
@@ -82,11 +99,6 @@
  * When tts_shouldFree is true, the physical tuple is "owned" by the slot
  * and should be freed when the slot's reference to the tuple is dropped.
  *
- * If tts_buffer is not InvalidBuffer, then the slot is holding a pin
- * on the indicated buffer page; drop the pin when we release the
- * slot's reference to that buffer.  (tts_shouldFree should always be
- * false in such a case, since presumably tts_tuple is pointing at the
- * buffer page.)
  *
  * tts_nvalid indicates the number of valid columns in the tts_values/isnull
  * arrays.  When the slot is holding a "virtual" tuple this must be equal
@@ -114,23 +126,20 @@ typedef struct TupleTableSlot
 {
 	NodeTag		type;
 	bool		tts_isempty;	/* true = slot is empty */
-	bool		tts_shouldFree; /* should pfree tts_tuple? */
-	bool		tts_shouldFreeMin;	/* should pfree tts_mintuple? */
-	bool		tts_slow;		/* saved state for slot_deform_tuple */
-	HeapTuple	tts_tuple;		/* physical tuple, or NULL if virtual */
+	ItemPointerData tts_tid;	/* XXX describe */
 	TupleDesc	tts_tupleDescriptor;	/* slot's tuple descriptor */
 	MemoryContext tts_mcxt;		/* slot itself is in this context */
-	Buffer		tts_buffer;		/* tuple's buffer, or InvalidBuffer */
+	Oid           tts_tableOid;   /* XXX describe */
+    Oid           tts_tupleOid;   /* XXX describe */
 	int			tts_nvalid;		/* # of valid values in tts_values */
+    uint32      tts_speculativeToken;   /* XXX describe */
+    bool		tts_shouldFree;
+    bool		tts_shouldFreeMin;
 	Datum	   *tts_values;		/* current per-attribute values */
 	bool	   *tts_isnull;		/* current per-attribute isnull flags */
-	MinimalTuple tts_mintuple;	/* minimal tuple, or NULL if none */
-	HeapTupleData tts_minhdr;	/* workspace for minimal-tuple-only case */
-	long		tts_off;		/* saved state for slot_deform_tuple */
+    struct StorageSlotAmRoutine *tts_storageslotam; /* storage AM */
+    void       *tts_storage;        /* storage AM's opaque space */
 } TupleTableSlot;
-
-#define TTS_HAS_PHYSICAL_TUPLE(slot)  \
-	((slot)->tts_tuple != NULL && (slot)->tts_tuple != &((slot)->tts_minhdr))
 
 /*
  * TupIsNull -- is a TupleTableSlot empty?
@@ -143,9 +152,10 @@ extern TupleTableSlot *MakeTupleTableSlot(void);
 extern TupleTableSlot *ExecAllocTableSlot(List **tupleTable);
 extern void ExecResetTupleTable(List *tupleTable, bool shouldFree);
 extern TupleTableSlot *MakeSingleTupleTableSlot(TupleDesc tupdesc);
+extern bool ExecSlotCompare(TupleTableSlot *slot1, TupleTableSlot *slot2);
 extern void ExecDropSingleTupleTableSlot(TupleTableSlot *slot);
 extern void ExecSetSlotDescriptor(TupleTableSlot *slot, TupleDesc tupdesc);
-extern TupleTableSlot *ExecStoreTuple(HeapTuple tuple,
+extern TupleTableSlot *ExecStoreTuple(void *tuple,
 			   TupleTableSlot *slot,
 			   Buffer buffer,
 			   bool shouldFree);
@@ -155,12 +165,14 @@ extern TupleTableSlot *ExecStoreMinimalTuple(MinimalTuple mtup,
 extern TupleTableSlot *ExecClearTuple(TupleTableSlot *slot);
 extern TupleTableSlot *ExecStoreVirtualTuple(TupleTableSlot *slot);
 extern TupleTableSlot *ExecStoreAllNullTuple(TupleTableSlot *slot);
-extern HeapTuple ExecCopySlotTuple(TupleTableSlot *slot);
+extern StorageTuple ExecCopySlotTuple(TupleTableSlot *slot);
 extern MinimalTuple ExecCopySlotMinimalTuple(TupleTableSlot *slot);
-extern HeapTuple ExecFetchSlotTuple(TupleTableSlot *slot);
+extern void ExecSlotUpdateTupleTableoid(TupleTableSlot *slot, Oid tableoid);
+extern StorageTuple ExecFetchSlotTuple(TupleTableSlot *slot);
 extern MinimalTuple ExecFetchSlotMinimalTuple(TupleTableSlot *slot);
 extern Datum ExecFetchSlotTupleDatum(TupleTableSlot *slot);
-extern HeapTuple ExecMaterializeSlot(TupleTableSlot *slot);
+extern void ExecMaterializeSlot(TupleTableSlot *slot);
+extern StorageTuple ExecHeapifySlot(TupleTableSlot *slot);
 extern TupleTableSlot *ExecCopySlot(TupleTableSlot *dstslot,
 			 TupleTableSlot *srcslot);
 

@@ -108,8 +108,10 @@
 #include "miscadmin.h"
 
 #include "access/heapam.h"
+#include "access/heapam_common.h"
 #include "access/heapam_xlog.h"
 #include "access/rewriteheap.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
@@ -126,13 +128,13 @@
 
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/procarray.h"
 #include "storage/smgr.h"
 
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/tqual.h"
 
-#include "storage/procarray.h"
 
 /*
  * State associated with a rewrite operation. This is opaque to the user
@@ -357,7 +359,7 @@ end_heap_rewrite(RewriteState state)
 	 * wrote before the checkpoint.
 	 */
 	if (RelationNeedsWAL(state->rs_new_rel))
-		heap_sync(state->rs_new_rel);
+		storage_sync(state->rs_new_rel);
 
 	logical_end_heap_rewrite(state);
 
@@ -407,7 +409,7 @@ rewrite_heap_tuple(RewriteState state,
 	 * While we have our hands on the tuple, we may as well freeze any
 	 * eligible xmin or xmax, so that future VACUUM effort can be saved.
 	 */
-	heap_freeze_tuple(new_tuple->t_data, state->rs_freeze_xid,
+	storage_freeze_tuple(state->rs_new_rel, new_tuple->t_data, state->rs_freeze_xid,
 					  state->rs_cutoff_multi);
 
 	/*

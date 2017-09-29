@@ -51,7 +51,7 @@
 typedef struct
 {
 	pairingheap_node ph_node;
-	HeapTuple	htup;
+	StorageTuple	htup;
 	Datum	   *orderbyvals;
 	bool	   *orderbynulls;
 } ReorderTuple;
@@ -65,9 +65,9 @@ static int cmp_orderbyvals(const Datum *adist, const bool *anulls,
 				IndexScanState *node);
 static int reorderqueue_cmp(const pairingheap_node *a,
 				 const pairingheap_node *b, void *arg);
-static void reorderqueue_push(IndexScanState *node, HeapTuple tuple,
+static void reorderqueue_push(IndexScanState *node, StorageTuple tuple,
 				  Datum *orderbyvals, bool *orderbynulls);
-static HeapTuple reorderqueue_pop(IndexScanState *node);
+static StorageTuple reorderqueue_pop(IndexScanState *node);
 
 
 /* ----------------------------------------------------------------
@@ -84,7 +84,7 @@ IndexNext(IndexScanState *node)
 	ExprContext *econtext;
 	ScanDirection direction;
 	IndexScanDesc scandesc;
-	HeapTuple	tuple;
+	StorageTuple	tuple;
 	TupleTableSlot *slot;
 
 	/*
@@ -185,7 +185,7 @@ IndexNextWithReorder(IndexScanState *node)
 	EState	   *estate;
 	ExprContext *econtext;
 	IndexScanDesc scandesc;
-	HeapTuple	tuple;
+	StorageTuple	tuple;
 	TupleTableSlot *slot;
 	ReorderTuple *topmost = NULL;
 	bool		was_exact;
@@ -483,7 +483,7 @@ reorderqueue_cmp(const pairingheap_node *a, const pairingheap_node *b,
  * Helper function to push a tuple to the reorder queue.
  */
 static void
-reorderqueue_push(IndexScanState *node, HeapTuple tuple,
+reorderqueue_push(IndexScanState *node, StorageTuple tuple,
 				  Datum *orderbyvals, bool *orderbynulls)
 {
 	IndexScanDesc scandesc = node->iss_ScanDesc;
@@ -516,10 +516,10 @@ reorderqueue_push(IndexScanState *node, HeapTuple tuple,
 /*
  * Helper function to pop the next tuple from the reorder queue.
  */
-static HeapTuple
+static StorageTuple
 reorderqueue_pop(IndexScanState *node)
 {
-	HeapTuple	result;
+	StorageTuple	result;
 	ReorderTuple *topmost;
 	int			i;
 

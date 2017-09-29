@@ -650,7 +650,7 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	Oid		   *index_collations = index->rd_indcollation;
 	int			index_natts = index->rd_index->indnatts;
 	IndexScanDesc index_scan;
-	HeapTuple	tup;
+	StorageTuple	tup;
 	ScanKeyData scankeys[INDEX_MAX_KEYS];
 	SnapshotData DirtySnapshot;
 	int			i;
@@ -732,12 +732,13 @@ retry:
 		bool		existing_isnull[INDEX_MAX_KEYS];
 		char	   *error_new;
 		char	   *error_existing;
+		tuple_data t_data = storage_tuple_get_data(heap, tup, TID);
 
 		/*
 		 * Ignore the entry for the tuple we're trying to check.
 		 */
 		if (ItemPointerIsValid(tupleid) &&
-			ItemPointerEquals(tupleid, &tup->t_self))
+			ItemPointerEquals(tupleid, &(t_data.tid)))
 		{
 			if (found_self)		/* should not happen */
 				elog(ERROR, "found self tuple multiple times in index \"%s\"",
@@ -785,7 +786,8 @@ retry:
 			  DirtySnapshot.speculativeToken &&
 			  TransactionIdPrecedes(GetCurrentTransactionId(), xwait))))
 		{
-			ctid_wait = tup->t_data->t_ctid;
+			t_data = storage_tuple_get_data(heap, tup, CTID);
+			ctid_wait = t_data.tid;
 			reason_wait = indexInfo->ii_ExclusionOps ?
 				XLTW_RecheckExclusionConstr : XLTW_InsertIndex;
 			index_endscan(index_scan);
@@ -805,7 +807,10 @@ retry:
 		{
 			conflict = true;
 			if (conflictTid)
-				*conflictTid = tup->t_self;
+			{
+				t_data = storage_tuple_get_data(heap, tup, TID);
+				*conflictTid = t_data.tid;
+			}
 			break;
 		}
 

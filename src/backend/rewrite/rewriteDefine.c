@@ -17,6 +17,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -419,7 +420,7 @@ DefineQueryRewrite(char *rulename,
 		if (event_relation->rd_rel->relkind != RELKIND_VIEW &&
 			event_relation->rd_rel->relkind != RELKIND_MATVIEW)
 		{
-			HeapScanDesc scanDesc;
+			StorageScanDesc scanDesc;
 			Snapshot	snapshot;
 
 			if (event_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -435,13 +436,13 @@ DefineQueryRewrite(char *rulename,
 								RelationGetRelationName(event_relation))));
 
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
-			scanDesc = heap_beginscan(event_relation, snapshot, 0, NULL);
-			if (heap_getnext(scanDesc, ForwardScanDirection) != NULL)
+			scanDesc = storage_beginscan(event_relation, snapshot, 0, NULL);
+			if (storage_getnext(scanDesc, ForwardScanDirection) != NULL)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("could not convert table \"%s\" to a view because it is not empty",
 								RelationGetRelationName(event_relation))));
-			heap_endscan(scanDesc);
+			storage_endscan(scanDesc);
 			UnregisterSnapshot(snapshot);
 
 			if (event_relation->rd_rel->relhastriggers)

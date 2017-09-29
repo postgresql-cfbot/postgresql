@@ -724,9 +724,12 @@ apply_handle_update(StringInfo s)
 	 */
 	if (found)
 	{
+		HeapTuple tuple;
+
 		/* Process and store remote tuple in the slot */
 		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		ExecStoreTuple(localslot->tts_tuple, remoteslot, InvalidBuffer, false);
+		tuple = ExecHeapifySlot(localslot);
+		ExecStoreTuple(tuple, remoteslot, InvalidBuffer, false);
 		slot_modify_cstrings(remoteslot, rel, newtup.values, newtup.changed);
 		MemoryContextSwitchTo(oldctx);
 

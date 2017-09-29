@@ -558,6 +558,11 @@ DESCR("convert int4 to float4");
 DATA(insert OID = 319 (  int4			   PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1  0 23 "700" _null_ _null_ _null_ _null_ _null_	ftoi4 _null_ _null_ _null_ ));
 DESCR("convert float4 to int4");
 
+/* Storage access method handlers */
+DATA(insert OID = 4002 (  heapam_storage_handler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 3998 "2281" _null_ _null_ _null_ _null_ _null_	heapam_storage_handler _null_ _null_ _null_ ));
+DESCR("row-oriented storage access method handler");
+#define HEAPAM_STORAGE_AM_HANDLER_OID	4002
+
 /* Index access method handlers */
 DATA(insert OID = 330 (  bthandler		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 325 "2281" _null_ _null_ _null_ _null_ _null_	bthandler _null_ _null_ _null_ ));
 DESCR("btree index access method handler");
@@ -3876,6 +3881,10 @@ DESCR("I/O");
 DATA(insert OID = 326  (  index_am_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 325 "2275" _null_ _null_ _null_ _null_ _null_ index_am_handler_in _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 327  (  index_am_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "325" _null_ _null_ _null_ _null_ _null_ index_am_handler_out _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3425  (  storage_am_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3998 "2275" _null_ _null_ _null_ _null_ _null_ storage_am_handler_in _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3426  (  storage_am_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3998" _null_ _null_ _null_ _null_ _null_ storage_am_handler_out _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 3311 (  tsm_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3310 "2275" _null_ _null_ _null_ _null_ _null_ tsm_handler_in _null_ _null_ _null_ ));
 DESCR("I/O");

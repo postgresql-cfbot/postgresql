@@ -22,6 +22,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/session.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -1207,15 +1208,15 @@ static bool
 ThereIsAtLeastOneRole(void)
 {
 	Relation	pg_authid_rel;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	bool		result;
 
 	pg_authid_rel = heap_open(AuthIdRelationId, AccessShareLock);
 
-	scan = heap_beginscan_catalog(pg_authid_rel, 0, NULL);
-	result = (heap_getnext(scan, ForwardScanDirection) != NULL);
+	scan = storage_beginscan_catalog(pg_authid_rel, 0, NULL);
+	result = (storage_getnext(scan, ForwardScanDirection) != NULL);
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(pg_authid_rel, AccessShareLock);
 
 	return result;

@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/storageam.h"
 #include "catalog/index.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -102,7 +103,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * removed.
 	 */
 	tmptid = new_row->t_self;
-	if (!heap_hot_search(&tmptid, trigdata->tg_relation, SnapshotSelf, NULL))
+	if (!storage_hot_search(&tmptid, trigdata->tg_relation, SnapshotSelf, NULL))
 	{
 		/*
 		 * All rows in the HOT chain are dead, so skip the check.

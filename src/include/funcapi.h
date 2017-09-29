@@ -229,7 +229,7 @@ extern TupleDesc TypeGetTupleDesc(Oid typeoid, List *colaliases);
 /* from execTuples.c */
 extern TupleDesc BlessTupleDesc(TupleDesc tupdesc);
 extern AttInMetadata *TupleDescGetAttInMetadata(TupleDesc tupdesc);
-extern HeapTuple BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values);
+extern StorageTuple BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values);
 extern Datum HeapTupleHeaderGetDatum(HeapTupleHeader tuple);
 extern TupleTableSlot *TupleDescGetSlot(TupleDesc tupdesc);
 

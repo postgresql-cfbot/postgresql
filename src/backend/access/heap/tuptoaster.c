@@ -32,6 +32,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/storageam.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -1777,7 +1778,12 @@ toast_delete_datum(Relation rel, Datum value, bool is_speculative)
 		 * Have a chunk, delete it
 		 */
 		if (is_speculative)
-			heap_abort_speculative(toastrel, toasttup);
+		{
+			TupleTableSlot *slot = MakeSingleTupleTableSlot(RelationGetDescr(toastrel));
+			ExecStoreTuple(toasttup, slot, InvalidBuffer, false);
+			storage_abort_speculative(toastrel, slot);
+			ExecDropSingleTupleTableSlot(slot);
+		}
 		else
 			simple_heap_delete(toastrel, &toasttup->t_self);
 	}

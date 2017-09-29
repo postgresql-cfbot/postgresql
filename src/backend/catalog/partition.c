@@ -947,7 +947,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		Snapshot	snapshot;
 		TupleDesc	tupdesc;
 		ExprContext *econtext;
-		HeapScanDesc scan;
+		StorageScanDesc scan;
 		MemoryContext oldCxt;
 		TupleTableSlot *tupslot;
 
@@ -988,7 +988,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 
 		econtext = GetPerTupleExprContext(estate);
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(part_rel, snapshot, 0, NULL);
+		scan = storage_beginscan(part_rel, snapshot, 0, NULL);
 		tupslot = MakeSingleTupleTableSlot(tupdesc);
 
 		/*
@@ -997,7 +997,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		 */
 		oldCxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 		{
 			ExecStoreTuple(tuple, tupslot, InvalidBuffer, false);
 			econtext->ecxt_scantuple = tupslot;
@@ -1013,7 +1013,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 		}
 
 		MemoryContextSwitchTo(oldCxt);
-		heap_endscan(scan);
+		storage_endscan(scan);
 		UnregisterSnapshot(snapshot);
 		ExecDropSingleTupleTableSlot(tupslot);
 		FreeExecutorState(estate);

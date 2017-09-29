@@ -26,6 +26,28 @@ typedef struct MinimalTupleData MinimalTupleData;
 
 typedef MinimalTupleData *MinimalTuple;
 
+typedef enum tuple_visibility_type
+{
+	MVCC_VISIBILITY = 0, 		/* HeapTupleSatisfiesMVCC */
+	SELF_VISIBILITY,			/* HeapTupleSatisfiesSelf */
+	ANY_VISIBILITY,				/* HeapTupleSatisfiesAny */
+	TOAST_VISIBILITY,			/* HeapTupleSatisfiesToast */
+	DIRTY_VISIBILITY,			/* HeapTupleSatisfiesDirty */
+	HISTORIC_MVCC_VISIBILITY,	/* HeapTupleSatisfiesHistoricMVCC */
+	NON_VACUUMABLE_VISIBILTY,	/* HeapTupleSatisfiesNonVacuumable */
+
+	END_OF_VISIBILITY
+} tuple_visibility_type;
+
+/* Result codes for HeapTupleSatisfiesVacuum */
+typedef enum
+{
+	HEAPTUPLE_DEAD,				/* tuple is dead and deletable */
+	HEAPTUPLE_LIVE,				/* tuple is live (committed, no deleter) */
+	HEAPTUPLE_RECENTLY_DEAD,	/* tuple is dead, but not deletable yet */
+	HEAPTUPLE_INSERT_IN_PROGRESS,	/* inserting xact is still in progress */
+	HEAPTUPLE_DELETE_IN_PROGRESS	/* deleting xact is still in progress */
+} HTSV_Result;
 
 /*
  * HeapTupleData is an in-memory data structure that points to a tuple.

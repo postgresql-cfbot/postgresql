@@ -37,6 +37,7 @@
 #include "commands/cluster.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
@@ -46,6 +47,7 @@
 #include "utils/acl.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -67,7 +69,7 @@ static BufferAccessStrategy vac_strategy;
 
 
 /* non-export function prototypes */
-static List *get_rel_oids(Oid relid, const RangeVar *vacrel);
+static void get_rel_oids(List **vacrels);
 static void vac_truncate_clog(TransactionId frozenXID,
 				  MultiXactId minMulti,
 				  TransactionId lastSaneFrozenXid,
@@ -90,7 +92,6 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 	Assert(vacstmt->options & (VACOPT_VACUUM | VACOPT_ANALYZE));
 	Assert((vacstmt->options & VACOPT_VACUUM) ||
 		   !(vacstmt->options & (VACOPT_FULL | VACOPT_FREEZE)));
-	Assert((vacstmt->options & VACOPT_ANALYZE) || vacstmt->va_cols == NIL);
 	Assert(!(vacstmt->options & VACOPT_SKIPTOAST));
 
 	/*
@@ -119,8 +120,7 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 	params.log_min_duration = -1;
 
 	/* Now go through the common routine */
-	vacuum(vacstmt->options, vacstmt->relation, InvalidOid, &params,
-		   vacstmt->va_cols, NULL, isTopLevel);
+	vacuum(vacstmt->options, vacstmt->rels, &params, NULL, isTopLevel);
 }
 
 /*
@@ -128,14 +128,11 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
  *
  * options is a bitmask of VacuumOption flags, indicating what to do.
  *
- * relid, if not InvalidOid, indicate the relation to process; otherwise,
- * the RangeVar is used.  (The latter must always be passed, because it's
- * used for error messages.)
+ * relations is a list of VacuumRelation to process.  If it is NIL, all
+ * relations in the database are processed.
  *
  * params contains a set of parameters that can be used to customize the
  * behavior.
- *
- * va_cols is a list of columns to analyze, or NIL to process them all.
  *
  * bstrategy is normally given as NULL, but in autovacuum it can be passed
  * in to use the same buffer strategy object across multiple vacuum() calls.
@@ -146,14 +143,15 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
  * memory context that will not disappear at transaction commit.
  */
 void
-vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
-	   List *va_cols, BufferAccessStrategy bstrategy, bool isTopLevel)
+vacuum(int options, List *relations, VacuumParams *params,
+	   BufferAccessStrategy bstrategy, bool isTopLevel)
 {
 	const char *stmttype;
 	volatile bool in_outer_xact,
 				use_own_xacts;
-	List	   *relations;
 	static bool in_vacuum = false;
+	MemoryContext	 oldcontext;
+	ListCell	*lc;
 
 	Assert(params != NULL);
 
@@ -196,6 +194,29 @@ vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
 
 	/*
+	 * Make sure VACOPT_ANALYZE is specified if any column lists are present.
+	 */
+	foreach(lc, relations)
+	{
+		VacuumRelation *relation = lfirst_node(VacuumRelation, lc);
+		if (relation->va_cols != NIL && (options & VACOPT_ANALYZE) == 0)
+		{
+			char *rel_name;
+			RangeVar *rangeVar = relation->relation;
+
+			if (rangeVar->schemaname != NULL)
+				rel_name = psprintf("%s.%s", rangeVar->schemaname, rangeVar->relname);
+			else
+				rel_name = rangeVar->relname;
+
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("ANALYZE option must be specified when a column list is provided"),
+					 errhint("A column list was specified for relation \"%s\".", rel_name)));
+		}
+	}
+
+	/*
 	 * Send info about dead objects to the statistics collector, unless we are
 	 * in autovacuum --- autovacuum.c does this for itself.
 	 */
@@ -226,10 +247,21 @@ vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
 	vac_strategy = bstrategy;
 
 	/*
-	 * Build list of relations to process, unless caller gave us one. (If we
-	 * build one, we put it in vac_context for safekeeping.)
+	 * Move our relation list to our special memory context so that we do
+	 * not lose it among our per-relation transactions.
 	 */
-	relations = get_rel_oids(relid, relation);
+	oldcontext = MemoryContextSwitchTo(vac_context);
+	relations = copyObject(relations);
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * Fill in the list of relations with their corresponding OIDs.
+	 *
+	 * If a listed relation is a partitioned table, an extra entry will be
+	 * added to the list for each partition.  The list is kept in
+	 * vac_context for safekeeping.
+	 */
+	get_rel_oids(&relations);
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.
@@ -297,11 +329,11 @@ vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
 		 */
 		foreach(cur, relations)
 		{
-			Oid			relid = lfirst_oid(cur);
+			VacuumRelation *relinfo = lfirst_node(VacuumRelation, cur);
 
 			if (options & VACOPT_VACUUM)
 			{
-				if (!vacuum_rel(relid, relation, options, params))
+				if (!vacuum_rel(relinfo->oid, relinfo->relation, options, params))
 					continue;
 			}
 
@@ -318,8 +350,8 @@ vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
 					PushActiveSnapshot(GetTransactionSnapshot());
 				}
 
-				analyze_rel(relid, relation, options, params,
-							va_cols, in_outer_xact, vac_strategy);
+				analyze_rel(relinfo->oid, relinfo->relation, options, params,
+							relinfo->va_cols, in_outer_xact, vac_strategy);
 
 				if (use_own_xacts)
 				{
@@ -373,67 +405,106 @@ vacuum(int options, RangeVar *relation, Oid relid, VacuumParams *params,
 }
 
 /*
- * Build a list of Oids for each relation to be processed
+ * Fill in the list of relations with their corresponding OIDs.
  *
- * The list is built in vac_context so that it will survive across our
- * per-relation transactions.
+ * If a listed relation is a partitioned table, an extra entry will be added to
+ * the list for each partition.  The list is kept in vac_context so that it will
+ * survive across our per-relation transactions.
  */
-static List *
-get_rel_oids(Oid relid, const RangeVar *vacrel)
+static void
+get_rel_oids(List **vacrels)
 {
-	List	   *oid_list = NIL;
+	List *vacrels_tmp = NIL;
+	VacuumRelation *relinfo;
 	MemoryContext oldcontext;
 
-	/* OID supplied by VACUUM's caller? */
-	if (OidIsValid(relid))
+	if (*vacrels != NIL)
 	{
-		oldcontext = MemoryContextSwitchTo(vac_context);
-		oid_list = lappend_oid(oid_list, relid);
-		MemoryContextSwitchTo(oldcontext);
-	}
-	else if (vacrel)
-	{
-		/* Process a specific relation */
-		Oid			relid;
-		HeapTuple	tuple;
-		Form_pg_class classForm;
-		bool		include_parts;
+		/* Process specific relation(s) */
+		ListCell *lc;
 
-		/*
-		 * Since we don't take a lock here, the relation might be gone, or the
-		 * RangeVar might no longer refer to the OID we look up here.  In the
-		 * former case, VACUUM will do nothing; in the latter case, it will
-		 * process the OID we looked up here, rather than the new one. Neither
-		 * is ideal, but there's little practical alternative, since we're
-		 * going to commit this transaction and begin a new one between now
-		 * and then.
-		 */
-		relid = RangeVarGetRelid(vacrel, NoLock, false);
+		foreach(lc, *vacrels)
+		{
+			Oid			 relid;
+			HeapTuple		 tuple;
+			Form_pg_class		 classForm;
+			bool			 include_parts;
 
-		/*
-		 * To check whether the relation is a partitioned table, fetch its
-		 * syscache entry.
-		 */
-		tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
-		if (!HeapTupleIsValid(tuple))
-			elog(ERROR, "cache lookup failed for relation %u", relid);
-		classForm = (Form_pg_class) GETSTRUCT(tuple);
-		include_parts = (classForm->relkind == RELKIND_PARTITIONED_TABLE);
-		ReleaseSysCache(tuple);
+			relinfo = lfirst_node(VacuumRelation, lc);
 
-		/*
-		 * Make relation list entries for this guy and its partitions, if any.
-		 * Note that the list returned by find_all_inheritors() include the
-		 * passed-in OID at its head.  Also note that we did not request a
-		 * lock to be taken to match what would be done otherwise.
-		 */
-		oldcontext = MemoryContextSwitchTo(vac_context);
-		if (include_parts)
-			oid_list = list_concat(oid_list,
-								   find_all_inheritors(relid, NoLock, NULL));
-		else
-			oid_list = lappend_oid(oid_list, relid);
-		MemoryContextSwitchTo(oldcontext);
+			/* OIDs supplied by VACUUM's caller? */
+			if (OidIsValid(relinfo->oid))
+			{
+				oldcontext = MemoryContextSwitchTo(vac_context);
+				vacrels_tmp = lappend(vacrels_tmp, relinfo);
+				MemoryContextSwitchTo(oldcontext);
+				continue;
+			}
+
+			/*
+			 * Since we don't take a lock here, the relation might be gone, or the
+			 * RangeVar might no longer refer to the OID we look up here.  In the
+			 * former case, VACUUM will do nothing; in the latter case, it will
+			 * process the OID we looked up here, rather than the new one. Neither
+			 * is ideal, but there's little practical alternative, since we're
+			 * going to commit this transaction and begin a new one between now
+			 * and then.
+			 */
+			relid = RangeVarGetRelid(relinfo->relation, NoLock, false);
+
+			/*
+			 * To check whether the relation is a partitioned table, fetch its
+			 * syscache entry.
+			 */
+			tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+			if (!HeapTupleIsValid(tuple))
+				elog(ERROR, "cache lookup failed for relation %u", relid);
+			classForm = (Form_pg_class) GETSTRUCT(tuple);
+			include_parts = (classForm->relkind == RELKIND_PARTITIONED_TABLE);
+			ReleaseSysCache(tuple);
+
+			/*
+			 * Make relation list entries for this guy and its partitions, if any.
+			 * Note that the list returned by find_all_inheritors() include the
+			 * passed-in OID at its head.  Also note that we did not request a
+			 * lock to be taken to match what would be done otherwise.
+			 */
+			oldcontext = MemoryContextSwitchTo(vac_context);
+
+			if (include_parts)
+			{
+				List *partition_oids = find_all_inheritors(relid, NoLock, NULL);
+				ListCell *part_lc;
+				foreach(part_lc, partition_oids)
+				{
+					RangeVar *rangevar;
+					VacuumRelation *tmp;
+					char *schemaname = NULL;
+					char *relname = NULL;
+					Oid part_oid;
+					Oid namespace_oid;
+
+					part_oid = lfirst_oid(part_lc);
+
+					namespace_oid = get_rel_namespace(part_oid);
+					if (OidIsValid(namespace_oid))
+						schemaname = get_namespace_name(namespace_oid);
+					relname = get_rel_name(part_oid);
+					rangevar = makeRangeVar(schemaname, relname, -1);
+
+					tmp = makeVacuumRelation(rangevar, relinfo->va_cols, part_oid);
+
+					vacrels_tmp = lappend(vacrels_tmp, tmp);
+				}
+			}
+			else
+			{
+				relinfo->oid = relid;
+				vacrels_tmp = lappend(vacrels_tmp, relinfo);
+			}
+
+			MemoryContextSwitchTo(oldcontext);
+		}
 	}
 	else
 	{
@@ -451,7 +522,11 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 
 		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
+			Oid rel_oid;
 			Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
+			char *schemaname;
+			char *relname;
+			RangeVar *rangevar;
 
 			/*
 			 * We include partitioned tables here; depending on which
@@ -465,7 +540,14 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 
 			/* Make a relation list entry for this guy */
 			oldcontext = MemoryContextSwitchTo(vac_context);
-			oid_list = lappend_oid(oid_list, HeapTupleGetOid(tuple));
+
+			rel_oid = HeapTupleGetOid(tuple);
+			schemaname = get_namespace_name(classForm->relnamespace);
+			relname = NameStr(classForm->relname);
+			rangevar = makeRangeVar(schemaname, relname, -1);
+			relinfo = makeVacuumRelation(rangevar, NIL, rel_oid);
+			vacrels_tmp = lappend(vacrels_tmp, relinfo);
+
 			MemoryContextSwitchTo(oldcontext);
 		}
 
@@ -473,7 +555,7 @@ get_rel_oids(Oid relid, const RangeVar *vacrel)
 		heap_close(pgclass, AccessShareLock);
 	}
 
-	return oid_list;
+	*vacrels = vacrels_tmp;
 }
 
 /*
@@ -1232,6 +1314,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	int			save_nestlevel;
 
 	Assert(params != NULL);
+	Assert(relation != NULL);
 
 	/* Begin a transaction for vacuuming this relation */
 	StartTransactionCommand();

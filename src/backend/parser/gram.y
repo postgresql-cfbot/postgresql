@@ -366,6 +366,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	import_qualification_type
 %type <importqual> import_qualification
 
+%type <node>	vacuum_relation
+
 %type <list>	stmtblock stmtmulti
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
@@ -395,7 +397,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
-				publication_name_list
+				publication_name_list vacuum_relation_list
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -10157,11 +10159,10 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_FREEZE;
 					if ($4)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->rels = NIL;
 					$$ = (Node *)n;
 				}
-			| VACUUM opt_full opt_freeze opt_verbose qualified_name
+			| VACUUM opt_full opt_freeze opt_verbose vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM;
@@ -10171,8 +10172,7 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 						n->options |= VACOPT_FREEZE;
 					if ($4)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = $5;
-					n->va_cols = NIL;
+					n->rels = $5;
 					$$ = (Node *)n;
 				}
 			| VACUUM opt_full opt_freeze opt_verbose AnalyzeStmt
@@ -10191,18 +10191,14 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->rels = NIL;
 					$$ = (Node *) n;
 				}
-			| VACUUM '(' vacuum_option_list ')' qualified_name opt_name_list
+			| VACUUM '(' vacuum_option_list ')' vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_VACUUM | $3;
-					n->relation = $5;
-					n->va_cols = $6;
-					if (n->va_cols != NIL)	/* implies analyze */
-						n->options |= VACOPT_ANALYZE;
+					n->rels = $5;
 					$$ = (Node *) n;
 				}
 		;
@@ -10236,18 +10232,16 @@ AnalyzeStmt:
 					n->options = VACOPT_ANALYZE;
 					if ($2)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = NULL;
-					n->va_cols = NIL;
+					n->rels = NIL;
 					$$ = (Node *)n;
 				}
-			| analyze_keyword opt_verbose qualified_name opt_name_list
+			| analyze_keyword opt_verbose vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = VACOPT_ANALYZE;
 					if ($2)
 						n->options |= VACOPT_VERBOSE;
-					n->relation = $3;
-					n->va_cols = $4;
+					n->rels = $3;
 					$$ = (Node *)n;
 				}
 		;
@@ -10273,6 +10267,18 @@ opt_freeze: FREEZE									{ $$ = TRUE; }
 opt_name_list:
 			'(' name_list ')'						{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NIL; }
+		;
+
+vacuum_relation:
+			qualified_name opt_name_list
+				{
+					$$ = (Node *) makeVacuumRelation($1, $2, InvalidOid);
+				}
+		;
+
+vacuum_relation_list:
+			vacuum_relation					{ $$ = list_make1($1); }
+			| vacuum_relation_list ',' vacuum_relation	{ $$ = lappend($1, $3); }
 		;
 
 

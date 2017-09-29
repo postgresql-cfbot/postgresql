@@ -117,6 +117,8 @@ analyze_rel(Oid relid, RangeVar *relation, int options,
 	AcquireSampleRowsFunc acquirefunc = NULL;
 	BlockNumber relpages = 0;
 
+	Assert(relation != NULL);
+
 	/* Select logging level */
 	if (options & VACOPT_VERBOSE)
 		elevel = INFO;

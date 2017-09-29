@@ -21,9 +21,21 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-VACUUM [ ( { FULL | FREEZE | VERBOSE | ANALYZE | DISABLE_PAGE_SKIPPING } [, ...] ) ] [ <replaceable class="PARAMETER">table_name</replaceable> [ (<replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
-VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ <replaceable class="PARAMETER">table_name</replaceable> ]
-VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">table_name</replaceable> [ (<replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
+VACUUM [ ( <replaceable class="PARAMETER">option</replaceable> [, ...] ) ] [ <replaceable class="PARAMETER">table_and_columns</replaceable> [, ...] ]
+VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ <replaceable class="PARAMETER">table_name</replaceable> [, ...] ]
+VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">table_and_columns</replaceable> [, ...] ]
+
+<phrase>where <replaceable class="PARAMETER">option</replaceable> can be one of:</phrase>
+
+    FULL
+    FREEZE
+    VERBOSE
+    ANALYZE
+    DISABLE_PAGE_SKIPPING
+
+<phrase>and <replaceable class="PARAMETER">table_and_columns</replaceable> is:</phrase>
+
+    <replaceable class="PARAMETER">table_name</replaceable> [ ( <replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -165,7 +177,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] ANALYZE [ <replaceable class="PARAMETER">
     <listitem>
      <para>
       The name of a specific column to analyze. Defaults to all columns.
-      If a column list is specified, <literal>ANALYZE</> is implied.
+      If a column list is specified, <literal>ANALYZE</> must also be
+      specified.
      </para>
     </listitem>
    </varlistentry>

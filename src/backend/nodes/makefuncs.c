@@ -611,3 +611,18 @@ makeGroupingSet(GroupingSetKind kind, List *content, int location)
 	n->location = location;
 	return n;
 }
+
+/*
+ * makeVacuumRelation -
+ *	  create a VacuumRelation node
+ */
+VacuumRelation *
+makeVacuumRelation(RangeVar *relation, List *va_cols, Oid oid)
+{
+	VacuumRelation *v = makeNode(VacuumRelation);
+
+	v->relation = relation;
+	v->va_cols = va_cols;
+	v->oid = oid;
+	return v;
+}

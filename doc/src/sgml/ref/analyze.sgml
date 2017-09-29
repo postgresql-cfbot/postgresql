@@ -21,7 +21,11 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-ANALYZE [ VERBOSE ] [ <replaceable class="PARAMETER">table_name</replaceable> [ ( <replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ] ]
+ANALYZE [ VERBOSE ] [ <replaceable class="PARAMETER">table_and_columns</replaceable> [, ...] ]
+
+<phrase>where <replaceable class="PARAMETER">table_and_columns</replaceable> is:</phrase>
+
+    <replaceable class="PARAMETER">table_name</replaceable> [ ( <replaceable class="PARAMETER">column_name</replaceable> [, ...] ) ]
 </synopsis>
  </refsynopsisdiv>
 

@@ -296,6 +296,7 @@
 #enable_material = on
 #enable_mergejoin = on
 #enable_nestloop = on
+#enable_parallelappend = on
 #enable_seqscan = on
 #enable_sort = on
 #enable_tidscan = on

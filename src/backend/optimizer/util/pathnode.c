@@ -46,6 +46,7 @@ typedef enum
 #define STD_FUZZ_FACTOR 1.01
 
 static List *translate_sub_tlist(List *tlist, int relid);
+static int append_total_cost_compare(const void *a, const void *b);
 
 
 /*****************************************************************************
@@ -1193,6 +1194,82 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
 }
 
 /*
+ * get_append_num_workers
+ *    Return the number of workers to request for partial append path.
+ */
+int
+get_append_num_workers(List *partial_subpaths,
+					   List *nonpartial_subpaths,
+					   bool parallel_aware)
+{
+	ListCell   *lc;
+	double		log2w;
+	int			num_workers;
+	int			max_per_plan_workers;
+
+	/*
+	 * log2(number_of_subpaths)+1 formula seems to give an appropriate number of
+	 * workers for Append path either having high number of children (> 100) or
+	 * having all non-partial subpaths or subpaths with 1-2 parallel_workers.
+	 * Whereas, if the subpaths->parallel_workers is high, this formula is not
+	 * suitable, because it does not take into account per-subpath workers.
+	 * For e.g., with 3 subplans having per-subplan workers such as (2, 8, 8),
+	 * the Append workers should be at least 8, whereas the formula gives 2. In
+	 * this case, it seems better to follow the method used for calculating
+	 * parallel_workers of an unpartitioned table : log3(table_size). So we
+	 * treat a partitioned table as if the data belongs to a single
+	 * unpartitioned table, and then derive its workers. So it will be :
+	 * logb(b^w1 + b^w2 + b^w3) where w1, w2.. are per-subplan workers and
+	 * b is some logarithmic base such as 2 or 3. It turns out that this
+	 * evaluates to a value just a bit greater than max(w1,w2, w3). So, we
+	 * just use the maximum of workers formula. But this formula gives too few
+	 * workers when all paths have single worker (meaning they are non-partial)
+	 * For e.g. with workers : (1, 1, 1, 1, 1, 1), it is better to allocate 3
+	 * workers, whereas this method allocates only 1.
+	 * So we use whichever method that gives higher number of workers.
+	 */
+
+	/* Get log2(num_subpaths) */
+	log2w = fls(list_length(partial_subpaths) +
+				list_length(nonpartial_subpaths));
+
+	/* Avoid further calculations if we already crossed max workers limit */
+	if (max_parallel_workers_per_gather <= log2w + 1)
+		return max_parallel_workers_per_gather;
+
+
+	/*
+	 * Get the parallel_workers value of the partial subpath having the highest
+	 * parallel_workers.
+	 */
+	max_per_plan_workers = 1;
+	foreach(lc, partial_subpaths)
+	{
+		Path	   *subpath = lfirst(lc);
+		max_per_plan_workers = Max(max_per_plan_workers,
+								   subpath->parallel_workers);
+	}
+
+	/*
+	 * For non-parallel-aware Append, all workers run a common subplan at a
+	 * time, so it makes sense to just choose the per-subplan max workers as
+	 * the Append workers. For parallel-aware Append, choose the higher of the
+	 * results of the two formulae.
+	 */
+	num_workers = (parallel_aware ?
+				   rint(Max(log2w, max_per_plan_workers) + 1)
+				   : max_per_plan_workers);
+
+
+	/* In no case use more than max_parallel_workers_per_gather workers. */
+	num_workers = Min(num_workers, max_parallel_workers_per_gather);
+
+	Assert(num_workers > 0);
+
+	return num_workers;
+}
+
+/*
  * create_append_path
  *	  Creates a path corresponding to an Append plan, returning the
  *	  pathnode.
@@ -1200,8 +1277,11 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
  * Note that we must handle subpaths = NIL, representing a dummy access path.
  */
 AppendPath *
-create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
-				   int parallel_workers, List *partitioned_rels)
+create_append_path(RelOptInfo *rel,
+				   List *subpaths, List *partial_subpaths,
+				   Relids required_outer,
+				   int parallel_workers, bool parallel_aware,
+				   List *partitioned_rels)
 {
 	AppendPath *pathnode = makeNode(AppendPath);
 	ListCell   *l;
@@ -1211,41 +1291,48 @@ create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
 	pathnode->path.pathtarget = rel->reltarget;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
-	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_aware = (parallel_aware && parallel_workers > 0);
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_workers = parallel_workers;
 	pathnode->path.pathkeys = NIL;	/* result is always considered unsorted */
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
-	pathnode->subpaths = subpaths;
 
-	/*
-	 * We don't bother with inventing a cost_append(), but just do it here.
-	 *
-	 * Compute rows and costs as sums of subplan rows and costs.  We charge
-	 * nothing extra for the Append itself, which perhaps is too optimistic,
-	 * but since it doesn't do any selection or projection, it is a pretty
-	 * cheap node.
-	 */
-	pathnode->path.rows = 0;
-	pathnode->path.startup_cost = 0;
-	pathnode->path.total_cost = 0;
+	/* For parallel append, non-partial paths are sorted by descending costs */
+	if (pathnode->path.parallel_aware)
+		subpaths = list_qsort(subpaths, append_total_cost_compare);
+
+	pathnode->first_partial_path = list_length(subpaths);
+	pathnode->subpaths = list_concat(subpaths, partial_subpaths);
+
 	foreach(l, subpaths)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
 
-		pathnode->path.rows += subpath->rows;
-
-		if (l == list_head(subpaths))	/* first node? */
-			pathnode->path.startup_cost = subpath->startup_cost;
-		pathnode->path.total_cost += subpath->total_cost;
 		pathnode->path.parallel_safe = pathnode->path.parallel_safe &&
-			subpath->parallel_safe;
+									   subpath->parallel_safe;
 
 		/* All child paths must have same parameterization */
 		Assert(bms_equal(PATH_REQ_OUTER(subpath), required_outer));
 	}
 
+	cost_append(&pathnode->path, pathnode->subpaths,
+				pathnode->first_partial_path);
+
 	return pathnode;
+}
+
+static int
+append_total_cost_compare(const void *a, const void *b)
+{
+	Path	   *path1 = (Path *) lfirst(*(ListCell **) a);
+	Path	   *path2 = (Path *) lfirst(*(ListCell **) b);
+
+	if (path1->total_cost > path2->total_cost)
+		return -1;
+	if (path1->total_cost < path2->total_cost)
+		return 1;
+
+	return 0;
 }
 
 /*

@@ -127,6 +127,7 @@ bool		enable_material = true;
 bool		enable_mergejoin = true;
 bool		enable_hashjoin = true;
 bool		enable_gathermerge = true;
+bool		enable_parallelappend = true;
 
 typedef struct
 {
@@ -159,6 +160,8 @@ static Selectivity get_foreign_key_join_selectivity(PlannerInfo *root,
 								 Relids inner_relids,
 								 SpecialJoinInfo *sjinfo,
 								 List **restrictlist);
+static Cost append_nonpartial_cost(List *subpaths, int numpaths,
+								   int parallel_workers);
 static void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
 static double relation_byte_size(double tuples, int width);
 static double page_size(double tuples, int width);
@@ -1738,6 +1741,189 @@ cost_sort(Path *path, PlannerInfo *root,
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
+}
+
+/*
+ * append_nonpartial_cost
+ *	  Determines and returns the cost of non-partial paths of Append node.
+ *
+ * It is the total cost units taken by all the workers to finish all the
+ * non-partial subpaths.
+ * subpaths contains non-partial paths followed by partial paths.
+ * numpaths tells the number of non-partial paths.
+ */
+static Cost
+append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
+{
+	Cost	   *costarr;
+	int			arrlen;
+	ListCell   *l;
+	ListCell   *cell;
+	int			i;
+	int			path_index;
+	int			min_index;
+	int			max_index;
+
+	if (numpaths == 0)
+		return 0;
+
+	/*
+	 * Build the cost array containing costs of first n number of subpaths,
+	 * where n = parallel_workers. Also, its size is kept only as long as the
+	 * number of subpaths, or parallel_workers, whichever is minimum.
+	 */
+	arrlen = Min(parallel_workers, numpaths);
+	costarr = (Cost *) palloc(sizeof(Cost) * arrlen);
+	path_index = 0;
+	foreach(cell, subpaths)
+	{
+		Path	    *subpath = (Path *) lfirst(cell);
+
+		if (path_index == arrlen)
+			break;
+		costarr[path_index++] = subpath->total_cost;
+	}
+
+	/*
+	 * Since the subpaths are non-partial paths, the array is initially sorted
+	 * by decreasing cost. So choose the last one for the index with minimum
+	 * cost.
+	 */
+	min_index = arrlen - 1;
+
+	/*
+	 * For each of the remaining subpaths, add its cost to the array element
+	 * with minimum cost.
+	 */
+	for_each_cell(l, cell)
+	{
+		Path    *subpath = (Path *) lfirst(l);
+		int		i;
+
+		/* Consider only the non-partial paths */
+		if (path_index++ == numpaths)
+			break;
+
+		costarr[min_index] += subpath->total_cost;
+
+		/* Update the new min cost array index */
+		for (min_index = i = 0; i < arrlen; i++)
+		{
+			if (costarr[i] < costarr[min_index])
+				min_index = i;
+		}
+	}
+
+	/* Return the highest cost from the array */
+	for (max_index = i = 0; i < arrlen; i++)
+	{
+		if (costarr[i] > costarr[max_index])
+			max_index = i;
+	}
+
+	return costarr[max_index];
+}
+
+/*
+ * cost_append
+ *	  Determines and returns the cost of an Append node.
+ *
+ * We charge nothing extra for the Append itself, which perhaps is too
+ * optimistic, but since it doesn't do any selection or projection, it is a
+ * pretty cheap node.
+ */
+void
+cost_append(Path *path, List *subpaths, int num_nonpartial_subpaths)
+{
+	ListCell *l;
+
+	path->rows = 0;
+	path->startup_cost = 0;
+	path->total_cost = 0;
+
+	if (list_length(subpaths) == 0)
+		return;
+
+	if (!path->parallel_aware)
+	{
+		Path	   *subpath = (Path *) linitial(subpaths);
+
+		/*
+		 * Startup cost of non-parallel-aware Append is the startup cost of
+		 * first subpath.
+		 */
+		path->startup_cost = subpath->startup_cost;
+
+		/* Compute rows and costs as sums of subplan rows and costs. */
+		foreach(l, subpaths)
+		{
+			Path	   *subpath = (Path *) lfirst(l);
+
+			path->rows += subpath->rows;
+			path->total_cost += subpath->total_cost;
+		}
+	}
+	else /* parallel-aware */
+	{
+		double	max_rows = 0;
+		double	nonpartial_rows = 0;
+		int		i = 0;
+
+		/* Include the non-partial paths total cost */
+		path->total_cost += append_nonpartial_cost(subpaths,
+												   num_nonpartial_subpaths,
+												   path->parallel_workers);
+
+		/* Calculate startup cost; also add up all the rows for later use */
+		foreach(l, subpaths)
+		{
+			Path	   *subpath = (Path *) lfirst(l);
+
+			/*
+			 * Append would start returning tuples when the child node having
+			 * lowest startup cost is done setting up. We consider only the
+			 * first few subplans that immediately get a worker assigned.
+			 */
+			if (i < path->parallel_workers)
+			{
+				path->startup_cost = Min(path->startup_cost,
+										 subpath->startup_cost);
+			}
+
+			if (i < num_nonpartial_subpaths)
+			{
+				nonpartial_rows += subpath->rows;
+
+				/* Also keep track of max rows for any given subpath */
+				max_rows = Max(max_rows, subpath->rows);
+			}
+
+			i++;
+		}
+
+		/*
+		 * As an approximation, non-partial rows are calculated as total rows
+		 * divided by number of workers. But if there are highly unequal number
+		 * of rows across the paths, this figure might not reflect correctly.
+		 * So we make a note that it also should not be less than the maximum
+		 * of all the path rows.
+		 */
+		nonpartial_rows /= path->parallel_workers;
+		path->rows += Max(nonpartial_rows, max_rows);
+
+		/* Calculate partial paths cost. */
+		if (list_length(subpaths) > num_nonpartial_subpaths)
+		{
+			/* Compute rows and costs as sums of subplan rows and costs. */
+			for_each_cell(l, list_nth_cell(subpaths, num_nonpartial_subpaths))
+			{
+				Path	   *subpath = (Path *) lfirst(l);
+
+				path->rows += subpath->rows;
+				path->total_cost += subpath->total_cost;
+			}
+		}
+	}
 }
 
 /*

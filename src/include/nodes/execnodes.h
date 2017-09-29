@@ -21,6 +21,7 @@
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
+#include "storage/spin.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
 #include "utils/reltrigger.h"
@@ -997,12 +998,15 @@ typedef struct ModifyTableState
  *		whichplan		which plan is being executed (0 .. n-1)
  * ----------------
  */
+struct ParallelAppendDescData;
 typedef struct AppendState
 {
 	PlanState	ps;				/* its first field is NodeTag */
 	PlanState **appendplans;	/* array of PlanStates for my inputs */
 	int			as_nplans;
 	int			as_whichplan;
+	struct ParallelAppendDescData *as_padesc; /* parallel coordination info */
+	Size		pappend_len;	/* size of parallel coordination info */
 } AppendState;
 
 /* ----------------

@@ -11,15 +11,16 @@ set parallel_setup_cost=0;
 set parallel_tuple_cost=0;
 set min_parallel_table_scan_size=0;
 set max_parallel_workers_per_gather=4;
+-- test Parallel Append.
 explain (costs off)
-  select count(*) from a_star;
+  select round(avg(aa)), sum(aa) from a_star;
                      QUERY PLAN                      
 -----------------------------------------------------
  Finalize Aggregate
    ->  Gather
-         Workers Planned: 1
+         Workers Planned: 4
          ->  Partial Aggregate
-               ->  Append
+               ->  Parallel Append
                      ->  Parallel Seq Scan on a_star
                      ->  Parallel Seq Scan on b_star
                      ->  Parallel Seq Scan on c_star
@@ -28,12 +29,40 @@ explain (costs off)
                      ->  Parallel Seq Scan on f_star
 (11 rows)
 
-select count(*) from a_star;
- count 
--------
-    50
+select round(avg(aa)), sum(aa) from a_star;
+ round | sum 
+-------+-----
+    14 | 355
 (1 row)
 
+-- Mix of partial and non-partial subplans.
+alter table c_star set (parallel_workers = 0);
+alter table d_star set (parallel_workers = 0);
+explain (costs off)
+  select round(avg(aa)), sum(aa) from a_star;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 4
+         ->  Partial Aggregate
+               ->  Parallel Append
+                     ->  Seq Scan on d_star
+                     ->  Seq Scan on c_star
+                     ->  Parallel Seq Scan on a_star
+                     ->  Parallel Seq Scan on b_star
+                     ->  Parallel Seq Scan on e_star
+                     ->  Parallel Seq Scan on f_star
+(11 rows)
+
+select round(avg(aa)), sum(aa) from a_star;
+ round | sum 
+-------+-----
+    14 | 355
+(1 row)
+
+alter table c_star reset (parallel_workers);
+alter table d_star reset (parallel_workers);
 -- test that parallel_restricted function doesn't run in worker
 alter table tenk1 set (parallel_workers = 4);
 explain (verbose, costs off)

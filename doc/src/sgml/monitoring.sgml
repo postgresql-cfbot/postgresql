@@ -1117,6 +1117,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <entry>Waiting for TBM shared iterator lock.</entry>
         </row>
         <row>
+         <entry><literal>parallel_append</></entry>
+         <entry>Waiting to choose the next subplan during Parallel Append plan
+         execution.</entry>
+        </row>
+        <row>
          <entry morerows="9"><literal>Lock</></entry>
          <entry><literal>relation</></entry>
          <entry>Waiting to acquire a lock on a relation.</entry>

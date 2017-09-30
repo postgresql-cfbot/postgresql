@@ -115,6 +115,9 @@ static List *find_nonnullable_vars_walker(Node *node, bool top_level);
 static bool is_strict_saop(ScalarArrayOpExpr *expr, bool falseOK);
 static Node *eval_const_expressions_mutator(Node *node,
 							   eval_const_expressions_context *context);
+static bool contain_non_const_walker(Node *node, void *context);
+static bool ece_function_is_safe(Oid funcid,
+					 eval_const_expressions_context *context);
 static List *simplify_or_arguments(List *args,
 					  eval_const_expressions_context *context,
 					  bool *haveNull, bool *forceTrue);
@@ -2464,6 +2467,37 @@ estimate_expression_value(PlannerInfo *root, Node *node)
 	return eval_const_expressions_mutator(node, &context);
 }
 
+/*
+ * The generic case in eval_const_expressions_mutator is to recurse using
+ * expression_tree_mutator, which will copy the given node unchanged but
+ * const-simplify its arguments (if any) as far as possible.  If the node
+ * itself does immutable processing, and each of its arguments were reduced
+ * to a Const, we can then reduce it to a Const using evaluate_expr.  (Some
+ * node types need more complicated logic; for example, a CASE expression
+ * might be reducible to a constant even if not all its subtrees are.)
+ */
+#define ece_generic_processing(node) \
+	expression_tree_mutator((Node *) (node), eval_const_expressions_mutator, \
+							(void *) context)
+
+/*
+ * Check whether all arguments of the given node were reduced to Consts.
+ * By going directly to expression_tree_walker, contain_non_const_walker
+ * is not applied to the node itself, only to its children.
+ */
+#define ece_all_arguments_const(node) \
+	(!expression_tree_walker((Node *) (node), contain_non_const_walker, NULL))
+
+/* Generic macro for applying evaluate_expr */
+#define ece_evaluate_expr(node) \
+	((Node *) evaluate_expr((Expr *) (node), \
+							exprType((Node *) (node)), \
+							exprTypmod((Node *) (node)), \
+							exprCollation((Node *) (node))))
+
+/*
+ * Recursive guts of eval_const_expressions/estimate_expression_value
+ */
 static Node *
 eval_const_expressions_mutator(Node *node,
 							   eval_const_expressions_context *context)
@@ -2779,6 +2813,25 @@ eval_const_expressions_mutator(Node *node,
 				newexpr->location = expr->location;
 				return (Node *) newexpr;
 			}
+		case T_ScalarArrayOpExpr:
+			{
+				ScalarArrayOpExpr *saop;
+
+				/* Copy the node and const-simplify its arguments */
+				saop = (ScalarArrayOpExpr *) ece_generic_processing(node);
+
+				/* Make sure we know underlying function */
+				set_sa_opfuncid(saop);
+
+				/*
+				 * If all arguments are Consts, and it's a safe function, we
+				 * can fold to a constant
+				 */
+				if (ece_all_arguments_const(saop) &&
+					ece_function_is_safe(saop->opfuncid, context))
+					return ece_evaluate_expr(saop);
+				return (Node *) saop;
+			}
 		case T_BoolExpr:
 			{
 				BoolExpr   *expr = (BoolExpr *) node;
@@ -3003,41 +3056,20 @@ eval_const_expressions_mutator(Node *node,
 			}
 		case T_ArrayCoerceExpr:
 			{
-				ArrayCoerceExpr *expr = (ArrayCoerceExpr *) node;
-				Expr	   *arg;
-				ArrayCoerceExpr *newexpr;
+				ArrayCoerceExpr *acexpr;
+
+				/* Copy the node and const-simplify its arguments */
+				acexpr = (ArrayCoerceExpr *) ece_generic_processing(node);
 
 				/*
-				 * Reduce constants in the ArrayCoerceExpr's argument, then
-				 * build a new ArrayCoerceExpr.
+				 * If all arguments are Consts, and it's a binary-coercible or
+				 * safe conversion function, we can fold to a constant
 				 */
-				arg = (Expr *) eval_const_expressions_mutator((Node *) expr->arg,
-															  context);
-
-				newexpr = makeNode(ArrayCoerceExpr);
-				newexpr->arg = arg;
-				newexpr->elemfuncid = expr->elemfuncid;
-				newexpr->resulttype = expr->resulttype;
-				newexpr->resulttypmod = expr->resulttypmod;
-				newexpr->resultcollid = expr->resultcollid;
-				newexpr->isExplicit = expr->isExplicit;
-				newexpr->coerceformat = expr->coerceformat;
-				newexpr->location = expr->location;
-
-				/*
-				 * If constant argument and it's a binary-coercible or
-				 * immutable conversion, we can simplify it to a constant.
-				 */
-				if (arg && IsA(arg, Const) &&
-					(!OidIsValid(newexpr->elemfuncid) ||
-					 func_volatile(newexpr->elemfuncid) == PROVOLATILE_IMMUTABLE))
-					return (Node *) evaluate_expr((Expr *) newexpr,
-												  newexpr->resulttype,
-												  newexpr->resulttypmod,
-												  newexpr->resultcollid);
-
-				/* Else we must return the partially-simplified node */
-				return (Node *) newexpr;
+				if (ece_all_arguments_const(acexpr) &&
+					(!OidIsValid(acexpr->elemfuncid) ||
+					 ece_function_is_safe(acexpr->elemfuncid, context)))
+					return ece_evaluate_expr(acexpr);
+				return (Node *) acexpr;
 			}
 		case T_CollateExpr:
 			{
@@ -3229,41 +3261,23 @@ eval_const_expressions_mutator(Node *node,
 				else
 					return copyObject(node);
 			}
+		case T_ArrayRef:
 		case T_ArrayExpr:
+		case T_RowExpr:
+		case T_BooleanTest:
 			{
-				ArrayExpr  *arrayexpr = (ArrayExpr *) node;
-				ArrayExpr  *newarray;
-				bool		all_const = true;
-				List	   *newelems;
-				ListCell   *element;
+				/*
+				 * Generic handling for node types whose own processing is
+				 * known to be immutable, and for which we need no smarts
+				 * beyond "simplify if all inputs are constants".
+				 */
 
-				newelems = NIL;
-				foreach(element, arrayexpr->elements)
-				{
-					Node	   *e;
-
-					e = eval_const_expressions_mutator((Node *) lfirst(element),
-													   context);
-					if (!IsA(e, Const))
-						all_const = false;
-					newelems = lappend(newelems, e);
-				}
-
-				newarray = makeNode(ArrayExpr);
-				newarray->array_typeid = arrayexpr->array_typeid;
-				newarray->array_collid = arrayexpr->array_collid;
-				newarray->element_typeid = arrayexpr->element_typeid;
-				newarray->elements = newelems;
-				newarray->multidims = arrayexpr->multidims;
-				newarray->location = arrayexpr->location;
-
-				if (all_const)
-					return (Node *) evaluate_expr((Expr *) newarray,
-												  newarray->array_typeid,
-												  exprTypmod(node),
-												  newarray->array_collid);
-
-				return (Node *) newarray;
+				/* Copy the node and const-simplify its arguments */
+				node = ece_generic_processing(node);
+				/* If all arguments are Consts, we can fold to a constant */
+				if (ece_all_arguments_const(node))
+					return ece_evaluate_expr(node);
+				return node;
 			}
 		case T_CoalesceExpr:
 			{
@@ -3340,7 +3354,8 @@ eval_const_expressions_mutator(Node *node,
 				 * simple Var.  (This case won't be generated directly by the
 				 * parser, because ParseComplexProjection short-circuits it.
 				 * But it can arise while simplifying functions.)  Also, we
-				 * can optimize field selection from a RowExpr construct.
+				 * can optimize field selection from a RowExpr construct, or
+				 * of course from a constant.
 				 *
 				 * However, replacing a whole-row Var in this way has a
 				 * pitfall: if we've already built the rel targetlist for the
@@ -3355,6 +3370,8 @@ eval_const_expressions_mutator(Node *node,
 				 * We must also check that the declared type of the field is
 				 * still the same as when the FieldSelect was created --- this
 				 * can change if someone did ALTER COLUMN TYPE on the rowtype.
+				 * If it isn't, we skip the optimization; the case will
+				 * probably fail at runtime, but that's not our problem here.
 				 */
 				FieldSelect *fselect = (FieldSelect *) node;
 				FieldSelect *newfselect;
@@ -3405,6 +3422,17 @@ eval_const_expressions_mutator(Node *node,
 				newfselect->resulttype = fselect->resulttype;
 				newfselect->resulttypmod = fselect->resulttypmod;
 				newfselect->resultcollid = fselect->resultcollid;
+				if (arg && IsA(arg, Const))
+				{
+					Const	   *con = (Const *) arg;
+
+					if (rowtype_field_matches(con->consttype,
+											  newfselect->fieldnum,
+											  newfselect->resulttype,
+											  newfselect->resulttypmod,
+											  newfselect->resultcollid))
+						return ece_evaluate_expr(newfselect);
+				}
 				return (Node *) newfselect;
 			}
 		case T_NullTest:
@@ -3498,59 +3526,6 @@ eval_const_expressions_mutator(Node *node,
 				newntest->location = ntest->location;
 				return (Node *) newntest;
 			}
-		case T_BooleanTest:
-			{
-				BooleanTest *btest = (BooleanTest *) node;
-				BooleanTest *newbtest;
-				Node	   *arg;
-
-				arg = eval_const_expressions_mutator((Node *) btest->arg,
-													 context);
-				if (arg && IsA(arg, Const))
-				{
-					Const	   *carg = (Const *) arg;
-					bool		result;
-
-					switch (btest->booltesttype)
-					{
-						case IS_TRUE:
-							result = (!carg->constisnull &&
-									  DatumGetBool(carg->constvalue));
-							break;
-						case IS_NOT_TRUE:
-							result = (carg->constisnull ||
-									  !DatumGetBool(carg->constvalue));
-							break;
-						case IS_FALSE:
-							result = (!carg->constisnull &&
-									  !DatumGetBool(carg->constvalue));
-							break;
-						case IS_NOT_FALSE:
-							result = (carg->constisnull ||
-									  DatumGetBool(carg->constvalue));
-							break;
-						case IS_UNKNOWN:
-							result = carg->constisnull;
-							break;
-						case IS_NOT_UNKNOWN:
-							result = !carg->constisnull;
-							break;
-						default:
-							elog(ERROR, "unrecognized booltesttype: %d",
-								 (int) btest->booltesttype);
-							result = false; /* keep compiler quiet */
-							break;
-					}
-
-					return makeBoolConst(result, false);
-				}
-
-				newbtest = makeNode(BooleanTest);
-				newbtest->arg = (Expr *) arg;
-				newbtest->booltesttype = btest->booltesttype;
-				newbtest->location = btest->location;
-				return (Node *) newbtest;
-			}
 		case T_PlaceHolderVar:
 
 			/*
@@ -3573,14 +3548,57 @@ eval_const_expressions_mutator(Node *node,
 	}
 
 	/*
-	 * For any node type not handled above, we recurse using
-	 * expression_tree_mutator, which will copy the node unchanged but try to
-	 * simplify its arguments (if any) using this routine. For example: we
-	 * cannot eliminate an ArrayRef node, but we might be able to simplify
-	 * constant expressions in its subscripts.
+	 * For any node type not handled above, copy the node unchanged but
+	 * const-simplify its subexpressions.  This is the correct thing for node
+	 * types whose behavior might change between planning and execution, such
+	 * as CoerceToDomain.  It's also a safe default for new node types not
+	 * known to this routine.
 	 */
-	return expression_tree_mutator(node, eval_const_expressions_mutator,
-								   (void *) context);
+	return ece_generic_processing(node);
+}
+
+/*
+ * Subroutine for eval_const_expressions: check for non-Const nodes.
+ *
+ * We can abort recursion immediately on finding a non-Const node.  This is
+ * critical for performance, else eval_const_expressions_mutator would take
+ * O(N^2) time on non-simplifiable trees.  However, we do need to descend
+ * into List nodes since expression_tree_walker sometimes invokes the walker
+ * function directly on List subtrees.
+ */
+static bool
+contain_non_const_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Const))
+		return false;
+	if (IsA(node, List))
+		return expression_tree_walker(node, contain_non_const_walker, context);
+	/* Otherwise, abort the tree traversal and return true */
+	return true;
+}
+
+/*
+ * Subroutine for eval_const_expressions: check if a function is OK to evaluate
+ */
+static bool
+ece_function_is_safe(Oid funcid, eval_const_expressions_context *context)
+{
+	char		provolatile = func_volatile(funcid);
+
+	/*
+	 * Ordinarily we are only allowed to simplify immutable functions. But for
+	 * purposes of estimation, we consider it okay to simplify functions that
+	 * are merely stable; the risk that the result might change from planning
+	 * time to execution time is worth taking in preference to not being able
+	 * to estimate the value at all.
+	 */
+	if (provolatile == PROVOLATILE_IMMUTABLE)
+		return true;
+	if (context->estimate && provolatile == PROVOLATILE_STABLE)
+		return true;
+	return false;
 }
 
 /*

@@ -47,20 +47,31 @@ static const uint32 nan[2] = {0xffffffff, 0x7fffffff};
 #define MAXFLOATWIDTH	64
 #define MAXDOUBLEWIDTH	128
 
+static void
+floaterr(bool is_overflow)
+{
+	if (is_overflow)
+		ereport(ERROR,											\
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),	\
+		  errmsg("value out of range: overflow")));				\
+	else
+		ereport(ERROR,											\
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),	\
+		 errmsg("value out of range: underflow")));				\
+}
+
+#undef isinf
+#define isinf __builtin_isinf
+
 /*
  * check to see if a float4/8 val has underflowed or overflowed
  */
 #define CHECKFLOATVAL(val, inf_is_valid, zero_is_valid)			\
 do {															\
 	if (isinf(val) && !(inf_is_valid))							\
-		ereport(ERROR,											\
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),	\
-		  errmsg("value out of range: overflow")));				\
-																\
+		floaterr(true);											\
 	if ((val) == 0.0 && !(zero_is_valid))						\
-		ereport(ERROR,											\
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),	\
-		 errmsg("value out of range: underflow")));				\
+		floaterr(false);										\
 } while(0)
 
 
@@ -903,6 +914,7 @@ float8mul(PG_FUNCTION_ARGS)
 
 	CHECKFLOATVAL(result, isinf(arg1) || isinf(arg2),
 				  arg1 == 0 || arg2 == 0);
+
 	PG_RETURN_FLOAT8(result);
 }
 

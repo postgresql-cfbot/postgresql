@@ -121,16 +121,9 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &subquerystate->ss.ps);
 
 	/*
-	 * initialize child expressions
-	 */
-	subquerystate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) subquerystate);
-
-	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &subquerystate->ss.ps);
-	ExecInitScanTupleSlot(estate, &subquerystate->ss);
+	ExecInitResultTupleSlotTL(estate, &subquerystate->ss.ps);
 
 	/*
 	 * initialize subquery
@@ -140,14 +133,19 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	/*
 	 * Initialize scan tuple type (needed by ExecAssignScanProjectionInfo)
 	 */
-	ExecAssignScanType(&subquerystate->ss,
+	ExecInitScanTupleSlot(estate, &subquerystate->ss,
 					   ExecGetResultType(subquerystate->subplan));
 
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&subquerystate->ss.ps);
 	ExecAssignScanProjectionInfo(&subquerystate->ss);
+
+	/*
+	 * initialize child expressions
+	 */
+	subquerystate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) subquerystate);
 
 	return subquerystate;
 }

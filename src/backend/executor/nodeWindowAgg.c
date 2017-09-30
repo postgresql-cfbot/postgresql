@@ -1823,8 +1823,7 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitScanTupleSlot(estate, &winstate->ss);
-	ExecInitResultTupleSlot(estate, &winstate->ss.ps);
+	ExecInitResultTupleSlotTL(estate, &winstate->ss.ps);
 	winstate->first_part_slot = ExecInitExtraTupleSlot(estate);
 	winstate->agg_row_slot = ExecInitExtraTupleSlot(estate);
 	winstate->temp_slot_1 = ExecInitExtraTupleSlot(estate);
@@ -1847,7 +1846,7 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 * initialize source tuple type (which is also the tuple type that we'll
 	 * store in the tuplestore and use in all our working slots).
 	 */
-	ExecAssignScanTypeFromOuterPlan(&winstate->ss);
+	ExecCreateScanSlotForOuterPlan(estate, &winstate->ss);
 
 	ExecSetSlotDescriptor(winstate->first_part_slot,
 						  winstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor);
@@ -1861,7 +1860,6 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&winstate->ss.ps);
 	ExecAssignProjectionInfo(&winstate->ss.ps, NULL);
 
 	/* Set up data for comparing tuples */

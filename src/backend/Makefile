@@ -45,6 +45,10 @@ LIBS := $(filter-out -lpgport -lpgcommon, $(LIBS)) $(LDAP_LIBS_BE) $(ICU_LIBS)
 # The backend doesn't need everything that's in LIBS, however
 LIBS := $(filter-out -lz -lreadline -ledit -ltermcap -lncurses -lcurses, $(LIBS))
 
+# Only the backend needs LLVM (if enabled) and it's a big library, so
+# only specify here
+LIBS += $(LLVM_LIBS)
+
 ifeq ($(with_systemd),yes)
 LIBS += -lsystemd
 endif
@@ -59,6 +63,12 @@ ifneq ($(PORTNAME), aix)
 
 postgres: $(OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(call expand_subsys,$^) $(LIBS) -o $@
+
+
+ifeq ($(findstring clang,$(CC)), clang)
+parsed: $(OBJS)
+	$(MAKE $(patsubst %.o,%.bc,$(call expand_subsys,$(OBJS))))
+endif
 
 endif
 endif

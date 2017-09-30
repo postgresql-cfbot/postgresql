@@ -214,6 +214,26 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 	prmdata->value = PointerGetDatum(rustate);
 	prmdata->isnull = false;
 
+
+	/*
+	 * initialize child nodes
+	 */
+	outerPlanState(rustate) = ExecInitNode(outerPlan(node), estate, eflags);
+	innerPlanState(rustate) = ExecInitNode(innerPlan(node), estate, eflags);
+
+	/*
+	 * RecursiveUnion nodes still have Result slots, which hold pointers to
+	 * tuples, so we have to initialize them.
+	 */
+	ExecInitResultTupleSlotTL(estate, &rustate->ps);
+
+	/*
+	 * Initialize result tuple type and projection info.  (Note: we have to
+	 * set up the result type before initializing child nodes, because
+	 * nodeWorktablescan.c expects it to be valid.)
+	 */
+	rustate->ps.ps_ProjInfo = NULL;
+
 	/*
 	 * Miscellaneous initialization
 	 *
@@ -221,26 +241,6 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 	 * call ExecQual or ExecProject.
 	 */
 	Assert(node->plan.qual == NIL);
-
-	/*
-	 * RecursiveUnion nodes still have Result slots, which hold pointers to
-	 * tuples, so we have to initialize them.
-	 */
-	ExecInitResultTupleSlot(estate, &rustate->ps);
-
-	/*
-	 * Initialize result tuple type and projection info.  (Note: we have to
-	 * set up the result type before initializing child nodes, because
-	 * nodeWorktablescan.c expects it to be valid.)
-	 */
-	ExecAssignResultTypeFromTL(&rustate->ps);
-	rustate->ps.ps_ProjInfo = NULL;
-
-	/*
-	 * initialize child nodes
-	 */
-	outerPlanState(rustate) = ExecInitNode(outerPlan(node), estate, eflags);
-	innerPlanState(rustate) = ExecInitNode(innerPlan(node), estate, eflags);
 
 	/*
 	 * If hashing, precompute fmgr lookup data for inner loop, and create the

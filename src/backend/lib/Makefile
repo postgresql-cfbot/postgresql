@@ -13,6 +13,6 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = binaryheap.o bipartite_match.o dshash.o hyperloglog.o ilist.o \
-	   knapsack.o pairingheap.o rbtree.o stringinfo.o
+	knapsack.o llvmjit.o pairingheap.o rbtree.o stringinfo.o
 
 include $(top_srcdir)/src/backend/common.mk

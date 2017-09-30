@@ -239,21 +239,20 @@ ExecInitValuesScan(ValuesScan *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
-
-	/*
-	 * initialize child expressions
-	 */
-	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
 
 	/*
 	 * get info about values list
 	 */
 	tupdesc = ExecTypeFromExprList((List *) linitial(node->values_lists));
 
-	ExecAssignScanType(&scanstate->ss, tupdesc);
+	ExecInitScanTupleSlot(estate, &scanstate->ss, tupdesc);
+
+	/*
+	 * initialize child expressions
+	 */
+	scanstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
 
 	/*
 	 * Other node-specific setup
@@ -273,7 +272,6 @@ ExecInitValuesScan(ValuesScan *node, EState *estate, int eflags)
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
 	ExecAssignScanProjectionInfo(&scanstate->ss);
 
 	return scanstate;

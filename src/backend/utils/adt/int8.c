@@ -45,6 +45,14 @@ typedef struct
  * Formatting and conversion routines.
  *---------------------------------------------------------*/
 
+static void
+overflowerr(void)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+			 errmsg("bigint out of range")));
+}
+
 /*
  * scanint8 --- try to parse a string into an int8.
  *
@@ -495,9 +503,7 @@ int8um(PG_FUNCTION_ARGS)
 	result = -arg;
 	/* overflow check (needed for INT64_MIN) */
 	if (arg != 0 && SAMESIGN(result, arg))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -524,9 +530,7 @@ int8pl(PG_FUNCTION_ARGS)
 	 * better be that sign too.
 	 */
 	if (SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -545,9 +549,8 @@ int8mi(PG_FUNCTION_ARGS)
 	 * result should be of the same sign as the first input.
 	 */
 	if (!SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
+
 	PG_RETURN_INT64(result);
 }
 
@@ -576,9 +579,7 @@ int8mul(PG_FUNCTION_ARGS)
 		if (arg2 != 0 &&
 			((arg2 == -1 && arg1 < 0 && result < 0) ||
 			 result / arg2 != arg1))
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 	}
 	PG_RETURN_INT64(result);
 }
@@ -610,9 +611,7 @@ int8div(PG_FUNCTION_ARGS)
 		result = -arg1;
 		/* overflow check (needed for INT64_MIN) */
 		if (arg1 != 0 && SAMESIGN(result, arg1))
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 		PG_RETURN_INT64(result);
 	}
 
@@ -635,9 +634,7 @@ int8abs(PG_FUNCTION_ARGS)
 	result = (arg1 < 0) ? -arg1 : arg1;
 	/* overflow check (needed for INT64_MIN) */
 	if (result < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -692,9 +689,7 @@ int8inc(PG_FUNCTION_ARGS)
 		result = *arg + 1;
 		/* Overflow check */
 		if (result < 0 && *arg > 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 
 		*arg = result;
 		PG_RETURN_POINTER(arg);
@@ -709,9 +704,7 @@ int8inc(PG_FUNCTION_ARGS)
 		result = arg + 1;
 		/* Overflow check */
 		if (result < 0 && arg > 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 
 		PG_RETURN_INT64(result);
 	}
@@ -736,9 +729,7 @@ int8dec(PG_FUNCTION_ARGS)
 		result = *arg - 1;
 		/* Overflow check */
 		if (result > 0 && *arg < 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 
 		*arg = result;
 		PG_RETURN_POINTER(arg);
@@ -753,9 +744,7 @@ int8dec(PG_FUNCTION_ARGS)
 		result = arg - 1;
 		/* Overflow check */
 		if (result > 0 && arg < 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 
 		PG_RETURN_INT64(result);
 	}
@@ -829,9 +818,7 @@ int84pl(PG_FUNCTION_ARGS)
 	 * better be that sign too.
 	 */
 	if (SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -850,9 +837,7 @@ int84mi(PG_FUNCTION_ARGS)
 	 * result should be of the same sign as the first input.
 	 */
 	if (!SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -877,9 +862,7 @@ int84mul(PG_FUNCTION_ARGS)
 	 */
 	if (arg1 != (int64) ((int32) arg1) &&
 		result / arg1 != arg2)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -910,9 +893,7 @@ int84div(PG_FUNCTION_ARGS)
 		result = -arg1;
 		/* overflow check (needed for INT64_MIN) */
 		if (arg1 != 0 && SAMESIGN(result, arg1))
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 		PG_RETURN_INT64(result);
 	}
 
@@ -938,9 +919,7 @@ int48pl(PG_FUNCTION_ARGS)
 	 * better be that sign too.
 	 */
 	if (SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -959,9 +938,7 @@ int48mi(PG_FUNCTION_ARGS)
 	 * result should be of the same sign as the first input.
 	 */
 	if (!SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -986,9 +963,7 @@ int48mul(PG_FUNCTION_ARGS)
 	 */
 	if (arg2 != (int64) ((int32) arg2) &&
 		result / arg2 != arg1)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1026,9 +1001,7 @@ int82pl(PG_FUNCTION_ARGS)
 	 * better be that sign too.
 	 */
 	if (SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1047,9 +1020,7 @@ int82mi(PG_FUNCTION_ARGS)
 	 * result should be of the same sign as the first input.
 	 */
 	if (!SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1074,9 +1045,7 @@ int82mul(PG_FUNCTION_ARGS)
 	 */
 	if (arg1 != (int64) ((int32) arg1) &&
 		result / arg1 != arg2)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1107,9 +1076,7 @@ int82div(PG_FUNCTION_ARGS)
 		result = -arg1;
 		/* overflow check (needed for INT64_MIN) */
 		if (arg1 != 0 && SAMESIGN(result, arg1))
-			ereport(ERROR,
-					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-					 errmsg("bigint out of range")));
+			overflowerr();
 		PG_RETURN_INT64(result);
 	}
 
@@ -1135,9 +1102,7 @@ int28pl(PG_FUNCTION_ARGS)
 	 * better be that sign too.
 	 */
 	if (SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1156,9 +1121,7 @@ int28mi(PG_FUNCTION_ARGS)
 	 * result should be of the same sign as the first input.
 	 */
 	if (!SAMESIGN(arg1, arg2) && !SAMESIGN(result, arg1))
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1183,9 +1146,7 @@ int28mul(PG_FUNCTION_ARGS)
 	 */
 	if (arg2 != (int64) ((int32) arg2) &&
 		result / arg2 != arg1)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 	PG_RETURN_INT64(result);
 }
 
@@ -1356,9 +1317,7 @@ dtoi8(PG_FUNCTION_ARGS)
 	result = (int64) arg;
 
 	if ((float8) result != arg)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 
 	PG_RETURN_INT64(result);
 }
@@ -1395,9 +1354,7 @@ ftoi8(PG_FUNCTION_ARGS)
 	result = (int64) darg;
 
 	if ((float8) result != darg)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("bigint out of range")));
+		overflowerr();
 
 	PG_RETURN_INT64(result);
 }

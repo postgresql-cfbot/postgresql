@@ -186,7 +186,12 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	/*
 	 * initialize our result slot
 	 */
-	ExecInitResultTupleSlot(estate, &hashstate->ps);
+	ExecInitResultTupleSlotTL(estate, &hashstate->ps);
+
+	/*
+	 * initialize child nodes
+	 */
+	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags);
 
 	/*
 	 * initialize child expressions
@@ -195,15 +200,9 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 		ExecInitQual(node->plan.qual, (PlanState *) hashstate);
 
 	/*
-	 * initialize child nodes
-	 */
-	outerPlanState(hashstate) = ExecInitNode(outerPlan(node), estate, eflags);
-
-	/*
 	 * initialize tuple type. no need to initialize projection info because
 	 * this node doesn't do projections
 	 */
-	ExecAssignResultTypeFromTL(&hashstate->ps);
 	hashstate->ps.ps_ProjInfo = NULL;
 
 	return hashstate;

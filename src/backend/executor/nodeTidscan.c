@@ -531,27 +531,6 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &tidstate->ss.ps);
 
 	/*
-	 * initialize child expressions
-	 */
-	tidstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) tidstate);
-
-	TidExprListCreate(tidstate);
-
-	/*
-	 * tuple table initialization
-	 */
-	ExecInitResultTupleSlot(estate, &tidstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &tidstate->ss);
-
-	/*
-	 * mark tid list as not computed yet
-	 */
-	tidstate->tss_TidList = NULL;
-	tidstate->tss_NumTids = 0;
-	tidstate->tss_TidPtr = -1;
-
-	/*
 	 * open the base relation and acquire appropriate lock on it.
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
@@ -560,15 +539,35 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	tidstate->ss.ss_currentScanDesc = NULL; /* no heap scan here */
 
 	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlotTL(estate, &tidstate->ss.ps);
+
+	/*
 	 * get the scan type from the relation descriptor.
 	 */
-	ExecAssignScanType(&tidstate->ss, RelationGetDescr(currentRelation));
+	ExecInitScanTupleSlot(estate, &tidstate->ss,
+						  RelationGetDescr(currentRelation));
 
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&tidstate->ss.ps);
 	ExecAssignScanProjectionInfo(&tidstate->ss);
+
+	/*
+	 * initialize child expressions
+	 */
+	tidstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) tidstate);
+
+	TidExprListCreate(tidstate);
+
+	/*
+	 * mark tid list as not computed yet
+	 */
+	tidstate->tss_TidList = NULL;
+	tidstate->tss_NumTids = 0;
+	tidstate->tss_TidPtr = -1;
 
 	/*
 	 * all done.

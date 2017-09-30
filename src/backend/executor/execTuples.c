@@ -58,7 +58,7 @@
  *		At ExecutorStart()
  *		----------------
  *		- ExecInitSeqScan() calls ExecInitScanTupleSlot() and
- *		  ExecInitResultTupleSlot() to construct TupleTableSlots
+ *		  ExecInitResultTupleSlotTL() to construct TupleTableSlots
  *		  for the tuples returned by the access methods and the
  *		  tuples resulting from performing target list projections.
  *
@@ -108,7 +108,7 @@ static TupleDesc ExecTypeFromTLInternal(List *targetList,
  * --------------------------------
  */
 TupleTableSlot *
-MakeTupleTableSlot(void)
+MakeTupleTableSlot(TupleDesc tupleDesc)
 {
 	TupleTableSlot *slot = makeNode(TupleTableSlot);
 
@@ -116,13 +116,22 @@ MakeTupleTableSlot(void)
 	slot->tts_shouldFree = false;
 	slot->tts_shouldFreeMin = false;
 	slot->tts_tuple = NULL;
+	slot->tts_fixedTupleDescriptor = false;
 	slot->tts_tupleDescriptor = NULL;
 	slot->tts_mcxt = CurrentMemoryContext;
 	slot->tts_buffer = InvalidBuffer;
 	slot->tts_nvalid = 0;
+	slot->tts_off = 0;
 	slot->tts_values = NULL;
 	slot->tts_isnull = NULL;
 	slot->tts_mintuple = NULL;
+
+	/* FIXME: instead allocate everything in one go */
+	if (tupleDesc != NULL)
+	{
+		ExecSetSlotDescriptor(slot, tupleDesc);
+		slot->tts_fixedTupleDescriptor = true;
+	}
 
 	return slot;
 }
@@ -134,9 +143,9 @@ MakeTupleTableSlot(void)
  * --------------------------------
  */
 TupleTableSlot *
-ExecAllocTableSlot(List **tupleTable)
+ExecAllocTableSlot(List **tupleTable, TupleDesc desc)
 {
-	TupleTableSlot *slot = MakeTupleTableSlot();
+	TupleTableSlot *slot = MakeTupleTableSlot(desc);
 
 	*tupleTable = lappend(*tupleTable, slot);
 
@@ -198,9 +207,7 @@ ExecResetTupleTable(List *tupleTable,	/* tuple table */
 TupleTableSlot *
 MakeSingleTupleTableSlot(TupleDesc tupdesc)
 {
-	TupleTableSlot *slot = MakeTupleTableSlot();
-
-	ExecSetSlotDescriptor(slot, tupdesc);
+	TupleTableSlot *slot = MakeTupleTableSlot(tupdesc);
 
 	return slot;
 }
@@ -247,6 +254,8 @@ void
 ExecSetSlotDescriptor(TupleTableSlot *slot, /* slot to change */
 					  TupleDesc tupdesc)	/* new tuple descriptor */
 {
+	Assert(!slot->tts_fixedTupleDescriptor);
+
 	/* For safety, make sure slot is empty before changing it */
 	ExecClearTuple(slot);
 
@@ -350,6 +359,7 @@ ExecStoreTuple(HeapTuple tuple,
 
 	/* Mark extracted state invalid */
 	slot->tts_nvalid = 0;
+	slot->tts_off = 0;
 
 	/*
 	 * If tuple is on a disk page, keep the page pinned as long as we hold a
@@ -423,6 +433,7 @@ ExecStoreMinimalTuple(MinimalTuple mtup,
 
 	/* Mark extracted state invalid */
 	slot->tts_nvalid = 0;
+	slot->tts_off = 0;
 
 	return slot;
 }
@@ -469,6 +480,7 @@ ExecClearTuple(TupleTableSlot *slot)	/* slot in which to store tuple */
 	 */
 	slot->tts_isempty = true;
 	slot->tts_nvalid = 0;
+	slot->tts_off = 0;
 
 	return slot;
 }
@@ -768,6 +780,7 @@ ExecMaterializeSlot(TupleTableSlot *slot)
 	 * that we have not pfree'd tts_mintuple, if there is one.)
 	 */
 	slot->tts_nvalid = 0;
+	slot->tts_off = 0;
 
 	/*
 	 * On the same principle of not depending on previous remote storage,
@@ -825,13 +838,28 @@ ExecCopySlot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
  */
 
 /* ----------------
- *		ExecInitResultTupleSlot
+ *		ExecInitResultTupleSlotTL
  * ----------------
  */
 void
-ExecInitResultTupleSlot(EState *estate, PlanState *planstate)
+ExecInitResultTupleSlotTL(EState *estate, PlanState *planstate)
 {
-	planstate->ps_ResultTupleSlot = ExecAllocTableSlot(&estate->es_tupleTable);
+	bool		hasoid;
+	TupleDesc	tupDesc;
+
+	if (ExecContextForcesOids(planstate, &hasoid))
+	{
+		/* context forces OID choice; hasoid is now set correctly */
+	}
+	else
+	{
+		/* given free choice, don't leave space for OIDs in result tuples */
+		hasoid = false;
+	}
+
+	tupDesc = ExecTypeFromTL(planstate->plan->targetlist, hasoid);
+
+	planstate->ps_ResultTupleSlot = ExecAllocTableSlot(&estate->es_tupleTable, tupDesc);
 }
 
 /* ----------------
@@ -839,9 +867,11 @@ ExecInitResultTupleSlot(EState *estate, PlanState *planstate)
  * ----------------
  */
 void
-ExecInitScanTupleSlot(EState *estate, ScanState *scanstate)
+ExecInitScanTupleSlot(EState *estate, ScanState *scanstate, TupleDesc tupledesc)
 {
-	scanstate->ss_ScanTupleSlot = ExecAllocTableSlot(&estate->es_tupleTable);
+	scanstate->ss_ScanTupleSlot = ExecAllocTableSlot(&estate->es_tupleTable,
+													 tupledesc);
+	scanstate->ps.scandesc = tupledesc;
 }
 
 /* ----------------
@@ -851,7 +881,7 @@ ExecInitScanTupleSlot(EState *estate, ScanState *scanstate)
 TupleTableSlot *
 ExecInitExtraTupleSlot(EState *estate)
 {
-	return ExecAllocTableSlot(&estate->es_tupleTable);
+	return ExecAllocTableSlot(&estate->es_tupleTable, NULL);
 }
 
 /* ----------------

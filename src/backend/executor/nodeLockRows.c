@@ -368,15 +368,9 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 	lrstate->ps.ExecProcNode = ExecLockRows;
 
 	/*
-	 * Miscellaneous initialization
-	 *
-	 * LockRows nodes never call ExecQual or ExecProject.
-	 */
-
-	/*
 	 * Tuple table initialization (XXX not actually used...)
 	 */
-	ExecInitResultTupleSlot(estate, &lrstate->ps);
+	ExecInitResultTupleSlotTL(estate, &lrstate->ps);
 
 	/*
 	 * then initialize outer plan
@@ -387,8 +381,13 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 	 * LockRows nodes do no projections, so initialize projection info for
 	 * this node appropriately
 	 */
-	ExecAssignResultTypeFromTL(&lrstate->ps);
 	lrstate->ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * LockRows nodes never call ExecQual or ExecProject.
+	 */
 
 	/*
 	 * Create workspace in which we can remember per-RTE locked tuples

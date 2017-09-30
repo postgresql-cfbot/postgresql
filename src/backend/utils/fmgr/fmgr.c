@@ -67,7 +67,7 @@ static Datum fmgr_security_definer(PG_FUNCTION_ARGS);
  * or name, but search by Oid is much faster.
  */
 
-static const FmgrBuiltin *
+const FmgrBuiltin *
 fmgr_isbuiltin(Oid id)
 {
 	int			low = 0;

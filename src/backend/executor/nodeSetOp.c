@@ -523,7 +523,7 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	/*
 	 * Tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &setopstate->ps);
+	ExecInitResultTupleSlotTL(estate, &setopstate->ps);
 
 	/*
 	 * initialize child nodes
@@ -539,7 +539,6 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	 * setop nodes do no projections, so initialize projection info for this
 	 * node appropriately
 	 */
-	ExecAssignResultTypeFromTL(&setopstate->ps);
 	setopstate->ps.ps_ProjInfo = NULL;
 
 	/*

@@ -106,7 +106,7 @@ ExecInitGatherMerge(GatherMerge *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &gm_state->ps);
+	ExecInitResultTupleSlotTL(estate, &gm_state->ps);
 
 	/*
 	 * now initialize outer plan
@@ -117,7 +117,6 @@ ExecInitGatherMerge(GatherMerge *node, EState *estate, int eflags)
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&gm_state->ps);
 	ExecAssignProjectionInfo(&gm_state->ps, NULL);
 
 	/*

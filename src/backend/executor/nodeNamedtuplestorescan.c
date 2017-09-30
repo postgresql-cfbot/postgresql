@@ -133,26 +133,20 @@ ExecInitNamedTuplestoreScan(NamedTuplestoreScan *node, EState *estate, int eflag
 	ExecAssignExprContext(estate, &scanstate->ss.ps);
 
 	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
+	ExecInitScanTupleSlot(estate, &scanstate->ss, scanstate->tupdesc);
+
+	/*
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
 		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
 
 	/*
-	 * tuple table initialization
-	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
-
-	/*
-	 * The scan tuple type is specified for the tuplestore.
-	 */
-	ExecAssignScanType(&scanstate->ss, scanstate->tupdesc);
-
-	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
 	ExecAssignScanProjectionInfo(&scanstate->ss);
 
 	return scanstate;

@@ -88,6 +88,11 @@ extern PGDLLIMPORT ExecutorEnd_hook_type ExecutorEnd_hook;
 typedef bool (*ExecutorCheckPerms_hook_type) (List *, bool);
 extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
 
+/* GUC variables for JITing */
+#ifdef USE_LLVM
+extern bool jit_expressions;
+extern bool jit_tuple_deforming;
+#endif
 
 /*
  * prototypes from functions in execAmi.c
@@ -259,6 +264,8 @@ extern ExprState *ExecInitExpr(Expr *node, PlanState *parent);
 extern ExprState *ExecInitQual(List *qual, PlanState *parent);
 extern ExprState *ExecInitCheck(List *qual, PlanState *parent);
 extern List *ExecInitExprList(List *nodes, PlanState *parent);
+extern ExprState *ExecInitAggTrans(AggState *aggstate, struct AggStatePerPhaseData *phase,
+								   PlanState *parent, bool doSort, bool doHash);
 extern ProjectionInfo *ExecBuildProjectionInfo(List *targetList,
 						ExprContext *econtext,
 						TupleTableSlot *slot,
@@ -418,8 +425,8 @@ extern void ExecScanReScan(ScanState *node);
 /*
  * prototypes from functions in execTuples.c
  */
-extern void ExecInitResultTupleSlot(EState *estate, PlanState *planstate);
-extern void ExecInitScanTupleSlot(EState *estate, ScanState *scanstate);
+extern void ExecInitResultTupleSlotTL(EState *estate, PlanState *planstate);
+extern void ExecInitScanTupleSlot(EState *estate, ScanState *scanstate, TupleDesc tupleDesc);
 extern TupleTableSlot *ExecInitExtraTupleSlot(EState *estate);
 extern TupleTableSlot *ExecInitNullTupleSlot(EState *estate,
 					  TupleDesc tupType);
@@ -489,14 +496,12 @@ extern ExprContext *MakePerTupleExprContext(EState *estate);
 	} while (0)
 
 extern void ExecAssignExprContext(EState *estate, PlanState *planstate);
-extern void ExecAssignResultType(PlanState *planstate, TupleDesc tupDesc);
-extern void ExecAssignResultTypeFromTL(PlanState *planstate);
 extern TupleDesc ExecGetResultType(PlanState *planstate);
 extern void ExecAssignProjectionInfo(PlanState *planstate,
 						 TupleDesc inputDesc);
 extern void ExecFreeExprContext(PlanState *planstate);
 extern void ExecAssignScanType(ScanState *scanstate, TupleDesc tupDesc);
-extern void ExecAssignScanTypeFromOuterPlan(ScanState *scanstate);
+extern void ExecCreateScanSlotForOuterPlan(EState *estate, ScanState *scanstate);
 
 extern bool ExecRelationIsTargetRelation(EState *estate, Index scanrelid);
 

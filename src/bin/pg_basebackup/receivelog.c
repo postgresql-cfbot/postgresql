@@ -328,7 +328,7 @@ writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
 static bool
 sendFeedback(PGconn *conn, XLogRecPtr blockpos, TimestampTz now, bool replyRequested)
 {
-	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
+	char		replybuf[1 + 8 + 8 + 8 + 8 + 1 + 8];
 	int			len = 0;
 
 	replybuf[len] = 'r';
@@ -346,6 +346,8 @@ sendFeedback(PGconn *conn, XLogRecPtr blockpos, TimestampTz now, bool replyReque
 	len += 8;
 	replybuf[len] = replyRequested ? 1 : 0; /* replyRequested */
 	len += 1;
+	fe_sendint64(-1, &replybuf[len]);	/* replyTo */
+	len += 8;
 
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
@@ -1016,6 +1018,7 @@ ProcessKeepaliveMsg(PGconn *conn, StreamCtl *stream, char *copybuf, int len,
 	 * check if the server requested a reply, and ignore the rest.
 	 */
 	pos = 1;					/* skip msgtype 'k' */
+	pos += 8;					/* skip messageNumber */
 	pos += 8;					/* skip walEnd */
 	pos += 8;					/* skip sendTime */
 

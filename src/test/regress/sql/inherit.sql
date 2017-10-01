@@ -544,6 +544,7 @@ drop table matest0 cascade;
 set enable_seqscan = off;
 set enable_indexscan = on;
 set enable_bitmapscan = off;
+set enable_incrementalsort = off;
 
 -- Check handling of duplicated, constant, or volatile targetlist items
 explain (costs off)
@@ -605,9 +606,26 @@ SELECT
     ORDER BY f.i LIMIT 10)
 FROM generate_series(1, 3) g(i);
 
+set enable_incrementalsort = on;
+
+-- check incremental sort is used when enabled
+explain (costs off)
+SELECT thousand, tenthous FROM tenk1
+UNION ALL
+SELECT thousand, thousand FROM tenk1
+ORDER BY thousand, tenthous;
+
+explain (costs off)
+SELECT x, y FROM
+  (SELECT thousand AS x, tenthous AS y FROM tenk1 a
+   UNION ALL
+   SELECT unique2 AS x, unique2 AS y FROM tenk1 b) s
+ORDER BY x, y;
+
 reset enable_seqscan;
 reset enable_indexscan;
 reset enable_bitmapscan;
+reset enable_incrementalsort;
 
 --
 -- Check that constraint exclusion works correctly with partitions using

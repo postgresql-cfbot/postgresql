@@ -3317,6 +3317,10 @@ print_path(PlannerInfo *root, Path *path, int indent)
 			ptype = "Sort";
 			subpath = ((SortPath *) path)->subpath;
 			break;
+		case T_IncrementalSortPath:
+			ptype = "IncrementalSort";
+			subpath = ((SortPath *) path)->subpath;
+			break;
 		case T_GroupPath:
 			ptype = "Group";
 			subpath = ((GroupPath *) path)->subpath;

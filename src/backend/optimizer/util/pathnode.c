@@ -95,7 +95,7 @@ compare_path_costs(Path *path1, Path *path2, CostSelector criterion)
 }
 
 /*
- * compare_path_fractional_costs
+ * compare_fractional_path_costs
  *	  Return -1, 0, or +1 according as path1 is cheaper, the same cost,
  *	  or more expensive than path2 for fetching the specified fraction
  *	  of the total tuples.
@@ -1296,12 +1296,13 @@ create_merge_append_path(PlannerInfo *root,
 	foreach(l, subpaths)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
+		int			n_common_pathkeys = pathkeys_common(pathkeys, subpath->pathkeys);
 
 		pathnode->path.rows += subpath->rows;
 		pathnode->path.parallel_safe = pathnode->path.parallel_safe &&
 			subpath->parallel_safe;
 
-		if (pathkeys_contained_in(pathkeys, subpath->pathkeys))
+		if (n_common_pathkeys == list_length(pathkeys))
 		{
 			/* Subpath is adequately ordered, we won't need to sort it */
 			input_startup_cost += subpath->startup_cost;
@@ -1315,6 +1316,8 @@ create_merge_append_path(PlannerInfo *root,
 			cost_sort(&sort_path,
 					  root,
 					  pathkeys,
+					  n_common_pathkeys,
+					  subpath->startup_cost,
 					  subpath->total_cost,
 					  subpath->parent->tuples,
 					  subpath->pathtarget->width,
@@ -1551,7 +1554,8 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 		/*
 		 * Estimate cost for sort+unique implementation
 		 */
-		cost_sort(&sort_path, root, NIL,
+		cost_sort(&sort_path, root, NIL, 0,
+				  subpath->startup_cost,
 				  subpath->total_cost,
 				  rel->rows,
 				  subpath->pathtarget->width,
@@ -1643,6 +1647,7 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	GatherMergePath *pathnode = makeNode(GatherMergePath);
 	Cost		input_startup_cost = 0;
 	Cost		input_total_cost = 0;
+	int			n_common_pathkeys;
 
 	Assert(subpath->parallel_safe);
 	Assert(pathkeys);
@@ -1659,7 +1664,9 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	pathnode->path.pathtarget = target ? target : rel->reltarget;
 	pathnode->path.rows += subpath->rows;
 
-	if (pathkeys_contained_in(pathkeys, subpath->pathkeys))
+	n_common_pathkeys = pathkeys_common(pathkeys, subpath->pathkeys);
+
+	if (n_common_pathkeys == list_length(pathkeys))
 	{
 		/* Subpath is adequately ordered, we won't need to sort it */
 		input_startup_cost += subpath->startup_cost;
@@ -1673,6 +1680,8 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 		cost_sort(&sort_path,
 				  root,
 				  pathkeys,
+				  n_common_pathkeys,
+				  subpath->startup_cost,
 				  subpath->total_cost,
 				  subpath->rows,
 				  subpath->pathtarget->width,
@@ -2516,9 +2525,31 @@ create_sort_path(PlannerInfo *root,
 				 List *pathkeys,
 				 double limit_tuples)
 {
-	SortPath   *pathnode = makeNode(SortPath);
+	SortPath   *pathnode;
+	int			n_common_pathkeys;
 
-	pathnode->path.pathtype = T_Sort;
+	if (enable_incrementalsort)
+		n_common_pathkeys = pathkeys_common(subpath->pathkeys, pathkeys);
+	else
+		n_common_pathkeys = 0;
+
+	if (n_common_pathkeys == 0)
+	{
+		pathnode = makeNode(SortPath);
+		pathnode->path.pathtype = T_Sort;
+	}
+	else
+	{
+		IncrementalSortPath   *incpathnode;
+
+		incpathnode = makeNode(IncrementalSortPath);
+		pathnode = &incpathnode->spath;
+		pathnode->path.pathtype = T_IncrementalSort;
+		incpathnode->skipCols = n_common_pathkeys;
+	}
+
+	Assert(n_common_pathkeys < list_length(pathkeys));
+
 	pathnode->path.parent = rel;
 	/* Sort doesn't project, so use source path's pathtarget */
 	pathnode->path.pathtarget = subpath->pathtarget;
@@ -2532,7 +2563,9 @@ create_sort_path(PlannerInfo *root,
 
 	pathnode->subpath = subpath;
 
-	cost_sort(&pathnode->path, root, pathkeys,
+	cost_sort(&pathnode->path, root,
+			  pathkeys, n_common_pathkeys,
+			  subpath->startup_cost,
 			  subpath->total_cost,
 			  subpath->rows,
 			  subpath->pathtarget->width,
@@ -2840,7 +2873,8 @@ create_groupingsets_path(PlannerInfo *root,
 			else
 			{
 				/* Account for cost of sort, but don't charge input cost again */
-				cost_sort(&sort_path, root, NIL,
+				cost_sort(&sort_path, root, NIL, 0,
+						  0.0,
 						  0.0,
 						  subpath->rows,
 						  subpath->pathtarget->width,

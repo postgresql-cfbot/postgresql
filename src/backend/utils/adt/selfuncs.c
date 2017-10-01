@@ -3650,6 +3650,42 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 }
 
 /*
+ * estimate_pathkeys_groups	- Estimate number of groups which dataset is
+ * 							  divided to by pathkeys.
+ *
+ * Returns an array of group numbers. i'th element of array is number of groups
+ * which first i pathkeys divides dataset into.  Actually is a convenience
+ * wrapper over estimate_num_groups().
+ */
+double *
+estimate_pathkeys_groups(List *pathkeys, PlannerInfo *root, double tuples)
+{
+	ListCell   *l;
+	List	   *groupExprs = NIL;
+	double	   *result;
+	int			i;
+
+	/*
+	 * Get number of groups for each prefix of pathkeys.
+	 */
+	i = 0;
+	result = (double *) palloc(sizeof(double) * list_length(pathkeys));
+	foreach(l, pathkeys)
+	{
+		PathKey *key = (PathKey *)lfirst(l);
+		EquivalenceMember *member = (EquivalenceMember *)
+							linitial(key->pk_eclass->ec_members);
+
+		groupExprs = lappend(groupExprs, member->em_expr);
+
+		result[i] = estimate_num_groups(root, groupExprs, tuples, NULL);
+		i++;
+	}
+
+	return result;
+}
+
+/*
  * Estimate hash bucket statistics when the specified expression is used
  * as a hash key for the given number of buckets.
  *

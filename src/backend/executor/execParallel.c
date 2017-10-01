@@ -28,6 +28,7 @@
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
+#include "executor/nodeIncrementalSort.h"
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeSeqscan.h"
@@ -258,6 +259,10 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 			/* even when not parallel-aware */
 			ExecSortEstimate((SortState *) planstate, e->pcxt);
 			break;
+		case T_IncrementalSortState:
+			/* even when not parallel-aware */
+			ExecIncrementalSortEstimate((IncrementalSortState *) planstate, e->pcxt);
+			break;
 
 		default:
 			break;
@@ -329,6 +334,10 @@ ExecParallelInitializeDSM(PlanState *planstate,
 		case T_SortState:
 			/* even when not parallel-aware */
 			ExecSortInitializeDSM((SortState *) planstate, d->pcxt);
+			break;
+		case T_IncrementalSortState:
+			/* even when not parallel-aware */
+			ExecIncrementalSortInitializeDSM((IncrementalSortState *) planstate, d->pcxt);
 			break;
 
 		default:
@@ -703,6 +712,10 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 			/* even when not parallel-aware */
 			ExecSortReInitializeDSM((SortState *) planstate, pcxt);
 			break;
+		case T_IncrementalSortState:
+			/* even when not parallel-aware */
+			ExecIncrementalSortReInitializeDSM((IncrementalSortState *) planstate, pcxt);
+			break;
 
 		default:
 			break;
@@ -761,6 +774,8 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 	 */
 	if (IsA(planstate, SortState))
 		ExecSortRetrieveInstrumentation((SortState *) planstate);
+	else if (IsA(planstate, IncrementalSortState))
+		ExecIncrementalSortRetrieveInstrumentation((IncrementalSortState *) planstate);
 
 	return planstate_tree_walker(planstate, ExecParallelRetrieveInstrumentation,
 								 instrumentation);
@@ -981,6 +996,10 @@ ExecParallelInitializeWorker(PlanState *planstate, shm_toc *toc)
 		case T_SortState:
 			/* even when not parallel-aware */
 			ExecSortInitializeWorker((SortState *) planstate, toc);
+			break;
+		case T_IncrementalSortState:
+			/* even when not parallel-aware */
+			ExecIncrementalSortInitializeWorker((IncrementalSortState *) planstate, toc);
 			break;
 
 		default:

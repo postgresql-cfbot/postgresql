@@ -204,7 +204,8 @@ CREATE ROLE <replaceable class="PARAMETER">name</replaceable> [ [ WITH ] <replac
         the role can make.  -1 (the default) means no limit. Note that only
         normal connections are counted towards this limit. Neither prepared
         transactions nor background worker connections are counted towards
-        this limit.
+        this limit (see <xref linkend="guc-max-worker-processes-per-user">
+        for the latter).
        </para>
       </listitem>
      </varlistentry>

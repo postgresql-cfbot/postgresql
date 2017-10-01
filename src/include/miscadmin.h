@@ -158,6 +158,7 @@ extern PGDLLIMPORT int NBuffers;
 extern int	MaxBackends;
 extern int	MaxConnections;
 extern int	max_worker_processes;
+extern int	max_worker_processes_per_user;
 extern int	max_parallel_workers;
 
 extern PGDLLIMPORT int MyProcPid;

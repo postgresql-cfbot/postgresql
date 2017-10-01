@@ -1994,6 +1994,34 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-max-worker-processes-per-user" xreflabel="max_worker_processes_per_user">
+       <term><varname>max_worker_processes_per_user</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>max_worker_processes_per_user</> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the maximum number of background processes allowed per user.  If
+         the setting is -1, then there is no limit.  That is also the default.
+        </para>
+
+        <para>
+         Only superusers can change this setting.
+         Unlike <varname>max_worker_processes</varname>, which controls the
+         overall instance limit, this setting can also be changed at run time
+         and can be set differently for different users by
+         using <literal>ALTER ROLE ... SET</literal>.
+        </para>
+
+        <para>
+         This setting is checked at the time the worker process is started
+         using the setting in the session that causes it to start.  Changes to
+         the setting will not affect already running workers.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="guc-max-parallel-workers-per-gather" xreflabel="max_parallel_workers_per_gather">
        <term><varname>max_parallel_workers_per_gather</varname> (<type>integer</type>)
        <indexterm>

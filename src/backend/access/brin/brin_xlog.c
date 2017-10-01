@@ -234,6 +234,14 @@ brin_xlog_revmap_extend(XLogReaderState *record)
 		metadata->lastRevmapPage = xlrec->targetBlk;
 
 		PageSetLSN(metapg, lsn);
+
+		/*
+		 * Set pd_lower just past the end of the metadata.  This is essential,
+		 * because without doing so, metadata will be lost if xlog.c
+		 * compresses the page.
+		 */
+		((PageHeader) metapg)->pd_lower =
+			((char *) metadata + sizeof(BrinMetaPageData)) - (char *) metapg;
 		MarkBufferDirty(metabuf);
 	}
 
@@ -331,14 +339,20 @@ void
 brin_mask(char *pagedata, BlockNumber blkno)
 {
 	Page		page = (Page) pagedata;
+	PageHeader	pagehdr = (PageHeader) page;
 
 	mask_page_lsn_and_checksum(page);
 
 	mask_page_hint_bits(page);
 
-	if (BRIN_IS_REGULAR_PAGE(page))
+	/*
+	 * Regular brin pages contain unused space which needs to be masked.
+	 * Similarly for meta pages, but mask it only if pd_lower appears to have
+	 * been set correctly.
+	 */
+	if (BRIN_IS_REGULAR_PAGE(page) ||
+		(BRIN_IS_META_PAGE(page) && pagehdr->pd_lower > SizeOfPageHeaderData))
 	{
-		/* Regular brin pages contain unused space which needs to be masked. */
 		mask_unused_space(page);
 	}
 }

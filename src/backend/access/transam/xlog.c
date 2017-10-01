@@ -2639,11 +2639,15 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 	 */
 	if (!sleeping)
 	{
+		int	flushbytes;
 		/* back off to last completed page boundary */
 		WriteRqstPtr -= WriteRqstPtr % XLOG_BLCKSZ;
 
-		/* if we have already flushed that far, we're done */
-		if (WriteRqstPtr <= LogwrtResult.Flush)
+		flushbytes =
+			WriteRqstPtr / XLOG_BLCKSZ - LogwrtResult.Flush / XLOG_BLCKSZ;
+
+		/* if there is nothing to write and we don't have enough to flush, we're done */
+		if (WriteRqstPtr <= LogwrtResult.Write && (WalWriterFlushAfter == 0 || flushbytes < WalWriterFlushAfter))
 			return;
 	}
 

@@ -239,6 +239,7 @@ TS_execute_ternary(GinChkVal *gcv, QueryItem *curitem, bool in_phrase)
 			return !result;
 
 		case OP_PHRASE:
+		case OP_AROUND:
 
 			/*
 			 * GIN doesn't contain any information about positions, so treat

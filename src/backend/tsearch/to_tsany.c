@@ -390,7 +390,8 @@ add_to_tsvector(void *_state, char *elem_value, int elem_len)
  * and different variants are ORed together.
  */
 static void
-pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, int16 weight, bool prefix)
+pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval,
+							int16 weight, bool prefix, bool isphrase)
 {
 	int32		count = 0;
 	ParsedText	prs;
@@ -423,7 +424,12 @@ pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, 
 					/* put placeholders for each missing stop word */
 					pushStop(state);
 					if (cntpos)
-						pushOperator(state, data->qoperator, 1);
+					{
+						if (isphrase)
+							pushOperator(state, OP_PHRASE, 1);
+						else
+							pushOperator(state, data->qoperator, 1);
+					}
 					cntpos++;
 					pos++;
 				}
@@ -464,7 +470,10 @@ pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, 
 			if (cntpos)
 			{
 				/* distance may be useful */
-				pushOperator(state, data->qoperator, 1);
+				if (isphrase)
+					pushOperator(state, OP_PHRASE, 1);
+				else
+					pushOperator(state, data->qoperator, 1);
 			}
 
 			cntpos++;
@@ -490,6 +499,7 @@ to_tsquery_byid(PG_FUNCTION_ARGS)
 	query = parse_tsquery(text_to_cstring(in),
 						  pushval_morph,
 						  PointerGetDatum(&data),
+						  false,
 						  false);
 
 	PG_RETURN_TSQUERY(query);
@@ -520,7 +530,8 @@ plainto_tsquery_byid(PG_FUNCTION_ARGS)
 	query = parse_tsquery(text_to_cstring(in),
 						  pushval_morph,
 						  PointerGetDatum(&data),
-						  true);
+						  true,
+						  false);
 
 	PG_RETURN_POINTER(query);
 }
@@ -551,7 +562,8 @@ phraseto_tsquery_byid(PG_FUNCTION_ARGS)
 	query = parse_tsquery(text_to_cstring(in),
 						  pushval_morph,
 						  PointerGetDatum(&data),
-						  true);
+						  true,
+						  false);
 
 	PG_RETURN_TSQUERY(query);
 }
@@ -566,4 +578,37 @@ phraseto_tsquery(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(DirectFunctionCall2(phraseto_tsquery_byid,
 										ObjectIdGetDatum(cfgId),
 										PointerGetDatum(in)));
+}
+
+Datum
+queryto_tsquery_byid(PG_FUNCTION_ARGS)
+{
+	text	   *in = PG_GETARG_TEXT_PP(1);
+	MorphOpaque	data;
+	TSQuery		query = NULL;
+
+	data.cfg_id = PG_GETARG_OID(0);
+
+	data.qoperator = OP_AND;
+
+	query = parse_tsquery(text_to_cstring(in),
+						  pushval_morph,
+						  PointerGetDatum(&data),
+						  false,
+						  true);
+
+	PG_RETURN_TSQUERY(query);
+}
+
+Datum
+queryto_tsquery(PG_FUNCTION_ARGS)
+{
+	text	   *in = PG_GETARG_TEXT_PP(0);
+	Oid			cfgId;
+
+	cfgId = getTSCurrentConfig(true);
+	PG_RETURN_DATUM(DirectFunctionCall2(queryto_tsquery_byid,
+										ObjectIdGetDatum(cfgId),
+										PointerGetDatum(in)));
+
 }

@@ -1429,6 +1429,7 @@ checkcondition_str(void *checkval, QueryOperand *val, ExecPhraseData *data)
 #define TSPO_L_ONLY		0x01	/* emit positions appearing only in L */
 #define TSPO_R_ONLY		0x02	/* emit positions appearing only in R */
 #define TSPO_BOTH		0x04	/* emit positions appearing in both L&R */
+#define TS_NOT_EXAC		0x08	/* not exact distance for AROUND(X) */
 
 static bool
 TS_phrase_output(ExecPhraseData *data,
@@ -1473,8 +1474,18 @@ TS_phrase_output(ExecPhraseData *data,
 			Rpos = INT_MAX;
 		}
 
+		/* Processing OP_AROUND */
+		if ((emit & TS_NOT_EXAC) &&
+			Lpos - Rpos >= 0 &&
+			Lpos - Rpos <= (Loffset + Roffset) * 2 - Rdata->width + Ldata->width)
+		{
+			if (emit & TSPO_BOTH)
+				output_pos = Rpos;
+			Lindex++;
+			Rindex++;
+		}
 		/* Merge-join the two input lists */
-		if (Lpos < Rpos)
+		else if (Lpos < Rpos)
 		{
 			/* Lpos is not matched in Rdata, should we output it? */
 			if (emit & TSPO_L_ONLY)
@@ -1625,6 +1636,7 @@ TS_phrase_execute(QueryItem *curitem, void *arg, uint32 flags,
 			}
 
 		case OP_PHRASE:
+		case OP_AROUND:
 		case OP_AND:
 			memset(&Ldata, 0, sizeof(Ldata));
 			memset(&Rdata, 0, sizeof(Rdata));
@@ -1647,7 +1659,7 @@ TS_phrase_execute(QueryItem *curitem, void *arg, uint32 flags,
 				(Rdata.npos == 0 && !Rdata.negate))
 				return (flags & TS_EXEC_PHRASE_NO_POS) ? true : false;
 
-			if (curitem->qoperator.oper == OP_PHRASE)
+			if (curitem->qoperator.oper == OP_PHRASE || curitem->qoperator.oper == OP_AROUND)
 			{
 				/*
 				 * Compute Loffset and Roffset suitable for phrase match, and
@@ -1703,7 +1715,7 @@ TS_phrase_execute(QueryItem *curitem, void *arg, uint32 flags,
 			{
 				/* straight AND */
 				return TS_phrase_output(data, &Ldata, &Rdata,
-										TSPO_BOTH,
+										TSPO_BOTH | (curitem->qoperator.oper == OP_AROUND ? TS_NOT_EXAC : 0),
 										Loffset, Roffset,
 										Min(Ldata.npos, Rdata.npos));
 			}
@@ -1843,6 +1855,7 @@ TS_execute(QueryItem *curitem, void *arg, uint32 flags,
 				return TS_execute(curitem + 1, arg, flags, chkcond);
 
 		case OP_PHRASE:
+		case OP_AROUND:
 			return TS_phrase_execute(curitem, arg, flags, chkcond, NULL);
 
 		default:
@@ -1882,6 +1895,7 @@ tsquery_requires_match(QueryItem *curitem)
 			return false;
 
 		case OP_PHRASE:
+		case OP_AROUND:
 
 			/*
 			 * Treat OP_PHRASE as OP_AND here

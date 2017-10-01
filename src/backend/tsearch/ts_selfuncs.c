@@ -396,6 +396,7 @@ tsquery_opr_selec(QueryItem *item, char *operand,
 				break;
 
 			case OP_PHRASE:
+			case OP_AROUND:
 			case OP_AND:
 				s1 = tsquery_opr_selec(item + 1, operand,
 									   lookup, length, minfreq);

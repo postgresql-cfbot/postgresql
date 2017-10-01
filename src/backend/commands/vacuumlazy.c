@@ -250,6 +250,17 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	vacrelstats->pages_removed = 0;
 	vacrelstats->lock_waiter_detected = false;
 
+	/*
+	 * Vacuum the Free Space Map partially before we start.
+	 * If an earlier vacuum was canceled, and that's likely in
+	 * highly contended tables, we may need to finish up. If we do
+	 * it now, we make the space visible to other backends regardless
+	 * of whether we succeed in finishing this time around.
+	 * Don't bother checking branches that already have usable space,
+	 * though.
+	 */
+	FreeSpaceMapVacuum(onerel, 64);
+
 	/* Open all indexes of the relation */
 	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
 	vacrelstats->hasindex = (nindexes > 0);
@@ -287,7 +298,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 								 PROGRESS_VACUUM_PHASE_FINAL_CLEANUP);
 
 	/* Vacuum the Free Space Map */
-	FreeSpaceMapVacuum(onerel);
+	FreeSpaceMapVacuum(onerel, 0);
 
 	/*
 	 * Update statistics in pg_class.
@@ -463,7 +474,9 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	HeapTupleData tuple;
 	char	   *relname;
 	BlockNumber empty_pages,
-				vacuumed_pages;
+				vacuumed_pages,
+				vacuumed_pages_at_fsm_vac,
+				vacuum_fsm_every_pages;
 	double		num_tuples,
 				tups_vacuumed,
 				nkeep,
@@ -473,6 +486,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
 	BlockNumber next_unskippable_block;
+	Size		max_freespace = 0;
 	bool		skipping_blocks;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
@@ -491,7 +505,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 					get_namespace_name(RelationGetNamespace(onerel)),
 					relname)));
 
-	empty_pages = vacuumed_pages = 0;
+	empty_pages = vacuumed_pages = vacuumed_pages_at_fsm_vac = 0;
 	num_tuples = tups_vacuumed = nkeep = nunused = 0;
 
 	indstats = (IndexBulkDeleteResult **)
@@ -503,6 +517,16 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->tupcount_pages = 0;
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
+
+	/*
+	 * Vacuum the FSM a few times in the middle if the relation is big
+	 * and has no indexes. Once every 8GB of dirtied pages, or one 8th
+	 * of the relation, whatever is bigger, to avoid quadratic cost.
+	 * If it has indexes, this is ignored, and the FSM is vacuumed after
+	 * each index pass.
+	 */
+	vacuum_fsm_every_pages = nblocks / 8;
+	vacuum_fsm_every_pages = Max(vacuum_fsm_every_pages, 1048576);
 
 	lazy_space_alloc(vacrelstats, nblocks);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
@@ -743,6 +767,14 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			vacrelstats->num_dead_tuples = 0;
 			vacrelstats->num_index_scans++;
 
+			/*
+			 * Vacuum the Free Space Map to make the changes we made visible.
+			 * Don't recurse into branches with more than max_freespace,
+			 * as we can't set it higher already.
+			 */
+			FreeSpaceMapVacuum(onerel, max_freespace);
+			max_freespace = 0;
+
 			/* Report that we are once again scanning the heap */
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
@@ -865,6 +897,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			UnlockReleaseBuffer(buf);
 
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			if (freespace > max_freespace)
+				max_freespace = freespace;
 			continue;
 		}
 
@@ -904,6 +938,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 			UnlockReleaseBuffer(buf);
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			if (freespace > max_freespace)
+				max_freespace = freespace;
 			continue;
 		}
 
@@ -1250,7 +1286,23 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * taken if there are no indexes.)
 		 */
 		if (vacrelstats->num_dead_tuples == prev_dead_count)
+		{
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			if (freespace > max_freespace)
+				max_freespace = freespace;
+		}
+
+		/*
+		 * If there are no indexes then we should periodically vacuum the FSM
+		 * on huge relations to make free space visible early.
+		 */
+		if (nindexes == 0 &&
+			(vacuumed_pages_at_fsm_vac - vacuumed_pages) > vacuum_fsm_every_pages)
+		{
+			/* Vacuum the Free Space Map */
+			FreeSpaceMapVacuum(onerel, 0);
+			vacuumed_pages_at_fsm_vac = vacuumed_pages;
+		}
 	}
 
 	/* report that everything is scanned and vacuumed */
@@ -1900,6 +1952,8 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 		 * We don't insert a vacuum delay point here, because we have an
 		 * exclusive lock on the table which we want to hold for as short a
 		 * time as possible.  We still need to check for interrupts however.
+		 * We might have to acquire the autovacuum lock, however, but that
+		 * shouldn't pose a deadlock risk.
 		 */
 		CHECK_FOR_INTERRUPTS();
 

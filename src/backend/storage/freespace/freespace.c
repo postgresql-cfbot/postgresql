@@ -108,7 +108,7 @@ static Size fsm_space_cat_to_avail(uint8 cat);
 static int fsm_set_and_search(Relation rel, FSMAddress addr, uint16 slot,
 				   uint8 newValue, uint8 minValue);
 static BlockNumber fsm_search(Relation rel, uint8 min_cat);
-static uint8 fsm_vacuum_page(Relation rel, FSMAddress addr, bool *eof);
+static uint8 fsm_vacuum_page(Relation rel, FSMAddress addr, Size threshold, bool *eof);
 static BlockNumber fsm_get_lastblckno(Relation rel, FSMAddress addr);
 static void fsm_update_recursive(Relation rel, FSMAddress addr, uint8 new_cat);
 
@@ -376,7 +376,7 @@ FreeSpaceMapTruncateRel(Relation rel, BlockNumber nblocks)
  * FreeSpaceMapVacuum - scan and fix any inconsistencies in the FSM
  */
 void
-FreeSpaceMapVacuum(Relation rel)
+FreeSpaceMapVacuum(Relation rel, Size threshold)
 {
 	bool		dummy;
 
@@ -384,7 +384,7 @@ FreeSpaceMapVacuum(Relation rel)
 	 * Traverse the tree in depth-first order. The tree is stored physically
 	 * in depth-first order, so this should be pretty I/O efficient.
 	 */
-	fsm_vacuum_page(rel, FSM_ROOT_ADDRESS, &dummy);
+	fsm_vacuum_page(rel, FSM_ROOT_ADDRESS, threshold, &dummy);
 }
 
 /******** Internal routines ********/
@@ -663,6 +663,8 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
  * If minValue > 0, the updated page is also searched for a page with at
  * least minValue of free space. If one is found, its slot number is
  * returned, -1 otherwise.
+ *
+ * If minValue == 0, the value at the root node is returned.
  */
 static int
 fsm_set_and_search(Relation rel, FSMAddress addr, uint16 slot,
@@ -686,6 +688,10 @@ fsm_set_and_search(Relation rel, FSMAddress addr, uint16 slot,
 		newslot = fsm_search_avail(buf, minValue,
 								   addr.level == FSM_BOTTOM_LEVEL,
 								   true);
+	}
+	 else
+	{
+		newslot = fsm_get_avail(page, 0);
 	}
 
 	UnlockReleaseBuffer(buf);
@@ -785,7 +791,7 @@ fsm_search(Relation rel, uint8 min_cat)
  * Recursive guts of FreeSpaceMapVacuum
  */
 static uint8
-fsm_vacuum_page(Relation rel, FSMAddress addr, bool *eof_p)
+fsm_vacuum_page(Relation rel, FSMAddress addr, Size threshold, bool *eof_p)
 {
 	Buffer		buf;
 	Page		page;
@@ -816,11 +822,19 @@ fsm_vacuum_page(Relation rel, FSMAddress addr, bool *eof_p)
 		{
 			int			child_avail;
 
+			/* Tree pruning for partial vacuums */
+			if (threshold)
+			{
+				child_avail = fsm_get_avail(page, slot);
+				if (child_avail >= threshold)
+					continue;
+			}
+
 			CHECK_FOR_INTERRUPTS();
 
 			/* After we hit end-of-file, just clear the rest of the slots */
 			if (!eof)
-				child_avail = fsm_vacuum_page(rel, fsm_get_child(addr, slot), &eof);
+				child_avail = fsm_vacuum_page(rel, fsm_get_child(addr, slot), threshold, &eof);
 			else
 				child_avail = 0;
 
@@ -884,6 +898,11 @@ fsm_update_recursive(Relation rel, FSMAddress addr, uint8 new_cat)
 	 * information in that.
 	 */
 	parent = fsm_get_parent(addr, &parentslot);
-	fsm_set_and_search(rel, parent, parentslot, new_cat, 0);
+	new_cat = fsm_set_and_search(rel, parent, parentslot, new_cat, 0);
+
+	/*
+	 * Bubble up, not the value we just set, but the one now in the root
+	 * node of the just-updated page, which is the page's highest value.
+	 */
 	fsm_update_recursive(rel, parent, new_cat);
 }

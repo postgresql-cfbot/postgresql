@@ -70,5 +70,5 @@ RecordUsedIndexPage(Relation rel, BlockNumber usedBlock)
 void
 IndexFreeSpaceMapVacuum(Relation rel)
 {
-	FreeSpaceMapVacuum(rel);
+	FreeSpaceMapVacuum(rel, 0);
 }

@@ -1426,5 +1426,5 @@ brin_vacuum_scan(Relation idxrel, BufferAccessStrategy strategy)
 	 * the way to the top.
 	 */
 	if (vacuum_fsm)
-		FreeSpaceMapVacuum(idxrel);
+		FreeSpaceMapVacuum(idxrel, 0);
 }

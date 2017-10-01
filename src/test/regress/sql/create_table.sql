@@ -350,11 +350,6 @@ CREATE TABLE partitioned (
 ) PARTITION BY RANGE (const_func());
 DROP FUNCTION const_func();
 
--- only accept "list" and "range" as partitioning strategy
-CREATE TABLE partitioned (
-	a int
-) PARTITION BY HASH (a);
-
 -- specified column must be present in the table
 CREATE TABLE partitioned (
 	a int
@@ -446,6 +441,8 @@ CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ('1'::int);
 CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ();
 -- trying to specify range for list partitioned table
 CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES FROM (1) TO (2);
+-- trying to specify modulus and remainder for list partitioned table
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES WITH (MODULUS 10, REMAINDER 1);
 
 -- check default partition cannot be created more than once
 CREATE TABLE part_default PARTITION OF list_parted DEFAULT;
@@ -481,6 +478,8 @@ CREATE TABLE range_parted (
 
 -- trying to specify list for range partitioned table
 CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES IN ('a');
+-- trying to specify modulus and remainder for range partitioned table
+CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES WITH (MODULUS 10, REMAINDER 1);
 -- each of start and end bounds must have same number of values as the
 -- length of the partition key
 CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES FROM ('a', 1) TO ('z');
@@ -489,6 +488,25 @@ CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES FROM ('a') TO ('z', 
 -- cannot specify null values in range bounds
 CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES FROM (null) TO (maxvalue);
 
+-- trying to specify modulus and remainder for range partitioned table
+CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES WITH (MODULUS 10, REMAINDER 1);
+
+-- check partition bound syntax for the hash partition
+CREATE TABLE hash_parted (
+	a int
+) PARTITION BY HASH (a);
+CREATE TABLE hpart_1 PARTITION OF hash_parted FOR VALUES WITH (MODULUS 10, REMAINDER 1);
+CREATE TABLE hpart_2 PARTITION OF hash_parted FOR VALUES WITH (MODULUS 50, REMAINDER 0);
+-- modulus 25 is factor of modulus of 50 but 10 is not factor of 25.
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES WITH (MODULUS 25, REMAINDER 2);
+-- trying to specify range for the hash partitioned table
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES FROM ('a', 1) TO ('z');
+-- trying to specify list value for the hash partitioned table
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES IN (1000);
+
+-- trying to create default partition for the hash partitioned table
+CREATE TABLE fail_default_part PARTITION OF hash_parted DEFAULT;
+
 -- check if compatible with the specified parent
 
 -- cannot create as partition of a non-partitioned table
@@ -496,6 +514,7 @@ CREATE TABLE unparted (
 	a int
 );
 CREATE TABLE fail_part PARTITION OF unparted FOR VALUES IN ('a');
+CREATE TABLE fail_part PARTITION OF unparted FOR VALUES WITH (MODULUS 2, REMAINDER 1);
 DROP TABLE unparted;
 
 -- cannot create a permanent rel as partition of a temp rel
@@ -585,6 +604,21 @@ CREATE TABLE range3_default PARTITION OF range_parted3 DEFAULT;
 -- more specific ranges
 CREATE TABLE fail_part PARTITION OF range_parted3 FOR VALUES FROM (1, minvalue) TO (1, maxvalue);
 
+-- check for partition bound overlap and other invalid specifications for the hash partition
+CREATE TABLE hash_parted2 (
+	a varchar
+) PARTITION BY HASH (a);
+CREATE TABLE h2part_1 PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+CREATE TABLE h2part_2 PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 8, REMAINDER 0);
+CREATE TABLE h2part_3 PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 8, REMAINDER 4);
+CREATE TABLE h2part_4 PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 8, REMAINDER 5);
+-- overlap with part_4
+CREATE TABLE fail_part PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+-- modulus must be greater than zero
+CREATE TABLE fail_part PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 0, REMAINDER 1);
+-- remainder must be greater than or equal to zero and less than modulus
+CREATE TABLE fail_part PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 8, REMAINDER 8);
+
 -- check schema propagation from parent
 
 CREATE TABLE parted (
@@ -654,6 +688,8 @@ DROP TABLE range_parted4;
 
 -- cleanup
 DROP TABLE parted, list_parted, range_parted, list_parted2, range_parted2, range_parted3;
+DROP TABLE hash_parted;
+DROP TABLE hash_parted2;
 
 -- comments on partitioned tables columns
 CREATE TABLE parted_col_comment (a int, b text) PARTITION BY LIST (a);

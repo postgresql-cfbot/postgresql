@@ -3310,6 +3310,11 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 
 	if (spec->is_default)
 	{
+		if (strategy == PARTITION_STRATEGY_HASH)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("default hash partition is not supported")));
+
 		/*
 		 * In case of the default partition, parser had no way to identify the
 		 * partition strategy. Assign the parent's strategy to the default
@@ -3320,7 +3325,27 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 		return result_spec;
 	}
 
-	if (strategy == PARTITION_STRATEGY_LIST)
+	if (strategy == PARTITION_STRATEGY_HASH)
+	{
+		if (spec->strategy != PARTITION_STRATEGY_HASH)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("invalid bound specification for a hash partition"),
+					 parser_errposition(pstate, exprLocation((Node *) spec))));
+
+		if (spec->modulus <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("modulus for hash partition must be a positive integer")));
+
+		Assert(spec->remainder >= 0);
+
+		if (spec->remainder >= spec->modulus)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("modulus for hash partition must be greater than remainder")));
+	}
+	else if (strategy == PARTITION_STRATEGY_LIST)
 	{
 		ListCell   *cell;
 		char	   *colname;

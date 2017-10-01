@@ -15,6 +15,7 @@
 
 #include "postgres.h"
 
+#include "access/hash.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
@@ -61,26 +62,35 @@
  * In the case of range partitioning, ndatums will typically be far less than
  * 2 * nparts, because a partition's upper bound and the next partition's lower
  * bound are the same in most common cases, and we only store one of them (the
- * upper bound).
+ * upper bound).  In case of hash partitioning, ndatums will be same as the
+ * number of partitions.
+ *
+ * For range and list partitioned tables, datums is an array of datum-tuples
+ * with key->partnatts datums each.  For hash partitioned tables, it is an array
+ * of datum-tuples with 2 datums, modulus and remainder, corresponding to a
+ * given partition.
  *
  * In the case of list partitioning, the indexes array stores one entry for
  * every datum, which is the index of the partition that accepts a given datum.
  * In case of range partitioning, it stores one entry per distinct range
  * datum, which is the index of the partition for which a given datum
- * is an upper bound.
+ * is an upper bound.  In the case of hash partitioning, the number of the
+ * entries in the indexes array is same as the greatest modulus amongst all
+ * partitions.  For a given partition key datum-tuple, the index of the
+ * partition which would accept that datum-tuple would be given by the entry
+ * pointed by remainder produced when hash value of the datum-tuple is divided
+ * by the greatest modulus.
  */
 
 typedef struct PartitionBoundInfoData
 {
-	char		strategy;		/* list or range bounds? */
+	char		strategy;		/* hash, list or range? */
 	int			ndatums;		/* Length of the datums following array */
-	Datum	  **datums;			/* Array of datum-tuples with key->partnatts
-								 * datums each */
+	Datum	  **datums;
 	PartitionRangeDatumKind **kind; /* The kind of each range bound datum;
-									 * NULL for list partitioned tables */
-	int		   *indexes;		/* Partition indexes; one entry per member of
-								 * the datums array (plus one if range
-								 * partitioned table) */
+									 * NULL for hash and list partitioned
+									 * tables */
+	int		   *indexes;		/* Partition indexes */
 	int			null_index;		/* Index of the null-accepting partition; -1
 								 * if there isn't one */
 	int			default_index;	/* Index of the default partition; -1 if there
@@ -94,6 +104,14 @@ typedef struct PartitionBoundInfoData
  * When qsort'ing partition bounds after reading from the catalog, each bound
  * is represented with one of the following structs.
  */
+
+/* One bound of a hash partition */
+typedef struct PartitionHashBound
+{
+	int			modulus;
+	int			remainder;
+	int			index;
+} PartitionHashBound;
 
 /* One value coming from some (index'th) list partition */
 typedef struct PartitionListValue
@@ -111,6 +129,7 @@ typedef struct PartitionRangeBound
 	bool		lower;			/* this is the lower (vs upper) bound */
 } PartitionRangeBound;
 
+static int32 qsort_partition_hbound_cmp(const void *a, const void *b);
 static int32 qsort_partition_list_value_cmp(const void *a, const void *b,
 							   void *arg);
 static int32 qsort_partition_rbound_cmp(const void *a, const void *b,
@@ -126,6 +145,7 @@ static void get_range_key_properties(PartitionKey key, int keynum,
 						 ListCell **partexprs_item,
 						 Expr **keyCol,
 						 Const **lower_val, Const **upper_val);
+static List *get_qual_for_hash(Relation parent, PartitionBoundSpec *spec);
 static List *get_qual_for_list(Relation parent, PartitionBoundSpec *spec);
 static List *get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 				   bool for_default);
@@ -134,6 +154,8 @@ static List *generate_partition_qual(Relation rel);
 
 static PartitionRangeBound *make_one_range_bound(PartitionKey key, int index,
 					 List *datums, bool lower);
+static int32 partition_hbound_cmp(int modulus1, int remainder1, int modulus2,
+					 int remainder2);
 static int32 partition_rbound_cmp(PartitionKey key,
 					 Datum *datums1, PartitionRangeDatumKind *kind1,
 					 bool lower1, PartitionRangeBound *b2);
@@ -149,6 +171,10 @@ static int partition_bound_bsearch(PartitionKey key,
 						void *probe, bool probe_is_bound, bool *is_equal);
 static void get_partition_dispatch_recurse(Relation rel, Relation parent,
 							   List **pds, List **leaf_part_oids);
+static uint64 compute_hash_value(PartitionKey key, Datum *values, bool *isnull);
+
+/* SQL-callable function for use in hash partition CHECK constraints */
+PG_FUNCTION_INFO_V1(satisfies_hash_partition);
 
 /*
  * RelationBuildPartitionDesc
@@ -173,6 +199,9 @@ RelationBuildPartitionDesc(Relation rel)
 
 	int			ndatums = 0;
 	int			default_index = -1;
+
+	/* Hash partitioning specific */
+	PartitionHashBound **hbounds = NULL;
 
 	/* List partitioning specific */
 	PartitionListValue **all_values = NULL;
@@ -255,7 +284,35 @@ RelationBuildPartitionDesc(Relation rel)
 			oids[i++] = lfirst_oid(cell);
 
 		/* Convert from node to the internal representation */
-		if (key->strategy == PARTITION_STRATEGY_LIST)
+		if (key->strategy == PARTITION_STRATEGY_HASH)
+		{
+			ndatums = nparts;
+			hbounds = (PartitionHashBound **)
+				palloc(nparts * sizeof(PartitionHashBound *));
+
+			i = 0;
+			foreach(cell, boundspecs)
+			{
+				PartitionBoundSpec *spec = castNode(PartitionBoundSpec,
+													lfirst(cell));
+
+				if (spec->strategy != PARTITION_STRATEGY_HASH)
+					elog(ERROR, "invalid strategy in partition bound spec");
+
+				hbounds[i] = (PartitionHashBound *)
+					palloc(sizeof(PartitionHashBound));
+
+				hbounds[i]->modulus = spec->modulus;
+				hbounds[i]->remainder = spec->remainder;
+				hbounds[i]->index = i;
+				i++;
+			}
+
+			/* Sort all the bounds in ascending order */
+			qsort(hbounds, nparts, sizeof(PartitionHashBound *),
+				  qsort_partition_hbound_cmp);
+		}
+		else if (key->strategy == PARTITION_STRATEGY_LIST)
 		{
 			List	   *non_null_values = NIL;
 
@@ -484,6 +541,42 @@ RelationBuildPartitionDesc(Relation rel)
 
 		switch (key->strategy)
 		{
+			case PARTITION_STRATEGY_HASH:
+				{
+					/* Modulus are stored in ascending order */
+					int			greatest_modulus = hbounds[ndatums - 1]->modulus;
+
+					boundinfo->indexes = (int *) palloc(greatest_modulus *
+														sizeof(int));
+
+					for (i = 0; i < greatest_modulus; i++)
+						boundinfo->indexes[i] = -1;
+
+					for (i = 0; i < nparts; i++)
+					{
+						int			modulus = hbounds[i]->modulus;
+						int			remainder = hbounds[i]->remainder;
+
+						boundinfo->datums[i] = (Datum *) palloc(2 *
+																sizeof(Datum));
+						boundinfo->datums[i][0] = Int32GetDatum(modulus);
+						boundinfo->datums[i][1] = Int32GetDatum(remainder);
+
+						while (remainder < greatest_modulus)
+						{
+							/* overlap? */
+							Assert(boundinfo->indexes[remainder] == -1);
+							boundinfo->indexes[remainder] = i;
+							remainder += modulus;
+						}
+
+						mapping[hbounds[i]->index] = i;
+						pfree(hbounds[i]);
+					}
+					pfree(hbounds);
+					break;
+				}
+
 			case PARTITION_STRATEGY_LIST:
 				{
 					boundinfo->indexes = (int *) palloc(ndatums * sizeof(int));
@@ -617,8 +710,7 @@ RelationBuildPartitionDesc(Relation rel)
 		 * Now assign OIDs from the original array into mapped indexes of the
 		 * result array.  Order of OIDs in the former is defined by the
 		 * catalog scan that retrieved them, whereas that in the latter is
-		 * defined by canonicalized representation of the list values or the
-		 * range bounds.
+		 * defined by canonicalized representation of the partition bounds.
 		 */
 		for (i = 0; i < nparts; i++)
 			result->oids[mapping[i]] = oids[i];
@@ -655,49 +747,97 @@ partition_bounds_equal(int partnatts, int16 *parttyplen, bool *parttypbyval,
 	if (b1->default_index != b2->default_index)
 		return false;
 
-	for (i = 0; i < b1->ndatums; i++)
+	if (b1->strategy == PARTITION_STRATEGY_HASH)
 	{
-		int			j;
+		int			greatest_modulus;
 
-		for (j = 0; j < partnatts; j++)
+		/*
+		 * If two hash partitioned tables have different greatest moduli or
+		 * same moduli with different number of partitions, their partition
+		 * schemes don't match.  For hash partitioned table, the greatest
+		 * modulus is given by the last datum and number of partitions is
+		 * given by ndatums.
+		 */
+		if (b1->datums[b1->ndatums - 1][0] != b2->datums[b2->ndatums - 1][0])
+			return false;
+
+		/*
+		 * We arrange the partitions in the ascending order of their modulus
+		 * and remainders.  Also every modulus is factor of next larger
+		 * modulus.  This means that the index of a given partition is same as
+		 * the remainder of that partition.  Also entries at (remainder + N *
+		 * modulus) positions in indexes array are all same for (modulus,
+		 * remainder) specification for any partition.  Thus datums array from
+		 * both the given bounds are same, if and only if their indexes array
+		 * will be same.  So, it suffices to compare indexes array.
+		 */
+		greatest_modulus = DatumGetInt32(b1->datums[b1->ndatums - 1][0]);
+		for (i = 0; i < greatest_modulus; i++)
+			if (b1->indexes[i] != b2->indexes[i])
+				return false;
+
+#ifdef USE_ASSERT_CHECKING
+
+		/*
+		 * Nonetheless make sure that the bounds are indeed same when the
+		 * indexes match.  Hash partition bound stores modulus and remainder
+		 * at b1->datums[i][0] and b1->datums[i][1] position respectively.
+		 */
+		for (i = 0; i < b1->ndatums; i++)
+			Assert((b1->datums[i][0] == b2->datums[i][0] &&
+					b1->datums[i][1] == b2->datums[i][1]));
+#endif
+	}
+	else
+	{
+		for (i = 0; i < b1->ndatums; i++)
 		{
-			/* For range partitions, the bounds might not be finite. */
-			if (b1->kind != NULL)
-			{
-				/* The different kinds of bound all differ from each other */
-				if (b1->kind[i][j] != b2->kind[i][j])
-					return false;
+			int			j;
 
-				/* Non-finite bounds are equal without further examination. */
-				if (b1->kind[i][j] != PARTITION_RANGE_DATUM_VALUE)
-					continue;
+			for (j = 0; j < partnatts; j++)
+			{
+				/* For range partitions, the bounds might not be finite. */
+				if (b1->kind != NULL)
+				{
+					/* The different kinds of bound all differ from each other */
+					if (b1->kind[i][j] != b2->kind[i][j])
+						return false;
+
+					/*
+					 * Non-finite bounds are equal without further
+					 * examination.
+					 */
+					if (b1->kind[i][j] != PARTITION_RANGE_DATUM_VALUE)
+						continue;
+				}
+
+				/*
+				 * Compare the actual values. Note that it would be both
+				 * incorrect and unsafe to invoke the comparison operator
+				 * derived from the partitioning specification here.  It would
+				 * be incorrect because we want the relcache entry to be
+				 * updated for ANY change to the partition bounds, not just
+				 * those that the partitioning operator thinks are
+				 * significant.  It would be unsafe because we might reach
+				 * this code in the context of an aborted transaction, and an
+				 * arbitrary partitioning operator might not be safe in that
+				 * context.  datumIsEqual() should be simple enough to be
+				 * safe.
+				 */
+				if (!datumIsEqual(b1->datums[i][j], b2->datums[i][j],
+								  parttypbyval[j], parttyplen[j]))
+					return false;
 			}
 
-			/*
-			 * Compare the actual values. Note that it would be both incorrect
-			 * and unsafe to invoke the comparison operator derived from the
-			 * partitioning specification here.  It would be incorrect because
-			 * we want the relcache entry to be updated for ANY change to the
-			 * partition bounds, not just those that the partitioning operator
-			 * thinks are significant.  It would be unsafe because we might
-			 * reach this code in the context of an aborted transaction, and
-			 * an arbitrary partitioning operator might not be safe in that
-			 * context.  datumIsEqual() should be simple enough to be safe.
-			 */
-			if (!datumIsEqual(b1->datums[i][j], b2->datums[i][j],
-							  parttypbyval[j], parttyplen[j]))
+			if (b1->indexes[i] != b2->indexes[i])
 				return false;
 		}
 
-		if (b1->indexes[i] != b2->indexes[i])
+		/* There are ndatums+1 indexes in case of range partitions */
+		if (b1->strategy == PARTITION_STRATEGY_RANGE &&
+			b1->indexes[i] != b2->indexes[i])
 			return false;
 	}
-
-	/* There are ndatums+1 indexes in case of range partitions */
-	if (b1->strategy == PARTITION_STRATEGY_RANGE &&
-		b1->indexes[i] != b2->indexes[i])
-		return false;
-
 	return true;
 }
 
@@ -733,6 +873,89 @@ check_new_partition_bound(char *relname, Relation parent,
 
 	switch (key->strategy)
 	{
+		case PARTITION_STRATEGY_HASH:
+			{
+				Assert(spec->strategy == PARTITION_STRATEGY_HASH);
+				Assert(spec->remainder >= 0 && spec->remainder < spec->modulus);
+
+				if (partdesc->nparts > 0)
+				{
+					PartitionBoundInfo boundinfo = partdesc->boundinfo;
+					Datum	  **datums = boundinfo->datums;
+					int			ndatums = boundinfo->ndatums;
+					int			greatest_modulus;
+					int			remainder;
+					int			offset;
+					bool		equal,
+								valid_modulus = true;
+					int			prev_modulus,	/* Previous largest modulus */
+								next_modulus;	/* Next largest modulus */
+
+					/*
+					 * Check rule that every modulus must be a factor of the
+					 * next larger modulus.  For example, if you have a bunch
+					 * of partitions that all have modulus 5, you can add a
+					 * new partition with modulus 10 or a new partition with
+					 * modulus 15, but you cannot add both a partition with
+					 * modulus 10 and a partition with modulus 15, because 10
+					 * is not a factor of 15.
+					 *
+					 * Get greatest bound in array boundinfo->datums which is
+					 * less than or equal to spec->modulus and
+					 * spec->remainder.
+					 */
+					offset = partition_bound_bsearch(key, boundinfo, spec,
+													 true, &equal);
+					if (offset < 0)
+					{
+						next_modulus = DatumGetInt32(datums[0][0]);
+						valid_modulus = (next_modulus % spec->modulus) == 0;
+					}
+					else
+					{
+						prev_modulus = DatumGetInt32(datums[offset][0]);
+						valid_modulus = (spec->modulus % prev_modulus) == 0;
+
+						if (valid_modulus && (offset + 1) < ndatums)
+						{
+							next_modulus = DatumGetInt32(datums[offset + 1][0]);
+							valid_modulus = (next_modulus % spec->modulus) == 0;
+						}
+					}
+
+					if (!valid_modulus)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+								 errmsg("every hash partition modulus must be a factor of the next larger modulus")));
+
+					greatest_modulus = DatumGetInt32(datums[ndatums - 1][0]);
+					remainder = spec->remainder;
+
+					/*
+					 * Normally, the lowest remainder that could conflict with
+					 * the new partition is equal to the remainder specified
+					 * for the new partition, but when the new partition has a
+					 * modulus higher than any used so far, we need to adjust.
+					 */
+					if (remainder >= greatest_modulus)
+						remainder = remainder % greatest_modulus;
+
+					/* Check every potentially-conflicting remainder. */
+					do
+					{
+						if (boundinfo->indexes[remainder] != -1)
+						{
+							overlap = true;
+							with = boundinfo->indexes[remainder];
+							break;
+						}
+						remainder += spec->modulus;
+					} while (remainder < greatest_modulus);
+				}
+
+				break;
+			}
+
 		case PARTITION_STRATEGY_LIST:
 			{
 				Assert(spec->strategy == PARTITION_STRATEGY_LIST);
@@ -1085,6 +1308,11 @@ get_qual_from_partbound(Relation rel, Relation parent,
 
 	switch (key->strategy)
 	{
+		case PARTITION_STRATEGY_HASH:
+			Assert(spec->strategy == PARTITION_STRATEGY_HASH);
+			my_qual = get_qual_for_hash(parent, spec);
+			break;
+
 		case PARTITION_STRATEGY_LIST:
 			Assert(spec->strategy == PARTITION_STRATEGY_LIST);
 			my_qual = get_qual_for_list(parent, spec);
@@ -1453,6 +1681,127 @@ make_partition_op_expr(PartitionKey key, int keynum,
 	}
 
 	return result;
+}
+
+/*
+ * get_qual_for_hash
+ *
+ * Given a list of partition columns, modulus and remainder corresponding to a
+ * partition, this function returns CHECK constraint expression Node for that
+ * partition.
+ *
+ * For a partitioned table defined as:
+ *	CREATE TABLE simple_hash (a int, b char(10)) PARTITION BY HASH (a, b);
+ *
+ * CREATE TABLE p_p1 PARTITION OF simple_hash
+ *	FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+ * CREATE TABLE p_p2 PARTITION OF simple_hash
+ *	FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+ * CREATE TABLE p_p3 PARTITION OF simple_hash
+ *	FOR VALUES WITH (MODULUS 8, REMAINDER 0);
+ * CREATE TABLE p_p4 PARTITION OF simple_hash
+ *	FOR VALUES WITH (MODULUS 8, REMAINDER 4);
+ *
+ * This function will return one of the following in the form of an
+ * expression:
+ *
+ * for p_p1: satisfies_hash_partition(2, 1, hash_fn_1_extended(a, HASH_SEED),
+ * 											hash_fn_2_extended(b, HASH_SEED))
+ * for p_p2: satisfies_hash_partition(4, 2, hash_fn_1_extended(a, HASH_SEED),
+ * 											hash_fn_2_extended(b, HASH_SEED))
+ * for p_p3: satisfies_hash_partition(8, 0, hash_fn_1_extended(a, HASH_SEED),
+ * 											hash_fn_2_extended(b, HASH_SEED))
+ * for p_p4: satisfies_hash_partition(8, 4, hash_fn_1_extended(a, HASH_SEED),
+ * 											hash_fn_2_extended(b, HASH_SEED))
+ *
+ * where hash_fn_1_extended and hash_fn_2_extended are datatype-specific hash
+ * functions(extended version) for columns a and b respectively and HASH_SEED
+ * is a predefined 64-bit seed.
+ */
+static List *
+get_qual_for_hash(Relation parent, PartitionBoundSpec *spec)
+{
+	PartitionKey key = RelationGetPartitionKey(parent);
+	FuncExpr   *fexpr;
+	Node	   *modulusConst;
+	Node	   *remainderConst;
+	Node	   *hashSeedConst;
+	List	   *args;
+	ListCell   *partexprs_item;
+	int			i;
+
+	/* Default hash partition is not supported */
+	Assert(!spec->is_default);
+
+	/* Fixed arguments. */
+	modulusConst = (Node *) makeConst(INT4OID,
+									  -1,
+									  InvalidOid,
+									  sizeof(int32),
+									  Int32GetDatum(spec->modulus),
+									  false,
+									  true);
+
+	remainderConst = (Node *) makeConst(INT4OID,
+										-1,
+										InvalidOid,
+										sizeof(int32),
+										Int32GetDatum(spec->remainder),
+										false,
+										true);
+
+	hashSeedConst = (Node *) makeConst(INT8OID,
+									   -1,
+									   InvalidOid,
+									   sizeof(uint64),
+									   UInt64GetDatum(HASH_SEED),
+									   false,
+									   FLOAT8PASSBYVAL);
+
+	args = list_make2(modulusConst, remainderConst);
+	partexprs_item = list_head(key->partexprs);
+
+	/* Add an argument for each key column. */
+	for (i = 0; i < key->partnatts; i++)
+	{
+		Node	   *keyCol;
+
+		/* Left operand */
+		if (key->partattrs[i] != 0)
+			keyCol = (Node *) makeVar(1,
+									  key->partattrs[i],
+									  key->parttypid[i],
+									  key->parttypmod[i],
+									  key->parttypcoll[i],
+									  0);
+		else
+		{
+			if (partexprs_item == NULL)
+				elog(ERROR, "wrong number of partition key expressions");
+
+			keyCol = (Node *) copyObject(lfirst(partexprs_item));
+			partexprs_item = lnext(partexprs_item);
+		}
+
+		/* Form hash_fn(keyCol) expression */
+		fexpr = makeFuncExpr(key->partsupfunc[i].fn_oid,
+							 get_func_rettype(key->partsupfunc[i].fn_oid),
+							 list_make2(keyCol, hashSeedConst),
+							 InvalidOid,
+							 InvalidOid,
+							 COERCE_EXPLICIT_CALL);
+
+		args = lappend(args, fexpr);
+	}
+
+	fexpr = makeFuncExpr(F_SATISFIES_HASH_PARTITION,
+						 BOOLOID,
+						 args,
+						 InvalidOid,
+						 InvalidOid,
+						 COERCE_EXPLICIT_CALL);
+
+	return list_make1(fexpr);
 }
 
 /*
@@ -2326,6 +2675,19 @@ get_partition_for_tuple(PartitionDispatch *pd,
 		/* Route as appropriate based on partitioning strategy. */
 		switch (key->strategy)
 		{
+			case PARTITION_STRATEGY_HASH:
+				{
+					PartitionBoundInfo boundinfo = partdesc->boundinfo;
+					int			ndatums = boundinfo->ndatums;
+					Datum		datum = boundinfo->datums[ndatums - 1][0];
+					int			greatest_modulus = DatumGetInt32(datum);
+					uint64		rowHash = compute_hash_value(key, values,
+															 isnull);
+
+					cur_index = boundinfo->indexes[rowHash % greatest_modulus];
+				}
+				break;
+
 			case PARTITION_STRATEGY_LIST:
 
 				if (isnull[0])
@@ -2436,6 +2798,38 @@ get_partition_for_tuple(PartitionDispatch *pd,
 error_exit:
 	ecxt->ecxt_scantuple = ecxt_scantuple_old;
 	return result;
+}
+
+/*
+ * qsort_partition_hbound_cmp
+ *
+ * We sort hash bounds by modulus, then by remainder.
+ */
+static int32
+qsort_partition_hbound_cmp(const void *a, const void *b)
+{
+	PartitionHashBound *h1 = (*(PartitionHashBound *const *) a);
+	PartitionHashBound *h2 = (*(PartitionHashBound *const *) b);
+
+	return partition_hbound_cmp(h1->modulus, h1->remainder,
+								h2->modulus, h2->remainder);
+}
+
+/*
+ * partition_hbound_cmp
+ *
+ * Compares modulus first, then remainder if modulus are equal.
+ */
+static int32
+partition_hbound_cmp(int modulus1, int remainder1, int modulus2, int remainder2)
+{
+	if (modulus1 < modulus2)
+		return -1;
+	if (modulus1 > modulus2)
+		return 1;
+	if (modulus1 == modulus2 && remainder1 != remainder2)
+		return (remainder1 > remainder2) ? 1 : -1;
+	return 0;
 }
 
 /*
@@ -2624,6 +3018,15 @@ partition_bound_cmp(PartitionKey key, PartitionBoundInfo boundinfo,
 
 	switch (key->strategy)
 	{
+		case PARTITION_STRATEGY_HASH:
+			{
+				PartitionBoundSpec *spec = (PartitionBoundSpec *) probe;
+
+				cmpval = partition_hbound_cmp(DatumGetInt32(bound_datums[0]),
+											  DatumGetInt32(bound_datums[1]),
+											  spec->modulus, spec->remainder);
+				break;
+			}
 		case PARTITION_STRATEGY_LIST:
 			cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[0],
 													 key->partcollation[0],
@@ -2807,4 +3210,105 @@ get_proposed_default_constraint(List *new_part_constraints)
 	defPartConstraint = canonicalize_qual(defPartConstraint);
 
 	return list_make1(defPartConstraint);
+}
+
+/*
+ * mix_hash_value
+ *
+ * This function takes an already computed hash values and combine them
+ * into a single 64-bit value.
+ */
+static uint64
+mix_hash_value(int nkeys, Datum *hash_array, bool *isnull)
+{
+	int			i;
+	uint64		rowHash = 0;
+
+	for (i = 0; i < nkeys; i++)
+	{
+		/*
+		 * This prevents equal values in different keys from cancelling each
+		 * other.
+		 */
+		rowHash = ROTATE_HIGH_AND_LOW_32BITS(rowHash);
+
+		if (!isnull[i])
+			rowHash ^= DatumGetUInt64(hash_array[i]);
+	}
+
+	return rowHash;
+}
+
+/*
+ * compute_hash_value
+ *
+ * Compute the hash value for given not null partition key values.
+ */
+static uint64
+compute_hash_value(PartitionKey key, Datum *values, bool *isnull)
+{
+	int			i;
+	int			nkeys = key->partnatts;
+	Datum		hash_array[PARTITION_MAX_KEYS];
+	Datum		seed = UInt64GetDatum(HASH_SEED);
+
+	for (i = 0; i < nkeys; i++)
+	{
+		if (!isnull[i])
+		{
+			Assert(OidIsValid(key->partsupfunc[i].fn_oid));
+
+			/*
+			 * Compute hash for each datum value by calling respective
+			 * datatype-specific hash functions of each partition key
+			 * attribute.
+			 */
+			hash_array[i] = FunctionCall2(&key->partsupfunc[i], values[i],
+										  seed);
+		}
+	}
+
+	/* Form a single 64-bit hash value */
+	return mix_hash_value(nkeys, hash_array, isnull);
+}
+
+/*
+ * satisfies_hash_partition
+ *
+ * This is a SQL-callable function for use in hash partition constraints takes
+ * an already computed hash values of each partition key attribute, and combine
+ * them into a single hash value by calling mix_hash_value.
+ *
+ * Returns true if remainder produced when this computed single hash value is
+ * divided by the given modulus is equal to given remainder, otherwise false.
+ *
+ * See get_qual_for_hash() for usage.
+ */
+Datum
+satisfies_hash_partition(PG_FUNCTION_ARGS)
+{
+	int			modulus = PG_GETARG_INT32(0);
+	int			remainder = PG_GETARG_INT32(1);
+	short		nkeys = PG_NARGS() - 2;
+	int			i;
+	Datum		hash_array[PARTITION_MAX_KEYS];
+	bool		isnull[PARTITION_MAX_KEYS];
+	uint64		rowHash;
+
+	for (i = 0; i < nkeys; i++)
+	{
+		/*
+		 * Partition key attribute's hash values start from third argument of
+		 * function.
+		 */
+		isnull[i] = PG_ARGISNULL(i + 2);
+
+		if (!isnull[i])
+			hash_array[i] = PG_GETARG_DATUM(i + 2);
+	}
+
+	/* Form a single 64-bit hash value */
+	rowHash = mix_hash_value(nkeys, hash_array, isnull);
+
+	PG_RETURN_BOOL(rowHash % modulus == remainder);
 }

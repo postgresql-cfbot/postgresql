@@ -28,7 +28,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     [, ... ]
 ] )
 [ INHERITS ( <replaceable>parent_table</replaceable> [, ... ] ) ]
-[ PARTITION BY { RANGE | LIST } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ WITH ( <replaceable class="PARAMETER">storage_parameter</replaceable> [= <replaceable class="PARAMETER">value</replaceable>] [, ... ] ) | WITH OIDS | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="PARAMETER">tablespace_name</replaceable> ]
@@ -39,7 +39,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     | <replaceable>table_constraint</replaceable> }
     [, ... ]
 ) ]
-[ PARTITION BY { RANGE | LIST } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ WITH ( <replaceable class="PARAMETER">storage_parameter</replaceable> [= <replaceable class="PARAMETER">value</replaceable>] [, ... ] ) | WITH OIDS | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="PARAMETER">tablespace_name</replaceable> ]
@@ -50,7 +50,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     | <replaceable>table_constraint</replaceable> }
     [, ... ]
 ) ] { FOR VALUES <replaceable class="PARAMETER">partition_bound_spec</replaceable> | DEFAULT }
-[ PARTITION BY { RANGE | LIST } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ WITH ( <replaceable class="PARAMETER">storage_parameter</replaceable> [= <replaceable class="PARAMETER">value</replaceable>] [, ... ] ) | WITH OIDS | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="PARAMETER">tablespace_name</replaceable> ]
@@ -88,7 +88,8 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 
 IN ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replaceable class="PARAMETER">string_literal</replaceable> | NULL } [, ...] ) |
 FROM ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replaceable class="PARAMETER">string_literal</replaceable> | MINVALUE | MAXVALUE } [, ...] )
-  TO ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replaceable class="PARAMETER">string_literal</replaceable> | MINVALUE | MAXVALUE } [, ...] )
+  TO ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replaceable class="PARAMETER">string_literal</replaceable> | MINVALUE | MAXVALUE } [, ...] ) |
+WITH ( MODULUS <replaceable class="PARAMETER">numeric_literal</replaceable>, REMAINDER <replaceable class="PARAMETER">numeric_literal</replaceable> )
 
 <phrase><replaceable class="PARAMETER">index_parameters</replaceable> in <literal>UNIQUE</literal>, <literal>PRIMARY KEY</literal>, and <literal>EXCLUDE</literal> constraints are:</phrase>
 
@@ -256,7 +257,8 @@ FROM ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replace
       Creates the table as a <firstterm>partition</firstterm> of the specified
       parent table. The table can be created either as a partition for specific
       values using <literal>FOR VALUES</literal> or as a default partition
-      using <literal>DEFAULT</literal>.
+      using <literal>DEFAULT</literal>.  Hash partitioned tables do not support
+      a default partition.
      </para>
 
      <para>
@@ -361,6 +363,29 @@ FROM ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replace
       the default partition is a foreign table or if it has a constraint which
       proves that it cannot contain rows which should be placed in the new
       partition.
+     </para>
+
+     <para>
+      When creating a hash partition, a modulus and remainder must be specified.
+      The modulus must be a positive integer, and the remainder must be a
+      non-negative integer less than the modulus.  Typically, when initially
+      setting up a hash-partitioned table, you should choose a modulus equal to
+      the number of partitions and assign every table the same modulus and a
+      different remainder (see examples, below).   However, it is not required
+      that every partition have the same modulus, only that every modulus which
+      occurs among the partitions of a hash-partitioned table is a factor of the
+      next larger modulus.  This allows the number of partitions to be increased
+      incrementally without needing to move all the data at once.  For example,
+      suppose you have a hash-partitioned table with 8 partitions, each of which
+      has modulus 8, but find it necessary to increase the number of partitions
+      to 16.  You can detach one of the modulus-8 partitions, create two new
+      modulus-16 partitions covering the same portion of the key space (one with
+      a remainder equal to the remainder of the detached partition, and the
+      other with a remainder equal to that value plus 8), and repopulate them
+      with data.  You can then repeat this -- perhaps at a later time -- for
+      each modulus-8 partition until none remain.  While this may still involve
+      a large amount of data movement at each step, it is still better than
+      having to create a whole new table and move all the data at once.
      </para>
 
      <para>
@@ -486,7 +511,7 @@ FROM ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replace
    </varlistentry>
 
    <varlistentry>
-    <term><literal>PARTITION BY { RANGE | LIST } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ <replaceable class="parameter">opclass</replaceable> ] [, ...] ) </literal></term>
+    <term><literal>PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ <replaceable class="parameter">opclass</replaceable> ] [, ...] ) </literal></term>
     <listitem>
      <para>
       The optional <literal>PARTITION BY</literal> clause specifies a strategy
@@ -497,9 +522,23 @@ FROM ( { <replaceable class="PARAMETER">numeric_literal</replaceable> | <replace
       include multiple columns or expressions (up to 32, but this limit can be
       altered when building <productname>PostgreSQL</productname>), but for
       list partitioning, the partition key must consist of a single column or
-      expression.  If no B-tree operator class is specified when creating a
-      partitioned table, the default B-tree operator class for the datatype will
-      be used.  If there is none, an error will be reported.
+      expression.  If no operator class is specified when creating a partitioned
+      table, the default operator class of the appropriate type (btree for list
+      and range partitioning, hash for hash partitioning) will be used.  If
+      there is none, an error will be reported.
+     </para>
+
+     <para>
+      Since hash operator class provides only equality, not ordering, collation
+      is not relevant for hash partitioning. The behaviour will be unaffected
+      if a collation is specified.
+     </para>
+
+     <para>
+      Hash partitioning will use support function 2 routines from the operator
+      class. If there is none, an error will be reported.  See <xref
+      linkend="xindex-support"> for details of operator class support
+      functions.
      </para>
 
      <para>
@@ -1650,6 +1689,16 @@ CREATE TABLE cities (
 </programlisting></para>
 
   <para>
+   Create a hash partitioned table:
+<programlisting>
+CREATE TABLE orders (
+    order_id     bigint not null,
+    cust_id      bigint not null,
+    status       text
+) PARTITION BY HASH (order_id);
+</programlisting></para>
+
+  <para>
    Create partition of a range partitioned table:
 <programlisting>
 CREATE TABLE measurement_y2016m07
@@ -1699,6 +1748,19 @@ CREATE TABLE cities_ab
 
 CREATE TABLE cities_ab_10000_to_100000
     PARTITION OF cities_ab FOR VALUES FROM (10000) TO (100000);
+</programlisting></para>
+
+  <para>
+   Create partitions of a hash partitioned table:
+<programlisting>
+CREATE TABLE orders_p1 PARTITION OF orders
+    FOR VALUES WITH(MODULUS 4, REMAINDER 0);
+CREATE TABLE orders_p2 PARTITION OF orders
+    FOR VALUES WITH(MODULUS 4, REMAINDER 1);
+CREATE TABLE orders_p3 PARTITION OF orders
+    FOR VALUES WITH(MODULUS 4, REMAINDER 2);
+CREATE TABLE orders_p4 PARTITION OF orders
+    FOR VALUES WITH(MODULUS 4, REMAINDER 3);
 </programlisting></para>
 
   <para>

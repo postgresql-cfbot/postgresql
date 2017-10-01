@@ -46,8 +46,8 @@ void
 validateWithCheckOption(char *value)
 {
 	if (value == NULL ||
-		(pg_strcasecmp(value, "local") != 0 &&
-		 pg_strcasecmp(value, "cascaded") != 0))
+		(strcmp(value, "local") != 0 &&
+		 strcmp(value, "cascaded") != 0))
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

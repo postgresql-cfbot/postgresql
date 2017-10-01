@@ -3596,6 +3596,21 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"gnutls_priority", PGC_SIGHUP, CONN_AUTH_SECURITY,
+			gettext_noop("Sets the list of allowed GnuTLS algorithms."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&gnutls_priority,
+#ifdef USE_SSL
+		"NORMAL:%SERVER_PRECEDENCE",
+#else
+		"none",
+#endif
+		NULL, NULL, NULL
+	},
+
+	{
 		{"ssl_dh_params_file", PGC_SIGHUP, CONN_AUTH_SECURITY,
 			gettext_noop("Location of the SSL DH parameters file."),
 			NULL,

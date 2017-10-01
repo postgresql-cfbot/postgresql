@@ -131,6 +131,10 @@
    don't. */
 #undef HAVE_DECL_F_FULLFSYNC
 
+/* Define to 1 if you have the declaration of `GNUTLS_X509_CRT_LIST_SORT', and
+   to 0 if you don't. */
+#undef HAVE_DECL_GNUTLS_X509_CRT_LIST_SORT
+
 /* Define to 1 if you have the declaration of `posix_fadvise', and to 0 if you
    don't. */
 #undef HAVE_DECL_POSIX_FADVISE
@@ -814,6 +818,12 @@
 /* Define to 1 if you want float8, int8, etc values to be passed by value.
    (--enable-float8-byval) */
 #undef USE_FLOAT8_BYVAL
+
+/* Define to build with GnuTLS support. (--with-gnutls) */
+#undef USE_GNUTLS
+
+/* Define to use GnuTLS for random number generation */
+#undef USE_GNUTLS_RANDOM
 
 /* Define to build with ICU support. (--with-icu) */
 #undef USE_ICU

@@ -99,10 +99,14 @@ test_connect_fails("sslrootcert=ssl/client_ca.crt sslmode=require");
 test_connect_fails("sslrootcert=ssl/client_ca.crt sslmode=verify-ca");
 test_connect_fails("sslrootcert=ssl/client_ca.crt sslmode=verify-full");
 
-# Try with just the server CA's cert. This fails because the root file
-# must contain the whole chain up to the root CA.
-note "connect with server CA cert, without root CA";
-test_connect_fails("sslrootcert=ssl/server_ca.crt sslmode=verify-ca");
+SKIP: {
+	skip 'Not compiled with OpenSSL', 1 unless $ENV{'WITH_OPENSSL'};
+
+	# Try with just the server CA's cert. This fails because the root file
+	# must contain the whole chain up to the root CA.
+	note "connect with server CA cert, without root CA";
+	test_connect_fails("sslrootcert=ssl/server_ca.crt sslmode=verify-ca");	
+}
 
 # And finally, with the correct root cert.
 note "connect with correct server CA cert file";
@@ -121,9 +125,13 @@ note "testing sslcrl option with a non-revoked cert";
 test_connect_ok(
 	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=invalid");
 
-# A CRL belonging to a different CA is not accepted, fails
-test_connect_fails(
-"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl");
+SKIP: {
+	skip 'Not compiled with OpenSSL', 1 unless $ENV{'WITH_OPENSSL'};
+
+	# A CRL belonging to a different CA is not accepted, fails
+	test_connect_fails(
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl");
+}
 
 # With the correct CRL, succeeds (this cert is not revoked)
 test_connect_ok(

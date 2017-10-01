@@ -709,6 +709,7 @@ UUID_EXTRA_OBJS
 with_uuid
 with_systemd
 with_selinux
+with_gnutls
 with_openssl
 krb_srvtab
 with_python
@@ -837,6 +838,7 @@ with_bsd_auth
 with_ldap
 with_bonjour
 with_openssl
+with_gnutls
 with_selinux
 with_systemd
 with_readline
@@ -1531,6 +1533,7 @@ Optional Packages:
   --with-ldap             build with LDAP support
   --with-bonjour          build with Bonjour support
   --with-openssl          build with OpenSSL support
+  --with-gnutls           build with GnuTS support
   --with-selinux          build with SELinux support
   --with-systemd          build with systemd support
   --without-readline      do not use GNU Readline nor BSD Libedit for editing
@@ -5998,6 +6001,41 @@ $as_echo "$with_openssl" >&6; }
 
 
 #
+# GnuTLS
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with GnuTLS support" >&5
+$as_echo_n "checking whether to build with GnuTLS support... " >&6; }
+
+
+
+# Check whether --with-gnutls was given.
+if test "${with_gnutls+set}" = set; then :
+  withval=$with_gnutls;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_GNUTLS 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-gnutls option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_gnutls=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_gnutls" >&5
+$as_echo "$with_gnutls" >&6; }
+
+
+#
 # SELinux
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with SELinux support" >&5
@@ -10164,6 +10202,83 @@ done
 
 fi
 
+if test "$with_gnutls" = yes ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing gnutls_init" >&5
+$as_echo_n "checking for library containing gnutls_init... " >&6; }
+if ${ac_cv_search_gnutls_init+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char gnutls_init ();
+int
+main ()
+{
+return gnutls_init ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' gnutls; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_search_gnutls_init=$ac_res
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext
+  if ${ac_cv_search_gnutls_init+:} false; then :
+  break
+fi
+done
+if ${ac_cv_search_gnutls_init+:} false; then :
+
+else
+  ac_cv_search_gnutls_init=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_gnutls_init" >&5
+$as_echo "$ac_cv_search_gnutls_init" >&6; }
+ac_res=$ac_cv_search_gnutls_init
+if test "$ac_res" != no; then :
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+else
+  as_fn_error $? "library 'gnutls' is required for GnuTLS" "$LINENO" 5
+fi
+
+  # GnuTLS versions before 3.4.0 do not support sorting incorrectly sorted
+  # certificate chains.
+  ac_fn_c_check_decl "$LINENO" "GNUTLS_X509_CRT_LIST_SORT" "ac_cv_have_decl_GNUTLS_X509_CRT_LIST_SORT" "#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+
+"
+if test "x$ac_cv_have_decl_GNUTLS_X509_CRT_LIST_SORT" = xyes; then :
+  ac_have_decl=1
+else
+  ac_have_decl=0
+fi
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_DECL_GNUTLS_X509_CRT_LIST_SORT $ac_have_decl
+_ACEOF
+
+fi
+
 if test "$with_pam" = yes ; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pam_start in -lpam" >&5
 $as_echo_n "checking for pam_start in -lpam... " >&6; }
@@ -10958,6 +11073,17 @@ if test "x$ac_cv_header_openssl_err_h" = xyes; then :
 
 else
   as_fn_error $? "header file <openssl/err.h> is required for OpenSSL" "$LINENO" 5
+fi
+
+
+fi
+
+if test "$with_gnutls" = yes ; then
+  ac_fn_c_check_header_mongrel "$LINENO" "gnutls/gnutls.h" "ac_cv_header_gnutls_gnutls_h" "$ac_includes_default"
+if test "x$ac_cv_header_gnutls_gnutls_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <gnutls/gnutls.h> is required for GnuTLS" "$LINENO" 5
 fi
 
 
@@ -15492,9 +15618,11 @@ fi
 # in the template or configure command line.
 
 # If not selected manually, try to select a source automatically.
-if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
+if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_GNUTLS_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
   if test x"$with_openssl" = x"yes" ; then
     USE_OPENSSL_RANDOM=1
+  elif test x"$with_gnutls" = x"yes" ; then
+    USE_GNUTLS_RANDOM=1
   elif test "$PORTNAME" = "win32" ; then
     USE_WIN32_RANDOM=1
   else
@@ -15533,6 +15661,12 @@ $as_echo "#define USE_OPENSSL_RANDOM 1" >>confdefs.h
 
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: OpenSSL" >&5
 $as_echo "OpenSSL" >&6; }
+  elif test x"$USE_GNUTLS_RANDOM" = x"1" ; then
+
+$as_echo "#define USE_GNUTLS_RANDOM 1" >>confdefs.h
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: GnuTLS" >&5
+$as_echo "GnuTLS" >&6; }
   elif test x"$USE_WIN32_RANDOM" = x"1" ; then
 
 $as_echo "#define USE_WIN32_RANDOM 1" >>confdefs.h

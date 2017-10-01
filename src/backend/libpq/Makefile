@@ -19,6 +19,8 @@ OBJS = be-fsstubs.o be-secure.o auth.o crypt.o hba.o ifaddr.o pqcomm.o \
 
 ifeq ($(with_openssl),yes)
 OBJS += be-secure-openssl.o
+else ifeq ($(with_gnutls),yes)
+OBJS += be-secure-gnutls.o
 endif
 
 include $(top_srcdir)/src/backend/common.mk

@@ -53,6 +53,8 @@ OBJS += base64.o ip.o md5.o scram-common.o saslprep.o unicode_norm.o
 
 ifeq ($(with_openssl),yes)
 OBJS += fe-secure-openssl.o sha2_openssl.o
+else ifeq ($(with_gnutls),yes)
+OBJS += fe-secure-gnutls.o sha2_gnutls.o
 else
 OBJS += sha2.o
 endif
@@ -78,12 +80,12 @@ endif
 # shared library link.  (The order in which you list them here doesn't
 # matter.)
 ifneq ($(PORTNAME), win32)
-SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi_krb5 -lgss -lgssapi -lssl -lsocket -lnsl -lresolv -lintl, $(LIBS)) $(LDAP_LIBS_FE) $(PTHREAD_LIBS)
+SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi_krb5 -lgss -lgssapi -lssl -lgnutls -lsocket -lnsl -lresolv -lintl, $(LIBS)) $(LDAP_LIBS_FE) $(PTHREAD_LIBS)
 else
-SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi32 -lssl -lsocket -lnsl -lresolv -lintl $(PTHREAD_LIBS), $(LIBS)) $(LDAP_LIBS_FE)
+SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi32 -lssl -lgnutls -lsocket -lnsl -lresolv -lintl $(PTHREAD_LIBS), $(LIBS)) $(LDAP_LIBS_FE)
 endif
 ifeq ($(PORTNAME), win32)
-SHLIB_LINK += -lshell32 -lws2_32 -lsecur32 $(filter -leay32 -lssleay32 -lcomerr32 -lkrb5_32, $(LIBS))
+SHLIB_LINK += -lshell32 -lws2_32 -lsecur32 $(filter -leay32 -lssleay32 -lgnutls -lcomerr32 -lkrb5_32, $(LIBS))
 endif
 
 SHLIB_EXPORTS = exports.txt
@@ -106,7 +108,7 @@ backend_src = $(top_srcdir)/src/backend
 chklocale.c crypt.c erand48.c getaddrinfo.c getpeereid.c inet_aton.c inet_net_ntop.c noblock.c open.c system.c pgsleep.c pg_strong_random.c pgstrcasecmp.c pqsignal.c snprintf.c strerror.c strlcpy.c thread.c win32error.c win32setlocale.c: % : $(top_srcdir)/src/port/%
 	rm -f $@ && $(LN_S) $< .
 
-ip.c md5.c base64.c scram-common.c sha2.c sha2_openssl.c saslprep.c unicode_norm.c: % : $(top_srcdir)/src/common/%
+ip.c md5.c base64.c scram-common.c sha2.c sha2_openssl.c sha2_gnutls.c saslprep.c unicode_norm.c: % : $(top_srcdir)/src/common/%
 	rm -f $@ && $(LN_S) $< .
 
 encnames.c wchar.c: % : $(backend_src)/utils/mb/%
@@ -156,7 +158,7 @@ clean distclean: clean-lib
 	rm -f pg_config_paths.h
 # Remove files we (may have) symlinked in from src/port and other places
 	rm -f chklocale.c crypt.c erand48.c getaddrinfo.c getpeereid.c inet_aton.c inet_net_ntop.c noblock.c open.c system.c pgsleep.c pg_strong_random.c pgstrcasecmp.c pqsignal.c snprintf.c strerror.c strlcpy.c thread.c win32error.c win32setlocale.c
-	rm -f ip.c md5.c base64.c scram-common.c sha2.c sha2_openssl.c saslprep.c unicode_norm.c
+	rm -f ip.c md5.c base64.c scram-common.c sha2.c sha2_openssl.c sha2_gnutls.c saslprep.c unicode_norm.c
 	rm -f encnames.c wchar.c
 
 maintainer-clean: distclean maintainer-clean-lib

@@ -99,5 +99,6 @@ extern WaitEventSet *FeBeWaitSet;
 extern char *SSLCipherSuites;
 extern char *SSLECDHCurve;
 extern bool SSLPreferServerCiphers;
+extern char *gnutls_priority;
 
 #endif							/* LIBPQ_H */

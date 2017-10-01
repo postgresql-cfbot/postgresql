@@ -77,14 +77,22 @@
 
 #authentication_timeout = 1min		# 1s-600s
 #ssl = off
-#ssl_ciphers = 'HIGH:MEDIUM:+3DES:!aNULL' # allowed SSL ciphers
-#ssl_prefer_server_ciphers = on
-#ssl_ecdh_curve = 'prime256v1'
 #ssl_dh_params_file = ''
 #ssl_cert_file = 'server.crt'
 #ssl_key_file = 'server.key'
 #ssl_ca_file = ''
 #ssl_crl_file = ''
+
+# Parameters for OpenSSL.  Leave these commented out if not using OpenSSL.
+
+#ssl_ciphers = 'HIGH:MEDIUM:+3DES:!aNULL' # allowed SSL ciphers
+#ssl_prefer_server_ciphers = on
+#ssl_ecdh_curve = 'prime256v1'
+
+# Parameters for GnuTLS.  Leave these commented out if not using GnuTLS.
+
+#gnutls_priority = 'NORMAL:%SERVER_PRECEDENCE'
+
 #password_encryption = md5		# md5 or scram-sha-256
 #db_user_namespace = off
 #row_security = on

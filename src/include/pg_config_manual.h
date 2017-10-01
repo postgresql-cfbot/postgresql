@@ -175,7 +175,7 @@
  * implementation.  (Currently, only OpenSSL is supported, but we might add
  * more implementations in the future.)
  */
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL) || defined(USE_GNUTLS)
 #define USE_SSL
 #endif
 

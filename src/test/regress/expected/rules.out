@@ -1819,6 +1819,23 @@ pg_stat_database_conflicts| SELECT d.oid AS datid,
     pg_stat_get_db_conflict_bufferpin(d.oid) AS confl_bufferpin,
     pg_stat_get_db_conflict_startup_deadlock(d.oid) AS confl_deadlock
    FROM pg_database d;
+pg_stat_progress_analyze| SELECT s.pid,
+    s.datid,
+    d.datname,
+    s.relid,
+        CASE s.param1
+            WHEN 0 THEN 'initializing'::text
+            WHEN 1 THEN 'collecting sample rows'::text
+            WHEN 2 THEN 'collecting inherited sample rows'::text
+            WHEN 3 THEN 'computing statistics'::text
+            ELSE NULL::text
+        END AS phase,
+    s.param2 AS child_relid,
+    s.param3 AS num_blks_total,
+    s.param4 AS num_blks_selected,
+    s.param5 AS num_target_sample_rows
+   FROM (pg_stat_get_progress_info('ANALYZE'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10)
+     LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_progress_vacuum| SELECT s.pid,
     s.datid,
     d.datname,

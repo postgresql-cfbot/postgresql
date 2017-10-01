@@ -2166,6 +2166,13 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       <entry><type>timestamp with time zone</type></entry>
       <entry>Time at which these statistics were last reset</entry>
      </row>
+
+     <row>
+      <entry><structname>pg_stat_progress_analyze</><indexterm><primary>pg_stat_progress_analyze</primary></indexterm></entry>
+      <entry>One row for each backend running
+      <command>ANALYZE</>, showing current progress.
+      See <xref linkend='analyze-progress-reporting'>.</entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -3241,9 +3248,8 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
 
   <para>
    <productname>PostgreSQL</> has the ability to report the progress of
-   certain commands during command execution.  Currently, the only command
-   which supports progress reporting is <command>VACUUM</>.  This may be
-   expanded in the future.
+   certain commands during command execution.  Currently, the supported progress 
+   reporting commands are <command>VACUUM</> and <command>ANALYZE</>.
   </para>
 
  <sect2 id="vacuum-progress-reporting">
@@ -3433,7 +3439,139 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
    </tbody>
    </tgroup>
   </table>
+ </sect2>
 
+ <sect2 id="analyze-progress-reporting">
+  <title>ANALYZE Progress Reporting</title>
+
+  <para>
+   Whenever <command>ANALYZE</> is running, the
+   <structname>pg_stat_progress_analyze</structname> view will contain
+   one row for each backend that is currently analyzing.
+   The tables below describe the information that will be reported and
+   provide information about how to interpret it. Currently the analyze
+   progress reporting facility is not supported for foreign table.
+  </para>
+
+  <table id="pg-stat-progress-analyze-view" xreflabel="pg_stat_progress_analyze">
+   <title><structname>pg_stat_progress_analyze</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</></entry>
+     <entry><type>integer</></entry>
+     <entry>Process ID of backend.</entry>
+    </row>
+    <row>
+     <entry><structfield>datid</></entry>
+     <entry><type>oid</></entry>
+     <entry>OID of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>datname</></entry>
+     <entry><type>name</></entry>
+     <entry>Name of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>relid</></entry>
+     <entry><type>oid</></entry>
+     <entry>OID of the table being analyzed.</entry>
+    </row>
+    <row>
+     <entry><structfield>phase</></entry>
+     <entry><type>text</></entry>
+     <entry>
+       Current processing phase of analyze.  See <xref linkend='analyze-phases'>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>child_relid</></entry>
+     <entry><type>bigint</></entry>
+     <entry>OID of the child table being sampled. If the table being analyzed has
+       one or more children, it will return child table relation id otherwise it will 
+       return NULL.</entry>
+    </row>
+    <row>
+     <entry><structfield>num_blks_total</></entry>
+     <entry><type>bigint</></entry>
+     <entry>Total number of blocks that will be sampled.</entry>
+    </row>
+    <row>
+     <entry><structfield>num_blks_selected</></entry>
+     <entry><type>bigint</></entry>
+     <entry>Total number of blocks selected for sampling so far.</entry>
+    </row>
+    <row>
+     <entry><structfield>num_target_sample_rows</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       Total number of sample rows of the relation. The sample it reads
+       is taken randomly. Its size depends on the
+       <xref linkend="guc-default-statistics-target"> parameter value.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <table id="analyze-phases">
+   <title>ANALYZE phases</title>
+   <tgroup cols="2">
+    <thead>
+    <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><literal>initializing</literal></entry>
+     <entry>
+       <command>ANALYZE</> is preparing to collect sample rows.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>collecting sample rows</literal></entry>
+     <entry>
+       <command>ANALYZE</> is currently collecting the sample rows of
+       single relation. The sample it reads is taken randomly. Its size
+       depends on the <xref linkend="guc-default-statistics-target">
+       parameter value.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>collecting inherited sample rows</literal></entry>
+     <entry>
+       <command>ANALYZE</> is currently collecting inherited sample rows.
+       If the table being analyzed has one or more children, this phase will
+       collect sample rows of parent table and all associated child relation.
+       The sample it reads is taken randomly. Its size depends on
+       the <xref linkend="guc-default-statistics-target"> parameter value.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>computing statistics</literal></entry>
+     <entry>
+       On the collected sample <command>ANALYZE</> is currently computing some
+       statistical informations, such as the percentage of NULL values,
+       the average width of a row, the number of distinct values etc.
+       It also stores the most common values and their frequencies.
+       The number of these values depends on the value of the
+       <xref linkend="guc-default-statistics-target"> parameter.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
  </sect2>
  </sect1>
 

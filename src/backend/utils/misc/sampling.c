@@ -18,6 +18,7 @@
 #include <math.h>
 
 #include "utils/sampling.h"
+#include "commands/progress.h"
 
 
 /*
@@ -38,6 +39,9 @@ BlockSampler_Init(BlockSampler bs, BlockNumber nblocks, int samplesize,
 				  long randseed)
 {
 	bs->N = nblocks;			/* measured table size */
+
+	/* Report total number of blocks taht will be sampled */
+	pgstat_progress_update_param(PROGRESS_ANALYZE_TOTAL_BLOCKS, bs->N);
 
 	/*
 	 * If we decide to reduce samplesize for tables that have less or not much
@@ -70,6 +74,10 @@ BlockSampler_Next(BlockSampler bs)
 	{
 		/* need all the rest */
 		bs->m++;
+
+		/* Report blocks selected so far */
+		pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_SELECTED, bs->m);
+
 		return bs->t++;
 	}
 

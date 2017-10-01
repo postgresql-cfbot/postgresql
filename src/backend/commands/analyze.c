@@ -33,6 +33,7 @@
 #include "commands/dbcommands.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
+#include "commands/progress.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -268,10 +269,16 @@ analyze_rel(Oid relid, RangeVar *relation, int options,
 	MyPgXact->vacuumFlags |= PROC_IN_ANALYZE;
 	LWLockRelease(ProcArrayLock);
 
+	/* Report that we are going to start analyzing onerel. */
+	pgstat_progress_start_command(PROGRESS_COMMAND_ANALYZE,
+								  RelationGetRelid(onerel));
+
 	/*
 	 * Do the normal non-recursive ANALYZE.  We can skip this for partitioned
 	 * tables, which don't contain any rows.
 	 */
+	pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+								 PROGRESS_ANALYZE_PHASE_COLLECT_SAMPLE_ROWS);
 	if (onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		do_analyze_rel(onerel, options, params, va_cols, acquirefunc,
 					   relpages, false, in_outer_xact, elevel);
@@ -280,8 +287,15 @@ analyze_rel(Oid relid, RangeVar *relation, int options,
 	 * If there are child tables, do recursive ANALYZE.
 	 */
 	if (onerel->rd_rel->relhassubclass)
+	{
+		pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+							 PROGRESS_ANALYZE_PHASE_COLLECT_INH_SAMPLE_ROWS);
 		do_analyze_rel(onerel, options, params, va_cols, acquirefunc, relpages,
 					   true, in_outer_xact, elevel);
+	}
+
+	/* We're done analyzing. */
+	pgstat_progress_end_command();
 
 	/*
 	 * Close source relation now, but keep lock so that no one deletes it
@@ -509,6 +523,11 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	/*
 	 * Acquire the sample rows
 	 */
+
+	/* Report the number of target sample rows */
+	pgstat_progress_update_param(PROGRESS_ANALYZE_NUM_TARGET_SAMPLE_ROWS,
+								 targrows);
+
 	rows = (HeapTuple *) palloc(targrows * sizeof(HeapTuple));
 	if (inh)
 		numrows = acquire_inherited_sample_rows(onerel, elevel,
@@ -525,6 +544,11 @@ do_analyze_rel(Relation onerel, int options, VacuumParams *params,
 	 * responsible to make sure that whatever they store into the VacAttrStats
 	 * structure is allocated in anl_context.
 	 */
+
+	/* Report that statistics will now be computed. */
+	pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+								 PROGRESS_ANALYZE_PHASE_COMPUTE_STATS);
+
 	if (numrows > 0)
 	{
 		MemoryContext col_context,
@@ -1432,6 +1456,9 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 		AcquireSampleRowsFunc acquirefunc = acquirefuncs[i];
 		double		childblocks = relblocks[i];
 
+		/* Report child relid which is currently collecting sample rows */
+		pgstat_progress_update_param(PROGRESS_ANALYZE_CHILD_REL, RelationGetRelid(childrel));
+
 		if (childblocks > 0)
 		{
 			int			childtargrows;
@@ -1482,6 +1509,8 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 				*totaldeadrows += tdrows;
 			}
 		}
+		/* We're done collecting sample rows from child relation */
+		pgstat_progress_update_param(PROGRESS_ANALYZE_CHILD_REL, 0);
 
 		/*
 		 * Note: we cannot release the child-table locks, since we may have

@@ -425,6 +425,15 @@ static const BuiltinScript builtin_script[] =
 		"END;\n"
 	},
 	{
+		"tpcb-func",
+		"<builtin: TPC-B (sort of) in PL/pgSQL>",
+		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
+		"\\set bid random(1, " CppAsString2(nbranches) " * :scale)\n"
+		"\\set tid random(1, " CppAsString2(ntellers) " * :scale)\n"
+		"\\set delta random(-5000, 5000)\n"
+		"select * from pgbench_transaction(:aid, :bid, :tid, :delta);\n"
+	},
+	{
 		"simple-update",
 		"<builtin: simple update>",
 		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
@@ -2722,6 +2731,20 @@ init(bool is_no_vacuum)
 
 		executeStatement(con, buffer);
 	}
+
+	executeStatement(con, 
+		"create or replace function pgbench_transaction(arg_aid int, arg_bid int, arg_tid int, arg_delta int) returns int as $$"
+		"DECLARE\n"
+		"abal int;\n"
+		"BEGIN\n"
+		"UPDATE pgbench_accounts SET abalance = abalance + arg_delta WHERE aid = arg_aid;\n"
+		"SELECT abalance into abal FROM pgbench_accounts WHERE aid = arg_aid;\n"
+		"UPDATE pgbench_tellers SET tbalance = tbalance + arg_delta WHERE tid = arg_tid;\n"
+		"UPDATE pgbench_branches SET bbalance = bbalance + arg_delta WHERE bid = arg_bid;\n"
+		"INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (arg_tid, arg_bid, arg_aid, arg_delta, CURRENT_TIMESTAMP);\n"
+		"RETURN abal;\n"
+		"END;\n"
+		"$$ language plpgsql");
 
 	executeStatement(con, "begin");
 

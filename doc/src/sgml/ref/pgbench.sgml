@@ -269,7 +269,7 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
         Add the specified built-in script to the list of executed scripts.
         An optional integer weight after <literal>@</> allows to adjust the
         probability of drawing the script.  If not specified, it is set to 1.
-        Available built-in scripts are: <literal>tpcb-like</>,
+        Available built-in scripts are: <literal>tpcb-like</>, <literal>tpcb-func</>,
         <literal>simple-update</> and <literal>select-only</>.
         Unambiguous prefixes of built-in names are accepted.
         With special name <literal>list</>, show the list of built-in scripts
@@ -724,6 +724,12 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
    <listitem><para><literal>INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);</literal></para></listitem>
    <listitem><para><literal>END;</literal></para></listitem>
   </orderedlist>
+
+  <para>
+   If you select the <literal>tpcb-func</> built-in,
+   the above steps are carried out by a single call to a <application>PL/pgSQL</> function,
+   reducing the overhead from inter-process-communication.
+  </para>
 
   <para>
    If you select the <literal>simple-update</> built-in (also <option>-N</>),

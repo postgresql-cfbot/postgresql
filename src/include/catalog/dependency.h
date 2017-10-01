@@ -236,6 +236,9 @@ extern long changeDependencyFor(Oid classId, Oid objectId,
 					Oid refClassId, Oid oldRefObjectId,
 					Oid newRefObjectId);
 
+extern long changeDependencyForAll(Oid refClassId, Oid oldRefObjectId,
+								   Oid newRefObjectId);
+
 extern Oid	getExtensionOfObject(Oid classId, Oid objectId);
 
 extern bool sequenceIsOwned(Oid seqId, char deptype, Oid *tableId, int32 *colId);
@@ -245,6 +248,8 @@ extern Oid	getOwnedSequence(Oid relid, AttrNumber attnum);
 extern Oid	get_constraint_index(Oid constraintId);
 
 extern Oid	get_index_constraint(Oid indexId);
+
+extern List *get_index_ref_constraints(Oid indexId);
 
 /* in pg_shdepend.c */
 

@@ -1,0 +1,18 @@
+CREATE TABLE gist_table (t box);
+\copy gist_table from 'data/rect.data'
+CREATE INDEX gist_idx ON gist_table USING gist (t);
+SELECT gist_stats('gist_idx');
+               gist_stats                
+-----------------------------------------
+ Number of levels:          2           +
+ Number of pages:           29          +
+ Number of leaf pages:      28          +
+ Number of tuples:          3406        +
+ Number of invalid tuples:  0           +
+ Number of leaf tuples:     3378        +
+ Total size of tuples:      143516 bytes+
+ Total size of leaf tuples: 142296 bytes+
+ Total size of index:       237568 bytes+
+ 
+(1 row)
+

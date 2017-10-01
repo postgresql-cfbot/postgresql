@@ -69,10 +69,10 @@ typedef struct ForeignTable
 } ForeignTable;
 
 
-extern ForeignServer *GetForeignServer(Oid serverid);
+extern ForeignServer *GetForeignServer(Oid serverid, bool missing_ok);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
 extern UserMapping *GetUserMapping(Oid userid, Oid serverid);
-extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
+extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid, bool missing_ok);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
 							bool missing_ok);
 extern ForeignTable *GetForeignTable(Oid relid);

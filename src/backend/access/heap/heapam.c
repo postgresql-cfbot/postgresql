@@ -34,6 +34,28 @@
  *	  the POSTGRES heap access method used for all POSTGRES
  *	  relations.
  *
+ * WAL CONSIDERATIONS
+ *	  All heap operations are normally WAL-logged. but there are a few
+ *	  exceptions. Temporary and unlogged relations never need to be
+ *	  WAL-logged, but we can also skip WAL-logging for a table that was
+ *	  created in the same transaction, if we don't need WAL for PITR or
+ *	  WAL archival purposes (i.e. if wal_level=minimal), and we fsync()
+ *	  the file to disk at COMMIT instead.
+ *
+ *	  The same-relation optimization is not employed automatically on all
+ *	  updates to a table that was created in the same transacton, because
+ *	  for a small number of changes, it's cheaper to just create the WAL
+ *	  records than fsyncing() the whole relation at COMMIT. It is only
+ *	  worthwhile for (presumably) large operations like COPY, CLUSTER,
+ *	  or VACUUM FULL. Use heap_register_sync() to initiate such an
+ *	  operation; it will cause any subsequent updates to the table to skip
+ *	  WAL-logging, if possible, and cause the heap to be synced to disk at
+ *	  COMMIT.
+ *
+ *	  To make that work, all modifications to heap must use
+ *	  HeapNeedsWAL() to check if WAL-logging is needed in this transaction
+ *	  for the given block.
+ *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -56,6 +78,7 @@
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -2373,12 +2396,6 @@ ReleaseBulkInsertStatePin(BulkInsertState bistate)
  * The new tuple is stamped with current transaction ID and the specified
  * command ID.
  *
- * If the HEAP_INSERT_SKIP_WAL option is specified, the new tuple is not
- * logged in WAL, even for a non-temp relation.  Safe usage of this behavior
- * requires that we arrange that all new tuples go into new pages not
- * containing any tuples from other transactions, and that the relation gets
- * fsync'd before commit.  (See also heap_sync() comments)
- *
  * The HEAP_INSERT_SKIP_FSM option is passed directly to
  * RelationGetBufferForTuple, which see for more info.
  *
@@ -2409,6 +2426,7 @@ ReleaseBulkInsertStatePin(BulkInsertState bistate)
  * TID where the tuple was stored.  But note that any toasting of fields
  * within the tuple data is NOT reflected into *tup.
  */
+extern HTAB *pendingSyncs;
 Oid
 heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 			int options, BulkInsertState bistate)
@@ -2482,7 +2500,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (!(options & HEAP_INSERT_SKIP_WAL) && RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_insert xlrec;
 		xl_heap_header xlhdr;
@@ -2681,12 +2699,10 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	int			ndone;
 	char	   *scratch = NULL;
 	Page		page;
-	bool		needwal;
 	Size		saveFreeSpace;
 	bool		need_tuple_data = RelationIsLogicallyLogged(relation);
 	bool		need_cids = RelationIsAccessibleInLogicalDecoding(relation);
 
-	needwal = !(options & HEAP_INSERT_SKIP_WAL) && RelationNeedsWAL(relation);
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
 
@@ -2701,7 +2717,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	 * palloc() within a critical section is not safe, so we allocate this
 	 * beforehand.
 	 */
-	if (needwal)
+	if (RelationNeedsWAL(relation))
 		scratch = palloc(BLCKSZ);
 
 	/*
@@ -2736,6 +2752,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 		Buffer		vmbuffer = InvalidBuffer;
 		bool		all_visible_cleared = false;
 		int			nthispage;
+		bool		needwal;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -2747,6 +2764,7 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 										   InvalidBuffer, options, bistate,
 										   &vmbuffer, NULL);
 		page = BufferGetPage(buffer);
+		needwal = BufferNeedsWAL(relation, buffer);
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -3303,7 +3321,7 @@ l1:
 	 * NB: heap_abort_speculative() uses the same xlog record and replay
 	 * routines.
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_delete xlrec;
 		XLogRecPtr	recptr;
@@ -4269,7 +4287,8 @@ l2:
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer) ||
+		BufferNeedsWAL(relation, newbuf))
 	{
 		XLogRecPtr	recptr;
 
@@ -5160,7 +5179,7 @@ failed:
 	 * (Also, in a PITR log-shipping or 2PC environment, we have to have XLOG
 	 * entries for everything anyway.)
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, *buffer))
 	{
 		xl_heap_lock xlrec;
 		XLogRecPtr	recptr;
@@ -5894,7 +5913,7 @@ l4:
 		MarkBufferDirty(buf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (BufferNeedsWAL(rel, buf))
 		{
 			xl_heap_lock_updated xlrec;
 			XLogRecPtr	recptr;
@@ -6050,7 +6069,7 @@ heap_finish_speculative(Relation relation, HeapTuple tuple)
 	htup->t_ctid = tuple->t_self;
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_confirm xlrec;
 		XLogRecPtr	recptr;
@@ -6183,7 +6202,7 @@ heap_abort_speculative(Relation relation, HeapTuple tuple)
 	 * The WAL records generated here match heap_delete().  The same recovery
 	 * routines are used.
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_delete xlrec;
 		XLogRecPtr	recptr;
@@ -6292,7 +6311,7 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_inplace xlrec;
 		XLogRecPtr	recptr;
@@ -7429,7 +7448,7 @@ log_heap_clean(Relation reln, Buffer buffer,
 	XLogRecPtr	recptr;
 
 	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	Assert(BufferNeedsWAL(reln, buffer));
 
 	xlrec.latestRemovedXid = latestRemovedXid;
 	xlrec.nredirected = nredirected;
@@ -7477,7 +7496,7 @@ log_heap_freeze(Relation reln, Buffer buffer, TransactionId cutoff_xid,
 	XLogRecPtr	recptr;
 
 	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	Assert(BufferNeedsWAL(reln, buffer));
 	/* nor when there are no tuples to freeze */
 	Assert(ntuples > 0);
 
@@ -7562,7 +7581,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	int			bufflags;
 
 	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	Assert(BufferNeedsWAL(reln, newbuf) || BufferNeedsWAL(reln, oldbuf));
 
 	XLogBeginInsert();
 
@@ -8653,8 +8672,13 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 */
 
 	/* Deal with old tuple version */
-	oldaction = XLogReadBufferForRedo(record, (oldblk == newblk) ? 0 : 1,
-									  &obuffer);
+	if (oldblk == newblk)
+		oldaction = XLogReadBufferForRedo(record, 0, &obuffer);
+	else if (XLogRecHasBlockRef(record, 1))
+		oldaction = XLogReadBufferForRedo(record, 1, &obuffer);
+	else
+		oldaction = BLK_DONE;
+
 	if (oldaction == BLK_NEEDS_REDO)
 	{
 		page = BufferGetPage(obuffer);
@@ -8708,6 +8732,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		PageInit(page, BufferGetPageSize(nbuffer), 0);
 		newaction = BLK_NEEDS_REDO;
 	}
+	else if (!XLogRecHasBlockRef(record, 0))
+		newaction = BLK_DONE;
 	else
 		newaction = XLogReadBufferForRedo(record, 0, &nbuffer);
 
@@ -9144,9 +9170,16 @@ heap2_redo(XLogReaderState *record)
  *	heap_sync		- sync a heap, for use when no WAL has been written
  *
  * This forces the heap contents (including TOAST heap if any) down to disk.
- * If we skipped using WAL, and WAL is otherwise needed, we must force the
- * relation down to disk before it's safe to commit the transaction.  This
- * requires writing out any dirty buffers and then doing a forced fsync.
+ * If we did any changes to the heap bypassing the buffer manager, we must
+ * force the relation down to disk before it's safe to commit the
+ * transaction, because the direct modifications will not be flushed by
+ * the next checkpoint.
+ *
+ * We used to also use this after batch operations like COPY and CLUSTER,
+ * if we skipped using WAL and WAL is otherwise needed, but there were
+ * corner-cases involving other WAL-logged operations to the same
+ * relation, where that was not enough. heap_register_sync() should be
+ * used for that purpose instead.
  *
  * Indexes are not touched.  (Currently, index operations associated with
  * the commands that use this are WAL-logged and so do not need fsync.
@@ -9254,5 +9287,35 @@ heap_mask(char *pagedata, BlockNumber blkno)
 			if (padlen > 0)
 				memset(page_item + len, MASK_MARKER, padlen);
 		}
+	}
+}
+
+/*
+ *	heap_register_sync	- register a heap to be synced to disk at commit
+ *
+ * This can be used to skip WAL-logging changes on a relation file that has
+ * been created in the same transaction. This makes note of the current size of
+ * the relation, and ensures that when the relation is extended, any changes
+ * to the new blocks in the heap, in the same transaction, will not be
+ * WAL-logged. Instead, the heap contents are flushed to disk at commit,
+ * like heap_sync() does.
+ *
+ * This does the same for the TOAST heap, if any. Indexes are not affected.
+ */
+void
+heap_register_sync(Relation rel)
+{
+	/* non-WAL-logged tables never need fsync */
+	if (!RelationNeedsWAL(rel))
+		return;
+
+	RecordPendingSync(rel);
+	if (OidIsValid(rel->rd_rel->reltoastrelid))
+	{
+		Relation	toastrel;
+
+		toastrel = heap_open(rel->rd_rel->reltoastrelid, AccessShareLock);
+		RecordPendingSync(toastrel);
+		heap_close(toastrel, AccessShareLock);
 	}
 }

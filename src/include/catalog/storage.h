@@ -22,13 +22,16 @@ extern void RelationCreateStorage(RelFileNode rnode, char relpersistence);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileNode rnode, bool atCommit);
 extern void RelationTruncate(Relation rel, BlockNumber nblocks);
-
+extern void RelationRemovePendingSync(Relation rel);
 /*
  * These functions used to be in storage/smgr/smgr.c, which explains the
  * naming
  */
 extern void smgrDoPendingDeletes(bool isCommit);
 extern int	smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr);
+extern void smgrDoPendingSyncs(bool isCommit);
+extern void RecordPendingSync(Relation rel);
+bool BufferNeedsWAL(Relation rel, Buffer buf);
 extern void AtSubCommit_smgr(void);
 extern void AtSubAbort_smgr(void);
 extern void PostPrepare_smgr(void);

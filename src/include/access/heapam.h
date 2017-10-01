@@ -25,10 +25,9 @@
 
 
 /* "options" flag bits for heap_insert */
-#define HEAP_INSERT_SKIP_WAL	0x0001
-#define HEAP_INSERT_SKIP_FSM	0x0002
-#define HEAP_INSERT_FROZEN		0x0004
-#define HEAP_INSERT_SPECULATIVE 0x0008
+#define HEAP_INSERT_SKIP_FSM	0x0001
+#define HEAP_INSERT_FROZEN		0x0002
+#define HEAP_INSERT_SPECULATIVE 0x0004
 
 typedef struct BulkInsertStateData *BulkInsertState;
 
@@ -179,6 +178,7 @@ extern void simple_heap_delete(Relation relation, ItemPointer tid);
 extern void simple_heap_update(Relation relation, ItemPointer otid,
 				   HeapTuple tup);
 
+extern void heap_register_sync(Relation relation);
 extern void heap_sync(Relation relation);
 extern void heap_update_snapshot(HeapScanDesc scan, Snapshot snapshot);
 

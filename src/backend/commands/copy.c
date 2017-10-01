@@ -2356,8 +2356,7 @@ CopyFrom(CopyState cstate)
 	 *	- data is being written to relfilenode created in this transaction
 	 * then we can skip writing WAL.  It's safe because if the transaction
 	 * doesn't commit, we'll discard the table (or the new relfilenode file).
-	 * If it does commit, we'll have done the heap_sync at the bottom of this
-	 * routine first.
+	 * If it does commit, commit will do heap_sync().
 	 *
 	 * As mentioned in comments in utils/rel.h, the in-same-transaction test
 	 * is not always set correctly, since in rare cases rd_newRelfilenodeSubid
@@ -2389,7 +2388,7 @@ CopyFrom(CopyState cstate)
 	{
 		hi_options |= HEAP_INSERT_SKIP_FSM;
 		if (!XLogIsNeeded())
-			hi_options |= HEAP_INSERT_SKIP_WAL;
+			heap_register_sync(cstate->rel);
 	}
 
 	/*
@@ -2873,11 +2872,11 @@ CopyFrom(CopyState cstate)
 	FreeExecutorState(estate);
 
 	/*
-	 * If we skipped writing WAL, then we need to sync the heap (but not
-	 * indexes since those use WAL anyway)
+	 * If we skipped writing WAL, then we will sync the heap at the end of
+	 * the transaction. (We used to do it here, but it was later found out
+	 * that to be safe, we must also avoid WAL-logging any subsequent
+	 * actions on the pages we skipped WAL for). Indexes always use WAL.
 	 */
-	if (hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(cstate->rel);
 
 	return processed;
 }

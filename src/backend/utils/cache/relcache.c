@@ -72,6 +72,7 @@
 #include "optimizer/var.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
+#include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/array.h"
@@ -417,6 +418,10 @@ AllocateRelationDesc(Form_pg_class relp)
 											   relationForm->relhasoids);
 	/* which we mark as a reference-counted tupdesc */
 	relation->rd_att->tdrefcount = 1;
+
+	/* We don't know if pending sync for this relation exists so far */
+	relation->pending_sync = NULL;
+	relation->no_pending_sync = false;
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -2040,6 +2045,10 @@ formrdesc(const char *relationName, Oid relationReltype,
 		relation->rd_rel->relhasindex = true;
 	}
 
+	/* We don't know if pending sync for this relation exists so far */
+	relation->pending_sync = NULL;
+	relation->no_pending_sync = false;
+
 	/*
 	 * add new reldesc to relcache
 	 */
@@ -3363,6 +3372,10 @@ RelationBuildLocalRelation(const char *relname,
 	}
 	else
 		rel->rd_rel->relfilenode = relfilenode;
+
+	/* newly built relation has no pending sync */
+	rel->no_pending_sync = true;
+	rel->pending_sync = NULL;
 
 	RelationInitLockInfo(rel);	/* see lmgr.c */
 

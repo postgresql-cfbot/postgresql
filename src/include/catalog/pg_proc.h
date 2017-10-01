@@ -5153,6 +5153,8 @@ DATA(insert OID = 3113 (  last_value	PGNSP PGUID 12 1 0 0 0 f t f f t f i s 1 0 
 DESCR("fetch the last row value");
 DATA(insert OID = 3114 (  nth_value		PGNSP PGUID 12 1 0 0 0 f t f f t f i s 2 0 2283 "2283 23" _null_ _null_ _null_ _null_ _null_ window_nth_value _null_ _null_ _null_ ));
 DESCR("fetch the Nth row value");
+DATA(insert OID = 4999 (  row_id		PGNSP PGUID 12 1 0 0 0 f t f f f f i s 0 0 20 "" _null_ _null_ _null_ _null_ _null_ window_row_id _null_ _null_ _null_ ));
+DESCR("row id within partition");
 
 /* functions for range types */
 DATA(insert OID = 3832 (  anyrange_in	PGNSP PGUID 12 1 0 0 0 f f f f t f s s 3 0 3831 "2275 26 23" _null_ _null_ _null_ _null_ _null_ anyrange_in _null_ _null_ _null_ ));

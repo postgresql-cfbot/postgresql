@@ -40,6 +40,7 @@
 #include "parser/parse_param.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_target.h"
+#include "parser/parse_temporal.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/rel.h"
@@ -1217,6 +1218,9 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	/* mark column origins */
 	markTargetListOrigins(pstate, qry->targetList);
 
+	/* transform inner parts of a temporal primitive node */
+	qry->temporalClause = transformTemporalClause(pstate, qry, stmt);
+
 	/* transform WHERE */
 	qual = transformWhereClause(pstate, stmt->whereClause,
 								EXPR_KIND_WHERE, "WHERE");
@@ -1293,6 +1297,9 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasAggs = pstate->p_hasAggs;
 	if (pstate->p_hasAggs || qry->groupClause || qry->groupingSets || qry->havingQual)
 		parseCheckAggregates(pstate, qry);
+
+	/* transform TEMPORAL PRIMITIVES */
+	qry->temporalClause = transformTemporalClauseResjunk(qry);
 
 	foreach(l, stmt->lockingClause)
 	{

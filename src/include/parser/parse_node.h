@@ -204,6 +204,12 @@ struct ParseState
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 
 	/*
+	 * Temporal aliases for internal-use-only columns (used by temporal
+	 * primitives only.
+	 */
+	List	   *p_temporal_aliases;
+
+	/*
 	 * Optional hook functions for parser callbacks.  These are null unless
 	 * set up by the caller of make_parsestate.
 	 */

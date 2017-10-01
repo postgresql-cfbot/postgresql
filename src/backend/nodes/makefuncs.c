@@ -22,6 +22,89 @@
 #include "nodes/nodeFuncs.h"
 #include "utils/lsyscache.h"
 
+/*
+ * makeColumnRef1 -
+ *		makes an ColumnRef node with a single element field-list
+ */
+ColumnRef *
+makeColumnRef1(Node *field1)
+{
+	ColumnRef 	*ref;
+
+	ref = makeNode(ColumnRef);
+	ref->fields = list_make1(field1);
+	ref->location = -1; /* Unknown location */
+
+	return ref;
+}
+
+/*
+ * makeColumnRef2 -
+ *		makes an ColumnRef node with a two elements field-list
+ */
+ColumnRef *
+makeColumnRef2(Node *field1, Node *field2)
+{
+	ColumnRef 	*ref;
+
+	ref = makeNode(ColumnRef);
+	ref->fields = list_make2(field1, field2);
+	ref->location = -1; /* Unknown location */
+
+	return ref;
+}
+
+/*
+ * makeResTarget -
+ *		makes an ResTarget node
+ */
+ResTarget *
+makeResTarget(Node *val, char *name)
+{
+	ResTarget *rt;
+
+	rt = makeNode(ResTarget);
+	rt->location = -1; /* unknown location */
+	rt->indirection = NIL;
+	rt->name = name;
+	rt->val = val;
+
+	return rt;
+}
+
+/*
+ * makeAliasFromArgument -
+ *		Selects and returns an arguments' alias, if any. Or creates a new one
+ *		from a given RangeVar relation name.
+ */
+Alias *
+makeAliasFromArgument(Node *arg)
+{
+	Alias *alias = NULL;
+
+	/* Find aliases of arguments */
+	switch(nodeTag(arg))
+	{
+		case T_RangeSubselect:
+			alias = ((RangeSubselect *) arg)->alias;
+			break;
+		case T_RangeVar:
+		{
+			RangeVar *v = (RangeVar *) arg;
+			if (v->alias != NULL)
+				alias = v->alias;
+			else
+				alias = makeAlias(v->relname, NIL);
+			break;
+		}
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("Argument has no alias or is not supported.")));
+	}
+
+	return alias;
+}
 
 /*
  * makeA_Expr -
@@ -611,3 +694,4 @@ makeGroupingSet(GroupingSetKind kind, List *content, int location)
 	n->location = location;
 	return n;
 }
+

@@ -2024,6 +2024,20 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		Path	   *path = (Path *) lfirst(lc);
 
 		/*
+		 * If there is a NORMALIZE or ALIGN clause, i.e., temporal primitive,
+		 * add the TemporalAdjustment node with type TemporalAligner or
+		 * TemporalNormalizer.
+		 */
+		if (parse->temporalClause)
+		{
+			path = (Path *) create_temporaladjustment_path(root,
+														 final_rel,
+														 path,
+														 parse->sortClause,
+									   (TemporalClause *)parse->temporalClause);
+		}
+
+		/*
 		 * If there is a FOR [KEY] UPDATE/SHARE clause, add the LockRows node.
 		 * (Note: we intentionally test parse->rowMarks not root->rowMarks
 		 * here.  If there are only non-locking rowmarks, they should be

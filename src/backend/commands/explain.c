@@ -928,6 +928,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SeqScan:
 			pname = sname = "Seq Scan";
 			break;
+		case T_TemporalAdjustment:
+			if(((TemporalAdjustment *) plan)->temporalCl->temporalType == TEMPORAL_TYPE_ALIGNER)
+				pname = sname = "Adjustment(for ALIGN)";
+			else
+				pname = sname = "Adjustment(for NORMALIZE)";
+			break;
 		case T_SampleScan:
 			pname = sname = "Sample Scan";
 			break;

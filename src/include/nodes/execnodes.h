@@ -1104,6 +1104,32 @@ typedef struct ScanState
 } ScanState;
 
 /* ----------------
+ *	 TemporalAdjustmentState information
+ * ----------------
+ */
+typedef struct TemporalAdjustmentState
+{
+	ScanState 		 	  ss;
+	bool 			 	  firstCall;	  /* Setup on first call already done? */
+	bool 			 	  alignment;	  /* true = align; false = normalize */
+	bool 			 	  sameleft;		  /* Is the previous and current tuple
+											 from the same group? */
+	Datum 			 	  sweepline;	  /* Sweep line status */
+	int64			 	  outrn;		  /* temporal aligner group-id */
+	TemporalClause		 *temporalCl;
+	bool 				 *nullMask;		  /* See heap_modify_tuple */
+	bool 				 *tsteMask;		  /* See heap_modify_tuple */
+	Datum 				 *newValues;	  /* tuple values that get updated */
+	MemoryContext		  tempContext;
+	FunctionCallInfoData  eqFuncCallInfo; /* calling equal */
+	FunctionCallInfoData  ltFuncCallInfo; /* calling less-than */
+	FunctionCallInfoData  rcFuncCallInfo; /* calling range_constructor2 */
+	FunctionCallInfoData  loFuncCallInfo; /* calling lower(range) */
+	FunctionCallInfoData  upFuncCallInfo; /* calling upper(range) */
+	Form_pg_attribute     datumFormat;	  /* Datum format of sweepline, P1, P2 */
+} TemporalAdjustmentState;
+
+/* ----------------
  *	 SeqScanState information
  * ----------------
  */

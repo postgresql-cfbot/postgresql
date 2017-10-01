@@ -262,6 +262,7 @@ _readQuery(void)
 	READ_NODE_FIELD(rowMarks);
 	READ_NODE_FIELD(setOperations);
 	READ_NODE_FIELD(constraintDeps);
+	READ_NODE_FIELD(temporalClause);
 	/* withCheckOptions intentionally omitted, see comment in parsenodes.h */
 	READ_LOCATION_FIELD(stmt_location);
 	READ_LOCATION_FIELD(stmt_len);
@@ -426,6 +427,24 @@ _readSetOperationStmt(void)
 	READ_DONE();
 }
 
+/*
+ * _readTemporalClause
+ */
+static TemporalClause *
+_readTemporalClause(void)
+{
+	READ_LOCALS(TemporalClause);
+
+	READ_ENUM_FIELD(temporalType, TemporalType);
+	READ_INT_FIELD(attNumTr);
+	READ_INT_FIELD(attNumP1);
+	READ_INT_FIELD(attNumP2);
+	READ_INT_FIELD(attNumRN);
+	READ_STRING_FIELD(colnameTr);
+
+	READ_DONE();
+}
+
 
 /*
  *	Stuff from primnodes.h.
@@ -454,6 +473,17 @@ _readRangeVar(void)
 	READ_BOOL_FIELD(inh);
 	READ_CHAR_FIELD(relpersistence);
 	READ_NODE_FIELD(alias);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+static ColumnRef *
+_readColumnRef(void)
+{
+	READ_LOCALS(ColumnRef);
+
+	READ_NODE_FIELD(fields);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -1278,6 +1308,8 @@ _readJoinExpr(void)
 	READ_NODE_FIELD(quals);
 	READ_NODE_FIELD(alias);
 	READ_INT_FIELD(rtindex);
+	READ_NODE_FIELD(temporalBounds);
+	READ_ENUM_FIELD(inTmpPrimTempType, TemporalType);
 
 	READ_DONE();
 }
@@ -2559,6 +2591,10 @@ parseNodeString(void)
 		return_value = _readDefElem();
 	else if (MATCH("DECLARECURSOR", 13))
 		return_value = _readDeclareCursorStmt();
+	else if (MATCH("TEMPORALCLAUSE", 14))
+		return_value = _readTemporalClause();
+	else if (MATCH("COLUMNREF", 9))
+		return_value = _readColumnRef();
 	else if (MATCH("PLANNEDSTMT", 11))
 		return_value = _readPlannedStmt();
 	else if (MATCH("PLAN", 4))

@@ -2084,6 +2084,8 @@ _copyJoinExpr(const JoinExpr *from)
 	COPY_NODE_FIELD(quals);
 	COPY_NODE_FIELD(alias);
 	COPY_SCALAR_FIELD(rtindex);
+	COPY_NODE_FIELD(temporalBounds);
+	COPY_SCALAR_FIELD(inTmpPrimTempType);
 
 	return newnode;
 }
@@ -2460,6 +2462,41 @@ _copyOnConflictClause(const OnConflictClause *from)
 	COPY_NODE_FIELD(targetList);
 	COPY_NODE_FIELD(whereClause);
 	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
+static TemporalClause *
+_copyTemporalClause(const TemporalClause *from)
+{
+	TemporalClause *newnode = makeNode(TemporalClause);
+
+	COPY_SCALAR_FIELD(temporalType);
+	COPY_SCALAR_FIELD(attNumTr);
+	COPY_SCALAR_FIELD(attNumP1);
+	COPY_SCALAR_FIELD(attNumP2);
+	COPY_SCALAR_FIELD(attNumRN);
+	COPY_STRING_FIELD(colnameTr);
+
+	return newnode;
+}
+
+static TemporalAdjustment *
+_copyTemporalAdjustment(const TemporalAdjustment *from)
+{
+	TemporalAdjustment *newnode = makeNode(TemporalAdjustment);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyPlanFields((const Plan *) from, (Plan *) newnode);
+
+	COPY_SCALAR_FIELD(numCols);
+	COPY_SCALAR_FIELD(eqOperatorID);
+	COPY_SCALAR_FIELD(ltOperatorID);
+	COPY_SCALAR_FIELD(sortCollationID);
+	COPY_NODE_FIELD(temporalCl);
+	COPY_NODE_FIELD(rangeVar);
 
 	return newnode;
 }
@@ -2959,6 +2996,7 @@ _copyQuery(const Query *from)
 	COPY_NODE_FIELD(setOperations);
 	COPY_NODE_FIELD(constraintDeps);
 	COPY_NODE_FIELD(withCheckOptions);
+	COPY_NODE_FIELD(temporalClause);
 	COPY_LOCATION_FIELD(stmt_location);
 	COPY_LOCATION_FIELD(stmt_len);
 
@@ -3041,6 +3079,7 @@ _copySelectStmt(const SelectStmt *from)
 	COPY_NODE_FIELD(limitCount);
 	COPY_NODE_FIELD(lockingClause);
 	COPY_NODE_FIELD(withClause);
+	COPY_NODE_FIELD(temporalClause);
 	COPY_SCALAR_FIELD(op);
 	COPY_SCALAR_FIELD(all);
 	COPY_NODE_FIELD(larg);
@@ -5511,6 +5550,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_RoleSpec:
 			retval = _copyRoleSpec(from);
+			break;
+		case T_TemporalClause:
+			retval = _copyTemporalClause(from);
+			break;
+		case T_TemporalAdjustment:
+			retval = _copyTemporalAdjustment(from);
 			break;
 		case T_TriggerTransition:
 			retval = _copyTriggerTransition(from);

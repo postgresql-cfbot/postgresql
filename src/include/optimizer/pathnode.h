@@ -171,6 +171,11 @@ extern SortPath *create_sort_path(PlannerInfo *root,
 				 Path *subpath,
 				 List *pathkeys,
 				 double limit_tuples);
+extern TemporalAdjustmentPath *create_temporaladjustment_path(PlannerInfo *root,
+						RelOptInfo *rel,
+						Path *subpath,
+						List *sortClause,
+						TemporalClause *temporalClause);
 extern GroupPath *create_group_path(PlannerInfo *root,
 				  RelOptInfo *rel,
 				  Path *subpath,

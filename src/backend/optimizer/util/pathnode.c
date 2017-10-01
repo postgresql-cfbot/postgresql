@@ -2542,6 +2542,66 @@ create_sort_path(PlannerInfo *root,
 	return pathnode;
 }
 
+TemporalAdjustmentPath *
+create_temporaladjustment_path(PlannerInfo *root,
+							   RelOptInfo *rel,
+							   Path *subpath,
+							   List *sortClause,
+							   TemporalClause *temporalClause)
+{
+	TemporalAdjustmentPath   *pathnode = makeNode(TemporalAdjustmentPath);
+
+	pathnode->path.pathtype = T_TemporalAdjustment;
+	pathnode->path.parent = rel;
+	/* TemporalAdjustment doesn't project, so use source path's pathtarget */
+	pathnode->path.pathtarget = subpath->pathtarget;
+	/* For now, assume we are above any joins, so no parameterization */
+	pathnode->path.param_info = NULL;
+
+	/* Currently we assume that temporal adjustment is not parallelizable */
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = false;
+	pathnode->path.parallel_workers = 0;
+
+	/* Temporal Adjustment does not change the sort order */
+	pathnode->path.pathkeys = subpath->pathkeys;
+
+	pathnode->subpath = subpath;
+
+	/* Special information needed by temporal adjustment plan node */
+	pathnode->sortClause = copyObject(sortClause);
+	pathnode->temporalClause = copyObject(temporalClause);
+
+	/* Path's cost estimations */
+	pathnode->path.startup_cost = subpath->startup_cost;
+	pathnode->path.total_cost = subpath->total_cost;
+	pathnode->path.rows = subpath->rows;
+
+	if(temporalClause->temporalType == TEMPORAL_TYPE_ALIGNER)
+	{
+		/*
+		 * Every tuple from the sub-node can produce up to three tuples in the
+		 * algorithm. In addition we make up to three attribute comparisons for
+		 * each result tuple.
+		 */
+		pathnode->path.total_cost = subpath->total_cost +
+				(cpu_tuple_cost + 3 * cpu_operator_cost) * subpath->rows * 3;
+	}
+	else /* TEMPORAL_TYPE_NORMALIZER */
+	{
+		/*
+		 * For each split point in the sub-node we can have up to two result
+		 * tuples. The total cost is the cost of the sub-node plus for each
+		 * result tuple the cost to produce it and one attribute comparison
+		 * (different from alignment since we omit the intersection part).
+		 */
+		pathnode->path.total_cost = subpath->total_cost +
+				(cpu_tuple_cost + cpu_operator_cost) * subpath->rows * 2;
+	}
+
+	return pathnode;
+}
+
 /*
  * create_group_path
  *	  Creates a pathnode that represents performing grouping of presorted input

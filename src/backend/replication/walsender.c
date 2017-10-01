@@ -2740,14 +2740,26 @@ XLogSendLogical(void)
 {
 	XLogRecord *record;
 	char	   *errm;
+	XLogRecPtr	RecentFlushPtr;
 
 	/*
-	 * Don't know whether we've caught up yet. We'll set it to true in
-	 * WalSndWaitForWal, if we're actually waiting. We also set to true if
-	 * XLogReadRecord() had to stop reading but WalSndWaitForWal didn't wait -
-	 * i.e. when we're shutting down.
+	 * We'll set WalSndCaughtUp to true in WalSndWaitForWal, if we're
+	 * actually waiting. We also set to true if XLogReadRecord() had to
+	 * stop reading but WalSendWaitForWal didn't wait - i.e. when we're
+	 * shutting down. Quick return if we don't have any work to do.
 	 */
 	WalSndCaughtUp = false;
+
+	if (!RecoveryInProgress())
+		RecentFlushPtr = GetFlushRecPtr();
+	else
+		RecentFlushPtr = GetXLogReplayRecPtr(NULL);
+
+	if (RecentFlushPtr <= sentPtr)
+	{
+		WalSndCaughtUp = true;
+		return;
+	}
 
 	record = XLogReadRecord(logical_decoding_ctx->reader, logical_startptr, &errm);
 	logical_startptr = InvalidXLogRecPtr;

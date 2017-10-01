@@ -2223,8 +2223,11 @@ typedef struct SemiAntiJoinFactors
  *
  * restrictlist contains all of the RestrictInfo nodes for restriction
  *		clauses that apply to this join
+ * mergejoin_allowed is a flag to indicate whether mergejoins are allowed
  * mergeclause_list is a list of RestrictInfo nodes for available
  *		mergejoin clauses in this join
+ * hashclause_list is a list of RestrictInfo nodes for available
+ *		hashjoin clauses in this join
  * inner_unique is true if each outer tuple provably matches no more
  *		than one inner tuple
  * sjinfo is extra info about special joins for selectivity estimation
@@ -2234,7 +2237,9 @@ typedef struct SemiAntiJoinFactors
 typedef struct JoinPathExtraData
 {
 	List	   *restrictlist;
+	bool		mergejoin_allowed;
 	List	   *mergeclause_list;
+	List	   *hashclause_list;
 	bool		inner_unique;
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;

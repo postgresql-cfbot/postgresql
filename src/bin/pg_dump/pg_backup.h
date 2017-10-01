@@ -146,6 +146,7 @@ typedef struct _dumpOptions
 	int			dump_inserts;
 	int			column_inserts;
 	int			if_exists;
+	int			no_comments;
 	int			no_security_labels;
 	int			no_publications;
 	int			no_subscriptions;

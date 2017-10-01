@@ -706,6 +706,7 @@ main(int argc, char **argv)
 	uint32		hi,
 				lo;
 	char	   *db_name;
+	char	   *strtol_endptr = NULL;
 
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
@@ -735,8 +736,8 @@ main(int argc, char **argv)
 				outfile = pg_strdup(optarg);
 				break;
 			case 'F':
-				fsync_interval = atoi(optarg) * 1000;
-				if (fsync_interval < 0)
+				fsync_interval = strtol(optarg, &strtol_endptr, 10) * 1000;
+				if (fsync_interval < 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, _("%s: invalid fsync interval \"%s\"\n"),
 							progname, optarg);
@@ -757,7 +758,7 @@ main(int argc, char **argv)
 				dbhost = pg_strdup(optarg);
 				break;
 			case 'p':
-				if (atoi(optarg) <= 0)
+				if (strtol(optarg, &strtol_endptr, 10) <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, _("%s: invalid port number \"%s\"\n"),
 							progname, optarg);
@@ -819,8 +820,8 @@ main(int argc, char **argv)
 				plugin = pg_strdup(optarg);
 				break;
 			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
+				standby_message_timeout = strtol(optarg, &strtol_endptr, 10) * 1000;
+				if (standby_message_timeout < 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, _("%s: invalid status interval \"%s\"\n"),
 							progname, optarg);

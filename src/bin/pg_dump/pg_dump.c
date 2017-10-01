@@ -292,6 +292,7 @@ main(int argc, char **argv)
 	const char *dumpencoding = NULL;
 	const char *dumpsnapshot = NULL;
 	char	   *use_role = NULL;
+	char	   *strtol_endptr = NULL;
 	int			numWorkers = 1;
 	trivalue	prompt_password = TRI_DEFAULT;
 	int			compressLevel = -1;
@@ -443,7 +444,12 @@ main(int argc, char **argv)
 				break;
 
 			case 'j':			/* number of dump jobs */
-				numWorkers = atoi(optarg);
+				numWorkers = strtol(optarg, &strtol_endptr, 10);
+				if (strtol_endptr != optarg + strlen(optarg))
+				{
+					write_msg(NULL, "invalid number of jobs\n");
+					exit_nicely(1);
+				}
 				break;
 
 			case 'n':			/* include schema(s) */
@@ -509,8 +515,8 @@ main(int argc, char **argv)
 				break;
 
 			case 'Z':			/* Compression Level */
-				compressLevel = atoi(optarg);
-				if (compressLevel < 0 || compressLevel > 9)
+				compressLevel = strtol(optarg, &strtol_endptr, 10);
+				if (compressLevel < 0 || compressLevel > 9 || strtol_endptr != optarg + strlen(optarg))
 				{
 					write_msg(NULL, "compression level must be in range 0..9\n");
 					exit_nicely(1);

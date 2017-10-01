@@ -88,7 +88,7 @@ static IncludeWal includewal = STREAM_WAL;
 static bool fastcheckpoint = false;
 static bool writerecoveryconf = false;
 static bool do_sync = true;
-static int	standby_message_timeout = 10 * 1000;	/* 10 sec = default */
+static long int	standby_message_timeout = 10 * 1000;	/* 10 sec = default */
 static pg_time_t last_progress_report = 0;
 static int32 maxrate = 0;		/* no limit by default */
 static char *replication_slot = NULL;
@@ -2092,6 +2092,7 @@ BaseBackup(void)
 int
 main(int argc, char **argv)
 {
+	char *strtol_endptr = NULL;
 	static struct option long_options[] = {
 		{"help", no_argument, NULL, '?'},
 		{"version", no_argument, NULL, 'V'},
@@ -2235,8 +2236,8 @@ main(int argc, char **argv)
 #endif
 				break;
 			case 'Z':
-				compresslevel = atoi(optarg);
-				if (compresslevel < 0 || compresslevel > 9)
+				compresslevel = strtol(optarg, &strtol_endptr, 10);
+				if (compresslevel < 0 || compresslevel > 9 || (strtol_endptr != optarg + strlen(optarg)))
 				{
 					fprintf(stderr, _("%s: invalid compression level \"%s\"\n"),
 							progname, optarg);
@@ -2274,8 +2275,8 @@ main(int argc, char **argv)
 				dbgetpassword = 1;
 				break;
 			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
+				standby_message_timeout = strtol(optarg, &strtol_endptr, 10) * 1000;
+				if ((standby_message_timeout < 0) || (strtol_endptr != optarg + strlen(optarg)))
 				{
 					fprintf(stderr, _("%s: invalid status interval \"%s\"\n"),
 							progname, optarg);

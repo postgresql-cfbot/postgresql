@@ -3704,6 +3704,7 @@ main(int argc, char **argv)
 	PGconn	   *con;
 	PGresult   *res;
 	char	   *env;
+	char	   *strtol_endptr;
 
 	progname = get_progname(argv[0]);
 
@@ -3762,8 +3763,8 @@ main(int argc, char **argv)
 				break;
 			case 'c':
 				benchmarking_option_set = true;
-				nclients = atoi(optarg);
-				if (nclients <= 0 || nclients > MAXCLIENTS)
+				nclients = strtol(optarg, &strtol_endptr, 10);
+				if (nclients <= 0 || nclients > MAXCLIENTS || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid number of clients: \"%s\"\n",
 							optarg);
@@ -3790,8 +3791,8 @@ main(int argc, char **argv)
 				break;
 			case 'j':			/* jobs */
 				benchmarking_option_set = true;
-				nthreads = atoi(optarg);
-				if (nthreads <= 0)
+				nthreads = strtol(optarg, &strtol_endptr, 10);
+				if (nthreads <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid number of threads: \"%s\"\n",
 							optarg);
@@ -3816,8 +3817,8 @@ main(int argc, char **argv)
 				break;
 			case 's':
 				scale_given = true;
-				scale = atoi(optarg);
-				if (scale <= 0)
+				scale = strtol(optarg, &strtol_endptr, 10);
+				if (scale <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid scaling factor: \"%s\"\n", optarg);
 					exit(1);
@@ -3830,8 +3831,8 @@ main(int argc, char **argv)
 					fprintf(stderr, "specify either a number of transactions (-t) or a duration (-T), not both\n");
 					exit(1);
 				}
-				nxacts = atoi(optarg);
-				if (nxacts <= 0)
+				nxacts = strtol(optarg, &strtol_endptr, 10);
+				if (nxacts <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid number of transactions: \"%s\"\n",
 							optarg);
@@ -3845,8 +3846,8 @@ main(int argc, char **argv)
 					fprintf(stderr, "specify either a number of transactions (-t) or a duration (-T), not both\n");
 					exit(1);
 				}
-				duration = atoi(optarg);
-				if (duration <= 0)
+				duration = strtol(optarg, &strtol_endptr, 10);
+				if (duration <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid duration: \"%s\"\n", optarg);
 					exit(1);
@@ -3912,8 +3913,8 @@ main(int argc, char **argv)
 				break;
 			case 'F':
 				initialization_option_set = true;
-				fillfactor = atoi(optarg);
-				if (fillfactor < 10 || fillfactor > 100)
+				fillfactor = strtol(optarg, &strtol_endptr, 10);
+				if (fillfactor < 10 || fillfactor > 100 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid fillfactor: \"%s\"\n", optarg);
 					exit(1);
@@ -3933,8 +3934,8 @@ main(int argc, char **argv)
 				break;
 			case 'P':
 				benchmarking_option_set = true;
-				progress = atoi(optarg);
-				if (progress <= 0)
+				progress = strtol(optarg, &strtol_endptr, 10);
+				if (progress <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid thread progress delay: \"%s\"\n",
 							optarg);
@@ -3995,8 +3996,8 @@ main(int argc, char **argv)
 				break;
 			case 5:
 				benchmarking_option_set = true;
-				agg_interval = atoi(optarg);
-				if (agg_interval <= 0)
+				agg_interval = strtol(optarg, &strtol_endptr, 10);
+				if (agg_interval <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					fprintf(stderr, "invalid number of seconds for aggregation: \"%s\"\n",
 							optarg);

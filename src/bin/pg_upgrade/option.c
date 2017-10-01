@@ -60,6 +60,7 @@ parseCommandLine(int argc, char *argv[])
 	int			os_user_effective_id;
 	FILE	   *fp;
 	char	  **filename;
+	char	   *strtol_endptr = NULL;
 	time_t		run_time = time(NULL);
 
 	user_opts.transfer_mode = TRANSFER_MODE_COPY;
@@ -167,7 +168,7 @@ parseCommandLine(int argc, char *argv[])
 				 * supported on all old/new versions (added in PG 9.2).
 				 */
 			case 'p':
-				if ((old_cluster.port = atoi(optarg)) <= 0)
+				if ((old_cluster.port = strtol(optarg, &strtol_endptr, 10)) <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					pg_fatal("invalid old port number\n");
 					exit(1);
@@ -175,7 +176,7 @@ parseCommandLine(int argc, char *argv[])
 				break;
 
 			case 'P':
-				if ((new_cluster.port = atoi(optarg)) <= 0)
+				if ((new_cluster.port = strtol(optarg, &strtol_endptr, 10)) <= 0 || strtol_endptr != optarg + strlen(optarg))
 				{
 					pg_fatal("invalid new port number\n");
 					exit(1);

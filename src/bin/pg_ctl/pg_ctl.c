@@ -2100,6 +2100,7 @@ main(int argc, char **argv)
 	};
 
 	char	   *env_wait;
+	char	   *strtol_endptr = NULL;
 	int			option_index;
 	int			c;
 	pgpid_t		killproc = 0;
@@ -2231,7 +2232,13 @@ main(int argc, char **argv)
 #endif
 					break;
 				case 't':
-					wait_seconds = atoi(optarg);
+					wait_seconds = strtol(optarg, &strtol_endptr, 10);
+					if (strtol_endptr != optarg + strlen(optarg))
+					{
+						write_stderr(_("%s: invalid value '%s' for -t\n"),
+								progname, optarg);
+						exit(1);
+					}
 					wait_seconds_arg = true;
 					break;
 				case 'U':

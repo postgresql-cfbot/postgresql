@@ -65,6 +65,7 @@ main(int argc, char **argv)
 	int			numWorkers = 1;
 	Archive    *AH;
 	char	   *inputFileSpec;
+	char	   *strtol_endptr = NULL;
 	static int	disable_triggers = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
@@ -181,7 +182,12 @@ main(int argc, char **argv)
 				break;
 
 			case 'j':			/* number of restore jobs */
-				numWorkers = atoi(optarg);
+				numWorkers = strtol(optarg, &strtol_endptr, 10);
+				if (strtol_endptr != optarg + strlen(optarg))
+				{
+					write_msg(NULL, "invalid number of jobs\n");
+					exit_nicely(1);
+				}
 				break;
 
 			case 'l':			/* Dump the TOC summary */

@@ -8,9 +8,6 @@
  *
  * src/include/utils/geo_decls.h
  *
- * NOTE
- *	  These routines do *not* use the float types from adt/.
- *
  *	  XXX These routines were not written by a numerical analyst.
  *
  *	  XXX I have made some attempt to flesh out the operators
@@ -24,6 +21,7 @@
 #include <math.h>
 
 #include "fmgr.h"
+#include "utils/float.h"
 
 /*--------------------------------------------------------------------
  * Useful floating point utilities and constants.
@@ -34,30 +32,29 @@
 
 #ifdef EPSILON
 #define FPzero(A)				(fabs(A) <= EPSILON)
-#define FPeq(A,B)				(fabs((A) - (B)) <= EPSILON)
-#define FPne(A,B)				(fabs((A) - (B)) > EPSILON)
-#define FPlt(A,B)				((B) - (A) > EPSILON)
-#define FPle(A,B)				((A) - (B) <= EPSILON)
-#define FPgt(A,B)				((A) - (B) > EPSILON)
-#define FPge(A,B)				((B) - (A) <= EPSILON)
+#define FPeq(A, B)				(float8_le(fabs(float8_mi(A, B)), EPSILON))
+#define FPne(A, B)				(float8_gt(fabs(float8_mi(A, B)), EPSILON))
+#define FPlt(A, B)				(float8_gt(float8_mi(B, A), EPSILON))
+#define FPle(A, B)				(float8_le(float8_mi(A, B), EPSILON))
+#define FPgt(A, B)				(float8_gt(float8_mi(A, B), EPSILON))
+#define FPge(A, B)				(float8_le(float8_mi(B, A), EPSILON))
 #else
-#define FPzero(A)				((A) == 0)
-#define FPeq(A,B)				((A) == (B))
-#define FPne(A,B)				((A) != (B))
-#define FPlt(A,B)				((A) < (B))
-#define FPle(A,B)				((A) <= (B))
-#define FPgt(A,B)				((A) > (B))
-#define FPge(A,B)				((A) >= (B))
+#define FPzero(A)				((A) == 0.0)
+#define FPeq(A, B)				(float8_eq(A, B))
+#define FPne(A, B)				(float8_ne(A, B))
+#define FPlt(A, B)				(float8_lt(A, B))
+#define FPle(A, B)				(float8_le(A, B))
+#define FPgt(A, B)				(float8_gt(A, B))
+#define FPge(A, B)				(float8_ge(A, B))
 #endif
 
-#define HYPOT(A, B)				pg_hypot(A, B)
 
 /*---------------------------------------------------------------------
  * Point - (x,y)
  *-------------------------------------------------------------------*/
 typedef struct
 {
-	double		x,
+	float8		x,
 				y;
 } Point;
 
@@ -79,7 +76,7 @@ typedef struct
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int32		npts;
 	int32		closed;			/* is this a closed polygon? */
-	int32		dummy;			/* padding to make it double align */
+	int32		dummy;			/* padding to make it float8 align */
 	Point		p[FLEXIBLE_ARRAY_MEMBER];
 } PATH;
 
@@ -89,7 +86,7 @@ typedef struct
  *-------------------------------------------------------------------*/
 typedef struct
 {
-	double		A,
+	float8		A,
 				B,
 				C;
 } LINE;
@@ -106,7 +103,7 @@ typedef struct
 } BOX;
 
 /*---------------------------------------------------------------------
- * POLYGON - Specified by an array of doubles defining the points,
+ * POLYGON - Specified by an array of float8s defining the points,
  *		keeping the number of points and the bounding box for
  *		speed purposes.
  *-------------------------------------------------------------------*/
@@ -124,7 +121,7 @@ typedef struct
 typedef struct
 {
 	Point		center;
-	double		radius;
+	float8		radius;
 } CIRCLE;
 
 /*
@@ -172,15 +169,5 @@ typedef struct
 #define CirclePGetDatum(X)	  PointerGetDatum(X)
 #define PG_GETARG_CIRCLE_P(n) DatumGetCircleP(PG_GETARG_DATUM(n))
 #define PG_RETURN_CIRCLE_P(x) return CirclePGetDatum(x)
-
-
-/*
- * in geo_ops.c
- */
-
-/* private point routines */
-extern double point_dt(Point *pt1, Point *pt2);
-extern double point_sl(Point *pt1, Point *pt2);
-extern double pg_hypot(double x, double y);
 
 #endif							/* GEO_DECLS_H */

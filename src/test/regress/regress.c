@@ -69,7 +69,9 @@ regress_dist_ptpath(PG_FUNCTION_ARGS)
 		case 0:
 			PG_RETURN_NULL();
 		case 1:
-			result = point_dt(pt, &path->p[0]);
+			result = DatumGetFloat8(DirectFunctionCall2(point_distance,
+														PointPGetDatum(pt),
+												PointPGetDatum(&path->p[0])));
 			break;
 		default:
 
@@ -287,8 +289,13 @@ pt_in_widget(PG_FUNCTION_ARGS)
 {
 	Point	   *point = PG_GETARG_POINT_P(0);
 	WIDGET	   *widget = (WIDGET *) PG_GETARG_POINTER(1);
+	float8		distance;
 
-	PG_RETURN_BOOL(point_dt(point, &widget->center) < widget->radius);
+	distance = DatumGetFloat8(DirectFunctionCall2(point_distance,
+												  PointPGetDatum(point),
+											PointPGetDatum(&widget->center)));
+
+	PG_RETURN_BOOL(distance < widget->radius);
 }
 
 PG_FUNCTION_INFO_V1(boxarea);

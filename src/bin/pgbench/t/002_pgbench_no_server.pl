@@ -73,6 +73,9 @@ my @options = (
 	[ 'ambiguous builtin', '-b s', [qr{ambiguous}] ],
 	[   '--progress-timestamp => --progress', '--progress-timestamp',
 		[qr{allowed only under}] ],
+	[ 'custom init without init option', '-I ctg', [qr{cannot be used in benchmarking mode}] ],
+	[ 'invalid custom init command', '-i -I cta',
+		[qr{invalid custom initialization script command}, qr{possible commands are} ] ],
 
 	# loging sub-options
 	[   'sampling => log', '--sampling-rate=0.01',

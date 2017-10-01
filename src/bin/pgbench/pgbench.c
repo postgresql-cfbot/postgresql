@@ -95,6 +95,8 @@ static int	pthread_join(pthread_t th, void **thread_return);
 
 #define MIN_GAUSSIAN_PARAM		2.0 /* minimum parameter for gauss */
 
+#define DEFAULT_INIT_COMMANDS "ctgvp"
+
 int			nxacts = 0;			/* number of transactions per client */
 int			duration = 0;		/* duration in seconds */
 int64		end_time = 0;		/* when to stop in micro seconds, under -T */
@@ -112,9 +114,9 @@ int			scale = 1;
 int			fillfactor = 100;
 
 /*
- * create foreign key constraints on the tables?
+ * no vacuum at all before testing?
  */
-int			foreign_keys = 0;
+bool			is_no_vacuum = false;
 
 /*
  * use unlogged tables?
@@ -458,6 +460,12 @@ static void pgbench_error(const char *fmt,...) pg_attribute_printf(1, 2);
 static void addScript(ParsedScript script);
 static void *threadRun(void *arg);
 static void setalarm(int seconds);
+static void initCleanupTables(PGconn *con);
+static void initCreateTables(PGconn *con);
+static void initLoadData(PGconn *con);
+static void initVacuum(PGconn *con);
+static void initCreatePKeys(PGconn *con);
+static void initCreateFKeys(PGconn *con);
 
 
 /* callback functions for our flex lexer */
@@ -475,6 +483,8 @@ usage(void)
 		   "  %s [OPTION]... [DBNAME]\n"
 		   "\nInitialization options:\n"
 		   "  -i, --initialize         invokes initialization mode\n"
+		   "  -I, --custom-initialize=[ctgvpf]+ (default \"ctgvp\")\n"
+		   "                           initialize with custom initialization commands\n"
 		   "  -F, --fillfactor=NUM     set fill factor\n"
 		   "  -n, --no-vacuum          do not run VACUUM after initialization\n"
 		   "  -q, --quiet              quiet logging (one message each 5 seconds)\n"
@@ -2601,9 +2611,55 @@ disconnect_all(CState *state, int length)
 	}
 }
 
-/* create tables and setup data */
+/* Check custom initialization commands */
 static void
-init(bool is_no_vacuum)
+checkCustomCommands(char *commands)
+{
+	char	*cmd;
+
+	if (commands[0] == '\0')
+	{
+		fprintf(stderr, "initialize command is empty\n");
+		exit(1);
+	}
+
+	for (cmd = commands; *cmd != '\0'; cmd++)
+	{
+		if (strchr("ctgvpf ", *cmd) == NULL)
+		{
+			fprintf(stderr, "invalid custom initialization script command \"%c\"\n", *cmd);
+			fprintf(stderr, "possible commands are: \"c\", \"t\", \"g\", \"v\", \"p\", \"f\"\n");
+			exit(1);
+		}
+	}
+}
+
+/* Remove old tables, if it exists */
+static void
+initCleanupTables(PGconn *con)
+{
+	int i;
+
+	/* tables in reverse foreign key dependencies order */
+	static const char *Tables[] = {
+		"pgbench_history", "pgbench_tellers", "pgbench_accounts", "pgbench_branches"
+	};
+
+	fprintf(stderr, "cleaning up...\n");
+
+	for (i = 0; i < lengthof(Tables); i++)
+	{
+		char	buffer[256];
+
+		/* Remove old table, if it exists. */
+		snprintf(buffer, sizeof(buffer), "drop table if exists %s", Tables[i]);
+		executeStatement(con, buffer);
+	}
+}
+
+/* Create tables */
+static void
+initCreateTables(PGconn *con)
 {
 /*
  * The scale factor at/beyond which 32-bit integers are insufficient for
@@ -2658,34 +2714,10 @@ init(bool is_no_vacuum)
 			1
 		}
 	};
-	static const char *const DDLINDEXes[] = {
-		"alter table pgbench_branches add primary key (bid)",
-		"alter table pgbench_tellers add primary key (tid)",
-		"alter table pgbench_accounts add primary key (aid)"
-	};
-	static const char *const DDLKEYs[] = {
-		"alter table pgbench_tellers add foreign key (bid) references pgbench_branches",
-		"alter table pgbench_accounts add foreign key (bid) references pgbench_branches",
-		"alter table pgbench_history add foreign key (bid) references pgbench_branches",
-		"alter table pgbench_history add foreign key (tid) references pgbench_tellers",
-		"alter table pgbench_history add foreign key (aid) references pgbench_accounts"
-	};
 
-	PGconn	   *con;
-	PGresult   *res;
-	char		sql[256];
-	int			i;
-	int64		k;
+	int i;
 
-	/* used to track elapsed time and estimate of the remaining time */
-	instr_time	start,
-				diff;
-	double		elapsed_sec,
-				remaining_sec;
-	int			log_interval = 1;
-
-	if ((con = doConnect()) == NULL)
-		exit(1);
+	fprintf(stderr, "creating tables...\n");
 
 	for (i = 0; i < lengthof(DDLs); i++)
 	{
@@ -2693,10 +2725,6 @@ init(bool is_no_vacuum)
 		char		buffer[256];
 		const struct ddlinfo *ddl = &DDLs[i];
 		const char *cols;
-
-		/* Remove old table, if it exists. */
-		snprintf(buffer, sizeof(buffer), "drop table if exists %s", ddl->table);
-		executeStatement(con, buffer);
 
 		/* Construct new create table statement. */
 		opts[0] = '\0';
@@ -2722,8 +2750,30 @@ init(bool is_no_vacuum)
 
 		executeStatement(con, buffer);
 	}
+}
 
+/* Fill the standard table with some data */
+static void
+initLoadData(PGconn *con)
+{
+	char		sql[256];
+	PGresult   *res;
+	int			i;
+	int64		k;
+
+	/* used to track elapsed time and estimate of the remaining time */
+	instr_time	start,
+				diff;
+	double		elapsed_sec,
+				remaining_sec;
+	int			log_interval = 1;
+
+	/*
+	 * fill the pgbench_accounts table with some data
+	 */
 	executeStatement(con, "begin");
+
+	executeStatement(con, "truncate pgbench_history, pgbench_branches, pgbench_tellers, pgbench_accounts");
 
 	for (i = 0; i < nbranches * scale; i++)
 	{
@@ -2742,16 +2792,6 @@ init(bool is_no_vacuum)
 				 i + 1, i / ntellers + 1);
 		executeStatement(con, sql);
 	}
-
-	executeStatement(con, "commit");
-
-	/*
-	 * fill the pgbench_accounts table with some data
-	 */
-	fprintf(stderr, "creating tables...\n");
-
-	executeStatement(con, "begin");
-	executeStatement(con, "truncate pgbench_accounts");
 
 	res = PQexec(con, "copy pgbench_accounts from stdin");
 	if (PQresultStatus(res) != PGRES_COPY_IN)
@@ -2827,20 +2867,33 @@ init(bool is_no_vacuum)
 		exit(1);
 	}
 	executeStatement(con, "commit");
+}
 
-	/* vacuum */
-	if (!is_no_vacuum)
-	{
-		fprintf(stderr, "vacuum...\n");
-		executeStatement(con, "vacuum analyze pgbench_branches");
-		executeStatement(con, "vacuum analyze pgbench_tellers");
-		executeStatement(con, "vacuum analyze pgbench_accounts");
-		executeStatement(con, "vacuum analyze pgbench_history");
-	}
+/* Invoke vacuum on all tables */
+static void
+initVacuum(PGconn *con)
+{
+	fprintf(stderr, "vacuum...\n");
+	executeStatement(con, "vacuum analyze pgbench_branches");
+	executeStatement(con, "vacuum analyze pgbench_tellers");
+	executeStatement(con, "vacuum analyze pgbench_accounts");
+	executeStatement(con, "vacuum analyze pgbench_history");
+}
 
-	/*
-	 * create indexes
-	 */
+/*
+ * Create primary keys on three tables; pgbench_accounts,
+ * pgbench_branches and pgbench_tellers.
+ */
+static void
+initCreatePKeys(PGconn *con)
+{
+	static const char *const DDLINDEXes[] = {
+		"alter table pgbench_branches add primary key (bid)",
+		"alter table pgbench_tellers add primary key (tid)",
+		"alter table pgbench_accounts add primary key (aid)"
+	};
+	int i;
+
 	fprintf(stderr, "set primary keys...\n");
 	for (i = 0; i < lengthof(DDLINDEXes); i++)
 	{
@@ -2861,16 +2914,71 @@ init(bool is_no_vacuum)
 
 		executeStatement(con, buffer);
 	}
+}
 
-	/*
-	 * create foreign keys
-	 */
-	if (foreign_keys)
+/*
+ * Create foreign key constraints between the standard tables
+ */
+static void
+initCreateFKeys(PGconn *con)
+{
+	static const char *const DDLKEYs[] = {
+		"alter table pgbench_tellers add constraint pgbench_tellers_bid_fkey foreign key (bid) references pgbench_branches",
+		"alter table pgbench_accounts add constraint pgbench_accounts_bid_fkey foreign key (bid) references pgbench_branches",
+		"alter table pgbench_history add constraint pgbench_history_bid_fkey foreign key (bid) references pgbench_branches",
+		"alter table pgbench_history add constraint pgbench_history_tid_fkey foreign key (tid) references pgbench_tellers",
+		"alter table pgbench_history add constraint pgbench_history_aid_fkey foreign key (aid) references pgbench_accounts"
+	};
+
+	int i;
+
+	fprintf(stderr, "set foreign keys...\n");
+	for (i = 0; i < lengthof(DDLKEYs); i++)
 	{
-		fprintf(stderr, "set foreign keys...\n");
-		for (i = 0; i < lengthof(DDLKEYs); i++)
+		executeStatement(con, DDLKEYs[i]);
+	}
+}
+
+/* invoke each initialization commands */
+static void
+init(char *initialize_cmds)
+{
+	char *cmd = initialize_cmds;
+	PGconn	   *con;
+
+	if ((con = doConnect()) == NULL)
+		exit(1);
+
+	for (cmd = initialize_cmds; *cmd != '\0'; cmd++)
+	{
+		switch (*cmd)
 		{
-			executeStatement(con, DDLKEYs[i]);
+			case 'c':
+				initCleanupTables(con);
+				break;
+			case 't':
+				initCreateTables(con);
+				break;
+			case 'g':
+				initLoadData(con);
+				break;
+			case 'v':
+				initVacuum(con);
+				break;
+			case 'p':
+				initCreatePKeys(con);
+				break;
+			case 'f':
+				initCreateFKeys(con);
+				break;
+			case ' ':
+				break;	/* skip */
+			default:
+			{
+				fprintf(stderr, "invalid custom initialization script command \"%c\"\n", *cmd);
+				PQfinish(con);
+				exit(1);
+			}
 		}
 	}
 
@@ -3644,6 +3752,7 @@ main(int argc, char **argv)
 		{"fillfactor", required_argument, NULL, 'F'},
 		{"host", required_argument, NULL, 'h'},
 		{"initialize", no_argument, NULL, 'i'},
+		{"custom-initialize", required_argument, NULL, 'I'},
 		{"jobs", required_argument, NULL, 'j'},
 		{"log", no_argument, NULL, 'l'},
 		{"latency-limit", required_argument, NULL, 'L'},
@@ -3662,7 +3771,6 @@ main(int argc, char **argv)
 		{"username", required_argument, NULL, 'U'},
 		{"vacuum-all", no_argument, NULL, 'v'},
 		/* long-named only options */
-		{"foreign-keys", no_argument, &foreign_keys, 1},
 		{"index-tablespace", required_argument, NULL, 3},
 		{"tablespace", required_argument, NULL, 2},
 		{"unlogged-tables", no_argument, &unlogged_tables, 1},
@@ -3670,12 +3778,13 @@ main(int argc, char **argv)
 		{"aggregate-interval", required_argument, NULL, 5},
 		{"progress-timestamp", no_argument, NULL, 6},
 		{"log-prefix", required_argument, NULL, 7},
+		{"foreign-keys", no_argument, NULL, 8},
 		{NULL, 0, NULL, 0}
 	};
 
 	int			c;
 	int			is_init_mode = 0;	/* initialize mode? */
-	int			is_no_vacuum = 0;	/* no vacuum at all before testing? */
+	char		*initialize_cmds;
 	int			do_vacuum_accounts = 0; /* do vacuum accounts before testing? */
 	int			optindex;
 	bool		scale_given = false;
@@ -3736,7 +3845,9 @@ main(int argc, char **argv)
 	state = (CState *) pg_malloc(sizeof(CState));
 	memset(state, 0, sizeof(CState));
 
-	while ((c = getopt_long(argc, argv, "ih:nvp:dqb:SNc:j:Crs:t:T:U:lf:D:F:M:P:R:L:", long_options, &optindex)) != -1)
+	initialize_cmds = pg_strdup(DEFAULT_INIT_COMMANDS);
+
+	while ((c = getopt_long(argc, argv, "iI:h:nvp:dqb:SNc:j:Crs:t:T:U:lf:D:F:M:P:R:L:", long_options, &optindex)) != -1)
 	{
 		char	   *script;
 
@@ -3745,12 +3856,30 @@ main(int argc, char **argv)
 			case 'i':
 				is_init_mode++;
 				break;
+			case 'I':
+				pg_free(initialize_cmds);
+				initialize_cmds = pg_strdup(optarg);
+
+				/* Check input custom initialization command string */
+				checkCustomCommands(initialize_cmds);
+
+				initialization_option_set = true;
+				break;
 			case 'h':
 				pghost = pg_strdup(optarg);
 				break;
 			case 'n':
-				is_no_vacuum++;
-				break;
+				{
+					char *p;
+
+					is_no_vacuum = true;
+
+					/* Get rid of vacuum commands from initialization commands */
+					while ((p = strchr(initialize_cmds, 'v')) != NULL)
+						*p = ' ';
+
+					break;
+				}
 			case 'v':
 				do_vacuum_accounts++;
 				break;
@@ -3973,7 +4102,7 @@ main(int argc, char **argv)
 				break;
 			case 0:
 				/* This covers long options which take no argument. */
-				if (foreign_keys || unlogged_tables)
+				if (unlogged_tables)
 					initialization_option_set = true;
 				break;
 			case 2:				/* tablespace */
@@ -4010,6 +4139,24 @@ main(int argc, char **argv)
 			case 7:
 				benchmarking_option_set = true;
 				logfile_prefix = pg_strdup(optarg);
+				break;
+			case 8:
+				{
+					/*
+					 * If a building foreign key command is not specified in
+					 * initialization commands, the command is added to the end.
+					 */
+					if (strchr(initialize_cmds, 'f') == NULL)
+					{
+						int n_cmds = strlen(initialize_cmds) + 1;
+
+						initialize_cmds = (char *) pg_realloc(initialize_cmds,
+															  sizeof(char) * n_cmds + 1);
+						initialize_cmds[n_cmds - 1] = 'f';
+						initialize_cmds[n_cmds] = '\0';
+					}
+					initialization_option_set = true;
+				}
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
@@ -4090,7 +4237,7 @@ main(int argc, char **argv)
 			exit(1);
 		}
 
-		init(is_no_vacuum);
+		init(initialize_cmds);
 		exit(0);
 	}
 	else

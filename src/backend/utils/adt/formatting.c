@@ -173,6 +173,8 @@ struct FormatNode
 #define NODE_TYPE_END		1
 #define NODE_TYPE_ACTION	2
 #define NODE_TYPE_CHAR		3
+#define NODE_TYPE_SEPARATOR	4
+#define NODE_TYPE_SPACE		5
 
 #define SUFFTYPE_PREFIX		1
 #define SUFFTYPE_POSTFIX	2
@@ -955,6 +957,7 @@ typedef struct NUMProc
 static const KeyWord *index_seq_search(const char *str, const KeyWord *kw,
 				 const int *index);
 static const KeySuffix *suff_search(const char *str, const KeySuffix *suf, int type);
+static bool is_separator_char(const char *str);
 static void NUMDesc_prepare(NUMDesc *num, FormatNode *n);
 static void parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 			 const KeySuffix *suf, const int *index, int ver, NUMDesc *Num);
@@ -971,7 +974,6 @@ static void dump_node(FormatNode *node, int max);
 static const char *get_th(char *num, int type);
 static char *str_numth(char *dest, char *num, int type);
 static int	adjust_partial_year_to_2020(int year);
-static int	strspace_len(char *str);
 static void from_char_set_mode(TmFromChar *tmfc, const FromCharDateMode mode);
 static void from_char_set_int(int *dest, const int value, const FormatNode *node);
 static int	from_char_parse_int_len(int *dest, char **src, const int len, FormatNode *node);
@@ -1042,6 +1044,16 @@ suff_search(const char *str, const KeySuffix *suf, int type)
 			return s;
 	}
 	return NULL;
+}
+
+static bool
+is_separator_char(const char *str)
+{
+	/* ASCII printable character, but not letter or digit */
+	return (*str > 0x20 && *str < 0x7F &&
+			!(*str >= 'A' && *str <= 'Z') &&
+			!(*str >= 'a' && *str <= 'z') &&
+			!(*str >= '0' && *str <= '9'));
 }
 
 /* ----------
@@ -1229,9 +1241,10 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 {
 	const KeySuffix *s;
 	FormatNode *n;
+	bool		in_text = false,
+				in_backslash = false;
 	int			node_set = 0,
-				suffix,
-				last = 0;
+				suffix;
 
 #ifdef DEBUG_TO_FROM_CHAR
 	elog(DEBUG_elog_output, "to_char/number(): run parser");
@@ -1242,6 +1255,50 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 	while (*str)
 	{
 		suffix = 0;
+
+		/* Previous character was a backslash */
+		if (in_backslash)
+		{
+			in_backslash = false;
+
+			n->type = NODE_TYPE_CHAR;
+			n->character = *str;
+			n->key = NULL;
+			n->suffix = 0;
+			n++;
+			str++;
+			continue;
+		}
+		/* Previous character was a quote */
+		else if (in_text)
+		{
+			if (*str == '"')
+			{
+				str++;
+				in_text = false;
+			}
+			else if (*str == '\\')
+			{
+				str++;
+				in_backslash = true;
+			}
+			else
+			{
+				if (ver == DCH_TYPE && is_separator_char(str))
+					n->type = NODE_TYPE_SEPARATOR;
+				else if (isspace((unsigned char) *str))
+					n->type = NODE_TYPE_SPACE;
+				else
+					n->type = NODE_TYPE_CHAR;
+
+				n->character = *str;
+				n->key = NULL;
+				n->suffix = 0;
+				n++;
+				str++;
+			}
+			continue;
+		}
 
 		/*
 		 * Prefix
@@ -1282,48 +1339,30 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 		}
 		else if (*str)
 		{
-			/*
-			 * Special characters '\' and '"'
-			 */
-			if (*str == '"' && last != '\\')
+			if (*str == '"')
 			{
-				int			x = 0;
-
-				while (*(++str))
-				{
-					if (*str == '"' && x != '\\')
-					{
-						str++;
-						break;
-					}
-					else if (*str == '\\' && x != '\\')
-					{
-						x = '\\';
-						continue;
-					}
-					n->type = NODE_TYPE_CHAR;
-					n->character = *str;
-					n->key = NULL;
-					n->suffix = 0;
-					++n;
-					x = *str;
-				}
+				in_text = true;
 				node_set = 0;
-				suffix = 0;
-				last = 0;
-			}
-			else if (*str && *str == '\\' && last != '\\' && *(str + 1) == '"')
-			{
-				last = *str;
 				str++;
 			}
-			else if (*str)
+			else if (*str == '\\')
 			{
-				n->type = NODE_TYPE_CHAR;
+				in_backslash = true;
+				node_set = 0;
+				str++;
+			}
+			else
+			{
+				if (ver == DCH_TYPE && is_separator_char(str))
+					n->type = NODE_TYPE_SEPARATOR;
+				else if (isspace((unsigned char) *str))
+					n->type = NODE_TYPE_SPACE;
+				else
+					n->type = NODE_TYPE_CHAR;
+
 				n->character = *str;
 				n->key = NULL;
 				node_set = 1;
-				last = 0;
 				str++;
 			}
 		}
@@ -1339,6 +1378,17 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 			node_set = 0;
 		}
 	}
+
+	if (in_backslash)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid escape sequence")));
+
+	/* If we didn't meet closing quotes */
+	if (in_text)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("unexpected end of format string, expected '\"' character")));
 
 	n->type = NODE_TYPE_END;
 	n->suffix = 0;
@@ -2124,20 +2174,6 @@ adjust_partial_year_to_2020(int year)
 		return year;
 }
 
-
-static int
-strspace_len(char *str)
-{
-	int			len = 0;
-
-	while (*str && isspace((unsigned char) *str))
-	{
-		str++;
-		len++;
-	}
-	return len;
-}
-
 /*
  * Set the date mode of a from-char conversion.
  *
@@ -2206,11 +2242,6 @@ from_char_parse_int_len(int *dest, char **src, const int len, FormatNode *node)
 	char		copy[DCH_MAX_ITEM_SIZ + 1];
 	char	   *init = *src;
 	int			used;
-
-	/*
-	 * Skip any whitespace before parsing the integer.
-	 */
-	*src += strspace_len(*src);
 
 	Assert(len <= DCH_MAX_ITEM_SIZ);
 	used = (int) strlcpy(copy, *src, len + 1);
@@ -2980,19 +3011,62 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 	FormatNode *n;
 	char	   *s;
 	int			len,
-				value;
+				value,
+				prev_type = NODE_TYPE_SPACE;
 	bool		fx_mode = false;
 
 	for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++)
 	{
-		if (n->type != NODE_TYPE_ACTION)
+		/* Ignore all spaces after previous field */
+		if (prev_type == NODE_TYPE_ACTION)
+			while (*s != '\0' && isspace((unsigned char) *s))
+				s++;
+
+		if (n->type == NODE_TYPE_SPACE || n->type == NODE_TYPE_SEPARATOR)
 		{
 			/*
-			 * Separator, so consume one character from input string.  Notice
-			 * we don't insist that the consumed character match the format's
-			 * character.
+			 * In non FX (fixed format) mode we skip spaces and separator
+			 * characters.
+			 */
+			if (!fx_mode)
+			{
+				if (isspace((unsigned char) *s) || is_separator_char(s))
+					s++;
+
+				prev_type = n->type;
+				continue;
+			}
+
+			/* Checks for FX mode */
+			if (n->type == NODE_TYPE_SPACE && !isspace((unsigned char) *s))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%c\", expected \"%c\"",
+								*s, n->character),
+						 errdetail("The given value did not match any of the allowed "
+								   "values for this field.")));
+			else if (n->type == NODE_TYPE_SEPARATOR && n->character != *s)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%c\", expected \"%c\"",
+								*s, n->character),
+						 errdetail("The given value did not match any of the allowed "
+								   "values for this field.")));
+
+			s++;
+			prev_type = n->type;
+			continue;
+		}
+		else if (n->type == NODE_TYPE_CHAR)
+		{
+			/*
+			 * Text character, so consume one character from input string.
+			 * Notice we don't insist that the consumed character match the
+			 * format's character.
+			 * Text field ignores FX mode.
 			 */
 			s++;
+			prev_type = n->type;
 			continue;
 		}
 
@@ -3001,7 +3075,25 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 		{
 			while (*s != '\0' && isspace((unsigned char) *s))
 				s++;
+
+			/*
+			 * Lost separator character from the input string. Separator
+			 * character should match at least one space or separator character
+			 * from the format string.
+			 */
+			if (is_separator_char(s))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%c\"", *s),
+						 errdetail("The given value did not match any of the allowed "
+								   "values for this field.")));
 		}
+		else if (isspace((unsigned char) *s) || is_separator_char(s))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+					 errmsg("unexpected character \"%c\"", *s),
+					 errdetail("The given value did not match any of the allowed "
+							   "values for this field.")));
 
 		from_char_set_mode(out, n->key->date_mode);
 
@@ -3242,6 +3334,7 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 				SKIP_THth(s, n->suffix);
 				break;
 		}
+		prev_type = n->type;
 	}
 }
 

@@ -827,14 +827,31 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
      <para>
       Sets variable <replaceable>varname</> to a value calculated
       from <replaceable>expression</>.
-      The expression may contain integer constants such as <literal>5432</>,
+      The expression may contain the <literal>NULL</> constant,
+      boolean constants <literal>TRUE</> and <literal>FALSE</>,
+      integer constants such as <literal>5432</>,
       double constants such as <literal>3.14159</>,
       references to variables <literal>:</><replaceable>variablename</>,
-      unary operators (<literal>+</>, <literal>-</>) and binary operators
-      (<literal>+</>, <literal>-</>, <literal>*</>, <literal>/</>,
-      <literal>%</>) with their usual precedence and associativity,
-      <link linkend="pgbench-builtin-functions">function calls</>, and
-      parentheses.
+      <link linkend="pgbench-builtin-operators">operators</>
+      with their usual SQL precedence and associativity,
+      <link linkend="pgbench-builtin-functions">function calls</>,
+      SQL <link linkend="functions-case"><token>CASE</> generic conditional
+      expressions</> and parentheses.
+     </para>
+
+     <para>
+      Functions and most operators return <literal>NULL</> on
+      <literal>NULL</> input.
+     </para>
+
+     <para>
+      For conditional purposes, non zero numerical values are <literal>TRUE</>,
+      zero numerical values and <literal>NULL</> are <literal>FALSE</>.
+     </para>
+
+     <para>
+      When no final <token>ELSE</> clause is provided to a <token>CASE</>,
+      the default value is <literal>NULL</>.
      </para>
 
      <para>
@@ -843,6 +860,7 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
 \set ntellers 10 * :scale
 \set aid (1021 * random(1, 100000 * :scale)) % \
            (100000 * :scale) + 1
+\set divx CASE WHEN :x <> 0 THEN :y/:x ELSE NULL END 
 </programlisting></para>
     </listitem>
    </varlistentry>
@@ -919,6 +937,177 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
   </variablelist>
  </refsect2>
 
+ <refsect2 id="pgbench-builtin-operators">
+  <title>Built-In Operators</title>
+
+  <para>
+   The arithmetic, bitwise, comparison and logical operators listed in
+   <xref linkend="pgbench-operators"> are built into <application>pgbench</>
+   and may be used in expressions appearing in
+   <link linkend="pgbench-metacommand-set"><literal>\set</literal></link>.
+  </para>
+
+  <table id="pgbench-operators">
+   <title>pgbench Operators by increasing precedence</title>
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Operator</>
+      <entry>Description</>
+      <entry>Example</>
+      <entry>Result</>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>OR</></>
+      <entry>logical or</>
+      <entry><literal>5 or 0</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>AND</></>
+      <entry>logical and</>
+      <entry><literal>3 and 0</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>NOT</></>
+      <entry>logical not</>
+      <entry><literal>not false</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>IS [NOT] (NULL|TRUE|FALSE)</></>
+      <entry>value tests</>
+      <entry><literal>1 is null</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>ISNULL|NOTNULL</></>
+      <entry>null tests</>
+      <entry><literal>1 notnull</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>=</></>
+      <entry>is equal</>
+      <entry><literal>5 = 4</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>&lt;&gt;</></>
+      <entry>is not equal</>
+      <entry><literal>5 &lt;&gt; 4</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>!=</></>
+      <entry>is not equal</>
+      <entry><literal>5 != 5</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>&lt;</></>
+      <entry>lower than</>
+      <entry><literal>5 &lt; 4</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>&lt;=</></>
+      <entry>lower or equal</>
+      <entry><literal>5 &lt;= 4</></>
+      <entry><literal>FALSE</></>
+     </row>
+     <row>
+      <entry><literal>&gt;</></>
+      <entry>greater than</>
+      <entry><literal>5 &gt; 4</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>&gt;=</></>
+      <entry>greater or equal</>
+      <entry><literal>5 &gt;= 4</></>
+      <entry><literal>TRUE</></>
+     </row>
+     <row>
+      <entry><literal>|</></>
+      <entry>integer bitwise OR</>
+      <entry><literal>1 | 2</></>
+      <entry><literal>3</></>
+     </row>
+     <row>
+      <entry><literal>#</></>
+      <entry>integer bitwise XOR</>
+      <entry><literal>1 # 3</></>
+      <entry><literal>2</></>
+     </row>
+     <row>
+      <entry><literal>&amp;</></>
+      <entry>integer bitwise AND</>
+      <entry><literal>1 &amp 3</></>
+      <entry><literal>1</></>
+     </row>
+     <row>
+      <entry><literal>~</></>
+      <entry>integer bitwise NOT</>
+      <entry><literal>~ 1</></>
+      <entry><literal>-2</></>
+     </row>
+     <row>
+      <entry><literal>&lt;&lt;</></>
+      <entry>integer bitwise shift left</>
+      <entry><literal>1 &lt;&lt; 2</></>
+      <entry><literal>4</></>
+     </row>
+     <row>
+      <entry><literal>&gt;&gt;</></>
+      <entry>integer bitwise shift right</>
+      <entry><literal>8 &gt;&gt; 2</></>
+      <entry><literal>2</></>
+     </row>
+     <row>
+      <entry><literal>+</></>
+      <entry>addition</>
+      <entry><literal>5 + 4</></>
+      <entry><literal>9</></>
+     </row>
+     <row>
+      <entry><literal>-</></>
+      <entry>substraction</>
+      <entry><literal>3 - 2.0</></>
+      <entry><literal>1.0</></>
+     </row>
+     <row>
+      <entry><literal>*</></>
+      <entry>multiplication</>
+      <entry><literal>5 * 4</></>
+      <entry><literal>20</></>
+     </row>
+     <row>
+      <entry><literal>/</></>
+      <entry>division (integer truncates the results)</>
+      <entry><literal>5 / 3</></>
+      <entry><literal>1</></>
+     </row>
+     <row>
+      <entry><literal>%</></>
+      <entry>modulo</>
+      <entry><literal>3 % 2</></>
+      <entry><literal>1</></>
+     </row>
+     <row>
+      <entry><literal>-</></>
+      <entry>opposite</>
+      <entry><literal>- 2.0</></>
+      <entry><literal>-2.0</></>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </refsect2>
+
  <refsect2 id="pgbench-builtin-functions">
   <title>Built-In Functions</title>
 
@@ -965,6 +1154,13 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
        <entry><literal>5432.0</></>
       </row>
       <row>
+       <entry><literal><function>exp(<replaceable>x</>)</></></>
+       <entry>double</>
+       <entry>exponential</>
+       <entry><literal>exp(1.0)</></>
+       <entry><literal>2.718281828459045</></>
+      </row>
+      <row>
        <entry><literal><function>greatest(<replaceable>a</> [, <replaceable>...</> ] )</></></>
        <entry>double if any <replaceable>a</> is double, else integer</>
        <entry>largest value among arguments</>
@@ -984,6 +1180,20 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
        <entry>smallest value among arguments</>
        <entry><literal>least(5, 4, 3, 2.1)</></>
        <entry><literal>2.1</></>
+      </row>
+      <row>
+       <entry><literal><function>ln(<replaceable>x</>)</></></>
+       <entry>double</>
+       <entry>natural logarithm</>
+       <entry><literal>ln(2.718281828459045)</></>
+       <entry><literal>1.0</></>
+      </row>
+      <row>
+       <entry><literal><function>mod(<replaceable>i</>, <replaceable>j</>)</></></>
+       <entry>inteter</>
+       <entry>modulo</>
+       <entry><literal>mod(54, 32)</></>
+       <entry><literal>22</></>
       </row>
       <row>
        <entry><literal><function>pi()</></></>

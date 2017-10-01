@@ -33,8 +33,10 @@ union YYSTYPE;
  */
 typedef enum
 {
+	PGBT_NULL,
 	PGBT_INT,
-	PGBT_DOUBLE
+	PGBT_DOUBLE,
+	PGBT_BOOLEAN
 	/* add other types here */
 } PgBenchValueType;
 
@@ -45,6 +47,7 @@ typedef struct
 	{
 		int64		ival;
 		double		dval;
+		bool		bval;
 		/* add other types here */
 	}			u;
 } PgBenchValue;
@@ -73,9 +76,25 @@ typedef enum PgBenchFunction
 	PGBENCH_DOUBLE,
 	PGBENCH_PI,
 	PGBENCH_SQRT,
+	PGBENCH_LN,
+	PGBENCH_EXP,
 	PGBENCH_RANDOM,
 	PGBENCH_RANDOM_GAUSSIAN,
-	PGBENCH_RANDOM_EXPONENTIAL
+	PGBENCH_RANDOM_EXPONENTIAL,
+	PGBENCH_AND,
+	PGBENCH_OR,
+	PGBENCH_NOT,
+	PGBENCH_BITAND,
+	PGBENCH_BITOR,
+	PGBENCH_BITXOR,
+	PGBENCH_LSHIFT,
+	PGBENCH_RSHIFT,
+	PGBENCH_EQ,
+	PGBENCH_NE,
+	PGBENCH_LE,
+	PGBENCH_LT,
+	PGBENCH_IS,
+	PGBENCH_CASE
 } PgBenchFunction;
 
 typedef struct PgBenchExpr PgBenchExpr;

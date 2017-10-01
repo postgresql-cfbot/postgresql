@@ -143,6 +143,9 @@ typedef struct FuncCallContext
  *		get_call_result_type.  Note: the cases in which rowtypes cannot be
  *		determined are different from the cases for get_call_result_type.
  *		Do *not* use this if you can use one of the others.
+ *
+ * A related function, which should generally *not* be used for identifying
+ * a function's result type, is get_expr_result_tupdesc().
  *----------
  */
 
@@ -164,6 +167,8 @@ extern TypeFuncClass get_expr_result_type(Node *expr,
 extern TypeFuncClass get_func_result_type(Oid functionId,
 					 Oid *resultTypeId,
 					 TupleDesc *resultTupleDesc);
+
+extern TupleDesc get_expr_result_tupdesc(Node *expr, bool noError);
 
 extern bool resolve_polymorphic_argtypes(int numargs, Oid *argtypes,
 							 char *argmodes,

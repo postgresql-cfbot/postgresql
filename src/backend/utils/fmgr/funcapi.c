@@ -394,6 +394,81 @@ internal_get_result_type(Oid funcid,
 }
 
 /*
+ * get_expr_result_tupdesc
+ *		Get a tupdesc describing the result of a composite-valued expression
+ *
+ * If expression is not composite or rowtype can't be determined, returns NULL
+ * if noError is true, else throws error.
+ *
+ * This can resolve the same cases that get_expr_result_type() can, plus one
+ * more: if the expression yields domain-over-composite, it will look through
+ * the domain and return the base type's tupdesc.  This is generally *not*
+ * appropriate to use when the caller is responsible for constructing a value
+ * of the expression's type, since one would end up constructing a value of
+ * the base type and failing to apply domain constraints if any.  However,
+ * when the goal is just to find out what fields can be extracted from the
+ * expression's value, this is a convenient helper function.
+ */
+TupleDesc
+get_expr_result_tupdesc(Node *expr, bool noError)
+{
+	TupleDesc	tupleDesc;
+	TupleDesc	cache_tupdesc;
+	Oid			exprTypeId;
+	Oid			baseTypeId;
+	int32		baseTypeMod;
+
+	/*
+	 * First, try get_expr_result_type(), because that can handle references
+	 * to functions returning anonymous record types.
+	 */
+	if (get_expr_result_type(expr, NULL, &tupleDesc) == TYPEFUNC_COMPOSITE)
+		return tupleDesc;
+
+	/*
+	 * There is one case get_expr_result_type() doesn't handle that we should,
+	 * which is a domain over composite.  So drill through any domain type
+	 * before asking lookup_rowtype_tupdesc_noerror().
+	 */
+	exprTypeId = exprType(expr);
+	baseTypeMod = exprTypmod(expr);
+	baseTypeId = getBaseTypeAndTypmod(exprTypeId, &baseTypeMod);
+
+	cache_tupdesc = lookup_rowtype_tupdesc_noerror(baseTypeId, baseTypeMod,
+												   true);
+	if (cache_tupdesc)
+	{
+		/*
+		 * Success!  But caller isn't expecting to have to manage a tupdesc
+		 * refcount, so copy the cached tupdesc.
+		 */
+		tupleDesc = CreateTupleDescCopyConstr(cache_tupdesc);
+		DecrTupleDescRefCount(cache_tupdesc);
+		return tupleDesc;
+	}
+
+	/*
+	 * Throw error if requested.  We could have left this to
+	 * lookup_rowtype_tupdesc_noerror, but if we're dealing with a domain
+	 * type, we prefer to finger the domain not its base type.
+	 */
+	if (!noError)
+	{
+		if (exprTypeId != RECORDOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("type %s is not composite",
+							format_type_be(exprTypeId))));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("record type has not been registered")));
+	}
+
+	return NULL;
+}
+
+/*
  * Given the result tuple descriptor for a function with OUT parameters,
  * replace any polymorphic columns (ANYELEMENT etc) with correct data types
  * deduced from the input arguments. Returns TRUE if able to deduce all types,

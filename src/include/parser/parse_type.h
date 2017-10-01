@@ -46,10 +46,11 @@ extern Oid	typeTypeCollation(Type typ);
 extern Datum stringTypeDatum(Type tp, char *string, int32 atttypmod);
 
 extern Oid	typeidTypeRelid(Oid type_id);
+extern Oid	typeOrDomainTypeRelid(Oid type_id);
 
 extern TypeName *typeStringToTypeName(const char *str);
 extern void parseTypeString(const char *str, Oid *typeid_p, int32 *typmod_p, bool missing_ok);
 
-#define ISCOMPLEX(typeid) (typeidTypeRelid(typeid) != InvalidOid)
+#define ISCOMPLEX(typeid) (typeOrDomainTypeRelid(typeid) != InvalidOid)
 
 #endif							/* PARSE_TYPE_H */

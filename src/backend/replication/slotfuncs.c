@@ -177,6 +177,73 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 }
 
 /*
+ * SQL function for moving the position in a replication slot.
+ */
+Datum
+pg_advance_replication_slot(PG_FUNCTION_ARGS)
+{
+	Name		slotname = PG_GETARG_NAME(0);
+	XLogRecPtr	moveto = PG_GETARG_LSN(1);
+	bool		changed = false;
+	bool 		backwards = false;
+
+	Assert(!MyReplicationSlot);
+
+	check_permissions();
+
+	if (XLogRecPtrIsInvalid(moveto))
+		ereport(ERROR,
+				(errmsg("Invalid target xlog position ")));
+
+	/* Temporarily acquire the slot so we "own" it */
+	ReplicationSlotAcquire(NameStr(*slotname), true);
+
+	/* Only physical slots can be moved */
+	if (MyReplicationSlot->data.database != InvalidOid)
+	{
+		ReplicationSlotRelease();
+		ereport(ERROR,
+				(errmsg("Only physical replication slots can be advanced.")));
+	}
+
+	if (moveto > GetXLogWriteRecPtr())
+		/* Can't move past current position, so truncate there */
+		moveto = GetXLogWriteRecPtr();
+
+	/* Now adjust it */
+	SpinLockAcquire(&MyReplicationSlot->mutex);
+	if (MyReplicationSlot->data.restart_lsn != moveto)
+	{
+		/* Never move backwards, because bad things can happen */
+		if (MyReplicationSlot->data.restart_lsn > moveto)
+			backwards = true;
+		else
+		{
+			MyReplicationSlot->data.restart_lsn = moveto;
+			changed = true;
+		}
+	}
+	SpinLockRelease(&MyReplicationSlot->mutex);
+
+	if (backwards)
+		ereport(WARNING,
+				(errmsg("Not moving replication slot backwards!")));
+
+
+	if (changed)
+	{
+		ReplicationSlotMarkDirty();
+		ReplicationSlotsComputeRequiredLSN();
+		ReplicationSlotSave();
+	}
+
+	ReplicationSlotRelease();
+
+	PG_RETURN_BOOL(changed);
+}
+
+
+/*
  * pg_get_replication_slots - SQL SRF showing active replication slots.
  */
 Datum

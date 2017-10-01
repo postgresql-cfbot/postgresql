@@ -19028,6 +19028,24 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
         be called when connected to the same database the slot was created on.
        </entry>
       </row>
+      <row>
+       <entry>
+        <indexterm>
+         <primary>pg_advance_replication_slot</primary>
+        </indexterm>
+        <literal><function>pg_advance_replication_slot(<parameter>slot_name</parameter> <type>name</type>, <parameter>position</parameter> <type>pg_lsn</type>)</function></literal>
+       </entry>
+       <entry>
+        <type>bool</type>
+       </entry>
+       <entry>
+        Advances the current restart position of a physical
+        replication slot named <parameter>slot_name</parameter>.
+        The slot will not be moved backwards, and it will not be
+        moved beyond the current insert location. Logical replication
+        slots cannot be moved. Returns true if the position was changed.
+       </entry>
+      </row>
 
       <row>
        <entry>

@@ -198,7 +198,6 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	BlockNumber new_rel_pages;
 	double		new_rel_tuples;
 	BlockNumber new_rel_allvisible;
-	double		new_live_tuples;
 	TransactionId new_frozen_xid;
 	MultiXactId new_min_multi;
 
@@ -335,13 +334,9 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 						false);
 
 	/* report results to the stats collector, too */
-	new_live_tuples = new_rel_tuples - vacrelstats->new_dead_tuples;
-	if (new_live_tuples < 0)
-		new_live_tuples = 0;	/* just in case */
-
 	pgstat_report_vacuum(RelationGetRelid(onerel),
 						 onerel->rd_rel->relisshared,
-						 new_live_tuples,
+						 new_rel_tuples,
 						 vacrelstats->new_dead_tuples);
 	pgstat_progress_end_command();
 
@@ -1267,7 +1262,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->new_rel_tuples = vac_estimate_reltuples(onerel, false,
 														 nblocks,
 														 vacrelstats->tupcount_pages,
-														 num_tuples);
+														 num_tuples - nkeep);
 
 	/*
 	 * Release any remaining pin on visibility map page.

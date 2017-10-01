@@ -382,6 +382,23 @@ select tableoid::regclass::text, a, min(b) as min_b, max(b) as max_b from list_p
  part_null     |    |     1 |     1
 (9 rows)
 
+-- test \d+ output on a table which has both partitioned and unpartitioned
+-- partitions
+\d+ list_parted
+                                Table "public.list_parted"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+--------------+-------------
+ a      | text    |           |          |         | extended |              | 
+ b      | integer |           |          |         | plain    |              | 
+Partition key: LIST (lower(a))
+Partitions: part_aa_bb FOR VALUES IN ('aa', 'bb'),
+            part_cc_dd FOR VALUES IN ('cc', 'dd'),
+            part_default DEFAULT is partitioned,
+            part_ee_ff FOR VALUES IN ('ee', 'ff') is partitioned,
+            part_gg FOR VALUES IN ('gg') is partitioned,
+            part_null FOR VALUES IN (NULL),
+            part_xx_yy FOR VALUES IN ('xx', 'yy') is partitioned
+
 -- cleanup
 drop table range_parted, list_parted;
 -- test that a default partition added as the first partition accepts any value

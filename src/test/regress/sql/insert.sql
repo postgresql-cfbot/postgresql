@@ -222,6 +222,10 @@ insert into list_parted select 'gg', s.a from generate_series(1, 9) s(a);
 insert into list_parted (b) values (1);
 select tableoid::regclass::text, a, min(b) as min_b, max(b) as max_b from list_parted group by 1, 2 order by 1;
 
+-- test \d+ output on a table which has both partitioned and unpartitioned
+-- partitions
+\d+ list_parted
+
 -- cleanup
 drop table range_parted, list_parted;
 

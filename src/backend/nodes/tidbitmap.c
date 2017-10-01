@@ -279,10 +279,7 @@ tbm_create(long maxbytes, dsa_area *dsa)
 	 * for our purpose.  Also count an extra Pointer per entry for the arrays
 	 * created during iteration readout.
 	 */
-	nbuckets = maxbytes /
-		(sizeof(PagetableEntry) + sizeof(Pointer) + sizeof(Pointer));
-	nbuckets = Min(nbuckets, INT_MAX - 1);	/* safety limit */
-	nbuckets = Max(nbuckets, 16);	/* sanity limit */
+	nbuckets = tbm_calculate_entires(maxbytes);
 	tbm->maxentries = (int) nbuckets;
 	tbm->lossify_start = 0;
 	tbm->dsa = dsa;
@@ -1545,4 +1542,27 @@ pagetable_free(pagetable_hash *pagetable, void *pointer)
 		dsa_free(tbm->dsa, tbm->dsapagetableold);
 		tbm->dsapagetableold = InvalidDsaPointer;
 	}
+}
+
+/*
+ * tbm_calculate_entires
+ *
+ * Calculate the number of estimated entries in the bitmap for given memory
+ * in bytes.
+ */
+long
+tbm_calculate_entires(double maxbytes)
+{
+	long	nbuckets;
+
+	/*
+	 * Estimate number of hashtable entries we can have within maxbytes. This
+	 * estimates the hash cost as sizeof(PagetableEntry).
+	 */
+	nbuckets = maxbytes /
+		(sizeof(PagetableEntry) + sizeof(Pointer) + sizeof(Pointer));
+	nbuckets = Min(nbuckets, INT_MAX - 1);		/* safety limit */
+	nbuckets = Max(nbuckets, 16);		/* sanity limit */
+
+	return nbuckets;
 }

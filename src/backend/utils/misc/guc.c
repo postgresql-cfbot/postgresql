@@ -147,6 +147,8 @@ static bool call_string_check_hook(struct config_string *conf, char **newval,
 static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 					 void **extra, GucSource source, int elevel);
 
+static void assign_default_transaction_read_only(bool newval, void *extra);
+
 static bool check_log_destination(char **newval, void **extra, GucSource source);
 static void assign_log_destination(const char *newval, void *extra);
 
@@ -493,6 +495,7 @@ int			huge_pages;
  */
 static char *syslog_ident_str;
 static bool session_auth_is_superuser;
+static bool session_read_only;
 static double phony_random_seed;
 static char *client_encoding_string;
 static char *datestyle_string;
@@ -934,6 +937,20 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		/*
+		 * Not for general use --- used to indicate whether
+		 * the session is read-only by default.
+		 */
+		{"session_read_only", PGC_INTERNAL, UNGROUPED,
+			gettext_noop("Shows whether the session is read-only by default."),
+			NULL,
+			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&session_read_only,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"bonjour", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Enables advertising the server via Bonjour."),
 			NULL
@@ -1367,7 +1384,7 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&DefaultXactReadOnly,
 		false,
-		NULL, NULL, NULL
+		NULL, assign_default_transaction_read_only, NULL
 	},
 	{
 		{"transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
@@ -10038,6 +10055,30 @@ static void
 assign_wal_consistency_checking(const char *newval, void *extra)
 {
 	wal_consistency_checking = (bool *) extra;
+}
+
+static void
+assign_default_transaction_read_only(bool newval, void *extra)
+{
+	if (newval == DefaultXactReadOnly)
+		return;
+
+	/*
+	 * We clamp manually-set values to at least 1MB.  Since
+	 * Also set the session read-only parameter.  We only need
+	 * to set the correct value in processes that have database
+	 * sessions, but there's no mechanism to know that there's
+	 * a session.  Instead, we use the shared memory segment
+	 * pointer because the processes with database sessions are
+	 * attached to the shared memory.  Without this check,
+	 * RecoveryInProgress() would crash the processes which
+	 * are not attached to the shared memory.
+	 */
+	if (IsUnderPostmaster && UsedShmemSegAddr != NULL &&
+		RecoveryInProgress())
+		newval = true;
+	SetConfigOption("session_read_only", newval ? "on" : "off",
+					PGC_INTERNAL, PGC_S_OVERRIDE);
 }
 
 static bool

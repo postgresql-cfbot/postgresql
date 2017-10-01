@@ -1178,7 +1178,8 @@ connectOptions2(PGconn *conn)
 	if (conn->target_session_attrs)
 	{
 		if (strcmp(conn->target_session_attrs, "any") != 0
-			&& strcmp(conn->target_session_attrs, "read-write") != 0)
+			&& strcmp(conn->target_session_attrs, "read-write") != 0
+			&& strcmp(conn->target_session_attrs, "read-only") != 0)
 		{
 			conn->status = CONNECTION_BAD;
 			printfPQExpBuffer(&conn->errorMessage,
@@ -2972,10 +2973,12 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/*
-				 * If a read-write connection is required, see if we have one.
+				 * If a specific type of connection is required, see if we have one.
 				 */
-				if (conn->target_session_attrs != NULL &&
-					strcmp(conn->target_session_attrs, "read-write") == 0)
+				/* If the server version is before 10.0, issue an SQL query. */
+				if (conn->sversion < 100000 &&
+					conn->target_session_attrs != NULL &&
+					strcmp(conn->target_session_attrs, "any") != 0)
 				{
 					/*
 					 * We are yet to make a connection. Save all existing
@@ -2998,6 +3001,34 @@ keep_going:						/* We will come back to here until there is
 					conn->status = CONNECTION_CHECK_WRITABLE;
 					restoreErrorMessage(conn, &savedMessage);
 					return PGRES_POLLING_READING;
+				}
+
+				/* Otherwise, check parameter status sent by backend to avoid round-trip for a query. */
+				if (conn->target_session_attrs != NULL &&
+					((strcmp(conn->target_session_attrs, "read-write") == 0 && !conn->session_read_only) ||
+					 (strcmp(conn->target_session_attrs, "read-only") == 0 && conn->session_read_only)))
+				{
+					/* Not suitable; close connection. */
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not make a suitable "
+													"connection to server "
+													"\"%s:%s\"\n"),
+									  conn->connhost[conn->whichhost].host,
+									  conn->connhost[conn->whichhost].port);
+					conn->status = CONNECTION_OK;
+					sendTerminateConn(conn);
+					pqDropConnection(conn, true);
+
+					/* Skip any remaining addresses for this host. */
+					conn->addr_cur = NULL;
+					if (conn->whichhost + 1 < conn->nconnhost)
+					{
+						conn->status = CONNECTION_NEEDED;
+						goto keep_going;
+					}
+
+					/* No more addresses to try. So we fail. */
+					goto error_return;
 				}
 
 				/* We can release the address lists now. */
@@ -3036,10 +3067,10 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is requested check for same.
+			 * If a specific type of connection is required, see if we have one.
 			 */
 			if (conn->target_session_attrs != NULL &&
-				strcmp(conn->target_session_attrs, "read-write") == 0)
+				strcmp(conn->target_session_attrs, "any") != 0)
 			{
 				if (!saveErrorMessage(conn, &savedMessage))
 					goto error_return;
@@ -3118,9 +3149,22 @@ keep_going:						/* We will come back to here until there is
 					PQntuples(res) == 1)
 				{
 					char	   *val;
+					char	   *expected_val;
+					int			expected_len;
+
+					if (strcmp(conn->target_session_attrs, "read-write") == 0)
+					{
+						expected_val = "on";
+						expected_len = 2;
+					}
+					else
+					{
+						expected_val = "off";
+						expected_len = 3;
+					}
 
 					val = PQgetvalue(res, 0, 0);
-					if (strncmp(val, "on", 2) == 0)
+					if (strncmp(val, expected_val, expected_len) == 0)
 					{
 						const char *displayed_host;
 						const char *displayed_port;
@@ -3136,9 +3180,9 @@ keep_going:						/* We will come back to here until there is
 						PQclear(res);
 						restoreErrorMessage(conn, &savedMessage);
 
-						/* Not writable; close connection. */
+						/* Not suitable; close connection. */
 						appendPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("could not make a writable "
+										  libpq_gettext("could not make a suiteable "
 														"connection to server "
 														"\"%s:%s\"\n"),
 										  displayed_host, displayed_port);
@@ -3344,6 +3388,7 @@ makeEmptyPGconn(void)
 	conn->setenv_state = SETENV_STATE_IDLE;
 	conn->client_encoding = PG_SQL_ASCII;
 	conn->std_strings = false;	/* unless server says differently */
+	conn->session_read_only = false;	/* unless server says differently */
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;

@@ -2150,7 +2150,11 @@ LOG:  database system is ready to accept read only connections
     be equal to or greater than the value on the primary. If these parameters
     are not set high enough then the standby will refuse to start.
     Higher values can then be supplied and the server
-    restarted to begin recovery again.  These parameters are:
+    restarted to begin recovery again. If you want to increase these values you
+    should do so on all standby servers first, before applying the changes to
+    the primary. If you instead want to decrease these values you should do so
+    on the primary first, before applying the changes to all standby servers.
+    These parameters are:
 
       <itemizedlist>
        <listitem>

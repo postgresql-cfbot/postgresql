@@ -41,6 +41,7 @@
 #include "utils/ruleutils.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
+#include "utils/backend_cancel.h"
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
 
@@ -216,7 +217,7 @@ current_query(PG_FUNCTION_ARGS)
 #define SIGNAL_BACKEND_NOPERMISSION 2
 #define SIGNAL_BACKEND_NOSUPERUSER 3
 static int
-pg_signal_backend(int pid, int sig)
+pg_signal_backend(int pid, int sig, char *msg)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
 
@@ -248,6 +249,18 @@ pg_signal_backend(int pid, int sig)
 		!has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID))
 		return SIGNAL_BACKEND_NOPERMISSION;
 
+	/* If the user supplied a message to the signalled backend */
+	if (msg != NULL)
+	{
+		int		r;
+
+		r = SetBackendCancelMessage(pid, msg);
+
+		if (r != -1 && r != strlen(msg))
+			ereport(NOTICE,
+					(errmsg("message is too long and has been truncated")));
+	}
+
 	/*
 	 * Can the process we just validated above end, followed by the pid being
 	 * recycled for a new process, before reaching here?  Then we'd be trying
@@ -278,10 +291,10 @@ pg_signal_backend(int pid, int sig)
  *
  * Note that only superusers can signal superuser-owned processes.
  */
-Datum
-pg_cancel_backend(PG_FUNCTION_ARGS)
+static bool
+pg_cancel_backend_internal(pid_t pid, char *msg)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGINT);
+	int			r = pg_signal_backend(pid, SIGINT, msg);
 
 	if (r == SIGNAL_BACKEND_NOSUPERUSER)
 		ereport(ERROR,
@@ -296,16 +309,32 @@ pg_cancel_backend(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
 }
 
+Datum
+pg_cancel_backend(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(pg_cancel_backend_internal(PG_GETARG_INT32(0), NULL));
+}
+
+Datum
+pg_cancel_backend_msg(PG_FUNCTION_ARGS)
+{
+	pid_t		pid = PG_GETARG_INT32(0);
+	char 	   *msg = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	PG_RETURN_BOOL(pg_cancel_backend_internal(pid, msg));
+}
+
+
 /*
  * Signal to terminate a backend process.  This is allowed if you are a member
  * of the role whose process is being terminated.
  *
  * Note that only superusers can signal superuser-owned processes.
  */
-Datum
-pg_terminate_backend(PG_FUNCTION_ARGS)
+static bool
+pg_terminate_backend_internal(pid_t pid, char *msg)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGTERM);
+	int r = pg_signal_backend(pid, SIGTERM, msg);
 
 	if (r == SIGNAL_BACKEND_NOSUPERUSER)
 		ereport(ERROR,
@@ -317,7 +346,22 @@ pg_terminate_backend(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 (errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend"))));
 
-	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+	return (r == SIGNAL_BACKEND_SUCCESS);
+}
+
+Datum
+pg_terminate_backend(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(pg_terminate_backend_internal(PG_GETARG_INT32(0), NULL));
+}
+
+Datum
+pg_terminate_backend_msg(PG_FUNCTION_ARGS)
+{
+	pid_t		pid = PG_GETARG_INT32(0);
+	char 	   *msg = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	PG_RETURN_BOOL(pg_terminate_backend_internal(pid, msg));
 }
 
 /*

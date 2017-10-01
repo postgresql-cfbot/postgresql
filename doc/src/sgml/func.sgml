@@ -18357,7 +18357,7 @@ SELECT set_config('log_statement_stats', 'off', false);
      <tbody>
       <row>
        <entry>
-        <literal><function>pg_cancel_backend(<parameter>pid</parameter> <type>int</>)</function></literal>
+        <literal><function>pg_cancel_backend(<parameter>pid</parameter> <type>int</> [, <parameter>message</parameter> <type>text</>])</function></literal>
         </entry>
        <entry><type>boolean</type></entry>
        <entry>Cancel a backend's current query.  This is also allowed if the
@@ -18382,7 +18382,7 @@ SELECT set_config('log_statement_stats', 'off', false);
       </row>
       <row>
        <entry>
-        <literal><function>pg_terminate_backend(<parameter>pid</parameter> <type>int</>)</function></literal>
+        <literal><function>pg_terminate_backend(<parameter>pid</parameter> <type>int</> [, <parameter>message</parameter> <type>text</>])</function></literal>
         </entry>
        <entry><type>boolean</type></entry>
        <entry>Terminate a backend.  This is also allowed if the calling role
@@ -18413,6 +18413,8 @@ SELECT set_config('log_statement_stats', 'off', false);
     The role of an active backend can be found from the
     <structfield>usename</structfield> column of the
     <structname>pg_stat_activity</structname> view.
+    If the optional <literal>message</literal> parameter is set, the text
+    will be appended to the error message returned to the signalled backend.
    </para>
 
    <para>

@@ -951,6 +951,69 @@ typedef NameData *Name;
 #define unlikely(x) ((x) != 0)
 #endif
 
+/* pg_shell_sort_pass is not intended to be used outside of following macros */
+#define pg_shell_sort_pass(elem_t, cmp, off, _n, _arr) \
+	do { \
+		int _i, _j; \
+		elem_t _temp; \
+		for (_i = off; _i < _n; _i += off) \
+		{ \
+			if (cmp(_arr+_i, _arr+_i-off) >= 0) \
+				continue; \
+			_temp = _arr[_i]; \
+			_j = _i; \
+			do { \
+				_arr[_j] = _arr[_j - off]; \
+				_j -= off; \
+			} while (_j >= off && cmp(_arr+_j-off, &_temp) > 0); \
+			_arr[_j] = _temp; \
+		} \
+	} while (0)
+
+/*
+ * pg_shell_sort - sort for small arrays with inlinable comparator.
+ * Since it is implemented as a macros it could be optimized together with
+ * comparison function.
+ * Gaps are "gap(i) = smallest prime number below e^i". They are close to
+ * Incerpi & Sedwick gaps, but looks to be better in average.
+ * It is best used with array smaller than 200 elements, and could be safely
+ * used upto 1000 elements. But it degrades fast after that, and it is
+ * better to use qsort.
+ *
+ * Arguments:
+ *	 elem_t - type of array element (for declaring temporary variables)
+ *	 array	- pointer to elements to be sorted
+ *	 nitems - amount of elements to be sorted
+ *	 cmp	- comparison function that accepts address of elements
+ *			  (it is compatible with qsort comparison function).
+ *	 Note: `cmp` argument evaluates many times and has no parentheses around
+ *	 application (so it can be a macro with arguments).
+ *	 Other arguments evaluates once.
+ */
+#define pg_shell_sort(elem_t, array, nitems, cmp) \
+	do { \
+		int _n = (nitems); \
+		elem_t* _arr = (array); \
+		static const int _offsets[] = {401, 139, 53, 19, 7, 3}; \
+		int _noff, _off; \
+		for (_noff = 0; _noff < lengthof(_offsets); _noff++) { \
+			_off = _offsets[_noff]; \
+			pg_shell_sort_pass(elem_t, cmp, _off, _n, _arr); \
+		} \
+		pg_shell_sort_pass(elem_t, cmp, 1, _n, _arr); \
+	} while(0)
+
+/*
+ * pg_insertion_sort - just insertion sort for smallest array, or if
+ * array was almost sorted already. Uses same arguments as pg_shell_sort.
+ */
+#define pg_insertion_sort(elem_t, array, nitems, cmp) \
+	do { \
+		int _n = (nitems); \
+		elem_t* _arr = (array); \
+		pg_shell_sort_pass(elem_t, cmp, 1, _n, _arr); \
+	} while (0)
+
 
 /* ----------------------------------------------------------------
  *				Section 8:	random stuff

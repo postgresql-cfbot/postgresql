@@ -434,6 +434,86 @@ itemoffcompare(const void *itemidp1, const void *itemidp2)
 }
 
 /*
+ * Sort an array of itemIdSort's on itemoff, descending.
+ *
+ * It uses Shell sort. Given array is small and itemoffcompare is inlined,
+ * it is much faster than call to qsort.
+ */
+static void
+sort_itemIds_small(itemIdSort itemidbase, int nitems)
+{
+	pg_shell_sort(itemIdSortData, itemidbase, nitems, itemoffcompare);
+}
+
+/*
+ * Sort an array of itemIdSort's on itemoff, descending.
+ *
+ * It uses bucket sort:
+ * - single pass of stable prefix sort on high 8 bits
+ * - and insertion sort on buckets larger than 1 element
+ */
+static void
+sort_itemIds(itemIdSort itemidbase, int nitems)
+{
+	itemIdSortData copy[Max(MaxIndexTuplesPerPage, MaxHeapTuplesPerPage)];
+#define NSPLIT 256
+#define PREFDIV (BLCKSZ / NSPLIT)
+	/* two extra elements to emulate offset on previous step */
+	uint16		count[NSPLIT + 2] = {0};
+	int			i,
+				max,
+				total,
+				pos,
+				highbits;
+
+	Assert(nitems <= MaxIndexTuplesPerPage);
+	for (i = 0; i < nitems; i++)
+	{
+		highbits = itemidbase[i].itemoff / PREFDIV;
+		count[highbits]++;
+	}
+	/* sort in decreasing order */
+	max = total = count[NSPLIT - 1];
+	for (i = NSPLIT - 2; i >= 0; i--)
+	{
+		max |= count[i];
+		total += count[i];
+		count[i] = total;
+	}
+
+	/*
+	 * count[k+1] is start of bucket k, count[k] is end of bucket k, and
+	 * count[k] - count[k+1] is length of bucket k.
+	 */
+	Assert(count[0] == nitems);
+	for (i = 0; i < nitems; i++)
+	{
+		highbits = itemidbase[i].itemoff / PREFDIV;
+		pos = count[highbits + 1];
+		count[highbits + 1]++;
+		copy[pos] = itemidbase[i];
+	}
+	Assert(count[1] == nitems);
+
+	if (max > 1)
+	{
+		/*
+		 * count[k+2] is start of bucket k, count[k+1] is end of bucket k, and
+		 * count[k+1]-count[k+2] is length of bucket k.
+		 */
+		for (i = NSPLIT; i > 0; i--)
+		{
+			pg_insertion_sort(itemIdSortData,
+							  copy + count[i + 1],
+							  count[i] - count[i + 1],
+							  itemoffcompare);
+		}
+	}
+
+	memcpy(itemidbase, copy, sizeof(itemIdSortData) * nitems);
+}
+
+/*
  * After removing or marking some line pointers unused, move the tuples to
  * remove the gaps caused by the removed items.
  */
@@ -444,9 +524,10 @@ compactify_tuples(itemIdSort itemidbase, int nitems, Page page)
 	Offset		upper;
 	int			i;
 
-	/* sort itemIdSortData array into decreasing itemoff order */
-	qsort((char *) itemidbase, nitems, sizeof(itemIdSortData),
-		  itemoffcompare);
+	if (nitems > 48)
+		sort_itemIds(itemidbase, nitems);
+	else
+		sort_itemIds_small(itemidbase, nitems);
 
 	upper = phdr->pd_special;
 	for (i = 0; i < nitems; i++)

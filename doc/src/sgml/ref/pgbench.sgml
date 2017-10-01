@@ -1016,6 +1016,14 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
        <entry>an integer between <literal>1</> and <literal>10</></>
       </row>
       <row>
+        <entry><literal><function>random_zipfian(<replaceable>lb</>, <replaceable>ub</>, <replaceable>parameter</>)</></></>
+        <entry>integer</>
+        <entry>Zipfian-distributed random integer in <literal>[lb, ub]</>,
+              see below</>
+        <entry><literal>random_zipfian(1, 10, 1.5)</></>
+        <entry>an integer between <literal>1</> and <literal>10</></>
+      </row>
+      <row>
        <entry><literal><function>sqrt(<replaceable>x</>)</></></>
        <entry>double</>
        <entry>square root</>
@@ -1095,6 +1103,28 @@ f(x) = PHI(2.0 * parameter * (x - mu) / (max - min + 1)) /
       quartiles). The minimum <replaceable>parameter</> is 2.0 for performance
       of the Box-Muller transform.
      </para>
+    </listitem>
+    <listitem>
+        <para>
+          <literal>random_zipfian</> generates an approximated bounded zipfian
+          distribution. For <replaceable>parameter</> in (0, 1), an
+          approximated algorithm is taken from
+          "Quickly Generating Billion-Record Synthetic Databases",
+          Jim Gray et al, SIGMOD 1994. For <replaceable>parameter</>
+          in (1, 1000), a rejection method used, based on
+          "Non-Uniform Random Variate Generation", Luc Devroye, p. 550-551,
+          Springer 1986. The distribution is not defined when the parameter's
+          value is 1.0. The drawing performance is poor for parameter values
+          close and above 1.0 and on a small range.
+          
+        </para>
+        <para>
+          <replaceable>parameter</>
+          defines how skewed the distribution is. The larger the <replaceable>parameter</>, the more
+          frequently values to the beginning of the interval are drawn.
+          The closer to 0 <replaceable>parameter</> is,
+          the flatter (more uniform) the access distribution.
+        </para>
     </listitem>
    </itemizedlist>
 

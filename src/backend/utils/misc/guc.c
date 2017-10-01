@@ -3877,7 +3877,7 @@ static struct config_enum ConfigureNamesEnum[] =
 
 	{
 		{"huge_pages", PGC_POSTMASTER, RESOURCES_MEM,
-			gettext_noop("Use of huge pages on Linux."),
+			gettext_noop("Use of huge pages on Linux/Windows."),
 			NULL
 		},
 		&huge_pages,

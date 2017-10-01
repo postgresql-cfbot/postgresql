@@ -276,20 +276,16 @@ int lo_open(PGconn *conn, Oid lobjId, int mode);
     </para>
 
     <para>
-     The server currently does not distinguish between modes
-     <symbol>INV_WRITE</symbol> and <symbol>INV_READ</> <literal>|</>
-     <symbol>INV_WRITE</symbol>: you are allowed to read from the descriptor
-     in either case.  However there is a significant difference between
-     these modes and <symbol>INV_READ</> alone: with <symbol>INV_READ</>
-     you cannot write on the descriptor, and the data read from it will
-     reflect the contents of the large object at the time of the transaction
-     snapshot that was active when <function>lo_open</> was executed,
-     regardless of later writes by this or other transactions.  Reading
-     from a descriptor opened with <symbol>INV_WRITE</symbol> returns
+     With only <symbol>INV_READ</> you cannot write on the descriptor,
+     and the data read from it will reflect the contents of the large object
+     at the time of the transaction snapshot that was active when
+     <function>lo_open</> was executed, regardless of later writes by this
+     or other transactions.  Reading from a descriptor opened with
+     <symbol>INV_READ</> <literal>|</> <symbol>INV_WRITE</symbol> returns
      data that reflects all writes of other committed transactions as well
-     as writes of the current transaction.  This is similar to the behavior
-     of <literal>REPEATABLE READ</> versus <literal>READ COMMITTED</> transaction
-     modes for ordinary SQL <command>SELECT</> commands.
+     as writes of the current transaction.  This is similar to the behavior of
+     <literal>REPEATABLE READ</> versus <literal>READ COMMITTED</>
+     transaction modes for ordinary SQL <command>SELECT</> commands.
     </para>
 
     <para>

@@ -345,6 +345,7 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		switch (rel->rtekind)
 		{
 			case RTE_RELATION:
+				remove_restrictions_implied_by_constraints(root, rel, rte);
 				if (rte->relkind == RELKIND_FOREIGN_TABLE)
 				{
 					/* Foreign table */
@@ -1051,6 +1052,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			set_dummy_rel_pathlist(childrel);
 			continue;
 		}
+		remove_restrictions_implied_by_constraints(root, childrel, childRTE);
 
 		/*
 		 * CE failed, so finish copying/modifying targetlist and join quals.

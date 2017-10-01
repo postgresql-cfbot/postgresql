@@ -1414,7 +1414,8 @@ relation_excluded_by_constraints(PlannerInfo *root,
 		return true;
 
 	/* Only plain relations have constraints */
-	if (rte->rtekind != RTE_RELATION || rte->inh)
+	if (rte->rtekind != RTE_RELATION ||
+		(rte->inh && rte->relkind != RELKIND_PARTITIONED_TABLE))
 		return false;
 
 	/*

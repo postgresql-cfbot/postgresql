@@ -1456,8 +1456,10 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 		onerel = NULL;
 
 		/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
+		pgstat_progress_start_command(PROGRESS_COMMAND_CLUSTER, relid);
 		cluster_rel(relid, InvalidOid, false,
 					(options & VACOPT_VERBOSE) != 0);
+		pgstat_progress_end_command();
 	}
 	else
 		lazy_vacuum_rel(onerel, options, params, vac_strategy);

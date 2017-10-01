@@ -34,10 +34,12 @@
 #include "catalog/objectaccess.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
+#include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "optimizer/planner.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
@@ -105,6 +107,7 @@ static void reform_and_rewrite_tuple(HeapTuple tuple,
 void
 cluster(ClusterStmt *stmt, bool isTopLevel)
 {
+
 	if (stmt->relation != NULL)
 	{
 		/* This is the single-relation case. */
@@ -178,7 +181,9 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		heap_close(rel, NoLock);
 
 		/* Do the job. */
+		pgstat_progress_start_command(PROGRESS_COMMAND_CLUSTER, tableOid);
 		cluster_rel(tableOid, indexOid, false, stmt->verbose);
+		pgstat_progress_end_command();
 	}
 	else
 	{
@@ -226,7 +231,9 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 			/* functions in indexes may want a snapshot set */
 			PushActiveSnapshot(GetTransactionSnapshot());
 			/* Do the job. */
+			pgstat_progress_start_command(PROGRESS_COMMAND_CLUSTER, rvtc->tableOid);
 			cluster_rel(rvtc->tableOid, rvtc->indexOid, true, stmt->verbose);
+			pgstat_progress_end_command();
 			PopActiveSnapshot();
 			CommitTransactionCommand();
 		}
@@ -373,6 +380,19 @@ cluster_rel(Oid tableOid, Oid indexOid, bool recheck, bool verbose)
 	 * including open scans and pending AFTER trigger events.
 	 */
 	CheckTableNotInUse(OldHeap, OidIsValid(indexOid) ? "CLUSTER" : "VACUUM");
+
+	/* Set command to column */
+	if(OidIsValid(indexOid))
+	{
+		pgstat_progress_update_param(PROGRESS_CLUSTER_COMMAND, PROGRESS_CLUSTER_COMMAND_CLUSTER);
+		/* Set indexOid to column */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_SCAN_INDEX_RELID, indexOid);
+	}
+	else
+	{
+		pgstat_progress_update_param(PROGRESS_CLUSTER_COMMAND, PROGRESS_CLUSTER_COMMAND_VACUUM_FULL);
+	}
+
 
 	/* Check heap and index are valid to cluster on */
 	if (OidIsValid(indexOid))
@@ -771,6 +791,9 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	else
 		OldIndex = NULL;
 
+	/* Set reltuples to total_tuples */
+	pgstat_progress_update_param(PROGRESS_CLUSTER_TOTAL_HEAP_TUPLES, OldHeap->rd_rel->reltuples);
+
 	/*
 	 * Their tuple descriptors should be exactly alike, but here we only need
 	 * assume that they have the same number of columns.
@@ -902,12 +925,16 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	 */
 	if (OldIndex != NULL && !use_sort)
 	{
+		pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_SCAN_HEAP_AND_WRITE_NEW_HEAP);
+		pgstat_progress_update_param(PROGRESS_CLUSTER_SCAN_METHOD, PROGRESS_CLUSTER_METHOD_INDEX_SCAN);
 		heapScan = NULL;
 		indexScan = index_beginscan(OldHeap, OldIndex, SnapshotAny, 0, 0);
 		index_rescan(indexScan, NULL, 0, NULL, 0);
 	}
 	else
 	{
+		pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_SCAN_HEAP);
+		pgstat_progress_update_param(PROGRESS_CLUSTER_SCAN_METHOD, PROGRESS_CLUSTER_METHOD_SEQ_SCAN);
 		heapScan = heap_beginscan(OldHeap, SnapshotAny, 0, (ScanKey) NULL);
 		indexScan = NULL;
 	}
@@ -1028,6 +1055,9 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 				tups_vacuumed += 1;
 				tups_recently_dead -= 1;
 			}
+			/* set tups_vacuumed and tups_recently_dead to columns for VACUUM FULL */
+			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_VACUUMED, tups_vacuumed);
+			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_RECENTLY_DEAD, tups_recently_dead);
 			continue;
 		}
 
@@ -1039,6 +1069,9 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 									 oldTupDesc, newTupDesc,
 									 values, isnull,
 									 NewHeap->rd_rel->relhasoids, rwstate);
+
+		/* Regardless of index scan or seq scan, update tuples_scanned column */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_SCANNED, num_tuples);
 	}
 
 	if (indexScan != NULL)
@@ -1052,8 +1085,15 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	 */
 	if (tuplesort != NULL)
 	{
+		double num_tuples = 0;
+
+		/* Report that we are now sorting tuples */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_SORT_TUPLES);
 		tuplesort_performsort(tuplesort);
 
+		/* Report that we are now writing new heap */
+		pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_WRITE_NEW_HEAP);
+		pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_SCANNED, num_tuples);
 		for (;;)
 		{
 			HeapTuple	tuple;
@@ -1064,10 +1104,13 @@ copy_heap_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 			if (tuple == NULL)
 				break;
 
+			num_tuples += 1;
 			reform_and_rewrite_tuple(tuple,
 									 oldTupDesc, newTupDesc,
 									 values, isnull,
 									 NewHeap->rd_rel->relhasoids, rwstate);
+
+			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_SCANNED, num_tuples);
 		}
 
 		tuplesort_end(tuplesort);
@@ -1480,6 +1523,11 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	int			reindex_flags;
 	int			i;
 
+	/* Report that we are now swapping relation files */
+	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_SWAP_REL_FILES);
+	/* Set scan_method to NULL */
+	pgstat_progress_update_param(PROGRESS_CLUSTER_SCAN_METHOD, -1);
+
 	/* Zero out possible results from swapped_relation_files */
 	memset(mapped_tables, 0, sizeof(mapped_tables));
 
@@ -1514,6 +1562,10 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	 * because the new heap won't contain any HOT chains at all, let alone
 	 * broken ones, so it can't be necessary to set indcheckxmin.
 	 */
+
+	/* Report that we are now reindexing relations */
+	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
+
 	reindex_flags = REINDEX_REL_SUPPRESS_INDEX_USE;
 	if (check_constraints)
 		reindex_flags |= REINDEX_REL_CHECK_CONSTRAINTS;
@@ -1528,6 +1580,9 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 		reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
 
 	reindex_relation(OIDOldHeap, reindex_flags, 0);
+
+	/* Report that we are now doing clean up */
+	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE, PROGRESS_CLUSTER_PHASE_FINAL_CLEANUP);
 
 	/*
 	 * If the relation being rebuild is pg_class, swap_relation_files()

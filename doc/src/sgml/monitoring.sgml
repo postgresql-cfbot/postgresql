@@ -332,6 +332,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       </entry>
      </row>
 
+     <row>
+      <entry><structname>pg_stat_progress_cluster</><indexterm><primary>pg_stat_progress_cluster</primary></indexterm></entry>
+      <entry>One row for each backend running
+       <command>CLUSTER</> and <command>VACUUM FULL</>, showing current progress.
+       See <xref linkend='cluster-progress-reporting'>.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -3241,9 +3249,9 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
 
   <para>
    <productname>PostgreSQL</> has the ability to report the progress of
-   certain commands during command execution.  Currently, the only command
-   which supports progress reporting is <command>VACUUM</>.  This may be
-   expanded in the future.
+   certain commands during command execution.  Currently, the suppoted 
+   progress reporting commands are <command>VACUUM</> and <command>CLUSTER</>.
+   This may be expanded in the future.
   </para>
 
  <sect2 id="vacuum-progress-reporting">
@@ -3255,9 +3263,8 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
    one row for each backend (including autovacuum worker processes) that is
    currently vacuuming.  The tables below describe the information
    that will be reported and provide information about how to interpret it.
-   Progress reporting is not currently supported for <command>VACUUM FULL</>
-   and backends running <command>VACUUM FULL</> will not be listed in this
-   view.
+   Running <command>VACUUM FULL</> is listed in <structname>pg_stat_progress_cluster</structname>
+   view because it uses <command>CLUSTER</> command. See <xref linkend='cluster-progress-reporting'>.
   </para>
 
   <table id="pg-stat-progress-vacuum-view" xreflabel="pg_stat_progress_vacuum">
@@ -3428,6 +3435,228 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
        <command>VACUUM</> will vacuum the free space map, update statistics
        in <literal>pg_class</>, and report statistics to the statistics
        collector.  When this phase is completed, <command>VACUUM</> will end.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
+ <sect2 id="cluster-progress-reporting">
+  <title>CLUSTER Progress Reporting</title>
+
+  <para>
+   Whenever <command>CLUSTER</> is running, the
+   <structname>pg_stat_progress_cluster</structname> view will contain
+   one row for each backend that is currently clustering or vacuuming (VACUUM FULL). 
+   The tables below describe the information that will be reported and
+   provide information about how to interpret it.
+  </para>
+
+  <table id="pg-stat-progress-cluster-view" xreflabel="pg_stat_progress_cluster">
+   <title><structname>pg_stat_progress_cluster</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</></entry>
+     <entry><type>integer</></entry>
+     <entry>Process ID of backend.</entry>
+    </row>
+    <row>
+     <entry><structfield>datid</></entry>
+     <entry><type>oid</></entry>
+     <entry>OID of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>datname</></entry>
+     <entry><type>name</></entry>
+     <entry>Name of the database to which this backend is connected.</entry>
+    </row>
+    <row>
+     <entry><structfield>relid</></entry>
+     <entry><type>oid</></entry>
+     <entry>OID of the table being clustered.</entry>
+    </row>
+    <row>
+     <entry><structfield>command</></entry>
+     <entry><type>text</></entry>
+     <entry>
+       Current processing command: CLUSTER/VACUUM FULL.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>phase</></entry>
+     <entry><type>text</></entry>
+     <entry>
+       Current processing phase of cluster/vacuum full.  See <xref linkend='cluster-phases'> or <xref linkend='vacuum-full-phases'>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>scan_method</></entry>
+     <entry><type>text</></entry>
+     <entry>
+       Scan method of table: index scan/seq scan.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>scan_index_relid</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       OID of the index.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_tuples_total</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       Total number of heap tuples in the table.  This number is reported
+       as of the beginning of the scan; tuples added later will not be (and
+       need not be) visited by this <command>CLUSTER</> and <command>VACUUM FULL</>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_tuples_scanned</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       Number of heap tuples scanned.
+       This counter only advances when the phase is <literal>scanning heap</>, 
+       <literal>writing new heap</> and <literal>scan heap and write new heap</>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_tuples_vacuumed</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       Number of heap tuples vacuumed. This counter only advances when the
+       command is <literal>VACUUM FULL</> and the phase is <literal>scanning heap</>.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>heap_tuples_recently_dead</></entry>
+     <entry><type>bigint</></entry>
+     <entry>
+       Number of heap tuples not vacuumed since these tuples marked recently dead.
+       This counter only advances when the command is <literal>VACUUM FULL</> and 
+       the phase is <literal>scanning heap</>.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <table id="cluster-phases">
+   <title>CLUSTER phases</title>
+   <tgroup cols="2">
+    <thead>
+    <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><literal>initializing</literal></entry>
+     <entry>
+       <command>CLUSTER</> is preparing to begin scanning the heap.  This
+       phase is expected to be very brief.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>scanning heap</literal></entry>
+     <entry>
+       <command>CLUSTER</> is currently scanning heap from the table by
+       seq scan. This phase is shown when the <structfield>scan_method</> is seq scan.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>sorting tuples</literal></entry>
+     <entry>
+       <command>CLUSTER</> is currently sorting tuples. 
+       This phase is shown when the <structfield>scan_method</> is seq scan.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>scan heap and write new heap</literal></entry>
+     <entry>
+       <command>CLUSTER</> is currently scanning heap from the table and
+       writing new clusterd heap.  This phase is shown when the <structfield>scan_method</> is
+       index scan.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>swapping relation files</literal></entry>
+     <entry>
+       <command>CLUSTER</> is currently swapping old heap and new clustered heap.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>rebuilding index</literal></entry>
+     <entry>
+       <command>CLUSTER</> is currently rebuilding index.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>performing final cleanup</literal></entry>
+     <entry>
+       <command>CLUSTER</> is performing final cleanup.  When this phase is 
+       completed, <command>CLUSTER</> will end.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <table id="vacuum-full-phases">
+   <title>VACUUM FULL phases</title>
+   <tgroup cols="2">
+    <thead>
+    <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><literal>initializing</literal></entry>
+     <entry>
+       <command>VACUUM FULL</> is preparing to begin scanning the heap.  This
+       phase is expected to be very brief.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>scanning heap</literal></entry>
+     <entry>
+       <command>VACUUM FULL</> is currently scanning heap from the table.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>swapping relation files</literal></entry>
+     <entry>
+       <command>VACUUM FULL</> is currently swapping old heap and new vacuumed heap.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>rebuilding index</literal></entry>
+     <entry>
+       <command>VACUUM FULL</> is currently rebuilding index.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>performing final cleanup</literal></entry>
+     <entry>
+       <command>VACUUM FULL</> is performing final cleanup.  When this phase is
+       completed, <command>VACUUM FULL</> will end.
      </entry>
     </row>
    </tbody>

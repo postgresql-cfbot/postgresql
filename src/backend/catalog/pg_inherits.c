@@ -126,19 +126,6 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
 		{
 			/* Get the lock to synchronize against concurrent drop */
 			LockRelationOid(inhrelid, lockmode);
-
-			/*
-			 * Now that we have the lock, double-check to see if the relation
-			 * really exists or not.  If not, assume it was dropped while we
-			 * waited to acquire lock, and ignore it.
-			 */
-			if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(inhrelid)))
-			{
-				/* Release useless lock */
-				UnlockRelationOid(inhrelid, lockmode);
-				/* And ignore this relation */
-				continue;
-			}
 		}
 
 		list = lappend_oid(list, inhrelid);

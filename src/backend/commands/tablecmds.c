@@ -1120,10 +1120,10 @@ RemoveRelations(DropStmt *drop)
 }
 
 /*
- * Before acquiring a table lock, check whether we have sufficient rights.
- * In the case of DROP INDEX, also try to lock the table before the index.
- * Also, if the table to be dropped is a partition, we try to lock the parent
- * first.
+ * Before acquiring a table lock, check whether we have sufficient rights.  In
+ * the case of DROP INDEX, also try to lock the table before the index.  Also,
+ * if the table to be dropped is a partition or inheritance children, we try
+ * to lock the parent first.
  */
 static void
 RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
@@ -1228,6 +1228,26 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 		state->partParentOid = get_partition_parent(relOid);
 		if (OidIsValid(state->partParentOid))
 			LockRelationOid(state->partParentOid, AccessExclusiveLock);
+	}
+
+	/* the same for all inheritance parents */
+	if (relOid != oldRelOid)
+	{
+		Relation	inhrel;
+		SysScanDesc	scan;
+		HeapTuple	inhtup;
+
+		inhrel = heap_open(InheritsRelationId, AccessShareLock);
+		scan = systable_beginscan(inhrel, InvalidOid, false, NULL, 0, NULL);
+		while (HeapTupleIsValid(inhtup = systable_getnext(scan)))
+		{
+			Form_pg_inherits inh = (Form_pg_inherits) GETSTRUCT(inhtup);
+
+			if (inh->inhrelid == relOid && OidIsValid(inh->inhparent))
+				LockRelationOid(inh->inhparent, AccessExclusiveLock);
+		}
+		systable_endscan(scan);
+		heap_close(inhrel, AccessShareLock);
 	}
 }
 
@@ -13175,7 +13195,28 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 		reltype = ((AlterObjectSchemaStmt *) stmt)->objectType;
 
 	else if (IsA(stmt, AlterTableStmt))
-		reltype = ((AlterTableStmt *) stmt)->relkind;
+	{
+		AlterTableStmt *alterstmt = (AlterTableStmt *)stmt;
+		ListCell *lc;
+
+		reltype = alterstmt->relkind;
+
+		foreach (lc, alterstmt->cmds)
+		{
+			AlterTableCmd *cmd = lfirst_node(AlterTableCmd, lc);
+			Assert(IsA(cmd, AlterTableCmd));
+
+			/*
+			 * Though NO INHERIT doesn't modify the parent, concurrent
+			 * expansion of inheritances will see a false child. We must
+			 * acquire lock on the parent when dropping inheritance, but no
+			 * need to ascend further.
+			 */
+			if (cmd->subtype == AT_DropInherit)
+				RangeVarGetRelid((RangeVar *)cmd->def,
+								 AccessExclusiveLock, false);
+		}
+	}
 	else
 	{
 		reltype = OBJECT_TABLE; /* placate compiler */

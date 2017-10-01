@@ -136,12 +136,15 @@ SELECT count(*) FROM tenk2;
 (1 row)
 
 -- do an indexscan
+-- disable bitmap scan because it can skip fetching the heap tuples
+SET enable_bitmapscan to OFF;
 SELECT count(*) FROM tenk2 WHERE unique1 = 1;
  count 
 -------
      1
 (1 row)
 
+SET enable_bitmapscan to ON;
 -- We can't just call wait_for_stats() at this point, because we only
 -- transmit stats when the session goes idle, and we probably didn't
 -- transmit the last couple of counts yet thanks to the rate-limiting logic

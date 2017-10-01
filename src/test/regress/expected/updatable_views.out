@@ -1658,20 +1658,22 @@ UPDATE rw_view1 SET a = a + 5; -- should fail
 ERROR:  new row violates check option for view "rw_view1"
 DETAIL:  Failing row contains (15).
 EXPLAIN (costs off) INSERT INTO rw_view1 VALUES (5);
-                          QUERY PLAN                           
----------------------------------------------------------------
+                      QUERY PLAN                       
+-------------------------------------------------------
  Insert on base_tbl b
    ->  Result
          SubPlan 1
-           ->  Index Only Scan using ref_tbl_pkey on ref_tbl r
-                 Index Cond: (a = b.a)
+           ->  Bitmap Heap Scan on ref_tbl r
+                 Recheck Cond: (a = b.a)
+                 ->  Bitmap Index Scan on ref_tbl_pkey
+                       Index Cond: (a = b.a)
          SubPlan 2
            ->  Seq Scan on ref_tbl r_1
-(7 rows)
+(9 rows)
 
 EXPLAIN (costs off) UPDATE rw_view1 SET a = a + 5;
-                           QUERY PLAN                            
------------------------------------------------------------------
+                      QUERY PLAN                       
+-------------------------------------------------------
  Update on base_tbl b
    ->  Hash Join
          Hash Cond: (b.a = r.a)
@@ -1679,11 +1681,13 @@ EXPLAIN (costs off) UPDATE rw_view1 SET a = a + 5;
          ->  Hash
                ->  Seq Scan on ref_tbl r
          SubPlan 1
-           ->  Index Only Scan using ref_tbl_pkey on ref_tbl r_1
-                 Index Cond: (a = b.a)
+           ->  Bitmap Heap Scan on ref_tbl r_1
+                 Recheck Cond: (a = b.a)
+                 ->  Bitmap Index Scan on ref_tbl_pkey
+                       Index Cond: (a = b.a)
          SubPlan 2
            ->  Seq Scan on ref_tbl r_2
-(11 rows)
+(13 rows)
 
 DROP TABLE base_tbl, ref_tbl CASCADE;
 NOTICE:  drop cascades to view rw_view1
@@ -2024,24 +2028,28 @@ EXPLAIN (costs off) DELETE FROM rw_view1 WHERE id = 1 AND snoop(data);
 DELETE FROM rw_view1 WHERE id = 1 AND snoop(data);
 NOTICE:  snooped value: Row 1
 EXPLAIN (costs off) INSERT INTO rw_view1 VALUES (2, 'New row 2');
-                        QUERY PLAN                         
------------------------------------------------------------
+                       QUERY PLAN                       
+--------------------------------------------------------
  Insert on base_tbl
    InitPlan 1 (returns $0)
-     ->  Index Only Scan using base_tbl_pkey on base_tbl t
-           Index Cond: (id = 2)
+     ->  Bitmap Heap Scan on base_tbl t
+           Recheck Cond: (id = 2)
+           ->  Bitmap Index Scan on base_tbl_pkey
+                 Index Cond: (id = 2)
    ->  Result
          One-Time Filter: ($0 IS NOT TRUE)
  
  Update on base_tbl
    InitPlan 1 (returns $0)
-     ->  Index Only Scan using base_tbl_pkey on base_tbl t
-           Index Cond: (id = 2)
+     ->  Bitmap Heap Scan on base_tbl t
+           Recheck Cond: (id = 2)
+           ->  Bitmap Index Scan on base_tbl_pkey
+                 Index Cond: (id = 2)
    ->  Result
          One-Time Filter: $0
          ->  Index Scan using base_tbl_pkey on base_tbl
                Index Cond: (id = 2)
-(15 rows)
+(19 rows)
 
 INSERT INTO rw_view1 VALUES (2, 'New row 2');
 SELECT * FROM base_tbl;

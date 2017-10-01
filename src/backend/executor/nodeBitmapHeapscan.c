@@ -39,6 +39,7 @@
 
 #include "access/relscan.h"
 #include "access/transam.h"
+#include "access/visibilitymap.h"
 #include "executor/execdebug.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "miscadmin.h"
@@ -225,9 +226,25 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			}
 
 			/*
-			 * Fetch the current heap page and identify candidate tuples.
+			 * If we don't need the tuple contents and are only counting them,
+			 * we can skip fetching the page if the bitmap doesn't need rechecking
+			 * and all tuples on the page are visible to our transaction
 			 */
-			bitgetpage(scan, tbmres);
+			node->bhs_nofetch = !tbmres->recheck
+				&& node->ss.ps.qual == NULL
+				&& node->ss.ps.plan->targetlist == NIL
+				&& VM_ALL_VISIBLE(node->ss.ss_currentRelation, tbmres->blockno,
+								  &node->bhs_vmbuffer);
+
+			if (node->bhs_nofetch)
+				scan->rs_ntuples = tbmres->ntuples;
+			else
+			{
+				/*
+				 * Fetch the current heap page and identify candidate tuples.
+				 */
+				bitgetpage(scan, tbmres);
+			}
 
 			if (tbmres->ntuples >= 0)
 				node->exact_pages++;
@@ -289,45 +306,58 @@ BitmapHeapNext(BitmapHeapScanState *node)
 		 */
 		BitmapPrefetch(node, scan);
 
-		/*
-		 * Okay to fetch the tuple
-		 */
-		targoffset = scan->rs_vistuples[scan->rs_cindex];
-		dp = (Page) BufferGetPage(scan->rs_cbuf);
-		lp = PageGetItemId(dp, targoffset);
-		Assert(ItemIdIsNormal(lp));
 
-		scan->rs_ctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
-		scan->rs_ctup.t_len = ItemIdGetLength(lp);
-		scan->rs_ctup.t_tableOid = scan->rs_rd->rd_id;
-		ItemPointerSet(&scan->rs_ctup.t_self, tbmres->blockno, targoffset);
-
-		pgstat_count_heap_fetch(scan->rs_rd);
-
-		/*
-		 * Set up the result slot to point to this tuple. Note that the slot
-		 * acquires a pin on the buffer.
-		 */
-		ExecStoreTuple(&scan->rs_ctup,
-					   slot,
-					   scan->rs_cbuf,
-					   false);
-
-		/*
-		 * If we are using lossy info, we have to recheck the qual conditions
-		 * at every tuple.
-		 */
-		if (tbmres->recheck)
+		if (node->bhs_nofetch)
 		{
-			econtext->ecxt_scantuple = slot;
-			ResetExprContext(econtext);
+			/*
+			 * If we don't have to fetch the tuple, just return a
+			 * bogus one 
+			 */
+			slot->tts_isempty = false;
+			slot->tts_nvalid = 0;
+		}
+		else
+		{
+			/*
+			 * Okay to fetch the tuple
+			 */
+			targoffset = scan->rs_vistuples[scan->rs_cindex];
+			dp = (Page) BufferGetPage(scan->rs_cbuf);
+			lp = PageGetItemId(dp, targoffset);
+			Assert(ItemIdIsNormal(lp));
 
-			if (!ExecQual(node->bitmapqualorig, econtext))
+			scan->rs_ctup.t_data = (HeapTupleHeader) PageGetItem((Page) dp, lp);
+			scan->rs_ctup.t_len = ItemIdGetLength(lp);
+			scan->rs_ctup.t_tableOid = scan->rs_rd->rd_id;
+			ItemPointerSet(&scan->rs_ctup.t_self, tbmres->blockno, targoffset);
+
+			pgstat_count_heap_fetch(scan->rs_rd);
+
+			/*
+			 * Set up the result slot to point to this tuple. Note that the slot
+			 * acquires a pin on the buffer.
+			 */
+			ExecStoreTuple(&scan->rs_ctup,
+						   slot,
+						   scan->rs_cbuf,
+						   false);
+
+			/*
+			 * If we are using lossy info, we have to recheck the qual conditions
+			 * at every tuple.
+			 */
+			if (tbmres->recheck)
 			{
-				/* Fails recheck, so drop it and loop back for another */
-				InstrCountFiltered2(node, 1);
-				ExecClearTuple(slot);
-				continue;
+				econtext->ecxt_scantuple = slot;
+				ResetExprContext(econtext);
+
+				if (!ExecQual(node->bitmapqualorig, econtext))
+				{
+					/* Fails recheck, so drop it and loop back for another */
+					InstrCountFiltered2(node, 1);
+					ExecClearTuple(slot);
+					continue;
+				}
 			}
 		}
 
@@ -573,6 +603,15 @@ BitmapPrefetch(BitmapHeapScanState *node, HeapScanDesc scan)
 #ifdef USE_PREFETCH
 	ParallelBitmapHeapState *pstate = node->pstate;
 
+	if (node->bhs_nofetch)
+	{
+		/*
+		 * If we did not need to fetch the current page,
+		 * we probably will not need to fetch the next.
+		 */
+		return;
+	}
+
 	if (pstate == NULL)
 	{
 		TBMIterator *prefetch_iterator = node->prefetch_iterator;
@@ -761,6 +800,11 @@ ExecEndBitmapHeapScan(BitmapHeapScanState *node)
 	if (node->shared_prefetch_iterator)
 		tbm_end_shared_iterate(node->shared_prefetch_iterator);
 
+	if (node->bhs_vmbuffer != InvalidBuffer)
+	{
+		ReleaseBuffer(node->bhs_vmbuffer);
+	}
+
 	/*
 	 * close heap scan
 	 */
@@ -810,6 +854,8 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	scanstate->prefetch_iterator = NULL;
 	scanstate->prefetch_pages = 0;
 	scanstate->prefetch_target = 0;
+	scanstate->bhs_vmbuffer = InvalidBuffer;
+	scanstate->bhs_nofetch = false;
 	/* may be updated below */
 	scanstate->prefetch_maximum = target_prefetch_pages;
 	scanstate->pscan_len = 0;

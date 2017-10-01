@@ -778,6 +778,13 @@ use_physical_tlist(PlannerInfo *root, Path *path, int flags)
 		return false;
 
 	/*
+	 * If the tlist is empty, keep it as is, so that the
+	 * bitmap heap scan could try skipping heap page fetches.
+	 */
+	if (path->pathtarget->exprs == NIL)
+		return false;
+
+	/*
 	 * We can do this for real relation scans, subquery scans, function scans,
 	 * tablefunc scans, values scans, and CTE scans (but not for, eg, joins).
 	 */

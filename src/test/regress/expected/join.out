@@ -3746,7 +3746,6 @@ where tt1.f1 = ss1.c0;
                      Output: tt1.f1
                      Filter: (tt1.f1 = 'foo'::text)
                ->  Seq Scan on public.text_tbl tt2
-                     Output: tt2.f1
          ->  Materialize
                Output: tt4.f1
                ->  Nested Loop Left Join
@@ -3765,7 +3764,7 @@ where tt1.f1 = ss1.c0;
                Output: (tt4.f1)
                ->  Seq Scan on public.text_tbl tt5
                      Output: tt4.f1
-(29 rows)
+(28 rows)
 
 select 1 from
   text_tbl as tt1

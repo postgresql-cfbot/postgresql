@@ -275,7 +275,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		SecLabelStmt SelectStmt TransactionStmt TruncateStmt
 		UnlistenStmt UpdateStmt VacuumStmt
 		VariableResetStmt VariableSetStmt VariableShowStmt
-		ViewStmt CheckPointStmt CreateConversionStmt
+		ViewStmt WaitLSNStmt CheckPointStmt CreateConversionStmt
 		DeallocateStmt PrepareStmt ExecuteStmt
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
@@ -322,7 +322,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	OptSchemaEltList
 
 %type <boolean> TriggerForSpec TriggerForType
-%type <ival>	TriggerActionTime
+%type <ival>	TriggerActionTime WaitDelay
 %type <list>	TriggerEvents TriggerOneEvent
 %type <value>	TriggerFuncArg
 %type <node>	TriggerWhen
@@ -682,7 +682,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
 	VERBOSE VERSION_P VIEW VIEWS VOLATILE
 
-	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
+	WAITLSN WAITLSN_INFINITE WAITLSN_NO_WAIT WHEN WHERE WHITESPACE_P WINDOW
+	WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
 	XML_P XMLATTRIBUTES XMLCONCAT XMLELEMENT XMLEXISTS XMLFOREST XMLNAMESPACES
 	XMLPARSE XMLPI XMLROOT XMLSERIALIZE XMLTABLE
@@ -933,6 +934,7 @@ stmt :
 			| VariableSetStmt
 			| VariableShowStmt
 			| ViewStmt
+			| WaitLSNStmt
 			| /*EMPTY*/
 				{ $$ = NULL; }
 		;
@@ -13848,7 +13850,41 @@ frame_bound:
 				}
 		;
 
+/*****************************************************************************
+ *
+ *		QUERY:
+ *				WAITLSN <LSN> can appear as a query-level command
+ *
+ *
+ *****************************************************************************/
 
+WaitLSNStmt:
+			WAITLSN Sconst WaitDelay
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = $3;
+					$$ = (Node *)n;
+				}
+			| WAITLSN_INFINITE Sconst
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = 0;
+					$$ = (Node *)n;
+				}
+			| WAITLSN_NO_WAIT Sconst
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = 1;
+					$$ = (Node *)n;
+				}
+		;
+WaitDelay:
+			',' Iconst							{ $$ = $2; }
+			| /*EMPTY*/							{ $$ = 0; }
+		;
 /*
  * Supporting nonterminals for expressions.
  */
@@ -14885,6 +14921,9 @@ unreserved_keyword:
 			| VIEW
 			| VIEWS
 			| VOLATILE
+			| WAITLSN
+			| WAITLSN_INFINITE
+			| WAITLSN_NO_WAIT
 			| WHITESPACE_P
 			| WITHIN
 			| WITHOUT

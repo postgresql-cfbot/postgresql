@@ -3016,6 +3016,24 @@ typedef struct LoadStmt
 	char	   *filename;		/* file to load */
 } LoadStmt;
 
+
+/*
+ * DBSpecType - The type of a database name.
+ */
+typedef enum DBSpecNameType
+{
+	DBSPEC_CSTRING,				/* database name is stored as a C string */
+	DBSPEC_CURRENT_DATABASE		/* database name is CURRENT_DATABASE */
+} DBSpecNameType;
+
+typedef struct DBSpecName
+{
+	NodeTag			type;
+	DBSpecNameType 	dbnametype;		/* Type of the database */
+	char	   		*dbname;		/* filled only for DBSPEC_CSTRING */
+	int				location;		/* token location, or -1 if unknown */
+} DBSpecName;
+
 /* ----------------------
  *		Createdb Statement
  * ----------------------
@@ -3034,14 +3052,14 @@ typedef struct CreatedbStmt
 typedef struct AlterDatabaseStmt
 {
 	NodeTag		type;
-	char	   *dbname;			/* name of database to alter */
-	List	   *options;		/* List of DefElem nodes */
+	Node		*dbspec;		/* name of database to alter, DBSpecName */
+	List	   	*options;		/* List of DefElem nodes */
 } AlterDatabaseStmt;
 
 typedef struct AlterDatabaseSetStmt
 {
 	NodeTag		type;
-	char	   *dbname;			/* database name */
+	Node	   *dbspec;			/* database name, DBSpecName */
 	VariableSetStmt *setstmt;	/* SET or RESET subcommand */
 } AlterDatabaseSetStmt;
 

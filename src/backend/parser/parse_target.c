@@ -1873,6 +1873,10 @@ FigureColnameInternal(Node *node, char **name)
 				case SVFOP_CURRENT_SCHEMA:
 					*name = "current_schema";
 					return 2;
+				case SVFOP_CURRENT_DATABASE:
+					*name = "current_database";
+					return 2;
+
 			}
 			break;
 		case T_XmlExpr:

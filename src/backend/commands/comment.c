@@ -52,13 +52,20 @@ CommentObject(CommentStmt *stmt)
 	 */
 	if (stmt->objtype == OBJECT_DATABASE)
 	{
-		char	   *database = strVal((Value *) stmt->object);
+		char		*dbname = NULL;
+		DBSpecName	*dbspecname = NULL;
 
-		if (!OidIsValid(get_database_oid(database, true)))
+		dbspecname = (DBSpecName*)stmt->object;
+
+		if (dbspecname->dbnametype == DBSPEC_CURRENT_DATABASE )
+			dbname = get_database_name(MyDatabaseId);
+		else
+			dbname = dbspecname->dbname;
+		if (!OidIsValid(get_database_oid(dbname, true)))
 		{
 			ereport(WARNING,
 					(errcode(ERRCODE_UNDEFINED_DATABASE),
-					 errmsg("database \"%s\" does not exist", database)));
+					 errmsg("database \"%s\" does not exist", dbname)));
 			return address;
 		}
 	}

@@ -721,7 +721,8 @@ const ObjectAddress InvalidObjectAddress =
 	InvalidOid,
 	0
 };
-
+static ObjectAddress get_object_address_database(ObjectType objtype,
+								DBSpecName * object, bool missing_ok);
 static ObjectAddress get_object_address_unqualified(ObjectType objtype,
 							   Value *strval, bool missing_ok);
 static ObjectAddress get_relation_by_qualified_name(ObjectType objtype,
@@ -865,6 +866,8 @@ get_object_address(ObjectType objtype, Node *object,
 				}
 				break;
 			case OBJECT_DATABASE:
+				address = get_object_address_database(objtype, (DBSpecName*)object, missing_ok);
+				break;
 			case OBJECT_EXTENSION:
 			case OBJECT_TABLESPACE:
 			case OBJECT_ROLE:
@@ -1104,6 +1107,28 @@ get_object_address_rv(ObjectType objtype, RangeVar *rel, List *object,
 
 	return get_object_address(objtype, (Node *) object,
 							  relp, lockmode, missing_ok);
+}
+
+/*
+ * Find an ObjectAddress for a type of object that is identified by an
+ * database name
+ */
+static ObjectAddress
+get_object_address_database(ObjectType objtype, DBSpecName * object, bool missing_ok)
+{
+	char			*dbname;
+	ObjectAddress 	address;
+
+	if (object && object->dbnametype == DBSPEC_CURRENT_DATABASE )
+		dbname = get_database_name(MyDatabaseId);
+	else
+		dbname = object->dbname;
+
+	address.classId = DatabaseRelationId;
+	address.objectId = get_database_oid(dbname, missing_ok);
+	address.objectSubId = 0;
+
+	return address;
 }
 
 /*
@@ -2241,8 +2266,20 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 			break;
 		case OBJECT_DATABASE:
 			if (!pg_database_ownercheck(address.objectId, roleid))
-				aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,
-							   strVal((Value *) object));
+			{
+				char 		*dbname;
+				DBSpecName 	*dbspecname;
+
+				/* Format is valid, extract the actual name. */
+				dbspecname = (DBSpecName*)object;
+
+				if (dbspecname->dbnametype == DBSPEC_CURRENT_DATABASE )
+					dbname = get_database_name(MyDatabaseId);
+				else
+					dbname = dbspecname->dbname;
+
+				aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,dbname);
+			}
 			break;
 		case OBJECT_TYPE:
 		case OBJECT_DOMAIN:

@@ -187,7 +187,7 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
-
+static Node *makeDBSpecName(DBSpecNameType type, int location);
 %}
 
 %pure-parser
@@ -570,6 +570,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				opt_frame_clause frame_extent frame_bound
 %type <str>		opt_existing_window_name
 %type <boolean> opt_if_not_exists
+%type <node>	db_spec_name
 %type <ival>	generated_when override_kind
 %type <partspec>	PartitionSpec OptPartitionSpec
 %type <str>			part_strategy
@@ -614,7 +615,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	COMMITTED CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
 	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREATE
 	CROSS CSV CUBE CURRENT_P
-	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
+	CURRENT_CATALOG CURRENT_DATABASE CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
@@ -6293,6 +6294,14 @@ CommentStmt:
 					n->comment = $6;
 					$$ = (Node *) n;
 				}
+			| COMMENT ON DATABASE db_spec_name IS comment_text
+				{
+					CommentStmt *n = makeNode(CommentStmt);
+					n->objtype = OBJECT_DATABASE;
+					n->object = (Node *) $4;
+					n->comment = $6;
+					$$ = (Node *) n;
+				}
 			| COMMENT ON TYPE_P Typename IS comment_text
 				{
 					CommentStmt *n = makeNode(CommentStmt);
@@ -6441,7 +6450,6 @@ comment_type_any_name:
 /* object types taking name */
 comment_type_name:
 			ACCESS METHOD						{ $$ = OBJECT_ACCESS_METHOD; }
-			| DATABASE							{ $$ = OBJECT_DATABASE; }
 			| EVENT TRIGGER						{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION							{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER			{ $$ = OBJECT_FDW; }
@@ -6487,6 +6495,16 @@ SecLabelStmt:
 					n->provider = $3;
 					n->objtype = $5;
 					n->object = (Node *) makeString($6);
+					n->label = $8;
+					$$ = (Node *) n;
+				}
+			| SECURITY LABEL opt_provider ON DATABASE db_spec_name
+			IS security_label
+				{
+					SecLabelStmt *n = makeNode(SecLabelStmt);
+					n->provider = $3;
+					n->objtype = OBJECT_DATABASE;
+					n->object = (Node *) $6;
 					n->label = $8;
 					$$ = (Node *) n;
 				}
@@ -6558,8 +6576,7 @@ security_label_type_any_name:
 
 /* object types taking name */
 security_label_type_name:
-			DATABASE							{ $$ = OBJECT_DATABASE; }
-			| EVENT TRIGGER						{ $$ = OBJECT_EVENT_TRIGGER; }
+			EVENT TRIGGER						{ $$ = OBJECT_EVENT_TRIGGER; }
 			| opt_procedural LANGUAGE			{ $$ = OBJECT_LANGUAGE; }
 			| PUBLICATION						{ $$ = OBJECT_PUBLICATION; }
 			| ROLE								{ $$ = OBJECT_ROLE; }
@@ -8988,11 +9005,11 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 					n->newowner = $6;
 					$$ = (Node *)n;
 				}
-			| ALTER DATABASE database_name OWNER TO RoleSpec
+			| ALTER DATABASE db_spec_name OWNER TO RoleSpec
 				{
 					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
 					n->objectType = OBJECT_DATABASE;
-					n->object = (Node *) makeString($3);
+					n->object = (Node *) $3;
 					n->newowner = $6;
 					$$ = (Node *)n;
 				}
@@ -9798,24 +9815,24 @@ opt_equal:	'='										{}
  *****************************************************************************/
 
 AlterDatabaseStmt:
-			ALTER DATABASE database_name WITH createdb_opt_list
+			ALTER DATABASE db_spec_name WITH createdb_opt_list
 				 {
 					AlterDatabaseStmt *n = makeNode(AlterDatabaseStmt);
-					n->dbname = $3;
+					n->dbspec = $3;
 					n->options = $5;
 					$$ = (Node *)n;
 				 }
-			| ALTER DATABASE database_name createdb_opt_list
+			| ALTER DATABASE db_spec_name createdb_opt_list
 				 {
 					AlterDatabaseStmt *n = makeNode(AlterDatabaseStmt);
-					n->dbname = $3;
+					n->dbspec = $3;
 					n->options = $4;
 					$$ = (Node *)n;
 				 }
-			| ALTER DATABASE database_name SET TABLESPACE name
+			| ALTER DATABASE db_spec_name SET TABLESPACE name
 				 {
 					AlterDatabaseStmt *n = makeNode(AlterDatabaseStmt);
-					n->dbname = $3;
+					n->dbspec = $3;
 					n->options = list_make1(makeDefElem("tablespace",
 														(Node *)makeString($6), @6));
 					$$ = (Node *)n;
@@ -9823,10 +9840,10 @@ AlterDatabaseStmt:
 		;
 
 AlterDatabaseSetStmt:
-			ALTER DATABASE database_name SetResetClause
+			ALTER DATABASE db_spec_name SetResetClause
 				{
 					AlterDatabaseSetStmt *n = makeNode(AlterDatabaseSetStmt);
-					n->dbname = $3;
+					n->dbspec = $3;
 					n->setstmt = $4;
 					$$ = (Node *)n;
 				}
@@ -13374,6 +13391,10 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_SESSION_USER, -1, @1);
 				}
+			| CURRENT_DATABASE
+				{
+					$$ = makeSQLValueFunction(SVFOP_CURRENT_DATABASE, -1, @1);
+				}
 			| USER
 				{
 					$$ = makeSQLValueFunction(SVFOP_USER, -1, @1);
@@ -14344,8 +14365,31 @@ name_list:	name
 name:		ColId									{ $$ = $1; };
 
 database_name:
-			ColId									{ $$ = $1; };
+			ColId									
+				{ $$ = $1; }
+			| CURRENT_DATABASE			
+				{ 
+					ereport(ERROR,
+							(errcode(ERRCODE_RESERVED_NAME),
+							 errmsg("%s cannot be used as a database name here",
+									"CURRENT_DATABASE"),
+							 parser_errposition(@1)));
+				}
+		;
 
+db_spec_name:
+			ColId									
+				{ 
+					DBSpecName *n = (DBSpecName *) makeDBSpecName(DBSPEC_CSTRING, @1);
+					n->dbname = pstrdup($1);
+					$$ = (Node *)n;					 
+				}
+			| CURRENT_DATABASE			
+				{ 
+					$$ = (Node *) makeDBSpecName(DBSPEC_CURRENT_DATABASE, @1);
+				}
+		;
+		
 access_method:
 			ColId									{ $$ = $1; };
 
@@ -14370,6 +14414,8 @@ func_name:	type_function_name
 						$$ = check_func_name(lcons(makeString($1), $2),
 											 yyscanner);
 					}
+			| CURRENT_DATABASE
+					{ $$ = list_make1(makeString("current_database")); }
 		;
 
 
@@ -15021,6 +15067,7 @@ reserved_keyword:
 			| CONSTRAINT
 			| CREATE
 			| CURRENT_CATALOG
+			| CURRENT_DATABASE
 			| CURRENT_DATE
 			| CURRENT_ROLE
 			| CURRENT_TIME
@@ -15930,6 +15977,20 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	s->fromClause = list_make1(makeRangeVar(NULL, relname, -1));
 
 	return (Node *) s;
+}
+
+/* makeDBSpecName
+ * Create a DBSpecName with the given type
+ */
+static Node *
+makeDBSpecName(DBSpecNameType type, int location)
+{
+	DBSpecName *spec = makeNode(DBSpecName);
+
+	spec->dbnametype = type;
+	spec->location = location;
+
+	return (Node *) spec;
 }
 
 /* parser_init()

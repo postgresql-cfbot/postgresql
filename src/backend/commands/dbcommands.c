@@ -1413,6 +1413,15 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 	Datum		new_record[Natts_pg_database];
 	bool		new_record_nulls[Natts_pg_database];
 	bool		new_record_repl[Natts_pg_database];
+	char		*dbname = NULL;
+	DBSpecName	*dbspecname = NULL;
+
+	dbspecname = (DBSpecName*)stmt->dbspec;
+
+	if (dbspecname->dbnametype == DBSPEC_CURRENT_DATABASE )
+		dbname = get_database_name(MyDatabaseId);
+	else
+		dbname = dbspecname->dbname;
 
 	/* Extract options from the statement node tree */
 	foreach(option, stmt->options)
@@ -1477,7 +1486,7 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 					 parser_errposition(pstate, dtablespace->location)));
 		/* this case isn't allowed within a transaction block */
 		PreventTransactionChain(isTopLevel, "ALTER DATABASE SET TABLESPACE");
-		movedb(stmt->dbname, defGetString(dtablespace));
+		movedb(dbname, defGetString(dtablespace));
 		return InvalidOid;
 	}
 
@@ -1503,20 +1512,20 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 	ScanKeyInit(&scankey,
 				Anum_pg_database_datname,
 				BTEqualStrategyNumber, F_NAMEEQ,
-				CStringGetDatum(stmt->dbname));
+				CStringGetDatum(dbname));
 	scan = systable_beginscan(rel, DatabaseNameIndexId, true,
 							  NULL, 1, &scankey);
 	tuple = systable_getnext(scan);
 	if (!HeapTupleIsValid(tuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
-				 errmsg("database \"%s\" does not exist", stmt->dbname)));
+				 errmsg("database \"%s\" does not exist", dbname)));
 
 	dboid = HeapTupleGetOid(tuple);
 
 	if (!pg_database_ownercheck(HeapTupleGetOid(tuple), GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,
-					   stmt->dbname);
+					   dbname);
 
 	/*
 	 * In order to avoid getting locked out and having to go through
@@ -1574,7 +1583,18 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 Oid
 AlterDatabaseSet(AlterDatabaseSetStmt *stmt)
 {
-	Oid			datid = get_database_oid(stmt->dbname, false);
+	Oid			datid;
+	char		*dbname;
+	DBSpecName	*dbspecname;
+
+	dbspecname = (DBSpecName*)stmt->dbspec;
+
+	if (dbspecname->dbnametype == DBSPEC_CURRENT_DATABASE )
+		dbname = get_database_name(MyDatabaseId);
+	else
+		dbname = dbspecname->dbname;
+
+	datid = get_database_oid(dbname, false);
 
 	/*
 	 * Obtain a lock on the database and make sure it didn't go away in the
@@ -1584,7 +1604,7 @@ AlterDatabaseSet(AlterDatabaseSetStmt *stmt)
 
 	if (!pg_database_ownercheck(datid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,
-					   stmt->dbname);
+					   dbname);
 
 	AlterSetting(datid, InvalidOid, stmt->setstmt);
 
@@ -1598,7 +1618,7 @@ AlterDatabaseSet(AlterDatabaseSetStmt *stmt)
  * ALTER DATABASE name OWNER TO newowner
  */
 ObjectAddress
-AlterDatabaseOwner(const char *dbname, Oid newOwnerId)
+AlterDatabaseOwner(const DBSpecName *dbspec, Oid newOwnerId)
 {
 	Oid			db_id;
 	HeapTuple	tuple;
@@ -1607,6 +1627,12 @@ AlterDatabaseOwner(const char *dbname, Oid newOwnerId)
 	SysScanDesc scan;
 	Form_pg_database datForm;
 	ObjectAddress address;
+	char		*dbname;
+
+	if (dbspec->dbnametype == DBSPEC_CURRENT_DATABASE)
+		dbname = get_database_name(MyDatabaseId);
+	else
+		dbname = dbspec->dbname;
 
 	/*
 	 * Get the old tuple.  We don't need a lock on the database per se,

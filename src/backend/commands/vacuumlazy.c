@@ -373,7 +373,8 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 			 * emitting individual parts of the message when not applicable.
 			 */
 			initStringInfo(&buf);
-			appendStringInfo(&buf, _("automatic vacuum of table \"%s.%s.%s\": index scans: %d\n"),
+			appendStringInfo(&buf, _("automatic %svacuum of table \"%s.%s.%s\": index scans: %d\n"),
+							 aggressive ? "aggressive " : "",
 							 get_database_name(MyDatabaseId),
 							 get_namespace_name(RelationGetNamespace(onerel)),
 							 RelationGetRelationName(onerel),
@@ -487,7 +488,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 
 	relname = RelationGetRelationName(onerel);
 	ereport(elevel,
-			(errmsg("vacuuming \"%s.%s\"",
+			(errmsg("%svacuuming \"%s.%s\"",
+					aggressive ? "aggressive " : "",
 					get_namespace_name(RelationGetNamespace(onerel)),
 					relname)));
 

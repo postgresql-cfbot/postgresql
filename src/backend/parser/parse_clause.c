@@ -3135,6 +3135,13 @@ transformOnConflictArbiter(ParseState *pstate,
 				 errhint("For example, ON CONFLICT (column_name)."),
 				 parser_errposition(pstate,
 									exprLocation((Node *) onConflictClause))));
+	else if (onConflictClause->action == ONCONFLICT_SELECT && !infer)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("ON CONFLICT DO SELECT requires inference specification or constraint name"),
+				 errhint("For example, ON CONFLICT (column_name)."),
+				 parser_errposition(pstate,
+									exprLocation((Node *) onConflictClause))));
 
 	/*
 	 * To simplify certain aspects of its design, speculative insertion into

@@ -36,6 +36,7 @@ INSERT INTO <replaceable class="PARAMETER">table_name</replaceable> [ AS <replac
 <phrase>and <replaceable class="parameter">conflict_action</replaceable> is one of:</phrase>
 
     DO NOTHING
+    DO SELECT [ FOR { UPDATE | NO KEY UPDATE | SHARE | KEY SHARE } ]
     DO UPDATE SET { <replaceable class="PARAMETER">column_name</replaceable> = { <replaceable class="PARAMETER">expression</replaceable> | DEFAULT } |
                     ( <replaceable class="PARAMETER">column_name</replaceable> [, ...] ) = [ ROW ] ( { <replaceable class="PARAMETER">expression</replaceable> | DEFAULT } [, ...] ) |
                     ( <replaceable class="PARAMETER">column_name</replaceable> [, ...] ) = ( <replaceable class="PARAMETER">sub-SELECT</replaceable> )
@@ -83,26 +84,31 @@ INSERT INTO <replaceable class="PARAMETER">table_name</replaceable> [ AS <replac
 
   <para>
    The optional <literal>RETURNING</> clause causes <command>INSERT</>
-   to compute and return value(s) based on each row actually inserted
-   (or updated, if an <literal>ON CONFLICT DO UPDATE</> clause was
-   used).  This is primarily useful for obtaining values that were
+   to compute and return value(s) based on each row actually inserted.
+   If an <literal>ON CONFLICT DO UPDATE</> clause was used,
+   <literal>RETURNING</> also returns tuples which were updated, and
+   in the presence of an <literal>ON CONFLICT DO SELECT</> clause all
+   input rows are returned.  With a traditional <command>INSERT</>,
+   the <literal>RETURNING</> clause is primarily useful for obtaining
+   values that were
    supplied by defaults, such as a serial sequence number.  However,
    any expression using the table's columns is allowed.  The syntax of
    the <literal>RETURNING</> list is identical to that of the output
-   list of <command>SELECT</>.  Only rows that were successfully
+   list of <command>SELECT</>.  If an <literal>ON CONFLICT DO SELECT</>
+   clause is not present, only rows that were successfully
    inserted or updated will be returned.  For example, if a row was
    locked but not updated because an <literal>ON CONFLICT DO UPDATE
    ... WHERE</literal> clause <replaceable
    class="PARAMETER">condition</replaceable> was not satisfied, the
-   row will not be returned.
+   row will not be returned.  <literal>ON CONFLICT DO SELECT</>
+   works similarly, except no update takes place.
   </para>
 
   <para>
    You must have <literal>INSERT</literal> privilege on a table in
    order to insert into it.  If <literal>ON CONFLICT DO UPDATE</> is
    present, <literal>UPDATE</literal> privilege on the table is also
-   required.
-  </para>
+   required.  </para>
 
   <para>
    If a column list is specified, you only need

@@ -2458,6 +2458,7 @@ _copyOnConflictClause(const OnConflictClause *from)
 	COPY_SCALAR_FIELD(action);
 	COPY_NODE_FIELD(infer);
 	COPY_NODE_FIELD(targetList);
+	COPY_SCALAR_FIELD(lockingStrength);
 	COPY_NODE_FIELD(whereClause);
 	COPY_LOCATION_FIELD(location);
 

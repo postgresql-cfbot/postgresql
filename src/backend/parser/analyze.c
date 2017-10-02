@@ -1108,16 +1108,30 @@ transformOnConflictClause(ParseState *pstate,
 											   onConflictClause->whereClause,
 											   EXPR_KIND_WHERE, "WHERE");
 	}
+	else if (onConflictClause->action == ONCONFLICT_SELECT)
+	{
+		/*
+		 * References to EXCLUDED are not allowed, but we need the main
+		 * relation to be visible to the WHERE clause.
+		 */
+		addRTEtoQuery(pstate, pstate->p_target_rangetblentry,
+					  false, true, true);
 
-	/* Finally, build ON CONFLICT DO [NOTHING | UPDATE] expression */
+		onConflictWhere = transformWhereClause(pstate,
+											   onConflictClause->whereClause,
+											   EXPR_KIND_WHERE, "WHERE");
+	}
+
+	/* Finally, build ON CONFLICT DO [NOTHING | SELECT | UPDATE] expression */
 	result = makeNode(OnConflictExpr);
 
 	result->action = onConflictClause->action;
 	result->arbiterElems = arbiterElems;
 	result->arbiterWhere = arbiterWhere;
 	result->constraint = arbiterConstraint;
-	result->onConflictSet = onConflictSet;
 	result->onConflictWhere = onConflictWhere;
+	result->lockingStrength = onConflictClause->lockingStrength;
+	result->onConflictSet = onConflictSet;
 	result->exclRelIndex = exclRelIndex;
 	result->exclRelTlist = exclRelTlist;
 

@@ -17,6 +17,7 @@
 #include <limits.h>
 
 #include "miscadmin.h"
+#include "catalog/pg_class.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
@@ -151,6 +152,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->boundinfo = NULL;
 	rel->part_rels = NULL;
 	rel->partexprs = NULL;
+	rel->painfo = NULL;
 
 	/*
 	 * Pass top parent's relids down the inheritance hierarchy. If the parent
@@ -227,8 +229,12 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		int			cnt_parts = 0;
 
 		if (nparts > 0)
+		{
+			rel->part_appinfos = (AppendRelInfo **)
+				palloc(sizeof(AppendRelInfo *) * nparts);
 			rel->part_rels = (RelOptInfo **)
 				palloc(sizeof(RelOptInfo *) * nparts);
+		}
 
 		foreach(l, root->append_rel_list)
 		{
@@ -252,6 +258,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			 * also match the PartitionDesc.  See expand_partitioned_rtentry.
 			 */
 			Assert(cnt_parts < nparts);
+			rel->part_appinfos[cnt_parts] = appinfo;
 			rel->part_rels[cnt_parts] = childrel;
 			cnt_parts++;
 		}

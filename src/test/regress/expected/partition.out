@@ -1,0 +1,465 @@
+--
+-- Test partitioning planner code
+--
+create table lp (a char) partition by list (a);
+create table lp_ef partition of lp for values in ('e', 'f');
+create table lp_ad partition of lp for values in ('a', 'd');
+create table lp_bc partition of lp for values in ('b', 'c');
+create table lp_null partition of lp for values in (null);
+explain (costs off) select * from lp;
+        QUERY PLAN         
+---------------------------
+ Append
+   ->  Seq Scan on lp_ad
+   ->  Seq Scan on lp_bc
+   ->  Seq Scan on lp_ef
+   ->  Seq Scan on lp_null
+(5 rows)
+
+explain (costs off) select * from lp where a > 'a' and a < 'd';
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Append
+   ->  Seq Scan on lp_bc
+         Filter: ((a > 'a'::bpchar) AND (a < 'd'::bpchar))
+(3 rows)
+
+explain (costs off) select * from lp where a > 'a' and a <= 'd';
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Append
+   ->  Seq Scan on lp_bc
+         Filter: ((a > 'a'::bpchar) AND (a <= 'd'::bpchar))
+   ->  Seq Scan on lp_ad
+         Filter: ((a > 'a'::bpchar) AND (a <= 'd'::bpchar))
+(5 rows)
+
+explain (costs off) select * from lp where a = 'a';
+            QUERY PLAN             
+-----------------------------------
+ Append
+   ->  Seq Scan on lp_ad
+         Filter: (a = 'a'::bpchar)
+(3 rows)
+
+explain (costs off) select * from lp where 'a' = a;	/* commutates */
+            QUERY PLAN             
+-----------------------------------
+ Append
+   ->  Seq Scan on lp_ad
+         Filter: ('a'::bpchar = a)
+(3 rows)
+
+explain (costs off) select * from lp where a is not null;
+           QUERY PLAN            
+---------------------------------
+ Append
+   ->  Seq Scan on lp_ad
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on lp_bc
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on lp_ef
+         Filter: (a IS NOT NULL)
+(7 rows)
+
+explain (costs off) select * from lp where a is null;
+         QUERY PLAN          
+-----------------------------
+ Append
+   ->  Seq Scan on lp_null
+         Filter: (a IS NULL)
+(3 rows)
+
+create table rlp (a int, b varchar) partition by range (a);
+create table rlp1 partition of rlp for values from (minvalue) to (1);
+create table rlp2 partition of rlp for values from (1) to (10);
+create table rlp3 (b varchar, a int) partition by list (b varchar_ops);
+create table rlp3abcd partition of rlp3 for values in ('ab', 'cd');
+create table rlp3efgh partition of rlp3 for values in ('ef', 'gh');
+create table rlp3nullxy partition of rlp3 for values in (null, 'xy');
+alter table rlp attach partition rlp3 for values from (15) to (20);
+create table rlp4 partition of rlp for values from (20) to (30);
+create table rlp5 partition of rlp for values from (31) to (maxvalue);
+explain (costs off) select * from rlp where a < 1;
+       QUERY PLAN        
+-------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a < 1)
+(3 rows)
+
+explain (costs off) select * from rlp where 1 > a;	/* commutates */
+       QUERY PLAN        
+-------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (1 > a)
+(3 rows)
+
+explain (costs off) select * from rlp where a <= 1;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a <= 1)
+   ->  Seq Scan on rlp2
+         Filter: (a <= 1)
+(5 rows)
+
+explain (costs off) select * from rlp where a = 1;
+       QUERY PLAN        
+-------------------------
+ Append
+   ->  Seq Scan on rlp2
+         Filter: (a = 1)
+(3 rows)
+
+explain (costs off) select * from rlp where a = 1::bigint;		/* same as above */
+            QUERY PLAN             
+-----------------------------------
+ Append
+   ->  Seq Scan on rlp2
+         Filter: (a = '1'::bigint)
+(3 rows)
+
+explain (costs off) select * from rlp where a = 1::numeric;	/* no pruning */
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp2
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp3abcd
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp3efgh
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp3nullxy
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp4
+         Filter: ((a)::numeric = '1'::numeric)
+   ->  Seq Scan on rlp5
+         Filter: ((a)::numeric = '1'::numeric)
+(15 rows)
+
+explain (costs off) select * from rlp where a <= 10;
+        QUERY PLAN         
+---------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a <= 10)
+   ->  Seq Scan on rlp2
+         Filter: (a <= 10)
+(5 rows)
+
+explain (costs off) select * from rlp where a > 10;
+          QUERY PLAN          
+------------------------------
+ Append
+   ->  Seq Scan on rlp3abcd
+         Filter: (a > 10)
+   ->  Seq Scan on rlp3efgh
+         Filter: (a > 10)
+   ->  Seq Scan on rlp3nullxy
+         Filter: (a > 10)
+   ->  Seq Scan on rlp4
+         Filter: (a > 10)
+   ->  Seq Scan on rlp5
+         Filter: (a > 10)
+(11 rows)
+
+explain (costs off) select * from rlp where a < 15;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a < 15)
+   ->  Seq Scan on rlp2
+         Filter: (a < 15)
+(5 rows)
+
+explain (costs off) select * from rlp where a <= 15;
+          QUERY PLAN          
+------------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a <= 15)
+   ->  Seq Scan on rlp2
+         Filter: (a <= 15)
+   ->  Seq Scan on rlp3abcd
+         Filter: (a <= 15)
+   ->  Seq Scan on rlp3efgh
+         Filter: (a <= 15)
+   ->  Seq Scan on rlp3nullxy
+         Filter: (a <= 15)
+(11 rows)
+
+explain (costs off) select * from rlp where a > 15 and b = 'ab';
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Append
+   ->  Seq Scan on rlp3abcd
+         Filter: ((a > 15) AND ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp4
+         Filter: ((a > 15) AND ((b)::text = 'ab'::text))
+   ->  Seq Scan on rlp5
+         Filter: ((a > 15) AND ((b)::text = 'ab'::text))
+(7 rows)
+
+explain (costs off) select * from rlp where a = 16 and b is null;
+                 QUERY PLAN                 
+--------------------------------------------
+ Append
+   ->  Seq Scan on rlp3nullxy
+         Filter: ((b IS NULL) AND (a = 16))
+(3 rows)
+
+explain (costs off) select * from rlp where a = 16 and b is not null;
+                   QUERY PLAN                   
+------------------------------------------------
+ Append
+   ->  Seq Scan on rlp3abcd
+         Filter: ((b IS NOT NULL) AND (a = 16))
+   ->  Seq Scan on rlp3efgh
+         Filter: ((b IS NOT NULL) AND (a = 16))
+   ->  Seq Scan on rlp3nullxy
+         Filter: ((b IS NOT NULL) AND (a = 16))
+(7 rows)
+
+explain (costs off) select * from rlp where a is null;		/* while we're on nulls */
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from rlp where a > 30;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on rlp5
+         Filter: (a > 30)
+(3 rows)
+
+explain (costs off) select * from rlp where a = 30;	/* empty */
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from rlp where a <= 31;
+          QUERY PLAN          
+------------------------------
+ Append
+   ->  Seq Scan on rlp1
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp2
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp3abcd
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp3efgh
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp3nullxy
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp4
+         Filter: (a <= 31)
+   ->  Seq Scan on rlp5
+         Filter: (a <= 31)
+(15 rows)
+
+-- multi-column keys
+create table mc3p (a int, b int, c int) partition by range (a, abs(b), c);
+create table mc3p0 partition of mc3p for values from (minvalue, minvalue, minvalue) to (1, 1, 1);
+create table mc3p1 partition of mc3p for values from (1, 1, 1) to (10, 5, 10);
+create table mc3p2 partition of mc3p for values from (10, 5, 10) to (10, 10, 10);
+create table mc3p3 partition of mc3p for values from (10, 10, 10) to (10, 10, 20);
+create table mc3p4 partition of mc3p for values from (10, 10, 20) to (10, maxvalue, maxvalue);
+create table mc3p5 partition of mc3p for values from (11, 1, 1) to (20, 10, 10);
+create table mc3p6 partition of mc3p for values from (20, 10, 10) to (20, 20, 20);
+create table mc3p7 partition of mc3p for values from (20, 20, 20) to (maxvalue, maxvalue, maxvalue);
+explain (costs off) select * from mc3p where a = 1;
+       QUERY PLAN        
+-------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: (a = 1)
+   ->  Seq Scan on mc3p1
+         Filter: (a = 1)
+(5 rows)
+
+explain (costs off) select * from mc3p where a = 1 and abs(b) < 1;
+                 QUERY PLAN                 
+--------------------------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: ((a = 1) AND (abs(b) < 1))
+(3 rows)
+
+explain (costs off) select * from mc3p where a = 1 and abs(b) = 1;
+                 QUERY PLAN                 
+--------------------------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: ((a = 1) AND (abs(b) = 1))
+   ->  Seq Scan on mc3p1
+         Filter: ((a = 1) AND (abs(b) = 1))
+(5 rows)
+
+explain (costs off) select * from mc3p where a = 1 and abs(b) = 1 and c < 8;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: ((c < 8) AND (a = 1) AND (abs(b) = 1))
+   ->  Seq Scan on mc3p1
+         Filter: ((c < 8) AND (a = 1) AND (abs(b) = 1))
+(5 rows)
+
+explain (costs off) select * from mc3p where a = 10 and abs(b) between 5 and 35;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3p1
+         Filter: ((a = 10) AND (abs(b) >= 5) AND (abs(b) <= 35))
+   ->  Seq Scan on mc3p2
+         Filter: ((a = 10) AND (abs(b) >= 5) AND (abs(b) <= 35))
+   ->  Seq Scan on mc3p3
+         Filter: ((a = 10) AND (abs(b) >= 5) AND (abs(b) <= 35))
+   ->  Seq Scan on mc3p4
+         Filter: ((a = 10) AND (abs(b) >= 5) AND (abs(b) <= 35))
+(9 rows)
+
+explain (costs off) select * from mc3p where a > 10;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on mc3p5
+         Filter: (a > 10)
+   ->  Seq Scan on mc3p6
+         Filter: (a > 10)
+   ->  Seq Scan on mc3p7
+         Filter: (a > 10)
+(7 rows)
+
+explain (costs off) select * from mc3p where a >= 10;
+        QUERY PLAN         
+---------------------------
+ Append
+   ->  Seq Scan on mc3p1
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p2
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p3
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p4
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p5
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p6
+         Filter: (a >= 10)
+   ->  Seq Scan on mc3p7
+         Filter: (a >= 10)
+(15 rows)
+
+explain (costs off) select * from mc3p where a < 10;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: (a < 10)
+   ->  Seq Scan on mc3p1
+         Filter: (a < 10)
+(5 rows)
+
+explain (costs off) select * from mc3p where a <= 10 and abs(b) < 10;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: ((a <= 10) AND (abs(b) < 10))
+   ->  Seq Scan on mc3p1
+         Filter: ((a <= 10) AND (abs(b) < 10))
+   ->  Seq Scan on mc3p2
+         Filter: ((a <= 10) AND (abs(b) < 10))
+(7 rows)
+
+explain (costs off) select * from mc3p where a = 11 and abs(b) = 0;	/* empty */
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from mc3p where a = 20 and abs(b) = 10 and c = 100;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3p6
+         Filter: ((a = 20) AND (c = 100) AND (abs(b) = 10))
+(3 rows)
+
+explain (costs off) select * from mc3p where a > 20;
+        QUERY PLAN        
+--------------------------
+ Append
+   ->  Seq Scan on mc3p7
+         Filter: (a > 20)
+(3 rows)
+
+explain (costs off) select * from mc3p where a >= 20;
+        QUERY PLAN         
+---------------------------
+ Append
+   ->  Seq Scan on mc3p5
+         Filter: (a >= 20)
+   ->  Seq Scan on mc3p6
+         Filter: (a >= 20)
+   ->  Seq Scan on mc3p7
+         Filter: (a >= 20)
+(7 rows)
+
+-- XXX - '<>' clauses cannot be handled yet
+explain (costs off) select * from lp where a <> 'a';
+             QUERY PLAN             
+------------------------------------
+ Append
+   ->  Seq Scan on lp_ad
+         Filter: (a <> 'a'::bpchar)
+   ->  Seq Scan on lp_bc
+         Filter: (a <> 'a'::bpchar)
+   ->  Seq Scan on lp_ef
+         Filter: (a <> 'a'::bpchar)
+(7 rows)
+
+-- XXX - redundant clause elimination does not happen yet
+explain (costs off) select * from mc3p where a = 10 and a > 1;
+               QUERY PLAN               
+----------------------------------------
+ Append
+   ->  Seq Scan on mc3p0
+         Filter: ((a > 1) AND (a = 10))
+   ->  Seq Scan on mc3p1
+         Filter: ((a > 1) AND (a = 10))
+   ->  Seq Scan on mc3p2
+         Filter: ((a > 1) AND (a = 10))
+   ->  Seq Scan on mc3p3
+         Filter: ((a > 1) AND (a = 10))
+   ->  Seq Scan on mc3p4
+         Filter: ((a > 1) AND (a = 10))
+(11 rows)
+
+-- XXX - the OR clauses don't contribute to partition-pruning yet
+explain (costs off) select * from rlp3 where b = 'ab' or b = 'ef';
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Append
+   ->  Seq Scan on rlp3abcd
+         Filter: (((b)::text = 'ab'::text) OR ((b)::text = 'ef'::text))
+   ->  Seq Scan on rlp3efgh
+         Filter: (((b)::text = 'ab'::text) OR ((b)::text = 'ef'::text))
+   ->  Seq Scan on rlp3nullxy
+         Filter: (((b)::text = 'ab'::text) OR ((b)::text = 'ef'::text))
+(7 rows)
+
+drop table lp, rlp, mc3p;

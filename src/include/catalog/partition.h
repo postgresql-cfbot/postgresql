@@ -99,6 +99,7 @@ extern int get_partition_for_tuple(PartitionDispatch *pd,
 						EState *estate,
 						PartitionDispatchData **failed_at,
 						TupleTableSlot **failed_slot);
+
 extern Oid	get_default_oid_from_partdesc(PartitionDesc partdesc);
 extern Oid	get_default_partition_oid(Oid parentId);
 extern void update_default_partition_oid(Oid parentId, Oid defaultPartId);
@@ -106,4 +107,12 @@ extern void check_default_allows_bound(Relation parent, Relation defaultRel,
 						   PartitionBoundSpec *new_spec);
 extern List *get_proposed_default_constraint(List *new_part_constaints);
 
+/* Planner support stuff. */
+extern List *get_partitions_for_keys(Relation rel,
+						NullTestType *keynullness,
+						Datum *minkeys, int n_minkeys, bool min_inclusive,
+						Datum *maxkeys, int n_maxkeys, bool max_inclusive,
+						int *min_datum_index, int *max_datum_index,
+						bool *null_partition_chosen,
+						bool *default_partition_chosen);
 #endif							/* PARTITION_H */

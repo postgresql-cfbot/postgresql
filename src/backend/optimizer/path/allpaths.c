@@ -20,6 +20,7 @@
 
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
+#include "catalog/partition.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
@@ -135,6 +136,10 @@ static void recurse_push_qual(Node *setOp, Query *topquery,
 static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
 static void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 						List *live_childrels);
+static void match_clauses_to_partkey(RelOptInfo *rel,
+						 List *clauses,
+						 List **matchedclauses,
+						 NullTestType *keynullness);
 
 
 /*
@@ -846,6 +851,279 @@ set_foreign_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 }
 
 /*
+ * match_clauses_to_partkey
+ *		Match the clauses in the list with partition's partition key
+ *
+ * Matched clauses are returned matchedclauses, which is an array with
+ * partnatts members, where each member is a list of clauses matched to the
+ * respective partition key.  keynullness array also contains partnatts
+ * members where each member corresponds to the type of the NullTest
+ * encountered for a given partition key.
+ */
+void
+match_clauses_to_partkey(RelOptInfo *rel,
+						 List *clauses,
+						 List **matchedclauses,
+						 NullTestType *keynullness)
+{
+	ListCell   *lc;
+	int		keyPos;
+	int		i;
+
+	/*
+	 * Match individual OpExprs in the query's restriction with individual
+	 * partition key columns.  There is one list per key.
+	 */
+	memset(keynullness, -1, PARTITION_MAX_KEYS * sizeof(NullTestType));
+	memset(matchedclauses, 0, PARTITION_MAX_KEYS * sizeof(List*));
+	keyPos = 0;
+	for (i = 0; i < rel->part_scheme->partnatts; i++)
+	{
+		Node   *partkey = linitial(rel->partexprs[i]);
+
+		foreach(lc, clauses)
+		{
+			RestrictInfo   *rinfo = lfirst(lc);
+			Expr		   *clause = rinfo->clause;
+
+			if (is_opclause(clause))
+			{
+				Node   *leftop = get_leftop(clause),
+					   *rightop = get_rightop(clause);
+				Oid		expr_op = ((OpExpr *) clause)->opno;
+
+				if (IsA(leftop, RelabelType))
+					leftop = (Node *) ((RelabelType *) leftop)->arg;
+				if (IsA(rightop, RelabelType))
+					rightop = (Node *) ((RelabelType *) rightop)->arg;
+
+				if (equal(leftop, partkey))
+				{
+					matchedclauses[keyPos] = lappend(matchedclauses[keyPos],
+													 clause);
+					/* A strict operator implies NOT NULL argument. */
+					keynullness[keyPos] = IS_NOT_NULL;
+				}
+				else if (equal(rightop, partkey))
+				{
+					Oid		commutator = get_commutator(expr_op);
+
+					if (OidIsValid(commutator))
+					{
+						OpExpr   *commutated_expr;
+
+						/*
+						 * Generate a commutated copy of the expression, but
+						 * try to make it look valid, because we only want
+						 * it to put the constant operand in a place that the
+						 * following code knows as the only place to find it.
+						 */
+						commutated_expr = (OpExpr *) copyObject(clause);
+						commutated_expr->opno = commutator;	/* really? */
+						commutated_expr->args = list_make2(rightop, leftop);
+						matchedclauses[keyPos] =
+											lappend(matchedclauses[keyPos],
+													commutated_expr);
+						/* A strict operator implies NOT NULL argument. */
+						keynullness[keyPos] = IS_NOT_NULL;
+					}
+				}
+			}
+			else if (IsA(clause, NullTest))
+			{
+				NullTest   *nulltest = (NullTest *) clause;
+				Node	   *arg = (Node *) nulltest->arg;
+
+				if (equal(arg, partkey))
+					keynullness[keyPos] = nulltest->nulltesttype;
+			}
+		}
+
+		/* Onto finding clauses matching the next partition key. */
+		keyPos++;
+	}
+}
+
+/*
+ * get_rel_partitions
+ *		Return the list of partitions of rel that pass the query clauses
+ *
+ * Returned list contains the AppendInfos of the chosen partitions.
+ */
+static List *
+get_rel_partitions(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+{
+	Relation		parent = heap_open(rte->relid, NoLock);
+	List   *indexes;
+	List   *result = NIL;
+	ListCell   *lc1;
+	List   *matchedclauses[PARTITION_MAX_KEYS];
+	NullTestType keynullness[PARTITION_MAX_KEYS];
+	Datum	minkeys[PARTITION_MAX_KEYS],
+			maxkeys[PARTITION_MAX_KEYS];
+	bool	need_next_min,
+			need_next_max,
+			minkey_set[PARTITION_MAX_KEYS],
+			maxkey_set[PARTITION_MAX_KEYS],
+			min_incl,
+			max_incl;
+	int		n_minkeys = 0,
+			n_maxkeys = 0,
+			i;
+
+	/*
+	 * Get the clauses that match the partition key, including information
+	 * about any nullness tests against partition keys.
+	 */
+	match_clauses_to_partkey(rel,
+							 rel->baserestrictinfo,
+							 matchedclauses,
+							 keynullness);
+
+	/*
+	 * Determine the min keys and the max keys using btree semantics-based
+	 * interpretation of the clauses' operators.
+	 */
+
+	/*
+	 * XXX - There should be a step similar to _bt_preprocess_keys() here,
+	 * to eliminate any redundant scan keys for a given partition column.  For
+	 * example, among a <= 4 and a <= 5, we can only keep a <= 4 for being
+	 * more restrictive and discard a <= 5.  While doing that, we can also
+	 * check to see if there exists a contradictory combination of scan keys
+	 * that makes the query trivially false for all records in the table.
+	 */
+	memset(minkeys, 0, sizeof(minkeys));
+	memset(maxkeys, 0, sizeof(maxkeys));
+	memset(minkey_set, false, sizeof(minkey_set));
+	memset(maxkey_set, false, sizeof(maxkey_set));
+	need_next_min = true;
+	need_next_max = true;
+	for (i = 0; i < rel->part_scheme->partnatts; i++)
+	{
+		/*
+		 * If no scan key existed for the previous column, we are done.
+		 */
+		if (i > n_minkeys)
+			need_next_min = false;
+
+		if (i > n_maxkeys)
+			need_next_max = false;
+
+		foreach(lc1, matchedclauses[i])
+		{
+			Expr   *clause = lfirst(lc1);
+			Const  *rightop = (Const *) get_rightop(clause);
+			Oid		opno = ((OpExpr *) clause)->opno,
+					opfamily = rel->part_scheme->partopfamily[i];
+			StrategyNumber	strategy;
+
+			strategy = get_op_opfamily_strategy(opno, opfamily);
+			switch (strategy)
+			{
+				case BTLessStrategyNumber:
+				case BTLessEqualStrategyNumber:
+					if (need_next_max)
+					{
+						maxkeys[i] = rightop->constvalue;
+						if (!maxkey_set[i])
+							n_maxkeys++;
+						maxkey_set[i] = true;
+						max_incl = (strategy == BTLessEqualStrategyNumber);
+					}
+					if (strategy == BTLessStrategyNumber)
+						need_next_max = false;
+					break;
+
+				case BTGreaterStrategyNumber:
+				case BTGreaterEqualStrategyNumber:
+					if (need_next_min)
+					{
+						minkeys[i] = rightop->constvalue;
+						if (!minkey_set[i])
+							n_minkeys++;
+						minkey_set[i] = true;
+						min_incl = (strategy == BTGreaterEqualStrategyNumber);
+					}
+					if (strategy == BTGreaterStrategyNumber)
+						need_next_min = false;
+					break;
+
+				case BTEqualStrategyNumber:
+					if (need_next_min)
+					{
+						minkeys[i] = rightop->constvalue;
+						if (!minkey_set[i])
+							n_minkeys++;
+					}
+					minkey_set[i] = true;
+					min_incl = true;
+
+					if (need_next_max)
+					{
+						maxkeys[i] = rightop->constvalue;
+						if (!maxkey_set[i])
+							n_maxkeys++;
+					}
+					maxkey_set[i] = true;
+					max_incl = true;
+					break;
+
+				/*
+				 * This might mean '<>', but we don't have anything for that
+				 * case yet.  Perhaps, handle that as key < const OR
+				 * key > const, once we have props needed for handling OR
+				 * clauses.
+				 */
+				default:
+					min_incl = max_incl = false;
+					break;
+			}
+		}
+	}
+
+	/* Ask partition.c which partitions it thinks match the keys. */
+	indexes = get_partitions_for_keys(parent, keynullness,
+									  minkeys, n_minkeys, min_incl,
+									  maxkeys, n_maxkeys, max_incl,
+									  &rel->painfo->min_datum_idx,
+									  &rel->painfo->max_datum_idx,
+									  &rel->painfo->contains_null_partition,
+								  &rel->painfo->contains_default_partition);
+
+	if (indexes != NIL)
+	{
+#ifdef USE_ASSERT_CHECKING
+		int		first_index,
+				last_index;
+		first_index = linitial_int(indexes);
+		last_index = llast_int(indexes);
+		Assert(first_index <= last_index ||
+			   rel->part_scheme->strategy != PARTITION_STRATEGY_RANGE);
+#endif
+
+		foreach(lc1, indexes)
+		{
+			int		partidx = lfirst_int(lc1);
+			AppendRelInfo *appinfo = rel->part_appinfos[partidx];
+#ifdef USE_ASSERT_CHECKING
+			RangeTblEntry *rte = planner_rt_fetch(appinfo->child_relid, root);
+			PartitionDesc partdesc = RelationGetPartitionDesc(parent);
+			Assert(partdesc->oids[partidx] == rte->relid);
+#endif
+			result = lappend(result, appinfo);
+		}
+	}
+
+	/* Remember for future users such as set_append_rel_pathlist(). */
+	rel->painfo->live_partition_appinfos = result;
+
+	heap_close(parent, NoLock);
+
+	return result;
+}
+
+/*
  * set_append_rel_size
  *	  Set size estimates for a simple "append relation"
  *
@@ -860,6 +1138,7 @@ static void
 set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 					Index rti, RangeTblEntry *rte)
 {
+	List	   *rel_appinfos = NIL;
 	int			parentRTindex = rti;
 	bool		has_live_children;
 	double		parent_rows;
@@ -872,6 +1151,24 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	check_stack_depth();
 
 	Assert(IS_SIMPLE_REL(rel));
+
+	if (rte->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		foreach (l, root->append_rel_list)
+		{
+			AppendRelInfo   *appinfo = lfirst(l);
+
+			/* append_rel_list contains all append rels; ignore others */
+			if (appinfo->parent_relid == parentRTindex)
+				rel_appinfos = lappend(rel_appinfos, appinfo);
+		}
+	}
+	else
+	{
+		rel_appinfos = get_rel_partitions(root, rel, rte);
+		Assert(rel->painfo != NULL);
+		rel->painfo->live_partitioned_rels = list_make1_int(rti);
+	}
 
 	/*
 	 * Initialize to compute size estimates for whole append relation.
@@ -893,7 +1190,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	nattrs = rel->max_attr - rel->min_attr + 1;
 	parent_attrsizes = (double *) palloc0(nattrs * sizeof(double));
 
-	foreach(l, root->append_rel_list)
+	foreach(l, rel_appinfos)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
 		int			childRTindex;
@@ -905,10 +1202,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *parentvars;
 		ListCell   *childvars;
 		ListCell   *lc;
-
-		/* append_rel_list contains all append rels; ignore others */
-		if (appinfo->parent_relid != parentRTindex)
-			continue;
 
 		childRTindex = appinfo->child_relid;
 		childRTE = root->simple_rte_array[childRTindex];
@@ -1118,6 +1411,17 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		has_live_children = true;
 
 		/*
+		 * If childrel is itself partitioned, add it and its partitioned
+		 * children to the list being propagated up to the root rel.
+		 */
+		if (childrel->painfo && rel->painfo)
+		{
+			rel->painfo->live_partitioned_rels =
+				list_concat(rel->painfo->live_partitioned_rels,
+					   list_copy(childrel->painfo->live_partitioned_rels));
+		}
+
+		/*
 		 * If any live child is not parallel-safe, treat the whole appendrel
 		 * as not parallel-safe.  In future we might be able to generate plans
 		 * in which some children are farmed out to workers while others are
@@ -1213,14 +1517,29 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 						Index rti, RangeTblEntry *rte)
 {
 	int			parentRTindex = rti;
-	List	   *live_childrels = NIL;
+	List	   *rel_appinfos = NIL,
+			   *live_childrels = NIL;
 	ListCell   *l;
+
+	if (rte->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		foreach (l, root->append_rel_list)
+		{
+			AppendRelInfo   *appinfo = lfirst(l);
+
+			/* append_rel_list contains all append rels; ignore others */
+			if (appinfo->parent_relid == parentRTindex)
+				rel_appinfos = lappend(rel_appinfos, appinfo);
+		}
+	}
+	else
+		rel_appinfos = rel->painfo->live_partition_appinfos;
 
 	/*
 	 * Generate access paths for each member relation, and remember the
 	 * non-dummy children.
 	 */
-	foreach(l, root->append_rel_list)
+	foreach(l, rel_appinfos)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
 		int			childRTindex;
@@ -1291,33 +1610,31 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	ListCell   *l;
 	List	   *partitioned_rels = NIL;
 	RangeTblEntry *rte;
-	bool		build_partitioned_rels = false;
 
 	/*
-	 * A root partition will already have a PartitionedChildRelInfo, and a
-	 * non-root partitioned table doesn't need one, because its Append paths
-	 * will get flattened into the parent anyway.  For a subquery RTE, no
-	 * PartitionedChildRelInfo exists; we collect all partitioned_rels
-	 * associated with any child.  (This assumes that we don't need to look
-	 * through multiple levels of subquery RTEs; if we ever do, we could
-	 * create a PartitionedChildRelInfo with the accumulated list of
-	 * partitioned_rels which would then be found when populated our parent
-	 * rel with paths.  For the present, that appears to be unnecessary.)
+	 * AppendPath we are about to generate must record the RT indexes of
+	 * partitioned tables that are direct or indirect children of this Append
+	 * rel.  For partitioned tables, we collect its live partitioned children
+	 * from rel->painfo.  However, it will contain only its immediate children,
+	 * so collect live partitioned children from all children that are
+	 * themselves partitioned and concatenate to our list before finally
+	 * passing the list to create_append_path() and/or
+	 * generate_mergeappend_paths().
+	 *
+	 * If this is a sub-query RTE, its RelOptInfo doesn't itself contain the
+	 * list of live partitioned children, so we must assemble the same in the
+	 * loop below from the children that are known to correspond to
+	 * partitioned rels.  (This assumes that we don't need to look through
+	 * multiple levels of subquery RTEs; if we ever do, we could consider
+	 * stuffing the list we generate here into sub-query RTE's RelOptInfo, just
+	 * like we do for partitioned rels, which would be used when populating our
+	 * parent rel with paths.  For the present, that appears to be
+	 * unnecessary.)
 	 */
 	rte = planner_rt_fetch(rel->relid, root);
-	switch (rte->rtekind)
-	{
-		case RTE_RELATION:
-			if (rte->relkind == RELKIND_PARTITIONED_TABLE)
-				partitioned_rels =
-					get_partitioned_child_rels(root, rel->relid);
-			break;
-		case RTE_SUBQUERY:
-			build_partitioned_rels = true;
-			break;
-		default:
-			elog(ERROR, "unexpected rtekind: %d", (int) rte->rtekind);
-	}
+	if (rte->rtekind == RTE_RELATION &&
+		rte->relkind == RELKIND_PARTITIONED_TABLE)
+		partitioned_rels = rel->painfo->live_partitioned_rels;
 
 	/*
 	 * For every non-dummy child, remember the cheapest path.  Also, identify
@@ -1330,17 +1647,12 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *lcp;
 
 		/*
-		 * If we need to build partitioned_rels, accumulate the partitioned
-		 * rels for this child.
+		 * Accumulate the live partitioned children of this child, if it's
+		 * itself partitioned rel.
 		 */
-		if (build_partitioned_rels)
-		{
-			List	   *cprels;
-
-			cprels = get_partitioned_child_rels(root, childrel->relid);
+		if (childrel->painfo)
 			partitioned_rels = list_concat(partitioned_rels,
-										   list_copy(cprels));
-		}
+								   childrel->painfo->live_partitioned_rels);
 
 		/*
 		 * If child has an unparameterized cheapest-total path, add that to

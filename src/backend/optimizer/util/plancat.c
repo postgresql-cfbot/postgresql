@@ -1160,7 +1160,9 @@ get_relation_constraints(PlannerInfo *root,
 	Index		varno = rel->relid;
 	Relation	relation;
 	TupleConstr *constr;
+#ifdef USE_PARTITION_CONSTRAINT_FOR_PRUNING
 	List	   *pcqual;
+#endif
 
 	/*
 	 * We assume the relation has already been safely locked.
@@ -1246,6 +1248,7 @@ get_relation_constraints(PlannerInfo *root,
 		}
 	}
 
+#ifdef USE_PARTITION_CONSTRAINT_FOR_PRUNING
 	/* Append partition predicates, if any */
 	pcqual = RelationGetPartitionQual(relation);
 	if (pcqual)
@@ -1263,6 +1266,7 @@ get_relation_constraints(PlannerInfo *root,
 
 		result = list_concat(result, pcqual);
 	}
+#endif
 
 	heap_close(relation, NoLock);
 
@@ -1833,6 +1837,16 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 	rel->boundinfo = partdesc->boundinfo;
 	rel->nparts = partdesc->nparts;
 	rel->partexprs = build_baserel_partition_key_exprs(relation, rel->relid);
+
+	/*
+	 * A PartitionAppendInfo to map this table to its immediate partitions
+	 * that will be scanned by this query.  At the same time, it records the
+	 * table's partitioning properties reflecting any partition-pruning that
+	 * might've occurred to satisfy the query.  Rest of the fields are set in
+	 * get_rel_partitions() and set_append_rel_size().
+	 */
+	rel->painfo = makeNode(PartitionAppendInfo);
+	rel->painfo->boundinfo = partdesc->boundinfo;
 }
 
 /*

@@ -524,6 +524,7 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * 		part_scheme - Partitioning scheme of the relation
  * 		boundinfo - Partition bounds
  * 		nparts - Number of partitions
+ *		part_appinfos - AppendRelInfo of each partition
  * 		part_rels - RelOptInfos for each partition
  * 		partexprs - Partition key expressions
  *
@@ -560,6 +561,9 @@ typedef enum RelOptKind
 
 /* Is the given relation an "other" relation? */
 #define IS_OTHER_REL(rel) ((rel)->reloptkind == RELOPT_OTHER_MEMBER_REL)
+
+typedef struct AppendRelInfo AppendRelInfo;
+typedef struct PartitionAppendInfo PartitionAppendInfo;
 
 typedef struct RelOptInfo
 {
@@ -643,9 +647,19 @@ typedef struct RelOptInfo
 	PartitionScheme part_scheme;	/* Partitioning scheme. */
 	int			nparts;			/* number of partitions */
 	struct PartitionBoundInfoData *boundinfo;	/* Partition bounds */
+	struct AppendRelInfo  **part_appinfos;	/* Array of AppendRelInfos of
+											 * of partitioned, stored in the
+											 * same order as of bounds */
 	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of partitions,
 									 * stored in the same order of bounds */
 	List	  **partexprs;		/* Partition key expressions. */
+
+	/*
+	 * For a partitioned relation, the following represents the identities
+	 * of its live partitions (their appinfos) and some informations about
+	 * the bounds that the live partitions satisfy.
+	 */
+	PartitionAppendInfo *painfo;
 } RelOptInfo;
 
 /*
@@ -2084,6 +2098,58 @@ typedef struct PartitionedChildRelInfo
 	Index		parent_relid;
 	List	   *child_rels;
 } PartitionedChildRelInfo;
+
+/* Forward declarations, to avoid including other headers */
+typedef struct PartitionDispatchData *PartitionDispatch;
+typedef struct PartitionBoundInfoData *PartitionBoundInfo;
+typedef struct PartitionKeyData *PartitionKey;
+
+/*
+ * PartitionAppendInfo - Properties of partitions contained in the Append path
+ *						 of a given partitioned table
+ */
+typedef struct PartitionAppendInfo
+{
+	NodeTag		type;
+
+	/*
+	 * List of AppendRelInfos of the table's partitions that satisfy a given
+	 * query.
+	 */
+	List	   *live_partition_appinfos;
+
+	/*
+	 * RT indexes of live partitions that are partitioned tables themselves.
+	 * This includes the RT index of the table itself.
+	 */
+	List	   *live_partitioned_rels;
+
+	/*
+	 * The following simply copies the pointer to boundinfo in the table's
+	 * PartitionDesc.
+	 */
+	PartitionBoundInfo boundinfo;
+
+	/*
+	 * Indexes in the boundinfo->datums array of the smallest and the largest
+	 * value of the partition key that the query allows.  They are set by
+	 * calling get_partitions_for_keys().
+	 */
+	int		min_datum_idx;
+	int		max_datum_idx;
+
+	/*
+	 * Does this Append contain the null-accepting partition, if one exists
+	 * and is allowed by the query's quals.
+	 */
+	bool	contains_null_partition;
+
+	/*
+	 * Does this Append contain the default partition, if one exists and is
+	 * allowed by the query's quals.
+	 */
+	bool contains_default_partition;
+} PartitionAppendInfo;
 
 /*
  * For each distinct placeholder expression generated during planning, we

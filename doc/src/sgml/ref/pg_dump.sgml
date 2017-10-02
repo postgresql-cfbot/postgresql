@@ -192,8 +192,11 @@ PostgreSQL documentation
         database itself and reconnect to the created database.  (With a
         script of this form, it doesn't matter which database in the
         destination installation you connect to before running the script.)
-        If <option>--clean</option> is also specified, the script drops and
-        recreates the target database before reconnecting to it.
+        It also sets all the database-level properties such as ownership, 
+        ACLs, <command>ALTER DATABASE ... SET</command> commands, and 
+        <command>ALTER ROLE IN DATABASE ... SET</command> commands.
+        If <option>--clean</option> is also specified, the script drops
+        and recreates the target database before reconnecting to it.
        </para>
 
        <para>
@@ -706,6 +709,20 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry>
+      <term><option>--enable-pgdumpall-behaviour</option></term>
+      <listitem>
+       <para>
+        This option is for the use of <command>pg_dumpall</command> or
+        <command>pg_upgrade</command> utility to dump the database objects
+        by <application>pg_dump</application> for a complete dump. 
+        This option can only be used with <option>-C/--create</option>.
+        Its use for other ourposes is not recommended or supported.
+        The behavior of the option may change in future releases without notice.
+       </para>
+      </listitem>
+     </varlistentry>
+     
      <varlistentry>
       <term><option>--enable-row-security</></term>
       <listitem>
@@ -1231,10 +1248,6 @@ CREATE DATABASE foo WITH TEMPLATE template0;
    <command>ANALYZE</command> after restoring from a dump file
    to ensure optimal performance; see <xref linkend="vacuum-for-statistics">
    and <xref linkend="autovacuum"> for more information.
-   The dump file also does not
-   contain any <command>ALTER DATABASE ... SET</> commands;
-   these settings are dumped by <xref linkend="app-pg-dumpall">,
-   along with database users and other installation-wide settings.
   </para>
 
   <para>

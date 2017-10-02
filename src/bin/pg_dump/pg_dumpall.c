@@ -38,16 +38,9 @@ static void dumpGroups(PGconn *conn);
 static void dropTablespaces(PGconn *conn);
 static void dumpTablespaces(PGconn *conn);
 static void dropDBs(PGconn *conn);
-static void dumpCreateDB(PGconn *conn);
-static void dumpDatabaseConfig(PGconn *conn, const char *dbname);
 static void dumpUserConfig(PGconn *conn, const char *username);
-static void dumpDbRoleConfig(PGconn *conn);
-static void makeAlterConfigCommand(PGconn *conn, const char *arrayitem,
-					   const char *type, const char *name, const char *type2,
-					   const char *name2);
 static void dumpDatabases(PGconn *conn);
 static void dumpTimestamp(const char *msg);
-
 static int	runPgDump(const char *dbname);
 static void buildShSecLabels(PGconn *conn, const char *catalog_name,
 				 uint32 objectId, PQExpBuffer buffer,
@@ -55,15 +48,12 @@ static void buildShSecLabels(PGconn *conn, const char *catalog_name,
 static PGconn *connectDatabase(const char *dbname, const char *connstr, const char *pghost, const char *pgport,
 				const char *pguser, trivalue prompt_password, bool fail_on_error);
 static char *constructConnStr(const char **keywords, const char **values);
-static PGresult *executeQuery(PGconn *conn, const char *query);
 static void executeCommand(PGconn *conn, const char *query);
 
 static char pg_dump_bin[MAXPGPATH];
-static const char *progname;
 static PQExpBuffer pgdumpopts;
 static char *connstr = "";
 static bool skip_acls = false;
-static bool verbose = false;
 static bool dosync = true;
 
 static int	binary_upgrade = 0;
@@ -281,7 +271,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'v':
-				verbose = true;
+				g_verbose = true;
 				appendPQExpBufferStr(pgdumpopts, " -v");
 				break;
 
@@ -498,7 +488,7 @@ main(int argc, char *argv[])
 		executeCommand(conn, "SET quote_all_identifiers = true");
 
 	fprintf(OPF, "--\n-- PostgreSQL database cluster dump\n--\n\n");
-	if (verbose)
+	if (g_verbose)
 		dumpTimestamp("Started on");
 
 	/*
@@ -558,17 +548,6 @@ main(int argc, char *argv[])
 		/* Dump tablespaces */
 		if (!roles_only && !no_tablespaces)
 			dumpTablespaces(conn);
-
-		/* Dump CREATE DATABASE commands */
-		if (binary_upgrade || (!globals_only && !roles_only && !tablespaces_only))
-			dumpCreateDB(conn);
-
-		/* Dump role/database settings */
-		if (!tablespaces_only && !roles_only)
-		{
-			if (server_version >= 90000)
-				dumpDbRoleConfig(conn);
-		}
 	}
 
 	if (!globals_only && !roles_only && !tablespaces_only)
@@ -576,7 +555,7 @@ main(int argc, char *argv[])
 
 	PQfinish(conn);
 
-	if (verbose)
+	if (g_verbose)
 		dumpTimestamp("Completed on");
 	fprintf(OPF, "--\n-- PostgreSQL database cluster dump complete\n--\n\n");
 
@@ -1302,323 +1281,6 @@ dropDBs(PGconn *conn)
 	fprintf(OPF, "\n\n");
 }
 
-/*
- * Dump commands to create each database.
- *
- * To minimize the number of reconnections (and possibly ensuing
- * password prompts) required by the output script, we emit all CREATE
- * DATABASE commands during the initial phase of the script, and then
- * run pg_dump for each database to dump the contents of that
- * database.  We skip databases marked not datallowconn, since we'd be
- * unable to connect to them anyway (and besides, we don't want to
- * dump template0).
- */
-static void
-dumpCreateDB(PGconn *conn)
-{
-	PQExpBuffer buf = createPQExpBuffer();
-	char	   *default_encoding = NULL;
-	char	   *default_collate = NULL;
-	char	   *default_ctype = NULL;
-	PGresult   *res;
-	int			i;
-
-	fprintf(OPF, "--\n-- Database creation\n--\n\n");
-
-	/*
-	 * First, get the installation's default encoding and locale information.
-	 * We will dump encoding and locale specifications in the CREATE DATABASE
-	 * commands for just those databases with values different from defaults.
-	 *
-	 * We consider template0's encoding and locale to define the installation
-	 * default.  Pre-8.4 installations do not have per-database locale
-	 * settings; for them, every database must necessarily be using the
-	 * installation default, so there's no need to do anything.
-	 */
-	if (server_version >= 80400)
-		res = executeQuery(conn,
-						   "SELECT pg_encoding_to_char(encoding), "
-						   "datcollate, datctype "
-						   "FROM pg_database "
-						   "WHERE datname = 'template0'");
-	else
-		res = executeQuery(conn,
-						   "SELECT pg_encoding_to_char(encoding), "
-						   "null::text AS datcollate, null::text AS datctype "
-						   "FROM pg_database "
-						   "WHERE datname = 'template0'");
-
-	/* If for some reason the template DB isn't there, treat as unknown */
-	if (PQntuples(res) > 0)
-	{
-		if (!PQgetisnull(res, 0, 0))
-			default_encoding = pg_strdup(PQgetvalue(res, 0, 0));
-		if (!PQgetisnull(res, 0, 1))
-			default_collate = pg_strdup(PQgetvalue(res, 0, 1));
-		if (!PQgetisnull(res, 0, 2))
-			default_ctype = pg_strdup(PQgetvalue(res, 0, 2));
-	}
-
-	PQclear(res);
-
-
-	/*
-	 * Now collect all the information about databases to dump.
-	 *
-	 * For the database ACLs, as of 9.6, we extract both the positive (as
-	 * datacl) and negative (as rdatacl) ACLs, relative to the default ACL for
-	 * databases, which are then passed to buildACLCommands() below.
-	 *
-	 * See buildACLQueries() and buildACLCommands().
-	 *
-	 * Note that we do not support initial privileges (pg_init_privs) on
-	 * databases.
-	 */
-	if (server_version >= 90600)
-		printfPQExpBuffer(buf,
-						  "SELECT datname, "
-						  "coalesce(rolname, (select rolname from %s where oid=(select datdba from pg_database where datname='template0'))), "
-						  "pg_encoding_to_char(d.encoding), "
-						  "datcollate, datctype, datfrozenxid, datminmxid, "
-						  "datistemplate, "
-						  "(SELECT pg_catalog.array_agg(acl ORDER BY acl::text COLLATE \"C\") FROM ( "
-						  "  SELECT pg_catalog.unnest(coalesce(datacl,pg_catalog.acldefault('d',datdba))) AS acl "
-						  "  EXCEPT SELECT pg_catalog.unnest(pg_catalog.acldefault('d',datdba))) as datacls)"
-						  "AS datacl, "
-						  "(SELECT pg_catalog.array_agg(acl ORDER BY acl::text COLLATE \"C\") FROM ( "
-						  "  SELECT pg_catalog.unnest(pg_catalog.acldefault('d',datdba)) AS acl "
-						  "  EXCEPT SELECT pg_catalog.unnest(coalesce(datacl,pg_catalog.acldefault('d',datdba)))) as rdatacls)"
-						  "AS rdatacl, "
-						  "datconnlimit, "
-						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
-						  "FROM pg_database d LEFT JOIN %s u ON (datdba = u.oid) "
-						  "WHERE datallowconn ORDER BY 1", role_catalog, role_catalog);
-	else if (server_version >= 90300)
-		printfPQExpBuffer(buf,
-						  "SELECT datname, "
-						  "coalesce(rolname, (select rolname from %s where oid=(select datdba from pg_database where datname='template0'))), "
-						  "pg_encoding_to_char(d.encoding), "
-						  "datcollate, datctype, datfrozenxid, datminmxid, "
-						  "datistemplate, datacl, '' as rdatacl, "
-						  "datconnlimit, "
-						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
-						  "FROM pg_database d LEFT JOIN %s u ON (datdba = u.oid) "
-						  "WHERE datallowconn ORDER BY 1", role_catalog, role_catalog);
-	else if (server_version >= 80400)
-		printfPQExpBuffer(buf,
-						  "SELECT datname, "
-						  "coalesce(rolname, (select rolname from %s where oid=(select datdba from pg_database where datname='template0'))), "
-						  "pg_encoding_to_char(d.encoding), "
-						  "datcollate, datctype, datfrozenxid, 0 AS datminmxid, "
-						  "datistemplate, datacl, '' as rdatacl, "
-						  "datconnlimit, "
-						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
-						  "FROM pg_database d LEFT JOIN %s u ON (datdba = u.oid) "
-						  "WHERE datallowconn ORDER BY 1", role_catalog, role_catalog);
-	else if (server_version >= 80100)
-		printfPQExpBuffer(buf,
-						  "SELECT datname, "
-						  "coalesce(rolname, (select rolname from %s where oid=(select datdba from pg_database where datname='template0'))), "
-						  "pg_encoding_to_char(d.encoding), "
-						  "null::text AS datcollate, null::text AS datctype, datfrozenxid, 0 AS datminmxid, "
-						  "datistemplate, datacl, '' as rdatacl, "
-						  "datconnlimit, "
-						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
-						  "FROM pg_database d LEFT JOIN %s u ON (datdba = u.oid) "
-						  "WHERE datallowconn ORDER BY 1", role_catalog, role_catalog);
-	else
-		printfPQExpBuffer(buf,
-						  "SELECT datname, "
-						  "coalesce(usename, (select usename from pg_shadow where usesysid=(select datdba from pg_database where datname='template0'))), "
-						  "pg_encoding_to_char(d.encoding), "
-						  "null::text AS datcollate, null::text AS datctype, datfrozenxid, 0 AS datminmxid, "
-						  "datistemplate, datacl, '' as rdatacl, "
-						  "-1 as datconnlimit, "
-						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
-						  "FROM pg_database d LEFT JOIN pg_shadow u ON (datdba = usesysid) "
-						  "WHERE datallowconn ORDER BY 1");
-
-	res = executeQuery(conn, buf->data);
-
-	for (i = 0; i < PQntuples(res); i++)
-	{
-		char	   *dbname = PQgetvalue(res, i, 0);
-		char	   *dbowner = PQgetvalue(res, i, 1);
-		char	   *dbencoding = PQgetvalue(res, i, 2);
-		char	   *dbcollate = PQgetvalue(res, i, 3);
-		char	   *dbctype = PQgetvalue(res, i, 4);
-		uint32		dbfrozenxid = atooid(PQgetvalue(res, i, 5));
-		uint32		dbminmxid = atooid(PQgetvalue(res, i, 6));
-		char	   *dbistemplate = PQgetvalue(res, i, 7);
-		char	   *dbacl = PQgetvalue(res, i, 8);
-		char	   *rdbacl = PQgetvalue(res, i, 9);
-		char	   *dbconnlimit = PQgetvalue(res, i, 10);
-		char	   *dbtablespace = PQgetvalue(res, i, 11);
-		char	   *fdbname;
-
-		fdbname = pg_strdup(fmtId(dbname));
-
-		resetPQExpBuffer(buf);
-
-		/*
-		 * Skip the CREATE DATABASE commands for "template1" and "postgres",
-		 * since they are presumably already there in the destination cluster.
-		 * We do want to emit their ACLs and config options if any, however.
-		 */
-		if (strcmp(dbname, "template1") != 0 &&
-			strcmp(dbname, "postgres") != 0)
-		{
-			appendPQExpBuffer(buf, "CREATE DATABASE %s", fdbname);
-
-			appendPQExpBufferStr(buf, " WITH TEMPLATE = template0");
-
-			if (strlen(dbowner) != 0)
-				appendPQExpBuffer(buf, " OWNER = %s", fmtId(dbowner));
-
-			if (default_encoding && strcmp(dbencoding, default_encoding) != 0)
-			{
-				appendPQExpBufferStr(buf, " ENCODING = ");
-				appendStringLiteralConn(buf, dbencoding, conn);
-			}
-
-			if (default_collate && strcmp(dbcollate, default_collate) != 0)
-			{
-				appendPQExpBufferStr(buf, " LC_COLLATE = ");
-				appendStringLiteralConn(buf, dbcollate, conn);
-			}
-
-			if (default_ctype && strcmp(dbctype, default_ctype) != 0)
-			{
-				appendPQExpBufferStr(buf, " LC_CTYPE = ");
-				appendStringLiteralConn(buf, dbctype, conn);
-			}
-
-			/*
-			 * Output tablespace if it isn't the default.  For default, it
-			 * uses the default from the template database.  If tablespace is
-			 * specified and tablespace creation failed earlier, (e.g. no such
-			 * directory), the database creation will fail too.  One solution
-			 * would be to use 'SET default_tablespace' like we do in pg_dump
-			 * for setting non-default database locations.
-			 */
-			if (strcmp(dbtablespace, "pg_default") != 0 && !no_tablespaces)
-				appendPQExpBuffer(buf, " TABLESPACE = %s",
-								  fmtId(dbtablespace));
-
-			if (strcmp(dbistemplate, "t") == 0)
-				appendPQExpBuffer(buf, " IS_TEMPLATE = true");
-
-			if (strcmp(dbconnlimit, "-1") != 0)
-				appendPQExpBuffer(buf, " CONNECTION LIMIT = %s",
-								  dbconnlimit);
-
-			appendPQExpBufferStr(buf, ";\n");
-		}
-		else if (strcmp(dbtablespace, "pg_default") != 0 && !no_tablespaces)
-		{
-			/*
-			 * Cannot change tablespace of the database we're connected to, so
-			 * to move "postgres" to another tablespace, we connect to
-			 * "template1", and vice versa.
-			 */
-			if (strcmp(dbname, "postgres") == 0)
-				appendPQExpBuffer(buf, "\\connect template1\n");
-			else
-				appendPQExpBuffer(buf, "\\connect postgres\n");
-
-			appendPQExpBuffer(buf, "ALTER DATABASE %s SET TABLESPACE %s;\n",
-							  fdbname, fmtId(dbtablespace));
-
-			/* connect to original database */
-			appendPsqlMetaConnect(buf, dbname);
-		}
-
-		if (binary_upgrade)
-		{
-			appendPQExpBufferStr(buf, "-- For binary upgrade, set datfrozenxid and datminmxid.\n");
-			appendPQExpBuffer(buf, "UPDATE pg_catalog.pg_database "
-							  "SET datfrozenxid = '%u', datminmxid = '%u' "
-							  "WHERE datname = ",
-							  dbfrozenxid, dbminmxid);
-			appendStringLiteralConn(buf, dbname, conn);
-			appendPQExpBufferStr(buf, ";\n");
-		}
-
-		if (!skip_acls &&
-			!buildACLCommands(fdbname, NULL, "DATABASE",
-							  dbacl, rdbacl, dbowner,
-							  "", server_version, buf))
-		{
-			fprintf(stderr, _("%s: could not parse ACL list (%s) for database \"%s\"\n"),
-					progname, dbacl, fdbname);
-			PQfinish(conn);
-			exit_nicely(1);
-		}
-
-		fprintf(OPF, "%s", buf->data);
-
-		dumpDatabaseConfig(conn, dbname);
-
-		free(fdbname);
-	}
-
-	if (default_encoding)
-		free(default_encoding);
-	if (default_collate)
-		free(default_collate);
-	if (default_ctype)
-		free(default_ctype);
-
-	PQclear(res);
-	destroyPQExpBuffer(buf);
-
-	fprintf(OPF, "\n\n");
-}
-
-
-/*
- * Dump database-specific configuration
- */
-static void
-dumpDatabaseConfig(PGconn *conn, const char *dbname)
-{
-	PQExpBuffer buf = createPQExpBuffer();
-	int			count = 1;
-
-	for (;;)
-	{
-		PGresult   *res;
-
-		if (server_version >= 90000)
-			printfPQExpBuffer(buf, "SELECT setconfig[%d] FROM pg_db_role_setting WHERE "
-							  "setrole = 0 AND setdatabase = (SELECT oid FROM pg_database WHERE datname = ", count);
-		else
-			printfPQExpBuffer(buf, "SELECT datconfig[%d] FROM pg_database WHERE datname = ", count);
-		appendStringLiteralConn(buf, dbname, conn);
-
-		if (server_version >= 90000)
-			appendPQExpBufferChar(buf, ')');
-
-		res = executeQuery(conn, buf->data);
-		if (PQntuples(res) == 1 &&
-			!PQgetisnull(res, 0, 0))
-		{
-			makeAlterConfigCommand(conn, PQgetvalue(res, 0, 0),
-								   "DATABASE", dbname, NULL, NULL);
-			PQclear(res);
-			count++;
-		}
-		else
-		{
-			PQclear(res);
-			break;
-		}
-	}
-
-	destroyPQExpBuffer(buf);
-}
-
-
 
 /*
  * Dump user-specific configuration
@@ -1646,11 +1308,14 @@ dumpUserConfig(PGconn *conn, const char *username)
 			appendPQExpBufferChar(buf, ')');
 
 		res = executeQuery(conn, buf->data);
+		resetPQExpBuffer(buf);
+
 		if (PQntuples(res) == 1 &&
 			!PQgetisnull(res, 0, 0))
 		{
 			makeAlterConfigCommand(conn, PQgetvalue(res, 0, 0),
-								   "ROLE", username, NULL, NULL);
+								   "ROLE", username, NULL, NULL, buf);
+			fprintf(OPF, "%s", buf->data);
 			PQclear(res);
 			count++;
 		}
@@ -1663,85 +1328,6 @@ dumpUserConfig(PGconn *conn, const char *username)
 
 	destroyPQExpBuffer(buf);
 }
-
-
-/*
- * Dump user-and-database-specific configuration
- */
-static void
-dumpDbRoleConfig(PGconn *conn)
-{
-	PQExpBuffer buf = createPQExpBuffer();
-	PGresult   *res;
-	int			i;
-
-	printfPQExpBuffer(buf, "SELECT rolname, datname, unnest(setconfig) "
-					  "FROM pg_db_role_setting, %s u, pg_database "
-					  "WHERE setrole = u.oid AND setdatabase = pg_database.oid", role_catalog);
-	res = executeQuery(conn, buf->data);
-
-	if (PQntuples(res) > 0)
-	{
-		fprintf(OPF, "--\n-- Per-Database Role Settings \n--\n\n");
-
-		for (i = 0; i < PQntuples(res); i++)
-		{
-			makeAlterConfigCommand(conn, PQgetvalue(res, i, 2),
-								   "ROLE", PQgetvalue(res, i, 0),
-								   "DATABASE", PQgetvalue(res, i, 1));
-		}
-
-		fprintf(OPF, "\n\n");
-	}
-
-	PQclear(res);
-	destroyPQExpBuffer(buf);
-}
-
-
-/*
- * Helper function for dumpXXXConfig().
- */
-static void
-makeAlterConfigCommand(PGconn *conn, const char *arrayitem,
-					   const char *type, const char *name,
-					   const char *type2, const char *name2)
-{
-	char	   *pos;
-	char	   *mine;
-	PQExpBuffer buf;
-
-	mine = pg_strdup(arrayitem);
-	pos = strchr(mine, '=');
-	if (pos == NULL)
-	{
-		free(mine);
-		return;
-	}
-
-	buf = createPQExpBuffer();
-
-	*pos = 0;
-	appendPQExpBuffer(buf, "ALTER %s %s ", type, fmtId(name));
-	if (type2 != NULL && name2 != NULL)
-		appendPQExpBuffer(buf, "IN %s %s ", type2, fmtId(name2));
-	appendPQExpBuffer(buf, "SET %s TO ", fmtId(mine));
-
-	/*
-	 * Some GUC variable names are 'LIST' type and hence must not be quoted.
-	 */
-	if (pg_strcasecmp(mine, "DateStyle") == 0
-		|| pg_strcasecmp(mine, "search_path") == 0)
-		appendPQExpBufferStr(buf, pos + 1);
-	else
-		appendStringLiteralConn(buf, pos + 1, conn);
-	appendPQExpBufferStr(buf, ";\n");
-
-	fprintf(OPF, "%s", buf->data);
-	destroyPQExpBuffer(buf);
-	free(mine);
-}
-
 
 
 /*
@@ -1758,28 +1344,10 @@ dumpDatabases(PGconn *conn)
 	for (i = 0; i < PQntuples(res); i++)
 	{
 		int			ret;
-
 		char	   *dbname = PQgetvalue(res, i, 0);
-		PQExpBufferData connectbuf;
 
-		if (verbose)
+		if (g_verbose)
 			fprintf(stderr, _("%s: dumping database \"%s\"...\n"), progname, dbname);
-
-		initPQExpBuffer(&connectbuf);
-		appendPsqlMetaConnect(&connectbuf, dbname);
-		fprintf(OPF, "%s\n", connectbuf.data);
-		termPQExpBuffer(&connectbuf);
-
-		/*
-		 * Restore will need to write to the target cluster.  This connection
-		 * setting is emitted for pg_dumpall rather than in the code also used
-		 * by pg_dump, so that a cluster with databases or users which have
-		 * this flag turned on can still be replicated through pg_dumpall
-		 * without editing the file or stream.  With pg_dump there are many
-		 * other ways to allow the file to be used, and leaving it out allows
-		 * users to protect databases from being accidental restore targets.
-		 */
-		fprintf(OPF, "SET default_transaction_read_only = off;\n\n");
 
 		if (filename)
 			fclose(OPF);
@@ -1822,6 +1390,13 @@ runPgDump(const char *dbname)
 	appendPQExpBuffer(cmd, "\"%s\" %s", pg_dump_bin,
 					  pgdumpopts->data);
 
+
+	/*
+	 * The create individual database logic has been moved to pg_dump. invoke
+	 * pg_dump with create database option.
+	 */
+	appendPQExpBufferStr(cmd, " -C --enable-pgdumpall-behaviour");
+
 	/*
 	 * If we have a filename, use the undocumented plain-append pg_dump
 	 * format.
@@ -1840,7 +1415,7 @@ runPgDump(const char *dbname)
 
 	appendShellString(cmd, connstrbuf->data);
 
-	if (verbose)
+	if (g_verbose)
 		fprintf(stderr, _("%s: running \"%s\"\n"), progname, cmd->data);
 
 	fflush(stdout);
@@ -2133,31 +1708,7 @@ constructConnStr(const char **keywords, const char **values)
 	return connstr;
 }
 
-/*
- * Run a query, return the results, exit program on failure.
- */
-static PGresult *
-executeQuery(PGconn *conn, const char *query)
-{
-	PGresult   *res;
 
-	if (verbose)
-		fprintf(stderr, _("%s: executing %s\n"), progname, query);
-
-	res = PQexec(conn, query);
-	if (!res ||
-		PQresultStatus(res) != PGRES_TUPLES_OK)
-	{
-		fprintf(stderr, _("%s: query failed: %s"),
-				progname, PQerrorMessage(conn));
-		fprintf(stderr, _("%s: query was: %s\n"),
-				progname, query);
-		PQfinish(conn);
-		exit_nicely(1);
-	}
-
-	return res;
-}
 
 /*
  * As above for a SQL command (which returns nothing).
@@ -2167,7 +1718,7 @@ executeCommand(PGconn *conn, const char *query)
 {
 	PGresult   *res;
 
-	if (verbose)
+	if (g_verbose)
 		fprintf(stderr, _("%s: executing %s\n"), progname, query);
 
 	res = PQexec(conn, query);

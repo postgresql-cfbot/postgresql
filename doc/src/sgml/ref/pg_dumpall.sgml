@@ -129,6 +129,10 @@ PostgreSQL documentation
       <listitem>
        <para>
         Dump only global objects (roles and tablespaces), no databases.
+        Any database role configuration settings are not dumped with
+        this option. User needs to use <command>pg_dump</command> with
+        <option>--create</option> option to dump 
+        <command>ALTER ROLE IN DATABASE ... SET</> commands.
        </para>
       </listitem>
      </varlistentry>

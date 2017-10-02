@@ -122,6 +122,7 @@ typedef struct _restoreOptions
 	int			enable_row_security;
 	int			sequence_data;	/* dump sequence data even in schema-only mode */
 	int			binary_upgrade;
+	int			enable_pgdumpall_behaviour;
 } RestoreOptions;
 
 typedef struct _dumpOptions
@@ -158,6 +159,7 @@ typedef struct _dumpOptions
 	int			use_setsessauth;
 	int			enable_row_security;
 	int			load_via_partition_root;
+	int         enable_pgdumpall_behaviour;
 
 	/* default, if no "inclusion" switches appear, is to dump everything */
 	bool		include_everything;

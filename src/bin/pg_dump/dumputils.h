@@ -17,6 +17,7 @@
 
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
+#include "pg_backup_utils.h"
 
 /*
  * Preferred strftime(3) format specifier for printing timestamps in pg_dump
@@ -55,5 +56,11 @@ extern void buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 				PQExpBuffer init_acl_subquery, PQExpBuffer init_racl_subquery,
 				const char *acl_column, const char *acl_owner,
 				const char *obj_kind, bool binary_upgrade);
+
+extern void makeAlterConfigCommand(PGconn *conn, const char *arrayitem,
+                                          const char *type, const char *name, const char *type2,
+                                          const char *name2, PQExpBuffer buf);
+
+extern PGresult *executeQuery(PGconn *conn, const char *query);
 
 #endif							/* DUMPUTILS_H */

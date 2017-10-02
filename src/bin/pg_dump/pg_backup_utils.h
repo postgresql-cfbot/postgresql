@@ -26,6 +26,7 @@ typedef enum					/* bits returned by set_dump_section */
 typedef void (*on_exit_nicely_callback) (int code, void *arg);
 
 extern const char *progname;
+extern bool g_verbose;
 
 extern void set_dump_section(const char *arg, int *dumpSections);
 extern void write_msg(const char *modulename, const char *fmt,...) pg_attribute_printf(2, 3);

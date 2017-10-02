@@ -2714,7 +2714,7 @@ qr/CREATE CAST \(timestamp with time zone AS interval\) WITH FUNCTION pg_catalog
 		create_order => 47,
 		create_sql   => 'CREATE DATABASE dump_test;',
 		regexp       => qr/^
-			\QCREATE DATABASE dump_test WITH TEMPLATE = template0 \E
+			\QCREATE DATABASE dump_test WITH TEMPLATE = template0\E
 			.*;/xm,
 		like   => { pg_dumpall_dbprivs => 1, },
 		unlike => {

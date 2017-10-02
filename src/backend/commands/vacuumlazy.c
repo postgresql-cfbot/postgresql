@@ -855,7 +855,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			if (PageIsNew(page))
 			{
 				ereport(WARNING,
-						(errmsg("relation \"%s\" page %u is uninitialized --- fixing",
+						(errmsg("relation \"%s.%s\" page %u is uninitialized --- fixing",
+								get_namespace_name(RelationGetNamespace(onerel)),
 								relname, blkno)));
 				PageInit(page, BufferGetPageSize(buf), 0);
 				empty_pages++;
@@ -1005,7 +1006,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 					/* Tuple is good --- but let's do some validity checks */
 					if (onerel->rd_rel->relhasoids &&
 						!OidIsValid(HeapTupleGetOid(&tuple)))
-						elog(WARNING, "relation \"%s\" TID %u/%u: OID is invalid",
+						elog(WARNING, "relation \"%s.%s\" TID %u/%u: OID is invalid",
+							 get_namespace_name(RelationGetNamespace(onerel)),
 							 relname, blkno, offnum);
 
 					/*
@@ -1189,7 +1191,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		else if (all_visible_according_to_vm && !PageIsAllVisible(page)
 				 && VM_ALL_VISIBLE(onerel, blkno, &vmbuffer))
 		{
-			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
+			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s.%s\" page %u",
+				 get_namespace_name(RelationGetNamespace(onerel)),
 				 relname, blkno);
 			visibilitymap_clear(onerel, blkno, vmbuffer,
 								VISIBILITYMAP_VALID_BITS);
@@ -1210,7 +1213,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 */
 		else if (PageIsAllVisible(page) && has_dead_tuples)
 		{
-			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s\" page %u",
+			elog(WARNING, "page containing dead tuples is marked as all-visible in relation \"%s.%s\" page %u",
+				 get_namespace_name(RelationGetNamespace(onerel)),
 				 relname, blkno);
 			PageClearAllVisible(page);
 			MarkBufferDirty(buf);
@@ -1325,7 +1329,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
 		ereport(elevel,
-				(errmsg("\"%s\": removed %.0f row versions in %u pages",
+				(errmsg("\"%s.%s\": removed %.0f row versions in %u pages",
+						get_namespace_name(RelationGetNamespace(onerel)),
 						RelationGetRelationName(onerel),
 						tups_vacuumed, vacuumed_pages)));
 
@@ -1354,7 +1359,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
 
 	ereport(elevel,
-			(errmsg("\"%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
+			(errmsg("\"%s.%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
+					get_namespace_name(RelationGetNamespace(onerel)),
 					RelationGetRelationName(onerel),
 					tups_vacuumed, num_tuples,
 					vacrelstats->scanned_pages, nblocks),
@@ -1423,7 +1429,8 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	}
 
 	ereport(elevel,
-			(errmsg("\"%s\": removed %d row versions in %d pages",
+			(errmsg("\"%s.%s\": removed %d row versions in %d pages",
+					get_namespace_name(RelationGetNamespace(onerel)),
 					RelationGetRelationName(onerel),
 					tupindex, npages),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
@@ -1611,7 +1618,8 @@ lazy_vacuum_index(Relation indrel,
 							   lazy_tid_reaped, (void *) vacrelstats);
 
 	ereport(elevel,
-			(errmsg("scanned index \"%s\" to remove %d row versions",
+			(errmsg("scanned index \"%s.%s\" to remove %d row versions",
+					get_namespace_name(RelationGetNamespace(indrel)),
 					RelationGetRelationName(indrel),
 					vacrelstats->num_dead_tuples),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
@@ -1657,7 +1665,8 @@ lazy_cleanup_index(Relation indrel,
 							false);
 
 	ereport(elevel,
-			(errmsg("index \"%s\" now contains %.0f row versions in %u pages",
+			(errmsg("index \"%s.%s\" now contains %.0f row versions in %u pages",
+					get_namespace_name(RelationGetNamespace(indrel)),
 					RelationGetRelationName(indrel),
 					stats->num_index_tuples,
 					stats->num_pages),
@@ -1756,7 +1765,8 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 				 */
 				vacrelstats->lock_waiter_detected = true;
 				ereport(elevel,
-						(errmsg("\"%s\": stopping truncate due to conflicting lock request",
+						(errmsg("\"%s.%s\": stopping truncate due to conflicting lock request",
+								get_namespace_name(RelationGetNamespace(onerel)),
 								RelationGetRelationName(onerel))));
 				return;
 			}
@@ -1821,7 +1831,8 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 		vacrelstats->rel_pages = new_rel_pages;
 
 		ereport(elevel,
-				(errmsg("\"%s\": truncated %u to %u pages",
+				(errmsg("\"%s.%s\": truncated %u to %u pages",
+						get_namespace_name(RelationGetNamespace(onerel)),
 						RelationGetRelationName(onerel),
 						old_rel_pages, new_rel_pages),
 				 errdetail_internal("%s",
@@ -1886,7 +1897,8 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 				if (LockHasWaitersRelation(onerel, AccessExclusiveLock))
 				{
 					ereport(elevel,
-							(errmsg("\"%s\": suspending truncate due to conflicting lock request",
+							(errmsg("\"%s.%s\": suspending truncate due to conflicting lock request",
+									get_namespace_name(RelationGetNamespace(onerel)),
 									RelationGetRelationName(onerel))));
 
 					vacrelstats->lock_waiter_detected = true;

@@ -2408,16 +2408,27 @@ apply_projection_to_path(PlannerInfo *root,
 		 * projection-capable, so as to avoid modifying the subpath in place.
 		 * It seems unlikely at present that there could be any other
 		 * references to the subpath, but better safe than sorry.
-		 *
-		 * Note that we don't change the GatherPath's cost estimates; it might
-		 * be appropriate to do so, to reflect the fact that the bulk of the
-		 * target evaluation will happen in workers.
 		 */
 		gpath->subpath = (Path *)
 			create_projection_path(root,
 								   gpath->subpath->parent,
 								   gpath->subpath,
 								   target);
+
+		/*
+		 * Adjust the cost of GatherPath to reflect the fact that the bulk of
+		 * the target evaluation will happen in workers.
+		 */
+		if (((ProjectionPath *) gpath->subpath)->dummypp)
+		{
+			path->total_cost -= (target->cost.per_tuple - oldcost.per_tuple) * path->rows;
+			path->total_cost += (target->cost.per_tuple - oldcost.per_tuple) * gpath->subpath->rows;
+		}
+		else
+		{
+			path->total_cost -= (target->cost.per_tuple - oldcost.per_tuple) * path->rows;
+			path->total_cost += (cpu_tuple_cost + target->cost.per_tuple) * gpath->subpath->rows;
+		}
 	}
 	else if (path->parallel_safe &&
 			 !is_parallel_safe(root, (Node *) target->exprs))

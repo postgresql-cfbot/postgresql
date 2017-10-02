@@ -39,6 +39,17 @@ explain (costs off)
 	select  sum(parallel_restricted(unique1)) from tenk1
 	group by(parallel_restricted(unique1));
 
+-- test that parallel plan gets selected when target list contains costly
+-- function
+create or replace function costly_func(var1 integer) returns integer
+as $$
+begin
+        return var1 + 10;
+end;
+$$ language plpgsql PARALLEL SAFE Cost 100000;
+explain (costs off) select ten, costly_func(ten) from tenk1;
+drop function costly_func(var1 integer);
+
 -- test parallel plans for queries containing un-correlated subplans.
 alter table tenk2 set (parallel_workers = 0);
 explain (costs off)

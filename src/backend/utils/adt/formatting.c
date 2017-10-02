@@ -4649,6 +4649,8 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 	FormatNode *n;
 	NUMProc		_Np,
 			   *Np = &_Np;
+	int			separator_len;
+	bool		noadd;
 
 	MemSet(Np, 0, sizeof(NUMProc));
 
@@ -4802,6 +4804,7 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 	 * Locale
 	 */
 	NUM_prepare_locale(Np);
+	separator_len = strlen(Np->L_thousands_sep);
 
 	/*
 	 * Processor direct cycle
@@ -4813,6 +4816,7 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 
 	for (n = node, Np->inout_p = Np->inout; n->type != NODE_TYPE_END; n++)
 	{
+		noadd = false;
 		if (!Np->is_to_char)
 		{
 			/*
@@ -4872,6 +4876,10 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 							if (IS_FILLMODE(Np->Num))
 								continue;
 						}
+						if (strncmp(Np->inout_p, Np->L_thousands_sep, separator_len) == 0)
+							Np->inout_p += separator_len - 1;
+						else
+							noadd = true;
 					}
 					break;
 
@@ -4884,10 +4892,8 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 								continue;
 							else
 							{
-								int			x = strlen(Np->L_thousands_sep);
-
-								memset(Np->inout_p, ' ', x);
-								Np->inout_p += x - 1;
+								memset(Np->inout_p, ' ', separator_len);
+								Np->inout_p += separator_len - 1;
 							}
 						}
 						else
@@ -4903,7 +4909,10 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 							if (IS_FILLMODE(Np->Num))
 								continue;
 						}
-						Np->inout_p += strlen(Np->L_thousands_sep) - 1;
+						if (strncmp(Np->inout_p, Np->L_thousands_sep, separator_len) == 0)
+							Np->inout_p += separator_len - 1;
+						else
+							noadd = true;
 					}
 					break;
 
@@ -5024,7 +5033,8 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 			if (Np->is_to_char)
 				*Np->inout_p = n->character;
 		}
-		Np->inout_p++;
+		if (!noadd)
+			Np->inout_p++;
 	}
 
 	if (Np->is_to_char)

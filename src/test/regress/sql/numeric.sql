@@ -1013,3 +1013,13 @@ select scale(-13.000000000000000);
 -- cases that need carry propagation
 SELECT SUM(9999::numeric) FROM generate_series(1, 100000);
 SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
+
+--
+-- Tests to regression test TODO item 'Fix to_number() handling for values not matching the format string'
+--
+
+select to_number('34,50','999,99');
+select to_number('34,50','999G99');
+select to_number('12,34','999G99');
+select to_number('123,000','999G');
+select to_number('123456','999G999');

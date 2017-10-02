@@ -1946,3 +1946,36 @@ SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
  -999900000
 (1 row)
 
+--
+-- Tests to regression test TODO item 'Fix to_number() handling for values not matching the format string'
+--
+select to_number('34,50','999,99');
+ to_number 
+-----------
+      3450
+(1 row)
+
+select to_number('34,50','999G99');
+ to_number 
+-----------
+      3450
+(1 row)
+
+select to_number('12,34','999G99');
+ to_number 
+-----------
+      1234
+(1 row)
+
+select to_number('123,000','999G');
+ to_number 
+-----------
+       123
+(1 row)
+
+select to_number('123456','999G999');
+ to_number 
+-----------
+    123456
+(1 row)
+

@@ -986,6 +986,29 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 			recvFile = XLogFileInit(recvSegNo, &use_existent, true);
 			recvFileTLI = ThisTimeLineID;
 			recvOff = 0;
+
+			if ((recptr & 0xffffffL) == 0)
+			{
+				XLogPageHeader ph = (XLogPageHeader) buf;
+				Assert(nbytes >= sizeof(SizeOfXLogShortPHD));
+
+				elog(LOG, "############# CHECK AT %lX : %d",
+					 recptr, (ph->xlp_info & XLP_FIRST_IS_CONTRECORD) != 0);
+				if (ph->xlp_info & XLP_FIRST_IS_CONTRECORD)
+				{
+					struct stat sbuf;
+					if (stat("/tmp/hoge", &sbuf) == 0)
+					{
+						elog(LOG, "#################### STOP THE SERVER");
+						system("pg_ctl stop -m f -W");
+						while (1)
+						{
+							ProcessWalRcvInterrupts();
+							sleep(1);
+						}
+					}
+				}
+			}
 		}
 
 		/* Calculate the start offset of the received logs */

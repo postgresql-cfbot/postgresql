@@ -11647,6 +11647,11 @@ retry:
 	Assert(reqLen <= readLen);
 
 	*readTLI = curFileTLI;
+
+	if (!XLogReaderValidatePageHeader(xlogreader, targetPagePtr,
+									  (XLogPageHeader) readBuf))
+		goto next_record_is_invalid;
+
 	return readLen;
 
 next_record_is_invalid:
@@ -11781,7 +11786,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						}
 						else
 						{
-							ptr = tliRecPtr;
+							ptr = RecPtr;
 							tli = tliOfPointInHistory(tliRecPtr, expectedTLEs);
 
 							if (curFileTLI > 0 && tli < curFileTLI)

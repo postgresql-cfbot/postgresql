@@ -27,8 +27,6 @@
 
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 
-static bool ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
-					XLogPageHeader hdr);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -547,7 +545,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 		hdr = (XLogPageHeader) state->readBuf;
 
-		if (!ValidXLogPageHeader(state, targetSegmentPtr, hdr))
+		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr, hdr))
 			goto err;
 	}
 
@@ -584,7 +582,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	/*
 	 * Now that we know we have the full header, validate it.
 	 */
-	if (!ValidXLogPageHeader(state, pageptr, hdr))
+	if (!XLogReaderValidatePageHeader(state, pageptr, hdr))
 		goto err;
 
 	/* update read state information */
@@ -711,9 +709,9 @@ ValidXLogRecord(XLogReaderState *state, XLogRecord *record, XLogRecPtr recptr)
 /*
  * Validate a page header
  */
-static bool
-ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
-					XLogPageHeader hdr)
+bool
+XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
+							 XLogPageHeader hdr)
 {
 	XLogRecPtr	recaddr;
 	XLogSegNo	segno;

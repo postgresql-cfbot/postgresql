@@ -2840,6 +2840,57 @@ declare f1 int; begin return 1; end $$ language plpgsql;
 
 select shadowtest(1);
 
+-- runtime extra checks
+set plpgsql.extra_warnings to 'too_many_rows';
+
+do $$
+declare x int;
+begin
+  select v from generate_series(1,2) g(v) into x;
+end;
+$$;
+
+set plpgsql.extra_errors to 'too_many_rows';
+
+do $$
+declare x int;
+begin
+  select v from generate_series(1,2) g(v) into x;
+end;
+$$;
+
+reset plpgsql.extra_errors;
+reset plpgsql.extra_warnings;
+
+set plpgsql.extra_warnings to 'strict_multi_assignment';
+
+do $$
+declare
+  x int;
+  y int;
+begin
+  select 1 into x, y;
+  select 1,2 into x, y;
+  select 1,2,3 into x, y;
+end
+$$;
+
+set plpgsql.extra_errors to 'strict_multi_assignment';
+
+do $$
+declare
+  x int;
+  y int;
+begin
+  select 1 into x, y;
+  select 1,2 into x, y;
+  select 1,2,3 into x, y;
+end
+$$;
+
+reset plpgsql.extra_errors;
+reset plpgsql.extra_warnings;
+
 -- test scrollable cursor support
 
 create function sc_test() returns setof integer as $$

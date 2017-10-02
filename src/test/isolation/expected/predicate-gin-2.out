@@ -1,0 +1,321 @@
+Parsed test spec with 2 sessions
+
+starting permutation: rxy1 wx1 c1 rxy2 wy2 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 c1 wy2 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step c1: COMMIT;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 wy2 c1 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 wy2 c2 c1
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 c1 wy2 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 wy2 c1 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 wy2 c2 c1
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 wx1 c1 c2
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 wx1 c2 c1
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 c2 wx1 c1
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 c1 wy2 c2
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 wy2 c1 c2
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 wy2 c2 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 wx1 c1 c2
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 wx1 c2 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 c2 wx1 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 wx1 c1 c2
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 wx1 c2 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 c2 wx1 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step c2: COMMIT;
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 c2 rxy1 wx1 c1
+step rxy2: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[3,4];
+sum            
+
+1007820        
+step wy2: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(4000, 4100) g;
+step c2: COMMIT;
+step rxy1: select sum(p[1]+p[2]+p[3]) from gin_tbl where p @> array[1,2];
+sum            
+
+1003860        
+step wx1: insert into gin_tbl select g, array[g, g*2, g*3]
+		  from generate_series(3000, 3100) g;
+step c1: COMMIT;

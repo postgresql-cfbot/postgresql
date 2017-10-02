@@ -63,3 +63,5 @@ test: sequence-ddl
 test: async-notify
 test: vacuum-reltuples
 test: timeouts
+test: predicate-spgist
+test: predicate-spgist-2

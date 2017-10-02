@@ -17,6 +17,7 @@
 
 #include "access/relscan.h"
 #include "access/spgist_private.h"
+#include "storage/predicate.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "utils/datum.h"
@@ -350,6 +351,8 @@ redirect:
 			OffsetNumber max = PageGetMaxOffsetNumber(page);
 			Datum		leafValue = (Datum) 0;
 			bool		recheck = false;
+
+			PredicateLockPage(index, BufferGetBlockNumber(buffer), snapshot);
 
 			if (SpGistBlockIsRoot(blkno))
 			{

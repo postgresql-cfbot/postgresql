@@ -19,6 +19,7 @@
 #include "access/spgist_private.h"
 #include "access/spgxlog.h"
 #include "access/xloginsert.h"
+#include "storage/predicate.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
@@ -1030,6 +1031,10 @@ doPickSplit(Relation index, SpGistState *state,
 											SPGIST_PAGE_CAPACITY),
 										&xlrec.initDest);
 
+		PredicateLockPageSplit(index,
+					BufferGetBlockNumber(current->buffer),
+					BufferGetBlockNumber(newLeafBuffer));
+
 		/*
 		 * Attempt to assign node groups to the two pages.  We might fail to
 		 * do so, even if totalLeafSizes is less than the available space,
@@ -2023,6 +2028,8 @@ spgdoinsert(Relation index, SpGistState *state,
 			SpGistLeafTuple leafTuple;
 			int			nToSplit,
 						sizeToSplit;
+
+			CheckForSerializableConflictIn(index, NULL, current.buffer);
 
 			leafTuple = spgFormLeafTuple(state, heapPtr, leafDatum, isnull);
 			if (leafTuple->size + sizeof(ItemIdData) <=

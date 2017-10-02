@@ -48,7 +48,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = false;
 	amroutine->amclusterable = false;
-	amroutine->ampredlocks = false;
+	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = false;
 	amroutine->amkeytype = InvalidOid;
 

@@ -4355,3 +4355,28 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
 }
+
+#if defined(USE_ASSERT_CHECKING) && !defined(FRONTEND)
+void
+AssertPageIsLockedForLSN(Page page)
+{
+	char *pagePtr = page;
+
+	/*
+	 * We only want to assert that we hold a lock on the page contents if the
+	 * page is shared (i.e. it is one of the BufferBlocks).
+	 */
+	if (BufferBlocks <= pagePtr
+		&& pagePtr < (BufferBlocks + NBuffers * BLCKSZ))
+	{
+		ptrdiff_t bufId = (pagePtr - BufferBlocks) / BLCKSZ;
+		BufferDesc *buf = GetBufferDescriptor(bufId);
+		LWLock *content_lock = BufferDescriptorGetContentLock(buf);
+		uint32 buf_state = pg_atomic_read_u32(&buf->state);
+
+		Assert(LWLockHeldByMeInMode(content_lock, LW_EXCLUSIVE)
+			   || (LWLockHeldByMeInMode(content_lock, LW_SHARED)
+				   && (buf_state & BM_LOCKED)));
+	}
+}
+#endif

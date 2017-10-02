@@ -101,6 +101,7 @@ bool		IsPostmasterEnvironment = false;
 bool		IsUnderPostmaster = false;
 bool		IsBinaryUpgrade = false;
 bool		IsBackgroundWorker = false;
+bool            am_autovacuum_worker = false;
 
 bool		ExitOnAnyError = false;
 

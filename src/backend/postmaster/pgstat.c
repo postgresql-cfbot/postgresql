@@ -142,6 +142,15 @@ char	   *pgstat_stat_tmpname = NULL;
  */
 PgStat_MsgBgWriter BgWriterStats;
 
+/*
+ * WalWrites Local statistics counters.
+ * The statistics data gets populated in XLogWrite function.
+ * Stored directly in a stats message structure so it can be sent
+ * to stats collector process without needing to copy things around.
+ * We assume this inits to zeroes.
+ */
+PgStat_MsgWalWrites LocalWalWritesStats;
+
 /* ----------
  * Local data
  * ----------
@@ -256,6 +265,7 @@ static int	localNumBackends = 0;
  */
 static PgStat_ArchiverStats archiverStats;
 static PgStat_GlobalStats globalStats;
+static PgStat_WalWritesStats walwritesStats;
 
 /*
  * List of OIDs of databases we need to write out.  If an entry is InvalidOid,
@@ -336,6 +346,7 @@ static void pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len);
 static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len);
 static void pgstat_recv_deadlock(PgStat_MsgDeadlock *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+static void pgstat_recv_walwrites(PgStat_MsgWalWrites * msg, int len);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -1336,11 +1347,13 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_ARCHIVER;
 	else if (strcmp(target, "bgwriter") == 0)
 		msg.m_resettarget = RESET_BGWRITER;
+	else if (strcmp(target, "walwrites") == 0)
+		msg.m_resettarget = RESET_WALWRITES;
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\" or \"bgwriter\".")));
+				 errhint("Target must be \"archiver\" or \"bgwriter\" or \"walwrites\".")));
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSHAREDCOUNTER);
 	pgstat_send(&msg, sizeof(msg));
@@ -2580,6 +2593,21 @@ pgstat_fetch_global(void)
 	return &globalStats;
 }
 
+/*
+ * ---------
+ * pgstat_fetch_stat_walwrites() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	a pointer to the walwrites statistics struct.
+ * ---------
+ */
+PgStat_WalWritesStats *
+pgstat_fetch_stat_walwrites(void)
+{
+	backend_read_statsfile();
+
+	return &walwritesStats;
+}
 
 /* ------------------------------------------------------------
  * Functions for management of the shared-memory PgBackendStatus array
@@ -4184,6 +4212,39 @@ pgstat_send_bgwriter(void)
 	MemSet(&BgWriterStats, 0, sizeof(BgWriterStats));
 }
 
+/* ----------
+ * pgstat_send_walwrites() -
+ *
+ *		Send wal writes statistics to the collector
+ * ----------
+ */
+
+void
+pgstat_send_walwrites(void)
+{
+	/* We assume this initializes to zeroes */
+	static const PgStat_MsgWalWrites all_zeroes;
+
+	/*
+	 * This function can be called even if nothing at all has happened. In
+	 * this case, avoid sending a completely empty message to the stats
+	 * collector.
+	 */
+	if (memcmp(&LocalWalWritesStats, &all_zeroes, sizeof(PgStat_MsgWalWrites)) == 0)
+		return;
+
+	/*
+	 * Prepare and send the message
+	 */
+	pgstat_setheader(&LocalWalWritesStats.m_hdr, PGSTAT_MTYPE_WALWRITES);
+	pgstat_send(&LocalWalWritesStats, sizeof(LocalWalWritesStats));
+
+	/*
+	 * Clear out the statistics buffer, so it can be re-used.
+	 */
+	MemSet(&LocalWalWritesStats, 0, sizeof(LocalWalWritesStats));
+}
+
 
 /* ----------
  * PgstatCollectorMain() -
@@ -4398,6 +4459,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_TEMPFILE:
 					pgstat_recv_tempfile((PgStat_MsgTempFile *) &msg, len);
+					break;
+
+				case PGSTAT_MTYPE_WALWRITES:
+					pgstat_recv_walwrites((PgStat_MsgWalWrites *) & msg, len);
 					break;
 
 				default:
@@ -4666,6 +4731,12 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	(void) rc;					/* we'll check for error with ferror */
 
 	/*
+	 * Write wal writes stats struct
+	 */
+	rc = fwrite(&walwritesStats, sizeof(walwritesStats), 1, fpout);
+	(void) rc;					/* we'll check for error with ferror */
+
+	/*
 	 * Walk through the database table.
 	 */
 	hash_seq_init(&hstat, pgStatDBHash);
@@ -4922,6 +4993,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	 */
 	memset(&globalStats, 0, sizeof(globalStats));
 	memset(&archiverStats, 0, sizeof(archiverStats));
+	memset(&walwritesStats, 0, sizeof(walwritesStats));
 
 	/*
 	 * Set the current timestamp (will be kept only in case we can't load an
@@ -4929,6 +5001,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	 */
 	globalStats.stat_reset_timestamp = GetCurrentTimestamp();
 	archiverStats.stat_reset_timestamp = globalStats.stat_reset_timestamp;
+	walwritesStats.stat_reset_timestamp = globalStats.stat_reset_timestamp;
 
 	/*
 	 * Try to open the stats file. If it doesn't exist, the backends simply
@@ -4989,6 +5062,16 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		memset(&archiverStats, 0, sizeof(archiverStats));
+		goto done;
+	}
+
+	/*
+	 * Read wal writes stats struct
+	 */
+	if (fread(&walwritesStats, 1, sizeof(walwritesStats), fpin) != sizeof(walwritesStats))
+	{
+		ereport(pgStatRunningInCollector ? LOG : WARNING,
+				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		goto done;
 	}
 
@@ -5290,6 +5373,7 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	PgStat_StatDBEntry dbentry;
 	PgStat_GlobalStats myGlobalStats;
 	PgStat_ArchiverStats myArchiverStats;
+	PgStat_WalWritesStats myWalwritesStats;
 	FILE	   *fpin;
 	int32		format_id;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
@@ -5337,6 +5421,18 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	 */
 	if (fread(&myArchiverStats, 1, sizeof(myArchiverStats),
 			  fpin) != sizeof(myArchiverStats))
+	{
+		ereport(pgStatRunningInCollector ? LOG : WARNING,
+				(errmsg("corrupted statistics file \"%s\"", statfile)));
+		FreeFile(fpin);
+		return false;
+	}
+
+	/*
+	 * Read wal writes stats struct
+	 */
+	if (fread(&myWalwritesStats, 1, sizeof(myWalwritesStats),
+			  fpin) != sizeof(myWalwritesStats))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
@@ -5906,6 +6002,12 @@ pgstat_recv_resetsharedcounter(PgStat_MsgResetsharedcounter *msg, int len)
 		memset(&archiverStats, 0, sizeof(archiverStats));
 		archiverStats.stat_reset_timestamp = GetCurrentTimestamp();
 	}
+	else if (msg->m_resettarget == RESET_WALWRITES)
+	{
+		/* Reset the wal writes statistics of the cluster. */
+		memset(&walwritesStats, 0, sizeof(walwritesStats));
+		walwritesStats.stat_reset_timestamp = GetCurrentTimestamp();
+	}
 
 	/*
 	 * Presumably the sender of this message validated the target, don't
@@ -6083,6 +6185,25 @@ pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len)
 	globalStats.buf_written_backend += msg->m_buf_written_backend;
 	globalStats.buf_fsync_backend += msg->m_buf_fsync_backend;
 	globalStats.buf_alloc += msg->m_buf_alloc;
+}
+
+/* ----------
+ * pgstat_recv_walwrites() -
+ *
+ *	Process a WALWRITES message.
+ * ----------
+ */
+static void
+pgstat_recv_walwrites(PgStat_MsgWalWrites * msg, int len)
+{
+	walwritesStats.stats.writes += msg->stats.writes;
+	walwritesStats.stats.walwriter_writes += msg->stats.walwriter_writes;
+	walwritesStats.stats.backend_writes += msg->stats.backend_writes;
+	walwritesStats.stats.dirty_writes += msg->stats.dirty_writes;
+	walwritesStats.stats.backend_dirty_writes += msg->stats.backend_dirty_writes;
+	walwritesStats.stats.write_blocks += msg->stats.write_blocks;
+	walwritesStats.stats.walwriter_write_blocks += msg->stats.walwriter_write_blocks;
+	walwritesStats.stats.backend_write_blocks += msg->stats.backend_write_blocks;
 }
 
 /* ----------

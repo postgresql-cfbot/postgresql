@@ -365,6 +365,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_walwrites</><indexterm><primary>pg_stat_walwrites</primary></indexterm></entry>
+      <entry>One row only, showing statistics about the
+       WAL writing activity. See
+       <xref linkend="pg-stat-walwrites-view"> for details.
+     </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_database</><indexterm><primary>pg_stat_database</primary></indexterm></entry>
       <entry>One row per database, showing database-wide statistics. See
        <xref linkend="pg-stat-database-view"> for details.
@@ -2262,6 +2270,82 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    single row, containing global data for the cluster.
   </para>
 
+  <table id="pg-stat-walwrites-view" xreflabel="pg_stat_walwrites">
+   <title><structname>pg_stat_walwrites</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+     <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>writes</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+      Number of WAL writes that are carried out by background processes and workers. 
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>walwriter_writes</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL writes that are carried out by the wal writer process</entry>
+     </row>
+     <row>
+      <entry><structfield>backend_writes</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL writes that are carried out by the backend processes</entry>
+     </row>
+     <row>
+      <entry><structfield>dirty_writes</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+      Number of dirty WAL writes that are carried out by background processes and workers
+      when the <xref linkend="guc-wal-buffers"> are full.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>backend_dirty_writes</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>
+      Number of dirty WAL writes that are carried out by the backend processes when 
+      the <xref linkend="guc-wal-buffers"> are full. 
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>write_blocks</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL pages written to the disk by the background processes/workers</entry>
+     </row>
+     <row>
+      <entry><structfield>walwriter_write_blocks</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL pages written to the disk by the wal writer process</entry>
+     </row>
+     <row>
+      <entry><structfield>backend_write_blocks</></entry>
+      <entry><type>bigint</type></entry>
+      <entry>Number of WAL pages written to the disk by the backend processes</entry>
+     </row>
+     <row>
+      <entry><structfield>stats_reset</></entry>
+      <entry><type>timestamp with time zone</type></entry>
+      <entry>Time at which these statistics were last reset</entry>
+     </row>
+     </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_walwrites</structname> view will always have a
+   single row, containing data about the WAL writing activity of the cluster.
+  </para>
+
+
   <table id="pg-stat-database-view" xreflabel="pg_stat_database">
    <title><structname>pg_stat_database</structname> View</title>
    <tgroup cols="3">
@@ -3041,6 +3125,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        counters shown in the <structname>pg_stat_bgwriter</> view.
        Calling <literal>pg_stat_reset_shared('archiver')</> will zero all the
        counters shown in the <structname>pg_stat_archiver</> view.
+       Calling <literal>pg_stat_reset_shared('walwrites')</> will zero all the
+       counters shown in the <structname>pg_stat_walwrites</> view.
       </entry>
      </row>
 

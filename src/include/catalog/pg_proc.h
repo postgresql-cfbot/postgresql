@@ -2980,6 +2980,9 @@ DESCR("statistics: number of backend buffer writes that did their own fsync");
 DATA(insert OID = 2859 ( pg_stat_get_buf_alloc			PGNSP PGUID 12 1 0 0 0 f f f f t f s r 0 0 20 "" _null_ _null_ _null_ _null_ _null_ pg_stat_get_buf_alloc _null_ _null_ _null_ ));
 DESCR("statistics: number of buffer allocations");
 
+DATA(insert OID = 3998 (  pg_stat_get_walwrites		PGNSP PGUID 12 1 0 0 0 f f f f f f s r 0 0 2249 "" "{20,20,20,20,20,20,20,20,1184}" "{o,o,o,o,o,o,o,o,o}" "{writes,walwriter_writes,backend_writes,dirty_writes,backend_dirty_writes,write_blocks,walwriter_write_blocks,backend_write_blocks,stats_reset}" _null_ _null_ pg_stat_get_walwrites _null_ _null_ _null_ ));
+DESCR("statistics: information about WAL writes activity");
+
 DATA(insert OID = 2978 (  pg_stat_get_function_calls		PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 20 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_function_calls _null_ _null_ _null_ ));
 DESCR("statistics: number of function calls");
 DATA(insert OID = 2979 (  pg_stat_get_function_total_time	PGNSP PGUID 12 1 0 0 0 f f f f t f s r 1 0 701 "26" _null_ _null_ _null_ _null_ _null_ pg_stat_get_function_total_time _null_ _null_ _null_ ));

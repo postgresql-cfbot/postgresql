@@ -34,8 +34,8 @@ extern void NotifyMyFrontEnd(const char *channel,
 
 /* notify-related SQL statements */
 extern void Async_Notify(const char *channel, const char *payload);
-extern void Async_Listen(const char *channel);
-extern void Async_Unlisten(const char *channel);
+extern void Async_Listen(const char *pattern, bool isSimilarToPattern);
+extern void Async_Unlisten(const char *pattern);
 extern void Async_UnlistenAll(void);
 
 /* perform (or cancel) outbound notify processing at transaction commit */

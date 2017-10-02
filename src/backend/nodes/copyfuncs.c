@@ -3549,7 +3549,8 @@ _copyListenStmt(const ListenStmt *from)
 {
 	ListenStmt *newnode = makeNode(ListenStmt);
 
-	COPY_STRING_FIELD(conditionname);
+	COPY_STRING_FIELD(pattern);
+	COPY_SCALAR_FIELD(isSimilarToPattern);
 
 	return newnode;
 }
@@ -3559,7 +3560,7 @@ _copyUnlistenStmt(const UnlistenStmt *from)
 {
 	UnlistenStmt *newnode = makeNode(UnlistenStmt);
 
-	COPY_STRING_FIELD(conditionname);
+	COPY_STRING_FIELD(pattern);
 
 	return newnode;
 }

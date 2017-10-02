@@ -1482,7 +1482,8 @@ _equalNotifyStmt(const NotifyStmt *a, const NotifyStmt *b)
 static bool
 _equalListenStmt(const ListenStmt *a, const ListenStmt *b)
 {
-	COMPARE_STRING_FIELD(conditionname);
+	COMPARE_STRING_FIELD(pattern);
+	COMPARE_SCALAR_FIELD(isSimilarToPattern);
 
 	return true;
 }
@@ -1490,7 +1491,7 @@ _equalListenStmt(const ListenStmt *a, const ListenStmt *b)
 static bool
 _equalUnlistenStmt(const UnlistenStmt *a, const UnlistenStmt *b)
 {
-	COMPARE_STRING_FIELD(conditionname);
+	COMPARE_STRING_FIELD(pattern);
 
 	return true;
 }

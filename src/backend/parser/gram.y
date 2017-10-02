@@ -9449,7 +9449,15 @@ notify_payload:
 ListenStmt: LISTEN ColId
 				{
 					ListenStmt *n = makeNode(ListenStmt);
-					n->conditionname = $2;
+					n->pattern = $2;
+					n->isSimilarToPattern = false;
+					$$ = (Node *)n;
+				}
+			| LISTEN SIMILAR TO Sconst
+				{
+					ListenStmt *n = makeNode(ListenStmt);
+					n->pattern = $4;
+					n->isSimilarToPattern = true;
 					$$ = (Node *)n;
 				}
 		;
@@ -9458,13 +9466,19 @@ UnlistenStmt:
 			UNLISTEN ColId
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
-					n->conditionname = $2;
+					n->pattern = $2;
+					$$ = (Node *)n;
+				}
+			| UNLISTEN Sconst
+				{
+					UnlistenStmt *n = makeNode(UnlistenStmt);
+					n->pattern = $2;
 					$$ = (Node *)n;
 				}
 			| UNLISTEN '*'
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
-					n->conditionname = NULL;
+					n->pattern = NULL;
 					$$ = (Node *)n;
 				}
 		;

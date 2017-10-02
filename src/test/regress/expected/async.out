@@ -27,11 +27,54 @@ SELECT pg_notify(NULL,'sample message1');
 ERROR:  channel name cannot be empty
 SELECT pg_notify('notify_async_channel_name_too_long______________________________','sample_message1');
 ERROR:  channel name too long
---Should work. Valid NOTIFY/LISTEN/UNLISTEN commands
+-- Should work. Valid NOTIFY/LISTEN/UNLISTEN commands
+-- src/test/isolation/specs/async-notify-2.spec tests for actual usage.
 NOTIFY notify_async2;
 LISTEN notify_async2;
+LISTEN SIMILAR TO 'notify_%';
 UNLISTEN notify_async2;
+UNLISTEN 'notify_%';
+UNLISTEN 'notify_(%';
 UNLISTEN *;
+-- Should fail. Invalid LISTEN command
+LISTEN *;
+ERROR:  syntax error at or near "*"
+LINE 1: LISTEN *;
+               ^
+LISTEN notify_%;
+ERROR:  syntax error at or near "%"
+LINE 1: LISTEN notify_%;
+                      ^
+LISTEN SIMILAR TO 'notify_(%';
+ERROR:  invalid regular expression: parentheses () not balanced
+LISTEN SIMILAR TO '*';
+ERROR:  invalid regular expression: quantifier operand invalid
+-- Should contain two listeners
+LISTEN notify_async2;
+LISTEN SIMILAR TO 'notify_async2';
+LISTEN SIMILAR TO 'notify_%';
+SELECT pg_listening_channels();
+ pg_listening_channels 
+-----------------------
+ notify_async2
+ notify_%
+(2 rows)
+
+-- Should contain one listener
+UNLISTEN 'notify_%';
+SELECT pg_listening_channels();
+ pg_listening_channels 
+-----------------------
+ notify_async2
+(1 row)
+
+-- Should not contain listeners
+UNLISTEN *;
+SELECT pg_listening_channels();
+ pg_listening_channels 
+-----------------------
+(0 rows)
+
 -- Should return zero while there are no pending notifications.
 -- src/test/isolation/specs/async-notify.spec tests for actual usage.
 SELECT pg_notification_queue_usage();

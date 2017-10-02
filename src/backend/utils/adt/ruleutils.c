@@ -314,6 +314,9 @@ static char *pg_get_viewdef_worker(Oid viewoid,
 static char *pg_get_triggerdef_worker(Oid trigid, bool pretty);
 static void decompile_column_index_array(Datum column_index_array, Oid relId,
 							 StringInfo buf);
+static void decompile_fk_column_index_array(Datum column_index_array,
+							Datum fk_reftype_array,
+							Oid relId, StringInfo buf);
 static char *pg_get_ruledef_worker(Oid ruleoid, int prettyFlags);
 static char *pg_get_indexdef_worker(Oid indexrelid, int colno,
 					   const Oid *excludeOps,
@@ -1882,7 +1885,8 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 	{
 		case CONSTRAINT_FOREIGN:
 			{
-				Datum		val;
+				Datum		colindexes;
+				Datum		reftypes;
 				bool		isnull;
 				const char *string;
 
@@ -1890,13 +1894,21 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 				appendStringInfoString(&buf, "FOREIGN KEY (");
 
 				/* Fetch and build referencing-column list */
-				val = SysCacheGetAttr(CONSTROID, tup,
-									  Anum_pg_constraint_conkey, &isnull);
+				colindexes = SysCacheGetAttr(CONSTROID, tup,
+											 Anum_pg_constraint_conkey,
+											 &isnull);
 				if (isnull)
 					elog(ERROR, "null conkey for constraint %u",
 						 constraintId);
+				reftypes = SysCacheGetAttr(CONSTROID, tup,
+										   Anum_pg_constraint_confreftype,
+										   &isnull);
+				if (isnull)
+					elog(ERROR, "null confreftype for constraint %u",
+						 constraintId);
 
-				decompile_column_index_array(val, conForm->conrelid, &buf);
+				decompile_fk_column_index_array(colindexes, reftypes,
+												conForm->conrelid, &buf);
 
 				/* add foreign relation name */
 				appendStringInfo(&buf, ") REFERENCES %s(",
@@ -1904,13 +1916,15 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 														NIL));
 
 				/* Fetch and build referenced-column list */
-				val = SysCacheGetAttr(CONSTROID, tup,
-									  Anum_pg_constraint_confkey, &isnull);
+				colindexes = SysCacheGetAttr(CONSTROID, tup,
+											 Anum_pg_constraint_confkey,
+											 &isnull);
 				if (isnull)
 					elog(ERROR, "null confkey for constraint %u",
 						 constraintId);
 
-				decompile_column_index_array(val, conForm->confrelid, &buf);
+				decompile_column_index_array(colindexes,
+											 conForm->confrelid, &buf);
 
 				appendStringInfoChar(&buf, ')');
 
@@ -2185,6 +2199,66 @@ decompile_column_index_array(Datum column_index_array, Oid relId,
 	}
 }
 
+ /*
+  * Convert an int16[] Datum and a char[] Datum into a comma-separated
+  * list of column names for the indicated relation, prefixed by appropriate
+  * keywords depending on the foreign key reference semantics indicated by
+  * the char[] entries.  Append the text to buf.
+  */
+ static void
+ decompile_fk_column_index_array(Datum column_index_array,
+								Datum fk_reftype_array,
+								Oid relId, StringInfo buf)
+ {
+	Datum	   *keys;
+	int			nKeys;
+	Datum	   *reftypes;
+	int			nReftypes;
+	int			j;
+
+	/* Extract data from array of int16 */
+	deconstruct_array(DatumGetArrayTypeP(column_index_array),
+					  INT2OID, sizeof(int16), true, 's',
+					  &keys, NULL, &nKeys);
+
+	/* Extract data from array of char */
+	deconstruct_array(DatumGetArrayTypeP(fk_reftype_array),
+					  CHAROID, sizeof(char), true, 'c',
+					  &reftypes, NULL, &nReftypes);
+
+	if (nKeys != nReftypes)
+		elog(ERROR, "wrong confreftype cardinality");
+
+	for (j = 0; j < nKeys; j++)
+	{
+		char	   *colName;
+		const char *prefix;
+
+		colName = get_relid_attribute_name(relId, DatumGetInt16(keys[j]));
+
+		switch (DatumGetChar(reftypes[j]))
+		{
+			case FKCONSTR_REF_PLAIN:
+				prefix = "";
+				break;
+			case FKCONSTR_REF_EACH_ELEMENT:
+				prefix = "EACH ELEMENT OF ";
+				break;
+			default:
+				elog(ERROR, "invalid fk_reftype: %d",
+					 (int) DatumGetChar(reftypes[j]));
+				prefix = NULL;	/* keep compiler quiet */
+				break;
+		}
+
+		if (j == 0)
+			appendStringInfo(buf, "%s%s", prefix,
+							 quote_identifier(colName));
+		else
+			appendStringInfo(buf, ", %s%s", prefix,
+							 quote_identifier(colName));
+	}
+}
 
 /* ----------
  * get_expr			- Decompile an expression tree

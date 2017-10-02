@@ -59,6 +59,7 @@ CreateConstraintEntry(const char *constraintName,
 					  Oid indexRelId,
 					  Oid foreignRelId,
 					  const int16 *foreignKey,
+					  const char *foreignRefType,
 					  const Oid *pfEqOp,
 					  const Oid *ppEqOp,
 					  const Oid *ffEqOp,
@@ -82,6 +83,7 @@ CreateConstraintEntry(const char *constraintName,
 	Datum		values[Natts_pg_constraint];
 	ArrayType  *conkeyArray;
 	ArrayType  *confkeyArray;
+	ArrayType  *confreftypeArray;
 	ArrayType  *conpfeqopArray;
 	ArrayType  *conppeqopArray;
 	ArrayType  *conffeqopArray;
@@ -119,7 +121,11 @@ CreateConstraintEntry(const char *constraintName,
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = Int16GetDatum(foreignKey[i]);
 		confkeyArray = construct_array(fkdatums, foreignNKeys,
-									   INT2OID, 2, true, 's');
+									   INT2OID, sizeof(int16), true, 's');
+		for (i = 0; i < foreignNKeys; i++)
+			fkdatums[i] = CharGetDatum(foreignRefType[i]);
+		confreftypeArray = construct_array(fkdatums, foreignNKeys,
+										   CHAROID, sizeof(char), true, 'c');
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = ObjectIdGetDatum(pfEqOp[i]);
 		conpfeqopArray = construct_array(fkdatums, foreignNKeys,
@@ -136,6 +142,7 @@ CreateConstraintEntry(const char *constraintName,
 	else
 	{
 		confkeyArray = NULL;
+		confreftypeArray = NULL;
 		conpfeqopArray = NULL;
 		conppeqopArray = NULL;
 		conffeqopArray = NULL;
@@ -187,6 +194,11 @@ CreateConstraintEntry(const char *constraintName,
 		values[Anum_pg_constraint_confkey - 1] = PointerGetDatum(confkeyArray);
 	else
 		nulls[Anum_pg_constraint_confkey - 1] = true;
+
+	if (confreftypeArray)
+		values[Anum_pg_constraint_confreftype - 1] = PointerGetDatum(confreftypeArray);
+	else
+		nulls[Anum_pg_constraint_confreftype - 1] = true;
 
 	if (conpfeqopArray)
 		values[Anum_pg_constraint_conpfeqop - 1] = PointerGetDatum(conpfeqopArray);

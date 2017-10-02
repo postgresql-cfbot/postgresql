@@ -2575,6 +2575,7 @@ _equalConstraint(const Constraint *a, const Constraint *b)
 	COMPARE_NODE_FIELD(pktable);
 	COMPARE_NODE_FIELD(fk_attrs);
 	COMPARE_NODE_FIELD(pk_attrs);
+	COMPARE_NODE_FIELD(fk_reftypes);
 	COMPARE_SCALAR_FIELD(fk_matchtype);
 	COMPARE_SCALAR_FIELD(fk_upd_action);
 	COMPARE_SCALAR_FIELD(fk_del_action);

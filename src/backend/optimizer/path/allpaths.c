@@ -920,12 +920,81 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		childrel = find_base_rel(root, childRTindex);
 		Assert(childrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
 
+		if (rel->part_scheme)
+		{
+			AttrNumber	attno;
+
+			/*
+			 * For a partitioned tables, individual partitions can participate
+			 * in the pair-wise joins. We need attr_needed data for building
+			 * targetlists of joins between partitions.
+			 */
+			for (attno = rel->min_attr; attno <= rel->max_attr; attno++)
+			{
+				int			index = attno - rel->min_attr;
+				Relids		attr_needed = bms_copy(rel->attr_needed[index]);
+
+				/* System attributes do not need translation. */
+				if (attno <= 0)
+				{
+					Assert(rel->min_attr == childrel->min_attr);
+					childrel->attr_needed[index] = attr_needed;
+				}
+				else
+				{
+					Var		   *var = list_nth(appinfo->translated_vars,
+											   attno - 1);
+					int			child_index;
+
+					/*
+					 * Parent Var for a user defined attribute translates to
+					 * child Var.
+					 */
+					Assert(IsA(var, Var));
+
+					child_index = var->varattno - childrel->min_attr;
+					childrel->attr_needed[child_index] = attr_needed;
+				}
+			}
+		}
+
 		/*
-		 * We have to copy the parent's targetlist and quals to the child,
-		 * with appropriate substitution of variables.  However, only the
-		 * baserestrictinfo quals are needed before we can check for
-		 * constraint exclusion; so do that first and then check to see if we
-		 * can disregard this child.
+		 * Copy/Modify targetlist. Even if this child is deemed empty, we need
+		 * its targetlist in case it falls on nullable side in a child-join
+		 * because of partition-wise join.
+		 *
+		 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
+		 * expressions, which otherwise would not occur in a rel's targetlist.
+		 * Code that might be looking at an appendrel child must cope with
+		 * such.  (Normally, a rel's targetlist would only include Vars and
+		 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
+		 * fields of childrel->reltarget; not clear if that would be useful.
+		 */
+		childrel->reltarget->exprs = (List *)
+			adjust_appendrel_attrs(root,
+								   (Node *) rel->reltarget->exprs,
+								   1, &appinfo);
+
+		/*
+		 * We have to make child entries in the EquivalenceClass data
+		 * structures as well.  This is needed either if the parent
+		 * participates in some eclass joins (because we will want to consider
+		 * inner-indexscan joins on the individual children) or if the parent
+		 * has useful pathkeys (because we should try to build MergeAppend
+		 * paths that produce those sort orderings). Even if this child is
+		 * deemed dummy, it may fall on nullable side in a child-join, which in
+		 * turn may participate in a MergeAppend, where we will need the
+		 * EquivalenceClass data structures.
+		 */
+		if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
+			add_child_rel_equivalences(root, appinfo, rel, childrel);
+		childrel->has_eclass_joins = rel->has_eclass_joins;
+
+		/*
+		 * We have to copy the parent's quals to the child, with appropriate
+		 * substitution of variables.  However, only the baserestrictinfo
+		 * quals are needed before we can check for constraint exclusion; so
+		 * do that first and then check to see if we can disregard this child.
 		 *
 		 * The child rel's targetlist might contain non-Var expressions, which
 		 * means that substitution into the quals could produce opportunities
@@ -1052,44 +1121,11 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			continue;
 		}
 
-		/*
-		 * CE failed, so finish copying/modifying targetlist and join quals.
-		 *
-		 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
-		 * expressions, which otherwise would not occur in a rel's targetlist.
-		 * Code that might be looking at an appendrel child must cope with
-		 * such.  (Normally, a rel's targetlist would only include Vars and
-		 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
-		 * fields of childrel->reltarget; not clear if that would be useful.
-		 */
+		/* CE failed, so finish copying/modifying join quals. */
 		childrel->joininfo = (List *)
 			adjust_appendrel_attrs(root,
 								   (Node *) rel->joininfo,
 								   1, &appinfo);
-		childrel->reltarget->exprs = (List *)
-			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget->exprs,
-								   1, &appinfo);
-
-		/*
-		 * We have to make child entries in the EquivalenceClass data
-		 * structures as well.  This is needed either if the parent
-		 * participates in some eclass joins (because we will want to consider
-		 * inner-indexscan joins on the individual children) or if the parent
-		 * has useful pathkeys (because we should try to build MergeAppend
-		 * paths that produce those sort orderings).
-		 */
-		if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
-			add_child_rel_equivalences(root, appinfo, rel, childrel);
-		childrel->has_eclass_joins = rel->has_eclass_joins;
-
-		/*
-		 * Note: we could compute appropriate attr_needed data for the child's
-		 * variables, by transforming the parent's attr_needed through the
-		 * translated_vars mapping.  However, currently there's no need
-		 * because attr_needed is only examined for base relations not
-		 * otherrels.  So we just leave the child's attr_needed empty.
-		 */
 
 		/*
 		 * If parallelism is allowable for this query in general, see whether
@@ -1293,30 +1329,44 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	RangeTblEntry *rte;
 	bool		build_partitioned_rels = false;
 
-	/*
-	 * A root partition will already have a PartitionedChildRelInfo, and a
-	 * non-root partitioned table doesn't need one, because its Append paths
-	 * will get flattened into the parent anyway.  For a subquery RTE, no
-	 * PartitionedChildRelInfo exists; we collect all partitioned_rels
-	 * associated with any child.  (This assumes that we don't need to look
-	 * through multiple levels of subquery RTEs; if we ever do, we could
-	 * create a PartitionedChildRelInfo with the accumulated list of
-	 * partitioned_rels which would then be found when populated our parent
-	 * rel with paths.  For the present, that appears to be unnecessary.)
-	 */
-	rte = planner_rt_fetch(rel->relid, root);
-	switch (rte->rtekind)
+	if (IS_SIMPLE_REL(rel))
 	{
-		case RTE_RELATION:
-			if (rte->relkind == RELKIND_PARTITIONED_TABLE)
-				partitioned_rels =
-					get_partitioned_child_rels(root, rel->relid);
-			break;
-		case RTE_SUBQUERY:
-			build_partitioned_rels = true;
-			break;
-		default:
-			elog(ERROR, "unexpected rtekind: %d", (int) rte->rtekind);
+		/*
+		 * A root partition will already have a PartitionedChildRelInfo, and a
+		 * non-root partitioned table doesn't need one, because its Append
+		 * paths will get flattened into the parent anyway.  For a subquery
+		 * RTE, no PartitionedChildRelInfo exists; we collect all
+		 * partitioned_rels associated with any child.  (This assumes that we
+		 * don't need to look through multiple levels of subquery RTEs; if we
+		 * ever do, we could create a PartitionedChildRelInfo with the
+		 * accumulated list of partitioned_rels which would then be found when
+		 * populated our parent rel with paths.  For the present, that appears
+		 * to be unnecessary.)
+		 */
+		rte = planner_rt_fetch(rel->relid, root);
+		switch (rte->rtekind)
+		{
+			case RTE_RELATION:
+				if (rte->relkind == RELKIND_PARTITIONED_TABLE)
+					partitioned_rels =
+						get_partitioned_child_rels(root, rel->relid);
+				break;
+			case RTE_SUBQUERY:
+				build_partitioned_rels = true;
+				break;
+			default:
+				elog(ERROR, "unexpcted rtekind: %d", (int) rte->rtekind);
+		}
+	}
+	else if (rel->reloptkind == RELOPT_JOINREL && rel->part_scheme)
+	{
+		/*
+		 * Associate PartitionedChildRelInfo of the root partitioned tables
+		 * being joined with the root partitioned join (indicated by
+		 * RELOPT_JOINREL).
+		 */
+		partitioned_rels = get_partitioned_child_rels_for_join(root,
+															   rel->relids);
 	}
 
 	/*
@@ -2422,15 +2472,25 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 		join_search_one_level(root, lev);
 
 		/*
-		 * Run generate_gather_paths() for each just-processed joinrel.  We
-		 * could not do this earlier because both regular and partial paths
-		 * can get added to a particular joinrel at multiple times within
-		 * join_search_one_level.  After that, we're done creating paths for
-		 * the joinrel, so run set_cheapest().
+		 * Run generate_partition_wise_join_paths() and
+		 * generate_gather_paths() for each just-processed joinrel.  We could
+		 * not do this earlier because both regular and partial paths can get
+		 * added to a particular joinrel at multiple times within
+		 * join_search_one_level.
+		 *
+		 * After that, we're done creating paths for the joinrel, so run
+		 * set_cheapest().
 		 */
 		foreach(lc, root->join_rel_level[lev])
 		{
 			rel = (RelOptInfo *) lfirst(lc);
+
+			/*
+			 * Create paths for partition-wise joins. Do this before creating
+			 * GatherPaths so that partial "append" paths in partitioned joins
+			 * will be considered.
+			 */
+			generate_partition_wise_join_paths(root, rel);
 
 			/* Create GatherPaths for any useful partial paths for rel */
 			generate_gather_paths(root, rel);
@@ -3177,6 +3237,76 @@ compute_parallel_worker(RelOptInfo *rel, double heap_pages, double index_pages)
 	parallel_workers = Min(parallel_workers, max_parallel_workers_per_gather);
 
 	return parallel_workers;
+}
+
+/*
+ * generate_partition_wise_join_paths
+ *
+ * 		Create paths representing partition-wise join for given partitioned
+ * 		join relation.
+ *
+ * This must not be called until after we are done adding paths for all
+ * child-joins. Otherwise, add_path might delete a path that some "append"
+ * path has reference to.
+ */
+void
+generate_partition_wise_join_paths(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	   *live_children = NIL;
+	int			cnt_parts;
+	int			num_parts;
+	RelOptInfo **part_rels;
+
+	/* Handle only join relations here. */
+	if (!IS_JOIN_REL(rel))
+		return;
+
+	/*
+	 * Nothing to do if the relation is not partitioned. We explicitly check
+	 * existence of child-joins since a dummy join relation may have rest of
+	 * the partitioning properties set except the child-join RelOptInfos. See
+	 * try_partition_wise_join() for more explanation.
+	 */
+	if (!IS_PARTITIONED_REL(rel))
+		return;
+
+	/* Guard against stack overflow due to overly deep partition hierarchy. */
+	check_stack_depth();
+
+	num_parts = rel->nparts;
+	part_rels = rel->part_rels;
+
+	/* Collect non-dummy child-joins. */
+	for (cnt_parts = 0; cnt_parts < num_parts; cnt_parts++)
+	{
+		RelOptInfo *child_rel = part_rels[cnt_parts];
+
+		/* Add partition-wise join paths for partitioned child-joins. */
+		generate_partition_wise_join_paths(root, child_rel);
+
+		/* Dummy children will not be scanned, so ingore those. */
+		if (IS_DUMMY_REL(child_rel))
+			continue;
+
+		set_cheapest(child_rel);
+
+#ifdef OPTIMIZER_DEBUG
+		debug_print_rel(root, rel);
+#endif
+
+		live_children = lappend(live_children, child_rel);
+	}
+
+	/* If all child-joins are dummy, parent join is also dummy. */
+	if (!live_children)
+	{
+		mark_dummy_rel(rel);
+		return;
+	}
+
+	/* Add "append" paths containing paths from child-joins. */
+	add_paths_to_append_rel(root, rel, live_children);
+	list_free(live_children);
 }
 
 

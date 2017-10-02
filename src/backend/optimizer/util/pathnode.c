@@ -18,15 +18,20 @@
 
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/extensible.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/parsetree.h"
+#include "foreign/fdwapi.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/selfuncs.h"
 
 
@@ -3428,4 +3433,430 @@ reparameterize_path(PlannerInfo *root, Path *path,
 			break;
 	}
 	return NULL;
+}
+
+/*
+ * reparameterize_path_by_child
+ * 		Given a path parameterized by the parent of the given relation,
+ * 		translate the path to be parameterized by the given child relation.
+ *
+ * The function creates a new path of the same type as the given path, but
+ * parameterized by the given child relation. If it can not reparameterize the
+ * path as required, it returns NULL.
+ *
+ * The cost, number of rows, width and parallel path properties depend upon
+ * path->parent, which does not change during the translation. Hence those
+ * members are copied as they are.
+ */
+
+Path *
+reparameterize_path_by_child(PlannerInfo *root, Path *path,
+							 RelOptInfo *child_rel)
+{
+
+#define FLAT_COPY_PATH(newnode, node, nodetype)  \
+	( (newnode) = makeNode(nodetype), \
+	  memcpy((newnode), (node), sizeof(nodetype)) )
+
+	Path	   *new_path;
+	ParamPathInfo *new_ppi;
+	ParamPathInfo *old_ppi;
+	Relids		required_outer;
+
+	/*
+	 * If the path is not parameterized by parent of the given relation, it
+	 * doesn't need reparameterization.
+	 */
+	if (!path->param_info ||
+		!bms_overlap(PATH_REQ_OUTER(path), child_rel->top_parent_relids))
+		return path;
+
+	/*
+	 * Make a copy of the given path and reparameterize or translate the path
+	 * specific members.
+	 */
+	switch (nodeTag(path))
+	{
+		case T_Path:
+			FLAT_COPY_PATH(new_path, path, Path);
+			break;
+
+		case T_IndexPath:
+			{
+				IndexPath  *ipath;
+
+				FLAT_COPY_PATH(ipath, path, IndexPath);
+				ipath->indexclauses = (List *) adjust_appendrel_attrs_multilevel(root,
+																				 (Node *) ipath->indexclauses,
+																				 child_rel->relids,
+																				 child_rel->top_parent_relids);
+				ipath->indexquals = (List *) adjust_appendrel_attrs_multilevel(root,
+																			   (Node *) ipath->indexquals,
+																			   child_rel->relids,
+																			   child_rel->top_parent_relids);
+				new_path = (Path *) ipath;
+			}
+			break;
+
+		case T_BitmapHeapPath:
+			{
+				BitmapHeapPath *bhpath;
+
+				FLAT_COPY_PATH(bhpath, path, BitmapHeapPath);
+				bhpath->bitmapqual = reparameterize_path_by_child(root,
+																  bhpath->bitmapqual,
+																  child_rel);
+				new_path = (Path *) bhpath;
+			}
+			break;
+
+		case T_BitmapAndPath:
+			{
+				BitmapAndPath *bapath;
+				ListCell   *lc;
+				List	   *bitmapquals = NIL;
+
+				FLAT_COPY_PATH(bapath, path, BitmapAndPath);
+				foreach(lc, bapath->bitmapquals)
+				{
+					Path	   *bmqpath = lfirst(lc);
+
+					bitmapquals = lappend(bitmapquals,
+										  reparameterize_path_by_child(root,
+																	   bmqpath,
+																	   child_rel));
+				}
+				bapath->bitmapquals = bitmapquals;
+				new_path = (Path *) bapath;
+			}
+			break;
+
+		case T_BitmapOrPath:
+			{
+				BitmapOrPath *bopath;
+				ListCell   *lc;
+				List	   *bitmapquals = NIL;
+
+				FLAT_COPY_PATH(bopath, path, BitmapOrPath);
+				foreach(lc, bopath->bitmapquals)
+				{
+					Path	   *bmqpath = lfirst(lc);
+
+					bitmapquals = lappend(bitmapquals,
+										  reparameterize_path_by_child(root,
+																	   bmqpath,
+																	   child_rel));
+				}
+				bopath->bitmapquals = bitmapquals;
+				new_path = (Path *) bopath;
+			}
+			break;
+
+		case T_TidPath:
+			{
+				TidPath    *tpath;
+
+				/*
+				 * TidPath contains tidquals, which do not contain any
+				 * external parameters per create_tidscan_path(). So don't
+				 * bother to translate those.
+				 */
+				FLAT_COPY_PATH(tpath, path, TidPath);
+				new_path = (Path *) tpath;
+			}
+			break;
+
+		case T_ForeignPath:
+			{
+				ForeignPath *fpath;
+				ReparameterizeForeignPathByChild_function rfpc_func;
+
+				FLAT_COPY_PATH(fpath, path, ForeignPath);
+				if (fpath->fdw_outerpath)
+					fpath->fdw_outerpath = reparameterize_path_by_child(root,
+																		fpath->fdw_outerpath,
+																		child_rel);
+				rfpc_func = path->parent->fdwroutine->ReparameterizeForeignPathByChild;
+
+				/* Hand over to FDW if supported. */
+				if (rfpc_func)
+					fpath->fdw_private = rfpc_func(root, fpath->fdw_private,
+												   child_rel);
+				new_path = (Path *) fpath;
+			}
+			break;
+
+		case T_CustomPath:
+			{
+				CustomPath *cpath;
+				ListCell   *lc;
+				List	   *custompaths = NIL;
+
+				FLAT_COPY_PATH(cpath, path, CustomPath);
+
+				foreach(lc, cpath->custom_paths)
+				{
+					Path	   *subpath = lfirst(lc);
+
+					custompaths = lappend(custompaths,
+										  reparameterize_path_by_child(root,
+																	   subpath,
+																	   child_rel));
+				}
+				cpath->custom_paths = custompaths;
+
+				if (cpath->methods &&
+					cpath->methods->ReparameterizeCustomPathByChild)
+					cpath->custom_private = cpath->methods->ReparameterizeCustomPathByChild(root,
+																							cpath->custom_private,
+																							child_rel);
+
+				new_path = (Path *) cpath;
+			}
+			break;
+
+		case T_NestPath:
+			{
+				JoinPath   *jpath;
+
+				FLAT_COPY_PATH(jpath, path, NestPath);
+
+				jpath->outerjoinpath = reparameterize_path_by_child(root,
+																	jpath->outerjoinpath,
+																	child_rel);
+				jpath->innerjoinpath = reparameterize_path_by_child(root,
+																	jpath->innerjoinpath,
+																	child_rel);
+				jpath->joinrestrictinfo = (List *) adjust_appendrel_attrs_multilevel(root,
+																					 (Node *) jpath->joinrestrictinfo,
+																					 child_rel->relids,
+																					 child_rel->top_parent_relids);
+				new_path = (Path *) jpath;
+			}
+			break;
+
+		case T_MergePath:
+			{
+				JoinPath   *jpath;
+				MergePath  *mpath;
+
+				FLAT_COPY_PATH(mpath, path, MergePath);
+
+				jpath = (JoinPath *) mpath;
+				jpath->outerjoinpath = reparameterize_path_by_child(root,
+																	jpath->outerjoinpath,
+																	child_rel);
+				jpath->innerjoinpath = reparameterize_path_by_child(root,
+																	jpath->innerjoinpath,
+																	child_rel);
+				jpath->joinrestrictinfo = (List *) adjust_appendrel_attrs_multilevel(root,
+																					 (Node *) jpath->joinrestrictinfo,
+																					 child_rel->relids,
+																					 child_rel->top_parent_relids);
+				mpath->path_mergeclauses = (List *) adjust_appendrel_attrs_multilevel(root,
+																					  (Node *) mpath->path_mergeclauses,
+																					  child_rel->relids,
+																					  child_rel->top_parent_relids);
+				new_path = (Path *) mpath;
+			}
+			break;
+
+		case T_HashPath:
+			{
+				JoinPath   *jpath;
+				HashPath   *hpath;
+
+				FLAT_COPY_PATH(hpath, path, HashPath);
+
+				jpath = (JoinPath *) hpath;
+				jpath->outerjoinpath = reparameterize_path_by_child(root,
+																	jpath->outerjoinpath,
+																	child_rel);
+				jpath->innerjoinpath = reparameterize_path_by_child(root,
+																	jpath->innerjoinpath,
+																	child_rel);
+				jpath->joinrestrictinfo = (List *) adjust_appendrel_attrs_multilevel(root,
+																					 (Node *) jpath->joinrestrictinfo,
+																					 child_rel->relids,
+																					 child_rel->top_parent_relids);
+				hpath->path_hashclauses = (List *) adjust_appendrel_attrs_multilevel(root,
+																					 (Node *) hpath->path_hashclauses,
+																					 child_rel->relids,
+																					 child_rel->top_parent_relids);
+				new_path = (Path *) hpath;
+			}
+			break;
+
+		case T_AppendPath:
+			{
+				AppendPath *apath;
+				List	   *subpaths = NIL;
+				ListCell   *lc;
+
+				FLAT_COPY_PATH(apath, path, AppendPath);
+				foreach(lc, apath->subpaths)
+					subpaths = lappend(subpaths,
+									   reparameterize_path_by_child(root,
+																	lfirst(lc),
+																	child_rel));
+				apath->subpaths = subpaths;
+				new_path = (Path *) apath;
+			}
+			break;
+
+		case T_MergeAppend:
+			{
+				MergeAppendPath *mapath;
+				List	   *subpaths = NIL;
+				ListCell   *lc;
+
+				FLAT_COPY_PATH(mapath, path, MergeAppendPath);
+				foreach(lc, mapath->subpaths)
+					subpaths = lappend(subpaths,
+									   reparameterize_path_by_child(root,
+																	lfirst(lc),
+																	child_rel));
+				mapath->subpaths = subpaths;
+				new_path = (Path *) mapath;
+			}
+			break;
+
+		case T_MaterialPath:
+			{
+				MaterialPath *mpath;
+
+				FLAT_COPY_PATH(mpath, path, MaterialPath);
+				mpath->subpath = reparameterize_path_by_child(root,
+															  mpath->subpath,
+															  child_rel);
+				new_path = (Path *) mpath;
+			}
+			break;
+
+		case T_UniquePath:
+			{
+				UniquePath *upath;
+
+				FLAT_COPY_PATH(upath, path, UniquePath);
+				upath->subpath = reparameterize_path_by_child(root,
+															  upath->subpath,
+															  child_rel);
+				upath->uniq_exprs = (List *) adjust_appendrel_attrs_multilevel(root,
+																			   (Node *) upath->uniq_exprs,
+																			   child_rel->relids,
+																			   child_rel->top_parent_relids);
+				new_path = (Path *) upath;
+			}
+			break;
+
+		case T_GatherPath:
+			{
+				GatherPath *gpath;
+
+				FLAT_COPY_PATH(gpath, path, GatherPath);
+				gpath->subpath = reparameterize_path_by_child(root,
+															  gpath->subpath,
+															  child_rel);
+				new_path = (Path *) gpath;
+			}
+			break;
+
+		case T_GatherMergePath:
+			{
+				GatherMergePath *gmpath;
+
+				FLAT_COPY_PATH(gmpath, path, GatherMergePath);
+				gmpath->subpath = reparameterize_path_by_child(root,
+															   gmpath->subpath,
+															   child_rel);
+				new_path = (Path *) gmpath;
+			}
+			break;
+
+		case T_SubqueryScanPath:
+
+			/*
+			 * Subqueries can't be partitioned right now, so a subquery can
+			 * not participate in a partition-wise join and hence can not be
+			 * seen here.
+			 */
+		case T_ResultPath:
+
+			/*
+			 * A result path can not have any parameterization, so we should
+			 * never see it here.
+			 */
+		default:
+			/* Other kinds of paths can not appear in a join tree. */
+			elog(ERROR, "unrecognized path node type %d", (int) nodeTag(path));
+
+			/* Keep compiler quite about unassigned new_path */
+			return NULL;
+	}
+
+	/*
+	 * Adjust the parameterization information, which refers to the topmost
+	 * parent. The topmost parent can be multiple levels away from the given
+	 * child, hence use multi-level expression adjustment routines.
+	 */
+	old_ppi = new_path->param_info;
+	required_outer = adjust_child_relids_multilevel(root,
+													old_ppi->ppi_req_outer,
+													child_rel->relids,
+													child_rel->top_parent_relids);
+
+	/* If we already have a PPI for this parameterization, just return it */
+	new_ppi = find_param_path_info(new_path->parent, required_outer);
+
+	/*
+	 * If not, build a new one and link it to the list of PPIs. When called
+	 * during GEQO join planning, we are in a short-lived memory context.  We
+	 * must make sure that the new PPI and its contents attached to a baserel
+	 * survives the GEQO cycle, else the baserel is trashed for future GEQO
+	 * cycles.  On the other hand, when we are adding new PPI to a joinrel
+	 * during GEQO, we don't want that to clutter the main planning context.
+	 * Upshot is that the best solution is to explicitly allocate new PPI in
+	 * the same context the given RelOptInfo is in.
+	 */
+	if (!new_ppi)
+	{
+		MemoryContext oldcontext;
+		RelOptInfo *rel = path->parent;
+
+		oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(rel));
+
+		new_ppi = makeNode(ParamPathInfo);
+		new_ppi->ppi_req_outer = bms_copy(required_outer);
+		new_ppi->ppi_rows = old_ppi->ppi_rows;
+		new_ppi->ppi_clauses = (List *) adjust_appendrel_attrs_multilevel(root,
+																		  (Node *) old_ppi->ppi_clauses,
+																		  child_rel->relids,
+																		  child_rel->top_parent_relids);
+		rel->ppilist = lappend(rel->ppilist, new_ppi);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	bms_free(required_outer);
+
+	new_path->param_info = new_ppi;
+
+	/*
+	 * Adjust the path target if the parent of the outer relation is
+	 * referenced in the targetlist. This can happen when only the parent of
+	 * outer relation is laterally referenced in this relation.
+	 */
+	if (bms_overlap(path->parent->lateral_relids, child_rel->top_parent_relids))
+	{
+		List	   *exprs;
+
+		new_path->pathtarget = copy_pathtarget(new_path->pathtarget);
+		exprs = new_path->pathtarget->exprs;
+		exprs = (List *) adjust_appendrel_attrs_multilevel(root,
+														   (Node *) exprs,
+														   child_rel->relids,
+														   child_rel->top_parent_relids);
+		new_path->pathtarget->exprs = exprs;
+	}
+
+	return new_path;
 }

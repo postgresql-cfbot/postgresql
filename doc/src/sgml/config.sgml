@@ -3632,6 +3632,25 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-partition-wise-join" xreflabel="enable_partition_wise_join">
+      <term><varname>enable_partition_wise_join</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_partition_wise_join</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's use of partition-wise join
+        plans. When enabled, it spends time in creating paths for joins between
+        partitions and consumes memory to construct expression nodes to be used
+        for those joins, even if partition-wise join does not result in the
+        cheapest path. The time and memory increase exponentially with the
+        number of partitioned tables being joined and they increase linearly
+        with the number of partitions. The default is <literal>off</>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-seqscan" xreflabel="enable_seqscan">
       <term><varname>enable_seqscan</varname> (<type>boolean</type>)
       <indexterm>

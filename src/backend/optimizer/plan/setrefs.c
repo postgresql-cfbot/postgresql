@@ -41,6 +41,9 @@ typedef struct
 	int			num_vars;		/* number of plain Var tlist entries */
 	bool		has_ph_vars;	/* are there PlaceHolderVar entries? */
 	bool		has_non_vars;	/* are there other entries? */
+	bool		has_conv_whole_rows;	/* are there ConvertRowtypeExpr
+										 * entries encapsulating a whole-row
+										 * Var? */
 	tlist_vinfo vars[FLEXIBLE_ARRAY_MEMBER];	/* has num_vars entries */
 } indexed_tlist;
 
@@ -139,6 +142,7 @@ static List *set_returning_clause_references(PlannerInfo *root,
 								int rtoffset);
 static bool extract_query_dependencies_walker(Node *node,
 								  PlannerInfo *context);
+static Var *get_wholerow_ref_from_convert_row_type(Node *node);
 
 /*****************************************************************************
  *
@@ -1944,6 +1948,7 @@ build_tlist_index(List *tlist)
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
 	itlist->has_non_vars = false;
+	itlist->has_conv_whole_rows = false;
 
 	/* Find the Vars and fill in the index array */
 	vinfo = itlist->vars;
@@ -1962,6 +1967,8 @@ build_tlist_index(List *tlist)
 		}
 		else if (tle->expr && IsA(tle->expr, PlaceHolderVar))
 			itlist->has_ph_vars = true;
+		else if (get_wholerow_ref_from_convert_row_type((Node *) tle->expr))
+			itlist->has_conv_whole_rows = true;
 		else
 			itlist->has_non_vars = true;
 	}
@@ -1977,7 +1984,10 @@ build_tlist_index(List *tlist)
  * This is like build_tlist_index, but we only index tlist entries that
  * are Vars belonging to some rel other than the one specified.  We will set
  * has_ph_vars (allowing PlaceHolderVars to be matched), but not has_non_vars
- * (so nothing other than Vars and PlaceHolderVars can be matched).
+ * (so nothing other than Vars and PlaceHolderVars can be matched). In case of
+ * DML, where this function will be used, returning lists from child relations
+ * will be appended similar to a simple append relation. That does not require
+ * fixing ConvertRowtypeExpr references. So, those are not considered here.
  */
 static indexed_tlist *
 build_tlist_index_other_vars(List *tlist, Index ignore_rel)
@@ -1994,6 +2004,7 @@ build_tlist_index_other_vars(List *tlist, Index ignore_rel)
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
 	itlist->has_non_vars = false;
+	itlist->has_conv_whole_rows = false;
 
 	/* Find the desired Vars and fill in the index array */
 	vinfo = itlist->vars;
@@ -2264,6 +2275,29 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		/* If not supplied by input plans, evaluate the contained expr */
 		return fix_join_expr_mutator((Node *) phv->phexpr, context);
 	}
+	if (get_wholerow_ref_from_convert_row_type(node))
+	{
+		if (context->outer_itlist &&
+			context->outer_itlist->has_conv_whole_rows)
+		{
+			newvar = search_indexed_tlist_for_non_var((Expr *) node,
+													  context->outer_itlist,
+													  OUTER_VAR);
+
+			if (newvar)
+				return (Node *) newvar;
+		}
+		if (context->inner_itlist &&
+			context->inner_itlist->has_conv_whole_rows)
+		{
+			newvar = search_indexed_tlist_for_non_var((Expr *) node,
+													  context->inner_itlist,
+													  INNER_VAR);
+
+			if (newvar)
+				return (Node *) newvar;
+		}
+	}
 	if (IsA(node, Param))
 		return fix_param_node(context->root, (Param *) node);
 	/* Try matching more complex expressions too, if tlists have any */
@@ -2369,6 +2403,17 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		}
 		/* If not supplied by input plan, evaluate the contained expr */
 		return fix_upper_expr_mutator((Node *) phv->phexpr, context);
+	}
+	if (get_wholerow_ref_from_convert_row_type(node))
+	{
+		if (context->subplan_itlist->has_conv_whole_rows)
+		{
+			newvar = search_indexed_tlist_for_non_var((Expr *) node,
+													  context->subplan_itlist,
+													  context->newvarno);
+			if (newvar)
+				return (Node *) newvar;
+		}
 	}
 	if (IsA(node, Param))
 		return fix_param_node(context->root, (Param *) node);
@@ -2601,4 +2646,36 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 	}
 	return expression_tree_walker(node, extract_query_dependencies_walker,
 								  (void *) context);
+}
+
+/*
+ * get_wholerow_ref_from_convert_row_type
+ *		Given a node, check if it's a ConvertRowtypeExpr encapsulating a
+ *		whole-row reference as implicit cast and return the whole-row
+ *		reference Var if so. Otherwise return NULL. In case of multi-level
+ *		partitioning, we will have as many nested ConvertRowtypeExpr as there
+ *		are levels in partition hierarchy.
+ */
+static Var *
+get_wholerow_ref_from_convert_row_type(Node *node)
+{
+	Var		   *var = NULL;
+	ConvertRowtypeExpr *convexpr;
+
+	if (!node || !IsA(node, ConvertRowtypeExpr))
+		return NULL;
+
+	/* Traverse nested ConvertRowtypeExpr's. */
+	convexpr = castNode(ConvertRowtypeExpr, node);
+	while (convexpr->convertformat == COERCE_IMPLICIT_CAST &&
+		   IsA(convexpr->arg, ConvertRowtypeExpr))
+		convexpr = (ConvertRowtypeExpr *) convexpr->arg;
+
+	if (IsA(convexpr->arg, Var))
+		var = castNode(Var, convexpr->arg);
+
+	if (var && var->varattno == 0)
+		return var;
+
+	return NULL;
 }

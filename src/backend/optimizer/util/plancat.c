@@ -1293,6 +1293,9 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 		HeapTuple	htup;
 		Bitmapset  *keys = NULL;
 		int			i;
+		int			kind = 0;
+
+		StatisticExtInfo *info = makeNode(StatisticExtInfo);
 
 		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!htup)
@@ -1307,30 +1310,25 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 		for (i = 0; i < staForm->stxkeys.dim1; i++)
 			keys = bms_add_member(keys, staForm->stxkeys.values[i]);
 
-		/* add one StatisticExtInfo for each kind built */
+		/* now build the bitmask of statistics kinds */
 		if (statext_is_kind_built(htup, STATS_EXT_NDISTINCT))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
-
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_NDISTINCT;
-			info->keys = bms_copy(keys);
-
-			stainfos = lcons(info, stainfos);
-		}
+			kind |= STATS_EXT_INFO_NDISTINCT;
 
 		if (statext_is_kind_built(htup, STATS_EXT_DEPENDENCIES))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+			kind |= STATS_EXT_INFO_DEPENDENCIES;
 
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_DEPENDENCIES;
-			info->keys = bms_copy(keys);
+		if (statext_is_kind_built(htup, STATS_EXT_MCV))
+			kind |= STATS_EXT_INFO_MCV;
 
-			stainfos = lcons(info, stainfos);
-		}
+		if (statext_is_kind_built(htup, STATS_EXT_HISTOGRAM))
+			kind |= STATS_EXT_INFO_HISTOGRAM;
+
+		info->statOid = statOid;
+		info->rel = rel;
+		info->kinds = kind;
+		info->keys = bms_copy(keys);
+
+		stainfos = lcons(info, stainfos);
 
 		ReleaseSysCache(htup);
 		bms_free(keys);

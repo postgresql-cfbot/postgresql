@@ -3854,7 +3854,7 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 		int			nshared;
 
 		/* skip statistics of other kinds */
-		if (info->kind != STATS_EXT_NDISTINCT)
+		if ((info->kinds & STATS_EXT_INFO_NDISTINCT) == 0)
 			continue;
 
 		/* compute attnums shared by the vars and the statistics object */

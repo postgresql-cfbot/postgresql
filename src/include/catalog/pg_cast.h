@@ -262,6 +262,14 @@ DATA(insert (  3361  25    0 i i ));
 DATA(insert (  3402  17    0 i b ));
 DATA(insert (  3402  25    0 i i ));
 
+/* pg_mcv_list can be coerced to, but not from, bytea and text */
+DATA(insert (  3419	 17    0 i b ));
+DATA(insert (  3419	 25    0 i i ));
+
+/* pg_histogram can be coerced to, but not from, bytea */
+DATA(insert (  3425	 17    0 i b ));
+
+
 /*
  * Datetime category
  */

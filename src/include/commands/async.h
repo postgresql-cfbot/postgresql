@@ -24,6 +24,7 @@
 
 extern bool Trace_notify;
 extern volatile sig_atomic_t notifyInterruptPending;
+extern volatile sig_atomic_t hotStandbyExitInterruptPending;
 
 extern Size AsyncShmemSize(void);
 extern void AsyncShmemInit(void);
@@ -53,5 +54,11 @@ extern void HandleNotifyInterrupt(void);
 
 /* process interrupts */
 extern void ProcessNotifyInterrupt(void);
+
+/* signal handler for inbound notifies (PROCSIG_HOTSTANDBY_EXIT) */
+extern void HandleHotStandbyExitInterrupt(void);
+
+/* process recovery exit event */
+extern void ProcessHotStandbyExitInterrupt(void);
 
 #endif							/* ASYNC_H */

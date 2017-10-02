@@ -533,9 +533,13 @@ ProcessClientReadInterrupt(bool blocked)
 		if (catchupInterruptPending)
 			ProcessCatchupInterrupt();
 
-		/* Process sinval catchup interrupts that happened while reading */
+		/* Process NOTIFY interrupts that happened while reading */
 		if (notifyInterruptPending)
 			ProcessNotifyInterrupt();
+
+		/* Process recovery exit interrupts that happened while reading */
+		if (hotStandbyExitInterruptPending)
+			ProcessHotStandbyExitInterrupt();
 	}
 	else if (ProcDiePending && blocked)
 	{
@@ -3765,6 +3769,14 @@ PostgresMain(int argc, char *argv[],
 	 * involves database access should be there, not here.
 	 */
 	InitPostgres(dbname, InvalidOid, username, InvalidOid, NULL);
+
+	/*
+	 * Update session read-only status if in recovery.
+	 */
+	if (IsUnderPostmaster && !DefaultXactReadOnly &&
+		RecoveryInProgress())
+		SetConfigOption("session_read_only", "on",
+						PGC_INTERNAL, PGC_S_OVERRIDE);
 
 	/*
 	 * If the PostmasterContext is still around, recycle the space; we don't

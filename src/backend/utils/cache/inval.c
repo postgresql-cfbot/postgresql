@@ -559,9 +559,14 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 		{
 			InvalidateCatalogSnapshot();
 
+			/*
+			 * Call the callbacks first so that the callbacks can access the
+			 * entries corresponding to the hashValue.
+			 */
+			CallSyscacheCallbacks(msg->cc.id, msg->cc.hashValue);
+
 			SysCacheInvalidate(msg->cc.id, msg->cc.hashValue);
 
-			CallSyscacheCallbacks(msg->cc.id, msg->cc.hashValue);
 		}
 	}
 	else if (msg->id == SHAREDINVALCATALOG_ID)

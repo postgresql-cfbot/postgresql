@@ -304,10 +304,11 @@ CatCachePrintStats(int code, Datum arg)
 
 		if (cache->cc_ntup == 0 && cache->cc_searches == 0)
 			continue;			/* don't print unused caches */
-		elog(DEBUG2, "catcache %s/%u: %d tup, %ld srch, %ld+%ld=%ld hits, %ld+%ld=%ld loads, %ld invals, %ld lsrch, %ld lhits",
+		elog(DEBUG2, "catcache %s/%u: %d tup, %d negtup, %ld srch, %ld+%ld=%ld hits, %ld+%ld=%ld loads, %ld invals, %ld lsrch, %ld lhits",
 			 cache->cc_relname,
 			 cache->cc_indexoid,
 			 cache->cc_ntup,
+			 cache->cc_nnegtup,
 			 cache->cc_searches,
 			 cache->cc_hits,
 			 cache->cc_neg_hits,
@@ -374,6 +375,10 @@ CatCacheRemoveCTup(CatCache *cache, CatCTup *ct)
 	/* free associated tuple data */
 	if (ct->tuple.t_data != NULL)
 		pfree(ct->tuple.t_data);
+
+	if (ct->negative)
+		--cache->cc_nnegtup;
+
 	pfree(ct);
 
 	--cache->cc_ntup;
@@ -572,6 +577,49 @@ ResetCatalogCache(CatCache *cache)
 }
 
 /*
+ *		CleanupCatCacheNegEntries
+ *
+ *	Remove negative cache tuples matching a partial key.
+ *
+ */
+void
+CleanupCatCacheNegEntries(CatCache *cache, ScanKeyData *skey)
+{
+	int i;
+
+	/* If this cache has no negative entries, nothing to do */
+	if (cache->cc_nnegtup == 0)
+		return;
+
+	/* searching with a partial key means scanning the whole cache */
+	for (i = 0; i < cache->cc_nbuckets; i++)
+	{
+		dlist_head *bucket = &cache->cc_bucket[i];
+		dlist_mutable_iter iter;
+
+		dlist_foreach_modify(iter, bucket)
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+			bool		res;
+
+			if (!ct->negative)
+				continue;
+
+			HeapKeyTest(&ct->tuple, cache->cc_tupdesc, 1, skey, res);
+			if (!res)
+				continue;
+
+			/*
+			 * the negative cache entries can no longer be referenced, so we
+			 * can remove it unconditionally
+			 */
+			CatCacheRemoveCTup(cache, ct);
+		}
+	}
+}
+
+
+/*
  *		ResetCatalogCaches
  *
  * Reset all caches when a shared cache inval event forces it
@@ -718,6 +766,7 @@ InitCatCache(int id,
 	cp->cc_relisshared = false; /* temporary */
 	cp->cc_tupdesc = (TupleDesc) NULL;
 	cp->cc_ntup = 0;
+	cp->cc_nnegtup = 0;
 	cp->cc_nbuckets = nbuckets;
 	cp->cc_nkeys = nkeys;
 	for (i = 0; i < nkeys; ++i)
@@ -1215,8 +1264,8 @@ SearchCatCache(CatCache *cache,
 
 		CACHE4_elog(DEBUG2, "SearchCatCache(%s): Contains %d/%d tuples",
 					cache->cc_relname, cache->cc_ntup, CacheHdr->ch_ntup);
-		CACHE3_elog(DEBUG2, "SearchCatCache(%s): put neg entry in bucket %d",
-					cache->cc_relname, hashIndex);
+		CACHE4_elog(DEBUG2, "SearchCatCache(%s): put neg entry in bucket %d, total %d",
+					cache->cc_relname, hashIndex, cache->cc_nnegtup);
 
 		/*
 		 * We are not returning the negative entry to the caller, so leave its
@@ -1311,6 +1360,48 @@ GetCatCacheHashValue(CatCache *cache,
 	return CatalogCacheComputeHashValue(cache, cache->cc_nkeys, cur_skey);
 }
 
+/*
+ * CollectOIDsForHashValue
+ *
+ * Collect OIDs correspond to a hash value. attnum is the column to retrieve
+ * the OIDs.
+ */
+List *
+CollectOIDsForHashValue(CatCache *cache, uint32 hashValue, int attnum)
+{
+	Index		 hashIndex = HASH_INDEX(hashValue, cache->cc_nbuckets);
+	dlist_head	*bucket = &cache->cc_bucket[hashIndex];
+	dlist_iter	 iter;
+	List *ret = NIL;
+
+	/* Nothing to return before initialization */
+	if (cache->cc_tupdesc == NULL)
+		return ret;
+
+	/* Currently only OID key is supported */
+	Assert(attnum <= cache->cc_tupdesc->natts);
+	Assert(attnum < 0 ? attnum == ObjectIdAttributeNumber :
+		   cache->cc_tupdesc->attrs[attnum].atttypid == OIDOID);
+
+	dlist_foreach(iter, bucket)
+	{
+		CatCTup *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+		bool	isNull;
+		Datum	oid;
+
+		if (ct->dead)
+			continue;			/* ignore dead entries */
+
+		if (ct->hash_value != hashValue)
+			continue;			/* quickly skip entry if wrong hash val */
+
+		oid = heap_getattr(&ct->tuple, attnum, cache->cc_tupdesc, &isNull);
+		if (!isNull)
+			ret = lappend_oid(ret, DatumGetObjectId(oid));
+	}
+
+	return ret;
+}
 
 /*
  *	SearchCatCacheList
@@ -1667,6 +1758,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp,
 
 	cache->cc_ntup++;
 	CacheHdr->ch_ntup++;
+	if (negative)
+		cache->cc_nnegtup++;
 
 	/*
 	 * If the hash table has become too full, enlarge the buckets array. Quite

@@ -75,6 +75,8 @@
 #include "catalog/pg_user_mapping.h"
 #include "utils/rel.h"
 #include "utils/catcache.h"
+#include "utils/fmgroids.h"
+#include "utils/inval.h"
 #include "utils/syscache.h"
 
 
@@ -109,6 +111,16 @@
 */
 
 /*
+ *	struct for flushing negative cache by syscache invalidation
+ */
+typedef struct SysCacheCBParam_T
+{
+	int	trig_attnum;
+	int	target_cacheid;
+	ScanKeyData skey;
+} SysCacheCBParam;
+
+/*
  *		struct cachedesc: information defining a single syscache
  */
 struct cachedesc
@@ -118,6 +130,18 @@ struct cachedesc
 	int			nkeys;			/* # of keys needed for cache lookup */
 	int			key[4];			/* attribute numbers of key attrs */
 	int			nbuckets;		/* number of hash buckets for this cache */
+
+	/* relcache invalidation stuff */
+	AttrNumber	relattrnum;		/* attrnum to retrieve reloid for
+								 * invalidation, 0 if not needed */
+
+	/* catcache invalidation stuff */
+	int			trig_cacheid;	/* cache id of triggering syscache: -1 means
+								 * no triggering cache */
+	int16		trig_attnum;	/* key column in triggering cache. Must be an
+								 * OID */
+	int16		target_attnum;	/* corresponding column in this cache. Must be
+								 * an OID*/
 };
 
 static const struct cachedesc cacheinfo[] = {
@@ -130,7 +154,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{AccessMethodRelationId,	/* AMNAME */
 		AmNameIndexId,
@@ -141,7 +167,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{AccessMethodRelationId,	/* AMOID */
 		AmOidIndexId,
@@ -152,7 +180,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{AccessMethodOperatorRelationId,	/* AMOPOPID */
 		AccessMethodOperatorIndexId,
@@ -163,7 +193,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_amop_amopfamily,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{AccessMethodOperatorRelationId,	/* AMOPSTRATEGY */
 		AccessMethodStrategyIndexId,
@@ -174,7 +206,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_amop_amoprighttype,
 			Anum_pg_amop_amopstrategy
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{AccessMethodProcedureRelationId,	/* AMPROCNUM */
 		AccessMethodProcedureIndexId,
@@ -185,7 +219,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_amproc_amprocrighttype,
 			Anum_pg_amproc_amprocnum
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{AttributeRelationId,		/* ATTNAME */
 		AttributeRelidNameIndexId,
@@ -196,7 +232,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		32
+		32,
+		Anum_pg_attribute_attrelid,
+		-1, 0, 0
 	},
 	{AttributeRelationId,		/* ATTNUM */
 		AttributeRelidNumIndexId,
@@ -207,7 +245,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		128
+		128,
+		Anum_pg_attribute_attrelid,
+		-1, 0, 0
 	},
 	{AuthMemRelationId,			/* AUTHMEMMEMROLE */
 		AuthMemMemRoleIndexId,
@@ -218,7 +258,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{AuthMemRelationId,			/* AUTHMEMROLEMEM */
 		AuthMemRoleMemIndexId,
@@ -229,7 +271,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{AuthIdRelationId,			/* AUTHNAME */
 		AuthIdRolnameIndexId,
@@ -240,7 +284,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{AuthIdRelationId,			/* AUTHOID */
 		AuthIdOidIndexId,
@@ -251,10 +297,11 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
-	{
-		CastRelationId,			/* CASTSOURCETARGET */
+	{CastRelationId,			/* CASTSOURCETARGET */
 		CastSourceTargetIndexId,
 		2,
 		{
@@ -263,7 +310,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		256
+		256,
+		0,
+		-1, 0, 0
 	},
 	{OperatorClassRelationId,	/* CLAAMNAMENSP */
 		OpclassAmNameNspIndexId,
@@ -274,7 +323,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_opclass_opcnamespace,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{OperatorClassRelationId,	/* CLAOID */
 		OpclassOidIndexId,
@@ -285,7 +336,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{CollationRelationId,		/* COLLNAMEENCNSP */
 		CollationNameEncNspIndexId,
@@ -296,7 +349,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_collation_collnamespace,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{CollationRelationId,		/* COLLOID */
 		CollationOidIndexId,
@@ -307,7 +362,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{ConversionRelationId,		/* CONDEFAULT */
 		ConversionDefaultIndexId,
@@ -318,7 +375,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_conversion_contoencoding,
 			ObjectIdAttributeNumber,
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{ConversionRelationId,		/* CONNAMENSP */
 		ConversionNameNspIndexId,
@@ -329,7 +388,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{ConstraintRelationId,		/* CONSTROID */
 		ConstraintOidIndexId,
@@ -340,7 +401,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{ConversionRelationId,		/* CONVOID */
 		ConversionOidIndexId,
@@ -351,7 +414,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{DatabaseRelationId,		/* DATABASEOID */
 		DatabaseOidIndexId,
@@ -362,7 +427,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{DefaultAclRelationId,		/* DEFACLROLENSPOBJ */
 		DefaultAclRoleNspObjIndexId,
@@ -373,7 +440,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_default_acl_defaclobjtype,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{EnumRelationId,			/* ENUMOID */
 		EnumOidIndexId,
@@ -384,7 +453,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{EnumRelationId,			/* ENUMTYPOIDNAME */
 		EnumTypIdLabelIndexId,
@@ -395,7 +466,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{EventTriggerRelationId,	/* EVENTTRIGGERNAME */
 		EventTriggerNameIndexId,
@@ -406,7 +479,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{EventTriggerRelationId,	/* EVENTTRIGGEROID */
 		EventTriggerOidIndexId,
@@ -417,7 +492,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{ForeignDataWrapperRelationId,	/* FOREIGNDATAWRAPPERNAME */
 		ForeignDataWrapperNameIndexId,
@@ -428,7 +505,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{ForeignDataWrapperRelationId,	/* FOREIGNDATAWRAPPEROID */
 		ForeignDataWrapperOidIndexId,
@@ -439,7 +518,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{ForeignServerRelationId,	/* FOREIGNSERVERNAME */
 		ForeignServerNameIndexId,
@@ -450,7 +531,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{ForeignServerRelationId,	/* FOREIGNSERVEROID */
 		ForeignServerOidIndexId,
@@ -461,7 +544,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{ForeignTableRelationId,	/* FOREIGNTABLEREL */
 		ForeignTableRelidIndexId,
@@ -472,7 +557,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{IndexRelationId,			/* INDEXRELID */
 		IndexRelidIndexId,
@@ -483,7 +570,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{LanguageRelationId,		/* LANGNAME */
 		LanguageNameIndexId,
@@ -494,7 +583,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{LanguageRelationId,		/* LANGOID */
 		LanguageOidIndexId,
@@ -505,7 +596,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{NamespaceRelationId,		/* NAMESPACENAME */
 		NamespaceNameIndexId,
@@ -516,7 +609,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{NamespaceRelationId,		/* NAMESPACEOID */
 		NamespaceOidIndexId,
@@ -527,7 +622,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{OperatorRelationId,		/* OPERNAMENSP */
 		OperatorNameNspIndexId,
@@ -538,7 +635,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_operator_oprright,
 			Anum_pg_operator_oprnamespace
 		},
-		256
+		256,
+		0,
+		-1, 0, 0
 	},
 	{OperatorRelationId,		/* OPEROID */
 		OperatorOidIndexId,
@@ -549,7 +648,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		32
+		32,
+		0,
+		-1, 0, 0
 	},
 	{OperatorFamilyRelationId,	/* OPFAMILYAMNAMENSP */
 		OpfamilyAmNameNspIndexId,
@@ -560,7 +661,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_opfamily_opfnamespace,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{OperatorFamilyRelationId,	/* OPFAMILYOID */
 		OpfamilyOidIndexId,
@@ -571,7 +674,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{PartitionedRelationId,		/* PARTRELID */
 		PartitionedRelidIndexId,
@@ -582,7 +687,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		32
+		32,
+		0,
+		-1, 0, 0
 	},
 	{ProcedureRelationId,		/* PROCNAMEARGSNSP */
 		ProcedureNameArgsNspIndexId,
@@ -593,7 +700,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_proc_pronamespace,
 			0
 		},
-		128
+		128,
+		0,
+		-1, 0, 0
 	},
 	{ProcedureRelationId,		/* PROCOID */
 		ProcedureOidIndexId,
@@ -604,7 +713,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		128
+		128,
+		0,
+		-1, 0, 0
 	},
 	{PublicationRelationId,		/* PUBLICATIONNAME */
 		PublicationNameIndexId,
@@ -615,7 +726,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{PublicationRelationId,		/* PUBLICATIONOID */
 		PublicationObjectIndexId,
@@ -626,7 +739,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{PublicationRelRelationId,	/* PUBLICATIONREL */
 		PublicationRelObjectIndexId,
@@ -637,7 +752,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{PublicationRelRelationId,	/* PUBLICATIONRELMAP */
 		PublicationRelPrrelidPrpubidIndexId,
@@ -648,7 +765,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{RangeRelationId,			/* RANGETYPE */
 		RangeTypidIndexId,
@@ -659,7 +778,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{RelationRelationId,		/* RELNAMENSP */
 		ClassNameNspIndexId,
@@ -670,7 +791,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		128
+		128,
+		0,
+		NAMESPACEOID, ObjectIdAttributeNumber, Anum_pg_class_relnamespace
 	},
 	{RelationRelationId,		/* RELOID */
 		ClassOidIndexId,
@@ -681,7 +804,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		128
+		128,
+		0,
+		-1, 0, 0
 	},
 	{ReplicationOriginRelationId,	/* REPLORIGIDENT */
 		ReplicationOriginIdentIndex,
@@ -692,7 +817,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{ReplicationOriginRelationId,	/* REPLORIGNAME */
 		ReplicationOriginNameIndex,
@@ -703,7 +830,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{RewriteRelationId,			/* RULERELNAME */
 		RewriteRelRulenameIndexId,
@@ -714,7 +843,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		8
+		8,
+		0,
+		-1, 0, 0
 	},
 	{SequenceRelationId,		/* SEQRELID */
 		SequenceRelidIndexId,
@@ -725,7 +856,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		32
+		32,
+		0,
+		-1, 0, 0
 	},
 	{StatisticExtRelationId,	/* STATEXTNAMENSP */
 		StatisticExtNameIndexId,
@@ -736,7 +869,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{StatisticExtRelationId,	/* STATEXTOID */
 		StatisticExtOidIndexId,
@@ -747,7 +882,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{StatisticRelationId,		/* STATRELATTINH */
 		StatisticRelidAttnumInhIndexId,
@@ -758,7 +895,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_statistic_stainherit,
 			0
 		},
-		128
+		128,
+		Anum_pg_statistic_starelid,
+		-1, 0, 0
 	},
 	{SubscriptionRelationId,	/* SUBSCRIPTIONNAME */
 		SubscriptionNameIndexId,
@@ -769,7 +908,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{SubscriptionRelationId,	/* SUBSCRIPTIONOID */
 		SubscriptionObjectIndexId,
@@ -780,7 +921,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{SubscriptionRelRelationId, /* SUBSCRIPTIONRELMAP */
 		SubscriptionRelSrrelidSrsubidIndexId,
@@ -791,7 +934,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{TableSpaceRelationId,		/* TABLESPACEOID */
 		TablespaceOidIndexId,
@@ -802,7 +947,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0,
 		},
-		4
+		4,
+		0,
+		-1, 0, 0
 	},
 	{TransformRelationId,		/* TRFOID */
 		TransformOidIndexId,
@@ -813,7 +960,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0,
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{TransformRelationId,		/* TRFTYPELANG */
 		TransformTypeLangIndexId,
@@ -824,7 +973,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0,
 		},
-		16
+		16,
+		0,
+		-1, 0, 0
 	},
 	{TSConfigMapRelationId,		/* TSCONFIGMAP */
 		TSConfigMapIndexId,
@@ -835,7 +986,9 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_ts_config_map_mapseqno,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSConfigRelationId,		/* TSCONFIGNAMENSP */
 		TSConfigNameNspIndexId,
@@ -846,7 +999,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSConfigRelationId,		/* TSCONFIGOID */
 		TSConfigOidIndexId,
@@ -857,7 +1012,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSDictionaryRelationId,	/* TSDICTNAMENSP */
 		TSDictionaryNameNspIndexId,
@@ -868,7 +1025,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSDictionaryRelationId,	/* TSDICTOID */
 		TSDictionaryOidIndexId,
@@ -879,7 +1038,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSParserRelationId,		/* TSPARSERNAMENSP */
 		TSParserNameNspIndexId,
@@ -890,7 +1051,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSParserRelationId,		/* TSPARSEROID */
 		TSParserOidIndexId,
@@ -901,7 +1064,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSTemplateRelationId,		/* TSTEMPLATENAMENSP */
 		TSTemplateNameNspIndexId,
@@ -912,7 +1077,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TSTemplateRelationId,		/* TSTEMPLATEOID */
 		TSTemplateOidIndexId,
@@ -923,7 +1090,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{TypeRelationId,			/* TYPENAMENSP */
 		TypeNameNspIndexId,
@@ -934,7 +1103,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{TypeRelationId,			/* TYPEOID */
 		TypeOidIndexId,
@@ -945,7 +1116,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		64
+		64,
+		0,
+		-1, 0, 0
 	},
 	{UserMappingRelationId,		/* USERMAPPINGOID */
 		UserMappingOidIndexId,
@@ -956,7 +1129,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	},
 	{UserMappingRelationId,		/* USERMAPPINGUSERSERVER */
 		UserMappingUserServerIndexId,
@@ -967,7 +1142,9 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0
 		},
-		2
+		2,
+		0,
+		-1, 0, 0
 	}
 };
 
@@ -983,9 +1160,25 @@ static int	SysCacheRelationOidSize;
 static Oid	SysCacheSupportingRelOid[SysCacheSize * 2];
 static int	SysCacheSupportingRelOidSize;
 
+/*
+ * stuff for negative cache flushing by relcache invalidation
+ */
+#define MAX_RELINVAL_CALLBACKS 4
+typedef struct RELINVALCBParam
+{
+	CatCache *cache;
+	int		  relkeynum;
+}  RELINVALCBParam;
+
+RELINVALCBParam relinval_callback_list[MAX_RELINVAL_CALLBACKS];
+static int relinval_callback_count = 0;
+
+static ScanKeyData	oideqscankey; /* ScanKey for reloid match  */
+
 static int	oid_compare(const void *a, const void *b);
-
-
+static void SysCacheRelInvalCallback(Datum arg, Oid reloid);
+static void SysCacheSysCacheInvalCallback(Datum arg, int cacheid,
+										  uint32 hashvalue);
 /*
  * InitCatalogCache - initialize the caches
  *
@@ -1028,6 +1221,49 @@ InitCatalogCache(void)
 			cacheinfo[cacheId].indoid;
 		/* see comments for RelationInvalidatesSnapshotsOnly */
 		Assert(!RelationInvalidatesSnapshotsOnly(cacheinfo[cacheId].reloid));
+
+		/*
+		 * If this syscache is requesting relcache invalidation, register a
+		 * callback
+		 */
+		if (cacheinfo[cacheId].relattrnum > 0)
+		{
+			Assert(relinval_callback_count < MAX_RELINVAL_CALLBACKS);
+
+			relinval_callback_list[relinval_callback_count].cache  =
+				SysCache[cacheId];
+			relinval_callback_list[relinval_callback_count].relkeynum =
+				cacheinfo[cacheId].relattrnum;
+			relinval_callback_count++;
+		}
+
+		/*
+		 * If this syscache has syscache invalidation trigger, register
+		 * it.
+		 */
+		if (cacheinfo[cacheId].trig_cacheid >= 0)
+		{
+			SysCacheCBParam *param;
+
+			param = MemoryContextAlloc(CacheMemoryContext,
+									   sizeof(SysCacheCBParam));
+			param->target_cacheid = cacheId;
+
+			/*
+			 * XXXX: Create a scankeydata for OID comparison. We don't have a
+			 * means to check the type of the column in the system catalog at
+			 * this time. So we have to believe the definition.
+			 */
+			fmgr_info_cxt(F_OIDEQ, &param->skey.sk_func, CacheMemoryContext);
+			param->skey.sk_attno = cacheinfo[cacheId].target_attnum;
+			param->trig_attnum = cacheinfo[cacheId].trig_attnum;
+			param->skey.sk_strategy = BTEqualStrategyNumber;
+			param->skey.sk_subtype = InvalidOid;
+			param->skey.sk_collation = InvalidOid;
+			CacheRegisterSyscacheCallback(cacheinfo[cacheId].trig_cacheid,
+										  SysCacheSysCacheInvalCallback,
+										  PointerGetDatum(param));
+		}
 	}
 
 	Assert(SysCacheRelationOidSize <= lengthof(SysCacheRelationOid));
@@ -1052,7 +1288,37 @@ InitCatalogCache(void)
 	}
 	SysCacheSupportingRelOidSize = j + 1;
 
+	/*
+	 * prepare the scankey for reloid comparison and register a relcache inval
+	 * callback.
+	 */
+	oideqscankey.sk_strategy = BTEqualStrategyNumber;
+	oideqscankey.sk_subtype = InvalidOid;
+	oideqscankey.sk_collation = InvalidOid;
+	fmgr_info_cxt(F_OIDEQ, &oideqscankey.sk_func, CacheMemoryContext);
+	CacheRegisterRelcacheCallback(SysCacheRelInvalCallback, (Datum) 0);
+
 	CacheInitialized = true;
+}
+
+/*
+ * Callback function for negative cache flushing by relcache invalidation
+ * scankey for this function has been prepared in InitCatalogCache.
+ */
+static void
+SysCacheRelInvalCallback(Datum arg, Oid reloid)
+{
+	int i;
+
+	for(i = 0 ; i < relinval_callback_count ; i++)
+	{
+		ScanKeyData skey;
+
+		memcpy(&skey, &oideqscankey, sizeof(skey));
+		skey.sk_attno = relinval_callback_list[i].relkeynum;
+		skey.sk_argument = ObjectIdGetDatum(reloid);
+		CleanupCatCacheNegEntries(relinval_callback_list[i].cache, &skey);
+	}
 }
 
 /*
@@ -1435,6 +1701,53 @@ RelationInvalidatesSnapshotsOnly(Oid relid)
 	}
 
 	return false;
+}
+
+/*
+ * SysCacheSysCacheInvalCallback
+ *
+ * Callback function for negative cache flushing by syscache invalidation.
+ * Fetches an OID (not restricted to system oid column) from the invalidated
+ * tuple and flushes negative entries that matches the OID in the target
+ * syscache.
+ */
+static void
+SysCacheSysCacheInvalCallback(Datum arg, int cacheid, uint32 hashValue)
+{
+	SysCacheCBParam *param;
+	CatCache	*trigger_cache;		/* triggering catcache */
+	CatCache	*target_cache;		/* target catcache */
+	List *oids;
+	ListCell *lc;
+	int			trigger_cacheid = cacheid;
+	int			target_cacheid;
+
+	param = (SysCacheCBParam *)DatumGetPointer(arg);
+	target_cacheid = param->target_cacheid;
+
+	trigger_cache = SysCache[trigger_cacheid];
+	target_cache = SysCache[target_cacheid];
+
+	/*
+	 * Collect candidate OIDs for target syscache entries. The result contains
+	 * just one value for most cases, or two or more for the case hashvalue
+	 * has synonyms. At least one of them is the right OID but it is
+	 * undistinguishable from others by the given hash value.
+	 * As the result some unnecessary entries may be flushed but it won't harm
+	 * so much than letting them bloat catcaches.
+	 */
+	oids =
+		CollectOIDsForHashValue(trigger_cache, hashValue, param->trig_attnum);
+
+	foreach (lc, oids)
+	{
+		ScanKeyData skey;
+		Oid oid = lfirst_oid (lc);
+
+		memcpy(&skey, &param->skey, sizeof(skey));
+		skey.sk_argument = ObjectIdGetDatum(oid);
+		CleanupCatCacheNegEntries(target_cache, &skey);
+	}
 }
 
 /*

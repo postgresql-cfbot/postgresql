@@ -44,6 +44,7 @@ typedef struct catcache
 	bool		cc_relisshared; /* is relation shared across databases? */
 	TupleDesc	cc_tupdesc;		/* tuple descriptor (copied from reldesc) */
 	int			cc_ntup;		/* # of tuples currently in this cache */
+	int			cc_nnegtup;		/* # of negative tuples */
 	int			cc_nbuckets;	/* # of hash buckets in this cache */
 	int			cc_nkeys;		/* # of keys (1..CATCACHE_MAXKEYS) */
 	int			cc_key[CATCACHE_MAXKEYS];	/* AttrNumber of each key */
@@ -182,11 +183,16 @@ extern uint32 GetCatCacheHashValue(CatCache *cache,
 					 Datum v1, Datum v2,
 					 Datum v3, Datum v4);
 
+extern List *CollectOIDsForHashValue(CatCache *cache,
+									 uint32 hashValue, int attnum);
+
 extern CatCList *SearchCatCacheList(CatCache *cache, int nkeys,
 				   Datum v1, Datum v2,
 				   Datum v3, Datum v4);
 extern void ReleaseCatCacheList(CatCList *list);
 
+extern void
+CleanupCatCacheNegEntries(CatCache *cache, ScanKeyData *skey);
 extern void ResetCatalogCaches(void);
 extern void CatalogCacheFlushCatalog(Oid catId);
 extern void CatCacheInvalidate(CatCache *cache, uint32 hashValue);

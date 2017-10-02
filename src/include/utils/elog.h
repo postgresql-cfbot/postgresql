@@ -396,6 +396,7 @@ extern bool syslog_split_messages;
 #define LOG_DESTINATION_SYSLOG	 2
 #define LOG_DESTINATION_EVENTLOG 4
 #define LOG_DESTINATION_CSVLOG	 8
+#define LOG_DESTINATION_FILE     16
 
 /* Other exported functions */
 extern void DebugFileOpen(void);

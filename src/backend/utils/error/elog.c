@@ -175,7 +175,7 @@ static const char *process_log_prefix_padding(const char *p, int *padding);
 static void log_line_prefix(StringInfo buf, ErrorData *edata);
 static void write_csvlog(ErrorData *edata);
 static void send_message_to_server_log(ErrorData *edata);
-static void write_pipe_chunks(char *data, int len, int dest);
+static void write_pipe_chunks(char *data, int len, bool csv);
 static void send_message_to_frontend(ErrorData *edata);
 static char *expand_fmt_string(const char *fmt, ErrorData *edata);
 static const char *useful_strerror(int errnum);
@@ -2831,7 +2831,7 @@ write_csvlog(ErrorData *edata)
 	if (am_syslogger)
 		write_syslogger_file(buf.data, buf.len, LOG_DESTINATION_CSVLOG);
 	else
-		write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_CSVLOG);
+		write_pipe_chunks(buf.data, buf.len, true);
 
 	pfree(buf.data);
 }
@@ -3008,7 +3008,7 @@ send_message_to_server_log(ErrorData *edata)
 #endif							/* WIN32 */
 
 	/* Write to stderr, if enabled */
-	if ((Log_destination & LOG_DESTINATION_STDERR) || whereToSendOutput == DestDebug)
+	if ((Log_destination & (LOG_DESTINATION_STDERR | LOG_DESTINATION_FILE)) || whereToSendOutput == DestDebug)
 	{
 		/*
 		 * Use the chunking protocol if we know the syslogger should be
@@ -3016,7 +3016,7 @@ send_message_to_server_log(ErrorData *edata)
 		 * Otherwise, just do a vanilla write to stderr.
 		 */
 		if (redirection_done && !am_syslogger)
-			write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
+			write_pipe_chunks(buf.data, buf.len, false);
 #ifdef WIN32
 
 		/*
@@ -3088,7 +3088,7 @@ send_message_to_server_log(ErrorData *edata)
  * rc to void to shut up the compiler.
  */
 static void
-write_pipe_chunks(char *data, int len, int dest)
+write_pipe_chunks(char *data, int len, bool csv)
 {
 	PipeProtoChunk p;
 	int			fd = fileno(stderr);
@@ -3102,7 +3102,7 @@ write_pipe_chunks(char *data, int len, int dest)
 	/* write all but the last chunk */
 	while (len > PIPE_MAX_PAYLOAD)
 	{
-		p.proto.is_last = (dest == LOG_DESTINATION_CSVLOG ? 'F' : 'f');
+		p.proto.is_last = (csv ? 'F' : 'f');
 		p.proto.len = PIPE_MAX_PAYLOAD;
 		memcpy(p.proto.data, data, PIPE_MAX_PAYLOAD);
 		rc = write(fd, &p, PIPE_HEADER_SIZE + PIPE_MAX_PAYLOAD);
@@ -3112,7 +3112,7 @@ write_pipe_chunks(char *data, int len, int dest)
 	}
 
 	/* write the last chunk */
-	p.proto.is_last = (dest == LOG_DESTINATION_CSVLOG ? 'T' : 't');
+	p.proto.is_last = (csv ? 'T' : 't');
 	p.proto.len = len;
 	memcpy(p.proto.data, data, len);
 	rc = write(fd, &p, PIPE_HEADER_SIZE + len);

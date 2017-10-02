@@ -1766,7 +1766,7 @@ ServerLoop(void)
 		}
 
 		/* If we have lost the log collector, try to start a new one */
-		if (SysLoggerPID == 0 && Logging_collector)
+		if (SysLoggerPID == 0)
 			SysLoggerPID = SysLogger_Start();
 
 		/*

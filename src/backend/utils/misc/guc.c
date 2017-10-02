@@ -1437,15 +1437,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"logging_collector", PGC_POSTMASTER, LOGGING_WHERE,
-			gettext_noop("Start a subprocess to capture stderr output and/or csvlogs into log files."),
-			NULL
-		},
-		&Logging_collector,
-		false,
-		NULL, NULL, NULL
-	},
-	{
 		{"log_truncate_on_rotation", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Truncate existing log files of same name during log rotation."),
 			NULL
@@ -3314,7 +3305,7 @@ static struct config_string ConfigureNamesString[] =
 		{"log_destination", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the destination for server log output."),
 			gettext_noop("Valid values are combinations of \"stderr\", "
-						 "\"syslog\", \"csvlog\", and \"eventlog\", "
+						 "\"file\", \"syslog\", \"csvlog\", and \"eventlog\", "
 						 "depending on the platform."),
 			GUC_LIST_INPUT
 		},
@@ -10068,6 +10059,8 @@ check_log_destination(char **newval, void **extra, GucSource source)
 
 		if (pg_strcasecmp(tok, "stderr") == 0)
 			newlogdest |= LOG_DESTINATION_STDERR;
+		else if (pg_strcasecmp(tok, "file") == 0)
+			newlogdest |= LOG_DESTINATION_FILE;
 		else if (pg_strcasecmp(tok, "csvlog") == 0)
 			newlogdest |= LOG_DESTINATION_CSVLOG;
 #ifdef HAVE_SYSLOG

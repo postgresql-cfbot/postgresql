@@ -172,3 +172,8 @@ PQsslAttribute            169
 PQsetErrorContextVisibility 170
 PQresultVerboseErrorMessage 171
 PQencryptPasswordConn     172
+PQenterBatchMode	  173
+PQexitBatchMode           174
+PQbatchCommitQueue	  175
+PQbatchProcessQueue	  176
+PQbatchStatus		  177

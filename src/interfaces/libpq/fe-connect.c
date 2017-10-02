@@ -3566,6 +3566,25 @@ sendTerminateConn(PGconn *conn)
 }
 
 /*
+ * PQfreeCommandQueue
+ * Free all the entries of PGcommandQueueEntry queue passed.
+ */
+static void
+PQfreeCommandQueue(PGcommandQueueEntry *queue)
+{
+
+	while (queue != NULL)
+	{
+		PGcommandQueueEntry *prev = queue;
+
+		queue = queue->next;
+		if (prev->query)
+			free(prev->query);
+		free(prev);
+	}
+}
+
+/*
  * closePGconn
  *	 - properly close a connection to the backend
  *
@@ -3577,6 +3596,7 @@ static void
 closePGconn(PGconn *conn)
 {
 	PGnotify   *notify;
+	PGcommandQueueEntry *queue;
 	pgParameterStatus *pstatus;
 
 	sendTerminateConn(conn);
@@ -3608,6 +3628,14 @@ closePGconn(PGconn *conn)
 		free(prev);
 	}
 	conn->notifyHead = conn->notifyTail = NULL;
+	queue = conn->cmd_queue_head;
+	PQfreeCommandQueue(queue);
+	conn->cmd_queue_head = conn->cmd_queue_tail = NULL;
+
+	queue = conn->cmd_queue_recycle;
+	PQfreeCommandQueue(queue);
+
+	conn->cmd_queue_recycle = NULL;
 	pstatus = conn->pstatus;
 	while (pstatus != NULL)
 	{

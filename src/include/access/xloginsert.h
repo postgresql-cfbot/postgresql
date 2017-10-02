@@ -58,4 +58,28 @@ extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void InitXLogInsert(void);
 
+/* Hook for plugins to get control in during page insertion into xlog */
+typedef void (*xlog_insert_buffer_hook_type) (BlockNumber block_number, RelFileNode rel, bool recovery);
+
+/* in xloginsert.c */
+extern PGDLLIMPORT xlog_insert_buffer_hook_type xlog_insert_buffer_hook;
+
+/* Hook for plugins to get control at the beginning of insertion xlog */
+typedef void (*xlog_begin_insert_hook_type) ();
+
+/* in xloginsert.c */
+extern PGDLLIMPORT xlog_begin_insert_hook_type xlog_begin_insert_hook;
+
+/* Hook for plugins to get control at the end of insertion of xlog record */
+typedef void (*xlog_end_insert_hook_type) (bool inserted);
+
+/* in xloginsert.c */
+extern PGDLLIMPORT xlog_end_insert_hook_type xlog_end_insert_hook;
+
+/* Hook for plugins to get notified during the end of segment */
+typedef void (*wal_switch_hook_type) (XLogRecPtr EndPos);
+
+/* in xlog.c */
+extern PGDLLIMPORT wal_switch_hook_type wal_switch_hook;
+
 #endif							/* XLOGINSERT_H */

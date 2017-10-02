@@ -930,6 +930,9 @@ static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
 
+/* Hook for plugins to get notified during the end of segment */
+PGDLLIMPORT wal_switch_hook_type wal_switch_hook = NULL;
+
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
  * chunks.  This is a low-level routine; to construct the WAL record header
@@ -7099,6 +7102,7 @@ StartupXLOG(void)
 			do
 			{
 				bool		switchedTLI = false;
+				int nblock;
 
 #ifdef WAL_DEBUG
 				if (XLOG_DEBUG ||
@@ -7260,6 +7264,16 @@ StartupXLOG(void)
 
 				/* Pop the error context stack */
 				error_context_stack = errcallback.previous;
+
+				if (xlog_insert_buffer_hook)
+					for(nblock = 0; nblock < xlogreader->max_block_id; nblock++)
+					{
+						if(xlogreader->blocks[nblock].forknum == MAIN_FORKNUM)
+						{
+							xlog_insert_buffer_hook(xlogreader->blocks[nblock].blkno,
+											xlogreader->blocks[nblock].rnode, true);
+						}
+					}
 
 				/*
 				 * Update lastReplayedEndRecPtr after this record has been

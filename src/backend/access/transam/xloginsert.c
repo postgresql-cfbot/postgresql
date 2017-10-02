@@ -112,6 +112,9 @@ static XLogRecData *XLogRecordAssemble(RmgrId rmid, uint8 info,
 static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 						uint16 hole_length, char *dest, uint16 *dlen);
 
+/* Hook for plugins to get control at the beginning of insertion xlog */
+PGDLLIMPORT xlog_begin_insert_hook_type xlog_begin_insert_hook = NULL;
+
 /*
  * Begin constructing a WAL record. This must be called before the
  * XLogRegister* functions and XLogInsert().
@@ -131,6 +134,8 @@ XLogBeginInsert(void)
 		elog(ERROR, "XLogBeginInsert was already called");
 
 	begininsert_called = true;
+	if(xlog_begin_insert_hook)
+		xlog_begin_insert_hook();
 }
 
 /*
@@ -205,6 +210,9 @@ XLogResetInsertion(void)
 	begininsert_called = false;
 }
 
+/* Hook for plugins to get control in during page insertion into xlog */
+PGDLLIMPORT xlog_insert_buffer_hook_type xlog_insert_buffer_hook = NULL;
+
 /*
  * Register a reference to a buffer with the WAL record being constructed.
  * This must be called for every page that the WAL-logged operation modifies.
@@ -256,6 +264,10 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 #endif
 
 	regbuf->in_use = true;
+	if (xlog_insert_buffer_hook && regbuf->forkno == MAIN_FORKNUM)
+	{
+		xlog_insert_buffer_hook(regbuf->block, regbuf->rnode, false);
+	}
 }
 
 /*
@@ -400,6 +412,9 @@ XLogSetRecordFlags(uint8 flags)
 	curinsert_flags = flags;
 }
 
+/* Hook for plugins to get control at the end of insertion of xlog record */
+PGDLLIMPORT xlog_end_insert_hook_type xlog_end_insert_hook = NULL;
+
 /*
  * Insert an XLOG record having the specified RMID and info bytes, with the
  * body of the record being the data and buffer references registered earlier
@@ -438,6 +453,8 @@ XLogInsert(RmgrId rmid, uint8 info)
 	if (IsBootstrapProcessingMode() && rmid != RM_XLOG_ID)
 	{
 		XLogResetInsertion();
+		if (xlog_end_insert_hook)
+			xlog_end_insert_hook(false);
 		EndPos = SizeOfXLogLongPHD; /* start of 1st chkpt record */
 		return EndPos;
 	}
@@ -463,6 +480,8 @@ XLogInsert(RmgrId rmid, uint8 info)
 	} while (EndPos == InvalidXLogRecPtr);
 
 	XLogResetInsertion();
+	if (xlog_end_insert_hook)
+		xlog_end_insert_hook(true);
 
 	return EndPos;
 }

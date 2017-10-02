@@ -18,6 +18,8 @@
 #include "access/gistscan.h"
 #include "catalog/pg_collation.h"
 #include "miscadmin.h"
+#include "storage/lmgr.h"
+#include "storage/predicate.h"
 #include "nodes/execnodes.h"
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
@@ -70,7 +72,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = true;
 	amroutine->amclusterable = true;
-	amroutine->ampredlocks = false;
+	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = false;
 	amroutine->amkeytype = InvalidOid;
 
@@ -446,6 +448,11 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			GistPageSetNSN(ptr->page, oldnsn);
 		}
 
+		for (ptr = dist; ptr; ptr = ptr->next)
+			PredicateLockPageSplit(rel,
+						BufferGetBlockNumber(buffer),
+						BufferGetBlockNumber(ptr->buffer));
+
 		/*
 		 * gistXLogSplit() needs to WAL log a lot of pages, prepare WAL
 		 * insertion for that. NB: The number of pages and data segments
@@ -723,6 +730,7 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace, GISTSTATE *giststate)
 				{
 					LockBuffer(stack->buffer, GIST_UNLOCK);
 					LockBuffer(stack->buffer, GIST_EXCLUSIVE);
+					CheckForSerializableConflictIn(r, NULL, stack->buffer);
 					xlocked = true;
 					stack->page = (Page) BufferGetPage(stack->buffer);
 
@@ -787,6 +795,7 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace, GISTSTATE *giststate)
 			{
 				LockBuffer(stack->buffer, GIST_UNLOCK);
 				LockBuffer(stack->buffer, GIST_EXCLUSIVE);
+				CheckForSerializableConflictIn(r, NULL, stack->buffer);
 				xlocked = true;
 				stack->page = (Page) BufferGetPage(stack->buffer);
 				stack->lsn = PageGetLSN(stack->page);

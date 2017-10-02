@@ -1,0 +1,321 @@
+Parsed test spec with 2 sessions
+
+starting permutation: rxy1 wx1 c1 rxy2 wy2 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 c1 wy2 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step c1: COMMIT;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 wy2 c1 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 wx1 rxy2 wy2 c2 c1
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 c1 wy2 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 wy2 c1 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wx1 wy2 c2 c1
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 wx1 c1 c2
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 wx1 c2 c1
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy1 rxy2 wy2 c2 wx1 c1
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 c1 wy2 c2
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 wy2 c1 c2
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wx1 wy2 c2 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 wx1 c1 c2
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 wx1 c2 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 rxy1 wy2 c2 wx1 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 wx1 c1 c2
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+step c2: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 wx1 c2 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c2: COMMIT;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 rxy1 c2 wx1 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step c2: COMMIT;
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;
+
+starting permutation: rxy2 wy2 c2 rxy1 wx1 c1
+step rxy2: select sum(p[0]) from gist_point_tbl where p << point(1000,1000);
+sum            
+
+49500          
+step wy2: insert into gist_point_tbl (id, p)
+		  select g, point(g*50, g*50) from generate_series(1, 20) g;
+step c2: COMMIT;
+step rxy1: select sum(p[0]) from gist_point_tbl where p >> point(6000,6000);
+sum            
+
+3202000        
+step wx1: insert into gist_point_tbl (id, p)
+                  select g, point(g*500, g*500) from generate_series(12, 18) g;
+step c1: COMMIT;

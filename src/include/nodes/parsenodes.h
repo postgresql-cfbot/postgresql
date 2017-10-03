@@ -3098,12 +3098,23 @@ typedef enum VacuumOption
 	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7	/* don't skip any pages */
 } VacuumOption;
 
+/*
+ * This is used to keep track of a relation and an optional list of
+ * column names, as may be specified in VACUUM and ANALYZE.
+ */
+typedef struct VacuumRelation
+{
+	NodeTag		 type;
+	RangeVar	*relation;	/* table to process (required for error messaging) */
+	List		*va_cols;	/* list of column names, or NIL for all */
+	Oid		 oid;		/* corresponding OID (filled in by [auto]vacuum.c) */
+} VacuumRelation;
+
 typedef struct VacuumStmt
 {
-	NodeTag		type;
-	int			options;		/* OR of VacuumOption flags */
-	RangeVar   *relation;		/* single table to process, or NULL */
-	List	   *va_cols;		/* list of column names, or NIL for all */
+	NodeTag		 type;
+	int		 options;	/* OR of VacuumOption flags */
+	List		*rels;		/* list of tables/columns to process, or NIL for all */
 } VacuumStmt;
 
 /* ----------------------

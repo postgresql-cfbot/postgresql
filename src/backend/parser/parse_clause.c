@@ -40,6 +40,7 @@
 #include "parser/parse_func.h"
 #include "parser/parse_oper.h"
 #include "parser/parse_relation.h"
+#include "parser/parse_temporal.h"
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
 #include "rewrite/rewriteManip.h"
@@ -1247,6 +1248,43 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		int			k;
 
 		/*
+		 * If this is a temporal primitive, rewrite it into a sub-query using
+		 * the given join quals and the alias. We need this as temporal
+		 * primitives.
+		 */
+		if(j->jointype == TEMPORAL_ALIGN || j->jointype == TEMPORAL_NORMALIZE)
+		{
+			RangeSubselect			*rss;
+			RangeTblRef 			*rtr;
+			RangeTblEntry 			*rte;
+			int						 rtindex;
+
+			if(j->jointype == TEMPORAL_ALIGN)
+			{
+				/* Rewrite the temporal aligner into a sub-SELECT */
+				rss = (RangeSubselect *) transformTemporalAligner(pstate, j);
+			}
+			else
+			{
+				/* Rewrite the temporal normalizer into a sub-SELECT */
+				rss = (RangeSubselect *) transformTemporalNormalizer(pstate, j);
+			}
+
+			/* Transform the sub-SELECT */
+			rte = transformRangeSubselect(pstate, rss);
+
+			/* assume new rte is at end */
+			rtindex = list_length(pstate->p_rtable);
+			Assert(rte == rt_fetch(rtindex, pstate->p_rtable));
+			*top_rte = rte;
+			*top_rti = rtindex;
+			*namespace = list_make1(makeDefaultNSItem(rte));
+			rtr = makeNode(RangeTblRef);
+			rtr->rtindex = rtindex;
+			return (Node *) rtr;
+		}
+
+		/*
 		 * Recursively process the left subtree, then the right.  We must do
 		 * it in this order for correct visibility of LATERAL references.
 		 */
@@ -1307,6 +1345,16 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 				  &l_colnames, &l_colvars);
 		expandRTE(r_rte, r_rtindex, 0, -1, false,
 				  &r_colnames, &r_colvars);
+
+		/*
+		 * Rename columns automatically to unique not-in-use column names, if
+		 * column names clash with internal-use-only columns of temporal
+		 * primitives.
+		 */
+		transformTemporalClauseAmbiguousColumns(pstate, j,
+												l_colnames, r_colnames,
+												l_colvars, r_colvars,
+												l_rte, r_rte);
 
 		/*
 		 * Natural join does not explicitly specify columns; must generate

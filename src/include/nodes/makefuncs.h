@@ -85,5 +85,9 @@ extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,
 					DefElemAction defaction, int location);
 
 extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int location);
+extern ColumnRef *makeColumnRef1(Node *field1);
+extern ColumnRef *makeColumnRef2(Node *field1, Node *field2);
+extern ResTarget *makeResTarget(Node *val, char *name);
+extern Alias *makeAliasFromArgument(Node *arg);
 
 #endif							/* MAKEFUNC_H */

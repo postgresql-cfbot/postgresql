@@ -88,6 +88,19 @@ window_row_number(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(curpos + 1);
 }
 
+/*
+ * row_id
+ * just increment up from 1 until current partition finishes.
+ */
+Datum
+window_row_id(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	int64		curpos = WinGetCurrentPosition(winobj);
+
+	WinSetMarkPosition(winobj, curpos);
+	PG_RETURN_INT64(curpos + 1);
+}
 
 /*
  * rank

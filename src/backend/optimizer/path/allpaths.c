@@ -45,6 +45,7 @@
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/fmgroids.h"
 
 
 /* results of subquery_is_pushdown_safe */
@@ -135,7 +136,7 @@ static void recurse_push_qual(Node *setOp, Query *topquery,
 static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
 static void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 						List *live_childrels);
-
+static bool allWindowFuncsHaveRowId(List *targetList);
 
 /*
  * make_one_rel
@@ -2544,7 +2545,8 @@ subquery_is_pushdown_safe(Query *subquery, Query *topquery,
 	/* Check points 3, 4, and 5 */
 	if (subquery->distinctClause ||
 		subquery->hasWindowFuncs ||
-		subquery->hasTargetSRFs)
+		subquery->hasTargetSRFs ||
+		subquery->temporalClause)
 		safetyInfo->unsafeVolatile = true;
 
 	/*
@@ -2654,6 +2656,7 @@ static void
 check_output_expressions(Query *subquery, pushdown_safety_info *safetyInfo)
 {
 	ListCell   *lc;
+	bool wfsafe = allWindowFuncsHaveRowId(subquery->targetList);
 
 	foreach(lc, subquery->targetList)
 	{
@@ -2692,11 +2695,28 @@ check_output_expressions(Query *subquery, pushdown_safety_info *safetyInfo)
 
 		/* If subquery uses window functions, check point 4 */
 		if (subquery->hasWindowFuncs &&
-			!targetIsInAllPartitionLists(tle, subquery))
+			!targetIsInAllPartitionLists(tle, subquery) &&
+			!wfsafe)
 		{
 			/* not present in all PARTITION BY clauses, so mark it unsafe */
 			safetyInfo->unsafeColumns[tle->resno] = true;
 			continue;
+		}
+
+		/*
+		 * If subquery uses temporal primitives, mark all columns that are
+		 * used as temporal attributes as unsafe, since they may be changed.
+		 */
+		if (subquery->temporalClause)
+		{
+			AttrNumber resnoRangeT =
+					((TemporalClause *)subquery->temporalClause)->attNumTr;
+
+			if (tle->resno == resnoRangeT)
+			{
+				safetyInfo->unsafeColumns[tle->resno] = true;
+				continue;
+			}
 		}
 	}
 }
@@ -2763,6 +2783,32 @@ targetIsInAllPartitionLists(TargetEntry *tle, Query *query)
 		if (!targetIsInSortList(tle, InvalidOid, wc->partitionClause))
 			return false;
 	}
+	return true;
+}
+
+/*
+ * allWindowFuncsHaveRowId
+ *  	True if all window functions are row_id(), otherwise false. We use this
+ *  	to have unique numbers for each tuple. It is push-down-safe, because we
+ *  	accept gaps between numbers.
+ */
+static bool
+allWindowFuncsHaveRowId(List *targetList)
+{
+	ListCell *lc;
+
+	foreach(lc, targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->resjunk)
+			continue;
+
+		if(IsA(tle->expr, WindowFunc)
+				&& ((WindowFunc *) tle->expr)->winfnoid != F_WINDOW_ROW_ID)
+				return false;
+	}
+
 	return true;
 }
 
@@ -3007,6 +3053,13 @@ remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel)
 	 * anything.
 	 */
 	if (bms_is_member(0 - FirstLowInvalidHeapAttributeNumber, attrs_used))
+		return;
+
+	/*
+	 * If there's a sub-query belonging to a temporal primitive, do not remove
+	 * any entries, because we need all of them.
+	 */
+	if (subquery->temporalClause)
 		return;
 
 	/*

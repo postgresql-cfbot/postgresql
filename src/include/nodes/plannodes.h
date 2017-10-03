@@ -238,6 +238,24 @@ typedef struct ModifyTable
 } ModifyTable;
 
 /* ----------------
+ *	 TemporalAdjustment node -
+ *		Generate a temporal adjustment node as temporal aligner or normalizer.
+ * ----------------
+ */
+typedef struct TemporalAdjustment
+{
+	Plan			 plan;
+	int     		 numCols;    	  /* number of columns in total */
+	Oid        		 eqOperatorID;    /* equality operator to compare with */
+	Oid        		 ltOperatorID;    /* less-than operator to compare with */
+	Oid              sortCollationID; /* sort operator collation id */
+	TemporalClause  *temporalCl;	  /* Temporal type, attribute numbers,
+										 and colnames */
+	Var             *rangeVar;		  /* targetlist entry of the given range
+										 type used to call range_constructor */
+} TemporalAdjustment;
+
+/* ----------------
  *	 Append node -
  *		Generate the concatenation of the results of sub-plans.
  * ----------------

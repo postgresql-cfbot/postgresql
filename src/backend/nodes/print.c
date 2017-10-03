@@ -25,6 +25,7 @@
 #include "optimizer/clauses.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
+#include "parser/parse_node.h"
 
 
 /*
@@ -499,4 +500,28 @@ print_slot(TupleTableSlot *slot)
 	}
 
 	debugtup(slot, NULL);
+}
+
+/*
+ * print_namespace
+ * 		print out all name space items' RTEs.
+ */
+void
+print_namespace(const List *namespace)
+{
+	ListCell   *lc;
+
+	if (list_length(namespace) == 0)
+	{
+		printf("No namespaces in list.\n");
+		fflush(stdout);
+		return;
+	}
+
+	foreach(lc, namespace)
+	{
+		ParseNamespaceItem *nsitem = (ParseNamespaceItem *) lfirst(lc);
+		pprint(nsitem->p_rte);
+	}
+
 }

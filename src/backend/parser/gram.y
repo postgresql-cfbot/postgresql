@@ -426,6 +426,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean>	all_or_distinct
 
 %type <node>	join_outer join_qual
+%type <node>	normalizer_qual
 %type <jtype>	join_type
 
 %type <list>	extract_list overlay_list position_list
@@ -479,11 +480,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
 %type <alias>	alias_clause opt_alias_clause
+%type <list>	temporal_bounds
 %type <list>	func_alias_clause
 %type <sortby>	sortby
 %type <ielem>	index_elem
 %type <node>	table_ref
 %type <jexpr>	joined_table
+%type <jexpr>   aligned_table
+%type <jexpr>   normalized_table
 %type <range>	relation_expr
 %type <range>	relation_expr_opt_alias
 %type <node>	tablesample_clause opt_repeatable_clause
@@ -578,6 +582,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <node>		partbound_datum PartitionRangeDatum
 %type <list>		partbound_datum_list range_datum_list
+%type <list>    temporal_bounds_list
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -602,7 +607,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 /* ordinary key words in alphabetical order */
 %token <keyword> ABORT_P ABSOLUTE_P ACCESS ACTION ADD_P ADMIN AFTER
-	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
+	AGGREGATE ALIGN ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
@@ -648,7 +653,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
-	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
+	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE NORMALIZE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
@@ -11265,6 +11270,19 @@ first_or_next: FIRST_P								{ $$ = 0; }
 			| NEXT									{ $$ = 0; }
 		;
 
+temporal_bounds: WITH '(' temporal_bounds_list ')'				{ $$ = $3; }
+		;
+
+temporal_bounds_list:
+			columnref
+				{
+					$$ = list_make1($1);
+				}
+			| temporal_bounds_list ',' columnref
+				{
+					$$ = lappend($1, $3);
+				}
+		;
 
 /*
  * This syntax for group_clause tries to follow the spec quite closely.
@@ -11533,6 +11551,88 @@ table_ref:	relation_expr opt_alias_clause
 				{
 					$2->alias = $4;
 					$$ = (Node *) $2;
+				}
+			| '(' aligned_table ')' alias_clause
+				{
+					$2->alias = $4;
+					$$ = (Node *) $2;
+				}
+			| '(' normalized_table ')' alias_clause
+				{
+					$2->alias = $4;
+					$$ = (Node *) $2;
+				}
+		;
+
+aligned_table:
+			table_ref ALIGN table_ref ON a_expr temporal_bounds
+				{
+					JoinExpr *n = makeNode(JoinExpr);
+					n->jointype = TEMPORAL_ALIGN;
+					n->isNatural = FALSE;
+					n->larg = $1;
+					n->rarg = $3;
+
+					/* No USING clause, we use only ON as join qualifier. */
+					n->usingClause = NIL;
+
+					/*
+					 * A list for our valid-time boundaries with two range typed
+					 * values. Only PostgreSQL's default boundary type is
+					 * currently supported, i.e., '[)'.
+					 */
+					if(list_length($6) == 2)
+						n->temporalBounds = $6;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("Temporal adjustment boundaries must " \
+										"have two range typed values"),
+								 parser_errposition(@6)));
+
+					n->quals = $5; /* ON clause */
+					$$ = n;
+				}
+		;
+
+normalizer_qual:
+			USING '(' name_list ')'					{ $$ = (Node *) $3; }
+			| USING '(' ')'							{ $$ = (Node *) NIL; }
+			| ON a_expr								{ $$ = $2; }
+		;
+
+normalized_table:
+			table_ref NORMALIZE table_ref normalizer_qual temporal_bounds
+				{
+					JoinExpr *n = makeNode(JoinExpr);
+					n->jointype = TEMPORAL_NORMALIZE;
+					n->isNatural = FALSE;
+					n->larg = $1;
+					n->rarg = $3;
+
+					n->usingClause = NIL;
+					n->quals = NULL;
+
+					if ($4 != NULL && IsA($4, List))
+						n->usingClause = (List *) $4; /* USING clause */
+					else
+						n->quals = $4; /* ON clause */
+
+					/*
+					 * A list for our valid-time boundaries with two range typed
+					 * values. Only PostgreSQL's default boundary type is
+					 * currently supported, i.e., '[)'.
+					 */
+					if(list_length($5) == 2)
+						n->temporalBounds = $5;
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("Temporal adjustment boundaries must " \
+										"have two range typed values"),
+								 parser_errposition(@5)));
+
+					$$ = n;
 				}
 		;
 
@@ -15003,7 +15103,8 @@ type_func_name_keyword:
  * forced to.
  */
 reserved_keyword:
-			  ALL
+			  ALIGN
+			| ALL
 			| ANALYSE
 			| ANALYZE
 			| AND
@@ -15051,6 +15152,7 @@ reserved_keyword:
 			| LIMIT
 			| LOCALTIME
 			| LOCALTIMESTAMP
+			| NORMALIZE
 			| NOT
 			| NULL_P
 			| OFFSET

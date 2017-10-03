@@ -1170,6 +1170,25 @@ typedef struct SubqueryScanPath
 } SubqueryScanPath;
 
 /*
+ * TemporalAdjustmentPath represents a scan of a rewritten temporal subquery.
+ *
+ * Depending, whether it is a temporal normalizer or a temporal aligner, we have
+ * different subqueries below the temporal adjustment node, but for sure there
+ * is a sort clause on top of the rewritten subquery for both temporal
+ * primitives. We remember this sort clause, because we need to fetch equality,
+ * sort operator, and collation Oids from it. Which will then re-used for the
+ * temporal primitive clause.
+ */
+typedef struct TemporalAdjustmentPath
+{
+	Path			 path;
+	Path	   		*subpath;		/* path representing subquery execution */
+	List	   		*sortClause;
+	TemporalClause 	*temporalClause;
+} TemporalAdjustmentPath;
+
+
+/*
  * ForeignPath represents a potential scan of a foreign table, foreign join
  * or foreign upper-relation.
  *

@@ -114,6 +114,9 @@ static LockRows *create_lockrows_plan(PlannerInfo *root, LockRowsPath *best_path
 static ModifyTable *create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path);
 static Limit *create_limit_plan(PlannerInfo *root, LimitPath *best_path,
 				  int flags);
+static TemporalAdjustment *create_temporaladjustment_plan(PlannerInfo *root,
+							   TemporalAdjustmentPath *best_path,
+							   int flags);
 static SeqScan *create_seqscan_plan(PlannerInfo *root, Path *best_path,
 					List *tlist, List *scan_clauses);
 static SampleScan *create_samplescan_plan(PlannerInfo *root, Path *best_path,
@@ -282,7 +285,9 @@ static ModifyTable *make_modifytable(PlannerInfo *root,
 				 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 						 GatherMergePath *best_path);
-
+static TemporalAdjustment *make_temporalAdjustment(Plan *lefttree,
+						TemporalClause *temporalClause,
+						List *sortClause);
 
 /*
  * create_plan
@@ -484,6 +489,11 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 		case T_GatherMerge:
 			plan = (Plan *) create_gather_merge_plan(root,
 													 (GatherMergePath *) best_path);
+			break;
+		case T_TemporalAdjustment:
+			plan = (Plan *) create_temporaladjustment_plan(root,
+										(TemporalAdjustmentPath *) best_path,
+										flags);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -2392,6 +2402,33 @@ create_limit_plan(PlannerInfo *root, LimitPath *best_path, int flags)
 	plan = make_limit(subplan,
 					  best_path->limitOffset,
 					  best_path->limitCount);
+
+	copy_generic_path_info(&plan->plan, (Path *) best_path);
+
+	return plan;
+}
+
+/*
+ * create_temporaladjustment_plan
+ *
+ *	  Create a Temporal Adjustment plan for 'best_path' and (recursively) plans
+ *	  for its subpaths. Depending on the type of the temporal clause, we create
+ *	  a temporal normalize or a temporal aligner node.
+ */
+static TemporalAdjustment *
+create_temporaladjustment_plan(PlannerInfo *root,
+							   TemporalAdjustmentPath *best_path,
+							   int flags)
+{
+	TemporalAdjustment	*plan;
+	Plan	   			*subplan;
+
+	/* Limit doesn't project, so tlist requirements pass through */
+	subplan = create_plan_recurse(root, best_path->subpath, flags);
+
+	plan = make_temporalAdjustment(subplan,
+								   best_path->temporalClause,
+								   best_path->sortClause);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -5116,6 +5153,57 @@ make_subqueryscan(List *qptlist,
 	plan->righttree = NULL;
 	node->scan.scanrelid = scanrelid;
 	node->subplan = subplan;
+
+	return node;
+}
+
+static TemporalAdjustment *
+make_temporalAdjustment(Plan *lefttree,
+						TemporalClause *temporalClause,
+						List *sortClause)
+{
+	TemporalAdjustment 	*node = makeNode(TemporalAdjustment);
+	Plan				*plan = &node->plan;
+	SortGroupClause     *sgc;
+	TargetEntry 		*tle;
+
+	plan->targetlist = lefttree->targetlist;
+	plan->qual = NIL;
+	plan->lefttree = lefttree;
+	plan->righttree = NULL;
+
+	node->numCols = list_length(lefttree->targetlist);
+	node->temporalCl = copyObject(temporalClause);
+
+	/*
+	 * Fetch the targetlist entry of the given range type, s.t. we have all
+	 * needed information to call range_constructor inside the executor.
+	 */
+	node->rangeVar = NULL;
+	if (temporalClause->attNumTr != -1)
+	{
+		TargetEntry *tle = get_tle_by_resno(plan->targetlist,
+											temporalClause->attNumTr);
+		node->rangeVar = (Var *) copyObject(tle->expr);
+	}
+
+	/*
+	 * The last element in the sort clause is one of the temporal attributes
+	 * P1 or P2, which have the same attribute type as the valid timestamps of
+	 * both relations. Hence, we can fetch equality, sort operator, and
+	 * collation Oids from them.
+	 */
+	sgc = (SortGroupClause *) llast(sortClause);
+
+	/* the parser should have made sure of this */
+	Assert(OidIsValid(sgc->sortop));
+	Assert(OidIsValid(sgc->eqop));
+
+	node->eqOperatorID = sgc->eqop;
+	node->ltOperatorID = sgc->sortop;
+
+	tle = get_sortgroupclause_tle(sgc, plan->targetlist);
+	node->sortCollationID = exprCollation((Node *) tle->expr);
 
 	return node;
 }

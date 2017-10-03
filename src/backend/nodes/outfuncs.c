@@ -1665,6 +1665,8 @@ _outJoinExpr(StringInfo str, const JoinExpr *node)
 	WRITE_NODE_FIELD(quals);
 	WRITE_NODE_FIELD(alias);
 	WRITE_INT_FIELD(rtindex);
+	WRITE_NODE_FIELD(temporalBounds);
+	WRITE_ENUM_FIELD(inTmpPrimTempType, TemporalType);
 }
 
 static void
@@ -1944,6 +1946,18 @@ _outSortPath(StringInfo str, const SortPath *node)
 	_outPathInfo(str, (const Path *) node);
 
 	WRITE_NODE_FIELD(subpath);
+}
+
+static void
+_outTemporalAdjustmentPath(StringInfo str, const TemporalAdjustmentPath *node)
+{
+	WRITE_NODE_TYPE("TEMPORALADJUSTMENTPATH");
+
+	_outPathInfo(str, (const Path *) node);
+
+	WRITE_NODE_FIELD(subpath);
+	WRITE_NODE_FIELD(sortClause);
+	WRITE_NODE_FIELD(temporalClause);
 }
 
 static void
@@ -2709,6 +2723,7 @@ _outSelectStmt(StringInfo str, const SelectStmt *node)
 	WRITE_NODE_FIELD(limitCount);
 	WRITE_NODE_FIELD(lockingClause);
 	WRITE_NODE_FIELD(withClause);
+	WRITE_NODE_FIELD(temporalClause);
 	WRITE_ENUM_FIELD(op, SetOperation);
 	WRITE_BOOL_FIELD(all);
 	WRITE_NODE_FIELD(larg);
@@ -2782,6 +2797,34 @@ _outTriggerTransition(StringInfo str, const TriggerTransition *node)
 	WRITE_STRING_FIELD(name);
 	WRITE_BOOL_FIELD(isNew);
 	WRITE_BOOL_FIELD(isTable);
+}
+
+static void
+_outTemporalAdjustment(StringInfo str, const TemporalAdjustment *node)
+{
+	WRITE_NODE_TYPE("TEMPORALADJUSTMENT");
+
+	WRITE_INT_FIELD(numCols);
+	WRITE_OID_FIELD(eqOperatorID);
+	WRITE_OID_FIELD(ltOperatorID);
+	WRITE_OID_FIELD(sortCollationID);
+	WRITE_NODE_FIELD(temporalCl);
+	WRITE_NODE_FIELD(rangeVar);
+
+	_outPlanInfo(str, (const Plan *) node);
+}
+
+static void
+_outTemporalClause(StringInfo str, const TemporalClause *node)
+{
+	WRITE_NODE_TYPE("TEMPORALCLAUSE");
+
+	WRITE_ENUM_FIELD(temporalType, TemporalType);
+	WRITE_INT_FIELD(attNumTr);
+	WRITE_INT_FIELD(attNumP1);
+	WRITE_INT_FIELD(attNumP2);
+	WRITE_INT_FIELD(attNumRN);
+	WRITE_STRING_FIELD(colnameTr);
 }
 
 static void
@@ -2919,6 +2962,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(setOperations);
 	WRITE_NODE_FIELD(constraintDeps);
+	WRITE_NODE_FIELD(temporalClause);
 	/* withCheckOptions intentionally omitted, see comment in parsenodes.h */
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_LOCATION_FIELD(stmt_len);
@@ -3958,6 +4002,9 @@ outNode(StringInfo str, const void *obj)
 			case T_SortPath:
 				_outSortPath(str, obj);
 				break;
+			case T_TemporalAdjustmentPath:
+				_outTemporalAdjustmentPath(str, obj);
+				break;
 			case T_GroupPath:
 				_outGroupPath(str, obj);
 				break;
@@ -4068,6 +4115,12 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_ExtensibleNode:
 				_outExtensibleNode(str, obj);
+				break;
+			case T_TemporalAdjustment:
+				_outTemporalAdjustment(str, obj);
+				break;
+			case T_TemporalClause:
+				_outTemporalClause(str, obj);
 				break;
 			case T_CreateStmt:
 				_outCreateStmt(str, obj);

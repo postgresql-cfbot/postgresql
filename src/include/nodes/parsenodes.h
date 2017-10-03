@@ -170,6 +170,8 @@ typedef struct Query
 									 * only added during rewrite and therefore
 									 * are not written out as part of Query. */
 
+	Node	   *temporalClause; /* temporal primitive node */
+
 	/*
 	 * The following two fields identify the portion of the source text string
 	 * containing this query.  They are typically only populated in top-level
@@ -1537,6 +1539,8 @@ typedef struct SelectStmt
 	Node	   *limitCount;		/* # of result tuples to return */
 	List	   *lockingClause;	/* FOR UPDATE (list of LockingClause's) */
 	WithClause *withClause;		/* WITH clause */
+
+	TemporalClause *temporalClause; /* Temporal primitive node */
 
 	/*
 	 * These fields are used only in upper-level SelectStmts.

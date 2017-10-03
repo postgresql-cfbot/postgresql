@@ -52,6 +52,31 @@ typedef enum OnCommitAction
 	ONCOMMIT_DROP				/* ON COMMIT DROP */
 } OnCommitAction;
 
+/* Options for temporal primitives used by queries with temporal alignment */
+typedef enum TemporalType
+{
+	TEMPORAL_TYPE_NONE,
+	TEMPORAL_TYPE_ALIGNER,
+	TEMPORAL_TYPE_NORMALIZER
+} TemporalType;
+
+typedef struct TemporalClause
+{
+	NodeTag      type;
+	TemporalType temporalType;   /* Type of temporal primitives */
+
+	/*
+	 * Attribute number or column position for internal-use-only columns, and
+	 * temporal boundaries
+	 */
+	AttrNumber   attNumTr;
+	AttrNumber   attNumP1;
+	AttrNumber   attNumP2;
+	AttrNumber   attNumRN;
+
+	char		*colnameTr;	    /* If range type used for bounds, or NULL */
+} TemporalClause;
+
 /*
  * RangeVar - range variable, used in FROM clauses
  *
@@ -1454,6 +1479,9 @@ typedef struct JoinExpr
 	Node	   *quals;			/* qualifiers on join, if any */
 	Alias	   *alias;			/* user-written alias clause, if any */
 	int			rtindex;		/* RT index assigned for join, or 0 */
+	List	   *temporalBounds; /* columns that form bounds for both subtrees,
+								 * used by temporal adjustment primitives */
+	TemporalType inTmpPrimTempType;	/* inside a temporal primitive clause */
 } JoinExpr;
 
 /*----------

@@ -205,6 +205,7 @@ Section: Class 22 - Data Exception
 2200N    E    ERRCODE_INVALID_XML_CONTENT                                    invalid_xml_content
 2200S    E    ERRCODE_INVALID_XML_COMMENT                                    invalid_xml_comment
 2200T    E    ERRCODE_INVALID_XML_PROCESSING_INSTRUCTION                     invalid_xml_processing_instruction
+220T0    E    ERRCODE_INVALID_ARGUMENT_FOR_TEMPORAL_ADJUSTMENT               invalid_argument_for_temporal_adjustment
 
 Section: Class 23 - Integrity Constraint Violation
 

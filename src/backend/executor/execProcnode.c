@@ -113,6 +113,7 @@
 #include "executor/nodeValuesscan.h"
 #include "executor/nodeWindowAgg.h"
 #include "executor/nodeWorktablescan.h"
+#include "executor/nodeTemporalAdjustment.h"
 #include "nodes/nodeFuncs.h"
 #include "miscadmin.h"
 
@@ -361,6 +362,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 
 		case T_Limit:
 			result = (PlanState *) ExecInitLimit((Limit *) node,
+												 estate, eflags);
+			break;
+
+		case T_TemporalAdjustment:
+			result = (PlanState *) ExecInitTemporalAdjustment((TemporalAdjustment *) node,
 												 estate, eflags);
 			break;
 
@@ -709,6 +715,10 @@ ExecEndNode(PlanState *node)
 
 		case T_LimitState:
 			ExecEndLimit((LimitState *) node);
+			break;
+
+		case T_TemporalAdjustmentState:
+			ExecEndTemporalAdjustment((TemporalAdjustmentState *) node);
 			break;
 
 		default:

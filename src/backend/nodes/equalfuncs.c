@@ -784,6 +784,8 @@ _equalJoinExpr(const JoinExpr *a, const JoinExpr *b)
 	COMPARE_NODE_FIELD(quals);
 	COMPARE_NODE_FIELD(alias);
 	COMPARE_SCALAR_FIELD(rtindex);
+	COMPARE_NODE_FIELD(temporalBounds);
+	COMPARE_SCALAR_FIELD(inTmpPrimTempType);
 
 	return true;
 }

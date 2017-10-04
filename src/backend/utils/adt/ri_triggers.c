@@ -242,7 +242,7 @@ static void ri_ExtractValues(Relation rel, HeapTuple tup,
 static void ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				   Relation pk_rel, Relation fk_rel,
 				   HeapTuple violator, TupleDesc tupdesc,
-				   int queryno, bool spi_err);
+				   int queryno) pg_attribute_noreturn();
 
 
 /* ----------
@@ -2435,8 +2435,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	qplan = SPI_prepare(querybuf.data, 0, NULL);
 
 	if (qplan == NULL)
-		elog(ERROR, "SPI_prepare returned %d for %s",
-			 SPI_result, querybuf.data);
+		elog(ERROR, "SPI_prepare returned %s for %s",
+			 SPI_result_code_string(SPI_result), querybuf.data);
 
 	/*
 	 * Run the plan.  For safety we force a current snapshot to be used. (In
@@ -2453,7 +2453,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 
 	/* Check result */
 	if (spi_result != SPI_OK_SELECT)
-		elog(ERROR, "SPI_execute_snapshot returned %d", spi_result);
+		elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
 
 	/* Did we find a tuple violating the constraint? */
 	if (SPI_processed > 0)
@@ -2499,7 +2499,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 		ri_ReportViolation(&fake_riinfo,
 						   pk_rel, fk_rel,
 						   tuple, tupdesc,
-						   RI_PLAN_CHECK_LOOKUPPK, false);
+						   RI_PLAN_CHECK_LOOKUPPK);
 	}
 
 	if (SPI_finish() != SPI_OK_FINISH)
@@ -3016,7 +3016,7 @@ ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
 	qplan = SPI_prepare(querystr, nargs, argtypes);
 
 	if (qplan == NULL)
-		elog(ERROR, "SPI_prepare returned %d for %s", SPI_result, querystr);
+		elog(ERROR, "SPI_prepare returned %s for %s", SPI_result_code_string(SPI_result), querystr);
 
 	/* Restore UID and security context */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
@@ -3144,14 +3144,16 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 
 	/* Check result */
 	if (spi_result < 0)
-		elog(ERROR, "SPI_execute_snapshot returned %d", spi_result);
+		elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
 
 	if (expect_OK >= 0 && spi_result != expect_OK)
-		ri_ReportViolation(riinfo,
-						   pk_rel, fk_rel,
-						   new_tuple ? new_tuple : old_tuple,
-						   NULL,
-						   qkey->constr_queryno, true);
+		ereport(ERROR,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("referential integrity query on \"%s\" from constraint \"%s\" on \"%s\" gave unexpected result",
+						RelationGetRelationName(pk_rel),
+						NameStr(riinfo->conname),
+						RelationGetRelationName(fk_rel)),
+				 errhint("This is most likely due to a rule having rewritten the query.")));
 
 	/* XXX wouldn't it be clearer to do this part at the caller? */
 	if (qkey->constr_queryno != RI_PLAN_CHECK_LOOKUPPK_FROM_PK &&
@@ -3161,7 +3163,7 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 						   pk_rel, fk_rel,
 						   new_tuple ? new_tuple : old_tuple,
 						   NULL,
-						   qkey->constr_queryno, false);
+						   qkey->constr_queryno);
 
 	return SPI_processed != 0;
 }
@@ -3205,7 +3207,7 @@ static void
 ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				   Relation pk_rel, Relation fk_rel,
 				   HeapTuple violator, TupleDesc tupdesc,
-				   int queryno, bool spi_err)
+				   int queryno)
 {
 	StringInfoData key_names;
 	StringInfoData key_values;
@@ -3215,15 +3217,6 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 	Oid			rel_oid;
 	AclResult	aclresult;
 	bool		has_perm = true;
-
-	if (spi_err)
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("referential integrity query on \"%s\" from constraint \"%s\" on \"%s\" gave unexpected result",
-						RelationGetRelationName(pk_rel),
-						NameStr(riinfo->conname),
-						RelationGetRelationName(fk_rel)),
-				 errhint("This is most likely due to a rule having rewritten the query.")));
 
 	/*
 	 * Determine which relation to complain about.  If tupdesc wasn't passed

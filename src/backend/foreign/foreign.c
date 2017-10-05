@@ -22,6 +22,9 @@
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
+#include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -689,113 +692,182 @@ get_foreign_server_oid(const char *servername, bool missing_ok)
 	return oid;
 }
 
+
 /*
- * Get a copy of an existing local path for a given join relation.
+ * Try to build an alternative local join path to reconstruct a join tuple for
+ * the foreign join in EvalPlanQual
  *
- * This function is usually helpful to obtain an alternate local path for EPQ
- * checks.
- *
- * Right now, this function only supports unparameterized foreign joins, so we
- * only search for unparameterized path in the given list of paths. Since we
- * are searching for a path which can be used to construct an alternative local
- * plan for a foreign join, we look for only MergeJoin, HashJoin or NestLoop
- * paths.
- *
- * If the inner or outer subpath of the chosen path is a ForeignScan, we
- * replace it with its outer subpath.  For this reason, and also because the
- * planner might free the original path later, the path returned by this
- * function is a shallow copy of the original.  There's no need to copy
- * the substructure, so we don't.
- *
- * Since the plan created using this path will presumably only be used to
- * execute EPQ checks, efficiency of the path is not a concern. But since the
- * path list in RelOptInfo is anyway sorted by total cost we are likely to
- * choose the most efficient path, which is all for the best.
+ * 'joinrel' is the join relation
+ * 'outerrel' is the outer join relation
+ * 'innerrel' is the inner join relation
+ * 'jointype' is the type of join to do
+ * 'extra' contains additional input values
  */
-extern Path *
-GetExistingLocalJoinPath(RelOptInfo *joinrel)
+Path *
+CreateLocalJoinPath(PlannerInfo *root,
+					RelOptInfo *joinrel,
+					RelOptInfo *outerrel,
+					RelOptInfo *innerrel,
+					JoinType jointype,
+					JoinPathExtraData *extra)
 {
-	ListCell   *lc;
+	Path	   *result;
+	Path	   *outer_path = outerrel->cheapest_total_path;
+	Path	   *inner_path = innerrel->cheapest_total_path;
 
-	Assert(IS_JOIN_REL(joinrel));
+	/*
+	 * We don't try to build the alternative local join path if the cheapest
+	 * total outer and inner paths are parameterized; that seems unlikely in
+	 * normal case.
+	 */
+	if (outer_path->param_info != NULL || inner_path->param_info != NULL)
+		return NULL;
 
-	foreach(lc, joinrel->pathlist)
+	switch (jointype)
 	{
-		Path	   *path = (Path *) lfirst(lc);
-		JoinPath   *joinpath = NULL;
+		case JOIN_INNER:
+		case JOIN_LEFT:
+		case JOIN_SEMI:
+		case JOIN_ANTI:
+			{
+				JoinCostWorkspace workspace;
 
-		/* Skip parameterized paths. */
-		if (path->param_info != NULL)
-			continue;
+				/* Get an initial estimate */
+				initial_cost_nestloop(root, &workspace, jointype,
+									  outer_path, inner_path, extra);
+				/* Generate a nestloop path */
+				result = (Path *) create_nestloop_path(root,
+													   joinrel,
+													   jointype,
+													   &workspace,
+													   extra,
+													   outer_path,
+													   inner_path,
+													   extra->restrictlist,
+													   NIL,
+													   NULL);
+			}
+			break;
+		case JOIN_RIGHT:
+		case JOIN_FULL:
+			{
+				JoinCostWorkspace workspace;
 
-		switch (path->pathtype)
-		{
-			case T_HashJoin:
+				/* Generate a hashjoin or mergejoin path, if possible */
+				if (extra->hashclause_list)
 				{
-					HashPath   *hash_path = makeNode(HashPath);
-
-					memcpy(hash_path, path, sizeof(HashPath));
-					joinpath = (JoinPath *) hash_path;
+					/* Get an initial estimate */
+					initial_cost_hashjoin(root, &workspace, jointype,
+										  extra->hashclause_list,
+										  outer_path, inner_path, extra);
+					/* Generate a hashjoin path */
+					result = (Path *) create_hashjoin_path(root,
+														   joinrel,
+														   jointype,
+														   &workspace,
+														   extra,
+														   outer_path,
+														   inner_path,
+														   extra->restrictlist,
+														   NULL,
+														   extra->hashclause_list);
 				}
-				break;
-
-			case T_NestLoop:
+				else if (extra->mergejoin_allowed)
 				{
-					NestPath   *nest_path = makeNode(NestPath);
+					/*
+					 * If right or full join with no mergejoinable clauses,
+					 * create a clauseless mergejoin path.  Otherwise create a
+					 * mergejoin path by explicitly sorting both the outer and
+					 * inner relations.
+					 */
+					if (!extra->mergeclause_list)
+					{
+						/* Get an initial estimate */
+						initial_cost_mergejoin(root, &workspace, jointype,
+											   NIL, outer_path, inner_path,
+											   NIL, NIL, extra);
+						/* Generate a mergejoin path */
+						result = (Path *) create_mergejoin_path(root,
+																joinrel,
+																jointype,
+																&workspace,
+																extra,
+																outer_path,
+																inner_path,
+																extra->restrictlist,
+																NIL,
+																NULL,
+																NIL,
+																NIL,
+																NIL);
+					}
+					else
+					{
+						List	   *mergeclauses;
+						List	   *outerkeys;
+						List	   *innerkeys;
 
-					memcpy(nest_path, path, sizeof(NestPath));
-					joinpath = (JoinPath *) nest_path;
+						/* Build sort pathkeys for the outer side */
+						outerkeys = select_outer_pathkeys_for_merge(root,
+																	extra->mergeclause_list,
+																	joinrel);
+						/* Sort the mergeclauses into the corresponding ordering */
+						mergeclauses = find_mergeclauses_for_pathkeys(root,
+																	  outerkeys,
+																	  true,
+																	  extra->mergeclause_list);
+						/* Should have used them all... */
+						Assert(list_length(mergeclauses) == list_length(extra->mergeclause_list));
+						/* Build sort pathkeys for the inner side */
+						innerkeys = make_inner_pathkeys_for_merge(root,
+																  mergeclauses,
+																  outerkeys);
+						/*
+						 * It's possible that the cheapest total paths will
+						 * already be sorted properly; if so, suppress an
+						 * explicit sort.
+						 */
+						if (outerkeys &&
+							pathkeys_contained_in(outerkeys,
+												  outer_path->pathkeys))
+							outerkeys = NIL;
+						if (innerkeys &&
+							pathkeys_contained_in(innerkeys,
+												  inner_path->pathkeys))
+							innerkeys = NIL;
+
+						/* Get an initial estimate */
+						initial_cost_mergejoin(root, &workspace, jointype,
+											   mergeclauses,
+											   outer_path, inner_path,
+											   outerkeys, innerkeys, extra);
+						/* Generate a mergejoin path */
+						result = (Path *) create_mergejoin_path(root,
+																joinrel,
+																jointype,
+																&workspace,
+																extra,
+																outer_path,
+																inner_path,
+																extra->restrictlist,
+																NIL,
+																NULL,
+																mergeclauses,
+																outerkeys,
+																innerkeys);
+					}
 				}
-				break;
-
-			case T_MergeJoin:
-				{
-					MergePath  *merge_path = makeNode(MergePath);
-
-					memcpy(merge_path, path, sizeof(MergePath));
-					joinpath = (JoinPath *) merge_path;
-				}
-				break;
-
-			default:
-
-				/*
-				 * Just skip anything else. We don't know if corresponding
-				 * plan would build the output row from whole-row references
-				 * of base relations and execute the EPQ checks.
-				 */
-				break;
-		}
-
-		/* This path isn't good for us, check next. */
-		if (!joinpath)
-			continue;
-
-		/*
-		 * If either inner or outer path is a ForeignPath corresponding to a
-		 * pushed down join, replace it with the fdw_outerpath, so that we
-		 * maintain path for EPQ checks built entirely of local join
-		 * strategies.
-		 */
-		if (IsA(joinpath->outerjoinpath, ForeignPath))
-		{
-			ForeignPath *foreign_path;
-
-			foreign_path = (ForeignPath *) joinpath->outerjoinpath;
-			if (IS_JOIN_REL(foreign_path->path.parent))
-				joinpath->outerjoinpath = foreign_path->fdw_outerpath;
-		}
-
-		if (IsA(joinpath->innerjoinpath, ForeignPath))
-		{
-			ForeignPath *foreign_path;
-
-			foreign_path = (ForeignPath *) joinpath->innerjoinpath;
-			if (IS_JOIN_REL(foreign_path->path.parent))
-				joinpath->innerjoinpath = foreign_path->fdw_outerpath;
-		}
-
-		return (Path *) joinpath;
+				else
+					result = NULL;
+			}
+			break;
+		default:
+			/* other values not expected here */
+			elog(ERROR, "unrecognized join type: %d",
+				 (int) jointype);
+			result = NULL; /* keep compiler quiet */
+			break;
 	}
-	return NULL;
+
+	return result;
 }

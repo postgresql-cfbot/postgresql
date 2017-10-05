@@ -68,6 +68,10 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 						 List *restrictlist,
 						 JoinType jointype,
 						 bool *mergejoin_allowed);
+static List *select_hashjoin_clauses(RelOptInfo *outerrel,
+						RelOptInfo *innerrel,
+						List *restrictlist,
+						JoinType jointype);
 static void generate_mergejoin_paths(PlannerInfo *root,
 						 RelOptInfo *joinrel,
 						 RelOptInfo *innerrel,
@@ -113,11 +117,12 @@ add_paths_to_joinrel(PlannerInfo *root,
 					 List *restrictlist)
 {
 	JoinPathExtraData extra;
-	bool		mergejoin_allowed = true;
 	ListCell   *lc;
 
 	extra.restrictlist = restrictlist;
+	extra.mergejoin_allowed = true;
 	extra.mergeclause_list = NIL;
+	extra.hashclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;
 
@@ -177,7 +182,22 @@ add_paths_to_joinrel(PlannerInfo *root,
 														  innerrel,
 														  restrictlist,
 														  jointype,
-														  &mergejoin_allowed);
+													&extra.mergejoin_allowed);
+
+	/*
+	 * Find hashjoin clauses.  As above, skip this if we are not interested in
+	 * doing a hashjoin, but disregard enable_hashjoin for full joins, because
+	 * there may be no other alternative.
+	 *
+	 * Note: we need to build only one hashclause list for any given pair of
+	 * outer and inner relations; all of the hashable clauses will be used as
+	 * keys.
+	 */
+	if (enable_hashjoin || jointype == JOIN_FULL)
+		extra.hashclause_list = select_hashjoin_clauses(outerrel,
+														innerrel,
+														restrictlist,
+														jointype);
 
 	/*
 	 * If it's SEMI, ANTI, or inner_unique join, compute correction factors
@@ -240,7 +260,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * 1. Consider mergejoin paths where both relations must be explicitly
 	 * sorted.  Skip this if we can't mergejoin.
 	 */
-	if (mergejoin_allowed)
+	if (extra.mergejoin_allowed)
 		sort_inner_and_outer(root, joinrel, outerrel, innerrel,
 							 jointype, &extra);
 
@@ -251,7 +271,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * (That's okay because we know that nestloop can't handle right/full
 	 * joins at all, so it wouldn't work in the prohibited cases either.)
 	 */
-	if (mergejoin_allowed)
+	if (extra.mergejoin_allowed)
 		match_unsorted_outer(root, joinrel, outerrel, innerrel,
 							 jointype, &extra);
 
@@ -268,7 +288,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * those made by match_unsorted_outer when add_paths_to_joinrel() is
 	 * invoked with the two rels given in the other order.
 	 */
-	if (mergejoin_allowed)
+	if (extra.mergejoin_allowed)
 		match_unsorted_inner(root, joinrel, outerrel, innerrel,
 							 jointype, &extra);
 #endif
@@ -1589,41 +1609,7 @@ hash_inner_and_outer(PlannerInfo *root,
 					 JoinPathExtraData *extra)
 {
 	JoinType	save_jointype = jointype;
-	bool		isouterjoin = IS_OUTER_JOIN(jointype);
-	List	   *hashclauses;
-	ListCell   *l;
-
-	/*
-	 * We need to build only one hashclauses list for any given pair of outer
-	 * and inner relations; all of the hashable clauses will be used as keys.
-	 *
-	 * Scan the join's restrictinfo list to find hashjoinable clauses that are
-	 * usable with this pair of sub-relations.
-	 */
-	hashclauses = NIL;
-	foreach(l, extra->restrictlist)
-	{
-		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(l);
-
-		/*
-		 * If processing an outer join, only use its own join clauses for
-		 * hashing.  For inner joins we need not be so picky.
-		 */
-		if (isouterjoin && restrictinfo->is_pushed_down)
-			continue;
-
-		if (!restrictinfo->can_join ||
-			restrictinfo->hashjoinoperator == InvalidOid)
-			continue;			/* not hashjoinable */
-
-		/*
-		 * Check if clause has the form "outer op inner" or "inner op outer".
-		 */
-		if (!clause_sides_match_join(restrictinfo, outerrel, innerrel))
-			continue;			/* no good for these input relations */
-
-		hashclauses = lappend(hashclauses, restrictinfo);
-	}
+	List	   *hashclauses = extra->hashclause_list;
 
 	/* If we found any usable hashclauses, make paths */
 	if (hashclauses)
@@ -1909,4 +1895,54 @@ select_mergejoin_clauses(PlannerInfo *root,
 	}
 
 	return result_list;
+}
+
+/*
+ * select_hashjoin_clauses
+ *	  Select hashjoin clauses that are usable for a particular join.
+ *	  Returns a list of RestrictInfo nodes for those clauses.
+ *
+ * We mark each selected RestrictInfo to show which side is currently
+ * being considered as outer.  These are transient markings that are only
+ * good for the duration of the current add_paths_to_joinrel() call!
+ *
+ * We examine each restrictinfo clause known for the join to see
+ * if it is hashjoinable and involves vars from the two sub-relations
+ * currently of interest.
+ */
+static List *
+select_hashjoin_clauses(RelOptInfo *outerrel,
+						RelOptInfo *innerrel,
+						List *restrictlist,
+						JoinType jointype)
+{
+	List	   *hashclauses = NIL;
+	bool		isouterjoin = IS_OUTER_JOIN(jointype);
+	ListCell   *l;
+
+	foreach(l, restrictlist)
+	{
+		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(l);
+
+		/*
+		 * If processing an outer join, only use its own join clauses for
+		 * hashing.  For inner joins we need not be so picky.
+		 */
+		if (isouterjoin && restrictinfo->is_pushed_down)
+			continue;
+
+		if (!restrictinfo->can_join ||
+			restrictinfo->hashjoinoperator == InvalidOid)
+			continue;			/* not hashjoinable */
+
+		/*
+		 * Check if clause has the form "outer op inner" or "inner op outer".
+		 */
+		if (!clause_sides_match_join(restrictinfo, outerrel, innerrel))
+			continue;			/* no good for these input relations */
+
+		hashclauses = lappend(hashclauses, restrictinfo);
+	}
+
+	return hashclauses;
 }

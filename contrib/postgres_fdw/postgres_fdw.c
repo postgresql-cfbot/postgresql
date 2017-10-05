@@ -4494,21 +4494,21 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 	/*
 	 * If there is a possibility that EvalPlanQual will be executed, we need
 	 * to be able to reconstruct the row using scans of the base relations.
-	 * GetExistingLocalJoinPath will find a suitable path for this purpose in
-	 * the path list of the joinrel, if one exists.  We must be careful to
-	 * call it before adding any ForeignPath, since the ForeignPath might
-	 * dominate the only suitable local path available.  We also do it before
-	 * calling foreign_join_ok(), since that function updates fpinfo and marks
-	 * it as pushable if the join is found to be pushable.
+	 * CreateLocalJoinPath will build an alternative local join path for this
+	 * purpose.  We must be careful to call it before calling foreign_join_ok,
+	 * since that function updates fpinfo and marks it as pushable if the join
+	 * is found to be pushable.
 	 */
 	if (root->parse->commandType == CMD_DELETE ||
 		root->parse->commandType == CMD_UPDATE ||
 		root->rowMarks)
 	{
-		epq_path = GetExistingLocalJoinPath(joinrel);
+		/* Create a local join path */
+		epq_path = CreateLocalJoinPath(root, joinrel, outerrel, innerrel,
+									   jointype, extra);
 		if (!epq_path)
 		{
-			elog(DEBUG3, "could not push down foreign join because a local path suitable for EPQ checks was not found");
+			elog(DEBUG3, "could not push down foreign join because a local path suitable for EPQ checks could not be created");
 			return;
 		}
 	}
@@ -4517,7 +4517,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 
 	if (!foreign_join_ok(root, joinrel, jointype, outerrel, innerrel, extra))
 	{
-		/* Free path required for EPQ if we copied one; we don't need it now */
+		/* Free path required for EPQ if we created one; we don't need it now */
 		if (epq_path)
 			pfree(epq_path);
 		return;

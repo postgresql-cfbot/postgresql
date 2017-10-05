@@ -996,11 +996,9 @@ RecheckForeignScan(ForeignScanState *node,
      can be executed and the resulting tuple can be stored in the slot.
      This plan need not be efficient since no base table will return more
      than one row; for example, it may implement all joins as nested loops.
-     The function <literal>GetExistingLocalJoinPath</> may be used to search
-     existing paths for a suitable local join path, which can be used as the
-     alternative local join plan.  <literal>GetExistingLocalJoinPath</>
-     searches for an unparameterized path in the path list of the specified
-     join relation.  (If it does not find such a path, it returns NULL, in
+     The function <literal>CreateLocalJoinPath</> may be used to build
+     a suitable local join path, which can be used to create an alternative
+     local join plan.  (If it does not build such a path, it returns NULL, in
      which case a foreign data wrapper may build the local path by itself or
      may choose not to create access paths for that join.)
     </para>

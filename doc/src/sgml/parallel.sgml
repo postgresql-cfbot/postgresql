@@ -243,15 +243,6 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
 
     <listitem>
       <para>
-        A prepared statement is executed using a <literal>CREATE TABLE .. AS
-        EXECUTE ..</literal> statement.  This construct converts what otherwise
-        would have been a read-only operation into a read-write operation,
-        making it ineligible for parallel query.
-      </para>
-    </listitem>
-
-    <listitem>
-      <para>
         The transaction isolation level is serializable.  This situation
         does not normally arise, because parallel query plans are not
         generated when the transaction isolation level is serializable.
@@ -391,7 +382,30 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   </para>
 
  </sect2>
+ 
+ <sect2 id="writes-using-parallel-plans">
+  <title>Write Operations Using Parallel Plan</title>
 
+   <para>
+    Currently there are limited number of write operations
+    that uses benefits of parallelism. Those are,
+   </para> 
+   
+  <itemizedlist>
+   <listitem>
+    <para>
+     An utility statement that is used to create table or materialized view
+     such as <literal>CREATE TABLE .. AS</literal> or <literal>CREATE
+     MATERIALIZED VIEW .. AS</literal> and etc statements are supported.
+     These write operations not perfomed concurrently by the parallel workers,
+     but the underlying query that is used by these operations are eligible
+     for parallel plans.
+    </para>
+   </listitem>
+  </itemizedlist>
+  
+ </sect2>
+ 
  <sect2 id="parallel-plan-tips">
   <title>Parallel Plan Tips</title>
 

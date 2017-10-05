@@ -62,12 +62,14 @@
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
+#include "utils/memutils.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parsetree.h"
 #include "pgstat.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
+#include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
@@ -129,7 +131,6 @@ static Datum ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnul
 static void ExecInitInterpreter(void);
 
 /* support functions */
-static void CheckVarSlotCompatibility(TupleTableSlot *slot, int attnum, Oid vartype);
 static TupleDesc get_cached_rowtype(Oid type_id, int32 typmod,
 				   TupleDesc *cache_field, ExprContext *econtext);
 static void ShutdownTupleDescRef(Datum arg);
@@ -137,11 +138,8 @@ static void ExecEvalRowNullInt(ExprState *state, ExprEvalStep *op,
 				   ExprContext *econtext, bool checkisnull);
 
 /* fast-path evaluation functions */
-static Datum ExecJustInnerVarFirst(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
-static Datum ExecJustOuterVarFirst(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustOuterVar(ExprState *state, ExprContext *econtext, bool *isnull);
-static Datum ExecJustScanVarFirst(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustConst(ExprState *state, ExprContext *econtext, bool *isnull);
 static Datum ExecJustAssignInnerVar(ExprState *state, ExprContext *econtext, bool *isnull);
@@ -154,7 +152,7 @@ static Datum ExecJustApplyFuncToCase(ExprState *state, ExprContext *econtext, bo
  * Prepare ExprState for interpreted execution.
  */
 void
-ExecReadyInterpretedExpr(ExprState *state)
+ExecReadyInterpretedExpr(ExprState *state, PlanState *parent)
 {
 	/* Ensure one-time interpreter setup has been done */
 	ExecInitInterpreter();
@@ -170,6 +168,8 @@ ExecReadyInterpretedExpr(ExprState *state)
 	 */
 	if (state->flags & EEO_FLAG_INTERPRETER_INITIALIZED)
 		return;
+
+	state->evalfunc = ExecInterpExprStillValid;
 
 	/* DIRECT_THREADED should not already be set */
 	Assert((state->flags & EEO_FLAG_DIRECT_THREADED) == 0);
@@ -192,39 +192,39 @@ ExecReadyInterpretedExpr(ExprState *state)
 		ExprEvalOp	step1 = state->steps[1].opcode;
 
 		if (step0 == EEOP_INNER_FETCHSOME &&
-			step1 == EEOP_INNER_VAR_FIRST)
+			step1 == EEOP_INNER_VAR)
 		{
-			state->evalfunc = ExecJustInnerVarFirst;
+			state->evalfunc_private = ExecJustInnerVar;
 			return;
 		}
 		else if (step0 == EEOP_OUTER_FETCHSOME &&
-				 step1 == EEOP_OUTER_VAR_FIRST)
+				 step1 == EEOP_OUTER_VAR)
 		{
-			state->evalfunc = ExecJustOuterVarFirst;
+			state->evalfunc_private = ExecJustOuterVar;
 			return;
 		}
 		else if (step0 == EEOP_SCAN_FETCHSOME &&
-				 step1 == EEOP_SCAN_VAR_FIRST)
+				 step1 == EEOP_SCAN_VAR)
 		{
-			state->evalfunc = ExecJustScanVarFirst;
+			state->evalfunc_private = ExecJustScanVar;
 			return;
 		}
 		else if (step0 == EEOP_INNER_FETCHSOME &&
 				 step1 == EEOP_ASSIGN_INNER_VAR)
 		{
-			state->evalfunc = ExecJustAssignInnerVar;
+			state->evalfunc_private = ExecJustAssignInnerVar;
 			return;
 		}
 		else if (step0 == EEOP_OUTER_FETCHSOME &&
 				 step1 == EEOP_ASSIGN_OUTER_VAR)
 		{
-			state->evalfunc = ExecJustAssignOuterVar;
+			state->evalfunc_private = ExecJustAssignOuterVar;
 			return;
 		}
 		else if (step0 == EEOP_SCAN_FETCHSOME &&
 				 step1 == EEOP_ASSIGN_SCAN_VAR)
 		{
-			state->evalfunc = ExecJustAssignScanVar;
+			state->evalfunc_private = ExecJustAssignScanVar;
 			return;
 		}
 		else if (step0 == EEOP_CASE_TESTVAL &&
@@ -238,7 +238,7 @@ ExecReadyInterpretedExpr(ExprState *state)
 	else if (state->steps_len == 2 &&
 			 state->steps[0].opcode == EEOP_CONST)
 	{
-		state->evalfunc = ExecJustConst;
+		state->evalfunc_private = ExecJustConst;
 		return;
 	}
 
@@ -262,7 +262,7 @@ ExecReadyInterpretedExpr(ExprState *state)
 	}
 #endif							/* EEO_USE_COMPUTED_GOTO */
 
-	state->evalfunc = ExecInterpExpr;
+	state->evalfunc_private = ExecInterpExpr;
 }
 
 
@@ -293,11 +293,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_INNER_FETCHSOME,
 		&&CASE_EEOP_OUTER_FETCHSOME,
 		&&CASE_EEOP_SCAN_FETCHSOME,
-		&&CASE_EEOP_INNER_VAR_FIRST,
 		&&CASE_EEOP_INNER_VAR,
-		&&CASE_EEOP_OUTER_VAR_FIRST,
 		&&CASE_EEOP_OUTER_VAR,
-		&&CASE_EEOP_SCAN_VAR_FIRST,
 		&&CASE_EEOP_SCAN_VAR,
 		&&CASE_EEOP_INNER_SYSVAR,
 		&&CASE_EEOP_OUTER_SYSVAR,
@@ -367,6 +364,14 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_WINDOW_FUNC,
 		&&CASE_EEOP_SUBPLAN,
 		&&CASE_EEOP_ALTERNATIVE_SUBPLAN,
+		&&CASE_EEOP_AGG_FILTER,
+		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK,
+		&&CASE_EEOP_AGG_INIT_TRANS,
+		&&CASE_EEOP_AGG_STRICT_TRANS_CHECK,
+		&&CASE_EEOP_AGG_PLAIN_TRANS_BYVAL,
+		&&CASE_EEOP_AGG_PLAIN_TRANS,
+		&&CASE_EEOP_AGG_ORDERED_TRANS_DATUM,
+		&&CASE_EEOP_AGG_ORDERED_TRANS_TUPLE,
 		&&CASE_EEOP_LAST
 	};
 
@@ -419,22 +424,6 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
-		EEO_CASE(EEOP_INNER_VAR_FIRST)
-		{
-			int			attnum = op->d.var.attnum;
-
-			/*
-			 * First time through, check whether attribute matches Var.  Might
-			 * not be ok anymore, due to schema changes.
-			 */
-			CheckVarSlotCompatibility(innerslot, attnum + 1, op->d.var.vartype);
-
-			/* Skip that check on subsequent evaluations */
-			op->opcode = EEO_OPCODE(EEOP_INNER_VAR);
-
-			/* FALL THROUGH to EEOP_INNER_VAR */
-		}
-
 		EEO_CASE(EEOP_INNER_VAR)
 		{
 			int			attnum = op->d.var.attnum;
@@ -452,18 +441,6 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
-		EEO_CASE(EEOP_OUTER_VAR_FIRST)
-		{
-			int			attnum = op->d.var.attnum;
-
-			/* See EEOP_INNER_VAR_FIRST comments */
-
-			CheckVarSlotCompatibility(outerslot, attnum + 1, op->d.var.vartype);
-			op->opcode = EEO_OPCODE(EEOP_OUTER_VAR);
-
-			/* FALL THROUGH to EEOP_OUTER_VAR */
-		}
-
 		EEO_CASE(EEOP_OUTER_VAR)
 		{
 			int			attnum = op->d.var.attnum;
@@ -475,18 +452,6 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			*op->resnull = outerslot->tts_isnull[attnum];
 
 			EEO_NEXT();
-		}
-
-		EEO_CASE(EEOP_SCAN_VAR_FIRST)
-		{
-			int			attnum = op->d.var.attnum;
-
-			/* See EEOP_INNER_VAR_FIRST comments */
-
-			CheckVarSlotCompatibility(scanslot, attnum + 1, op->d.var.vartype);
-			op->opcode = EEO_OPCODE(EEOP_SCAN_VAR);
-
-			/* FALL THROUGH to EEOP_SCAN_VAR */
 		}
 
 		EEO_CASE(EEOP_SCAN_VAR)
@@ -1535,6 +1500,197 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
+		EEO_CASE(EEOP_AGG_FILTER)
+		{
+			if (*op->resnull || !DatumGetBool(*op->resvalue))
+			{
+				Assert(op->d.agg_filter.jumpfalse != -1);
+				EEO_JUMP(op->d.agg_filter.jumpfalse);
+			}
+			else
+				EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_STRICT_INPUT_CHECK)
+		{
+			int argno;
+			bool *nulls = op->d.agg_strict_input_check.nulls;
+
+			Assert(op->d.agg_strict_input_check.jumpnull != -1);
+
+			for (argno = 0; argno < op->d.agg_strict_input_check.nargs; argno++)
+			{
+				if (nulls[argno])
+				{
+					EEO_JUMP(op->d.agg_strict_input_check.jumpnull);
+				}
+			}
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_INIT_TRANS)
+		{
+			AggState *aggstate;
+			AggStatePerGroup pergroup;
+
+			aggstate = op->d.agg_init_trans.aggstate;
+			pergroup = &aggstate->all_pergroups
+				[op->d.agg_init_trans.setoff]
+				[op->d.agg_init_trans.transno];
+
+			if (pergroup->noTransValue)
+			{
+				AggStatePerTrans pertrans = op->d.agg_init_trans.pertrans;
+
+				aggstate->curaggcontext = op->d.agg_init_trans.aggcontext;
+				aggstate->current_set = op->d.agg_init_trans.setno;
+
+				ExecAggInitGroup(aggstate, pertrans, pergroup);
+
+				EEO_JUMP(op->d.agg_init_trans.jumpnull);
+			}
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_STRICT_TRANS_CHECK)
+		{
+			AggState *aggstate;
+			AggStatePerGroup pergroup;
+
+			aggstate = op->d.agg_strict_trans_check.aggstate;
+			pergroup = &aggstate->all_pergroups
+				[op->d.agg_strict_trans_check.setoff]
+				[op->d.agg_strict_trans_check.transno];
+
+			Assert(op->d.agg_strict_trans_check.jumpnull != -1);
+
+			if (unlikely(pergroup->transValueIsNull))
+			{
+				elog(ERROR, "blarg");
+				EEO_JUMP(op->d.agg_strict_trans_check.jumpnull);
+			}
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_PLAIN_TRANS_BYVAL)
+		{
+			AggState *aggstate;
+			AggStatePerTrans pertrans;
+			AggStatePerGroup pergroup;
+			FunctionCallInfo fcinfo;
+			MemoryContext oldContext;
+			Datum newVal;
+
+			aggstate = op->d.agg_plain_trans.aggstate;
+			pertrans = op->d.agg_plain_trans.pertrans;
+
+			pergroup = &aggstate->all_pergroups
+				[op->d.agg_plain_trans.setoff]
+				[op->d.agg_plain_trans.transno];
+
+			Assert(pertrans->transtypeByVal);
+
+			fcinfo = &pertrans->transfn_fcinfo;
+
+			/* cf. select_current_set() */
+			aggstate->curaggcontext = op->d.agg_plain_trans.aggcontext;
+			aggstate->current_set = op->d.agg_plain_trans.setno;
+
+			oldContext = MemoryContextSwitchTo(aggstate->tmpcontext->ecxt_per_tuple_memory);
+
+			/* set up aggstate->curpertrans for AggGetAggref() */
+			aggstate->curpertrans = pertrans;
+
+			fcinfo->arg[0] = pergroup->transValue;
+			fcinfo->argnull[0] = pergroup->transValueIsNull;
+			fcinfo->isnull = false;		/* just in case transfn doesn't set it */
+
+			newVal = FunctionCallInvoke(fcinfo);
+
+			pergroup->transValue = newVal;
+			pergroup->transValueIsNull = fcinfo->isnull;
+
+			MemoryContextSwitchTo(oldContext);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_PLAIN_TRANS)
+		{
+			AggState *aggstate;
+			AggStatePerTrans pertrans;
+			AggStatePerGroup pergroup;
+			FunctionCallInfo fcinfo;
+			MemoryContext oldContext;
+			Datum newVal;
+
+			aggstate = op->d.agg_plain_trans.aggstate;
+			pertrans = op->d.agg_plain_trans.pertrans;
+
+			pergroup = &aggstate->all_pergroups
+				[op->d.agg_plain_trans.setoff]
+				[op->d.agg_plain_trans.transno];
+
+			Assert(!pertrans->transtypeByVal);
+
+			fcinfo = &pertrans->transfn_fcinfo;
+
+			/* cf. select_current_set() */
+			aggstate->curaggcontext = op->d.agg_plain_trans.aggcontext;
+			aggstate->current_set = op->d.agg_plain_trans.setno;
+
+			oldContext = MemoryContextSwitchTo(aggstate->tmpcontext->ecxt_per_tuple_memory);
+
+			/* set up aggstate->curpertrans for AggGetAggref() */
+			aggstate->curpertrans = pertrans;
+
+			fcinfo->arg[0] = pergroup->transValue;
+			fcinfo->argnull[0] = pergroup->transValueIsNull;
+			fcinfo->isnull = false;		/* just in case transfn doesn't set it */
+
+			newVal = FunctionCallInvoke(fcinfo);
+
+			/*
+			 * For pass-by-ref datatype, must copy the new value into aggcontext and
+			 * free the prior transValue.  But if transfn returned a pointer to its
+			 * first input, we don't need to do anything.  Also, if transfn returned a
+			 * pointer to a R/W expanded object that is already a child of the
+			 * aggcontext, assume we can adopt that value without copying it.
+			 */
+			if (DatumGetPointer(newVal) != DatumGetPointer(pergroup->transValue))
+			{
+				newVal = ExecAggTransRepatriate(aggstate, pertrans,
+												newVal, fcinfo->isnull,
+												pergroup->transValue,
+												pergroup->transValueIsNull);
+			}
+
+
+			pergroup->transValue = newVal;
+			pergroup->transValueIsNull = fcinfo->isnull;
+
+			MemoryContextSwitchTo(oldContext);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_ORDERED_TRANS_DATUM)
+		{
+			/* too complex for an inline implementation */
+			ExecEvalAggOrderedTransDatum(state, op, econtext);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_ORDERED_TRANS_TUPLE)
+		{
+			/* too complex for an inline implementation */
+			ExecEvalAggOrderedTransTuple(state, op, econtext);
+
+			EEO_NEXT();
+		}
+
 		EEO_CASE(EEOP_LAST)
 		{
 			/* unreachable */
@@ -1553,7 +1709,7 @@ out:
  * expression.  This should succeed unless there have been schema changes
  * since the expression tree has been created.
  */
-static void
+void
 CheckVarSlotCompatibility(TupleTableSlot *slot, int attnum, Oid vartype)
 {
 	/*
@@ -1600,6 +1756,61 @@ CheckVarSlotCompatibility(TupleTableSlot *slot, int attnum, Oid vartype)
 							   format_type_be(vartype))));
 	}
 }
+
+Datum
+ExecInterpExprStillValid(ExprState *state, ExprContext *econtext, bool *isNull)
+{
+	CheckExprStillValid(state, econtext, isNull);
+
+	state->evalfunc = state->evalfunc_private;
+
+	return state->evalfunc(state, econtext, isNull);
+}
+
+void
+CheckExprStillValid(ExprState *state, ExprContext *econtext, bool *isNull)
+{
+	int i = 0;
+	TupleTableSlot *innerslot;
+	TupleTableSlot *outerslot;
+	TupleTableSlot *scanslot;
+
+	innerslot = econtext->ecxt_innertuple;
+	outerslot = econtext->ecxt_outertuple;
+	scanslot = econtext->ecxt_scantuple;
+
+	for (i = 0; i < state->steps_len;i++)
+	{
+		ExprEvalStep   *op = &state->steps[i];
+
+		switch (ExecEvalStepOp(state, op))
+		{
+			case EEOP_INNER_VAR:
+				{
+					int			attnum = op->d.var.attnum;
+					CheckVarSlotCompatibility(innerslot, attnum + 1, op->d.var.vartype);
+					break;
+				}
+
+		case EEOP_OUTER_VAR:
+				{
+					int			attnum = op->d.var.attnum;
+					CheckVarSlotCompatibility(outerslot, attnum + 1, op->d.var.vartype);
+					break;
+				}
+
+		case EEOP_SCAN_VAR:
+				{
+					int			attnum = op->d.var.attnum;
+					CheckVarSlotCompatibility(scanslot, attnum + 1, op->d.var.vartype);
+					break;
+				}
+		default:
+			break;
+		}
+	}
+}
+
 
 /*
  * get_cached_rowtype: utility function to lookup a rowtype tupdesc
@@ -1660,28 +1871,6 @@ ShutdownTupleDescRef(Datum arg)
  * Fast-path functions, for very simple expressions
  */
 
-/* Simple reference to inner Var, first time through */
-static Datum
-ExecJustInnerVarFirst(ExprState *state, ExprContext *econtext, bool *isnull)
-{
-	ExprEvalStep *op = &state->steps[1];
-	int			attnum = op->d.var.attnum + 1;
-	TupleTableSlot *slot = econtext->ecxt_innertuple;
-
-	/* See ExecInterpExpr()'s comments for EEOP_INNER_VAR_FIRST */
-
-	CheckVarSlotCompatibility(slot, attnum, op->d.var.vartype);
-	op->opcode = EEOP_INNER_VAR;	/* just for cleanliness */
-	state->evalfunc = ExecJustInnerVar;
-
-	/*
-	 * Since we use slot_getattr(), we don't need to implement the FETCHSOME
-	 * step explicitly, and we also needn't Assert that the attnum is in range
-	 * --- slot_getattr() will take care of any problems.
-	 */
-	return slot_getattr(slot, attnum, isnull);
-}
-
 /* Simple reference to inner Var */
 static Datum
 ExecJustInnerVar(ExprState *state, ExprContext *econtext, bool *isnull)
@@ -1690,23 +1879,11 @@ ExecJustInnerVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	int			attnum = op->d.var.attnum + 1;
 	TupleTableSlot *slot = econtext->ecxt_innertuple;
 
-	/* See comments in ExecJustInnerVarFirst */
-	return slot_getattr(slot, attnum, isnull);
-}
-
-/* Simple reference to outer Var, first time through */
-static Datum
-ExecJustOuterVarFirst(ExprState *state, ExprContext *econtext, bool *isnull)
-{
-	ExprEvalStep *op = &state->steps[1];
-	int			attnum = op->d.var.attnum + 1;
-	TupleTableSlot *slot = econtext->ecxt_outertuple;
-
-	CheckVarSlotCompatibility(slot, attnum, op->d.var.vartype);
-	op->opcode = EEOP_OUTER_VAR;	/* just for cleanliness */
-	state->evalfunc = ExecJustOuterVar;
-
-	/* See comments in ExecJustInnerVarFirst */
+	/*
+	 * Since we use slot_getattr(), we don't need to implement the FETCHSOME
+	 * step explicitly, and we also needn't Assert that the attnum is in range
+	 * --- slot_getattr() will take care of any problems.
+	 */
 	return slot_getattr(slot, attnum, isnull);
 }
 
@@ -1718,23 +1895,7 @@ ExecJustOuterVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	int			attnum = op->d.var.attnum + 1;
 	TupleTableSlot *slot = econtext->ecxt_outertuple;
 
-	/* See comments in ExecJustInnerVarFirst */
-	return slot_getattr(slot, attnum, isnull);
-}
-
-/* Simple reference to scan Var, first time through */
-static Datum
-ExecJustScanVarFirst(ExprState *state, ExprContext *econtext, bool *isnull)
-{
-	ExprEvalStep *op = &state->steps[1];
-	int			attnum = op->d.var.attnum + 1;
-	TupleTableSlot *slot = econtext->ecxt_scantuple;
-
-	CheckVarSlotCompatibility(slot, attnum, op->d.var.vartype);
-	op->opcode = EEOP_SCAN_VAR; /* just for cleanliness */
-	state->evalfunc = ExecJustScanVar;
-
-	/* See comments in ExecJustInnerVarFirst */
+	/* See comments in ExecJustInnerVar */
 	return slot_getattr(slot, attnum, isnull);
 }
 
@@ -1746,7 +1907,7 @@ ExecJustScanVar(ExprState *state, ExprContext *econtext, bool *isnull)
 	int			attnum = op->d.var.attnum + 1;
 	TupleTableSlot *slot = econtext->ecxt_scantuple;
 
-	/* See comments in ExecJustInnerVarFirst */
+	/* See comments in ExecJustInnerVar */
 	return slot_getattr(slot, attnum, isnull);
 }
 
@@ -3623,4 +3784,85 @@ ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 
 	*op->resvalue = PointerGetDatum(dtuple);
 	*op->resnull = false;
+}
+
+void
+ExecAggInitGroup(AggState *aggstate, AggStatePerTrans pertrans, AggStatePerGroup pergroup)
+{
+   FunctionCallInfo fcinfo = &pertrans->transfn_fcinfo;
+   MemoryContext oldContext;
+
+   /*
+	* transValue has not been initialized. This is the first non-NULL
+	* input value. We use it as the initial value for transValue. (We
+	* already checked that the agg's input type is binary-compatible
+	* with its transtype, so straight copy here is OK.)
+	*
+	* We must copy the datum into aggcontext if it is pass-by-ref. We
+	* do not need to pfree the old transValue, since it's NULL.
+	*/
+   oldContext = MemoryContextSwitchTo(
+	   aggstate->curaggcontext->ecxt_per_tuple_memory);
+   pergroup->transValue = datumCopy(fcinfo->arg[1],
+									pertrans->transtypeByVal,
+									pertrans->transtypeLen);
+   pergroup->transValueIsNull = false;
+   pergroup->noTransValue = false;
+   MemoryContextSwitchTo(oldContext);
+}
+
+
+
+Datum
+ExecAggTransRepatriate(AggState *aggstate, AggStatePerTrans pertrans,
+					   Datum newValue, bool newValueIsNull,
+					   Datum oldValue, bool oldValueIsNull)
+{
+	if (!newValueIsNull)
+	{
+		MemoryContextSwitchTo(aggstate->curaggcontext->ecxt_per_tuple_memory);
+		if (DatumIsReadWriteExpandedObject(newValue,
+										   false,
+										   pertrans->transtypeLen) &&
+			MemoryContextGetParent(DatumGetEOHP(newValue)->eoh_context) == CurrentMemoryContext)
+			/* do nothing */ ;
+		else
+			newValue = datumCopy(newValue,
+								 pertrans->transtypeByVal,
+								 pertrans->transtypeLen);
+	}
+	if (!oldValueIsNull)
+	{
+		if (DatumIsReadWriteExpandedObject(oldValue,
+										   false,
+										   pertrans->transtypeLen))
+			DeleteExpandedObject(oldValue);
+		else
+			pfree(DatumGetPointer(oldValue));
+	}
+
+	return newValue;
+}
+
+void
+ExecEvalAggOrderedTransDatum(ExprState *state, ExprEvalStep *op,
+							 ExprContext *econtext)
+{
+	AggStatePerTrans pertrans = op->d.agg_plain_trans.pertrans;
+	int setno = op->d.agg_plain_trans.setno;
+
+	tuplesort_putdatum(pertrans->sortstates[setno],
+					   *op->resvalue, *op->resnull);
+}
+
+void ExecEvalAggOrderedTransTuple(ExprState *state, ExprEvalStep *op,
+								  ExprContext *econtext)
+{
+	AggStatePerTrans pertrans = op->d.agg_plain_trans.pertrans;
+	int setno = op->d.agg_plain_trans.setno;
+
+	ExecClearTuple(pertrans->sortslot);
+	pertrans->sortslot->tts_nvalid = pertrans->numInputs;
+	ExecStoreVirtualTuple(pertrans->sortslot);
+	tuplesort_puttupleslot(pertrans->sortstates[setno], pertrans->sortslot);
 }

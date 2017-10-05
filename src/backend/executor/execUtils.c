@@ -156,6 +156,8 @@ CreateExecutorState(void)
 	estate->es_epqScanDone = NULL;
 	estate->es_sourceText = NULL;
 
+	estate->es_jit = NULL;
+
 	/*
 	 * Return the executor state structure
 	 */
@@ -426,47 +428,6 @@ ExecAssignExprContext(EState *estate, PlanState *planstate)
 }
 
 /* ----------------
- *		ExecAssignResultType
- * ----------------
- */
-void
-ExecAssignResultType(PlanState *planstate, TupleDesc tupDesc)
-{
-	TupleTableSlot *slot = planstate->ps_ResultTupleSlot;
-
-	ExecSetSlotDescriptor(slot, tupDesc);
-}
-
-/* ----------------
- *		ExecAssignResultTypeFromTL
- * ----------------
- */
-void
-ExecAssignResultTypeFromTL(PlanState *planstate)
-{
-	bool		hasoid;
-	TupleDesc	tupDesc;
-
-	if (ExecContextForcesOids(planstate, &hasoid))
-	{
-		/* context forces OID choice; hasoid is now set correctly */
-	}
-	else
-	{
-		/* given free choice, don't leave space for OIDs in result tuples */
-		hasoid = false;
-	}
-
-	/*
-	 * ExecTypeFromTL needs the parse-time representation of the tlist, not a
-	 * list of ExprStates.  This is good because some plan nodes don't bother
-	 * to set up planstate->targetlist ...
-	 */
-	tupDesc = ExecTypeFromTL(planstate->plan->targetlist, hasoid);
-	ExecAssignResultType(planstate, tupDesc);
-}
-
-/* ----------------
  *		ExecGetResultType
  * ----------------
  */
@@ -554,7 +515,7 @@ ExecAssignScanType(ScanState *scanstate, TupleDesc tupDesc)
  * ----------------
  */
 void
-ExecAssignScanTypeFromOuterPlan(ScanState *scanstate)
+ExecCreateScanSlotForOuterPlan(EState *estate, ScanState *scanstate)
 {
 	PlanState  *outerPlan;
 	TupleDesc	tupDesc;
@@ -562,7 +523,7 @@ ExecAssignScanTypeFromOuterPlan(ScanState *scanstate)
 	outerPlan = outerPlanState(scanstate);
 	tupDesc = ExecGetResultType(outerPlan);
 
-	ExecAssignScanType(scanstate, tupDesc);
+	ExecInitScanTupleSlot(estate, scanstate, tupDesc);
 }
 
 

@@ -192,19 +192,11 @@ ExecInitSort(Sort *node, EState *estate, int eflags)
 	sortstate->tuplesortstate = NULL;
 
 	/*
-	 * Miscellaneous initialization
-	 *
-	 * Sort nodes don't initialize their ExprContexts because they never call
-	 * ExecQual or ExecProject.
-	 */
-
-	/*
 	 * tuple table initialization
 	 *
 	 * sort nodes only return scan tuples from their sorted relation.
 	 */
-	ExecInitResultTupleSlot(estate, &sortstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &sortstate->ss);
+	ExecInitResultTupleSlotTL(estate, &sortstate->ss.ps);
 
 	/*
 	 * initialize child nodes
@@ -220,9 +212,15 @@ ExecInitSort(Sort *node, EState *estate, int eflags)
 	 * initialize tuple type.  no need to initialize projection info because
 	 * this node doesn't do projections.
 	 */
-	ExecAssignResultTypeFromTL(&sortstate->ss.ps);
-	ExecAssignScanTypeFromOuterPlan(&sortstate->ss);
+	ExecCreateScanSlotForOuterPlan(estate, &sortstate->ss);
 	sortstate->ss.ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * Sort nodes don't initialize their ExprContexts because they never call
+	 * ExecQual or ExecProject.
+	 */
 
 	SO1_printf("ExecInitSort: %s\n",
 			   "sort node initialized");

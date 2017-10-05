@@ -364,7 +364,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	/*
 	 * Tuple table initialization (XXX not actually used...)
 	 */
-	ExecInitResultTupleSlot(estate, &limitstate->ps);
+	ExecInitResultTupleSlotTL(estate, &limitstate->ps);
 
 	/*
 	 * then initialize outer plan
@@ -376,7 +376,6 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * limit nodes do no projections, so initialize projection info for this
 	 * node appropriately
 	 */
-	ExecAssignResultTypeFromTL(&limitstate->ps);
 	limitstate->ps.ps_ProjInfo = NULL;
 
 	return limitstate;

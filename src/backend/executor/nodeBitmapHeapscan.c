@@ -40,6 +40,7 @@
 #include "access/relscan.h"
 #include "access/transam.h"
 #include "executor/execdebug.h"
+#include "executor/execScan.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -825,23 +826,33 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &scanstate->ss.ps);
 
 	/*
+	 * open the base relation and acquire appropriate lock on it.
+	 */
+	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+
+	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
+
+	/*
+	 * get the scan type from the relation descriptor.
+	 */
+	ExecInitScanTupleSlot(estate, &scanstate->ss,
+						  RelationGetDescr(currentRelation));
+
+	/*
+	 * Initialize result tuple type and projection info.
+	 */
+	ExecAssignScanProjectionInfo(&scanstate->ss);
+
+	/*
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
 		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
 	scanstate->bitmapqualorig =
 		ExecInitQual(node->bitmapqualorig, (PlanState *) scanstate);
-
-	/*
-	 * tuple table initialization
-	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
-
-	/*
-	 * open the base relation and acquire appropriate lock on it.
-	 */
-	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
 
 	/*
 	 * Determine the maximum for prefetch_target.  If the tablespace has a
@@ -869,17 +880,6 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 														 estate->es_snapshot,
 														 0,
 														 NULL);
-
-	/*
-	 * get the scan type from the relation descriptor.
-	 */
-	ExecAssignScanType(&scanstate->ss, RelationGetDescr(currentRelation));
-
-	/*
-	 * Initialize result tuple type and projection info.
-	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
-	ExecAssignScanProjectionInfo(&scanstate->ss);
 
 	/*
 	 * initialize child nodes

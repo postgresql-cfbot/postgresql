@@ -200,19 +200,11 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	matstate->tuplestorestate = NULL;
 
 	/*
-	 * Miscellaneous initialization
-	 *
-	 * Materialization nodes don't need ExprContexts because they never call
-	 * ExecQual or ExecProject.
-	 */
-
-	/*
 	 * tuple table initialization
 	 *
 	 * material nodes only return tuples from their materialized relation.
 	 */
-	ExecInitResultTupleSlot(estate, &matstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &matstate->ss);
+	ExecInitResultTupleSlotTL(estate, &matstate->ss.ps);
 
 	/*
 	 * initialize child nodes
@@ -229,9 +221,15 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	 * initialize tuple type.  no need to initialize projection info because
 	 * this node doesn't do projections.
 	 */
-	ExecAssignResultTypeFromTL(&matstate->ss.ps);
-	ExecAssignScanTypeFromOuterPlan(&matstate->ss);
+	ExecCreateScanSlotForOuterPlan(estate, &matstate->ss);
 	matstate->ss.ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * Materialization nodes don't need ExprContexts because they never call
+	 * ExecQual or ExecProject.
+	 */
 
 	return matstate;
 }

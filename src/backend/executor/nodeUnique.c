@@ -143,7 +143,7 @@ ExecInitUnique(Unique *node, EState *estate, int eflags)
 	/*
 	 * Tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &uniquestate->ps);
+	ExecInitResultTupleSlotTL(estate, &uniquestate->ps);
 
 	/*
 	 * then initialize outer plan
@@ -154,7 +154,6 @@ ExecInitUnique(Unique *node, EState *estate, int eflags)
 	 * unique nodes do no projections, so initialize projection info for this
 	 * node appropriately
 	 */
-	ExecAssignResultTypeFromTL(&uniquestate->ps);
 	uniquestate->ps.ps_ProjInfo = NULL;
 
 	/*

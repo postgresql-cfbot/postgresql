@@ -186,6 +186,7 @@ with_tcl	= @with_tcl@
 with_openssl	= @with_openssl@
 with_selinux	= @with_selinux@
 with_systemd	= @with_systemd@
+with_llvm	= @with_llvm@
 with_libxml	= @with_libxml@
 with_libxslt	= @with_libxslt@
 with_system_tzdata = @with_system_tzdata@
@@ -270,6 +271,7 @@ LDAP_LIBS_FE = @LDAP_LIBS_FE@
 LDAP_LIBS_BE = @LDAP_LIBS_BE@
 UUID_LIBS = @UUID_LIBS@
 UUID_EXTRA_OBJS = @UUID_EXTRA_OBJS@
+LLVM_LIBS=@LLVM_LIBS@
 LD = @LD@
 with_gnu_ld = @with_gnu_ld@
 
@@ -812,6 +814,10 @@ ifndef COMPILE.c
 COMPILE.c = $(CC) $(CFLAGS) $(CPPFLAGS) -c
 endif
 
+ifndef COMPILE.bc
+COMPILE.bc = $(CC) $(filter-out -g3 -g -ggdb3 -fno-strict-aliasing, $(CFLAGS)) -fstrict-aliasing $(CPPFLAGS) -emit-llvm -c
+endif
+
 DEPDIR = .deps
 
 ifeq ($(GCC), yes)
@@ -820,6 +826,10 @@ ifeq ($(GCC), yes)
 %.o : %.c
 	@if test ! -d $(DEPDIR); then mkdir -p $(DEPDIR); fi
 	$(COMPILE.c) -o $@ $< -MMD -MP -MF $(DEPDIR)/$(*F).Po
+
+%.bc : %.c %.o
+	@if test ! -d $(DEPDIR); then mkdir -p $(DEPDIR); fi
+	$(COMPILE.bc) -o $@ $<
 
 endif # GCC
 

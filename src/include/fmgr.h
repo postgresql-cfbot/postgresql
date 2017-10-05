@@ -196,7 +196,18 @@ extern void fmgr_info_copy(FmgrInfo *dstinfo, FmgrInfo *srcinfo,
  * Note: it'd be nice if these could be macros, but I see no way to do that
  * without evaluating the arguments multiple times, which is NOT acceptable.
  */
-extern struct varlena *pg_detoast_datum(struct varlena *datum);
+#ifndef FRONTEND
+extern struct varlena *heap_tuple_untoast_attr(struct varlena *attr);
+static inline struct varlena *
+pg_detoast_datum(struct varlena *datum)
+{
+	if (VARATT_IS_EXTENDED(datum))
+		return heap_tuple_untoast_attr(datum);
+	else
+		return datum;
+}
+#endif
+
 extern struct varlena *pg_detoast_datum_copy(struct varlena *datum);
 extern struct varlena *pg_detoast_datum_slice(struct varlena *datum,
 					   int32 first, int32 count);

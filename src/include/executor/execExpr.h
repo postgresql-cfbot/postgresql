@@ -15,6 +15,7 @@
 #define EXEC_EXPR_H
 
 #include "nodes/execnodes.h"
+#include "executor/nodeAgg.h"
 
 /* forward reference to avoid circularity */
 struct ArrayRefState;
@@ -45,12 +46,8 @@ typedef enum ExprEvalOp
 	EEOP_SCAN_FETCHSOME,
 
 	/* compute non-system Var value */
-	/* "FIRST" variants are used only the first time through */
-	EEOP_INNER_VAR_FIRST,
 	EEOP_INNER_VAR,
-	EEOP_OUTER_VAR_FIRST,
 	EEOP_OUTER_VAR,
-	EEOP_SCAN_VAR_FIRST,
 	EEOP_SCAN_VAR,
 
 	/* compute system Var value */
@@ -62,7 +59,6 @@ typedef enum ExprEvalOp
 	EEOP_WHOLEROW,
 
 	/* compute non-system Var value, assign it into ExprState's resultslot */
-	/* (these are not used if _FIRST checks would be needed) */
 	EEOP_ASSIGN_INNER_VAR,
 	EEOP_ASSIGN_OUTER_VAR,
 	EEOP_ASSIGN_SCAN_VAR,
@@ -212,6 +208,15 @@ typedef enum ExprEvalOp
 	EEOP_SUBPLAN,
 	EEOP_ALTERNATIVE_SUBPLAN,
 
+	EEOP_AGG_FILTER,
+	EEOP_AGG_STRICT_INPUT_CHECK,
+	EEOP_AGG_INIT_TRANS,
+	EEOP_AGG_STRICT_TRANS_CHECK,
+	EEOP_AGG_PLAIN_TRANS_BYVAL,
+	EEOP_AGG_PLAIN_TRANS,
+	EEOP_AGG_ORDERED_TRANS_DATUM,
+	EEOP_AGG_ORDERED_TRANS_TUPLE,
+
 	/* non-existent operation, used e.g. to check array lengths */
 	EEOP_LAST
 } ExprEvalOp;
@@ -243,6 +248,7 @@ typedef struct ExprEvalStep
 		{
 			/* attribute number up to which to fetch (inclusive) */
 			int			last_var;
+			TupleDesc	known_desc;
 		}			fetch;
 
 		/* for EEOP_INNER/OUTER/SCAN_[SYS]VAR[_FIRST] */
@@ -558,6 +564,58 @@ typedef struct ExprEvalStep
 			/* out-of-line state, created by nodeSubplan.c */
 			AlternativeSubPlanState *asstate;
 		}			alternative_subplan;
+
+		struct
+		{
+			int jumpfalse;
+		} agg_filter;
+
+		struct
+		{
+			bool *nulls;
+			int nargs;
+			int jumpnull;
+		} agg_strict_input_check;
+
+		struct
+		{
+			AggState *aggstate;
+			AggStatePerTrans pertrans;
+			ExprContext *aggcontext;
+			int setno;
+			int transno;
+			int setoff;
+			int jumpnull;
+		} agg_init_trans;
+
+		struct
+		{
+			AggState *aggstate;
+			int setno;
+			int transno;
+			int setoff;
+			int jumpnull;
+		} agg_strict_trans_check;
+
+		struct
+		{
+			AggState *aggstate;
+			AggStatePerTrans pertrans;
+			ExprContext *aggcontext;
+			int setno;
+			int transno;
+			int setoff;
+		} agg_plain_trans;
+
+		struct
+		{
+			AggState *aggstate;
+			AggStatePerTrans pertrans;
+			ExprContext *aggcontext;
+			int setno;
+			int transno;
+			int setoff;
+		} agg_ordered_trans;
 	}			d;
 } ExprEvalStep;
 
@@ -598,9 +656,14 @@ typedef struct ArrayRefState
 } ArrayRefState;
 
 
-extern void ExecReadyInterpretedExpr(ExprState *state);
+extern void ExecReadyInterpretedExpr(ExprState *state, PlanState *parent);
+extern bool ExecReadyCompiledExpr(ExprState *state, PlanState *parent);
 
 extern ExprEvalOp ExecEvalStepOp(ExprState *state, ExprEvalStep *op);
+
+extern void CheckVarSlotCompatibility(TupleTableSlot *slot, int attnum, Oid vartype);
+extern Datum ExecInterpExprStillValid(ExprState *state, ExprContext *econtext, bool *isNull);
+extern void CheckExprStillValid(ExprState *state, ExprContext *econtext, bool *isNull);
 
 /*
  * Non fast-path execution functions. These are externs instead of statics in
@@ -646,5 +709,17 @@ extern void ExecEvalAlternativeSubPlan(ExprState *state, ExprEvalStep *op,
 						   ExprContext *econtext);
 extern void ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op,
 					ExprContext *econtext);
+
+extern void ExecEvalAggOrderedTransDatum(ExprState *state, ExprEvalStep *op,
+										 ExprContext *econtext);
+extern void ExecEvalAggOrderedTransTuple(ExprState *state, ExprEvalStep *op,
+										 ExprContext *econtext);
+
+
+extern void ExecAggInitGroup(AggState *aggstate, AggStatePerTrans pertrans, AggStatePerGroup pergroup);
+
+extern Datum ExecAggTransRepatriate(AggState *aggstate, AggStatePerTrans pertrans,
+									Datum newValue, bool newValueIsNull,
+									Datum oldValue, bool oldValueIsNull);
 
 #endif							/* EXEC_EXPR_H */

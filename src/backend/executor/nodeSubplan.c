@@ -469,6 +469,9 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 
 	Assert(subplan->subLinkType == ANY_SUBLINK);
 
+	slot = planstate->ps_ResultTupleSlot;
+	Assert(slot);
+
 	/*
 	 * If we already had any hash tables, destroy 'em; then create empty hash
 	 * table(s).
@@ -494,8 +497,11 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 	if (nbuckets < 1)
 		nbuckets = 1;
 
-	node->hashtable = BuildTupleHashTable(ncols,
+	node->hashtable = BuildTupleHashTable(node->parent,
+										  slot->tts_tupleDescriptor,
+										  ncols,
 										  node->keyColIdx,
+										  NULL,
 										  node->tab_eq_funcs,
 										  node->tab_hash_funcs,
 										  nbuckets,
@@ -514,8 +520,11 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 			if (nbuckets < 1)
 				nbuckets = 1;
 		}
-		node->hashnulls = BuildTupleHashTable(ncols,
+		node->hashnulls = BuildTupleHashTable(node->parent,
+											  slot->tts_tupleDescriptor,
+											  ncols,
 											  node->keyColIdx,
+											  NULL,
 											  node->tab_eq_funcs,
 											  node->tab_hash_funcs,
 											  nbuckets,

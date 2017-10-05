@@ -92,7 +92,11 @@ extern int	tm2interval(struct pg_tm *tm, fsec_t fsec, Interval *span);
 extern Timestamp SetEpochTimestamp(void);
 extern void GetEpochTime(struct pg_tm *tm);
 
-extern int	timestamp_cmp_internal(Timestamp dt1, Timestamp dt2);
+static inline int
+timestamp_cmp_internal(Timestamp dt1, Timestamp dt2)
+{
+	return (dt1 < dt2) ? -1 : ((dt1 > dt2) ? 1 : 0);
+}
 
 /* timestamp comparison works for timestamptz also */
 #define timestamptz_cmp_internal(dt1,dt2)	timestamp_cmp_internal(dt1, dt2)

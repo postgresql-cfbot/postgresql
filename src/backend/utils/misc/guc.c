@@ -41,7 +41,9 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "commands/trigger.h"
+#include "executor/executor.h"
 #include "funcapi.h"
+#include "lib/llvmjit.h"
 #include "libpq/auth.h"
 #include "libpq/be-fsstubs.h"
 #include "libpq/libpq.h"
@@ -996,6 +998,65 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+
+#ifdef USE_LLVM
+	{
+		{"jit_log_ir", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("just-in-time debugging: print IR to stdout"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&jit_log_ir,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"jit_dump_bitcode", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("just-in-time debuggin: write out bitcode"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&jit_dump_bitcode,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"jit_expressions", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("just-in-time compile expression evaluation"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&jit_expressions,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"jit_tuple_deforming", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("just-in-time compile tuple deforming"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&jit_tuple_deforming,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"jit_perform_inlining", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("inline functions for JIT"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&jit_perform_inlining,
+		false,
+		NULL, NULL, NULL
+	},
+
+#endif
+
 	{
 		{"zero_damaged_pages", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Continues processing past damaged page headers."),
@@ -3638,6 +3699,19 @@ static struct config_string ConfigureNamesString[] =
 		"",
 		check_wal_consistency_checking, assign_wal_consistency_checking, NULL
 	},
+
+#ifdef USE_LLVM
+	{
+		{"jit_inline_directories", PGC_BACKEND, DEVELOPER_OPTIONS,
+			gettext_noop("Sets the directories where inline contents for JIT are located."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&jit_inline_directories,
+		"",
+		NULL, NULL, NULL
+	},
+#endif
 
 	/* End-of-list marker */
 	{

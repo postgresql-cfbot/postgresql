@@ -153,17 +153,10 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	appendstate->as_nplans = nplans;
 
 	/*
-	 * Miscellaneous initialization
-	 *
-	 * Append plans don't have expression contexts because they never call
-	 * ExecQual or ExecProject.
-	 */
-
-	/*
 	 * append nodes still have Result slots, which hold pointers to tuples, so
 	 * we have to initialize them.
 	 */
-	ExecInitResultTupleSlot(estate, &appendstate->ps);
+	ExecInitResultTupleSlotTL(estate, &appendstate->ps);
 
 	/*
 	 * call ExecInitNode on each of the plans to be executed and save the
@@ -181,8 +174,14 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	/*
 	 * initialize output tuple type
 	 */
-	ExecAssignResultTypeFromTL(&appendstate->ps);
 	appendstate->ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * Append plans don't have expression contexts because they never call
+	 * ExecQual or ExecProject.
+	 */
 
 	/*
 	 * initialize to scan first subplan

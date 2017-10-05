@@ -60,7 +60,11 @@
 #include "access/sysattr.h"
 #include "access/tuptoaster.h"
 #include "executor/tuptable.h"
+#include "nodes/execnodes.h"
 #include "utils/expandeddatum.h"
+#include "utils/memutils.h"
+#include "utils/resowner.h"
+#include "lib/llvmjit.h"
 
 
 /* Does att's datatype allow packing into the 1-byte-header varlena format? */
@@ -69,6 +73,11 @@
 /* Use this if it's already known varlena */
 #define VARLENA_ATT_IS_PACKABLE(att) \
 	((att)->attstorage != 'p')
+
+#ifdef USE_LLVM
+bool jit_tuple_deforming = false;
+
+#endif /* USE_LLVM */
 
 
 /* ----------------------------------------------------------------
@@ -1046,6 +1055,7 @@ slot_deform_tuple(TupleTableSlot *slot, int natts)
 	long		off;			/* offset in tuple data */
 	bits8	   *bp = tup->t_bits;	/* ptr to null bitmap in tuple */
 	bool		slow;			/* can we use/set attcacheoff? */
+	int			valnatts = natts;
 
 	/*
 	 * Check whether the first call for this tuple, and initialize or restore
@@ -1064,6 +1074,9 @@ slot_deform_tuple(TupleTableSlot *slot, int natts)
 		off = slot->tts_off;
 		slow = slot->tts_slow;
 	}
+
+
+	natts = Min(natts, Min(HeapTupleHeaderGetNatts(tuple->t_data), slot->tts_tupleDescriptor->natts));
 
 	tp = (char *) tup + tup->t_hoff;
 
@@ -1118,10 +1131,16 @@ slot_deform_tuple(TupleTableSlot *slot, int natts)
 			slow = true;		/* can't use attcacheoff anymore */
 	}
 
+	for (; attnum < valnatts; attnum++)
+	{
+		values[attnum] = 0;
+		isnull[attnum] = 1;
+	}
+
 	/*
 	 * Save state for next execution
 	 */
-	slot->tts_nvalid = attnum;
+	slot->tts_nvalid = valnatts;
 	slot->tts_off = off;
 	slot->tts_slow = slow;
 }
@@ -1142,46 +1161,38 @@ Datum
 slot_getattr(TupleTableSlot *slot, int attnum, bool *isnull)
 {
 	HeapTuple	tuple = slot->tts_tuple;
-	TupleDesc	tupleDesc = slot->tts_tupleDescriptor;
-	HeapTupleHeader tup;
+	TupleDesc	tupleDesc PG_USED_FOR_ASSERTS_ONLY = slot->tts_tupleDescriptor;
 
 	/*
 	 * system attributes are handled by heap_getsysattr
 	 */
-	if (attnum <= 0)
+	if (unlikely(attnum <= 0))
 	{
-		if (tuple == NULL)		/* internal error */
-			elog(ERROR, "cannot extract system attribute from virtual tuple");
-		if (tuple == &(slot->tts_minhdr))	/* internal error */
-			elog(ERROR, "cannot extract system attribute from minimal tuple");
+
+		/* cannot extract system attribute from virtual tuple */
+		Assert(tuple);
+		/* "cannot extract system attribute from minimal tuple */
+		Assert(tuple != &(slot->tts_minhdr));
 		return heap_getsysattr(tuple, attnum, tupleDesc, isnull);
 	}
 
 	/*
 	 * fast path if desired attribute already cached
 	 */
-	if (attnum <= slot->tts_nvalid)
+	if (likely(attnum <= slot->tts_nvalid))
 	{
 		*isnull = slot->tts_isnull[attnum - 1];
 		return slot->tts_values[attnum - 1];
 	}
 
 	/*
-	 * return NULL if attnum is out of range according to the tupdesc
+	 * While tuples might possibly be wider than the slot, they should never
+	 * be accessed. We used to return NULL if so, but that a) isn't free b)
+	 * seems more likely to hide bugs than anything.
 	 */
-	if (attnum > tupleDesc->natts)
-	{
-		*isnull = true;
-		return (Datum) 0;
-	}
+	Assert(attnum <= tupleDesc->natts);
 
-	/*
-	 * otherwise we had better have a physical tuple (tts_nvalid should equal
-	 * natts in all virtual-tuple cases)
-	 */
-	if (tuple == NULL)			/* internal error */
-		elog(ERROR, "cannot extract attribute from empty tuple slot");
-
+#ifdef NOT_ANYMORE
 	/*
 	 * return NULL if attnum is out of range according to the tuple
 	 *
@@ -1195,26 +1206,13 @@ slot_getattr(TupleTableSlot *slot, int attnum, bool *isnull)
 		*isnull = true;
 		return (Datum) 0;
 	}
+#endif
 
 	/*
-	 * check if target attribute is null: no point in groveling through tuple
+	 * otherwise we had better have a physical tuple (tts_nvalid should equal
+	 * natts in all virtual-tuple cases)
 	 */
-	if (HeapTupleHasNulls(tuple) && att_isnull(attnum - 1, tup->t_bits))
-	{
-		*isnull = true;
-		return (Datum) 0;
-	}
-
-	/*
-	 * If the attribute's column has been dropped, we force a NULL result.
-	 * This case should not happen in normal use, but it could happen if we
-	 * are executing a plan cached before the column was dropped.
-	 */
-	if (TupleDescAttr(tupleDesc, attnum - 1)->attisdropped)
-	{
-		*isnull = true;
-		return (Datum) 0;
-	}
+	Assert(tuple != NULL);
 
 	/*
 	 * Extract the attribute, along with any preceding attributes.
@@ -1238,8 +1236,7 @@ void
 slot_getallattrs(TupleTableSlot *slot)
 {
 	int			tdesc_natts = slot->tts_tupleDescriptor->natts;
-	int			attnum;
-	HeapTuple	tuple;
+	HeapTuple	tuple PG_USED_FOR_ASSERTS_ONLY;
 
 	/* Quick out if we have 'em all already */
 	if (slot->tts_nvalid == tdesc_natts)
@@ -1250,27 +1247,10 @@ slot_getallattrs(TupleTableSlot *slot)
 	 * natts in all virtual-tuple cases)
 	 */
 	tuple = slot->tts_tuple;
-	if (tuple == NULL)			/* internal error */
-		elog(ERROR, "cannot extract attribute from empty tuple slot");
+	Assert(tuple != NULL);
 
-	/*
-	 * load up any slots available from physical tuple
-	 */
-	attnum = HeapTupleHeaderGetNatts(tuple->t_data);
-	attnum = Min(attnum, tdesc_natts);
-
-	slot_deform_tuple(slot, attnum);
-
-	/*
-	 * If tuple doesn't have all the atts indicated by tupleDesc, read the
-	 * rest as null
-	 */
-	for (; attnum < tdesc_natts; attnum++)
-	{
-		slot->tts_values[attnum] = (Datum) 0;
-		slot->tts_isnull[attnum] = true;
-	}
-	slot->tts_nvalid = tdesc_natts;
+	slot_deform_tuple(slot, tdesc_natts);
+	Assert(tdesc_natts <= slot->tts_nvalid);
 }
 
 /*
@@ -1281,43 +1261,22 @@ slot_getallattrs(TupleTableSlot *slot)
 void
 slot_getsomeattrs(TupleTableSlot *slot, int attnum)
 {
-	HeapTuple	tuple;
-	int			attno;
-
 	/* Quick out if we have 'em all already */
 	if (slot->tts_nvalid >= attnum)
 		return;
 
 	/* Check for caller error */
-	if (attnum <= 0 || attnum > slot->tts_tupleDescriptor->natts)
-		elog(ERROR, "invalid attribute number %d", attnum);
+	Assert(attnum > 0);
+	Assert(attnum <= slot->tts_tupleDescriptor->natts);
 
 	/*
 	 * otherwise we had better have a physical tuple (tts_nvalid should equal
 	 * natts in all virtual-tuple cases)
 	 */
-	tuple = slot->tts_tuple;
-	if (tuple == NULL)			/* internal error */
-		elog(ERROR, "cannot extract attribute from empty tuple slot");
+	Assert(slot->tts_tuple != NULL); /* internal error */
 
-	/*
-	 * load up any slots available from physical tuple
-	 */
-	attno = HeapTupleHeaderGetNatts(tuple->t_data);
-	attno = Min(attno, attnum);
-
-	slot_deform_tuple(slot, attno);
-
-	/*
-	 * If tuple doesn't have all the atts indicated by tupleDesc, read the
-	 * rest as null
-	 */
-	for (; attno < attnum; attno++)
-	{
-		slot->tts_values[attno] = (Datum) 0;
-		slot->tts_isnull[attno] = true;
-	}
-	slot->tts_nvalid = attnum;
+	slot_deform_tuple(slot, attnum);
+	Assert(attnum <= slot->tts_nvalid);
 }
 
 /*
@@ -1329,38 +1288,34 @@ bool
 slot_attisnull(TupleTableSlot *slot, int attnum)
 {
 	HeapTuple	tuple = slot->tts_tuple;
-	TupleDesc	tupleDesc = slot->tts_tupleDescriptor;
+	TupleDesc	tupleDesc PG_USED_FOR_ASSERTS_ONLY = slot->tts_tupleDescriptor;
 
 	/*
 	 * system attributes are handled by heap_attisnull
 	 */
-	if (attnum <= 0)
+	if (unlikely(attnum <= 0))
 	{
-		if (tuple == NULL)		/* internal error */
-			elog(ERROR, "cannot extract system attribute from virtual tuple");
-		if (tuple == &(slot->tts_minhdr))	/* internal error */
-			elog(ERROR, "cannot extract system attribute from minimal tuple");
+		/* cannot extract system attribute from virtual tuple */
+		Assert(tuple);
+		/* "cannot extract system attribute from minimal tuple */
+		Assert(tuple != &(slot->tts_minhdr));
 		return heap_attisnull(tuple, attnum);
 	}
 
 	/*
 	 * fast path if desired attribute already cached
 	 */
-	if (attnum <= slot->tts_nvalid)
+	if (likely(attnum <= slot->tts_nvalid))
 		return slot->tts_isnull[attnum - 1];
 
-	/*
-	 * return NULL if attnum is out of range according to the tupdesc
-	 */
-	if (attnum > tupleDesc->natts)
-		return true;
+	/* Check for caller error */
+	Assert(attnum <= tupleDesc->natts);
 
 	/*
 	 * otherwise we had better have a physical tuple (tts_nvalid should equal
 	 * natts in all virtual-tuple cases)
 	 */
-	if (tuple == NULL)			/* internal error */
-		elog(ERROR, "cannot extract attribute from empty tuple slot");
+	Assert(tuple != NULL);
 
 	/* and let the tuple tell it */
 	return heap_attisnull(tuple, attnum);
@@ -1530,3 +1485,762 @@ minimal_tuple_from_heap_tuple(HeapTuple htup)
 	result->t_len = len;
 	return result;
 }
+
+
+extern size_t varsize_any(void *p);
+
+size_t
+varsize_any(void *p)
+{
+	return VARSIZE_ANY(p);
+}
+
+#ifdef USE_LLVM
+
+/* build extern reference for varsize_any */
+static LLVMValueRef
+create_varsize_any(LLVMJitContext *context, LLVMModuleRef mod)
+{
+	LLVMTypeRef *param_types = palloc(sizeof(LLVMTypeRef) * 1);
+	LLVMTypeRef sig;
+	LLVMValueRef fn;
+	LLVMModuleRef inline_mod;
+	const char *nm = "varsize_any";
+
+	fn = LLVMGetNamedFunction(mod, nm);
+	if (fn)
+		return fn;
+
+	param_types[0] = LLVMPointerType(LLVMInt8Type(), 0);
+	sig = LLVMFunctionType(LLVMInt64Type(), param_types, 1, 0);
+	fn = LLVMAddFunction(mod, nm, sig);
+
+
+	inline_mod = llvm_module_for_function(nm);
+	if (inline_mod)
+	{
+		context->inline_modules =
+			list_append_unique_ptr(context->inline_modules,
+								   inline_mod);
+	}
+
+	return fn;
+}
+
+/* build extern reference for strlen */
+static LLVMValueRef
+create_strlen(LLVMJitContext *context, LLVMModuleRef mod)
+{
+	LLVMTypeRef *param_types = palloc(sizeof(LLVMTypeRef) * 1);
+	LLVMTypeRef sig;
+	LLVMValueRef fn;
+	LLVMModuleRef inline_mod;
+	const char *nm = "strlen";
+
+	fn = LLVMGetNamedFunction(mod, nm);
+	if (fn)
+		return fn;
+
+	param_types[0] = LLVMPointerType(LLVMInt8Type(), 0);
+	sig = LLVMFunctionType(TypeSizeT, param_types, 1, 0);
+	fn = LLVMAddFunction(mod, nm, sig);
+
+	inline_mod = llvm_module_for_function(nm);
+	if (inline_mod)
+	{
+		context->inline_modules =
+			list_append_unique_ptr(context->inline_modules,
+								   inline_mod);
+	}
+
+	return fn;
+}
+
+
+static LLVMValueRef
+get_Memset(LLVMModuleRef mod)
+{
+	LLVMTypeRef sig;
+	LLVMValueRef fn;
+	LLVMTypeRef param_types[5];
+	const char *nm = "llvm.memset.p0i8.i32";
+
+	fn = LLVMGetNamedFunction(mod, nm);
+	if (fn)
+		return fn;
+
+	param_types[0] = LLVMPointerType(LLVMInt8Type(), 0); /* addr */
+	param_types[1] = LLVMInt8Type(); /* val */
+	param_types[2] = LLVMInt32Type(); /* len */
+	param_types[3] = LLVMInt32Type(); /* align */
+	param_types[4] = LLVMInt1Type(); /* volatile */
+
+	sig = LLVMFunctionType(LLVMVoidType(), param_types, lengthof(param_types), 0);
+	fn = LLVMAddFunction(mod, nm, sig);
+
+	LLVMSetFunctionCallConv(fn, LLVMCCallConv);
+
+	Assert(LLVMGetIntrinsicID(fn));
+
+	return fn;
+}
+
+/*
+ * Create a function that deforms a tuple of type desc up to natts columns.
+ */
+LLVMValueRef
+slot_compile_deform(LLVMJitContext *context, TupleDesc desc, int natts)
+{
+	char *funcname;
+
+	LLVMModuleRef mod;
+	LLVMBuilderRef builder;
+
+	LLVMTypeRef deform_sig;
+	LLVMValueRef deform_fn;
+
+	LLVMBasicBlockRef entry;
+	LLVMBasicBlockRef adjust_unavail_cols;
+	LLVMBasicBlockRef find_startblock;
+
+	LLVMBasicBlockRef outblock;
+	LLVMBasicBlockRef deadblock;
+	LLVMBasicBlockRef *attcheckattnoblocks;
+	LLVMBasicBlockRef *attstartblocks;
+	LLVMBasicBlockRef *attisnullblocks;
+	LLVMBasicBlockRef *attcheckalignblocks;
+	LLVMBasicBlockRef *attalignblocks;
+	LLVMBasicBlockRef *attstoreblocks;
+
+	LLVMValueRef v_offp;
+
+	LLVMValueRef v_tupdata_base;
+	LLVMValueRef v_tts_values;
+	LLVMValueRef v_tts_nulls;
+	LLVMValueRef v_slotoffp;
+	LLVMValueRef v_slowp;
+	LLVMValueRef v_nvalidp, v_nvalid;
+	LLVMValueRef v_maxatt;
+
+	LLVMValueRef v_slot;
+
+	LLVMValueRef v_tupleheaderp;
+	LLVMValueRef v_tuplep;
+	LLVMValueRef v_infomask1;
+	LLVMValueRef v_infomask2;
+	LLVMValueRef v_bits;
+
+	LLVMValueRef v_hoff;
+
+	LLVMValueRef v_hasnulls;
+
+	/* last column (0 indexed) guaranteed to exist */
+	int guaranteed_column_number = -1;
+
+	/* current known alignment */
+	int attcuralign = 0;
+	/* if true, attcuralign describes definite offset of column */
+	bool attguaranteedalign = true;
+
+	int attnum;
+
+	mod = llvm_mutable_module(context);
+
+	funcname = psprintf("deform%d", context->counter++);
+
+	/*
+	 * Check which columns do have to exist, so we don't have to check the
+	 * rows natts unnecessarily.
+	 */
+	for (attnum = 0; attnum < desc->natts; attnum++)
+	{
+		if (TupleDescAttr(desc, attnum)->attnotnull)
+		{
+			guaranteed_column_number = attnum;
+		}
+	}
+
+	/* Create the signature and function */
+	{
+		LLVMTypeRef param_types[] = {
+			LLVMPointerType(StructTupleTableSlot, 0)};
+		deform_sig = LLVMFunctionType(LLVMVoidType(), param_types,
+									  lengthof(param_types), 0);
+	}
+	deform_fn = LLVMAddFunction(mod, funcname, deform_sig);
+	LLVMSetLinkage(deform_fn, LLVMInternalLinkage);
+	LLVMSetVisibility(deform_fn, LLVMDefaultVisibility);
+	LLVMSetParamAlignment(LLVMGetParam(deform_fn, 0), MAXIMUM_ALIGNOF);
+
+	entry = LLVMAppendBasicBlock(deform_fn, "entry");
+	adjust_unavail_cols = LLVMAppendBasicBlock(deform_fn, "adjust_unavail_cols");
+	find_startblock = LLVMAppendBasicBlock(deform_fn, "find_startblock");
+	outblock = LLVMAppendBasicBlock(deform_fn, "out");
+	deadblock = LLVMAppendBasicBlock(deform_fn, "deadblock");
+	builder = LLVMCreateBuilder();
+
+	attcheckattnoblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attstartblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attisnullblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attcheckalignblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attalignblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+	attstoreblocks = palloc(sizeof(LLVMBasicBlockRef) * natts);
+
+	attcuralign = 0;
+
+	LLVMPositionBuilderAtEnd(builder, entry);
+
+	/* perform allocas first, llvm only converts those to registers */
+	v_offp = LLVMBuildAlloca(builder, TypeSizeT, "v_offp");
+
+	v_slot = LLVMGetParam(deform_fn, 0);
+
+	v_tts_values = LLVMBuildLoad(builder,
+						   LLVMBuildStructGEP(builder, v_slot, 10, ""),
+						   "tts_values");
+	v_tts_nulls = LLVMBuildLoad(builder,
+							LLVMBuildStructGEP(builder, v_slot, 11, ""),
+							"tts_isnull");
+	v_slotoffp = LLVMBuildStructGEP(builder, v_slot, 14, "");
+	v_slowp = LLVMBuildStructGEP(builder, v_slot, 4, "");
+	v_nvalidp = LLVMBuildStructGEP(builder, v_slot, 9, "");
+
+	v_tupleheaderp = LLVMBuildLoad(
+		builder,
+		LLVMBuildStructGEP(builder, v_slot, 5, ""),
+		"tupleheader");
+	v_tuplep = LLVMBuildLoad(
+		builder,
+		LLVMBuildStructGEP(builder, v_tupleheaderp, 3, ""),
+		"tuple");
+	v_bits = LLVMBuildBitCast(
+		builder,
+		LLVMBuildStructGEP(builder, v_tuplep, 5, "t_bits"),
+		LLVMPointerType(LLVMInt8Type(), 0),
+		"");
+
+	v_infomask1 =
+		LLVMBuildLoad(builder,
+					  LLVMBuildStructGEP(builder, v_tuplep, 3, ""),
+					  "infomask1");
+	v_infomask2 =
+		LLVMBuildLoad(builder,
+					  LLVMBuildStructGEP(builder, v_tuplep, 2, ""),
+					  "infomask2");
+
+	/* t_infomask & HEAP_HASNULL */
+	v_hasnulls =
+		LLVMBuildICmp(builder, LLVMIntNE,
+					  LLVMBuildAnd(builder,
+								   LLVMConstInt(LLVMInt16Type(), HEAP_HASNULL, false),
+								   v_infomask1, ""),
+					  LLVMConstInt(LLVMInt16Type(), 0, false),
+					  "hasnulls");
+
+	/* t_infomask2 & HEAP_NATTS_MASK */
+	v_maxatt = LLVMBuildAnd(builder,
+							LLVMConstInt(LLVMInt16Type(), HEAP_NATTS_MASK, false),
+							v_infomask2, "");
+
+	v_hoff = LLVMBuildLoad(
+		builder,
+		LLVMBuildStructGEP(
+			builder,
+			v_tuplep,
+			4,
+			""),
+		"t_hoff");
+
+	v_tupdata_base = LLVMBuildGEP(
+		builder,
+		LLVMBuildBitCast(
+			builder,
+			v_tuplep,
+			LLVMPointerType(LLVMInt8Type(), 0),
+			""),
+		&v_hoff, 1,
+		"v_tupdata_base");
+
+	{
+		LLVMValueRef v_off_start;
+
+		v_off_start = LLVMBuildLoad(
+			builder,
+			LLVMBuildStructGEP(
+				builder,
+				v_slot,
+				14,
+				""),
+			"v_slot_off");
+		v_off_start = LLVMBuildZExt(builder, v_off_start, TypeSizeT, "");
+		LLVMBuildStore(builder, v_off_start, v_offp);
+	}
+
+	/* build the basic block for each attribute, need them as jump target */
+	for (attnum = 0; attnum < natts; attnum++)
+	{
+		char *blockname;
+
+		blockname = psprintf("block.attr.%d.attcheckattno", attnum);
+		attcheckattnoblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+		blockname = psprintf("block.attr.%d.start", attnum);
+		attstartblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+		blockname = psprintf("block.attr.%d.attisnull", attnum);
+		attisnullblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+		blockname = psprintf("block.attr.%d.attcheckalign", attnum);
+		attcheckalignblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+		blockname = psprintf("block.attr.%d.align", attnum);
+		attalignblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+		blockname = psprintf("block.attr.%d.store", attnum);
+		attstoreblocks[attnum] = LLVMAppendBasicBlock(deform_fn, blockname);
+		pfree(blockname);
+	}
+
+	/* check if the all attributes are available in tuple */
+	if ((natts - 1) <= guaranteed_column_number)
+	{
+		LLVMBuildBr(builder, adjust_unavail_cols);
+		LLVMPositionBuilderAtEnd(builder, adjust_unavail_cols);
+		LLVMBuildBr(builder, find_startblock);
+	}
+	else
+	{
+		LLVMValueRef v_set;
+		LLVMValueRef v_startset;
+		LLVMValueRef v_params[5];
+
+		LLVMBuildCondBr(
+			builder,
+			LLVMBuildICmp(builder, LLVMIntULT,
+						  v_maxatt,
+						  LLVMConstInt(LLVMInt16Type(), natts, false),
+					  ""),
+			adjust_unavail_cols,
+			find_startblock);
+
+		LLVMPositionBuilderAtEnd(builder, adjust_unavail_cols);
+
+		v_set = LLVMBuildSub(builder,
+							 LLVMConstInt(LLVMInt16Type(), attnum, false),
+							 v_maxatt, "");
+
+		v_startset = LLVMBuildGEP(builder, v_tts_nulls, &v_maxatt, 1, "");
+
+		v_params[0] = v_startset;
+		v_params[1] = LLVMConstInt(LLVMInt8Type(), 1, false);
+		v_params[2] = LLVMBuildZExt(builder, v_set, LLVMInt32Type(), "");
+		v_params[3] = LLVMConstInt(LLVMInt32Type(), 1, false);
+		v_params[4] = LLVMConstInt(LLVMInt1Type(), 0, false);
+
+		LLVMBuildCall(builder, get_Memset(mod),
+					  v_params, lengthof(v_params),"");
+		LLVMBuildBr(builder, find_startblock);
+	}
+
+	LLVMPositionBuilderAtEnd(builder, find_startblock);
+
+	v_nvalid = LLVMBuildLoad(builder, v_nvalidp, "");
+
+	/* build switch to go from nvalid to the right startblock */
+	if (true)
+	{
+		LLVMValueRef v_switch = LLVMBuildSwitch(builder, v_nvalid,
+												deadblock, natts);
+		for (attnum = 0; attnum < natts; attnum++)
+		{
+			LLVMValueRef v_attno = LLVMConstInt(LLVMInt32Type(), attnum, false);
+			LLVMAddCase(v_switch, v_attno, attcheckattnoblocks[attnum]);
+		}
+
+	}
+	else
+	{
+		/* jump from entry block to first block */
+		LLVMBuildBr(builder, attcheckattnoblocks[0]);
+	}
+
+	LLVMPositionBuilderAtEnd(builder, deadblock);
+	LLVMBuildUnreachable(builder);
+
+	for (attnum = 0; attnum < natts; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, attnum);
+		LLVMValueRef incby;
+		int alignto;
+		LLVMValueRef l_attno = LLVMConstInt(LLVMInt32Type(), attnum, false);
+		LLVMValueRef v_attdatap;
+		LLVMValueRef v_resultp;
+
+		/* build block checking whether we did all the necessary attributes */
+		LLVMPositionBuilderAtEnd(builder, attcheckattnoblocks[attnum]);
+
+		/* check if done, unless guaranteed to not be necessary */
+		if (attnum <= guaranteed_column_number)
+		{
+			LLVMBuildBr(builder, attstartblocks[attnum]);
+		}
+		else
+		{
+			LLVMValueRef v_islast;
+
+			v_islast = LLVMBuildICmp(builder, LLVMIntEQ,
+									 LLVMConstInt(LLVMInt16Type(), attnum, false),
+									 v_maxatt, "heap_natts");
+			LLVMBuildCondBr(
+				builder,
+				v_islast,
+				outblock,
+				attstartblocks[attnum]);
+		}
+		LLVMPositionBuilderAtEnd(builder, attstartblocks[attnum]);
+
+		/* check for nulls if necessary */
+		if (!att->attnotnull)
+		{
+			LLVMBasicBlockRef blockifnotnull;
+			LLVMBasicBlockRef blockifnull;
+			LLVMBasicBlockRef blocknext;
+			LLVMValueRef attisnull;
+			LLVMValueRef v_nullbyteno;
+			LLVMValueRef v_nullbytemask;
+			LLVMValueRef v_nullbyte;
+			LLVMValueRef v_nullbit;
+
+			blockifnotnull = attcheckalignblocks[attnum];
+			blockifnull = attisnullblocks[attnum];
+
+			if (attnum + 1 == natts)
+				blocknext = outblock;
+			else
+				blocknext = attcheckattnoblocks[attnum + 1];
+
+			/* FIXME: replace with neg */
+			v_nullbyteno = LLVMConstInt(LLVMInt32Type(), attnum >> 3, false);
+			v_nullbytemask = LLVMConstInt(LLVMInt8Type(), 1 << ((attnum) & 0x07), false);
+			v_nullbyte = LLVMBuildLoad(
+				builder,
+				LLVMBuildGEP(builder, v_bits,
+							 &v_nullbyteno, 1, ""),
+				"attnullbyte");
+
+			v_nullbit = LLVMBuildICmp(
+				builder,
+				LLVMIntEQ,
+				LLVMBuildAnd(builder, v_nullbyte, v_nullbytemask, ""),
+				LLVMConstInt(LLVMInt8Type(), 0, false),
+				"attisnull");
+
+			attisnull = LLVMBuildAnd(builder, v_hasnulls, v_nullbit, "");
+
+			LLVMBuildCondBr(builder, attisnull, blockifnull, blockifnotnull);
+
+			LLVMPositionBuilderAtEnd(builder, blockifnull);
+
+			/* store null-byte */
+			LLVMBuildStore(builder,
+						   LLVMConstInt(LLVMInt8Type(), 1, false),
+						   LLVMBuildGEP(builder, v_tts_nulls, &l_attno, 1, ""));
+			/* store zero datum */
+			LLVMBuildStore(builder,
+						   LLVMConstInt(TypeSizeT, 0, false),
+						   LLVMBuildGEP(builder, v_tts_values, &l_attno, 1, ""));
+
+			LLVMBuildBr(builder, blocknext);
+			attguaranteedalign = false;
+		}
+		else
+		{
+			LLVMBuildBr(builder, attcheckalignblocks[attnum]);
+
+			/* yuck, dirty hack */
+			LLVMPositionBuilderAtEnd(builder, attisnullblocks[attnum]);
+			LLVMBuildBr(builder, attcheckalignblocks[attnum]);
+		}
+		LLVMPositionBuilderAtEnd(builder, attcheckalignblocks[attnum]);
+
+		/* perform alignment */
+		if (att->attalign == 'i')
+		{
+			alignto = ALIGNOF_INT;
+		}
+		else if (att->attalign == 'c')
+		{
+			alignto = 1;
+		}
+		else if (att->attalign == 'd')
+		{
+			alignto = ALIGNOF_DOUBLE;
+		}
+		else if (att->attalign == 's')
+		{
+			alignto = ALIGNOF_SHORT;
+		}
+		else
+		{
+			elog(ERROR, "unknown alignment");
+			alignto = 0;
+		}
+
+		if (alignto > 1 &&
+			(attcuralign < 0 || attcuralign != TYPEALIGN(alignto, attcuralign)))
+		{
+			/*
+			 * If varlena, do only alignment if not short varlena. Check if
+			 * the byte is padding for that.
+			 */
+			if (att->attlen == -1)
+			{
+				LLVMValueRef possible_padbyte;
+				LLVMValueRef ispad;
+				LLVMValueRef v_off;
+
+				/* don't know if short varlena or not */
+				attguaranteedalign = false;
+
+				v_off = LLVMBuildLoad(builder, v_offp, "");
+
+				possible_padbyte = LLVMBuildLoad(
+					builder,
+					LLVMBuildGEP(builder, v_tupdata_base, &v_off, 1, ""),
+					"padbyte");
+				ispad = LLVMBuildICmp(
+					builder,
+					LLVMIntEQ,
+					possible_padbyte,
+					LLVMConstInt(LLVMInt8Type(), 0, false),
+					"ispadbyte");
+				LLVMBuildCondBr(
+					builder, ispad,
+					attalignblocks[attnum],
+					attstoreblocks[attnum]);
+			}
+			else
+			{
+				LLVMBuildBr(builder, attalignblocks[attnum]);
+			}
+
+			LLVMPositionBuilderAtEnd(builder, attalignblocks[attnum]);
+
+			{
+				/* translation of alignment code (cf TYPEALIGN()) */
+				LLVMValueRef v_off_aligned;
+				LLVMValueRef v_off = LLVMBuildLoad(builder, v_offp, "");
+				/* ((ALIGNVAL) - 1) */
+				LLVMValueRef alignval = LLVMConstInt(TypeSizeT, alignto - 1, false);
+				/* ((uintptr_t) (LEN) + ((ALIGNVAL) - 1)) */
+				LLVMValueRef lh = LLVMBuildAdd(builder, v_off, alignval, "");
+				/* ~((uintptr_t) ((ALIGNVAL) - 1))*/
+				LLVMValueRef rh = LLVMConstInt(TypeSizeT, ~(alignto - 1), false);
+
+				v_off_aligned = LLVMBuildAnd(builder, lh, rh, "aligned_offset");
+
+				LLVMBuildStore(builder, v_off_aligned, v_offp);
+
+				if (attcuralign >= 0)
+				{
+					Assert(attcuralign != 0);
+					attcuralign = TYPEALIGN(alignto, attcuralign);
+				}
+			}
+
+			LLVMBuildBr(builder, attstoreblocks[attnum]);
+			LLVMPositionBuilderAtEnd(builder, attstoreblocks[attnum]);
+		}
+		else
+		{
+			LLVMPositionBuilderAtEnd(builder, attcheckalignblocks[attnum]);
+			LLVMBuildBr(builder, attalignblocks[attnum]);
+			LLVMPositionBuilderAtEnd(builder, attalignblocks[attnum]);
+			LLVMBuildBr(builder, attstoreblocks[attnum]);
+		}
+		LLVMPositionBuilderAtEnd(builder, attstoreblocks[attnum]);
+
+		if (attguaranteedalign)
+		{
+			Assert(attcuralign >= 0);
+			LLVMBuildStore(builder, LLVMConstInt(TypeSizeT, attcuralign, 0), v_offp);
+		}
+
+		/* compute what following columns are aligned to */
+		if (att->attlen < 0)
+		{
+			/* can't guarantee any alignment after varlen field */
+			attcuralign = -1;
+			attguaranteedalign = false;
+		}
+		else if (att->attnotnull && attcuralign >= 0)
+		{
+			Assert(att->attlen > 0);
+			attcuralign += att->attlen;
+		}
+		else if (att->attnotnull)
+		{
+			/*
+			 * After a NOT NULL fixed-width column, alignment is
+			 * guaranteed to be the minimum of the forced alignment and
+			 * length.  XXX
+			 */
+			attcuralign = alignto + att->attlen;
+			Assert(attcuralign > 0);
+			attguaranteedalign = false;
+		}
+		else
+		{
+			attcuralign = -1;
+			attguaranteedalign = false;
+		}
+
+
+		/* compute address to load data from */
+		{
+			LLVMValueRef v_off = LLVMBuildLoad(builder, v_offp, "");
+
+			v_attdatap =
+				LLVMBuildGEP(builder, v_tupdata_base, &v_off, 1, "");
+		}
+
+		/* compute address to store value at */
+		v_resultp = LLVMBuildGEP(builder, v_tts_values, &l_attno, 1, "");
+
+		/* store null-byte (false) */
+		LLVMBuildStore(builder,
+					   LLVMConstInt(LLVMInt8Type(), 0, false),
+					   LLVMBuildGEP(builder, v_tts_nulls, &l_attno, 1, ""));
+
+		if (att->attbyval)
+		{
+			LLVMValueRef tmp_loaddata;
+			LLVMTypeRef vartypep =
+				LLVMPointerType(LLVMIntType(att->attlen*8), 0);
+			tmp_loaddata =
+				LLVMBuildPointerCast(builder, v_attdatap, vartypep, "");
+			tmp_loaddata = LLVMBuildLoad(builder, tmp_loaddata, "attr_byval");
+			tmp_loaddata = LLVMBuildZExt(builder, tmp_loaddata, TypeSizeT, "");
+
+			LLVMBuildStore(builder, tmp_loaddata, v_resultp);
+		}
+		else
+		{
+			LLVMValueRef tmp_loaddata;
+
+			/* store pointer */
+			tmp_loaddata =
+				LLVMBuildPtrToInt(builder,
+								  v_attdatap,
+								  TypeSizeT,
+								  "attr_ptr");
+			LLVMBuildStore(builder, tmp_loaddata, v_resultp);
+		}
+
+		/* increment data pointer */
+		if (att->attlen > 0)
+		{
+			incby = LLVMConstInt(TypeSizeT, att->attlen, false);
+		}
+		else if (att->attlen == -1)
+		{
+			LLVMValueRef l_varsize_any = create_varsize_any(context, mod);
+
+			incby = LLVMBuildCall(builder, l_varsize_any,
+								  &v_attdatap, 1,
+								  "varsize_any");
+
+			{
+				char argname[] = "readonly";
+				LLVMAttributeRef ref =
+					LLVMCreateStringAttribute(LLVMGetGlobalContext(), argname, strlen(argname), NULL, 0);
+				LLVMAddCallSiteAttribute(incby, LLVMAttributeFunctionIndex, ref);
+			}
+
+			{
+				int id = LLVMGetEnumAttributeKindForName("alwaysinline", sizeof("alwaysinline") - 1);
+				LLVMAttributeRef attr;
+
+				attr = LLVMCreateEnumAttribute(LLVMGetGlobalContext(),
+											   id, 0);
+				LLVMAddCallSiteAttribute(incby, LLVMAttributeFunctionIndex, attr);
+			}
+		}
+		else if (att->attlen == -2)
+		{
+			LLVMValueRef l_strlen;
+
+			l_strlen = create_strlen(context, mod);
+			incby = LLVMBuildCall(builder, l_strlen, &v_attdatap, 1, "strlen");
+
+			{
+				int id = LLVMGetEnumAttributeKindForName("alwaysinline", sizeof("alwaysinline") - 1);
+				LLVMAttributeRef attr;
+
+				attr = LLVMCreateEnumAttribute(LLVMGetGlobalContext(),
+											   id, 0);
+				LLVMAddCallSiteAttribute(incby, LLVMAttributeFunctionIndex, attr);
+			}
+
+			/* add 1 for NULL byte */
+			incby =
+				LLVMBuildAdd(builder, incby,
+							 LLVMConstInt(TypeSizeT, 1, false), "");
+		}
+		else
+		{
+			Assert(false);
+			incby = NULL; /* silence compiler */
+		}
+
+		if (attguaranteedalign)
+		{
+			Assert(attcuralign >= 0);
+			LLVMBuildStore(builder, LLVMConstInt(TypeSizeT, attcuralign, 0), v_offp);
+		}
+		else
+		{
+			LLVMValueRef v_off = LLVMBuildLoad(builder, v_offp, "");
+			v_off = LLVMBuildAdd(builder, v_off, incby, "increment_offset");
+			LLVMBuildStore(builder, v_off, v_offp);
+		}
+
+		/*
+		 * jump to next block, unless last possible column, or all desired
+		 * (available) attributes have been fetched.
+		 */
+		if (attnum + 1 == natts)
+		{
+			/* jump out */
+			LLVMBuildBr(builder, outblock);
+		}
+		else
+		{
+			LLVMBuildBr(builder, attcheckattnoblocks[attnum + 1]);
+		}
+	}
+
+
+	/* build block that returns */
+	LLVMPositionBuilderAtEnd(builder, outblock);
+
+	{
+
+		LLVMValueRef v_off = LLVMBuildLoad(builder, v_offp, "");
+
+		LLVMBuildStore(
+			builder,
+			LLVMConstInt(LLVMInt32Type(), natts, false),
+			v_nvalidp);
+		v_off = LLVMBuildTrunc(builder, v_off, LLVMInt32Type(), "");
+		LLVMBuildStore(builder, v_off, v_slotoffp);
+		LLVMBuildStore(builder, LLVMConstInt(LLVMInt8Type(), 1, false),
+					   v_slowp);
+		LLVMBuildRetVoid(builder);
+	}
+
+	LLVMDisposeBuilder(builder);
+
+	return deform_fn;
+}
+#endif

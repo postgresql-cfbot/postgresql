@@ -230,7 +230,7 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &state->ps);
+	ExecInitResultTupleSlotTL(estate, &state->ps);
 
 	/* We don't support any qual on ProjectSet nodes */
 	Assert(node->plan.qual == NIL);
@@ -248,7 +248,6 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 	/*
 	 * initialize tuple type and projection info
 	 */
-	ExecAssignResultTypeFromTL(&state->ps);
 
 	/* Create workspace for per-tlist-entry expr state & SRF-is-done state */
 	state->nelems = list_length(node->plan.targetlist);

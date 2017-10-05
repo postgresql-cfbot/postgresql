@@ -22,6 +22,7 @@
 #include "postgres.h"
 
 #include "executor/execdebug.h"
+#include "executor/execScan.h"
 #include "executor/nodeBitmapIndexscan.h"
 #include "executor/nodeIndexscan.h"
 #include "miscadmin.h"
@@ -227,13 +228,6 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 	indexstate->biss_result = NULL;
 
 	/*
-	 * Miscellaneous initialization
-	 *
-	 * We do not need a standard exprcontext for this node, though we may
-	 * decide below to create a runtime-key exprcontext
-	 */
-
-	/*
 	 * initialize child expressions
 	 *
 	 * We don't need to initialize targetlist or qual since neither are used.
@@ -246,6 +240,13 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 	 * We do not open or lock the base relation here.  We assume that an
 	 * ancestor BitmapHeapScan node is holding AccessShareLock (or better) on
 	 * the heap relation throughout the execution of the plan tree.
+	 */
+
+	/*
+	 * Miscellaneous initialization
+	 *
+	 * We do not need a standard exprcontext for this node, though we may
+	 * decide below to create a runtime-key exprcontext
 	 */
 
 	indexstate->ss.ss_currentRelation = NULL;

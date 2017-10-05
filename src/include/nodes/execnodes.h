@@ -94,6 +94,8 @@ typedef struct ExprState
 
 	Datum	   *innermost_domainval;
 	bool	   *innermost_domainnull;
+
+	void	   *evalfunc_private;
 } ExprState;
 
 
@@ -508,7 +510,9 @@ typedef struct EState
 	bool	   *es_epqScanDone; /* true if EPQ tuple has been fetched */
 
 	/* The per-query shared memory area to use for parallel execution. */
-	struct dsa_area *es_query_dsa;
+	struct dsa_area   *es_query_dsa;
+
+	struct LLVMJitContext *es_jit;
 } EState;
 
 
@@ -616,6 +620,9 @@ typedef struct TupleHashTableData
 	FmgrInfo   *in_hash_funcs;	/* hash functions for input datatype(s) */
 	FmgrInfo   *cur_eq_funcs;	/* equality functions for input vs. table */
 	uint32		hash_iv;		/* hash-function IV */
+
+	ExprState  *eq_func;
+	ExprContext *exprcontext;
 }			TupleHashTableData;
 
 typedef tuplehash_iterator TupleHashIterator;
@@ -865,6 +872,9 @@ typedef struct PlanState
 	ExprState  *qual;			/* boolean qual condition */
 	struct PlanState *lefttree; /* input plan tree(s) */
 	struct PlanState *righttree;
+
+	TupleDesc scandesc;
+
 	List	   *initPlan;		/* Init SubPlanState nodes (un-correlated expr
 								 * subselects) */
 	List	   *subPlan;		/* SubPlanState nodes in my expressions */
@@ -1821,13 +1831,20 @@ typedef struct AggState
 	Tuplesortstate *sort_out;	/* input is copied here for next phase */
 	TupleTableSlot *sort_slot;	/* slot for sort results */
 	/* these fields are used in AGG_PLAIN and AGG_SORTED modes: */
-	AggStatePerGroup pergroup;	/* per-Aggref-per-group working state */
+	AggStatePerGroup *pergroups;	/* grouping set indexed array of per-group
+									 * pointers */
 	HeapTuple	grp_firstTuple; /* copy of first tuple of current group */
 	/* these fields are used in AGG_HASHED and AGG_MIXED modes: */
 	bool		table_filled;	/* hash table filled yet? */
 	int			num_hashes;
 	AggStatePerHash perhash;
-	AggStatePerGroup *hash_pergroup;	/* array of per-group pointers */
+	AggStatePerGroup *hash_pergroup;	/* grouping set indexed array of
+										 * per-group pointers */
+
+	AggStatePerGroup *all_pergroups;
+	ExprContext **all_contexts;
+
+
 	/* support for evaluation of agg inputs */
 	TupleTableSlot *evalslot;	/* slot for agg inputs */
 	ProjectionInfo *evalproj;	/* projection machinery */

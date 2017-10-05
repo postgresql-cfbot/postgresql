@@ -24,6 +24,7 @@
 
 #include "nodes/execnodes.h"
 #include "executor/executor.h"
+#include "executor/execScan.h"
 #include "executor/nodeTableFuncscan.h"
 #include "executor/tablefunc.h"
 #include "miscadmin.h"
@@ -140,18 +141,6 @@ ExecInitTableFuncScan(TableFuncScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &scanstate->ss.ps);
 
 	/*
-	 * initialize child expressions
-	 */
-	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, &scanstate->ss.ps);
-
-	/*
-	 * tuple table initialization
-	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
-
-	/*
 	 * initialize source tuple type
 	 */
 	tupdesc = BuildDescFromLists(tf->colnames,
@@ -159,13 +148,22 @@ ExecInitTableFuncScan(TableFuncScan *node, EState *estate, int eflags)
 								 tf->coltypmods,
 								 tf->colcollations);
 
-	ExecAssignScanType(&scanstate->ss, tupdesc);
+	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
+	ExecInitScanTupleSlot(estate, &scanstate->ss, tupdesc);
 
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
 	ExecAssignScanProjectionInfo(&scanstate->ss);
+
+	/*
+	 * initialize child expressions
+	 */
+	scanstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, &scanstate->ss.ps);
 
 	/* Only XMLTABLE is supported currently */
 	scanstate->routine = &XmlTableRoutine;

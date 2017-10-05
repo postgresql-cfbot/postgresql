@@ -401,6 +401,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hjstate->js.ps.plan = (Plan *) node;
 	hjstate->js.ps.state = estate;
 	hjstate->js.ps.ExecProcNode = ExecHashJoin;
+	hjstate->js.jointype = node->join.jointype;
 
 	/*
 	 * Miscellaneous initialization
@@ -408,17 +409,6 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	 * create expression context for node
 	 */
 	ExecAssignExprContext(estate, &hjstate->js.ps);
-
-	/*
-	 * initialize child expressions
-	 */
-	hjstate->js.ps.qual =
-		ExecInitQual(node->join.plan.qual, (PlanState *) hjstate);
-	hjstate->js.jointype = node->join.jointype;
-	hjstate->js.joinqual =
-		ExecInitQual(node->join.joinqual, (PlanState *) hjstate);
-	hjstate->hashclauses =
-		ExecInitQual(node->hashclauses, (PlanState *) hjstate);
 
 	/*
 	 * initialize child nodes
@@ -436,7 +426,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &hjstate->js.ps);
+	ExecInitResultTupleSlotTL(estate, &hjstate->js.ps);
 	hjstate->hj_OuterTupleSlot = ExecInitExtraTupleSlot(estate);
 
 	/*
@@ -492,11 +482,20 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	/*
 	 * initialize tuple type and projection info
 	 */
-	ExecAssignResultTypeFromTL(&hjstate->js.ps);
 	ExecAssignProjectionInfo(&hjstate->js.ps, NULL);
 
 	ExecSetSlotDescriptor(hjstate->hj_OuterTupleSlot,
 						  ExecGetResultType(outerPlanState(hjstate)));
+
+	/*
+	 * initialize child expressions
+	 */
+	hjstate->js.ps.qual =
+		ExecInitQual(node->join.plan.qual, (PlanState *) hjstate);
+	hjstate->js.joinqual =
+		ExecInitQual(node->join.joinqual, (PlanState *) hjstate);
+	hjstate->hashclauses =
+		ExecInitQual(node->hashclauses, (PlanState *) hjstate);
 
 	/*
 	 * initialize hash-specific info

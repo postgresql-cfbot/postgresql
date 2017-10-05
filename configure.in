@@ -825,6 +825,33 @@ PGAC_ARG_BOOL(with, zlib, yes,
               [do not use Zlib])
 AC_SUBST(with_zlib)
 
+PGAC_ARG_BOOL(with, llvm, no, [build with llvm (JIT) support],
+              [AC_DEFINE([USE_LLVM], 1, [Define to 1 to build with llvm support. (--with-llvm)])])
+
+if test "$with_llvm" = yes ; then
+  AC_CHECK_PROGS(LLVM_CONFIG, llvm-config)
+  if test -n "$LLVM_CONFIG"; then
+    for pgac_option in `$LLVM_CONFIG --cflags`; do
+      case $pgac_option in
+        -I*|-D*) CPPFLAGS="$CPPFLAGS $pgac_option";;
+      esac
+    done
+    for pgac_option in `$LLVM_CONFIG --ldflags`; do
+      case $pgac_option in
+        -L*) LDFLAGS="$LDFLAGS $pgac_option";;
+      esac
+    done
+    for pgac_option in `$LLVM_CONFIG --libs --system-libs engine debuginfodwarf orcjit passes perfjitevents`; do
+      case $pgac_option in
+        -l*) LLVM_LIBS="$LLVM_LIBS $pgac_option";;
+      esac
+    done
+  fi
+fi
+AC_SUBST(LLVM_LIBS)
+AC_SUBST(with_llvm)
+
+
 #
 # Elf
 #

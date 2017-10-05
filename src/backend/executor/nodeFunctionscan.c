@@ -23,6 +23,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "executor/execScan.h"
 #include "executor/nodeFunctionscan.h"
 #include "funcapi.h"
 #include "nodes/nodeFuncs.h"
@@ -334,18 +335,6 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 	 */
 	ExecAssignExprContext(estate, &scanstate->ss.ps);
 
-	/*
-	 * tuple table initialization
-	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
-
-	/*
-	 * initialize child expressions
-	 */
-	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
-
 	scanstate->funcstates = palloc(nfuncs * sizeof(FunctionScanPerFuncState));
 
 	natts = 0;
@@ -491,13 +480,23 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 		Assert(attno == natts);
 	}
 
-	ExecAssignScanType(&scanstate->ss, scan_tupdesc);
+	/*
+	 * tuple table initialization
+	 */
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
+	ExecInitScanTupleSlot(estate, &scanstate->ss, scan_tupdesc);
 
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
 	ExecAssignScanProjectionInfo(&scanstate->ss);
+
+	/*
+	 * initialize child expressions
+	 */
+	scanstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+
 
 	/*
 	 * Create a memory context that ExecMakeTableFunctionResult can use to

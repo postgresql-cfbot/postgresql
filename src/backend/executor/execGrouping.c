@@ -20,6 +20,7 @@
 
 #include "access/hash.h"
 #include "access/parallel.h"
+#include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "utils/lsyscache.h"
@@ -287,7 +288,10 @@ execTuplesHashPrepare(int numCols,
  * storage that will live as long as the hashtable does.
  */
 TupleHashTable
-BuildTupleHashTable(int numCols, AttrNumber *keyColIdx,
+BuildTupleHashTable(PlanState *parent,
+					TupleDesc inputDesc,
+					int numCols, AttrNumber *keyColIdx,
+					Oid *eqOperators,
 					FmgrInfo *eqfunctions,
 					FmgrInfo *hashfunctions,
 					long nbuckets, Size additionalsize,
@@ -296,6 +300,7 @@ BuildTupleHashTable(int numCols, AttrNumber *keyColIdx,
 {
 	TupleHashTable hashtable;
 	Size		entrysize = sizeof(TupleHashEntryData) + additionalsize;
+	MemoryContext oldcontext;
 
 	Assert(nbuckets > 0);
 
@@ -332,6 +337,20 @@ BuildTupleHashTable(int numCols, AttrNumber *keyColIdx,
 
 	hashtable->hashtab = tuplehash_create(tablecxt, nbuckets, hashtable);
 
+	oldcontext = MemoryContextSwitchTo(hashtable->tablecxt);
+	/*
+	 * We copy the input tuple descriptor just for safety --- we assume
+	 * all input tuples will have equivalent descriptors.
+	 */
+	hashtable->tableslot = MakeSingleTupleTableSlot(CreateTupleDescCopy(inputDesc));
+	MemoryContextSwitchTo(oldcontext);
+
+	hashtable->eq_func = ExecInitGroupingEqual(inputDesc,
+											   numCols,
+											   keyColIdx, eqfunctions,
+											   parent);
+	hashtable->exprcontext = CreateExprContext(parent->state);
+
 	return hashtable;
 }
 
@@ -355,22 +374,6 @@ LookupTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 	MemoryContext oldContext;
 	bool		found;
 	MinimalTuple key;
-
-	/* If first time through, clone the input slot to make table slot */
-	if (hashtable->tableslot == NULL)
-	{
-		TupleDesc	tupdesc;
-
-		oldContext = MemoryContextSwitchTo(hashtable->tablecxt);
-
-		/*
-		 * We copy the input tuple descriptor just for safety --- we assume
-		 * all input tuples will have equivalent descriptors.
-		 */
-		tupdesc = CreateTupleDescCopy(slot->tts_tupleDescriptor);
-		hashtable->tableslot = MakeSingleTupleTableSlot(tupdesc);
-		MemoryContextSwitchTo(oldContext);
-	}
 
 	/* Need to run the hash functions in short-lived context */
 	oldContext = MemoryContextSwitchTo(hashtable->tempcxt);
@@ -527,6 +530,7 @@ TupleHashTableMatch(struct tuplehash_hash *tb, const MinimalTuple tuple1, const 
 	TupleTableSlot *slot1;
 	TupleTableSlot *slot2;
 	TupleHashTable hashtable = (TupleHashTable) tb->private_data;
+	Datum result;
 
 	/*
 	 * We assume that simplehash.h will only ever call us with the first
@@ -540,6 +544,7 @@ TupleHashTableMatch(struct tuplehash_hash *tb, const MinimalTuple tuple1, const 
 	Assert(tuple2 == NULL);
 	slot2 = hashtable->inputslot;
 
+#if 0
 	/* For crosstype comparisons, the inputslot must be first */
 	if (execTuplesMatch(slot2,
 						slot1,
@@ -550,4 +555,11 @@ TupleHashTableMatch(struct tuplehash_hash *tb, const MinimalTuple tuple1, const 
 		return 0;
 	else
 		return 1;
+#else
+	hashtable->exprcontext->ecxt_innertuple = slot1;
+	hashtable->exprcontext->ecxt_outertuple = slot2;
+	result = ExecQual(hashtable->eq_func, hashtable->exprcontext);
+	ResetExprContext(hashtable->exprcontext);
+	return DatumGetBool(result);
+#endif
 }

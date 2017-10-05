@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "executor/execdebug.h"
+#include "executor/execScan.h"
 #include "executor/nodeCtescan.h"
 #include "miscadmin.h"
 
@@ -243,29 +244,27 @@ ExecInitCteScan(CteScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &scanstate->ss.ps);
 
 	/*
-	 * initialize child expressions
-	 */
-	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
-
-	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &scanstate->ss.ps);
-	ExecInitScanTupleSlot(estate, &scanstate->ss);
+	ExecInitResultTupleSlotTL(estate, &scanstate->ss.ps);
 
 	/*
 	 * The scan tuple type (ie, the rowtype we expect to find in the work
 	 * table) is the same as the result rowtype of the CTE query.
 	 */
-	ExecAssignScanType(&scanstate->ss,
-					   ExecGetResultType(scanstate->cteplanstate));
+	ExecInitScanTupleSlot(estate, &scanstate->ss,
+						  ExecGetResultType(scanstate->cteplanstate));
 
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&scanstate->ss.ps);
 	ExecAssignScanProjectionInfo(&scanstate->ss);
+
+	/*
+	 * initialize child expressions
+	 */
+	scanstate->ss.ps.qual =
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
 
 	return scanstate;
 }

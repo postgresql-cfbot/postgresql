@@ -43,4 +43,6 @@ extern const int fmgr_nbuiltins;	/* number of entries in table */
 #define InvalidOidBuiltinMapping PG_UINT16_MAX
 extern const uint16 fmgr_builtin_oid_index[FirstBootstrapObjectId];
 
+extern const FmgrBuiltin *fmgr_isbuiltin(Oid id);
+
 #endif							/* FMGRTAB_H */

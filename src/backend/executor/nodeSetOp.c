@@ -120,12 +120,19 @@ static void
 build_hash_table(SetOpState *setopstate)
 {
 	SetOp	   *node = (SetOp *) setopstate->ps.plan;
+	TupleTableSlot *slot;
 
 	Assert(node->strategy == SETOP_HASHED);
 	Assert(node->numGroups > 0);
 
-	setopstate->hashtable = BuildTupleHashTable(node->numCols,
+	slot = outerPlanState(&setopstate->ps)->ps_ResultTupleSlot;
+	Assert(slot);
+
+	setopstate->hashtable = BuildTupleHashTable(&setopstate->ps,
+												slot->tts_tupleDescriptor,
+												node->numCols,
 												node->dupColIdx,
+												node->dupOperators,
 												setopstate->eqfunctions,
 												setopstate->hashfunctions,
 												node->numGroups,
@@ -523,7 +530,7 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	/*
 	 * Tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &setopstate->ps);
+	ExecInitResultTupleSlotTL(estate, &setopstate->ps);
 
 	/*
 	 * initialize child nodes
@@ -539,7 +546,6 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	 * setop nodes do no projections, so initialize projection info for this
 	 * node appropriately
 	 */
-	ExecAssignResultTypeFromTL(&setopstate->ps);
 	setopstate->ps.ps_ProjInfo = NULL;
 
 	/*

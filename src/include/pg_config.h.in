@@ -828,6 +828,9 @@
    (--with-libxslt) */
 #undef USE_LIBXSLT
 
+/* Define to 1 to build with llvm support. (--with-llvm) */
+#undef USE_LLVM
+
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES
 

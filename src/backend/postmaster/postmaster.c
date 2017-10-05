@@ -99,6 +99,7 @@
 #include "catalog/pg_control.h"
 #include "common/ip.h"
 #include "lib/ilist.h"
+#include "lib/llvmjit.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
 #include "libpq/pqsignal.h"
@@ -1359,6 +1360,10 @@ PostmasterMain(int argc, char *argv[])
 
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
+
+#ifdef USE_LLVM
+	llvm_initialize();
+#endif
 
 	status = ServerLoop();
 

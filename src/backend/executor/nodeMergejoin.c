@@ -1450,6 +1450,8 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	mergestate->js.ps.plan = (Plan *) node;
 	mergestate->js.ps.state = estate;
 	mergestate->js.ps.ExecProcNode = ExecMergeJoin;
+	mergestate->js.jointype = node->join.jointype;
+	mergestate->mj_ConstFalseJoin = false;
 
 	/*
 	 * Miscellaneous initialization
@@ -1465,17 +1467,6 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	 */
 	mergestate->mj_OuterEContext = CreateExprContext(estate);
 	mergestate->mj_InnerEContext = CreateExprContext(estate);
-
-	/*
-	 * initialize child expressions
-	 */
-	mergestate->js.ps.qual =
-		ExecInitQual(node->join.plan.qual, (PlanState *) mergestate);
-	mergestate->js.jointype = node->join.jointype;
-	mergestate->js.joinqual =
-		ExecInitQual(node->join.joinqual, (PlanState *) mergestate);
-	mergestate->mj_ConstFalseJoin = false;
-	/* mergeclauses are handled below */
 
 	/*
 	 * initialize child nodes
@@ -1513,11 +1504,20 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	/*
 	 * tuple table initialization
 	 */
-	ExecInitResultTupleSlot(estate, &mergestate->js.ps);
+	ExecInitResultTupleSlotTL(estate, &mergestate->js.ps);
 
 	mergestate->mj_MarkedTupleSlot = ExecInitExtraTupleSlot(estate);
 	ExecSetSlotDescriptor(mergestate->mj_MarkedTupleSlot,
 						  ExecGetResultType(innerPlanState(mergestate)));
+
+	/*
+	 * initialize child expressions
+	 */
+	mergestate->js.ps.qual =
+		ExecInitQual(node->join.plan.qual, (PlanState *) mergestate);
+	mergestate->js.joinqual =
+		ExecInitQual(node->join.joinqual, (PlanState *) mergestate);
+	/* mergeclauses are handled below */
 
 	/*
 	 * detect whether we need only consider the first matching inner tuple
@@ -1586,7 +1586,6 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	/*
 	 * initialize tuple type and projection info
 	 */
-	ExecAssignResultTypeFromTL(&mergestate->js.ps);
 	ExecAssignProjectionInfo(&mergestate->js.ps, NULL);
 
 	/*

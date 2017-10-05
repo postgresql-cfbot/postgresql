@@ -93,7 +93,7 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	 * tuple table initialization
 	 */
 	gatherstate->funnel_slot = ExecInitExtraTupleSlot(estate);
-	ExecInitResultTupleSlot(estate, &gatherstate->ps);
+	ExecInitResultTupleSlotTL(estate, &gatherstate->ps);
 
 	/*
 	 * now initialize outer plan
@@ -104,7 +104,6 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	/*
 	 * Initialize result tuple type and projection info.
 	 */
-	ExecAssignResultTypeFromTL(&gatherstate->ps);
 	ExecAssignProjectionInfo(&gatherstate->ps, NULL);
 
 	/*

@@ -3298,7 +3298,7 @@ ExecSetupPartitionTupleRouting(Relation rel,
 	 * (such as ModifyTableState) and released when the node finishes
 	 * processing.
 	 */
-	*partition_tuple_slot = MakeTupleTableSlot();
+	*partition_tuple_slot = MakeTupleTableSlot(NULL);
 
 	leaf_part_rri = *partitions;
 	i = 0;

@@ -1746,4 +1746,9 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		joinrel->partexprs[cnt] = partexpr;
 		joinrel->nullable_partexprs[cnt] = nullable_partexpr;
 	}
+
+	/* Allocate space to hold child-joins RelOptInfos. */
+	joinrel->part_rels =
+		(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * joinrel->nparts);
+
 }

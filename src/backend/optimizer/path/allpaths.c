@@ -3261,12 +3261,7 @@ generate_partition_wise_join_paths(PlannerInfo *root, RelOptInfo *rel)
 	if (IS_DUMMY_REL(rel))
 		return;
 
-	/*
-	 * Nothing to do if the relation is not partitioned. An outer join
-	 * relation which had empty inner relation in every pair will have rest of
-	 * the partitioning properties set except the child-join RelOptInfos. See
-	 * try_partition_wise_join() for more explanation.
-	 */
+	/* Nothing to do if the relation is not partitioned. */
 	if (rel->nparts <= 0 || rel->part_rels == NULL)
 		return;
 

@@ -22,6 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 LISTEN <replaceable class="PARAMETER">channel</replaceable>
+LISTEN SIMILAR TO '<replaceable class="PARAMETER">pattern</replaceable>'
 </synopsis>
  </refsynopsisdiv>
 
@@ -31,9 +32,11 @@ LISTEN <replaceable class="PARAMETER">channel</replaceable>
   <para>
    <command>LISTEN</command> registers the current session as a
    listener on the notification channel named <replaceable
-   class="PARAMETER">channel</replaceable>.
+   class="PARAMETER">channel</replaceable>. Session can listen
+   to multiple notification channels simultaneously by using
+   <command>LISTEN SIMILAR TO</command> pattern.
    If the current session is already registered as a listener for
-   this notification channel, nothing is done.
+   this notification channel or pattern, nothing is done.
   </para>
 
   <para>
@@ -84,6 +87,16 @@ LISTEN <replaceable class="PARAMETER">channel</replaceable>
      </para>
     </listitem>
    </varlistentry>
+   
+   <varlistentry>
+    <term><replaceable class="PARAMETER">pattern</replaceable></term>
+    <listitem>
+     <para>
+	  <link linkend="functions-similarto-regexp"><literal>SIMILAR TO</></link>
+	  pattern (any string constant). Used to match notification channel names.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </refsect1>
 
@@ -113,6 +126,9 @@ LISTEN <replaceable class="PARAMETER">channel</replaceable>
 LISTEN virtual;
 NOTIFY virtual;
 Asynchronous notification "virtual" received from server process with PID 8448.
+LISTEN SIMILAR TO 'foo%';
+NOTIFY foobar;
+Asynchronous notification "foobar" received from server process with PID 8448.
 </programlisting></para>
  </refsect1>
 

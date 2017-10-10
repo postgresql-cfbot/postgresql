@@ -33,7 +33,10 @@ NOTIFY <replaceable class="PARAMETER">channel</replaceable> [ , <replaceable cla
    with an optional <quote>payload</> string to each client application that
    has previously executed
    <command>LISTEN <replaceable class="parameter">channel</></command>
-   for the specified channel name in the current database.
+   for the specified channel name in the current database. Client application
+   can also listen to multiple channel names using pattern matching by
+   <command>LISTEN SIMILAR TO '<replaceable class="parameter">pattern</>'</command>
+   command. 
    Notifications are visible to all users.
   </para>
 
@@ -210,6 +213,10 @@ Asynchronous notification "virtual" with payload "This is the payload" received 
 LISTEN foo;
 SELECT pg_notify('fo' || 'o', 'pay' || 'load');
 Asynchronous notification "foo" with payload "payload" received from server process with PID 14728.
+
+LISTEN SIMILAR TO 'foo%';
+NOTIFY foobar;
+Asynchronous notification "foobar" received from server process with PID 8448.
 </programlisting></para>
  </refsect1>
 

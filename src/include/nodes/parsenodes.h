@@ -2897,7 +2897,8 @@ typedef struct NotifyStmt
 typedef struct ListenStmt
 {
 	NodeTag		type;
-	char	   *conditionname;	/* condition name to listen on */
+	bool		isSimilarToPattern;
+	char	   *pattern;	/* condition pattern to listen on */
 } ListenStmt;
 
 /* ----------------------
@@ -2907,7 +2908,7 @@ typedef struct ListenStmt
 typedef struct UnlistenStmt
 {
 	NodeTag		type;
-	char	   *conditionname;	/* name to unlisten on, or NULL for all */
+	char	   *pattern;	/* condition pattern to unlisten on, or NULL for all */
 } UnlistenStmt;
 
 /* ----------------------

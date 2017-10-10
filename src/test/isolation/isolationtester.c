@@ -46,7 +46,8 @@ static bool try_complete_step(Step *step, int flags);
 static int	step_qsort_cmp(const void *a, const void *b);
 static int	step_bsearch_cmp(const void *a, const void *b);
 
-static void printResultSet(PGresult *res);
+static void printResultSet(PGresult *res, PGconn *conn);
+static void printAsyncNotify(PGconn *conn);
 
 /* close all connections and exit */
 static void
@@ -487,7 +488,7 @@ run_permutation(TestSpec *testspec, int nsteps, Step **steps)
 		res = PQexec(conns[0], testspec->setupsqls[i]);
 		if (PQresultStatus(res) == PGRES_TUPLES_OK)
 		{
-			printResultSet(res);
+			printResultSet(res, conns[i + 1]);
 		}
 		else if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
@@ -505,7 +506,7 @@ run_permutation(TestSpec *testspec, int nsteps, Step **steps)
 			res = PQexec(conns[i + 1], testspec->sessions[i]->setupsql);
 			if (PQresultStatus(res) == PGRES_TUPLES_OK)
 			{
-				printResultSet(res);
+				printResultSet(res, conns[i + 1]);
 			}
 			else if (PQresultStatus(res) != PGRES_COMMAND_OK)
 			{
@@ -640,7 +641,7 @@ run_permutation(TestSpec *testspec, int nsteps, Step **steps)
 			res = PQexec(conns[i + 1], testspec->sessions[i]->teardownsql);
 			if (PQresultStatus(res) == PGRES_TUPLES_OK)
 			{
-				printResultSet(res);
+				printResultSet(res, conns[i + 1]);
 			}
 			else if (PQresultStatus(res) != PGRES_COMMAND_OK)
 			{
@@ -659,7 +660,7 @@ run_permutation(TestSpec *testspec, int nsteps, Step **steps)
 		res = PQexec(conns[0], testspec->teardownsql);
 		if (PQresultStatus(res) == PGRES_TUPLES_OK)
 		{
-			printResultSet(res);
+			printResultSet(res, conns[0]);
 		}
 		else if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
@@ -821,9 +822,10 @@ try_complete_step(Step *step, int flags)
 		switch (PQresultStatus(res))
 		{
 			case PGRES_COMMAND_OK:
+				printAsyncNotify(conn);
 				break;
 			case PGRES_TUPLES_OK:
-				printResultSet(res);
+				printResultSet(res, conn);
 				break;
 			case PGRES_FATAL_ERROR:
 				if (step->errormsg != NULL)
@@ -860,7 +862,7 @@ try_complete_step(Step *step, int flags)
 }
 
 static void
-printResultSet(PGresult *res)
+printResultSet(PGresult *res, PGconn *conn)
 {
 	int			nFields;
 	int			i,
@@ -878,5 +880,25 @@ printResultSet(PGresult *res)
 		for (j = 0; j < nFields; j++)
 			printf("%-15s", PQgetvalue(res, i, j));
 		printf("\n");
+	}
+
+	printAsyncNotify(conn);
+}
+
+static void
+printAsyncNotify(PGconn *conn)
+{
+	PGnotify   *notify;
+
+	while ((notify = PQnotifies(conn)) != NULL)
+	{
+		if (notify->extra[0])
+			printf("ASYNC NOTIFY of '%s' with payload '%s' received\n",
+				notify->relname, notify->extra);
+		else
+			printf("ASYNC NOTIFY of '%s' received\n",
+				notify->relname);
+
+		PQfreemem(notify);
 	}
 }

@@ -138,7 +138,10 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timestamp.h"
-
+#include "utils/elog.h"
+#include "regex/regex.h"
+#include "catalog/pg_collation.h"
+#include "miscadmin.h"
 
 /*
  * Maximum size of a NOTIFY payload, including terminating NULL.  This
@@ -286,9 +289,19 @@ static SlruCtlData AsyncCtlData;
  */
 #define QUEUE_MAX_PAGE			(SLRU_PAGES_PER_SEGMENT * 0x10000 - 1)
 
+ /*
+ * Currently listened channel consisting of compiled RE
+ * used for pattern listeners and the pattern send by the user. 
+ */
+typedef struct ListenChannel
+{
+	regex_t		*compiledRegex;
+	char		userPattern[FLEXIBLE_ARRAY_MEMBER]; /* nul-terminated string */
+} ListenChannel;
+
 /*
  * listenChannels identifies the channels we are actually listening to
- * (ie, have committed a LISTEN on).  It is a simple list of channel names,
+ * (ie, have committed a LISTEN on).  It is a list of ListenChannel,
  * allocated in TopMemoryContext.
  */
 static List *listenChannels = NIL;	/* list of C strings */
@@ -313,7 +326,9 @@ typedef enum
 typedef struct
 {
 	ListenActionKind action;
-	char		channel[FLEXIBLE_ARRAY_MEMBER]; /* nul-terminated string */
+	bool			 actionApplied;
+	regex_t			*compiledRegex;
+	char			 userPattern[FLEXIBLE_ARRAY_MEMBER]; /* nul-terminated string */
 } ListenAction;
 
 static List *pendingActions = NIL;	/* list of ListenAction */
@@ -369,12 +384,12 @@ bool		Trace_notify = false;
 
 /* local function prototypes */
 static bool asyncQueuePagePrecedes(int p, int q);
-static void queue_listen(ListenActionKind action, const char *channel);
+static void queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPattern);
 static void Async_UnlistenOnExit(int code, Datum arg);
 static void Exec_ListenPreCommit(void);
-static void Exec_ListenCommit(const char *channel);
-static void Exec_UnlistenCommit(const char *channel);
-static void Exec_UnlistenAllCommit(void);
+static bool Exec_ListenCommit(const char *pattern, regex_t *compiledRegex);
+static bool Exec_UnlistenCommit(const char *pattern);
+static bool Exec_UnlistenAllCommit(void);
 static bool IsListeningOn(const char *channel);
 static void asyncQueueUnregister(void);
 static bool asyncQueueIsFull(void);
@@ -594,6 +609,36 @@ Async_Notify(const char *channel, const char *payload)
 }
 
 /*
+* compile_regex
+*		Compiles RE pattern into a compiled RE.
+*
+*		Returns result code from pg_regcomp.
+*/
+static int
+compile_regex(const char *pattern, regex_t *compiled_regex)
+{
+	pg_wchar	*wcharpattern;
+	int			resregcomp;
+	int			lenwchar;
+	int			lenpattern = strlen(pattern);
+
+	wcharpattern = (pg_wchar *)palloc((lenpattern + 1) * sizeof(pg_wchar));
+	lenwchar = pg_mb2wchar_with_len(pattern,
+									wcharpattern,
+									lenpattern);
+
+	resregcomp = pg_regcomp(compiled_regex,
+							wcharpattern,
+							lenwchar,
+							REG_ADVANCED,
+							DEFAULT_COLLATION_OID);
+
+	pfree(wcharpattern);
+
+	return resregcomp;
+}
+
+/*
  * queue_listen
  *		Common code for listen, unlisten, unlisten all commands.
  *
@@ -602,10 +647,15 @@ Async_Notify(const char *channel, const char *payload)
  *		commit.
  */
 static void
-queue_listen(ListenActionKind action, const char *channel)
+queue_listen(ListenActionKind action, const char *pattern, bool isSimilarToPattern)
 {
 	MemoryContext oldcontext;
 	ListenAction *actrec;
+	regex_t		 compreg;
+	regex_t		 *pcompreg;
+	int			 resregcomp;
+	char		 errormsg[100];
+	Datum		 datum;
 
 	/*
 	 * Unlike Async_Notify, we don't try to collapse out duplicates. It would
@@ -615,11 +665,46 @@ queue_listen(ListenActionKind action, const char *channel)
 	 */
 	oldcontext = MemoryContextSwitchTo(CurTransactionContext);
 
+	if (isSimilarToPattern)
+	{
+		/* convert to regex pattern */
+		datum = DirectFunctionCall2(similar_escape, 
+									CStringGetTextDatum(pattern), 
+									CStringGetTextDatum("\\"));
+
+		/*
+		* Regex pattern is now compiled to ensure any errors are captured at this point.
+		* Compiled regex is copied to top memory context when we reach transaction commit.
+		* If compiled RE was not applied as a listener then it is freed at transaction commit.
+		*/
+		resregcomp = compile_regex(TextDatumGetCString(datum), &compreg);
+
+		if (resregcomp != REG_OKAY)
+		{
+			MemoryContextSwitchTo(oldcontext);
+
+			CHECK_FOR_INTERRUPTS();
+			pg_regerror(resregcomp, &compreg, errormsg, sizeof(errormsg));
+			ereport(ERROR,
+				(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+					errmsg("invalid regular expression: %s", errormsg)));
+		}
+
+		pcompreg = palloc(sizeof(regex_t));
+		memcpy(pcompreg, &compreg, sizeof(regex_t));
+	}
+	else
+	{
+		pcompreg = NULL;
+	}
+
 	/* space for terminating null is included in sizeof(ListenAction) */
-	actrec = (ListenAction *) palloc(offsetof(ListenAction, channel) +
-									 strlen(channel) + 1);
+	actrec = (ListenAction *) palloc(offsetof(ListenAction, userPattern) +
+									 strlen(pattern) + 1);
 	actrec->action = action;
-	strcpy(actrec->channel, channel);
+	actrec->actionApplied = false;
+	actrec->compiledRegex = pcompreg;
+	strcpy(actrec->userPattern, pattern);
 
 	pendingActions = lappend(pendingActions, actrec);
 
@@ -632,12 +717,12 @@ queue_listen(ListenActionKind action, const char *channel)
  *		This is executed by the SQL listen command.
  */
 void
-Async_Listen(const char *channel)
+Async_Listen(const char *pattern, bool isSimilarToPattern)
 {
 	if (Trace_notify)
-		elog(DEBUG1, "Async_Listen(%s,%d)", channel, MyProcPid);
+		elog(DEBUG1, "Async_Listen(%s,%d)", pattern, MyProcPid);
 
-	queue_listen(LISTEN_LISTEN, channel);
+	queue_listen(LISTEN_LISTEN, pattern, isSimilarToPattern);
 }
 
 /*
@@ -646,16 +731,16 @@ Async_Listen(const char *channel)
  *		This is executed by the SQL unlisten command.
  */
 void
-Async_Unlisten(const char *channel)
+Async_Unlisten(const char *pattern)
 {
 	if (Trace_notify)
-		elog(DEBUG1, "Async_Unlisten(%s,%d)", channel, MyProcPid);
+		elog(DEBUG1, "Async_Unlisten(%s,%d)", pattern, MyProcPid);
 
 	/* If we couldn't possibly be listening, no need to queue anything */
 	if (pendingActions == NIL && !unlistenExitRegistered)
 		return;
 
-	queue_listen(LISTEN_UNLISTEN, channel);
+	queue_listen(LISTEN_UNLISTEN, pattern, false);
 }
 
 /*
@@ -673,7 +758,7 @@ Async_UnlistenAll(void)
 	if (pendingActions == NIL && !unlistenExitRegistered)
 		return;
 
-	queue_listen(LISTEN_UNLISTEN_ALL, "");
+	queue_listen(LISTEN_UNLISTEN_ALL, "", false);
 }
 
 /*
@@ -714,10 +799,10 @@ pg_listening_channels(PG_FUNCTION_ARGS)
 
 	while (*lcp != NULL)
 	{
-		char	   *channel = (char *) lfirst(*lcp);
+		ListenChannel	   *channel = (ListenChannel *) lfirst(*lcp);
 
 		*lcp = lnext(*lcp);
-		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(channel));
+		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(channel->userPattern));
 	}
 
 	SRF_RETURN_DONE(funcctx);
@@ -890,13 +975,13 @@ AtCommit_Notify(void)
 		switch (actrec->action)
 		{
 			case LISTEN_LISTEN:
-				Exec_ListenCommit(actrec->channel);
+				actrec->actionApplied = Exec_ListenCommit(actrec->userPattern, actrec->compiledRegex);
 				break;
 			case LISTEN_UNLISTEN:
-				Exec_UnlistenCommit(actrec->channel);
+				actrec->actionApplied = Exec_UnlistenCommit(actrec->userPattern);
 				break;
 			case LISTEN_UNLISTEN_ALL:
-				Exec_UnlistenAllCommit();
+				actrec->actionApplied = Exec_UnlistenAllCommit();
 				break;
 		}
 	}
@@ -1000,14 +1085,23 @@ Exec_ListenPreCommit(void)
  *
  * Add the channel to the list of channels we are listening on.
  */
-static void
-Exec_ListenCommit(const char *channel)
+static bool
+Exec_ListenCommit(const char *pattern, regex_t *compiledRegex)
 {
+	ListCell	  *p;
 	MemoryContext oldcontext;
+	ListenChannel *lchan;
+	regex_t		  *copiedcompreg;
 
-	/* Do nothing if we are already listening on this channel */
-	if (IsListeningOn(channel))
-		return;
+	/* Do nothing if we are already using this pattern for listening */
+
+	foreach(p, listenChannels)
+	{
+		ListenChannel	   *lchan = (ListenChannel *)lfirst(p);
+
+		if (strcmp(lchan->userPattern, pattern) == 0)
+			return false;
+	}
 
 	/*
 	 * Add the new channel name to listenChannels.
@@ -1017,9 +1111,31 @@ Exec_ListenCommit(const char *channel)
 	 * doesn't seem worth trying to guard against that, but maybe improve this
 	 * later.
 	 */
+
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-	listenChannels = lappend(listenChannels, pstrdup(channel));
+
+	if (compiledRegex != NULL)
+	{
+		/* copy the compiled RE to top memory context */
+
+		copiedcompreg = (regex_t *)palloc(sizeof(regex_t));
+		memcpy(copiedcompreg, compiledRegex, sizeof(regex_t));
+	}
+	else
+	{
+		copiedcompreg = NULL;
+	}
+
+	lchan = (ListenChannel *)palloc(offsetof(ListenChannel, userPattern) + 
+									strlen(pattern) + 1);
+	lchan->compiledRegex = copiedcompreg;
+	strcpy(lchan->userPattern, pattern);
+
+	listenChannels = lappend(listenChannels, lchan);
+
 	MemoryContextSwitchTo(oldcontext);
+
+	return true;
 }
 
 /*
@@ -1027,24 +1143,35 @@ Exec_ListenCommit(const char *channel)
  *
  * Remove the specified channel name from listenChannels.
  */
-static void
-Exec_UnlistenCommit(const char *channel)
+static bool
+Exec_UnlistenCommit(const char *pattern)
 {
 	ListCell   *q;
 	ListCell   *prev;
+	bool	   found;
 
 	if (Trace_notify)
-		elog(DEBUG1, "Exec_UnlistenCommit(%s,%d)", channel, MyProcPid);
+		elog(DEBUG1, "Exec_UnlistenCommit(%s,%d)", pattern, MyProcPid);
 
+	found = false;
 	prev = NULL;
 	foreach(q, listenChannels)
 	{
-		char	   *lchan = (char *) lfirst(q);
+		ListenChannel	   *lchan = (ListenChannel *) lfirst(q);
 
-		if (strcmp(lchan, channel) == 0)
+		if (strcmp(lchan->userPattern, pattern) == 0)
 		{
+			if (lchan->compiledRegex != NULL)
+			{
+				pg_regfree(lchan->compiledRegex);
+				pfree(lchan->compiledRegex);
+			}
+
 			listenChannels = list_delete_cell(listenChannels, q, prev);
+
 			pfree(lchan);
+
+			found = true;
 			break;
 		}
 		prev = q;
@@ -1054,6 +1181,8 @@ Exec_UnlistenCommit(const char *channel)
 	 * We do not complain about unlistening something not being listened;
 	 * should we?
 	 */
+
+	return found;
 }
 
 /*
@@ -1061,14 +1190,34 @@ Exec_UnlistenCommit(const char *channel)
  *
  *		Unlisten on all channels for this backend.
  */
-static void
+static bool
 Exec_UnlistenAllCommit(void)
 {
+	ListCell	*p;
+	bool		is_empty;
+
 	if (Trace_notify)
 		elog(DEBUG1, "Exec_UnlistenAllCommit(%d)", MyProcPid);
 
+	is_empty = true;
+
+	foreach(p, listenChannels)
+	{
+		ListenChannel		*lchan = (ListenChannel *)lfirst(p);
+
+		if (lchan->compiledRegex != NULL)
+		{
+			pg_regfree(lchan->compiledRegex);
+			pfree(lchan->compiledRegex);
+		}
+
+		is_empty = false;
+	}
+
 	list_free_deep(listenChannels);
 	listenChannels = NIL;
+	
+	return is_empty;
 }
 
 /*
@@ -1163,16 +1312,66 @@ ProcessCompletedNotifies(void)
 static bool
 IsListeningOn(const char *channel)
 {
-	ListCell   *p;
+	ListCell	*p;
+	pg_wchar	*wcharchannel;
+	int			lenwchar;
+	int			resregexec;
+	char		errormsg[100];
+	bool		matches;
+
+	wcharchannel = NULL;
+	matches = false;
 
 	foreach(p, listenChannels)
 	{
-		char	   *lchan = (char *) lfirst(p);
+		ListenChannel		*lchan = (ListenChannel *) lfirst(p);
 
-		if (strcmp(lchan, channel) == 0)
-			return true;
+		if (lchan->compiledRegex == NULL)
+		{
+			if (strcmp(lchan->userPattern, channel) == 0)
+			{
+				matches = true;
+				break;
+			}
+		}
+		else
+		{
+			if (wcharchannel == NULL)
+			{
+				/* Convert channel string to wide characters */
+				wcharchannel = (pg_wchar *)palloc((strlen(channel) + 1) * sizeof(pg_wchar));
+				lenwchar = pg_mb2wchar_with_len(channel, wcharchannel, strlen(channel));
+			}
+
+			/* Check RE match */
+			resregexec = pg_regexec(lchan->compiledRegex, wcharchannel, lenwchar, 0, NULL, 0, NULL, 0);
+
+			if (resregexec != REG_OKAY && resregexec != REG_NOMATCH)
+			{
+				pfree(wcharchannel);
+				wcharchannel = NULL;
+
+				CHECK_FOR_INTERRUPTS();
+				pg_regerror(resregexec, lchan->compiledRegex, errormsg, sizeof(errormsg));
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+						errmsg("regular expression failed: %s", errormsg)));
+			}
+
+			if (resregexec == REG_OKAY)
+			{
+				matches = true;
+				break;
+			}
+		}
 	}
-	return false;
+
+	if (wcharchannel != NULL)
+	{
+		pfree(wcharchannel);
+	}
+
+	return matches;
 }
 
 /*
@@ -2149,6 +2348,20 @@ AsyncExistsPendingNotify(const char *channel, const char *payload)
 static void
 ClearPendingActionsAndNotifies(void)
 {
+	ListCell   *p;
+
+	/* free compiled REs that were not added as new listeners */
+	foreach(p, pendingActions)
+	{
+		ListenAction *actrec = (ListenAction *)lfirst(p);
+
+		if (!actrec->actionApplied && actrec->compiledRegex != NULL)
+		{
+			pg_regfree(actrec->compiledRegex);
+			pfree(actrec->compiledRegex);
+		}
+	}
+
 	/*
 	 * We used to have to explicitly deallocate the list members and nodes,
 	 * because they were malloc'd.  Now, since we know they are palloc'd in

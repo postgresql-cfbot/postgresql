@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | * }
+UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | '<replaceable class="PARAMETER">channel_pattern</replaceable>' | * }
 </synopsis>
  </refsynopsisdiv>
 
@@ -34,9 +34,10 @@ UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | * }
    <command>UNLISTEN</command> cancels any existing registration of
    the current <productname>PostgreSQL</productname> session as a
    listener on the notification channel named <replaceable
-   class="PARAMETER">channel</replaceable>.  The special wildcard
-   <literal>*</literal> cancels all listener registrations for the
-   current session.
+   class="PARAMETER">channel</replaceable>. Existing pattern based listeners
+   are unregistered using '<replaceable class="PARAMETER">channel_pattern</replaceable>'
+   string constant. The special wildcard <literal>*</literal> cancels all listener 
+   registrations for the current session.
   </para>
 
   <para>
@@ -56,6 +57,15 @@ UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | * }
     <listitem>
      <para>
       Name of a notification channel (any identifier).
+     </para>
+    </listitem>
+   </varlistentry>
+   
+   <varlistentry>
+    <term><replaceable class="PARAMETER">channel_pattern</replaceable></term>
+    <listitem>
+     <para>
+	  Pattern or channel name to unregister (any string constant).
      </para>
     </listitem>
    </varlistentry>
@@ -88,6 +98,12 @@ UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | * }
    A transaction that has executed <command>UNLISTEN</command> cannot be
    prepared for two-phase commit.
   </para>
+  
+  <para>
+   <command>UNLISTEN</command> '<replaceable class="PARAMETER">channel_pattern</replaceable>'
+   only unregisters a single pattern that is equal to a previously 
+   registered pattern. See below for an example.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -100,6 +116,9 @@ UNLISTEN { <replaceable class="PARAMETER">channel</replaceable> | * }
 LISTEN virtual;
 NOTIFY virtual;
 Asynchronous notification "virtual" received from server process with PID 8448.
+LISTEN SIMILAR TO 'foo%';
+NOTIFY foobar;
+Asynchronous notification "foobar" received from server process with PID 8448.
 </programlisting>
   </para>
 
@@ -109,8 +128,21 @@ Asynchronous notification "virtual" received from server process with PID 8448.
 
 <programlisting>
 UNLISTEN virtual;
+UNLISTEN 'foo%';
 NOTIFY virtual;
+NOTIFY foobar;
 -- no NOTIFY event is received
+</programlisting></para>
+
+  <para>
+   <command>UNLISTEN</command> '<replaceable class="PARAMETER">channel_pattern</replaceable>'
+   cannot be used in a pattern matching way:
+
+<programlisting>
+LISTEN SIMILAR TO 'foobar%';
+UNLISTEN 'foo%'; -- this has no effect
+NOTIFY foobarbaz;
+Asynchronous notification "foobarbaz" received from server process with PID 8448.
 </programlisting></para>
  </refsect1>
 

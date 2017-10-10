@@ -1,0 +1,118 @@
+Parsed test spec with 2 sessions
+
+starting permutation: listen_normal notify consume
+step listen_normal: LISTEN test;
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+ASYNC NOTIFY of 'test' with payload '1' received
+ASYNC NOTIFY of 'test' with payload '2' received
+ASYNC NOTIFY of 'test' with payload '3' received
+ASYNC NOTIFY of 'test' with payload '4' received
+ASYNC NOTIFY of 'test' with payload '5' received
+
+starting permutation: listen_pattern_1 notify consume
+step listen_pattern_1: LISTEN SIMILAR TO 'te%';
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+ASYNC NOTIFY of 'test' with payload '1' received
+ASYNC NOTIFY of 'test' with payload '2' received
+ASYNC NOTIFY of 'test' with payload '3' received
+ASYNC NOTIFY of 'test' with payload '4' received
+ASYNC NOTIFY of 'test' with payload '5' received
+ASYNC NOTIFY of 'test_2' with payload '1' received
+ASYNC NOTIFY of 'test_2' with payload '2' received
+ASYNC NOTIFY of 'test_2' with payload '3' received
+ASYNC NOTIFY of 'test_2' with payload '4' received
+ASYNC NOTIFY of 'test_2' with payload '5' received
+
+starting permutation: listen_pattern_2 notify consume
+step listen_pattern_2: LISTEN SIMILAR TO 'test';
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+ASYNC NOTIFY of 'test' with payload '1' received
+ASYNC NOTIFY of 'test' with payload '2' received
+ASYNC NOTIFY of 'test' with payload '3' received
+ASYNC NOTIFY of 'test' with payload '4' received
+ASYNC NOTIFY of 'test' with payload '5' received
+
+starting permutation: listen_pattern_3 notify consume
+step listen_pattern_3: LISTEN SIMILAR TO 'te';
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+
+starting permutation: listen_pattern_invalid notify consume
+step listen_pattern_invalid: LISTEN SIMILAR TO '*';
+ERROR:  invalid regular expression: quantifier operand invalid
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+
+starting permutation: listen_normal listen_pattern_1 unlisten_1 notify consume
+step listen_normal: LISTEN test;
+step listen_pattern_1: LISTEN SIMILAR TO 'te%';
+step unlisten_1: UNLISTEN 't%';
+step notify: 
+ SELECT count(pg_notify('test', s::text)) FROM generate_series(1, 5) s;
+ SELECT count(pg_notify('test_2', s::text)) FROM generate_series(1, 5) s;
+
+count          
+
+5              
+count          
+
+5              
+step consume: BEGIN; END;
+ASYNC NOTIFY of 'test' with payload '1' received
+ASYNC NOTIFY of 'test' with payload '2' received
+ASYNC NOTIFY of 'test' with payload '3' received
+ASYNC NOTIFY of 'test' with payload '4' received
+ASYNC NOTIFY of 'test' with payload '5' received
+ASYNC NOTIFY of 'test_2' with payload '1' received
+ASYNC NOTIFY of 'test_2' with payload '2' received
+ASYNC NOTIFY of 'test_2' with payload '3' received
+ASYNC NOTIFY of 'test_2' with payload '4' received
+ASYNC NOTIFY of 'test_2' with payload '5' received

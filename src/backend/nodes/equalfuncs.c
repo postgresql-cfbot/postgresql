@@ -2767,6 +2767,7 @@ _equalOnConflictClause(const OnConflictClause *a, const OnConflictClause *b)
 	COMPARE_SCALAR_FIELD(action);
 	COMPARE_NODE_FIELD(infer);
 	COMPARE_NODE_FIELD(targetList);
+	COMPARE_SCALAR_FIELD(lockingStrength);
 	COMPARE_NODE_FIELD(whereClause);
 	COMPARE_LOCATION_FIELD(location);
 

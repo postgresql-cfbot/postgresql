@@ -20,7 +20,7 @@
  */
 typedef enum LockClauseStrength
 {
-	LCS_NONE,					/* no such clause - only used in PlanRowMark */
+	LCS_NONE,					/* no such clause - only used in PlanRowMark and ON CONFLICT SELECT */
 	LCS_FORKEYSHARE,			/* FOR KEY SHARE */
 	LCS_FORSHARE,				/* FOR SHARE */
 	LCS_FORNOKEYUPDATE,			/* FOR NO KEY UPDATE */

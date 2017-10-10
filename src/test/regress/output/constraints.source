@@ -425,7 +425,7 @@ INSERT INTO UNIQUE_TBL VALUES (5, 'five-upsert-insert') ON CONFLICT (i) DO UPDAT
 INSERT INTO UNIQUE_TBL VALUES (6, 'six-upsert-insert') ON CONFLICT (i) DO UPDATE SET t = 'six-upsert-update';
 -- should fail
 INSERT INTO UNIQUE_TBL VALUES (1, 'a'), (2, 'b'), (2, 'b') ON CONFLICT (i) DO UPDATE SET t = 'fails';
-ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
+ERROR:  ON CONFLICT command cannot affect row a second time
 HINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
 SELECT '' AS five, * FROM UNIQUE_TBL;
  five | i |         t          

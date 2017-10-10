@@ -97,6 +97,16 @@ insert into insertconflicttest
 values (1, 'Apple'), (2, 'Orange')
 on conflict (key) do update set (fruit, key) = (excluded.fruit, excluded.key);
 
+-- DO SELECT
+delete from insertconflicttest where fruit = 'Apple';
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select returning *;
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select returning *;
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select where fruit <> 'Apple' returning *;
+delete from insertconflicttest where fruit = 'Apple';
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select for update returning *;
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select for update returning *;
+insert into insertconflicttest values (1, 'Apple') on conflict (key) do select for update where fruit <> 'Apple' returning *;
+
 -- Give good diagnostic message when EXCLUDED.* spuriously referenced from
 -- RETURNING:
 insert into insertconflicttest values (1, 'Apple') on conflict (key) do update set fruit = excluded.fruit RETURNING excluded.fruit;
@@ -466,6 +476,30 @@ commit;
 
 begin transaction isolation level serializable;
 insert into selfconflict values (6,1), (6,2) on conflict(f1) do update set f2 = 0;
+commit;
+
+begin transaction isolation level read committed;
+insert into selfconflict values (7,1), (7,2) on conflict(f1) do select returning *;
+commit;
+
+begin transaction isolation level repeatable read;
+insert into selfconflict values (8,1), (8,2) on conflict(f1) do select returning *;
+commit;
+
+begin transaction isolation level serializable;
+insert into selfconflict values (9,1), (9,2) on conflict(f1) do select returning *;
+commit;
+
+begin transaction isolation level read committed;
+insert into selfconflict values (10,1), (10,2) on conflict(f1) do select for update returning *;
+commit;
+
+begin transaction isolation level repeatable read;
+insert into selfconflict values (11,1), (11,2) on conflict(f1) do select for update returning *;
+commit;
+
+begin transaction isolation level serializable;
+insert into selfconflict values (12,1), (12,2) on conflict(f1) do select for update returning *;
 commit;
 
 select * from selfconflict;

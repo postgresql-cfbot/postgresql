@@ -20,6 +20,7 @@
 #include "access/attnum.h"
 #include "nodes/bitmapset.h"
 #include "nodes/pg_list.h"
+#include "nodes/lockoptions.h"
 
 
 /* ----------------------------------------------------------------
@@ -1492,9 +1493,14 @@ typedef struct OnConflictExpr
 	Node	   *arbiterWhere;	/* unique index arbiter WHERE clause */
 	Oid			constraint;		/* pg_constraint OID for arbiter */
 
+	/* both ON CONFLICT SELECT and UPDATE */
+	Node	   *onConflictWhere;	/* qualifiers to restrict SELECT/UPDATE to */
+
+	/* ON CONFLICT SELECT */
+	LockClauseStrength lockingStrength; /* strengh of lock for DO SELECT, or LCS_NONE */
+
 	/* ON CONFLICT UPDATE */
 	List	   *onConflictSet;	/* List of ON CONFLICT SET TargetEntrys */
-	Node	   *onConflictWhere;	/* qualifiers to restrict UPDATE to */
 	int			exclRelIndex;	/* RT index of 'excluded' relation */
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;

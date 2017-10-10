@@ -202,7 +202,8 @@ compute_tsvector_stats(VacAttrStats *stats,
 		TSVector	vector;
 		WordEntry  *curentryptr;
 		char	   *lexemesptr;
-		int			j;
+		int			j,
+					pos;
 
 		vacuum_delay_point();
 
@@ -236,7 +237,9 @@ compute_tsvector_stats(VacAttrStats *stats,
 		 */
 		lexemesptr = STRPTR(vector);
 		curentryptr = ARRPTR(vector);
-		for (j = 0; j < vector->size; j++)
+
+		INITPOS(pos);
+		for (j = 0; j < TS_COUNT(vector); j++)
 		{
 			bool		found;
 
@@ -246,8 +249,8 @@ compute_tsvector_stats(VacAttrStats *stats,
 			 * make a copy of it.  This way we can free the tsvector value
 			 * once we've processed all its lexemes.
 			 */
-			hash_key.lexeme = lexemesptr + curentryptr->pos;
-			hash_key.length = curentryptr->len;
+			hash_key.lexeme = lexemesptr + pos;
+			hash_key.length = ENTRY_LEN(vector, curentryptr);
 
 			/* Lookup current lexeme in hashtable, adding it if new */
 			item = (TrackItem *) hash_search(lexemes_tab,
@@ -280,7 +283,7 @@ compute_tsvector_stats(VacAttrStats *stats,
 			}
 
 			/* Advance to the next WordEntry in the tsvector */
-			curentryptr++;
+			INCRPTR(vector, curentryptr, pos);
 		}
 
 		/* If the vector was toasted, free the detoasted copy. */

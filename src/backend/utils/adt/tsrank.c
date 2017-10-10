@@ -53,29 +53,19 @@ word_distance(int32 w)
 static int
 cnt_length(TSVector t)
 {
-	WordEntry  *ptr = ARRPTR(t),
-			   *end = (WordEntry *) STRPTR(t);
-	int			len = 0;
+	int			i,
+				len = 0;
 
-	while (ptr < end)
+	for (i = 0; i < TS_COUNT(t); i++)
 	{
-		int			clen = POSDATALEN(t, ptr);
+		WordEntry  *entry = UNWRAP_ENTRY(t, ARRPTR(t) + i);
 
-		if (clen == 0)
-			len += 1;
-		else
-			len += clen;
-
-		ptr++;
+		Assert(!entry->hasoff);
+		len += (entry->npos == 0) ? 1 : entry->npos;
 	}
 
 	return len;
 }
-
-
-#define WordECompareQueryItem(e,q,p,i,m) \
-	tsCompareString((q) + (i)->distance, (i)->length,	\
-					(e) + (p)->pos, (p)->len, (m))
 
 
 /*
@@ -83,13 +73,19 @@ cnt_length(TSVector t)
  * tsvector 't'. 'q' is the TSQuery containing 'item'.
  * Returns NULL if not found.
  */
-static WordEntry *
+static int
 find_wordentry(TSVector t, TSQuery q, QueryOperand *item, int32 *nitem)
 {
-	WordEntry  *StopLow = ARRPTR(t);
-	WordEntry  *StopHigh = (WordEntry *) STRPTR(t);
-	WordEntry  *StopMiddle = StopHigh;
+#define WordECompareQueryItem(s,l,q,i,m) \
+	tsCompareString((q) + (i)->distance, (i)->length,	\
+					s, l, (m))
+
+	int			StopLow = 0;
+	int			StopHigh = TS_COUNT(t);
+	int			StopMiddle = StopHigh;
 	int			difference;
+	char	   *lexeme;
+	WordEntry  *we;
 
 	*nitem = 0;
 
@@ -97,7 +93,12 @@ find_wordentry(TSVector t, TSQuery q, QueryOperand *item, int32 *nitem)
 	while (StopLow < StopHigh)
 	{
 		StopMiddle = StopLow + (StopHigh - StopLow) / 2;
-		difference = WordECompareQueryItem(STRPTR(t), GETOPERAND(q), StopMiddle, item, false);
+		lexeme = tsvector_getlexeme(t, StopMiddle, &we);
+
+		Assert(!we->hasoff);
+		difference = WordECompareQueryItem(lexeme, we->len,
+										   GETOPERAND(q), item, false);
+
 		if (difference == 0)
 		{
 			StopHigh = StopMiddle;
@@ -117,17 +118,21 @@ find_wordentry(TSVector t, TSQuery q, QueryOperand *item, int32 *nitem)
 
 		*nitem = 0;
 
-		while (StopMiddle < (WordEntry *) STRPTR(t) &&
-			   WordECompareQueryItem(STRPTR(t), GETOPERAND(q), StopMiddle, item, true) == 0)
+		while (StopMiddle < TS_COUNT(t))
 		{
+			lexeme = tsvector_getlexeme(t, StopMiddle, &we);
+
+			Assert(!we->hasoff);
+			if (WordECompareQueryItem(lexeme, we->len, GETOPERAND(q), item, true) != 0)
+				break;
+
 			(*nitem)++;
 			StopMiddle++;
 		}
 	}
 
-	return (*nitem > 0) ? StopHigh : NULL;
+	return (*nitem > 0) ? StopHigh : -1;
 }
-
 
 /*
  * sort QueryOperands by (length, word)
@@ -200,15 +205,13 @@ SortAndUniqItems(TSQuery q, int *size)
 static float
 calc_rank_and(const float *w, TSVector t, TSQuery q)
 {
-	WordEntryPosVector **pos;
-	WordEntryPosVector1 posnull;
-	WordEntryPosVector *POSNULL;
+	WordEntryPos **pos;
+	uint16	   *npos;
+	WordEntryPos posnull[1] = {0};
 	int			i,
 				k,
 				l,
 				p;
-	WordEntry  *entry,
-			   *firstentry;
 	WordEntryPos *post,
 			   *ct;
 	int32		dimt,
@@ -225,41 +228,55 @@ calc_rank_and(const float *w, TSVector t, TSQuery q)
 		pfree(item);
 		return calc_rank_or(w, t, q);
 	}
-	pos = (WordEntryPosVector **) palloc0(sizeof(WordEntryPosVector *) * q->size);
+	pos = (WordEntryPos **) palloc0(sizeof(WordEntryPos *) * q->size);
+	npos = (uint16 *) palloc0(sizeof(uint16) * q->size);
 
-	/* A dummy WordEntryPos array to use when haspos is false */
-	posnull.npos = 1;
-	posnull.pos[0] = 0;
-	WEP_SETPOS(posnull.pos[0], MAXENTRYPOS - 1);
-	POSNULL = (WordEntryPosVector *) &posnull;
+	/* posnull is a dummy WordEntryPos array to use when npos == 0 */
+	WEP_SETPOS(posnull[0], MAXENTRYPOS - 1);
 
 	for (i = 0; i < size; i++)
 	{
-		firstentry = entry = find_wordentry(t, q, item[i], &nitem);
-		if (!entry)
+		int			idx = find_wordentry(t, q, item[i], &nitem),
+					firstidx;
+
+		if (idx == -1)
 			continue;
 
-		while (entry - firstentry < nitem)
-		{
-			if (entry->haspos)
-				pos[i] = _POSVECPTR(t, entry);
-			else
-				pos[i] = POSNULL;
+		firstidx = idx;
 
-			dimt = pos[i]->npos;
-			post = pos[i]->pos;
+		while (idx - firstidx < nitem)
+		{
+			WordEntry  *entry;
+
+			char	   *lexeme = tsvector_getlexeme(t, idx, &entry);
+
+			Assert(!entry->hasoff);
+			if (entry->npos)
+			{
+				pos[i] = POSDATAPTR(lexeme, entry->len);
+				npos[i] = entry->npos;
+			}
+			else
+			{
+				pos[i] = posnull;
+				npos[i] = 1;
+			}
+
+			post = pos[i];
+			dimt = npos[i];
+
 			for (k = 0; k < i; k++)
 			{
 				if (!pos[k])
 					continue;
-				lenct = pos[k]->npos;
-				ct = pos[k]->pos;
+				lenct = npos[k];
+				ct = pos[k];
 				for (l = 0; l < dimt; l++)
 				{
 					for (p = 0; p < lenct; p++)
 					{
 						dist = Abs((int) WEP_GETPOS(post[l]) - (int) WEP_GETPOS(ct[p]));
-						if (dist || (dist == 0 && (pos[i] == POSNULL || pos[k] == POSNULL)))
+						if (dist || (dist == 0 && (pos[i] == posnull || pos[k] == posnull)))
 						{
 							float		curw;
 
@@ -272,10 +289,11 @@ calc_rank_and(const float *w, TSVector t, TSQuery q)
 				}
 			}
 
-			entry++;
+			idx++;
 		}
 	}
 	pfree(pos);
+	pfree(npos);
 	pfree(item);
 	return res;
 }
@@ -283,9 +301,8 @@ calc_rank_and(const float *w, TSVector t, TSQuery q)
 static float
 calc_rank_or(const float *w, TSVector t, TSQuery q)
 {
-	WordEntry  *entry,
-			   *firstentry;
-	WordEntryPosVector1 posnull;
+	/* A dummy WordEntryPos array to use when lexeme hasn't positions */
+	WordEntryPos posnull[1] = {0};
 	WordEntryPos *post;
 	int32		dimt,
 				j,
@@ -295,33 +312,37 @@ calc_rank_or(const float *w, TSVector t, TSQuery q)
 	QueryOperand **item;
 	int			size = q->size;
 
-	/* A dummy WordEntryPos array to use when haspos is false */
-	posnull.npos = 1;
-	posnull.pos[0] = 0;
-
 	item = SortAndUniqItems(q, &size);
 
 	for (i = 0; i < size; i++)
 	{
+		int			idx,
+					firstidx;
 		float		resj,
 					wjm;
 		int32		jm;
 
-		firstentry = entry = find_wordentry(t, q, item[i], &nitem);
-		if (!entry)
+		idx = find_wordentry(t, q, item[i], &nitem);
+		if (idx == -1)
 			continue;
 
-		while (entry - firstentry < nitem)
+		firstidx = idx;
+
+		while (idx - firstidx < nitem)
 		{
-			if (entry->haspos)
+			WordEntry  *entry;
+			char	   *lexeme = tsvector_getlexeme(t, idx, &entry);
+
+			Assert(!entry->hasoff);
+			if (entry->npos)
 			{
-				dimt = POSDATALEN(t, entry);
-				post = POSDATAPTR(t, entry);
+				dimt = entry->npos;
+				post = POSDATAPTR(lexeme, entry->len);
 			}
 			else
 			{
-				dimt = posnull.npos;
-				post = posnull.pos;
+				dimt = 1;
+				post = posnull;
 			}
 
 			resj = 0.0;
@@ -345,7 +366,7 @@ calc_rank_or(const float *w, TSVector t, TSQuery q)
 */
 			res = res + (wjm + resj - wjm / ((jm + 1) * (jm + 1))) / 1.64493406685;
 
-			entry++;
+			idx++;
 		}
 	}
 	if (size > 0)
@@ -361,7 +382,7 @@ calc_rank(const float *w, TSVector t, TSQuery q, int32 method)
 	float		res = 0.0;
 	int			len;
 
-	if (!t->size || !q->size)
+	if (!TS_COUNT(t) || !q->size)
 		return 0.0;
 
 	/* XXX: What about NOT? */
@@ -373,7 +394,7 @@ calc_rank(const float *w, TSVector t, TSQuery q, int32 method)
 	if (res < 0)
 		res = 1e-20f;
 
-	if ((method & RANK_NORM_LOGLENGTH) && t->size > 0)
+	if ((method & RANK_NORM_LOGLENGTH) && TS_COUNT(t) > 0)
 		res /= log((double) (cnt_length(t) + 1)) / log(2.0);
 
 	if (method & RANK_NORM_LENGTH)
@@ -385,11 +406,11 @@ calc_rank(const float *w, TSVector t, TSQuery q, int32 method)
 
 	/* RANK_NORM_EXTDIST not applicable */
 
-	if ((method & RANK_NORM_UNIQ) && t->size > 0)
-		res /= (float) (t->size);
+	if ((method & RANK_NORM_UNIQ) && TS_COUNT(t) > 0)
+		res /= (float) (TS_COUNT(t));
 
-	if ((method & RANK_NORM_LOGUNIQ) && t->size > 0)
-		res /= log((double) (t->size + 1)) / log(2.0);
+	if ((method & RANK_NORM_LOGUNIQ) && TS_COUNT(t) > 0)
+		res /= log((double) (TS_COUNT(t) + 1)) / log(2.0);
 
 	if (method & RANK_NORM_RDIVRPLUS1)
 		res /= (res + 1);
@@ -504,13 +525,13 @@ typedef struct
 		struct
 		{						/* compiled doc representation */
 			QueryItem **items;
-			int16		nitem;
+			int32		nitem;
 		}			query;
 		struct
 		{						/* struct is used for preparing doc
 								 * representation */
 			QueryItem  *item;
-			WordEntry  *entry;
+			int32		idx;
 		}			map;
 	}			data;
 	WordEntryPos pos;
@@ -526,10 +547,10 @@ compareDocR(const void *va, const void *vb)
 	{
 		if (WEP_GETWEIGHT(a->pos) == WEP_GETWEIGHT(b->pos))
 		{
-			if (a->data.map.entry == b->data.map.entry)
+			if (a->data.map.idx == b->data.map.idx)
 				return 0;
 
-			return (a->data.map.entry > b->data.map.entry) ? 1 : -1;
+			return (a->data.map.idx > b->data.map.idx) ? 1 : -1;
 		}
 
 		return (WEP_GETWEIGHT(a->pos) > WEP_GETWEIGHT(b->pos)) ? 1 : -1;
@@ -724,9 +745,6 @@ static DocRepresentation *
 get_docrep(TSVector txt, QueryRepresentation *qr, int *doclen)
 {
 	QueryItem  *item = GETQUERY(qr->query);
-	WordEntry  *entry,
-			   *firstentry;
-	WordEntryPos *post;
 	int32		dimt,			/* number of 'post' items */
 				j,
 				i,
@@ -743,29 +761,38 @@ get_docrep(TSVector txt, QueryRepresentation *qr, int *doclen)
 	 */
 	for (i = 0; i < qr->query->size; i++)
 	{
+		int			idx,
+					firstidx;
 		QueryOperand *curoperand;
+		WordEntryPos *post;
 
 		if (item[i].type != QI_VAL)
 			continue;
 
 		curoperand = &item[i].qoperand;
 
-		firstentry = entry = find_wordentry(txt, qr->query, curoperand, &nitem);
-		if (!entry)
+		idx = find_wordentry(txt, qr->query, curoperand, &nitem);
+		if (idx < 0)
 			continue;
 
+		firstidx = idx;
+
 		/* iterations over entries in tsvector */
-		while (entry - firstentry < nitem)
+		while (idx - firstidx < nitem)
 		{
-			if (entry->haspos)
+			WordEntry  *entry;
+			char	   *lex = tsvector_getlexeme(txt, idx, &entry);
+
+			Assert(!entry->hasoff);
+			if (entry->npos)
 			{
-				dimt = POSDATALEN(txt, entry);
-				post = POSDATAPTR(txt, entry);
+				dimt = entry->npos;
+				post = POSDATAPTR(lex, entry->len);
 			}
 			else
 			{
 				/* ignore words without positions */
-				entry++;
+				idx++;
 				continue;
 			}
 
@@ -782,13 +809,12 @@ get_docrep(TSVector txt, QueryRepresentation *qr, int *doclen)
 					curoperand->weight & (1 << WEP_GETWEIGHT(post[j])))
 				{
 					doc[cur].pos = post[j];
-					doc[cur].data.map.entry = entry;
+					doc[cur].data.map.idx = idx;
 					doc[cur].data.map.item = (QueryItem *) curoperand;
 					cur++;
 				}
 			}
-
-			entry++;
+			idx++;
 		}
 	}
 
@@ -814,7 +840,7 @@ get_docrep(TSVector txt, QueryRepresentation *qr, int *doclen)
 		while (rptr - doc < cur)
 		{
 			if (rptr->pos == (rptr - 1)->pos &&
-				rptr->data.map.entry == (rptr - 1)->data.map.entry)
+				rptr->data.map.idx == (rptr - 1)->data.map.idx)
 			{
 				storage.data.query.items[storage.data.query.nitem] = rptr->data.map.item;
 				storage.data.query.nitem++;
@@ -917,7 +943,7 @@ calc_rank_cd(const float4 *arrdata, TSVector txt, TSQuery query, int method)
 		NExtent++;
 	}
 
-	if ((method & RANK_NORM_LOGLENGTH) && txt->size > 0)
+	if ((method & RANK_NORM_LOGLENGTH) && TS_COUNT(txt) > 0)
 		Wdoc /= log((double) (cnt_length(txt) + 1));
 
 	if (method & RANK_NORM_LENGTH)
@@ -930,11 +956,11 @@ calc_rank_cd(const float4 *arrdata, TSVector txt, TSQuery query, int method)
 	if ((method & RANK_NORM_EXTDIST) && NExtent > 0 && SumDist > 0)
 		Wdoc /= ((double) NExtent) / SumDist;
 
-	if ((method & RANK_NORM_UNIQ) && txt->size > 0)
-		Wdoc /= (double) (txt->size);
+	if ((method & RANK_NORM_UNIQ) && TS_COUNT(txt) > 0)
+		Wdoc /= (double) (TS_COUNT(txt));
 
-	if ((method & RANK_NORM_LOGUNIQ) && txt->size > 0)
-		Wdoc /= log((double) (txt->size + 1)) / log(2.0);
+	if ((method & RANK_NORM_LOGUNIQ) && TS_COUNT(txt) > 0)
+		Wdoc /= log((double) (TS_COUNT(txt) + 1)) / log(2.0);
 
 	if (method & RANK_NORM_RDIVRPLUS1)
 		Wdoc /= (Wdoc + 1);

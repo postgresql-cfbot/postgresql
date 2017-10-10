@@ -156,13 +156,10 @@ TSVector
 make_tsvector(ParsedText *prs)
 {
 	int			i,
-				j,
 				lenstr = 0,
-				totallen;
+				totallen,
+				stroff = 0;
 	TSVector	in;
-	WordEntry  *ptr;
-	char	   *str;
-	int			stroff;
 
 	/* Merge duplicate words */
 	if (prs->curwords > 0)
@@ -171,12 +168,9 @@ make_tsvector(ParsedText *prs)
 	/* Determine space needed */
 	for (i = 0; i < prs->curwords; i++)
 	{
-		lenstr += prs->words[i].len;
-		if (prs->words[i].alen)
-		{
-			lenstr = SHORTALIGN(lenstr);
-			lenstr += sizeof(uint16) + prs->words[i].pos.apos[0] * sizeof(WordEntryPos);
-		}
+		int			npos = prs->words[i].alen ? prs->words[i].pos.apos[0] : 0;
+
+		INCRSIZE(lenstr, i, prs->words[i].len, npos);
 	}
 
 	if (lenstr > MAXSTRPOS)
@@ -187,41 +181,21 @@ make_tsvector(ParsedText *prs)
 	totallen = CALCDATASIZE(prs->curwords, lenstr);
 	in = (TSVector) palloc0(totallen);
 	SET_VARSIZE(in, totallen);
-	in->size = prs->curwords;
+	TS_SETCOUNT(in, prs->curwords);
 
-	ptr = ARRPTR(in);
-	str = STRPTR(in);
-	stroff = 0;
 	for (i = 0; i < prs->curwords; i++)
 	{
-		ptr->len = prs->words[i].len;
-		ptr->pos = stroff;
-		memcpy(str + stroff, prs->words[i].word, prs->words[i].len);
-		stroff += prs->words[i].len;
+		int			npos = 0;
+
+		if (prs->words[i].alen)
+			npos = prs->words[i].pos.apos[0];
+
+		tsvector_addlexeme(in, i, &stroff, prs->words[i].word, prs->words[i].len,
+						   prs->words[i].pos.apos + 1, npos);
+
 		pfree(prs->words[i].word);
 		if (prs->words[i].alen)
-		{
-			int			k = prs->words[i].pos.apos[0];
-			WordEntryPos *wptr;
-
-			if (k > 0xFFFF)
-				elog(ERROR, "positions array too long");
-
-			ptr->haspos = 1;
-			stroff = SHORTALIGN(stroff);
-			*(uint16 *) (str + stroff) = (uint16) k;
-			wptr = POSDATAPTR(in, ptr);
-			for (j = 0; j < k; j++)
-			{
-				WEP_SETWEIGHT(wptr[j], 0);
-				WEP_SETPOS(wptr[j], prs->words[i].pos.apos[j + 1]);
-			}
-			stroff += sizeof(uint16) + k * sizeof(WordEntryPos);
 			pfree(prs->words[i].pos.apos);
-		}
-		else
-			ptr->haspos = 0;
-		ptr++;
 	}
 
 	if (prs->words)
@@ -251,7 +225,6 @@ to_tsvector_byid(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(in, 1);
 
 	out = make_tsvector(&prs);
-
 	PG_RETURN_TSVECTOR(out);
 }
 

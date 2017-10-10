@@ -67,23 +67,27 @@ gin_extract_tsvector(PG_FUNCTION_ARGS)
 	TSVector	vector = PG_GETARG_TSVECTOR(0);
 	int32	   *nentries = (int32 *) PG_GETARG_POINTER(1);
 	Datum	   *entries = NULL;
+	int			tscount = TS_COUNT(vector);
 
-	*nentries = vector->size;
-	if (vector->size > 0)
+	*nentries = tscount;
+	if (tscount > 0)
 	{
 		int			i;
+		uint32		pos;
+
 		WordEntry  *we = ARRPTR(vector);
 
-		entries = (Datum *) palloc(sizeof(Datum) * vector->size);
+		entries = (Datum *) palloc(sizeof(Datum) * tscount);
 
-		for (i = 0; i < vector->size; i++)
+		INITPOS(pos);
+		for (i = 0; i < tscount; i++)
 		{
 			text	   *txt;
 
-			txt = cstring_to_text_with_len(STRPTR(vector) + we->pos, we->len);
+			txt = cstring_to_text_with_len(STRPTR(vector) + pos,
+										   ENTRY_LEN(vector, we));
 			entries[i] = PointerGetDatum(txt);
-
-			we++;
+			INCRPTR(vector, we, pos);
 		}
 	}
 

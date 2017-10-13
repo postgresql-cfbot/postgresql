@@ -48,7 +48,8 @@ extern List *RelationGetIndexPredicate(Relation relation);
 
 typedef enum IndexAttrBitmapKind
 {
-	INDEX_ATTR_BITMAP_ALL,
+	INDEX_ATTR_BITMAP_HOT,
+	INDEX_ATTR_BITMAP_WARM,
 	INDEX_ATTR_BITMAP_KEY,
 	INDEX_ATTR_BITMAP_PRIMARY_KEY,
 	INDEX_ATTR_BITMAP_IDENTITY_KEY

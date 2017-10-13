@@ -130,6 +130,15 @@ static relopt_bool boolRelOpts[] =
 	},
 	{
 		{
+			"projection",
+			"Evaluate functional index expression on update to check if its values is changed",
+			RELOPT_KIND_INDEX,
+			AccessExclusiveLock
+		},
+		true
+	},
+	{
+		{
 			"security_barrier",
 			"View acts as a row security barrier",
 			RELOPT_KIND_VIEW,
@@ -1301,7 +1310,7 @@ fillRelOptions(void *rdopts, Size basesize,
 				break;
 			}
 		}
-		if (validate && !found)
+		if (validate && !found && options[i].gen->kinds != RELOPT_KIND_INDEX)
 			elog(ERROR, "reloption \"%s\" not found in parse table",
 				 options[i].gen->name);
 	}

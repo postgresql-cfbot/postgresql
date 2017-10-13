@@ -4582,6 +4582,8 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->tuples_updated = 0;
 		result->tuples_deleted = 0;
 		result->tuples_hot_updated = 0;
+		result->hot_update_hits = 0;
+		result->hot_update_misses = 0;
 		result->n_live_tuples = 0;
 		result->n_dead_tuples = 0;
 		result->changes_since_analyze = 0;
@@ -5712,6 +5714,8 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->tuples_updated = tabmsg->t_counts.t_tuples_updated;
 			tabentry->tuples_deleted = tabmsg->t_counts.t_tuples_deleted;
 			tabentry->tuples_hot_updated = tabmsg->t_counts.t_tuples_hot_updated;
+			tabentry->hot_update_hits = tabmsg->t_counts.t_hot_update_hits;
+			tabentry->hot_update_misses = tabmsg->t_counts.t_hot_update_misses;
 			tabentry->n_live_tuples = tabmsg->t_counts.t_delta_live_tuples;
 			tabentry->n_dead_tuples = tabmsg->t_counts.t_delta_dead_tuples;
 			tabentry->changes_since_analyze = tabmsg->t_counts.t_changed_tuples;
@@ -5739,6 +5743,8 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->tuples_updated += tabmsg->t_counts.t_tuples_updated;
 			tabentry->tuples_deleted += tabmsg->t_counts.t_tuples_deleted;
 			tabentry->tuples_hot_updated += tabmsg->t_counts.t_tuples_hot_updated;
+			tabentry->hot_update_hits += tabmsg->t_counts.t_hot_update_hits;
+			tabentry->hot_update_misses += tabmsg->t_counts.t_hot_update_misses;
 			/* If table was truncated, first reset the live/dead counters */
 			if (tabmsg->t_counts.t_truncated)
 			{

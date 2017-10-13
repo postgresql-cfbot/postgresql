@@ -105,6 +105,8 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter t_tuples_updated;
 	PgStat_Counter t_tuples_deleted;
 	PgStat_Counter t_tuples_hot_updated;
+	PgStat_Counter t_hot_update_hits;
+	PgStat_Counter t_hot_update_misses;
 	bool		t_truncated;
 
 	PgStat_Counter t_delta_live_tuples;
@@ -566,7 +568,7 @@ typedef union PgStat_Msg
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9D
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9E
 
 /* ----------
  * PgStat_StatDBEntry			The collector's data per database
@@ -625,6 +627,9 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter tuples_updated;
 	PgStat_Counter tuples_deleted;
 	PgStat_Counter tuples_hot_updated;
+
+	PgStat_Counter hot_update_hits;
+	PgStat_Counter hot_update_misses;
 
 	PgStat_Counter n_live_tuples;
 	PgStat_Counter n_dead_tuples;

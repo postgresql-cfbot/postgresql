@@ -1656,11 +1656,11 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("(");
 	/* ALTER INDEX <foo> SET|RESET ( */
 	else if (Matches5("ALTER", "INDEX", MatchAny, "RESET", "("))
-		COMPLETE_WITH_LIST3("fillfactor", "fastupdate",
-							"gin_pending_list_limit");
+		COMPLETE_WITH_LIST4("fillfactor", "fastupdate",
+							"gin_pending_list_limit", "projection");
 	else if (Matches5("ALTER", "INDEX", MatchAny, "SET", "("))
-		COMPLETE_WITH_LIST3("fillfactor =", "fastupdate =",
-							"gin_pending_list_limit =");
+		COMPLETE_WITH_LIST4("fillfactor =", "fastupdate =",
+							"gin_pending_list_limit =", "projection = ");
 
 	/* ALTER LANGUAGE <name> */
 	else if (Matches3("ALTER", "LANGUAGE", MatchAny))

@@ -26,6 +26,7 @@ extern int	max_standby_streaming_delay;
 
 extern void InitRecoveryTransactionEnvironment(void);
 extern void ShutdownRecoveryTransactionEnvironment(void);
+extern void SendHotStandbyExitSignal(void);
 
 extern void ResolveRecoveryConflictWithSnapshot(TransactionId latestRemovedXid,
 									RelFileNode node);

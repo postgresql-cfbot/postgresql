@@ -361,7 +361,7 @@ struct pg_conn
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif
 
-	/* Type of connection to make.  Possible values: any, read-write. */
+	/* Type of connection to make.  Possible values: any, read-write, read-only. */
 	char	   *target_session_attrs;
 
 	/* Optional file to write trace info to */
@@ -421,6 +421,7 @@ struct pg_conn
 	pgParameterStatus *pstatus; /* ParameterStatus data */
 	int			client_encoding;	/* encoding id */
 	bool		std_strings;	/* standard_conforming_strings */
+	bool		session_read_only;	/* session_read_only */
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */

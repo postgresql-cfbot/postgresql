@@ -1476,10 +1476,14 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        <para>
         If this parameter is set to <literal>read-write</literal>, only a
         connection in which read-write transactions are accepted by default
+        is considered acceptable.
+        If this parameter is set to <literal>read-only</literal>, only a
+        connection in which read-write transactions are rejected by default
         is considered acceptable.  The query
         <literal>SHOW transaction_read_only</literal> will be sent upon any
-        successful connection; if it returns <literal>on</>, the connection
-        will be closed.  If multiple hosts were specified in the connection
+        successful connection if the server is prior to version 10.
+        If the session attribute does not match the requested one, the connection will be closed.
+        If multiple hosts were specified in the connection
         string, any remaining servers will be tried just as if the connection
         attempt had failed.  The default value of this parameter,
         <literal>any</>, regards all connections as acceptable.
@@ -1760,6 +1764,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>application_name</>,
        <varname>is_superuser</>,
        <varname>session_authorization</>,
+       <varname>session_read_only</>,
        <varname>DateStyle</>,
        <varname>IntervalStyle</>,
        <varname>TimeZone</>,
@@ -1770,7 +1775,8 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>standard_conforming_strings</> was not reported by releases
        before 8.1;
        <varname>IntervalStyle</> was not reported by releases before 8.4;
-       <varname>application_name</> was not reported by releases before 9.0.)
+       <varname>application_name</> was not reported by releases before 9.0;
+       <varname>session_read_only</> was not reported by releases before 10.0.)
        Note that
        <varname>server_version</>,
        <varname>server_encoding</> and

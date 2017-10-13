@@ -1007,8 +1007,8 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 	}
 
 	/*
-	 * Special hacks: remember client_encoding and
-	 * standard_conforming_strings, and convert server version to a numeric
+	 * Special hacks: remember client_encoding/
+	 * standard_conforming_strings/session_read_only, and convert server version to a numeric
 	 * form.  We keep the first two of these in static variables as well, so
 	 * that PQescapeString and PQescapeBytea can behave somewhat sanely (at
 	 * least in single-connection-using programs).
@@ -1026,6 +1026,8 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 		conn->std_strings = (strcmp(value, "on") == 0);
 		static_std_strings = conn->std_strings;
 	}
+	else if (strcmp(name, "session_read_only") == 0)
+		conn->session_read_only = (strcmp(value, "on") == 0);
 	else if (strcmp(name, "server_version") == 0)
 	{
 		int			cnt;

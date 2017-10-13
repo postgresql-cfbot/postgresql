@@ -1185,23 +1185,33 @@ ALTER FOREIGN TABLE ft1 DROP CONSTRAINT ft1_c2negative;
 -- ===================================================================
 
 CREATE TABLE base_tbl (a int, b int);
+CREATE FUNCTION row_before_insupd_trigfunc() RETURNS trigger AS $$BEGIN NEW.a := NEW.a + 10; RETURN NEW; END$$ LANGUAGE plpgsql;
+CREATE TRIGGER row_before_insupd_trigger BEFORE INSERT OR UPDATE ON base_tbl FOR EACH ROW EXECUTE PROCEDURE row_before_insupd_trigfunc();
 CREATE FOREIGN TABLE foreign_tbl (a int, b int)
-  SERVER loopback OPTIONS(table_name 'base_tbl');
+  SERVER loopback OPTIONS (table_name 'base_tbl');
 CREATE VIEW rw_view AS SELECT * FROM foreign_tbl
   WHERE a < b WITH CHECK OPTION;
 \d+ rw_view
 
-INSERT INTO rw_view VALUES (0, 10); -- ok
-INSERT INTO rw_view VALUES (10, 0); -- should fail
 EXPLAIN (VERBOSE, COSTS OFF)
-UPDATE rw_view SET b = 20 WHERE a = 0; -- not pushed down
-UPDATE rw_view SET b = 20 WHERE a = 0; -- ok
+INSERT INTO rw_view VALUES (0, 5);
+INSERT INTO rw_view VALUES (0, 5); -- should fail
 EXPLAIN (VERBOSE, COSTS OFF)
-UPDATE rw_view SET b = -20 WHERE a = 0; -- not pushed down
-UPDATE rw_view SET b = -20 WHERE a = 0; -- should fail
+INSERT INTO rw_view VALUES (0, 15);
+INSERT INTO rw_view VALUES (0, 15); -- ok
+SELECT * FROM foreign_tbl;
+
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE rw_view SET b = b + 5;
+UPDATE rw_view SET b = b + 5; -- should fail
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE rw_view SET b = b + 15;
+UPDATE rw_view SET b = b + 15; -- ok
 SELECT * FROM foreign_tbl;
 
 DROP FOREIGN TABLE foreign_tbl CASCADE;
+DROP TRIGGER row_before_insupd_trigger ON base_tbl;
+DROP FUNCTION row_before_insupd_trigfunc;
 DROP TABLE base_tbl;
 
 -- ===================================================================

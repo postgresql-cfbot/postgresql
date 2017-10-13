@@ -565,12 +565,13 @@ ExecForeignInsert(EState *estate,
 
     <para>
      The data in the returned slot is used only if the <command>INSERT</>
-     query has a <literal>RETURNING</> clause or the foreign table has
-     an <literal>AFTER ROW</> trigger.  Triggers require all columns, but the
-     FDW could choose to optimize away returning some or all columns depending
-     on the contents of the <literal>RETURNING</> clause.  Regardless, some
-     slot must be returned to indicate success, or the query's reported row
-     count will be wrong.
+     query has a <literal>WITH CHECK OPTION</> or <literal>RETURNING</>
+     clause or the foreign table has an <literal>AFTER ROW</> trigger.
+     Triggers require all columns, but the FDW could choose to optimize away
+     returning some or all columns depending on the contents of the
+     <literal>WITH CHECK OPTION</> or <literal>RETURNING</> clause.
+     Regardless, some slot must be returned to indicate success, or the
+     query's reported row count will be wrong.
     </para>
 
     <para>
@@ -611,12 +612,13 @@ ExecForeignUpdate(EState *estate,
 
     <para>
      The data in the returned slot is used only if the <command>UPDATE</>
-     query has a <literal>RETURNING</> clause or the foreign table has
-     an <literal>AFTER ROW</> trigger.  Triggers require all columns, but the
-     FDW could choose to optimize away returning some or all columns depending
-     on the contents of the <literal>RETURNING</> clause.  Regardless, some
-     slot must be returned to indicate success, or the query's reported row
-     count will be wrong.
+     query has a <literal>WITH CHECK OPTION</> or <literal>RETURNING</>
+     clause or the foreign table has an <literal>AFTER ROW</> trigger.
+     Triggers require all columns, but the FDW could choose to optimize away
+     returning some or all columns depending on the contents of the
+     <literal>WITH CHECK OPTION</> or <literal>RETURNING</> clause.
+     Regardless, some slot must be returned to indicate success, or the
+     query's reported row count will be wrong.
     </para>
 
     <para>

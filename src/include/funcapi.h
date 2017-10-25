@@ -2,6 +2,7 @@
  *
  * funcapi.h
  *	  Definitions for functions which return composite type and/or sets
+ *	  or work on VARIADIC inputs.
  *
  * This file must be included by all Postgres modules that either define
  * or call FUNCAPI-callable functions or macros.
@@ -316,3 +317,27 @@ extern void end_MultiFuncCall(PG_FUNCTION_ARGS, FuncCallContext *funcctx);
 	} while (0)
 
 #endif							/* FUNCAPI_H */
+
+/*----------
+ *	Support to ease writing of functions dealing with VARIADIC inputs
+ *----------
+ *
+ * This function extracts a set of argument values, types and NULL markers
+ * for a given input function. This returns a set of data:
+ * - **values includes the set of Datum values extracted.
+ * - **types the data type OID for each element.
+ * - **nulls tracks if an element is NULL.
+ *
+ * variadic_start indicates the argument number where the VARIADIC argument
+ * starts.
+ * convert_unknown set to true will enforce the conversion of arguments
+ * with unknown data type to text.
+ *
+ * The return result is the number of elements stored. In the event of a
+ * NULL input, then the caller of this function ought to generate a NULL
+ * object as final result, and in this case a result value of -1 is used
+ * to be able to make the difference between an empty array or object.
+ */
+extern int extract_variadic_args(FunctionCallInfo fcinfo, int variadic_start,
+								 bool convert_unknown, Datum **values,
+								 Oid **types, bool **nulls);

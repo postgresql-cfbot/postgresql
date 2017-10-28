@@ -509,6 +509,7 @@ typedef struct EState
 
 	bool		es_use_parallel_mode; /* can we use parallel workers? */
 
+	bool		es_use_parallel_mode; /* can we use parallel workers? */
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;
 } EState;

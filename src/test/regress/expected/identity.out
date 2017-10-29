@@ -333,3 +333,38 @@ SELECT * FROM itest8;
 RESET ROLE;
 DROP TABLE itest8;
 DROP USER regress_user1;
+-- typed table
+CREATE TYPE itest_type AS (f1 integer, f2 text, f3 bigint);
+CREATE TABLE itest9 OF itest_type (
+   f4 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- error
+ERROR:  column "f4" does not exist
+CREATE TABLE itest9 OF itest_type (
+   f2 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- error
+ERROR:  identity column type must be smallint, integer, or bigint
+CREATE TABLE itest9 OF itest_type (
+   f1 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- ok
+\d itest9
+                         Table "public.itest9"
+ Column |  Type   | Collation | Nullable |           Default            
+--------+---------+-----------+----------+------------------------------
+ f1     | integer |           | not null | generated always as identity
+ f2     | text    |           |          | 
+ f3     | bigint  |           |          | 
+Typed table of type: itest_type
+
+DROP TYPE itest_type CASCADE;
+NOTICE:  drop cascades to table itest9
+-- partitioned tables
+CREATE TABLE itest_parent (f1 date NOT NULL, f2 int) PARTITION BY RANGE (f1);
+CREATE TABLE itest_child PARTITION OF itest_parent (
+   f2 WITH OPTIONS GENERATED ALWAYS AS IDENTITY
+) FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+\d itest_child
+                       Table "public.itest_child"
+ Column |  Type   | Collation | Nullable |           Default            
+--------+---------+-----------+----------+------------------------------
+ f1     | date    |           | not null | 
+ f2     | integer |           | not null | generated always as identity
+Partition of: itest_parent FOR VALUES FROM ('07-01-2016') TO ('08-01-2016')
+
+DROP TABLE itest_parent CASCADE;

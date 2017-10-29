@@ -1753,6 +1753,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					coldef->raw_default = restdef->raw_default;
 					coldef->cooked_default = restdef->cooked_default;
 					coldef->constraints = restdef->constraints;
+					coldef->identity = restdef->identity;
 					coldef->is_from_type = false;
 					list_delete_cell(schema, rest, prev);
 				}
@@ -2257,6 +2258,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 						coldef->cooked_default = restdef->cooked_default;
 						coldef->constraints = restdef->constraints;
 						coldef->is_from_parent = false;
+						coldef->identity = restdef->identity;
 						list_delete_cell(schema, rest, prev);
 					}
 					else

@@ -80,6 +80,7 @@ typedef struct
 	bool		isforeign;		/* true if CREATE/ALTER FOREIGN TABLE */
 	bool		isalter;		/* true if altering existing table */
 	bool		hasoids;		/* does relation have an OID column? */
+	Oid			ofTypeOid;		/* type used with CREATE TABLE OF */
 	List	   *columns;		/* ColumnDef items */
 	List	   *ckconstraints;	/* CHECK constraints */
 	List	   *fkconstraints;	/* FOREIGN KEY constraints */
@@ -231,6 +232,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.rel = NULL;
 	cxt.inhRelations = stmt->inhRelations;
 	cxt.isalter = false;
+	cxt.ofTypeOid = InvalidOid;
 	cxt.columns = NIL;
 	cxt.ckconstraints = NIL;
 	cxt.fkconstraints = NIL;
@@ -240,6 +242,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.alist = NIL;
 	cxt.pkey = NULL;
 	cxt.ispartitioned = stmt->partspec != NULL;
+	cxt.partbound = stmt->partbound;
 
 	/*
 	 * Notice that we allow OIDs here only for plain tables, even though
@@ -661,8 +664,84 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				{
 					Type		ctype;
 					Oid			typeOid;
+					TypeName   *typeName;
+					bool		found_type = false;
+					int			i;
 
-					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					/*
+					 * Look at the type name of the column. When created
+					 * under the context of CREATE TABLE OF, the column type
+					 * name is not specified as part of the column clause, so
+					 * do a lookup at the composite type defined and extract
+					 * the correct type name from it. Columns listed in a
+					 * child partition do not define a type name either, so
+					 * look at the parent partition in this case and extract
+					 * the type needed. Note that the type is needed beforehand
+					 * so as serial evaluations can happen in a consistent way.
+					 */
+					if (OidIsValid(cxt->ofTypeOid))
+					{
+						TupleDesc	tupdesc;
+
+						tupdesc = lookup_rowtype_tupdesc(cxt->ofTypeOid, -1);
+						for (i = 0; i < tupdesc->natts ; i++)
+						{
+							Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+							if (attr->attisdropped)
+								continue;
+
+							if (strcmp(NameStr(attr->attname),
+									   column->colname) == 0)
+							{
+								typeName = makeTypeNameFromOid(attr->atttypid,
+															   attr->atttypmod);
+								found_type = true;
+								break;
+							}
+						}
+						DecrTupleDescRefCount(tupdesc);
+					}
+					else if (cxt->partbound)
+					{
+						Relation	rel;
+						RangeVar   *inh = linitial_node(RangeVar,
+														cxt->inhRelations);
+
+						Assert(list_length(cxt->inhRelations) == 1);
+
+						rel = heap_openrv(inh, AccessShareLock);
+						for (i = 0; i < rel->rd_att->natts; i++)
+						{
+							Form_pg_attribute attr =
+								TupleDescAttr(rel->rd_att, i);
+
+							if (attr->attisdropped)
+								continue;
+							if (strcmp(NameStr(attr->attname),
+									   column->colname) == 0)
+							{
+								typeName = makeTypeNameFromOid(attr->atttypid,
+															   attr->atttypmod);
+								found_type = true;
+								break;
+							}
+						}
+						heap_close(rel, NoLock);
+					}
+					else
+					{
+						typeName = column->typeName;
+						found_type = true;
+					}
+
+					if (!found_type)
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_COLUMN),
+								 errmsg("column \"%s\" does not exist",
+										column->colname)));
+
+					ctype = typenameType(cxt->pstate, typeName, NULL);
 					typeOid = HeapTupleGetOid(ctype);
 					ReleaseSysCache(ctype);
 
@@ -1217,6 +1296,7 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 	check_of_type(tuple);
 	ofTypeId = HeapTupleGetOid(tuple);
 	ofTypename->typeOid = ofTypeId; /* cached for later */
+	cxt->ofTypeOid = ofTypeId;
 
 	tupdesc = lookup_rowtype_tupdesc(ofTypeId, -1);
 	for (i = 0; i < tupdesc->natts; i++)
@@ -2686,6 +2766,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.rel = rel;
 	cxt.inhRelations = NIL;
 	cxt.isalter = true;
+	cxt.ofTypeOid = InvalidOid;
 	cxt.hasoids = false;		/* need not be right */
 	cxt.columns = NIL;
 	cxt.ckconstraints = NIL;

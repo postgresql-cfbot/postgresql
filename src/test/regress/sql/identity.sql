@@ -194,3 +194,22 @@ SELECT * FROM itest8;
 RESET ROLE;
 DROP TABLE itest8;
 DROP USER regress_user1;
+
+-- typed table
+CREATE TYPE itest_type AS (f1 integer, f2 text, f3 bigint);
+CREATE TABLE itest9 OF itest_type (
+   f4 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- error
+CREATE TABLE itest9 OF itest_type (
+   f2 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- error
+CREATE TABLE itest9 OF itest_type (
+   f1 WITH OPTIONS GENERATED ALWAYS AS IDENTITY); -- ok
+\d itest9
+DROP TYPE itest_type CASCADE;
+
+-- partitioned tables
+CREATE TABLE itest_parent (f1 date NOT NULL, f2 int) PARTITION BY RANGE (f1);
+CREATE TABLE itest_child PARTITION OF itest_parent (
+   f2 WITH OPTIONS GENERATED ALWAYS AS IDENTITY
+) FOR VALUES FROM ('2016-07-01') TO ('2016-08-01');
+\d itest_child
+DROP TABLE itest_parent CASCADE;

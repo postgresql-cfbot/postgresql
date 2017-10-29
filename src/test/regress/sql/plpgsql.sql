@@ -4820,3 +4820,40 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+CREATE TYPE ct1 AS (a int, b numeric, c varchar);
+CREATE TYPE ct2 AS (a varchar, b int, c date);
+
+CREATE OR REPLACE FUNCTION multiout(IN id int, OUT v1 ct1, OUT v2 ct2, OUT v3 text)
+AS $$
+BEGIN
+  v1.a := 10;
+  v1.b := 3.14;
+  v1.c := 'ok';
+  v2.a := 'without any error';
+  v2.b := 45442;
+  v2.c := '20170514';
+  v3 := 'no error';
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE v1 ct1; v2 ct2; v3 text;
+BEGIN
+  SELECT * FROM multiout(10) INTO v1, v2, v3;
+  RAISE NOTICE 'v1 := %', v1;
+  RAISE NOTICE 'v2 := %', v2;
+  RAISE NOTICE 'v3 := %', v3;
+END;
+$$;
+
+-- should fail
+DO $$
+DECLARE v1 ct1; v2 ct2; v3 text;
+BEGIN
+  SELECT * FROM multiout(10) INTO v2, v1, v3;
+  RAISE NOTICE 'v1 := %', v1;
+  RAISE NOTICE 'v2 := %', v2;
+  RAISE NOTICE 'v3 := %', v3;
+END;
+$$;

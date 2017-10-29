@@ -92,9 +92,10 @@ static	char			*NameOfDatum(PLwdatum *wdatum);
 static	void			 check_assignable(PLpgSQL_datum *datum, int location);
 static	void			 read_into_target(PLpgSQL_rec **rec, PLpgSQL_row **row,
 										  bool *strict);
-static	PLpgSQL_row		*read_into_scalar_list(char *initial_name,
-											   PLpgSQL_datum *initial_datum,
-											   int initial_location);
+static void read_into_list(char *initial_name,
+					  PLpgSQL_datum *initial_datum, int initial_location,
+					  PLpgSQL_datum **scalar,
+					  PLpgSQL_rec **rec, PLpgSQL_row **row);
 static	PLpgSQL_row		*make_scalar_list1(char *initial_name,
 										   PLpgSQL_datum *initial_datum,
 										   int lineno, int location);
@@ -1558,33 +1559,9 @@ for_variable	: T_DATUM
 					{
 						$$.name = NameOfDatum(&($1));
 						$$.lineno = plpgsql_location_to_lineno(@1);
-						if ($1.datum->dtype == PLPGSQL_DTYPE_ROW)
-						{
-							$$.scalar = NULL;
-							$$.rec = NULL;
-							$$.row = (PLpgSQL_row *) $1.datum;
-						}
-						else if ($1.datum->dtype == PLPGSQL_DTYPE_REC)
-						{
-							$$.scalar = NULL;
-							$$.rec = (PLpgSQL_rec *) $1.datum;
-							$$.row = NULL;
-						}
-						else
-						{
-							int			tok;
 
-							$$.scalar = $1.datum;
-							$$.rec = NULL;
-							$$.row = NULL;
-							/* check for comma-separated list */
-							tok = yylex();
-							plpgsql_push_back_token(tok);
-							if (tok == ',')
-								$$.row = read_into_scalar_list($$.name,
-															   $$.scalar,
-															   @1);
-						}
+						read_into_list($$.name, $1.datum, @1,
+									   &$$.scalar, &$$.rec, &$$.row);
 					}
 				| T_WORD
 					{
@@ -3337,95 +3314,42 @@ check_assignable(PLpgSQL_datum *datum, int location)
 }
 
 /*
- * Read the argument of an INTO clause.  On entry, we have just read the
- * INTO keyword.
+ * Given the first datum and name in the INTO list, continue to read
+ * comma-separated variables until we run out. Then construct
+ * and return a fake "row" variable that represents the list of
+ * fields. When there is only one rec or row field, then return
+ * this variable without nesting.
  */
 static void
-read_into_target(PLpgSQL_rec **rec, PLpgSQL_row **row, bool *strict)
-{
-	int			tok;
-
-	/* Set default results */
-	*rec = NULL;
-	*row = NULL;
-	if (strict)
-		*strict = false;
-
-	tok = yylex();
-	if (strict && tok == K_STRICT)
-	{
-		*strict = true;
-		tok = yylex();
-	}
-
-	/*
-	 * Currently, a row or record variable can be the single INTO target,
-	 * but not a member of a multi-target list.  So we throw error if there
-	 * is a comma after it, because that probably means the user tried to
-	 * write a multi-target list.  If this ever gets generalized, we should
-	 * probably refactor read_into_scalar_list so it handles all cases.
-	 */
-	switch (tok)
-	{
-		case T_DATUM:
-			if (yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_ROW)
-			{
-				check_assignable(yylval.wdatum.datum, yylloc);
-				*row = (PLpgSQL_row *) yylval.wdatum.datum;
-
-				if ((tok = yylex()) == ',')
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("record or row variable cannot be part of multiple-item INTO list"),
-							 parser_errposition(yylloc)));
-				plpgsql_push_back_token(tok);
-			}
-			else if (yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_REC)
-			{
-				check_assignable(yylval.wdatum.datum, yylloc);
-				*rec = (PLpgSQL_rec *) yylval.wdatum.datum;
-
-				if ((tok = yylex()) == ',')
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("record or row variable cannot be part of multiple-item INTO list"),
-							 parser_errposition(yylloc)));
-				plpgsql_push_back_token(tok);
-			}
-			else
-			{
-				*row = read_into_scalar_list(NameOfDatum(&(yylval.wdatum)),
-											 yylval.wdatum.datum, yylloc);
-			}
-			break;
-
-		default:
-			/* just to give a better message than "syntax error" */
-			current_token_is_not_variable(tok);
-	}
-}
-
-/*
- * Given the first datum and name in the INTO list, continue to read
- * comma-separated scalar variables until we run out. Then construct
- * and return a fake "row" variable that represents the list of
- * scalars.
- */
-static PLpgSQL_row *
-read_into_scalar_list(char *initial_name,
-					  PLpgSQL_datum *initial_datum,
-					  int initial_location)
+read_into_list(char *initial_name,
+					  PLpgSQL_datum *initial_datum, int initial_location,
+					  PLpgSQL_datum **scalar, PLpgSQL_rec **rec, PLpgSQL_row **row)
 {
 	int				 nfields;
 	char			*fieldnames[1024];
 	int				 varnos[1024];
-	PLpgSQL_row		*row;
+	PLpgSQL_row		*auxrow;
 	int				 tok;
 
 	check_assignable(initial_datum, initial_location);
 	fieldnames[0] = initial_name;
 	varnos[0]	  = initial_datum->dno;
 	nfields		  = 1;
+
+	*rec = NULL;
+	*row = NULL;
+	if (scalar)
+		*scalar = NULL;
+
+	/*
+	 * save row or rec if list has only one field.
+	 */
+	if (initial_datum->dtype == PLPGSQL_DTYPE_ROW)
+		*row = (PLpgSQL_row *) initial_datum;
+	else if (initial_datum->dtype == PLPGSQL_DTYPE_REC)
+		*rec = (PLpgSQL_rec *) initial_datum;
+	else if (scalar != NULL)
+		*scalar = initial_datum;
 
 	while ((tok = yylex()) == ',')
 	{
@@ -3441,13 +3365,6 @@ read_into_scalar_list(char *initial_name,
 		{
 			case T_DATUM:
 				check_assignable(yylval.wdatum.datum, yylloc);
-				if (yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_ROW ||
-					yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_REC)
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("\"%s\" is not a scalar variable",
-									NameOfDatum(&(yylval.wdatum))),
-							 parser_errposition(yylloc)));
 				fieldnames[nfields] = NameOfDatum(&(yylval.wdatum));
 				varnos[nfields++]	= yylval.wdatum.datum->dno;
 				break;
@@ -3464,23 +3381,64 @@ read_into_scalar_list(char *initial_name,
 	 */
 	plpgsql_push_back_token(tok);
 
-	row = palloc(sizeof(PLpgSQL_row));
-	row->dtype = PLPGSQL_DTYPE_ROW;
-	row->refname = pstrdup("*internal*");
-	row->lineno = plpgsql_location_to_lineno(initial_location);
-	row->rowtupdesc = NULL;
-	row->nfields = nfields;
-	row->fieldnames = palloc(sizeof(char *) * nfields);
-	row->varnos = palloc(sizeof(int) * nfields);
+	/* leave when new row var is not necessary */
+	if (nfields == 1 && (*row != NULL || *rec != NULL || scalar != NULL))
+		return;
+
+	auxrow = palloc(sizeof(PLpgSQL_row));
+	auxrow->dtype = PLPGSQL_DTYPE_ROW;
+	auxrow->refname = pstrdup("*internal*");
+	auxrow->lineno = plpgsql_location_to_lineno(initial_location);
+	auxrow->rowtupdesc = NULL;
+	auxrow->nfields = nfields;
+	auxrow->fieldnames = palloc(sizeof(char *) * nfields);
+	auxrow->varnos = palloc(sizeof(int) * nfields);
 	while (--nfields >= 0)
 	{
-		row->fieldnames[nfields] = fieldnames[nfields];
-		row->varnos[nfields] = varnos[nfields];
+		auxrow->fieldnames[nfields] = fieldnames[nfields];
+		auxrow->varnos[nfields] = varnos[nfields];
 	}
 
-	plpgsql_adddatum((PLpgSQL_datum *)row);
+	plpgsql_adddatum((PLpgSQL_datum *)auxrow);
 
-	return row;
+	/* result should not be rec */
+	*rec = NULL;
+	*row = auxrow;
+}
+
+
+/*
+ * Read the argument of an INTO clause.  On entry, we have just read the
+ * INTO keyword.
+ */
+static void
+read_into_target(PLpgSQL_rec **rec, PLpgSQL_row **row, bool *strict)
+{
+	int			tok;
+
+	/* Set default results */
+	if (strict)
+		*strict = false;
+
+	tok = yylex();
+	if (strict && tok == K_STRICT)
+	{
+		*strict = true;
+		tok = yylex();
+	}
+
+	switch (tok)
+	{
+		case T_DATUM:
+				read_into_list(NameOfDatum(&(yylval.wdatum)),
+											 yylval.wdatum.datum, yylloc,
+											 NULL, rec, row);
+			break;
+
+		default:
+			/* just to give a better message than "syntax error" */
+			current_token_is_not_variable(tok);
+	}
 }
 
 /*

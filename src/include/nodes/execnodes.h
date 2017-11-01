@@ -1342,6 +1342,8 @@ typedef struct ParallelBitmapHeapState
  *		shared_tbmiterator	   shared iterator
  *		shared_prefetch_iterator shared iterator for prefetching
  *		pstate			   shared state for parallel bitmap scan
+ * 		bhs_vmbuffer	   buffer for visibility map lookups
+ * 		bhs_nofetch		   can we not fetch the heap page and return an empty tuple?
  * ----------------
  */
 typedef struct BitmapHeapScanState
@@ -1362,6 +1364,8 @@ typedef struct BitmapHeapScanState
 	TBMSharedIterator *shared_tbmiterator;
 	TBMSharedIterator *shared_prefetch_iterator;
 	ParallelBitmapHeapState *pstate;
+	Buffer bhs_vmbuffer;
+	bool bhs_nofetch;
 } BitmapHeapScanState;
 
 /* ----------------

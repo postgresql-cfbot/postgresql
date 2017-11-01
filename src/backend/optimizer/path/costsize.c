@@ -983,6 +983,14 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 	else
 		cost_per_page = spc_random_page_cost;
 
+	/*
+	 * Bitmap heap scan tries not to fetch the heap pages if the targetlist
+	 * is empty. It should be reflected in the cost somehow; for now, just
+	 * halve the number of pages to be fetched.
+	 */
+	if (path->pathtarget->exprs == NIL)
+		pages_fetched = pages_fetched / 2;
+
 	run_cost += pages_fetched * cost_per_page;
 
 	/*

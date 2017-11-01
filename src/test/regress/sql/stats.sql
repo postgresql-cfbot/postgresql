@@ -138,7 +138,10 @@ ROLLBACK;
 -- do a seqscan
 SELECT count(*) FROM tenk2;
 -- do an indexscan
+-- disable bitmap scan because it can skip fetching the heap tuples
+SET enable_bitmapscan to OFF;
 SELECT count(*) FROM tenk2 WHERE unique1 = 1;
+SET enable_bitmapscan to ON;
 
 -- We can't just call wait_for_stats() at this point, because we only
 -- transmit stats when the session goes idle, and we probably didn't

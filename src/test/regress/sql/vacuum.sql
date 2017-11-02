@@ -90,5 +90,24 @@ ANALYZE vactst, does_not_exist, vacparted;
 ANALYZE vactst (i), vacparted (does_not_exist);
 
 DROP TABLE vaccluster;
+
+INSERT INTO vactst SELECT * from generate_series(1,400000);
+CREATE INDEX ix_vactst ON vactst (i);
+DELETE FROM vactst WHERE i in (SELECT i FROM vactst ORDER BY random() LIMIT 300000);
+SET maintenance_work_mem = 1024;
+VACUUM vactst;
+SET maintenance_work_mem TO DEFAULT;
+DROP INDEX ix_vactst;
+TRUNCATE TABLE vactst;
+
+INSERT INTO vactst SELECT * from generate_series(1,40);
+CREATE INDEX ix_vactst ON vactst (i);
+DELETE FROM vactst;
+VACUUM vactst;
+SELECT pg_relation_size('vactst', 'main');
+SELECT count(*) FROM vactst;
+DROP INDEX ix_vactst;
+TRUNCATE TABLE vactst;
+
 DROP TABLE vactst;
 DROP TABLE vacparted;

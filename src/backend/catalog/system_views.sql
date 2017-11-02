@@ -883,8 +883,9 @@ CREATE VIEW pg_stat_bgwriter AS
 
 CREATE VIEW pg_stat_progress_vacuum AS
 	SELECT
-		S.pid AS pid, S.datid AS datid, D.datname AS datname,
-		S.relid AS relid,
+		S.pid,
+		S.datid,
+		S.relid,
 		CASE S.param1 WHEN 0 THEN 'initializing'
 					  WHEN 1 THEN 'scanning heap'
 					  WHEN 2 THEN 'vacuuming indexes'
@@ -893,11 +894,22 @@ CREATE VIEW pg_stat_progress_vacuum AS
 					  WHEN 5 THEN 'truncating heap'
 					  WHEN 6 THEN 'performing final cleanup'
 					  END AS phase,
-		S.param2 AS heap_blks_total, S.param3 AS heap_blks_scanned,
-		S.param4 AS heap_blks_vacuumed, S.param5 AS index_vacuum_count,
-		S.param6 AS max_dead_tuples, S.param7 AS num_dead_tuples
-    FROM pg_stat_get_progress_info('VACUUM') AS S
-		LEFT JOIN pg_database D ON S.datid = D.oid;
+		S.param2 AS heap_blks_total,
+		W.heap_blks_scanned,
+		W.heap_blks_vacuumed,
+		W.index_vacuum_count,
+		S.param6 AS max_dead_tuples,
+		W.num_dead_tuples
+	FROM pg_stat_get_progress_info('VACUUM') AS S,
+		(SELECT leader_pid,
+			max(param3) AS heap_blks_scanned,
+			max(param4) AS heap_blks_vacuumed,
+			max(param5) AS index_vacuum_count,
+			max(param7) AS num_dead_tuples
+		FROM pg_stat_get_progress_info('VACUUM')
+		GROUP BY leader_pid) AS W
+	WHERE
+		S.pid = W.leader_pid;
 
 CREATE VIEW pg_user_mappings AS
     SELECT

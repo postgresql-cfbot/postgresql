@@ -3210,6 +3210,25 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
 	pgstat_increment_changecount_after(beentry);
 }
 
+/*-----------
+ * pgstat_report_leader_pid() -
+ *
+ * Report process id of the leader process that this backend is involved
+ * with.
+ */
+void
+pgstat_report_leader_pid(int pid)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+	pgstat_increment_changecount_before(beentry);
+	beentry->st_leader_pid = pid;
+	pgstat_increment_changecount_after(beentry);
+}
+
 /* ----------
  * pgstat_read_current_status() -
  *
@@ -3609,6 +3628,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_PARALLEL_BITMAP_SCAN:
 			event_name = "ParallelBitmapScan";
+			break;
+		case WAIT_EVENT_PARALLEL_VACUUM_PREPARE:
+			event_name = "ParallelVacuumPrepare";
+			break;
+		case WAIT_EVENT_PARALLEL_VACUUM_DONE:
+			event_name = "ParallelVacuumDone";
 			break;
 		case WAIT_EVENT_PROCARRAY_GROUP_UPDATE:
 			event_name = "ProcArrayGroupUpdate";

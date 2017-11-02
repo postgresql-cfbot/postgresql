@@ -20,6 +20,7 @@
 #include "access/xlog.h"
 #include "catalog/namespace.h"
 #include "commands/async.h"
+#include "commands/vacuum.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -124,6 +125,9 @@ static const struct
 {
 	{
 		"ParallelQueryMain", ParallelQueryMain
+	},
+	{
+		"LazyVacuumWorkerMain", LazyVacuumWorkerMain
 	}
 };
 
@@ -1135,6 +1139,9 @@ ParallelWorkerMain(Datum main_arg)
 
 	/* Set ParallelMasterBackendId so we know how to address temp relations. */
 	ParallelMasterBackendId = fps->parallel_master_backend_id;
+
+	/* Report pid of master process for progress information */
+	pgstat_report_leader_pid(fps->parallel_master_pid);
 
 	/*
 	 * We've initialized all of our state now; nothing should change

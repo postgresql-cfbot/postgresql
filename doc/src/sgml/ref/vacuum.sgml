@@ -30,6 +30,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     FREEZE
     VERBOSE
     ANALYZE
+    PARALLEL
     DISABLE_PAGE_SKIPPING
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
@@ -137,6 +138,20 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
      <para>
       Updates statistics used by the planner to determine the most
       efficient way to execute a query.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL <replaceable class="PARAMETER">N</replaceable></literal></term>
+    <listitem>
+     <para>
+      Execute <command>VACUUM</command> in parallel by <replaceable class="PARAMETER">N
+      </replaceable> background workers. Collecting garbage on table is processed
+      in block-level parallel. For tables with indexes, parallel vacuum assigns each
+      index to each parallel vacuum worker and all garbages on a index are processed
+      by particular parallel vacuum worker. This option can not use with <literal>FULL</>
+      option.
      </para>
     </listitem>
    </varlistentry>

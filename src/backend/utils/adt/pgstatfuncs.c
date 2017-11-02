@@ -439,7 +439,7 @@ pg_stat_get_backend_idset(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_PROGRESS_COLS	PGSTAT_NUM_PROGRESS_PARAM + 3
+#define PG_STAT_GET_PROGRESS_COLS	PGSTAT_NUM_PROGRESS_PARAM + 4
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	char	   *cmd = text_to_cstring(PG_GETARG_TEXT_PP(0));
@@ -516,14 +516,16 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		if (has_privs_of_role(GetUserId(), beentry->st_userid))
 		{
 			values[2] = ObjectIdGetDatum(beentry->st_progress_command_target);
+			values[3] = Int32GetDatum(beentry->st_leader_pid);
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
-				values[i + 3] = Int64GetDatum(beentry->st_progress_param[i]);
+				values[i + 4] = Int64GetDatum(beentry->st_progress_param[i]);
 		}
 		else
 		{
 			nulls[2] = true;
+			nulls[3] = true;
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
-				nulls[i + 3] = true;
+				nulls[i + 4] = true;
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

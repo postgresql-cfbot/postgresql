@@ -1324,6 +1324,15 @@ FROM ( { <replaceable class="parameter">numeric_literal</replaceable> | <replace
    </varlistentry>
 
    <varlistentry>
+    <term><literal>autovacuum_vacuum_parallel_workers</literal>, <literal>toast.autovacuum_multixact_freeze_max_age</literal> (<type>integer</type>)</term>
+    <listitem>
+     <para>
+      This sets the number of worker that can be used to vacuum for this table. If not set, the autovacuum performs with no workers (non-parallel).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>autovacuum_multixact_freeze_table_age</literal>, <literal>toast.autovacuum_multixact_freeze_table_age</literal> (<type>integer</type>)</term>
     <listitem>
      <para>

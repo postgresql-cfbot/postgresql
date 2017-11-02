@@ -2008,6 +2008,7 @@ psql_completion(const char *text, int start, int end)
 			"autovacuum_multixact_freeze_max_age",
 			"autovacuum_multixact_freeze_min_age",
 			"autovacuum_multixact_freeze_table_age",
+			"autovacuum_vacuum_parallel_workers",
 			"autovacuum_vacuum_cost_delay",
 			"autovacuum_vacuum_cost_limit",
 			"autovacuum_vacuum_scale_factor",

@@ -2040,7 +2040,6 @@ EstimateSnapshotSpace(Snapshot snap)
 	Size		size;
 
 	Assert(snap != InvalidSnapshot);
-	Assert(snap->satisfies == HeapTupleSatisfiesMVCC);
 
 	/* We allocate any XID arrays needed in the same palloc block. */
 	size = add_size(sizeof(SerializedSnapshotData),

@@ -90,8 +90,6 @@ static HeapScanDesc heap_beginscan_internal(Relation relation,
 						bool is_bitmapscan,
 						bool is_samplescan,
 						bool temp_snap);
-static void heap_parallelscan_startblock_init(HeapScanDesc scan);
-static BlockNumber heap_parallelscan_nextpage(HeapScanDesc scan);
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
 					TransactionId xid, CommandId cid, int options);
 static XLogRecPtr log_heap_update(Relation reln, Buffer oldbuf,
@@ -1667,7 +1665,7 @@ heap_beginscan_parallel(Relation relation, ParallelHeapScanDesc parallel_scan)
  *		only to set the startblock once.
  * ----------------
  */
-static void
+void
 heap_parallelscan_startblock_init(HeapScanDesc scan)
 {
 	BlockNumber sync_startpage = InvalidBlockNumber;
@@ -1715,7 +1713,7 @@ retry:
  *		first backend gets an InvalidBlockNumber return.
  * ----------------
  */
-static BlockNumber
+BlockNumber
 heap_parallelscan_nextpage(HeapScanDesc scan)
 {
 	BlockNumber page;

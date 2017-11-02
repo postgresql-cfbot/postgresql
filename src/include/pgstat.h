@@ -811,6 +811,8 @@ typedef enum
 	WAIT_EVENT_MQ_SEND,
 	WAIT_EVENT_PARALLEL_FINISH,
 	WAIT_EVENT_PARALLEL_BITMAP_SCAN,
+	WAIT_EVENT_PARALLEL_VACUUM_PREPARE,
+	WAIT_EVENT_PARALLEL_VACUUM_DONE,
 	WAIT_EVENT_PROCARRAY_GROUP_UPDATE,
 	WAIT_EVENT_CLOG_GROUP_UPDATE,
 	WAIT_EVENT_REPLICATION_ORIGIN_DROP,
@@ -1014,13 +1016,17 @@ typedef struct PgBackendStatus
 
 	/*
 	 * Command progress reporting.  Any command which wishes can advertise
-	 * that it is running by setting st_progress_command,
+	 * that it is running by setting st_leaderpid, st_progress_command,
 	 * st_progress_command_target, and st_progress_param[].
 	 * st_progress_command_target should be the OID of the relation which the
 	 * command targets (we assume there's just one, as this is meant for
 	 * utility commands), but the meaning of each element in the
 	 * st_progress_param array is command-specific.
+	 * st_leader_pid can be used for command progress reporting of parallel
+	 * operation. Setting by the leader's pid of parallel operation we can
+	 * group them in progress reporting SQL.
 	 */
+	int			st_leader_pid;
 	ProgressCommandType st_progress_command;
 	Oid			st_progress_command_target;
 	int64		st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
@@ -1180,6 +1186,7 @@ extern void pgstat_report_activity(BackendState state, const char *cmd_str);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);
+extern void pgstat_report_leader_pid(int pid);
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
 extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);

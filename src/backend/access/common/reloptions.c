@@ -283,6 +283,14 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"autovacuum_vacuum_parallel_workers",
+			"Number of parallel processes that can be used to vacuum for this relation",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		}, -1, 0, 1024
+	},
+	{
+		{
 			"log_autovacuum_min_duration",
 			"Sets the minimum execution time above which autovacuum actions will be logged",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -1342,6 +1350,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_max_age)},
 		{"autovacuum_multixact_freeze_table_age", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
+		{"autovacuum_vacuum_parallel_workers", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_parallel_workers)},
 		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},
 		{"autovacuum_vacuum_scale_factor", RELOPT_TYPE_REAL,

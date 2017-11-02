@@ -61,6 +61,9 @@ VACUUM FULL vaccluster;
 VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
+VACUUM (PARALLEL 2) vactst;
+VACUUM (PARALLEL 2, DISABLE_PAGE_SKIPPING) vactst;
+VACUUM (PARALLEL 2, FREEZE) vactst;
 
 -- partitioned table
 CREATE TABLE vacparted (a int, b char) PARTITION BY LIST (a);

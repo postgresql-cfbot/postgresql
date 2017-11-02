@@ -399,6 +399,14 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	/*
 	 * Write metabuffer, make xlog entry
 	 */
+
+	/*
+	 * Set pd_lower just past the end of the metadata.  This is essential,
+	 * because without doing so, metadata will be lost if xlog.c compresses
+	 * the page.
+	 */
+	((PageHeader) metapage)->pd_lower =
+			((char *) metadata + sizeof(GinMetaPageData)) - (char *) metapage;
 	MarkBufferDirty(metabuffer);
 
 	if (needWal)
@@ -407,7 +415,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 
 		memcpy(&data.metadata, metadata, sizeof(GinMetaPageData));
 
-		XLogRegisterBuffer(0, metabuffer, REGBUF_WILL_INIT);
+		XLogRegisterBuffer(0, metabuffer, REGBUF_WILL_INIT | REGBUF_STANDARD);
 		XLogRegisterData((char *) &data, sizeof(ginxlogUpdateMeta));
 
 		recptr = XLogInsert(RM_GIN_ID, XLOG_GIN_UPDATE_META_PAGE);
@@ -572,6 +580,13 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 			metadata->nPendingHeapTuples = 0;
 		}
 
+		/*
+		 * Set pd_lower just past the end of the metadata.  This is essential,
+		 * because without doing so, metadata will be lost if xlog.c compresses
+		 * the page.
+		 */
+		((PageHeader) metapage)->pd_lower =
+			((char *) metadata + sizeof(GinMetaPageData)) - (char *) metapage;
 		MarkBufferDirty(metabuffer);
 
 		for (i = 0; i < data.ndeleted; i++)
@@ -586,7 +601,8 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 			XLogRecPtr	recptr;
 
 			XLogBeginInsert();
-			XLogRegisterBuffer(0, metabuffer, REGBUF_WILL_INIT);
+			XLogRegisterBuffer(0, metabuffer,
+							   REGBUF_WILL_INIT | REGBUF_STANDARD);
 			for (i = 0; i < data.ndeleted; i++)
 				XLogRegisterBuffer(i + 1, buffers[i], REGBUF_WILL_INIT);
 

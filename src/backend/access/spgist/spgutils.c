@@ -262,9 +262,19 @@ SpGistUpdateMetaPage(Relation index)
 
 		if (ConditionalLockBuffer(metabuffer))
 		{
+			Page		metapage;
+
 			metadata = SpGistPageGetMeta(BufferGetPage(metabuffer));
 			metadata->lastUsedPages = cache->lastUsedPages;
 
+			/*
+			 * Set pd_lower just past the end of the metadata.  This is
+			 * essential, because without doing so, metadata will be lost if
+			 * xlog.c compresses the page.
+			 */
+			metapage = BufferGetPage(metabuffer);
+			((PageHeader) metapage)->pd_lower = ((char *) metadata +
+							sizeof(SpGistMetaPageData)) - (char *) metapage;
 			MarkBufferDirty(metabuffer);
 			UnlockReleaseBuffer(metabuffer);
 		}
@@ -534,6 +544,14 @@ SpGistInitMetapage(Page page)
 	/* initialize last-used-page cache to empty */
 	for (i = 0; i < SPGIST_CACHED_PAGES; i++)
 		metadata->lastUsedPages.cachedPage[i].blkno = InvalidBlockNumber;
+
+	/*
+	 * Set pd_lower just past the end of the metadata.  This is essential,
+	 * because without doing so, metadata will be lost if xlog.c compresses
+	 * the page.
+	 */
+	((PageHeader) page)->pd_lower =
+		((char *) metadata + sizeof(SpGistMetaPageData)) - (char *) page;
 }
 
 /*

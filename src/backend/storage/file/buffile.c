@@ -264,8 +264,7 @@ BufFileLoadBuffer(BufFile *file)
 	file->offsets[file->curFile] += file->nbytes;
 	/* we choose not to advance curOffset here */
 
-	if (file->nbytes > 0)
-		pgBufferUsage.temp_blks_read++;
+	pgBufferUsage.temp_blks_read++;
 }
 
 /*

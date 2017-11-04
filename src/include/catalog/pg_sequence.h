@@ -14,7 +14,7 @@ CATALOG(pg_sequence,2224) BKI_WITHOUT_OIDS
 	int64		seqmax;
 	int64		seqmin;
 	int64		seqcache;
-	bool		seqcycle;
+	bool8		seqcycle;
 } FormData_pg_sequence;
 
 typedef FormData_pg_sequence *Form_pg_sequence;

@@ -26,7 +26,7 @@ typedef struct FormData_pg_sequence_data
 {
 	int64		last_value;
 	int64		log_cnt;
-	bool		is_called;
+	bool8		is_called;
 } FormData_pg_sequence_data;
 
 typedef FormData_pg_sequence_data *Form_pg_sequence_data;

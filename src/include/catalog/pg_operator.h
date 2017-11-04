@@ -37,8 +37,8 @@ CATALOG(pg_operator,2617)
 	Oid			oprnamespace;	/* OID of namespace containing this oper */
 	Oid			oprowner;		/* operator owner */
 	char		oprkind;		/* 'l', 'r', or 'b' */
-	bool		oprcanmerge;	/* can be used in merge join? */
-	bool		oprcanhash;		/* can be used in hash join? */
+	bool8		oprcanmerge;	/* can be used in merge join? */
+	bool8		oprcanhash;		/* can be used in hash join? */
 	Oid			oprleft;		/* left arg type, or 0 if 'l' oprkind */
 	Oid			oprright;		/* right arg type, or 0 if 'r' oprkind */
 	Oid			oprresult;		/* result datatype */

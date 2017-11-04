@@ -23,7 +23,7 @@ CATALOG(pg_policy,3256)
 	NameData	polname;		/* Policy name. */
 	Oid			polrelid;		/* Oid of the relation with policy. */
 	char		polcmd;			/* One of ACL_*_CHR, or '*' for all */
-	bool		polpermissive;	/* restrictive or permissive policy */
+	bool8		polpermissive;	/* restrictive or permissive policy */
 
 #ifdef CATALOG_VARLEN
 	Oid			polroles[1];	/* Roles associated with policy, not-NULL */

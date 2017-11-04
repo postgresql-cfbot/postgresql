@@ -37,7 +37,7 @@ CATALOG(pg_rewrite,2618)
 	Oid			ev_class;
 	char		ev_type;
 	char		ev_enabled;
-	bool		is_instead;
+	bool8		is_instead;
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	pg_node_tree ev_qual;

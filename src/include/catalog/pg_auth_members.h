@@ -34,7 +34,7 @@ CATALOG(pg_auth_members,1261) BKI_SHARED_RELATION BKI_WITHOUT_OIDS BKI_ROWTYPE_O
 	Oid			roleid;			/* ID of a role */
 	Oid			member;			/* ID of a member of that role */
 	Oid			grantor;		/* who granted the membership */
-	bool		admin_option;	/* granted with admin option? */
+	bool8		admin_option;	/* granted with admin option? */
 } FormData_pg_auth_members;
 
 /* ----------------

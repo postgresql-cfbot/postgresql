@@ -33,7 +33,7 @@ CATALOG(pg_statistic,2619) BKI_WITHOUT_OIDS
 	/* These fields form the unique key for the entry: */
 	Oid			starelid;		/* relation containing attribute */
 	int16		staattnum;		/* attribute (column) stats are for */
-	bool		stainherit;		/* true if inheritance children are included */
+	bool8		stainherit;		/* true if inheritance children are included */
 
 	/* the fraction of the column's entries that are NULL: */
 	float4		stanullfrac;

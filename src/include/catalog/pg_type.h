@@ -51,13 +51,13 @@ CATALOG(pg_type,1247) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71) BKI_SCHEMA_MACRO
 
 	/*
 	 * typbyval determines whether internal Postgres routines pass a value of
-	 * this type by value or by reference.  typbyval had better be FALSE if
+	 * this type by value or by reference.  typbyval had better be false if
 	 * the length is not 1, 2, or 4 (or 8 on 8-byte-Datum machines).
 	 * Variable-length types are always passed by reference. Note that
 	 * typbyval can be false even if the length would allow pass-by-value;
 	 * this is currently true for type float4, for example.
 	 */
-	bool		typbyval;
+	bool8		typbyval;
 
 	/*
 	 * typtype is 'b' for a base type, 'c' for a composite type (e.g., a
@@ -76,13 +76,13 @@ CATALOG(pg_type,1247) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71) BKI_SCHEMA_MACRO
 	 */
 	char		typcategory;	/* arbitrary type classification */
 
-	bool		typispreferred; /* is type "preferred" within its category? */
+	bool8		typispreferred; /* is type "preferred" within its category? */
 
 	/*
 	 * If typisdefined is false, the entry is only a placeholder (forward
 	 * reference).  We know the type name, but not yet anything else about it.
 	 */
-	bool		typisdefined;
+	bool8		typisdefined;
 
 	char		typdelim;		/* delimiter for arrays of this type */
 
@@ -172,7 +172,7 @@ CATALOG(pg_type,1247) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71) BKI_SCHEMA_MACRO
 	 *
 	 * Used primarily for domain types.
 	 */
-	bool		typnotnull;
+	bool8		typnotnull;
 
 	/*
 	 * Domains use typbasetype to show the base (or domain) type that the

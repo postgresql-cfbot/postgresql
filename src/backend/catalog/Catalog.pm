@@ -31,6 +31,8 @@ sub Catalogs
 	# There are a few types which are given one name in the C source, but a
 	# different name at the SQL level.  These are enumerated here.
 	my %RENAME_ATTTYPE = (
+		'bool'          => 'INVALID',  # use bool8 instead
+		'bool8'         => 'bool',
 		'int16'         => 'int2',
 		'int32'         => 'int4',
 		'int64'         => 'int8',

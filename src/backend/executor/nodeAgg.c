@@ -2628,7 +2628,7 @@ agg_retrieve_hash_table(AggState *aggstate)
 			else
 			{
 				/* No more hashtables, so done */
-				aggstate->agg_done = TRUE;
+				aggstate->agg_done = true;
 				return NULL;
 			}
 		}

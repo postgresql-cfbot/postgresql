@@ -27,7 +27,7 @@
  *	  -------	------------------------------------------------
  *		0)		pg_config.h and standard system headers
  *		1)		hacks to cope with non-ANSI C compilers
- *		2)		bool, true, false, TRUE, FALSE
+ *		2)		bool, true, false
  *		3)		standard system types
  *		4)		IsValid macros for system types
  *		5)		offsetof, lengthof, alignment
@@ -184,7 +184,7 @@
 #endif
 
 /* ----------------------------------------------------------------
- *				Section 2:	bool, true, false, TRUE, FALSE
+ *				Section 2:	bool, true, false
  * ----------------------------------------------------------------
  */
 
@@ -192,32 +192,37 @@
  * bool
  *		Boolean value, either true or false.
  *
- * XXX for C++ compilers, we assume the compiler has a compatible
+ * Use stdbool.h if available, to ensure best compatibility with third-party
+ * libraries.  For C++ compilers, we assume the compiler has a compatible
  * built-in definition of bool.
  */
 
 #ifndef __cplusplus
 
-#ifndef bool
-typedef char bool;
+#ifdef HAVE_STDBOOL_H
+#include <stdbool.h>
+#else
+#ifndef HAVE__BOOL
+#define _Bool signed char
+#define SIZEOF__BOOL 1
+#endif
+#define bool _Bool
+#define false 0
+#define true 1
 #endif
 
-#ifndef true
-#define true	((bool) 1)
-#endif
+#define SIZEOF_BOOL SIZEOF__BOOL
 
-#ifndef false
-#define false	((bool) 0)
-#endif
 #endif							/* not C++ */
 
-#ifndef TRUE
-#define TRUE	1
-#endif
-
-#ifndef FALSE
-#define FALSE	0
-#endif
+/*
+ * bool8
+ *
+ * A bool type that is guaranteed to be 8 bits/1 byte, mainly for use in
+ * system catalog definitions.  (stdbool.h's bool is not 1 byte on all
+ * platforms.)
+ */
+typedef char bool8;
 
 
 /* ----------------------------------------------------------------
@@ -493,7 +498,7 @@ typedef NameData *Name;
 #define NameStr(name)	((name).data)
 
 /*
- * Support macros for escaping strings.  escape_backslash should be TRUE
+ * Support macros for escaping strings.  escape_backslash should be true
  * if generating a non-standard-conforming string.  Prefixing a string
  * with ESCAPE_STRING_SYNTAX guarantees it is non-standard-conforming.
  * Beware of multiple evaluation of the "ch" argument!

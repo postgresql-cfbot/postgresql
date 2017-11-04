@@ -32,7 +32,7 @@
  *	conforencoding		FOR encoding id
  *	contoencoding		TO encoding id
  *	conproc				OID of the conversion proc
- *	condefault			TRUE if this is a default conversion
+ *	condefault			true if this is a default conversion
  * ----------------------------------------------------------------
  */
 #define ConversionRelationId  2607
@@ -45,7 +45,7 @@ CATALOG(pg_conversion,2607)
 	int32		conforencoding;
 	int32		contoencoding;
 	regproc		conproc;
-	bool		condefault;
+	bool8		condefault;
 } FormData_pg_conversion;
 
 /* ----------------

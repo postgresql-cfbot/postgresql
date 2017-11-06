@@ -278,6 +278,12 @@ static const struct config_enum_entry isolation_level_options[] = {
 	{NULL, 0}
 };
 
+static const struct config_enum_entry rollback_scope_options[] = {
+	{"transaction", XACT_SCOPE_XACT, false},
+	{"statement", XACT_SCOPE_STMT, false},
+	{NULL, 0}
+};
+
 static const struct config_enum_entry session_replication_role_options[] = {
 	{"origin", SESSION_REPLICATION_ROLE_ORIGIN, false},
 	{"replica", SESSION_REPLICATION_ROLE_REPLICA, false},
@@ -505,6 +511,7 @@ static char *timezone_string;
 static char *log_timezone_string;
 static char *timezone_abbreviations_string;
 static char *XactIsoLevel_string;
+static char *XactRollbackScope_string;
 static char *data_directory;
 static char *session_authorization_string;
 static int	max_function_args;
@@ -3407,6 +3414,17 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"transaction_rollback_scope", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the scope of rollback when the current transaction aborts."),
+			NULL,
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&XactRollbackScope_string,
+		"default",
+		check_XactRollbackScope, assign_XactRollbackScope, show_XactRollbackScope
+	},
+
+	{
 		{"unix_socket_group", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the owning group of the Unix-domain socket."),
 			gettext_noop("The owning user of the socket is always the user "
@@ -3706,6 +3724,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&DefaultXactIsoLevel,
 		XACT_READ_COMMITTED, isolation_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"default_transaction_rollback_scope", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the scope of rollback when the current transaction aborts."),
+			NULL
+		},
+		&DefaultXactRollbackScope,
+		XACT_SCOPE_XACT, rollback_scope_options,
 		NULL, NULL, NULL
 	},
 
@@ -4506,6 +4534,8 @@ InitializeGUCOptions(void)
 	 * non-interactive sources.
 	 */
 	SetConfigOption("transaction_isolation", "default",
+					PGC_POSTMASTER, PGC_S_OVERRIDE);
+	SetConfigOption("transaction_rollback_scope", "default",
 					PGC_POSTMASTER, PGC_S_OVERRIDE);
 	SetConfigOption("transaction_read_only", "no",
 					PGC_POSTMASTER, PGC_S_OVERRIDE);
@@ -7337,6 +7367,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 					if (strcmp(item->defname, "transaction_isolation") == 0)
 						SetPGVariable("transaction_isolation",
 									  list_make1(item->arg), stmt->is_local);
+					else if (strcmp(item->defname, "transaction_rollback_scope") == 0)
+						SetPGVariable("transaction_isolation",
+									  list_make1(item->arg), stmt->is_local);
 					else if (strcmp(item->defname, "transaction_read_only") == 0)
 						SetPGVariable("transaction_read_only",
 									  list_make1(item->arg), stmt->is_local);
@@ -7357,6 +7390,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 					DefElem    *item = (DefElem *) lfirst(head);
 
 					if (strcmp(item->defname, "transaction_isolation") == 0)
+						SetPGVariable("default_transaction_isolation",
+									  list_make1(item->arg), stmt->is_local);
+					else if (strcmp(item->defname, "transaction_rollback_scope") == 0)
 						SetPGVariable("default_transaction_isolation",
 									  list_make1(item->arg), stmt->is_local);
 					else if (strcmp(item->defname, "transaction_read_only") == 0)

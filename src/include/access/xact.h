@@ -43,6 +43,15 @@ extern PGDLLIMPORT int XactIsoLevel;
 #define IsolationUsesXactSnapshot() (XactIsoLevel >= XACT_REPEATABLE_READ)
 #define IsolationIsSerializable() (XactIsoLevel == XACT_SERIALIZABLE)
 
+/*
+ * Xact rollback scopes
+ */
+#define XACT_SCOPE_XACT 0
+#define XACT_SCOPE_STMT 1
+
+extern int	DefaultXactRollbackScope;
+extern PGDLLIMPORT int XactRollbackScope;
+
 /* Xact read-only state */
 extern bool DefaultXactReadOnly;
 extern bool XactReadOnly;

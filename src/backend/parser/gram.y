@@ -352,7 +352,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	RowSecurityOptionalWithCheck RowSecurityOptionalExpr
 %type <list>	RowSecurityDefaultToRole RowSecurityOptionalToRole
 
-%type <str>		iso_level opt_encoding
+%type <str>		iso_level rollback_scope opt_encoding
 %type <rolespec> grantee
 %type <list>	grantee_list
 %type <accesspriv> privilege
@@ -668,7 +668,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROW ROWS RULE
 
-	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
+	SAVEPOINT SCHEMA SCHEMAS SCOPE SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
 	START STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P
@@ -1555,6 +1555,10 @@ iso_level:	READ UNCOMMITTED						{ $$ = "read uncommitted"; }
 			| READ COMMITTED						{ $$ = "read committed"; }
 			| REPEATABLE READ						{ $$ = "repeatable read"; }
 			| SERIALIZABLE							{ $$ = "serializable"; }
+		;
+
+rollback_scope:	TRANSACTION						{ $$ = "transaction"; }
+			| STATEMENT							{ $$ = "statement"; }
 		;
 
 opt_boolean_or_string:
@@ -9596,6 +9600,9 @@ transaction_mode_item:
 			ISOLATION LEVEL iso_level
 					{ $$ = makeDefElem("transaction_isolation",
 									   makeStringConst($3, @3), @1); }
+			| ROLLBACK SCOPE rollback_scope
+					{ $$ = makeDefElem("transaction_rollback_scope",
+									   makeStringConst($3, @3), @1); }
 			| READ ONLY
 					{ $$ = makeDefElem("transaction_read_only",
 									   makeIntConst(TRUE, @1), @1); }
@@ -14807,6 +14814,7 @@ unreserved_keyword:
 			| SAVEPOINT
 			| SCHEMA
 			| SCHEMAS
+			| SCOPE
 			| SCROLL
 			| SEARCH
 			| SECOND_P

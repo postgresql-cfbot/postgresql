@@ -608,6 +608,58 @@ show_XactIsoLevel(void)
 }
 
 /*
+ * SET TRANSACTION ROLLBACK SCOPE
+ */
+bool
+check_XactRollbackScope(char **newval, void **extra, GucSource source)
+{
+	int			newXactRollbackScope;
+
+	if (strcmp(*newval, "transaction") == 0)
+	{
+		newXactRollbackScope = XACT_SCOPE_XACT;
+	}
+	else if (strcmp(*newval, "statement") == 0)
+	{
+		newXactRollbackScope = XACT_SCOPE_STMT;
+	}
+	else if (strcmp(*newval, "default") == 0)
+	{
+		newXactRollbackScope = DefaultXactRollbackScope;
+	}
+	else
+		return false;
+
+	*extra = malloc(sizeof(int));
+	if (!*extra)
+		return false;
+	*((int *) *extra) = newXactRollbackScope;
+
+	return true;
+}
+
+void
+assign_XactRollbackScope(const char *newval, void *extra)
+{
+	XactRollbackScope = *((int *) extra);
+}
+
+const char *
+show_XactRollbackScope(void)
+{
+	/* We need this because we don't want to show "default". */
+	switch (XactRollbackScope)
+	{
+		case XACT_SCOPE_XACT:
+			return "transaction";
+		case XACT_SCOPE_STMT:
+			return "statement";
+		default:
+			return "bogus";
+	}
+}
+
+/*
  * SET TRANSACTION [NOT] DEFERRABLE
  */
 

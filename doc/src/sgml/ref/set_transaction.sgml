@@ -10,6 +10,11 @@
  </indexterm>
 
  <indexterm>
+  <primary>transaction rollback scope</primary>
+  <secondary>setting</secondary>
+ </indexterm>
+
+ <indexterm>
   <primary>read-only transaction</primary>
   <secondary>setting</secondary>
  </indexterm>
@@ -39,6 +44,7 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
 <phrase>where <replaceable class="parameter">transaction_mode</replaceable> is one of:</phrase>
 
     ISOLATION LEVEL { SERIALIZABLE | REPEATABLE READ | READ COMMITTED | READ UNCOMMITTED }
+    ROLLBACK SCOPE { TRANSACTION | STATEMENT }
     READ WRITE | READ ONLY
     [ NOT ] DEFERRABLE
 </synopsis>
@@ -59,8 +65,8 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
 
   <para>
    The available transaction characteristics are the transaction
-   isolation level, the transaction access mode (read/write or
-   read-only), and the deferrable mode.
+   isolation level, the rollback scope,
+   the transaction access mode (read/write or read-only), and the deferrable mode.
    In addition, a snapshot can be selected, though only for the current
    transaction, not as a session default.
   </para>
@@ -121,6 +127,36 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
    <command>COPY</command>) of a transaction has been executed.  See
    <xref linkend="mvcc"> for more information about transaction
    isolation and concurrency control.
+  </para>
+
+tunatuna
+  <para>
+   The isolation level of a transaction determines what data the
+   The rollback scope of a transaction determines which range of
+   operations to roll back when an SQL statement fails:
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>TRANSACTION</literal></term>
+     <listitem>
+      <para>
+       A statement can only see rows committed before it began. This
+       Rolls back the entire transaction or current subtransaction.
+       This is the default.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>STATEMENT</literal></term>
+     <listitem>
+      <para>
+       All statements of the current transaction can only see rows committed
+       Rolls back the failed SQL statement.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
   </para>
 
   <para>
@@ -200,6 +236,7 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
   <para>
    The session default transaction modes can also be set by setting the
    configuration parameters <xref linkend="guc-default-transaction-isolation">,
+   <xref linkend="guc-default-transaction-rollback-scope">,
    <xref linkend="guc-default-transaction-read-only">, and
    <xref linkend="guc-default-transaction-deferrable">.
    (In fact <command>SET SESSION CHARACTERISTICS</command> is just a

@@ -6379,6 +6379,32 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-default-transaction-rollback-scope" xreflabel="default_transaction_rollback_scope">
+      <term><varname>default_transaction_rollback_scope</varname> (<type>enum</type>)
+      <indexterm>
+       <primary>transaction rollback scope</primary>
+       <secondary>setting default</secondary>
+      </indexterm>
+      <indexterm>
+       <primary><varname>default_transaction_rollback_scope</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter controls which range of operations
+        to roll back when an SQL statement fails.
+        <quote>transaction</quote> rolls back the entire
+        transaction or current subtransaction.
+        <quote>statement</quote> rolls back the failed SQL statement.
+        The default is <quote>transaction</quote>.
+       </para>
+
+       <para>
+        Consult <xref linkend="sql-set-transaction"> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-default-transaction-read-only" xreflabel="default_transaction_read_only">
       <term><varname>default_transaction_read_only</varname> (<type>boolean</type>)
       <indexterm>

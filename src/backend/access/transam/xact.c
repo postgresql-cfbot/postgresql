@@ -73,6 +73,9 @@
 int			DefaultXactIsoLevel = XACT_READ_COMMITTED;
 int			XactIsoLevel;
 
+int			DefaultXactRollbackScope = XACT_SCOPE_XACT;
+int			XactRollbackScope;
+
 bool		DefaultXactReadOnly = false;
 bool		XactReadOnly;
 
@@ -1839,6 +1842,7 @@ StartTransaction(void)
 	}
 	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
+	XactRollbackScope = DefaultXactRollbackScope;
 	forceSyncCommit = false;
 	MyXactFlags = 0;
 

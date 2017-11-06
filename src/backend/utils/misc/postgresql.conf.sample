@@ -545,6 +545,7 @@
 					# only default tablespace
 #check_function_bodies = on
 #default_transaction_isolation = 'read committed'
+#default_transaction_rollback_scope = 'transaction'
 #default_transaction_read_only = off
 #default_transaction_deferrable = off
 #session_replication_role = 'origin'

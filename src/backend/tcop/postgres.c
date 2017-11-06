@@ -149,6 +149,13 @@ static bool ignore_till_sync = false;
 static bool stmt_timeout_active = false;
 
 /*
+ * Flag to keep track of whether we have started a transaction.
+ * Flag to keep track of whether we have created a savepoint
+ * for statement rollback.
+ */
+static bool stmt_savepoint_created = false;
+
+/*
  * If an unnamed prepared statement exists, it's stored here.
  * We keep it separate from the hashtable kept by commands/prepare.c
  * in order to reduce overhead for short-lived queries.
@@ -923,6 +930,16 @@ exec_simple_query(const char *query_string)
 	start_xact_command();
 
 	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
+
+	/*
 	 * Zap any pre-existing unnamed statement.  (While not strictly necessary,
 	 * it seems best to define simple-Query mode as if it used the unnamed
 	 * statement and portal; this ensures we recover any storage used by prior
@@ -1021,6 +1038,17 @@ exec_simple_query(const char *query_string)
 		 */
 		if (use_implicit_block)
 			BeginImplicitTransactionBlock();
+
+		/*
+		 * Create a savepoint for statement rollback.
+		 */
+		if (XactRollbackScope == XACT_SCOPE_STMT &&
+			!stmt_savepoint_created &&
+			IsTransactionBlock())
+		{
+			BeginInternalSubTransaction(NULL);
+			stmt_savepoint_created = true;
+		}
 
 		/* If we got a cancel signal in parsing or prior command, quit */
 		CHECK_FOR_INTERRUPTS();
@@ -1143,6 +1171,7 @@ exec_simple_query(const char *query_string)
 			if (use_implicit_block)
 				EndImplicitTransactionBlock();
 			finish_xact_command();
+			stmt_savepoint_created = false;
 		}
 		else if (IsA(parsetree->stmt, TransactionStmt))
 		{
@@ -1159,6 +1188,15 @@ exec_simple_query(const char *query_string)
 			 * those that start or end a transaction block.
 			 */
 			CommandCounterIncrement();
+
+			/*
+			 * Delete the savepoint for statement rollback.
+			 */
+			if (stmt_savepoint_created)
+			{
+				ReleaseCurrentSubTransaction();
+				stmt_savepoint_created = false;
+			}
 		}
 
 		/*
@@ -1169,6 +1207,15 @@ exec_simple_query(const char *query_string)
 		 */
 		EndCommand(completionTag, dest);
 	}							/* end loop over parsetrees */
+
+	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	if (stmt_savepoint_created)
+	{
+		ReleaseCurrentSubTransaction();
+		stmt_savepoint_created = false;
+	}
 
 	/*
 	 * Close down transaction statement, if one is open.  (This will only do
@@ -1256,6 +1303,16 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	 * necessary.
 	 */
 	start_xact_command();
+
+	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
 
 	/*
 	 * Switch to appropriate context for constructing parsetrees.
@@ -1435,6 +1492,12 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	MemoryContextSwitchTo(oldcontext);
 
 	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	ReleaseCurrentSubTransaction();
+	stmt_savepoint_created = false;
+
+	/*
 	 * We do NOT close the open transaction command here; that only happens
 	 * when the client sends Sync.  Instead, do CommandCounterIncrement just
 	 * in case something happened during parse/plan.
@@ -1545,6 +1608,16 @@ exec_bind_message(StringInfo input_message)
 	 * necessary.
 	 */
 	start_xact_command();
+
+	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
 
 	/* Switch back to message context */
 	MemoryContextSwitchTo(MessageContext);
@@ -1823,6 +1896,12 @@ exec_bind_message(StringInfo input_message)
 	PortalSetResultFormat(portal, numRFormats, rformats);
 
 	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	ReleaseCurrentSubTransaction();
+	stmt_savepoint_created = false;
+
+	/*
 	 * Send BindComplete.
 	 */
 	if (whereToSendOutput == DestRemote)
@@ -1883,6 +1962,16 @@ exec_execute_message(const char *portal_name, long max_rows)
 	dest = whereToSendOutput;
 	if (dest == DestRemote)
 		dest = DestRemoteExecute;
+
+	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
 
 	portal = GetPortalByName(portal_name);
 	if (!PortalIsValid(portal))
@@ -2026,6 +2115,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 			 * will start a new xact command for the next command (if any).
 			 */
 			finish_xact_command();
+			stmt_savepoint_created = false;
 		}
 		else
 		{
@@ -2047,6 +2137,15 @@ exec_execute_message(const char *portal_name, long max_rows)
 		/* Portal run not complete, so send PortalSuspended */
 		if (whereToSendOutput == DestRemote)
 			pq_putemptymessage('s');
+	}
+
+	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	if (stmt_savepoint_created)
+	{
+		ReleaseCurrentSubTransaction();
+		stmt_savepoint_created = false;
 	}
 
 	/*
@@ -2327,6 +2426,16 @@ exec_describe_statement_message(const char *stmt_name)
 	 */
 	start_xact_command();
 
+	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
+
 	/* Switch back to message context */
 	MemoryContextSwitchTo(MessageContext);
 
@@ -2367,6 +2476,12 @@ exec_describe_statement_message(const char *stmt_name)
 				 errmsg("current transaction is aborted, "
 						"commands ignored until end of transaction block"),
 				 errdetail_abort()));
+
+	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	ReleaseCurrentSubTransaction();
+	stmt_savepoint_created = false;
 
 	if (whereToSendOutput != DestRemote)
 		return;					/* can't actually do anything... */
@@ -2422,6 +2537,16 @@ exec_describe_portal_message(const char *portal_name)
 	 */
 	start_xact_command();
 
+	/*
+	 * Create a savepoint for statement rollback.
+	 */
+	if (XactRollbackScope == XACT_SCOPE_STMT &&
+		IsTransactionBlock())
+	{
+		BeginInternalSubTransaction(NULL);
+		stmt_savepoint_created = true;
+	}
+
 	/* Switch back to message context */
 	MemoryContextSwitchTo(MessageContext);
 
@@ -2446,6 +2571,12 @@ exec_describe_portal_message(const char *portal_name)
 				 errmsg("current transaction is aborted, "
 						"commands ignored until end of transaction block"),
 				 errdetail_abort()));
+
+	/*
+	 * Delete the savepoint for statement rollback.
+	 */
+	ReleaseCurrentSubTransaction();
+	stmt_savepoint_created = false;
 
 	if (whereToSendOutput != DestRemote)
 		return;					/* can't actually do anything... */
@@ -3928,6 +4059,13 @@ PostgresMain(int argc, char *argv[],
 		 * Abort the current transaction in order to recover.
 		 */
 		AbortCurrentTransaction();
+
+		/* Roll back the failed statement, if requested. */
+		if (stmt_savepoint_created)
+		{
+			RollbackAndReleaseCurrentSubTransaction();
+			stmt_savepoint_created = false;
+		}
 
 		if (am_walsender)
 			WalSndErrorCleanup();

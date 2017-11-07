@@ -2221,13 +2221,18 @@ CalculateCheckpointSegments(void)
 	 * Calculate the distance at which to trigger a checkpoint, to avoid
 	 * exceeding max_wal_size_mb. This is based on two assumptions:
 	 *
-	 * a) we keep WAL for two checkpoint cycles, back to the "prev" checkpoint.
+	 * a) we keep WAL for only one checkpoint cycle (prior to PG11 we kept
+	 *    WAL for two checkpoint cycles to allow us to recover from the
+	 *    secondary checkpoint if the first checkpoint failed, though we
+	 *    only did this on the master anyway, not on standby. Keeping just
+	 *    one checkpoint simplifies processing and reduces disk space in
+	 *    many smaller databases.)
 	 * b) during checkpoint, we consume checkpoint_completion_target *
 	 *	  number of segments consumed between checkpoints.
 	 *-------
 	 */
 	target = (double) ConvertToXSegs(max_wal_size_mb, wal_segment_size) /
-		(2.0 + CheckPointCompletionTarget);
+		(1.0 + CheckPointCompletionTarget);
 
 	/* round down */
 	CheckPointSegments = (int) target;
@@ -6593,29 +6598,16 @@ StartupXLOG(void)
 					(errmsg("checkpoint record is at %X/%X",
 							(uint32) (checkPointLoc >> 32), (uint32) checkPointLoc)));
 		}
-		else if (StandbyMode)
+		else
 		{
 			/*
-			 * The last valid checkpoint record required for a streaming
-			 * recovery exists in neither standby nor the primary.
+			 * We used to attempt to go back to a secondary checkpoint
+			 * record here, but only when not in standby_mode. We now
+			 * just fail if we can't read the last checkpoint because
+			 * this allows us to simplify processing around checkpoints.
 			 */
 			ereport(PANIC,
 					(errmsg("could not locate a valid checkpoint record")));
-		}
-		else
-		{
-			checkPointLoc = ControlFile->prevCheckPoint;
-			record = ReadCheckpointRecord(xlogreader, checkPointLoc, 2, true);
-			if (record != NULL)
-			{
-				ereport(LOG,
-						(errmsg("using previous checkpoint record at %X/%X",
-								(uint32) (checkPointLoc >> 32), (uint32) checkPointLoc)));
-				InRecovery = true;	/* force recovery even if SHUTDOWNED */
-			}
-			else
-				ereport(PANIC,
-						(errmsg("could not locate a valid checkpoint record")));
 		}
 		memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
 		wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
@@ -6845,7 +6837,6 @@ StartupXLOG(void)
 								recoveryTargetTLI)));
 			ControlFile->state = DB_IN_CRASH_RECOVERY;
 		}
-		ControlFile->prevCheckPoint = ControlFile->checkPoint;
 		ControlFile->checkPoint = checkPointLoc;
 		ControlFile->checkPointCopy = checkPoint;
 		if (InArchiveRecovery)
@@ -7619,12 +7610,11 @@ StartupXLOG(void)
 		{
 			if (fast_promote)
 			{
-				checkPointLoc = ControlFile->prevCheckPoint;
+				checkPointLoc = ControlFile->checkPoint;
 
 				/*
 				 * Confirm the last checkpoint is available for us to recover
-				 * from if we fail. Note that we don't check for the secondary
-				 * checkpoint since that isn't available in most base backups.
+				 * from if we fail.
 				 */
 				record = ReadCheckpointRecord(xlogreader, checkPointLoc, 1, false);
 				if (record != NULL)
@@ -8090,7 +8080,7 @@ LocalSetXLogInsertAllowed(void)
  * Subroutine to try to fetch and validate a prior checkpoint record.
  *
  * whichChkpt identifies the checkpoint (merely for reporting purposes).
- * 1 for "primary", 2 for "secondary", 0 for "other" (backup_label)
+ * 1 for "primary", 0 for "other" (backup_label)
  */
 static XLogRecord *
 ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
@@ -8109,10 +8099,6 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 			case 1:
 				ereport(LOG,
 						(errmsg("invalid primary checkpoint link in control file")));
-				break;
-			case 2:
-				ereport(LOG,
-						(errmsg("invalid secondary checkpoint link in control file")));
 				break;
 			default:
 				ereport(LOG,
@@ -8135,10 +8121,6 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 				ereport(LOG,
 						(errmsg("invalid primary checkpoint record")));
 				break;
-			case 2:
-				ereport(LOG,
-						(errmsg("invalid secondary checkpoint record")));
-				break;
 			default:
 				ereport(LOG,
 						(errmsg("invalid checkpoint record")));
@@ -8153,10 +8135,6 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 			case 1:
 				ereport(LOG,
 						(errmsg("invalid resource manager ID in primary checkpoint record")));
-				break;
-			case 2:
-				ereport(LOG,
-						(errmsg("invalid resource manager ID in secondary checkpoint record")));
 				break;
 			default:
 				ereport(LOG,
@@ -8175,10 +8153,6 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 				ereport(LOG,
 						(errmsg("invalid xl_info in primary checkpoint record")));
 				break;
-			case 2:
-				ereport(LOG,
-						(errmsg("invalid xl_info in secondary checkpoint record")));
-				break;
 			default:
 				ereport(LOG,
 						(errmsg("invalid xl_info in checkpoint record")));
@@ -8193,10 +8167,6 @@ ReadCheckpointRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr,
 			case 1:
 				ereport(LOG,
 						(errmsg("invalid length of primary checkpoint record")));
-				break;
-			case 2:
-				ereport(LOG,
-						(errmsg("invalid length of secondary checkpoint record")));
 				break;
 			default:
 				ereport(LOG,
@@ -8933,8 +8903,7 @@ CreateCheckPoint(int flags)
 				(errmsg("concurrent write-ahead log activity while database system is shutting down")));
 
 	/*
-	 * Remember the prior checkpoint's redo pointer, used later to determine
-	 * the point where the log can be truncated.
+	 * Remember the prior checkpoint's redo ptr for UpdateCheckPointDistanceEstimate()
 	 */
 	PriorRedoPtr = ControlFile->checkPointCopy.redo;
 
@@ -8944,7 +8913,6 @@ CreateCheckPoint(int flags)
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 	if (shutdown)
 		ControlFile->state = DB_SHUTDOWNED;
-	ControlFile->prevCheckPoint = ControlFile->checkPoint;
 	ControlFile->checkPoint = ProcLastRecPtr;
 	ControlFile->checkPointCopy = checkPoint;
 	ControlFile->time = (pg_time_t) time(NULL);
@@ -8982,8 +8950,7 @@ CreateCheckPoint(int flags)
 	smgrpostckpt();
 
 	/*
-	 * Delete old log files (those no longer needed even for previous
-	 * checkpoint or the standbys in XLOG streaming).
+	 * Delete old log files and recycle them
 	 */
 	if (PriorRedoPtr != InvalidXLogRecPtr)
 	{
@@ -8992,7 +8959,8 @@ CreateCheckPoint(int flags)
 		/* Update the average distance between checkpoints. */
 		UpdateCheckPointDistanceEstimate(RedoRecPtr - PriorRedoPtr);
 
-		XLByteToSeg(PriorRedoPtr, _logSegNo, wal_segment_size);
+		/* Trim from the last checkpoint, not the last - 1 */
+		XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 		KeepLogSeg(recptr, &_logSegNo);
 		_logSegNo--;
 		RemoveOldXlogFiles(_logSegNo, PriorRedoPtr, recptr);
@@ -9258,8 +9226,7 @@ CreateRestartPoint(int flags)
 	CheckPointGuts(lastCheckPoint.redo, flags);
 
 	/*
-	 * Remember the prior checkpoint's redo pointer, used later to determine
-	 * the point at which we can truncate the log.
+	 * Remember the prior checkpoint's redo ptr for UpdateCheckPointDistanceEstimate()
 	 */
 	PriorRedoPtr = ControlFile->checkPointCopy.redo;
 
@@ -9273,7 +9240,6 @@ CreateRestartPoint(int flags)
 	if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY &&
 		ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
 	{
-		ControlFile->prevCheckPoint = ControlFile->checkPoint;
 		ControlFile->checkPoint = lastCheckPointRecPtr;
 		ControlFile->checkPointCopy = lastCheckPoint;
 		ControlFile->time = (pg_time_t) time(NULL);

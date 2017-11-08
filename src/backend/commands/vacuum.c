@@ -28,6 +28,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
@@ -68,7 +69,7 @@ static BufferAccessStrategy vac_strategy;
 
 
 /* non-export function prototypes */
-static List *expand_vacuum_rel(VacuumRelation *vrel);
+static List *expand_vacuum_rel(VacuumRelation * vrel);
 static List *get_all_vacuum_rels(void);
 static void vac_truncate_clog(TransactionId frozenXID,
 				  MultiXactId minMulti,
@@ -423,7 +424,7 @@ vacuum(int options, List *relations, VacuumParams *params,
  * are made in vac_context.
  */
 static List *
-expand_vacuum_rel(VacuumRelation *vrel)
+expand_vacuum_rel(VacuumRelation * vrel)
 {
 	List	   *vacrels = NIL;
 	MemoryContext oldcontext;
@@ -528,14 +529,14 @@ get_all_vacuum_rels(void)
 {
 	List	   *vacrels = NIL;
 	Relation	pgclass;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 
 	pgclass = heap_open(RelationRelationId, AccessShareLock);
 
-	scan = heap_beginscan_catalog(pgclass, 0, NULL);
+	scan = storage_beginscan_catalog(pgclass, 0, NULL);
 
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 		MemoryContext oldcontext;
@@ -562,7 +563,7 @@ get_all_vacuum_rels(void)
 		MemoryContextSwitchTo(oldcontext);
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(pgclass, AccessShareLock);
 
 	return vacrels;
@@ -1182,7 +1183,7 @@ vac_truncate_clog(TransactionId frozenXID,
 {
 	TransactionId nextXID = ReadNewTransactionId();
 	Relation	relation;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	HeapTuple	tuple;
 	Oid			oldestxid_datoid;
 	Oid			minmulti_datoid;
@@ -1213,9 +1214,9 @@ vac_truncate_clog(TransactionId frozenXID,
 	 */
 	relation = heap_open(DatabaseRelationId, AccessShareLock);
 
-	scan = heap_beginscan_catalog(relation, 0, NULL);
+	scan = storage_beginscan_catalog(relation, 0, NULL);
 
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		volatile FormData_pg_database *dbform = (Form_pg_database) GETSTRUCT(tuple);
 		TransactionId datfrozenxid = dbform->datfrozenxid;
@@ -1252,7 +1253,7 @@ vac_truncate_clog(TransactionId frozenXID,
 		}
 	}
 
-	heap_endscan(scan);
+	storage_endscan(scan);
 
 	heap_close(relation, AccessShareLock);
 

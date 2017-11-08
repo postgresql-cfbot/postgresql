@@ -76,6 +76,8 @@ extern void RelationInitIndexAccessInfo(Relation relation);
 struct PublicationActions;
 extern struct PublicationActions *GetRelationPublicationActions(Relation relation);
 
+extern void RelationInitStorageAccessInfo(Relation relation);
+
 /*
  * Routines to support ereport() reports of relation-related errors
  */

@@ -18,6 +18,7 @@
 #include "access/heapam.h"
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/storageam.h"
 #include "access/transam.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
@@ -325,8 +326,8 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 				 * that satisfies SnapshotDirty.  This is necessary because we
 				 * have just a single index entry for the entire chain.
 				 */
-				else if (heap_hot_search(&htid, heapRel, &SnapshotDirty,
-										 &all_dead))
+				else if (storage_hot_search(&htid, heapRel, &SnapshotDirty,
+											&all_dead))
 				{
 					TransactionId xwait;
 
@@ -379,7 +380,7 @@ _bt_check_unique(Relation rel, IndexTuple itup, Relation heapRel,
 					 * entry.
 					 */
 					htid = itup->t_tid;
-					if (heap_hot_search(&htid, heapRel, SnapshotSelf, NULL))
+					if (storage_hot_search(&htid, heapRel, SnapshotSelf, NULL))
 					{
 						/* Normal case --- it's still live */
 					}

@@ -52,7 +52,7 @@ typedef bool (*SnapshotSatisfiesFunc) (HeapTuple htup,
  */
 typedef struct SnapshotData
 {
-	SnapshotSatisfiesFunc satisfies;	/* tuple test function */
+	tuple_visibility_type visibility_type;	/* tuple visibility test type */
 
 	/*
 	 * The remaining fields are used only for MVCC snapshots, and are normally

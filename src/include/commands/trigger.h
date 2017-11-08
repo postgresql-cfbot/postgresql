@@ -190,7 +190,7 @@ extern TupleTableSlot *ExecBRInsertTriggers(EState *estate,
 					 TupleTableSlot *slot);
 extern void ExecARInsertTriggers(EState *estate,
 					 ResultRelInfo *relinfo,
-					 HeapTuple trigtuple,
+					 TupleTableSlot *slot,
 					 List *recheckIndexes,
 					 TransitionCaptureState *transition_capture);
 extern TupleTableSlot *ExecIRInsertTriggers(EState *estate,

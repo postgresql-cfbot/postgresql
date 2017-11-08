@@ -22,7 +22,7 @@ typedef struct SQLFunctionParseInfo *SQLFunctionParseInfoPtr;
 
 extern Datum fmgr_sql(PG_FUNCTION_ARGS);
 
-extern SQLFunctionParseInfoPtr prepare_sql_fn_parse_info(HeapTuple procedureTuple,
+extern SQLFunctionParseInfoPtr prepare_sql_fn_parse_info(StorageTuple procedureTuple,
 						  Node *call_expr,
 						  Oid inputCollation);
 

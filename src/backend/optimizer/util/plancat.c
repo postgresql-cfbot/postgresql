@@ -21,6 +21,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/storageamapi.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/xlog.h"
@@ -253,7 +254,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->amsearchnulls = amroutine->amsearchnulls;
 			info->amcanparallel = amroutine->amcanparallel;
 			info->amhasgettuple = (amroutine->amgettuple != NULL);
-			info->amhasgetbitmap = (amroutine->amgetbitmap != NULL);
+			info->amhasgetbitmap = ((amroutine->amgetbitmap != NULL)
+									&& (relation->rd_stamroutine->scan_get_heappagescandesc != NULL));
 			info->amcostestimate = amroutine->amcostestimate;
 			Assert(info->amcostestimate != NULL);
 
@@ -1825,7 +1827,7 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 							Relation relation)
 {
 	PartitionDesc partdesc;
-	PartitionKey  partkey;
+	PartitionKey partkey;
 
 	Assert(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 
@@ -1890,8 +1892,8 @@ find_partition_scheme(PlannerInfo *root, Relation relation)
 
 	/*
 	 * Did not find matching partition scheme. Create one copying relevant
-	 * information from the relcache. We need to copy the contents of the array
-	 * since the relcache entry may not survive after we have closed the
+	 * information from the relcache. We need to copy the contents of the
+	 * array since the relcache entry may not survive after we have closed the
 	 * relation.
 	 */
 	part_scheme = (PartitionScheme) palloc0(sizeof(PartitionSchemeData));

@@ -508,13 +508,15 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Datum		d;
 
 			/* these asserts must match defenses in slot_getattr */
-			Assert(innerslot->tts_tuple != NULL);
-			Assert(innerslot->tts_tuple != &(innerslot->tts_minhdr));
+			Assert(innerslot->tts_storage != NULL);
+
+			/*
+			 * hari
+			 * Assert(innerslot->tts_storageslotam->slot_is_physical_tuple(innerslot));
+			 */
 
 			/* heap_getsysattr has sufficient defenses against bad attnums */
-			d = heap_getsysattr(innerslot->tts_tuple, attnum,
-								innerslot->tts_tupleDescriptor,
-								op->resnull);
+			d = slot_getattr(innerslot, attnum, op->resnull);
 			*op->resvalue = d;
 
 			EEO_NEXT();
@@ -526,13 +528,14 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Datum		d;
 
 			/* these asserts must match defenses in slot_getattr */
-			Assert(outerslot->tts_tuple != NULL);
-			Assert(outerslot->tts_tuple != &(outerslot->tts_minhdr));
+			Assert(outerslot->tts_storage != NULL);
 
+			/*
+			 * hari
+			 * Assert(outerslot->tts_storageslotam->slot_is_physical_tuple(outerslot));
+			 */
 			/* heap_getsysattr has sufficient defenses against bad attnums */
-			d = heap_getsysattr(outerslot->tts_tuple, attnum,
-								outerslot->tts_tupleDescriptor,
-								op->resnull);
+			d = slot_getattr(outerslot, attnum, op->resnull);
 			*op->resvalue = d;
 
 			EEO_NEXT();
@@ -544,13 +547,15 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			Datum		d;
 
 			/* these asserts must match defenses in slot_getattr */
-			Assert(scanslot->tts_tuple != NULL);
-			Assert(scanslot->tts_tuple != &(scanslot->tts_minhdr));
+			Assert(scanslot->tts_storage != NULL);
+
+			/*
+			 * hari
+			 * Assert(scanslot->tts_storageslotam->slot_is_physical_tuple(scanslot));
+			 */
 
 			/* heap_getsysattr has sufficient defenses against bad attnums */
-			d = heap_getsysattr(scanslot->tts_tuple, attnum,
-								scanslot->tts_tupleDescriptor,
-								op->resnull);
+			d = slot_getattr(scanslot, attnum, op->resnull);
 			*op->resvalue = d;
 
 			EEO_NEXT();

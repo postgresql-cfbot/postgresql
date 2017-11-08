@@ -1894,7 +1894,7 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 		/* See the comment above. */
 		if (resultRelInfo->ri_PartitionRoot)
 		{
-			HeapTuple	tuple = ExecFetchSlotTuple(slot);
+			StorageTuple tuple = ExecFetchSlotTuple(slot);
 			TupleDesc	old_tupdesc = RelationGetDescr(rel);
 			TupleConversionMap *map;
 
@@ -1974,7 +1974,7 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				 */
 				if (resultRelInfo->ri_PartitionRoot)
 				{
-					HeapTuple	tuple = ExecFetchSlotTuple(slot);
+					StorageTuple tuple = ExecFetchSlotTuple(slot);
 					TupleConversionMap *map;
 
 					rel = resultRelInfo->ri_PartitionRoot;
@@ -2021,7 +2021,7 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 			/* See the comment above. */
 			if (resultRelInfo->ri_PartitionRoot)
 			{
-				HeapTuple	tuple = ExecFetchSlotTuple(slot);
+				StorageTuple tuple = ExecFetchSlotTuple(slot);
 				TupleDesc	old_tupdesc = RelationGetDescr(rel);
 				TupleConversionMap *map;
 
@@ -2480,7 +2480,8 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 			 ItemPointer tid, TransactionId priorXmax)
 {
 	TupleTableSlot *slot;
-	HeapTuple	copyTuple;
+	StorageTuple copyTuple;
+	tuple_data	t_data;
 
 	Assert(rti > 0);
 
@@ -2497,7 +2498,9 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 	 * For UPDATE/DELETE we have to return tid of actual row we're executing
 	 * PQ for.
 	 */
-	*tid = copyTuple->t_self;
+
+	t_data = storage_tuple_get_data(relation, copyTuple, TID);
+	*tid = t_data.tid;
 
 	/*
 	 * Need to run a recheck subquery.  Initialize or reinitialize EPQ state.
@@ -2528,7 +2531,7 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 	 * is to guard against early re-use of the EPQ query.
 	 */
 	if (!TupIsNull(slot))
-		(void) ExecMaterializeSlot(slot);
+		ExecMaterializeSlot(slot);
 
 	/*
 	 * Clear out the test tuple.  This is needed in case the EPQ query is
@@ -2561,14 +2564,14 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
  * Note: properly, lockmode should be declared as enum LockTupleMode,
  * but we use "int" to avoid having to include heapam.h in executor.h.
  */
-HeapTuple
+StorageTuple
 EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 				  LockWaitPolicy wait_policy,
 				  ItemPointer tid, TransactionId priorXmax)
 {
-	HeapTuple	copyTuple = NULL;
-	HeapTupleData tuple;
+	StorageTuple tuple = NULL;
 	SnapshotData SnapshotDirty;
+	tuple_data	t_data;
 
 	/*
 	 * fetch target tuple
@@ -2576,12 +2579,12 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 	 * Loop here to deal with updated or busy tuples
 	 */
 	InitDirtySnapshot(SnapshotDirty);
-	tuple.t_self = *tid;
 	for (;;)
 	{
 		Buffer		buffer;
+		ItemPointerData ctid;
 
-		if (heap_fetch(relation, &SnapshotDirty, &tuple, &buffer, true, NULL))
+		if (storage_fetch(relation, tid, &SnapshotDirty, &tuple, &buffer, true, NULL))
 		{
 			HTSU_Result test;
 			HeapUpdateFailureData hufd;
@@ -2595,7 +2598,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 			 * atomic, and Xmin never changes in an existing tuple, except to
 			 * invalid or frozen, and neither of those can match priorXmax.)
 			 */
-			if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple.t_data),
+			if (!TransactionIdEquals(HeapTupleHeaderGetXmin(((HeapTuple)tuple)->t_data),
 									 priorXmax))
 			{
 				ReleaseBuffer(buffer);
@@ -2617,7 +2620,8 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 				{
 					case LockWaitBlock:
 						XactLockTableWait(SnapshotDirty.xmax,
-										  relation, &tuple.t_self,
+										  relation,
+										  tid,
 										  XLTW_FetchUpdated);
 						break;
 					case LockWaitSkip:
@@ -2646,20 +2650,23 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 			 * that priorXmax == xmin, so we can test that variable instead of
 			 * doing HeapTupleHeaderGetXmin again.
 			 */
-			if (TransactionIdIsCurrentTransactionId(priorXmax) &&
-				HeapTupleHeaderGetCmin(tuple.t_data) >= estate->es_output_cid)
+			if (TransactionIdIsCurrentTransactionId(priorXmax))
 			{
-				ReleaseBuffer(buffer);
-				return NULL;
+				t_data = storage_tuple_get_data(relation, tuple, CMIN);
+				if (t_data.cid >= estate->es_output_cid)
+				{
+					ReleaseBuffer(buffer);
+					return NULL;
+				}
 			}
 
 			/*
 			 * This is a live tuple, so now try to lock it.
 			 */
-			test = heap_lock_tuple(relation, &tuple,
-								   estate->es_output_cid,
-								   lockmode, wait_policy,
-								   false, &buffer, &hufd);
+			test = storage_lock_tuple(relation, tid, tuple,
+									  estate->es_output_cid,
+									  lockmode, wait_policy,
+									  false, &buffer, &hufd);
 			/* We now have two pins on the buffer, get rid of one */
 			ReleaseBuffer(buffer);
 
@@ -2695,12 +2702,15 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 								 errmsg("could not serialize access due to concurrent update")));
 
+#if 0 //hari
 					/* Should not encounter speculative tuple on recheck */
 					Assert(!HeapTupleHeaderIsSpeculative(tuple.t_data));
-					if (!ItemPointerEquals(&hufd.ctid, &tuple.t_self))
+#endif
+					t_data = storage_tuple_get_data(relation, tuple, TID);
+					if (!ItemPointerEquals(&hufd.ctid, &t_data.tid))
 					{
 						/* it was updated, so look at the updated version */
-						tuple.t_self = hufd.ctid;
+						*tid = hufd.ctid;
 						/* updated row should have xmin matching this xmax */
 						priorXmax = hufd.xmax;
 						continue;
@@ -2722,10 +2732,6 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 					return NULL;	/* keep compiler quiet */
 			}
 
-			/*
-			 * We got tuple - now copy it for use by recheck query.
-			 */
-			copyTuple = heap_copytuple(&tuple);
 			ReleaseBuffer(buffer);
 			break;
 		}
@@ -2734,7 +2740,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 		 * If the referenced slot was actually empty, the latest version of
 		 * the row must have been deleted, so we need do nothing.
 		 */
-		if (tuple.t_data == NULL)
+		if (tuple == NULL)
 		{
 			ReleaseBuffer(buffer);
 			return NULL;
@@ -2743,7 +2749,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 		/*
 		 * As above, if xmin isn't what we're expecting, do nothing.
 		 */
-		if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple.t_data),
+		if (!TransactionIdEquals(HeapTupleHeaderGetXmin(((HeapTuple)tuple)->t_data),
 								 priorXmax))
 		{
 			ReleaseBuffer(buffer);
@@ -2762,7 +2768,9 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 		 * As above, it should be safe to examine xmax and t_ctid without the
 		 * buffer content lock, because they can't be changing.
 		 */
-		if (ItemPointerEquals(&tuple.t_self, &tuple.t_data->t_ctid))
+		t_data = storage_tuple_get_data(relation, tuple, CTID);
+		ctid = t_data.tid;
+		if (ItemPointerEquals(tid, &ctid))
 		{
 			/* deleted, so forget about it */
 			ReleaseBuffer(buffer);
@@ -2770,17 +2778,19 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 		}
 
 		/* updated, so look at the updated row */
-		tuple.t_self = tuple.t_data->t_ctid;
+		*tid = ctid;
+
 		/* updated row should have xmin matching this xmax */
-		priorXmax = HeapTupleHeaderGetUpdateXid(tuple.t_data);
+		t_data = storage_tuple_get_data(relation, tuple, UPDATED_XID);
+		priorXmax = t_data.xid;
 		ReleaseBuffer(buffer);
 		/* loop back to fetch next in chain */
 	}
 
 	/*
-	 * Return the copied tuple
+	 * Return the tuple
 	 */
-	return copyTuple;
+	return tuple;
 }
 
 /*
@@ -2826,7 +2836,7 @@ EvalPlanQualSetPlan(EPQState *epqstate, Plan *subplan, List *auxrowmarks)
  * NB: passed tuple must be palloc'd; it may get freed later
  */
 void
-EvalPlanQualSetTuple(EPQState *epqstate, Index rti, HeapTuple tuple)
+EvalPlanQualSetTuple(EPQState *epqstate, Index rti, StorageTuple tuple)
 {
 	EState	   *estate = epqstate->estate;
 
@@ -2845,7 +2855,7 @@ EvalPlanQualSetTuple(EPQState *epqstate, Index rti, HeapTuple tuple)
 /*
  * Fetch back the current test tuple (if any) for the specified RTI
  */
-HeapTuple
+StorageTuple
 EvalPlanQualGetTuple(EPQState *epqstate, Index rti)
 {
 	EState	   *estate = epqstate->estate;
@@ -2873,7 +2883,7 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 		ExecRowMark *erm = aerm->rowmark;
 		Datum		datum;
 		bool		isNull;
-		HeapTupleData tuple;
+		StorageTuple tuple;
 
 		if (RowMarkRequiresRowShareLock(erm->markType))
 			elog(ERROR, "EvalPlanQual doesn't support locking rowmarks");
@@ -2904,8 +2914,6 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 
 		if (erm->markType == ROW_MARK_REFERENCE)
 		{
-			HeapTuple	copyTuple;
-
 			Assert(erm->relation != NULL);
 
 			/* fetch the tuple's ctid */
@@ -2929,11 +2937,11 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot lock rows in foreign table \"%s\"",
 									RelationGetRelationName(erm->relation))));
-				copyTuple = fdwroutine->RefetchForeignRow(epqstate->estate,
-														  erm,
-														  datum,
-														  &updated);
-				if (copyTuple == NULL)
+				tuple = fdwroutine->RefetchForeignRow(epqstate->estate,
+													  erm,
+													  datum,
+													  &updated);
+				if (tuple == NULL)
 					elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 
 				/*
@@ -2947,23 +2955,18 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 				/* ordinary table, fetch the tuple */
 				Buffer		buffer;
 
-				tuple.t_self = *((ItemPointer) DatumGetPointer(datum));
-				if (!heap_fetch(erm->relation, SnapshotAny, &tuple, &buffer,
-								false, NULL))
+				if (!storage_fetch(erm->relation, (ItemPointer) DatumGetPointer(datum), SnapshotAny, &tuple, &buffer,
+								   false, NULL))
 					elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 
-				/* successful, copy tuple */
-				copyTuple = heap_copytuple(&tuple);
 				ReleaseBuffer(buffer);
 			}
 
 			/* store tuple */
-			EvalPlanQualSetTuple(epqstate, erm->rti, copyTuple);
+			EvalPlanQualSetTuple(epqstate, erm->rti, tuple);
 		}
 		else
 		{
-			HeapTupleHeader td;
-
 			Assert(erm->markType == ROW_MARK_COPY);
 
 			/* fetch the whole-row Var for the relation */
@@ -2973,19 +2976,12 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 			/* non-locked rels could be on the inside of outer joins */
 			if (isNull)
 				continue;
-			td = DatumGetHeapTupleHeader(datum);
 
-			/* build a temporary HeapTuple control structure */
-			tuple.t_len = HeapTupleHeaderGetDatumLength(td);
-			tuple.t_data = td;
-			/* relation might be a foreign table, if so provide tableoid */
-			tuple.t_tableOid = erm->relid;
-			/* also copy t_ctid in case there's valid data there */
-			tuple.t_self = td->t_ctid;
+			tuple = storage_tuple_by_datum(erm->relation, datum, erm->relid);
 
-			/* copy and store tuple */
-			EvalPlanQualSetTuple(epqstate, erm->rti,
-								 heap_copytuple(&tuple));
+			/* store tuple */
+			EvalPlanQualSetTuple(epqstate, erm->rti, tuple);
+
 		}
 	}
 }
@@ -3151,8 +3147,8 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	}
 	else
 	{
-		estate->es_epqTuple = (HeapTuple *)
-			palloc0(rtsize * sizeof(HeapTuple));
+		estate->es_epqTuple = (StorageTuple *)
+			palloc0(rtsize * sizeof(StorageTuple));
 		estate->es_epqTupleSet = (bool *)
 			palloc0(rtsize * sizeof(bool));
 	}

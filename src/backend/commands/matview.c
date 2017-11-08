@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/storageam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -491,19 +492,22 @@ static bool
 transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
-	HeapTuple	tuple;
 
 	/*
 	 * get the heap tuple out of the tuple table slot, making sure we have a
 	 * writable copy
 	 */
-	tuple = ExecMaterializeSlot(slot);
+	ExecMaterializeSlot(slot);
 
-	heap_insert(myState->transientrel,
-				tuple,
-				myState->output_cid,
-				myState->hi_options,
-				myState->bistate);
+	storage_insert(myState->transientrel,
+				   slot,
+				   myState->output_cid,
+				   myState->hi_options,
+				   myState->bistate,
+				   NULL,
+				   NULL,
+				   NIL,
+				   NULL);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -522,7 +526,7 @@ transientrel_shutdown(DestReceiver *self)
 
 	/* If we skipped using WAL, must heap_sync before commit */
 	if (myState->hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(myState->transientrel);
+		storage_sync(myState->transientrel);
 
 	/* close transientrel, but keep lock until commit */
 	heap_close(myState->transientrel, NoLock);

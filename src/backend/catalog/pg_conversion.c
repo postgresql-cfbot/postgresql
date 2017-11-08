@@ -16,6 +16,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/storageam.h"
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -150,7 +151,7 @@ RemoveConversionById(Oid conversionOid)
 {
 	Relation	rel;
 	HeapTuple	tuple;
-	HeapScanDesc scan;
+	StorageScanDesc scan;
 	ScanKeyData scanKeyData;
 
 	ScanKeyInit(&scanKeyData,
@@ -161,14 +162,14 @@ RemoveConversionById(Oid conversionOid)
 	/* open pg_conversion */
 	rel = heap_open(ConversionRelationId, RowExclusiveLock);
 
-	scan = heap_beginscan_catalog(rel, 1, &scanKeyData);
+	scan = storage_beginscan_catalog(rel, 1, &scanKeyData);
 
 	/* search for the target tuple */
-	if (HeapTupleIsValid(tuple = heap_getnext(scan, ForwardScanDirection)))
+	if (HeapTupleIsValid(tuple = storage_getnext(scan, ForwardScanDirection)))
 		CatalogTupleDelete(rel, &tuple->t_self);
 	else
 		elog(ERROR, "could not find tuple for conversion %u", conversionOid);
-	heap_endscan(scan);
+	storage_endscan(scan);
 	heap_close(rel, RowExclusiveLock);
 }
 

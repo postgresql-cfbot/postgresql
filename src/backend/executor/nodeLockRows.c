@@ -22,6 +22,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/storageam.h"
 #include "access/xact.h"
 #include "executor/executor.h"
 #include "executor/nodeLockRows.h"
@@ -74,18 +75,20 @@ lnext:
 	{
 		ExecAuxRowMark *aerm = (ExecAuxRowMark *) lfirst(lc);
 		ExecRowMark *erm = aerm->rowmark;
-		HeapTuple  *testTuple;
+		StorageTuple *testTuple;
 		Datum		datum;
 		bool		isNull;
-		HeapTupleData tuple;
+		StorageTuple tuple;
 		Buffer		buffer;
 		HeapUpdateFailureData hufd;
 		LockTupleMode lockmode;
 		HTSU_Result test;
-		HeapTuple	copyTuple;
+		StorageTuple copyTuple;
+		ItemPointerData tid;
+		tuple_data	t_data;
 
 		/* clear any leftover test tuple for this rel */
-		testTuple = &(node->lr_curtuples[erm->rti - 1]);
+		testTuple = (StorageTuple) (&(node->lr_curtuples[erm->rti - 1]));
 		if (*testTuple != NULL)
 			heap_freetuple(*testTuple);
 		*testTuple = NULL;
@@ -159,7 +162,7 @@ lnext:
 		}
 
 		/* okay, try to lock the tuple */
-		tuple.t_self = *((ItemPointer) DatumGetPointer(datum));
+		tid = *((ItemPointer) DatumGetPointer(datum));
 		switch (erm->markType)
 		{
 			case ROW_MARK_EXCLUSIVE:
@@ -180,11 +183,13 @@ lnext:
 				break;
 		}
 
-		test = heap_lock_tuple(erm->relation, &tuple,
-							   estate->es_output_cid,
-							   lockmode, erm->waitPolicy, true,
-							   &buffer, &hufd);
-		ReleaseBuffer(buffer);
+		test = storage_lock_tuple(erm->relation, &tid, &tuple,
+								  estate->es_output_cid,
+								  lockmode, erm->waitPolicy, true,
+								  &buffer, &hufd);
+		if (BufferIsValid(buffer))
+			ReleaseBuffer(buffer);
+
 		switch (test)
 		{
 			case HeapTupleWouldBlock:
@@ -218,7 +223,8 @@ lnext:
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
-				if (ItemPointerEquals(&hufd.ctid, &tuple.t_self))
+				t_data = erm->relation->rd_stamroutine->get_tuple_data(tuple, TID);
+				if (ItemPointerEquals(&hufd.ctid, &(t_data.tid)))
 				{
 					/* Tuple was deleted, so don't return it */
 					goto lnext;
@@ -238,7 +244,8 @@ lnext:
 					goto lnext;
 				}
 				/* remember the actually locked tuple's TID */
-				tuple.t_self = copyTuple->t_self;
+				t_data = erm->relation->rd_stamroutine->get_tuple_data(copyTuple, TID);
+				tid = t_data.tid;
 
 				/* Save locked tuple for EvalPlanQual testing below */
 				*testTuple = copyTuple;
@@ -258,7 +265,7 @@ lnext:
 		}
 
 		/* Remember locked tuple's TID for EPQ testing and WHERE CURRENT OF */
-		erm->curCtid = tuple.t_self;
+		erm->curCtid = tid;
 	}
 
 	/*
@@ -280,7 +287,7 @@ lnext:
 		{
 			ExecAuxRowMark *aerm = (ExecAuxRowMark *) lfirst(lc);
 			ExecRowMark *erm = aerm->rowmark;
-			HeapTupleData tuple;
+			StorageTuple tuple;
 			Buffer		buffer;
 
 			/* skip non-active child tables, but clear their test tuples */
@@ -308,14 +315,12 @@ lnext:
 			Assert(ItemPointerIsValid(&(erm->curCtid)));
 
 			/* okay, fetch the tuple */
-			tuple.t_self = erm->curCtid;
-			if (!heap_fetch(erm->relation, SnapshotAny, &tuple, &buffer,
-							false, NULL))
+			if (!storage_fetch(erm->relation, &erm->curCtid, SnapshotAny, &tuple, &buffer,
+							   false, NULL))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 
 			/* successful, copy and store tuple */
-			EvalPlanQualSetTuple(&node->lr_epqstate, erm->rti,
-								 heap_copytuple(&tuple));
+			EvalPlanQualSetTuple(&node->lr_epqstate, erm->rti, tuple);
 			ReleaseBuffer(buffer);
 		}
 
@@ -394,8 +399,8 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 	 * Create workspace in which we can remember per-RTE locked tuples
 	 */
 	lrstate->lr_ntables = list_length(estate->es_range_table);
-	lrstate->lr_curtuples = (HeapTuple *)
-		palloc0(lrstate->lr_ntables * sizeof(HeapTuple));
+	lrstate->lr_curtuples = (StorageTuple *)
+		palloc0(lrstate->lr_ntables * sizeof(StorageTuple));
 
 	/*
 	 * Locate the ExecRowMark(s) that this node is responsible for, and

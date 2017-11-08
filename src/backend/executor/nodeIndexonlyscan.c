@@ -117,7 +117,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	 */
 	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
 	{
-		HeapTuple	tuple = NULL;
+		StorageTuple tuple = NULL;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -186,9 +186,9 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		/*
 		 * Fill the scan tuple slot with data from the index.  This might be
-		 * provided in either HeapTuple or IndexTuple format.  Conceivably an
-		 * index AM might fill both fields, in which case we prefer the heap
-		 * format, since it's probably a bit cheaper to fill a slot from.
+		 * provided in either StorageTuple or IndexTuple format.  Conceivably
+		 * an index AM might fill both fields, in which case we prefer the
+		 * heap format, since it's probably a bit cheaper to fill a slot from.
 		 */
 		if (scandesc->xs_hitup)
 		{

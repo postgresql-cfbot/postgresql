@@ -32,6 +32,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/storageam.h"
 #include "access/xact.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
@@ -2381,14 +2382,14 @@ AlterDomainNotNull(List *names, bool notNull)
 			RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 			Relation	testrel = rtc->rel;
 			TupleDesc	tupdesc = RelationGetDescr(testrel);
-			HeapScanDesc scan;
+			StorageScanDesc scan;
 			HeapTuple	tuple;
 			Snapshot	snapshot;
 
 			/* Scan all tuples in this relation */
 			snapshot = RegisterSnapshot(GetLatestSnapshot());
-			scan = heap_beginscan(testrel, snapshot, 0, NULL);
-			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+			scan = storage_beginscan(testrel, snapshot, 0, NULL);
+			while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 			{
 				int			i;
 
@@ -2417,7 +2418,7 @@ AlterDomainNotNull(List *names, bool notNull)
 					}
 				}
 			}
-			heap_endscan(scan);
+			storage_endscan(scan);
 			UnregisterSnapshot(snapshot);
 
 			/* Close each rel after processing, but keep lock */
@@ -2777,14 +2778,14 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 		RelToCheck *rtc = (RelToCheck *) lfirst(rt);
 		Relation	testrel = rtc->rel;
 		TupleDesc	tupdesc = RelationGetDescr(testrel);
-		HeapScanDesc scan;
+		StorageScanDesc scan;
 		HeapTuple	tuple;
 		Snapshot	snapshot;
 
 		/* Scan all tuples in this relation */
 		snapshot = RegisterSnapshot(GetLatestSnapshot());
-		scan = heap_beginscan(testrel, snapshot, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		scan = storage_beginscan(testrel, snapshot, 0, NULL);
+		while ((tuple = storage_getnext(scan, ForwardScanDirection)) != NULL)
 		{
 			int			i;
 
@@ -2827,7 +2828,7 @@ validateDomainConstraint(Oid domainoid, char *ccbin)
 
 			ResetExprContext(econtext);
 		}
-		heap_endscan(scan);
+		storage_endscan(scan);
 		UnregisterSnapshot(snapshot);
 
 		/* Hold relation lock till commit (XXX bad for concurrency) */

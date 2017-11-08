@@ -34,6 +34,7 @@ typedef struct Trigger
 	Oid			tgconstraint;
 	bool		tgdeferrable;
 	bool		tginitdeferred;
+	bool		tgalwaysdeferred;
 	int16		tgnargs;
 	int16		tgnattr;
 	int16	   *tgattr;

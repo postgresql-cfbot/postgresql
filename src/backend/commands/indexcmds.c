@@ -671,7 +671,7 @@ DefineIndex(Oid relationId,
 					 collationObjectId, classObjectId,
 					 coloptions, reloptions, stmt->primary,
 					 stmt->isconstraint, stmt->deferrable, stmt->initdeferred,
-					 allowSystemTableMods,
+					 stmt->alwaysdeferred, allowSystemTableMods,
 					 skip_build || stmt->concurrent,
 					 stmt->concurrent, !check_rights,
 					 stmt->if_not_exists);

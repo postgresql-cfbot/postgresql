@@ -44,6 +44,7 @@ CATALOG(pg_constraint,2606)
 	char		contype;		/* constraint type; see codes below */
 	bool		condeferrable;	/* deferrable constraint? */
 	bool		condeferred;	/* deferred by default? */
+	bool		conalwaysdeferred;	/* always deferred? */
 	bool		convalidated;	/* constraint has been validated? */
 
 	/*
@@ -150,31 +151,32 @@ typedef FormData_pg_constraint *Form_pg_constraint;
  *		compiler constants for pg_constraint
  * ----------------
  */
-#define Natts_pg_constraint					24
+#define Natts_pg_constraint					25
 #define Anum_pg_constraint_conname			1
 #define Anum_pg_constraint_connamespace		2
 #define Anum_pg_constraint_contype			3
 #define Anum_pg_constraint_condeferrable	4
 #define Anum_pg_constraint_condeferred		5
-#define Anum_pg_constraint_convalidated		6
-#define Anum_pg_constraint_conrelid			7
-#define Anum_pg_constraint_contypid			8
-#define Anum_pg_constraint_conindid			9
-#define Anum_pg_constraint_confrelid		10
-#define Anum_pg_constraint_confupdtype		11
-#define Anum_pg_constraint_confdeltype		12
-#define Anum_pg_constraint_confmatchtype	13
-#define Anum_pg_constraint_conislocal		14
-#define Anum_pg_constraint_coninhcount		15
-#define Anum_pg_constraint_connoinherit		16
-#define Anum_pg_constraint_conkey			17
-#define Anum_pg_constraint_confkey			18
-#define Anum_pg_constraint_conpfeqop		19
-#define Anum_pg_constraint_conppeqop		20
-#define Anum_pg_constraint_conffeqop		21
-#define Anum_pg_constraint_conexclop		22
-#define Anum_pg_constraint_conbin			23
-#define Anum_pg_constraint_consrc			24
+#define Anum_pg_constraint_conalwaysdeferred	6
+#define Anum_pg_constraint_convalidated		7
+#define Anum_pg_constraint_conrelid			8
+#define Anum_pg_constraint_contypid			9
+#define Anum_pg_constraint_conindid			10
+#define Anum_pg_constraint_confrelid		11
+#define Anum_pg_constraint_confupdtype		12
+#define Anum_pg_constraint_confdeltype		13
+#define Anum_pg_constraint_confmatchtype	14
+#define Anum_pg_constraint_conislocal		15
+#define Anum_pg_constraint_coninhcount		16
+#define Anum_pg_constraint_connoinherit		17
+#define Anum_pg_constraint_conkey			18
+#define Anum_pg_constraint_confkey			19
+#define Anum_pg_constraint_conpfeqop		20
+#define Anum_pg_constraint_conppeqop		21
+#define Anum_pg_constraint_conffeqop		22
+#define Anum_pg_constraint_conexclop		23
+#define Anum_pg_constraint_conbin			24
+#define Anum_pg_constraint_consrc			25
 
 /* ----------------
  *		initial contents of pg_constraint

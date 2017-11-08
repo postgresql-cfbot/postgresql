@@ -895,6 +895,10 @@ CREATE VIEW domain_constraints AS
              AS yes_or_no) AS is_deferrable,
            CAST(CASE WHEN condeferred THEN 'YES' ELSE 'NO' END
              AS yes_or_no) AS initially_deferred
+	   /*
+	    * XXX Can we add is_always_deferred here?  Are there
+	    * standards considerations?
+	    */
     FROM pg_namespace rs, pg_namespace n, pg_constraint con, pg_type t
     WHERE rs.oid = con.connamespace
           AND n.oid = t.typnamespace
@@ -1779,6 +1783,10 @@ CREATE VIEW table_constraints AS
              AS is_deferrable,
            CAST(CASE WHEN c.condeferred THEN 'YES' ELSE 'NO' END AS yes_or_no)
              AS initially_deferred
+	   /*
+	    * XXX Can we add is_always_deferred here?  Are there
+	    * standards considerations?
+	    */
 
     FROM pg_namespace nc,
          pg_namespace nr,

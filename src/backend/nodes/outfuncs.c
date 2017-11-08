@@ -3513,6 +3513,10 @@ _outConstraint(StringInfo str, const Constraint *node)
 			appendStringInfoString(str, "ATTR_NOT_DEFERRABLE");
 			break;
 
+		case CONSTR_ATTR_ALWAYS_DEFERRED:
+			appendStringInfoString(str, "ATTR_ALWAYS_DEFERRED");
+			break;
+
 		case CONSTR_ATTR_DEFERRED:
 			appendStringInfoString(str, "ATTR_DEFERRED");
 			break;

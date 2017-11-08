@@ -2061,7 +2061,8 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_ATTR_DEFERRABLE,		/* attributes for previous constraint node */
 	CONSTR_ATTR_NOT_DEFERRABLE,
 	CONSTR_ATTR_DEFERRED,
-	CONSTR_ATTR_IMMEDIATE
+	CONSTR_ATTR_IMMEDIATE,
+	CONSTR_ATTR_ALWAYS_DEFERRED
 } ConstrType;
 
 /* Foreign key action codes */
@@ -2085,6 +2086,7 @@ typedef struct Constraint
 	char	   *conname;		/* Constraint name, or NULL if unnamed */
 	bool		deferrable;		/* DEFERRABLE? */
 	bool		initdeferred;	/* INITIALLY DEFERRED? */
+	bool		alwaysdeferred;	/* ALWAYS DEFERRED? */
 	int			location;		/* token location, or -1 if unknown */
 
 	/* Fields used for constraints with expressions (CHECK and DEFAULT): */
@@ -2369,6 +2371,7 @@ typedef struct CreateTrigStmt
 	/* The remaining fields are only used for constraint triggers */
 	bool		deferrable;		/* [NOT] DEFERRABLE */
 	bool		initdeferred;	/* INITIALLY {DEFERRED|IMMEDIATE} */
+	bool		alwaysdeferred;	/* ALWAYS DEFERRED? */
 	RangeVar   *constrrel;		/* opposite relation, if RI trigger */
 } CreateTrigStmt;
 
@@ -2713,6 +2716,7 @@ typedef struct IndexStmt
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */
 	bool		deferrable;		/* is the constraint DEFERRABLE? */
 	bool		initdeferred;	/* is the constraint INITIALLY DEFERRED? */
+	bool		alwaysdeferred;	/* ALWAYS DEFERRED? */
 	bool		transformed;	/* true when transformIndexStmt is finished */
 	bool		concurrent;		/* should this be a concurrent index build? */
 	bool		if_not_exists;	/* just do nothing if index already exists? */

@@ -2831,6 +2831,7 @@ _copyConstraint(const Constraint *from)
 	COPY_STRING_FIELD(conname);
 	COPY_SCALAR_FIELD(deferrable);
 	COPY_SCALAR_FIELD(initdeferred);
+	COPY_SCALAR_FIELD(alwaysdeferred);
 	COPY_LOCATION_FIELD(location);
 	COPY_SCALAR_FIELD(is_no_inherit);
 	COPY_NODE_FIELD(raw_expr);
@@ -3379,6 +3380,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_SCALAR_FIELD(isconstraint);
 	COPY_SCALAR_FIELD(deferrable);
 	COPY_SCALAR_FIELD(initdeferred);
+	COPY_SCALAR_FIELD(alwaysdeferred);
 	COPY_SCALAR_FIELD(transformed);
 	COPY_SCALAR_FIELD(concurrent);
 	COPY_SCALAR_FIELD(if_not_exists);
@@ -4148,6 +4150,7 @@ _copyCreateTrigStmt(const CreateTrigStmt *from)
 	COPY_NODE_FIELD(transitionRels);
 	COPY_SCALAR_FIELD(deferrable);
 	COPY_SCALAR_FIELD(initdeferred);
+	COPY_SCALAR_FIELD(alwaysdeferred);
 	COPY_NODE_FIELD(constrrel);
 
 	return newnode;

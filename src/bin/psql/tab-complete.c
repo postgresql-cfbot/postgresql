@@ -2549,10 +2549,10 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatches7("CREATE", "TRIGGER", MatchAny, "INSTEAD", "OF", MatchAny, "ON"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
 	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches2("ON", MatchAny))
-		COMPLETE_WITH_LIST7("NOT DEFERRABLE", "DEFERRABLE", "INITIALLY",
+		COMPLETE_WITH_LIST8("ALWAYS DEFERRABLE", "NOT DEFERRABLE", "DEFERRABLE", "INITIALLY",
 							"REFERENCING", "FOR", "WHEN (", "EXECUTE PROCEDURE");
 	else if (HeadMatches2("CREATE", "TRIGGER") &&
-			 (TailMatches1("DEFERRABLE") || TailMatches2("INITIALLY", "IMMEDIATE|DEFERRED")))
+			 (TailMatches2("ALLWAYS", "DEFERRABLE") || TailMatches1("DEFERRABLE") || TailMatches2("INITIALLY", "IMMEDIATE|DEFERRED")))
 		COMPLETE_WITH_LIST4("REFERENCING", "FOR", "WHEN (", "EXECUTE PROCEDURE");
 	else if (HeadMatches2("CREATE", "TRIGGER") && TailMatches1("REFERENCING"))
 		COMPLETE_WITH_LIST2("OLD TABLE", "NEW TABLE");

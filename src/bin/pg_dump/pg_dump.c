@@ -6518,6 +6518,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_conname,
 				i_condeferrable,
 				i_condeferred,
+				i_conalwaysdeferred,
 				i_contableoid,
 				i_conoid,
 				i_condef,
@@ -6575,7 +6576,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "i.indkey, i.indisclustered, "
 							  "i.indisreplident, t.relpages, "
 							  "c.contype, c.conname, "
-							  "c.condeferrable, c.condeferred, "
+							  "c.condeferrable, c.condeferred, c.conalwaysdeferred, "
 							  "c.tableoid AS contableoid, "
 							  "c.oid AS conoid, "
 							  "pg_catalog.pg_get_constraintdef(c.oid, false) AS condef, "
@@ -6606,7 +6607,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "i.indkey, i.indisclustered, "
 							  "false AS indisreplident, t.relpages, "
 							  "c.contype, c.conname, "
-							  "c.condeferrable, c.condeferred, "
+							  "c.condeferrable, c.condeferred, c.conalwaysdeferred, "
 							  "c.tableoid AS contableoid, "
 							  "c.oid AS conoid, "
 							  "pg_catalog.pg_get_constraintdef(c.oid, false) AS condef, "
@@ -6633,7 +6634,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "i.indkey, i.indisclustered, "
 							  "false AS indisreplident, t.relpages, "
 							  "c.contype, c.conname, "
-							  "c.condeferrable, c.condeferred, "
+							  "c.condeferrable, c.condeferred, c.conalwaysdeferred "
 							  "c.tableoid AS contableoid, "
 							  "c.oid AS conoid, "
 							  "null AS condef, "
@@ -6663,7 +6664,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "i.indkey, i.indisclustered, "
 							  "false AS indisreplident, t.relpages, "
 							  "c.contype, c.conname, "
-							  "c.condeferrable, c.condeferred, "
+							  "c.condeferrable, c.condeferred, c.conalwaysdeferred "
 							  "c.tableoid AS contableoid, "
 							  "c.oid AS conoid, "
 							  "null AS condef, "
@@ -6700,6 +6701,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 		i_conname = PQfnumber(res, "conname");
 		i_condeferrable = PQfnumber(res, "condeferrable");
 		i_condeferred = PQfnumber(res, "condeferred");
+		i_conalwaysdeferred = PQfnumber(res, "conalwaysdeferred");
 		i_contableoid = PQfnumber(res, "contableoid");
 		i_conoid = PQfnumber(res, "conoid");
 		i_condef = PQfnumber(res, "condef");
@@ -6755,6 +6757,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				constrinfo[j].conindex = indxinfo[j].dobj.dumpId;
 				constrinfo[j].condeferrable = *(PQgetvalue(res, j, i_condeferrable)) == 't';
 				constrinfo[j].condeferred = *(PQgetvalue(res, j, i_condeferred)) == 't';
+				constrinfo[j].conalwaysdeferred = *(PQgetvalue(res, j, i_conalwaysdeferred)) == 't';
 				constrinfo[j].conislocal = true;
 				constrinfo[j].separate = true;
 
@@ -6952,6 +6955,7 @@ getConstraints(Archive *fout, TableInfo tblinfo[], int numTables)
 			constrinfo[j].conindex = 0;
 			constrinfo[j].condeferrable = false;
 			constrinfo[j].condeferred = false;
+			constrinfo[j].conalwaysdeferred = false;
 			constrinfo[j].conislocal = true;
 			constrinfo[j].separate = true;
 		}
@@ -7038,6 +7042,7 @@ getDomainConstraints(Archive *fout, TypeInfo *tyinfo)
 		constrinfo[i].conindex = 0;
 		constrinfo[i].condeferrable = false;
 		constrinfo[i].condeferred = false;
+		constrinfo[i].conalwaysdeferred = false;
 		constrinfo[i].conislocal = true;
 
 		constrinfo[i].separate = !validated;
@@ -7202,6 +7207,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_tgenabled,
 				i_tgdeferrable,
 				i_tginitdeferred,
+				i_tgalwaysdeferred,
 				i_tgdef;
 	int			ntups;
 
@@ -7300,6 +7306,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 		i_tgenabled = PQfnumber(res, "tgenabled");
 		i_tgdeferrable = PQfnumber(res, "tgdeferrable");
 		i_tginitdeferred = PQfnumber(res, "tginitdeferred");
+		i_tgalwaysdeferred = PQfnumber(res, "tgalwaysdeferred");
 		i_tgdef = PQfnumber(res, "tgdef");
 
 		tginfo = (TriggerInfo *) pg_malloc(ntups * sizeof(TriggerInfo));
@@ -7329,6 +7336,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 				tginfo[j].tgisconstraint = false;
 				tginfo[j].tgdeferrable = false;
 				tginfo[j].tginitdeferred = false;
+				tginfo[j].tgalwaysdeferred = false;
 				tginfo[j].tgconstrname = NULL;
 				tginfo[j].tgconstrrelid = InvalidOid;
 				tginfo[j].tgconstrrelname = NULL;
@@ -7344,6 +7352,8 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 				tginfo[j].tgisconstraint = *(PQgetvalue(res, j, i_tgisconstraint)) == 't';
 				tginfo[j].tgdeferrable = *(PQgetvalue(res, j, i_tgdeferrable)) == 't';
 				tginfo[j].tginitdeferred = *(PQgetvalue(res, j, i_tginitdeferred)) == 't';
+				if (i_tgalwaysdeferred != -1)
+					tginfo[j].tgalwaysdeferred = *(PQgetvalue(res, j, i_tgalwaysdeferred)) == 't';
 
 				if (tginfo[j].tgisconstraint)
 				{
@@ -8292,6 +8302,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 				constrs[j].conindex = 0;
 				constrs[j].condeferrable = false;
 				constrs[j].condeferred = false;
+				constrs[j].conalwaysdeferred = false;
 				constrs[j].conislocal = (PQgetvalue(res, j, 4)[0] == 't');
 
 				/*
@@ -16295,6 +16306,11 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 					appendPQExpBufferStr(q, " INITIALLY DEFERRED");
 			}
 
+			if (coninfo->conalwaysdeferred)
+			{
+				appendPQExpBufferStr(q, " ALWAYS DEFERRED");
+			}
+
 			appendPQExpBufferStr(q, ";\n");
 		}
 
@@ -16960,9 +16976,12 @@ dumpTrigger(Archive *fout, TriggerInfo *tginfo)
 				appendPQExpBufferStr(query, "NOT ");
 			appendPQExpBufferStr(query, "DEFERRABLE INITIALLY ");
 			if (tginfo->tginitdeferred)
-				appendPQExpBufferStr(query, "DEFERRED\n");
+				appendPQExpBufferStr(query, "DEFERRED");
 			else
-				appendPQExpBufferStr(query, "IMMEDIATE\n");
+				appendPQExpBufferStr(query, "IMMEDIATE");
+			if (tginfo->tgalwaysdeferred)
+				appendPQExpBufferStr(query, " ALWAYS DEFERRED");
+			appendPQExpBufferStr(query, "\n");
 		}
 
 		if (TRIGGER_FOR_ROW(tginfo->tgtype))

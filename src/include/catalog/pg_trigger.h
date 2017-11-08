@@ -48,6 +48,7 @@ CATALOG(pg_trigger,2620)
 	Oid			tgconstraint;	/* associated pg_constraint entry, if any */
 	bool		tgdeferrable;	/* constraint trigger is deferrable */
 	bool		tginitdeferred; /* constraint trigger is deferred initially */
+	bool		tgalwaysdeferred; /* constraint trigger is always deferred */
 	int16		tgnargs;		/* # of extra arguments in tgargs */
 
 	/*
@@ -75,7 +76,7 @@ typedef FormData_pg_trigger *Form_pg_trigger;
  *		compiler constants for pg_trigger
  * ----------------
  */
-#define Natts_pg_trigger				17
+#define Natts_pg_trigger				18
 #define Anum_pg_trigger_tgrelid			1
 #define Anum_pg_trigger_tgname			2
 #define Anum_pg_trigger_tgfoid			3
@@ -87,12 +88,13 @@ typedef FormData_pg_trigger *Form_pg_trigger;
 #define Anum_pg_trigger_tgconstraint	9
 #define Anum_pg_trigger_tgdeferrable	10
 #define Anum_pg_trigger_tginitdeferred	11
-#define Anum_pg_trigger_tgnargs			12
-#define Anum_pg_trigger_tgattr			13
-#define Anum_pg_trigger_tgargs			14
-#define Anum_pg_trigger_tgqual			15
-#define Anum_pg_trigger_tgoldtable		16
-#define Anum_pg_trigger_tgnewtable		17
+#define Anum_pg_trigger_tgalwaysdeferred	12
+#define Anum_pg_trigger_tgnargs			13
+#define Anum_pg_trigger_tgattr			14
+#define Anum_pg_trigger_tgargs			15
+#define Anum_pg_trigger_tgqual			16
+#define Anum_pg_trigger_tgoldtable		17
+#define Anum_pg_trigger_tgnewtable		18
 
 /* Bits within tgtype */
 #define TRIGGER_TYPE_ROW				(1 << 0)

@@ -20,6 +20,7 @@
 #include "lib/ilist.h"
 #include "miscadmin.h"
 #include "utils/rel.h"
+#include "storage/predicate.h"
 
 /*
  * Min, Max and Target size of posting lists stored on leaf pages, in bytes.
@@ -1759,7 +1760,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
  */
 BlockNumber
 createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
-				  GinStatsData *buildStats)
+				  GinStatsData *buildStats, Buffer entrybuffer)
 {
 	BlockNumber blkno;
 	Buffer		buffer;
@@ -1809,6 +1810,12 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	buffer = GinNewBuffer(index);
 	page = BufferGetPage(buffer);
 	blkno = BufferGetBlockNumber(buffer);
+
+	/*
+	 *Copy a predicate lock from entry tree leaf (containing posting list)
+	 *to  posting tree.
+	 */
+	PredicateLockPageSplit(index, BufferGetBlockNumber(entrybuffer), blkno);
 
 	START_CRIT_SECTION();
 
@@ -1904,6 +1911,7 @@ ginInsertItemPointers(Relation index, BlockNumber rootBlkno,
 		btree.itemptr = insertdata.items[insertdata.curitem];
 		stack = ginFindLeafPage(&btree, false, NULL);
 
+		CheckForSerializableConflictIn(btree.index, NULL, stack->buffer);
 		ginInsertValue(&btree, stack, &insertdata, buildStats);
 	}
 }

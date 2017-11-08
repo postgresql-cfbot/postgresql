@@ -379,6 +379,17 @@ level during a GiST search. An index insert at the leaf level can
 then be trusted to ripple up to all levels and locations where
 conflicting predicate locks may exist.
 
+    * Gin searches acquire predicate locks only on the leaf pages
+of entry tree and posting tree. We acquire a predicate lock on entry
+tree leaf pages only when entry has a posting list. If entry tree has
+a pointer to posting tree, we skip locking entry tree leaf page and lock
+only posting tree leaf pages. If, however, fast update is enabled, a
+predicate lock on the index relation is required as fast update postpones
+the insertion of tuples into index structure by temporarily storing them
+into pending list due to which we are unable to detect all r-w conflicts.
+During a page split, a predicate lock is copied from the original page
+to the new page.
+
     * The effects of page splits, overflows, consolidations, and
 removals must be carefully reviewed to ensure that predicate locks
 aren't "lost" during those operations, or kept with pages which could

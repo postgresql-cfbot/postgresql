@@ -140,6 +140,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = true;
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = true;
+	amroutine->amcaninclude = true;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = btbuild;

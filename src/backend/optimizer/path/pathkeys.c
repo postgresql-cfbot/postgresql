@@ -477,6 +477,13 @@ build_index_pathkeys(PlannerInfo *root,
 		bool		nulls_first;
 		PathKey    *cpathkey;
 
+		/*
+		 * INCLUDE columns are stored in index unordered,
+		 * so they don't support ordered index scan.
+		 */
+		if(i >= index->nkeycolumns)
+			break;
+
 		/* We assume we don't need to make a copy of the tlist item */
 		indexkey = indextle->expr;
 

@@ -288,13 +288,11 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 		}
 
 		/* Extract left hikey and its size (assuming 16-bit alignment) */
-		if (!isleaf)
-		{
-			left_hikey = (Item) datapos;
-			left_hikeysz = MAXALIGN(IndexTupleSize(left_hikey));
-			datapos += left_hikeysz;
-			datalen -= left_hikeysz;
-		}
+		left_hikey = (Item) datapos;
+		left_hikeysz = MAXALIGN(IndexTupleSize(left_hikey));
+		datapos += left_hikeysz;
+		datalen -= left_hikeysz;
+
 		Assert(datalen == 0);
 
 		newlpage = PageGetTempPageCopySpecial(lpage);

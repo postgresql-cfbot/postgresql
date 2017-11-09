@@ -1877,7 +1877,9 @@ typedef struct RestrictInfo
 								 * not yet set */
 
 	/* valid if clause is mergejoinable, else NIL */
-	List	   *mergeopfamilies;	/* opfamilies containing clause operator */
+	List	   *mergeopfamilies;	/* opfamilies containing mergejoinable
+									 * operator */	
+	bool		is_equality;		/* is this an equality clause? */
 
 	/* cache space for mergeclause processing; NULL if not yet set */
 	EquivalenceClass *left_ec;	/* EquivalenceClass containing lefthand */

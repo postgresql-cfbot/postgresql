@@ -2175,6 +2175,7 @@ _copyRestrictInfo(const RestrictInfo *from)
 	COPY_SCALAR_FIELD(norm_selec);
 	COPY_SCALAR_FIELD(outer_selec);
 	COPY_NODE_FIELD(mergeopfamilies);
+	COPY_SCALAR_FIELD(is_equality);
 	/* EquivalenceClasses are never copied, so shallow-copy the pointers */
 	COPY_SCALAR_FIELD(left_ec);
 	COPY_SCALAR_FIELD(right_ec);

@@ -199,7 +199,7 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 	if (!OidIsValid(equality_op))	/* shouldn't happen */
 		elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 			 BTEqualStrategyNumber, opcintype, opcintype, opfamily);
-	opfamilies = get_mergejoin_opfamilies(equality_op);
+	opfamilies = get_equiv_opfamilies(equality_op);
 	if (!opfamilies)			/* certainly should find some */
 		elog(ERROR, "could not find opfamilies for equality operator %u",
 			 equality_op);
@@ -1119,7 +1119,8 @@ find_mergeclauses_for_pathkeys(PlannerInfo *root,
 List *
 select_outer_pathkeys_for_merge(PlannerInfo *root,
 								List *mergeclauses,
-								RelOptInfo *joinrel)
+								RelOptInfo *joinrel,
+								JoinType jointype)
 {
 	List	   *pathkeys = NIL;
 	int			nClauses = list_length(mergeclauses);
@@ -1186,8 +1187,15 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 	 * Find out if we have all the ECs mentioned in query_pathkeys; if so we
 	 * can generate a sort order that's also useful for final output. There is
 	 * no percentage in a partial match, though, so we have to have 'em all.
+	 *
+	 * Full joins on an inequality clause are performed as merge joins and
+	 * require a particular combination of merge clause, sort order, and which
+	 * relation is outer and which is inner. populate_joinrel_with_paths()
+	 * tries both relations as outer, so we should use the same sort order for
+	 * them.
 	 */
-	if (root->query_pathkeys)
+
+	if (root->query_pathkeys && jointype != JOIN_FULL)
 	{
 		foreach(lc, root->query_pathkeys)
 		{

@@ -2984,7 +2984,6 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 							   &op_strategy,
 							   &op_lefttype,
 							   &op_righttype);
-	Assert(op_strategy == BTEqualStrategyNumber);
 
 	/*
 	 * Look up the various operators we need.  If we don't find them all, it
@@ -3167,18 +3166,39 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 	if (selec != DEFAULT_INEQ_SEL)
 		*rightstart = selec;
 
-	/*
-	 * Only one of the two "start" fractions can really be more than zero;
-	 * believe the larger estimate and reset the other one to exactly 0.0. If
-	 * we get exactly equal estimates (as can easily happen with self-joins),
-	 * believe neither.
-	 */
-	if (*leftstart < *rightstart)
+	if (op_strategy == BTLessStrategyNumber
+		|| op_strategy == BTLessEqualStrategyNumber)
+	{
+		/*
+		 * If the left variable must be less than right, its first tuple
+		 * will already produce the first join pair.
+		 */
 		*leftstart = 0.0;
-	else if (*leftstart > *rightstart)
+	}
+	else if (op_strategy == BTGreaterStrategyNumber
+			 || op_strategy == BTGreaterEqualStrategyNumber)
+	{
+		/*
+		 * Similarly for the right variable and greater operator.
+		 */
 		*rightstart = 0.0;
+	}
 	else
-		*leftstart = *rightstart = 0.0;
+	{
+		Assert(op_strategy == BTEqualStrategyNumber);
+		/*
+		 * Only one of the two "start" fractions can really be more than zero;
+		 * believe the larger estimate and reset the other one to exactly 0.0. If
+		 * we get exactly equal estimates (as can easily happen with self-joins),
+		 * believe neither.
+		 */
+		if (*leftstart < *rightstart)
+			*leftstart = 0.0;
+		else if (*leftstart > *rightstart)
+			*rightstart = 0.0;
+		else
+			*leftstart = *rightstart = 0.0;
+	}
 
 	/*
 	 * If the sort order is nulls-first, we're going to have to skip over any

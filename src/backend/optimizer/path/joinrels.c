@@ -1463,7 +1463,7 @@ have_partkey_equi_join(RelOptInfo *rel1, RelOptInfo *rel2, JoinType jointype,
 			continue;
 
 		/* Skip clauses which are not equality conditions. */
-		if (!rinfo->mergeopfamilies)
+		if (!rinfo->is_equality)
 			continue;
 
 		opexpr = (OpExpr *) rinfo->clause;

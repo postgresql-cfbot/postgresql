@@ -157,7 +157,8 @@ SELECT '' AS "xxx", *
 --
 
 SELECT '' AS "xxx", *
-  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k);
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k)
+  ORDER BY J1_TBL.i;
 
 
 --
@@ -192,6 +193,16 @@ SELECT '' AS "xxx", *
 
 SELECT '' AS "xxx", *
   FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
+
+-- Full merge join
+
+explain (costs off) select * from J1_TBL full join J2_TBL on J1_TBL.i <= J2_TBL.k order by J1_TBL.i;
+
+explain (costs off) select * from J1_TBL full join J2_TBL on J1_TBL.i <= J2_TBL.k order by J2_TBL.k desc;
+
+select * from J1_TBL full join J2_TBL on J1_TBL.i <= J2_TBL.k order by J1_TBL.i;
+
+select * from J1_TBL full join J2_TBL on J1_TBL.i > J2_TBL.k order by J1_TBL.i;
 
 
 --
@@ -1793,6 +1804,8 @@ rollback;
 -- test planner's ability to mark joins as unique
 --
 
+set enable_mergejoin to 0;
+
 create table j1 (id int primary key);
 create table j2 (id int primary key);
 create table j3 (id int);
@@ -1893,6 +1906,7 @@ left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
 set enable_nestloop to 0;
 set enable_hashjoin to 0;
 set enable_sort to 0;
+set enable_mergejoin to 1;
 
 -- create an index that will be preferred over the PK to perform the join
 create index j1_id1_idx on j1 (id1) where id1 % 1000 = 1;

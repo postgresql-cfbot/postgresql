@@ -2982,7 +2982,8 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 		 * mergeopfamilies will be if it has a mergejoinable operator and
 		 * doesn't contain volatile functions.
 		 */
-		if (restrictinfo->mergeopfamilies == NIL)
+		if (restrictinfo->mergeopfamilies == NIL
+				|| !restrictinfo->is_equality)
 			continue;			/* not mergejoinable */
 
 		/*

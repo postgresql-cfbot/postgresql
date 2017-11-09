@@ -26,9 +26,9 @@ SELECT oid, cfgname
 FROM pg_ts_config
 WHERE cfgnamespace = 0 OR cfgowner = 0 OR cfgparser = 0;
 
-SELECT mapcfg, maptokentype, mapseqno
+SELECT mapcfg, maptokentype
 FROM pg_ts_config_map
-WHERE mapcfg = 0 OR mapdict = 0;
+WHERE mapcfg = 0;
 
 -- Look for pg_ts_config_map entries that aren't one of parser's token types
 SELECT * FROM
@@ -146,8 +146,7 @@ SELECT * from ts_debug('english', 'http://aew.wer0c.ewr/id?ad=qwe&dw<span>');
 SELECT * from ts_debug('english', 'http://5aew.werc.ewr:8100/?');
 SELECT * from ts_debug('english', '5aew.werc.ewr:8100/?xx');
 SELECT token, alias,
-  dictionaries, dictionaries is null as dnull, array_dims(dictionaries) as ddims,
-  lexemes, lexemes is null as lnull, array_dims(lexemes) as ldims
+  dictionaries, lexemes, lexemes is null as lnull, array_dims(lexemes) as ldims
 from ts_debug('english', 'a title');
 
 -- to_tsquery

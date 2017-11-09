@@ -14,6 +14,7 @@
 #define _PG_TS_PUBLIC_H_
 
 #include "tsearch/ts_type.h"
+#include "catalog/pg_ts_config_map.h"
 
 /*
  * Parser's framework
@@ -115,6 +116,7 @@ typedef struct
 #define TSL_ADDPOS		0x01
 #define TSL_PREFIX		0x02
 #define TSL_FILTER		0x04
+#define TSL_MULTI		0x08
 
 /*
  * Struct for supporting complex dictionaries like thesaurus.

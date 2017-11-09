@@ -420,6 +420,145 @@ SELECT ts_lexize('thesaurus', 'one');
  {1}
 (1 row)
 
+-- test dictionary pipeline in configuration
+CREATE TEXT SEARCH CONFIGURATION english_multi(
+						COPY=english
+);
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN english_stem UNION simple END;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+    to_tsvector     
+--------------------
+ 'book':1 'books':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+     to_tsvector      
+----------------------
+ 'book':1 'booking':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN english_stem INTERSECT simple END;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN simple EXCEPT english_stem END;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+ to_tsvector 
+-------------
+ 'books':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+ to_tsvector 
+-------------
+ 'booking':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH ispell;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+     to_tsvector      
+----------------------
+ 'book':1 'booking':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN ispell THEN ispell
+	ELSE english_stem
+END;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+     to_tsvector      
+----------------------
+ 'book':1 'booking':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN hunspell THEN english_stem MAP BY hunspell
+	ELSE english_stem
+END;
+SELECT to_tsvector('english_multi', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'books');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_multi', 'booking');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
 -- Test ispell dictionary in configuration
 CREATE TEXT SEARCH CONFIGURATION ispell_tst (
 						COPY=english
@@ -578,5 +717,76 @@ SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a
                       to_tsvector                      
 -------------------------------------------------------
  'card':3,10 'invit':2,9 'like':6 'look':5 'order':1,8
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION english_multi2(
+					COPY=english_multi
+);
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN english_stem OR simple THEN english_stem UNION simple
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+                                     to_tsvector                                      
+--------------------------------------------------------------------------------------
+ '1987a':6 'mysteri':2 'mysterious':2 'of':4 'ring':3 'rings':3 'supernova':5 'the':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN thesaurus ELSE english_stem
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+              to_tsvector              
+---------------------------------------
+ '1987a':6 'mysteri':2 'ring':3 'sn':5
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus IS NOT NULL OR english_stem IS NOT NULL THEN thesaurus UNION english_stem
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+                     to_tsvector                     
+-----------------------------------------------------
+ '1987a':6 'mysteri':2 'ring':3 'sn':5 'supernova':5
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN simple UNION thesaurus
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+          to_tsvector           
+--------------------------------
+ '1987a':2 'sn':1 'supernova':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN simple UNION thesaurus
+	ELSE simple
+END;
+SELECT to_tsvector('english_multi2', 'one two');
+      to_tsvector       
+------------------------
+ '12':1 'one':1 'two':2
+(1 row)
+
+SELECT to_tsvector('english_multi2', 'one two three');
+            to_tsvector            
+-----------------------------------
+ '123':1 'one':1 'three':3 'two':2
+(1 row)
+
+SELECT to_tsvector('english_multi2', 'one two four');
+           to_tsvector           
+---------------------------------
+ '12':1 'four':3 'one':1 'two':2
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN thesaurus UNION simple
+	ELSE english_stem UNION simple
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+                                         to_tsvector                                         
+---------------------------------------------------------------------------------------------
+ '1987a':6 'mysteri':2 'mysterious':2 'of':4 'ring':3 'rings':3 'sn':5 'supernova':5 'the':1
 (1 row)
 

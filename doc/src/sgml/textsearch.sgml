@@ -732,10 +732,11 @@ SELECT to_tsvector('english', 'a fat  cat sat on a mat - it ate a fat rats');
     The <function>to_tsvector</function> function internally calls a parser
     which breaks the document text into tokens and assigns a type to
     each token.  For each token, a list of
-    dictionaries (<xref linkend="textsearch-dictionaries">) is consulted,
-    where the list can vary depending on the token type.  The first dictionary
-    that <firstterm>recognizes</firstterm> the token emits one or more normalized
-    <firstterm>lexemes</firstterm> to represent the token.  For example,
+    condition/command pairs is consulted, where the list can vary depending
+    on the token type, condition and command are logical and set expressions
+    on dictionaries(<xref linkend="textsearch-dictionaries">) respectively.
+    The first pair with true-resulted condition emits one or more normalized
+    <firstterm>lexemes</firstterm> to represent the token based on command.  For example,
     <literal>rats</literal> became <literal>rat</literal> because one of the
     dictionaries recognized that the word <literal>rats</literal> is a plural
     form of <literal>rat</literal>.  Some words are recognized as
@@ -743,7 +744,7 @@ SELECT to_tsvector('english', 'a fat  cat sat on a mat - it ate a fat rats');
     causes them to be ignored since they occur too frequently to be useful in
     searching.  In our example these are
     <literal>a</literal>, <literal>on</literal>, and <literal>it</literal>.
-    If no dictionary in the list recognizes the token then it is also ignored.
+    If none of conditions is <literal>true</literal> the token then is also ignored.
     In this example that happened to the punctuation sign <literal>-</literal>
     because there are in fact no dictionaries assigned for its token type
     (<literal>Space symbols</literal>), meaning space tokens will never be
@@ -2232,7 +2233,9 @@ SELECT alias, description, token FROM ts_debug('http://example.com/stuff/index.h
       a single lexeme with the <literal>TSL_FILTER</literal> flag set, to replace
       the original token with a new token to be passed to subsequent
       dictionaries (a dictionary that does this is called a
-      <firstterm>filtering dictionary</firstterm>)
+      <firstterm>filtering dictionary</firstterm>). This behavior is applicable only
+      with comma-separated configuration
+      (see <xref linkend="SQL-ALTERTSCONFIG"> for more information)
      </para>
     </listitem>
     <listitem>
@@ -2264,38 +2267,85 @@ SELECT alias, description, token FROM ts_debug('http://example.com/stuff/index.h
    type that the parser can return, a separate list of dictionaries is
    specified by the configuration.  When a token of that type is found
    by the parser, each dictionary in the list is consulted in turn,
-   until some dictionary recognizes it as a known word.  If it is identified
-   as a stop word, or if no dictionary recognizes the token, it will be
-   discarded and not indexed or searched for.
-   Normally, the first dictionary that returns a non-<literal>NULL</literal>
-   output determines the result, and any remaining dictionaries are not
-   consulted; but a filtering dictionary can replace the given word
-   with a modified word, which is then passed to subsequent dictionaries.
+   until command is not selected based on it's condition. If none of cases is
+   selected it will be discarded and not indexed or searched for.
   </para>
 
   <para>
-   The general rule for configuring a list of dictionaries
+   A list of cases is described as condition/command pairs. Each condition is
+   evaluated in order to select appropriate command to generate resulted set
+   of lexems.
+  </para>
+
+  <para>
+   A condition is a boolean expression with dictionaries used as operands and
+   basic logic operators <literal>AND</literal>, <literal>OR</literal>, <literal>NOT</literal> and
+   special operator <literal>MAP BY</literal>. In addition to operators, each operand
+   could contain <literal>IS [NOT] NULL</literal> or <literal>IS [NOT] STOPWORD</literal> option
+   to mark way to interpret lexemes as boolean value. If no options are mentioned
+   it is interpret as <literal>dictionary IS NOT NULL AND dictionary IS NOT STOPWORD</literal>.
+
+   Special operator <literal>MAP BY</literal> is used to use output of right-hand
+   subexpression as input for left-hand one. In condition left and right
+   subexpressions can be either another <literal>MAP BY</literal> expression or
+   dictionary expression. Result of <literal>MAP BY</literal> should be explicitly
+   makred for boolean interpretation.
+  </para>
+
+  <para>
+   A command is a set expression with dictionaries used as operands and basic
+   set operators <literal>UNION</literal>, <literal>EXCEPT</literal>, <literal>INTERSECT</literal>
+   and special operator <literal>MAP BY</literal>. The behavior of <literal>MAP BY</literal>
+   operator is similar to one in condition but without restrictions on content
+   of subexpressions since all operators operates on sets.
+  </para>
+
+  <para>
+   The general rule for configuring a list of condition/command pairs
    is to place first the most narrow, most specific dictionary, then the more
-   general dictionaries, finishing with a very general dictionary, like
+   general dictionaries, finishing with a very general dictionaries, like
    a <application>Snowball</application> stemmer or <literal>simple</literal>, which
-   recognizes everything.  For example, for an astronomy-specific search
+   recognizes everything. For example, for an astronomy-specific search
    (<literal>astro_en</literal> configuration) one could bind token type
    <type>asciiword</type> (ASCII word) to a synonym dictionary of astronomical
    terms, a general English dictionary and a <application>Snowball</application> English
-   stemmer:
+   stemmer via comma-separated variant of mapping:
 
 <programlisting>
 ALTER TEXT SEARCH CONFIGURATION astro_en
     ADD MAPPING FOR asciiword WITH astrosyn, english_ispell, english_stem;
 </programlisting>
+
+   Another example is a configuration for both english and german languages via
+   operator-separated variant of mapping:
+
+<programlisting>
+ALTER TEXT SEARCH CONFIGURATION multi_en_de
+    ADD MAPPING FOR asciiword, word WITH
+        CASE
+            WHEN english_ispell AND german_ispell THEN
+                 english_ispell UNION german_ispell
+            WHEN english_ispell THEN
+                 english_ispell UNION german_stem
+            WHEN german_ispell THEN
+                 german_ispell UNION english_stem
+            ELSE
+                 english_stem UNION german_stem
+        END;
+</programlisting>
+
   </para>
 
   <para>
-   A filtering dictionary can be placed anywhere in the list, except at the
-   end where it'd be useless.  Filtering dictionaries are useful to partially
+   A filtering dictionary can be placed anywhere in comma-separated list,
+   except at the end where it'd be useless.
+   Filtering dictionaries are useful to partially
    normalize words to simplify the task of later dictionaries.  For example,
    a filtering dictionary could be used to remove accents from accented
    letters, as is done by the <xref linkend="unaccent"> module.
+   Otherwise filter dictionary should be placed at righthand of <literal>MAP BY</literal>
+   operator. If filter dictionary returns <literal>NULL</literal> it pass initial token
+   further in processing chain.
   </para>
 
   <sect2 id="textsearch-stopwords">
@@ -2462,9 +2512,9 @@ SELECT ts_lexize('public.simple_dict','The');
 
 <screen>
 SELECT * FROM ts_debug('english', 'Paris');
-   alias   |   description   | token |  dictionaries  |  dictionary  | lexemes 
------------+-----------------+-------+----------------+--------------+---------
- asciiword | Word, all ASCII | Paris | {english_stem} | english_stem | {pari}
+   alias   |   description   | token | dictionaries |   command    | lexemes 
+-----------+-----------------+-------+--------------+--------------+---------
+ asciiword | Word, all ASCII | Paris | english_stem | english_stem | {pari}
 
 CREATE TEXT SEARCH DICTIONARY my_synonym (
     TEMPLATE = synonym,
@@ -2476,9 +2526,9 @@ ALTER TEXT SEARCH CONFIGURATION english
     WITH my_synonym, english_stem;
 
 SELECT * FROM ts_debug('english', 'Paris');
-   alias   |   description   | token |       dictionaries        | dictionary | lexemes 
------------+-----------------+-------+---------------------------+------------+---------
- asciiword | Word, all ASCII | Paris | {my_synonym,english_stem} | my_synonym | {paris}
+   alias   |   description   | token |      dictionaries       |  command   | lexemes 
+-----------+-----------------+-------+-------------------------+------------+---------
+ asciiword | Word, all ASCII | Paris | my_synonym,english_stem | my_synonym | {paris}
 </screen>
    </para>
 
@@ -3107,6 +3157,20 @@ CREATE TEXT SEARCH DICTIONARY english_ispell (
 ALTER TEXT SEARCH CONFIGURATION pg
     ALTER MAPPING FOR asciiword, asciihword, hword_asciipart,
                       word, hword, hword_part
+    WITH 
+      CASE
+        WHEN pg_dict IS NOT NULL THEN pg_dict
+        WHEN english_ispell THEN english_ispell
+        ELSE english_stem
+      END;
+</programlisting>
+
+    Or use alternative comma-separated syntax:
+
+<programlisting>
+ALTER TEXT SEARCH CONFIGURATION pg
+    ALTER MAPPING FOR asciiword, asciihword, hword_asciipart,
+                      word, hword, hword_part
     WITH pg_dict, english_ispell, english_stem;
 </programlisting>
 
@@ -3177,13 +3241,13 @@ SHOW default_text_search_config;
   </indexterm>
 
 <synopsis>
-ts_debug(<optional> <replaceable class="parameter">config</replaceable> <type>regconfig</type>, </optional> <replaceable class="parameter">document</replaceable> <type>text</type>,
-         OUT <replaceable class="parameter">alias</replaceable> <type>text</type>,
-         OUT <replaceable class="parameter">description</replaceable> <type>text</type>,
-         OUT <replaceable class="parameter">token</replaceable> <type>text</type>,
-         OUT <replaceable class="parameter">dictionaries</replaceable> <type>regdictionary[]</type>,
-         OUT <replaceable class="parameter">dictionary</replaceable> <type>regdictionary</type>,
-         OUT <replaceable class="parameter">lexemes</replaceable> <type>text[]</type>)
+ts_debug(<optional> <replaceable class="PARAMETER">config</replaceable> <type>regconfig</type>, </optional> <replaceable class="PARAMETER">document</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">alias</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">description</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">token</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">dictionaries</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">command</replaceable> <type>text</type>,
+         OUT <replaceable class="PARAMETER">lexemes</replaceable> <type>text[]</type>)
          returns setof record
 </synopsis>
 
@@ -3220,20 +3284,20 @@ ts_debug(<optional> <replaceable class="parameter">config</replaceable> <type>re
      </listitem>
      <listitem>
       <para>
-       <replaceable>dictionaries</replaceable> <type>regdictionary[]</type> &mdash; the
-       dictionaries selected by the configuration for this token type
+       <replaceable>dictionaries</replaceable> <type>text</type> &mdash; the
+       dictionaries defined by the configuration for this token type
       </para>
      </listitem>
      <listitem>
       <para>
-       <replaceable>dictionary</replaceable> <type>regdictionary</type> &mdash; the dictionary
-       that recognized the token, or <literal>NULL</literal> if none did
+       <replaceable>command</replaceable> <type>text</type> &mdash; the command that describes
+       the way to generate output
       </para>
      </listitem>
      <listitem>
       <para>
        <replaceable>lexemes</replaceable> <type>text[]</type> &mdash; the lexeme(s) produced
-       by the dictionary that recognized the token, or <literal>NULL</literal> if
+       by the command selected acording conditions, or <literal>NULL</literal> if
        none did; an empty array (<literal>{}</literal>) means it was recognized as a
        stop word
       </para>
@@ -3246,32 +3310,32 @@ ts_debug(<optional> <replaceable class="parameter">config</replaceable> <type>re
 
 <screen>
 SELECT * FROM ts_debug('english','a fat  cat sat on a mat - it ate a fat rats');
-   alias   |   description   | token |  dictionaries  |  dictionary  | lexemes 
------------+-----------------+-------+----------------+--------------+---------
- asciiword | Word, all ASCII | a     | {english_stem} | english_stem | {}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | fat   | {english_stem} | english_stem | {fat}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | cat   | {english_stem} | english_stem | {cat}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | sat   | {english_stem} | english_stem | {sat}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | on    | {english_stem} | english_stem | {}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | a     | {english_stem} | english_stem | {}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | mat   | {english_stem} | english_stem | {mat}
- blank     | Space symbols   |       | {}             |              | 
- blank     | Space symbols   | -     | {}             |              | 
- asciiword | Word, all ASCII | it    | {english_stem} | english_stem | {}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | ate   | {english_stem} | english_stem | {ate}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | a     | {english_stem} | english_stem | {}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | fat   | {english_stem} | english_stem | {fat}
- blank     | Space symbols   |       | {}             |              | 
- asciiword | Word, all ASCII | rats  | {english_stem} | english_stem | {rat}
+   alias   |   description   | token | dictionaries |   command    | lexemes 
+-----------+-----------------+-------+--------------+--------------+---------
+ asciiword | Word, all ASCII | a     | english_stem | english_stem | {}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | fat   | english_stem | english_stem | {fat}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | cat   | english_stem | english_stem | {cat}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | sat   | english_stem | english_stem | {sat}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | on    | english_stem | english_stem | {}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | a     | english_stem | english_stem | {}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | mat   | english_stem | english_stem | {mat}
+ blank     | Space symbols   |       |              |              | 
+ blank     | Space symbols   | -     |              |              | 
+ asciiword | Word, all ASCII | it    | english_stem | english_stem | {}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | ate   | english_stem | english_stem | {ate}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | a     | english_stem | english_stem | {}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | fat   | english_stem | english_stem | {fat}
+ blank     | Space symbols   |       |              |              | 
+ asciiword | Word, all ASCII | rats  | english_stem | english_stem | {rat}
 </screen>
   </para>
 
@@ -3297,13 +3361,13 @@ ALTER TEXT SEARCH CONFIGURATION public.english
 
 <screen>
 SELECT * FROM ts_debug('public.english','The Brightest supernovaes');
-   alias   |   description   |    token    |         dictionaries          |   dictionary   |   lexemes   
------------+-----------------+-------------+-------------------------------+----------------+-------------
- asciiword | Word, all ASCII | The         | {english_ispell,english_stem} | english_ispell | {}
- blank     | Space symbols   |             | {}                            |                | 
- asciiword | Word, all ASCII | Brightest   | {english_ispell,english_stem} | english_ispell | {bright}
- blank     | Space symbols   |             | {}                            |                | 
- asciiword | Word, all ASCII | supernovaes | {english_ispell,english_stem} | english_stem   | {supernova}
+   alias   |   description   |    token    |        dictionaries         |    command     |   lexemes   
+-----------+-----------------+-------------+-----------------------------+----------------+-------------
+ asciiword | Word, all ASCII | The         | english_ispell,english_stem | english_ispell | {}
+ blank     | Space symbols   |             |                             |                | 
+ asciiword | Word, all ASCII | Brightest   | english_ispell,english_stem | english_ispell | {bright}
+ blank     | Space symbols   |             |                             |                | 
+ asciiword | Word, all ASCII | supernovaes | english_ispell,english_stem | english_stem   | {supernova}
 </screen>
 
   <para>

@@ -3370,6 +3370,33 @@ typedef enum AlterTSConfigType
 	ALTER_TSCONFIG_DROP_MAPPING
 } AlterTSConfigType;
 
+typedef enum DictPipeElemType
+{
+	DICT_MAP_OPERAND,
+	DICT_MAP_OPERATOR,
+	DICT_MAP_CONST_TRUE
+} DictPipeType;
+
+typedef struct DictMapExprElem
+{
+	NodeTag		type;
+	int8		kind;			/* See DictMapExprElemType */
+	List	   *dictname;		/* Used in DICT_MAP_EXPR_OPERAND */
+	struct DictMapExprElem *left;	/* Used in DICT_MAP_EXPR_OPERATOR */
+	struct DictMapExprElem *right;	/* Used in DICT_MAP_EXPR_OPERATOR */
+	int8		oper;			/* Used in DICT_MAP_EXPR_OPERATOR */
+	int8		options;		/* Can be used in the future */
+} DictMapExprElem;
+
+typedef struct DictMapElem
+{
+	NodeTag		type;
+	DictMapExprElem *condition;
+	DictMapExprElem *command;
+	List	   *commandmaps;
+	List	   *dictnames;
+} DictMapElem;
+
 typedef struct AlterTSConfigurationStmt
 {
 	NodeTag		type;
@@ -3382,6 +3409,7 @@ typedef struct AlterTSConfigurationStmt
 	 */
 	List	   *tokentype;		/* list of Value strings */
 	List	   *dicts;			/* list of list of Value strings */
+	List	   *dict_map;
 	bool		override;		/* if true - remove old variant */
 	bool		replace;		/* if true - replace dictionary by another */
 	bool		missing_ok;		/* for DROP - skip error if missing? */

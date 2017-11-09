@@ -2177,6 +2177,28 @@ _equalReassignOwnedStmt(const ReassignOwnedStmt *a, const ReassignOwnedStmt *b)
 }
 
 static bool
+_equalDictMapExprElem(const DictMapExprElem *a, const DictMapExprElem *b)
+{
+	COMPARE_NODE_FIELD(dictname);
+	COMPARE_NODE_FIELD(left);
+	COMPARE_NODE_FIELD(right);
+	COMPARE_SCALAR_FIELD(kind);
+	COMPARE_SCALAR_FIELD(oper);
+	COMPARE_SCALAR_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalDictMapElem(const DictMapElem *a, const DictMapElem *b)
+{
+	COMPARE_NODE_FIELD(condition);
+	COMPARE_NODE_FIELD(command);
+
+	return true;
+}
+
+static bool
 _equalAlterTSDictionaryStmt(const AlterTSDictionaryStmt *a, const AlterTSDictionaryStmt *b)
 {
 	COMPARE_NODE_FIELD(dictname);
@@ -3516,6 +3538,12 @@ equal(const void *a, const void *b)
 			break;
 		case T_ReassignOwnedStmt:
 			retval = _equalReassignOwnedStmt(a, b);
+			break;
+		case T_DictMapExprElem:
+			retval = _equalDictMapExprElem(a, b);
+			break;
+		case T_DictMapElem:
+			retval = _equalDictMapElem(a, b);
 			break;
 		case T_AlterTSDictionaryStmt:
 			retval = _equalAlterTSDictionaryStmt(a, b);

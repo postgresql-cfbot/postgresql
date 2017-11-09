@@ -4371,6 +4371,32 @@ _copyReassignOwnedStmt(const ReassignOwnedStmt *from)
 	return newnode;
 }
 
+static DictMapExprElem *
+_copyDictMapExprElem(const DictMapExprElem *from)
+{
+	DictMapExprElem *newnode = makeNode(DictMapExprElem);
+
+	COPY_NODE_FIELD(dictname);
+	COPY_NODE_FIELD(left);
+	COPY_NODE_FIELD(right);
+	COPY_SCALAR_FIELD(kind);
+	COPY_SCALAR_FIELD(oper);
+	COPY_SCALAR_FIELD(options);
+
+	return newnode;
+}
+
+static DictMapElem *
+_copyDictMapElem(const DictMapElem *from)
+{
+	DictMapElem *newnode = makeNode(DictMapElem);
+
+	COPY_NODE_FIELD(condition);
+	COPY_NODE_FIELD(command);
+
+	return newnode;
+}
+
 static AlterTSDictionaryStmt *
 _copyAlterTSDictionaryStmt(const AlterTSDictionaryStmt *from)
 {
@@ -5372,6 +5398,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_ReassignOwnedStmt:
 			retval = _copyReassignOwnedStmt(from);
+			break;
+		case T_DictMapExprElem:
+			retval = _copyDictMapExprElem(from);
+			break;
+		case T_DictMapElem:
+			retval = _copyDictMapElem(from);
 			break;
 		case T_AlterTSDictionaryStmt:
 			retval = _copyAlterTSDictionaryStmt(from);

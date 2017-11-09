@@ -117,6 +117,68 @@ CREATE TEXT SEARCH DICTIONARY thesaurus (
 
 SELECT ts_lexize('thesaurus', 'one');
 
+-- test dictionary pipeline in configuration
+CREATE TEXT SEARCH CONFIGURATION english_multi(
+						COPY=english
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN english_stem UNION simple END;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN english_stem INTERSECT simple END;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN english_stem OR simple THEN simple EXCEPT english_stem END;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH ispell;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN ispell THEN ispell
+	ELSE english_stem
+END;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi ALTER MAPPING FOR
+	asciiword
+	WITH CASE
+	WHEN hunspell THEN english_stem MAP BY hunspell
+	ELSE english_stem
+END;
+
+SELECT to_tsvector('english_multi', 'book');
+SELECT to_tsvector('english_multi', 'books');
+SELECT to_tsvector('english_multi', 'booking');
+
 -- Test ispell dictionary in configuration
 CREATE TEXT SEARCH CONFIGURATION ispell_tst (
 						COPY=english
@@ -188,3 +250,41 @@ ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR
 SELECT to_tsvector('thesaurus_tst', 'one postgres one two one two three one');
 SELECT to_tsvector('thesaurus_tst', 'Supernovae star is very new star and usually called supernovae (abbreviation SN)');
 SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a tickets');
+CREATE TEXT SEARCH CONFIGURATION english_multi2(
+					COPY=english_multi
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN english_stem OR simple THEN english_stem UNION simple
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN thesaurus ELSE english_stem
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus IS NOT NULL OR english_stem IS NOT NULL THEN thesaurus UNION english_stem
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN simple UNION thesaurus
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN simple UNION thesaurus
+	ELSE simple
+END;
+SELECT to_tsvector('english_multi2', 'one two');
+SELECT to_tsvector('english_multi2', 'one two three');
+SELECT to_tsvector('english_multi2', 'one two four');
+
+ALTER TEXT SEARCH CONFIGURATION english_multi2 ALTER MAPPING FOR asciiword WITH CASE
+	WHEN thesaurus THEN thesaurus UNION simple
+	ELSE english_stem UNION simple
+END;
+SELECT to_tsvector('english_multi2', 'The Mysterious Rings of Supernova 1987A');
+

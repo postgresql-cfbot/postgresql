@@ -14194,10 +14194,11 @@ dumpTSConfig(Archive *fout, TSConfigInfo *cfginfo)
 					  "SELECT\n"
 					  "  ( SELECT alias FROM pg_catalog.ts_token_type('%u'::pg_catalog.oid) AS t\n"
 					  "    WHERE t.tokid = m.maptokentype ) AS tokenname,\n"
-					  "  m.mapdict::pg_catalog.regdictionary AS dictname\n"
+					  "  dictionary_map_to_text(m.mapcfg, m.maptokentype) AS dictname\n"
 					  "FROM pg_catalog.pg_ts_config_map AS m\n"
 					  "WHERE m.mapcfg = '%u'\n"
-					  "ORDER BY m.mapcfg, m.maptokentype, m.mapseqno",
+					  "GROUP BY m.mapcfg, m.maptokentype\n"
+					  "ORDER BY m.mapcfg, m.maptokentype",
 					  cfginfo->cfgparser, cfginfo->dobj.catId.oid);
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -14211,20 +14212,14 @@ dumpTSConfig(Archive *fout, TSConfigInfo *cfginfo)
 		char	   *tokenname = PQgetvalue(res, i, i_tokenname);
 		char	   *dictname = PQgetvalue(res, i, i_dictname);
 
-		if (i == 0 ||
-			strcmp(tokenname, PQgetvalue(res, i - 1, i_tokenname)) != 0)
-		{
-			/* starting a new token type, so start a new command */
-			if (i > 0)
-				appendPQExpBufferStr(q, ";\n");
-			appendPQExpBuffer(q, "\nALTER TEXT SEARCH CONFIGURATION %s\n",
-							  fmtId(cfginfo->dobj.name));
-			/* tokenname needs quoting, dictname does NOT */
-			appendPQExpBuffer(q, "    ADD MAPPING FOR %s WITH %s",
-							  fmtId(tokenname), dictname);
-		}
-		else
-			appendPQExpBuffer(q, ", %s", dictname);
+		/* starting a new token type, so start a new command */
+		if (i > 0)
+			appendPQExpBufferStr(q, ";\n");
+		appendPQExpBuffer(q, "\nALTER TEXT SEARCH CONFIGURATION %s\n",
+						  fmtId(cfginfo->dobj.name));
+		/* tokenname needs quoting, dictname does NOT */
+		appendPQExpBuffer(q, "    ADD MAPPING FOR %s WITH \n%s",
+						  fmtId(tokenname), dictname);
 	}
 
 	if (ntups > 0)

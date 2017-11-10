@@ -172,8 +172,8 @@ static int partition_bound_bsearch(PartitionKey key,
 						void *probe, bool probe_is_bound, bool *is_equal);
 static void get_partition_dispatch_recurse(Relation rel, Relation parent,
 							   List **pds, List **leaf_part_oids);
-static int	get_partition_bound_num_indexes(PartitionBoundInfo b);
-static int	get_greatest_modulus(PartitionBoundInfo b);
+static int get_partition_bound_num_indexes(PartitionBoundInfo b);
+static int get_greatest_modulus(PartitionBoundInfo b);
 static uint64 compute_hash_value(PartitionKey key, Datum *values, bool *isnull);
 
 /* SQL-callable function for use in hash partition CHECK constraints */
@@ -547,7 +547,7 @@ RelationBuildPartitionDesc(Relation rel)
 			case PARTITION_STRATEGY_HASH:
 				{
 					/* Modulus are stored in ascending order */
-					int			greatest_modulus = hbounds[ndatums - 1]->modulus;
+					int		greatest_modulus = hbounds[ndatums - 1]->modulus;
 
 					boundinfo->indexes = (int *) palloc(greatest_modulus *
 														sizeof(int));
@@ -755,10 +755,11 @@ partition_bounds_equal(int partnatts, int16 *parttyplen, bool *parttypbyval,
 		int			greatest_modulus;
 
 		/*
-		 * If two hash partitioned tables have different greatest moduli,
-		 * their partition schemes don't match.  For hash partitioned table,
-		 * the greatest modulus is given by the last datum and number of
-		 * partitions is given by ndatums.
+		 * If two hash partitioned tables have different greatest moduli or
+		 * same moduli with different number of partitions, their partition
+		 * schemes don't match.  For hash partitioned table, the greatest
+		 * modulus is given by the last datum and number of partitions is
+		 * given by ndatums.
 		 */
 		if (b1->datums[b1->ndatums - 1][0] != b2->datums[b2->ndatums - 1][0])
 			return false;
@@ -852,11 +853,11 @@ extern PartitionBoundInfo
 partition_bounds_copy(PartitionBoundInfo src,
 					  PartitionKey key)
 {
-	PartitionBoundInfo dest;
-	int			i;
-	int			ndatums;
-	int			partnatts;
-	int			num_indexes;
+	PartitionBoundInfo	dest;
+	int		i;
+	int		ndatums;
+	int		partnatts;
+	int		num_indexes;
 
 	dest = (PartitionBoundInfo) palloc(sizeof(PartitionBoundInfoData));
 
@@ -874,11 +875,11 @@ partition_bounds_copy(PartitionBoundInfo src,
 	if (src->kind != NULL)
 	{
 		dest->kind = (PartitionRangeDatumKind **) palloc(ndatums *
-														 sizeof(PartitionRangeDatumKind *));
+												sizeof(PartitionRangeDatumKind *));
 		for (i = 0; i < ndatums; i++)
 		{
 			dest->kind[i] = (PartitionRangeDatumKind *) palloc(partnatts *
-															   sizeof(PartitionRangeDatumKind));
+												sizeof(PartitionRangeDatumKind));
 
 			memcpy(dest->kind[i], src->kind[i],
 				   sizeof(PartitionRangeDatumKind) * key->partnatts);
@@ -889,26 +890,26 @@ partition_bounds_copy(PartitionBoundInfo src,
 
 	for (i = 0; i < ndatums; i++)
 	{
-		int			j;
+		int		j;
 
 		/*
 		 * For a corresponding to hash partition, datums array will have two
 		 * elements - modulus and remainder.
 		 */
-		bool		hash_part = (key->strategy == PARTITION_STRATEGY_HASH);
-		int			natts = hash_part ? 2 : partnatts;
+		bool	hash_part = (key->strategy == PARTITION_STRATEGY_HASH);
+		int		natts = hash_part? 2 : partnatts;
 
 		dest->datums[i] = (Datum *) palloc(sizeof(Datum) * natts);
 
 		for (j = 0; j < natts; j++)
 		{
-			bool		byval;
-			int			typlen;
+			bool	byval;
+			int		typlen;
 
 			if (hash_part)
 			{
 				typlen = sizeof(int32); /* Always int4 */
-				byval = true;	/* int4 is pass-by-value */
+				byval = true;           /* int4 is pass-by-value */
 			}
 			else
 			{
@@ -1802,7 +1803,8 @@ make_partition_op_expr(PartitionKey key, int keynum,
  * The partition constraint for a hash partition is always a call to the
  * built-in function satisfies_hash_partition().  The first two arguments are
  * the modulus and remainder for the partition; the remaining arguments are the
- * values to be hashed.
+ * hash values computed for each column of the partition key using the extended
+ * hash function from the appropriate opclass.
  */
 static List *
 get_qual_for_hash(Relation parent, PartitionBoundSpec *spec)
@@ -2752,9 +2754,9 @@ get_partition_for_tuple(PartitionDispatch *pd,
 			case PARTITION_STRATEGY_HASH:
 				{
 					PartitionBoundInfo boundinfo = partdesc->boundinfo;
-					int			greatest_modulus = get_greatest_modulus(boundinfo);
-					uint64		rowHash = compute_hash_value(key, values,
-															 isnull);
+					int		greatest_modulus = get_greatest_modulus(boundinfo);
+					uint64	rowHash = compute_hash_value(key, values,
+														 isnull);
 
 					cur_index = boundinfo->indexes[rowHash % greatest_modulus];
 				}
@@ -3292,14 +3294,13 @@ get_proposed_default_constraint(List *new_part_constraints)
 static int
 get_partition_bound_num_indexes(PartitionBoundInfo bound)
 {
-	int			num_indexes;
+	int num_indexes;
 
 	Assert(bound);
 
 	switch (bound->strategy)
 	{
 		case PARTITION_STRATEGY_HASH:
-
 			/*
 			 * The number of the entries in the indexes array is same as the
 			 * greatest modulus.
@@ -3358,7 +3359,7 @@ compute_hash_value(PartitionKey key, Datum *values, bool *isnull)
 	{
 		if (!isnull[i])
 		{
-			Datum		hash;
+			Datum	hash;
 
 			Assert(OidIsValid(key->partsupfunc[i].fn_oid));
 
@@ -3396,7 +3397,7 @@ satisfies_hash_partition(PG_FUNCTION_ARGS)
 	{
 		Oid			relid;
 		int16		nkeys;
-		FmgrInfo	partsupfunc[PARTITION_MAX_KEYS];
+		FmgrInfo   partsupfunc[PARTITION_MAX_KEYS];
 	}			ColumnsHashData;
 	Oid			parentId = PG_GETARG_OID(0);
 	int			modulus = PG_GETARG_INT32(1);
@@ -3416,7 +3417,6 @@ satisfies_hash_partition(PG_FUNCTION_ARGS)
 	{
 		Relation	parent;
 		PartitionKey key;
-		int j;
 
 		fcinfo->flinfo->fn_extra =
 			MemoryContextAllocZero(fcinfo->flinfo->fn_mcxt,
@@ -3431,19 +3431,17 @@ satisfies_hash_partition(PG_FUNCTION_ARGS)
 		key = RelationGetPartitionKey(parent);
 
 		Assert(key->partnatts == nkeys);
-		for (j = 0; j < nkeys; ++j)
-			fmgr_info_copy(&my_extra->partsupfunc[j],
-						   key->partsupfunc,
-						   fcinfo->flinfo->fn_mcxt);
+		memcpy(my_extra->partsupfunc, key->partsupfunc, nkeys * sizeof(FmgrInfo));
 
-		/* Hold lock until commit */
-		heap_close(parent, NoLock);
+		/* TODO: Should we hold lock until commit? */
+		heap_close(parent, AccessShareLock);
 	}
 
+	/* Get TypeCacheEntry for each partition column. */
 	for (i = 0; i < nkeys; i++)
 	{
 		/* keys start from fourth argument of function. */
-		int			argno = i + 3;
+		int argno = i + 3;
 
 		if (!PG_ARGISNULL(argno))
 		{

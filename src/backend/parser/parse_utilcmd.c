@@ -3343,7 +3343,7 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 		if (spec->remainder >= spec->modulus)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("remainder for hash partition must be less than modulus")));
+					 errmsg("modulus for hash partition must be greater than remainder")));
 	}
 	else if (strategy == PARTITION_STRATEGY_LIST)
 	{
@@ -3510,7 +3510,7 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 static void
 validateInfiniteBounds(ParseState *pstate, List *blist)
 {
-	ListCell   *lc;
+	ListCell *lc;
 	PartitionRangeDatumKind kind = PARTITION_RANGE_DATUM_VALUE;
 
 	foreach(lc, blist)

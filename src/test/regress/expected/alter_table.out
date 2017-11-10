@@ -3598,7 +3598,7 @@ CREATE TABLE quuux2 PARTITION OF quuux FOR VALUES IN (2);
 INFO:  updated partition constraint for default partition "quuux_default1" is implied by existing constraints
 DROP TABLE quuux;
 -- check validation when attaching hash partitions
--- The default hash functions as they exist today aren't portable; they can
+-- The default hash functions as they exist today aren't portable, they can
 -- return different results on different machines.  Depending upon how the
 -- values are hashed, the row may map to different partitions, which result in
 -- regression failure.  To avoid this, let's create a non-default hash function
@@ -3646,7 +3646,7 @@ CREATE TABLE fail_part(LIKE hash_parted);
 ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 0, REMAINDER 1);
 ERROR:  modulus for hash partition must be a positive integer
 ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 8, REMAINDER 8);
-ERROR:  remainder for hash partition must be less than modulus
+ERROR:  modulus for hash partition must be greater than remainder
 ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 3, REMAINDER 2);
 ERROR:  every hash partition modulus must be a factor of the next larger modulus
 DROP TABLE fail_part;

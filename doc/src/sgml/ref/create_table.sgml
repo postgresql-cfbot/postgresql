@@ -257,8 +257,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       Creates the table as a <firstterm>partition</firstterm> of the specified
       parent table. The table can be created either as a partition for specific
       values using <literal>FOR VALUES</literal> or as a default partition
-      using <literal>DEFAULT</literal>.  This option is not available for
-      hash-partitioned tables.
+      using <literal>DEFAULT</literal>.  Hash partitioned tables do not support
+      a default partition.
      </para>
 
      <para>
@@ -266,9 +266,9 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       must correspond to the partitioning method and partition key of the
       parent table, and must not overlap with any existing partition of that
       parent.  The form with <literal>IN</literal> is used for list partitioning,
-      the form with <literal>FROM</literal> and <literal>TO</literal> is used
-      for range partitioning, and the form with <literal>WITH</literal> is used
-      for hash partitioning.
+      the form with <literal>FROM</literal> and <literal>TO</literal> is used for
+      range partitioning, and the form with <literal>WITH</literal> is used for
+      hash partitioning.
      </para>
 
      <para>

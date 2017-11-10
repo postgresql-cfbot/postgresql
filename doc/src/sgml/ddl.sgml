@@ -2881,10 +2881,11 @@ VALUES ('Albany', NULL, NULL, 'NY');
 
        <listitem>
         <para>
-         The table is partitioned by specifying a modulus and a remainder for
-         each partition. Each partition will hold the rows for which the hash
-         value of the partition key divided by the specified modulus will
-         produce the specified remainder.
+         The table is partitioned by specifying a modulus and a remainder for each
+         partition. Each partition will hold the rows for which the hash value of
+         the partition key divided by the specified modulus will produce the specified
+         remainder. Refer to <xref linkend="sql-createtable-partition">
+         for additional clarification on modulus and remainder.
         </para>
        </listitem>
       </varlistentry>

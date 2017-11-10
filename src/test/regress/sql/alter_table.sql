@@ -2335,7 +2335,7 @@ DROP TABLE quuux;
 
 -- check validation when attaching hash partitions
 
--- The default hash functions as they exist today aren't portable; they can
+-- The default hash functions as they exist today aren't portable, they can
 -- return different results on different machines.  Depending upon how the
 -- values are hashed, the row may map to different partitions, which result in
 -- regression failure.  To avoid this, let's create a non-default hash function

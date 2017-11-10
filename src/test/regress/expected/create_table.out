@@ -340,11 +340,6 @@ CREATE TABLE partitioned (
 ) PARTITION BY RANGE (const_func());
 ERROR:  cannot use constant expression as partition key
 DROP FUNCTION const_func();
--- only accept valid partitioning strategy
-CREATE TABLE partitioned (
-    a int
-) PARTITION BY MAGIC (a);
-ERROR:  unrecognized partitioning strategy "magic"
 -- specified column must be present in the table
 CREATE TABLE partitioned (
 	a int
@@ -682,7 +677,7 @@ CREATE TABLE fail_part PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 0, REM
 ERROR:  modulus for hash partition must be a positive integer
 -- remainder must be greater than or equal to zero and less than modulus
 CREATE TABLE fail_part PARTITION OF hash_parted2 FOR VALUES WITH (MODULUS 8, REMAINDER 8);
-ERROR:  remainder for hash partition must be less than modulus
+ERROR:  modulus for hash partition must be greater than remainder
 -- check schema propagation from parent
 CREATE TABLE parted (
 	a text,

@@ -5171,6 +5171,10 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 	double		T;
 	double		pages_fetched;
 	double		tuples_fetched;
+	double		heap_pages = 0;
+	double		exact_pages = 0;
+	double		lossy_pages = 0;
+	long		maxentries;
 
 	/*
 	 * Fetch total cost of obtaining the bitmap, as well as its total
@@ -5184,6 +5188,20 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 	tuples_fetched = clamp_row_est(indexSelectivity * baserel->tuples);
 
 	T = (baserel->pages > 1) ? (double) baserel->pages : 1.0;
+
+	/*
+	 * For a single scan, the number of heap pages that need to be fetched
+	 * is the same as the Mackert and Lohman formula for the case T <= b
+	 * (ie, no re-reads needed).
+	 */
+	pages_fetched = (2.0 * T * tuples_fetched) / (2.0 * T + tuples_fetched);
+
+	/*
+	 * Calculate the number of pages fetched from the heap.  Then based on
+	 * current work_mem estimate get the estimated maxentries in the bitmap.
+	 */
+	heap_pages = Min(pages_fetched, baserel->pages);
+	maxentries = tbm_calculate_entries(work_mem * 1024L);
 
 	if (loop_count > 1)
 	{
@@ -5199,21 +5217,31 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 											root);
 		pages_fetched /= loop_count;
 	}
-	else
-	{
-		/*
-		 * For a single scan, the number of heap pages that need to be fetched
-		 * is the same as the Mackert and Lohman formula for the case T <= b
-		 * (ie, no re-reads needed).
-		 */
-		pages_fetched =
-			(2.0 * T * tuples_fetched) / (2.0 * T + tuples_fetched);
-	}
 
 	if (pages_fetched >= T)
 		pages_fetched = T;
 	else
 		pages_fetched = ceil(pages_fetched);
+
+	/*
+	 * After the initial lossification that is maxentries / 2, the number of
+	 * lossy pages grows slower. It is good enough to reflect this initial
+	 * sharp increase in the lossy page number.
+	 */
+	if (maxentries < heap_pages)
+		lossy_pages = Max(0, heap_pages - maxentries / 2);
+
+	exact_pages = heap_pages - lossy_pages;
+
+	/*
+	 * If there are lossy pages then recompute the  number of tuples processed
+	 * by the bitmap heap node.  For the exact_pages it's baserel->tuples *
+	 * indexSelectivity and for lossy_pages we have to process all the tuples.
+	 */
+	if (lossy_pages > 0)
+		tuples_fetched = clamp_row_est (indexSelectivity *
+					(exact_pages / heap_pages) * baserel->tuples +
+					(lossy_pages / heap_pages) * baserel->tuples);
 
 	if (cost)
 		*cost = indexTotalCost;

@@ -3210,7 +3210,8 @@ void
 SyncVariables(void)
 {
 	char		vbuf[32];
-	const char *server_version;
+	const char *server_version,
+			   *server_version_raw;
 
 	/* get stuff from connection */
 	pset.encoding = PQclientEncoding(pset.db);
@@ -3237,6 +3238,17 @@ SyncVariables(void)
 	snprintf(vbuf, sizeof(vbuf), "%d", pset.sversion);
 	SetVariable(pset.vars, "SERVER_VERSION_NUM", vbuf);
 
+	server_version_raw = PQparameterStatus(pset.db, "server_version_raw");
+	/* fall back again */
+	if (!server_version_raw)
+	{
+		snprintf(vbuf, sizeof(vbuf), "PostgreSQL ");
+		formatPGVersionNumber(pset.sversion, true, vbuf + strlen(vbuf),
+							  sizeof(vbuf) - strlen(vbuf));
+		server_version_raw = vbuf;
+	}
+	SetVariable(pset.vars, "SERVER_VERSION", server_version_raw);
+
 	/* send stuff to it, too */
 	PQsetErrorVerbosity(pset.db, pset.verbosity);
 	PQsetErrorContextVisibility(pset.db, pset.show_context);
@@ -3255,6 +3267,7 @@ UnsyncVariables(void)
 	SetVariable(pset.vars, "HOST", NULL);
 	SetVariable(pset.vars, "PORT", NULL);
 	SetVariable(pset.vars, "ENCODING", NULL);
+	SetVariable(pset.vars, "SERVER_VERSION", NULL);
 	SetVariable(pset.vars, "SERVER_VERSION_NAME", NULL);
 	SetVariable(pset.vars, "SERVER_VERSION_NUM", NULL);
 }

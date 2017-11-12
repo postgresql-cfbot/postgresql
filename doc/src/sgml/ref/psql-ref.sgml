@@ -3770,11 +3770,14 @@ bar
       </varlistentry>
 
       <varlistentry>
+        <term><varname>SERVER_VERSION</varname></term>
         <term><varname>SERVER_VERSION_NAME</varname></term>
         <term><varname>SERVER_VERSION_NUM</varname></term>
         <listitem>
         <para>
-        The server's version number as a string, for
+        The server's version number as a long string, for
+        example <literal>PostgreSQL 11devel ...</literal>,
+        as a short string, for
         example <literal>9.6.2</literal>, <literal>10.1</literal> or <literal>11beta1</literal>,
         and in numeric form, for
         example <literal>90602</literal> or <literal>100001</literal>.

@@ -500,6 +500,7 @@ static char *locale_collate;
 static char *locale_ctype;
 static char *server_encoding_string;
 static char *server_version_string;
+static char *server_version_raw_string;
 static int	server_version_num;
 static char *timezone_string;
 static char *log_timezone_string;
@@ -3292,6 +3293,18 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&server_version_string,
 		PG_VERSION,
+		NULL, NULL, NULL
+	},
+
+	{
+		/* Can't be set in postgresql.conf */
+		{"server_version_raw", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows the server version string."),
+			NULL,
+			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&server_version_raw_string,
+		PG_VERSION_STR,
 		NULL, NULL, NULL
 	},
 

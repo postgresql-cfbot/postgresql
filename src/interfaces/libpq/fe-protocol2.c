@@ -280,6 +280,10 @@ pqSetenvPoll(PGconn *conn)
 						{
 							char	   *ptr;
 
+							/* keep returned value */
+							pqSaveParameterStatus(conn, "server_version_raw",
+												  val);
+
 							/* strip off PostgreSQL part */
 							val += 11;
 

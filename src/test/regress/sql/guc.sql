@@ -288,3 +288,10 @@ set default_text_search_config = no_such_config;
 select func_with_bad_set();
 
 reset check_function_bodies;
+
+-- check consistency of SERVER_VERSION
+-- which is transmitted as GUC "server_version_raw"
+SELECT :'SERVER_VERSION' = VERSION()
+   AND :'SERVER_VERSION' = current_setting('server_version_raw')
+   AND :'SERVER_VERSION' = :'VERSION'
+       AS "SERVER_VERSION is consistent";

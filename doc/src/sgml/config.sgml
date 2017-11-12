@@ -7956,8 +7956,22 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </term>
       <listitem>
        <para>
-        Reports the version number of the server as an integer. It is determined
-        by the value of <literal>PG_VERSION_NUM</literal> when building the server.
+        Reports the version number of the server as a short string. It is determined
+        by the value of <literal>PG_VERSION</literal> when building the server.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-server-raw" xreflabel="server_version_raw">
+      <term><varname>server_version_raw</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>server_version_raw</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports the version of the server as a long string. It is determined
+        by the value of <literal>PG_VERSION_STR</literal> when building the server.
        </para>
       </listitem>
      </varlistentry>

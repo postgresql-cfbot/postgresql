@@ -84,12 +84,36 @@ pgbench(
 '--initialize --scale=1 --unlogged-tables --fillfactor=98 --foreign-keys --quiet --tablespace=pg_default --index-tablespace=pg_default',
 	0,
 	[qr{^$}i],
-	[   qr{creating tables},
+	[   qr{cleaning up},
+		qr{creating tables},
 		qr{vacuum},
 		qr{set primary keys},
 		qr{set foreign keys},
 		qr{done\.} ],
 	'pgbench scale 1 initialization');
+
+# Custom initialization option
+pgbench(
+	'--initialize --custom-initialize=ctpvgf --unlogged-tables', 0, [qr{^$}],
+	[   qr{cleaning up},
+		qr{creating tables},
+		qr{.* of .* tuples \(.*\) done},
+		qr{set primary keys},
+		qr{vacuum},
+		qr{set foreign keys},
+		qr{done\.} ],
+	'pgbench custom initialization script');
+
+# Custom initialization with other initialization options
+pgbench(
+	'--initialize --custom-initialize=ctpvgvv --no-vacuum --foreign-keys --unlogged-tables', 0, [qr{^$}],
+	[   qr{cleaning up},
+		qr{creating tables},
+		qr{set primary keys},
+		qr{.* of .* tuples \(.*\) done},
+		qr{set foreign keys},
+		qr{done\.} ],
+	'pgbench custom initialization with other initialization options');
 
 # Run all builtin scripts, for a few transactions each
 pgbench(

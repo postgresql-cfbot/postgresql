@@ -159,6 +159,75 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
      </varlistentry>
 
      <varlistentry>
+      <term><option>-I {<replaceable>custom_init_command</replaceable> [...]}</option></term>
+      <term><option>--custom-initialize={<replaceable>custom_init_command</replaceable> [...]}</option></term>
+      <listitem>
+       <para>
+        Specify custom initialization steps.
+        <replaceable>custom_init_command</replaceable> specifies custom
+        initialization steps for the initialization. The default is
+        <literal>ctgvp</literal>. Each command is invoked in the
+        specified order. The supported commands are:
+
+        <variablelist>
+         <varlistentry>
+          <term><literal>c</literal> (cleanup)</term>
+          <listitem>
+           <para>
+            Destroying existing pgbench tables: <structname>pgbench_accounts</structname>,
+            <structname>pgbench_branches</structname>, <structname>pgbench_history</structname>
+            and <structname>pgbench_tellers</structname>.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>t</literal> (table creation)</term>
+          <listitem>
+           <para>
+            Create four tables <structname>pgbench_accounts</structname>,
+            <structname>pgbench_branches</structname>, <structname>pgbench_history</structname>
+            and <structname>pgbench_tellers</structname>.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>g</literal> (generate data)</term>
+          <listitem>
+           <para>
+            Generate data and load it to standard tables.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>v</literal> (vacuum)</term>
+          <listitem>
+           <para>
+            Invoke vacuum on standard tables.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>p</literal> (primary key)</term>
+          <listitem>
+           <para>
+            Create primary keys on standard tables.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+         <term><literal>f</literal> (foreign key)</term>
+          <listitem>
+           <para>
+            Create foreign keys constraints between the standard tables.
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-F</option> <replaceable>fillfactor</replaceable></term>
       <term><option>--fillfactor=</option><replaceable>fillfactor</replaceable></term>
       <listitem>

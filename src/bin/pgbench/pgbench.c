@@ -2714,7 +2714,12 @@ init(bool is_no_vacuum)
 	instr_time	start,
 				diff;
 	double		elapsed_sec,
-				remaining_sec;
+				remaining_sec,
+				insert_sec,
+				commit_sec,
+				vaccum_sec,
+				index_sec,
+				total_sec;
 	int			log_interval = 1;
 
 	if ((con = doConnect()) == NULL)
@@ -2859,7 +2864,20 @@ init(bool is_no_vacuum)
 		fprintf(stderr, "PQendcopy failed\n");
 		exit(1);
 	}
+
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	insert_sec = INSTR_TIME_GET_DOUBLE(diff);
+
+	INSTR_TIME_SET_CURRENT(start);
+
 	executeStatement(con, "commit");
+
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	commit_sec = INSTR_TIME_GET_DOUBLE(diff);
+
+	INSTR_TIME_SET_CURRENT(start);
 
 	/* vacuum */
 	if (!is_no_vacuum)
@@ -2870,6 +2888,12 @@ init(bool is_no_vacuum)
 		executeStatement(con, "vacuum analyze pgbench_accounts");
 		executeStatement(con, "vacuum analyze pgbench_history");
 	}
+
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	vaccum_sec = INSTR_TIME_GET_DOUBLE(diff);
+
+	INSTR_TIME_SET_CURRENT(start);
 
 	/*
 	 * create indexes
@@ -2907,6 +2931,14 @@ init(bool is_no_vacuum)
 		}
 	}
 
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	index_sec = INSTR_TIME_GET_DOUBLE(diff);
+
+	total_sec = insert_sec + commit_sec + vaccum_sec + index_sec;
+
+	fprintf(stderr, "total time: %.2f s (insert %.2f s, commit %.2f s, vacuum %.2f s, index %.2f s)\n",
+			total_sec, insert_sec, commit_sec, vaccum_sec, index_sec);
 	fprintf(stderr, "done.\n");
 	PQfinish(con);
 }

@@ -3067,3 +3067,73 @@ DROP ROLE regress_reindexuser;
 \set VERBOSITY terse \\ -- suppress cascade details
 DROP SCHEMA schema_to_reindex CASCADE;
 NOTICE:  drop cascades to 6 other objects
+RESET client_min_messages;
+RESET search_path;
+--
+-- Check behavior of REINDEX and REINDEX CONCURRENTLY
+--
+CREATE TABLE concur_reindex_tab (c1 int);
+-- REINDEX
+REINDEX TABLE concur_reindex_tab; -- notice
+NOTICE:  table "concur_reindex_tab" has no indexes
+REINDEX TABLE CONCURRENTLY concur_reindex_tab; -- notice
+NOTICE:  table "concur_reindex_tab" has no indexes
+ALTER TABLE concur_reindex_tab ADD COLUMN c2 text; -- add toast index
+-- Normal index with integer column
+CREATE UNIQUE INDEX concur_reindex_ind1 ON concur_reindex_tab(c1);
+-- Normal index with text column
+CREATE INDEX concur_reindex_ind2 ON concur_reindex_tab(c2);
+-- UNIQUE index with expression
+CREATE UNIQUE INDEX concur_reindex_ind3 ON concur_reindex_tab(abs(c1));
+-- Duplicate column names
+CREATE INDEX concur_reindex_ind4 ON concur_reindex_tab(c1, c1, c2);
+-- Create table for check on foreign key dependence switch with indexes swapped
+ALTER TABLE concur_reindex_tab ADD PRIMARY KEY USING INDEX concur_reindex_ind1;
+CREATE TABLE concur_reindex_tab2 (c1 int REFERENCES concur_reindex_tab);
+INSERT INTO concur_reindex_tab VALUES  (1, 'a');
+INSERT INTO concur_reindex_tab VALUES  (2, 'a');
+-- Reindex of exclusion constraint
+ALTER TABLE concur_reindex_tab ADD COLUMN c3 int4range, ADD EXCLUDE USING gist (c3 WITH &&);
+INSERT INTO concur_reindex_tab VALUES  (3, 'a', '[1,2]');
+REINDEX TABLE concur_reindex_tab;
+INSERT INTO concur_reindex_tab VALUES  (4, 'a', '[2,4]');
+ERROR:  conflicting key value violates exclusion constraint "concur_reindex_tab_c3_excl"
+-- Check materialized views
+CREATE MATERIALIZED VIEW concur_reindex_matview AS SELECT * FROM concur_reindex_tab;
+REINDEX INDEX CONCURRENTLY concur_reindex_ind1;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
+REINDEX TABLE CONCURRENTLY concur_reindex_matview;
+-- Check errors
+-- Cannot run inside a transaction block
+BEGIN;
+REINDEX TABLE CONCURRENTLY concur_reindex_tab;
+ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
+COMMIT;
+REINDEX TABLE CONCURRENTLY pg_database; -- no shared relation
+ERROR:  concurrent reindex is not supported for shared relations
+REINDEX TABLE CONCURRENTLY pg_class; -- no catalog relations
+ERROR:  concurrent reindex is not supported for catalog relations
+REINDEX SYSTEM CONCURRENTLY postgres; -- not allowed for SYSTEM
+ERROR:  can only reindex the currently open database
+-- Warns about catalog relations
+REINDEX SCHEMA CONCURRENTLY pg_catalog;
+WARNING:  concurrent reindex is not supported for catalog relations, skipping all
+-- Check the relation status, there should not be invalid indexes
+\d concur_reindex_tab
+          Table "public.concur_reindex_tab"
+ Column |   Type    | Collation | Nullable | Default 
+--------+-----------+-----------+----------+---------
+ c1     | integer   |           | not null | 
+ c2     | text      |           |          | 
+ c3     | int4range |           |          | 
+Indexes:
+    "concur_reindex_ind1" PRIMARY KEY, btree (c1)
+    "concur_reindex_ind3" UNIQUE, btree (abs(c1))
+    "concur_reindex_ind2" btree (c2)
+    "concur_reindex_ind4" btree (c1, c1, c2)
+    "concur_reindex_tab_c3_excl" EXCLUDE USING gist (c3 WITH &&)
+Referenced by:
+    TABLE "concur_reindex_tab2" CONSTRAINT "concur_reindex_tab2_c1_fkey" FOREIGN KEY (c1) REFERENCES concur_reindex_tab(c1)
+
+DROP MATERIALIZED VIEW concur_reindex_matview;
+DROP TABLE concur_reindex_tab, concur_reindex_tab2;

@@ -245,6 +245,18 @@ TupleDescCopyEntry(TupleDesc dst, AttrNumber dstAttno,
 }
 
 /*
+ * Reset attcacheoff for a TupleDesc
+ */
+void
+ResetTupleDescCache(TupleDesc tupdesc)
+{
+	int i;
+
+	for (i = 0; i < tupdesc->natts; i++)
+		tupdesc->attrs[i].attcacheoff = -1;
+}
+
+/*
  * Free a TupleDesc including all substructure
  */
 void

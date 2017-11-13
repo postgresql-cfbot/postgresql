@@ -1892,6 +1892,18 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		}
 
 		/*
+		 * Consider ways to implement parallel paths.  We always skip
+		 * generating parallel path for top level scan/join nodes till the
+		 * pathtarget is computed.  This is to ensure that we can account for
+		 * the fact that most of the target evaluation work will be performed
+		 * in workers.
+		 */
+		generate_gather_paths(root, current_rel, scanjoin_target);
+
+		/* Set or update cheapest_total_path and related fields */
+		set_cheapest(current_rel);
+
+		/*
 		 * Upper planning steps which make use of the top scan/join rel's
 		 * partial pathlist will expect partial paths for that rel to produce
 		 * the same output as complete paths ... and we just changed the

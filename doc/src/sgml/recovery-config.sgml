@@ -503,6 +503,30 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       </listitem>
      </varlistentry>
 
+     <varlistentry id="recovery-min-apply-delay-reconnect" xreflabel="recovery_min_apply_delay_reconnect">
+      <term><varname>recovery_min_apply_delay_reconnect</varname> (<type>integer</type>)
+      <indexterm>
+        <primary><varname>recovery_min_apply_delay_reconnect</> recovery parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If the streaming replication is inturruped while
+        <varname>recovery_min_apply_delay</varname> is set, WAL records will be
+        replayed from the archive. After all records have been processed from
+        local disk, <productname>PostgreSQL</> will attempt to resume streaming
+        and connect to the master.
+       </para>
+       <para>
+        This parameter is used to compromise the fixed apply delay in order to
+        restablish streaming. In this way a standby server can be run in fair
+        conditions with a long delay (hours or days) without while specifying
+        the maximum delay that can be expected before the WAL archive is brought
+        back up to date with the master after a network failure.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
    </sect1>
 

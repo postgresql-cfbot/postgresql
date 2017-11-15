@@ -20,13 +20,17 @@ my $backup_name = 'my_backup';
 $node_master->backup($backup_name);
 
 # Create streaming standby from backup
-my $node_standby = get_new_node('standby');
-my $delay        = 3;
+# Set recovery_min_apply_delay_reconnect to verify that in normal conditions it
+# does not interfere with recovery_min_apply_delay
+my $node_standby    = get_new_node('standby');
+my $delay           = 3;
+my $delay_reconnect = 1;
 $node_standby->init_from_backup($node_master, $backup_name,
 	has_streaming => 1);
 $node_standby->append_conf(
 	'recovery.conf', qq(
 recovery_min_apply_delay = '${delay}s'
+recovery_min_apply_delay_reconnect = '${delay_reconnect}s'
 ));
 $node_standby->start;
 

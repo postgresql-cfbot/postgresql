@@ -267,6 +267,7 @@ static TimestampTz recoveryTargetTime;
 static char *recoveryTargetName;
 static XLogRecPtr recoveryTargetLSN;
 static int	recovery_min_apply_delay = 0;
+static int	recovery_min_apply_delay_reconnect = 0;
 static TimestampTz recoveryDelayUntilTime;
 
 /* options taken from recovery.conf for XLOG streaming */
@@ -5217,6 +5218,7 @@ readRecoveryCommandFile(void)
 			   *head = NULL,
 			   *tail = NULL;
 	bool		recoveryTargetActionSet = false;
+	const char	*hintmsg;
 
 
 	fd = AllocateFile(RECOVERY_COMMAND_FILE, "r");
@@ -5442,8 +5444,6 @@ readRecoveryCommandFile(void)
 		}
 		else if (strcmp(item->name, "recovery_min_apply_delay") == 0)
 		{
-			const char *hintmsg;
-
 			if (!parse_int(item->value, &recovery_min_apply_delay, GUC_UNIT_MS,
 						   &hintmsg))
 				ereport(ERROR,
@@ -5453,6 +5453,25 @@ readRecoveryCommandFile(void)
 						 hintmsg ? errhint("%s", _(hintmsg)) : 0));
 			ereport(DEBUG2,
 					(errmsg_internal("recovery_min_apply_delay = '%s'", item->value)));
+			recovery_min_apply_delay_reconnect = recovery_min_apply_delay;
+		}
+		else if (strcmp(item->name, "recovery_min_apply_delay_reconnect") == 0)
+		{
+			if (!parse_int(item->value, &recovery_min_apply_delay_reconnect, GUC_UNIT_MS,
+						   &hintmsg))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"%s\" requires a temporal value",
+								"recovery_min_apply_delay_reconnect"),
+						 hintmsg ? errhint("%s", _(hintmsg)) : 0));
+			if (recovery_min_apply_delay_reconnect > recovery_min_apply_delay)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" must be <= \"%s\"",
+								"recovery_min_apply_delay_reconnect",
+								"recovery_min_apply_delay")));
+			ereport(DEBUG2,
+					(errmsg_internal("recovery_min_apply_delay_reconnect = '%s'", item->value)));
 		}
 		else
 			ereport(FATAL,
@@ -6070,20 +6089,25 @@ recoveryApplyDelay(XLogReaderState *record)
 	if (!getRecordTimestamp(record, &xtime))
 		return false;
 
-	recoveryDelayUntilTime =
-		TimestampTzPlusMilliseconds(xtime, recovery_min_apply_delay);
-
-	/*
-	 * Exit without arming the latch if it's already past time to apply this
-	 * record
-	 */
-	TimestampDifference(GetCurrentTimestamp(), recoveryDelayUntilTime,
-						&secs, &microsecs);
-	if (secs <= 0 && microsecs <= 0)
-		return false;
 
 	while (true)
 	{
+		if (PrimaryConnInfo != NULL && !WalRcvStreaming())
+			recoveryDelayUntilTime =
+				TimestampTzPlusMilliseconds(xtime, recovery_min_apply_delay_reconnect);
+		else
+			recoveryDelayUntilTime =
+				TimestampTzPlusMilliseconds(xtime, recovery_min_apply_delay);
+
+		TimestampDifference(GetCurrentTimestamp(), recoveryDelayUntilTime,
+							&secs, &microsecs);
+		/*
+		 * Exit without arming the latch if it's already past time to apply this
+		 * record
+		 */
+		if (secs <= 0 && microsecs <= 0)
+			return false;
+
 		ResetLatch(&XLogCtl->recoveryWakeupLatch);
 
 		/* might change the trigger file's location */

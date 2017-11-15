@@ -745,6 +745,8 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				 * list of FK constraints to be processed later.
 				 */
 				constraint->fk_attrs = list_make1(makeString(column->colname));
+				/* grammar should have set fk_reftypes */
+				Assert(list_length(constraint->fk_reftypes) == 1);
 				cxt->fkconstraints = lappend(cxt->fkconstraints, constraint);
 				break;
 

@@ -65,7 +65,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ] |
   UNIQUE <replaceable class="parameter">index_parameters</replaceable> |
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
-  REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
+  [EACH ELEMENT OF] REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="PARAMETER">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
     [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ] }
 [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
 
@@ -867,10 +867,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="sql-createtable-foreign-key" xreflabel="FOREIGN KEY">
     <term><literal>REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH <replaceable class="parameter">matchtype</replaceable> ] [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ]</literal> (column constraint)</term>
 
-   <term><literal>FOREIGN KEY ( <replaceable class="parameter">column_name</replaceable> [, ... ] )
+   <term><literal>FOREIGN KEY ( [EACH ELEMENT OF] <replaceable class="parameter">column_name</replaceable> [, ... ] )
     REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> [, ... ] ) ]
     [ MATCH <replaceable class="parameter">matchtype</replaceable> ]
     [ ON DELETE <replaceable class="parameter">action</replaceable> ]
@@ -891,6 +891,20 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       (either the whole table, or the specific referenced columns).
       Note that foreign key constraints cannot be defined between temporary
       tables and permanent tables.
+     </para>
+
+     <para>
+      In case the column name <replaceable
+      class="parameter">column</replaceable> is prepended with the
+      <literal>EACH ELEMENT OF</literal> keyword and <replaceable
+      class="parameter">column</replaceable> is an array of elements compatible
+      with the corresponding <replaceable
+      class="parameter">refcolumn</replaceable> in <replaceable
+      class="parameter">reftable</replaceable>, a Foreign Key Array constraint
+      is put in place (see <xref
+      linkend="sql-createtable-element-foreign-key-constraints"> for more
+      information). Multi-column keys with more than one <literal>EACH ELEMENT
+      OF</literal> column are currently not allowed. 
      </para>
 
      <para>
@@ -956,7 +970,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
          <para>
           Delete any rows referencing the deleted row, or update the
           values of the referencing column(s) to the new values of the
-          referenced columns, respectively.
+          referenced columns, respectively. Currently not supported
+          with array <literal>ELEMENT</literal> foreign keys.
          </para>
         </listitem>
        </varlistentry>
@@ -965,7 +980,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
         <term><literal>SET NULL</literal></term>
         <listitem>
          <para>
-          Set the referencing column(s) to null.
+          Set the referencing column(s) to null. Currently not supported
+          with array <literal>ELEMENT</literal> foreign keys.
          </para>
         </listitem>
        </varlistentry>
@@ -977,6 +993,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
           Set the referencing column(s) to their default values.
           (There must be a row in the referenced table matching the default
           values, if they are not null, or the operation will fail.)
+          Currently not supported with array <literal>ELEMENT</literal>
+          foreign keys.
          </para>
         </listitem>
        </varlistentry>
@@ -988,6 +1006,85 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       add an index to the referencing column(s) so that referential actions
       associated with the foreign key constraint can be performed more
       efficiently.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createtable-element-foreign-key-constraints" xreflabel="FOREIGN KEY ARRAYS">
+    <term><literal>EACH ELEMENT OF <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH <replaceable class="parameter">matchtype</replaceable> ] [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ]</literal> (column constraint)</term>
+
+    <listitem>
+     <para>
+      The <literal>EACH ELEMENT OF REFERENCES</literal> definition specifies a
+      <quote>Foreign Key Array</quote>, a special
+      kind of foreign key constraint requiring the referencing column to be an
+      array of elements of the same type (or a compatible one) as the
+      referenced column in the referenced table. The value of each element of
+      the <replaceable class="parameter">refcolumn</replaceable> array will be
+      matched against some row of <replaceable
+      class="parameter">reftable</replaceable>.
+     </para>
+
+     <para>
+      Foreign Key Arrays are an extension
+      of PostgreSQL and are not included in the SQL standard.
+     </para>
+
+     <para>
+      Even with Foreign Key Arrays, modifications in the referenced column can
+      trigger actions to be performed on the referencing array. Similarly to
+      standard foreign keys, you can specify these actions using the
+      <literal>ON DELETE</literal> and <literal>ON UPDATE</literal> clauses.
+      However, only the following actions for each clause are currently
+      allowed:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>ON UPDATE/DELETE NO ACTION</literal></term>
+        <listitem>
+         <para>
+          Same as standard foreign key constraints. This is the default action.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>ON UPDATE/DELETE RESTRICT</literal></term>
+        <listitem>
+         <para>
+          Same as standard foreign key constraints.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>ON DELETE CASCADE</literal></term>
+        <listitem>
+         <para>
+          Same as standard foreign key constraints. Deletes the entire array.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+
+     <para>
+      It is advisable to index the refrencing column using GIN index as it
+      considerably enhances the performance. Also concerning coercion while
+      using the GIN index:
+        
+      <programlisting>
+       CREATE TABLE pktableforarray ( ptest1 int2 PRIMARY KEY, ptest2 text );
+       CREATE TABLE fktableforarray ( ftest1 int4[], FOREIGN KEY (EACH ELEMENT OF ftest1) REFERENCES PKTABLEFORARRAY, ftest2 int );
+      </programlisting>
+      This syntax is fine since it will cast ptest1 to int4 upon RI checks,        
+
+      <programlisting>
+       CREATE TABLE pktableforarray ( ptest1 int4 PRIMARY KEY, ptest2 text );
+       CREATE TABLE fktableforarray ( ftest1 int2[], FOREIGN KEY (EACH ELEMENT OF ftest1) REFERENCES PKTABLEFORARRAY, ftest2 int );        
+      </programlisting>
+       however, this syntax will cast ftest1 to int4 upon RI checks, thus defeating the
+      purpose of the index.
      </para>
     </listitem>
    </varlistentry>
@@ -1957,6 +2054,16 @@ CREATE TABLE cities_partdef
     the <quote>self-referencing column</quote>.  PostgreSQL does not
     support these self-referencing columns explicitly, but the same
     effect can be had using the OID feature.
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title id="sql-createtable-foreign-key-arrays">Array <literal>ELEMENT</literal> Foreign Keys</title>
+
+   <para>
+     Array <literal>ELEMENT</literal> foreign keys and the <literal>ELEMENT
+     REFERENCES</literal> clause are a <productname>PostgreSQL</productname>
+     extension.
    </para>
   </refsect2>
 

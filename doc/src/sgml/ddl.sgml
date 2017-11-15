@@ -882,6 +882,116 @@ CREATE TABLE order_items (
    </para>
   </sect2>
 
+  <sect2 id="ddl-constraints-element-fk">
+   <title>Foreign Key Arrays</title>
+
+   <indexterm>
+    <primary>Foreign Key Arrays</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>ELEMENT foreign key</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>constraint</primary>
+    <secondary>Array ELEMENT foreign key</secondary>
+   </indexterm>
+
+   <indexterm>
+    <primary>constraint</primary>
+    <secondary>ELEMENT foreign key</secondary>
+   </indexterm>
+
+   <indexterm>
+    <primary>referential integrity</primary>
+   </indexterm>
+
+   <para>
+    Another option you have with foreign keys is to use a referencing column
+    which is an array of elements with the same type (or a compatible one) as
+    the referenced column in the related table. This feature is called
+    <firstterm>Foreign Key Arrays</firstterm> and is implemented in PostgreSQL
+    with <firstterm>EACH ELEMENT OF foreign key constraints</firstterm>, as
+    described in the following example:
+
+    <programlisting>
+     CREATE TABLE drivers (
+         driver_id integer PRIMARY KEY,
+         first_name text,
+         last_name text
+     );
+
+     CREATE TABLE races (
+         race_id integer PRIMARY KEY,
+         title text,
+         race_day date,
+         final_positions integer[],
+         FOREIGN KEY <emphasis> (EACH ELEMENT OF final_positions) REFERENCES drivers </emphasis>
+     );
+    </programlisting>
+
+    The above example uses an array (<literal>final_positions</literal>) to
+    store the results of a race: for each of its elements a referential
+    integrity check is enforced on the <literal>drivers</literal> table. Note
+    that <literal>(EACH ELEMENT OF ...) REFERENCES</literal> is an extension of
+    PostgreSQL and it is not included in the SQL standard.
+   </para>
+
+   <para>
+    We currently only support the table constraint form.
+   </para>
+
+   <para>
+    Even though the most common use case for Foreign Key Array constraint is on
+    a single column key, you can define a Foreign Key Array constraint on a
+    group of columns.
+
+    <programlisting>
+     CREATE TABLE available_moves (
+         kind text,
+         move text,
+         description text,
+         PRIMARY KEY (kind, move)
+     );
+
+     CREATE TABLE paths (
+         description text,
+         kind text,
+         moves text[],
+         <emphasis>FOREIGN KEY (kind, EACH ELEMENT OF moves) REFERENCES available_moves (kind, move)</emphasis>
+     );
+
+     INSERT INTO available_moves VALUES ('relative', 'LN', 'look north');
+     INSERT INTO available_moves VALUES ('relative', 'RL', 'rotate left');
+     INSERT INTO available_moves VALUES ('relative', 'RR', 'rotate right');
+     INSERT INTO available_moves VALUES ('relative', 'MF', 'move forward');
+     INSERT INTO available_moves VALUES ('absolute', 'N', 'move north');
+     INSERT INTO available_moves VALUES ('absolute', 'S', 'move south');
+     INSERT INTO available_moves VALUES ('absolute', 'E', 'move east');
+     INSERT INTO available_moves VALUES ('absolute', 'W', 'move west');
+
+     INSERT INTO paths VALUES ('L-shaped path', 'relative', '{LN, RL, MF, RR, MF, MF}');
+     INSERT INTO paths VALUES ('L-shaped path', 'absolute', '{W, N, N}');
+    </programlisting>
+
+    On top of standard foreign key requirements, array
+    <literal>ELEMENT</literal> foreign key constraints require that the
+    referencing column is an array of a compatible type of the corresponding
+    referenced column.
+   
+    However, it is very important to note that, currently, we only support
+    one array reference per foreign key.
+   </para>
+
+   <para>
+    For more detailed information on Foreign Key Array options and special
+    cases, please refer to the documentation for 
+    <xref linkend="sql-createtable-foreign-key"> and
+    <xref linkend="sql-createtable-element-foreign-key-constraints">.
+   </para>
+  </sect2>
+
   <sect2 id="ddl-constraints-exclusion">
    <title>Exclusion Constraints</title>
 

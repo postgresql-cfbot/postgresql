@@ -2846,6 +2846,7 @@ _copyConstraint(const Constraint *from)
 	COPY_NODE_FIELD(pktable);
 	COPY_NODE_FIELD(fk_attrs);
 	COPY_NODE_FIELD(pk_attrs);
+	COPY_NODE_FIELD(fk_reftypes);
 	COPY_SCALAR_FIELD(fk_matchtype);
 	COPY_SCALAR_FIELD(fk_upd_action);
 	COPY_SCALAR_FIELD(fk_del_action);

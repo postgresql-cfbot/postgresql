@@ -5060,8 +5060,7 @@ create_ordered_paths(PlannerInfo *root,
 			path = (Path *)
 				create_gather_merge_path(root, ordered_rel,
 										 path,
-										 path->pathtarget,
-										 root->sort_pathkeys, NULL,
+										 target, root->sort_pathkeys, NULL,
 										 &total_groups);
 
 			/* Add projection step if needed */

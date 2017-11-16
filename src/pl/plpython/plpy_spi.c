@@ -389,6 +389,8 @@ PLy_spi_execute_fetch_result(SPITupleTable *tuptable, uint64 rows, int status)
 	volatile MemoryContext oldcontext;
 
 	result = (PLyResultObject *) PLy_result_new();
+	if (!result)
+		return NULL;
 	Py_DECREF(result->status);
 	result->status = PyInt_FromLong(status);
 
@@ -435,15 +437,22 @@ PLy_spi_execute_fetch_result(SPITupleTable *tuptable, uint64 rows, int status)
 
 				Py_DECREF(result->rows);
 				result->rows = PyList_New(rows);
-
-				PLy_input_tuple_funcs(&args, tuptable->tupdesc);
-				for (i = 0; i < rows; i++)
+				if (!result->rows)
 				{
-					PyObject   *row = PLyDict_FromTuple(&args,
-														tuptable->vals[i],
-														tuptable->tupdesc);
+					Py_DECREF(result);
+					result = NULL;
+				}
+				else
+				{
+					PLy_input_tuple_funcs(&args, tuptable->tupdesc);
+					for (i = 0; i < rows; i++)
+					{
+						PyObject   *row = PLyDict_FromTuple(&args,
+															tuptable->vals[i],
+															tuptable->tupdesc);
 
-					PyList_SetItem(result->rows, i, row);
+						PyList_SetItem(result->rows, i, row);
+					}
 				}
 			}
 

@@ -464,15 +464,20 @@ PLy_cursor_fetch(PyObject *self, PyObject *args)
 
 			Py_DECREF(ret->rows);
 			ret->rows = PyList_New(SPI_processed);
-
-			for (i = 0; i < SPI_processed; i++)
+			if (!ret->rows)
 			{
-				PyObject   *row = PLyDict_FromTuple(&cursor->result,
-													SPI_tuptable->vals[i],
-													SPI_tuptable->tupdesc);
-
-				PyList_SetItem(ret->rows, i, row);
+				Py_DECREF(ret);
+				ret = NULL;
 			}
+			else
+				for (i = 0; i < SPI_processed; i++)
+				{
+					PyObject   *row = PLyDict_FromTuple(&cursor->result,
+														SPI_tuptable->vals[i],
+														SPI_tuptable->tupdesc);
+
+					PyList_SetItem(ret->rows, i, row);
+				}
 		}
 
 		SPI_freetuptable(SPI_tuptable);

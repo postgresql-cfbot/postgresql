@@ -68,6 +68,7 @@ static int	numextmembers;
 
 static void flagInhTables(Archive *fout, TableInfo *tbinfo, int numTables,
 			  InhInfo *inhinfo, int numInherits);
+static void flagInhIndexes(Archive *fout, TableInfo *tblinfo, int numTables);
 static void flagInhAttrs(DumpOptions *dopt, TableInfo *tblinfo, int numTables);
 static DumpableObject **buildIndexArray(void *objArray, int numObjs,
 				Size objSize);
@@ -76,6 +77,8 @@ static int	ExtensionMemberIdCompare(const void *p1, const void *p2);
 static void findParentsByOid(TableInfo *self,
 				 InhInfo *inhinfo, int numInherits);
 static int	strInArray(const char *pattern, char **arr, int arr_size);
+static IndxInfo *findIndexByOid(Oid oid, DumpableObject **idxinfoindex,
+			   int numIndexes);
 
 
 /*
@@ -258,6 +261,10 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	getIndexes(fout, tblinfo, numTables);
 
 	if (g_verbose)
+		write_msg(NULL, "flagging indexes in partitioned tables\n");
+	flagInhIndexes(fout, tblinfo, numTables);
+
+	if (g_verbose)
 		write_msg(NULL, "reading extended statistics\n");
 	getExtendedStatistics(fout, tblinfo, numTables);
 
@@ -352,6 +359,57 @@ flagInhTables(Archive *fout, TableInfo *tblinfo, int numTables,
 				parents[j]->interesting = true;
 		}
 	}
+}
+
+/*
+ * flagInhIndexes -
+ *	Fill in each partitioned index's ->parentidx pointer.
+ */
+static void
+flagInhIndexes(Archive *fout, TableInfo *tblinfo, int numTables)
+{
+	int		i,
+			j;
+	DumpableObject ***parentIndexArray;
+
+	parentIndexArray = (DumpableObject ***)
+		pg_malloc0(getMaxDumpId() * sizeof(DumpableObject **));
+
+	for (i = 0; i < numTables; i++)
+	{
+		TableInfo	   *parenttbl;
+
+		if (!tblinfo[i].ispartition || tblinfo[i].numParents == 0)
+			continue;
+
+		Assert(tblinfo[i].numParents == 1);
+		parenttbl = tblinfo[i].parents[0];
+
+		if (parentIndexArray[parenttbl->dobj.dumpId] == NULL)
+			parentIndexArray[parenttbl->dobj.dumpId] =
+				buildIndexArray(parenttbl->indexes,
+								parenttbl->numIndexes,
+								sizeof(IndxInfo));
+
+		for (j = 0; j < tblinfo[i].numIndexes; j++)
+		{
+			IndxInfo  *index = &(tblinfo[i].indexes[j]);
+
+			if (index->indparentidx == 0)
+				continue;
+
+			index->parentidx =
+				findIndexByOid(index->indparentidx,
+							   parentIndexArray[parenttbl->dobj.dumpId],
+							   parenttbl->numIndexes);
+		}
+	}
+
+	for (i = 0; i < numTables; i++)
+		if (parentIndexArray[i])
+			pg_free(parentIndexArray[i]);
+
+	pg_free(parentIndexArray);
 }
 
 /* flagInhAttrs -
@@ -827,6 +885,18 @@ findExtensionByOid(Oid oid)
 	return (ExtensionInfo *) findObjectByOid(oid, extinfoindex, numExtensions);
 }
 
+/*
+ * findIndexByOid
+ *		find the entry of the index with the given oid
+ *
+ * This one's signature is different from the previous ones because we lack a
+ * global array of all indexes, so caller must pass their array as argument.
+ */
+static IndxInfo *
+findIndexByOid(Oid oid, DumpableObject **idxinfoindex, int numIndexes)
+{
+	return (IndxInfo *) findObjectByOid(oid, idxinfoindex, numIndexes);
+}
 
 /*
  * setExtensionMembership

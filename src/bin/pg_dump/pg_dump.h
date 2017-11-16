@@ -328,6 +328,8 @@ typedef struct _tableInfo
 	 */
 	int			numParents;		/* number of (immediate) parent tables */
 	struct _tableInfo **parents;	/* TableInfos of immediate parents */
+	int			numIndexes;		/* number of indexes */
+	struct _indxInfo *indexes;	/* indexes */
 	struct _tableDataInfo *dataObj; /* TableDataInfo, if dumping its data */
 	int			numTriggers;	/* number of triggers for table */
 	struct _triggerInfo *triggers;	/* array of TriggerInfo structs */
@@ -361,6 +363,8 @@ typedef struct _indxInfo
 	Oid		   *indkeys;
 	bool		indisclustered;
 	bool		indisreplident;
+	Oid			indparentidx;	/* if partitioned, parent index OID */
+	struct _indxInfo *parentidx;	/* link to parent index (initially NULL) */
 	/* if there is an associated constraint object, its dumpId: */
 	DumpId		indexconstraint;
 	int			relpages;		/* relpages of the underlying table */

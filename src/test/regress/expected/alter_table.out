@@ -3229,14 +3229,6 @@ CREATE TABLE partitioned (
 	a int,
 	b int
 ) PARTITION BY RANGE (a, (a+b+1));
-ALTER TABLE partitioned ADD UNIQUE (a);
-ERROR:  unique constraints are not supported on partitioned tables
-LINE 1: ALTER TABLE partitioned ADD UNIQUE (a);
-                                    ^
-ALTER TABLE partitioned ADD PRIMARY KEY (a);
-ERROR:  primary key constraints are not supported on partitioned tables
-LINE 1: ALTER TABLE partitioned ADD PRIMARY KEY (a);
-                                    ^
 ALTER TABLE partitioned ADD FOREIGN KEY (a) REFERENCES blah;
 ERROR:  foreign key constraints are not supported on partitioned tables
 LINE 1: ALTER TABLE partitioned ADD FOREIGN KEY (a) REFERENCES blah;
@@ -3276,7 +3268,7 @@ CREATE TABLE unparted (
 );
 CREATE TABLE fail_part (like unparted);
 ALTER TABLE unparted ATTACH PARTITION fail_part FOR VALUES IN ('a');
-ERROR:  "unparted" is not partitioned
+ERROR:  table "unparted" is not partitioned
 DROP TABLE unparted, fail_part;
 -- check that partition bound is compatible
 CREATE TABLE list_parted (
@@ -3656,7 +3648,7 @@ DROP TABLE fail_part;
 -- check that the table is partitioned at all
 CREATE TABLE regular_table (a int);
 ALTER TABLE regular_table DETACH PARTITION any_name;
-ERROR:  "regular_table" is not partitioned
+ERROR:  table "regular_table" is not partitioned
 DROP TABLE regular_table;
 -- check that the partition being detached exists at all
 ALTER TABLE list_parted2 DETACH PARTITION part_4;

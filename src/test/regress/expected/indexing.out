@@ -1,0 +1,461 @@
+-- Creating an index on a partitioned table makes the partitions
+-- automatically get the index
+create table idxpart (a int, b int, c text) partition by range (a);
+create table idxpart1 partition of idxpart for values from (0) to (10);
+create table idxpart2 partition of idxpart for values from (10) to (100)
+	partition by range (b);
+create table idxpart21 partition of idxpart2 for values from (0) to (100);
+create index on idxpart (a);
+select relname, relkind, indparentidx::regclass
+    from pg_class left join pg_index on (indexrelid = oid)
+	where relname like 'idxpart%' order by relname;
+     relname     | relkind |  indparentidx  
+-----------------+---------+----------------
+ idxpart         | p       | 
+ idxpart1        | r       | 
+ idxpart1_a_idx  | i       | idxpart_a_idx
+ idxpart2        | p       | 
+ idxpart21       | r       | 
+ idxpart21_a_idx | i       | idxpart2_a_idx
+ idxpart2_a_idx  | I       | idxpart_a_idx
+ idxpart_a_idx   | I       | -
+(8 rows)
+
+drop table idxpart;
+-- Some unsupported cases
+create table idxpart (a int, b int, c text) partition by range (a);
+create table idxpart1 partition of idxpart for values from (0) to (10);
+create index concurrently on idxpart (a);
+ERROR:  cannot create index on partitioned table "idxpart" concurrently
+drop table idxpart;
+-- If a table without index is attached as partition to a table with
+-- an index, the index is automatically created
+create table idxpart (a int, b int, c text) partition by range (a);
+create index idxparti on idxpart (a);
+create index idxparti2 on idxpart (b, c);
+create table idxpart1 (like idxpart);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+
+alter table idxpart attach partition idxpart1 for values from (0) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_b_c_idx" btree (b, c)
+
+drop table idxpart;
+-- If a partition already has an index, make sure we don't create a separate
+-- one
+create table idxpart (a int, b int) partition by range (a, b);
+create table idxpart1 partition of idxpart for values from (0, 0) to (10, 10);
+create index on idxpart1 (a, b);
+create index on idxpart (a, b);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (0, 0) TO (10, 10)
+Indexes:
+    "idxpart1_a_b_idx" btree (a, b)
+
+select indexrelid::regclass, indrelid::regclass, indparentidx::regclass
+  from pg_index where indexrelid::regclass::text like 'idxpart%'
+  order by indexrelid::regclass;
+    indexrelid    | indrelid |  indparentidx   
+------------------+----------+-----------------
+ idxpart1_a_b_idx | idxpart1 | idxpart_a_b_idx
+ idxpart_a_b_idx  | idxpart  | -
+(2 rows)
+
+create index idxpart1_tst1 on idxpart1 (b, a);
+create index idxpart1_tst2 on idxpart1 using hash (a);
+create index idxpart1_tst3 on idxpart1 (a, b) where a > 10;
+-- ALTER INDEX .. ATTACH/DETACH, error cases
+alter index idxpart attach partition idxpart1;
+ERROR:  "idxpart" is not an index
+alter index idxpart detach partition idxpart1;
+ERROR:  "idxpart" is not an index
+alter index idxpart_a_b_idx attach partition idxpart1;
+ERROR:  "idxpart1" is not an index
+alter index idxpart_a_b_idx detach partition idxpart1;
+ERROR:  "idxpart1" is not an index
+alter index idxpart_a_b_idx attach partition idxpart_a_b_idx;
+ERROR:  index "idxpart_a_b_idx" is not on a partition of table "idxpart"
+alter index idxpart_a_b_idx attach partition idxpart1_b_idx;
+ERROR:  relation "idxpart1_b_idx" does not exist
+alter index idxpart_a_b_idx attach partition idxpart1_tst1;
+ERROR:  definition of index "idxpart1_tst1" is not compatible with index "idxpart_a_b_idx"
+alter index idxpart_a_b_idx attach partition idxpart1_tst2;
+ERROR:  definition of index "idxpart1_tst2" is not compatible with index "idxpart_a_b_idx"
+alter index idxpart_a_b_idx attach partition idxpart1_tst3;
+ERROR:  definition of index "idxpart1_tst3" is not compatible with index "idxpart_a_b_idx"
+-- OK
+alter index idxpart_a_b_idx attach partition idxpart1_a_b_idx;
+alter index idxpart_a_b_idx attach partition idxpart1_a_b_idx; -- quiet
+alter index idxpart_a_b_idx detach partition idxpart1_a_b_idx;
+alter index idxpart_a_b_idx detach partition idxpart1_a_b_idx; -- quiet
+drop table idxpart;
+-- make sure everything's gone
+select indexrelid::regclass, indrelid::regclass, indparentidx::regclass
+  from pg_index where indexrelid::regclass::text like 'idxpart%';
+ indexrelid | indrelid | indparentidx 
+------------+----------+--------------
+(0 rows)
+
+-- If CREATE INDEX ONLY, don't create indexes on partitions; and existing
+-- indexes on partitions don't change parent.  ALTER INDEX ATTACH can change
+-- the parent after the fact.
+create table idxpart (a int) partition by range (a);
+create table idxpart1 partition of idxpart for values from (0) to (100);
+create table idxpart2 partition of idxpart for values from (100) to (1000)
+  partition by range (a);
+create table idxpart21 partition of idxpart2 for values from (100) to (200);
+create table idxpart22 partition of idxpart2 for values from (200) to (300);
+create index on idxpart22 (a);
+create index on only idxpart2 (a);
+create index on idxpart (a);
+-- Here we expect that idxpart1 and idxpart2 have a new index, but idxpart21
+-- does not; also, idxpart22 is detached.
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (100)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+
+\d idxpart2
+              Table "public.idxpart2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (100) TO (1000)
+Partition key: RANGE (a)
+Indexes:
+    "idxpart2_a_idx" btree (a)
+Number of partitions: 2 (Use \d+ to list them.)
+
+\d idxpart21
+             Table "public.idxpart21"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+Partition of: idxpart2 FOR VALUES FROM (100) TO (200)
+
+select indexrelid::regclass, indrelid::regclass, indparentidx::regclass
+  from pg_index where indexrelid::regclass::text like 'idxpart%'
+  order by indrelid::regclass;
+   indexrelid    | indrelid  | indparentidx  
+-----------------+-----------+---------------
+ idxpart_a_idx   | idxpart   | -
+ idxpart1_a_idx  | idxpart1  | idxpart_a_idx
+ idxpart2_a_idx  | idxpart2  | idxpart_a_idx
+ idxpart22_a_idx | idxpart22 | -
+(4 rows)
+
+alter index idxpart2_a_idx attach partition idxpart22_a_idx;
+select indexrelid::regclass, indrelid::regclass, indparentidx::regclass
+  from pg_index where indexrelid::regclass::text like 'idxpart%'
+  order by indrelid::regclass;
+   indexrelid    | indrelid  |  indparentidx  
+-----------------+-----------+----------------
+ idxpart_a_idx   | idxpart   | -
+ idxpart1_a_idx  | idxpart1  | idxpart_a_idx
+ idxpart2_a_idx  | idxpart2  | idxpart_a_idx
+ idxpart22_a_idx | idxpart22 | idxpart2_a_idx
+(4 rows)
+
+drop table idxpart;
+-- When a table is attached a partition and it already has an index, a
+-- duplicate index should not get created, but rather the index becomes
+-- attached to the parent's index.
+create table idxpart (a int, b int, c text) partition by range (a);
+create index idxparti on idxpart (a);
+create index idxparti2 on idxpart (b, c);
+create table idxpart1 (like idxpart including indexes);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_b_c_idx" btree (b, c)
+
+select relname, relkind, indparentidx::regclass
+    from pg_class left join pg_index on (indexrelid = oid)
+	where relname like 'idxpart%' order by relname;
+     relname      | relkind | indparentidx 
+------------------+---------+--------------
+ idxpart          | p       | 
+ idxpart1         | r       | 
+ idxpart1_a_idx   | i       | -
+ idxpart1_b_c_idx | i       | -
+ idxparti         | I       | -
+ idxparti2        | I       | -
+(6 rows)
+
+alter table idxpart attach partition idxpart1 for values from (0) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_b_c_idx" btree (b, c)
+
+select relname, relkind, indparentidx::regclass
+    from pg_class left join pg_index on (indexrelid = oid)
+	where relname like 'idxpart%' order by relname;
+     relname      | relkind | indparentidx 
+------------------+---------+--------------
+ idxpart          | p       | 
+ idxpart1         | r       | 
+ idxpart1_a_idx   | i       | idxparti
+ idxpart1_b_c_idx | i       | idxparti2
+ idxparti         | I       | -
+ idxparti2        | I       | -
+(6 rows)
+
+drop table idxpart;
+-- Make sure the partition columns are mapped correctly
+create table idxpart (a int, b int, c text) partition by range (a);
+create index idxparti on idxpart (a);
+create index idxparti2 on idxpart (c, b);
+create table idxpart1 (c text, a int, b int);
+alter table idxpart attach partition idxpart1 for values from (0) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ c      | text    |           |          | 
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_c_b_idx" btree (c, b)
+
+drop table idxpart;
+-- Make sure things work if either table has dropped columns
+create table idxpart (a int, b int, c int, d int) partition by range (a);
+alter table idxpart drop column c;
+create index idxparti on idxpart (a);
+create index idxparti2 on idxpart (b, d);
+create table idxpart1 (like idxpart);
+alter table idxpart attach partition idxpart1 for values from (0) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ d      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_b_d_idx" btree (b, d)
+
+select attrelid::regclass, attname, attnum from pg_attribute
+  where attrelid in ('idxpart'::regclass, 'idxpart1'::regclass) and attnum > 0
+  order by attrelid::regclass, attnum;
+ attrelid |           attname            | attnum 
+----------+------------------------------+--------
+ idxpart  | a                            |      1
+ idxpart  | b                            |      2
+ idxpart  | ........pg.dropped.3........ |      3
+ idxpart  | d                            |      4
+ idxpart1 | a                            |      1
+ idxpart1 | b                            |      2
+ idxpart1 | d                            |      3
+(7 rows)
+
+drop table idxpart;
+create table idxpart (a int, b int, c int) partition by range (a);
+create table idxpart1 (zz int, like idxpart, aa int);
+alter table idxpart1 drop column zz, drop column aa;
+create index idxparti on idxpart (a);
+create index idxparti2 on idxpart (b, c);
+alter table idxpart attach partition idxpart1 for values from (0) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_b_c_idx" btree (b, c)
+
+select attrelid::regclass, attname, attnum from pg_attribute
+  where attrelid in ('idxpart'::regclass, 'idxpart1'::regclass) and attnum > 0
+  order by attrelid::regclass, attnum;
+ attrelid |           attname            | attnum 
+----------+------------------------------+--------
+ idxpart  | a                            |      1
+ idxpart  | b                            |      2
+ idxpart  | c                            |      3
+ idxpart1 | ........pg.dropped.1........ |      1
+ idxpart1 | a                            |      2
+ idxpart1 | b                            |      3
+ idxpart1 | c                            |      4
+ idxpart1 | ........pg.dropped.5........ |      5
+(8 rows)
+
+drop table idxpart;
+--
+-- Constraint-related indexes
+--
+-- Verify that it works to add primary key / unique to partitioned tables
+create table idxpart (a int primary key, b int) partition by range (b);
+ERROR:  UNIQUE index on table "idxpart" contains column "a" which is not part of the partition key
+create table idxpart (a int primary key, b int) partition by range (a);
+\d idxpart
+              Table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+ b      | integer |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_pkey" PRIMARY KEY, btree (a)
+
+drop table idxpart;
+create table idxpart (a int unique, b int) partition by range (a);
+\d idxpart
+              Table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_a_key" UNIQUE CONSTRAINT, btree (a)
+
+drop table idxpart;
+-- but not other types of index-based constraints
+create table idxpart (a int, exclude (a with = )) partition by range (a);
+ERROR:  exclusion constraints are not supported on partitioned tables
+LINE 1: create table idxpart (a int, exclude (a with = )) partition ...
+                                     ^
+-- It works to add primary keys after the partitioned table is created
+create table idxpart (a int, b int) partition by range (a);
+alter table idxpart add primary key (a);
+\d idxpart
+              Table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+ b      | integer |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_pkey" PRIMARY KEY, btree (a)
+
+drop table idxpart;
+-- It works to add unique constraints after the partitioned table is created
+create table idxpart (a int, b int) partition by range (a);
+alter table idxpart add unique (a);
+\d idxpart
+              Table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_a_key" UNIQUE CONSTRAINT, btree (a)
+
+drop table idxpart;
+-- Exclusion constraints cannot be added
+create table idxpart (a int, b int) partition by range (a);
+alter table idxpart add exclude (a with =);
+ERROR:  exclusion constraints are not supported on partitioned tables
+LINE 1: alter table idxpart add exclude (a with =);
+                                ^
+drop table idxpart;
+-- It is an error to add a constraint to columns that are not in the partition
+-- key.
+create table idxpart (a int, b int, primary key (a, b)) partition by range (a);
+ERROR:  UNIQUE index on table "idxpart" contains column "b" which is not part of the partition key
+create table idxpart (a int, b int, primary key (a, b)) partition by range (b);
+ERROR:  UNIQUE index on table "idxpart" contains column "a" which is not part of the partition key
+create table idxpart (a int, b int, unique (a, b)) partition by range (a);
+ERROR:  UNIQUE index on table "idxpart" contains column "b" which is not part of the partition key
+create table idxpart (a int, b int, unique (a, b)) partition by range (b);
+ERROR:  UNIQUE index on table "idxpart" contains column "a" which is not part of the partition key
+-- but using a partial set of columns is okay
+create table idxpart (a int, b int, c int primary key) partition by range (b);
+ERROR:  UNIQUE index on table "idxpart" contains column "c" which is not part of the partition key
+drop table idxpart;
+ERROR:  table "idxpart" does not exist
+create table idxpart (a int, b int, primary key (a)) partition by range (a, b);
+drop table idxpart;
+create table idxpart (a int, b int, primary key (b)) partition by range (a, b);
+drop table idxpart;
+create table idxpart (a int, b int, c int unique) partition by range (b);
+ERROR:  UNIQUE index on table "idxpart" contains column "c" which is not part of the partition key
+drop table idxpart;
+ERROR:  table "idxpart" does not exist
+create table idxpart (a int, b int, unique (a)) partition by range (a, b);
+drop table idxpart;
+create table idxpart (a int, b int, unique (b)) partition by range (a, b);
+drop table idxpart;
+-- When (sub)partitions are created, they also contain the constraint
+create table idxpart (a int, b int, primary key (a, b)) partition by range (a, b);
+create table idxpart1 partition of idxpart for values from (1, 1) to (10, 10);
+create table idxpart2 partition of idxpart for values from (10, 10) to (20, 20)
+  partition by range (b);
+create table idxpart21 partition of idxpart2 for values from (10) to (15);
+create table idxpart22 partition of idxpart2 for values from (15) to (20);
+create table idxpart3 (b int not null, a int not null);
+alter table idxpart attach partition idxpart3 for values from (20, 20) to (30, 30);
+select conname, contype, conrelid::regclass, conindid::regclass, conkey
+  from pg_constraint where conrelid::regclass::text like 'idxpart%'
+  order by conname;
+    conname     | contype | conrelid  |    conindid    | conkey 
+----------------+---------+-----------+----------------+--------
+ idxpart1_pkey  | p       | idxpart1  | idxpart1_pkey  | {1,2}
+ idxpart21_pkey | p       | idxpart21 | idxpart21_pkey | {1,2}
+ idxpart22_pkey | p       | idxpart22 | idxpart22_pkey | {1,2}
+ idxpart2_pkey  | p       | idxpart2  | idxpart2_pkey  | {1,2}
+ idxpart3_pkey  | p       | idxpart3  | idxpart3_pkey  | {2,1}
+ idxpart_pkey   | p       | idxpart   | idxpart_pkey   | {1,2}
+(6 rows)
+
+drop table idxpart;
+create table idxpart (a int primary key, b int) partition by range (a);
+create table idxpart1 partition of idxpart for values from (1) to (10);
+\d idxpart1
+              Table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+ b      | integer |           |          | 
+Partition of: idxpart FOR VALUES FROM (1) TO (10)
+Indexes:
+    "idxpart1_pkey" PRIMARY KEY, btree (a)
+
+drop table idxpart;

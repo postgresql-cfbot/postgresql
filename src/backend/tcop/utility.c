@@ -23,6 +23,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_inherits_fn.h"
 #include "catalog/toasting.h"
 #include "commands/alter.h"
 #include "commands/async.h"
@@ -1296,6 +1297,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					IndexStmt  *stmt = (IndexStmt *) parsetree;
 					Oid			relid;
 					LOCKMODE	lockmode;
+					List	   *inheritors = NIL;
 
 					if (stmt->concurrent)
 						PreventTransactionChain(isTopLevel,
@@ -1317,6 +1319,9 @@ ProcessUtilitySlow(ParseState *pstate,
 												 false, false,
 												 RangeVarCallbackOwnsRelation,
 												 NULL);
+					/* Also, lock any descendant tables if recursive */
+					if (stmt->relation->inh)
+						inheritors = find_all_inheritors(relid, lockmode, NULL);
 
 					/* Run parse analysis ... */
 					stmt = transformIndexStmt(relid, stmt, queryString);
@@ -1327,6 +1332,7 @@ ProcessUtilitySlow(ParseState *pstate,
 						DefineIndex(relid,	/* OID of heap relation */
 									stmt,
 									InvalidOid, /* no predefined OID */
+									InvalidOid, /* no parent index */
 									false,	/* is_alter_table */
 									true,	/* check_rights */
 									true,	/* check_not_in_use */
@@ -1342,6 +1348,9 @@ ProcessUtilitySlow(ParseState *pstate,
 													 parsetree);
 					commandCollected = true;
 					EventTriggerAlterTableEnd();
+
+					if (inheritors)
+						list_free(inheritors);
 				}
 				break;
 

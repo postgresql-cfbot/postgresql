@@ -23,7 +23,9 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
+#include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_inherits_fn.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_tablespace.h"
@@ -35,6 +37,7 @@
 #include "commands/tablespace.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/planner.h"
@@ -77,6 +80,7 @@ static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 								Oid relId, Oid oldRelId, void *arg);
+static void ReindexPartitionedIndex(Relation parentIdx);
 
 /*
  * CheckIndexCompatible
@@ -292,14 +296,15 @@ CheckIndexCompatible(Oid oldId,
  * 'stmt': IndexStmt describing the properties of the new index.
  * 'indexRelationId': normally InvalidOid, but during bootstrap can be
  *		nonzero to specify a preselected OID for the index.
+ * 'parentIndexId': the OID of the parent index; InvalidOid if not the child
+ *		of a partitioned index.
  * 'is_alter_table': this is due to an ALTER rather than a CREATE operation.
  * 'check_rights': check for CREATE rights in namespace and tablespace.  (This
  *		should be true except when ALTER is deleting/recreating an index.)
  * 'check_not_in_use': check for table not already in use in current session.
  *		This should be true unless caller is holding the table open, in which
  *		case the caller had better have checked it earlier.
- * 'skip_build': make the catalog entries but leave the index file empty;
- *		it will be filled later.
+ * 'skip_build': make the catalog entries but don't create the index files
  * 'quiet': suppress the NOTICE chatter ordinarily provided for constraints.
  *
  * Returns the object address of the created index.
@@ -308,6 +313,7 @@ ObjectAddress
 DefineIndex(Oid relationId,
 			IndexStmt *stmt,
 			Oid indexRelationId,
+			Oid parentIndexId,
 			bool is_alter_table,
 			bool check_rights,
 			bool check_not_in_use,
@@ -330,6 +336,7 @@ DefineIndex(Oid relationId,
 	IndexAmRoutine *amRoutine;
 	bool		amcanorder;
 	amoptions_function amoptions;
+	bool		partitioned;
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -382,22 +389,46 @@ DefineIndex(Oid relationId,
 	{
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
 			/* OK */
 			break;
 		case RELKIND_FOREIGN_TABLE:
+			/*
+			 * Custom error message for FOREIGN TABLE since the term is close
+			 * to a regular table and can confuse the user.
+			 */
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot create index on foreign table \"%s\"",
-							RelationGetRelationName(rel))));
-		case RELKIND_PARTITIONED_TABLE:
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot create index on partitioned table \"%s\"",
 							RelationGetRelationName(rel))));
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("\"%s\" is not a table or materialized view",
+							RelationGetRelationName(rel))));
+			break;
+	}
+
+	/*
+	 * Establish behavior for partitioned tables, and verify sanity of
+	 * parameters.
+	 *
+	 * We do not build an actual index in this case; we only create a few
+	 * catalog entries.  The actual indexes are built by recursing for each
+	 * partition.
+	 */
+	partitioned = rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
+	if (partitioned)
+	{
+		if (stmt->concurrent)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
+							RelationGetRelationName(rel))));
+		if (stmt->excludeOpNames)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot create exclusion constraints on partitioned table \"%s\"",
 							RelationGetRelationName(rel))));
 	}
 
@@ -595,6 +626,71 @@ DefineIndex(Oid relationId,
 		index_check_primary_key(rel, indexInfo, is_alter_table);
 
 	/*
+	 * If this table is partitioned and we're creating a unique index or a
+	 * primary key, make sure that the indexed columns are part of the
+	 * partition key.  Otherwise it would be possible to violate uniqueness by
+	 * putting values that ought to be unique in different partitions.
+	 *
+	 * We could lift this limitation if we had global indexes, but those have
+	 * their own problems, so this is a useful feature combination.
+	 *
+	 * XXX in some cases rel->rd_partkey is NULL, which caused this code to
+	 * crash.  In what cases can that happen?
+	 */
+	if (partitioned && (stmt->unique || stmt->primary) &&
+		(rel->rd_partkey != NULL))
+	{
+		int			i;
+		PartitionKey key = rel->rd_partkey;
+
+		/*
+		 * A partitioned table can have unique indexes, as long as all the
+		 * columns in the unique key appear in the partition key.  Because
+		 * partitions are non-overlapping, this guarantees that there is a
+		 * single partition that can contain any given key, and thus the
+		 * uniqueness is guaranteed globally.
+		 */
+
+		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+		{
+			bool	found;
+			int		j;
+
+			/*
+			 * Expression indexes are not supported yet.  We can probably use
+			 * pull_varattnos() on the expression, and verify that all the
+			 * vars mentioned correspond to columns of the partition key.
+			 */
+			if (indexInfo->ii_KeyAttrNumbers[i] == 0)
+				ereport(ERROR,
+					   (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("UNIQUE indexes containing expressions are not supported")));
+
+			found = false;
+			for (j = 0; j < key->partnatts; j++)
+			{
+				if (indexInfo->ii_KeyAttrNumbers[i] == key->partattrs[j])
+				{
+					found = true;
+					break;	/* all good */
+				}
+			}
+			if (!found)
+			{
+				char	   *attname;
+
+				attname = NameStr(TupleDescAttr(RelationGetDescr(rel),
+												indexInfo->ii_KeyAttrNumbers[i] - 1)->attname);
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("UNIQUE index on table \"%s\" contains column \"%s\" which is not part of the partition key",
+								RelationGetRelationName(rel), attname)));
+			}
+		}
+	}
+
+
+	/*
 	 * We disallow indexes on system columns other than OID.  They would not
 	 * necessarily get updated correctly, and they don't seem useful anyway.
 	 */
@@ -665,17 +761,20 @@ DefineIndex(Oid relationId,
 	/*
 	 * Make the catalog entries for the index, including constraints. This
 	 * step also actually builds the index, except if caller requested not to
-	 * or in concurrent mode, in which case it'll be done later.
+	 * or in concurrent mode, in which case it'll be done later, or
+	 * doing a partitioned index (because those don't have storage).
 	 */
 	flags = constr_flags = 0;
 	if (stmt->isconstraint)
 		flags |= INDEX_CREATE_ADD_CONSTRAINT;
-	if (skip_build || stmt->concurrent)
+	if (skip_build || stmt->concurrent || partitioned)
 		flags |= INDEX_CREATE_SKIP_BUILD;
 	if (stmt->if_not_exists)
 		flags |= INDEX_CREATE_IF_NOT_EXISTS;
 	if (stmt->concurrent)
 		flags |= INDEX_CREATE_CONCURRENT;
+	if (partitioned)
+		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
 
@@ -685,8 +784,8 @@ DefineIndex(Oid relationId,
 		constr_flags |= INDEX_CONSTR_CREATE_INIT_DEFERRED;
 
 	indexRelationId =
-		index_create(rel, indexRelationName, indexRelationId, stmt->oldNode,
-					 indexInfo, indexColNames,
+		index_create(rel, indexRelationName, indexRelationId, parentIndexId,
+					 stmt->oldNode, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationObjectId, classObjectId,
 					 coloptions, reloptions,
@@ -705,6 +804,145 @@ DefineIndex(Oid relationId,
 	if (stmt->idxcomment != NULL)
 		CreateComments(indexRelationId, RelationRelationId, 0,
 					   stmt->idxcomment);
+
+	if (partitioned)
+	{
+		/*
+		 * If ONLY was specified, we're done.  Otherwise, recurse to each
+		 * partition to create the corresponding index, or flag an existing
+		 * index as a children of this one.
+		 *
+		 * If we're invoked internally, recurse always.
+		 */
+		if ((stmt->relation && stmt->relation->inh) || !stmt->relation)
+		{
+			PartitionDesc partdesc = RelationGetPartitionDesc(rel);
+			Oid		   *part_oids;
+			int			nparts;
+			MemoryContext oldcxt;
+			TupleDesc	parentDesc;
+
+			/*
+			 * XXX In this block, we're going to call DefineIndex recursively
+			 * on the partitions; when building CONCURRENTLY, this will close
+			 * and open one transaction each time.  If indexes exist on some
+			 * partitions, we will not use separate transactions for those.
+			 * That seems okay, since the changes done in that case will be
+			 * catalog only and should not take long.
+			 *
+			 * XXX Note that CONCURRENTLY is not implemented yet for
+			 * partitioned tables, though; make sure to fix any holes there
+			 * before enabling that ...
+			 */
+
+			/*
+			 * For the concurrent case, we must ensure not to lose the array
+			 * of partitions we're going to work on, so copy it out of relcache.
+			 * PortalContext has the lifetime we need.  Also, save a copy of
+			 * the relation's tuple desc.
+			 */
+			oldcxt = MemoryContextSwitchTo(PortalContext);
+
+			nparts = partdesc->nparts;
+			part_oids = palloc(sizeof(Oid) * nparts);
+			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
+
+			parentDesc = palloc(TupleDescSize(RelationGetDescr(rel)));
+			TupleDescCopy(parentDesc, RelationGetDescr(rel));
+
+			MemoryContextSwitchTo(oldcxt);
+
+			heap_close(rel, NoLock);
+
+			/*
+			 * Now recurse, one child at a time.  Note that if any child is in
+			 * turn a partitioned table, this will recursively do the right thing.
+			 * In the concurrent case, this will close the current transaction and
+			 * open a new one.
+			 *
+			 * XXX Verify this coding carefully; see also ATExecAttachPartition
+			 */
+			for (i = 0; i < nparts; i++)
+			{
+				Oid		childRelid = part_oids[i];
+				Relation childrel;
+				List   *childidxs;
+				ListCell *cell;
+				AttrNumber *attmap = NULL;
+				bool	found = false;
+
+				childrel = heap_open(childRelid, lockmode);
+				/* childidxs goes away with transaction in concurrent mode;
+				 * we leak it otherwise */
+				childidxs = RelationGetIndexList(childrel);
+
+				foreach(cell, childidxs)
+				{
+					Oid			cldidxid = lfirst_oid(cell);
+					Relation	cldidx;
+					IndexInfo  *cldIdxInfo;
+
+					cldidx = index_open(cldidxid, AccessShareLock);
+
+					/* this index is already partition of another one */
+					if (cldidx->rd_index->indparentidx != 0)
+					{
+						index_close(cldidx, AccessShareLock);
+						continue;
+					}
+
+					cldIdxInfo = BuildIndexInfo(cldidx);
+					if (attmap == NULL)
+						attmap =
+							convert_tuples_by_name_map(RelationGetDescr(childrel),
+													   parentDesc,
+													   gettext_noop("could not convert row type"));
+
+					if (CompareIndexInfo(cldIdxInfo, indexInfo, attmap))
+					{
+						/* matched */
+						IndexSetParentIndex(cldidx, indexRelationId);
+						found = true;
+						index_close(cldidx, AccessShareLock);
+						break;
+					}
+
+					index_close(cldidx, AccessShareLock);
+				}
+
+				heap_close(childrel, NoLock);
+
+				if (!found)
+				{
+					IndexStmt *childStmt;
+
+					childStmt = copyObject(stmt);
+					childStmt->idxname = NULL;
+					childStmt->relationId = childRelid;
+
+					/*
+					 * Note that the event trigger command stash will only contain
+					 * a command to create the top-level index, not each of the
+					 * individual index partitions.
+					 */
+					/* XXX emit a DDL event here? */
+					DefineIndex(childRelid, childStmt,
+								InvalidOid,			/* no predefined OID */
+								indexRelationId,	/* this is our child */
+								false, check_rights, check_not_in_use,
+								false, quiet);
+				}
+			}
+		}
+		else
+			heap_close(rel, NoLock);
+
+		/*
+		 * Indexes on partitioned tables are not themselves built, so we're
+		 * done here.
+		 */
+		return address;
+	}
 
 	if (!stmt->concurrent)
 	{
@@ -1762,7 +2000,7 @@ ChooseIndexColumnNames(List *indexElems)
  * ReindexIndex
  *		Recreate a specific index.
  */
-Oid
+void
 ReindexIndex(RangeVar *indexRelation, int options)
 {
 	Oid			indOid;
@@ -1785,12 +2023,17 @@ ReindexIndex(RangeVar *indexRelation, int options)
 	 * lock on the index.
 	 */
 	irel = index_open(indOid, NoLock);
+
+	if (irel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+	{
+		ReindexPartitionedIndex(irel);
+		return;
+	}
+
 	persistence = irel->rd_rel->relpersistence;
 	index_close(irel, NoLock);
 
 	reindex_index(indOid, false, persistence, options);
-
-	return indOid;
 }
 
 /*
@@ -1829,7 +2072,8 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	relkind = get_rel_relkind(relId);
 	if (!relkind)
 		return;
-	if (relkind != RELKIND_INDEX)
+	if (relkind != RELKIND_INDEX &&
+		relkind != RELKIND_PARTITIONED_INDEX)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not an index", relation->relname)));
@@ -1973,6 +2217,12 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 		/*
 		 * Only regular tables and matviews can have indexes, so ignore any
 		 * other kind of relation.
+		 *
+		 * XXX it is tempting to also consider partitioned tables here, but
+		 * that has the problem that if the children are in the same schema,
+		 * they would be processed twice.  Maybe we could have a separate
+		 * list of partitioned tables, and expand that afterwards into relids,
+		 * ignoring any duplicates.
 		 */
 		if (classtuple->relkind != RELKIND_RELATION &&
 			classtuple->relkind != RELKIND_MATVIEW)
@@ -2034,4 +2284,68 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	StartTransactionCommand();
 
 	MemoryContextDelete(private_context);
+}
+
+/*
+ * Reindex each child of a partitioned index.
+ *
+ * The parent index is given, locked in AccessExclusive mode; this routine
+ * obtains the list of children and releases the lock on parent before
+ * applying reindex on each child.
+ */
+static void
+ReindexPartitionedIndex(Relation parentIdx)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("REINDEX is not yet implemented for partitioned indexes")));
+}
+
+/*
+ * Update the pg_index tuple corresponding to the given index on a partition
+ * to indicate that the given index OID is now its parent partitioned index.
+ *
+ * (De-)register the dependency from/in pg_depend.
+ */
+void
+IndexSetParentIndex(Relation idx, Oid parentOid)
+{
+	Relation	pgindex;
+	HeapTuple	indTup;
+	Form_pg_index indForm;
+
+	/* Make sure this is an index */
+	Assert(idx->rd_rel->relkind == RELKIND_INDEX ||
+		   idx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
+
+	pgindex = heap_open(IndexRelationId, RowExclusiveLock);
+	indTup = idx->rd_indextuple;
+	indForm = (Form_pg_index) GETSTRUCT(indTup);
+	indForm->indparentidx = parentOid;
+
+	CatalogTupleUpdate(pgindex, &(indTup->t_self), indTup);
+
+	heap_close(pgindex, RowExclusiveLock);
+
+	/*
+	 * If setting a parent, add a pg_depend row; if making standalone, remove
+	 * all existing rows.
+	 */
+	if (OidIsValid(parentOid))
+	{
+		ObjectAddress	parent;
+		ObjectAddress	partition;
+
+		/* set up pg_depend */
+		ObjectAddressSet(parent, RelationRelationId, parentOid);
+		ObjectAddressSet(partition, RelationRelationId, RelationGetRelid(idx));
+		recordDependencyOn(&partition, &parent, DEPENDENCY_INTERNAL);
+	}
+	else
+	{
+		deleteDependencyRecordsForClass(RelationRelationId,
+										RelationGetRelid(idx),
+										RelationRelationId,
+										DEPENDENCY_INTERNAL);
+	}
 }

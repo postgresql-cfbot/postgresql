@@ -266,6 +266,12 @@ static const struct dropmsgstrings dropmsgstringarray[] = {
 		gettext_noop("table \"%s\" does not exist, skipping"),
 		gettext_noop("\"%s\" is not a table"),
 	gettext_noop("Use DROP TABLE to remove a table.")},
+	{RELKIND_PARTITIONED_INDEX,
+		ERRCODE_UNDEFINED_OBJECT,
+		gettext_noop("index \"%s\" does not exist"),
+		gettext_noop("index \"%s\" does not exist, skipping"),
+		gettext_noop("\"%s\" is not an index"),
+	gettext_noop("Use DROP INDEX to remove an index.")},
 	{'\0', 0, NULL, NULL, NULL, NULL}
 };
 
@@ -481,6 +487,9 @@ static void ValidatePartitionConstraints(List **wqueue, Relation scanrel,
 							 List *partConstraint,
 							 bool validate_default);
 static ObjectAddress ATExecDetachPartition(Relation rel, RangeVar *name);
+static ObjectAddress ATExecAttachPartitionIdx(List **wqueue, Relation rel,
+						 RangeVar *name);
+static ObjectAddress ATExecDetachPartitionIdx(Relation rel, RangeVar *name);
 
 
 /* ----------------------------------------------------------------
@@ -901,6 +910,52 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
+	 * Now that the partition spec is installed, we can create any indexes
+	 * from the partitioned table into the partitions.  We can't do it
+	 * earlier, because if this is a partition which in turn is partitioned,
+	 * DefineIndex would not be able to recurse correctly into children to
+	 * apply indexes from the parent table.
+	 */
+	if (stmt->partbound)
+	{
+		Oid			parentId = linitial_oid(inheritOids);
+		Relation	parent;
+		List	   *idxlist;
+		ListCell   *cell;
+
+		/* Already have strong enough lock on the parent */
+		parent = heap_open(parentId, NoLock);
+		idxlist = RelationGetIndexList(parent);
+
+		/*
+		 * For each index in the parent table, create one in the partition
+		 */
+		foreach(cell, idxlist)
+		{
+			Relation	idxRel = index_open(lfirst_oid(cell), AccessShareLock);
+			AttrNumber *attmap;
+			IndexStmt  *idxstmt;
+
+			attmap = convert_tuples_by_name_map(RelationGetDescr(rel),
+												RelationGetDescr(parent),
+												gettext_noop("could not convert row type"));
+			idxstmt =
+				generateClonedIndexStmt(NULL, RelationGetRelid(rel), idxRel,
+										attmap, RelationGetDescr(rel)->natts);
+			DefineIndex(RelationGetRelid(rel),
+						idxstmt,
+						InvalidOid,
+						RelationGetRelid(idxRel),
+						false, false, false, false, false);
+
+			index_close(idxRel, AccessShareLock);
+		}
+
+		list_free(idxlist);
+		heap_close(parent, NoLock);
+	}
+
+	/*
 	 * Now add any newly specified column default values and CHECK constraints
 	 * to the new relation.  These are passed to us in the form of raw
 	 * parsetrees; we need to transform them to executable expression trees
@@ -1180,10 +1235,13 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	 * but RemoveRelations() can only pass one relkind for a given relation.
 	 * It chooses RELKIND_RELATION for both regular and partitioned tables.
 	 * That means we must be careful before giving the wrong type error when
-	 * the relation is RELKIND_PARTITIONED_TABLE.
+	 * the relation is RELKIND_PARTITIONED_TABLE.  There's an equivalent
+	 * problem with indexes.
 	 */
 	if (classform->relkind == RELKIND_PARTITIONED_TABLE)
 		expected_relkind = RELKIND_RELATION;
+	else if (classform->relkind == RELKIND_PARTITIONED_INDEX)
+		expected_relkind = RELKIND_INDEX;
 	else
 		expected_relkind = classform->relkind;
 
@@ -1211,7 +1269,8 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	 * we do it the other way around.  No error if we don't find a pg_index
 	 * entry, though --- the relation may have been dropped.
 	 */
-	if (relkind == RELKIND_INDEX && relOid != oldRelOid)
+	if ((relkind == RELKIND_INDEX || relkind == RELKIND_PARTITIONED_INDEX) &&
+		relOid != oldRelOid)
 	{
 		state->heapOid = IndexGetRelation(relOid, true);
 		if (OidIsValid(state->heapOid))
@@ -2541,6 +2600,7 @@ renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
 		relkind != RELKIND_MATVIEW &&
 		relkind != RELKIND_COMPOSITE_TYPE &&
 		relkind != RELKIND_INDEX &&
+		relkind != RELKIND_PARTITIONED_INDEX &&
 		relkind != RELKIND_FOREIGN_TABLE &&
 		relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
@@ -3020,7 +3080,8 @@ RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal)
 	/*
 	 * Also rename the associated constraint, if any.
 	 */
-	if (targetrelation->rd_rel->relkind == RELKIND_INDEX)
+	if (targetrelation->rd_rel->relkind == RELKIND_INDEX ||
+		targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
 	{
 		Oid			constraintId = get_index_constraint(myrelid);
 
@@ -3074,6 +3135,7 @@ CheckTableNotInUse(Relation rel, const char *stmt)
 						stmt, RelationGetRelationName(rel))));
 
 	if (rel->rd_rel->relkind != RELKIND_INDEX &&
+		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
 		AfterTriggerPendingOnRel(RelationGetRelid(rel)))
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_IN_USE),
@@ -3766,7 +3828,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			break;
 		case AT_AttachPartition:
 		case AT_DetachPartition:
-			ATSimplePermissions(rel, ATT_TABLE);
+			ATSimplePermissions(rel, ATT_TABLE | ATT_INDEX);
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
 			break;
@@ -4113,10 +4175,18 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			ATExecGenericOptions(rel, (List *) cmd->def);
 			break;
 		case AT_AttachPartition:
-			ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def);
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def);
+			else
+				ATExecAttachPartitionIdx(wqueue, rel,
+										 ((PartitionCmd *) cmd->def)->name);
 			break;
 		case AT_DetachPartition:
-			ATExecDetachPartition(rel, ((PartitionCmd *) cmd->def)->name);
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ATExecDetachPartition(rel, ((PartitionCmd *) cmd->def)->name);
+			else
+				ATExecDetachPartitionIdx(rel,
+										 ((PartitionCmd *) cmd->def)->name);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -4751,6 +4821,7 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 			actual_target = ATT_MATVIEW;
 			break;
 		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
 			actual_target = ATT_INDEX;
 			break;
 		case RELKIND_COMPOSITE_TYPE:
@@ -6195,6 +6266,7 @@ ATPrepSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 	if (rel->rd_rel->relkind != RELKIND_RELATION &&
 		rel->rd_rel->relkind != RELKIND_MATVIEW &&
 		rel->rd_rel->relkind != RELKIND_INDEX &&
+		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
 		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
 		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
@@ -6206,7 +6278,9 @@ ATPrepSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 	 * We allow referencing columns by numbers only for indexes, since table
 	 * column numbers could contain gaps if columns are later dropped.
 	 */
-	if (rel->rd_rel->relkind != RELKIND_INDEX && !colName)
+	if (rel->rd_rel->relkind != RELKIND_INDEX &&
+		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+		!colName)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot refer to non-index column by number")));
@@ -6284,7 +6358,8 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
-	if (rel->rd_rel->relkind == RELKIND_INDEX &&
+	if ((rel->rd_rel->relkind == RELKIND_INDEX ||
+		 rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX) &&
 		rel->rd_index->indkey.values[attnum - 1] != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -6797,6 +6872,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	address = DefineIndex(RelationGetRelid(rel),
 						  stmt,
 						  InvalidOid,	/* no predefined OID */
+						  InvalidOid,	/* no parent index */
 						  true, /* is_alter_table */
 						  check_rights,
 						  false,	/* check_not_in_use - we did it already */
@@ -9198,7 +9274,9 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				{
 					char		relKind = get_rel_relkind(foundObject.objectId);
 
-					if (relKind == RELKIND_INDEX)
+					/* XXX does this do the right thing?  Probably not */
+					if (relKind == RELKIND_INDEX ||
+						relKind == RELKIND_PARTITIONED_INDEX)
 					{
 						Assert(foundObject.objectSubId == 0);
 						if (!list_member_oid(tab->changedIndexOids, foundObject.objectId))
@@ -10162,6 +10240,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		 */
 		if (tuple_class->relkind != RELKIND_COMPOSITE_TYPE &&
 			tuple_class->relkind != RELKIND_INDEX &&
+			tuple_class->relkind != RELKIND_PARTITIONED_INDEX &&
 			tuple_class->relkind != RELKIND_TOASTVALUE)
 			changeDependencyOnOwner(RelationRelationId, relationOid,
 									newOwnerId);
@@ -10169,7 +10248,8 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		/*
 		 * Also change the ownership of the table's row type, if it has one
 		 */
-		if (tuple_class->relkind != RELKIND_INDEX)
+		if (tuple_class->relkind != RELKIND_INDEX &&
+			tuple_class->relkind != RELKIND_PARTITIONED_INDEX)
 			AlterTypeOwnerInternal(tuple_class->reltype, newOwnerId);
 
 		/*
@@ -10193,6 +10273,15 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 
 			list_free(index_oid_list);
 		}
+
+#if 0
+		/* For partitioned indexes, recurse to each child index */
+		if (tuple_class->relkind == RELKIND_PARTITIONED_INDEX)
+		{
+			foreach (i, child_index_oid)
+				ATExecChangeOwner(lfirst_oid(i), newOwnerId, true, lockmode);
+		}
+#endif
 
 		if (tuple_class->relkind == RELKIND_RELATION ||
 			tuple_class->relkind == RELKIND_MATVIEW)
@@ -10486,6 +10575,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			(void) view_reloptions(newOptions, true);
 			break;
 		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
 			(void) index_reloptions(rel->rd_amroutine->amoptions, newOptions, true);
 			break;
 		default:
@@ -10898,7 +10988,8 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 			 relForm->relkind != RELKIND_RELATION &&
 			 relForm->relkind != RELKIND_PARTITIONED_TABLE) ||
 			(stmt->objtype == OBJECT_INDEX &&
-			 relForm->relkind != RELKIND_INDEX) ||
+			 relForm->relkind != RELKIND_INDEX &&
+			 relForm->relkind != RELKIND_PARTITIONED_INDEX) ||
 			(stmt->objtype == OBJECT_MATVIEW &&
 			 relForm->relkind != RELKIND_MATVIEW))
 			continue;
@@ -13285,7 +13376,8 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not a composite type", rv->relname)));
 
-	if (reltype == OBJECT_INDEX && relkind != RELKIND_INDEX
+	if (reltype == OBJECT_INDEX && relkind != RELKIND_INDEX &&
+		relkind != RELKIND_PARTITIONED_INDEX
 		&& !IsA(stmt, RenameStmt))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -14006,6 +14098,103 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 	StorePartitionBound(attachrel, rel, cmd->bound);
 
 	/*
+	 * Ensure a correct set of indexes in the partition.  This either creates
+	 * a new index in the table being attached, or re-parents an existing one.
+	 */
+	{
+		AttrNumber *attmap = NULL;
+		List	   *idxes;
+		List	   *attachRelIdxs;
+		Relation   *attachrelIdxRels;
+		IndexInfo **attachInfos;
+		int			i;
+		ListCell   *cell;
+
+		idxes = RelationGetIndexList(rel);
+		attachRelIdxs = RelationGetIndexList(attachrel);
+		attachrelIdxRels = palloc(sizeof(Relation) * list_length(attachRelIdxs));
+		attachInfos = palloc(sizeof(IndexInfo *) * list_length(attachRelIdxs));
+
+		i = 0;
+		foreach(cell, attachRelIdxs)
+		{
+			Oid			cldIdxId = lfirst_oid(cell);
+
+			attachrelIdxRels[i] = index_open(cldIdxId, AccessShareLock);
+			attachInfos[i] = BuildIndexInfo(attachrelIdxRels[i]);
+			i++;
+		}
+
+		/*
+		 * For each index on the partitioned table, find a match in the table
+		 * being attached as partition; if one is not found, create one.
+		 */
+		foreach(cell, idxes)
+		{
+			Oid			idx = lfirst_oid(cell);
+			Relation	idxRel = index_open(idx, AccessShareLock);
+			IndexInfo  *info;
+			bool		found = false;
+
+			if (idxRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+			{
+				index_close(idxRel, AccessShareLock);
+				continue;
+			}
+			info = BuildIndexInfo(idxRel);
+			if (attmap == NULL)
+				attmap =
+					convert_tuples_by_name_map(RelationGetDescr(attachrel),
+											   RelationGetDescr(rel),
+											   gettext_noop("could not convert row type"));
+
+			for (i = 0; i < list_length(attachRelIdxs); i++)
+			{
+				/* already used it */
+				if (attachrelIdxRels[i]->rd_index->indparentidx != 0)
+					continue;
+
+				if (CompareIndexInfo(info, attachInfos[i], attmap))
+				{
+					/* bingo. */
+					IndexSetParentIndex(attachrelIdxRels[i], idx);
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				IndexStmt  *stmt;
+
+				stmt = generateClonedIndexStmt(NULL, RelationGetRelid(attachrel),
+											   idxRel, attmap,
+											   RelationGetDescr(rel)->natts);
+				/* XXX emit a DDL event here */
+				DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
+							RelationGetRelid(idxRel),
+							false, false, false, false, false);
+			}
+
+			index_close(idxRel, AccessShareLock);
+		}
+
+		/* Clean up. */
+		if (attmap)
+			pfree(attmap);
+
+		for (i = 0; i < list_length(attachRelIdxs); i++)
+		{
+			pfree(attachInfos[i]);
+			index_close(attachrelIdxRels[i], AccessShareLock);
+		}
+
+		if (idxes)
+			pfree(idxes);
+		if (attachRelIdxs)
+			pfree(attachRelIdxs);
+	}
+
+	/*
 	 * Generate partition constraint from the partition bound specification.
 	 * If the parent itself is a partition, make sure to include its
 	 * constraint as well.
@@ -14092,6 +14281,8 @@ ATExecDetachPartition(Relation rel, RangeVar *name)
 				new_repl[Natts_pg_class];
 	ObjectAddress address;
 	Oid			defaultPartOid;
+	List	   *indexes;
+	ListCell   *cell;
 
 	/*
 	 * We must lock the default partition, because detaching this partition
@@ -14150,6 +14341,25 @@ ATExecDetachPartition(Relation rel, RangeVar *name)
 		}
 	}
 
+	/* detach indexes too */
+	indexes = RelationGetIndexList(partRel);
+	foreach(cell, indexes)
+	{
+		Oid			idxid = lfirst_oid(cell);
+		Relation	idx = index_open(idxid, AccessExclusiveLock);
+
+		if (idx->rd_index->indparentidx != InvalidOid)
+		{
+			Assert(IndexGetRelation(idx->rd_index->indparentidx, false) ==
+				   RelationGetRelid(rel));
+
+			IndexSetParentIndex(idx, InvalidOid);
+		}
+
+		relation_close(idx, AccessExclusiveLock);
+	}
+
+
 	/*
 	 * Invalidate the parent's relcache so that the partition is no longer
 	 * included in its partition descriptor.
@@ -14160,6 +14370,136 @@ ATExecDetachPartition(Relation rel, RangeVar *name)
 
 	/* keep our lock until commit */
 	heap_close(partRel, NoLock);
+
+	return address;
+}
+
+/*
+ * ALTER INDEX i1 ATTACH PARTITION i2
+ */
+static ObjectAddress
+ATExecAttachPartitionIdx(List **wqueue, Relation rel, RangeVar *name)
+{
+	Relation	partRel;
+	ObjectAddress address;
+
+	/* XXX do we need this strong a lock? */
+	partRel = relation_openrv(name, AccessExclusiveLock);
+
+	/* Ensure it's what we need */
+	if (partRel->rd_rel->relkind != RELKIND_INDEX &&
+		partRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("\"%s\" is not an index", RelationGetRelationName(partRel))));
+
+	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(partRel));
+
+	/* Silently do nothing if already the right state */
+	if (partRel->rd_index->indparentidx != RelationGetRelid(rel))
+	{
+		Relation	parentTable,
+					partTable;
+		IndexInfo  *childInfo;
+		IndexInfo  *parentInfo;
+		AttrNumber *attmap;
+		bool		found;
+		int			i;
+		PartitionDesc partDesc;
+
+		if (OidIsValid(partRel->rd_index->indparentidx))
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("index \"%s\" is already a partition of another index",
+							RelationGetRelationName(partRel))));
+
+		/* Make sure it indexes a partition of the other index's table */
+		/* XXX need to avoid deadlocks here somehow */
+		parentTable = heap_open(rel->rd_index->indrelid, AccessShareLock);
+		partTable = heap_open(partRel->rd_index->indrelid, AccessShareLock);
+
+		partDesc = RelationGetPartitionDesc(parentTable);
+		found = false;
+		for (i = 0; i < partDesc->nparts; i++)
+		{
+			if (partDesc->oids[i] == RelationGetRelid(partTable))
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			ereport(ERROR,
+					(errmsg("index \"%s\" is not on a partition of table \"%s\"",
+							RelationGetRelationName(partRel),
+							RelationGetRelationName(parentTable))));
+
+		/*
+		 * Make sure the indexes are compatible.  It seems like this could be
+		 * relaxed a bit: for instance maybe it'd be useful to have a hash index
+		 * on one partition and a btree index in another.  But let's keep this
+		 * simple for now.
+		 */
+		childInfo = BuildIndexInfo(partRel);
+		parentInfo = BuildIndexInfo(rel);
+		/* XXX are these inverted? */
+		attmap = convert_tuples_by_name_map(RelationGetDescr(partTable),
+											RelationGetDescr(parentTable),
+											gettext_noop("could not convert row type"));
+		if (!CompareIndexInfo(parentInfo, childInfo, attmap))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("definition of index \"%s\" is not compatible with index \"%s\"",
+							RelationGetRelationName(partRel),
+							RelationGetRelationName(rel))));
+
+		/* All good -- do it */
+		IndexSetParentIndex(partRel, RelationGetRelid(rel));
+
+		relation_close(parentTable, AccessShareLock);
+		relation_close(partTable, AccessShareLock);
+	}
+
+	relation_close(partRel, AccessExclusiveLock);
+
+	return address;
+}
+
+/*
+ * ALTER INDEX i1 DETACH INDEX i2
+ */
+static ObjectAddress
+ATExecDetachPartitionIdx(Relation rel, RangeVar *name)
+{
+	Relation	partRel;
+	ObjectAddress address;
+
+	/* XXX do we need this strong a lock? */
+	partRel = relation_openrv(name, AccessExclusiveLock);
+
+	/* Ensure it's what we need */
+	if (partRel->rd_rel->relkind != RELKIND_INDEX &&
+		partRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("\"%s\" is not an index", RelationGetRelationName(partRel))));
+
+	/* Silently do nothing if already the right state */
+	if (OidIsValid(partRel->rd_index->indparentidx))
+	{
+		if (partRel->rd_index->indparentidx != RelationGetRelid(rel))
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("\"%s\" is not attached to \"%s\"",
+							RelationGetRelationName(partRel),
+							RelationGetRelationName(rel))));
+
+		/* all good */
+		IndexSetParentIndex(partRel, InvalidOid);
+	}
+
+	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(partRel));
+	relation_close(partRel, AccessExclusiveLock);
 
 	return address;
 }

@@ -46,6 +46,7 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/var.h"
 #include "parser/parsetree.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -63,7 +64,16 @@ static bool ExecOnConflictUpdate(ModifyTableState *mtstate,
 					 EState *estate,
 					 bool canSetTag,
 					 TupleTableSlot **returning);
-
+static void ExecSetupChildParentMap(ModifyTableState *mtstate,
+						ResultRelInfo *rootRelInfo,
+						int numResultRelInfos, bool perleaf);
+static TupleConversionMap *tupconv_map_for_subplan(ModifyTableState *node,
+													int whichplan);
+static HeapTuple ConvertPartitionTupleSlot(ModifyTableState *mtstate,
+										   TupleConversionMap *map,
+										   HeapTuple tuple,
+										   TupleTableSlot *new_slot,
+										   TupleTableSlot **p_old_slot);
 /*
  * Verify that the tuples to be produced by INSERT or UPDATE match the
  * target relation's rowtype
@@ -241,6 +251,38 @@ ExecCheckTIDVisible(EState *estate,
 	ReleaseBuffer(buffer);
 }
 
+/*
+ * ConvertPartitionTupleSlot -- convenience function for tuple conversion using
+ * 'map'. The tuple, if converted, is stored in 'new_slot', and 'p_my_slot' is
+ * updated with the 'new_slot'. 'new_slot' typically should be one of the
+ * dedicated partition tuple slots. If map is NULL, keeps p_my_slot unchanged.
+ *
+ * Returns the converted tuple, unless map is NULL, in which case original
+ * tuple is returned unmodified.
+ */
+static HeapTuple
+ConvertPartitionTupleSlot(ModifyTableState *mtstate,
+						  TupleConversionMap *map,
+						  HeapTuple tuple,
+						  TupleTableSlot *new_slot,
+						  TupleTableSlot **p_my_slot)
+{
+	if (!map)
+		return tuple;
+
+	tuple = do_convert_tuple(tuple, map);
+
+	/*
+	 * Change the partition tuple slot descriptor, as per converted tuple.
+	 */
+	*p_my_slot = new_slot;
+	Assert(new_slot != NULL);
+	ExecSetSlotDescriptor(new_slot, map->outdesc);
+	ExecStoreTuple(tuple, new_slot, InvalidBuffer, true);
+
+	return tuple;
+}
+
 /* ----------------------------------------------------------------
  *		ExecInsert
  *
@@ -266,6 +308,9 @@ ExecInsert(ModifyTableState *mtstate,
 	Oid			newId;
 	List	   *recheckIndexes = NIL;
 	TupleTableSlot *result = NULL;
+	TransitionCaptureState *transition_capture;
+
+	transition_capture = mtstate->mt_transition_capture;
 
 	/*
 	 * get the heap tuple out of the tuple table slot, making sure we have a
@@ -282,17 +327,47 @@ ExecInsert(ModifyTableState *mtstate,
 	if (mtstate->mt_partition_dispatch_info)
 	{
 		int			leaf_part_index;
-		TupleConversionMap *map;
+		ResultRelInfo *rootResultRelInfo;
+
+		/*
+		 * For UPDATE, the resultRelInfo is not the root partitioned table, so
+		 * we should convert the tuple into root's tuple descriptor, since
+		 * ExecFindPartition() starts the search from root.  The tuple
+		 * conversion map list is in the order of mtstate->resultRelInfo[], so
+		 * to retrieve the one for this resultRel, we need to know the position
+		 * of the resultRel in mtstate->resultRelInfo[].
+		 */
+		if (mtstate->operation == CMD_UPDATE)
+		{
+			int			map_index = resultRelInfo - mtstate->resultRelInfo;
+			TupleConversionMap *tupconv_map;
+
+			Assert(mtstate->rootResultRelInfo != NULL);
+			rootResultRelInfo = mtstate->rootResultRelInfo;
+
+			/* resultRelInfo must be one of the per-subplan result rels. */
+			Assert(resultRelInfo >= mtstate->resultRelInfo &&
+				   resultRelInfo <= mtstate->resultRelInfo + mtstate->mt_nplans - 1);
+
+			tupconv_map = tupconv_map_for_subplan(mtstate, map_index);
+			tuple = ConvertPartitionTupleSlot(mtstate,
+											  tupconv_map,
+											  tuple,
+											  mtstate->mt_root_tuple_slot,
+											  &slot);
+		}
+		else
+			rootResultRelInfo = resultRelInfo;
 
 		/*
 		 * Away we go ... If we end up not finding a partition after all,
 		 * ExecFindPartition() does not return and errors out instead.
 		 * Otherwise, the returned value is to be used as an index into arrays
-		 * mt_partitions[] and mt_partition_tupconv_maps[] that will get us
+		 * mt_partitions[] and mt_parentchild_tupconv_maps[] that will get us
 		 * the ResultRelInfo and TupleConversionMap for the partition,
 		 * respectively.
 		 */
-		leaf_part_index = ExecFindPartition(resultRelInfo,
+		leaf_part_index = ExecFindPartition(rootResultRelInfo,
 											mtstate->mt_partition_dispatch_info,
 											slot,
 											estate);
@@ -331,8 +406,10 @@ ExecInsert(ModifyTableState *mtstate,
 				 * back to tuplestore format.
 				 */
 				mtstate->mt_transition_capture->tcs_original_insert_tuple = NULL;
+
+				Assert(mtstate->mt_is_tupconv_perpart == true);
 				mtstate->mt_transition_capture->tcs_map =
-					mtstate->mt_transition_tupconv_maps[leaf_part_index];
+					mtstate->mt_childparent_tupconv_maps[leaf_part_index];
 			}
 			else
 			{
@@ -345,30 +422,21 @@ ExecInsert(ModifyTableState *mtstate,
 			}
 		}
 		if (mtstate->mt_oc_transition_capture != NULL)
+		{
+			Assert(mtstate->mt_is_tupconv_perpart == true);
 			mtstate->mt_oc_transition_capture->tcs_map =
-				mtstate->mt_transition_tupconv_maps[leaf_part_index];
+				mtstate->mt_childparent_tupconv_maps[leaf_part_index];
+		}
 
 		/*
 		 * We might need to convert from the parent rowtype to the partition
 		 * rowtype.
 		 */
-		map = mtstate->mt_partition_tupconv_maps[leaf_part_index];
-		if (map)
-		{
-			Relation	partrel = resultRelInfo->ri_RelationDesc;
-
-			tuple = do_convert_tuple(tuple, map);
-
-			/*
-			 * We must use the partition's tuple descriptor from this point
-			 * on, until we're finished dealing with the partition. Use the
-			 * dedicated slot for that.
-			 */
-			slot = mtstate->mt_partition_tuple_slot;
-			Assert(slot != NULL);
-			ExecSetSlotDescriptor(slot, RelationGetDescr(partrel));
-			ExecStoreTuple(tuple, slot, InvalidBuffer, true);
-		}
+		tuple = ConvertPartitionTupleSlot(mtstate,
+										  mtstate->mt_parentchild_tupconv_maps[leaf_part_index],
+										  tuple,
+										  mtstate->mt_partition_tuple_slot,
+										  &slot);
 	}
 
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
@@ -486,7 +554,7 @@ ExecInsert(ModifyTableState *mtstate,
 
 		/* Check the constraints of the tuple */
 		if (resultRelationDesc->rd_att->constr || check_partition_constr)
-			ExecConstraints(resultRelInfo, slot, estate);
+			ExecConstraints(resultRelInfo, slot, estate, true);
 
 		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0)
 		{
@@ -622,9 +690,32 @@ ExecInsert(ModifyTableState *mtstate,
 		setLastTid(&(tuple->t_self));
 	}
 
+	/*
+	 * If this INSERT is part of a partition-key-UPDATE and we are capturing
+	 * transition tables, put this row into the transition NEW TABLE.
+	 * (Similarly we need to add the deleted row in OLD TABLE).  We need to do
+	 * this separately for DELETE and INSERT because they happen on different
+	 * tables.
+	 */
+	if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
+		&& mtstate->mt_transition_capture->tcs_update_new_table)
+	{
+		ExecARUpdateTriggers(estate, resultRelInfo, NULL,
+							 NULL,
+							 tuple,
+							 NULL,
+							 mtstate->mt_transition_capture);
+
+		/*
+		 * Now that we have already captured NEW TABLE row, any AR INSERT
+		 * trigger should not again capture it below. Arrange for the same.
+		 */
+		transition_capture = NULL;
+	}
+
 	/* AFTER ROW INSERT Triggers */
 	ExecARInsertTriggers(estate, resultRelInfo, tuple, recheckIndexes,
-						 mtstate->mt_transition_capture);
+						 transition_capture);
 
 	list_free(recheckIndexes);
 
@@ -678,6 +769,8 @@ ExecDelete(ModifyTableState *mtstate,
 		   TupleTableSlot *planSlot,
 		   EPQState *epqstate,
 		   EState *estate,
+		   bool *tuple_deleted,
+		   bool process_returning,
 		   bool canSetTag)
 {
 	ResultRelInfo *resultRelInfo;
@@ -685,6 +778,12 @@ ExecDelete(ModifyTableState *mtstate,
 	HTSU_Result result;
 	HeapUpdateFailureData hufd;
 	TupleTableSlot *slot = NULL;
+	TransitionCaptureState *transition_capture;
+
+	transition_capture = mtstate->mt_transition_capture;
+
+	if (tuple_deleted)
+		*tuple_deleted = false;
 
 	/*
 	 * get information on the (current) result relation
@@ -849,12 +948,39 @@ ldelete:;
 	if (canSetTag)
 		(estate->es_processed)++;
 
+	/* The delete has actually happened, so inform that to the caller */
+	if (tuple_deleted)
+		*tuple_deleted = true;
+
+	/*
+	 * In case this is part of update tuple routing, put this row into the
+	 * transition OLD TABLE if we are capturing transition tables. We need to
+	 * do this separately for DELETE and INSERT because they happen on
+	 * different tables.
+	 */
+	if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
+		&& mtstate->mt_transition_capture->tcs_update_old_table)
+	{
+		ExecARUpdateTriggers(estate, resultRelInfo,
+							 tupleid,
+							 oldtuple,
+							 NULL,
+							 NULL,
+							 mtstate->mt_transition_capture);
+
+		/*
+		 * Now that we have already captured OLD TABLE row, any AR DELETE
+		 * trigger should not again capture it below. Arrange for the same.
+		 */
+		transition_capture = NULL;
+	}
+
 	/* AFTER ROW DELETE Triggers */
 	ExecARDeleteTriggers(estate, resultRelInfo, tupleid, oldtuple,
-						 mtstate->mt_transition_capture);
+						 transition_capture);
 
-	/* Process RETURNING if present */
-	if (resultRelInfo->ri_projectReturning)
+	/* Process RETURNING if present and if requested */
+	if (process_returning && resultRelInfo->ri_projectReturning)
 	{
 		/*
 		 * We have to put the target tuple into a slot, which means first we
@@ -947,6 +1073,7 @@ ExecUpdate(ModifyTableState *mtstate,
 	HTSU_Result result;
 	HeapUpdateFailureData hufd;
 	List	   *recheckIndexes = NIL;
+	TupleConversionMap *saved_tcs_map = NULL;
 
 	/*
 	 * abort the operation if not running transactions
@@ -1043,12 +1170,88 @@ lreplace:;
 								 resultRelInfo, slot, estate);
 
 		/*
+		 * If a partition check fails, try to move the row into the right
+		 * partition.
+		 */
+		if (resultRelInfo->ri_PartitionCheck &&
+			!ExecPartitionCheck(resultRelInfo, slot, estate))
+		{
+			bool		tuple_deleted;
+			TupleTableSlot *ret_slot;
+
+			/*
+			 * When an UPDATE is run with a leaf partition, we would not have
+			 * partition tuple routing setup. In that case, fail with
+			 * partition constraint violation error.
+			 */
+			if (mtstate->mt_partition_dispatch_info == NULL)
+				ExecPartitionCheckEmitError(resultRelInfo, slot, estate);
+
+			/* Do the row movement. */
+
+			/*
+			 * Skip RETURNING processing for DELETE. We want to return rows
+			 * from INSERT.
+			 */
+			ExecDelete(mtstate, tupleid, oldtuple, planSlot, epqstate, estate,
+					   &tuple_deleted, false, false);
+
+			/*
+			 * For some reason if DELETE didn't happen (e.g. trigger prevented
+			 * it, or it was already deleted by self, or it was concurrently
+			 * deleted by another transaction), then we should skip INSERT as
+			 * well, otherwise, there will be effectively one new row inserted.
+			 *
+			 * For a normal UPDATE, the case where the tuple has been the
+			 * subject of a concurrent UPDATE or DELETE would be handled by
+			 * the EvalPlanQual machinery, but for an UPDATE that we've
+			 * translated into a DELETE from this partition and an INSERT into
+			 * some other partition, that's not available, because CTID chains
+			 * can't span relation boundaries.  We mimic the semantics to a
+			 * limited extent by skipping the INSERT if the DELETE fails to
+			 * find a tuple. This ensures that two concurrent attempts to
+			 * UPDATE the same tuple at the same time can't turn one tuple
+			 * into two, and that an UPDATE of a just-deleted tuple can't
+			 * resurrect it.
+			 */
+			if (!tuple_deleted)
+				return NULL;
+
+			/*
+			 * UPDATEs set the transition capture map only when a new subplan
+			 * is chosen.  But for INSERTs, it is set for each row. So after
+			 * INSERT, we need to revert back to the map created for UPDATE;
+			 * otherwise the next UPDATE will incorrectly use the one created
+			 * for INESRT.  So first save the one created for UPDATE.
+			 */
+			if (mtstate->mt_transition_capture)
+				saved_tcs_map = mtstate->mt_transition_capture->tcs_map;
+
+			ret_slot = ExecInsert(mtstate, slot, planSlot, NULL,
+								  ONCONFLICT_NONE, estate, canSetTag);
+
+			if (mtstate->mt_transition_capture)
+			{
+				/*
+				 * Now revert back the transition capture map. See the above
+				 * comments.
+				 */
+				mtstate->mt_transition_capture->tcs_original_insert_tuple = NULL;
+				mtstate->mt_transition_capture->tcs_map = saved_tcs_map;
+			}
+			return ret_slot;
+		}
+
+		/*
 		 * Check the constraints of the tuple.  Note that we pass the same
 		 * slot for the orig_slot argument, because unlike ExecInsert(), no
 		 * tuple-routing is performed here, hence the slot remains unchanged.
+		 * We've already checked the partition constraint above; however, we
+		 * must still ensure the tuple passes all other constraints, so we will
+		 * call ExecConstraints() and have it validate all remaining checks.
 		 */
-		if (resultRelationDesc->rd_att->constr || resultRelInfo->ri_PartitionCheck)
-			ExecConstraints(resultRelInfo, slot, estate);
+		if (resultRelationDesc->rd_att->constr)
+			ExecConstraints(resultRelInfo, slot, estate, false);
 
 		/*
 		 * replace the heap tuple
@@ -1476,7 +1679,6 @@ static void
 ExecSetupTransitionCaptureState(ModifyTableState *mtstate, EState *estate)
 {
 	ResultRelInfo *targetRelInfo = getASTriggerResultRelInfo(mtstate);
-	int			i;
 
 	/* Check for transition tables on the directly targeted relation. */
 	mtstate->mt_transition_capture =
@@ -1505,45 +1707,8 @@ ExecSetupTransitionCaptureState(ModifyTableState *mtstate, EState *estate)
 							 mtstate->mt_num_partitions :
 							 mtstate->mt_nplans);
 
-		/*
-		 * Build array of conversion maps from each child's TupleDesc to the
-		 * one used in the tuplestore.  The map pointers may be NULL when no
-		 * conversion is necessary, which is hopefully a common case for
-		 * partitions.
-		 */
-		mtstate->mt_transition_tupconv_maps = (TupleConversionMap **)
-			palloc0(sizeof(TupleConversionMap *) * numResultRelInfos);
-
-		/* Choose the right set of partitions */
-		if (mtstate->mt_partition_dispatch_info != NULL)
-		{
-			/*
-			 * For tuple routing among partitions, we need TupleDescs based
-			 * on the partition routing table.
-			 */
-			ResultRelInfo **resultRelInfos = mtstate->mt_partitions;
-
-			for (i = 0; i < numResultRelInfos; ++i)
-			{
-				mtstate->mt_transition_tupconv_maps[i] =
-					convert_tuples_by_name(RelationGetDescr(resultRelInfos[i]->ri_RelationDesc),
-										   RelationGetDescr(targetRelInfo->ri_RelationDesc),
-										   gettext_noop("could not convert row type"));
-			}
-		}
-		else
-		{
-			/* Otherwise we need the ResultRelInfo for each subplan. */
-			ResultRelInfo *resultRelInfos = mtstate->resultRelInfo;
-
-			for (i = 0; i < numResultRelInfos; ++i)
-			{
-				mtstate->mt_transition_tupconv_maps[i] =
-					convert_tuples_by_name(RelationGetDescr(resultRelInfos[i].ri_RelationDesc),
-										   RelationGetDescr(targetRelInfo->ri_RelationDesc),
-										   gettext_noop("could not convert row type"));
-			}
-		}
+		ExecSetupChildParentMap(mtstate, targetRelInfo, numResultRelInfos,
+								(mtstate->mt_partition_dispatch_info != NULL));
 
 		/*
 		 * Install the conversion map for the first plan for UPDATE and DELETE
@@ -1551,9 +1716,129 @@ ExecSetupTransitionCaptureState(ModifyTableState *mtstate, EState *estate)
 		 * plan.  (INSERT operations set it every time, so we need not update
 		 * mtstate->mt_oc_transition_capture here.)
 		 */
-		if (mtstate->mt_transition_capture)
+		if (mtstate->mt_transition_capture && mtstate->operation != CMD_INSERT)
 			mtstate->mt_transition_capture->tcs_map =
-				mtstate->mt_transition_tupconv_maps[0];
+				tupconv_map_for_subplan(mtstate, 0);
+	}
+}
+
+/*
+ * Initialize the child-to-root tuple conversion map array.
+ *
+ * This map array is required for two purposes :
+ * 1. For update-tuple-routing. We need to convert the tuple from the subplan
+ * result rel to the root partitioned table descriptor.
+ * 2. For capturing transition tables that are partitions. For UPDATEs, we need
+ * to convert the tuple from subplan result rel to target table descriptor,
+ * and for INSERTs, we need to convert the inserted tuple from leaf partition
+ * to the target table descriptor.
+ *
+ * The caller can request either a per-subplan map or per-leaf-partition map.
+ */
+static void
+ExecSetupChildParentMap(ModifyTableState *mtstate,
+						ResultRelInfo *rootRelInfo,
+						int numResultRelInfos, bool perleaf)
+{
+	TupleDesc	outdesc;
+	int			i;
+
+	/* First check if there is already one */
+	if (mtstate->mt_childparent_tupconv_maps)
+	{
+		/*
+		 * If per-leaf map is required and the map is already created, that map
+		 * has to be per-leaf. If that map is per-subplan, we won't be able to
+		 * access the maps leaf-partition-wise. But if the map is per-leaf, we
+		 * will be able to access the maps subplan-wise using the
+		 * mt_subplan_partition_offsets map using function
+		 * tupconv_map_for_subplan().  So if the callers might need to access
+		 * the map both leaf-partition-wise and subplan-wise, they should make
+		 * sure that the first time this function is called, it should be
+		 * called with perleaf=true so that the map created is per-leaf, not
+		 * per-subplan.
+		 */
+		Assert(!(perleaf && !mtstate->mt_is_tupconv_perpart));
+		return;
+	}
+
+	/* Get tuple descriptor of the root partitioned table. */
+	outdesc = RelationGetDescr(rootRelInfo->ri_RelationDesc);
+
+	/*
+	 * Build array of conversion maps from each child's TupleDesc to the
+	 * one used in the tuplestore.  The map pointers may be NULL when no
+	 * conversion is necessary, which is hopefully a common case for
+	 * partitions.
+	 */
+	mtstate->mt_childparent_tupconv_maps = (TupleConversionMap **)
+		palloc0(sizeof(TupleConversionMap *) * numResultRelInfos);
+
+	/* Choose the right set of partitions */
+	if (perleaf)
+	{
+		/*
+		 * For tuple routing among partitions, we need TupleDescs based
+		 * on the partition routing table.
+		 */
+		ResultRelInfo **resultRelInfos = mtstate->mt_partitions;
+
+		for (i = 0; i < numResultRelInfos; ++i)
+		{
+			mtstate->mt_childparent_tupconv_maps[i] =
+				convert_tuples_by_name(RelationGetDescr(resultRelInfos[i]->ri_RelationDesc),
+									   outdesc,
+									   gettext_noop("could not convert row type"));
+		}
+
+		/*
+		 * Save the info that the tuple conversion map is per-leaf, not
+		 * per-subplan
+		 */
+		mtstate->mt_is_tupconv_perpart = true;
+	}
+	else
+	{
+		/* Otherwise we need the ResultRelInfo for each subplan. */
+		ResultRelInfo *resultRelInfos = mtstate->resultRelInfo;
+
+		for (i = 0; i < numResultRelInfos; ++i)
+		{
+			mtstate->mt_childparent_tupconv_maps[i] =
+				convert_tuples_by_name(RelationGetDescr(resultRelInfos[i].ri_RelationDesc),
+									   outdesc,
+									   gettext_noop("could not convert row type"));
+		}
+	}
+
+}
+
+/*
+ * For a given subplan index, get the tuple conversion map.
+ */
+static TupleConversionMap *
+tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
+{
+	Assert(mtstate->mt_childparent_tupconv_maps != NULL);
+
+	/*
+	 * If the tuple conversion map array is per-partition, we need to first get
+	 * the index into the partition array.
+	 */
+	if (mtstate->mt_is_tupconv_perpart)
+	{
+		int leaf_index;
+
+		Assert(mtstate->mt_subplan_partition_offsets != NULL);
+		leaf_index = mtstate->mt_subplan_partition_offsets[whichplan];
+
+		Assert(leaf_index >= 0 && leaf_index < mtstate->mt_num_partitions);
+		return mtstate->mt_childparent_tupconv_maps[leaf_index];
+	}
+	else
+	{
+		Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
+		return mtstate->mt_childparent_tupconv_maps[whichplan];
 	}
 }
 
@@ -1660,15 +1945,13 @@ ExecModifyTable(PlanState *pstate)
 				/* Prepare to convert transition tuples from this child. */
 				if (node->mt_transition_capture != NULL)
 				{
-					Assert(node->mt_transition_tupconv_maps != NULL);
 					node->mt_transition_capture->tcs_map =
-						node->mt_transition_tupconv_maps[node->mt_whichplan];
+						tupconv_map_for_subplan(node, node->mt_whichplan);
 				}
 				if (node->mt_oc_transition_capture != NULL)
 				{
-					Assert(node->mt_transition_tupconv_maps != NULL);
 					node->mt_oc_transition_capture->tcs_map =
-						node->mt_transition_tupconv_maps[node->mt_whichplan];
+						tupconv_map_for_subplan(node, node->mt_whichplan);
 				}
 				continue;
 			}
@@ -1784,7 +2067,8 @@ ExecModifyTable(PlanState *pstate)
 				break;
 			case CMD_DELETE:
 				slot = ExecDelete(node, tupleid, oldtuple, planSlot,
-								  &node->mt_epqstate, estate, node->canSetTag);
+								  &node->mt_epqstate, estate,
+								  NULL, true, node->canSetTag);
 				break;
 			default:
 				elog(ERROR, "unknown operation");
@@ -1829,9 +2113,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	ResultRelInfo *resultRelInfo;
 	TupleDesc	tupDesc;
 	Plan	   *subplan;
+	int			firstVarno = 0;
+	Relation	firstResultRel = NULL;
 	ListCell   *l;
 	int			i;
 	Relation	rel;
+	bool		update_tuple_routing_needed = node->partKeyUpdated;
 
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
@@ -1904,6 +2191,16 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_IndexRelationDescs == NULL)
 			ExecOpenIndices(resultRelInfo, mtstate->mt_onconflict != ONCONFLICT_NONE);
 
+		/*
+		 * If this is an UPDATE and a BEFORE UPDATE trigger is present, the
+		 * trigger itself might modify the partition-key values. So arrange for
+		 * tuple routing.
+		 */
+		if (resultRelInfo->ri_TrigDesc &&
+			resultRelInfo->ri_TrigDesc->trig_update_before_row &&
+			operation == CMD_UPDATE)
+			update_tuple_routing_needed = true;
+
 		/* Now init the plan for this result rel */
 		estate->es_result_relation_info = resultRelInfo;
 		mtstate->mt_plans[i] = ExecInitNode(subplan, estate, eflags);
@@ -1941,31 +2238,54 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	else
 		rel = mtstate->resultRelInfo->ri_RelationDesc;
 
-	/* Build state for INSERT tuple routing */
-	if (operation == CMD_INSERT &&
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	/*
+	 * If it's not a partitioned table after all, UPDATE tuple routing should
+	 * not be attempted.
+	 */
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		update_tuple_routing_needed = false;
+
+	/*
+	 * Build state for tuple routing if it's an INSERT or if it's an UPDATE of
+	 * partition key.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+		(operation == CMD_INSERT || update_tuple_routing_needed))
 	{
 		PartitionDispatch *partition_dispatch_info;
 		ResultRelInfo **partitions;
 		TupleConversionMap **partition_tupconv_maps;
+		int *subplan_leaf_map;
 		TupleTableSlot *partition_tuple_slot;
 		int			num_parted,
 					num_partitions;
 
 		ExecSetupPartitionTupleRouting(rel,
+									   mtstate->resultRelInfo,
+									   (operation == CMD_UPDATE ? nplans : 0),
 									   node->nominalRelation,
 									   estate,
 									   &partition_dispatch_info,
 									   &partitions,
 									   &partition_tupconv_maps,
+									   &subplan_leaf_map,
 									   &partition_tuple_slot,
 									   &num_parted, &num_partitions);
 		mtstate->mt_partition_dispatch_info = partition_dispatch_info;
 		mtstate->mt_num_dispatch = num_parted;
 		mtstate->mt_partitions = partitions;
 		mtstate->mt_num_partitions = num_partitions;
-		mtstate->mt_partition_tupconv_maps = partition_tupconv_maps;
+		mtstate->mt_parentchild_tupconv_maps = partition_tupconv_maps;
+		mtstate->mt_subplan_partition_offsets = subplan_leaf_map;
 		mtstate->mt_partition_tuple_slot = partition_tuple_slot;
+		mtstate->mt_root_tuple_slot = MakeTupleTableSlot();
+
+		/*
+		 * Below are required as reference objects for mapping partition
+		 * attno's in expressions such as WithCheckOptions and RETURNING.
+		 */
+		firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		firstResultRel = mtstate->resultRelInfo[0].ri_RelationDesc;
 	}
 
 	/*
@@ -1974,6 +2294,18 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	 */
 	if (!(eflags & EXEC_FLAG_EXPLAIN_ONLY))
 		ExecSetupTransitionCaptureState(mtstate, estate);
+
+	/*
+	 * Construct mapping from each of the per-subplan partition attnos to the
+	 * root attno.  This is required when during update row movement the tuple
+	 * descriptor of a source partition does not match the root partitioned
+	 * table descriptor.  In such a case we need to convert tuples to the root
+	 * tuple descriptor, because the search for destination partition starts
+	 * from the root.  Skip this setup if it's not a partition key update.
+	 */
+	if (update_tuple_routing_needed)
+		ExecSetupChildParentMap(mtstate, getASTriggerResultRelInfo(mtstate),
+								mtstate->mt_nplans, false);
 
 	/*
 	 * Initialize any WITH CHECK OPTION constraints if needed.
@@ -2005,26 +2337,29 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	 * Build WITH CHECK OPTION constraints for each leaf partition rel. Note
 	 * that we didn't build the withCheckOptionList for each partition within
 	 * the planner, but simple translation of the varattnos for each partition
-	 * will suffice.  This only occurs for the INSERT case; UPDATE/DELETE
-	 * cases are handled above.
+	 * will suffice.  This only occurs for the INSERT case or for UPDATE row
+	 * movement. DELETEs and local UPDATEs are handled above.
 	 */
 	if (node->withCheckOptionLists != NIL && mtstate->mt_num_partitions > 0)
 	{
-		List	   *wcoList;
-		PlanState  *plan;
+		List	   *first_wcoList;
 
 		/*
 		 * In case of INSERT on partitioned tables, there is only one plan.
 		 * Likewise, there is only one WITH CHECK OPTIONS list, not one per
-		 * partition.  We make a copy of the WCO qual for each partition; note
-		 * that, if there are SubPlans in there, they all end up attached to
-		 * the one parent Plan node.
+		 * partition. Whereas for UPDATE, there are as many WCOs as there are
+		 * plans. So in either case, use the WCO expression of the first
+		 * resultRelInfo as a reference to calculate attno's for the WCO
+		 * expression of each of the partitions. We make a copy of the WCO
+		 * qual for each partition. Note that, if there are SubPlans in there,
+		 * they all end up attached to the one parent Plan node.
 		 */
-		Assert(operation == CMD_INSERT &&
-			   list_length(node->withCheckOptionLists) == 1 &&
-			   mtstate->mt_nplans == 1);
-		wcoList = linitial(node->withCheckOptionLists);
-		plan = mtstate->mt_plans[0];
+		Assert(update_tuple_routing_needed ||
+			   (operation == CMD_INSERT &&
+				list_length(node->withCheckOptionLists) == 1 &&
+				mtstate->mt_nplans == 1));
+
+		first_wcoList = linitial(node->withCheckOptionLists);
 		for (i = 0; i < mtstate->mt_num_partitions; i++)
 		{
 			Relation	partrel;
@@ -2033,17 +2368,26 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			ListCell   *ll;
 
 			resultRelInfo = mtstate->mt_partitions[i];
+
+			/*
+			 * If we are referring to a resultRelInfo from one of the update
+			 * result rels, that result rel would already have WithCheckOptions
+			 * initialized.
+			 */
+			if (resultRelInfo->ri_WithCheckOptions)
+				continue;
+
 			partrel = resultRelInfo->ri_RelationDesc;
 
-			/* varno = node->nominalRelation */
-			mapped_wcoList = map_partition_varattnos(wcoList,
-													 node->nominalRelation,
-													 partrel, rel, NULL);
+			mapped_wcoList = map_partition_varattnos(first_wcoList,
+													firstVarno,
+													partrel, firstResultRel,
+													NULL);
 			foreach(ll, mapped_wcoList)
 			{
 				WithCheckOption *wco = castNode(WithCheckOption, lfirst(ll));
 				ExprState  *wcoExpr = ExecInitQual(castNode(List, wco->qual),
-												   plan);
+												   &mtstate->ps);
 
 				wcoExprs = lappend(wcoExprs, wcoExpr);
 			}
@@ -2060,7 +2404,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	{
 		TupleTableSlot *slot;
 		ExprContext *econtext;
-		List	   *returningList;
+		List	   *firstReturningList;
 
 		/*
 		 * Initialize result tuple slot and assign its rowtype using the first
@@ -2097,22 +2441,35 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		 * Build a projection for each leaf partition rel.  Note that we
 		 * didn't build the returningList for each partition within the
 		 * planner, but simple translation of the varattnos for each partition
-		 * will suffice.  This only occurs for the INSERT case; UPDATE/DELETE
-		 * are handled above.
+		 * will suffice.  This only occurs for the INSERT case or for UPDATE
+		 * row movement. DELETEs and local UPDATEs are handled above.
 		 */
-		returningList = linitial(node->returningLists);
+		firstReturningList = linitial(node->returningLists);
 		for (i = 0; i < mtstate->mt_num_partitions; i++)
 		{
 			Relation	partrel;
 			List	   *rlist;
 
 			resultRelInfo = mtstate->mt_partitions[i];
+
+			/*
+			 * If we are referring to a resultRelInfo from one of the update
+			 * result rels, that result rel would already have a returningList
+			 * built.
+			 */
+			if (resultRelInfo->ri_projectReturning)
+				continue;
+
 			partrel = resultRelInfo->ri_RelationDesc;
 
-			/* varno = node->nominalRelation */
-			rlist = map_partition_varattnos(returningList,
-											node->nominalRelation,
-											partrel, rel, NULL);
+			/*
+			 * Use the returning expression of the first resultRelInfo as a
+			 * reference to calculate attno's for the returning expression of
+			 * each of the partitions.
+			 */
+			rlist = map_partition_varattnos(firstReturningList,
+											firstVarno,
+											partrel, firstResultRel, NULL);
 			resultRelInfo->ri_projectReturning =
 				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
 										resultRelInfo->ri_RelationDesc->rd_att);
@@ -2357,6 +2714,7 @@ void
 ExecEndModifyTable(ModifyTableState *node)
 {
 	int			i;
+	CmdType		operation = node->operation;
 
 	/*
 	 * Allow any FDWs to shut down
@@ -2391,11 +2749,23 @@ ExecEndModifyTable(ModifyTableState *node)
 	{
 		ResultRelInfo *resultRelInfo = node->mt_partitions[i];
 
+		/*
+		 * If this result rel is one of the subplan result rels, let
+		 * ExecEndPlan() close it. For INSERTs, this does not apply because
+		 * leaf partition result rels are always newly allocated.
+		 */
+		if (operation == CMD_UPDATE &&
+			resultRelInfo >= node->resultRelInfo &&
+			resultRelInfo < node->resultRelInfo + node->mt_nplans)
+			continue;
+
 		ExecCloseIndices(resultRelInfo);
 		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
 	}
 
-	/* Release the standalone partition tuple descriptor, if any */
+	/* Release the standalone partition tuple descriptors, if any */
+	if (node->mt_root_tuple_slot)
+		ExecDropSingleTupleTableSlot(node->mt_root_tuple_slot);
 	if (node->mt_partition_tuple_slot)
 		ExecDropSingleTupleTableSlot(node->mt_partition_tuple_slot);
 

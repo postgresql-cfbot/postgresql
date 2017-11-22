@@ -54,12 +54,14 @@ extern void check_new_partition_bound(char *relname, Relation parent,
 extern Oid	get_partition_parent(Oid relid);
 extern List *get_qual_from_partbound(Relation rel, Relation parent,
 						PartitionBoundSpec *spec);
-extern List *map_partition_varattnos(List *expr, int target_varno,
-						Relation partrel, Relation parent,
+extern List *map_partition_varattnos(List *expr, int fromrel_varno,
+						Relation to_rel, Relation from_rel,
 						bool *found_whole_row);
 extern List *RelationGetPartitionQual(Relation rel);
 extern Expr *get_partition_qual_relid(Oid relid);
-
+extern void pull_child_partition_columns(Relation rel,
+							 Relation parent,
+							 Bitmapset **partcols);
 extern Oid	get_default_oid_from_partdesc(PartitionDesc partdesc);
 extern Oid	get_default_partition_oid(Oid parentId);
 extern void update_default_partition_oid(Oid parentId, Oid defaultPartId);

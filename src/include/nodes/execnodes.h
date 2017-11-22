@@ -982,15 +982,19 @@ typedef struct ModifyTableState
 	int			mt_num_partitions;	/* Number of members in the following
 									 * arrays */
 	ResultRelInfo **mt_partitions;	/* Per partition result relation pointers */
-	TupleConversionMap **mt_partition_tupconv_maps;
-	/* Per partition tuple conversion map */
 	TupleTableSlot *mt_partition_tuple_slot;
+	TupleTableSlot *mt_root_tuple_slot;
 	struct TransitionCaptureState *mt_transition_capture;
 	/* controls transition table population for specified operation */
 	struct TransitionCaptureState *mt_oc_transition_capture;
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
-	TupleConversionMap **mt_transition_tupconv_maps;
-	/* Per plan/partition tuple conversion */
+	TupleConversionMap **mt_parentchild_tupconv_maps;
+	/* Per partition map for tuple conversion from root to leaf */
+	TupleConversionMap **mt_childparent_tupconv_maps;
+	/* Per plan/partition map for tuple conversion from child to root */
+	bool		mt_is_tupconv_perpart;	/* Is the above map per-partition ? */
+	int		*mt_subplan_partition_offsets;
+	/* Stores position of update result rels in leaf partitions */
 } ModifyTableState;
 
 /* ----------------

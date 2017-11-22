@@ -112,6 +112,10 @@ typedef struct
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
+static void get_all_partition_cols(List *rtable,
+					   Index root_rti,
+					   List *partitioned_rels,
+					   Bitmapset **all_part_cols);
 static void inheritance_planner(PlannerInfo *root);
 static void grouping_planner(PlannerInfo *root, bool inheritance_update,
 				 double tuple_fraction);
@@ -1057,6 +1061,40 @@ preprocess_phv_expression(PlannerInfo *root, Expr *expr)
 }
 
 /*
+ * get_all_partition_cols
+ *	  Get attribute numbers of all partition key columns of all the partitioned
+ *    tables.
+ *
+ * All the child partition attribute numbers are converted to the root
+ * partitioned table.
+ */
+static void
+get_all_partition_cols(List *rtable,
+					   Index root_rti,
+					   List *partitioned_rels,
+					   Bitmapset **all_part_cols)
+{
+	ListCell   *lc;
+	Oid			root_relid = getrelid(root_rti, rtable);
+	Relation	root_rel;
+
+	/* The caller must have already locked all the partitioned tables. */
+	root_rel = heap_open(root_relid, NoLock);
+	*all_part_cols = NULL;
+	foreach(lc, partitioned_rels)
+	{
+		Index		rti = lfirst_int(lc);
+		Oid			relid = getrelid(rti, rtable);
+		Relation	part_rel = heap_open(relid, NoLock);
+
+		pull_child_partition_columns(part_rel, root_rel, all_part_cols);
+		heap_close(part_rel, NoLock);
+	}
+
+	heap_close(root_rel, NoLock);
+}
+
+/*
  * inheritance_planner
  *	  Generate Paths in the case where the result relation is an
  *	  inheritance set.
@@ -1101,6 +1139,7 @@ inheritance_planner(PlannerInfo *root)
 	Query	   *parent_parse;
 	Bitmapset  *parent_relids = bms_make_singleton(top_parentRTindex);
 	PlannerInfo **parent_roots = NULL;
+	bool		partColsUpdated = false;
 
 	Assert(parse->commandType != CMD_INSERT);
 
@@ -1171,10 +1210,23 @@ inheritance_planner(PlannerInfo *root)
 	parent_rte = rt_fetch(top_parentRTindex, root->parse->rtable);
 	if (parent_rte->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+		Bitmapset	*all_part_cols = NULL;
+
 		nominalRelation = top_parentRTindex;
 		partitioned_rels = get_partitioned_child_rels(root, top_parentRTindex);
 		/* The root partitioned table is included as a child rel */
 		Assert(list_length(partitioned_rels) >= 1);
+
+		/*
+		 * Retrieve the partition key columns of all the partitioned tables,
+		 * so as to check whether any of the columns being updated is
+		 * a partition key of any of the partition tables.
+		 */
+		get_all_partition_cols(root->parse->rtable, top_parentRTindex,
+							   partitioned_rels, &all_part_cols);
+
+		if (bms_overlap(all_part_cols, parent_rte->updatedCols))
+			partColsUpdated = true;
 	}
 
 	/*
@@ -1512,6 +1564,7 @@ inheritance_planner(PlannerInfo *root)
 									 parse->canSetTag,
 									 nominalRelation,
 									 partitioned_rels,
+									 partColsUpdated,
 									 resultRelations,
 									 subpaths,
 									 subroots,
@@ -2129,6 +2182,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										parse->canSetTag,
 										parse->resultRelation,
 										NIL,
+										false,
 										list_make1_int(parse->resultRelation),
 										list_make1(path),
 										list_make1(root),

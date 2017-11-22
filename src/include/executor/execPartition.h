@@ -50,11 +50,14 @@ typedef struct PartitionDispatchData
 typedef struct PartitionDispatchData *PartitionDispatch;
 
 extern void ExecSetupPartitionTupleRouting(Relation rel,
+							   ResultRelInfo *update_rri,
+							   int num_update_rri,
 							   Index resultRTindex,
 							   EState *estate,
 							   PartitionDispatch **pd,
 							   ResultRelInfo ***partitions,
 							   TupleConversionMap ***tup_conv_maps,
+							   int **subplan_leaf_map,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions);
 extern int ExecFindPartition(ResultRelInfo *resultRelInfo,

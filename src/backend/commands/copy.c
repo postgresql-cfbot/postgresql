@@ -2479,11 +2479,14 @@ CopyFrom(CopyState cstate)
 					num_partitions;
 
 		ExecSetupPartitionTupleRouting(cstate->rel,
+									   NULL,
+									   0,
 									   1,
 									   estate,
 									   &partition_dispatch_info,
 									   &partitions,
 									   &partition_tupconv_maps,
+									   NULL,
 									   &partition_tuple_slot,
 									   &num_parted, &num_partitions);
 		cstate->partition_dispatch_info = partition_dispatch_info;
@@ -2749,7 +2752,7 @@ CopyFrom(CopyState cstate)
 
 				/* Check the constraints of the tuple */
 				if (cstate->rel->rd_att->constr || check_partition_constr)
-					ExecConstraints(resultRelInfo, slot, estate);
+					ExecConstraints(resultRelInfo, slot, estate, true);
 
 				if (useHeapMultiInsert)
 				{

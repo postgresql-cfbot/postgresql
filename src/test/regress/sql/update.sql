@@ -107,25 +107,229 @@ INSERT INTO upsert_test VALUES (1, 'Bat') ON CONFLICT(a)
 DROP TABLE update_test;
 DROP TABLE upsert_test;
 
--- update to a partition should check partition bound constraint for the new tuple
-create table range_parted (
-	a text,
-	b int
-) partition by range (a, b);
-create table part_a_1_a_10 partition of range_parted for values from ('a', 1) to ('a', 10);
-create table part_a_10_a_20 partition of range_parted for values from ('a', 10) to ('a', 20);
-create table part_b_1_b_10 partition of range_parted for values from ('b', 1) to ('b', 10);
-create table part_b_10_b_20 partition of range_parted for values from ('b', 10) to ('b', 20);
-insert into part_a_1_a_10 values ('a', 1);
-insert into part_b_10_b_20 values ('b', 10);
 
--- fail
-update part_a_1_a_10 set a = 'b' where a = 'a';
-update range_parted set b = b - 1 where b = 10;
--- ok
-update range_parted set b = b + 1 where b = 10;
+---------------------------
+-- UPDATE with row movement
+---------------------------
+
+-- update to a partition should check partition bound constraint for the new tuple.
+-- If partition key is updated, the row should be moved to the appropriate
+-- partition. updatable views using partitions should enforce the check options
+-- for the rows that have been moved.
+create table mintab(c1 int);
+insert into mintab values (120);
+CREATE TABLE range_parted (
+	a text,
+	b bigint,
+	c numeric,
+	d int,
+	e varchar
+) partition by range (a, b);
+CREATE VIEW upview AS SELECT * FROM range_parted WHERE (select c > c1 from mintab) WITH CHECK OPTION;
+
+-- Create partitions intentionally in descending bound order, so as to test
+-- that update-row-movement works with the leaf partitions not in bound order.
+create table part_b_20_b_30 (e varchar, c numeric, a text, b bigint, d int);
+alter table range_parted attach partition part_b_20_b_30 for values from ('b', 20) to ('b', 30);
+create table part_b_10_b_20 (e varchar, c numeric, a text, b bigint, d int) partition by range (c);
+create table part_b_1_b_10 partition of range_parted for values from ('b', 1) to ('b', 10);
+alter table range_parted attach partition part_b_10_b_20 for values from ('b', 10) to ('b', 20);
+create table part_a_10_a_20 partition of range_parted for values from ('a', 10) to ('a', 20);
+create table part_a_1_a_10 partition of range_parted for values from ('a', 1) to ('a', 10);
+
+-- This tests partition-key UPDATE on a partitioned table that does not have any child partitions
+update part_b_10_b_20 set b = b - 6;
+
+-- As mentioned above, the partition creation is intentionally kept in descending bound order.
+create table part_c_100_200 (e varchar, c numeric, a text, b bigint, d int) partition by range (d);
+create table part_d_1_15 partition of part_c_100_200 for values from (1) to (15);
+create table part_d_15_20 partition of part_c_100_200 for values from (15) to (20);
+
+alter table part_b_10_b_20 attach partition part_c_100_200 for values from (100) to (200);
+
+create table part_c_1_100 (e varchar, d int, c numeric, b bigint, a text);
+alter table part_b_10_b_20 attach partition part_c_1_100 for values from (1) to (100);
+
+\set init_range_parted 'truncate range_parted; insert into range_parted values (''a'', 1, 1, 1), (''a'', 10, 200, 1), (''b'', 12, 96, 1), (''b'', 13, 97, 2), (''b'', 15, 105, 16), (''b'', 17, 105, 19)'
+\set show_data 'select tableoid::regclass::text COLLATE "C" partname, * from range_parted order by 1, 2, 3, 4, 5, 6'
+:init_range_parted;
+:show_data;
+
+-- The order of subplans should be in bound order
+explain (costs off) update range_parted set c = c - 50 where c > 97;
+
+-- fail (row movement happens only within the partition subtree) :
+update part_c_100_200 set c = c - 20, d = c where c = 105;
+-- fail (no partition key update, so no attempt to move tuple, but "a = 'a'" violates partition constraint enforced by root partition)
+update part_b_10_b_20 set a = 'a';
+-- success; partition key update, no constraint violation
+update range_parted set d = d - 10 where d > 10;
+-- success; no partition key update, no constraint violation
+update range_parted set e = d;
+-- No row found :
+update part_c_1_100 set c = c + 20 where c = 98;
+-- ok (row movement)
+update part_b_10_b_20 set c = c + 20 returning c, b, a;
+:show_data;
+
+-- fail (row movement happens only within the partition subtree) :
+update part_b_10_b_20 set b = b - 6 where c > 116 returning *;
+-- ok (row movement, with subset of rows moved into different partition)
+update range_parted set b = b - 6 where c > 116 returning a, b + c;
+
+:show_data;
+
+-- update partition key using updatable view.
+
+-- succeeds
+update upview set c = 199 where b = 4;
+-- fail, check option violation
+update upview set c = 120 where b = 4;
+-- fail, row movement with check option violation
+update upview set a = 'b', b = 15, c = 120 where b = 4;
+-- succeeds, row movement , check option passes
+update upview set a = 'b', b = 15 where b = 4;
+
+:show_data;
+
+-- cleanup
+drop view upview;
+
+-- RETURNING having whole-row vars.
+----------------------------------
+:init_range_parted;
+update range_parted set c = 95 where a = 'b' and b > 10 and c > 100 returning (range_parted)  , *;
+:show_data;
+
+
+-- Transition tables with update row movement
+---------------------------------------------
+:init_range_parted;
+
+create function trans_updatetrigfunc() returns trigger language plpgsql as
+$$
+  begin
+    raise notice 'trigger = %, old table = %, new table = %',
+                 TG_NAME,
+                 (select string_agg(old_table::text, ', ' order by a) from old_table),
+                 (select string_agg(new_table::text, ', ' order by a) from new_table);
+    return null;
+  end;
+$$;
+
+create trigger trans_updatetrig
+  after update on range_parted referencing old table as old_table new table as new_table
+  for each statement execute procedure trans_updatetrigfunc();
+
+update range_parted set c = (case when c = 96 then 110 else c + 1 end ) where a = 'b' and b > 10 and c >= 96;
+:show_data;
+:init_range_parted;
+
+-- Enabling OLD TABLE capture for both DELETE as well as UPDATE stmt triggers
+-- should not cause DELETEd rows to be captured twice. Similar thing for
+-- INSERT triggers and inserted rows.
+create trigger trans_deletetrig
+  after delete on range_parted referencing old table as old_table
+  for each statement execute procedure trans_updatetrigfunc();
+create trigger trans_inserttrig
+  after insert on range_parted referencing new table as new_table
+  for each statement execute procedure trans_updatetrigfunc();
+update range_parted set c = c + 50 where a = 'b' and b > 10 and c >= 96;
+:show_data;
+drop trigger trans_updatetrig ON range_parted;
+drop trigger trans_deletetrig ON range_parted;
+drop trigger trans_inserttrig ON range_parted;
+
+-- Install BR triggers on child partition, so that transition tuple conversion takes place.
+create function func_parted_mod_b() returns trigger as $$
+begin
+   NEW.b = NEW.b + 1;
+   return NEW;
+end $$ language plpgsql;
+create trigger trig_c1_100 before update or insert on part_c_1_100
+   for each row execute procedure func_parted_mod_b();
+create trigger trig_d1_15 before update or insert on part_d_1_15
+   for each row execute procedure func_parted_mod_b();
+create trigger trig_d15_20 before update or insert on part_d_15_20
+   for each row execute procedure func_parted_mod_b();
+:init_range_parted;
+update range_parted set c = (case when c = 96 then 110 else c + 1 end ) where a = 'b' and b > 10 and c >= 96;
+:show_data;
+:init_range_parted;
+update range_parted set c = c + 50 where a = 'b' and b > 10 and c >= 96;
+:show_data;
+drop trigger trig_c1_100 ON part_c_1_100;
+drop trigger trig_d1_15 ON part_d_1_15;
+drop trigger trig_d15_20 ON part_d_15_20;
+drop function func_parted_mod_b();
+
+
+-- statement triggers with update row movement
+---------------------------------------------------
+
+:init_range_parted;
+
+create function trigfunc() returns trigger language plpgsql as
+$$
+  begin
+    raise notice 'trigger = % fired on table % during %',
+                 TG_NAME, TG_TABLE_NAME, TG_OP;
+    return null;
+  end;
+$$;
+-- Triggers on root partition
+create trigger parent_delete_trig
+  after delete on range_parted for each statement execute procedure trigfunc();
+create trigger parent_update_trig
+  after update on range_parted for each statement execute procedure trigfunc();
+create trigger parent_insert_trig
+  after insert on range_parted for each statement execute procedure trigfunc();
+
+-- Triggers on leaf partition part_c_1_100
+create trigger c1_delete_trig
+  after delete on part_c_1_100 for each statement execute procedure trigfunc();
+create trigger c1_update_trig
+  after update on part_c_1_100 for each statement execute procedure trigfunc();
+create trigger c1_insert_trig
+  after insert on part_c_1_100 for each statement execute procedure trigfunc();
+
+-- Triggers on leaf partition part_d_1_15
+create trigger d1_delete_trig
+  after delete on part_d_1_15 for each statement execute procedure trigfunc();
+create trigger d1_update_trig
+  after update on part_d_1_15 for each statement execute procedure trigfunc();
+create trigger d1_insert_trig
+  after insert on part_d_1_15 for each statement execute procedure trigfunc();
+-- Triggers on leaf partition part_d_15_20
+create trigger d15_delete_trig
+  after delete on part_d_15_20 for each statement execute procedure trigfunc();
+create trigger d15_update_trig
+  after update on part_d_15_20 for each statement execute procedure trigfunc();
+create trigger d15_insert_trig
+  after insert on part_d_15_20 for each statement execute procedure trigfunc();
+
+-- Move all rows from part_c_100_200 to part_c_1_100. None of the delete or insert statement triggers should be fired.
+update range_parted set c = c - 50 where c > 97;
+:show_data;
+
+drop trigger parent_delete_trig ON range_parted;
+drop trigger parent_update_trig ON range_parted;
+drop trigger parent_insert_trig ON range_parted;
+drop trigger c1_delete_trig ON part_c_1_100;
+drop trigger c1_update_trig ON part_c_1_100;
+drop trigger c1_insert_trig ON part_c_1_100;
+drop trigger d1_delete_trig ON part_d_1_15;
+drop trigger d1_update_trig ON part_d_1_15;
+drop trigger d1_insert_trig ON part_d_1_15;
+drop trigger d15_delete_trig ON part_d_15_20;
+drop trigger d15_update_trig ON part_d_15_20;
+drop trigger d15_insert_trig ON part_d_15_20;
+
+drop table mintab;
+
 
 -- Creating default partition for range
+:init_range_parted;
 create table part_def partition of range_parted default;
 \d+ part_def
 insert into range_parted values ('c', 9);
@@ -133,6 +337,21 @@ insert into range_parted values ('c', 9);
 update part_def set a = 'd' where a = 'c';
 -- fail
 update part_def set a = 'a' where a = 'd';
+
+:show_data;
+
+-- Update row movement from non-default to default partition.
+-- Fail, default partition is not under part_a_10_a_20;
+update part_a_10_a_20 set a = 'ad' where a = 'a';
+-- Success
+update range_parted set a = 'ad' where a = 'a';
+update range_parted set a = 'bd' where a = 'b';
+:show_data;
+-- Update row movement from default to non-default partitions.
+-- Success
+update range_parted set a = 'a' where a = 'ad';
+update range_parted set a = 'b' where a = 'bd';
+:show_data;
 
 create table list_parted (
 	a text,
@@ -147,6 +366,84 @@ insert into list_default values ('d', 10);
 update list_default set a = 'a' where a = 'd';
 -- ok
 update list_default set a = 'x' where a = 'd';
+
+drop table list_parted;
+
+--------------
+-- UPDATE with
+-- partition key or non-partition columns, with different column ordering,
+-- triggers.
+--------------
+
+-- Setup
+--------
+create table list_parted (a numeric, b int, c int8) partition by list (a);
+create table sub_parted partition of list_parted for values in (1) partition by list (b);
+
+create table sub_part1(b int, c int8, a numeric);
+alter table sub_parted attach partition sub_part1 for values in (1);
+create table sub_part2(b int, c int8, a numeric);
+alter table sub_parted attach partition sub_part2 for values in (2);
+
+create table list_part1(a numeric, b int, c int8);
+alter table list_parted attach partition list_part1 for values in (2,3);
+
+insert into list_parted values (2,5,50);
+insert into list_parted values (3,6,60);
+insert into sub_parted values (1,1,60);
+insert into sub_parted values (1,2,10);
+
+-- Test partition constraint violation when intermediate ancestor is used and
+-- constraint is inherited from upper root.
+update sub_parted set a = 2 where c = 10;
+
+-- UPDATE which does not modify partition key of partitions that are chosen for update.
+select tableoid::regclass::text , * from list_parted where a = 2 order by 1;
+update list_parted set b = c + a where a = 2;
+select tableoid::regclass::text , * from list_parted where a = 2 order by 1;
+
+
+-----------
+-- Triggers can cause UPDATE row movement if it modified partition key.
+-----------
+create function func_parted_mod_b() returns trigger as $$
+begin
+   NEW.b = 2; -- This is changing partition key column.
+   return NEW;
+end $$ language plpgsql;
+create trigger parted_mod_b before update on sub_part1
+   for each row execute procedure func_parted_mod_b();
+
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+
+-- This should do the tuple routing even though there is no explicit
+-- partition-key update, because there is a trigger on sub_part1
+update list_parted set c = 70 where b  = 1 ;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+
+drop trigger parted_mod_b ON sub_part1 ;
+
+-- If BR DELETE trigger prevented DELETE from happening, we should also skip
+-- the INSERT if that delete is part of UPDATE=>DELETE+INSERT.
+create or replace function func_parted_mod_b() returns trigger as $$
+begin return NULL; end $$ language plpgsql;
+create trigger trig_skip_delete before delete on sub_part1
+   for each row execute procedure func_parted_mod_b();
+update list_parted set b = 1 where c = 70;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+
+drop trigger trig_skip_delete ON sub_part1 ;
+
+-- UPDATE partition-key with FROM clause. If join produces multiple output
+-- rows for the same row to be modified, we should tuple-route the row only once.
+-- There should not be any rows inserted.
+create table non_parted (id int);
+insert into non_parted values (1), (1), (1), (2), (2), (2), (3), (3), (3);
+update list_parted t1 set a = 2 from non_parted t2 where t1.a = t2.id and a = 1;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+drop table non_parted;
+
+drop function func_parted_mod_b();
 
 -- create custom operator class and hash function, for the same reason
 -- explained in alter_table.sql
@@ -169,6 +466,7 @@ insert into hpart4 values (3, 4);
 
 -- fail
 update hpart1 set a = 3, b=4 where a = 1;
+-- ok : row movement
 update hash_parted set b = b - 1 where b = 1;
 -- ok
 update hash_parted set b = b + 8 where b = 1;

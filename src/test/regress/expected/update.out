@@ -198,36 +198,367 @@ INSERT INTO upsert_test VALUES (1, 'Bat') ON CONFLICT(a)
 
 DROP TABLE update_test;
 DROP TABLE upsert_test;
--- update to a partition should check partition bound constraint for the new tuple
-create table range_parted (
+---------------------------
+-- UPDATE with row movement
+---------------------------
+-- update to a partition should check partition bound constraint for the new tuple.
+-- If partition key is updated, the row should be moved to the appropriate
+-- partition. updatable views using partitions should enforce the check options
+-- for the rows that have been moved.
+create table mintab(c1 int);
+insert into mintab values (120);
+CREATE TABLE range_parted (
 	a text,
-	b int
+	b bigint,
+	c numeric,
+	d int,
+	e varchar
 ) partition by range (a, b);
-create table part_a_1_a_10 partition of range_parted for values from ('a', 1) to ('a', 10);
-create table part_a_10_a_20 partition of range_parted for values from ('a', 10) to ('a', 20);
+CREATE VIEW upview AS SELECT * FROM range_parted WHERE (select c > c1 from mintab) WITH CHECK OPTION;
+-- Create partitions intentionally in descending bound order, so as to test
+-- that update-row-movement works with the leaf partitions not in bound order.
+create table part_b_20_b_30 (e varchar, c numeric, a text, b bigint, d int);
+alter table range_parted attach partition part_b_20_b_30 for values from ('b', 20) to ('b', 30);
+create table part_b_10_b_20 (e varchar, c numeric, a text, b bigint, d int) partition by range (c);
 create table part_b_1_b_10 partition of range_parted for values from ('b', 1) to ('b', 10);
-create table part_b_10_b_20 partition of range_parted for values from ('b', 10) to ('b', 20);
-insert into part_a_1_a_10 values ('a', 1);
-insert into part_b_10_b_20 values ('b', 10);
--- fail
-update part_a_1_a_10 set a = 'b' where a = 'a';
-ERROR:  new row for relation "part_a_1_a_10" violates partition constraint
-DETAIL:  Failing row contains (b, 1).
-update range_parted set b = b - 1 where b = 10;
-ERROR:  new row for relation "part_b_10_b_20" violates partition constraint
-DETAIL:  Failing row contains (b, 9).
--- ok
-update range_parted set b = b + 1 where b = 10;
+alter table range_parted attach partition part_b_10_b_20 for values from ('b', 10) to ('b', 20);
+create table part_a_10_a_20 partition of range_parted for values from ('a', 10) to ('a', 20);
+create table part_a_1_a_10 partition of range_parted for values from ('a', 1) to ('a', 10);
+-- This tests partition-key UPDATE on a partitioned table that does not have any child partitions
+update part_b_10_b_20 set b = b - 6;
+-- As mentioned above, the partition creation is intentionally kept in descending bound order.
+create table part_c_100_200 (e varchar, c numeric, a text, b bigint, d int) partition by range (d);
+create table part_d_1_15 partition of part_c_100_200 for values from (1) to (15);
+create table part_d_15_20 partition of part_c_100_200 for values from (15) to (20);
+alter table part_b_10_b_20 attach partition part_c_100_200 for values from (100) to (200);
+create table part_c_1_100 (e varchar, d int, c numeric, b bigint, a text);
+alter table part_b_10_b_20 attach partition part_c_1_100 for values from (1) to (100);
+\set init_range_parted 'truncate range_parted; insert into range_parted values (''a'', 1, 1, 1), (''a'', 10, 200, 1), (''b'', 12, 96, 1), (''b'', 13, 97, 2), (''b'', 15, 105, 16), (''b'', 17, 105, 19)'
+\set show_data 'select tableoid::regclass::text COLLATE "C" partname, * from range_parted order by 1, 2, 3, 4, 5, 6'
+:init_range_parted;
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 12 |  96 |  1 | 
+ part_c_1_100   | b | 13 |  97 |  2 | 
+ part_d_15_20   | b | 15 | 105 | 16 | 
+ part_d_15_20   | b | 17 | 105 | 19 | 
+(6 rows)
+
+-- The order of subplans should be in bound order
+explain (costs off) update range_parted set c = c - 50 where c > 97;
+             QUERY PLAN              
+-------------------------------------
+ Update on range_parted
+   Update on part_a_1_a_10
+   Update on part_a_10_a_20
+   Update on part_b_1_b_10
+   Update on part_c_1_100
+   Update on part_d_1_15
+   Update on part_d_15_20
+   Update on part_b_20_b_30
+   ->  Seq Scan on part_a_1_a_10
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_a_10_a_20
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_b_1_b_10
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_c_1_100
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_d_1_15
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_d_15_20
+         Filter: (c > '97'::numeric)
+   ->  Seq Scan on part_b_20_b_30
+         Filter: (c > '97'::numeric)
+(22 rows)
+
+-- fail (row movement happens only within the partition subtree) :
+update part_c_100_200 set c = c - 20, d = c where c = 105;
+ERROR:  new row for relation "part_c_100_200" violates partition constraint
+DETAIL:  Failing row contains (null, 85, b, 15, 105).
+-- fail (no partition key update, so no attempt to move tuple, but "a = 'a'" violates partition constraint enforced by root partition)
+update part_b_10_b_20 set a = 'a';
+ERROR:  new row for relation "part_c_1_100" violates partition constraint
+DETAIL:  Failing row contains (null, 1, 96, 12, a).
+-- success; partition key update, no constraint violation
+update range_parted set d = d - 10 where d > 10;
+-- success; no partition key update, no constraint violation
+update range_parted set e = d;
+-- No row found :
+update part_c_1_100 set c = c + 20 where c = 98;
+-- ok (row movement)
+update part_b_10_b_20 set c = c + 20 returning c, b, a;
+  c  | b  | a 
+-----+----+---
+ 116 | 12 | b
+ 117 | 13 | b
+ 125 | 15 | b
+ 125 | 17 | b
+(4 rows)
+
+:show_data;
+    partname    | a | b  |  c  | d | e 
+----------------+---+----+-----+---+---
+ part_a_10_a_20 | a | 10 | 200 | 1 | 1
+ part_a_1_a_10  | a |  1 |   1 | 1 | 1
+ part_d_1_15    | b | 12 | 116 | 1 | 1
+ part_d_1_15    | b | 13 | 117 | 2 | 2
+ part_d_1_15    | b | 15 | 125 | 6 | 6
+ part_d_1_15    | b | 17 | 125 | 9 | 9
+(6 rows)
+
+-- fail (row movement happens only within the partition subtree) :
+update part_b_10_b_20 set b = b - 6 where c > 116 returning *;
+ERROR:  new row for relation "part_d_1_15" violates partition constraint
+DETAIL:  Failing row contains (2, 117, b, 7, 2).
+-- ok (row movement, with subset of rows moved into different partition)
+update range_parted set b = b - 6 where c > 116 returning a, b + c;
+ a | ?column? 
+---+----------
+ a |      204
+ b |      124
+ b |      134
+ b |      136
+(4 rows)
+
+:show_data;
+   partname    | a | b  |  c  | d | e 
+---------------+---+----+-----+---+---
+ part_a_1_a_10 | a |  1 |   1 | 1 | 1
+ part_a_1_a_10 | a |  4 | 200 | 1 | 1
+ part_b_1_b_10 | b |  7 | 117 | 2 | 2
+ part_b_1_b_10 | b |  9 | 125 | 6 | 6
+ part_d_1_15   | b | 11 | 125 | 9 | 9
+ part_d_1_15   | b | 12 | 116 | 1 | 1
+(6 rows)
+
+-- update partition key using updatable view.
+-- succeeds
+update upview set c = 199 where b = 4;
+-- fail, check option violation
+update upview set c = 120 where b = 4;
+ERROR:  new row violates check option for view "upview"
+DETAIL:  Failing row contains (a, 4, 120, 1, 1).
+-- fail, row movement with check option violation
+update upview set a = 'b', b = 15, c = 120 where b = 4;
+ERROR:  new row violates check option for view "upview"
+DETAIL:  Failing row contains (b, 15, 120, 1, 1).
+-- succeeds, row movement , check option passes
+update upview set a = 'b', b = 15 where b = 4;
+:show_data;
+   partname    | a | b  |  c  | d | e 
+---------------+---+----+-----+---+---
+ part_a_1_a_10 | a |  1 |   1 | 1 | 1
+ part_b_1_b_10 | b |  7 | 117 | 2 | 2
+ part_b_1_b_10 | b |  9 | 125 | 6 | 6
+ part_d_1_15   | b | 11 | 125 | 9 | 9
+ part_d_1_15   | b | 12 | 116 | 1 | 1
+ part_d_1_15   | b | 15 | 199 | 1 | 1
+(6 rows)
+
+-- cleanup
+drop view upview;
+-- RETURNING having whole-row vars.
+----------------------------------
+:init_range_parted;
+update range_parted set c = 95 where a = 'b' and b > 10 and c > 100 returning (range_parted)  , *;
+ range_parted  | a | b  | c  | d  | e 
+---------------+---+----+----+----+---
+ (b,15,95,16,) | b | 15 | 95 | 16 | 
+ (b,17,95,19,) | b | 17 | 95 | 19 | 
+(2 rows)
+
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 12 |  96 |  1 | 
+ part_c_1_100   | b | 13 |  97 |  2 | 
+ part_c_1_100   | b | 15 |  95 | 16 | 
+ part_c_1_100   | b | 17 |  95 | 19 | 
+(6 rows)
+
+-- Transition tables with update row movement
+---------------------------------------------
+:init_range_parted;
+create function trans_updatetrigfunc() returns trigger language plpgsql as
+$$
+  begin
+    raise notice 'trigger = %, old table = %, new table = %',
+                 TG_NAME,
+                 (select string_agg(old_table::text, ', ' order by a) from old_table),
+                 (select string_agg(new_table::text, ', ' order by a) from new_table);
+    return null;
+  end;
+$$;
+create trigger trans_updatetrig
+  after update on range_parted referencing old table as old_table new table as new_table
+  for each statement execute procedure trans_updatetrigfunc();
+update range_parted set c = (case when c = 96 then 110 else c + 1 end ) where a = 'b' and b > 10 and c >= 96;
+NOTICE:  trigger = trans_updatetrig, old table = (b,12,96,1,), (b,13,97,2,), (b,15,105,16,), (b,17,105,19,), new table = (b,12,110,1,), (b,13,98,2,), (b,15,106,16,), (b,17,106,19,)
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 13 |  98 |  2 | 
+ part_d_15_20   | b | 15 | 106 | 16 | 
+ part_d_15_20   | b | 17 | 106 | 19 | 
+ part_d_1_15    | b | 12 | 110 |  1 | 
+(6 rows)
+
+:init_range_parted;
+-- Enabling OLD TABLE capture for both DELETE as well as UPDATE stmt triggers
+-- should not cause DELETEd rows to be captured twice. Similar thing for
+-- INSERT triggers and inserted rows.
+create trigger trans_deletetrig
+  after delete on range_parted referencing old table as old_table
+  for each statement execute procedure trans_updatetrigfunc();
+create trigger trans_inserttrig
+  after insert on range_parted referencing new table as new_table
+  for each statement execute procedure trans_updatetrigfunc();
+update range_parted set c = c + 50 where a = 'b' and b > 10 and c >= 96;
+NOTICE:  trigger = trans_updatetrig, old table = (b,12,96,1,), (b,13,97,2,), (b,15,105,16,), (b,17,105,19,), new table = (b,12,146,1,), (b,13,147,2,), (b,15,155,16,), (b,17,155,19,)
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_d_15_20   | b | 15 | 155 | 16 | 
+ part_d_15_20   | b | 17 | 155 | 19 | 
+ part_d_1_15    | b | 12 | 146 |  1 | 
+ part_d_1_15    | b | 13 | 147 |  2 | 
+(6 rows)
+
+drop trigger trans_updatetrig ON range_parted;
+drop trigger trans_deletetrig ON range_parted;
+drop trigger trans_inserttrig ON range_parted;
+-- Install BR triggers on child partition, so that transition tuple conversion takes place.
+create function func_parted_mod_b() returns trigger as $$
+begin
+   NEW.b = NEW.b + 1;
+   return NEW;
+end $$ language plpgsql;
+create trigger trig_c1_100 before update or insert on part_c_1_100
+   for each row execute procedure func_parted_mod_b();
+create trigger trig_d1_15 before update or insert on part_d_1_15
+   for each row execute procedure func_parted_mod_b();
+create trigger trig_d15_20 before update or insert on part_d_15_20
+   for each row execute procedure func_parted_mod_b();
+:init_range_parted;
+update range_parted set c = (case when c = 96 then 110 else c + 1 end ) where a = 'b' and b > 10 and c >= 96;
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 15 |  98 |  2 | 
+ part_d_15_20   | b | 17 | 106 | 16 | 
+ part_d_15_20   | b | 19 | 106 | 19 | 
+ part_d_1_15    | b | 15 | 110 |  1 | 
+(6 rows)
+
+:init_range_parted;
+update range_parted set c = c + 50 where a = 'b' and b > 10 and c >= 96;
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_d_15_20   | b | 17 | 155 | 16 | 
+ part_d_15_20   | b | 19 | 155 | 19 | 
+ part_d_1_15    | b | 15 | 146 |  1 | 
+ part_d_1_15    | b | 16 | 147 |  2 | 
+(6 rows)
+
+drop trigger trig_c1_100 ON part_c_1_100;
+drop trigger trig_d1_15 ON part_d_1_15;
+drop trigger trig_d15_20 ON part_d_15_20;
+drop function func_parted_mod_b();
+-- statement triggers with update row movement
+---------------------------------------------------
+:init_range_parted;
+create function trigfunc() returns trigger language plpgsql as
+$$
+  begin
+    raise notice 'trigger = % fired on table % during %',
+                 TG_NAME, TG_TABLE_NAME, TG_OP;
+    return null;
+  end;
+$$;
+-- Triggers on root partition
+create trigger parent_delete_trig
+  after delete on range_parted for each statement execute procedure trigfunc();
+create trigger parent_update_trig
+  after update on range_parted for each statement execute procedure trigfunc();
+create trigger parent_insert_trig
+  after insert on range_parted for each statement execute procedure trigfunc();
+-- Triggers on leaf partition part_c_1_100
+create trigger c1_delete_trig
+  after delete on part_c_1_100 for each statement execute procedure trigfunc();
+create trigger c1_update_trig
+  after update on part_c_1_100 for each statement execute procedure trigfunc();
+create trigger c1_insert_trig
+  after insert on part_c_1_100 for each statement execute procedure trigfunc();
+-- Triggers on leaf partition part_d_1_15
+create trigger d1_delete_trig
+  after delete on part_d_1_15 for each statement execute procedure trigfunc();
+create trigger d1_update_trig
+  after update on part_d_1_15 for each statement execute procedure trigfunc();
+create trigger d1_insert_trig
+  after insert on part_d_1_15 for each statement execute procedure trigfunc();
+-- Triggers on leaf partition part_d_15_20
+create trigger d15_delete_trig
+  after delete on part_d_15_20 for each statement execute procedure trigfunc();
+create trigger d15_update_trig
+  after update on part_d_15_20 for each statement execute procedure trigfunc();
+create trigger d15_insert_trig
+  after insert on part_d_15_20 for each statement execute procedure trigfunc();
+-- Move all rows from part_c_100_200 to part_c_1_100. None of the delete or insert statement triggers should be fired.
+update range_parted set c = c - 50 where c > 97;
+NOTICE:  trigger = parent_update_trig fired on table range_parted during UPDATE
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 150 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 12 |  96 |  1 | 
+ part_c_1_100   | b | 13 |  97 |  2 | 
+ part_c_1_100   | b | 15 |  55 | 16 | 
+ part_c_1_100   | b | 17 |  55 | 19 | 
+(6 rows)
+
+drop trigger parent_delete_trig ON range_parted;
+drop trigger parent_update_trig ON range_parted;
+drop trigger parent_insert_trig ON range_parted;
+drop trigger c1_delete_trig ON part_c_1_100;
+drop trigger c1_update_trig ON part_c_1_100;
+drop trigger c1_insert_trig ON part_c_1_100;
+drop trigger d1_delete_trig ON part_d_1_15;
+drop trigger d1_update_trig ON part_d_1_15;
+drop trigger d1_insert_trig ON part_d_1_15;
+drop trigger d15_delete_trig ON part_d_15_20;
+drop trigger d15_update_trig ON part_d_15_20;
+drop trigger d15_insert_trig ON part_d_15_20;
+drop table mintab;
 -- Creating default partition for range
+:init_range_parted;
 create table part_def partition of range_parted default;
 \d+ part_def
-                                  Table "public.part_def"
- Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+---------+-----------+----------+---------+----------+--------------+-------------
- a      | text    |           |          |         | extended |              | 
- b      | integer |           |          |         | plain    |              | 
+                                       Table "public.part_def"
+ Column |       Type        | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+-------------------+-----------+----------+---------+----------+--------------+-------------
+ a      | text              |           |          |         | extended |              | 
+ b      | bigint            |           |          |         | plain    |              | 
+ c      | numeric           |           |          |         | main     |              | 
+ d      | integer           |           |          |         | plain    |              | 
+ e      | character varying |           |          |         | extended |              | 
 Partition of: range_parted DEFAULT
-Partition constraint: (NOT (((a = 'a'::text) AND (b >= 1) AND (b < 10)) OR ((a = 'a'::text) AND (b >= 10) AND (b < 20)) OR ((a = 'b'::text) AND (b >= 1) AND (b < 10)) OR ((a = 'b'::text) AND (b >= 10) AND (b < 20))))
+Partition constraint: (NOT (((a = 'a'::text) AND (b >= '1'::bigint) AND (b < '10'::bigint)) OR ((a = 'a'::text) AND (b >= '10'::bigint) AND (b < '20'::bigint)) OR ((a = 'b'::text) AND (b >= '1'::bigint) AND (b < '10'::bigint)) OR ((a = 'b'::text) AND (b >= '10'::bigint) AND (b < '20'::bigint)) OR ((a = 'b'::text) AND (b >= '20'::bigint) AND (b < '30'::bigint))))
 
 insert into range_parted values ('c', 9);
 -- ok
@@ -235,7 +566,55 @@ update part_def set a = 'd' where a = 'c';
 -- fail
 update part_def set a = 'a' where a = 'd';
 ERROR:  new row for relation "part_def" violates partition constraint
-DETAIL:  Failing row contains (a, 9).
+DETAIL:  Failing row contains (a, 9, null, null, null).
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 12 |  96 |  1 | 
+ part_c_1_100   | b | 13 |  97 |  2 | 
+ part_d_15_20   | b | 15 | 105 | 16 | 
+ part_d_15_20   | b | 17 | 105 | 19 | 
+ part_def       | d |  9 |     |    | 
+(7 rows)
+
+-- Update row movement from non-default to default partition.
+-- Fail, default partition is not under part_a_10_a_20;
+update part_a_10_a_20 set a = 'ad' where a = 'a';
+ERROR:  new row for relation "part_a_10_a_20" violates partition constraint
+DETAIL:  Failing row contains (ad, 10, 200, 1, null).
+-- Success
+update range_parted set a = 'ad' where a = 'a';
+update range_parted set a = 'bd' where a = 'b';
+:show_data;
+ partname | a  | b  |  c  | d  | e 
+----------+----+----+-----+----+---
+ part_def | ad |  1 |   1 |  1 | 
+ part_def | ad | 10 | 200 |  1 | 
+ part_def | bd | 12 |  96 |  1 | 
+ part_def | bd | 13 |  97 |  2 | 
+ part_def | bd | 15 | 105 | 16 | 
+ part_def | bd | 17 | 105 | 19 | 
+ part_def | d  |  9 |     |    | 
+(7 rows)
+
+-- Update row movement from default to non-default partitions.
+-- Success
+update range_parted set a = 'a' where a = 'ad';
+update range_parted set a = 'b' where a = 'bd';
+:show_data;
+    partname    | a | b  |  c  | d  | e 
+----------------+---+----+-----+----+---
+ part_a_10_a_20 | a | 10 | 200 |  1 | 
+ part_a_1_a_10  | a |  1 |   1 |  1 | 
+ part_c_1_100   | b | 12 |  96 |  1 | 
+ part_c_1_100   | b | 13 |  97 |  2 | 
+ part_d_15_20   | b | 15 | 105 | 16 | 
+ part_d_15_20   | b | 17 | 105 | 19 | 
+ part_def       | d |  9 |     |    | 
+(7 rows)
+
 create table list_parted (
 	a text,
 	b int
@@ -250,6 +629,111 @@ ERROR:  new row for relation "list_default" violates partition constraint
 DETAIL:  Failing row contains (a, 10).
 -- ok
 update list_default set a = 'x' where a = 'd';
+drop table list_parted;
+--------------
+-- UPDATE with
+-- partition key or non-partition columns, with different column ordering,
+-- triggers.
+--------------
+-- Setup
+--------
+create table list_parted (a numeric, b int, c int8) partition by list (a);
+create table sub_parted partition of list_parted for values in (1) partition by list (b);
+create table sub_part1(b int, c int8, a numeric);
+alter table sub_parted attach partition sub_part1 for values in (1);
+create table sub_part2(b int, c int8, a numeric);
+alter table sub_parted attach partition sub_part2 for values in (2);
+create table list_part1(a numeric, b int, c int8);
+alter table list_parted attach partition list_part1 for values in (2,3);
+insert into list_parted values (2,5,50);
+insert into list_parted values (3,6,60);
+insert into sub_parted values (1,1,60);
+insert into sub_parted values (1,2,10);
+-- Test partition constraint violation when intermediate ancestor is used and
+-- constraint is inherited from upper root.
+update sub_parted set a = 2 where c = 10;
+ERROR:  new row for relation "sub_part2" violates partition constraint
+DETAIL:  Failing row contains (2, 10, 2).
+-- UPDATE which does not modify partition key of partitions that are chosen for update.
+select tableoid::regclass::text , * from list_parted where a = 2 order by 1;
+  tableoid  | a | b | c  
+------------+---+---+----
+ list_part1 | 2 | 5 | 50
+(1 row)
+
+update list_parted set b = c + a where a = 2;
+select tableoid::regclass::text , * from list_parted where a = 2 order by 1;
+  tableoid  | a | b  | c  
+------------+---+----+----
+ list_part1 | 2 | 52 | 50
+(1 row)
+
+-----------
+-- Triggers can cause UPDATE row movement if it modified partition key.
+-----------
+create function func_parted_mod_b() returns trigger as $$
+begin
+   NEW.b = 2; -- This is changing partition key column.
+   return NEW;
+end $$ language plpgsql;
+create trigger parted_mod_b before update on sub_part1
+   for each row execute procedure func_parted_mod_b();
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+  tableoid  | a | b  | c  
+------------+---+----+----
+ list_part1 | 2 | 52 | 50
+ list_part1 | 3 |  6 | 60
+ sub_part1  | 1 |  1 | 60
+ sub_part2  | 1 |  2 | 10
+(4 rows)
+
+-- This should do the tuple routing even though there is no explicit
+-- partition-key update, because there is a trigger on sub_part1
+update list_parted set c = 70 where b  = 1 ;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+  tableoid  | a | b  | c  
+------------+---+----+----
+ list_part1 | 2 | 52 | 50
+ list_part1 | 3 |  6 | 60
+ sub_part2  | 1 |  2 | 10
+ sub_part2  | 1 |  2 | 70
+(4 rows)
+
+drop trigger parted_mod_b ON sub_part1 ;
+-- If BR DELETE trigger prevented DELETE from happening, we should also skip
+-- the INSERT if that delete is part of UPDATE=>DELETE+INSERT.
+create or replace function func_parted_mod_b() returns trigger as $$
+begin return NULL; end $$ language plpgsql;
+create trigger trig_skip_delete before delete on sub_part1
+   for each row execute procedure func_parted_mod_b();
+update list_parted set b = 1 where c = 70;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+  tableoid  | a | b  | c  
+------------+---+----+----
+ list_part1 | 2 | 52 | 50
+ list_part1 | 3 |  6 | 60
+ sub_part1  | 1 |  1 | 70
+ sub_part2  | 1 |  2 | 10
+(4 rows)
+
+drop trigger trig_skip_delete ON sub_part1 ;
+-- UPDATE partition-key with FROM clause. If join produces multiple output
+-- rows for the same row to be modified, we should tuple-route the row only once.
+-- There should not be any rows inserted.
+create table non_parted (id int);
+insert into non_parted values (1), (1), (1), (2), (2), (2), (3), (3), (3);
+update list_parted t1 set a = 2 from non_parted t2 where t1.a = t2.id and a = 1;
+select tableoid::regclass::text , * from list_parted order by 1, 2, 3, 4;
+  tableoid  | a | b  | c  
+------------+---+----+----
+ list_part1 | 2 |  1 | 70
+ list_part1 | 2 |  2 | 10
+ list_part1 | 2 | 52 | 50
+ list_part1 | 3 |  6 | 60
+(4 rows)
+
+drop table non_parted;
+drop function func_parted_mod_b();
 -- create custom operator class and hash function, for the same reason
 -- explained in alter_table.sql
 create or replace function dummy_hashint4(a int4, seed int8) returns int8 as
@@ -271,9 +755,8 @@ insert into hpart4 values (3, 4);
 update hpart1 set a = 3, b=4 where a = 1;
 ERROR:  new row for relation "hpart1" violates partition constraint
 DETAIL:  Failing row contains (3, 4).
+-- ok : row movement
 update hash_parted set b = b - 1 where b = 1;
-ERROR:  new row for relation "hpart1" violates partition constraint
-DETAIL:  Failing row contains (1, 0).
 -- ok
 update hash_parted set b = b + 8 where b = 1;
 -- cleanup

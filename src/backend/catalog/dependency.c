@@ -1660,6 +1660,14 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* fall through to examine arguments */
 	}
+	else if (IsA(node, SubscriptingRef))
+	{
+		SubscriptingRef   *sbsref = (SubscriptingRef *) node;
+
+		add_object_address(OCLASS_PROC, sbsref->refevalfunc, 0,
+						   context->addrs);
+		/* fall through to examine arguments */
+	}
 	else if (IsA(node, OpExpr))
 	{
 		OpExpr	   *opexpr = (OpExpr *) node;

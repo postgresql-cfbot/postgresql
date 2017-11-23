@@ -973,13 +973,10 @@ transformInsertRow(ParseState *pstate, List *exprlist,
 
 					expr = (Expr *) linitial(fstore->newvals);
 				}
-				else if (IsA(expr, ArrayRef))
+				else if (IsA(expr, SubscriptingRef) && IsAssignment(expr))
 				{
-					ArrayRef   *aref = (ArrayRef *) expr;
-
-					if (aref->refassgnexpr == NULL)
-						break;
-					expr = aref->refassgnexpr;
+					SubscriptingRef   *sbsref = (SubscriptingRef *) expr;
+					expr = sbsref->refassgnexpr;
 				}
 				else
 					break;

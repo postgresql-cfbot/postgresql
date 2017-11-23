@@ -35,6 +35,11 @@
     </listitem>
     <listitem>
      <para>
+      subscripting procedure (starting in <xref linkend="xsubscripting">)
+     </para>
+    </listitem>
+    <listitem>
+     <para>
       operator classes for indexes (starting in <xref linkend="xindex">)
      </para>
     </listitem>
@@ -314,6 +319,7 @@
   &xaggr;
   &xtypes;
   &xoper;
+  &xsubscripting;
   &xindex;
 
 

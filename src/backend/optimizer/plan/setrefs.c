@@ -1379,6 +1379,11 @@ fix_expr_common(PlannerInfo *root, Node *node)
 		record_plan_function_dependency(root,
 										((FuncExpr *) node)->funcid);
 	}
+	else if (IsA(node, SubscriptingRef))
+	{
+		record_plan_function_dependency(root,
+										((SubscriptingRef *) node)->refevalfunc);
+	}
 	else if (IsA(node, OpExpr))
 	{
 		set_opfuncid((OpExpr *) node);

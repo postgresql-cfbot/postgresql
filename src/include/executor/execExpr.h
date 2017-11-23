@@ -17,7 +17,7 @@
 #include "nodes/execnodes.h"
 
 /* forward reference to avoid circularity */
-struct ArrayRefState;
+struct SubscriptingRefState;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -178,20 +178,20 @@ typedef enum ExprEvalOp
 	EEOP_FIELDSTORE_FORM,
 
 	/* Process an array subscript; short-circuit expression to NULL if NULL */
-	EEOP_ARRAYREF_SUBSCRIPT,
+	EEOP_SBSREF_SUBSCRIPT,
 
 	/*
-	 * Compute old array element/slice when an ArrayRef assignment expression
-	 * contains ArrayRef/FieldStore subexpressions.  Value is accessed using
+	 * Compute old array element/slice when an SubscriptingRef assignment expression
+	 * contains SubscriptingRef/FieldStore subexpressions.  Value is accessed using
 	 * the CaseTest mechanism.
 	 */
-	EEOP_ARRAYREF_OLD,
+	EEOP_SBSREF_OLD,
 
-	/* compute new value for ArrayRef assignment expression */
-	EEOP_ARRAYREF_ASSIGN,
+	/* compute new value for SubscriptingRef assignment expression */
+	EEOP_SBSREF_ASSIGN,
 
-	/* compute element/slice for ArrayRef fetch expression */
-	EEOP_ARRAYREF_FETCH,
+	/* compute element/slice for SubscriptingRef fetch expression */
+	EEOP_SBSREF_FETCH,
 
 	/* evaluate value for CoerceToDomainValue */
 	EEOP_DOMAIN_TESTVAL,
@@ -457,22 +457,25 @@ typedef struct ExprEvalStep
 			int			ncolumns;
 		}			fieldstore;
 
-		/* for EEOP_ARRAYREF_SUBSCRIPT */
+		/* for EEOP_SBSREF_SUBSCRIPT */
 		struct
 		{
 			/* too big to have inline */
-			struct ArrayRefState *state;
+			struct SubscriptingRefState *state;
 			int			off;	/* 0-based index of this subscript */
 			bool		isupper;	/* is it upper or lower subscript? */
 			int			jumpdone;	/* jump here on null */
-		}			arrayref_subscript;
+		}			sbsref_subscript;
 
-		/* for EEOP_ARRAYREF_OLD / ASSIGN / FETCH */
+		/* for EEOP_SBSREF_OLD / ASSIGN / FETCH */
 		struct
 		{
 			/* too big to have inline */
-			struct ArrayRefState *state;
-		}			arrayref;
+			FmgrInfo   *eval_finfo;	/* function to evaluate subscript */
+			FmgrInfo   *nested_finfo;	/* function to handle nested assignment */
+
+			struct SubscriptingRefState *state;
+		}			sbsref;
 
 		/* for EEOP_DOMAIN_NOTNULL / DOMAIN_CHECK */
 		struct
@@ -563,7 +566,7 @@ typedef struct ExprEvalStep
 
 
 /* Non-inline data for array operations */
-typedef struct ArrayRefState
+typedef struct SubscriptingRefState
 {
 	bool		isassignment;	/* is it assignment, or just fetch? */
 
@@ -576,13 +579,13 @@ typedef struct ArrayRefState
 	/* numupper and upperprovided[] are filled at compile time */
 	/* at runtime, extracted subscript datums get stored in upperindex[] */
 	int			numupper;
-	bool		upperprovided[MAXDIM];
-	int			upperindex[MAXDIM];
+	bool		upperprovided[MAX_SUBSCRIPT_DEPTH];
+	Datum		upper[MAX_SUBSCRIPT_DEPTH];
 
 	/* similarly for lower indexes, if any */
 	int			numlower;
-	bool		lowerprovided[MAXDIM];
-	int			lowerindex[MAXDIM];
+	bool		lowerprovided[MAX_SUBSCRIPT_DEPTH];
+	Datum		lower[MAX_SUBSCRIPT_DEPTH];
 
 	/* subscript expressions get evaluated into here */
 	Datum		subscriptvalue;
@@ -592,11 +595,10 @@ typedef struct ArrayRefState
 	Datum		replacevalue;
 	bool		replacenull;
 
-	/* if we have a nested assignment, ARRAYREF_OLD puts old value here */
+	/* if we have a nested assignment, SBSREF_OLD puts old value here */
 	Datum		prevvalue;
 	bool		prevnull;
-} ArrayRefState;
-
+} SubscriptingRefState;
 
 extern void ExecReadyInterpretedExpr(ExprState *state);
 
@@ -630,10 +632,10 @@ extern void ExecEvalFieldStoreDeForm(ExprState *state, ExprEvalStep *op,
 						 ExprContext *econtext);
 extern void ExecEvalFieldStoreForm(ExprState *state, ExprEvalStep *op,
 					   ExprContext *econtext);
-extern bool ExecEvalArrayRefSubscript(ExprState *state, ExprEvalStep *op);
-extern void ExecEvalArrayRefFetch(ExprState *state, ExprEvalStep *op);
-extern void ExecEvalArrayRefOld(ExprState *state, ExprEvalStep *op);
-extern void ExecEvalArrayRefAssign(ExprState *state, ExprEvalStep *op);
+extern bool ExecEvalSubscriptingRef(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalSubscriptingRefFetch(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalSubscriptingRefOld(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalSubscriptingRefAssign(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConvertRowtype(ExprState *state, ExprEvalStep *op,
 					   ExprContext *econtext);
 extern void ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op);

@@ -65,7 +65,7 @@ static void ExecInitExprSlots(ExprState *state, Node *node);
 static bool get_last_attnums_walker(Node *node, LastAttnumInfo *info);
 static void ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable,
 					PlanState *parent);
-static void ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref,
+static void ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *aref,
 				 PlanState *parent, ExprState *state,
 				 Datum *resv, bool *resnull);
 static bool isAssignmentIndirectionExpr(Expr *expr);
@@ -791,11 +791,11 @@ ExecInitExprRec(Expr *node, PlanState *parent, ExprState *state,
 				break;
 			}
 
-		case T_ArrayRef:
+		case T_SubscriptingRef:
 			{
-				ArrayRef   *aref = (ArrayRef *) node;
+				SubscriptingRef   *aref = (SubscriptingRef *) node;
 
-				ExecInitArrayRef(&scratch, aref, parent, state, resv, resnull);
+				ExecInitSubscriptingRef(&scratch, aref, parent, state, resv, resnull);
 				break;
 			}
 
@@ -1109,7 +1109,7 @@ ExecInitExprRec(Expr *node, PlanState *parent, ExprState *state,
 					/*
 					 * Use the CaseTestExpr mechanism to pass down the old
 					 * value of the field being replaced; this is needed in
-					 * case the newval is itself a FieldStore or ArrayRef that
+					 * case the newval is itself a FieldStore or SubscriptingRef that
 					 * has to obtain and modify the old value.  It's safe to
 					 * reuse the CASE mechanism because there cannot be a CASE
 					 * between here and where the value would be needed, and a
@@ -2328,31 +2328,37 @@ ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable, PlanState *parent)
 }
 
 /*
- * Prepare evaluation of an ArrayRef expression.
+ * Prepare evaluation of an SubscriptingRef expression.
  */
 static void
-ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
+ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *aref, PlanState *parent,
 				 ExprState *state, Datum *resv, bool *resnull)
 {
 	bool		isAssignment = (aref->refassgnexpr != NULL);
-	ArrayRefState *arefstate = palloc0(sizeof(ArrayRefState));
+	SubscriptingRefState *arefstate = palloc0(sizeof(SubscriptingRefState));
 	List	   *adjust_jumps = NIL;
 	ListCell   *lc;
 	int			i;
+	FmgrInfo   *eval_finfo, *nested_finfo;
 
-	/* Fill constant fields of ArrayRefState */
+	eval_finfo = palloc0(sizeof(FmgrInfo));
+	nested_finfo = palloc0(sizeof(FmgrInfo));
+
+	fmgr_info(aref->refevalfunc, eval_finfo);
+	if (OidIsValid(aref->refnestedfunc))
+	{
+		fmgr_info(aref->refnestedfunc, nested_finfo);
+	}
+
+	/* Fill constant fields of SubscriptingRefState */
 	arefstate->isassignment = isAssignment;
 	arefstate->refelemtype = aref->refelemtype;
-	arefstate->refattrlength = get_typlen(aref->refarraytype);
-	get_typlenbyvalalign(aref->refelemtype,
-						 &arefstate->refelemlength,
-						 &arefstate->refelembyval,
-						 &arefstate->refelemalign);
+	arefstate->refattrlength = get_typlen(aref->refcontainertype);
 
 	/*
 	 * Evaluate array input.  It's safe to do so into resv/resnull, because we
 	 * won't use that as target for any of the other subexpressions, and it'll
-	 * be overwritten by the final EEOP_ARRAYREF_FETCH/ASSIGN step, which is
+	 * be overwritten by the final EEOP_SBSREF_FETCH/ASSIGN step, which is
 	 * pushed last.
 	 */
 	ExecInitExprRec(aref->refexpr, parent, state, resv, resnull);
@@ -2367,22 +2373,23 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 		scratch->opcode = EEOP_JUMP_IF_NULL;
 		scratch->d.jump.jumpdone = -1;	/* adjust later */
 		ExprEvalPushStep(state, scratch);
+
 		adjust_jumps = lappend_int(adjust_jumps,
 								   state->steps_len - 1);
 	}
 
 	/* Verify subscript list lengths are within limit */
-	if (list_length(aref->refupperindexpr) > MAXDIM)
+	if (list_length(aref->refupperindexpr) > MAX_SUBSCRIPT_DEPTH)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(aref->refupperindexpr), MAXDIM)));
+						list_length(aref->refupperindexpr), MAX_SUBSCRIPT_DEPTH)));
 
-	if (list_length(aref->reflowerindexpr) > MAXDIM)
+	if (list_length(aref->reflowerindexpr) > MAX_SUBSCRIPT_DEPTH)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(aref->reflowerindexpr), MAXDIM)));
+						list_length(aref->reflowerindexpr), MAX_SUBSCRIPT_DEPTH)));
 
 	/* Evaluate upper subscripts */
 	i = 0;
@@ -2404,13 +2411,14 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 		ExecInitExprRec(e, parent, state,
 						&arefstate->subscriptvalue, &arefstate->subscriptnull);
 
-		/* ... and then ARRAYREF_SUBSCRIPT saves it into step's workspace */
-		scratch->opcode = EEOP_ARRAYREF_SUBSCRIPT;
-		scratch->d.arrayref_subscript.state = arefstate;
-		scratch->d.arrayref_subscript.off = i;
-		scratch->d.arrayref_subscript.isupper = true;
-		scratch->d.arrayref_subscript.jumpdone = -1;	/* adjust later */
+		/* ... and then SBSREF_SUBSCRIPT saves it into step's workspace */
+		scratch->opcode = EEOP_SBSREF_SUBSCRIPT;
+		scratch->d.sbsref_subscript.state = arefstate;
+		scratch->d.sbsref_subscript.off = i;
+		scratch->d.sbsref_subscript.isupper = true;
+		scratch->d.sbsref_subscript.jumpdone = -1;	/* adjust later */
 		ExprEvalPushStep(state, scratch);
+
 		adjust_jumps = lappend_int(adjust_jumps,
 								   state->steps_len - 1);
 		i++;
@@ -2437,13 +2445,14 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 		ExecInitExprRec(e, parent, state,
 						&arefstate->subscriptvalue, &arefstate->subscriptnull);
 
-		/* ... and then ARRAYREF_SUBSCRIPT saves it into step's workspace */
-		scratch->opcode = EEOP_ARRAYREF_SUBSCRIPT;
-		scratch->d.arrayref_subscript.state = arefstate;
-		scratch->d.arrayref_subscript.off = i;
-		scratch->d.arrayref_subscript.isupper = false;
-		scratch->d.arrayref_subscript.jumpdone = -1;	/* adjust later */
+		/* ... and then SBSREF_SUBSCRIPT saves it into step's workspace */
+		scratch->opcode = EEOP_SBSREF_SUBSCRIPT;
+		scratch->d.sbsref_subscript.state = arefstate;
+		scratch->d.sbsref_subscript.off = i;
+		scratch->d.sbsref_subscript.isupper = false;
+		scratch->d.sbsref_subscript.jumpdone = -1;	/* adjust later */
 		ExprEvalPushStep(state, scratch);
+
 		adjust_jumps = lappend_int(adjust_jumps,
 								   state->steps_len - 1);
 		i++;
@@ -2462,7 +2471,7 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 
 		/*
 		 * We might have a nested-assignment situation, in which the
-		 * refassgnexpr is itself a FieldStore or ArrayRef that needs to
+		 * refassgnexpr is itself a FieldStore or SubscriptingRef that needs to
 		 * obtain and modify the previous value of the array element or slice
 		 * being replaced.  If so, we have to extract that value from the
 		 * array and pass it down via the CaseTestExpr mechanism.  It's safe
@@ -2476,12 +2485,14 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 		 */
 		if (isAssignmentIndirectionExpr(aref->refassgnexpr))
 		{
-			scratch->opcode = EEOP_ARRAYREF_OLD;
-			scratch->d.arrayref.state = arefstate;
+			scratch->opcode = EEOP_SBSREF_OLD;
+			scratch->d.sbsref.state = arefstate;
+			scratch->d.sbsref.eval_finfo = eval_finfo;
+			scratch->d.sbsref.nested_finfo = nested_finfo;
 			ExprEvalPushStep(state, scratch);
 		}
 
-		/* ARRAYREF_OLD puts extracted value into prevvalue/prevnull */
+		/* SBSREF_OLD puts extracted value into prevvalue/prevnull */
 		save_innermost_caseval = state->innermost_caseval;
 		save_innermost_casenull = state->innermost_casenull;
 		state->innermost_caseval = &arefstate->prevvalue;
@@ -2495,16 +2506,22 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 		state->innermost_casenull = save_innermost_casenull;
 
 		/* and perform the assignment */
-		scratch->opcode = EEOP_ARRAYREF_ASSIGN;
-		scratch->d.arrayref.state = arefstate;
+		scratch->opcode = EEOP_SBSREF_ASSIGN;
+		scratch->d.sbsref.state = arefstate;
+		scratch->d.sbsref.eval_finfo = eval_finfo;
+		scratch->d.sbsref.nested_finfo = nested_finfo;
 		ExprEvalPushStep(state, scratch);
+
 	}
 	else
 	{
 		/* array fetch is much simpler */
-		scratch->opcode = EEOP_ARRAYREF_FETCH;
-		scratch->d.arrayref.state = arefstate;
+		scratch->opcode = EEOP_SBSREF_FETCH;
+		scratch->d.sbsref.state = arefstate;
+		scratch->d.sbsref.eval_finfo = eval_finfo;
+		scratch->d.sbsref.nested_finfo = nested_finfo;
 		ExprEvalPushStep(state, scratch);
+
 	}
 
 	/* adjust jump targets */
@@ -2512,10 +2529,10 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 	{
 		ExprEvalStep *as = &state->steps[lfirst_int(lc)];
 
-		if (as->opcode == EEOP_ARRAYREF_SUBSCRIPT)
+		if (as->opcode == EEOP_SBSREF_SUBSCRIPT)
 		{
-			Assert(as->d.arrayref_subscript.jumpdone == -1);
-			as->d.arrayref_subscript.jumpdone = state->steps_len;
+			Assert(as->d.sbsref_subscript.jumpdone == -1);
+			as->d.sbsref_subscript.jumpdone = state->steps_len;
 		}
 		else
 		{
@@ -2527,8 +2544,8 @@ ExecInitArrayRef(ExprEvalStep *scratch, ArrayRef *aref, PlanState *parent,
 }
 
 /*
- * Helper for preparing ArrayRef expressions for evaluation: is expr a nested
- * FieldStore or ArrayRef that needs the old element value passed down?
+ * Helper for preparing SubscriptingRef expressions for evaluation: is expr a nested
+ * FieldStore or SubscriptingRef that needs the old element value passed down?
  *
  * (We could use this in FieldStore too, but in that case passing the old
  * value is so cheap there's no need.)
@@ -2551,11 +2568,11 @@ isAssignmentIndirectionExpr(Expr *expr)
 		if (fstore->arg && IsA(fstore->arg, CaseTestExpr))
 			return true;
 	}
-	else if (IsA(expr, ArrayRef))
+	else if (IsA(expr, SubscriptingRef))
 	{
-		ArrayRef   *arrayRef = (ArrayRef *) expr;
+		SubscriptingRef   *sbsRef = (SubscriptingRef *) expr;
 
-		if (arrayRef->refexpr && IsA(arrayRef->refexpr, CaseTestExpr))
+		if (sbsRef->refexpr && IsA(sbsRef->refexpr, CaseTestExpr))
 			return true;
 	}
 	return false;

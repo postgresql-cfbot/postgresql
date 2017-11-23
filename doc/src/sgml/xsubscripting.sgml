@@ -1,0 +1,110 @@
+<!-- doc/src/sgml/xsubscripting.sgml -->
+
+ <sect1 id="xsubscripting">
+  <title>User-defined subscripting procedure</title>
+
+  <indexterm zone="xsubscripting">
+    <primary>custom subscripting</primary>
+  </indexterm>
+  <para>
+  When you define a new base type, you can also specify a custom procedures to
+  handle subscripting expressions. They must contain logic for verification and
+  evaluation of this expression, i.e. fetching or updating some data in this
+  data type. For instance:
+</para>
+<programlisting><![CDATA[
+typedef struct Custom
+{
+    int first;
+    int second;
+}   Custom;
+
+PG_FUNCTION_INFO_V1(custom_subscripting_parse);
+PG_FUNCTION_INFO_V1(custom_subscripting_assign);
+PG_FUNCTION_INFO_V1(custom_subscripting_fetch);
+
+Datum
+custom_subscripting_parse(PG_FUNCTION_ARGS)
+{
+    bool                isAssignment = PG_GETARG_BOOL(0);
+    SubscriptingRef     *sbsref = (SubscriptingRef *) PG_GETARG_POINTER(1);
+    ParseState          *pstate = (ParseState *) PG_GETARG_POINTER(2);
+
+    // Some verifications or type coersion
+    PG_RETURN_POINTER(sbsref);
+}
+
+Datum
+custom_subscripting_assign(PG_FUNCTION_ARGS)
+{
+    Custom          *containerSource = (Custom *) PG_GETARG_DATUM(0);
+    ExprEvalStep    *step = (ExprEvalStep *) PG_GETARG_POINTER(1);
+
+    // Some extraction logic based on sbsdata
+    PG_RETURN_POINTER(containerSource);
+}
+
+Datum
+custom_subscripting_fetch(PG_FUNCTION_ARGS)
+{
+    Custom          *containerSource = (Custom *) PG_GETARG_DATUM(0);
+    ExprEvalStep    *step = (ExprEvalStep *) PG_GETARG_POINTER(1);
+
+    // Some fetch logic based on sbsdata
+}]]>
+</programlisting>
+
+<para>
+    Then you can define a subscripting procedures and a custom data type:
+</para>
+<programlisting>
+CREATE FUNCTION custom_subscripting_parse(internal)
+    RETURNS internal
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION custom_subscripting_assign(internal)
+    RETURNS internal
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION custom_subscripting_fetch(internal)
+    RETURNS internal
+    AS '<replaceable>filename</replaceable>'
+    LANGUAGE C IMMUTABLE STRICT;
+
+CREATE TYPE custom (
+   internallength = 4,
+   input = custom_in,
+   output = custom_out,
+   subscripting_parse = custom_subscripting_parse,
+   subscripting_fetch = custom_subscripting_fetch,
+   subscripting_assign = custom_subscripting_assign
+);
+</programlisting>
+
+<para>
+    and use it as usual:
+</para>
+<programlisting>
+CREATE TABLE test_subscripting (
+    data    custom
+);
+
+INSERT INTO test_subscripting VALUES ('(1, 2)');
+
+SELECT data[0] from test_subscripting;
+
+UPDATE test_subscripting SET data[1] = 3;
+</programlisting>
+
+
+  <para>
+   The examples of custom subscripting implementation can be found in
+   <filename>subscripting.sql</filename> and <filename>subscripting.c</filename>
+   in the <filename>src/tutorial</filename> directory of the source distribution.
+   See the <filename>README</filename> file in that directory for instructions
+   about running the examples.
+  </para>
+
+</sect1>

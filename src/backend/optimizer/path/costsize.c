@@ -3622,6 +3622,11 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 		context->total.per_tuple +=
 			get_func_cost(((FuncExpr *) node)->funcid) * cpu_operator_cost;
 	}
+	else if (IsA(node, SubscriptingRef))
+	{
+		context->total.per_tuple +=
+			get_func_cost(((SubscriptingRef *) node)->refevalfunc) * cpu_operator_cost;
+	}
 	else if (IsA(node, OpExpr) ||
 			 IsA(node, DistinctExpr) ||
 			 IsA(node, NullIfExpr))

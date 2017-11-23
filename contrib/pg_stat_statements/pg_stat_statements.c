@@ -2504,14 +2504,16 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 				JumbleExpr(jstate, (Node *) expr->aggfilter);
 			}
 			break;
-		case T_ArrayRef:
+		case T_SubscriptingRef:
 			{
-				ArrayRef   *aref = (ArrayRef *) node;
+				SubscriptingRef   *sbsref = (SubscriptingRef *) node;
 
-				JumbleExpr(jstate, (Node *) aref->refupperindexpr);
-				JumbleExpr(jstate, (Node *) aref->reflowerindexpr);
-				JumbleExpr(jstate, (Node *) aref->refexpr);
-				JumbleExpr(jstate, (Node *) aref->refassgnexpr);
+				JumbleExpr(jstate, (Node *) sbsref->refupperindexpr);
+				JumbleExpr(jstate, (Node *) sbsref->reflowerindexpr);
+				JumbleExpr(jstate, (Node *) sbsref->refexpr);
+				JumbleExpr(jstate, (Node *) sbsref->refassgnexpr);
+				APP_JUMB(sbsref->refevalfunc);
+				APP_JUMB(sbsref->refnestedfunc);
 			}
 			break;
 		case T_FuncExpr:

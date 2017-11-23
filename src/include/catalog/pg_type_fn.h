@@ -52,7 +52,10 @@ extern ObjectAddress TypeCreate(Oid newTypeOid,
 		   int32 typeMod,
 		   int32 typNDims,
 		   bool typeNotNull,
-		   Oid typeCollation);
+		   Oid typeCollation,
+		   Oid subscriptingParseProcedure,
+		   Oid subscriptingAssignProcedure,
+		   Oid subscriptingFetchProcedure);
 
 extern void GenerateTypeDependencies(Oid typeNamespace,
 						 Oid typeObjectId,
@@ -70,6 +73,9 @@ extern void GenerateTypeDependencies(Oid typeNamespace,
 						 bool isImplicitArray,
 						 Oid baseType,
 						 Oid typeCollation,
+						 Oid subscriptingParseProcedure,
+						 Oid subscriptingAssignProcedure,
+						 Oid subscriptingFetchProcedure,
 						 Node *defaultExpr,
 						 bool rebuild);
 

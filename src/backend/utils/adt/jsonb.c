@@ -1147,23 +1147,34 @@ to_jsonb(PG_FUNCTION_ARGS)
 {
 	Datum		val = PG_GETARG_DATUM(0);
 	Oid			val_type = get_fn_expr_argtype(fcinfo->flinfo, 0);
-	JsonbInState result;
-	JsonbTypeCategory tcategory;
-	Oid			outfuncoid;
+	JsonbValue *res = to_jsonb_worker(val, val_type, false);
+	PG_RETURN_POINTER(JsonbValueToJsonb(res));
+}
 
-	if (val_type == InvalidOid)
+/*
+ * Do the actual conversion to jsonb for to_jsonb function. This logic is
+ * separated because it can be useful not only in here (e.g. we use it in
+ * jsonb subscripting)
+ */
+JsonbValue *
+to_jsonb_worker(Datum source, Oid source_type, bool is_null)
+{
+	JsonbInState		result;
+	JsonbTypeCategory	tcategory;
+	Oid					outfuncoid;
+
+	if (source_type == InvalidOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("could not determine input data type")));
 
-	jsonb_categorize_type(val_type,
+	jsonb_categorize_type(source_type,
 						  &tcategory, &outfuncoid);
 
 	memset(&result, 0, sizeof(JsonbInState));
 
-	datum_to_jsonb(val, false, &result, tcategory, outfuncoid, false);
-
-	PG_RETURN_POINTER(JsonbValueToJsonb(result.res));
+	datum_to_jsonb(source, is_null, &result, tcategory, outfuncoid, false);
+	return result.res;
 }
 
 /*

@@ -56,7 +56,7 @@ extern TimestampTz GetOldSnapshotThresholdTimestamp(void);
 
 extern bool FirstSnapshotSet;
 
-extern TransactionId TransactionXmin;
+extern PGDLLIMPORT TransactionId TransactionXmin;
 extern TransactionId RecentXmin;
 extern PGDLLIMPORT TransactionId RecentGlobalXmin;
 extern TransactionId RecentGlobalDataXmin;

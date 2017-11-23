@@ -831,6 +831,8 @@ restore_toc_entry(ArchiveHandle *AH, TocEntry *te, bool is_parallel)
 
 			ahlog(AH, 1, "connecting to new database \"%s\"\n", te->tag);
 			_reconnectToDB(AH, te->tag);
+
+			ahprintf(AH, "SET default_transaction_read_only = off;\n\n");
 			ropt->dbname = connstr.data;
 		}
 	}

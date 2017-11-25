@@ -1330,25 +1330,31 @@ ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
     <para>
 <programlisting>
 ForeignDataWrapper *
-GetForeignDataWrapper(Oid fdwid);
+GetForeignDataWrapper(Oid fdwid, bool missing_ok);
 </programlisting>
 
      This function returns a <structname>ForeignDataWrapper</structname>
      object for the foreign-data wrapper with the given OID.  A
      <structname>ForeignDataWrapper</structname> object contains properties
      of the FDW (see <filename>foreign/foreign.h</filename> for details).
+     If <literal>missing_ok</> is true, a <literal>NULL</> result is
+     returned to the caller instead of an error for an undefined
+     foreign-data wrapper.
     </para>
 
     <para>
 <programlisting>
 ForeignServer *
-GetForeignServer(Oid serverid);
+GetForeignServer(Oid serverid, bool missing_ok);
 </programlisting>
 
      This function returns a <structname>ForeignServer</structname> object
      for the foreign server with the given OID.  A
      <structname>ForeignServer</structname> object contains properties
      of the server (see <filename>foreign/foreign.h</filename> for details).
+     If <literal>missing_ok</> is true, a <literal>NULL</> result is
+     returned to the caller instead of an error for an undefined foreign
+     server.
     </para>
 
     <para>

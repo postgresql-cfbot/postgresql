@@ -2784,7 +2784,7 @@ get_connect_string(const char *servername)
 		Oid			userid = GetUserId();
 
 		user_mapping = GetUserMapping(userid, serverid);
-		fdw = GetForeignDataWrapper(fdwid);
+		fdw = GetForeignDataWrapper(fdwid, false);
 
 		/* Check permissions, user must have usage on the server. */
 		aclresult = pg_foreign_server_aclcheck(serverid, userid, ACL_USAGE);

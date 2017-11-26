@@ -19,6 +19,7 @@
 
 /* Channel binding types */
 #define SCRAM_CHANNEL_BINDING_TLS_UNIQUE	"tls-unique"
+#define SCRAM_CHANNEL_BINDING_TLS_ENDPOINT	"tls-server-end-point"
 
 /* Status codes for message exchange */
 #define SASL_EXCHANGE_CONTINUE		0
@@ -28,7 +29,8 @@
 /* Routines dedicated to authentication */
 extern void *pg_be_scram_init(const char *username, const char *shadow_pass,
 					 bool ssl_in_use, const char *tls_finished_message,
-					 size_t tls_finished_len);
+					 size_t tls_finished_len, const char *certificate_hash,
+					 size_t certificate_hash_len);
 extern int pg_be_scram_exchange(void *opaq, char *input, int inputlen,
 					 char **output, int *outputlen, char **logdetail);
 

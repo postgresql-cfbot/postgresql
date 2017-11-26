@@ -113,6 +113,8 @@ typedef struct
 	bool		ssl_in_use;
 	const char *tls_finished_message;
 	size_t		tls_finished_len;
+	const char *certificate_hash;
+	size_t		certificate_hash_len;
 	char	   *channel_binding_type;
 
 	int			iterations;
@@ -175,7 +177,9 @@ pg_be_scram_init(const char *username,
 				 const char *shadow_pass,
 				 bool ssl_in_use,
 				 const char *tls_finished_message,
-				 size_t tls_finished_len)
+				 size_t tls_finished_len,
+				 const char *certificate_hash,
+				 size_t certificate_hash_len)
 {
 	scram_state *state;
 	bool		got_verifier;
@@ -186,6 +190,8 @@ pg_be_scram_init(const char *username,
 	state->ssl_in_use = ssl_in_use;
 	state->tls_finished_message = tls_finished_message;
 	state->tls_finished_len = tls_finished_len;
+	state->certificate_hash = certificate_hash;
+	state->certificate_hash_len = certificate_hash_len;
 	state->channel_binding_type = NULL;
 
 	/*
@@ -852,13 +858,15 @@ read_client_first_message(scram_state *state, char *input)
 				}
 
 				/*
-				 * Read value provided by client; only tls-unique is supported
-				 * for now.  (It is not safe to print the name of an
-				 * unsupported binding type in the error message.  Pranksters
-				 * could print arbitrary strings into the log that way.)
+				 * Read value provided by client; only tls-unique and
+				 * tls-server-end-point are supported for now.  (It is
+				 * not safe to print the name of an unsupported binding
+				 * type in the error message.  Pranksters could print
+				 * arbitrary strings into the log that way.)
 				 */
 				channel_binding_type = read_attr_value(&input, 'p');
-				if (strcmp(channel_binding_type, SCRAM_CHANNEL_BINDING_TLS_UNIQUE) != 0)
+				if (strcmp(channel_binding_type, SCRAM_CHANNEL_BINDING_TLS_UNIQUE) != 0 &&
+					strcmp(channel_binding_type, SCRAM_CHANNEL_BINDING_TLS_ENDPOINT) != 0)
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
 							 (errmsg("unsupported SCRAM channel-binding type"))));
@@ -1115,6 +1123,12 @@ read_client_final_message(scram_state *state, char *input)
 		{
 			cbind_data = state->tls_finished_message;
 			cbind_data_len = state->tls_finished_len;
+		}
+		else if (strcmp(state->channel_binding_type,
+						SCRAM_CHANNEL_BINDING_TLS_ENDPOINT) == 0)
+		{
+			cbind_data = state->certificate_hash;
+			cbind_data_len = state->certificate_hash_len;
 		}
 		else
 		{

@@ -873,6 +873,8 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	bool		initial;
 	char	   *tls_finished = NULL;
 	size_t		tls_finished_len = 0;
+	char	   *certificate_hash = NULL;
+	size_t		certificate_hash_len = 0;
 
 	/*
 	 * SASL auth is not supported for protocol versions before 3, because it
@@ -920,6 +922,8 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	if (port->ssl_in_use)
 	{
 		tls_finished = be_tls_get_peer_finished(port, &tls_finished_len);
+		certificate_hash = be_tls_get_certificate_hash(port,
+													   &certificate_hash_len);
 	}
 #endif
 
@@ -938,7 +942,9 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 								  shadow_pass,
 								  port->ssl_in_use,
 								  tls_finished,
-								  tls_finished_len);
+								  tls_finished_len,
+								  certificate_hash,
+								  certificate_hash_len);
 
 	/*
 	 * Loop through SASL message exchange.  This exchange can consist of

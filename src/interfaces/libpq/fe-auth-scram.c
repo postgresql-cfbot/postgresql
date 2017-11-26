@@ -48,6 +48,8 @@ typedef struct
 	bool		ssl_in_use;
 	char	   *tls_finished_message;
 	size_t		tls_finished_len;
+	char	   *certificate_hash;
+	size_t		certificate_hash_len;
 	char	   *sasl_mechanism;
 	const char *channel_binding_type;
 
@@ -94,8 +96,11 @@ pg_fe_scram_init(const char *username,
 				 const char *password,
 				 bool ssl_in_use,
 				 const char *sasl_mechanism,
+				 const char *channel_binding_type,
 				 char *tls_finished_message,
-				 size_t tls_finished_len)
+				 size_t tls_finished_len,
+				 char *certificate_hash,
+				 size_t certificate_hash_len)
 {
 	fe_scram_state *state;
 	char	   *prep_password;
@@ -112,6 +117,8 @@ pg_fe_scram_init(const char *username,
 	state->ssl_in_use = ssl_in_use;
 	state->tls_finished_message = tls_finished_message;
 	state->tls_finished_len = tls_finished_len;
+	state->certificate_hash = certificate_hash;
+	state->certificate_hash_len = certificate_hash_len;
 	state->sasl_mechanism = strdup(sasl_mechanism);
 	if (!state->sasl_mechanism)
 	{
@@ -120,9 +127,14 @@ pg_fe_scram_init(const char *username,
 	}
 
 	/*
-	 * Store channel binding type.  Only one type is currently supported.
+	 * Store channel binding type.  Two types are currently supported,
+	 * tls-unique, which is also the default, and tls-server-end-point.
+	 * Anything defined by the caller is forcibly used.
 	 */
-	state->channel_binding_type = SCRAM_CHANNEL_BINDING_TLS_UNIQUE;
+	if (channel_binding_type && strlen(channel_binding_type) > 0)
+		state->channel_binding_type = channel_binding_type;
+	else
+		state->channel_binding_type = SCRAM_CHANNEL_BINDING_TLS_UNIQUE;
 
 	/* Normalize the password with SASLprep, if possible */
 	rc = pg_saslprep(password, &prep_password);
@@ -159,8 +171,8 @@ pg_fe_scram_free(void *opaq)
 		free(state->password);
 	if (state->tls_finished_message)
 		free(state->tls_finished_message);
-	if (state->sasl_mechanism)
-		free(state->sasl_mechanism);
+	if (state->certificate_hash)
+		free(state->certificate_hash);
 
 	/* client messages */
 	if (state->client_nonce)
@@ -450,6 +462,12 @@ build_client_final_message(fe_scram_state *state, PQExpBuffer errormessage)
 		{
 			cbind_data = state->tls_finished_message;
 			cbind_data_len = state->tls_finished_len;
+		}
+		else if (strcmp(state->channel_binding_type,
+						SCRAM_CHANNEL_BINDING_TLS_ENDPOINT) == 0)
+		{
+			cbind_data = state->certificate_hash;
+			cbind_data_len = state->certificate_hash_len;
 		}
 		else
 		{

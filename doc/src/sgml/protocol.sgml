@@ -1576,8 +1576,9 @@ the password is in.
   <para>
 <firstterm>Channel binding</firstterm> is supported in PostgreSQL builds with
 SSL support. The SASL mechanism name for SCRAM with channel binding
-is <literal>SCRAM-SHA-256-PLUS</literal>.  The only channel binding type
-supported at the moment is <literal>tls-unique</literal>, defined in RFC 5929.
+is <literal>SCRAM-SHA-256-PLUS</literal>.  Two channel binding types are
+supported at the moment: <literal>tls-unique</literal>, which is the default,
+and <literal>tls-server-end-point</literal>, both defined in RFC 5929.
   </para>
 
 <procedure>

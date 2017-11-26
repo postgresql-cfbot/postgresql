@@ -493,6 +493,8 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 	PQExpBufferData mechanism_buf;
 	char	   *tls_finished = NULL;
 	size_t		tls_finished_len = 0;
+	char	   *certificate_hash = NULL;
+	size_t		certificate_hash_len = 0;
 	char	   *password;
 
 	initPQExpBuffer(&mechanism_buf);
@@ -577,6 +579,12 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 		tls_finished = pgtls_get_finished(conn, &tls_finished_len);
 		if (tls_finished == NULL)
 			goto oom_error;
+
+		certificate_hash =
+			pgtls_get_peer_certificate_hash(conn,
+											&certificate_hash_len);
+		if (certificate_hash == NULL)
+			goto error;		/* error message is set */
 	}
 #endif
 
@@ -590,8 +598,11 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 										password,
 										conn->ssl_in_use,
 										selected_mechanism,
+										conn->saslchannelbinding,
 										tls_finished,
-										tls_finished_len);
+										tls_finished_len,
+										certificate_hash,
+										certificate_hash_len);
 	if (!conn->sasl_state)
 		goto oom_error;
 

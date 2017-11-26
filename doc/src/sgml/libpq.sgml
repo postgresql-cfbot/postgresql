@@ -1222,6 +1222,18 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-saslchannelbinding" xreflabel="saslchannelbinding">
+      <term><literal>saslchannelbinding</literal></term>
+      <listitem>
+       <para>
+        Controls the name of the channel binding type sent to server when doing
+        a message exchange for a SASL authentication. The list of channel
+        binding names supported by server are listed in
+        <xref linkend="sasl-authentication"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+     
      <varlistentry id="libpq-connect-sslmode" xreflabel="sslmode">
       <term><literal>sslmode</literal></term>
       <listitem>

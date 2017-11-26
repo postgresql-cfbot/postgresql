@@ -349,6 +349,7 @@ struct pg_conn
 										 * retransmits */
 	char	   *keepalives_count;	/* maximum number of TCP keepalive
 									 * retransmits */
+	char	   *saslchannelbinding;	/* channel binding type used in SASL */
 	char	   *sslmode;		/* SSL mode (require,prefer,allow,disable) */
 	char	   *sslcompression; /* SSL compression (0 or 1) */
 	char	   *sslkey;			/* client key filename */
@@ -671,6 +672,7 @@ extern ssize_t pgtls_read(PGconn *conn, void *ptr, size_t len);
 extern bool pgtls_read_pending(PGconn *conn);
 extern ssize_t pgtls_write(PGconn *conn, const void *ptr, size_t len);
 extern char *pgtls_get_finished(PGconn *conn, size_t *len);
+extern char *pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len);
 
 /*
  * this is so that we can check if a connection is non-blocking internally

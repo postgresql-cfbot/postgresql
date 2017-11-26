@@ -136,7 +136,6 @@ int			Log_autovacuum_min_duration = -1;
 
 /* Flags to tell if we are in an autovacuum process */
 static bool am_autovacuum_launcher = false;
-static bool am_autovacuum_worker = false;
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;

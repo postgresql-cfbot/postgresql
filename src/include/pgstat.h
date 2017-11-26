@@ -64,7 +64,8 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_FUNCPURGE,
 	PGSTAT_MTYPE_RECOVERYCONFLICT,
 	PGSTAT_MTYPE_TEMPFILE,
-	PGSTAT_MTYPE_DEADLOCK
+	PGSTAT_MTYPE_DEADLOCK,
+	PGSTAT_MTYPE_WALWRITES
 } StatMsgType;
 
 /* ----------
@@ -119,7 +120,8 @@ typedef struct PgStat_TableCounts
 typedef enum PgStat_Shared_Reset_Target
 {
 	RESET_ARCHIVER,
-	RESET_BGWRITER
+	RESET_BGWRITER,
+	RESET_WALWRITES
 } PgStat_Shared_Reset_Target;
 
 /* Possible object types for resetting single counters */
@@ -422,6 +424,36 @@ typedef struct PgStat_MsgBgWriter
 	PgStat_Counter m_checkpoint_sync_time;
 } PgStat_MsgBgWriter;
 
+/*
+ * Walwrites statistics counters
+ */
+typedef struct PgStat_WalWritesCounts
+{
+	PgStat_Counter writes;		/* No of writes by background
+								 * processes/workers */
+	PgStat_Counter walwriter_writes;		/* No of writes by walwriter */
+	PgStat_Counter backend_writes;		/* No of writes by backends */
+	PgStat_Counter dirty_writes;/* No of dirty writes by background
+								 * processes/workers when WAL buffers full */
+	PgStat_Counter backend_dirty_writes;		/* No of dirty writes by
+												 * backends when WAL buffers
+												 * full */
+	PgStat_Counter write_blocks;/* Total no of pages written by background
+								 * processes/workers */
+	PgStat_Counter walwriter_write_blocks;/* Total no of pages written by walwriter */
+	PgStat_Counter backend_write_blocks;	/* Total no of pages written by backends */
+} PgStat_WalWritesCounts;
+
+/* ----------
+ * PgStat_MsgWalWrites			Sent by the walwriter after collecting all shared stats
+ * ----------
+ */
+typedef struct PgStat_MsgWalWrites
+{
+	PgStat_MsgHdr m_hdr;
+	PgStat_WalWritesCounts stats;
+} PgStat_MsgWalWrites;
+
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
  * ----------
@@ -555,6 +587,7 @@ typedef union PgStat_Msg
 	PgStat_MsgFuncpurge msg_funcpurge;
 	PgStat_MsgRecoveryConflict msg_recoveryconflict;
 	PgStat_MsgDeadlock msg_deadlock;
+	PgStat_MsgWalWrites msg_walwrites;
 } PgStat_Msg;
 
 
@@ -694,6 +727,14 @@ typedef struct PgStat_GlobalStats
 	TimestampTz stat_reset_timestamp;
 } PgStat_GlobalStats;
 
+/*
+ * Walwrites statistics kept in the stats collector
+ */
+typedef struct PgStat_WalWritesStats
+{
+	PgStat_WalWritesCounts stats;
+	TimestampTz stat_reset_timestamp;	/* Last time when the stats reset */
+} PgStat_WalWritesStats;
 
 /* ----------
  * Backend types
@@ -1126,6 +1167,11 @@ extern char *pgstat_stat_filename;
 extern PgStat_MsgBgWriter BgWriterStats;
 
 /*
+ * Wal writes statistics updated in XLogWrite function
+ */
+extern PgStat_MsgWalWrites LocalWalWritesStats;
+
+/*
  * Updated by pgstat_count_buffer_*_time macros
  */
 extern PgStat_Counter pgStatBlockReadTime;
@@ -1321,6 +1367,7 @@ extern void pgstat_twophase_postabort(TransactionId xid, uint16 info,
 
 extern void pgstat_send_archiver(const char *xlog, bool failed);
 extern void pgstat_send_bgwriter(void);
+extern void pgstat_send_walwrites(void);
 
 /* ----------
  * Support functions for the SQL-callable functions to
@@ -1335,5 +1382,7 @@ extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgStat_ArchiverStats *pgstat_fetch_stat_archiver(void);
 extern PgStat_GlobalStats *pgstat_fetch_global(void);
+extern PgStat_WalWritesStats *pgstat_fetch_stat_walwrites(void);
+
 
 #endif							/* PGSTAT_H */

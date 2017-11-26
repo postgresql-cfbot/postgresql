@@ -881,6 +881,9 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_buf_alloc() AS buffers_alloc,
         pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
 
+CREATE VIEW pg_stat_walwrites AS
+   SELECT * FROM pg_stat_get_walwrites() AS A;
+
 CREATE VIEW pg_stat_progress_vacuum AS
 	SELECT
 		S.pid AS pid, S.datid AS datid, D.datname AS datname,

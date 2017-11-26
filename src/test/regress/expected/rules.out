@@ -1973,6 +1973,16 @@ pg_stat_wal_receiver| SELECT s.pid,
     s.conninfo
    FROM pg_stat_get_wal_receiver() s(pid, status, receive_start_lsn, receive_start_tli, received_lsn, received_tli, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time, slot_name, conninfo)
   WHERE (s.pid IS NOT NULL);
+pg_stat_walwrites| SELECT a.writes,
+    a.walwriter_writes,
+    a.backend_writes,
+    a.dirty_writes,
+    a.backend_dirty_writes,
+    a.write_blocks,
+    a.walwriter_write_blocks,
+    a.backend_write_blocks,
+    a.stats_reset
+   FROM pg_stat_get_walwrites() a(writes, walwriter_writes, backend_writes, dirty_writes, backend_dirty_writes, write_blocks, walwriter_write_blocks, backend_write_blocks, stats_reset);
 pg_stat_xact_all_tables| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,

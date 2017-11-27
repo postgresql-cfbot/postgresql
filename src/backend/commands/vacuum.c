@@ -771,6 +771,9 @@ vacuum_set_xid_limits(Relation rel,
  *		we take the old value of pg_class.reltuples as a measurement of the
  *		tuple density in the unscanned pages.
  *
+ *		Note: scanned_tuples should count only *live* tuples, since
+ *		pg_class.reltuples is defined that way.
+ *
  *		This routine is shared by VACUUM and ANALYZE.
  */
 double

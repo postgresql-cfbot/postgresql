@@ -115,8 +115,9 @@ typedef struct LVRelStats
 	BlockNumber frozenskipped_pages;	/* # of frozen pages we skipped */
 	BlockNumber tupcount_pages; /* pages whose tuples we counted */
 	double		scanned_tuples; /* counts only tuples on tupcount_pages */
-	double		old_rel_tuples; /* previous value of pg_class.reltuples */
+	double		old_live_tuples;	/* previous value of pg_class.reltuples */
 	double		new_rel_tuples; /* new estimated total # of tuples */
+	double		new_live_tuples;	/* new estimated total # of live tuples */
 	double		new_dead_tuples;	/* new estimated total # of dead tuples */
 	BlockNumber pages_removed;
 	double		tuples_deleted;
@@ -196,7 +197,6 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	TransactionId xidFullScanLimit;
 	MultiXactId mxactFullScanLimit;
 	BlockNumber new_rel_pages;
-	double		new_rel_tuples;
 	BlockNumber new_rel_allvisible;
 	double		new_live_tuples;
 	TransactionId new_frozen_xid;
@@ -245,7 +245,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	vacrelstats = (LVRelStats *) palloc0(sizeof(LVRelStats));
 
 	vacrelstats->old_rel_pages = onerel->rd_rel->relpages;
-	vacrelstats->old_rel_tuples = onerel->rd_rel->reltuples;
+	vacrelstats->old_live_tuples = onerel->rd_rel->reltuples;
 	vacrelstats->num_index_scans = 0;
 	vacrelstats->pages_removed = 0;
 	vacrelstats->lock_waiter_detected = false;
@@ -311,11 +311,11 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	 * since then we don't know for certain that all tuples have a newer xmin.
 	 */
 	new_rel_pages = vacrelstats->rel_pages;
-	new_rel_tuples = vacrelstats->new_rel_tuples;
+	new_live_tuples = vacrelstats->new_live_tuples;
 	if (vacrelstats->tupcount_pages == 0 && new_rel_pages > 0)
 	{
 		new_rel_pages = vacrelstats->old_rel_pages;
-		new_rel_tuples = vacrelstats->old_rel_tuples;
+		new_live_tuples = vacrelstats->old_live_tuples;
 	}
 
 	visibilitymap_count(onerel, &new_rel_allvisible, NULL);
@@ -327,7 +327,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 
 	vac_update_relstats(onerel,
 						new_rel_pages,
-						new_rel_tuples,
+						new_live_tuples,
 						new_rel_allvisible,
 						vacrelstats->hasindex,
 						new_frozen_xid,
@@ -335,10 +335,6 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 						false);
 
 	/* report results to the stats collector, too */
-	new_live_tuples = new_rel_tuples - vacrelstats->new_dead_tuples;
-	if (new_live_tuples < 0)
-		new_live_tuples = 0;	/* just in case */
-
 	pgstat_report_vacuum(RelationGetRelid(onerel),
 						 onerel->rd_rel->relisshared,
 						 new_live_tuples,
@@ -1275,10 +1271,14 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->new_dead_tuples = nkeep;
 
 	/* now we can compute the new value for pg_class.reltuples */
-	vacrelstats->new_rel_tuples = vac_estimate_reltuples(onerel, false,
-														 nblocks,
-														 vacrelstats->tupcount_pages,
-														 num_tuples);
+	vacrelstats->new_live_tuples = vac_estimate_reltuples(onerel, false,
+														  nblocks,
+														  vacrelstats->tupcount_pages,
+														  num_tuples - nkeep);
+
+	/* indexes probably care more about the total number of heap entries */
+	vacrelstats->new_rel_tuples =
+		vacrelstats->new_live_tuples + vacrelstats->new_dead_tuples;
 
 	/*
 	 * Release any remaining pin on visibility map page.
@@ -1614,7 +1614,8 @@ lazy_vacuum_index(Relation indrel,
 	ivinfo.analyze_only = false;
 	ivinfo.estimated_count = true;
 	ivinfo.message_level = elevel;
-	ivinfo.num_heap_tuples = vacrelstats->old_rel_tuples;
+	/* We can only provide an approximate value of num_heap_tuples here */
+	ivinfo.num_heap_tuples = vacrelstats->old_live_tuples;
 	ivinfo.strategy = vac_strategy;
 
 	/* Do bulk deletion */
@@ -1645,6 +1646,7 @@ lazy_cleanup_index(Relation indrel,
 	ivinfo.analyze_only = false;
 	ivinfo.estimated_count = (vacrelstats->tupcount_pages < vacrelstats->rel_pages);
 	ivinfo.message_level = elevel;
+	/* Now we can provide a better estimate of total # of surviving tuples */
 	ivinfo.num_heap_tuples = vacrelstats->new_rel_tuples;
 	ivinfo.strategy = vac_strategy;
 

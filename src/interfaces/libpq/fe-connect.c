@@ -323,6 +323,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"forced_protocol_version", "PGFORCEPROTOCOLVERSION", NULL, NULL,
+	 "Forced-version", "D", sizeof("Forced-version"),
+	offsetof(struct pg_conn, forced_protocol_version)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1802,7 +1806,14 @@ connectDBStart(PGconn *conn)
 	 */
 	conn->whichhost = 0;
 	conn->addr_cur = conn->connhost[0].addrlist;
-	conn->pversion = PG_PROTOCOL(3, 0);
+	if (conn->forced_protocol_version != NULL)
+	{
+		conn->pversion = atoi(conn->forced_protocol_version);
+	}
+	else
+	{
+		conn->pversion = PG_PROTOCOL(3, 0);
+	}
 	conn->send_appname = true;
 	conn->status = CONNECTION_NEEDED;
 

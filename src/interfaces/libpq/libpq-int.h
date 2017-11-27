@@ -364,6 +364,9 @@ struct pg_conn
 	/* Type of connection to make.  Possible values: any, read-write. */
 	char	   *target_session_attrs;
 
+	char	   *forced_protocol_version; /* for testing: force protocol to a
+										  * specific version */
+
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
 

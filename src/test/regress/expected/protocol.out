@@ -1,0 +1,252 @@
+\set ON_ERROR_STOP 0
+-- Function that returns the protocol version, as required for the protocol
+CREATE OR REPLACE FUNCTION pg_protocol(major int, minor int)
+RETURNS int
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+    SELECT $1 << 16 | $2;
+$$;
+--
+-- first a few error checks about acceptance of various protocol versions
+--
+-- Can't execute failing tests these via psql -f / pg_regress, as they
+-- exit after a connection failure, therefore those are commented out.
+--
+-- -- too old protocol version
+-- SELECT pg_protocol(major => 1, minor => 0) \gset
+-- \setenv PGFORCEPROTOCOLVERSION :pg_protocol
+-- \c
+--
+-- -- check too low major, with high minor
+-- SELECT pg_protocol(major => 1, minor => 30) \gset
+-- \setenv PGFORCEPROTOCOLVERSION :pg_protocol
+-- \c
+--
+-- check 2.0 protocol, the earliest accepted
+SELECT pg_protocol(major => 2, minor => 0) \gset
+\setenv PGFORCEPROTOCOLVERSION :pg_protocol
+\c
+-- check 2.10 protocol, an unknown minor
+SELECT pg_protocol(major => 2, minor => 10) \gset
+\setenv PGFORCEPROTOCOLVERSION :pg_protocol
+\c
+-- check 3.0 protocol, the default version
+SELECT pg_protocol(major => 3, minor => 0) \gset
+\setenv PGFORCEPROTOCOLVERSION :pg_protocol
+\c
+-- -- check 3.10 protocol, an unknown minor, will error out
+-- SELECT pg_protocol(major => 3, minor => 10) \gset
+-- \setenv PGFORCEPROTOCOLVERSION :pg_protocol
+-- \c
+--
+-- ensure some coverage for v2 protocol, which is otherwise untested
+--
+SELECT pg_protocol(major => 2, minor => 0) \gset
+\setenv PGFORCEPROTOCOLVERSION :pg_protocol
+\c
+-- check that NOTICEs in the middle of a statement work
+CREATE OR REPLACE FUNCTION pg_temp.raise_notice(p_text text)
+RETURNS text
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE NOTICE '%', p_text;
+    RETURN p_text;
+END$$;
+-- check that NOTICE in the middle of a normal statement works
+SELECT d, COALESCE(d, pg_temp.raise_notice('isnull'))
+FROM (VALUES ('notnull'), (NULL), ('notnullagain')) AS d(d);
+NOTICE:  isnull
+      d       |   coalesce   
+--------------+--------------
+ notnull      | notnull
+              | isnull
+ notnullagain | notnullagain
+(3 rows)
+
+-- check that NOTICE in the middle of a COPY works
+CREATE TEMPORARY TABLE bleat_on_null(d text CHECK(COALESCE(d, pg_temp.raise_notice('isnull')) IS NOT NULL));
+\copy bleat_on_null from stdin
+NOTICE:  isnull
+NOTICE:  isnull
+-- while at it, also test COPY OUT
+\copy bleat_on_null TO stdout
+notnull
+\N
+\N
+notnullagain
+COPY BLEAT_ON_NULL TO stdout;
+notnull
+\N
+\N
+notnullagain
+-- no columns
+SELECT;
+--
+(1 row)
+
+-- anonymous columns
+SELECT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- many columns with NULLs (for NULL bitmap)
+SELECT 1 c1, 2 c2, 3 c3, NULL::int c4, 5 c5, 6 c6, 7 c7, 8 c8, NULL::text c9, 10 c10;
+ c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 
+----+----+----+----+----+----+----+----+----+-----
+  1 |  2 |  3 |    |  5 |  6 |  7 |  8 |    |  10
+(1 row)
+
+-- send two sql queries in one protocol message
+SELECT 1\;SELECT 2;
+ ?column? 
+----------
+        2
+(1 row)
+
+-- a few more rows
+SELECT a, b
+FROM generate_series(1, 10) a, generate_series(1, 10) b;
+ a  | b  
+----+----
+  1 |  1
+  1 |  2
+  1 |  3
+  1 |  4
+  1 |  5
+  1 |  6
+  1 |  7
+  1 |  8
+  1 |  9
+  1 | 10
+  2 |  1
+  2 |  2
+  2 |  3
+  2 |  4
+  2 |  5
+  2 |  6
+  2 |  7
+  2 |  8
+  2 |  9
+  2 | 10
+  3 |  1
+  3 |  2
+  3 |  3
+  3 |  4
+  3 |  5
+  3 |  6
+  3 |  7
+  3 |  8
+  3 |  9
+  3 | 10
+  4 |  1
+  4 |  2
+  4 |  3
+  4 |  4
+  4 |  5
+  4 |  6
+  4 |  7
+  4 |  8
+  4 |  9
+  4 | 10
+  5 |  1
+  5 |  2
+  5 |  3
+  5 |  4
+  5 |  5
+  5 |  6
+  5 |  7
+  5 |  8
+  5 |  9
+  5 | 10
+  6 |  1
+  6 |  2
+  6 |  3
+  6 |  4
+  6 |  5
+  6 |  6
+  6 |  7
+  6 |  8
+  6 |  9
+  6 | 10
+  7 |  1
+  7 |  2
+  7 |  3
+  7 |  4
+  7 |  5
+  7 |  6
+  7 |  7
+  7 |  8
+  7 |  9
+  7 | 10
+  8 |  1
+  8 |  2
+  8 |  3
+  8 |  4
+  8 |  5
+  8 |  6
+  8 |  7
+  8 |  8
+  8 |  9
+  8 | 10
+  9 |  1
+  9 |  2
+  9 |  3
+  9 |  4
+  9 |  5
+  9 |  6
+  9 |  7
+  9 |  8
+  9 |  9
+  9 | 10
+ 10 |  1
+ 10 |  2
+ 10 |  3
+ 10 |  4
+ 10 |  5
+ 10 |  6
+ 10 |  7
+ 10 |  8
+ 10 |  9
+ 10 | 10
+(100 rows)
+
+-- check error responses
+SELECT "nonexistant-column";
+ERROR:  column "nonexistant-column" does not exist at character 8
+DO $$
+BEGIN
+    RAISE 'I am an error, what is your name?';
+END;
+$$;
+ERROR:  I am an error, what is your name?
+-- minimal largeobject test, also verifies PQfn()
+BEGIN;
+SELECT lo_creat(1) AS lo_oid \gset
+SELECT lo_open(:lo_oid, CAST(x'20000' | x'40000' AS integer)) as fd \gset
+SELECT lowrite(:fd, 'just some text');
+ lowrite 
+---------
+      14
+(1 row)
+
+SELECT loread(:fd, '100');
+ loread 
+--------
+ \x
+(1 row)
+
+SELECT lo_lseek(:fd, 0, 2);
+ lo_lseek 
+----------
+       14
+(1 row)
+
+COMMIT;
+\lo_unlink :lo_oid
+--
+-- Cleanup
+--
+DROP FUNCTION pg_protocol(int, int);

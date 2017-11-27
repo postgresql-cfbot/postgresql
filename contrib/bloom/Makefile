@@ -20,5 +20,12 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
+installcheck: wal-installcheck
+
+check: wal-check
+
+wal-installcheck:
+	$(prove_installcheck)
+
 wal-check: temp-install
 	$(prove_check)

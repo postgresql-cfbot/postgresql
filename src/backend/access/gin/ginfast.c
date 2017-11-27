@@ -450,12 +450,8 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 
 	END_CRIT_SECTION();
 
-	/*
-	 * Since it could contend with concurrent cleanup process we cleanup
-	 * pending list not forcibly.
-	 */
 	if (needCleanup)
-		ginInsertCleanup(ginstate, false, true, false, NULL);
+		ginInsertCleanup(ginstate, false, true, NULL);
 }
 
 /*
@@ -752,8 +748,7 @@ processPendingPage(BuildAccumulator *accum, KeyArray *ka,
  */
 void
 ginInsertCleanup(GinState *ginstate, bool full_clean,
-				 bool fill_fsm, bool forceCleanup,
-				 IndexBulkDeleteResult *stats)
+				 bool fill_fsm, IndexBulkDeleteResult *stats)
 {
 	Relation	index = ginstate->index;
 	Buffer		metabuffer,
@@ -770,6 +765,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 	bool		cleanupFinish = false;
 	bool		fsm_vac = false;
 	Size		workMemory;
+	bool		inVacuum = (stats == NULL);
 
 	/*
 	 * We would like to prevent concurrent cleanup process. For that we will
@@ -778,7 +774,7 @@ ginInsertCleanup(GinState *ginstate, bool full_clean,
 	 * insertion into pending list
 	 */
 
-	if (forceCleanup)
+	if (inVacuum)
 	{
 		/*
 		 * We are called from [auto]vacuum/analyze or gin_clean_pending_list()
@@ -1040,7 +1036,7 @@ gin_clean_pending_list(PG_FUNCTION_ARGS)
 
 	memset(&stats, 0, sizeof(stats));
 	initGinState(&ginstate, indexRel);
-	ginInsertCleanup(&ginstate, true, true, true, &stats);
+	ginInsertCleanup(&ginstate, true, true, &stats);
 
 	index_close(indexRel, AccessShareLock);
 

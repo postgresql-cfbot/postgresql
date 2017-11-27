@@ -16,7 +16,7 @@
 
  <para>
   This extension won't build at all unless the installation was
-  configured with <literal>--with-openssl</literal>.
+  configured with <literal>--with-ssl</literal>.
  </para>
 
  <sect2>

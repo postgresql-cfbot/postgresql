@@ -59,6 +59,9 @@ char	   *SSLECDHCurve;
 /* GUC variable: if false, prefer client ciphers */
 bool		SSLPreferServerCiphers;
 
+/* GUC variable controlling GnuTLS priorities */
+char	   *gnutls_priority;
+
 /* ------------------------------------------------------------ */
 /*			 Procedures common to all secure sessions			*/
 /* ------------------------------------------------------------ */

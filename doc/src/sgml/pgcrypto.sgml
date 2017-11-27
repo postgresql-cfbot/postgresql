@@ -1146,7 +1146,7 @@ gen_random_uuid() returns uuid
     <filename>pgcrypto</filename> configures itself according to the findings of the
     main PostgreSQL <literal>configure</literal> script.  The options that
     affect it are <literal>--with-zlib</literal> and
-    <literal>--with-openssl</literal>.
+    <literal>--with-ssl</literal>.
    </para>
 
    <para>

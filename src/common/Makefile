@@ -45,8 +45,10 @@ OBJS_COMMON = base64.o config_info.o controldata_utils.o exec.o ip.o \
 	rmtree.o saslprep.o scram-common.o string.o unicode_norm.o \
 	username.o wait_error.o
 
-ifeq ($(with_openssl),yes)
+ifeq ($(with_ssl),openssl)
 OBJS_COMMON += sha2_openssl.o
+else ifeq ($(with_ssl),gnutls)
+OBJS_COMMON += sha2_gnutls.o
 else
 OBJS_COMMON += sha2.o
 endif

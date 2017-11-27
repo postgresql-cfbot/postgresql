@@ -17,8 +17,10 @@ include $(top_builddir)/src/Makefile.global
 OBJS = be-fsstubs.o be-secure.o auth.o crypt.o hba.o ifaddr.o pqcomm.o \
        pqformat.o pqmq.o pqsignal.o auth-scram.o
 
-ifeq ($(with_openssl),yes)
+ifeq ($(with_ssl),openssl)
 OBJS += be-secure-openssl.o
+else ifeq ($(with_ssl),gnutls)
+OBJS += be-secure-gnutls.o
 endif
 
 include $(top_srcdir)/src/backend/common.mk

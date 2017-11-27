@@ -78,7 +78,9 @@ typedef struct
 #ifndef OPENSSL_NO_ENGINE
 #define USE_SSL_ENGINE
 #endif
-#endif							/* USE_OPENSSL */
+#elif defined(USE_GNUTLS)
+#include <gnutls/gnutls.h>
+#endif
 
 /*
  * POSTGRES backend dependent Constants.
@@ -469,7 +471,10 @@ struct pg_conn
 	void	   *engine;			/* dummy field to keep struct the same if
 								 * OpenSSL version changes */
 #endif
-#endif							/* USE_OPENSSL */
+#elif defined(USE_GNUTLS)
+	gnutls_session_t	ssl;	/* SSL status, if have SSL connection */
+	gnutls_x509_crt_t	peer;	/* X509 cert of server */
+#endif
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS

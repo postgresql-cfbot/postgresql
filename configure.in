@@ -695,13 +695,27 @@ AC_MSG_RESULT([$with_bonjour])
 
 
 #
-# OpenSSL
+# TLS library
 #
-AC_MSG_CHECKING([whether to build with OpenSSL support])
-PGAC_ARG_BOOL(with, openssl, no, [build with OpenSSL support],
-              [AC_DEFINE([USE_OPENSSL], 1, [Define to build with OpenSSL support. (--with-openssl)])])
-AC_MSG_RESULT([$with_openssl])
-AC_SUBST(with_openssl)
+AC_MSG_CHECKING([which SSL library to build with])
+PGAC_ARG_REQ(with, ssl, [LIB], [build with TLS support from LIB (openssl,gnutls)])
+if test x"$with_ssl" = x"" ; then
+  with_ssl=no
+fi
+PGAC_ARG_BOOL(with, openssl, no, [obsolete spelling of --with-ssl=openssl])
+if test "$with_ssl" = openssl ; then
+  with_ssl=openssl
+fi
+
+if test "$with_ssl" = openssl ; then
+  AC_DEFINE([USE_OPENSSL], 1, [Define to build with OpenSSL support. (--with-ssl=openssl)])
+elif test "$with_ssl" = gnutls ; then
+  AC_DEFINE([USE_GNUTLS], 1, [Define to build with GnuTLS support. (--with-ssl=gnutls)])
+elif test "$with_ssl" != no ; then
+  AC_MSG_ERROR([--with-ssl must specify one of openssl or gnutls])
+fi
+AC_MSG_RESULT([$with_ssl])
+AC_SUBST(with_ssl)
 
 #
 # SELinux
@@ -1055,7 +1069,7 @@ if test "$with_gssapi" = yes ; then
   fi
 fi
 
-if test "$with_openssl" = yes ; then
+if test "$with_ssl" = openssl ; then
   dnl Order matters!
   if test "$PORTNAME" != "win32"; then
      AC_CHECK_LIB(crypto, CRYPTO_new_ex_data, [], [AC_MSG_ERROR([library 'crypto' is required for OpenSSL])])
@@ -1075,6 +1089,17 @@ if test "$with_openssl" = yes ; then
   # thread-safety. In 1.1.0, it's no longer required, and CRYPTO_lock()
   # function was removed.
   AC_CHECK_FUNCS([CRYPTO_lock])
+fi
+
+if test "$with_ssl" = gnutls ; then
+  AC_SEARCH_LIBS(gnutls_init, gnutls, [], [AC_MSG_ERROR([library 'gnutls' is required for GnuTLS])])
+  # GnuTLS versions before 3.4.0 do not support sorting incorrectly sorted
+  # certificate chains.
+  AC_CHECK_DECLS(GNUTLS_X509_CRT_LIST_SORT, [], [],
+[#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+])
+  AC_CHECK_FUNCS([gnutls_pkcs11_set_pin_function])
 fi
 
 if test "$with_pam" = yes ; then
@@ -1219,9 +1244,13 @@ if test "$with_gssapi" = yes ; then
 	[AC_CHECK_HEADERS(gssapi.h, [], [AC_MSG_ERROR([gssapi.h header file is required for GSSAPI])])])
 fi
 
-if test "$with_openssl" = yes ; then
+if test "$with_ssl" = openssl ; then
   AC_CHECK_HEADER(openssl/ssl.h, [], [AC_MSG_ERROR([header file <openssl/ssl.h> is required for OpenSSL])])
   AC_CHECK_HEADER(openssl/err.h, [], [AC_MSG_ERROR([header file <openssl/err.h> is required for OpenSSL])])
+fi
+
+if test "$with_ssl" = gnutls ; then
+  AC_CHECK_HEADER(gnutls/gnutls.h, [], [AC_MSG_ERROR([header file <gnutls/gnutls.h> is required for GnuTLS])])
 fi
 
 if test "$with_pam" = yes ; then
@@ -1989,9 +2018,11 @@ fi
 # in the template or configure command line.
 
 # If not selected manually, try to select a source automatically.
-if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
-  if test x"$with_openssl" = x"yes" ; then
+if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_GNUTLS_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
+  if test x"$with_ssl" = x"openssl" ; then
     USE_OPENSSL_RANDOM=1
+  elif test x"$with_ssl" = x"gnutls" ; then
+    USE_GNUTLS_RANDOM=1
   elif test "$PORTNAME" = "win32" ; then
     USE_WIN32_RANDOM=1
   else
@@ -2008,6 +2039,9 @@ if test "$enable_strong_random" = yes ; then
   if test x"$USE_OPENSSL_RANDOM" = x"1" ; then
     AC_DEFINE(USE_OPENSSL_RANDOM, 1, [Define to use OpenSSL for random number generation])
     AC_MSG_RESULT([OpenSSL])
+  elif test x"$USE_GNUTLS_RANDOM" = x"1" ; then
+    AC_DEFINE(USE_GNUTLS_RANDOM, 1, [Define to use GnuTLS for random number generation])
+    AC_MSG_RESULT([GnuTLS])
   elif test x"$USE_WIN32_RANDOM" = x"1" ; then
     AC_DEFINE(USE_WIN32_RANDOM, 1, [Define to use native Windows API for random number generation])
     AC_MSG_RESULT([Windows native])

@@ -790,20 +790,39 @@ su - postgres
       </varlistentry>
 
       <varlistentry>
-       <term><option>--with-openssl</option>
+       <term><option>--with-ssl=<replaceable>LIBRARY</replaceable></option>
        <indexterm>
-        <primary>OpenSSL</primary>
-        <seealso>SSL</seealso>
+        <primary>SSL</primary>
+        <seealso>OpenSSL</seealso>
+        <seealso>GnuTLS</seealso>
        </indexterm>
        </term>
        <listitem>
         <para>
          Build with support for <acronym>SSL</acronym> (encrypted)
-         connections. This requires the <productname>OpenSSL</productname>
-         package to be installed.  <filename>configure</filename> will check
-         for the required header files and libraries to make sure that
-         your <productname>OpenSSL</productname> installation is sufficient
-         before proceeding.
+         connections using the specified library.
+         <replaceable>LIBRARY</replaceable> must be one of:
+        </para>
+        <itemizedlist>
+         <listitem>
+          <para>
+           <option>openssl</option> to use <productname>OpenSSL</productname>.
+          </para>
+         </listitem>
+         <listitem>
+          <para>
+           <option>gnutls</option> to use <productname>GnuTLS</productname>.
+          </para>
+         </listitem>
+        </itemizedlist>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><option>--with-openssl</option></term>
+       <listitem>
+        <para>
+         Obsolete equivalent of <literal>--with-ssl=openssl</literal>.
         </para>
        </listitem>
       </varlistentry>

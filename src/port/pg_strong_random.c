@@ -27,6 +27,10 @@
 #ifdef USE_OPENSSL
 #include <openssl/rand.h>
 #endif
+#ifdef USE_GNUTLS
+#include <gnutls/gnutls.h>
+#include <gnutls/crypto.h>
+#endif
 #ifdef WIN32
 #include <wincrypt.h>
 #endif
@@ -85,8 +89,9 @@ random_from_file(char *filename, void *buf, size_t len)
  * We support a number of sources:
  *
  * 1. OpenSSL's RAND_bytes()
- * 2. Windows' CryptGenRandom() function
- * 3. /dev/urandom
+ * 2. GnuTLS's gnutls_rnd()
+ * 3. Windows' CryptGenRandom() function
+ * 4. /dev/urandom
  *
  * The configure script will choose which one to use, and set
  * a USE_*_RANDOM flag accordingly.
@@ -104,6 +109,14 @@ pg_strong_random(void *buf, size_t len)
 	 */
 #if defined(USE_OPENSSL_RANDOM)
 	if (RAND_bytes(buf, len) == 1)
+		return true;
+	return false;
+
+	/*
+	 * When built with GnuTLS, use GnuTLS's gnutls_rnd function.
+	 */
+#elif defined(USE_GNUTLS_RANDOM)
+	if (gnutls_rnd(GNUTLS_RND_RANDOM, buf, len) == 0)
 		return true;
 	return false;
 

@@ -22,6 +22,8 @@
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#elif defined(USE_GNUTLS)
+#include <gnutls/gnutls.h>
 #endif
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
@@ -183,12 +185,15 @@ typedef struct Port
 	bool		peer_cert_valid;
 
 	/*
-	 * OpenSSL structures. (Keep these last so that the locations of other
-	 * fields are the same whether or not you build with OpenSSL.)
+	 * SSL library specific structures. (Keep these last so that the locations
+	 * of other fields are the same whether or not you build with SSL.)
 	 */
 #ifdef USE_OPENSSL
 	SSL		   *ssl;
 	X509	   *peer;
+#elif defined(USE_GNUTLS)
+	gnutls_session_t	ssl;
+	gnutls_x509_crt_t	peer;
 #endif
 } Port;
 

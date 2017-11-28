@@ -101,6 +101,66 @@ logicalrep_read_commit(StringInfo in, LogicalRepCommitData *commit_data)
 	commit_data->commit_lsn = pq_getmsgint64(in);
 	commit_data->end_lsn = pq_getmsgint64(in);
 	commit_data->committime = pq_getmsgint64(in);
+
+	/* set gid to empty */
+	commit_data->gid[0] = '\0';
+}
+
+/*
+ * Write PREPARE to the output stream.
+ */
+void
+logicalrep_write_prepare(StringInfo out, ReorderBufferTXN *txn,
+						XLogRecPtr prepare_lsn)
+{
+	uint8		flags = 0;
+
+	pq_sendbyte(out, 'P');		/* sending PREPARE protocol */
+
+	if (txn->txn_flags & TXN_COMMIT_PREPARED)
+		flags |= LOGICALREP_IS_COMMIT_PREPARED;
+	else if (txn->txn_flags & TXN_ROLLBACK_PREPARED)
+		flags |= LOGICALREP_IS_ROLLBACK_PREPARED;
+	else if (txn->txn_flags & TXN_PREPARE)
+		flags |= LOGICALREP_IS_PREPARE;
+
+	if (flags == 0)
+		elog(ERROR, "unrecognized flags %u in [commit|rollback] prepare message", flags);
+
+	/* send the flags field */
+	pq_sendbyte(out, flags);
+
+	/* send fields */
+	pq_sendint64(out, prepare_lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	/* send gid */
+	pq_sendstring(out, txn->gid);
+}
+
+/*
+ * Read transaction PREPARE from the stream.
+ */
+void
+logicalrep_read_prepare(StringInfo in, LogicalRepCommitData *commit_data, uint8 *flags)
+{
+	/* read flags */
+	uint8		prep_flags = pq_getmsgbyte(in);
+
+	if (!(prep_flags & LOGICALREP_PREPARE_MASK))
+		elog(ERROR, "unrecognized flags %u in prepare message", prep_flags);
+
+	/* read fields */
+	commit_data->commit_lsn = pq_getmsgint64(in);
+	commit_data->end_lsn = pq_getmsgint64(in);
+	commit_data->committime = pq_getmsgint64(in);
+
+	/* read gid */
+	strcpy(commit_data->gid, pq_getmsgstring(in));
+
+	/* set flags */
+	*flags = prep_flags;
 }
 
 /*

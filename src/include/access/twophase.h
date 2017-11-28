@@ -15,6 +15,7 @@
 #define TWOPHASE_H
 
 #include "access/xlogdefs.h"
+#include "access/xact.h"
 #include "datatype/timestamp.h"
 #include "storage/lock.h"
 
@@ -57,4 +58,6 @@ extern void PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 			   XLogRecPtr end_lsn);
 extern void PrepareRedoRemove(TransactionId xid, bool giveWarning);
 extern void restoreTwoPhaseData(void);
+extern void ParsePrepareRecord(uint8 info, char *xlrec,
+							   xl_xact_parsed_prepare *parsed);
 #endif							/* TWOPHASE_H */

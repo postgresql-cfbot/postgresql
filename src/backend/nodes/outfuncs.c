@@ -1046,6 +1046,7 @@ _outTableFunc(StringInfo str, const TableFunc *node)
 {
 	WRITE_NODE_TYPE("TABLEFUNC");
 
+	WRITE_ENUM_FIELD(functype, TableFuncType);
 	WRITE_NODE_FIELD(ns_uris);
 	WRITE_NODE_FIELD(ns_names);
 	WRITE_NODE_FIELD(docexpr);
@@ -1056,7 +1057,9 @@ _outTableFunc(StringInfo str, const TableFunc *node)
 	WRITE_NODE_FIELD(colcollations);
 	WRITE_NODE_FIELD(colexprs);
 	WRITE_NODE_FIELD(coldefexprs);
+	WRITE_NODE_FIELD(colvalexprs);
 	WRITE_BITMAPSET_FIELD(notnulls);
+	WRITE_NODE_FIELD(plan);
 	WRITE_INT_FIELD(ordinalitycol);
 	WRITE_LOCATION_FIELD(location);
 }
@@ -1145,6 +1148,8 @@ _outAggref(StringInfo str, const Aggref *node)
 	WRITE_CHAR_FIELD(aggkind);
 	WRITE_UINT_FIELD(agglevelsup);
 	WRITE_ENUM_FIELD(aggsplit, AggSplit);
+	WRITE_ENUM_FIELD(aggformat, FuncFormat);
+	WRITE_NODE_FIELD(aggformatopts);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -1174,6 +1179,8 @@ _outWindowFunc(StringInfo str, const WindowFunc *node)
 	WRITE_UINT_FIELD(winref);
 	WRITE_BOOL_FIELD(winstar);
 	WRITE_BOOL_FIELD(winagg);
+	WRITE_ENUM_FIELD(winformat, FuncFormat);
+	WRITE_NODE_FIELD(winformatopts);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -1205,6 +1212,8 @@ _outFuncExpr(StringInfo str, const FuncExpr *node)
 	WRITE_OID_FIELD(funccollid);
 	WRITE_OID_FIELD(inputcollid);
 	WRITE_NODE_FIELD(args);
+	WRITE_ENUM_FIELD(funcformat2, FuncFormat);
+	WRITE_NODE_FIELD(funcformatopts);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -1697,6 +1706,94 @@ _outOnConflictExpr(StringInfo str, const OnConflictExpr *node)
 	WRITE_NODE_FIELD(onConflictWhere);
 	WRITE_INT_FIELD(exclRelIndex);
 	WRITE_NODE_FIELD(exclRelTlist);
+}
+
+static void
+_outJsonValueExpr(StringInfo str, const JsonValueExpr *node)
+{
+	WRITE_NODE_TYPE("JSONVALUEEXPR");
+
+	WRITE_NODE_FIELD(expr);
+	WRITE_ENUM_FIELD(format.type, JsonFormatType);
+	WRITE_ENUM_FIELD(format.encoding, JsonEncoding);
+	WRITE_LOCATION_FIELD(format.location);
+}
+
+static void
+_outJsonCtorOpts(StringInfo str, const JsonCtorOpts *node)
+{
+	WRITE_NODE_TYPE("JSONCTOROPTS");
+
+	WRITE_ENUM_FIELD(returning.format.type, JsonFormatType);
+	WRITE_ENUM_FIELD(returning.format.encoding, JsonEncoding);
+	WRITE_LOCATION_FIELD(returning.format.location);
+	WRITE_OID_FIELD(returning.typid);
+	WRITE_INT_FIELD(returning.typmod);
+	WRITE_BOOL_FIELD(unique);
+	WRITE_BOOL_FIELD(absent_on_null);
+}
+
+static void
+_outJsonExpr(StringInfo str, const JsonExpr *node)
+{
+	WRITE_NODE_TYPE("JSONEXPR");
+
+	WRITE_ENUM_FIELD(op, JsonExprOp);
+	WRITE_NODE_FIELD(raw_expr);
+	WRITE_NODE_FIELD(formatted_expr);
+	WRITE_NODE_FIELD(result_expr);
+	WRITE_BOOL_FIELD(coerce_via_io);
+	WRITE_OID_FIELD(coerce_via_io_collation);
+	WRITE_ENUM_FIELD(format.type, JsonFormatType);
+	WRITE_ENUM_FIELD(format.encoding, JsonEncoding);
+	WRITE_LOCATION_FIELD(format.location);
+	WRITE_NODE_FIELD(path_spec);
+	WRITE_NODE_FIELD(passing.values);
+	WRITE_NODE_FIELD(passing.names);
+	WRITE_ENUM_FIELD(returning.format.type, JsonFormatType);
+	WRITE_ENUM_FIELD(returning.format.encoding, JsonEncoding);
+	WRITE_LOCATION_FIELD(returning.format.location);
+	WRITE_OID_FIELD(returning.typid);
+	WRITE_INT_FIELD(returning.typmod);
+	WRITE_ENUM_FIELD(on_error.btype, JsonBehaviorType);
+	WRITE_NODE_FIELD(on_error.default_expr);
+	WRITE_ENUM_FIELD(on_empty.btype, JsonBehaviorType);
+	WRITE_NODE_FIELD(on_empty.default_expr);
+	WRITE_ENUM_FIELD(wrapper, JsonWrapper);
+	WRITE_BOOL_FIELD(omit_quotes);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outJsonIsPredicateOpts(StringInfo str, const JsonIsPredicateOpts *node)
+{
+	WRITE_NODE_TYPE("JSONISOPTS");
+
+	WRITE_ENUM_FIELD(value_type, JsonValueType);
+	WRITE_BOOL_FIELD(unique_keys);
+}
+
+static void
+_outJsonTableParentNode(StringInfo str, const JsonTableParentNode *node)
+{
+	WRITE_NODE_TYPE("JSONTABPNODE");
+
+	WRITE_NODE_FIELD(path);
+	WRITE_STRING_FIELD(name);
+	WRITE_NODE_FIELD(child);
+	WRITE_BOOL_FIELD(outerJoin);
+	WRITE_INT_FIELD(colMin);
+	WRITE_INT_FIELD(colMax);
+}
+
+static void
+_outJsonTableSiblingNode(StringInfo str, const JsonTableSiblingNode *node)
+{
+	WRITE_NODE_TYPE("JSONTABSNODE");
+
+	WRITE_NODE_FIELD(larg);
+	WRITE_NODE_FIELD(rarg);
+	WRITE_BOOL_FIELD(cross);
 }
 
 /*****************************************************************************
@@ -4240,6 +4337,24 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PartitionRangeDatum:
 				_outPartitionRangeDatum(str, obj);
+				break;
+			case T_JsonValueExpr:
+				_outJsonValueExpr(str, obj);
+				break;
+			case T_JsonCtorOpts:
+				_outJsonCtorOpts(str, obj);
+				break;
+			case T_JsonIsPredicateOpts:
+				_outJsonIsPredicateOpts(str, obj);
+				break;
+			case T_JsonExpr:
+				_outJsonExpr(str, obj);
+				break;
+			case T_JsonTableParentNode:
+				_outJsonTableParentNode(str, obj);
+				break;
+			case T_JsonTableSiblingNode:
+				_outJsonTableSiblingNode(str, obj);
 				break;
 
 			default:

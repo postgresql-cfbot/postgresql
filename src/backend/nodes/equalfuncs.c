@@ -119,6 +119,7 @@ _equalRangeVar(const RangeVar *a, const RangeVar *b)
 static bool
 _equalTableFunc(const TableFunc *a, const TableFunc *b)
 {
+	COMPARE_SCALAR_FIELD(functype);
 	COMPARE_NODE_FIELD(ns_uris);
 	COMPARE_NODE_FIELD(ns_names);
 	COMPARE_NODE_FIELD(docexpr);
@@ -129,9 +130,34 @@ _equalTableFunc(const TableFunc *a, const TableFunc *b)
 	COMPARE_NODE_FIELD(colcollations);
 	COMPARE_NODE_FIELD(colexprs);
 	COMPARE_NODE_FIELD(coldefexprs);
+	COMPARE_NODE_FIELD(colvalexprs);
 	COMPARE_BITMAPSET_FIELD(notnulls);
+	COMPARE_NODE_FIELD(plan);
 	COMPARE_SCALAR_FIELD(ordinalitycol);
 	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
+static bool
+_equalJsonTableParentNode(const JsonTableParentNode *a, const JsonTableParentNode *b)
+{
+	COMPARE_NODE_FIELD(path);
+	COMPARE_STRING_FIELD(name);
+	COMPARE_NODE_FIELD(child);
+	COMPARE_SCALAR_FIELD(outerJoin);
+	COMPARE_SCALAR_FIELD(colMin);
+	COMPARE_SCALAR_FIELD(colMax);
+
+	return true;
+}
+
+static bool
+_equalJsonTableSiblingNode(const JsonTableSiblingNode *a, const JsonTableSiblingNode *b)
+{
+	COMPARE_NODE_FIELD(larg);
+	COMPARE_NODE_FIELD(rarg);
+	COMPARE_SCALAR_FIELD(cross);
 
 	return true;
 }
@@ -226,6 +252,8 @@ _equalAggref(const Aggref *a, const Aggref *b)
 	COMPARE_SCALAR_FIELD(aggkind);
 	COMPARE_SCALAR_FIELD(agglevelsup);
 	COMPARE_SCALAR_FIELD(aggsplit);
+	COMPARE_SCALAR_FIELD(aggformat);
+	COMPARE_NODE_FIELD(aggformatopts);
 	COMPARE_LOCATION_FIELD(location);
 
 	return true;
@@ -258,6 +286,8 @@ _equalWindowFunc(const WindowFunc *a, const WindowFunc *b)
 	COMPARE_SCALAR_FIELD(winref);
 	COMPARE_SCALAR_FIELD(winstar);
 	COMPARE_SCALAR_FIELD(winagg);
+	COMPARE_SCALAR_FIELD(winformat);
+	COMPARE_NODE_FIELD(winformatopts);
 	COMPARE_LOCATION_FIELD(location);
 
 	return true;
@@ -289,6 +319,8 @@ _equalFuncExpr(const FuncExpr *a, const FuncExpr *b)
 	COMPARE_SCALAR_FIELD(funccollid);
 	COMPARE_SCALAR_FIELD(inputcollid);
 	COMPARE_NODE_FIELD(args);
+	COMPARE_SCALAR_FIELD(funcformat2);
+	COMPARE_NODE_FIELD(funcformatopts);
 	COMPARE_LOCATION_FIELD(location);
 
 	return true;
@@ -808,6 +840,75 @@ _equalOnConflictExpr(const OnConflictExpr *a, const OnConflictExpr *b)
 	COMPARE_NODE_FIELD(onConflictWhere);
 	COMPARE_SCALAR_FIELD(exclRelIndex);
 	COMPARE_NODE_FIELD(exclRelTlist);
+
+	return true;
+}
+
+static bool
+_equalJsonValueExpr(const JsonValueExpr *a, const JsonValueExpr *b)
+{
+	COMPARE_NODE_FIELD(expr);
+	COMPARE_SCALAR_FIELD(format.type);
+	COMPARE_SCALAR_FIELD(format.encoding);
+	COMPARE_LOCATION_FIELD(format.location);
+
+	return true;
+}
+
+static bool
+_equalJsonCtorOpts(const JsonCtorOpts *a, const JsonCtorOpts *b)
+{
+	COMPARE_SCALAR_FIELD(returning.format.type);
+	COMPARE_SCALAR_FIELD(returning.format.encoding);
+	COMPARE_LOCATION_FIELD(returning.format.location);
+	COMPARE_SCALAR_FIELD(returning.typid);
+	COMPARE_SCALAR_FIELD(returning.typmod);
+	COMPARE_SCALAR_FIELD(absent_on_null);
+	COMPARE_SCALAR_FIELD(unique);
+
+	return true;
+}
+
+static bool
+_equalJsonIsPredicateOpts(const JsonIsPredicateOpts *a,
+						  const JsonIsPredicateOpts *b)
+{
+	COMPARE_SCALAR_FIELD(value_type);
+	COMPARE_SCALAR_FIELD(unique_keys);
+
+	return true;
+}
+
+/*
+ * _equalJsonExpr
+ */
+static bool
+_equalJsonExpr(const JsonExpr *a, const JsonExpr *b)
+{
+	COMPARE_SCALAR_FIELD(op);
+	COMPARE_NODE_FIELD(raw_expr);
+	COMPARE_NODE_FIELD(formatted_expr);
+	COMPARE_NODE_FIELD(result_expr);
+	COMPARE_SCALAR_FIELD(coerce_via_io);
+	COMPARE_SCALAR_FIELD(coerce_via_io_collation);
+	COMPARE_SCALAR_FIELD(format.type);
+	COMPARE_SCALAR_FIELD(format.encoding);
+	COMPARE_LOCATION_FIELD(format.location);
+	COMPARE_NODE_FIELD(path_spec);
+	COMPARE_NODE_FIELD(passing.values);
+	COMPARE_NODE_FIELD(passing.names);
+	COMPARE_SCALAR_FIELD(returning.format.type);
+	COMPARE_SCALAR_FIELD(returning.format.encoding);
+	COMPARE_LOCATION_FIELD(returning.format.location);
+	COMPARE_SCALAR_FIELD(returning.typid);
+	COMPARE_SCALAR_FIELD(returning.typmod);
+	COMPARE_SCALAR_FIELD(on_error.btype);
+	COMPARE_NODE_FIELD(on_error.default_expr);
+	COMPARE_SCALAR_FIELD(on_empty.btype);
+	COMPARE_NODE_FIELD(on_empty.default_expr);
+	COMPARE_SCALAR_FIELD(wrapper);
+	COMPARE_SCALAR_FIELD(omit_quotes);
+	COMPARE_LOCATION_FIELD(location);
 
 	return true;
 }
@@ -3147,6 +3248,24 @@ equal(const void *a, const void *b)
 			break;
 		case T_JoinExpr:
 			retval = _equalJoinExpr(a, b);
+			break;
+		case T_JsonValueExpr:
+			retval = _equalJsonValueExpr(a, b);
+			break;
+		case T_JsonCtorOpts:
+			retval = _equalJsonCtorOpts(a, b);
+			break;
+		case T_JsonIsPredicateOpts:
+			retval = _equalJsonIsPredicateOpts(a, b);
+			break;
+		case T_JsonExpr:
+			retval = _equalJsonExpr(a, b);
+			break;
+		case T_JsonTableParentNode:
+			retval = _equalJsonTableParentNode(a, b);
+			break;
+		case T_JsonTableSiblingNode:
+			retval = _equalJsonTableSiblingNode(a, b);
 			break;
 
 			/*

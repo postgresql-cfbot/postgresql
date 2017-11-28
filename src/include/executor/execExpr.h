@@ -18,6 +18,7 @@
 
 /* forward reference to avoid circularity */
 struct ArrayRefState;
+struct JsonbValue;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -211,6 +212,7 @@ typedef enum ExprEvalOp
 	EEOP_WINDOW_FUNC,
 	EEOP_SUBPLAN,
 	EEOP_ALTERNATIVE_SUBPLAN,
+	EEOP_JSONEXPR,
 
 	/* non-existent operation, used e.g. to check array lengths */
 	EEOP_LAST
@@ -558,6 +560,55 @@ typedef struct ExprEvalStep
 			/* out-of-line state, created by nodeSubplan.c */
 			AlternativeSubPlanState *asstate;
 		}			alternative_subplan;
+
+		/* for EEOP_JSONEXPR */
+		struct
+		{
+			JsonExpr   *jsexpr;			/* original expression node */
+
+			struct
+			{
+				FmgrInfo	func;		/* typinput function for output type */
+				Oid			typioparam;
+			} input;					/* I/O info for output type */
+
+			struct
+			{
+				Datum		value;
+				bool		isnull;
+			}		   *raw_expr;			/* raw context item value */
+
+			ExprState  *formatted_expr;		/* formatted context item */
+			ExprState  *result_expr;		/* coerced to output type */
+			ExprState  *default_on_empty;	/* ON EMPTY DEFAULT expression */
+			ExprState  *default_on_error;	/* ON ERROR DEFAULT expression */
+			List	   *args;				/* passing arguments */
+
+			void	   *cache;				/* cache for json_populate_type() */
+
+			struct JsonScalarCoercions
+			{
+				struct JsonScalarCoercionExprState
+				{
+					Node	   *result_expr;		/* coercion expression */
+					ExprState  *result_expr_state;	/* coercion expression state */
+					bool		coerce_via_io;
+					bool		coerce_via_populate;
+					bool		initialized;
+				} 			string,
+							numeric,
+							boolean,
+							date,
+							time,
+							timetz,
+							timestamp,
+							timestamptz,
+							composite,
+							null;
+			}			scalar;		/* states for coercion from SQL/JSON item
+									 * types directly to the output type */
+		}			jsonexpr;
+
 	}			d;
 } ExprEvalStep;
 
@@ -596,7 +647,6 @@ typedef struct ArrayRefState
 	Datum		prevvalue;
 	bool		prevnull;
 } ArrayRefState;
-
 
 extern void ExecReadyInterpretedExpr(ExprState *state);
 
@@ -647,5 +697,15 @@ extern void ExecEvalAlternativeSubPlan(ExprState *state, ExprEvalStep *op,
 						   ExprContext *econtext);
 extern void ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op,
 					ExprContext *econtext);
+extern void ExecEvalJson(ExprState *state, ExprEvalStep *op,
+						 ExprContext *econtext);
+extern Datum ExecPrepareJsonItemCoercion(struct JsonbValue *item, bool is_jsonb,
+							JsonReturning *returning,
+							struct JsonScalarCoercions *coercions,
+							MemoryContext mcxt,
+							struct JsonScalarCoercionExprState **pcestate);
+extern Datum ExecEvalExprPassingCaseValue(ExprState *estate,
+									ExprContext *econtext, bool *isnull,
+									Datum caseval_datum, bool caseval_isnull);
 
 #endif							/* EXEC_EXPR_H */

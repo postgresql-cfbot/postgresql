@@ -6,7 +6,9 @@
 CREATE SCHEMA lock_schema1;
 SET search_path = lock_schema1;
 CREATE TABLE lock_tbl1 (a BIGINT);
-CREATE VIEW lock_view1 AS SELECT 1;
+CREATE VIEW lock_view1 AS SELECT * FROM lock_tbl1;
+CREATE VIEW lock_view2 AS SELECT count(*) FROM lock_tbl1;
+CREATE VIEW lock_view3 AS SELECT 1;
 CREATE ROLE regress_rol_lock1;
 ALTER ROLE regress_rol_lock1 SET search_path = lock_schema1;
 GRANT USAGE ON SCHEMA lock_schema1 TO regress_rol_lock1;
@@ -33,7 +35,13 @@ LOCK TABLE lock_tbl1 IN SHARE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN SHARE ROW EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE NOWAIT;
-LOCK TABLE lock_view1 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-table
+LOCK TABLE lock_view1 IN EXCLUSIVE MODE;   -- OK; can lock an autoupdatable view
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view2 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-autoupdatable view
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view3 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-autoupdatable view
 ROLLBACK;
 
 -- Verify that we can lock a table with inheritance children.
@@ -59,6 +67,8 @@ RESET ROLE;
 -- Clean up
 --
 DROP VIEW lock_view1;
+DROP VIEW lock_view2;
+DROP VIEW lock_view3;
 DROP TABLE lock_tbl3;
 DROP TABLE lock_tbl2;
 DROP TABLE lock_tbl1;

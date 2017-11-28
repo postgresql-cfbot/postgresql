@@ -1162,7 +1162,7 @@ primary_slot_name = 'node_a_slot'
     cause each commit to wait until the current synchronous standbys report
     that they have replayed the transaction, making it visible to user
     queries.  In simple cases, this allows for load balancing with causal
-    consistency.
+    consistency.  See also <xref linkend="synchronous-replay">.
    </para>
 
    <para>
@@ -1358,6 +1358,119 @@ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
    </para>
 
    </sect3>
+  </sect2>
+
+  <sect2 id="synchronous-replay">
+   <title>Synchronous replay</title>
+   <indexterm>
+    <primary>synchronous replay</primary>
+    <secondary>in standby</secondary>
+   </indexterm>
+
+   <para>
+    The synchronous replay feature allows read-only queries to run on hot
+    standby servers without exposing stale data to the client, providing a
+    form of causal consistency.  Transactions can run on any standby with the
+    following guarantee about the visibility of preceding transactions: If you
+    set <varname>synchronous_replay</> to <literal>on</> in any pair of
+    consecutive transactions tx1, tx2 where tx2 begins after tx1 successfully
+    returns, then tx2 will either see tx1 or fail with a new error "standby is
+    not available for synchronous replay", no matter which server it runs on.
+    Although the guarantee is expressed in terms of two individual
+    transactions, the GUC can also be set at session, role or system level to
+    make the guarantee generally, allowing for load balancing of applications
+    that were not designed with load balancing in mind.
+   </para>
+
+   <para>
+    In order to enable the feature, <varname>synchronous_replay_max_lag</>
+    must be set to a non-zero value on the primary server.  The
+    GUC <varname>synchronous_replay_standby_names</> can be used to limit the
+    set of standbys that can join the dynamic set of synchronous replay
+    standbys by providing a comma-separated list of application names.  By
+    default, all standbys are candidates, if the feature is enabled.
+   </para>
+
+   <para>
+    The current set of servers that the primary considers to be available for
+    synchronous replay can be seen in
+    the <link linkend="monitoring-stats-views-table"> <literal>pg_stat_replication</></>
+    view.  Administrators, applications and load balancing middleware can use
+    this view to discover standbys that can currently handle synchronous
+    replay transactions without raising the error.  Since that information is
+    only an instantantaneous snapshot, clients should still be prepared for
+    the error to be raised at any time, and consider redirecting transactions
+    to another standby.
+   </para>
+
+   <para>
+    The advantages of the synchronous replay feature over simply
+    setting <varname>synchronous_commit</> to <literal>remote_apply</> are:
+    <orderedlist>
+      <listitem>
+       <para>
+        It provides certainty about exactly which standbys can see a
+        transaction.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+        It places a configurable limit on how much replay lag (and therefore
+        delay at commit time) the primary tolerates from standbys before it
+        drops them from the dynamic set of standbys it waits for.
+       </para>   
+      </listitem>
+      <listitem>
+       <para>
+        It upholds the synchronous replay guarantee during the transitions that
+        occur when new standbys are added or removed from the set of standbys,
+        including scenarios where contact has been lost between the primary
+        and standbys but the standby is still alive and running client
+        queries.
+       </para>
+      </listitem>
+    </orderedlist>
+   </para>
+
+   <para>
+    The protocol used to uphold the guarantee even in the case of network
+    failure depends on the system clocks of the primary and standby servers
+    being synchronized, with an allowance for a difference up to one quarter
+    of <varname>synchronous_replay_lease_time</>.  For example,
+    if <varname>synchronous_replay_lease_time</> is set to <literal>5s</>,
+    then the clocks must not be more than 1.25 second apart for the guarantee
+    to be upheld reliably during transitions.  The ubiquity of the Network
+    Time Protocol (NTP) on modern operating systems and availability of high
+    quality time servers makes it possible to choose a tolerance significantly
+    higher than the maximum expected clock difference.  An effort is
+    nevertheless made to detect and report misconfigured and faulty systems
+    with clock differences greater than the configured tolerance.
+   </para>
+
+   <note>
+    <para>
+     Current hardware clocks, NTP implementations and public time servers are
+     unlikely to allow the system clocks to differ more than tens or hundreds
+     of milliseconds, and systems synchronized with dedicated local time
+     servers may be considerably more accurate, but you should only consider
+     setting <varname>synchronous_replay_lease_time</> below the default of 5
+     seconds (allowing up to 1.25 second of clock difference) after
+     researching your time synchronization infrastructure thoroughly.
+    </para>  
+   </note>
+
+   <note>
+    <para>
+      While similar to synchronous commit in the sense that both involve the
+      primary server waiting for responses from standby servers, the
+      synchronous replay feature is not concerned with avoiding data loss.  A
+      primary configured for synchronous replay will drop all standbys that
+      stop responding or replay too slowly from the dynamic set that it waits
+      for, so you should consider configuring both synchronous replication and
+      synchronous replay if you need data loss avoidance guarantees and causal
+      consistency guarantees for load balancing.
+    </para>
+   </note>
   </sect2>
 
   <sect2 id="continuous-archiving-in-standby">
@@ -1708,7 +1821,16 @@ if (!triggered)
     so there will be a measurable delay between primary and standby. Running the
     same query nearly simultaneously on both primary and standby might therefore
     return differing results. We say that data on the standby is
-    <firstterm>eventually consistent</firstterm> with the primary.  Once the
+    <firstterm>eventually consistent</firstterm> with the primary by default.
+    The data visible to a transaction running on a standby can be
+    made <firstterm>causally consistent</> with respect to a transaction that
+    has completed on the primary by setting <varname>synchronous_replay</>
+    to <literal>on</> in both transactions.  For more details,
+    see <xref linkend="synchronous-replay">.
+   </para>
+
+   <para>
+    Once the    
     commit record for a transaction is replayed on the standby, the changes
     made by that transaction will be visible to any new snapshots taken on
     the standby.  Snapshots may be taken at the start of each query or at the

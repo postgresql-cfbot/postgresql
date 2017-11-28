@@ -2882,6 +2882,36 @@ include_dir 'conf.d'
      across the cluster without problems if that is required.
     </para>
 
+    <sect2 id="runtime-config-replication-all">
+     <title>All Servers</title>
+     <para>
+      These parameters can be set on the primary or any standby.
+     </para>
+     <variablelist>
+      <varlistentry id="guc-synchronous-replay" xreflabel="synchronous_replay">
+       <term><varname>synchronous_replay</varname> (<type>boolean</type>)
+       <indexterm>
+        <primary><varname>synchronous_replay</> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Enables causal consistency between transactions run on different
+         servers.  A transaction that is run on a standby
+         with <varname>synchronous_replay</> set to <literal>on</> is
+         guaranteed either to see the effects of all completed transactions
+         run on the primary with the setting on, or to receive an error
+         "standby is not available for synchronous replay".  Note that both
+         transactions involved in a causal dependency (a write on the primary
+         followed by a read on any server which must see the write) must be
+         run with the setting on.  See <xref linkend="synchronous-replay"> for
+         more details.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>     
+    </sect2>
+
     <sect2 id="runtime-config-replication-sender">
      <title>Sending Server(s)</title>
 
@@ -3188,6 +3218,66 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        <para>
         This does not prevent cleanup of dead rows which have reached the age
         specified by <varname>old_snapshot_threshold</varname>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><varname>synchronous_replay_max_lag</varname>
+      (<type>integer</type>)
+       <indexterm>
+        <primary><varname>synchronous_replay_max_lag</> configuration
+        parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the maximum replay lag the primary will tolerate from a
+        standby before dropping it from the synchronous replay set.
+       </para>
+       <para>
+        This must be set to a value which is at least 4 times the maximum
+        possible difference in system clocks between the primary and standby
+        servers, as described in <xref linkend="synchronous-replay">.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><varname>synchronous_replay_lease_time</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>synchronous_replay_lease_time</> configuration
+        parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the duration of 'leases' sent by the primary server to
+        standbys granting them the right to run synchronous replay queries for
+        a limited time.  This affects the rate at which replacement leases
+        must be sent and the wait time if contact is lost with a standby, as
+        described in <xref linkend="synchronous-replay">.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-synchronous-replay-standby-names" xreflabel="synchronous-replay-standby-names">
+      <term><varname>synchronous_replay_standby_names</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>synchronous_replay_standby_names</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a comma-separated list of standby names that can support
+        <firstterm>synchronous replay</>, as described in
+        <xref linkend="synchronous-replay">.  Follows the same convention
+        as <link linkend="guc-synchronous-standby-names"><literal>synchronous_standby_name</></>.
+        The default is <literal>*</>, matching all standbys.
+       </para>
+       <para>
+        This setting has no effect if <varname>synchronous_replay_max_lag</>
+        is not set.
        </para>
       </listitem>
      </varlistentry>

@@ -3628,6 +3628,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
 			break;
+		case WAIT_EVENT_SYNC_REPLAY:
+			event_name = "SyncReplay";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 
@@ -3655,6 +3658,9 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 			break;
 		case WAIT_EVENT_RECOVERY_APPLY_DELAY:
 			event_name = "RecoveryApplyDelay";
+			break;
+		case WAIT_EVENT_SYNC_REPLAY_LEASE_REVOKE:
+			event_name = "SyncReplayLeaseRevoke";
 			break;
 			/* no default case, so that compiler will warn */
 	}

@@ -27,8 +27,6 @@
 
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 
-static bool ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
-					XLogPageHeader hdr);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
@@ -533,7 +531,6 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 */
 	if (targetSegNo != state->readSegNo && targetPageOff != 0)
 	{
-		XLogPageHeader hdr;
 		XLogRecPtr	targetSegmentPtr = pageptr - targetPageOff;
 
 		readLen = state->read_page(state, targetSegmentPtr, XLOG_BLCKSZ,
@@ -545,9 +542,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		/* we can be sure to have enough WAL available, we scrolled back */
 		Assert(readLen == XLOG_BLCKSZ);
 
-		hdr = (XLogPageHeader) state->readBuf;
-
-		if (!ValidXLogPageHeader(state, targetSegmentPtr, hdr))
+		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
+										  state->readBuf))
 			goto err;
 	}
 
@@ -584,7 +580,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	/*
 	 * Now that we know we have the full header, validate it.
 	 */
-	if (!ValidXLogPageHeader(state, pageptr, hdr))
+	if (!XLogReaderValidatePageHeader(state, pageptr, (char *) hdr))
 		goto err;
 
 	/* update read state information */
@@ -710,14 +706,26 @@ ValidXLogRecord(XLogReaderState *state, XLogRecord *record, XLogRecPtr recptr)
 
 /*
  * Validate a page header
+ *
+ * Check if phdr is valid as the XLog page header of the XLog page of the page
+ * pointed by recptr.
+ *
+ * phdr is read as XLogPageHeaderData and check if it has valid magic, has no
+ * usused flag bits set and belongs to correct page pointed by recptr. The
+ * incorrect page address is detected usually when we read a page in a
+ * recycled segment.
+ *
+ * If it is the first page in a segment or detected rewind of state,
+ * additional checks are performed.
  */
-static bool
-ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
-					XLogPageHeader hdr)
+bool
+XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
+							 char *phdr)
 {
 	XLogRecPtr	recaddr;
 	XLogSegNo	segno;
 	int32		offset;
+	XLogPageHeader hdr = (XLogPageHeader) phdr;
 
 	Assert((recptr % XLOG_BLCKSZ) == 0);
 

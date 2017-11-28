@@ -1057,14 +1057,14 @@ NOTICE:  f_leak => awesome science fiction
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_document WHERE f_leak(dtitle);
-                             QUERY PLAN                             
---------------------------------------------------------------------
+                     QUERY PLAN                      
+-----------------------------------------------------
  Append
    InitPlan 1 (returns $0)
      ->  Index Scan using uaccount_pkey on uaccount
            Index Cond: (pguser = CURRENT_USER)
    ->  Seq Scan on part_document_fiction
-         Filter: ((cid < 55) AND (dlevel <= $0) AND f_leak(dtitle))
+         Filter: ((dlevel <= $0) AND f_leak(dtitle))
 (6 rows)
 
 -- pp1 ERROR
@@ -1136,14 +1136,14 @@ NOTICE:  f_leak => awesome science fiction
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_document WHERE f_leak(dtitle);
-                             QUERY PLAN                             
---------------------------------------------------------------------
+                     QUERY PLAN                      
+-----------------------------------------------------
  Append
    InitPlan 1 (returns $0)
      ->  Index Scan using uaccount_pkey on uaccount
            Index Cond: (pguser = CURRENT_USER)
    ->  Seq Scan on part_document_fiction
-         Filter: ((cid < 55) AND (dlevel <= $0) AND f_leak(dtitle))
+         Filter: ((dlevel <= $0) AND f_leak(dtitle))
 (6 rows)
 
 -- viewpoint from regress_rls_carol

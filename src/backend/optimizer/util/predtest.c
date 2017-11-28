@@ -17,6 +17,7 @@
 
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_operator.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -1407,6 +1408,13 @@ static const StrategyNumber BT_refute_table[6][6] = {
 	{none, none, BTEQ, none, none, none}	/* NE */
 };
 
+#define Int2LessOperator 95
+#define Int2LessOrEqualOperator 522
+#define Int4LessOrEqualOperator 523
+#define Int8LessOrEqualOperator 414
+#define DateLessOrEqualOperator 1096
+#define DateLessOperator 1095
+
 
 /*
  * operator_predicate_proof
@@ -1599,6 +1607,17 @@ operator_predicate_proof(Expr *predicate, Node *clause, bool refute_it)
 		return false;
 	if (clause_const->constisnull)
 		return false;
+
+	if (!refute_it
+		&& ((pred_op == Int4LessOrEqualOperator && clause_op == Int4LessOperator)
+			|| (pred_op == Int8LessOrEqualOperator && clause_op == Int8LessOperator)
+			|| (pred_op == Int2LessOrEqualOperator && clause_op == Int2LessOperator)
+			|| (pred_op == DateLessOrEqualOperator && clause_op == DateLessOperator))
+		&& pred_const->constbyval && clause_const->constbyval
+		&& pred_const->constvalue + 1 == clause_const->constvalue)
+	{
+		return true;
+	}
 
 	/*
 	 * Lookup the constant-comparison operator using the system catalogs and

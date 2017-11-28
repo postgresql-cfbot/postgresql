@@ -1456,6 +1456,51 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	return false;
 }
 
+/*
+ * Remove from restrictions list items implied by table constraints
+ */
+void remove_restrictions_implied_by_constraints(PlannerInfo *root,
+												RelOptInfo *rel, RangeTblEntry *rte)
+{
+	List	   *constraint_pred;
+	List	   *safe_constraints = NIL;
+	List	   *safe_restrictions = NIL;
+	ListCell   *lc;
+
+	if (rte->rtekind != RTE_RELATION || rte->inh)
+		return;
+
+	/*
+	 * OK to fetch the constraint expressions.  Include "col IS NOT NULL"
+	 * expressions for attnotnull columns, in case we can refute those.
+	 */
+	constraint_pred = get_relation_constraints(root, rte->relid, rel, true);
+
+	/*
+	 * We do not currently enforce that CHECK constraints contain only
+	 * immutable functions, so it's necessary to check here. We daren't draw
+	 * conclusions from plan-time evaluation of non-immutable functions. Since
+	 * they're ANDed, we can just ignore any mutable constraints in the list,
+	 * and reason about the rest.
+	 */
+	foreach(lc, constraint_pred)
+	{
+		Node	   *pred = (Node*) lfirst(lc);
+
+		if (!contain_mutable_functions(pred))
+			safe_constraints = lappend(safe_constraints, pred);
+	}
+
+	foreach(lc, rel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		if (!predicate_implied_by(list_make1(rinfo->clause), safe_constraints, false)) {
+			safe_restrictions = lappend(safe_restrictions, rinfo);
+		}
+	}
+	rel->baserestrictinfo = safe_restrictions;
+}
+
 
 /*
  * build_physical_tlist

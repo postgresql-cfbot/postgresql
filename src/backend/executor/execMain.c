@@ -781,6 +781,9 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		if ((rte->requiredPerms & (~ACL_SELECT)) == 0)
 			continue;
 
+		if (rte->relkind == 'f')
+			continue;
+
 		if (isTempNamespace(get_rel_namespace(rte->relid)))
 			continue;
 

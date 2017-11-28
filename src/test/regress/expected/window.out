@@ -23,8 +23,8 @@ SELECT depname, empno, salary, sum(salary) OVER (PARTITION BY depname) FROM emps
 -----------+-------+--------+-------
  develop   |     7 |   4200 | 25100
  develop   |     9 |   4500 | 25100
- develop   |    11 |   5200 | 25100
  develop   |    10 |   5200 | 25100
+ develop   |    11 |   5200 | 25100
  develop   |     8 |   6000 | 25100
  personnel |     5 |   3500 |  7400
  personnel |     2 |   3900 |  7400
@@ -78,15 +78,15 @@ GROUP BY four, ten ORDER BY four, ten;
 SELECT depname, empno, salary, sum(salary) OVER w FROM empsalary WINDOW w AS (PARTITION BY depname);
   depname  | empno | salary |  sum  
 -----------+-------+--------+-------
- develop   |    11 |   5200 | 25100
- develop   |     7 |   4200 | 25100
+ develop   |    10 |   5200 | 25100
  develop   |     9 |   4500 | 25100
  develop   |     8 |   6000 | 25100
- develop   |    10 |   5200 | 25100
+ develop   |    11 |   5200 | 25100
+ develop   |     7 |   4200 | 25100
  personnel |     5 |   3500 |  7400
  personnel |     2 |   3900 |  7400
- sales     |     3 |   4800 | 14600
  sales     |     1 |   5000 | 14600
+ sales     |     3 |   4800 | 14600
  sales     |     4 |   4800 | 14600
 (10 rows)
 
@@ -94,11 +94,11 @@ SELECT depname, empno, salary, rank() OVER w FROM empsalary WINDOW w AS (PARTITI
   depname  | empno | salary | rank 
 -----------+-------+--------+------
  develop   |     7 |   4200 |    1
- personnel |     5 |   3500 |    1
  sales     |     3 |   4800 |    1
  sales     |     4 |   4800 |    1
- personnel |     2 |   3900 |    2
+ personnel |     5 |   3500 |    1
  develop   |     9 |   4500 |    2
+ personnel |     2 |   3900 |    2
  sales     |     1 |   5000 |    3
  develop   |    11 |   5200 |    3
  develop   |    10 |   5200 |    3
@@ -364,11 +364,11 @@ SELECT first_value(ten) OVER (PARTITION BY four ORDER BY ten), ten, four FROM te
 SELECT last_value(four) OVER (ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10;
  last_value | ten | four 
 ------------+-----+------
-          0 |   0 |    0
-          0 |   0 |    2
-          0 |   0 |    0
-          1 |   1 |    1
+          2 |   0 |    0
+          2 |   0 |    0
+          2 |   0 |    2
           1 |   1 |    3
+          1 |   1 |    1
           1 |   1 |    1
           3 |   3 |    3
           0 |   4 |    0
@@ -773,12 +773,12 @@ SELECT sum(unique1) over (order by four range between current row and unbounded 
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
+  45 |       4 |    0
   45 |       0 |    0
   45 |       8 |    0
-  45 |       4 |    0
   33 |       5 |    1
-  33 |       9 |    1
   33 |       1 |    1
+  33 |       9 |    1
   18 |       6 |    2
   18 |       2 |    2
   10 |       3 |    3
@@ -875,12 +875,12 @@ SELECT sum(unique1) over (w range between current row and unbounded following),
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
  sum | unique1 | four 
 -----+---------+------
+  45 |       4 |    0
   45 |       0 |    0
   45 |       8 |    0
-  45 |       4 |    0
   33 |       5 |    1
-  33 |       9 |    1
   33 |       1 |    1
+  33 |       9 |    1
   18 |       6 |    2
   18 |       2 |    2
   10 |       3 |    3
@@ -901,12 +901,12 @@ FROM tenk1 WHERE unique1 < 10
 WINDOW w AS (order by four range between current row and unbounded following);
  first_value | nth_2 | last_value | unique1 | four 
 -------------+-------+------------+---------+------
-           0 |     8 |          7 |       0 |    0
-           0 |     8 |          7 |       8 |    0
-           0 |     8 |          7 |       4 |    0
-           5 |     9 |          7 |       5 |    1
-           5 |     9 |          7 |       9 |    1
-           5 |     9 |          7 |       1 |    1
+           4 |     0 |          7 |       4 |    0
+           4 |     0 |          7 |       0 |    0
+           4 |     0 |          7 |       8 |    0
+           5 |     1 |          7 |       5 |    1
+           5 |     1 |          7 |       1 |    1
+           5 |     1 |          7 |       9 |    1
            6 |     2 |          7 |       6 |    2
            6 |     2 |          7 |       2 |    2
            3 |     7 |          7 |       3 |    3

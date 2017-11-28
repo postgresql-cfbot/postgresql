@@ -770,9 +770,9 @@ compute_attributes_with_style(ParseState *pstate, List *parameters, bool *isStri
 	{
 		DefElem    *param = (DefElem *) lfirst(pl);
 
-		if (pg_strcasecmp(param->defname, "isstrict") == 0)
+		if (strcmp(param->defname, "isstrict") == 0)
 			*isStrict_p = defGetBoolean(param);
-		else if (pg_strcasecmp(param->defname, "iscachable") == 0)
+		else if (strcmp(param->defname, "iscachable") == 0)
 		{
 			/* obsolete spelling of isImmutable */
 			if (defGetBoolean(param))

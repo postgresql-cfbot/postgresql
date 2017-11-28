@@ -366,7 +366,8 @@ calc_rank(const float *w, TSVector t, TSQuery q, int32 method)
 
 	/* XXX: What about NOT? */
 	res = (item->type == QI_OPR && (item->qoperator.oper == OP_AND ||
-									item->qoperator.oper == OP_PHRASE)) ?
+									item->qoperator.oper == OP_PHRASE ||
+									item->qoperator.oper == OP_AROUND)) ?
 		calc_rank_and(w, t, q) :
 		calc_rank_or(w, t, q);
 

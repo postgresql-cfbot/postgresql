@@ -161,7 +161,8 @@ clean_NOT_intree(NODE *node)
 		NODE	   *res = node;
 
 		Assert(node->valnode->qoperator.oper == OP_AND ||
-			   node->valnode->qoperator.oper == OP_PHRASE);
+			   node->valnode->qoperator.oper == OP_PHRASE ||
+			   node->valnode->qoperator.oper == OP_AROUND);
 
 		node->left = clean_NOT_intree(node->left);
 		node->right = clean_NOT_intree(node->right);
@@ -277,7 +278,8 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 		node->right = clean_stopword_intree(node->right, &rladd, &rradd);
 
 		/* Check if current node is OP_PHRASE, get its distance */
-		isphrase = (node->valnode->qoperator.oper == OP_PHRASE);
+		isphrase = (node->valnode->qoperator.oper == OP_PHRASE ||
+					node->valnode->qoperator.oper == OP_AROUND);
 		ndistance = isphrase ? node->valnode->qoperator.distance : 0;
 
 		if (node->left == NULL && node->right == NULL)

@@ -797,13 +797,15 @@ UPDATE tt SET ti =
    <para>
     <productname>PostgreSQL</productname> provides the
     functions <function>to_tsquery</function>,
-    <function>plainto_tsquery</function>, and
-    <function>phraseto_tsquery</function>
+    <function>plainto_tsquery</function>,
+    <function>phraseto_tsquery</function> and
+    <function>queryto_tsquery</function>
     for converting a query to the <type>tsquery</type> data type.
     <function>to_tsquery</function> offers access to more features
     than either <function>plainto_tsquery</function> or
     <function>phraseto_tsquery</function>, but it is less forgiving
-    about its input.
+    about its input. <function>queryto_tsquery</function> provides a 
+    different, Google like syntax to create tsquery.
    </para>
 
    <indexterm>
@@ -960,8 +962,72 @@ SELECT phraseto_tsquery('english', 'The Fat &amp; Rats:C');
 -----------------------------
  'fat' &lt;-&gt; 'rat' &lt;-&gt; 'c'
 </screen>
-   </para>
+</para>
 
+<synopsis>
+queryto_tsquery(<optional> <replaceable class="parameter">config</replaceable> <type>regconfig</type>, </optional> <replaceable class="parameter">querytext</replaceable> <type>text</type>) returns <type>tsquery</type>
+</synopsis>
+
+   <para>
+    <function>queryto_tsquery</function> creates a <type>tsquery</type> from a unformated text.
+    But instead of <function>plainto_tsquery</function> and <function>phraseto_tsquery</function> it won't
+    ignore already placed operations. This function supports following operators:
+    <itemizedlist  spacing="compact" mark="bullet">
+     <listitem>
+      <para>
+       <literal>some text</literal> - any text inside quote signs will be treated as a phrase and will be
+        performed like in <function>phraseto_tsquery</function>.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>OR</literal> - standard logical operator. It is just an alias for <literal>|</literal> sign.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>terma AROUND(N) termb</literal> - this operation will match if the distance between 
+       terma and termb is less than N.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       <literal>-</literal> - standard logical negation sign. It is an alias for <literal>!</literal> sign.
+      </para>
+     </listitem>
+    </itemizedlist>
+    Other missing operators will be replaced by AND like in <function>plainto_tsquery</function>.
+   </para>
+   <para>
+    Examples:
+    <screen>
+      select queryto_tsquery('The fat rats');
+       queryto_tsquery 
+      -----------------
+       'fat' &amp; 'rat'
+      (1 row)
+    </screen>
+    <screen>
+      select queryto_tsquery('"supernovae stars" AND -crab');
+             queryto_tsquery          
+      ----------------------------------
+       'supernova' &lt;-&gt; 'star' &amp; !'crab'
+    (1 row)
+    </screen>
+    <screen>
+      select queryto_tsquery('-run AROUND(5) "gnu debugger" OR "I like bananas"');
+                            queryto_tsquery                      
+      -----------------------------------------------------------
+       !'run' AROUND(5) 'gnu' &lt;-&gt; 'debugg' | 'like' &lt;-&gt; 'banana'
+      (1 row)
+    </screen>
+    </para>
+    <para>
+     Note that in the examples <function>queryto_tsquery</function> didn't ignore
+     operators if they were placed and put required operations
+     if they were skipped. In case of inquote text <function>queryto_tsquery</function>
+     has placed phrase operator and &amp; in other cases.
+    </para>
   </sect2>
 
   <sect2 id="textsearch-ranking">

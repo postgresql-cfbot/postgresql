@@ -1672,3 +1672,115 @@ select * from phrase_index_test where fts @@ phraseto_tsquery('english', 'fat ca
 (1 row)
 
 set enable_seqscan = on;
+
+--test queryto_tsquery function
+select queryto_tsquery('My brand new smartphone');
+        queryto_tsquery        
+-------------------------------
+ 'brand' & 'new' & 'smartphon'
+(1 row)
+
+select queryto_tsquery('My brand "new smartphone"');
+         queryto_tsquery         
+---------------------------------
+ 'brand' & 'new' <-> 'smartphon'
+(1 row)
+
+select queryto_tsquery('"A fat cat" has just eaten a -rat.');
+          queryto_tsquery           
+------------------------------------
+ 'fat' <-> 'cat' & 'eaten' & !'rat'
+(1 row)
+
+select queryto_tsquery('"A fat cat" has just eaten OR -rat.');
+          queryto_tsquery           
+------------------------------------
+ 'fat' <-> 'cat' & 'eaten' | !'rat'
+(1 row)
+
+select queryto_tsquery('"A fat cat" has just (eaten OR -rat)');
+            queryto_tsquery             
+----------------------------------------
+ 'fat' <-> 'cat' & ( 'eaten' | !'rat' )
+(1 row)
+
+-- testing AROUND operator evaluation
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"gnu debugger" AROUND(5) runs');
+ ?column? 
+----------
+ f
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('run AROUND(5) "gnu debugger"');
+ ?column? 
+----------
+ f
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"gnu debugger" AROUND(6) runs');
+ ?column? 
+----------
+ t
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('run AROUND(6) "gnu debugger"');
+ ?column? 
+----------
+ t
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"many programming languages" AROUND(10) "portable debugger"');
+ ?column? 
+----------
+ f
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"portable debugger" AROUND(10) "many programming languages"');
+ ?column? 
+----------
+ f
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"many programming languages" AROUND(11) "portable debugger"');
+ ?column? 
+----------
+ t
+(1 row)
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+queryto_tsquery('"portable debugger" AROUND(11) "many programming languages"');
+ ?column? 
+----------
+ t
+(1 row)
+
+select queryto_tsquery('"fat cat AROUND(5) rat"');
+                queryto_tsquery                 
+------------------------------------------------
+ 'fat' <-> 'cat' <-> 'around' <-> '5' <-> 'rat'
+(1 row)
+
+select queryto_tsquery('simple','"fat cat OR rat"');
+          queryto_tsquery           
+------------------------------------
+ 'fat' <-> 'cat' <-> 'or' <-> 'rat'
+(1 row)
+
+select queryto_tsquery('fat*rat');
+ queryto_tsquery 
+-----------------
+ 'fat' & 'rat'
+(1 row)
+
+select queryto_tsquery('fat-rat');
+      queryto_tsquery      
+---------------------------
+ 'fat-rat' & 'fat' & 'rat'
+(1 row)

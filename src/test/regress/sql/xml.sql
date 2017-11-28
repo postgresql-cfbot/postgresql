@@ -594,3 +594,23 @@ INSERT INTO xmltest2 VALUES('<d><r><dc>2</dc></r></d>', 'D');
 SELECT xmltable.* FROM xmltest2, LATERAL xmltable('/d/r' PASSING x COLUMNS a int PATH '' || lower(_path) || 'c');
 SELECT xmltable.* FROM xmltest2, LATERAL xmltable(('/d/r/' || lower(_path) || 'c') PASSING x COLUMNS a int PATH '.');
 SELECT xmltable.* FROM xmltest2, LATERAL xmltable(('/d/r/' || lower(_path) || 'c') PASSING x COLUMNS a int PATH 'x' DEFAULT ascii(_path) - 54);
+
+-- default namespaces
+CREATE TABLE t1 (id int, doc xml);
+INSERT INTO t1 VALUES (5, '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>');
+
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES('http://x.y' AS x), '/x:rows/x:row' PASSING t1.doc COLUMNS data int PATH 'x:a[1][@hoge]') AS x;
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'a[1][@hoge]') AS x;
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'child::a[1][attribute::hoge="haha"]') as x;
+
+-- should fail
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES('http://x.y' AS "pgdefnamespace.pgsqlxml.internal"), '/x:rows/x:row' PASSING t1.doc COLUMNS data int PATH 'x:a[1][@hoge]') AS x;
+
+-- xpath and xpath_exists supports namespaces too
+SELECT xpath('/x:rows/x:row/x:a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['x', 'http://x.y']]);
+SELECT xpath('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y']]);
+SELECT xpath_exists('/x:rows/x:row/x:a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['x', 'http://x.y']]);
+SELECT xpath_exists('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y']]);
+
+-- should fail
+SELECT xpath_exists('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y'], ARRAY['', 'http://x.z']]);

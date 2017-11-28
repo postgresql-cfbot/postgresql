@@ -111,13 +111,8 @@ LYNX = lynx
 INSTALL: % : %.html
 	$(PERL) -p -e 's,<h(1|2) class="title",<h\1 align=center,g' $< | LC_ALL=en_US.ISO8859-1 $(LYNX) -force_html -dump -nolist -stdin | $(ICONV) -f latin1 -t us-ascii//TRANSLIT > $@
 
-INSTALL.html: %.html : stylesheet-text.xsl %.xml
-	$(XMLLINT) --noout --valid $*.xml
-	$(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $^ >$@
-
-INSTALL.xml: standalone-profile.xsl standalone-install.xml postgres.sgml $(ALLSGML)
-	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --xinclude $(wordlist 1,2,$^) >$@
-
+INSTALL.html: installation.sgml installation-single.xsl stylesheet-text.xsl
+	sed -e "s/&version;/$(VERSION)/" $< | $(XSLTPROC) $(XSLTPROCFLAGS) $(word 2,$^) - | $(XSLTPROC) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $(word 3,$^) - >$@
 
 ##
 ## HTML

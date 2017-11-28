@@ -1,11 +1,38 @@
-<?xml version="1.0"?>
-<!DOCTYPE article PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN" "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+<?xml version='1.0'?>
+<!DOCTYPE xsl:stylesheet [
+<!ENTITY % version SYSTEM "version.sgml">
+%version;
+]>
+
+<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                version="1.0">
+
 <!--
-This file contains the stand-alone installation instructions that end up in
-the INSTALL file.  This document stitches together parts of the installation
-instructions in the main documentation with some material that only appears
-in the stand-alone version.
+This is a preprocessing layer to convert the installation instructions into a
+variant without links and references to the main documentation.
+
+- To include some section from installation.sgml,
+  use the <xsl:apply-templates select="//*[@id='{section-id}']"> construction.
+
+
+- To omit or replace something in the stand-alone INSTALL file,
+  give the element (maybe wrap a plain text in <phrase>)
+  in installation.sgml a standalonetext="..." attribute.
+
 -->
+
+<xsl:output
+    doctype-public="-//OASIS//DTD DocBook XML V4.2//EN"
+    doctype-system="http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd"/>
+
+<xsl:template match="@*|node()">
+  <xsl:copy>
+    <xsl:apply-templates select="@*|node()" />
+  </xsl:copy>
+</xsl:template>
+
+<xsl:template match="/">
+
 <article id="installation">
  <title><productname>PostgreSQL</productname> Installation from Source Code</title>
 
@@ -14,10 +41,10 @@ in the stand-alone version.
   <productname>PostgreSQL</productname> using this source code distribution.
  </para>
 
- <xi:include href="postgres.sgml" xpointer="install-short" xmlns:xi="http://www.w3.org/2001/XInclude"/>
- <xi:include href="postgres.sgml" xpointer="install-requirements" xmlns:xi="http://www.w3.org/2001/XInclude"/>
- <xi:include href="postgres.sgml" xpointer="install-procedure" xmlns:xi="http://www.w3.org/2001/XInclude"/>
- <xi:include href="postgres.sgml" xpointer="install-post" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+ <xsl:apply-templates select="//*[@id='install-short']"/>
+ <xsl:apply-templates select="//*[@id='install-requirements']"/>
+ <xsl:apply-templates select="//*[@id='install-procedure']"/>
+ <xsl:apply-templates select="//*[@id='install-post']"/>
 
  <sect1 id="install-getting-started">
   <title>Getting Started</title>
@@ -65,7 +92,7 @@ postgres$ <userinput>/usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data</useri
 
    <step>
     <para>
-     At this point, if you did not use the <command>initdb</command> <literal>-A</literal>
+     At this point, if you did not use the <command>initdb</command>&#160;<literal>-A</literal>
      option, you might want to modify <filename>pg_hba.conf</filename> to control
      local access to the server before you start it.  The default is to
      trust all local users.
@@ -162,6 +189,14 @@ postgres$ <userinput>/usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data</useri
   </para>
  </sect1>
 
- <xi:include href="postgres.sgml" xpointer="supported-platforms" xmlns:xi="http://www.w3.org/2001/XInclude"/>
- <xi:include href="postgres.sgml" xpointer="installation-platform-notes" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+ <xsl:apply-templates select="//*[@id='supported-platforms']"/>
+ <xsl:apply-templates select="//*[@id='installation-platform-notes']"/>
+
 </article>
+</xsl:template>
+
+<xsl:template match="*[@standalonetext]">
+  <xsl:value-of select="@standalonetext" />
+</xsl:template>
+
+</xsl:stylesheet>

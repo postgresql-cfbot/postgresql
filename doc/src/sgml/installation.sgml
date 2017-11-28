@@ -4,22 +4,24 @@
 The standalone version has some portions that are different from the version
 that is integrated into the full documentation set, in particular as regards
 links, so that INSTALL.html can be created without links to the main
-documentation.  See standalone-profile.xsl for details.
+documentation.  See installation-single.xsl for details.
 
 -->
 
 <chapter id="installation">
- <title>Installation from Source Code</title>
+ <title><phrase standalonetext="PostgreSQL"></phrase>
+  Installation from Source Code</title>
 
  <indexterm zone="installation">
   <primary>installation</primary>
  </indexterm>
 
  <para>
-  This chapter describes the installation of
+  This <phrase standalonetext="document">chapter</phrase> describes the installation of
   <productname>PostgreSQL</productname> using the source code
   distribution.  (If you are installing a pre-packaged distribution,
-  such as an RPM or Debian package, ignore this chapter
+  such as an RPM or Debian package, ignore this
+  <phrase standalonetext="document">chapter</phrase>
   and read the packager's instructions instead.)
  </para>
 
@@ -42,7 +44,7 @@ su - postgres
 /usr/local/pgsql/bin/psql test
 </synopsis>
    The long version is the rest of this
-   <phrase>chapter</phrase>.
+   <phrase standalonetext="document">chapter</phrase>.
   </para>
  </sect1>
 
@@ -193,7 +195,7 @@ su - postgres
       required version is <productname>Python</productname> 2.4.
       <productname>Python 3</productname> is supported if it's
       version 3.1 or later; but see
-      <xref linkend="plpython-python23"/>
+      <xref standalonetext="the PL/Python documentation" linkend="plpython-python23"/>
       when using Python 3.
      </para>
 
@@ -262,7 +264,8 @@ su - postgres
      <para>
       To build the <productname>PostgreSQL</productname> documentation,
       there is a separate set of requirements; see
-      <xref linkend="docguide-toolsets"/>.
+      <xref standalonetext="the main documentation's appendix on documentation"
+            linkend="docguide-toolsets"/>.
      </para>
     </listitem>
    </itemizedlist>
@@ -835,8 +838,8 @@ su - postgres
         <para>
          Build with <acronym>LDAP</acronym><indexterm><primary>LDAP</primary></indexterm>
          support for authentication and connection parameter lookup (see
-         <phrase id="install-ldap-links"><xref linkend="libpq-ldap"/> and
-         <xref linkend="auth-ldap"/></phrase> for more information). On Unix,
+         <phrase standalonetext="the documentation about client authentication and libpq">
+         <xref linkend="libpq-ldap"/> and <xref linkend="auth-ldap"/></phrase> for more information). On Unix,
          this requires the <productname>OpenLDAP</productname> package to be
          installed. On Windows, the default <productname>WinLDAP</productname>
          library is used.  <filename>configure</filename> will check for the required
@@ -855,7 +858,7 @@ su - postgres
          for <application>systemd</application><indexterm><primary>systemd</primary></indexterm>
          service notifications.  This improves integration if the server binary
          is started under <application>systemd</application> but has no impact
-         otherwise<phrase condition="standalone-ignore">; see <xref linkend="server-start"/> for more
+         otherwise<phrase standalonetext="">; see <xref linkend="server-start"/> for more
          information</phrase>.  <application>libsystemd</application> and the
          associated header files need to be installed to be able to use this
          option.
@@ -901,7 +904,7 @@ su - postgres
        <term><option>--with-uuid=<replaceable>LIBRARY</replaceable></option></term>
        <listitem>
         <para>
-         Build the <xref linkend="uuid-ossp"/> module
+         Build the <xref standalonetext="uuid-ossp" linkend="uuid-ossp"/> module
          (which provides functions to generate UUIDs), using the specified
          UUID library.<indexterm><primary>UUID</primary></indexterm>
          <replaceable>LIBRARY</replaceable> must be one of:
@@ -968,7 +971,7 @@ su - postgres
        <listitem>
         <para>
          Use libxslt when building the
-         <xref linkend="xml2"/>
+         <xref standalonetext="xml2" linkend="xml2"/>
          module.  <application>xml2</application> relies on this library
          to perform XSL transformations of XML.
         </para>
@@ -1084,7 +1087,7 @@ su - postgres
          has no support for strong random numbers on the platform.
          A source of random numbers is needed for some authentication
          protocols, as well as some routines in the
-         <xref linkend="pgcrypto"/>
+         <xref standalonetext="pgcrypto" linkend="pgcrypto"/>
          module. <option>--disable-strong-random</option> disables functionality that
          requires cryptographically strong random numbers, and substitutes
          a weak pseudo-random-number-generator for the generation of
@@ -1188,7 +1191,7 @@ su - postgres
          code coverage testing instrumentation.  When run, they
          generate files in the build directory with code coverage
          metrics.
-         <phrase condition="standalone-ignore">See <xref linkend="regress-coverage"/>
+         <phrase standalonetext="">See <xref linkend="regress-coverage"/>
          for more information.</phrase> This option is for use only with GCC
          and when doing development work.
         </para>
@@ -1249,7 +1252,7 @@ su - postgres
          </indexterm>
          Compiles <productname>PostgreSQL</productname> with support for the
          dynamic tracing tool DTrace.
-         <phrase condition="standalone-ignore">See <xref linkend="dynamic-trace"/>
+         <phrase standalonetext="">See <xref linkend="dynamic-trace"/>
          for more information.</phrase>
         </para>
 
@@ -1285,7 +1288,7 @@ su - postgres
         <para>
          Enable tests using the Perl TAP tools.  This requires a Perl
          installation and the Perl module <literal>IPC::Run</literal>.
-         <phrase condition="standalone-ignore">See <xref linkend="regress-tap"/> for more information.</phrase>
+         <phrase standalonetext="">See <xref linkend="regress-tap"/> for more information.</phrase>
         </para>
        </listitem>
       </varlistentry>
@@ -1442,7 +1445,7 @@ su - postgres
          whether Python 2 or 3 is specified here (or otherwise
          implicitly chosen) determines which variant of the PL/Python
          language becomes available.  See
-         <xref linkend="plpython-python23"/>
+         <xref standalonetext="the PL/Python documentation" linkend="plpython-python23"/>
          for more information.
         </para>
        </listitem>
@@ -1569,7 +1572,8 @@ PostgreSQL, contrib, and documentation successfully made. Ready to install.
 <userinput>make check</userinput>
 </screen>
     (This won't work as root; do it as an unprivileged user.)
-    See <xref linkend="regress"/> for
+    <phrase standalonetext="See the file &quot;src/test/regress/README&quot; and the documentation for">
+    <xref linkend="regress"/> contains</phrase>
     detailed information about interpreting the test results. You can
     repeat this test at any later time by issuing the same command.
    </para>
@@ -1581,7 +1585,7 @@ PostgreSQL, contrib, and documentation successfully made. Ready to install.
    <note>
     <para>
      If you are upgrading an existing system be sure to read
-     <xref linkend="upgrading"/>,
+     <xref standalonetext="the documentation" linkend="upgrading"/>,
      which has instructions about upgrading a
      cluster.
     </para>
@@ -1895,9 +1899,9 @@ export MANPATH
    This section documents additional platform-specific issues
    regarding the installation and setup of PostgreSQL.  Be sure to
    read the installation instructions, and in
-   particular <xref linkend="install-requirements"/> as well.  Also,
-   check <xref linkend="regress"/> regarding the
-   interpretation of regression test results.
+   particular <xref linkend="install-requirements"/> as well.  Also, check
+   <xref standalonetext="the file &quot;src/test/regress/README&quot; and the documentation" linkend="regress"/>
+   regarding the interpretation of regression test results.
   </para>
 
   <para>
@@ -2247,7 +2251,7 @@ ERROR:  could not load library "/opt/dbs/pgsql/lib/plperl.so": Bad address
    <para>
     PostgreSQL can be built using Cygwin, a Linux-like environment for
     Windows, but that method is inferior to the native Windows build
-    <phrase condition="standalone-ignore">(see <xref linkend="install-windows"/>)</phrase> and
+    <phrase standalonetext="">(see <xref linkend="install-windows"/>)</phrase> and
     running a server under Cygwin is no longer recommended.
    </para>
 
@@ -2441,7 +2445,7 @@ PHSS_30849  s700_800 u2comp/be/plugin library Patch
     Microsoft's <productname>Visual C++</productname> compiler suite.
     The MinGW build variant uses the normal build system described in
     this chapter; the Visual C++ build works completely differently
-    and is described in <xref linkend="install-windows"/>.
+    and is described in <xref standalonetext="the documentation" linkend="install-windows"/>.
     It is a fully native build and uses no additional software like
     MinGW.  A ready-made installer is available on the main
     PostgreSQL web site.
@@ -2602,8 +2606,9 @@ LIBOBJS = snprintf.o
     <title>Using DTrace for Tracing PostgreSQL</title>
 
     <para>
-     Yes, using DTrace is possible.  See <xref linkend="dynamic-trace"/> for
-     further information.
+     Yes, using DTrace is possible.  See
+     <xref standalonetext="the documentation" linkend="dynamic-trace"/>
+     for further information.
     </para>
 
     <para>

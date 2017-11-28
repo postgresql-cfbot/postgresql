@@ -11,6 +11,7 @@
 
 <!ENTITY reference  SYSTEM "reference.sgml">
 
+<!ENTITY % local.effectivity.attrib "standalonetext CDATA #IMPLIED">
 ]>
 
 <book id="postgres">

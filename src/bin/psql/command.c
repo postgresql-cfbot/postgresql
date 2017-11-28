@@ -349,8 +349,9 @@ exec_command(const char *cmd,
 		status = exec_command_include(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "if") == 0)
 		status = exec_command_if(scan_state, cstack, query_buf);
-	else if (strcmp(cmd, "l") == 0 || strcmp(cmd, "list") == 0 ||
-			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0)
+	else if (strcmp(cmd, "list") == 0 || strcmp(cmd, "list+") == 0 ||
+			 strcmp(cmd, "l") == 0 || strncmp(cmd, "l+", 2) == 0 ||
+			 strncmp(cmd, "ls", 2) == 0)
 		status = exec_command_list(scan_state, active_branch, cmd);
 	else if (strncmp(cmd, "lo_", 3) == 0)
 		status = exec_command_lo(scan_state, active_branch, cmd);
@@ -702,7 +703,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	{
 		char	   *pattern;
 		bool		show_verbose,
-					show_system;
+					show_system,
+					sort_desc;
+		sortby_type	sortby;
 
 		/* We don't do SQLID reduction on the pattern yet */
 		pattern = psql_scan_slash_option(scan_state,
@@ -710,6 +713,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 
 		show_verbose = strchr(cmd, '+') ? true : false;
 		show_system = strchr(cmd, 'S') ? true : false;
+
+		sortby = SORTBY_SCHEMA_NAME;
+		sort_desc = false;
 
 		switch (cmd[1])
 		{
@@ -720,7 +726,8 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					success = describeTableDetails(pattern, show_verbose, show_system);
 				else
 					/* standard listing of interesting things */
-					success = listTables("tvmsE", NULL, show_verbose, show_system);
+					success = listTables("tvmsE", NULL, show_verbose, show_system,
+										 false, false);
 				break;
 			case 'A':
 				success = describeAccessMethods(pattern, show_verbose);
@@ -789,12 +796,20 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeTypes(pattern, show_verbose, show_system);
 				break;
 			case 't':
-			case 'v':
 			case 'm':
 			case 'i':
+				if (strlen(cmd) >= 2)
+				{
+					if (strchr(&cmd[2], 's') != NULL)
+						sortby = SORTBY_SIZE;
+					sort_desc = strchr(&cmd[2], 'd') ? true : false;
+				}
+
+			case 'v':
 			case 's':
 			case 'E':
-				success = listTables(&cmd[1], pattern, show_verbose, show_system);
+				success = listTables(&cmd[1], pattern, show_verbose, show_system,
+									 sortby, sort_desc);
 				break;
 			case 'r':
 				if (cmd[2] == 'd' && cmd[3] == 's')
@@ -1655,13 +1670,17 @@ exec_command_list(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	{
 		char	   *pattern;
 		bool		show_verbose;
+		bool		sort_desc;
+		sortby_type	sortby;
 
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
 		show_verbose = strchr(cmd, '+') ? true : false;
+		sortby = strchr(cmd, 's') != NULL ? SORTBY_SIZE : SORTBY_NAME;
+		sort_desc = strchr(cmd, 'd') ? true : false;
 
-		success = listAllDbs(pattern, show_verbose);
+		success = listAllDbs(pattern, show_verbose, sortby, sort_desc);
 
 		if (pattern)
 			free(pattern);

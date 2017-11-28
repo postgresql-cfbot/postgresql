@@ -782,7 +782,7 @@ describeOperators(const char *pattern, bool verbose, bool showSystem)
  * for \l, \list, and -l switch
  */
 bool
-listAllDbs(const char *pattern, bool verbose)
+listAllDbs(const char *pattern, bool verbose, sortby_type sortby, bool sort_desc)
 {
 	PGresult   *res;
 	PQExpBufferData buf;
@@ -830,7 +830,30 @@ listAllDbs(const char *pattern, bool verbose)
 		processSQLNamePattern(pset.db, &buf, pattern, false, false,
 							  NULL, "d.datname", NULL, NULL);
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	if (sortby == SORTBY_SIZE)
+	{
+		if (pset.sversion < 80200)
+		{
+			char		sverbuf[32];
+
+			psql_error("The server (version %s) does not support database size function.\n",
+					   formatPGVersionNumber(pset.sversion, false,
+											 sverbuf, sizeof(sverbuf)));
+			return true;
+		}
+
+		appendPQExpBufferStr(&buf, "ORDER BY pg_catalog.pg_database_size(d.datname)");
+
+		if (sort_desc)
+				appendPQExpBuffer(&buf, " DESC");
+
+		appendPQExpBuffer(&buf, ", 1;");
+	}
+	else
+	{
+		Assert(sortby == SORTBY_NAME);
+		appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	}
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
 	if (!res)
@@ -3359,7 +3382,8 @@ listDbRoleSettings(const char *pattern, const char *pattern2)
  * (any order of the above is fine)
  */
 bool
-listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem)
+listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem,
+		   sortby_type sortby, bool sort_desc)
 {
 	bool		showTables = strchr(tabtypes, 't') != NULL;
 	bool		showIndexes = strchr(tabtypes, 'i') != NULL;
@@ -3480,7 +3504,37 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 						  "n.nspname", "c.relname", NULL,
 						  "pg_catalog.pg_table_is_visible(c.oid)");
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+	if (sortby == SORTBY_SIZE)
+	{
+		appendPQExpBufferStr(&buf, "ORDER BY ");
+
+		/*
+		 * As of PostgreSQL 9.0, use pg_table_size() to show a more accurate
+		 * size of a table, including FSM, VM and TOAST tables.
+		 */
+		if (pset.sversion >= 90000)
+			appendPQExpBuffer(&buf, "pg_catalog.pg_table_size(c.oid)");
+		else if (pset.sversion >= 80100)
+			appendPQExpBuffer(&buf, "pg_catalog.pg_relation_size(c.oid)");
+		else
+		{
+			char		sverbuf[32];
+
+			psql_error("The server (version %s) does not support table size function.\n",
+					   formatPGVersionNumber(pset.sversion, false,
+											 sverbuf, sizeof(sverbuf)));
+			return true;
+		}
+
+		if (sort_desc)
+			appendPQExpBufferStr(&buf, "DESC");
+		appendPQExpBufferStr(&buf, " , 1,2;");
+	}
+	else
+	{
+		Assert(sortby == SORTBY_SCHEMA_NAME);
+		appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+	}
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);

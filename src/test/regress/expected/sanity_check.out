@@ -43,6 +43,7 @@ dupindexcols|t
 e_star|f
 emp|f
 equipment_r|f
+equipment_ra|f
 f_star|f
 fast_emp4000|t
 float4_tbl|f
@@ -53,6 +54,7 @@ hash_i4_heap|t
 hash_name_heap|t
 hash_txt_heap|t
 hobbies_r|f
+hobbies_ra|f
 ihighway|t
 inet_tbl|f
 inhf|f
@@ -93,8 +95,9 @@ num_exp_sqrt|t
 num_exp_sub|t
 num_input_test|f
 num_result|f
-onek|t
+onek|f
 onek2|t
+oneka|t
 path_tbl|f
 person|f
 persons|f
@@ -182,8 +185,10 @@ sql_sizing|f
 sql_sizing_profiles|f
 stud_emp|f
 student|f
-tenk1|t
-tenk2|t
+tenk1|f
+tenk1a|t
+tenk2|f
+tenk2a|t
 test_range_excl|t
 test_range_gist|t
 test_range_spgist|t

@@ -350,16 +350,16 @@ set enable_hashagg to on;
 explain (costs off)
 select count(*) from
   ( select unique1 from tenk1 intersect select fivethous from tenk1 ) ss;
-                                     QUERY PLAN                                     
-------------------------------------------------------------------------------------
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
  Aggregate
    ->  Subquery Scan on ss
          ->  HashSetOp Intersect
                ->  Append
                      ->  Subquery Scan on "*SELECT* 2"
-                           ->  Seq Scan on tenk1
+                           ->  Seq Scan on tenk1a
                      ->  Subquery Scan on "*SELECT* 1"
-                           ->  Index Only Scan using tenk1_unique1 on tenk1 tenk1_1
+                           ->  Index Only Scan using tenk1_unique1 on tenk1a tenk1a_1
 (8 rows)
 
 select count(*) from
@@ -371,14 +371,14 @@ select count(*) from
 
 explain (costs off)
 select unique1 from tenk1 except select unique2 from tenk1 where unique2 != 10;
-                               QUERY PLAN                               
-------------------------------------------------------------------------
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
  HashSetOp Except
    ->  Append
          ->  Subquery Scan on "*SELECT* 1"
-               ->  Index Only Scan using tenk1_unique1 on tenk1
+               ->  Index Only Scan using tenk1_unique1 on tenk1a
          ->  Subquery Scan on "*SELECT* 2"
-               ->  Index Only Scan using tenk1_unique2 on tenk1 tenk1_1
+               ->  Index Only Scan using tenk1_unique2 on tenk1a tenk1a_1
                      Filter: (unique2 <> 10)
 (7 rows)
 
@@ -392,8 +392,8 @@ set enable_hashagg to off;
 explain (costs off)
 select count(*) from
   ( select unique1 from tenk1 intersect select fivethous from tenk1 ) ss;
-                                        QUERY PLAN                                        
-------------------------------------------------------------------------------------------
+                                         QUERY PLAN                                         
+--------------------------------------------------------------------------------------------
  Aggregate
    ->  Subquery Scan on ss
          ->  SetOp Intersect
@@ -401,9 +401,9 @@ select count(*) from
                      Sort Key: "*SELECT* 2".fivethous
                      ->  Append
                            ->  Subquery Scan on "*SELECT* 2"
-                                 ->  Seq Scan on tenk1
+                                 ->  Seq Scan on tenk1a
                            ->  Subquery Scan on "*SELECT* 1"
-                                 ->  Index Only Scan using tenk1_unique1 on tenk1 tenk1_1
+                                 ->  Index Only Scan using tenk1_unique1 on tenk1a tenk1a_1
 (10 rows)
 
 select count(*) from
@@ -415,16 +415,16 @@ select count(*) from
 
 explain (costs off)
 select unique1 from tenk1 except select unique2 from tenk1 where unique2 != 10;
-                                  QUERY PLAN                                  
-------------------------------------------------------------------------------
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
  SetOp Except
    ->  Sort
          Sort Key: "*SELECT* 1".unique1
          ->  Append
                ->  Subquery Scan on "*SELECT* 1"
-                     ->  Index Only Scan using tenk1_unique1 on tenk1
+                     ->  Index Only Scan using tenk1_unique1 on tenk1a
                ->  Subquery Scan on "*SELECT* 2"
-                     ->  Index Only Scan using tenk1_unique2 on tenk1 tenk1_1
+                     ->  Index Only Scan using tenk1_unique2 on tenk1a tenk1a_1
                            Filter: (unique2 <> 10)
 (9 rows)
 
@@ -697,11 +697,10 @@ explain (costs off)
    UNION ALL
    SELECT 2 AS t, * FROM tenk1 b) c
  WHERE t = 2;
-        QUERY PLAN         
----------------------------
- Append
-   ->  Seq Scan on tenk1 b
-(2 rows)
+      QUERY PLAN      
+----------------------
+ Seq Scan on tenk1a b
+(1 row)
 
 -- Test that we push quals into UNION sub-selects only when it's safe
 explain (costs off)

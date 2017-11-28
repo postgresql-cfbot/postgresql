@@ -619,12 +619,12 @@ explain (costs off)
 select first_value(max(x)) over (), y
   from (select unique1 as x, ten+four as y from tenk1) ss
   group by y;
-                 QUERY PLAN                  
----------------------------------------------
+                  QUERY PLAN                   
+-----------------------------------------------
  WindowAgg
    ->  HashAggregate
-         Group Key: (tenk1.ten + tenk1.four)
-         ->  Seq Scan on tenk1
+         Group Key: (tenk1a.ten + tenk1a.four)
+         ->  Seq Scan on tenk1a
 (4 rows)
 
 -- test non-default frame specifications

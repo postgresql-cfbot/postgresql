@@ -242,7 +242,7 @@ where (thousand, tenthous) >= (997, 5000)
 order by thousand, tenthous;
                         QUERY PLAN                         
 -----------------------------------------------------------
- Index Only Scan using tenk1_thous_tenthous on tenk1
+ Index Only Scan using tenk1_thous_tenthous on tenk1a
    Index Cond: (ROW(thousand, tenthous) >= ROW(997, 5000))
 (2 rows)
 
@@ -615,7 +615,7 @@ select row_to_json(q) from
                          QUERY PLAN                          
 -------------------------------------------------------------
  Subquery Scan on q
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1a
          Index Cond: ((thousand = 42) AND (tenthous < 2000))
 (3 rows)
 

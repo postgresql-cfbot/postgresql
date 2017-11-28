@@ -1521,14 +1521,14 @@ SELECT thousand, tenthous FROM tenk1
 UNION ALL
 SELECT thousand, thousand FROM tenk1
 ORDER BY thousand, tenthous;
-                               QUERY PLAN                                
--------------------------------------------------------------------------
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
  Merge Append
-   Sort Key: tenk1.thousand, tenk1.tenthous
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Sort Key: tenk1a.thousand, tenk1a.tenthous
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1a
    ->  Sort
-         Sort Key: tenk1_1.thousand, tenk1_1.thousand
-         ->  Index Only Scan using tenk1_thous_tenthous on tenk1 tenk1_1
+         Sort Key: tenk1a_1.thousand, tenk1a_1.thousand
+         ->  Index Only Scan using tenk1_thous_tenthous on tenk1a tenk1a_1
 (6 rows)
 
 explain (costs off)
@@ -1536,14 +1536,14 @@ SELECT thousand, tenthous, thousand+tenthous AS x FROM tenk1
 UNION ALL
 SELECT 42, 42, hundred FROM tenk1
 ORDER BY thousand, tenthous;
-                            QUERY PLAN                            
-------------------------------------------------------------------
+                             QUERY PLAN                             
+--------------------------------------------------------------------
  Merge Append
-   Sort Key: tenk1.thousand, tenk1.tenthous
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Sort Key: tenk1a.thousand, tenk1a.tenthous
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1a
    ->  Sort
          Sort Key: 42, 42
-         ->  Index Only Scan using tenk1_hundred on tenk1 tenk1_1
+         ->  Index Only Scan using tenk1_hundred on tenk1a tenk1a_1
 (6 rows)
 
 explain (costs off)
@@ -1551,14 +1551,14 @@ SELECT thousand, tenthous FROM tenk1
 UNION ALL
 SELECT thousand, random()::integer FROM tenk1
 ORDER BY thousand, tenthous;
-                               QUERY PLAN                                
--------------------------------------------------------------------------
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
  Merge Append
-   Sort Key: tenk1.thousand, tenk1.tenthous
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Sort Key: tenk1a.thousand, tenk1a.tenthous
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1a
    ->  Sort
-         Sort Key: tenk1_1.thousand, ((random())::integer)
-         ->  Index Only Scan using tenk1_thous_tenthous on tenk1 tenk1_1
+         Sort Key: tenk1a_1.thousand, ((random())::integer)
+         ->  Index Only Scan using tenk1_thous_tenthous on tenk1a tenk1a_1
 (6 rows)
 
 -- Check min/max aggregate optimization
@@ -1567,16 +1567,16 @@ SELECT min(x) FROM
   (SELECT unique1 AS x FROM tenk1 a
    UNION ALL
    SELECT unique2 AS x FROM tenk1 b) s;
-                             QUERY PLAN                             
---------------------------------------------------------------------
+                             QUERY PLAN                              
+---------------------------------------------------------------------
  Result
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Merge Append
                  Sort Key: a.unique1
-                 ->  Index Only Scan using tenk1_unique1 on tenk1 a
+                 ->  Index Only Scan using tenk1_unique1 on tenk1a a
                        Index Cond: (unique1 IS NOT NULL)
-                 ->  Index Only Scan using tenk1_unique2 on tenk1 b
+                 ->  Index Only Scan using tenk1_unique2 on tenk1a b
                        Index Cond: (unique2 IS NOT NULL)
 (9 rows)
 
@@ -1585,16 +1585,16 @@ SELECT min(y) FROM
   (SELECT unique1 AS x, unique1 AS y FROM tenk1 a
    UNION ALL
    SELECT unique2 AS x, unique2 AS y FROM tenk1 b) s;
-                             QUERY PLAN                             
---------------------------------------------------------------------
+                             QUERY PLAN                              
+---------------------------------------------------------------------
  Result
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Merge Append
                  Sort Key: a.unique1
-                 ->  Index Only Scan using tenk1_unique1 on tenk1 a
+                 ->  Index Only Scan using tenk1_unique1 on tenk1a a
                        Index Cond: (unique1 IS NOT NULL)
-                 ->  Index Only Scan using tenk1_unique2 on tenk1 b
+                 ->  Index Only Scan using tenk1_unique2 on tenk1a b
                        Index Cond: (unique2 IS NOT NULL)
 (9 rows)
 
@@ -1605,14 +1605,14 @@ SELECT x, y FROM
    UNION ALL
    SELECT unique2 AS x, unique2 AS y FROM tenk1 b) s
 ORDER BY x, y;
-                         QUERY PLAN                          
--------------------------------------------------------------
+                          QUERY PLAN                          
+--------------------------------------------------------------
  Merge Append
    Sort Key: a.thousand, a.tenthous
-   ->  Index Only Scan using tenk1_thous_tenthous on tenk1 a
+   ->  Index Only Scan using tenk1_thous_tenthous on tenk1a a
    ->  Sort
          Sort Key: b.unique2, b.unique2
-         ->  Index Only Scan using tenk1_unique2 on tenk1 b
+         ->  Index Only Scan using tenk1_unique2 on tenk1a b
 (6 rows)
 
 -- exercise rescan code path via a repeatedly-evaluated subquery
@@ -1678,12 +1678,11 @@ explain (costs off) select * from list_parted;
 (4 rows)
 
 explain (costs off) select * from list_parted where a is null;
-           QUERY PLAN           
---------------------------------
- Append
-   ->  Seq Scan on part_null_xy
-         Filter: (a IS NULL)
-(3 rows)
+        QUERY PLAN        
+--------------------------
+ Seq Scan on part_null_xy
+   Filter: (a IS NULL)
+(2 rows)
 
 explain (costs off) select * from list_parted where a is not null;
            QUERY PLAN            
@@ -1720,12 +1719,11 @@ explain (costs off) select * from list_parted where a = 'ab' or a in (null, 'cd'
 (7 rows)
 
 explain (costs off) select * from list_parted where a = 'ab';
-                QUERY PLAN                
-------------------------------------------
- Append
-   ->  Seq Scan on part_ab_cd
-         Filter: ((a)::text = 'ab'::text)
-(3 rows)
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on part_ab_cd
+   Filter: ((a)::text = 'ab'::text)
+(2 rows)
 
 create table range_list_parted (
 	a	int,
@@ -1805,12 +1803,11 @@ explain (costs off) select * from range_list_parted where a is null;
 
 /* Should only select rows from the null-accepting partition */
 explain (costs off) select * from range_list_parted where b is null;
-             QUERY PLAN             
-------------------------------------
- Append
-   ->  Seq Scan on part_40_inf_null
-         Filter: (b IS NULL)
-(3 rows)
+          QUERY PLAN          
+------------------------------
+ Seq Scan on part_40_inf_null
+   Filter: (b IS NULL)
+(2 rows)
 
 explain (costs off) select * from range_list_parted where a is not null and a < 67;
                    QUERY PLAN                   
@@ -1860,20 +1857,18 @@ create table mcrparted3 partition of mcrparted for values from (11, 1, 1) to (20
 create table mcrparted4 partition of mcrparted for values from (20, 10, 10) to (20, 20, 20);
 create table mcrparted5 partition of mcrparted for values from (20, 20, 20) to (maxvalue, maxvalue, maxvalue);
 explain (costs off) select * from mcrparted where a = 0;	-- scans mcrparted0
-          QUERY PLAN          
-------------------------------
- Append
-   ->  Seq Scan on mcrparted0
-         Filter: (a = 0)
-(3 rows)
+       QUERY PLAN       
+------------------------
+ Seq Scan on mcrparted0
+   Filter: (a = 0)
+(2 rows)
 
 explain (costs off) select * from mcrparted where a = 10 and abs(b) < 5;	-- scans mcrparted1
-                 QUERY PLAN                  
----------------------------------------------
- Append
-   ->  Seq Scan on mcrparted1
-         Filter: ((a = 10) AND (abs(b) < 5))
-(3 rows)
+              QUERY PLAN               
+---------------------------------------
+ Seq Scan on mcrparted1
+   Filter: ((a = 10) AND (abs(b) < 5))
+(2 rows)
 
 explain (costs off) select * from mcrparted where a = 10 and abs(b) = 5;	-- scans mcrparted1, mcrparted2
                  QUERY PLAN                  
@@ -1920,12 +1915,11 @@ explain (costs off) select * from mcrparted where a > -1;	-- scans all partition
 (13 rows)
 
 explain (costs off) select * from mcrparted where a = 20 and abs(b) = 10 and c > 10;	-- scans mcrparted4
-                        QUERY PLAN                         
------------------------------------------------------------
- Append
-   ->  Seq Scan on mcrparted4
-         Filter: ((c > 10) AND (a = 20) AND (abs(b) = 10))
-(3 rows)
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Seq Scan on mcrparted4
+   Filter: ((c > 10) AND (a = 20) AND (abs(b) = 10))
+(2 rows)
 
 explain (costs off) select * from mcrparted where a = 20 and c > 20; -- scans mcrparted3, mcrparte4, mcrparte5
                QUERY PLAN                
@@ -1947,22 +1941,18 @@ create table parted_minmax1 partition of parted_minmax for values from (1) to (1
 create index parted_minmax1i on parted_minmax1 (a, b);
 insert into parted_minmax values (1,'12345');
 explain (costs off) select min(a), max(a) from parted_minmax where b = '12345';
-                                              QUERY PLAN                                               
--------------------------------------------------------------------------------------------------------
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
  Result
    InitPlan 1 (returns $0)
      ->  Limit
-           ->  Merge Append
-                 Sort Key: parted_minmax1.a
-                 ->  Index Only Scan using parted_minmax1i on parted_minmax1
-                       Index Cond: ((a IS NOT NULL) AND (b = '12345'::text))
+           ->  Index Only Scan using parted_minmax1i on parted_minmax1
+                 Index Cond: ((a IS NOT NULL) AND (b = '12345'::text))
    InitPlan 2 (returns $1)
      ->  Limit
-           ->  Merge Append
-                 Sort Key: parted_minmax1_1.a DESC
-                 ->  Index Only Scan Backward using parted_minmax1i on parted_minmax1 parted_minmax1_1
-                       Index Cond: ((a IS NOT NULL) AND (b = '12345'::text))
-(13 rows)
+           ->  Index Only Scan Backward using parted_minmax1i on parted_minmax1 parted_minmax1_1
+                 Index Cond: ((a IS NOT NULL) AND (b = '12345'::text))
+(9 rows)
 
 select min(a), max(a) from parted_minmax where b = '12345';
  min | max 

@@ -426,7 +426,7 @@ explain (costs off)
   select * from tenk1 where unique1 = unique1 and unique2 = unique2;
                          QUERY PLAN                          
 -------------------------------------------------------------
- Seq Scan on tenk1
+ Seq Scan on tenk1a
    Filter: ((unique1 IS NOT NULL) AND (unique2 IS NOT NULL))
 (2 rows)
 
@@ -435,7 +435,7 @@ explain (costs off)
   select * from tenk1 where unique1 = unique1 or unique2 = unique2;
                        QUERY PLAN                       
 --------------------------------------------------------
- Seq Scan on tenk1
+ Seq Scan on tenk1a
    Filter: ((unique1 = unique1) OR (unique2 = unique2))
 (2 rows)
 

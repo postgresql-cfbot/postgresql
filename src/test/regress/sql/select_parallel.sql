@@ -36,7 +36,7 @@ reset max_parallel_workers;
 reset parallel_leader_participation;
 
 -- test that parallel_restricted function doesn't run in worker
-alter table tenk1 set (parallel_workers = 4);
+alter table tenk1a set (parallel_workers = 4);
 explain (verbose, costs off)
 select parallel_restricted(unique1) from tenk1
   where stringu1 = 'GRAAAA' order by 1;
@@ -62,7 +62,7 @@ execute tenk1_count(1);
 deallocate tenk1_count;
 
 -- test parallel plans for queries containing un-correlated subplans.
-alter table tenk2 set (parallel_workers = 0);
+alter table tenk2a set (parallel_workers = 0);
 explain (costs off)
 	select count(*) from tenk1 where (two, four) not in
 	(select hundred, thousand from tenk2 where thousand > 100);

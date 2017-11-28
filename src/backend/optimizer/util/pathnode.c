@@ -1206,13 +1206,21 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
  *	  pathnode.
  *
  * Note that we must handle subpaths = NIL, representing a dummy access path.
+ * If isproxy is true, then we expect only a single subpath. translate_from
+ * and translate_to can be set to allow translation of Exprs between the
+ * subpath and the Append Rel.
  */
 AppendPath *
 create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
-				   int parallel_workers, List *partitioned_rels)
+				   int parallel_workers, List *partitioned_rels,
+				   List *translate_from, List *translate_to,
+				   bool isproxy)
 {
 	AppendPath *pathnode = makeNode(AppendPath);
 	ListCell   *l;
+
+	/* Might both be NIL, but must contain the same number of elements. */
+	Assert(list_length(translate_from) == list_length(translate_to));
 
 	pathnode->path.pathtype = T_Append;
 	pathnode->path.parent = rel;
@@ -1222,9 +1230,26 @@ create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_workers = parallel_workers;
-	pathnode->path.pathkeys = NIL;	/* result is always considered unsorted */
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
+	pathnode->translate_from = translate_from;
+	pathnode->translate_to = translate_to;
 	pathnode->subpaths = subpaths;
+	pathnode->isproxy = isproxy;
+
+	/*
+	 * If this is a proxy Append, there can be only one subpath, so we're able
+	 * to use its PathKeys.
+	 */
+	if (isproxy)
+	{
+		Assert(list_length(subpaths) == 1);
+		pathnode->path.pathkeys = ((Path *) linitial(subpaths))->pathkeys;
+	}
+	else
+	{
+		Assert(translate_from == NIL);
+		pathnode->path.pathkeys = NIL;
+	}
 
 	/*
 	 * We don't bother with inventing a cost_append(), but just do it here.

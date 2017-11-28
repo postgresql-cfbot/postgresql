@@ -8,12 +8,18 @@
 CREATE TABLE hobbies_r (
 	name		text,
 	person 		text
-);
+) PARTITION BY RANGE (name);
+
+CREATE TABLE hobbies_ra PARTITION OF hobbies_r FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
+
 
 CREATE TABLE equipment_r (
 	name 		text,
 	hobby		text
-);
+) PARTITION BY RANGE (name);
+
+CREATE TABLE equipment_ra PARTITION OF equipment_r FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
+
 
 CREATE TABLE onek (
 	unique1		int4,
@@ -32,7 +38,10 @@ CREATE TABLE onek (
 	stringu1	name,
 	stringu2	name,
 	string4		name
-);
+) PARTITION BY RANGE (unique1);
+
+CREATE TABLE oneka PARTITION OF onek FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
+
 
 CREATE TABLE tenk1 (
 	unique1		int4,
@@ -51,7 +60,9 @@ CREATE TABLE tenk1 (
 	stringu1	name,
 	stringu2	name,
 	string4		name
-) WITH OIDS;
+) PARTITION BY RANGE (unique1) WITH OIDS;
+
+CREATE TABLE tenk1a PARTITION OF tenk1 FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
 
 CREATE TABLE tenk2 (
 	unique1 	int4,
@@ -70,7 +81,10 @@ CREATE TABLE tenk2 (
 	stringu1	name,
 	stringu2	name,
 	string4		name
-);
+) PARTITION BY RANGE (unique1);
+
+CREATE TABLE tenk2a PARTITION OF tenk2 FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
+
 
 
 CREATE TABLE person (

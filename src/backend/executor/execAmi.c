@@ -443,6 +443,21 @@ ExecSupportsMarkRestore(Path *pathnode)
 				return false;	/* childless Result */
 			}
 
+		case T_Append:
+			{
+				AppendPath *appendPath = castNode(AppendPath, pathnode);
+
+				/*
+				 * AppendPaths acting as a proxy will never appear in the
+				 * final plan, so just return the mark/restore capability of
+				 * the proxied subpath.
+				 */
+				if (IS_PROXY_PATH(appendPath))
+					return ExecSupportsMarkRestore(
+									(Path *) linitial(appendPath->subpaths));
+
+				return false;
+			}
 		default:
 			break;
 	}

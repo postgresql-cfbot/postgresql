@@ -415,12 +415,12 @@ LINE 3:        lateral (select a, b, sum(v.x) from gstest_data(v.x) ...
 -- min max optimization should still work with GROUP BY ()
 explain (costs off)
   select min(unique1) from tenk1 GROUP BY ();
-                         QUERY PLAN                         
-------------------------------------------------------------
+                         QUERY PLAN                          
+-------------------------------------------------------------
  Result
    InitPlan 1 (returns $0)
      ->  Limit
-           ->  Index Only Scan using tenk1_unique1 on tenk1
+           ->  Index Only Scan using tenk1_unique1 on tenk1a
                  Index Cond: (unique1 IS NOT NULL)
 (5 rows)
 
@@ -1420,21 +1420,21 @@ explain (costs off)
          count(hundred), count(thousand), count(twothousand),
          count(*)
     from tenk1 group by grouping sets (unique1,twothousand,thousand,hundred,ten,four,two);
-          QUERY PLAN           
--------------------------------
+            QUERY PLAN             
+-----------------------------------
  MixedAggregate
-   Hash Key: two
-   Hash Key: four
-   Hash Key: ten
-   Hash Key: hundred
-   Group Key: unique1
-   Sort Key: twothousand
-     Group Key: twothousand
-   Sort Key: thousand
-     Group Key: thousand
+   Hash Key: tenk1a.two
+   Hash Key: tenk1a.four
+   Hash Key: tenk1a.ten
+   Hash Key: tenk1a.hundred
+   Group Key: tenk1a.unique1
+   Sort Key: tenk1a.twothousand
+     Group Key: tenk1a.twothousand
+   Sort Key: tenk1a.thousand
+     Group Key: tenk1a.thousand
    ->  Sort
-         Sort Key: unique1
-         ->  Seq Scan on tenk1
+         Sort Key: tenk1a.unique1
+         ->  Seq Scan on tenk1a
 (13 rows)
 
 explain (costs off)
@@ -1443,17 +1443,17 @@ explain (costs off)
          count(hundred), count(thousand), count(twothousand),
          count(*)
     from tenk1 group by grouping sets (unique1,hundred,ten,four,two);
-          QUERY PLAN           
--------------------------------
+            QUERY PLAN            
+----------------------------------
  MixedAggregate
-   Hash Key: two
-   Hash Key: four
-   Hash Key: ten
-   Hash Key: hundred
-   Group Key: unique1
+   Hash Key: tenk1a.two
+   Hash Key: tenk1a.four
+   Hash Key: tenk1a.ten
+   Hash Key: tenk1a.hundred
+   Group Key: tenk1a.unique1
    ->  Sort
-         Sort Key: unique1
-         ->  Seq Scan on tenk1
+         Sort Key: tenk1a.unique1
+         ->  Seq Scan on tenk1a
 (9 rows)
 
 set work_mem = '384kB';
@@ -1463,20 +1463,20 @@ explain (costs off)
          count(hundred), count(thousand), count(twothousand),
          count(*)
     from tenk1 group by grouping sets (unique1,twothousand,thousand,hundred,ten,four,two);
-          QUERY PLAN           
--------------------------------
+            QUERY PLAN             
+-----------------------------------
  MixedAggregate
-   Hash Key: two
-   Hash Key: four
-   Hash Key: ten
-   Hash Key: hundred
-   Hash Key: thousand
-   Group Key: unique1
-   Sort Key: twothousand
-     Group Key: twothousand
+   Hash Key: tenk1a.two
+   Hash Key: tenk1a.four
+   Hash Key: tenk1a.ten
+   Hash Key: tenk1a.hundred
+   Hash Key: tenk1a.thousand
+   Group Key: tenk1a.unique1
+   Sort Key: tenk1a.twothousand
+     Group Key: tenk1a.twothousand
    ->  Sort
-         Sort Key: unique1
-         ->  Seq Scan on tenk1
+         Sort Key: tenk1a.unique1
+         ->  Seq Scan on tenk1a
 (12 rows)
 
 -- end

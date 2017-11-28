@@ -35,6 +35,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/predtest.h"
+#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
@@ -73,12 +74,13 @@ static Plan *create_plan_recurse(PlannerInfo *root, Path *best_path,
 static Plan *create_scan_plan(PlannerInfo *root, Path *best_path,
 				 int flags);
 static List *build_path_tlist(PlannerInfo *root, Path *path);
+static List *finalize_plan_tlist(PlannerInfo *root, List *tlist);
 static bool use_physical_tlist(PlannerInfo *root, Path *path, int flags);
 static List *get_gating_quals(PlannerInfo *root, List *quals);
 static Plan *create_gating_plan(PlannerInfo *root, Path *path, Plan *plan,
 				   List *gating_quals);
 static Plan *create_join_plan(PlannerInfo *root, JoinPath *best_path);
-static Plan *create_append_plan(PlannerInfo *root, AppendPath *best_path);
+static Plan *create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags);
 static Plan *create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path);
 static Result *create_result_plan(PlannerInfo *root, ResultPath *best_path);
 static ProjectSet *create_project_set_plan(PlannerInfo *root, ProjectSetPath *best_path);
@@ -383,7 +385,7 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 			break;
 		case T_Append:
 			plan = create_append_plan(root,
-									  (AppendPath *) best_path);
+									  (AppendPath *) best_path, flags);
 			break;
 		case T_MergeAppend:
 			plan = create_merge_append_plan(root,
@@ -747,6 +749,12 @@ build_path_tlist(PlannerInfo *root, Path *path)
 		if (path->param_info)
 			node = replace_nestloop_params(root, node);
 
+		/*
+		 * Perform any translations required from any Append nodes which
+		 * were removed.
+		 */
+		node = replace_translatable_exprs(root, node);
+
 		tle = makeTargetEntry((Expr *) node,
 							  resno,
 							  NULL,
@@ -758,6 +766,18 @@ build_path_tlist(PlannerInfo *root, Path *path)
 		resno++;
 	}
 	return tlist;
+}
+
+/*
+ * finalize_plan_tlist
+ *		Finalize the plan's targetlist. This must be used in places where
+ *		build_path_tlist is called before create_plan_recurse is called for
+ *		any of the plan's subplans.
+ */
+static List *
+finalize_plan_tlist(PlannerInfo *root, List *tlist)
+{
+	return (List *) replace_translatable_exprs(root, (Node *) tlist);
 }
 
 /*
@@ -793,9 +813,13 @@ use_physical_tlist(PlannerInfo *root, Path *path, int flags)
 	/*
 	 * Can't do it with inheritance cases either (mainly because Append
 	 * doesn't project; this test may be unnecessary now that
-	 * create_append_plan instructs its children to return an exact tlist).
+	 * create_append_plan instructs its children to return an exact tlist),
+	 * however, we must allow any inherited children that have been pulled up
+	 * from below and Append.
 	 */
-	if (rel->reloptkind != RELOPT_BASEREL)
+	if (rel->reloptkind != RELOPT_BASEREL &&
+		(rel->reloptkind != RELOPT_OTHER_MEMBER_REL ||
+		!bms_is_member(rel->relid, root->translated_childrelids)))
 		return false;
 
 	/*
@@ -1009,12 +1033,54 @@ create_join_plan(PlannerInfo *root, JoinPath *best_path)
  *	  Returns a Plan node.
  */
 static Plan *
-create_append_plan(PlannerInfo *root, AppendPath *best_path)
+create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 {
 	Append	   *plan;
-	List	   *tlist = build_path_tlist(root, &best_path->path);
+	List	   *tlist;
 	List	   *subplans = NIL;
 	ListCell   *subpaths;
+
+	/*
+	 * If the AppendPath is acting as a proxy to a single subpath then we
+	 * don't create the Append node at all. Instead we'll just generate the
+	 * plan node for the only subpath.
+	 */
+	if (IS_PROXY_PATH(best_path))
+	{
+		Path	   *subpath = (Path *) linitial(best_path->subpaths);
+		Plan	   *plan;
+
+		/* Just verify we've only one, otherwise the planner messed up */
+		Assert(list_length(best_path->subpaths) == 1);
+
+		/*
+		 * Make the required changes to the child relation to allow it to
+		 * be scanned in place of its parent.
+		 */
+		promote_child_relation(root, best_path->path.parent, subpath->parent,
+							   best_path->translate_from,
+							   best_path->translate_to);
+
+		/* Generate a new PathTarget using the Append relation's one */
+		subpath->pathtarget = copy_pathtarget(best_path->path.pathtarget);
+		subpath->pathtarget->exprs = (List *) replace_translatable_exprs(root,
+										(Node *) subpath->pathtarget->exprs);
+
+		plan = create_plan_recurse(root, subpath, flags);
+
+		/*
+		 * If we require an exact tlist then we'd better use a translated
+		 * version of the, would be, Append node's tlist.
+		 */
+		if (flags & CP_EXACT_TLIST)
+			plan->targetlist = build_path_tlist(root, &best_path->path);
+
+		copy_generic_path_info(plan, (Path *) subpath);
+
+		return plan;
+	}
+
+	tlist = build_path_tlist(root, &best_path->path);
 
 	/*
 	 * The subpaths list could be empty, if every child was proven empty by
@@ -1051,13 +1117,6 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path)
 
 		subplans = lappend(subplans, subplan);
 	}
-
-	/*
-	 * XXX ideally, if there's just one child, we'd not bother to generate an
-	 * Append node but just return the single child.  At the moment this does
-	 * not work because the varno of the child scan plan won't match the
-	 * parent-rel Vars it'll be asked to emit.
-	 */
 
 	plan = make_append(subplans, tlist, best_path->partitioned_rels);
 
@@ -1170,6 +1229,14 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path)
 	node->partitioned_rels = best_path->partitioned_rels;
 	node->mergeplans = subplans;
 
+	/*
+	 * Since we called build_path_tlist() before create_plan_recurse some
+	 * Append nodes may have been removed and new translation Vars added.
+	 * We'll need to perform a final translation to perform any further
+	 * translations which were added since build_path_tlist was called.
+	 */
+	plan->targetlist = finalize_plan_tlist(root, plan->targetlist);
+
 	return (Plan *) node;
 }
 
@@ -1192,6 +1259,8 @@ create_result_plan(PlannerInfo *root, ResultPath *best_path)
 
 	/* best_path->quals is just bare clauses */
 	quals = order_qual_clauses(root, best_path->quals);
+
+	quals = (List *) replace_translatable_exprs(root, (Node *) quals);
 
 	plan = make_result(tlist, (Node *) quals, NULL);
 
@@ -1299,7 +1368,8 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 	 * sorting or stuff has to be added.
 	 */
 	in_operators = best_path->in_operators;
-	uniq_exprs = best_path->uniq_exprs;
+	uniq_exprs = (List *) replace_translatable_exprs(root,
+											(Node *) best_path->uniq_exprs);
 
 	/* initialize modified subplan tlist as just the "required" vars */
 	newtlist = build_path_tlist(root, &best_path->path);
@@ -1548,6 +1618,15 @@ create_gather_merge_plan(PlannerInfo *root, GatherMergePath *best_path)
 	/* use parallel mode for parallel plans. */
 	root->glob->parallelModeNeeded = true;
 
+	/*
+	 * Since we called build_path_tlist() before create_plan_recurse some
+	 * Append nodes may have been removed and new translation Vars added.
+	 * We'll need to perform a final translation to perform any further
+	 * translations which were added since build_path_tlist was called.
+	 */
+	gm_plan->plan.targetlist = finalize_plan_tlist(root,
+												   gm_plan->plan.targetlist);
+
 	return gm_plan;
 }
 
@@ -1693,6 +1772,8 @@ create_group_plan(PlannerInfo *root, GroupPath *best_path)
 
 	quals = order_qual_clauses(root, best_path->qual);
 
+	quals = (List *) replace_translatable_exprs(root, (Node *) quals);
+
 	plan = make_group(tlist,
 					  quals,
 					  list_length(best_path->groupClause),
@@ -1757,6 +1838,8 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 	tlist = build_path_tlist(root, &best_path->path);
 
 	quals = order_qual_clauses(root, best_path->qual);
+
+	quals = (List *) replace_translatable_exprs(root, (Node *) quals);
 
 	plan = make_agg(tlist, quals,
 					best_path->aggstrategy,
@@ -1951,13 +2034,18 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 		RollupData *rollup = linitial(rollups);
 		AttrNumber *top_grpColIdx;
 		int			numGroupCols;
+		List	   *quals;
 
 		top_grpColIdx = remap_groupColIdx(root, rollup->groupClause);
 
 		numGroupCols = list_length((List *) linitial(rollup->gsets));
 
+		quals = (List *) replace_translatable_exprs(root,
+													(Node *) best_path->qual);
+
+
 		plan = make_agg(build_path_tlist(root, &best_path->path),
-						best_path->qual,
+						quals,
 						best_path->aggstrategy,
 						AGGSPLIT_SIMPLE,
 						numGroupCols,
@@ -1995,6 +2083,13 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 		PlannerInfo *subroot = mminfo->subroot;
 		Query	   *subparse = subroot->parse;
 		Plan	   *plan;
+
+		/*
+		 * This minmaxagg may have been below a single path Append node which
+		 * has been removed.  Apply expr translations, if required.
+		 */
+		mminfo->target = (Expr *) replace_translatable_exprs(root,
+													(Node *) mminfo->target);
 
 		/*
 		 * Generate the plan for the subquery. We already have a Path, but we
@@ -3051,6 +3146,11 @@ create_tidscan_plan(PlannerInfo *root, TidPath *best_path,
 		ortidquals = list_make1(make_orclause(ortidquals));
 	scan_clauses = list_difference(scan_clauses, ortidquals);
 
+	/*
+	 * tidquals won't need to be passed through replace_translatable_exprs()
+	 * as ctid is the same varattno in every relation.
+	 */
+
 	scan_plan = make_tidscan(tlist,
 							 scan_clauses,
 							 scan_relid,
@@ -3727,6 +3827,8 @@ create_nestloop_plan(PlannerInfo *root,
 		{
 			root->curOuterParams = list_delete_cell(root->curOuterParams,
 													cell, prev);
+			nlp->paramval = (Var *) replace_translatable_exprs(root,
+													(Node *) nlp->paramval);
 			nestParams = lappend(nestParams, nlp);
 		}
 		else if (IsA(nlp->paramval, PlaceHolderVar) &&
@@ -3739,11 +3841,19 @@ create_nestloop_plan(PlannerInfo *root,
 		{
 			root->curOuterParams = list_delete_cell(root->curOuterParams,
 													cell, prev);
+			nlp->paramval = (Var *) replace_translatable_exprs(root,
+													(Node *) nlp->paramval);
 			nestParams = lappend(nestParams, nlp);
 		}
 		else
 			prev = cell;
 	}
+
+	/* perform translation of join clauses, if required */
+	joinclauses = (List *) replace_translatable_exprs(root,
+														(Node *) joinclauses);
+	otherclauses = (List *) replace_translatable_exprs(root,
+													(Node *) otherclauses);
 
 	join_plan = make_nestloop(tlist,
 							  joinclauses,
@@ -3753,6 +3863,15 @@ create_nestloop_plan(PlannerInfo *root,
 							  inner_plan,
 							  best_path->jointype,
 							  best_path->inner_unique);
+
+	/*
+	 * Since we called build_path_tlist() before create_plan_recurse some
+	 * Append nodes may have been removed and new translation Vars added.
+	 * We'll need to perform a final translation to perform any further
+	 * translations which were added since build_path_tlist was called.
+	 */
+	join_plan->join.plan.targetlist = finalize_plan_tlist(root,
+											join_plan->join.plan.targetlist);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->path);
 
@@ -4047,6 +4166,14 @@ create_mergejoin_plan(PlannerInfo *root,
 	 * than we need for the current mergejoin.
 	 */
 
+	/* perform translation of join clauses, if required */
+	mergeclauses = (List *) replace_translatable_exprs(root,
+													(Node *) mergeclauses);
+	joinclauses = (List *) replace_translatable_exprs(root,
+														(Node *) joinclauses);
+	otherclauses = (List *) replace_translatable_exprs(root,
+													(Node *) otherclauses);
+
 	/*
 	 * Now we can build the mergejoin node.
 	 */
@@ -4063,6 +4190,15 @@ create_mergejoin_plan(PlannerInfo *root,
 							   best_path->jpath.jointype,
 							   best_path->jpath.inner_unique,
 							   best_path->skip_mark_restore);
+
+	/*
+	 * Since we called build_path_tlist() before create_plan_recurse some
+	 * Append nodes may have been removed and new translation Vars added.
+	 * We'll need to perform a final translation to perform any further
+	 * translations which were added since build_path_tlist was called.
+	 */
+	join_plan->join.plan.targetlist = finalize_plan_tlist(root,
+											join_plan->join.plan.targetlist);
 
 	/* Costs of sort and material steps are included in path cost already */
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
@@ -4190,6 +4326,14 @@ create_hashjoin_plan(PlannerInfo *root,
 	copy_plan_costsize(&hash_plan->plan, inner_plan);
 	hash_plan->plan.startup_cost = hash_plan->plan.total_cost;
 
+	/* perform translation of join clauses, if required */
+	hashclauses = (List *) replace_translatable_exprs(root,
+														(Node *) hashclauses);
+	joinclauses = (List *) replace_translatable_exprs(root,
+														(Node *) joinclauses);
+	otherclauses = (List *) replace_translatable_exprs(root,
+														(Node *) otherclauses);
+
 	join_plan = make_hashjoin(tlist,
 							  joinclauses,
 							  otherclauses,
@@ -4198,6 +4342,15 @@ create_hashjoin_plan(PlannerInfo *root,
 							  (Plan *) hash_plan,
 							  best_path->jpath.jointype,
 							  best_path->jpath.inner_unique);
+
+	/*
+	 * Since we called build_path_tlist() before create_plan_recurse some
+	 * Append nodes may have been removed and new translation Vars added.
+	 * We'll need to perform a final translation to perform any further
+	 * translations which were added since build_path_tlist was called.
+	 */
+	join_plan->join.plan.targetlist = finalize_plan_tlist(root,
+											join_plan->join.plan.targetlist);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
 
@@ -6583,14 +6736,24 @@ is_projection_capable_path(Path *path)
 		case T_RecursiveUnion:
 			return false;
 		case T_Append:
+			{
+				AppendPath *apath = (AppendPath *) path;
+				/*
+				 * For Appends acting as a proxy to a single subpath, just
+				 * return the projection capability of that subpath.
+				 */
+				if (IS_PROXY_PATH(apath))
+					return is_projection_capable_path(
+										(Path *) linitial(apath->subpaths));
 
-			/*
-			 * Append can't project, but if it's being used to represent a
-			 * dummy path, claim that it can project.  This prevents us from
-			 * converting a rel from dummy to non-dummy status by applying a
-			 * projection to its dummy path.
-			 */
-			return IS_DUMMY_PATH(path);
+				/*
+				 * Otherwise, Append can't project, but if it's being used to
+				 * represent a dummy path, claim that it can project.  This
+				 * prevents us from converting a rel from dummy to non-dummy
+				 * status by applying a projection to its dummy path.
+				 */
+				return IS_DUMMY_PATH(path);
+			}
 		case T_ProjectSet:
 
 			/*

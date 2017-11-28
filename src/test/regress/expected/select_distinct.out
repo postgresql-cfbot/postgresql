@@ -130,15 +130,15 @@ SELECT DISTINCT p.age FROM person* p ORDER BY age using >;
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT count(*) FROM
   (SELECT DISTINCT two, four, two FROM tenk1) ss;
-                       QUERY PLAN                       
---------------------------------------------------------
+                        QUERY PLAN                         
+-----------------------------------------------------------
  Aggregate
    Output: count(*)
    ->  HashAggregate
-         Output: tenk1.two, tenk1.four, tenk1.two
-         Group Key: tenk1.two, tenk1.four, tenk1.two
-         ->  Seq Scan on public.tenk1
-               Output: tenk1.two, tenk1.four, tenk1.two
+         Output: tenk1a.two, tenk1a.four, tenk1a.two
+         Group Key: tenk1a.two, tenk1a.four, tenk1a.two
+         ->  Seq Scan on public.tenk1a
+               Output: tenk1a.two, tenk1a.four, tenk1a.two
 (7 rows)
 
 SELECT count(*) FROM

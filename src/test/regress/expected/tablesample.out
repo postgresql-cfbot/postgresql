@@ -257,7 +257,7 @@ select pct, count(unique1) from
    Group Key: "*VALUES*".column1
    ->  Nested Loop
          ->  Values Scan on "*VALUES*"
-         ->  Sample Scan on tenk1
+         ->  Sample Scan on tenk1a
                Sampling: bernoulli ("*VALUES*".column1)
 (6 rows)
 

@@ -9,7 +9,7 @@ COPY aggtest FROM '@abs_srcdir@/data/agg.data';
 
 COPY onek FROM '@abs_srcdir@/data/onek.data';
 
-COPY onek TO '@abs_builddir@/results/onek.data';
+COPY oneka TO '@abs_builddir@/results/onek.data';
 
 DELETE FROM onek;
 

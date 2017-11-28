@@ -6,31 +6,31 @@
 --
 -- BTREE
 --
-CREATE INDEX onek_unique1 ON onek USING btree(unique1 int4_ops);
+CREATE INDEX onek_unique1 ON oneka USING btree(unique1 int4_ops);
 
-CREATE INDEX IF NOT EXISTS onek_unique1 ON onek USING btree(unique1 int4_ops);
+CREATE INDEX IF NOT EXISTS onek_unique1 ON oneka USING btree(unique1 int4_ops);
 
-CREATE INDEX IF NOT EXISTS ON onek USING btree(unique1 int4_ops);
+CREATE INDEX IF NOT EXISTS ON oneka USING btree(unique1 int4_ops);
 
-CREATE INDEX onek_unique2 ON onek USING btree(unique2 int4_ops);
+CREATE INDEX onek_unique2 ON oneka USING btree(unique2 int4_ops);
 
-CREATE INDEX onek_hundred ON onek USING btree(hundred int4_ops);
+CREATE INDEX onek_hundred ON oneka USING btree(hundred int4_ops);
 
-CREATE INDEX onek_stringu1 ON onek USING btree(stringu1 name_ops);
+CREATE INDEX onek_stringu1 ON oneka USING btree(stringu1 name_ops);
 
-CREATE INDEX tenk1_unique1 ON tenk1 USING btree(unique1 int4_ops);
+CREATE INDEX tenk1_unique1 ON tenk1a USING btree(unique1 int4_ops);
 
-CREATE INDEX tenk1_unique2 ON tenk1 USING btree(unique2 int4_ops);
+CREATE INDEX tenk1_unique2 ON tenk1a USING btree(unique2 int4_ops);
 
-CREATE INDEX tenk1_hundred ON tenk1 USING btree(hundred int4_ops);
+CREATE INDEX tenk1_hundred ON tenk1a USING btree(hundred int4_ops);
 
-CREATE INDEX tenk1_thous_tenthous ON tenk1 (thousand, tenthous);
+CREATE INDEX tenk1_thous_tenthous ON tenk1a (thousand, tenthous);
 
-CREATE INDEX tenk2_unique1 ON tenk2 USING btree(unique1 int4_ops);
+CREATE INDEX tenk2_unique1 ON tenk2a USING btree(unique1 int4_ops);
 
-CREATE INDEX tenk2_unique2 ON tenk2 USING btree(unique2 int4_ops);
+CREATE INDEX tenk2_unique2 ON tenk2a USING btree(unique2 int4_ops);
 
-CREATE INDEX tenk2_hundred ON tenk2 USING btree(hundred int4_ops);
+CREATE INDEX tenk2_hundred ON tenk2a USING btree(hundred int4_ops);
 
 CREATE INDEX rix ON road USING btree (name text_ops);
 
@@ -693,7 +693,7 @@ DROP TABLE unlogged_hash_table;
 -- Test hash index build tuplesorting.  Force hash tuplesort using low
 -- maintenance_work_mem setting and fillfactor:
 SET maintenance_work_mem = '1MB';
-CREATE INDEX hash_tuplesort_idx ON tenk1 USING hash (stringu1 name_ops) WITH (fillfactor = 10);
+CREATE INDEX hash_tuplesort_idx ON tenk1a USING hash (stringu1 name_ops) WITH (fillfactor = 10);
 EXPLAIN (COSTS OFF)
 SELECT count(*) FROM tenk1 WHERE stringu1 = 'TVAAAA';
 SELECT count(*) FROM tenk1 WHERE stringu1 = 'TVAAAA';

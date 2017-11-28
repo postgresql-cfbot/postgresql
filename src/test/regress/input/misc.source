@@ -51,7 +51,7 @@ DROP TABLE tmp;
 --
 -- copy
 --
-COPY onek TO '@abs_builddir@/results/onek.data';
+COPY oneka TO '@abs_builddir@/results/onek.data';
 
 DELETE FROM onek;
 

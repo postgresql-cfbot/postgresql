@@ -20,9 +20,12 @@
 
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
+#include "catalog/partition.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_opfamily.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_type.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -135,6 +138,14 @@ static void recurse_push_qual(Node *setOp, Query *topquery,
 static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
 static void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 						List *live_childrels);
+static List *get_append_rel_partitions(PlannerInfo *root,
+						  RelOptInfo *rel,
+						  RangeTblEntry *rte);
+static List *match_clauses_to_partkey(PlannerInfo *root,
+						 RelOptInfo *rel,
+						 List *clauses,
+						 bool *contains_const,
+						 bool *constfalse);
 
 
 /*
@@ -846,6 +857,399 @@ set_foreign_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 }
 
 /*
+ * get_append_rel_partitions
+ *		Return the list of partitions of rel that pass the clauses mentioned
+ *		in rel->baserestrictinfo.  An empty list is returned if no matching
+ *		partitions were found.
+ *
+ * Returned list contains the AppendRelInfos of chosen partitions.
+ */
+static List *
+get_append_rel_partitions(PlannerInfo *root,
+						  RelOptInfo *rel,
+						  RangeTblEntry *rte)
+{
+	List   *partclauses;
+	bool	contains_const,
+			constfalse;
+
+	/*
+	 * Get the clauses that match the partition key, including information
+	 * about any nullness tests against partition keys.  Set keynullness to
+	 * a invalid value of NullTestType, which 0 is not.
+	 */
+	partclauses = match_clauses_to_partkey(root, rel,
+										   list_copy(rel->baserestrictinfo),
+										   &contains_const,
+										   &constfalse);
+
+	if (!constfalse)
+	{
+		Relation		parent = heap_open(rte->relid, NoLock);
+		PartitionDesc	partdesc = RelationGetPartitionDesc(parent);
+		Bitmapset	   *partindexes;
+		List		   *result = NIL;
+		int				i;
+
+		/*
+		 * If we have matched clauses that contain at least one constant
+		 * operand, then use these to prune partitions.
+		 */
+		if (partclauses != NIL && contains_const)
+			partindexes = get_partitions_from_clauses(parent, rel->relid,
+													  partclauses);
+
+		/*
+		 * Else there are no clauses that are useful to prune any paritions,
+		 * so we must scan all partitions.
+		 */
+		else
+			partindexes = bms_add_range(NULL, 0, partdesc->nparts - 1);
+
+		/* Fetch the partition appinfos. */
+		i = -1;
+		while ((i = bms_next_member(partindexes, i)) >= 0)
+		{
+			AppendRelInfo *appinfo = rel->part_appinfos[i];
+
+#ifdef USE_ASSERT_CHECKING
+			RangeTblEntry *rte = planner_rt_fetch(appinfo->child_relid, root);
+
+			/*
+			 * Must be the intended child's RTE here, because appinfos are ordered
+			 * the same way as partitions in the partition descriptor.
+			 */
+			Assert(partdesc->oids[i] == rte->relid);
+#endif
+
+			result = lappend(result, appinfo);
+		}
+
+		/* Record which partitions must be scanned. */
+		rel->live_part_appinfos = result;
+
+		heap_close(parent, NoLock);
+
+		return result;
+	}
+
+	return NIL;
+}
+
+#define PartCollMatchesExprColl(partcoll, exprcoll) \
+	((partcoll) == InvalidOid || (partcoll) == (exprcoll))
+
+/*
+ * match_clauses_to_partkey
+ *		Match clauses with rel's partition key
+ *
+ * For an individual clause to match with a partition key column, the clause
+ * must be an operator clause of the form (partkey op const) or (const op
+ * partkey); the latter only if a suitable commutator exists.  Furthermore,
+ * the operator must be strict and its input collation must match the partition
+ * collation.  The aforementioned "const" means any expression that doesn't
+ * involve a volatile function or a Var of this relation.  We allow Vars
+ * belonging to other relations (for example, if the clause is a join clause),
+ * but they are treated as parameters whose values are not known now, so cannot
+ * be used for partition pruning right within the planner.  It's the
+ * responsibility of higher code levels to manage restriction and join clauses
+ * appropriately.
+ *
+ * If a NullTest against a partition key is encountered, it's added to the
+ * result as well.
+ *
+ * If clauses contains at least one constant operand or a Nullness test,
+ * *contains_const is set so that the caller can pass the clauses to the
+ * partitioning module right away.
+ *
+ * If the list contains a pseudo-constant RestrictInfo with constant false
+ * value, *constfalse is set.
+ */
+static List *
+match_clauses_to_partkey(PlannerInfo *root,
+						 RelOptInfo *rel,
+						 List *clauses,
+						 bool *contains_const,
+						 bool *constfalse)
+{
+	PartitionScheme	partscheme = rel->part_scheme;
+	List	   *result = NIL;
+	ListCell   *lc;
+
+	*contains_const = false;
+	*constfalse = false;
+
+	Assert (partscheme != NULL);
+
+	foreach(lc, clauses)
+	{
+		Node   *member = lfirst(lc);
+		Expr   *clause;
+		int		i;
+
+		if (IsA(member, RestrictInfo))
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) member;
+
+			clause = rinfo->clause;
+			if (rinfo->pseudoconstant &&
+				(IsA(clause, Const) &&
+				 ((((Const *) clause)->constisnull) ||
+				  !DatumGetBool(((Const *) clause)->constvalue))))
+			{
+				*constfalse = true;
+				return NIL;
+			}
+		}
+		else
+			clause = (Expr *) member;
+
+		/*
+		 * For a BoolExpr, we should try to match each of its args with the
+		 * partition key as described below for each type.
+		 */
+		if (IsA(clause, BoolExpr))
+		{
+			if (or_clause((Node *) clause))
+			{
+				/*
+				 * For each of OR clause's args, call this function
+				 * recursively with a given arg as the only member in the
+				 * input list and see if it's returned as matching the
+				 * partition key.  Add the OR clause to the result iff at
+				 * least one of its args contain a matching clause.
+				 */
+				BoolExpr *orclause = (BoolExpr *) clause;
+				ListCell *lc1;
+				bool	arg_matches_key = false,
+						matched_arg_contains_const = false,
+						all_args_constfalse = true;
+
+				foreach (lc1, orclause->args)
+				{
+					Node   *arg = lfirst(lc1);
+					bool	contains_const1,
+							constfalse1;
+
+					if (match_clauses_to_partkey(root, rel, list_make1(arg),
+												 &contains_const1,
+												 &constfalse1) != NIL)
+					{
+						arg_matches_key = true;
+						matched_arg_contains_const = contains_const1;
+					}
+
+					/* We got at least one arg that is not constant false. */
+					if (!constfalse1)
+						all_args_constfalse = false;
+				}
+
+				if (arg_matches_key)
+				{
+					result = lappend(result, clause);
+					*contains_const = matched_arg_contains_const;
+				}
+
+				/* OR clause is "constant false" if all of its args are. */
+				*constfalse = all_args_constfalse;
+				continue;
+			}
+			else if (and_clause((Node *) clause))
+			{
+				/*
+				 * Since the clause is itself implicitly ANDed with other
+				 * clauses in the input list, queue the args to be processed
+				 * later as if they were part of the original input list.
+				 */
+				clauses = list_concat(clauses,
+									  list_copy(((BoolExpr *) clause)->args));
+				continue;
+			}
+
+			/* Fall-through for a NOT clause, which is handled below. */
+		}
+
+		for (i = 0; i < partscheme->partnatts; i++)
+		{
+			Node   *partkey = linitial(rel->partexprs[i]);
+			Oid		partopfamily = partscheme->partopfamily[i],
+					partcoll = partscheme->partcollation[i];
+
+			/*
+			 * Check if the clauses matches the partition key and add it to
+			 * the result list if other things such as operator input
+			 * collation, strictness, etc. look fine.
+			 */
+			if (is_opclause(clause))
+			{
+				Expr   *constexpr,
+					   *leftop,
+					   *rightop;
+				Relids	constrelids,
+						left_relids,
+						right_relids;
+				Oid		expr_op,
+						expr_coll;
+
+				leftop = (Expr *) get_leftop(clause);
+				rightop = (Expr *) get_rightop(clause);
+				expr_op = ((OpExpr *) clause)->opno;
+				expr_coll = ((OpExpr *) clause)->inputcollid;
+				left_relids = pull_varnos((Node *) leftop);
+				right_relids = pull_varnos((Node *) rightop);
+
+				if (IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+				if (IsA(rightop, RelabelType))
+					rightop = ((RelabelType *) rightop)->arg;
+
+				if (equal(leftop, partkey))
+				{
+					constexpr = rightop;
+					constrelids = right_relids;
+				}
+				else if (equal(rightop, partkey))
+				{
+					constexpr = leftop;
+					constrelids = left_relids;
+					expr_op = get_commutator(expr_op);
+
+					/*
+					 * If no commutator exists, cannot flip the qual's args,
+					 * so give up.
+					 */
+					if (!OidIsValid(expr_op))
+						continue;
+				}
+				else
+					/* Neither argument matches the partition key. */
+					continue;
+
+				/*
+				 * Useless if what we're thinking of as a constant is actually
+				 * a Var coming from this relation.
+				 */
+				if (bms_is_member(rel->relid, constrelids))
+					continue;
+
+				/*
+				 * Also, useless, if the clause's collation is different from
+				 * the partitioning collation.
+				 */
+				if (!PartCollMatchesExprColl(partcoll, expr_coll))
+					continue;
+
+				/*
+				 * Only allow strict operators to think sanely about the
+				 * behavior with null arguments.
+				 */
+				if (!op_strict(expr_op))
+					continue;
+
+				/* Useless if the "constant" can change its value. */
+				if (contain_volatile_functions((Node *) constexpr))
+					continue;
+
+				/*
+				 * Everything seems to be fine, so add it to the list of
+				 * clauses we will use for pruning.
+				 */
+				result = lappend(result, clause);
+
+				if (!*contains_const)
+					*contains_const = IsA(constexpr, Const);
+			}
+			else if (IsA(clause, ScalarArrayOpExpr))
+			{
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+				Oid		saop_op = saop->opno;
+				Oid		saop_coll = saop->inputcollid;
+				Node   *leftop = (Node *) linitial(saop->args),
+					   *rightop = (Node *) lsecond(saop->args);
+
+				if (IsA(leftop, RelabelType))
+					leftop = (Node *) ((RelabelType *) leftop)->arg;
+				if (!equal(leftop, partkey))
+					continue;
+
+				/* Check if saop_op is compatible with partitioning. */
+				if (!op_strict(saop_op))
+					continue;
+
+				/* Useless if the "constant" can change its value. */
+				if (contain_volatile_functions((Node *) rightop))
+					continue;
+
+				/*
+				 * Also, useless, if the clause's collation is different from
+				 * the partitioning collation.
+				 */
+				if (!PartCollMatchesExprColl(partcoll, saop_coll))
+					continue;
+
+				/* OK to add to the result. */
+				result = lappend(result, clause);
+				if (IsA(estimate_expression_value(root, rightop), Const))
+					*contains_const = true;
+				else
+					*contains_const = false;
+			}
+			else if (IsA(clause, NullTest))
+			{
+				NullTest   *nulltest = (NullTest *) clause;
+				Node	   *arg = (Node *) nulltest->arg;
+
+				if (equal(arg, partkey))
+				{
+					result = lappend(result, nulltest);
+					/* A Nullness test can be used right away. */
+					*contains_const = true;
+				}
+			}
+			/*
+			 * Certain Boolean conditions have a special shape, which we
+			 * accept if the partitioning opfamily accepts Boolean conditions.
+			 */
+			else if (IsBooleanOpfamily(partopfamily) &&
+					 (IsA(clause, BooleanTest) ||
+					  IsA(clause, Var) || not_clause((Node *) clause)))
+			{
+				/*
+				 * Only accept those for pruning that appear to be
+				 * IS [NOT] TRUE/FALSE.
+				 */
+				if (IsA(clause, BooleanTest))
+				{
+					BooleanTest *btest = (BooleanTest *) clause;
+					Expr   *arg = btest->arg;
+
+					if (btest->booltesttype != IS_UNKNOWN &&
+						btest->booltesttype != IS_NOT_UNKNOWN &&
+						equal((Node *) arg, partkey))
+						result = lappend(result, clause);
+				}
+				else if (IsA(clause, Var))
+				{
+					if (equal((Node *) clause, partkey))
+						result = lappend(result, clause);
+				}
+				else
+				{
+					Node   *arg = (Node *) get_notclausearg((Expr *) clause);
+
+					if (equal(arg, partkey))
+						result = lappend(result, clause);
+				}
+
+				*contains_const = true;
+			}
+		}
+	}
+
+	return result;
+}
+
+/*
  * set_append_rel_size
  *	  Set size estimates for a simple "append relation"
  *
@@ -860,6 +1264,7 @@ static void
 set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 					Index rti, RangeTblEntry *rte)
 {
+	List	   *rel_appinfos = NIL;
 	int			parentRTindex = rti;
 	bool		has_live_children;
 	double		parent_rows;
@@ -872,6 +1277,23 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	check_stack_depth();
 
 	Assert(IS_SIMPLE_REL(rel));
+
+	if (rte->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		foreach (l, root->append_rel_list)
+		{
+			AppendRelInfo   *appinfo = lfirst(l);
+
+			/* append_rel_list contains all append rels; ignore others */
+			if (appinfo->parent_relid == parentRTindex)
+				rel_appinfos = lappend(rel_appinfos, appinfo);
+		}
+	}
+	else
+	{
+		rel_appinfos = get_append_rel_partitions(root, rel, rte);
+		rel->live_partitioned_rels = list_make1_int(rti);
+	}
 
 	/*
 	 * Initialize to compute size estimates for whole append relation.
@@ -893,7 +1315,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	nattrs = rel->max_attr - rel->min_attr + 1;
 	parent_attrsizes = (double *) palloc0(nattrs * sizeof(double));
 
-	foreach(l, root->append_rel_list)
+	foreach(l, rel_appinfos)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
 		int			childRTindex;
@@ -906,10 +1328,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *childvars;
 		ListCell   *lc;
 
-		/* append_rel_list contains all append rels; ignore others */
-		if (appinfo->parent_relid != parentRTindex)
-			continue;
-
 		childRTindex = appinfo->child_relid;
 		childRTE = root->simple_rte_array[childRTindex];
 
@@ -920,85 +1338,11 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		childrel = find_base_rel(root, childRTindex);
 		Assert(childrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
 
-		if (rel->part_scheme)
-		{
-			AttrNumber	attno;
-
-			/*
-			 * We need attr_needed data for building targetlist of a join
-			 * relation representing join between matching partitions for
-			 * partition-wise join. A given attribute of a child will be
-			 * needed in the same highest joinrel where the corresponding
-			 * attribute of parent is needed. Hence it suffices to use the
-			 * same Relids set for parent and child.
-			 */
-			for (attno = rel->min_attr; attno <= rel->max_attr; attno++)
-			{
-				int			index = attno - rel->min_attr;
-				Relids		attr_needed = rel->attr_needed[index];
-
-				/* System attributes do not need translation. */
-				if (attno <= 0)
-				{
-					Assert(rel->min_attr == childrel->min_attr);
-					childrel->attr_needed[index] = attr_needed;
-				}
-				else
-				{
-					Var		   *var = list_nth_node(Var,
-													appinfo->translated_vars,
-													attno - 1);
-					int			child_index;
-
-					/*
-					 * Ignore any column dropped from the parent.
-					 * Corresponding Var won't have any translation. It won't
-					 * have attr_needed information, since it can not be
-					 * referenced in the query.
-					 */
-					if (var == NULL)
-					{
-						Assert(attr_needed == NULL);
-						continue;
-					}
-
-					child_index = var->varattno - childrel->min_attr;
-					childrel->attr_needed[child_index] = attr_needed;
-				}
-			}
-		}
-
 		/*
-		 * Copy/Modify targetlist. Even if this child is deemed empty, we need
-		 * its targetlist in case it falls on nullable side in a child-join
-		 * because of partition-wise join.
-		 *
-		 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
-		 * expressions, which otherwise would not occur in a rel's targetlist.
-		 * Code that might be looking at an appendrel child must cope with
-		 * such.  (Normally, a rel's targetlist would only include Vars and
-		 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
-		 * fields of childrel->reltarget; not clear if that would be useful.
+		 * Initialize some properties of child rel from the parent rel, such
+		 * target list, equivalence class members, etc.
 		 */
-		childrel->reltarget->exprs = (List *)
-			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget->exprs,
-								   1, &appinfo);
-
-		/*
-		 * We have to make child entries in the EquivalenceClass data
-		 * structures as well.  This is needed either if the parent
-		 * participates in some eclass joins (because we will want to consider
-		 * inner-indexscan joins on the individual children) or if the parent
-		 * has useful pathkeys (because we should try to build MergeAppend
-		 * paths that produce those sort orderings). Even if this child is
-		 * deemed dummy, it may fall on nullable side in a child-join, which
-		 * in turn may participate in a MergeAppend, where we will need the
-		 * EquivalenceClass data structures.
-		 */
-		if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
-			add_child_rel_equivalences(root, appinfo, rel, childrel);
-		childrel->has_eclass_joins = rel->has_eclass_joins;
+		set_basic_child_rel_properties(root, rel, childrel, appinfo);
 
 		/*
 		 * We have to copy the parent's quals to the child, with appropriate
@@ -1164,6 +1508,19 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		has_live_children = true;
 
 		/*
+		 * If childrel is itself partitioned, add it and its partitioned
+		 * children to the list being propagated up to the root rel.
+		 * Note that since rel itself (the parent) might just be a union all
+		 * subquery, in which case, there is nothing to do here.
+		 */
+		if (IS_PARTITIONED_REL(childrel) && IS_PARTITIONED_REL(rel))
+		{
+			rel->live_partitioned_rels =
+					list_concat(rel->live_partitioned_rels,
+								list_copy(childrel->live_partitioned_rels));
+		}
+
+		/*
 		 * If any live child is not parallel-safe, treat the whole appendrel
 		 * as not parallel-safe.  In future we might be able to generate plans
 		 * in which some children are farmed out to workers while others are
@@ -1259,14 +1616,29 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 						Index rti, RangeTblEntry *rte)
 {
 	int			parentRTindex = rti;
-	List	   *live_childrels = NIL;
+	List	   *rel_appinfos = NIL,
+			   *live_childrels = NIL;
 	ListCell   *l;
+
+	if (rte->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		foreach (l, root->append_rel_list)
+		{
+			AppendRelInfo   *appinfo = lfirst(l);
+
+			/* append_rel_list contains all append rels; ignore others */
+			if (appinfo->parent_relid == parentRTindex)
+				rel_appinfos = lappend(rel_appinfos, appinfo);
+		}
+	}
+	else
+		rel_appinfos = rel->live_part_appinfos;
 
 	/*
 	 * Generate access paths for each member relation, and remember the
 	 * non-dummy children.
 	 */
-	foreach(l, root->append_rel_list)
+	foreach(l, rel_appinfos)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
 		int			childRTindex;
@@ -1337,43 +1709,40 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	ListCell   *l;
 	List	   *partitioned_rels = NIL;
 	RangeTblEntry *rte;
-	bool		build_partitioned_rels = false;
 
+	/*
+	 * AppendPath we are about to generate must record the RT indexes of
+	 * partitioned tables that are direct or indirect children of this Append
+	 * rel.  For partitioned tables, we collect its live partitioned children
+	 * from rel->painfo.  However, it will contain only its immediate children,
+	 * so collect live partitioned children from all children that are
+	 * themselves partitioned and concatenate to our list before finally
+	 * passing the list to create_append_path() and/or
+	 * generate_mergeappend_paths().
+	 *
+	 * If this is a sub-query RTE, its RelOptInfo doesn't itself contain the
+	 * list of live partitioned children, so we must assemble the same in the
+	 * loop below from the children that are known to correspond to
+	 * partitioned rels.  (This assumes that we don't need to look through
+	 * multiple levels of subquery RTEs; if we ever do, we could consider
+	 * stuffing the list we generate here into sub-query RTE's RelOptInfo, just
+	 * like we do for partitioned rels, which would be used when populating our
+	 * parent rel with paths.  For the present, that appears to be
+	 * unnecessary.)
+	 */
 	if (IS_SIMPLE_REL(rel))
 	{
-		/*
-		 * A root partition will already have a PartitionedChildRelInfo, and a
-		 * non-root partitioned table doesn't need one, because its Append
-		 * paths will get flattened into the parent anyway.  For a subquery
-		 * RTE, no PartitionedChildRelInfo exists; we collect all
-		 * partitioned_rels associated with any child.  (This assumes that we
-		 * don't need to look through multiple levels of subquery RTEs; if we
-		 * ever do, we could create a PartitionedChildRelInfo with the
-		 * accumulated list of partitioned_rels which would then be found when
-		 * populated our parent rel with paths.  For the present, that appears
-		 * to be unnecessary.)
-		 */
 		rte = planner_rt_fetch(rel->relid, root);
-		switch (rte->rtekind)
-		{
-			case RTE_RELATION:
-				if (rte->relkind == RELKIND_PARTITIONED_TABLE)
-					partitioned_rels =
-						get_partitioned_child_rels(root, rel->relid);
-				break;
-			case RTE_SUBQUERY:
-				build_partitioned_rels = true;
-				break;
-			default:
-				elog(ERROR, "unexpected rtekind: %d", (int) rte->rtekind);
-		}
+		if (rte->rtekind == RTE_RELATION &&
+			rte->relkind == RELKIND_PARTITIONED_TABLE)
+		partitioned_rels = rel->live_partitioned_rels;
 	}
 	else if (rel->reloptkind == RELOPT_JOINREL && rel->part_scheme)
 	{
 		/*
-		 * Associate PartitionedChildRelInfo of the root partitioned tables
-		 * being joined with the root partitioned join (indicated by
-		 * RELOPT_JOINREL).
+		 * For joinrel consisting of root partitioned tables, get
+		 * partitioned_rels list by combining live_partitioned_rels of the
+		 * component partitioned tables.
 		 */
 		partitioned_rels = get_partitioned_child_rels_for_join(root,
 															   rel->relids);
@@ -1390,17 +1759,12 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *lcp;
 
 		/*
-		 * If we need to build partitioned_rels, accumulate the partitioned
-		 * rels for this child.
+		 * Accumulate the live partitioned children of this child, if it's
+		 * itself partitioned rel.
 		 */
-		if (build_partitioned_rels)
-		{
-			List	   *cprels;
-
-			cprels = get_partitioned_child_rels(root, childrel->relid);
+		if (childrel->part_scheme)
 			partitioned_rels = list_concat(partitioned_rels,
-										   list_copy(cprels));
-		}
+										   childrel->live_partitioned_rels);
 
 		/*
 		 * If child has an unparameterized cheapest-total path, add that to

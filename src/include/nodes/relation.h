@@ -342,6 +342,10 @@ typedef struct PlannerInfo
  * partition bounds. Since partition key data types and the opclass declared
  * input data types are expected to be binary compatible (per ResolveOpClass),
  * both of those should have same byval and length properties.
+ *
+ * Since partitioning might be using a collation for a given partition key
+ * column that is not same as the collation implied by column's type, store
+ * the same separately.
  */
 typedef struct PartitionSchemeData
 {
@@ -349,7 +353,8 @@ typedef struct PartitionSchemeData
 	int16		partnatts;		/* number of partition attributes */
 	Oid		   *partopfamily;	/* OIDs of operator families */
 	Oid		   *partopcintype;	/* OIDs of opclass declared input data types */
-	Oid		   *parttypcoll;	/* OIDs of collations of partition keys. */
+	Oid		   *parttypcoll;	/* OIDs of partition key type collation. */
+	Oid		   *partcollation;	/* OIDs of partitioning collation */
 
 	/* Cached information about partition key data types. */
 	int16	   *parttyplen;
@@ -529,6 +534,7 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * 		part_scheme - Partitioning scheme of the relation
  * 		boundinfo - Partition bounds
  * 		nparts - Number of partitions
+ *		part_appinfos - AppendRelInfo of each partition
  * 		part_rels - RelOptInfos for each partition
  * 		partexprs, nullable_partexprs - Partition key expressions
  *
@@ -657,10 +663,27 @@ typedef struct RelOptInfo
 	PartitionScheme part_scheme;	/* Partitioning scheme. */
 	int			nparts;			/* number of partitions */
 	struct PartitionBoundInfoData *boundinfo;	/* Partition bounds */
-	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of partitions,
-									 * stored in the same order of bounds */
+	struct AppendRelInfo  **part_appinfos;	/* Array of AppendRelInfos of
+											 * of partitioned, stored in the
+											 * same order as of bounds */
+	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of *all*
+									 * partitions, stored in the same order as
+									 * of bounds */
 	List	  **partexprs;		/* Non-nullable partition key expressions. */
 	List	  **nullable_partexprs;	/* Nullable partition key expressions. */
+
+
+	/*
+	 * List of AppendRelInfo's of the table's partitions that survive a
+	 * query's clauses.
+	 */
+	List	   *live_part_appinfos;
+
+	/*
+	 * RT indexes of live partitions that are partitioned tables themselves.
+	 * This includes the RT index of the table itself.
+	 */
+	List	   *live_partitioned_rels;
 } RelOptInfo;
 
 /*

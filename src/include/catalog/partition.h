@@ -71,4 +71,7 @@ extern List *get_proposed_default_constraint(List *new_part_constaints);
 extern int get_partition_for_tuple(Relation relation, Datum *values,
 							bool *isnull);
 
+/* For partition-pruning */
+extern Bitmapset *get_partitions_from_clauses(Relation relation, int rt_index,
+							List *partclauses);
 #endif							/* PARTITION_H */

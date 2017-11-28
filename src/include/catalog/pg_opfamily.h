@@ -187,4 +187,7 @@ DATA(insert OID = 4082 (	3580	pg_lsn_minmax_ops		PGNSP PGUID ));
 DATA(insert OID = 4104 (	3580	box_inclusion_ops		PGNSP PGUID ));
 DATA(insert OID = 5000 (	4000	box_ops		PGNSP PGUID ));
 
+#define IsBooleanOpfamily(opfamily) \
+	((opfamily) == BOOL_BTREE_FAM_OID || (opfamily) == BOOL_HASH_FAM_OID)
+
 #endif							/* PG_OPFAMILY_H */

@@ -296,5 +296,9 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 					 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 					 RelOptInfo *parent_joinrel, List *restrictlist,
 					 SpecialJoinInfo *sjinfo, JoinType jointype);
+extern void set_basic_child_rel_properties(PlannerInfo *root,
+							   RelOptInfo *rel,
+							   RelOptInfo *childrel,
+							   AppendRelInfo *appinfo);
 
 #endif							/* PATHNODE_H */

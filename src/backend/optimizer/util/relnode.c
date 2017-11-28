@@ -18,6 +18,7 @@
 
 #include "miscadmin.h"
 #include "catalog/partition.h"
+#include "catalog/pg_class.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
@@ -154,9 +155,12 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->part_scheme = NULL;
 	rel->nparts = 0;
 	rel->boundinfo = NULL;
+	rel->part_appinfos = NULL;
 	rel->part_rels = NULL;
 	rel->partexprs = NULL;
 	rel->nullable_partexprs = NULL;
+	rel->live_part_appinfos = NIL;
+	rel->live_partitioned_rels = NIL;
 
 	/*
 	 * Pass top parent's relids down the inheritance hierarchy. If the parent
@@ -233,8 +237,12 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		int			cnt_parts = 0;
 
 		if (nparts > 0)
+		{
+			rel->part_appinfos = (AppendRelInfo **)
+				palloc(sizeof(AppendRelInfo *) * nparts);
 			rel->part_rels = (RelOptInfo **)
 				palloc(sizeof(RelOptInfo *) * nparts);
+		}
 
 		foreach(l, root->append_rel_list)
 		{
@@ -258,6 +266,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			 * also match the PartitionDesc.  See expand_partitioned_rtentry.
 			 */
 			Assert(cnt_parts < nparts);
+			rel->part_appinfos[cnt_parts] = appinfo;
 			rel->part_rels[cnt_parts] = childrel;
 			cnt_parts++;
 		}
@@ -567,6 +576,7 @@ build_join_rel(PlannerInfo *root,
 	joinrel->part_scheme = NULL;
 	joinrel->nparts = 0;
 	joinrel->boundinfo = NULL;
+	joinrel->part_appinfos = NULL;
 	joinrel->part_rels = NULL;
 	joinrel->partexprs = NULL;
 	joinrel->nullable_partexprs = NULL;
@@ -734,6 +744,7 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->has_eclass_joins = false;
 	joinrel->top_parent_relids = NULL;
 	joinrel->part_scheme = NULL;
+	joinrel->part_appinfos = NULL;
 	joinrel->part_rels = NULL;
 	joinrel->partexprs = NULL;
 	joinrel->nullable_partexprs = NULL;
@@ -1744,5 +1755,95 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 
 		joinrel->partexprs[cnt] = partexpr;
 		joinrel->nullable_partexprs[cnt] = nullable_partexpr;
+	}
+}
+
+/*
+ * Initialize some basic properties of child rel from the parent rel, such
+ * target list, equivalence class members, etc.
+ */
+void
+set_basic_child_rel_properties(PlannerInfo *root,
+							   RelOptInfo *rel,
+							   RelOptInfo *childrel,
+							   AppendRelInfo *appinfo)
+{
+	/*
+	 * Copy/Modify targetlist. Even if this child is deemed empty, we need
+	 * its targetlist in case it falls on nullable side in a child-join
+	 * because of partition-wise join.
+	 *
+	 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
+	 * expressions, which otherwise would not occur in a rel's targetlist.
+	 * Code that might be looking at an appendrel child must cope with
+	 * such.  (Normally, a rel's targetlist would only include Vars and
+	 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
+	 * fields of childrel->reltarget; not clear if that would be useful.
+	 */
+	childrel->reltarget->exprs = (List *)
+			adjust_appendrel_attrs(root,
+								   (Node *) rel->reltarget->exprs,
+								   1, &appinfo);
+
+	/*
+	 * We have to make child entries in the EquivalenceClass data
+	 * structures as well.  This is needed either if the parent
+	 * participates in some eclass joins (because we will want to consider
+	 * inner-indexscan joins on the individual children) or if the parent
+	 * has useful pathkeys (because we should try to build MergeAppend
+	 * paths that produce those sort orderings). Even if this child is
+	 * deemed dummy, it may fall on nullable side in a child-join, which
+	 * in turn may participate in a MergeAppend, where we will need the
+	 * EquivalenceClass data structures.
+	 */
+	if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
+		add_child_rel_equivalences(root, appinfo, rel, childrel);
+	childrel->has_eclass_joins = rel->has_eclass_joins;
+
+	if (rel->part_scheme)
+	{
+		AttrNumber	attno;
+
+		/*
+		 * We need attr_needed data for building targetlist of a join relation
+		 * representing join between matching partitions for partition-wise
+		 * join. A given attribute of a child will be needed in the same
+		 * highest joinrel where the corresponding attribute of parent is
+		 * needed. Hence it suffices to use the same Relids set for parent and
+		 * child.
+		 */
+		for (attno = rel->min_attr; attno <= rel->max_attr; attno++)
+		{
+			int			index = attno - rel->min_attr;
+			Relids		attr_needed = rel->attr_needed[index];
+
+			/* System attributes do not need translation. */
+			if (attno <= 0)
+			{
+				Assert(rel->min_attr == childrel->min_attr);
+				childrel->attr_needed[index] = attr_needed;
+			}
+			else
+			{
+				Var		   *var = list_nth_node(Var,
+												appinfo->translated_vars,
+												attno - 1);
+				int			child_index;
+
+				/*
+				 * Ignore any column dropped from the parent.  Corresponding
+				 * Var won't have any translation. It won't have attr_needed
+				 * information, since it can not be referenced in the query.
+				 */
+				if (var == NULL)
+				{
+					Assert(attr_needed == NULL);
+					continue;
+				}
+
+				child_index = var->varattno - childrel->min_attr;
+				childrel->attr_needed[child_index] = attr_needed;
+			}
+		}
 	}
 }

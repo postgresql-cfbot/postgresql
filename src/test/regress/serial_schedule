@@ -71,6 +71,7 @@ test: create_cast
 test: constraints
 test: triggers
 test: inherit
+test: partition
 test: create_table_like
 test: typed_table
 test: vacuum

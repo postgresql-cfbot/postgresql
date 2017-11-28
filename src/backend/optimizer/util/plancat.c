@@ -1161,7 +1161,6 @@ get_relation_constraints(PlannerInfo *root,
 	Index		varno = rel->relid;
 	Relation	relation;
 	TupleConstr *constr;
-	List	   *pcqual;
 
 	/*
 	 * We assume the relation has already been safely locked.
@@ -1248,21 +1247,25 @@ get_relation_constraints(PlannerInfo *root,
 	}
 
 	/* Append partition predicates, if any */
-	pcqual = RelationGetPartitionQual(relation);
-	if (pcqual)
+	if (root->parse->commandType != CMD_SELECT)
 	{
-		/*
-		 * Run each expression through const-simplification and
-		 * canonicalization similar to check constraints.
-		 */
-		pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
-		pcqual = (List *) canonicalize_qual((Expr *) pcqual);
+		List	   *pcqual = RelationGetPartitionQual(relation);
 
-		/* Fix Vars to have the desired varno */
-		if (varno != 1)
-			ChangeVarNodes((Node *) pcqual, 1, varno, 0);
+		if (pcqual)
+		{
+			/*
+			 * Run each expression through const-simplification and
+			 * canonicalization similar to check constraints.
+			 */
+			pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
+			pcqual = (List *) canonicalize_qual((Expr *) pcqual);
 
-		result = list_concat(result, pcqual);
+			/* Fix Vars to have the desired varno */
+			if (varno != 1)
+				ChangeVarNodes((Node *) pcqual, 1, varno, 0);
+
+			result = list_concat(result, pcqual);
+		}
 	}
 
 	heap_close(relation, NoLock);
@@ -1917,6 +1920,10 @@ find_partition_scheme(PlannerInfo *root, Relation relation)
 	part_scheme->parttypbyval = (bool *) palloc(sizeof(bool) * partnatts);
 	memcpy(part_scheme->parttypbyval, partkey->parttypbyval,
 		   sizeof(bool) * partnatts);
+
+	part_scheme->partcollation = (Oid *) palloc(sizeof(Oid) * partnatts);
+	memcpy(part_scheme->partcollation, partkey->partcollation,
+		   sizeof(Oid) * partnatts);
 
 	/* Add the partitioning scheme to PlannerInfo. */
 	root->part_schemes = lappend(root->part_schemes, part_scheme);

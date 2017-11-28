@@ -84,5 +84,7 @@ extern Node *estimate_expression_value(PlannerInfo *root, Node *node);
 
 extern Query *inline_set_returning_function(PlannerInfo *root,
 							  RangeTblEntry *rte);
+extern Expr *evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
+			  Oid result_collation);
 
 #endif							/* CLAUSES_H */

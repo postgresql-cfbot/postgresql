@@ -122,6 +122,7 @@ int			maintenance_work_mem = 16384;
 int			NBuffers = 1000;
 int			MaxConnections = 90;
 int			max_worker_processes = 8;
+int			max_worker_processes_per_user = -1;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
 

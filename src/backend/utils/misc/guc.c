@@ -2519,6 +2519,18 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_worker_processes_per_user",
+			PGC_SUSET,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum number of concurrent worker processes per user."),
+			NULL,
+		},
+		&max_worker_processes_per_user,
+		-1, -1, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"max_logical_replication_workers",
 			PGC_POSTMASTER,
 			REPLICATION_SUBSCRIBERS,

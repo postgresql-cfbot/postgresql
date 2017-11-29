@@ -1573,7 +1573,21 @@ deparseInsertSql(StringInfo buf, PlannerInfo *root,
 			deparseColumnRef(buf, rtindex, attnum, root, false);
 		}
 
-		appendStringInfoString(buf, ") VALUES (");
+		appendStringInfoString(buf, ") ");
+
+		switch (root->parse->override)
+		{
+			case OVERRIDING_USER_VALUE:
+				appendStringInfoString(buf, "OVERRIDING USER VALUE ");
+				break;
+			case OVERRIDING_SYSTEM_VALUE:
+				appendStringInfoString(buf, "OVERRIDING SYSTEM VALUE ");
+				break;
+			default:
+				break;
+		}
+
+		appendStringInfoString(buf, "VALUES (");
 
 		pindex = 1;
 		first = true;

@@ -721,7 +721,6 @@ const ObjectAddress InvalidObjectAddress =
 	InvalidOid,
 	0
 };
-
 static ObjectAddress get_object_address_unqualified(ObjectType objtype,
 							   Value *strval, bool missing_ok);
 static ObjectAddress get_relation_by_qualified_name(ObjectType objtype,
@@ -865,6 +864,10 @@ get_object_address(ObjectType objtype, Node *object,
 				}
 				break;
 			case OBJECT_DATABASE:
+				address.classId = DatabaseRelationId;
+				address.objectId = get_dbspec_oid((DbSpec *)object, missing_ok);
+				address.objectSubId = 0;
+				break;
 			case OBJECT_EXTENSION:
 			case OBJECT_TABLESPACE:
 			case OBJECT_ROLE:
@@ -2242,7 +2245,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_DATABASE:
 			if (!pg_database_ownercheck(address.objectId, roleid))
 				aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_DATABASE,
-							   strVal((Value *) object));
+							   get_dbspec_name((DbSpec *)object));
 			break;
 		case OBJECT_TYPE:
 		case OBJECT_DOMAIN:

@@ -802,7 +802,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 	switch (stmt->objectType)
 	{
 		case OBJECT_DATABASE:
-			return AlterDatabaseOwner(strVal((Value *) stmt->object), newowner);
+			return AlterDatabaseOwner((DbSpec *) stmt->object, newowner);
 
 		case OBJECT_SCHEMA:
 			return AlterSchemaOwner(strVal((Value *) stmt->object), newowner);

@@ -670,9 +670,44 @@ emitShSecLabels(PGconn *conn, PGresult *res, PQExpBuffer buffer,
 		appendPQExpBuffer(buffer,
 						  "SECURITY LABEL FOR %s ON %s",
 						  fmtId(provider), target);
+
 		appendPQExpBuffer(buffer,
 						  " %s IS ",
 						  fmtId(objname));
+		appendStringLiteralConn(buffer, label, conn);
+		appendPQExpBufferStr(buffer, ";\n");
+	}
+}
+
+/*
+ * emitDatabaseSecLabels
+ *
+ * Format security label data on database.
+ */
+void
+emitDatabaseSecLabels(PGconn *conn, PGresult *res, PQExpBuffer buffer,
+				const char *objname, bool current_datbase)
+{
+	int			i;
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		char	   *provider = PQgetvalue(res, i, 0);
+		char	   *label = PQgetvalue(res, i, 1);
+
+		/* must use fmtId result before calling it again */
+		appendPQExpBuffer(buffer,
+						  "SECURITY LABEL FOR %s ON DATABASE",
+						  fmtId(provider));
+
+		if(current_datbase)
+			appendPQExpBuffer(buffer," CURRENT_DATABASE IS ");
+		else
+		{
+			appendPQExpBuffer(buffer,
+							  " %s IS ",
+							  fmtId(objname));
+		}
 		appendStringLiteralConn(buffer, label, conn);
 		appendPQExpBufferStr(buffer, ";\n");
 	}

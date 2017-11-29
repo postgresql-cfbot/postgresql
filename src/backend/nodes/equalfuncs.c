@@ -1635,7 +1635,7 @@ _equalCreatedbStmt(const CreatedbStmt *a, const CreatedbStmt *b)
 static bool
 _equalAlterDatabaseStmt(const AlterDatabaseStmt *a, const AlterDatabaseStmt *b)
 {
-	COMPARE_STRING_FIELD(dbname);
+	COMPARE_NODE_FIELD(dbspec);
 	COMPARE_NODE_FIELD(options);
 
 	return true;
@@ -1644,7 +1644,7 @@ _equalAlterDatabaseStmt(const AlterDatabaseStmt *a, const AlterDatabaseStmt *b)
 static bool
 _equalAlterDatabaseSetStmt(const AlterDatabaseSetStmt *a, const AlterDatabaseSetStmt *b)
 {
-	COMPARE_STRING_FIELD(dbname);
+	COMPARE_NODE_FIELD(dbspec);
 	COMPARE_NODE_FIELD(setstmt);
 
 	return true;
@@ -2877,6 +2877,16 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	return true;
 }
 
+static bool
+_equalDatabaseSpec(const DbSpec *a, const DbSpec *b)
+{
+	COMPARE_SCALAR_FIELD(dbtype);
+	COMPARE_STRING_FIELD(dbname);
+	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
 /*
  * Stuff from pg_list.h
  */
@@ -3689,6 +3699,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
+			break;
+		case T_DbSpec:
+			retval = _equalDatabaseSpec(a, b);
 			break;
 
 		default:

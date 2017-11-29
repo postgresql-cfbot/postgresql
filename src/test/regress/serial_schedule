@@ -185,3 +185,4 @@ test: reloptions
 test: hash_part
 test: event_trigger
 test: stats
+test: dbname

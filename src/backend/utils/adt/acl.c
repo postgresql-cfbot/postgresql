@@ -24,6 +24,7 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_database.h"
 #include "commands/dbcommands.h"
 #include "commands/proclang.h"
 #include "commands/tablespace.h"
@@ -5272,4 +5273,67 @@ check_rolespec_name(const RoleSpec *role, const char *detail_msg)
 					 errmsg("role name \"%s\" is reserved",
 							role->rolename)));
 	}
+}
+
+
+/*
+ * Given a DbSpec, returns a palloc'ed copy of the corresponding role's name.
+ */
+char *
+get_dbspec_name(const DbSpec *db)
+{
+	char	   *dbname;
+	HeapTuple	tuple;
+	Form_pg_database dbForm;
+
+	switch (db->dbtype)
+	{
+		case DBSPEC_CSTRING:
+			Assert(db->dbname);
+			dbname = db->dbname;
+			break;
+
+		case DBSPEC_CURRENT_DATABASE:
+			tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+			if (!HeapTupleIsValid(tuple))
+				elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+
+			dbForm = (Form_pg_database) GETSTRUCT(tuple);
+			dbname = pstrdup(NameStr(dbForm->datname));
+			ReleaseSysCache(tuple);
+			break;
+
+		default:
+			elog(ERROR, "unexpected database type %d", db->dbtype);
+	}
+
+
+	return dbname;
+}
+
+/*
+ * Given a DbSpec node, return the OID it corresponds to.  If missing_ok is
+ * true, return InvalidOid if the database does not exist.
+ */
+Oid
+get_dbspec_oid(const DbSpec *db, bool missing_ok)
+{
+	Oid			oid;
+
+	switch (db->dbtype)
+	{
+		case DBSPEC_CSTRING:
+			Assert(db->dbname);
+			oid = get_database_oid(db->dbname, missing_ok);
+			break;
+
+		case DBSPEC_CURRENT_DATABASE:
+			oid = MyDatabaseId;
+			break;
+
+		default:
+			elog(ERROR, "unexpected database type %d", db->dbtype);
+	}
+
+	return oid;
 }

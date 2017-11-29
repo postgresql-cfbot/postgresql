@@ -463,6 +463,7 @@ typedef enum NodeTag
 	T_OnConflictClause,
 	T_CommonTableExpr,
 	T_RoleSpec,
+	T_DbSpec,
 	T_TriggerTransition,
 	T_PartitionElem,
 	T_PartitionSpec,

@@ -552,7 +552,16 @@ WaitForParallelWorkersToFinish(ParallelContext *pcxt)
 
 		for (i = 0; i < pcxt->nworkers_launched; ++i)
 		{
-			if (pcxt->worker[i].error_mqh != NULL)
+			pid_t		pid;
+
+			/*
+			 * Check for unexpected worker death.  This will ensure that if
+			 * the postmaster failed to start the worker, then we don't wait
+			 * for it indefinitely.
+			 */
+			if (pcxt->worker[i].error_mqh != NULL &&
+				pcxt->worker[i].bgwhandle != NULL &&
+				GetBackgroundWorkerPid(pcxt->worker[i].bgwhandle, &pid) != BGWH_STOPPED)
 			{
 				anyone_alive = true;
 				break;

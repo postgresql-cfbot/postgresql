@@ -1037,7 +1037,8 @@ RegisterDynamicBackgroundWorker(BackgroundWorker *worker,
  * BGWH_STARTED and *pidp will get the PID of the worker process.
  * Otherwise, the return value will be BGWH_NOT_YET_STARTED if the worker
  * hasn't been started yet, and BGWH_STOPPED if the worker was previously
- * running but is no longer.
+ * running but is no longer or postmaster has failed to start the worker due
+ * to fork failure or such conditions.
  *
  * In the latter case, the worker may be stopped temporarily (if it is
  * configured for automatic restart and exited non-zero) or gone for
@@ -1067,7 +1068,8 @@ GetBackgroundWorkerPid(BackgroundWorkerHandle *handle, pid_t *pidp)
 	 * won't be garbage, but it might be out of date by the time the caller
 	 * examines it (but that's unavoidable anyway).
 	 */
-	if (handle->generation != slot->generation)
+	if (handle->generation != slot->generation ||
+		!slot->in_use)
 		pid = 0;
 	else
 		pid = slot->pid;

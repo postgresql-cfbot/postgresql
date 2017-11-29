@@ -206,6 +206,14 @@ query_planner(PlannerInfo *root, List *tlist,
 	add_placeholders_to_base_rels(root);
 
 	/*
+	 * Also, if we have a request to emit baserel CTIDs, add those to the
+	 * baserel targetlists now.  This likewise has to be done after join
+	 * removal, because we only want CTIDs for rels that survive join removal.
+	 */
+	if (root->needBaseTids)
+		add_base_rel_ctids(root);
+
+	/*
 	 * Construct the lateral reference sets now that we have finalized
 	 * PlaceHolderVar eval levels.
 	 */

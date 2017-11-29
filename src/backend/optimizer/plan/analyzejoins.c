@@ -150,10 +150,12 @@ clause_sides_match_join(RestrictInfo *rinfo, Relids outerrelids,
  *	  it will just duplicate its left input.
  *
  * This is true for a left join for which the join condition cannot match
- * more than one inner-side row.  (There are other possibly interesting
- * cases, but we don't have the infrastructure to prove them.)  We also
- * have to check that the inner side doesn't generate any variables needed
- * above the join.
+ * more than one inner-side row.  We can also allow removal of joins to
+ * relations that may match more than one inner-side row if a DISTINCT or
+ * GROUP BY clause would subsequently remove any duplicates caused by the
+ * join. (There are other possibly interesting cases, but we don't have the
+ * infrastructure to prove them.)  We also have to check that the inner side
+ * doesn't generate any variables needed above the join.
  */
 static bool
 join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
@@ -235,6 +237,22 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 						innerrel->relids))
 			return false;		/* it does reference innerrel */
 	}
+
+	/*
+	 * When a DISTINCT or GROUP BY clause is present, the unreferenced
+	 * relation's join has no ability to duplicate rows in result set, as any
+	 * duplicate rows would been removed by the DISTINCT/GROUP BY clause
+	 * anyway.  However, we're unable to apply this when aggregate functions
+	 * are present as we must aggregate any duplicated rows.  We needn't
+	 * bother checking the actual distinct/grouping exprs here, as we already
+	 * know from the above checks that no Var is present from the relation
+	 * we're trying to remove.
+	 */
+	if (root->parse->distinctClause != NIL)
+		return true;
+
+	if (root->parse->groupClause != NIL && !root->parse->hasAggs)
+		return true;
 
 	/*
 	 * Search for mergejoinable clauses that constrain the inner rel against
@@ -597,15 +615,25 @@ rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 	if (rel->rtekind == RTE_RELATION)
 	{
 		/*
-		 * For a plain relation, we only know how to prove uniqueness by
-		 * reference to unique indexes.  Make sure there's at least one
-		 * suitable unique index.  It must be immediately enforced, and if
-		 * it's a partial index, it must match the query.  (Keep these
-		 * conditions in sync with relation_has_unique_index_for!)
+		 * For a plain relation, we can make use of DISTINCT or GROUP BY
+		 * clauses as unique proofs. We also know how to prove uniqueness by
+		 * reference to unique indexes.
 		 */
 		ListCell   *lc;
 
-		foreach(lc, rel->indexlist)
+		if (root->parse->distinctClause != NIL)
+			return true;
+
+		if (root->parse->groupClause != NIL && !root->parse->hasAggs)
+			return true;
+
+		/*
+		 * Make sure there's at least one suitable unique index.  It must be
+		 * immediately enforced, and if it's a partial index, it must match
+		 * the query.  (Keep these conditions in sync with
+		 * relation_has_unique_index_for!)
+		 */
+		 foreach(lc, rel->indexlist)
 		{
 			IndexOptInfo *ind = (IndexOptInfo *) lfirst(lc);
 

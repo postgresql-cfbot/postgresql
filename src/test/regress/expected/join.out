@@ -4051,6 +4051,59 @@ select d.* from d left join (select id from a union select id from b) s
  Seq Scan on d
 (1 row)
 
+-- check join removal works without a unique index on the left joined table
+-- when a DISTINCT or GROUP BY is present which would remove row duplication
+explain (costs off)
+select distinct a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a;
+               QUERY PLAN                
+-----------------------------------------
+ HashAggregate
+   Group Key: a.id, a.b_id, b.id, b.c_id
+   ->  Hash Left Join
+         Hash Cond: (a.b_id = b.id)
+         ->  Seq Scan on a
+         ->  Hash
+               ->  Seq Scan on b
+(7 rows)
+
+-- as above but with GROUP BY
+explain (costs off)
+select a.id,b.id from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+             QUERY PLAN             
+------------------------------------
+ HashAggregate
+   Group Key: a.id, b.id
+   ->  Hash Left Join
+         Hash Cond: (a.b_id = b.id)
+         ->  Seq Scan on a
+         ->  Hash
+               ->  Seq Scan on b
+(7 rows)
+
+-- ensure no join removal when we must aggregate any duplicated rows
+explain (costs off)
+select a.id,b.id,count(*) from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+                   QUERY PLAN                   
+------------------------------------------------
+ HashAggregate
+   Group Key: a.id, b.id
+   ->  Merge Left Join
+         Merge Cond: (a.b_id = d.a)
+         ->  Sort
+               Sort Key: a.b_id
+               ->  Hash Left Join
+                     Hash Cond: (a.b_id = b.id)
+                     ->  Seq Scan on a
+                     ->  Hash
+                           ->  Seq Scan on b
+         ->  Sort
+               Sort Key: d.a
+               ->  Seq Scan on d
+(14 rows)
+
 -- check join removal with a cross-type comparison operator
 explain (costs off)
 select i8.* from int8_tbl i8 left join (select f1 from int4_tbl group by f1) i4

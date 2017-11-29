@@ -6527,6 +6527,16 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
        (e.g., <literal>9.99EEEE</literal> is a valid pattern).
       </para>
      </listitem>
+
+     <listitem>
+      <para>
+       <literal>RN</literal> (Roman numerals) converts a valid Roman numeral string to a number.
+       <literal>RN</literal> and <literal>rn</literal> are both valid.
+       The input is parsed case-insensitively, (e.g., <literal>to_number('CVIII', 'RN')</literal> and
+       <literal>to_number('CvIiI', 'rn')</literal> both produce <literal>108</literal>). If this option
+       is specified in the format string, other elements of the format string will be ignored.
+      </para>
+     </listitem>
     </itemizedlist>
    </para>
 

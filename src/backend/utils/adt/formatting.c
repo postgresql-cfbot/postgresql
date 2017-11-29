@@ -50,7 +50,6 @@
  *		  ideal code
  *	- use Assert()
  *	- add support for abstime
- *	- add support for roman number to standard number conversion
  *	- add support for number spelling
  *	- add support for string to string formatting (we must be better
  *	  than Oracle :-),
@@ -981,6 +980,7 @@ static void do_to_timestamp(text *date_txt, text *fmt,
 static char *fill_str(char *str, int c, int max);
 static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str, bool *shouldFree);
 static char *int_to_roman(int number);
+static int roman_to_int(char *numerals, int len);
 static void NUM_prepare_locale(NUMProc *Np);
 static char *get_last_relevant_decnum(char *num);
 static void NUM_numpart_from_char(NUMProc *Np, int id, int input_len);
@@ -4111,6 +4111,101 @@ int_to_roman(int number)
 }
 
 
+static int
+roman_to_int(char *numerals, int len)
+{
+	int i, total, prev, curr, prevCount;
+	bool sub, l, v, d;
+	total = prev = curr = prevCount = 0;
+	sub = l = v = d = false;
+
+	for (i = len-1; i >= 0; i--)
+	{
+		switch (numerals[i])
+		{
+			case 'M':
+			case 'm':
+				curr = 1000;
+				break;
+			case 'D':
+			case 'd':
+				curr = 500;
+				if (d || prev > curr)
+					ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid character \"D\" at position %d", i+1)));
+				d = true;
+				break;
+			case 'C':
+			case 'c':
+				curr = 100;
+				break;
+			case 'L':
+			case 'l':
+				curr = 50;
+				if (l || prev > curr)
+					ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid character \"L\" at position %d", i+1)));
+				l = true;
+				break;
+			case 'X':
+			case 'x':
+				curr = 10;
+				break;
+			case 'V':
+			case 'v':
+				curr = 5;
+				if (v || prev > curr)
+					ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid character \"V\" at position %d", i+1)));
+				v = true;
+				break;
+			case 'I':
+			case 'i':
+				curr = 1;
+				break;
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid character \"%c\"", numerals[i])));
+		}
+		if (prev == curr)
+		{
+			if (++prevCount == 3)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("character \"%c\" repeated too many times", numerals[i])));
+		}
+		else
+		{
+			prevCount = 0;
+		}
+		if (prev <= curr)
+		{
+			total += curr;
+			sub = false;
+			prev = curr;
+		}
+		else
+		{
+			if (sub)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("duplicate subtraction at position %d", i+1)));
+			if (total / curr > 10)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("subtraction value too small at position %d", i+1)));
+			sub = true;
+			total -= curr;
+			prev = prev - curr;
+		}
+	}
+	return total;
+}
+
 
 /* ----------
  * Locale
@@ -4691,11 +4786,6 @@ NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
 	 */
 	if (IS_ROMAN(Np->Num))
 	{
-		if (!Np->is_to_char)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("\"RN\" not supported for input")));
-
 		Np->Num->lsign = Np->Num->pre_lsign_num = Np->Num->post =
 			Np->Num->pre = Np->out_pre_spaces = Np->sign = 0;
 
@@ -5190,39 +5280,58 @@ numeric_to_number(PG_FUNCTION_ARGS)
 
 	format = NUM_cache(len, &Num, fmt, &shouldFree);
 
-	numstr = (char *) palloc((len * NUM_MAX_ITEM_SIZ) + 1);
+	if (IS_ROMAN(&Num))
+	{
+		char *cp = text_to_cstring(value);
+		while (*cp)
+		{
+			if (!isspace(*cp))
+				break;
+			cp++;
+		}
+		len = strlen(cp);
+		if (!len)
+			ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("no number")));
+		result = DirectFunctionCall1(int4_numeric,
+								Int32GetDatum(roman_to_int(cp, len)));
+	}
+	else
+	{
+		numstr = (char *) palloc((len * NUM_MAX_ITEM_SIZ) + 1);
 
-	NUM_processor(format, &Num, VARDATA_ANY(value), numstr,
-				  VARSIZE_ANY_EXHDR(value), 0, 0, false, PG_GET_COLLATION());
+		NUM_processor(format, &Num, VARDATA_ANY(value), numstr,
+					VARSIZE_ANY_EXHDR(value), 0, 0, false, PG_GET_COLLATION());
 
-	scale = Num.post;
-	precision = Num.pre + Num.multi + scale;
+		scale = Num.post;
+		precision = Num.pre + Num.multi + scale;
 
-	if (shouldFree)
-		pfree(format);
-
-	result = DirectFunctionCall3(numeric_in,
+		result = DirectFunctionCall3(numeric_in,
 								 CStringGetDatum(numstr),
 								 ObjectIdGetDatum(InvalidOid),
 								 Int32GetDatum(((precision << 16) | scale) + VARHDRSZ));
 
-	if (IS_MULTI(&Num))
-	{
-		Numeric		x;
-		Numeric		a = DatumGetNumeric(DirectFunctionCall1(int4_numeric,
-															Int32GetDatum(10)));
-		Numeric		b = DatumGetNumeric(DirectFunctionCall1(int4_numeric,
-															Int32GetDatum(-Num.multi)));
+		if (IS_MULTI(&Num))
+		{
+			Numeric		x;
+			Numeric		a = DatumGetNumeric(DirectFunctionCall1(int4_numeric,
+																Int32GetDatum(10)));
+			Numeric		b = DatumGetNumeric(DirectFunctionCall1(int4_numeric,
+																Int32GetDatum(-Num.multi)));
 
-		x = DatumGetNumeric(DirectFunctionCall2(numeric_power,
-												NumericGetDatum(a),
-												NumericGetDatum(b)));
-		result = DirectFunctionCall2(numeric_mul,
-									 result,
-									 NumericGetDatum(x));
+			x = DatumGetNumeric(DirectFunctionCall2(numeric_power,
+													NumericGetDatum(a),
+													NumericGetDatum(b)));
+			result = DirectFunctionCall2(numeric_mul,
+										result,
+										NumericGetDatum(x));
+		}
+		pfree(numstr);
 	}
+	if (shouldFree)
+		pfree(format);
 
-	pfree(numstr);
 	return result;
 }
 

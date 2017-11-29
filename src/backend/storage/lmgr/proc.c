@@ -765,6 +765,8 @@ ProcReleaseLocks(bool isCommit)
 		return;
 	/* If waiting, get off wait queue (should only be needed after error) */
 	LockErrorCleanup();
+	/* Release relation extension locks */
+	RelExtLockReleaseAll();
 	/* Release standard locks, including session-level if aborting */
 	LockReleaseAll(DEFAULT_LOCKMETHOD, !isCommit);
 	/* Release transaction-level advisory locks */

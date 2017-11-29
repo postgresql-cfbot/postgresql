@@ -824,10 +824,10 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	{
 		/* Get the current relation length */
 		if (needLock)
-			LockRelationForExtension(index, ExclusiveLock);
+			LockRelationForExtension(index, RELEXT_EXCLUSIVE);
 		num_pages = RelationGetNumberOfBlocks(index);
 		if (needLock)
-			UnlockRelationForExtension(index, ExclusiveLock);
+			UnlockRelationForExtension(index);
 
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= num_pages)

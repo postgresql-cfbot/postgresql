@@ -59,10 +59,10 @@ gistvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 
 	/* try to find deleted pages */
 	if (needLock)
-		LockRelationForExtension(rel, ExclusiveLock);
+		LockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 	npages = RelationGetNumberOfBlocks(rel);
 	if (needLock)
-		UnlockRelationForExtension(rel, ExclusiveLock);
+		UnlockRelationForExtension(rel);
 
 	totFreePages = 0;
 	for (blkno = GIST_ROOT_BLKNO + 1; blkno < npages; blkno++)
@@ -91,10 +91,10 @@ gistvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	/* return statistics */
 	stats->pages_free = totFreePages;
 	if (needLock)
-		LockRelationForExtension(rel, ExclusiveLock);
+		LockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 	stats->num_pages = RelationGetNumberOfBlocks(rel);
 	if (needLock)
-		UnlockRelationForExtension(rel, ExclusiveLock);
+		UnlockRelationForExtension(rel);
 
 	return stats;
 }

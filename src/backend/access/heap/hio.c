@@ -519,11 +519,11 @@ loop:
 	if (needLock)
 	{
 		if (!use_fsm)
-			LockRelationForExtension(relation, ExclusiveLock);
-		else if (!ConditionalLockRelationForExtension(relation, ExclusiveLock))
+			LockRelationForExtension(relation, RELEXT_EXCLUSIVE);
+		else if (!ConditionalLockRelationForExtension(relation, RELEXT_EXCLUSIVE))
 		{
 			/* Couldn't get the lock immediately; wait for it. */
-			LockRelationForExtension(relation, ExclusiveLock);
+			LockRelationForExtension(relation, RELEXT_EXCLUSIVE);
 
 			/*
 			 * Check if some other backend has extended a block for us while
@@ -537,7 +537,7 @@ loop:
 			 */
 			if (targetBlock != InvalidBlockNumber)
 			{
-				UnlockRelationForExtension(relation, ExclusiveLock);
+				UnlockRelationForExtension(relation);
 				goto loop;
 			}
 
@@ -576,7 +576,7 @@ loop:
 	 * against vacuumlazy.c --- see comments therein.
 	 */
 	if (needLock)
-		UnlockRelationForExtension(relation, ExclusiveLock);
+		UnlockRelationForExtension(relation);
 
 	/*
 	 * We need to initialize the empty new page.  Double-check that it really

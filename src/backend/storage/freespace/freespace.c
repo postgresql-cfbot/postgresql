@@ -624,7 +624,7 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 	 * Note that another backend might have extended or created the relation
 	 * by the time we get the lock.
 	 */
-	LockRelationForExtension(rel, ExclusiveLock);
+	LockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 
 	/* Might have to re-open if a cache flush happened */
 	RelationOpenSmgr(rel);
@@ -652,7 +652,7 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 	/* Update local cache with the up-to-date size */
 	rel->rd_smgr->smgr_fsm_nblocks = fsm_nblocks_now;
 
-	UnlockRelationForExtension(rel, ExclusiveLock);
+	UnlockRelationForExtension(rel);
 
 	pfree(pg);
 }

@@ -29,6 +29,12 @@ process has to wait for an LWLock, it blocks on a SysV semaphore so as
 to not consume CPU time.  Waiting processes will be granted the lock in
 arrival order.  There is no timeout.
 
+* Relation extension locks.  The relation extension lock manager is
+specialized in relation extensions. In PostgreSQL 10 relation extension
+lock has been moved out of regular lock. It's similar to regular locks
+but doesn't have full dead lock detection and group locking. When
+confliction relation extension lock waits using condition variables.
+
 * Regular locks (a/k/a heavyweight locks).  The regular lock manager
 supports a variety of lock modes with table-driven semantics, and it has
 full deadlock detection and automatic release at transaction end.
@@ -40,9 +46,9 @@ Acquisition of either a spinlock or a lightweight lock causes query
 cancel and die() interrupts to be held off until all such locks are
 released. No such restriction exists for regular locks, however.  Also
 note that we can accept query cancel and die() interrupts while waiting
-for a regular lock, but we will not accept them while waiting for
-spinlocks or LW locks. It is therefore not a good idea to use LW locks
-when the wait time might exceed a few seconds.
+for a relation extension lock or a regular lock, but we will not accept
+them while waiting for spinlocks or LW locks. It is therefore not a good
+idea to use LW locks when the wait time might exceed a few seconds.
 
 The rest of this README file discusses the regular lock manager in detail.
 

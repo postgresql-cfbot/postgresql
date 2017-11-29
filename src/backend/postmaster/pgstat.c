@@ -3628,6 +3628,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
 			break;
+		case WAIT_EVENT_RELATION_EXTENSION:
+			event_name = "RelationExtension";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

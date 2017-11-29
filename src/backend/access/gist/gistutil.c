@@ -821,13 +821,13 @@ gistNewBuffer(Relation r)
 	needLock = !RELATION_IS_LOCAL(r);
 
 	if (needLock)
-		LockRelationForExtension(r, ExclusiveLock);
+		LockRelationForExtension(r, RELEXT_EXCLUSIVE);
 
 	buffer = ReadBuffer(r, P_NEW);
 	LockBuffer(buffer, GIST_EXCLUSIVE);
 
 	if (needLock)
-		UnlockRelationForExtension(r, ExclusiveLock);
+		UnlockRelationForExtension(r);
 
 	return buffer;
 }

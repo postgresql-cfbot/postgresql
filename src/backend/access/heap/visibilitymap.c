@@ -641,7 +641,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	 * Note that another backend might have extended or created the relation
 	 * by the time we get the lock.
 	 */
-	LockRelationForExtension(rel, ExclusiveLock);
+	LockRelationForExtension(rel, RELEXT_EXCLUSIVE);
 
 	/* Might have to re-open if a cache flush happened */
 	RelationOpenSmgr(rel);
@@ -679,7 +679,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	/* Update local cache with the up-to-date size */
 	rel->rd_smgr->smgr_vm_nblocks = vm_nblocks_now;
 
-	UnlockRelationForExtension(rel, ExclusiveLock);
+	UnlockRelationForExtension(rel);
 
 	pfree(pg);
 }

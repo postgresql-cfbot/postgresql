@@ -716,10 +716,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	needLock = !RELATION_IS_LOCAL(index);
 
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index, RELEXT_EXCLUSIVE);
 	npages = RelationGetNumberOfBlocks(index);
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	totFreePages = 0;
 
@@ -766,10 +766,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	stats->pages_free = totFreePages;
 
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index, RELEXT_EXCLUSIVE);
 	stats->num_pages = RelationGetNumberOfBlocks(index);
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	return stats;
 }

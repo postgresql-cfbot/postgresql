@@ -623,8 +623,8 @@ brin_page_cleanup(Relation idxrel, Buffer buf)
 	 */
 	if (PageIsNew(page))
 	{
-		LockRelationForExtension(idxrel, ShareLock);
-		UnlockRelationForExtension(idxrel, ShareLock);
+		LockRelationForExtension(idxrel, RELEXT_SHARED);
+		UnlockRelationForExtension(idxrel);
 
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(page))
@@ -716,7 +716,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 			 */
 			if (!RELATION_IS_LOCAL(irel))
 			{
-				LockRelationForExtension(irel, ExclusiveLock);
+				LockRelationForExtension(irel, RELEXT_EXCLUSIVE);
 				extensionLockHeld = true;
 			}
 			buf = ReadBuffer(irel, P_NEW);
@@ -768,7 +768,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 				}
 
 				if (extensionLockHeld)
-					UnlockRelationForExtension(irel, ExclusiveLock);
+					UnlockRelationForExtension(irel);
 
 				ReleaseBuffer(buf);
 				return InvalidBuffer;
@@ -778,7 +778,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 		if (extensionLockHeld)
-			UnlockRelationForExtension(irel, ExclusiveLock);
+			UnlockRelationForExtension(irel);
 
 		page = BufferGetPage(buf);
 

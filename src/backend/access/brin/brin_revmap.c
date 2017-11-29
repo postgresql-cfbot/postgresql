@@ -570,7 +570,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 	else
 	{
 		if (needLock)
-			LockRelationForExtension(irel, ExclusiveLock);
+			LockRelationForExtension(irel, RELEXT_EXCLUSIVE);
 
 		buf = ReadBuffer(irel, P_NEW);
 		if (BufferGetBlockNumber(buf) != mapBlk)
@@ -582,7 +582,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 			 * page from under whoever is using it.
 			 */
 			if (needLock)
-				UnlockRelationForExtension(irel, ExclusiveLock);
+				UnlockRelationForExtension(irel);
 			LockBuffer(revmap->rm_metaBuf, BUFFER_LOCK_UNLOCK);
 			ReleaseBuffer(buf);
 			return;
@@ -591,7 +591,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 		page = BufferGetPage(buf);
 
 		if (needLock)
-			UnlockRelationForExtension(irel, ExclusiveLock);
+			UnlockRelationForExtension(irel);
 	}
 
 	/* Check that it's a regular block (or an empty page) */

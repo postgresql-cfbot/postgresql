@@ -120,14 +120,21 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 #define LOG2_NUM_PREDICATELOCK_PARTITIONS  4
 #define NUM_PREDICATELOCK_PARTITIONS  (1 << LOG2_NUM_PREDICATELOCK_PARTITIONS)
 
+/* Number of partitions the shared relation extension lock tables are divided into */
+#define LOG2_NUM_RELEXTLOCK_PARTITIONS	4
+#define NUM_RELEXTLOCK_PARTITIONS	(1 << LOG2_NUM_RELEXTLOCK_PARTITIONS)
+
 /* Offsets for various chunks of preallocated lwlocks. */
 #define BUFFER_MAPPING_LWLOCK_OFFSET	NUM_INDIVIDUAL_LWLOCKS
 #define LOCK_MANAGER_LWLOCK_OFFSET		\
 	(BUFFER_MAPPING_LWLOCK_OFFSET + NUM_BUFFER_PARTITIONS)
 #define PREDICATELOCK_MANAGER_LWLOCK_OFFSET \
 	(LOCK_MANAGER_LWLOCK_OFFSET + NUM_LOCK_PARTITIONS)
-#define NUM_FIXED_LWLOCKS \
+#define RELEXTLOCK_MANAGER_LWLOCK_OFFSET \
 	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS)
+#define NUM_FIXED_LWLOCKS \
+	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS + \
+	 NUM_RELEXTLOCK_PARTITIONS)
 
 typedef enum LWLockMode
 {
@@ -151,6 +158,8 @@ extern void LWLockReleaseClearVar(LWLock *lock, uint64 *valptr, uint64 val);
 extern void LWLockReleaseAll(void);
 extern bool LWLockHeldByMe(LWLock *lock);
 extern bool LWLockHeldByMeInMode(LWLock *lock, LWLockMode mode);
+extern bool LWLockCheckForCleanup(LWLock *lock);
+extern int LWLockWaiterCount(LWLock *lock);
 
 extern bool LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval);
 extern void LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 value);
@@ -211,6 +220,7 @@ typedef enum BuiltinTrancheIds
 	LWTRANCHE_BUFFER_MAPPING,
 	LWTRANCHE_LOCK_MANAGER,
 	LWTRANCHE_PREDICATE_LOCK_MANAGER,
+	LWTRANCHE_RELEXT_LOCK_MANAGER,
 	LWTRANCHE_PARALLEL_QUERY_DSA,
 	LWTRANCHE_SESSION_DSA,
 	LWTRANCHE_SESSION_RECORD_TABLE,

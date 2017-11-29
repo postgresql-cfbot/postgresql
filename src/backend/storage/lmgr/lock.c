@@ -45,6 +45,7 @@
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
+#include "storage/lmgr.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/resowner_private.h"
@@ -388,6 +389,9 @@ InitLocks(void)
 	max_table_size = NLOCKENTS();
 	init_table_size = max_table_size / 2;
 
+	/* Initialize lock structure for relation extension lock */
+	InitRelExtLock(max_table_size);
+
 	/*
 	 * Allocate hash table for LOCK structs.  This stores per-locked-object
 	 * information.
@@ -716,6 +720,15 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	LWLock	   *partitionLock;
 	int			status;
 	bool		log_lock = false;
+
+	/*
+	 * We allow to take a relation extension lock after took a
+	 * heavy-weight lock. However, since we don't have dead lock
+	 * detection mechanism between heavy-weight lock and relation
+	 * extension lock it's not allowed taking an another heavy-weight
+	 * lock while holding a relation extension lock.
+	 */
+	Assert(RelExtLockHoldingLockCount() == 0);
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
@@ -3366,6 +3379,7 @@ LockShmemSize(void)
 	/* lock hash table */
 	max_table_size = NLOCKENTS();
 	size = add_size(size, hash_estimate_size(max_table_size, sizeof(LOCK)));
+	size = add_size(size, hash_estimate_size(max_table_size, sizeof(LWLock)));
 
 	/* proclock hash table */
 	max_table_size *= 2;

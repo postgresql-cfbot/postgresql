@@ -15,6 +15,7 @@
 #define LMGR_H
 
 #include "lib/stringinfo.h"
+#include "storage/extension_lock.h"
 #include "storage/itemptr.h"
 #include "storage/lock.h"
 #include "utils/rel.h"
@@ -49,13 +50,6 @@ extern bool LockHasWaitersRelation(Relation relation, LOCKMODE lockmode);
 
 extern void LockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode);
 extern void UnlockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode);
-
-/* Lock a relation for extension */
-extern void LockRelationForExtension(Relation relation, LOCKMODE lockmode);
-extern void UnlockRelationForExtension(Relation relation, LOCKMODE lockmode);
-extern bool ConditionalLockRelationForExtension(Relation relation,
-									LOCKMODE lockmode);
-extern int	RelationExtensionLockWaiterCount(Relation relation);
 
 /* Lock a page (currently only used within indexes) */
 extern void LockPage(Relation relation, BlockNumber blkno, LOCKMODE lockmode);

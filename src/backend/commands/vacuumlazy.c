@@ -860,8 +860,8 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * it's got exclusive lock on the whole relation.
 			 */
 			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
-			LockRelationForExtension(onerel, ExclusiveLock);
-			UnlockRelationForExtension(onerel, ExclusiveLock);
+			LockRelationForExtension(onerel, RELEXT_EXCLUSIVE);
+			UnlockRelationForExtension(onerel);
 			LockBufferForCleanup(buf);
 			if (PageIsNew(page))
 			{

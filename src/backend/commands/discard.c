@@ -19,6 +19,7 @@
 #include "commands/discard.h"
 #include "commands/prepare.h"
 #include "commands/sequence.h"
+#include "storage/extension_lock.h"
 #include "utils/guc.h"
 #include "utils/portal.h"
 
@@ -71,6 +72,7 @@ DiscardAll(bool isTopLevel)
 	ResetAllOptions();
 	DropAllPreparedStatements();
 	Async_UnlistenAll();
+	RelExtLockReleaseAll();
 	LockReleaseAll(USER_LOCKMETHOD, true);
 	ResetPlanCache();
 	ResetTempTableNamespace();

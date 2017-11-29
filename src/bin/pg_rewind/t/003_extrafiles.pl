@@ -71,12 +71,12 @@ sub run_test
 			"$test_master_datadir/tst_both_dir/both_file2",
 			"$test_master_datadir/tst_both_dir/both_subdir",
 			"$test_master_datadir/tst_both_dir/both_subdir/both_file3",
-			"$test_master_datadir/tst_standby_dir",
-			"$test_master_datadir/tst_standby_dir/standby_file1",
-			"$test_master_datadir/tst_standby_dir/standby_file2",
-			"$test_master_datadir/tst_standby_dir/standby_subdir",
-"$test_master_datadir/tst_standby_dir/standby_subdir/standby_file3" ],
-		"file lists match");
+                        "$test_master_datadir/tst_master_dir",
+                        "$test_master_datadir/tst_master_dir/master_file1",
+                        "$test_master_datadir/tst_master_dir/master_file2",
+                        "$test_master_datadir/tst_master_dir/master_subdir",
+                        "$test_master_datadir/tst_master_dir/master_subdir/master_file3", ],
+		"file lists match") or (diag("Files found:"), diag(explain(\@paths)));
 
 	RewindTest::clean_rewind_test();
 }

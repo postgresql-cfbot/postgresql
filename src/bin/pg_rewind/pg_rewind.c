@@ -287,7 +287,7 @@ main(int argc, char **argv)
 	pg_log(PG_PROGRESS, "reading source file list\n");
 	fetchSourceFileList();
 	pg_log(PG_PROGRESS, "reading target file list\n");
-	traverse_datadir(datadir_target, &process_target_file);
+	traverse_rewinddirs(datadir_target, &process_target_file);
 
 	/*
 	 * Read the target WAL from last checkpoint before the point of fork, to

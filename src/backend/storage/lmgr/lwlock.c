@@ -517,6 +517,7 @@ RegisterLWLockTranches(void)
 	LWLockRegisterTranche(LWTRANCHE_SESSION_TYPMOD_TABLE,
 						  "session_typmod_table");
 	LWLockRegisterTranche(LWTRANCHE_TBM, "tbm");
+	LWLockRegisterTranche(LWTRANCHE_SXACT, "sxact");
 
 	/* Register named tranches. */
 	for (i = 0; i < NamedLWLockTrancheRequests; i++)

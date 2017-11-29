@@ -4,13 +4,14 @@ use warnings;
 use PostgresNode;
 use TestLib;
 use Test::More;
+use Time::HiRes qw{time};
 
 # start a pgbench specific server
 my $node = get_new_node('main');
 $node->init;
 $node->start;
 
-# invoke pgbench
+# invoke pgbench, return elapsed time
 sub pgbench
 {
 	my ($opts, $stat, $out, $err, $name, $files) = @_;
@@ -32,10 +33,13 @@ sub pgbench
 			append_to_file($filename, $$files{$fn});
 		}
 	}
+
+	my $t0 = time();
 	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
 
 	# cleanup?
 	#unlink @filenames or die "cannot unlink files (@filenames): $!";
+	return time() - $t0;
 }
 
 # Test concurrent insertion into table with UNIQUE oid column.  DDL expects
@@ -458,14 +462,53 @@ sub check_pgbench_logs
 	ok(unlink(@logs), "remove log files");
 }
 
-# with sampling rate
+# note: --progress-timestamp is not tested
+
+# The point of this test is coverage of various time-related features
+# (-T, -P, --aggregate-interval, --rate, --latency-limit...), so it is
+# somehow time sensitive.
+# The checks performed are quite loose so as to still pass even under
+# degraded (high load, slow host, valgrind run) testing conditions.
+# Maybe it might fail if no every second progress report is
+# shown over 2 seconds...
+my $elapsed = pgbench(
+	'-T 2 -P 1 -l --log-prefix=001_pgbench_log_1 --aggregate-interval=1'
+	  . ' -S -b se@2 --rate=20 --latency-limit=1000 -j ' . $nthreads
+	  . ' -c 3 -r',
+	0,
+	[   qr{type: multiple},
+		qr{clients: 3},
+		qr{threads: $nthreads},
+		# the shown duration is really -T argument value
+		qr{duration: 2 s},
+		qr{script 1: .* select only},
+		qr{script 2: .* select only},
+		qr{statement latencies in milliseconds},
+		qr{FROM pgbench_accounts} ],
+	[	qr{vacuum},
+		# hopefully at least expect some progress report?
+		qr{progress: \d\b} ],
+	'pgbench progress');
+
+# if the test has gone AWOL, coldly skip these detailed checks.
+if (abs($elapsed - 2.0) < 0.5)
+{
+	# $nthreads threads, 2 seconds, but due to timing imprecision we might get
+	# only 1 or as many as 3 progress reports per thread.
+	check_pgbench_logs('001_pgbench_log_1', $nthreads, 1, 3,
+		qr{^\d+ \d{1,2} \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+$});
+}
+
+# with sampling rate, not time sensitive
 pgbench(
 '-n -S -t 50 -c 2 --log --log-prefix=001_pgbench_log_2 --sampling-rate=0.5',
 	0,
 	[ qr{select only}, qr{processed: 100/100} ],
-	[qr{^$}],
+	[ qr{^$} ],
 	'pgbench logs');
 
+# random 50% of 2*50 transactions, accept between 8 and 92
+# probability of failure is about 2 * 2^-42 (?)
 check_pgbench_logs('001_pgbench_log_2', 1, 8, 92,
 	qr{^0 \d{1,2} \d+ \d \d+ \d+$});
 

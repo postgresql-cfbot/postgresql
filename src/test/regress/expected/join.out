@@ -1845,6 +1845,89 @@ SELECT '' AS "xxx", *
      | 1 | 4 | one | -1
 (1 row)
 
+-- SEMI and ANTI join neq selectivity
+ANALYZE J1_TBL;
+ANALYZE J2_TBL;
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM J1_TBL t1
+WHERE EXISTS (SELECT * FROM J2_TBL t2 WHERE t1.i <> t2.i);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Nested Loop Semi Join (actual rows=9 loops=1)
+   Join Filter: (t1.i <> t2.i)
+   Rows Removed by Join Filter: 19
+   ->  Seq Scan on j1_tbl t1 (actual rows=11 loops=1)
+   ->  Materialize (actual rows=3 loops=11)
+         ->  Seq Scan on j2_tbl t2 (actual rows=9 loops=1)
+(6 rows)
+
+SELECT count(*) FROM J1_TBL t1
+WHERE EXISTS (SELECT * FROM J2_TBL t2 WHERE t1.i <> t2.i);
+ count 
+-------
+     9
+(1 row)
+
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM J1_TBL t1
+WHERE EXISTS (SELECT * FROM J2_TBL t2 WHERE t2.i <> t1.i);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Nested Loop Semi Join (actual rows=9 loops=1)
+   Join Filter: (t2.i <> t1.i)
+   Rows Removed by Join Filter: 19
+   ->  Seq Scan on j1_tbl t1 (actual rows=11 loops=1)
+   ->  Materialize (actual rows=3 loops=11)
+         ->  Seq Scan on j2_tbl t2 (actual rows=9 loops=1)
+(6 rows)
+
+SELECT count(*) FROM J1_TBL t1
+WHERE EXISTS (SELECT * FROM J2_TBL t2 WHERE t2.i <> t1.i);
+ count 
+-------
+     9
+(1 row)
+
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM J1_TBL t1
+WHERE NOT EXISTS (SELECT * FROM J2_TBL t2 WHERE t1.i <> t2.i);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Nested Loop Anti Join (actual rows=2 loops=1)
+   Join Filter: (t1.i <> t2.i)
+   Rows Removed by Join Filter: 19
+   ->  Seq Scan on j1_tbl t1 (actual rows=11 loops=1)
+   ->  Materialize (actual rows=3 loops=11)
+         ->  Seq Scan on j2_tbl t2 (actual rows=9 loops=1)
+(6 rows)
+
+SELECT count(*) FROM J1_TBL t1
+WHERE NOT EXISTS (SELECT * FROM J2_TBL t2 WHERE t1.i <> t2.i);
+ count 
+-------
+     2
+(1 row)
+
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM J1_TBL t1
+WHERE NOT EXISTS (SELECT * FROM J2_TBL t2 WHERE t2.i <> t1.i);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Nested Loop Anti Join (actual rows=2 loops=1)
+   Join Filter: (t2.i <> t1.i)
+   Rows Removed by Join Filter: 19
+   ->  Seq Scan on j1_tbl t1 (actual rows=11 loops=1)
+   ->  Materialize (actual rows=3 loops=11)
+         ->  Seq Scan on j2_tbl t2 (actual rows=9 loops=1)
+(6 rows)
+
+SELECT count(*) FROM J1_TBL t1
+WHERE NOT EXISTS (SELECT * FROM J2_TBL t2 WHERE t2.i <> t1.i);
+ count 
+-------
+     2
+(1 row)
+
 --
 -- More complicated constructs
 --

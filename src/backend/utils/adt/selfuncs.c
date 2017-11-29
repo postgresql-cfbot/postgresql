@@ -2770,26 +2770,63 @@ neqjoinsel(PG_FUNCTION_ARGS)
 	Oid			eqop;
 	float8		result;
 
-	/*
-	 * We want 1 - eqjoinsel() where the equality operator is the one
-	 * associated with this != operator, that is, its negator.
-	 */
-	eqop = get_negator(operator);
-	if (eqop)
+
+	if (jointype == JOIN_SEMI || jointype == JOIN_ANTI)
 	{
-		result = DatumGetFloat8(DirectFunctionCall5(eqjoinsel,
-													PointerGetDatum(root),
-													ObjectIdGetDatum(eqop),
-													PointerGetDatum(args),
-													Int16GetDatum(jointype),
-													PointerGetDatum(sjinfo)));
+		VariableStatData leftvar;
+		VariableStatData rightvar;
+		double		nullfrac;
+		bool		reversed;
+		HeapTuple	statsTuple;
+
+		get_join_variables(root, args, sjinfo, &leftvar, &rightvar, &reversed);
+		statsTuple = reversed ? rightvar.statsTuple : leftvar.statsTuple;
+		if (HeapTupleIsValid(statsTuple))
+			nullfrac = ((Form_pg_statistic) GETSTRUCT(statsTuple))->stanullfrac;
+		else
+			nullfrac = 0.0;
+		ReleaseVariableStats(leftvar);
+		ReleaseVariableStats(rightvar);
+
+		/*
+		 * For semi-joins, if there is more than one distinct value in the RHS
+		 * relation then every non-null LHS row must find a row to join since
+		 * it can only be equal to one of them.  We'll assume that there is
+		 * always more than one distinct RHS value for the sake of stability,
+		 * though in theory we could have special cases for empty RHS
+		 * (selectivity = 0) and single-distinct-value RHS (selectivity =
+		 * fraction of LHS that has the same value as the single RHS value).
+		 *
+		 * For anti-joins, if we use the same assumption that there is more
+		 * than one distinct key in the RHS relation, then every non-null LHS
+		 * row must be suppressed by the anti-join leaving only nullfrac.
+		 */
+		result = 1.0 - nullfrac;
 	}
 	else
 	{
-		/* Use default selectivity (should we raise an error instead?) */
-		result = DEFAULT_EQ_SEL;
+		/*
+		 * We want 1 - eqjoinsel() where the equality operator is the one
+		 * associated with this != operator, that is, its negator.
+		 */
+		eqop = get_negator(operator);
+		if (eqop)
+		{
+			result = DatumGetFloat8(DirectFunctionCall5(eqjoinsel,
+														PointerGetDatum(root),
+														ObjectIdGetDatum(eqop),
+														PointerGetDatum(args),
+														Int16GetDatum(jointype),
+														PointerGetDatum(sjinfo)));
+		}
+		else
+		{
+			/* Use default selectivity (should we raise an error instead?) */
+			result = DEFAULT_EQ_SEL;
+		}
+		result = 1.0 - result;
 	}
-	result = 1.0 - result;
+
 	PG_RETURN_FLOAT8(result);
 }
 

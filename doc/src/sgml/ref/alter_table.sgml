@@ -53,6 +53,8 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET ( <replaceable class="parameter">attribute_option</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> RESET ( <replaceable class="parameter">attribute_option</replaceable> [, ... ] )
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN }
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET COMPRESSED <replaceable class="parameter">compression_method_name</replaceable> [ WITH (<replaceable class="parameter">compression_method_options</replaceable>) ]
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET NOT COMPRESSED
     ADD <replaceable class="parameter">table_constraint</replaceable> [ NOT VALID ]
     ADD <replaceable class="parameter">table_constraint_using_index</replaceable>
     ALTER CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
@@ -316,6 +318,34 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
       <literal>SET STORAGE</literal> doesn't itself change anything in the table,
       it just sets the strategy to be pursued during future table updates.
       See <xref linkend="storage-toast"/> for more information.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal>SET COMPRESSED <replaceable class="parameter">compression_method_name</replaceable></literal>
+    </term>
+    <listitem>
+     <para>
+      This form adds compression to a column. Compression method should be
+      created with <xref linkend="SQL-CREATECOMPRESSIONMETHOD">. If compression
+      method has options they could be specified with <literal>WITH</literal>
+      parameter. Setting a compression method doesn't change anything in the
+      table and affects only future table updates.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal>SET NOT COMPRESSED</literal>
+    </term>
+    <listitem>
+     <para>
+      This form removes compression from a column. Removing compresssion from
+      a column doesn't change already compressed tuples and affects only future
+      table updates.
      </para>
     </listitem>
    </varlistentry>

@@ -1009,6 +1009,7 @@ ProcessUtilitySlow(ParseState *pstate,
 													 RELKIND_RELATION,
 													 InvalidOid, NULL,
 													 queryString);
+
 							EventTriggerCollectSimpleCommand(address,
 															 secondaryObject,
 															 stmt);
@@ -1282,6 +1283,11 @@ ProcessUtilitySlow(ParseState *pstate,
 													  stmt->defnames,
 													  stmt->definition,
 													  stmt->if_not_exists);
+							break;
+						case OBJECT_COMPRESSION_METHOD:
+							Assert(stmt->args == NIL);
+							address = DefineCompressionMethod(stmt->defnames,
+															  stmt->definition);
 							break;
 						default:
 							elog(ERROR, "unrecognized define stmt type: %d",
@@ -2309,6 +2315,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_STATISTIC_EXT:
 					tag = "DROP STATISTICS";
 					break;
+				case OBJECT_COMPRESSION_METHOD:
+					tag = "DROP COMPRESSION METHOD";
+					break;
 				default:
 					tag = "???";
 			}
@@ -2411,6 +2420,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = "CREATE ACCESS METHOD";
+					break;
+				case OBJECT_COMPRESSION_METHOD:
+					tag = "CREATE COMPRESSION METHOD";
 					break;
 				default:
 					tag = "???";

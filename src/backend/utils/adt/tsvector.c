@@ -14,11 +14,14 @@
 
 #include "postgres.h"
 
+#include "access/compression.h"
+#include "catalog/pg_type.h"
 #include "libpq/pqformat.h"
 #include "tsearch/ts_locale.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "common/pg_lzcompress.h"
 
 typedef struct
 {
@@ -547,4 +550,86 @@ tsvectorrecv(PG_FUNCTION_ARGS)
 				  compareentry, (void *) STRPTR(vec));
 
 	PG_RETURN_TSVECTOR(vec);
+}
+
+/*
+ * Compress tsvector using LZ compression.
+ * Instead of trying to compress whole tsvector we compress only text part
+ * here. This approach gives more compressibility for tsvectors.
+ */
+static struct varlena *
+tsvector_compress(CompressionMethodOptions *cmoptions, const struct varlena *data)
+{
+	char	   *tmp;
+	int32		valsize = VARSIZE_ANY_EXHDR(data);
+	int32		len = valsize + VARHDRSZ_CUSTOM_COMPRESSED,
+				lenc;
+
+	char	   *arr = VARDATA(data),
+			   *str = STRPTR((TSVector) data);
+	int32		arrsize = str - arr;
+
+	Assert(!VARATT_IS_COMPRESSED(data));
+	tmp = palloc0(len);
+
+	/* we try to compress string part of tsvector first */
+	lenc = pglz_compress(str,
+						 valsize - arrsize,
+						 tmp + VARHDRSZ_CUSTOM_COMPRESSED + arrsize,
+						 PGLZ_strategy_default);
+
+	if (lenc >= 0)
+	{
+		/* tsvector is compressible, copy size and entries to its beginning */
+		memcpy(tmp + VARHDRSZ_CUSTOM_COMPRESSED, arr, arrsize);
+		SET_VARSIZE_COMPRESSED(tmp, arrsize + lenc + VARHDRSZ_CUSTOM_COMPRESSED);
+		return (struct varlena *) tmp;
+	}
+
+	pfree(tmp);
+	return NULL;
+}
+
+static struct varlena *
+tsvector_decompress(CompressionMethodOptions *cmoptions, const struct varlena *data)
+{
+	char	   *tmp,
+			   *raw_data = (char *) data + VARHDRSZ_CUSTOM_COMPRESSED;
+	int32		count,
+				arrsize,
+				len = VARRAWSIZE_4B_C(data) + VARHDRSZ;
+
+	Assert(VARATT_IS_CUSTOM_COMPRESSED(data));
+	tmp = palloc0(len);
+	SET_VARSIZE(tmp, len);
+	count = *((uint32 *) raw_data);
+	arrsize = sizeof(uint32) + count * sizeof(WordEntry);
+	memcpy(VARDATA(tmp), raw_data, arrsize);
+
+	if (pglz_decompress(raw_data + arrsize,
+						VARSIZE(data) - VARHDRSZ_CUSTOM_COMPRESSED - arrsize,
+						VARDATA(tmp) + arrsize,
+						VARRAWSIZE_4B_C(data) - arrsize) < 0)
+		elog(ERROR, "compressed tsvector is corrupted");
+
+	return (struct varlena *) tmp;
+}
+
+Datum
+tsvector_compression_handler(PG_FUNCTION_ARGS)
+{
+	CompressionMethodOpArgs *opargs = (CompressionMethodOpArgs *)
+	PG_GETARG_POINTER(0);
+	CompressionMethodRoutine *cmr = makeNode(CompressionMethodRoutine);
+	Oid			typeid = opargs->typeid;
+
+	if (OidIsValid(typeid) && typeid != TSVECTOROID)
+		elog(ERROR, "unexpected type %d for tsvector compression handler", typeid);
+
+	cmr->configure = NULL;
+	cmr->drop = NULL;
+	cmr->compress = tsvector_compress;
+	cmr->decompress = tsvector_decompress;
+
+	PG_RETURN_POINTER(cmr);
 }

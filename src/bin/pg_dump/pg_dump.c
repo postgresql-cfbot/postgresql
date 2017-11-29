@@ -361,6 +361,7 @@ main(int argc, char **argv)
 		{"no-synchronized-snapshots", no_argument, &dopt.no_synchronized_snapshots, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
+		{"no-compression-methods", no_argument, &dopt.no_compression_methods, 1},
 		{"no-sync", no_argument, NULL, 7},
 
 		{NULL, 0, NULL, 0}
@@ -581,6 +582,9 @@ main(int argc, char **argv)
 	if (dopt.binary_upgrade)
 		dopt.sequence_data = 1;
 
+	if (dopt.binary_upgrade)
+		dopt.compression_options_data = 1;
+
 	if (dopt.dataOnly && dopt.schemaOnly)
 	{
 		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used together\n");
@@ -784,6 +788,9 @@ main(int argc, char **argv)
 
 	if (dopt.schemaOnly && dopt.sequence_data)
 		getTableData(&dopt, tblinfo, numTables, dopt.oids, RELKIND_SEQUENCE);
+
+	if (dopt.schemaOnly && dopt.compression_options_data)
+		getCompressionOptions(fout);
 
 	/*
 	 * In binary-upgrade mode, we do not have to worry about the actual blob
@@ -3957,6 +3964,205 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 	destroyPQExpBuffer(query);
 }
 
+/*
+ * getCompressionMethods
+ *	  get information about compression methods
+ */
+CompressionMethodInfo *
+getCompressionMethods(Archive *fout, int *numMethods)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer query;
+	PGresult   *res;
+	CompressionMethodInfo *cminfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_handler;
+	int			i_name;
+	int			i,
+				ntups;
+
+	if (dopt->no_compression_methods || fout->remoteVersion < 110000)
+		return NULL;
+
+	query = createPQExpBuffer();
+	resetPQExpBuffer(query);
+
+	/* Get the compression methods in current database. */
+	appendPQExpBuffer(query, "SELECT c.tableoid, c.oid, c.cmname, "
+					  "c.cmhandler::pg_catalog.regproc as cmhandler "
+					  "FROM pg_catalog.pg_compression c");
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_name = PQfnumber(res, "cmname");
+	i_handler = PQfnumber(res, "cmhandler");
+
+	cminfo = pg_malloc(ntups * sizeof(CompressionMethodInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		cminfo[i].dobj.objType = DO_COMPRESSION_METHOD;
+		cminfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		cminfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&cminfo[i].dobj);
+		cminfo[i].cmhandler = pg_strdup(PQgetvalue(res, i, i_handler));
+		cminfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_name));
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(cminfo[i].dobj), fout);
+	}
+	if (numMethods)
+		*numMethods = ntups;
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+
+	return cminfo;
+}
+
+/*
+ * dumpCompressionMethod
+ *	  dump the definition of the given compression method
+ */
+static void
+dumpCompressionMethod(Archive *fout, CompressionMethodInfo * cminfo)
+{
+	PQExpBuffer query;
+
+	if (!(cminfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		return;
+
+	/* Make sure we are in proper schema */
+	selectSourceSchema(fout, "pg_catalog");
+
+	query = createPQExpBuffer();
+	appendPQExpBuffer(query, "CREATE COMPRESSION METHOD %s HANDLER",
+					  fmtId(cminfo->dobj.name));
+	appendPQExpBuffer(query, " %s;\n", cminfo->cmhandler);
+
+	ArchiveEntry(fout,
+				 cminfo->dobj.catId,
+				 cminfo->dobj.dumpId,
+				 cminfo->dobj.name,
+				 NULL,
+				 NULL,
+				 "", false,
+				 "COMPRESSION METHOD", SECTION_PRE_DATA,
+				 query->data, "", NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * getCompressionOptions
+ *	  get information about compression options.
+ *	  this information should be migrated at binary upgrade
+ */
+void
+getCompressionOptions(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	CompressionOptionsInfo *cminfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_handler;
+	int			i_name;
+	int			i_options;
+	int			i,
+				ntups;
+
+	if (fout->remoteVersion < 110000)
+		return;
+
+	query = createPQExpBuffer();
+	resetPQExpBuffer(query);
+
+	appendPQExpBuffer(query,
+					  "SELECT c.tableoid, c.cmoptoid, c.cmname,"
+					  " c.cmhandler::pg_catalog.regproc as cmhandler, c.cmoptions "
+					  "FROM pg_catalog.pg_compression_opt c");
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "cmoptoid");
+	i_name = PQfnumber(res, "cmname");
+	i_handler = PQfnumber(res, "cmhandler");
+	i_options = PQfnumber(res, "cmoptions");
+
+	cminfo = pg_malloc(ntups * sizeof(CompressionOptionsInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		cminfo[i].dobj.objType = DO_COMPRESSION_OPTIONS;
+		cminfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		cminfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&cminfo[i].dobj);
+		cminfo[i].cmhandler = pg_strdup(PQgetvalue(res, i, i_handler));
+		cminfo[i].cmoptions = pg_strdup(PQgetvalue(res, i, i_options));
+		cminfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_name));
+		cminfo[i].dobj.dump = DUMP_COMPONENT_DEFINITION;
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpCompressionOptions
+ *	  dump the given compression options
+ */
+static void
+dumpCompressionOptions(Archive *fout, CompressionOptionsInfo * cminfo)
+{
+	PQExpBuffer query;
+
+	if (!(cminfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		return;
+
+	/* Make sure we are in proper schema */
+	selectSourceSchema(fout, "pg_catalog");
+
+	query = createPQExpBuffer();
+	if (strlen(cminfo->cmoptions) > 0)
+		appendPQExpBuffer(query, "INSERT INTO pg_compression_opt (cmoptoid, cmname, cmhandler,"
+						  " cmoptions) VALUES (%d, '%s', CAST('%s' AS REGPROC), '%s');\n",
+						  cminfo->dobj.catId.oid,
+						  cminfo->dobj.name,
+						  cminfo->cmhandler,
+						  cminfo->cmoptions);
+	else
+		appendPQExpBuffer(query, "INSERT INTO pg_compression_opt (cmoptoid, cmname, cmhandler,"
+						  " cmoptions) VALUES (%d, '%s', CAST('%s' AS REGPROC), NULL);\n",
+						  cminfo->dobj.catId.oid,
+						  cminfo->dobj.name,
+						  cminfo->cmhandler);
+
+	ArchiveEntry(fout,
+				 cminfo->dobj.catId,
+				 cminfo->dobj.dumpId,
+				 cminfo->dobj.name,
+				 NULL,
+				 NULL,
+				 "", false,
+				 "COMPRESSION OPTIONS", SECTION_PRE_DATA,
+				 query->data, "", NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
+	destroyPQExpBuffer(query);
+}
+
 static void
 binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 										 PQExpBuffer upgrade_buffer,
@@ -4484,7 +4690,47 @@ getTypes(Archive *fout, int *numTypes)
 	/* Make sure we are in proper schema */
 	selectSourceSchema(fout, "pg_catalog");
 
-	if (fout->remoteVersion >= 90600)
+	if (fout->remoteVersion >= 110000)
+	{
+		PQExpBuffer acl_subquery = createPQExpBuffer();
+		PQExpBuffer racl_subquery = createPQExpBuffer();
+		PQExpBuffer initacl_subquery = createPQExpBuffer();
+		PQExpBuffer initracl_subquery = createPQExpBuffer();
+
+		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
+						initracl_subquery, "t.typacl", "t.typowner", "'T'",
+						dopt->binary_upgrade);
+
+		appendPQExpBuffer(query, "SELECT t.tableoid, t.oid, t.typname, "
+						  "t.typnamespace, "
+						  "%s AS typacl, "
+						  "%s AS rtypacl, "
+						  "%s AS inittypacl, "
+						  "%s AS initrtypacl, "
+						  "(%s t.typowner) AS rolname, "
+						  "t.typelem, t.typrelid, "
+						  "CASE WHEN t.typrelid = 0 THEN ' '::\"char\" "
+						  "ELSE (SELECT relkind FROM pg_class WHERE oid = t.typrelid) END AS typrelkind, "
+						  "t.typtype, t.typisdefined, "
+						  "t.typname[0] = '_' AND t.typelem != 0 AND "
+						  "(SELECT typarray FROM pg_type te WHERE oid = t.typelem) = t.oid AS isarray "
+						  "FROM pg_type t "
+						  "LEFT JOIN pg_init_privs pip ON "
+						  "(t.oid = pip.objoid "
+						  "AND pip.classoid = 'pg_type'::regclass "
+						  "AND pip.objsubid = 0) ",
+						  acl_subquery->data,
+						  racl_subquery->data,
+						  initacl_subquery->data,
+						  initracl_subquery->data,
+						  username_subquery);
+
+		destroyPQExpBuffer(acl_subquery);
+		destroyPQExpBuffer(racl_subquery);
+		destroyPQExpBuffer(initacl_subquery);
+		destroyPQExpBuffer(initracl_subquery);
+	}
+	else if (fout->remoteVersion >= 90600)
 	{
 		PQExpBuffer acl_subquery = createPQExpBuffer();
 		PQExpBuffer racl_subquery = createPQExpBuffer();
@@ -7895,6 +8141,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_attoptions;
 	int			i_attcollation;
 	int			i_attfdwoptions;
+	int			i_attcmoptions;
+	int			i_attcmname;
 	PGresult   *res;
 	int			ntups;
 	bool		hasdefaults;
@@ -7930,7 +8178,46 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 
 		resetPQExpBuffer(q);
 
-		if (fout->remoteVersion >= 100000)
+		if (fout->remoteVersion >= 110000)
+		{
+			/*
+			 * attcompression is new in version 11
+			 */
+			appendPQExpBuffer(q, "SELECT a.attnum, a.attname, a.atttypmod, "
+							  "a.attstattarget, a.attstorage, t.typstorage, "
+							  "a.attnotnull, a.atthasdef, a.attisdropped, "
+							  "a.attlen, a.attalign, a.attislocal, "
+							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
+							  "array_to_string(a.attoptions, ', ') AS attoptions, "
+							  "CASE WHEN a.attcollation <> t.typcollation "
+							  "THEN a.attcollation ELSE 0 END AS attcollation, "
+							  "a.attidentity, "
+			/* fdw options */
+							  "pg_catalog.array_to_string(ARRAY("
+							  "SELECT pg_catalog.quote_ident(option_name) || "
+							  "' ' || pg_catalog.quote_literal(option_value) "
+							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
+							  "ORDER BY option_name"
+							  "), E',\n    ') AS attfdwoptions, "
+			/* compression options */
+							  "pg_catalog.array_to_string(ARRAY("
+							  "SELECT pg_catalog.quote_ident(option_name) || "
+							  "' ' || pg_catalog.quote_literal(option_value) "
+							  "FROM pg_catalog.pg_options_to_table(c.cmoptions) "
+							  "ORDER BY option_name"
+							  "), E',\n    ') AS attcmoptions, "
+							  "c.cmname AS attcmname "
+			/* FROM */
+							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
+							  "ON a.atttypid = t.oid "
+							  "LEFT JOIN pg_catalog.pg_compression_opt c "
+							  "ON a.attcompression = c.cmoptoid "
+							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
+							  "AND a.attnum > 0::pg_catalog.int2 "
+							  "ORDER BY a.attnum",
+							  tbinfo->dobj.catId.oid);
+		}
+		else if (fout->remoteVersion >= 100000)
 		{
 			/*
 			 * attidentity is new in version 10.
@@ -7949,9 +8236,13 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "' ' || pg_catalog.quote_literal(option_value) "
 							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
 							  "ORDER BY option_name"
-							  "), E',\n    ') AS attfdwoptions "
+							  "), E',\n    ') AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
+							  "LEFT JOIN pg_catalog.pg_compression_opt c "
+							  "ON a.attcompression = c.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
 							  "AND a.attnum > 0::pg_catalog.int2 "
 							  "ORDER BY a.attnum",
@@ -7975,7 +8266,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "' ' || pg_catalog.quote_literal(option_value) "
 							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
 							  "ORDER BY option_name"
-							  "), E',\n    ') AS attfdwoptions "
+							  "), E',\n    ') AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -7999,7 +8292,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "array_to_string(a.attoptions, ', ') AS attoptions, "
 							  "CASE WHEN a.attcollation <> t.typcollation "
 							  "THEN a.attcollation ELSE 0 END AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8017,7 +8312,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
 							  "array_to_string(a.attoptions, ', ') AS attoptions, "
 							  "0 AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8034,7 +8331,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "a.attlen, a.attalign, a.attislocal, "
 							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
 							  "'' AS attoptions, 0 AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8064,6 +8363,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		i_attoptions = PQfnumber(res, "attoptions");
 		i_attcollation = PQfnumber(res, "attcollation");
 		i_attfdwoptions = PQfnumber(res, "attfdwoptions");
+		i_attcmname = PQfnumber(res, "attcmname");
+		i_attcmoptions = PQfnumber(res, "attcmoptions");
 
 		tbinfo->numatts = ntups;
 		tbinfo->attnames = (char **) pg_malloc(ntups * sizeof(char *));
@@ -8080,6 +8381,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attcollation = (Oid *) pg_malloc(ntups * sizeof(Oid));
 		tbinfo->attfdwoptions = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmoptions = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmnames = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->notnull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->inhNotNull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attrdefs = (AttrDefInfo **) pg_malloc(ntups * sizeof(AttrDefInfo *));
@@ -8107,6 +8410,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attoptions[j] = pg_strdup(PQgetvalue(res, j, i_attoptions));
 			tbinfo->attcollation[j] = atooid(PQgetvalue(res, j, i_attcollation));
 			tbinfo->attfdwoptions[j] = pg_strdup(PQgetvalue(res, j, i_attfdwoptions));
+			tbinfo->attcmoptions[j] = pg_strdup(PQgetvalue(res, j, i_attcmoptions));
+			tbinfo->attcmnames[j] = pg_strdup(PQgetvalue(res, j, i_attcmname));
 			tbinfo->attrdefs[j] = NULL; /* fix below */
 			if (PQgetvalue(res, j, i_atthasdef)[0] == 't')
 				hasdefaults = true;
@@ -9595,6 +9900,12 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (SubscriptionInfo *) dobj);
+			break;
+		case DO_COMPRESSION_METHOD:
+			dumpCompressionMethod(fout, (CompressionMethodInfo *) dobj);
+			break;
+		case DO_COMPRESSION_OPTIONS:
+			dumpCompressionOptions(fout, (CompressionOptionsInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -15513,6 +15824,15 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						}
 					}
 
+					if (tbinfo->attcmnames[j] && strlen(tbinfo->attcmnames[j]))
+					{
+						appendPQExpBuffer(q, " COMPRESSED %s",
+										  tbinfo->attcmnames[j]);
+						if (nonemptyReloptions(tbinfo->attcmoptions[j]))
+							appendPQExpBuffer(q, " WITH (%s)",
+											  tbinfo->attcmoptions[j]);
+					}
+
 					if (has_default)
 						appendPQExpBuffer(q, " DEFAULT %s",
 										  tbinfo->attrdefs[j]->adef_expr);
@@ -17778,6 +18098,8 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_FOREIGN_SERVER:
 			case DO_TRANSFORM:
 			case DO_BLOB:
+			case DO_COMPRESSION_METHOD:
+			case DO_COMPRESSION_OPTIONS:
 				/* Pre-data objects: must come before the pre-data boundary */
 				addObjectDependency(preDataBound, dobj->dumpId);
 				break;

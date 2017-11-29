@@ -397,6 +397,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				publication_name_list
+				optCompressionParameters
 				vacuum_relation_list opt_vacuum_relation_list
 
 %type <list>	group_by_list
@@ -582,6 +583,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound partbound_datum_list range_datum_list
 %type <defelt>		hash_partbound_elem
 
+%type <node>	columnCompression optColumnCompression compressedClause
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -614,9 +617,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CACHE CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
-	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREATE
-	CROSS CSV CUBE CURRENT_P
+	COMMITTED COMPRESSED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
+	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
+	COST CREATE CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
@@ -2168,6 +2171,15 @@ alter_table_cmd:
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET (NOT COMPRESSED | COMPRESSED <cm> [WITH (<options>)]) */
+			| ALTER opt_column ColId SET columnCompression
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AlterColumnCompression;
+					n->name = $3;
+					n->def = $5;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
 			| DROP opt_column IF_P EXISTS ColId opt_drop_behavior
 				{
@@ -3332,11 +3344,12 @@ TypedTableElement:
 			| TableConstraint					{ $$ = $1; }
 		;
 
-columnDef:	ColId Typename create_generic_options ColQualList
+columnDef:	ColId Typename optColumnCompression create_generic_options ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3346,8 +3359,8 @@ columnDef:	ColId Typename create_generic_options ColQualList
 					n->raw_default = NULL;
 					n->cooked_default = NULL;
 					n->collOid = InvalidOid;
-					n->fdwoptions = $3;
-					SplitColQualList($4, &n->constraints, &n->collClause,
+					n->fdwoptions = $4;
+					SplitColQualList($5, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
 					$$ = (Node *)n;
@@ -3392,6 +3405,37 @@ columnOptions:	ColId ColQualList
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+		;
+
+compressedClause:
+			COMPRESSED name optCompressionParameters
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->methodName = $2;
+					n->options = (List *) $3;
+					$$ = (Node *) n;
+				}
+		;
+
+columnCompression:
+			compressedClause |
+			NOT COMPRESSED
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->methodName = NULL;
+					n->options = NIL;
+					$$ = (Node *) n;
+				}
+		;
+
+optColumnCompression:
+			compressedClause /* FIXME shift/reduce conflict on NOT COMPRESSED/NOT NULL */
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
+optCompressionParameters:
+			WITH '(' generic_option_list ')' { $$ = $3; }
+			| /*EMPTY*/	{ $$ = NIL; }
 		;
 
 ColQualList:
@@ -5754,6 +5798,15 @@ DefineStmt:
 					n->if_not_exists = true;
 					$$ = (Node *)n;
 				}
+			| CREATE COMPRESSION METHOD any_name HANDLER handler_name
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+					n->kind = OBJECT_COMPRESSION_METHOD;
+					n->args = NIL;
+					n->defnames = $4;
+					n->definition = list_make1(makeDefElem("handler", (Node *) $6, @6));
+					$$ = (Node *) n;
+				}
 		;
 
 definition: '(' def_list ')'						{ $$ = $2; }
@@ -6262,6 +6315,7 @@ drop_type_any_name:
 /* object types taking name_list */
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
+			| COMPRESSION METHOD					{ $$ = OBJECT_COMPRESSION_METHOD; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }
@@ -6325,7 +6379,7 @@ opt_restart_seqs:
  *	The COMMENT ON statement can take different forms based upon the type of
  *	the object associated with the comment. The form of the statement is:
  *
- *	COMMENT ON [ [ ACCESS METHOD | CONVERSION | COLLATION |
+ *	COMMENT ON [ [ ACCESS METHOD | COMPRESSION METHOD | CONVERSION | COLLATION |
  *                 DATABASE | DOMAIN |
  *                 EXTENSION | EVENT TRIGGER | FOREIGN DATA WRAPPER |
  *                 FOREIGN TABLE | INDEX | [PROCEDURAL] LANGUAGE |
@@ -6515,6 +6569,7 @@ comment_type_any_name:
 /* object types taking name */
 comment_type_name:
 			ACCESS METHOD						{ $$ = OBJECT_ACCESS_METHOD; }
+			| COMPRESSION METHOD				{ $$ = OBJECT_COMPRESSION_METHOD; }
 			| DATABASE							{ $$ = OBJECT_DATABASE; }
 			| EVENT TRIGGER						{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION							{ $$ = OBJECT_EXTENSION; }
@@ -14704,6 +14759,8 @@ unreserved_keyword:
 			| COMMENTS
 			| COMMIT
 			| COMMITTED
+			| COMPRESSED
+			| COMPRESSION
 			| CONFIGURATION
 			| CONFLICT
 			| CONNECTION

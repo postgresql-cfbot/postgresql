@@ -451,6 +451,7 @@ sub emit_pgattr_row
 		attisdropped  => 'f',
 		attislocal    => 't',
 		attinhcount   => '0',
+		attcompression=> '0',
 		attacl        => '_null_',
 		attoptions    => '_null_',
 		attfdwoptions => '_null_');

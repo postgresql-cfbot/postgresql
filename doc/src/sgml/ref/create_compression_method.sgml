@@ -1,0 +1,50 @@
+<!--
+doc/src/sgml/ref/create_compression_method.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-CREATECOMPRESSIONMETHOD">
+ <indexterm zone="sql-createcompressionmethod">
+  <primary>CREATE COMPRESSION METHOD</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE COMPRESSION METHOD</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE COMPRESSION METHOD</refname>
+  <refpurpose>define a new compression method</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE COMPRESSION METHOD <replaceable class="parameter">compression_method_name</replaceable>
+    HANDLER <replaceable class="parameter">compression_method_handler</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE COMPRESSION METHOD</command> creates a new compression method
+   with <replaceable class="parameter">compression_method_name</replaceable>.
+  </para>
+
+  <para>
+   A compression method links a name with a compression handler. And the
+   handler is a special function that returns collection of methods that
+   can be used for compression.
+  </para>
+
+  <para>
+   After a compression method is created, you can specify it in
+   <xref linkend="SQL-CREATETABLE"> or <xref linkend="SQL-ALTERTABLE">
+   statements.
+  </para>
+ </refsect1>
+
+</refentry>

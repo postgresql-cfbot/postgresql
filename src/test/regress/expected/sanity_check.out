@@ -111,6 +111,8 @@ pg_authid|t
 pg_cast|t
 pg_class|t
 pg_collation|t
+pg_compression|t
+pg_compression_opt|t
 pg_constraint|t
 pg_conversion|t
 pg_database|t

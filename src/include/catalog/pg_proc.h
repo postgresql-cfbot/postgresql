@@ -3881,6 +3881,10 @@ DATA(insert OID = 3311 (  tsm_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 
 DESCR("I/O");
 DATA(insert OID = 3312 (  tsm_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3310" _null_ _null_ _null_ _null_ _null_ tsm_handler_out _null_ _null_ _null_ ));
 DESCR("I/O");
+DATA(insert OID = 3425 (  compression_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3421 "2275" _null_ _null_ _null_ _null_ _null_ compression_handler_in _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3426 (  compression_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3421" _null_ _null_ _null_ _null_ _null_ compression_handler_out _null_ _null_ _null_ ));
+DESCR("I/O");
 
 /* tablesample method handlers */
 DATA(insert OID = 3313 (  bernoulli			PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 3310 "2281" _null_ _null_ _null_ _null_ _null_ tsm_bernoulli_handler _null_ _null_ _null_ ));
@@ -4677,6 +4681,8 @@ DATA(insert OID =  3646 (  gtsvectorin			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 
 DESCR("I/O");
 DATA(insert OID =  3647 (  gtsvectorout			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3642" _null_ _null_ _null_ _null_ _null_ gtsvectorout _null_ _null_ _null_ ));
 DESCR("I/O");
+DATA(insert OID =  3453 (  tsvector_compression_handler PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 3421 "2281" _null_ _null_ _null_ _null_ _null_ tsvector_compression_handler _null_ _null_ _null_ ));
+DESCR("tsvector compression handler");
 
 DATA(insert OID = 3616 (  tsvector_lt			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 16 "3614 3614" _null_ _null_ _null_ _null_ _null_ tsvector_lt _null_ _null_ _null_ ));
 DATA(insert OID = 3617 (  tsvector_le			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 16 "3614 3614" _null_ _null_ _null_ _null_ _null_ tsvector_le _null_ _null_ _null_ ));

@@ -87,6 +87,7 @@
    &createAggregate;
    &createCast;
    &createCollation;
+   &createCompressionMethod;
    &createConversion;
    &createDatabase;
    &createDomain;

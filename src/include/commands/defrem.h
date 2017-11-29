@@ -140,6 +140,7 @@ extern Oid	RemoveUserMapping(DropUserMappingStmt *stmt);
 extern void RemoveUserMappingById(Oid umId);
 extern void CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid);
 extern void ImportForeignSchema(ImportForeignSchemaStmt *stmt);
+extern Datum optionListToArray(List *options);
 extern Datum transformGenericOptions(Oid catalogId,
 						Datum oldOptions,
 						List *options,
@@ -151,6 +152,14 @@ extern void RemoveAccessMethodById(Oid amOid);
 extern Oid	get_index_am_oid(const char *amname, bool missing_ok);
 extern Oid	get_am_oid(const char *amname, bool missing_ok);
 extern char *get_am_name(Oid amOid);
+
+/* commands/compressioncmds.c */
+extern ObjectAddress DefineCompressionMethod(List *names, List *parameters);
+extern void RemoveCompressionMethodById(Oid cmOid);
+extern void RemoveCompressionOptionsById(Oid cmoptoid);
+extern Oid	get_compression_method_oid(const char *cmname, bool missing_ok);
+extern char *get_compression_method_name(Oid cmOid);
+extern char *get_compression_method_name_for_opt(Oid cmoptoid);
 
 /* support routines in commands/define.c */
 

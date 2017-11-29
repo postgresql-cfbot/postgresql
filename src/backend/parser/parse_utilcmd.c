@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "access/compression.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "catalog/dependency.h"
@@ -495,6 +496,39 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 }
 
 /*
+ * transformColumnCompression
+ *
+ * Build ALTER TABLE .. SET COMPRESSED command if a compression method was
+ * specified for the column
+ */
+void
+transformColumnCompression(ColumnDef *column, RangeVar *relation,
+						   AlterTableStmt **alterStmt)
+{
+	if (column->compression)
+	{
+		AlterTableCmd *cmd;
+
+		cmd = makeNode(AlterTableCmd);
+		cmd->subtype = AT_AlterColumnCompression;
+		cmd->name = column->colname;
+		cmd->def = (Node *) column->compression;
+		cmd->behavior = DROP_RESTRICT;
+		cmd->missing_ok = false;
+
+		if (!*alterStmt)
+		{
+			*alterStmt = makeNode(AlterTableStmt);
+			(*alterStmt)->relation = relation;
+			(*alterStmt)->relkind = OBJECT_TABLE;
+			(*alterStmt)->cmds = NIL;
+		}
+
+		(*alterStmt)->cmds = lappend((*alterStmt)->cmds, cmd);
+	}
+}
+
+/*
  * transformColumnDefinition -
  *		transform a single ColumnDef within CREATE TABLE
  *		Also used in ALTER TABLE ADD COLUMN
@@ -794,6 +828,16 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 		cxt->alist = lappend(cxt->alist, stmt);
 	}
+
+	if (cxt->isalter)
+	{
+		AlterTableStmt *stmt = NULL;
+
+		transformColumnCompression(column, cxt->relation, &stmt);
+
+		if (stmt)
+			cxt->alist = lappend(cxt->alist, stmt);
+	}
 }
 
 /*
@@ -1003,6 +1047,10 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		def->collOid = attribute->attcollation;
 		def->constraints = NIL;
 		def->location = -1;
+		if (attribute->attcompression)
+			def->compression = GetColumnCompressionForAttribute(attribute);
+		else
+			def->compression = NULL;
 
 		/*
 		 * Add to column list

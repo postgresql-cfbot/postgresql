@@ -29,8 +29,10 @@
  */
 #include "postgres.h"
 
+#include "access/compression.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -44,6 +46,8 @@
 #include "catalog/partition.h"
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_compression.h"
+#include "catalog/pg_compression_opt.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_constraint_fn.h"
 #include "catalog/pg_foreign_table.h"
@@ -628,6 +632,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
 	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
 	values[Anum_pg_attribute_attcollation - 1] = ObjectIdGetDatum(new_attribute->attcollation);
+	values[Anum_pg_attribute_attcompression - 1] = ObjectIdGetDatum(new_attribute->attcompression);
 
 	/* start out with empty permissions and empty options */
 	nulls[Anum_pg_attribute_attacl - 1] = true;
@@ -1454,6 +1459,24 @@ DeleteRelationTuple(Oid relid)
 }
 
 /*
+ *		CallCompressionDropCallback
+ *
+ * Call drop callback from compression routine.
+ */
+static void
+CallCompressionDropCallback(Form_pg_attribute att)
+{
+	CompressionMethodRoutine *cmr = GetCompressionMethodRoutine(att->attcompression);
+
+	if (cmr->drop)
+	{
+		List	   *options = GetCompressionOptionsList(att->attcompression);
+
+		cmr->drop(att, options);
+	}
+}
+
+/*
  *		DeleteAttributeTuples
  *
  * Remove pg_attribute rows for the given relid.
@@ -1483,7 +1506,14 @@ DeleteAttributeTuples(Oid relid)
 
 	/* Delete all the matching tuples */
 	while ((atttup = systable_getnext(scan)) != NULL)
+	{
+		Form_pg_attribute att = (Form_pg_attribute) GETSTRUCT(atttup);
+
+		if (OidIsValid(att->attcompression))
+			CallCompressionDropCallback(att);
+
 		CatalogTupleDelete(attrel, &atttup->t_self);
+	}
 
 	/* Clean up after the scan */
 	systable_endscan(scan);
@@ -1576,6 +1606,8 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 	else
 	{
 		/* Dropping user attributes is lots harder */
+		if (OidIsValid(attStruct->attcompression))
+			CallCompressionDropCallback(attStruct);
 
 		/* Mark the attribute as dropped */
 		attStruct->attisdropped = true;
@@ -1596,6 +1628,8 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 
 		/* We don't want to keep stats for it anymore */
 		attStruct->attstattarget = 0;
+
+		attStruct->attcompression = InvalidOid;
 
 		/*
 		 * Change the column name to something that isn't likely to conflict

@@ -889,6 +889,11 @@ static const SchemaQuery Query_for_list_of_statistics = {
 "    AND d.datname = pg_catalog.current_database() "\
 "    AND s.subdbid = d.oid"
 
+#define Query_for_list_of_compression_methods \
+" SELECT pg_catalog.quote_ident(cmname) "\
+"   FROM pg_catalog.pg_compression "\
+"  WHERE substring(pg_catalog.quote_ident(cmname),1,%d)='%s'"
+
 /* the silly-looking length condition is just to eat up the current word */
 #define Query_for_list_of_arguments \
 "SELECT pg_catalog.oidvectortypes(proargtypes)||')' "\
@@ -1011,6 +1016,7 @@ static const pgsql_thing_t words_after_create[] = {
 	 * CREATE CONSTRAINT TRIGGER is not supported here because it is designed
 	 * to be used only by pg_dump.
 	 */
+	{"COMPRESSION METHOD", NULL, NULL},
 	{"CONFIGURATION", Query_for_list_of_ts_configurations, NULL, THING_NO_SHOW},
 	{"CONVERSION", "SELECT pg_catalog.quote_ident(conname) FROM pg_catalog.pg_conversion WHERE substring(pg_catalog.quote_ident(conname),1,%d)='%s'"},
 	{"DATABASE", Query_for_list_of_databases},
@@ -1424,8 +1430,8 @@ psql_completion(const char *text, int start, int end)
 		"\\a",
 		"\\connect", "\\conninfo", "\\C", "\\cd", "\\copy",
 		"\\copyright", "\\crosstabview",
-		"\\d", "\\da", "\\dA", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
-		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
+		"\\d", "\\da", "\\dA", "\\db", "\\dc", "\\dC", "\\dCM", "\\dd", "\\ddp",
+		"\\dD", "\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp",
 		"\\drds", "\\dRs", "\\dRp", "\\ds", "\\dS",
@@ -1954,11 +1960,17 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET */
 	else if (Matches7("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET") ||
 			 Matches6("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET"))
-		COMPLETE_WITH_LIST5("(", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
+		COMPLETE_WITH_LIST6("(", "COMPRESSED", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET ( */
 	else if (Matches8("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "(") ||
 			 Matches7("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "("))
 		COMPLETE_WITH_LIST2("n_distinct", "n_distinct_inherited");
+	else if (Matches8("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSED") ||
+			 Matches7("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSED"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_compression_methods);
+	else if (Matches9("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSED", MatchAny) ||
+			 Matches8("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSED", MatchAny))
+		COMPLETE_WITH_CONST("WITH (");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET STORAGE */
 	else if (Matches8("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "STORAGE") ||
 			 Matches7("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "STORAGE"))
@@ -2177,12 +2189,14 @@ psql_completion(const char *text, int start, int end)
 			"SCHEMA", "SEQUENCE", "STATISTICS", "SUBSCRIPTION",
 			"TABLE", "TYPE", "VIEW", "MATERIALIZED VIEW", "COLUMN", "AGGREGATE", "FUNCTION",
 			"OPERATOR", "TRIGGER", "CONSTRAINT", "DOMAIN", "LARGE OBJECT",
-		"TABLESPACE", "TEXT SEARCH", "ROLE", NULL};
+		"TABLESPACE", "TEXT SEARCH", "ROLE", "COMPRESSION METHOD", NULL};
 
 		COMPLETE_WITH_LIST(list_COMMENT);
 	}
 	else if (Matches4("COMMENT", "ON", "ACCESS", "METHOD"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
+	else if (Matches4("COMMENT", "ON", "COMPRESSION", "METHOD"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_compression_methods);
 	else if (Matches3("COMMENT", "ON", "FOREIGN"))
 		COMPLETE_WITH_LIST2("DATA WRAPPER", "TABLE");
 	else if (Matches4("COMMENT", "ON", "TEXT", "SEARCH"))
@@ -2254,6 +2268,14 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE ACCESS METHOD <name> TYPE <type>" */
 	else if (Matches6("CREATE", "ACCESS", "METHOD", MatchAny, "TYPE", MatchAny))
 		COMPLETE_WITH_CONST("HANDLER");
+
+	/* CREATE COMPRESSION METHOD */
+	/* Complete "CREATE COMPRESSION METHOD <name>" */
+	else if (Matches4("CREATE", "COMPRESSION", "METHOD", MatchAny))
+		COMPLETE_WITH_CONST("HANDLER");
+	/* Complete "CREATE COMPRESSION METHOD <name> HANDLER" */
+	else if (Matches5("CREATE", "COMPRESSION", "METHOD", MatchAny, "HANDLER"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
 
 	/* CREATE DATABASE */
 	else if (Matches3("CREATE", "DATABASE", MatchAny))
@@ -2687,6 +2709,7 @@ psql_completion(const char *text, int start, int end)
 			 Matches4("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 (Matches4("DROP", "AGGREGATE|FUNCTION", MatchAny, MatchAny) &&
 			  ends_with(prev_wd, ')')) ||
+			 Matches4("DROP", "COMPRESSION", "METHOD", MatchAny) ||
 			 Matches4("DROP", "EVENT", "TRIGGER", MatchAny) ||
 			 Matches5("DROP", "FOREIGN", "DATA", "WRAPPER", MatchAny) ||
 			 Matches4("DROP", "FOREIGN", "TABLE", MatchAny) ||
@@ -2774,6 +2797,12 @@ psql_completion(const char *text, int start, int end)
 	}
 	else if (Matches5("DROP", "RULE", MatchAny, "ON", MatchAny))
 		COMPLETE_WITH_LIST2("CASCADE", "RESTRICT");
+
+	/* DROP COMPRESSION METHOD */
+	else if (Matches2("DROP", "COMPRESSION"))
+		COMPLETE_WITH_CONST("METHOD");
+	else if (Matches3("DROP", "COMPRESSION", "METHOD"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_compression_methods);
 
 /* EXECUTE */
 	else if (Matches1("EXECUTE"))
@@ -3407,6 +3436,8 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (TailMatchesCS1("\\db*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
+	else if (TailMatchesCS1("\\dCM*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_compression_methods);
 	else if (TailMatchesCS1("\\dD*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_domains, NULL);
 	else if (TailMatchesCS1("\\des*"))

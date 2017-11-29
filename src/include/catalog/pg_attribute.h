@@ -156,6 +156,9 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 	/* attribute's collation */
 	Oid			attcollation;
 
+	/* attribute's compression options  or InvalidOid */
+	Oid			attcompression;
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* NOTE: The following fields are not present in tuple descriptors. */
 
@@ -174,10 +177,10 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
  * ATTRIBUTE_FIXED_PART_SIZE is the size of the fixed-layout,
  * guaranteed-not-null part of a pg_attribute row.  This is in fact as much
  * of the row as gets copied into tuple descriptors, so don't expect you
- * can access fields beyond attcollation except in a real tuple!
+ * can access fields beyond attcompression except in a real tuple!
  */
 #define ATTRIBUTE_FIXED_PART_SIZE \
-	(offsetof(FormData_pg_attribute,attcollation) + sizeof(Oid))
+	(offsetof(FormData_pg_attribute,attcompression) + sizeof(Oid))
 
 /* ----------------
  *		Form_pg_attribute corresponds to a pointer to a tuple with
@@ -191,29 +194,30 @@ typedef FormData_pg_attribute *Form_pg_attribute;
  * ----------------
  */
 
-#define Natts_pg_attribute				22
-#define Anum_pg_attribute_attrelid		1
-#define Anum_pg_attribute_attname		2
-#define Anum_pg_attribute_atttypid		3
-#define Anum_pg_attribute_attstattarget 4
-#define Anum_pg_attribute_attlen		5
-#define Anum_pg_attribute_attnum		6
-#define Anum_pg_attribute_attndims		7
-#define Anum_pg_attribute_attcacheoff	8
-#define Anum_pg_attribute_atttypmod		9
-#define Anum_pg_attribute_attbyval		10
-#define Anum_pg_attribute_attstorage	11
-#define Anum_pg_attribute_attalign		12
-#define Anum_pg_attribute_attnotnull	13
-#define Anum_pg_attribute_atthasdef		14
-#define Anum_pg_attribute_attidentity	15
-#define Anum_pg_attribute_attisdropped	16
-#define Anum_pg_attribute_attislocal	17
-#define Anum_pg_attribute_attinhcount	18
-#define Anum_pg_attribute_attcollation	19
-#define Anum_pg_attribute_attacl		20
-#define Anum_pg_attribute_attoptions	21
-#define Anum_pg_attribute_attfdwoptions 22
+#define Natts_pg_attribute					23
+#define Anum_pg_attribute_attrelid			1
+#define Anum_pg_attribute_attname			2
+#define Anum_pg_attribute_atttypid			3
+#define Anum_pg_attribute_attstattarget		4
+#define Anum_pg_attribute_attlen			5
+#define Anum_pg_attribute_attnum			6
+#define Anum_pg_attribute_attndims			7
+#define Anum_pg_attribute_attcacheoff		8
+#define Anum_pg_attribute_atttypmod			9
+#define Anum_pg_attribute_attbyval			10
+#define Anum_pg_attribute_attstorage		11
+#define Anum_pg_attribute_attalign			12
+#define Anum_pg_attribute_attnotnull		13
+#define Anum_pg_attribute_atthasdef			14
+#define Anum_pg_attribute_attidentity		15
+#define Anum_pg_attribute_attisdropped		16
+#define Anum_pg_attribute_attislocal		17
+#define Anum_pg_attribute_attinhcount		18
+#define Anum_pg_attribute_attcollation		19
+#define Anum_pg_attribute_attcompression	20
+#define Anum_pg_attribute_attacl			21
+#define Anum_pg_attribute_attoptions		22
+#define Anum_pg_attribute_attfdwoptions		23
 
 
 /* ----------------

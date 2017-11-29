@@ -201,6 +201,69 @@ describeAccessMethods(const char *pattern, bool verbose)
 }
 
 /*
+ * \dCM
+ * Takes an optional regexp to select particular compression methods
+ */
+bool
+describeCompressionMethods(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, false};
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+
+		psql_error("The server (version %s) does not support compression methods.\n",
+				   formatPGVersionNumber(pset.sversion, false,
+										 sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT cmname AS \"%s\"",
+					  gettext_noop("Name"));
+
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf,
+						  ",\n  cmhandler AS \"%s\",\n"
+						  "  pg_catalog.obj_description(oid, 'pg_compression') AS \"%s\"",
+						  gettext_noop("Handler"),
+						  gettext_noop("Description"));
+	}
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_compression\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false, false,
+						  NULL, "cmname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of compression methods");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
  * \db
  * Takes an optional regexp to select particular tablespaces
  */
@@ -1716,6 +1779,22 @@ describeOneTableDetails(const char *schemaname,
 	if (verbose)
 	{
 		appendPQExpBufferStr(&buf, ",\n  a.attstorage");
+
+		/* compresssion info */
+		if (pset.sversion >= 110000)
+			appendPQExpBufferStr(&buf, ",\n  CASE WHEN attcompression = 0 THEN NULL ELSE "
+								 " (SELECT c.cmname || "
+								 "		(CASE WHEN cmoptions IS NULL "
+								 "		 THEN '' "
+								 "		 ELSE '(' || array_to_string(ARRAY(SELECT quote_ident(option_name) || ' ' || quote_literal(option_value)"
+								 "											  FROM pg_options_to_table(cmoptions)), ', ') || ')'"
+								 " 		 END) "
+								 "  FROM pg_catalog.pg_compression_opt c "
+								 "  WHERE c.cmoptoid = a.attcompression) "
+								 " END AS attcmname");
+		else
+			appendPQExpBufferStr(&buf, "\n  NULL AS attcmname");
+
 		appendPQExpBufferStr(&buf, ",\n  CASE WHEN a.attstattarget=-1 THEN NULL ELSE a.attstattarget END AS attstattarget");
 
 		/*
@@ -1830,6 +1909,10 @@ describeOneTableDetails(const char *schemaname,
 	if (verbose)
 	{
 		headers[cols++] = gettext_noop("Storage");
+
+		if (tableinfo.relkind == RELKIND_RELATION)
+			headers[cols++] = gettext_noop("Compression");
+
 		if (tableinfo.relkind == RELKIND_RELATION ||
 			tableinfo.relkind == RELKIND_INDEX ||
 			tableinfo.relkind == RELKIND_MATVIEW ||
@@ -1925,6 +2008,11 @@ describeOneTableDetails(const char *schemaname,
 										 "???")))),
 							  false, false);
 
+			/* Column compression. */
+			if (tableinfo.relkind == RELKIND_RELATION)
+				printTableAddCell(&cont, PQgetvalue(res, i, firstvcol + 1),
+								  false, false);
+
 			/* Statistics target, if the relkind supports this feature */
 			if (tableinfo.relkind == RELKIND_RELATION ||
 				tableinfo.relkind == RELKIND_INDEX ||
@@ -1932,7 +2020,7 @@ describeOneTableDetails(const char *schemaname,
 				tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
 				tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 			{
-				printTableAddCell(&cont, PQgetvalue(res, i, firstvcol + 1),
+				printTableAddCell(&cont, PQgetvalue(res, i, firstvcol + 2),
 								  false, false);
 			}
 
@@ -1943,7 +2031,7 @@ describeOneTableDetails(const char *schemaname,
 				tableinfo.relkind == RELKIND_COMPOSITE_TYPE ||
 				tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
 				tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
-				printTableAddCell(&cont, PQgetvalue(res, i, firstvcol + 2),
+				printTableAddCell(&cont, PQgetvalue(res, i, firstvcol + 3),
 								  false, false);
 		}
 	}

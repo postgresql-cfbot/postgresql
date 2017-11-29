@@ -54,6 +54,7 @@ static DumpableObject **oprinfoindex;
 static DumpableObject **collinfoindex;
 static DumpableObject **nspinfoindex;
 static DumpableObject **extinfoindex;
+static DumpableObject **cminfoindex;
 static int	numTables;
 static int	numTypes;
 static int	numFuncs;
@@ -61,6 +62,7 @@ static int	numOperators;
 static int	numCollations;
 static int	numNamespaces;
 static int	numExtensions;
+static int	numCompressionMethods;
 
 /* This is an array of object identities, not actual DumpableObjects */
 static ExtensionMemberId *extmembers;
@@ -93,6 +95,8 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	NamespaceInfo *nspinfo;
 	ExtensionInfo *extinfo;
 	InhInfo    *inhinfo;
+	CompressionMethodInfo *cminfo;
+
 	int			numAggregates;
 	int			numInherits;
 	int			numRules;
@@ -288,6 +292,11 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	if (g_verbose)
 		write_msg(NULL, "reading subscriptions\n");
 	getSubscriptions(fout);
+
+	if (g_verbose)
+		write_msg(NULL, "reading compression methods\n");
+	cminfo = getCompressionMethods(fout, &numCompressionMethods);
+	cminfoindex = buildIndexArray(cminfo, numCompressionMethods, sizeof(CompressionMethodInfo));
 
 	*numTablesPtr = numTables;
 	return tblinfo;
@@ -827,6 +836,17 @@ findExtensionByOid(Oid oid)
 	return (ExtensionInfo *) findObjectByOid(oid, extinfoindex, numExtensions);
 }
 
+/*
+ * findCompressionMethodByOid
+ *	  finds the entry (in cminfo) of the compression method with the given oid
+ *	  returns NULL if not found
+ */
+CompressionMethodInfo *
+findCompressionMethodByOid(Oid oid)
+{
+	return (CompressionMethodInfo *) findObjectByOid(oid, cminfoindex,
+													 numCompressionMethods);
+}
 
 /*
  * setExtensionMembership

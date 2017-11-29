@@ -945,9 +945,29 @@ untransformRelOptions(Datum options)
 			val = (Node *) makeString(pstrdup(p));
 		}
 		result = lappend(result, makeDefElem(pstrdup(s), val, -1));
+		pfree(s);
 	}
 
 	return result;
+}
+
+char *
+formatRelOptions(List *options)
+{
+	StringInfoData buf;
+	ListCell   *cell;
+
+	initStringInfo(&buf);
+
+	foreach(cell, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(cell);
+
+		appendStringInfo(&buf, "%s%s=%s", buf.len > 0 ? ", " : "",
+						 def->defname, defGetString(def));
+	}
+
+	return buf.data;
 }
 
 /*

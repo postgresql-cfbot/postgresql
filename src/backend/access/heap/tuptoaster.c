@@ -30,8 +30,10 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#include "access/compression.h"
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/reloptions.h"
 #include "access/tuptoaster.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -39,8 +41,11 @@
 #include "miscadmin.h"
 #include "utils/expandeddatum.h"
 #include "utils/fmgroids.h"
+#include "utils/hsearch.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/typcache.h"
 #include "utils/tqual.h"
 
@@ -53,19 +58,57 @@
 typedef struct toast_compress_header
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
-	int32		rawsize;
+	uint32		info;			/* flags (2 bits) and rawsize */
 } toast_compress_header;
+
+/*
+ * If the compression method were used, then data also contains
+ * Oid of compression options
+ */
+typedef struct toast_compress_header_custom
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	uint32		info;			/* flags (2 high bits) and rawsize */
+	Oid			cmoptoid;		/* Oid from pg_compression_opt */
+}			toast_compress_header_custom;
+
+static HTAB *compression_options_cache = NULL;
+static MemoryContext compression_options_mcxt = NULL;
+
+#define RAWSIZEMASK (0x3FFFFFFFU)
 
 /*
  * Utilities for manipulation of header information for compressed
  * toast entries.
  */
-#define TOAST_COMPRESS_HDRSZ		((int32) sizeof(toast_compress_header))
-#define TOAST_COMPRESS_RAWSIZE(ptr) (((toast_compress_header *) (ptr))->rawsize)
+#define TOAST_COMPRESS_HDRSZ			((int32) sizeof(toast_compress_header))
+#define TOAST_COMPRESS_HDRSZ_CUSTOM		((int32) sizeof(toast_compress_header_custom))
+#define TOAST_COMPRESS_RAWSIZE(ptr) (((toast_compress_header *) (ptr))->info & RAWSIZEMASK)
 #define TOAST_COMPRESS_RAWDATA(ptr) \
 	(((char *) (ptr)) + TOAST_COMPRESS_HDRSZ)
 #define TOAST_COMPRESS_SET_RAWSIZE(ptr, len) \
-	(((toast_compress_header *) (ptr))->rawsize = (len))
+do { \
+	Assert(len > 0 && len <= RAWSIZEMASK); \
+	((toast_compress_header *) (ptr))->info = (len); \
+} while (0)
+#define TOAST_COMPRESS_SET_CMOPTOID(ptr, oid) \
+	(((toast_compress_header_custom *) (ptr))->cmoptoid = (oid))
+
+/*
+ * Marks varlena as custom compressed. Notice that this macro should be called
+ * after TOAST_COMPRESS_SET_RAWSIZE because it will clean flags.
+ */
+#define TOAST_COMPRESS_SET_CUSTOM(ptr) \
+do { \
+	(((toast_compress_header *) (ptr))->info |= (1 << 31)); \
+	(((toast_compress_header *) (ptr))->info &= ~(1 << 30)); \
+} while (0)
+
+#define VARATT_EXTERNAL_SET_CUSTOM(toast_pointer) \
+do { \
+	((toast_pointer).va_extinfo |= (1 << 31)); \
+	((toast_pointer).va_extinfo &= ~(1 << 30)); \
+} while (0)
 
 static void toast_delete_datum(Relation rel, Datum value, bool is_speculative);
 static Datum toast_save_datum(Relation rel, Datum value,
@@ -83,6 +126,8 @@ static int toast_open_indexes(Relation toastrel,
 static void toast_close_indexes(Relation *toastidxs, int num_indexes,
 					LOCKMODE lock);
 static void init_toast_snapshot(Snapshot toast_snapshot);
+static void init_compression_options_cache(void);
+static CompressionMethodOptions *get_cached_compression_options(Oid cmoptoid);
 
 
 /* ----------
@@ -421,7 +466,7 @@ toast_datum_size(Datum value)
 		struct varatt_external toast_pointer;
 
 		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
-		result = toast_pointer.va_extsize;
+		result = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	}
 	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
 	{
@@ -678,20 +723,46 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 			 * still in the tuple must be someone else's that we cannot reuse
 			 * (this includes the case of an out-of-line in-memory datum).
 			 * Fetch it back (without decompression, unless we are forcing
-			 * PLAIN storage).  If necessary, we'll push it out as a new
-			 * external value below.
+			 * PLAIN storage or it has a custom compression).  If necessary,
+			 * we'll push it out as a new external value below.
 			 */
 			if (VARATT_IS_EXTERNAL(new_value))
 			{
 				toast_oldexternal[i] = new_value;
 				if (att->attstorage == 'p')
 					new_value = heap_tuple_untoast_attr(new_value);
+				else if (VARATT_IS_EXTERNAL_ONDISK(new_value))
+				{
+					struct varatt_external toast_pointer;
+
+					VARATT_EXTERNAL_GET_POINTER(toast_pointer, new_value);
+
+					/*
+					 * If we're trying to insert a custom compressed datum we
+					 * should decompress it first.
+					 */
+					if (VARATT_EXTERNAL_IS_CUSTOM_COMPRESSED(toast_pointer))
+						new_value = heap_tuple_untoast_attr(new_value);
+					else
+						new_value = heap_tuple_fetch_attr(new_value);
+				}
 				else
 					new_value = heap_tuple_fetch_attr(new_value);
+
 				toast_values[i] = PointerGetDatum(new_value);
 				toast_free[i] = true;
 				need_change = true;
 				need_free = true;
+			}
+			else if (VARATT_IS_CUSTOM_COMPRESSED(new_value)
+					|| OidIsValid(att->attcompression))
+			{
+				struct varlena *untoasted_value = heap_tuple_untoast_attr(new_value);
+
+				toast_values[i] = PointerGetDatum(untoasted_value);
+				need_free = (untoasted_value != new_value);
+				toast_free[i] = need_free;
+				need_change = need_free;
 			}
 
 			/*
@@ -741,12 +812,14 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		Datum		old_value;
 		Datum		new_value;
 
+		Form_pg_attribute att;
+
 		/*
 		 * Search for the biggest yet unprocessed internal attribute
 		 */
 		for (i = 0; i < numAttrs; i++)
 		{
-			Form_pg_attribute att = TupleDescAttr(tupleDesc, i);
+			char		attstorage;
 
 			if (toast_action[i] != ' ')
 				continue;
@@ -754,7 +827,9 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 				continue;		/* can't happen, toast_action would be 'p' */
 			if (VARATT_IS_COMPRESSED(DatumGetPointer(toast_values[i])))
 				continue;
-			if (att->attstorage != 'x' && att->attstorage != 'e')
+
+			attstorage = (TupleDescAttr(tupleDesc, i))->attstorage;
+			if (attstorage != 'x' && attstorage != 'e')
 				continue;
 			if (toast_sizes[i] > biggest_size)
 			{
@@ -770,10 +845,11 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		 * Attempt to compress it inline, if it has attstorage 'x'
 		 */
 		i = biggest_attno;
-		if (TupleDescAttr(tupleDesc, i)->attstorage == 'x')
+		att = TupleDescAttr(tupleDesc, i);
+		if (att->attstorage == 'x')
 		{
 			old_value = toast_values[i];
-			new_value = toast_compress_datum(old_value);
+			new_value = toast_compress_datum(old_value, att->attcompression);
 
 			if (DatumGetPointer(new_value) != NULL)
 			{
@@ -914,7 +990,8 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		 */
 		i = biggest_attno;
 		old_value = toast_values[i];
-		new_value = toast_compress_datum(old_value);
+		new_value = toast_compress_datum(old_value,
+										 TupleDescAttr(tupleDesc, i)->attcompression);
 
 		if (DatumGetPointer(new_value) != NULL)
 		{
@@ -1046,6 +1123,7 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 						(char *) new_data + new_header_len,
 						new_data_len,
 						&(new_data->t_infomask),
+						&(new_data->t_infomask2),
 						has_nulls ? new_data->t_bits : NULL);
 	}
 	else
@@ -1274,6 +1352,7 @@ toast_flatten_tuple_to_datum(HeapTupleHeader tup,
 					(char *) new_data + new_header_len,
 					new_data_len,
 					&(new_data->t_infomask),
+					&(new_data->t_infomask2),
 					has_nulls ? new_data->t_bits : NULL);
 
 	/*
@@ -1353,7 +1432,6 @@ toast_build_flattened_tuple(TupleDesc tupleDesc,
 	return new_tuple;
 }
 
-
 /* ----------
  * toast_compress_datum -
  *
@@ -1368,41 +1446,57 @@ toast_build_flattened_tuple(TupleDesc tupleDesc,
  * ----------
  */
 Datum
-toast_compress_datum(Datum value)
+toast_compress_datum(Datum value, Oid cmoptoid)
 {
-	struct varlena *tmp;
-	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	int32		len;
+	struct varlena *tmp = NULL;
+	int32		valsize,
+				len = 0;
+	CompressionMethodOptions *cmoptions = NULL;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
-	/*
-	 * No point in wasting a palloc cycle if value size is out of the allowed
-	 * range for compression
-	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
-		return PointerGetDatum(NULL);
+	if (OidIsValid(cmoptoid))
+		cmoptions = get_cached_compression_options(cmoptoid);
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
+	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+
+	if (cmoptions)
+	{
+		tmp = cmoptions->routine->compress(cmoptions, (const struct varlena *) value);
+		if (!tmp)
+			return PointerGetDatum(NULL);
+	}
+	else
+	{
+		/*
+		 * No point in wasting a palloc cycle if value size is out of the
+		 * allowed range for compression
+		 */
+		if (valsize < PGLZ_strategy_default->min_input_size ||
+			valsize > PGLZ_strategy_default->max_input_size)
+			return PointerGetDatum(NULL);
+
+		tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
+										TOAST_COMPRESS_HDRSZ);
+		len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
+							valsize,
+							TOAST_COMPRESS_RAWDATA(tmp),
+							PGLZ_strategy_default);
+	}
 
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
-	 * because it might be satisfied with having saved as little as one byte
-	 * in the compressed data --- which could turn into a net loss once you
-	 * consider header and alignment padding.  Worst case, the compressed
-	 * format might require three padding bytes (plus header, which is
-	 * included in VARSIZE(tmp)), whereas the uncompressed format would take
-	 * only one header byte and no padding if the value is short enough.  So
-	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
+	 * We recheck the actual size even if compression function reports
+	 * success, because it might be satisfied with having saved as little as
+	 * one byte in the compressed data --- which could turn into a net loss
+	 * once you consider header and alignment padding.  Worst case, the
+	 * compressed format might require three padding bytes (plus header, which
+	 * is included in VARSIZE(tmp)), whereas the uncompressed format would
+	 * take only one header byte and no padding if the value is short enough.
+	 * So we insist on a savings of more than 2 bytes to ensure we have a
+	 * gain.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
-	if (len >= 0 &&
+	if (!cmoptions && len >= 0 &&
 		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
 	{
 		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
@@ -1410,10 +1504,20 @@ toast_compress_datum(Datum value)
 		/* successful compression */
 		return PointerGetDatum(tmp);
 	}
+	else if (cmoptions && VARSIZE(tmp) < valsize - 2)
+	{
+		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
+		TOAST_COMPRESS_SET_CUSTOM(tmp);
+		TOAST_COMPRESS_SET_CMOPTOID(tmp, cmoptions->cmoptoid);
+		/* successful compression */
+		return PointerGetDatum(tmp);
+	}
 	else
 	{
 		/* incompressible data */
-		pfree(tmp);
+		if (tmp)
+			pfree(tmp);
+
 		return PointerGetDatum(NULL);
 	}
 }
@@ -1510,19 +1614,20 @@ toast_save_datum(Relation rel, Datum value,
 									&num_indexes);
 
 	/*
-	 * Get the data pointer and length, and compute va_rawsize and va_extsize.
+	 * Get the data pointer and length, and compute va_rawsize and va_extinfo.
 	 *
 	 * va_rawsize is the size of the equivalent fully uncompressed datum, so
 	 * we have to adjust for short headers.
 	 *
-	 * va_extsize is the actual size of the data payload in the toast records.
+	 * va_extinfo contains the actual size of the data payload in the toast
+	 * records.
 	 */
 	if (VARATT_IS_SHORT(dval))
 	{
 		data_p = VARDATA_SHORT(dval);
 		data_todo = VARSIZE_SHORT(dval) - VARHDRSZ_SHORT;
 		toast_pointer.va_rawsize = data_todo + VARHDRSZ;	/* as if not short */
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;	/* no flags */
 	}
 	else if (VARATT_IS_COMPRESSED(dval))
 	{
@@ -1530,7 +1635,10 @@ toast_save_datum(Relation rel, Datum value,
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		/* rawsize in a compressed datum is just the size of the payload */
 		toast_pointer.va_rawsize = VARRAWSIZE_4B_C(dval) + VARHDRSZ;
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;
+		if (VARATT_IS_CUSTOM_COMPRESSED(dval))
+			VARATT_EXTERNAL_SET_CUSTOM(toast_pointer);
+
 		/* Assert that the numbers look like it's compressed */
 		Assert(VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer));
 	}
@@ -1539,7 +1647,7 @@ toast_save_datum(Relation rel, Datum value,
 		data_p = VARDATA(dval);
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		toast_pointer.va_rawsize = VARSIZE(dval);
-		toast_pointer.va_extsize = data_todo;
+		toast_pointer.va_extinfo = data_todo;	/* no flags */
 	}
 
 	/*
@@ -1899,7 +2007,7 @@ toast_fetch_datum(struct varlena *attr)
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
-	ressize = toast_pointer.va_extsize;
+	ressize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	numchunks = ((ressize - 1) / TOAST_MAX_CHUNK_SIZE) + 1;
 
 	result = (struct varlena *) palloc(ressize + VARHDRSZ);
@@ -2084,7 +2192,7 @@ toast_fetch_datum_slice(struct varlena *attr, int32 sliceoffset, int32 length)
 	 */
 	Assert(!VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer));
 
-	attrsize = toast_pointer.va_extsize;
+	attrsize = VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer);
 	totalchunks = ((attrsize - 1) / TOAST_MAX_CHUNK_SIZE) + 1;
 
 	if (sliceoffset >= attrsize)
@@ -2280,15 +2388,26 @@ toast_decompress_datum(struct varlena *attr)
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	result = (struct varlena *)
-		palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-	SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+	if (VARATT_IS_CUSTOM_COMPRESSED(attr))
+	{
+		CompressionMethodOptions *cmoptions;
+		toast_compress_header_custom *hdr;
 
-	if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-						VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
-						VARDATA(result),
-						TOAST_COMPRESS_RAWSIZE(attr)) < 0)
-		elog(ERROR, "compressed data is corrupted");
+		hdr = (toast_compress_header_custom *) attr;
+		cmoptions = get_cached_compression_options(hdr->cmoptoid);
+		result = cmoptions->routine->decompress(cmoptions, attr);
+	}
+	else
+	{
+		result = (struct varlena *)
+			palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+		SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+		if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
+							VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
+							VARDATA(result),
+							TOAST_COMPRESS_RAWSIZE(attr)) < 0)
+			elog(ERROR, "compressed data is corrupted");
+	}
 
 	return result;
 }
@@ -2389,4 +2508,79 @@ init_toast_snapshot(Snapshot toast_snapshot)
 		elog(ERROR, "no known snapshots");
 
 	InitToastSnapshot(*toast_snapshot, snapshot->lsn, snapshot->whenTaken);
+}
+
+/* ----------
+ * init_compression_options_cache
+ *
+ * Initialize a local cache for compression options.
+ */
+static void
+init_compression_options_cache(void)
+{
+	HASHCTL		ctl;
+
+	compression_options_mcxt = AllocSetContextCreate(TopMemoryContext,
+													 "compression options cache context",
+													 ALLOCSET_DEFAULT_SIZES);
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(CompressionMethodOptions);
+	ctl.hcxt = compression_options_mcxt;
+	compression_options_cache = hash_create("compression options cache", 100, &ctl,
+											HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+}
+
+/* ----------
+ * get_cached_compression_options
+ *
+ * Remove cached compression options from the local cache
+ */
+static inline void
+remove_cached_compression_options(Oid cmoptoid)
+{
+	bool		found;
+
+	hash_search(compression_options_cache, &cmoptoid, HASH_REMOVE, &found);
+}
+
+/* ----------
+ * get_cached_compression_options
+ *
+ * Get cached compression options structure or create it if it's not in cache.
+ * Cache is required because we can't afford for each tuple create
+ * CompressionMethodRoutine and parse its options.
+ */
+static CompressionMethodOptions *
+get_cached_compression_options(Oid cmoptoid)
+{
+	bool		found;
+	CompressionMethodOptions *result;
+
+	Assert(OidIsValid(cmoptoid));
+	if (!compression_options_cache)
+		init_compression_options_cache();
+
+	/* check if the compression options wasn't removed from the last check */
+	found = SearchSysCacheExists(COMPRESSIONOPTIONSOID,
+								 ObjectIdGetDatum(cmoptoid), 0, 0, 0);
+	if (!found)
+	{
+		remove_cached_compression_options(cmoptoid);
+		elog(ERROR, "cache lookup failed for compression options %u", cmoptoid);
+	}
+
+	result = hash_search(compression_options_cache, &cmoptoid, HASH_ENTER, &found);
+	if (!found)
+	{
+		MemoryContext oldcxt;
+
+		Assert(compression_options_mcxt);
+		oldcxt = MemoryContextSwitchTo(compression_options_mcxt);
+		result->cmoptoid = cmoptoid;
+		result->routine = GetCompressionMethodRoutine(cmoptoid);
+		result->options = GetCompressionOptionsList(cmoptoid);
+		MemoryContextSwitchTo(oldcxt);
+	}
+	return result;
 }

@@ -221,11 +221,11 @@ update range_parted set b = b + 1 where b = 10;
 -- Creating default partition for range
 create table part_def partition of range_parted default;
 \d+ part_def
-                                  Table "public.part_def"
- Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+---------+-----------+----------+---------+----------+--------------+-------------
- a      | text    |           |          |         | extended |              | 
- b      | integer |           |          |         | plain    |              | 
+                                         Table "public.part_def"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+-------------+--------------+-------------
+ a      | text    |           |          |         | extended |             |              | 
+ b      | integer |           |          |         | plain    |             |              | 
 Partition of: range_parted DEFAULT
 Partition constraint: (NOT ((a IS NOT NULL) AND (b IS NOT NULL) AND (((a = 'a'::text) AND (b >= 1) AND (b < 10)) OR ((a = 'a'::text) AND (b >= 10) AND (b < 20)) OR ((a = 'b'::text) AND (b >= 1) AND (b < 10)) OR ((a = 'b'::text) AND (b >= 10) AND (b < 20)))))
 

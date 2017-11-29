@@ -83,7 +83,9 @@ typedef enum
 	DO_POLICY,
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
-	DO_SUBSCRIPTION
+	DO_SUBSCRIPTION,
+	DO_COMPRESSION_METHOD,
+	DO_COMPRESSION_OPTIONS
 } DumpableObjectType;
 
 /* component types of an object which can be selected for dumping */
@@ -315,6 +317,8 @@ typedef struct _tableInfo
 	char	  **attoptions;		/* per-attribute options */
 	Oid		   *attcollation;	/* per-attribute collation selection */
 	char	  **attfdwoptions;	/* per-attribute fdw options */
+	char	  **attcmoptions;	/* per-attribute compression options */
+	char	  **attcmnames;		/* per-attribute compression method names */
 	bool	   *notnull;		/* NOT NULL constraints on attributes */
 	bool	   *inhNotNull;		/* true if NOT NULL is inherited */
 	struct _attrDefInfo **attrdefs; /* DEFAULT expressions */
@@ -611,6 +615,21 @@ typedef struct _SubscriptionInfo
 	char	   *subpublications;
 } SubscriptionInfo;
 
+/* The CompressionMethodInfo struct is used to represent compression method */
+typedef struct _CompressionMethodInfo
+{
+	DumpableObject dobj;
+	char	   *cmhandler;
+}			CompressionMethodInfo;
+
+/* The CompressionOptionsInfo struct is used to represent compression options */
+typedef struct _CompressionOptionsInfo
+{
+	DumpableObject dobj;
+	char	   *cmhandler;
+	char	   *cmoptions;
+}			CompressionOptionsInfo;
+
 /*
  * We build an array of these with an entry for each object that is an
  * extension member according to pg_depend.
@@ -654,6 +673,7 @@ extern OprInfo *findOprByOid(Oid oid);
 extern CollInfo *findCollationByOid(Oid oid);
 extern NamespaceInfo *findNamespaceByOid(Oid oid);
 extern ExtensionInfo *findExtensionByOid(Oid oid);
+extern CompressionMethodInfo * findCompressionMethodByOid(Oid oid);
 
 extern void setExtensionMembership(ExtensionMemberId *extmems, int nextmems);
 extern ExtensionInfo *findOwningExtension(CatalogId catalogId);
@@ -711,5 +731,8 @@ extern void getPublications(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 					 int numTables);
 extern void getSubscriptions(Archive *fout);
+extern CompressionMethodInfo * getCompressionMethods(Archive *fout,
+													 int *numMethods);
+void		getCompressionOptions(Archive *fout);
 
 #endif							/* PG_DUMP_H */

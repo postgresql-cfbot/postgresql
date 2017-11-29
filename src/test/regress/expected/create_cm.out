@@ -1,0 +1,154 @@
+-- test drop
+CREATE COMPRESSION METHOD ts1 HANDLER tsvector_compression_handler;
+CREATE TABLE droptest(fts tsvector COMPRESSED ts1);
+DROP COMPRESSION METHOD ts1;
+ERROR:  cannot drop compression method ts1 because other objects depend on it
+DETAIL:  compression options for ts1 depends on compression method ts1
+table droptest column fts depends on compression options for ts1
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP COMPRESSION METHOD ts1 CASCADE;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to compression options for ts1
+drop cascades to table droptest column fts
+\d+ droptest
+                                       Table "public.droptest"
+ Column | Type | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+---------+-------------+--------------+-------------
+
+DROP TABLE droptest;
+CREATE COMPRESSION METHOD ts1 HANDLER tsvector_compression_handler;
+CREATE TABLE cmtest(fts tsvector COMPRESSED ts1);
+SELECT * FROM pg_compression;
+ cmname |          cmhandler           
+--------+------------------------------
+ ts1    | tsvector_compression_handler
+(1 row)
+
+SELECT cmhandler, cmoptions FROM pg_compression_opt;
+          cmhandler           | cmoptions 
+------------------------------+-----------
+ tsvector_compression_handler | 
+(1 row)
+
+\dCM
+List of compression methods
+ Name 
+------
+ ts1
+(1 row)
+
+\d+ cmtest
+                                          Table "public.cmtest"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+-------------+--------------+-------------
+ fts    | tsvector |           |          |         | extended | ts1         |              | 
+
+INSERT INTO cmtest
+	SELECT to_tsvector(string_agg(repeat(substr(i::text,1,1), i), ' '))
+	FROM generate_series(1,200) i;
+SELECT length(fts) FROM cmtest;
+ length 
+--------
+    200
+(1 row)
+
+SELECT length(fts) FROM cmtest;
+ length 
+--------
+    200
+(1 row)
+
+-- check ALTER commands
+ALTER TABLE cmtest ALTER COLUMN fts SET NOT COMPRESSED;
+\d+ cmtest
+                                          Table "public.cmtest"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+-------------+--------------+-------------
+ fts    | tsvector |           |          |         | extended |             |              | 
+
+ALTER TABLE cmtest ALTER COLUMN fts SET COMPRESSED ts1 WITH (format 'lz');
+ERROR:  the compression method "ts1" does not take any options
+ALTER TABLE cmtest ALTER COLUMN fts SET COMPRESSED ts1;
+\d+ cmtest
+                                          Table "public.cmtest"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+-------------+--------------+-------------
+ fts    | tsvector |           |          |         | extended | ts1         |              | 
+
+-- create different types of tables
+SELECT * INTO cmtest2 FROM cmtest;
+CREATE TABLE cmtest3 (LIKE cmtest);
+CREATE TABLE cmtest4(fts tsvector, a int) INHERITS (cmtest);
+NOTICE:  merging column "fts" with inherited definition
+CREATE TABLE cmtest5(fts tsvector);
+CREATE TABLE cmtest6(fts tsvector);
+INSERT INTO cmtest6 SELECT * FROM cmtest;
+-- we update usual datum with compressed datum
+INSERT INTO cmtest5
+	SELECT to_tsvector(string_agg(repeat(substr(i::text,1,1), i), ' '))
+	FROM generate_series(1,200) i;
+UPDATE cmtest5 SET fts = cmtest.fts FROM cmtest;
+\d+ cmtest3
+                                          Table "public.cmtest3"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+-------------+--------------+-------------
+ fts    | tsvector |           |          |         | extended | ts1         |              | 
+
+\d+ cmtest4
+                                          Table "public.cmtest4"
+ Column |   Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------+-----------+----------+---------+----------+-------------+--------------+-------------
+ fts    | tsvector |           |          |         | extended | ts1         |              | 
+ a      | integer  |           |          |         | plain    |             |              | 
+Inherits: cmtest
+
+DROP TABLE cmtest CASCADE;
+NOTICE:  drop cascades to table cmtest4
+DROP TABLE cmtest3;
+SELECT cmhandler, cmoptions FROM pg_compression_opt;
+          cmhandler           | cmoptions 
+------------------------------+-----------
+ tsvector_compression_handler | 
+ tsvector_compression_handler | 
+ tsvector_compression_handler | 
+ tsvector_compression_handler | 
+(4 rows)
+
+DROP COMPRESSION METHOD ts1 CASCADE;
+NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to compression options for ts1
+drop cascades to compression options for ts1
+drop cascades to compression options for ts1
+drop cascades to compression options for ts1
+SELECT * FROM pg_compression;
+ cmname | cmhandler 
+--------+-----------
+(0 rows)
+
+SELECT * FROM pg_compression_opt;
+ cmoptoid | cmname | cmhandler | cmoptions 
+----------+--------+-----------+-----------
+(0 rows)
+
+-- check that moved tuples still can be decompressed
+SELECT length(fts) FROM cmtest2;
+ length 
+--------
+    200
+(1 row)
+
+SELECT length(fts) FROM cmtest5;
+ length 
+--------
+    200
+(1 row)
+
+SELECT length(fts) FROM cmtest6;
+ length 
+--------
+    200
+(1 row)
+
+DROP TABLE cmtest2;
+DROP TABLE cmtest5;
+DROP TABLE cmtest6;

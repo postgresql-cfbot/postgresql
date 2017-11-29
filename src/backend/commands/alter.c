@@ -385,6 +385,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_PUBLICATION:
 		case OBJECT_SUBSCRIPTION:
+		case OBJECT_COMPRESSION_METHOD:
 			{
 				ObjectAddress address;
 				Relation	catalog;
@@ -500,6 +501,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:
+		case OBJECT_COMPRESSION_METHOD:
 			{
 				Relation	catalog;
 				Relation	relation;
@@ -627,6 +629,8 @@ AlterObjectNamespace_oid(Oid classId, Oid objid, Oid nspOid,
 		case OCLASS_PUBLICATION_REL:
 		case OCLASS_SUBSCRIPTION:
 		case OCLASS_TRANSFORM:
+		case OCLASS_COMPRESSION_METHOD:
+		case OCLASS_COMPRESSION_OPTIONS:
 			/* ignore object types that don't have schema-qualified names */
 			break;
 

@@ -744,6 +744,7 @@ typedef NameData *Name;
  * about a negative width for a struct bit-field.  This will not include a
  * helpful error message, but it beats not getting an error at all.
  */
+#ifndef __cplusplus
 #ifdef HAVE__STATIC_ASSERT
 #define StaticAssertStmt(condition, errmessage) \
 	do { _Static_assert(condition, errmessage); } while(0)
@@ -755,6 +756,18 @@ typedef NameData *Name;
 #define StaticAssertExpr(condition, errmessage) \
 	StaticAssertStmt(condition, errmessage)
 #endif							/* HAVE__STATIC_ASSERT */
+#else							/* C++ */
+#if defined(__cpp_static_assert) && __cpp_static_assert >= 200410
+#define StaticAssertStmt(condition, errmessage) \
+	static_assert(condition, errmessage)
+#else
+/* not worth providing a workaround */
+#define StaticAssertStmt(condition, errmessage) \
+	((void) 0)
+#endif
+#define StaticAssertExpr(condition, errmessage) \
+	({ StaticAssertStmt(condition, errmessage); true; })
+#endif							/* C++ */
 
 
 /*

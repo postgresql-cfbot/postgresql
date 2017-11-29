@@ -421,6 +421,13 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 	/* This should be run once and only once per Executor instance */
 	Assert(!estate->es_finished);
 
+	/* If this was PARALLEL cursor, do cleanup and exit parallel mode. */
+	if (queryDesc->parallel_cursor)
+	{
+		ExecShutdownNode(queryDesc->planstate);
+		ExitParallelMode();
+	}
+
 	/* Switch into per-query memory context */
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
@@ -1083,6 +1090,18 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 	queryDesc->tupDesc = tupType;
 	queryDesc->planstate = planstate;
+
+	/* If this was PARALLEL cursor, enter parallel mode, except in EXPLAIN-only. */
+
+	queryDesc->parallel_cursor
+		= (eflags & EXEC_FLAG_PARALLEL) && !(eflags & EXEC_FLAG_EXPLAIN_ONLY);
+
+	/*
+	 * In PARALLEL cursors we have to enter the parallel mode once, at the very
+	 * beginning (and not in ExecutePlan, as we do for execute_once plans).
+	 */
+	if (queryDesc->parallel_cursor)
+		EnterParallelMode();
 }
 
 /*
@@ -1724,7 +1743,8 @@ ExecutePlan(EState *estate,
 		if (TupIsNull(slot))
 		{
 			/* Allow nodes to release or shut down resources. */
-			(void) ExecShutdownNode(planstate);
+			if (execute_once)
+				(void) ExecShutdownNode(planstate);
 			break;
 		}
 
@@ -1771,7 +1791,8 @@ ExecutePlan(EState *estate,
 		if (numberTuples && numberTuples == current_tuple_count)
 		{
 			/* Allow nodes to release or shut down resources. */
-			(void) ExecShutdownNode(planstate);
+			if (execute_once)
+				(void) ExecShutdownNode(planstate);
 			break;
 		}
 	}

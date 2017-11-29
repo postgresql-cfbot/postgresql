@@ -47,6 +47,7 @@ typedef struct QueryDesc
 	TupleDesc	tupDesc;		/* descriptor for result tuples */
 	EState	   *estate;			/* executor's query-wide state */
 	PlanState  *planstate;		/* tree of per-plan-node state */
+	bool		parallel_cursor;	/* should run in parallel mode */
 
 	/* This field is set by ExecutorRun */
 	bool		already_executed;	/* true if previously executed */

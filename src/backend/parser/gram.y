@@ -10831,6 +10831,7 @@ cursor_options: /*EMPTY*/					{ $$ = 0; }
 			| cursor_options SCROLL			{ $$ = $1 | CURSOR_OPT_SCROLL; }
 			| cursor_options BINARY			{ $$ = $1 | CURSOR_OPT_BINARY; }
 			| cursor_options INSENSITIVE	{ $$ = $1 | CURSOR_OPT_INSENSITIVE; }
+			| cursor_options PARALLEL		{ $$ = $1 | CURSOR_OPT_PARALLEL; }
 		;
 
 opt_hold: /* EMPTY */						{ $$ = 0; }

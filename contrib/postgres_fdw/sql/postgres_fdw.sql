@@ -1835,3 +1835,56 @@ SELECT t1.a,t1.b FROM fprt1 t1, LATERAL (SELECT t2.a, t2.b FROM fprt2 t2 WHERE t
 SELECT t1.a,t1.b FROM fprt1 t1, LATERAL (SELECT t2.a, t2.b FROM fprt2 t2 WHERE t1.a = t2.b AND t1.b = t2.a) q WHERE t1.a%25 = 0 ORDER BY 1,2;
 
 RESET enable_partition_wise_join;
+
+
+-- ===================================================================
+-- test partition-wise-aggregates
+-- ===================================================================
+
+CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+
+CREATE TABLE pagg_tab_p1 (a int, b int, c text);
+CREATE TABLE pagg_tab_p2 (a int, b int, c text);
+CREATE TABLE pagg_tab_p3 (a int, b int, c text);
+
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+
+-- Create foreign partitions
+CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
+CREATE FOREIGN TABLE fpagg_tab_p2 PARTITION OF pagg_tab FOR VALUES FROM (10) TO (20) SERVER loopback OPTIONS (table_name 'pagg_tab_p2');;
+CREATE FOREIGN TABLE fpagg_tab_p3 PARTITION OF pagg_tab FOR VALUES FROM (20) TO (30) SERVER loopback OPTIONS (table_name 'pagg_tab_p3');;
+
+ANALYZE pagg_tab;
+ANALYZE fpagg_tab_p1;
+ANALYZE fpagg_tab_p2;
+ANALYZE fpagg_tab_p3;
+
+-- When GROUP BY clause matches with PARTITION KEY.
+-- Plan when partition-wise-agg is disabled
+SET enable_partition_wise_agg TO false;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 25 ORDER BY 1;
+
+-- Plan when partition-wise-agg is enabled
+SET enable_partition_wise_agg TO true;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 25 ORDER BY 1;
+SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 25 ORDER BY 1;
+
+-- When GROUP BY clause not matches with PARTITION KEY.
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 800 ORDER BY 1;
+SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 800 ORDER BY 1;
+
+
+-- Clean-up
+RESET enable_partition_wise_agg;
+DROP FOREIGN TABLE fpagg_tab_p3;
+DROP FOREIGN TABLE fpagg_tab_p2;
+DROP FOREIGN TABLE fpagg_tab_p1;
+DROP TABLE pagg_tab_p3;
+DROP TABLE pagg_tab_p2;
+DROP TABLE pagg_tab_p1;
+DROP TABLE pagg_tab;

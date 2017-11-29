@@ -551,6 +551,7 @@ typedef enum RelOptKind
 	RELOPT_OTHER_MEMBER_REL,
 	RELOPT_OTHER_JOINREL,
 	RELOPT_UPPER_REL,
+	RELOPT_OTHER_UPPER_REL,
 	RELOPT_DEADREL
 } RelOptKind;
 
@@ -568,12 +569,15 @@ typedef enum RelOptKind
 	 (rel)->reloptkind == RELOPT_OTHER_JOINREL)
 
 /* Is the given relation an upper relation? */
-#define IS_UPPER_REL(rel) ((rel)->reloptkind == RELOPT_UPPER_REL)
+#define IS_UPPER_REL(rel)	\
+	((rel)->reloptkind == RELOPT_UPPER_REL || \
+	 (rel)->reloptkind == RELOPT_OTHER_UPPER_REL)
 
 /* Is the given relation an "other" relation? */
 #define IS_OTHER_REL(rel) \
 	((rel)->reloptkind == RELOPT_OTHER_MEMBER_REL || \
-	 (rel)->reloptkind == RELOPT_OTHER_JOINREL)
+	 (rel)->reloptkind == RELOPT_OTHER_JOINREL || \
+	 (rel)->reloptkind == RELOPT_OTHER_UPPER_REL)
 
 typedef struct RelOptInfo
 {
@@ -2274,6 +2278,31 @@ typedef struct JoinPathExtraData
 	SemiAntiJoinFactors semifactors;
 	Relids		param_source_rels;
 } JoinPathExtraData;
+
+/*
+ * Struct for extra information passed to subroutines involving path creation
+ * for upper rels.
+ *
+ * isPartial is true if we are creating a partial agg path
+ * can_sort is true if sorted path is possible
+ * can_hash is true if hashed path is possible
+ * inputRows is the number of input tuples provided for aggregation/grouping,
+ * 		used at finalization step
+ * pathTarget is the PathTarget for this upper rel
+ * partialPathTarget is the partial PathTarget for child upper rel
+ * havingQual is the quals applied to this upper rel
+ */
+typedef struct
+{
+	bool		isPartial;
+	bool		can_sort;
+	bool		can_hash;
+
+	double		inputRows;
+	PathTarget *pathTarget;
+	PathTarget *partialPathTarget;
+	Node	   *havingQual;
+} UpperPathExtraData;
 
 /*
  * For speed reasons, cost estimation for join paths is performed in two

@@ -546,6 +546,7 @@ generate_union_path(SetOperationStmt *op, PlannerInfo *root,
 	List	   *tlist_list;
 	List	   *tlist;
 	Path	   *path;
+	PathTarget *pathtarget;
 
 	/*
 	 * If plain UNION, tell children to fetch all tuples.
@@ -587,13 +588,14 @@ generate_union_path(SetOperationStmt *op, PlannerInfo *root,
 
 	*pTargetList = tlist;
 
+	/* We have to manually jam the right tlist into the path; ick */
+	pathtarget = create_pathtarget(root, tlist);
+
 	/*
 	 * Append the child results together.
 	 */
-	path = (Path *) create_append_path(result_rel, pathlist, NULL, 0, NIL);
-
-	/* We have to manually jam the right tlist into the path; ick */
-	path->pathtarget = create_pathtarget(root, tlist);
+	path = (Path *) create_append_path(result_rel, pathlist, pathtarget, NULL,
+									   0, NIL);
 
 	/*
 	 * For UNION ALL, we just need the Append path.  For UNION, need to add
@@ -643,6 +645,7 @@ generate_nonunion_path(SetOperationStmt *op, PlannerInfo *root,
 	bool		use_hash;
 	SetOpCmd	cmd;
 	int			firstFlag;
+	PathTarget *pathtarget;
 
 	/*
 	 * Tell children to fetch all tuples.
@@ -699,13 +702,14 @@ generate_nonunion_path(SetOperationStmt *op, PlannerInfo *root,
 
 	*pTargetList = tlist;
 
+	/* We have to manually jam the right tlist into the path; ick */
+	pathtarget = create_pathtarget(root, tlist);
+
 	/*
 	 * Append the child results together.
 	 */
-	path = (Path *) create_append_path(result_rel, pathlist, NULL, 0, NIL);
-
-	/* We have to manually jam the right tlist into the path; ick */
-	path->pathtarget = create_pathtarget(root, tlist);
+	path = (Path *) create_append_path(result_rel, pathlist, pathtarget, NULL,
+									   0, NIL);
 
 	/* Identify the grouping semantics */
 	groupList = generate_setop_grouplist(op, tlist);

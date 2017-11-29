@@ -3653,6 +3653,26 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-partition-wise-agg" xreflabel="enable_partition_wise_agg">
+      <term><varname>enable_partition_wise_agg</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_partition_wise_agg</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's use of partition-wise grouping
+        or aggregation, which allows grouping or aggregation on a partitioned
+        tables to be spread across the partitions. If <literal>GROUP
+        BY</literal> clause includes partition keys, the rows are aggregated
+        at each partition. Otherwise, partial aggregates computed for each
+        partition are required to be combined. Because partition-wise grouping
+        or aggregation can use significantly more CPU time and memory during
+        planning, the default is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-seqscan" xreflabel="enable_seqscan">
       <term><varname>enable_seqscan</varname> (<type>boolean</type>)
       <indexterm>

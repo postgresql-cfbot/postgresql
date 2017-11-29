@@ -920,6 +920,15 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"enable_partition_wise_agg", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables partition-wise aggregation and grouping."),
+			NULL
+		},
+		&enable_partition_wise_agg,
+		false,
+		NULL, NULL, NULL
+	},
 
 	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,

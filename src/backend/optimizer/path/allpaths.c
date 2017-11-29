@@ -95,9 +95,15 @@ static void set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 static void set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 						Index rti, RangeTblEntry *rte);
 static void generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
+						   PathTarget *target,
 						   List *live_childrels,
 						   List *all_child_pathkeys,
-						   List *partitioned_rels);
+						   List *partitioned_rels,
+						   UpperPathExtraData *extra);
+static void add_append_path(PlannerInfo *root, RelOptInfo *rel, List *subpaths,
+				List *partial_subpaths, PathTarget *target, List *pathkeys,
+				Relids required_outer, int parallel_workers,
+				List *partitioned_rels, UpperPathExtraData *extra);
 static Path *get_cheapest_parameterized_child_path(PlannerInfo *root,
 									  RelOptInfo *rel,
 									  Relids required_outer);
@@ -133,8 +139,6 @@ static void subquery_push_qual(Query *subquery,
 static void recurse_push_qual(Node *setOp, Query *topquery,
 				  RangeTblEntry *rte, Index rti, Node *qual);
 static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
-static void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
-						List *live_childrels);
 
 
 /*
@@ -1309,7 +1313,7 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/* Add paths to the append relation. */
-	add_paths_to_append_rel(root, rel, live_childrels);
+	add_paths_to_append_rel(root, rel, live_childrels, NULL);
 }
 
 
@@ -1323,10 +1327,15 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
  * an append path collecting one path from each non-dummy child with given
  * parameterization or ordering. Similarly it collects partial paths from
  * non-dummy children to create partial append paths.
+ *
+ * extra provides more information about the partitioned aggregation/grouping
+ * e.g path target, whether to use partial aggregate and so on.  When present
+ * we call create_partition_agg_paths() to add paths for partition-wise
+ * aggregates.
  */
-static void
+void
 add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
-						List *live_childrels)
+						List *live_childrels, UpperPathExtraData *extra)
 {
 	List	   *subpaths = NIL;
 	bool		subpaths_valid = true;
@@ -1491,15 +1500,14 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	 * if we have zero or one live subpath due to constraint exclusion.)
 	 */
 	if (subpaths_valid)
-		add_path(rel, (Path *) create_append_path(rel, subpaths, NULL, 0,
-												  partitioned_rels));
+		add_append_path(root, rel, subpaths, NIL, rel->reltarget, NIL, NULL, 0,
+						partitioned_rels, extra);
 
 	/*
 	 * Consider an append of partial unordered, unparameterized partial paths.
 	 */
 	if (partial_subpaths_valid)
 	{
-		AppendPath *appendpath;
 		ListCell   *lc;
 		int			parallel_workers = 0;
 
@@ -1518,9 +1526,8 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		Assert(parallel_workers > 0);
 
 		/* Generate a partial append path. */
-		appendpath = create_append_path(rel, partial_subpaths, NULL,
-										parallel_workers, partitioned_rels);
-		add_partial_path(rel, (Path *) appendpath);
+		add_append_path(root, rel, NIL, partial_subpaths, rel->reltarget, NIL,
+						NULL, parallel_workers, partitioned_rels, extra);
 	}
 
 	/*
@@ -1528,9 +1535,9 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	 * list of child pathkeys.
 	 */
 	if (subpaths_valid)
-		generate_mergeappend_paths(root, rel, live_childrels,
+		generate_mergeappend_paths(root, rel, rel->reltarget, live_childrels,
 								   all_child_pathkeys,
-								   partitioned_rels);
+								   partitioned_rels, extra);
 
 	/*
 	 * Build Append paths for each parameterization seen among the child rels.
@@ -1571,9 +1578,8 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		if (subpaths_valid)
-			add_path(rel, (Path *)
-					 create_append_path(rel, subpaths, required_outer, 0,
-										partitioned_rels));
+			add_append_path(root, rel, subpaths, NIL, rel->reltarget, NIL,
+							required_outer, 0, partitioned_rels, extra);
 	}
 }
 
@@ -1602,9 +1608,11 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
  */
 static void
 generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
+						   PathTarget *target,
 						   List *live_childrels,
 						   List *all_child_pathkeys,
-						   List *partitioned_rels)
+						   List *partitioned_rels,
+						   UpperPathExtraData *extra)
 {
 	ListCell   *lcp;
 
@@ -1664,19 +1672,53 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/* ... and build the MergeAppend paths */
-		add_path(rel, (Path *) create_merge_append_path(root,
-														rel,
-														startup_subpaths,
-														pathkeys,
-														NULL,
-														partitioned_rels));
+		add_append_path(root, rel, startup_subpaths, NIL, target, pathkeys,
+						NULL, 0, partitioned_rels, extra);
+
 		if (startup_neq_total)
-			add_path(rel, (Path *) create_merge_append_path(root,
-															rel,
-															total_subpaths,
-															pathkeys,
-															NULL,
-															partitioned_rels));
+			add_append_path(root, rel, total_subpaths, NIL, target, pathkeys,
+							NULL, 0, partitioned_rels, extra);
+	}
+}
+
+/*
+ * add_append_path
+ *
+ * If extra is provided, then we need to handover the path addition to the
+ * create_partition_agg_paths() as it might require to add finalization step.
+ * Whereas, if pathkeys are present we create MergeAppend path and add that,
+ * else Append path is added.
+ */
+static void
+add_append_path(PlannerInfo *root, RelOptInfo *rel, List *subpaths,
+				List *partial_subpaths, PathTarget *target, List *pathkeys,
+				Relids required_outer, int parallel_workers,
+				List *partitioned_rels, UpperPathExtraData *extra)
+{
+	Assert ((subpaths != NIL) || (partial_subpaths != NIL));
+
+	if (extra)
+		create_partition_agg_paths(root, rel, subpaths, partial_subpaths,
+								   pathkeys, required_outer, parallel_workers,
+								   partitioned_rels, extra);
+	else if (pathkeys)
+		add_path(rel, (Path *) create_merge_append_path(root, rel, subpaths,
+														target, pathkeys,
+														required_outer,
+														partitioned_rels));
+	else
+	{
+		AppendPath *appendpath;
+
+		appendpath = create_append_path(rel,
+										(subpaths != NIL) ? subpaths : partial_subpaths,
+										target, required_outer,
+										parallel_workers, partitioned_rels);
+
+		if (subpaths != NIL)
+			add_path(rel, (Path *) appendpath);
+		else
+			add_partial_path(rel, (Path *) appendpath);
 	}
 }
 
@@ -1809,7 +1851,8 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
 	rel->pathlist = NIL;
 	rel->partial_pathlist = NIL;
 
-	add_path(rel, (Path *) create_append_path(rel, NIL, NULL, 0, NIL));
+	add_path(rel, (Path *) create_append_path(rel, NIL, rel->reltarget, NULL,
+											  0, NIL));
 
 	/*
 	 * We set the cheapest path immediately, to ensure that IS_DUMMY_REL()
@@ -3319,7 +3362,7 @@ generate_partition_wise_join_paths(PlannerInfo *root, RelOptInfo *rel)
 	}
 
 	/* Build additional paths for this rel from child-join paths. */
-	add_paths_to_append_rel(root, rel, live_children);
+	add_paths_to_append_rel(root, rel, live_children, NULL);
 	list_free(live_children);
 }
 

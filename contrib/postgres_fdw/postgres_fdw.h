@@ -94,6 +94,8 @@ typedef struct PgFdwRelationInfo
 
 	/* Grouping information */
 	List	   *grouped_tlist;
+	PathTarget *grouped_target;
+	Node	   *havingQual;
 
 	/* Subquery information */
 	bool		make_outerrel_subquery; /* do we deparse outerrel as a

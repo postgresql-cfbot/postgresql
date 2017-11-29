@@ -347,7 +347,8 @@ static bool postgresRecheckForeignScan(ForeignScanState *node,
 static void postgresGetForeignUpperPaths(PlannerInfo *root,
 							 UpperRelationKind stage,
 							 RelOptInfo *input_rel,
-							 RelOptInfo *output_rel);
+							 RelOptInfo *output_rel,
+							 UpperPathExtraData *extra);
 
 /*
  * Helper functions
@@ -413,7 +414,8 @@ static void add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 								Path *epq_path);
 static void add_foreign_grouping_paths(PlannerInfo *root,
 						   RelOptInfo *input_rel,
-						   RelOptInfo *grouped_rel);
+						   RelOptInfo *grouped_rel,
+						   UpperPathExtraData *extra);
 static void apply_server_options(PgFdwRelationInfo *fpinfo);
 static void apply_table_options(PgFdwRelationInfo *fpinfo);
 static void merge_fdw_options(PgFdwRelationInfo *fpinfo,
@@ -2689,7 +2691,7 @@ estimate_path_cost_size(PlannerInfo *root,
 		else if (IS_UPPER_REL(foreignrel))
 		{
 			PgFdwRelationInfo *ofpinfo;
-			PathTarget *ptarget = root->upper_targets[UPPERREL_GROUP_AGG];
+			PathTarget *ptarget = fpinfo->grouped_target;
 			AggClauseCosts aggcosts;
 			double		input_rows;
 			int			numGroupCols;
@@ -2719,7 +2721,7 @@ estimate_path_cost_size(PlannerInfo *root,
 			{
 				get_agg_clause_costs(root, (Node *) fpinfo->grouped_tlist,
 									 AGGSPLIT_SIMPLE, &aggcosts);
-				get_agg_clause_costs(root, (Node *) root->parse->havingQual,
+				get_agg_clause_costs(root, fpinfo->havingQual,
 									 AGGSPLIT_SIMPLE, &aggcosts);
 			}
 
@@ -4622,7 +4624,7 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 	 * different from those in the plan's targetlist. Use a copy of path
 	 * target to record the new sortgrouprefs.
 	 */
-	grouping_target = copy_pathtarget(root->upper_targets[UPPERREL_GROUP_AGG]);
+	grouping_target = copy_pathtarget(fpinfo->grouped_target);
 
 	/*
 	 * Evaluate grouping targets and check whether they are safe to push down
@@ -4704,11 +4706,11 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 	 * Classify the pushable and non-pushable having clauses and save them in
 	 * remote_conds and local_conds of the grouped rel's fpinfo.
 	 */
-	if (root->hasHavingQual && query->havingQual)
+	if (root->hasHavingQual && fpinfo->havingQual)
 	{
 		ListCell   *lc;
 
-		foreach(lc, (List *) query->havingQual)
+		foreach(lc, (List *) fpinfo->havingQual)
 		{
 			Expr	   *expr = (Expr *) lfirst(lc);
 			RestrictInfo *rinfo;
@@ -4808,7 +4810,8 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
  */
 static void
 postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
-							 RelOptInfo *input_rel, RelOptInfo *output_rel)
+							 RelOptInfo *input_rel, RelOptInfo *output_rel,
+							 UpperPathExtraData *extra)
 {
 	PgFdwRelationInfo *fpinfo;
 
@@ -4828,7 +4831,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	fpinfo->pushdown_safe = false;
 	output_rel->fdw_private = fpinfo;
 
-	add_foreign_grouping_paths(root, input_rel, output_rel);
+	add_foreign_grouping_paths(root, input_rel, output_rel, extra);
 }
 
 /*
@@ -4840,13 +4843,12 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
  */
 static void
 add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
-						   RelOptInfo *grouped_rel)
+						   RelOptInfo *grouped_rel, UpperPathExtraData *extra)
 {
 	Query	   *parse = root->parse;
 	PgFdwRelationInfo *ifpinfo = input_rel->fdw_private;
 	PgFdwRelationInfo *fpinfo = grouped_rel->fdw_private;
 	ForeignPath *grouppath;
-	PathTarget *grouping_target;
 	double		rows;
 	int			width;
 	Cost		startup_cost;
@@ -4857,7 +4859,21 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		!root->hasHavingQual)
 		return;
 
-	grouping_target = root->upper_targets[UPPERREL_GROUP_AGG];
+	/* Store passed-in target and havingQual in fpinfo for later use */
+	if (extra)
+	{
+		/* Partial aggregates are not supported. */
+		if (extra->isPartial)
+			return;
+
+		fpinfo->grouped_target = extra->pathTarget;
+		fpinfo->havingQual = extra->havingQual;
+	}
+	else
+	{
+		fpinfo->grouped_target = root->upper_targets[UPPERREL_GROUP_AGG];
+		fpinfo->havingQual = parse->havingQual;
+	}
 
 	/* save the input_rel as outerrel in fpinfo */
 	fpinfo->outerrel = input_rel;
@@ -4888,7 +4904,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	/* Create and add foreign path to the grouping relation. */
 	grouppath = create_foreignscan_path(root,
 										grouped_rel,
-										grouping_target,
+										fpinfo->grouped_target,
 										rows,
 										startup_cost,
 										total_cost,

@@ -182,5 +182,6 @@ test: identity
 test: partition_join
 test: reloptions
 test: hash_part
+test: partition_agg
 test: event_trigger
 test: stats

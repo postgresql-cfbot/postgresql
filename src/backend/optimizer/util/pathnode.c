@@ -1208,15 +1208,18 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
  * Note that we must handle subpaths = NIL, representing a dummy access path.
  */
 AppendPath *
-create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
+create_append_path(RelOptInfo *rel, List *subpaths,
+				   PathTarget *target, Relids required_outer,
 				   int parallel_workers, List *partitioned_rels)
 {
 	AppendPath *pathnode = makeNode(AppendPath);
+	Cost		input_startup_cost;
+	Cost		input_total_cost;
 	ListCell   *l;
 
 	pathnode->path.pathtype = T_Append;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1227,31 +1230,30 @@ create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
 	pathnode->subpaths = subpaths;
 
 	/*
-	 * We don't bother with inventing a cost_append(), but just do it here.
-	 *
-	 * Compute rows and costs as sums of subplan rows and costs.  We charge
-	 * nothing extra for the Append itself, which perhaps is too optimistic,
-	 * but since it doesn't do any selection or projection, it is a pretty
-	 * cheap node.
+	 * Add up the sizes and costs of the input paths.
 	 */
 	pathnode->path.rows = 0;
-	pathnode->path.startup_cost = 0;
-	pathnode->path.total_cost = 0;
+	input_startup_cost = 0;
+	input_total_cost = 0;
 	foreach(l, subpaths)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
 
 		pathnode->path.rows += subpath->rows;
-
-		if (l == list_head(subpaths))	/* first node? */
-			pathnode->path.startup_cost = subpath->startup_cost;
-		pathnode->path.total_cost += subpath->total_cost;
 		pathnode->path.parallel_safe = pathnode->path.parallel_safe &&
 			subpath->parallel_safe;
+
+		if (l == list_head(subpaths))	/* first node? */
+			input_startup_cost = subpath->startup_cost;
+		input_total_cost += subpath->total_cost;
 
 		/* All child paths must have same parameterization */
 		Assert(bms_equal(PATH_REQ_OUTER(subpath), required_outer));
 	}
+
+	/* Now we can compute total costs of the Append */
+	cost_append(&pathnode->path, input_startup_cost, input_total_cost,
+				pathnode->path.rows);
 
 	return pathnode;
 }
@@ -1265,6 +1267,7 @@ MergeAppendPath *
 create_merge_append_path(PlannerInfo *root,
 						 RelOptInfo *rel,
 						 List *subpaths,
+						 PathTarget *target,
 						 List *pathkeys,
 						 Relids required_outer,
 						 List *partitioned_rels)
@@ -1276,7 +1279,7 @@ create_merge_append_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_MergeAppend;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
 	pathnode->path.parallel_aware = false;

@@ -1101,3 +1101,35 @@ any two partitioned relations with same partitioning scheme point to the same
 PartitionSchemeData object.  This reduces memory consumed by
 PartitionSchemeData objects and makes it easy to compare the partition schemes
 of joining relations.
+
+Partition-wise aggregates/grouping
+----------------------------------
+If GROUP BY clause has all partition keys, all the rows that belong to a given
+group come from a single partition and thus aggregates can be finalized
+separately for each partition. If GROUP BY doesn't contain all the partition
+keys, partial aggregates can be computed for each partition followed by
+combining partial aggregates from one or more partitions belonging to the same
+group to compute complete aggregate for each group. This technique of breaking
+down aggregation or grouping over a partitioned relation into aggregation or
+grouping over its partitions is called partition-wise aggregation.
+
+Say, if we have a partitioned table having three children, then query with
+aggregate will have plan like (assuming group by key matches with the partition
+key):
+ HashAggregate
+   ->  Append
+         ->  Seq Scan on prt1
+         ->  Seq Scan on prt1_p1
+         ->  Seq Scan on prt1_p2
+         ->  Seq Scan on prt1_p3
+
+In above plan, aggregation is performed after append node which means that the
+whole table is an input for the aggregation node. However, with partition-wise
+aggregation, same query will have plan like:
+ Append
+   ->  HashAggregate
+         ->  Seq Scan on prt1_p1
+   ->  HashAggregate
+         ->  Seq Scan on prt1_p2
+   ->  HashAggregate
+         ->  Seq Scan on prt1_p3

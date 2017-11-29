@@ -2359,6 +2359,7 @@ UnlistenStmt
 UnresolvedTup
 UnresolvedTupData
 UpdateStmt
+UpperPathExtraData
 UpperRelationKind
 UpperUniquePath
 UserAuth

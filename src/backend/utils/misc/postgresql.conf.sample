@@ -300,6 +300,7 @@
 #enable_sort = on
 #enable_tidscan = on
 #enable_partition_wise_join = off
+#enable_partition_wise_agg = off
 
 # - Planner Cost Constants -
 

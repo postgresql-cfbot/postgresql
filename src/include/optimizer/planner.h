@@ -61,4 +61,14 @@ extern List *get_partitioned_child_rels(PlannerInfo *root, Index rti);
 extern List *get_partitioned_child_rels_for_join(PlannerInfo *root,
 									Relids join_relids);
 
+extern void create_partition_agg_paths(PlannerInfo *root,
+						   RelOptInfo *grouped_rel,
+						   List *subpaths,
+						   List *partial_subpaths,
+						   List *pathkeys,
+						   Relids required_outer,
+						   int parallel_workers,
+						   List *partitioned_rels,
+						   UpperPathExtraData *extra);
+
 #endif							/* PLANNER_H */

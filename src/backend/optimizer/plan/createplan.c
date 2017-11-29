@@ -1662,7 +1662,15 @@ create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 	subplan = create_plan_recurse(root, best_path->subpath,
 								  flags | CP_SMALL_TLIST);
 
-	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys, NULL);
+	/*
+	 * In find_ec_member_for_tle(), child EC members are ignored if they don't
+	 * belong to the given relids. Thus, if this sort path is based on a child
+	 * relation, we must pass the relids of it. Otherwise, we will end-up into
+	 * an error requiring pathkey item.
+	 */
+	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys,
+								   IS_OTHER_REL(best_path->subpath->parent) ?
+								   best_path->path.parent->relids : NULL);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -3493,15 +3501,8 @@ create_foreignscan_plan(PlannerInfo *root, ForeignPath *best_path,
 	/* Copy foreign server OID; likewise, no need to make FDW do this */
 	scan_plan->fs_server = rel->serverid;
 
-	/*
-	 * Likewise, copy the relids that are represented by this foreign scan. An
-	 * upper rel doesn't have relids set, but it covers all the base relations
-	 * participating in the underlying scan, so use root's all_baserels.
-	 */
-	if (IS_UPPER_REL(rel))
-		scan_plan->fs_relids = root->all_baserels;
-	else
-		scan_plan->fs_relids = best_path->path.parent->relids;
+	/* Likewise, copy the relids that are represented by this foreign scan. */
+	scan_plan->fs_relids = best_path->path.parent->relids;
 
 	/*
 	 * If this is a foreign join, and to make it valid to push down we had to

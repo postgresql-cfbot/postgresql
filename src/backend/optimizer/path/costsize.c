@@ -4085,21 +4085,57 @@ void
 set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
 	double		nrows;
+	Selectivity prev_sel, sel;
+	List *clause_list;
+	List *ordered_clauses;
+	ListCell *l;
+	QualCost cost;
 
 	/* Should only be applied to base relations */
 	Assert(rel->relid > 0);
 
-	nrows = rel->tuples *
-		clauselist_selectivity(root,
-							   rel->baserestrictinfo,
-							   0,
-							   JOIN_INNER,
-							   NULL);
+	ordered_clauses = order_qual_clauses(root, rel->baserestrictinfo);
+	clause_list = ordered_clauses;
+
+	cost.startup = 0;
+	cost.per_tuple = 0;
+	prev_sel = 1.0;
+	foreach(l, clause_list)
+	{
+		Node *qual = (Node *) lfirst(l);
+		List *clause_list_for_sel = NULL;
+		ListCell *m;
+		cost_qual_eval_context context;
+		context.root = root;
+		context.total.startup = 0;
+		context.total.per_tuple = 0;
+
+		/* Make a temporary clause list for selectivity calcuation */
+		foreach(m, ordered_clauses)
+		{
+			clause_list_for_sel = lappend(clause_list_for_sel, lfirst(m));
+
+			if(m == l)
+				break;
+		}
+
+		sel = clauselist_selectivity(root,
+									 clause_list_for_sel,
+									 0,
+									 JOIN_INNER,
+									 NULL);
+
+		cost_qual_eval_walker(qual, &context);
+		cost.startup += context.total.startup * prev_sel;
+		cost.per_tuple += context.total.per_tuple * prev_sel;
+
+		prev_sel = sel;
+	}
+
+	nrows = rel->tuples * prev_sel;
 
 	rel->rows = clamp_row_est(nrows);
-
-	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
-
+	rel->baserestrictcost = cost;
 	set_rel_width(root, rel);
 }
 

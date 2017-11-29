@@ -1507,6 +1507,16 @@ typedef struct SortPath
 } SortPath;
 
 /*
+ * IncrementalSortPath
+ */
+typedef struct IncrementalSortPath
+{
+	SortPath	spath;
+	int			skipCols;
+} IncrementalSortPath;
+
+
+/*
  * GroupPath represents grouping (of presorted input)
  *
  * groupClause represents the columns to be grouped on; the input path

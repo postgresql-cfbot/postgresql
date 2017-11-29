@@ -188,6 +188,7 @@ typedef enum
 
 extern PathKeysComparison compare_pathkeys(List *keys1, List *keys2);
 extern bool pathkeys_contained_in(List *keys1, List *keys2);
+extern int pathkeys_common(List *keys1, List *keys2);
 extern Path *get_cheapest_path_for_pathkeys(List *paths, List *pathkeys,
 							   Relids required_outer,
 							   CostSelector cost_criterion,
@@ -226,6 +227,7 @@ extern List *select_outer_pathkeys_for_merge(PlannerInfo *root,
 extern List *make_inner_pathkeys_for_merge(PlannerInfo *root,
 							  List *mergeclauses,
 							  List *outer_pathkeys);
+extern int pathkeys_useful_for_ordering(List *query_pathkeys, List *pathkeys);
 extern List *truncate_useless_pathkeys(PlannerInfo *root,
 						  RelOptInfo *rel,
 						  List *pathkeys);

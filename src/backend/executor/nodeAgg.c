@@ -666,6 +666,7 @@ initialize_phase(AggState *aggstate, int newphase)
 												  sortnode->collations,
 												  sortnode->nullsFirst,
 												  work_mem,
+												  false,
 												  false);
 	}
 
@@ -753,7 +754,7 @@ initialize_aggregate(AggState *aggstate, AggStatePerTrans pertrans,
 									 pertrans->sortOperators,
 									 pertrans->sortCollations,
 									 pertrans->sortNullsFirst,
-									 work_mem, false);
+									 work_mem, false, false);
 	}
 
 	/*

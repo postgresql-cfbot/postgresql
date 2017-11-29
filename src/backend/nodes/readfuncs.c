@@ -2212,6 +2212,7 @@ _readHash(void)
 	READ_OID_FIELD(skewTable);
 	READ_INT_FIELD(skewColumn);
 	READ_BOOL_FIELD(skewInherit);
+	READ_FLOAT_FIELD(rows_total);
 
 	READ_DONE();
 }

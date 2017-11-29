@@ -1458,6 +1458,7 @@ typedef struct HashPath
 	JoinPath	jpath;
 	List	   *path_hashclauses;	/* join clauses used for hashing */
 	int			num_batches;	/* number of batches expected */
+	double		inner_rows_total;	/* total inner rows expected */
 } HashPath;
 
 /*
@@ -2309,6 +2310,7 @@ typedef struct JoinCostWorkspace
 	/* private for cost_hashjoin code */
 	int			numbuckets;
 	int			numbatches;
+	double		inner_rows_total;
 } JoinCostWorkspace;
 
 #endif							/* RELATION_H */

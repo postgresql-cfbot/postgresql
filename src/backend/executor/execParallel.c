@@ -29,6 +29,7 @@
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
+#include "executor/nodeHashjoin.h"
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeSeqscan.h"
@@ -259,6 +260,11 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 				ExecBitmapHeapEstimate((BitmapHeapScanState *) planstate,
 									   e->pcxt);
 			break;
+		case T_HashJoinState:
+			if (planstate->plan->parallel_aware)
+				ExecHashJoinEstimate((HashJoinState *) planstate,
+									 e->pcxt);
+			break;
 		case T_SortState:
 			/* even when not parallel-aware */
 			ExecSortEstimate((SortState *) planstate, e->pcxt);
@@ -457,6 +463,11 @@ ExecParallelInitializeDSM(PlanState *planstate,
 			if (planstate->plan->parallel_aware)
 				ExecBitmapHeapInitializeDSM((BitmapHeapScanState *) planstate,
 											d->pcxt);
+			break;
+		case T_HashJoinState:
+			if (planstate->plan->parallel_aware)
+				ExecHashJoinInitializeDSM((HashJoinState *) planstate,
+										  d->pcxt);
 			break;
 		case T_SortState:
 			/* even when not parallel-aware */
@@ -872,6 +883,11 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 				ExecBitmapHeapReInitializeDSM((BitmapHeapScanState *) planstate,
 											  pcxt);
 			break;
+		case T_HashJoinState:
+			if (planstate->plan->parallel_aware)
+				ExecHashJoinReInitializeDSM((HashJoinState *) planstate,
+											pcxt);
+			break;
 		case T_SortState:
 			/* even when not parallel-aware */
 			ExecSortReInitializeDSM((SortState *) planstate, pcxt);
@@ -1159,6 +1175,11 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 			if (planstate->plan->parallel_aware)
 				ExecBitmapHeapInitializeWorker((BitmapHeapScanState *) planstate,
 											   pwcxt);
+			break;
+		case T_HashJoinState:
+			if (planstate->plan->parallel_aware)
+				ExecHashJoinInitializeWorker((HashJoinState *) planstate,
+											 pwcxt);
 			break;
 		case T_SortState:
 			/* even when not parallel-aware */

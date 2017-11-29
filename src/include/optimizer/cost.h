@@ -68,6 +68,7 @@ extern bool enable_mergejoin;
 extern bool enable_hashjoin;
 extern bool enable_gathermerge;
 extern bool enable_partition_wise_join;
+extern bool enable_parallel_hash;
 extern int	constraint_exclusion;
 
 extern double clamp_row_est(double nrows);
@@ -151,7 +152,8 @@ extern void initial_cost_hashjoin(PlannerInfo *root,
 					  JoinType jointype,
 					  List *hashclauses,
 					  Path *outer_path, Path *inner_path,
-					  JoinPathExtraData *extra);
+					  JoinPathExtraData *extra,
+					  bool parallel_hash);
 extern void final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 					JoinCostWorkspace *workspace,
 					JoinPathExtraData *extra);

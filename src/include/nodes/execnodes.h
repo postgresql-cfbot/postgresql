@@ -24,6 +24,7 @@
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
 #include "utils/reltrigger.h"
+#include "utils/sharedtuplestore.h"
 #include "utils/sortsupport.h"
 #include "utils/tuplestore.h"
 #include "utils/tuplesort.h"
@@ -41,6 +42,8 @@
 struct ExprState;				/* forward references in this file */
 struct ExprContext;
 struct ExprEvalStep;			/* avoid including execExpr.h everywhere */
+
+struct ParallelHashJoinState;
 
 typedef Datum (*ExprStateEvalFunc) (struct ExprState *expression,
 									struct ExprContext *econtext,
@@ -1990,6 +1993,9 @@ typedef struct HashState
 	HashJoinTable hashtable;	/* hash table for the hashjoin */
 	List	   *hashkeys;		/* list of ExprState nodes */
 	/* hashkeys is same as parent's hj_InnerHashKeys */
+
+	/* Parallel hash state. */
+	struct ParallelHashJoinState *parallel_state;
 } HashState;
 
 /* ----------------

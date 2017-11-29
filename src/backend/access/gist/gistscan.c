@@ -14,6 +14,8 @@
  */
 #include "postgres.h"
 
+#include <math.h>
+
 #include "access/gist_private.h"
 #include "access/gistscan.h"
 #include "access/relscan.h"
@@ -36,8 +38,36 @@ pairingheap_GISTSearchItem_cmp(const pairingheap_node *a, const pairingheap_node
 	/* Order according to distance comparison */
 	for (i = 0; i < scan->numberOfOrderBys; i++)
 	{
-		if (sa->distances[i] != sb->distances[i])
-			return (sa->distances[i] < sb->distances[i]) ? 1 : -1;
+		double		da;
+		double		db;
+
+		if (sa->distances[i].isnull)
+		{
+			if (sb->distances[i].isnull)
+				continue;	/* NULL = NULL */
+
+			return -1;	/* NULL > non-NULL */
+		}
+
+		if (sb->distances[i].isnull)
+			return 1;	/* non-NULL < NULL */
+
+		da = sa->distances[i].value;
+		db = sb->distances[i].value;
+
+		if (isnan(da))
+		{
+			if (isnan(db))
+				continue;	/* NaN = NaN */
+
+			return -1;	/* NaN > non-NaN */
+		}
+
+		if (isnan(db))
+			return 1;	/* non-NaN < NaN */
+
+		if (da != db)
+			return (da < db) ? 1 : -1;
 	}
 
 	/* Heap items go before inner pages, to ensure a depth-first search */
@@ -81,7 +111,7 @@ gistbeginscan(Relation r, int nkeys, int norderbys)
 	so->queueCxt = giststate->scanCxt;	/* see gistrescan */
 
 	/* workspaces with size dependent on numberOfOrderBys: */
-	so->distances = palloc(sizeof(double) * scan->numberOfOrderBys);
+	so->distances = palloc(sizeof(so->distances[0]) * scan->numberOfOrderBys);
 	so->qual_ok = true;			/* in case there are zero keys */
 	if (scan->numberOfOrderBys > 0)
 	{

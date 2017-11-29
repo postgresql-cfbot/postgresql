@@ -125,6 +125,13 @@ typedef struct GISTSearchHeapItem
 								 * LP_DEAD */
 } GISTSearchHeapItem;
 
+/* Nullable distance */
+typedef struct GISTDistance
+{
+	double		value;
+	bool		isnull;
+} GISTDistance;
+
 /* Unvisited item, either index page or heap tuple */
 typedef struct GISTSearchItem
 {
@@ -136,13 +143,13 @@ typedef struct GISTSearchItem
 		/* we must store parentlsn to detect whether a split occurred */
 		GISTSearchHeapItem heap;	/* heap info, if heap tuple */
 	}			data;
-	double		distances[FLEXIBLE_ARRAY_MEMBER];	/* numberOfOrderBys
+	GISTDistance distances[FLEXIBLE_ARRAY_MEMBER];	/* numberOfOrderBys
 													 * entries */
 } GISTSearchItem;
 
 #define GISTSearchItemIsHeap(item)	((item).blkno == InvalidBlockNumber)
 
-#define SizeOfGISTSearchItem(n_distances) (offsetof(GISTSearchItem, distances) + sizeof(double) * (n_distances))
+#define SizeOfGISTSearchItem(n_distances) (offsetof(GISTSearchItem, distances) + sizeof(GISTDistance) * (n_distances))
 
 /*
  * GISTScanOpaqueData: private state for a scan of a GiST index
@@ -158,7 +165,7 @@ typedef struct GISTScanOpaqueData
 	bool		firstCall;		/* true until first gistgettuple call */
 
 	/* pre-allocated workspace arrays */
-	double	   *distances;		/* output area for gistindex_keytest */
+	GISTDistance *distances;	/* output area for gistindex_keytest */
 
 	/* info about killed items if any (killedItems is NULL if never used) */
 	OffsetNumber *killedItems;	/* offset numbers of killed items */

@@ -1121,6 +1121,16 @@ gist_circle_compress(PG_FUNCTION_ARGS)
 		r->high.y = in->center.y + in->radius;
 		r->low.y = in->center.y - in->radius;
 
+		/* avoid box inconsistency by transforming NaNs into infinities */
+		if (isnan(r->high.x))
+			r->high.x = get_float8_infinity();
+		if (isnan(r->high.y))
+			r->high.y = get_float8_infinity();
+		if (isnan(r->low.x))
+			r->low.x = -get_float8_infinity();
+		if (isnan(r->low.y))
+			r->low.y = -get_float8_infinity();
+
 		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(r),
 					  entry->rel, entry->page,

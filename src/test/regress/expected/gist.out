@@ -243,3 +243,67 @@ reset enable_seqscan;
 reset enable_bitmapscan;
 reset enable_indexonlyscan;
 drop table gist_tbl;
+-- Test ORDER BY circle <-> point with Inifinities and NaNs
+CREATE TABLE gist_circle_tbl (id int, c circle);
+INSERT INTO gist_circle_tbl
+  SELECT (x - 1) * 100 + y, circle(point(x * 10, y * 10), 1 + (x + y) % 10)
+  FROM generate_series(1, 100) x,
+       generate_series(1, 100) y;
+INSERT INTO gist_circle_tbl
+  SELECT i, '<(200, 300), 5>'
+  FROM generate_series(10001, 11000) AS i;
+INSERT INTO gist_circle_tbl
+  VALUES
+    (11001, NULL),
+    (11002, NULL),
+    (11003, '<(0,100), infinity>'),
+    (11004, '<(-infinity,0),1000>'),
+    (11005, '<(infinity,-infinity),infinity>');
+CREATE INDEX gist_circle_tbl_idx ON gist_circle_tbl USING gist(c);
+-- get ordering results from seq scan
+SET enable_seqscan TO on;
+SET enable_indexscan TO off;
+EXPLAIN (COSTS OFF)
+SELECT rank() OVER (ORDER BY c <-> point '123,456') n, c <-> point '123,456' dist, id
+FROM gist_circle_tbl;
+                   QUERY PLAN                   
+------------------------------------------------
+ WindowAgg
+   ->  Sort
+         Sort Key: ((c <-> '(123,456)'::point))
+         ->  Seq Scan on gist_circle_tbl
+(4 rows)
+
+CREATE TABLE gist_circle_tbl_ord_seq AS
+  SELECT rank() OVER (ORDER BY c <-> point '123,456') n, c <-> point '123,456' dist, id
+  FROM gist_circle_tbl;
+-- get ordering results from index scan
+SET enable_seqscan TO off;
+SET enable_indexscan TO on;
+EXPLAIN (COSTS OFF)
+SELECT rank() OVER (ORDER BY c <-> point '123,456') n, c <-> point '123,456' dist, id
+FROM gist_circle_tbl;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ WindowAgg
+   ->  Index Scan using gist_circle_tbl_idx on gist_circle_tbl
+         Order By: (c <-> '(123,456)'::point)
+(3 rows)
+
+CREATE TABLE gist_circle_tbl_ord_idx AS
+  SELECT rank() OVER (ORDER BY c <-> point '123,456') n, c <-> point '123,456' dist, id
+  FROM gist_circle_tbl;
+-- compare results
+SELECT *
+FROM gist_circle_tbl_ord_seq seq FULL JOIN gist_circle_tbl_ord_idx idx USING (n, id)
+WHERE seq.id IS NULL OR idx.id IS NULL;
+ n | id | dist | dist 
+---+----+------+------
+(0 rows)
+
+-- clean up
+RESET enable_seqscan;
+RESET enable_indexscan;
+DROP TABLE gist_circle_tbl;
+DROP TABLE gist_circle_tbl_ord_seq;
+DROP TABLE gist_circle_tbl_ord_idx;

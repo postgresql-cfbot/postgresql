@@ -105,6 +105,7 @@ int			wal_level = WAL_LEVEL_MINIMAL;
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
+int			max_slot_wal_keep_size_mb = 0;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -9354,6 +9355,128 @@ CreateRestartPoint(int flags)
 	return true;
 }
 
+
+/*
+ * Returns the segment number of the oldest file in XLOG directory.
+ */
+static XLogSegNo
+GetOldestXLogFileSegNo(void)
+{
+	DIR		*xldir;
+	struct dirent *xlde;
+	XLogSegNo segno = 0;
+
+	xldir = AllocateDir(XLOGDIR);
+	if (xldir == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open write-ahead log directory \"%s\": %m",
+						XLOGDIR)));
+
+	while ((xlde = ReadDir(xldir, XLOGDIR)) != NULL)
+	{
+		TimeLineID tli;
+		XLogSegNo fsegno;
+
+		/* Ignore files that are not XLOG segments */
+		if (!IsXLogFileName(xlde->d_name) &&
+			!IsPartialXLogFileName(xlde->d_name))
+			continue;
+
+		XLogFromFileName(xlde->d_name, &tli, &fsegno, wal_segment_size);
+
+		/* get minimum segment ignorig timeline ID */
+		if (segno == 0 || fsegno < segno)
+			segno = fsegno;
+	}
+
+	return segno;
+}
+
+/*
+ * Check if the record on the given restartLSN is present in XLOG files.
+ *
+ * Returns true if it is present. If minSecureLSN is given, it receives the
+ * LSN at the beginning of the oldest existing WAL segment.
+ */
+bool
+IsLsnStillAvaiable(XLogRecPtr restartLSN, XLogRecPtr *minSecureLSN)
+{
+	XLogRecPtr currpos;
+	XLogSegNo currSeg;
+	XLogSegNo restartSeg;
+	XLogSegNo tailSeg;
+	XLogSegNo oldestSeg;
+	uint64 keepSegs;
+
+	currpos = GetXLogWriteRecPtr();
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	oldestSeg = XLogCtl->lastRemovedSegNo;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	/*
+	 * oldestSeg is zero before at least one segment has been removed since
+	 * startup. Use oldest segno taken from file names.
+	 */
+	if (oldestSeg == 0)
+	{
+		static XLogSegNo oldestFileSeg = 0;
+
+		if (oldestFileSeg == 0)
+			oldestFileSeg = GetOldestXLogFileSegNo();
+		/* let it have the same meaning with lastRemovedSegNo here */
+		oldestSeg = oldestFileSeg - 1;
+	}
+
+	/* oldest segment is just after the last removed segment */
+	oldestSeg++;
+
+	XLByteToSeg(currpos, currSeg, wal_segment_size);
+	XLByteToSeg(restartLSN, restartSeg, wal_segment_size);
+
+
+	if (minSecureLSN)
+	{
+		if (max_slot_wal_keep_size_mb > 0)
+		{
+			uint64 slotlimitbytes = 1024 * 1024 * max_slot_wal_keep_size_mb;
+			uint64 slotlimitfragment = XLogSegmentOffset(slotlimitbytes,
+														 wal_segment_size);
+			uint64 currposoff = XLogSegmentOffset(currpos, wal_segment_size);
+
+			/* Calculate keep segments. Must be in sync with KeepLogSeg. */
+			Assert(wal_keep_segments >= 0);
+			Assert(max_slot_wal_keep_size_mb >= 0);
+
+			keepSegs = wal_keep_segments +
+				ConvertToXSegs(max_slot_wal_keep_size_mb, wal_segment_size);
+			if (currposoff < slotlimitfragment)
+				keepSegs++;
+
+			/*
+			 * calculate the oldest segment that will be kept by
+			 * wal_keep_segments and max_slot_wal_keep_size_mb
+			 */
+			if (currSeg < keepSegs)
+				tailSeg = 0;
+			else
+				tailSeg = currSeg - keepSegs;
+
+		}
+		else
+		{
+			/* all requred segments are secured in this case */
+			XLogRecPtr keep = XLogGetReplicationSlotMinimumLSN();
+			XLByteToSeg(keep, tailSeg, wal_segment_size);
+		}
+
+		XLogSegNoOffsetToRecPtr(tailSeg, 0, *minSecureLSN, wal_segment_size);
+	}
+
+	return	oldestSeg <= restartSeg;
+}
+
 /*
  * Retreat *logSegNo to the last segment that we need to retain because of
  * either wal_keep_segments or replication slots.
@@ -9381,12 +9504,54 @@ KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo)
 			segno = segno - wal_keep_segments;
 	}
 
-	/* then check whether slots limit removal further */
+	/*
+	 * then check whether slots limit removal further
+	 * should be consistent with IsLsnStillAvaiable().
+	 */
+
 	if (max_replication_slots > 0 && keep != InvalidXLogRecPtr)
 	{
 		XLogSegNo	slotSegNo;
+		int			slotlimitsegs;
+		uint64		recptroff;
+		uint64		slotlimitbytes;
+		uint64		slotlimitfragment;
+
+		recptroff = XLogSegmentOffset(recptr, wal_segment_size);
+		slotlimitbytes = 1024 * 1024 * max_slot_wal_keep_size_mb;
+		slotlimitfragment =	XLogSegmentOffset(slotlimitbytes,
+											  wal_segment_size);
+
+		/* calculate segments to keep by max_slot_wal_keep_size_mb */
+		slotlimitsegs = ConvertToXSegs(max_slot_wal_keep_size_mb,
+									   wal_segment_size);
+		/* honor the fragment */
+		if (recptroff < slotlimitfragment)
+			slotlimitsegs++;
 
 		XLByteToSeg(keep, slotSegNo, wal_segment_size);
+
+		/*
+		 * ignore slots if too many wal segments are kept.
+		 * max_slot_wal_keep_size is just accumulated on wal_keep_segments.
+		 */
+		if (max_slot_wal_keep_size_mb > 0 && slotSegNo + slotlimitsegs < segno)
+		{
+			segno = segno - slotlimitsegs; /* must be positive */
+
+			/*
+			 * warn only if the checkpoint flushes the required segment.
+			 * we assume here that *logSegNo is calculated keep location.
+			 */
+			if (slotSegNo < *logSegNo)
+				ereport(WARNING,
+					(errmsg ("restart LSN of replication slots is ignored by checkpoint"),
+					 errdetail("Some replication slots have lost required WAL segnents to continue by up to %ld segments.",
+					   (segno < *logSegNo ? segno : *logSegNo) - slotSegNo)));
+
+			/* emergency vent */
+			slotSegNo = segno;
+		}
 
 		if (slotSegNo <= 0)
 			segno = 1;

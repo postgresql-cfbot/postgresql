@@ -4938,7 +4938,7 @@ a_output := a_output || $$ if v_$$ || referrer_keys.kind || $$ like '$$
 
   </sect2>
   <sect2 id="plpgsql-extra-checks">
-   <title>Additional Compile-time Checks</title>
+   <title>Additional Compile-time and Run-time Checks</title>
 
    <para>
     To aid the user in finding instances of simple but common problems before
@@ -4948,6 +4948,11 @@ a_output := a_output || $$ if v_$$ || referrer_keys.kind || $$ like '$$
     during the compilation of a function. A function which has received
     a <literal>WARNING</literal> can be executed without producing further messages,
     so you are advised to test in a separate development environment.
+   </para>
+
+   <para>
+    The setting <varname>plpgsql.extra_warnings</> to <literal>all</> is a 
+    good idea in developer or test environments.
    </para>
 
  <para>
@@ -4963,6 +4968,30 @@ a_output := a_output || $$ if v_$$ || referrer_keys.kind || $$ like '$$
     <listitem>
      <para>
       Checks if a declaration shadows a previously defined variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><varname>strict_multi_assignment</varname></term>
+    <listitem>
+     <para>
+      Some <application>PL/PgSQL</> commands allows to assign a values to
+      more than one variable. The number of target variables should not be
+      equal to number of source values. Missing values are replaced by NULL
+      value, spare values are ignored. More times this situation signalize
+      some error.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><varname>too_many_rows</varname></term>
+    <listitem>
+     <para>
+      When result is assigned to a variable by <literal>INTO</literal> clause,
+      checks if query returns more than one row. In this case the assignment
+      is not deterministic usually - and it can be signal some issues in design.
      </para>
     </listitem>
    </varlistentry>
@@ -4984,6 +5013,34 @@ WARNING:  variable "f1" shadows a previously defined variable
 LINE 3: f1 int;
         ^
 CREATE FUNCTION
+</programlisting>
+
+  The another example shows the effect of <varname>plpgsql.extra_warnings</>
+  set to <varname>strict_multi_assignment</>:
+<programlisting>
+SET plpgsql.extra_warnings TO 'strict_multi_assignment';
+
+CREATE OR REPLACE FUNCTION public.foo()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $$
+DECLARE
+  x int;
+  y int;
+BEGIN
+  SELECT 1 INTO x, y;
+  SELECT 1, 2 INTO x, y;
+  SELECT 1, 2, 3 INTO x, y;
+END;
+$$
+
+SELECT foo();
+WARNING:  Number of evaluated attributies (1) does not match expected attributies (2)
+WARNING:  Number of evaluated attributies (3) does not match expected attributies (2)
+ foo 
+-----
+ 
+(1 row)
 </programlisting>
  </para>
  </sect2>

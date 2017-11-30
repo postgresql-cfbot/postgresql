@@ -3623,6 +3623,24 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	long		tcount;
 	int			rc;
 	PLpgSQL_expr *expr = stmt->sqlstmt;
+	bool		too_many_rows_check;
+	int			too_many_rows_level;
+
+	if (plpgsql_extra_errors & PLPGSQL_XCHECK_TOOMANYROWS)
+	{
+		too_many_rows_check = true;
+		too_many_rows_level = ERROR;
+	}
+	else if (plpgsql_extra_warnings & PLPGSQL_XCHECK_TOOMANYROWS)
+	{
+		too_many_rows_check = true;
+		too_many_rows_level = WARNING;
+	}
+	else
+	{
+		too_many_rows_check = false;
+		too_many_rows_level = NOTICE;
+	}
 
 	/*
 	 * On the first call for this statement generate the plan, and detect
@@ -3672,7 +3690,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	 */
 	if (stmt->into)
 	{
-		if (stmt->strict || stmt->mod_stmt)
+		if (stmt->strict || stmt->mod_stmt || too_many_rows_check)
 			tcount = 2;
 		else
 			tcount = 1;
@@ -3792,7 +3810,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 		}
 		else
 		{
-			if (n > 1 && (stmt->strict || stmt->mod_stmt))
+			if (n > 1 && (stmt->strict || stmt->mod_stmt || too_many_rows_check))
 			{
 				char	   *errdetail;
 
@@ -3801,7 +3819,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 				else
 					errdetail = NULL;
 
-				ereport(ERROR,
+				ereport(too_many_rows_level == WARNING && !stmt->strict ? WARNING : ERROR,
 						(errcode(ERRCODE_TOO_MANY_ROWS),
 						 errmsg("query returned more than one row"),
 						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0));
@@ -6027,11 +6045,47 @@ exec_move_row(PLpgSQL_execstate *estate,
 		int			t_natts;
 		int			fnum;
 		int			anum;
+		bool		strict_multiassignment_check;
+		int			strict_multiassignment_level;
+
+		if (plpgsql_extra_errors & PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT)
+		{
+			strict_multiassignment_check = true;
+			strict_multiassignment_level = ERROR;
+		}
+		else if (plpgsql_extra_warnings & PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT)
+		{
+			strict_multiassignment_check = true;
+			strict_multiassignment_level = WARNING;
+		}
+		else
+		{
+			strict_multiassignment_check = false;
+			strict_multiassignment_level = NOTICE;
+		}
 
 		if (HeapTupleIsValid(tup))
 			t_natts = HeapTupleHeaderGetNatts(tup->t_data);
 		else
 			t_natts = 0;
+
+		if (strict_multiassignment_check)
+		{
+			int		i;
+
+			anum = 0;
+			for (i = 0; i < td_natts; i++)
+				if (!TupleDescAttr(tupdesc, i)->attisdropped)
+					anum++;
+
+			if (anum != row->nfields)
+			{
+				ereport(strict_multiassignment_level,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("Number of evaluated attributies (%d) does not match expected attributies (%d)",
+									anum, row->nfields)));
+			}
+		}
 
 		anum = 0;
 		for (fnum = 0; fnum < row->nfields; fnum++)

@@ -143,7 +143,6 @@ typedef struct CachedPlan
 	MemoryContext context;		/* context containing this CachedPlan */
 } CachedPlan;
 
-
 extern void InitPlanCache(void);
 extern void ResetPlanCache(void);
 
@@ -181,5 +180,17 @@ extern CachedPlan *GetCachedPlan(CachedPlanSource *plansource,
 			  bool useResOwner,
 			  QueryEnvironment *queryEnv);
 extern void ReleaseCachedPlan(CachedPlan *plan, bool useResOwner);
+
+/* possible values for plancache_mode */
+typedef enum
+{
+	PLANCACHE_DEFAULT,
+	PLANCACHE_FORCE_GENERIC_PLAN,
+	PLANCACHE_FORCE_CUSTOM_PLAN
+}			PlanCacheMode;
+
+
+/* GUC parameter */
+extern int plancache_mode;
 
 #endif							/* PLANCACHE_H */

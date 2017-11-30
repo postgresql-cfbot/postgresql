@@ -106,6 +106,8 @@ static void PlanCacheRelCallback(Datum arg, Oid relid);
 static void PlanCacheFuncCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
 
+/* GUC parameter */
+int	plancache_mode;
 
 /*
  * InitPlanCache: initialize module during InitPostgres.
@@ -1030,6 +1032,12 @@ choose_custom_plan(CachedPlanSource *plansource, ParamListInfo boundParams)
 	/* ... nor for transaction control statements */
 	if (IsTransactionStmtPlan(plansource))
 		return false;
+
+	/* See if settings wants to force the decision */
+	if (plancache_mode & PLANCACHE_FORCE_GENERIC_PLAN)
+		return false;
+	if (plancache_mode & PLANCACHE_FORCE_CUSTOM_PLAN)
+		return true;
 
 	/* See if caller wants to force the decision */
 	if (plansource->cursor_options & CURSOR_OPT_GENERIC_PLAN)

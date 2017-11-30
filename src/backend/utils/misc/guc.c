@@ -403,6 +403,13 @@ static const struct config_enum_entry force_parallel_mode_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry plancache_mode_options[] = {
+	{"default", PLANCACHE_DEFAULT, false},
+	{"force_generic_plan", PLANCACHE_FORCE_GENERIC_PLAN, false},
+	{"force_custom_plan", PLANCACHE_FORCE_CUSTOM_PLAN, false},
+	{NULL, 0, false}
+};
+
 /*
  * password_encryption used to be a boolean, so accept all the likely
  * variants of "on", too. "off" used to store passwords in plaintext,
@@ -3923,6 +3930,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&Password_encryption,
 		PASSWORD_TYPE_MD5, password_encryption_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"plancache_mode", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Forces use of custom or generic plans."),
+			gettext_noop("It can control query plan cache.")
+		},
+		&plancache_mode,
+		PLANCACHE_DEFAULT, plancache_mode_options,
 		NULL, NULL, NULL
 	},
 

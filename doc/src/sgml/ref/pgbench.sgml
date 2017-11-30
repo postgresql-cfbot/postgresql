@@ -895,6 +895,51 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
   </para>
 
   <variablelist>
+   <varlistentry id='pgbench-metacommand-gset'>
+    <term>
+     <literal>\cset [<replaceable>prefix</replaceable>]</literal> or
+     <literal>\gset [<replaceable>prefix</replaceable>]</literal>
+    </term>
+
+    <listitem>
+     <para>
+      These commands may be used to end SQL queries, replacing a semicolon.
+      <literal>\cset</literal> replaces an embedded semicolon (<literal>\;</literal>) within
+      a compound SQL command, and <literal>\gset</literal> replaces a final
+      (<literal>;</literal>) semicolon which ends the SQL command. 
+     </para>
+
+     <para>
+      When these commands are used, the preceding SQL query is expected to
+      return one row, the columns of which are stored into variables named after
+      column names, and prefixed with <replaceable>prefix</replaceable> if provided.
+     </para>
+
+     <para>
+      The following example puts the final account balance from the first query
+      into variable <replaceable>abalance</replaceable>, and fills variables
+      <replaceable>one</replaceable>, <replaceable>two</replaceable> and
+      <replaceable>p_three</replaceable> with integers from a compound query.
+<programlisting>
+UPDATE pgbench_accounts
+  SET abalance = abalance + :delta
+  WHERE aid = :aid
+  RETURNING abalance \gset
+-- compound of two queries
+SELECT 1 AS one, 2 AS two \cset
+SELECT 3 AS three \gset p_
+</programlisting>
+     </para>
+
+     <note>
+      <para>
+        <literal>\cset</literal> and <literal>\gset</literal> commands do not work when
+        empty SQL queries appear within a compound SQL command.
+      </para>
+     </note>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id='pgbench-metacommand-set'>
     <term>
      <literal>\set <replaceable>varname</replaceable> <replaceable>expression</replaceable></literal>

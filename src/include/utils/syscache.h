@@ -132,6 +132,8 @@ extern HeapTuple SearchSysCache4(int cacheId,
 				Datum key1, Datum key2, Datum key3, Datum key4);
 
 extern void ReleaseSysCache(HeapTuple tuple);
+extern void CleanupNegativeCache(int cacheid, int nkeys,
+							Datum key1, Datum key2, Datum key3, Datum key4);
 
 /* convenience routines */
 extern HeapTuple SearchSysCacheCopy(int cacheId,

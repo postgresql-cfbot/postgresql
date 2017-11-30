@@ -59,6 +59,7 @@ typedef struct catcache
 	Oid			cc_indexoid;	/* OID of index matching cache keys */
 	bool		cc_relisshared; /* is relation shared across databases? */
 	slist_node	cc_next;		/* list link */
+	int			cc_nnegtup;		/* # of negative tuples */
 	ScanKeyData cc_skey[CATCACHE_MAXKEYS];	/* precomputed key info for heap
 											 * scans */
 
@@ -212,11 +213,16 @@ extern uint32 GetCatCacheHashValue(CatCache *cache,
 					 Datum v1, Datum v2,
 					 Datum v3, Datum v4);
 
+extern List *CollectOIDsForHashValue(CatCache *cache,
+									 uint32 hashValue, int attnum);
+
 extern CatCList *SearchCatCacheList(CatCache *cache, int nkeys,
 				   Datum v1, Datum v2,
 				   Datum v3, Datum v4);
 extern void ReleaseCatCacheList(CatCList *list);
 
+extern void
+CleanupCatCacheNegEntries(CatCache *cache, ScanKeyData *skey);
 extern void ResetCatalogCaches(void);
 extern void CatalogCacheFlushCatalog(Oid catId);
 extern void CatCacheInvalidate(CatCache *cache, uint32 hashValue);

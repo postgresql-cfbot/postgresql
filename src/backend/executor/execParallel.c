@@ -26,6 +26,7 @@
 #include "executor/execExpr.h"
 #include "executor/execParallel.h"
 #include "executor/executor.h"
+#include "executor/nodeAppend.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
@@ -249,6 +250,11 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 				ExecForeignScanEstimate((ForeignScanState *) planstate,
 										e->pcxt);
 			break;
+		case T_AppendState:
+			if (planstate->plan->parallel_aware)
+				ExecAppendEstimate((AppendState *) planstate,
+									e->pcxt);
+			break;
 		case T_CustomScanState:
 			if (planstate->plan->parallel_aware)
 				ExecCustomScanEstimate((CustomScanState *) planstate,
@@ -447,6 +453,11 @@ ExecParallelInitializeDSM(PlanState *planstate,
 			if (planstate->plan->parallel_aware)
 				ExecForeignScanInitializeDSM((ForeignScanState *) planstate,
 											 d->pcxt);
+			break;
+		case T_AppendState:
+			if (planstate->plan->parallel_aware)
+				ExecAppendInitializeDSM((AppendState *) planstate,
+										 d->pcxt);
 			break;
 		case T_CustomScanState:
 			if (planstate->plan->parallel_aware)
@@ -862,6 +873,10 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 				ExecForeignScanReInitializeDSM((ForeignScanState *) planstate,
 											   pcxt);
 			break;
+		case T_AppendState:
+			if (planstate->plan->parallel_aware)
+				ExecAppendReInitializeDSM((AppendState *) planstate, pcxt);
+			break;
 		case T_CustomScanState:
 			if (planstate->plan->parallel_aware)
 				ExecCustomScanReInitializeDSM((CustomScanState *) planstate,
@@ -1149,6 +1164,10 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 			if (planstate->plan->parallel_aware)
 				ExecForeignScanInitializeWorker((ForeignScanState *) planstate,
 												pwcxt);
+			break;
+		case T_AppendState:
+			if (planstate->plan->parallel_aware)
+				ExecAppendInitializeWorker((AppendState *) planstate, pwcxt);
 			break;
 		case T_CustomScanState:
 			if (planstate->plan->parallel_aware)

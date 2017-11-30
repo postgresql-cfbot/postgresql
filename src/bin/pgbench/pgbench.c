@@ -186,19 +186,18 @@ const char *progname;
 volatile bool timer_exceeded = false;	/* flag from signal handler */
 
 /*
- * Variable definitions.  If a variable has a string value, "value" is that
- * value, is_numeric is false, and num_value is undefined.  If the value is
- * known to be numeric, is_numeric is true and num_value contains the value
- * (in any permitted numeric variant).  In this case "value" contains the
- * string equivalent of the number, if we've had occasion to compute that,
- * or NULL if we haven't.
+ * Variable definitions.  If a variable only has a string value, "svalue" is that
+ * value, "has_value" is false, and "value" is undefined.  If the value is
+ * known, "has_value" is true and "value" contains the value (in any variant).
+ * In this case "svalue" contains the string equivalent of the value, if we've had
+ * occasion to compute that, or NULL if we haven't.
  */
 typedef struct
 {
 	char	   *name;			/* variable's name */
-	char	   *value;			/* its value in string form, if known */
-	bool		is_numeric;		/* is numeric value known? */
-	PgBenchValue num_value;		/* variable's value in numeric form */
+	char	   *svalue;			/* its value in string form, if known */
+	bool		has_value;		/* is actual value known? */
+	PgBenchValue value;			/* actual variable's value */
 } Variable;
 
 #define MAX_SCRIPTS		128		/* max number of SQL scripts allowed */
@@ -454,6 +453,8 @@ static const BuiltinScript builtin_script[] =
 
 
 /* Function prototypes */
+static void setNullValue(PgBenchValue *pv);
+static void setBoolValue(PgBenchValue *pv, bool bval);
 static void setIntValue(PgBenchValue *pv, int64 ival);
 static void setDoubleValue(PgBenchValue *pv, double dval);
 static bool evaluateExpr(TState *, CState *, PgBenchExpr *, PgBenchValue *);
@@ -981,50 +982,82 @@ getVariable(CState *st, char *name)
 	if (var == NULL)
 		return NULL;			/* not found */
 
-	if (var->value)
-		return var->value;		/* we have it in string form */
+	if (var->svalue)
+		return var->svalue;		/* we have it in string form */
 
 	/* We need to produce a string equivalent of the numeric value */
-	Assert(var->is_numeric);
-	if (var->num_value.type == PGBT_INT)
+	Assert(var->has_value);
+	if (var->value.type == PGBT_NULL)
+		snprintf(stringform, sizeof(stringform), "NULL");
+	else if (var->value.type == PGBT_BOOLEAN)
 		snprintf(stringform, sizeof(stringform),
-				 INT64_FORMAT, var->num_value.u.ival);
-	else
-	{
-		Assert(var->num_value.type == PGBT_DOUBLE);
+				 "%s", var->value.u.bval ? "true" : "false");
+	else if (var->value.type == PGBT_INT)
 		snprintf(stringform, sizeof(stringform),
-				 "%.*g", DBL_DIG, var->num_value.u.dval);
-	}
-	var->value = pg_strdup(stringform);
-	return var->value;
+				 INT64_FORMAT, var->value.u.ival);
+	else if (var->value.type == PGBT_DOUBLE)
+		snprintf(stringform, sizeof(stringform),
+				 "%.*g", DBL_DIG, var->value.u.dval);
+	else /* internal error, unexpected type */
+		Assert(0);
+	var->svalue = pg_strdup(stringform);
+	return var->svalue;
 }
 
 /* Try to convert variable to numeric form; return false on failure */
 static bool
-makeVariableNumeric(Variable *var)
+makeVariableValue(Variable *var)
 {
-	if (var->is_numeric)
+	size_t slen;
+
+	if (var->has_value)
 		return true;			/* no work */
 
-	if (is_an_int(var->value))
+	slen = strlen(var->svalue);
+
+	if (slen == 0)
+		/* what should it do on ""? */
+		return false;
+
+	if (pg_strcasecmp(var->svalue, "null") == 0)
 	{
-		setIntValue(&var->num_value, strtoint64(var->value));
-		var->is_numeric = true;
+		setNullValue(&var->value);
+		var->has_value = true;
+	}
+	else if (pg_strncasecmp(var->svalue, "true", slen) == 0 ||
+			 pg_strncasecmp(var->svalue, "yes", slen) == 0 ||
+			 pg_strcasecmp(var->svalue, "on") == 0)
+	{
+		setBoolValue(&var->value, true);
+		var->has_value = true;
+	}
+	else if (pg_strncasecmp(var->svalue, "false", slen) == 0 ||
+			 pg_strncasecmp(var->svalue, "no", slen) == 0 ||
+			 pg_strcasecmp(var->svalue, "off") == 0 ||
+			 pg_strcasecmp(var->svalue, "of") == 0)
+	{
+		setBoolValue(&var->value, false);
+		var->has_value = true;
+	}
+	else if (is_an_int(var->svalue))
+	{
+		setIntValue(&var->value, strtoint64(var->svalue));
+		var->has_value = true;
 	}
 	else						/* type should be double */
 	{
 		double		dv;
 		char		xs;
 
-		if (sscanf(var->value, "%lf%c", &dv, &xs) != 1)
+		if (sscanf(var->svalue, "%lf%c", &dv, &xs) != 1)
 		{
 			fprintf(stderr,
 					"malformed variable \"%s\" value: \"%s\"\n",
-					var->name, var->value);
+					var->name, var->svalue);
 			return false;
 		}
-		setDoubleValue(&var->num_value, dv);
-		var->is_numeric = true;
+		setDoubleValue(&var->value, dv);
+		var->has_value = true;
 	}
 	return true;
 }
@@ -1101,7 +1134,7 @@ lookupCreateVariable(CState *st, const char *context, char *name)
 		var = &newvars[st->nvariables];
 
 		var->name = pg_strdup(name);
-		var->value = NULL;
+		var->svalue = NULL;
 		/* caller is expected to initialize remaining fields */
 
 		st->nvariables++;
@@ -1127,10 +1160,10 @@ putVariable(CState *st, const char *context, char *name, const char *value)
 	/* dup then free, in case value is pointing at this variable */
 	val = pg_strdup(value);
 
-	if (var->value)
-		free(var->value);
-	var->value = val;
-	var->is_numeric = false;
+	if (var->svalue)
+		free(var->svalue);
+	var->svalue = val;
+	var->has_value = false;
 
 	return true;
 }
@@ -1138,7 +1171,7 @@ putVariable(CState *st, const char *context, char *name, const char *value)
 /* Assign a numeric value to a variable, creating it if need be */
 /* Returns false on failure (bad name) */
 static bool
-putVariableNumber(CState *st, const char *context, char *name,
+putVariableValue(CState *st, const char *context, char *name,
 				  const PgBenchValue *value)
 {
 	Variable   *var;
@@ -1147,11 +1180,11 @@ putVariableNumber(CState *st, const char *context, char *name,
 	if (!var)
 		return false;
 
-	if (var->value)
-		free(var->value);
-	var->value = NULL;
-	var->is_numeric = true;
-	var->num_value = *value;
+	if (var->svalue)
+		free(var->svalue);
+	var->svalue = NULL;
+	var->has_value = true;
+	var->value = *value;
 
 	return true;
 }
@@ -1164,7 +1197,7 @@ putVariableInt(CState *st, const char *context, char *name, int64 value)
 	PgBenchValue val;
 
 	setIntValue(&val, value);
-	return putVariableNumber(st, context, name, &val);
+	return putVariableValue(st, context, name, &val);
 }
 
 /*
@@ -1263,6 +1296,61 @@ getQueryParams(CState *st, const Command *command, const char **params)
 		params[i] = getVariable(st, command->argv[i + 1]);
 }
 
+static char *
+valueTypeName(PgBenchValue *pval)
+{
+	if (pval->type == PGBT_NULL)
+		return "null";
+	else if (pval->type == PGBT_INT)
+		return "int";
+	else if (pval->type == PGBT_DOUBLE)
+		return "double";
+	else if (pval->type == PGBT_BOOLEAN)
+		return "boolean";
+	else
+		return "<unknown>";
+}
+
+/* get a value as a boolean, or tell if there is a problem */
+static bool
+coerceToBool(PgBenchValue *pval, bool *bval)
+{
+	if (pval->type == PGBT_BOOLEAN)
+	{
+		*bval = pval->u.bval;
+		return true;
+	}
+	else /* NULL, INT or DOUBLE */
+	{
+		fprintf(stderr, "cannot coerce %s to boolean\n", valueTypeName(pval));
+		return false;
+	}
+}
+
+/*
+ * Return true or false from an expression for conditional purposes.
+ * Non zero numerical values are true, zero and NULL are false.
+ */
+static bool
+valueTruth(PgBenchValue *pval)
+{
+	switch (pval->type)
+	{
+		case PGBT_NULL:
+			return false;
+		case PGBT_BOOLEAN:
+			return pval->u.bval;
+		case PGBT_INT:
+			return pval->u.ival != 0;
+		case PGBT_DOUBLE:
+			return pval->u.dval != 0.0;
+		default:
+			/* internal error, unexpected type */
+			Assert(0);
+			return false;
+	}
+}
+
 /* get a value as an int, tell if there is a problem */
 static bool
 coerceToInt(PgBenchValue *pval, int64 *ival)
@@ -1272,11 +1360,10 @@ coerceToInt(PgBenchValue *pval, int64 *ival)
 		*ival = pval->u.ival;
 		return true;
 	}
-	else
+	else if (pval->type == PGBT_DOUBLE)
 	{
 		double		dval = pval->u.dval;
 
-		Assert(pval->type == PGBT_DOUBLE);
 		if (dval < PG_INT64_MIN || PG_INT64_MAX < dval)
 		{
 			fprintf(stderr, "double to int overflow for %f\n", dval);
@@ -1284,6 +1371,11 @@ coerceToInt(PgBenchValue *pval, int64 *ival)
 		}
 		*ival = (int64) dval;
 		return true;
+	}
+	else /* BOOLEAN or NULL */
+	{
+		fprintf(stderr, "cannot coerce %s to int\n", valueTypeName(pval));
+		return false;
 	}
 }
 
@@ -1296,12 +1388,32 @@ coerceToDouble(PgBenchValue *pval, double *dval)
 		*dval = pval->u.dval;
 		return true;
 	}
-	else
+	else if (pval->type == PGBT_INT)
 	{
-		Assert(pval->type == PGBT_INT);
 		*dval = (double) pval->u.ival;
 		return true;
 	}
+	else /* BOOLEAN or NULL */
+	{
+		fprintf(stderr, "cannot coerce %s to double\n", valueTypeName(pval));
+		return false;
+	}
+}
+
+/* assign a null value */
+static void
+setNullValue(PgBenchValue *pv)
+{
+	pv->type = PGBT_NULL;
+	pv->u.ival = 0;
+}
+
+/* assign a boolean value */
+static void
+setBoolValue(PgBenchValue *pv, bool bval)
+{
+	pv->type = PGBT_BOOLEAN;
+	pv->u.bval = bval;
 }
 
 /* assign an integer value */
@@ -1331,19 +1443,31 @@ evalFunc(TState *thread, CState *st,
 		 PgBenchFunction func, PgBenchExprLink *args, PgBenchValue *retval)
 {
 	/* evaluate all function arguments */
-	int			nargs = 0;
-	PgBenchValue vargs[MAX_FARGS];
+	int				nargs = 0;
+	PgBenchValue	vargs[MAX_FARGS];
 	PgBenchExprLink *l = args;
+	bool			has_null = false;
 
 	for (nargs = 0; nargs < MAX_FARGS && l != NULL; nargs++, l = l->next)
+	{
 		if (!evaluateExpr(thread, st, l->expr, &vargs[nargs]))
 			return false;
+		has_null |= vargs[nargs].type == PGBT_NULL;
+	}
 
 	if (l != NULL)
 	{
 		fprintf(stderr,
 				"too many function arguments, maximum is %d\n", MAX_FARGS);
 		return false;
+	}
+
+	/* NULL arguments */
+	if (has_null &&
+		func != PGBENCH_IS && func != PGBENCH_CASE && func != PGBENCH_DEBUG)
+	{
+		setNullValue(retval);
+		return true;
 	}
 
 	/* then evaluate function */
@@ -1355,6 +1479,10 @@ evalFunc(TState *thread, CState *st,
 		case PGBENCH_MUL:
 		case PGBENCH_DIV:
 		case PGBENCH_MOD:
+		case PGBENCH_EQ:
+		case PGBENCH_NE:
+		case PGBENCH_LE:
+		case PGBENCH_LT:
 			{
 				PgBenchValue *lval = &vargs[0],
 						   *rval = &vargs[1];
@@ -1390,6 +1518,22 @@ evalFunc(TState *thread, CState *st,
 							setDoubleValue(retval, ld / rd);
 							return true;
 
+						case PGBENCH_EQ:
+							setBoolValue(retval, ld == rd);
+							return true;
+
+						case PGBENCH_NE:
+							setBoolValue(retval, ld != rd);
+							return true;
+
+						case PGBENCH_LE:
+							setBoolValue(retval, ld <= rd);
+							return true;
+
+						case PGBENCH_LT:
+							setBoolValue(retval, ld < rd);
+							return true;
+
 						default:
 							/* cannot get here */
 							Assert(0);
@@ -1416,6 +1560,22 @@ evalFunc(TState *thread, CState *st,
 
 						case PGBENCH_MUL:
 							setIntValue(retval, li * ri);
+							return true;
+
+						case PGBENCH_EQ:
+							setBoolValue(retval, li == ri);
+							return true;
+
+						case PGBENCH_NE:
+							setBoolValue(retval, li != ri);
+							return true;
+
+						case PGBENCH_LE:
+							setBoolValue(retval, li <= ri);
+							return true;
+
+						case PGBENCH_LT:
+							setBoolValue(retval, li < ri);
 							return true;
 
 						case PGBENCH_DIV:
@@ -1458,6 +1618,63 @@ evalFunc(TState *thread, CState *st,
 				}
 			}
 
+			/* integer bitwise operators */
+		case PGBENCH_BITAND:
+		case PGBENCH_BITOR:
+		case PGBENCH_BITXOR:
+		case PGBENCH_LSHIFT:
+		case PGBENCH_RSHIFT:
+			{
+				int64 li, ri;
+
+				if (!coerceToInt(&vargs[0], &li) || !coerceToInt(&vargs[1], &ri))
+					return false;
+
+				if (func == PGBENCH_BITAND)
+					setIntValue(retval, li & ri);
+				else if (func == PGBENCH_BITOR)
+					setIntValue(retval, li | ri);
+				else if (func == PGBENCH_BITXOR)
+					setIntValue(retval, li ^ ri);
+				else if (func == PGBENCH_LSHIFT)
+					setIntValue(retval, li << ri);
+				else if (func == PGBENCH_RSHIFT)
+					setIntValue(retval, li >> ri);
+				else /* cannot get here */
+					Assert(0);
+
+				return true;
+			}
+
+			/* logical operators */
+		case PGBENCH_AND:
+		case PGBENCH_OR:
+			{
+				bool lb, rb;
+
+				if (!coerceToBool(&vargs[0], &lb) ||
+					!coerceToBool(&vargs[1], &rb))
+					return false;
+
+				if (func == PGBENCH_AND)
+					setBoolValue(retval, lb && rb);
+				else if (func == PGBENCH_OR)
+					setBoolValue(retval, lb || rb);
+				else /* cannot get here */
+					Assert(0);
+
+				return true;
+			}
+		case PGBENCH_NOT:
+			{
+				bool b;
+				if (!coerceToBool(&vargs[0], &b))
+					return false;
+
+				setBoolValue(retval, !b);
+				return true;
+			}
+
 			/* no arguments */
 		case PGBENCH_PI:
 			setDoubleValue(retval, M_PI);
@@ -1496,13 +1713,16 @@ evalFunc(TState *thread, CState *st,
 				fprintf(stderr, "debug(script=%d,command=%d): ",
 						st->use_file, st->command + 1);
 
-				if (varg->type == PGBT_INT)
+				if (varg->type == PGBT_NULL)
+					fprintf(stderr, "null\n");
+				else if (varg->type == PGBT_BOOLEAN)
+					fprintf(stderr, "boolean %s\n", varg->u.bval ? "true" : "false");
+				else if (varg->type == PGBT_INT)
 					fprintf(stderr, "int " INT64_FORMAT "\n", varg->u.ival);
-				else
-				{
-					Assert(varg->type == PGBT_DOUBLE);
+				else if (varg->type == PGBT_DOUBLE)
 					fprintf(stderr, "double %.*g\n", DBL_DIG, varg->u.dval);
-				}
+				else /* internal error, unexpected type */
+					Assert(0);
 
 				*retval = *varg;
 
@@ -1512,6 +1732,8 @@ evalFunc(TState *thread, CState *st,
 			/* 1 double argument */
 		case PGBENCH_DOUBLE:
 		case PGBENCH_SQRT:
+		case PGBENCH_LN:
+		case PGBENCH_EXP:
 			{
 				double		dval;
 
@@ -1522,6 +1744,11 @@ evalFunc(TState *thread, CState *st,
 
 				if (func == PGBENCH_SQRT)
 					dval = sqrt(dval);
+				else if (func == PGBENCH_LN)
+					dval = log(dval);
+				else if (func == PGBENCH_EXP)
+					dval = exp(dval);
+				/* else is cast: do nothing */
 
 				setDoubleValue(retval, dval);
 				return true;
@@ -1600,6 +1827,23 @@ evalFunc(TState *thread, CState *st,
 				}
 				return true;
 			}
+		case PGBENCH_CASE:
+			{
+				int		n_when = nargs / 2, i;
+				Assert(nargs >= 3 && nargs % 2 == 1);
+				/* return on first true when condition */
+				for (i = 0; i < n_when; i++)
+				{
+					if (valueTruth(&vargs[2*i]))
+					{
+						*retval = vargs[2*i+1];
+						return true;
+					}
+				}
+				/* else value is last */
+				*retval = vargs[nargs-1];
+				return true;
+			}
 
 			/* random functions */
 		case PGBENCH_RANDOM:
@@ -1673,6 +1917,16 @@ evalFunc(TState *thread, CState *st,
 				return true;
 			}
 
+		case PGBENCH_IS:
+			{
+				Assert(nargs == 2);
+				/* note: this simple implementation is more permissive than SQL */
+				setBoolValue(retval,
+							 vargs[0].type == vargs[1].type &&
+							 vargs[0].u.bval == vargs[1].u.bval);
+				return true;
+			}
+
 		default:
 			/* cannot get here */
 			Assert(0);
@@ -1709,10 +1963,10 @@ evaluateExpr(TState *thread, CState *st, PgBenchExpr *expr, PgBenchValue *retval
 					return false;
 				}
 
-				if (!makeVariableNumeric(var))
+				if (!makeVariableValue(var))
 					return false;
 
-				*retval = var->num_value;
+				*retval = var->value;
 				return true;
 			}
 
@@ -2284,7 +2538,7 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 								break;
 							}
 
-							if (!putVariableNumber(st, argv[0], argv[1], &result))
+							if (!putVariableValue(st, argv[0], argv[1], &result))
 							{
 								commandFailed(st, "assignment of meta-command 'set' failed");
 								st->state = CSTATE_ABORTED;
@@ -4376,16 +4630,16 @@ main(int argc, char **argv)
 			{
 				Variable   *var = &state[0].variables[j];
 
-				if (var->is_numeric)
+				if (var->has_value)
 				{
-					if (!putVariableNumber(&state[i], "startup",
-										   var->name, &var->num_value))
+					if (!putVariableValue(&state[i], "startup",
+										   var->name, &var->value))
 						exit(1);
 				}
 				else
 				{
 					if (!putVariable(&state[i], "startup",
-									 var->name, var->value))
+									 var->name, var->svalue))
 						exit(1);
 				}
 			}

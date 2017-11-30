@@ -2766,6 +2766,13 @@ XLogSendLogical(void)
 		LogicalDecodingProcessRecord(logical_decoding_ctx, logical_decoding_ctx->reader);
 
 		sentPtr = logical_decoding_ctx->reader->EndRecPtr;
+
+		/*
+		 * If we've sent a record is at or beyond the flushed point, then
+		 * we're caught up.
+		 */
+		if (sentPtr >= GetFlushRecPtr())
+			WalSndCaughtUp = true;
 	}
 	else
 	{

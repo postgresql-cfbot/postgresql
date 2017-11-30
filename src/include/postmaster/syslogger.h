@@ -62,7 +62,6 @@ typedef union
 
 
 /* GUC options */
-extern bool Logging_collector;
 extern int	Log_RotationAge;
 extern int	Log_RotationSize;
 extern PGDLLIMPORT char *Log_directory;
@@ -81,7 +80,7 @@ extern HANDLE syslogPipe[2];
 
 extern int	SysLogger_Start(void);
 
-extern void write_syslogger_file(const char *buffer, int count, int dest);
+extern void write_syslogger_file(const char *buffer, int count, bool dest_csv);
 
 #ifdef EXEC_BACKEND
 extern void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();

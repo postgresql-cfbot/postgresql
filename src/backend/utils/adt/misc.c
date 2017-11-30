@@ -349,13 +349,6 @@ pg_reload_conf(PG_FUNCTION_ARGS)
 Datum
 pg_rotate_logfile(PG_FUNCTION_ARGS)
 {
-	if (!Logging_collector)
-	{
-		ereport(WARNING,
-				(errmsg("rotation not possible because log collection not active")));
-		PG_RETURN_BOOL(false);
-	}
-
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
 	PG_RETURN_BOOL(true);
 }

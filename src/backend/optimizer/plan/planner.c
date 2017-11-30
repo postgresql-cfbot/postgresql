@@ -879,10 +879,12 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		reduce_outer_joins(root);
 
 	/*
-	 * Do the main planning.  If we have an inherited target relation, that
-	 * needs special processing, else go straight to grouping_planner.
+	 * Do the main planning.  If we have an inherited UPDATE/DELETE target
+	 * relation, that needs special processing, else go straight to
+	 * grouping_planner.
 	 */
-	if (parse->resultRelation &&
+	if ((parse->commandType == CMD_UPDATE ||
+		 parse->commandType == CMD_DELETE) &&
 		rt_fetch(parse->resultRelation, parse->rtable)->inh)
 		inheritance_planner(root);
 	else

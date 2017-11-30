@@ -1680,6 +1680,69 @@ drop table loct1;
 drop table loct2;
 
 -- ===================================================================
+-- test tuple routing for foreign-table partitions
+-- ===================================================================
+
+create table pt (a int, b int) partition by list (a);
+create table locp partition of pt for values in (1);
+create table locfoo (a int check (a in (2)), b int);
+create foreign table remp partition of pt for values in (2) server loopback options (table_name 'locfoo');
+
+explain (verbose, costs off)
+insert into pt values (1, 1), (2, 1);
+insert into pt values (1, 1), (2, 1);
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+explain (verbose, costs off)
+insert into pt values (1, 2), (2, 2) returning *;
+insert into pt values (1, 2), (2, 2) returning *;
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+prepare q1 as insert into pt values (1, 3), (2, 3);
+explain (verbose, costs off) execute q1;
+alter table locfoo rename to locbar;
+alter foreign table remp options (set table_name 'locbar');
+explain (verbose, costs off) execute q1;
+execute q1;
+
+select tableoid::regclass, * FROM pt;
+select tableoid::regclass, * FROM locp;
+select tableoid::regclass, * FROM remp;
+
+deallocate q1;
+drop table pt;
+drop table locbar;
+
+-- Check INSERT into a multi-level partitioned table
+create table mlpt (a int, b int, c varchar) partition by range (a);
+create table mlptp1 partition of mlpt for values from (100) to (200) partition by range(b);
+create table mlptp2 partition of mlpt for values from (200) to (300);
+create table locfoo (a int check (a >= 100 and a < 200), b int check (b >= 100 and b < 200), c varchar);
+create table locbar (a int check (a >= 100 and a < 200), b int check (b >= 200 and b < 300), c varchar);
+create foreign table mlptp1p1 partition of mlptp1 for values from (100) to (200) server loopback options (table_name 'locfoo');
+create foreign table mlptp1p2 partition of mlptp1 for values from (200) to (300) server loopback options (table_name 'locbar');
+
+explain (verbose, costs off)
+insert into mlpt values (101, 101, 'x'), (101, 201, 'y') returning *;
+insert into mlpt values (101, 101, 'x'), (101, 201, 'y') returning *;
+
+select tableoid::regclass, * FROM mlpt;
+select tableoid::regclass, * FROM mlptp1;
+select tableoid::regclass, * FROM mlptp2;
+select tableoid::regclass, * FROM mlptp1p1;
+select tableoid::regclass, * FROM mlptp1p2;
+
+drop table mlpt;
+drop table locfoo;
+drop table locbar;
+
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 

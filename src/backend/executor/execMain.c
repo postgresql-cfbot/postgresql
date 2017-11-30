@@ -1100,12 +1100,15 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 	Relation	resultRel = resultRelInfo->ri_RelationDesc;
 	TriggerDesc *trigDesc = resultRel->trigdesc;
 	FdwRoutine *fdwroutine;
+	bool		is_valid;
 
 	switch (resultRel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
 			CheckCmdReplicaIdentity(resultRel, operation);
+			if (resultRelInfo->ri_PartitionRoot && operation == CMD_INSERT)
+				resultRelInfo->ri_PartitionIsValid = true;
 			break;
 		case RELKIND_SEQUENCE:
 			ereport(ERROR,
@@ -1172,24 +1175,28 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 			switch (operation)
 			{
 				case CMD_INSERT:
-
-					/*
-					 * If foreign partition to do tuple-routing for, skip the
-					 * check; it's disallowed elsewhere.
-					 */
-					if (resultRelInfo->ri_PartitionRoot)
-						break;
+					is_valid = true;
 					if (fdwroutine->ExecForeignInsert == NULL)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot insert into foreign table \"%s\"",
-										RelationGetRelationName(resultRel))));
+					{
+						if (!resultRelInfo->ri_PartitionRoot)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot insert into foreign table \"%s\"",
+											RelationGetRelationName(resultRel))));
+						is_valid = false;
+					}
 					if (fdwroutine->IsForeignRelUpdatable != NULL &&
 						(fdwroutine->IsForeignRelUpdatable(resultRel) & (1 << CMD_INSERT)) == 0)
-						ereport(ERROR,
-								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-								 errmsg("foreign table \"%s\" does not allow inserts",
-										RelationGetRelationName(resultRel))));
+					{
+						if (!resultRelInfo->ri_PartitionRoot)
+							ereport(ERROR,
+									(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+									 errmsg("foreign table \"%s\" does not allow inserts",
+											RelationGetRelationName(resultRel))));
+						is_valid = false;
+					}
+					if (resultRelInfo->ri_PartitionRoot)
+						resultRelInfo->ri_PartitionIsValid = is_valid;
 					break;
 				case CMD_UPDATE:
 					if (fdwroutine->ExecForeignUpdate == NULL)
@@ -1306,7 +1313,7 @@ void
 InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
-				  Relation partition_root,
+				  ResultRelInfo *partition_root,
 				  int instrument_options)
 {
 	List	   *partition_check = NIL;
@@ -1362,8 +1369,9 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	 */
 	partition_check = RelationGetPartitionQual(resultRelationDesc);
 
-	resultRelInfo->ri_PartitionCheck = partition_check;
 	resultRelInfo->ri_PartitionRoot = partition_root;
+	resultRelInfo->ri_PartitionCheck = partition_check;
+	resultRelInfo->ri_PartitionIsValid = false;
 }
 
 /*
@@ -1890,15 +1898,16 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 	{
 		char	   *val_desc;
 		Relation	orig_rel = rel;
+		ResultRelInfo *rootRelInfo = resultRelInfo->ri_PartitionRoot;
 
 		/* See the comment above. */
-		if (resultRelInfo->ri_PartitionRoot)
+		if (rootRelInfo)
 		{
 			HeapTuple	tuple = ExecFetchSlotTuple(slot);
 			TupleDesc	old_tupdesc = RelationGetDescr(rel);
 			TupleConversionMap *map;
 
-			rel = resultRelInfo->ri_PartitionRoot;
+			rel = rootRelInfo->ri_RelationDesc;
 			tupdesc = RelationGetDescr(rel);
 			/* a reverse map */
 			map = convert_tuples_by_name(old_tupdesc, tupdesc,
@@ -1909,10 +1918,15 @@ ExecPartitionCheck(ResultRelInfo *resultRelInfo, TupleTableSlot *slot,
 				ExecSetSlotDescriptor(slot, tupdesc);
 				ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 			}
-		}
 
-		insertedCols = GetInsertedColumns(resultRelInfo, estate);
-		updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+			insertedCols = GetInsertedColumns(rootRelInfo, estate);
+			updatedCols = GetUpdatedColumns(rootRelInfo, estate);
+		}
+		else
+		{
+			insertedCols = GetInsertedColumns(resultRelInfo, estate);
+			updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+		}
 		modifiedCols = bms_union(insertedCols, updatedCols);
 		val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
 												 slot,
@@ -1964,6 +1978,7 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				char	   *val_desc;
 				Relation	orig_rel = rel;
 				TupleDesc	orig_tupdesc = RelationGetDescr(rel);
+				ResultRelInfo *rootRelInfo = resultRelInfo->ri_PartitionRoot;
 
 				/*
 				 * If the tuple has been routed, it's been converted to the
@@ -1972,12 +1987,12 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				 * rowtype so that val_desc shown error message matches the
 				 * input tuple.
 				 */
-				if (resultRelInfo->ri_PartitionRoot)
+				if (rootRelInfo)
 				{
 					HeapTuple	tuple = ExecFetchSlotTuple(slot);
 					TupleConversionMap *map;
 
-					rel = resultRelInfo->ri_PartitionRoot;
+					rel = rootRelInfo->ri_RelationDesc;
 					tupdesc = RelationGetDescr(rel);
 					/* a reverse map */
 					map = convert_tuples_by_name(orig_tupdesc, tupdesc,
@@ -1988,10 +2003,15 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 						ExecSetSlotDescriptor(slot, tupdesc);
 						ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 					}
-				}
 
-				insertedCols = GetInsertedColumns(resultRelInfo, estate);
-				updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+					insertedCols = GetInsertedColumns(rootRelInfo, estate);
+					updatedCols = GetUpdatedColumns(rootRelInfo, estate);
+				}
+				else
+				{
+					insertedCols = GetInsertedColumns(resultRelInfo, estate);
+					updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+				}
 				modifiedCols = bms_union(insertedCols, updatedCols);
 				val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
 														 slot,
@@ -2017,15 +2037,16 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 		{
 			char	   *val_desc;
 			Relation	orig_rel = rel;
+			ResultRelInfo *rootRelInfo = resultRelInfo->ri_PartitionRoot;
 
 			/* See the comment above. */
-			if (resultRelInfo->ri_PartitionRoot)
+			if (rootRelInfo)
 			{
 				HeapTuple	tuple = ExecFetchSlotTuple(slot);
 				TupleDesc	old_tupdesc = RelationGetDescr(rel);
 				TupleConversionMap *map;
 
-				rel = resultRelInfo->ri_PartitionRoot;
+				rel = rootRelInfo->ri_RelationDesc;
 				tupdesc = RelationGetDescr(rel);
 				/* a reverse map */
 				map = convert_tuples_by_name(old_tupdesc, tupdesc,
@@ -2036,10 +2057,15 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 					ExecSetSlotDescriptor(slot, tupdesc);
 					ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 				}
-			}
 
-			insertedCols = GetInsertedColumns(resultRelInfo, estate);
-			updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+				insertedCols = GetInsertedColumns(rootRelInfo, estate);
+				updatedCols = GetUpdatedColumns(rootRelInfo, estate);
+			}
+			else
+			{
+				insertedCols = GetInsertedColumns(resultRelInfo, estate);
+				updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+			}
 			modifiedCols = bms_union(insertedCols, updatedCols);
 			val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
 													 slot,
@@ -2111,6 +2137,7 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 		 */
 		if (!ExecQual(wcoExpr, econtext))
 		{
+			ResultRelInfo *rootRelInfo = resultRelInfo->ri_PartitionRoot;
 			char	   *val_desc;
 			Bitmapset  *modifiedCols;
 			Bitmapset  *insertedCols;
@@ -2129,13 +2156,13 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 					 */
 				case WCO_VIEW_CHECK:
 					/* See the comment in ExecConstraints(). */
-					if (resultRelInfo->ri_PartitionRoot)
+					if (rootRelInfo)
 					{
 						HeapTuple	tuple = ExecFetchSlotTuple(slot);
 						TupleDesc	old_tupdesc = RelationGetDescr(rel);
 						TupleConversionMap *map;
 
-						rel = resultRelInfo->ri_PartitionRoot;
+						rel = rootRelInfo->ri_RelationDesc;
 						tupdesc = RelationGetDescr(rel);
 						/* a reverse map */
 						map = convert_tuples_by_name(old_tupdesc, tupdesc,
@@ -2146,10 +2173,15 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 							ExecSetSlotDescriptor(slot, tupdesc);
 							ExecStoreTuple(tuple, slot, InvalidBuffer, false);
 						}
-					}
 
-					insertedCols = GetInsertedColumns(resultRelInfo, estate);
-					updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+						insertedCols = GetInsertedColumns(rootRelInfo, estate);
+						updatedCols = GetUpdatedColumns(rootRelInfo, estate);
+					}
+					else
+					{
+						insertedCols = GetInsertedColumns(resultRelInfo, estate);
+						updatedCols = GetUpdatedColumns(resultRelInfo, estate);
+					}
 					modifiedCols = bms_union(insertedCols, updatedCols);
 					val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
 															 slot,

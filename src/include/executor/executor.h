@@ -181,7 +181,7 @@ extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
-				  Relation partition_root,
+				  ResultRelInfo *partition_root,
 				  int instrument_options);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecCleanUpTriggerState(EState *estate);

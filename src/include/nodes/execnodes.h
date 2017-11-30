@@ -404,14 +404,17 @@ typedef struct ResultRelInfo
 	/* list of ON CONFLICT DO UPDATE exprs (qual) */
 	ExprState  *ri_onConflictSetWhere;
 
+	/* root partitioned table */
+	struct ResultRelInfo *ri_PartitionRoot;
+
 	/* partition check expression */
 	List	   *ri_PartitionCheck;
 
 	/* partition check expression state */
 	ExprState  *ri_PartitionCheckExpr;
 
-	/* relation descriptor for root partitioned table */
-	Relation	ri_PartitionRoot;
+	/* true when partition is legal for tuple-routing */
+	bool		ri_PartitionIsValid;
 } ResultRelInfo;
 
 /* ----------------

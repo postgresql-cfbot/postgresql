@@ -204,6 +204,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_SCALAR_FIELD(canSetTag);
 	COPY_SCALAR_FIELD(nominalRelation);
 	COPY_NODE_FIELD(partitioned_rels);
+	COPY_NODE_FIELD(partition_rels);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_SCALAR_FIELD(resultRelIndex);
 	COPY_SCALAR_FIELD(rootResultRelIndex);
@@ -220,6 +221,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(onConflictWhere);
 	COPY_SCALAR_FIELD(exclRelRTI);
 	COPY_NODE_FIELD(exclRelTlist);
+	COPY_NODE_FIELD(fdwPartitionPrivLists);
 
 	return newnode;
 }

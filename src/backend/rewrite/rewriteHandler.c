@@ -2899,13 +2899,6 @@ rewriteTargetView(Query *parsetree, Relation view)
 	new_rt_index = list_length(parsetree->rtable);
 
 	/*
-	 * INSERTs never inherit.  For UPDATE/DELETE, we use the view query's
-	 * inheritance flag for the base relation.
-	 */
-	if (parsetree->commandType == CMD_INSERT)
-		new_rte->inh = false;
-
-	/*
 	 * Adjust the view's targetlist Vars to reference the new target RTE, ie
 	 * make their varnos be new_rt_index instead of base_rt_index.  There can
 	 * be no Vars for other rels in the tlist, so this is sufficient to pull

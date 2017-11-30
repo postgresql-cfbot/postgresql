@@ -1568,6 +1568,7 @@ _readModifyTable(void)
 	READ_BOOL_FIELD(canSetTag);
 	READ_UINT_FIELD(nominalRelation);
 	READ_NODE_FIELD(partitioned_rels);
+	READ_NODE_FIELD(partition_rels);
 	READ_NODE_FIELD(resultRelations);
 	READ_INT_FIELD(resultRelIndex);
 	READ_INT_FIELD(rootResultRelIndex);
@@ -1584,6 +1585,7 @@ _readModifyTable(void)
 	READ_NODE_FIELD(onConflictWhere);
 	READ_UINT_FIELD(exclRelRTI);
 	READ_NODE_FIELD(exclRelTlist);
+	READ_NODE_FIELD(fdwPartitionPrivLists);
 
 	READ_DONE();
 }

@@ -858,6 +858,10 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				{
 					lfirst_int(l) += rtoffset;
 				}
+				foreach(l, splan->partition_rels)
+				{
+					lfirst_int(l) += rtoffset;
+				}
 				foreach(l, splan->resultRelations)
 				{
 					lfirst_int(l) += rtoffset;

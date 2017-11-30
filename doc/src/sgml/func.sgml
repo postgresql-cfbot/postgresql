@@ -6166,11 +6166,25 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
        <function>to_timestamp</function> and <function>to_date</function>
        skip multiple blank spaces in the input string unless the
        <literal>FX</literal> option is used. For example,
-       <literal>to_timestamp('2000&nbsp;&nbsp;&nbsp;&nbsp;JUN', 'YYYY MON')</literal> works, but
+       <literal>to_timestamp('2000&nbsp;&nbsp;&nbsp;&nbsp;JUN', 'YYYY MON')</literal> and
+       <literal>to_timestamp('2000&nbsp;JUN', 'YYYY&nbsp;&nbsp;&nbsp;&nbsp;MON')</literal> work, but
        <literal>to_timestamp('2000&nbsp;&nbsp;&nbsp;&nbsp;JUN', 'FXYYYY MON')</literal> returns an error
        because <function>to_timestamp</function> expects one space only.
        <literal>FX</literal> must be specified as the first item in
        the template.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       <function>to_timestamp</function> and <function>to_date</function> don't
+       skip multiple printable non letter and non digit characters in the input
+       string, but skip them in the formatting string. For example,
+       <literal>to_timestamp('2000-JUN', 'YYYY/MON')</literal> and
+       <literal>to_timestamp('2000/JUN', 'YYYY//MON')</literal> work, but
+       <literal>to_timestamp('2000//JUN', 'YYYY/MON')</literal>
+       returns an error because count of the "/" character in the input string
+       doesn't match count of it in the formatting string.
       </para>
      </listitem>
 

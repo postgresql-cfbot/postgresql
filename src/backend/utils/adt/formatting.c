@@ -171,6 +171,8 @@ typedef struct
 #define NODE_TYPE_END		1
 #define NODE_TYPE_ACTION	2
 #define NODE_TYPE_CHAR		3
+#define NODE_TYPE_SEPARATOR	4
+#define NODE_TYPE_SPACE		5
 
 #define SUFFTYPE_PREFIX		1
 #define SUFFTYPE_POSTFIX	2
@@ -953,6 +955,7 @@ typedef struct NUMProc
 static const KeyWord *index_seq_search(const char *str, const KeyWord *kw,
 				 const int *index);
 static const KeySuffix *suff_search(const char *str, const KeySuffix *suf, int type);
+static bool is_separator_char(const char *str);
 static void NUMDesc_prepare(NUMDesc *num, FormatNode *n);
 static void parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 			 const KeySuffix *suf, const int *index, int ver, NUMDesc *Num);
@@ -969,7 +972,6 @@ static void dump_node(FormatNode *node, int max);
 static const char *get_th(char *num, int type);
 static char *str_numth(char *dest, char *num, int type);
 static int	adjust_partial_year_to_2020(int year);
-static int	strspace_len(char *str);
 static void from_char_set_mode(TmFromChar *tmfc, const FromCharDateMode mode);
 static void from_char_set_int(int *dest, const int value, const FormatNode *node);
 static int	from_char_parse_int_len(int *dest, char **src, const int len, FormatNode *node);
@@ -1040,6 +1042,16 @@ suff_search(const char *str, const KeySuffix *suf, int type)
 			return s;
 	}
 	return NULL;
+}
+
+static bool
+is_separator_char(const char *str)
+{
+	/* ASCII printable character, but not letter or digit */
+	return (*str > 0x20 && *str < 0x7F &&
+			!(*str >= 'A' && *str <= 'Z') &&
+			!(*str >= 'a' && *str <= 'z') &&
+			!(*str >= '0' && *str <= '9'));
 }
 
 /* ----------
@@ -1317,7 +1329,14 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 				if (*str == '\\' && *(str + 1) == '"')
 					str++;
 				chlen = pg_mblen(str);
-				n->type = NODE_TYPE_CHAR;
+
+				if (ver == DCH_TYPE && is_separator_char(str))
+					n->type = NODE_TYPE_SEPARATOR;
+				else if (isspace((unsigned char) *str))
+					n->type = NODE_TYPE_SPACE;
+				else
+					n->type = NODE_TYPE_CHAR;
+
 				memcpy(n->character, str, chlen);
 				n->character[chlen] = '\0';
 				n->key = NULL;
@@ -2115,19 +2134,6 @@ adjust_partial_year_to_2020(int year)
 }
 
 
-static int
-strspace_len(char *str)
-{
-	int			len = 0;
-
-	while (*str && isspace((unsigned char) *str))
-	{
-		str++;
-		len++;
-	}
-	return len;
-}
-
 /*
  * Set the date mode of a from-char conversion.
  *
@@ -2196,11 +2202,6 @@ from_char_parse_int_len(int *dest, char **src, const int len, FormatNode *node)
 	char		copy[DCH_MAX_ITEM_SIZ + 1];
 	char	   *init = *src;
 	int			used;
-
-	/*
-	 * Skip any whitespace before parsing the integer.
-	 */
-	*src += strspace_len(*src);
 
 	Assert(len <= DCH_MAX_ITEM_SIZ);
 	used = (int) strlcpy(copy, *src, len + 1);
@@ -2975,16 +2976,59 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 
 	for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++)
 	{
-		if (n->type != NODE_TYPE_ACTION)
+		if (n->type == NODE_TYPE_SPACE || n->type == NODE_TYPE_SEPARATOR)
 		{
 			/*
-			 * Separator, so consume one character from input string.  Notice
-			 * we don't insist that the consumed character match the format's
-			 * character.
+			 * In non FX (fixed format) mode we don't insist that the consumed
+			 * character matches the format's character.
+			 */
+			if (!fx_mode)
+			{
+				if (isspace((unsigned char) *s) || is_separator_char(s))
+					s++;
+
+				continue;
+			}
+
+			/*
+			 * In FX mode we insist that whitespace from the format string
+			 * matches whitespace from the input string.
+			 */
+			if (n->type == NODE_TYPE_SPACE && !isspace((unsigned char) *s))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%.*s\", expected \"%s\"",
+								pg_mblen(s), s, n->character),
+						 errhint("In FX mode, punctuation in the input string "
+								 "must exactly match the format string.")));
+			/*
+			 * In FX mode we insist that separator character from the format
+			 * string matches separator character from the input string.
+			 */
+			else if (n->type == NODE_TYPE_SEPARATOR && *n->character != *s)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%.*s\", expected \"%s\"",
+								pg_mblen(s), s, n->character),
+						 errhint("In FX mode, punctuation in the input string "
+								 "must exactly match the format string.")));
+
+			s++;
+			continue;
+		}
+		else if (n->type == NODE_TYPE_CHAR)
+		{
+			/*
+			 * Text character, so consume one character from input string.
+			 * Notice we don't insist that the consumed character match the
+			 * format's character.
+			 * Text field ignores FX mode.
 			 */
 			s += pg_mblen(s);
 			continue;
 		}
+
+		/* n->type == NODE_TYPE_ACTION */
 
 		/* Ignore spaces before fields when not in FX (fixed width) mode */
 		if (!fx_mode && n->key->id != DCH_FX)
@@ -2992,6 +3036,31 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 			while (*s != '\0' && isspace((unsigned char) *s))
 				s++;
 		}
+
+		if (!fx_mode)
+		{
+			/*
+			 * Lost separator character from the input string. Separator
+			 * character should match at least one space or separator character
+			 * from the format string.
+			 */
+			if (is_separator_char(s))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%c\"", *s),
+						 errhint("Separator character from the input string "
+								 "must match at least one space or separator "
+								 "character from the format string.")));
+		}
+		/*
+		 * In FX mode we don't expect a whitespace or a character.
+		 */
+		else if (isspace((unsigned char) *s) || is_separator_char(s))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+					 errmsg("unexpected character \"%c\"", *s),
+					 errhint("In FX mode, punctuation in the input string "
+							 "must exactly match the format string.")));
 
 		from_char_set_mode(out, n->key->date_mode);
 
@@ -3231,6 +3300,13 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 				from_char_parse_int(&out->j, &s, n);
 				SKIP_THth(s, n->suffix);
 				break;
+		}
+
+		/* Ignore all spaces after fields */
+		if (!fx_mode)
+		{
+			while (*s != '\0' && isspace((unsigned char) *s))
+				s++;
 		}
 	}
 }

@@ -480,6 +480,7 @@ typedef enum NodeTag
 	T_DropReplicationSlotCmd,
 	T_StartReplicationCmd,
 	T_TimeLineHistoryCmd,
+	T_WaitLSNStmt,
 	T_SQLCmd,
 
 	/*

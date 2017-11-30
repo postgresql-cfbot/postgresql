@@ -83,7 +83,9 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_na
       Currently supported kinds are
       <literal>ndistinct</literal>, which enables n-distinct statistics, and
       <literal>dependencies</literal>, which enables functional
-      dependency statistics.
+      dependency statistics, and <literal>mcv</literal> which enables
+      most-common values lists, and <literal>histogram</literal> which
+      enables histograms.
       If this clause is omitted, all supported statistics kinds are
       included in the statistics object.
       For more information, see <xref linkend="planner-stats-extended"/>
@@ -162,6 +164,57 @@ EXPLAIN ANALYZE SELECT * FROM t1 WHERE (a = 1) AND (b = 0);
    row count estimate.
    With such statistics, the planner recognizes that the <literal>WHERE</literal>
    conditions are redundant and does not underestimate the rowcount.
+  </para>
+
+  <para>
+   Create table <structname>t2</> with two perfectly correlated columns
+   (containing identical data), and a MCV list on those columns:
+
+<programlisting>
+CREATE TABLE t2 (
+    a   int,
+    b   int
+);
+
+INSERT INTO t2 SELECT mod(i,100), mod(i,100)
+                 FROM generate_series(1,1000000) s(i);
+
+CREATE STATISTICS s2 WITH (mcv) ON (a, b) FROM t2;
+
+ANALYZE t2;
+
+-- valid combination (found in MCV)
+EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 1);
+
+-- invalid combination (not found in MCV)
+EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 2);
+</programlisting>
+  </para>
+
+  <para>
+   Create table <structname>t3</> with two strongly correlated columns, and
+   a histogram on those two columns:
+
+<programlisting>
+CREATE TABLE t3 (
+    a   float,
+    b   float
+);
+
+INSERT INTO t3 SELECT mod(i,1000), mod(i,1000) + 50 * (r - 0.5) FROM (
+                   SELECT i, random() r FROM generate_series(1,1000000) s(i)
+                 ) foo;
+
+CREATE STATISTICS s3 WITH (histogram) ON (a, b) FROM t3;
+
+ANALYZE t3;
+
+-- small overlap
+EXPLAIN ANALYZE SELECT * FROM t3 WHERE (a < 500) AND (b > 500);
+
+-- no overlap
+EXPLAIN ANALYZE SELECT * FROM t3 WHERE (a < 400) AND (b > 600);
+</programlisting>
   </para>
 
  </refsect1>

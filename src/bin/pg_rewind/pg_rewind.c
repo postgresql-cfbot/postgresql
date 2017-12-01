@@ -27,6 +27,7 @@
 #include "common/restricted_token.h"
 #include "getopt_long.h"
 #include "storage/bufpage.h"
+#include "access/xlog_internal.h"
 
 static void usage(const char *progname);
 
@@ -58,6 +59,10 @@ bool		dry_run = false;
 /* Target history */
 TimeLineHistoryEntry *targetHistory;
 int			targetNentries;
+
+/* WAL location */
+XLogSegNo	divergence_segno;
+XLogSegNo	last_source_segno;
 
 static void
 usage(const char *progname)
@@ -279,6 +284,28 @@ main(int argc, char **argv)
 	printf(_("rewinding from last common checkpoint at %X/%X on timeline %u\n"),
 		   (uint32) (chkptrec >> 32), (uint32) chkptrec,
 		   chkpttli);
+
+	/*
+	 * Save the WAL segment numbers of the divergence and the current WAL insert
+	 * location of the source server. Later only the WAL files between those
+	 * would be copied to the target data directory.
+	 * 
+	 * Note: The later generated WAL files in the source server before the end
+	 * of the copy of the data files must be made available when the target
+	 * server is started. This can be done by configuring the target server as
+	 * a standby of the source server.
+	 */
+	if (connstr_source)
+	{
+		endrec = libpqGetCurrentXlogInsertLocation();
+	}
+	else
+	{
+		endrec = ControlFile_source.checkPoint;
+	}
+
+	XLByteToSeg(divergerec, divergence_segno, WalSegSz);
+	XLByteToPrevSeg(endrec, last_source_segno, WalSegSz);
 
 	/*
 	 * Build the filemap, by comparing the source and target data directories.

@@ -21,6 +21,7 @@
 #include "common/string.h"
 #include "catalog/pg_tablespace.h"
 #include "storage/fd.h"
+#include "access/xlog_internal.h"
 
 filemap_t  *filemap = NULL;
 
@@ -67,6 +68,8 @@ process_source_file(const char *path, file_type_t type, size_t newsize,
 	file_action_t action = FILE_ACTION_NONE;
 	size_t		oldsize = 0;
 	file_entry_t *entry;
+	uint32		tli;
+	XLogSegNo	segno;
 
 	Assert(map->array == NULL);
 
@@ -168,11 +171,30 @@ process_source_file(const char *path, file_type_t type, size_t newsize,
 				 *
 				 * An exception: PG_VERSIONs should be identical, but avoid
 				 * overwriting it for paranoia.
+				 *
+				 * Another exception: Do not copy WAL files before the
+				 * divergence and the WAL files after the current WAL insert
+				 * location of the source server for performance reasons.
 				 */
 				if (pg_str_endswith(path, "PG_VERSION"))
 				{
 					action = FILE_ACTION_NONE;
 					oldsize = statbuf.st_size;
+				}
+				else if (strncmp(path, XLOGDIR "/", strlen(XLOGDIR "/")) == 0 &&
+						 IsXLogFileName(path + strlen(XLOGDIR "/")))
+				{
+					XLogFromFileName(path + strlen(XLOGDIR "/"), &tli, &segno, WalSegSz);
+					if (segno >= divergence_segno && segno <= last_source_segno)
+					{
+						action = FILE_ACTION_COPY;
+						oldsize = 0;
+					}
+					else
+					{
+						action = FILE_ACTION_NONE;
+						oldsize = exists ? statbuf.st_size : 0;
+					}
 				}
 				else
 				{
@@ -258,6 +280,9 @@ process_target_file(const char *path, file_type_t type, size_t oldsize,
 	file_entry_t *key_ptr;
 	filemap_t  *map = filemap;
 	file_entry_t *entry;
+	bool		reserve = false;
+	uint32		tli;
+	XLogSegNo	segno;
 
 	snprintf(localpath, sizeof(localpath), "%s/%s", datadir_target, path);
 	if (lstat(localpath, &statbuf) < 0)
@@ -303,8 +328,19 @@ process_target_file(const char *path, file_type_t type, size_t oldsize,
 	exists = (bsearch(&key_ptr, map->array, map->narray, sizeof(file_entry_t *),
 					  path_cmp) != NULL);
 
-	/* Remove any file or folder that doesn't exist in the source system. */
-	if (!exists)
+	if(strncmp(path, XLOGDIR "/", strlen(XLOGDIR "/")) == 0 &&
+		IsXLogFileName(path + strlen(XLOGDIR "/")))
+	{
+		XLogFromFileName(path + strlen(XLOGDIR "/"), &tli, &segno, WalSegSz);
+		if(segno < divergence_segno)
+			reserve = true;
+	}
+
+	/*
+	 * Remove any file or folder that doesn't exist in the source system
+	 * except the WAL files before the divergence.
+	 */
+	if (!exists && !reserve)
 	{
 		entry = pg_malloc(sizeof(file_entry_t));
 		entry->path = pg_strdup(path);

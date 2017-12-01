@@ -10638,8 +10638,14 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	{
 		WALInsertLockAcquireExclusive();
 		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
-		WALInsertLockRelease();
+
+		/*
+		 * Set session-level lock. To avoid calling CHECK_FOR_INTERRUPTS by
+		 * LWLockReleaseClearVar before changing the backup state we change
+		 * it while holding the WAL insert lock.
+		 */
 		sessionBackupState = SESSION_BACKUP_EXCLUSIVE;
+		WALInsertLockRelease();
 	}
 	else
 		sessionBackupState = SESSION_BACKUP_NON_EXCLUSIVE;
@@ -10867,10 +10873,17 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
 	}
-	WALInsertLockRelease();
 
-	/* Clean up session-level lock */
+	/*
+	 * Clean up session-level lock. To avoid calling CHECK_FOR_INTERRUPTS by
+	 * LWLockReleaseClearVar before changing the backup state we change it
+	 * while holding the WAL insert lock as this allows to keep backup counters
+	 * kept in shared memory consistent with the state of the session starting
+	 * or stopping a backup.
+	 */
 	sessionBackupState = SESSION_BACKUP_NONE;
+
+	WALInsertLockRelease();
 
 	/*
 	 * Read and parse the START WAL LOCATION line (this code is pretty crude,
@@ -11109,8 +11122,16 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 void
 do_pg_abort_backup(void)
 {
+	/*
+	 * Quick exit if session is not keeping around a non-exclusive backup
+	 * already started.
+	 */
+	if (sessionBackupState == SESSION_BACKUP_NONE)
+		return;
+
 	WALInsertLockAcquireExclusive();
 	Assert(XLogCtl->Insert.nonExclusiveBackups > 0);
+	Assert(sessionBackupState == SESSION_BACKUP_NON_EXCLUSIVE);
 	XLogCtl->Insert.nonExclusiveBackups--;
 
 	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&

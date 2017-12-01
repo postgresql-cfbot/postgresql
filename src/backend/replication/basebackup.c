@@ -214,8 +214,8 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 	/*
 	 * Once do_pg_start_backup has been called, ensure that any failure causes
 	 * us to abort the backup so we don't "leak" a backup counter. For this
-	 * reason, *all* functionality between do_pg_start_backup() and
-	 * do_pg_stop_backup() should be inside the error cleanup block!
+	 * reason, *all* functionality between do_pg_start_backup() until
+	 * do_pg_stop_backup() is done should be inside the error cleanup block!
 	 */
 
 	PG_ENSURE_ERROR_CLEANUP(base_backup_cleanup, (Datum) 0);
@@ -324,10 +324,16 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 			else
 				pq_putemptymessage('c');	/* CopyDone */
 		}
+
+		/*
+		 * Finish the backup while still holding the cleanup callback to
+		 * avoid inconsistent in-memory data should the this call fail
+		 * before sessionBackupState is updated.
+		 */
+		endptr = do_pg_stop_backup(labelfile->data, !opt->nowait, &endtli);
 	}
 	PG_END_ENSURE_ERROR_CLEANUP(base_backup_cleanup, (Datum) 0);
 
-	endptr = do_pg_stop_backup(labelfile->data, !opt->nowait, &endtli);
 
 	if (opt->includewal)
 	{

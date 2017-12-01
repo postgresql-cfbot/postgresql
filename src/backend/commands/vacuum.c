@@ -1330,6 +1330,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	bool		rel_lock;
 
 	Assert(params != NULL);
 
@@ -1393,6 +1394,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	 * If we've been asked not to wait for the relation lock, acquire it first
 	 * in non-blocking mode, before calling try_relation_open().
 	 */
+	rel_lock = true;
 	if (!(options & VACOPT_NOWAIT))
 		onerel = try_relation_open(relid, lmode);
 	else if (ConditionalLockRelationOid(relid, lmode))
@@ -1400,16 +1402,58 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	else
 	{
 		onerel = NULL;
-		if (relation &&
-			IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
-			ereport(LOG,
+		rel_lock = false;
+	}
+
+	/*
+	 * If we failed to open or lock the relation, emit a log message before
+	 * exiting.
+	 */
+	if (!onerel)
+	{
+		int elevel;
+
+		/*
+		 * If the RangeVar is not defined, we do not have enough
+		 * information to provide a meaningful log statement.  Chances
+		 * are that vacuum_rel's caller has intentionally not provided
+		 * this information so that this logging is skipped, anyway.
+		 */
+		if (relation == NULL)
+		{
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			return false;
+		}
+
+		/*
+		 * Determine the log level.  For autovacuum logs, we emit a LOG
+		 * if log_autovacuum_min_duration is not disabled.  For manual
+		 * VACUUM, we emit a WARNING to match the log statements in the
+		 * permissions checks.
+		 */
+		if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
+			elevel = LOG;
+		else if (!IsAutoVacuumWorkerProcess())
+			elevel = WARNING;
+		else
+		{
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			return false;
+		}
+
+		if (!rel_lock)
+			ereport(elevel,
 					(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 					 errmsg("skipping vacuum of \"%s\" --- lock not available",
 							relation->relname)));
-	}
+		else
+			ereport(elevel,
+					(errcode(ERRCODE_UNDEFINED_TABLE),
+					 errmsg("skipping vacuum of \"%s\" --- relation no longer exists",
+							relation->relname)));
 
-	if (!onerel)
-	{
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		return false;

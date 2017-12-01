@@ -369,6 +369,7 @@ static void
 print_unaligned_text(const printTableContent *cont, FILE *fout)
 {
 	bool		opt_tuples_only = cont->opt->tuples_only;
+	bool		opt_force_column_header = cont->opt->force_column_header;
 	unsigned int i;
 	const char *const *ptr;
 	bool		need_recordsep = false;
@@ -386,7 +387,7 @@ print_unaligned_text(const printTableContent *cont, FILE *fout)
 		}
 
 		/* print headers */
-		if (!opt_tuples_only)
+		if (!opt_tuples_only || opt_force_column_header)
 		{
 			for (ptr = cont->headers; *ptr; ptr++)
 			{

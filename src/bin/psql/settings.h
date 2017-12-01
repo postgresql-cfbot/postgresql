@@ -92,6 +92,8 @@ typedef struct _psqlSettings
 
 	char	   *gfname;			/* one-shot file output argument for \g */
 	bool		g_expanded;		/* one-shot expanded output requested via \gx */
+	bool		g_raw;			/* one-shot raw format for \graw */
+	bool		g_raw_header;	/* one-shot show header for \graw+ */
 	char	   *gset_prefix;	/* one-shot prefix argument for \gset */
 	bool		gdesc_flag;		/* one-shot request to describe query results */
 	bool		gexec_flag;		/* one-shot request to execute query results */

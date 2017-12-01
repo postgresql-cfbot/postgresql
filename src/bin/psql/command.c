@@ -332,7 +332,8 @@ exec_command(const char *cmd,
 		status = exec_command_errverbose(scan_state, active_branch);
 	else if (strcmp(cmd, "f") == 0)
 		status = exec_command_f(scan_state, active_branch);
-	else if (strcmp(cmd, "g") == 0 || strcmp(cmd, "gx") == 0)
+	else if (strcmp(cmd, "g") == 0 || strcmp(cmd, "gx") == 0 ||
+			 strcmp(cmd, "graw") == 0 || strcmp(cmd, "graw+") == 0)
 		status = exec_command_g(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "gdesc") == 0)
 		status = exec_command_gdesc(scan_state, active_branch);
@@ -1232,6 +1233,7 @@ exec_command_f(PsqlScanState scan_state, bool active_branch)
 
 /*
  * \g [filename] -- send query, optionally with output to file/pipe
+ * \graw [filename] -- same as \g with raw format
  * \gx [filename] -- same as \g, with expanded mode forced
  */
 static backslashResult
@@ -1254,6 +1256,10 @@ exec_command_g(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		free(fname);
 		if (strcmp(cmd, "gx") == 0)
 			pset.g_expanded = true;
+		else if (strcmp(cmd, "graw") == 0)
+			pset.g_raw = true;
+		else if (strcmp(cmd, "graw+") == 0)
+			pset.g_raw_header = true;
 		status = PSQL_CMD_SEND;
 	}
 	else

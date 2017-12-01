@@ -688,3 +688,8 @@ select 1/(15-unique2) from tenk1 order by unique2 limit 19;
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 
 \unset FETCH_COUNT
+
+-- \graw
+\pset fieldsep ,
+SELECT 1 AS a, 2 AS b \graw
+SELECT 1 AS a, 2 AS b \graw+

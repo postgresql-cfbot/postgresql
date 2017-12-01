@@ -3243,3 +3243,10 @@ last error message: division by zero
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 last error code: 22012
 \unset FETCH_COUNT
+-- \graw
+\pset fieldsep ,
+SELECT 1 AS a, 2 AS b \graw
+1,2
+SELECT 1 AS a, 2 AS b \graw+
+a,b
+1,2

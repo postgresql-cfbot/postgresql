@@ -63,7 +63,7 @@
 
 slock_t		dummy_spinlock;
 
-static int	spins_per_delay = DEFAULT_SPINS_PER_DELAY;
+int			spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 
 
 /*
@@ -93,11 +93,11 @@ s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 {
 	SpinDelayStatus delayStatus;
 
-	init_spin_delay(&delayStatus, file, line, func);
+	init_spin_delay(&delayStatus);
 
 	while (TAS_SPIN(lock))
 	{
-		perform_spin_delay(&delayStatus);
+		perform_spin_delay_with_info(&delayStatus, file, line, func);
 	}
 
 	finish_spin_delay(&delayStatus);
@@ -122,7 +122,8 @@ s_unlock(volatile slock_t *lock)
  * Wait while spinning on a contended spinlock.
  */
 void
-perform_spin_delay(SpinDelayStatus *status)
+perform_spin_delay_with_info(SpinDelayStatus *status,
+							 const char *file, int line, const char *func)
 {
 	/* CPU-specific delay each time through the loop */
 	SPIN_DELAY();
@@ -131,7 +132,7 @@ perform_spin_delay(SpinDelayStatus *status)
 	if (++(status->spins) >= spins_per_delay)
 	{
 		if (++(status->delays) > NUM_DELAYS)
-			s_lock_stuck(status->file, status->line, status->func);
+			s_lock_stuck(file, line, func);
 
 		if (status->cur_delay == 0) /* first time to delay? */
 			status->cur_delay = MIN_DELAY_USEC;
@@ -177,6 +178,11 @@ finish_spin_delay(SpinDelayStatus *status)
 	if (status->cur_delay == 0)
 	{
 		/* we never had to delay */
+		if (status->spins == 0)
+		{
+			/* but we didn't spin either, so ignore */
+			return;
+		}
 		if (spins_per_delay < MAX_SPINS_PER_DELAY)
 			spins_per_delay = Min(spins_per_delay + 100, MAX_SPINS_PER_DELAY);
 	}

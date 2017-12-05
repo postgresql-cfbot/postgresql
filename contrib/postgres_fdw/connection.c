@@ -75,7 +75,7 @@ static bool xact_got_connection = false;
 /* prototypes of private functions */
 static PGconn *connect_pg_server(ForeignServer *server, UserMapping *user);
 static void disconnect_pg_server(ConnCacheEntry *entry);
-static void check_conn_params(const char **keywords, const char **values, UserMapping *user);
+static void check_conn_params(const char **keywords, const char **values);
 static void configure_remote_session(PGconn *conn);
 static void do_sql_command(PGconn *conn, const char *sql);
 static void begin_remote_xact(ConnCacheEntry *entry);
@@ -261,7 +261,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 		keywords[n] = values[n] = NULL;
 
 		/* verify connection parameters and make connection */
-		check_conn_params(keywords, values, user);
+		check_conn_params(keywords, values);
 
 		conn = PQconnectdbParams(keywords, values, false);
 		if (!conn || PQstatus(conn) != CONNECTION_OK)
@@ -276,7 +276,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 		 * otherwise, he's piggybacking on the postgres server's user
 		 * identity. See also dblink_security_check() in contrib/dblink.
 		 */
-		if (!superuser_arg(user->userid) && !PQconnectionUsedPassword(conn))
+		if (!superuser() && !PQconnectionUsedPassword(conn))
 			ereport(ERROR,
 					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
 					 errmsg("password is required"),
@@ -322,12 +322,12 @@ disconnect_pg_server(ConnCacheEntry *entry)
  * contrib/dblink.)
  */
 static void
-check_conn_params(const char **keywords, const char **values, UserMapping *user)
+check_conn_params(const char **keywords, const char **values)
 {
 	int			i;
 
 	/* no check required if superuser */
-	if (superuser_arg(user->userid))
+	if (superuser())
 		return;
 
 	/* ok if params contain a non-empty password */

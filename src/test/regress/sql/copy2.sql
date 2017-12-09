@@ -411,6 +411,22 @@ test1
 
 SELECT * FROM instead_of_insert_tbl;
 
+-- test with IDENTITY columns
+CREATE TABLE copy_tab_identity (a int GENERATED ALWAYS AS IDENTITY,
+  b text, c bigint);
+COPY copy_tab_identity FROM stdin;
+100	foo	200
+101	bar	201
+\.
+
+COPY copy_tab_identity (b, c) FROM stdin;
+foo2	202
+bar2	203
+\.
+
+SELECT * FROM copy_tab_identity;
+
+DROP TABLE copy_tab_identity;
 
 -- clean up
 DROP TABLE forcetest;

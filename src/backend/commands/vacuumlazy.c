@@ -54,6 +54,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
+#include "storage/extension_lock.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "utils/lsyscache.h"
@@ -862,8 +863,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * it's got exclusive lock on the whole relation.
 			 */
 			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
-			LockRelationForExtension(onerel, ExclusiveLock);
-			UnlockRelationForExtension(onerel, ExclusiveLock);
+			WaitForRelationExtensionLockToBeFree(onerel);
 			LockBufferForCleanup(buf);
 			if (PageIsNew(page))
 			{

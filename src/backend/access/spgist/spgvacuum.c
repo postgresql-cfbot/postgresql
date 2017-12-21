@@ -24,6 +24,7 @@
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/extension_lock.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
@@ -824,10 +825,10 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	{
 		/* Get the current relation length */
 		if (needLock)
-			LockRelationForExtension(index, ExclusiveLock);
+			LockRelationForExtension(index);
 		num_pages = RelationGetNumberOfBlocks(index);
 		if (needLock)
-			UnlockRelationForExtension(index, ExclusiveLock);
+			UnlockRelationForExtension(index);
 
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= num_pages)

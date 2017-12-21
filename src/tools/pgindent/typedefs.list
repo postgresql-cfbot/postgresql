@@ -1834,6 +1834,8 @@ RegisNode
 RegisteredBgWorker
 ReindexObjectType
 ReindexStmt
+RelExtLock
+RelExtLockTag
 RelFileNode
 RelFileNodeBackend
 RelIdCacheEnt
@@ -2958,6 +2960,7 @@ registered_buffer
 regmatch_t
 regoff_t
 regproc
+relextlock_handle
 relopt_bool
 relopt_gen
 relopt_int

@@ -35,6 +35,7 @@
 #include "replication/origin.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
+#include "storage/extension_lock.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
@@ -133,6 +134,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, BackgroundWorkerShmemSize());
 		size = add_size(size, MultiXactShmemSize());
 		size = add_size(size, LWLockShmemSize());
+		size = add_size(size, RelExtLockShmemSize());
 		size = add_size(size, ProcArrayShmemSize());
 		size = add_size(size, BackendStatusShmemSize());
 		size = add_size(size, SInvalShmemSize());
@@ -233,6 +235,11 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	 * Set up predicate lock manager
 	 */
 	InitPredicateLocks();
+
+	/*
+	 * Set up relation extension lock manager
+	 */
+	InitRelExtLocks();
 
 	/*
 	 * Set up process table

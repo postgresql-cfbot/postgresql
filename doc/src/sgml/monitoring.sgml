@@ -669,8 +669,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
           Heavyweight locks, also known as lock manager locks or simply locks,
           primarily protect SQL-visible objects such as tables.  However,
           they are also used to ensure mutual exclusion for certain internal
-          operations such as relation extension.  <literal>wait_event</literal> will
-          identify the type of lock awaited.
+          operations such as waiting for a transaction to finish.
+          <literal>wait_event</literal> will identify the type of lock awaited.
          </para>
         </listitem>
         <listitem>
@@ -1122,13 +1122,9 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          execution.</entry>
         </row>
         <row>
-         <entry morerows="9"><literal>Lock</literal></entry>
+         <entry morerows="8"><literal>Lock</literal></entry>
          <entry><literal>relation</literal></entry>
          <entry>Waiting to acquire a lock on a relation.</entry>
-        </row>
-        <row>
-         <entry><literal>extend</literal></entry>
-         <entry>Waiting to extend a relation.</entry>
         </row>
         <row>
          <entry><literal>page</literal></entry>
@@ -1263,7 +1259,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <entry>Waiting in an extension.</entry>
         </row>
         <row>
-         <entry morerows="17"><literal>IPC</literal></entry>
+         <entry morerows="18"><literal>IPC</literal></entry>
          <entry><literal>BgWorkerShutdown</literal></entry>
          <entry>Waiting for background worker to shut down.</entry>
         </row>
@@ -1318,6 +1314,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
         <row>
          <entry><literal>ClogGroupUpdate</literal></entry>
          <entry>Waiting for group leader to update transaction status at transaction end.</entry>
+        </row>
+        <row>
+         <entry><literal>RelationExtensionLock</literal></entry>
+         <entry>Waiting to extend a relation.</entry>
         </row>
         <row>
          <entry><literal>ReplicationOriginDrop</literal></entry>

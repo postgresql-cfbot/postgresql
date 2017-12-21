@@ -3616,6 +3616,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_CLOG_GROUP_UPDATE:
 			event_name = "ClogGroupUpdate";
 			break;
+		case WAIT_EVENT_RELATION_EXTENSION_LOCK:
+			event_name = "RelationExtensionLock";
+			break;
 		case WAIT_EVENT_REPLICATION_ORIGIN_DROP:
 			event_name = "ReplicationOriginDrop";
 			break;

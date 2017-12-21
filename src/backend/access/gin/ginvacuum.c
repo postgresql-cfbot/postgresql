@@ -20,6 +20,7 @@
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
+#include "storage/extension_lock.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/memutils.h"
@@ -716,10 +717,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	needLock = !RELATION_IS_LOCAL(index);
 
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index);
 	npages = RelationGetNumberOfBlocks(index);
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	totFreePages = 0;
 
@@ -766,10 +767,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	stats->pages_free = totFreePages;
 
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index);
 	stats->num_pages = RelationGetNumberOfBlocks(index);
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	return stats;
 }

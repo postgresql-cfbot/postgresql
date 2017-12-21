@@ -20,6 +20,7 @@
 #include "access/htup_details.h"
 #include "access/visibilitymap.h"
 #include "storage/bufmgr.h"
+#include "storage/extension_lock.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
@@ -186,7 +187,7 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 	Buffer		buffer;
 
 	/* Use the length of the lock wait queue to judge how much to extend. */
-	lockWaiters = RelationExtensionLockWaiterCount(relation);
+	lockWaiters = EstimateNumberOfExtensionLockWaiters(relation);
 	if (lockWaiters <= 0)
 		return;
 
@@ -519,11 +520,11 @@ loop:
 	if (needLock)
 	{
 		if (!use_fsm)
-			LockRelationForExtension(relation, ExclusiveLock);
-		else if (!ConditionalLockRelationForExtension(relation, ExclusiveLock))
+			LockRelationForExtension(relation);
+		else if (!ConditionalLockRelationForExtension(relation))
 		{
 			/* Couldn't get the lock immediately; wait for it. */
-			LockRelationForExtension(relation, ExclusiveLock);
+			LockRelationForExtension(relation);
 
 			/*
 			 * Check if some other backend has extended a block for us while
@@ -537,7 +538,7 @@ loop:
 			 */
 			if (targetBlock != InvalidBlockNumber)
 			{
-				UnlockRelationForExtension(relation, ExclusiveLock);
+				UnlockRelationForExtension(relation);
 				goto loop;
 			}
 
@@ -576,7 +577,7 @@ loop:
 	 * against vacuumlazy.c --- see comments therein.
 	 */
 	if (needLock)
-		UnlockRelationForExtension(relation, ExclusiveLock);
+		UnlockRelationForExtension(relation);
 
 	/*
 	 * We need to initialize the empty new page.  Double-check that it really

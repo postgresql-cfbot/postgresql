@@ -119,8 +119,7 @@ typedef struct SpGistState
 {
 	spgConfigOut config;		/* filled in by opclass config method */
 
-	SpGistTypeDesc attType;		/* type of values to be indexed/restored */
-	SpGistTypeDesc attLeafType;		/* type of leaf-tuple values */
+	SpGistTypeDesc attType;		/* type of input data and leaf values */
 	SpGistTypeDesc attPrefixType;	/* type of inner-tuple prefix values */
 	SpGistTypeDesc attLabelType;	/* type of node label values */
 
@@ -179,8 +178,7 @@ typedef struct SpGistCache
 {
 	spgConfigOut config;		/* filled in by opclass config method */
 
-	SpGistTypeDesc attType;		/* type of values to be indexed/restored */
-	SpGistTypeDesc attLeafType;		/* type of leaf-tuple values */
+	SpGistTypeDesc attType;		/* type of input data and leaf values */
 	SpGistTypeDesc attPrefixType;	/* type of inner-tuple prefix values */
 	SpGistTypeDesc attLabelType;	/* type of node label values */
 
@@ -302,7 +300,7 @@ typedef SpGistLeafTupleData *SpGistLeafTuple;
 
 #define SGLTHDRSZ			MAXALIGN(sizeof(SpGistLeafTupleData))
 #define SGLTDATAPTR(x)		(((char *) (x)) + SGLTHDRSZ)
-#define SGLTDATUM(x, s)		((s)->attLeafType.attbyval ? \
+#define SGLTDATUM(x, s)		((s)->attType.attbyval ? \
 							 *(Datum *) SGLTDATAPTR(x) : \
 							 PointerGetDatum(SGLTDATAPTR(x)))
 

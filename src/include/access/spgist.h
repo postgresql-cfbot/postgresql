@@ -30,9 +30,7 @@
 #define SPGIST_PICKSPLIT_PROC			3
 #define SPGIST_INNER_CONSISTENT_PROC	4
 #define SPGIST_LEAF_CONSISTENT_PROC		5
-#define SPGIST_COMPRESS_PROC			6
-#define SPGISTNRequiredProc				5
-#define SPGISTNProc						6
+#define SPGISTNProc						5
 
 /*
  * Argument structs for spg_config method
@@ -46,7 +44,6 @@ typedef struct spgConfigOut
 {
 	Oid			prefixType;		/* Data type of inner-tuple prefixes */
 	Oid			labelType;		/* Data type of inner-tuple node labels */
-	Oid			leafType;		/* Data type of leaf-tuple values */
 	bool		canReturnData;	/* Opclass can reconstruct original data */
 	bool		longValuesOK;	/* Opclass can cope with values > 1 page */
 } spgConfigOut;

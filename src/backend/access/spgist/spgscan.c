@@ -40,7 +40,7 @@ typedef struct ScanStackEntry
 static void
 freeScanStackEntry(SpGistScanOpaque so, ScanStackEntry *stackEntry)
 {
-	if (!so->state.attLeafType.attbyval &&
+	if (!so->state.attType.attbyval &&
 		DatumGetPointer(stackEntry->reconstructedValue) != NULL)
 		pfree(DatumGetPointer(stackEntry->reconstructedValue));
 	if (stackEntry->traversalValue)
@@ -527,8 +527,8 @@ redirect:
 					if (out.reconstructedValues)
 						newEntry->reconstructedValue =
 							datumCopy(out.reconstructedValues[i],
-									  so->state.attLeafType.attbyval,
-									  so->state.attLeafType.attlen);
+									  so->state.attType.attbyval,
+									  so->state.attType.attlen);
 					else
 						newEntry->reconstructedValue = (Datum) 0;
 

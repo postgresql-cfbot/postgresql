@@ -911,6 +911,64 @@ getZipfianRand(TState *thread, int64 min, int64 max, double s)
 					  : computeHarmonicZipfian(thread, n, s));
 }
 
+/* Position of the most significant bit */
+static int64
+ffs_i64(int64 i)
+{
+	int64 bits = 0;
+
+	if (i < 0)
+		i = -i;
+	while (i)
+	{
+		i>>=1;
+		bits++;
+	}
+
+	return bits;
+}
+
+/* Heuristic to check for ipow overflow */
+static bool
+ipow_check_overflow(int64 base, int64 exp)
+{
+	int64 msb_base,
+			msb_base_sqr;
+
+	Assert(exp >= 0);
+	if (base == 0 || base == 1 || base == -1 || exp <= 1)
+		return false;
+
+	msb_base = ffs_i64(base);
+	if (msb_base >= 32)
+		return true;
+
+	msb_base_sqr = ffs_i64(base * base);
+	if (msb_base_sqr <= msb_base)
+		return true;
+
+	return (msb_base + (msb_base_sqr - msb_base) * (exp -1)) > 63;
+}
+
+/* Faster power function for integer values with exp >= 0 */
+static int64
+ipow(int64 base, int64 exp)
+{
+	int64 result = 1;
+
+	Assert(exp >= 0);
+
+	while (exp)
+	{
+		if (exp & 1)
+			result *= base;
+		exp >>= 1;
+		base *= base;
+	}
+
+	return result;
+}
+
 /*
  * Initialize the given SimpleStats struct to all zeroes
  */
@@ -1847,6 +1905,64 @@ evalFunc(TState *thread, CState *st,
 					}
 				}
 
+				return true;
+			}
+
+		case PGBENCH_POW:
+			{
+				PgBenchValue *lval = &vargs[0];
+				PgBenchValue *rval = &vargs[1];
+
+				Assert(nargs == 2);
+
+				if (!coerceToDouble(lval, &ld) ||
+					!coerceToDouble(rval, &rd))
+					return false;
+
+				setDoubleValue(retval, pow(ld, rd));
+
+				return true;
+			}
+
+		case PGBENCH_POW:
+			{
+				PgBenchValue *lval = &vargs[0];
+				PgBenchValue *rval = &vargs[1];
+
+				Assert(nargs == 2);
+
+				/*
+				 * If both operands are int, exp >= 0 and the output
+				 * fits in an int64 use the faster ipow(), else use pow()
+				 */
+				if (lval->type == PGBT_INT &&
+					 rval->type == PGBT_INT)
+				{
+
+					int64		li,
+								ri;
+
+					if (!coerceToInt(lval, &li) ||
+						!coerceToInt(rval, &ri))
+						return false;
+
+					if (ri >= 0 &&
+						!ipow_check_overflow(li,ri))
+						setDoubleValue(retval, ipow(li, ri));
+					else
+						setDoubleValue(retval, pow(li, ri));
+				}
+				else
+				{
+					double		ld,
+								rd;
+
+					if (!coerceToDouble(lval, &ld) ||
+						!coerceToDouble(rval, &rd))
+						return false;
+
+					setDoubleValue(retval, pow(ld, rd));
+				}
 				return true;
 			}
 

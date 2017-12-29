@@ -27,7 +27,7 @@
 use strict;
 use convutils;
 
-my $this_script = 'src/backend/utils/mb/Unicode/UCS_to_BIG5.pl';
+my $this_script = $0;
 
 # Load BIG5.TXT
 my $all = &read_source("BIG5.TXT");

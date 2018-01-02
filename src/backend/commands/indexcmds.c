@@ -861,6 +861,7 @@ DefineIndex(Oid relationId,
 
 	PopActiveSnapshot();
 	UnregisterSnapshot(snapshot);
+	InvalidateCatalogSnapshotConditionally();
 
 	/*
 	 * The index is now valid in the sense that it contains all currently

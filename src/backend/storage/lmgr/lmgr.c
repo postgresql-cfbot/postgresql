@@ -590,7 +590,7 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 
 		if (!TransactionIdIsInProgress(xid))
 			break;
-		xid = SubTransGetParent(xid);
+		xid = SubTransGetTopmostTransaction(xid);
 	}
 
 	if (oper != XLTW_None)
@@ -622,7 +622,7 @@ ConditionalXactLockTableWait(TransactionId xid)
 
 		if (!TransactionIdIsInProgress(xid))
 			break;
-		xid = SubTransGetParent(xid);
+		xid = SubTransGetTopmostTransaction(xid);
 	}
 
 	return true;

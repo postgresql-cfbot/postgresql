@@ -195,7 +195,17 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 void
 TupleDescCopy(TupleDesc dst, TupleDesc src)
 {
+	int			i;
+
 	memcpy(dst, src, TupleDescSize(src));
+	for (i = 0; i < dst->natts; ++i)
+	{
+		Form_pg_attribute att = TupleDescAttr(dst, i);
+
+		att->attnotnull = false;
+		att->atthasdef = false;
+		att->attidentity = '\0';
+	}
 	dst->constr = NULL;
 	dst->tdrefcount = -1;
 }

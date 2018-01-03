@@ -1503,6 +1503,16 @@ omicron         bryanh                  guest1
       </listitem>
      </varlistentry>
      <varlistentry>
+      <term><literal>ldapscheme</literal></term>
+      <listitem>
+       <para>
+        Set to <literal>ldaps</literal> to use LDAPS.  This is a non-standard
+        way of using LDAP with SSL supported by some popular LDAP server
+        implementation.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
       <term><literal>ldaptls</literal></term>
       <listitem>
        <para>
@@ -1594,7 +1604,7 @@ omicron         bryanh                  guest1
          An RFC 4516 LDAP URL.  This is an alternative way to write some of the
          other LDAP options in a more compact and standard form.  The format is
 <synopsis>
-ldap://<replaceable>host</replaceable>[:<replaceable>port</replaceable>]/<replaceable>basedn</replaceable>[?[<replaceable>attribute</replaceable>][?[<replaceable>scope</replaceable>][?[<replaceable>filter</replaceable>]]]]
+ldap[s]://<replaceable>host</replaceable>[:<replaceable>port</replaceable>]/<replaceable>basedn</replaceable>[?[<replaceable>attribute</replaceable>][?[<replaceable>scope</replaceable>][?[<replaceable>filter</replaceable>]]]]
 </synopsis>
          <replaceable>scope</replaceable> must be one
          of <literal>base</literal>, <literal>one</literal>, <literal>sub</literal>,
@@ -1615,9 +1625,9 @@ ldap://<replaceable>host</replaceable>[:<replaceable>port</replaceable>]/<replac
 
         <para>
          To use encrypted LDAP connections, the <literal>ldaptls</literal>
-         option has to be used in addition to <literal>ldapurl</literal>.
-         The <literal>ldaps</literal> URL scheme (direct SSL connection) is not
-         supported.
+         option should be used in addition to <literal>ldapurl</literal>.  A
+         non-standard alternative is to use
+         <literal>ldapscheme=ldaps</literal>.
         </para>
 
         <para>

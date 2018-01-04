@@ -419,6 +419,84 @@ pgtls_get_finished(PGconn *conn, size_t *len)
 	return result;
 }
 
+/*
+ *	Get the hash of the server certificate
+ *
+ * This information is useful for end-point channel binding, where the
+ * client certificate hash is used as a link, per RFC 5929. If the
+ * signature hash algorithm is MD5 or SHA-1, fall back to SHA-256,
+ * as per RFC 5929 (https://tools.ietf.org/html/rfc5929#section-4.1).
+ * NULL is sent back to the caller in the event of an error, with an
+ * error message for the caller to consume.
+ */
+char *
+pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len)
+{
+	char	   *cert_hash = NULL;
+
+	*len = 0;
+
+	if (conn->peer)
+	{
+		X509		   *peer_cert = conn->peer;
+		const EVP_MD   *algo_type = NULL;
+		char			hash[EVP_MAX_MD_SIZE];	/* size for SHA-512 */
+		unsigned int	hash_size;
+		int				algo_nid;
+
+		/*
+		 * Get the signature algorithm of the certificate to determine the
+		 * hash algorithm to use for the result.
+		 */
+		if (!OBJ_find_sigid_algs(X509_get_signature_nid(peer_cert),
+								 &algo_nid, NULL))
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("could not find signature algorithm\n"));
+			return NULL;
+		}
+
+		switch (algo_nid)
+		{
+			case NID_md5:
+			case NID_sha1:
+				algo_type = EVP_sha256();
+				break;
+
+			default:
+				algo_type = EVP_get_digestbynid(algo_nid);
+				if (algo_type == NULL)
+				{
+					printfPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not find digest for NID %s\n"),
+									  OBJ_nid2sn(algo_nid));
+					return NULL;
+				}
+				break;
+		}
+
+		if (!X509_digest(peer_cert, algo_type, (unsigned char *) hash,
+						 &hash_size))
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("could not generate peer certificate hash\n"));
+			return NULL;
+		}
+
+		/* save result */
+		cert_hash = (char *) malloc(hash_size);
+		if (cert_hash == NULL)
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("out of memory\n"));
+			return NULL;
+		}
+		memcpy(cert_hash, hash, hash_size);
+		*len = hash_size;
+	}
+
+	return cert_hash;
+}
 
 /* ------------------------------------------------------------ */
 /*						OpenSSL specific code					*/

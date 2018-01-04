@@ -234,7 +234,7 @@ heap_page_items(PG_FUNCTION_ARGS)
 					int			bits_len;
 
 					bits_len =
-						((tuphdr->t_infomask2 & HEAP_NATTS_MASK) / 8 + 1) * 8;
+						TYPEALIGN(8, (tuphdr->t_infomask2 & HEAP_NATTS_MASK));
 					values[11] = CStringGetTextDatum(
 													 bits_to_text(tuphdr->t_bits, bits_len));
 				}

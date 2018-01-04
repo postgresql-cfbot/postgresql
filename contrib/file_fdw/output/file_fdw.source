@@ -315,7 +315,7 @@ SELECT tableoid::regclass, * FROM p2;
 (0 rows)
 
 COPY pt FROM '@abs_srcdir@/data/list2.bad' with (format 'csv', delimiter ','); -- ERROR
-ERROR:  cannot route inserted tuples to a foreign table
+ERROR:  cannot route copied tuples to a foreign table
 CONTEXT:  COPY pt, line 2: "1,qux"
 COPY pt FROM '@abs_srcdir@/data/list2.csv' with (format 'csv', delimiter ',');
 SELECT tableoid::regclass, * FROM pt;
@@ -341,8 +341,26 @@ SELECT tableoid::regclass, * FROM p2;
  p2       | 2 | qux
 (2 rows)
 
+\t on
+EXPLAIN (VERBOSE, COSTS FALSE) INSERT INTO pt VALUES (1, 'xyzzy');
+ Insert on public.pt
+   Foreign Insert on public.p1
+   Insert on public.p2
+   ->  Result
+         Output: 1, 'xyzzy'::text
+
+\t off
 INSERT INTO pt VALUES (1, 'xyzzy'); -- ERROR
-ERROR:  cannot route inserted tuples to a foreign table
+ERROR:  cannot route inserted tuples to foreign table "p1"
+\t on
+EXPLAIN (VERBOSE, COSTS FALSE) INSERT INTO pt VALUES (2, 'xyzzy');
+ Insert on public.pt
+   Foreign Insert on public.p1
+   Insert on public.p2
+   ->  Result
+         Output: 2, 'xyzzy'::text
+
+\t off
 INSERT INTO pt VALUES (2, 'xyzzy');
 SELECT tableoid::regclass, * FROM pt;
  tableoid | a |   b   

@@ -44,6 +44,8 @@ static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
  * Output arguments:
  * 'pd' receives an array of PartitionDispatch objects with one entry for
  *		every partitioned table in the partition tree
+ * 'leaf_parts' receives a list of relation OIDs with one entry for every leaf
+ *		partition in the partition tree
  * 'partitions' receives an array of ResultRelInfo* objects with one entry for
  *		every leaf partition in the partition tree
  * 'tup_conv_maps' receives an array of TupleConversionMap objects with one
@@ -63,29 +65,21 @@ static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
  * RowExclusiveLock mode upon return from this function.
  */
 void
-ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
-							   Relation rel,
-							   Index resultRTindex,
-							   EState *estate,
+ExecSetupPartitionTupleRouting(Relation rel,
 							   PartitionDispatch **pd,
+							   List **leaf_parts,
 							   ResultRelInfo ***partitions,
 							   TupleConversionMap ***tup_conv_maps,
 							   TupleTableSlot **partition_tuple_slot,
 							   int *num_parted, int *num_partitions)
 {
-	TupleDesc	tupDesc = RelationGetDescr(rel);
-	List	   *leaf_parts;
-	ListCell   *cell;
-	int			i;
-	ResultRelInfo *leaf_part_rri;
-
 	/*
 	 * Get the information about the partition tree after locking all the
 	 * partitions.
 	 */
 	(void) find_all_inheritors(RelationGetRelid(rel), RowExclusiveLock, NULL);
-	*pd = RelationGetPartitionDispatchInfo(rel, num_parted, &leaf_parts);
-	*num_partitions = list_length(leaf_parts);
+	*pd = RelationGetPartitionDispatchInfo(rel, num_parted, leaf_parts);
+	*num_partitions = list_length(*leaf_parts);
 	*partitions = (ResultRelInfo **) palloc(*num_partitions *
 											sizeof(ResultRelInfo *));
 	*tup_conv_maps = (TupleConversionMap **) palloc0(*num_partitions *
@@ -98,60 +92,61 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 	 * processing.
 	 */
 	*partition_tuple_slot = MakeTupleTableSlot();
+}
 
-	leaf_part_rri = (ResultRelInfo *) palloc0(*num_partitions *
-											  sizeof(ResultRelInfo));
-	i = 0;
-	foreach(cell, leaf_parts)
-	{
-		Relation	partrel;
-		TupleDesc	part_tupdesc;
+/*
+ * ExecInitPartition -- Prepare ResultRelInfo and tuple conversion map for
+ * the partition with OID 'partOid'
+ */
+void
+ExecInitPartition(ModifyTableState *mtstate,
+				  EState *estate,
+				  ResultRelInfo *rootRelInfo,
+				  Oid partOid,
+				  Index partRTindex,
+				  ResultRelInfo *partRelInfo,
+				  TupleConversionMap **partTupConvMap)
+{
+	Relation	rootrel = rootRelInfo->ri_RelationDesc;
+	Relation	partrel;
 
-		/*
-		 * We locked all the partitions above including the leaf partitions.
-		 * Note that each of the relations in *partitions are eventually
-		 * closed by the caller.
-		 */
-		partrel = heap_open(lfirst_oid(cell), NoLock);
-		part_tupdesc = RelationGetDescr(partrel);
+	/*
+	 * We assume that ExecSetupPartitionTupleRouting() already locked the
+	 * partition, so we need no lock here.  The partition must be closed
+	 * by the caller.
+	 */
+	partrel = heap_open(partOid, NoLock);
 
-		/*
-		 * Save a tuple conversion map to convert a tuple routed to this
-		 * partition from the parent's type to the partition's.
-		 */
-		(*tup_conv_maps)[i] = convert_tuples_by_name(tupDesc, part_tupdesc,
-													 gettext_noop("could not convert row type"));
+	/* Save ResultRelInfo data for the partition. */
+	InitResultRelInfo(partRelInfo,
+					  partrel,
+					  partRTindex,
+					  rootRelInfo,
+					  estate->es_instrument);
 
-		InitResultRelInfo(leaf_part_rri,
-						  partrel,
-						  resultRTindex,
-						  rel,
-						  estate->es_instrument);
+	/*
+	 * Open partition indices.  The user may have asked to check for conflicts
+	 * within this leaf partition and do "nothing" instead of throwing an
+	 * error.  Be prepared in that case by initializing the index information
+	 * needed by ExecInsert() to perform speculative insertions.
+	 */
+	if (partRelInfo->ri_RelationDesc->rd_rel->relhasindex &&
+		partRelInfo->ri_IndexRelationDescs == NULL)
+		ExecOpenIndices(partRelInfo,
+						mtstate != NULL &&
+						mtstate->mt_onconflict != ONCONFLICT_NONE);
 
-		/*
-		 * Verify result relation is a valid target for INSERT.
-		 */
-		CheckValidResultRel(leaf_part_rri, CMD_INSERT);
+	/* Store ResultRelInfo in *estate. */
+	estate->es_leaf_result_relations =
+		lappend(estate->es_leaf_result_relations, partRelInfo);
 
-		/*
-		 * Open partition indices.  The user may have asked to check for
-		 * conflicts within this leaf partition and do "nothing" instead of
-		 * throwing an error.  Be prepared in that case by initializing the
-		 * index information needed by ExecInsert() to perform speculative
-		 * insertions.
-		 */
-		if (leaf_part_rri->ri_RelationDesc->rd_rel->relhasindex &&
-			leaf_part_rri->ri_IndexRelationDescs == NULL)
-			ExecOpenIndices(leaf_part_rri,
-							mtstate != NULL &&
-							mtstate->mt_onconflict != ONCONFLICT_NONE);
-
-		estate->es_leaf_result_relations =
-			lappend(estate->es_leaf_result_relations, leaf_part_rri);
-
-		(*partitions)[i] = leaf_part_rri++;
-		i++;
-	}
+	/*
+	 * Save conversion map to convert a tuple routed to the partition from
+	 * the parent's type to the partition's.
+	 */
+	*partTupConvMap = convert_tuples_by_name(RelationGetDescr(rootrel),
+											 RelationGetDescr(partrel),
+											 gettext_noop("could not convert row type"));
 }
 
 /*

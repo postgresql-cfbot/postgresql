@@ -7088,6 +7088,208 @@ NOTICE:  drop cascades to foreign table bar2
 drop table loct1;
 drop table loct2;
 -- ===================================================================
+-- test tuple routing for foreign-table partitions
+-- ===================================================================
+create table pt (a int, b int) partition by list (a);
+create table locp partition of pt for values in (1);
+create table locfoo (a int check (a in (2)), b int);
+create foreign table remp partition of pt for values in (2) server loopback options (table_name 'locfoo');
+explain (verbose, costs off)
+insert into pt values (1, 1), (2, 1);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+insert into pt values (1, 1), (2, 1);
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ remp     | 2 | 1
+(2 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+(1 row)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+(1 row)
+
+explain (verbose, costs off)
+insert into pt values (1, 2), (2, 2) returning *;
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Insert on public.pt
+   Output: pt.a, pt.b
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2) RETURNING a, b
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(7 rows)
+
+insert into pt values (1, 2), (2, 2) returning *;
+ a | b 
+---+---
+ 1 | 2
+ 2 | 2
+(2 rows)
+
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ remp     | 2 | 1
+ remp     | 2 | 2
+(4 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+(2 rows)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+ remp     | 2 | 2
+(2 rows)
+
+prepare q1 as insert into pt values (1, 3), (2, 3);
+explain (verbose, costs off) execute q1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locfoo(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+alter table locfoo rename to locbar;
+alter foreign table remp options (set table_name 'locbar');
+explain (verbose, costs off) execute q1;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Insert on public.pt
+   Insert on public.locp
+   Foreign Insert on public.remp
+     Remote SQL: INSERT INTO public.locbar(a, b) VALUES ($1, $2)
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+(6 rows)
+
+execute q1;
+select tableoid::regclass, * FROM pt;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ locp     | 1 | 3
+ remp     | 2 | 1
+ remp     | 2 | 2
+ remp     | 2 | 3
+(6 rows)
+
+select tableoid::regclass, * FROM locp;
+ tableoid | a | b 
+----------+---+---
+ locp     | 1 | 1
+ locp     | 1 | 2
+ locp     | 1 | 3
+(3 rows)
+
+select tableoid::regclass, * FROM remp;
+ tableoid | a | b 
+----------+---+---
+ remp     | 2 | 1
+ remp     | 2 | 2
+ remp     | 2 | 3
+(3 rows)
+
+deallocate q1;
+drop table pt;
+drop table locbar;
+-- Check INSERT into a multi-level partitioned table
+create table mlpt (a int, b int, c varchar) partition by range (a);
+create table mlptp1 partition of mlpt for values from (100) to (200) partition by range(b);
+create table mlptp2 partition of mlpt for values from (200) to (300);
+create table locfoo (a int check (a >= 100 and a < 200), b int check (b >= 100 and b < 200), c varchar);
+create table locbar (a int check (a >= 100 and a < 200), b int check (b >= 200 and b < 300), c varchar);
+create foreign table mlptp1p1 partition of mlptp1 for values from (100) to (200) server loopback options (table_name 'locfoo');
+create foreign table mlptp1p2 partition of mlptp1 for values from (200) to (300) server loopback options (table_name 'locbar');
+explain (verbose, costs off)
+insert into mlpt values (101, 101, 'x'), (101, 201, 'y') returning *;
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Insert on public.mlpt
+   Output: mlpt.a, mlpt.b, mlpt.c
+   Foreign Insert on public.mlptp1p1
+     Remote SQL: INSERT INTO public.locfoo(a, b, c) VALUES ($1, $2, $3) RETURNING a, b, c
+   Foreign Insert on public.mlptp1p2
+     Remote SQL: INSERT INTO public.locbar(a, b, c) VALUES ($1, $2, $3) RETURNING a, b, c
+   Insert on public.mlptp2
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2, "*VALUES*".column3
+(9 rows)
+
+insert into mlpt values (101, 101, 'x'), (101, 201, 'y') returning *;
+  a  |  b  | c 
+-----+-----+---
+ 101 | 101 | x
+ 101 | 201 | y
+(2 rows)
+
+select tableoid::regclass, * FROM mlpt;
+ tableoid |  a  |  b  | c 
+----------+-----+-----+---
+ mlptp1p1 | 101 | 101 | x
+ mlptp1p2 | 101 | 201 | y
+(2 rows)
+
+select tableoid::regclass, * FROM mlptp1;
+ tableoid |  a  |  b  | c 
+----------+-----+-----+---
+ mlptp1p1 | 101 | 101 | x
+ mlptp1p2 | 101 | 201 | y
+(2 rows)
+
+select tableoid::regclass, * FROM mlptp2;
+ tableoid | a | b | c 
+----------+---+---+---
+(0 rows)
+
+select tableoid::regclass, * FROM mlptp1p1;
+ tableoid |  a  |  b  | c 
+----------+-----+-----+---
+ mlptp1p1 | 101 | 101 | x
+(1 row)
+
+select tableoid::regclass, * FROM mlptp1p2;
+ tableoid |  a  |  b  | c 
+----------+-----+-----+---
+ mlptp1p2 | 101 | 201 | y
+(1 row)
+
+drop table mlpt;
+drop table locfoo;
+drop table locbar;
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 CREATE SCHEMA import_source;

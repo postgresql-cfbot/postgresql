@@ -176,7 +176,13 @@ COPY pt FROM '@abs_srcdir@/data/list2.csv' with (format 'csv', delimiter ',');
 SELECT tableoid::regclass, * FROM pt;
 SELECT tableoid::regclass, * FROM p1;
 SELECT tableoid::regclass, * FROM p2;
+\t on
+EXPLAIN (VERBOSE, COSTS FALSE) INSERT INTO pt VALUES (1, 'xyzzy');
+\t off
 INSERT INTO pt VALUES (1, 'xyzzy'); -- ERROR
+\t on
+EXPLAIN (VERBOSE, COSTS FALSE) INSERT INTO pt VALUES (2, 'xyzzy');
+\t off
 INSERT INTO pt VALUES (2, 'xyzzy');
 SELECT tableoid::regclass, * FROM pt;
 SELECT tableoid::regclass, * FROM p1;

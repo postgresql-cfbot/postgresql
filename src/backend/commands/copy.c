@@ -2473,17 +2473,19 @@ CopyFrom(CopyState cstate)
 	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		PartitionDispatch *partition_dispatch_info;
+		List	   *partition_oids;
 		ResultRelInfo **partitions;
 		TupleConversionMap **partition_tupconv_maps;
 		TupleTableSlot *partition_tuple_slot;
 		int			num_parted,
 					num_partitions;
+		ResultRelInfo *partRelInfo;
+		int			i;
+		ListCell   *l;
 
-		ExecSetupPartitionTupleRouting(NULL,
-									   cstate->rel,
-									   1,
-									   estate,
+		ExecSetupPartitionTupleRouting(cstate->rel,
 									   &partition_dispatch_info,
+									   &partition_oids,
 									   &partitions,
 									   &partition_tupconv_maps,
 									   &partition_tuple_slot,
@@ -2494,6 +2496,41 @@ CopyFrom(CopyState cstate)
 		cstate->num_partitions = num_partitions;
 		cstate->partition_tupconv_maps = partition_tupconv_maps;
 		cstate->partition_tuple_slot = partition_tuple_slot;
+
+		partRelInfo = (ResultRelInfo *) palloc0(num_partitions *
+												sizeof(ResultRelInfo));
+		i = 0;
+		foreach(l, partition_oids)
+		{
+			Oid			partOid = lfirst_oid(l);
+			Relation	partrel;
+
+			/* Prepare ResultRelInfo and map for the partition */
+			ExecInitPartition(NULL,
+							  estate,
+							  resultRelInfo,
+							  partOid,
+							  0,		/* dummy rangetable index */
+							  partRelInfo,
+							  &partition_tupconv_maps[i]);
+			partitions[i] = partRelInfo;
+
+			/* Verify the partition is a valid target for COPY */
+			partrel = partRelInfo->ri_RelationDesc;
+			if (partrel->rd_rel->relkind == RELKIND_RELATION)
+				partRelInfo->ri_PartitionIsValid = true;
+			else
+			{
+				/* The partition should be foreign */
+				Assert(partrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE);
+
+				/* We do not yet have a way to copy into a foreign partition */
+				partRelInfo->ri_PartitionIsValid = false;
+			}
+
+			partRelInfo++;
+			i++;
+		}
 
 		/*
 		 * If we are capturing transition tuples, they may need to be
@@ -2643,11 +2680,16 @@ CopyFrom(CopyState cstate)
 			saved_resultRelInfo = resultRelInfo;
 			resultRelInfo = cstate->partitions[leaf_part_index];
 
-			/* We do not yet have a way to insert into a foreign partition */
-			if (resultRelInfo->ri_FdwRoutine)
+			if (!resultRelInfo->ri_PartitionIsValid)
+			{
+				/* The partition should be foreign */
+				Assert(resultRelInfo->ri_FdwRoutine);
+
+				/* We do not yet have a way to copy into a foreign partition */
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot route inserted tuples to a foreign table")));
+						 errmsg("cannot route copied tuples to a foreign table")));
+			}
 
 			/*
 			 * For ExecInsertIndexTuples() to work on the partition's indexes

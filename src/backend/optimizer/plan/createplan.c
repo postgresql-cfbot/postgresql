@@ -35,6 +35,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/predtest.h"
+#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
@@ -6449,6 +6450,7 @@ make_modifytable(PlannerInfo *root,
 	ModifyTable *node = makeNode(ModifyTable);
 	List	   *fdw_private_list;
 	Bitmapset  *direct_modify_plans;
+	List	   *partition_rels;
 	ListCell   *lc;
 	int			i;
 
@@ -6571,6 +6573,135 @@ make_modifytable(PlannerInfo *root,
 	}
 	node->fdwPrivLists = fdw_private_list;
 	node->fdwDirectModifyPlans = direct_modify_plans;
+
+	/*
+	 * Also, if this is an INSERT into a partitioned table, build a list of
+	 * RT indexes of partitions, and for each foreign partition, allow the FDW
+	 * to construct private plan data and accumulate it all into another list.
+	 *
+	 * Note: ExecSetupPartitionTupleRouting() will expand partitions in the
+	 * same order as these lists.
+	 */
+	partition_rels = NIL;
+	fdw_private_list = NIL;
+	if (operation == CMD_INSERT &&
+		planner_rt_fetch(nominalRelation, root)->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		List	   *saved_withCheckOptionLists = node->withCheckOptionLists;
+		List	   *saved_returningLists = node->returningLists;
+		Plan	   *subplan = (Plan *) linitial(node->plans);
+		List	   *saved_tlist = subplan->targetlist;
+		Query	   **parent_parses;
+		Query	   *parent_parse;
+		Bitmapset  *parent_relids;
+
+		/*
+		 * Similarly to inheritance_planner(), we generate a modified query
+		 * with each child as target by applying adjust_appendrel_attrs() to
+		 * the query for its immediate parent, so build an array to store in
+		 * the query for each parent.
+		 */
+		parent_parses = (Query **)
+			palloc0((list_length(root->parse->rtable) + 1) * sizeof(Query *));
+
+		parent_parses[nominalRelation] = root->parse;
+		parent_relids = bms_make_singleton(nominalRelation);
+
+		foreach(lc, root->append_rel_list)
+		{
+			AppendRelInfo *appinfo = lfirst_node(AppendRelInfo, lc);
+			Index		parent_rti = appinfo->parent_relid;
+			Index		child_rti = appinfo->child_relid;
+			RangeTblEntry *child_rte;
+			Query	   *child_parse;
+			FdwRoutine *fdwroutine = NULL;
+			List	   *fdw_private = NIL;
+
+			/* append_rel_list contains all append rels; ignore others */
+			if (!bms_is_member(parent_rti, parent_relids))
+				continue;
+
+			child_rte = planner_rt_fetch(child_rti, root);
+			Assert(child_rte->rtekind == RTE_RELATION);
+
+			/* No work if the child is a plain table */
+			if (child_rte->relkind == RELKIND_RELATION)
+			{
+				partition_rels = lappend_int(partition_rels, child_rti);
+				fdw_private_list = lappend(fdw_private_list, NIL);
+				continue;
+			}
+
+			/*
+			 * expand_inherited_rtentry() always processes a parent before any
+			 * of that parent's children, so the query for its parent should
+			 * already be available.
+			 */
+			parent_parse = parent_parses[parent_rti];
+			Assert(parent_parse);
+
+			/* Generate the query with the child as target */
+			child_parse = (Query *)
+				adjust_appendrel_attrs(root,
+									   (Node *) parent_parse,
+									   1, &appinfo);
+
+			/* Store the query if the child is a partitioned table */
+			if (child_rte->relkind == RELKIND_PARTITIONED_TABLE)
+			{
+				parent_parses[child_rti] = child_parse;
+				parent_relids = bms_add_member(parent_relids, child_rti);
+				continue;
+			}
+
+			/* The child should be a foreign table */
+			Assert(child_rte->relkind == RELKIND_FOREIGN_TABLE);
+
+			fdwroutine = GetFdwRoutineByRelId(child_rte->relid);
+			Assert(fdwroutine != NULL);
+
+			if (fdwroutine->PlanForeignModify != NULL)
+			{
+				List	   *tlist;
+
+				/* Replace the root query with the child query. */
+				root->parse = child_parse;
+
+				/* Adjust the plan node to refer to the child as target. */
+				node->nominalRelation = child_rti;
+				node->resultRelations = list_make1_int(child_rti);
+				node->withCheckOptionLists =
+					list_make1(child_parse->withCheckOptions);
+				node->returningLists =
+					list_make1(child_parse->returningList);
+
+				/*
+				 * The column list of the child might have a different column
+				 * order and/or a different set of dropped columns than that
+				 * of its parent, so adjust the subplan's tlist as well.
+				 */
+				tlist = preprocess_targetlist(root);
+				subplan->targetlist = tlist;
+
+				fdw_private = fdwroutine->PlanForeignModify(root,
+															node,
+															child_rti,
+															0);
+
+				subplan->targetlist = saved_tlist;
+				node->nominalRelation = nominalRelation;
+				node->resultRelations = list_make1_int(nominalRelation);
+				node->withCheckOptionLists = saved_withCheckOptionLists;
+				node->returningLists = saved_returningLists;
+				root->parse = parent_parses[nominalRelation];
+			}
+
+			partition_rels = lappend_int(partition_rels, child_rti);
+			fdw_private_list = lappend(fdw_private_list, fdw_private);
+		}
+	}
+	node->partition_rels = partition_rels;
+	node->fdwPartitionPrivLists = fdw_private_list;
 
 	return node;
 }

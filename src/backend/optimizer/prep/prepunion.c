@@ -1969,8 +1969,9 @@ adjust_appendrel_attrs(PlannerInfo *root, Node *node, int nappinfos,
 			if (newnode->resultRelation == appinfo->parent_relid)
 			{
 				newnode->resultRelation = appinfo->child_relid;
-				/* Fix tlist resnos too, if it's inherited UPDATE */
-				if (newnode->commandType == CMD_UPDATE)
+				/* Fix tlist resnos too, if it's inherited INSERT/UPDATE */
+				if (newnode->commandType == CMD_INSERT ||
+					newnode->commandType == CMD_UPDATE)
 					newnode->targetList =
 						adjust_inherited_tlist(newnode->targetList,
 											   appinfo);
@@ -2320,7 +2321,7 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 }
 
 /*
- * Adjust the targetlist entries of an inherited UPDATE operation
+ * Adjust the targetlist entries of an inherited INSERT/UPDATE operation
  *
  * The expressions have already been fixed, but we have to make sure that
  * the target resnos match the child table (they may not, in the case of
@@ -2332,8 +2333,6 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
  * The given tlist has already been through expression_tree_mutator;
  * therefore the TargetEntry nodes are fresh copies that it's okay to
  * scribble on.
- *
- * Note that this is not needed for INSERT because INSERT isn't inheritable.
  */
 static List *
 adjust_inherited_tlist(List *tlist, AppendRelInfo *context)

@@ -1681,6 +1681,22 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 
 		if (TransactionIdPrecedes(txn->xid, oldestRunningXid))
 		{
+			/*
+			 * We set final_lsn when we decode the commit or abort record for
+			 * a transaction, but transactions implicitly aborted by a crash
+			 * never write such a record.
+			 * The final_lsn of which transaction that hasn't produced an abort
+			 * record is invalid. To ensure cleanup the serialized changes of
+			 * such transaction we set the LSN of the last change action to
+			 * final_lsn.
+			 */
+			if (txn->serialized && txn->final_lsn == 0)
+			{
+				ReorderBufferChange *last_change =
+				dlist_tail_element(ReorderBufferChange, node, &txn->changes);
+				txn->final_lsn = last_change->lsn;
+			}
+
 			elog(DEBUG2, "aborting old transaction %u", txn->xid);
 
 			/* remove potential on-disk data, and deallocate this tx */

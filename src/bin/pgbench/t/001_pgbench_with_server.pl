@@ -435,9 +435,11 @@ for my $e (@errors)
 	my $n = '001_pgbench_error_' . $name;
 	$n =~ s/ /_/g;
 	pgbench(
-		'-n -t 1 -Dfoo=bla -M prepared',
+		'-n -t 1 -Dfoo=bla -M prepared --debug-fails',
 		$status,
-		[ $status ? qr{^$} : qr{processed: 0/1} ],
+		($status ?
+		 [ qr{^$} ] :
+		 [ qr{processed: 1/1}, qr{number of errors: 1 \(100\.000 %\)} ]),
 		$re,
 		'pgbench script error: ' . $name,
 		{ $n => $script });

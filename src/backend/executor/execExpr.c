@@ -32,6 +32,7 @@
 
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
@@ -43,6 +44,7 @@
 #include "optimizer/planner.h"
 #include "pgstat.h"
 #include "utils/builtins.h"
+#include "utils/jsonpath.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -71,6 +73,7 @@ static bool isAssignmentIndirectionExpr(Expr *expr);
 static void ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 					   ExprState *state,
 					   Datum *resv, bool *resnull);
+static char getJsonExprVolatility(JsonExpr *jsexpr);
 
 
 /*
@@ -2103,6 +2106,113 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_JsonValueExpr:
+			ExecInitExprRec(((JsonValueExpr *) node)->expr, state, resv,
+							resnull);
+			break;
+
+		case T_JsonExpr:
+			{
+				JsonExpr   *jexpr = castNode(JsonExpr, node);
+				ListCell   *argexprlc;
+				ListCell   *argnamelc;
+
+				scratch.opcode = EEOP_JSONEXPR;
+				scratch.d.jsonexpr.jsexpr = jexpr;
+
+				scratch.d.jsonexpr.raw_expr =
+						palloc(sizeof(*scratch.d.jsonexpr.raw_expr));
+
+				ExecInitExprRec((Expr *) jexpr->raw_expr, state,
+								&scratch.d.jsonexpr.raw_expr->value,
+								&scratch.d.jsonexpr.raw_expr->isnull);
+
+				scratch.d.jsonexpr.pathspec =
+					palloc(sizeof(*scratch.d.jsonexpr.pathspec));
+
+				ExecInitExprRec((Expr *) jexpr->path_spec, state,
+								&scratch.d.jsonexpr.pathspec->value,
+								&scratch.d.jsonexpr.pathspec->isnull);
+
+				scratch.d.jsonexpr.formatted_expr =
+						ExecInitExpr((Expr *) jexpr->formatted_expr,
+									 state->parent);
+
+				scratch.d.jsonexpr.result_expr = jexpr->result_coercion
+					? ExecInitExpr((Expr *) jexpr->result_coercion->expr,
+								   state->parent)
+					: NULL;
+
+				scratch.d.jsonexpr.default_on_empty =
+					ExecInitExpr((Expr *) jexpr->on_empty.default_expr,
+								 state->parent);
+
+				scratch.d.jsonexpr.default_on_error =
+					ExecInitExpr((Expr *) jexpr->on_error.default_expr,
+								 state->parent);
+
+				if (jexpr->omit_quotes ||
+					(jexpr->result_coercion && jexpr->result_coercion->via_io))
+				{
+					Oid			typinput;
+
+					/* lookup the result type's input function */
+					getTypeInputInfo(jexpr->returning.typid, &typinput,
+									 &scratch.d.jsonexpr.input.typioparam);
+					fmgr_info(typinput, &scratch.d.jsonexpr.input.func);
+				}
+
+				scratch.d.jsonexpr.args = NIL;
+
+				forboth(argexprlc, jexpr->passing.values,
+						argnamelc, jexpr->passing.names)
+				{
+					Expr	   *argexpr = (Expr *) lfirst(argexprlc);
+					Value	   *argname = (Value *) lfirst(argnamelc);
+					JsonPathVariableEvalContext *var = palloc(sizeof(*var));
+
+					var->var.varName = cstring_to_text(argname->val.str);
+					var->var.typid = exprType((Node *) argexpr);
+					var->var.typmod = exprTypmod((Node *) argexpr);
+					var->var.cb = EvalJsonPathVar;
+					var->var.cb_arg = var;
+					var->estate = ExecInitExpr(argexpr, state->parent);
+					var->econtext = NULL;
+					var->mcxt = NULL;
+					var->evaluated = false;
+					var->value = (Datum) 0;
+					var->isnull = true;
+
+					scratch.d.jsonexpr.args =
+						lappend(scratch.d.jsonexpr.args, var);
+				}
+
+				scratch.d.jsonexpr.cache = NULL;
+
+				if (jexpr->coercions)
+				{
+					JsonCoercion **coercion;
+					struct JsonCoercionState *cstate;
+
+					for (cstate = &scratch.d.jsonexpr.coercions.null,
+						 coercion = &jexpr->coercions->null;
+						 coercion <= &jexpr->coercions->composite;
+						 coercion++, cstate++)
+					{
+						cstate->coercion = *coercion;
+						cstate->estate = *coercion ?
+							ExecInitExpr((Expr *)(*coercion)->expr,
+										 state->parent) : NULL;
+					}
+				}
+
+				if (jexpr->on_error.btype != JSON_BEHAVIOR_ERROR)
+					scratch.d.jsonexpr.volatility = getJsonExprVolatility(jexpr);
+
+				ExprEvalPushStep(state, &scratch);
+			}
+			break;
+
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));
@@ -2774,4 +2884,106 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 				break;
 		}
 	}
+}
+
+
+static char
+getExprVolatility(Node *expr)
+{
+	if (contain_volatile_functions(expr))
+		return PROVOLATILE_VOLATILE;
+
+	if (contain_mutable_functions(expr))
+		return PROVOLATILE_STABLE;
+
+	return PROVOLATILE_IMMUTABLE;
+}
+
+static char
+getJsonCoercionVolatility(JsonCoercion *coercion, JsonReturning *returning)
+{
+	if (!coercion)
+		return PROVOLATILE_IMMUTABLE;
+
+	if (coercion->expr)
+		return getExprVolatility(coercion->expr);
+
+	if (coercion->via_io)
+	{
+		Oid			typinput;
+		Oid			typioparam;
+
+		getTypeInputInfo(returning->typid, &typinput, &typioparam);
+
+		return func_volatile(typinput);
+	}
+
+	if (coercion->via_populate)
+		return PROVOLATILE_STABLE;
+
+	return PROVOLATILE_IMMUTABLE;
+}
+
+static char
+getJsonExprVolatility(JsonExpr *jsexpr)
+{
+	char		volatility;
+	char		volatility2;
+	ListCell   *lc;
+
+	volatility = getExprVolatility(jsexpr->formatted_expr);
+
+	if (volatility == PROVOLATILE_VOLATILE)
+		return PROVOLATILE_VOLATILE;
+
+	volatility2 = getJsonCoercionVolatility(jsexpr->result_coercion,
+											&jsexpr->returning);
+
+	if (volatility2 == PROVOLATILE_VOLATILE)
+		return PROVOLATILE_VOLATILE;
+
+	if (volatility2 == PROVOLATILE_STABLE)
+		volatility = PROVOLATILE_STABLE;
+
+	if (jsexpr->coercions)
+	{
+		JsonCoercion **coercion;
+
+		for (coercion = &jsexpr->coercions->null;
+			 coercion <= &jsexpr->coercions->composite;
+			 coercion++)
+		{
+			volatility2 = getJsonCoercionVolatility(*coercion, &jsexpr->returning);
+
+			if (volatility2 == PROVOLATILE_VOLATILE)
+				return PROVOLATILE_VOLATILE;
+
+			if (volatility2 == PROVOLATILE_STABLE)
+				volatility = PROVOLATILE_STABLE;
+		}
+	}
+
+	if (jsexpr->on_empty.btype == JSON_BEHAVIOR_DEFAULT)
+	{
+		volatility2 = getExprVolatility(jsexpr->on_empty.default_expr);
+
+		if (volatility2 == PROVOLATILE_VOLATILE)
+			return PROVOLATILE_VOLATILE;
+
+		if (volatility2 == PROVOLATILE_STABLE)
+			volatility = PROVOLATILE_STABLE;
+	}
+
+	foreach(lc, jsexpr->passing.values)
+	{
+		volatility2 = getExprVolatility(lfirst(lc));
+
+		if (volatility2 == PROVOLATILE_VOLATILE)
+			return PROVOLATILE_VOLATILE;
+
+		if (volatility2 == PROVOLATILE_STABLE)
+			volatility = PROVOLATILE_STABLE;
+	}
+
+	return volatility;
 }

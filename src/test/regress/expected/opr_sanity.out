@@ -205,11 +205,12 @@ WHERE p1.oid != p2.oid AND
 ORDER BY 1, 2;
  proargtypes | proargtypes 
 -------------+-------------
+          25 |         114
           25 |        1042
           25 |        1043
         1114 |        1184
         1560 |        1562
-(4 rows)
+(5 rows)
 
 SELECT DISTINCT p1.proargtypes[1], p2.proargtypes[1]
 FROM pg_proc AS p1, pg_proc AS p2
@@ -1817,6 +1818,8 @@ ORDER BY 1, 2, 3;
        2742 |            9 | ?
        2742 |           10 | ?|
        2742 |           11 | ?&
+       2742 |           15 | @?
+       2742 |           16 | @~
        3580 |            1 | <
        3580 |            1 | <<
        3580 |            2 | &<
@@ -1880,7 +1883,7 @@ ORDER BY 1, 2, 3;
        4000 |           25 | <<=
        4000 |           26 | >>
        4000 |           27 | >>=
-(121 rows)
+(123 rows)
 
 -- Check that all opclass search operators have selectivity estimators.
 -- This is not absolutely required, but it seems a reasonable thing

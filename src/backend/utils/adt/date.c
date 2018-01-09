@@ -41,13 +41,6 @@
 #endif
 
 
-static int	time2tm(TimeADT time, struct pg_tm *tm, fsec_t *fsec);
-static int	timetz2tm(TimeTzADT *time, struct pg_tm *tm, fsec_t *fsec, int *tzp);
-static int	tm2time(struct pg_tm *tm, fsec_t fsec, TimeADT *result);
-static int	tm2timetz(struct pg_tm *tm, fsec_t fsec, int tz, TimeTzADT *result);
-static void AdjustTimeForTypmod(TimeADT *time, int32 typmod);
-
-
 /* common code for timetypmodin and timetztypmodin */
 static int32
 anytime_typmodin(bool istz, ArrayType *ta)
@@ -1234,7 +1227,7 @@ time_in(PG_FUNCTION_ARGS)
 /* tm2time()
  * Convert a tm structure to a time data type.
  */
-static int
+int
 tm2time(struct pg_tm *tm, fsec_t fsec, TimeADT *result)
 {
 	*result = ((((tm->tm_hour * MINS_PER_HOUR + tm->tm_min) * SECS_PER_MINUTE) + tm->tm_sec)
@@ -1249,7 +1242,7 @@ tm2time(struct pg_tm *tm, fsec_t fsec, TimeADT *result)
  * If out of this range, leave as UTC (in practice that could only happen
  * if pg_time_t is just 32 bits) - thomas 97/05/27
  */
-static int
+int
 time2tm(TimeADT time, struct pg_tm *tm, fsec_t *fsec)
 {
 	tm->tm_hour = time / USECS_PER_HOUR;
@@ -1400,7 +1393,7 @@ time_scale(PG_FUNCTION_ARGS)
  * have a fundamental tie together but rather a coincidence of
  * implementation. - thomas
  */
-static void
+void
 AdjustTimeForTypmod(TimeADT *time, int32 typmod)
 {
 	static const int64 TimeScales[MAX_TIME_PRECISION + 1] = {
@@ -1939,7 +1932,7 @@ time_part(PG_FUNCTION_ARGS)
 /* tm2timetz()
  * Convert a tm structure to a time data type.
  */
-static int
+int
 tm2timetz(struct pg_tm *tm, fsec_t fsec, int tz, TimeTzADT *result)
 {
 	result->time = ((((tm->tm_hour * MINS_PER_HOUR + tm->tm_min) * SECS_PER_MINUTE) + tm->tm_sec) *
@@ -2073,7 +2066,7 @@ timetztypmodout(PG_FUNCTION_ARGS)
 /* timetz2tm()
  * Convert TIME WITH TIME ZONE data type to POSIX time structure.
  */
-static int
+int
 timetz2tm(TimeTzADT *time, struct pg_tm *tm, fsec_t *fsec, int *tzp)
 {
 	TimeOffset	trem = time->time;

@@ -4355,3 +4355,40 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
 }
+
+#if defined(USE_ASSERT_CHECKING) && !defined(FRONTEND)
+void
+AssertPageIsLockedForLSN(Page page)
+{
+	char *pagePtr = page;
+
+	/*
+	 * We only want to assert that we hold a lock on the page contents if the
+	 * page is shared (i.e. it is one of the BufferBlocks).  Crash recovery or
+	 * WAL replay is exempt from this assertion because page acecss is
+	 * guaranteed to be serialized.
+	 */
+	if (!InRecovery && BufferBlocks <= pagePtr
+		&& pagePtr < (BufferBlocks + NBuffers * BLCKSZ))
+	{
+		ptrdiff_t bufId = (pagePtr - BufferBlocks) / BLCKSZ;
+		BufferDesc *buf = GetBufferDescriptor(bufId);
+		LWLock *content_lock = BufferDescriptorGetContentLock(buf);
+		uint32 buf_state = pg_atomic_read_u32(&buf->state);
+
+		/*
+		 * Either:
+		 * 1) we hold the exclusive lock for the buffer contents, so reading is
+		 *    always safe, or
+		 * 2) we hold the shared lock and the header spinlock, in which case we
+		 *    are protected against other exclusive lock holders and other WAL
+		 *    log hint writers, or
+		 * 3) XLog hint bits aren't enabled (so there are no WAL log hint
+		 *    writers) and we just need the shared lock by itself.
+		 */
+		Assert(LWLockHeldByMeInMode(content_lock, LW_EXCLUSIVE)
+			   || (LWLockHeldByMeInMode(content_lock, LW_SHARED)
+				   && (!XLogHintBitIsNeeded() || (buf_state & BM_LOCKED))));
+	}
+}
+#endif

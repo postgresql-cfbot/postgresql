@@ -250,7 +250,7 @@ page_header(PG_FUNCTION_ARGS)
 
 	/* Extract information from the page header */
 
-	lsn = PageGetLSN(page);
+	lsn = PageGetLSN((Page) page);
 
 	/* pageinspect >= 1.2 uses pg_lsn instead of text for the LSN field. */
 	if (TupleDescAttr(tupdesc, 0)->atttypid == TEXTOID)

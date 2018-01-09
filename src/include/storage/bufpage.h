@@ -359,8 +359,21 @@ PageValidateSpecialPointer(Page page)
  * Additional macros for access to page headers. (Beware multiple evaluation
  * of the arguments!)
  */
-#define PageGetLSN(page) \
-	PageXLogRecPtrGet(((PageHeader) (page))->pd_lsn)
+
+#if defined(USE_ASSERT_CHECKING) && !defined(FRONTEND)
+/* in bufmgr.c; used in PageGetLSN */
+extern void AssertPageIsLockedForLSN(Page page);
+#else
+#define AssertPageIsLockedForLSN(page)
+#endif
+
+static inline XLogRecPtr
+PageGetLSN(Page page)
+{
+	AssertPageIsLockedForLSN(page);
+	return PageXLogRecPtrGet(((PageHeader) page)->pd_lsn);
+}
+
 #define PageSetLSN(page, lsn) \
 	PageXLogRecPtrSet(((PageHeader) (page))->pd_lsn, lsn)
 

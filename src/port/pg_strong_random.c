@@ -135,6 +135,15 @@ pg_strong_random(void *buf, size_t len)
 	return false;
 
 	/*
+	 * Using arc4random call to fill the buffer
+	 * with strong randomness which never fails
+	 * not needs a file descriptor
+	 */
+#elif defined(USE_ARC4_RANDOM)
+	arc4random_buf(buf, len);
+	return true;
+
+	/*
 	 * Read /dev/urandom ourselves.
 	 */
 #elif defined(USE_DEV_URANDOM)

@@ -15677,11 +15677,13 @@ fi
 # in the template or configure command line.
 
 # If not selected manually, try to select a source automatically.
-if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
+if test "$enable_strong_random" = "yes" && test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_ARC4_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
   if test x"$with_openssl" = x"yes" ; then
     USE_OPENSSL_RANDOM=1
   elif test "$PORTNAME" = "win32" ; then
     USE_WIN32_RANDOM=1
+  elif test "$PORTNAME" = "freebsd" || test "$PORTNAME" = "openbsd" || test "$PORTNAME" = "netbsd" || test "$PORTNAME" = "darwin" ; then
+    USE_ARC4_RANDOM=1
   else
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for /dev/urandom" >&5
 $as_echo_n "checking for /dev/urandom... " >&6; }
@@ -15724,6 +15726,12 @@ $as_echo "#define USE_WIN32_RANDOM 1" >>confdefs.h
 
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: Windows native" >&5
 $as_echo "Windows native" >&6; }
+  elif test x"$USE_ARC4_RANDOM" = x"1" ; then
+
+$as_echo "#define USE_ARC4_RANDOM 1" >>confdefs.h
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: arc4random" >&5
+$as_echo "arc4random" >&6; }
   elif test x"$USE_DEV_URANDOM" = x"1" ; then
 
 $as_echo "#define USE_DEV_URANDOM 1" >>confdefs.h
@@ -15733,7 +15741,7 @@ $as_echo "/dev/urandom" >&6; }
   else
     as_fn_error $? "
 no source of strong random numbers was found
-PostgreSQL can use OpenSSL or /dev/urandom as a source of random numbers,
+PostgreSQL can use OpenSSL or arc4random or /dev/urandom as a source of random numbers,
 for authentication protocols. You can use --disable-strong-random to use a
 built-in pseudo random number generator, but that may be insecure." "$LINENO" 5
   fi

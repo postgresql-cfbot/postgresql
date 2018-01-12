@@ -8,6 +8,13 @@
 #ifndef DESCRIBE_H
 #define DESCRIBE_H
 
+/* how the result list should be sorted */
+typedef enum sortby_type
+{
+	SORTBY_NAME,
+	SORTBY_SCHEMA_NAME,
+	SORTBY_SIZE
+} sortby_type;
 
 /* \da */
 extern bool describeAggregates(const char *pattern, bool verbose, bool showSystem);
@@ -58,10 +65,11 @@ extern bool listTSDictionaries(const char *pattern, bool verbose);
 extern bool listTSTemplates(const char *pattern, bool verbose);
 
 /* \l */
-extern bool listAllDbs(const char *pattern, bool verbose);
+extern bool listAllDbs(const char *pattern, bool verbose, sortby_type sortby, bool sort_desc);
 
 /* \dt, \di, \ds, \dS, etc. */
-extern bool listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem);
+extern bool listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem,
+					   sortby_type sortby, bool sort_desc);
 
 /* \dD */
 extern bool listDomains(const char *pattern, bool verbose, bool showSystem);

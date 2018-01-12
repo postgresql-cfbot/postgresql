@@ -241,10 +241,10 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dFp[+] [PATTERN]      list text search parsers\n"));
 	fprintf(output, _("  \\dFt[+] [PATTERN]      list text search templates\n"));
 	fprintf(output, _("  \\dg[S+] [PATTERN]      list roles\n"));
-	fprintf(output, _("  \\di[S+] [PATTERN]      list indexes\n"));
+	fprintf(output, _("  \\di[Ssd+] [PATTERN]    list indexes\n"));
 	fprintf(output, _("  \\dl                    list large objects, same as \\lo_list\n"));
 	fprintf(output, _("  \\dL[S+] [PATTERN]      list procedural languages\n"));
-	fprintf(output, _("  \\dm[S+] [PATTERN]      list materialized views\n"));
+	fprintf(output, _("  \\dm[Ssd+] [PATTERN]    list materialized views\n"));
 	fprintf(output, _("  \\dn[S+] [PATTERN]      list schemas\n"));
 	fprintf(output, _("  \\do[S]  [PATTERN]      list operators\n"));
 	fprintf(output, _("  \\dO[S+] [PATTERN]      list collations\n"));
@@ -253,13 +253,13 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dRp[+] [PATTERN]      list replication publications\n"));
 	fprintf(output, _("  \\dRs[+] [PATTERN]      list replication subscriptions\n"));
 	fprintf(output, _("  \\ds[S+] [PATTERN]      list sequences\n"));
-	fprintf(output, _("  \\dt[S+] [PATTERN]      list tables\n"));
+	fprintf(output, _("  \\dt[Ssd+] [PATTERN]    list tables\n"));
 	fprintf(output, _("  \\dT[S+] [PATTERN]      list data types\n"));
 	fprintf(output, _("  \\du[S+] [PATTERN]      list roles\n"));
 	fprintf(output, _("  \\dv[S+] [PATTERN]      list views\n"));
 	fprintf(output, _("  \\dx[+]  [PATTERN]      list extensions\n"));
 	fprintf(output, _("  \\dy     [PATTERN]      list event triggers\n"));
-	fprintf(output, _("  \\l[+]   [PATTERN]      list databases\n"));
+	fprintf(output, _("  \\l[sd+] [PATTERN]      list databases\n"));
 	fprintf(output, _("  \\sf[+]  FUNCNAME       show a function's definition\n"));
 	fprintf(output, _("  \\sv[+]  VIEWNAME       show a view's definition\n"));
 	fprintf(output, _("  \\z      [PATTERN]      same as \\dp\n"));

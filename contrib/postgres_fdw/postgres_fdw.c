@@ -4591,7 +4591,7 @@ static bool
 foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 {
 	Query	   *query = root->parse;
-	PathTarget *grouping_target;
+	PathTarget *grouping_target = root->upper_targets[UPPERREL_GROUP_AGG];
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) grouped_rel->fdw_private;
 	PgFdwRelationInfo *ofpinfo;
 	List	   *aggvars;
@@ -4615,16 +4615,6 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 		return false;
 
 	/*
-	 * The targetlist expected from this node and the targetlist pushed down
-	 * to the foreign server may be different. The latter requires
-	 * sortgrouprefs to be set to push down GROUP BY clause, but should not
-	 * have those arising from ORDER BY clause. These sortgrouprefs may be
-	 * different from those in the plan's targetlist. Use a copy of path
-	 * target to record the new sortgrouprefs.
-	 */
-	grouping_target = copy_pathtarget(root->upper_targets[UPPERREL_GROUP_AGG]);
-
-	/*
 	 * Evaluate grouping targets and check whether they are safe to push down
 	 * to the foreign side.  All GROUP BY expressions will be part of the
 	 * grouping target and thus there is no need to evaluate it separately.
@@ -4641,6 +4631,8 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 		/* Check whether this expression is part of GROUP BY clause */
 		if (sgref && get_sortgroupref_clause_noerr(sgref, query->groupClause))
 		{
+			TargetEntry *tle;
+
 			/*
 			 * If any of the GROUP BY expression is not shippable we can not
 			 * push down aggregation to the foreign server.
@@ -4648,8 +4640,18 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 			if (!is_foreign_expr(root, grouped_rel, expr))
 				return false;
 
-			/* Pushable, add to tlist */
-			tlist = add_to_flat_tlist(tlist, list_make1(expr));
+			/*
+			 * Pushable, add to tlist. We need to create a tle for this
+			 * expression and need to transfer the sortgroupref too. We cannot
+			 * use add_to_flat_tlist() here as it avoids the duplicate entries
+			 * in the targetlist but here we want those duplicate entries as
+			 * there can be multiple GROUP BY expressions pointing to the same
+			 * column at different positions.
+			 */
+			tle = makeTargetEntry((Expr *) expr, list_length(tlist) + 1, NULL,
+								  false);
+			tle->ressortgroupref = sgref;
+			tlist = lappend(tlist, tle);
 		}
 		else
 		{
@@ -4661,14 +4663,6 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 			}
 			else
 			{
-				/*
-				 * If we have sortgroupref set, then it means that we have an
-				 * ORDER BY entry pointing to this expression.  Since we are
-				 * not pushing ORDER BY with GROUP BY, clear it.
-				 */
-				if (sgref)
-					grouping_target->sortgrouprefs[i] = 0;
-
 				/* Not matched exactly, pull the var with aggregates then */
 				aggvars = pull_var_clause((Node *) expr,
 										  PVC_INCLUDE_AGGREGATES);
@@ -4770,9 +4764,6 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel)
 			}
 		}
 	}
-
-	/* Transfer any sortgroupref data to the replacement tlist */
-	apply_pathtarget_labeling_to_tlist(tlist, grouping_target);
 
 	/* Store generated targetlist */
 	fpinfo->grouped_tlist = tlist;

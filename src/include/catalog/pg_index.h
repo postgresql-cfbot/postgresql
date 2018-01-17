@@ -11,8 +11,8 @@
  * src/include/catalog/pg_index.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -58,6 +58,11 @@ CATALOG(pg_index,2610) BKI_WITHOUT_OIDS BKI_SCHEMA_MACRO
 								 * index; else NULL */
 #endif
 } FormData_pg_index;
+
+DECLARE_INDEX(pg_index_indrelid_index, 2678, on pg_index using btree(indrelid oid_ops));
+#define IndexIndrelidIndexId  2678
+DECLARE_UNIQUE_INDEX(pg_index_indexrelid_index, 2679, on pg_index using btree(indexrelid oid_ops));
+#define IndexRelidIndexId  2679
 
 /* ----------------
  *		Form_pg_index corresponds to a pointer to a tuple with

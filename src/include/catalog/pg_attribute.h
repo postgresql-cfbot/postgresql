@@ -11,8 +11,8 @@
  * src/include/catalog/pg_attribute.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -179,6 +179,11 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 #define ATTRIBUTE_FIXED_PART_SIZE \
 	(offsetof(FormData_pg_attribute,attcollation) + sizeof(Oid))
 
+DECLARE_UNIQUE_INDEX(pg_attribute_relid_attnam_index, 2658, on pg_attribute using btree(attrelid oid_ops, attname name_ops));
+#define AttributeRelidNameIndexId  2658
+DECLARE_UNIQUE_INDEX(pg_attribute_relid_attnum_index, 2659, on pg_attribute using btree(attrelid oid_ops, attnum int2_ops));
+#define AttributeRelidNumIndexId  2659
+
 /* ----------------
  *		Form_pg_attribute corresponds to a pointer to a tuple with
  *		the format of pg_attribute relation.
@@ -217,8 +222,6 @@ typedef FormData_pg_attribute *Form_pg_attribute;
 
 
 /* ----------------
- *		initial contents of pg_attribute
- *
  * The initial contents of pg_attribute are generated at compile time by
  * genbki.pl.  Only "bootstrapped" relations need be included.
  * ----------------

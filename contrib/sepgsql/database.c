@@ -16,7 +16,6 @@
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_database.h"
-#include "catalog/indexing.h"
 #include "commands/dbcommands.h"
 #include "commands/seclabel.h"
 #include "utils/builtins.h"

@@ -7,8 +7,8 @@
  * src/include/catalog/pg_transform.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -31,6 +31,11 @@ CATALOG(pg_transform,3576)
 	regproc		trffromsql;
 	regproc		trftosql;
 } FormData_pg_transform;
+
+DECLARE_UNIQUE_INDEX(pg_transform_oid_index, 3574, on pg_transform using btree(oid oid_ops));
+#define TransformOidIndexId 3574
+DECLARE_UNIQUE_INDEX(pg_transform_type_lang_index, 3575, on pg_transform using btree(trftype oid_ops, trflang oid_ops));
+#define TransformTypeLangIndexId  3575
 
 typedef FormData_pg_transform *Form_pg_transform;
 

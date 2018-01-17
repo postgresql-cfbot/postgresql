@@ -11,8 +11,8 @@
  * src/include/catalog/pg_extension.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -43,6 +43,11 @@ CATALOG(pg_extension,3079)
 #endif
 } FormData_pg_extension;
 
+DECLARE_UNIQUE_INDEX(pg_extension_oid_index, 3080, on pg_extension using btree(oid oid_ops));
+#define ExtensionOidIndexId 3080
+DECLARE_UNIQUE_INDEX(pg_extension_name_index, 3081, on pg_extension using btree(extname name_ops));
+#define ExtensionNameIndexId 3081
+
 /* ----------------
  *		Form_pg_extension corresponds to a pointer to a tuple with
  *		the format of pg_extension relation.
@@ -63,10 +68,5 @@ typedef FormData_pg_extension *Form_pg_extension;
 #define Anum_pg_extension_extversion		5
 #define Anum_pg_extension_extconfig			6
 #define Anum_pg_extension_extcondition		7
-
-/* ----------------
- *		pg_extension has no initial contents
- * ----------------
- */
 
 #endif							/* PG_EXTENSION_H */

@@ -11,8 +11,8 @@
  * src/include/catalog/pg_constraint.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -139,6 +139,16 @@ CATALOG(pg_constraint,2606)
 #endif
 } FormData_pg_constraint;
 
+DECLARE_TOAST(pg_constraint, 2832, 2833);
+DECLARE_INDEX(pg_constraint_conname_nsp_index, 2664, on pg_constraint using btree(conname name_ops, connamespace oid_ops));
+#define ConstraintNameNspIndexId  2664
+DECLARE_INDEX(pg_constraint_conrelid_index, 2665, on pg_constraint using btree(conrelid oid_ops));
+#define ConstraintRelidIndexId	2665
+DECLARE_INDEX(pg_constraint_contypid_index, 2666, on pg_constraint using btree(contypid oid_ops));
+#define ConstraintTypidIndexId	2666
+DECLARE_UNIQUE_INDEX(pg_constraint_oid_index, 2667, on pg_constraint using btree(oid oid_ops));
+#define ConstraintOidIndexId  2667
+
 /* ----------------
  *		Form_pg_constraint corresponds to a pointer to a tuple with
  *		the format of pg_constraint relation.
@@ -175,14 +185,6 @@ typedef FormData_pg_constraint *Form_pg_constraint;
 #define Anum_pg_constraint_conexclop		22
 #define Anum_pg_constraint_conbin			23
 #define Anum_pg_constraint_consrc			24
-
-/* ----------------
- *		initial contents of pg_constraint
- * ----------------
- */
-
-/* nothing, at present */
-
 
 /* Valid values for contype */
 #define CONSTRAINT_CHECK			'c'

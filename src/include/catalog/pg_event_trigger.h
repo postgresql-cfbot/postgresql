@@ -11,8 +11,8 @@
  * src/include/catalog/pg_event_trigger.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -41,6 +41,11 @@ CATALOG(pg_event_trigger,3466)
 	text		evttags[1];		/* command TAGs this event trigger targets */
 #endif
 } FormData_pg_event_trigger;
+
+DECLARE_UNIQUE_INDEX(pg_event_trigger_evtname_index, 3467, on pg_event_trigger using btree(evtname name_ops));
+#define EventTriggerNameIndexId  3467
+DECLARE_UNIQUE_INDEX(pg_event_trigger_oid_index, 3468, on pg_event_trigger using btree(oid oid_ops));
+#define EventTriggerOidIndexId	3468
 
 /* ----------------
  *		Form_pg_event_trigger corresponds to a pointer to a tuple with

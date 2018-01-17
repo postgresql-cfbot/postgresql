@@ -38,7 +38,6 @@
 
 #include "access/htup_details.h"
 #include "access/reloptions.h"
-#include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"

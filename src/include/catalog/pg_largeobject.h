@@ -11,8 +11,6 @@
  * src/include/catalog/pg_largeobject.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
  *
  *-------------------------------------------------------------------------
  */
@@ -37,6 +35,9 @@ CATALOG(pg_largeobject,2613) BKI_WITHOUT_OIDS
 	bytea		data BKI_FORCE_NOT_NULL;	/* Data for page (may be
 											 * zero-length) */
 } FormData_pg_largeobject;
+
+DECLARE_UNIQUE_INDEX(pg_largeobject_loid_pn_index, 2683, on pg_largeobject using btree(loid oid_ops, pageno int4_ops));
+#define LargeObjectLOidPNIndexId  2683
 
 /* ----------------
  *		Form_pg_largeobject corresponds to a pointer to a tuple with

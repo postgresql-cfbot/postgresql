@@ -11,8 +11,8 @@
  * src/include/catalog/pg_inherits.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -35,6 +35,11 @@ CATALOG(pg_inherits,2611) BKI_WITHOUT_OIDS
 	int32		inhseqno;
 } FormData_pg_inherits;
 
+DECLARE_UNIQUE_INDEX(pg_inherits_relid_seqno_index, 2680, on pg_inherits using btree(inhrelid oid_ops, inhseqno int4_ops));
+#define InheritsRelidSeqnoIndexId  2680
+DECLARE_INDEX(pg_inherits_parent_index, 2187, on pg_inherits using btree(inhparent oid_ops));
+#define InheritsParentIndexId  2187
+
 /* ----------------
  *		Form_pg_inherits corresponds to a pointer to a tuple with
  *		the format of pg_inherits relation.
@@ -50,10 +55,5 @@ typedef FormData_pg_inherits *Form_pg_inherits;
 #define Anum_pg_inherits_inhrelid		1
 #define Anum_pg_inherits_inhparent		2
 #define Anum_pg_inherits_inhseqno		3
-
-/* ----------------
- *		pg_inherits has no initial contents
- * ----------------
- */
 
 #endif							/* PG_INHERITS_H */

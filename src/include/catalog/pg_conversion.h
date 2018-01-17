@@ -11,8 +11,8 @@
  * src/include/catalog/pg_conversion.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -48,6 +48,13 @@ CATALOG(pg_conversion,2607)
 	bool		condefault;
 } FormData_pg_conversion;
 
+DECLARE_UNIQUE_INDEX(pg_conversion_default_index, 2668, on pg_conversion using btree(connamespace oid_ops, conforencoding int4_ops, contoencoding int4_ops, oid oid_ops));
+#define ConversionDefaultIndexId  2668
+DECLARE_UNIQUE_INDEX(pg_conversion_name_nsp_index, 2669, on pg_conversion using btree(conname name_ops, connamespace oid_ops));
+#define ConversionNameNspIndexId  2669
+DECLARE_UNIQUE_INDEX(pg_conversion_oid_index, 2670, on pg_conversion using btree(oid oid_ops));
+#define ConversionOidIndexId  2670
+
 /* ----------------
  *		Form_pg_conversion corresponds to a pointer to a tuple with
  *		the format of pg_conversion relation.
@@ -68,10 +75,5 @@ typedef FormData_pg_conversion *Form_pg_conversion;
 #define Anum_pg_conversion_contoencoding		5
 #define Anum_pg_conversion_conproc		6
 #define Anum_pg_conversion_condefault	7
-
-/* ----------------
- * initial contents of pg_conversion
- * ---------------
- */
 
 #endif							/* PG_CONVERSION_H */

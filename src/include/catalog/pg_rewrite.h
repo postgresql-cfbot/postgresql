@@ -14,8 +14,8 @@
  * src/include/catalog/pg_rewrite.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -44,6 +44,12 @@ CATALOG(pg_rewrite,2618)
 	pg_node_tree ev_action;
 #endif
 } FormData_pg_rewrite;
+
+DECLARE_TOAST(pg_rewrite, 2838, 2839);
+DECLARE_UNIQUE_INDEX(pg_rewrite_oid_index, 2692, on pg_rewrite using btree(oid oid_ops));
+#define RewriteOidIndexId  2692
+DECLARE_UNIQUE_INDEX(pg_rewrite_rel_rulename_index, 2693, on pg_rewrite using btree(ev_class oid_ops, rulename name_ops));
+#define RewriteRelRulenameIndexId  2693
 
 /* ----------------
  *		Form_pg_rewrite corresponds to a pointer to a tuple with

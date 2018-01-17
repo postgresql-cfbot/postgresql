@@ -21,8 +21,9 @@
   input file used by <application>initdb</application> is created as
   part of building and installing <productname>PostgreSQL</productname>
   by a program named <filename>genbki.pl</filename>, which reads some
-  specially formatted C header files in the <filename>src/include/catalog/</filename>
-  directory of the source tree.  The created <acronym>BKI</acronym> file
+  specially formatted C header files and data files in the
+  <filename>src/include/catalog/</filename> directory of the source tree.
+  The created <acronym>BKI</acronym> file
   is called <filename>postgres.bki</filename> and is
   normally installed in the
   <filename>share</filename> subdirectory of the installation tree.

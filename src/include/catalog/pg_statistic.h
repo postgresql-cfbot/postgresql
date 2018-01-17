@@ -11,8 +11,8 @@
  * src/include/catalog/pg_statistic.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -118,8 +118,11 @@ CATALOG(pg_statistic,2619) BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_statistic;
 
-#define STATISTIC_NUM_SLOTS  5
+DECLARE_TOAST(pg_statistic, 2840, 2841);
+DECLARE_UNIQUE_INDEX(pg_statistic_relid_att_inh_index, 2696, on pg_statistic using btree(starelid oid_ops, staattnum int2_ops, stainherit bool_ops));
+#define StatisticRelidAttnumInhIndexId	2696
 
+#define STATISTIC_NUM_SLOTS  5
 
 /* ----------------
  *		Form_pg_statistic corresponds to a pointer to a tuple with

@@ -465,13 +465,16 @@ EOF
 				'src/backend/catalog/postgres.bki',
 				"src/include/catalog/$bki"))
 		{
-			print "Generating postgres.bki and schemapg.h...\n";
+			print "Generating postgres.bki, oid_symbols.h, schemapg.h...\n";
 			chdir('src/backend/catalog');
 			my $bki_srcs = join(' ../../../src/include/catalog/', @allbki);
 			system(
 "perl genbki.pl -I../../../src/include/catalog --set-version=$self->{majorver} $bki_srcs"
 			);
 			chdir('../../..');
+			copyFile(
+				'src/backend/catalog/oid_symbols.h',
+				'src/include/catalog/oid_symbols.h');
 			copyFile(
 				'src/backend/catalog/schemapg.h',
 				'src/include/catalog/schemapg.h');

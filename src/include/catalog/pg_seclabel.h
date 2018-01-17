@@ -32,6 +32,10 @@ CATALOG(pg_seclabel,3596) BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_seclabel;
 
+DECLARE_TOAST(pg_seclabel, 3598, 3599);
+DECLARE_UNIQUE_INDEX(pg_seclabel_object_index, 3597, on pg_seclabel using btree(objoid oid_ops, classoid oid_ops, objsubid int4_ops, provider text_pattern_ops));
+#define SecLabelObjectIndexId				3597
+
 /* ----------------
  *		compiler constants for pg_seclabel
  * ----------------

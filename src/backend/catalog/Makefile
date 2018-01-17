@@ -22,11 +22,10 @@ BKIFILES = postgres.bki postgres.description postgres.shdescription
 
 include $(top_srcdir)/src/backend/common.mk
 
-all: $(BKIFILES) schemapg.h
+all: $(BKIFILES) oid_symbols.h schemapg.h
 
 # Note: there are some undocumented dependencies on the ordering in which
-# the catalog header files are assembled into postgres.bki.  In particular,
-# indexing.h had better be last, and toasting.h just before it.
+# the catalog header files are assembled into postgres.bki.
 
 POSTGRES_BKI_SRCS = $(addprefix $(top_srcdir)/src/include/catalog/,\
 	pg_proc.h pg_type.h pg_attribute.h pg_class.h \
@@ -46,30 +45,27 @@ POSTGRES_BKI_SRCS = $(addprefix $(top_srcdir)/src/include/catalog/,\
 	pg_collation.h pg_partitioned_table.h pg_range.h pg_transform.h \
 	pg_sequence.h pg_publication.h pg_publication_rel.h pg_subscription.h \
 	pg_subscription_rel.h \
-	toasting.h indexing.h \
     )
+
+POSTGRES_BKI_DATA = $(wildcard $(top_srcdir)/src/include/catalog/*.dat)
 
 # location of Catalog.pm
 catalogdir = $(top_srcdir)/src/backend/catalog
 
-# locations of headers that genbki.pl needs to read
-pg_includes = -I$(top_srcdir)/src/include/catalog -I$(top_builddir)/src/include/catalog
-
 # see explanation in ../parser/Makefile
 postgres.description: postgres.bki ;
-
 postgres.shdescription: postgres.bki ;
-
 schemapg.h: postgres.bki ;
+oid_symbols.h: postgres.bki ;
 
 # Technically, this should depend on Makefile.global, but then
 # postgres.bki would need to be rebuilt after every configure run,
 # even in distribution tarballs.  So this is cheating a bit, but it
 # will achieve the goal of updating the version number when it
 # changes.
-postgres.bki: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(top_srcdir)/configure $(top_srcdir)/src/include/catalog/duplicate_oids
+postgres.bki: genbki.pl Catalog.pm $(POSTGRES_BKI_SRCS) $(POSTGRES_BKI_DATA) $(top_srcdir)/configure $(top_srcdir)/src/include/catalog/duplicate_oids
 	cd $(top_srcdir)/src/include/catalog && $(PERL) ./duplicate_oids
-	$(PERL) -I $(catalogdir) $< $(pg_includes) --set-version=$(MAJORVERSION) $(POSTGRES_BKI_SRCS)
+	$(PERL) -I $(catalogdir) $< --set-version=$(MAJORVERSION) $(POSTGRES_BKI_SRCS)
 
 .PHONY: install-data
 install-data: $(BKIFILES) installdirs

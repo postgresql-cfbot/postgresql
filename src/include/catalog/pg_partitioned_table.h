@@ -10,8 +10,8 @@
  * src/include/catalog/pg_partitioned_table.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -52,6 +52,9 @@ CATALOG(pg_partitioned_table,3350) BKI_WITHOUT_OIDS
 								 * one item for each zero entry in partattrs[] */
 #endif
 } FormData_pg_partitioned_table;
+
+DECLARE_UNIQUE_INDEX(pg_partitioned_table_partrelid_index, 3351, on pg_partitioned_table using btree(partrelid oid_ops));
+#define PartitionedRelidIndexId			 3351
 
 /* ----------------
  *		Form_pg_partitioned_table corresponds to a pointer to a tuple with

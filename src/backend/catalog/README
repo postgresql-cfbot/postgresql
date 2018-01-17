@@ -7,24 +7,79 @@ This directory contains .c files that manipulate the system catalogs;
 src/include/catalog contains the .h files that define the structure
 of the system catalogs.
 
-When the compile-time scripts (Gen_fmgrtab.pl and genbki.pl)
-execute, they grep the DATA statements out of the .h files and munge
-these in order to generate the postgres.bki file.  The .bki file is then
+When the compile-time script genbki.pl executes, it parses the .h files
+and .dat files in order to generate the postgres.* files.  These are then
 used as input to initdb (which is just a wrapper around postgres
 running single-user in bootstrapping mode) in order to generate the
 initial (template) system catalog relation files.
 
+backend/utils/Gen_fmgrtab.pl uses the same mechanism to genarate .c and
+.h files used by the function manager.
+
 -----------------------------------------------------------------
 
-People who are going to hose around with the .h files should be aware
-of the following facts:
+The data file format and bootstrap data conventions
 
-- It is very important that the DATA statements be properly formatted
+- As far as the bootstrap code is concerned, it is very important
+that the insert statements in postgres.bki be properly formatted
 (e.g., no broken lines, proper use of white-space and _null_).  The
 scripts are line-oriented and break easily.  In addition, the only
 documentation on the proper format for them is the code in the
-bootstrap/ directory.  Just be careful when adding new DATA
-statements.
+bootstrap/ directory.  Fortunately, the source bootstrap data is much
+more tolerant with respect to formatting, but it still pays to be
+careful when adding new data.
+
+- The .dat files contain Perl data structure literals that are simply
+eval'd to produce in-memory data structures.  As such, the code reading
+them doesn't care about ordering and layout, but in order to maintain
+a standard appearance, src/include/catalog/rewrite_dat.pl should be run
+before submitting catalog data patches.  Each file contains an array of
+hash references, which represent the data entries.  The best examples are
+the existing data files, but an altered subset of pg_database.dat will
+demonstrate the key features:
+
+# pg_database_example.dat
+[
+
+# a comment
+{ oid => '1', oid_symbol => 'TemplateDbOid', shdescr => 'default template',
+  datname => 'Berkely\'s DB', datcollate => '"LC_COLLATE"', datacl => '_null_' },
+
+]
+
+-The layout is: open bracket, one or more sets of curly brackets containing
+comma-separated key-value pairs, close bracket.
+-All values are single-quoted.
+-Single quotes within values must be escaped.
+-If a value is a macro to be expanded by initdb.c, it must have double-
+quotes, since we don't know what kind of characters will be substituted.
+-Nulls are represented as "_null_".
+-Comments must be on their own lines.
+-The fields oid, oid_symbol, descr, and shdescr are on their own line
+within the curly brackets.  This is done automatically during rewriting
+so don't worry about their placement during development.
+
+- Some techniques are used to keep the data representation compact.
+These are automatically enforced by rewrite_dat.pl, but you should be
+aware of them.  pg_proc.dat uses all three of them in an attempt to keep
+the file manageable:
+1. If the .h file specifies a default value for a column, and a data entry
+has that same value, it will be ommitted from the data file.
+2. Likewise, some values could be computed from other values, so are also
+left out.
+3. If the .h file specifies a column abbeviation, then it will be used as
+the hash key in the data entry.
+
+- If you want to add a new default value or abbreviation, you must
+change the relevant .h file to use the new default/abbreviation, and
+then run "perl -I ../../backend/catalog rewrite_dat.pl pg_foo.dat".
+If you want to change an existing default value or abbreviation, you must
+first run rewrite_dat.pl with the "--expand" argument before proceeding
+as above.
+
+-If you want to add a new method of making the data representation
+smaller, you must implement it in rewrite_dat.pl and also teach
+Catalog::ParseData() how to expand the data back into the full representation.
 
 - Some catalogs require that OIDs be preallocated to tuples because
 of cross-references from other pre-loaded tuples.  For example, pg_type
@@ -38,29 +93,36 @@ catalog that has no OIDs).  In practice we usually preassign OIDs
 for all or none of the pre-loaded tuples in a given catalog, even if only
 some of them are actually cross-referenced.
 
-- We also sometimes preallocate OIDs for catalog tuples whose OIDs must
-be known directly in the C code.  In such cases, put a #define in the
-catalog's .h file, and use the #define symbol in the C code.  Writing
+- We also sometimes preallocate OIDs for catalog tuples whose OIDs must be
+known directly in the C code.  In such cases, put an 'oid_symbol' entry in
+the catalog's data file, and use the #define symbol in the C code.  Writing
 the actual numeric value of any OID in C code is considered very bad form.
-Direct references to pg_proc OIDs are common enough that there's a special
-mechanism to create the necessary #define's automatically: see
-backend/utils/Gen_fmgrtab.pl.  We also have standard conventions for setting
-up #define's for the pg_class OIDs of system catalogs and indexes.  For all
-the other system catalogs, you have to manually create any #define's you
-need.
+Direct references to pg_type and pg_proc OIDs are common enough that there's
+a special mechanism to create the necessary #define's automatically:
+see Catalog.pm and backend/utils/Gen_fmgrtab.pl, respectively.  We also
+have standard conventions for setting up #define's for the pg_class OIDs
+of system catalogs and indexes.  For all the other system catalogs, you
+have to manually create any #define's you need.
 
-- If you need to find a valid OID for a new predefined tuple,
-use the unused_oids script.  It generates inclusive ranges of
+- If you need to find a valid OID for a new predefined tuple, use the
+script src/include/catalog/unused_oids.  It generates inclusive ranges of
 *unused* OIDs (e.g., the line "45-900" means OIDs 45 through 900 have
 not been allocated yet).  Currently, OIDs 1-9999 are reserved for manual
 assignment; the unused_oids script simply looks through the include/catalog
-headers to see which ones do not appear in "OID =" clauses in DATA lines.
+headers and .dat files to see which ones do not appear.
 (As of Postgres 8.1, it also looks at CATALOG and DECLARE_INDEX lines.)
-You can also use the duplicate_oids script to check for mistakes.
+You can use the duplicate_oids script to check for mistakes.  This script
+is also run at compile time, and will stop the build if a duplicate is
+found.
 
 - The OID counter starts at 10000 at bootstrap.  If a catalog row is in a
 table that requires OIDs, but no OID was preassigned by an "OID =" clause,
 then it will receive an OID of 10000 or above.
+
+-----------------------------------------------------------------
+
+People who are going to hose around with the .h files should be aware
+of the following facts:
 
 - To create a "BOOTSTRAP" table you have to do a lot of extra work: these
 tables are not created through a normal CREATE TABLE operation, but spring
@@ -75,11 +137,10 @@ POSTGRES_BKI_SRCS variable, as these cannot be created through the standard
 heap_create_with_catalog process, because it needs these tables to exist
 already.  The list of files this currently includes is:
 	pg_proc.h pg_type.h pg_attribute.h pg_class.h
-Within this list, pg_type.h must come before pg_attribute.h.
-Also, indexing.h must be last, since the indexes can't be created until all
-the tables are in place, and toasting.h should probably be next-to-last
-(or at least after all the tables that need toast tables).  There are
-reputedly some other order dependencies in the .bki list, too.
+There are reputedly some other order dependencies in the BKI list, too.
+
+-As of Postgres 11, toast and index declarations are stored in the relevant
+pg_*.h file, and not in toasting.h or indexing.h.
 
 -----------------------------------------------------------------
 
@@ -98,7 +159,7 @@ catalog tuples that contain NULL attributes except in their
 variable-length portions!  (The bootstrapping code is fairly good about
 marking NOT NULL each of the columns that can legally be referenced via
 C struct declarations ... but those markings won't be enforced against
-DATA commands, so you must get it right in a DATA line.)
+insert commands, so you must get it right in the data files.)
 
 - Modification of the catalogs must be performed with the proper
 updating of catalog indexes!  That is, most catalogs have indexes

@@ -11,8 +11,8 @@
  * src/include/catalog/pg_tablespace.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -20,6 +20,7 @@
 #define PG_TABLESPACE_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /* ----------------
  *		pg_tablespace definition.  cpp turns this into
@@ -39,6 +40,11 @@ CATALOG(pg_tablespace,1213) BKI_SHARED_RELATION
 #endif
 } FormData_pg_tablespace;
 
+DECLARE_UNIQUE_INDEX(pg_tablespace_oid_index, 2697, on pg_tablespace using btree(oid oid_ops));
+#define TablespaceOidIndexId  2697
+DECLARE_UNIQUE_INDEX(pg_tablespace_spcname_index, 2698, on pg_tablespace using btree(spcname name_ops));
+#define TablespaceNameIndexId  2698
+
 /* ----------------
  *		Form_pg_tablespace corresponds to a pointer to a tuple with
  *		the format of pg_tablespace relation.
@@ -56,11 +62,5 @@ typedef FormData_pg_tablespace *Form_pg_tablespace;
 #define Anum_pg_tablespace_spcowner		2
 #define Anum_pg_tablespace_spcacl		3
 #define Anum_pg_tablespace_spcoptions	4
-
-DATA(insert OID = 1663 ( pg_default PGUID _null_ _null_ ));
-DATA(insert OID = 1664 ( pg_global	PGUID _null_ _null_ ));
-
-#define DEFAULTTABLESPACE_OID 1663
-#define GLOBALTABLESPACE_OID 1664
 
 #endif							/* PG_TABLESPACE_H */

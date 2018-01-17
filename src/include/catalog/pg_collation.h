@@ -12,8 +12,8 @@
  *		src/include/catalog/pg_collation.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -21,6 +21,7 @@
 #define PG_COLLATION_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /* ----------------
  *		pg_collation definition.  cpp turns this into
@@ -44,6 +45,11 @@ CATALOG(pg_collation,3456)
 #endif
 } FormData_pg_collation;
 
+DECLARE_UNIQUE_INDEX(pg_collation_name_enc_nsp_index, 3164, on pg_collation using btree(collname name_ops, collencoding int4_ops, collnamespace oid_ops));
+#define CollationNameEncNspIndexId 3164
+DECLARE_UNIQUE_INDEX(pg_collation_oid_index, 3085, on pg_collation using btree(oid oid_ops));
+#define CollationOidIndexId  3085
+
 /* ----------------
  *		Form_pg_collation corresponds to a pointer to a row with
  *		the format of pg_collation relation.
@@ -64,22 +70,6 @@ typedef FormData_pg_collation *Form_pg_collation;
 #define Anum_pg_collation_collcollate	6
 #define Anum_pg_collation_collctype		7
 #define Anum_pg_collation_collversion	8
-
-/* ----------------
- *		initial contents of pg_collation
- * ----------------
- */
-
-DATA(insert OID = 100 ( default		PGNSP PGUID d -1 "" "" _null_ ));
-DESCR("database's default collation");
-#define DEFAULT_COLLATION_OID	100
-DATA(insert OID = 950 ( C			PGNSP PGUID c -1 "C" "C" _null_ ));
-DESCR("standard C collation");
-#define C_COLLATION_OID			950
-DATA(insert OID = 951 ( POSIX		PGNSP PGUID c -1 "POSIX" "POSIX" _null_ ));
-DESCR("standard POSIX collation");
-#define POSIX_COLLATION_OID		951
-
 
 #define COLLPROVIDER_DEFAULT	'd'
 #define COLLPROVIDER_ICU		'i'

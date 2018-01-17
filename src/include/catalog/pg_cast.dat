@@ -1,0 +1,288 @@
+# pg_cast.dat
+[
+
+# Note: this table has OIDs, but we don't bother to assign them manually,
+# since nothing needs to know the specific OID of any built-in cast.
+
+# Numeric category: implicit casts are allowed in the direction
+# int2->int4->int8->numeric->float4->float8, while casts in the
+# reverse direction are assignment-only.
+{ castsource => 'int8', casttarget => 'int2', castfunc => '714', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'int8', casttarget => 'int4', castfunc => '480', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'int8', casttarget => 'float4', castfunc => '652', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int8', casttarget => 'float8', castfunc => '482', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int8', casttarget => 'numeric', castfunc => '1781', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'int8', castfunc => '754', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'int4', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'float4', castfunc => '236', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'float8', castfunc => '235', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'numeric', castfunc => '1782', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'int8', castfunc => '481', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'int2', castfunc => '314', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'float4', castfunc => '318', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'float8', castfunc => '316', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'numeric', castfunc => '1740', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'float4', casttarget => 'int8', castfunc => '653', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float4', casttarget => 'int2', castfunc => '238', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float4', casttarget => 'int4', castfunc => '319', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float4', casttarget => 'float8', castfunc => '311', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'float4', casttarget => 'numeric', castfunc => '1742', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float8', casttarget => 'int8', castfunc => '483', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float8', casttarget => 'int2', castfunc => '237', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float8', casttarget => 'int4', castfunc => '317', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float8', casttarget => 'float4', castfunc => '312', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'float8', casttarget => 'numeric', castfunc => '1743', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'int8', castfunc => '1779', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'int2', castfunc => '1783', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'int4', castfunc => '1744', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'float4', castfunc => '1745', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'float8', castfunc => '1746', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'money', casttarget => 'numeric', castfunc => '3823', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'money', castfunc => '3824', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'money', castfunc => '3811', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'int8', casttarget => 'money', castfunc => '3812', castcontext => 'a', castmethod => 'f' },
+
+# Allow explicit coercions between int4 and bool
+{ castsource => 'int4', casttarget => 'bool', castfunc => '2557', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'bool', casttarget => 'int4', castfunc => '2558', castcontext => 'e', castmethod => 'f' },
+
+# OID category: allow implicit conversion from any integral type (including
+# int8, to support OID literals > 2G) to OID, as well as assignment coercion
+# from OID to int4 or int8.  Similarly for each OID-alias type.  Also allow
+# implicit coercions between OID and each OID-alias type, as well as
+# regproc<->regprocedure and regoper<->regoperator.  (Other coercions
+# between alias types must pass through OID.)	Lastly, there are implicit
+# casts from text and varchar to regclass, which exist mainly to support
+# legacy forms of nextval() and related functions.
+
+{ castsource => 'int8', casttarget => 'oid', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'oid', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'oid', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regproc', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regproc', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regproc', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regproc', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regproc', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regproc', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regproc', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'regproc', casttarget => 'regprocedure', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regprocedure', casttarget => 'regproc', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regprocedure', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regprocedure', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regprocedure', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regprocedure', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regprocedure', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regprocedure', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regprocedure', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regoper', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regoper', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regoper', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regoper', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regoper', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regoper', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regoper', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'regoper', casttarget => 'regoperator', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regoperator', casttarget => 'regoper', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regoperator', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regoperator', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regoperator', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regoperator', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regoperator', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regoperator', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regoperator', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regclass', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regclass', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regclass', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regclass', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regclass', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regclass', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regclass', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regtype', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regtype', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regtype', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regtype', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regtype', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regtype', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regtype', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regconfig', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regconfig', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regconfig', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regconfig', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regconfig', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regconfig', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regconfig', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regdictionary', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regdictionary', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regdictionary', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regdictionary', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regdictionary', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regdictionary', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regdictionary', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'text', casttarget => 'regclass', castfunc => '1079', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'varchar', casttarget => 'regclass', castfunc => '1079', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'oid', casttarget => 'regrole', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regrole', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regrole', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regrole', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regrole', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regrole', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regrole', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'oid', casttarget => 'regnamespace', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regnamespace', casttarget => 'oid', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'int8', casttarget => 'regnamespace', castfunc => '1287', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int2', casttarget => 'regnamespace', castfunc => '313', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'regnamespace', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'regnamespace', casttarget => 'int8', castfunc => '1288', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'regnamespace', casttarget => 'int4', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+
+# String category
+{ castsource => 'text', casttarget => 'bpchar', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'text', casttarget => 'varchar', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'bpchar', casttarget => 'text', castfunc => '401', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'bpchar', casttarget => 'varchar', castfunc => '401', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'varchar', casttarget => 'text', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'varchar', casttarget => 'bpchar', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'char', casttarget => 'text', castfunc => '946', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'char', casttarget => 'bpchar', castfunc => '860', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'char', casttarget => 'varchar', castfunc => '946', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'name', casttarget => 'text', castfunc => '406', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'name', casttarget => 'bpchar', castfunc => '408', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'name', casttarget => 'varchar', castfunc => '1401', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'text', casttarget => 'char', castfunc => '944', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'bpchar', casttarget => 'char', castfunc => '944', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'varchar', casttarget => 'char', castfunc => '944', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'text', casttarget => 'name', castfunc => '407', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'bpchar', casttarget => 'name', castfunc => '409', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'varchar', casttarget => 'name', castfunc => '1400', castcontext => 'i', castmethod => 'f' },
+
+# Allow explicit coercions between int4 and "char"
+{ castsource => 'char', casttarget => 'int4', castfunc => '77', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'char', castfunc => '78', castcontext => 'e', castmethod => 'f' },
+
+# pg_node_tree can be coerced to, but not from, text
+{ castsource => 'pg_node_tree', casttarget => 'text', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+
+# pg_ndistinct can be coerced to, but not from, bytea and text
+{ castsource => 'pg_ndistinct', casttarget => 'bytea', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'pg_ndistinct', casttarget => 'text', castfunc => '0', castcontext => 'i', castmethod => 'i' },
+
+# pg_dependencies can be coerced to, but not from, bytea and text
+{ castsource => 'pg_dependencies', casttarget => 'bytea', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'pg_dependencies', casttarget => 'text', castfunc => '0', castcontext => 'i', castmethod => 'i' },
+
+# Datetime category
+{ castsource => 'abstime', casttarget => 'date', castfunc => '1179', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'abstime', casttarget => 'time', castfunc => '1364', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'abstime', casttarget => 'timestamp', castfunc => '2023', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'abstime', casttarget => 'timestamptz', castfunc => '1173', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'reltime', casttarget => 'interval', castfunc => '1177', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'date', casttarget => 'timestamp', castfunc => '2024', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'date', casttarget => 'timestamptz', castfunc => '1174', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'time', casttarget => 'interval', castfunc => '1370', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'time', casttarget => 'timetz', castfunc => '2047', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'timestamp', casttarget => 'abstime', castfunc => '2030', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamp', casttarget => 'date', castfunc => '2029', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamp', casttarget => 'time', castfunc => '1316', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamp', casttarget => 'timestamptz', castfunc => '2028', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'abstime', castfunc => '1180', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'date', castfunc => '1178', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'time', castfunc => '2019', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'timestamp', castfunc => '2027', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'timetz', castfunc => '1388', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'interval', casttarget => 'reltime', castfunc => '1194', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'interval', casttarget => 'time', castfunc => '1419', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'timetz', casttarget => 'time', castfunc => '2046', castcontext => 'a', castmethod => 'f' },
+
+# Cross-category casts between int4 and abstime, reltime
+{ castsource => 'int4', casttarget => 'abstime', castfunc => '0', castcontext => 'e', castmethod => 'b' },
+{ castsource => 'abstime', casttarget => 'int4', castfunc => '0', castcontext => 'e', castmethod => 'b' },
+{ castsource => 'int4', casttarget => 'reltime', castfunc => '0', castcontext => 'e', castmethod => 'b' },
+{ castsource => 'reltime', casttarget => 'int4', castfunc => '0', castcontext => 'e', castmethod => 'b' },
+
+# Geometric category
+{ castsource => 'point', casttarget => 'box', castfunc => '4091', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'lseg', casttarget => 'point', castfunc => '1532', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'path', casttarget => 'point', castfunc => '1533', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'path', casttarget => 'polygon', castfunc => '1449', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'box', casttarget => 'point', castfunc => '1534', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'box', casttarget => 'lseg', castfunc => '1541', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'box', casttarget => 'polygon', castfunc => '1448', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'box', casttarget => 'circle', castfunc => '1479', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'polygon', casttarget => 'point', castfunc => '1540', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'polygon', casttarget => 'path', castfunc => '1447', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'polygon', casttarget => 'box', castfunc => '1446', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'polygon', casttarget => 'circle', castfunc => '1474', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'circle', casttarget => 'point', castfunc => '1416', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'circle', casttarget => 'box', castfunc => '1480', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'circle', casttarget => 'polygon', castfunc => '1544', castcontext => 'e', castmethod => 'f' },
+
+# MAC address category
+{ castsource => 'macaddr', casttarget => 'macaddr8', castfunc => '4123', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'macaddr8', casttarget => 'macaddr', castfunc => '4124', castcontext => 'i', castmethod => 'f' },
+
+# INET category
+{ castsource => 'cidr', casttarget => 'inet', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'inet', casttarget => 'cidr', castfunc => '1715', castcontext => 'a', castmethod => 'f' },
+
+# BitString category
+{ castsource => 'bit', casttarget => 'varbit', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+{ castsource => 'varbit', casttarget => 'bit', castfunc => '0', castcontext => 'i', castmethod => 'b' },
+
+# Cross-category casts between bit and int4, int8
+{ castsource => 'int8', casttarget => 'bit', castfunc => '2075', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'int4', casttarget => 'bit', castfunc => '1683', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'bit', casttarget => 'int8', castfunc => '2076', castcontext => 'e', castmethod => 'f' },
+{ castsource => 'bit', casttarget => 'int4', castfunc => '1684', castcontext => 'e', castmethod => 'f' },
+
+# Cross-category casts to and from TEXT
+# We need entries here only for a few specialized cases where the behavior
+# of the cast function differs from the datatype's I/O functions.  Otherwise,
+# parse_coerce.c will generate CoerceViaIO operations without any prompting.
+# Note that the castcontext values specified here should be no stronger than
+# parse_coerce.c's automatic casts ('a' to text, 'e' from text) else odd
+# behavior will ensue when the automatic cast is applied instead of the
+# pg_cast entry!
+
+{ castsource => 'cidr', casttarget => 'text', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'inet', casttarget => 'text', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'bool', casttarget => 'text', castfunc => '2971', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'xml', casttarget => 'text', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'text', casttarget => 'xml', castfunc => '2896', castcontext => 'e', castmethod => 'f' },
+
+# Cross-category casts to and from VARCHAR
+
+# We support all the same casts as for TEXT.
+{ castsource => 'cidr', casttarget => 'varchar', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'inet', casttarget => 'varchar', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'bool', casttarget => 'varchar', castfunc => '2971', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'xml', casttarget => 'varchar', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'varchar', casttarget => 'xml', castfunc => '2896', castcontext => 'e', castmethod => 'f' },
+
+# Cross-category casts to and from BPCHAR
+
+# We support all the same casts as for TEXT.
+{ castsource => 'cidr', casttarget => 'bpchar', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'inet', casttarget => 'bpchar', castfunc => '730', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'bool', casttarget => 'bpchar', castfunc => '2971', castcontext => 'a', castmethod => 'f' },
+{ castsource => 'xml', casttarget => 'bpchar', castfunc => '0', castcontext => 'a', castmethod => 'b' },
+{ castsource => 'bpchar', casttarget => 'xml', castfunc => '2896', castcontext => 'e', castmethod => 'f' },
+
+# Length-coercion functions
+{ castsource => 'bpchar', casttarget => 'bpchar', castfunc => '668', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'varchar', casttarget => 'varchar', castfunc => '669', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'time', casttarget => 'time', castfunc => '1968', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'timestamp', casttarget => 'timestamp', castfunc => '1961', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'timestamptz', casttarget => 'timestamptz', castfunc => '1967', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'interval', casttarget => 'interval', castfunc => '1200', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'timetz', casttarget => 'timetz', castfunc => '1969', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'bit', casttarget => 'bit', castfunc => '1685', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'varbit', casttarget => 'varbit', castfunc => '1687', castcontext => 'i', castmethod => 'f' },
+{ castsource => 'numeric', casttarget => 'numeric', castfunc => '1703', castcontext => 'i', castmethod => 'f' },
+
+# json to/from jsonb
+{ castsource => 'json', casttarget => 'jsonb', castfunc => '0', castcontext => 'a', castmethod => 'i' },
+{ castsource => 'jsonb', casttarget => 'json', castfunc => '0', castcontext => 'a', castmethod => 'i' },
+
+]

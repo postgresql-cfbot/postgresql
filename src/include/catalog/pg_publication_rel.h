@@ -9,8 +9,8 @@
  * src/include/catalog/pg_publication_rel.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -32,6 +32,9 @@ CATALOG(pg_publication_rel,6106)
 	Oid			prpubid;		/* Oid of the publication */
 	Oid			prrelid;		/* Oid of the relation */
 } FormData_pg_publication_rel;
+
+DECLARE_UNIQUE_INDEX(pg_publication_rel_prrelid_prpubid_index, 6113, on pg_publication_rel using btree(prrelid oid_ops, prpubid oid_ops));
+#define PublicationRelPrrelidPrpubidIndexId 6113
 
 /* ----------------
  *		Form_pg_publication_rel corresponds to a pointer to a tuple with

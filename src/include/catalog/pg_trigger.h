@@ -11,8 +11,8 @@
  * src/include/catalog/pg_trigger.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -63,6 +63,14 @@ CATALOG(pg_trigger,2620)
 	NameData	tgnewtable;		/* new transition table, or NULL if none */
 #endif
 } FormData_pg_trigger;
+
+DECLARE_TOAST(pg_trigger, 2336, 2337);
+DECLARE_INDEX(pg_trigger_tgconstraint_index, 2699, on pg_trigger using btree(tgconstraint oid_ops));
+#define TriggerConstraintIndexId  2699
+DECLARE_UNIQUE_INDEX(pg_trigger_tgrelid_tgname_index, 2701, on pg_trigger using btree(tgrelid oid_ops, tgname name_ops));
+#define TriggerRelidNameIndexId  2701
+DECLARE_UNIQUE_INDEX(pg_trigger_oid_index, 2702, on pg_trigger using btree(oid oid_ops));
+#define TriggerOidIndexId  2702
 
 /* ----------------
  *		Form_pg_trigger corresponds to a pointer to a tuple with

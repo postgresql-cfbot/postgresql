@@ -10,11 +10,8 @@
  * src/include/catalog/pg_enum.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
- *
- *	  XXX do NOT break up DATA() statements into multiple lines!
- *		  the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -38,6 +35,13 @@ CATALOG(pg_enum,3501)
 	NameData	enumlabel;		/* text representation of enum value */
 } FormData_pg_enum;
 
+DECLARE_UNIQUE_INDEX(pg_enum_oid_index, 3502, on pg_enum using btree(oid oid_ops));
+#define EnumOidIndexId	3502
+DECLARE_UNIQUE_INDEX(pg_enum_typid_label_index, 3503, on pg_enum using btree(enumtypid oid_ops, enumlabel name_ops));
+#define EnumTypIdLabelIndexId 3503
+DECLARE_UNIQUE_INDEX(pg_enum_typid_sortorder_index, 3534, on pg_enum using btree(enumtypid oid_ops, enumsortorder float4_ops));
+#define EnumTypIdSortOrderIndexId 3534
+
 /* ----------------
  *		Form_pg_enum corresponds to a pointer to a tuple with
  *		the format of pg_enum relation.
@@ -53,11 +57,6 @@ typedef FormData_pg_enum *Form_pg_enum;
 #define Anum_pg_enum_enumtypid			1
 #define Anum_pg_enum_enumsortorder		2
 #define Anum_pg_enum_enumlabel			3
-
-/* ----------------
- *		pg_enum has no initial contents
- * ----------------
- */
 
 /*
  * prototypes for functions in pg_enum.c

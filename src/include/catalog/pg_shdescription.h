@@ -18,11 +18,8 @@
  * src/include/catalog/pg_shdescription.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -48,6 +45,12 @@ CATALOG(pg_shdescription,2396) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_shdescription;
 
+DECLARE_TOAST(pg_shdescription, 2846, 2847);
+#define PgShdescriptionToastTable 2846
+#define PgShdescriptionToastIndex 2847
+DECLARE_UNIQUE_INDEX(pg_shdescription_o_c_index, 2397, on pg_shdescription using btree(objoid oid_ops, classoid oid_ops));
+#define SharedDescriptionObjIndexId 2397
+
 /* ----------------
  *		Form_pg_shdescription corresponds to a pointer to a tuple with
  *		the format of pg_shdescription relation.
@@ -64,15 +67,10 @@ typedef FormData_pg_shdescription * Form_pg_shdescription;
 #define Anum_pg_shdescription_classoid	2
 #define Anum_pg_shdescription_description 3
 
-/* ----------------
- *		initial contents of pg_shdescription
- * ----------------
- */
-
 /*
- *	Because the contents of this table are taken from the other *.h files,
- *	there is no initialization here.  The initial contents are extracted
- *	by genbki.pl and loaded during initdb.
+ *	Because the contents of this table are taken from the *.dat files
+ *	of other catalogs, pg_shdescription does not have its own *.dat file.
+ *	The initial contents are assembled by genbki.pl and loaded during initdb.
  */
 
 #endif							/* PG_SHDESCRIPTION_H */

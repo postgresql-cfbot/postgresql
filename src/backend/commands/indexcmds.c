@@ -22,7 +22,6 @@
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
-#include "catalog/indexing.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"

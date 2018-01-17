@@ -1,0 +1,184 @@
+# pg_aggregate.dat
+[
+
+# avg
+{ aggfnoid => '2100', aggtransfn => 'int8_avg_accum', aggfinalfn => 'numeric_poly_avg', aggcombinefn => 'int8_avg_combine', aggserialfn => 'int8_avg_serialize', aggdeserialfn => 'int8_avg_deserialize', aggmtransfn => 'int8_avg_accum', aggminvtransfn => 'int8_avg_accum_inv', aggmfinalfn => 'numeric_poly_avg', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2101', aggtransfn => 'int4_avg_accum', aggfinalfn => 'int8_avg', aggcombinefn => 'int4_avg_combine', aggmtransfn => 'int4_avg_accum', aggminvtransfn => 'int4_avg_accum_inv', aggmfinalfn => 'int8_avg', aggtranstype => '1016', aggmtranstype => '1016', agginitval => '{0,0}', aggminitval => '{0,0}' },
+{ aggfnoid => '2102', aggtransfn => 'int2_avg_accum', aggfinalfn => 'int8_avg', aggcombinefn => 'int4_avg_combine', aggmtransfn => 'int2_avg_accum', aggminvtransfn => 'int2_avg_accum_inv', aggmfinalfn => 'int8_avg', aggtranstype => '1016', aggmtranstype => '1016', agginitval => '{0,0}', aggminitval => '{0,0}' },
+{ aggfnoid => '2103', aggtransfn => 'numeric_avg_accum', aggfinalfn => 'numeric_avg', aggcombinefn => 'numeric_avg_combine', aggserialfn => 'numeric_avg_serialize', aggdeserialfn => 'numeric_avg_deserialize', aggmtransfn => 'numeric_avg_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_avg', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2104', aggtransfn => 'float4_accum', aggfinalfn => 'float8_avg', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2105', aggtransfn => 'float8_accum', aggfinalfn => 'float8_avg', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2106', aggtransfn => 'interval_accum', aggfinalfn => 'interval_avg', aggcombinefn => 'interval_combine', aggmtransfn => 'interval_accum', aggminvtransfn => 'interval_accum_inv', aggmfinalfn => 'interval_avg', aggtranstype => '1187', aggmtranstype => '1187', agginitval => '{0 second,0 second}', aggminitval => '{0 second,0 second}' },
+
+# sum
+{ aggfnoid => '2107', aggtransfn => 'int8_avg_accum', aggfinalfn => 'numeric_poly_sum', aggcombinefn => 'int8_avg_combine', aggserialfn => 'int8_avg_serialize', aggdeserialfn => 'int8_avg_deserialize', aggmtransfn => 'int8_avg_accum', aggminvtransfn => 'int8_avg_accum_inv', aggmfinalfn => 'numeric_poly_sum', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2108', aggtransfn => 'int4_sum', aggcombinefn => 'int8pl', aggmtransfn => 'int4_avg_accum', aggminvtransfn => 'int4_avg_accum_inv', aggmfinalfn => 'int2int4_sum', aggtranstype => '20', aggmtranstype => '1016', aggminitval => '{0,0}' },
+{ aggfnoid => '2109', aggtransfn => 'int2_sum', aggcombinefn => 'int8pl', aggmtransfn => 'int2_avg_accum', aggminvtransfn => 'int2_avg_accum_inv', aggmfinalfn => 'int2int4_sum', aggtranstype => '20', aggmtranstype => '1016', aggminitval => '{0,0}' },
+{ aggfnoid => '2110', aggtransfn => 'float4pl', aggcombinefn => 'float4pl', aggtranstype => '700' },
+{ aggfnoid => '2111', aggtransfn => 'float8pl', aggcombinefn => 'float8pl', aggtranstype => '701' },
+{ aggfnoid => '2112', aggtransfn => 'cash_pl', aggcombinefn => 'cash_pl', aggmtransfn => 'cash_pl', aggminvtransfn => 'cash_mi', aggtranstype => '790', aggmtranstype => '790' },
+{ aggfnoid => '2113', aggtransfn => 'interval_pl', aggcombinefn => 'interval_pl', aggmtransfn => 'interval_pl', aggminvtransfn => 'interval_mi', aggtranstype => '1186', aggmtranstype => '1186' },
+{ aggfnoid => '2114', aggtransfn => 'numeric_avg_accum', aggfinalfn => 'numeric_sum', aggcombinefn => 'numeric_avg_combine', aggserialfn => 'numeric_avg_serialize', aggdeserialfn => 'numeric_avg_deserialize', aggmtransfn => 'numeric_avg_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_sum', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# max
+{ aggfnoid => '2115', aggtransfn => 'int8larger', aggcombinefn => 'int8larger', aggsortop => '413', aggtranstype => '20' },
+{ aggfnoid => '2116', aggtransfn => 'int4larger', aggcombinefn => 'int4larger', aggsortop => '521', aggtranstype => '23' },
+{ aggfnoid => '2117', aggtransfn => 'int2larger', aggcombinefn => 'int2larger', aggsortop => '520', aggtranstype => '21' },
+{ aggfnoid => '2118', aggtransfn => 'oidlarger', aggcombinefn => 'oidlarger', aggsortop => '610', aggtranstype => '26' },
+{ aggfnoid => '2119', aggtransfn => 'float4larger', aggcombinefn => 'float4larger', aggsortop => '623', aggtranstype => '700' },
+{ aggfnoid => '2120', aggtransfn => 'float8larger', aggcombinefn => 'float8larger', aggsortop => '674', aggtranstype => '701' },
+{ aggfnoid => '2121', aggtransfn => 'int4larger', aggcombinefn => 'int4larger', aggsortop => '563', aggtranstype => '702' },
+{ aggfnoid => '2122', aggtransfn => 'date_larger', aggcombinefn => 'date_larger', aggsortop => '1097', aggtranstype => '1082' },
+{ aggfnoid => '2123', aggtransfn => 'time_larger', aggcombinefn => 'time_larger', aggsortop => '1112', aggtranstype => '1083' },
+{ aggfnoid => '2124', aggtransfn => 'timetz_larger', aggcombinefn => 'timetz_larger', aggsortop => '1554', aggtranstype => '1266' },
+{ aggfnoid => '2125', aggtransfn => 'cashlarger', aggcombinefn => 'cashlarger', aggsortop => '903', aggtranstype => '790' },
+{ aggfnoid => '2126', aggtransfn => 'timestamp_larger', aggcombinefn => 'timestamp_larger', aggsortop => '2064', aggtranstype => '1114' },
+{ aggfnoid => '2127', aggtransfn => 'timestamptz_larger', aggcombinefn => 'timestamptz_larger', aggsortop => '1324', aggtranstype => '1184' },
+{ aggfnoid => '2128', aggtransfn => 'interval_larger', aggcombinefn => 'interval_larger', aggsortop => '1334', aggtranstype => '1186' },
+{ aggfnoid => '2129', aggtransfn => 'text_larger', aggcombinefn => 'text_larger', aggsortop => '666', aggtranstype => '25' },
+{ aggfnoid => '2130', aggtransfn => 'numeric_larger', aggcombinefn => 'numeric_larger', aggsortop => '1756', aggtranstype => '1700' },
+{ aggfnoid => '2050', aggtransfn => 'array_larger', aggcombinefn => 'array_larger', aggsortop => '1073', aggtranstype => '2277' },
+{ aggfnoid => '2244', aggtransfn => 'bpchar_larger', aggcombinefn => 'bpchar_larger', aggsortop => '1060', aggtranstype => '1042' },
+{ aggfnoid => '2797', aggtransfn => 'tidlarger', aggcombinefn => 'tidlarger', aggsortop => '2800', aggtranstype => '27' },
+{ aggfnoid => '3526', aggtransfn => 'enum_larger', aggcombinefn => 'enum_larger', aggsortop => '3519', aggtranstype => '3500' },
+{ aggfnoid => '3564', aggtransfn => 'network_larger', aggcombinefn => 'network_larger', aggsortop => '1205', aggtranstype => '869' },
+
+# min
+{ aggfnoid => '2131', aggtransfn => 'int8smaller', aggcombinefn => 'int8smaller', aggsortop => '412', aggtranstype => '20' },
+{ aggfnoid => '2132', aggtransfn => 'int4smaller', aggcombinefn => 'int4smaller', aggsortop => '97', aggtranstype => '23' },
+{ aggfnoid => '2133', aggtransfn => 'int2smaller', aggcombinefn => 'int2smaller', aggsortop => '95', aggtranstype => '21' },
+{ aggfnoid => '2134', aggtransfn => 'oidsmaller', aggcombinefn => 'oidsmaller', aggsortop => '609', aggtranstype => '26' },
+{ aggfnoid => '2135', aggtransfn => 'float4smaller', aggcombinefn => 'float4smaller', aggsortop => '622', aggtranstype => '700' },
+{ aggfnoid => '2136', aggtransfn => 'float8smaller', aggcombinefn => 'float8smaller', aggsortop => '672', aggtranstype => '701' },
+{ aggfnoid => '2137', aggtransfn => 'int4smaller', aggcombinefn => 'int4smaller', aggsortop => '562', aggtranstype => '702' },
+{ aggfnoid => '2138', aggtransfn => 'date_smaller', aggcombinefn => 'date_smaller', aggsortop => '1095', aggtranstype => '1082' },
+{ aggfnoid => '2139', aggtransfn => 'time_smaller', aggcombinefn => 'time_smaller', aggsortop => '1110', aggtranstype => '1083' },
+{ aggfnoid => '2140', aggtransfn => 'timetz_smaller', aggcombinefn => 'timetz_smaller', aggsortop => '1552', aggtranstype => '1266' },
+{ aggfnoid => '2141', aggtransfn => 'cashsmaller', aggcombinefn => 'cashsmaller', aggsortop => '902', aggtranstype => '790' },
+{ aggfnoid => '2142', aggtransfn => 'timestamp_smaller', aggcombinefn => 'timestamp_smaller', aggsortop => '2062', aggtranstype => '1114' },
+{ aggfnoid => '2143', aggtransfn => 'timestamptz_smaller', aggcombinefn => 'timestamptz_smaller', aggsortop => '1322', aggtranstype => '1184' },
+{ aggfnoid => '2144', aggtransfn => 'interval_smaller', aggcombinefn => 'interval_smaller', aggsortop => '1332', aggtranstype => '1186' },
+{ aggfnoid => '2145', aggtransfn => 'text_smaller', aggcombinefn => 'text_smaller', aggsortop => '664', aggtranstype => '25' },
+{ aggfnoid => '2146', aggtransfn => 'numeric_smaller', aggcombinefn => 'numeric_smaller', aggsortop => '1754', aggtranstype => '1700' },
+{ aggfnoid => '2051', aggtransfn => 'array_smaller', aggcombinefn => 'array_smaller', aggsortop => '1072', aggtranstype => '2277' },
+{ aggfnoid => '2245', aggtransfn => 'bpchar_smaller', aggcombinefn => 'bpchar_smaller', aggsortop => '1058', aggtranstype => '1042' },
+{ aggfnoid => '2798', aggtransfn => 'tidsmaller', aggcombinefn => 'tidsmaller', aggsortop => '2799', aggtranstype => '27' },
+{ aggfnoid => '3527', aggtransfn => 'enum_smaller', aggcombinefn => 'enum_smaller', aggsortop => '3518', aggtranstype => '3500' },
+{ aggfnoid => '3565', aggtransfn => 'network_smaller', aggcombinefn => 'network_smaller', aggsortop => '1203', aggtranstype => '869' },
+
+# count
+{ aggfnoid => '2147', aggtransfn => 'int8inc_any', aggcombinefn => 'int8pl', aggmtransfn => 'int8inc_any', aggminvtransfn => 'int8dec_any', aggtranstype => '20', aggmtranstype => '20', agginitval => '0', aggminitval => '0' },
+{ aggfnoid => '2803', aggtransfn => 'int8inc', aggcombinefn => 'int8pl', aggmtransfn => 'int8inc', aggminvtransfn => 'int8dec', aggtranstype => '20', aggmtranstype => '20', agginitval => '0', aggminitval => '0' },
+
+# var_pop
+{ aggfnoid => '2718', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_var_pop', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_var_pop', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2719', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_var_pop', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_var_pop', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2720', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_var_pop', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_var_pop', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2721', aggtransfn => 'float4_accum', aggfinalfn => 'float8_var_pop', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2722', aggtransfn => 'float8_accum', aggfinalfn => 'float8_var_pop', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2723', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_var_pop', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_var_pop', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# var_samp
+{ aggfnoid => '2641', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_var_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_var_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2642', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_var_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_var_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2643', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_var_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_var_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2644', aggtransfn => 'float4_accum', aggfinalfn => 'float8_var_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2645', aggtransfn => 'float8_accum', aggfinalfn => 'float8_var_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2646', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_var_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_var_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# variance: historical Postgres syntax for var_samp
+{ aggfnoid => '2148', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_var_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_var_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2149', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_var_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_var_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2150', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_var_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_var_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2151', aggtransfn => 'float4_accum', aggfinalfn => 'float8_var_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2152', aggtransfn => 'float8_accum', aggfinalfn => 'float8_var_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2153', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_var_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_var_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# stddev_pop
+{ aggfnoid => '2724', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_stddev_pop', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_stddev_pop', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2725', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_stddev_pop', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_stddev_pop', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2726', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_stddev_pop', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_stddev_pop', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2727', aggtransfn => 'float4_accum', aggfinalfn => 'float8_stddev_pop', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2728', aggtransfn => 'float8_accum', aggfinalfn => 'float8_stddev_pop', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2729', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_stddev_pop', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_stddev_pop', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# stddev_samp
+{ aggfnoid => '2712', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_stddev_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_stddev_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2713', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_stddev_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_stddev_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2714', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_stddev_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_stddev_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2715', aggtransfn => 'float4_accum', aggfinalfn => 'float8_stddev_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2716', aggtransfn => 'float8_accum', aggfinalfn => 'float8_stddev_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2717', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_stddev_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_stddev_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# stddev: historical Postgres syntax for stddev_samp
+{ aggfnoid => '2154', aggtransfn => 'int8_accum', aggfinalfn => 'numeric_stddev_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'int8_accum', aggminvtransfn => 'int8_accum_inv', aggmfinalfn => 'numeric_stddev_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+{ aggfnoid => '2155', aggtransfn => 'int4_accum', aggfinalfn => 'numeric_poly_stddev_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int4_accum', aggminvtransfn => 'int4_accum_inv', aggmfinalfn => 'numeric_poly_stddev_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2156', aggtransfn => 'int2_accum', aggfinalfn => 'numeric_poly_stddev_samp', aggcombinefn => 'numeric_poly_combine', aggserialfn => 'numeric_poly_serialize', aggdeserialfn => 'numeric_poly_deserialize', aggmtransfn => 'int2_accum', aggminvtransfn => 'int2_accum_inv', aggmfinalfn => 'numeric_poly_stddev_samp', aggtranstype => '2281', aggtransspace => '48', aggmtranstype => '2281', aggmtransspace => '48' },
+{ aggfnoid => '2157', aggtransfn => 'float4_accum', aggfinalfn => 'float8_stddev_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2158', aggtransfn => 'float8_accum', aggfinalfn => 'float8_stddev_samp', aggcombinefn => 'float8_combine', aggtranstype => '1022', agginitval => '{0,0,0}' },
+{ aggfnoid => '2159', aggtransfn => 'numeric_accum', aggfinalfn => 'numeric_stddev_samp', aggcombinefn => 'numeric_combine', aggserialfn => 'numeric_serialize', aggdeserialfn => 'numeric_deserialize', aggmtransfn => 'numeric_accum', aggminvtransfn => 'numeric_accum_inv', aggmfinalfn => 'numeric_stddev_samp', aggtranstype => '2281', aggtransspace => '128', aggmtranstype => '2281', aggmtransspace => '128' },
+
+# SQL2003 binary regression aggregates
+{ aggfnoid => '2818', aggtransfn => 'int8inc_float8_float8', aggcombinefn => 'int8pl', aggtranstype => '20', agginitval => '0' },
+{ aggfnoid => '2819', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_sxx', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2820', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_syy', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2821', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_sxy', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2822', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_avgx', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2823', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_avgy', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2824', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_r2', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2825', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_slope', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2826', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_regr_intercept', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2827', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_covar_pop', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2828', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_covar_samp', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+{ aggfnoid => '2829', aggtransfn => 'float8_regr_accum', aggfinalfn => 'float8_corr', aggcombinefn => 'float8_regr_combine', aggtranstype => '1022', agginitval => '{0,0,0,0,0,0}' },
+
+# boolean-and and boolean-or
+{ aggfnoid => '2517', aggtransfn => 'booland_statefunc', aggcombinefn => 'booland_statefunc', aggmtransfn => 'bool_accum', aggminvtransfn => 'bool_accum_inv', aggmfinalfn => 'bool_alltrue', aggsortop => '58', aggtranstype => '16', aggmtranstype => '2281', aggmtransspace => '16' },
+{ aggfnoid => '2518', aggtransfn => 'boolor_statefunc', aggcombinefn => 'boolor_statefunc', aggmtransfn => 'bool_accum', aggminvtransfn => 'bool_accum_inv', aggmfinalfn => 'bool_anytrue', aggsortop => '59', aggtranstype => '16', aggmtranstype => '2281', aggmtransspace => '16' },
+{ aggfnoid => '2519', aggtransfn => 'booland_statefunc', aggcombinefn => 'booland_statefunc', aggmtransfn => 'bool_accum', aggminvtransfn => 'bool_accum_inv', aggmfinalfn => 'bool_alltrue', aggsortop => '58', aggtranstype => '16', aggmtranstype => '2281', aggmtransspace => '16' },
+
+# bitwise integer
+{ aggfnoid => '2236', aggtransfn => 'int2and', aggcombinefn => 'int2and', aggtranstype => '21' },
+{ aggfnoid => '2237', aggtransfn => 'int2or', aggcombinefn => 'int2or', aggtranstype => '21' },
+{ aggfnoid => '2238', aggtransfn => 'int4and', aggcombinefn => 'int4and', aggtranstype => '23' },
+{ aggfnoid => '2239', aggtransfn => 'int4or', aggcombinefn => 'int4or', aggtranstype => '23' },
+{ aggfnoid => '2240', aggtransfn => 'int8and', aggcombinefn => 'int8and', aggtranstype => '20' },
+{ aggfnoid => '2241', aggtransfn => 'int8or', aggcombinefn => 'int8or', aggtranstype => '20' },
+{ aggfnoid => '2242', aggtransfn => 'bitand', aggcombinefn => 'bitand', aggtranstype => '1560' },
+{ aggfnoid => '2243', aggtransfn => 'bitor', aggcombinefn => 'bitor', aggtranstype => '1560' },
+
+# xml
+{ aggfnoid => '2901', aggtransfn => 'xmlconcat2', aggtranstype => '142' },
+
+# array
+{ aggfnoid => '2335', aggtransfn => 'array_agg_transfn', aggfinalfn => 'array_agg_finalfn', aggfinalextra => 't', aggtranstype => '2281' },
+{ aggfnoid => '4053', aggtransfn => 'array_agg_array_transfn', aggfinalfn => 'array_agg_array_finalfn', aggfinalextra => 't', aggtranstype => '2281' },
+
+# text
+{ aggfnoid => '3538', aggtransfn => 'string_agg_transfn', aggfinalfn => 'string_agg_finalfn', aggtranstype => '2281' },
+
+# bytea
+{ aggfnoid => '3545', aggtransfn => 'bytea_string_agg_transfn', aggfinalfn => 'bytea_string_agg_finalfn', aggtranstype => '2281' },
+
+# json
+{ aggfnoid => '3175', aggtransfn => 'json_agg_transfn', aggfinalfn => 'json_agg_finalfn', aggtranstype => '2281' },
+{ aggfnoid => '3197', aggtransfn => 'json_object_agg_transfn', aggfinalfn => 'json_object_agg_finalfn', aggtranstype => '2281' },
+
+# jsonb
+{ aggfnoid => '3267', aggtransfn => 'jsonb_agg_transfn', aggfinalfn => 'jsonb_agg_finalfn', aggtranstype => '2281' },
+{ aggfnoid => '3270', aggtransfn => 'jsonb_object_agg_transfn', aggfinalfn => 'jsonb_object_agg_finalfn', aggtranstype => '2281' },
+
+# ordered-set and hypothetical-set aggregates
+{ aggfnoid => '3972', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_disc_final', aggfinalextra => 't', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3974', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_cont_float8_final', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3976', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_cont_interval_final', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3978', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_disc_multi_final', aggfinalextra => 't', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3980', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_cont_float8_multi_final', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3982', aggkind => 'o', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition', aggfinalfn => 'percentile_cont_interval_multi_final', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3984', aggkind => 'o', aggtransfn => 'ordered_set_transition', aggfinalfn => 'mode_final', aggfinalextra => 't', aggfinalmodify => 's', aggmfinalmodify => 's', aggtranstype => '2281' },
+{ aggfnoid => '3986', aggkind => 'h', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition_multi', aggfinalfn => 'rank_final', aggfinalextra => 't', aggfinalmodify => 'w', aggmfinalmodify => 'w', aggtranstype => '2281' },
+{ aggfnoid => '3988', aggkind => 'h', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition_multi', aggfinalfn => 'percent_rank_final', aggfinalextra => 't', aggfinalmodify => 'w', aggmfinalmodify => 'w', aggtranstype => '2281' },
+{ aggfnoid => '3990', aggkind => 'h', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition_multi', aggfinalfn => 'cume_dist_final', aggfinalextra => 't', aggfinalmodify => 'w', aggmfinalmodify => 'w', aggtranstype => '2281' },
+{ aggfnoid => '3992', aggkind => 'h', aggnumdirectargs => '1', aggtransfn => 'ordered_set_transition_multi', aggfinalfn => 'dense_rank_final', aggfinalextra => 't', aggfinalmodify => 'w', aggmfinalmodify => 'w', aggtranstype => '2281' },
+
+]

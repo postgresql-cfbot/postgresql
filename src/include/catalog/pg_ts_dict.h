@@ -10,11 +10,8 @@
  * src/include/catalog/pg_ts_dict.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -42,6 +39,11 @@ CATALOG(pg_ts_dict,3600)
 #endif
 } FormData_pg_ts_dict;
 
+DECLARE_UNIQUE_INDEX(pg_ts_dict_dictname_index, 3604, on pg_ts_dict using btree(dictname name_ops, dictnamespace oid_ops));
+#define TSDictionaryNameNspIndexId	3604
+DECLARE_UNIQUE_INDEX(pg_ts_dict_oid_index, 3605, on pg_ts_dict using btree(oid oid_ops));
+#define TSDictionaryOidIndexId	3605
+
 typedef FormData_pg_ts_dict *Form_pg_ts_dict;
 
 /* ----------------
@@ -54,13 +56,5 @@ typedef FormData_pg_ts_dict *Form_pg_ts_dict;
 #define Anum_pg_ts_dict_dictowner		3
 #define Anum_pg_ts_dict_dicttemplate	4
 #define Anum_pg_ts_dict_dictinitoption	5
-
-/* ----------------
- *		initial contents of pg_ts_dict
- * ----------------
- */
-
-DATA(insert OID = 3765 ( "simple" PGNSP PGUID 3727 _null_));
-DESCR("simple dictionary: just lower case and check for stopword");
 
 #endif							/* PG_TS_DICT_H */

@@ -11,8 +11,8 @@
  * src/include/catalog/pg_shdepend.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -55,6 +55,11 @@ CATALOG(pg_shdepend,1214) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 	 */
 	char		deptype;		/* see codes in dependency.h */
 } FormData_pg_shdepend;
+
+DECLARE_INDEX(pg_shdepend_depender_index, 1232, on pg_shdepend using btree(dbid oid_ops, classid oid_ops, objid oid_ops, objsubid int4_ops));
+#define SharedDependDependerIndexId		1232
+DECLARE_INDEX(pg_shdepend_reference_index, 1233, on pg_shdepend using btree(refclassid oid_ops, refobjid oid_ops));
+#define SharedDependReferenceIndexId	1233
 
 /* ----------------
  *		Form_pg_shdepend corresponds to a pointer to a row with

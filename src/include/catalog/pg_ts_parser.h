@@ -10,11 +10,8 @@
  * src/include/catalog/pg_ts_parser.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -41,6 +38,11 @@ CATALOG(pg_ts_parser,3601)
 	regproc		prslextype;		/* return descriptions of lexeme's types */
 } FormData_pg_ts_parser;
 
+DECLARE_UNIQUE_INDEX(pg_ts_parser_prsname_index, 3606, on pg_ts_parser using btree(prsname name_ops, prsnamespace oid_ops));
+#define TSParserNameNspIndexId	3606
+DECLARE_UNIQUE_INDEX(pg_ts_parser_oid_index, 3607, on pg_ts_parser using btree(oid oid_ops));
+#define TSParserOidIndexId	3607
+
 typedef FormData_pg_ts_parser *Form_pg_ts_parser;
 
 /* ----------------
@@ -55,13 +57,5 @@ typedef FormData_pg_ts_parser *Form_pg_ts_parser;
 #define Anum_pg_ts_parser_prsend			5
 #define Anum_pg_ts_parser_prsheadline		6
 #define Anum_pg_ts_parser_prslextype		7
-
-/* ----------------
- *		initial contents of pg_ts_parser
- * ----------------
- */
-
-DATA(insert OID = 3722 ( "default" PGNSP prsd_start prsd_nexttoken prsd_end prsd_headline prsd_lextype ));
-DESCR("default word parser");
 
 #endif							/* PG_TS_PARSER_H */

@@ -10,11 +10,8 @@
  * src/include/catalog/pg_ts_config.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -38,6 +35,11 @@ CATALOG(pg_ts_config,3602)
 	Oid			cfgparser;		/* OID of parser (in pg_ts_parser) */
 } FormData_pg_ts_config;
 
+DECLARE_UNIQUE_INDEX(pg_ts_config_cfgname_index, 3608, on pg_ts_config using btree(cfgname name_ops, cfgnamespace oid_ops));
+#define TSConfigNameNspIndexId	3608
+DECLARE_UNIQUE_INDEX(pg_ts_config_oid_index, 3712, on pg_ts_config using btree(oid oid_ops));
+#define TSConfigOidIndexId	3712
+
 typedef FormData_pg_ts_config *Form_pg_ts_config;
 
 /* ----------------
@@ -49,12 +51,5 @@ typedef FormData_pg_ts_config *Form_pg_ts_config;
 #define Anum_pg_ts_config_cfgnamespace	2
 #define Anum_pg_ts_config_cfgowner		3
 #define Anum_pg_ts_config_cfgparser		4
-
-/* ----------------
- *		initial contents of pg_ts_config
- * ----------------
- */
-DATA(insert OID = 3748 ( "simple" PGNSP PGUID 3722 ));
-DESCR("simple configuration");
 
 #endif							/* PG_TS_CONFIG_H */

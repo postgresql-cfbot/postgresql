@@ -15,7 +15,6 @@
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
-#include "catalog/indexing.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "commands/seclabel.h"

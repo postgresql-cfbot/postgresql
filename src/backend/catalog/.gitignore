@@ -2,3 +2,4 @@
 /postgres.description
 /postgres.shdescription
 /schemapg.h
+/oid_symbols.h

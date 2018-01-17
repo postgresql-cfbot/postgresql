@@ -11,11 +11,8 @@
  * src/include/catalog/pg_am.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -23,6 +20,7 @@
 #define PG_AM_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /* ----------------
  *		pg_am definition.  cpp turns this into
@@ -37,6 +35,11 @@ CATALOG(pg_am,2601)
 	regproc		amhandler;		/* handler function */
 	char		amtype;			/* see AMTYPE_xxx constants below */
 } FormData_pg_am;
+
+DECLARE_UNIQUE_INDEX(pg_am_name_index, 2651, on pg_am using btree(amname name_ops));
+#define AmNameIndexId  2651
+DECLARE_UNIQUE_INDEX(pg_am_oid_index, 2652, on pg_am using btree(oid oid_ops));
+#define AmOidIndexId  2652
 
 /* ----------------
  *		Form_pg_am corresponds to a pointer to a tuple with
@@ -59,29 +62,5 @@ typedef FormData_pg_am *Form_pg_am;
  * ----------------
  */
 #define AMTYPE_INDEX					'i' /* index access method */
-
-/* ----------------
- *		initial contents of pg_am
- * ----------------
- */
-
-DATA(insert OID = 403 (  btree		bthandler	i ));
-DESCR("b-tree index access method");
-#define BTREE_AM_OID 403
-DATA(insert OID = 405 (  hash		hashhandler i ));
-DESCR("hash index access method");
-#define HASH_AM_OID 405
-DATA(insert OID = 783 (  gist		gisthandler i ));
-DESCR("GiST index access method");
-#define GIST_AM_OID 783
-DATA(insert OID = 2742 (  gin		ginhandler	i ));
-DESCR("GIN index access method");
-#define GIN_AM_OID 2742
-DATA(insert OID = 4000 (  spgist	spghandler	i ));
-DESCR("SP-GiST index access method");
-#define SPGIST_AM_OID 4000
-DATA(insert OID = 3580 (  brin		brinhandler i ));
-DESCR("block range index (BRIN) access method");
-#define BRIN_AM_OID 3580
 
 #endif							/* PG_AM_H */

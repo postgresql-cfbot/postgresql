@@ -1,0 +1,11 @@
+# pg_language.dat
+[
+
+{ oid => '12', oid_symbol => 'INTERNALlanguageId', descr => 'built-in functions',
+  lanname => 'internal', lanowner => 'PGUID', lanispl => 'f', lanpltrusted => 'f', lanplcallfoid => '0', laninline => '0', lanvalidator => '2246', lanacl => '_null_' },
+{ oid => '13', oid_symbol => 'ClanguageId', descr => 'dynamically-loaded C functions',
+  lanname => 'c', lanowner => 'PGUID', lanispl => 'f', lanpltrusted => 'f', lanplcallfoid => '0', laninline => '0', lanvalidator => '2247', lanacl => '_null_' },
+{ oid => '14', oid_symbol => 'SQLlanguageId', descr => 'SQL-language functions',
+  lanname => 'sql', lanowner => 'PGUID', lanispl => 'f', lanpltrusted => 't', lanplcallfoid => '0', laninline => '0', lanvalidator => '2248', lanacl => '_null_' },
+
+]

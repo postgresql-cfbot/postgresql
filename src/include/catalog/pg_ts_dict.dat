@@ -1,0 +1,7 @@
+# pg_ts_dict.dat
+[
+
+{ oid => '3765', descr => 'simple dictionary: just lower case and check for stopword',
+  dictname => 'simple', dictnamespace => 'PGNSP', dictowner => 'PGUID', dicttemplate => '3727', dictinitoption => '_null_' },
+
+]

@@ -11,8 +11,8 @@
  * src/include/catalog/pg_auth_members.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -36,6 +36,11 @@ CATALOG(pg_auth_members,1261) BKI_SHARED_RELATION BKI_WITHOUT_OIDS BKI_ROWTYPE_O
 	Oid			grantor;		/* who granted the membership */
 	bool		admin_option;	/* granted with admin option? */
 } FormData_pg_auth_members;
+
+DECLARE_UNIQUE_INDEX(pg_auth_members_role_member_index, 2694, on pg_auth_members using btree(roleid oid_ops, member oid_ops));
+#define AuthMemRoleMemIndexId	2694
+DECLARE_UNIQUE_INDEX(pg_auth_members_member_role_index, 2695, on pg_auth_members using btree(member oid_ops, roleid oid_ops));
+#define AuthMemMemRoleIndexId	2695
 
 /* ----------------
  *		Form_pg_auth_members corresponds to a pointer to a tuple with

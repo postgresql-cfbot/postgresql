@@ -35,8 +35,6 @@
 
 #include "access/xact.h"
 
-#include "catalog/indexing.h"
-
 #include "nodes/execnodes.h"
 
 #include "replication/message.h"

@@ -32,6 +32,12 @@ CATALOG(pg_shseclabel,3592) BKI_SHARED_RELATION BKI_ROWTYPE_OID(4066) BKI_WITHOU
 #endif
 } FormData_pg_shseclabel;
 
+DECLARE_TOAST(pg_shseclabel, 4060, 4061);
+#define PgShseclabelToastTable 4060
+#define PgShseclabelToastIndex 4061
+DECLARE_UNIQUE_INDEX(pg_shseclabel_object_index, 3593, on pg_shseclabel using btree(objoid oid_ops, classoid oid_ops, provider text_pattern_ops));
+#define SharedSecLabelObjectIndexId			3593
+
 typedef FormData_pg_shseclabel * Form_pg_shseclabel;
 
 /* ----------------

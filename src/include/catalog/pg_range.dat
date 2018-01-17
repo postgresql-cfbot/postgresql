@@ -1,0 +1,11 @@
+# pg_range.dat
+[
+
+{ rngtypid => 'int4range', rngsubtype => 'int4', rngcollation => '0', rngsubopc => '1978', rngcanonical => 'int4range_canonical', rngsubdiff => 'int4range_subdiff' },
+{ rngtypid => 'numrange', rngsubtype => 'numeric', rngcollation => '0', rngsubopc => '3125', rngcanonical => '-', rngsubdiff => 'numrange_subdiff' },
+{ rngtypid => 'tsrange', rngsubtype => 'timestamp', rngcollation => '0', rngsubopc => '3128', rngcanonical => '-', rngsubdiff => 'tsrange_subdiff' },
+{ rngtypid => 'tstzrange', rngsubtype => 'timestamptz', rngcollation => '0', rngsubopc => '3127', rngcanonical => '-', rngsubdiff => 'tstzrange_subdiff' },
+{ rngtypid => 'daterange', rngsubtype => 'date', rngcollation => '0', rngsubopc => '3122', rngcanonical => 'daterange_canonical', rngsubdiff => 'daterange_subdiff' },
+{ rngtypid => 'int8range', rngsubtype => 'int8', rngcollation => '0', rngsubopc => '3124', rngcanonical => 'int8range_canonical', rngsubdiff => 'int8range_subdiff' },
+
+]

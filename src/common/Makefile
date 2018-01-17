@@ -88,12 +88,17 @@ libpgcommon_srv.a: $(OBJS_SRV)
 %_srv.o: %.c %.o
 	$(CC) $(CFLAGS) $(subst -DFRONTEND ,, $(CPPFLAGS)) -c $< -o $@
 
-$(OBJS_SRV): | submake-errcodes
+$(OBJS_SRV): | submake-errcodes submake-oidsymbols
 
 .PHONY: submake-errcodes
 
 submake-errcodes:
 	$(MAKE) -C ../backend submake-errcodes
+
+.PHONY: submake-oidsymbols
+
+submake-oidsymbols:
+	$(MAKE) -C ../backend submake-oidsymbols
 
 # Dependencies of keywords.o need to be managed explicitly to make sure
 # that you don't get broken parsing code, even in a non-enable-depend build.

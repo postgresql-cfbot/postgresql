@@ -1,0 +1,1037 @@
+# pg_amop.dat
+[
+
+# btree integer_ops
+
+# default operators int2
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int2', str => '1', oper => '<(int2,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int2', str => '2', oper => '<=(int2,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int2', str => '3', oper => '=(int2,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int2', str => '4', oper => '>=(int2,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int2', str => '5', oper => '>(int2,int2)', am => 'btree' },
+
+# crosstype operators int24
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int4', str => '1', oper => '<(int2,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int4', str => '2', oper => '<=(int2,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int4', str => '3', oper => '=(int2,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int4', str => '4', oper => '>=(int2,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int4', str => '5', oper => '>(int2,int4)', am => 'btree' },
+
+# crosstype operators int28
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int8', str => '1', oper => '<(int2,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int8', str => '2', oper => '<=(int2,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int8', str => '3', oper => '=(int2,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int8', str => '4', oper => '>=(int2,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int2', rt => 'int8', str => '5', oper => '>(int2,int8)', am => 'btree' },
+
+# default operators int4
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int4', str => '1', oper => '<(int4,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int4', str => '2', oper => '<=(int4,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int4', str => '3', oper => '=(int4,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int4', str => '4', oper => '>=(int4,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int4', str => '5', oper => '>(int4,int4)', am => 'btree' },
+
+# crosstype operators int42
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int2', str => '1', oper => '<(int4,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int2', str => '2', oper => '<=(int4,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int2', str => '3', oper => '=(int4,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int2', str => '4', oper => '>=(int4,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int2', str => '5', oper => '>(int4,int2)', am => 'btree' },
+
+# crosstype operators int48
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int8', str => '1', oper => '<(int4,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int8', str => '2', oper => '<=(int4,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int8', str => '3', oper => '=(int4,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int8', str => '4', oper => '>=(int4,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int4', rt => 'int8', str => '5', oper => '>(int4,int8)', am => 'btree' },
+
+# default operators int8
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int8', str => '1', oper => '<(int8,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int8', str => '2', oper => '<=(int8,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int8', str => '3', oper => '=(int8,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int8', str => '4', oper => '>=(int8,int8)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int8', str => '5', oper => '>(int8,int8)', am => 'btree' },
+
+# crosstype operators int82
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int2', str => '1', oper => '<(int8,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int2', str => '2', oper => '<=(int8,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int2', str => '3', oper => '=(int8,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int2', str => '4', oper => '>=(int8,int2)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int2', str => '5', oper => '>(int8,int2)', am => 'btree' },
+
+# crosstype operators int84
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int4', str => '1', oper => '<(int8,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int4', str => '2', oper => '<=(int8,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int4', str => '3', oper => '=(int8,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int4', str => '4', oper => '>=(int8,int4)', am => 'btree' },
+{ opf => 'btree/integer_ops', lt => 'int8', rt => 'int4', str => '5', oper => '>(int8,int4)', am => 'btree' },
+
+# btree oid_ops
+
+{ opf => 'btree/oid_ops', lt => 'oid', rt => 'oid', str => '1', oper => '<(oid,oid)', am => 'btree' },
+{ opf => 'btree/oid_ops', lt => 'oid', rt => 'oid', str => '2', oper => '<=(oid,oid)', am => 'btree' },
+{ opf => 'btree/oid_ops', lt => 'oid', rt => 'oid', str => '3', oper => '=(oid,oid)', am => 'btree' },
+{ opf => 'btree/oid_ops', lt => 'oid', rt => 'oid', str => '4', oper => '>=(oid,oid)', am => 'btree' },
+{ opf => 'btree/oid_ops', lt => 'oid', rt => 'oid', str => '5', oper => '>(oid,oid)', am => 'btree' },
+
+# btree tid_ops
+
+{ opf => 'btree/tid_ops', lt => 'tid', rt => 'tid', str => '1', oper => '<(tid,tid)', am => 'btree' },
+{ opf => 'btree/tid_ops', lt => 'tid', rt => 'tid', str => '2', oper => '<=(tid,tid)', am => 'btree' },
+{ opf => 'btree/tid_ops', lt => 'tid', rt => 'tid', str => '3', oper => '=(tid,tid)', am => 'btree' },
+{ opf => 'btree/tid_ops', lt => 'tid', rt => 'tid', str => '4', oper => '>=(tid,tid)', am => 'btree' },
+{ opf => 'btree/tid_ops', lt => 'tid', rt => 'tid', str => '5', oper => '>(tid,tid)', am => 'btree' },
+
+# btree oidvector_ops
+
+{ opf => 'btree/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '1', oper => '<(oidvector,oidvector)', am => 'btree' },
+{ opf => 'btree/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '2', oper => '<=(oidvector,oidvector)', am => 'btree' },
+{ opf => 'btree/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '3', oper => '=(oidvector,oidvector)', am => 'btree' },
+{ opf => 'btree/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '4', oper => '>=(oidvector,oidvector)', am => 'btree' },
+{ opf => 'btree/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '5', oper => '>(oidvector,oidvector)', am => 'btree' },
+
+# btree float_ops
+
+# default operators float4
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float4', str => '1', oper => '<(float4,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float4', str => '2', oper => '<=(float4,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float4', str => '3', oper => '=(float4,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float4', str => '4', oper => '>=(float4,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float4', str => '5', oper => '>(float4,float4)', am => 'btree' },
+
+# crosstype operators float48
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float8', str => '1', oper => '<(float4,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float8', str => '2', oper => '<=(float4,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float8', str => '3', oper => '=(float4,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float8', str => '4', oper => '>=(float4,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float4', rt => 'float8', str => '5', oper => '>(float4,float8)', am => 'btree' },
+
+# default operators float8
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float8', str => '1', oper => '<(float8,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float8', str => '2', oper => '<=(float8,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float8', str => '3', oper => '=(float8,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float8', str => '4', oper => '>=(float8,float8)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float8', str => '5', oper => '>(float8,float8)', am => 'btree' },
+
+# crosstype operators float84
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float4', str => '1', oper => '<(float8,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float4', str => '2', oper => '<=(float8,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float4', str => '3', oper => '=(float8,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float4', str => '4', oper => '>=(float8,float4)', am => 'btree' },
+{ opf => 'btree/float_ops', lt => 'float8', rt => 'float4', str => '5', oper => '>(float8,float4)', am => 'btree' },
+
+# btree char_ops
+
+{ opf => 'btree/char_ops', lt => 'char', rt => 'char', str => '1', oper => '<(char,char)', am => 'btree' },
+{ opf => 'btree/char_ops', lt => 'char', rt => 'char', str => '2', oper => '<=(char,char)', am => 'btree' },
+{ opf => 'btree/char_ops', lt => 'char', rt => 'char', str => '3', oper => '=(char,char)', am => 'btree' },
+{ opf => 'btree/char_ops', lt => 'char', rt => 'char', str => '4', oper => '>=(char,char)', am => 'btree' },
+{ opf => 'btree/char_ops', lt => 'char', rt => 'char', str => '5', oper => '>(char,char)', am => 'btree' },
+
+# btree name_ops
+
+{ opf => 'btree/name_ops', lt => 'name', rt => 'name', str => '1', oper => '<(name,name)', am => 'btree' },
+{ opf => 'btree/name_ops', lt => 'name', rt => 'name', str => '2', oper => '<=(name,name)', am => 'btree' },
+{ opf => 'btree/name_ops', lt => 'name', rt => 'name', str => '3', oper => '=(name,name)', am => 'btree' },
+{ opf => 'btree/name_ops', lt => 'name', rt => 'name', str => '4', oper => '>=(name,name)', am => 'btree' },
+{ opf => 'btree/name_ops', lt => 'name', rt => 'name', str => '5', oper => '>(name,name)', am => 'btree' },
+
+# btree text_ops
+
+{ opf => 'btree/text_ops', lt => 'text', rt => 'text', str => '1', oper => '<(text,text)', am => 'btree' },
+{ opf => 'btree/text_ops', lt => 'text', rt => 'text', str => '2', oper => '<=(text,text)', am => 'btree' },
+{ opf => 'btree/text_ops', lt => 'text', rt => 'text', str => '3', oper => '=(text,text)', am => 'btree' },
+{ opf => 'btree/text_ops', lt => 'text', rt => 'text', str => '4', oper => '>=(text,text)', am => 'btree' },
+{ opf => 'btree/text_ops', lt => 'text', rt => 'text', str => '5', oper => '>(text,text)', am => 'btree' },
+
+# btree bpchar_ops
+
+{ opf => 'btree/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '1', oper => '<(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '2', oper => '<=(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '3', oper => '=(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '4', oper => '>=(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '5', oper => '>(bpchar,bpchar)', am => 'btree' },
+
+# btree bytea_ops
+
+{ opf => 'btree/bytea_ops', lt => 'bytea', rt => 'bytea', str => '1', oper => '<(bytea,bytea)', am => 'btree' },
+{ opf => 'btree/bytea_ops', lt => 'bytea', rt => 'bytea', str => '2', oper => '<=(bytea,bytea)', am => 'btree' },
+{ opf => 'btree/bytea_ops', lt => 'bytea', rt => 'bytea', str => '3', oper => '=(bytea,bytea)', am => 'btree' },
+{ opf => 'btree/bytea_ops', lt => 'bytea', rt => 'bytea', str => '4', oper => '>=(bytea,bytea)', am => 'btree' },
+{ opf => 'btree/bytea_ops', lt => 'bytea', rt => 'bytea', str => '5', oper => '>(bytea,bytea)', am => 'btree' },
+
+# btree abstime_ops
+
+{ opf => 'btree/abstime_ops', lt => 'abstime', rt => 'abstime', str => '1', oper => '<(abstime,abstime)', am => 'btree' },
+{ opf => 'btree/abstime_ops', lt => 'abstime', rt => 'abstime', str => '2', oper => '<=(abstime,abstime)', am => 'btree' },
+{ opf => 'btree/abstime_ops', lt => 'abstime', rt => 'abstime', str => '3', oper => '=(abstime,abstime)', am => 'btree' },
+{ opf => 'btree/abstime_ops', lt => 'abstime', rt => 'abstime', str => '4', oper => '>=(abstime,abstime)', am => 'btree' },
+{ opf => 'btree/abstime_ops', lt => 'abstime', rt => 'abstime', str => '5', oper => '>(abstime,abstime)', am => 'btree' },
+
+# btree datetime_ops
+
+# default operators date
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'date', str => '1', oper => '<(date,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'date', str => '2', oper => '<=(date,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'date', str => '3', oper => '=(date,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'date', str => '4', oper => '>=(date,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'date', str => '5', oper => '>(date,date)', am => 'btree' },
+
+# crosstype operators vs timestamp
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamp', str => '1', oper => '<(date,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamp', str => '2', oper => '<=(date,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamp', str => '3', oper => '=(date,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamp', str => '4', oper => '>=(date,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamp', str => '5', oper => '>(date,timestamp)', am => 'btree' },
+
+# crosstype operators vs timestamptz
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamptz', str => '1', oper => '<(date,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamptz', str => '2', oper => '<=(date,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamptz', str => '3', oper => '=(date,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamptz', str => '4', oper => '>=(date,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'date', rt => 'timestamptz', str => '5', oper => '>(date,timestamptz)', am => 'btree' },
+
+# default operators timestamp
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamp', str => '1', oper => '<(timestamp,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamp', str => '2', oper => '<=(timestamp,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamp', str => '3', oper => '=(timestamp,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamp', str => '4', oper => '>=(timestamp,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamp', str => '5', oper => '>(timestamp,timestamp)', am => 'btree' },
+
+# crosstype operators vs date
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'date', str => '1', oper => '<(timestamp,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'date', str => '2', oper => '<=(timestamp,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'date', str => '3', oper => '=(timestamp,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'date', str => '4', oper => '>=(timestamp,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'date', str => '5', oper => '>(timestamp,date)', am => 'btree' },
+
+# crosstype operators vs timestamptz
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamptz', str => '1', oper => '<(timestamp,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamptz', str => '2', oper => '<=(timestamp,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamptz', str => '3', oper => '=(timestamp,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamptz', str => '4', oper => '>=(timestamp,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamp', rt => 'timestamptz', str => '5', oper => '>(timestamp,timestamptz)', am => 'btree' },
+
+# default operators timestamptz
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamptz', str => '1', oper => '<(timestamptz,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamptz', str => '2', oper => '<=(timestamptz,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamptz', str => '3', oper => '=(timestamptz,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamptz', str => '4', oper => '>=(timestamptz,timestamptz)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamptz', str => '5', oper => '>(timestamptz,timestamptz)', am => 'btree' },
+
+# crosstype operators vs date
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'date', str => '1', oper => '<(timestamptz,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'date', str => '2', oper => '<=(timestamptz,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'date', str => '3', oper => '=(timestamptz,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'date', str => '4', oper => '>=(timestamptz,date)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'date', str => '5', oper => '>(timestamptz,date)', am => 'btree' },
+
+# crosstype operators vs timestamp
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamp', str => '1', oper => '<(timestamptz,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamp', str => '2', oper => '<=(timestamptz,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamp', str => '3', oper => '=(timestamptz,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamp', str => '4', oper => '>=(timestamptz,timestamp)', am => 'btree' },
+{ opf => 'btree/datetime_ops', lt => 'timestamptz', rt => 'timestamp', str => '5', oper => '>(timestamptz,timestamp)', am => 'btree' },
+
+# btree time_ops
+
+{ opf => 'btree/time_ops', lt => 'time', rt => 'time', str => '1', oper => '<(time,time)', am => 'btree' },
+{ opf => 'btree/time_ops', lt => 'time', rt => 'time', str => '2', oper => '<=(time,time)', am => 'btree' },
+{ opf => 'btree/time_ops', lt => 'time', rt => 'time', str => '3', oper => '=(time,time)', am => 'btree' },
+{ opf => 'btree/time_ops', lt => 'time', rt => 'time', str => '4', oper => '>=(time,time)', am => 'btree' },
+{ opf => 'btree/time_ops', lt => 'time', rt => 'time', str => '5', oper => '>(time,time)', am => 'btree' },
+
+# btree timetz_ops
+
+{ opf => 'btree/timetz_ops', lt => 'timetz', rt => 'timetz', str => '1', oper => '<(timetz,timetz)', am => 'btree' },
+{ opf => 'btree/timetz_ops', lt => 'timetz', rt => 'timetz', str => '2', oper => '<=(timetz,timetz)', am => 'btree' },
+{ opf => 'btree/timetz_ops', lt => 'timetz', rt => 'timetz', str => '3', oper => '=(timetz,timetz)', am => 'btree' },
+{ opf => 'btree/timetz_ops', lt => 'timetz', rt => 'timetz', str => '4', oper => '>=(timetz,timetz)', am => 'btree' },
+{ opf => 'btree/timetz_ops', lt => 'timetz', rt => 'timetz', str => '5', oper => '>(timetz,timetz)', am => 'btree' },
+
+# btree interval_ops
+
+{ opf => 'btree/interval_ops', lt => 'interval', rt => 'interval', str => '1', oper => '<(interval,interval)', am => 'btree' },
+{ opf => 'btree/interval_ops', lt => 'interval', rt => 'interval', str => '2', oper => '<=(interval,interval)', am => 'btree' },
+{ opf => 'btree/interval_ops', lt => 'interval', rt => 'interval', str => '3', oper => '=(interval,interval)', am => 'btree' },
+{ opf => 'btree/interval_ops', lt => 'interval', rt => 'interval', str => '4', oper => '>=(interval,interval)', am => 'btree' },
+{ opf => 'btree/interval_ops', lt => 'interval', rt => 'interval', str => '5', oper => '>(interval,interval)', am => 'btree' },
+
+# btree macaddr
+
+{ opf => 'btree/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '1', oper => '<(macaddr,macaddr)', am => 'btree' },
+{ opf => 'btree/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '2', oper => '<=(macaddr,macaddr)', am => 'btree' },
+{ opf => 'btree/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '3', oper => '=(macaddr,macaddr)', am => 'btree' },
+{ opf => 'btree/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '4', oper => '>=(macaddr,macaddr)', am => 'btree' },
+{ opf => 'btree/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '5', oper => '>(macaddr,macaddr)', am => 'btree' },
+
+# btree macaddr8
+
+{ opf => 'btree/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '1', oper => '<(macaddr8,macaddr8)', am => 'btree' },
+{ opf => 'btree/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '2', oper => '<=(macaddr8,macaddr8)', am => 'btree' },
+{ opf => 'btree/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '3', oper => '=(macaddr8,macaddr8)', am => 'btree' },
+{ opf => 'btree/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '4', oper => '>=(macaddr8,macaddr8)', am => 'btree' },
+{ opf => 'btree/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '5', oper => '>(macaddr8,macaddr8)', am => 'btree' },
+
+# btree network
+
+{ opf => 'btree/network_ops', lt => 'inet', rt => 'inet', str => '1', oper => '<(inet,inet)', am => 'btree' },
+{ opf => 'btree/network_ops', lt => 'inet', rt => 'inet', str => '2', oper => '<=(inet,inet)', am => 'btree' },
+{ opf => 'btree/network_ops', lt => 'inet', rt => 'inet', str => '3', oper => '=(inet,inet)', am => 'btree' },
+{ opf => 'btree/network_ops', lt => 'inet', rt => 'inet', str => '4', oper => '>=(inet,inet)', am => 'btree' },
+{ opf => 'btree/network_ops', lt => 'inet', rt => 'inet', str => '5', oper => '>(inet,inet)', am => 'btree' },
+
+# btree numeric
+
+{ opf => 'btree/numeric_ops', lt => 'numeric', rt => 'numeric', str => '1', oper => '<(numeric,numeric)', am => 'btree' },
+{ opf => 'btree/numeric_ops', lt => 'numeric', rt => 'numeric', str => '2', oper => '<=(numeric,numeric)', am => 'btree' },
+{ opf => 'btree/numeric_ops', lt => 'numeric', rt => 'numeric', str => '3', oper => '=(numeric,numeric)', am => 'btree' },
+{ opf => 'btree/numeric_ops', lt => 'numeric', rt => 'numeric', str => '4', oper => '>=(numeric,numeric)', am => 'btree' },
+{ opf => 'btree/numeric_ops', lt => 'numeric', rt => 'numeric', str => '5', oper => '>(numeric,numeric)', am => 'btree' },
+
+# btree bool
+
+{ opf => 'btree/bool_ops', lt => 'bool', rt => 'bool', str => '1', oper => '<(bool,bool)', am => 'btree' },
+{ opf => 'btree/bool_ops', lt => 'bool', rt => 'bool', str => '2', oper => '<=(bool,bool)', am => 'btree' },
+{ opf => 'btree/bool_ops', lt => 'bool', rt => 'bool', str => '3', oper => '=(bool,bool)', am => 'btree' },
+{ opf => 'btree/bool_ops', lt => 'bool', rt => 'bool', str => '4', oper => '>=(bool,bool)', am => 'btree' },
+{ opf => 'btree/bool_ops', lt => 'bool', rt => 'bool', str => '5', oper => '>(bool,bool)', am => 'btree' },
+
+# btree bit
+
+{ opf => 'btree/bit_ops', lt => 'bit', rt => 'bit', str => '1', oper => '<(bit,bit)', am => 'btree' },
+{ opf => 'btree/bit_ops', lt => 'bit', rt => 'bit', str => '2', oper => '<=(bit,bit)', am => 'btree' },
+{ opf => 'btree/bit_ops', lt => 'bit', rt => 'bit', str => '3', oper => '=(bit,bit)', am => 'btree' },
+{ opf => 'btree/bit_ops', lt => 'bit', rt => 'bit', str => '4', oper => '>=(bit,bit)', am => 'btree' },
+{ opf => 'btree/bit_ops', lt => 'bit', rt => 'bit', str => '5', oper => '>(bit,bit)', am => 'btree' },
+
+# btree varbit
+
+{ opf => 'btree/varbit_ops', lt => 'varbit', rt => 'varbit', str => '1', oper => '<(varbit,varbit)', am => 'btree' },
+{ opf => 'btree/varbit_ops', lt => 'varbit', rt => 'varbit', str => '2', oper => '<=(varbit,varbit)', am => 'btree' },
+{ opf => 'btree/varbit_ops', lt => 'varbit', rt => 'varbit', str => '3', oper => '=(varbit,varbit)', am => 'btree' },
+{ opf => 'btree/varbit_ops', lt => 'varbit', rt => 'varbit', str => '4', oper => '>=(varbit,varbit)', am => 'btree' },
+{ opf => 'btree/varbit_ops', lt => 'varbit', rt => 'varbit', str => '5', oper => '>(varbit,varbit)', am => 'btree' },
+
+# btree text pattern
+
+{ opf => 'btree/text_pattern_ops', lt => 'text', rt => 'text', str => '1', oper => '~<~(text,text)', am => 'btree' },
+{ opf => 'btree/text_pattern_ops', lt => 'text', rt => 'text', str => '2', oper => '~<=~(text,text)', am => 'btree' },
+{ opf => 'btree/text_pattern_ops', lt => 'text', rt => 'text', str => '3', oper => '=(text,text)', am => 'btree' },
+{ opf => 'btree/text_pattern_ops', lt => 'text', rt => 'text', str => '4', oper => '~>=~(text,text)', am => 'btree' },
+{ opf => 'btree/text_pattern_ops', lt => 'text', rt => 'text', str => '5', oper => '~>~(text,text)', am => 'btree' },
+
+# btree bpchar pattern
+
+{ opf => 'btree/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '1', oper => '~<~(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '2', oper => '~<=~(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '3', oper => '=(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '4', oper => '~>=~(bpchar,bpchar)', am => 'btree' },
+{ opf => 'btree/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '5', oper => '~>~(bpchar,bpchar)', am => 'btree' },
+
+# btree money_ops
+
+{ opf => 'btree/money_ops', lt => 'money', rt => 'money', str => '1', oper => '<(money,money)', am => 'btree' },
+{ opf => 'btree/money_ops', lt => 'money', rt => 'money', str => '2', oper => '<=(money,money)', am => 'btree' },
+{ opf => 'btree/money_ops', lt => 'money', rt => 'money', str => '3', oper => '=(money,money)', am => 'btree' },
+{ opf => 'btree/money_ops', lt => 'money', rt => 'money', str => '4', oper => '>=(money,money)', am => 'btree' },
+{ opf => 'btree/money_ops', lt => 'money', rt => 'money', str => '5', oper => '>(money,money)', am => 'btree' },
+
+# btree reltime_ops
+
+{ opf => 'btree/reltime_ops', lt => 'reltime', rt => 'reltime', str => '1', oper => '<(reltime,reltime)', am => 'btree' },
+{ opf => 'btree/reltime_ops', lt => 'reltime', rt => 'reltime', str => '2', oper => '<=(reltime,reltime)', am => 'btree' },
+{ opf => 'btree/reltime_ops', lt => 'reltime', rt => 'reltime', str => '3', oper => '=(reltime,reltime)', am => 'btree' },
+{ opf => 'btree/reltime_ops', lt => 'reltime', rt => 'reltime', str => '4', oper => '>=(reltime,reltime)', am => 'btree' },
+{ opf => 'btree/reltime_ops', lt => 'reltime', rt => 'reltime', str => '5', oper => '>(reltime,reltime)', am => 'btree' },
+
+# btree tinterval_ops
+
+{ opf => 'btree/tinterval_ops', lt => 'tinterval', rt => 'tinterval', str => '1', oper => '<(tinterval,tinterval)', am => 'btree' },
+{ opf => 'btree/tinterval_ops', lt => 'tinterval', rt => 'tinterval', str => '2', oper => '<=(tinterval,tinterval)', am => 'btree' },
+{ opf => 'btree/tinterval_ops', lt => 'tinterval', rt => 'tinterval', str => '3', oper => '=(tinterval,tinterval)', am => 'btree' },
+{ opf => 'btree/tinterval_ops', lt => 'tinterval', rt => 'tinterval', str => '4', oper => '>=(tinterval,tinterval)', am => 'btree' },
+{ opf => 'btree/tinterval_ops', lt => 'tinterval', rt => 'tinterval', str => '5', oper => '>(tinterval,tinterval)', am => 'btree' },
+
+# btree array_ops
+
+{ opf => 'btree/array_ops', lt => 'anyarray', rt => 'anyarray', str => '1', oper => '<(anyarray,anyarray)', am => 'btree' },
+{ opf => 'btree/array_ops', lt => 'anyarray', rt => 'anyarray', str => '2', oper => '<=(anyarray,anyarray)', am => 'btree' },
+{ opf => 'btree/array_ops', lt => 'anyarray', rt => 'anyarray', str => '3', oper => '=(anyarray,anyarray)', am => 'btree' },
+{ opf => 'btree/array_ops', lt => 'anyarray', rt => 'anyarray', str => '4', oper => '>=(anyarray,anyarray)', am => 'btree' },
+{ opf => 'btree/array_ops', lt => 'anyarray', rt => 'anyarray', str => '5', oper => '>(anyarray,anyarray)', am => 'btree' },
+
+# btree record_ops
+
+{ opf => 'btree/record_ops', lt => 'record', rt => 'record', str => '1', oper => '<(record,record)', am => 'btree' },
+{ opf => 'btree/record_ops', lt => 'record', rt => 'record', str => '2', oper => '<=(record,record)', am => 'btree' },
+{ opf => 'btree/record_ops', lt => 'record', rt => 'record', str => '3', oper => '=(record,record)', am => 'btree' },
+{ opf => 'btree/record_ops', lt => 'record', rt => 'record', str => '4', oper => '>=(record,record)', am => 'btree' },
+{ opf => 'btree/record_ops', lt => 'record', rt => 'record', str => '5', oper => '>(record,record)', am => 'btree' },
+
+# btree record_image_ops
+
+{ opf => 'btree/record_image_ops', lt => 'record', rt => 'record', str => '1', oper => '*<(record,record)', am => 'btree' },
+{ opf => 'btree/record_image_ops', lt => 'record', rt => 'record', str => '2', oper => '*<=(record,record)', am => 'btree' },
+{ opf => 'btree/record_image_ops', lt => 'record', rt => 'record', str => '3', oper => '*=(record,record)', am => 'btree' },
+{ opf => 'btree/record_image_ops', lt => 'record', rt => 'record', str => '4', oper => '*>=(record,record)', am => 'btree' },
+{ opf => 'btree/record_image_ops', lt => 'record', rt => 'record', str => '5', oper => '*>(record,record)', am => 'btree' },
+
+# btree uuid_ops
+
+{ opf => 'btree/uuid_ops', lt => 'uuid', rt => 'uuid', str => '1', oper => '<(uuid,uuid)', am => 'btree' },
+{ opf => 'btree/uuid_ops', lt => 'uuid', rt => 'uuid', str => '2', oper => '<=(uuid,uuid)', am => 'btree' },
+{ opf => 'btree/uuid_ops', lt => 'uuid', rt => 'uuid', str => '3', oper => '=(uuid,uuid)', am => 'btree' },
+{ opf => 'btree/uuid_ops', lt => 'uuid', rt => 'uuid', str => '4', oper => '>=(uuid,uuid)', am => 'btree' },
+{ opf => 'btree/uuid_ops', lt => 'uuid', rt => 'uuid', str => '5', oper => '>(uuid,uuid)', am => 'btree' },
+
+# btree pg_lsn_ops
+
+{ opf => 'btree/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '1', oper => '<(pg_lsn,pg_lsn)', am => 'btree' },
+{ opf => 'btree/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '2', oper => '<=(pg_lsn,pg_lsn)', am => 'btree' },
+{ opf => 'btree/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '3', oper => '=(pg_lsn,pg_lsn)', am => 'btree' },
+{ opf => 'btree/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '4', oper => '>=(pg_lsn,pg_lsn)', am => 'btree' },
+{ opf => 'btree/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '5', oper => '>(pg_lsn,pg_lsn)', am => 'btree' },
+
+# hash index _ops
+
+# bpchar_ops
+{ opf => 'hash/bpchar_ops', lt => 'bpchar', rt => 'bpchar', str => '1', oper => '=(bpchar,bpchar)', am => 'hash' },
+
+# char_ops
+{ opf => 'hash/char_ops', lt => 'char', rt => 'char', str => '1', oper => '=(char,char)', am => 'hash' },
+
+# date_ops
+{ opf => 'hash/date_ops', lt => 'date', rt => 'date', str => '1', oper => '=(date,date)', am => 'hash' },
+
+# float_ops
+{ opf => 'hash/float_ops', lt => 'float4', rt => 'float4', str => '1', oper => '=(float4,float4)', am => 'hash' },
+{ opf => 'hash/float_ops', lt => 'float8', rt => 'float8', str => '1', oper => '=(float8,float8)', am => 'hash' },
+{ opf => 'hash/float_ops', lt => 'float4', rt => 'float8', str => '1', oper => '=(float4,float8)', am => 'hash' },
+{ opf => 'hash/float_ops', lt => 'float8', rt => 'float4', str => '1', oper => '=(float8,float4)', am => 'hash' },
+
+# network_ops
+{ opf => 'hash/network_ops', lt => 'inet', rt => 'inet', str => '1', oper => '=(inet,inet)', am => 'hash' },
+
+# integer_ops
+{ opf => 'hash/integer_ops', lt => 'int2', rt => 'int2', str => '1', oper => '=(int2,int2)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int4', rt => 'int4', str => '1', oper => '=(int4,int4)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int8', rt => 'int8', str => '1', oper => '=(int8,int8)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int2', rt => 'int4', str => '1', oper => '=(int2,int4)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int2', rt => 'int8', str => '1', oper => '=(int2,int8)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int4', rt => 'int2', str => '1', oper => '=(int4,int2)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int4', rt => 'int8', str => '1', oper => '=(int4,int8)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int8', rt => 'int2', str => '1', oper => '=(int8,int2)', am => 'hash' },
+{ opf => 'hash/integer_ops', lt => 'int8', rt => 'int4', str => '1', oper => '=(int8,int4)', am => 'hash' },
+
+# interval_ops
+{ opf => 'hash/interval_ops', lt => 'interval', rt => 'interval', str => '1', oper => '=(interval,interval)', am => 'hash' },
+
+# macaddr_ops
+{ opf => 'hash/macaddr_ops', lt => 'macaddr', rt => 'macaddr', str => '1', oper => '=(macaddr,macaddr)', am => 'hash' },
+
+# macaddr8_ops
+{ opf => 'hash/macaddr8_ops', lt => 'macaddr8', rt => 'macaddr8', str => '1', oper => '=(macaddr8,macaddr8)', am => 'hash' },
+
+# name_ops
+{ opf => 'hash/name_ops', lt => 'name', rt => 'name', str => '1', oper => '=(name,name)', am => 'hash' },
+
+# oid_ops
+{ opf => 'hash/oid_ops', lt => 'oid', rt => 'oid', str => '1', oper => '=(oid,oid)', am => 'hash' },
+
+# oidvector_ops
+{ opf => 'hash/oidvector_ops', lt => 'oidvector', rt => 'oidvector', str => '1', oper => '=(oidvector,oidvector)', am => 'hash' },
+
+# text_ops
+{ opf => 'hash/text_ops', lt => 'text', rt => 'text', str => '1', oper => '=(text,text)', am => 'hash' },
+
+# time_ops
+{ opf => 'hash/time_ops', lt => 'time', rt => 'time', str => '1', oper => '=(time,time)', am => 'hash' },
+
+# timestamptz_ops
+{ opf => 'hash/timestamptz_ops', lt => 'timestamptz', rt => 'timestamptz', str => '1', oper => '=(timestamptz,timestamptz)', am => 'hash' },
+
+# timetz_ops
+{ opf => 'hash/timetz_ops', lt => 'timetz', rt => 'timetz', str => '1', oper => '=(timetz,timetz)', am => 'hash' },
+
+# timestamp_ops
+{ opf => 'hash/timestamp_ops', lt => 'timestamp', rt => 'timestamp', str => '1', oper => '=(timestamp,timestamp)', am => 'hash' },
+
+# bool_ops
+{ opf => 'hash/bool_ops', lt => 'bool', rt => 'bool', str => '1', oper => '=(bool,bool)', am => 'hash' },
+
+# bytea_ops
+{ opf => 'hash/bytea_ops', lt => 'bytea', rt => 'bytea', str => '1', oper => '=(bytea,bytea)', am => 'hash' },
+
+# xid_ops
+{ opf => 'hash/xid_ops', lt => 'xid', rt => 'xid', str => '1', oper => '=(xid,xid)', am => 'hash' },
+
+# cid_ops
+{ opf => 'hash/cid_ops', lt => 'cid', rt => 'cid', str => '1', oper => '=(cid,cid)', am => 'hash' },
+
+# abstime_ops
+{ opf => 'hash/abstime_ops', lt => 'abstime', rt => 'abstime', str => '1', oper => '=(abstime,abstime)', am => 'hash' },
+
+# reltime_ops
+{ opf => 'hash/reltime_ops', lt => 'reltime', rt => 'reltime', str => '1', oper => '=(reltime,reltime)', am => 'hash' },
+
+# text_pattern_ops
+{ opf => 'hash/text_pattern_ops', lt => 'text', rt => 'text', str => '1', oper => '=(text,text)', am => 'hash' },
+
+# bpchar_pattern_ops
+{ opf => 'hash/bpchar_pattern_ops', lt => 'bpchar', rt => 'bpchar', str => '1', oper => '=(bpchar,bpchar)', am => 'hash' },
+
+# aclitem_ops
+{ opf => 'hash/aclitem_ops', lt => 'aclitem', rt => 'aclitem', str => '1', oper => '=(aclitem,aclitem)', am => 'hash' },
+
+# uuid_ops
+{ opf => 'hash/uuid_ops', lt => 'uuid', rt => 'uuid', str => '1', oper => '=(uuid,uuid)', am => 'hash' },
+
+# pg_lsn_ops
+{ opf => 'hash/pg_lsn_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '1', oper => '=(pg_lsn,pg_lsn)', am => 'hash' },
+
+# numeric_ops
+{ opf => 'hash/numeric_ops', lt => 'numeric', rt => 'numeric', str => '1', oper => '=(numeric,numeric)', am => 'hash' },
+
+# array_ops
+{ opf => 'hash/array_ops', lt => 'anyarray', rt => 'anyarray', str => '1', oper => '=(anyarray,anyarray)', am => 'hash' },
+
+# gist box_ops
+
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '1', oper => '<<(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '2', oper => '&<(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '3', oper => '&&(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '4', oper => '&>(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '5', oper => '>>(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '6', oper => '~=(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '7', oper => '@>(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '8', oper => '<@(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '9', oper => '&<|(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '10', oper => '<<|(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '11', oper => '|>>(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '12', oper => '|&>(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '13', oper => '~(box,box)', am => 'gist' },
+{ opf => 'gist/box_ops', lt => 'box', rt => 'box', str => '14', oper => '@(box,box)', am => 'gist' },
+
+# gist point_ops
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '11', oper => '>^(point,point)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '1', oper => '<<(point,point)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '5', oper => '>>(point,point)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '10', oper => '<^(point,point)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '6', oper => '~=(point,point)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'point', str => '15', pur => 'o', oper => '<->(point,point)', am => 'gist', amopsortfamily => 'btree/float_ops' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'box', str => '28', oper => '<@(point,box)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'polygon', str => '48', oper => '<@(point,polygon)', am => 'gist' },
+{ opf => 'gist/point_ops', lt => 'point', rt => 'circle', str => '68', oper => '<@(point,circle)', am => 'gist' },
+
+# gist poly_ops (supports polygons)
+
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '1', oper => '<<(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '2', oper => '&<(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '3', oper => '&&(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '4', oper => '&>(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '5', oper => '>>(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '6', oper => '~=(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '7', oper => '@>(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '8', oper => '<@(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '9', oper => '&<|(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '10', oper => '<<|(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '11', oper => '|>>(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '12', oper => '|&>(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '13', oper => '~(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'polygon', str => '14', oper => '@(polygon,polygon)', am => 'gist' },
+{ opf => 'gist/poly_ops', lt => 'polygon', rt => 'point', str => '15', pur => 'o', oper => '<->(polygon,point)', am => 'gist', amopsortfamily => 'btree/float_ops' },
+
+# gist circle_ops
+
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '1', oper => '<<(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '2', oper => '&<(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '3', oper => '&&(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '4', oper => '&>(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '5', oper => '>>(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '6', oper => '~=(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '7', oper => '@>(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '8', oper => '<@(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '9', oper => '&<|(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '10', oper => '<<|(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '11', oper => '|>>(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '12', oper => '|&>(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '13', oper => '~(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'circle', str => '14', oper => '@(circle,circle)', am => 'gist' },
+{ opf => 'gist/circle_ops', lt => 'circle', rt => 'point', str => '15', pur => 'o', oper => '<->(circle,point)', am => 'gist', amopsortfamily => 'btree/float_ops' },
+
+# gin array_ops
+{ opf => 'gin/array_ops', lt => 'anyarray', rt => 'anyarray', str => '1', oper => '&&(anyarray,anyarray)', am => 'gin' },
+{ opf => 'gin/array_ops', lt => 'anyarray', rt => 'anyarray', str => '2', oper => '@>(anyarray,anyarray)', am => 'gin' },
+{ opf => 'gin/array_ops', lt => 'anyarray', rt => 'anyarray', str => '3', oper => '<@(anyarray,anyarray)', am => 'gin' },
+{ opf => 'gin/array_ops', lt => 'anyarray', rt => 'anyarray', str => '4', oper => '=(anyarray,anyarray)', am => 'gin' },
+
+# btree enum_ops
+{ opf => 'btree/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '1', oper => '<(anyenum,anyenum)', am => 'btree' },
+{ opf => 'btree/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '2', oper => '<=(anyenum,anyenum)', am => 'btree' },
+{ opf => 'btree/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '3', oper => '=(anyenum,anyenum)', am => 'btree' },
+{ opf => 'btree/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '4', oper => '>=(anyenum,anyenum)', am => 'btree' },
+{ opf => 'btree/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '5', oper => '>(anyenum,anyenum)', am => 'btree' },
+
+# hash enum_ops
+{ opf => 'hash/enum_ops', lt => 'anyenum', rt => 'anyenum', str => '1', oper => '=(anyenum,anyenum)', am => 'hash' },
+
+# btree tsvector_ops
+{ opf => 'btree/tsvector_ops', lt => 'tsvector', rt => 'tsvector', str => '1', oper => '<(tsvector,tsvector)', am => 'btree' },
+{ opf => 'btree/tsvector_ops', lt => 'tsvector', rt => 'tsvector', str => '2', oper => '<=(tsvector,tsvector)', am => 'btree' },
+{ opf => 'btree/tsvector_ops', lt => 'tsvector', rt => 'tsvector', str => '3', oper => '=(tsvector,tsvector)', am => 'btree' },
+{ opf => 'btree/tsvector_ops', lt => 'tsvector', rt => 'tsvector', str => '4', oper => '>=(tsvector,tsvector)', am => 'btree' },
+{ opf => 'btree/tsvector_ops', lt => 'tsvector', rt => 'tsvector', str => '5', oper => '>(tsvector,tsvector)', am => 'btree' },
+
+# GiST tsvector_ops
+{ opf => 'gist/tsvector_ops', lt => 'tsvector', rt => 'tsquery', str => '1', oper => '@@(tsvector,tsquery)', am => 'gist' },
+
+# GIN tsvector_ops
+{ opf => 'gin/tsvector_ops', lt => 'tsvector', rt => 'tsquery', str => '1', oper => '@@(tsvector,tsquery)', am => 'gin' },
+{ opf => 'gin/tsvector_ops', lt => 'tsvector', rt => 'tsquery', str => '2', oper => '@@@(tsvector,tsquery)', am => 'gin' },
+
+# btree tsquery_ops
+{ opf => 'btree/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '1', oper => '<(tsquery,tsquery)', am => 'btree' },
+{ opf => 'btree/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '2', oper => '<=(tsquery,tsquery)', am => 'btree' },
+{ opf => 'btree/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '3', oper => '=(tsquery,tsquery)', am => 'btree' },
+{ opf => 'btree/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '4', oper => '>=(tsquery,tsquery)', am => 'btree' },
+{ opf => 'btree/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '5', oper => '>(tsquery,tsquery)', am => 'btree' },
+
+# GiST tsquery_ops
+{ opf => 'gist/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '7', oper => '@>(tsquery,tsquery)', am => 'gist' },
+{ opf => 'gist/tsquery_ops', lt => 'tsquery', rt => 'tsquery', str => '8', oper => '<@(tsquery,tsquery)', am => 'gist' },
+
+# btree range_ops
+{ opf => 'btree/range_ops', lt => 'anyrange', rt => 'anyrange', str => '1', oper => '<(anyrange,anyrange)', am => 'btree' },
+{ opf => 'btree/range_ops', lt => 'anyrange', rt => 'anyrange', str => '2', oper => '<=(anyrange,anyrange)', am => 'btree' },
+{ opf => 'btree/range_ops', lt => 'anyrange', rt => 'anyrange', str => '3', oper => '=(anyrange,anyrange)', am => 'btree' },
+{ opf => 'btree/range_ops', lt => 'anyrange', rt => 'anyrange', str => '4', oper => '>=(anyrange,anyrange)', am => 'btree' },
+{ opf => 'btree/range_ops', lt => 'anyrange', rt => 'anyrange', str => '5', oper => '>(anyrange,anyrange)', am => 'btree' },
+
+# hash range_ops
+{ opf => 'hash/range_ops', lt => 'anyrange', rt => 'anyrange', str => '1', oper => '=(anyrange,anyrange)', am => 'hash' },
+
+# GiST range_ops
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '1', oper => '<<(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '2', oper => '&<(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '3', oper => '&&(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '4', oper => '&>(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '5', oper => '>>(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '6', oper => '-|-(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '7', oper => '@>(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '8', oper => '<@(anyrange,anyrange)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyelement', str => '16', oper => '@>(anyrange,anyelement)', am => 'gist' },
+{ opf => 'gist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '18', oper => '=(anyrange,anyrange)', am => 'gist' },
+
+# SP-GiST quad_point_ops
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'point', str => '11', oper => '>^(point,point)', am => 'spgist' },
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'point', str => '1', oper => '<<(point,point)', am => 'spgist' },
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'point', str => '5', oper => '>>(point,point)', am => 'spgist' },
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'point', str => '10', oper => '<^(point,point)', am => 'spgist' },
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'point', str => '6', oper => '~=(point,point)', am => 'spgist' },
+{ opf => 'spgist/quad_point_ops', lt => 'point', rt => 'box', str => '8', oper => '<@(point,box)', am => 'spgist' },
+
+# SP-GiST kd_point_ops
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'point', str => '11', oper => '>^(point,point)', am => 'spgist' },
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'point', str => '1', oper => '<<(point,point)', am => 'spgist' },
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'point', str => '5', oper => '>>(point,point)', am => 'spgist' },
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'point', str => '10', oper => '<^(point,point)', am => 'spgist' },
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'point', str => '6', oper => '~=(point,point)', am => 'spgist' },
+{ opf => 'spgist/kd_point_ops', lt => 'point', rt => 'box', str => '8', oper => '<@(point,box)', am => 'spgist' },
+
+# SP-GiST text_ops
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '1', oper => '~<~(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '2', oper => '~<=~(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '3', oper => '=(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '4', oper => '~>=~(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '5', oper => '~>~(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '11', oper => '<(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '12', oper => '<=(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '14', oper => '>=(text,text)', am => 'spgist' },
+{ opf => 'spgist/text_ops', lt => 'text', rt => 'text', str => '15', oper => '>(text,text)', am => 'spgist' },
+
+# btree jsonb_ops
+{ opf => 'btree/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '1', oper => '<(jsonb,jsonb)', am => 'btree' },
+{ opf => 'btree/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '2', oper => '<=(jsonb,jsonb)', am => 'btree' },
+{ opf => 'btree/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '3', oper => '=(jsonb,jsonb)', am => 'btree' },
+{ opf => 'btree/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '4', oper => '>=(jsonb,jsonb)', am => 'btree' },
+{ opf => 'btree/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '5', oper => '>(jsonb,jsonb)', am => 'btree' },
+
+# hash jsonb_ops
+{ opf => 'hash/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '1', oper => '=(jsonb,jsonb)', am => 'hash' },
+
+# GIN jsonb_ops
+{ opf => 'gin/jsonb_ops', lt => 'jsonb', rt => 'jsonb', str => '7', oper => '@>(jsonb,jsonb)', am => 'gin' },
+{ opf => 'gin/jsonb_ops', lt => 'jsonb', rt => 'text', str => '9', oper => '?(jsonb,text)', am => 'gin' },
+{ opf => 'gin/jsonb_ops', lt => 'jsonb', rt => '_text', str => '10', oper => '?|(jsonb,_text)', am => 'gin' },
+{ opf => 'gin/jsonb_ops', lt => 'jsonb', rt => '_text', str => '11', oper => '?&(jsonb,_text)', am => 'gin' },
+
+# GIN jsonb_path_ops
+{ opf => 'gin/jsonb_path_ops', lt => 'jsonb', rt => 'jsonb', str => '7', oper => '@>(jsonb,jsonb)', am => 'gin' },
+
+# SP-GiST range_ops
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '1', oper => '<<(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '2', oper => '&<(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '3', oper => '&&(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '4', oper => '&>(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '5', oper => '>>(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '6', oper => '-|-(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '7', oper => '@>(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '8', oper => '<@(anyrange,anyrange)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyelement', str => '16', oper => '@>(anyrange,anyelement)', am => 'spgist' },
+{ opf => 'spgist/range_ops', lt => 'anyrange', rt => 'anyrange', str => '18', oper => '=(anyrange,anyrange)', am => 'spgist' },
+
+# SP-GiST box_ops
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '1', oper => '<<(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '2', oper => '&<(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '3', oper => '&&(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '4', oper => '&>(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '5', oper => '>>(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '6', oper => '~=(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '7', oper => '@>(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '8', oper => '<@(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '9', oper => '&<|(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '10', oper => '<<|(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '11', oper => '|>>(box,box)', am => 'spgist' },
+{ opf => 'spgist/box_ops', lt => 'box', rt => 'box', str => '12', oper => '|&>(box,box)', am => 'spgist' },
+
+# SP-GiST poly_ops (supports polygons)
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '1', oper => '<<(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '2', oper => '&<(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '3', oper => '&&(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '4', oper => '&>(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '5', oper => '>>(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '6', oper => '~=(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '7', oper => '@>(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '8', oper => '<@(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '9', oper => '&<|(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '10', oper => '<<|(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '11', oper => '|>>(polygon,polygon)', am => 'spgist' },
+{ opf => 'spgist/poly_ops', lt => 'polygon', rt => 'polygon', str => '12', oper => '|&>(polygon,polygon)', am => 'spgist' },
+
+# GiST inet_ops
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '3', oper => '&&(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '18', oper => '=(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '19', oper => '<>(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '20', oper => '<(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '21', oper => '<=(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '22', oper => '>(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '23', oper => '>=(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '24', oper => '<<(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '25', oper => '<<=(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '26', oper => '>>(inet,inet)', am => 'gist' },
+{ opf => 'gist/network_ops', lt => 'inet', rt => 'inet', str => '27', oper => '>>=(inet,inet)', am => 'gist' },
+
+# SP-GiST inet_ops
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '3', oper => '&&(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '18', oper => '=(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '19', oper => '<>(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '20', oper => '<(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '21', oper => '<=(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '22', oper => '>(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '23', oper => '>=(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '24', oper => '<<(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '25', oper => '<<=(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '26', oper => '>>(inet,inet)', am => 'spgist' },
+{ opf => 'spgist/network_ops', lt => 'inet', rt => 'inet', str => '27', oper => '>>=(inet,inet)', am => 'spgist' },
+
+# BRIN opclasses
+
+# minmax bytea
+{ opf => 'brin/bytea_minmax_ops', lt => 'bytea', rt => 'bytea', str => '1', oper => '<(bytea,bytea)', am => 'brin' },
+{ opf => 'brin/bytea_minmax_ops', lt => 'bytea', rt => 'bytea', str => '2', oper => '<=(bytea,bytea)', am => 'brin' },
+{ opf => 'brin/bytea_minmax_ops', lt => 'bytea', rt => 'bytea', str => '3', oper => '=(bytea,bytea)', am => 'brin' },
+{ opf => 'brin/bytea_minmax_ops', lt => 'bytea', rt => 'bytea', str => '4', oper => '>=(bytea,bytea)', am => 'brin' },
+{ opf => 'brin/bytea_minmax_ops', lt => 'bytea', rt => 'bytea', str => '5', oper => '>(bytea,bytea)', am => 'brin' },
+
+# minmax "char"
+{ opf => 'brin/char_minmax_ops', lt => 'char', rt => 'char', str => '1', oper => '<(char,char)', am => 'brin' },
+{ opf => 'brin/char_minmax_ops', lt => 'char', rt => 'char', str => '2', oper => '<=(char,char)', am => 'brin' },
+{ opf => 'brin/char_minmax_ops', lt => 'char', rt => 'char', str => '3', oper => '=(char,char)', am => 'brin' },
+{ opf => 'brin/char_minmax_ops', lt => 'char', rt => 'char', str => '4', oper => '>=(char,char)', am => 'brin' },
+{ opf => 'brin/char_minmax_ops', lt => 'char', rt => 'char', str => '5', oper => '>(char,char)', am => 'brin' },
+
+# minmax name
+{ opf => 'brin/name_minmax_ops', lt => 'name', rt => 'name', str => '1', oper => '<(name,name)', am => 'brin' },
+{ opf => 'brin/name_minmax_ops', lt => 'name', rt => 'name', str => '2', oper => '<=(name,name)', am => 'brin' },
+{ opf => 'brin/name_minmax_ops', lt => 'name', rt => 'name', str => '3', oper => '=(name,name)', am => 'brin' },
+{ opf => 'brin/name_minmax_ops', lt => 'name', rt => 'name', str => '4', oper => '>=(name,name)', am => 'brin' },
+{ opf => 'brin/name_minmax_ops', lt => 'name', rt => 'name', str => '5', oper => '>(name,name)', am => 'brin' },
+
+# minmax integer
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int8', str => '1', oper => '<(int8,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int8', str => '2', oper => '<=(int8,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int8', str => '3', oper => '=(int8,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int8', str => '4', oper => '>=(int8,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int8', str => '5', oper => '>(int8,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int2', str => '1', oper => '<(int8,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int2', str => '2', oper => '<=(int8,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int2', str => '3', oper => '=(int8,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int2', str => '4', oper => '>=(int8,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int2', str => '5', oper => '>(int8,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int4', str => '1', oper => '<(int8,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int4', str => '2', oper => '<=(int8,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int4', str => '3', oper => '=(int8,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int4', str => '4', oper => '>=(int8,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int8', rt => 'int4', str => '5', oper => '>(int8,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int2', str => '1', oper => '<(int2,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int2', str => '2', oper => '<=(int2,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int2', str => '3', oper => '=(int2,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int2', str => '4', oper => '>=(int2,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int2', str => '5', oper => '>(int2,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int8', str => '1', oper => '<(int2,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int8', str => '2', oper => '<=(int2,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int8', str => '3', oper => '=(int2,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int8', str => '4', oper => '>=(int2,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int8', str => '5', oper => '>(int2,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int4', str => '1', oper => '<(int2,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int4', str => '2', oper => '<=(int2,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int4', str => '3', oper => '=(int2,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int4', str => '4', oper => '>=(int2,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int2', rt => 'int4', str => '5', oper => '>(int2,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int4', str => '1', oper => '<(int4,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int4', str => '2', oper => '<=(int4,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int4', str => '3', oper => '=(int4,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int4', str => '4', oper => '>=(int4,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int4', str => '5', oper => '>(int4,int4)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int2', str => '1', oper => '<(int4,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int2', str => '2', oper => '<=(int4,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int2', str => '3', oper => '=(int4,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int2', str => '4', oper => '>=(int4,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int2', str => '5', oper => '>(int4,int2)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int8', str => '1', oper => '<(int4,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int8', str => '2', oper => '<=(int4,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int8', str => '3', oper => '=(int4,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int8', str => '4', oper => '>=(int4,int8)', am => 'brin' },
+{ opf => 'brin/integer_minmax_ops', lt => 'int4', rt => 'int8', str => '5', oper => '>(int4,int8)', am => 'brin' },
+
+# minmax text
+{ opf => 'brin/text_minmax_ops', lt => 'text', rt => 'text', str => '1', oper => '<(text,text)', am => 'brin' },
+{ opf => 'brin/text_minmax_ops', lt => 'text', rt => 'text', str => '2', oper => '<=(text,text)', am => 'brin' },
+{ opf => 'brin/text_minmax_ops', lt => 'text', rt => 'text', str => '3', oper => '=(text,text)', am => 'brin' },
+{ opf => 'brin/text_minmax_ops', lt => 'text', rt => 'text', str => '4', oper => '>=(text,text)', am => 'brin' },
+{ opf => 'brin/text_minmax_ops', lt => 'text', rt => 'text', str => '5', oper => '>(text,text)', am => 'brin' },
+
+# minmax oid
+{ opf => 'brin/oid_minmax_ops', lt => 'oid', rt => 'oid', str => '1', oper => '<(oid,oid)', am => 'brin' },
+{ opf => 'brin/oid_minmax_ops', lt => 'oid', rt => 'oid', str => '2', oper => '<=(oid,oid)', am => 'brin' },
+{ opf => 'brin/oid_minmax_ops', lt => 'oid', rt => 'oid', str => '3', oper => '=(oid,oid)', am => 'brin' },
+{ opf => 'brin/oid_minmax_ops', lt => 'oid', rt => 'oid', str => '4', oper => '>=(oid,oid)', am => 'brin' },
+{ opf => 'brin/oid_minmax_ops', lt => 'oid', rt => 'oid', str => '5', oper => '>(oid,oid)', am => 'brin' },
+
+# minmax tid
+{ opf => 'brin/tid_minmax_ops', lt => 'tid', rt => 'tid', str => '1', oper => '<(tid,tid)', am => 'brin' },
+{ opf => 'brin/tid_minmax_ops', lt => 'tid', rt => 'tid', str => '2', oper => '<=(tid,tid)', am => 'brin' },
+{ opf => 'brin/tid_minmax_ops', lt => 'tid', rt => 'tid', str => '3', oper => '=(tid,tid)', am => 'brin' },
+{ opf => 'brin/tid_minmax_ops', lt => 'tid', rt => 'tid', str => '4', oper => '>=(tid,tid)', am => 'brin' },
+{ opf => 'brin/tid_minmax_ops', lt => 'tid', rt => 'tid', str => '5', oper => '>(tid,tid)', am => 'brin' },
+
+# minmax float (float4, float8)
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float4', str => '1', oper => '<(float4,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float4', str => '2', oper => '<=(float4,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float4', str => '3', oper => '=(float4,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float4', str => '4', oper => '>=(float4,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float4', str => '5', oper => '>(float4,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float8', str => '1', oper => '<(float4,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float8', str => '2', oper => '<=(float4,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float8', str => '3', oper => '=(float4,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float8', str => '4', oper => '>=(float4,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float4', rt => 'float8', str => '5', oper => '>(float4,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float4', str => '1', oper => '<(float8,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float4', str => '2', oper => '<=(float8,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float4', str => '3', oper => '=(float8,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float4', str => '4', oper => '>=(float8,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float4', str => '5', oper => '>(float8,float4)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float8', str => '1', oper => '<(float8,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float8', str => '2', oper => '<=(float8,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float8', str => '3', oper => '=(float8,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float8', str => '4', oper => '>=(float8,float8)', am => 'brin' },
+{ opf => 'brin/float_minmax_ops', lt => 'float8', rt => 'float8', str => '5', oper => '>(float8,float8)', am => 'brin' },
+
+# minmax abstime
+{ opf => 'brin/abstime_minmax_ops', lt => 'abstime', rt => 'abstime', str => '1', oper => '<(abstime,abstime)', am => 'brin' },
+{ opf => 'brin/abstime_minmax_ops', lt => 'abstime', rt => 'abstime', str => '2', oper => '<=(abstime,abstime)', am => 'brin' },
+{ opf => 'brin/abstime_minmax_ops', lt => 'abstime', rt => 'abstime', str => '3', oper => '=(abstime,abstime)', am => 'brin' },
+{ opf => 'brin/abstime_minmax_ops', lt => 'abstime', rt => 'abstime', str => '4', oper => '>=(abstime,abstime)', am => 'brin' },
+{ opf => 'brin/abstime_minmax_ops', lt => 'abstime', rt => 'abstime', str => '5', oper => '>(abstime,abstime)', am => 'brin' },
+
+# minmax reltime
+{ opf => 'brin/reltime_minmax_ops', lt => 'reltime', rt => 'reltime', str => '1', oper => '<(reltime,reltime)', am => 'brin' },
+{ opf => 'brin/reltime_minmax_ops', lt => 'reltime', rt => 'reltime', str => '2', oper => '<=(reltime,reltime)', am => 'brin' },
+{ opf => 'brin/reltime_minmax_ops', lt => 'reltime', rt => 'reltime', str => '3', oper => '=(reltime,reltime)', am => 'brin' },
+{ opf => 'brin/reltime_minmax_ops', lt => 'reltime', rt => 'reltime', str => '4', oper => '>=(reltime,reltime)', am => 'brin' },
+{ opf => 'brin/reltime_minmax_ops', lt => 'reltime', rt => 'reltime', str => '5', oper => '>(reltime,reltime)', am => 'brin' },
+
+# minmax macaddr
+{ opf => 'brin/macaddr_minmax_ops', lt => 'macaddr', rt => 'macaddr', str => '1', oper => '<(macaddr,macaddr)', am => 'brin' },
+{ opf => 'brin/macaddr_minmax_ops', lt => 'macaddr', rt => 'macaddr', str => '2', oper => '<=(macaddr,macaddr)', am => 'brin' },
+{ opf => 'brin/macaddr_minmax_ops', lt => 'macaddr', rt => 'macaddr', str => '3', oper => '=(macaddr,macaddr)', am => 'brin' },
+{ opf => 'brin/macaddr_minmax_ops', lt => 'macaddr', rt => 'macaddr', str => '4', oper => '>=(macaddr,macaddr)', am => 'brin' },
+{ opf => 'brin/macaddr_minmax_ops', lt => 'macaddr', rt => 'macaddr', str => '5', oper => '>(macaddr,macaddr)', am => 'brin' },
+
+# minmax macaddr8
+{ opf => 'brin/macaddr8_minmax_ops', lt => 'macaddr8', rt => 'macaddr8', str => '1', oper => '<(macaddr8,macaddr8)', am => 'brin' },
+{ opf => 'brin/macaddr8_minmax_ops', lt => 'macaddr8', rt => 'macaddr8', str => '2', oper => '<=(macaddr8,macaddr8)', am => 'brin' },
+{ opf => 'brin/macaddr8_minmax_ops', lt => 'macaddr8', rt => 'macaddr8', str => '3', oper => '=(macaddr8,macaddr8)', am => 'brin' },
+{ opf => 'brin/macaddr8_minmax_ops', lt => 'macaddr8', rt => 'macaddr8', str => '4', oper => '>=(macaddr8,macaddr8)', am => 'brin' },
+{ opf => 'brin/macaddr8_minmax_ops', lt => 'macaddr8', rt => 'macaddr8', str => '5', oper => '>(macaddr8,macaddr8)', am => 'brin' },
+
+# minmax inet
+{ opf => 'brin/network_minmax_ops', lt => 'inet', rt => 'inet', str => '1', oper => '<(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_minmax_ops', lt => 'inet', rt => 'inet', str => '2', oper => '<=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_minmax_ops', lt => 'inet', rt => 'inet', str => '3', oper => '=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_minmax_ops', lt => 'inet', rt => 'inet', str => '4', oper => '>=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_minmax_ops', lt => 'inet', rt => 'inet', str => '5', oper => '>(inet,inet)', am => 'brin' },
+
+# inclusion inet
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '3', oper => '&&(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '7', oper => '>>=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '8', oper => '<<=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '18', oper => '=(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '24', oper => '>>(inet,inet)', am => 'brin' },
+{ opf => 'brin/network_inclusion_ops', lt => 'inet', rt => 'inet', str => '26', oper => '<<(inet,inet)', am => 'brin' },
+
+# minmax character
+{ opf => 'brin/bpchar_minmax_ops', lt => 'bpchar', rt => 'bpchar', str => '1', oper => '<(bpchar,bpchar)', am => 'brin' },
+{ opf => 'brin/bpchar_minmax_ops', lt => 'bpchar', rt => 'bpchar', str => '2', oper => '<=(bpchar,bpchar)', am => 'brin' },
+{ opf => 'brin/bpchar_minmax_ops', lt => 'bpchar', rt => 'bpchar', str => '3', oper => '=(bpchar,bpchar)', am => 'brin' },
+{ opf => 'brin/bpchar_minmax_ops', lt => 'bpchar', rt => 'bpchar', str => '4', oper => '>=(bpchar,bpchar)', am => 'brin' },
+{ opf => 'brin/bpchar_minmax_ops', lt => 'bpchar', rt => 'bpchar', str => '5', oper => '>(bpchar,bpchar)', am => 'brin' },
+
+# minmax time without time zone
+{ opf => 'brin/time_minmax_ops', lt => 'time', rt => 'time', str => '1', oper => '<(time,time)', am => 'brin' },
+{ opf => 'brin/time_minmax_ops', lt => 'time', rt => 'time', str => '2', oper => '<=(time,time)', am => 'brin' },
+{ opf => 'brin/time_minmax_ops', lt => 'time', rt => 'time', str => '3', oper => '=(time,time)', am => 'brin' },
+{ opf => 'brin/time_minmax_ops', lt => 'time', rt => 'time', str => '4', oper => '>=(time,time)', am => 'brin' },
+{ opf => 'brin/time_minmax_ops', lt => 'time', rt => 'time', str => '5', oper => '>(time,time)', am => 'brin' },
+
+# minmax datetime (date, timestamp, timestamptz)
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamp', str => '1', oper => '<(timestamp,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamp', str => '2', oper => '<=(timestamp,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamp', str => '3', oper => '=(timestamp,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamp', str => '4', oper => '>=(timestamp,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamp', str => '5', oper => '>(timestamp,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'date', str => '1', oper => '<(timestamp,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'date', str => '2', oper => '<=(timestamp,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'date', str => '3', oper => '=(timestamp,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'date', str => '4', oper => '>=(timestamp,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'date', str => '5', oper => '>(timestamp,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamptz', str => '1', oper => '<(timestamp,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamptz', str => '2', oper => '<=(timestamp,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamptz', str => '3', oper => '=(timestamp,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamptz', str => '4', oper => '>=(timestamp,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamp', rt => 'timestamptz', str => '5', oper => '>(timestamp,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'date', str => '1', oper => '<(date,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'date', str => '2', oper => '<=(date,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'date', str => '3', oper => '=(date,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'date', str => '4', oper => '>=(date,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'date', str => '5', oper => '>(date,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamp', str => '1', oper => '<(date,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamp', str => '2', oper => '<=(date,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamp', str => '3', oper => '=(date,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamp', str => '4', oper => '>=(date,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamp', str => '5', oper => '>(date,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamptz', str => '1', oper => '<(date,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamptz', str => '2', oper => '<=(date,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamptz', str => '3', oper => '=(date,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamptz', str => '4', oper => '>=(date,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'date', rt => 'timestamptz', str => '5', oper => '>(date,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'date', str => '1', oper => '<(timestamptz,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'date', str => '2', oper => '<=(timestamptz,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'date', str => '3', oper => '=(timestamptz,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'date', str => '4', oper => '>=(timestamptz,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'date', str => '5', oper => '>(timestamptz,date)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamp', str => '1', oper => '<(timestamptz,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamp', str => '2', oper => '<=(timestamptz,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamp', str => '3', oper => '=(timestamptz,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamp', str => '4', oper => '>=(timestamptz,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamp', str => '5', oper => '>(timestamptz,timestamp)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamptz', str => '1', oper => '<(timestamptz,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamptz', str => '2', oper => '<=(timestamptz,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamptz', str => '3', oper => '=(timestamptz,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamptz', str => '4', oper => '>=(timestamptz,timestamptz)', am => 'brin' },
+{ opf => 'brin/datetime_minmax_ops', lt => 'timestamptz', rt => 'timestamptz', str => '5', oper => '>(timestamptz,timestamptz)', am => 'brin' },
+
+# minmax interval
+{ opf => 'brin/interval_minmax_ops', lt => 'interval', rt => 'interval', str => '1', oper => '<(interval,interval)', am => 'brin' },
+{ opf => 'brin/interval_minmax_ops', lt => 'interval', rt => 'interval', str => '2', oper => '<=(interval,interval)', am => 'brin' },
+{ opf => 'brin/interval_minmax_ops', lt => 'interval', rt => 'interval', str => '3', oper => '=(interval,interval)', am => 'brin' },
+{ opf => 'brin/interval_minmax_ops', lt => 'interval', rt => 'interval', str => '4', oper => '>=(interval,interval)', am => 'brin' },
+{ opf => 'brin/interval_minmax_ops', lt => 'interval', rt => 'interval', str => '5', oper => '>(interval,interval)', am => 'brin' },
+
+# minmax time with time zone
+{ opf => 'brin/timetz_minmax_ops', lt => 'timetz', rt => 'timetz', str => '1', oper => '<(timetz,timetz)', am => 'brin' },
+{ opf => 'brin/timetz_minmax_ops', lt => 'timetz', rt => 'timetz', str => '2', oper => '<=(timetz,timetz)', am => 'brin' },
+{ opf => 'brin/timetz_minmax_ops', lt => 'timetz', rt => 'timetz', str => '3', oper => '=(timetz,timetz)', am => 'brin' },
+{ opf => 'brin/timetz_minmax_ops', lt => 'timetz', rt => 'timetz', str => '4', oper => '>=(timetz,timetz)', am => 'brin' },
+{ opf => 'brin/timetz_minmax_ops', lt => 'timetz', rt => 'timetz', str => '5', oper => '>(timetz,timetz)', am => 'brin' },
+
+# minmax bit
+{ opf => 'brin/bit_minmax_ops', lt => 'bit', rt => 'bit', str => '1', oper => '<(bit,bit)', am => 'brin' },
+{ opf => 'brin/bit_minmax_ops', lt => 'bit', rt => 'bit', str => '2', oper => '<=(bit,bit)', am => 'brin' },
+{ opf => 'brin/bit_minmax_ops', lt => 'bit', rt => 'bit', str => '3', oper => '=(bit,bit)', am => 'brin' },
+{ opf => 'brin/bit_minmax_ops', lt => 'bit', rt => 'bit', str => '4', oper => '>=(bit,bit)', am => 'brin' },
+{ opf => 'brin/bit_minmax_ops', lt => 'bit', rt => 'bit', str => '5', oper => '>(bit,bit)', am => 'brin' },
+
+# minmax bit varying
+{ opf => 'brin/varbit_minmax_ops', lt => 'varbit', rt => 'varbit', str => '1', oper => '<(varbit,varbit)', am => 'brin' },
+{ opf => 'brin/varbit_minmax_ops', lt => 'varbit', rt => 'varbit', str => '2', oper => '<=(varbit,varbit)', am => 'brin' },
+{ opf => 'brin/varbit_minmax_ops', lt => 'varbit', rt => 'varbit', str => '3', oper => '=(varbit,varbit)', am => 'brin' },
+{ opf => 'brin/varbit_minmax_ops', lt => 'varbit', rt => 'varbit', str => '4', oper => '>=(varbit,varbit)', am => 'brin' },
+{ opf => 'brin/varbit_minmax_ops', lt => 'varbit', rt => 'varbit', str => '5', oper => '>(varbit,varbit)', am => 'brin' },
+
+# minmax numeric
+{ opf => 'brin/numeric_minmax_ops', lt => 'numeric', rt => 'numeric', str => '1', oper => '<(numeric,numeric)', am => 'brin' },
+{ opf => 'brin/numeric_minmax_ops', lt => 'numeric', rt => 'numeric', str => '2', oper => '<=(numeric,numeric)', am => 'brin' },
+{ opf => 'brin/numeric_minmax_ops', lt => 'numeric', rt => 'numeric', str => '3', oper => '=(numeric,numeric)', am => 'brin' },
+{ opf => 'brin/numeric_minmax_ops', lt => 'numeric', rt => 'numeric', str => '4', oper => '>=(numeric,numeric)', am => 'brin' },
+{ opf => 'brin/numeric_minmax_ops', lt => 'numeric', rt => 'numeric', str => '5', oper => '>(numeric,numeric)', am => 'brin' },
+
+# minmax uuid
+{ opf => 'brin/uuid_minmax_ops', lt => 'uuid', rt => 'uuid', str => '1', oper => '<(uuid,uuid)', am => 'brin' },
+{ opf => 'brin/uuid_minmax_ops', lt => 'uuid', rt => 'uuid', str => '2', oper => '<=(uuid,uuid)', am => 'brin' },
+{ opf => 'brin/uuid_minmax_ops', lt => 'uuid', rt => 'uuid', str => '3', oper => '=(uuid,uuid)', am => 'brin' },
+{ opf => 'brin/uuid_minmax_ops', lt => 'uuid', rt => 'uuid', str => '4', oper => '>=(uuid,uuid)', am => 'brin' },
+{ opf => 'brin/uuid_minmax_ops', lt => 'uuid', rt => 'uuid', str => '5', oper => '>(uuid,uuid)', am => 'brin' },
+
+# inclusion range types
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '1', oper => '<<(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '2', oper => '&<(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '3', oper => '&&(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '4', oper => '&>(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '5', oper => '>>(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '7', oper => '@>(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '8', oper => '<@(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyelement', str => '16', oper => '@>(anyrange,anyelement)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '17', oper => '-|-(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '18', oper => '=(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '20', oper => '<(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '21', oper => '<=(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '22', oper => '>(anyrange,anyrange)', am => 'brin' },
+{ opf => 'brin/range_inclusion_ops', lt => 'anyrange', rt => 'anyrange', str => '23', oper => '>=(anyrange,anyrange)', am => 'brin' },
+
+# minmax pg_lsn
+{ opf => 'brin/pg_lsn_minmax_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '1', oper => '<(pg_lsn,pg_lsn)', am => 'brin' },
+{ opf => 'brin/pg_lsn_minmax_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '2', oper => '<=(pg_lsn,pg_lsn)', am => 'brin' },
+{ opf => 'brin/pg_lsn_minmax_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '3', oper => '=(pg_lsn,pg_lsn)', am => 'brin' },
+{ opf => 'brin/pg_lsn_minmax_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '4', oper => '>=(pg_lsn,pg_lsn)', am => 'brin' },
+{ opf => 'brin/pg_lsn_minmax_ops', lt => 'pg_lsn', rt => 'pg_lsn', str => '5', oper => '>(pg_lsn,pg_lsn)', am => 'brin' },
+
+# inclusion box
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '1', oper => '<<(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '2', oper => '&<(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '3', oper => '&&(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '4', oper => '&>(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '5', oper => '>>(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '6', oper => '~=(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '7', oper => '@>(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '8', oper => '<@(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '9', oper => '&<|(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '10', oper => '<<|(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '11', oper => '|>>(box,box)', am => 'brin' },
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'box', str => '12', oper => '|&>(box,box)', am => 'brin' },
+
+# we could, but choose not to, supply entries for strategies 13 and 14
+{ opf => 'brin/box_inclusion_ops', lt => 'box', rt => 'point', str => '7', oper => '@>(box,point)', am => 'brin' },
+
+]

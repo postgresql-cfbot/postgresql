@@ -11,8 +11,8 @@
  * src/include/catalog/pg_statistic_ext.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -52,6 +52,14 @@ CATALOG(pg_statistic_ext,3381)
 #endif
 
 } FormData_pg_statistic_ext;
+
+DECLARE_TOAST(pg_statistic_ext, 3439, 3440);
+DECLARE_UNIQUE_INDEX(pg_statistic_ext_oid_index, 3380, on pg_statistic_ext using btree(oid oid_ops));
+#define StatisticExtOidIndexId	3380
+DECLARE_UNIQUE_INDEX(pg_statistic_ext_name_index, 3997, on pg_statistic_ext using btree(stxname name_ops, stxnamespace oid_ops));
+#define StatisticExtNameIndexId 3997
+DECLARE_INDEX(pg_statistic_ext_relid_index, 3379, on pg_statistic_ext using btree(stxrelid oid_ops));
+#define StatisticExtRelidIndexId 3379
 
 /* ----------------
  *		Form_pg_statistic_ext corresponds to a pointer to a tuple with

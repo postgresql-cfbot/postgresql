@@ -1,0 +1,7 @@
+# pg_ts_config.dat
+[
+
+{ oid => '3748', descr => 'simple configuration',
+  cfgname => 'simple', cfgnamespace => 'PGNSP', cfgowner => 'PGUID', cfgparser => '3722' },
+
+]

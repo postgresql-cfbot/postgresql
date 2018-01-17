@@ -11,8 +11,8 @@
  * src/include/catalog/pg_depend.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -52,6 +52,11 @@ CATALOG(pg_depend,2608) BKI_WITHOUT_OIDS
 	 */
 	char		deptype;		/* see codes in dependency.h */
 } FormData_pg_depend;
+
+DECLARE_INDEX(pg_depend_depender_index, 2673, on pg_depend using btree(classid oid_ops, objid oid_ops, objsubid int4_ops));
+#define DependDependerIndexId  2673
+DECLARE_INDEX(pg_depend_reference_index, 2674, on pg_depend using btree(refclassid oid_ops, refobjid oid_ops, refobjsubid int4_ops));
+#define DependReferenceIndexId	2674
 
 /* ----------------
  *		Form_pg_depend corresponds to a pointer to a row with

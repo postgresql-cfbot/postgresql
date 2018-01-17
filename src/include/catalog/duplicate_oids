@@ -5,7 +5,7 @@ use warnings;
 
 BEGIN
 {
-	@ARGV = (glob("pg_*.h"), qw(indexing.h toasting.h));
+	@ARGV = (glob("pg_*.h"), glob("pg_*.dat"));
 }
 
 my %oidcounts;
@@ -14,7 +14,7 @@ while (<>)
 {
 	next if /^CATALOG\(.*BKI_BOOTSTRAP/;
 	next
-	  unless /^DATA\(insert *OID *= *(\d+)/
+	  unless /\boid *=> *'(\d+)'/
 		  || /^CATALOG\([^,]*, *(\d+).*BKI_ROWTYPE_OID\((\d+)\)/
 		  || /^CATALOG\([^,]*, *(\d+)/
 		  || /^DECLARE_INDEX\([^,]*, *(\d+)/
@@ -30,7 +30,7 @@ foreach my $oid (sort { $a <=> $b } keys %oidcounts)
 {
 	next unless $oidcounts{$oid} > 1;
 	$found = 1;
-	print "$oid\n";
+	print "***Duplicate OID: $oid\n";
 }
 
 exit $found;

@@ -9,8 +9,8 @@
  * src/include/catalog/pg_publication.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -50,6 +50,13 @@ CATALOG(pg_publication,6104)
 	bool		pubdelete;
 
 } FormData_pg_publication;
+
+DECLARE_UNIQUE_INDEX(pg_publication_oid_index, 6110, on pg_publication using btree(oid oid_ops));
+#define PublicationObjectIndexId 6110
+DECLARE_UNIQUE_INDEX(pg_publication_pubname_index, 6111, on pg_publication using btree(pubname name_ops));
+#define PublicationNameIndexId 6111
+DECLARE_UNIQUE_INDEX(pg_publication_rel_oid_index, 6112, on pg_publication_rel using btree(oid oid_ops));
+#define PublicationRelObjectIndexId 6112
 
 /* ----------------
  *		Form_pg_publication corresponds to a pointer to a tuple with

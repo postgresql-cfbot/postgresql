@@ -9,8 +9,8 @@
  * src/include/catalog/pg_foreign_table.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -35,6 +35,9 @@ CATALOG(pg_foreign_table,3118) BKI_WITHOUT_OIDS
 	text		ftoptions[1];	/* FDW-specific options */
 #endif
 } FormData_pg_foreign_table;
+
+DECLARE_UNIQUE_INDEX(pg_foreign_table_relid_index, 3119, on pg_foreign_table using btree(ftrelid oid_ops));
+#define ForeignTableRelidIndexId 3119
 
 /* ----------------
  *		Form_pg_foreign_table corresponds to a pointer to a tuple with

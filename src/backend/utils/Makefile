@@ -11,6 +11,9 @@ include $(top_builddir)/src/Makefile.global
 OBJS        = fmgrtab.o
 SUBDIRS     = adt cache error fmgr hash init mb misc mmgr resowner sort time
 
+FMGR_DATA = $(addprefix $(top_srcdir)/src/include/catalog/,\
+	pg_proc.dat pg_language.dat)
+
 # location of Catalog.pm
 catalogdir  = $(top_srcdir)/src/backend/catalog
 
@@ -24,8 +27,8 @@ $(SUBDIRS:%=%-recursive): fmgroids.h fmgrprotos.h
 fmgrprotos.h: fmgroids.h ;
 fmgroids.h: fmgrtab.c ;
 
-fmgrtab.c: Gen_fmgrtab.pl $(catalogdir)/Catalog.pm $(top_srcdir)/src/include/catalog/pg_proc.h
-	$(PERL) -I $(catalogdir) $< -I $(top_srcdir)/src/include/ $(top_srcdir)/src/include/catalog/pg_proc.h
+fmgrtab.c: Gen_fmgrtab.pl $(catalogdir)/Catalog.pm $(FMGR_DATA) $(top_srcdir)/src/include/access/transam.h
+	$(PERL) -I $(catalogdir) $< -I $(top_srcdir)/src/include/ $(FMGR_DATA)
 
 errcodes.h: $(top_srcdir)/src/backend/utils/errcodes.txt generate-errcodes.pl
 	$(PERL) $(srcdir)/generate-errcodes.pl $< > $@

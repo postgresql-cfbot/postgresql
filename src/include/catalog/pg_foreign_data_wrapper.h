@@ -11,8 +11,6 @@
  * src/include/catalog/pg_foreign_data_wrapper.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
  *
  *-------------------------------------------------------------------------
  */
@@ -40,6 +38,11 @@ CATALOG(pg_foreign_data_wrapper,2328)
 	text		fdwoptions[1];	/* FDW options */
 #endif
 } FormData_pg_foreign_data_wrapper;
+
+DECLARE_UNIQUE_INDEX(pg_foreign_data_wrapper_oid_index, 112, on pg_foreign_data_wrapper using btree(oid oid_ops));
+#define ForeignDataWrapperOidIndexId	112
+DECLARE_UNIQUE_INDEX(pg_foreign_data_wrapper_name_index, 548, on pg_foreign_data_wrapper using btree(fdwname name_ops));
+#define ForeignDataWrapperNameIndexId	548
 
 /* ----------------
  *		Form_pg_fdw corresponds to a pointer to a tuple with

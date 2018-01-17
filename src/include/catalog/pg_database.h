@@ -11,8 +11,8 @@
  * src/include/catalog/pg_database.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -20,6 +20,7 @@
 #define PG_DATABASE_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /* ----------------
  *		pg_database definition.  cpp turns this into
@@ -49,6 +50,11 @@ CATALOG(pg_database,1262) BKI_SHARED_RELATION BKI_ROWTYPE_OID(1248) BKI_SCHEMA_M
 #endif
 } FormData_pg_database;
 
+DECLARE_UNIQUE_INDEX(pg_database_datname_index, 2671, on pg_database using btree(datname name_ops));
+#define DatabaseNameIndexId  2671
+DECLARE_UNIQUE_INDEX(pg_database_oid_index, 2672, on pg_database using btree(oid oid_ops));
+#define DatabaseOidIndexId	2672
+
 /* ----------------
  *		Form_pg_database corresponds to a pointer to a tuple with
  *		the format of pg_database relation.
@@ -74,9 +80,5 @@ typedef FormData_pg_database *Form_pg_database;
 #define Anum_pg_database_datminmxid		11
 #define Anum_pg_database_dattablespace	12
 #define Anum_pg_database_datacl			13
-
-DATA(insert OID = 1 (  template1 PGUID ENCODING "LC_COLLATE" "LC_CTYPE" t t -1 0 0 1 1663 _null_));
-SHDESCR("default template for new databases");
-#define TemplateDbOid			1
 
 #endif							/* PG_DATABASE_H */

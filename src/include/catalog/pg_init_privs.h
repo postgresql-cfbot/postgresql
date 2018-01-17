@@ -21,11 +21,8 @@
  * src/include/catalog/pg_init_privs.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -52,6 +49,9 @@ CATALOG(pg_init_privs,3394) BKI_WITHOUT_OIDS
 	aclitem		initprivs[1] BKI_FORCE_NOT_NULL;	/* initial privs on object */
 #endif
 } FormData_pg_init_privs;
+
+DECLARE_UNIQUE_INDEX(pg_init_privs_o_c_o_index, 3395, on pg_init_privs using btree(objoid oid_ops, classoid oid_ops, objsubid int4_ops));
+#define InitPrivsObjIndexId  3395
 
 /* ----------------
  *		Form_pg_init_privs corresponds to a pointer to a tuple with
@@ -84,15 +84,10 @@ typedef enum InitPrivsType
 	INITPRIVS_EXTENSION = 'e'
 } InitPrivsType;
 
-/* ----------------
- *		initial contents of pg_init_privs
- * ----------------
- */
-
 /*
  *	Because the contents of this table depend on what is done with the other
- *	objects in the system (and, in particular, may change due to changes is
- *	system_views.sql), there is no initialization here.
+ *	objects in the system (and, in particular, may change due to changes in
+ *	system_views.sql), there is no *.dat file.
  *
  *	The initial contents are loaded near the end of initdb.
  */

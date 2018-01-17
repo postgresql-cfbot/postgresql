@@ -10,8 +10,8 @@
  * src/include/catalog/pg_default_acl.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -38,6 +38,11 @@ CATALOG(pg_default_acl,826)
 #endif
 } FormData_pg_default_acl;
 
+DECLARE_UNIQUE_INDEX(pg_default_acl_role_nsp_obj_index, 827, on pg_default_acl using btree(defaclrole oid_ops, defaclnamespace oid_ops, defaclobjtype char_ops));
+#define DefaultAclRoleNspObjIndexId 827
+DECLARE_UNIQUE_INDEX(pg_default_acl_oid_index, 828, on pg_default_acl using btree(oid oid_ops));
+#define DefaultAclOidIndexId	828
+
 /* ----------------
  *		Form_pg_default_acl corresponds to a pointer to a tuple with
  *		the format of pg_default_acl relation.
@@ -55,11 +60,6 @@ typedef FormData_pg_default_acl *Form_pg_default_acl;
 #define Anum_pg_default_acl_defaclnamespace		2
 #define Anum_pg_default_acl_defaclobjtype		3
 #define Anum_pg_default_acl_defaclacl			4
-
-/* ----------------
- *		pg_default_acl has no initial contents
- * ----------------
- */
 
 /*
  * Types of objects for which the user is allowed to specify default

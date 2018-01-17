@@ -9,8 +9,8 @@
  * src/include/catalog/pg_replication_origin.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -52,6 +52,11 @@ CATALOG(pg_replication_origin,6000) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_replication_origin;
 
+DECLARE_UNIQUE_INDEX(pg_replication_origin_roiident_index, 6001, on pg_replication_origin using btree(roident oid_ops));
+#define ReplicationOriginIdentIndex 6001
+DECLARE_UNIQUE_INDEX(pg_replication_origin_roname_index, 6002, on pg_replication_origin using btree(roname text_pattern_ops));
+#define ReplicationOriginNameIndex 6002
+
 typedef FormData_pg_replication_origin *Form_pg_replication_origin;
 
 /* ----------------
@@ -61,10 +66,5 @@ typedef FormData_pg_replication_origin *Form_pg_replication_origin;
 #define Natts_pg_replication_origin					2
 #define Anum_pg_replication_origin_roident			1
 #define Anum_pg_replication_origin_roname			2
-
-/* ----------------
- *		pg_replication_origin has no initial contents
- * ----------------
- */
 
 #endif							/* PG_REPLICATION_ORIGIN_H */

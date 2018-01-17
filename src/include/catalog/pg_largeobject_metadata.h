@@ -11,8 +11,8 @@
  * src/include/catalog/pg_largeobject_metadata.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -36,6 +36,9 @@ CATALOG(pg_largeobject_metadata,2995)
 	aclitem		lomacl[1];		/* access permissions */
 #endif
 } FormData_pg_largeobject_metadata;
+
+DECLARE_UNIQUE_INDEX(pg_largeobject_metadata_oid_index, 2996, on pg_largeobject_metadata using btree(oid oid_ops));
+#define LargeObjectMetadataOidIndexId	2996
 
 /* ----------------
  *		Form_pg_largeobject_metadata corresponds to a pointer to a tuple

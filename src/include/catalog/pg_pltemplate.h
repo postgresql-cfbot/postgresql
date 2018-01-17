@@ -11,8 +11,8 @@
  * src/include/catalog/pg_pltemplate.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -44,6 +44,9 @@ CATALOG(pg_pltemplate,1136) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_pltemplate;
 
+DECLARE_UNIQUE_INDEX(pg_pltemplate_name_index, 1137, on pg_pltemplate using btree(tmplname name_ops));
+#define PLTemplateNameIndexId  1137
+
 /* ----------------
  *		Form_pg_pltemplate corresponds to a pointer to a row with
  *		the format of pg_pltemplate relation.
@@ -64,20 +67,5 @@ typedef FormData_pg_pltemplate *Form_pg_pltemplate;
 #define Anum_pg_pltemplate_tmplvalidator	6
 #define Anum_pg_pltemplate_tmpllibrary		7
 #define Anum_pg_pltemplate_tmplacl			8
-
-
-/* ----------------
- *		initial contents of pg_pltemplate
- * ----------------
- */
-
-DATA(insert ( "plpgsql"		t t "plpgsql_call_handler" "plpgsql_inline_handler" "plpgsql_validator" "$libdir/plpgsql" _null_ ));
-DATA(insert ( "pltcl"		t t "pltcl_call_handler" _null_ _null_ "$libdir/pltcl" _null_ ));
-DATA(insert ( "pltclu"		f f "pltclu_call_handler" _null_ _null_ "$libdir/pltcl" _null_ ));
-DATA(insert ( "plperl"		t t "plperl_call_handler" "plperl_inline_handler" "plperl_validator" "$libdir/plperl" _null_ ));
-DATA(insert ( "plperlu"		f f "plperlu_call_handler" "plperlu_inline_handler" "plperlu_validator" "$libdir/plperl" _null_ ));
-DATA(insert ( "plpythonu"	f f "plpython_call_handler" "plpython_inline_handler" "plpython_validator" "$libdir/plpython2" _null_ ));
-DATA(insert ( "plpython2u"	f f "plpython2_call_handler" "plpython2_inline_handler" "plpython2_validator" "$libdir/plpython2" _null_ ));
-DATA(insert ( "plpython3u"	f f "plpython3_call_handler" "plpython3_inline_handler" "plpython3_validator" "$libdir/plpython3" _null_ ));
 
 #endif							/* PG_PLTEMPLATE_H */

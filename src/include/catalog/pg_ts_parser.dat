@@ -1,0 +1,7 @@
+# pg_ts_parser.dat
+[
+
+{ oid => '3722', descr => 'default word parser',
+  prsname => 'default', prsnamespace => 'PGNSP', prsstart => 'prsd_start', prstoken => 'prsd_nexttoken', prsend => 'prsd_end', prsheadline => 'prsd_headline', prslextype => 'prsd_lextype' },
+
+]

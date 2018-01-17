@@ -11,8 +11,8 @@
  * src/include/catalog/pg_language.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -20,6 +20,7 @@
 #define PG_LANGUAGE_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /* ----------------
  *		pg_language definition.  cpp turns this into
@@ -43,6 +44,11 @@ CATALOG(pg_language,2612)
 #endif
 } FormData_pg_language;
 
+DECLARE_UNIQUE_INDEX(pg_language_name_index, 2681, on pg_language using btree(lanname name_ops));
+#define LanguageNameIndexId  2681
+DECLARE_UNIQUE_INDEX(pg_language_oid_index, 2682, on pg_language using btree(oid oid_ops));
+#define LanguageOidIndexId	2682
+
 /* ----------------
  *		Form_pg_language corresponds to a pointer to a tuple with
  *		the format of pg_language relation.
@@ -63,20 +69,5 @@ typedef FormData_pg_language *Form_pg_language;
 #define Anum_pg_language_laninline		6
 #define Anum_pg_language_lanvalidator	7
 #define Anum_pg_language_lanacl			8
-
-/* ----------------
- *		initial contents of pg_language
- * ----------------
- */
-
-DATA(insert OID = 12 ( "internal"	PGUID f f 0 0 2246 _null_ ));
-DESCR("built-in functions");
-#define INTERNALlanguageId 12
-DATA(insert OID = 13 ( "c"			PGUID f f 0 0 2247 _null_ ));
-DESCR("dynamically-loaded C functions");
-#define ClanguageId 13
-DATA(insert OID = 14 ( "sql"		PGUID f t 0 0 2248 _null_ ));
-DESCR("SQL-language functions");
-#define SQLlanguageId 14
 
 #endif							/* PG_LANGUAGE_H */

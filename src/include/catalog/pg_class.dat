@@ -1,0 +1,17 @@
+# pg_class.dat
+[
+
+# Note: only "bootstrapped" relations need to be declared here.  Be sure that
+# the OIDs listed here match those given in their CATALOG macros, and that
+# the relnatts values are correct.
+
+{ oid => '1247',
+  relname => 'pg_type', reltype => '71', relnatts => '30', relhasoids => 't' },
+{ oid => '1249',
+  relname => 'pg_attribute', reltype => '75', relnatts => '22', relhasoids => 'f' },
+{ oid => '1255',
+  relname => 'pg_proc', reltype => '81', relnatts => '29', relhasoids => 't' },
+{ oid => '1259',
+  relname => 'pg_class', reltype => '83', relnatts => '33', relhasoids => 't' },
+
+]

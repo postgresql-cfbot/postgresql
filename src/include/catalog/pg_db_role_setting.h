@@ -10,11 +10,8 @@
  * src/include/catalog/pg_db_role_setting.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -42,6 +39,12 @@ CATALOG(pg_db_role_setting,2964) BKI_SHARED_RELATION BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_db_role_setting;
 
+DECLARE_TOAST(pg_db_role_setting, 2966, 2967);
+#define PgDbRoleSettingToastTable 2966
+#define PgDbRoleSettingToastIndex 2967
+DECLARE_UNIQUE_INDEX(pg_db_role_setting_databaseid_rol_index, 2965, on pg_db_role_setting using btree(setdatabase oid_ops, setrole oid_ops));
+#define DbRoleSettingDatidRolidIndexId	2965
+
 typedef FormData_pg_db_role_setting * Form_pg_db_role_setting;
 
 /* ----------------
@@ -52,11 +55,6 @@ typedef FormData_pg_db_role_setting * Form_pg_db_role_setting;
 #define Anum_pg_db_role_setting_setdatabase		1
 #define Anum_pg_db_role_setting_setrole			2
 #define Anum_pg_db_role_setting_setconfig		3
-
-/* ----------------
- *		initial contents of pg_db_role_setting are NOTHING
- * ----------------
- */
 
 /*
  * prototypes for functions in pg_db_role_setting.h

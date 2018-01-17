@@ -13,8 +13,8 @@
  * src/include/catalog/pg_authid.h
  *
  * NOTES
- *	  the genbki.pl script reads this file and generates .bki
- *	  information from the DATA() statements.
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -22,6 +22,7 @@
 #define PG_AUTHID_H
 
 #include "catalog/genbki.h"
+#include "catalog/oid_symbols.h"
 
 /*
  * The CATALOG definition has to refer to the type of rolvaliduntil as
@@ -44,25 +45,50 @@
 
 CATALOG(pg_authid,1260) BKI_SHARED_RELATION BKI_ROWTYPE_OID(2842) BKI_SCHEMA_MACRO
 {
-	NameData	rolname;		/* name of role */
-	bool		rolsuper;		/* read this field via superuser() only! */
-	bool		rolinherit;		/* inherit privileges from other roles? */
-	bool		rolcreaterole;	/* allowed to create more roles? */
-	bool		rolcreatedb;	/* allowed to create databases? */
-	bool		rolcanlogin;	/* allowed to log in as session user? */
-	bool		rolreplication; /* role used for streaming replication */
-	bool		rolbypassrls;	/* bypasses row level security? */
-	int32		rolconnlimit;	/* max connections allowed (-1=no limit) */
+	/* name of role */
+	NameData	rolname;
+
+	/* read this field via superuser() only! */
+	bool		rolsuper BKI_DEFAULT(f);
+
+	/* inherit privileges from other roles? */
+	bool		rolinherit BKI_DEFAULT(t);
+
+	/* allowed to create more roles? */
+	bool		rolcreaterole BKI_DEFAULT(f);
+
+	/* allowed to create databases? */
+	bool		rolcreatedb BKI_DEFAULT(f);
+
+	/* allowed to log in as session user? */
+	bool		rolcanlogin BKI_DEFAULT(f);
+
+	/* role used for streaming replication */
+	bool		rolreplication BKI_DEFAULT(f);
+
+	/* bypasses row level security? */
+	bool		rolbypassrls BKI_DEFAULT(f);
+
+	/* max connections allowed (-1=no limit) */
+	int32		rolconnlimit BKI_DEFAULT(-1);
 
 	/* remaining fields may be null; use heap_getattr to read them! */
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
-	text		rolpassword;	/* password, if any */
-	timestamptz rolvaliduntil;	/* password expiration time, if any */
+
+	/* password, if any */
+	text		rolpassword BKI_DEFAULT(_null_);
+
+	/* password expiration time, if any */
+	timestamptz rolvaliduntil BKI_DEFAULT(_null_);
 #endif
 } FormData_pg_authid;
 
 #undef timestamptz
 
+DECLARE_UNIQUE_INDEX(pg_authid_rolname_index, 2676, on pg_authid using btree(rolname name_ops));
+#define AuthIdRolnameIndexId	2676
+DECLARE_UNIQUE_INDEX(pg_authid_oid_index, 2677, on pg_authid using btree(oid oid_ops));
+#define AuthIdOidIndexId	2677
 
 /* ----------------
  *		Form_pg_authid corresponds to a pointer to a tuple with
@@ -87,28 +113,5 @@ typedef FormData_pg_authid *Form_pg_authid;
 #define Anum_pg_authid_rolconnlimit		9
 #define Anum_pg_authid_rolpassword		10
 #define Anum_pg_authid_rolvaliduntil	11
-
-/* ----------------
- *		initial contents of pg_authid
- *
- * The uppercase quantities will be replaced at initdb time with
- * user choices.
- *
- * The C code typically refers to these roles using the #define symbols,
- * so be sure to keep those in sync with the DATA lines.
- * ----------------
- */
-DATA(insert OID = 10 ( "POSTGRES" t t t t t t t -1 _null_ _null_));
-#define BOOTSTRAP_SUPERUSERID			10
-DATA(insert OID = 3373 ( "pg_monitor" f t f f f f f -1 _null_ _null_));
-#define DEFAULT_ROLE_MONITOR		3373
-DATA(insert OID = 3374 ( "pg_read_all_settings" f t f f f f f -1 _null_ _null_));
-#define DEFAULT_ROLE_READ_ALL_SETTINGS	3374
-DATA(insert OID = 3375 ( "pg_read_all_stats" f t f f f f f -1 _null_ _null_));
-#define DEFAULT_ROLE_READ_ALL_STATS 3375
-DATA(insert OID = 3377 ( "pg_stat_scan_tables" f t f f f f f -1 _null_ _null_));
-#define DEFAULT_ROLE_STAT_SCAN_TABLES	3377
-DATA(insert OID = 4200 ( "pg_signal_backend" f t f f f f f -1 _null_ _null_));
-#define DEFAULT_ROLE_SIGNAL_BACKENDID	4200
 
 #endif							/* PG_AUTHID_H */

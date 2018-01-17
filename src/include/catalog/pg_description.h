@@ -25,11 +25,8 @@
  * src/include/catalog/pg_description.h
  *
  * NOTES
- *		the genbki.pl script reads this file and generates .bki
- *		information from the DATA() statements.
- *
- *		XXX do NOT break up DATA() statements into multiple lines!
- *			the scripts are not as smart as you might think...
+ *	  The Catalog.pm module reads this file and derives schema
+ *	  information.
  *
  *-------------------------------------------------------------------------
  */
@@ -56,6 +53,10 @@ CATALOG(pg_description,2609) BKI_WITHOUT_OIDS
 #endif
 } FormData_pg_description;
 
+DECLARE_TOAST(pg_description, 2834, 2835);
+DECLARE_UNIQUE_INDEX(pg_description_o_c_o_index, 2675, on pg_description using btree(objoid oid_ops, classoid oid_ops, objsubid int4_ops));
+#define DescriptionObjIndexId  2675
+
 /* ----------------
  *		Form_pg_description corresponds to a pointer to a tuple with
  *		the format of pg_description relation.
@@ -73,15 +74,10 @@ typedef FormData_pg_description * Form_pg_description;
 #define Anum_pg_description_objsubid	3
 #define Anum_pg_description_description 4
 
-/* ----------------
- *		initial contents of pg_description
- * ----------------
- */
-
 /*
- *	Because the contents of this table are taken from the other *.h files,
- *	there is no initialization here.  The initial contents are extracted
- *	by genbki.pl and loaded during initdb.
+ *	Because the contents of this table are taken from the *.dat files
+ *	of other catalogs, pg_description does not have its own *.dat file.
+ *	The initial contents are assembled by genbki.pl and loaded during initdb.
  */
 
 #endif							/* PG_DESCRIPTION_H */

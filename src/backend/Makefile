@@ -119,6 +119,10 @@ submake-errcodes: $(top_builddir)/src/include/utils/errcodes.h
 
 $(top_builddir)/src/port/libpgport_srv.a: | submake-libpgport
 
+# src/common/ needs a convenient way to force just oid_symbols.h to get built
+submake-oidsymbols: $(top_builddir)/src/include/catalog/oid_symbols.h
+
+.PHONY: submake-oidsymbols
 
 # The postgres.o target is needed by the rule in Makefile.global that
 # creates the exports file when MAKE_EXPORTS = true.
@@ -142,13 +146,15 @@ utils/errcodes.h: utils/generate-errcodes.pl utils/errcodes.txt
 # see explanation in parser/Makefile
 utils/fmgrprotos.h: utils/fmgroids.h ;
 
-utils/fmgroids.h: utils/Gen_fmgrtab.pl catalog/Catalog.pm $(top_srcdir)/src/include/catalog/pg_proc.h
+utils/fmgroids.h: utils/Gen_fmgrtab.pl catalog/Catalog.pm $(top_srcdir)/src/include/catalog/pg_proc.dat $(top_srcdir)/src/include/catalog/pg_language.dat $(top_srcdir)/src/include/access/transam.h
 	$(MAKE) -C utils $(notdir $@)
 
 utils/probes.h: utils/probes.d
 	$(MAKE) -C utils probes.h
 
 # run this unconditionally to avoid needing to know its dependencies here:
+catalog/oid_symbols.h: catalog/schemapg.h ;
+
 catalog/schemapg.h: | submake-schemapg
 
 submake-schemapg:
@@ -167,11 +173,20 @@ submake-schemapg:
 # will be in the build tree, so a simple ../.. reference won't work.
 # For headers generated during regular builds, we prefer a relative symlink.
 
+GENERATED_HEADERS = $(addprefix $(top_builddir)/src/include/,\
+	parser/gram.h catalog/oid_symbols.h catalog/schemapg.h storage/lwlocknames.h \
+	utils/errcodes.h utils/fmgroids.h utils/fmgrprotos.h utils/probes.h)
+
 .PHONY: generated-headers
 
-generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/catalog/schemapg.h $(top_builddir)/src/include/storage/lwlocknames.h $(top_builddir)/src/include/utils/errcodes.h $(top_builddir)/src/include/utils/fmgroids.h $(top_builddir)/src/include/utils/fmgrprotos.h $(top_builddir)/src/include/utils/probes.h
+generated-headers: $(GENERATED_HEADERS)
 
 $(top_builddir)/src/include/parser/gram.h: parser/gram.h
+	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
+	  cd '$(dir $@)' && rm -f $(notdir $@) && \
+	  $(LN_S) "$$prereqdir/$(notdir $<)" .
+
+$(top_builddir)/src/include/catalog/oid_symbols.h: catalog/oid_symbols.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
 	  cd '$(dir $@)' && rm -f $(notdir $@) && \
 	  $(LN_S) "$$prereqdir/$(notdir $<)" .
@@ -216,7 +231,7 @@ utils/probes.o: utils/probes.d $(SUBDIROBJS)
 distprep:
 	$(MAKE) -C parser	gram.c gram.h scan.c
 	$(MAKE) -C bootstrap	bootparse.c bootscanner.c
-	$(MAKE) -C catalog	schemapg.h postgres.bki postgres.description postgres.shdescription
+	$(MAKE) -C catalog	oid_symbols.h schemapg.h postgres.bki postgres.description postgres.shdescription
 	$(MAKE) -C replication	repl_gram.c repl_scanner.c syncrep_gram.c syncrep_scanner.c
 	$(MAKE) -C storage/lmgr	lwlocknames.h
 	$(MAKE) -C utils	fmgrtab.c fmgroids.h fmgrprotos.h errcodes.h
@@ -306,13 +321,7 @@ endif
 ##########################################################################
 
 clean:
-	rm -f $(LOCALOBJS) postgres$(X) $(POSTGRES_IMP) \
-		$(top_builddir)/src/include/parser/gram.h \
-		$(top_builddir)/src/include/catalog/schemapg.h \
-		$(top_builddir)/src/include/storage/lwlocknames.h \
-		$(top_builddir)/src/include/utils/fmgroids.h \
-		$(top_builddir)/src/include/utils/fmgrprotos.h \
-		$(top_builddir)/src/include/utils/probes.h
+	rm -f $(LOCALOBJS) postgres$(X) $(POSTGRES_IMP) $(GENERATED_HEADERS)
 ifeq ($(PORTNAME), cygwin)
 	rm -f postgres.dll libpostgres.a
 endif
@@ -329,6 +338,7 @@ maintainer-clean: distclean
 	      parser/gram.c \
 	      parser/gram.h \
 	      parser/scan.c \
+	      catalog/oid_symbols.h \
 	      catalog/schemapg.h \
 	      catalog/postgres.bki \
 	      catalog/postgres.description \

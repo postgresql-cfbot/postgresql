@@ -27,6 +27,9 @@ CATALOG(pg_sequence,2224) BKI_WITHOUT_OIDS
 	bool		seqcycle;
 } FormData_pg_sequence;
 
+DECLARE_UNIQUE_INDEX(pg_sequence_seqrelid_index, 5002, on pg_sequence using btree(seqrelid oid_ops));
+#define SequenceRelidIndexId	5002
+
 typedef FormData_pg_sequence *Form_pg_sequence;
 
 #define Natts_pg_sequence				8

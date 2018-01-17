@@ -17,6 +17,7 @@
 #include "access/htup_details.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/dbcommands.h"
@@ -307,13 +308,17 @@ calculate_relation_size(RelFileNode *rfn, BackendId backend, ForkNumber forknum)
 	return totalsize;
 }
 
-Datum
-pg_relation_size(PG_FUNCTION_ARGS)
+/*
+ * Computes and stores in *size the file size of the specified fork of the
+ * relation with OID relOid.
+
+ * Returns true if size was sucessfully calculated and stored in *size, false
+ * otherwise.
+ */
+static bool
+pg_relation_size_internal(Oid relOid, char *forkName, int64 *size)
 {
-	Oid			relOid = PG_GETARG_OID(0);
-	text	   *forkName = PG_GETARG_TEXT_PP(1);
 	Relation	rel;
-	int64		size;
 
 	rel = try_relation_open(relOid, AccessShareLock);
 
@@ -321,16 +326,51 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	 * Before 9.2, we used to throw an error if the relation didn't exist, but
 	 * that makes queries like "SELECT pg_relation_size(oid) FROM pg_class"
 	 * less robust, because while we scan pg_class with an MVCC snapshot,
-	 * someone else might drop the table. It's better to return NULL for
-	 * already-dropped tables than throw an error and abort the whole query.
+	 * someone else might drop the table. It's better to return that we
+	 * couldn't get the size for already-dropped tables than throw an error
+	 * and abort the whole query.
 	 */
 	if (rel == NULL)
-		PG_RETURN_NULL();
+		return false;
 
-	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
-								   forkname_to_number(text_to_cstring(forkName)));
+	/*
+	 * For a partitioned table, get the size by accumulating that of its
+	 * leaf partitions.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		PartitionDesc	partdesc = rel->rd_partdesc;
+		int		i;
+
+		*size = 0;
+		for (i = 0; i < partdesc->nparts; i++)
+		{
+			int64	partsize;
+
+			if (pg_relation_size_internal(partdesc->oids[i], forkName,
+										  &partsize))
+				*size += partsize;
+		}
+	}
+	else
+		*size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
+										forkname_to_number(forkName));
 
 	relation_close(rel, AccessShareLock);
+
+	return true;
+}
+
+Datum
+pg_relation_size(PG_FUNCTION_ARGS)
+{
+	Oid			relOid = PG_GETARG_OID(0);
+	text	   *forkName = PG_GETARG_TEXT_PP(1);
+	int64		size;
+
+	if (!pg_relation_size_internal(relOid, text_to_cstring(forkName),
+								   &size))
+		PG_RETURN_NULL();
 
 	PG_RETURN_INT64(size);
 }
@@ -508,21 +548,50 @@ calculate_total_relation_size(Relation rel)
 	return size;
 }
 
-Datum
-pg_total_relation_size(PG_FUNCTION_ARGS)
+static int64
+pg_total_relation_size_internal(Oid relOid, int64 *size)
 {
-	Oid			relOid = PG_GETARG_OID(0);
 	Relation	rel;
-	int64		size;
 
 	rel = try_relation_open(relOid, AccessShareLock);
 
 	if (rel == NULL)
-		PG_RETURN_NULL();
+		return false;
 
-	size = calculate_total_relation_size(rel);
+	/*
+	 * For a partitioned table, get the size by accumulating that of its
+	 * leaf partitions.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		PartitionDesc	partdesc = rel->rd_partdesc;
+		int		i;
+
+		*size = 0;
+		for (i = 0; i < partdesc->nparts; i++)
+		{
+			int64	partsize;
+
+			if (pg_total_relation_size_internal(partdesc->oids[i], &partsize))
+				*size += partsize;
+		}
+	}
+	else
+		*size = calculate_total_relation_size(rel);
 
 	relation_close(rel, AccessShareLock);
+
+	return true;
+}
+
+Datum
+pg_total_relation_size(PG_FUNCTION_ARGS)
+{
+	Oid			relOid = PG_GETARG_OID(0);
+	int64		size;
+
+	if (!pg_total_relation_size_internal(relOid, &size))
+		PG_RETURN_NULL();
 
 	PG_RETURN_INT64(size);
 }

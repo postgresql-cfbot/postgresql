@@ -4330,9 +4330,22 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 		Cost		startup_cost;
 		Cost		total_cost;
 		List	   *useful_pathkeys = lfirst(lc);
+		Path	   *sorted_epq_path;
 
 		estimate_path_cost_size(root, rel, NIL, useful_pathkeys,
 								&rows, &width, &startup_cost, &total_cost);
+
+		/* epq_path might not be properly sorted */
+		sorted_epq_path = epq_path;
+		if (sorted_epq_path != NULL &&
+			!pathkeys_contained_in(useful_pathkeys,
+								   sorted_epq_path->pathkeys))
+			sorted_epq_path = (Path *)
+				create_sort_path(root,
+								 rel,
+								 sorted_epq_path,
+								 useful_pathkeys,
+								 -1.0);
 
 		add_path(rel, (Path *)
 				 create_foreignscan_path(root, rel,
@@ -4342,7 +4355,7 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 										 total_cost,
 										 useful_pathkeys,
 										 NULL,
-										 epq_path,
+										 sorted_epq_path,
 										 NIL));
 	}
 }

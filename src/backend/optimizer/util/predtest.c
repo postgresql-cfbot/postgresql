@@ -17,6 +17,9 @@
 
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_range.h"
+#include "catalog/pg_operator.h"
+#include "access/htup_details.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -26,6 +29,8 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
+#include "utils/rangetypes.h"
 
 
 /*
@@ -1407,6 +1412,104 @@ static const StrategyNumber BT_refute_table[6][6] = {
 	{none, none, BTEQ, none, none, none}	/* NE */
 };
 
+/*
+ * Get range type for the corresprent scalar type.
+ * Returns NULl if such range type is not found.
+ * This function performs sequential scan in pg_range table,
+ * but since number of range rtype is not expected to be large (6 builtin range types),
+ * it should not be a problem.
+ */
+static TypeCacheEntry* lookup_range_type(Oid type)
+{
+	TypeCacheEntry* typCache = NULL;
+	Relation	pgRangeRel;
+	Form_pg_range pgRange;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	pgRangeRel = heap_open(RangeRelationId, AccessShareLock);
+
+	scan = systable_beginscan(pgRangeRel, InvalidOid, false,
+							  NULL, 0, NULL);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		pgRange = (Form_pg_range) GETSTRUCT(tuple);
+		if (pgRange->rngsubtype == type)
+		{
+			typCache = lookup_type_cache(pgRange->rngtypid, TYPECACHE_RANGE_INFO);
+			break;
+		}
+	}
+	systable_endscan(scan);
+	heap_close(pgRangeRel, AccessShareLock);
+
+	return typCache;
+}
+
+/*
+ * Contruct range type for the comparison operator:
+ * '<=' ->  '(,"$value"]'
+ * '>=' ->  '["$value",)'
+ * '<'  ->  '(,"$value")'
+ * '>'. ->  '("$value",)'
+ * otherwise: NULL
+ */
+static RangeType* operator_to_range(TypeCacheEntry *typcache, Oid oper, Const* literal)
+{
+	HeapTuple	tuple;
+	char const* oprname;
+	RangeBound  lower, upper;
+
+	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for operator %u", oper);
+	oprname = ((Form_pg_operator) GETSTRUCT(tuple))->oprname.data;
+
+	lower.lower = true;
+	upper.lower = false;
+
+	if (strcmp(oprname, "<=") == 0)
+	{
+		lower.infinite = true;
+		lower.inclusive = false;
+		upper.infinite = false;
+		upper.inclusive = true;
+		upper.val = literal->constvalue;
+	}
+	else if (strcmp(oprname, "<") == 0)
+	{
+		lower.infinite = true;
+		lower.inclusive = false;
+		upper.infinite = false;
+		upper.inclusive = false;
+		upper.val = literal->constvalue;
+	}
+	else if (strcmp(oprname, ">=") == 0)
+	{
+		lower.infinite = false;
+		lower.inclusive = true;
+		lower.val = literal->constvalue;
+		upper.infinite = true;
+		upper.inclusive = false;
+	}
+	else if (strcmp(oprname, ">") == 0)
+	{
+		lower.infinite = false;
+		lower.inclusive = false;
+		lower.val = literal->constvalue;
+		upper.infinite = true;
+		upper.inclusive = false;
+	}
+	else
+	{
+		ReleaseSysCache(tuple);
+		return NULL;
+	}
+	ReleaseSysCache(tuple);
+
+	return make_range(typcache, &lower, &upper, false);
+}
 
 /*
  * operator_predicate_proof
@@ -1599,6 +1702,20 @@ operator_predicate_proof(Expr *predicate, Node *clause, bool refute_it)
 		return false;
 	if (clause_const->constisnull)
 		return false;
+
+	if (!refute_it && pred_const->consttype == clause_const->consttype)
+	{
+		TypeCacheEntry *typcache = lookup_range_type(clause_const->consttype);
+		if (typcache != NULL)
+		{
+			RangeType* pred_range = operator_to_range(typcache, pred_op, pred_const);
+			RangeType* clause_range = operator_to_range(typcache, clause_op, clause_const);
+			if (pred_range && clause_range && range_eq_internal(typcache, pred_range, clause_range))
+			{
+				return true;
+			}
+		}
+	}
 
 	/*
 	 * Lookup the constant-comparison operator using the system catalogs and

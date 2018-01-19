@@ -71,6 +71,7 @@
 
 #include "access/amapi.h"
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -605,12 +606,12 @@ index_fetch_heap(IndexScanDesc scan)
 
 	/* Obtain share-lock on the buffer so we can examine visibility */
 	LockBuffer(scan->xs_cbuf, BUFFER_LOCK_SHARE);
-	got_heap_tuple = heap_hot_search_buffer(tid, scan->heapRelation,
-											scan->xs_cbuf,
-											scan->xs_snapshot,
-											&scan->xs_ctup,
-											&all_dead,
-											!scan->xs_continue_hot);
+	got_heap_tuple = table_hot_search_buffer(tid, scan->heapRelation,
+											   scan->xs_cbuf,
+											   scan->xs_snapshot,
+											   &scan->xs_ctup,
+											   &all_dead,
+											   !scan->xs_continue_hot);
 	LockBuffer(scan->xs_cbuf, BUFFER_LOCK_UNLOCK);
 
 	if (got_heap_tuple)

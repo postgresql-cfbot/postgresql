@@ -321,6 +321,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		OptSchemaName
 %type <list>	OptSchemaEltList
 
+%type <chr>		am_type
+
 %type <boolean> TriggerForSpec TriggerForType
 %type <ival>	TriggerActionTime
 %type <list>	TriggerEvents TriggerOneEvent
@@ -5279,14 +5281,19 @@ row_security_cmd:
  *
  *****************************************************************************/
 
-CreateAmStmt: CREATE ACCESS METHOD name TYPE_P INDEX HANDLER handler_name
+CreateAmStmt: CREATE ACCESS METHOD name TYPE_P am_type HANDLER handler_name
 				{
 					CreateAmStmt *n = makeNode(CreateAmStmt);
 					n->amname = $4;
 					n->handler_name = $8;
-					n->amtype = AMTYPE_INDEX;
+					n->amtype = $6;
 					$$ = (Node *) n;
 				}
+		;
+
+am_type:
+			INDEX			{ $$ = AMTYPE_INDEX; }
+		|	TABLE			{ $$ = AMTYPE_TABLE; }
 		;
 
 /*****************************************************************************

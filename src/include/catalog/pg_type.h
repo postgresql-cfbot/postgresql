@@ -708,6 +708,8 @@ DATA(insert OID = 3115 ( fdw_handler	PGNSP PGUID  4 t p P f t \054 0 0 0 fdw_han
 #define FDW_HANDLEROID	3115
 DATA(insert OID = 325 ( index_am_handler	PGNSP PGUID  4 t p P f t \054 0 0 0 index_am_handler_in index_am_handler_out - - - - - i p f 0 -1 0 0 _null_ _null_ _null_ ));
 #define INDEX_AM_HANDLEROID 325
+DATA(insert OID = 3998 ( table_am_handler	PGNSP PGUID 4 t p P f t \054 0 0 0 table_am_handler_in table_am_handler_out - - - - - i p f 0 -1 0 0 _null_ _null_ _null_ ));
+#define TABLE_AM_HANDLEROID	3998
 DATA(insert OID = 3310 ( tsm_handler	PGNSP PGUID  4 t p P f t \054 0 0 0 tsm_handler_in tsm_handler_out - - - - - i p f 0 -1 0 0 _null_ _null_ _null_ ));
 #define TSM_HANDLEROID	3310
 DATA(insert OID = 3831 ( anyrange		PGNSP PGUID  -1 f p P f t \054 0 0 0 anyrange_in anyrange_out - - - - - d x f 0 -1 0 0 _null_ _null_ _null_ ));

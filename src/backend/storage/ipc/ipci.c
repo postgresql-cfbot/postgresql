@@ -147,7 +147,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, ApplyLauncherShmemSize());
 		size = add_size(size, SnapMgrShmemSize());
 		size = add_size(size, BTreeShmemSize());
-		size = add_size(size, SyncScanShmemSize());
+		size = add_size(size, heapam_storage_shmem_size());
 		size = add_size(size, AsyncShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
 #ifdef EXEC_BACKEND
@@ -267,7 +267,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	 */
 	SnapMgrInit();
 	BTreeShmemInit();
-	SyncScanShmemInit();
+	heapam_storage_shmem_init();
 	AsyncShmemInit();
 	BackendRandomShmemInit();
 

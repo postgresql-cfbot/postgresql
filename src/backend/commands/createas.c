@@ -26,6 +26,7 @@
 
 #include "access/reloptions.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -59,7 +60,7 @@ typedef struct
 	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			hi_options;		/* heap_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	void       *bistate;		/* bulk insert state */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -569,7 +570,7 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->hi_options = HEAP_INSERT_SKIP_FSM |
 		(XLogIsNeeded() ? 0 : HEAP_INSERT_SKIP_WAL);
-	myState->bistate = GetBulkInsertState();
+	myState->bistate = table_getbulkinsertstate(intoRelationDesc);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);
@@ -582,25 +583,28 @@ static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
-	HeapTuple	tuple;
 
 	/*
 	 * get the heap tuple out of the tuple table slot, making sure we have a
 	 * writable copy
 	 */
-	tuple = ExecMaterializeSlot(slot);
+	ExecMaterializeSlot(slot);
 
 	/*
 	 * force assignment of new OID (see comments in ExecInsert)
 	 */
 	if (myState->rel->rd_rel->relhasoids)
-		HeapTupleSetOid(tuple, InvalidOid);
+		slot->tts_tupleOid = InvalidOid;
 
-	heap_insert(myState->rel,
-				tuple,
-				myState->output_cid,
-				myState->hi_options,
-				myState->bistate);
+	table_insert(myState->rel,
+				   slot,
+				   myState->output_cid,
+				   myState->hi_options,
+				   myState->bistate,
+				   NULL,
+				   NULL,
+				   NIL,
+				   NULL);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -615,11 +619,11 @@ intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 
-	FreeBulkInsertState(myState->bistate);
+	table_freebulkinsertstate(myState->rel, myState->bistate);
 
 	/* If we skipped using WAL, must heap_sync before commit */
 	if (myState->hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(myState->rel);
+		table_sync(myState->rel);
 
 	/* close rel, but keep lock until commit */
 	heap_close(myState->rel, NoLock);

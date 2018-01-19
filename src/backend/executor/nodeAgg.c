@@ -2499,7 +2499,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		Oid			inputTypes[FUNC_MAX_ARGS];
 		int			numArguments;
 		int			numDirectArgs;
-		HeapTuple	aggTuple;
+		TableTuple aggTuple;
 		Form_pg_aggregate aggform;
 		AclResult	aclresult;
 		Oid			transfn_oid,
@@ -2624,7 +2624,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
 		/* Check that aggregate owner has permission to call component fns */
 		{
-			HeapTuple	procTuple;
+			TableTuple procTuple;
 			Oid			aggOwner;
 
 			procTuple = SearchSysCache1(PROCOID,

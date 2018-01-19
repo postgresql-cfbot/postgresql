@@ -20,6 +20,7 @@
 #include "postgres.h"
 
 #include "access/relscan.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "catalog/index.h"
 #include "lib/stringinfo.h"
@@ -394,9 +395,9 @@ systable_beginscan(Relation heapRelation,
 		 * disadvantage; and there are no compensating advantages, because
 		 * it's unlikely that such scans will occur in parallel.
 		 */
-		sysscan->scan = heap_beginscan_strat(heapRelation, snapshot,
-											 nkeys, key,
-											 true, false);
+		sysscan->scan = table_beginscan_strat(heapRelation, snapshot,
+												nkeys, key,
+												true, false);
 		sysscan->iscan = NULL;
 	}
 
@@ -432,7 +433,7 @@ systable_getnext(SysScanDesc sysscan)
 			elog(ERROR, "system catalog scans with lossy index conditions are not implemented");
 	}
 	else
-		htup = heap_getnext(sysscan->scan, ForwardScanDirection);
+		htup = table_scan_getnext(sysscan->scan, ForwardScanDirection);
 
 	return htup;
 }
@@ -472,19 +473,19 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 		Assert(BufferIsValid(scan->xs_cbuf));
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(scan->xs_cbuf, BUFFER_LOCK_SHARE);
-		result = HeapTupleSatisfiesVisibility(tup, freshsnap, scan->xs_cbuf);
+		result = HeapTupleSatisfiesVisibility(sysscan->heap_rel->rd_tableamroutine, tup, freshsnap, scan->xs_cbuf);
 		LockBuffer(scan->xs_cbuf, BUFFER_LOCK_UNLOCK);
 	}
 	else
 	{
-		HeapScanDesc scan = sysscan->scan;
+		TableScanDesc scan = sysscan->scan;
 
 		Assert(IsMVCCSnapshot(scan->rs_snapshot));
-		Assert(tup == &scan->rs_ctup);
+		/* hari Assert(tup == &scan->rs_ctup); */
 		Assert(BufferIsValid(scan->rs_cbuf));
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
-		result = HeapTupleSatisfiesVisibility(tup, freshsnap, scan->rs_cbuf);
+		result = HeapTupleSatisfiesVisibility(sysscan->heap_rel->rd_tableamroutine, tup, freshsnap, scan->rs_cbuf);
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 	}
 	return result;
@@ -504,7 +505,7 @@ systable_endscan(SysScanDesc sysscan)
 		index_close(sysscan->irel, AccessShareLock);
 	}
 	else
-		heap_endscan(sysscan->scan);
+		table_endscan(sysscan->scan);
 
 	if (sysscan->snapshot)
 		UnregisterSnapshot(sysscan->snapshot);

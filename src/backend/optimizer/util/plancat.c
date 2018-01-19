@@ -21,6 +21,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/tableamapi.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "access/xlog.h"
@@ -253,7 +254,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->amsearchnulls = amroutine->amsearchnulls;
 			info->amcanparallel = amroutine->amcanparallel;
 			info->amhasgettuple = (amroutine->amgettuple != NULL);
-			info->amhasgetbitmap = (amroutine->amgetbitmap != NULL);
+			info->amhasgetbitmap = ((amroutine->amgetbitmap != NULL)
+									&& (relation->rd_tableamroutine->scan_get_heappagescandesc != NULL));
 			info->amcostestimate = amroutine->amcostestimate;
 			Assert(info->amcostestimate != NULL);
 

@@ -59,6 +59,7 @@ typedef FormData_pg_am *Form_pg_am;
  * ----------------
  */
 #define AMTYPE_INDEX					'i' /* index access method */
+#define AMTYPE_TABLE					't' /* table access method */
 
 /* ----------------
  *		initial contents of pg_am
@@ -83,5 +84,8 @@ DESCR("SP-GiST index access method");
 DATA(insert OID = 3580 (  brin		brinhandler i ));
 DESCR("block range index (BRIN) access method");
 #define BRIN_AM_OID 3580
+DATA(insert OID = 4001 (  heap_tableam         heap_tableam_handler s ));
+DESCR("heap table access method");
+#define HEAP_TABLE_AM_OID 4001
 
 #endif							/* PG_AM_H */

@@ -45,7 +45,7 @@
  */
 typedef struct GMReaderTupleBuffer
 {
-	HeapTuple  *tuple;			/* array of length MAX_TUPLE_STORE */
+	TableTuple *tuple;		/* array of length MAX_TUPLE_STORE */
 	int			nTuples;		/* number of tuples currently stored */
 	int			readCounter;	/* index of next tuple to extract */
 	bool		done;			/* true if reader is known exhausted */
@@ -54,8 +54,8 @@ typedef struct GMReaderTupleBuffer
 static TupleTableSlot *ExecGatherMerge(PlanState *pstate);
 static int32 heap_compare_slots(Datum a, Datum b, void *arg);
 static TupleTableSlot *gather_merge_getnext(GatherMergeState *gm_state);
-static HeapTuple gm_readnext_tuple(GatherMergeState *gm_state, int nreader,
-				  bool nowait, bool *done);
+static TableTuple gm_readnext_tuple(GatherMergeState *gm_state, int nreader,
+									  bool nowait, bool *done);
 static void ExecShutdownGatherMergeWorkers(GatherMergeState *node);
 static void gather_merge_setup(GatherMergeState *gm_state);
 static void gather_merge_init(GatherMergeState *gm_state);
@@ -407,7 +407,7 @@ gather_merge_setup(GatherMergeState *gm_state)
 	{
 		/* Allocate the tuple array with length MAX_TUPLE_STORE */
 		gm_state->gm_tuple_buffers[i].tuple =
-			(HeapTuple *) palloc0(sizeof(HeapTuple) * MAX_TUPLE_STORE);
+			(TableTuple *) palloc0(sizeof(TableTuple) * MAX_TUPLE_STORE);
 
 		/* Initialize tuple slot for worker */
 		gm_state->gm_slots[i + 1] = ExecInitExtraTupleSlot(gm_state->ps.state);
@@ -625,7 +625,7 @@ static bool
 gather_merge_readnext(GatherMergeState *gm_state, int reader, bool nowait)
 {
 	GMReaderTupleBuffer *tuple_buffer;
-	HeapTuple	tup;
+	TableTuple tup;
 
 	/*
 	 * If we're being asked to generate a tuple from the leader, then we just
@@ -700,12 +700,12 @@ gather_merge_readnext(GatherMergeState *gm_state, int reader, bool nowait)
 /*
  * Attempt to read a tuple from given worker.
  */
-static HeapTuple
+static TableTuple
 gm_readnext_tuple(GatherMergeState *gm_state, int nreader, bool nowait,
 				  bool *done)
 {
 	TupleQueueReader *reader;
-	HeapTuple	tup;
+	TableTuple tup;
 
 	/* Check for async events, particularly messages from workers. */
 	CHECK_FOR_INTERRUPTS();

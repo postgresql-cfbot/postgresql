@@ -28,6 +28,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
@@ -528,14 +529,14 @@ get_all_vacuum_rels(void)
 {
 	List	   *vacrels = NIL;
 	Relation	pgclass;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 
 	pgclass = heap_open(RelationRelationId, AccessShareLock);
 
-	scan = heap_beginscan_catalog(pgclass, 0, NULL);
+	scan = table_beginscan_catalog(pgclass, 0, NULL);
 
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = table_scan_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 		MemoryContext oldcontext;
@@ -562,7 +563,7 @@ get_all_vacuum_rels(void)
 		MemoryContextSwitchTo(oldcontext);
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	heap_close(pgclass, AccessShareLock);
 
 	return vacrels;
@@ -1183,7 +1184,7 @@ vac_truncate_clog(TransactionId frozenXID,
 {
 	TransactionId nextXID = ReadNewTransactionId();
 	Relation	relation;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 	Oid			oldestxid_datoid;
 	Oid			minmulti_datoid;
@@ -1214,9 +1215,9 @@ vac_truncate_clog(TransactionId frozenXID,
 	 */
 	relation = heap_open(DatabaseRelationId, AccessShareLock);
 
-	scan = heap_beginscan_catalog(relation, 0, NULL);
+	scan = table_beginscan_catalog(relation, 0, NULL);
 
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = table_scan_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		volatile FormData_pg_database *dbform = (Form_pg_database) GETSTRUCT(tuple);
 		TransactionId datfrozenxid = dbform->datfrozenxid;
@@ -1253,7 +1254,7 @@ vac_truncate_clog(TransactionId frozenXID,
 		}
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 
 	heap_close(relation, AccessShareLock);
 

@@ -2092,7 +2092,7 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 {
 	Oid			inputTypes[FUNC_MAX_ARGS];
 	int			numArguments;
-	HeapTuple	aggTuple;
+	TableTuple aggTuple;
 	Form_pg_aggregate aggform;
 	Oid			aggtranstype;
 	AttrNumber	initvalAttNo;
@@ -2175,7 +2175,7 @@ initialize_peragg(WindowAggState *winstate, WindowFunc *wfunc,
 
 	/* Check that aggregate owner has permission to call component fns */
 	{
-		HeapTuple	procTuple;
+		TableTuple procTuple;
 		Oid			aggOwner;
 
 		procTuple = SearchSysCache1(PROCOID,

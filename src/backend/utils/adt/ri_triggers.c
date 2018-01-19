@@ -287,7 +287,7 @@ RI_FKey_check(TriggerData *trigdata)
 	 * should be holding pin, but not lock.
 	 */
 	LockBuffer(new_row_buf, BUFFER_LOCK_SHARE);
-	if (!HeapTupleSatisfiesVisibility(new_row, SnapshotSelf, new_row_buf))
+	if (!HeapTupleSatisfiesVisibility(trigdata->tg_relation->rd_tableamroutine, new_row, SnapshotSelf, new_row_buf))
 	{
 		LockBuffer(new_row_buf, BUFFER_LOCK_UNLOCK);
 		return PointerGetDatum(NULL);

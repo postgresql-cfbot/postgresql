@@ -402,7 +402,7 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 			 * either here or while following a chain below.  Whichever path
 			 * gets there first will mark the tuple unused.
 			 */
-			if (HeapTupleSatisfiesVacuum(&tup, OldestXmin, buffer)
+			if (relation->rd_tableamroutine->snapshot_satisfiesVacuum(&tup, OldestXmin, buffer)
 				== HEAPTUPLE_DEAD && !HeapTupleHeaderIsHotUpdated(htup))
 			{
 				heap_prune_record_unused(prstate, rootoffnum);
@@ -486,7 +486,7 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 		 */
 		tupdead = recent_dead = false;
 
-		switch (HeapTupleSatisfiesVacuum(&tup, OldestXmin, buffer))
+		switch (relation->rd_tableamroutine->snapshot_satisfiesVacuum(&tup, OldestXmin, buffer))
 		{
 			case HEAPTUPLE_DEAD:
 				tupdead = true;

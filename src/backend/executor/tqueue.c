@@ -58,7 +58,7 @@ tqueueReceiveSlot(TupleTableSlot *slot, DestReceiver *self)
 	shm_mq_result result;
 
 	/* Send the tuple itself. */
-	tuple = ExecMaterializeSlot(slot);
+	tuple = ExecHeapifySlot(slot);
 	result = shm_mq_send(tqueue->queue, tuple->t_len, tuple->t_data, false);
 
 	/* Check for failure. */
@@ -168,7 +168,7 @@ DestroyTupleQueueReader(TupleQueueReader *reader)
  * accumulate bytes from a partially-read message, so it's useful to call
  * this with nowait = true even if nothing is returned.
  */
-HeapTuple
+TableTuple
 TupleQueueReaderNext(TupleQueueReader *reader, bool nowait, bool *done)
 {
 	HeapTupleData htup;

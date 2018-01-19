@@ -16,6 +16,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/tableam.h"
 #include "access/htup_details.h"
 #include "access/itup.h"
 #include "access/tupdesc.h"
@@ -42,40 +43,54 @@ typedef struct ParallelHeapScanDescData
 	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 }			ParallelHeapScanDescData;
 
-typedef struct HeapScanDescData
+typedef struct TableScanDescData
 {
 	/* scan parameters */
 	Relation	rs_rd;			/* heap relation descriptor */
 	Snapshot	rs_snapshot;	/* snapshot to see */
 	int			rs_nkeys;		/* number of scan keys */
 	ScanKey		rs_key;			/* array of scan key descriptors */
-	bool		rs_bitmapscan;	/* true if this is really a bitmap scan */
-	bool		rs_samplescan;	/* true if this is really a sample scan */
+
+	/* scan current state */
+	bool		rs_inited;		/* false = scan not init'd yet */
+	BlockNumber rs_cblock;		/* current block # in scan, if any */
+	Buffer		rs_cbuf;		/* current buffer in scan, if any */
+}			TableScanDescData;
+
+typedef struct HeapPageScanDescData
+{
 	bool		rs_pageatatime; /* verify visibility page-at-a-time? */
-	bool		rs_allow_strat; /* allow or disallow use of access strategy */
-	bool		rs_allow_sync;	/* allow or disallow use of syncscan */
-	bool		rs_temp_snap;	/* unregister snapshot at scan end? */
 
 	/* state set up at initscan time */
 	BlockNumber rs_nblocks;		/* total number of blocks in rel */
 	BlockNumber rs_startblock;	/* block # to start at */
 	BlockNumber rs_numblocks;	/* max number of blocks to scan */
+
 	/* rs_numblocks is usually InvalidBlockNumber, meaning "scan whole rel" */
 	BufferAccessStrategy rs_strategy;	/* access strategy for reads */
 	bool		rs_syncscan;	/* report location to syncscan logic? */
-
-	/* scan current state */
-	bool		rs_inited;		/* false = scan not init'd yet */
-	HeapTupleData rs_ctup;		/* current tuple in scan, if any */
-	BlockNumber rs_cblock;		/* current block # in scan, if any */
-	Buffer		rs_cbuf;		/* current buffer in scan, if any */
-	/* NB: if rs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
-	ParallelHeapScanDesc rs_parallel;	/* parallel scan information */
 
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
 	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
+}			HeapPageScanDescData;
+
+typedef struct HeapScanDescData
+{
+	/* scan parameters */
+	TableScanDescData rs_scan;	/* */
+	HeapPageScanDescData rs_pagescan;
+	bool		rs_bitmapscan;	/* true if this is really a bitmap scan */
+	bool		rs_samplescan;	/* true if this is really a sample scan */
+	bool		rs_allow_strat; /* allow or disallow use of access strategy */
+	bool		rs_allow_sync;	/* allow or disallow use of syncscan */
+	bool		rs_temp_snap;	/* unregister snapshot at scan end? */
+
+	HeapTupleData rs_ctup;		/* current tuple in scan, if any */
+
+	/* NB: if rs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
+	ParallelHeapScanDesc rs_parallel;	/* parallel scan information */
 }			HeapScanDescData;
 
 /*
@@ -149,12 +164,12 @@ typedef struct ParallelIndexScanDescData
 	char		ps_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 }			ParallelIndexScanDescData;
 
-/* Struct for heap-or-index scans of system tables */
+/* Struct for storage-or-index scans of system tables */
 typedef struct SysScanDescData
 {
 	Relation	heap_rel;		/* catalog being scanned */
 	Relation	irel;			/* NULL if doing heap scan */
-	HeapScanDesc scan;			/* only valid in heap-scan case */
+	TableScanDesc scan;		/* only valid in storage-scan case */
 	IndexScanDesc iscan;		/* only valid in index-scan case */
 	Snapshot	snapshot;		/* snapshot to unregister at end of scan */
 }			SysScanDescData;

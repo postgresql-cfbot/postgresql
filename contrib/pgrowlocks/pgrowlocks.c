@@ -35,6 +35,7 @@
 #include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/tqual.h"
@@ -121,7 +122,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 			aclresult = is_member_of_role(GetUserId(), DEFAULT_ROLE_STAT_SCAN_TABLES) ? ACLCHECK_OK : ACLCHECK_NO_PRIV;
 
 		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, ACL_KIND_CLASS,
+			aclcheck_error(aclresult, relkind_get_objtype(get_rel_relkind(RelationGetRelid(rel))),
 						   RelationGetRelationName(rel));
 
 		scan = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);

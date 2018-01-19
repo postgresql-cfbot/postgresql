@@ -25,6 +25,7 @@
 #include "statistics/statistics.h"
 #include "utils/builtins.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -141,7 +142,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 
 		/* You must own the relation to create stats on it */
 		if (!pg_class_ownercheck(RelationGetRelid(rel), stxowner))
-			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_CLASS,
+			aclcheck_error(ACLCHECK_NOT_OWNER, relkind_get_objtype(get_rel_relkind(RelationGetRelid(rel))),
 						   RelationGetRelationName(rel));
 	}
 

@@ -107,7 +107,7 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	rel = relation_open(relOid, AccessShareLock);
 	aclresult = pg_class_aclcheck(relOid, GetUserId(), ACL_SELECT);
 	if (aclresult != ACLCHECK_OK)
-		aclcheck_error(aclresult, ACL_KIND_CLASS, get_rel_name(relOid));
+		aclcheck_error(aclresult, relkind_get_objtype(get_rel_relkind(relOid)), get_rel_name(relOid));
 
 	/* Check that the fork exists. */
 	RelationOpenSmgr(rel);

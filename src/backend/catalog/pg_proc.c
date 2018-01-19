@@ -400,7 +400,7 @@ ProcedureCreate(const char *procedureName,
 					 errmsg("function \"%s\" already exists with same argument types",
 							procedureName)));
 		if (!pg_proc_ownercheck(HeapTupleGetOid(oldtup), proowner))
-			aclcheck_error(ACLCHECK_NOT_OWNER, ACL_KIND_PROC,
+			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FUNCTION,
 						   procedureName);
 
 		/*
@@ -582,7 +582,7 @@ ProcedureCreate(const char *procedureName,
 		/* Creating a new procedure */
 
 		/* First, get default permissions and set up proacl */
-		proacl = get_user_default_acl(ACL_OBJECT_FUNCTION, proowner,
+		proacl = get_user_default_acl(OBJECT_FUNCTION, proowner,
 									  procNamespace);
 		if (proacl != NULL)
 			values[Anum_pg_proc_proacl - 1] = PointerGetDatum(proacl);

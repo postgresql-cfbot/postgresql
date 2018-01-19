@@ -342,7 +342,10 @@ flagInhTables(Archive *fout, TableInfo *tblinfo, int numTables,
 		if (find_parents)
 			findParentsByOid(&tblinfo[i], inhinfo, numInherits);
 
-		/* If needed, mark the parents as interesting for getTableAttrs. */
+		/*
+		 * If needed, mark the parents as interesting for getTableAttrs
+		 * and getIndexes.
+		 */
 		if (mark_parents)
 		{
 			int			numParents = tblinfo[i].numParents;

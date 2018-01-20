@@ -133,3 +133,28 @@ PLyUnicode_FromString(const char *s)
 }
 
 #endif							/* PY_MAJOR_VERSION >= 3 */
+
+/*
+ * Return a suitable Python object containing a uint64.
+ */
+PyObject *
+PLyObject_FromUint64(uint64 ival)
+{
+#if PY_MAJOR_VERSION < 3
+	/* In Python 2, return int if it fits. */
+	if (ival <= (uint64) LONG_MAX)
+		return PyInt_FromLong((long) ival);
+	else
+#endif
+	{
+		/*
+		 * Convert to Python long, picking the conversion function that
+		 * corresponds to the underlying definition of our uint64.
+		 */
+#ifdef HAVE_LONG_LONG
+		return PyLong_FromUnsignedLongLong(ival);
+#else
+		return PyLong_FromUnsignedLong(ival);
+#endif
+	}
+}

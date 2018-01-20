@@ -14,4 +14,6 @@ extern PyObject *PLyUnicode_FromString(const char *s);
 extern PyObject *PLyUnicode_FromStringAndSize(const char *s, Py_ssize_t size);
 #endif
 
+extern PyObject *PLyObject_FromUint64(uint64 ival);
+
 #endif							/* PLPY_UTIL_H */

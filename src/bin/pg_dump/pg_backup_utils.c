@@ -19,6 +19,9 @@
 /* Globals exported by this file */
 const char *progname = NULL;
 
+/* User wants verbose narration of our activities */
+bool		g_verbose = false;
+
 #define MAX_ON_EXIT_NICELY				20
 
 static struct

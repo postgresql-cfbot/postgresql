@@ -48,6 +48,7 @@ generate_old_dump(void)
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
 		PQExpBufferData connstr,
 					escaped_connstr;
+		PQExpBuffer create_opts = createPQExpBuffer();
 
 		initPQExpBuffer(&connstr);
 		appendPQExpBuffer(&connstr, "dbname=");
@@ -60,13 +61,20 @@ generate_old_dump(void)
 		snprintf(sql_file_name, sizeof(sql_file_name), DB_DUMP_FILE_MASK, old_db->db_oid);
 		snprintf(log_file_name, sizeof(log_file_name), DB_DUMP_LOG_FILE_MASK, old_db->db_oid);
 
+		if (strcmp(old_db->db_name, "template1") == 0 || strcmp(old_db->db_name, "postgres") == 0)
+			appendPQExpBufferStr(create_opts, " --set-db-properties ");
+		else
+			appendPQExpBufferStr(create_opts, " -C ");
+
 		parallel_exec_prog(log_file_name, NULL,
 						   "\"%s/pg_dump\" %s --schema-only --quote-all-identifiers "
-						   "--binary-upgrade --format=custom %s --file=\"%s\" %s",
+						   "--binary-upgrade %s "
+						   "--format=custom %s --file=\"%s\" %s",
 						   new_cluster.bindir, cluster_conn_opts(&old_cluster),
-						   log_opts.verbose ? "--verbose" : "",
+						   create_opts->data, log_opts.verbose ? "--verbose" : "",
 						   sql_file_name, escaped_connstr.data);
 
+		termPQExpBuffer(create_opts);
 		termPQExpBuffer(&escaped_connstr);
 	}
 

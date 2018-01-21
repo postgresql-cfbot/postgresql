@@ -807,3 +807,70 @@ buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 		printfPQExpBuffer(init_racl_subquery, "NULL");
 	}
 }
+
+/*
+ * Helper function for dumpXXXConfig().
+ *
+ * Frame the ALTER ".." SET ".." commands and fill it in buf.
+ */
+void
+makeAlterConfigCommand(PGconn *conn, const char *configitem,
+					   const char *type, const char *name,
+					   const char *type2, const char *name2,
+					   PQExpBuffer buf)
+{
+	char	   *pos;
+	char	   *mine;
+
+	mine = pg_strdup(configitem);
+	pos = strchr(mine, '=');
+	if (pos == NULL)
+	{
+		pg_free(mine);
+		return;
+	}
+
+	*pos++ = '\0';
+	appendPQExpBuffer(buf, "ALTER %s %s ", type, fmtId(name));
+	if (type2 != NULL && name2 != NULL)
+		appendPQExpBuffer(buf, "IN %s %s ", type2, fmtId(name2));
+	appendPQExpBuffer(buf, "SET %s TO ", fmtId(mine));
+
+	/*
+	 * Some GUC variable names are 'LIST' type and hence must not be quoted.
+	 */
+	if (pg_strcasecmp(mine, "DateStyle") == 0
+		|| pg_strcasecmp(mine, "search_path") == 0)
+		appendPQExpBufferStr(buf, pos);
+	else
+		appendStringLiteralConn(buf, pos, conn);
+	appendPQExpBufferStr(buf, ";\n");
+
+	pg_free(mine);
+}
+
+/*
+ * Run a query, return the results, exit program on failure.
+ */
+PGresult *
+executeQuery(PGconn *conn, const char *query)
+{
+	PGresult   *res;
+
+	if (g_verbose)
+		fprintf(stderr, _("%s: executing %s\n"), progname, query);
+
+	res = PQexec(conn, query);
+	if (!res ||
+		PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		fprintf(stderr, _("%s: query failed: %s"),
+				progname, PQerrorMessage(conn));
+		fprintf(stderr, _("%s: query was: %s\n"),
+				progname, query);
+		PQfinish(conn);
+		exit_nicely(1);
+	}
+
+	return res;
+}

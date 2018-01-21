@@ -192,8 +192,11 @@ PostgreSQL documentation
         database itself and reconnect to the created database.  (With a
         script of this form, it doesn't matter which database in the
         destination installation you connect to before running the script.)
-        If <option>--clean</option> is also specified, the script drops and
-        recreates the target database before reconnecting to it.
+        It also sets all the database-level properties such as ownership, 
+        ACLs, <command>ALTER DATABASE ... SET</command> commands, and 
+        <command>ALTER ROLE IN DATABASE ... SET</command> commands.
+        If <option>--clean</option> is also specified, the script drops
+        and recreates the target database before reconnecting to it.
        </para>
 
        <para>
@@ -706,6 +709,28 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry>
+      <term><option>--set-db-properties</option></term>
+      <listitem>
+       <para>
+        This option is to dump the database properties without issuing the
+        <command>CREATE DATABASE</command> command. The generated dump is 
+        used to restore the databases on a target location where the database
+        is already exists. This option cannot be used with either of
+        <option>-C/--create</option> or <option>-c/--clean</option> options.
+       </para>
+      
+       <note>
+        <para>
+         The Dump file generated with this option cannot be restored using
+         <option>-c/--clean</option> and <option>-C/--create</option> options of
+         <application>pg_restore</application> command. This is due to not available
+         of <command>CREATE DATABASE</command> command in the dump file.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+     
      <varlistentry>
       <term><option>--enable-row-security</option></term>
       <listitem>
@@ -1231,10 +1256,6 @@ CREATE DATABASE foo WITH TEMPLATE template0;
    <command>ANALYZE</command> after restoring from a dump file
    to ensure optimal performance; see <xref linkend="vacuum-for-statistics"/>
    and <xref linkend="autovacuum"/> for more information.
-   The dump file also does not
-   contain any <command>ALTER DATABASE ... SET</command> commands;
-   these settings are dumped by <xref linkend="app-pg-dumpall"/>,
-   along with database users and other installation-wide settings.
   </para>
 
   <para>

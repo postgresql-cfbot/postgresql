@@ -46,7 +46,7 @@
 #endif
 
 static void prepare_new_cluster(void);
-static void prepare_new_databases(void);
+static void prepare_new_globals(void);
 static void create_new_objects(void);
 static void copy_xact_xlog_xid(void);
 static void set_frozenxids(bool minmxid_only);
@@ -124,7 +124,7 @@ main(int argc, char **argv)
 	/* -- NEW -- */
 	start_postmaster(&new_cluster, true);
 
-	prepare_new_databases();
+	prepare_new_globals();
 
 	create_new_objects();
 
@@ -271,7 +271,7 @@ prepare_new_cluster(void)
 
 
 static void
-prepare_new_databases(void)
+prepare_new_globals(void)
 {
 	/*
 	 * We set autovacuum_freeze_max_age to its maximum value so autovacuum
@@ -294,9 +294,6 @@ prepare_new_databases(void)
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  GLOBALS_DUMP_FILE);
 	check_ok();
-
-	/* we load this to get a current list of databases */
-	get_db_and_rel_infos(&new_cluster);
 }
 
 
@@ -312,15 +309,6 @@ create_new_objects(void)
 		char		sql_file_name[MAXPGPATH],
 					log_file_name[MAXPGPATH];
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
-		PQExpBufferData connstr,
-					escaped_connstr;
-
-		initPQExpBuffer(&connstr);
-		appendPQExpBuffer(&connstr, "dbname=");
-		appendConnStrVal(&connstr, old_db->db_name);
-		initPQExpBuffer(&escaped_connstr);
-		appendShellString(&escaped_connstr, connstr.data);
-		termPQExpBuffer(&connstr);
 
 		pg_log(PG_STATUS, "%s", old_db->db_name);
 		snprintf(sql_file_name, sizeof(sql_file_name), DB_DUMP_FILE_MASK, old_db->db_oid);
@@ -332,13 +320,10 @@ create_new_objects(void)
 		 */
 		parallel_exec_prog(log_file_name,
 						   NULL,
-						   "\"%s/pg_restore\" %s --exit-on-error --verbose --dbname %s \"%s\"",
+						   "\"%s/pg_restore\" %s --create --exit-on-error --verbose --dbname template1 \"%s\"",
 						   new_cluster.bindir,
 						   cluster_conn_opts(&new_cluster),
-						   escaped_connstr.data,
 						   sql_file_name);
-
-		termPQExpBuffer(&escaped_connstr);
 	}
 
 	/* reap all children */

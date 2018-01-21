@@ -219,14 +219,19 @@ plpython2_validator(PG_FUNCTION_ARGS)
 Datum
 plpython_call_handler(PG_FUNCTION_ARGS)
 {
+	bool		nonatomic;
 	Datum		retval;
 	PLyExecutionContext *exec_ctx;
 	ErrorContextCallback plerrcontext;
 
 	PLy_initialize();
 
+	nonatomic = fcinfo->context &&
+		IsA(fcinfo->context, CallContext) &&
+		!castNode(CallContext, fcinfo->context)->atomic;
+
 	/* Note: SPI_finish() happens in plpy_exec.c, which is dubious design */
-	if (SPI_connect() != SPI_OK_CONNECT)
+	if (SPI_connect_ext(nonatomic ? SPI_OPT_NONATOMIC : 0) != SPI_OK_CONNECT)
 		elog(ERROR, "SPI_connect failed");
 
 	/*
@@ -303,7 +308,7 @@ plpython_inline_handler(PG_FUNCTION_ARGS)
 	PLy_initialize();
 
 	/* Note: SPI_finish() happens in plpy_exec.c, which is dubious design */
-	if (SPI_connect() != SPI_OK_CONNECT)
+	if (SPI_connect_ext(codeblock->atomic ? 0 : SPI_OPT_NONATOMIC) != SPI_OK_CONNECT)
 		elog(ERROR, "SPI_connect failed");
 
 	MemSet(&fake_fcinfo, 0, sizeof(fake_fcinfo));
@@ -435,7 +440,7 @@ PLy_push_execution_context(void)
 	PLyExecutionContext *context;
 
 	context = (PLyExecutionContext *)
-		MemoryContextAlloc(TopTransactionContext, sizeof(PLyExecutionContext));
+		MemoryContextAlloc(PortalContext, sizeof(PLyExecutionContext));
 	context->curr_proc = NULL;
 	context->scratch_ctx = NULL;
 	context->next = PLy_execution_contexts;

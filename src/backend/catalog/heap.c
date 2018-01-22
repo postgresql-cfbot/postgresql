@@ -1847,10 +1847,7 @@ heap_drop_with_catalog(Oid relid)
 	/*
 	 * Schedule unlinking of the relation's physical files at commit.
 	 */
-	if (rel->rd_rel->relkind != RELKIND_VIEW &&
-		rel->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
-		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+	if (OidIsValid(rel->rd_node.relNode))
 	{
 		RelationDropStorage(rel);
 	}

@@ -22,6 +22,7 @@
 #include "prompt.h"
 #include "settings.h"
 
+static bool is_in_recovery(void);
 
 /*--------------------------
  * get_prompt
@@ -46,6 +47,7 @@
  *		in prompt3 nothing
  * %x - transaction status: empty, *, !, ? (unknown or no connection)
  * %l - The line number inside the current statement, starting from 1.
+ * %r - recovery status: & ("st'and'by") if in recovery, otherwise empty
  * %? - the error code of the last query (not yet implemented)
  * %% - a percent sign
  *
@@ -313,6 +315,11 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 #endif							/* USE_READLINE */
 					break;
 
+				case 'r':
+					if (is_in_recovery())
+						buf[0] = '&';
+					break;
+
 				default:
 					buf[0] = *p;
 					buf[1] = '\0';
@@ -335,4 +342,27 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 	}
 
 	return destination;
+}
+
+
+bool
+is_in_recovery(void)
+{
+	PGresult   *res;
+	bool        server_is_in_recovery = false;
+
+	if (!pset.db)
+		return false;
+
+	res = PSQLexec("SELECT pg_catalog.pg_is_in_recovery()");
+
+	if (!res)
+		return false;
+
+	if (strcmp(PQgetvalue(res, 0, 0), "t") == 0)
+		server_is_in_recovery = true;
+
+	PQclear(res);
+
+	return server_is_in_recovery;
 }

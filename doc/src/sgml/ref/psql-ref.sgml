@@ -4104,6 +4104,17 @@ testdb=&gt; <userinput>INSERT INTO my_table VALUES (:'content');</userinput>
       </varlistentry>
 
       <varlistentry>
+        <term><literal>%r</literal></term>
+        <listitem>
+        <para>
+        Recovery status: &amp; ("st<emphasis>and</emphasis>by") if in recovery, otherwise empty.
+        Note this prompt substitution sends a <literal><function>pg_is_in_recovery()</function></literal>
+        query to the server each time it is encountered.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
         <term><literal>%</literal><replaceable class="parameter">digits</replaceable></term>
         <listitem>
         <para>

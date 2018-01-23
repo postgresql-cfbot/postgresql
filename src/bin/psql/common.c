@@ -865,6 +865,14 @@ PrintQueryTuples(const PGresult *results)
 	if (pset.g_expanded)
 		my_popt.topt.expanded = 1;
 
+	/* one-shot raw output requested by \raw and \graw+ */
+	else if (pset.g_raw || pset.g_raw_header)
+	{
+		my_popt.topt.format = PRINT_UNALIGNED;
+		my_popt.topt.tuples_only = true;
+		my_popt.topt.force_column_header = pset.g_raw_header;
+	}
+
 	/* write output to \g argument, if any */
 	if (pset.gfname)
 	{
@@ -1516,6 +1524,10 @@ sendquery_cleanup:
 
 	/* reset \gx's expanded-mode flag */
 	pset.g_expanded = false;
+
+	/* reset \graw flags */
+	pset.g_raw = false;
+	pset.g_raw_header = false;
 
 	/* reset \gset trigger */
 	if (pset.gset_prefix)

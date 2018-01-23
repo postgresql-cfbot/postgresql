@@ -2021,6 +2021,19 @@ CREATE INDEX
 
 
       <varlistentry>
+        <term><literal>\graw[+] [ <replaceable class="parameter">filename</replaceable> ]</literal></term>
+        <term><literal>\graw[+]  [ |<replaceable class="parameter">command</replaceable> ]</literal></term>
+        <listitem>
+        <para>
+        <literal>\graw</literal> is equivalent to <literal>\g</literal>, but
+        forces unaligned output mode for this query. When <literal>+</literal>
+        is appended, column names are also displayed.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
         <term><literal>\gset [ <replaceable class="parameter">prefix</replaceable> ]</literal></term>
 
         <listitem>

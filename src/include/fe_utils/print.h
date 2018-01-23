@@ -108,6 +108,7 @@ typedef struct printTableOpt
 	bool		start_table;	/* print start decoration, eg <table> */
 	bool		stop_table;		/* print stop decoration, eg </table> */
 	bool		default_footer; /* allow "(xx rows)" default footer */
+	bool		force_column_header;	/* print column header in raw mode */
 	unsigned long prior_records;	/* start offset for record counters */
 	const printTextFormat *line_style;	/* line style (NULL for default) */
 	struct separator fieldSep;	/* field separator for unaligned text mode */

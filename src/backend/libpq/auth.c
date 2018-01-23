@@ -873,6 +873,7 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 	int			inputlen;
 	int			result;
 	bool		initial;
+	List	   *channel_bindings = NIL;
 
 	/*
 	 * SASL auth is not supported for protocol versions before 3, because it
@@ -898,7 +899,17 @@ CheckSCRAMAuth(Port *port, char *shadow_pass, char **logdetail)
 						strlen(SCRAM_SHA256_NAME) + 3);
 	p = sasl_mechs;
 
-	if (port->ssl_in_use)
+#ifdef USE_SSL
+	/*
+	 * Get the list of channel binding types supported by this SSL
+	 * implementation to determine if server should publish -PLUS
+	 * mechanisms or not.
+	 */
+	channel_bindings = be_tls_list_channel_bindings();
+#endif
+
+	if (port->ssl_in_use &&
+		list_length(channel_bindings) > 0)
 	{
 		strcpy(p, SCRAM_SHA256_PLUS_NAME);
 		p += strlen(SCRAM_SHA256_PLUS_NAME) + 1;

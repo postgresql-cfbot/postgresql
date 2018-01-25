@@ -1372,14 +1372,15 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Enables/disables the use of huge memory pages. Valid values are
-        <literal>try</literal> (the default), <literal>on</literal>,
-        and <literal>off</literal>.
+        Controls whether huge pages are requested for the main shared memory
+        area. Valid values are <literal>try</literal> (the default),
+        <literal>on</literal>, and <literal>off</literal>.
        </para>
 
        <para>
-        At present, this feature is supported only on Linux and Windows. The
-        setting is ignored on other systems when set to <literal>try</literal>.
+        At present, explicitly requesting huge pages is supported only on
+        Linux and Windows. The setting is ignored on other systems when set
+        to <literal>try</literal>.
        </para>
 
        <para>
@@ -1401,11 +1402,24 @@ include_dir 'conf.d'
        </para>
 
        <para>
-        With <varname>huge_pages</varname> set to <literal>try</literal>,
-        the server will try to use huge pages, but fall back to using
-        normal allocation if that fails. With <literal>on</literal>, failure
-        to use huge pages will prevent the server from starting up. With
-        <literal>off</literal>, huge pages will not be used.
+        With <varname>huge_pages</varname> set to <literal>try</literal>, the
+        server will try to request huge pages, but fall back to the default if
+        that fails. With <literal>on</literal>, failure to request huge pages
+        will prevent the server from starting up. With
+        <literal>off</literal>, huge pages will not be requested.
+       </para>
+
+       <para>
+        Note that, besides huge pages requested explicitly, operating systems
+        including Linux, FreeBSD and Illumos can also use huge pages (also
+        known as "super" pages or "large" pages) automatically, without an
+        explicit request from
+        <productname>PostgreSQL</productname>. On Linux, this is called
+        "transparent huge pages", but since that feature is known to cause
+        performance degradation with
+        <productname>PostgreSQL</productname> on current Linux versions
+        (unlike explicit use of <varname>huge_pages</varname>), its use is
+        discouraged.
        </para>
       </listitem>
      </varlistentry>

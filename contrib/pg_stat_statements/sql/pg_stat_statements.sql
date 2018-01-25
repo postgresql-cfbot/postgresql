@@ -195,4 +195,20 @@ DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
+--
+-- [re]plan counting
+--
+SELECT pg_stat_statements_reset();
+CREATE TABLE test ();
+PREPARE prep1 AS SELECT COUNT(*) FROM test;;
+EXECUTE prep1;
+EXECUTE prep1;
+EXECUTE prep1;
+ALTER TABLE test ADD COLUMN x int;
+EXECUTE prep1;
+SELECT 42;
+SELECT 42;
+SELECT 42;
+SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
 DROP EXTENSION pg_stat_statements;

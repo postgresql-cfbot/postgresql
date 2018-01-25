@@ -93,6 +93,9 @@ typedef struct PlannedStmt
 
 	Node	   *utilityStmt;	/* non-null if this is utility stmt */
 
+	/* This is always set to 0 by the core system, but plugins can change it. */
+	double		planning_time;
+
 	/* statement location in source string (copied from Query) */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */

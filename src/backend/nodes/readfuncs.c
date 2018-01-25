@@ -1482,6 +1482,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(invalItems);
 	READ_NODE_FIELD(paramExecTypes);
 	READ_NODE_FIELD(utilityStmt);
+	READ_FLOAT_FIELD(planning_time);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_LOCATION_FIELD(stmt_len);
 

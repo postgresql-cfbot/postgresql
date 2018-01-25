@@ -478,6 +478,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->paramExecTypes = glob->paramExecTypes;
 	/* utilityStmt should be null, but we might as well copy it */
 	result->utilityStmt = parse->utilityStmt;
+	result->planning_time = 0;
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 

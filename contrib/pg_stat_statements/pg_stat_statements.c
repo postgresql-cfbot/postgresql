@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pg_stat_statements.c
- *		Track statement execution times across a whole database cluster.
+ *		Track statement planning and execution times across a whole cluster.
  *
  * Execution costs are totalled for each distinct source query, and kept in
  * a shared hashtable.  (We track only as many distinct queries as will fit
@@ -67,6 +67,7 @@
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "optimizer/planner.h"
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "parser/scanner.h"
@@ -119,7 +120,8 @@ typedef enum pgssVersion
 	PGSS_V1_0 = 0,
 	PGSS_V1_1,
 	PGSS_V1_2,
-	PGSS_V1_3
+	PGSS_V1_3,
+	PGSS_V1_4
 } pgssVersion;
 
 /*
@@ -149,6 +151,8 @@ typedef struct Counters
 	double		max_time;		/* maximum execution time in msec */
 	double		mean_time;		/* mean execution time in msec */
 	double		sum_var_time;	/* sum of variances in execution time in msec */
+	int64		plans;			/* # of times planned */
+	double		planning_time;	/* total planning time, in msec */
 	int64		rows;			/* total # of retrieved or affected rows */
 	int64		shared_blks_hit;	/* # of shared buffer hits */
 	int64		shared_blks_read;	/* # of shared disk blocks read */
@@ -237,6 +241,7 @@ static int	nested_level = 0;
 
 /* Saved hook values in case of unload */
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+static planner_hook_type prev_planner_hook = NULL;
 static post_parse_analyze_hook_type prev_post_parse_analyze_hook = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorRun_hook_type prev_ExecutorRun = NULL;
@@ -291,10 +296,14 @@ void		_PG_fini(void);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
+PG_FUNCTION_INFO_V1(pg_stat_statements_1_4);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 
 static void pgss_shmem_startup(void);
 static void pgss_shmem_shutdown(int code, Datum arg);
+static PlannedStmt *pgss_planner_hook(Query *parse,
+									  int cursorOptions,
+									  ParamListInfo boundParams);
 static void pgss_post_parse_analyze(ParseState *pstate, Query *query);
 static void pgss_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void pgss_ExecutorRun(QueryDesc *queryDesc,
@@ -309,7 +318,9 @@ static void pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 static uint64 pgss_hash_string(const char *str, int len);
 static void pgss_store(const char *query, uint64 queryId,
 		   int query_location, int query_len,
-		   double total_time, uint64 rows,
+		   double total_time,
+		   double planning_time,
+		   uint64 rows,
 		   const BufferUsage *bufusage,
 		   pgssJumbleState *jstate);
 static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
@@ -422,6 +433,8 @@ _PG_init(void)
 	 */
 	prev_shmem_startup_hook = shmem_startup_hook;
 	shmem_startup_hook = pgss_shmem_startup;
+	prev_planner_hook = planner_hook;
+	planner_hook = pgss_planner_hook;
 	prev_post_parse_analyze_hook = post_parse_analyze_hook;
 	post_parse_analyze_hook = pgss_post_parse_analyze;
 	prev_ExecutorStart = ExecutorStart_hook;
@@ -445,6 +458,7 @@ _PG_fini(void)
 	/* Uninstall hooks. */
 	shmem_startup_hook = prev_shmem_startup_hook;
 	post_parse_analyze_hook = prev_post_parse_analyze_hook;
+	planner_hook = prev_planner_hook;
 	ExecutorStart_hook = prev_ExecutorStart;
 	ExecutorRun_hook = prev_ExecutorRun;
 	ExecutorFinish_hook = prev_ExecutorFinish;
@@ -771,6 +785,54 @@ error:
 }
 
 /*
+ * Planner hook: forward to regular planner, but measure planning time.
+ */
+static PlannedStmt *pgss_planner_hook(Query *parse,
+									  int cursorOptions,
+									  ParamListInfo boundParams)
+{
+	PlannedStmt *result;
+
+	if (pgss_enabled())
+	{
+		instr_time		start;
+		instr_time		duration;
+
+		INSTR_TIME_SET_CURRENT(start);
+
+		nested_level++;
+		PG_TRY();
+		{
+			if (prev_planner_hook)
+				result = prev_planner_hook(parse, cursorOptions, boundParams);
+			else
+				result = standard_planner(parse, cursorOptions, boundParams);
+			nested_level--;
+		}
+		PG_CATCH();
+		{
+			nested_level--;
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, start);
+
+		result->planning_time = INSTR_TIME_GET_DOUBLE(duration);
+	}
+	else
+	{
+		if (prev_planner_hook)
+			result = prev_planner_hook(parse, cursorOptions, boundParams);
+		else
+			result = standard_planner(parse, cursorOptions, boundParams);
+	}
+
+	return result;
+}
+
+/*
  * Post-parse-analysis hook: mark query with a queryId
  */
 static void
@@ -835,6 +897,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 				   query->queryId,
 				   query->stmt_location,
 				   query->stmt_len,
+				   0,
 				   0,
 				   0,
 				   NULL,
@@ -943,9 +1006,16 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   queryDesc->plannedstmt->stmt_location,
 				   queryDesc->plannedstmt->stmt_len,
 				   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
+				   queryDesc->plannedstmt->planning_time * 1000.0,
 				   queryDesc->estate->es_processed,
 				   &queryDesc->totaltime->bufusage,
 				   NULL);
+
+		/*
+		 * Clear planning_time, so that we only count it once for each
+		 * replanning of a prepared statement.
+		 */
+		queryDesc->plannedstmt->planning_time = 0;
 	}
 
 	if (prev_ExecutorEnd)
@@ -974,8 +1044,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * hash table entry for the PREPARE (with hash calculated from the query
 	 * string), and then a different one with the same query string (but hash
 	 * calculated from the query tree) would be used to accumulate costs of
-	 * ensuing EXECUTEs.  This would be confusing, and inconsistent with other
-	 * cases where planning time is not included at all.
+	 * ensuing EXECUTEs.
 	 *
 	 * Likewise, we don't track execution of DEALLOCATE.
 	 */
@@ -1054,6 +1123,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				   pstmt->stmt_location,
 				   pstmt->stmt_len,
 				   INSTR_TIME_GET_MILLISEC(duration),
+				   0,
 				   rows,
 				   &bufusage,
 				   NULL);
@@ -1096,7 +1166,9 @@ pgss_hash_string(const char *str, int len)
 static void
 pgss_store(const char *query, uint64 queryId,
 		   int query_location, int query_len,
-		   double total_time, uint64 rows,
+		   double total_time,
+		   double planning_time,
+		   uint64 rows,
 		   const BufferUsage *bufusage,
 		   pgssJumbleState *jstate)
 {
@@ -1265,6 +1337,9 @@ pgss_store(const char *query, uint64 queryId,
 			if (e->counters.max_time < total_time)
 				e->counters.max_time = total_time;
 		}
+		if (planning_time > 0)
+			e->counters.plans += 1;
+		e->counters.planning_time += planning_time;
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
 		e->counters.shared_blks_read += bufusage->shared_blks_read;
@@ -1310,7 +1385,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_1	18
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS			23	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_4	25
+#define PG_STAT_STATEMENTS_COLS			25	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1322,6 +1398,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
  * expected API version is identified by embedding it in the C name of the
  * function.  Unfortunately we weren't bright enough to do that for 1.1.
  */
+Datum
+pg_stat_statements_1_4(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_4, showtext);
+
+	return (Datum) 0;
+}
+
 Datum
 pg_stat_statements_1_3(PG_FUNCTION_ARGS)
 {
@@ -1426,6 +1512,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			break;
 		case PG_STAT_STATEMENTS_COLS_V1_3:
 			if (api_version != PGSS_V1_3)
+				elog(ERROR, "incorrect number of output arguments");
+			break;
+		case PG_STAT_STATEMENTS_COLS_V1_4:
+			if (api_version != PGSS_V1_4)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
 		default:
@@ -1586,6 +1676,11 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		if (tmp.calls == 0)
 			continue;
 
+		if (api_version >= PGSS_V1_4)
+		{
+			values[i++] = Int64GetDatumFast(tmp.plans);
+			values[i++] = Float8GetDatumFast(tmp.planning_time);
+		}
 		values[i++] = Int64GetDatumFast(tmp.calls);
 		values[i++] = Float8GetDatumFast(tmp.total_time);
 		if (api_version >= PGSS_V1_3)
@@ -1629,6 +1724,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 					 api_version == PGSS_V1_1 ? PG_STAT_STATEMENTS_COLS_V1_1 :
 					 api_version == PGSS_V1_2 ? PG_STAT_STATEMENTS_COLS_V1_2 :
 					 api_version == PGSS_V1_3 ? PG_STAT_STATEMENTS_COLS_V1_3 :
+					 api_version == PGSS_V1_4 ? PG_STAT_STATEMENTS_COLS_V1_4 :
 					 -1 /* fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

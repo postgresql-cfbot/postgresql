@@ -1,4 +1,4 @@
-/* contrib/pg_stat_statements/pg_stat_statements--1.4.sql */
+/* contrib/pg_stat_statements/pg_stat_statements--1.6.sql */
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_stat_statements" to load this file. \quit
@@ -14,6 +14,8 @@ CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT dbid oid,
     OUT queryid bigint,
     OUT query text,
+    OUT plans int8,
+    OUT planning_time float8,
     OUT calls int8,
     OUT total_time float8,
     OUT min_time float8,
@@ -35,7 +37,7 @@ CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT blk_write_time float8
 )
 RETURNS SETOF record
-AS 'MODULE_PATHNAME', 'pg_stat_statements_1_3'
+AS 'MODULE_PATHNAME', 'pg_stat_statements_1_4'
 LANGUAGE C STRICT VOLATILE PARALLEL SAFE;
 
 -- Register a view on the function for ease of use.
@@ -46,3 +48,5 @@ GRANT SELECT ON pg_stat_statements TO PUBLIC;
 
 -- Don't want this to be available to non-superusers.
 REVOKE ALL ON FUNCTION pg_stat_statements_reset() FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION pg_stat_statements_reset() TO pg_read_all_stats;

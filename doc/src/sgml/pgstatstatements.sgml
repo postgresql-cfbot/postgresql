@@ -9,7 +9,8 @@
 
  <para>
   The <filename>pg_stat_statements</filename> module provides a means for
-  tracking execution statistics of all SQL statements executed by a server.
+  tracking planning and execution statistics of all SQL statements executed by
+  a server.
  </para>
 
  <para>
@@ -83,6 +84,20 @@
      </row>
 
      <row>
+      <entry><structfield>plans</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry></entry>
+      <entry>Number of times the statement was planned</entry>
+     </row>
+
+     <row>
+      <entry><structfield>planning_time</structfield></entry>
+      <entry><type>double precision</type></entry>
+      <entry></entry>
+      <entry>Total time spent planning the statement, in milliseconds</entry>
+     </row>
+
+     <row>
       <entry><structfield>calls</structfield></entry>
       <entry><type>bigint</type></entry>
       <entry></entry>
@@ -93,35 +108,35 @@
       <entry><structfield>total_time</structfield></entry>
       <entry><type>double precision</type></entry>
       <entry></entry>
-      <entry>Total time spent in the statement, in milliseconds</entry>
+      <entry>Total time spent executing the statement, in milliseconds</entry>
      </row>
 
      <row>
       <entry><structfield>min_time</structfield></entry>
       <entry><type>double precision</type></entry>
       <entry></entry>
-      <entry>Minimum time spent in the statement, in milliseconds</entry>
+      <entry>Minimum time spent executing the statement, in milliseconds</entry>
      </row>
 
      <row>
       <entry><structfield>max_time</structfield></entry>
       <entry><type>double precision</type></entry>
       <entry></entry>
-      <entry>Maximum time spent in the statement, in milliseconds</entry>
+      <entry>Maximum time spent executing the statement, in milliseconds</entry>
      </row>
 
      <row>
       <entry><structfield>mean_time</structfield></entry>
       <entry><type>double precision</type></entry>
       <entry></entry>
-      <entry>Mean time spent in the statement, in milliseconds</entry>
+      <entry>Mean time spent executing the statement, in milliseconds</entry>
      </row>
 
      <row>
       <entry><structfield>stddev_time</structfield></entry>
       <entry><type>double precision</type></entry>
       <entry></entry>
-      <entry>Population standard deviation of time spent in the statement, in milliseconds</entry>
+      <entry>Population standard deviation of time spent executing the statement, in milliseconds</entry>
      </row>
 
      <row>

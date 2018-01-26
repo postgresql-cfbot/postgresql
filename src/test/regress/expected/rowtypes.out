@@ -669,6 +669,167 @@ select row(1, '(1,2)')::testtype6 *<> row(1, '(1,3)')::testtype6;
 
 drop type testtype1, testtype2, testtype3, testtype4, testtype5, testtype6;
 --
+-- Tests for record_image_{eq,cmp}
+--
+create type testtype1 as (a int, b int);
+-- all true
+select row(1, 2)::testtype1 *< row(1, 3)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 2)::testtype1 *<= row(1, 3)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 2)::testtype1 *= row(1, 2)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 2)::testtype1 *<> row(1, 3)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 3)::testtype1 *>= row(1, 2)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 3)::testtype1 *> row(1, 2)::testtype1;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- all false
+select row(1, -2)::testtype1 *< row(1, -3)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, -2)::testtype1 *<= row(1, -3)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, -2)::testtype1 *= row(1, -3)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, -2)::testtype1 *<> row(1, -2)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, -3)::testtype1 *>= row(1, -2)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, -3)::testtype1 *> row(1, -2)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+-- This returns the "wrong" order because record_image_cmp works on
+-- unsigned datums without knowing about the actual data type.
+select row(1, -2)::testtype1 *< row(1, 3)::testtype1;
+ ?column? 
+----------
+ f
+(1 row)
+
+-- other types
+create type testtype2 as (a smallint, b bool);  -- byval different sizes
+select row(1, true)::testtype2 *< row(2, true)::testtype2;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(-2, true)::testtype2 *< row(-1, true)::testtype2;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(0, false)::testtype2 *< row(0, true)::testtype2;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(0, false)::testtype2 *<> row(0, true)::testtype2;
+ ?column? 
+----------
+ t
+(1 row)
+
+create type testtype3 as (a int, b text);  -- variable length
+select row(1, 'abc')::testtype3 *< row(1, 'abd')::testtype3;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 'abc')::testtype3 *< row(1, 'abcd')::testtype3;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, 'abc')::testtype3 *> row(1, 'abd')::testtype3;
+ ?column? 
+----------
+ f
+(1 row)
+
+select row(1, 'abc')::testtype3 *<> row(1, 'abd')::testtype3;
+ ?column? 
+----------
+ t
+(1 row)
+
+create type testtype4 as (a int, b point);  -- by ref, fixed length
+select row(1, '(1,2)')::testtype4 *< row(1, '(1,3)')::testtype4;
+ ?column? 
+----------
+ t
+(1 row)
+
+select row(1, '(1,2)')::testtype4 *<> row(1, '(1,3)')::testtype4;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- mismatches
+select row(1, 2)::testtype1 *< row(1, 'abc')::testtype3;
+ERROR:  cannot compare dissimilar column types integer and text at record column 2
+select row(1, 2)::testtype1 *<> row(1, 'abc')::testtype3;
+ERROR:  cannot compare dissimilar column types integer and text at record column 2
+create type testtype5 as (a int);
+select row(1, 2)::testtype1 *< row(1)::testtype5;
+ERROR:  cannot compare record types with different numbers of columns
+select row(1, 2)::testtype1 *<> row(1)::testtype5;
+ERROR:  cannot compare record types with different numbers of columns
+drop type testtype1, testtype2, testtype3, testtype4, testtype5;
+--
 -- Test case derived from bug #5716: check multiple uses of a rowtype result
 --
 BEGIN;

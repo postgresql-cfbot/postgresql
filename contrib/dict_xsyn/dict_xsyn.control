@@ -1,5 +1,5 @@
 # dict_xsyn extension
 comment = 'text search dictionary template for extended synonym processing'
-default_version = '1.0'
+default_version = '1.1'
 module_pathname = '$libdir/dict_xsyn'
 relocatable = true

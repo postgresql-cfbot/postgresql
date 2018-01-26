@@ -3,7 +3,7 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION dict_xsyn" to load this file. \quit
 
-CREATE FUNCTION dxsyn_init(internal)
+CREATE FUNCTION dxsyn_init(internal, internal)
         RETURNS internal
         AS 'MODULE_PATHNAME'
         LANGUAGE C STRICT;

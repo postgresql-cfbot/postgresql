@@ -194,6 +194,7 @@ SELECT ts_lexize('hunspell', 'footballyklubber');
 -- Test ISpell dictionary with hunspell affix file with FLAG long parameter
 CREATE TEXT SEARCH DICTIONARY hunspell_long (
                         Template=ispell,
+                        Shareable=false,
                         DictFile=hunspell_sample_long,
                         AffFile=hunspell_sample_long
 );
@@ -290,6 +291,7 @@ SELECT ts_lexize('hunspell_long', 'footballyklubber');
 -- Test ISpell dictionary with hunspell affix file with FLAG num parameter
 CREATE TEXT SEARCH DICTIONARY hunspell_num (
                         Template=ispell,
+                        Shareable=false,
                         DictFile=hunspell_sample_num,
                         AffFile=hunspell_sample_num
 );
@@ -579,4 +581,59 @@ SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a
 -------------------------------------------------------
  'card':3,10 'invit':2,9 'like':6 'look':5 'order':1,8
 (1 row)
+
+-- Test shared dictionaries
+CREATE TEXT SEARCH DICTIONARY shared_ispell (
+                        Template=ispell,
+                        DictFile=ispell_sample,
+                        AffFile=ispell_sample
+);
+-- Make sure that dictionaries in shared memory
+SELECT ts_lexize('ispell', 'skies');
+ ts_lexize 
+-----------
+ {sky}
+(1 row)
+
+SELECT ts_lexize('hunspell', 'skies');
+ ts_lexize 
+-----------
+ {sky}
+(1 row)
+
+SELECT ts_lexize('shared_ispell', 'skies');
+ ts_lexize 
+-----------
+ {sky}
+(1 row)
+
+SELECT schemaname, dictname FROM pg_ts_shared_dictionaries;
+ schemaname |   dictname    
+------------+---------------
+ public     | ispell
+ public     | hunspell
+ public     | shared_ispell
+(3 rows)
+
+-- shared_ispell space should be released in shared memory
+DROP TEXT SEARCH DICTIONARY shared_ispell;
+-- Make sure that dictionaries in shared memory, DROP invalidates cache
+SELECT ts_lexize('ispell', 'skies');
+ ts_lexize 
+-----------
+ {sky}
+(1 row)
+
+SELECT ts_lexize('hunspell', 'skies');
+ ts_lexize 
+-----------
+ {sky}
+(1 row)
+
+SELECT schemaname, dictname FROM pg_ts_shared_dictionaries;
+ schemaname | dictname 
+------------+----------
+ public     | ispell
+ public     | hunspell
+(2 rows)
 

@@ -8229,6 +8229,11 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><link linkend="view-pg-ts-shared-dictionaries"><structname>pg_ts_shared_dictionaries</structname></link></entry>
+      <entry>dictionaries currently in shared memory</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-user"><structname>pg_user</structname></link></entry>
       <entry>database users</entry>
      </row>
@@ -10981,6 +10986,63 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
    </tgroup>
   </table>
 
+ </sect1>
+
+ <sect1 id="view-pg-ts-shared-dictionaries">
+  <title><structname>pg_ts_shared_dictionaries</structname></title>
+
+  <indexterm zone="view-pg-ts-shared-dictionaries">
+   <primary>pg_ts_shared_dictionaries</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_ts_shared_dictionaries</structname> view provides a
+   listing of all text search dictionaries that currently allocated in the
+   shared memory. The size of available space in shared memory is controlled by
+   <xref linkend="guc-shared-buffers"/>. A dictionary may have an option which
+   controls allocation in shared memory (see <xref linkend="textsearch-ispell-dictionary"/>).
+  </para>
+
+  <table>
+   <title><structname>pg_ts_shared_dictionaries</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><structfield>dictoid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-ts-dict"><structname>pg_ts_dict</structname></link>.oid</literal></entry>
+      <entry>The OID of the text search dictionary located in shared memory</entry>
+     </row>
+     <row>
+      <entry><structfield>schemaname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.nspname</literal></entry>
+      <entry>The name of schema containing the text search dictionary</entry>
+     </row>
+     <row>
+      <entry><structfield>dictname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-ts-dict"><structname>pg_ts_dict</structname></link>.dictname</literal></entry>
+      <entry>The text search dictionary name</entry>
+     </row>
+     <row>
+      <entry><structfield>size</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry></entry>
+      <entry>Size of the text search dictionary in bytes</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect1>
 
  <sect1 id="view-pg-user">

@@ -19,7 +19,7 @@
 
 SET search_path = pg_catalog;
 
-CREATE FUNCTION dsnowball_init(INTERNAL)
+CREATE FUNCTION dsnowball_init(INTERNAL, INTERNAL)
     RETURNS INTERNAL AS '$libdir/dict_snowball', 'dsnowball_init'
 LANGUAGE C STRICT;
 

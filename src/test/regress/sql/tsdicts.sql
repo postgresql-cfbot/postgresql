@@ -51,6 +51,7 @@ SELECT ts_lexize('hunspell', 'footballyklubber');
 -- Test ISpell dictionary with hunspell affix file with FLAG long parameter
 CREATE TEXT SEARCH DICTIONARY hunspell_long (
                         Template=ispell,
+                        Shareable=false,
                         DictFile=hunspell_sample_long,
                         AffFile=hunspell_sample_long
 );
@@ -75,6 +76,7 @@ SELECT ts_lexize('hunspell_long', 'footballyklubber');
 -- Test ISpell dictionary with hunspell affix file with FLAG num parameter
 CREATE TEXT SEARCH DICTIONARY hunspell_num (
                         Template=ispell,
+                        Shareable=false,
                         DictFile=hunspell_sample_num,
                         AffFile=hunspell_sample_num
 );
@@ -188,3 +190,26 @@ ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR
 SELECT to_tsvector('thesaurus_tst', 'one postgres one two one two three one');
 SELECT to_tsvector('thesaurus_tst', 'Supernovae star is very new star and usually called supernovae (abbreviation SN)');
 SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a tickets');
+
+-- Test shared dictionaries
+CREATE TEXT SEARCH DICTIONARY shared_ispell (
+                        Template=ispell,
+                        DictFile=ispell_sample,
+                        AffFile=ispell_sample
+);
+
+-- Make sure that dictionaries in shared memory
+SELECT ts_lexize('ispell', 'skies');
+SELECT ts_lexize('hunspell', 'skies');
+SELECT ts_lexize('shared_ispell', 'skies');
+
+SELECT schemaname, dictname FROM pg_ts_shared_dictionaries;
+
+-- shared_ispell space should be released in shared memory
+DROP TEXT SEARCH DICTIONARY shared_ispell;
+
+-- Make sure that dictionaries in shared memory, DROP invalidates cache
+SELECT ts_lexize('ispell', 'skies');
+SELECT ts_lexize('hunspell', 'skies');
+
+SELECT schemaname, dictname FROM pg_ts_shared_dictionaries;

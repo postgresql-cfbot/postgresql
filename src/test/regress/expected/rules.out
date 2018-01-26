@@ -2209,6 +2209,11 @@ pg_timezone_names| SELECT pg_timezone_names.name,
     pg_timezone_names.utc_offset,
     pg_timezone_names.is_dst
    FROM pg_timezone_names() pg_timezone_names(name, abbrev, utc_offset, is_dst);
+pg_ts_shared_dictionaries| SELECT pg_ts_shared_dictionaries.dictoid,
+    pg_ts_shared_dictionaries.schemaname,
+    pg_ts_shared_dictionaries.dictname,
+    pg_ts_shared_dictionaries.size
+   FROM pg_ts_shared_dictionaries() pg_ts_shared_dictionaries(dictoid, schemaname, dictname, size);
 pg_user| SELECT pg_shadow.usename,
     pg_shadow.usesysid,
     pg_shadow.usecreatedb,

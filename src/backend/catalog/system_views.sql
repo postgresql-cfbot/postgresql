@@ -504,6 +504,9 @@ CREATE VIEW pg_config AS
 REVOKE ALL on pg_config FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_config() FROM PUBLIC;
 
+CREATE VIEW pg_ts_shared_dictionaries AS
+    SELECT * FROM pg_ts_shared_dictionaries();
+
 -- Statistics views
 
 CREATE VIEW pg_stat_all_tables AS

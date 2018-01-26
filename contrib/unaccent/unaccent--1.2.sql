@@ -13,7 +13,7 @@ CREATE FUNCTION unaccent(text)
 	AS 'MODULE_PATHNAME', 'unaccent_dict'
 	LANGUAGE C STABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION unaccent_init(internal)
+CREATE FUNCTION unaccent_init(internal,internal)
 	RETURNS internal
 	AS 'MODULE_PATHNAME', 'unaccent_init'
 	LANGUAGE C PARALLEL SAFE;

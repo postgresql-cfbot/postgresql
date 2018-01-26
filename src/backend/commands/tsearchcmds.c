@@ -39,6 +39,7 @@
 #include "nodes/makefuncs.h"
 #include "parser/parse_func.h"
 #include "tsearch/ts_cache.h"
+#include "tsearch/ts_shared.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -396,7 +397,8 @@ verify_dictoptions(Oid tmplId, List *dictoptions)
 		 * Call the init method and see if it complains.  We don't worry about
 		 * it leaking memory, since our command will soon be over anyway.
 		 */
-		(void) OidFunctionCall1(initmethod, PointerGetDatum(dictoptions));
+		(void) OidFunctionCall2(initmethod, PointerGetDatum(dictoptions),
+								ObjectIdGetDatum(InvalidOid));
 	}
 
 	ReleaseSysCache(tup);
@@ -512,6 +514,8 @@ RemoveTSDictionaryById(Oid dictId)
 			 dictId);
 
 	CatalogTupleDelete(relation, &tup->t_self);
+
+	ts_dict_shmem_release(dictId);
 
 	ReleaseSysCache(tup);
 
@@ -660,7 +664,7 @@ get_ts_template_func(DefElem *defel, int attnum)
 	switch (attnum)
 	{
 		case Anum_pg_ts_template_tmplinit:
-			nargs = 1;
+			nargs = 2;
 			break;
 		case Anum_pg_ts_template_tmpllexize:
 			nargs = 4;

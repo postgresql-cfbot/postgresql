@@ -2828,6 +2828,7 @@ iconv -f ISO_8859-1 -t UTF-8 -o nn_no.dict nn_NO.dic
 <programlisting>
 CREATE TEXT SEARCH DICTIONARY english_hunspell (
     TEMPLATE = ispell,
+    Shareable = false,
     DictFile = en_us,
     AffFile = en_us,
     Stopwords = english);
@@ -2842,6 +2843,9 @@ CREATE TEXT SEARCH DICTIONARY english_hunspell (
     The stop-words file has the same format explained above for the
     <literal>simple</literal> dictionary type.  The format of the other files is
     not specified here but is available from the above-mentioned web sites.
+    <literal>Shareable</literal> controls loading into shared memory.  By
+    default it is <literal>true</literal> (see more in
+    <xref linkend="textsearch-shared-dictionaries"/>).
    </para>
 
    <para>
@@ -3025,6 +3029,30 @@ CREATE TEXT SEARCH DICTIONARY english_stem (
     at the end of the dictionary list. It is useless to have it
     before any other dictionary because a token will never pass through it to
     the next dictionary.
+   </para>
+
+  </sect2>
+
+  <sect2 id="textsearch-shared-dictionaries">
+   <title>Dictionaries in Shared Memory</title>
+
+   <para>
+    Some dictionaries, especially <application>Ispell</application>, consumes a
+    noticable value of memory.  Size of a dictionary can reach tens of megabytes.
+    Most of them also stores configuration in text files.  A dictionary is compiled
+    during first access per a user session.  Currently only
+    <application>Ispell</application> supports loading into shared memory.
+   </para>
+
+   <para>
+    To store dictionaries in shared memory set to <xref linkend="guc-max-shared-dictionaries-size"/>
+    parameter value greater than zero before server starting.
+   </para>
+
+   <para>
+    List of dictionaries currently located in shared memory can be retreived by
+    <link linkend="view-pg-ts-shared-dictionaries"><structname>pg_ts_shared_dictionaries</structname></link>
+    view.
    </para>
 
   </sect2>

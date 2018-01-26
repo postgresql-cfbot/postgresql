@@ -4853,22 +4853,22 @@ DESCR("(internal)");
 DATA(insert OID = 3723 (  ts_lexize			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 1009 "3769 25" _null_ _null_ _null_ _null_ _null_ ts_lexize _null_ _null_ _null_ ));
 DESCR("normalize one word by dictionary");
 
-DATA(insert OID = 3725 (  dsimple_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ dsimple_init _null_ _null_ _null_ ));
+DATA(insert OID = 3725 (  dsimple_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ dsimple_init _null_ _null_ _null_ ));
 DESCR("(internal)");
 DATA(insert OID = 3726 (  dsimple_lexize	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ _null_ dsimple_lexize _null_ _null_ _null_ ));
 DESCR("(internal)");
 
-DATA(insert OID = 3728 (  dsynonym_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ dsynonym_init _null_ _null_ _null_ ));
+DATA(insert OID = 3728 (  dsynonym_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ dsynonym_init _null_ _null_ _null_ ));
 DESCR("(internal)");
 DATA(insert OID = 3729 (  dsynonym_lexize	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ _null_ dsynonym_lexize _null_ _null_ _null_ ));
 DESCR("(internal)");
 
-DATA(insert OID = 3731 (  dispell_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ dispell_init _null_ _null_ _null_ ));
+DATA(insert OID = 3731 (  dispell_init		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ dispell_init _null_ _null_ _null_ ));
 DESCR("(internal)");
 DATA(insert OID = 3732 (  dispell_lexize	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ _null_ dispell_lexize _null_ _null_ _null_ ));
 DESCR("(internal)");
 
-DATA(insert OID = 3740 (  thesaurus_init	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ thesaurus_init _null_ _null_ _null_ ));
+DATA(insert OID = 3740 (  thesaurus_init	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ thesaurus_init _null_ _null_ _null_ ));
 DESCR("(internal)");
 DATA(insert OID = 3741 (  thesaurus_lexize	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ _null_ thesaurus_lexize _null_ _null_ _null_ ));
 DESCR("(internal)");
@@ -4932,6 +4932,9 @@ DESCR("trigger for automatic update of tsvector column");
 
 DATA(insert OID = 3759 (  get_current_ts_config PGNSP PGUID 12 1 0 0 0 f f f f t f s s 0 0 3734 "" _null_ _null_ _null_ _null_ _null_ get_current_ts_config _null_ _null_ _null_ ));
 DESCR("get current tsearch configuration");
+
+DATA(insert OID = 4213 (  pg_ts_shared_dictionaries PGNSP PGUID 12 1 10 0 0 f f f f f t s s 0 0 2249 "" "{26,19,19,20}" "{o,o,o,o}" "{dictoid,schemaname,dictname,size}" _null_ _null_ pg_ts_shared_dictionaries _null_ _null_ _null_ ));
+DESCR("information about text search dictionaries currently in shared memory");
 
 DATA(insert OID = 3736 (  regconfigin		PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 3734 "2275" _null_ _null_ _null_ _null_ _null_ regconfigin _null_ _null_ _null_ ));
 DESCR("I/O");

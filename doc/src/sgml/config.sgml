@@ -1364,6 +1364,35 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-shared-dictionaries-size" xreflabel="max_shared_dictionaries_size">
+      <term><varname>max_shared_dictionaries_size</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_shared_dictionaries_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the maximum size of all text search dictionaries loaded into shared
+        memory.  The default is 100 megabytes (<literal>100MB</literal>).  This
+        parameter can only be set at server start.
+       </para>
+
+       <para>
+        Currently controls only loading of <application>Ispell</application>
+        dictionaries (see <xref linkend="textsearch-ispell-dictionary"/>).
+        After compiling the dictionary it will be copied into shared memory.
+        Another backends on first use of the dictionary will use it from shared
+        memory, so it doesn't need to compile the dictionary second time.
+       </para>
+
+       <para>
+        If total size of simultaneously loaded dictionaries reaches the maximum
+        allowed size then a new dictionary will be loaded into local memory of
+        a backend.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-huge-pages" xreflabel="huge_pages">
       <term><varname>huge_pages</varname> (<type>enum</type>)
       <indexterm>

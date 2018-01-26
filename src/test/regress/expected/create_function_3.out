@@ -66,6 +66,9 @@ SELECT proname, provolatile FROM pg_proc
  functest_b_4 | v
 (4 rows)
 
+CREATE FUNCTION functest_B_5(int) RETURNS bool LANGUAGE 'sql'
+		VOLATILE AS 'SELECT $1 < 0' WITH (iscachable);
+ERROR:  conflicting or redundant options
 --
 -- SECURITY DEFINER | INVOKER
 --

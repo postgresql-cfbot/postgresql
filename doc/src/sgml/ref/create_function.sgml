@@ -590,7 +590,6 @@ CREATE [ OR REPLACE ] FUNCTION
 
       </variablelist>
 
-      Attribute names are not case-sensitive.
      </para>
     </listitem>
    </varlistentry>

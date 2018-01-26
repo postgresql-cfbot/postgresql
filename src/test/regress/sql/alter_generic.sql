@@ -548,6 +548,9 @@ SELECT nspname, tmplname
   WHERE t.tmplnamespace = n.oid AND nspname like 'alt_nsp%'
   ORDER BY nspname, tmplname;
 
+-- invalid: non-lowercase quoted identifiers
+CREATE TEXT SEARCH TEMPLATE tstemp_case ("Init" = init_function);
+
 --
 -- Text Search Parser
 --
@@ -569,6 +572,9 @@ SELECT nspname, prsname
   FROM pg_ts_parser t, pg_namespace n
   WHERE t.prsnamespace = n.oid AND nspname like 'alt_nsp%'
   ORDER BY nspname, prsname;
+
+-- invalid: non-lowercase quoted identifiers
+CREATE TEXT SEARCH PARSER tspars_case ("Start" = start_function);
 
 ---
 --- Cleanup resources

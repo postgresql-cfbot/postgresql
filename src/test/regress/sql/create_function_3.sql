@@ -48,6 +48,8 @@ SELECT proname, provolatile FROM pg_proc
                      'functest_B_2'::regproc,
                      'functest_B_3'::regproc,
 		     'functest_B_4'::regproc) ORDER BY proname;
+CREATE FUNCTION functest_B_5(int) RETURNS bool LANGUAGE 'sql'
+		VOLATILE AS 'SELECT $1 < 0' WITH (iscachable);
 
 --
 -- SECURITY DEFINER | INVOKER

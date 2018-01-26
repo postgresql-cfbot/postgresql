@@ -140,3 +140,6 @@ SELECT ts_lexize('xsyn', 'grb');
  
 (1 row)
 
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY xsyn ("Matchorig" = false);
+ERROR:  unrecognized xsyn parameter: "Matchorig"

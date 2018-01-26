@@ -5848,13 +5848,17 @@ old_aggr_list: old_aggr_elem						{ $$ = list_make1($1); }
 		;
 
 /*
- * Must use IDENT here to avoid reduce/reduce conflicts; fortunately none of
- * the item names needed in old aggregate definitions are likely to become
- * SQL keywords.
+ * Must use IDENT here to avoid reduce/reduce conflicts; fortunately, with
+ * the exception of PARALLEL, none of the item names needed in old aggregate
+ * definitions are likely to become keywords.
  */
 old_aggr_elem:  IDENT '=' def_arg
 				{
 					$$ = makeDefElem($1, (Node *)$3, @1);
+				}
+				| PARALLEL '=' def_arg
+				{
+					$$ = makeDefElem("parallel", (Node *)$3, @1);
 				}
 		;
 

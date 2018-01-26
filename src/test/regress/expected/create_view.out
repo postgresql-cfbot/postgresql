@@ -1712,3 +1712,13 @@ DROP SCHEMA temp_view_test CASCADE;
 NOTICE:  drop cascades to 27 other objects
 DROP SCHEMA testviewschm2 CASCADE;
 NOTICE:  drop cascades to 62 other objects
+-- invalid: non-lowercase quoted identifiers
+-- Check for both CREATE VIEW and ALTER VIEW SET
+CREATE TABLE tt24 (a int);
+CREATE VIEW tt24v WITH ("Check_option" = 'local') AS SELECT * FROM tt24;
+ERROR:  unrecognized parameter "Check_option"
+CREATE VIEW tt24v WITH (check_option = 'local') AS SELECT * FROM tt24;
+ALTER VIEW tt24v SET "Check_option" = 'local';
+ERROR:  syntax error at or near ""Check_option"" at character 22
+DROP TABLE tt24 CASCADE;
+NOTICE:  drop cascades to view tt24v

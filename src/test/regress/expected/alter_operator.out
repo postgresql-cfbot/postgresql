@@ -128,6 +128,9 @@ CREATE USER regress_alter_op_user;
 SET SESSION AUTHORIZATION regress_alter_op_user;
 ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
 ERROR:  must be owner of operator ===
+-- invalid: non-lowercase quoted identifiers
+ALTER OPERATOR & (bit, bit) SET ("Restrict" = _int_contsel, "Join" = _int_contjoinsel);
+ERROR:  operator attribute "Restrict" not recognized
 -- Clean up
 RESET SESSION AUTHORIZATION;
 DROP USER regress_alter_op_user;

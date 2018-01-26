@@ -707,3 +707,12 @@ COMMENT ON COLUMN parted_col_comment.a IS 'Partition key';
 SELECT obj_description('parted_col_comment'::regclass);
 \d+ parted_col_comment
 DROP TABLE parted_col_comment;
+
+-- invalid: non-lowercase quoted reloptions identifiers
+CREATE TABLE tas_case WITH ("Fillfactor" = 10) AS SELECT 1 a;
+CREATE TABLE tas_case (a text) WITH ("Oids" = true);
+-- options with namespaces used with non-lowercase and quotes, all should fail
+CREATE TABLE tas_case (a text) WITH ("Toast"."Autovacuum_vacuum_cost_limit" = 1);
+CREATE TABLE tas_case (a text) WITH ("Toast.Autovacuum_vacuum_cost_limit" = 1);
+CREATE TABLE tas_case (a text) WITH ("Toast".autovacuum_vacuum_cost_limit = 1);
+CREATE TABLE tas_case (a text) WITH (toast."Autovacuum_vacuum_cost_limit" = 1);

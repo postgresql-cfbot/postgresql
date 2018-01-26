@@ -43,3 +43,6 @@ ALTER TEXT SEARCH DICTIONARY xsyn (RULES='xsyn_sample', KEEPORIG=false, MATCHORI
 SELECT ts_lexize('xsyn', 'supernova');
 SELECT ts_lexize('xsyn', 'sn');
 SELECT ts_lexize('xsyn', 'grb');
+
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY xsyn ("Matchorig" = false);

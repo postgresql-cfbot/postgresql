@@ -584,3 +584,11 @@ select pg_get_ruledef(oid, true) from pg_rewrite
 \set VERBOSITY terse \\ -- suppress cascade details
 DROP SCHEMA temp_view_test CASCADE;
 DROP SCHEMA testviewschm2 CASCADE;
+
+-- invalid: non-lowercase quoted identifiers
+-- Check for both CREATE VIEW and ALTER VIEW SET
+CREATE TABLE tt24 (a int);
+CREATE VIEW tt24v WITH ("Check_option" = 'local') AS SELECT * FROM tt24;
+CREATE VIEW tt24v WITH (check_option = 'local') AS SELECT * FROM tt24;
+ALTER VIEW tt24v SET "Check_option" = 'local';
+DROP TABLE tt24 CASCADE;

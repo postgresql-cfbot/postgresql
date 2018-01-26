@@ -80,6 +80,7 @@ CREATE AGGREGATE <replaceable class="parameter">name</replaceable> (
     [ , MFINALFUNC_MODIFY = { READ_ONLY | SHARABLE | READ_WRITE } ]
     [ , MINITCOND = <replaceable class="parameter">minitial_condition</replaceable> ]
     [ , SORTOP = <replaceable class="parameter">sort_operator</replaceable> ]
+    [ , PARALLEL = { SAFE | RESTRICTED | UNSAFE } ]
 )
 </synopsis>
  </refsynopsisdiv>

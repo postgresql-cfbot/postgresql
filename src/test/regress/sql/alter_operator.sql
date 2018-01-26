@@ -89,6 +89,9 @@ SET SESSION AUTHORIZATION regress_alter_op_user;
 
 ALTER OPERATOR === (boolean, boolean) SET (RESTRICT = NONE);
 
+-- invalid: non-lowercase quoted identifiers
+ALTER OPERATOR & (bit, bit) SET ("Restrict" = _int_contsel, "Join" = _int_contjoinsel);
+
 -- Clean up
 RESET SESSION AUTHORIZATION;
 DROP USER regress_alter_op_user;

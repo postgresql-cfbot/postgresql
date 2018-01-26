@@ -134,3 +134,14 @@ CREATE TEMP TABLE mytab (foo widget(42,13));
 
 SELECT format_type(atttypid,atttypmod) FROM pg_attribute
 WHERE attrelid = 'mytab'::regclass AND attnum > 0;
+
+-- invalid: non-lowercase quoted identifiers
+CREATE TYPE case_int42 (
+	"Internallength" = 4,
+	"Input" = int42_in,
+	"Output" = int42_out,
+	"Alignment" = int4,
+	"Default" = 42,
+	"Passedbyvalue"
+);
+CREATE TYPE int4_range AS RANGE ("Subtype" = int4, "Subtype_diff" = int4mi);

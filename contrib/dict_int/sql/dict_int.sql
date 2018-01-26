@@ -51,3 +51,6 @@ select ts_lexize('intdict', '252281774');
 select ts_lexize('intdict', '313425');
 select ts_lexize('intdict', '641439323669');
 select ts_lexize('intdict', '314532610153');
+
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY intdict ("Maxlen" = 4);

@@ -863,3 +863,17 @@ Partition key: LIST (a)
 Number of partitions: 0
 
 DROP TABLE parted_col_comment;
+-- invalid: non-lowercase quoted reloptions identifiers
+CREATE TABLE tas_case WITH ("Fillfactor" = 10) AS SELECT 1 a;
+ERROR:  unrecognized parameter "Fillfactor"
+CREATE TABLE tas_case (a text) WITH ("Oids" = true);
+ERROR:  unrecognized parameter "Oids"
+-- options with namespaces used with non-lowercase and quotes, all should fail
+CREATE TABLE tas_case (a text) WITH ("Toast"."Autovacuum_vacuum_cost_limit" = 1);
+ERROR:  unrecognized parameter namespace "Toast"
+CREATE TABLE tas_case (a text) WITH ("Toast.Autovacuum_vacuum_cost_limit" = 1);
+ERROR:  unrecognized parameter "Toast.Autovacuum_vacuum_cost_limit"
+CREATE TABLE tas_case (a text) WITH ("Toast".autovacuum_vacuum_cost_limit = 1);
+ERROR:  unrecognized parameter namespace "Toast"
+CREATE TABLE tas_case (a text) WITH (toast."Autovacuum_vacuum_cost_limit" = 1);
+ERROR:  unrecognized parameter "Autovacuum_vacuum_cost_limit"

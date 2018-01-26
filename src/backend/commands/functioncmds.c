@@ -651,7 +651,8 @@ compute_attributes_sql_style(ParseState *pstate,
 							 ArrayType **proconfig,
 							 float4 *procost,
 							 float4 *prorows,
-							 char *parallel_p)
+							 char *parallel_p,
+							 bool *has_volatile)
 {
 	ListCell   *option;
 	DefElem    *as_item = NULL;
@@ -759,7 +760,12 @@ compute_attributes_sql_style(ParseState *pstate,
 	if (windowfunc_item)
 		*windowfunc_p = intVal(windowfunc_item->arg);
 	if (volatility_item)
+	{
+		*has_volatile = true;
 		*volatility_p = interpret_func_volatility(volatility_item);
+	}
+	else
+		*has_volatile = false;
 	if (strict_item)
 		*strict_p = intVal(strict_item->arg);
 	if (security_item)
@@ -791,7 +797,8 @@ compute_attributes_sql_style(ParseState *pstate,
 
 /*-------------
  *	 Interpret the parameters *parameters and return their contents via
- *	 *isStrict_p and *volatility_p.
+ *	 *isStrict_p and *volatility_p. If has_volatile is true then volatility
+ *	 has been defined already in the syntax.
  *
  *	These parameters supply optional information about a function.
  *	All have defaults if not specified. Parameters:
@@ -804,7 +811,7 @@ compute_attributes_sql_style(ParseState *pstate,
  *------------
  */
 static void
-compute_attributes_with_style(ParseState *pstate, bool is_procedure, List *parameters, bool *isStrict_p, char *volatility_p)
+compute_attributes_with_style(ParseState *pstate, bool is_procedure, List *parameters, bool *isStrict_p, char *volatility_p, bool has_volatile)
 {
 	ListCell   *pl;
 
@@ -812,6 +819,12 @@ compute_attributes_with_style(ParseState *pstate, bool is_procedure, List *param
 	{
 		DefElem    *param = (DefElem *) lfirst(pl);
 
+		/*
+		 * Attribute names from the parser should always be in casefolded into
+		 * lowercase, but for the old attributes isStrict and isCachable the
+		 * manual has since 7.3 stated that they are not case-sensitive so for
+		 * now use pg_strcasecmp().
+		 */
 		if (pg_strcasecmp(param->defname, "isstrict") == 0)
 		{
 			if (is_procedure)
@@ -829,8 +842,15 @@ compute_attributes_with_style(ParseState *pstate, bool is_procedure, List *param
 						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 						 errmsg("invalid attribute in procedure definition"),
 						 parser_errposition(pstate, param->location)));
+
 			if (defGetBoolean(param))
+			{
+				if (has_volatile && *volatility_p != PROVOLATILE_IMMUTABLE)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("conflicting or redundant options")));
 				*volatility_p = PROVOLATILE_IMMUTABLE;
+			}
 		}
 		else
 			ereport(WARNING,
@@ -938,6 +958,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 				isStrict,
 				security,
 				isLeakProof;
+	bool		hasVolatile;
 	char		volatility;
 	ArrayType  *proconfig;
 	float4		procost;
@@ -975,7 +996,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 								 &as_clause, &language, &transformDefElem,
 								 &isWindowFunc, &volatility,
 								 &isStrict, &security, &isLeakProof,
-								 &proconfig, &procost, &prorows, &parallel);
+								 &proconfig, &procost, &prorows, &parallel,
+								 &hasVolatile);
 
 	/* Look up the language and validate permissions */
 	languageTuple = SearchSysCache1(LANGNAME, PointerGetDatum(language));
@@ -1107,7 +1129,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 		trftypes = NULL;
 	}
 
-	compute_attributes_with_style(pstate, stmt->is_procedure, stmt->withClause, &isStrict, &volatility);
+	compute_attributes_with_style(pstate, stmt->is_procedure, stmt->withClause,
+								  &isStrict, &volatility, hasVolatile);
 
 	interpret_AS_clause(languageOid, language, funcname, as_clause,
 						&prosrc_str, &probin_str);

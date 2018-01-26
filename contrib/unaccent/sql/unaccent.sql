@@ -16,3 +16,6 @@ SELECT unaccent('unaccent', '³φιλ');
 SELECT ts_lexize('unaccent', 'foobar');
 SELECT ts_lexize('unaccent', '£ΜΛΑ');
 SELECT ts_lexize('unaccent', '³φιλ');
+
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY unaccent ("Rules" = 'my_rules');

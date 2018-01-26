@@ -61,3 +61,6 @@ SELECT ts_lexize('unaccent', '³φιλ');
  {εφιλ}
 (1 row)
 
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY unaccent ("Rules" = 'my_rules');
+ERROR:  unrecognized Unaccent parameter: "Rules"

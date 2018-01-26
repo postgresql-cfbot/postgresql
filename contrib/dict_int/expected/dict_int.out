@@ -300,3 +300,6 @@ select ts_lexize('intdict', '314532610153');
  {314532}
 (1 row)
 
+-- invalid: non-lowercase quoted identifiers
+ALTER TEXT SEARCH DICTIONARY intdict ("Maxlen" = 4);
+ERROR:  unrecognized intdict parameter: "Maxlen"

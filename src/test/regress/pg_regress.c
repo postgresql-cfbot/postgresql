@@ -2275,7 +2275,7 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		/* initdb */
 		header(_("initializing database system"));
 		snprintf(buf, sizeof(buf),
-				 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
+				 "\"%s%sinitdb\" -D \"%s/data\" -x 1249835483136 -m 2422361554944 -o 3594887626752 --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 temp_instance,

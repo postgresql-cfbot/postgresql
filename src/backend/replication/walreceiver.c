@@ -1180,9 +1180,6 @@ static void
 XLogWalRcvSendHSFeedback(bool immed)
 {
 	TimestampTz now;
-	TransactionId nextXid;
-	uint32		xmin_epoch,
-				catalog_xmin_epoch;
 	TransactionId xmin,
 				catalog_xmin;
 	static TimestampTz sendTime = 0;
@@ -1254,28 +1251,15 @@ XLogWalRcvSendHSFeedback(bool immed)
 		catalog_xmin = InvalidTransactionId;
 	}
 
-	/*
-	 * Get epoch and adjust if nextXid and oldestXmin are different sides of
-	 * the epoch boundary.
-	 */
-	GetNextXidAndEpoch(&nextXid, &xmin_epoch);
-	catalog_xmin_epoch = xmin_epoch;
-	if (nextXid < xmin)
-		xmin_epoch--;
-	if (nextXid < catalog_xmin)
-		catalog_xmin_epoch--;
-
-	elog(DEBUG2, "sending hot standby feedback xmin %u epoch %u catalog_xmin %u catalog_xmin_epoch %u",
-		 xmin, xmin_epoch, catalog_xmin, catalog_xmin_epoch);
+	elog(DEBUG2, "sending hot standby feedback xmin " XID_FMT " catalog_xmin " XID_FMT,
+		 xmin, catalog_xmin);
 
 	/* Construct the message and send it. */
 	resetStringInfo(&reply_message);
 	pq_sendbyte(&reply_message, 'h');
 	pq_sendint64(&reply_message, GetCurrentTimestamp());
-	pq_sendint32(&reply_message, xmin);
-	pq_sendint32(&reply_message, xmin_epoch);
-	pq_sendint32(&reply_message, catalog_xmin);
-	pq_sendint32(&reply_message, catalog_xmin_epoch);
+	pq_sendint64(&reply_message, xmin);
+	pq_sendint64(&reply_message, catalog_xmin);
 	walrcv_send(wrconn, reply_message.data, reply_message.len);
 	if (TransactionIdIsValid(xmin) || TransactionIdIsValid(catalog_xmin))
 		master_has_standby_xmin = true;

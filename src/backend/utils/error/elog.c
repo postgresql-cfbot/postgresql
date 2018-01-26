@@ -2589,12 +2589,12 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 					{
 						char		strfbuf[128];
 
-						snprintf(strfbuf, sizeof(strfbuf) - 1, "%d/%u",
+						snprintf(strfbuf, sizeof(strfbuf) - 1, "%d/" XID_FMT,
 								 MyProc->backendId, MyProc->lxid);
 						appendStringInfo(buf, "%*s", padding, strfbuf);
 					}
 					else
-						appendStringInfo(buf, "%d/%u", MyProc->backendId, MyProc->lxid);
+						appendStringInfo(buf, "%d/" XID_FMT, MyProc->backendId, MyProc->lxid);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
@@ -2602,9 +2602,9 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				break;
 			case 'x':
 				if (padding != 0)
-					appendStringInfo(buf, "%*u", padding, GetTopTransactionIdIfAny());
+					appendStringInfo(buf, "%*" INT64_MODIFIER "u", padding, GetTopTransactionIdIfAny());
 				else
-					appendStringInfo(buf, "%u", GetTopTransactionIdIfAny());
+					appendStringInfo(buf, XID_FMT, GetTopTransactionIdIfAny());
 				break;
 			case 'e':
 				if (padding != 0)
@@ -2751,11 +2751,11 @@ write_csvlog(ErrorData *edata)
 	/* Virtual transaction id */
 	/* keep VXID format in sync with lockfuncs.c */
 	if (MyProc != NULL && MyProc->backendId != InvalidBackendId)
-		appendStringInfo(&buf, "%d/%u", MyProc->backendId, MyProc->lxid);
+		appendStringInfo(&buf, "%d/" XID_FMT, MyProc->backendId, MyProc->lxid);
 	appendStringInfoChar(&buf, ',');
 
 	/* Transaction id */
-	appendStringInfo(&buf, "%u", GetTopTransactionIdIfAny());
+	appendStringInfo(&buf, XID_FMT, GetTopTransactionIdIfAny());
 	appendStringInfoChar(&buf, ',');
 
 	/* Error severity */

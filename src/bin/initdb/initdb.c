@@ -144,6 +144,9 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static TransactionId start_xid = 0;
+static MultiXactId start_mx_id = 0;
+static MultiXactOffset start_mx_offset = 0;
 
 
 /* internal vars */
@@ -1381,10 +1384,13 @@ bootstrap_template1(void)
 	unsetenv("PGCLIENTENCODING");
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -x1 -X %u %s %s %s",
+			 "\"%s\" --boot -x1 -X %u %s %s " XID_FMT " %s " XID_FMT " %s " XID_FMT " %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 "-z", start_xid,
+			 "-m", start_mx_id,
+			 "-o", start_mx_offset,
 			 boot_options,
 			 debug ? "-d 5" : "");
 
@@ -2323,13 +2329,21 @@ usage(const char *progname)
 	printf(_("  -U, --username=NAME       database superuser name\n"));
 	printf(_("  -W, --pwprompt            prompt for a password for the new superuser\n"));
 	printf(_("  -X, --waldir=WALDIR       location for the write-ahead log directory\n"));
+	printf(_("  -x, --xid=START_XID       specify start xid value in decimal format for new db instance to test 64-bit xids,\n"
+			 "                            default value is 0, max value is 2^62-1\n"));
 	printf(_("      --wal-segsize=SIZE    size of wal segment size\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
 	printf(_("  -L DIRECTORY              where to find the input files\n"));
+	printf(_("  -m, --multixact-id=START_MX_ID\n"
+			 "                            specify start multixact id value in decimal format for new db instance\n"
+			 "                            to test 64-bit xids, default value is 0, max value is 2^62-1\n"));
 	printf(_("  -n, --no-clean            do not clean up after errors\n"));
 	printf(_("  -N, --no-sync             do not wait for changes to be written safely to disk\n"));
+	printf(_("  -o, --multixact-offset=START_MX_OFFSET\n"
+			 "                            specify start multixact offset value in decimal format for new db instance\n"
+			 "                            to test 64-bit xids, default value is 0, max value is 2^62-1\n"));
 	printf(_("  -s, --show                show internal settings\n"));
 	printf(_("  -S, --sync-only           only sync data directory\n"));
 	printf(_("\nOther options:\n"));
@@ -3016,6 +3030,9 @@ main(int argc, char *argv[])
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
+		{"xid", required_argument, NULL, 'x'},
+		{"multixact-id", required_argument, NULL, 'm'},
+		{"multixact-offset", required_argument, NULL, 'o'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3057,7 +3074,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "dD:E:kL:m:nNU:WA:o:sST:X:x:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3096,12 +3113,40 @@ main(int argc, char *argv[])
 				debug = true;
 				printf(_("Running in debug mode.\n"));
 				break;
+			case 'm':
+				if (sscanf(optarg, XID_FMT, &start_mx_id) != 1)
+				{
+					fprintf(stderr, "%s: invalid decimal START_MX_ID value\n",
+							progname);
+					exit(1);
+				}
+				if (!StartMultiXactIdIsValid(start_mx_id))
+				{
+					fprintf(stderr, "%s: out-of-range START_MX_ID value (the value must be less than 2^62)\n",
+							progname);
+					exit(1);
+				}
+				break;
 			case 'n':
 				noclean = true;
 				printf(_("Running in no-clean mode.  Mistakes will not be cleaned up.\n"));
 				break;
 			case 'N':
 				do_sync = false;
+				break;
+			case 'o':
+				if (sscanf(optarg, XID_FMT, &start_mx_offset) != 1)
+				{
+					fprintf(stderr, "%s: invalid decimal START_MX_OFFSET value\n",
+							progname);
+					exit(1);
+				}
+				if (!StartMultiXactOffsetIsValid(start_mx_offset))
+				{
+					fprintf(stderr, "%s: out-of-range START_MX_OFFSET value (the value must be less than 2^62)\n",
+							progname);
+					exit(1);
+				}
 				break;
 			case 'S':
 				sync_only = true;
@@ -3147,6 +3192,20 @@ main(int argc, char *argv[])
 				break;
 			case 'X':
 				xlog_dir = pg_strdup(optarg);
+				break;
+			case 'x':
+				if (sscanf(optarg, XID_FMT, &start_xid) != 1)
+				{
+					fprintf(stderr, "%s: invalid decimal START_XID value\n",
+							progname);
+					exit(1);
+				}
+				if (!StartTransactionIdIsValid(start_xid))
+				{
+					fprintf(stderr, "%s: out-of-range START_XID value (the value must be less than 2^62)\n",
+							progname);
+					exit(1);
+				}
 				break;
 			case 12:
 				str_wal_segment_size_mb = pg_strdup(optarg);

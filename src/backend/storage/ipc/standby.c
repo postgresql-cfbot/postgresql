@@ -34,7 +34,7 @@
 #include "utils/timestamp.h"
 
 /* User-settable GUC parameters */
-int			vacuum_defer_cleanup_age;
+int64		vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
 int			max_standby_streaming_delay = 30 * 1000;
 
@@ -649,12 +649,12 @@ StandbyReleaseLocks(TransactionId xid)
 			LOCKTAG		locktag;
 
 			elog(trace_recovery(DEBUG4),
-				 "releasing recovery lock: xid %u db %u rel %u",
+				 "releasing recovery lock: xid " XID_FMT " db %u rel %u",
 				 lock->xid, lock->dbOid, lock->relOid);
 			SET_LOCKTAG_RELATION(locktag, lock->dbOid, lock->relOid);
 			if (!LockRelease(&locktag, AccessExclusiveLock, true))
 				elog(LOG,
-					 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid %u database %u relation %u",
+					 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid " XID_FMT " database %u relation %u",
 					 lock->xid, lock->dbOid, lock->relOid);
 
 			RecoveryLockList = list_delete_cell(RecoveryLockList, cell, prev);
@@ -704,12 +704,12 @@ StandbyReleaseAllLocks(void)
 		next = lnext(cell);
 
 		elog(trace_recovery(DEBUG4),
-			 "releasing recovery lock: xid %u db %u rel %u",
+			 "releasing recovery lock: xid " XID_FMT " db %u rel %u",
 			 lock->xid, lock->dbOid, lock->relOid);
 		SET_LOCKTAG_RELATION(locktag, lock->dbOid, lock->relOid);
 		if (!LockRelease(&locktag, AccessExclusiveLock, true))
 			elog(LOG,
-				 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid %u database %u relation %u",
+				 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid " XID_FMT " database %u relation %u",
 				 lock->xid, lock->dbOid, lock->relOid);
 		RecoveryLockList = list_delete_cell(RecoveryLockList, cell, prev);
 		pfree(lock);
@@ -765,12 +765,12 @@ StandbyReleaseOldLocks(int nxids, TransactionId *xids)
 		if (remove)
 		{
 			elog(trace_recovery(DEBUG4),
-				 "releasing recovery lock: xid %u db %u rel %u",
+				 "releasing recovery lock: xid " XID_FMT " db %u rel %u",
 				 lock->xid, lock->dbOid, lock->relOid);
 			SET_LOCKTAG_RELATION(locktag, lock->dbOid, lock->relOid);
 			if (!LockRelease(&locktag, AccessExclusiveLock, true))
 				elog(LOG,
-					 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid %u database %u relation %u",
+					 "RecoveryLockList contains entry for lock no longer recorded by lock manager: xid " XID_FMT " database %u relation %u",
 					 lock->xid, lock->dbOid, lock->relOid);
 			RecoveryLockList = list_delete_cell(RecoveryLockList, cell, prev);
 			pfree(lock);
@@ -992,7 +992,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 
 	if (CurrRunningXacts->subxid_overflow)
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid " XID_FMT " latest complete " XID_FMT " next xid " XID_FMT ")",
 			 CurrRunningXacts->xcnt,
 			 (uint32) (recptr >> 32), (uint32) recptr,
 			 CurrRunningXacts->oldestRunningXid,
@@ -1000,7 +1000,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 			 CurrRunningXacts->nextXid);
 	else
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid " XID_FMT " latest complete " XID_FMT " next xid " XID_FMT ")",
 			 CurrRunningXacts->xcnt, CurrRunningXacts->subxcnt,
 			 (uint32) (recptr >> 32), (uint32) recptr,
 			 CurrRunningXacts->oldestRunningXid,

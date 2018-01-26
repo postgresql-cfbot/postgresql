@@ -417,16 +417,18 @@ copy_xact_xlog_xid(void)
 	/* set the next transaction id and epoch of the new cluster */
 	prep_status("Setting next transaction ID and epoch for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-			  "\"%s/pg_resetwal\" -f -x %u \"%s\"",
+			  "\"%s/pg_resetwal\" -f -x " XID_FMT " \"%s\"",
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtxid,
 			  new_cluster.pgdata);
+#ifdef NOT_USED
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
 			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
 			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
 			  new_cluster.pgdata);
+#endif
 	/* must reset commit timestamp limits also */
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-			  "\"%s/pg_resetwal\" -f -c %u,%u \"%s\"",
+			  "\"%s/pg_resetwal\" -f -c " XID_FMT "," XID_FMT " \"%s\"",
 			  new_cluster.bindir,
 			  old_cluster.controldata.chkpnt_nxtxid,
 			  old_cluster.controldata.chkpnt_nxtxid,
@@ -452,7 +454,7 @@ copy_xact_xlog_xid(void)
 		 * counters here and the oldest multi present on system.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-				  "\"%s/pg_resetwal\" -O %u -m %u,%u \"%s\"",
+				  "\"%s/pg_resetwal\" -O " XID_FMT " -m " XID_FMT "," XID_FMT " \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmxoff,
 				  old_cluster.controldata.chkpnt_nxtmulti,
@@ -480,7 +482,7 @@ copy_xact_xlog_xid(void)
 		 * next=MaxMultiXactId, but multixact.c can cope with that just fine.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
-				  "\"%s/pg_resetwal\" -m %u,%u \"%s\"",
+				  "\"%s/pg_resetwal\" -m " XID_FMT "," XID_FMT " \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmulti + 1,
 				  old_cluster.controldata.chkpnt_nxtmulti,
@@ -531,13 +533,13 @@ set_frozenxids(bool minmxid_only)
 		/* set pg_database.datfrozenxid */
 		PQclear(executeQueryOrDie(conn_template1,
 								  "UPDATE pg_catalog.pg_database "
-								  "SET	datfrozenxid = '%u'",
+								  "SET	datfrozenxid = '" XID_FMT "'",
 								  old_cluster.controldata.chkpnt_nxtxid));
 
 	/* set pg_database.datminmxid */
 	PQclear(executeQueryOrDie(conn_template1,
 							  "UPDATE pg_catalog.pg_database "
-							  "SET	datminmxid = '%u'",
+							  "SET	datminmxid = '" XID_FMT "'",
 							  old_cluster.controldata.chkpnt_nxtmulti));
 
 	/* get database names */
@@ -572,7 +574,7 @@ set_frozenxids(bool minmxid_only)
 			/* set pg_class.relfrozenxid */
 			PQclear(executeQueryOrDie(conn,
 									  "UPDATE	pg_catalog.pg_class "
-									  "SET	relfrozenxid = '%u' "
+									  "SET	relfrozenxid = '" XID_FMT "' "
 			/* only heap, materialized view, and TOAST are vacuumed */
 									  "WHERE	relkind IN ("
 									  CppAsString2(RELKIND_RELATION) ", "
@@ -583,7 +585,7 @@ set_frozenxids(bool minmxid_only)
 		/* set pg_class.relminmxid */
 		PQclear(executeQueryOrDie(conn,
 								  "UPDATE	pg_catalog.pg_class "
-								  "SET	relminmxid = '%u' "
+								  "SET	relminmxid = '" XID_FMT "' "
 		/* only heap, materialized view, and TOAST are vacuumed */
 								  "WHERE	relkind IN ("
 								  CppAsString2(RELKIND_RELATION) ", "

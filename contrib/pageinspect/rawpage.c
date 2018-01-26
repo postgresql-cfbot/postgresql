@@ -18,6 +18,7 @@
 #include "pageinspect.h"
 
 #include "access/htup_details.h"
+#include "commands/sequence.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
@@ -220,8 +221,8 @@ page_header(PG_FUNCTION_ARGS)
 
 	Datum		result;
 	HeapTuple	tuple;
-	Datum		values[9];
-	bool		nulls[9];
+	Datum		values[11];
+	bool		nulls[11];
 
 	PageHeader	page;
 	XLogRecPtr	lsn;
@@ -270,7 +271,33 @@ page_header(PG_FUNCTION_ARGS)
 	values[5] = UInt16GetDatum(page->pd_special);
 	values[6] = UInt16GetDatum(PageGetPageSize(page));
 	values[7] = UInt16GetDatum(PageGetPageLayoutVersion(page));
-	values[8] = TransactionIdGetDatum(page->pd_prune_xid);
+
+	if (PageGetSpecialSize(page) == MAXALIGN(sizeof(HeapPageSpecialData)))
+	{
+		HeapPageSpecial pageSpecial = HeapPageGetSpecial(page);
+		if (pageSpecial->pd_magic == HEAP_PAGE_MAGIC ||
+			pageSpecial->pd_magic == SEQ_PAGE_MAGIC)
+		{
+			values[8] = TransactionIdGetDatum(pageSpecial->pd_xid_base);
+			values[9] = TransactionIdGetDatum(pageSpecial->pd_multi_base);
+			values[10] = TransactionIdGetDatum(HeapPageGetPruneXid(page));
+			nulls[8] = false;
+			nulls[9] = false;
+			nulls[10] = false;
+		}
+		else
+		{
+			nulls[8] = true;
+			nulls[9] = true;
+			nulls[10] = true;
+		}
+	}
+	else
+	{
+		nulls[8] = true;
+		nulls[9] = true;
+		nulls[10] = true;
+	}
 
 	/* Build and return the tuple. */
 

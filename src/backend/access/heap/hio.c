@@ -36,7 +36,8 @@ void
 RelationPutHeapTuple(Relation relation,
 					 Buffer buffer,
 					 HeapTuple tuple,
-					 bool token)
+					 bool token,
+					 TransactionId xid)
 {
 	Page		pageHeader;
 	OffsetNumber offnum;
@@ -49,6 +50,9 @@ RelationPutHeapTuple(Relation relation,
 
 	/* Add the tuple to the page */
 	pageHeader = BufferGetPage(buffer);
+
+	/* FIXME */
+	tuple->t_data->t_choice.t_heap.t_xmin = NormalTransactionIdToShort(HeapPageGetSpecial(pageHeader)->pd_xid_base, xid);
 
 	offnum = PageAddItem(pageHeader, (Item) tuple->t_data,
 						 tuple->t_len, InvalidOffsetNumber, false, true);
@@ -68,8 +72,9 @@ RelationPutHeapTuple(Relation relation,
 	{
 		ItemId		itemId = PageGetItemId(pageHeader, offnum);
 		Item		item = PageGetItem(pageHeader, itemId);
+		HeapTupleHeader	tup = (HeapTupleHeader) item;
 
-		((HeapTupleHeader) item)->t_ctid = tuple->t_self;
+		tup->t_ctid = tuple->t_self;
 	}
 }
 
@@ -206,7 +211,9 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		/* Extend by one page. */
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		page = BufferGetPage(buffer);
-		PageInit(page, BufferGetPageSize(buffer), 0);
+		PageInit(page, BufferGetPageSize(buffer), sizeof(HeapPageSpecialData));
+		HeapPageGetSpecial(page)->pd_xid_base = RecentXmin - FirstNormalTransactionId;
+		HeapPageGetSpecial(page)->pd_magic = HEAP_PAGE_MAGIC;
 		MarkBufferDirty(buffer);
 		blockNum = BufferGetBlockNumber(buffer);
 		freespace = PageGetHeapFreeSpace(page);
@@ -590,7 +597,9 @@ loop:
 			 BufferGetBlockNumber(buffer),
 			 RelationGetRelationName(relation));
 
-	PageInit(page, BufferGetPageSize(buffer), 0);
+	PageInit(page, BufferGetPageSize(buffer), sizeof(HeapPageSpecialData));
+	HeapPageGetSpecial(page)->pd_xid_base = RecentXmin - FirstNormalTransactionId;
+	HeapPageGetSpecial(page)->pd_magic = HEAP_PAGE_MAGIC;
 
 	if (len > PageGetHeapFreeSpace(page))
 	{

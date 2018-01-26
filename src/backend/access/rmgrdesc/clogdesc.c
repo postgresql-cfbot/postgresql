@@ -25,17 +25,17 @@ clog_desc(StringInfo buf, XLogReaderState *record)
 
 	if (info == CLOG_ZEROPAGE)
 	{
-		int			pageno;
+		int64		pageno;
 
-		memcpy(&pageno, rec, sizeof(int));
-		appendStringInfo(buf, "page %d", pageno);
+		memcpy(&pageno, rec, sizeof(int64));
+		appendStringInfo(buf, "page " INT64_FORMAT, pageno);
 	}
 	else if (info == CLOG_TRUNCATE)
 	{
 		xl_clog_truncate xlrec;
 
 		memcpy(&xlrec, rec, sizeof(xl_clog_truncate));
-		appendStringInfo(buf, "page %d; oldestXact %u",
+		appendStringInfo(buf, "page " INT64_FORMAT "; oldestXact " XID_FMT,
 						 xlrec.pageno, xlrec.oldestXact);
 	}
 }

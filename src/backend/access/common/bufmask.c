@@ -45,11 +45,6 @@ mask_page_lsn_and_checksum(Page page)
 void
 mask_page_hint_bits(Page page)
 {
-	PageHeader	phdr = (PageHeader) page;
-
-	/* Ignore prune_xid (it's like a hint-bit) */
-	phdr->pd_prune_xid = MASK_MARKER;
-
 	/* Ignore PD_PAGE_FULL and PD_HAS_FREE_LINES flags, they are just hints. */
 	PageClearFull(page);
 	PageClearHasFreeLinePointers(page);

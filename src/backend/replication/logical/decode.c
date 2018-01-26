@@ -481,6 +481,10 @@ DecodeHeapOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			/* we don't care about row level locks for now */
 			break;
 
+		case XLOG_HEAP_BASE_SHIFT:
+			/* we don't care about base shift */
+			break;
+
 		default:
 			elog(ERROR, "unexpected RM_HEAP_ID record type: %u", info);
 			break;
@@ -663,8 +667,13 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	xl_heap_insert *xlrec;
 	ReorderBufferChange *change;
 	RelFileNode target_node;
+	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+	Pointer		rec_data;
 
-	xlrec = (xl_heap_insert *) XLogRecGetData(r);
+	rec_data = (Pointer) XLogRecGetData(r);
+	if (isinit)
+		rec_data += sizeof(TransactionId);
+	xlrec = (xl_heap_insert *) rec_data;
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
@@ -715,8 +724,13 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	ReorderBufferChange *change;
 	char	   *data;
 	RelFileNode target_node;
+	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+	Pointer		rec_data;
 
-	xlrec = (xl_heap_update *) XLogRecGetData(r);
+	rec_data = (Pointer) XLogRecGetData(r);
+	if (isinit)
+		rec_data += sizeof(TransactionId);
+	xlrec = (xl_heap_update *) rec_data;
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
@@ -840,8 +854,13 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	char	   *tupledata;
 	Size		tuplelen;
 	RelFileNode rnode;
+	bool		isinit = (XLogRecGetInfo(r) & XLOG_HEAP_INIT_PAGE) != 0;
+	Pointer		rec_data;
 
-	xlrec = (xl_heap_multi_insert *) XLogRecGetData(r);
+	rec_data = (Pointer) XLogRecGetData(r);
+	if (isinit)
+		rec_data += sizeof(TransactionId);
+	xlrec = (xl_heap_multi_insert *) rec_data;
 
 	/* only interested in our database */
 	XLogRecGetBlockTag(r, 0, &rnode, NULL, NULL);
@@ -897,6 +916,7 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			 * transactions.
 			 */
 			tuple->tuple.t_tableOid = InvalidOid;
+			HeapTupleSetZeroBase(&(tuple->tuple));
 
 			tuple->tuple.t_len = datalen + SizeofHeapTupleHeader;
 
@@ -987,6 +1007,7 @@ DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tuple)
 
 	/* we can only figure this out after reassembling the transactions */
 	tuple->tuple.t_tableOid = InvalidOid;
+	HeapTupleSetZeroBase(&(tuple->tuple));
 
 	/* data is not stored aligned, copy to aligned storage */
 	memcpy((char *) &xlhdr,

@@ -1850,6 +1850,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 		ct->tuple.t_len = dtp->t_len;
 		ct->tuple.t_self = dtp->t_self;
 		ct->tuple.t_tableOid = dtp->t_tableOid;
+		ct->tuple.t_xid_base = dtp->t_xid_base;
+		ct->tuple.t_multi_base = dtp->t_multi_base;
 		ct->tuple.t_data = (HeapTupleHeader)
 			MAXALIGN(((char *) ct) + sizeof(CatCTup));
 		/* copy tuple contents */

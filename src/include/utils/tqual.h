@@ -82,7 +82,7 @@ extern bool XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
 
 extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 					 uint16 infomask, TransactionId xid);
-extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
+extern bool HeapTupleHeaderIsOnlyLocked(HeapTuple tuple);
 
 /*
  * To avoid leaking too much knowledge about reorderbuffer implementation

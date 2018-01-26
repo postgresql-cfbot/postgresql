@@ -1557,7 +1557,7 @@ RecordTransactionAbort(bool isSubXact)
 	 * Check that we haven't aborted halfway through RecordTransactionCommit.
 	 */
 	if (TransactionIdDidCommit(xid))
-		elog(PANIC, "cannot abort transaction %u, it was already committed",
+		elog(PANIC, "cannot abort transaction " XID_FMT ", it was already committed",
 			 xid);
 
 	/* Fetch the data we need for the abort record */
@@ -5119,9 +5119,9 @@ ShowTransactionStateRec(const char *str, TransactionState s)
 	{
 		int			i;
 
-		appendStringInfo(&buf, ", children: %u", s->childXids[0]);
+		appendStringInfo(&buf, ", children: " XID_FMT, s->childXids[0]);
 		for (i = 1; i < s->nChildXids; i++)
-			appendStringInfo(&buf, " %u", s->childXids[i]);
+			appendStringInfo(&buf, " " XID_FMT, s->childXids[i]);
 	}
 
 	if (s->parent)
@@ -5129,13 +5129,13 @@ ShowTransactionStateRec(const char *str, TransactionState s)
 
 	/* use ereport to suppress computation if msg will not be printed */
 	ereport(DEBUG5,
-			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: %u/%u/%u%s%s",
+			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: " XID_FMT "/" XID_FMT "/%u%s%s",
 							 str, s->nestingLevel,
 							 PointerIsValid(s->name) ? s->name : "unnamed",
 							 BlockStateAsString(s->blockState),
 							 TransStateAsString(s->state),
-							 (unsigned int) s->transactionId,
-							 (unsigned int) s->subTransactionId,
+							 s->transactionId,
+							 s->subTransactionId,
 							 (unsigned int) currentCommandId,
 							 currentCommandIdUsed ? " (used)" : "",
 							 buf.data)));
@@ -5266,9 +5266,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_xinfo xl_xinfo;
 	xl_xact_dbinfo xl_dbinfo;
 	xl_xact_subxacts xl_subxacts;
+	xl_xact_twophase xl_twophase;
 	xl_xact_relfilenodes xl_relfilenodes;
 	xl_xact_invals xl_invals;
-	xl_xact_twophase xl_twophase;
 	xl_xact_origin xl_origin;
 
 	uint8		info;
@@ -5318,6 +5318,12 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_subxacts.nsubxacts = nsubxacts;
 	}
 
+	if (TransactionIdIsValid(twophase_xid))
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+		xl_twophase.xid = twophase_xid;
+	}
+
 	if (nrels > 0)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILENODES;
@@ -5328,12 +5334,6 @@ XactLogCommitRecord(TimestampTz commit_time,
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_INVALS;
 		xl_invals.nmsgs = nmsgs;
-	}
-
-	if (TransactionIdIsValid(twophase_xid))
-	{
-		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
-		xl_twophase.xid = twophase_xid;
 	}
 
 	/* dump transaction origin information */
@@ -5368,6 +5368,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 						 nsubxacts * sizeof(TransactionId));
 	}
 
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_TWOPHASE)
+		XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
+
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_RELFILENODES)
 	{
 		XLogRegisterData((char *) (&xl_relfilenodes),
@@ -5382,9 +5385,6 @@ XactLogCommitRecord(TimestampTz commit_time,
 		XLogRegisterData((char *) msgs,
 						 nmsgs * sizeof(SharedInvalidationMessage));
 	}
-
-	if (xl_xinfo.xinfo & XACT_XINFO_HAS_TWOPHASE)
-		XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
@@ -5410,8 +5410,8 @@ XactLogAbortRecord(TimestampTz abort_time,
 	xl_xact_abort xlrec;
 	xl_xact_xinfo xl_xinfo;
 	xl_xact_subxacts xl_subxacts;
-	xl_xact_relfilenodes xl_relfilenodes;
 	xl_xact_twophase xl_twophase;
+	xl_xact_relfilenodes xl_relfilenodes;
 
 	uint8		info;
 
@@ -5439,16 +5439,16 @@ XactLogAbortRecord(TimestampTz abort_time,
 		xl_subxacts.nsubxacts = nsubxacts;
 	}
 
-	if (nrels > 0)
-	{
-		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILENODES;
-		xl_relfilenodes.nrels = nrels;
-	}
-
 	if (TransactionIdIsValid(twophase_xid))
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
 		xl_twophase.xid = twophase_xid;
+	}
+
+	if (nrels > 0)
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILENODES;
+		xl_relfilenodes.nrels = nrels;
 	}
 
 	if (xl_xinfo.xinfo != 0)
@@ -5471,6 +5471,9 @@ XactLogAbortRecord(TimestampTz abort_time,
 						 nsubxacts * sizeof(TransactionId));
 	}
 
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_TWOPHASE)
+		XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
+
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_RELFILENODES)
 	{
 		XLogRegisterData((char *) (&xl_relfilenodes),
@@ -5478,9 +5481,6 @@ XactLogAbortRecord(TimestampTz abort_time,
 		XLogRegisterData((char *) rels,
 						 nrels * sizeof(RelFileNode));
 	}
-
-	if (xl_xinfo.xinfo & XACT_XINFO_HAS_TWOPHASE)
-		XLogRegisterData((char *) (&xl_twophase), sizeof(xl_xact_twophase));
 
 	return XLogInsert(RM_XACT_ID, info);
 }

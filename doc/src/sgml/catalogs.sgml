@@ -1939,8 +1939,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <entry>
        All transaction IDs before this one have been replaced with a permanent
        (<quote>frozen</quote>) transaction ID in this table.  This is used to track
-       whether the table needs to be vacuumed in order to prevent transaction
-       ID wraparound or to allow <literal>pg_xact</literal> to be shrunk.  Zero
+       whether the table needs to be vacuumed in order to allow
+       <literal>pg_xact</literal> to be shrunk.  Zero
        (<symbol>InvalidTransactionId</symbol>) if the relation is not a table.
       </entry>
      </row>
@@ -1952,8 +1952,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <entry>
        All multixact IDs before this one have been replaced by a
        transaction ID in this table.  This is used to track
-       whether the table needs to be vacuumed in order to prevent multixact ID
-       wraparound or to allow <literal>pg_multixact</literal> to be shrunk.  Zero
+       whether the table needs to be vacuumed in order to allow
+       <literal>pg_multixact</literal> to be shrunk.  Zero
        (<symbol>InvalidMultiXactId</symbol>) if the relation is not a table.
       </entry>
      </row>
@@ -2635,8 +2635,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <entry>
        All transaction IDs before this one have been replaced with a permanent
        (<quote>frozen</quote>) transaction ID in this database.  This is used to
-       track whether the database needs to be vacuumed in order to prevent
-       transaction ID wraparound or to allow <literal>pg_xact</literal> to be shrunk.
+       track whether the database needs to be vacuumed in order to allow
+       <literal>pg_xact</literal> to be shrunk.
        It is the minimum of the per-table
        <structname>pg_class</structname>.<structfield>relfrozenxid</structfield> values.
       </entry>
@@ -2649,8 +2649,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <entry>
        All multixact IDs before this one have been replaced with a
        transaction ID in this database.  This is used to
-       track whether the database needs to be vacuumed in order to prevent
-       multixact ID wraparound or to allow <literal>pg_multixact</literal> to be shrunk.
+       track whether the database needs to be vacuumed in order to allow
+       <literal>pg_multixact</literal> to be shrunk.
        It is the minimum of the per-table
        <structname>pg_class</structname>.<structfield>relminmxid</structfield> values.
       </entry>

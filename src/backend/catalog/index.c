@@ -2585,7 +2585,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					 * before commit there.  Give a warning if neither case
 					 * applies.
 					 */
-					xwait = HeapTupleHeaderGetXmin(heapTuple->t_data);
+					xwait = HeapTupleGetXmin(heapTuple);
 					if (!TransactionIdIsCurrentTransactionId(xwait))
 					{
 						if (!is_system_catalog)
@@ -2633,7 +2633,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 						break;
 					}
 
-					xwait = HeapTupleHeaderGetUpdateXid(heapTuple->t_data);
+					xwait = HeapTupleGetUpdateXidAny(heapTuple);
 					if (!TransactionIdIsCurrentTransactionId(xwait))
 					{
 						if (!is_system_catalog)

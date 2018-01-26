@@ -214,7 +214,7 @@ ExecCheckHeapTupleVisible(EState *estate,
 		 * visible to our snapshot.  (This would happen, for example, if
 		 * conflicting keys are proposed for insertion in a single command.)
 		 */
-		if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple->t_data)))
+		if (!TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(tuple)))
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to concurrent update")));
@@ -1441,7 +1441,7 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 			 * that for SQL MERGE, an exception must be raised in the event of
 			 * an attempt to update the same row twice.
 			 */
-			if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple.t_data)))
+			if (TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(&tuple)))
 				ereport(ERROR,
 						(errcode(ERRCODE_CARDINALITY_VIOLATION),
 						 errmsg("ON CONFLICT DO UPDATE command cannot affect row a second time"),
@@ -2023,6 +2023,7 @@ ExecModifyTable(PlanState *pstate)
 						HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
 					ItemPointerSetInvalid(&(oldtupdata.t_self));
 					/* Historically, view triggers see invalid t_tableOid. */
+					HeapTupleSetZeroBase(&oldtupdata);
 					oldtupdata.t_tableOid =
 						(relkind == RELKIND_VIEW) ? InvalidOid :
 						RelationGetRelid(resultRelInfo->ri_RelationDesc);

@@ -20,6 +20,7 @@
 #include "storage/checksum.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 
 
 /* GUC variable */
@@ -55,7 +56,6 @@ PageInit(Page page, Size pageSize, Size specialSize)
 	p->pd_upper = pageSize - specialSize;
 	p->pd_special = pageSize - specialSize;
 	PageSetPageSizeAndVersion(page, pageSize, PG_PAGE_LAYOUT_VERSION);
-	/* p->pd_prune_xid = InvalidTransactionId;		done by above MemSet */
 }
 
 

@@ -110,7 +110,6 @@ typedef struct
  *		pd_upper	- offset to end of free space.
  *		pd_special	- offset to start of special space.
  *		pd_pagesize_version - size in bytes and page layout version number.
- *		pd_prune_xid - oldest XID among potentially prunable tuples on page.
  *
  * The LSN is used by the buffer manager to enforce the basic rule of WAL:
  * "thou shalt write xlog before data".  A dirty buffer cannot be dumped
@@ -126,9 +125,6 @@ typedef struct
  * is valid or not, a deliberate design choice which avoids the problem
  * of relying on the page contents to decide whether to verify it. Hence
  * there are no flag bits relating to checksums.
- *
- * pd_prune_xid is a hint field that helps determine whether pruning will be
- * useful.  It is currently unused in index pages.
  *
  * The page version number and page size are packed together into a single
  * uint16 field.  This is for historical reasons: before PostgreSQL 7.3,
@@ -155,11 +151,61 @@ typedef struct PageHeaderData
 	LocationIndex pd_upper;		/* offset to end of free space */
 	LocationIndex pd_special;	/* offset to start of special space */
 	uint16		pd_pagesize_version;
-	TransactionId pd_prune_xid; /* oldest prunable XID, or zero if none */
 	ItemIdData	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderData;
 
 typedef PageHeaderData *PageHeader;
+
+
+/*
+ * HeapPageSpecialData -- data that stored at the end of each heap page.
+ *
+ *		pd_xid_base - base value for transaction IDs on page
+ *		pd_multi_base - base value for multixact IDs on page
+ *		pd_prune_xid - oldest XID among potentially prunable tuples on page.
+ *		pd_magic - magic number identifies type of page
+ *
+ * pd_prune_xid is a hint field that helps determine whether pruning will be
+ * useful.  It is currently unused in index pages.
+ *
+ * pd_magic allows identified an type of object heap page belongs to.
+ * Currently, heap page may belong to an regular table heap or sequence heap.
+ */
+typedef struct HeapPageSpecialData
+{
+	TransactionId		pd_xid_base;   /* base value for transaction IDs on page */
+	TransactionId		pd_multi_base; /* base value for multixact IDs on page */
+	ShortTransactionId	pd_prune_xid;  /* oldest prunable XID, or zero if none */
+	uint32				pd_magic;	   /* magic number identifies type of page */
+} HeapPageSpecialData;
+
+/*
+ * Possible value for pd_magic field.
+ */
+#define HEAP_PAGE_MAGIC	(0x1010)	/* regular heap page */
+#define SEQ_PAGE_MAGIC	(0x1717)	/* sequence page */
+
+typedef HeapPageSpecialData *HeapPageSpecial;
+
+/*
+ * Get pointer to HeapPageSpecialData without using pd_special of the page
+ * (for the sake of speed) assuming all heap pages have same size of special
+ * data.
+ */
+#define HeapPageGetSpecial(page) ( \
+	AssertMacro(((PageHeader) page)->pd_special == BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData))), \
+	(HeapPageSpecial) ((Pointer) page + BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData))) \
+)
+
+#define HeapPageSetPruneXid(page, xid) \
+( \
+	HeapPageGetSpecial(page)->pd_prune_xid = NormalTransactionIdToShort(HeapPageGetSpecial(page)->pd_xid_base, (xid)) \
+)
+
+#define HeapPageGetPruneXid(page) \
+( \
+	ShortTransactionIdToNormal(HeapPageGetSpecial(page)->pd_xid_base, HeapPageGetSpecial(page)->pd_prune_xid) \
+)
 
 /*
  * pd_flags contains the following flag bits.  Undefined bits are initialized
@@ -388,18 +434,18 @@ PageValidateSpecialPointer(Page page)
 #define PageIsPrunable(page, oldestxmin) \
 ( \
 	AssertMacro(TransactionIdIsNormal(oldestxmin)), \
-	TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) && \
-	TransactionIdPrecedes(((PageHeader) (page))->pd_prune_xid, oldestxmin) \
+	TransactionIdIsValid(HeapPageGetPruneXid(page)) && \
+	TransactionIdPrecedes(HeapPageGetPruneXid(page), oldestxmin) \
 )
 #define PageSetPrunable(page, xid) \
 do { \
 	Assert(TransactionIdIsNormal(xid)); \
-	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
-		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
-		((PageHeader) (page))->pd_prune_xid = (xid); \
+	if (!TransactionIdIsValid(HeapPageGetPruneXid(page)) || \
+		TransactionIdPrecedes(xid, HeapPageGetPruneXid(page))) \
+		HeapPageSetPruneXid(page, xid); \
 } while (0)
 #define PageClearPrunable(page) \
-	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
+	(HeapPageSetPruneXid(page, InvalidTransactionId))
 
 
 /* ----------------------------------------------------------------

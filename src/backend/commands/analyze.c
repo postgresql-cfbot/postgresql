@@ -1118,6 +1118,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 			targtuple.t_tableOid = RelationGetRelid(onerel);
 			targtuple.t_data = (HeapTupleHeader) PageGetItem(targpage, itemid);
 			targtuple.t_len = ItemIdGetLength(itemid);
+			HeapTupleCopyBaseFromPage(&targtuple, targpage);
 
 			switch (HeapTupleSatisfiesVacuum(&targtuple,
 											 OldestXmin,
@@ -1155,7 +1156,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 					 * has to adjust the numbers we send to the stats
 					 * collector to make this come out right.)
 					 */
-					if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(targtuple.t_data)))
+					if (TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(&targtuple)))
 					{
 						sample_it = true;
 						liverows += 1;
@@ -1175,7 +1176,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 					 * right.  (Note: this works out properly when the row was
 					 * both inserted and deleted in our xact.)
 					 */
-					if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(targtuple.t_data)))
+					if (TransactionIdIsCurrentTransactionId(HeapTupleGetUpdateXidAny(&targtuple)))
 						deadrows += 1;
 					else
 						liverows += 1;

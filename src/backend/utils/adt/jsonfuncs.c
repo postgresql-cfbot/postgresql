@@ -3140,6 +3140,7 @@ populate_record(TupleDesc tupdesc,
 		tuple.t_len = HeapTupleHeaderGetDatumLength(defaultval);
 		ItemPointerSetInvalid(&(tuple.t_self));
 		tuple.t_tableOid = InvalidOid;
+		HeapTupleSetZeroBase(&tuple);
 		tuple.t_data = defaultval;
 
 		/* Break down the tuple into fields */
@@ -3534,6 +3535,7 @@ populate_recordset_record(PopulateRecordsetState *state, JsObject *obj)
 	tuple.t_len = HeapTupleHeaderGetDatumLength(tuphead);
 	ItemPointerSetInvalid(&(tuple.t_self));
 	tuple.t_tableOid = InvalidOid;
+	HeapTupleSetZeroBase(&tuple);
 	tuple.t_data = tuphead;
 
 	tuplestore_puttuple(state->tuple_store, &tuple);

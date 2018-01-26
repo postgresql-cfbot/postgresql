@@ -847,6 +847,7 @@ hstore_from_record(PG_FUNCTION_ARGS)
 		ItemPointerSetInvalid(&(tuple.t_self));
 		tuple.t_tableOid = InvalidOid;
 		tuple.t_data = rec;
+		HeapTupleSetZeroBase(&tuple);
 
 		values = (Datum *) palloc(ncolumns * sizeof(Datum));
 		nulls = (bool *) palloc(ncolumns * sizeof(bool));
@@ -1000,6 +1001,7 @@ hstore_populate_record(PG_FUNCTION_ARGS)
 		ItemPointerSetInvalid(&(tuple.t_self));
 		tuple.t_tableOid = InvalidOid;
 		tuple.t_data = rec;
+		HeapTupleSetZeroBase(&tuple);
 	}
 
 	/*

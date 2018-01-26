@@ -225,7 +225,10 @@ bt_page_stats(PG_FUNCTION_ARGS)
 	values[j++] = psprintf("%d", stat.free_size);
 	values[j++] = psprintf("%d", stat.btpo_prev);
 	values[j++] = psprintf("%d", stat.btpo_next);
-	values[j++] = psprintf("%d", (stat.type == 'd') ? stat.btpo.xact : stat.btpo.level);
+	if (stat.type == 'd')
+		values[j++] = psprintf(XID_FMT, stat.btpo.xact);
+	else
+		values[j++] = psprintf("%d", stat.btpo.level);
 	values[j++] = psprintf("%d", stat.btpo_flags);
 
 	tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),

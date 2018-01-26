@@ -2672,7 +2672,7 @@ validate_plperl_function(plperl_proc_ptr *proc_ptr, HeapTuple procTup)
 		 * This is needed because CREATE OR REPLACE FUNCTION can modify the
 		 * function's pg_proc entry without changing its OID.
 		 ************************************************************/
-		uptodate = (prodesc->fn_xmin == HeapTupleHeaderGetRawXmin(procTup->t_data) &&
+		uptodate = (prodesc->fn_xmin == HeapTupleGetRawXmin(procTup) &&
 					ItemPointerEquals(&prodesc->fn_tid, &procTup->t_self));
 
 		if (uptodate)
@@ -2796,7 +2796,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		prodesc->proname = pstrdup(NameStr(procStruct->proname));
 		prodesc->fn_cxt = proc_cxt;
 		prodesc->fn_refcount = 0;
-		prodesc->fn_xmin = HeapTupleHeaderGetRawXmin(procTup->t_data);
+		prodesc->fn_xmin = HeapTupleGetRawXmin(procTup);
 		prodesc->fn_tid = procTup->t_self;
 		prodesc->nargs = procStruct->pronargs;
 		prodesc->arg_out_func = (FmgrInfo *) palloc0(prodesc->nargs * sizeof(FmgrInfo));

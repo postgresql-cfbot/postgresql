@@ -3694,13 +3694,17 @@ static void
 writetup_cluster(Tuplesortstate *state, int tapenum, SortTuple *stup)
 {
 	HeapTuple	tuple = (HeapTuple) stup->tuple;
-	unsigned int tuplen = tuple->t_len + sizeof(ItemPointerData) + sizeof(int);
+	unsigned int tuplen = tuple->t_len + sizeof(ItemPointerData) + 2 * sizeof(TransactionId) + sizeof(int);
 
 	/* We need to store t_self, but not other fields of HeapTupleData */
 	LogicalTapeWrite(state->tapeset, tapenum,
 					 &tuplen, sizeof(tuplen));
 	LogicalTapeWrite(state->tapeset, tapenum,
 					 &tuple->t_self, sizeof(ItemPointerData));
+	LogicalTapeWrite(state->tapeset, tapenum,
+					 &tuple->t_xid_base, sizeof(TransactionId));
+	LogicalTapeWrite(state->tapeset, tapenum,
+					 &tuple->t_multi_base, sizeof(TransactionId));
 	LogicalTapeWrite(state->tapeset, tapenum,
 					 tuple->t_data, tuple->t_len);
 	if (state->randomAccess)	/* need trailing length word? */
@@ -3718,7 +3722,7 @@ static void
 readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 				int tapenum, unsigned int tuplen)
 {
-	unsigned int t_len = tuplen - sizeof(ItemPointerData) - sizeof(int);
+	unsigned int t_len = tuplen - sizeof(ItemPointerData) - 2 * sizeof(TransactionId) - sizeof(int);
 	HeapTuple	tuple = (HeapTuple) readtup_alloc(state,
 												  t_len + HEAPTUPLESIZE);
 
@@ -3727,6 +3731,10 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 	tuple->t_len = t_len;
 	LogicalTapeReadExact(state->tapeset, tapenum,
 						 &tuple->t_self, sizeof(ItemPointerData));
+	LogicalTapeReadExact(state->tapeset, tapenum,
+						 &tuple->t_xid_base, sizeof(TransactionId));
+	LogicalTapeReadExact(state->tapeset, tapenum,
+						 &tuple->t_multi_base, sizeof(TransactionId));
 	/* We don't currently bother to reconstruct t_tableOid */
 	tuple->t_tableOid = InvalidOid;
 	/* Read in the tuple body */

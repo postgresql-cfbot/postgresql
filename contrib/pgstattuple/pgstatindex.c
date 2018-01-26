@@ -620,7 +620,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
 	metap = HashPageGetMeta(BufferGetPage(metabuf));
 	stats.version = metap->hashm_version;
-	stats.space_per_page = metap->hashm_bsize;
+	stats.space_per_page = BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(HashPageOpaqueData));
 	_hash_relbuf(rel, metabuf);
 
 	/* Get the current relation length */

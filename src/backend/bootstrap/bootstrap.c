@@ -128,7 +128,7 @@ static const struct typinfo TypInfo[] = {
 	F_OIDIN, F_OIDOUT},
 	{"tid", TIDOID, 0, 6, false, 's', 'p', InvalidOid,
 	F_TIDIN, F_TIDOUT},
-	{"xid", XIDOID, 0, 4, true, 'i', 'p', InvalidOid,
+	{"xid", XIDOID, 0, 8, FLOAT8PASSBYVAL, 'd', 'p', InvalidOid,
 	F_XIDIN, F_XIDOUT},
 	{"cid", CIDOID, 0, 4, true, 'i', 'p', InvalidOid,
 	F_CIDIN, F_CIDOUT},
@@ -223,7 +223,10 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	start_xid = 0;
+	start_mx_id = 0;
+	start_mx_offset = 0;
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkm:o:r:z:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -252,8 +255,29 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
+			case 'm':
+				if (sscanf(optarg, XID_FMT, &start_mx_id) != 1
+					|| !StartMultiXactIdIsValid(start_mx_id))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start multixact id value")));
+				break;
+			case 'o':
+				if (sscanf(optarg, XID_FMT, &start_mx_offset) != 1
+					|| !StartMultiXactOffsetIsValid(start_mx_offset))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start multixact offset value")));
+				break;
 			case 'r':
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
+				break;
+			case 'z':
+				if (sscanf(optarg, XID_FMT, &start_xid) != 1
+					|| !StartTransactionIdIsValid(start_xid))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start xid value")));
 				break;
 			case 'x':
 				MyAuxProcType = atoi(optarg);

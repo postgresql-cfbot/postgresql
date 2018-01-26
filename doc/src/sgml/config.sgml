@@ -2148,7 +2148,8 @@ include_dir 'conf.d'
          <literal>1min</literal>) are only allowed because they may sometimes be
          useful for testing.  While a setting as high as <literal>60d</literal> is
          allowed, please note that in many workloads extreme bloat or
-         transaction ID wraparound may occur in much shorter time frames.
+         page-level transaction ID wraparound may occur in much shorter time
+         frames.
         </para>
 
         <para>
@@ -3193,7 +3194,7 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
      </varlistentry>
 
      <varlistentry id="guc-vacuum-defer-cleanup-age" xreflabel="vacuum_defer_cleanup_age">
-      <term><varname>vacuum_defer_cleanup_age</varname> (<type>integer</type>)
+      <term><varname>vacuum_defer_cleanup_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>vacuum_defer_cleanup_age</varname> configuration parameter</primary>
       </indexterm>
@@ -5967,8 +5968,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        </para>
        <para>
         Note that even when this parameter is disabled, the system
-        will launch autovacuum processes if necessary to
-        prevent transaction ID wraparound.  See <xref
+        will launch autovacuum processes if necessary to shrink
+        <literal>pg_clog</literal> and <literal>pg_multixact</literal>.  See <xref
         linkend="vacuum-for-wraparound"/> for more information.
        </para>
       </listitem>
@@ -6112,7 +6113,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </varlistentry>
 
      <varlistentry id="guc-autovacuum-freeze-max-age" xreflabel="autovacuum_freeze_max_age">
-      <term><varname>autovacuum_freeze_max_age</varname> (<type>integer</type>)
+      <term><varname>autovacuum_freeze_max_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>autovacuum_freeze_max_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6122,15 +6123,14 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         Specifies the maximum age (in transactions) that a table's
         <structname>pg_class</structname>.<structfield>relfrozenxid</structfield> field can
         attain before a <command>VACUUM</command> operation is forced
-        to prevent transaction ID wraparound within the table.
-        Note that the system will launch autovacuum processes to
-        prevent wraparound even when autovacuum is otherwise disabled.
+        to shrink <literal>pg_clog</literal>.
+        Note that the system will launch autovacuum processes for this purpose
+        even when autovacuum is otherwise disabled.
        </para>
 
        <para>
         Vacuum also allows removal of old files from the
-        <filename>pg_xact</filename> subdirectory, which is why the default
-        is a relatively low 200 million transactions.
+        <filename>pg_xact</filename> subdirectory.
         This parameter can only be set at server start, but the setting
         can be reduced for individual tables by
         changing table storage parameters.
@@ -6140,7 +6140,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </varlistentry>
 
      <varlistentry id="guc-autovacuum-multixact-freeze-max-age" xreflabel="autovacuum_multixact_freeze_max_age">
-      <term><varname>autovacuum_multixact_freeze_max_age</varname> (<type>integer</type>)
+      <term><varname>autovacuum_multixact_freeze_max_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>autovacuum_multixact_freeze_max_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6149,17 +6149,13 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <para>
         Specifies the maximum age (in multixacts) that a table's
         <structname>pg_class</structname>.<structfield>relminmxid</structfield> field can
-        attain before a <command>VACUUM</command> operation is forced to
-        prevent multixact ID wraparound within the table.
-        Note that the system will launch autovacuum processes to
-        prevent wraparound even when autovacuum is otherwise disabled.
+        attain before a <command>VACUUM</command> operation is forced
+        to shrink <literal>pg_multixact</literal>.
+        Note that the system will launch autovacuum processes for this
+        purpose even when autovacuum is otherwise disabled.
        </para>
 
        <para>
-        Vacuuming multixacts also allows removal of old files from the
-        <filename>pg_multixact/members</filename> and <filename>pg_multixact/offsets</filename>
-        subdirectories, which is why the default is a relatively low
-        400 million multixacts.
         This parameter can only be set at server start, but the setting can
         be reduced for individual tables by changing table storage parameters.
         For more information see <xref linkend="vacuum-for-multixact-wraparound"/>.
@@ -6647,7 +6643,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </varlistentry>
 
      <varlistentry id="guc-vacuum-freeze-table-age" xreflabel="vacuum_freeze_table_age">
-      <term><varname>vacuum_freeze_table_age</varname> (<type>integer</type>)
+      <term><varname>vacuum_freeze_table_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>vacuum_freeze_table_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6660,19 +6656,19 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         a regular <command>VACUUM</command> in that it visits every page that might
         contain unfrozen XIDs or MXIDs, not just those that might contain dead
         tuples.  The default is 150 million transactions.  Although users can
-        set this value anywhere from zero to two billions, <command>VACUUM</command>
+        set this value anywhere from zero to 2^63 - 1, <command>VACUUM</command>
         will silently limit the effective value to 95% of
         <xref linkend="guc-autovacuum-freeze-max-age"/>, so that a
         periodical manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound autovacuum is launched for the table. For more
-        information see
+        autovacuum to shrink <literal>pg_clog</literal> and <literal>pg_multixact</literal>
+        is launched for the table. For more information see
         <xref linkend="vacuum-for-wraparound"/>.
        </para>
       </listitem>
      </varlistentry>
 
      <varlistentry id="guc-vacuum-freeze-min-age" xreflabel="vacuum_freeze_min_age">
-      <term><varname>vacuum_freeze_min_age</varname> (<type>integer</type>)
+      <term><varname>vacuum_freeze_min_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>vacuum_freeze_min_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6683,7 +6679,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         should use to decide whether to freeze row versions
         while scanning a table.
         The default is 50 million transactions.  Although
-        users can set this value anywhere from zero to one billion,
+        users can set this value anywhere from zero to 2^63 - 1,
         <command>VACUUM</command> will silently limit the effective value to half
         the value of <xref linkend="guc-autovacuum-freeze-max-age"/>, so
         that there is not an unreasonably short time between forced
@@ -6694,7 +6690,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </varlistentry>
 
      <varlistentry id="guc-vacuum-multixact-freeze-table-age" xreflabel="vacuum_multixact_freeze_table_age">
-      <term><varname>vacuum_multixact_freeze_table_age</varname> (<type>integer</type>)
+      <term><varname>vacuum_multixact_freeze_table_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>vacuum_multixact_freeze_table_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6707,18 +6703,19 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         a regular <command>VACUUM</command> in that it visits every page that might
         contain unfrozen XIDs or MXIDs, not just those that might contain dead
         tuples.  The default is 150 million multixacts.
-        Although users can set this value anywhere from zero to two billions,
+        Although users can set this value anywhere from zero to 2^63 - 1,
         <command>VACUUM</command> will silently limit the effective value to 95% of
         <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>, so that a
         periodical manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound is launched for the table.
+        autovacuum to shrink <literal>pg_clog</literal> and <literal>pg_multixact</literal>
+        is launched for the table.
         For more information see <xref linkend="vacuum-for-multixact-wraparound"/>.
        </para>
       </listitem>
      </varlistentry>
 
      <varlistentry id="guc-vacuum-multixact-freeze-min-age" xreflabel="vacuum_multixact_freeze_min_age">
-      <term><varname>vacuum_multixact_freeze_min_age</varname> (<type>integer</type>)
+      <term><varname>vacuum_multixact_freeze_min_age</varname> (<type>integer 64</type>)
       <indexterm>
        <primary><varname>vacuum_multixact_freeze_min_age</varname> configuration parameter</primary>
       </indexterm>
@@ -6729,7 +6726,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         should use to decide whether to replace multixact IDs with a newer
         transaction ID or multixact ID while scanning a table.  The default
         is 5 million multixacts.
-        Although users can set this value anywhere from zero to one billion,
+        Although users can set this value anywhere from zero to 2^63 - 1,
         <command>VACUUM</command> will silently limit the effective value to half
         the value of <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>,
         so that there is not an unreasonably short time between forced

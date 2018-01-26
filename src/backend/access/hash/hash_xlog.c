@@ -18,6 +18,7 @@
 #include "access/bufmask.h"
 #include "access/hash.h"
 #include "access/hash_xlog.h"
+#include "access/htup_details.h"
 #include "access/xlogutils.h"
 #include "access/xlog.h"
 #include "access/transam.h"
@@ -988,7 +989,6 @@ hash_xlog_vacuum_get_latestRemovedXid(XLogReaderState *record)
 	ItemId		iitemid,
 				hitemid;
 	IndexTuple	itup;
-	HeapTupleHeader htuphdr;
 	BlockNumber hblkno;
 	OffsetNumber hoffnum;
 	TransactionId latestRemovedXid = InvalidTransactionId;
@@ -1088,8 +1088,12 @@ hash_xlog_vacuum_get_latestRemovedXid(XLogReaderState *record)
 		 */
 		if (ItemIdHasStorage(hitemid))
 		{
-			htuphdr = (HeapTupleHeader) PageGetItem(hpage, hitemid);
-			HeapTupleHeaderAdvanceLatestRemovedXid(htuphdr, &latestRemovedXid);
+			HeapTupleData htup;
+
+			htup.t_data = (HeapTupleHeader) PageGetItem(hpage, hitemid);
+			HeapTupleCopyBaseFromPage(&htup, hpage);
+
+			HeapTupleHeaderAdvanceLatestRemovedXid(&htup, &latestRemovedXid);
 		}
 		else if (ItemIdIsDead(hitemid))
 		{

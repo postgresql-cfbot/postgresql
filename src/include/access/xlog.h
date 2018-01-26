@@ -131,6 +131,14 @@ typedef enum WalLevel
 
 extern PGDLLIMPORT int wal_level;
 
+/*
+ * these parameters specifies starting xid, multixact id and multixact offset
+ *             for testing 64 bit xids
+ */
+extern TransactionId  start_xid;
+extern MultiXactId    start_mx_id;
+extern MultiXactOffset  start_mx_offset;
+
 /* Is WAL archiving enabled (always or only while server is running normally)? */
 #define XLogArchivingActive() \
 	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode > ARCHIVE_MODE_OFF)
@@ -276,7 +284,6 @@ extern XLogRecPtr GetRedoRecPtr(void);
 extern XLogRecPtr GetInsertRecPtr(void);
 extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
-extern void GetNextXidAndEpoch(TransactionId *xid, uint32 *epoch);
 extern void RemovePromoteSignalFiles(void);
 
 extern bool CheckPromoteSignal(void);

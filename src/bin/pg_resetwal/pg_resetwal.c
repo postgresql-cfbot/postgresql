@@ -61,7 +61,6 @@ static ControlFileData ControlFile; /* pg_control values */
 static XLogSegNo newXlogSegNo;	/* new XLOG segment # */
 static bool guessed = false;	/* T if we had to guess at any values */
 static const char *progname;
-static uint32 set_xid_epoch = (uint32) -1;
 static TransactionId set_xid = 0;
 static TransactionId set_oldest_commit_ts_xid = 0;
 static TransactionId set_newest_commit_ts_xid = 0;
@@ -83,6 +82,7 @@ static void KillExistingXLOG(void);
 static void KillExistingArchiveStatus(void);
 static void WriteEmptyXLOG(void);
 static void usage(void);
+static uint64 str2uint64(const char *str, char **endptr, int base);
 
 
 int
@@ -117,7 +117,7 @@ main(int argc, char *argv[])
 	}
 
 
-	while ((c = getopt(argc, argv, "c:D:e:fl:m:no:O:x:")) != -1)
+	while ((c = getopt(argc, argv, "c:D:fl:m:no:O:x:")) != -1)
 	{
 		switch (c)
 		{
@@ -133,25 +133,8 @@ main(int argc, char *argv[])
 				noupdate = true;
 				break;
 
-			case 'e':
-				set_xid_epoch = strtoul(optarg, &endptr, 0);
-				if (endptr == optarg || *endptr != '\0')
-				{
-					/*------
-					  translator: the second %s is a command line argument (-e, etc) */
-					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-e");
-					fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
-					exit(1);
-				}
-				if (set_xid_epoch == -1)
-				{
-					fprintf(stderr, _("%s: transaction ID epoch (-e) must not be -1\n"), progname);
-					exit(1);
-				}
-				break;
-
 			case 'x':
-				set_xid = strtoul(optarg, &endptr, 0);
+				set_xid = str2uint64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != '\0')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-x");
@@ -166,14 +149,14 @@ main(int argc, char *argv[])
 				break;
 
 			case 'c':
-				set_oldest_commit_ts_xid = strtoul(optarg, &endptr, 0);
+				set_oldest_commit_ts_xid = str2uint64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != ',')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-c");
 					fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 					exit(1);
 				}
-				set_newest_commit_ts_xid = strtoul(endptr + 1, &endptr2, 0);
+				set_newest_commit_ts_xid = str2uint64(endptr + 1, &endptr2, 0);
 				if (endptr2 == endptr + 1 || *endptr2 != '\0')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-c");
@@ -212,7 +195,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'm':
-				set_mxid = strtoul(optarg, &endptr, 0);
+				set_mxid = str2uint64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != ',')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-m");
@@ -220,7 +203,7 @@ main(int argc, char *argv[])
 					exit(1);
 				}
 
-				set_oldestmxid = strtoul(endptr + 1, &endptr2, 0);
+				set_oldestmxid = str2uint64(endptr + 1, &endptr2, 0);
 				if (endptr2 == endptr + 1 || *endptr2 != '\0')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-m");
@@ -246,7 +229,7 @@ main(int argc, char *argv[])
 				break;
 
 			case 'O':
-				set_mxoff = strtoul(optarg, &endptr, 0);
+				set_mxoff = str2uint64(optarg, &endptr, 0);
 				if (endptr == optarg || *endptr != '\0')
 				{
 					fprintf(stderr, _("%s: invalid argument for option %s\n"), progname, "-O");
@@ -371,13 +354,6 @@ main(int argc, char *argv[])
 	 */
 	if ((guessed && !force) || noupdate)
 		PrintControlValues(guessed);
-
-	/*
-	 * Adjust fields if required by switches.  (Do this now so that printout,
-	 * if any, includes these values.)
-	 */
-	if (set_xid_epoch != -1)
-		ControlFile.checkPointCopy.nextXidEpoch = set_xid_epoch;
 
 	if (set_xid != 0)
 	{
@@ -647,7 +623,6 @@ GuessControlValues(void)
 	ControlFile.checkPointCopy.ThisTimeLineID = 1;
 	ControlFile.checkPointCopy.PrevTimeLineID = 1;
 	ControlFile.checkPointCopy.fullPageWrites = false;
-	ControlFile.checkPointCopy.nextXidEpoch = 0;
 	ControlFile.checkPointCopy.nextXid = FirstNormalTransactionId;
 	ControlFile.checkPointCopy.nextOid = FirstBootstrapObjectId;
 	ControlFile.checkPointCopy.nextMulti = FirstMultiXactId;
@@ -727,28 +702,27 @@ PrintControlValues(bool guessed)
 		   ControlFile.checkPointCopy.ThisTimeLineID);
 	printf(_("Latest checkpoint's full_page_writes: %s\n"),
 		   ControlFile.checkPointCopy.fullPageWrites ? _("on") : _("off"));
-	printf(_("Latest checkpoint's NextXID:          %u:%u\n"),
-		   ControlFile.checkPointCopy.nextXidEpoch,
+	printf(_("Latest checkpoint's NextXID:          " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.nextXid);
 	printf(_("Latest checkpoint's NextOID:          %u\n"),
 		   ControlFile.checkPointCopy.nextOid);
-	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
+	printf(_("Latest checkpoint's NextMultiXactId:  " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.nextMulti);
-	printf(_("Latest checkpoint's NextMultiOffset:  %u\n"),
+	printf(_("Latest checkpoint's NextMultiOffset:  " INT64_FORMAT "\n"),
 		   ControlFile.checkPointCopy.nextMultiOffset);
-	printf(_("Latest checkpoint's oldestXID:        %u\n"),
+	printf(_("Latest checkpoint's oldestXID:        " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestXid);
 	printf(_("Latest checkpoint's oldestXID's DB:   %u\n"),
 		   ControlFile.checkPointCopy.oldestXidDB);
-	printf(_("Latest checkpoint's oldestActiveXID:  %u\n"),
+	printf(_("Latest checkpoint's oldestActiveXID:  " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestActiveXid);
-	printf(_("Latest checkpoint's oldestMultiXid:   %u\n"),
+	printf(_("Latest checkpoint's oldestMultiXid:   " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestMulti);
 	printf(_("Latest checkpoint's oldestMulti's DB: %u\n"),
 		   ControlFile.checkPointCopy.oldestMultiDB);
-	printf(_("Latest checkpoint's oldestCommitTsXid:%u\n"),
+	printf(_("Latest checkpoint's oldestCommitTsXid:" XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestCommitTsXid);
-	printf(_("Latest checkpoint's newestCommitTsXid:%u\n"),
+	printf(_("Latest checkpoint's newestCommitTsXid:" XID_FMT "\n"),
 		   ControlFile.checkPointCopy.newestCommitTsXid);
 	printf(_("Maximum data alignment:               %u\n"),
 		   ControlFile.maxAlign);
@@ -798,9 +772,9 @@ PrintNewControlValues(void)
 
 	if (set_mxid != 0)
 	{
-		printf(_("NextMultiXactId:                      %u\n"),
+		printf(_("NextMultiXactId:                      " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.nextMulti);
-		printf(_("OldestMultiXid:                       %u\n"),
+		printf(_("OldestMultiXid:                       " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.oldestMulti);
 		printf(_("OldestMulti's DB:                     %u\n"),
 			   ControlFile.checkPointCopy.oldestMultiDB);
@@ -808,7 +782,7 @@ PrintNewControlValues(void)
 
 	if (set_mxoff != -1)
 	{
-		printf(_("NextMultiOffset:                      %u\n"),
+		printf(_("NextMultiOffset:                      " INT64_FORMAT "\n"),
 			   ControlFile.checkPointCopy.nextMultiOffset);
 	}
 
@@ -820,28 +794,22 @@ PrintNewControlValues(void)
 
 	if (set_xid != 0)
 	{
-		printf(_("NextXID:                              %u\n"),
+		printf(_("NextXID:                              " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.nextXid);
-		printf(_("OldestXID:                            %u\n"),
+		printf(_("OldestXID:                            " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.oldestXid);
 		printf(_("OldestXID's DB:                       %u\n"),
 			   ControlFile.checkPointCopy.oldestXidDB);
 	}
 
-	if (set_xid_epoch != -1)
-	{
-		printf(_("NextXID epoch:                        %u\n"),
-			   ControlFile.checkPointCopy.nextXidEpoch);
-	}
-
 	if (set_oldest_commit_ts_xid != 0)
 	{
-		printf(_("oldestCommitTsXid:                    %u\n"),
+		printf(_("oldestCommitTsXid:                    " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.oldestCommitTsXid);
 	}
 	if (set_newest_commit_ts_xid != 0)
 	{
-		printf(_("newestCommitTsXid:                    %u\n"),
+		printf(_("newestCommitTsXid:                    " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.newestCommitTsXid);
 	}
 }
@@ -1254,7 +1222,6 @@ usage(void)
 	printf(_("  -c XID,XID       set oldest and newest transactions bearing commit timestamp\n"));
 	printf(_("                   (zero in either value means no change)\n"));
 	printf(_(" [-D] DATADIR      data directory\n"));
-	printf(_("  -e XIDEPOCH      set next transaction ID epoch\n"));
 	printf(_("  -f               force update to be done\n"));
 	printf(_("  -l WALFILE       force minimum WAL starting location for new write-ahead log\n"));
 	printf(_("  -m MXID,MXID     set next and oldest multitransaction ID\n"));
@@ -1265,4 +1232,22 @@ usage(void)
 	printf(_("  -x XID           set next transaction ID\n"));
 	printf(_("  -?, --help       show this help, then exit\n"));
 	printf(_("\nReport bugs to <pgsql-bugs@postgresql.org>.\n"));
+}
+
+
+/*
+ *	str2uint64()
+ *
+ *	convert string to 64-bit unsigned int
+ */
+static uint64
+str2uint64(const char *str, char **endptr, int base)
+{
+#ifdef _MSC_VER					/* MSVC only */
+	return _strtoui64(str, endptr, base);
+#elif defined(HAVE_STRTOULL) && SIZEOF_LONG < 8
+	return strtoull(str, endptr, base);
+#else
+	return strtoul(str, endptr, base);
+#endif
 }

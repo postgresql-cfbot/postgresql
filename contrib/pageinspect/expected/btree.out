@@ -21,7 +21,7 @@ live_items    | 1
 dead_items    | 0
 avg_item_size | 16
 page_size     | 8192
-free_size     | 8128
+free_size     | 8124
 btpo_prev     | 0
 btpo_next     | 0
 btpo          | 0

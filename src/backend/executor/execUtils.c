@@ -1067,6 +1067,8 @@ GetAttributeByNum(HeapTupleHeader tuple,
 	tmptup.t_len = HeapTupleHeaderGetDatumLength(tuple);
 	ItemPointerSetInvalid(&(tmptup.t_self));
 	tmptup.t_tableOid = InvalidOid;
+	HeapTupleSetZeroBase(&tmptup);
+	HeapTupleSetZeroBase(&tmptup);
 	tmptup.t_data = tuple;
 
 	result = heap_getattr(&tmptup,

@@ -22,10 +22,12 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
 #include "optimizer/clauses.h"
+#include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/tlist.h"
 #include "utils/lsyscache.h"
+#include "utils/selfuncs.h"
 
 
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
@@ -307,6 +309,33 @@ compare_pathkeys(List *keys1, List *keys2)
 		return PATHKEYS_BETTER2;	/* key2 is longer */
 	return PATHKEYS_EQUAL;
 }
+
+
+/*
+ * pathkeys_common
+ *    Returns length of longest common prefix of keys1 and keys2.
+ */
+int
+pathkeys_common(List *keys1, List *keys2)
+{
+	int n;
+	ListCell   *key1,
+			   *key2;
+	n = 0;
+
+	forboth(key1, keys1, key2, keys2)
+	{
+		PathKey    *pathkey1 = (PathKey *) lfirst(key1);
+		PathKey    *pathkey2 = (PathKey *) lfirst(key2);
+
+		if (pathkey1 != pathkey2)
+			return n;
+		n++;
+	}
+
+	return n;
+}
+
 
 /*
  * pathkeys_contained_in
@@ -1488,26 +1517,42 @@ right_merge_direction(PlannerInfo *root, PathKey *pathkey)
  *		Count the number of pathkeys that are useful for meeting the
  *		query's requested output ordering.
  *
- * Unlike merge pathkeys, this is an all-or-nothing affair: it does us
- * no good to order by just the first key(s) of the requested ordering.
- * So the result is always either 0 or list_length(root->query_pathkeys).
+ * Returns number of pathkeys that maches given argument. Others can be
+ * satisfied by incremental sort.
  */
-static int
-pathkeys_useful_for_ordering(PlannerInfo *root, List *pathkeys)
+int
+pathkeys_useful_for_ordering(List *query_pathkeys, List *pathkeys)
 {
-	if (root->query_pathkeys == NIL)
+	int	n_common_pathkeys;
+
+	if (query_pathkeys == NIL)
 		return 0;				/* no special ordering requested */
 
 	if (pathkeys == NIL)
 		return 0;				/* unordered path */
 
-	if (pathkeys_contained_in(root->query_pathkeys, pathkeys))
-	{
-		/* It's useful ... or at least the first N keys are */
-		return list_length(root->query_pathkeys);
-	}
+	n_common_pathkeys = pathkeys_common(query_pathkeys, pathkeys);
 
-	return 0;					/* path ordering not useful */
+	if (enable_incrementalsort)
+	{
+		/*
+		 * Return the number of path keys in common, or 0 if there are none. Any
+		 * first common pathkeys could be useful for ordering because we can use
+		 * incremental sort.
+		 */
+		return n_common_pathkeys;
+	}
+	else
+	{
+		/*
+		 * When incremental sort is disabled, pathkeys are useful only when they
+		 * do contain all the query pathkeys.
+		 */
+		if (n_common_pathkeys == list_length(query_pathkeys))
+			return n_common_pathkeys;
+		else
+			return 0;
+	}
 }
 
 /*
@@ -1523,7 +1568,7 @@ truncate_useless_pathkeys(PlannerInfo *root,
 	int			nuseful2;
 
 	nuseful = pathkeys_useful_for_merging(root, rel, pathkeys);
-	nuseful2 = pathkeys_useful_for_ordering(root, pathkeys);
+	nuseful2 = pathkeys_useful_for_ordering(root->query_pathkeys, pathkeys);
 	if (nuseful2 > nuseful)
 		nuseful = nuseful2;
 

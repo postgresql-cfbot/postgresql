@@ -236,7 +236,7 @@ static MergeJoin *make_mergejoin(List *tlist,
 			   Plan *lefttree, Plan *righttree,
 			   JoinType jointype, bool inner_unique,
 			   bool skip_mark_restore);
-static Sort *make_sort(Plan *lefttree, int numCols,
+static Sort *make_sort(Plan *lefttree, int numCols, int skipCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
 		  Oid *collations, bool *nullsFirst);
 static Plan *prepare_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
@@ -252,10 +252,11 @@ static EquivalenceMember *find_ec_member_for_tle(EquivalenceClass *ec,
 					   TargetEntry *tle,
 					   Relids relids);
 static Sort *make_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
-						Relids relids);
+						Relids relids, int skipCols);
 static Sort *make_sort_from_groupcols(List *groupcls,
 						 AttrNumber *grpColIdx,
-						 Plan *lefttree);
+						 Plan *lefttree,
+						 int skipCols);
 static Material *make_material(Plan *lefttree);
 static WindowAgg *make_windowagg(List *tlist, Index winref,
 			   int partNumCols, AttrNumber *partColIdx, Oid *partOperators,
@@ -438,6 +439,7 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 											   (GatherPath *) best_path);
 			break;
 		case T_Sort:
+		case T_IncrementalSort:
 			plan = (Plan *) create_sort_plan(root,
 											 (SortPath *) best_path,
 											 flags);
@@ -1123,6 +1125,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path)
 		Oid		   *sortOperators;
 		Oid		   *collations;
 		bool	   *nullsFirst;
+		int			n_common_pathkeys;
 
 		/* Build the child plan */
 		/* Must insist that all children return the same tlist */
@@ -1157,9 +1160,11 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path)
 					  numsortkeys * sizeof(bool)) == 0);
 
 		/* Now, insert a Sort node if subplan isn't sufficiently ordered */
-		if (!pathkeys_contained_in(pathkeys, subpath->pathkeys))
+		n_common_pathkeys = pathkeys_common(pathkeys, subpath->pathkeys);
+		if (n_common_pathkeys < list_length(pathkeys))
 		{
 			Sort	   *sort = make_sort(subplan, numsortkeys,
+										 n_common_pathkeys,
 										 sortColIdx, sortOperators,
 										 collations, nullsFirst);
 
@@ -1509,6 +1514,7 @@ create_gather_merge_plan(PlannerInfo *root, GatherMergePath *best_path)
 	Plan	   *subplan;
 	List	   *pathkeys = best_path->path.pathkeys;
 	List	   *tlist = build_path_tlist(root, &best_path->path);
+	int			n_common_pathkeys;
 
 	/* As with Gather, it's best to project away columns in the workers. */
 	subplan = create_plan_recurse(root, best_path->subpath, CP_EXACT_TLIST);
@@ -1538,12 +1544,16 @@ create_gather_merge_plan(PlannerInfo *root, GatherMergePath *best_path)
 
 
 	/* Now, insert a Sort node if subplan isn't sufficiently ordered */
-	if (!pathkeys_contained_in(pathkeys, best_path->subpath->pathkeys))
+	n_common_pathkeys = pathkeys_common(pathkeys, best_path->subpath->pathkeys);
+	if (n_common_pathkeys < list_length(pathkeys))
+	{
 		subplan = (Plan *) make_sort(subplan, gm_plan->numCols,
+									 n_common_pathkeys,
 									 gm_plan->sortColIdx,
 									 gm_plan->sortOperators,
 									 gm_plan->collations,
 									 gm_plan->nullsFirst);
+	}
 
 	/* Now insert the subplan under GatherMerge. */
 	gm_plan->plan.lefttree = subplan;
@@ -1656,6 +1666,7 @@ create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 {
 	Sort	   *plan;
 	Plan	   *subplan;
+	int			n_common_pathkeys;
 
 	/*
 	 * We don't want any excess columns in the sorted tuples, so request a
@@ -1665,7 +1676,13 @@ create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 	subplan = create_plan_recurse(root, best_path->subpath,
 								  flags | CP_SMALL_TLIST);
 
-	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys, NULL);
+	if (IsA(best_path, IncrementalSortPath))
+		n_common_pathkeys = ((IncrementalSortPath *) best_path)->skipCols;
+	else
+		n_common_pathkeys = 0;
+
+	plan = make_sort_from_pathkeys(subplan, best_path->path.pathkeys,
+								   NULL, n_common_pathkeys);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -1909,7 +1926,8 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 				sort_plan = (Plan *)
 					make_sort_from_groupcols(rollup->groupClause,
 											 new_grpColIdx,
-											 subplan);
+											 subplan,
+											 0);
 			}
 
 			if (!rollup->is_hashed)
@@ -3850,10 +3868,15 @@ create_mergejoin_plan(PlannerInfo *root,
 	 */
 	if (best_path->outersortkeys)
 	{
+		Sort	   *sort;
+		int			n_common_pathkeys;
 		Relids		outer_relids = outer_path->parent->relids;
-		Sort	   *sort = make_sort_from_pathkeys(outer_plan,
-												   best_path->outersortkeys,
-												   outer_relids);
+
+		n_common_pathkeys = pathkeys_common(best_path->outersortkeys,
+									best_path->jpath.outerjoinpath->pathkeys);
+
+		sort = make_sort_from_pathkeys(outer_plan, best_path->outersortkeys,
+									   outer_relids, n_common_pathkeys);
 
 		label_sort_with_costsize(root, sort, -1.0);
 		outer_plan = (Plan *) sort;
@@ -3864,10 +3887,15 @@ create_mergejoin_plan(PlannerInfo *root,
 
 	if (best_path->innersortkeys)
 	{
+		Sort	   *sort;
+		int			n_common_pathkeys;
 		Relids		inner_relids = inner_path->parent->relids;
-		Sort	   *sort = make_sort_from_pathkeys(inner_plan,
-												   best_path->innersortkeys,
-												   inner_relids);
+
+		n_common_pathkeys = pathkeys_common(best_path->innersortkeys,
+									best_path->jpath.innerjoinpath->pathkeys);
+
+		sort = make_sort_from_pathkeys(inner_plan, best_path->innersortkeys,
+									   inner_relids, n_common_pathkeys);
 
 		label_sort_with_costsize(root, sort, -1.0);
 		inner_plan = (Plan *) sort;
@@ -4929,8 +4957,13 @@ label_sort_with_costsize(PlannerInfo *root, Sort *plan, double limit_tuples)
 {
 	Plan	   *lefttree = plan->plan.lefttree;
 	Path		sort_path;		/* dummy for result of cost_sort */
+	int			skip_cols = 0;
 
-	cost_sort(&sort_path, root, NIL,
+	if (IsA(plan, IncrementalSort))
+		skip_cols = ((IncrementalSort *) plan)->skipCols;
+
+	cost_sort(&sort_path, root, NIL, skip_cols,
+			  lefttree->startup_cost,
 			  lefttree->total_cost,
 			  lefttree->plan_rows,
 			  lefttree->plan_width,
@@ -5521,13 +5554,31 @@ make_mergejoin(List *tlist,
  * nullsFirst arrays already.
  */
 static Sort *
-make_sort(Plan *lefttree, int numCols,
+make_sort(Plan *lefttree, int numCols, int skipCols,
 		  AttrNumber *sortColIdx, Oid *sortOperators,
 		  Oid *collations, bool *nullsFirst)
 {
-	Sort	   *node = makeNode(Sort);
-	Plan	   *plan = &node->plan;
+	Sort	   *node;
+	Plan	   *plan;
 
+	/* Always use regular sort node when enable_incrementalsort = false */
+	if (!enable_incrementalsort)
+		skipCols = 0;
+
+	if (skipCols == 0)
+	{
+		node = makeNode(Sort);
+	}
+	else
+	{
+		IncrementalSort    *incrementalSort;
+
+		incrementalSort = makeNode(IncrementalSort);
+		node = &incrementalSort->sort;
+		incrementalSort->skipCols = skipCols;
+	}
+
+	plan = &node->plan;
 	plan->targetlist = lefttree->targetlist;
 	plan->qual = NIL;
 	plan->lefttree = lefttree;
@@ -5860,9 +5911,11 @@ find_ec_member_for_tle(EquivalenceClass *ec,
  *	  'lefttree' is the node which yields input tuples
  *	  'pathkeys' is the list of pathkeys by which the result is to be sorted
  *	  'relids' is the set of relations required by prepare_sort_from_pathkeys()
+ *	  'skipCols' is the number of presorted columns in input tuples
  */
 static Sort *
-make_sort_from_pathkeys(Plan *lefttree, List *pathkeys, Relids relids)
+make_sort_from_pathkeys(Plan *lefttree, List *pathkeys,
+						Relids relids, int skipCols)
 {
 	int			numsortkeys;
 	AttrNumber *sortColIdx;
@@ -5882,7 +5935,7 @@ make_sort_from_pathkeys(Plan *lefttree, List *pathkeys, Relids relids)
 										  &nullsFirst);
 
 	/* Now build the Sort node */
-	return make_sort(lefttree, numsortkeys,
+	return make_sort(lefttree, numsortkeys, skipCols,
 					 sortColIdx, sortOperators,
 					 collations, nullsFirst);
 }
@@ -5925,7 +5978,7 @@ make_sort_from_sortclauses(List *sortcls, Plan *lefttree)
 		numsortkeys++;
 	}
 
-	return make_sort(lefttree, numsortkeys,
+	return make_sort(lefttree, numsortkeys, 0,
 					 sortColIdx, sortOperators,
 					 collations, nullsFirst);
 }
@@ -5946,7 +5999,8 @@ make_sort_from_sortclauses(List *sortcls, Plan *lefttree)
 static Sort *
 make_sort_from_groupcols(List *groupcls,
 						 AttrNumber *grpColIdx,
-						 Plan *lefttree)
+						 Plan *lefttree,
+						 int skipCols)
 {
 	List	   *sub_tlist = lefttree->targetlist;
 	ListCell   *l;
@@ -5979,7 +6033,7 @@ make_sort_from_groupcols(List *groupcls,
 		numsortkeys++;
 	}
 
-	return make_sort(lefttree, numsortkeys,
+	return make_sort(lefttree, numsortkeys, skipCols,
 					 sortColIdx, sortOperators,
 					 collations, nullsFirst);
 }
@@ -6637,6 +6691,7 @@ is_projection_capable_plan(Plan *plan)
 		case T_Hash:
 		case T_Material:
 		case T_Sort:
+		case T_IncrementalSort:
 		case T_Unique:
 		case T_SetOp:
 		case T_LockRows:

@@ -3853,14 +3853,14 @@ create_grouping_paths(PlannerInfo *root,
 			foreach(lc, input_rel->partial_pathlist)
 			{
 				Path	   *path = (Path *) lfirst(lc);
-				bool		is_sorted;
+				int			n_useful_pathkeys;
 
-				is_sorted = pathkeys_contained_in(root->group_pathkeys,
-												  path->pathkeys);
-				if (path == cheapest_partial_path || is_sorted)
+				n_useful_pathkeys = pathkeys_useful_for_ordering(
+										root->group_pathkeys, path->pathkeys);
+				if (path == cheapest_partial_path || n_useful_pathkeys > 0)
 				{
 					/* Sort the cheapest partial path, if it isn't already */
-					if (!is_sorted)
+					if (n_useful_pathkeys < list_length(root->group_pathkeys))
 						path = (Path *) create_sort_path(root,
 														 grouped_rel,
 														 path,
@@ -3933,14 +3933,14 @@ create_grouping_paths(PlannerInfo *root,
 		foreach(lc, input_rel->pathlist)
 		{
 			Path	   *path = (Path *) lfirst(lc);
-			bool		is_sorted;
+			int			n_useful_pathkeys;
 
-			is_sorted = pathkeys_contained_in(root->group_pathkeys,
-											  path->pathkeys);
-			if (path == cheapest_path || is_sorted)
+			n_useful_pathkeys = pathkeys_useful_for_ordering(
+										root->group_pathkeys, path->pathkeys);
+			if (path == cheapest_path || n_useful_pathkeys > 0)
 			{
 				/* Sort the cheapest-total path if it isn't already sorted */
-				if (!is_sorted)
+				if (n_useful_pathkeys < list_length(root->group_pathkeys))
 					path = (Path *) create_sort_path(root,
 													 grouped_rel,
 													 path,
@@ -5007,13 +5007,13 @@ create_ordered_paths(PlannerInfo *root,
 	foreach(lc, input_rel->pathlist)
 	{
 		Path	   *path = (Path *) lfirst(lc);
-		bool		is_sorted;
+		int			n_useful_pathkeys;
 
-		is_sorted = pathkeys_contained_in(root->sort_pathkeys,
-										  path->pathkeys);
-		if (path == cheapest_input_path || is_sorted)
+		n_useful_pathkeys = pathkeys_useful_for_ordering(root->sort_pathkeys,
+														 path->pathkeys);
+		if (path == cheapest_input_path || n_useful_pathkeys > 0)
 		{
-			if (!is_sorted)
+			if (n_useful_pathkeys < list_length(root->sort_pathkeys))
 			{
 				/* An explicit sort here can take advantage of LIMIT */
 				path = (Path *) create_sort_path(root,
@@ -6143,8 +6143,9 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 
 	/* Estimate the cost of seq scan + sort */
 	seqScanPath = create_seqscan_path(root, rel, NULL, 0);
-	cost_sort(&seqScanAndSortPath, root, NIL,
-			  seqScanPath->total_cost, rel->tuples, rel->reltarget->width,
+	cost_sort(&seqScanAndSortPath, root, NIL, 0,
+			  seqScanPath->startup_cost, seqScanPath->total_cost,
+			  rel->tuples, rel->reltarget->width,
 			  comparisonCost, maintenance_work_mem, -1.0);
 
 	/* Estimate the cost of index scan */

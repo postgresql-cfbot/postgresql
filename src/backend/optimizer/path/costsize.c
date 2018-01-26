@@ -121,6 +121,7 @@ bool		enable_indexonlyscan = true;
 bool		enable_bitmapscan = true;
 bool		enable_tidscan = true;
 bool		enable_sort = true;
+bool		enable_incrementalsort = true;
 bool		enable_hashagg = true;
 bool		enable_nestloop = true;
 bool		enable_material = true;
@@ -1605,6 +1606,13 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  *	  Determines and returns the cost of sorting a relation, including
  *	  the cost of reading the input data.
  *
+ * Sort could be either full sort of relation or incremental sort when we already
+ * have data presorted by some of required pathkeys.  In the second case
+ * we estimate number of groups which source data is divided to by presorted
+ * pathkeys.  And then estimate cost of sorting each individual group assuming
+ * data is divided into group uniformly.  Also, if LIMIT is specified then
+ * we have to pull from source and sort only some of total groups.
+ *
  * If the total volume of data to sort is less than sort_mem, we will do
  * an in-memory sort, which requires no I/O and about t*log2(t) tuple
  * comparisons for t tuples.
@@ -1631,7 +1639,9 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  * work that has to be done to prepare the inputs to the comparison operators.
  *
  * 'pathkeys' is a list of sort keys
- * 'input_cost' is the total cost for reading the input data
+ * 'presorted_keys' is a number of pathkeys already presorted in given path
+ * 'input_startup_cost' is the startup cost for reading the input data
+ * 'input_total_cost' is the total cost for reading the input data
  * 'tuples' is the number of tuples in the relation
  * 'width' is the average tuple width in bytes
  * 'comparison_cost' is the extra cost per comparison, if any
@@ -1647,19 +1657,28 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  */
 void
 cost_sort(Path *path, PlannerInfo *root,
-		  List *pathkeys, Cost input_cost, double tuples, int width,
-		  Cost comparison_cost, int sort_mem,
+		  List *pathkeys, int presorted_keys,
+		  Cost input_startup_cost, Cost input_total_cost,
+		  double tuples, int width, Cost comparison_cost, int sort_mem,
 		  double limit_tuples)
 {
-	Cost		startup_cost = input_cost;
-	Cost		run_cost = 0;
+	Cost		startup_cost = input_startup_cost;
+	Cost		run_cost = 0,
+				rest_cost,
+				group_cost,
+				input_run_cost = input_total_cost - input_startup_cost;
 	double		input_bytes = relation_byte_size(tuples, width);
 	double		output_bytes;
 	double		output_tuples;
+	double		num_groups,
+				group_input_bytes,
+				group_tuples;
 	long		sort_mem_bytes = sort_mem * 1024L;
 
 	if (!enable_sort)
 		startup_cost += disable_cost;
+	if (!enable_incrementalsort)
+		presorted_keys = 0;
 
 	path->rows = tuples;
 
@@ -1685,13 +1704,50 @@ cost_sort(Path *path, PlannerInfo *root,
 		output_bytes = input_bytes;
 	}
 
-	if (output_bytes > sort_mem_bytes)
+	/*
+	 * Estimate number of groups which dataset is divided by presorted keys.
+	 */
+	if (presorted_keys > 0)
+	{
+		List	   *presortedExprs = NIL;
+		ListCell   *l;
+		int			i = 0;
+
+		/* Extract presorted keys as list of expressions */
+		foreach(l, pathkeys)
+		{
+			PathKey *key = (PathKey *)lfirst(l);
+			EquivalenceMember *member = (EquivalenceMember *)
+										linitial(key->pk_eclass->ec_members);
+
+			presortedExprs = lappend(presortedExprs, member->em_expr);
+
+			i++;
+			if (i >= presorted_keys)
+				break;
+		}
+
+		/* Estimate number of groups with equal presorted keys */
+		num_groups = estimate_num_groups(root, presortedExprs, tuples, NULL);
+	}
+	else
+	{
+		num_groups = 1.0;
+	}
+
+	/*
+	 * Estimate average cost of sorting of one group where presorted keys are
+	 * equal.
+	 */
+	group_input_bytes = input_bytes / num_groups;
+	group_tuples = tuples / num_groups;
+	if (output_bytes > sort_mem_bytes && group_input_bytes > sort_mem_bytes)
 	{
 		/*
 		 * We'll have to use a disk-based sort of all the tuples
 		 */
-		double		npages = ceil(input_bytes / BLCKSZ);
-		double		nruns = input_bytes / sort_mem_bytes;
+		double		npages = ceil(group_input_bytes / BLCKSZ);
+		double		nruns = group_input_bytes / sort_mem_bytes;
 		double		mergeorder = tuplesort_merge_order(sort_mem_bytes);
 		double		log_runs;
 		double		npageaccesses;
@@ -1701,7 +1757,7 @@ cost_sort(Path *path, PlannerInfo *root,
 		 *
 		 * Assume about N log2 N comparisons
 		 */
-		startup_cost += comparison_cost * tuples * LOG2(tuples);
+		group_cost = comparison_cost * group_tuples * LOG2(group_tuples);
 
 		/* Disk costs */
 
@@ -1712,10 +1768,10 @@ cost_sort(Path *path, PlannerInfo *root,
 			log_runs = 1.0;
 		npageaccesses = 2.0 * npages * log_runs;
 		/* Assume 3/4ths of accesses are sequential, 1/4th are not */
-		startup_cost += npageaccesses *
+		group_cost += npageaccesses *
 			(seq_page_cost * 0.75 + random_page_cost * 0.25);
 	}
-	else if (tuples > 2 * output_tuples || input_bytes > sort_mem_bytes)
+	else if (group_tuples > 2 * output_tuples || group_input_bytes > sort_mem_bytes)
 	{
 		/*
 		 * We'll use a bounded heap-sort keeping just K tuples in memory, for
@@ -1723,13 +1779,32 @@ cost_sort(Path *path, PlannerInfo *root,
 		 * factor is a bit higher than for quicksort.  Tweak it so that the
 		 * cost curve is continuous at the crossover point.
 		 */
-		startup_cost += comparison_cost * tuples * LOG2(2.0 * output_tuples);
+		group_cost = comparison_cost * group_tuples * LOG2(2.0 * output_tuples);
 	}
 	else
 	{
-		/* We'll use plain quicksort on all the input tuples */
-		startup_cost += comparison_cost * tuples * LOG2(tuples);
+		/*
+		 * We'll use plain quicksort on all the input tuples.  If it appears
+		 * that we expect less than two tuples per sort group then assume
+		 * logarithmic part of estimate to be 1.
+		 */
+		if (group_tuples >= 2.0)
+			group_cost = comparison_cost * group_tuples * LOG2(group_tuples);
+		else
+			group_cost = comparison_cost * group_tuples;
 	}
+
+	/* Add per group cost of fetching tuples from input */
+	group_cost += input_run_cost / num_groups;
+
+	/*
+	 * We've to sort first group to start output from node. Sorting rest of
+	 * groups are required to return all the other tuples.
+	 */
+	startup_cost += group_cost;
+	rest_cost = (num_groups * (output_tuples / tuples) - 1.0) * group_cost;
+	if (rest_cost > 0.0)
+		run_cost += rest_cost;
 
 	/*
 	 * Also charge a small amount (arbitrarily set equal to operator cost) per
@@ -1740,6 +1815,20 @@ cost_sort(Path *path, PlannerInfo *root,
 	 * counting the LIMIT otherwise.
 	 */
 	run_cost += cpu_operator_cost * tuples;
+
+	/* Extra costs of incremental sort */
+	if (presorted_keys > 0)
+	{
+		/*
+		 * In incremental sort case we also have to cost the detection of
+		 * sort groups.  This turns out to be one extra copy and comparison
+		 * per tuple.
+		 */
+		run_cost += (cpu_tuple_cost + comparison_cost) * tuples;
+
+		/* Cost of per group tuplesort reset */
+		run_cost += 2.0 * cpu_tuple_cost * num_groups;
+	}
 
 	path->startup_cost = startup_cost;
 	path->total_cost = startup_cost + run_cost;
@@ -2717,6 +2806,8 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		cost_sort(&sort_path,
 				  root,
 				  outersortkeys,
+				  pathkeys_common(outer_path->pathkeys, outersortkeys),
+				  outer_path->startup_cost,
 				  outer_path->total_cost,
 				  outer_path_rows,
 				  outer_path->pathtarget->width,
@@ -2743,6 +2834,8 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		cost_sort(&sort_path,
 				  root,
 				  innersortkeys,
+				  pathkeys_common(inner_path->pathkeys, innersortkeys),
+				  inner_path->startup_cost,
 				  inner_path->total_cost,
 				  inner_path_rows,
 				  inner_path->pathtarget->width,

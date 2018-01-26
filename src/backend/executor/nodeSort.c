@@ -93,7 +93,8 @@ ExecSort(PlanState *pstate)
 											  plannode->collations,
 											  plannode->nullsFirst,
 											  work_mem,
-											  node->randomAccess);
+											  node->randomAccess,
+											  false);
 		if (node->bounded)
 			tuplesort_set_bound(tuplesortstate, node->bound);
 		node->tuplesortstate = (void *) tuplesortstate;

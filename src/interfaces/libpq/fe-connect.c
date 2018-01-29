@@ -6015,13 +6015,15 @@ PQpass(const PGconn *conn)
 char *
 PQhost(const PGconn *conn)
 {
+	char *host;
+
 	if (!conn)
 		return NULL;
-	if (conn->connhost != NULL &&
-		conn->connhost[conn->whichhost].type != CHT_HOST_ADDRESS)
-		return conn->connhost[conn->whichhost].host;
-	else if (conn->pghost != NULL && conn->pghost[0] != '\0')
-		return conn->pghost;
+
+	host = PQhostNoDefault(conn);
+
+	if (host)
+		return host;
 	else
 	{
 #ifdef HAVE_UNIX_SOCKETS
@@ -6029,6 +6031,38 @@ PQhost(const PGconn *conn)
 #else
 		return DefaultHost;
 #endif
+	}
+}
+
+char *
+PQhostNoDefault(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+	if (conn->connhost != NULL &&
+		conn->connhost[conn->whichhost].host != NULL &&
+		conn->connhost[conn->whichhost].host[0] != '\0')
+		return conn->connhost[conn->whichhost].host;
+	else if (conn->pghost != NULL && conn->pghost[0] != '\0')
+		return conn->pghost;
+	else
+		return NULL;
+}
+
+char *
+PQhostaddr(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+	if (conn->connhost != NULL &&
+			conn->connhost[conn->whichhost].hostaddr != NULL &&
+			conn->connhost[conn->whichhost].hostaddr[0] != '\0')
+		return conn->connhost[conn->whichhost].hostaddr;
+	else if (conn->pghostaddr != NULL && conn->pghostaddr[0] != '\0')
+		return conn->pghostaddr;
+	else
+	{
+		return NULL;
 	}
 }
 

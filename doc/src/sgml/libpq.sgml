@@ -1621,6 +1621,47 @@ char *PQhost(const PGconn *conn);
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-pqhostnodefault">
+     <term>
+      <function>PQhostNoDefault</function>
+      <indexterm>
+       <primary>PQhostNoDefault</primary>
+      </indexterm>
+     </term>
+
+     <listitem>
+      <para>
+       Returns the server host name of the connection or NULL if there is
+       no host name associated with the connection. This can be a host name,
+       an IP address, or a directory path if the connection is via Unix socket.
+       (The path case can be distinguished because it will always be an
+       absolute path, beginning with <literal>/</literal>.)
+<synopsis>
+char *PQhostNoDefault(const PGconn *conn);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-pqhostaddr">
+     <term>
+      <function>PQhostaddr</function>
+      <indexterm>
+       <primary>PQhostaddr</primary>
+      </indexterm>
+     </term>
+
+     <listitem>
+      <para>
+       Returns the server host address of the connection.
+
+<synopsis>
+char *PQhostaddr(const PGconn *conn);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-pqport">
      <term>
       <function>PQport</function>

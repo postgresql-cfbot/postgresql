@@ -53,6 +53,8 @@ static WalReceiverConn *libpqrcv_connect(const char *conninfo,
 				 char **err);
 static void libpqrcv_check_conninfo(const char *conninfo);
 static char *libpqrcv_get_conninfo(WalReceiverConn *conn);
+static void libpqrcv_get_remoteserver_info(WalReceiverConn *conn, char **host,
+					  char **hostaddr, int *port);
 static char *libpqrcv_identify_system(WalReceiverConn *conn,
 						 TimeLineID *primary_tli,
 						 int *server_version);
@@ -82,6 +84,7 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	libpqrcv_connect,
 	libpqrcv_check_conninfo,
 	libpqrcv_get_conninfo,
+	libpqrcv_get_remoteserver_info,
 	libpqrcv_identify_system,
 	libpqrcv_readtimelinehistoryfile,
 	libpqrcv_startstreaming,
@@ -280,6 +283,30 @@ libpqrcv_get_conninfo(WalReceiverConn *conn)
 	retval = PQExpBufferDataBroken(buf) ? NULL : pstrdup(buf.data);
 	termPQExpBuffer(&buf);
 	return retval;
+}
+
+/*
+ * Provides effective connected remote sever connection details.
+ */
+static void
+libpqrcv_get_remoteserver_info(WalReceiverConn *conn, char **host,
+					  char **hostaddr, int *port)
+{
+	char *ret = NULL;
+
+	Assert(conn->streamConn != NULL);
+
+	ret = PQhostNoDefault(conn->streamConn);
+	if (ret)
+		*host = pstrdup(ret);
+
+	ret = PQhostaddr(conn->streamConn);
+	if (ret)
+		*hostaddr = pstrdup(ret);
+
+	ret = PQport(conn->streamConn);
+	if (ret)
+		*port = atoi(ret);
 }
 
 /*

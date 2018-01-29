@@ -107,6 +107,9 @@ typedef struct
 	 * clobbered to hide security-sensitive fields.
 	 */
 	char		conninfo[MAXCONNINFO];
+	char		host[NI_MAXHOST];
+	char		hostaddr[NI_MAXHOST];
+	int			port;
 
 	/*
 	 * replication slot name; is also used for walreceiver to connect with the
@@ -197,6 +200,10 @@ typedef WalReceiverConn *(*walrcv_connect_fn) (const char *conninfo, bool logica
 											   char **err);
 typedef void (*walrcv_check_conninfo_fn) (const char *conninfo);
 typedef char *(*walrcv_get_conninfo_fn) (WalReceiverConn *conn);
+typedef void (*walrcv_get_remoteserver_info_fn) (WalReceiverConn *conn,
+										 char **host,
+										 char **hostaddr,
+										 int *port);
 typedef char *(*walrcv_identify_system_fn) (WalReceiverConn *conn,
 											TimeLineID *primary_tli,
 											int *server_version);
@@ -227,6 +234,7 @@ typedef struct WalReceiverFunctionsType
 	walrcv_connect_fn walrcv_connect;
 	walrcv_check_conninfo_fn walrcv_check_conninfo;
 	walrcv_get_conninfo_fn walrcv_get_conninfo;
+	walrcv_get_remoteserver_info_fn walrcv_get_remoteserver_info;
 	walrcv_identify_system_fn walrcv_identify_system;
 	walrcv_readtimelinehistoryfile_fn walrcv_readtimelinehistoryfile;
 	walrcv_startstreaming_fn walrcv_startstreaming;
@@ -246,6 +254,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_check_conninfo(conninfo)
 #define walrcv_get_conninfo(conn) \
 	WalReceiverFunctions->walrcv_get_conninfo(conn)
+#define walrcv_get_remoteserver_info(conn, host, hostaddr, port) \
+	WalReceiverFunctions->walrcv_get_remoteserver_info(conn, host, hostaddr, port)
 #define walrcv_identify_system(conn, primary_tli, server_version) \
 	WalReceiverFunctions->walrcv_identify_system(conn, primary_tli, server_version)
 #define walrcv_readtimelinehistoryfile(conn, tli, filename, content, size) \

@@ -52,6 +52,7 @@
 #include "access/xlog_internal.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
+#include "common/ip.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -199,6 +200,9 @@ WalReceiverMain(void)
 	TimestampTz now;
 	bool		ping_sent;
 	char	   *err;
+	char	   *host = NULL;
+	char	   *hostaddr = NULL;
+	int			port = 0;
 
 	/*
 	 * WalRcv should be set up already (if we are a backend, we inherit this
@@ -311,15 +315,32 @@ WalReceiverMain(void)
 	 * conninfo, for security.
 	 */
 	tmp_conninfo = walrcv_get_conninfo(wrconn);
+	walrcv_get_remoteserver_info(wrconn, &host, &hostaddr, &port);
 	SpinLockAcquire(&walrcv->mutex);
 	memset(walrcv->conninfo, 0, MAXCONNINFO);
 	if (tmp_conninfo)
 		strlcpy((char *) walrcv->conninfo, tmp_conninfo, MAXCONNINFO);
+
+	memset(walrcv->host, 0, NI_MAXHOST);
+	if (host)
+		strlcpy((char *) walrcv->host, host, NI_MAXHOST);
+
+	memset(walrcv->hostaddr, 0, NI_MAXHOST);
+	if (hostaddr)
+		strlcpy((char *) walrcv->hostaddr, hostaddr, NI_MAXHOST);
+
+	walrcv->port = port;
 	walrcv->ready_to_display = true;
 	SpinLockRelease(&walrcv->mutex);
 
 	if (tmp_conninfo)
 		pfree(tmp_conninfo);
+
+	if (host)
+		pfree(host);
+
+	if (hostaddr)
+		pfree(hostaddr);
 
 	first_stream = true;
 	for (;;)
@@ -1402,6 +1423,9 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	TimestampTz last_receipt_time;
 	XLogRecPtr	latest_end_lsn;
 	TimestampTz latest_end_time;
+	char		host[NI_MAXHOST];
+	char		hostaddr[NI_MAXHOST];
+	int			port = 0;
 	char		slotname[NAMEDATALEN];
 	char		conninfo[MAXCONNINFO];
 
@@ -1419,6 +1443,9 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	latest_end_lsn = WalRcv->latestWalEnd;
 	latest_end_time = WalRcv->latestWalEndTime;
 	strlcpy(slotname, (char *) WalRcv->slotname, sizeof(slotname));
+	strlcpy(host, (char *) WalRcv->host, sizeof(host));
+	strlcpy(hostaddr, (char *) WalRcv->hostaddr, sizeof(hostaddr));
+	port = WalRcv->port;
 	strlcpy(conninfo, (char *) WalRcv->conninfo, sizeof(conninfo));
 	SpinLockRelease(&WalRcv->mutex);
 
@@ -1482,10 +1509,22 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 			nulls[10] = true;
 		else
 			values[10] = CStringGetTextDatum(slotname);
-		if (*conninfo == '\0')
+		if (*host == '\0')
 			nulls[11] = true;
 		else
-			values[11] = CStringGetTextDatum(conninfo);
+			values[11] = CStringGetTextDatum(host);
+		if (*hostaddr == '\0')
+			nulls[12] = true;
+		else
+			values[12] = CStringGetTextDatum(hostaddr);
+		if (port == 0)
+			nulls[13] = true;
+		else
+			values[13] = Int32GetDatum(port);
+		if (*conninfo == '\0')
+			nulls[14] = true;
+		else
+			values[14] = CStringGetTextDatum(conninfo);
 	}
 
 	/* Returns the record as Datum */

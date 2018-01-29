@@ -2023,6 +2023,30 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
      <entry>Replication slot name used by this WAL receiver</entry>
     </row>
     <row>
+     <entry><structfield>remote_hostname</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>
+      Host name of the <productname>PostgreSQL</productname> instance
+      this WAL receiver is connected to.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>remote_hostaddr</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>
+      Host address of the <productname>PostgreSQL</productname> instance
+      this WAL receiver is connected to.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>remote_port</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>
+      Port number of the <productname>PostgreSQL</productname> instance
+      this WAL receiver is connected to.
+     </entry>
+    </row>
+    <row>
      <entry><structfield>conninfo</structfield></entry>
      <entry><type>text</type></entry>
      <entry>

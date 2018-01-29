@@ -939,17 +939,20 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			Relation	idxRel = index_open(lfirst_oid(cell), AccessShareLock);
 			AttrNumber *attmap;
 			IndexStmt  *idxstmt;
+			Oid			constraintOid;
 
 			attmap = convert_tuples_by_name_map(RelationGetDescr(rel),
 												RelationGetDescr(parent),
 												gettext_noop("could not convert row type"));
 			idxstmt =
 				generateClonedIndexStmt(NULL, RelationGetRelid(rel), idxRel,
-										attmap, RelationGetDescr(rel)->natts);
+										attmap, RelationGetDescr(rel)->natts,
+										&constraintOid);
 			DefineIndex(RelationGetRelid(rel),
 						idxstmt,
 						InvalidOid,
 						RelationGetRelid(idxRel),
+						constraintOid,
 						false, false, false, false, false);
 
 			index_close(idxRel, AccessShareLock);
@@ -6809,6 +6812,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 						  stmt,
 						  InvalidOid,	/* no predefined OID */
 						  InvalidOid,	/* no parent index */
+						  InvalidOid,	/* no parent constraint */
 						  true, /* is_alter_table */
 						  check_rights,
 						  false,	/* check_not_in_use - we did it already */
@@ -6901,6 +6905,7 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 
 	address = index_constraint_create(rel,
 									  index_oid,
+									  InvalidOid,
 									  indexInfo,
 									  constraintName,
 									  constraintType,
@@ -14132,6 +14137,7 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		IndexInfo  *info;
 		AttrNumber *attmap;
 		bool		found = false;
+		Oid			constraintOid;
 
 		/*
 		 * Ignore indexes in the partitioned table other than partitioned
@@ -14148,6 +14154,7 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		attmap = convert_tuples_by_name_map(RelationGetDescr(attachrel),
 											RelationGetDescr(rel),
 											gettext_noop("could not convert row type"));
+		constraintOid = get_relation_idx_constraint_oid(RelationGetRelid(rel), idx);
 
 		/*
 		 * Scan the list of existing indexes in the partition-to-be, and mark
@@ -14156,6 +14163,8 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		 */
 		for (i = 0; i < list_length(attachRelIdxs); i++)
 		{
+			Oid		cldConstrOid;
+
 			/* does this index have a parent?  if so, can't use it */
 			if (has_superclass(RelationGetRelid(attachrelIdxRels[i])))
 				continue;
@@ -14168,8 +14177,26 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 								 attmap,
 								 RelationGetDescr(rel)->natts))
 			{
+				/*
+				 * If this index is being created in the parent because of a
+				 * constraint, then the child needs to have a constraint also,
+				 * so look for one.  If there is no such constraint, this
+				 * index is no good, so keep looking.
+				 */
+				if (OidIsValid(constraintOid))
+				{
+					cldConstrOid =
+						get_relation_idx_constraint_oid(RelationGetRelid(attachrel),
+														RelationGetRelid(attachrelIdxRels[i]));
+					/* no dice */
+					if (!OidIsValid(cldConstrOid))
+						continue;
+				}
+
 				/* bingo. */
 				IndexSetParentIndex(attachrelIdxRels[i], idx);
+				if (OidIsValid(constraintOid))
+					ConstraintSetParentConstraint(cldConstrOid, constraintOid);
 				found = true;
 				break;
 			}
@@ -14182,12 +14209,15 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		if (!found)
 		{
 			IndexStmt  *stmt;
+			Oid			constraintOid;
 
 			stmt = generateClonedIndexStmt(NULL, RelationGetRelid(attachrel),
 										   idxRel, attmap,
-										   RelationGetDescr(rel)->natts);
+										   RelationGetDescr(rel)->natts,
+										   &constraintOid);
 			DefineIndex(RelationGetRelid(attachrel), stmt, InvalidOid,
 						RelationGetRelid(idxRel),
+						constraintOid,
 						false, false, false, false, false);
 		}
 
@@ -14430,6 +14460,8 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 		bool		found;
 		int			i;
 		PartitionDesc partDesc;
+		Oid			constraintOid,
+					cldConstrId;
 
 		/*
 		 * If this partition already has an index attached, refuse the operation.
@@ -14485,8 +14517,34 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 							RelationGetRelationName(parentIdx)),
 					 errdetail("The index definitions do not match.")));
 
+		/*
+		 * If there is a constraint in the parent, make sure there is one
+		 * in the child too.
+		 */
+		constraintOid = get_relation_idx_constraint_oid(RelationGetRelid(parentTbl),
+														RelationGetRelid(parentIdx));
+
+		if (OidIsValid(constraintOid))
+		{
+			cldConstrId = get_relation_idx_constraint_oid(RelationGetRelid(partTbl),
+														  partIdxId);
+			if (!OidIsValid(cldConstrId))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("cannot attach index \"%s\" as a partition of index \"%s\"",
+								RelationGetRelationName(partIdx),
+								RelationGetRelationName(parentIdx)),
+						 errdetail("The index \"%s\" belongs to a constraint in table \"%s\" but no constraint exists for index \"%s\".",
+								RelationGetRelationName(parentIdx),
+								RelationGetRelationName(parentTbl),
+								RelationGetRelationName(partIdx))));
+		}
+
 		/* All good -- do it */
 		IndexSetParentIndex(partIdx, RelationGetRelid(parentIdx));
+		if (OidIsValid(constraintOid))
+			ConstraintSetParentConstraint(cldConstrId, constraintOid);
+
 		pfree(attmap);
 
 		CommandCounterIncrement();

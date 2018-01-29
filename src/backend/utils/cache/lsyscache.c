@@ -341,7 +341,7 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
 }
 
 /*
- * get_mergejoin_opfamilies
+ * get_equiv_opfamilies
  *		Given a putatively mergejoinable operator, return a list of the OIDs
  *		of the btree opfamilies in which it represents equality.
  *
@@ -360,7 +360,7 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
  * or cycles here to guarantee the ordering in that case.
  */
 List *
-get_mergejoin_opfamilies(Oid opno)
+get_equiv_opfamilies(Oid opno)
 {
 	List	   *result = NIL;
 	CatCList   *catlist;
@@ -381,6 +381,45 @@ get_mergejoin_opfamilies(Oid opno)
 		if (aform->amopmethod == BTREE_AM_OID &&
 			aform->amopstrategy == BTEqualStrategyNumber)
 			result = lappend_oid(result, aform->amopfamily);
+	}
+
+	ReleaseSysCacheList(catlist);
+
+	return result;
+}
+
+
+/*
+ * Given an operator, returns a list of operator families in which it represents
+ * btree comparison.
+ * Also see the comment for get_equiv_opfamilies().
+ */
+List *
+get_mergejoin_opfamilies(Oid opno)
+{
+	List	   *result = NIL;
+	CatCList   *catlist;
+	int			i;
+
+	/*
+	 * Search pg_amop to see if the target operator is registered as the "<"
+	 * or ">" operator of any btree opfamily.
+	 */
+	catlist = SearchSysCacheList1(AMOPOPID, ObjectIdGetDatum(opno));
+
+	for (i = 0; i < catlist->n_members; i++)
+	{
+		HeapTuple	tuple = &catlist->members[i]->tuple;
+		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
+
+		if (aform->amopmethod == BTREE_AM_OID
+			&& (aform->amopstrategy == BTLessStrategyNumber
+				|| aform->amopstrategy == BTLessEqualStrategyNumber
+				|| aform->amopstrategy == BTGreaterStrategyNumber
+				|| aform->amopstrategy == BTGreaterEqualStrategyNumber))
+		{
+			result = lappend_oid(result, aform->amopfamily);
+		}
 	}
 
 	ReleaseSysCacheList(catlist);
@@ -1179,11 +1218,11 @@ op_input_types(Oid opno, Oid *lefttype, Oid *righttype)
 }
 
 /*
- * op_mergejoinable
+ * op_mergejoinable_equality
  *
- * Returns true if the operator is potentially mergejoinable.  (The planner
- * will fail to find any mergejoin plans unless there are suitable btree
- * opfamily entries for this operator and associated sortops.  The pg_operator
+ * Returns true if the operator is a potentially mergejoinable equality operator.
+ * (The planner will fail to find any mergejoin plans unless there are suitable
+ * btree opfamily entries for this operator and associated sortops. The pg_operator
  * flag is just a hint to tell the planner whether to bother looking.)
  *
  * In some cases (currently only array_eq and record_eq), mergejoinability
@@ -1192,7 +1231,7 @@ op_input_types(Oid opno, Oid *lefttype, Oid *righttype)
  * is needed to check this --- by convention, pass the left input's data type.
  */
 bool
-op_mergejoinable(Oid opno, Oid inputtype)
+op_mergejoinable_equality(Oid opno, Oid inputtype)
 {
 	bool		result = false;
 	HeapTuple	tp;
@@ -1249,7 +1288,7 @@ op_hashjoinable(Oid opno, Oid inputtype)
 	HeapTuple	tp;
 	TypeCacheEntry *typentry;
 
-	/* As in op_mergejoinable, let the typcache handle the hard cases */
+	/* As in op_mergejoinable_equality, let the typcache handle the hard cases */
 	/* Eventually we'll need a similar case for record_eq ... */
 	if (opno == ARRAY_EQ_OP)
 	{

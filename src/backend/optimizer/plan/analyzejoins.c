@@ -1084,11 +1084,9 @@ is_innerrel_unique_for(PlannerInfo *root,
 	ListCell   *lc;
 
 	/*
-	 * Search for mergejoinable clauses that constrain the inner rel against
-	 * the outer rel.  If an operator is mergejoinable then it behaves like
-	 * equality for some btree opclass, so it's what we want.  The
-	 * mergejoinability test also eliminates clauses containing volatile
-	 * functions, which we couldn't depend on.
+	 * Search for mergejoinable equality clauses that constrain the inner
+	 * rel against the outer rel. The mergejoinability test also eliminates
+	 * clauses containing volatile functions, which we couldn't depend on.
 	 */
 	foreach(lc, restrictlist)
 	{
@@ -1101,9 +1099,9 @@ is_innerrel_unique_for(PlannerInfo *root,
 		if (restrictinfo->is_pushed_down && IS_OUTER_JOIN(jointype))
 			continue;
 
-		/* Ignore if it's not a mergejoinable clause */
+		/* Ignore if it's not a mergejoinable equality clause */
 		if (!restrictinfo->can_join ||
-			restrictinfo->mergeopfamilies == NIL)
+			!restrictinfo->is_equality)
 			continue;			/* not mergejoinable */
 
 		/*

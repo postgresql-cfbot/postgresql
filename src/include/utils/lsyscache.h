@@ -74,6 +74,7 @@ extern bool get_ordering_op_properties(Oid opno,
 						   Oid *opfamily, Oid *opcintype, int16 *strategy);
 extern Oid	get_equality_op_for_ordering_op(Oid opno, bool *reverse);
 extern Oid	get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type);
+extern List *get_equiv_opfamilies(Oid opno);
 extern List *get_mergejoin_opfamilies(Oid opno);
 extern bool get_compatible_hash_operators(Oid opno,
 							  Oid *lhs_opno, Oid *rhs_opno);
@@ -100,7 +101,7 @@ extern RegProcedure get_opcode(Oid opno);
 extern char *get_opname(Oid opno);
 extern Oid	get_op_rettype(Oid opno);
 extern void op_input_types(Oid opno, Oid *lefttype, Oid *righttype);
-extern bool op_mergejoinable(Oid opno, Oid inputtype);
+extern bool op_mergejoinable_equality(Oid opno, Oid inputtype);
 extern bool op_hashjoinable(Oid opno, Oid inputtype);
 extern bool op_strict(Oid opno);
 extern char op_volatile(Oid opno);

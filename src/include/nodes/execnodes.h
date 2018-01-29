@@ -1652,6 +1652,8 @@ typedef struct NestLoopState
  *		NullInnerTupleSlot prepared null tuple for left outer joins
  *		OuterEContext	   workspace for computing outer tuple's join values
  *		InnerEContext	   workspace for computing inner tuple's join values
+ *		UseLesser		   join lesser values
+ *		UseEqual		   join equal values
  * ----------------
  */
 /* private in nodeMergejoin.c: */
@@ -1662,6 +1664,8 @@ typedef struct MergeJoinState
 	JoinState	js;				/* its first field is NodeTag */
 	int			mj_NumClauses;
 	MergeJoinClause mj_Clauses; /* array of length mj_NumClauses */
+	bool	   *mj_UseLesser;
+	bool	   *mj_UseEqual;
 	int			mj_JoinState;
 	bool		mj_SkipMarkRestore;
 	bool		mj_ExtraMarks;

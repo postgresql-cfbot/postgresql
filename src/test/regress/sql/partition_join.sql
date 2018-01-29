@@ -6,6 +6,9 @@
 -- Enable partition-wise join, which by default is disabled.
 SET enable_partition_wise_join to true;
 
+-- Disable merge joins to get predictable plans
+SET enable_mergejoin TO off;
+
 --
 -- partitioned by a single column
 --
@@ -146,6 +149,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
 -- test merge joins
 SET enable_hashjoin TO off;
 SET enable_nestloop TO off;
+SET enable_mergejoin TO on;
 
 EXPLAIN (COSTS OFF)
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (SELECT (t1.a + t1.b)/2 FROM prt1_e t1 WHERE t1.c = 0)) AND t1.b = 0 ORDER BY t1.a;
@@ -162,6 +166,7 @@ SELECT t1.a, t2.b FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT *
 
 RESET enable_hashjoin;
 RESET enable_nestloop;
+SET enable_mergejoin TO off;
 
 --
 -- partitioned by multiple columns

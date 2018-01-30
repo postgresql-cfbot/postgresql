@@ -30,6 +30,10 @@ extern int	WalSegSz;
 extern TimeLineHistoryEntry *targetHistory;
 extern int	targetNentries;
 
+/* WAL location */
+extern XLogSegNo divergence_segno;
+extern XLogSegNo last_source_segno;
+
 /* in parsexlog.c */
 extern void extractPageMap(const char *datadir, XLogRecPtr startpoint,
 			   int tliIndex, XLogRecPtr endpoint);

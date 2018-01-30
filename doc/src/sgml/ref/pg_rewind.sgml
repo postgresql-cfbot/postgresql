@@ -50,12 +50,14 @@ PostgreSQL documentation
   <para>
    The result is equivalent to replacing the target data directory with the
    source one. Only changed blocks from relation files are copied;
-   all other files are copied in full, including configuration files. The
-   advantage of <application>pg_rewind</application> over taking a new base backup, or
-   tools like <application>rsync</application>, is that <application>pg_rewind</application> does
-   not require reading through unchanged blocks in the cluster. This makes
-   it a lot faster when the database is large and only a small
-   fraction of blocks differ between the clusters.
+   all other files except WAL are copied in full, including configuration
+   files. Only the WAL files between the point of divergence and the current
+   WAL insert location of the source server are copied, other WAL files are
+   useless for the target server. The advantage of <application>pg_rewind</application>
+   over taking a new base backup, or tools like <application>rsync</application>, 
+   is that <application>pg_rewind</application> does not require reading through unchanged
+   blocks in the cluster. This makes it a lot faster when the database is
+   large and only a small fraction of blocks differ between the clusters.
   </para>
 
   <para>
@@ -231,7 +233,7 @@ PostgreSQL documentation
      <para>
       Copy all other files such as <filename>pg_xact</filename> and
       configuration files from the source cluster to the target cluster
-      (everything except the relation files).
+      (everything except the relation files and some WAL files).
      </para>
     </step>
     <step>

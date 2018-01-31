@@ -147,7 +147,7 @@ libpqProcessFileList(void)
 {
 	PGresult   *res;
 	const char *sql;
-	int			i;
+	int			i, p;
 
 	/*
 	 * Create a recursive directory listing of the whole data directory.
@@ -163,7 +163,8 @@ libpqProcessFileList(void)
 		"WITH RECURSIVE files (path, filename, size, isdir) AS (\n"
 		"  SELECT '' AS path, filename, size, isdir FROM\n"
 		"  (SELECT pg_ls_dir('.', true, false) AS filename) AS fn,\n"
-		"        pg_stat_file(fn.filename, true) AS this\n"
+		"   LATERAL pg_stat_file(fn.filename, true) AS this\n"
+		"  WHERE filename = $1\n"
 		"  UNION ALL\n"
 		"  SELECT parent.path || parent.filename || '/' AS path,\n"
 		"         fn, this.size, this.isdir\n"
@@ -177,44 +178,56 @@ libpqProcessFileList(void)
 		"FROM files\n"
 		"LEFT OUTER JOIN pg_tablespace ON files.path = 'pg_tblspc/'\n"
 		"                             AND oid::text = files.filename\n";
-	res = PQexec(conn, sql);
 
-	if (PQresultStatus(res) != PGRES_TUPLES_OK)
-		pg_fatal("could not fetch file list: %s",
+	/* Going through the directories in a loop.  Doing it this way
+	 * makes it easier to add more inclusions later.
+	 *
+	 * Note that the query filters out on top-level directories before
+	 * recursion so this will not give us problems in terms of listing
+	 * lots of files many times.
+	 */
+	for (p = 0; rewind_dirs[p] != NULL; ++p)
+	{
+		const char *paths[1];
+		paths[0] = rewind_dirs[p];
+		res = PQexecParams(conn, sql,  1, NULL, paths, NULL, NULL, 0);
+
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+			pg_fatal("could not fetch file list: %s",
 				 PQresultErrorMessage(res));
 
-	/* sanity check the result set */
-	if (PQnfields(res) != 4)
-		pg_fatal("unexpected result set while fetching file list\n");
+		/* sanity check the result set */
+		if (PQnfields(res) != 4)
+			pg_fatal("unexpected result set while fetching file list\n");
 
-	/* Read result to local variables */
-	for (i = 0; i < PQntuples(res); i++)
-	{
-		char	   *path = PQgetvalue(res, i, 0);
-		int64		filesize = atol(PQgetvalue(res, i, 1));
-		bool		isdir = (strcmp(PQgetvalue(res, i, 2), "t") == 0);
-		char	   *link_target = PQgetvalue(res, i, 3);
-		file_type_t type;
-
-		if (PQgetisnull(res, 0, 1))
+		/* Read result to local variables */
+		for (i = 0; i < PQntuples(res); i++)
 		{
-			/*
-			 * The file was removed from the server while the query was
-			 * running. Ignore it.
-			 */
-			continue;
+			char	   *path = PQgetvalue(res, i, 0);
+			int64		filesize = atol(PQgetvalue(res, i, 1));
+			bool		isdir = (strcmp(PQgetvalue(res, i, 2), "t") == 0);
+			char	   *link_target = PQgetvalue(res, i, 3);
+			file_type_t type;
+
+			if (PQgetisnull(res, 0, 1))
+			{
+				/*
+				 * The file was removed from the server while the query was
+				 * running. Ignore it.
+				 */
+				continue;
+			}
+
+			if (link_target[0])
+				type = FILE_TYPE_SYMLINK;
+			else if (isdir)
+				type = FILE_TYPE_DIRECTORY;
+			else
+				type = FILE_TYPE_REGULAR;
+			process_source_file(path, type, filesize, link_target);
 		}
-
-		if (link_target[0])
-			type = FILE_TYPE_SYMLINK;
-		else if (isdir)
-			type = FILE_TYPE_DIRECTORY;
-		else
-			type = FILE_TYPE_REGULAR;
-
-		process_source_file(path, type, filesize, link_target);
+		PQclear(res);
 	}
-	PQclear(res);
 }
 
 /*----

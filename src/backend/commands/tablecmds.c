@@ -4476,8 +4476,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		bistate = GetBulkInsertState();
 
 		hi_options = HEAP_INSERT_SKIP_FSM;
+
 		if (!XLogIsNeeded())
-			hi_options |= HEAP_INSERT_SKIP_WAL;
+			heap_register_sync(newrel);
 	}
 	else
 	{
@@ -4750,8 +4751,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		FreeBulkInsertState(bistate);
 
 		/* If we skipped writing WAL, then we need to sync the heap. */
-		if (hi_options & HEAP_INSERT_SKIP_WAL)
-			heap_sync(newrel);
 
 		heap_close(newrel, NoLock);
 	}
@@ -10755,11 +10754,12 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 
 	/*
 	 * Create and copy all forks of the relation, and schedule unlinking of
-	 * old physical files.
+	 * old physical files. Pending syncs for the old node is no longer needed.
 	 *
 	 * NOTE: any conflict in relfilenode value will be caught in
 	 * RelationCreateStorage().
 	 */
+	RelationRemovePendingSync(rel);
 	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
 
 	/* copy main fork */

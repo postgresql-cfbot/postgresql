@@ -29,6 +29,7 @@
 #include "catalog/storage_xlog.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -62,6 +63,49 @@ typedef struct PendingRelDelete
 } PendingRelDelete;
 
 static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
+
+/*
+ * We also track relation files (RelFileNode values) that have been created
+ * in the same transaction, and that have been modified without WAL-logging
+ * the action (an optimization possible with wal_level=minimal). When we are
+ * about to skip WAL-logging, a PendingRelSync entry is created, and
+ * 'sync_above' is set to the current size of the relation. Any operations
+ * on blocks < sync_above need to be WAL-logged as usual, but for operations
+ * on higher blocks, WAL-logging is skipped.
+ *
+ * NB: after WAL-logging has been skipped for a block, we must not WAL-log
+ * any subsequent actions on the same block either. Replaying the WAL record
+ * of the subsequent action might fail otherwise, as the "before" state of
+ * the block might not match, as the earlier actions were not WAL-logged.
+ * Likewise, after we have WAL-logged an operation for a block, we must
+ * WAL-log any subsequent operations on the same page as well. Replaying
+ * a possible full-page-image from the earlier WAL record would otherwise
+ * revert the page to the old state, even if we sync the relation at end
+ * of transaction.
+ *
+ * If a relation is truncated (without creating a new relfilenode), and we
+ * emit a WAL record of the truncation, we can't skip WAL-logging for any
+ * of the truncated blocks anymore, as replaying the truncation record will
+ * destroy all the data inserted after that. But if we have already decided
+ * to skip WAL-logging changes to a relation, and the relation is truncated,
+ * we don't need to WAL-log the truncation either.
+ *
+ * This mechanism is currently only used by heaps. Indexes are always
+ * WAL-logged. Also, this only applies for wal_level=minimal; with higher
+ * WAL levels we need the WAL for PITR/replication anyway.
+ */
+typedef struct PendingRelSync
+{
+	RelFileNode relnode;		/* relation created in same xact */
+	BlockNumber sync_above;		/* WAL-logging skipped for blocks >=
+								 * sync_above */
+	BlockNumber truncated_to;	/* truncation WAL record was written */
+}	PendingRelSync;
+
+/* Relations that need to be fsync'd at commit */
+static HTAB *pendingSyncs = NULL;
+
+static void createPendingSyncsHash(void);
 
 /*
  * RelationCreateStorage
@@ -226,6 +270,8 @@ RelationPreserveStorage(RelFileNode rnode, bool atCommit)
 void
 RelationTruncate(Relation rel, BlockNumber nblocks)
 {
+	PendingRelSync *pending = NULL;
+	bool		found;
 	bool		fsm;
 	bool		vm;
 
@@ -260,35 +306,79 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 */
 	if (RelationNeedsWAL(rel))
 	{
-		/*
-		 * Make an XLOG entry reporting the file truncation.
-		 */
-		XLogRecPtr	lsn;
-		xl_smgr_truncate xlrec;
+		/* no_pending_sync is ignored since new entry is created here */
+		if (!rel->pending_sync)
+		{
+			if (!pendingSyncs)
+				createPendingSyncsHash();
+			elog(DEBUG2, "RelationTruncate: accessing hash");
+			pending = (PendingRelSync *) hash_search(pendingSyncs,
+												 (void *) &rel->rd_node,
+												 HASH_ENTER, &found);
+			if (!found)
+			{
+				pending->sync_above = InvalidBlockNumber;
+				pending->truncated_to = InvalidBlockNumber;
+			}
 
-		xlrec.blkno = nblocks;
-		xlrec.rnode = rel->rd_node;
-		xlrec.flags = SMGR_TRUNCATE_ALL;
+			rel->no_pending_sync= false;
+			rel->pending_sync = pending;
+		}
 
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+		if (rel->pending_sync->sync_above == InvalidBlockNumber ||
+			rel->pending_sync->sync_above < nblocks)
+		{
+			/*
+			 * Make an XLOG entry reporting the file truncation.
+			 */
+			XLogRecPtr		lsn;
+			xl_smgr_truncate xlrec;
 
-		lsn = XLogInsert(RM_SMGR_ID,
-						 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+			xlrec.blkno = nblocks;
+			xlrec.rnode = rel->rd_node;
 
-		/*
-		 * Flush, because otherwise the truncation of the main relation might
-		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or visibility map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or visibility map would still
-		 * contain entries for the non-existent heap pages.
-		 */
-		if (fsm || vm)
-			XLogFlush(lsn);
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+
+			lsn = XLogInsert(RM_SMGR_ID,
+							 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+
+			elog(DEBUG2, "WAL-logged truncation of rel %u/%u/%u to %u blocks",
+				 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+				 nblocks);
+
+			/*
+			 * Flush, because otherwise the truncation of the main relation
+			 * might hit the disk before the WAL record, and the truncation of
+			 * the FSM or visibility map. If we crashed during that window,
+			 * we'd be left with a truncated heap, but the FSM or visibility
+			 * map would still contain entries for the non-existent heap
+			 * pages.
+			 */
+			if (fsm || vm)
+				XLogFlush(lsn);
+
+			rel->pending_sync->truncated_to = nblocks;
+		}
 	}
 
 	/* Do the real work */
 	smgrtruncate(rel->rd_smgr, MAIN_FORKNUM, nblocks);
+}
+
+/* create the hash table to track pending at-commit fsyncs */
+static void
+createPendingSyncsHash(void)
+{
+	/* First time through: initialize the hash table */
+	HASHCTL		ctl;
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(RelFileNode);
+	ctl.entrysize = sizeof(PendingRelSync);
+	ctl.hash = tag_hash;
+	pendingSyncs = hash_create("pending relation sync table", 5,
+							   &ctl, HASH_ELEM | HASH_FUNCTION);
 }
 
 /*
@@ -369,6 +459,24 @@ smgrDoPendingDeletes(bool isCommit)
 }
 
 /*
+ * RelationRemovePendingSync() -- remove pendingSync entry for a relation
+ */
+void
+RelationRemovePendingSync(Relation rel)
+{
+	bool found;
+
+	rel->pending_sync = NULL;
+	rel->no_pending_sync = true;
+	if (pendingSyncs)
+	{
+		elog(DEBUG2, "RelationRemovePendingSync: accessing hash");
+		hash_search(pendingSyncs, (void *) &rel->rd_node, HASH_REMOVE, &found);
+	}
+}
+
+
+/*
  * smgrGetPendingDeletes() -- Get a list of non-temp relations to be deleted.
  *
  * The return value is the number of relations scheduled for termination.
@@ -417,6 +525,176 @@ smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr)
 		}
 	}
 	return nrels;
+}
+
+
+/*
+ * Remember that the given relation needs to be sync'd at commit, because we
+ * are going to skip WAL-logging subsequent actions to it.
+ */
+void
+RecordPendingSync(Relation rel)
+{
+	bool found = true;
+	BlockNumber nblocks;
+
+	Assert(RelationNeedsWAL(rel));
+
+	/* ignore no_pending_sync since new entry is created here */
+	if (!rel->pending_sync)
+	{
+		if (!pendingSyncs)
+			createPendingSyncsHash();
+
+		/* Look up or create an entry */
+		rel->no_pending_sync = false;
+		elog(DEBUG2, "RecordPendingSync: accessing hash");
+		rel->pending_sync =
+			(PendingRelSync *) hash_search(pendingSyncs,
+										   (void *) &rel->rd_node,
+										   HASH_ENTER, &found);
+	}
+
+	nblocks = RelationGetNumberOfBlocks(rel);
+	if (!found)
+	{
+		rel->pending_sync->truncated_to = InvalidBlockNumber;
+		rel->pending_sync->sync_above = nblocks;
+
+		elog(DEBUG2,
+			 "registering new pending sync for rel %u/%u/%u at block %u",
+			 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+			 nblocks);
+
+	}
+	else if (rel->pending_sync->sync_above == InvalidBlockNumber)
+	{
+		elog(DEBUG2, "registering pending sync for rel %u/%u/%u at block %u",
+			 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+			 nblocks);
+		rel->pending_sync->sync_above = nblocks;
+	}
+	else
+		elog(DEBUG2,
+			 "pending sync for rel %u/%u/%u was already registered at block %u (new %u)",
+			 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+			 rel->pending_sync->sync_above, nblocks);
+}
+
+/*
+ * Do changes to given heap page need to be WAL-logged?
+ *
+ * This takes into account any previous RecordPendingSync() requests.
+ *
+ * Note that it is required to check this before creating any WAL records for
+ * heap pages - it is not merely an optimization! WAL-logging a record, when
+ * we have already skipped a previous WAL record for the same page could lead
+ * to failure at WAL replay, as the "before" state expected by the record
+ * might not match what's on disk. Also, if the heap was truncated earlier, we
+ * must WAL-log any changes to the once-truncated blocks, because replaying
+ * the truncation record will destroy them.
+ */
+bool
+BufferNeedsWAL(Relation rel, Buffer buf)
+{
+	BlockNumber blkno = InvalidBlockNumber;
+
+	if (!RelationNeedsWAL(rel))
+		return false;
+
+	/*
+	 * no point in doing further work if we know that we don't have pending
+	 * sync
+	 */
+	if (!pendingSyncs || rel->no_pending_sync)
+		return true;
+
+	Assert(BufferIsValid(buf));
+
+	elog(DEBUG2, "BufferNeedsWAL(r %d, b %d): hash = %p, ent=%p, neg = %d", rel->rd_id, BufferGetBlockNumber(buf), pendingSyncs, rel->pending_sync, rel->no_pending_sync);
+
+	/* do the real work */
+	if (!rel->pending_sync)
+	{
+		bool found = false;
+
+		/*
+		 * Hold the entry in rel. This relies on the fact that hash entry
+		 * never moves.
+		 */
+		rel->pending_sync =
+			(PendingRelSync *) hash_search(pendingSyncs,
+										   (void *) &rel->rd_node,
+										   HASH_FIND, &found);
+		elog(DEBUG2, "BufferNeedsWAL: accessing hash : %s", found ? "found" : "not found");
+		if (!found)
+		{
+			/* we don't have no one. don't access the hash no longer */
+			rel->no_pending_sync = true;
+			return true;
+		}
+	}
+
+	blkno = BufferGetBlockNumber(buf);
+	if (rel->pending_sync->sync_above == InvalidBlockNumber ||
+		rel->pending_sync->sync_above > blkno)
+	{
+		elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because sync_above is %u",
+			 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+			 blkno, rel->pending_sync->sync_above);
+		return true;
+	}
+
+	/*
+	 * We have emitted a truncation record for this block.
+	 */
+	if (rel->pending_sync->truncated_to != InvalidBlockNumber &&
+		rel->pending_sync->truncated_to <= blkno)
+	{
+		elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because it was truncated earlier in the same xact",
+			 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+			 blkno);
+		return true;
+	}
+
+	elog(DEBUG2, "skipping WAL-logging for rel %u/%u/%u block %u",
+		 rel->rd_node.spcNode, rel->rd_node.dbNode, rel->rd_node.relNode,
+		 blkno);
+
+	return false;
+}
+
+/*
+ * Sync to disk any relations that we skipped WAL-logging for earlier.
+ */
+void
+smgrDoPendingSyncs(bool isCommit)
+{
+	if (!pendingSyncs)
+		return;
+
+	if (isCommit)
+	{
+		HASH_SEQ_STATUS status;
+		PendingRelSync *pending;
+
+		hash_seq_init(&status, pendingSyncs);
+
+		while ((pending = hash_seq_search(&status)) != NULL)
+		{
+			if (pending->sync_above != InvalidBlockNumber)
+			{
+				FlushRelationBuffersWithoutRelCache(pending->relnode, false);
+				smgrimmedsync(smgropen(pending->relnode, InvalidBackendId), MAIN_FORKNUM);
+
+				elog(DEBUG2, "syncing rel %u/%u/%u", pending->relnode.spcNode,
+					 pending->relnode.dbNode, pending->relnode.relNode);
+			}
+		}
+	}
+
+	hash_destroy(pendingSyncs);
+	pendingSyncs = NULL;
 }
 
 /*

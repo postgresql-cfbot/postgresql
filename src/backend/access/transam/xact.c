@@ -2001,6 +2001,9 @@ CommitTransaction(void)
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
+	/* Flush updates to relations that we didn't WAL-logged */
+	smgrDoPendingSyncs(true);
+
 	/*
 	 * Mark serializable transaction as complete for predicate locking
 	 * purposes.  This should be done as late as we can put it and still allow
@@ -2228,6 +2231,9 @@ PrepareTransaction(void)
 
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
+
+	/* Flush updates to relations that we didn't WAL-logged */
+	smgrDoPendingSyncs(true);
 
 	/*
 	 * Mark serializable transaction as complete for predicate locking
@@ -2542,6 +2548,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false);
 	AtAbort_Twophase();
+	smgrDoPendingSyncs(false);	/* abandone pending syncs */
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as

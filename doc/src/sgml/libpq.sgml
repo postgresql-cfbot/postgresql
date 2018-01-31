@@ -1246,6 +1246,24 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-replication" xreflabel="replication">
+      <term><literal>replication</literal></term>
+      <listitem>
+      <para>
+       This option determines if a backend should use the replication
+       protocol. A Boolean value of <literal>true</literal> tells the backend
+       to go into walsender mode, wherein a small set of replication commands
+       can be issued instead of SQL statements. Only the simple query protocol
+       can be used in walsender mode. Passing <literal>database</literal>
+       as the value instructs walsender to connect to the database specified
+       in the <literal>dbname</literal> parameter, which will allow the
+       connection to be used for logical replication from that database.
+       For a detailed description about the replication protocol, consult
+       <xref linkend="protocol-replication"/>.
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-sslmode" xreflabel="sslmode">
       <term><literal>sslmode</literal></term>
       <listitem>

@@ -150,10 +150,12 @@ clause_sides_match_join(RestrictInfo *rinfo, Relids outerrelids,
  *	  it will just duplicate its left input.
  *
  * This is true for a left join for which the join condition cannot match
- * more than one inner-side row.  (There are other possibly interesting
- * cases, but we don't have the infrastructure to prove them.)  We also
- * have to check that the inner side doesn't generate any variables needed
- * above the join.
+ * more than one inner-side row.  We can also allow removal of joins to
+ * relations that may match more than one inner-side row if a DISTINCT or
+ * GROUP BY clause would subsequently remove any duplicates caused by the
+ * join. (There are other possibly interesting cases, but we don't have the
+ * infrastructure to prove them.)  We also have to check that the inner side
+ * doesn't generate any variables needed above the join.
  */
 static bool
 join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
@@ -181,9 +183,11 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 	/*
 	 * Before we go to the effort of checking whether any innerrel variables
 	 * are needed above the join, make a quick check to eliminate cases in
-	 * which we will surely be unable to prove uniqueness of the innerrel.
+	 * which we will surely be unable to remove the join.
 	 */
-	if (!rel_supports_distinctness(root, innerrel))
+	if (!rel_supports_distinctness(root, innerrel) &&
+		root->parse->distinctClause == NIL &&
+		(root->parse->groupClause == NIL || root->parse->hasAggs))
 		return false;
 
 	/* Compute the relid set for the join we are considering */
@@ -235,6 +239,22 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 						innerrel->relids))
 			return false;		/* it does reference innerrel */
 	}
+
+	/*
+	 * When a DISTINCT, DISTINCT ON or GROUP BY clause is present, the
+	 * unreferenced relation's join has no ability to duplicate rows in final
+	 * result set, as any duplicate rows would be removed by the
+	 * DISTINCT/GROUP BY clause anyway.  However, we're unable to apply this
+	 * when aggregate functions are present as we must aggregate any
+	 * duplicated rows.  We needn't bother checking the actual distinct or
+	 * grouping expressions here, as we already know from the above checks
+	 * that no Var is present from the relation we're trying to remove.
+	 */
+	if (root->parse->distinctClause != NIL)
+		return true;
+
+	if (root->parse->groupClause != NIL && !root->parse->hasAggs)
+		return true;
 
 	/*
 	 * Search for mergejoinable clauses that constrain the inner rel against

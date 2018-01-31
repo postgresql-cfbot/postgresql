@@ -1340,6 +1340,34 @@ explain (costs off)
 select d.* from d left join (select id from a union select id from b) s
   on d.a = s.id;
 
+-- check join removal works without a unique index on the left joined table
+-- when a DISTINCT or GROUP BY is present which would remove row duplication
+explain (costs off)
+select distinct a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a;
+
+-- as above but with DISTINCT ON
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+
+-- as above but with GROUP BY
+explain (costs off)
+select a.id,b.id from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+
+-- also ensure the removal works with other relation types.
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a
+left join b on a.b_id = b.id
+left join (values(1),(1)) d(a)
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+
+-- ensure no join removal when we must aggregate any duplicated rows
+explain (costs off)
+select a.id,b.id,count(*) from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+
 -- check join removal with a cross-type comparison operator
 explain (costs off)
 select i8.* from int8_tbl i8 left join (select f1 from int4_tbl group by f1) i4

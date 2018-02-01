@@ -3250,6 +3250,13 @@ pltcl_build_tuple_result(Tcl_Interp *interp, Tcl_Obj **kvObjv, int kvObjc,
 					 errmsg("cannot set system attribute \"%s\"",
 							fieldName)));
 
+		if (call_state->trigdata &&
+			get_attgenerated(RelationGetRelid(call_state->trigdata->tg_relation), attn))
+			ereport(ERROR,
+					(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+					 errmsg("cannot set generated column \"%s\"",
+							fieldName)));
+
 		values[attn - 1] = utf_u2e(Tcl_GetString(kvObjv[i + 1]));
 	}
 

@@ -67,6 +67,7 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
+#include "parser/parsetree.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
@@ -144,37 +145,37 @@ static List *insert_ordered_unique_oid(List *list, Oid datum);
 static FormData_pg_attribute a1 = {
 	0, {"ctid"}, TIDOID, 0, sizeof(ItemPointerData),
 	SelfItemPointerAttributeNumber, 0, -1, -1,
-	false, 'p', 's', true, false, '\0', false, true, 0
+	false, 'p', 's', true, false, '\0', '\0', false, true, 0
 };
 
 static FormData_pg_attribute a2 = {
 	0, {"oid"}, OIDOID, 0, sizeof(Oid),
 	ObjectIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 static FormData_pg_attribute a3 = {
 	0, {"xmin"}, XIDOID, 0, sizeof(TransactionId),
 	MinTransactionIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 static FormData_pg_attribute a4 = {
 	0, {"cmin"}, CIDOID, 0, sizeof(CommandId),
 	MinCommandIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 static FormData_pg_attribute a5 = {
 	0, {"xmax"}, XIDOID, 0, sizeof(TransactionId),
 	MaxTransactionIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 static FormData_pg_attribute a6 = {
 	0, {"cmax"}, CIDOID, 0, sizeof(CommandId),
 	MaxCommandIdAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 /*
@@ -186,7 +187,7 @@ static FormData_pg_attribute a6 = {
 static FormData_pg_attribute a7 = {
 	0, {"tableoid"}, OIDOID, 0, sizeof(Oid),
 	TableOidAttributeNumber, 0, -1, -1,
-	true, 'p', 'i', true, false, '\0', false, true, 0
+	true, 'p', 'i', true, false, '\0', '\0', false, true, 0
 };
 
 static const Form_pg_attribute SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &a6, &a7};
@@ -625,6 +626,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	values[Anum_pg_attribute_attnotnull - 1] = BoolGetDatum(new_attribute->attnotnull);
 	values[Anum_pg_attribute_atthasdef - 1] = BoolGetDatum(new_attribute->atthasdef);
 	values[Anum_pg_attribute_attidentity - 1] = CharGetDatum(new_attribute->attidentity);
+	values[Anum_pg_attribute_attgenerated - 1] = CharGetDatum(new_attribute->attgenerated);
 	values[Anum_pg_attribute_attisdropped - 1] = BoolGetDatum(new_attribute->attisdropped);
 	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
 	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
@@ -1939,6 +1941,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	Relation	attrrel;
 	HeapTuple	atttup;
 	Form_pg_attribute attStruct;
+	char		attgenerated;
 	Oid			attrdefOid;
 	ObjectAddress colobject,
 				defobject;
@@ -1994,6 +1997,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 			 attnum, RelationGetRelid(rel));
 	attStruct = (Form_pg_attribute) GETSTRUCT(atttup);
+	attgenerated = attStruct->attgenerated;
 	if (!attStruct->atthasdef)
 	{
 		attStruct->atthasdef = true;
@@ -2015,7 +2019,26 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	/*
 	 * Record dependencies on objects used in the expression, too.
 	 */
-	recordDependencyOnExpr(&defobject, expr, NIL, DEPENDENCY_NORMAL);
+	if (attgenerated)
+	{
+		/*
+		 * Generated column: Dropping anything that the generation expression
+		 * refers to automatically drops the generated column.
+		 */
+		recordDependencyOnSingleRelExpr(&colobject, expr, RelationGetRelid(rel),
+										DEPENDENCY_AUTO,
+										DEPENDENCY_AUTO, false);
+	}
+	else
+	{
+		/*
+		 * Normal default: Dropping anything that the default refers to
+		 * requires CASCADE and drops the default only.
+		 */
+		recordDependencyOnSingleRelExpr(&defobject, expr, RelationGetRelid(rel),
+										DEPENDENCY_NORMAL,
+										DEPENDENCY_NORMAL, false);
+	}
 
 	/*
 	 * Post creation hook for attribute defaults.
@@ -2279,7 +2302,8 @@ AddRelationNewConstraints(Relation rel,
 
 		expr = cookDefault(pstate, colDef->raw_default,
 						   atp->atttypid, atp->atttypmod,
-						   NameStr(atp->attname));
+						   NameStr(atp->attname),
+						   atp->attgenerated);
 
 		/*
 		 * If the expression is just a NULL constant, we do not bother to make
@@ -2645,6 +2669,46 @@ SetRelationNumChecks(Relation rel, int numchecks)
 }
 
 /*
+ * Check for references to generated columns
+ */
+static bool
+check_nested_generated_walker(Node *node, void *context)
+{
+	ParseState *pstate = context;
+
+	if (node == NULL)
+		return false;
+	else if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+
+		relid = getrelid(var->varno, pstate->p_rtable);
+		attnum = var->varattno;
+
+		if (relid && attnum && get_attgenerated(relid, attnum))
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("cannot use generated column \"%s\" in column generation expression",
+							get_attname(relid, attnum)),
+					 errdetail("A generated column cannot reference another generated column."),
+					 parser_errposition(pstate, var->location)));
+
+		return false;
+	}
+	else
+		return expression_tree_walker(node, check_nested_generated_walker,
+									  (void *) context);
+}
+
+static void
+check_nested_generated(ParseState *pstate, Node *node)
+{
+	check_nested_generated_walker(node, pstate);
+}
+
+/*
  * Take a raw default and convert it to a cooked format ready for
  * storage.
  *
@@ -2661,7 +2725,8 @@ cookDefault(ParseState *pstate,
 			Node *raw_default,
 			Oid atttypid,
 			int32 atttypmod,
-			const char *attname)
+			const char *attname,
+			char attgenerated)
 {
 	Node	   *expr;
 
@@ -2670,16 +2735,19 @@ cookDefault(ParseState *pstate,
 	/*
 	 * Transform raw parsetree to executable expression.
 	 */
-	expr = transformExpr(pstate, raw_default, EXPR_KIND_COLUMN_DEFAULT);
+	expr = transformExpr(pstate, raw_default, attgenerated ? EXPR_KIND_GENERATED_COLUMN : EXPR_KIND_COLUMN_DEFAULT);
 
 	/*
 	 * Make sure default expr does not refer to any vars (we need this check
 	 * since the pstate includes the target table).
 	 */
-	if (contain_var_clause(expr))
+	if (!attgenerated && contain_var_clause(expr))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 				 errmsg("cannot use column references in default expression")));
+
+	if (attgenerated)
+		check_nested_generated(pstate, expr);
 
 	/*
 	 * transformExpr() should have already rejected subqueries, aggregates,

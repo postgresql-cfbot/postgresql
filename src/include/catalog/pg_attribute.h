@@ -136,6 +136,9 @@ CATALOG(pg_attribute,1249) BKI_BOOTSTRAP BKI_WITHOUT_OIDS BKI_ROWTYPE_OID(75) BK
 	/* One of the ATTRIBUTE_IDENTITY_* constants below, or '\0' */
 	char		attidentity BKI_DEFAULT("");
 
+	/* One of the ATTRIBUTE_GENERATED_* constants below, or '\0' */
+	char		attgenerated BKI_DEFAULT("");
+
 	/* Is dropped (ie, logically invisible) or not */
 	bool		attisdropped BKI_DEFAULT(f);
 
@@ -191,7 +194,7 @@ typedef FormData_pg_attribute *Form_pg_attribute;
  * ----------------
  */
 
-#define Natts_pg_attribute				22
+#define Natts_pg_attribute				23
 #define Anum_pg_attribute_attrelid		1
 #define Anum_pg_attribute_attname		2
 #define Anum_pg_attribute_atttypid		3
@@ -207,13 +210,14 @@ typedef FormData_pg_attribute *Form_pg_attribute;
 #define Anum_pg_attribute_attnotnull	13
 #define Anum_pg_attribute_atthasdef		14
 #define Anum_pg_attribute_attidentity	15
-#define Anum_pg_attribute_attisdropped	16
-#define Anum_pg_attribute_attislocal	17
-#define Anum_pg_attribute_attinhcount	18
-#define Anum_pg_attribute_attcollation	19
-#define Anum_pg_attribute_attacl		20
-#define Anum_pg_attribute_attoptions	21
-#define Anum_pg_attribute_attfdwoptions 22
+#define Anum_pg_attribute_attgenerated	16
+#define Anum_pg_attribute_attisdropped	17
+#define Anum_pg_attribute_attislocal	18
+#define Anum_pg_attribute_attinhcount	19
+#define Anum_pg_attribute_attcollation	20
+#define Anum_pg_attribute_attacl		21
+#define Anum_pg_attribute_attoptions	22
+#define Anum_pg_attribute_attfdwoptions 23
 
 
 /* ----------------
@@ -227,5 +231,8 @@ typedef FormData_pg_attribute *Form_pg_attribute;
 
 #define		  ATTRIBUTE_IDENTITY_ALWAYS		'a'
 #define		  ATTRIBUTE_IDENTITY_BY_DEFAULT 'd'
+
+/* only one option for now */
+#define		  ATTRIBUTE_GENERATED_VIRTUAL	'v'
 
 #endif							/* PG_ATTRIBUTE_H */

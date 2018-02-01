@@ -1648,13 +1648,19 @@
      <row>
       <entry><literal>is_generated</literal></entry>
       <entry><type>character_data</type></entry>
-      <entry>Applies to a feature not available in <productname>PostgreSQL</productname></entry>
+      <entry>
+       If the column is a generated column, then <literal>ALWAYS</literal>,
+       else <literal>NEVER</literal>.
+      </entry>
      </row>
 
      <row>
       <entry><literal>generation_expression</literal></entry>
       <entry><type>character_data</type></entry>
-      <entry>Applies to a feature not available in <productname>PostgreSQL</productname></entry>
+      <entry>
+       If the column is a generated column, then the generation expression,
+       else null.
+      </entry>
      </row>
 
      <row>

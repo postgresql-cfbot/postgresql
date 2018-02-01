@@ -2814,6 +2814,7 @@ _outColumnDef(StringInfo str, const ColumnDef *node)
 	WRITE_NODE_FIELD(raw_default);
 	WRITE_NODE_FIELD(cooked_default);
 	WRITE_CHAR_FIELD(identity);
+	WRITE_CHAR_FIELD(generated);
 	WRITE_NODE_FIELD(collClause);
 	WRITE_OID_FIELD(collOid);
 	WRITE_NODE_FIELD(constraints);
@@ -3463,6 +3464,14 @@ _outConstraint(StringInfo str, const Constraint *node)
 			WRITE_NODE_FIELD(raw_expr);
 			WRITE_STRING_FIELD(cooked_expr);
 			WRITE_CHAR_FIELD(generated_when);
+			break;
+
+		case CONSTR_GENERATED:
+			appendStringInfoString(str, "GENERATED");
+			WRITE_NODE_FIELD(raw_expr);
+			WRITE_STRING_FIELD(cooked_expr);
+			WRITE_CHAR_FIELD(generated_when);
+			WRITE_CHAR_FIELD(generated_kind);
 			break;
 
 		case CONSTR_CHECK:

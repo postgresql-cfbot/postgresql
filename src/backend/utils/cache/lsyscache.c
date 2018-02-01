@@ -837,6 +837,38 @@ get_attnum(Oid relid, const char *attname)
 }
 
 /*
+ * get_attgenerated
+ *
+ *		Given the relation id and the attribute name,
+ *		return the "attgenerated" field from the attribute relation.
+ *
+ *		Returns '\0' if not found.
+ *
+ *		Since not generated is represented by '\0', this can also be used as a
+ *		Boolean test.
+ */
+char
+get_attgenerated(Oid relid, AttrNumber attnum)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache2(ATTNUM,
+						 ObjectIdGetDatum(relid),
+						 Int16GetDatum(attnum));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_attribute att_tup = (Form_pg_attribute) GETSTRUCT(tp);
+		char		result;
+
+		result = att_tup->attgenerated;
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return '\0';
+}
+
+/*
  * get_attidentity
  *
  *		Given the relation id and the attribute name,

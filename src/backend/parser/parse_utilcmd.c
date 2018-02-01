@@ -506,6 +506,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 	bool		saw_nullable;
 	bool		saw_default;
 	bool		saw_identity;
+	bool		saw_generated;
 	ListCell   *clist;
 
 	cxt->columns = lappend(cxt->columns, column);
@@ -613,6 +614,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 	saw_nullable = false;
 	saw_default = false;
 	saw_identity = false;
+	saw_generated = false;
 
 	foreach(clist, column->constraints)
 	{
@@ -692,6 +694,50 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 					column->is_not_null = true;
 					break;
 				}
+
+			case CONSTR_GENERATED:
+				if (cxt->ofType)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("generated colums are not supported on typed tables")));
+				if (cxt->partbound)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("generated columns are not supported on partitions")));
+
+				if (saw_generated)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("multiple generation clauses specified for column \"%s\" of table \"%s\"",
+									column->colname, cxt->relation->relname),
+							 parser_errposition(cxt->pstate,
+												constraint->location)));
+				column->generated = constraint->generated_kind;
+				column->raw_default = constraint->raw_expr;
+				Assert(constraint->cooked_expr == NULL);
+				saw_generated = true;
+
+				/*
+				 * Prevent virtual generated columns from having a domain
+				 * type.  We would have to enforce domain constraints when
+				 * columns underlying the generated column change.  This could
+				 * possibly be implemented, but it's not.
+				 */
+				if (column->generated == ATTRIBUTE_GENERATED_VIRTUAL)
+				{
+					Type		ctype;
+
+					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					if (((Form_pg_type) GETSTRUCT(ctype))->typtype == TYPTYPE_DOMAIN)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("virtual generated column \"%s\" cannot have a domain type",
+										column->colname),
+								 parser_errposition(cxt->pstate,
+													column->location)));
+					ReleaseSysCache(ctype);
+				}
+				break;
 
 			case CONSTR_CHECK:
 				cxt->ckconstraints = lappend(cxt->ckconstraints, constraint);
@@ -777,6 +823,50 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 							column->colname, cxt->relation->relname),
 					 parser_errposition(cxt->pstate,
 										constraint->location)));
+
+		if (saw_default && saw_generated)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("both default and generation expression specified for column \"%s\" of table \"%s\"",
+							column->colname, cxt->relation->relname),
+					 parser_errposition(cxt->pstate,
+										constraint->location)));
+
+		if (saw_identity && saw_generated)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("both identity and generation expression specified for column \"%s\" of table \"%s\"",
+							column->colname, cxt->relation->relname),
+					 parser_errposition(cxt->pstate,
+										constraint->location)));
+
+		/*
+		 * For a generated column, convert the not-null constraint into a full
+		 * check constraint, so that the generation expression can be expanded
+		 * at check time.
+		 */
+		if (column->is_not_null && column->generated)
+		{
+			Constraint *chk = makeNode(Constraint);
+			NullTest *nt = makeNode(NullTest);
+			ColumnRef *cr = makeNode(ColumnRef);
+
+			cr->location = -1;
+			cr->fields = list_make1(makeString(column->colname));
+
+			nt->arg = (Expr *) cr;
+			nt->nulltesttype = IS_NOT_NULL;
+			nt->location = -1;
+
+			chk->contype = CONSTR_CHECK;
+			chk->location = -1;
+			chk->initially_valid = true;
+			chk->raw_expr = (Node *) nt;
+
+			cxt->ckconstraints = lappend(cxt->ckconstraints, chk);
+
+			column->is_not_null = false;
+		}
 	}
 
 	/*
@@ -1024,7 +1114,8 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		 * Copy default, if present and the default has been requested
 		 */
 		if (attribute->atthasdef &&
-			(table_like_clause->options & CREATE_TABLE_LIKE_DEFAULTS))
+			(table_like_clause->options & CREATE_TABLE_LIKE_DEFAULTS ||
+			 table_like_clause->options & CREATE_TABLE_LIKE_GENERATED))
 		{
 			Node	   *this_default = NULL;
 			AttrDefault *attrdef;
@@ -1049,6 +1140,9 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 			 */
 
 			def->cooked_default = this_default;
+			if (attribute->attgenerated &&
+				(table_like_clause->options & CREATE_TABLE_LIKE_GENERATED))
+				def->generated = attribute->attgenerated;
 		}
 
 		/*

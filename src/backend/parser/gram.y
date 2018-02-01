@@ -3546,6 +3546,17 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+			| GENERATED generated_when AS '(' a_expr ')'
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_GENERATED;
+					n->generated_when = $2;
+					n->raw_expr = $5;
+					n->cooked_expr = NULL;
+					n->generated_kind = ATTRIBUTE_GENERATED_VIRTUAL;  /* only option for now */
+					n->location = @1;
+					$$ = (Node *)n;
+				}
 			| REFERENCES qualified_name opt_column_list key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3635,6 +3646,7 @@ TableLikeOption:
 				DEFAULTS			{ $$ = CREATE_TABLE_LIKE_DEFAULTS; }
 				| CONSTRAINTS		{ $$ = CREATE_TABLE_LIKE_CONSTRAINTS; }
 				| IDENTITY_P		{ $$ = CREATE_TABLE_LIKE_IDENTITY; }
+				| GENERATED			{ $$ = CREATE_TABLE_LIKE_GENERATED; }
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
 				| COMMENTS			{ $$ = CREATE_TABLE_LIKE_COMMENTS; }

@@ -62,6 +62,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   NULL |
   CHECK ( <replaceable class="parameter">expression</replaceable> ) [ NO INHERIT ] |
   DEFAULT <replaceable>default_expr</replaceable> |
+  GENERATED ALWAYS AS ( <replaceable>generation_expr</replaceable> ) |
   GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ] |
   UNIQUE <replaceable class="parameter">index_parameters</replaceable> |
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
@@ -82,7 +83,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 
 <phrase>and <replaceable class="parameter">like_option</replaceable> is:</phrase>
 
-{ INCLUDING | EXCLUDING } { DEFAULTS | CONSTRAINTS | IDENTITY | INDEXES | STORAGE | COMMENTS | ALL }
+{ INCLUDING | EXCLUDING } { DEFAULTS | CONSTRAINTS | IDENTITY | GENERATED | INDEXES | STORAGE | COMMENTS | ALL }
 
 <phrase>and <replaceable class="parameter">partition_bound_spec</replaceable> is:</phrase>
 
@@ -586,6 +587,12 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       from the sequences associated with the old table.
      </para>
      <para>
+      Generated columns will only become generated columns in the new table if
+      <literal>INCLUDING GENERATED</literal> is specified, which will copy the
+      generation expression.  Otherwise, the new column will be a regular base
+      column.
+     </para>
+     <para>
       Not-null constraints are always copied to the new table.
       <literal>CHECK</literal> constraints will be copied only if
       <literal>INCLUDING CONSTRAINTS</literal> is specified.
@@ -617,7 +624,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
      <para>
       <literal>INCLUDING ALL</literal> is an abbreviated form of
-      <literal>INCLUDING DEFAULTS INCLUDING IDENTITY INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING STORAGE INCLUDING COMMENTS</literal>.
+      <literal>INCLUDING DEFAULTS INCLUDING IDENTITY INCLUDING GENERATED INCLUDING CONSTRAINTS INCLUDING INDEXES INCLUDING STORAGE INCLUDING COMMENTS</literal>.
      </para>
      <para>
       Note that unlike <literal>INHERITS</literal>, columns and
@@ -727,6 +734,29 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       The default expression will be used in any insert operation that
       does not specify a value for the column.  If there is no default
       for a column, then the default is null.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>GENERATED ALWAYS AS ( <replaceable>generation_expr</replaceable> )</literal><indexterm><primary>generated column</primary></indexterm></term>
+    <listitem>
+     <para>
+      This clause creates the column as a <firstterm>generated
+      column</firstterm>.  The column cannot be written to, and when read it
+      will be computed from the specified expression.
+     </para>
+
+     <para>
+      The current implementation creates a <firstterm>virtual</firstterm>
+      generated column, which means the column will be computed when it is
+      read, and it will not occupy any storage.
+     </para>
+
+     <para>
+      The generation expression can refer to other columns in the table, but
+      not other generated columns.  Any functions and operators used must be
+      immutable.  References to other tables are not allowed.
      </para>
     </listitem>
    </varlistentry>

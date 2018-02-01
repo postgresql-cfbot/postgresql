@@ -1161,6 +1161,17 @@
      </row>
 
      <row>
+      <entry><structfield>attgenerated</structfield></entry>
+      <entry><type>char</type></entry>
+      <entry></entry>
+      <entry>
+       If a zero byte (<literal>''</literal>), then not a generated column.
+       Otherwise, <literal>v</literal> (for virtual, the only option
+       currently).
+      </entry>
+     </row>
+
+     <row>
       <entry><structfield>attisdropped</structfield></entry>
       <entry><type>bool</type></entry>
       <entry></entry>

@@ -2819,6 +2819,7 @@ _copyColumnDef(const ColumnDef *from)
 	COPY_NODE_FIELD(raw_default);
 	COPY_NODE_FIELD(cooked_default);
 	COPY_SCALAR_FIELD(identity);
+	COPY_SCALAR_FIELD(generated);
 	COPY_NODE_FIELD(collClause);
 	COPY_SCALAR_FIELD(collOid);
 	COPY_NODE_FIELD(constraints);
@@ -2842,6 +2843,7 @@ _copyConstraint(const Constraint *from)
 	COPY_NODE_FIELD(raw_expr);
 	COPY_STRING_FIELD(cooked_expr);
 	COPY_SCALAR_FIELD(generated_when);
+	COPY_SCALAR_FIELD(generated_kind);
 	COPY_NODE_FIELD(keys);
 	COPY_NODE_FIELD(exclusions);
 	COPY_NODE_FIELD(options);

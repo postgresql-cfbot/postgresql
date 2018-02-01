@@ -10730,11 +10730,7 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	XLogRecPtr	startpoint;
 	XLogRecPtr	stoppoint;
 	TimeLineID	stoptli;
-	pg_time_t	stamp_time;
-	char		strfbuf[128];
-	char		histfilepath[MAXPGPATH];
 	char		startxlogfilename[MAXFNAMELEN];
-	char		stopxlogfilename[MAXFNAMELEN];
 	char		lastxlogfilename[MAXFNAMELEN];
 	char		histfilename[MAXFNAMELEN];
 	char		backupfrom[20];
@@ -10940,12 +10936,6 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	 * location. Note that it can be greater than the exact backup end
 	 * location if the minimum recovery point is updated after the backup of
 	 * pg_control. This is harmless for current uses.
-	 *
-	 * XXX currently a backup history file is for informational and debug
-	 * purposes only. It's not essential for an online backup. Furthermore,
-	 * even if it's created, it will not be archived during recovery because
-	 * an archiver is not invoked. So it doesn't seem worthwhile to write a
-	 * backup history file during recovery.
 	 */
 	if (backup_started_in_recovery)
 	{
@@ -10990,9 +10980,21 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 		 * valid as soon as archiver moves out the current segment file.
 		 */
 		RequestXLogSwitch(false);
+	}
 
-		XLByteToPrevSeg(stoppoint, _logSegNo, wal_segment_size);
-		XLogFileName(stopxlogfilename, stoptli, _logSegNo, wal_segment_size);
+	/*
+	 * Write the backup history file if archiving is enabled.
+	 *
+	 * XXX currently a backup history file is for informational and debug
+	 * purposes only. It's not essential for an online backup.
+	 */
+	if ((!backup_started_in_recovery && XLogArchivingActive()) ||
+		(backup_started_in_recovery && XLogArchivingAlways()))
+	{
+		char		strfbuf[128];
+		char		histfilepath[MAXPGPATH];
+		char		stopxlogfilename[MAXFNAMELEN];
+		pg_time_t	stamp_time;
 
 		/* Use the log timezone here, not the session timezone */
 		stamp_time = (pg_time_t) time(NULL);
@@ -11000,9 +11002,8 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 					"%Y-%m-%d %H:%M:%S %Z",
 					pg_localtime(&stamp_time, log_timezone));
 
-		/*
-		 * Write the backup history file
-		 */
+		XLByteToPrevSeg(stoppoint, _logSegNo, wal_segment_size);
+		XLogFileName(stopxlogfilename, stoptli, _logSegNo, wal_segment_size);
 		XLByteToSeg(startpoint, _logSegNo, wal_segment_size);
 		BackupHistoryFilePath(histfilepath, stoptli, _logSegNo,
 							  startpoint, wal_segment_size);

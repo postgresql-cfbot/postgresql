@@ -275,7 +275,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		SecLabelStmt SelectStmt TransactionStmt TruncateStmt
 		UnlistenStmt UpdateStmt VacuumStmt
 		VariableResetStmt VariableSetStmt VariableShowStmt
-		ViewStmt CheckPointStmt CreateConversionStmt
+		ViewStmt WaitLSNStmt CheckPointStmt CreateConversionStmt
 		DeallocateStmt PrepareStmt ExecuteStmt
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
@@ -322,7 +322,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	OptSchemaEltList
 
 %type <boolean> TriggerForSpec TriggerForType
-%type <ival>	TriggerActionTime
+%type <ival>	TriggerActionTime WaitDelay
 %type <list>	TriggerEvents TriggerOneEvent
 %type <value>	TriggerFuncArg
 %type <node>	TriggerWhen
@@ -637,7 +637,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
 	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P
-	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
+	INCLUDING INCREMENT INDEX INDEXES INFINITELY INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
@@ -676,7 +676,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SUBSCRIPTION SUBSTRING SYMMETRIC SYSID SYSTEM_P
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
-	TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM TREAT TRIGGER TRIM TRUE_P
+	TIME TIMEOUT TIMESTAMP TO TRAILING TRANSACTION TRANSFORM TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
 	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
@@ -685,7 +685,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
 	VERBOSE VERSION_P VIEW VIEWS VOLATILE
 
-	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
+	WAITLSN WHEN WHERE WHITESPACE_P WINDOW
+	WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
 	XML_P XMLATTRIBUTES XMLCONCAT XMLELEMENT XMLEXISTS XMLFOREST XMLNAMESPACES
 	XMLPARSE XMLPI XMLROOT XMLSERIALIZE XMLTABLE
@@ -937,6 +938,7 @@ stmt :
 			| VariableSetStmt
 			| VariableShowStmt
 			| ViewStmt
+			| WaitLSNStmt
 			| /*EMPTY*/
 				{ $$ = NULL; }
 		;
@@ -14166,6 +14168,44 @@ frame_bound:
 				}
 		;
 
+/*****************************************************************************
+ *
+ *		QUERY:
+ *				WAITLSN <LSN> can appear as a query-level command
+ *
+ *
+ *****************************************************************************/
+
+WaitLSNStmt:
+			WAITLSN Sconst
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = 0;
+					$$ = (Node *)n;
+				}
+			| WAITLSN Sconst TIMEOUT Iconst
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = $4;
+					$$ = (Node *)n;
+				}
+			| WAITLSN Sconst INFINITELY
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = 0;
+					$$ = (Node *)n;
+				}
+			| WAITLSN Sconst NOWAIT
+				{
+					WaitLSNStmt *n = makeNode(WaitLSNStmt);
+					n->lsn = $2;
+					n->delay = 1;
+					$$ = (Node *)n;
+				}
+		;
 
 /*
  * Supporting nonterminals for expressions.
@@ -15041,6 +15081,7 @@ unreserved_keyword:
 			| INCREMENT
 			| INDEX
 			| INDEXES
+			| INFINITELY
 			| INHERIT
 			| INHERITS
 			| INLINE_P
@@ -15182,6 +15223,7 @@ unreserved_keyword:
 			| TEMPLATE
 			| TEMPORARY
 			| TEXT_P
+			| TIMEOUT
 			| TRANSACTION
 			| TRANSFORM
 			| TRIGGER
@@ -15207,6 +15249,7 @@ unreserved_keyword:
 			| VIEW
 			| VIEWS
 			| VOLATILE
+			| WAITLSN
 			| WHITESPACE_P
 			| WITHIN
 			| WITHOUT

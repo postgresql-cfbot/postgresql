@@ -97,7 +97,9 @@
  *		- All transactions share this single lock (with no partitioning).
  *		- There is never a need for a process other than the one running
  *			an active transaction to walk the list of locks held by that
- *			transaction.
+ *			transaction, except parallel query workers sharing the leader's
+ *			transaction.  In the parallel case, an extra per-sxact lock is
+ *			taken; see below.
  *		- It is relatively infrequent that another process needs to
  *			modify the list for a transaction, but it does happen for such
  *			things as index page splits for pages with predicate locks and
@@ -115,6 +117,12 @@
  *		- A process which needs to alter the list of a transaction other
  *			than its own active transaction must acquire an exclusive
  *			lock.
+ *
+ *	SERIALIZABLEXACT's member 'lock'
+ *		- Protects the linked list of locks held by a transaction.  Only
+ *			needed for parallel mode, where multiple backends share the
+ *			same SERIALIZABLEXACT object.  Not needed if
+ *			SerializablePredicateLockListLock is held exclusively.
  *
  *	PredicateLockHashPartitionLock(hashcode)
  *		- The same lock protects a target, all locks on that target, and
@@ -186,6 +194,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/parallel.h"
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -1825,6 +1834,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	SHMQueueInit(&(sxact->predicateLocks));
 	SHMQueueElemInit(&(sxact->finishedLink));
 	sxact->flags = 0;
+	LWLockInitialize(&sxact->lock, LWTRANCHE_SXACT);
 	if (XactReadOnly)
 	{
 		sxact->flags |= SXACT_FLAG_READ_ONLY;
@@ -2107,6 +2117,14 @@ RemoveTargetIfNoLongerUsed(PREDICATELOCKTARGET *target, uint32 targettaghash)
 
 	Assert(LWLockHeldByMe(SerializablePredicateLockListLock));
 
+	if (IsInParallelMode())
+	{
+		Assert(LWLockHeldByMeInMode(SerializablePredicateLockListLock,
+									LW_EXCLUSIVE) ||
+			   LWLockHeldByMeInMode(&MySerializableXact->lock,
+									LW_EXCLUSIVE));
+	}
+
 	/* Can't remove it until no locks at this target. */
 	if (!SHMQueueEmpty(&target->predicateLocks))
 		return;
@@ -2124,7 +2142,9 @@ RemoveTargetIfNoLongerUsed(PREDICATELOCKTARGET *target, uint32 targettaghash)
  * This implementation is assuming that the usage of each target tag field
  * is uniform.  No need to make this hard if we don't have to.
  *
- * We aren't acquiring lightweight locks for the predicate lock or lock
+ * We acquire an LWLock in the case of parallel mode, because worker
+ * backends have access to the leader's SERIALIZABLEXACT.  Otherwise,
+ * we aren't acquiring lightweight locks for the predicate lock or lock
  * target structures associated with this transaction unless we're going
  * to modify them, because no other process is permitted to modify our
  * locks.
@@ -2137,6 +2157,8 @@ DeleteChildTargetLocks(const PREDICATELOCKTARGETTAG *newtargettag)
 
 	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 	sxact = MySerializableXact;
+	if (IsInParallelMode())
+		LWLockAcquire(&sxact->lock, LW_EXCLUSIVE);
 	predlock = (PREDICATELOCK *)
 		SHMQueueNext(&(sxact->predicateLocks),
 					 &(sxact->predicateLocks),
@@ -2190,6 +2212,8 @@ DeleteChildTargetLocks(const PREDICATELOCKTARGETTAG *newtargettag)
 
 		predlock = nextpredlock;
 	}
+	if (IsInParallelMode())
+		LWLockRelease(&sxact->lock);
 	LWLockRelease(SerializablePredicateLockListLock);
 }
 
@@ -2388,6 +2412,8 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 	partitionLock = PredicateLockHashPartitionLock(targettaghash);
 
 	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+	if (IsInParallelMode())
+		LWLockAcquire(&sxact->lock, LW_EXCLUSIVE);
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
 	/* Make sure that the target is represented. */
@@ -2425,6 +2451,8 @@ CreatePredicateLock(const PREDICATELOCKTARGETTAG *targettag,
 	}
 
 	LWLockRelease(partitionLock);
+	if (IsInParallelMode())
+		LWLockRelease(&sxact->lock);
 	LWLockRelease(SerializablePredicateLockListLock);
 }
 
@@ -2612,7 +2640,8 @@ DeleteLockTarget(PREDICATELOCKTARGET *target, uint32 targettaghash)
 	PREDICATELOCK *nextpredlock;
 	bool		found;
 
-	Assert(LWLockHeldByMe(SerializablePredicateLockListLock));
+	Assert(LWLockHeldByMeInMode(SerializablePredicateLockListLock,
+								LW_EXCLUSIVE));
 	Assert(LWLockHeldByMe(PredicateLockHashPartitionLock(targettaghash)));
 
 	predlock = (PREDICATELOCK *)
@@ -2672,7 +2701,7 @@ DeleteLockTarget(PREDICATELOCKTARGET *target, uint32 targettaghash)
  * covers it, or if we are absolutely certain that no one will need to
  * refer to that lock in the future.
  *
- * Caller must hold SerializablePredicateLockListLock.
+ * Caller must hold SerializablePredicateLockListLock exclusively.
  */
 static bool
 TransferPredicateLocksToNewTarget(PREDICATELOCKTARGETTAG oldtargettag,
@@ -2687,7 +2716,8 @@ TransferPredicateLocksToNewTarget(PREDICATELOCKTARGETTAG oldtargettag,
 	bool		found;
 	bool		outOfShmem = false;
 
-	Assert(LWLockHeldByMe(SerializablePredicateLockListLock));
+	Assert(LWLockHeldByMeInMode(SerializablePredicateLockListLock,
+								LW_EXCLUSIVE));
 
 	oldtargettaghash = PredicateLockTargetTagHashCode(&oldtargettag);
 	newtargettaghash = PredicateLockTargetTagHashCode(&newtargettag);
@@ -3284,6 +3314,10 @@ ReleasePredicateLocks(bool isCommit)
 	 */
 	bool		topLevelIsDeclaredReadOnly;
 
+	/* Only leader processes should release predicate locks. */
+	if (IsParallelWorker())
+		goto cleanup;
+
 	if (MySerializableXact == InvalidSerializableXact)
 	{
 		Assert(LocalPredicateLockHash == NULL);
@@ -3570,6 +3604,7 @@ ReleasePredicateLocks(bool isCommit)
 	MySerializableXact = InvalidSerializableXact;
 	MyXactDidWrite = false;
 
+cleanup:
 	/* Delete per-transaction lock table */
 	if (LocalPredicateLockHash != NULL)
 	{
@@ -4259,6 +4294,8 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 		PREDICATELOCK *rmpredlock;
 
 		LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
+		if (IsInParallelMode())
+			LWLockAcquire(&MySerializableXact->lock, LW_EXCLUSIVE);
 		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 		LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
@@ -4293,6 +4330,8 @@ CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag)
 
 		LWLockRelease(SerializableXactHashLock);
 		LWLockRelease(partitionLock);
+		if (IsInParallelMode())
+			LWLockRelease(&MySerializableXact->lock);
 		LWLockRelease(SerializablePredicateLockListLock);
 
 		if (rmpredlock != NULL)
@@ -4841,6 +4880,11 @@ AtPrepare_PredicateLocks(void)
 	 */
 	LWLockAcquire(SerializablePredicateLockListLock, LW_SHARED);
 
+	/*
+	 * No need to take sxact->lock in parallel mode because there cannot be
+	 * any parallel workers running while we are preparing a transaction.
+	 */
+
 	predlock = (PREDICATELOCK *)
 		SHMQueueNext(&(sxact->predicateLocks),
 					 &(sxact->predicateLocks),
@@ -5048,4 +5092,23 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 
 		CreatePredicateLock(&lockRecord->target, targettaghash, sxact);
 	}
+}
+
+/*
+ * Accessor to allow parallel leaders to export the current SERIALIZABLEXACT
+ * to parallel workers.
+ */
+SERIALIZABLEXACT *
+GetSerializableXact(void)
+{
+	return MySerializableXact;
+}
+
+/*
+ * Allow parallel workers to import the leader's SERIALIZABLEXACT.
+ */
+void
+SetSerializableXact(SERIALIZABLEXACT *sxact)
+{
+	MySerializableXact = sxact;
 }

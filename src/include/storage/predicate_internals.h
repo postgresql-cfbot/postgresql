@@ -15,6 +15,7 @@
 #define PREDICATE_INTERNALS_H
 
 #include "storage/lock.h"
+#include "storage/lwlock.h"
 
 /*
  * Commit number.
@@ -90,6 +91,9 @@ typedef struct SERIALIZABLEXACT
 	SHM_QUEUE	predicateLocks; /* list of associated PREDICATELOCK objects */
 	SHM_QUEUE	finishedLink;	/* list link in
 								 * FinishedSerializableTransactions */
+
+	/* lock to protect predicateLocks list in parallel mode */
+	LWLock		lock;
 
 	/*
 	 * for r/o transactions: list of concurrent r/w transactions that we could
@@ -475,5 +479,7 @@ typedef struct TwoPhasePredicateRecord
 extern PredicateLockData *GetPredicateLockStatusData(void);
 extern int GetSafeSnapshotBlockingPids(int blocked_pid,
 							int *output, int output_size);
+extern SERIALIZABLEXACT *GetSerializableXact(void);
+extern void SetSerializableXact(SERIALIZABLEXACT *sxact);
 
 #endif							/* PREDICATE_INTERNALS_H */

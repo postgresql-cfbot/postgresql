@@ -29,6 +29,7 @@
 #include "optimizer/planmain.h"
 #include "pgstat.h"
 #include "storage/ipc.h"
+#include "storage/predicate_internals.h"
 #include "storage/sinval.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
@@ -85,6 +86,7 @@ typedef struct FixedParallelState
 	PGPROC	   *parallel_master_pgproc;
 	pid_t		parallel_master_pid;
 	BackendId	parallel_master_backend_id;
+	SERIALIZABLEXACT *parallel_master_serializablexact;
 
 	/* Mutex protects remaining fields. */
 	slock_t		mutex;
@@ -162,14 +164,6 @@ CreateParallelContext(const char *library_name, const char *function_name,
 	 * background workers.
 	 */
 	if (dynamic_shared_memory_type == DSM_IMPL_NONE)
-		nworkers = 0;
-
-	/*
-	 * If we are running under serializable isolation, we can't use parallel
-	 * workers, at least not until somebody enhances that mechanism to be
-	 * parallel-aware.
-	 */
-	if (IsolationIsSerializable())
 		nworkers = 0;
 
 	/* We might be running in a short-lived memory context. */
@@ -315,6 +309,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	fps->parallel_master_pgproc = MyProc;
 	fps->parallel_master_pid = MyProcPid;
 	fps->parallel_master_backend_id = MyBackendId;
+	fps->parallel_master_serializablexact = GetSerializableXact();
 	SpinLockInit(&fps->mutex);
 	fps->last_xlog_end = 0;
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_FIXED, fps);
@@ -1238,6 +1233,9 @@ ParallelWorkerMain(Datum main_arg)
 	/* Restore reindex state. */
 	reindexspace = shm_toc_lookup(toc, PARALLEL_KEY_REINDEX_STATE, false);
 	RestoreReindexState(reindexspace);
+
+	/* Use the leader's SERIALIZABLEXACT. */
+	SetSerializableXact(fps->parallel_master_serializablexact);
 
 	/*
 	 * We've initialized all of our state now; nothing should change

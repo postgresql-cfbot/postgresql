@@ -17546,7 +17546,8 @@ SELECT collation for ('foo' COLLATE "de_DE");
    This description is intended to be human-readable, and might be translated,
    depending on server configuration.
    This is useful to determine the identity of an object as stored in the
-   <structname>pg_depend</structname> catalog.
+   <structname>pg_depend</structname> catalog. This function returns
+   <literal>NULL</literal> values for undefined objects.
   </para>
 
   <para>
@@ -17562,7 +17563,8 @@ SELECT collation for ('foo' COLLATE "de_DE");
    identifier of the object, otherwise <literal>NULL</literal>;
    <parameter>identity</parameter> is the complete object identity, with the precise format
    depending on object type, and each part within the format being
-   schema-qualified and quoted as necessary.
+   schema-qualified and quoted as necessary. Undefined objects are identified
+   with <literal>NULL</literal> values.
   </para>
 
   <para>
@@ -17577,6 +17579,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
    <function>pg_get_object_address</function> to obtain the internal address
    of the object.
    This function is the inverse of <function>pg_get_object_address</function>.
+   Undefined objects are identified with <literal>NULL</literal> values.
   </para>
 
   <para>

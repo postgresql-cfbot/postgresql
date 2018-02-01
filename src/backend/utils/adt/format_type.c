@@ -28,9 +28,6 @@
 
 #define MAX_INT32_LEN 11
 
-static char *format_type_internal(Oid type_oid, int32 typemod,
-					 bool typemod_given, bool allow_invalid,
-					 bool force_qualify);
 static char *printTypmod(const char *typname, int32 typmod, Oid typmodout);
 
 
@@ -74,11 +71,11 @@ format_type(PG_FUNCTION_ARGS)
 	type_oid = PG_GETARG_OID(0);
 
 	if (PG_ARGISNULL(1))
-		result = format_type_internal(type_oid, -1, false, true, false);
+		result = format_type_extended(type_oid, -1, false, true, false);
 	else
 	{
 		typemod = PG_GETARG_INT32(1);
-		result = format_type_internal(type_oid, typemod, true, true, false);
+		result = format_type_extended(type_oid, typemod, true, true, false);
 	}
 
 	PG_RETURN_TEXT_P(cstring_to_text(result));
@@ -93,7 +90,7 @@ format_type(PG_FUNCTION_ARGS)
 char *
 format_type_be(Oid type_oid)
 {
-	return format_type_internal(type_oid, -1, false, false, false);
+	return format_type_extended(type_oid, -1, false, false, false);
 }
 
 /*
@@ -103,7 +100,7 @@ format_type_be(Oid type_oid)
 char *
 format_type_be_qualified(Oid type_oid)
 {
-	return format_type_internal(type_oid, -1, false, false, true);
+	return format_type_extended(type_oid, -1, false, false, true);
 }
 
 /*
@@ -112,7 +109,7 @@ format_type_be_qualified(Oid type_oid)
 char *
 format_type_with_typemod(Oid type_oid, int32 typemod)
 {
-	return format_type_internal(type_oid, typemod, true, false, false);
+	return format_type_extended(type_oid, typemod, true, false, false);
 }
 
 /*
@@ -122,14 +119,14 @@ format_type_with_typemod(Oid type_oid, int32 typemod)
 char *
 format_type_with_typemod_qualified(Oid type_oid, int32 typemod)
 {
-	return format_type_internal(type_oid, typemod, true, false, true);
+	return format_type_extended(type_oid, typemod, true, false, true);
 }
 
 /*
  * Common workhorse.
  */
-static char *
-format_type_internal(Oid type_oid, int32 typemod,
+char *
+format_type_extended(Oid type_oid, int32 typemod,
 					 bool typemod_given, bool allow_invalid,
 					 bool force_qualify)
 {
@@ -141,7 +138,7 @@ format_type_internal(Oid type_oid, int32 typemod,
 	char	   *buf;
 
 	if (type_oid == InvalidOid && allow_invalid)
-		return pstrdup("-");
+			return pstrdup("-");
 
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
 	if (!HeapTupleIsValid(tuple))
@@ -437,7 +434,7 @@ oidvectortypes(PG_FUNCTION_ARGS)
 
 	for (num = 0; num < numargs; num++)
 	{
-		char	   *typename = format_type_internal(oidArray->values[num], -1,
+		char	   *typename = format_type_extended(oidArray->values[num], -1,
 													false, true, false);
 		size_t		slen = strlen(typename);
 

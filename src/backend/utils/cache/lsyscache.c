@@ -768,10 +768,11 @@ get_opfamily_proc(Oid opfamily, Oid lefttype, Oid righttype, int16 procnum)
  *		Given the relation id and the attribute number,
  *		return the "attname" field from the attribute relation.
  *
- * Note: returns a palloc'd copy of the string, or NULL if no such attribute.
+ * Note: returns a palloc'd copy of the string. In the event if an error,
+ * return NULL if missing_ok is true.
  */
 char *
-get_attname(Oid relid, AttrNumber attnum)
+get_attname(Oid relid, AttrNumber attnum, bool missing_ok)
 {
 	HeapTuple	tp;
 
@@ -787,26 +788,12 @@ get_attname(Oid relid, AttrNumber attnum)
 		ReleaseSysCache(tp);
 		return result;
 	}
-	else
+
+	if (missing_ok)
 		return NULL;
-}
 
-/*
- * get_relid_attribute_name
- *
- * Same as above routine get_attname(), except that error
- * is handled by elog() instead of returning NULL.
- */
-char *
-get_relid_attribute_name(Oid relid, AttrNumber attnum)
-{
-	char	   *attname;
-
-	attname = get_attname(relid, attnum);
-	if (attname == NULL)
-		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
-			 attnum, relid);
-	return attname;
+	elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+		 attnum, relid);
 }
 
 /*

@@ -116,6 +116,9 @@ extern char *format_type_be(Oid type_oid);
 extern char *format_type_be_qualified(Oid type_oid);
 extern char *format_type_with_typemod(Oid type_oid, int32 typemod);
 extern char *format_type_with_typemod_qualified(Oid type_oid, int32 typemod);
+extern char *format_type_extended(Oid type_oid, int32 typemod,
+								  bool typemod_given, bool allow_invalid,
+								  bool force_qualify);
 extern int32 type_maximum_size(Oid type_oid, int32 typemod);
 
 /* quote.c */

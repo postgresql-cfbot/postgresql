@@ -18,10 +18,31 @@
  *	  This module includes server facing code and shares libpqwalreceiver
  *	  module with walreceiver for providing the libpq specific functionality.
  *
+ *
+ * STREAMED TRANSACTIONS
+ * ---------------------
+ *
+ * Streamed transactions (large transactions exceeding a memory limit on the
+ * upstream) are not applied immediately, but instead the data is written
+ * to files and then applied at once when the final commit arrives.
+ *
+ * Unlike the regular (non-streamed) case, handling streamed transactions has
+ * to handle aborts of both the toplevel transaction and subtransactions. This
+ * is achieved by tracking offsets for subtransactions, which is then used
+ * to truncate the file with serialized changes.
+ *
+ * The files are placed in /tmp by default, and the filenames include both
+ * the XID of the toplevel transaction and OID of the subscription. This
+ * is necessary so that different workers processing a remote transaction
+ * with the same XID don't interfere.
+ *
  *-------------------------------------------------------------------------
  */
 
 #include "postgres.h"
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -33,6 +54,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
+#include "catalog/pg_tablespace.h"
 
 #include "commands/trigger.h"
 
@@ -68,6 +90,7 @@
 #include "rewrite/rewriteHandler.h"
 
 #include "storage/bufmgr.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -77,6 +100,7 @@
 
 #include "utils/builtins.h"
 #include "utils/catcache.h"
+#include "utils/dynahash.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
@@ -115,6 +139,43 @@ bool		MySubscriptionValid = false;
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
 
+/* fields valid only when processing streamed transaction */
+bool		in_streamed_transaction = false;
+
+static TransactionId stream_xid = InvalidTransactionId;
+static int	stream_fd = -1;
+
+typedef struct SubXactInfo
+{
+	TransactionId xid;			/* XID of the subxact */
+	off_t		offset;			/* offset in the file */
+}			SubXactInfo;
+
+static uint32 nsubxacts = 0;
+static uint32 nsubxacts_max = 0;
+static SubXactInfo * subxacts = NULL;
+static TransactionId subxact_last = InvalidTransactionId;
+
+static void subxact_filename(char *path, Oid subid, TransactionId xid);
+static void changes_filename(char *path, Oid subid, TransactionId xid);
+
+/*
+ * Information about subtransactions of a given toplevel transaction.
+ */
+static void subxact_info_write(Oid subid, TransactionId xid);
+static void subxact_info_read(Oid subid, TransactionId xid);
+static void subxact_info_add(TransactionId xid);
+
+/*
+ * Serialize and deserialize changes for a toplevel transaction.
+ */
+static void stream_cleanup_files(Oid subid, TransactionId xid);
+static void stream_open_file(Oid subid, TransactionId xid, bool first);
+static void stream_write_change(char action, StringInfo s);
+static void stream_close_file(void);
+
+static bool handle_streamed_transaction(const char action, StringInfo s);
+
 static void send_feedback(XLogRecPtr recvpos, bool force, bool requestReply);
 
 static void store_flush_position(XLogRecPtr remote_lsn);
@@ -123,6 +184,9 @@ static void maybe_reread_subscription(void);
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;
+
+/* prototype needed because of stream_commit */
+static void apply_dispatch(StringInfo s);
 
 /*
  * Should this worker apply changes for given relation.
@@ -175,6 +239,42 @@ ensure_transaction(void)
 	return true;
 }
 
+/*
+ * Handle streamed transactions.
+ *
+ * If in streaming mode (receiving a block of streamed transaction), we
+ * simply redirect it to a file for the proper toplevel transaction.
+ *
+ * Returns true for streamed transactions, false otherwise (regular mode).
+ */
+static bool
+handle_streamed_transaction(const char action, StringInfo s)
+{
+	TransactionId xid;
+
+	/* not in streaming mode */
+	if (!in_streamed_transaction)
+		return false;
+
+	Assert(stream_fd != -1);
+	Assert(TransactionIdIsValid(stream_xid));
+
+	/*
+	 * We should have received XID of the subxact as the first part of the
+	 * message, so extract it.
+	 */
+	xid = pq_getmsgint(s, 4);
+
+	Assert(TransactionIdIsValid(xid));
+
+	/* Add the new subxact to the array (unless already there). */
+	subxact_info_add(xid);
+
+	/* write the change to the current file */
+	stream_write_change(action, s);
+
+	return true;
+}
 
 /*
  * Executor state preparation for evaluation of constraint expressions,
@@ -507,6 +607,318 @@ apply_handle_origin(StringInfo s)
 }
 
 /*
+ * Handle STREAM START message.
+ */
+static void
+apply_handle_stream_start(StringInfo s)
+{
+	bool		first_segment;
+
+	Assert(!in_streamed_transaction);
+
+	/* notify handle methods we're processing a remote transaction */
+	in_streamed_transaction = true;
+
+	/* extract XID of the top-level transaction */
+	stream_xid = logicalrep_read_stream_start(s, &first_segment);
+
+	/* open the spool file for this transaction */
+	stream_open_file(MyLogicalRepWorker->subid, stream_xid, first_segment);
+
+	/*
+	 * if this is not the first segment, open existing file
+	 *
+	 * XXX Note that the cleanup is performed by stream_open_file.
+	 */
+	if (!first_segment)
+		subxact_info_read(MyLogicalRepWorker->subid, stream_xid);
+
+	pgstat_report_activity(STATE_RUNNING, NULL);
+}
+
+/*
+ * Handle STREAM STOP message.
+ */
+static void
+apply_handle_stream_stop(StringInfo s)
+{
+	Assert(in_streamed_transaction);
+
+	/*
+	 * Close the file with serialized changes, and serialize information about
+	 * subxacts for the toplevel transaction.
+	 */
+	subxact_info_write(MyLogicalRepWorker->subid, stream_xid);
+	stream_close_file();
+
+	in_streamed_transaction = false;
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
+ * Handle STREAM abort message.
+ */
+static void
+apply_handle_stream_abort(StringInfo s)
+{
+	TransactionId xid;
+	TransactionId subxid;
+
+	Assert(!in_streamed_transaction);
+
+	logicalrep_read_stream_abort(s, &xid, &subxid);
+
+	/*
+	 * If the two XIDs are the same, it's in fact abort of toplevel xact, so
+	 * just delete the files with serialized info.
+	 */
+	if (xid == subxid)
+	{
+		char		path[MAXPGPATH];
+
+		/*
+		 * XXX Maybe this should be an error instead? Can we receive abort for
+		 * a toplevel transaction we haven't received?
+		 */
+
+		changes_filename(path, MyLogicalRepWorker->subid, xid);
+
+		if (unlink(path) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not remove file \"%s\": %m", path)));
+
+		subxact_filename(path, MyLogicalRepWorker->subid, xid);
+
+		if (unlink(path) < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not remove file \"%s\": %m", path)));
+
+		return;
+	}
+	else
+	{
+		/*
+		 * OK, so it's a subxact. We need to read the subxact file for the
+		 * toplevel transaction, determine the offset tracked for the subxact,
+		 * and truncate the file with changes. We also remove the subxacts
+		 * with higher offsets (or rather higher XIDs).
+		 *
+		 * We intentionally scan the array from the tail, because we're likely
+		 * aborting a change for the most recent subtransactions.
+		 *
+		 * XXX Can we rely on the subxact XIDs arriving in sorted order? That
+		 * would allow us to use binary search here.
+		 *
+		 * XXX Or perhaps we can rely on the aborts to arrive in the reverse
+		 * order, i.e. from the inner-most subxact (when nested)? In which
+		 * case we could simply check the last element.
+		 */
+
+		int64		i;
+		int64		subidx;
+		bool		found = false;
+		char		path[MAXPGPATH];
+
+		subidx = -1;
+		subxact_info_read(MyLogicalRepWorker->subid, xid);
+
+		/* FIXME optimize the search by bsearch on sorted data */
+		for (i = nsubxacts; i > 0; i--)
+		{
+			if (subxacts[i - 1].xid == subxid)
+			{
+				subidx = (i - 1);
+				found = true;
+				break;
+			}
+		}
+
+		/* We should not receive aborts for unknown subtransactions. */
+		Assert(found);
+
+		/* OK, truncate the file at the right offset. */
+		Assert((subidx >= 0) && (subidx < nsubxacts));
+
+		changes_filename(path, MyLogicalRepWorker->subid, xid);
+
+		if (truncate(path, subxacts[subidx].offset))
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not truncate file \"%s\": %m", path)));
+
+		/* discard the subxacts added later */
+		nsubxacts = subidx;
+
+		/* write the updated subxact list */
+		subxact_info_write(MyLogicalRepWorker->subid, xid);
+	}
+}
+
+/*
+ * Handle STREAM COMMIT message.
+ */
+static void
+apply_handle_stream_commit(StringInfo s)
+{
+	int			fd;
+	TransactionId xid;
+	StringInfoData s2;
+	int			nchanges;
+
+	char		path[MAXPGPATH];
+	char	   *buffer = NULL;
+	LogicalRepCommitData commit_data;
+
+	MemoryContext oldcxt;
+
+	Assert(!in_streamed_transaction);
+
+	xid = logicalrep_read_stream_commit(s, &commit_data);
+
+	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	/* open the spool file for the committed transaction */
+	changes_filename(path, MyLogicalRepWorker->subid, xid);
+
+	elog(DEBUG1, "replaying changes from file '%s'", path);
+
+	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						path)));
+	}
+
+	/* XXX Should this be allocated in another memory context? */
+
+	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+
+	buffer = palloc(8192);
+	initStringInfo(&s2);
+
+	MemoryContextSwitchTo(oldcxt);
+
+	ensure_transaction();
+
+	/*
+	 * Make sure the handle apply_dispatch methods are aware we're in a remote
+	 * transaction.
+	 */
+	in_remote_transaction = true;
+	pgstat_report_activity(STATE_RUNNING, NULL);
+
+	/*
+	 * Read the entries one by one and pass them through the same logic as in
+	 * apply_dispatch.
+	 */
+	nchanges = 0;
+	while (true)
+	{
+		int			nbytes;
+		int			len;
+
+		/* read length of the on-disk record */
+		pgstat_report_wait_start(WAIT_EVENT_LOGICAL_CHANGES_READ);
+		nbytes = read(fd, &len, sizeof(len));
+		pgstat_report_wait_end();
+
+		/* have we reached end of the file? */
+		if (nbytes == 0)
+			break;
+
+		/* do we have a correct length? */
+		if (nbytes != sizeof(len))
+		{
+			int			save_errno = errno;
+
+			CloseTransientFile(fd);
+			errno = save_errno;
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file: %m")));
+			return;
+		}
+
+		Assert(len > 0);
+
+		/* make sure we have sufficiently large buffer */
+		buffer = repalloc(buffer, len);
+
+		/* and finally read the data into the buffer */
+		pgstat_report_wait_start(WAIT_EVENT_LOGICAL_CHANGES_READ);
+		if (read(fd, buffer, len) != len)
+		{
+			int			save_errno = errno;
+
+			CloseTransientFile(fd);
+			errno = save_errno;
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file: %m")));
+			return;
+		}
+		pgstat_report_wait_end();
+
+		/* copy the buffer to the stringinfo and call apply_dispatch */
+		resetStringInfo(&s2);
+		appendBinaryStringInfo(&s2, buffer, len);
+
+		/* Ensure we are reading the data into our memory context. */
+		oldcxt = MemoryContextSwitchTo(ApplyMessageContext);
+
+		apply_dispatch(&s2);
+
+		MemoryContextReset(ApplyMessageContext);
+
+		MemoryContextSwitchTo(oldcxt);
+
+		nchanges++;
+
+		if (nchanges % 1000 == 0)
+			elog(DEBUG1, "replayed %d changes from file '%s'",
+				 nchanges, path);
+
+		/*
+		 * send feedback to upstream
+		 *
+		 * XXX Probably should send a valid LSN. But which one?
+		 */
+		send_feedback(InvalidXLogRecPtr, false, false);
+	}
+
+	CloseTransientFile(fd);
+
+	/*
+	 * Update origin state so we can restart streaming from correct
+	 * position in case of crash.
+	 */
+	replorigin_session_origin_lsn = commit_data.end_lsn;
+	replorigin_session_origin_timestamp = commit_data.committime;
+
+	CommitTransactionCommand();
+	pgstat_report_stat(false);
+
+	store_flush_position(commit_data.end_lsn);
+
+	elog(DEBUG1, "replayed %d (all) changes from file '%s'",
+		 nchanges, path);
+
+	in_remote_transaction = false;
+	pgstat_report_activity(STATE_IDLE, NULL);
+
+	/* unlink the files with serialized changes and subxact info */
+	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+
+	pfree(buffer);
+	pfree(s2.data);
+}
+
+/*
  * Handle RELATION message.
  *
  * Note we don't do validation against local schema here. The validation
@@ -518,6 +930,9 @@ static void
 apply_handle_relation(StringInfo s)
 {
 	LogicalRepRelation *rel;
+
+	if (handle_streamed_transaction('R', s))
+		return;
 
 	rel = logicalrep_read_rel(s);
 	logicalrep_relmap_update(rel);
@@ -533,6 +948,9 @@ static void
 apply_handle_type(StringInfo s)
 {
 	LogicalRepTyp typ;
+
+	if (handle_streamed_transaction('Y', s))
+		return;
 
 	logicalrep_read_typ(s, &typ);
 	logicalrep_typmap_update(&typ);
@@ -568,6 +986,9 @@ apply_handle_insert(StringInfo s)
 	EState	   *estate;
 	TupleTableSlot *remoteslot;
 	MemoryContext oldctx;
+
+	if (handle_streamed_transaction('I', s))
+		return;
 
 	ensure_transaction();
 
@@ -668,6 +1089,9 @@ apply_handle_update(StringInfo s)
 	TupleTableSlot *remoteslot;
 	bool		found;
 	MemoryContext oldctx;
+
+	if (handle_streamed_transaction('U', s))
+		return;
 
 	ensure_transaction();
 
@@ -787,6 +1211,9 @@ apply_handle_delete(StringInfo s)
 	TupleTableSlot *localslot;
 	bool		found;
 	MemoryContext oldctx;
+
+	if (handle_streamed_transaction('D', s))
+		return;
 
 	ensure_transaction();
 
@@ -911,6 +1338,22 @@ apply_dispatch(StringInfo s)
 			/* ORIGIN */
 		case 'O':
 			apply_handle_origin(s);
+			break;
+			/* STREAM START */
+		case 'S':
+			apply_handle_stream_start(s);
+			break;
+			/* STREAM END */
+		case 'E':
+			apply_handle_stream_stop(s);
+			break;
+			/* STREAM ABORT */
+		case 'A':
+			apply_handle_stream_abort(s);
+			break;
+			/* STREAM COMMIT */
+		case 'c':
+			apply_handle_stream_commit(s);
 			break;
 		default:
 			ereport(ERROR,
@@ -1475,6 +1918,483 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 	MySubscriptionValid = false;
 }
 
+/*
+ * subxact_info_write
+ *	  Store information about subxacts for a toplevel transaction.
+ *
+ * For each subxact we store offset of it's first change in the main file.
+ * The file is always over-written as a whole, and we also include CRC32C
+ * checksum of the information.
+ *
+ * XXX We should only store subxacts that were not aborted yet.
+ *
+ * XXX Maybe we should only include the checksum when the cluster is
+ * initialized with checksums?
+ *
+ * XXX Add calls to pgstat_report_wait_start/pgstat_report_wait_end.
+ */
+static void
+subxact_info_write(Oid subid, TransactionId xid)
+{
+	int			fd;
+	char		path[MAXPGPATH];
+	uint32		checksum;
+	Size		len;
+
+	Assert(TransactionIdIsValid(xid));
+
+	subxact_filename(path, subid, xid);
+
+	fd = OpenTransientFile(path, O_CREAT | O_TRUNC | O_WRONLY | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	len = sizeof(SubXactInfo) * nsubxacts;
+
+	/* compute the checksum */
+	INIT_CRC32C(checksum);
+	COMP_CRC32C(checksum, (char *) &nsubxacts, sizeof(nsubxacts));
+	COMP_CRC32C(checksum, (char *) subxacts, len);
+	FIN_CRC32C(checksum);
+
+	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_SUBXACT_WRITE);
+
+	if (write(fd, &checksum, sizeof(checksum)) != sizeof(checksum))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	if (write(fd, &nsubxacts, sizeof(nsubxacts)) != sizeof(nsubxacts))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	if ((len > 0) && (write(fd, subxacts, len) != len))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	pgstat_report_wait_end();
+
+	/*
+	 * We don't need to fsync or anything, as we'll recreate the files after a
+	 * crash from scratch. So just close the file.
+	 */
+	CloseTransientFile(fd);
+
+	/*
+	 * But we free the memory allocated for subxact info. There might be one
+	 * exceptional transaction with many subxacts, and we don't want to keep
+	 * the memory allocated forewer.
+	 *
+	 */
+	if (subxacts)
+		pfree(subxacts);
+
+	subxacts = NULL;
+	subxact_last = InvalidTransactionId;
+	nsubxacts = 0;
+	nsubxacts_max = 0;
+}
+
+/*
+ * subxact_info_read
+ *	  Restore information about subxacts of a streamed transaction.
+ *
+ * Read information about subxacts into the global variables, and while
+ * reading the information verify the checksum.
+ *
+ * XXX Add calls to pgstat_report_wait_start/pgstat_report_wait_end.
+ *
+ * XXX Do we need to allocate it in TopMemoryContext?
+ */
+static void
+subxact_info_read(Oid subid, TransactionId xid)
+{
+	int			fd;
+	char		path[MAXPGPATH];
+	uint32		checksum;
+	uint32		checksum_new;
+	Size		len;
+	MemoryContext oldctx;
+
+	Assert(TransactionIdIsValid(xid));
+	Assert(!subxacts);
+	Assert(nsubxacts == 0);
+	Assert(nsubxacts_max == 0);
+
+	subxact_filename(path, subid, xid);
+
+	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_SUBXACT_READ);
+
+	/* read the checksum */
+	if (read(fd, &checksum, sizeof(checksum)) != sizeof(checksum))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	/* read number of subxact items */
+	if (read(fd, &nsubxacts, sizeof(nsubxacts)) != sizeof(nsubxacts))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	pgstat_report_wait_end();
+
+	len = sizeof(SubXactInfo) * nsubxacts;
+
+	/* we keep the maximum as a power of 2 */
+	nsubxacts_max = 1 << my_log2(nsubxacts);
+
+	/* subxacts are long-lived */
+	oldctx = MemoryContextSwitchTo(TopMemoryContext);
+	subxacts = palloc(nsubxacts_max * sizeof(SubXactInfo));
+	MemoryContextSwitchTo(oldctx);
+
+	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_SUBXACT_READ);
+
+	if ((len > 0) && ((read(fd, subxacts, len)) != len))
+	{
+		int			save_errno = errno;
+
+		CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m",
+						path)));
+		return;
+	}
+
+	pgstat_report_wait_end();
+
+	/* recompute the checksum */
+	INIT_CRC32C(checksum_new);
+	COMP_CRC32C(checksum_new, (char *) &nsubxacts, sizeof(nsubxacts));
+	COMP_CRC32C(checksum_new, (char *) subxacts, len);
+	FIN_CRC32C(checksum_new);
+
+	if (checksum_new != checksum)
+		ereport(ERROR,
+				(errmsg("checksum failure when reading subxacts")));
+
+	CloseTransientFile(fd);
+}
+
+/*
+ * subxact_info_add
+ *	  Add information about a subxact (offset in the main file).
+ *
+ * XXX Do we need to allocate it in TopMemoryContext?
+ */
+static void
+subxact_info_add(TransactionId xid)
+{
+	int64		i;
+
+	/*
+	 * If the XID matches the toplevel transaction, we don't want to add it.
+	 */
+	if (stream_xid == xid)
+		return;
+
+	/*
+	 * In most cases we're checking the same subxact as we've already seen in
+	 * the last call, so make ure just ignore it (this change comes later).
+	 */
+	if (subxact_last == xid)
+		return;
+
+	/* OK, remember we're processing this XID. */
+	subxact_last = xid;
+
+	/*
+	 * Check if the transaction is already present in the array of subxact. We
+	 * intentionally scan the array from the tail, because we're likely adding
+	 * a change for the most recent subtransactions.
+	 *
+	 * XXX Can we rely on the subxact XIDs arriving in sorted order? That
+	 * would allow us to use binary search here.
+	 */
+	for (i = nsubxacts; i > 0; i--)
+	{
+		/* found, so we're done */
+		if (subxacts[i - 1].xid == xid)
+			return;
+	}
+
+	/* This is a new subxact, so we need to add it to the array. */
+
+	if (nsubxacts == 0)
+	{
+		MemoryContext oldctx;
+
+		nsubxacts_max = 128;
+		oldctx = MemoryContextSwitchTo(TopMemoryContext);
+		subxacts = palloc(nsubxacts_max * sizeof(SubXactInfo));
+		MemoryContextSwitchTo(oldctx);
+	}
+	else if (nsubxacts == nsubxacts_max)
+	{
+		nsubxacts_max *= 2;
+		subxacts = repalloc(subxacts, nsubxacts_max * sizeof(SubXactInfo));
+	}
+
+	subxacts[nsubxacts].xid = xid;
+	subxacts[nsubxacts].offset = lseek(stream_fd, 0, SEEK_END);
+
+	nsubxacts++;
+}
+
+/* format filename for file containing the info about subxacts */
+static void
+subxact_filename(char *path, Oid subid, TransactionId xid)
+{
+	char		tempdirpath[MAXPGPATH];
+
+	TempTablespacePath(tempdirpath, DEFAULTTABLESPACE_OID);
+
+	/*
+	 * We might need to create the tablespace's tempfile directory, if no
+	 * one has yet done so.
+	 *
+	 * Don't check for error from mkdir; it could fail if the directory
+	 * already exists (maybe someone else just did the same thing).  If
+	 * it doesn't work then we'll bomb out when opening the file
+	 */
+	mkdir(tempdirpath, S_IRWXU);
+
+	snprintf(path, MAXPGPATH, "%s/logical-%u-%u.subxacts",
+			 tempdirpath, subid, xid);
+}
+
+/* format filename for file containing serialized changes */
+static void
+changes_filename(char *path, Oid subid, TransactionId xid)
+{
+	char		tempdirpath[MAXPGPATH];
+
+	TempTablespacePath(tempdirpath, DEFAULTTABLESPACE_OID);
+
+	/*
+	 * We might need to create the tablespace's tempfile directory, if no
+	 * one has yet done so.
+	 *
+	 * Don't check for error from mkdir; it could fail if the directory
+	 * already exists (maybe someone else just did the same thing).  If
+	 * it doesn't work then we'll bomb out when opening the file
+	 */
+	mkdir(tempdirpath, S_IRWXU);
+
+	snprintf(path, MAXPGPATH, "%s/logical-%u-%u.changes",
+			 tempdirpath, subid, xid);
+}
+
+/*
+ * stream_cleanup_files
+ *	  Cleanup files for a subscription / toplevel transaction.
+ *
+ * Remove files with serialized changes and subxact info for a particular
+ * toplevel transaction. Each subscription has a separate set of files.
+ */
+static void
+stream_cleanup_files(Oid subid, TransactionId xid)
+{
+	char		path[MAXPGPATH];
+
+	subxact_filename(path, subid, xid);
+
+	if ((unlink(path) < 0) && (errno != ENOENT))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not remove file \"%s\": %m", path)));
+
+	changes_filename(path, subid, xid);
+
+	if ((unlink(path) < 0) && (errno != ENOENT))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not remove file \"%s\": %m", path)));
+}
+
+/*
+ * stream_open_file
+ *	  Open file we'll use to serialize changes for a toplevel transaction.
+ *
+ * Open a file for streamed changes from a toplevel transaction identified
+ * by stream_xid (global variable). If it's the first chunk of streamed
+ * changes for this transaction, perform cleanup by removing existing
+ * files after a possible previous crash.
+ *
+ * This can only be called at the beginning of a "streaming" block, i.e.
+ * between stream_start/stream_stop messages from the upstream.
+ */
+static void
+stream_open_file(Oid subid, TransactionId xid, bool first_segment)
+{
+	char		path[MAXPGPATH];
+	int			flags;
+
+	Assert(in_streamed_transaction);
+	Assert(OidIsValid(subid));
+	Assert(TransactionIdIsValid(xid));
+	Assert(stream_fd == -1);
+
+	/*
+	 * If this is the first segment for this transaction, try removing
+	 * existing files (if there are any, possibly after a crash).
+	 */
+	if (first_segment)
+		stream_cleanup_files(subid, xid);
+
+	changes_filename(path, subid, xid);
+
+	elog(DEBUG1, "opening file '%s' for streamed changes", path);
+
+	/*
+	 * If this is the first streamed segment, the file must not exist, so make
+	 * sure we're the ones creating it. Otherwise just open the file for
+	 * writing, in append mode.
+	 */
+	if (first_segment)
+		flags = (O_WRONLY | O_CREAT | O_EXCL | PG_BINARY);
+	else
+		flags = (O_WRONLY | O_APPEND | PG_BINARY);
+
+	stream_fd = OpenTransientFile(path, flags);
+
+	if (stream_fd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						path)));
+}
+
+/*
+ * stream_close_file
+ *	  Close the currently open file with streamed changes.
+ *
+ * This can only be called at the beginning of a "streaming" block, i.e.
+ * between stream_start/stream_stop messages from the upstream.
+ */
+static void
+stream_close_file(void)
+{
+	Assert(in_streamed_transaction);
+	Assert(TransactionIdIsValid(stream_xid));
+	Assert(stream_fd != -1);
+
+	CloseTransientFile(stream_fd);
+
+	stream_xid = InvalidTransactionId;
+	stream_fd = -1;
+}
+
+/*
+ * stream_write_change
+ *	  Serialize a change to a file for the current toplevel transaction.
+ *
+ * The change is serialied in a simple format, with length (not including
+ * the length), action code (identifying the message type) and message
+ * contents (without the subxact TransactionId value).
+ *
+ * XXX The subxact file includes CRC32C of the contents. Maybe we should
+ * include something like that here too, but doing so will not be as
+ * straighforward, because we write the file in chunks.
+ */
+static void
+stream_write_change(char action, StringInfo s)
+{
+	int			len;
+
+	Assert(in_streamed_transaction);
+	Assert(TransactionIdIsValid(stream_xid));
+	Assert(stream_fd != -1);
+
+	/* total on-disk size, including the action type character */
+	len = (s->len - s->cursor) + sizeof(char);
+
+	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_CHANGES_WRITE);
+
+	/* first write the size */
+	if (write(stream_fd, &len, sizeof(len)) != sizeof(len))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not serialize streamed change to file: %m")));
+
+	/* then the action */
+	if (write(stream_fd, &action, sizeof(action)) != sizeof(action))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not serialize streamed change to file: %m")));
+
+	/* and finally the remaining part of the buffer (after the XID) */
+	len = (s->len - s->cursor);
+
+	if (write(stream_fd, &s->data[s->cursor], len) != len)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not serialize streamed change to file: %m")));
+
+	pgstat_report_wait_end();
+}
+
 /* SIGHUP: set flag to reload configuration at next convenient time */
 static void
 logicalrep_worker_sighup(SIGNAL_ARGS)
@@ -1644,6 +2564,8 @@ ApplyWorkerMain(Datum main_arg)
 	options.slotname = myslotname;
 	options.proto.logical.proto_version = LOGICALREP_PROTO_VERSION_NUM;
 	options.proto.logical.publication_names = MySubscription->publications;
+	options.proto.logical.work_mem = MySubscription->workmem;
+	options.proto.logical.streaming = MySubscription->stream;
 
 	/* Start normal logical streaming replication. */
 	walrcv_startstreaming(wrconn, &options);

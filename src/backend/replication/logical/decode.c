@@ -279,6 +279,23 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				}
 				break;
 			}
+		case XLOG_XACT_INVALIDATIONS:
+			{
+				TransactionId xid;
+				xl_xact_invalidations *invals;
+
+				xid = XLogRecGetXid(r);
+				invals = (xl_xact_invalidations *) XLogRecGetData(r);
+
+				/* XXX for now we're issuing invalidations one by one */
+				Assert(invals->nmsgs == 1);
+
+				ReorderBufferAddInvalidation(reorder, xid, buf->origptr,
+											 invals->dbId, invals->tsId,
+											 invals->relcacheInitFileInval,
+											 invals->msgs[0]);
+			}
+			break;
 		case XLOG_XACT_PREPARE:
 
 			/*

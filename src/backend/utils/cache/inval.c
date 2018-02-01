@@ -102,6 +102,7 @@
 #include "catalog/catalog.h"
 #include "miscadmin.h"
 #include "storage/sinval.h"
+#include "storage/standby.h"
 #include "storage/smgr.h"
 #include "utils/catcache.h"
 #include "utils/inval.h"
@@ -207,6 +208,9 @@ static struct RELCACHECALLBACK
 }			relcache_callback_list[MAX_RELCACHE_CALLBACKS];
 
 static int	relcache_callback_count = 0;
+
+static void LogLogicalInvalidations(int nmsgs, SharedInvalidationMessage *msgs,
+						bool relcacheInitFileInval);
 
 /* ----------------------------------------------------------------
  *				Invalidation list support functions
@@ -487,6 +491,18 @@ RegisterCatcacheInvalidation(int cacheId,
 {
 	AddCatcacheInvalidationMessage(&transInvalInfo->CurrentCmdInvalidMsgs,
 								   cacheId, hashValue, dbId);
+
+	/* Issue an invalidation WAL record (when wal_level=logical) */
+	if (XLogLogicalInfoActive())
+	{
+		SharedInvalidationMessage msg;
+
+		msg.cc.id = (int8) cacheId;
+		msg.cc.dbId = dbId;
+		msg.cc.hashValue = hashValue;
+
+		LogLogicalInvalidations(1, &msg, false);
+	}
 }
 
 /*
@@ -499,6 +515,18 @@ RegisterCatalogInvalidation(Oid dbId, Oid catId)
 {
 	AddCatalogInvalidationMessage(&transInvalInfo->CurrentCmdInvalidMsgs,
 								  dbId, catId);
+
+	/* Issue an invalidation WAL record (when wal_level=logical) */
+	if (XLogLogicalInfoActive())
+	{
+		SharedInvalidationMessage msg;
+
+		msg.cat.id = SHAREDINVALCATALOG_ID;
+		msg.cat.dbId = dbId;
+		msg.cat.catId = catId;
+
+		LogLogicalInvalidations(1, &msg, false);
+	}
 }
 
 /*
@@ -509,6 +537,8 @@ RegisterCatalogInvalidation(Oid dbId, Oid catId)
 static void
 RegisterRelcacheInvalidation(Oid dbId, Oid relId)
 {
+	bool		RelcacheInitFileInval = false;
+
 	AddRelcacheInvalidationMessage(&transInvalInfo->CurrentCmdInvalidMsgs,
 								   dbId, relId);
 
@@ -527,7 +557,22 @@ RegisterRelcacheInvalidation(Oid dbId, Oid relId)
 	 */
 	if (OidIsValid(dbId) &&
 		(RelationIdIsInInitFile(relId) || relId == InvalidOid))
+	{
 		transInvalInfo->RelcacheInitFileInval = true;
+		RelcacheInitFileInval = true;
+	}
+
+	/* Issue an invalidation WAL record (when wal_level=logical) */
+	if (XLogLogicalInfoActive())
+	{
+		SharedInvalidationMessage msg;
+
+		msg.rc.id = SHAREDINVALRELCACHE_ID;
+		msg.rc.dbId = dbId;
+		msg.rc.relId = relId;
+
+		LogLogicalInvalidations(1, &msg, RelcacheInitFileInval);
+	}
 }
 
 /*
@@ -541,6 +586,18 @@ RegisterSnapshotInvalidation(Oid dbId, Oid relId)
 {
 	AddSnapshotInvalidationMessage(&transInvalInfo->CurrentCmdInvalidMsgs,
 								   dbId, relId);
+
+	/* Issue an invalidation WAL record (when wal_level=logical) */
+	if (XLogLogicalInfoActive())
+	{
+		SharedInvalidationMessage msg;
+
+		msg.sn.id = SHAREDINVALSNAPSHOT_ID;
+		msg.sn.dbId = dbId;
+		msg.sn.relId = relId;
+
+		LogLogicalInvalidations(1, &msg, false);
+	}
 }
 
 /*
@@ -1463,4 +1520,28 @@ CallSyscacheCallbacks(int cacheid, uint32 hashvalue)
 		ccitem->function(ccitem->arg, cacheid, hashvalue);
 		i = ccitem->link - 1;
 	}
+}
+
+/*
+ * Emit WAL for invalidations.
+ */
+static void
+LogLogicalInvalidations(int nmsgs, SharedInvalidationMessage *msgs,
+						bool relcacheInitFileInval)
+{
+	xl_xact_invalidations xlrec;
+
+	/* prepare record */
+	memset(&xlrec, 0, sizeof(xlrec));
+	xlrec.dbId = MyDatabaseId;
+	xlrec.tsId = MyDatabaseTableSpace;
+	xlrec.relcacheInitFileInval = relcacheInitFileInval;
+	xlrec.nmsgs = nmsgs;
+
+	/* perform insertion */
+	XLogBeginInsert();
+	XLogRegisterData((char *) (&xlrec), MinSizeOfXactInvalidations);
+	XLogRegisterData((char *) msgs,
+					 nmsgs * sizeof(SharedInvalidationMessage));
+	XLogInsert(RM_XACT_ID, XLOG_XACT_INVALIDATIONS);
 }

@@ -376,6 +376,12 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 		appendStringInfo(&cmd, "proto_version '%u'",
 						 options->proto.logical.proto_version);
 
+		appendStringInfo(&cmd, ", work_mem '%d'",
+						 options->proto.logical.work_mem);
+
+		appendStringInfo(&cmd, ", streaming '%s'",
+						 options->proto.logical.streaming ? "on" : "off");
+
 		pubnames = options->proto.logical.publication_names;
 		pubnames_str = stringlist_to_identifierstr(conn->streamConn, pubnames);
 		if (!pubnames_str)

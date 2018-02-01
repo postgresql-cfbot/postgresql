@@ -187,7 +187,6 @@ typedef struct TransactionStateData
 	int			prevSecContext; /* previous SecurityRestrictionContext */
 	bool		prevXactReadOnly;	/* entry-time xact r/o state */
 	bool		startedInRecovery;	/* did we start in recovery? */
-	bool		didLogXid;		/* has xid been included in WAL record? */
 	int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
 	struct TransactionStateData *parent;	/* back link to parent */
 } TransactionStateData;
@@ -218,7 +217,6 @@ static TransactionStateData TopTransactionStateData = {
 	0,							/* previous SecurityRestrictionContext */
 	false,						/* entry-time xact r/o state */
 	false,						/* startedInRecovery */
-	false,						/* didLogXid */
 	0,							/* parallelMode */
 	NULL						/* link to parent state block */
 };
@@ -437,18 +435,6 @@ GetCurrentTransactionIdIfAny(void)
 	return CurrentTransactionState->transactionId;
 }
 
-/*
- *	MarkCurrentTransactionIdLoggedIfAny
- *
- * Remember that the current xid - if it is assigned - now has been wal logged.
- */
-void
-MarkCurrentTransactionIdLoggedIfAny(void)
-{
-	if (TransactionIdIsValid(CurrentTransactionState->transactionId))
-		CurrentTransactionState->didLogXid = true;
-}
-
 
 /*
  *	GetStableLatestTransactionId
@@ -491,7 +477,7 @@ AssignTransactionId(TransactionState s)
 {
 	bool		isSubXact = (s->parent != NULL);
 	ResourceOwner currentOwner;
-	bool		log_unknown_top = false;
+	bool		log_assignment = false;
 
 	/* Assert that caller didn't screw up */
 	Assert(!TransactionIdIsValid(s->transactionId));
@@ -534,18 +520,17 @@ AssignTransactionId(TransactionState s)
 	}
 
 	/*
-	 * When wal_level=logical, guarantee that a subtransaction's xid can only
-	 * be seen in the WAL stream if its toplevel xid has been logged before.
-	 * If necessary we log an xact_assignment record with fewer than
-	 * PGPROC_MAX_CACHED_SUBXIDS. Note that it is fine if didLogXid isn't set
-	 * for a transaction even though it appears in a WAL record, we just might
-	 * superfluously log something. That can happen when an xid is included
-	 * somewhere inside a wal record, but not in XLogRecord->xl_xid, like in
-	 * xl_standby_locks.
+	 * When wal_level=logical, we issue the XLOG_XACT_ASSIGNMENT records
+	 * immediately, so that we can decode the top-level transaction without
+	 * waiting for the commit.
+	 *
+	 * This also guarantees that a subtransaction's xid can only be seen in
+	 * the WAL stream if its toplevel xid has been logged before. That can
+	 * happen when an xid is included somewhere inside a wal record, but not
+	 * in XLogRecord->xl_xid, like in xl_standby_locks.
 	 */
-	if (isSubXact && XLogLogicalInfoActive() &&
-		!TopTransactionStateData.didLogXid)
-		log_unknown_top = true;
+	if (isSubXact && XLogLogicalInfoActive())
+		log_assignment = true;
 
 	/*
 	 * Generate a new Xid and record it in PG_PROC and pg_subtrans.
@@ -609,7 +594,7 @@ AssignTransactionId(TransactionState s)
 		 * RecoverPreparedTransactions()
 		 */
 		if (nUnreportedXids >= PGPROC_MAX_CACHED_SUBXIDS ||
-			log_unknown_top)
+			log_assignment)
 		{
 			xl_xact_assignment xlrec;
 
@@ -629,8 +614,6 @@ AssignTransactionId(TransactionState s)
 			(void) XLogInsert(RM_XACT_ID, XLOG_XACT_ASSIGNMENT);
 
 			nUnreportedXids = 0;
-			/* mark top, not current xact as having been logged */
-			TopTransactionStateData.didLogXid = true;
 		}
 	}
 }
@@ -1855,7 +1838,6 @@ StartTransaction(void)
 	 * initialize reported xid accounting
 	 */
 	nUnreportedXids = 0;
-	s->didLogXid = false;
 
 	/*
 	 * must initialize resource-management stuff first
@@ -5813,6 +5795,13 @@ xact_redo(XLogReaderState *record)
 		if (standbyState >= STANDBY_INITIALIZED)
 			ProcArrayApplyXidAssignment(xlrec->xtop,
 										xlrec->nsubxacts, xlrec->xsub);
+	}
+	else if (info == XLOG_XACT_INVALIDATIONS)
+	{
+		/*
+		 * XXX we do ignore this for now, what matters are invalidations
+		 * written into the commit record.
+		 */
 	}
 	else
 		elog(PANIC, "xact_redo: unknown op code %u", info);

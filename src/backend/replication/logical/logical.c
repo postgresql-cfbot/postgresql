@@ -66,6 +66,19 @@ static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				   XLogRecPtr message_lsn, bool transactional,
 				   const char *prefix, Size message_size, const char *message);
 
+/* streaming callbacks */
+static void stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						 Relation relation, ReorderBufferChange *change);
+static void stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  XLogRecPtr message_lsn, bool transactional,
+						  const char *prefix, Size message_size, const char *message);
+static void stream_abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						XLogRecPtr abort_lsn);
+static void stream_commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						 XLogRecPtr apply_lsn);
+static void stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn);
+static void stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn);
+
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, char *plugin);
 
 /*
@@ -185,6 +198,48 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->apply_change = change_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
+
+	/*
+	 * To support streaming, we require change/commit/abort callbacks. The
+	 * message callback is optional, similarly to regular output plugins. We
+	 * however enable streaming when at least one of the methods is enabled,
+	 * so that we can easily identify missing methods.
+	 */
+	ctx->streaming = (ctx->callbacks.stream_change_cb != NULL) ||
+		(ctx->callbacks.stream_abort_cb != NULL) ||
+		(ctx->callbacks.stream_message_cb != NULL) ||
+		(ctx->callbacks.stream_commit_cb != NULL) ||
+		(ctx->callbacks.stream_start_cb != NULL) ||
+		(ctx->callbacks.stream_stop_cb != NULL);
+
+	/* make sure all required methods are provided */
+	if (ctx->streaming)
+	{
+		if (ctx->callbacks.stream_change_cb == NULL)
+			elog(ERROR, "stream_change callback is missing");
+
+		if (ctx->callbacks.stream_abort_cb == NULL)
+			elog(ERROR, "stream_abort callback is missing");
+
+		if (ctx->callbacks.stream_commit_cb == NULL)
+			elog(ERROR, "stream_commit callback is missing");
+
+		if (ctx->callbacks.stream_start_cb == NULL)
+			elog(ERROR, "stream_start callback is missing");
+
+		if (ctx->callbacks.stream_stop_cb == NULL)
+			elog(ERROR, "stream_stop callback is missing");
+
+		ctx->reorder->stream_change = stream_change_cb_wrapper;
+		ctx->reorder->stream_abort = stream_abort_cb_wrapper;
+		ctx->reorder->stream_commit = stream_commit_cb_wrapper;
+		ctx->reorder->stream_start = stream_start_cb_wrapper;
+		ctx->reorder->stream_stop = stream_stop_cb_wrapper;
+
+		/* stream_message callback is optional */
+		if (ctx->callbacks.stream_message_cb != NULL)
+			ctx->reorder->stream_message = stream_message_cb_wrapper;
+	}
 
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
@@ -791,6 +846,231 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* do the actual work: call callback */
 	ctx->callbacks.message_cb(ctx, txn, message_lsn, transactional, prefix,
 							  message_size, message);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						 Relation relation, ReorderBufferChange *change)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_change";
+	state.report_location = change->lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+
+	/*
+	 * report this change's lsn so replies from clients can give an up2date
+	 * answer. This won't ever be enough (and shouldn't be!) to confirm
+	 * receipt of this transaction, but it might allow another transaction's
+	 * commit to be confirmed with one message.
+	 */
+	ctx->write_location = change->lsn;
+
+	ctx->callbacks.stream_change_cb(ctx, txn, relation, change);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  XLogRecPtr message_lsn, bool transactional,
+						  const char *prefix, Size message_size, const char *message)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	if (ctx->callbacks.stream_message_cb == NULL)
+		return;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_message";
+	state.report_location = message_lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn != NULL ? txn->xid : InvalidTransactionId;
+	ctx->write_location = message_lsn;
+
+	/* do the actual work: call callback */
+	ctx->callbacks.stream_message_cb(ctx, txn, message_lsn, transactional, prefix,
+									 message_size, message);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						XLogRecPtr abort_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_abort";
+	state.report_location = abort_lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+
+	/*
+	 * report this change's lsn so replies from clients can give an up2date
+	 * answer. This won't ever be enough (and shouldn't be!) to confirm
+	 * receipt of this transaction, but it might allow another transaction's
+	 * commit to be confirmed with one message.
+	 */
+	ctx->write_location = abort_lsn;
+
+	ctx->callbacks.stream_abort_cb(ctx, txn, abort_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						 XLogRecPtr apply_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_commit";
+	state.report_location = apply_lsn;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+
+	/*
+	 * report this change's lsn so replies from clients can give an up2date
+	 * answer. This won't ever be enough (and shouldn't be!) to confirm
+	 * receipt of this transaction, but it might allow another transaction's
+	 * commit to be confirmed with one message.
+	 */
+	ctx->write_location = apply_lsn;
+
+	ctx->callbacks.stream_commit_cb(ctx, txn, apply_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_start_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_start";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+
+	/*
+	 * report this change's lsn so replies from clients can give an up2date
+	 * answer. This won't ever be enough (and shouldn't be!) to confirm
+	 * receipt of this transaction, but it might allow another transaction's
+	 * commit to be confirmed with one message.
+	 */
+	/* XXX ctx->write_location = apply_lsn; */
+
+	ctx->callbacks.stream_start_cb(ctx, txn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+stream_stop_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* We're only supposed to call this when streaming is supported. */
+	Assert(ctx->streaming);
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "stream_stop";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+
+	/*
+	 * report this change's lsn so replies from clients can give an up2date
+	 * answer. This won't ever be enough (and shouldn't be!) to confirm
+	 * receipt of this transaction, but it might allow another transaction's
+	 * commit to be confirmed with one message.
+	 */
+	/* XXX ctx->write_location = apply_lsn; */
+
+	ctx->callbacks.stream_stop_cb(ctx, txn);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

@@ -90,6 +90,58 @@ typedef bool (*LogicalDecodeFilterByOriginCB) (struct LogicalDecodingContext *ct
 typedef void (*LogicalDecodeShutdownCB) (struct LogicalDecodingContext *ctx);
 
 /*
+ * Callback for streaming individual changes from in-progress transactions.
+ */
+typedef void (*LogicalDecodeStreamChangeCB) (struct LogicalDecodingContext *ctx,
+											 ReorderBufferTXN *txn,
+											 Relation relation,
+											 ReorderBufferChange *change);
+
+/*
+ * Callback for streaming generic logical decoding messages from in-progress
+ * transactions.
+ */
+typedef void (*LogicalDecodeStreamMessageCB) (struct LogicalDecodingContext *ctx,
+											  ReorderBufferTXN *txn,
+											  XLogRecPtr message_lsn,
+											  bool transactional,
+											  const char *prefix,
+											  Size message_size,
+											  const char *message);
+
+/*
+ * Called to discard changes streamed to remote node from in-progress
+ * transaction.
+ */
+typedef void (*LogicalDecodeStreamAbortCB) (struct LogicalDecodingContext *ctx,
+											ReorderBufferTXN *txn,
+											XLogRecPtr abort_lsn);
+
+/*
+ * Called to apply changes streamed to remote node from in-progress
+ * transaction.
+ */
+typedef void (*LogicalDecodeStreamCommitCB) (struct LogicalDecodingContext *ctx,
+											 ReorderBufferTXN *txn,
+											 XLogRecPtr commit_lsn);
+
+/*
+ * Called when starting to stream a block of changes from in-progress
+ * transaction (may be called repeatedly, if it's streamed in multiple
+ * chunks).
+ */
+typedef void (*LogicalDecodeStreamStartCB) (struct LogicalDecodingContext *ctx,
+											ReorderBufferTXN *txn);
+
+/*
+ * Called when stopping to stream a block of changes from in-progress
+ * transaction to a remote node (may be called repeatedly, if it's streamed
+ * in multiple chunks).
+ */
+typedef void (*LogicalDecodeStreamStopCB) (struct LogicalDecodingContext *ctx,
+										   ReorderBufferTXN *txn);
+
+/*
  * Output plugin callbacks
  */
 typedef struct OutputPluginCallbacks
@@ -101,6 +153,13 @@ typedef struct OutputPluginCallbacks
 	LogicalDecodeMessageCB message_cb;
 	LogicalDecodeFilterByOriginCB filter_by_origin_cb;
 	LogicalDecodeShutdownCB shutdown_cb;
+	/* streaming of changes */
+	LogicalDecodeStreamChangeCB stream_change_cb;
+	LogicalDecodeStreamMessageCB stream_message_cb;
+	LogicalDecodeStreamAbortCB stream_abort_cb;
+	LogicalDecodeStreamCommitCB stream_commit_cb;
+	LogicalDecodeStreamStartCB stream_start_cb;
+	LogicalDecodeStreamStopCB stream_stop_cb;
 } OutputPluginCallbacks;
 
 /* Functions in replication/logical/logical.c */

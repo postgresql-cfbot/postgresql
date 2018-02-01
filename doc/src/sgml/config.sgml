@@ -1556,6 +1556,38 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-logical-work-mem" xreflabel="logical_work_mem">
+      <term><varname>logical_work_mem</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>logical_work_mem</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the maximum amount of memory to be used by logical decoding,
+        before some of the decoded changes are either written to local disk
+        or streamed over network to the downstream node.  This both limits the
+        amount of memory used by logical streaming replication connections, and
+        helps to reduce the apply lag by transferring changes from in-progress
+        transactions.  It defaults to the same value as
+        <varname>maintenance_work_mem</varname>, that is 64 megabytes
+        (<literal>64MB</literal>).  Since each replication connection only uses
+        a single buffer of this size, and an installation normally doesn't have
+        many such connections concurrently (as limited by
+        <varname>max_wal_senders</varname>), it's safe to set this value
+        significantly higher than <varname>work_mem</varname>, reducing the
+        amount of decoded changes written to disk.
+       </para>
+       <para>
+        Note that when an output plugin supports streaming of in-progress
+        transactions, using higher values may run counter the goal of reducing
+        apply lag by streaming fewer transactions.  In these cases it may be
+        beneficial to use a smaller values, to stream decoded changes more
+        aggressively.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

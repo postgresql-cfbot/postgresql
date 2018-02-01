@@ -125,6 +125,12 @@ static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
  * indexOid, if nonzero, is the OID of an index associated with the constraint.
  * We do nothing with this except store it into pg_trigger.tgconstrindid.
  *
+ * funcoid, if nonzero, is the OID of the function to invoke.  When this is
+ * given, stmt->funcname is ignored.
+ *
+ * parentTriggerOid, if nonzero, is a trigger that begets this one; so that
+ * if that trigger is dropped, this one should be too.
+ *
  * If isInternal is true then this is an internally-generated trigger.
  * This argument sets the tgisinternal field of the pg_trigger entry, and
  * if true causes us to modify the given trigger name to ensure uniqueness.
@@ -133,6 +139,10 @@ static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
  * relation, as well as ACL_EXECUTE on the trigger function.  For internal
  * triggers the caller must apply any required permission checks.
  *
+ * When called on partitioned tables, this function recurses to create the
+ * trigger on all the partitions, except if isInternal is true, in which
+ * case caller is expected to execute recursion on its own.
+ *
  * Note: can return InvalidObjectAddress if we decided to not create a trigger
  * at all, but a foreign-key constraint.  This is a kluge for backwards
  * compatibility.
@@ -140,7 +150,7 @@ static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
 ObjectAddress
 CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 			  Oid relOid, Oid refRelOid, Oid constraintOid, Oid indexOid,
-			  bool isInternal)
+			  Oid funcoid, Oid parentTriggerOid, bool isInternal)
 {
 	int16		tgtype;
 	int			ncolumns;
@@ -159,7 +169,6 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	Relation	pgrel;
 	HeapTuple	tuple;
 	Oid			fargtypes[1];	/* dummy */
-	Oid			funcoid;
 	Oid			funcrettype;
 	Oid			trigoid;
 	char		internaltrigname[NAMEDATALEN];
@@ -179,8 +188,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 * Triggers must be on tables or views, and there are additional
 	 * relation-type-specific restrictions.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	if (rel->rd_rel->relkind == RELKIND_RELATION)
 	{
 		/* Tables can't have INSTEAD OF triggers */
 		if (stmt->timing != TRIGGER_TYPE_BEFORE &&
@@ -190,13 +198,69 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 					 errmsg("\"%s\" is a table",
 							RelationGetRelationName(rel)),
 					 errdetail("Tables cannot have INSTEAD OF triggers.")));
-		/* Disallow ROW triggers on partitioned tables */
-		if (stmt->row && rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	}
+	else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/* Partitioned tables can't have INSTEAD OF triggers */
+		if (stmt->timing != TRIGGER_TYPE_BEFORE &&
+			stmt->timing != TRIGGER_TYPE_AFTER)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a partitioned table",
+					 errmsg("\"%s\" is a table",
 							RelationGetRelationName(rel)),
-					 errdetail("Partitioned tables cannot have ROW triggers.")));
+					 errdetail("Tables cannot have INSTEAD OF triggers.")));
+		/*
+		 * FOR EACH ROW triggers have further restrictions
+		 */
+		if (stmt->row)
+		{
+			/*
+			 * Disallow WHEN clauses; I think it's okay, but disallow for now
+			 * to reduce testing surface.
+			 */
+			if (stmt->whenClause)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is a partitioned table",
+								RelationGetRelationName(rel)),
+						 errdetail("Triggers FOR EACH ROW on partitioned table cannot have WHEN clauses.")));
+
+			/*
+			 * BEFORE triggers FOR EACH ROW are forbidden, because they would
+			 * allow the user to direct the row to another partition, which
+			 * isn't implemented in the executor.
+			 */
+			if (stmt->timing != TRIGGER_TYPE_AFTER)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is a partitioned table",
+								RelationGetRelationName(rel)),
+						 errdetail("Partitioned tables cannot have BEFORE / FOR EACH ROW triggers.")));
+
+			/*
+			 * Constraint triggers are not allowed, either.
+			 */
+			if (stmt->isconstraint)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("\"%s\" is a partitioned table",
+								RelationGetRelationName(rel)),
+						 errdetail("Partitioned tables cannot have CONSTRAINT triggers FOR EACH ROW.")));
+
+			/*
+			 * Disallow use of transition tables.  If this partitioned table
+			 * has any partitions, the error would occur below; but if it
+			 * doesn't then we would only hit that code when the first CREATE
+			 * TABLE ... PARTITION OF is executed, which is too late.  Check
+			 * early to avoid the problem.
+			 */
+			if (stmt->transitionRels != NIL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("\"%s\" is a partitioned table",
+								RelationGetRelationName(rel)),
+						 errdetail("Triggers on partitioned tables cannot have transition tables.")));
+		}
 	}
 	else if (rel->rd_rel->relkind == RELKIND_VIEW)
 	{
@@ -587,7 +651,8 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	/*
 	 * Find and validate the trigger function.
 	 */
-	funcoid = LookupFuncName(stmt->funcname, 0, fargtypes, false);
+	if (!OidIsValid(funcoid))
+		funcoid = LookupFuncName(stmt->funcname, 0, fargtypes, false);
 	if (!isInternal)
 	{
 		aclresult = pg_proc_aclcheck(funcoid, GetUserId(), ACL_EXECUTE);
@@ -928,11 +993,18 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 		 * User CREATE TRIGGER, so place dependencies.  We make trigger be
 		 * auto-dropped if its relation is dropped or if the FK relation is
 		 * dropped.  (Auto drop is compatible with our pre-7.3 behavior.)
+		 *
+		 * Exception: if this trigger comes from a parent partitioned table,
+		 * then it's not separately drop-able, but goes away if the partition
+		 * does.
 		 */
 		referenced.classId = RelationRelationId;
 		referenced.objectId = RelationGetRelid(rel);
 		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+		recordDependencyOn(&myself, &referenced, OidIsValid(parentTriggerOid) ?
+						   DEPENDENCY_INTERNAL_AUTO :
+						   DEPENDENCY_AUTO);
+
 		if (OidIsValid(constrrelid))
 		{
 			referenced.classId = RelationRelationId;
@@ -953,6 +1025,13 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 			referenced.objectId = constraintOid;
 			referenced.objectSubId = 0;
 			recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
+		}
+
+		/* Depends on the parent trigger, if there is one. */
+		if (OidIsValid(parentTriggerOid))
+		{
+			ObjectAddressSet(referenced, TriggerRelationId, parentTriggerOid);
+			recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL_AUTO);
 		}
 	}
 
@@ -981,6 +1060,31 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	/* Post creation hook for new trigger */
 	InvokeObjectPostCreateHookArg(TriggerRelationId, trigoid, 0,
 								  isInternal);
+
+	/*
+	 * If this is a FOR EACH ROW trigger on a partitioned table, recurse for
+	 * each partition if invoked directly by user (otherwise, caller must do
+	 * its own recursion).
+	 */
+	if (stmt->row && rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+		!isInternal)
+	{
+		PartitionDesc	partdesc = RelationGetPartitionDesc(rel);
+		int				i;
+
+		for (i = 0; i < partdesc->nparts; i++)
+		{
+			/* XXX must create a separate constraint for each child */
+			Assert(constraintOid == InvalidOid);
+			/* XXX must create a separate index for each child */
+			Assert(indexOid == InvalidOid);
+
+			CreateTrigger(copyObject(stmt), queryString,
+						  partdesc->oids[i], refRelOid,
+						  constraintOid, indexOid,
+						  InvalidOid, trigoid, isInternal);
+		}
+	}
 
 	/* Keep lock on target rel until end of xact */
 	heap_close(rel, NoLock);

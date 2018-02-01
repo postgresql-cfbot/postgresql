@@ -487,6 +487,7 @@ static void ValidatePartitionConstraints(List **wqueue, Relation scanrel,
 							 List *scanrel_children,
 							 List *partConstraint,
 							 bool validate_default);
+static void CloneRowTriggersOnPartition(Oid parentId, Oid partitionId);
 static ObjectAddress ATExecDetachPartition(Relation rel, RangeVar *name);
 static ObjectAddress ATExecAttachPartitionIdx(List **wqueue, Relation rel,
 						 RangeVar *name);
@@ -916,9 +917,11 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
-	 * If we're creating a partition, create now all the indexes defined in
-	 * the parent.  We can't do it earlier, because DefineIndex wants to know
-	 * the partition key which we just stored.
+	 * If we're creating a partition, create now all the indexes and triggers
+	 * defined in the parent.
+	 *
+	 * We can't do it earlier, because DefineIndex wants to know the partition
+	 * key which we just stored.
 	 */
 	if (stmt->partbound)
 	{
@@ -956,6 +959,14 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		}
 
 		list_free(idxlist);
+
+		/*
+		 * If there are any triggers, clone the appropriate ones to the new
+		 * partition.
+		 */
+		if (parent->trigdesc != NULL)
+			CloneRowTriggersOnPartition(RelationGetRelid(parent), relationId);
+
 		heap_close(parent, NoLock);
 	}
 
@@ -8426,7 +8437,7 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->args = NIL;
 
 	(void) CreateTrigger(fk_trigger, NULL, myRelOid, refRelOid, constraintOid,
-						 indexOid, true);
+						 indexOid, InvalidOid, InvalidOid, true);
 
 	/* Make changes-so-far visible */
 	CommandCounterIncrement();
@@ -8500,7 +8511,7 @@ createForeignKeyTriggers(Relation rel, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->args = NIL;
 
 	(void) CreateTrigger(fk_trigger, NULL, refRelOid, myRelOid, constraintOid,
-						 indexOid, true);
+						 indexOid, InvalidOid, InvalidOid, true);
 
 	/* Make changes-so-far visible */
 	CommandCounterIncrement();
@@ -8555,7 +8566,7 @@ createForeignKeyTriggers(Relation rel, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->args = NIL;
 
 	(void) CreateTrigger(fk_trigger, NULL, refRelOid, myRelOid, constraintOid,
-						 indexOid, true);
+						 indexOid, InvalidOid, InvalidOid, true);
 
 	/* Make changes-so-far visible */
 	CommandCounterIncrement();
@@ -14010,6 +14021,8 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 
 	/* Ensure there exists a correct set of indexes in the partition. */
 	AttachPartitionEnsureIndexes(rel, attachrel);
+	/* and triggers */
+	CloneRowTriggersOnPartition(RelationGetRelid(rel), RelationGetRelid(attachrel));
 
 	/*
 	 * Generate partition constraint from the partition bound specification.
@@ -14194,11 +14207,73 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		index_close(idxRel, AccessShareLock);
 	}
 
+	/* Make this all visible */
+	CommandCounterIncrement();
+
 	/* Clean up. */
 	for (i = 0; i < list_length(attachRelIdxs); i++)
 		index_close(attachrelIdxRels[i], AccessShareLock);
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(cxt);
+}
+
+/*
+ * CloneRowTriggersOnPartition
+ *		subroutine for ATExecAttachPartition/DefineRelation to create row
+ *		triggers on partitions
+ */
+static void
+CloneRowTriggersOnPartition(Oid parentId, Oid partitionId)
+{
+	Relation	pg_trigger;
+	ScanKeyData	key;
+	SysScanDesc	scan;
+	HeapTuple	tuple;
+
+	ScanKeyInit(&key, Anum_pg_trigger_tgrelid, BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(parentId));
+	pg_trigger = heap_open(TriggerRelationId, RowExclusiveLock);
+	scan = systable_beginscan(pg_trigger, TriggerRelidNameIndexId,
+							  true, NULL, 1, &key);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_trigger trigForm;
+		CreateTrigStmt *trigStmt;
+
+		trigForm = (Form_pg_trigger) GETSTRUCT(tuple);
+		if (!TRIGGER_FOR_ROW(trigForm->tgtype) ||
+			TRIGGER_FOR_BEFORE(trigForm->tgtype) ||
+			TRIGGER_FOR_INSTEAD(trigForm->tgtype) ||
+			OidIsValid(trigForm->tgconstraint))
+			continue;
+
+		trigStmt = makeNode(CreateTrigStmt);
+
+		trigStmt->trigname = NameStr(trigForm->tgname);
+		trigStmt->relation = NULL;
+		trigStmt->funcname = NULL;
+		trigStmt->args = NULL;
+		trigStmt->row = true;
+		trigStmt->timing = trigForm->tgtype & TRIGGER_TYPE_TIMING_MASK;
+		trigStmt->events = trigForm->tgtype & TRIGGER_TYPE_EVENT_MASK;
+		trigStmt->columns = NIL;
+		trigStmt->whenClause = NULL;
+		trigStmt->isconstraint = false;
+		trigStmt->transitionRels = NIL;
+		trigStmt->deferrable = trigForm->tgdeferrable;
+		trigStmt->initdeferred = trigForm->tginitdeferred;
+		trigStmt->constrrel = NULL;
+
+		CreateTrigger(trigStmt, NULL, partitionId,
+					  InvalidOid, InvalidOid, InvalidOid,
+					  trigForm->tgfoid, HeapTupleGetOid(tuple), false);
+		pfree(trigStmt);
+	}
+
+	systable_endscan(scan);
+
+	heap_close(pg_trigger, RowExclusiveLock);
 }
 
 /*

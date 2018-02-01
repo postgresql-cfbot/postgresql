@@ -1319,7 +1319,8 @@ index_constraint_create(Relation heapRelation,
 		trigger->constrrel = NULL;
 
 		(void) CreateTrigger(trigger, NULL, RelationGetRelid(heapRelation),
-							 InvalidOid, conOid, indexRelationId, true);
+							 InvalidOid, conOid, indexRelationId, InvalidOid,
+							 InvalidOid, true);
 	}
 
 	/*

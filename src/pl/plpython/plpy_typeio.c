@@ -839,7 +839,7 @@ PLyDict_FromTuple(PLyDatumToOb *arg, HeapTuple tuple, TupleDesc desc)
 			bool		is_null;
 			PyObject   *value;
 
-			if (attr->attisdropped)
+			if (attr->attisdropped || attr->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
 				continue;
 
 			key = NameStr(attr->attname);

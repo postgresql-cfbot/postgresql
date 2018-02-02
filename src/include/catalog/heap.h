@@ -109,7 +109,8 @@ extern Node *cookDefault(ParseState *pstate,
 			Node *raw_default,
 			Oid atttypid,
 			int32 atttypmod,
-			const char *attname);
+			const char *attname,
+			char attgenerated);
 
 extern void DeleteRelationTuple(Oid relid);
 extern void DeleteAttributeTuples(Oid relid);

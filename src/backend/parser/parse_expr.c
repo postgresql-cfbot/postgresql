@@ -1846,6 +1846,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_PARTITION_EXPRESSION:
 			err = _("cannot use subquery in partition key expression");
 			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+			err = _("cannot use subquery in column generation expression");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -3470,6 +3473,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "PARTITION BY";
 		case EXPR_KIND_CALL:
 			return "CALL";
+		case EXPR_KIND_GENERATED_COLUMN:
+			return "GENERATED AS";
 
 			/*
 			 * There is intentionally no default: case here, so that the

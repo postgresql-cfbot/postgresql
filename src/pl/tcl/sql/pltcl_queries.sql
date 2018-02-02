@@ -76,6 +76,10 @@ select * from T_pkey2 order by key1 using @<, key2 collate "C";
 -- show dump of trigger data
 insert into trigger_test values(1,'insert');
 
+insert into trigger_test_generated (i) values (1);
+update trigger_test_generated set i = 11 where i = 1;
+delete from trigger_test_generated;
+
 insert into trigger_test_view values(2,'insert');
 update trigger_test_view set v = 'update' where i=1;
 delete from trigger_test_view;
@@ -84,6 +88,9 @@ update trigger_test set v = 'update', test_skip=true where i = 1;
 update trigger_test set v = 'update' where i = 1;
 delete from trigger_test;
 truncate trigger_test;
+
+DROP TRIGGER show_trigger_data_trig_before on trigger_test_generated;
+DROP TRIGGER show_trigger_data_trig_after on trigger_test_generated;
 
 -- Test composite-type arguments
 select tcl_composite_arg_ref1(row('tkey', 42, 'ref2'));
@@ -279,3 +286,21 @@ CREATE TRIGGER a_t AFTER UPDATE ON transition_table_test
 update transition_table_test set name = 'b';
 drop table transition_table_test;
 drop function transition_table_test_f();
+
+
+-- dealing with generated columns
+
+CREATE FUNCTION generated_test_func1() RETURNS trigger
+LANGUAGE pltcl
+AS $$
+# not allowed
+set NEW(j) 5
+return [array get NEW]
+$$;
+
+CREATE TRIGGER generated_test_trigger1 BEFORE INSERT ON trigger_test_generated
+FOR EACH ROW EXECUTE PROCEDURE generated_test_func1();
+
+TRUNCATE trigger_test_generated;
+INSERT INTO trigger_test_generated (i) VALUES (1);
+SELECT * FROM trigger_test_generated;

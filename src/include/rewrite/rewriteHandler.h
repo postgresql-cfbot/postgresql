@@ -32,5 +32,6 @@ extern const char *view_query_is_auto_updatable(Query *viewquery,
 extern int relation_is_updatable(Oid reloid,
 					  bool include_triggers,
 					  Bitmapset *include_cols);
+extern Expr *expand_generated_columns_in_expr(Expr *expr, Relation rel);
 
 #endif							/* REWRITEHANDLER_H */

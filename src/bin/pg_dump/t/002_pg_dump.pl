@@ -5032,6 +5032,45 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 			role                     => 1,
 			section_post_data        => 1, }, },
 
+	'CREATE TABLE test_table_generated' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 3,
+		create_sql   => 'CREATE TABLE dump_test.test_table_generated (
+						   col1 int primary key,
+						   col2 int generated always as (col1 * 2)
+					   );',
+		regexp => qr/^
+			\QCREATE TABLE test_table_generated (\E\n
+			\s+\Qcol1 integer NOT NULL,\E\n
+			\s+\Qcol2 integer GENERATED ALWAYS AS (col1 * 2)\E\n
+			\);
+			/xms,
+		like => {
+			binary_upgrade          => 1,
+			clean                   => 1,
+			clean_if_exists         => 1,
+			createdb                => 1,
+			defaults                => 1,
+			exclude_test_table      => 1,
+			exclude_test_table_data => 1,
+			no_blobs                => 1,
+			no_privs                => 1,
+			no_owner                => 1,
+			only_dump_test_schema   => 1,
+			pg_dumpall_dbprivs      => 1,
+			schema_only             => 1,
+			section_pre_data        => 1,
+			test_schema_plus_blobs  => 1,
+			with_oids               => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_test_table     => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_post_data        => 1, }, },
+
 	'CREATE STATISTICS extended_stats_no_options' => {
 		all_runs     => 1,
 		catch_all    => 'CREATE ... commands',

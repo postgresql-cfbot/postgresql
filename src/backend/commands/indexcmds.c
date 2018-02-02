@@ -641,6 +641,8 @@ DefineIndex(Oid relationId,
 	/*
 	 * We disallow indexes on system columns other than OID.  They would not
 	 * necessarily get updated correctly, and they don't seem useful anyway.
+	 *
+	 * Also disallow generated columns in indexes. (could be implemented)
 	 */
 	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 	{
@@ -650,10 +652,16 @@ DefineIndex(Oid relationId,
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
+
+		if (get_attgenerated(relationId, attno))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("index creation on virtual generated columns is not supported")));
 	}
 
 	/*
-	 * Also check for system columns used in expressions or predicates.
+	 * Also check for system and generated columns used in expressions or
+	 * predicates.
 	 */
 	if (indexInfo->ii_Expressions || indexInfo->ii_Predicate)
 	{
@@ -662,14 +670,20 @@ DefineIndex(Oid relationId,
 		pull_varattnos((Node *) indexInfo->ii_Expressions, 1, &indexattrs);
 		pull_varattnos((Node *) indexInfo->ii_Predicate, 1, &indexattrs);
 
-		for (i = FirstLowInvalidHeapAttributeNumber + 1; i < 0; i++)
+		i = -1;
+		while ((i = bms_next_member(indexattrs, i)) >= 0)
 		{
-			if (i != ObjectIdAttributeNumber &&
-				bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
-							  indexattrs))
+			AttrNumber	attno = i + FirstLowInvalidHeapAttributeNumber;
+
+			if (attno < 0 && attno != ObjectIdAttributeNumber)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("index creation on system columns is not supported")));
+
+			if (get_attgenerated(relationId, attno))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("index creation on virtual generated columns is not supported")));
 		}
 	}
 

@@ -43,6 +43,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "pgstat.h"
+#include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -101,6 +102,7 @@ static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 					  TransitionCaptureState *transition_capture);
 static void AfterTriggerEnlargeQueryState(void);
 static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
+static void check_modified_virtual_generated(TupleDesc tupdesc, HeapTuple tuple);
 
 
 /*
@@ -561,6 +563,11 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 						ereport(ERROR,
 								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								 errmsg("BEFORE trigger's WHEN condition cannot reference NEW system columns"),
+								 parser_errposition(pstate, var->location)));
+					if (get_attgenerated(RelationGetRelid(rel), var->varattno) && TRIGGER_FOR_BEFORE(tgtype))
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("BEFORE trigger's WHEN condition cannot reference NEW generated columns"),
 								 parser_errposition(pstate, var->location)));
 					break;
 				default:
@@ -2342,6 +2349,8 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 		TupleTableSlot *newslot = estate->es_trig_tuple_slot;
 		TupleDesc	tupdesc = RelationGetDescr(relinfo->ri_RelationDesc);
 
+		check_modified_virtual_generated(tupdesc, newtuple);
+
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
 		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
@@ -2829,6 +2838,8 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		TupleTableSlot *newslot = estate->es_trig_tuple_slot;
 		TupleDesc	tupdesc = RelationGetDescr(relinfo->ri_RelationDesc);
 
+		check_modified_virtual_generated(tupdesc, newtuple);
+
 		if (newslot->tts_tupleDescriptor != tupdesc)
 			ExecSetSlotDescriptor(newslot, tupdesc);
 		ExecStoreTuple(newtuple, newslot, InvalidBuffer, false);
@@ -3226,6 +3237,7 @@ TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 
 			oldContext = MemoryContextSwitchTo(estate->es_query_cxt);
 			tgqual = stringToNode(trigger->tgqual);
+			tgqual = (Node *) expand_generated_columns_in_expr((Expr *) tgqual, relinfo->ri_RelationDesc);
 			/* Change references to OLD and NEW to INNER_VAR and OUTER_VAR */
 			ChangeVarNodes(tgqual, PRS2_OLD_VARNO, INNER_VAR, 0);
 			ChangeVarNodes(tgqual, PRS2_NEW_VARNO, OUTER_VAR, 0);
@@ -5868,4 +5880,28 @@ Datum
 pg_trigger_depth(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT32(MyTriggerDepth);
+}
+
+/*
+ * Check whether a trigger modified a virtual generated column and error if
+ * so.
+ */
+static void
+check_modified_virtual_generated(TupleDesc tupdesc, HeapTuple tuple)
+{
+	int			i;
+
+	for (i = 0; i < tupdesc->natts; i++)
+	{
+		if (TupleDescAttr(tupdesc, i)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		{
+			bool		isnull;
+
+			fastgetattr(tuple, i + 1, tupdesc, &isnull);
+			if (!isnull)
+				ereport(ERROR,
+						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+						 errmsg("trigger modified virtual generated column value")));
+		}
+	}
 }

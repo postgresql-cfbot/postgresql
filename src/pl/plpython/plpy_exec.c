@@ -13,6 +13,7 @@
 #include "executor/spi.h"
 #include "funcapi.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/typcache.h"
 
@@ -953,6 +954,11 @@ PLy_modify_tuple(PLyProcedure *proc, PyObject *pltd, TriggerData *tdata,
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot set system attribute \"%s\"",
+								plattstr)));
+			if (get_attgenerated(RelationGetRelid(tdata->tg_relation), attn))
+				ereport(ERROR,
+						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+						 errmsg("cannot set generated column \"%s\"",
 								plattstr)));
 
 			plval = PyDict_GetItem(plntup, platt);

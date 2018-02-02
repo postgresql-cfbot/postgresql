@@ -2564,6 +2564,7 @@ _equalColumnDef(const ColumnDef *a, const ColumnDef *b)
 	COMPARE_NODE_FIELD(raw_default);
 	COMPARE_NODE_FIELD(cooked_default);
 	COMPARE_SCALAR_FIELD(identity);
+	COMPARE_SCALAR_FIELD(generated);
 	COMPARE_NODE_FIELD(collClause);
 	COMPARE_SCALAR_FIELD(collOid);
 	COMPARE_NODE_FIELD(constraints);
@@ -2585,6 +2586,7 @@ _equalConstraint(const Constraint *a, const Constraint *b)
 	COMPARE_NODE_FIELD(raw_expr);
 	COMPARE_STRING_FIELD(cooked_expr);
 	COMPARE_SCALAR_FIELD(generated_when);
+	COMPARE_SCALAR_FIELD(generated_kind);
 	COMPARE_NODE_FIELD(keys);
 	COMPARE_NODE_FIELD(exclusions);
 	COMPARE_NODE_FIELD(options);

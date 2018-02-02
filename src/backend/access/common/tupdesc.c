@@ -130,6 +130,7 @@ CreateTupleDescCopy(TupleDesc tupdesc)
 		att->attnotnull = false;
 		att->atthasdef = false;
 		att->attidentity = '\0';
+		att->attgenerated = '\0';
 	}
 
 	/* We can copy the tuple type identification, too */
@@ -228,6 +229,7 @@ TupleDescCopy(TupleDesc dst, TupleDesc src)
 		att->attnotnull = false;
 		att->atthasdef = false;
 		att->attidentity = '\0';
+		att->attgenerated = '\0';
 	}
 	dst->constr = NULL;
 
@@ -280,6 +282,7 @@ TupleDescCopyEntry(TupleDesc dst, AttrNumber dstAttno,
 	dstAtt->attnotnull = false;
 	dstAtt->atthasdef = false;
 	dstAtt->attidentity = '\0';
+	dstAtt->attgenerated = '\0';
 }
 
 /*
@@ -425,6 +428,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 		if (attr1->atthasdef != attr2->atthasdef)
 			return false;
 		if (attr1->attidentity != attr2->attidentity)
+			return false;
+		if (attr1->attgenerated != attr2->attgenerated)
 			return false;
 		if (attr1->attisdropped != attr2->attisdropped)
 			return false;
@@ -585,6 +590,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attnotnull = false;
 	att->atthasdef = false;
 	att->attidentity = '\0';
+	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
@@ -643,6 +649,7 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	att->attnotnull = false;
 	att->atthasdef = false;
 	att->attidentity = '\0';
+	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;

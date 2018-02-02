@@ -647,6 +647,7 @@ typedef struct ColumnDef
 	Node	   *raw_default;	/* default value (untransformed parse tree) */
 	Node	   *cooked_default; /* default value (transformed expr tree) */
 	char		identity;		/* attidentity setting */
+	char		generated;		/* attgenerated setting */
 	CollateClause *collClause;	/* untransformed COLLATE spec, if any */
 	Oid			collOid;		/* collation OID (InvalidOid if not set) */
 	List	   *constraints;	/* other constraints on column */
@@ -669,9 +670,10 @@ typedef enum TableLikeOption
 	CREATE_TABLE_LIKE_DEFAULTS = 1 << 0,
 	CREATE_TABLE_LIKE_CONSTRAINTS = 1 << 1,
 	CREATE_TABLE_LIKE_IDENTITY = 1 << 2,
-	CREATE_TABLE_LIKE_INDEXES = 1 << 3,
-	CREATE_TABLE_LIKE_STORAGE = 1 << 4,
-	CREATE_TABLE_LIKE_COMMENTS = 1 << 5,
+	CREATE_TABLE_LIKE_GENERATED = 1 << 3,
+	CREATE_TABLE_LIKE_INDEXES = 1 << 4,
+	CREATE_TABLE_LIKE_STORAGE = 1 << 5,
+	CREATE_TABLE_LIKE_COMMENTS = 1 << 6,
 	CREATE_TABLE_LIKE_ALL = PG_INT32_MAX
 } TableLikeOption;
 
@@ -2044,6 +2046,7 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_NOTNULL,
 	CONSTR_DEFAULT,
 	CONSTR_IDENTITY,
+	CONSTR_GENERATED,
 	CONSTR_CHECK,
 	CONSTR_PRIMARY,
 	CONSTR_UNIQUE,
@@ -2082,7 +2085,8 @@ typedef struct Constraint
 	bool		is_no_inherit;	/* is constraint non-inheritable? */
 	Node	   *raw_expr;		/* expr, as untransformed parse tree */
 	char	   *cooked_expr;	/* expr, as nodeToString representation */
-	char		generated_when;
+	char		generated_when;	/* ALWAYS or BY DEFAULT */
+	char		generated_kind; /* VIRTUAL or other options in the future */
 
 	/* Fields used for unique constraints (UNIQUE and PRIMARY KEY): */
 	List	   *keys;			/* String nodes naming referenced column(s) */

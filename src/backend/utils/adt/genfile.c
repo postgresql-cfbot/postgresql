@@ -22,6 +22,7 @@
 
 #include "access/htup_details.h"
 #include "access/xlog_internal.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -54,6 +55,15 @@ convert_and_check_filename(text *arg)
 	filename = text_to_cstring(arg);
 	canonicalize_path(filename);	/* filename can change length here */
 
+	/*
+	 * Members of the 'pg_access_server_files' role are allowed to access any
+	 * files on the server as the PG user, so no need to do any further checks
+	 * here.
+	 */
+	if (is_member_of_role(GetUserId(), DEFAULT_ROLE_ACCESS_SERVER_FILES))
+		return filename;
+
+	/* User isn't a member of the default role, so check if it's allowable */
 	if (is_absolute_path(filename))
 	{
 		/* Disallow '/a/b/data/..' */
@@ -195,11 +205,6 @@ pg_read_file(PG_FUNCTION_ARGS)
 	char	   *filename;
 	text	   *result;
 
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to read files"))));
-
 	/* handle optional arguments */
 	if (PG_NARGS() >= 3)
 	{
@@ -235,11 +240,6 @@ pg_read_binary_file(PG_FUNCTION_ARGS)
 	bool		missing_ok = false;
 	char	   *filename;
 	bytea	   *result;
-
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to read files"))));
 
 	/* handle optional arguments */
 	if (PG_NARGS() >= 3)
@@ -312,11 +312,6 @@ pg_stat_file(PG_FUNCTION_ARGS)
 	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	bool		missing_ok = false;
-
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to get file information"))));
 
 	/* check the optional argument */
 	if (PG_NARGS() == 2)
@@ -398,11 +393,6 @@ pg_ls_dir(PG_FUNCTION_ARGS)
 	struct dirent *de;
 	directory_fctx *fctx;
 	MemoryContext oldcontext;
-
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to get directory listings"))));
 
 	if (SRF_IS_FIRSTCALL())
 	{

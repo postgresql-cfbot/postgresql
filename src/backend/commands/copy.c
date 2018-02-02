@@ -24,6 +24,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/dependency.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
 #include "commands/defrem.h"
@@ -770,8 +771,8 @@ CopyLoadRawBuf(CopyState cstate)
  * input/output stream. The latter could be either stdin/stdout or a
  * socket, depending on whether we're running under Postmaster control.
  *
- * Do not allow a Postgres user without superuser privilege to read from
- * or write to a file.
+ * Do not allow a Postgres user without the 'pg_access_server_files' role to
+ * read from or write to a file.
  *
  * Do not allow the copy if user doesn't have proper permission to access
  * the table or the specifically requested columns.
@@ -788,19 +789,22 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	Oid			relid;
 	RawStmt    *query = NULL;
 
-	/* Disallow COPY to/from file or program except to superusers. */
-	if (!pipe && !superuser())
+	/*
+	 * Disallow COPY to/from file or program except to users with the
+	 * 'pg_access_server_files' role.
+	 */
+	if (!pipe && !is_member_of_role(GetUserId(), DEFAULT_ROLE_ACCESS_SERVER_FILES))
 	{
 		if (stmt->is_program)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to COPY to or from an external program"),
+					 errmsg("must be superuser or a member of the pg_access_server_files role to COPY to or from an external program"),
 					 errhint("Anyone can COPY to stdout or from stdin. "
 							 "psql's \\copy command also works for anyone.")));
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to COPY to or from a file"),
+					 errmsg("must be superuser or a member of the pg_access_server_files role to COPY to or from a file"),
 					 errhint("Anyone can COPY to stdout or from stdin. "
 							 "psql's \\copy command also works for anyone.")));
 	}

@@ -18,6 +18,7 @@
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/sysattr.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/copy.h"
 #include "commands/defrem.h"
@@ -202,9 +203,10 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 	ListCell   *cell;
 
 	/*
-	 * Only superusers are allowed to set options of a file_fdw foreign table.
-	 * This is because we don't want non-superusers to be able to control
-	 * which file gets read or which program gets executed.
+	 * Only members of the special role 'pg_access_server_files' are allowed
+	 * to set options of a file_fdw foreign table.  This is because we don't
+	 * want regular users to be able to control which file gets read or which
+	 * program gets executed.
 	 *
 	 * Putting this sort of permissions check in a validator is a bit of a
 	 * crock, but there doesn't seem to be any other place that can enforce
@@ -214,10 +216,11 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 	 * program at any options level other than foreign table --- otherwise
 	 * there'd still be a security hole.
 	 */
-	if (catalog == ForeignTableRelationId && !superuser())
+	if (catalog == ForeignTableRelationId &&
+		!is_member_of_role(GetUserId(), DEFAULT_ROLE_ACCESS_SERVER_FILES))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("only superuser can change options of a file_fdw foreign table")));
+				 errmsg("only superuser or a member of the pg_access_server_files role can change options of a file_fdw foreign table")));
 
 	/*
 	 * Check that only options supported by file_fdw, and allowed for the

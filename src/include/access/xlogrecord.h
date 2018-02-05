@@ -42,7 +42,8 @@ typedef struct XLogRecord
 {
 	uint32		xl_tot_len;		/* total len of entire record */
 	TransactionId xl_xid;		/* xact id */
-	XLogRecPtr	xl_prev;		/* ptr to previous record in log */
+	uint16		xl_walid;		/* lowest 16 bits of the WAL file to which this
+								   record belongs */
 	uint8		xl_info;		/* flag bits, see below */
 	RmgrId		xl_rmid;		/* resource manager for this record */
 	/* 2 bytes of padding here, initialize to zero */

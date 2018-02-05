@@ -218,7 +218,7 @@ extern bool DecodeXLogRecord(XLogReaderState *state, XLogRecord *record,
 				 char **errmsg);
 
 #define XLogRecGetTotalLen(decoder) ((decoder)->decoded_record->xl_tot_len)
-#define XLogRecGetPrev(decoder) ((decoder)->decoded_record->xl_prev)
+#define XLogRecGetWALId(decoder) ((decoder)->decoded_record->xl_walid)
 #define XLogRecGetInfo(decoder) ((decoder)->decoded_record->xl_info)
 #define XLogRecGetRmid(decoder) ((decoder)->decoded_record->xl_rmid)
 #define XLogRecGetXid(decoder) ((decoder)->decoded_record->xl_xid)

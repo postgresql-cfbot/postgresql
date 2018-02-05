@@ -1176,7 +1176,7 @@ WriteEmptyXLOG(void)
 	/* Insert the initial checkpoint record */
 	recptr = (char *) page + SizeOfXLogLongPHD;
 	record = (XLogRecord *) recptr;
-	record->xl_prev = 0;
+	record->xl_walid = newXlogSegNo & XLogSegNoLowOrderMask;
 	record->xl_xid = InvalidTransactionId;
 	record->xl_tot_len = SizeOfXLogRecord + SizeOfXLogRecordDataHeaderShort + sizeof(CheckPoint);
 	record->xl_info = XLOG_CHECKPOINT_SHUTDOWN;

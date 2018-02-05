@@ -122,6 +122,18 @@ typedef XLogLongPageHeaderData *XLogLongPageHeader;
 	logSegNo = ((xlrp) - 1) / (wal_segsz_bytes)
 
 /*
+ * Get the WAL segment identifier given the XLogRecPtr.
+ *
+ * The identifier is just the lower order 16-bits of the WAL segno. So the
+ * value will be repeated after 2^16 WAL segments. But we use this identifier
+ * just to detect invalid WAL records and hence can live with that limitation.
+ */
+#define XLogSegNoLowOrderMask	0xFFFF
+#define XLogSegNoToSegID(segno) ((uint16) ((segno) & XLogSegNoLowOrderMask))
+#define XLByteToSegID(xlrp, wal_segsz_bytes) \
+	(XLogSegNoToSegID((xlrp) / (wal_segsz_bytes)))
+
+/*
  * Is an XLogRecPtr within a particular XLOG segment?
  *
  * For XLByteInSeg, do the computation at face value.  For XLByteInPrevSeg,

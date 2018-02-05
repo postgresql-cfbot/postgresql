@@ -637,38 +637,30 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 							  (uint32) RecPtr);
 		return false;
 	}
-	if (randAccess)
+
+	/*
+	 * Previously, we guarded against stale but valid-looking WAL records that
+	 * start on sector boundaries by storing a pointer to the previous WAL
+	 * record (xl_prev). xl_prev was 8 bytes. Storing the whole pointer is
+	 * unnecessary, since we only need to store enough information to prevent
+	 * reading stale WAL records, so we do that now by storing only a 2 byte
+	 * value corresponding to the number of the WAL file. Even though 2 byte
+	 * value cycles every 32768 values, this is still enough as long as we
+	 * ensure that the old segment and the new segment do not share the same
+	 * value and thus we can distinguish between the WAL records belonging to
+	 * the old segment and the new segment.
+	 *
+	 * Reducing the value to 2 bytes means we save 8 bytes per WAL
+	 * record because of alignment issues.
+	 */
+	if (XLByteToSegID(RecPtr, state->wal_segment_size) != record->xl_walid)
 	{
-		/*
-		 * We can't exactly verify the prev-link, but surely it should be less
-		 * than the record's own address.
-		 */
-		if (!(record->xl_prev < RecPtr))
-		{
-			report_invalid_record(state,
-								  "record with incorrect prev-link %X/%X at %X/%X",
-								  (uint32) (record->xl_prev >> 32),
-								  (uint32) record->xl_prev,
-								  (uint32) (RecPtr >> 32), (uint32) RecPtr);
-			return false;
-		}
-	}
-	else
-	{
-		/*
-		 * Record's prev-link should exactly match our previous location. This
-		 * check guards against torn WAL pages where a stale but valid-looking
-		 * WAL record starts on a sector boundary.
-		 */
-		if (record->xl_prev != PrevRecPtr)
-		{
-			report_invalid_record(state,
-								  "record with incorrect prev-link %X/%X at %X/%X",
-								  (uint32) (record->xl_prev >> 32),
-								  (uint32) record->xl_prev,
-								  (uint32) (RecPtr >> 32), (uint32) RecPtr);
-			return false;
-		}
+		report_invalid_record(state,
+							  "record with incorrect walid %u at %X/%X, expected walid %u",
+							  record->xl_walid,
+							  (uint32) (RecPtr >> 32), (uint32) RecPtr,
+							  XLByteToSegID(RecPtr, state->wal_segment_size));
+		return false;
 	}
 
 	return true;

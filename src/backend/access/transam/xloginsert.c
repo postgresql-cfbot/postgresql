@@ -471,7 +471,7 @@ XLogInsert(RmgrId rmid, uint8 info)
  * Assemble a WAL record from the registered data and buffers into an
  * XLogRecData chain, ready for insertion with XLogInsertRecord().
  *
- * The record header fields are filled in, except for the xl_prev field. The
+ * The record header fields are filled in, except for the xl_walid field. The
  * calculated CRC does not include the record header yet.
  *
  * If there are any registered buffers, and a full-page image was not taken
@@ -780,7 +780,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		COMP_CRC32C(rdata_crc, rdt->data, rdt->len);
 
 	/*
-	 * Fill in the fields in the record header. Prev-link is filled in later,
+	 * Fill in the fields in the record header. xl_walid is filled in later,
 	 * once we know where in the WAL the record will be inserted. The CRC does
 	 * not include the record header yet.
 	 */
@@ -788,7 +788,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	rechdr->xl_tot_len = total_len;
 	rechdr->xl_info = info;
 	rechdr->xl_rmid = rmid;
-	rechdr->xl_prev = InvalidXLogRecPtr;
+	rechdr->xl_walid = 0;
 	rechdr->xl_crc = rdata_crc;
 
 	return &hdr_rdt;

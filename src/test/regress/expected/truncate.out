@@ -68,6 +68,10 @@ HINT:  Truncate table "trunc_b" at the same time, or use TRUNCATE ... CASCADE.
 TRUNCATE TABLE truncate_a CASCADE;  -- ok
 NOTICE:  truncate cascades to table "trunc_b"
 NOTICE:  truncate cascades to table "trunc_e"
+-- Ignore foreign-key checks with session_replication_role = replica
+SET session_replication_role = replica;
+TRUNCATE TABLE truncate_a;		-- ok
+RESET session_replication_role;
 -- circular references
 ALTER TABLE truncate_a ADD FOREIGN KEY (col1) REFERENCES trunc_c;
 -- Add some data to verify that truncating actually works ...

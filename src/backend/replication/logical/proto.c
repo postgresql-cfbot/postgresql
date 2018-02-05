@@ -26,6 +26,9 @@
  */
 #define LOGICALREP_IS_REPLICA_IDENTITY 1
 
+#define TRUNCATE_CASCADE		(1<<0)
+#define TRUNCATE_RESTART_SEQS	(1<<1)
+
 static void logicalrep_write_attrs(StringInfo out, Relation rel);
 static void logicalrep_write_tuple(StringInfo out, Relation rel,
 					   HeapTuple tuple);
@@ -288,6 +291,48 @@ logicalrep_read_delete(StringInfo in, LogicalRepTupleData *oldtup)
 		elog(ERROR, "expected action 'O' or 'K', got %c", action);
 
 	logicalrep_read_tuple(in, oldtup);
+
+	return relid;
+}
+
+/*
+ * Write TRUNCATE to the output stream.
+ */
+void
+logicalrep_write_truncate(StringInfo out, Relation rel,
+						  bool cascade, bool restart_seqs)
+{
+	uint8 flags = 0;
+
+	pq_sendbyte(out, 'T');		/* action TRUNCATE */
+
+	/* use Oid as relation identifier */
+	pq_sendint32(out, RelationGetRelid(rel));
+
+	/* encode and send truncate flags */
+	if (cascade)
+		flags |= TRUNCATE_CASCADE;
+	if (restart_seqs)
+		flags |= TRUNCATE_RESTART_SEQS;
+	pq_sendint8(out, flags);
+}
+
+/*
+ * Read TRUNCATE from stream.
+ */
+LogicalRepRelId
+logicalrep_read_truncate(StringInfo in, bool *cascade, bool *restart_seqs)
+{
+	LogicalRepRelId relid;
+	uint8 flags;
+
+	/* read the relation id */
+	relid = pq_getmsgint(in, 4);
+
+	/* read and decode truncate flags */
+	flags = pq_getmsgint(in, 1);
+	*cascade = (flags & TRUNCATE_CASCADE) > 0;
+	*restart_seqs = (flags & TRUNCATE_RESTART_SEQS) > 0;
 
 	return relid;
 }

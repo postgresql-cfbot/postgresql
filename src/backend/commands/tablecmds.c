@@ -16,6 +16,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/heapam_xlog.h"
 #include "access/multixact.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -1312,11 +1313,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 {
 	List	   *rels = NIL;
 	List	   *relids = NIL;
-	List	   *seq_relids = NIL;
-	EState	   *estate;
-	ResultRelInfo *resultRelInfos;
-	ResultRelInfo *resultRelInfo;
-	SubTransactionId mySubid;
+	List	   *relids_logged = NIL;
 	ListCell   *cell;
 
 	/*
@@ -1340,6 +1337,9 @@ ExecuteTruncate(TruncateStmt *stmt)
 		truncate_check_rel(rel);
 		rels = lappend(rels, rel);
 		relids = lappend_oid(relids, myrelid);
+		/* Log this relation only if needed for logical decoding */
+		if (RelationIsLogicallyLogged(rel))
+			relids_logged = lappend_oid(relids_logged, myrelid);
 
 		if (recurse)
 		{
@@ -1360,6 +1360,9 @@ ExecuteTruncate(TruncateStmt *stmt)
 				truncate_check_rel(rel);
 				rels = lappend(rels, rel);
 				relids = lappend_oid(relids, childrelid);
+				/* Log this relation only if needed for logical decoding */
+				if (RelationIsLogicallyLogged(rel))
+					relids_logged = lappend_oid(relids_logged, childrelid);
 			}
 		}
 		else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -1369,7 +1372,39 @@ ExecuteTruncate(TruncateStmt *stmt)
 					 errhint("Do not specify the ONLY keyword, or use truncate only on the partitions directly.")));
 	}
 
+	ExecuteTruncateGuts(rels, relids, relids_logged,
+						stmt->behavior, stmt->restart_seqs);
+
+	/* And close the rels */
+	foreach(cell, rels)
+	{
+		Relation	rel = (Relation) lfirst(cell);
+
+		heap_close(rel, NoLock);
+	}
+
+}
+
+void
+ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
+							DropBehavior behavior, bool restart_seqs)
+{
+	List	   *rels = list_copy(explicit_rels);
+	List	   *seq_relids = NIL;
+	EState	   *estate;
+	ResultRelInfo *resultRelInfos;
+	ResultRelInfo *resultRelInfo;
+	SubTransactionId mySubid;
+	ListCell   *cell;
+	List	   *seq_relids_logged = NIL;
+	uint32	    nrelids = 0;
+	uint32	    nseqrelids = 0;
+	uint32	    maxrelids = 2;
+	Oid		   *logrelids = NULL;
+
 	/*
+	 * Open, exclusive-lock, and check all the explicitly-specified relations
+	 *
 	 * In CASCADE mode, suck in all referencing relations as well.  This
 	 * requires multiple iterations to find indirectly-dependent relations. At
 	 * each phase, we need to exclusive-lock new rels before looking for their
@@ -1377,7 +1412,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 	 * soon as we open it, to avoid a faux pas such as holding lock for a long
 	 * time on a rel we have no permissions for.
 	 */
-	if (stmt->behavior == DROP_CASCADE)
+	if (behavior == DROP_CASCADE)
 	{
 		for (;;)
 		{
@@ -1399,21 +1434,32 @@ ExecuteTruncate(TruncateStmt *stmt)
 				truncate_check_rel(rel);
 				rels = lappend(rels, rel);
 				relids = lappend_oid(relids, relid);
+				/* Log this relation only if needed for logical decoding */
+				if (RelationIsLogicallyLogged(rel))
+					relids_logged = lappend_oid(relids_logged, relid);
 			}
 		}
 	}
 
 	/*
-	 * Check foreign key references.  In CASCADE mode, this should be
-	 * unnecessary since we just pulled in all the references; but as a
-	 * cross-check, do it anyway if in an Assert-enabled build.
+	 * Suppress foreign key references check if session replication role is
+	 * set to REPLICA.
 	 */
+	if (SessionReplicationRole != SESSION_REPLICATION_ROLE_REPLICA)
+	{
+
+		/*
+		 * Check foreign key references.  In CASCADE mode, this should be
+		 * unnecessary since we just pulled in all the references; but as a
+		 * cross-check, do it anyway if in an Assert-enabled build.
+		 */
 #ifdef USE_ASSERT_CHECKING
-	heap_truncate_check_FKs(rels, false);
-#else
-	if (stmt->behavior == DROP_RESTRICT)
 		heap_truncate_check_FKs(rels, false);
+#else
+		if (behavior == DROP_RESTRICT)
+			heap_truncate_check_FKs(rels, false);
 #endif
+	}
 
 	/*
 	 * If we are asked to restart sequences, find all the sequences, lock them
@@ -1421,7 +1467,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 	 * We want to do this early since it's pointless to do all the truncation
 	 * work only to fail on sequence permissions.
 	 */
-	if (stmt->restart_seqs)
+	if (restart_seqs)
 	{
 		foreach(cell, rels)
 		{
@@ -1442,6 +1488,10 @@ ExecuteTruncate(TruncateStmt *stmt)
 								   RelationGetRelationName(seq_rel));
 
 				seq_relids = lappend_oid(seq_relids, seq_relid);
+				/* Log this relation only if needed for logical decoding */
+				if (RelationIsLogicallyLogged(seq_rel))
+					seq_relids_logged = lappend_oid(seq_relids_logged,
+													seq_relid);
 
 				relation_close(seq_rel, NoLock);
 			}
@@ -1577,6 +1627,60 @@ ExecuteTruncate(TruncateStmt *stmt)
 	}
 
 	/*
+	 * Write a WAL record to allow this set of actions to be logically decoded.
+	 * We could optimize this away when !RelationIsLogicallyLogged(rel)
+	 * but that doesn't save much space or time.
+	 *
+	 * Assemble an array of relids, then an array of seqrelids so we can write
+	 * a single WAL record for the whole action.
+	 */
+	logrelids = palloc(maxrelids * sizeof(Oid));
+	foreach (cell, relids_logged)
+	{
+		nrelids++;
+		if (nrelids > maxrelids)
+		{
+			maxrelids *= 2;
+			logrelids = repalloc(logrelids, maxrelids * sizeof(Oid));
+		}
+		logrelids[nrelids - 1] = lfirst_oid(cell);
+	}
+
+	foreach (cell, seq_relids_logged)
+	{
+		nseqrelids++;
+		if ((nrelids + nseqrelids) > maxrelids)
+		{
+			maxrelids *= 2;
+			logrelids = repalloc(logrelids, maxrelids * sizeof(Oid));
+		}
+		logrelids[nrelids + nseqrelids - 1] = lfirst_oid(cell);
+	}
+
+	if ((nrelids + nseqrelids) > 0)
+	{
+		xl_heap_truncate xlrec;
+
+		xlrec.dbId = MyDatabaseId;
+		xlrec.nrelids = nrelids;
+		xlrec.nseqrelids = nseqrelids;
+		xlrec.flags = 0;
+		if (behavior == DROP_CASCADE)
+			xlrec.flags |= XLH_TRUNCATE_CASCADE;
+		if (restart_seqs)
+			xlrec.flags |= XLH_TRUNCATE_RESTART_SEQS;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, SizeOfHeapTruncate);
+		XLogRegisterData((char *) logrelids,
+							(nrelids + nseqrelids) * sizeof(Oid));
+
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+
+		(void) XLogInsert(RM_HEAP_ID, XLOG_HEAP_TRUNCATE);
+	}
+
+	/*
 	 * Process all AFTER STATEMENT TRUNCATE triggers.
 	 */
 	resultRelInfo = resultRelInfos;
@@ -1593,7 +1697,10 @@ ExecuteTruncate(TruncateStmt *stmt)
 	/* We can clean up the EState now */
 	FreeExecutorState(estate);
 
-	/* And close the rels (can't do this while EState still holds refs) */
+	/* And close the eventual rels opened by CASCADE
+	 * (can't do this while EState still holds refs)
+	 */
+	rels = list_difference_ptr(rels, explicit_rels);
 	foreach(cell, rels)
 	{
 		Relation	rel = (Relation) lfirst(cell);

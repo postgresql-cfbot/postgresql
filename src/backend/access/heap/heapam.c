@@ -9157,6 +9157,13 @@ heap_redo(XLogReaderState *record)
 		case XLOG_HEAP_UPDATE:
 			heap_xlog_update(record, false);
 			break;
+		case XLOG_HEAP_TRUNCATE:
+			/*
+			 * TRUNCATE is a no-op because the actions are already logged
+			 * as SMGR WAL records. TRUNCATE WAL record only exists to allow
+			 * it to be logically decoded precisely.
+			 */
+			break;
 		case XLOG_HEAP_HOT_UPDATE:
 			heap_xlog_update(record, true);
 			break;

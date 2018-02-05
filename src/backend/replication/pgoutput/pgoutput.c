@@ -275,6 +275,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			if (!relentry->pubactions.pubupdate)
 				return;
 			break;
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
 		case REORDER_BUFFER_CHANGE_DELETE:
 			if (!relentry->pubactions.pubdelete)
 				return;
@@ -351,6 +352,15 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			}
 			else
 				elog(DEBUG1, "didn't send DELETE change because of missing oldtuple");
+			break;
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
+			{
+				OutputPluginPrepareWrite(ctx, true);
+				logicalrep_write_truncate(ctx->out, relation,
+										  change->data.truncate_msg.cascade,
+										  change->data.truncate_msg.restart_seqs);
+				OutputPluginWrite(ctx, true);
+			}
 			break;
 		default:
 			Assert(false);

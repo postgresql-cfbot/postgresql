@@ -466,6 +466,20 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 									&change->data.tp.oldtuple->tuple,
 									true);
 			break;
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
+			appendStringInfoString(ctx->out, " TRUNCATE:");
+
+			if (change->data.truncate_msg.restart_seqs
+				|| change->data.truncate_msg.cascade)
+			{
+				if (change->data.truncate_msg.restart_seqs)
+					appendStringInfo(ctx->out, " restart_seqs");
+				if (change->data.truncate_msg.cascade)
+					appendStringInfo(ctx->out, " cascade");
+			}
+			else
+				appendStringInfoString(ctx->out, " (no-flags)");
+			break;
 		default:
 			Assert(false);
 	}

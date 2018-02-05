@@ -333,6 +333,9 @@ UPDATE table_with_unique_not_null SET id = -id;
 UPDATE table_with_unique_not_null SET id = -id;
 DELETE FROM table_with_unique_not_null WHERE data = 3;
 
+TRUNCATE table_with_unique_not_null;
+TRUNCATE table_with_unique_not_null, table_with_unique_not_null RESTART IDENTITY CASCADE;
+
 -- check toast support
 BEGIN;
 CREATE SEQUENCE toasttable_rand_seq START 79 INCREMENT 1499; -- portable "random"

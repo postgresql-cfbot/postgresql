@@ -403,6 +403,8 @@ ReorderBufferReturnChange(ReorderBuffer *rb, ReorderBufferChange *change)
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 			break;
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
+			break;
 	}
 
 	pfree(change);
@@ -1342,6 +1344,13 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 
 			switch (change->action)
 			{
+				case REORDER_BUFFER_CHANGE_TRUNCATE:
+					reloid = change->data.truncate_msg.relid;
+					relation = RelationIdGetRelation(reloid);
+					rb->apply_change(rb, txn, relation, change);
+					RelationClose(relation);
+					break;
+
 				case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 
 					/*
@@ -2239,6 +2248,7 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				}
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
@@ -2524,6 +2534,7 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				break;
 			}
 			/* the base struct contains all the data, easy peasy */
+		case REORDER_BUFFER_CHANGE_TRUNCATE:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:

@@ -59,7 +59,8 @@ enum ReorderBufferChangeType
 	REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID,
 	REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID,
 	REORDER_BUFFER_CHANGE_INTERNAL_SPEC_INSERT,
-	REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM
+	REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM,
+	REORDER_BUFFER_CHANGE_TRUNCATE
 };
 
 /*
@@ -128,7 +129,18 @@ typedef struct ReorderBufferChange
 			CommandId	cmax;
 			CommandId	combocid;
 		}			tuplecid;
-	}			data;
+
+		/*
+		 * Truncate data for REORDER_BUFFER_CHANGE_TRUNCATE representing
+		 * one relation to be truncated.
+		 */
+		struct
+		{
+			Oid			relid;
+			bool		cascade;
+			bool		restart_seqs;
+		}	truncate_msg;
+	}	data;
 
 	/*
 	 * While in use this is how a change is linked into a transactions,

@@ -111,6 +111,11 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
           and so the default value for this option is
           <literal>'insert, update, delete'</literal>.
          </para>
+         <para>
+           <command>TRUNCATE</command> is treated as a form of
+           <command>DELETE</command> for the purpose of deciding whether
+           to publish, or not.
+         </para>
         </listitem>
        </varlistentry>
       </variablelist>
@@ -168,8 +173,7 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
   </para>
 
   <para>
-   <command>TRUNCATE</command> and <acronym>DDL</acronym> operations
-   are not published.
+   <acronym>DDL</acronym> operations are not published.
   </para>
  </refsect1>
 

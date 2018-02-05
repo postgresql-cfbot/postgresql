@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 16;
+use Test::More tests => 24;
 
 # Initialize publisher node
 my $node_publisher = get_new_node('publisher');
@@ -181,11 +181,21 @@ $result = $node_subscriber->safe_psql('postgres',
 is($result, qq(20|-20|-1),
 	'check changes skipped after subscription publication change');
 
+# truncate should not be replicated
+$node_publisher->safe_psql('postgres', "TRUNCATE tab_rep");
+
+$node_publisher->wait_for_catchup($appname);
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_rep");
+is($result, qq(20|-20|-1),
+	'check changes skipped after subscription publication change');
+
 # check alter publication (relcache invalidation etc)
 $node_publisher->safe_psql('postgres',
 	"ALTER PUBLICATION tap_pub_ins_only SET (publish = 'insert, delete')");
 $node_publisher->safe_psql('postgres',
-	"ALTER PUBLICATION tap_pub_ins_only ADD TABLE tab_full");
+	"ALTER PUBLICATION tap_pub_ins_only ADD TABLE tab_full, tab_rep");
 $node_publisher->safe_psql('postgres', "DELETE FROM tab_ins WHERE a > 0");
 $node_subscriber->safe_psql('postgres',
 	"ALTER SUBSCRIPTION tap_sub REFRESH PUBLICATION WITH (copy_data = false)"
@@ -203,6 +213,69 @@ is($result, qq(1052|1|1002),
 $result = $node_subscriber->safe_psql('postgres',
 	"SELECT count(*), min(a), max(a) FROM tab_full");
 is($result, qq(21|0|100), 'check replicated insert after alter publication');
+
+# add a sequence and a foreign key to check cascade and restart
+# identity truncate options
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE tab_notrep_fk (a int REFERENCES tab_rep(a))"
+);
+$node_subscriber->safe_psql('postgres', "INSERT INTO tab_notrep_fk VALUES (-1)");
+$node_subscriber->safe_psql('postgres',
+	"CREATE SEQUENCE seq_notrep OWNED BY tab_rep.a"
+);
+$node_subscriber->safe_psql('postgres',
+	"ALTER SEQUENCE seq_notrep START 101"
+);
+
+# truncate should now be replicated
+$node_publisher->safe_psql('postgres', "TRUNCATE tab_rep");
+
+$node_publisher->wait_for_catchup($appname);
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_rep");
+is($result, qq(0||),
+	'check replicated truncate after alter publication');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_notrep_fk");
+is($result, qq(1|-1|-1),
+	'check replicated truncate does not cascade');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT nextval('seq_notrep')");
+is($result, qq(1),
+	'check replicated truncate does not restart identities');
+
+# should restart identity
+$node_publisher->safe_psql('postgres', "TRUNCATE tab_rep RESTART IDENTITY");
+
+$node_publisher->wait_for_catchup($appname);
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_notrep_fk");
+is($result, qq(1|-1|-1),
+	'check replicated truncate does not cascade');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT nextval('seq_notrep')");
+is($result, qq(101),
+	'check replicated truncate restart identities');
+
+# should not cascade on replica
+$node_publisher->safe_psql('postgres', "TRUNCATE tab_rep CASCADE");
+
+$node_publisher->wait_for_catchup($appname);
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_notrep_fk");
+is($result, qq(1|-1|-1),
+	'check replicated truncate does not cascade on replica');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT nextval('seq_notrep')");
+is($result, qq(102),
+	'check replicated truncate does not restart identities');
 
 # check restart on rename
 $oldpid = $node_publisher->safe_psql('postgres',

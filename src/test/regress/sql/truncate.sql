@@ -33,6 +33,11 @@ TRUNCATE TABLE trunc_c,trunc_d,trunc_e,truncate_a,trunc_b;	-- ok
 TRUNCATE TABLE truncate_a RESTRICT; -- fail
 TRUNCATE TABLE truncate_a CASCADE;  -- ok
 
+-- Ignore foreign-key checks with session_replication_role = replica
+SET session_replication_role = replica;
+TRUNCATE TABLE truncate_a;		-- ok
+RESET session_replication_role;
+
 -- circular references
 ALTER TABLE truncate_a ADD FOREIGN KEY (col1) REFERENCES trunc_c;
 

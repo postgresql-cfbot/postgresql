@@ -575,4 +575,10 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 						 const char *relname);
 
+/*
+ * prototype for tablecmds.c accessible for logical apply
+ */
+void ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
+						 DropBehavior behavior, bool restart_seqs);
+
 #endif							/* EXECUTOR_H  */

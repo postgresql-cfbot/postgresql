@@ -30,6 +30,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
@@ -83,6 +84,7 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/timeout.h"
 #include "utils/tqual.h"
 #include "utils/syscache.h"
@@ -869,6 +871,56 @@ apply_handle_delete(StringInfo s)
 	CommandCounterIncrement();
 }
 
+/*
+ * Handle TRUNCATE message.
+ *
+ * TODO: FDW support
+ */
+static void
+apply_handle_truncate(StringInfo s)
+{
+	LogicalRepRelMapEntry *rel;
+	LogicalRepRelId relid;
+	bool	 cascade = false;
+	bool	 restart_seqs = false;
+	List	*rels = NIL;
+	List	*relids = NIL;
+	List	*relids_logged = NIL;
+
+	ensure_transaction();
+
+	relid = logicalrep_read_truncate(s, &cascade, &restart_seqs);
+	rel = logicalrep_rel_open(relid, RowExclusiveLock);
+	if (!should_apply_changes_for_rel(rel))
+	{
+		/*
+		 * The relation can't become interesting in the middle of the
+		 * transaction so it's safe to unlock it.
+		 */
+		logicalrep_rel_close(rel, RowExclusiveLock);
+		return;
+	}
+
+	/* Check if we can do the truncate. */
+	check_relation_updatable(rel);
+
+	rels = lappend(rels, rel->localrel);
+	relids = lappend_oid(relids, rel->localreloid);
+	if (RelationIsLogicallyLogged(rel->localrel))
+		relids_logged = lappend_oid(relids, rel->localreloid);
+
+	/*
+	 * Even if we used CASCADE on the upstream master we explicitly
+	 * default to replaying changes without further cascading.
+	 * This might be later changeable with a user specified option.
+	 */
+	ExecuteTruncateGuts(rels, relids, relids_logged, DROP_RESTRICT, restart_seqs);
+
+	logicalrep_rel_close(rel, NoLock);
+
+	CommandCounterIncrement();
+}
+
 
 /*
  * Logical replication protocol message dispatcher.
@@ -899,6 +951,10 @@ apply_dispatch(StringInfo s)
 			/* DELETE */
 		case 'D':
 			apply_handle_delete(s);
+			break;
+			/* TRUNCATE */
+		case 'T':
+			apply_handle_truncate(s);
 			break;
 			/* RELATION */
 		case 'R':

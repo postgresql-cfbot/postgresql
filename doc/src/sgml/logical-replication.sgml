@@ -111,6 +111,8 @@
    any combination of <command>INSERT</command>, <command>UPDATE</command>, and
    <command>DELETE</command>, similar to how triggers are fired by
    particular event types.  By default, all operation types are replicated.
+   <command>TRUNCATE</command> is treated as a form of <command>DELETE</command>
+   for the purpose of deciding whether to publish, or not.
   </para>
 
   <para>
@@ -361,15 +363,6 @@
      current data from the publisher (perhaps
      using <command>pg_dump</command>) or by determining a sufficiently high
      value from the tables themselves.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
-     <command>TRUNCATE</command> commands are not replicated.  This can, of
-     course, be worked around by using <command>DELETE</command> instead.  To
-     avoid accidental <command>TRUNCATE</command> invocations, you can revoke
-     the <literal>TRUNCATE</literal> privilege from tables.
     </para>
    </listitem>
 

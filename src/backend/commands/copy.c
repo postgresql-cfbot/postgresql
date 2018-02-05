@@ -2470,7 +2470,7 @@ CopyFrom(CopyState cstate)
 		PartitionTupleRouting *proute;
 
 		proute = cstate->partition_tuple_routing =
-			ExecSetupPartitionTupleRouting(NULL, cstate->rel, 1, estate);
+			ExecSetupPartitionTupleRouting(NULL, cstate->rel);
 
 		/*
 		 * If we are capturing transition tuples, they may need to be
@@ -2590,6 +2590,10 @@ CopyFrom(CopyState cstate)
 			Assert(leaf_part_index >= 0 &&
 				   leaf_part_index < proute->num_partitions);
 
+			/* Initialize partition info, if not done already. */
+			ExecInitPartitionInfo(NULL, resultRelInfo, proute, estate,
+								  leaf_part_index);
+
 			/*
 			 * If this tuple is mapped to a partition that is not same as the
 			 * previous one, we'd better make the bulk insert mechanism gets a
@@ -2607,6 +2611,7 @@ CopyFrom(CopyState cstate)
 			 */
 			saved_resultRelInfo = resultRelInfo;
 			resultRelInfo = proute->partitions[leaf_part_index];
+			Assert(resultRelInfo != NULL);
 
 			/* We do not yet have a way to insert into a foreign partition */
 			if (resultRelInfo->ri_FdwRoutine)

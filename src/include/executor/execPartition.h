@@ -91,6 +91,7 @@ typedef struct PartitionTupleRouting
 {
 	PartitionDispatch *partition_dispatch_info;
 	int			num_dispatch;
+	Oid		   *partition_oids;
 	ResultRelInfo **partitions;
 	int			num_partitions;
 	TupleConversionMap **parent_child_tupconv_maps;
@@ -103,15 +104,20 @@ typedef struct PartitionTupleRouting
 } PartitionTupleRouting;
 
 extern PartitionTupleRouting *ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
-							   Relation rel, Index resultRTindex,
-							   EState *estate);
+							   Relation rel);
 extern int ExecFindPartition(ResultRelInfo *resultRelInfo,
 				  PartitionDispatch *pd,
 				  TupleTableSlot *slot,
 				  EState *estate);
+extern void ExecInitPartitionInfo(ModifyTableState *mtstate,
+					ResultRelInfo *resultRelInfo,
+					PartitionTupleRouting *proute,
+					EState *estate, int partidx);
 extern void ExecSetupChildParentMapForLeaf(PartitionTupleRouting *proute);
 extern TupleConversionMap *TupConvMapForLeaf(PartitionTupleRouting *proute,
 				  ResultRelInfo *rootRelInfo, int leaf_index);
+extern TupleConversionMap *TupConvMapForSubplan(ModifyTableState *mtstate,
+				int subplan_index);
 extern HeapTuple ConvertPartitionTupleSlot(TupleConversionMap *map,
 						  HeapTuple tuple,
 						  TupleTableSlot *new_slot,

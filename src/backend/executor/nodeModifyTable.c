@@ -304,12 +304,17 @@ ExecInsert(ModifyTableState *mtstate,
 		Assert(leaf_part_index >= 0 &&
 			   leaf_part_index < proute->num_partitions);
 
+		/* Initialize partition info, if not done already. */
+		ExecInitPartitionInfo(mtstate, resultRelInfo, proute, estate,
+							  leaf_part_index);
+
 		/*
 		 * Save the old ResultRelInfo and switch to the one corresponding to
 		 * the selected partition.
 		 */
 		saved_resultRelInfo = resultRelInfo;
 		resultRelInfo = proute->partitions[leaf_part_index];
+		Assert(resultRelInfo != NULL);
 
 		/* We do not yet have a way to insert into a foreign partition */
 		if (resultRelInfo->ri_FdwRoutine)
@@ -1804,27 +1809,10 @@ tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
 	 * array *only* if partition-indexed array is not required.
 	 */
 	if (mtstate->mt_per_subplan_tupconv_maps == NULL)
-	{
-		int			leaf_index;
-		PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
+		return TupConvMapForSubplan(mtstate, whichplan);
 
-		/*
-		 * If subplan-indexed array is NULL, things should have been arranged
-		 * to convert the subplan index to partition index.
-		 */
-		Assert(proute && proute->subplan_partition_offsets != NULL &&
-			   whichplan < proute->num_subplan_partition_offsets);
-
-		leaf_index = proute->subplan_partition_offsets[whichplan];
-
-		return TupConvMapForLeaf(proute, getTargetResultRelInfo(mtstate),
-								 leaf_index);
-	}
-	else
-	{
-		Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
-		return mtstate->mt_per_subplan_tupconv_maps[whichplan];
-	}
+	Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
+	return mtstate->mt_per_subplan_tupconv_maps[whichplan];
 }
 
 /* ----------------------------------------------------------------
@@ -2098,14 +2086,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	ResultRelInfo *saved_resultRelInfo;
 	ResultRelInfo *resultRelInfo;
 	Plan	   *subplan;
-	int			firstVarno = 0;
-	Relation	firstResultRel = NULL;
 	ListCell   *l;
 	int			i;
 	Relation	rel;
 	bool		update_tuple_routing_needed = node->partColsUpdated;
-	PartitionTupleRouting *proute = NULL;
-	int			num_partitions = 0;
 
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
@@ -2228,20 +2212,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	 */
 	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
 		(operation == CMD_INSERT || update_tuple_routing_needed))
-	{
-		proute = mtstate->mt_partition_tuple_routing =
-			ExecSetupPartitionTupleRouting(mtstate,
-										   rel, node->nominalRelation,
-										   estate);
-		num_partitions = proute->num_partitions;
-
-		/*
-		 * Below are required as reference objects for mapping partition
-		 * attno's in expressions such as WithCheckOptions and RETURNING.
-		 */
-		firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
-		firstResultRel = mtstate->resultRelInfo[0].ri_RelationDesc;
-	}
+		mtstate->mt_partition_tuple_routing =
+						ExecSetupPartitionTupleRouting(mtstate, rel);
 
 	/*
 	 * Build state for collecting transition tuples.  This requires having a
@@ -2288,77 +2260,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	}
 
 	/*
-	 * Build WITH CHECK OPTION constraints for each leaf partition rel. Note
-	 * that we didn't build the withCheckOptionList for each partition within
-	 * the planner, but simple translation of the varattnos for each partition
-	 * will suffice.  This only occurs for the INSERT case or for UPDATE row
-	 * movement. DELETEs and local UPDATEs are handled above.
-	 */
-	if (node->withCheckOptionLists != NIL && num_partitions > 0)
-	{
-		List	   *first_wcoList;
-
-		/*
-		 * In case of INSERT on partitioned tables, there is only one plan.
-		 * Likewise, there is only one WITH CHECK OPTIONS list, not one per
-		 * partition. Whereas for UPDATE, there are as many WCOs as there are
-		 * plans. So in either case, use the WCO expression of the first
-		 * resultRelInfo as a reference to calculate attno's for the WCO
-		 * expression of each of the partitions. We make a copy of the WCO
-		 * qual for each partition. Note that, if there are SubPlans in there,
-		 * they all end up attached to the one parent Plan node.
-		 */
-		Assert(update_tuple_routing_needed ||
-			   (operation == CMD_INSERT &&
-				list_length(node->withCheckOptionLists) == 1 &&
-				mtstate->mt_nplans == 1));
-
-		first_wcoList = linitial(node->withCheckOptionLists);
-		for (i = 0; i < num_partitions; i++)
-		{
-			Relation	partrel;
-			List	   *mapped_wcoList;
-			List	   *wcoExprs = NIL;
-			ListCell   *ll;
-
-			resultRelInfo = proute->partitions[i];
-
-			/*
-			 * If we are referring to a resultRelInfo from one of the update
-			 * result rels, that result rel would already have
-			 * WithCheckOptions initialized.
-			 */
-			if (resultRelInfo->ri_WithCheckOptions)
-				continue;
-
-			partrel = resultRelInfo->ri_RelationDesc;
-
-			mapped_wcoList = map_partition_varattnos(first_wcoList,
-													 firstVarno,
-													 partrel, firstResultRel,
-													 NULL);
-			foreach(ll, mapped_wcoList)
-			{
-				WithCheckOption *wco = castNode(WithCheckOption, lfirst(ll));
-				ExprState  *wcoExpr = ExecInitQual(castNode(List, wco->qual),
-												   &mtstate->ps);
-
-				wcoExprs = lappend(wcoExprs, wcoExpr);
-			}
-
-			resultRelInfo->ri_WithCheckOptions = mapped_wcoList;
-			resultRelInfo->ri_WithCheckOptionExprs = wcoExprs;
-		}
-	}
-
-	/*
 	 * Initialize RETURNING projections if needed.
 	 */
 	if (node->returningLists)
 	{
 		TupleTableSlot *slot;
 		ExprContext *econtext;
-		List	   *firstReturningList;
 
 		/*
 		 * Initialize result tuple slot and assign its rowtype using the first
@@ -2388,44 +2295,6 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
 										resultRelInfo->ri_RelationDesc->rd_att);
 			resultRelInfo++;
-		}
-
-		/*
-		 * Build a projection for each leaf partition rel.  Note that we
-		 * didn't build the returningList for each partition within the
-		 * planner, but simple translation of the varattnos for each partition
-		 * will suffice.  This only occurs for the INSERT case or for UPDATE
-		 * row movement. DELETEs and local UPDATEs are handled above.
-		 */
-		firstReturningList = linitial(node->returningLists);
-		for (i = 0; i < num_partitions; i++)
-		{
-			Relation	partrel;
-			List	   *rlist;
-
-			resultRelInfo = proute->partitions[i];
-
-			/*
-			 * If we are referring to a resultRelInfo from one of the update
-			 * result rels, that result rel would already have a returningList
-			 * built.
-			 */
-			if (resultRelInfo->ri_projectReturning)
-				continue;
-
-			partrel = resultRelInfo->ri_RelationDesc;
-
-			/*
-			 * Use the returning expression of the first resultRelInfo as a
-			 * reference to calculate attno's for the returning expression of
-			 * each of the partitions.
-			 */
-			rlist = map_partition_varattnos(firstReturningList,
-											firstVarno,
-											partrel, firstResultRel, NULL);
-			resultRelInfo->ri_projectReturning =
-				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
-										resultRelInfo->ri_RelationDesc->rd_att);
 		}
 	}
 	else

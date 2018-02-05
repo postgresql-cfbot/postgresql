@@ -44,22 +44,23 @@ static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
  *
  * Note that all the relations in the partition tree are locked using the
  * RowExclusiveLock mode upon return from this function.
+ *
+ * While we allocate the arrays of pointers of various objects for all
+ * partitions here, the objects themselves are lazily allocated and
+ * initialized for a given partition if a tuple is actually routed to it;
+ * see ExecInitPartitionInfo.
  */
 PartitionTupleRouting *
-ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
-							   Relation rel, Index resultRTindex,
-							   EState *estate)
+ExecSetupPartitionTupleRouting(ModifyTableState *mtstate, Relation rel)
 {
-	TupleDesc	tupDesc = RelationGetDescr(rel);
+	PartitionTupleRouting *proute;
 	List	   *leaf_parts;
 	ListCell   *cell;
-	int			i;
-	ResultRelInfo *leaf_part_arr = NULL,
-			   *update_rri = NULL;
-	int			num_update_rri = 0,
-				update_rri_index = 0;
+	int			leaf_index,
+				update_rri_index,
+				num_update_rri;
 	bool		is_update = false;
-	PartitionTupleRouting *proute;
+	ResultRelInfo *update_rri;
 
 	/*
 	 * Get the information about the partition tree after locking all the
@@ -71,20 +72,24 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 		RelationGetPartitionDispatchInfo(rel, &proute->num_dispatch,
 										 &leaf_parts);
 	proute->num_partitions = list_length(leaf_parts);
-	proute->partitions = (ResultRelInfo **) palloc(proute->num_partitions *
-												   sizeof(ResultRelInfo *));
+	/*
+	 * Actual ResultRelInfo's and TupleConversionMap's are allocated in
+	 * ExecInitResultRelInfo().
+	 */
+	proute->partitions = (ResultRelInfo **) palloc0(proute->num_partitions *
+													sizeof(ResultRelInfo *));
 	proute->parent_child_tupconv_maps =
 		(TupleConversionMap **) palloc0(proute->num_partitions *
 										sizeof(TupleConversionMap *));
+	proute->partition_oids = (Oid *) palloc0(proute->num_partitions *
+											 sizeof(Oid));
 
 	/* Set up details specific to the type of tuple routing we are doing. */
 	if (mtstate && mtstate->operation == CMD_UPDATE)
 	{
-		ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
-
 		is_update = true;
 		update_rri = mtstate->resultRelInfo;
-		num_update_rri = list_length(node->plans);
+		num_update_rri = mtstate->mt_nplans;
 		proute->subplan_partition_offsets =
 			palloc(num_update_rri * sizeof(int));
 		proute->num_subplan_partition_offsets = num_update_rri;
@@ -95,15 +100,29 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 		 */
 		proute->root_tuple_slot = MakeTupleTableSlot();
 	}
-	else
+
+	leaf_index = update_rri_index = 0;
+	foreach (cell, leaf_parts)
 	{
+		Oid		leaf_oid = lfirst_oid(cell);
+
+		proute->partition_oids[leaf_index] = leaf_oid;
+
 		/*
-		 * Since we are inserting tuples, we need to create all new result
-		 * rels. Avoid repeated pallocs by allocating memory for all the
-		 * result rels in bulk.
+		 * The per-subplan resultrels and the resultrels of the leaf
+		 * partitions are both in the same canonical order.  So while going
+		 * through the leaf partition oids, we need to keep track of the
+		 * next per-subplan result rel to be looked for in the leaf
+		 * partition resultrels.
 		 */
-		leaf_part_arr = (ResultRelInfo *) palloc0(proute->num_partitions *
-												  sizeof(ResultRelInfo));
+		if (is_update && update_rri_index < num_update_rri &&
+			RelationGetRelid(update_rri[update_rri_index].ri_RelationDesc) == leaf_oid)
+		{
+			proute->subplan_partition_offsets[update_rri_index] = leaf_index;
+			update_rri_index++;
+		}
+
+		leaf_index++;
 	}
 
 	/*
@@ -113,109 +132,6 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 	 * processing.
 	 */
 	proute->partition_tuple_slot = MakeTupleTableSlot();
-
-	i = 0;
-	foreach(cell, leaf_parts)
-	{
-		ResultRelInfo *leaf_part_rri;
-		Relation	partrel = NULL;
-		TupleDesc	part_tupdesc;
-		Oid			leaf_oid = lfirst_oid(cell);
-
-		if (is_update)
-		{
-			/*
-			 * If the leaf partition is already present in the per-subplan
-			 * result rels, we re-use that rather than initialize a new result
-			 * rel. The per-subplan resultrels and the resultrels of the leaf
-			 * partitions are both in the same canonical order. So while going
-			 * through the leaf partition oids, we need to keep track of the
-			 * next per-subplan result rel to be looked for in the leaf
-			 * partition resultrels.
-			 */
-			if (update_rri_index < num_update_rri &&
-				RelationGetRelid(update_rri[update_rri_index].ri_RelationDesc) == leaf_oid)
-			{
-				leaf_part_rri = &update_rri[update_rri_index];
-				partrel = leaf_part_rri->ri_RelationDesc;
-
-				/*
-				 * This is required in order to we convert the partition's
-				 * tuple to be compatible with the root partitioned table's
-				 * tuple descriptor.  When generating the per-subplan result
-				 * rels, this was not set.
-				 */
-				leaf_part_rri->ri_PartitionRoot = rel;
-
-				/* Remember the subplan offset for this ResultRelInfo */
-				proute->subplan_partition_offsets[update_rri_index] = i;
-
-				update_rri_index++;
-			}
-			else
-				leaf_part_rri = (ResultRelInfo *) palloc0(sizeof(ResultRelInfo));
-		}
-		else
-		{
-			/* For INSERTs, we already have an array of result rels allocated */
-			leaf_part_rri = &leaf_part_arr[i];
-		}
-
-		/*
-		 * If we didn't open the partition rel, it means we haven't
-		 * initialized the result rel either.
-		 */
-		if (!partrel)
-		{
-			/*
-			 * We locked all the partitions above including the leaf
-			 * partitions. Note that each of the newly opened relations in
-			 * proute->partitions are eventually closed by the caller.
-			 */
-			partrel = heap_open(leaf_oid, NoLock);
-			InitResultRelInfo(leaf_part_rri,
-							  partrel,
-							  resultRTindex,
-							  rel,
-							  estate->es_instrument);
-		}
-
-		part_tupdesc = RelationGetDescr(partrel);
-
-		/*
-		 * Save a tuple conversion map to convert a tuple routed to this
-		 * partition from the parent's type to the partition's.
-		 */
-		proute->parent_child_tupconv_maps[i] =
-			convert_tuples_by_name(tupDesc, part_tupdesc,
-								   gettext_noop("could not convert row type"));
-
-		/*
-		 * Verify result relation is a valid target for an INSERT.  An UPDATE
-		 * of a partition-key becomes a DELETE+INSERT operation, so this check
-		 * is still required when the operation is CMD_UPDATE.
-		 */
-		CheckValidResultRel(leaf_part_rri, CMD_INSERT);
-
-		/*
-		 * Open partition indices.  The user may have asked to check for
-		 * conflicts within this leaf partition and do "nothing" instead of
-		 * throwing an error.  Be prepared in that case by initializing the
-		 * index information needed by ExecInsert() to perform speculative
-		 * insertions.
-		 */
-		if (leaf_part_rri->ri_RelationDesc->rd_rel->relhasindex &&
-			leaf_part_rri->ri_IndexRelationDescs == NULL)
-			ExecOpenIndices(leaf_part_rri,
-							mtstate != NULL &&
-							mtstate->mt_onconflict != ONCONFLICT_NONE);
-
-		estate->es_leaf_result_relations =
-			lappend(estate->es_leaf_result_relations, leaf_part_rri);
-
-		proute->partitions[i] = leaf_part_rri;
-		i++;
-	}
 
 	/*
 	 * For UPDATE, we should have found all the per-subplan resultrels in the
@@ -345,6 +261,244 @@ ExecFindPartition(ResultRelInfo *resultRelInfo, PartitionDispatch *pd,
 	return result;
 }
 
+static int
+leafpart_index_cmp(const void *arg1, const void *arg2)
+{
+	int		leafidx1 = *(const int *) arg1;
+	int		leafidx2 = *(const int *) arg2;
+
+	if (leafidx1 > leafidx2)
+		return 1;
+	else if (leafidx1 < leafidx2)
+		return -1;
+	return 0;
+}
+
+/*
+ * ExecInitPartitionInfo
+ *		Initialize ResultRelInfo and other information for a partition if not
+ *		already done
+ */
+void
+ExecInitPartitionInfo(ModifyTableState *mtstate,
+					  ResultRelInfo *resultRelInfo,
+					  PartitionTupleRouting *proute,
+					  EState *estate, int partidx)
+{
+	Relation	partrel,
+				rootrel;
+	ResultRelInfo *leaf_part_rri;
+
+	/* Nothing to do if already set. */
+	if (proute->partitions[partidx])
+		return;
+
+	leaf_part_rri = NULL;
+	rootrel = resultRelInfo->ri_RelationDesc;
+
+	/*
+	 * If we are doing tuple routing for update, try to reuse the
+	 * per-subplan resultrel for this partition that ExecInitModifyTable()
+	 * might already have created.
+	 */
+	if (mtstate && mtstate->operation == CMD_UPDATE)
+	{
+		int   *partidx_entry;
+
+		/*
+		 * If the partition's ResultRelInfo has already been created, we'd
+		 * find its index in proute->subplan_partition_offsets.
+		 */
+		partidx_entry = (int *) bsearch(&partidx,
+										proute->subplan_partition_offsets,
+										mtstate->mt_nplans, sizeof(int),
+										leafpart_index_cmp);
+		if (partidx_entry)
+		{
+			int		update_rri_index =
+							partidx_entry - proute->subplan_partition_offsets;
+
+			Assert (update_rri_index < mtstate->mt_nplans);
+			leaf_part_rri = &mtstate->resultRelInfo[update_rri_index];
+			partrel = leaf_part_rri->ri_RelationDesc;
+
+			/*
+			 * This is required in order to we convert the partition's
+			 * tuple to be compatible with the root partitioned table's
+			 * tuple descriptor.  When generating the per-subplan result
+			 * rels, this was not set.
+			 */
+			leaf_part_rri->ri_PartitionRoot = rootrel;
+		}
+	}
+
+	/*
+	 * Create new result rel, either if we are *inserting* the new tuple, or
+	 * if we didn't find the result rel above for the update tuple routing
+	 * case.
+	 */
+	if (leaf_part_rri == NULL)
+	{
+		int			firstVarno;
+		Relation	firstResultRel;
+		ModifyTable *node = NULL;
+
+		if (mtstate)
+		{
+			node = (ModifyTable *) mtstate->ps.plan;
+			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+			firstResultRel = mtstate->resultRelInfo[0].ri_RelationDesc;
+		}
+
+		leaf_part_rri = (ResultRelInfo *) palloc0(sizeof(ResultRelInfo));
+
+		/*
+		 * We locked all the partitions in ExecSetupPartitionTupleRouting
+		 * including the leaf partitions.
+		 */
+		partrel = heap_open(proute->partition_oids[partidx], NoLock);
+		InitResultRelInfo(leaf_part_rri,
+						  partrel,
+						  node ? node->nominalRelation : 1,
+						  rootrel,
+						  estate->es_instrument);
+
+		/*
+		 * Build WITH CHECK OPTION constraints for this partition rel.  Note
+		 * that we didn't build the withCheckOptionList for each partition
+		 * within the planner, but simple translation of the varattnos will
+		 * suffice.  This only occurs for the INSERT case or in the case of
+		 * UPDATE for which we didn't find a result rel above to reuse.
+		 */
+		if (node && node->withCheckOptionLists != NIL)
+		{
+			List	   *wcoList;
+			List	   *mapped_wcoList;
+			List	   *wcoExprs = NIL;
+			ListCell   *ll;
+
+			/*
+			 * In the case of INSERT on partitioned tables, there is only one
+			 * plan.  Likewise, there is only one WCO list, not one per
+			 * partition.  For UPDATE, there would be as many WCO lists as
+			 * there are plans, but we use the first one as reference.  Note
+			 * that if there are SubPlans in there, they all end up attached
+			 * to the one parent Plan node.
+			 */
+			Assert((node->operation == CMD_INSERT &&
+					list_length(node->withCheckOptionLists) == 1 &&
+					list_length(node->plans) == 1) ||
+				   (node->operation == CMD_UPDATE &&
+					list_length(node->withCheckOptionLists) ==
+					list_length(node->plans)));
+			wcoList = linitial(node->withCheckOptionLists);
+
+			mapped_wcoList = map_partition_varattnos(wcoList,
+													 firstVarno,
+													 partrel, firstResultRel,
+													 NULL);
+			foreach(ll, mapped_wcoList)
+			{
+				WithCheckOption *wco = castNode(WithCheckOption, lfirst(ll));
+				ExprState  *wcoExpr = ExecInitQual(castNode(List, wco->qual),
+												   mtstate->mt_plans[0]);
+				wcoExprs = lappend(wcoExprs, wcoExpr);
+			}
+
+			leaf_part_rri->ri_WithCheckOptions = mapped_wcoList;
+			leaf_part_rri->ri_WithCheckOptionExprs = wcoExprs;
+		}
+
+		/*
+		 * Build the RETURNING projection if any for the partition.  Note that
+		 * we didn't build the returningList for each partition within the
+		 * planner, but simple translation of the varattnos will suffice.
+		 * This only occurs for the INSERT case; in the UPDATE/DELETE cases,
+		 * ExecInitModifyTable() would've initialized this.
+		 */
+		if (node && node->returningLists != NIL)
+		{
+			TupleTableSlot *slot;
+			ExprContext *econtext;
+			List	   *returningList;
+			List	   *rlist;
+			TupleDesc	tupDesc;
+
+			/* See the comment written above for WCO lists. */
+			Assert((node->operation == CMD_INSERT &&
+					list_length(node->returningLists) == 1 &&
+					list_length(node->plans) == 1) ||
+				   (node->operation == CMD_UPDATE &&
+					list_length(node->returningLists) ==
+					list_length(node->plans)));
+			returningList = linitial(node->returningLists);
+
+			/*
+			 * Initialize result tuple slot and assign its rowtype using the first
+			 * RETURNING list.  We assume the rest will look the same.
+			 */
+			tupDesc = ExecTypeFromTL(returningList, false);
+
+			/* Set up a slot for the output of the RETURNING projection(s) */
+			ExecInitResultTupleSlot(estate, &mtstate->ps);
+			ExecAssignResultType(&mtstate->ps, tupDesc);
+			slot = mtstate->ps.ps_ResultTupleSlot;
+
+			/* Need an econtext too */
+			if (mtstate->ps.ps_ExprContext == NULL)
+				ExecAssignExprContext(estate, &mtstate->ps);
+			econtext = mtstate->ps.ps_ExprContext;
+
+			rlist = map_partition_varattnos(returningList,
+											firstVarno,
+											partrel, firstResultRel, NULL);
+			leaf_part_rri->ri_projectReturning =
+				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
+										RelationGetDescr(partrel));
+		}
+
+		/*
+		 * Open partition indices.  The user may have asked to check for
+		 * conflicts within this leaf partition and do "nothing" instead of
+		 * throwing an error.  Be prepared in that case by initializing the
+		 * index information needed by ExecInsert() to perform speculative
+		 * insertions.
+		 */
+		if (partrel->rd_rel->relhasindex &&
+			leaf_part_rri->ri_IndexRelationDescs == NULL)
+			ExecOpenIndices(leaf_part_rri,
+							mtstate != NULL &&
+							mtstate->mt_onconflict != ONCONFLICT_NONE);
+	}
+
+	/*
+	 * Verify result relation is a valid target for an INSERT.  An UPDATE
+	 * of a partition-key becomes a DELETE+INSERT operation, so this check
+	 * is still required when the operation is CMD_UPDATE.
+	 */
+	CheckValidResultRel(leaf_part_rri, CMD_INSERT);
+
+	proute->partitions[partidx] = leaf_part_rri;
+
+	/*
+	 * Note that the entries in this list appear in no predetermined order,
+	 * because partition result rels are initialized as and when they're
+	 * needed.
+	 */
+	estate->es_leaf_result_relations =
+								lappend(estate->es_leaf_result_relations,
+										leaf_part_rri);
+
+	/*
+	 * Save a tuple conversion map to convert a tuple routed to this
+	 * partition from the parent's type to the partition's.
+	 */
+	proute->parent_child_tupconv_maps[partidx] =
+							convert_tuples_by_name(RelationGetDescr(rootrel),
+												   RelationGetDescr(partrel),
+											   gettext_noop("could not convert row type"));
+}
+
 /*
  * ExecSetupChildParentMapForLeaf -- Initialize the per-leaf-partition
  * child-to-root tuple conversion map array.
@@ -373,40 +527,89 @@ ExecSetupChildParentMapForLeaf(PartitionTupleRouting *proute)
 }
 
 /*
- * TupConvMapForLeaf -- Get the tuple conversion map for a given leaf partition
- * index.
+ * ChildParentTupConvMap -- Return tuple conversion map to convert tuples of
+ *							'partrel' into those of 'rootrel'
+ *
+ * If the function was previously called for this partition, we would've
+ * either already created the map and stored the same at
+ * proute->child_parent_tupconv_maps[index] or found out that such a map
+ * is not needed and thus set proute->child_parent_map_not_required[index].
  */
-TupleConversionMap *
-TupConvMapForLeaf(PartitionTupleRouting *proute,
-				  ResultRelInfo *rootRelInfo, int leaf_index)
+static TupleConversionMap *
+ChildParentTupConvMap(Relation partrel, Relation rootrel,
+					  PartitionTupleRouting *proute, int index)
 {
-	ResultRelInfo **resultRelInfos = proute->partitions;
-	TupleConversionMap **map;
-	TupleDesc	tupdesc;
+	TupleConversionMap *map;
 
 	/* Don't call this if we're not supposed to be using this type of map. */
 	Assert(proute->child_parent_tupconv_maps != NULL);
 
 	/* If it's already known that we don't need a map, return NULL. */
-	if (proute->child_parent_map_not_required[leaf_index])
+	if (proute->child_parent_map_not_required[index])
 		return NULL;
 
 	/* If we've already got a map, return it. */
-	map = &proute->child_parent_tupconv_maps[leaf_index];
-	if (*map != NULL)
-		return *map;
+	map = proute->child_parent_tupconv_maps[index];
+	if (map != NULL)
+		return map;
 
 	/* No map yet; try to create one. */
-	tupdesc = RelationGetDescr(resultRelInfos[leaf_index]->ri_RelationDesc);
-	*map =
-		convert_tuples_by_name(tupdesc,
-							   RelationGetDescr(rootRelInfo->ri_RelationDesc),
-							   gettext_noop("could not convert row type"));
+	map = convert_tuples_by_name(RelationGetDescr(partrel),
+								 RelationGetDescr(rootrel),
+								 gettext_noop("could not convert row type"));
 
 	/* If it turns out no map is needed, remember for next time. */
-	proute->child_parent_map_not_required[leaf_index] = (*map == NULL);
+	proute->child_parent_map_not_required[index] = (map == NULL);
 
-	return *map;
+	return map;
+}
+
+/*
+ * TupConvMapForLeaf -- Get the tuple conversion map for a given leaf partition
+ * index.
+ *
+ * Call this only if it's known that the partition at leaf_index has been
+ * initialized.
+ */
+TupleConversionMap *
+TupConvMapForLeaf(PartitionTupleRouting *proute,
+				  ResultRelInfo *rootRelInfo, int leaf_index)
+{
+	ResultRelInfo **resultrels = proute->partitions;
+
+	Assert(resultrels[leaf_index] != NULL);
+
+	return ChildParentTupConvMap(resultrels[leaf_index]->ri_RelationDesc,
+								 rootRelInfo->ri_RelationDesc, proute,
+								 leaf_index);
+}
+
+/*
+ * TupConvMapForSubplan -- Get the tuple conversion map for a partition given
+ * its subplan index.
+ *
+ * Call this if it's unclear whether the partition's ResultRelInfo has been
+ * initialized in mtstate->mt_partition_tuple_routing.
+ */
+TupleConversionMap *
+TupConvMapForSubplan(ModifyTableState *mtstate, int subplan_index)
+{
+	int		leaf_index;
+	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
+	ResultRelInfo *resultrels = mtstate->resultRelInfo,
+				  *rootRelInfo = (mtstate->rootResultRelInfo != NULL)
+									? mtstate->rootResultRelInfo
+									: mtstate->resultRelInfo;
+
+	Assert(proute != NULL &&
+		   proute->subplan_partition_offsets != NULL &&
+		   subplan_index < proute->num_subplan_partition_offsets);
+	leaf_index = proute->subplan_partition_offsets[subplan_index];
+
+	Assert(subplan_index >= 0 && subplan_index < mtstate->mt_nplans);
+	return ChildParentTupConvMap(resultrels[subplan_index].ri_RelationDesc,
+								 rootRelInfo->ri_RelationDesc,
+								 proute, leaf_index);
 }
 
 /*
@@ -489,8 +692,11 @@ ExecCleanupTupleRouting(PartitionTupleRouting *proute)
 			continue;
 		}
 
-		ExecCloseIndices(resultRelInfo);
-		heap_close(resultRelInfo->ri_RelationDesc, NoLock);
+		if (resultRelInfo)
+		{
+			ExecCloseIndices(resultRelInfo);
+			heap_close(resultRelInfo->ri_RelationDesc, NoLock);
+		}
 	}
 
 	/* Release the standalone partition tuple descriptors, if any */

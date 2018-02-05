@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 4;
+use Test::More tests => 6;
 
 use RewindTest;
 

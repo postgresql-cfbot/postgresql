@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 8;
+use Test::More tests => 10;
 
 use RewindTest;
 
@@ -9,7 +9,7 @@ sub run_test
 {
 	my $test_mode = shift;
 
-	RewindTest::setup_cluster($test_mode);
+	RewindTest::setup_cluster($test_mode, 1);
 	RewindTest::start_master();
 
 	# Create a test table and insert a row in master.

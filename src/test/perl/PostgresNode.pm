@@ -268,6 +268,20 @@ sub connstr
 
 =pod
 
+=item $node->group_access()
+
+Does the data dir allow group access?
+
+=cut
+
+sub group_access
+{
+	my ($self) = @_;
+	return $self->{_group_access};
+}
+
+=pod
+
 =item $node->data_dir()
 
 Returns the path to the data directory. postgresql.conf and pg_hba.conf are
@@ -405,9 +419,15 @@ sub init
 
 	$params{allows_streaming} = 0 unless defined $params{allows_streaming};
 	$params{has_archiving}    = 0 unless defined $params{has_archiving};
+	$params{has_group_access} = 0 unless defined $params{has_group_access};
 
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
+
+    if ($params{has_group_access})
+    {
+        push(@{$params{extra}}, '-g');
+    }
 
 	TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
 		@{ $params{extra} });
@@ -459,8 +479,12 @@ sub init
 	}
 	close $conf;
 
+    chmod($params{has_group_access} ? 0640 : 0600, "$pgdata/postgresql.conf")
+        or die("unable to set permissions for $pgdata/postgresql.conf");
+
 	$self->set_replication_conf if $params{allows_streaming};
 	$self->enable_archiving     if $params{has_archiving};
+	$self->{_group_access} = 1  if $params{has_group_access};
 }
 
 =pod
@@ -483,6 +507,9 @@ sub append_conf
 	my $conffile = $self->data_dir . '/' . $filename;
 
 	TestLib::append_to_file($conffile, $str . "\n");
+
+    chmod($self->group_access() ? 0640 : 0600, $conffile)
+        or die("unable to set permissions for $conffile");
 }
 
 =pod

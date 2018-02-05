@@ -12,8 +12,10 @@ use warnings;
 
 use Config;
 use Exporter 'import';
+use Fcntl qw(:mode);
 use File::Basename;
 use File::Spec;
+use File::stat qw(stat);
 use File::Temp ();
 use IPC::Run;
 use SimpleTee;
@@ -26,6 +28,7 @@ our @EXPORT = qw(
   slurp_dir
   slurp_file
   append_to_file
+  check_pg_data_perm
   check_pg_config
   system_or_bail
   system_log
@@ -220,6 +223,96 @@ sub append_to_file
 	  or die "could not write \"$filename\": $!";
 	print $fh $str;
 	close $fh;
+}
+
+# Ensure all permissions in the pg_data directory are correct.  When allow_group
+# is true then permissions should be dir = 0750, file = 0640.  When allow_group
+# is false then permissions should be dir = 0700, file = 0600.
+sub check_pg_data_perm
+{
+    my ($dir, $allow_group, $level) = @_;
+
+    # Expected permission
+    my $expected_file_perm = $allow_group ? 0640 : 0600;
+    my $expected_dir_perm = $allow_group ? 0750 : 0700;
+
+    # First level is 0
+    $level = defined($level) ? $level : 0;
+
+    # Get all entries in the dir
+    opendir(my $dir_handle, $dir)
+        or die("unable to open $dir");
+
+    my @dir_entry = grep(!/^(\.\.)$/i, readdir($dir_handle));
+    close($dir_handle);
+
+    @dir_entry != 0
+        or die("unable to read $dir");
+
+    # Check each entry
+    foreach my $entry (@dir_entry)
+    {
+        my $entry_path = $entry eq '.' ? $dir : "$dir/$entry";
+        my $entry_stat = stat($entry_path);
+
+        defined($entry_stat)
+            or die("unable to stat $entry_path");
+
+        my $entry_mode = S_IMODE($entry_stat->mode);
+
+        # Is this a file?
+        if (S_ISREG($entry_stat->mode))
+        {
+            # postmaster.pid file must be 600
+            if ($level == 0 && $entry eq 'postmaster.pid')
+            {
+                if ($entry_mode != 0600)
+                {
+                    print(*STDERR, "$entry_path mode must be 0600\n");
+                    return 0;
+                }
+            }
+            else
+            {
+                if ($entry_mode != $expected_file_perm)
+                {
+                    print(*STDERR,
+                        sprintf("$entry_path mode must be %04o\n",
+                            $expected_file_perm));
+                    return 0;
+                }
+            }
+        }
+        # Else a directory?
+        elsif (S_ISDIR($entry_stat->mode))
+        {
+            # Only need to check the dir once
+            if ($entry eq '.')
+            {
+                if ($entry_mode != $expected_dir_perm)
+                {
+                    print(*STDERR,
+                        sprintf("$entry_path mode must be %04o\n",
+                            $expected_dir_perm));
+                    return 0;
+                }
+            }
+            else
+            {
+                if (!check_pg_data_perm($entry_path, $allow_group, $level + 1))
+                {
+                    return 0;
+                }
+            }
+        }
+        # Else something we can't handle
+        else
+        {
+            die "unknown file type for $entry_path";
+        }
+    }
+
+    return 1;
 }
 
 # Check presence of a given regexp within pg_config.h for the installation

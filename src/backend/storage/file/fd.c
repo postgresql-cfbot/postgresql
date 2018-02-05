@@ -84,6 +84,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_tablespace.h"
+#include "common/file_perm.h"
 #include "pgstat.h"
 #include "portability/mem.h"
 #include "storage/fd.h"
@@ -123,12 +124,6 @@
  * ones, choke.
  */
 #define FD_MINFREE				10
-
-/*
- * Default mode for created files, unless something else is specified using
- * the *Perm() function variants.
- */
-#define PG_FILE_MODE_DEFAULT	(S_IRUSR | S_IWUSR)
 
 /*
  * A number of platforms allow individual processes to open many more files
@@ -1435,7 +1430,7 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 void
 PathNameCreateTemporaryDir(const char *basedir, const char *directory)
 {
-	if (mkdir(directory, S_IRWXU) < 0)
+	if (MakeDirectoryDefaultPerm(directory) < 0)
 	{
 		if (errno == EEXIST)
 			return;
@@ -1445,14 +1440,14 @@ PathNameCreateTemporaryDir(const char *basedir, const char *directory)
 		 * EEXIST to close a race against another process following the same
 		 * algorithm.
 		 */
-		if (mkdir(basedir, S_IRWXU) < 0 && errno != EEXIST)
+		if (MakeDirectoryDefaultPerm(basedir) < 0 && errno != EEXIST)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("cannot create temporary directory \"%s\": %m",
 							basedir)));
 
 		/* Try again. */
-		if (mkdir(directory, S_IRWXU) < 0 && errno != EEXIST)
+		if (MakeDirectoryDefaultPerm(directory) < 0 && errno != EEXIST)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("cannot create temporary subdirectory \"%s\": %m",
@@ -1602,11 +1597,11 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 		 * We might need to create the tablespace's tempfile directory, if no
 		 * one has yet done so.
 		 *
-		 * Don't check for error from mkdir; it could fail if someone else
-		 * just did the same thing.  If it doesn't work then we'll bomb out on
+		 * Don't check error from MakeDirectoryDefaultPerm; it could fail if someone
+		 * else just did the same thing.  If it doesn't work then we'll bomb out on
 		 * the second create attempt, instead.
 		 */
-		mkdir(tempdirpath, S_IRWXU);
+		MakeDirectoryDefaultPerm(tempdirpath);
 
 		file = PathNameOpenFile(tempfilepath,
 								O_RDWR | O_CREAT | O_TRUNC | PG_BINARY);
@@ -3554,4 +3549,17 @@ fsync_parent_path(const char *fname, int elevel)
 		return -1;
 
 	return 0;
+}
+
+/*
+ * Create a directory using PG_DIR_MODE_DEFAULT for permissions
+ *
+ * Directories in PGDATA should normally have specific permissions -- when
+ * using this function the caller does not need to know what they should be.
+ * For permissions other than the default use mkdir() directly.
+ */
+int
+MakeDirectoryDefaultPerm(const char *directoryName)
+{
+	return mkdir(directoryName, PG_DIR_MODE_DEFAULT);
 }

@@ -2,9 +2,11 @@ use strict;
 use warnings;
 
 use Config;
+use Fcntl ':mode';
+use File::stat qw{lstat};
 use PostgresNode;
 use TestLib;
-use Test::More tests => 19;
+use Test::More tests => 25;
 
 my $tempdir       = TestLib::tempdir;
 my $tempdir_short = TestLib::tempdir_short;
@@ -57,10 +59,37 @@ command_ok([ 'pg_ctl', 'stop', '-D', "$tempdir/data" ], 'pg_ctl stop');
 command_fails([ 'pg_ctl', 'stop', '-D', "$tempdir/data" ],
 	'second pg_ctl stop fails');
 
+# Log file for first perm test
+my $logFileName = "$tempdir/data/perm-test-600.log";
+
 command_ok(
-	[ 'pg_ctl', 'restart', '-D', "$tempdir/data" ],
+	[ 'pg_ctl', 'restart', '-D', "$tempdir/data", '-l', $logFileName ],
 	'pg_ctl restart with server not running');
-command_ok([ 'pg_ctl', 'restart', '-D', "$tempdir/data" ],
+
+# Log file should exist and have no group permissions
+ok(-f $logFileName);
+ok(check_pg_data_perm("$tempdir/data", 0));
+
+# Log file for second perm test
+$logFileName = "$tempdir/data/perm-test-640.log";
+
+# Change the data dir mode so log file will be created with group read
+# privileges on the next start
+system_or_bail 'pg_ctl', 'stop', '-D', "$tempdir/data";
+
+command_ok(
+	[ 'chmod', "-R", 'g+rX', "$tempdir/data" ],
+	'add group perms to PGDATA');
+
+command_ok(
+	[ 'pg_ctl', 'start', '-D', "$tempdir/data", '-l', $logFileName ],
+	'start server to check group permissions');
+
+ok(-f $logFileName);
+ok(check_pg_data_perm("$tempdir/data", 1));
+
+command_ok(
+	[ 'pg_ctl', 'restart', '-D', "$tempdir/data", '-l', $logFileName ],
 	'pg_ctl restart with server running');
 
 system_or_bail 'pg_ctl', 'stop', '-D', "$tempdir/data";

@@ -97,6 +97,7 @@
 #include "access/xlog.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/pg_control.h"
+#include "common/file_perm.h"
 #include "common/ip.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
@@ -587,7 +588,8 @@ PostmasterMain(int argc, char *argv[])
 	IsPostmasterEnvironment = true;
 
 	/*
-	 * for security, no dir or file created can be group or other accessible
+	 * By default, no dir or file created can be group or other accessible.  This
+	 * may be modified later depending in the permissions of the data directory.
 	 */
 	umask(S_IRWXG | S_IRWXO);
 
@@ -1524,25 +1526,30 @@ checkDataDir(void)
 #endif
 
 	/*
-	 * Check if the directory has group or world access.  If so, reject.
-	 *
-	 * It would be possible to allow weaker constraints (for example, allow
-	 * group access) but we cannot make a general assumption that that is
-	 * okay; for example there are platforms where nearly all users
-	 * customarily belong to the same group.  Perhaps this test should be
-	 * configurable.
+	 * Check if the directory has correct permissions.  If not, reject.
 	 *
 	 * XXX temporarily suppress check when on Windows, because there may not
 	 * be proper support for Unix-y file permissions.  Need to think of a
 	 * reasonable check to apply on Windows.
 	 */
 #if !defined(WIN32) && !defined(__CYGWIN__)
-	if (stat_buf.st_mode & (S_IRWXG | S_IRWXO))
+	if (stat_buf.st_mode & PG_MODE_MASK_ALLOW_GROUP)
 		ereport(FATAL,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("data directory \"%s\" has group or world access",
+				 errmsg("data directory \"%s\" has invalid permissions",
 						DataDir),
-				 errdetail("Permissions should be u=rwx (0700).")));
+				 errdetail("Permissions should be u=rwx (0700) or u=rwx,g=rx (0750).")));
+#endif
+
+	/*
+	 * Reset the file mode creation mask based on the mode of the data
+	 * directory.
+	 *
+	 * Suppress when on Windows, because there may not be proper support
+	 * for Unix-y file permissions.
+	 */
+#if !defined(WIN32) && !defined(__CYGWIN__)
+	umask(PG_MODE_MASK_DEFAULT & ~stat_buf.st_mode);
 #endif
 
 	/* Look for PG_VERSION before looking for pg_control */
@@ -4495,7 +4502,7 @@ internal_forkexec(int argc, char *argv[], Port *port)
 		 * As in OpenTemporaryFileInTablespace, try to make the temp-file
 		 * directory
 		 */
-		mkdir(PG_TEMP_FILES_DIR, S_IRWXU);
+		MakeDirectoryDefaultPerm(PG_TEMP_FILES_DIR);
 
 		fp = AllocateFile(tmpfilename, PG_BINARY_W);
 		if (!fp)

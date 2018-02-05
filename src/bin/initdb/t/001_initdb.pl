@@ -4,9 +4,11 @@
 
 use strict;
 use warnings;
+use Fcntl ':mode';
+use File::stat qw{lstat};
 use PostgresNode;
 use TestLib;
-use Test::More tests => 15;
+use Test::More tests => 18;
 
 my $tempdir = TestLib::tempdir;
 my $xlogdir = "$tempdir/pgxlog";
@@ -45,6 +47,17 @@ mkdir $datadir;
 
 	command_ok([ 'initdb', '-N', '-T', 'german', '-X', $xlogdir, $datadir ],
 		'successful creation');
+
+	ok(check_pg_data_perm($datadir, 0));
 }
 command_ok([ 'initdb', '-S', $datadir ], 'sync only');
 command_fails([ 'initdb', $datadir ], 'existing data directory');
+
+# Init a new db with group access
+my $datadir_group = "$tempdir/data_group";
+
+command_ok(
+	[ 'initdb', '-g', $datadir_group ],
+	'successful creation with group access');
+
+ok(check_pg_data_perm($datadir_group, 1));

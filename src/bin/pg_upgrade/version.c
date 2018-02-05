@@ -53,7 +53,7 @@ new_9_0_populate_pg_largeobject_metadata(ClusterInfo *cluster, bool check_mode)
 			{
 				PQExpBufferData connectbuf;
 
-				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+				if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 					pg_fatal("could not open file \"%s\": %s\n", output_path,
 							 strerror(errno));
 
@@ -152,7 +152,7 @@ old_9_3_check_for_line_data_type_usage(ClusterInfo *cluster)
 		for (rowno = 0; rowno < ntups; rowno++)
 		{
 			found = true;
-			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 				pg_fatal("could not open file \"%s\": %s\n", output_path,
 						 strerror(errno));
 			if (!db_used)
@@ -253,7 +253,7 @@ old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster)
 		for (rowno = 0; rowno < ntups; rowno++)
 		{
 			found = true;
-			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 				pg_fatal("could not open file \"%s\": %s\n", output_path,
 						 strerror(errno));
 			if (!db_used)
@@ -335,7 +335,7 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 			found = true;
 			if (!check_mode)
 			{
-				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+				if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 					pg_fatal("could not open file \"%s\": %s\n", output_path,
 							 strerror(errno));
 				if (!db_used)

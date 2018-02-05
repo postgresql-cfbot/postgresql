@@ -115,10 +115,12 @@ sub check_query
 sub setup_cluster
 {
 	my $extra_name = shift;
+    my $group_access = shift;
 
 	# Initialize master, data checksums are mandatory
 	$node_master = get_new_node('master' . ($extra_name ? "_${extra_name}" : ''));
-	$node_master->init(allows_streaming => 1);
+	$node_master->init(allows_streaming => 1,
+        has_group_access => defined($group_access) ? $group_access : 0);
 	# Set wal_keep_segments to prevent WAL segment recycling after enforced
 	# checkpoints in the tests.
 	$node_master->append_conf('postgresql.conf', qq(
@@ -236,6 +238,9 @@ sub run_pg_rewind
 		"$tmp_folder/master-postgresql.conf.tmp",
 		"$master_pgdata/postgresql.conf");
 
+    chmod($node_master->group_access() ? 0640 : 0600, "$master_pgdata/postgresql.conf")
+        or die("unable to set permissions for $master_pgdata/postgresql.conf");
+
 	# Plug-in rewound node to the now-promoted standby node
 	my $port_standby = $node_standby->port;
 	$node_master->append_conf(
@@ -254,6 +259,9 @@ recovery_target_timeline='latest'
 # Clean up after the test. Stop both servers, if they're still running.
 sub clean_rewind_test
 {
+    ok (check_pg_data_perm(
+        $node_master->data_dir(), $node_master->group_access()));
+
 	$node_master->teardown_node  if defined $node_master;
 	$node_standby->teardown_node if defined $node_standby;
 }

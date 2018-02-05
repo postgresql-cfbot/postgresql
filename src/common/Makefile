@@ -51,7 +51,7 @@ else
 OBJS_COMMON += sha2.o
 endif
 
-OBJS_FRONTEND = $(OBJS_COMMON) fe_memutils.o file_utils.o restricted_token.o
+OBJS_FRONTEND = $(OBJS_COMMON) fe_memutils.o file_perm.o file_utils.o restricted_token.o
 
 OBJS_SRV = $(OBJS_COMMON:%.o=%_srv.o)
 

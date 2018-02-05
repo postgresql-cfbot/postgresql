@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 4;
+use Test::More tests => 6;
 
 use File::Find;
 
@@ -13,6 +13,8 @@ use RewindTest;
 sub run_test
 {
 	my $test_mode = shift;
+
+	umask(0077);
 
 	RewindTest::setup_cluster($test_mode);
 	RewindTest::start_master();

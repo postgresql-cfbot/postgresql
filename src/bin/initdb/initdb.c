@@ -64,6 +64,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_collation.h"
+#include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/restricted_token.h"
 #include "common/username.h"
@@ -144,6 +145,7 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static mode_t file_mode_mask = PG_MODE_MASK_DEFAULT;
 
 
 /* internal vars */
@@ -1170,12 +1172,6 @@ setup_config(void)
 	snprintf(path, sizeof(path), "%s/postgresql.conf", pg_data);
 
 	writefile(path, conflines);
-	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
-	{
-		fprintf(stderr, _("%s: could not change permissions of \"%s\": %s\n"),
-				progname, path, strerror(errno));
-		exit_nicely();
-	}
 
 	/*
 	 * create the automatic configuration file to store the configuration
@@ -1190,12 +1186,6 @@ setup_config(void)
 	sprintf(path, "%s/postgresql.auto.conf", pg_data);
 
 	writefile(path, autoconflines);
-	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
-	{
-		fprintf(stderr, _("%s: could not change permissions of \"%s\": %s\n"),
-				progname, path, strerror(errno));
-		exit_nicely();
-	}
 
 	free(conflines);
 
@@ -1277,12 +1267,6 @@ setup_config(void)
 	snprintf(path, sizeof(path), "%s/pg_hba.conf", pg_data);
 
 	writefile(path, conflines);
-	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
-	{
-		fprintf(stderr, _("%s: could not change permissions of \"%s\": %s\n"),
-				progname, path, strerror(errno));
-		exit_nicely();
-	}
 
 	free(conflines);
 
@@ -1293,12 +1277,6 @@ setup_config(void)
 	snprintf(path, sizeof(path), "%s/pg_ident.conf", pg_data);
 
 	writefile(path, conflines);
-	if (chmod(path, S_IRUSR | S_IWUSR) != 0)
-	{
-		fprintf(stderr, _("%s: could not change permissions of \"%s\": %s\n"),
-				progname, path, strerror(errno));
-		exit_nicely();
-	}
 
 	free(conflines);
 
@@ -2311,6 +2289,7 @@ usage(const char *progname)
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
+	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
 			 "      --lc-monetary=, --lc-numeric=, --lc-time=LOCALE\n"
@@ -2692,7 +2671,7 @@ create_data_directory(void)
 				   pg_data);
 			fflush(stdout);
 
-			if (pg_mkdir_p(pg_data, S_IRWXU) != 0)
+			if (pg_mkdir_p(pg_data, PG_DIR_MODE_DEFAULT) != 0)
 			{
 				fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
 						progname, pg_data, strerror(errno));
@@ -2710,7 +2689,7 @@ create_data_directory(void)
 				   pg_data);
 			fflush(stdout);
 
-			if (chmod(pg_data, S_IRWXU) != 0)
+			if (chmod(pg_data, PG_DIR_MODE_DEFAULT & ~file_mode_mask) != 0)
 			{
 				fprintf(stderr, _("%s: could not change permissions of directory \"%s\": %s\n"),
 						progname, pg_data, strerror(errno));
@@ -2778,7 +2757,7 @@ create_xlog_or_symlink(void)
 					   xlog_dir);
 				fflush(stdout);
 
-				if (pg_mkdir_p(xlog_dir, S_IRWXU) != 0)
+				if (pg_mkdir_p(xlog_dir, PG_DIR_MODE_DEFAULT) != 0)
 				{
 					fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
 							progname, xlog_dir, strerror(errno));
@@ -2796,7 +2775,7 @@ create_xlog_or_symlink(void)
 					   xlog_dir);
 				fflush(stdout);
 
-				if (chmod(xlog_dir, S_IRWXU) != 0)
+				if (chmod(xlog_dir, PG_DIR_MODE_DEFAULT & ~file_mode_mask) != 0)
 				{
 					fprintf(stderr, _("%s: could not change permissions of directory \"%s\": %s\n"),
 							progname, xlog_dir, strerror(errno));
@@ -2846,7 +2825,7 @@ create_xlog_or_symlink(void)
 	else
 	{
 		/* Without -X option, just make the subdirectory normally */
-		if (mkdir(subdirloc, S_IRWXU) < 0)
+		if (mkdir(subdirloc, PG_DIR_MODE_DEFAULT) < 0)
 		{
 			fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
 					progname, subdirloc, strerror(errno));
@@ -2882,8 +2861,6 @@ initialize_data_directory(void)
 
 	setup_signals();
 
-	umask(S_IRWXG | S_IRWXO);
-
 	create_data_directory();
 
 	create_xlog_or_symlink();
@@ -2902,7 +2879,7 @@ initialize_data_directory(void)
 		 * The parent directory already exists, so we only need mkdir() not
 		 * pg_mkdir_p() here, which avoids some failure modes; cf bug #13853.
 		 */
-		if (mkdir(path, S_IRWXU) < 0)
+		if (mkdir(path, PG_DIR_MODE_DEFAULT) < 0)
 		{
 			fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
 					progname, path, strerror(errno));
@@ -3016,6 +2993,7 @@ main(int argc, char *argv[])
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
+		{"allow-group-access", no_argument, NULL, 'g'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3057,7 +3035,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3151,6 +3129,9 @@ main(int argc, char *argv[])
 			case 12:
 				str_wal_segment_size_mb = pg_strdup(optarg);
 				break;
+			case 'g':
+				file_mode_mask = PG_MODE_MASK_ALLOW_GROUP;
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
@@ -3159,6 +3140,8 @@ main(int argc, char *argv[])
 		}
 	}
 
+	/* Set the file mode creation mask */
+	umask(file_mode_mask);
 
 	/*
 	 * Non-option argument specifies data directory as long as it wasn't

@@ -38,6 +38,7 @@
 
 #include "pg_upgrade.h"
 #include "catalog/pg_class.h"
+#include "common/file_perm.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
 
@@ -94,6 +95,9 @@ main(int argc, char **argv)
 	get_sock_dir(&new_cluster, false);
 
 	check_cluster_compatibility(live_check);
+
+	/* Set mask based on PGDATA permissions */
+	umask(DataDirectoryMask(new_cluster.pgdata));
 
 	check_and_dump_old_cluster(live_check);
 

@@ -97,7 +97,7 @@ parseCommandLine(int argc, char *argv[])
 	if (os_user_effective_id == 0)
 		pg_fatal("%s: cannot be run as root\n", os_info.progname);
 
-	if ((log_opts.internal = fopen_priv(INTERNAL_LOG_FILE, "a")) == NULL)
+	if ((log_opts.internal = fopen(INTERNAL_LOG_FILE, "a")) == NULL)
 		pg_fatal("could not write to log file \"%s\"\n", INTERNAL_LOG_FILE);
 
 	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:ko:O:p:P:rU:v",
@@ -213,7 +213,7 @@ parseCommandLine(int argc, char *argv[])
 	/* label start of upgrade in logfiles */
 	for (filename = output_files; *filename != NULL; filename++)
 	{
-		if ((fp = fopen_priv(*filename, "a")) == NULL)
+		if ((fp = fopen(*filename, "a")) == NULL)
 			pg_fatal("could not write to log file \"%s\"\n", *filename);
 
 		/* Start with newline because we might be appending to a file. */

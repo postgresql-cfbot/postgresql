@@ -33,3 +33,9 @@ uninstall:
 
 clean distclean maintainer-clean:
 	rm -f pg_resetwal$(X) $(OBJS)
+
+check:
+	$(prove_check)
+
+installcheck:
+	$(prove_installcheck)

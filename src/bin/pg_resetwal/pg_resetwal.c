@@ -52,6 +52,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "common/fe_memutils.h"
+#include "common/file_perm.h"
 #include "common/restricted_token.h"
 #include "storage/large_object.h"
 #include "pg_getopt.h"
@@ -326,6 +327,9 @@ main(int argc, char *argv[])
 				progname, DataDir, strerror(errno));
 		exit(1);
 	}
+
+	/* Set mask based on PGDATA permissions */
+	umask(DataDirectoryMask(DataDir));
 
 	/* Check that data directory matches our server version */
 	CheckDataVersion();
@@ -919,7 +923,7 @@ RewriteControlFile(void)
 
 	fd = open(XLOG_CONTROL_FILE,
 			  O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
-			  S_IRUSR | S_IWUSR);
+			  PG_FILE_MODE_DEFAULT);
 	if (fd < 0)
 	{
 		fprintf(stderr, _("%s: could not create pg_control file: %s\n"),
@@ -1201,7 +1205,7 @@ WriteEmptyXLOG(void)
 	unlink(path);
 
 	fd = open(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
-			  S_IRUSR | S_IWUSR);
+			  PG_FILE_MODE_DEFAULT);
 	if (fd < 0)
 	{
 		fprintf(stderr, _("%s: could not open file \"%s\": %s\n"),

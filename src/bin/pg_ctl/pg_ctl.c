@@ -25,6 +25,7 @@
 
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "common/file_perm.h"
 #include "getopt_long.h"
 #include "utils/pidfile.h"
 
@@ -2170,7 +2171,8 @@ main(int argc, char **argv)
 	 */
 	argv0 = argv[0];
 
-	umask(S_IRWXG | S_IRWXO);
+	/* Set restrictive mode mask until PGDATA permissions are checked */
+	umask(PG_MODE_MASK_DEFAULT);
 
 	/* support --help and --version even if invoked as root */
 	if (argc > 1)
@@ -2405,6 +2407,9 @@ main(int argc, char **argv)
 		snprintf(version_file, MAXPGPATH, "%s/PG_VERSION", pg_data);
 		snprintf(pid_file, MAXPGPATH, "%s/postmaster.pid", pg_data);
 		snprintf(backup_file, MAXPGPATH, "%s/backup_label", pg_data);
+
+		/* Set mask based on PGDATA permissions */
+		umask(DataDirectoryMask(pg_data));
 	}
 
 	switch (ctl_command)

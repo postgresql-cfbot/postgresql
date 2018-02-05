@@ -1095,7 +1095,11 @@ SELECT pg_stop_backup();
     and <filename>postmaster.opts</filename>, which record information
     about the running <application>postmaster</application>, not about the
     <application>postmaster</application> which will eventually use this backup.
-    (These files can confuse <application>pg_ctl</application>.)
+    (These files can confuse <application>pg_ctl</application>.)  If group read
+    access is enabled on the data directory and an unprivileged user in the
+    <productname>PostgreSQL</productname> group is performing the backup, then
+    <filename>postmaster.pid</filename> will not be readable and must be
+    excluded.
    </para>
 
    <para>

@@ -442,7 +442,7 @@ create_script_for_cluster_analyze(char **analyze_script_file_name)
 	*analyze_script_file_name = psprintf("%sanalyze_new_cluster.%s",
 										 SCRIPT_PREFIX, SCRIPT_EXT);
 
-	if ((script = fopen_priv(*analyze_script_file_name, "w")) == NULL)
+	if ((script = fopen(*analyze_script_file_name, "w")) == NULL)
 		pg_fatal("could not open file \"%s\": %s\n",
 				 *analyze_script_file_name, strerror(errno));
 
@@ -570,7 +570,7 @@ create_script_for_old_cluster_deletion(char **deletion_script_file_name)
 
 	prep_status("Creating script to delete old cluster");
 
-	if ((script = fopen_priv(*deletion_script_file_name, "w")) == NULL)
+	if ((script = fopen(*deletion_script_file_name, "w")) == NULL)
 		pg_fatal("could not open file \"%s\": %s\n",
 				 *deletion_script_file_name, strerror(errno));
 
@@ -834,7 +834,7 @@ check_for_isn_and_int8_passing_mismatch(ClusterInfo *cluster)
 		for (rowno = 0; rowno < ntups; rowno++)
 		{
 			found = true;
-			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 				pg_fatal("could not open file \"%s\": %s\n",
 						 output_path, strerror(errno));
 			if (!db_used)
@@ -937,7 +937,7 @@ check_for_reg_data_type_usage(ClusterInfo *cluster)
 		for (rowno = 0; rowno < ntups; rowno++)
 		{
 			found = true;
-			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 				pg_fatal("could not open file \"%s\": %s\n",
 						 output_path, strerror(errno));
 			if (!db_used)
@@ -1028,7 +1028,7 @@ check_for_jsonb_9_4_usage(ClusterInfo *cluster)
 		for (rowno = 0; rowno < ntups; rowno++)
 		{
 			found = true;
-			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+			if (script == NULL && (script = fopen(output_path, "w")) == NULL)
 				pg_fatal("could not open file \"%s\": %s\n",
 						 output_path, strerror(errno));
 			if (!db_used)

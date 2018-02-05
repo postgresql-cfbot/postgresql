@@ -1506,4 +1506,37 @@ typedef struct OnConflictExpr
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;
 
+/*----------
+ * PartitionClauseInfo
+ *
+ * Stores clauses which were matched to a partition key. Each matching clause
+ * is stored in the 'keyclauses' list for the partition key index that it was
+ * matched to.  Other details are also stored, such as OR clauses and
+ * not-equal (<>) clauses.  Nullness properties are also stored.
+ *----------
+ */
+typedef struct PartitionClauseInfo
+{
+	NodeTag		type;
+
+	/* Lists of clauses indexed by the partition key */
+	List   *keyclauses[PARTITION_MAX_KEYS];
+
+	/* Each members is a List itself of a given OR clauses's arguments. */
+	List   *or_clauses;
+
+	/* List of clauses containing <> operator. */
+	List   *ne_clauses;
+
+	/* Nth (0 <= N < partnatts) bit set if the key is NULL or NOT NULL. */
+	Bitmapset   *keyisnull;
+	Bitmapset   *keyisnotnull;
+
+	/* True if at least one of above fields contains valid information. */
+	bool	foundkeyclauses;
+
+	/* True if mutually contradictory clauses were found. */
+	bool	constfalse;
+} PartitionClauseInfo;
+
 #endif							/* PRIMNODES_H */

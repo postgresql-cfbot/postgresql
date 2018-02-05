@@ -190,6 +190,7 @@ typedef enum NodeTag
 	T_JoinExpr,
 	T_FromExpr,
 	T_OnConflictExpr,
+	T_PartitionClauseInfo,
 	T_IntoClause,
 
 	/*

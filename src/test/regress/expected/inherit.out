@@ -1715,11 +1715,7 @@ explain (costs off) select * from list_parted where a = 'ab' or a in (null, 'cd'
  Append
    ->  Seq Scan on part_ab_cd
          Filter: (((a)::text = 'ab'::text) OR ((a)::text = ANY ('{NULL,cd}'::text[])))
-   ->  Seq Scan on part_ef_gh
-         Filter: (((a)::text = 'ab'::text) OR ((a)::text = ANY ('{NULL,cd}'::text[])))
-   ->  Seq Scan on part_null_xy
-         Filter: (((a)::text = 'ab'::text) OR ((a)::text = ANY ('{NULL,cd}'::text[])))
-(7 rows)
+(3 rows)
 
 explain (costs off) select * from list_parted where a = 'ab';
                 QUERY PLAN                
@@ -1906,11 +1902,13 @@ explain (costs off) select * from mcrparted where abs(b) = 5;	-- scans all parti
          Filter: (abs(b) = 5)
    ->  Seq Scan on mcrparted3
          Filter: (abs(b) = 5)
+   ->  Seq Scan on mcrparted4
+         Filter: (abs(b) = 5)
    ->  Seq Scan on mcrparted5
          Filter: (abs(b) = 5)
    ->  Seq Scan on mcrparted_def
          Filter: (abs(b) = 5)
-(13 rows)
+(15 rows)
 
 explain (costs off) select * from mcrparted where a > -1;	-- scans all partitions
              QUERY PLAN              

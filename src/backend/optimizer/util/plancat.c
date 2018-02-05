@@ -1171,7 +1171,6 @@ get_relation_constraints(PlannerInfo *root,
 	Index		varno = rel->relid;
 	Relation	relation;
 	TupleConstr *constr;
-	List	   *pcqual;
 
 	/*
 	 * We assume the relation has already been safely locked.
@@ -1257,22 +1256,32 @@ get_relation_constraints(PlannerInfo *root,
 		}
 	}
 
-	/* Append partition predicates, if any */
-	pcqual = RelationGetPartitionQual(relation);
-	if (pcqual)
+	/*
+	 * Append partition predicates, if any.
+	 *
+	 * For selects, partition pruning uses the parent table's partition bound
+	 * descriptor, instead of constraint exclusion which is driven by the
+	 * individual partition's partition constraint.
+	 */
+	if (root->parse->commandType != CMD_SELECT)
 	{
-		/*
-		 * Run each expression through const-simplification and
-		 * canonicalization similar to check constraints.
-		 */
-		pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
-		pcqual = (List *) canonicalize_qual((Expr *) pcqual);
+		List	   *pcqual = RelationGetPartitionQual(relation);
 
-		/* Fix Vars to have the desired varno */
-		if (varno != 1)
-			ChangeVarNodes((Node *) pcqual, 1, varno, 0);
+		if (pcqual)
+		{
+			/*
+			 * Run each expression through const-simplification and
+			 * canonicalization similar to check constraints.
+			 */
+			pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
+			pcqual = (List *) canonicalize_qual((Expr *) pcqual);
 
-		result = list_concat(result, pcqual);
+			/* Fix Vars to have the desired varno */
+			if (varno != 1)
+				ChangeVarNodes((Node *) pcqual, 1, varno, 0);
+
+			result = list_concat(result, pcqual);
+		}
 	}
 
 	heap_close(relation, NoLock);
@@ -1928,6 +1937,10 @@ find_partition_scheme(PlannerInfo *root, Relation relation)
 
 	part_scheme->parttypcoll = (Oid *) palloc(sizeof(Oid) * partnatts);
 	memcpy(part_scheme->parttypcoll, partkey->parttypcoll,
+		   sizeof(Oid) * partnatts);
+
+	part_scheme->partcollation = (Oid *) palloc(sizeof(Oid) * partnatts);
+	memcpy(part_scheme->partcollation, partkey->partcollation,
 		   sizeof(Oid) * partnatts);
 
 	part_scheme->parttyplen = (int16 *) palloc(sizeof(int16) * partnatts);

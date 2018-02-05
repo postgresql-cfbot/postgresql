@@ -2127,6 +2127,25 @@ _copyOnConflictExpr(const OnConflictExpr *from)
 	return newnode;
 }
 
+static PartitionClauseInfo *
+_copyPartitionClauseInfo(const PartitionClauseInfo *from)
+{
+	PartitionClauseInfo *newnode = makeNode(PartitionClauseInfo);
+
+	int i;
+	for (i = 0; i < PARTITION_MAX_KEYS; i++)
+		COPY_NODE_FIELD(keyclauses[i]);
+
+	COPY_NODE_FIELD(or_clauses);
+	COPY_NODE_FIELD(ne_clauses);
+	COPY_BITMAPSET_FIELD(keyisnull);
+	COPY_BITMAPSET_FIELD(keyisnotnull);
+	COPY_SCALAR_FIELD(constfalse);
+	COPY_SCALAR_FIELD(foundkeyclauses);
+
+	return newnode;
+}
+
 /* ****************************************************************
  *						relation.h copy functions
  *
@@ -5009,6 +5028,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_OnConflictExpr:
 			retval = _copyOnConflictExpr(from);
+			break;
+		case T_PartitionClauseInfo:
+			retval = _copyPartitionClauseInfo(from);
 			break;
 
 			/*

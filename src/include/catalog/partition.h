@@ -40,6 +40,13 @@ typedef struct PartitionDescData
 	PartitionBoundInfo boundinfo;	/* collection of partition bounds */
 } PartitionDescData;
 
+typedef struct PartitionPruneContext
+{
+	int			rt_index;
+	Relation	relation;
+	PartitionClauseInfo *clauseinfo;
+} PartitionPruneContext;
+
 typedef struct PartitionDescData *PartitionDesc;
 
 extern void RelationBuildPartitionDesc(Relation relation);
@@ -72,5 +79,10 @@ extern List *get_proposed_default_constraint(List *new_part_constaints);
 /* For tuple routing */
 extern int get_partition_for_tuple(Relation relation, Datum *values,
 						bool *isnull);
+
+/* For partition-pruning */
+PartitionClauseInfo *generate_partition_clauses(Relation relation,
+						   int rt_index, List *clauses);
+extern Bitmapset *get_partitions_from_clauses(PartitionPruneContext *context);
 
 #endif							/* PARTITION_H */

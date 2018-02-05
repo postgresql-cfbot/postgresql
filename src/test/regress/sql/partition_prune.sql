@@ -152,4 +152,79 @@ explain (costs off) select * from boolpart where a is not true and a is not fals
 explain (costs off) select * from boolpart where a is unknown;
 explain (costs off) select * from boolpart where a is not unknown;
 
-drop table lp, coll_pruning, rlp, mc3p, mc2p, boolpart;
+-- hash partitioning
+create table hp (a int, b text) partition by hash (a, b);
+create table hp0 partition of hp for values with (modulus 4, remainder 0);
+create table hp3 partition of hp for values with (modulus 4, remainder 3);
+create table hp1 partition of hp for values with (modulus 4, remainder 1);
+create table hp2 partition of hp for values with (modulus 4, remainder 2);
+
+insert into hp values (null, null);
+insert into hp values (1, null);
+insert into hp values (1, 'xxx');
+insert into hp values (null, 'xxx');
+insert into hp values (10, 'xxx');
+insert into hp values (10, 'yyy');
+select tableoid::regclass, * from hp order by 1;
+
+-- partial keys won't prune, nor would non-equality conditions
+explain (costs off) select * from hp where a = 1;
+explain (costs off) select * from hp where b = 'xxx';
+explain (costs off) select * from hp where a is null;
+explain (costs off) select * from hp where b is null;
+explain (costs off) select * from hp where a < 1 and b = 'xxx';
+explain (costs off) select * from hp where a <> 1 and b = 'yyy';
+
+-- pruning should work in all cases below
+explain (costs off) select * from hp where a is null and b is null;
+explain (costs off) select * from hp where a = 1 and b is null;
+explain (costs off) select * from hp where a = 1 and b = 'xxx';
+explain (costs off) select * from hp where a is null and b = 'xxx';
+explain (costs off) select * from hp where a = 10 and b = 'xxx';
+explain (costs off) select * from hp where a = 10 and b = 'yyy';
+explain (costs off) select * from hp where (a = 10 and b = 'yyy') or (a = 10 and b = 'xxx') or (a is null and b is null);
+
+--
+-- some more cases
+--
+
+--
+-- pruning for partitioned table appearing inside a sub-query
+--
+
+-- pruning won't work for mc3p, because some keys are Params
+explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.a = t1.b and abs(t2.b) = 1 and t2.c = 1) s where t1.a = 1;
+
+-- pruning should work fine, because prefix of keys is available
+explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.c = t1.b and abs(t2.b) = 1 and t2.a = 1) s where t1.a = 1;
+
+-- pruning should work fine in this case, too.
+explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.a = 1 and abs(t2.b) = 1 and t2.c = 1) s where t1.a = 1;
+
+--
+-- pruning with clauses containing <> operator
+--
+
+-- doesn't prune range or hash partitions
+explain (costs off) select * from hp where a <> 1 and b <> 'xxx';
+
+create table rp (a int) partition by range (a);
+create table rp0 partition of rp for values from (minvalue) to (1);
+create table rp1 partition of rp for values from (1) to (2);
+create table rp2 partition of rp for values from (2) to (maxvalue);
+
+explain (costs off) select * from rp where a <> 1;
+explain (costs off) select * from rp where a <> 1 and a <> 2;
+
+-- null partition should be eliminated due to strict <> clause.
+explain (costs off) select * from lp where a <> 'a';
+
+-- ensure we detect contradictions in clauses; a can't be NULL and NOT NULL.
+explain (costs off) select * from lp where a <> 'a' and a is null;
+
+explain (costs off) select * from lp where (a <> 'a' and a <> 'd') or a is null;
+
+-- case for list partitioned table that's not root
+explain (costs off) select * from rlp where a = 15 and b <> 'ab' and b <> 'cd' and b <> 'xy' and b is not null;
+
+drop table lp, coll_pruning, rlp, mc3p, mc2p, boolpart, hp, rp;

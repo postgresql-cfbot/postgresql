@@ -5975,14 +5975,23 @@ List *
 get_partitioned_child_rels_for_join(PlannerInfo *root, Relids join_relids)
 {
 	List	   *result = NIL;
-	ListCell   *l;
+	int			relid;
 
-	foreach(l, root->pcinfo_list)
+	relid = -1;
+	while ((relid = bms_next_member(join_relids, relid)) >= 0)
 	{
-		PartitionedChildRelInfo *pc = lfirst(l);
+		RelOptInfo *rel;
 
-		if (bms_is_member(pc->parent_relid, join_relids))
-			result = list_concat(result, list_copy(pc->child_rels));
+		/* Paranoia: ignore bogus relid indexes */
+		if (relid >= root->simple_rel_array_size)
+			continue;
+		rel = root->simple_rel_array[relid];
+		if (rel == NULL)
+			continue;
+		Assert(rel->relid == relid);	/* sanity check on array */
+		Assert(rel->part_scheme != NULL);
+		Assert(list_length(rel->live_partitioned_rels) >= 1);
+		result = list_concat(result, list_copy(rel->live_partitioned_rels));
 	}
 
 	return result;

@@ -1395,6 +1395,30 @@ try_partition_wise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 											   child_rel2->relids);
 
 		/*
+		 * If either child_rel1 or child_rel2 is not a live partition, they'd
+		 * not have been touched by set_append_rel_size.  So, its RelOptInfo
+		 * would be missing some information that set_append_rel_size sets for
+		 * live partitions, such as the target list, child EQ members, etc.
+		 * We need to make the RelOptInfo of even the dead partitions look
+		 * minimally valid and as having a valid dummy path attached to it.
+		 */
+		if (IS_SIMPLE_REL(child_rel1) && child_rel1->pathlist == NIL)
+		{
+			AppendRelInfo *appinfo = rel1->part_appinfos[cnt_parts];
+
+			set_basic_child_rel_properties(root, rel1, child_rel1, appinfo);
+			mark_dummy_rel(child_rel1);
+		}
+
+		if (IS_SIMPLE_REL(child_rel2) && child_rel2->pathlist == NIL)
+		{
+			AppendRelInfo *appinfo = rel2->part_appinfos[cnt_parts];
+
+			set_basic_child_rel_properties(root, rel2, child_rel2, appinfo);
+			mark_dummy_rel(child_rel2);
+		}
+
+		/*
 		 * Construct restrictions applicable to the child join from those
 		 * applicable to the parent join.
 		 */

@@ -28,6 +28,8 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_inherits_fn.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_operator.h"
+#include "catalog/pg_opfamily.h"
 #include "catalog/pg_partitioned_table.h"
 #include "catalog/pg_type.h"
 #include "commands/tablecmds.h"
@@ -38,6 +40,8 @@
 #include "nodes/parsenodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/planmain.h"
+#include "optimizer/planner.h"
+#include "optimizer/predtest.h"
 #include "optimizer/prep.h"
 #include "optimizer/var.h"
 #include "parser/parse_coerce.h"
@@ -138,6 +142,81 @@ typedef struct PartitionRangeBound
 	bool		lower;			/* this is the lower (vs upper) bound */
 } PartitionRangeBound;
 
+/*
+ * Information about a clause matched with a partition key column kept to
+ * avoid recomputing it in remove_redundant_clauses().
+ */
+typedef struct PartClause
+{
+	Oid		opno;		/* opno to compare partkey to 'value' */
+	Oid		inputcollid; /* collation to compare partkey to 'value' */
+	Expr   *value;	/* The value the partition key is being compared to */
+
+	/* cached info. */
+	bool	valid_cache;	/* Are the following fields populated? */
+	int		op_strategy;
+	Oid		op_subtype;
+	FmgrInfo op_func;
+} PartClause;
+
+/*
+ * Strategy of a partition clause operator per the partitioning operator class
+ * definition.
+ */
+typedef enum PartOpStrategy
+{
+	PART_OP_EQUAL,
+	PART_OP_LESS,
+	PART_OP_GREATER
+} PartOpStrategy;
+
+/*
+ * PartScanKeyInfo
+ *		Information about partition look up keys to be passed to
+ *		get_partitions_for_keys()
+ *
+ * Stores Datums and nullness properties found in clauses which match the
+ * partition key.  Properties found are cached and are indexed by the
+ * partition key index.
+ */
+typedef struct PartScanKeyInfo
+{
+	/*
+	 * Equality look up key.  Used to store known Datums values from clauses
+	 * compared by an equality operation to the partition key.
+	 */
+	Datum	eqkeys[PARTITION_MAX_KEYS];
+
+	/*
+	 * Lower and upper bounds on a sequence of selected partitions.  These may
+	 * contain values for only a prefix of the partition keys.
+	 */
+	Datum	minkeys[PARTITION_MAX_KEYS];
+	Datum	maxkeys[PARTITION_MAX_KEYS];
+
+	/*
+	 * Number of values stored in the corresponding array above
+	 */
+	int		n_eqkeys;
+	int		n_minkeys;
+	int		n_maxkeys;
+
+	/*
+	 * Properties to mark if the clauses found for the corresponding partition
+	 * are inclusive of the stored value or not.
+	 */
+	bool	min_incl;
+	bool	max_incl;
+
+	/*
+	 * Information about nullness of the partition keys, either specified
+	 * explicitly in the query (in the form of a IS [NOT] NULL clause) or
+	 * implied from strict clauses matching the partition key.
+	 */
+	Bitmapset   *keyisnull;
+	Bitmapset   *keyisnotnull;
+} PartScanKeyInfo;
+
 static int32 qsort_partition_hbound_cmp(const void *a, const void *b);
 static int32 qsort_partition_list_value_cmp(const void *a, const void *b,
 							   void *arg);
@@ -170,27 +249,51 @@ static int32 partition_rbound_cmp(PartitionKey key,
 					 bool lower1, PartitionRangeBound *b2);
 static int32 partition_rbound_datum_cmp(PartitionKey key,
 						   Datum *rb_datums, PartitionRangeDatumKind *rb_kind,
-						   Datum *tuple_datums, int n_tuple_datums);
+						   Datum *tuple_datums);
 
-static int partition_list_bsearch(PartitionKey key,
-					   PartitionBoundInfo boundinfo,
-					   Datum value, bool *is_equal);
-static int partition_range_bsearch(PartitionKey key,
+static int32 partition_bound_cmp(PartitionKey key,
+					PartitionBoundInfo boundinfo,
+					int offset, void *probe, bool probe_is_bound);
+static int partition_bound_bsearch(PartitionKey key,
 						PartitionBoundInfo boundinfo,
-						PartitionRangeBound *probe, bool *is_equal);
-static int partition_range_datum_bsearch(PartitionKey key,
-							  PartitionBoundInfo boundinfo,
-							  int nvalues, Datum *values, bool *is_equal);
-static int partition_hash_bsearch(PartitionKey key,
-					   PartitionBoundInfo boundinfo,
-					   int modulus, int remainder);
-
+						void *probe, bool probe_is_bound, bool *is_equal);
 static int	get_partition_bound_num_indexes(PartitionBoundInfo b);
 static int	get_greatest_modulus(PartitionBoundInfo b);
 static uint64 compute_hash_value(PartitionKey key, Datum *values, bool *isnull);
 
 /* SQL-callable function for use in hash partition CHECK constraints */
 PG_FUNCTION_INFO_V1(satisfies_hash_partition);
+
+static Bitmapset *get_partitions_excluded_by_ne_clauses(
+									  PartitionPruneContext *context,
+									  List *ne_clauses);
+static Bitmapset *get_partitions_from_or_clause_args(
+								   PartitionPruneContext *context,
+								   List *or_clause_args);
+static PartitionClauseInfo *extract_partition_key_clauses(
+							  PartitionKey partkey, List *clauses,
+							  int rt_index);
+static bool extract_bounding_datums(PartitionKey partkey,
+						PartitionPruneContext *context,
+						List **minimalclauses, PartScanKeyInfo *keys);
+static bool partition_cmp_args(PartitionKey key, int partkeyidx,
+				   PartClause *pc, PartClause *leftarg, PartClause *rightarg,
+				   bool *result);
+static PartOpStrategy partition_op_strategy(PartitionKey key, PartClause *pc,
+					bool *incl);
+static bool partkey_datum_from_expr(PartitionKey key, int partkeyidx,
+						Expr *expr, Datum *value);
+static void remove_redundant_clauses(PartitionKey partkey,
+						 PartitionPruneContext *context,
+						 List **minimalclauses);
+static Bitmapset *get_partitions_for_keys(Relation rel,
+						PartScanKeyInfo *keys);
+static Bitmapset *get_partitions_for_keys_hash(Relation rel,
+						PartScanKeyInfo *keys);
+static Bitmapset *get_partitions_for_keys_list(Relation rel,
+						PartScanKeyInfo *keys);
+static Bitmapset *get_partitions_for_keys_range(Relation rel,
+						PartScanKeyInfo *keys);
 
 /*
  * RelationBuildPartitionDesc
@@ -988,7 +1091,8 @@ check_new_partition_bound(char *relname, Relation parent,
 					int			greatest_modulus;
 					int			remainder;
 					int			offset;
-					bool		valid_modulus = true;
+					bool		equal,
+								valid_modulus = true;
 					int			prev_modulus,	/* Previous largest modulus */
 								next_modulus;	/* Next largest modulus */
 
@@ -1001,13 +1105,12 @@ check_new_partition_bound(char *relname, Relation parent,
 					 * modulus 10 and a partition with modulus 15, because 10
 					 * is not a factor of 15.
 					 *
-					 * Get the greatest (modulus, remainder) pair contained in
-					 * boundinfo->datums that is less than or equal to the
-					 * (spec->modulus, spec->remainder) pair.
+					 * Get greatest bound in array boundinfo->datums which is
+					 * less than or equal to spec->modulus and
+					 * spec->remainder.
 					 */
-					offset = partition_hash_bsearch(key, boundinfo,
-													spec->modulus,
-													spec->remainder);
+					offset = partition_bound_bsearch(key, boundinfo, spec,
+													 true, &equal);
 					if (offset < 0)
 					{
 						next_modulus = DatumGetInt32(datums[0][0]);
@@ -1081,9 +1184,9 @@ check_new_partition_bound(char *relname, Relation parent,
 							int			offset;
 							bool		equal;
 
-							offset = partition_list_bsearch(key, boundinfo,
-															val->constvalue,
-															&equal);
+							offset = partition_bound_bsearch(key, boundinfo,
+															 &val->constvalue,
+															 true, &equal);
 							if (offset >= 0 && equal)
 							{
 								overlap = true;
@@ -1155,8 +1258,8 @@ check_new_partition_bound(char *relname, Relation parent,
 					 * since the index array is initialised with an extra -1
 					 * at the end.
 					 */
-					offset = partition_range_bsearch(key, boundinfo, lower,
-													 &equal);
+					offset = partition_bound_bsearch(key, boundinfo, lower,
+													 true, &equal);
 
 					if (boundinfo->indexes[offset + 1] < 0)
 					{
@@ -1169,16 +1272,10 @@ check_new_partition_bound(char *relname, Relation parent,
 						if (offset + 1 < boundinfo->ndatums)
 						{
 							int32		cmpval;
-							Datum 	   *datums;
-							PartitionRangeDatumKind *kind;
-							bool		is_lower;
 
-							datums = boundinfo->datums[offset + 1];
-							kind = boundinfo->kind[offset + 1];
-							is_lower = (boundinfo->indexes[offset + 1] == -1);
-
-							cmpval = partition_rbound_cmp(key, datums, kind,
-														  is_lower, upper);
+							cmpval = partition_bound_cmp(key, boundinfo,
+														 offset + 1, upper,
+														 true);
 							if (cmpval < 0)
 							{
 								/*
@@ -1550,7 +1647,1958 @@ get_partition_qual_relid(Oid relid)
 	return result;
 }
 
+/*
+ * generate_partition_clauses
+ *		Processes 'clauses' to try to match them to relation's partition
+ *		keys.  If any compatible clauses are found which match a partition
+ *		key, then these clauses are stored in 'partclauseinfo'.
+ *
+ * The caller must ensure that 'clauses' is not an empty List.  Upon return,
+ * callers must also check if the 'partclauseinfo' constfalse has been set, if
+ * so, then they must be aware that the 'partclauseinfo' may only be partially
+ * populated.
+ */
+PartitionClauseInfo *
+generate_partition_clauses(Relation relation,
+						   int rt_index, List *clauses)
+{
+	PartitionDesc		partdesc;
+	PartitionKey		partkey;
+	PartitionBoundInfo	boundinfo;
+
+	Assert(clauses != NIL);
+
+	partkey = RelationGetPartitionKey(relation);
+	partdesc = RelationGetPartitionDesc(relation);
+
+	/* Some functions called below modify this list */
+	clauses = list_copy(clauses);
+	boundinfo = partdesc->boundinfo;
+
+	/*
+	 * For sub-partitioned tables there's a corner case where if the
+	 * sub-partitioned table shares any partition keys with its parent, then
+	 * it's possible that the partitioning hierarchy allows the parent
+	 * partition to only contain a narrower range of values than the
+	 * sub-partitioned table does.  In this case it is possible that we'd
+	 * include partitions that could not possibly have any tuples matching
+	 * 'clauses'.  The possibility of such a partition arrangement
+	 * is perhaps unlikely for non-default partitions, but it may be more
+	 * likely in the case of default partitions, so we'll add the parent
+	 * partition table's partition qual to the clause list in this case only.
+	 * This may result in the default partition being eliminated.
+	 */
+	if (partition_bound_has_default(boundinfo))
+	{
+		List *partqual = RelationGetPartitionQual(relation);
+
+		partqual = (List *) expression_planner((Expr *) partqual);
+
+		/* Fix Vars to have the desired varno */
+		if (rt_index != 1)
+			ChangeVarNodes((Node *) partqual, 1, rt_index, 0);
+
+		clauses = list_concat(clauses, partqual);
+	}
+
+	return extract_partition_key_clauses(partkey, clauses, rt_index);
+}
+
+/*
+ * get_partitions_from_clauses
+ *		Determine all partitions of context->relation that could possibly
+ *		contain a record that matches clauses as described in
+ *		context->clauseinfo
+ *
+ * Returns a Bitmapset of the matching partition indexes, or NULL if none can
+ * match.
+ */
+Bitmapset *
+get_partitions_from_clauses(PartitionPruneContext *context)
+{
+	PartitionClauseInfo	*partclauseinfo = context->clauseinfo;
+	PartitionDesc		partdesc;
+	PartScanKeyInfo		keys;
+	Bitmapset 		   *result;
+	ListCell *lc;
+
+	Assert(partclauseinfo != NULL);
+
+	/*
+	 * Check if there were proofs that no partitions can match due to some
+	 * clause items contradicting another.
+	 */
+	if (partclauseinfo->constfalse)
+		return NULL;
+
+	partdesc = RelationGetPartitionDesc(context->relation);
+
+	if (!partclauseinfo->foundkeyclauses)
+	{
+		/* No interesting clauses were found to eliminate partitions. */
+		result = bms_add_range(NULL, 0, partdesc->nparts - 1);
+	}
+	else
+	{
+		PartitionKey	partkey = RelationGetPartitionKey(context->relation);
+		List *minimalclauses[PARTITION_MAX_KEYS];
+
+		/*
+		 * Populate minimal clauses with the most restrictive
+		 * of clauses from context's partclauseinfo.
+		 */
+		remove_redundant_clauses(partkey, context, minimalclauses);
+
+		/* Did remove_redundant_clauses find any contradicting clauses? */
+		if (partclauseinfo->constfalse)
+			return NULL;
+
+		if (extract_bounding_datums(partkey, context, minimalclauses, &keys))
+		{
+			result = get_partitions_for_keys(context->relation, &keys);
+
+			/*
+			 * No point in trying to look at other conjunctive clauses, if we
+			 * got an empty set in the first place.
+			 */
+			if (bms_is_empty(result))
+				return NULL;
+		}
+		else
+		{
+			/*
+			 * Looks like we didn't have the values we'd need to eliminate
+			 * partitions using get_partitions_for_keys, likely because
+			 * context->clauseinfo only contained <> clauses and/or OR
+			 * clauses, which are handled further below in this function.
+			 */
+			result = bms_add_range(NULL, 0, partdesc->nparts - 1);
+		}
+	}
+
+	/* Select partitions by applying the clauses containing <> operators. */
+	if (partclauseinfo->ne_clauses)
+	{
+		Bitmapset *ne_parts;
+
+		ne_parts = get_partitions_excluded_by_ne_clauses(context,
+												partclauseinfo->ne_clauses);
+
+		/* Remove any partitions we found to not be needed */
+		result = bms_del_members(result, ne_parts);
+		bms_free(ne_parts);
+	}
+
+	/* Select partitions by applying OR clauses. */
+	foreach(lc, partclauseinfo->or_clauses)
+	{
+		List *or_args = (List *) lfirst(lc);
+		PartitionPruneContext orcontext;
+		Bitmapset *or_parts;
+
+		orcontext.rt_index = context->rt_index;
+		orcontext.relation = context->relation;
+		orcontext.clauseinfo = NULL;
+
+		or_parts = get_partitions_from_or_clause_args(&orcontext, or_args);
+
+		/*
+		 * Clauses in or_clauses are mutually conjunctive and also in
+		 * in conjunction with the rest of the clauses above, so combine the
+		 * partitions thus selected with those in result using set
+		 * intersection.
+		 */
+		result = bms_int_members(result, or_parts);
+		bms_free(or_parts);
+	}
+
+	return result;
+}
+
 /* Module-local functions */
+
+/*
+ * get_partitions_excluded_by_ne_clauses
+ *
+ * Returns a Bitmapset of partition indexes of any partition that can safely
+ * be removed due to 'ne_clauses' containing not-equal clauses for all
+ * possible values that the partition can contain.
+ */
+static Bitmapset *
+get_partitions_excluded_by_ne_clauses(PartitionPruneContext *context,
+									  List *ne_clauses)
+{
+	ListCell	   *lc;
+	Bitmapset	   *excluded_parts;
+	Bitmapset	   *foundoffsets = NULL;
+	Relation		relation = context->relation;
+	PartitionKey	partkey = RelationGetPartitionKey(relation);
+	PartitionDesc	partdesc = RelationGetPartitionDesc(relation);
+	PartitionBoundInfo boundinfo = partdesc->boundinfo;
+	int			   *datums_in_part;
+	int			   *datums_found;
+	int				i;
+
+	Assert(partkey->strategy == PARTITION_STRATEGY_LIST);
+	Assert(partkey->partnatts == 1);
+
+	/*
+	 * Build a Bitmapset to record the indexes of all datums of the
+	 * query that are found in boundinfo.
+	 */
+	foreach(lc, ne_clauses)
+	{
+		PartClause *pc = (PartClause *) lfirst(lc);
+		Datum	datum;
+
+		if (partkey_datum_from_expr(partkey, 0, pc->value, &datum))
+		{
+			int		offset;
+			bool	is_equal;
+
+			offset = partition_list_bsearch(partkey, boundinfo, datum,
+											&is_equal);
+			if (offset >= 0 && is_equal)
+			{
+				Assert(boundinfo->indexes[offset] >= 0);
+				foundoffsets = bms_add_member(foundoffsets, offset);
+			}
+		}
+	}
+
+	/* No partitions can be excluded if none of the datums were found. */
+	if (bms_is_empty(foundoffsets))
+		return NULL;
+
+	/*
+	 * Since each list partition can permit multiple values, we must ensure
+	 * that we got clauses for all those values before we can eliminate the
+	 * the entire partition.
+	 *
+	 * We'll need two arrays for this, one to count the number of unique
+	 * datums found in the query which belong to each partition, and another
+	 * to record the number of datums permitted in each partition.  Once we've
+	 * counted all this, we can eliminate any partition where the number of
+	 * datums found matches the number of datums allowed in the partition.
+	 */
+	datums_in_part = (int *) palloc0(sizeof(int) * partdesc->nparts);
+	datums_found = (int *) palloc0(sizeof(int) * partdesc->nparts);
+
+	i = -1;
+	while ((i = bms_next_member(foundoffsets, i)) >= 0)
+		datums_found[boundinfo->indexes[i]]++;
+
+	/*
+	 * Now, in a single pass over all the datums, count the number of datums
+	 * permitted in each partition.
+	 */
+	for (i = 0; i < boundinfo->ndatums; i++)
+		datums_in_part[boundinfo->indexes[i]]++;
+
+	/*
+	 * Now compare the counts and eliminate any partition for which we found
+	 * clauses for all its permitted values.  We must be careful here not to
+	 * eliminate the default partition.  We can recognize that by it having a
+	 * zero value in both arrays.
+	 */
+	excluded_parts = NULL;
+
+	for (i = 0; i < partdesc->nparts; i++)
+	{
+		if (datums_found[i] >= datums_in_part[i] && datums_found[i] > 0)
+			excluded_parts = bms_add_member(excluded_parts, i);
+	}
+
+	/*
+	 * Because the above clauses are strict, we can also exclude the NULL
+	 * partition, provided it does not also allow non-NULL values.
+	 */
+	if (partition_bound_accepts_nulls(boundinfo) &&
+		datums_in_part[boundinfo->null_index] == 0)
+		excluded_parts = bms_add_member(excluded_parts,
+										boundinfo->null_index);
+
+	pfree(datums_in_part);
+	pfree(datums_found);
+
+	return excluded_parts;
+}
+
+/*
+ * get_partitions_from_or_clause_args
+ *
+ * Returns the set of partitions of relation, each of which satisfies some
+ * clause in or_clause_args.
+ */
+static Bitmapset *
+get_partitions_from_or_clause_args(PartitionPruneContext *context,
+								   List *or_clause_args)
+{
+	PartitionKey	partkey = RelationGetPartitionKey(context->relation);
+	Bitmapset	   *result = NULL;
+	ListCell	   *lc;
+
+	/*
+	 * When matching an OR expression, it is only checked if at least one of
+	 * its args matches the partition key, not all.  For arguments that don't
+	 * match, we cannot eliminate any of its partitions using
+	 * get_partitions_from_clauses().  However, if the table is itself a
+	 * partition, we may be able to prove using constraint exclusion that the
+	 * clause refutes its partition constraint, that is, we can eliminate all
+	 * of its partitions.
+	 */
+	foreach(lc, or_clause_args)
+	{
+		List *clauses = list_make1(lfirst(lc));
+		PartitionClauseInfo *partclauseinfo;
+		PartitionPruneContext subcontext;
+		Bitmapset *arg_partset;
+
+		partclauseinfo = extract_partition_key_clauses(partkey, clauses,
+													   context->rt_index);
+
+		if (!partclauseinfo->foundkeyclauses)
+		{
+			List *partconstr = RelationGetPartitionQual(context->relation);
+			PartitionDesc partdesc;
+
+			if (partconstr)
+			{
+				partconstr = (List *) expression_planner((Expr *) partconstr);
+				if (context->rt_index != 1)
+					ChangeVarNodes((Node *) partconstr, 1, context->rt_index,
+								   0);
+				if (predicate_refuted_by(partconstr, clauses, false))
+					continue;
+			}
+
+			/* Couldn't eliminate any of the partitions. */
+			partdesc = RelationGetPartitionDesc(context->relation);
+			return bms_add_range(NULL, 0, partdesc->nparts - 1);
+		}
+
+		subcontext.rt_index = context->rt_index;
+		subcontext.relation = context->relation;
+		subcontext.clauseinfo = partclauseinfo;
+		arg_partset = get_partitions_from_clauses(&subcontext);
+
+		result = bms_add_members(result, arg_partset);
+		bms_free(arg_partset);
+	}
+
+	return result;
+}
+
+/* Match partition key (partattno/partexpr) to an expression (expr). */
+#define EXPR_MATCHES_PARTKEY(expr, partattno, partexpr) \
+		((partattno) != 0 ? \
+		 (IsA((expr), Var) && \
+		 ((Var *) (expr))->varattno == (partattno)) : \
+		 equal((expr), (partexpr)))
+
+#define COLLATION_MATCH(partcoll, exprcoll) \
+	(!OidIsValid(partcoll) || (partcoll) == (exprcoll))
+
+/*
+ * extract_partition_key_clauses
+ *		Processes 'clauses' to extract clause matching the partition key.
+ *		This adds matched clauses to the list corresponding to particular key
+ *		in 'partclauseinfo'.  Also collects other useful clauses to assist
+ *		in partition elimination, such as OR clauses, clauses containing <>
+ *		operator, and IS [NOT] NULL clauses
+ *
+ * We may also discover some contradiction in the clauses which means that no
+ * partition can possibly match.  In this case, the function sets
+ * partclauseinfo's 'constfalse' to true and exits immediately without
+ * processing any further clauses.  In this case, the caller must be careful
+ * not to assume the PartitionClauseInfo is fully populated with all clauses.
+ */
+static PartitionClauseInfo *
+extract_partition_key_clauses(PartitionKey partkey, List *clauses,
+							  int rt_index)
+{
+	PartitionClauseInfo *partclauseinfo = makeNode(PartitionClauseInfo);
+	int			i;
+	ListCell   *lc;
+
+	memset(partclauseinfo->keyclauses, 0, sizeof(partclauseinfo->keyclauses));
+	partclauseinfo->or_clauses = NIL;
+	partclauseinfo->ne_clauses = NIL;
+	partclauseinfo->keyisnull = NULL;
+	partclauseinfo->keyisnotnull = NULL;
+	partclauseinfo->constfalse = false;
+	partclauseinfo->foundkeyclauses = false;
+
+	foreach(lc, clauses)
+	{
+		Expr	   *clause = (Expr *) lfirst(lc);
+		ListCell   *partexprs_item;
+
+		if (IsA(clause, RestrictInfo))
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) clause;
+
+			clause = rinfo->clause;
+			if (rinfo->pseudoconstant &&
+				!DatumGetBool(((Const *) clause)->constvalue))
+			{
+				partclauseinfo->constfalse = true;
+				return partclauseinfo;
+			}
+		}
+
+		/* Get the BoolExpr's out of the way.*/
+		if (IsA(clause, BoolExpr))
+		{
+			if (or_clause((Node *) clause))
+			{
+				partclauseinfo->or_clauses =
+										lappend(partclauseinfo->or_clauses,
+												((BoolExpr *) clause)->args);
+				continue;
+			}
+			else if (and_clause((Node *) clause))
+			{
+				clauses = list_concat(clauses,
+									  list_copy(((BoolExpr *) clause)->args));
+				continue;
+			}
+			/* Fall-through for a NOT clause, which is handled below. */
+		}
+
+		partexprs_item = list_head(partkey->partexprs);
+		for (i = 0; i < partkey->partnatts; i++)
+		{
+			PartClause *pc;
+			Oid			partopfamily = partkey->partopfamily[i];
+			Oid			partcoll = partkey->partcollation[i];
+			Oid			commutator = InvalidOid;
+			AttrNumber	partattno = partkey->partattrs[i];
+			Expr	   *partexpr = NULL;
+
+			/*
+			 * A zero attno means the partition key is an expression, so grab
+			 * the next expression from the list.
+			 */
+			if (partattno == 0)
+			{
+				if (partexprs_item == NULL)
+					elog(ERROR, "wrong number of partition key expressions");
+
+				partexpr = (Expr *) lfirst(partexprs_item);
+
+				/*
+				 * Expressions stored for the PartitionKey in the relcache are
+				 * all stored with the dummy varno of 1. Change that to what
+				 * we need.
+				 */
+				if (rt_index != 1)
+				{
+					/* make a copy so as not to overwrite the relcache */
+					partexpr = (Expr *) copyObject(partexpr);
+					ChangeVarNodes((Node *) partexpr, 1, rt_index, 0);
+				}
+
+				partexprs_item = lnext(partexprs_item);
+			}
+
+			if (IsA(clause, OpExpr))
+			{
+				OpExpr	   *opclause = (OpExpr *) clause;
+				Expr	   *leftop,
+						   *rightop,
+						   *valueexpr;
+				bool		is_ne_listp = false;
+
+				leftop = (Expr *) get_leftop(clause);
+				if (IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+				rightop = (Expr *) get_rightop(clause);
+				if (IsA(rightop, RelabelType))
+					rightop = ((RelabelType *) rightop)->arg;
+
+				/* check if the clause matches this partition key */
+				if (EXPR_MATCHES_PARTKEY(leftop, partattno, partexpr))
+					valueexpr = rightop;
+				else if (EXPR_MATCHES_PARTKEY(rightop, partattno, partexpr))
+				{
+					valueexpr = leftop;
+
+					commutator = get_commutator(opclause->opno);
+
+					/* nothing we can do unless we can swap the operands */
+					if (!OidIsValid(commutator))
+						continue;
+				}
+				else
+					/* Clause does not match this partition key. */
+					continue;
+
+				/*
+				 * Also, useless, if the clause's collation is different from
+				 * the partitioning collation.
+				 */
+				if (!COLLATION_MATCH(partcoll, opclause->inputcollid))
+					continue;
+
+				/*
+				 * Only allow strict operators.  This will guarantee nulls are
+				 * filtered.
+				 */
+				if (!op_strict(opclause->opno))
+					continue;
+
+				/* We can't use any volatile value to prune partitions. */
+				if (contain_volatile_functions((Node *) valueexpr))
+					continue;
+
+				/*
+				 * Handle cases where the clause's operator does not belong to
+				 * the partitioning operator family.  We currently handle two
+				 * such cases: 1. Operators named '<>' are not listed in any
+				 * operator family whatsoever, 2.  Ordering operators like '<'
+				 * are not listed in the hash operator families.  For 1, check
+				 * if list partitioning is in use and if so, proceed to pass
+				 * the clause to the caller without doing any more processing
+				 * ourselves.  2 cannot be handled at all, so the clause is
+				 * simply skipped.
+				 */
+				if (!op_in_opfamily(opclause->opno, partopfamily))
+				{
+					Oid		negator;
+
+					/*
+					 * To confirm if the operator is really '<>', check if its
+					 * negator is a equality operator.  If it's a btree
+					 * equality operator *and* this is a list partitioned
+					 * table, we can use it prune partitions.
+					 */
+					negator = get_negator(opclause->opno);
+					if (OidIsValid(negator) &&
+						op_in_opfamily(negator, partopfamily))
+					{
+						Oid		lefttype;
+						Oid		righttype;
+						int		strategy;
+
+						get_op_opfamily_properties(negator, partopfamily,
+												   false,
+												   &strategy,
+												   &lefttype, &righttype);
+
+						if (strategy == BTEqualStrategyNumber &&
+							partkey->strategy == PARTITION_STRATEGY_LIST)
+							is_ne_listp = true;
+					}
+
+					/* Cannot handle this clause. */
+					if (!is_ne_listp)
+						continue;
+				}
+
+				pc = (PartClause *) palloc0(sizeof(PartClause));
+				pc->opno = OidIsValid(commutator) ? commutator : opclause->opno;
+				pc->inputcollid = opclause->inputcollid;
+				pc->value = valueexpr;
+
+				/*
+				 * We don't turn a <> operator clause into a key right away.
+				 * Instead, the caller will hand over such clauses to
+				 * get_partitions_excluded_by_ne_clauses().
+				 */
+				if (is_ne_listp)
+					partclauseinfo->ne_clauses =
+										lappend(partclauseinfo->ne_clauses,
+												pc);
+				else
+					partclauseinfo->keyclauses[i] =
+										lappend(partclauseinfo->keyclauses[i],
+												pc);
+
+				/*
+				 * Since we only allow strict operators, check for any
+				 * contradicting IS NULLs.
+				 */
+				if (bms_is_member(i, partclauseinfo->keyisnull))
+				{
+					partclauseinfo->constfalse = true;
+					return partclauseinfo;
+				}
+				/* Record that a strict clause has been seen for this key */
+				partclauseinfo->keyisnotnull =
+								bms_add_member(partclauseinfo->keyisnotnull,
+											   i);
+				partclauseinfo->foundkeyclauses = true;
+			}
+			else if (IsA(clause, ScalarArrayOpExpr))
+			{
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+				Oid		saop_op = saop->opno;
+				Oid		saop_coll = saop->inputcollid;
+				Expr   *leftop = (Expr *) linitial(saop->args),
+					   *rightop = (Expr *) lsecond(saop->args);
+				List   *elem_exprs,
+					   *elem_clauses;
+				ListCell *lc1;
+
+				if (IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+
+				/* Check it matches this partition key */
+				if (!EXPR_MATCHES_PARTKEY(leftop, partattno, partexpr))
+					continue;
+
+				/*
+				 * Also, useless, if the clause's collation is different from
+				 * the partitioning collation.
+				 */
+				if (!COLLATION_MATCH(partcoll, saop->inputcollid))
+					continue;
+
+				/*
+				 * Only allow strict operators.  This will guarantee null are
+				 * filtered.
+				 */
+				if (!op_strict(saop->opno))
+					continue;
+
+				/* Useless if the array has any volatile functions. */
+				if (contain_volatile_functions((Node *) rightop))
+					continue;
+
+				/*
+				 * In case of NOT IN (..), we get a '<>', which while not
+				 * listed as part of any operator family, we are able to
+				 * handle it if its negator is indeed a part of the
+				 * partitioning equality operator.
+				 */
+				if (!op_in_opfamily(saop_op, partopfamily))
+				{
+					Oid		negator = get_negator(saop_op);
+					int		strategy;
+					Oid		lefttype,
+							righttype;
+
+					if (!OidIsValid(negator))
+						continue;
+					get_op_opfamily_properties(negator, partopfamily, false,
+											   &strategy,
+											   &lefttype, &righttype);
+					if (strategy != BTEqualStrategyNumber)
+						continue;
+				}
+
+				/*
+				 * First generate a list of Const nodes, one for each array
+				 * element.
+				 */
+				elem_exprs = NIL;
+				if (IsA(rightop, Const))
+				{
+					Const *arr = (Const *) lsecond(saop->args);
+					ArrayType *arrval = DatumGetArrayTypeP(arr->constvalue);
+					int16	elemlen;
+					bool	elembyval;
+					char	elemalign;
+					Datum  *elem_values;
+					bool   *elem_nulls;
+					int		num_elems;
+
+					get_typlenbyvalalign(ARR_ELEMTYPE(arrval),
+										 &elemlen, &elembyval, &elemalign);
+					deconstruct_array(arrval,
+									  ARR_ELEMTYPE(arrval),
+									  elemlen, elembyval, elemalign,
+									  &elem_values, &elem_nulls,
+									  &num_elems);
+					for (i = 0; i < num_elems; i++)
+					{
+						/* Only consider non-null values. */
+						if (!elem_nulls[i])
+						{
+							Const *elem_expr = makeConst(ARR_ELEMTYPE(arrval),
+														 -1, arr->constcollid,
+														 elemlen,
+														 elem_values[i],
+														 false, elembyval);
+
+							elem_exprs = lappend(elem_exprs, elem_expr);
+						}
+					}
+				}
+				else
+				{
+					ArrayExpr *arrexpr = castNode(ArrayExpr, rightop);
+
+					/*
+					 * For a nested ArrayExpr, we don't know how to get the
+					 * actual scalar values out into a flat list, so we give
+					 * up doing anything with this ScalarArrayOpExpr.
+					 */
+					if (arrexpr->multidims)
+						continue;
+
+					elem_exprs = arrexpr->elements;
+				}
+
+				/*
+				 * Now generate a list of clauses, one for each array element,
+				 * of the form: saop_leftop saop_op elem_expr
+				 */
+				elem_clauses = NIL;
+				foreach(lc1, elem_exprs)
+				{
+					Expr   *rightop = (Expr *) lfirst(lc1),
+						   *elem_clause;
+
+					elem_clause = (Expr *) make_opclause(saop_op, BOOLOID,
+														 false,
+														 leftop, rightop,
+														 InvalidOid,
+														 saop_coll);
+					elem_clauses = lappend(elem_clauses, elem_clause);
+				}
+
+				/*
+				 * Build the OR clause if needed or add the clauses to the end
+				 * of the list that's being processed currently.
+				 */
+				if (saop->useOr && list_length(elem_clauses) > 1)
+					partclauseinfo->or_clauses =
+										lappend(partclauseinfo->or_clauses,
+												elem_clauses);
+				else
+					clauses = list_concat(clauses, elem_clauses);
+				partclauseinfo->foundkeyclauses = true;
+			}
+			else if (IsA(clause, NullTest))
+			{
+				NullTest *nulltest = (NullTest *) clause;
+				Expr *arg = nulltest->arg;
+
+				if (IsA(arg, RelabelType))
+					arg = ((RelabelType *) arg)->arg;
+
+				/* Does leftop match with this partition key column? */
+				if (EXPR_MATCHES_PARTKEY(arg, partattno, partexpr))
+				{
+					if (nulltest->nulltesttype == IS_NULL)
+					{
+						/* check for conflicting IS NOT NULLs */
+						if (bms_is_member(i, partclauseinfo->keyisnotnull))
+						{
+							partclauseinfo->constfalse = true;
+							return partclauseinfo;
+						}
+						partclauseinfo->keyisnull =
+									bms_add_member(partclauseinfo->keyisnull,
+												   i);
+					}
+					else
+					{
+						/* check for conflicting IS NULLs */
+						if (bms_is_member(i, partclauseinfo->keyisnull))
+						{
+							partclauseinfo->constfalse = true;
+							return partclauseinfo;
+						}
+
+						partclauseinfo->keyisnotnull =
+								bms_add_member(partclauseinfo->keyisnotnull,
+											   i);
+					}
+					partclauseinfo->foundkeyclauses = true;
+				}
+			}
+			/*
+			 * Boolean clauses have a special shape, which would've been
+			 * accepted if the partitioning opfamily accepts Boolean
+			 * conditions.
+			 */
+			else if (IsBooleanOpfamily(partopfamily) &&
+					 (IsA(clause, BooleanTest) ||
+					  IsA(clause, Var) ||
+					  not_clause((Node *) clause)))
+			{
+				Expr   *leftop,
+					   *rightop;
+
+				if (IsA(clause, BooleanTest))
+				{
+					BooleanTest *btest = (BooleanTest *) clause;
+
+					/* Only IS [NOT] TRUE/FALSE are any good to us */
+					if (btest->booltesttype == IS_UNKNOWN ||
+						btest->booltesttype == IS_NOT_UNKNOWN)
+						continue;
+
+					leftop = btest->arg;
+					if (IsA(leftop, RelabelType))
+						leftop = ((RelabelType *) leftop)->arg;
+
+					/* Clause does not match this partition key. */
+					if (!EXPR_MATCHES_PARTKEY(leftop, partattno, partexpr))
+						continue;
+
+					rightop = (btest->booltesttype == IS_TRUE ||
+							   btest->booltesttype == IS_NOT_FALSE)
+									? (Expr *) makeBoolConst(true, false)
+									: (Expr *) makeBoolConst(false, false);
+				}
+				else
+				{
+					leftop = IsA(clause, Var)
+								? (Expr *) clause
+								: (Expr *) get_notclausearg((Expr *) clause);
+					if (IsA(leftop, RelabelType))
+						leftop = ((RelabelType *) leftop)->arg;
+
+					/* Clause does not match this partition key. */
+					if (!EXPR_MATCHES_PARTKEY(leftop, partattno, partexpr))
+						continue;
+
+					rightop = IsA(clause, Var)
+									? (Expr *) makeBoolConst(true, false)
+									: (Expr *) makeBoolConst(false, false);
+				}
+
+				pc = (PartClause *) palloc0(sizeof(PartClause));
+				pc->opno = BooleanEqualOperator;
+				pc->inputcollid = InvalidOid;
+				pc->value = rightop;
+
+				partclauseinfo->keyclauses[i] =
+										lappend(partclauseinfo->keyclauses[i],
+												pc);
+				partclauseinfo->foundkeyclauses = true;
+			}
+		}
+	}
+
+	return partclauseinfo;
+}
+
+/*
+ * extract_bounding_datums
+ *		Process clauses in context->clauseinfo and populate 'keys' with all
+ *		min/max/equal values that we're able to determine.
+ *
+ * For RANGE partitioning we do not need to match and find values for all
+ * partition keys.  We may be able to eliminate some partitions with just a
+ * prefix of the partition keys.  HASH partitioning does require all keys are
+ * matched to with at least some combinations of equality clauses and IS NULL
+ * clauses. LIST partitions don't support multiple partition keys.
+ *
+ * Returns true if at least one key was found; false otherwise.
+ */
+static bool
+extract_bounding_datums(PartitionKey partkey, PartitionPruneContext *context,
+						List **minimalclauses, PartScanKeyInfo *keys)
+{
+	PartitionClauseInfo *clauseinfo = context->clauseinfo;
+	bool		need_next_eq,
+				need_next_min,
+				need_next_max;
+	int 		i;
+	ListCell   *lc;
+
+	/*
+	 * Based on the strategies of the clauses' operators (=, </<=, >/>=), try
+	 * to construct a tuple of those datums that serve as the exact lookup
+	 * tuple or two tuples that serve as minimum and maximum bound.
+	 *
+	 * If we find datums for all partition key columns that appear in =
+	 * operator clauses, then we have the exact match lookup tuple, which will
+	 * be used to match just one partition (although that's required only for
+	 * range partitioning, finding datums for just some columns is fine for
+	 * hash partitioning).
+	 *
+	 * If the last datum in a tuple comes from a clause containing </<= or
+	 * >/>= operator, then that constitutes the minimum or maximum bound tuple,
+	 * respectively.  There is one exception -- if we have a tuple containing
+	 * values for only a prefix of partition key columns, where none of its
+	 * values come from a </<= or >/>= operator clause, we still consider such
+	 * tuple as both minimum and maximum bound tuple.
+	 */
+	need_next_eq = true;
+	need_next_min = true;
+	need_next_max = true;
+	memset(keys, 0, sizeof(PartScanKeyInfo));
+	for (i = 0; i < partkey->partnatts; i++)
+	{
+		List *clauselist = minimalclauses[i];
+
+		/*
+		 * Min and max keys must constitute a prefix of the partition key and
+		 * must appear in the same order as partition keys.  Equal keys have
+		 * to satisfy that requirement only for non-hash partitioning.
+		 */
+		if (i > keys->n_eqkeys &&
+			partkey->strategy != PARTITION_STRATEGY_HASH)
+			need_next_eq = false;
+
+		if (i > keys->n_minkeys)
+			need_next_min = false;
+
+		if (i > keys->n_maxkeys)
+			need_next_max = false;
+
+		foreach(lc, clauselist)
+		{
+			PartClause *clause = (PartClause *) lfirst(lc);
+			Expr *value = clause->value;
+			bool incl;
+			PartOpStrategy	op_strategy;
+
+			op_strategy = partition_op_strategy(partkey, clause, &incl);
+			switch (op_strategy)
+			{
+				case PART_OP_EQUAL:
+					Assert(incl);
+					if (need_next_eq &&
+						partkey_datum_from_expr(partkey, i, value,
+												&keys->eqkeys[i]))
+						keys->n_eqkeys++;
+
+					if (need_next_max &&
+						partkey_datum_from_expr(partkey, i, value,
+												&keys->maxkeys[i]))
+					{
+						keys->n_maxkeys++;
+						keys->max_incl = true;
+					}
+
+					if (need_next_min &&
+						partkey_datum_from_expr(partkey, i, value,
+												&keys->minkeys[i]))
+					{
+						keys->n_minkeys++;
+						keys->min_incl = true;
+					}
+					break;
+
+				case PART_OP_LESS:
+					if (need_next_max &&
+						partkey_datum_from_expr(partkey, i, value,
+												&keys->maxkeys[i]))
+					{
+						keys->n_maxkeys++;
+						keys->max_incl = incl;
+						if (!incl)
+							need_next_eq = need_next_max = false;
+					}
+					break;
+
+				case PART_OP_GREATER:
+					if (need_next_min &&
+						partkey_datum_from_expr(partkey, i, value,
+												&keys->minkeys[i]))
+					{
+						keys->n_minkeys++;
+						keys->min_incl = incl;
+						if (!incl)
+							need_next_eq = need_next_min = false;
+					}
+					break;
+
+				default:
+					Assert(false);
+			}
+		}
+	}
+
+	/*
+	 * To set eqkeys, we must have found matching clauses containing =
+	 * operator for all partition key columns and if present we don't need
+	 * the values in minkeys and maxkeys anymore.  In the case hash
+	 * partitioning, we don't require all of eqkeys to be operator clausses.
+	 * In that case, any IS NULL clauses involving partition key columns are
+	 * also considered as equality keys by the code for hash partition pruning,
+	 * which checks that all partition columns are covered before actually
+	 * performing the pruning.
+	 */
+	if (keys->n_eqkeys == partkey->partnatts ||
+		partkey->strategy == PARTITION_STRATEGY_HASH)
+		keys->n_minkeys = keys->n_maxkeys = 0;
+	else
+		keys->n_eqkeys = 0;
+
+	/* Finally, also set the keyisnull and keyisnotnull values. */
+	keys->keyisnull = clauseinfo->keyisnull;
+	keys->keyisnotnull = clauseinfo->keyisnotnull;
+
+	return (keys->n_eqkeys > 0 || keys->n_minkeys > 0 ||
+			keys->n_maxkeys > 0 || !bms_is_empty(keys->keyisnull) ||
+			!bms_is_empty(keys->keyisnotnull));
+}
+
+/*
+ * partition_op_strategy
+ *		Returns whether the clause in 'pc' contains an =, </<=, or >/>=
+ *		operator and set *incl to true if the operator's strategy is
+ *		inclusive.
+ */
+static PartOpStrategy
+partition_op_strategy(PartitionKey key, PartClause *pc, bool *incl)
+{
+	*incl = false;	/* may be overwritten below */
+
+	switch (key->strategy)
+	{
+		/* Hash partitioning allows only hash equality. */
+		case PARTITION_STRATEGY_HASH:
+			if (pc->op_strategy == HTEqualStrategyNumber)
+			{
+				*incl = true;
+				return PART_OP_EQUAL;
+			}
+			elog(ERROR, "unexpected operator strategy number: %d",
+				 pc->op_strategy);
+
+		/* List and range partitioning support all btree operators. */
+		case PARTITION_STRATEGY_LIST:
+		case PARTITION_STRATEGY_RANGE:
+			switch (pc->op_strategy)
+			{
+				case BTLessEqualStrategyNumber:
+					*incl = true;
+					/* fall through */
+
+				case BTLessStrategyNumber:
+					return PART_OP_LESS;
+
+				case BTEqualStrategyNumber:
+					*incl = true;
+					return PART_OP_EQUAL;
+
+				case BTGreaterEqualStrategyNumber:
+					*incl = true;
+					/* fall through */
+
+				case BTGreaterStrategyNumber:
+					return PART_OP_GREATER;
+			}
+
+		default:
+			elog(ERROR, "unexpected partition strategy: %d",
+				 (int) key->strategy);
+	}
+
+	return PART_OP_EQUAL;		/* keep compiler quiet */
+}
+
+/*
+ * partkey_datum_from_expr
+ *		Set *value to the constant value obtained by evaluating 'expr'
+ *
+ * Note that we may not be able to evaluate the input expression, in which
+ * case, the function returns false to indicate that *value has not been
+ * set.  True is returned otherwise.
+ */
+static bool
+partkey_datum_from_expr(PartitionKey key, int partkeyidx,
+						Expr *expr, Datum *value)
+{
+	Oid		exprtype = exprType((Node *) expr);
+
+	if (exprtype != key->parttypid[partkeyidx])
+	{
+		ParseState *pstate = make_parsestate(NULL);
+
+		expr = (Expr *) coerce_to_target_type(pstate, (Node *) expr,
+									 exprtype,
+									 key->parttypid[partkeyidx], -1,
+									 COERCION_EXPLICIT,
+									 COERCE_IMPLICIT_CAST, -1);
+		free_parsestate(pstate);
+
+		/*
+		 * If we couldn't coerce to the partition key's type, that is, the
+		 * type of the datums stored in PartitionBoundInfo for this partition
+		 * key, there's no hope of using this expression for anything
+		 * partitioning-related.
+		 */
+		if (expr == NULL)
+			return false;
+
+		/*
+		 * Transform into a form that the following code can do something
+		 * useful with.
+		 */
+		expr = evaluate_expr(expr,
+							 exprType((Node *) expr),
+							 exprTypmod((Node *) expr),
+							 exprCollation((Node *) expr));
+	}
+
+	/*
+	 * Add more expression types here as needed to support higher-level
+	 * code.
+	 */
+	if (IsA(expr, Const))
+	{
+		*value = ((Const *) expr)->constvalue;
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * remove_redundant_clauses
+ *		Processes the clauses contained in context->clauseinfo to remove the
+ *		ones that are superseeded by other clauses which are more restrictive.
+ *
+ * For example, x > 1 AND x > 2 and x >= 5, the latter is the most
+ * restrictive, so 5 is the best minimum bound for x.
+ *
+ * We also look for clauses which contradict one another in a way that proves
+ * that the clauses cannot possibly match any partition.  Impossible clauses
+ * include things like: x = 1 AND x = 2, x > 0 and x < 10.  The function
+ * returns right after finding such a clause and before returning, sets a field
+ * in context->clauseinfo to inform the caller that we found such clause.
+ */
+static void
+remove_redundant_clauses(PartitionKey partkey,
+						 PartitionPruneContext *context,
+						 List **minimalclauses)
+{
+	PartClause *hash_clause,
+			   *btree_clauses[BTMaxStrategyNumber];
+	PartitionClauseInfo *partclauseinfo = context->clauseinfo;
+	ListCell *lc;
+	int		s;
+	int		i;
+	bool	test_result;
+
+	for (i = 0; i < partkey->partnatts; i++)
+	{
+		List *keyclauses = partclauseinfo->keyclauses[i];
+
+		minimalclauses[i] = NIL;
+		hash_clause = NULL;
+
+		memset(btree_clauses, 0, sizeof(btree_clauses));
+
+		foreach(lc, keyclauses)
+		{
+			PartClause *pc = (PartClause *) lfirst(lc);
+
+			if (!pc->valid_cache)
+			{
+				Oid		lefttype;
+
+				get_op_opfamily_properties(pc->opno,
+										   partkey->partopfamily[i],
+										   false,
+										   &pc->op_strategy,
+										   &lefttype,
+										   &pc->op_subtype);
+				fmgr_info(get_opcode(pc->opno), &pc->op_func);
+				pc->valid_cache = true;
+			}
+
+			/*
+			 * Hash-partitioning knows only about equality.  So, if we've
+			 * matched a clause and found another clause whose constant
+			 * operand doesn't match the constant operand of the former, then
+			 * we have found mutually contradictory clauses.
+			 */
+			if (partkey->strategy == PARTITION_STRATEGY_HASH)
+			{
+				if (hash_clause == NULL)
+					hash_clause = pc;
+				/* check if another clause would contradict the one we have */
+				else if (partition_cmp_args(partkey, i,
+											pc, pc, hash_clause,
+											&test_result))
+				{
+					if (!test_result)
+					{
+						partclauseinfo->constfalse = true;
+						return;
+					}
+				}
+				/*
+				 * Couldn't compare; keep hash_clause set to the previous value,
+				 * and add this one directly to the result.  Caller would
+				 * arbitrarily choose one of the many and perform
+				 * partition-pruning with it.
+				 */
+				else
+					minimalclauses[i] = lappend(minimalclauses[i], pc);
+
+				/*
+				 * The code below handles btree operators, so not relevant for
+				 * hash partitioning.
+				 */
+				continue;
+			}
+
+			/*
+			 * The code that follows closely mimics similar processing done by
+			 * nbtutils.c: _bt_preprocess_keys().
+			 *
+			 * btree_clauses[s] points currently best clause containing the
+			 * operator strategy type s+1; it is NULL if we haven't yet found
+			 * such a clause.
+			 */
+			s = pc->op_strategy - 1;
+			if (btree_clauses[s] == NULL)
+			{
+				btree_clauses[s] = pc;
+			}
+			else
+			{
+				/*
+				 * Is this one more restrictive than what we already have?
+				 *
+				 * Consider some examples: 1. If btree_clauses[BTLT] now contains
+				 * a < 5, and cur is a < 3, then because 3 < 5 is true, a < 5
+				 * currently at btree_clauses[BTLT] will be replaced by a < 3.
+				 *
+				 * 2. If btree_clauses[BTEQ] now contains a = 5 and cur is a = 7,
+				 * then because 5 = 7 is false, we found a mutual contradiction,
+				 * so we set *constfalse to true and return.
+				 *
+				 * 3. If btree_clauses[BTLT] now contains a < 5 and cur is a < 7,
+				 * then because 7 < 5 is false, we leave a < 5 where it is and
+				 * effectively discard a < 7 as being redundant.
+				 */
+				if (partition_cmp_args(partkey, i,
+									   pc, pc, btree_clauses[s],
+									   &test_result))
+				{
+					/* cur is more restrictive, so replace the existing. */
+					if (test_result)
+						btree_clauses[s] = pc;
+					else if (s == BTEqualStrategyNumber - 1)
+					{
+						partclauseinfo->constfalse = true;
+						return;
+					}
+
+					/* Old one is more restrictive, so keep around. */
+				}
+				else
+				{
+					/*
+					 * We couldn't determine which one is more restrictive.  Keep
+					 * the previous one in btree_clauses[s] and push this one directly
+					 * to the output list.
+					 */
+					minimalclauses[i] = lappend(minimalclauses[i], pc);
+				}
+			}
+		}
+
+		if (partkey->strategy == PARTITION_STRATEGY_HASH)
+		{
+			/* Note we didn't add this one to the result yet. */
+			if (hash_clause)
+				minimalclauses[i] = lappend(minimalclauses[i], hash_clause);
+			continue;
+		}
+
+		/* Compare btree operator clauses across strategies. */
+
+		/* Compare the equality clause with clauses of other strategies. */
+		if (btree_clauses[BTEqualStrategyNumber - 1])
+		{
+			PartClause *eq = btree_clauses[BTEqualStrategyNumber - 1];
+
+			for (s = 0; s < BTMaxStrategyNumber; s++)
+			{
+				PartClause *chk = btree_clauses[s];
+
+				if (!chk || s == (BTEqualStrategyNumber - 1))
+					continue;
+
+				/*
+				 * Suppose btree_clauses[BTLT] contained a < 5 and the eq clause
+				 * is a = 5, then because 5 < 5 is false, we found contradiction.
+				 * That is, a < 5 and a = 5 are mutually contradictory.  OTOH, if
+				 * eq clause is a = 3, then because 3 < 5, we no longer need
+				 * a < 5, because a = 3 is more restrictive.
+				 */
+				if (partition_cmp_args(partkey, i,
+									   chk, eq, chk,
+									   &test_result))
+				{
+					if (!test_result)
+					{
+						partclauseinfo->constfalse = true;
+						return;
+					}
+					/* Discard the no longer needed clause. */
+					btree_clauses[s] = NULL;
+				}
+			}
+		}
+
+		/*
+		 * Try to keep only one of <, <=.
+		 *
+		 * Suppose btree_clauses[BTLT] contains a < 3 and btree_clauses[BTLE]
+		 * contains a <= 3 (or a <= 4), then because 3 <= 3 (or 3 <= 4) is true,
+		 * we discard the a <= 3 (or a <= 4) as redundant.  If the latter contains
+		 * contains a <= 2, then because 3 <= 2 is false, we dicard a < 3 as
+		 * redundant.
+		 */
+		if (btree_clauses[BTLessStrategyNumber - 1] &&
+			btree_clauses[BTLessEqualStrategyNumber - 1])
+		{
+			PartClause *lt = btree_clauses[BTLessStrategyNumber - 1],
+					   *le = btree_clauses[BTLessEqualStrategyNumber - 1];
+
+			if (partition_cmp_args(partkey, i,
+								   le, lt, le,
+								   &test_result))
+			{
+				if (test_result)
+					btree_clauses[BTLessEqualStrategyNumber - 1] = NULL;
+				else
+					btree_clauses[BTLessStrategyNumber - 1] = NULL;
+			}
+		}
+
+		/* Try to keep only one of >, >=.  See the example above. */
+		if (btree_clauses[BTGreaterStrategyNumber - 1] &&
+			btree_clauses[BTGreaterEqualStrategyNumber - 1])
+		{
+			PartClause *gt = btree_clauses[BTGreaterStrategyNumber - 1],
+					   *ge = btree_clauses[BTGreaterEqualStrategyNumber - 1];
+
+			if (partition_cmp_args(partkey, i,
+								   ge, gt, ge,
+								   &test_result))
+			{
+				if (test_result)
+					btree_clauses[BTGreaterEqualStrategyNumber - 1] = NULL;
+				else
+					btree_clauses[BTGreaterStrategyNumber - 1] = NULL;
+			}
+		}
+
+		/*
+		 * btree_clauses now contains the "best" clause or NULL for each btree
+		 * strategy number.  Add to the newlist.
+		 */
+		for (s = 0; s < BTMaxStrategyNumber; s++)
+		{
+			if (btree_clauses[s])
+				minimalclauses[i] = lappend(minimalclauses[i],
+											btree_clauses[s]);
+		}
+	}
+}
+
+/*
+ * partition_cmp_args
+ *		Try to compare the constant arguments of 'leftarg' and 'rightarg', in
+ *		that order, using the operator of 'op' and set *result to the result
+ *		of this comparison.
+ *
+ * Returns true if we could actually perform the comparison; otherwise false.
+ *
+ * Note: We may not be able to perform the comparison if operand values are
+ * unknown in this context or if the type of any of the operands are
+ * incompatible with the operator.
+ */
+static bool
+partition_cmp_args(PartitionKey key, int partkeyidx,
+				   PartClause *pc, PartClause *leftarg, PartClause *rightarg,
+				   bool *result)
+{
+	Datum	left_value;
+	Datum	right_value;
+
+	Assert(pc->valid_cache && leftarg->valid_cache && rightarg->valid_cache);
+
+	/*
+	 * Try to extract an actual value from each arg.  This may fail if the
+	 * value is unknown in this context, in which case we cannot compare.
+	 */
+	if (!partkey_datum_from_expr(key, partkeyidx,
+								 leftarg->value, &left_value))
+		return false;
+
+	if (!partkey_datum_from_expr(key, partkeyidx,
+								 rightarg->value, &right_value))
+		return false;
+
+	/*
+	 * We can compare left_value and right_value using op's operator
+	 * only if both are of the expected type.
+	 */
+	if (leftarg->op_subtype == pc->op_subtype &&
+		rightarg->op_subtype == pc->op_subtype)
+	{
+		*result = DatumGetBool(FunctionCall2Coll(&pc->op_func,
+												 pc->inputcollid,
+												 left_value,
+												 right_value));
+		return true;
+	}
+	else
+	{
+		Oid		partopfamily = key->partopfamily[partkeyidx];
+		Oid		cmp_op;
+
+		/* Otherwise, look one up in the partitioning operator family. */
+		cmp_op = get_opfamily_member(partopfamily,
+									 leftarg->op_subtype,
+									 rightarg->op_subtype,
+									 pc->op_strategy);
+		if (OidIsValid(cmp_op))
+		{
+			*result = DatumGetBool(OidFunctionCall2Coll(get_opcode(cmp_op),
+														pc->inputcollid,
+														left_value,
+														right_value));
+			return true;
+		}
+	}
+
+	/* Couldn't do the comparison. */
+	*result = false;
+	return false;
+}
+
+/*
+ * get_partitions_for_keys
+ *		Returns the partitions of 'rel' that will need to be scanned for the
+ *		given look up keys
+ *
+ * Input:
+ *	See the comments above the definition of PartScanKeyInfo to see what
+ *	kind of information is contained in 'keys'.
+ *
+ * Outputs:
+ *	Bitmapset containing indexes of the selceted partitions
+ */
+static Bitmapset *
+get_partitions_for_keys(Relation rel, PartScanKeyInfo *keys)
+{
+	/* Return an empty set if no partitions to see. */
+	if (RelationGetPartitionDesc(rel)->nparts == 0)
+		return NULL;
+
+	switch (RelationGetPartitionKey(rel)->strategy)
+	{
+		case PARTITION_STRATEGY_HASH:
+			return get_partitions_for_keys_hash(rel, keys);
+
+		case PARTITION_STRATEGY_LIST:
+			return get_partitions_for_keys_list(rel, keys);
+
+		case PARTITION_STRATEGY_RANGE:
+			return get_partitions_for_keys_range(rel, keys);
+
+		default:
+			elog(ERROR, "unexpected partition strategy: %d",
+						RelationGetPartitionKey(rel)->strategy);
+	}
+
+	return NULL;	/* keep compiler quiet */
+}
+
+/*
+ * get_partitions_for_keys_hash
+ *		Return partitions of a hash partitioned table for requested
+ *		keys
+ *
+ * This interprets the keys and looks up partitions in the partition bound
+ * descriptor using the hash partitioning semantics.
+ */
+static Bitmapset *
+get_partitions_for_keys_hash(Relation rel, PartScanKeyInfo *keys)
+{
+	PartitionKey	partkey = RelationGetPartitionKey(rel);
+	PartitionDesc	partdesc = RelationGetPartitionDesc(rel);
+	PartitionBoundInfo boundinfo = partdesc->boundinfo;
+	bool			keyisnull[PARTITION_MAX_KEYS];
+	int				i;
+
+	Assert(partdesc->nparts > 0);
+
+	/*
+	 * Since tuples with NULL values in the partition key columns are stored
+	 * in regular partitions, we'll treat any IS NULL clauses here as regular
+	 * equality clauses.
+	 */
+	memset(keyisnull, false, sizeof(keyisnull));
+	for (i = 0; i < partkey->partnatts; i++)
+	{
+		if (bms_is_member(i, keys->keyisnull))
+		{
+			keys->n_eqkeys++;
+			keyisnull[i] = true;
+		}
+	}
+
+	/*
+	 * Can only do pruning if we know all the keys and they're all equality
+	 * keys including the nulls that we just counted above.
+	 */
+	if (keys->n_eqkeys == partkey->partnatts)
+	{
+		uint64	rowHash;
+		int 	greatest_modulus = get_greatest_modulus(boundinfo),
+				result_index;
+
+		rowHash = compute_hash_value(partkey, keys->eqkeys, keyisnull);
+		result_index = boundinfo->indexes[rowHash % greatest_modulus];
+		if (result_index >= 0)
+			return bms_make_singleton(result_index);
+	}
+	else
+		/* Can't do pruning otherwise, so return all partitions. */
+		return bms_add_range(NULL, 0, partdesc->nparts - 1);
+
+	return NULL;
+}
+
+/*
+ * get_partitions_for_keys_list
+ *		Return partitions of a list partitioned table for requested keys
+ *
+ * This interprets the keys and looks up partitions in the partition bound
+ * descriptor using the list partitioning semantics.
+ */
+static Bitmapset *
+get_partitions_for_keys_list(Relation rel, PartScanKeyInfo *keys)
+{
+	Bitmapset			   *result = NULL;
+	PartitionKey			partkey = RelationGetPartitionKey(rel);
+	PartitionBoundInfo		boundinfo = RelationGetPartitionDesc(rel)->boundinfo;
+	int		i,
+			eqoff,
+			minoff,
+			maxoff;
+	bool	is_equal;
+
+	Assert(RelationGetPartitionDesc(rel)->nparts > 0);
+	Assert(partkey->partnatts == 1);
+
+	/*
+	 * If the query is looking for null keys, there can only be one such
+	 * partition.  Return the same if one exists.
+	 */
+	if (!bms_is_empty(keys->keyisnull))
+	{
+		/*
+		 * NULLs may only exist in the NULL partition, or in the
+		 * default, if there's no NULL partition.
+		 */
+		if (partition_bound_accepts_nulls(boundinfo))
+			return bms_make_singleton(boundinfo->null_index);
+		else if (partition_bound_has_default(boundinfo))
+			return bms_make_singleton(boundinfo->default_index);
+		else
+			return NULL;
+	}
+
+	/*
+	 * If there are no datums to compare keys with, but there are partitions,
+	 * just return the default partition if one exists.
+	 */
+	if (boundinfo->ndatums == 0)
+	{
+		if (partition_bound_has_default(boundinfo))
+			return bms_make_singleton(boundinfo->default_index);
+		else
+			return NULL;	/* shouldn't happen */
+	}
+
+	/* Equality key. */
+	if (keys->n_eqkeys > 0)
+	{
+		eqoff = partition_list_bsearch(partkey, boundinfo, keys->eqkeys[0],
+									   &is_equal);
+		if (eqoff >= 0 && is_equal)
+		{
+			/* Exactly matching datum exists. */
+			Assert(boundinfo->indexes[eqoff] >= 0);
+			return bms_make_singleton(boundinfo->indexes[eqoff]);
+		}
+		else if (partition_bound_has_default(boundinfo))
+			return bms_make_singleton(boundinfo->default_index);
+		else
+			return NULL;
+	}
+
+	/*
+	 * Find the left-most bound that satisfies the query, i.e., the one that
+	 * satisfies minkeys.
+	 */
+	minoff = 0;
+	if (keys->n_minkeys > 0)
+	{
+		minoff = partition_list_bsearch(partkey, boundinfo, keys->minkeys[0],
+										&is_equal);
+		if (minoff >= 0)
+		{
+			/*
+			 * The bound at minoff is <= minkeys, given the way
+			 * partition_bound_bsearch() works.  If it's not equal (<), then
+			 * increment minoff to make it point to the datum on the right
+			 * that necessarily satisfies minkeys.  Also do the same if it is
+			 * equal but minkeys is exclusive.
+			 */
+			if (!is_equal || !keys->min_incl)
+				minoff++;
+		}
+		else
+		{
+			/*
+			 * minoff set to -1 means all datums are greater than minkeys,
+			 * which means all partitions satisfy minkeys.  In that case, set
+			 * minoff to the index of the leftmost datum, viz. 0.
+			 */
+			minoff = 0;
+		}
+
+		/*
+		 * minkeys is greater than the datums of all non-default partitions,
+		 * meaning there isn't one to return.  Return the default partition if
+		 * one exists.
+		 */
+		if (minoff > boundinfo->ndatums - 1)
+			return partition_bound_has_default(boundinfo)
+						? bms_make_singleton(boundinfo->default_index)
+						: NULL;
+	}
+
+	/*
+	 * Find the right-most bound that satisfies the query, i.e., the one that
+	 * satisfies maxkeys.
+	 */
+	maxoff = boundinfo->ndatums - 1;
+	if (keys->n_maxkeys > 0)
+	{
+		maxoff = partition_list_bsearch(partkey, boundinfo, keys->maxkeys[0],
+										&is_equal);
+		if (maxoff >= 0)
+		{
+			/*
+			 * The bound at maxoff is <= maxkeys, given the way
+			 * partition_bound_bsearch works.  If the bound at maxoff exactly
+			 * matches maxkey (is_equal), but the maxkey is exclusive, then
+			 * decrement maxoff to point to the bound on the left.
+			 */
+			if (is_equal && !keys->max_incl)
+				maxoff--;
+		}
+
+		/*
+		 * maxkeys is smaller than the datums of all non-default partitions,
+		 * meaning there isn't one to return.  Return the default partition if
+		 * one exists.
+		 */
+		if (maxoff < 0)
+			return partition_bound_has_default(boundinfo)
+						? bms_make_singleton(boundinfo->default_index)
+						: NULL;
+	}
+
+	Assert (minoff >= 0 && maxoff >= 0);
+
+	/*
+	 * All datums between those at minoff and maxoff satisfy query's keys, so
+	 * add the corresponding partitions to the result set.
+	 */
+	for (i = minoff; i <= maxoff; i++)
+		result = bms_add_member(result, boundinfo->indexes[i]);
+
+	/*
+	 * For range queries, always include the default list partition,
+	 * because list partitions divide the key space in a discontinuous
+	 * manner, not all values in the given range will have a partition
+	 * assigned.
+	 */
+	if (partition_bound_has_default(boundinfo))
+		return bms_add_member(result, boundinfo->default_index);
+
+	return result;
+}
+
+/*
+ * get_partitions_for_keys_range
+ *		Return partitions of a range partitioned table for requested keys
+ *
+ * This interprets the keys and looks up partitions in the partition bound
+ * descriptor using the range partitioning semantics.
+ */
+static Bitmapset *
+get_partitions_for_keys_range(Relation rel, PartScanKeyInfo *keys)
+{
+	Bitmapset			   *result = NULL;
+	PartitionKey			partkey = RelationGetPartitionKey(rel);
+	PartitionBoundInfo 		boundinfo = RelationGetPartitionDesc(rel)->boundinfo;
+	int		i,
+			eqoff,
+			minoff,
+			maxoff;
+	bool	is_equal,
+			include_def = false;
+
+	Assert(RelationGetPartitionDesc(rel)->nparts > 0);
+
+	/*
+	 * We might be able to get the answer sooner based on the nullness of
+	 * keys, so get that out of the way.
+	 */
+	for (i = 0; i < partkey->partnatts; i++)
+	{
+		if (bms_is_member(i, keys->keyisnull))
+		{
+			/* Only the default partition accepts nulls. */
+			if (partition_bound_has_default(boundinfo))
+				return bms_make_singleton(boundinfo->default_index);
+			else
+				return NULL;
+		}
+	}
+
+	/*
+	 * If there are no datums to compare keys with, but there are partitions,
+	 * just return the default partition, if one exists.
+	 */
+	if (boundinfo->ndatums == 0)
+	{
+		if (partition_bound_has_default(boundinfo))
+			return bms_make_singleton(boundinfo->default_index);
+		else
+			return NULL;
+	}
+
+	/* Equality keys. */
+	if (keys->n_eqkeys > 0)
+	{
+		/* Valid iff there are as many as partition key columns. */
+		Assert(keys->n_eqkeys == partkey->partnatts);
+		eqoff = partition_range_datum_bsearch(partkey, boundinfo,
+											  keys->n_eqkeys, keys->eqkeys,
+											  &is_equal);
+		/*
+		 * The bound at eqoff is known to be <= eqkeys, given the way
+		 * partition_bound_bsearch works.  Considering it as the lower bound
+		 * of the partition that eqkeys falls into, the bound at eqoff + 1
+		 * would be its upper bound, so use eqoff + 1 to get the desired
+		 * partition's index.
+		 */
+		if (eqoff >= 0 && boundinfo->indexes[eqoff + 1] >= 0)
+			return bms_make_singleton(boundinfo->indexes[eqoff+1]);
+		/*
+		 * eqkeys falls into a range of values for which no non-default
+		 * partition exists.
+		 */
+		else if (partition_bound_has_default(boundinfo))
+			return bms_make_singleton(boundinfo->default_index);
+		else
+			return NULL;
+	}
+
+	/*
+	 * Find the leftmost bound that satisfies the query, that is, make minoff
+	 * point to the datum corresponding to the upper bound of the left-most
+	 * partition to be selected.
+	 */
+	minoff = 0;
+	if (keys->n_minkeys > 0)
+	{
+		minoff = partition_range_datum_bsearch(partkey, boundinfo,
+											   keys->n_minkeys, keys->minkeys,
+											   &is_equal);
+
+		/*
+		 * If minkeys does not contain values for all partition key columns,
+		 * that is, only a prefix is specified, then there may be multiple
+		 * bounds in boundinfo that share the same prefix.  But
+		 * partition_bound_bsearch would've returned the offset of just one of
+		 * those.  If minkey is inclusive, we must decrement minoff until it
+		 * reaches the leftmost of those bound values, so that partitions
+		 * corresponding to all those bound values are selected.  If minkeys
+		 * is exclusive, we must increment minoff until it reaches the first
+		 * bound greater than this prefix, so that none of the partitions
+		 * corresponding to those bound values are selected.
+		 */
+		if (is_equal && keys->n_minkeys < partkey->partnatts)
+		{
+			while (minoff >= 1 && minoff < boundinfo->ndatums - 1)
+			{
+				int32	cmpval;
+				int		nextoff;
+
+				nextoff = keys->min_incl ? minoff - 1 : minoff + 1;
+				cmpval = partition_rbound_datum_cmp(partkey,
+												boundinfo->datums[nextoff],
+												boundinfo->kind[nextoff],
+												keys->minkeys,
+												keys->n_minkeys);
+				if (cmpval != 0)
+				{
+					/* Move to the non-equal bound only in this case. */
+					if (!keys->min_incl)
+						minoff += 1;
+					break;
+				}
+
+				if (keys->min_incl)
+					minoff -= 1;
+				else
+					minoff += 1;
+			}
+		}
+		/*
+		 * Assuming minoff currently points to the lower bound of the left-
+		 * most selected partition, increment it so that it points to the
+		 * upper bound.
+		 */
+		else
+			minoff += 1;
+	}
+
+	/*
+	 * Find the rightmost bound that satisfies the query, that is, make maxoff
+	 * maxoff point to the datum corresponding to the upper bound of the
+	 * right-most partition to be selected.
+	 */
+	maxoff = boundinfo->ndatums;
+	if (keys->n_maxkeys > 0)
+	{
+		maxoff = partition_range_datum_bsearch(partkey, boundinfo,
+											   keys->n_maxkeys, keys->maxkeys,
+											   &is_equal);
+
+		/* See the comment written above for minkeys. */
+		if (is_equal && keys->n_maxkeys < partkey->partnatts)
+		{
+			while (maxoff >= 1 && maxoff < boundinfo->ndatums - 1)
+			{
+				int32	cmpval;
+				int		nextoff;
+
+				nextoff = keys->max_incl ? maxoff + 1 : maxoff - 1;
+				cmpval = partition_rbound_datum_cmp(partkey,
+												boundinfo->datums[nextoff],
+												boundinfo->kind[nextoff],
+												keys->maxkeys,
+												keys->n_maxkeys);
+				if (cmpval != 0)
+				{
+					/* Move to the non-equal bound only in this case. */
+					if (!keys->max_incl)
+						maxoff -= 1;
+					break;
+				}
+
+				if (keys->max_incl)
+					maxoff += 1;
+				else
+					maxoff -= 1;
+			}
+
+			/*
+			 * Assuming maxoff currently points to the lower bound of the
+			 * right-most partition, increment it so that it points to the
+			 * upper bound.
+			 */
+			maxoff += 1;
+		}
+		/*
+		 * Assuming maxoff currently points to the lower bound of the right-
+		 * most selected partition, increment it so that it points to the
+		 * upper bound.  We do not need to include that partition though if
+		 * maxkeys exactly matched the bound in question and it is exclusive.
+		 * Not incrementing simply means we treat the matched bound itself
+		 * the upper bound of the right-most selected partition.
+		 */
+		else if (!is_equal || keys->max_incl)
+			maxoff += 1;
+	}
+
+	Assert (minoff >= 0 && maxoff >= 0);
+
+	/*
+	 * At this point, we believe that minoff/maxoff point to the upper bound
+	 * of some partition, but it may not be the case.  It might actually be
+	 * the upper bound of an unassigned range of values, which if so, move
+	 * minoff/maxoff to the adjacent bound which must be the upper bound of
+	 * a valid partition.
+	 *
+	 * By doing that, we skip over a portion of values that do indeed satisfy
+	 * the query, but don't have a valid partition assigned.  The default
+	 * partition will have to be included to cover those values.  Although, if
+	 * the original bound in question contains an infinite value, there would
+	 * not be any unassigned range to speak of, because the range us unbounded
+	 * in that direction by definition, so no need to include the default.
+	 */
+	if (boundinfo->indexes[minoff] < 0)
+	{
+		int		lastkey = partkey->partnatts - 1;
+
+		if (keys->n_minkeys > 0)
+			lastkey = keys->n_minkeys - 1;
+		if (minoff >=0 && minoff < boundinfo->ndatums &&
+			boundinfo->kind[minoff][lastkey] == PARTITION_RANGE_DATUM_VALUE)
+			include_def = true;
+		minoff += 1;
+	}
+
+	if (maxoff >= 1 && boundinfo->indexes[maxoff] < 0)
+	{
+		int		lastkey = partkey->partnatts - 1;
+
+		if (keys->n_maxkeys > 0)
+			lastkey = keys->n_maxkeys - 1;
+		if (maxoff >=0 && maxoff <= boundinfo->ndatums &&
+			boundinfo->kind[maxoff - 1][lastkey] == PARTITION_RANGE_DATUM_VALUE)
+			include_def = true;
+		maxoff -= 1;
+	}
+
+	if (minoff <= maxoff)
+		result = bms_add_range(result,
+							   boundinfo->indexes[minoff],
+							   boundinfo->indexes[maxoff]);
+	/*
+	 * There may exist a range of values unassigned to any non-default
+	 * partition between the datums at minoff and maxoff.
+	 */
+	for (i = minoff; i <= maxoff; i++)
+	{
+		if (boundinfo->indexes[i] < 0)
+		{
+			include_def = true;
+			break;
+		}
+	}
+
+	/*
+	 * Since partition keys with nulls are mapped to the default range
+	 * partition, we must include the default partition if some keys
+	 * could be null.
+	 */
+	if (keys->n_minkeys < partkey->partnatts ||
+		keys->n_maxkeys < partkey->partnatts)
+	{
+		for (i = 0; i < partkey->partnatts; i++)
+		{
+			if (!bms_is_member(i, keys->keyisnotnull))
+			{
+				include_def = true;
+				break;
+			}
+		}
+	}
+
+	if (include_def && partition_bound_has_default(boundinfo))
+		result = bms_add_member(result, boundinfo->default_index);
+
+	return result;
+}
 
 /*
  * get_partition_operator
@@ -2587,9 +4635,11 @@ get_partition_for_tuple(Relation relation, Datum *values, bool *isnull)
 			{
 				bool		equal = false;
 
-				bound_offset = partition_list_bsearch(key,
-													  partdesc->boundinfo,
-													  values[0], &equal);
+				bound_offset = partition_bound_bsearch(key,
+													   partdesc->boundinfo,
+													   values,
+													   false,
+													   &equal);
 				if (bound_offset >= 0 && equal)
 					part_index = partdesc->boundinfo->indexes[bound_offset];
 			}
@@ -2616,11 +4666,12 @@ get_partition_for_tuple(Relation relation, Datum *values, bool *isnull)
 
 				if (!range_partkey_has_null)
 				{
-					bound_offset = partition_range_datum_bsearch(key,
-														partdesc->boundinfo,
-														key->partnatts,
-														values,
-														&equal);
+					bound_offset = partition_bound_bsearch(key,
+														   partdesc->boundinfo,
+														   values,
+														   false,
+														   &equal);
+
 					/*
 					 * The bound at bound_offset is less than or equal to the
 					 * tuple value, so the bound at offset+1 is the upper
@@ -2891,12 +4942,12 @@ partition_rbound_cmp(PartitionKey key,
 static int32
 partition_rbound_datum_cmp(PartitionKey key,
 						   Datum *rb_datums, PartitionRangeDatumKind *rb_kind,
-						   Datum *tuple_datums, int n_tuple_datums)
+						   Datum *tuple_datums)
 {
 	int			i;
 	int32		cmpval = -1;
 
-	for (i = 0; i < n_tuple_datums; i++)
+	for (i = 0; i < key->partnatts; i++)
 	{
 		if (rb_kind[i] == PARTITION_RANGE_DATUM_MINVALUE)
 			return -1;
@@ -2915,17 +4966,84 @@ partition_rbound_datum_cmp(PartitionKey key,
 }
 
 /*
- * partition_list_bsearch
- *		Returns the index of the greatest bound datum that is less than equal
- * 		to the given value or -1 if all of the bound datums are greater
+ * partition_bound_cmp
  *
- * *is_equal is set to true if the bound datum at the returned index is equal
- * to the input value.
+ * Return whether the bound at offset in boundinfo is <, =, or > the argument
+ * specified in *probe.
+ */
+static int32
+partition_bound_cmp(PartitionKey key, PartitionBoundInfo boundinfo,
+					int offset, void *probe, bool probe_is_bound)
+{
+	Datum	   *bound_datums = boundinfo->datums[offset];
+	int32		cmpval = -1;
+
+	switch (key->strategy)
+	{
+		case PARTITION_STRATEGY_HASH:
+			{
+				PartitionBoundSpec *spec = (PartitionBoundSpec *) probe;
+
+				cmpval = partition_hbound_cmp(DatumGetInt32(bound_datums[0]),
+											  DatumGetInt32(bound_datums[1]),
+											  spec->modulus, spec->remainder);
+				break;
+			}
+		case PARTITION_STRATEGY_LIST:
+			cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[0],
+													 key->partcollation[0],
+													 bound_datums[0],
+													 *(Datum *) probe));
+			break;
+
+		case PARTITION_STRATEGY_RANGE:
+			{
+				PartitionRangeDatumKind *kind = boundinfo->kind[offset];
+
+				if (probe_is_bound)
+				{
+					/*
+					 * We need to pass whether the existing bound is a lower
+					 * bound, so that two equal-valued lower and upper bounds
+					 * are not regarded equal.
+					 */
+					bool		lower = boundinfo->indexes[offset] < 0;
+
+					cmpval = partition_rbound_cmp(key,
+												  bound_datums, kind, lower,
+												  (PartitionRangeBound *) probe);
+				}
+				else
+					cmpval = partition_rbound_datum_cmp(key,
+														bound_datums, kind,
+														(Datum *) probe);
+				break;
+			}
+
+		default:
+			elog(ERROR, "unexpected partition strategy: %d",
+				 (int) key->strategy);
+	}
+
+	return cmpval;
+}
+
+/*
+ * Binary search on a collection of partition bounds. Returns greatest
+ * bound in array boundinfo->datums which is less than or equal to *probe.
+ * If all bounds in the array are greater than *probe, -1 is returned.
+ *
+ * *probe could either be a partition bound or a Datum array representing
+ * the partition key of a tuple being routed; probe_is_bound tells which.
+ * We pass that down to the comparison function so that it can interpret the
+ * contents of *probe accordingly.
+ *
+ * *is_equal is set to whether the bound at the returned index is equal with
+ * *probe.
  */
 static int
-partition_list_bsearch(PartitionKey key,
-					   PartitionBoundInfo boundinfo,
-					   Datum value, bool *is_equal)
+partition_bound_bsearch(PartitionKey key, PartitionBoundInfo boundinfo,
+						void *probe, bool probe_is_bound, bool *is_equal)
 {
 	int			lo,
 				hi,
@@ -2938,146 +5056,14 @@ partition_list_bsearch(PartitionKey key,
 		int32		cmpval;
 
 		mid = (lo + hi + 1) / 2;
-		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[0],
-												 key->partcollation[0],
-												 boundinfo->datums[mid][0],
-												 value));
-		if (cmpval <= 0)
-		{
-			lo = mid;
-			*is_equal = (cmpval == 0);
-			if (*is_equal)
-				break;
-		}
-		else
-			hi = mid - 1;
-	}
-
-	return lo;
-}
-
-/*
- * partition_range_bsearch
- *		Returns the index of the greatest range bound that is less than or
- *		equal to the given range bound or -1 if all of the range bounds are
- *		greater
- *
- * *is_equal is set to true if the range bound at the returned index is equal
- * to the input range bound
- */
-static int
-partition_range_bsearch(PartitionKey key,
-						PartitionBoundInfo boundinfo,
-						PartitionRangeBound *probe, bool *is_equal)
-{
-	int			lo,
-				hi,
-				mid;
-
-	lo = -1;
-	hi = boundinfo->ndatums - 1;
-	while (lo < hi)
-	{
-		int32		cmpval;
-
-		mid = (lo + hi + 1) / 2;
-		cmpval = partition_rbound_cmp(key,
-									  boundinfo->datums[mid],
-									  boundinfo->kind[mid],
-									  (boundinfo->indexes[mid] == -1),
-									  probe);
+		cmpval = partition_bound_cmp(key, boundinfo, mid, probe,
+									 probe_is_bound);
 		if (cmpval <= 0)
 		{
 			lo = mid;
 			*is_equal = (cmpval == 0);
 
 			if (*is_equal)
-				break;
-		}
-		else
-			hi = mid - 1;
-	}
-
-	return lo;
-}
-
-/*
- * partition_range_bsearch
- *		Returns the index of the greatest range bound that is less than or
- *		equal to the given tuple or -1 if all of the range bounds are greater
- *
- * *is_equal is set to true if the range bound at the returned index is equal
- * to the input tuple.
- */
-static int
-partition_range_datum_bsearch(PartitionKey key,
-							  PartitionBoundInfo boundinfo,
-							  int nvalues, Datum *values, bool *is_equal)
-{
-	int			lo,
-				hi,
-				mid;
-
-	lo = -1;
-	hi = boundinfo->ndatums - 1;
-	while (lo < hi)
-	{
-		int32		cmpval;
-
-		mid = (lo + hi + 1) / 2;
-		cmpval = partition_rbound_datum_cmp(key,
-											boundinfo->datums[mid],
-											boundinfo->kind[mid],
-											values,
-											nvalues);
-		if (cmpval <= 0)
-		{
-			lo = mid;
-			*is_equal = (cmpval == 0);
-
-			if (*is_equal)
-				break;
-		}
-		else
-			hi = mid - 1;
-	}
-
-	return lo;
-}
-
-/*
- * partition_hash_bsearch
- *		Returns the index of the greatest (modulus, remainder) pair that is
- *		less than or equal to the given (modulus, remainder) pair or -1 if
- *		all of them are greater
- */
-static int
-partition_hash_bsearch(PartitionKey key,
-					   PartitionBoundInfo boundinfo,
-					   int modulus, int remainder)
-{
-	int			lo,
-				hi,
-				mid;
-
-	lo = -1;
-	hi = boundinfo->ndatums - 1;
-	while (lo < hi)
-	{
-		int32		cmpval,
-					bound_modulus,
-					bound_remainder;
-
-		mid = (lo + hi + 1) / 2;
-		bound_modulus = DatumGetInt32(boundinfo->datums[mid][0]);
-		bound_remainder = DatumGetInt32(boundinfo->datums[mid][1]);
-		cmpval = partition_hbound_cmp(bound_modulus, bound_remainder,
-									  modulus, remainder);
-		if (cmpval <= 0)
-		{
-			lo = mid;
-
-			if (cmpval == 0)
 				break;
 		}
 		else

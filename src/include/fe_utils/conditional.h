@@ -60,6 +60,8 @@ extern ConditionalStack conditional_stack_create(void);
 
 extern void conditional_stack_destroy(ConditionalStack cstack);
 
+extern int conditional_stack_depth(ConditionalStack cstack);
+
 extern void conditional_stack_push(ConditionalStack cstack, ifState new_state);
 
 extern bool conditional_stack_pop(ConditionalStack cstack);

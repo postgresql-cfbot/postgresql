@@ -539,3 +539,43 @@ create index phrase_index_test_idx on phrase_index_test using gin(fts);
 set enable_seqscan = off;
 select * from phrase_index_test where fts @@ phraseto_tsquery('english', 'fat cat');
 set enable_seqscan = on;
+
+--test websearch_to_tsquery function
+select websearch_to_tsquery('My brand new smartphone');
+select websearch_to_tsquery('My brand "new smartphone"');
+select websearch_to_tsquery('"A fat cat" has just eaten a -rat.');
+select websearch_to_tsquery('"A fat cat" has just eaten OR -rat.');
+select websearch_to_tsquery('"A fat cat" has just (eaten OR -rat)');
+
+-- testing AROUND operator evaluation
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"gnu debugger" AROUND(5) runs');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('run AROUND(5) "gnu debugger"');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"gnu debugger" AROUND(6) runs');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('run AROUND(6) "gnu debugger"');
+
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"many programming languages" AROUND(10) "portable debugger"');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"portable debugger" AROUND(10) "many programming languages"');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"many programming languages" AROUND(11) "portable debugger"');
+select to_tsvector('The GNU Debugger is a portable debugger that runs on many Unix like systems and works for many programming languages') @@
+websearch_to_tsquery('"portable debugger" AROUND(11) "many programming languages"');
+
+select websearch_to_tsquery('"fat cat AROUND(5) rat"');
+select websearch_to_tsquery('simple','"fat cat OR rat"');
+select websearch_to_tsquery('fat*rat');
+select websearch_to_tsquery('fat-rat');
+
+select websearch_to_tsquery('"A the" OR just on');
+select websearch_to_tsquery('russian', '"толстая кошка" съела крысу');
+
+select to_tsvector('russian', 'съела толстая кошка крысу') @@
+websearch_to_tsquery('russian', '"толстая кошка" съела крысу');
+
+select to_tsvector('russian', 'съела толстая серая кошка крысу') @@
+websearch_to_tsquery('russian', '"толстая кошка" съела крысу');

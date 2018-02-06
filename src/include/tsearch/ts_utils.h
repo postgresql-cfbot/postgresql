@@ -44,11 +44,12 @@ typedef void (*PushFunction) (Datum opaque, TSQueryParserState state,
 							  char *token, int tokenlen,
 							  int16 tokenweights,	/* bitmap as described in
 													 * QueryOperand struct */
-							  bool prefix);
+							  bool prefix,
+							  bool isphrase);
 
 extern TSQuery parse_tsquery(char *buf,
 			  PushFunction pushval,
-			  Datum opaque, bool isplain);
+			  Datum opaque, bool isplain, bool isquery);
 
 /* Functions for use by PushFunction implementations */
 extern void pushValue(TSQueryParserState state,

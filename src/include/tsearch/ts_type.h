@@ -166,8 +166,9 @@ typedef struct
 #define OP_NOT			1
 #define OP_AND			2
 #define OP_OR			3
-#define OP_PHRASE		4		/* highest code, tsquery_cleanup.c */
-#define OP_COUNT		4
+#define OP_PHRASE		4
+#define OP_AROUND		5		/* highest code, tsquery_cleanup.c */
+#define OP_COUNT		5
 
 extern const int tsearch_op_priority[OP_COUNT];
 

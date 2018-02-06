@@ -121,7 +121,7 @@ QTNodeCompare(QTNode *an, QTNode *bn)
 					return res;
 		}
 
-		if (ao->oper == OP_PHRASE && ao->distance != bo->distance)
+		if ((ao->oper == OP_PHRASE || ao->oper == OP_AROUND) && ao->distance != bo->distance)
 			return (ao->distance > bo->distance) ? -1 : 1;
 
 		return 0;
@@ -171,7 +171,8 @@ QTNSort(QTNode *in)
 
 	for (i = 0; i < in->nchild; i++)
 		QTNSort(in->child[i]);
-	if (in->nchild > 1 && in->valnode->qoperator.oper != OP_PHRASE)
+	if (in->nchild > 1 && in->valnode->qoperator.oper != OP_PHRASE
+		&& in->valnode->qoperator.oper != OP_AROUND)
 		qsort((void *) in->child, in->nchild, sizeof(QTNode *), cmpQTN);
 }
 

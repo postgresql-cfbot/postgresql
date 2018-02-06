@@ -89,6 +89,13 @@ ANALYZE vacparted (b), vactst;
 ANALYZE vactst, does_not_exist, vacparted;
 ANALYZE vactst (i), vacparted (does_not_exist);
 
+-- parenthesized syntax for ANALYZE
+ANALYZE (NOWAIT, VERBOSE) does_not_exist;
+
+-- nowait option
+VACUUM (NOWAIT) vactst;
+ANALYZE (NOWAIT) vactst;
+
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;

@@ -1,0 +1,64 @@
+Parsed test spec with 2 sessions
+
+starting permutation: lock vac_specified commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+WARNING:  skipping vacuum of "part1" --- lock not available
+step vac_specified: VACUUM (NOWAIT) part1, part2;
+step commit: 
+	COMMIT;
+
+
+starting permutation: lock vac_all_parts commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+step vac_all_parts: VACUUM (NOWAIT) parted;
+step commit: 
+	COMMIT;
+
+
+starting permutation: lock analyze_specified commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+WARNING:  skipping analyze of "part1" --- lock not available
+step analyze_specified: ANALYZE (NOWAIT) part1, part2;
+step commit: 
+	COMMIT;
+
+
+starting permutation: lock analyze_all_parts commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+step analyze_all_parts: ANALYZE (NOWAIT) parted;
+step commit: 
+	COMMIT;
+
+
+starting permutation: lock vac_analyze_specified commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+WARNING:  skipping vacuum of "part1" --- lock not available
+step vac_analyze_specified: VACUUM (ANALYZE, NOWAIT) part1, part2;
+step commit: 
+	COMMIT;
+
+
+starting permutation: lock vac_analyze_all_parts commit
+step lock: 
+	BEGIN;
+	LOCK part1 IN SHARE MODE;
+
+step vac_analyze_all_parts: VACUUM (ANALYZE, NOWAIT) parted;
+step commit: 
+	COMMIT;
+

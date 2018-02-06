@@ -401,9 +401,14 @@
   </para>
 
   <para>
-   B-trees require a single support function, and allow a second one to be
+   B-trees require a comparison support function,
+   and allow two additional support functions to be
    supplied at the operator class author's option, as shown in <xref
    linkend="xindex-btree-support-table"/>.
+   (These additional support functions are not directly used during B-tree
+   index operations.  Rather, they provide support for other parts of
+   the system, for which a B-tree operator class defines the semantics
+   of sorting.)
   </para>
 
    <table tocentry="1" id="xindex-btree-support-table">
@@ -430,6 +435,14 @@
         as documented in <filename>utils/sortsupport.h</filename> (optional)
        </entry>
        <entry>2</entry>
+      </row>
+      <row>
+       <entry>
+        Compare a test value to a base value plus/minus an offset, and return
+        true or false according to the comparison result, as documented
+        in <filename>src/backend/access/nbtree/README</filename> (optional)
+       </entry>
+       <entry>3</entry>
       </row>
      </tbody>
     </tgroup>
@@ -1179,6 +1192,39 @@ SELECT * FROM mytable ORDER BY somecol USING ~&lt;~;
    defined by the type's default B-tree operator class.  If there is no
    default B-tree operator class, but there is a default hash operator class,
    then array equality is supported, but not ordering comparisons.
+  </para>
+
+  <para>
+   Another SQL feature that requires even more data-type-specific knowledge
+   is the <literal>RANGE</literal> <replaceable>offset</replaceable>
+   <literal>PRECEDING</literal>/<literal>FOLLOWING</literal> option for
+   window functions (see <xref linkend="syntax-window-functions"/>).
+   For a query such as
+<programlisting>
+SELECT sum(x) OVER (ORDER BY x RANGE BETWEEN 5 PRECEDING AND 10 FOLLOWING)
+  FROM mytable;
+</programlisting>
+   it is not sufficient to know how to order by <literal>x</literal>;
+   the database must also understand how to <quote>subtract 5</quote> or
+   <quote>add 10</quote> to the current row's value of <literal>x</literal>
+   to identify the bounds of the current window frame.  Comparing the
+   resulting bounds to other rows' values of <literal>x</literal> is
+   possible, using the comparison operators provided by the B-tree operator
+   class that defines the <literal>ORDER BY</literal> ordering &mdash; but
+   addition and subtraction operators are not part of the operator class, so
+   which ones should be used?  Hard-wiring that choice would be undesirable,
+   because different sort orders (different B-tree operator classes) might
+   need different behavior.  Therefore, a B-tree operator class can specify
+   an <firstterm>in_range</firstterm> support function that encapsulates the
+   addition and subtraction behaviors that make sense for its sort order.
+   It can even provide more than one in_range support function, in case
+   there is more than one data type that makes sense to use as the offset
+   in <literal>RANGE</literal> clauses.
+   If the B-tree operator class associated with the window's <literal>ORDER
+   BY</literal> clause does not have a matching in_range support function,
+   the <replaceable>offset</replaceable>
+   <literal>PRECEDING</literal>/<literal>FOLLOWING</literal>
+   option is not supported.
   </para>
 
   <para>

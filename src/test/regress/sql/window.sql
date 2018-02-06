@@ -6,20 +6,25 @@ CREATE TEMPORARY TABLE empsalary (
     depname varchar,
     empno bigint,
     salary int,
-    enroll_date date
+    enroll_date date,
+    enroll_time time,
+    enroll_timetz timetz,
+    enroll_interval interval,
+    enroll_timestamptz timestamptz,
+    enroll_timestamp timestamp
 );
 
 INSERT INTO empsalary VALUES
-('develop', 10, 5200, '2007-08-01'),
-('sales', 1, 5000, '2006-10-01'),
-('personnel', 5, 3500, '2007-12-10'),
-('sales', 4, 4800, '2007-08-08'),
-('personnel', 2, 3900, '2006-12-23'),
-('develop', 7, 4200, '2008-01-01'),
-('develop', 9, 4500, '2008-01-01'),
-('sales', 3, 4800, '2007-08-01'),
-('develop', 8, 6000, '2006-10-01'),
-('develop', 11, 5200, '2007-08-15');
+('develop', 10, 5200, '2007-08-01', '11:00', '11:00 BST', '1 year'::interval, TIMESTAMP '2000-10-19 10:23:54+01', TIMESTAMP '2000-10-19 10:23:54'),
+('sales', 1, 5000, '2006-10-01', '12:00', '12:00 BST', '2 years'::interval, TIMESTAMP '2001-10-19 10:23:54+01', TIMESTAMP '2001-10-19 10:23:54'),
+('personnel', 5, 3500, '2007-12-10', '13:00', '13:00 BST', '3 years'::interval, TIMESTAMP '2001-10-19 10:23:54+01', TIMESTAMP '2001-10-19 10:23:54'),
+('sales', 4, 4800, '2007-08-08', '14:00', '14:00 BST', '4 years'::interval, TIMESTAMP '2002-10-19 10:23:54+01', TIMESTAMP '2002-10-19 10:23:54'),
+('personnel', 2, 3900, '2006-12-23', '15:00', '15:00 BST', '5 years'::interval, TIMESTAMP '2003-10-19 10:23:54+01', TIMESTAMP '2003-10-19 10:23:54'),
+('develop', 7, 4200, '2008-01-01', '15:00', '15:00 BST', '5 years'::interval, TIMESTAMP '2004-10-19 10:23:54+01', TIMESTAMP '2004-10-19 10:23:54'),
+('develop', 9, 4500, '2008-01-01', '17:00', '17:00 BST', '7 years'::interval, TIMESTAMP '2005-10-19 10:23:54+01', TIMESTAMP '2005-10-19 10:23:54'),
+('sales', 3, 4800, '2007-08-01', '18:00', '18:00 BST', '8 years'::interval, TIMESTAMP '2006-10-19 10:23:54+01', TIMESTAMP '2006-10-19 10:23:54'),
+('develop', 8, 6000, '2006-10-01', '19:00', '19:00 BST', '9 years'::interval, TIMESTAMP '2007-10-19 10:23:54+01', TIMESTAMP '2007-10-19 10:23:54'),
+('develop', 11, 5200, '2007-08-15', '20:00', '20:00 BST', '10 years'::interval, TIMESTAMP '2008-10-19 10:23:54+01', TIMESTAMP '2008-10-19 10:23:54');
 
 SELECT depname, empno, salary, sum(salary) OVER (PARTITION BY depname) FROM empsalary ORDER BY depname, salary;
 
@@ -189,6 +194,46 @@ SELECT sum(unique1) over (rows between 2 preceding and 2 following),
 	unique1, four
 FROM tenk1 WHERE unique1 < 10;
 
+SELECT sum(unique1) over (rows between 2 preceding and 2 following exclude no others),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (rows between 2 preceding and 2 following exclude current row),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (rows between 2 preceding and 2 following exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (rows between 2 preceding and 2 following exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 following exclude current row),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 following exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 following exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude current row),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
 SELECT sum(unique1) over (rows between 2 preceding and 1 preceding),
 	unique1, four
 FROM tenk1 WHERE unique1 < 10;
@@ -205,10 +250,17 @@ SELECT sum(unique1) over (w range between current row and unbounded following),
 	unique1, four
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
 
--- fail: not implemented yet
-SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding),
+SELECT sum(unique1) over (w range between unbounded preceding and current row exclude current row),
 	unique1, four
-FROM tenk1 WHERE unique1 < 10;
+FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
+
+SELECT sum(unique1) over (w range between unbounded preceding and current row exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
+
+SELECT sum(unique1) over (w range between unbounded preceding and current row exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
 
 SELECT first_value(unique1) over w,
 	nth_value(unique1, 2) over w AS nth_2,
@@ -229,6 +281,453 @@ CREATE TEMP VIEW v_window AS
 SELECT * FROM v_window;
 
 SELECT pg_get_viewdef('v_window');
+
+CREATE OR REPLACE TEMP VIEW v_window AS
+	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
+	exclude current row) as sum_rows FROM generate_series(1, 10) i;
+
+SELECT * FROM v_window;
+
+SELECT pg_get_viewdef('v_window');
+
+CREATE OR REPLACE TEMP VIEW v_window AS
+	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
+	exclude group) as sum_rows FROM generate_series(1, 10) i;
+
+SELECT * FROM v_window;
+
+SELECT pg_get_viewdef('v_window');
+
+CREATE OR REPLACE TEMP VIEW v_window AS
+	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
+	exclude ties) as sum_rows FROM generate_series(1, 10) i;
+
+SELECT * FROM v_window;
+
+SELECT pg_get_viewdef('v_window');
+
+CREATE OR REPLACE TEMP VIEW v_window AS
+	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
+	exclude no others) as sum_rows FROM generate_series(1, 10) i;
+
+SELECT * FROM v_window;
+
+SELECT pg_get_viewdef('v_window');
+
+CREATE OR REPLACE TEMP VIEW v_window AS
+	SELECT i, sum(i) over (order by i groups between 1 preceding and 1 following
+	exclude no others) as sum_rows FROM generate_series(1, 10) i;
+
+SELECT * FROM v_window;
+
+SELECT pg_get_viewdef('v_window');
+
+-- RANGE BETWEEN with values tests
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four desc range between 2::int8 preceding and 1::int2 preceding),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding exclude no others),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding exclude current row),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 6::int2 following exclude ties),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four range between 2::int8 preceding and 6::int2 following exclude group),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by four order by unique1 range between 5::int8 preceding and 6::int2 following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by four order by unique1 range between 5::int8 preceding and 6::int2 following
+	exclude current row),unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following),
+	salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_date desc range between '1 year'::interval preceding and '1 year'::interval following),
+	salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_date desc range between '1 year'::interval following and '1 year'::interval following),
+	salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following
+	exclude current row), salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following
+	exclude group), salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following
+	exclude ties), salary, enroll_date from empsalary;
+
+select sum(salary) over (order by enroll_time range between '1 hour'::interval preceding and '2 hours'::interval following),
+	salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_time desc range between '1 hour'::interval preceding and '2 hours'::interval following),
+	salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_time desc range between '1 hour'::interval following and '2 hours'::interval following),
+	salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_time range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude current row), salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_time range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude group), salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_time range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude ties), salary, enroll_time from empsalary;
+
+select sum(salary) over (order by enroll_timetz range between '1 hour'::interval preceding and '2 hours'::interval following),
+	salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_timetz desc range between '1 hour'::interval preceding and '2 hours'::interval following),
+	salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_timetz desc range between '1 hour'::interval following and '2 hours'::interval following),
+	salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_timetz range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude current row), salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_timetz range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude group), salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_timetz range between '1 hour'::interval preceding and '2 hours'::interval following
+	exclude ties), salary, enroll_timetz from empsalary;
+
+select sum(salary) over (order by enroll_interval range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_interval desc range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_interval desc range between '1 year'::interval following and '2 years'::interval following),
+	salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_interval range between '1 year'::interval preceding and '2 years'::interval following
+	exclude current row), salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_interval range between '1 year'::interval preceding and '2 years'::interval following
+	exclude group), salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_interval range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_interval from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz desc range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz desc range between '1 year'::interval following and '2 years'::interval following),
+	salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz range between '1 year'::interval preceding and '2 years'::interval following
+	exclude current row), salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz range between '1 year'::interval preceding and '2 years'::interval following
+	exclude group), salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamptz range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamptz from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp desc range between '1 year'::interval preceding and '2 years'::interval following),
+	salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp desc range between '1 year'::interval following and '2 years'::interval following),
+	salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between '1 year'::interval preceding and '2 years'::interval following
+	exclude current row), salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between '1 year'::interval preceding and '2 years'::interval following
+	exclude group), salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between current row and '2 years'::interval following),
+	salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by enroll_timestamp range between '1 year'::interval preceding and current row),
+	salary, enroll_timestamp from empsalary;
+
+select sum(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following),
+	salary, enroll_date from empsalary;
+
+select sum(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude current row), salary, enroll_date from empsalary;
+
+select sum(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude group), salary, enroll_date from empsalary;
+
+select sum(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude ties), salary, enroll_date from empsalary;
+
+select first_value(salary) over(order by salary range between 1000 preceding and 1000 following),
+	lead(salary) over(order by salary range between 1000 preceding and 1000 following),
+	nth_value(salary, 1) over(order by salary range between 1000 preceding and 1000 following),
+	salary from empsalary;
+
+select last_value(salary) over(order by salary range between 1000 preceding and 1000 following),
+	lag(salary) over(order by salary range between 1000 preceding and 1000 following),
+	salary from empsalary;
+
+select first_value(salary) over(order by salary range between 1000 following and 3000 following
+	exclude current row),
+	lead(salary) over(order by salary range between 1000 following and 3000 following exclude ties),
+	nth_value(salary, 1) over(order by salary range between 1000 following and 3000 following
+	exclude ties),
+	salary from empsalary;
+
+select last_value(salary) over(order by salary range between 1000 following and 3000 following
+	exclude group),
+	lag(salary) over(order by salary range between 1000 following and 3000 following exclude group),
+	salary from empsalary;
+
+select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude ties),
+	last_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following),
+	salary, enroll_date from empsalary;
+
+select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude ties),
+	last_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude ties),
+	salary, enroll_date from empsalary;
+
+select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude group),
+	last_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude group),
+	salary, enroll_date from empsalary;
+
+select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude current row),
+	last_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
+	exclude current row),
+	salary, enroll_date from empsalary;
+
+-- RANGE BETWEEN with null values
+select x, y,
+       first_value(y) over w,
+       last_value(y) over w
+from
+  (select x, x as y from generate_series(1,5) as x
+   union all select null, 42
+   union all select null, 43) ss
+window w as
+  (order by x asc nulls first range between 2 preceding and 2 following);
+
+select x, y,
+       first_value(y) over w,
+       last_value(y) over w
+from
+  (select x, x as y from generate_series(1,5) as x
+   union all select null, 42
+   union all select null, 43) ss
+window w as
+  (order by x asc nulls last range between 2 preceding and 2 following);
+
+select x, y,
+       first_value(y) over w,
+       last_value(y) over w
+from
+  (select x, x as y from generate_series(1,5) as x
+   union all select null, 42
+   union all select null, 43) ss
+window w as
+  (order by x desc nulls first range between 2 preceding and 2 following);
+
+select x, y,
+       first_value(y) over w,
+       last_value(y) over w
+from
+  (select x, x as y from generate_series(1,5) as x
+   union all select null, 42
+   union all select null, 43) ss
+window w as
+  (order by x desc nulls last range between 2 preceding and 2 following);
+
+-- RANGE BETWEEN with values negative tests
+select sum(salary) over (order by enroll_timestamp, enroll_date range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select sum(salary) over (order by depname range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select max(enroll_date) over (order by enroll_timestamp range between 1 preceding and 2 following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select max(enroll_date) over (order by salary range between -1 preceding and 2 following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select max(enroll_date) over (order by salary range between 1 preceding and -2 following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+select max(enroll_date) over (order by salary range between '1 year'::interval preceding and '2 years'::interval following
+	exclude ties), salary, enroll_timestamp from empsalary;
+
+-- GROUPS tests
+
+SELECT sum(unique1) over (order by four groups between unbounded preceding and current row),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between unbounded preceding and unbounded following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between current row and unbounded following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 1 preceding and unbounded following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 1 following and unbounded following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between unbounded preceding and 2 following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 2 preceding and 1 preceding),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 2 preceding and 1 following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 0 preceding and 0 following),
+	unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 2 preceding and 1 following
+	exclude current row), unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 2 preceding and 1 following
+	exclude group), unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (order by four groups between 2 preceding and 1 following
+	exclude ties), unique1, four
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by ten
+	order by four groups between 0 preceding and 0 following),unique1, four, ten
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by ten
+	order by four groups between 0 preceding and 0 following exclude current row), unique1, four, ten
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by ten
+	order by four groups between 0 preceding and 0 following exclude group), unique1, four, ten
+FROM tenk1 WHERE unique1 < 10;
+
+SELECT sum(unique1) over (partition by ten
+	order by four groups between 0 preceding and 0 following exclude ties), unique1, four, ten
+FROM tenk1 WHERE unique1 < 10;
+
+select first_value(salary) over(order by enroll_date groups between 1 preceding and 1 following),
+	lead(salary) over(order by enroll_date groups between 1 preceding and 1 following),
+	nth_value(salary, 1) over(order by enroll_date groups between 1 preceding and 1 following),
+	salary, enroll_date from empsalary;
+
+select last_value(salary) over(order by enroll_date groups between 1 preceding and 1 following),
+	lag(salary) over(order by enroll_date groups between 1 preceding and 1 following),
+	salary, enroll_date from empsalary;
+
+select first_value(salary) over(order by enroll_date groups between 1 following and 3 following
+	exclude current row),
+	lead(salary) over(order by enroll_date groups between 1 following and 3 following exclude ties),
+	nth_value(salary, 1) over(order by enroll_date groups between 1 following and 3 following
+	exclude ties),
+	salary, enroll_date from empsalary;
+
+select last_value(salary) over(order by enroll_date groups between 1 following and 3 following
+	exclude group),
+	lag(salary) over(order by enroll_date groups between 1 following and 3 following exclude group),
+	salary, enroll_date from empsalary;
+
+-- Show differences in values mode between ROWS, RANGE, and GROUPS
+WITH cte (x) AS (
+        SELECT * FROM generate_series(1, 35, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x rows between 1 preceding and 1 following);
+
+WITH cte (x) AS (
+        SELECT * FROM generate_series(1, 35, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x range between 1 preceding and 1 following);
+
+WITH cte (x) AS (
+        SELECT * FROM generate_series(1, 35, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x groups between 1 preceding and 1 following);
+
+WITH cte (x) AS (
+        select 1 union all select 1 union all select 1 union all
+        SELECT * FROM generate_series(5, 49, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x rows between 1 preceding and 1 following);
+
+WITH cte (x) AS (
+        select 1 union all select 1 union all select 1 union all
+        SELECT * FROM generate_series(5, 49, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x range between 1 preceding and 1 following);
+
+WITH cte (x) AS (
+        select 1 union all select 1 union all select 1 union all
+        SELECT * FROM generate_series(5, 49, 2)
+)
+SELECT x, (sum(x) over w)
+FROM cte
+WINDOW w AS (ORDER BY x groups between 1 preceding and 1 following);
 
 -- with UNION
 SELECT count(*) OVER (PARTITION BY four) FROM (SELECT * FROM tenk1 UNION ALL SELECT * FROM tenk2)s LIMIT 0;

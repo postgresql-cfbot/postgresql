@@ -1778,6 +1778,10 @@ restoreTwoPhaseData(void)
  * write a WAL entry, and so there might be no evidence in WAL of those
  * subxact XIDs.
  *
+ * On corrupted two-phase files, fail immediately. Keeping around broken
+ * entries and let replay continue causes harm on the system, and likely
+ * a new backup should be rolled in.
+ *
  * Our other responsibility is to determine and return the oldest valid XID
  * among the prepared xacts (if none, return ShmemVariableCache->nextXid).
  * This is needed to synchronize pg_subtrans startup properly.
@@ -2070,13 +2074,9 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 		/* Read and validate file */
 		buf = ReadTwoPhaseFile(xid, true);
 		if (buf == NULL)
-		{
-			ereport(WARNING,
-					(errmsg("removing corrupt two-phase state file for transaction %u",
+			ereport(FATAL,
+					(errmsg("corrupted two-phase state file for \"%u\"",
 							xid)));
-			RemoveTwoPhaseFile(xid, true);
-			return NULL;
-		}
 	}
 	else
 	{
@@ -2089,21 +2089,13 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 	if (!TransactionIdEquals(hdr->xid, xid))
 	{
 		if (fromdisk)
-		{
-			ereport(WARNING,
-					(errmsg("removing corrupt two-phase state file for transaction %u",
+			ereport(FATAL,
+					(errmsg("corrupted two-phase state file for \"%u\"",
 							xid)));
-			RemoveTwoPhaseFile(xid, true);
-		}
 		else
-		{
-			ereport(WARNING,
-					(errmsg("removing corrupt two-phase state from memory for transaction %u",
+			ereport(FATAL,
+					(errmsg("corrupted two-phase state in memory for \"%u\"",
 							xid)));
-			PrepareRedoRemove(xid, true);
-		}
-		pfree(buf);
-		return NULL;
 	}
 
 	/*

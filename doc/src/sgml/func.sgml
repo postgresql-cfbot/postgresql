@@ -10497,7 +10497,8 @@ SELECT xml_is_well_formed_document('<pg:foo xmlns:pg="http://postgresql.org/stuf
      second the namespace URI. It is not required that aliases provided in
      this array be the same as those being used in the XML document itself (in
      other words, both in the XML document and in the <function>xpath</function>
-     function context, aliases are <emphasis>local</emphasis>).
+     function context, aliases are <emphasis>local</emphasis>). Default namespace has
+     empty name (empty string) and should be only one.
     </para>
 
     <para>
@@ -10514,10 +10515,17 @@ SELECT xpath('/my:a/text()', '<my:a xmlns:my="http://example.com">test</my:a>',
     </para>
 
     <para>
+     Inside a predicate, literals <literal>and</literal>, <literal>or</literal>,
+     <literal>div</literal> and <literal>mod</literal> are identified as keywords
+     (XPath operators) every time and default namespace are not applied in the case.
+     Use named namespace to qualify such tag names appear in an XPath predicate.
+    </para>
+
+    <para>
      To deal with default (anonymous) namespaces, do something like this:
 <screen><![CDATA[
-SELECT xpath('//mydefns:b/text()', '<a xmlns="http://example.com"><b>test</b></a>',
-             ARRAY[ARRAY['mydefns', 'http://example.com']]);
+SELECT xpath('//b/text()', '<a xmlns="http://example.com"><b>test</b></a>',
+             ARRAY[ARRAY['', 'http://example.com']]);
 
  xpath
 --------
@@ -10591,8 +10599,7 @@ SELECT xpath_exists('/my:a/text()', '<my:a xmlns:my="http://example.com">test</m
     <para>
      The optional <literal>XMLNAMESPACES</literal> clause is a comma-separated
      list of namespaces.  It specifies the XML namespaces used in
-     the document and their aliases. A default namespace specification
-     is not currently supported.
+     the document and their aliases.
     </para>
 
     <para>

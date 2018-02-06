@@ -29,6 +29,7 @@ extern void rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 extern Query *get_view_query(Relation view);
 extern const char *view_query_is_auto_updatable(Query *viewquery,
 							 bool check_cols);
+extern const char *view_query_is_lockable(Query *viewquery);
 extern int relation_is_updatable(Oid reloid,
 					  bool include_triggers,
 					  Bitmapset *include_cols);

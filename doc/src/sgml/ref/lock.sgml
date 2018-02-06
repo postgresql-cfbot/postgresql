@@ -46,6 +46,14 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
   </para>
 
   <para>
+   Automatically updatable views (see <xref linkend="sql-createview"/>)
+   that do not have <literal>INSTEAD OF</literal> triggers or
+   <literal>INSTEAD</literal> rules are also lockable. When a view is
+   locked, its base relations are also locked recursively with the same
+   lock mode. Tables appearing in a subquery are ignored and not locked.
+  </para>
+
+  <para>
    When acquiring locks automatically for commands that reference
    tables, <productname>PostgreSQL</productname> always uses the least
    restrictive lock mode possible. <command>LOCK TABLE</command>

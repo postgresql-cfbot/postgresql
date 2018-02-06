@@ -5,7 +5,12 @@
 CREATE SCHEMA lock_schema1;
 SET search_path = lock_schema1;
 CREATE TABLE lock_tbl1 (a BIGINT);
-CREATE VIEW lock_view1 AS SELECT 1;
+CREATE TABLE no_lock_tbl (a BIGINT);
+CREATE VIEW lock_view1 AS SELECT * FROM lock_tbl1;
+CREATE VIEW lock_view2 AS SELECT count(*) FROM lock_tbl1;
+CREATE VIEW lock_view3 AS SELECT 1;
+CREATE VIEW lock_view4 AS SELECT * from lock_view1;
+CREATE VIEW lock_view5 AS SELECT * from lock_tbl1 where a in (select * from no_lock_tbl);
 CREATE ROLE regress_rol_lock1;
 ALTER ROLE regress_rol_lock1 SET search_path = lock_schema1;
 GRANT USAGE ON SCHEMA lock_schema1 TO regress_rol_lock1;
@@ -30,8 +35,60 @@ LOCK TABLE lock_tbl1 IN SHARE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN SHARE ROW EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN EXCLUSIVE MODE NOWAIT;
 LOCK TABLE lock_tbl1 IN ACCESS EXCLUSIVE MODE NOWAIT;
-LOCK TABLE lock_view1 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-table
-ERROR:  "lock_view1" is not a table
+ROLLBACK;
+-- Verify that we can lock a auto-updatable views
+BEGIN TRANSACTION;
+LOCK TABLE lock_view1 IN EXCLUSIVE MODE;   -- OK; can lock an auto-updatable view
+-- lock_view1 and lock_tbl are locked
+select relname from pg_locks l, pg_class c
+ where l.relation = c.oid and relname like '%lock_%'
+ order by relname;
+  relname   
+------------
+ lock_tbl1
+ lock_view1
+ pg_locks
+(3 rows)
+
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view2 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-auto-updatable view
+ERROR:  cannot lock view "lock_view2"
+DETAIL:  Views that return aggregate functions are not lockable.
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view3 IN EXCLUSIVE MODE;   -- Will fail; can't lock a non-auto-updatable view
+ERROR:  cannot lock view "lock_view3"
+DETAIL:  Views that do not select from a single table or view are not lockable.
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view4 IN EXCLUSIVE MODE;   -- OK; can lock an auto-updatable view
+-- lock_view4, lock_view1, and lock_tbl are locked recursively
+select relname from pg_locks l, pg_class c
+ where l.relation = c.oid and relname like '%lock_%'
+ order by relname;
+  relname   
+------------
+ lock_tbl1
+ lock_view1
+ lock_view4
+ pg_locks
+(4 rows)
+
+ROLLBACK;
+BEGIN TRANSACTION;
+LOCK TABLE lock_view5 IN EXCLUSIVE MODE;   -- OK; can lock an auto-updatable view
+-- lock_view1, and lock_tbl are locked; no_lock_tbl in the subquery is not locked
+select relname from pg_locks l, pg_class c
+ where l.relation = c.oid and relname like '%lock_%'
+ order by relname;
+  relname   
+------------
+ lock_tbl1
+ lock_view5
+ pg_locks
+(3 rows)
+
 ROLLBACK;
 -- Verify that we can lock a table with inheritance children.
 CREATE TABLE lock_tbl2 (b BIGINT) INHERITS (lock_tbl1);
@@ -54,10 +111,15 @@ RESET ROLE;
 --
 -- Clean up
 --
+DROP VIEW lock_view5;
+DROP VIEW lock_view4;
+DROP VIEW lock_view3;
+DROP VIEW lock_view2;
 DROP VIEW lock_view1;
 DROP TABLE lock_tbl3;
 DROP TABLE lock_tbl2;
 DROP TABLE lock_tbl1;
+DROP TABLE no_lock_tbl;
 DROP SCHEMA lock_schema1 CASCADE;
 DROP ROLE regress_rol_lock1;
 -- atomic ops tests

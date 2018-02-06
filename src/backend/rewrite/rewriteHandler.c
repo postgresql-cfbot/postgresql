@@ -2236,20 +2236,23 @@ view_col_is_auto_updatable(RangeTblRef *rtr, TargetEntry *tle)
 
 
 /*
- * view_query_is_auto_updatable - test whether the specified view definition
- * represents an auto-updatable view. Returns NULL (if the view can be updated)
- * or a message string giving the reason that it cannot be.
+ * view_query_is_auto_updatable_or_lockable - test whether the specified view
+ * definition represents an auto-updatable view. Returns NULL (if the view can
+ * be updated) or a message string giving the reason that it cannot be.
  *
  * If check_cols is true, the view is required to have at least one updatable
  * column (necessary for INSERT/UPDATE). Otherwise the view's columns are not
  * checked for updatability. See also view_cols_are_auto_updatable.
  *
+ * If for_lock is true, the returned message describes the reason that it
+ * cannot be lockable rather than auto-updatable.
+ *
  * Note that the checks performed here are only based on the view definition.
  * We do not check whether any base relations referred to by the view are
  * updatable.
  */
-const char *
-view_query_is_auto_updatable(Query *viewquery, bool check_cols)
+static const char *
+view_query_is_auto_updatable_or_lockable(Query *viewquery, bool check_cols, bool for_lock)
 {
 	RangeTblRef *rtr;
 	RangeTblEntry *base_rte;
@@ -2287,22 +2290,34 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 	 *----------
 	 */
 	if (viewquery->distinctClause != NIL)
-		return gettext_noop("Views containing DISTINCT are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing DISTINCT are not automatically updatable.") :
+			gettext_noop("Views containing DISTINCT are not lockable."));
 
 	if (viewquery->groupClause != NIL || viewquery->groupingSets)
-		return gettext_noop("Views containing GROUP BY are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing GROUP BY are not automatically updatable.") :
+			gettext_noop("Views containing GROUP BY are not lockable."));
 
 	if (viewquery->havingQual != NULL)
-		return gettext_noop("Views containing HAVING are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing HAVING are not automatically updatable.") :
+			gettext_noop("Views containing HAVING are not lockable."));
 
 	if (viewquery->setOperations != NULL)
-		return gettext_noop("Views containing UNION, INTERSECT, or EXCEPT are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing UNION, INTERSECT, or EXCEPT are not automatically updatable.") :
+			gettext_noop("Views containing UNION, INTERSECT, or EXCEPT are not lockable."));
 
 	if (viewquery->cteList != NIL)
-		return gettext_noop("Views containing WITH are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing WITH are not automatically updatable.") :
+			gettext_noop("Views containing WITH are not lockable."));
 
 	if (viewquery->limitOffset != NULL || viewquery->limitCount != NULL)
-		return gettext_noop("Views containing LIMIT or OFFSET are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing LIMIT or OFFSET are not automatically updatable.") :
+			gettext_noop("Views containing LIMIT or OFFSET are not lockable."));
 
 	/*
 	 * We must not allow window functions or set returning functions in the
@@ -2314,24 +2329,34 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 	 * unique row in the underlying base relation.
 	 */
 	if (viewquery->hasAggs)
-		return gettext_noop("Views that return aggregate functions are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that return aggregate functions are not automatically updatable.") :
+			gettext_noop("Views that return aggregate functions are not lockable."));
 
 	if (viewquery->hasWindowFuncs)
-		return gettext_noop("Views that return window functions are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that return window functions are not automatically updatable.") :
+			gettext_noop("Views that return window functions are not lockable."));
 
 	if (viewquery->hasTargetSRFs)
-		return gettext_noop("Views that return set-returning functions are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that return set-returning functions are not automatically updatable.") :
+			gettext_noop("Views that return set-returning functions are not lockable."));
 
 	/*
 	 * The view query should select from a single base relation, which must be
 	 * a table or another view.
 	 */
 	if (list_length(viewquery->jointree->fromlist) != 1)
-		return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that do not select from a single table or view are not automatically updatable.") :
+			gettext_noop("Views that do not select from a single table or view are not lockable."));
 
 	rtr = (RangeTblRef *) linitial(viewquery->jointree->fromlist);
 	if (!IsA(rtr, RangeTblRef))
-		return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that do not select from a single table or view are not automatically updatable.") :
+			gettext_noop("Views that do not select from a single table or view are not lockable."));
 
 	base_rte = rt_fetch(rtr->rtindex, viewquery->rtable);
 	if (base_rte->rtekind != RTE_RELATION ||
@@ -2339,10 +2364,14 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 		 base_rte->relkind != RELKIND_FOREIGN_TABLE &&
 		 base_rte->relkind != RELKIND_VIEW &&
 		 base_rte->relkind != RELKIND_PARTITIONED_TABLE))
-		return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views that do not select from a single table or view are not automatically updatable.") :
+			gettext_noop("Views that do not select from a single table or view are not lockable."));
 
 	if (base_rte->tablesample)
-		return gettext_noop("Views containing TABLESAMPLE are not automatically updatable.");
+		return (!for_lock ?
+			gettext_noop("Views containing TABLESAMPLE are not automatically updatable.") :
+			gettext_noop("Views containing TABLESAMPLE are not lockable."));
 
 	/*
 	 * Check that the view has at least one updatable column. This is required
@@ -2370,6 +2399,29 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 	}
 
 	return NULL;				/* the view is updatable */
+}
+
+
+/*
+ * view_query_is_auto_updatable - a simple wrapper function of
+ * view_query_is_auto_updatable_or_lockable
+ */
+const char *
+view_query_is_auto_updatable(Query *viewquery, bool check_cols)
+{
+	return view_query_is_auto_updatable_or_lockable(viewquery, check_cols, false);
+}
+
+/*
+ * view_query_is_lockable - a wrapper function of
+ * view_query_is_auto_updatable_or_lockable to check whether a given view is
+ * lockable. Returns NULL (if the view can be locked) or a message string
+ * giving the reason that it cannot be.
+ */
+const char *
+view_query_is_lockable(Query *viewquery)
+{
+	return view_query_is_auto_updatable_or_lockable(viewquery, false, true);
 }
 
 

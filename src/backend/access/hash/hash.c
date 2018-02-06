@@ -70,6 +70,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = false;
 	amroutine->ampredlocks = false;
 	amroutine->amcanparallel = false;
+	amroutine->amcaninclude = false;
 	amroutine->amkeytype = INT4OID;
 
 	amroutine->ambuild = hashbuild;

@@ -2844,6 +2844,7 @@ _copyConstraint(const Constraint *from)
 	COPY_STRING_FIELD(cooked_expr);
 	COPY_SCALAR_FIELD(generated_when);
 	COPY_NODE_FIELD(keys);
+	COPY_NODE_FIELD(including);
 	COPY_NODE_FIELD(exclusions);
 	COPY_NODE_FIELD(options);
 	COPY_STRING_FIELD(indexname);
@@ -3386,6 +3387,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_STRING_FIELD(accessMethod);
 	COPY_STRING_FIELD(tableSpace);
 	COPY_NODE_FIELD(indexParams);
+	COPY_NODE_FIELD(indexIncludingParams);
 	COPY_NODE_FIELD(options);
 	COPY_NODE_FIELD(whereClause);
 	COPY_NODE_FIELD(excludeOpNames);

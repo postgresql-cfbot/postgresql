@@ -2,7 +2,7 @@
 -- VACUUM
 --
 
-CREATE TABLE vactst (i INT);
+CREATE TABLE vactst (i INT) WITH (autovacuum_enabled = false);
 INSERT INTO vactst VALUES (1);
 INSERT INTO vactst SELECT * FROM vactst;
 INSERT INTO vactst SELECT * FROM vactst;
@@ -88,6 +88,25 @@ ANALYZE vactst, vacparted;
 ANALYZE vacparted (b), vactst;
 ANALYZE vactst, does_not_exist, vacparted;
 ANALYZE vactst (i), vacparted (does_not_exist);
+
+-- large mwm vacuum runs
+INSERT INTO vactst SELECT * from generate_series(1,400000);
+CREATE INDEX ix_vactst ON vactst (i);
+DELETE FROM vactst WHERE i in (SELECT i FROM vactst ORDER BY random() LIMIT 300000);
+SET maintenance_work_mem = 1024;
+VACUUM vactst;
+SET maintenance_work_mem TO DEFAULT;
+DROP INDEX ix_vactst;
+TRUNCATE TABLE vactst;
+
+INSERT INTO vactst SELECT * from generate_series(1,40);
+CREATE INDEX ix_vactst ON vactst (i);
+DELETE FROM vactst;
+VACUUM vactst;
+EXPLAIN (ANALYZE, BUFFERS, COSTS off, TIMING off, SUMMARY off) SELECT * FROM vactst;
+SELECT count(*) FROM vactst;
+DROP INDEX ix_vactst;
+TRUNCATE TABLE vactst;
 
 DROP TABLE vaccluster;
 DROP TABLE vactst;

@@ -57,13 +57,39 @@ pgrename(const char *from, const char *to)
 	 * and blocking other backends.
 	 */
 #if defined(WIN32) && !defined(__CYGWIN__)
-	while (!MoveFileEx(from, to, MOVEFILE_REPLACE_EXISTING))
+	DWORD		err;
+
+	/*
+	 * On Windows we use ReplaceFile() to rename while concurrent processes
+	 * have file open.  However, ReplaceFile() is to be used only when target
+	 * file is already exists.  Thus, we check for file existence and then
+	 * choose between MoveFileEx() and ReplaceFile() functions.
+	 */
+	while (true)
+	{
+		DWORD		dwAttrib;
+		bool		filePresent;
+
+		dwAttrib = GetFileAttributes(to);
+		filePresent = (dwAttrib != INVALID_FILE_ATTRIBUTES) &&
+					 !(dwAttrib & FILE_ATTRIBUTE_DIRECTORY);
+
+		if (filePresent)
+		{
+			if (ReplaceFile(to, from, NULL, REPLACEFILE_IGNORE_MERGE_ERRORS, 0, 0))
+				break;
+		}
+		else
+		{
+			if (MoveFileEx(from, to, MOVEFILE_REPLACE_EXISTING))
+				break;
+		}
 #else
 	while (rename(from, to) < 0)
-#endif
 	{
+#endif
 #if defined(WIN32) && !defined(__CYGWIN__)
-		DWORD		err = GetLastError();
+		err = GetLastError();
 
 		_dosmaperr(err);
 

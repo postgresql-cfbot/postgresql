@@ -304,8 +304,33 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
    <para>
     The optional <literal>WITH</literal> clause specifies <firstterm>storage
     parameters</firstterm> for the index.  Each index method has its own set of allowed
-    storage parameters.  The B-tree, hash, GiST and SP-GiST index methods all
-    accept this parameter:
+    storage parameters.  All indexes accept the following parameter:
+   </para>
+
+   <variablelist>
+   <varlistentry>
+    <term><literal>recheck_on_update</literal></term>
+    <listitem>
+     <para>
+       Functional index is based on on projection function: function which extract subset of its argument.
+       In mathematic such functions are called non-injective. For injective function if any attribute used in the indexed
+       expression is changed, then value of index expression is also changed. So to check that index is affected by the
+       update, it is enough to check the set of changed fields. By default this parameters is assigned true value and function is considered
+       as non-injective.
+       In this case change of any of indexed key doesn't mean that value of the function is changed. For example, for
+       the expression expression<literal>(bookinfo-&gt;&gt;'isbn')</literal> defined
+       for column of JSON type is changed only when ISBN is changed, which rarely happen. The same is true for most
+       functional indexes. For non-injective functions, Postgres compares values of indexed expression for old and updated tuple and updates
+       index only when function results are different. It allows to eliminate index update and use HOT update.
+       But there are extra evaluations of the functions. So if function is expensive or probability that change of indexed column will not effect
+       the function value is small, then marking index as recheck_on_update may increase update speed.
+    </para>
+    </listitem>
+   </varlistentry>
+   </variablelist>
+
+   <para>
+     The B-tree, hash, GiST and SP-GiST index methods all accept this parameter:
    </para>
 
    <variablelist>

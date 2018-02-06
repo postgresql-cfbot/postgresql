@@ -47,6 +47,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 	unsigned short infomask = 0;
 	bool		hasnull = false;
 	uint16		tupmask = 0;
+	uint16		tupmask2 = 0;
 	int			numberOfAttributes = tupleDescriptor->natts;
 
 #ifdef TOAST_INDEX_HACK
@@ -74,13 +75,30 @@ index_form_tuple(TupleDesc tupleDescriptor,
 
 		/*
 		 * If value is stored EXTERNAL, must fetch it so we are not depending
-		 * on outside storage.  This should be improved someday.
+		 * on outside storage.  This should be improved someday. If value also
+		 * was compressed by custom compression method then we should
+		 * decompress it too.
 		 */
 		if (VARATT_IS_EXTERNAL(DatumGetPointer(values[i])))
 		{
+			struct varatt_external toast_pointer;
+
+			VARATT_EXTERNAL_GET_POINTER(toast_pointer, DatumGetPointer(values[i]));
+			if (VARATT_EXTERNAL_IS_CUSTOM_COMPRESSED(toast_pointer))
+				untoasted_values[i] =
+					PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)
+															DatumGetPointer(values[i])));
+			else
+				untoasted_values[i] =
+					PointerGetDatum(heap_tuple_fetch_attr((struct varlena *)
+														  DatumGetPointer(values[i])));
+			untoasted_free[i] = true;
+		}
+		else if (VARATT_IS_CUSTOM_COMPRESSED(DatumGetPointer(values[i])))
+		{
 			untoasted_values[i] =
-				PointerGetDatum(heap_tuple_fetch_attr((struct varlena *)
-													  DatumGetPointer(values[i])));
+				PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)
+														DatumGetPointer(values[i])));
 			untoasted_free[i] = true;
 		}
 
@@ -92,7 +110,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			VARSIZE(DatumGetPointer(untoasted_values[i])) > TOAST_INDEX_TARGET &&
 			(att->attstorage == 'x' || att->attstorage == 'm'))
 		{
-			Datum		cvalue = toast_compress_datum(untoasted_values[i]);
+			Datum		cvalue = toast_compress_datum(untoasted_values[i], InvalidOid);
 
 			if (DatumGetPointer(cvalue) != NULL)
 			{
@@ -142,6 +160,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 					(char *) tp + hoff,
 					data_size,
 					&tupmask,
+					&tupmask2,
 					(hasnull ? (bits8 *) tp + sizeof(IndexTupleData) : NULL));
 
 #ifdef TOAST_INDEX_HACK

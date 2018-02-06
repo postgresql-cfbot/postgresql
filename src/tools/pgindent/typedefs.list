@@ -138,6 +138,8 @@ AttoptCacheKey
 AttrDefInfo
 AttrDefault
 AttrNumber
+AttributeCompressionInfo
+AttributeCompressionItem
 AttributeOpts
 AuthRequest
 AutoPrewarmSharedState
@@ -343,6 +345,7 @@ CollectedCommand
 CollectedCommandType
 ColorTrgm
 ColorTrgmInfo
+ColumnCompression
 ColumnCompareData
 ColumnDef
 ColumnIOData
@@ -367,6 +370,8 @@ CompositeIOData
 CompositeTypeStmt
 CompoundAffixFlag
 CompressionAlgorithm
+CompressionAmOptions
+CompressionAmRoutine
 CompressorState
 ConditionVariable
 ConditionalStack

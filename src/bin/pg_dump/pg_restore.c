@@ -75,6 +75,7 @@ main(int argc, char **argv)
 	static int	no_publications = 0;
 	static int	no_security_labels = 0;
 	static int	no_subscriptions = 0;
+	static int	no_compression_methods = 0;
 	static int	strict_names = 0;
 
 	struct option cmdopts[] = {
@@ -124,6 +125,7 @@ main(int argc, char **argv)
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
+		{"no-compression-methods", no_argument, &no_compression_methods, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -364,6 +366,7 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->no_compression_methods = no_compression_methods;
 
 	if (if_exists && !opts->dropSchema)
 	{

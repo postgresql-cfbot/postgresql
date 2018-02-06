@@ -145,7 +145,7 @@ void
 heap_fill_tuple(TupleDesc tupleDesc,
 				Datum *values, bool *isnull,
 				char *data, Size data_size,
-				uint16 *infomask, bits8 *bit)
+				uint16 *infomask, uint16 *infomask2, bits8 *bit)
 {
 	bits8	   *bitP;
 	int			bitmask;
@@ -169,6 +169,7 @@ heap_fill_tuple(TupleDesc tupleDesc,
 	}
 
 	*infomask &= ~(HEAP_HASNULL | HEAP_HASVARWIDTH | HEAP_HASEXTERNAL);
+	*infomask2 &= ~HEAP_HASCUSTOMCOMPRESSED;
 
 	for (i = 0; i < numberOfAttributes; i++)
 	{
@@ -195,6 +196,9 @@ heap_fill_tuple(TupleDesc tupleDesc,
 			*bitP |= bitmask;
 		}
 
+		if (OidIsValid(att->attcompression))
+			*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
+
 		/*
 		 * XXX we use the att_align macros on the pointer value itself, not on
 		 * an offset.  This is a bit of a hack.
@@ -213,6 +217,7 @@ heap_fill_tuple(TupleDesc tupleDesc,
 			Pointer		val = DatumGetPointer(values[i]);
 
 			*infomask |= HEAP_HASVARWIDTH;
+
 			if (VARATT_IS_EXTERNAL(val))
 			{
 				if (VARATT_IS_EXTERNAL_EXPANDED(val))
@@ -230,10 +235,20 @@ heap_fill_tuple(TupleDesc tupleDesc,
 				}
 				else
 				{
+
 					*infomask |= HEAP_HASEXTERNAL;
 					/* no alignment, since it's short by definition */
 					data_length = VARSIZE_EXTERNAL(val);
 					memcpy(data, val, data_length);
+
+					if (VARATT_IS_EXTERNAL_ONDISK(val))
+					{
+						struct varatt_external toast_pointer;
+
+						VARATT_EXTERNAL_GET_POINTER(toast_pointer, val);
+						if (VARATT_EXTERNAL_IS_CUSTOM_COMPRESSED(toast_pointer))
+							*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
+					}
 				}
 			}
 			else if (VARATT_IS_SHORT(val))
@@ -257,6 +272,9 @@ heap_fill_tuple(TupleDesc tupleDesc,
 												  att->attalign);
 				data_length = VARSIZE(val);
 				memcpy(data, val, data_length);
+
+				if (VARATT_IS_CUSTOM_COMPRESSED(val))
+					*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
 			}
 		}
 		else if (att->attlen == -2)
@@ -774,6 +792,7 @@ heap_form_tuple(TupleDesc tupleDescriptor,
 					(char *) td + hoff,
 					data_len,
 					&td->t_infomask,
+					&td->t_infomask2,
 					(hasnull ? td->t_bits : NULL));
 
 	return tuple;
@@ -1456,6 +1475,7 @@ heap_form_minimal_tuple(TupleDesc tupleDescriptor,
 					(char *) tuple + hoff,
 					data_len,
 					&tuple->t_infomask,
+					&tuple->t_infomask2,
 					(hasnull ? tuple->t_bits : NULL));
 
 	return tuple;

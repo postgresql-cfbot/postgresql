@@ -142,6 +142,7 @@ extern Oid	RemoveUserMapping(DropUserMappingStmt *stmt);
 extern void RemoveUserMappingById(Oid umId);
 extern void CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid);
 extern void ImportForeignSchema(ImportForeignSchemaStmt *stmt);
+extern Datum optionListToArray(List *options, bool sorted);
 extern Datum transformGenericOptions(Oid catalogId,
 						Datum oldOptions,
 						List *options,
@@ -151,8 +152,21 @@ extern Datum transformGenericOptions(Oid catalogId,
 extern ObjectAddress CreateAccessMethod(CreateAmStmt *stmt);
 extern void RemoveAccessMethodById(Oid amOid);
 extern Oid	get_index_am_oid(const char *amname, bool missing_ok);
+extern Oid	get_compression_am_oid(const char *amname, bool missing_ok);
 extern Oid	get_am_oid(const char *amname, bool missing_ok);
 extern char *get_am_name(Oid amOid);
+extern regproc get_am_handler_oid(Oid amOid, char amtype, bool noerror);
+
+/* commands/compressioncmds.c */
+extern ColumnCompression *MakeColumnCompression(Oid acoid);
+extern Oid CreateAttributeCompression(Form_pg_attribute attr,
+						   ColumnCompression *compression,
+						   bool *need_rewrite,
+						   List **preserved_amoids);
+extern void RemoveAttributeCompression(Oid acoid);
+extern void CheckCompressionMismatch(ColumnCompression *c1,
+						 ColumnCompression *c2, const char *attributeName);
+void		CleanupAttributeCompression(Oid relid, AttrNumber attnum, List *keepAmOids);
 
 /* support routines in commands/define.c */
 

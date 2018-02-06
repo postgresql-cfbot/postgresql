@@ -578,6 +578,10 @@ DESCR("brin: standalone scan new table pages");
 DATA(insert OID = 4014 (  brin_desummarize_range PGNSP PGUID 12 1 0 0 0 f f f f t f v s 2 0 2278 "2205 20" _null_ _null_ _null_ _null_ _null_ brin_desummarize_range _null_ _null_ _null_ ));
 DESCR("brin: desummarize page range");
 
+/* Compression access method handlers */
+DATA(insert OID =  3453 (  pglzhandler PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 3421 "2281" _null_ _null_ _null_ _null_ _null_ pglzhandler _null_ _null_ _null_ ));
+DESCR("pglz compression access method handler");
+
 DATA(insert OID = 338 (  amvalidate		PGNSP PGUID 12 1 0 0 0 f f f f t f v s 1 0 16 "26" _null_ _null_ _null_ _null_ _null_	amvalidate _null_ _null_ _null_ ));
 DESCR("validate an operator class");
 
@@ -3809,6 +3813,8 @@ DATA(insert OID = 3454 ( pg_filenode_relation PGNSP PGUID 12 1 0 0 0 f f f f t f
 DESCR("relation OID for filenode and tablespace");
 DATA(insert OID = 3034 ( pg_relation_filepath	PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 25 "2205" _null_ _null_ _null_ _null_ _null_ pg_relation_filepath _null_ _null_ _null_ ));
 DESCR("file path of relation");
+DATA(insert OID = 3419 ( pg_column_compression	PGNSP PGUID 12 1 0 0 0 f f f f t f s s 2 0 25 "2205 25" _null_ _null_ _null_ _null_ _null_ pg_column_compression _null_ _null_ _null_ ));
+DESCR("list of compression access methods used by the column");
 
 DATA(insert OID = 2316 ( postgresql_fdw_validator PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 16 "1009 26" _null_ _null_ _null_ _null_ _null_ postgresql_fdw_validator _null_ _null_ _null_));
 DESCR("(internal)");
@@ -3880,6 +3886,10 @@ DESCR("I/O");
 DATA(insert OID = 3311 (  tsm_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3310 "2275" _null_ _null_ _null_ _null_ _null_ tsm_handler_in _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 3312 (  tsm_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3310" _null_ _null_ _null_ _null_ _null_ tsm_handler_out _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3425 (  compression_am_handler_in	PGNSP PGUID 12 1 0 0 0 f f f f f f i s 1 0 3421 "2275" _null_ _null_ _null_ _null_ _null_ compression_am_handler_in _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID = 3426 (  compression_am_handler_out	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2275 "3421" _null_ _null_ _null_ _null_ _null_ compression_am_handler_out _null_ _null_ _null_ ));
 DESCR("I/O");
 
 /* tablesample method handlers */

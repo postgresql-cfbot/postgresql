@@ -47,6 +47,9 @@ typedef enum LockTupleMode
 	LockTupleExclusive
 } LockTupleMode;
 
+/* Hash table control struct is an opaque type known only within dynahash.c */
+typedef struct HTAB HTAB;
+
 #define MaxLockTupleMode	LockTupleExclusive
 
 /*
@@ -71,7 +74,6 @@ typedef struct HeapUpdateFailureData
 	TransactionId xmax;
 	CommandId	cmax;
 } HeapUpdateFailureData;
-
 
 /* ----------------
  *		function prototypes for heap access method
@@ -146,7 +148,7 @@ extern void heap_get_latest_tid(Relation relation, Snapshot snapshot,
 					ItemPointer tid);
 extern void setLastTid(const ItemPointer tid);
 
-extern BulkInsertState GetBulkInsertState(void);
+extern BulkInsertState GetBulkInsertState(HTAB *);
 extern void FreeBulkInsertState(BulkInsertState);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 

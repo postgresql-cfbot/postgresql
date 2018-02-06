@@ -48,50 +48,6 @@ typedef struct
 /* Internal functions */
 static void import_error_callback(void *arg);
 
-
-/*
- * Convert a DefElem list to the text array format that is used in
- * pg_foreign_data_wrapper, pg_foreign_server, pg_user_mapping, and
- * pg_foreign_table.
- *
- * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
- * if the list is empty.
- *
- * Note: The array is usually stored to database without further
- * processing, hence any validation should be done before this
- * conversion.
- */
-static Datum
-optionListToArray(List *options)
-{
-	ArrayBuildState *astate = NULL;
-	ListCell   *cell;
-
-	foreach(cell, options)
-	{
-		DefElem    *def = lfirst(cell);
-		const char *value;
-		Size		len;
-		text	   *t;
-
-		value = defGetString(def);
-		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
-		t = palloc(len + 1);
-		SET_VARSIZE(t, len);
-		sprintf(VARDATA(t), "%s=%s", def->defname, value);
-
-		astate = accumArrayResult(astate, PointerGetDatum(t),
-								  false, TEXTOID,
-								  CurrentMemoryContext);
-	}
-
-	if (astate)
-		return makeArrayResult(astate, CurrentMemoryContext);
-
-	return PointerGetDatum(NULL);
-}
-
-
 /*
  * Transform a list of DefElem into text array format.  This is substantially
  * the same thing as optionListToArray(), except we recognize SET/ADD/DROP
@@ -178,7 +134,7 @@ transformGenericOptions(Oid catalogId,
 		}
 	}
 
-	result = optionListToArray(resultOptions);
+	result = optionListToArray(resultOptions, false);
 
 	if (OidIsValid(fdwvalidator))
 	{

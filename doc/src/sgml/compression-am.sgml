@@ -1,0 +1,145 @@
+<!-- doc/src/sgml/compression-am.sgml -->
+
+<chapter id="compression-am">
+ <title>Compression Access Method Interface Definition</title>
+  <para>
+   This chapter defines the interface between the core
+   <productname>PostgreSQL</productname> system and <firstterm>compression access
+   methods</firstterm>, which manage individual compression types.
+  </para>
+
+ <sect1 id="compression-api">
+  <title>Basic API Structure for compression methods</title>
+
+  <para>
+   Each compression access method is described by a row in the
+   <link linkend="catalog-pg-am"><structname>pg_am</structname></link>
+   system catalog.  The <structname>pg_am</structname> entry
+   specifies a name and a <firstterm>handler function</firstterm> for the access
+   method.  These entries can be created and deleted using the
+   <xref linkend="sql-create-access-method"/> and
+   <xref linkend="sql-drop-access-method"/> SQL commands.
+  </para>
+
+  <para>
+   A compression access method handler function must be declared to accept a
+   single argument of type <type>internal</type> and to return the
+   pseudo-type <type>compression_am_handler</type>.  The argument is a dummy value that
+   simply serves to prevent handler functions from being called directly from
+   SQL commands.  The result of the function must be a palloc'd struct of
+   type <structname>CompressionAmRoutine</structname>, which contains everything
+   that the core code needs to know to make use of the compression access method.
+   The <structname>CompressionAmRoutine</structname> struct, also called the access
+   method's <firstterm>API struct</firstterm>, contains pointers to support
+   functions for the access method. These support functions are plain C
+   functions and are not visible or callable at the SQL level.
+   The support functions are described in <xref linkend="compression-am-functions"/>.
+  </para>
+
+  <para>
+   The structure <structname>CompressionAmRoutine</structname> is defined thus:
+<programlisting>
+typedef struct CompressionAmRoutine
+{
+    NodeTag		type;
+
+    cmcheck_function        cmcheck;        /* can be NULL */
+    cmdrop_function         cmdrop;         /* can be NULL */
+    cminitstate_function    cminitstate;    /* can be NULL */
+    cmcompress_function     cmcompress;
+    cmcompress_function     cmdecompress;
+} CompressionAmRoutine;
+</programlisting>
+  </para>
+ </sect1>
+ <sect1 id="compression-am-functions">
+  <title>Compression Access Method Functions</title>
+
+  <para>
+   The compression and auxiliary functions that an compression access
+   method must provide in <structname>CompressionAmRoutine</structname> are:
+  </para>
+
+  <para>
+<programlisting>
+void
+cmcheck (Form_pg_attribute att, List *options);
+</programlisting>
+   Called when an attribute is linked with compression access method. Could
+   be used to check compatibility with the attribute and other additional
+   checks.
+  </para>
+
+  <para>
+<programlisting>
+void
+cmdrop (Oid acoid);
+</programlisting>
+   Called when the attribute compression is going to be removed.
+  </para>
+
+  <para>
+  Compression functions take special struct
+  <structname>CompressionAmOptions</structname> as first
+  parameter. This struct contains per backend cached state for each
+  attribute compression record. CompressionAmOptions is defined thus:
+
+<programlisting>
+typedef struct CompressionAmOptions
+{
+    Oid         acoid;          /* Oid of attribute compression */
+    Oid         amoid;          /* Oid of compression access method */
+    List       *acoptions;      /* Parsed options, used for comparison */
+    CompressionAmRoutine *amroutine;    /* compression access method routine */
+
+    /* result of cminitstate function will be put here */
+    void       *acstate;
+} CompressionAmOptions;
+</programlisting>
+  </para>
+
+  <para>
+  The <structfield>acstate</structfield> field is used to keep temporary state
+  between compression functions calls and stores the result of
+  <structfield>cminitstate</structfield> function. It could be useful to store
+  the parsed view of the compression options.
+  </para>
+
+  <para>
+  Note that any <structname>pg_attr_compression</structname> relation invalidation
+  will cause all the cached <structfield>acstate</structfield> options cleared.
+  They will be recreated on the next compression functions calls.
+  </para>
+
+  <para>
+<programlisting>
+void *
+cminitstate (Oid acoid, List *options);
+</programlisting>
+  Called when <structname>CompressionAmOptions</structname> is being
+  initialized. Can return a pointer to memory that will be passed between
+  compression functions calls.
+  </para>
+
+  <para>
+<programlisting>
+struct varlena *
+cmcompress (CompressionAmOptions *cmoptions,
+            const struct varlena *value);
+</programlisting>
+   Function is used to compress varlena. Could return NULL if data is
+   incompressible. If it returns varlena bigger than original the core will
+   not use it.
+  </para>
+
+  <para>
+<programlisting>
+struct varlena *
+cmdecompress (CompressionAmOptions *cmoptions,
+              const struct varlena *value);
+</programlisting>
+   Function is used to decompress varlena.
+  </para>
+
+ </sect1>
+</chapter>

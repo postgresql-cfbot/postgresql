@@ -40,11 +40,13 @@
 #include "getopt_long.h"
 
 #include "access/attnum.h"
+#include "access/cmapi.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attribute.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_default_acl.h"
@@ -365,6 +367,7 @@ main(int argc, char **argv)
 		{"no-synchronized-snapshots", no_argument, &dopt.no_synchronized_snapshots, 1},
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
+		{"no-compression-methods", no_argument, &dopt.no_compression_methods, 1},
 		{"no-sync", no_argument, NULL, 7},
 
 		{NULL, 0, NULL, 0}
@@ -585,6 +588,9 @@ main(int argc, char **argv)
 	if (dopt.binary_upgrade)
 		dopt.sequence_data = 1;
 
+	if (dopt.binary_upgrade)
+		dopt.compression_data = 1;
+
 	if (dopt.dataOnly && dopt.schemaOnly)
 	{
 		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used together\n");
@@ -795,6 +801,9 @@ main(int argc, char **argv)
 
 	if (dopt.schemaOnly && dopt.sequence_data)
 		getTableData(&dopt, tblinfo, numTables, dopt.oids, RELKIND_SEQUENCE);
+
+	if (dopt.schemaOnly && dopt.compression_data)
+		getAttributeCompressionData(fout);
 
 	/*
 	 * In binary-upgrade mode, we do not have to worry about the actual blob
@@ -4177,6 +4186,236 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 		free(pubnames);
 
 	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * getAttributeCompressionData
+ *	  get information from pg_attr_compression
+ *	  this information should be migrated at binary upgrade
+ */
+void
+getAttributeCompressionData(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	AttributeCompressionInfo *cminfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_relid;
+	int			i_attnum;
+	int			i_name;
+	int			i_options;
+	int			i_iscurrent;
+	int			i_attname;
+	int			i_parsedoptions;
+	int			i_preserve;
+	int			i_cnt;
+	int			i,
+				j,
+				k,
+				attcnt,
+				ntups;
+
+	if (fout->remoteVersion < 110000)
+		return;
+
+	res = ExecuteSqlQuery(fout,
+						  "SELECT tableoid, acrelid::pg_catalog.regclass as acrelid, acattnum, COUNT(*) AS cnt "
+						  "FROM pg_catalog.pg_attr_compression "
+						  "WHERE acrelid > 0 AND acattnum > 0 "
+						  "GROUP BY tableoid, acrelid, acattnum;",
+						  PGRES_TUPLES_OK);
+
+	attcnt = PQntuples(res);
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_relid = PQfnumber(res, "acrelid");
+	i_attnum = PQfnumber(res, "acattnum");
+	i_cnt = PQfnumber(res, "cnt");
+
+	cminfo = pg_malloc(attcnt * sizeof(AttributeCompressionInfo));
+	for (i = 0; i < attcnt; i++)
+	{
+		char	   *acrelid = pg_strdup(PQgetvalue(res, i, i_relid));
+		uint16		attnum = atoi(PQgetvalue(res, i, i_attnum));
+		int			cnt = atoi(PQgetvalue(res, i, i_cnt));
+
+		cminfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_tableoid));
+		cminfo[i].dobj.dump = DUMP_COMPONENT_DEFINITION;
+		cminfo[i].dobj.objType = DO_ATTRIBUTE_COMPRESSION;
+		AssignDumpId(&cminfo[i].dobj);
+
+		cminfo[i].acrelid = acrelid;
+		cminfo[i].acattnum = attnum;
+		cminfo[i].preserve = NULL;
+		cminfo[i].attname = NULL;
+		cminfo[i].nitems = cnt;
+		cminfo[i].items = pg_malloc0(sizeof(AttributeCompressionItem) * cnt);
+		cminfo[i].dobj.name = psprintf("%s.%d", acrelid, attnum);
+	}
+	PQclear(res);
+
+	query = createPQExpBuffer();
+	resetPQExpBuffer(query);
+	appendPQExpBuffer(query,
+					  "SELECT c.acoid, c.acname, c.acattnum,"
+					  " c.acrelid::pg_catalog.regclass as acrelid, c.acoptions,"
+					  " a.attcompression = c.acoid as iscurrent, a.attname,"
+					  " pg_catalog.pg_column_compression(a.attrelid, a.attname) as preserve,"
+					  " pg_catalog.array_to_string(ARRAY("
+					  " SELECT pg_catalog.quote_ident(option_name) || "
+					  " ' ' || pg_catalog.quote_literal(option_value) "
+					  " FROM pg_catalog.pg_options_to_table(c.acoptions) "
+					  " ORDER BY option_name"
+					  " ), E',\n    ') AS parsedoptions "
+					  "FROM pg_catalog.pg_attr_compression c "
+					  "JOIN pg_attribute a ON (c.acrelid = a.attrelid "
+					  "                        AND c.acattnum = a.attnum) "
+					  "WHERE acrelid > 0 AND attnum > 0 "
+					  "ORDER BY iscurrent");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_oid = PQfnumber(res, "acoid");
+	i_name = PQfnumber(res, "acname");
+	i_relid = PQfnumber(res, "acrelid");
+	i_attnum = PQfnumber(res, "acattnum");
+	i_options = PQfnumber(res, "acoptions");
+	i_iscurrent = PQfnumber(res, "iscurrent");
+	i_attname = PQfnumber(res, "attname");
+	i_parsedoptions = PQfnumber(res, "parsedoptions");
+	i_preserve = PQfnumber(res, "preserve");
+
+	for (i = 0; i < ntups; i++)
+	{
+		char	   *acrelid = pg_strdup(PQgetvalue(res, i, i_relid));
+		uint16		attnum = atoi(PQgetvalue(res, i, i_attnum));
+
+		for (j = 0; j < attcnt; j++)
+		{
+			if (strcmp(cminfo[j].acrelid, acrelid) == 0 &&
+				cminfo[j].acattnum == attnum)
+			{
+				/* in the end it will be current */
+				cminfo[j].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+
+				if (cminfo[j].preserve == NULL)
+					cminfo[j].preserve = pg_strdup(PQgetvalue(res, i, i_preserve));
+				if (cminfo[j].attname == NULL)
+					cminfo[j].attname = pg_strdup(PQgetvalue(res, i, i_attname));
+
+				for (k = 0; k < cminfo[j].nitems; k++)
+				{
+					AttributeCompressionItem *item = &cminfo[j].items[k];
+
+					if (item->acname == NULL)
+					{
+						item->acoid = atooid(PQgetvalue(res, i, i_oid));
+						item->acname = pg_strdup(PQgetvalue(res, i, i_name));
+						item->acoptions = pg_strdup(PQgetvalue(res, i, i_options));
+						item->iscurrent = PQgetvalue(res, i, i_iscurrent)[0] == 't';
+						item->parsedoptions = pg_strdup(PQgetvalue(res, i, i_parsedoptions));
+
+						/* to next tuple */
+						break;
+					}
+				}
+
+				/* to next tuple */
+				break;
+			}
+		}
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpAttributeCompression
+ *	  dump the given compression options
+ */
+static void
+dumpAttributeCompression(Archive *fout, AttributeCompressionInfo *cminfo)
+{
+	PQExpBuffer query;
+	AttributeCompressionItem *item;
+	int			i;
+
+	if (!(cminfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		return;
+
+	/* Make sure we are in proper schema */
+	selectSourceSchema(fout, "pg_catalog");
+
+	query = createPQExpBuffer();
+	resetPQExpBuffer(query);
+
+	for (i = 0; i < cminfo->nitems; i++)
+	{
+		item = &cminfo->items[i];
+		appendPQExpBuffer(query, "INSERT INTO pg_catalog.pg_attr_compression\n\t"
+						  "VALUES (%d, '%s', '%s'::pg_catalog.regclass, %d, ",
+						  item->acoid,
+						  item->acname,
+						  cminfo->acrelid,
+						  cminfo->acattnum);
+		if (strlen(item->acoptions) > 0)
+			appendPQExpBuffer(query, "'%s');\n", item->acoptions);
+		else
+			appendPQExpBuffer(query, "NULL);\n");
+
+		/*
+		 * Restore dependency with access method. pglz is pinned by the
+		 * system, no need to create dependency.
+		 */
+		if (strcmp(item->acname, "pglz") != 0)
+			appendPQExpBuffer(query,
+							  "WITH t AS (SELECT oid FROM pg_am WHERE amname = '%s')\n\t"
+							  "INSERT INTO pg_catalog.pg_depend "
+							  "SELECT %d, %d, 0, %d, t.oid, 0, 'n' FROM t;\n",
+							  item->acname,
+							  AttrCompressionRelationId,
+							  item->acoid,
+							  AccessMethodRelationId);
+
+		if (item->iscurrent)
+		{
+			appendPQExpBuffer(query, "ALTER TABLE %s ALTER COLUMN %s\n\tSET COMPRESSION %s",
+							  cminfo->acrelid,
+							  cminfo->attname,
+							  item->acname);
+			if (strlen(item->parsedoptions) > 0)
+				appendPQExpBuffer(query, " WITH (%s)", item->parsedoptions);
+			appendPQExpBuffer(query, " PRESERVE (%s);\n", cminfo->preserve);
+		}
+		else if (!IsBuiltinCompression(item->acoid))
+		{
+			/* restore dependency */
+			appendPQExpBuffer(query, "INSERT INTO pg_catalog.pg_depend VALUES "
+							  "(%d, %d, 0, %d, '%s'::pg_catalog.regclass, %d, 'i');\n",
+							  AttrCompressionRelationId,
+							  item->acoid,
+							  RelationRelationId,
+							  cminfo->acrelid,
+							  cminfo->acattnum);
+		}
+	}
+
+	ArchiveEntry(fout,
+				 cminfo->dobj.catId,
+				 cminfo->dobj.dumpId,
+				 cminfo->dobj.name,
+				 NULL,
+				 NULL,
+				 "", false,
+				 "ATTRIBUTE COMPRESSION", SECTION_PRE_DATA,
+				 query->data, "", NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
 	destroyPQExpBuffer(query);
 }
 
@@ -8140,6 +8379,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_attoptions;
 	int			i_attcollation;
 	int			i_attfdwoptions;
+	int			i_attcmoptions;
+	int			i_attcmname;
 	PGresult   *res;
 	int			ntups;
 	bool		hasdefaults;
@@ -8175,7 +8416,46 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 
 		resetPQExpBuffer(q);
 
-		if (fout->remoteVersion >= 100000)
+		if (fout->remoteVersion >= 110000)
+		{
+			/*
+			 * attcompression is new in version 11
+			 */
+			appendPQExpBuffer(q, "SELECT a.attnum, a.attname, a.atttypmod, "
+							  "a.attstattarget, a.attstorage, t.typstorage, "
+							  "a.attnotnull, a.atthasdef, a.attisdropped, "
+							  "a.attlen, a.attalign, a.attislocal, "
+							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
+							  "array_to_string(a.attoptions, ', ') AS attoptions, "
+							  "CASE WHEN a.attcollation <> t.typcollation "
+							  "THEN a.attcollation ELSE 0 END AS attcollation, "
+							  "a.attidentity, "
+			/* fdw options */
+							  "pg_catalog.array_to_string(ARRAY("
+							  "SELECT pg_catalog.quote_ident(option_name) || "
+							  "' ' || pg_catalog.quote_literal(option_value) "
+							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
+							  "ORDER BY option_name"
+							  "), E',\n    ') AS attfdwoptions, "
+			/* compression */
+							  "pg_catalog.array_to_string(ARRAY("
+							  "SELECT pg_catalog.quote_ident(option_name) || "
+							  "' ' || pg_catalog.quote_literal(option_value) "
+							  "FROM pg_catalog.pg_options_to_table(c.acoptions) "
+							  "ORDER BY option_name"
+							  "), E',\n    ') AS attcmoptions, "
+							  "c.acname AS attcmname "
+			/* FROM */
+							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
+							  "ON a.atttypid = t.oid "
+							  "LEFT JOIN pg_catalog.pg_attr_compression c "
+							  "ON a.attcompression = c.acoid "
+							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
+							  "AND a.attnum > 0::pg_catalog.int2 "
+							  "ORDER BY a.attnum",
+							  tbinfo->dobj.catId.oid);
+		}
+		else if (fout->remoteVersion >= 100000)
 		{
 			/*
 			 * attidentity is new in version 10.
@@ -8194,7 +8474,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "' ' || pg_catalog.quote_literal(option_value) "
 							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
 							  "ORDER BY option_name"
-							  "), E',\n    ') AS attfdwoptions "
+							  "), E',\n    ') AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8220,7 +8502,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "' ' || pg_catalog.quote_literal(option_value) "
 							  "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
 							  "ORDER BY option_name"
-							  "), E',\n    ') AS attfdwoptions "
+							  "), E',\n    ') AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8244,7 +8528,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "array_to_string(a.attoptions, ', ') AS attoptions, "
 							  "CASE WHEN a.attcollation <> t.typcollation "
 							  "THEN a.attcollation ELSE 0 END AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8262,7 +8548,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
 							  "array_to_string(a.attoptions, ', ') AS attoptions, "
 							  "0 AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8279,7 +8567,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 							  "a.attlen, a.attalign, a.attislocal, "
 							  "pg_catalog.format_type(t.oid,a.atttypmod) AS atttypname, "
 							  "'' AS attoptions, 0 AS attcollation, "
-							  "NULL AS attfdwoptions "
+							  "NULL AS attfdwoptions, "
+							  "NULL AS attcmoptions, "
+							  "NULL AS attcmname "
 							  "FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_type t "
 							  "ON a.atttypid = t.oid "
 							  "WHERE a.attrelid = '%u'::pg_catalog.oid "
@@ -8309,6 +8599,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		i_attoptions = PQfnumber(res, "attoptions");
 		i_attcollation = PQfnumber(res, "attcollation");
 		i_attfdwoptions = PQfnumber(res, "attfdwoptions");
+		i_attcmname = PQfnumber(res, "attcmname");
+		i_attcmoptions = PQfnumber(res, "attcmoptions");
 
 		tbinfo->numatts = ntups;
 		tbinfo->attnames = (char **) pg_malloc(ntups * sizeof(char *));
@@ -8325,6 +8617,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attcollation = (Oid *) pg_malloc(ntups * sizeof(Oid));
 		tbinfo->attfdwoptions = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmoptions = (char **) pg_malloc(ntups * sizeof(char *));
+		tbinfo->attcmnames = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->notnull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->inhNotNull = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attrdefs = (AttrDefInfo **) pg_malloc(ntups * sizeof(AttrDefInfo *));
@@ -8352,6 +8646,8 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attoptions[j] = pg_strdup(PQgetvalue(res, j, i_attoptions));
 			tbinfo->attcollation[j] = atooid(PQgetvalue(res, j, i_attcollation));
 			tbinfo->attfdwoptions[j] = pg_strdup(PQgetvalue(res, j, i_attfdwoptions));
+			tbinfo->attcmoptions[j] = pg_strdup(PQgetvalue(res, j, i_attcmoptions));
+			tbinfo->attcmnames[j] = pg_strdup(PQgetvalue(res, j, i_attcmname));
 			tbinfo->attrdefs[j] = NULL; /* fix below */
 			if (PQgetvalue(res, j, i_atthasdef)[0] == 't')
 				hasdefaults = true;
@@ -9851,6 +10147,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (SubscriptionInfo *) dobj);
+			break;
+		case DO_ATTRIBUTE_COMPRESSION:
+			dumpAttributeCompression(fout, (AttributeCompressionInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -12704,6 +13003,9 @@ dumpAccessMethod(Archive *fout, AccessMethodInfo *aminfo)
 	{
 		case AMTYPE_INDEX:
 			appendPQExpBuffer(q, "TYPE INDEX ");
+			break;
+		case AMTYPE_COMPRESSION:
+			appendPQExpBuffer(q, "TYPE COMPRESSION ");
 			break;
 		default:
 			write_msg(NULL, "WARNING: invalid type \"%c\" of access method \"%s\"\n",
@@ -15736,6 +16038,14 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 												dopt->binary_upgrade));
 
 					/*
+					 * Compression will require a record in
+					 * pg_attr_compression
+					 */
+					bool		has_custom_compression = (tbinfo->attcmnames[j] &&
+														  ((strcmp(tbinfo->attcmnames[j], "pglz") != 0) ||
+														   nonemptyReloptions(tbinfo->attcmoptions[j])));
+
+					/*
 					 * Skip column if fully defined by reloftype or the
 					 * partition parent.
 					 */
@@ -15795,6 +16105,25 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 											  fmtId(coll->dobj.namespace->dobj.name));
 							appendPQExpBufferStr(q, fmtId(coll->dobj.name));
 						}
+					}
+
+					/*
+					 * Compression
+					 *
+					 * In binary-upgrade mode, compression is assigned by
+					 * ALTER. Even we're skipping compression the attribute
+					 * will get builtin compression. It's the task for ALTER
+					 * command to change to right one and remove dependency to
+					 * builtin compression.
+					 */
+					if (tbinfo->attcmnames[j] && strlen(tbinfo->attcmnames[j])
+						&& !(dopt->binary_upgrade && has_custom_compression))
+					{
+						appendPQExpBuffer(q, " COMPRESSION %s",
+										  tbinfo->attcmnames[j]);
+						if (nonemptyReloptions(tbinfo->attcmoptions[j]))
+							appendPQExpBuffer(q, " WITH (%s)",
+											  tbinfo->attcmoptions[j]);
 					}
 
 					if (has_default)
@@ -18098,6 +18427,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_FOREIGN_SERVER:
 			case DO_TRANSFORM:
 			case DO_BLOB:
+			case DO_ATTRIBUTE_COMPRESSION:
 				/* Pre-data objects: must come before the pre-data boundary */
 				addObjectDependency(preDataBound, dobj->dumpId);
 				break;

@@ -88,6 +88,11 @@ DECLARE_UNIQUE_INDEX(pg_attrdef_adrelid_adnum_index, 2656, on pg_attrdef using b
 DECLARE_UNIQUE_INDEX(pg_attrdef_oid_index, 2657, on pg_attrdef using btree(oid oid_ops));
 #define AttrDefaultOidIndexId  2657
 
+DECLARE_UNIQUE_INDEX(pg_attr_compression_index, 3424, on pg_attr_compression using btree(acoid oid_ops));
+#define AttrCompressionIndexId  3424
+DECLARE_INDEX(pg_attr_compression_relid_attnum_index, 3423, on pg_attr_compression using btree(acrelid oid_ops, acattnum int2_ops));
+#define AttrCompressionRelidAttnumIndexId  3423
+
 DECLARE_UNIQUE_INDEX(pg_attribute_relid_attnam_index, 2658, on pg_attribute using btree(attrelid oid_ops, attname name_ops));
 #define AttributeRelidNameIndexId  2658
 DECLARE_UNIQUE_INDEX(pg_attribute_relid_attnum_index, 2659, on pg_attribute using btree(attrelid oid_ops, attnum int2_ops));

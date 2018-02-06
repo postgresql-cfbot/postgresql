@@ -3463,4 +3463,16 @@ typedef struct DropSubscriptionStmt
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
 } DropSubscriptionStmt;
 
+/* ----------------------
+ *		WaitLSN Statement
+ * ----------------------
+ */
+typedef struct WaitLSNStmt
+{
+	NodeTag		type;
+	char	   *lsn;			/* Taraget LSN to wait for */
+	int			delay;			/* Delay to wait for LSN*/
+	bool		nowait;			/* No wait for LSN just result*/
+} WaitLSNStmt;
+
 #endif							/* PARSENODES_H */

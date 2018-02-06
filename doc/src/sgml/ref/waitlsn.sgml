@@ -1,0 +1,144 @@
+<!--
+doc/src/sgml/ref/waitlsn.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="SQL-WAITLSN">
+ <indexterm zone="sql-waitlsn">
+  <primary>WAITLSN</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>WAITLSN</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>WAITLSN</refname>
+  <refpurpose>wait for the target <acronym>LSN</> to be replayed</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+WAITLSN '<replaceable class="PARAMETER">LSN</replaceable>' [ INFINITELY ]
+WAITLSN '<replaceable class="PARAMETER">LSN</replaceable>' TIMEOUT <replaceable class="PARAMETER">wait_time</replaceable>
+WAITLSN '<replaceable class="PARAMETER">LSN</replaceable>' NOWAIT
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   interprocess communication mechanism to wait for the target log sequence
+   number (<acronym>LSN</>) on standby in <productname>&productname;</productname>
+   databases with master-standby asynchronous replication. When run with the
+   <replaceable>LSN</replaceable> option, the <command>WAITLSN</command> command
+   waits for the specified <acronym>LSN</> to be replayed. By default, wait
+   time is unlimited. Waiting can be interrupted using <literal>Ctrl+C</>, or
+   by shutting down the <literal>postgres</> server. You can also limit the wait
+   time using the <option>TIMEOUT</> option, or check the target <acronym>LSN</>
+   status immediately using the <option>NOWAIT</> option.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="PARAMETER">LSN</replaceable></term>
+    <listitem>
+     <para>
+	  Specify the target log sequence number to wait for.
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+	<term>INFINITELY</term>
+    <listitem>
+     <para>
+	  Wait until the target <acronym>LSN</> is replayed on standby.
+	  This is an optional parameter reinforcing the default behavior.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+   <varlistentry>
+	<term>TIMEOUT <replaceable class="PARAMETER">wait_time</replaceable></term>
+	<listitem>
+	 <para>
+	  Limit the time to wait for the LSN to be replayed.
+	  The specified <replaceable>wait_time</replaceable> must be an integer
+	  and is measured in milliseconds.
+	 </para>
+	</listitem>
+   </varlistentry>
+
+   <varlistentry>
+	<term>NOWAIT</term>
+	<listitem>
+	 <para>
+	  Report whether the target <acronym>LSN</> has been replayed already,
+	  without any waiting.
+	 </para>
+	</listitem>
+   </varlistentry>
+  </variablelist>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Run <literal>WAITLSN</> from <application>psql</application>,
+   limiting wait time to 10000 milliseconds:
+
+<screen>
+WAITLSN '0/3F07A6B1' TIMEOUT 10000;
+NOTICE:  LSN is not reached. Try to increase wait time.
+LSN reached
+-------------
+ f
+(1 row)
+</screen>
+  </para>
+
+  <para>
+   Wait until the specified <acronym>LSN</> is replayed:
+<screen>
+WAITLSN '0/3F07A611';
+LSN reached
+-------------
+ t
+(1 row)
+</screen>
+  </para>
+
+  <para>
+   Limit <acronym>LSN</> wait time to 500000 milliseconds, and then cancel the command:
+<screen>
+WAITLSN '0/3F0FF791' TIMEOUT 500000;
+^CCancel request sent
+NOTICE:  LSN is not reached. Try to increase wait time.
+ERROR:  canceling statement due to user request
+ LSN reached
+-------------
+ f
+(1 row)
+</screen>
+</para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>WAITLSN</command> statement in the SQL
+   standard.
+  </para>
+ </refsect1>
+</refentry>

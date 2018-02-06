@@ -40,6 +40,7 @@
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
 #include "commands/tablespace.h"
+#include "commands/waitlsn.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -7279,6 +7280,15 @@ StartupXLOG(void)
 				{
 					reachedStopPoint = true;
 					break;
+				}
+
+				/*
+				 * After update lastReplayedEndRecPtr set Latches in SHMEM array
+				 */
+				if (XLogCtl->lastReplayedEndRecPtr >= GetMinWaitLSN())
+				{
+
+					WaitLSNSetLatch(XLogCtl->lastReplayedEndRecPtr);
 				}
 
 				/* Else, try to fetch the next WAL record */

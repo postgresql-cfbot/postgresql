@@ -220,6 +220,13 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
 
      <para>
+      Full table scan is performed to check that no existing row
+      in the table has null values in given column.  It is possible to avoid
+      this scan by adding a valid <literal>CHECK</literal> constraint to
+      the table that would allow only NOT NULL values for given column.
+     </para>
+
+     <para>
       If this table is a partition, one cannot perform <literal>DROP NOT NULL</literal>
       on a column if it is marked <literal>NOT NULL</literal> in the parent
       table.  To drop the <literal>NOT NULL</literal> constraint from all the

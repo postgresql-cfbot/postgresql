@@ -106,7 +106,7 @@
  */
 
 /* We need four bytes per offset */
-#define MULTIXACT_OFFSETS_PER_PAGE (BLCKSZ / sizeof(MultiXactOffset))
+#define MULTIXACT_OFFSETS_PER_PAGE ((BLCKSZ - CHKSUMSZ) / sizeof(MultiXactOffset))
 
 #define MultiXactIdToOffsetPage(xid) \
 	((xid) / (MultiXactOffset) MULTIXACT_OFFSETS_PER_PAGE)
@@ -2039,7 +2039,6 @@ TrimMultiXact(void)
 	{
 		int			slotno;
 		MultiXactOffset *offptr;
-
 		slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, nextMXact);
 		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 		offptr += entryno;

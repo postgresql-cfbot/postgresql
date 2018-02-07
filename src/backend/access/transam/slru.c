@@ -58,7 +58,18 @@
 #include "storage/fd.h"
 #include "storage/shmem.h"
 #include "miscadmin.h"
+#include "utils/guc.h"
 
+#include "storage/checksum.h"
+#include "utils/memutils.h"
+
+/*
+ * GUC variable
+ * Set from backend:
+ * alter system set ignore_slru_checksum_failure = on/off;
+ * select pg_reload_conf();
+ */
+bool		ignore_slru_checksum_failure = true;
 
 #define SlruFileName(ctl, path, seg) \
 	snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir, seg)
@@ -376,6 +387,8 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 				  TransactionId xid)
 {
 	SlruShared	shared = ctl->shared;
+	int			checksum;
+	static char *pageCopy = NULL;
 
 	/* Outer loop handles restart if we must wait for someone else's I/O */
 	for (;;)
@@ -425,6 +438,22 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 
 		/* Do the read */
 		ok = SlruPhysicalReadPage(ctl, pageno, slotno);
+
+		if (pageCopy == NULL)
+			pageCopy = MemoryContextAlloc(TopMemoryContext, BLCKSZ);
+
+		memcpy(pageCopy, shared->page_buffer[slotno], BLCKSZ);
+
+		checksum = pg_getchecksum_slru_page(pageCopy);
+
+		if ( DataChecksumsEnabled() && (checksum != pg_checksum_slru_page(pageCopy) ))
+		{
+			elog(LOG, "CHECKSUM: Page Is not Verified.");
+			if (!ignore_slru_checksum_failure)
+			{
+				elog(ERROR, "CHECKSUM: ERROR ignore_slru_checksum_failure turned off.");
+			}
+		}
 
 		/* Set the LSNs for this newly read-in page to zero */
 		SimpleLruZeroLSNs(ctl, slotno);
@@ -538,6 +567,14 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruFlush fdata)
 
 	/* Release control lock while doing I/O */
 	LWLockRelease(shared->ControlLock);
+
+	/*
+	 * Calculate checksum of the page and write in the last 2 bytes of the page
+	 *
+	 * NOTE: it`s all done in checksum_impl.h : pg_checksum_slru_page()
+	 * you give there page and get page with updated checksum
+	 */
+	pg_checksum_slru_page(shared->page_buffer[slotno]);
 
 	/* Do the write */
 	ok = SlruPhysicalWritePage(ctl, pageno, slotno, fdata);

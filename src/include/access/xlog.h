@@ -292,6 +292,9 @@ extern void assign_checkpoint_completion_target(double newval, void *extra);
  * Routines to start, stop, and get status of a base backup.
  */
 
+/* Size of checksum in bytes default 2 bytes (uint16) */
+#define CHKSUMSZ 2
+
 /*
  * Session-level status of base backups
  *

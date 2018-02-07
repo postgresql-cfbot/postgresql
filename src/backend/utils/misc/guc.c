@@ -116,6 +116,7 @@ extern int	CommitSiblings;
 extern char *default_tablespace;
 extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
+extern bool ignore_slru_checksum_failure;
 extern bool synchronize_seqscans;
 
 #ifdef TRACE_SYNCSCAN
@@ -1022,6 +1023,20 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&ignore_checksum_failure,
 		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"ignore_slru_checksum_failure", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Continues processing after SLRU checksum failure."),
+			gettext_noop("Detection of a SLRU checksum failure normally causes PostgreSQL to "
+				"report an error. Setting ignore_slru_checksum_failure to true"
+						 "causes the system to ignore the failure (but still report a warning), and"
+						 "continue processing. This behavior could cause crashes or other serious"
+						 "problems. Only has an effect if checksums are enabled."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&ignore_slru_checksum_failure,
+		true,
 		NULL, NULL, NULL
 	},
 	{

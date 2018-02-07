@@ -8,7 +8,7 @@
  *	  in favor of a simple check for presorted input.
  *	  Take care to recurse on the smaller partition, to bound stack usage.
  *
- *	CAUTION: if you change this file, see also qsort.c, gen_qsort_tuple.pl
+ *	CAUTION: if you change this file, see also qsort_arg.c, qsort_template.h
  *
  *	src/port/qsort_arg.c
  */

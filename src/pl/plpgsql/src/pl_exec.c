@@ -3571,6 +3571,12 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	long		tcount;
 	int			rc;
 	PLpgSQL_expr *expr = stmt->sqlstmt;
+	int			too_many_rows_level = 0;
+
+	if (plpgsql_extra_errors & PLPGSQL_XCHECK_TOOMANYROWS)
+		too_many_rows_level = ERROR;
+	else if (plpgsql_extra_warnings & PLPGSQL_XCHECK_TOOMANYROWS)
+		too_many_rows_level = WARNING;
 
 	/*
 	 * On the first call for this statement generate the plan, and detect
@@ -3609,9 +3615,10 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 
 	/*
 	 * If we have INTO, then we only need one row back ... but if we have INTO
-	 * STRICT, ask for two rows, so that we can verify the statement returns
-	 * only one.  INSERT/UPDATE/DELETE are always treated strictly. Without
-	 * INTO, just run the statement to completion (tcount = 0).
+	 * STRICT or extra check too_many_rows, ask for two rows, so that we can
+	 * verify the statement returns only one.  INSERT/UPDATE/DELETE are always
+	 * treated strictly. Without INTO, just run the statement to completion
+	 * (tcount = 0).
 	 *
 	 * We could just ask for two rows always when using INTO, but there are
 	 * some cases where demanding the extra row costs significant time, eg by
@@ -3620,7 +3627,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	 */
 	if (stmt->into)
 	{
-		if (stmt->strict || stmt->mod_stmt)
+		if (stmt->strict || stmt->mod_stmt || too_many_rows_level >= WARNING)
 			tcount = 2;
 		else
 			tcount = 1;
@@ -3734,19 +3741,26 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 		}
 		else
 		{
-			if (n > 1 && (stmt->strict || stmt->mod_stmt))
+			if (n > 1 && (stmt->strict || stmt->mod_stmt || too_many_rows_level >= WARNING))
 			{
 				char	   *errdetail;
+				int			errlevel;
+				bool		use_errhint;
 
 				if (estate->func->print_strict_params)
 					errdetail = format_expr_params(estate, expr);
 				else
 					errdetail = NULL;
 
-				ereport(ERROR,
+				errlevel = stmt->strict || stmt->mod_stmt ? ERROR : too_many_rows_level;
+				use_errhint = !(stmt->strict || stmt->mod_stmt);
+
+				ereport(errlevel,
 						(errcode(ERRCODE_TOO_MANY_ROWS),
 						 errmsg("query returned more than one row"),
-						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0));
+						 errdetail ? errdetail_internal("parameters: %s", errdetail) : 0,
+						 use_errhint ? errhint("too_many_rows check of extra_%s is active.",
+									  too_many_rows_level == ERROR ? "errors" : "warnings") : 0));
 			}
 			/* Put the first result row into the target */
 			exec_move_row(estate, target, tuptab->vals[0], tuptab->tupdesc);
@@ -6007,6 +6021,12 @@ exec_move_row(PLpgSQL_execstate *estate,
 		int			t_natts;
 		int			fnum;
 		int			anum;
+		int			strict_multiassignment_level = 0;
+
+		if (plpgsql_extra_errors & PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT)
+			strict_multiassignment_level = ERROR;
+		else if (plpgsql_extra_warnings & PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT)
+			strict_multiassignment_level = WARNING;
 
 		if (HeapTupleIsValid(tup))
 			t_natts = HeapTupleHeaderGetNatts(tup->t_data);
@@ -6037,6 +6057,7 @@ exec_move_row(PLpgSQL_execstate *estate,
 					value = SPI_getbinval(tup, tupdesc, anum + 1, &isnull);
 				else
 				{
+					/* there are no data */
 					value = (Datum) 0;
 					isnull = true;
 				}
@@ -6050,10 +6071,35 @@ exec_move_row(PLpgSQL_execstate *estate,
 				isnull = true;
 				valtype = UNKNOWNOID;
 				valtypmod = -1;
+
+				if (strict_multiassignment_level >= WARNING)
+						ereport(strict_multiassignment_level,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+								 errmsg("Number of evaluated fields does not match expected."),
+								 errhint("strict_multi_assignement check of extra_%s is active.",
+									  strict_multiassignment_level == ERROR ? "errors" : "warnings")));
 			}
 
 			exec_assign_value(estate, (PLpgSQL_datum *) var,
 							  value, isnull, valtype, valtypmod);
+		}
+
+		/*
+		 * When stric_multiassignment extra check is active, then ensure so there
+		 * are not more unassigned columns.
+		 */
+		if (strict_multiassignment_level >= WARNING && anum < td_natts)
+		{
+			while (anum < td_natts &&
+				   TupleDescAttr(tupdesc, anum)->attisdropped)
+				anum++;			/* skip dropped column in tuple */
+
+			if (anum < td_natts)
+				ereport(strict_multiassignment_level,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("Number of evaluated fields does not match expected."),
+						 errhint("strict_multi_assignement check of extra_%s is active.",
+							  strict_multiassignment_level == ERROR ? "errors" : "warnings")));
 		}
 
 		return;

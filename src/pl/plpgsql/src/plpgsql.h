@@ -1039,7 +1039,9 @@ extern bool plpgsql_check_asserts;
 
 /* extra compile-time checks */
 #define PLPGSQL_XCHECK_NONE			0
-#define PLPGSQL_XCHECK_SHADOWVAR	1
+#define PLPGSQL_XCHECK_SHADOWVAR	(1 << 1)
+#define PLPGSQL_XCHECK_TOOMANYROWS	(1 << 2)
+#define PLPGSQL_XCHECK_STRICTMULTIASSIGNMENT	(1 << 3)
 #define PLPGSQL_XCHECK_ALL			((int) ~0)
 
 extern int	plpgsql_extra_warnings;

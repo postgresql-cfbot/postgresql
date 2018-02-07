@@ -3113,6 +3113,99 @@ select shadowtest(1);
  t
 (1 row)
 
+-- runtime extra checks
+set plpgsql.extra_warnings to 'too_many_rows';
+do $$
+declare x int;
+begin
+  select v from generate_series(1,2) g(v) into x;
+end;
+$$;
+WARNING:  query returned more than one row
+HINT:  too_many_rows check of extra_warnings is active.
+set plpgsql.extra_errors to 'too_many_rows';
+do $$
+declare x int;
+begin
+  select v from generate_series(1,2) g(v) into x;
+end;
+$$;
+ERROR:  query returned more than one row
+HINT:  too_many_rows check of extra_errors is active.
+CONTEXT:  PL/pgSQL function inline_code_block line 4 at SQL statement
+reset plpgsql.extra_errors;
+reset plpgsql.extra_warnings;
+set plpgsql.extra_warnings to 'strict_multi_assignment';
+do $$
+declare
+  x int;
+  y int;
+begin
+  select 1 into x, y;
+  select 1,2 into x, y;
+  select 1,2,3 into x, y;
+end
+$$;
+WARNING:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_warnings is active.
+WARNING:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_warnings is active.
+set plpgsql.extra_errors to 'strict_multi_assignment';
+do $$
+declare
+  x int;
+  y int;
+begin
+  select 1 into x, y;
+  select 1,2 into x, y;
+  select 1,2,3 into x, y;
+end
+$$;
+ERROR:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_errors is active.
+CONTEXT:  PL/pgSQL function inline_code_block line 6 at SQL statement
+create table test_01(a int, b int, c int);
+alter table test_01 drop column a;
+do $$
+declare
+  x int;
+  y int;
+begin
+  select * from test_01 into x, y; -- should be ok
+  raise notice 'ok';
+  select * from test_01 into x;    -- should to fail
+end;
+$$;
+NOTICE:  ok
+ERROR:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_errors is active.
+CONTEXT:  PL/pgSQL function inline_code_block line 8 at SQL statement
+do $$
+declare
+  t test_01;
+begin
+  select 1, 2 into t;  -- should be ok
+  raise notice 'ok';
+  select 1, 2, 3 into t; -- should fail;
+end;
+$$;
+NOTICE:  ok
+ERROR:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_errors is active.
+CONTEXT:  PL/pgSQL function inline_code_block line 7 at SQL statement
+do $$
+declare
+  t test_01;
+begin
+  select 1 into t; -- should fail;
+end;
+$$;
+ERROR:  Number of evaluated fields does not match expected.
+HINT:  strict_multi_assignement check of extra_errors is active.
+CONTEXT:  PL/pgSQL function inline_code_block line 5 at SQL statement
+drop table test_01;
+reset plpgsql.extra_errors;
+reset plpgsql.extra_warnings;
 -- test scrollable cursor support
 create function sc_test() returns setof integer as $$
 declare

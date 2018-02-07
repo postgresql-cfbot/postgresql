@@ -868,6 +868,10 @@ get_object_address(ObjectType objtype, Node *object,
 				}
 				break;
 			case OBJECT_DATABASE:
+				address.classId = DatabaseRelationId;
+				address.objectId = get_dbspec_oid((DbSpec *)object, missing_ok);
+				address.objectSubId = 0;
+				break;
 			case OBJECT_EXTENSION:
 			case OBJECT_TABLESPACE:
 			case OBJECT_ROLE:
@@ -2248,7 +2252,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_DATABASE:
 			if (!pg_database_ownercheck(address.objectId, roleid))
 				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
-							   strVal((Value *) object));
+							   get_dbspec_name((DbSpec *)object));
 			break;
 		case OBJECT_TYPE:
 		case OBJECT_DOMAIN:

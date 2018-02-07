@@ -187,3 +187,4 @@ test: hash_part
 test: indexing
 test: event_trigger
 test: stats
+test: dbname

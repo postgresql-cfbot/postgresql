@@ -31,14 +31,14 @@ ALTER DATABASE <replaceable class="parameter">name</replaceable> [ [ WITH ] <rep
 
 ALTER DATABASE <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 
-ALTER DATABASE <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_USER | SESSION_USER }
+ALTER DATABASE { <replaceable class="parameter">name</replaceable> | CURRENT_DATABASE } OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_USER | SESSION_USER }
 
 ALTER DATABASE <replaceable class="parameter">name</replaceable> SET TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
 
-ALTER DATABASE <replaceable class="parameter">name</replaceable> SET <replaceable>configuration_parameter</replaceable> { TO | = } { <replaceable>value</replaceable> | DEFAULT }
-ALTER DATABASE <replaceable class="parameter">name</replaceable> SET <replaceable>configuration_parameter</replaceable> FROM CURRENT
-ALTER DATABASE <replaceable class="parameter">name</replaceable> RESET <replaceable>configuration_parameter</replaceable>
-ALTER DATABASE <replaceable class="parameter">name</replaceable> RESET ALL
+ALTER DATABASE { <replaceable class="parameter">name</replaceable> | CURRENT_DATABASE } SET <replaceable>configuration_parameter</replaceable> { TO | = } { <replaceable>value</replaceable> | DEFAULT }
+ALTER DATABASE { <replaceable class="parameter">name</replaceable> | CURRENT_DATABASE } SET <replaceable>configuration_parameter</replaceable> FROM CURRENT
+ALTER DATABASE { <replaceable class="parameter">name</replaceable> | CURRENT_DATABASE } RESET <replaceable>configuration_parameter</replaceable>
+ALTER DATABASE { <replaceable class="parameter">name</replaceable> | CURRENT_DATABASE } RESET ALL
 </synopsis>
  </refsynopsisdiv>
 

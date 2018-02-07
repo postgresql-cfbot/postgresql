@@ -927,9 +927,9 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 	}
 
 	/* look up and lock the database, if specified */
-	if (stmt->database != NULL)
+	if (stmt->dbspec != NULL)
 	{
-		databaseid = get_database_oid(stmt->database, false);
+		databaseid = get_dbspec_oid(stmt->dbspec,false);
 		shdepLockAndCheckObject(DatabaseRelationId, databaseid);
 
 		if (!stmt->role)
@@ -940,11 +940,11 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 			 */
 			if (!pg_database_ownercheck(databaseid, GetUserId()))
 				aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_DATABASE,
-							   stmt->database);
+						get_dbspec_name(stmt->dbspec));
 		}
 	}
 
-	if (!stmt->role && !stmt->database)
+	if (!stmt->role && !stmt->dbspec)
 	{
 		/* Must be superuser to alter settings globally. */
 		if (!superuser())

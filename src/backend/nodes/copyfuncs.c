@@ -2937,6 +2937,18 @@ _copyTriggerTransition(const TriggerTransition *from)
 	return newnode;
 }
 
+static DbSpec *
+_copyDatabaseSpec(const DbSpec *from)
+{
+	DbSpec   *newnode = makeNode(DbSpec);
+
+	COPY_SCALAR_FIELD(dbtype);
+	COPY_STRING_FIELD(dbname);
+	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
 static Query *
 _copyQuery(const Query *from)
 {
@@ -3761,7 +3773,7 @@ _copyAlterDatabaseStmt(const AlterDatabaseStmt *from)
 {
 	AlterDatabaseStmt *newnode = makeNode(AlterDatabaseStmt);
 
-	COPY_STRING_FIELD(dbname);
+	COPY_NODE_FIELD(dbspec);
 	COPY_NODE_FIELD(options);
 
 	return newnode;
@@ -3772,7 +3784,7 @@ _copyAlterDatabaseSetStmt(const AlterDatabaseSetStmt *from)
 {
 	AlterDatabaseSetStmt *newnode = makeNode(AlterDatabaseSetStmt);
 
-	COPY_STRING_FIELD(dbname);
+	COPY_NODE_FIELD(dbspec);
 	COPY_NODE_FIELD(setstmt);
 
 	return newnode;
@@ -4251,7 +4263,7 @@ _copyAlterRoleSetStmt(const AlterRoleSetStmt *from)
 	AlterRoleSetStmt *newnode = makeNode(AlterRoleSetStmt);
 
 	COPY_NODE_FIELD(role);
-	COPY_STRING_FIELD(database);
+	COPY_NODE_FIELD(dbspec);
 	COPY_NODE_FIELD(setstmt);
 
 	return newnode;
@@ -5578,7 +5590,9 @@ copyObjectImpl(const void *from)
 		case T_PartitionCmd:
 			retval = _copyPartitionCmd(from);
 			break;
-
+		case T_DbSpec:
+			retval = _copyDatabaseSpec(from);
+			break;
 			/*
 			 * MISCELLANEOUS NODES
 			 */

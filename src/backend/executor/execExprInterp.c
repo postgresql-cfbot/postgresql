@@ -2320,6 +2320,7 @@ ExecEvalSQLValueFunction(ExprState *state, ExprEvalStep *op)
 			*op->resnull = fcinfo.isnull;
 			break;
 		case SVFOP_CURRENT_CATALOG:
+		case SVFOP_CURRENT_DATABASE:
 			InitFunctionCallInfoData(fcinfo, NULL, 0, InvalidOid, NULL, NULL);
 			*op->resvalue = current_database(&fcinfo);
 			*op->resnull = fcinfo.isnull;

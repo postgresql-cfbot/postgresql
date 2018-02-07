@@ -146,6 +146,15 @@ ALTER ROLE "Public" RESET application_name;
 ALTER ROLE ALL RESET application_name;
 SELECT * FROM chksetconfig();
 
+--  ALTER ROLE IN DATABASE CURRENT_DATABASE SET/RESET
+ALTER ROLE CURRENT_USER IN DATABASE CURRENT_DATABASE SET application_name to 'FOO';
+ALTER ROLE "current_user" IN DATABASE CURRENT_DATABASE SET application_name to 'FOOFOO';
+ALTER ROLE "Public" IN DATABASE CURRENT_DATABASE SET application_name to 'BARBAR';
+SELECT * FROM chksetconfig();
+ALTER ROLE CURRENT_USER IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER ROLE "current_user" IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER ROLE "Public" IN DATABASE CURRENT_DATABASE RESET application_name;
+SELECT * FROM chksetconfig();
 
 ALTER ROLE CURRENT_ROLE SET application_name to 'BAZ'; -- error
 ALTER ROLE USER SET application_name to 'BOOM'; -- error
@@ -169,6 +178,16 @@ ALTER USER "Public" RESET application_name;
 ALTER USER ALL RESET application_name;
 SELECT * FROM chksetconfig();
 
+
+--  ALTER USER IN DATABASE CURRENT_DATABASE SET/RESET
+ALTER USER SESSION_USER IN DATABASE CURRENT_DATABASE SET application_name to 'BAR';
+ALTER USER "current_user" IN DATABASE CURRENT_DATABASE SET application_name to 'FOOFOO';
+ALTER USER "Public" IN DATABASE CURRENT_DATABASE SET application_name to 'BARBAR';
+SELECT * FROM chksetconfig();
+ALTER USER SESSION_USER IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER USER "current_user" IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER USER "Public" IN DATABASE CURRENT_DATABASE RESET application_name;
+SELECT * FROM chksetconfig();
 
 ALTER USER CURRENT_USER SET application_name to 'BAZ'; -- error
 ALTER USER USER SET application_name to 'BOOM'; -- error

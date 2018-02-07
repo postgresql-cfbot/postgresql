@@ -1,0 +1,113 @@
+CREATE ROLE dbuser1 with LOGIN;
+CREATE ROLE dbuser2 with SUPERUSER LOGIN;
+CREATE ROLE dbuser3 with SUPERUSER LOGIN;
+DROP DATABASE IF EXISTS db1;
+NOTICE:  database "db1" does not exist, skipping
+CREATE DATABASE db1 with owner=dbuser1;
+CREATE DATABASE "current_database" with owner=dbuser1;
+CREATE DATABASE current_database with owner=dbuser1;
+ERROR:  CURRENT_DATABASE cannot be used as a database name here
+LINE 1: CREATE DATABASE current_database with owner=dbuser1;
+                        ^
+SELECT d.datname as "Name",
+       pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  	JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+WHERE d.datname='current_database' or d.datname='db1'
+ORDER BY 1;
+       Name       | Description 
+------------------+-------------
+ current_database | 
+ db1              | 
+(2 rows)
+
+\c db1;
+SELECT CURRENT_DATABASE;
+ current_database 
+------------------
+ db1
+(1 row)
+
+COMMENT ON DATABASE current_database IS 'db1';
+COMMENT ON DATABASE "current_database" IS 'db2';
+SELECT d.datname as "Name",
+       pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  	JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+WHERE d.datname='current_database' or d.datname='db1'
+ORDER BY 1;
+       Name       | Description 
+------------------+-------------
+ current_database | db2
+ db1              | db1
+(2 rows)
+
+-- test alter owner
+ALTER DATABASE current_database OWNER to dbuser2; 
+ALTER DATABASE "current_database" OWNER to dbuser2;
+SELECT d.datname as "Name",
+       pg_catalog.pg_get_userbyid(d.datdba) as "Owner",
+       pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  	JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+WHERE d.datname='current_database' or d.datname='db1'
+ORDER BY 1;
+       Name       |  Owner  | Description 
+------------------+---------+-------------
+ current_database | dbuser2 | db2
+ db1              | dbuser2 | db1
+(2 rows)
+
+-- test alter database tablespace
+ALTER DATABASE current_database SET TABLESPACE pg_default;
+ERROR:  cannot change the tablespace of the currently open database
+ALTER DATABASE "current_database" SET TABLESPACE pg_default;
+-- test alter database rename
+ALTER DATABASE current_database rename to db2;
+ERROR:  CURRENT_DATABASE cannot be used as a database name here
+LINE 1: ALTER DATABASE current_database rename to db2;
+                       ^
+COMMENT ON DATABASE "current_database" IS 'changed from current_database';
+ALTER DATABASE "current_database" rename to db2;
+ALTER DATABASE db2 rename to current_database;
+ERROR:  CURRENT_DATABASE cannot be used as a database name here
+LINE 1: ALTER DATABASE db2 rename to current_database;
+                                     ^
+SELECT d.datname as "Name",
+       pg_catalog.shobj_description(d.oid, 'pg_database') as "Description"
+FROM pg_catalog.pg_database d
+  	JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid
+WHERE d.datname='current_database' or d.datname='db1' or d.datname='db2'
+ORDER BY 1;
+ Name |          Description          
+------+-------------------------------
+ db1  | db1
+ db2  | changed from current_database
+(2 rows)
+
+-- test alter database set parameter
+ALTER DATABASE current_database SET parallel_tuple_cost=0.3;
+\c db1
+show parallel_tuple_cost;
+ parallel_tuple_cost 
+---------------------
+ 0.3
+(1 row)
+
+ALTER DATABASE current_database RESET parallel_tuple_cost;
+\c db1
+show parallel_tuple_cost;
+ parallel_tuple_cost 
+---------------------
+ 0.1
+(1 row)
+
+-- clean up
+\c postgres
+DROP DATABASE IF EXISTS "current_database";
+NOTICE:  database "current_database" does not exist, skipping
+DROP DATABASE IF EXISTS db1;
+DROP DATABASE IF EXISTS db2;
+DROP ROLE dbuser1;
+DROP ROLE dbuser2;
+DROP ROLE dbuser3;

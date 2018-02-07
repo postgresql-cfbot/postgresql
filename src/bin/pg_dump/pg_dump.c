@@ -366,6 +366,7 @@ main(int argc, char **argv)
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
 		{"no-sync", no_argument, NULL, 7},
+                {"lock-early", no_argument, &dopt.lock_early, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -607,6 +608,15 @@ main(int argc, char **argv)
 	if (dopt.if_exists && !dopt.outputClean)
 		exit_horribly(NULL, "option --if-exists requires option -c/--clean\n");
 
+        /* Basic checks for lock-early logic */
+        if( numWorkers <= 1 )
+        {
+           if( dopt.lock_early )
+           {
+               exit_horribly(NULL, "lock early only works for parallel backup\n" );
+           }
+        }        
+        
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
 
@@ -936,6 +946,8 @@ help(const char *progname)
 	printf(_("  -F, --format=c|d|t|p         output file format (custom, directory, tar,\n"
 			 "                               plain text (default))\n"));
 	printf(_("  -j, --jobs=NUM               use this many parallel jobs to dump\n"));
+	printf(_("      --lock-early             issue shared locks as early as possible for all\n"
+                         "                                tables on all parallel backup workers\n" ));                   
 	printf(_("  -v, --verbose                verbose mode\n"));
 	printf(_("  -V, --version                output version information, then exit\n"));
 	printf(_("  -Z, --compress=0-9           compression level for compressed formats\n"));

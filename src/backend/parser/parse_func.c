@@ -2289,6 +2289,9 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 		case EXPR_KIND_PARTITION_EXPRESSION:
 			err = _("set-returning functions are not allowed in partition key expressions");
 			break;
+		case EXPR_KIND_PARTITION_BOUNDS:
+			err = _("set-returning functions are not allowed in partition bounds value");
+			break;
 		case EXPR_KIND_CALL:
 			err = _("set-returning functions are not allowed in CALL arguments");
 			break;

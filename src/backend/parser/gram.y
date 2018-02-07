@@ -2790,9 +2790,7 @@ hash_partbound:
 		;
 
 partbound_datum:
-			Sconst			{ $$ = makeStringConst($1, @1); }
-			| NumericOnly	{ $$ = makeAConst($1, @1); }
-			| NULL_P		{ $$ = makeNullAConst(@1); }
+		AexprConst			{ $$ = $1; }
 		;
 
 partbound_datum_list:

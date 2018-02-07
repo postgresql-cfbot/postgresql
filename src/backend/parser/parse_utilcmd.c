@@ -134,7 +134,7 @@ static void transformColumnType(CreateStmtContext *cxt, ColumnDef *column);
 static void setSchemaName(char *context_schema, char **stmt_schema_name);
 static void transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd);
 static void validateInfiniteBounds(ParseState *pstate, List *blist);
-static Const *transformPartitionBoundValue(ParseState *pstate, A_Const *con,
+static Const *transformPartitionBoundValue(ParseState *pstate, Node *con,
 							 const char *colName, Oid colType, int32 colTypmod);
 
 
@@ -3420,12 +3420,12 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 		result_spec->listdatums = NIL;
 		foreach(cell, spec->listdatums)
 		{
-			A_Const    *con = castNode(A_Const, lfirst(cell));
+			Node	   *expr = (Node *)lfirst (cell);
 			Const	   *value;
 			ListCell   *cell2;
 			bool		duplicate;
 
-			value = transformPartitionBoundValue(pstate, con,
+			value = transformPartitionBoundValue(pstate, expr,
 												 colname, coltype, coltypmod);
 
 			/* Don't add to the result if the value is a duplicate */
@@ -3486,7 +3486,6 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 			char	   *colname;
 			Oid			coltype;
 			int32		coltypmod;
-			A_Const    *con;
 			Const	   *value;
 
 			/* Get the column's name in case we need to output an error */
@@ -3507,8 +3506,8 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 
 			if (ldatum->value)
 			{
-				con = castNode(A_Const, ldatum->value);
-				value = transformPartitionBoundValue(pstate, con,
+				value = transformPartitionBoundValue(pstate,
+													 ldatum->value,
 													 colname,
 													 coltype, coltypmod);
 				if (value->constisnull)
@@ -3521,8 +3520,8 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 
 			if (rdatum->value)
 			{
-				con = castNode(A_Const, rdatum->value);
-				value = transformPartitionBoundValue(pstate, con,
+				value = transformPartitionBoundValue(pstate,
+													 rdatum->value,
 													 colname,
 													 coltype, coltypmod);
 				if (value->constisnull)
@@ -3591,13 +3590,13 @@ validateInfiniteBounds(ParseState *pstate, List *blist)
  * Transform one constant in a partition bound spec
  */
 static Const *
-transformPartitionBoundValue(ParseState *pstate, A_Const *con,
+transformPartitionBoundValue(ParseState *pstate, Node *val,
 							 const char *colName, Oid colType, int32 colTypmod)
 {
 	Node	   *value;
 
 	/* Make it into a Const */
-	value = (Node *) make_const(pstate, &con->val, con->location);
+	value = transformExpr(pstate, val, EXPR_KIND_PARTITION_BOUNDS);
 
 	/* Coerce to correct type */
 	value = coerce_to_target_type(pstate,
@@ -3613,7 +3612,7 @@ transformPartitionBoundValue(ParseState *pstate, A_Const *con,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
 				 errmsg("specified value cannot be cast to type %s for column \"%s\"",
 						format_type_be(colType), colName),
-				 parser_errposition(pstate, con->location)));
+				 parser_errposition(pstate, exprLocation(val))));
 
 	/* Simplify the expression, in case we had a coercion */
 	if (!IsA(value, Const))
@@ -3627,7 +3626,7 @@ transformPartitionBoundValue(ParseState *pstate, A_Const *con,
 						format_type_be(colType), colName),
 				 errdetail("The cast requires a non-immutable conversion."),
 				 errhint("Try putting the literal value in single quotes."),
-				 parser_errposition(pstate, con->location)));
+				 parser_errposition(pstate, exprLocation(val))));
 
 	return (Const *) value;
 }

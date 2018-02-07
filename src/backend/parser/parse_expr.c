@@ -1846,6 +1846,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_PARTITION_EXPRESSION:
 			err = _("cannot use subquery in partition key expression");
 			break;
+		case EXPR_KIND_PARTITION_BOUNDS:
+			err = _("cannot use subquery in partition bounds value");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -3468,6 +3471,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "WHEN";
 		case EXPR_KIND_PARTITION_EXPRESSION:
 			return "PARTITION BY";
+		case EXPR_KIND_PARTITION_BOUNDS:
+			return "partition bounds";
 		case EXPR_KIND_CALL:
 			return "CALL";
 

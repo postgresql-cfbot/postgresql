@@ -27,6 +27,7 @@
 #include "parser/parse_type.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/hashutils.h"
 #include "utils/resowner_private.h"
 #include "utils/syscache.h"
@@ -176,6 +177,24 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 			}
 		}
 
+		if((cpy->num_missing = constr->num_missing) > 0)
+		{
+			cpy->missing = (AttrMissing *) palloc(cpy->num_missing * sizeof(AttrMissing));
+			memcpy(cpy->missing, constr->missing, cpy->num_missing * sizeof(AttrMissing));
+			for (i = cpy->num_missing - 1; i >= 0; i--)
+			{
+				if (constr->missing[i].ammissing)
+				{
+					int			attnum = constr->missing[i].amnum - 1;
+					Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum);
+
+					cpy->missing[i].ammissing = datumCopy(constr->missing[i].ammissing,
+														  attr->attbyval,
+														  attr->attlen);
+				}
+			}
+		}
+
 		if ((cpy->num_check = constr->num_check) > 0)
 		{
 			cpy->check = (ConstrCheck *) palloc(cpy->num_check * sizeof(ConstrCheck));
@@ -308,6 +327,20 @@ FreeTupleDesc(TupleDesc tupdesc)
 					pfree(attrdef[i].adbin);
 			}
 			pfree(attrdef);
+		}
+		if (tupdesc->constr->num_missing > 0)
+		{
+			AttrMissing *attrmiss = tupdesc->constr->missing;
+
+			Assert(attrmiss != NULL);
+
+			for (i = tupdesc->constr->num_missing - 1; i >= 0; i--)
+			{
+				if (attrmiss[i].ammissing
+					&& !TupleDescAttr(tupdesc, attrmiss[i].amnum - 1)->attbyval)
+					pfree(DatumGetPointer(attrmiss[i].ammissing));
+			}
+			pfree(attrmiss);
 		}
 		if (tupdesc->constr->num_check > 0)
 		{
@@ -469,6 +502,35 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			if (strcmp(defval1->adbin, defval2->adbin) != 0)
 				return false;
 		}
+		n = constr1->num_missing;
+		if (n != (int) constr2->num_missing)
+			return false;
+		for (i = 0; i < n; i++)
+		{
+			AttrMissing *missval1 = constr1->missing + i;
+			AttrMissing *missval2 = constr2->missing;
+
+			/* Similar logic to that used for defaults  */
+			for (j = 0; j < n; missval2++, j++)
+			{
+				if (missval1->amnum == missval2->amnum)
+					break;
+			}
+			if (j >= n)
+				return false;
+			if (missval1->ammissingNull != missval2->ammissingNull)
+				return false;
+			if (missval1->ammissing && missval2->ammissing)
+			{
+				Form_pg_attribute missatt1 = TupleDescAttr(tupdesc1, missval1->amnum - 1);
+
+				if (!datumIsEqual(missval1->ammissing, missval2->ammissing,
+								  missatt1->attbyval, missatt1->attlen))
+					return false;
+			}
+			else if (missval1->ammissing || missval2->ammissing)
+				return false;
+		}
 		n = constr1->num_check;
 		if (n != (int) constr2->num_check)
 			return false;
@@ -584,6 +646,7 @@ TupleDescInitEntry(TupleDesc desc,
 
 	att->attnotnull = false;
 	att->atthasdef = false;
+	att->atthasmissing = false;
 	att->attidentity = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
@@ -797,7 +860,9 @@ BuildDescForRelation(List *schema)
 
 		constr->has_not_null = true;
 		constr->defval = NULL;
+		constr->missing = NULL;
 		constr->num_defval = 0;
+		constr->num_missing = 0;
 		constr->check = NULL;
 		constr->num_check = 0;
 		desc->constr = constr;

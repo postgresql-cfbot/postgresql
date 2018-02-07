@@ -76,6 +76,116 @@
  * ----------------------------------------------------------------
  */
 
+/*
+ * Return the missing value of an attribute, or NULL if it
+ * there is no missing value.
+ */
+static Datum
+getmissingattr(TupleDesc tupleDesc,
+			   int attnum, bool *isnull)
+{
+	int			missingnum;
+	Form_pg_attribute att;
+	AttrMissing *attrmiss;
+
+	Assert(attnum <= tupleDesc->natts);
+	Assert(attnum > 0);
+
+	att = TupleDescAttr(tupleDesc, attnum - 1);
+
+	if (att->atthasmissing)
+	{
+		Assert(tupleDesc->constr);
+		Assert(tupleDesc->constr->num_missing > 0);
+
+		attrmiss = tupleDesc->constr->missing;
+
+		/*
+		 * Look through the tupledesc's attribute missing values
+		 * for the one that corresponds to this attribute.
+		 */
+		for (missingnum = tupleDesc->constr->num_missing - 1;
+			 missingnum >= 0; missingnum--)
+		{
+			if (attrmiss[missingnum].amnum == attnum)
+			{
+				if (attrmiss[missingnum].ammissingNull)
+				{
+					*isnull = true;
+					return (Datum) 0;
+				}
+				else
+				{
+					*isnull = false;
+					return attrmiss[missingnum].ammissing;
+				}
+			}
+		}
+		Assert(false); /* should not be able to get here */
+	}
+
+	*isnull = true;
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Fill in missing values for a TupleTableSlot
+ */
+static void
+slot_getmissingattrs(TupleTableSlot *slot, int startAttNum)
+{
+	int			tdesc_natts = slot->tts_tupleDescriptor->natts;
+	AttrMissing *attrmiss;
+	int			missingnum;
+	int         missattnum;
+	int         i;
+
+	if (slot->tts_tupleDescriptor->constr)
+	{
+		missingnum = slot->tts_tupleDescriptor->constr->num_missing -1;
+		attrmiss = slot->tts_tupleDescriptor->constr->missing;
+	}
+	else
+	{
+		missingnum = -1;
+		attrmiss = NULL;
+	}
+
+	for (missattnum = tdesc_natts - 1; missattnum >= startAttNum; missattnum--)
+	{
+		/*
+		 * Loop through the list of missing attributes (if any) looking for
+		 * a corresponding entry. Don't assume that the missing values
+		 * are in attribute order.
+		 */
+		for (i = missingnum; i >= 0; i--)
+		{
+			Assert(attrmiss != NULL);
+			if (attrmiss[i].amnum - 1 == missattnum)
+			{
+				if (attrmiss[i].ammissingNull)
+				{
+					slot->tts_values[missattnum] = PointerGetDatum(NULL);
+					slot->tts_isnull[missattnum] = true;
+				}
+				else
+				{
+					slot->tts_values[missattnum] = attrmiss[i].ammissing;
+					slot->tts_isnull[missattnum] = false;
+				}
+				break;
+			}
+		}
+		/*
+		 * If there is no corresponding missing entry use NULL.
+		 */
+		if (i < 0)
+		{
+			slot->tts_values[missattnum] = PointerGetDatum(NULL);
+			slot->tts_isnull[missattnum] = true;
+		}
+	}
+}
 
 /*
  * heap_compute_data_size
@@ -133,6 +243,131 @@ heap_compute_data_size(TupleDesc tupleDesc,
 }
 
 /*
+ * Fill in one attribute, either a data value or a bit in the null bitmask
+ */
+static inline void
+fill_val(Form_pg_attribute att,
+		 bits8 **bit,
+		 int *bitmask,
+		 char **dataP,
+		 uint16 *infomask,
+		 Datum datum,
+		 bool isnull)
+{
+	Size		data_length;
+	char	   *data = *dataP;
+
+	/*
+	 * If we're building a null bitmap, set the appropriate bit for the
+	 * current column value here.
+	 */
+	if (bit != NULL)
+	{
+		if (*bitmask != HIGHBIT)
+			*bitmask <<= 1;
+		else
+		{
+			*bit += 1;
+			**bit = 0x0;
+			*bitmask = 1;
+		}
+
+		if (isnull)
+		{
+			*infomask |= HEAP_HASNULL;
+			return;
+		}
+
+		**bit |= *bitmask;
+	}
+
+	Assert(att);
+
+	/*
+	 * XXX we use the att_align macros on the pointer value itself, not on an
+	 * offset.  This is a bit of a hack.
+	 */
+	if (att->attbyval)
+	{
+		/* pass-by-value */
+		data = (char *) att_align_nominal(data, att->attalign);
+		store_att_byval(data, datum, att->attlen);
+		data_length = att->attlen;
+	}
+	else if (att->attlen == -1)
+	{
+		/* varlena */
+		Pointer		val = DatumGetPointer(datum);
+
+		*infomask |= HEAP_HASVARWIDTH;
+		if (VARATT_IS_EXTERNAL(val))
+		{
+			if (VARATT_IS_EXTERNAL_EXPANDED(val))
+			{
+				/*
+				 * we want to flatten the expanded value so that the
+				 * constructed tuple doesn't depend on it
+				 */
+				ExpandedObjectHeader *eoh = DatumGetEOHP(datum);
+
+				data = (char *) att_align_nominal(data,
+												  att->attalign);
+				data_length = EOH_get_flat_size(eoh);
+				EOH_flatten_into(eoh, data, data_length);
+			}
+			else
+			{
+				*infomask |= HEAP_HASEXTERNAL;
+				/* no alignment, since it's short by definition */
+				data_length = VARSIZE_EXTERNAL(val);
+				memcpy(data, val, data_length);
+			}
+		}
+		else if (VARATT_IS_SHORT(val))
+		{
+			/* no alignment for short varlenas */
+			data_length = VARSIZE_SHORT(val);
+			memcpy(data, val, data_length);
+		}
+		else if (VARLENA_ATT_IS_PACKABLE(att) &&
+				 VARATT_CAN_MAKE_SHORT(val))
+		{
+			/* convert to short varlena -- no alignment */
+			data_length = VARATT_CONVERTED_SHORT_SIZE(val);
+			SET_VARSIZE_SHORT(data, data_length);
+			memcpy(data + 1, VARDATA(val), data_length - 1);
+		}
+		else
+		{
+			/* full 4-byte header varlena */
+			data = (char *) att_align_nominal(data,
+											  att->attalign);
+			data_length = VARSIZE(val);
+			memcpy(data, val, data_length);
+		}
+	}
+	else if (att->attlen == -2)
+	{
+		/* cstring ... never needs alignment */
+		*infomask |= HEAP_HASVARWIDTH;
+		Assert(att->attalign == 'c');
+		data_length = strlen(DatumGetCString(datum)) + 1;
+		memcpy(data, DatumGetPointer(datum), data_length);
+	}
+	else
+	{
+		/* fixed-length pass-by-reference */
+		data = (char *) att_align_nominal(data, att->attalign);
+		Assert(att->attlen > 0);
+		data_length = att->attlen;
+		memcpy(data, DatumGetPointer(datum), data_length);
+	}
+
+	data += data_length;
+	*dataP = data;
+}
+
+/*
  * heap_fill_tuple
  *		Load data portion of a tuple from values/isnull arrays
  *
@@ -172,111 +407,15 @@ heap_fill_tuple(TupleDesc tupleDesc,
 
 	for (i = 0; i < numberOfAttributes; i++)
 	{
-		Form_pg_attribute att = TupleDescAttr(tupleDesc, i);
-		Size		data_length;
+		Form_pg_attribute attr = TupleDescAttr(tupleDesc, i);
 
-		if (bit != NULL)
-		{
-			if (bitmask != HIGHBIT)
-				bitmask <<= 1;
-			else
-			{
-				bitP += 1;
-				*bitP = 0x0;
-				bitmask = 1;
-			}
-
-			if (isnull[i])
-			{
-				*infomask |= HEAP_HASNULL;
-				continue;
-			}
-
-			*bitP |= bitmask;
-		}
-
-		/*
-		 * XXX we use the att_align macros on the pointer value itself, not on
-		 * an offset.  This is a bit of a hack.
-		 */
-
-		if (att->attbyval)
-		{
-			/* pass-by-value */
-			data = (char *) att_align_nominal(data, att->attalign);
-			store_att_byval(data, values[i], att->attlen);
-			data_length = att->attlen;
-		}
-		else if (att->attlen == -1)
-		{
-			/* varlena */
-			Pointer		val = DatumGetPointer(values[i]);
-
-			*infomask |= HEAP_HASVARWIDTH;
-			if (VARATT_IS_EXTERNAL(val))
-			{
-				if (VARATT_IS_EXTERNAL_EXPANDED(val))
-				{
-					/*
-					 * we want to flatten the expanded value so that the
-					 * constructed tuple doesn't depend on it
-					 */
-					ExpandedObjectHeader *eoh = DatumGetEOHP(values[i]);
-
-					data = (char *) att_align_nominal(data,
-													  att->attalign);
-					data_length = EOH_get_flat_size(eoh);
-					EOH_flatten_into(eoh, data, data_length);
-				}
-				else
-				{
-					*infomask |= HEAP_HASEXTERNAL;
-					/* no alignment, since it's short by definition */
-					data_length = VARSIZE_EXTERNAL(val);
-					memcpy(data, val, data_length);
-				}
-			}
-			else if (VARATT_IS_SHORT(val))
-			{
-				/* no alignment for short varlenas */
-				data_length = VARSIZE_SHORT(val);
-				memcpy(data, val, data_length);
-			}
-			else if (VARLENA_ATT_IS_PACKABLE(att) &&
-					 VARATT_CAN_MAKE_SHORT(val))
-			{
-				/* convert to short varlena -- no alignment */
-				data_length = VARATT_CONVERTED_SHORT_SIZE(val);
-				SET_VARSIZE_SHORT(data, data_length);
-				memcpy(data + 1, VARDATA(val), data_length - 1);
-			}
-			else
-			{
-				/* full 4-byte header varlena */
-				data = (char *) att_align_nominal(data,
-												  att->attalign);
-				data_length = VARSIZE(val);
-				memcpy(data, val, data_length);
-			}
-		}
-		else if (att->attlen == -2)
-		{
-			/* cstring ... never needs alignment */
-			*infomask |= HEAP_HASVARWIDTH;
-			Assert(att->attalign == 'c');
-			data_length = strlen(DatumGetCString(values[i])) + 1;
-			memcpy(data, DatumGetPointer(values[i]), data_length);
-		}
-		else
-		{
-			/* fixed-length pass-by-reference */
-			data = (char *) att_align_nominal(data, att->attalign);
-			Assert(att->attlen > 0);
-			data_length = att->attlen;
-			memcpy(data, DatumGetPointer(values[i]), data_length);
-		}
-
-		data += data_length;
+		fill_val(attr,
+				 bitP ? &bitP : NULL,
+				 &bitmask,
+				 &data,
+				 infomask,
+				 values ? values[i] : PointerGetDatum(NULL),
+				 isnull ? isnull[i] : true);
 	}
 
 	Assert((data - start) == data_size);
@@ -293,10 +432,27 @@ heap_fill_tuple(TupleDesc tupleDesc,
  * ----------------
  */
 bool
-heap_attisnull(HeapTuple tup, int attnum)
+heap_attisnull(HeapTuple tup, int attnum, TupleDesc tupleDesc)
 {
+	/*
+	 * We allow a NULL tupledesc for relations not expected to have
+	 * missing values, such as catalog relations and indexes.
+	 */
+	Assert(!tupleDesc || attnum <= tupleDesc->natts);
+
 	if (attnum > (int) HeapTupleHeaderGetNatts(tup->t_data))
-		return true;
+	{
+		if (tupleDesc &&
+			attnum <= tupleDesc->natts &&
+			TupleDescAttr(tupleDesc, attnum - 1)->atthasmissing)
+		{
+			return false;
+		}
+		else
+		{
+			return true;
+		}
+	}
 
 	if (attnum > 0)
 	{
@@ -647,6 +803,293 @@ heap_copytuple_with_tuple(HeapTuple src, HeapTuple dest)
 	dest->t_tableOid = src->t_tableOid;
 	dest->t_data = (HeapTupleHeader) palloc(src->t_len);
 	memcpy((char *) dest->t_data, (char *) src->t_data, src->t_len);
+}
+
+/*
+ * Expand a tuple with missing values, or NULLs. The source tuple must have
+ * less attributes than the required number. Only one of targetHeapTuple
+ * and targetMinimalTuple may be supplied. The other argument must be NULL.
+ */
+static void
+expand_tuple(HeapTuple *targetHeapTuple,
+			 MinimalTuple *targetMinimalTuple,
+			 HeapTuple sourceTuple,
+			 TupleDesc tupleDesc)
+{
+	AttrMissing *attrmiss = NULL;
+	int			attnum;
+	int			missingnum;
+	int			firstmissingnum = 0;
+	int			num_missing = 0;
+	bool		hasNulls = HeapTupleHasNulls(sourceTuple);
+	HeapTupleHeader targetTHeader;
+	HeapTupleHeader sourceTHeader = sourceTuple->t_data;
+	int			sourceNatts = HeapTupleHeaderGetNatts(sourceTHeader);
+	int			natts = tupleDesc->natts;
+	int			sourceIndicatorLen;
+	int			targetIndicatorLen;
+	Size		sourceDataLen = sourceTuple->t_len - sourceTHeader->t_hoff;
+	Size		targetDataLen;
+	Size		len;
+	int			hoff;
+	bits8	   *nullBits = NULL;
+	int			bitMask = 0;
+	char	   *targetData;
+	uint16	   *infoMask;
+
+	Assert((targetHeapTuple && !targetMinimalTuple)
+		   || (!targetHeapTuple && targetMinimalTuple));
+
+	Assert(sourceNatts < natts);
+
+	sourceIndicatorLen = (hasNulls ? BITMAPLEN(sourceNatts) : 0);
+
+	targetDataLen = sourceDataLen;
+
+	if (tupleDesc->constr &&
+		tupleDesc->constr->num_missing)
+	{
+		/*
+		 * If there are missing values we want to put them into the tuple.
+		 * Before that we have to compute the extra length for the values
+		 * array and the variable length data.
+		 */
+		num_missing = tupleDesc->constr->num_missing;
+		attrmiss = tupleDesc->constr->missing;
+
+		/*
+		 * Find the first item in attrmiss for which we don't have a value in
+		 * the source (i.e. where its amnum is > sourceNatts). We can ignore
+		 * all the missing entries before that.
+		 */
+		for (firstmissingnum = 0;
+			 firstmissingnum < num_missing
+			 && attrmiss[firstmissingnum].amnum <= sourceNatts;
+			 firstmissingnum++)
+		{						/* empty */
+		}
+
+		/*
+		 * If there are no more missing values everything else must be
+		 * NULL
+		 */
+		if (firstmissingnum >= num_missing)
+		{
+			hasNulls = true;
+		}
+
+		/*
+		 * Now walk the missing attributes one by one. If there is a
+		 * missing value make space for it. Otherwise, it's going to be NULL.
+		 */
+		for (attnum = sourceNatts + 1;
+			 attnum <= natts;
+			 attnum++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupleDesc, attnum - 1);
+
+			for (missingnum = firstmissingnum; missingnum < num_missing; missingnum++)
+			{
+
+				/*
+				 * If there is a missing value for this attribute calculate
+				 * the required space if it's not NULL.
+				 */
+				if (attrmiss[missingnum].amnum == attnum)
+				{
+					if (attrmiss[missingnum].ammissingNull)
+						hasNulls = true;
+					else
+					{
+						targetDataLen = att_align_datum(targetDataLen,
+														att->attalign,
+														att->attlen,
+														attrmiss[missingnum].ammissing);
+
+						targetDataLen = att_addlength_pointer(targetDataLen,
+															  att->attlen,
+															  attrmiss[missingnum].ammissing);
+					}
+					break;
+				}
+			}
+			if (missingnum > num_missing)
+			{
+				/* there is no missing value for this attribute */
+				hasNulls = true;
+			}
+		}
+	}							/* end if have missing values */
+	else
+	{
+		/*
+		 * If there are no missing values at all then NULLS must be allowed,
+		 * since some of the attributes are known to be absent.
+		 */
+		hasNulls = true;
+	}
+
+	len = 0;
+
+	if (hasNulls)
+	{
+		targetIndicatorLen = BITMAPLEN(natts);
+		len += targetIndicatorLen;
+	}
+	else
+		targetIndicatorLen = 0;
+
+	if (tupleDesc->tdhasoid)
+		len += sizeof(Oid);
+
+	/*
+	 * Allocate and zero the space needed.  Note that the tuple body and
+	 * HeapTupleData management structure are allocated in one chunk.
+	 */
+	if (targetHeapTuple)
+	{
+		len += offsetof(HeapTupleHeaderData, t_bits);
+		hoff = len = MAXALIGN(len); /* align user data safely */
+		len += targetDataLen;
+
+		*targetHeapTuple = (HeapTuple) palloc0(HEAPTUPLESIZE + len);
+		(*targetHeapTuple)->t_data
+			= targetTHeader
+			= (HeapTupleHeader) ((char *) *targetHeapTuple + HEAPTUPLESIZE);
+		(*targetHeapTuple)->t_len = len;
+		(*targetHeapTuple)->t_tableOid = sourceTuple->t_tableOid;
+		ItemPointerSetInvalid(&((*targetHeapTuple)->t_self));
+
+		targetTHeader->t_infomask = sourceTHeader->t_infomask;
+		targetTHeader->t_hoff = hoff;
+		HeapTupleHeaderSetNatts(targetTHeader, natts);
+		HeapTupleHeaderSetDatumLength(targetTHeader, len);
+		HeapTupleHeaderSetTypeId(targetTHeader, tupleDesc->tdtypeid);
+		HeapTupleHeaderSetTypMod(targetTHeader, tupleDesc->tdtypmod);
+		/* We also make sure that t_ctid is invalid unless explicitly set */
+		ItemPointerSetInvalid(&(targetTHeader->t_ctid));
+		if (targetIndicatorLen > 0)
+			nullBits = (bits8 *) ((char *) (*targetHeapTuple)->t_data
+								  + offsetof(HeapTupleHeaderData, t_bits));
+		targetData = (char *) (*targetHeapTuple)->t_data + hoff;
+		infoMask = &(targetTHeader->t_infomask);
+	}
+	else
+	{
+		len += SizeofMinimalTupleHeader;
+		hoff = len = MAXALIGN(len); /* align user data safely */
+		len += targetDataLen;
+
+		*targetMinimalTuple = (MinimalTuple) palloc0(len);
+		(*targetMinimalTuple)->t_len = len;
+		(*targetMinimalTuple)->t_hoff = hoff + MINIMAL_TUPLE_OFFSET;
+		(*targetMinimalTuple)->t_infomask = sourceTHeader->t_infomask;
+		/* Same macro works for MinimalTuples */
+		HeapTupleHeaderSetNatts(*targetMinimalTuple, natts);
+		if (targetIndicatorLen > 0)
+			nullBits = (bits8 *) ((char *) *targetMinimalTuple
+								  + offsetof(MinimalTupleData, t_bits));
+		targetData = (char *) *targetMinimalTuple + hoff;
+		infoMask = &((*targetMinimalTuple)->t_infomask);
+	}
+
+	if (targetIndicatorLen > 0)
+	{
+		if (sourceIndicatorLen > 0)
+		{
+			/* if bitmap pre-existed copy in - all is set */
+			memcpy(nullBits,
+				   ((char *) sourceTHeader)
+				   + offsetof(HeapTupleHeaderData, t_bits),
+				   sourceIndicatorLen);
+			nullBits += sourceIndicatorLen - 1;
+		}
+		else
+		{
+			sourceIndicatorLen = BITMAPLEN(sourceNatts);
+			/* Set NOT NULL for all existing attributes */
+			memset(nullBits, 0xff, sourceIndicatorLen);
+
+			nullBits += sourceIndicatorLen - 1;
+
+			if (sourceNatts & 0x07)
+			{
+				/* build the mask (inverted!) */
+				bitMask = 0xff << (sourceNatts & 0x07);
+				/* Voila */
+				*nullBits = ~bitMask;
+			}
+		}
+
+		bitMask = (1 << ((sourceNatts - 1) & 0x07));
+	}							/* End if have null bitmap */
+
+	memcpy(targetData,
+		   ((char *) sourceTuple->t_data) + sourceTHeader->t_hoff,
+		   sourceDataLen);
+
+	/* If there are no missing values there is nothing more to do */
+	if (firstmissingnum < num_missing)
+	{
+		targetData += sourceDataLen;
+		missingnum = firstmissingnum;
+
+		/* Now fill in the missing values */
+		for (attnum = sourceNatts + 1; attnum <= natts; attnum++)
+		{
+
+			Form_pg_attribute attr = TupleDescAttr(tupleDesc, attnum - 1);
+
+			for (missingnum = firstmissingnum; missingnum < num_missing; missingnum++)
+			{
+				if (attrmiss[missingnum].amnum == attnum)
+				{
+					fill_val(attr,
+							 nullBits ? &nullBits : NULL,
+							 &bitMask,
+							 &targetData,
+							 infoMask,
+							 attrmiss[missingnum].ammissing,
+							 attrmiss[missingnum].ammissingNull);
+					break;
+				}
+			}
+			if (missingnum > num_missing)
+			{
+				fill_val(attr,
+						 &nullBits,
+						 &bitMask,
+						 &targetData,
+						 infoMask,
+						 (Datum) 0,
+						 true);
+			}
+		}						/* end loop over missing attributes */
+	}							/* end if there is no missing value */
+}
+
+/*
+ * Fill in the missing values for an ordinary HeapTuple
+ */
+MinimalTuple
+minimal_expand_tuple(HeapTuple sourceTuple, TupleDesc tupleDesc)
+{
+	MinimalTuple minimalTuple;
+
+	expand_tuple(NULL, &minimalTuple, sourceTuple, tupleDesc);
+	return minimalTuple;
+}
+
+/*
+ * Fill in the missing values for a minimal HeapTuple
+ */
+HeapTuple
+heap_expand_tuple(HeapTuple sourceTuple, TupleDesc tupleDesc)
+{
+	HeapTuple	heapTuple;
+
+	expand_tuple(&heapTuple, NULL, sourceTuple, tupleDesc);
+	return heapTuple;
 }
 
 /* ----------------
@@ -1192,8 +1635,7 @@ slot_getattr(TupleTableSlot *slot, int attnum, bool *isnull)
 	tup = tuple->t_data;
 	if (attnum > HeapTupleHeaderGetNatts(tup))
 	{
-		*isnull = true;
-		return (Datum) 0;
+		return getmissingattr(slot->tts_tupleDescriptor, attnum, isnull);
 	}
 
 	/*
@@ -1263,13 +1705,13 @@ slot_getallattrs(TupleTableSlot *slot)
 
 	/*
 	 * If tuple doesn't have all the atts indicated by tupleDesc, read the
-	 * rest as null
+	 * rest as NULLS or missing values.
 	 */
-	for (; attnum < tdesc_natts; attnum++)
+	if (attnum < tdesc_natts)
 	{
-		slot->tts_values[attnum] = (Datum) 0;
-		slot->tts_isnull[attnum] = true;
+		slot_getmissingattrs(slot, attnum);
 	}
+
 	slot->tts_nvalid = tdesc_natts;
 }
 
@@ -1310,12 +1752,11 @@ slot_getsomeattrs(TupleTableSlot *slot, int attnum)
 
 	/*
 	 * If tuple doesn't have all the atts indicated by tupleDesc, read the
-	 * rest as null
+	 * rest as NULLs or missing values
 	 */
-	for (; attno < attnum; attno++)
+	if (attno < attnum)
 	{
-		slot->tts_values[attno] = (Datum) 0;
-		slot->tts_isnull[attno] = true;
+		slot_getmissingattrs(slot, attno);
 	}
 	slot->tts_nvalid = attnum;
 }
@@ -1340,7 +1781,7 @@ slot_attisnull(TupleTableSlot *slot, int attnum)
 			elog(ERROR, "cannot extract system attribute from virtual tuple");
 		if (tuple == &(slot->tts_minhdr))	/* internal error */
 			elog(ERROR, "cannot extract system attribute from minimal tuple");
-		return heap_attisnull(tuple, attnum);
+		return heap_attisnull(tuple, attnum, tupleDesc);
 	}
 
 	/*
@@ -1363,7 +1804,7 @@ slot_attisnull(TupleTableSlot *slot, int attnum)
 		elog(ERROR, "cannot extract attribute from empty tuple slot");
 
 	/* and let the tuple tell it */
-	return heap_attisnull(tuple, attnum);
+	return heap_attisnull(tuple, attnum, tupleDesc);
 }
 
 /*

@@ -453,7 +453,7 @@ check_index_is_clusterable(Relation OldHeap, Oid indexOid, bool recheck, LOCKMOD
 	 * seqscan pass over the table to copy the missing rows, but that seems
 	 * expensive and tedious.
 	 */
-	if (!heap_attisnull(OldIndex->rd_indextuple, Anum_pg_index_indpred))
+	if (!heap_attisnull(OldIndex->rd_indextuple, Anum_pg_index_indpred, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot cluster on partial index \"%s\"",

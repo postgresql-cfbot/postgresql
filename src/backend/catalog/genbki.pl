@@ -416,7 +416,6 @@ sub morph_row_for_pgattr
 	}
 	elsif ($priornotnull)
 	{
-
 		# attnotnull will automatically be set if the type is
 		# fixed-width and prior columns are all NOT NULL ---
 		# compare DefineAttr in bootstrap.c. oidvector and

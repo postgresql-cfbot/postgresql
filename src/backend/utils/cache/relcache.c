@@ -77,6 +77,7 @@
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -493,7 +494,10 @@ RelationBuildTupleDesc(Relation relation)
 	int			need;
 	TupleConstr *constr;
 	AttrDefault *attrdef = NULL;
+	AttrMissing *attrmiss = NULL;
 	int			ndef = 0;
+	int         nmissing = 0;
+	int			attnum = 0;
 
 	/* copy some fields from pg_class row to rd_att */
 	relation->rd_att->tdtypeid = relation->rd_rel->reltype;
@@ -546,6 +550,16 @@ RelationBuildTupleDesc(Relation relation)
 			elog(ERROR, "invalid attribute number %d for %s",
 				 attp->attnum, RelationGetRelationName(relation));
 
+		/*
+		 * We have a dependency on the attrdef array being filled in in
+		 * ascending attnum order. This should be guaranteed by the index
+		 * driving the scan. But we want to be double sure
+		 */
+		if (!(attp->attnum > attnum))
+			elog(ERROR, "attribute numbers not ascending");
+
+		attnum = attp->attnum;
+
 		memcpy(TupleDescAttr(relation->rd_att, attp->attnum - 1),
 			   attp,
 			   ATTRIBUTE_FIXED_PART_SIZE);
@@ -554,6 +568,10 @@ RelationBuildTupleDesc(Relation relation)
 		if (attp->attnotnull)
 			constr->has_not_null = true;
 
+		/*
+		 * If the column has a default or missin value Fill it into the
+		 * attrdef array
+		 */
 		if (attp->atthasdef)
 		{
 			if (attrdef == NULL)
@@ -561,9 +579,70 @@ RelationBuildTupleDesc(Relation relation)
 					MemoryContextAllocZero(CacheMemoryContext,
 										   relation->rd_rel->relnatts *
 										   sizeof(AttrDefault));
-			attrdef[ndef].adnum = attp->attnum;
+			attrdef[ndef].adnum = attnum;
 			attrdef[ndef].adbin = NULL;
+
 			ndef++;
+		}
+		if (attp->atthasmissing)
+		{
+			Datum		missingval;
+			bool		missingNull;
+
+			if (attrmiss == NULL)
+				attrmiss = (AttrMissing *)
+					MemoryContextAllocZero(CacheMemoryContext,
+										   relation->rd_rel->relnatts *
+										   sizeof(AttrMissing));
+
+			/* Do we have a missing value? */
+			missingval = SysCacheGetAttr(ATTNUM, pg_attribute_tuple,
+										   Anum_pg_attribute_attmissingval,
+										   &missingNull);
+			attrmiss[nmissing].amnum = attnum;
+			if (missingNull)
+			{
+				/* No, then the store a NULL */
+				attrmiss[nmissing].ammissing = PointerGetDatum(NULL);
+				attrmiss[nmissing].ammissingNull = true;
+			}
+			else if (attp->attbyval)
+			{
+				/*
+				 * Yes, and its of the by-value kind Copy in the Datum
+				 */
+				memcpy(&attrmiss[nmissing].ammissing,
+					   VARDATA_ANY(missingval), sizeof(Datum));
+				attrmiss[nmissing].ammissingNull = false;
+			}
+			else if (attp->attlen > 0)
+			{
+				/*
+				 * Yes, and its fixed length Copy it out and have teh Datum
+				 * point to it.
+				 */
+				MemoryContext oldcxt;
+
+				oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+				attrmiss[nmissing].ammissing = PointerGetDatum(palloc(attp->attlen));
+				memcpy(DatumGetPointer(attrmiss[nmissing].ammissing),
+					   VARDATA_ANY(missingval), attp->attlen);
+				MemoryContextSwitchTo(oldcxt);
+				attrmiss[nmissing].ammissingNull = false;
+			}
+			else
+			{
+				/* Yes, variable length */
+				MemoryContext oldcxt;
+
+				oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+				attrmiss[nmissing].ammissing = datumCopy(missingval,
+														 attp->attbyval,
+														 attp->attlen);
+				attrmiss[nmissing].ammissingNull = false;
+				MemoryContextSwitchTo(oldcxt);
+			}
+			nmissing++;
 		}
 		need--;
 		if (need == 0)
@@ -605,7 +684,8 @@ RelationBuildTupleDesc(Relation relation)
 	/*
 	 * Set up constraint/default info
 	 */
-	if (constr->has_not_null || ndef > 0 || relation->rd_rel->relchecks)
+	if (constr->has_not_null || ndef > 0 ||
+		nmissing > 0 || relation->rd_rel->relchecks)
 	{
 		relation->rd_att->constr = constr;
 
@@ -620,7 +700,19 @@ RelationBuildTupleDesc(Relation relation)
 			AttrDefaultFetch(relation);
 		}
 		else
+		{
 			constr->num_defval = 0;
+		}
+
+		if (nmissing > 0)
+		{
+			if (nmissing < relation->rd_rel->relnatts)
+				constr->missing = (AttrMissing *)
+					repalloc(attrmiss, nmissing * sizeof(AttrMissing));
+			else
+				constr->missing = attrmiss;
+		}
+		constr->num_missing = nmissing;
 
 		if (relation->rd_rel->relchecks > 0)	/* CHECKs */
 		{
@@ -4059,10 +4151,6 @@ AttrDefaultFetch(Relation relation)
 
 	systable_endscan(adscan);
 	heap_close(adrel, AccessShareLock);
-
-	if (found != ndef)
-		elog(WARNING, "%d attrdef record(s) missing for rel %s",
-			 ndef - found, RelationGetRelationName(relation));
 }
 
 /*
@@ -4401,7 +4489,7 @@ RelationGetIndexList(Relation relation)
 		 */
 		if (!IndexIsValid(index) || !index->indisunique ||
 			!index->indimmediate ||
-			!heap_attisnull(htup, Anum_pg_index_indpred))
+			!heap_attisnull(htup, Anum_pg_index_indpred, NULL))
 			continue;
 
 		/* Check to see if is a usable btree index on OID */
@@ -4696,7 +4784,7 @@ RelationGetIndexExpressions(Relation relation)
 
 	/* Quick exit if there is nothing to do. */
 	if (relation->rd_indextuple == NULL ||
-		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indexprs))
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indexprs, NULL))
 		return NIL;
 
 	/*
@@ -4759,7 +4847,7 @@ RelationGetIndexPredicate(Relation relation)
 
 	/* Quick exit if there is nothing to do. */
 	if (relation->rd_indextuple == NULL ||
-		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indpred))
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indpred, NULL))
 		return NIL;
 
 	/*

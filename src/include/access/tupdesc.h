@@ -14,6 +14,7 @@
 #ifndef TUPDESC_H
 #define TUPDESC_H
 
+#include "postgres.h"
 #include "access/attnum.h"
 #include "catalog/pg_attribute.h"
 #include "nodes/pg_list.h"
@@ -24,6 +25,13 @@ typedef struct attrDefault
 	AttrNumber	adnum;
 	char	   *adbin;			/* nodeToString representation of expr */
 } AttrDefault;
+
+typedef struct attrMissing
+{
+	AttrNumber	amnum;
+	bool		ammissingNull;	/* true if missing value is NULL */
+	Datum		ammissing;		/* value when attribute is missing */
+} AttrMissing;
 
 typedef struct constrCheck
 {
@@ -38,8 +46,10 @@ typedef struct tupleConstr
 {
 	AttrDefault *defval;		/* array */
 	ConstrCheck *check;			/* array */
+	AttrMissing *missing;       /* missing attributes values, NULL if none */
 	uint16		num_defval;
 	uint16		num_check;
+	uint16      num_missing;
 	bool		has_not_null;
 } TupleConstr;
 

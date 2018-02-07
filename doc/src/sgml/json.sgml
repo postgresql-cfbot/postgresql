@@ -569,4 +569,18 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
       compared using the default database collation.
   </para>
  </sect2>
+  <sect2>
+  <title>Transforms</title>
+
+  <para>
+   Additional extensions are available that implement transforms for
+   the <type>jsonb</type> type for the language PL/Perl.  The
+   extensions for PL/Perl are called
+   <literal>jsonb_plperlu</literal> and <literal>jsonb_plperl</literal>
+   If you use them, <type>jsonb</type> values are mapped to
+   Perl RV.
+  </para>
+ </sect2>
+
+
 </sect1>

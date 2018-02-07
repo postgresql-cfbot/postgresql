@@ -1,0 +1,235 @@
+CREATE EXTENSION jsonb_plperlu CASCADE;
+NOTICE:  installing required extension "plperlu"
+-- test hash -> jsonb
+CREATE FUNCTION testHVToJsonb() RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+$val = {a => 1, b => 'boo', c => undef};
+return $val;
+$$;
+SELECT testHVToJsonb();
+          testhvtojsonb          
+---------------------------------
+ {"a": 1, "b": "boo", "c": null}
+(1 row)
+
+-- test array -> jsonb
+CREATE FUNCTION testAVToJsonb() RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+$val = [{a => 1, b => 'boo', c => undef}, {d => 2}];
+return $val;
+$$;
+SELECT testAVToJsonb();
+                testavtojsonb                
+---------------------------------------------
+ [{"a": 1, "b": "boo", "c": null}, {"d": 2}]
+(1 row)
+
+-- test scalar -> jsonb
+CREATE FUNCTION testSVToJsonb() RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+$val = 1;
+return $val;
+$$;
+SELECT testSVToJsonb();
+ testsvtojsonb 
+---------------
+ 1
+(1 row)
+
+-- test blessed scalar -> jsonb
+CREATE FUNCTION testBlessedToJsonb() RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+my $class = shift;
+my $tmp = { a=>"a", 1=>"1" };
+bless $tmp, $class;
+return $tmp;
+$$;
+SELECT testBlessedToJsonb();
+  testblessedtojsonb  
+----------------------
+ {"1": "1", "a": "a"}
+(1 row)
+
+-- test blessed scalar -> jsonb
+CREATE FUNCTION testRegexpToJsonb() RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+return ('1' =~ m(0\t2));
+$$;
+SELECT testRegexpToJsonb();
+ERROR:  could not transform to type "jsonb"
+DETAIL:  The type you are trying to transform can't be transformed to jsonb
+CONTEXT:  PL/Perl function "testregexptojsonb"
+-- test jsonb -> scalar -> jsonb
+CREATE FUNCTION testSVToJsonb2(val jsonb) RETURNS jsonb
+LANGUAGE plperlu
+TRANSFORM FOR TYPE jsonb
+AS $$
+return $_[0];
+$$;
+SELECT testSVToJsonb2('null');
+ testsvtojsonb2 
+----------------
+ null
+(1 row)
+
+SELECT testSVToJsonb2('1');
+ testsvtojsonb2 
+----------------
+ 1
+(1 row)
+
+SELECT testSVToJsonb2('1E+131071');
+ERROR:  could not transform to type "jsonb"
+DETAIL:  The type you are trying to transform can't be transformed to jsonb
+CONTEXT:  PL/Perl function "testsvtojsonb2"
+SELECT testSVToJsonb2('-1');
+ testsvtojsonb2 
+----------------
+ -1
+(1 row)
+
+SELECT testSVToJsonb2('1.2');
+ testsvtojsonb2 
+----------------
+ 1.2
+(1 row)
+
+SELECT testSVToJsonb2('-1.2');
+ testsvtojsonb2 
+----------------
+ -1.2
+(1 row)
+
+SELECT testSVToJsonb2('"string"');
+ testsvtojsonb2 
+----------------
+ "string"
+(1 row)
+
+SELECT testSVToJsonb2('"NaN"');
+ testsvtojsonb2 
+----------------
+ "NaN"
+(1 row)
+
+SELECT testSVToJsonb2('true');
+ testsvtojsonb2 
+----------------
+ 1
+(1 row)
+
+SELECT testSVToJsonb2('false');
+ testsvtojsonb2 
+----------------
+ 0
+(1 row)
+
+SELECT testSVToJsonb2('[]');
+ testsvtojsonb2 
+----------------
+ []
+(1 row)
+
+SELECT testSVToJsonb2('[null,null]');
+ testsvtojsonb2 
+----------------
+ [null, null]
+(1 row)
+
+SELECT testSVToJsonb2('[1,2,3]');
+ testsvtojsonb2 
+----------------
+ [1, 2, 3]
+(1 row)
+
+SELECT testSVToJsonb2('[-1,2,-3]');
+ testsvtojsonb2 
+----------------
+ [-1, 2, -3]
+(1 row)
+
+SELECT testSVToJsonb2('[1.2,2.3,3.4]');
+ testsvtojsonb2  
+-----------------
+ [1.2, 2.3, 3.4]
+(1 row)
+
+SELECT testSVToJsonb2('[-1.2,2.3,-3.4]');
+  testsvtojsonb2   
+-------------------
+ [-1.2, 2.3, -3.4]
+(1 row)
+
+SELECT testSVToJsonb2('["string1","string2"]');
+     testsvtojsonb2     
+------------------------
+ ["string1", "string2"]
+(1 row)
+
+SELECT testSVToJsonb2('{}');
+ testsvtojsonb2 
+----------------
+ {}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":null}');
+ testsvtojsonb2 
+----------------
+ {"1": null}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":1}');
+ testsvtojsonb2 
+----------------
+ {"1": 1}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":-1}');
+ testsvtojsonb2 
+----------------
+ {"1": -1}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":1.1}');
+ testsvtojsonb2 
+----------------
+ {"1": 1.1}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":-1.1}');
+ testsvtojsonb2 
+----------------
+ {"1": -1.1}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":"string1"}');
+  testsvtojsonb2  
+------------------
+ {"1": "string1"}
+(1 row)
+
+SELECT testSVToJsonb2('{"1":{"2":[3,4,5]},"2":3}');
+         testsvtojsonb2          
+---------------------------------
+ {"1": {"2": [3, 4, 5]}, "2": 3}
+(1 row)
+
+DROP EXTENSION plperlu CASCADE;
+NOTICE:  drop cascades to 7 other objects
+DETAIL:  drop cascades to extension jsonb_plperlu
+drop cascades to function testhvtojsonb()
+drop cascades to function testavtojsonb()
+drop cascades to function testsvtojsonb()
+drop cascades to function testblessedtojsonb()
+drop cascades to function testregexptojsonb()
+drop cascades to function testsvtojsonb2(jsonb)

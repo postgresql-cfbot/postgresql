@@ -10,6 +10,7 @@
 #define REORDERBUFFER_H
 
 #include "access/htup_details.h"
+#include "access/twophase.h"
 #include "lib/ilist.h"
 #include "storage/sinval.h"
 #include "utils/hsearch.h"
@@ -137,20 +138,50 @@ typedef struct ReorderBufferChange
 	dlist_node	node;
 } ReorderBufferChange;
 
+/* ReorderBufferTXN flags */
+#define TXN_HAS_CATALOG_CHANGES 0x0001
+#define TXN_IS_SUBXACT          0x0002
+#define TXN_SERIALIZED          0x0004
+#define TXN_PREPARE             0x0008
+#define TXN_COMMIT_PREPARED     0x0010
+#define TXN_ROLLBACK_PREPARED   0x0020
+#define TXN_COMMIT              0x0040
+#define TXN_ROLLBACK            0x0080
+
+/* does the txn have catalog changes */
+#define txn_has_catalog_changes(txn) (txn->txn_flags & TXN_HAS_CATALOG_CHANGES)
+/* is the txn known as a subxact? */
+#define txn_is_subxact(txn)          (txn->txn_flags & TXN_IS_SUBXACT)
+/*
+ * Has this transaction been spilled to disk?  It's not always possible to
+ * deduce that fact by comparing nentries with nentries_mem, because e.g.
+ * subtransactions of a large transaction might get serialized together
+ * with the parent - if they're restored to memory they'd have
+ * nentries_mem == nentries.
+ */
+#define txn_is_serialized(txn)       (txn->txn_flags & TXN_SERIALIZED)
+/* is this txn prepared? */
+#define txn_prepared(txn)            (txn->txn_flags & TXN_PREPARE)
+/* was this prepared txn committed in the meanwhile? */
+#define txn_commit_prepared(txn)     (txn->txn_flags & TXN_COMMIT_PREPARED)
+/* was this prepared txn aborted in the meanwhile? */
+#define txn_rollback_prepared(txn)   (txn->txn_flags & TXN_ROLLBACK_PREPARED)
+/* was this txn committed in the meanwhile? */
+#define txn_commit(txn)              (txn->txn_flags & TXN_COMMIT)
+/* was this prepared txn aborted in the meanwhile? */
+#define txn_rollback(txn)            (txn->txn_flags & TXN_ROLLBACK)
+
 typedef struct ReorderBufferTXN
 {
+	int		txn_flags;
+
 	/*
 	 * The transactions transaction id, can be a toplevel or sub xid.
 	 */
 	TransactionId xid;
 
-	/* did the TX have catalog changes */
-	bool		has_catalog_changes;
-
-	/*
-	 * Do we know this is a subxact?
-	 */
-	bool		is_known_as_subxact;
+	/* In case of 2PC we need to pass GID to output plugin */
+	char		gid[GIDSIZE];
 
 	/*
 	 * LSN of the first data carrying, WAL record with knowledge about this
@@ -213,15 +244,6 @@ typedef struct ReorderBufferTXN
 	 * spilled to disk.
 	 */
 	uint64		nentries_mem;
-
-	/*
-	 * Has this transaction been spilled to disk?  It's not always possible to
-	 * deduce that fact by comparing nentries with nentries_mem, because e.g.
-	 * subtransactions of a large transaction might get serialized together
-	 * with the parent - if they're restored to memory they'd have
-	 * nentries_mem == nentries.
-	 */
-	bool		serialized;
 
 	/*
 	 * List of ReorderBufferChange structs, including new Snapshots and new
@@ -294,6 +316,40 @@ typedef void (*ReorderBufferCommitCB) (
 									   ReorderBufferTXN *txn,
 									   XLogRecPtr commit_lsn);
 
+/* abort callback signature */
+typedef void (*ReorderBufferAbortCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   XLogRecPtr abort_lsn);
+
+typedef bool (*ReorderBufferFilterDecodeTxnCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn);
+
+typedef bool (*ReorderBufferFilterPrepareCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   TransactionId xid,
+									   const char *gid);
+
+/* prepare callback signature */
+typedef void (*ReorderBufferPrepareCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   XLogRecPtr prepare_lsn);
+
+/* commit prepared callback signature */
+typedef void (*ReorderBufferCommitPreparedCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   XLogRecPtr commit_lsn);
+
+/* abort prepared callback signature */
+typedef void (*ReorderBufferAbortPreparedCB) (
+									   ReorderBuffer *rb,
+									   ReorderBufferTXN *txn,
+									   XLogRecPtr abort_lsn);
+
 /* message callback signature */
 typedef void (*ReorderBufferMessageCB) (
 										ReorderBuffer *rb,
@@ -329,6 +385,12 @@ struct ReorderBuffer
 	ReorderBufferBeginCB begin;
 	ReorderBufferApplyChangeCB apply_change;
 	ReorderBufferCommitCB commit;
+	ReorderBufferAbortCB abort;
+	ReorderBufferFilterDecodeTxnCB filter_decode_txn;
+	ReorderBufferFilterPrepareCB filter_prepare;
+	ReorderBufferPrepareCB prepare;
+	ReorderBufferCommitPreparedCB commit_prepared;
+	ReorderBufferAbortPreparedCB abort_prepared;
 	ReorderBufferMessageCB message;
 
 	/*
@@ -371,6 +433,11 @@ void ReorderBufferQueueMessage(ReorderBuffer *, TransactionId, Snapshot snapshot
 void ReorderBufferCommit(ReorderBuffer *, TransactionId,
 					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
 					TimestampTz commit_time, RepOriginId origin_id, XLogRecPtr origin_lsn);
+void ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
+					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+					TimestampTz commit_time,
+					RepOriginId origin_id, XLogRecPtr origin_lsn,
+					char *gid, bool is_commit);
 void		ReorderBufferAssignChild(ReorderBuffer *, TransactionId, TransactionId, XLogRecPtr commit_lsn);
 void ReorderBufferCommitChild(ReorderBuffer *, TransactionId, TransactionId,
 						 XLogRecPtr commit_lsn, XLogRecPtr end_lsn);
@@ -394,6 +461,15 @@ void		ReorderBufferXidSetCatalogChanges(ReorderBuffer *, TransactionId xid, XLog
 bool		ReorderBufferXidHasCatalogChanges(ReorderBuffer *, TransactionId xid);
 bool		ReorderBufferXidHasBaseSnapshot(ReorderBuffer *, TransactionId xid);
 
+bool		ReorderBufferPrepareNeedSkip(ReorderBuffer *rb, TransactionId xid,
+										 const char *gid);
+bool		ReorderBufferTxnIsPrepared(ReorderBuffer *rb, TransactionId xid,
+										 const char *gid);
+void		ReorderBufferPrepare(ReorderBuffer *rb, TransactionId xid,
+					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+					TimestampTz commit_time,
+					RepOriginId origin_id, XLogRecPtr origin_lsn,
+					char *gid);
 ReorderBufferTXN *ReorderBufferGetOldestTXN(ReorderBuffer *);
 
 void		ReorderBufferSetRestartPoint(ReorderBuffer *, XLogRecPtr ptr);

@@ -89,6 +89,11 @@ typedef struct LogicalDecodingContext
 	bool		prepared_write;
 	XLogRecPtr	write_location;
 	TransactionId write_xid;
+
+	/*
+	 * Capabilities of the output plugin.
+	 */
+	bool		enable_twophase;
 } LogicalDecodingContext;
 
 
@@ -117,6 +122,8 @@ extern void LogicalIncreaseXminForSlot(XLogRecPtr lsn, TransactionId xmin);
 extern void LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn,
 									  XLogRecPtr restart_lsn);
 extern void LogicalConfirmReceivedLocation(XLogRecPtr lsn);
+extern bool LogicalLockTransaction(ReorderBufferTXN *txn);
+extern void LogicalUnlockTransaction(ReorderBufferTXN *txn);
 
 extern bool filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId origin_id);
 

@@ -455,13 +455,13 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 					case TRANS_STMT_COMMIT_PREPARED:
 						PreventTransactionChain(isTopLevel, "COMMIT PREPARED");
 						PreventCommandDuringRecovery("COMMIT PREPARED");
-						FinishPreparedTransaction(stmt->gid, true);
+						FinishPreparedTransaction(stmt->gid, true, false);
 						break;
 
 					case TRANS_STMT_ROLLBACK_PREPARED:
 						PreventTransactionChain(isTopLevel, "ROLLBACK PREPARED");
 						PreventCommandDuringRecovery("ROLLBACK PREPARED");
-						FinishPreparedTransaction(stmt->gid, false);
+						FinishPreparedTransaction(stmt->gid, false, false);
 						break;
 
 					case TRANS_STMT_ROLLBACK:

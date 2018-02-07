@@ -60,6 +60,18 @@ static void shutdown_cb_wrapper(LogicalDecodingContext *ctx);
 static void begin_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn);
 static void commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  XLogRecPtr commit_lsn);
+static void abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr abort_lsn);
+static bool filter_decode_txn_cb_wrapper(ReorderBuffer *cache,
+				  ReorderBufferTXN *txn);
+static bool filter_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  TransactionId xid, const char *gid);
+static void prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr prepare_lsn);
+static void commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr commit_lsn);
+static void abort_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr abort_lsn);
 static void change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  Relation relation, ReorderBufferChange *change);
 static void message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -125,6 +137,7 @@ StartupDecodingContext(List *output_plugin_options,
 	MemoryContext context,
 				old_context;
 	LogicalDecodingContext *ctx;
+	int			twophase_callbacks;
 
 	/* shorter lines... */
 	slot = MyReplicationSlot;
@@ -184,7 +197,26 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->begin = begin_cb_wrapper;
 	ctx->reorder->apply_change = change_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
+	ctx->reorder->abort = abort_cb_wrapper;
+	ctx->reorder->filter_decode_txn = filter_decode_txn_cb_wrapper;
+	ctx->reorder->filter_prepare = filter_prepare_cb_wrapper;
+	ctx->reorder->prepare = prepare_cb_wrapper;
+	ctx->reorder->commit_prepared = commit_prepared_cb_wrapper;
+	ctx->reorder->abort_prepared = abort_prepared_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
+
+	/* check that plugin implements all callbacks necessary to perform 2PC */
+	twophase_callbacks = (ctx->callbacks.prepare_cb != NULL) +
+		(ctx->callbacks.commit_prepared_cb != NULL) +
+		(ctx->callbacks.abort_prepared_cb != NULL);
+
+	ctx->enable_twophase = (twophase_callbacks == 3);
+
+	if (twophase_callbacks != 3 && twophase_callbacks != 0)
+		ereport(WARNING,
+			(errmsg("Output plugin registered only %d twophase callbacks. "
+					"Twophase transactions will be decoded at commit time.",
+					twophase_callbacks)));
 
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
@@ -694,6 +726,122 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 }
 
 static void
+abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr abort_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "abort";
+	state.report_location = txn->final_lsn; /* beginning of abort record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.abort_cb(ctx, txn, abort_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+ static void
+prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr prepare_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "prepare";
+	state.report_location = txn->final_lsn;		/* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.prepare_cb(ctx, txn, prepare_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr commit_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "commit_prepared";
+	state.report_location = txn->final_lsn;		/* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.commit_prepared_cb(ctx, txn, commit_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+abort_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				  XLogRecPtr abort_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "abort_prepared";
+	state.report_location = txn->final_lsn;		/* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.abort_prepared_cb(ctx, txn, abort_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
 change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  Relation relation, ReorderBufferChange *change)
 {
@@ -728,6 +876,62 @@ change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+}
+
+static bool
+filter_decode_txn_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+	bool		ret;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "filter_decode_txn";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = false;
+
+	/* do the actual work: call callback */
+	ret = ctx->callbacks.filter_decode_txn_cb(ctx, txn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+	return ret;
+}
+static bool
+filter_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  TransactionId xid, const char *gid)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+	bool		ret;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "filter_prepare";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = false;
+
+	/* do the actual work: call callback */
+	ret = ctx->callbacks.filter_prepare_cb(ctx, txn, xid, gid);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+	return ret;
 }
 
 bool
@@ -1012,4 +1216,165 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 		MyReplicationSlot->data.confirmed_flush = lsn;
 		SpinLockRelease(&MyReplicationSlot->mutex);
 	}
+}
+
+bool
+LogicalLockTransaction(ReorderBufferTXN *txn)
+{
+	bool	ok = false;
+
+	/*
+	 * Prepared transactions and uncommitted transactions
+	 * that have modified catalogs need to interlock with
+	 * concurrent rollback to ensure that there are no
+	 * issues while decoding
+	 */
+
+	if (!txn_has_catalog_changes(txn))
+		return true;
+
+	/*
+	 * Is it a prepared txn? Similar checks for uncommitted
+	 * transactions when we start supporting them
+	 */
+	if (!txn_prepared(txn))
+		return true;
+
+	/* check cached status */
+	if (txn_commit(txn))
+		return true;
+	if (txn_rollback(txn))
+		return false;
+
+	/*
+	 * Find the PROC that is handling this XID and add ourself as a
+	 * decodeGroupMember
+	 */
+	if (MyProc->decodeGroupLeader == NULL)
+	{
+		PGPROC *proc = BecomeDecodeGroupLeader(txn->xid, txn_prepared(txn));
+
+		/*
+		 * If decodeGroupLeader is NULL, then the only possibility
+		 * is that the transaction completed and went away
+		 */
+		if (proc == NULL)
+		{
+			Assert(!TransactionIdIsInProgress(txn->xid));
+			if (TransactionIdDidCommit(txn->xid))
+			{
+				txn->txn_flags |= TXN_COMMIT;
+				return true;
+			}
+			else
+			{
+				txn->txn_flags |= TXN_ROLLBACK;
+				return false;
+			}
+		}
+
+		/* Add ourself as a decodeGroupMember */
+		if (!BecomeDecodeGroupMember(proc, proc->pid, txn_prepared(txn)))
+		{
+			Assert(!TransactionIdIsInProgress(txn->xid));
+			if (TransactionIdDidCommit(txn->xid))
+			{
+				txn->txn_flags |= TXN_COMMIT;
+				return true;
+			}
+			else
+			{
+				txn->txn_flags |= TXN_ROLLBACK;
+				return false;
+			}
+		}
+	}
+
+	/*
+	 * If we were able to add ourself, then Abort processing will
+	 * interlock with us. Check if the transaction is still around
+	 */
+	Assert(MyProc->decodeGroupLeader);
+
+	if (MyProc->decodeGroupLeader)
+	{
+		LWLock	   *leader_lwlock;
+
+		leader_lwlock = LockHashPartitionLockByProc(MyProc->decodeGroupLeader);
+		LWLockAcquire(leader_lwlock, LW_SHARED);
+		if (MyProc->decodeAbortPending)
+		{
+			/*
+			 * Remove ourself from the decodeGroupMembership and return
+			 * false so that the decoding plugin also initiates abort
+			 * processing
+			 */
+			LWLockRelease(leader_lwlock);
+			LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+			RemoveDecodeGroupMemberLocked(MyProc->decodeGroupLeader);
+			/* reset the bool to let the leader know that we are going away */
+			MyProc->decodeAbortPending = false;
+			MyProc->decodeLocked = false;
+			txn->txn_flags |= TXN_ROLLBACK;
+			ok = false;
+		}
+		else
+		{
+			MyProc->decodeLocked = true;
+			ok = true;
+		}
+		LWLockRelease(leader_lwlock);
+	}
+	else
+		return false;
+
+	return ok;
+}
+
+void
+LogicalUnlockTransaction(ReorderBufferTXN *txn)
+{
+	LWLock	   *leader_lwlock;
+
+	/*
+	 * Prepared transactions and uncommitted transactions
+	 * that have modified catalogs need to interlock with
+	 * concurrent rollback to ensure that there are no
+	 * issues while decoding
+	 */
+
+	if (!txn_has_catalog_changes(txn))
+		return;
+
+	/*
+	 * Is it a prepared txn? Similar checks for uncommitted
+	 * transactions when we start supporting them
+	 */
+	if (!txn_prepared(txn))
+		return;
+
+	/* check cached status */
+	if (txn_commit(txn))
+		return;
+	if (txn_rollback(txn))
+		return;
+
+	Assert(MyProc->decodeGroupLeader);
+	leader_lwlock = LockHashPartitionLockByProc(MyProc->decodeGroupLeader);
+	LWLockAcquire(leader_lwlock, LW_SHARED);
+	if (MyProc->decodeAbortPending)
+	{
+		/*
+		 * Remove ourself from the decodeGroupMembership
+		 */
+		LWLockRelease(leader_lwlock);
+		LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+		RemoveDecodeGroupMemberLocked(MyProc->decodeGroupLeader);
+		/* reset the bool to let the leader know that we are going away */
+		MyProc->decodeAbortPending = false;
+		txn->txn_flags |= TXN_ROLLBACK;
+	}
+	MyProc->decodeLocked = false;
+	LWLockRelease(leader_lwlock);
+	return;
 }

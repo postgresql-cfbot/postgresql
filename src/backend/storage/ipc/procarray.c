@@ -2433,6 +2433,45 @@ BackendXidGetPid(TransactionId xid)
 }
 
 /*
+ * BackendXidGetProc -- get a backend's PGPROC given its XID
+ *
+ * Note that it is up to the caller to be sure that the question
+ * remains meaningful for long enough for the answer to be used ...
+ *
+ * Only main transaction Ids are considered.
+ *
+ */
+PGPROC *
+BackendXidGetProc(TransactionId xid)
+{
+	PGPROC			*result = NULL;
+	ProcArrayStruct *arrayP = procArray;
+	int			index;
+
+	if (xid == InvalidTransactionId)	/* never match invalid xid */
+		return 0;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		PGPROC *proc = &allProcs[pgprocno];
+		volatile PGXACT *pgxact = &allPgXact[pgprocno];
+
+		if (pgxact->xid == xid)
+		{
+			result = proc;
+			break;
+		}
+	}
+
+	LWLockRelease(ProcArrayLock);
+
+	return result;
+}
+
+/*
  * IsBackendPid -- is a given pid a running backend
  *
  * This is not called by the backend, but is called by external modules.

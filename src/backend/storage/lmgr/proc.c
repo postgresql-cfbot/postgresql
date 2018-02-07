@@ -267,6 +267,11 @@ InitProcGlobal(void)
 
 		/* Initialize lockGroupMembers list. */
 		dlist_init(&procs[i].lockGroupMembers);
+
+		/* Initialize decodeGroupMembers list. */
+		dlist_init(&procs[i].decodeGroupMembers);
+		procs[i].decodeAbortPending = false;
+		procs[i].decodeLocked = false;
 	}
 
 	/*
@@ -405,6 +410,12 @@ InitProcess(void)
 	/* Check that group locking fields are in a proper initial state. */
 	Assert(MyProc->lockGroupLeader == NULL);
 	Assert(dlist_is_empty(&MyProc->lockGroupMembers));
+
+	/* Check that group decode fields are in a proper initial state. */
+	Assert(MyProc->decodeGroupLeader == NULL);
+	Assert(dlist_is_empty(&MyProc->decodeGroupMembers));
+	MyProc->decodeAbortPending = false;
+	MyProc->decodeLocked = false;
 
 	/* Initialize wait event information. */
 	MyProc->wait_event_info = 0;
@@ -580,6 +591,12 @@ InitAuxiliaryProcess(void)
 	/* Check that group locking fields are in a proper initial state. */
 	Assert(MyProc->lockGroupLeader == NULL);
 	Assert(dlist_is_empty(&MyProc->lockGroupMembers));
+
+	/* Check that group decode fields are in a proper initial state. */
+	Assert(MyProc->decodeGroupLeader == NULL);
+	Assert(dlist_is_empty(&MyProc->decodeGroupMembers));
+	MyProc->decodeAbortPending = false;
+	MyProc->decodeLocked = false;
 
 	/*
 	 * We might be reusing a semaphore that belonged to a failed process. So
@@ -1886,4 +1903,269 @@ BecomeLockGroupMember(PGPROC *leader, int pid)
 	LWLockRelease(leader_lwlock);
 
 	return ok;
+}
+
+/*
+ * BecomeDecodeGroupLeader - designate process as decode group leader
+ *
+ * Once this function has returned, other processes can join the decode group
+ * by calling BecomeDecodeGroupMember.
+ */
+PGPROC *
+BecomeDecodeGroupLeader(TransactionId xid, bool is_prepared)
+{
+	PGPROC *proc = NULL;
+	int			pid;
+	LWLock	   *leader_lwlock;
+
+	Assert(xid != InvalidTransactionId);
+
+
+	proc = BackendXidGetProc(xid);
+	if (proc)
+		pid = proc->pid;
+
+	/*
+	 * This proc will become decodeGroupLeader if it's
+	 * not already
+	 */
+	if (proc && proc->decodeGroupLeader != proc)
+	{
+		volatile PGXACT *pgxact;
+		/* Create single-member group, containing this proc. */
+		leader_lwlock = LockHashPartitionLockByProc(proc);
+		LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+		/* recheck we are still the same */
+		pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
+		if (proc->pid == pid && pgxact->xid == xid)
+		{
+			if (is_prepared)
+				Assert(pid == 0);
+			/* recheck if someone else did not already assign us */
+			if (proc->decodeGroupLeader != proc)
+			{
+				/* We had better not be a follower. */
+				Assert(proc->decodeGroupLeader == NULL);
+				proc->decodeGroupLeader = proc;
+				dlist_push_head(&proc->decodeGroupMembers,
+								&proc->decodeGroupLink);
+			}
+		}
+		else
+		{
+			/* proc entry is gone */
+			proc = NULL;
+		}
+		LWLockRelease(leader_lwlock);
+	}
+
+	elog(DEBUG1, "became group leader (%p)", proc);
+	return proc;
+}
+
+/*
+ * BecomeDecodeGroupMember - designate process as decode group member
+ *
+ * This is pretty straightforward except for the possibility that the leader
+ * whose group we're trying to join might exit before we manage to do so;
+ * and the PGPROC might get recycled for an unrelated process.  To avoid
+ * that, we require the caller to pass the PID of the intended PGPROC as
+ * an interlock.  Returns true if we successfully join the intended lock
+ * group, and false if not.
+ */
+bool
+BecomeDecodeGroupMember(PGPROC *leader, int pid, bool is_prepared)
+{
+	LWLock	   *leader_lwlock;
+	bool		ok = false;
+
+	/* Group leader can't become member of group */
+	Assert(MyProc != leader);
+
+	/* Can't already be a member of a group */
+	Assert(MyProc->decodeGroupLeader == NULL);
+
+	/* PID must be valid OR this is a prepared transaction. */
+	Assert(pid != 0 || is_prepared);
+
+	/*
+	 * Get lock protecting the group fields.  Note LockHashPartitionLockByProc
+	 * accesses leader->pgprocno in a PGPROC that might be free.  This is safe
+	 * because all PGPROCs' pgprocno fields are set during shared memory
+	 * initialization and never change thereafter; so we will acquire the
+	 * correct lock even if the leader PGPROC is in process of being recycled.
+	 */
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+
+	/* Is this the leader we're looking for? */
+	if (leader->pid == pid && leader->decodeGroupLeader == leader)
+	{
+		if (is_prepared)
+			Assert(pid == 0);
+		/* is the leader going away? */
+		if (leader->decodeAbortPending)
+			ok = false;
+		else
+		{
+			/* OK, join the group */
+			ok = true;
+			MyProc->decodeGroupLeader = leader;
+			dlist_push_tail(&leader->decodeGroupMembers, &MyProc->decodeGroupLink);
+		}
+	}
+	else
+		MyProc->decodeGroupLeader = NULL;
+	LWLockRelease(leader_lwlock);
+
+	elog(DEBUG1, "became group member (%p) to (%p)", MyProc, leader);
+	return ok;
+}
+
+/*
+ * Remove a decodeGroupMember from the decodeGroupMembership of
+ * decodeGroupLeader
+ * Acquire lock
+ */
+void
+RemoveDecodeGroupMember(PGPROC *leader)
+{
+	LWLock	   *leader_lwlock;
+
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+	RemoveDecodeGroupMemberLocked(leader);
+	LWLockRelease(leader_lwlock);
+
+	return;
+}
+
+/*
+ * Remove a decodeGroupMember from the decodeGroupMembership of
+ * decodeGroupLeader
+ * Assumes that the caller is holding appropriate lock
+ */
+void
+RemoveDecodeGroupMemberLocked(PGPROC *leader)
+{
+	Assert(!dlist_is_empty(&leader->decodeGroupMembers));
+	dlist_delete(&MyProc->decodeGroupLink);
+	/* leader links to itself, so never empty */
+	Assert(!dlist_is_empty(&leader->decodeGroupMembers));
+	MyProc->decodeGroupLeader = NULL;
+	elog(DEBUG1, "removed group member (%p) from (%p)", MyProc, leader);
+
+	return;
+}
+
+/*
+ * Indicate to all decodeGroupMembers that this transaction is
+ * going away.
+ *
+ * Wait for all decodeGroupMembers to ack back before returning
+ * from here but only in case of aborts.
+ *
+ * This function should be called *after* the proc has been
+ * removed from the procArray.
+ *
+ * If the transaction is committing, it's ok for the
+ * decoders to continue merrily. When it tries to lock this
+ * proc, it won't find it and check for transaction status
+ * and cache the commit status for future calls in
+ * LogicalLockTransaction
+ */
+void
+LogicalDecodeRemoveTransaction(PGPROC *leader, bool isCommit)
+{
+	LWLock	   *leader_lwlock;
+	dlist_mutable_iter change_i;
+	dlist_iter  iter;
+	PGPROC	   *proc;
+	bool		do_wait;
+
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+	/* mark ourself as aborting */
+	if (!isCommit)
+		leader->decodeAbortPending = true;
+
+	if (leader->decodeGroupLeader == NULL)
+	{
+		Assert(dlist_is_empty(&leader->decodeGroupMembers));
+		LWLockRelease(leader_lwlock);
+		return;
+	}
+
+recheck:
+	do_wait = false;
+	Assert(leader->decodeGroupLeader == leader);
+	Assert(!dlist_is_empty(&leader->decodeGroupMembers));
+	if (!isCommit)
+	{
+		dlist_foreach(iter, &leader->decodeGroupMembers)
+		{
+			proc = dlist_container(PGPROC, decodeGroupLink, iter.cur);
+			/* mark the proc to indicate abort is pending */
+			if (proc == leader)
+				continue;
+			if (!proc->decodeAbortPending)
+			{
+				proc->decodeAbortPending = true;
+				elog(DEBUG1, "marking group member (%p) from (%p) for abort",
+					 proc, leader);
+			}
+			/* if the proc is currently locked, wait */
+			if (proc->decodeLocked)
+				do_wait = true;
+		}
+
+		if (do_wait)
+		{
+			int			rc;
+			LWLockRelease(leader_lwlock);
+
+			elog(LOG, "Waiting for backends to abort decoding");
+			/*
+			 * Wait on our latch to allow decodeGroupMembers to
+			 * go away soon
+			 */
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+						   100L,
+						   WAIT_EVENT_PG_SLEEP);
+			ResetLatch(MyLatch);
+
+			/* emergency bailout if postmaster has died */
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
+
+			CHECK_FOR_INTERRUPTS();
+
+			/* Recheck decodeGroupMembers */
+			LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+			goto recheck;
+		}
+	}
+
+	/*
+	 * All backends exited cleanly in case of aborts above,
+	 * remove decodeGroupMembers now for both commit/abort cases
+	 */
+	Assert(leader->decodeGroupLeader == leader);
+	Assert(!dlist_is_empty(&leader->decodeGroupMembers));
+	dlist_foreach_modify(change_i, &leader->decodeGroupMembers)
+	{
+		proc = dlist_container(PGPROC, decodeGroupLink, change_i.cur);
+		Assert(!proc->decodeLocked);
+		dlist_delete(&proc->decodeGroupLink);
+		elog(DEBUG1, "deleting group member (%p) from (%p)",
+			 proc, leader);
+		proc->decodeGroupLeader = NULL;
+	}
+	Assert(dlist_is_empty(&leader->decodeGroupMembers));
+	leader->decodeGroupLeader = NULL;
+	leader->decodeAbortPending = false;
+	LWLockRelease(leader_lwlock);
+
+	return;
 }

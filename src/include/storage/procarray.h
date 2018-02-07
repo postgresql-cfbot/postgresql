@@ -98,6 +98,7 @@ extern bool HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids
 extern PGPROC *BackendPidGetProc(int pid);
 extern PGPROC *BackendPidGetProcWithLock(int pid);
 extern int	BackendXidGetPid(TransactionId xid);
+extern PGPROC *BackendXidGetProc(TransactionId xid);
 extern bool IsBackendPid(int pid);
 
 extern VirtualTransactionId *GetCurrentVirtualXIDs(TransactionId limitXmin,

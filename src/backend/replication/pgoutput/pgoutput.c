@@ -37,11 +37,23 @@ static void pgoutput_begin_txn(LogicalDecodingContext *ctx,
 				   ReorderBufferTXN *txn);
 static void pgoutput_commit_txn(LogicalDecodingContext *ctx,
 					ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+static void pgoutput_abort_txn(LogicalDecodingContext *ctx,
+					ReorderBufferTXN *txn, XLogRecPtr abort_lsn);
 static void pgoutput_change(LogicalDecodingContext *ctx,
 				ReorderBufferTXN *txn, Relation rel,
 				ReorderBufferChange *change);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 					   RepOriginId origin_id);
+static bool pgoutput_filter_prepare(LogicalDecodingContext *ctx,
+			ReorderBufferTXN *txn, TransactionId xid, const char *gid);
+static bool pgoutput_decode_txn_filter(LogicalDecodingContext *ctx,
+					   ReorderBufferTXN *txn);
+static void pgoutput_prepare_txn(LogicalDecodingContext *ctx,
+				ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
+static void pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx,
+				ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
+static void pgoutput_abort_prepared_txn(LogicalDecodingContext *ctx,
+				ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
 
 static bool publications_valid;
 
@@ -79,7 +91,15 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->begin_cb = pgoutput_begin_txn;
 	cb->change_cb = pgoutput_change;
 	cb->commit_cb = pgoutput_commit_txn;
+	cb->abort_cb = pgoutput_abort_txn;
+
+	cb->filter_prepare_cb = pgoutput_filter_prepare;
+	cb->prepare_cb = pgoutput_prepare_txn;
+	cb->commit_prepared_cb = pgoutput_commit_prepared_txn;
+	cb->abort_prepared_cb = pgoutput_abort_prepared_txn;
+
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
+	cb->filter_decode_txn_cb = pgoutput_decode_txn_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
 }
 
@@ -252,6 +272,61 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 }
 
 /*
+ * ABORT callback
+ */
+static void
+pgoutput_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					XLogRecPtr abort_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_abort(ctx->out, txn, abort_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * PREPARE callback
+ */
+static void
+pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					XLogRecPtr prepare_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * COMMIT PREPARED callback
+ */
+static void
+pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					XLogRecPtr prepare_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
+	OutputPluginWrite(ctx, true);
+}
+/*
+ * PREPARE callback
+ */
+static void
+pgoutput_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					XLogRecPtr prepare_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
  * Sends the decoded DML over wire.
  */
 static void
@@ -362,6 +437,18 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 }
 
 /*
+ * Filter out unnecessary two-phase transactions.
+ *
+ * Currently, we forward all two-phase transactions
+ */
+static bool
+pgoutput_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+								TransactionId xid, const char *gid)
+{
+	return false;
+}
+
+/*
  * Currently we always forward.
  */
 static bool
@@ -369,6 +456,37 @@ pgoutput_origin_filter(LogicalDecodingContext *ctx,
 					   RepOriginId origin_id)
 {
 	return false;
+}
+
+/*
+ * Check if we should continue to decode this transaction.
+ *
+ * If it has aborted in the meanwhile, then there's no sense
+ * in decoding and sending the rest of the changes, we might
+ * as well ask the subscribers to abort immediately.
+ *
+ * This should be called if we are streaming a transaction
+ * before it's committed or if we are decoding a 2PC
+ * transaction. Otherwise we always decode committed
+ * transactions
+ *
+ * Additional checks can be added here, as needed
+ */
+static bool
+pgoutput_decode_txn_filter(LogicalDecodingContext *ctx,
+					   ReorderBufferTXN *txn)
+{
+	/*
+	 * Due to caching, repeated TransactionIdDidAbort calls
+	 * shouldn't be that expensive
+	 */
+	if (txn != NULL &&
+			TransactionIdIsValid(txn->xid) &&
+			TransactionIdDidAbort(txn->xid))
+			return true;
+
+	/* if txn is NULL, filter it out */
+	return (txn != NULL)? false:true;
 }
 
 /*

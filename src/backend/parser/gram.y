@@ -52,6 +52,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_trigger.h"
+#include "catalog/pg_ts_config_map.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
 #include "nodes/makefuncs.h"
@@ -241,6 +242,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
 	RoleSpec			*rolespec;
+	DictMapElem			*dmapelem;
 }
 
 %type <node>	stmt schema_stmt
@@ -308,7 +310,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	vacuum_option_list vacuum_option_elem
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
-				opt_nowait opt_if_exists opt_with_data
+				opt_nowait opt_if_exists opt_with_data opt_dictionary_map_no
 %type <ival>	opt_nowait_or_skip
 
 %type <list>	OptRoleList AlterOptRoleList
@@ -583,6 +585,13 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound partbound_datum_list range_datum_list
 %type <defelt>		hash_partbound_elem
 
+%type <ival>		dictionary_map_set_expr_operator
+%type <dmapelem>	dictionary_map_dict dictionary_map_command_expr_paren
+					dictionary_map_set_expr dictionary_map_case
+					dictionary_map_action dictionary_map
+					opt_dictionary_map_case_else dictionary_config
+					dictionary_config_comma
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -644,13 +653,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	JOIN
 
-	KEY
+	KEEP KEY
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MAP MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE
+	MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -10349,24 +10359,26 @@ AlterTSDictionaryStmt:
 		;
 
 AlterTSConfigurationStmt:
-			ALTER TEXT_P SEARCH CONFIGURATION any_name ADD_P MAPPING FOR name_list any_with any_name_list
+			ALTER TEXT_P SEARCH CONFIGURATION any_name ADD_P MAPPING FOR name_list any_with dictionary_config
 				{
 					AlterTSConfigurationStmt *n = makeNode(AlterTSConfigurationStmt);
 					n->kind = ALTER_TSCONFIG_ADD_MAPPING;
 					n->cfgname = $5;
 					n->tokentype = $9;
-					n->dicts = $11;
+					n->dict_map = $11;
+					n->dicts = NULL;
 					n->override = false;
 					n->replace = false;
 					$$ = (Node*)n;
 				}
-			| ALTER TEXT_P SEARCH CONFIGURATION any_name ALTER MAPPING FOR name_list any_with any_name_list
+			| ALTER TEXT_P SEARCH CONFIGURATION any_name ALTER MAPPING FOR name_list any_with dictionary_config
 				{
 					AlterTSConfigurationStmt *n = makeNode(AlterTSConfigurationStmt);
 					n->kind = ALTER_TSCONFIG_ALTER_MAPPING_FOR_TOKEN;
 					n->cfgname = $5;
 					n->tokentype = $9;
-					n->dicts = $11;
+					n->dict_map = $11;
+					n->dicts = NULL;
 					n->override = true;
 					n->replace = false;
 					$$ = (Node*)n;
@@ -10418,6 +10430,134 @@ any_with:	WITH									{}
 			| WITH_LA								{}
 		;
 
+opt_dictionary_map_no:
+			NO { $$ = true; }
+			| { $$ = false; }
+		;
+
+dictionary_config_comma:
+			dictionary_map_dict { $$ = $1; }
+			| dictionary_map_dict ',' dictionary_config_comma
+			{
+				DictMapExprElem *n = makeNode(DictMapExprElem);
+				DictMapElem *r = makeNode(DictMapElem);
+
+				n->left = $1;
+				n->oper = TSMAP_OP_COMMA;
+				n->right = $3;
+
+				r->kind = DICT_MAP_EXPRESSION;
+				r->data = n;
+				$$ = r;
+			}
+		;
+
+dictionary_config:
+			dictionary_map { $$ = $1; }
+			| dictionary_map_dict ',' dictionary_config_comma
+			{
+				DictMapExprElem *n = makeNode(DictMapExprElem);
+				DictMapElem *r = makeNode(DictMapElem);
+
+				n->left = $1;
+				n->oper = TSMAP_OP_COMMA;
+				n->right = $3;
+
+				r->kind = DICT_MAP_EXPRESSION;
+				r->data = n;
+				$$ = r;
+			}
+		;
+
+dictionary_map:
+			dictionary_map_case { $$ = $1; }
+			| dictionary_map_set_expr { $$ = $1; }
+		;
+
+dictionary_map_action:
+			KEEP
+			{
+				DictMapElem *n = makeNode(DictMapElem);
+				n->kind = DICT_MAP_KEEP;
+				n->data = NULL;
+				$$ = n;
+			}
+			| dictionary_map { $$ = $1; }
+		;
+
+opt_dictionary_map_case_else:
+			ELSE dictionary_map { $$ = $2; }
+			| { $$ = NULL; }
+		;
+
+dictionary_map_case:
+			CASE dictionary_map WHEN opt_dictionary_map_no MATCH THEN dictionary_map_action opt_dictionary_map_case_else END_P
+			{
+				DictMapCase *n = makeNode(DictMapCase);
+				DictMapElem *r = makeNode(DictMapElem);
+
+				n->condition = $2;
+				n->command = $7;
+				n->elsebranch = $8;
+				n->match = !$4;
+
+				r->kind = DICT_MAP_CASE;
+				r->data = n;
+				$$ = r;
+			}
+		;
+
+dictionary_map_set_expr_operator:
+			UNION { $$ = TSMAP_OP_UNION; }
+			| EXCEPT { $$ = TSMAP_OP_EXCEPT; }
+			| INTERSECT { $$ = TSMAP_OP_INTERSECT; }
+			| MAP { $$ = TSMAP_OP_MAP; }
+		;
+
+dictionary_map_set_expr:
+			dictionary_map_command_expr_paren { $$ = $1; }
+			| dictionary_map_case dictionary_map_set_expr_operator dictionary_map_case
+			{
+				DictMapExprElem *n = makeNode(DictMapExprElem);
+				DictMapElem *r = makeNode(DictMapElem);
+
+				n->left = $1;
+				n->oper = $2;
+				n->right = $3;
+
+				r->kind = DICT_MAP_EXPRESSION;
+				r->data = n;
+				$$ = r;
+			}
+			| dictionary_map_command_expr_paren dictionary_map_set_expr_operator dictionary_map_command_expr_paren
+			{
+				DictMapExprElem *n = makeNode(DictMapExprElem);
+				DictMapElem *r = makeNode(DictMapElem);
+
+				n->left = $1;
+				n->oper = $2;
+				n->right = $3;
+
+				r->kind = DICT_MAP_EXPRESSION;
+				r->data = n;
+				$$ = r;
+			}
+		;
+
+dictionary_map_command_expr_paren:
+			'(' dictionary_map_set_expr ')'	{ $$ = $2; }
+			| dictionary_map_dict			{ $$ = $1; }
+		;
+
+dictionary_map_dict:
+			any_name
+			{
+				DictMapElem *n = makeNode(DictMapElem);
+				n->kind = DICT_MAP_DICTIONARY;
+				n->data = $1;
+				$$ = n;
+			}
+		;
 
 /*****************************************************************************
  *
@@ -15071,6 +15211,7 @@ unreserved_keyword:
 			| LOCK_P
 			| LOCKED
 			| LOGGED
+			| MAP
 			| MAPPING
 			| MATCH
 			| MATERIALIZED
@@ -15377,6 +15518,7 @@ reserved_keyword:
 			| INITIALLY
 			| INTERSECT
 			| INTO
+			| KEEP
 			| LATERAL_P
 			| LEADING
 			| LIMIT

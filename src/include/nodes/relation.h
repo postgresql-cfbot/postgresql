@@ -1664,7 +1664,7 @@ typedef struct LockRowsPath
 } LockRowsPath;
 
 /*
- * ModifyTablePath represents performing INSERT/UPDATE/DELETE modifications
+ * ModifyTablePath represents performing INSERT/UPDATE/DELETE/MERGE
  *
  * We represent most things that will be in the ModifyTable plan node
  * literally, except we have child Path(s) not Plan(s).  But analysis of the
@@ -1673,13 +1673,14 @@ typedef struct LockRowsPath
 typedef struct ModifyTablePath
 {
 	Path		path;
-	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
+	CmdType		operation;		/* INSERT, UPDATE, DELETE or MERGE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
 	/* RT indexes of non-leaf tables in a partition tree */
 	List	   *partitioned_rels;
 	bool		partColsUpdated;	/* some part key in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
+	List	   *mergeTargetRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
@@ -1687,6 +1688,8 @@ typedef struct ModifyTablePath
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */
 	OnConflictExpr *onconflict; /* ON CONFLICT clause, or NULL */
 	int			epqParam;		/* ID of Param for EvalPlanQual re-eval */
+	List	   *mergeSourceTargetLists;
+	List	   *mergeActionLists; /* actions for MERGE */
 } ModifyTablePath;
 
 /*

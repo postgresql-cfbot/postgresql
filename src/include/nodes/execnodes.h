@@ -348,6 +348,7 @@ typedef struct JunkFilter
 	AttrNumber *jf_cleanMap;
 	TupleTableSlot *jf_resultSlot;
 	AttrNumber	jf_junkAttNo;
+	AttrNumber	jf_otherJunkAttNo;
 } JunkFilter;
 
 /*
@@ -426,6 +427,9 @@ typedef struct ResultRelInfo
 
 	/* relation descriptor for root partitioned table */
 	Relation	ri_PartitionRoot;
+
+	/* RTI of the target relation for MERGE */
+	Index		ri_mergeTargetRTI;
 } ResultRelInfo;
 
 /* ----------------
@@ -918,6 +922,13 @@ typedef struct PlanState
 			((PlanState *)(node))->instrument->nfiltered2 += (delta); \
 	} while(0)
 
+typedef enum EPQResult
+{
+	EPQ_UNUSED,
+	EPQ_TUPLE_IS_NULL,
+	EPQ_TUPLE_IS_NOT_NULL
+} EPQResult;
+
 /*
  * EPQState is state for executing an EvalPlanQual recheck on a candidate
  * tuple in ModifyTable or LockRows.  The estate and planstate fields are
@@ -931,6 +942,7 @@ typedef struct EPQState
 	Plan	   *plan;			/* plan tree to be executed */
 	List	   *arowMarks;		/* ExecAuxRowMarks (non-locking only) */
 	int			epqParam;		/* ID of Param to force scan node re-eval */
+	EPQResult	epqresult;		/* Result code used by MERGE */
 } EPQState;
 
 
@@ -964,13 +976,28 @@ typedef struct ProjectSetState
 } ProjectSetState;
 
 /* ----------------
+ *	 MergeActionState information
+ * ----------------
+ */
+typedef struct MergeActionState
+{
+	NodeTag     type;
+	bool        matched;        /* MATCHED or NOT MATCHED */
+	ExprState	*whenqual;  	/* WHEN quals */
+	CmdType     commandType;    /* type of action */
+	Node       *stmt;           /* T_UpdateStmt etc */
+	TupleTableSlot *slot;		/* instead of ResultRelInfo */
+	ProjectionInfo *proj;		/* instead of ResultRelInfo */
+} MergeActionState;
+
+/* ----------------
  *	 ModifyTableState information
  * ----------------
  */
 typedef struct ModifyTableState
 {
 	PlanState	ps;				/* its first field is NodeTag */
-	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
+	CmdType		operation;		/* INSERT, UPDATE, DELETE or MERGE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	bool		mt_done;		/* are we done? */
 	PlanState **mt_plans;		/* subplans (one per target rel) */
@@ -996,6 +1023,10 @@ typedef struct ModifyTableState
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
 	TupleConversionMap **mt_per_subplan_tupconv_maps;
 	/* Per plan map for tuple conversion from child to root */
+	TupleTableSlot	**mt_merge_existing;	/* extra slot for each subplan to
+											   store existing tuple. */
+	List		*mt_mergeActionStateLists;	/* List of MERGE action states */
+	AclMode		mt_merge_subcommands;	/* Flags show which cmd types are present */
 } ModifyTableState;
 
 /* ----------------

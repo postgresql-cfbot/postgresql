@@ -17,10 +17,15 @@
 #include "parser/parse_node.h"
 
 extern void transformFromClause(ParseState *pstate, List *frmList);
+extern int transformMergeJoinClause(ParseState *pstate, Node *merge,
+							List **mergeSourceTargetList);
 extern int setTargetTable(ParseState *pstate, RangeVar *relation,
 			   bool inh, bool alsoSource, AclMode requiredPerms);
 extern bool interpretOidsOption(List *defList, bool allowOids);
 
+extern void setNamespaceVisibilityForRTE(List *namespace, RangeTblEntry *rte,
+				bool rel_visible,
+				bool cols_visible);
 extern Node *transformWhereClause(ParseState *pstate, Node *clause,
 					 ParseExprKind exprKind, const char *constructName);
 extern Node *transformLimitClause(ParseState *pstate, Node *clause,

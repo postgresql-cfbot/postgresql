@@ -110,6 +110,7 @@ CommandIsReadOnly(PlannedStmt *pstmt)
 		case CMD_UPDATE:
 		case CMD_INSERT:
 		case CMD_DELETE:
+		case CMD_MERGE:
 			return false;
 		case CMD_UTILITY:
 			/* For now, treat all utility commands as read/write */
@@ -1847,6 +1848,8 @@ QueryReturnsTuples(Query *parsetree)
 		case CMD_SELECT:
 			/* returns tuples */
 			return true;
+		case CMD_MERGE:
+			return false;
 		case CMD_INSERT:
 		case CMD_UPDATE:
 		case CMD_DELETE:
@@ -2089,6 +2092,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_UpdateStmt:
 			tag = "UPDATE";
+			break;
+
+		case T_MergeStmt:
+			tag = "MERGE";
 			break;
 
 		case T_SelectStmt:
@@ -2834,6 +2841,9 @@ CreateCommandTag(Node *parsetree)
 					case CMD_DELETE:
 						tag = "DELETE";
 						break;
+					case CMD_MERGE:
+						tag = "MERGE";
+						break;
 					case CMD_UTILITY:
 						tag = CreateCommandTag(stmt->utilityStmt);
 						break;
@@ -2894,6 +2904,9 @@ CreateCommandTag(Node *parsetree)
 					case CMD_DELETE:
 						tag = "DELETE";
 						break;
+					case CMD_MERGE:
+						tag = "MERGE";
+						break;
 					case CMD_UTILITY:
 						tag = CreateCommandTag(stmt->utilityStmt);
 						break;
@@ -2942,6 +2955,7 @@ GetCommandLogLevel(Node *parsetree)
 		case T_InsertStmt:
 		case T_DeleteStmt:
 		case T_UpdateStmt:
+		case T_MergeStmt:
 			lev = LOGSTMT_MOD;
 			break;
 
@@ -3381,6 +3395,7 @@ GetCommandLogLevel(Node *parsetree)
 					case CMD_UPDATE:
 					case CMD_INSERT:
 					case CMD_DELETE:
+					case CMD_MERGE:
 						lev = LOGSTMT_MOD;
 						break;
 
@@ -3411,6 +3426,7 @@ GetCommandLogLevel(Node *parsetree)
 					case CMD_UPDATE:
 					case CMD_INSERT:
 					case CMD_DELETE:
+					case CMD_MERGE:
 						lev = LOGSTMT_MOD;
 						break;
 

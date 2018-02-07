@@ -105,8 +105,12 @@ preprocess_targetlist(PlannerInfo *root)
 	 * scribbles on parse->targetList, which is not very desirable, but we
 	 * keep it that way to avoid changing APIs used by FDWs.
 	 */
-	if (command_type == CMD_UPDATE || command_type == CMD_DELETE)
+	if (command_type == CMD_UPDATE ||
+		command_type == CMD_DELETE)
 		rewriteTargetListUD(parse, target_rte, target_relation);
+
+	if (command_type == CMD_MERGE)
+		rewriteTargetListMerge(parse, target_relation);
 
 	/*
 	 * for heap_form_tuple to work, the targetlist must match the exact order
@@ -117,6 +121,38 @@ preprocess_targetlist(PlannerInfo *root)
 	if (command_type == CMD_INSERT || command_type == CMD_UPDATE)
 		tlist = expand_targetlist(tlist, command_type,
 								  result_relation, target_relation);
+
+	/*
+	 * For MERGE command, handle targetlist of each MergeAction separately. We
+	 * give the same treatment to MergeAction->targetList as we would have
+	 * given to a regular INSERT/UPDATE/DELETE.
+	 */
+	if (command_type == CMD_MERGE)
+	{
+		ListCell *l;
+
+		foreach(l, parse->mergeActionList)
+		{
+			MergeAction     *action = (MergeAction *) lfirst(l);
+
+			switch (action->commandType)
+			{
+				case CMD_INSERT:
+				case CMD_UPDATE:
+					action->targetList = expand_targetlist(action->targetList,
+							action->commandType,
+							result_relation, target_relation);
+					break;
+				case CMD_DELETE:
+					break;
+				case CMD_NOTHING:
+					break;
+				default:
+					elog(ERROR, "unknown action in MERGE WHEN clause");
+
+			}
+		}
+	}
 
 	/*
 	 * Add necessary junk columns for rowmarked rels.  These values are needed
@@ -348,6 +384,7 @@ expand_targetlist(List *tlist, int command_type,
 													  true /* byval */ );
 					}
 					break;
+				case CMD_MERGE:
 				case CMD_UPDATE:
 					if (!att_tup->attisdropped)
 					{

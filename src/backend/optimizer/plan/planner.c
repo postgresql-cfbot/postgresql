@@ -205,6 +205,7 @@ static void add_partial_paths_to_grouping_rel(PlannerInfo *root,
 								  List *havingQual);
 static bool can_parallel_agg(PlannerInfo *root, RelOptInfo *input_rel,
 				 RelOptInfo *grouped_rel, const AggClauseCosts *agg_costs);
+static Index find_mergetarget_for_rel(PlannerInfo *root, Index child_relid);
 
 
 /*****************************************************************************
@@ -737,6 +738,20 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		/* exclRelTlist contains only Vars, so no preprocessing needed */
 	}
 
+	foreach (l, parse->mergeActionList)
+	{
+		MergeAction *action = (MergeAction *) lfirst(l);
+
+		action->targetList = (List *)
+			preprocess_expression(root,
+								  (Node *) action->targetList,
+								  EXPRKIND_TARGET);
+		action->qual =
+			preprocess_expression(root,
+								  (Node *) action->qual,
+								  EXPRKIND_QUAL);
+	}
+
 	root->append_rel_list = (List *)
 		preprocess_expression(root, (Node *) root->append_rel_list,
 							  EXPRKIND_APPINFO);
@@ -1109,9 +1124,13 @@ inheritance_planner(PlannerInfo *root)
 	List	   *subpaths = NIL;
 	List	   *subroots = NIL;
 	List	   *resultRelations = NIL;
+	List	   *mergeTargetRelations = NIL;
+	Index		mergeTargetRelation;
 	List	   *withCheckOptionLists = NIL;
 	List	   *returningLists = NIL;
 	List	   *rowMarks;
+	List	   *mergeActionLists = NIL;
+	List	   *mergeSourceTargetLists = NIL;
 	RelOptInfo *final_rel;
 	ListCell   *lc;
 	Index		rti;
@@ -1469,6 +1488,16 @@ inheritance_planner(PlannerInfo *root)
 		/* Build list of target-relation RT indexes */
 		resultRelations = lappend_int(resultRelations, appinfo->child_relid);
 
+		/* Build list of merge target-relation RT indexes */
+		if (parse->commandType == CMD_MERGE)
+		{
+			mergeTargetRelation = find_mergetarget_for_rel(root,
+					appinfo->child_relid);
+			Assert(mergeTargetRelation > 0);
+			mergeTargetRelations = lappend_int(mergeTargetRelations,
+					mergeTargetRelation);
+		}
+
 		/* Build lists of per-relation WCO and RETURNING targetlists */
 		if (parse->withCheckOptions)
 			withCheckOptionLists = lappend(withCheckOptionLists,
@@ -1477,6 +1506,12 @@ inheritance_planner(PlannerInfo *root)
 			returningLists = lappend(returningLists,
 									 subroot->parse->returningList);
 
+		if (parse->mergeActionList)
+			mergeActionLists = lappend(mergeActionLists,
+									   subroot->parse->mergeActionList);
+		if (parse->mergeSourceTargetList)
+			mergeSourceTargetLists = lappend(mergeSourceTargetLists,
+									   subroot->parse->mergeSourceTargetList);
 		Assert(!parse->onConflict);
 	}
 
@@ -1536,12 +1571,15 @@ inheritance_planner(PlannerInfo *root)
 									 partitioned_rels,
 									 partColsUpdated,
 									 resultRelations,
+									 mergeTargetRelations,
 									 subpaths,
 									 subroots,
 									 withCheckOptionLists,
 									 returningLists,
 									 rowMarks,
 									 NULL,
+									 mergeSourceTargetLists,
+									 mergeActionLists,
 									 SS_assign_special_param(root)));
 }
 
@@ -2107,8 +2145,8 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		}
 
 		/*
-		 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
-		 * inheritance_planner, add the ModifyTable node.
+		 * If this is an INSERT/UPDATE/DELETE/MERGE, and we're not being called
+		 * from inheritance_planner, add the ModifyTable node.
 		 */
 		if (parse->commandType != CMD_SELECT && !inheritance_update)
 		{
@@ -2148,12 +2186,15 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										NIL,
 										false,
 										list_make1_int(parse->resultRelation),
+										list_make1_int(parse->mergeTarget_relation),
 										list_make1(path),
 										list_make1(root),
 										withCheckOptionLists,
 										returningLists,
 										rowMarks,
 										parse->onConflict,
+										list_make1(parse->mergeSourceTargetList),
+										list_make1(parse->mergeActionList),
 										SS_assign_special_param(root));
 		}
 
@@ -6434,3 +6475,29 @@ can_parallel_agg(PlannerInfo *root, RelOptInfo *input_rel,
 	/* Everything looks good. */
 	return true;
 }
+
+static Index
+find_mergetarget_for_rel(PlannerInfo *root, Index child_relid)
+{
+	Query			*parse = root->parse;
+	Index			mergeTarget_relation = parse->mergeTarget_relation; 
+	RangeTblEntry	*rte, *child_rte;
+	ListCell		*l;
+
+	rte = rt_fetch(child_relid, parse->rtable);
+
+	foreach (l, root->append_rel_list)
+	{
+		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
+
+		if (appinfo->parent_relid != mergeTarget_relation)
+			continue;
+
+		child_rte = rt_fetch(appinfo->child_relid, parse->rtable);
+		if (child_rte->relid == rte->relid)
+			return appinfo->child_relid;
+	}
+
+	return 0;
+}
+

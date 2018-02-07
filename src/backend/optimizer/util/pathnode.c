@@ -3284,17 +3284,21 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'rowMarks' is a list of PlanRowMarks (non-locking only)
  * 'onconflict' is the ON CONFLICT clause, or NULL
  * 'epqParam' is the ID of Param for EvalPlanQual re-eval
+ * 'mergeActionList' is a list of MERGE actions
  */
 ModifyTablePath *
 create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						CmdType operation, bool canSetTag,
 						Index nominalRelation, List *partitioned_rels,
 						bool partColsUpdated,
-						List *resultRelations, List *subpaths,
+						List *resultRelations,
+						List *mergeTargetRelations,
+						List *subpaths,
 						List *subroots,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
-						int epqParam)
+						List *mergeSourceTargetLists,
+						List *mergeActionLists, int epqParam)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
 	double		total_size;
@@ -3306,6 +3310,12 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 		   list_length(resultRelations) == list_length(withCheckOptionLists));
 	Assert(returningLists == NIL ||
 		   list_length(resultRelations) == list_length(returningLists));
+	Assert(mergeSourceTargetLists == NIL ||
+		   list_length(resultRelations) == list_length(mergeSourceTargetLists));
+	Assert(mergeActionLists == NIL ||
+		   list_length(resultRelations) == list_length(mergeActionLists));
+	Assert(mergeTargetRelations == NIL ||
+		   list_length(resultRelations) == list_length(mergeTargetRelations));
 
 	pathnode->path.pathtype = T_ModifyTable;
 	pathnode->path.parent = rel;
@@ -3359,6 +3369,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
 	pathnode->partColsUpdated = partColsUpdated;
 	pathnode->resultRelations = resultRelations;
+	pathnode->mergeTargetRelations = mergeTargetRelations;
 	pathnode->subpaths = subpaths;
 	pathnode->subroots = subroots;
 	pathnode->withCheckOptionLists = withCheckOptionLists;
@@ -3366,6 +3377,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->rowMarks = rowMarks;
 	pathnode->onconflict = onconflict;
 	pathnode->epqParam = epqParam;
+	pathnode->mergeSourceTargetLists = mergeSourceTargetLists;
+	pathnode->mergeActionLists = mergeActionLists;
 
 	return pathnode;
 }

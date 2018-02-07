@@ -59,6 +59,7 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 	int			num_update_rri = 0,
 				update_rri_index = 0;
 	bool		is_update = false;
+	bool		is_merge = false;
 	PartitionTupleRouting *proute;
 
 	/*
@@ -79,10 +80,14 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 
 	/* Set up details specific to the type of tuple routing we are doing. */
 	if (mtstate && mtstate->operation == CMD_UPDATE)
+		is_update = true;
+	else if (mtstate && mtstate->operation == CMD_MERGE)
+		is_merge = true;
+
+	if (is_update || is_merge)
 	{
 		ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 
-		is_update = true;
 		update_rri = mtstate->resultRelInfo;
 		num_update_rri = list_length(node->plans);
 		proute->subplan_partition_offsets =
@@ -95,7 +100,8 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 		 */
 		proute->root_tuple_slot = MakeTupleTableSlot();
 	}
-	else
+	
+	if (!is_update || is_merge)
 	{
 		/*
 		 * Since we are inserting tuples, we need to create all new result
@@ -122,7 +128,7 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 		TupleDesc	part_tupdesc;
 		Oid			leaf_oid = lfirst_oid(cell);
 
-		if (is_update)
+		if (is_update || is_merge)
 		{
 			/*
 			 * If the leaf partition is already present in the per-subplan

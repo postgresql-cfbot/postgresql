@@ -1237,7 +1237,6 @@ find_childrel_parents(PlannerInfo *root, RelOptInfo *rel)
 	return result;
 }
 
-
 /*
  * get_baserel_parampathinfo
  *		Get the ParamPathInfo for a parameterized path for a base relation,

@@ -444,5 +444,6 @@ extern bool has_rolreplication(Oid roleid);
 /* in access/transam/xlog.c */
 extern bool BackupInProgress(void);
 extern void CancelBackup(void);
+extern int64 GetXactWALBytes(void);
 
 #endif							/* MISCADMIN_H */

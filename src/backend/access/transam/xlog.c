@@ -1210,6 +1210,12 @@ XLogInsertRecord(XLogRecData *rdata,
 	return EndPos;
 }
 
+int64
+GetXactWALBytes(void)
+{
+	return (int64) XactLastRecEnd;
+}
+
 /*
  * Reserves the right amount of space for a record of given size from the WAL.
  * *StartPos is set to the beginning of the reserved section, *EndPos to

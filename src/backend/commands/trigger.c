@@ -3075,11 +3075,14 @@ ltrmark:;
 				{
 					/* it was updated, so look at the updated version */
 					TupleTableSlot *epqslot;
+					Index rti = relinfo->ri_mergeTargetRTI > 0 ?
+									relinfo->ri_mergeTargetRTI :
+									relinfo->ri_RangeTableIndex;
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
 										   relation,
-										   relinfo->ri_RangeTableIndex,
+										   rti,
 										   lockmode,
 										   &hufd.ctid,
 										   hufd.xmax);
@@ -4432,6 +4435,16 @@ MakeTransitionCaptureState(TriggerDesc *trigdesc, Oid relid, CmdType cmdType)
 		case CMD_DELETE:
 			need_old = trigdesc->trig_delete_old_table;
 			need_new = false;
+			break;
+		case CMD_MERGE:
+			if (trigdesc->trig_insert_new_table ||
+				trigdesc->trig_update_new_table ||
+				trigdesc->trig_update_old_table ||
+				trigdesc->trig_delete_old_table)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("MERGE on table with transition capture triggers is not implemented")));
+			need_old = need_new = false;
 			break;
 		default:
 			elog(ERROR, "unexpected CmdType: %d", (int) cmdType);

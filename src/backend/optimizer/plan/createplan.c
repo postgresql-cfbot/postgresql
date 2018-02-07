@@ -282,9 +282,13 @@ static ModifyTable *make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
 				 Index nominalRelation, List *partitioned_rels,
 				 bool partColsUpdated,
-				 List *resultRelations, List *subplans,
+				 List *resultRelations,
+				 List *mergeTargetRelations,
+				 List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
-				 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
+				 List *rowMarks, OnConflictExpr *onconflict,
+				 List *mergeSourceTargetList,
+				 List *mergeActionList, int epqParam);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 						 GatherMergePath *best_path);
 
@@ -2386,11 +2390,14 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 							best_path->partitioned_rels,
 							best_path->partColsUpdated,
 							best_path->resultRelations,
+							best_path->mergeTargetRelations,
 							subplans,
 							best_path->withCheckOptionLists,
 							best_path->returningLists,
 							best_path->rowMarks,
 							best_path->onconflict,
+							best_path->mergeSourceTargetLists,
+							best_path->mergeActionLists,
 							best_path->epqParam);
 
 	copy_generic_path_info(&plan->plan, &best_path->path);
@@ -6462,9 +6469,13 @@ make_modifytable(PlannerInfo *root,
 				 CmdType operation, bool canSetTag,
 				 Index nominalRelation, List *partitioned_rels,
 				 bool partColsUpdated,
-				 List *resultRelations, List *subplans,
+				 List *resultRelations,
+				 List *mergeTargetRelations,
+				 List *subplans,
 				 List *withCheckOptionLists, List *returningLists,
-				 List *rowMarks, OnConflictExpr *onconflict, int epqParam)
+				 List *rowMarks, OnConflictExpr *onconflict,
+				 List *mergeSourceTargetLists,
+				 List *mergeActionLists, int epqParam)
 {
 	ModifyTable *node = makeNode(ModifyTable);
 	List	   *fdw_private_list;
@@ -6477,6 +6488,12 @@ make_modifytable(PlannerInfo *root,
 		   list_length(resultRelations) == list_length(withCheckOptionLists));
 	Assert(returningLists == NIL ||
 		   list_length(resultRelations) == list_length(returningLists));
+	Assert(mergeActionLists == NIL ||
+		   list_length(resultRelations) == list_length(mergeActionLists));
+	Assert(mergeSourceTargetLists == NIL ||
+		   list_length(resultRelations) == list_length(mergeSourceTargetLists));
+	Assert(mergeActionLists == NIL ||
+		   list_length(resultRelations) == list_length(mergeTargetRelations));
 
 	node->plan.lefttree = NULL;
 	node->plan.righttree = NULL;
@@ -6490,6 +6507,7 @@ make_modifytable(PlannerInfo *root,
 	node->partitioned_rels = partitioned_rels;
 	node->partColsUpdated = partColsUpdated;
 	node->resultRelations = resultRelations;
+	node->mergeTargetRelations = mergeTargetRelations;
 	node->resultRelIndex = -1;	/* will be set correctly in setrefs.c */
 	node->rootResultRelIndex = -1;	/* will be set correctly in setrefs.c */
 	node->plans = subplans;
@@ -6522,6 +6540,8 @@ make_modifytable(PlannerInfo *root,
 	node->withCheckOptionLists = withCheckOptionLists;
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;
+	node->mergeSourceTargetLists = mergeSourceTargetLists;
+	node->mergeActionLists = mergeActionLists;
 	node->epqParam = epqParam;
 
 	/*

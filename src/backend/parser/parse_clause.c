@@ -31,6 +31,7 @@
 #include "commands/defrem.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/print.h"
 #include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/analyze.h"
@@ -78,6 +79,7 @@ static TableSampleClause *transformRangeTableSample(ParseState *pstate,
 						  RangeTableSample *rts);
 static Node *transformFromClauseItem(ParseState *pstate, Node *n,
 						RangeTblEntry **top_rte, int *top_rti,
+						RangeTblEntry **right_rte, int *right_rti,
 						List **namespace);
 static Node *buildMergedJoinVar(ParseState *pstate, JoinType jointype,
 				   Var *l_colvar, Var *r_colvar);
@@ -139,6 +141,7 @@ transformFromClause(ParseState *pstate, List *frmList)
 		n = transformFromClauseItem(pstate, n,
 									&rte,
 									&rtindex,
+									NULL, NULL,
 									&namespace);
 
 		checkNameSpaceConflicts(pstate, pstate->p_namespace, namespace);
@@ -157,6 +160,79 @@ transformFromClause(ParseState *pstate, List *frmList)
 	 * but those should have been that way already.
 	 */
 	setNamespaceLateralState(pstate->p_namespace, false, true);
+}
+
+/*
+ *	Special handling for MERGE statement is required because we assemble
+ *	the query manually. This is similar to setTargetTable() followed
+ * 	by transformFromClause() but with a few less steps.
+ *
+ *	Process the FROM clause and add items to the query's range table,
+ *	joinlist, and namespace.
+ *
+ *	Note: we assume that the pstate's p_rtable, p_joinlist, and p_namespace
+ *	lists were initialized to NIL when the pstate was created.
+ *
+ *	A special targetlist comprising of the columns from the right-subtree of
+ *	the join is populated and returned. Note that when the JoinExpr is
+ *	setup by transformMergeStmt, the left subtree has the target result
+ *	relation and the right subtree has the source relation.
+ *
+ *	Returns the rangetable index of the target relation.
+ */
+int
+transformMergeJoinClause(ParseState *pstate, Node *merge,
+							List **mergeSourceTargetList)
+{
+	RangeTblEntry *rte, *rt_rte;
+	List	   *namespace;
+	int			rtindex, rt_rtindex;
+	Node		*n;
+	int			mergeTarget_relation = list_length(pstate->p_rtable) + 1;
+
+	n = transformFromClauseItem(pstate, merge,
+									&rte,
+									&rtindex,
+									&rt_rte,
+									&rt_rtindex,
+									&namespace);
+
+	pstate->p_joinlist = list_make1(n);
+
+	/*
+	 * We created an internal join between the target and the source relation
+	 * to carry out the MERGE actions. Normally such an unaliased join hides
+	 * the joining relations, unless the column references are qualified. Also,
+	 * any unqualified column refernces are resolved to the Join RTE, if there
+	 * is a matching entry in the targetlist. But the way MERGE execution is
+	 * later setup, we expect all column references to resolve to either the
+	 * source or the target relation. Hence we must not add the Join RTE to the
+	 * namespace.
+	 *
+	 * The last entry must be for the top-level Join RTE. The source (right
+	 * side of the join) RTE must have been placed just before that. Keep that
+	 * and discard everything else. More importantly, we want to discard the
+	 * RTE of the left side of the join since that contains the target
+	 * relation. References to the columns of the target relation must be
+	 * resolved from the result relation and not the one that is used in the
+	 * join.
+	 */
+	Assert(list_length(namespace) > 1);
+	namespace = list_truncate(namespace, list_length(namespace) - 1);
+	pstate->p_namespace = lappend(pstate->p_namespace, llast(namespace));
+
+	/* XXX Do we need this? */
+	setNamespaceLateralState(pstate->p_namespace, false, true);
+
+	/*
+	 * Expand the right relation and add its columns to the
+	 * mergeSourceTargetList. Note that the right relation can either be a
+	 * plain relation or a subquery or anything that can have a
+	 * RangeTableEntry.
+	 */
+	*mergeSourceTargetList = expandRelAttrs(pstate, rt_rte, rt_rtindex, 0, -1);
+
+	return mergeTarget_relation;
 }
 
 /*
@@ -1103,6 +1179,7 @@ getRTEForSpecialRelationTypes(ParseState *pstate, RangeVar *rv)
 static Node *
 transformFromClauseItem(ParseState *pstate, Node *n,
 						RangeTblEntry **top_rte, int *top_rti,
+						RangeTblEntry **right_rte, int *right_rti,
 						List **namespace)
 {
 	if (IsA(n, RangeVar))
@@ -1194,7 +1271,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		/* Recursively transform the contained relation */
 		rel = transformFromClauseItem(pstate, rts->relation,
-									  top_rte, top_rti, namespace);
+									  top_rte, top_rti, NULL, NULL, namespace);
 		/* Currently, grammar could only return a RangeVar as contained rel */
 		rtr = castNode(RangeTblRef, rel);
 		rte = rt_fetch(rtr->rtindex, pstate->p_rtable);
@@ -1240,6 +1317,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		j->larg = transformFromClauseItem(pstate, j->larg,
 										  &l_rte,
 										  &l_rtindex,
+										  NULL, NULL,
 										  &l_namespace);
 
 		/*
@@ -1267,6 +1345,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		j->rarg = transformFromClauseItem(pstate, j->rarg,
 										  &r_rte,
 										  &r_rtindex,
+										  NULL, NULL,
 										  &r_namespace);
 
 		/* Remove the left-side RTEs from the namespace list again */
@@ -1294,6 +1373,12 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 				  &l_colnames, &l_colvars);
 		expandRTE(r_rte, r_rtindex, 0, -1, false,
 				  &r_colnames, &r_colvars);
+
+		if (right_rte)
+			*right_rte = r_rte;
+
+		if (right_rti)
+			*right_rti = r_rtindex;
 
 		/*
 		 * Natural join does not explicitly specify columns; must generate
@@ -1690,6 +1775,27 @@ setNamespaceColumnVisibility(List *namespace, bool cols_visible)
 
 		nsitem->p_cols_visible = cols_visible;
 	}
+}
+
+void
+setNamespaceVisibilityForRTE(List *namespace, RangeTblEntry *rte,
+		bool rel_visible,
+		bool cols_visible)
+{
+	ListCell   *lc;
+
+	foreach(lc, namespace)
+	{
+		ParseNamespaceItem *nsitem = (ParseNamespaceItem *) lfirst(lc);
+
+		if (nsitem->p_rte == rte)
+		{
+			nsitem->p_rel_visible = rel_visible;
+			nsitem->p_cols_visible = cols_visible;
+			break;
+		}
+	}
+
 }
 
 /*

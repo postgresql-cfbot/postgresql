@@ -29,3 +29,11 @@ SELECT num_nulls(VARIADIC '{}'::int[]);
 -- should fail, one or more arguments is required
 SELECT num_nonnulls();
 SELECT num_nulls();
+
+---
+--- pg_get_typemod()
+---
+
+SELECT format_type(to_regtype(t), pg_to_typemod(t)) FROM (VALUES ('INTERVAL SECOND (5)'), ('Varchar(17)'), ('timestamptz (2)')) x(t);
+SELECT pg_to_typemod('int');
+SELECT pg_to_typemod('"Unknown Type"') IS NULL;

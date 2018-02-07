@@ -133,3 +133,26 @@ ERROR:  function num_nulls() does not exist
 LINE 1: SELECT num_nulls();
                ^
 HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+---
+--- pg_get_typemod()
+---
+SELECT format_type(to_regtype(t), pg_to_typemod(t)) FROM (VALUES ('INTERVAL SECOND (5)'), ('Varchar(17)'), ('timestamptz (2)')) x(t);
+         format_type         
+-----------------------------
+ interval second(5)
+ character varying(17)
+ timestamp(2) with time zone
+(3 rows)
+
+SELECT pg_to_typemod('int');
+ pg_to_typemod 
+---------------
+            -1
+(1 row)
+
+SELECT pg_to_typemod('"Unknown Type"') IS NULL;
+ ?column? 
+----------
+ t
+(1 row)
+

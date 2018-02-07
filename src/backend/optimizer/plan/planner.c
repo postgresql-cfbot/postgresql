@@ -3705,7 +3705,10 @@ create_grouping_paths(PlannerInfo *root,
 								   0,
 								   false,
 								   NIL,
-								   -1);
+								   -1,
+								   NIL,
+								   NIL,
+								   false);
 			path->pathtarget = target;
 		}
 		else

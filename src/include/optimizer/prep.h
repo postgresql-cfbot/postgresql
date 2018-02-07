@@ -49,6 +49,11 @@ extern RelOptInfo *plan_set_operations(PlannerInfo *root);
 
 extern void expand_inherited_tables(PlannerInfo *root);
 
+extern void promote_child_relation(PlannerInfo *root, RelOptInfo *parent,
+					   RelOptInfo *child,
+					   List *translate_from_exprs,
+					   List *translate_to_exprs);
+
 extern Node *adjust_appendrel_attrs(PlannerInfo *root, Node *node,
 					   int nappinfos, AppendRelInfo **appinfos);
 

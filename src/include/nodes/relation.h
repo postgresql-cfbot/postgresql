@@ -317,6 +317,16 @@ typedef struct PlannerInfo
 
 	/* optional private data for join_search_hook, e.g., GEQO */
 	void	   *join_search_private;
+
+	/*
+	 * Used for expr translation for some proxy path Append nodes during
+	 * createplan.
+	 */
+	List	   *translate_from_exprs;
+	List	   *translate_to_exprs;
+
+	Relids		translated_childrelids; /* All child rels that have been
+										 * promoted to parents */
 } PlannerInfo;
 
 
@@ -1266,6 +1276,18 @@ typedef struct CustomPath
  * elements.  These cases are optimized during create_append_plan.
  * In particular, an AppendPath with no subpaths is a "dummy" path that
  * is created to represent the case that a relation is provably empty.
+ *
+ * An AppendPath with a single subpath can be set up to become a "proxy" path.
+ * This allows a Path which belongs to one relation to be added to the pathlist
+ * of some other relation.  This is intended as generic infrastructure, but its
+ * primary use case is to allow Appends with only a single subpath to be
+ * removed from the final plan.
+ *
+ * A path's targetlist naturally will contain Vars belonging to its parent
+ * rel, so we must also provide a mechanism to allow the translation of any
+ * Vars which reference the original Append relation's Vars to allow them to
+ * be translated into the proxied path Vars. translate_from and translate_to
+ * serve this purpose.  They must only be set when isproxy is true.
  */
 typedef struct AppendPath
 {
@@ -1273,9 +1295,12 @@ typedef struct AppendPath
 	/* RT indexes of non-leaf tables in a partition tree */
 	List	   *partitioned_rels;
 	List	   *subpaths;		/* list of component Paths */
-
 	/* Index of first partial path in subpaths */
 	int			first_partial_path;
+
+	List	   *translate_from;
+	List	   *translate_to;
+	bool		isproxy;
 } AppendPath;
 
 #define IS_DUMMY_PATH(p) \
@@ -1285,6 +1310,10 @@ typedef struct AppendPath
 #define IS_DUMMY_REL(r) \
 	((r)->cheapest_total_path != NULL && \
 	 IS_DUMMY_PATH((r)->cheapest_total_path))
+
+/* Append path is acting as a proxy for its single subpath */
+#define IS_PROXY_PATH(p) \
+	(IsA((p), AppendPath) && ((AppendPath *) (p))->isproxy)
 
 /*
  * MergeAppendPath represents a MergeAppend plan, ie, the merging of sorted

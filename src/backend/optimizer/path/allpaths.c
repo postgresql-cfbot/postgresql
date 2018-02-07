@@ -136,6 +136,8 @@ static void recurse_push_qual(Node *setOp, Query *topquery,
 static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
 static void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 						List *live_childrels);
+static void generate_proxy_paths(PlannerInfo *root, RelOptInfo *rel,
+					 RelOptInfo *childrel);
 
 
 /*
@@ -1546,12 +1548,31 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	/*
 	 * If we found unparameterized paths for all children, build an unordered,
 	 * unparameterized Append path for the rel.  (Note: this is correct even
-	 * if we have zero or one live subpath due to constraint exclusion.)
+	 * if we have no live subpaths due to constraint exclusion.)
 	 */
 	if (subpaths_valid)
-		add_path(rel, (Path *) create_append_path(rel, subpaths, NIL,
-												  NULL, 0, false,
-												  partitioned_rels, -1));
+	{
+		/*
+		 * If only a single subpath exists then we've no need for the Append
+		 * at all. Here we'll generate a "proxy" path in rel for each of the
+		 * subpath rel's paths.
+		 */
+		if (list_length(subpaths) == 1)
+		{
+			generate_proxy_paths(root, rel,
+								 ((Path *) linitial(subpaths))->parent);
+
+			/* no need to generate any other paths */
+			return;
+		}
+		else
+		{
+			add_path(rel, (Path *) create_append_path(rel, subpaths, NIL,
+													  NULL, 0, false,
+													  partitioned_rels, -1,
+													  NIL, NIL, false));
+		}
+	}
 
 	/*
 	 * Consider an append of unordered, unparameterized partial paths.  Make
@@ -1594,7 +1615,8 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		appendpath = create_append_path(rel, NIL, partial_subpaths, NULL,
 										parallel_workers,
 										enable_parallel_append,
-										partitioned_rels, -1);
+										partitioned_rels, -1,
+										NIL, NIL, false);
 
 		/*
 		 * Make sure any subsequent partial paths use the same row count
@@ -1643,7 +1665,8 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		appendpath = create_append_path(rel, pa_nonpartial_subpaths,
 										pa_partial_subpaths,
 										NULL, parallel_workers, true,
-										partitioned_rels, partial_rows);
+										partitioned_rels, partial_rows,
+										NIL, NIL, false);
 		add_partial_path(rel, (Path *) appendpath);
 	}
 
@@ -1695,10 +1718,61 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		if (subpaths_valid)
-			add_path(rel, (Path *)
-					 create_append_path(rel, subpaths, NIL,
-										required_outer, 0, false,
-										partitioned_rels, -1));
+		{
+			if (list_length(subpaths) == 1)
+				generate_proxy_paths(root, rel,
+									 ((Path *) linitial(subpaths))->parent);
+			else
+				add_path(rel, (Path *)
+						 create_append_path(rel, subpaths, NIL,
+											required_outer, 0, false,
+											partitioned_rels, -1,
+											NIL, NIL, false));
+		}
+	}
+}
+
+/*
+ * generate_proxy_paths
+ *		Add all of childrel's paths to rel as proxy paths.
+ */
+static void
+generate_proxy_paths(PlannerInfo *root, RelOptInfo *rel, RelOptInfo *childrel)
+{
+	ListCell   *l;
+	List	   *oldtlist;
+	List	   *newtlist;
+
+	/*
+	 * Make a copy of the current target list.  Each path can share the same
+	 * copy.
+	 */
+	oldtlist = list_copy(rel->reltarget->exprs);
+
+	/* Perform translation to determine what the new tlist will be */
+	newtlist = (List *) adjust_appendrel_attrs_multilevel(root,
+											(Node *) rel->reltarget->exprs,
+											childrel->relids,
+											rel->relids);
+
+	foreach(l, childrel->pathlist)
+	{
+		Path *path = (Path *) lfirst(l);
+
+		add_path(rel, (Path *) create_append_path(rel,
+					list_make1(path), NIL, PATH_REQ_OUTER(path),
+					path->parallel_workers, false, NULL, -1,
+					oldtlist, newtlist, true));
+	}
+
+	foreach(l, childrel->partial_pathlist)
+	{
+		Path *path = (Path *) lfirst(l);
+
+		add_partial_path(rel, (Path *) create_append_path(rel,
+							list_make1(path), NIL, PATH_REQ_OUTER(path),
+							path->parallel_workers, false, NULL, -1,
+							oldtlist, newtlist, true));
 	}
 }
 
@@ -1963,8 +2037,8 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
 	rel->partial_pathlist = NIL;
 
 	add_path(rel, (Path *) create_append_path(rel, NIL, NIL, NULL,
-											  0, false, NIL, -1));
-
+											  0, false, NIL, -1,
+											  NIL, NIL, false));
 	/*
 	 * We set the cheapest path immediately, to ensure that IS_DUMMY_REL()
 	 * will recognize the relation as dummy if anyone asks.  This is redundant

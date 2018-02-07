@@ -60,6 +60,29 @@ gistRedoClearFollowRight(XLogReaderState *record, uint8 block_id)
 		UnlockReleaseBuffer(buffer);
 }
 
+static void
+gistRedoPageSetDeleted(XLogReaderState *record)
+{
+	XLogRecPtr	lsn = record->EndRecPtr;
+	gistxlogPageDelete *xldata = (gistxlogPageDelete *) XLogRecGetData(record);
+	Buffer		buffer;
+	Page		page;
+	PageHeader		header;
+
+	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
+	{
+		page = (Page) BufferGetPage(buffer);
+		header = (PageHeader) page;
+
+		header->pd_prune_xid = xldata->id;
+		GistPageSetDeleted(page);
+
+		PageSetLSN(page, lsn);
+		MarkBufferDirty(buffer);
+
+		UnlockReleaseBuffer(buffer);
+	}
+}
 /*
  * redo any page update (except page split)
  */
@@ -112,8 +135,8 @@ gistRedoPageUpdateRecord(XLogReaderState *record)
 			data += sizeof(OffsetNumber) * xldata->ntodelete;
 
 			PageIndexMultiDelete(page, todelete, xldata->ntodelete);
-			if (GistPageIsLeaf(page))
-				GistMarkTuplesDeleted(page);
+
+			GistMarkTuplesDeleted(page);
 		}
 
 		/* Add new tuples if any */
@@ -324,6 +347,9 @@ gist_redo(XLogReaderState *record)
 		case XLOG_GIST_CREATE_INDEX:
 			gistRedoCreateIndex(record);
 			break;
+		case XLOG_GIST_PAGE_DELETE:
+			gistRedoPageSetDeleted(record);
+			break;
 		default:
 			elog(PANIC, "gist_redo: unknown op code %u", info);
 	}
@@ -439,6 +465,23 @@ gistXLogSplit(bool page_is_leaf,
 
 	recptr = XLogInsert(RM_GIST_ID, XLOG_GIST_PAGE_SPLIT);
 
+	return recptr;
+}
+
+
+XLogRecPtr
+gistXLogSetDeleted(RelFileNode node, Buffer buffer, TransactionId xid) {
+	gistxlogPageDelete xlrec;
+	XLogRecPtr	recptr;
+
+	xlrec.id = xid;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(gistxlogPageDelete));
+
+	XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+	/* new tuples */
+	recptr = XLogInsert(RM_GIST_ID, XLOG_GIST_PAGE_DELETE);
 	return recptr;
 }
 

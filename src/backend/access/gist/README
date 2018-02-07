@@ -413,6 +413,41 @@ emptied yet; tuples never move upwards in the tree. The final emptying loops
 through buffers at a given level until all buffers at that level have been
 emptied, and then moves down to the next level.
 
+Bulk delete algorithm (VACUUM)
+------------------------------
+
+Function gistbulkdelete() is responsible for marking empty leaf pages as free
+so that they can be used it allocate newly split pages. To find this pages
+function can choose between two strategies: logical scan or physical scan.
+
+Physical scan reads the entire index from the first page to last. This scan
+maintains graph structure in palloc'ed array to collect block numbers of
+internal pages that need cleansing from references to empty leafs. Also, the
+array contains offsets on the internal page to potentially free leaf page. This
+scan method is chosen when maintenance work memory is sufficient to hold
+necessary graph structure.
+
+The logical scan is chosen when there is not enough maintenance memory to
+execute the physical scan. Logical scan traverses GiST index in DFS, looking up
+into incomplete split branches. The logical scan can be slower on hard disk
+drives.
+
+The result of both scans are the same: the stack of block numbers of internal
+pages with the list of offsets potentially referencing empty leaf pages. After
+the scan, for each internal pages under exclusive lock, each potentially free
+leaf page is examined. gistbulkdelete() never delete last one reference from
+internal page to preserve balanced tree properties.
+
+The physical scan can return empty leaf pages offsets unordered. Thus, before
+executing PageIndexMultiDelete offsets (already locked and checked) are sorted.
+This step is not necessary for the logical scan.
+
+Both scans hold only one lock at a time. Physical scan grabs exclusive lock
+instantly, while logical scan takes shared lock and then swaps it to exclusive.
+This is done because amount of work on internal page done by physical scan is
+lower and amount of internal pages is relatively low compared to the amount of
+leaf pages.
+
 
 Authors:
 	Teodor Sigaev	<teodor@sigaev.ru>

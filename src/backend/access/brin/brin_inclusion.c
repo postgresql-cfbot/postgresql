@@ -248,7 +248,8 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 {
 	BrinDesc   *bdesc = (BrinDesc *) PG_GETARG_POINTER(0);
 	BrinValues *column = (BrinValues *) PG_GETARG_POINTER(1);
-	ScanKey		key = (ScanKey) PG_GETARG_POINTER(2);
+	ScanKey	   *keys = (ScanKey *) PG_GETARG_POINTER(2);
+	int			nkeys = PG_GETARG_INT32(3);
 	Oid			colloid = PG_GET_COLLATION(),
 				subtype;
 	Datum		unionval;
@@ -256,235 +257,242 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 	Datum		query;
 	FmgrInfo   *finfo;
 	Datum		result;
-
-	Assert(key->sk_attno == column->bv_attno);
-
-	/* Handle IS NULL/IS NOT NULL tests. */
-	if (key->sk_flags & SK_ISNULL)
-	{
-		if (key->sk_flags & SK_SEARCHNULL)
-		{
-			if (column->bv_allnulls || column->bv_hasnulls)
-				PG_RETURN_BOOL(true);
-			PG_RETURN_BOOL(false);
-		}
-
-		/*
-		 * For IS NOT NULL, we can only skip ranges that are known to have
-		 * only nulls.
-		 */
-		if (key->sk_flags & SK_SEARCHNOTNULL)
-			PG_RETURN_BOOL(!column->bv_allnulls);
-
-		/*
-		 * Neither IS NULL nor IS NOT NULL was used; assume all indexable
-		 * operators are strict and return false.
-		 */
-		PG_RETURN_BOOL(false);
-	}
-
-	/* If it is all nulls, it cannot possibly be consistent. */
-	if (column->bv_allnulls)
-		PG_RETURN_BOOL(false);
+	int			keyno;
+	bool		matches;
 
 	/* It has to be checked, if it contains elements that are not mergeable. */
 	if (DatumGetBool(column->bv_values[INCLUSION_UNMERGEABLE]))
 		PG_RETURN_BOOL(true);
 
-	attno = key->sk_attno;
-	subtype = key->sk_subtype;
-	query = key->sk_argument;
-	unionval = column->bv_values[INCLUSION_UNION];
-	switch (key->sk_strategy)
+	matches = true;
+
+	for (keyno = 0; keyno < nkeys; keyno++)
 	{
-			/*
-			 * Placement strategies
-			 *
-			 * These are implemented by logically negating the result of the
-			 * converse placement operator; for this to work, the converse
-			 * operator must be part of the opclass.  An error will be thrown
-			 * by inclusion_get_strategy_procinfo() if the required strategy
-			 * is not part of the opclass.
-			 *
-			 * These all return false if either argument is empty, so there is
-			 * no need to check for empty elements.
-			 */
+		ScanKey	key = keys[keyno];
 
-		case RTLeftStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverRightStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+		/* NULL keys are handled and filtered-out in bringetbitmap */
+		Assert(!(key->sk_flags & SK_ISNULL));
 
-		case RTOverLeftStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTRightStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+		attno = key->sk_attno;
+		subtype = key->sk_subtype;
+		query = key->sk_argument;
+		unionval = column->bv_values[INCLUSION_UNION];
+		switch (key->sk_strategy)
+		{
+				/*
+				* Placement strategies
+				*
+				* These are implemented by logically negating the result of the
+				* converse placement operator; for this to work, the converse
+				* operator must be part of the opclass.  An error will be thrown
+				* by inclusion_get_strategy_procinfo() if the required strategy
+				* is not part of the opclass.
+				*
+				* These all return false if either argument is empty, so there is
+				* no need to check for empty elements.
+				*/
 
-		case RTOverRightStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTLeftStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTLeftStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverRightStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTRightStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverLeftStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTOverLeftStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTRightStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTBelowStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverAboveStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTOverRightStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTLeftStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTOverBelowStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTAboveStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTRightStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverLeftStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTOverAboveStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTBelowStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTBelowStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverAboveStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTAboveStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverBelowStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTOverBelowStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTAboveStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-			/*
-			 * Overlap and contains strategies
-			 *
-			 * These strategies are simple enough that we can simply call the
-			 * operator and return its result.  Empty elements don't change
-			 * the result.
-			 */
+			case RTOverAboveStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTBelowStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		case RTOverlapStrategyNumber:
-		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
-		case RTContainsElemStrategyNumber:
-		case RTSubStrategyNumber:
-		case RTSubEqualStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													key->sk_strategy);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_DATUM(result);
+			case RTAboveStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverBelowStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-			/*
-			 * Contained by strategies
-			 *
-			 * We cannot just call the original operator for the contained by
-			 * strategies because some elements can be contained even though
-			 * the union is not; instead we use the overlap operator.
-			 *
-			 * We check for empty elements separately as they are not merged
-			 * to the union but contained by everything.
-			 */
+				/*
+				* Overlap and contains strategies
+				*
+				* These strategies are simple enough that we can simply call the
+				* operator and return its result.  Empty elements don't change
+				* the result.
+				*/
 
-		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
-		case RTSuperStrategyNumber:
-		case RTSuperEqualStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverlapStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+			case RTOverlapStrategyNumber:
+			case RTContainsStrategyNumber:
+			case RTOldContainsStrategyNumber:
+			case RTContainsElemStrategyNumber:
+			case RTSubStrategyNumber:
+			case RTSubEqualStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														key->sk_strategy);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = DatumGetBool(result);
+				break;
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+				/*
+				* Contained by strategies
+				*
+				* We cannot just call the original operator for the contained by
+				* strategies because some elements can be contained even though
+				* the union is not; instead we use the overlap operator.
+				*
+				* We check for empty elements separately as they are not merged
+				* to the union but contained by everything.
+				*/
 
-			/*
-			 * Adjacent strategy
-			 *
-			 * We test for overlap first but to be safe we need to call the
-			 * actual adjacent operator also.
-			 *
-			 * An empty element cannot be adjacent to any other, so there is
-			 * no need to check for it.
-			 */
+			case RTContainedByStrategyNumber:
+			case RTOldContainedByStrategyNumber:
+			case RTSuperStrategyNumber:
+			case RTSuperEqualStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverlapStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				if (DatumGetBool(result))
+					matches = true;
+				else
+					matches = DatumGetBool(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
 
-		case RTAdjacentStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTOverlapStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				break;
 
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTAdjacentStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_DATUM(result);
+				/*
+				* Adjacent strategy
+				*
+				* We test for overlap first but to be safe we need to call the
+				* actual adjacent operator also.
+				*
+				* An empty element cannot be adjacent to any other, so there is
+				* no need to check for it.
+				*/
 
-			/*
-			 * Basic comparison strategies
-			 *
-			 * It is straightforward to support the equality strategies with
-			 * the contains operator.  Generally, inequality strategies do not
-			 * make much sense for the types which will be used with the
-			 * inclusion BRIN family of opclasses, but is possible to
-			 * implement them with logical negation of the left-of and
-			 * right-of operators.
-			 *
-			 * NB: These strategies cannot be used with geometric datatypes
-			 * that use comparison of areas!  The only exception is the "same"
-			 * strategy.
-			 *
-			 * Empty elements are considered to be less than the others.  We
-			 * cannot use the empty support function to check the query is an
-			 * empty element, because the query can be another data type than
-			 * the empty support function argument.  So we will return true,
-			 * if there is a possibility that empty elements will change the
-			 * result.
-			 */
+			case RTAdjacentStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTOverlapStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				if (DatumGetBool(result))
+					matches = (true);
+				else
+				{
 
-		case RTLessStrategyNumber:
-		case RTLessEqualStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTRightStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			if (!DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+					finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+															RTAdjacentStrategyNumber);
+					result = FunctionCall2Coll(finfo, colloid, unionval, query);
+					matches = DatumGetBool(result);
+				}
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+				break;
 
-		case RTSameStrategyNumber:
-		case RTEqualStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTContainsStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			if (DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+				/*
+				* Basic comparison strategies
+				*
+				* It is straightforward to support the equality strategies with
+				* the contains operator.  Generally, inequality strategies do not
+				* make much sense for the types which will be used with the
+				* inclusion BRIN family of opclasses, but is possible to
+				* implement them with logical negation of the left-of and
+				* right-of operators.
+				*
+				* NB: These strategies cannot be used with geometric datatypes
+				* that use comparison of areas!  The only exception is the "same"
+				* strategy.
+				*
+				* Empty elements are considered to be less than the others.  We
+				* cannot use the empty support function to check the query is an
+				* empty element, because the query can be another data type than
+				* the empty support function argument.  So we will return true,
+				* if there is a possibility that empty elements will change the
+				* result.
+				*/
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			case RTLessStrategyNumber:
+			case RTLessEqualStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTRightStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				if (!DatumGetBool(result))
+					matches = (true);
+				else
+					matches = DatumGetBool(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+				break;
 
-		case RTGreaterEqualStrategyNumber:
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTLeftStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			if (!DatumGetBool(result))
-				PG_RETURN_BOOL(true);
+			case RTSameStrategyNumber:
+			case RTEqualStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTContainsStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				if (DatumGetBool(result))
+					matches = (true);
+				else
+					matches = DatumGetBool(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+				break;
 
-			PG_RETURN_DATUM(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+			case RTGreaterEqualStrategyNumber:
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTLeftStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				if (!DatumGetBool(result))
+					matches = (true);
+				else
+					matches = DatumGetBool(column->bv_values[INCLUSION_CONTAINS_EMPTY]);
+				break;
 
-		case RTGreaterStrategyNumber:
-			/* no need to check for empty elements */
-			finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
-													RTLeftStrategyNumber);
-			result = FunctionCall2Coll(finfo, colloid, unionval, query);
-			PG_RETURN_BOOL(!DatumGetBool(result));
+			case RTGreaterStrategyNumber:
+				/* no need to check for empty elements */
+				finfo = inclusion_get_strategy_procinfo(bdesc, attno, subtype,
+														RTLeftStrategyNumber);
+				result = FunctionCall2Coll(finfo, colloid, unionval, query);
+				matches = (!DatumGetBool(result));
+				break;
 
-		default:
-			/* shouldn't happen */
-			elog(ERROR, "invalid strategy number %d", key->sk_strategy);
-			PG_RETURN_BOOL(false);
+			default:
+				/* shouldn't happen */
+				elog(ERROR, "invalid strategy number %d", key->sk_strategy);
+				matches = (false);
+		}
+
+		if (!matches)
+			break;
 	}
+
+	PG_RETURN_BOOL(matches);
 }
 
 /*

@@ -19,6 +19,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "utils/rel.h"
+#include "storage/predicate.h"
 
 static bool _hash_readpage(IndexScanDesc scan, Buffer *bufP,
 			   ScanDirection dir);
@@ -347,6 +348,7 @@ _hash_first(IndexScanDesc scan, ScanDirection dir)
 	so->hashso_sk_hash = hashkey;
 
 	buf = _hash_getbucketbuf_from_hashkey(rel, hashkey, HASH_READ, NULL);
+	PredicateLockPage(rel, BufferGetBlockNumber(buf), scan->xs_snapshot);
 	page = BufferGetPage(buf);
 	TestForOldSnapshot(scan->xs_snapshot, rel, page);
 	opaque = (HashPageOpaque) PageGetSpecialPointer(page);

@@ -125,6 +125,19 @@ clauselist_selectivity(PlannerInfo *root,
 	if (rel && rel->rtekind == RTE_RELATION && rel->statlist != NIL)
 	{
 		/*
+		 * Estimate selectivity on any clauses applicable by histograms and MCV
+		 * list, then by functional dependencies. This particular order is chosen
+		 * as MCV and histograms include attribute values and may be considered
+		 * more reliable.
+		 *
+		 * 'estimatedclauses' will be filled with the 0-based list positions of
+		 * clauses used that way, so that we can ignore them below.
+		 */
+		s1 *= statext_clauselist_selectivity(root, clauses, varRelid,
+											 jointype, sjinfo, rel,
+											 &estimatedclauses);
+
+		/*
 		 * Perform selectivity estimations on any clauses found applicable by
 		 * dependencies_clauselist_selectivity.  'estimatedclauses' will be
 		 * filled with the 0-based list positions of clauses used that way, so
@@ -133,11 +146,6 @@ clauselist_selectivity(PlannerInfo *root,
 		s1 *= dependencies_clauselist_selectivity(root, clauses, varRelid,
 												  jointype, sjinfo, rel,
 												  &estimatedclauses);
-
-		/*
-		 * This would be the place to apply any other types of extended
-		 * statistics selectivity estimations for remaining clauses.
-		 */
 	}
 
 	/*

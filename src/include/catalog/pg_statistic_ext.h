@@ -49,6 +49,8 @@ CATALOG(pg_statistic_ext,3381)
 												 * to build */
 	pg_ndistinct stxndistinct;	/* ndistinct coefficients (serialized) */
 	pg_dependencies stxdependencies;	/* dependencies (serialized) */
+	pg_mcv_list		stxmcv;		/* MCV (serialized) */
+	pg_histogram	stxhistogram;	/* MV histogram (serialized) */
 #endif
 
 } FormData_pg_statistic_ext;
@@ -64,7 +66,7 @@ typedef FormData_pg_statistic_ext *Form_pg_statistic_ext;
  *		compiler constants for pg_statistic_ext
  * ----------------
  */
-#define Natts_pg_statistic_ext					8
+#define Natts_pg_statistic_ext					10
 #define Anum_pg_statistic_ext_stxrelid			1
 #define Anum_pg_statistic_ext_stxname			2
 #define Anum_pg_statistic_ext_stxnamespace		3
@@ -73,8 +75,12 @@ typedef FormData_pg_statistic_ext *Form_pg_statistic_ext;
 #define Anum_pg_statistic_ext_stxkind			6
 #define Anum_pg_statistic_ext_stxndistinct		7
 #define Anum_pg_statistic_ext_stxdependencies	8
+#define Anum_pg_statistic_ext_stxmcv			9
+#define Anum_pg_statistic_ext_stxhistogram		10
 
 #define STATS_EXT_NDISTINCT			'd'
 #define STATS_EXT_DEPENDENCIES		'f'
+#define STATS_EXT_MCV				'm'
+#define STATS_EXT_HISTOGRAM			'h'
 
 #endif							/* PG_STATISTIC_EXT_H */

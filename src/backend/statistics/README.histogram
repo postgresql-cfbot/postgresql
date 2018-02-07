@@ -1,0 +1,299 @@
+Multivariate histograms
+=======================
+
+Histograms on individual attributes consist of buckets represented by ranges,
+covering the domain of the attribute. That is, each bucket is a [min,max]
+interval, and contains all values in this range. The histogram is built in such
+a way that all buckets have about the same frequency.
+
+Multivariate histograms are an extension into n-dimensional space - the buckets
+are n-dimensional intervals (i.e. n-dimensional rectagles), covering the domain
+of the combination of attributes. That is, each bucket has a vector of lower
+and upper boundaries, denoted min[i] and max[i] (where i = 1..n).
+
+In addition to the boundaries, each bucket tracks additional info:
+
+    * frequency (fraction of tuples in the bucket)
+    * whether the boundaries are inclusive or exclusive
+    * whether the dimension contains only NULL values
+    * number of distinct values in each dimension (for building only)
+
+It's possible that in the future we'll multiple histogram types, with different
+features. We do however expect all the types to share the same representation
+(buckets as ranges) and only differ in how we build them.
+
+The current implementation builds non-overlapping buckets, that may not be true
+for some histogram types and the code should not rely on this assumption. There
+are interesting types of histograms (or algorithms) with overlapping buckets.
+
+When used on low-cardinality data, histograms usually perform considerably worse
+than MCV lists (which are a good fit for this kind of data). This is especially
+true on label-like values, where ordering of the values is mostly unrelated to
+meaning of the data, as proper ordering is crucial for histograms.
+
+On high-cardinality data the histograms are usually a better choice, because MCV
+lists can't represent the distribution accurately enough.
+
+
+Selectivity estimation
+----------------------
+
+The estimation is implemented in clauselist_mv_selectivity_histogram(), and
+works very similarly to clauselist_mv_selectivity_mcvlist.
+
+The main difference is that while MCV lists support exact matches, histograms
+often result in approximate matches - e.g. with equality we can only say if
+the constant would be part of the bucket, but not whether it really is there
+or what fraction of the bucket it corresponds to. In this case we rely on
+some defaults just like in the per-column histograms.
+
+The current implementation uses histograms to estimates those types of clauses
+(think of WHERE conditions):
+
+    (a) equality clauses    WHERE (a = 1) AND (b = 2)
+    (b) inequality clauses  WHERE (a < 1) AND (b >= 2)
+    (c) NULL clauses        WHERE (a IS NULL) AND (b IS NOT NULL)
+    (d) OR-clauses          WHERE (a = 1)  OR (b = 2)
+
+Similarly to MCV lists, it's possible to add support for additional types of
+clauses, for example:
+
+    (e) multi-var clauses   WHERE (a > b)
+
+and so on. These are tasks for the future, not yet implemented.
+
+
+When evaluating a clause on a bucket, we may get one of three results:
+
+    (a) FULL_MATCH - The bucket definitely matches the clause.
+
+    (b) PARTIAL_MATCH - The bucket matches the clause, but not necessarily all
+                        the tuples it represents.
+
+    (c) NO_MATCH - The bucket definitely does not match the clause.
+
+This may be illustrated using a range [1, 5], which is essentially a 1-D bucket.
+With clause
+
+    WHERE (a < 10) => FULL_MATCH (all range values are below
+                      10, so the whole bucket matches)
+
+    WHERE (a < 3)  => PARTIAL_MATCH (there may be values matching
+                      the clause, but we don't know how many)
+
+    WHERE (a < 0)  => NO_MATCH (the whole range is above 1, so
+                      no values from the bucket can match)
+
+Some clauses may produce only some of those results - for example equality
+clauses may never produce FULL_MATCH as we always hit only part of the bucket
+(we can't match both boundaries at the same time). This results in less accurate
+estimates compared to MCV lists, where we can hit a MCV items exactly (there's
+no PARTIAL match in MCV).
+
+There are also clauses that may not produce any PARTIAL_MATCH results. A nice
+example of that is 'IS [NOT] NULL' clause, which either matches the bucket
+completely (FULL_MATCH) or not at all (NO_MATCH), thanks to how the NULL-buckets
+are constructed.
+
+Computing the total selectivity estimate is trivial - simply sum selectivities
+from all the FULL_MATCH and PARTIAL_MATCH buckets (but for buckets marked with
+PARTIAL_MATCH, multiply the frequency by 0.5 to minimize the average error).
+
+
+Building a histogram
+---------------------
+
+The algorithm of building a histogram in general is quite simple:
+
+    (a) create an initial bucket (containing all sample rows)
+
+    (b) create NULL buckets (by splitting the initial bucket)
+
+    (c) repeat
+
+        (1) choose bucket to split next
+
+        (2) terminate if no bucket that might be split found, or if we've
+            reached the maximum number of buckets (16384)
+
+        (3) choose dimension to partition the bucket by
+
+        (4) partition the bucket by the selected dimension
+
+The main complexity is hidden in steps (c.1) and (c.3), i.e. how we choose the
+bucket and dimension for the split, as discussed in the next section.
+
+
+Partitioning criteria
+---------------------
+
+Similarly to one-dimensional histograms, we want to produce buckets with roughly
+the same frequency.
+
+We also need to produce "regular" buckets, because buckets with one dimension
+much longer than the others are very likely to match a lot of conditions (which
+increases error, even if the bucket frequency is very low).
+
+This is especially important when handling OR-clauses, because in that case each
+clause may add buckets independently. With AND-clauses all the clauses have to
+match each bucket, which makes this issue somewhat less concenrning.
+
+To achieve this, we choose the largest bucket (containing the most sample rows),
+but we only choose buckets that can actually be split (have at least 3 different
+combinations of values).
+
+Then we choose the "longest" dimension of the bucket, which is computed by using
+the distinct values in the sample as a measure.
+
+For details see functions select_bucket_to_partition() and partition_bucket(),
+which also includes further discussion.
+
+
+The current limit on number of buckets (16384) is mostly arbitrary, but chosen
+so that it guarantees we don't exceed the number of distinct values indexable by
+uint16 in any of the dimensions. In practice we could handle more buckets as we
+index each dimension separately and the splits should use the dimensions evenly.
+
+Also, histograms this large (with 16k values in multiple dimensions) would be
+quite expensive to build and process, so the 16k limit is rather reasonable.
+
+The actual number of buckets is also related to statistics target, because we
+require MIN_BUCKET_ROWS (10) tuples per bucket before a split, so we can't have
+more than (2 * 300 * target / 10) buckets. For the default target (100) this
+evaluates to ~6k.
+
+
+NULL handling (create_null_buckets)
+-----------------------------------
+
+When building histograms on a single attribute, we first filter out NULL values.
+In the multivariate case, we can't really do that because the rows may contain
+a mix of NULL and non-NULL values in different columns (so we can't simply
+filter all of them out).
+
+For this reason, the histograms are built in a way so that for each bucket, each
+dimension only contains only NULL or non-NULL values. Building the NULL-buckets
+happens as the first step in the build, by the create_null_buckets() function.
+The number of NULL buckets, as produced by this function, has a clear upper
+boundary (2^N) where N is the number of dimensions (attributes the histogram is
+built on). Or rather 2^K where K is the number of attributes that are not marked
+as not-NULL.
+
+The buckets with NULL dimensions are then subject to the same build algorithm
+(i.e. may be split into smaller buckets) just like any other bucket, but may
+only be split by non-NULL dimension.
+
+
+Serialization
+-------------
+
+To store the histogram in pg_statistic_ext table, it is serialized into a more
+efficient form. We also use the representation for estimation, i.e. we don't
+fully deserialize the histogram.
+
+For example the boundary values are deduplicated to minimize the required space.
+How much redundancy is there, actually? Let's assume there are no NULL values,
+so we start with a single bucket - in that case we have 2*N boundaries. Each
+time we split a bucket we introduce one new value (in the "middle" of one of
+the dimensions), and keep boundries for all the other dimensions. So after K
+splits, we have up to
+
+    2*N + K
+
+unique boundary values (we may have fewe values, if the same value is used for
+several splits). But after K splits we do have (K+1) buckets, so
+
+    (K+1) * 2 * N
+
+boundary values. Using e.g. N=4 and K=999, we arrive to those numbers:
+
+    2*N + K       = 1007
+    (K+1) * 2 * N = 8000
+
+wich means a lot of redundancy. It's somewhat counter-intuitive that the number
+of distinct values does not really depend on the number of dimensions (except
+for the initial bucket, but that's negligible compared to the total).
+
+By deduplicating the values and replacing them with 16-bit indexes (uint16), we
+reduce the required space to
+
+    1007 * 8 + 8000 * 2 ~= 24kB
+
+which is significantly less than 64kB required for the 'raw' histogram (assuming
+the values are 8B).
+
+While the bytea compression (pglz) might achieve the same reduction of space,
+the deduplicated representation is used to optimize the estimation by caching
+results of function calls for already visited values. This significantly
+reduces the number of calls to (often quite expensive) operators.
+
+Note: Of course, this reasoning only holds for histograms built by the algorithm
+that simply splits the buckets in half. Other histograms types (e.g. containing
+overlapping buckets) may behave differently and require different serialization.
+
+Serialized histograms are marked with 'magic' constant, to make it easier to
+check the bytea value really is a serialized histogram.
+
+
+varlena compression
+-------------------
+
+This serialization may however disable automatic varlena compression, the array
+of unique values is placed at the beginning of the serialized form. Which is
+exactly the chunk used by pglz to check if the data is compressible, and it
+will probably decide it's not very compressible. This is similar to the issue
+we had with JSONB initially.
+
+Maybe storing buckets first would make it work, as the buckets may be better
+compressible.
+
+On the other hand the serialization is actually a context-aware compression,
+usually compressing to ~30% (or even less, with large data types). So the lack
+of additional pglz compression may be acceptable.
+
+
+Deserialization
+---------------
+
+The deserialization is not a perfect inverse of the serialization, as we keep
+the deduplicated arrays. This reduces the amount of memory and also allows
+optimizations during estimation (e.g. we can cache results for the distinct
+values, saving expensive function calls).
+
+
+Inspecting the histogram
+------------------------
+
+Inspecting the regular (per-attribute) histograms is trivial, as it's enough
+to select the columns from pg_stats - the data is encoded as anyarray, so we
+simply get the text representation of the array.
+
+With multivariate histograms it's not that simple due to the possible mix of
+data types in the histogram. It might be possible to produce similar array-like
+text representation, but that'd unnecessarily complicate further processing
+and analysis of the histogram. Instead, there's a SRF function that allows
+access to lower/upper boundaries, frequencies etc.
+
+    SELECT * FROM pg_histogram_buckets();
+
+It has two input parameters:
+
+    oid   - OID of the histogram (pg_statistic_ext.staoid)
+    otype - type of output
+
+and produces a table with these columns:
+
+    - bucket ID                (0...nbuckets-1)
+    - lower bucket boundaries  (string array)
+    - upper bucket boundaries  (string array)
+    - nulls only dimensions    (boolean array)
+    - lower boundary inclusive (boolean array)
+    - upper boundary includive (boolean array)
+    - frequency                (double precision)
+
+The 'otype' accepts three values, determining what will be returned in the
+lower/upper boundary arrays:
+
+    - 0 - values stored in the histogram, encoded as text
+    - 1 - indexes into the deduplicated arrays
+    - 2 - idnexes into the deduplicated arrays, scaled to [0,1]

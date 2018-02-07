@@ -662,13 +662,16 @@ CopySnapshot(Snapshot snapshot)
 	Snapshot	newsnap;
 	Size		subxipoff;
 	Size		size;
+	int			xcnt, subxcnt;
+	uint8		xhlog, subxhlog;
 
 	Assert(snapshot != InvalidSnapshot);
 
+	xcnt = ExtendXipSizeForHash(snapshot->xcnt, &xhlog);
+	subxcnt = ExtendXipSizeForHash(snapshot->subxcnt, &subxhlog);
 	/* We allocate any XID arrays needed in the same palloc block. */
-	size = subxipoff = sizeof(SnapshotData) +
-		snapshot->xcnt * sizeof(TransactionId);
-	if (snapshot->subxcnt > 0)
+	size = subxipoff = sizeof(SnapshotData) + xcnt * sizeof(TransactionId);
+	if (subxcnt > 0)
 		size += snapshot->subxcnt * sizeof(TransactionId);
 
 	newsnap = (Snapshot) MemoryContextAlloc(TopTransactionContext, size);
@@ -677,6 +680,8 @@ CopySnapshot(Snapshot snapshot)
 	newsnap->regd_count = 0;
 	newsnap->active_count = 0;
 	newsnap->copied = true;
+	newsnap->xhlog = xhlog;
+	newsnap->subxhlog = subxhlog;
 
 	/* setup XID array */
 	if (snapshot->xcnt > 0)
@@ -2130,16 +2135,18 @@ RestoreSnapshot(char *start_address)
 	Size		size;
 	Snapshot	snapshot;
 	TransactionId *serialized_xids;
+	int			xcnt, subxcnt;
+	uint8		xhlog, subxhlog;
 
 	memcpy(&serialized_snapshot, start_address,
 		   sizeof(SerializedSnapshotData));
 	serialized_xids = (TransactionId *)
 		(start_address + sizeof(SerializedSnapshotData));
 
+	xcnt = ExtendXipSizeForHash(serialized_snapshot.xcnt, &xhlog);
+	subxcnt = ExtendXipSizeForHash(serialized_snapshot.subxcnt, &subxhlog);
 	/* We allocate any XID arrays needed in the same palloc block. */
-	size = sizeof(SnapshotData)
-		+ serialized_snapshot.xcnt * sizeof(TransactionId)
-		+ serialized_snapshot.subxcnt * sizeof(TransactionId);
+	size = sizeof(SnapshotData) + (xcnt + subxcnt) * sizeof(TransactionId);
 
 	/* Copy all required fields */
 	snapshot = (Snapshot) MemoryContextAlloc(TopTransactionContext, size);
@@ -2148,8 +2155,10 @@ RestoreSnapshot(char *start_address)
 	snapshot->xmax = serialized_snapshot.xmax;
 	snapshot->xip = NULL;
 	snapshot->xcnt = serialized_snapshot.xcnt;
+	snapshot->xhlog = xhlog;
 	snapshot->subxip = NULL;
 	snapshot->subxcnt = serialized_snapshot.subxcnt;
+	snapshot->subxhlog = subxhlog;
 	snapshot->suboverflowed = serialized_snapshot.suboverflowed;
 	snapshot->takenDuringRecovery = serialized_snapshot.takenDuringRecovery;
 	snapshot->curcid = serialized_snapshot.curcid;
@@ -2167,8 +2176,7 @@ RestoreSnapshot(char *start_address)
 	/* Copy SubXIDs, if present. */
 	if (serialized_snapshot.subxcnt > 0)
 	{
-		snapshot->subxip = ((TransactionId *) (snapshot + 1)) +
-			serialized_snapshot.xcnt;
+		snapshot->subxip = ((TransactionId *) (snapshot + 1)) + xcnt;
 		memcpy(snapshot->subxip, serialized_xids + serialized_snapshot.xcnt,
 			   serialized_snapshot.subxcnt * sizeof(TransactionId));
 	}

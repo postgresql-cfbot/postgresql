@@ -23,6 +23,15 @@
 typedef struct SnapshotData *Snapshot;
 
 #define InvalidSnapshot		((Snapshot) NULL)
+/*
+ * Big running list will be converted into hash table on demand.
+ * SnapshotMinHash is threshold between "linear scan" and "hashtable on demand".
+ * SnapshotHashBuilt indicates that hash table was already built.
+ */
+#define SnapshotMinHash			(60)
+#define SnapshotHashBuilt		((uint8)0x80)
+/* Calculate size to hold both array and hash table (if needed) */
+int ExtendXipSizeForHash(int xipcnt, uint8* plog);
 
 /*
  * We use SnapshotData structures to represent both "regular" (MVCC)
@@ -78,6 +87,7 @@ typedef struct SnapshotData
 	 */
 	TransactionId *xip;
 	uint32		xcnt;			/* # of xact ids in xip[] */
+	uint8		xhlog;			/* log2 of allocated xip hash part */
 
 	/*
 	 * For non-historic MVCC snapshots, this contains subxact IDs that are in
@@ -94,6 +104,7 @@ typedef struct SnapshotData
 
 	bool		takenDuringRecovery;	/* recovery-shaped snapshot? */
 	bool		copied;			/* false if it's a static snapshot */
+	uint8		subxhlog;		/* log2 of allocated subxip hash part */
 
 	CommandId	curcid;			/* in my xact, CID < curcid are visible */
 

@@ -1470,6 +1470,54 @@ GetMaxSnapshotSubxidCount(void)
 }
 
 /*
+ * ExtendXipSizeForHash - calculate xip array size with space for hash table.
+ *
+ * Hash table should be at least twice larger than array to not depend on
+ * cleverness of algorithm.
+ *
+ * But if xipcnt < SnapshotMinHash, then no need in hash-table at all.
+ */
+int
+ExtendXipSizeForHash(int xipcnt, uint8* plog)
+{
+	int size;
+	uint8 log = 0;
+
+	size = xipcnt;
+	if (xipcnt >= SnapshotMinHash)
+	{
+		log = 1;
+		while (xipcnt) {
+			log++;
+			xipcnt >>= 1;
+		}
+		size += 1<<log;
+	}
+	*plog = log;
+	return size;
+}
+
+/*
+ * AllocateXip - allocate xip array, extended for hash part if needed.
+ *
+ * Hash part will be used in tqual.c in XidInMVCCSnapshot (XidInXip).
+ */
+static TransactionId *
+AllocateXip(int max, uint8* plog)
+{
+	int size;
+	TransactionId *xip;
+
+	size = ExtendXipSizeForHash(max, plog);
+	xip = (TransactionId *) malloc(size * sizeof(TransactionId));
+	if (xip == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+	return xip;
+}
+
+/*
  * GetSnapshotData -- returns information about running transactions.
  *
  * The returned snapshot includes xmin (lowest still-running xact ID),
@@ -1538,19 +1586,10 @@ GetSnapshotData(Snapshot snapshot)
 		 * First call for this snapshot. Snapshot is same size whether or not
 		 * we are in recovery, see later comments.
 		 */
-		snapshot->xip = (TransactionId *)
-			malloc(GetMaxSnapshotXidCount() * sizeof(TransactionId));
-		if (snapshot->xip == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		Assert(snapshot->subxip == NULL);
-		snapshot->subxip = (TransactionId *)
-			malloc(GetMaxSnapshotSubxidCount() * sizeof(TransactionId));
-		if (snapshot->subxip == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
+		snapshot->xip = AllocateXip(GetMaxSnapshotXidCount(),
+				&snapshot->xhlog);
+		snapshot->subxip = AllocateXip(GetMaxSnapshotSubxidCount(),
+				&snapshot->subxhlog);
 	}
 
 	/*
@@ -1758,6 +1797,8 @@ GetSnapshotData(Snapshot snapshot)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->copied = false;
+	snapshot->xhlog &= ~SnapshotHashBuilt;
+	snapshot->subxhlog &= ~SnapshotHashBuilt;
 
 	if (old_snapshot_threshold < 0)
 	{

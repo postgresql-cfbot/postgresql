@@ -1462,6 +1462,69 @@ HeapTupleIsSurelyDead(HeapTuple htup, TransactionId OldestXmin)
 }
 
 /*
+ * XidInXip searches xid in xip array.
+ *
+ * If xcnt is smaller than SnapshotMinHash (60), or *xhlog is zero, then simple
+ * linear scan of xip array used. Looks like there is no benifit in hash table
+ * for small xip array.
+ *
+ * If xhlog points to non-zero byte, then space for hash table is allocated
+ * after xip array, and logarithm of its size is in xhlog.
+ * Most significant xhlog bit should be set if hash table is already built.
+ *
+ * Hash table is built using simple linear probing. It allows keep both
+ * insertion and lookup loop small.
+ */
+static bool
+XidInXip(TransactionId xid, TransactionId *xip, uint32 xcnt, uint8 *xhlog)
+{
+	TransactionId *xiphash;
+	uint32 i, pos, mask;
+	int found = 0;
+
+	if (!TransactionIdIsNormal(xid))
+		return false;
+
+	if (xcnt < SnapshotMinHash || *xhlog == 0)
+	{
+		/* full scan for small snapshots and if xiphash is not allocated */
+		for (i = 0; i < xcnt; i++)
+			if (TransactionIdEquals(xid, xip[i]))
+				return true;
+		return false;
+	}
+
+	mask = ((uint32)1 << (*xhlog & ~SnapshotHashBuilt)) - 1;
+	xiphash = xip + xcnt;
+
+	if (*xhlog & SnapshotHashBuilt)
+	{
+		/* Hash table already built. Do lookup */
+		pos = xid & mask;
+		while (xiphash[pos] != InvalidTransactionId)
+		{
+			if (TransactionIdEquals(xiphash[pos], xid))
+				return true;
+			pos = (pos + 1) & mask;
+		}
+		return false;
+	}
+
+	/* Build hash table. */
+	*xhlog |= SnapshotHashBuilt;
+	memset(xiphash, 0, (mask+1) * sizeof(TransactionId));
+	for (i = 0; i < xcnt; i++)
+	{
+		found |= TransactionIdEquals(xip[i], xid);
+		pos = xip[i] & mask;
+		while (xiphash[pos] != InvalidTransactionId)
+			pos = (pos + 1) & mask;
+		xiphash[pos] = xip[i];
+	}
+	return found != 0;
+}
+
+/*
  * XidInMVCCSnapshot
  *		Is the given XID still-in-progress according to the snapshot?
  *
@@ -1474,8 +1537,6 @@ HeapTupleIsSurelyDead(HeapTuple htup, TransactionId OldestXmin)
 bool
 XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 {
-	uint32		i;
-
 	/*
 	 * Make a quick range check to eliminate most XIDs without looking at the
 	 * xip arrays.  Note that this is OK even if we convert a subxact XID to
@@ -1507,13 +1568,8 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		if (!snapshot->suboverflowed)
 		{
 			/* we have full data, so search subxip */
-			int32		j;
-
-			for (j = 0; j < snapshot->subxcnt; j++)
-			{
-				if (TransactionIdEquals(xid, snapshot->subxip[j]))
-					return true;
-			}
+			if (XidInXip(xid, snapshot->subxip, snapshot->subxcnt, &snapshot->subxhlog))
+				return true;
 
 			/* not there, fall through to search xip[] */
 		}
@@ -1534,16 +1590,12 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 				return false;
 		}
 
-		for (i = 0; i < snapshot->xcnt; i++)
-		{
-			if (TransactionIdEquals(xid, snapshot->xip[i]))
-				return true;
-		}
+
+		if (XidInXip(xid, snapshot->xip, snapshot->xcnt, &snapshot->xhlog))
+			return true;
 	}
 	else
 	{
-		int32		j;
-
 		/*
 		 * In recovery we store all xids in the subxact array because it is by
 		 * far the bigger array, and we mostly don't know which xids are
@@ -1573,11 +1625,8 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		 * indeterminate xid. We don't know whether it's top level or subxact
 		 * but it doesn't matter. If it's present, the xid is visible.
 		 */
-		for (j = 0; j < snapshot->subxcnt; j++)
-		{
-			if (TransactionIdEquals(xid, snapshot->subxip[j]))
-				return true;
-		}
+		if (XidInXip(xid, snapshot->subxip, snapshot->subxcnt, &snapshot->subxhlog))
+			return true;
 	}
 
 	return false;

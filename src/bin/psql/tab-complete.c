@@ -1030,6 +1030,82 @@ static const SchemaQuery Query_for_list_of_statistics = {
 "       and pg_catalog.pg_table_is_visible(c2.oid)"\
 "       and c2.relispartition = 'true'"
 
+/* For server versions prior to 8.1, oidvector does not support op ALL/ANY.
+   This query should work for server versions 7.3 and later; prior to that,
+   even pg_function_is_visible doesn't exist. */
+#define Query_for_list_of_selectable_functions_or_attributes_PRE_81 \
+" SELECT DISTINCT expansion FROM ( "\
+"   SELECT pg_catalog.quote_ident(proname)||'(' AS expansion, proname AS name "\
+"     FROM pg_catalog.pg_proc "\
+"    WHERE pg_catalog.pg_function_is_visible(oid) "\
+"      AND prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "\
+"    UNION ALL "\
+"   SELECT pg_catalog.quote_ident(attname), attname "\
+"     FROM pg_catalog.pg_attribute "\
+"    WHERE attnum > 0 "\
+"      AND NOT attisdropped "\
+"   ) ss "\
+"  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
+
+/* For server versions prior to 9.0, do not check tables referencing pg_proc. */
+#define Query_for_list_of_selectable_functions_or_attributes_PRE_90 \
+" SELECT DISTINCT expansion FROM ( "\
+"   SELECT pg_catalog.quote_ident(proname)||'(' AS expansion, proname AS name "\
+"     FROM pg_catalog.pg_proc "\
+"    WHERE pg_catalog.pg_function_is_visible(oid) "\
+"      AND prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "\
+"      AND 'internal'::regtype != ALL (proargtypes) "\
+"    UNION ALL "\
+"   SELECT pg_catalog.quote_ident(attname), attname "\
+"     FROM pg_catalog.pg_attribute "\
+"    WHERE attnum > 0 "\
+"      AND NOT attisdropped "\
+"   ) ss "\
+"  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
+
+/* For server versions prior to 9.6, pg_aggregate lacks several columns for support functions. */
+#define Query_for_list_of_selectable_functions_or_attributes_PRE_96 \
+" SELECT DISTINCT expansion FROM ( "\
+"   SELECT pg_catalog.quote_ident(proname)||'(' AS expansion, proname AS name "\
+"     FROM pg_catalog.pg_proc "\
+"    WHERE pg_catalog.pg_function_is_visible(oid) "\
+"      AND prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "\
+"      AND 'internal'::regtype != ALL (proargtypes) "\
+"      AND oid NOT IN (SELECT unnest(array[typinput,typoutput,typreceive,typsend,typmodin,typmodout,typanalyze]) FROM pg_type) "\
+"      AND oid NOT IN (SELECT unnest(array[aggtransfn,aggfinalfn]) FROM pg_aggregate) "\
+"      AND oid NOT IN (SELECT unnest(array[oprcode,oprrest,oprjoin]) FROM pg_operator) "\
+"      AND oid NOT IN (SELECT unnest(array[lanplcallfoid,laninline,lanvalidator]) FROM pg_language) "\
+"      AND oid NOT IN (SELECT castfunc FROM pg_cast) "\
+"      AND oid NOT IN (SELECT amproc FROM pg_amproc) "\
+"    UNION ALL "\
+"   SELECT pg_catalog.quote_ident(attname), attname "\
+"     FROM pg_catalog.pg_attribute "\
+"    WHERE attnum > 0 "\
+"      AND NOT attisdropped "\
+"   ) ss "\
+"  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
+
+#define Query_for_list_of_selectable_functions_or_attributes \
+" SELECT DISTINCT expansion FROM ( "\
+"   SELECT pg_catalog.quote_ident(proname)||'(' AS expansion, proname AS name "\
+"     FROM pg_catalog.pg_proc "\
+"    WHERE pg_catalog.pg_function_is_visible(oid) "\
+"      AND prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "\
+"      AND 'internal'::regtype <> ALL (proargtypes) "\
+"      AND oid NOT IN (SELECT unnest(array[typinput,typoutput,typreceive,typsend,typmodin,typmodout,typanalyze]) FROM pg_type) "\
+"      AND oid NOT IN (SELECT unnest(array[aggtransfn,aggfinalfn,aggcombinefn,aggserialfn,aggdeserialfn,aggmtransfn,aggminvtransfn,aggmfinalfn]) FROM pg_aggregate) "\
+"      AND oid NOT IN (SELECT unnest(array[oprcode,oprrest,oprjoin]) FROM pg_operator) "\
+"      AND oid NOT IN (SELECT unnest(array[lanplcallfoid,laninline,lanvalidator]) FROM pg_language) "\
+"      AND oid NOT IN (SELECT castfunc FROM pg_cast) "\
+"      AND oid NOT IN (SELECT amproc FROM pg_amproc) "\
+"    UNION ALL "\
+"   SELECT pg_catalog.quote_ident(attname), attname "\
+"     FROM pg_catalog.pg_attribute "\
+"    WHERE attnum > 0 "\
+"      AND NOT attisdropped "\
+"   ) ss "\
+"  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
+
 /*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
@@ -3247,7 +3323,18 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("IS");
 
 /* SELECT */
-	/* naah . . . */
+	else if ((TailMatches1("SELECT") || TailMatches2("SELECT", "ALL|DISTINCT")) &&
+			 pset.sversion >= 70300)
+	{
+		if (pset.sversion < 80100)
+			COMPLETE_WITH_QUERY(Query_for_list_of_selectable_functions_or_attributes_PRE_81);
+		else if (pset.sversion < 90000)
+			COMPLETE_WITH_QUERY(Query_for_list_of_selectable_functions_or_attributes_PRE_90);
+		else if (pset.sversion < 90600)
+			COMPLETE_WITH_QUERY(Query_for_list_of_selectable_functions_or_attributes_PRE_96);
+		else
+			COMPLETE_WITH_QUERY(Query_for_list_of_selectable_functions_or_attributes);
+	}
 
 /* SET, RESET, SHOW */
 	/* Complete with a variable name */

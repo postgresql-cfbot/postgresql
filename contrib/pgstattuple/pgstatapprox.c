@@ -68,7 +68,6 @@ statapprox_heap(Relation rel, output_type *stat)
 	Buffer		vmbuffer = InvalidBuffer;
 	BufferAccessStrategy bstrategy;
 	TransactionId OldestXmin;
-	uint64		misc_count = 0;
 
 	OldestXmin = GetOldestXmin(rel, PROCARRAY_FLAGS_VACUUM);
 	bstrategy = GetAccessStrategy(BAS_BULKREAD);
@@ -153,25 +152,21 @@ statapprox_heap(Relation rel, output_type *stat)
 			tuple.t_tableOid = RelationGetRelid(rel);
 
 			/*
-			 * We count live and dead tuples, but we also need to add up
-			 * others in order to feed vac_estimate_reltuples.
+			 * We follow VACUUM's lead in counting INSERT_IN_PROGRESS and
+			 * DELETE_IN_PROGRESS tuples as "live".
 			 */
 			switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
 			{
-				case HEAPTUPLE_RECENTLY_DEAD:
-					misc_count++;
-					/* Fall through */
-				case HEAPTUPLE_DEAD:
-					stat->dead_tuple_len += tuple.t_len;
-					stat->dead_tuple_count++;
-					break;
 				case HEAPTUPLE_LIVE:
+				case HEAPTUPLE_INSERT_IN_PROGRESS:
+				case HEAPTUPLE_DELETE_IN_PROGRESS:
 					stat->tuple_len += tuple.t_len;
 					stat->tuple_count++;
 					break;
-				case HEAPTUPLE_INSERT_IN_PROGRESS:
-				case HEAPTUPLE_DELETE_IN_PROGRESS:
-					misc_count++;
+				case HEAPTUPLE_DEAD:
+				case HEAPTUPLE_RECENTLY_DEAD:
+					stat->dead_tuple_len += tuple.t_len;
+					stat->dead_tuple_count++;
 					break;
 				default:
 					elog(ERROR, "unexpected HeapTupleSatisfiesVacuum result");
@@ -184,8 +179,12 @@ statapprox_heap(Relation rel, output_type *stat)
 
 	stat->table_len = (uint64) nblocks * BLCKSZ;
 
+	/*
+	 * Extrapolate the live-tuple count to the whole table in the same way
+	 * that VACUUM does.  (XXX shouldn't we also extrapolate tuple_len?)
+	 */
 	stat->tuple_count = vac_estimate_reltuples(rel, false, nblocks, scanned,
-											   stat->tuple_count + misc_count);
+											   stat->tuple_count);
 
 	/*
 	 * Calculate percentages if the relation has one or more pages.

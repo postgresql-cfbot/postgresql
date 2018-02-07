@@ -1415,3 +1415,70 @@ alter table fktable2 drop constraint fktable2_f1_fkey;
 ERROR:  cannot ALTER TABLE "pktable2" because it has pending trigger events
 commit;
 drop table pktable2, fktable2;
+--
+-- Foreign keys and partitioned tables
+--
+-- Test that it's possible to have a FK from a partitioned table to a regular
+-- one
+CREATE TABLE pkregular (f1 int primary key);
+CREATE TABLE fkpartit (f1 int references pkregular) PARTITION BY RANGE (f1);
+CREATE TABLE fkpart1  PARTITION OF fkpartit FOR VALUES FROM (0) TO (1000);
+INSERT INTO fkpartit VALUES (500);
+ERROR:  insert or update on table "fkpart1" violates foreign key constraint "fkpartit_f1_fkey"
+DETAIL:  Key (f1)=(500) is not present in table "pkregular".
+INSERT INTO fkpart1 VALUES (500);
+ERROR:  insert or update on table "fkpart1" violates foreign key constraint "fkpartit_f1_fkey"
+DETAIL:  Key (f1)=(500) is not present in table "pkregular".
+INSERT INTO pkregular VALUES (500);
+INSERT INTO fkpartit VALUES (500);
+INSERT INTO fkpart1 VALUES (500);
+DELETE FROM pkregular;
+ERROR:  update or delete on table "pkregular" violates foreign key constraint "fkpartit_f1_fkey" on table "fkpartit"
+DETAIL:  Key (f1)=(500) is still referenced from table "fkpartit".
+UPDATE pkregular SET f1 = 501;
+ERROR:  update or delete on table "pkregular" violates foreign key constraint "fkpartit_f1_fkey" on table "fkpartit"
+DETAIL:  Key (f1)=(500) is still referenced from table "fkpartit".
+ALTER TABLE fkpart1 DROP CONSTRAINT fkpartit_f1_fkey;	-- nope
+ERROR:  cannot drop inherited constraint "fkpartit_f1_fkey" of relation "fkpart1"
+ALTER TABLE fkpartit DROP CONSTRAINT fkpartit_f1_fkey;
+\d fkpartit
+              Table "public.fkpartit"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ f1     | integer |           |          | 
+Partition key: RANGE (f1)
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d fkpart1
+              Table "public.fkpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ f1     | integer |           |          | 
+Partition of: fkpartit FOR VALUES FROM (0) TO (1000)
+
+ALTER TABLE fkpartit ADD CONSTRAINT fkpartit_f1_fkey FOREIGN KEY (f1) REFERENCES pkregular ON DELETE CASCADE;
+\d fkpartit
+              Table "public.fkpartit"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ f1     | integer |           |          | 
+Partition key: RANGE (f1)
+Foreign-key constraints:
+    "fkpartit_f1_fkey" FOREIGN KEY (f1) REFERENCES pkregular(f1) ON DELETE CASCADE
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d fkpart1
+              Table "public.fkpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ f1     | integer |           |          | 
+Partition of: fkpartit FOR VALUES FROM (0) TO (1000)
+Foreign-key constraints:
+    "fkpartit_f1_fkey" FOREIGN KEY (f1) REFERENCES pkregular(f1) ON DELETE CASCADE
+
+DELETE FROM pkregular;
+SELECT * FROM fkpartit;
+ f1 
+----
+(0 rows)
+

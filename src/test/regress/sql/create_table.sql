@@ -299,22 +299,6 @@ CREATE TABLE partitioned (
 
 -- unsupported constraint type for partitioned tables
 CREATE TABLE partitioned (
-	a int PRIMARY KEY
-) PARTITION BY RANGE (a);
-
-CREATE TABLE pkrel (
-	a int PRIMARY KEY
-);
-CREATE TABLE partitioned (
-	a int REFERENCES pkrel(a)
-) PARTITION BY RANGE (a);
-DROP TABLE pkrel;
-
-CREATE TABLE partitioned (
-	a int UNIQUE
-) PARTITION BY RANGE (a);
-
-CREATE TABLE partitioned (
 	a int,
 	EXCLUDE USING gist (a WITH &&)
 ) PARTITION BY RANGE (a);

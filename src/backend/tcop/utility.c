@@ -1353,6 +1353,7 @@ ProcessUtilitySlow(ParseState *pstate,
 									stmt,
 									InvalidOid, /* no predefined OID */
 									InvalidOid, /* no parent index */
+									InvalidOid, /* no parent constraint */
 									false,	/* is_alter_table */
 									true,	/* check_rights */
 									true,	/* check_not_in_use */
@@ -1506,7 +1507,8 @@ ProcessUtilitySlow(ParseState *pstate,
 			case T_CreateTrigStmt:
 				address = CreateTrigger((CreateTrigStmt *) parsetree,
 										queryString, InvalidOid, InvalidOid,
-										InvalidOid, InvalidOid, false);
+										InvalidOid, InvalidOid, InvalidOid,
+										InvalidOid, false);
 				break;
 
 			case T_CreatePLangStmt:

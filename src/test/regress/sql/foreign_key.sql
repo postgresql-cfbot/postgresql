@@ -1055,3 +1055,31 @@ alter table fktable2 drop constraint fktable2_f1_fkey;
 commit;
 
 drop table pktable2, fktable2;
+
+
+--
+-- Foreign keys and partitioned tables
+--
+
+-- Test that it's possible to have a FK from a partitioned table to a regular
+-- one
+CREATE TABLE pkregular (f1 int primary key);
+CREATE TABLE fkpartit (f1 int references pkregular) PARTITION BY RANGE (f1);
+CREATE TABLE fkpart1  PARTITION OF fkpartit FOR VALUES FROM (0) TO (1000);
+INSERT INTO fkpartit VALUES (500);
+INSERT INTO fkpart1 VALUES (500);
+INSERT INTO pkregular VALUES (500);
+INSERT INTO fkpartit VALUES (500);
+INSERT INTO fkpart1 VALUES (500);
+DELETE FROM pkregular;
+UPDATE pkregular SET f1 = 501;
+
+ALTER TABLE fkpart1 DROP CONSTRAINT fkpartit_f1_fkey;	-- nope
+ALTER TABLE fkpartit DROP CONSTRAINT fkpartit_f1_fkey;
+\d fkpartit
+\d fkpart1
+ALTER TABLE fkpartit ADD CONSTRAINT fkpartit_f1_fkey FOREIGN KEY (f1) REFERENCES pkregular ON DELETE CASCADE;
+\d fkpartit
+\d fkpart1
+DELETE FROM pkregular;
+SELECT * FROM fkpartit;

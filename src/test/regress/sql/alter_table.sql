@@ -394,6 +394,62 @@ DROP TABLE tmp3;
 
 DROP TABLE tmp2;
 
+-- Ensure we can add foreign keys to and from partitioned tables
+SET search_path TO at_tst;
+CREATE SCHEMA at_tst;
+CREATE TABLE at_regular1 (col1 INT PRIMARY KEY);
+CREATE TABLE at_partitioned (col2 INT PRIMARY KEY,
+	reg1_col1 INT NOT NULL) PARTITION BY RANGE (col2);
+CREATE TABLE at_regular2 (col3 INT);
+ALTER TABLE at_regular2 ADD FOREIGN KEY (col3) REFERENCES at_partitioned;
+ALTER TABLE at_partitioned ADD FOREIGN KEY (reg1_col1) REFERENCES at_regular1;
+CREATE TABLE at_partitioned_0 PARTITION OF at_partitioned
+  FOR VALUES FROM (0) TO (10000);
+-- these fail:
+INSERT INTO at_regular2 VALUES (1000);
+INSERT INTO at_partitioned VALUES (1000, 42);
+
+-- these work:
+INSERT INTO at_regular1 VALUES (1000);
+INSERT INTO at_partitioned VALUES (42, 1000);
+INSERT INTO at_regular2 VALUES (42);
+
+CREATE TABLE at_partitioned_1 PARTITION OF at_partitioned
+  FOR VALUES FROM (10000) TO (20000);
+CREATE TABLE at_partitioned_2 (reg1_col1 INT, col2 INT);
+ALTER TABLE at_partitioned ATTACH PARTITION at_partitioned_2
+  FOR VALUES FROM (20000) TO (30000);
+ALTER TABLE at_partitioned_2
+	ALTER col2 SET NOT NULL,
+	ALTER reg1_col1 SET NOT NULL;
+ALTER TABLE at_partitioned ATTACH PARTITION at_partitioned_2
+  FOR VALUES FROM (20000) TO (30000);
+
+\d at_regular2
+\d at_partitioned
+\d at_partitioned_0
+\d at_partitioned_1
+\d at_partitioned_2
+
+INSERT INTO at_partitioned VALUES (5000, 42);
+INSERT INTO at_regular1 VALUES (42), (1042), (2042);
+INSERT INTO at_partitioned VALUES (5000, 42), (15000, 1042), (25000, 2042);
+INSERT INTO at_regular2 VALUES (5000), (15000), (25000);
+INSERT INTO at_regular2 VALUES (35000);
+
+-- ok
+ALTER TABLE at_regular2 DROP CONSTRAINT at_regular2_col3_fkey;
+
+-- disallowed: must drop it from parent instead
+ALTER TABLE at_partitioned_0 DROP CONSTRAINT at_partitioned_reg1_col1_fkey;
+-- ok
+ALTER TABLE at_partitioned DROP CONSTRAINT at_partitioned_reg1_col1_fkey;
+
+\set VERBOSITY terse
+DROP SCHEMA at_tst CASCADE;
+\set VERBOSITY default
+RESET search_path;
+
 -- NOT VALID with plan invalidation -- ensure we don't use a constraint for
 -- exclusion until validated
 set constraint_exclusion TO 'partition';
@@ -2035,9 +2091,6 @@ CREATE TABLE partitioned (
 	a int,
 	b int
 ) PARTITION BY RANGE (a, (a+b+1));
-ALTER TABLE partitioned ADD UNIQUE (a);
-ALTER TABLE partitioned ADD PRIMARY KEY (a);
-ALTER TABLE partitioned ADD FOREIGN KEY (a) REFERENCES blah;
 ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH &&);
 
 -- cannot drop column that is part of the partition key

@@ -56,9 +56,10 @@ extern Oid CreateConstraintEntry(const char *constraintName,
 					  bool conNoInherit,
 					  bool is_internal);
 
+extern void CloneForeignKeyConstraints(Oid parentId, Oid relationId);
+
 extern void RemoveConstraintById(Oid conId);
 extern void RenameConstraintById(Oid conId, const char *newname);
-extern void SetValidatedConstraintById(Oid conId);
 
 extern bool ConstraintNameIsUsed(ConstraintCategory conCat, Oid objId,
 					 Oid objNamespace, const char *conname);
@@ -68,10 +69,13 @@ extern char *ChooseConstraintName(const char *name1, const char *name2,
 
 extern void AlterConstraintNamespaces(Oid ownerId, Oid oldNspId,
 						  Oid newNspId, bool isType, ObjectAddresses *objsMoved);
+extern void ConstraintSetParentConstraint(Oid childConstrId,
+							  Oid parentConstrId);
 extern Oid	get_relation_constraint_oid(Oid relid, const char *conname, bool missing_ok);
 extern Bitmapset *get_relation_constraint_attnos(Oid relid, const char *conname,
 							   bool missing_ok, Oid *constraintOid);
 extern Oid	get_domain_constraint_oid(Oid typid, const char *conname, bool missing_ok);
+extern Oid get_relation_idx_constraint_oid(Oid relationId, Oid indexId);
 
 extern Bitmapset *get_primary_key_attnos(Oid relid, bool deferrableOk,
 					   Oid *constraintOid);

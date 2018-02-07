@@ -401,7 +401,7 @@ RI_FKey_check(TriggerData *trigdata)
 
 		/* ----------
 		 * The query string built is
-		 *	SELECT 1 FROM ONLY <pktable> x WHERE pkatt1 = $1 [AND ...]
+		 *	SELECT 1 FROM <pktable> x WHERE pkatt1 = $1 [AND ...]
 		 *		   FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * corresponding FK attributes.
@@ -409,7 +409,7 @@ RI_FKey_check(TriggerData *trigdata)
 		 */
 		initStringInfo(&querybuf);
 		quoteRelationName(pkrelname, pk_rel);
-		appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x", pkrelname);
+		appendStringInfo(&querybuf, "SELECT 1 FROM %s x", pkrelname);
 		querysep = "WHERE";
 		for (i = 0; i < riinfo->nkeys; i++)
 		{
@@ -537,7 +537,7 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 
 		/* ----------
 		 * The query string built is
-		 *	SELECT 1 FROM ONLY <pktable> x WHERE pkatt1 = $1 [AND ...]
+		 *	SELECT 1 FROM <pktable> x WHERE pkatt1 = $1 [AND ...]
 		 *		   FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * PK attributes themselves.
@@ -545,7 +545,7 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 		 */
 		initStringInfo(&querybuf);
 		quoteRelationName(pkrelname, pk_rel);
-		appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x", pkrelname);
+		appendStringInfo(&querybuf, "SELECT 1 FROM %s x", pkrelname);
 		querysep = "WHERE";
 		for (i = 0; i < riinfo->nkeys; i++)
 		{
@@ -793,7 +793,7 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 
 				/* ----------
 				 * The query string built is
-				 *	SELECT 1 FROM ONLY <fktable> x WHERE $1 = fkatt1 [AND ...]
+				 *	SELECT 1 FROM <fktable> x WHERE $1 = fkatt1 [AND ...]
 				 *		   FOR KEY SHARE OF x
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.
@@ -801,7 +801,7 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 				 */
 				initStringInfo(&querybuf);
 				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x",
+				appendStringInfo(&querybuf, "SELECT 1 FROM %s x",
 								 fkrelname);
 				querysep = "WHERE";
 				for (i = 0; i < riinfo->nkeys; i++)
@@ -951,14 +951,14 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 
 				/* ----------
 				 * The query string built is
-				 *	DELETE FROM ONLY <fktable> WHERE $1 = fkatt1 [AND ...]
+				 *	DELETE FROM <fktable> WHERE $1 = fkatt1 [AND ...]
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.
 				 * ----------
 				 */
 				initStringInfo(&querybuf);
 				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "DELETE FROM ONLY %s", fkrelname);
+				appendStringInfo(&querybuf, "DELETE FROM %s", fkrelname);
 				querysep = "WHERE";
 				for (i = 0; i < riinfo->nkeys; i++)
 				{
@@ -1122,7 +1122,7 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 
 				/* ----------
 				 * The query string built is
-				 *	UPDATE ONLY <fktable> SET fkatt1 = $1 [, ...]
+				 *	UPDATE <fktable> SET fkatt1 = $1 [, ...]
 				 *			WHERE $n = fkatt1 [AND ...]
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.  Note that we are assuming
@@ -1133,7 +1133,7 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 				initStringInfo(&querybuf);
 				initStringInfo(&qualbuf);
 				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "UPDATE ONLY %s SET", fkrelname);
+				appendStringInfo(&querybuf, "UPDATE %s SET", fkrelname);
 				querysep = "";
 				qualsep = "WHERE";
 				for (i = 0, j = riinfo->nkeys; i < riinfo->nkeys; i++, j++)
@@ -1342,7 +1342,7 @@ ri_setnull(TriggerData *trigdata)
 
 				/* ----------
 				 * The query string built is
-				 *	UPDATE ONLY <fktable> SET fkatt1 = NULL [, ...]
+				 *	UPDATE <fktable> SET fkatt1 = NULL [, ...]
 				 *			WHERE $1 = fkatt1 [AND ...]
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.
@@ -1351,7 +1351,7 @@ ri_setnull(TriggerData *trigdata)
 				initStringInfo(&querybuf);
 				initStringInfo(&qualbuf);
 				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "UPDATE ONLY %s SET", fkrelname);
+				appendStringInfo(&querybuf, "UPDATE %s SET", fkrelname);
 				querysep = "";
 				qualsep = "WHERE";
 				for (i = 0; i < riinfo->nkeys; i++)
@@ -1559,7 +1559,7 @@ ri_setdefault(TriggerData *trigdata)
 
 				/* ----------
 				 * The query string built is
-				 *	UPDATE ONLY <fktable> SET fkatt1 = DEFAULT [, ...]
+				 *	UPDATE <fktable> SET fkatt1 = DEFAULT [, ...]
 				 *			WHERE $1 = fkatt1 [AND ...]
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.
@@ -1568,7 +1568,7 @@ ri_setdefault(TriggerData *trigdata)
 				initStringInfo(&querybuf);
 				initStringInfo(&qualbuf);
 				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "UPDATE ONLY %s SET", fkrelname);
+				appendStringInfo(&querybuf, "UPDATE %s SET", fkrelname);
 				querysep = "";
 				qualsep = "WHERE";
 				for (i = 0; i < riinfo->nkeys; i++)
@@ -1895,8 +1895,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 
 	/*----------
 	 * The query string built is:
-	 *	SELECT fk.keycols FROM ONLY relname fk
-	 *	 LEFT OUTER JOIN ONLY pkrelname pk
+	 *	SELECT fk.keycols FROM relname fk
+	 *	 LEFT OUTER JOIN pkrelname pk
 	 *	 ON (pk.pkkeycol1=fk.keycol1 [AND ...])
 	 *	 WHERE pk.pkkeycol1 IS NULL AND
 	 * For MATCH SIMPLE:
@@ -1922,7 +1922,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	quoteRelationName(pkrelname, pk_rel);
 	quoteRelationName(fkrelname, fk_rel);
 	appendStringInfo(&querybuf,
-					 " FROM ONLY %s fk LEFT OUTER JOIN ONLY %s pk ON",
+					 " FROM %s fk LEFT OUTER JOIN %s pk ON",
 					 fkrelname, pkrelname);
 
 	strcpy(pkattname, "pk.");
@@ -2344,22 +2344,6 @@ ri_FetchConstraintInfo(Trigger *trigger, Relation trig_rel, bool rel_is_pk)
 
 	/* Find or create a hashtable entry for the constraint */
 	riinfo = ri_LoadConstraintInfo(constraintOid);
-
-	/* Do some easy cross-checks against the trigger call data */
-	if (rel_is_pk)
-	{
-		if (riinfo->fk_relid != trigger->tgconstrrelid ||
-			riinfo->pk_relid != RelationGetRelid(trig_rel))
-			elog(ERROR, "wrong pg_constraint entry for trigger \"%s\" on table \"%s\"",
-				 trigger->tgname, RelationGetRelationName(trig_rel));
-	}
-	else
-	{
-		if (riinfo->fk_relid != RelationGetRelid(trig_rel) ||
-			riinfo->pk_relid != trigger->tgconstrrelid)
-			elog(ERROR, "wrong pg_constraint entry for trigger \"%s\" on table \"%s\"",
-				 trigger->tgname, RelationGetRelationName(trig_rel));
-	}
 
 	return riinfo;
 }

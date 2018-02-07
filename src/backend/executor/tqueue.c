@@ -90,7 +90,10 @@ tqueueShutdownReceiver(DestReceiver *self)
 	TQueueDestReceiver *tqueue = (TQueueDestReceiver *) self;
 
 	if (tqueue->queue != NULL)
+	{
+		empty_queue(tqueue->queue);
 		shm_mq_detach(tqueue->queue);
+	}
 	tqueue->queue = NULL;
 }
 

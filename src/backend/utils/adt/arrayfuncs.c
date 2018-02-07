@@ -3196,6 +3196,19 @@ array_map(Datum arrayd,
 	array_iter_setup(&iter, v);
 	hasnulls = false;
 
+	/* we must have our own information for executing cached expressions */
+	Assert(exprstate->own_execute_cached_expressions);
+	/* for the first element get it from the top */
+	if (exprstate->top_execute_cached_expressions)
+	{
+		*(exprstate->own_execute_cached_expressions) =
+			*(exprstate->top_execute_cached_expressions);
+	}
+	else
+	{
+		/* We are top, so all is OK */
+	}
+
 	for (i = 0; i < nitems; i++)
 	{
 		/* Get source element, checking for NULL */

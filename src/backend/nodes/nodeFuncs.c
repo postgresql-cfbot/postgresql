@@ -54,6 +54,10 @@ exprType(const Node *expr)
 		case T_Const:
 			type = ((const Const *) expr)->consttype;
 			break;
+		case T_CachedExpr:
+			type =
+				exprType((const Node *) ((const CachedExpr *) expr)->subexpr);
+			break;
 		case T_Param:
 			type = ((const Param *) expr)->paramtype;
 			break;
@@ -284,6 +288,9 @@ exprTypmod(const Node *expr)
 			return ((const Var *) expr)->vartypmod;
 		case T_Const:
 			return ((const Const *) expr)->consttypmod;
+		case T_CachedExpr:
+			return
+				exprTypmod((const Node *) ((const CachedExpr *) expr)->subexpr);
 		case T_Param:
 			return ((const Param *) expr)->paramtypmod;
 		case T_ArrayRef:
@@ -573,6 +580,11 @@ exprIsLengthCoercion(const Node *expr, int32 *coercedTypmod)
 		return true;
 	}
 
+	if (expr && IsA(expr, CachedExpr))
+		return exprIsLengthCoercion(
+			(const Node *) ((const CachedExpr *) expr)->subexpr,
+			coercedTypmod);
+
 	return false;
 }
 
@@ -655,6 +667,11 @@ strip_implicit_coercions(Node *node)
 		if (c->coercionformat == COERCE_IMPLICIT_CAST)
 			return strip_implicit_coercions((Node *) c->arg);
 	}
+	else if (IsA(node, CachedExpr))
+	{
+		return strip_implicit_coercions(
+			(Node *) ((CachedExpr *) node)->subexpr);
+	}
 	return node;
 }
 
@@ -699,6 +716,8 @@ expression_returns_set_walker(Node *node, void *context)
 		return false;
 	if (IsA(node, WindowFunc))
 		return false;
+	if (IsA(node, CachedExpr))
+		return false;
 
 	return expression_tree_walker(node, expression_returns_set_walker,
 								  context);
@@ -731,6 +750,10 @@ exprCollation(const Node *expr)
 			break;
 		case T_Const:
 			coll = ((const Const *) expr)->constcollid;
+			break;
+		case T_CachedExpr:
+			coll = exprCollation(
+				(const Node *) ((const CachedExpr *) expr)->subexpr);
 			break;
 		case T_Param:
 			coll = ((const Param *) expr)->paramcollid;
@@ -927,6 +950,10 @@ exprInputCollation(const Node *expr)
 
 	switch (nodeTag(expr))
 	{
+		case T_CachedExpr:
+			coll = exprInputCollation(
+				(const Node *) ((const CachedExpr *) expr)->subexpr);
+			break;
 		case T_Aggref:
 			coll = ((const Aggref *) expr)->inputcollid;
 			break;
@@ -975,6 +1002,10 @@ exprSetCollation(Node *expr, Oid collation)
 			break;
 		case T_Const:
 			((Const *) expr)->constcollid = collation;
+			break;
+		case T_CachedExpr:
+			exprSetCollation((Node *) ((CachedExpr *) expr)->subexpr,
+							 collation);
 			break;
 		case T_Param:
 			((Param *) expr)->paramcollid = collation;
@@ -1123,6 +1154,10 @@ exprSetInputCollation(Node *expr, Oid inputcollation)
 {
 	switch (nodeTag(expr))
 	{
+		case T_CachedExpr:
+			exprSetInputCollation((Node *) ((CachedExpr *) expr)->subexpr,
+								  inputcollation);
+			break;
 		case T_Aggref:
 			((Aggref *) expr)->inputcollid = inputcollation;
 			break;
@@ -1202,6 +1237,10 @@ exprLocation(const Node *expr)
 			break;
 		case T_Const:
 			loc = ((const Const *) expr)->location;
+			break;
+		case T_CachedExpr:
+			loc = exprLocation(
+				(const Node *) ((const CachedExpr *) expr)->subexpr);
 			break;
 		case T_Param:
 			loc = ((const Param *) expr)->location;
@@ -1590,6 +1629,9 @@ fix_opfuncids_walker(Node *node, void *context)
 {
 	if (node == NULL)
 		return false;
+	if (IsA(node, CachedExpr))
+		return fix_opfuncids_walker((Node *) ((CachedExpr *) node)->subexpr,
+									context);
 	if (IsA(node, OpExpr))
 		set_opfuncid((OpExpr *) node);
 	else if (IsA(node, DistinctExpr))
@@ -1653,6 +1695,9 @@ check_functions_in_node(Node *node, check_function_callback checker,
 {
 	switch (nodeTag(node))
 	{
+		case T_CachedExpr:
+			return check_functions_in_node(
+				(Node *) ((CachedExpr *) node)->subexpr, checker, context);
 		case T_Aggref:
 			{
 				Aggref	   *expr = (Aggref *) node;
@@ -1868,6 +1913,18 @@ expression_tree_walker(Node *node,
 			break;
 		case T_WithCheckOption:
 			return walker(((WithCheckOption *) node)->qual, context);
+		case T_CachedExpr:
+			{
+				/*
+				 * cachedexpr is processed by walker, so its subexpr is
+				 * processed too and we need to process sub-nodes of subexpr.
+				 */
+				if (expression_tree_walker(
+										(Node *) ((CachedExpr *) node)->subexpr,
+										walker, context))
+					return true;
+			}
+			break;
 		case T_Aggref:
 			{
 				Aggref	   *expr = (Aggref *) node;
@@ -2478,6 +2535,25 @@ expression_tree_mutator(Node *node,
 				MUTATE(newnode->qual, wco->qual, Node *);
 				return (Node *) newnode;
 			}
+		case T_CachedExpr:
+			{
+				CachedExpr *expr = (CachedExpr *) node;
+				CachedExpr *newnode;
+
+				FLATCOPY(newnode, expr, CachedExpr);
+
+				/*
+				 * expr is already mutated, so its subexpr is already mutated
+				 * too and we need to mutate sub-nodes of subexpr.
+				 */
+				newnode->subexpr = (CacheableExpr *) expression_tree_mutator(
+														(Node *) expr->subexpr,
+														mutator,
+														context);
+
+				return (Node *) newnode;
+			}
+			break;
 		case T_Aggref:
 			{
 				Aggref	   *aggref = (Aggref *) node;
@@ -3816,4 +3892,24 @@ planstate_walk_members(List *plans, PlanState **planstates,
 	}
 
 	return false;
+}
+
+/*
+ * cast_node_if_cached_impl: return a node of this type (perhaps get it from the
+ * source cached expression) or NULL.
+ */
+Node *
+cast_node_if_cached_impl(Node *node, NodeTag tag)
+{
+	if (nodeTag(node) == tag)
+		return node;
+
+	if (nodeTag(node) == T_CachedExpr)
+	{
+		return cast_node_if_cached_impl(
+							(Node *) (castNode(CachedExpr, node))->subexpr,
+							tag);
+	}
+
+	return NULL;
 }

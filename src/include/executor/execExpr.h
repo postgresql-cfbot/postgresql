@@ -230,6 +230,16 @@ typedef enum ExprEvalOp
 	EEOP_AGG_ORDERED_TRANS_DATUM,
 	EEOP_AGG_ORDERED_TRANS_TUPLE,
 
+	/*
+	 * Evaluate CachedExpr.  EEOP_CACHEDEXPR_IF_CACHED is used before
+	 * subexpression evaluation (if subexpression was evaluated use cached value
+	 * and jump to next state or get prepared to subexpression evaluation
+	 * otherwise).  EEOP_CACHEDEXPR_SUBEXPR_END is used after subexpression
+	 * evaluation for caching its result.
+	 */
+	EEOP_CACHEDEXPR_IF_CACHED,
+	EEOP_CACHEDEXPR_SUBEXPR_END,
+
 	/* non-existent operation, used e.g. to check array lengths */
 	EEOP_LAST
 } ExprEvalOp;
@@ -634,6 +644,13 @@ typedef struct ExprEvalStep
 			int			transno;
 			int			setoff;
 		}			agg_trans;
+
+		/* for EEOP_CACHEDEXPR_* */
+		struct
+		{
+			/* steps for evaluation the same CachedExpr have the same state */
+			struct CachedExprState *state;
+		}			cachedexpr;
 	}			d;
 } ExprEvalStep;
 
@@ -672,6 +689,20 @@ typedef struct ArrayRefState
 	Datum		prevvalue;
 	bool		prevnull;
 } ArrayRefState;
+
+
+/*
+ * Non-inline data for EEOP_CACHEDEXPR_* operations (steps for evaluation the
+ * same CachedExpr have the same state).
+ */
+typedef struct CachedExprState
+{
+	bool		resnull;
+	Datum		resvalue;
+	bool		isExecuted;		/* in case upper expression jumps over it */
+	Oid 		restypid;		/* for copying resvalue of subexpression */
+	int			jumpdone;		/* jump here if result determined */
+} CachedExprState;
 
 
 /* functions in execExpr.c */

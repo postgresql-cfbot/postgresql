@@ -58,6 +58,16 @@ ExecInitTableFunctionResult(Expr *expr,
 {
 	SetExprState *state = makeNode(SetExprState);
 
+	/*
+	 * Although SRF expressions are not cached, expressions that return RECORD
+	 * can be cached. If such cached expression is executed in FROM (ROWS FROM),
+	 * this means that it is executed only once so we can treat it as a
+	 * non-cached expression (note that cached expressions always are calculated
+	 * as many times as they are mentioned in the query).
+	 */
+	if (IsA(expr, CachedExpr))
+		expr = (Expr *) ((CachedExpr *) expr)->subexpr;
+
 	state->funcReturnsSet = false;
 	state->expr = expr;
 	state->func.fn_oid = InvalidOid;

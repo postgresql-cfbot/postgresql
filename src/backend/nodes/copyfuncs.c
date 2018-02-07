@@ -1337,6 +1337,19 @@ _copyConst(const Const *from)
 }
 
 /*
+ * _copyCachedExpr
+ */
+static CachedExpr *
+_copyCachedExpr(const CachedExpr *from)
+{
+	CachedExpr *newnode = makeNode(CachedExpr);
+
+	COPY_NODE_FIELD(subexpr);
+
+	return newnode;
+}
+
+/*
  * _copyParam
  */
 static Param *
@@ -4884,6 +4897,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_Const:
 			retval = _copyConst(from);
+			break;
+		case T_CachedExpr:
+			retval = _copyCachedExpr(from);
 			break;
 		case T_Param:
 			retval = _copyParam(from);

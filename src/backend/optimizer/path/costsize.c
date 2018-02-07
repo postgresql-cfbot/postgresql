@@ -3960,6 +3960,27 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 		 */
 		return false;
 	}
+	else if (IsA(node, CachedExpr))
+	{
+		/*
+		 * Calculate subexpression cost as usual and add it to startup cost
+		 * (because subexpression will be executed only once for all tuples).
+		 */
+		cost_qual_eval_context subexpr_context;
+
+		subexpr_context.root = context->root;
+		subexpr_context.total.startup = 0;
+		subexpr_context.total.per_tuple = 0;
+
+		cost_qual_eval_walker((Node *) ((CachedExpr *) node)->subexpr,
+							  &subexpr_context);
+
+		context->total.startup +=
+			(subexpr_context.total.startup + subexpr_context.total.per_tuple);
+
+		/* do NOT recurse into children */
+		return false;
+	}
 
 	/* recurse into children */
 	return expression_tree_walker(node, cost_qual_eval_walker,

@@ -336,6 +336,20 @@ CREATE [ OR REPLACE ] FUNCTION
        <literal>setval()</literal>.
       </para>
 
+      <note>
+       <para>
+        Stable, immutable functions and other nonvolatile expressions are
+        precalculated (= calculated once for all output rows, but as many times
+        as expression is mentioned in query), if they don't return a set and
+        their arguments are constants or recursively precalculated expressions.
+       </para>
+
+       <para>
+        Now this feature is not supported for domain constraints (see <xref
+        linkend="sql-createdomain"/>).
+       </para>
+      </note>
+
       <para>
        For additional details see <xref linkend="xfunc-volatility"/>.
       </para>

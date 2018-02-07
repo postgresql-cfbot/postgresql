@@ -559,6 +559,19 @@ _readConst(void)
 }
 
 /*
+ * _readCachedExpr
+ */
+static CachedExpr *
+_readCachedExpr(void)
+{
+	READ_LOCALS(CachedExpr);
+
+	READ_NODE_FIELD(subexpr);
+
+	READ_DONE();
+}
+
+/*
  * _readParam
  */
 static Param *
@@ -2485,6 +2498,8 @@ parseNodeString(void)
 		return_value = _readVar();
 	else if (MATCH("CONST", 5))
 		return_value = _readConst();
+	else if (MATCH("CACHEDEXPR", 10))
+		return_value = _readCachedExpr();
 	else if (MATCH("PARAM", 5))
 		return_value = _readParam();
 	else if (MATCH("AGGREF", 6))

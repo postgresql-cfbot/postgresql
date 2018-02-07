@@ -252,6 +252,34 @@ negate_clause(Node *node)
 				return (Node *) newexpr;
 			}
 			break;
+		case T_CachedExpr:
+			{
+				CachedExpr *expr = (CachedExpr *) node;
+				/* Try to simplify its subexpression */
+				Node	   *newsubnode = negate_clause((Node *) expr->subexpr);
+
+				if (IsA(newsubnode, BoolExpr) &&
+					((BoolExpr *) newsubnode)->boolop == NOT_EXPR)
+				{
+					/*
+					 * Simplifying its subexpression did not help so return the
+					 * cached negation of the original node.
+					 */
+					CachedExpr *newexpr = makeNode(CachedExpr);
+					newexpr->subexpr =
+						(CacheableExpr *) make_notclause((Expr *) node);
+					return (Node *) newexpr;
+				}
+				else
+				{
+					/*
+					 * A simplified subexpression may be non-cacheable, so
+					 * return it by itself.
+					 */
+					return newsubnode;
+				}
+			}
+			break;
 		default:
 			/* else fall through */
 			break;

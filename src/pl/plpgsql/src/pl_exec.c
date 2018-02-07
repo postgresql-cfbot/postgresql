@@ -5530,6 +5530,13 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 	expr->expr_simple_in_use = true;
 
 	/*
+	 * The executor is used (again) from the very beginning, so the cached
+	 * expressions must be (re)calculated.
+	 */
+	Assert(expr->expr_simple_state->own_execute_cached_expressions);
+	*(expr->expr_simple_state->own_execute_cached_expressions) = true;
+
+	/*
 	 * Finally we can call the executor to evaluate the expression
 	 */
 	*result = ExecEvalExpr(expr->expr_simple_state,

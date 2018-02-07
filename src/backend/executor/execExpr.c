@@ -130,6 +130,12 @@ ExecInitExpr(Expr *node, PlanState *parent)
 	state->parent = parent;
 	state->ext_params = NULL;
 
+	/* after the first run, set it to false */
+	state->own_execute_cached_expressions = palloc(sizeof(bool));
+	*(state->own_execute_cached_expressions) = true;
+	/* there's no no upper state */
+	state->top_execute_cached_expressions = NULL;
+
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
 
@@ -166,6 +172,12 @@ ExecInitExprWithParams(Expr *node, ParamListInfo ext_params)
 	state->expr = node;
 	state->parent = NULL;
 	state->ext_params = ext_params;
+
+	/* after the first run, set it to false */
+	state->own_execute_cached_expressions = palloc(sizeof(bool));
+	*(state->own_execute_cached_expressions) = true;
+	/* there's no no upper state */
+	state->top_execute_cached_expressions = NULL;
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
@@ -221,6 +233,12 @@ ExecInitQual(List *qual, PlanState *parent)
 
 	/* mark expression as to be used with ExecQual() */
 	state->flags = EEO_FLAG_IS_QUAL;
+
+	/* after the first run, set it to false */
+	state->own_execute_cached_expressions = palloc(sizeof(bool));
+	*(state->own_execute_cached_expressions) = true;
+	/* there's no no upper state */
+	state->top_execute_cached_expressions = NULL;
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) qual);
@@ -365,6 +383,12 @@ ExecBuildProjectionInfo(List *targetList,
 	state->ext_params = NULL;
 
 	state->resultslot = slot;
+
+	/* after the first run, set it to false */
+	state->own_execute_cached_expressions = palloc(sizeof(bool));
+	*(state->own_execute_cached_expressions) = true;
+	/* there's no no upper state */
+	state->top_execute_cached_expressions = NULL;
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) targetList);
@@ -863,6 +887,38 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_CachedExpr:
+			{
+				/*
+				 * Allocate CachedExprState used by all steps of CachedExpr
+				 * evaluation.
+				 */
+				scratch.d.cachedexpr.state = (CachedExprState *) palloc(
+					sizeof(CachedExprState));
+				scratch.d.cachedexpr.state->resnull = false;
+				scratch.d.cachedexpr.state->resvalue = (Datum) 0;
+				scratch.d.cachedexpr.state->isExecuted = false;
+				scratch.d.cachedexpr.state->restypid = exprType(
+					(const Node *) node);
+
+				/* add EEOP_CACHEDEXPR_IF_CACHED step */
+				scratch.opcode = EEOP_CACHEDEXPR_IF_CACHED;
+				ExprEvalPushStep(state, &scratch);
+
+				/* add subexpression steps */
+				ExecInitExprRec((Expr *) ((CachedExpr *) node)->subexpr, state,
+								resv, resnull);
+
+				/* add EEOP_CACHEDEXPR_SUBEXPR_END step */
+				scratch.opcode = EEOP_CACHEDEXPR_SUBEXPR_END;
+				ExprEvalPushStep(state, &scratch);
+
+				/* adjust jump target */
+				scratch.d.cachedexpr.state->jumpdone = state->steps_len;
+
+				break;
+			}
+
 		case T_ArrayRef:
 			{
 				ArrayRef   *aref = (ArrayRef *) node;
@@ -1319,6 +1375,31 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				elemstate->expr = acoerce->elemexpr;
 				elemstate->parent = state->parent;
 				elemstate->ext_params = state->ext_params;
+
+				/*
+				 * Use the information from the upper state to get the first
+				 * element, but for other elements always set it to false. This
+				 * means that we will use our own information about it during
+				 * execution.
+				 */
+
+				elemstate->own_execute_cached_expressions =
+					palloc(sizeof(bool));
+
+				/* does not matter, set it at runtime */
+				*(elemstate->own_execute_cached_expressions) = true;
+
+				if (state->top_execute_cached_expressions)
+				{
+					elemstate->top_execute_cached_expressions =
+						state->top_execute_cached_expressions;
+				}
+				else
+				{
+					Assert(state->own_execute_cached_expressions);
+					elemstate->top_execute_cached_expressions =
+						state->own_execute_cached_expressions;
+				}
 
 				elemstate->innermost_caseval = (Datum *) palloc(sizeof(Datum));
 				elemstate->innermost_casenull = (bool *) palloc(sizeof(bool));
@@ -2822,6 +2903,12 @@ ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
 
 	state->expr = (Expr *) aggstate;
 	state->parent = parent;
+
+	/* after the first run, set it to false */
+	state->own_execute_cached_expressions = palloc(sizeof(bool));
+	*(state->own_execute_cached_expressions) = true;
+	/* there's no no upper state */
+	state->top_execute_cached_expressions = NULL;
 
 	scratch.resvalue = &state->resvalue;
 	scratch.resnull = &state->resnull;

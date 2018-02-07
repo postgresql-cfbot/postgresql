@@ -2822,10 +2822,11 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 				if (list_length(fscan->functions) == 1)
 				{
 					RangeTblFunction *rtfunc = (RangeTblFunction *) linitial(fscan->functions);
+					FuncExpr   *funcexpr = cast_node_if_cached(rtfunc->funcexpr,
+															   FuncExpr);
 
-					if (IsA(rtfunc->funcexpr, FuncExpr))
+					if (funcexpr)
 					{
-						FuncExpr   *funcexpr = (FuncExpr *) rtfunc->funcexpr;
 						Oid			funcid = funcexpr->funcid;
 
 						objectname = get_func_name(funcid);

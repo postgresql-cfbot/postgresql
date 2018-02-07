@@ -1533,8 +1533,19 @@ CREATE FUNCTION test(int, int) RETURNS int
 
    <para>
     For best optimization results, you should label your functions with the
-    strictest volatility category that is valid for them.
+    strictest volatility category that is valid for them. Stable, immutable
+    functions and other nonvolatile expressions are precalculated (= calculated
+    once for all output rows, but as many times as expression is mentioned in
+    query), if they don't return a set and their arguments are constants or
+    recursively precalculated expressions.
    </para>
+
+   <note>
+    <para>
+     Now this feature is not supported for domain constraints (see <xref
+     linkend="sql-createdomain"/>).
+    </para>
+   </note>
 
    <para>
     Any function with side-effects <emphasis>must</emphasis> be labeled

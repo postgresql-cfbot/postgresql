@@ -374,6 +374,14 @@ cost_gather(GatherPath *path, PlannerInfo *root,
 	startup_cost += parallel_setup_cost;
 	run_cost += parallel_tuple_cost * path->path.rows;
 
+	/* add tlist eval costs only if projecting */
+	if (path->path.pathtarget != path->subpath->pathtarget)
+	{
+		/* tlist eval costs are paid per output row, not per tuple scanned */
+		startup_cost += path->path.pathtarget->cost.startup;
+		run_cost += path->path.pathtarget->cost.per_tuple * path->path.rows;
+	}
+
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = (startup_cost + run_cost);
 }
@@ -440,6 +448,14 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 	 */
 	startup_cost += parallel_setup_cost;
 	run_cost += parallel_tuple_cost * path->path.rows * 1.05;
+
+	/* add tlist eval costs only if projecting */
+	if (path->path.pathtarget != path->subpath->pathtarget)
+	{
+		/* tlist eval costs are paid per output row, not per tuple scanned */
+		startup_cost += path->path.pathtarget->cost.startup;
+		run_cost += path->path.pathtarget->cost.per_tuple * path->path.rows;
+	}
 
 	path->path.startup_cost = startup_cost + input_startup_cost;
 	path->path.total_cost = (startup_cost + run_cost + input_total_cost);

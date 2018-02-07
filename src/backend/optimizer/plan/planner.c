@@ -1918,46 +1918,78 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		}
 
 		/*
-		 * Upper planning steps which make use of the top scan/join rel's
-		 * partial pathlist will expect partial paths for that rel to produce
-		 * the same output as complete paths ... and we just changed the
-		 * output for the complete paths, so we'll need to do the same thing
-		 * for partial paths.  But only parallel-safe expressions can be
-		 * computed by partial paths.
+		 * When possible, we want target list evaluation to happen in parallel
+		 * worker processes rather than in the leader.  To facilitate this,
+		 * scan/join planning avoids generating Gather or Gather Merge paths
+		 * for the topmost scan/join relation.  That lets us do it here,
+		 * possibly after adjusting the target lists of the partial paths.
+		 *
+		 * In the past, we used to generate Gather or Gather Merge paths first
+		 * and then modify the target lists of their subpaths after the fact,
+		 * but that wasn't good because at that point it's too late for the
+		 * associated cost savings to affect which plans get chosen.  A plan
+		 * that involves using parallel query for the entire scan/join tree
+		 * may gain a significant advantage as compared with a serial plan if
+		 * target list evaluation is expensive.
 		 */
-		if (current_rel->partial_pathlist &&
-			is_parallel_safe(root, (Node *) scanjoin_target->exprs))
+		if (current_rel->partial_pathlist != NIL)
 		{
-			/* Apply the scan/join target to each partial path */
-			foreach(lc, current_rel->partial_pathlist)
-			{
-				Path	   *subpath = (Path *) lfirst(lc);
-				Path	   *newpath;
+			bool		scanjoin_target_parallel_safe = false;
 
-				/* Shouldn't have any parameterized paths anymore */
-				Assert(subpath->param_info == NULL);
-
-				/*
-				 * Don't use apply_projection_to_path() here, because there
-				 * could be other pointers to these paths, and therefore we
-				 * mustn't modify them in place.
-				 */
-				newpath = (Path *) create_projection_path(root,
-														  current_rel,
-														  subpath,
-														  scanjoin_target);
-				lfirst(lc) = newpath;
-			}
-		}
-		else
-		{
 			/*
-			 * In the unfortunate event that scanjoin_target is not
-			 * parallel-safe, we can't apply it to the partial paths; in that
-			 * case, we'll need to forget about the partial paths, which
-			 * aren't valid input for upper planning steps.
+			 * If scanjoin_target is parallel-safe, apply it to all partial
+			 * paths, just like we already did for non-partial paths.
 			 */
-			current_rel->partial_pathlist = NIL;
+			if (is_parallel_safe(root, (Node *) scanjoin_target->exprs))
+			{
+				/* Remember that the target list is parallel safe. */
+				scanjoin_target_parallel_safe = true;
+
+				/* Apply the scan/join target to each partial path */
+				foreach(lc, current_rel->partial_pathlist)
+				{
+					Path	   *subpath = (Path *) lfirst(lc);
+					Path	   *newpath;
+
+					/* Shouldn't have any parameterized paths anymore */
+					Assert(subpath->param_info == NULL);
+
+					/*
+					 * Don't use apply_projection_to_path() here, because
+					 * there could be other pointers to these paths, and
+					 * therefore we mustn't modify them in place.
+					 */
+					newpath = (Path *) create_projection_path(root,
+															  current_rel,
+															  subpath,
+															  scanjoin_target);
+					lfirst(lc) = newpath;
+				}
+			}
+
+			/*
+			 * Try building Gather or Gather Merge paths.  We can do this even
+			 * if scanjoin_target isn't parallel-safe; for such queries,
+			 * Gather or Gather Merge will perform projection.  However, we
+			 * must be sure that the paths we generate produce
+			 * scanjoin_target, because the paths already in
+			 * current_rel->pathlist have already been adjusted to do so.
+			 */
+			generate_gather_paths(root, current_rel, scanjoin_target);
+
+			/*
+			 * If scanjoin_target isn't parallel-safe, the partial paths for
+			 * this relation haven't been adjusted to generate it, which means
+			 * they can't safely be used for upper planning steps.
+			 */
+			if (!scanjoin_target_parallel_safe)
+				current_rel->partial_pathlist = NIL;
+
+			/*
+			 * Since generate_gather_paths has likely added new paths to
+			 * current_rel, the cheapest path might have changed.
+			 */
+			set_cheapest(current_rel);
 		}
 
 		/* Now fix things up if scan/join target contains SRFs */
@@ -4700,7 +4732,20 @@ create_ordered_paths(PlannerInfo *root,
 											 ordered_rel,
 											 cheapest_partial_path,
 											 root->sort_pathkeys,
+
 											 limit_tuples);
+
+			/*
+			 * If projection is required, and it's safe to to do it before
+			 * Gather Merge, then do so.
+			 */
+			if (path->pathtarget != target &&
+				is_parallel_safe(root, (Node *) target->exprs))
+				path = (Path *)
+					create_projection_path(root,
+										   ordered_rel,
+										   path,
+										   target);
 
 			total_groups = cheapest_partial_path->rows *
 				cheapest_partial_path->parallel_workers;
@@ -4711,7 +4756,10 @@ create_ordered_paths(PlannerInfo *root,
 										 root->sort_pathkeys, NULL,
 										 &total_groups);
 
-			/* Add projection step if needed */
+			/*
+			 * If projection is required and we didn't do it before Gather
+			 * Merge, do it now.
+			 */
 			if (path->pathtarget != target)
 				path = apply_projection_to_path(root, ordered_rel,
 												path, target);

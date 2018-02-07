@@ -2435,10 +2435,6 @@ create_projection_path(PlannerInfo *root,
  * knows that the given path isn't referenced elsewhere and so can be modified
  * in-place.
  *
- * If the input path is a GatherPath or GatherMergePath, we try to push the
- * new target down to its input as well; this is a yet more invasive
- * modification of the input path, which create_projection_path() can't do.
- *
  * Note that we mustn't change the source path's parent link; so when it is
  * add_path'd to "rel" things will be a bit inconsistent.  So far that has
  * not caused any trouble.
@@ -2473,48 +2469,8 @@ apply_projection_to_path(PlannerInfo *root,
 	path->total_cost += target->cost.startup - oldcost.startup +
 		(target->cost.per_tuple - oldcost.per_tuple) * path->rows;
 
-	/*
-	 * If the path happens to be a Gather or GatherMerge path, we'd like to
-	 * arrange for the subpath to return the required target list so that
-	 * workers can help project.  But if there is something that is not
-	 * parallel-safe in the target expressions, then we can't.
-	 */
-	if ((IsA(path, GatherPath) ||IsA(path, GatherMergePath)) &&
-		is_parallel_safe(root, (Node *) target->exprs))
-	{
-		/*
-		 * We always use create_projection_path here, even if the subpath is
-		 * projection-capable, so as to avoid modifying the subpath in place.
-		 * It seems unlikely at present that there could be any other
-		 * references to the subpath, but better safe than sorry.
-		 *
-		 * Note that we don't change the parallel path's cost estimates; it
-		 * might be appropriate to do so, to reflect the fact that the bulk of
-		 * the target evaluation will happen in workers.
-		 */
-		if (IsA(path, GatherPath))
-		{
-			GatherPath *gpath = (GatherPath *) path;
-
-			gpath->subpath = (Path *)
-				create_projection_path(root,
-									   gpath->subpath->parent,
-									   gpath->subpath,
-									   target);
-		}
-		else
-		{
-			GatherMergePath *gmpath = (GatherMergePath *) path;
-
-			gmpath->subpath = (Path *)
-				create_projection_path(root,
-									   gmpath->subpath->parent,
-									   gmpath->subpath,
-									   target);
-		}
-	}
-	else if (path->parallel_safe &&
-			 !is_parallel_safe(root, (Node *) target->exprs))
+	if (path->parallel_safe &&
+		!is_parallel_safe(root, (Node *) target->exprs))
 	{
 		/*
 		 * We're inserting a parallel-restricted target list into a path

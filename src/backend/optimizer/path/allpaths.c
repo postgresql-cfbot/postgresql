@@ -481,14 +481,21 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/*
-	 * If this is a baserel, consider gathering any partial paths we may have
-	 * created for it.  (If we tried to gather inheritance children, we could
+	 * If this is a baserel, we should normally consider gathering any partial
+	 * paths we may have created for it.
+	 *
+	 * However, if this is an inheritance child, skip it.  Otherwise, we could
 	 * end up with a very large number of gather nodes, each trying to grab
-	 * its own pool of workers, so don't do this for otherrels.  Instead,
-	 * we'll consider gathering partial paths for the parent appendrel.)
+	 * its own pool of workers.  Instead, we'll consider gathering partial
+	 * paths for the parent appendrel.
+	 *
+	 * Also, if this is the topmost scan/join rel (that is, the only baserel),
+	 * we postpone this until the final scan/join targelist is available (see
+	 * grouping_planner).
 	 */
-	if (rel->reloptkind == RELOPT_BASEREL)
-		generate_gather_paths(root, rel);
+	if (rel->reloptkind == RELOPT_BASEREL &&
+		bms_membership(root->all_baserels) != BMS_SINGLETON)
+		generate_gather_paths(root, rel, rel->reltarget);
 
 	/*
 	 * Allow a plugin to editorialize on the set of Paths for this base
@@ -2444,9 +2451,13 @@ set_worktable_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
  * This must not be called until after we're done creating all partial paths
  * for the specified relation.  (Otherwise, add_partial_path might delete a
  * path that some GatherPath or GatherMergePath has a reference to.)
+ *
+ * It should also not be called until we know what target list we want to
+ * generate; if the Gather's target list is different from that of its subplan,
+ * the projection will have to be done by the leader rather than the workers.
  */
 void
-generate_gather_paths(PlannerInfo *root, RelOptInfo *rel)
+generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, PathTarget *target)
 {
 	Path	   *cheapest_partial_path;
 	Path	   *simple_gather_path;
@@ -2463,7 +2474,7 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel)
 	 */
 	cheapest_partial_path = linitial(rel->partial_pathlist);
 	simple_gather_path = (Path *)
-		create_gather_path(root, rel, cheapest_partial_path, rel->reltarget,
+		create_gather_path(root, rel, cheapest_partial_path, target,
 						   NULL, NULL);
 	add_path(rel, simple_gather_path);
 
@@ -2479,7 +2490,7 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel)
 		if (subpath->pathkeys == NIL)
 			continue;
 
-		path = create_gather_merge_path(root, rel, subpath, rel->reltarget,
+		path = create_gather_merge_path(root, rel, subpath, target,
 										subpath->pathkeys, NULL, NULL);
 		add_path(rel, &path->path);
 	}
@@ -2652,8 +2663,13 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 			/* Create paths for partition-wise joins. */
 			generate_partition_wise_join_paths(root, rel);
 
-			/* Create GatherPaths for any useful partial paths for rel */
-			generate_gather_paths(root, rel);
+			/*
+			 * Except for the topmost scan/join rel, consider gathering
+			 * partial paths.  We'll do the same for the topmost scan/join rel
+			 * once we know the final targetlist (see grouping_planner).
+			 */
+			if (lev < levels_needed)
+				generate_gather_paths(root, rel, rel->reltarget);
 
 			/* Find and save the cheapest paths for this rel */
 			set_cheapest(rel);

@@ -60,11 +60,19 @@ typedef struct
  */
 #define NumProcSignalSlots	(MaxBackends + NUM_AUXPROCTYPES)
 
+#define IsCustomProcSignalReason(reason) \
+	((reason) >= PROCSIG_CUSTOM_1 && (reason) <= PROCSIG_CUSTOM_N)
+
+static bool CustomSignalPendings[NUM_CUSTOM_PROCSIGNALS];
+static ProcSignalHandler_type CustomInterruptHandlers[NUM_CUSTOM_PROCSIGNALS];
+
 static ProcSignalSlot *ProcSignalSlots = NULL;
 static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
+
+static void CheckAndSetCustomSignalInterrupts(void);
 
 /*
  * ProcSignalShmemSize
@@ -163,6 +171,58 @@ CleanupProcSignalState(int status, Datum arg)
 	}
 
 	slot->pss_pid = 0;
+}
+
+/*
+ * RegisterCustomProcSignalHandler
+ *		Assign specific handler of custom process signal with new
+ *		ProcSignalReason key.
+ *
+ * This function have to be called in _PG_init function of extensions at the
+ * stage of loading shared preloaded libraries. Otherwise it throws fatal error.
+ *
+ * Return INVALID_PROCSIGNAL if all slots for custom signals have been occupied.
+ */
+ProcSignalReason
+RegisterCustomProcSignalHandler(ProcSignalHandler_type handler)
+{
+	ProcSignalReason reason;
+
+	if (!process_shared_preload_libraries_in_progress)
+		ereport(FATAL, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("cannot register custom signal after startup")));
+
+	/* iterate through custom signal keys to find free slot */
+	for (reason = PROCSIG_CUSTOM_1; reason <= PROCSIG_CUSTOM_N; reason++)
+		if (!CustomInterruptHandlers[reason - PROCSIG_CUSTOM_1])
+		{
+			CustomInterruptHandlers[reason - PROCSIG_CUSTOM_1] = handler;
+			return reason;
+		}
+	return INVALID_PROCSIGNAL;
+}
+
+/*
+ * UnregisterCustomProcSignal
+ *      Release slot of specific custom signal.
+ *
+ * This function have to be called in _PG_init or _PG_fini functions of
+ * extensions at the stage of loading shared preloaded libraries. Otherwise it
+ * throws fatal error. Also it throws fatal error if argument is not valid
+ * custom signal.
+ */
+void
+UnregisterCustomProcSignal(ProcSignalReason reason)
+{
+	if (!process_shared_preload_libraries_in_progress)
+		ereport(FATAL, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("cannot unregister custom signal after startup")));
+
+	if (!IsCustomProcSignalReason(reason))
+		ereport(FATAL, (errcode(ERRCODE_INTERNAL_ERROR),
+						errmsg("try to unregister not custom signal")));
+
+	CustomInterruptHandlers[reason - PROCSIG_CUSTOM_1] = NULL;
 }
 
 /*
@@ -292,9 +352,66 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
+	CheckAndSetCustomSignalInterrupts();
+
 	SetLatch(MyLatch);
 
 	latch_sigusr1_handler();
 
 	errno = save_errno;
+}
+
+/*
+ * Handle receipt of an interrupt indicating any of custom process signals.
+ */
+static void
+CheckAndSetCustomSignalInterrupts()
+{
+	ProcSignalReason	reason;
+
+	for (reason = PROCSIG_CUSTOM_1; reason <= PROCSIG_CUSTOM_N; reason++)
+	{
+		if (CheckProcSignal(reason))
+		{
+
+			/* set interrupt flags */
+			InterruptPending = true;
+			CustomSignalPendings[reason - PROCSIG_CUSTOM_1] = true;
+		}
+	}
+
+	SetLatch(MyLatch);
+}
+
+/*
+ * CheckAndHandleCustomSignals
+ *		Check custom signal flags and call handler assigned to that signal
+ *		if it is not NULL
+ *
+ * This function is called within CHECK_FOR_INTERRUPTS if interrupt have been
+ * occurred.
+ */
+void
+CheckAndHandleCustomSignals(void)
+{
+	int i;
+
+	/* Disable interrupts to avoid recursive calls */
+	HOLD_INTERRUPTS();
+
+	/* Check on expiring of custom signals and call its handlers if exist */
+	for (i = 0; i < NUM_CUSTOM_PROCSIGNALS; i++)
+		if (CustomSignalPendings[i])
+		{
+			ProcSignalHandler_type  handler;
+			ProcSignalReason        reason;
+
+			CustomSignalPendings[i] = false;
+			handler = CustomInterruptHandlers[i];
+			reason = PROCSIG_CUSTOM_1 + i;
+			if (handler)
+				handler(reason);
+		}
+
+	RESUME_INTERRUPTS();
 }

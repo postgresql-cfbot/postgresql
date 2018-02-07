@@ -2557,25 +2557,21 @@ compute_scalar_stats(VacAttrStatsP stats,
 		 * Decide how many values are worth storing as most-common values. If
 		 * we are able to generate a complete MCV list (all the values in the
 		 * sample will fit, and we think these are all the ones in the table),
-		 * then do so.  Otherwise, store only those values that are
-		 * significantly more common than the (estimated) average. We set the
-		 * threshold rather arbitrarily at 25% more than average, with at
-		 * least 2 instances in the sample.  Also, we won't suppress values
-		 * that have a frequency of at least 1/K where K is the intended
-		 * number of histogram bins; such values might otherwise cause us to
-		 * emit duplicate histogram bin boundaries.  (We might end up with
-		 * duplicate histogram entries anyway, if the distribution is skewed;
-		 * but we prefer to treat such values as MCVs if at all possible.)
+		 * then do so.  Otherwise, keep only those values that appear
+		 * sufficiently often in the sample that it is reasonable to
+		 * extrapolate their sample frequencies to the entire table. We do
+		 * this by placing an upper bound on the relative standard error of
+		 * the sample frequency, so that any estimates the planner generates
+		 * from these statistics can be expected to be reasonably accurate.
 		 *
 		 * Note: the first of these cases is meant to address columns with
 		 * small, fixed sets of possible values, such as boolean or enum
 		 * columns.  If we can *completely* represent the column population by
 		 * an MCV list that will fit into the stats target, then we should do
 		 * so and thus provide the planner with complete information.  But if
-		 * the MCV list is not complete, it's generally worth being more
-		 * selective, and not just filling it all the way up to the stats
-		 * target.  So for an incomplete list, we try to take only MCVs that
-		 * are significantly more common than average.
+		 * the MCV list is not complete, then we need to be more selective, to
+		 * avoid including values that aren't common enough in the sample to
+		 * generate accurate statistics for the population.
 		 */
 		if (track_cnt == ndistinct && toowide_cnt == 0 &&
 			stats->stadistinct > 0 &&
@@ -2586,24 +2582,39 @@ compute_scalar_stats(VacAttrStatsP stats,
 		}
 		else
 		{
-			double		ndistinct_table = stats->stadistinct;
-			double		avgcount,
-						mincount,
-						maxmincount;
+			/*----------
+			 * Discard values whose relative standard error is too high. A
+			 * common rule of thumb when estimating errors in this situation
+			 * is to require at least 10 instances in the sample. This is
+			 * sufficient to allow the distribution of the sample frequency (a
+			 * hypergeometric distribution, since we are doing sampling
+			 * without replacement) to be approximated by a normal
+			 * distribution, and standard error analysis techniques can be
+			 * applied. Then, if the sample size is n, the population size is
+			 * N, and the sample frequency is p=cnt/n, the standard error on p
+			 * is given by
+			 *		SE = sqrt(p*(1-p)/n) * sqrt((N-n)/(N-1))
+			 * where the second term is the finite population correction. We
+			 * impose an (arbitrarily chosen) upper bound on the relative
+			 * standard error of 10% -- i.e., SE/p < 0.1. This gives a lower
+			 * bound on the number of instances of the value seen:
+			 *		cnt > n*(N-n) / (N-n+0.01*n*(N-1))
+			 * This bound is at most 100, and approaches 0 as n approaches 0
+			 * or N. The case where n approaches 0 isn't actually possible,
+			 * since the sample size is at least 300. The case where n
+			 * approaches N corresponds to sampling most of the table, in
+			 * which case it is reasonable to keep the whole MCV list, as we
+			 * do above. Thus it is reasonable to apply this bound for all
+			 * inputs (even though the formula is technically only valid when
+			 * the right hand side is at least around 10), giving a smooth
+			 * transition from this code branch to the all-values-seen branch
+			 * above.
+			 *----------
+			 */
+			double		n = samplerows;
+			double		N = totalrows;
+			double		mincount = n*(N-n) / (N-n+0.01*n*(N-1));
 
-			/* Re-extract estimate of # distinct nonnull values in table */
-			if (ndistinct_table < 0)
-				ndistinct_table = -ndistinct_table * totalrows;
-			/* estimate # occurrences in sample of a typical nonnull value */
-			avgcount = (double) nonnull_cnt / ndistinct_table;
-			/* set minimum threshold count to store a value */
-			mincount = avgcount * 1.25;
-			if (mincount < 2)
-				mincount = 2;
-			/* don't let threshold exceed 1/K, however */
-			maxmincount = (double) values_cnt / (double) num_bins;
-			if (mincount > maxmincount)
-				mincount = maxmincount;
 			if (num_mcv > track_cnt)
 				num_mcv = track_cnt;
 			for (i = 0; i < num_mcv; i++)

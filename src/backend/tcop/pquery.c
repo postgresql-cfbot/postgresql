@@ -515,6 +515,12 @@ PortalStart(Portal portal, ParamListInfo params,
 					myeflags = eflags;
 
 				/*
+				 * If the cursor was declared as PARALLEL, enable parallel mode.
+				 */
+				if (portal->cursorOptions & CURSOR_OPT_PARALLEL)
+					myeflags = myeflags | EXEC_FLAG_PARALLEL;
+
+				/*
 				 * Call ExecutorStart to prepare the plan for execution
 				 */
 				ExecutorStart(queryDesc, myeflags);

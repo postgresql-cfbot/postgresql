@@ -66,6 +66,12 @@ PerformCursorOpen(DeclareCursorStmt *cstmt, ParamListInfo params,
 		RequireTransactionChain(isTopLevel, "DECLARE CURSOR");
 
 	/*
+	 * Enable parallel plans for cursors that explicitly requested it.
+	 */
+	if (cstmt->options & CURSOR_OPT_PARALLEL)
+		cstmt->options |= CURSOR_OPT_PARALLEL_OK;
+
+	/*
 	 * Parse analysis was done already, but we still have to run the rule
 	 * rewriter.  We do not do AcquireRewriteLocks: we assume the query either
 	 * came straight from the parser, or suitable locks were acquired by

@@ -171,6 +171,8 @@ typedef struct
 #define NODE_TYPE_END		1
 #define NODE_TYPE_ACTION	2
 #define NODE_TYPE_CHAR		3
+#define NODE_TYPE_SEPARATOR	4
+#define NODE_TYPE_SPACE		5
 
 #define SUFFTYPE_PREFIX		1
 #define SUFFTYPE_POSTFIX	2
@@ -542,6 +544,10 @@ static const KeySuffix DCH_suff[] = {
 	{NULL, 0, 0, 0}
 };
 
+#define IS_SEPARATOR_CHAR(s) ( \
+	isprint(*(unsigned char*)(s)) && \
+	!isalpha(*(unsigned char*)(s)) && \
+	!isdigit(*(unsigned char*)(s)))
 
 /* ----------
  * Format-pictures (KeyWord).
@@ -1325,7 +1331,14 @@ parse_format(FormatNode *node, const char *str, const KeyWord *kw,
 				if (*str == '\\' && *(str + 1) == '"')
 					str++;
 				chlen = pg_mblen(str);
-				n->type = NODE_TYPE_CHAR;
+
+				if (ver == DCH_TYPE && IS_SEPARATOR_CHAR(str))
+					n->type = NODE_TYPE_SEPARATOR;
+				else if (isspace((unsigned char) *str))
+					n->type = NODE_TYPE_SPACE;
+				else
+					n->type = NODE_TYPE_CHAR;
+
 				memcpy(n->character, str, chlen);
 				n->character[chlen] = '\0';
 				n->key = NULL;
@@ -2996,12 +3009,53 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out)
 
 	for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++)
 	{
-		if (n->type != NODE_TYPE_ACTION)
+		if (n->type == NODE_TYPE_SPACE || n->type == NODE_TYPE_SEPARATOR)
 		{
 			/*
-			 * Separator, so consume one character from input string.  Notice
-			 * we don't insist that the consumed character match the format's
-			 * character.
+			 * In non FX (fixed format) mode we don't insist that the consumed
+			 * character matches the format's character.
+			 */
+			if (!fx_mode)
+			{
+				if (isspace((unsigned char) *s) || IS_SEPARATOR_CHAR(s))
+					s++;
+
+				continue;
+			}
+
+			/*
+			 * In FX mode we insist that whitespace from the format string
+			 * matches whitespace from the input string.
+			 */
+			if (n->type == NODE_TYPE_SPACE && !isspace((unsigned char) *s))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%.*s\", expected space character \"%s\"",
+								pg_mblen(s), s, n->character),
+						 errhint("In FX mode, punctuation in the input string "
+								 "must exactly match the format string.")));
+			/*
+			 * In FX mode we insist that separator character from the format
+			 * string matches separator character from the input string.
+			 */
+			else if (n->type == NODE_TYPE_SEPARATOR && *n->character != *s)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+						 errmsg("unexpected character \"%.*s\", expected separator character \"%s\"",
+								pg_mblen(s), s, n->character),
+						 errhint("In FX mode, punctuation in the input string "
+								 "must exactly match the format string.")));
+
+			s++;
+			continue;
+		}
+		else if (n->type != NODE_TYPE_ACTION)
+		{
+			/*
+			 * Text character, so consume one character from input string.
+			 * Notice we don't insist that the consumed character match the
+			 * format's character.
+			 * Text field ignores FX mode.
 			 */
 			s += pg_mblen(s);
 			continue;

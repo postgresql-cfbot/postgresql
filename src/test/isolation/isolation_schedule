@@ -66,3 +66,6 @@ test: async-notify
 test: vacuum-reltuples
 test: timeouts
 test: vacuum-concurrent-drop
+test: partition-key-update-1
+test: partition-key-update-2
+test: partition-key-update-3

@@ -23,7 +23,9 @@
  * This is a pointer to an item within a disk page of a known file
  * (for example, a cross-link from an index to its parent table).
  * blkid tells us which block, posid tells us which entry in the linp
- * (ItemIdData) array we want.
+ * (ItemIdData) array we want.  blkid is marked InvalidBlockNumber when
+ * a tuple is moved to another partition relation due to an update of
+ * partition key.
  *
  * Note: because there is an item pointer in each tuple header and index
  * tuple header on disk, it's very important not to waste space with

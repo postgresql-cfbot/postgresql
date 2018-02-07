@@ -2709,6 +2709,10 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 						ereport(ERROR,
 								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 								 errmsg("could not serialize access due to concurrent update")));
+					if (!BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("tuple to be locked was already moved to another partition due to concurrent update")));
 
 					/* Should not encounter speculative tuple on recheck */
 					Assert(!HeapTupleHeaderIsSpeculative(tuple.t_data));

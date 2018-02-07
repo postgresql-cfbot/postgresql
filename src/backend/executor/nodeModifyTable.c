@@ -711,7 +711,8 @@ ExecDelete(ModifyTableState *mtstate,
 		   EState *estate,
 		   bool *tupleDeleted,
 		   bool processReturning,
-		   bool canSetTag)
+		   bool canSetTag,
+		   bool row_moved)
 {
 	ResultRelInfo *resultRelInfo;
 	Relation	resultRelationDesc;
@@ -802,7 +803,8 @@ ldelete:;
 							 estate->es_output_cid,
 							 estate->es_crosscheck_snapshot,
 							 true /* wait for commit */ ,
-							 &hufd);
+							 &hufd,
+							 row_moved);
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -848,6 +850,11 @@ ldelete:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
+				if (!BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))))
+					ereport(ERROR,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("tuple to be updated was already moved to another partition due to concurrent update")));
+
 				if (!ItemPointerEquals(tupleid, &hufd.ctid))
 				{
 					TupleTableSlot *epqslot;
@@ -1150,7 +1157,7 @@ lreplace:;
 			 * processing. We want to return rows from INSERT.
 			 */
 			ExecDelete(mtstate, tupleid, oldtuple, planSlot, epqstate, estate,
-					   &tuple_deleted, false, false);
+					   &tuple_deleted, false, false, true);
 
 			/*
 			 * For some reason if DELETE didn't happen (e.g. trigger prevented
@@ -1295,6 +1302,11 @@ lreplace:;
 					ereport(ERROR,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 errmsg("could not serialize access due to concurrent update")));
+				if (!BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))))
+					ereport(ERROR,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("tuple to be updated was already moved to another partition due to concurrent update")));
+
 				if (!ItemPointerEquals(tupleid, &hufd.ctid))
 				{
 					TupleTableSlot *epqslot;
@@ -1464,6 +1476,14 @@ ExecOnConflictUpdate(ModifyTableState *mtstate,
 				ereport(ERROR,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 						 errmsg("could not serialize access due to concurrent update")));
+
+			/*
+			 * As long as we don't support an UPDATE of INSERT ON CONFLICT for
+			 * a partitioned table we shouldn't reach to a case where tuple to
+			 * be lock is moved to another partition due to concurrent update
+			 * of partition key.
+			 */
+			Assert(BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))));
 
 			/*
 			 * Tell caller to try again from the very start.
@@ -2054,7 +2074,7 @@ ExecModifyTable(PlanState *pstate)
 			case CMD_DELETE:
 				slot = ExecDelete(node, tupleid, oldtuple, planSlot,
 								  &node->mt_epqstate, estate,
-								  NULL, true, node->canSetTag);
+								  NULL, true, node->canSetTag, false);
 				break;
 			default:
 				elog(ERROR, "unknown operation");

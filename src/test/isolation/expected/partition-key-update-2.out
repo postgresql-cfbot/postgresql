@@ -1,0 +1,18 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u s1c s2u
+step s1u: UPDATE foo SET b='EFG' WHERE a=1;
+step s1c: COMMIT;
+step s2u: UPDATE foo SET b='XYZ' WHERE a=1;
+
+starting permutation: s1u s2u s1c
+step s1u: UPDATE foo SET b='EFG' WHERE a=1;
+step s2u: UPDATE foo SET b='XYZ' WHERE a=1; <waiting ...>
+step s1c: COMMIT;
+step s2u: <... completed>
+error in steps s1c s2u: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+
+starting permutation: s2u s1u s1c
+step s2u: UPDATE foo SET b='XYZ' WHERE a=1;
+step s1u: UPDATE foo SET b='EFG' WHERE a=1;
+step s1c: COMMIT;

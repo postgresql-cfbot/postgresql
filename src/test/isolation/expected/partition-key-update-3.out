@@ -1,0 +1,8 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1u3 s2i s1c
+step s1u3: UPDATE foo_r SET a=11 WHERE a=7 AND b = 'ABC';
+step s2i: INSERT INTO bar VALUES(7); <waiting ...>
+step s1c: COMMIT;
+step s2i: <... completed>
+error in steps s1c s2i: ERROR:  tuple to be locked was already moved to another partition due to concurrent update

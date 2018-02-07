@@ -190,10 +190,15 @@ retry:
 			case HeapTupleMayBeUpdated:
 				break;
 			case HeapTupleUpdated:
-				/* XXX: Improve handling here */
-				ereport(LOG,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 errmsg("concurrent update, retrying")));
+				if (!BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))))
+					ereport(LOG,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("tuple to be locked was already moved to another partition due to concurrent update, retrying")));
+				else
+					/* XXX: Improve handling here */
+					ereport(LOG,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("concurrent update, retrying")));
 				goto retry;
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");
@@ -348,10 +353,15 @@ retry:
 			case HeapTupleMayBeUpdated:
 				break;
 			case HeapTupleUpdated:
-				/* XXX: Improve handling here */
-				ereport(LOG,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 errmsg("concurrent update, retrying")));
+				if (!BlockNumberIsValid(BlockIdGetBlockNumber(&((hufd.ctid).ip_blkid))))
+					ereport(LOG,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							 errmsg("tuple to be locked was already moved to another partition due to concurrent update, retrying")));
+				else
+					/* XXX: Improve handling here */
+					ereport(LOG,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("concurrent update, retrying")));
 				goto retry;
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");

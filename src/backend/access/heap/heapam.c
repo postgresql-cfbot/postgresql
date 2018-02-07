@@ -3037,6 +3037,8 @@ xmax_infomask_changed(uint16 new_infomask, uint16 old_infomask)
  *	crosscheck - if not InvalidSnapshot, also check tuple against this
  *	wait - true if should wait for any conflicting update to commit/abort
  *	hufd - output parameter, filled in failure cases (see below)
+ *	row_moved - true iff the tuple is being moved to another partition
+ *				table due to an update of partition key. Otherwise, false.
  *
  * Normal, successful return value is HeapTupleMayBeUpdated, which
  * actually means we did delete it.  Failure return codes are
@@ -3052,7 +3054,7 @@ xmax_infomask_changed(uint16 new_infomask, uint16 old_infomask)
 HTSU_Result
 heap_delete(Relation relation, ItemPointer tid,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			HeapUpdateFailureData *hufd)
+			HeapUpdateFailureData *hufd, bool row_moved)
 {
 	HTSU_Result result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -3320,6 +3322,13 @@ l1:
 	/* Make sure there is no forward chain link in t_ctid */
 	tp.t_data->t_ctid = tp.t_self;
 
+	/*
+	 * Sets a block identifier to the InvalidBlockNumber to indicate such an
+	 * update being moved tuple to another partition.
+	 */
+	if (row_moved)
+		BlockIdSet(&((tp.t_data->t_ctid).ip_blkid), InvalidBlockNumber);
+
 	MarkBufferDirty(buffer);
 
 	/*
@@ -3445,7 +3454,7 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 	result = heap_delete(relation, tid,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &hufd);
+						 &hufd, false);
 	switch (result)
 	{
 		case HeapTupleSelfUpdated:

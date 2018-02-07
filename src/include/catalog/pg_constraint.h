@@ -104,8 +104,16 @@ CATALOG(pg_constraint,2606)
 	int16		confkey[1];
 
 	/*
+	 * If a foreign key, the reference semantics for each column
+	 */
+	char		confreftype[1];
+
+	/*
 	 * If a foreign key, the OIDs of the PK = FK equality operators for each
 	 * column of the constraint
+	 *
+	 * Note: for FArray Element Foreign Keys, all these operators are for the array's
+	 * element type.
 	 */
 	Oid			conpfeqop[1];
 
@@ -150,7 +158,7 @@ typedef FormData_pg_constraint *Form_pg_constraint;
  *		compiler constants for pg_constraint
  * ----------------
  */
-#define Natts_pg_constraint					24
+#define Natts_pg_constraint					25
 #define Anum_pg_constraint_conname			1
 #define Anum_pg_constraint_connamespace		2
 #define Anum_pg_constraint_contype			3
@@ -169,12 +177,13 @@ typedef FormData_pg_constraint *Form_pg_constraint;
 #define Anum_pg_constraint_connoinherit		16
 #define Anum_pg_constraint_conkey			17
 #define Anum_pg_constraint_confkey			18
-#define Anum_pg_constraint_conpfeqop		19
-#define Anum_pg_constraint_conppeqop		20
-#define Anum_pg_constraint_conffeqop		21
-#define Anum_pg_constraint_conexclop		22
-#define Anum_pg_constraint_conbin			23
-#define Anum_pg_constraint_consrc			24
+#define Anum_pg_constraint_confreftype		19
+#define Anum_pg_constraint_conpfeqop		20
+#define Anum_pg_constraint_conppeqop		21
+#define Anum_pg_constraint_conffeqop		22
+#define Anum_pg_constraint_conexclop		23
+#define Anum_pg_constraint_conbin			24
+#define Anum_pg_constraint_consrc			25
 
 /* ----------------
  *		initial contents of pg_constraint
@@ -195,7 +204,9 @@ typedef FormData_pg_constraint *Form_pg_constraint;
 /*
  * Valid values for confupdtype and confdeltype are the FKCONSTR_ACTION_xxx
  * constants defined in parsenodes.h.  Valid values for confmatchtype are
- * the FKCONSTR_MATCH_xxx constants defined in parsenodes.h.
+ * the FKCONSTR_MATCH_xxx constants defined in parsenodes.h.  Valid values
+ * for elements of confreftype[] are the FKCONSTR_REF_xxx constants defined
+ * in parsenodes.h.
  */
 
 #endif							/* PG_CONSTRAINT_H */

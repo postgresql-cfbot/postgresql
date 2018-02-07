@@ -143,6 +143,7 @@ test: amutils
 test: select_views
 test: portals_p2
 test: foreign_key
+test: element_foreign_key
 test: cluster
 test: dependency
 test: guc

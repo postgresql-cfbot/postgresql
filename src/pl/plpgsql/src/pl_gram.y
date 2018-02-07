@@ -289,6 +289,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_FOREACH
 %token <keyword>	K_FORWARD
 %token <keyword>	K_FROM
+%token <keyword>	K_FUNCTION_NAME
 %token <keyword>	K_GET
 %token <keyword>	K_HINT
 %token <keyword>	K_IF
@@ -956,6 +957,7 @@ stmt_getdiag	: K_GET getdiag_area_opt K_DIAGNOSTICS getdiag_list ';'
 								/* these fields are disallowed in stacked case */
 								case PLPGSQL_GETDIAG_ROW_COUNT:
 								case PLPGSQL_GETDIAG_RESULT_OID:
+								case PLPGSQL_GETDIAG_FUNCTION_NAME:
 									if (new->is_stacked)
 										ereport(ERROR,
 												(errcode(ERRCODE_SYNTAX_ERROR),
@@ -1071,6 +1073,9 @@ getdiag_item :
 						else if (tok_is_keyword(tok, &yylval,
 												K_SCHEMA_NAME, "schema_name"))
 							$$ = PLPGSQL_GETDIAG_SCHEMA_NAME;
+						else if (tok_is_keyword(tok, &yylval,
+												K_FUNCTION_NAME, "function_name"))
+							$$ = PLPGSQL_GETDIAG_FUNCTION_NAME;
 						else if (tok_is_keyword(tok, &yylval,
 												K_RETURNED_SQLSTATE, "returned_sqlstate"))
 							$$ = PLPGSQL_GETDIAG_RETURNED_SQLSTATE;
@@ -2440,6 +2445,7 @@ unreserved_keyword	:
 				| K_FETCH
 				| K_FIRST
 				| K_FORWARD
+				| K_FUNCTION_NAME
 				| K_GET
 				| K_HINT
 				| K_IMPORT

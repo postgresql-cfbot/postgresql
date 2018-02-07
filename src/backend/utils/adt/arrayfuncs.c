@@ -25,13 +25,20 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
+#include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
+#include "executor/execExpr.h"
 #include "utils/array.h"
 #include "utils/arrayaccess.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/syscache.h"
 #include "utils/typcache.h"
+#include "parser/parse_node.h"
+#include "parser/parse_coerce.h"
 
 
 /*
@@ -158,7 +165,14 @@ static int width_bucket_array_variable(Datum operand,
 							ArrayType *thresholds,
 							Oid collation,
 							TypeCacheEntry *typentry);
+static SubscriptingRef *array_subscript_prepare(bool isAssignment, SubscriptingRef *sbsref);
+static SubscriptingRef *array_subscript_validate(bool isAssignment, SubscriptingRef *sbsref,
+												 ParseState *pstate);
 
+static Datum array_subscript_fetch(Datum containerSource,
+								   SubscriptingRefState *sbstate);
+static Datum array_subscript_assign(Datum containerSource,
+									SubscriptingRefState *sbstate);
 
 /*
  * array_in :
@@ -6557,4 +6571,267 @@ width_bucket_array_variable(Datum operand,
 	}
 
 	return left;
+}
+
+/*
+ * Perform an actual data extraction or modification for the array
+ * subscripting. As a result the extracted Datum or the modified containers
+ * value will be returned.
+ */
+Datum
+array_subscript_assign(Datum containerSource, SubscriptingRefState *sbstate)
+{
+	bool						is_slice = (sbstate->numlower != 0);
+	IntArray					u_index, l_index;
+	bool						eisnull = sbstate->resnull;
+	int							i = 0;
+
+	if (sbstate->refelemlength == 0)
+	{
+		/* do one-time catalog lookups for type info */
+		get_typlenbyvalalign(sbstate->refelemtype,
+							 &sbstate->refelemlength,
+							 &sbstate->refelembyval,
+							 &sbstate->refelemalign);
+	}
+
+	for(i = 0; i < sbstate->numupper; i++)
+		u_index.indx[i] = DatumGetInt32(sbstate->upperindex[i]);
+
+	if (is_slice)
+	{
+		for(i = 0; i < sbstate->numlower; i++)
+			l_index.indx[i] = DatumGetInt32(sbstate->lowerindex[i]);
+	}
+
+	/*
+	 * For assignment to varlena arrays, we handle a NULL original array
+	 * by substituting an empty (zero-dimensional) array; insertion of the
+	 * new element will result in a singleton array value.  It does not
+	 * matter whether the new element is NULL.
+	 */
+	if (eisnull)
+	{
+		containerSource = PointerGetDatum(construct_empty_array(sbstate->refelemtype));
+		sbstate->resnull = false;
+		eisnull = false;
+	}
+
+	if (!is_slice)
+		return array_set_element(containerSource, sbstate->numupper,
+								 u_index.indx,
+								 sbstate->replacevalue,
+								 sbstate->replacenull,
+								 sbstate->refattrlength,
+								 sbstate->refelemlength,
+								 sbstate->refelembyval,
+								 sbstate->refelemalign);
+	else
+		return array_set_slice(containerSource, sbstate->numupper,
+							   u_index.indx, l_index.indx,
+							   sbstate->upperprovided,
+							   sbstate->lowerprovided,
+							   sbstate->replacevalue,
+							   sbstate->replacenull,
+							   sbstate->refattrlength,
+							   sbstate->refelemlength,
+							   sbstate->refelembyval,
+							   sbstate->refelemalign);
+}
+
+Datum
+array_subscript_fetch(Datum containerSource, SubscriptingRefState *sbstate)
+{
+	bool							is_slice = (sbstate->numlower != 0);
+	IntArray						u_index, l_index;
+	int								i = 0;
+
+	if (sbstate->refelemlength == 0)
+	{
+		/* do one-time catalog lookups for type info */
+		get_typlenbyvalalign(sbstate->refelemtype,
+							 &sbstate->refelemlength,
+							 &sbstate->refelembyval,
+							 &sbstate->refelemalign);
+	}
+
+	for(i = 0; i < sbstate->numupper; i++)
+		u_index.indx[i] = DatumGetInt32(sbstate->upperindex[i]);
+
+	if (is_slice)
+	{
+		for(i = 0; i < sbstate->numlower; i++)
+			l_index.indx[i] = DatumGetInt32(sbstate->lowerindex[i]);
+	}
+
+	if (!is_slice)
+		return array_get_element(containerSource, sbstate->numupper,
+								 u_index.indx,
+								 sbstate->refattrlength,
+								 sbstate->refelemlength,
+								 sbstate->refelembyval,
+								 sbstate->refelemalign,
+								 &sbstate->resnull);
+	else
+		return array_get_slice(containerSource, sbstate->numupper,
+							   u_index.indx, l_index.indx,
+							   sbstate->upperprovided,
+							   sbstate->lowerprovided,
+							   sbstate->refattrlength,
+							   sbstate->refelemlength,
+							   sbstate->refelembyval,
+							   sbstate->refelemalign);
+}
+
+/*
+ * Handle array-type subscripting logic.
+ */
+Datum
+array_subscript_handler(PG_FUNCTION_ARGS)
+{
+	SubscriptRoutines *sbsroutines = (SubscriptRoutines *)
+									 palloc(sizeof(SubscriptRoutines));
+
+	sbsroutines->prepare = array_subscript_prepare;
+	sbsroutines->validate = array_subscript_validate;
+	sbsroutines->fetch = array_subscript_fetch;
+	sbsroutines->assign = array_subscript_assign;
+
+	PG_RETURN_POINTER(sbsroutines);
+}
+
+SubscriptingRef *
+array_subscript_prepare(bool isAssignment, SubscriptingRef *sbsref)
+{
+	Oid					array_type = sbsref->refcontainertype;
+	HeapTuple			type_tuple_container;
+	Form_pg_type		type_struct_container;
+	bool				is_slice = sbsref->reflowerindexpr != NIL;
+
+	/* Get the type tuple for the container */
+	type_tuple_container = SearchSysCache1(TYPEOID, ObjectIdGetDatum(array_type));
+	if (!HeapTupleIsValid(type_tuple_container))
+		elog(ERROR, "cache lookup failed for type %u", array_type);
+	type_struct_container = (Form_pg_type) GETSTRUCT(type_tuple_container);
+
+	/* needn't check typisdefined since this will fail anyway */
+	sbsref->refelemtype = type_struct_container->typelem;
+
+	/* Identify type that RHS must provide */
+	if (isAssignment)
+		sbsref->refassgntype = is_slice ? sbsref->refcontainertype : sbsref->refelemtype;
+
+	ReleaseSysCache(type_tuple_container);
+
+	return sbsref;
+}
+
+SubscriptingRef *
+array_subscript_validate(bool isAssignment, SubscriptingRef *sbsref,
+					  ParseState *pstate)
+{
+	bool				is_slice = sbsref->reflowerindexpr != NIL;
+	Oid					typeneeded = InvalidOid,
+						typesource = InvalidOid;
+	Node				*new_from;
+	Node				*subexpr;
+	List				*upperIndexpr = NIL;
+	List				*lowerIndexpr = NIL;
+	ListCell			*u, *l, *s;
+
+	foreach(u, sbsref->refupperindexpr)
+	{
+		subexpr = (Node *) lfirst(u);
+
+		if (subexpr == NULL)
+		{
+			upperIndexpr = lappend(upperIndexpr, subexpr);
+			continue;
+		}
+
+		subexpr = coerce_to_target_type(pstate,
+										subexpr, exprType(subexpr),
+										INT4OID, -1,
+										COERCION_ASSIGNMENT,
+										COERCE_IMPLICIT_CAST,
+										-1);
+		if (subexpr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("array subscript must have type integer"),
+					 parser_errposition(pstate, exprLocation(subexpr))));
+
+		upperIndexpr = lappend(upperIndexpr, subexpr);
+	}
+
+	sbsref->refupperindexpr = upperIndexpr;
+
+	forboth(l, sbsref->reflowerindexpr, s, sbsref->refindexprslice)
+	{
+		A_Indices *ai = (A_Indices *) lfirst(s);
+		subexpr = (Node *) lfirst(l);
+
+		if (subexpr == NULL && !ai->is_slice)
+		{
+			/* Make a constant 1 */
+			subexpr = (Node *) makeConst(INT4OID,
+										 -1,
+										 InvalidOid,
+										 sizeof(int32),
+										 Int32GetDatum(1),
+										 false,
+										 true);		/* pass by value */
+		}
+
+		if (subexpr == NULL)
+		{
+			lowerIndexpr = lappend(lowerIndexpr, subexpr);
+			continue;
+		}
+
+		subexpr = coerce_to_target_type(pstate,
+										subexpr, exprType(subexpr),
+										INT4OID, -1,
+										COERCION_ASSIGNMENT,
+										COERCE_IMPLICIT_CAST,
+										-1);
+		if (subexpr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("array subscript must have type integer"),
+					 parser_errposition(pstate, exprLocation(subexpr))));
+
+		lowerIndexpr = lappend(lowerIndexpr, subexpr);
+	}
+
+	sbsref->reflowerindexpr = lowerIndexpr;
+
+	if (isAssignment)
+	{
+		SubscriptingRef *assignRef = (SubscriptingRef *) sbsref;
+		Node *assignExpr = (Node *) assignRef->refassgnexpr;
+
+		typesource = exprType(assignExpr);
+		typeneeded = is_slice ? sbsref->refcontainertype : sbsref->refelemtype;
+		new_from = coerce_to_target_type(pstate,
+										assignExpr, typesource,
+										typeneeded, sbsref->reftypmod,
+										COERCION_ASSIGNMENT,
+										COERCE_IMPLICIT_CAST,
+										-1);
+		if (new_from == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("array assignment requires type %s"
+							" but expression is of type %s",
+							format_type_be(sbsref->refelemtype),
+							format_type_be(typesource)),
+				 errhint("You will need to rewrite or cast the expression."),
+					 parser_errposition(pstate, exprLocation(assignExpr))));
+		assignRef->refassgnexpr = (Expr *) new_from;
+	}
+
+	sbsref->refnestedfunc = F_ARRAY_SUBSCRIPT_HANDLER;
+
+	return sbsref;
 }

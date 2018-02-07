@@ -569,4 +569,29 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
       compared using the default database collation.
   </para>
  </sect2>
+
+ <sect2 id="jsonb-subscripting">
+  <title><type>jsonb</type> Subscripting</title>
+  <para>
+   <type>jsonb</type> data type supports array-style subscripting expressions to extract or update particular element. An example of subscripting syntax:
+<programlisting>
+-- Extract value by key
+SELECT ('{"a": 1}'::jsonb)['a'];
+
+-- Extract nested value by key path
+SELECT ('{"a": {"b": {"c": 1}}}'::jsonb)['a']['b']['c'];
+
+-- Extract element by index
+SELECT ('[1, "2", null]'::jsonb)['1'];
+
+-- Update value by key
+UPDATE table_name set jsonb_field['key'] = 1;
+
+-- Select records using where clause with subscripting
+SELECT * from table_name where jsonb_field['key'] = '"value"';
+</programlisting>
+  </para>
+ </sect2>
+
+
 </sect1>

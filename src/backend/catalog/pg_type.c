@@ -118,6 +118,7 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 	values[Anum_pg_type_typtypmod - 1] = Int32GetDatum(-1);
 	values[Anum_pg_type_typndims - 1] = Int32GetDatum(0);
 	values[Anum_pg_type_typcollation - 1] = ObjectIdGetDatum(InvalidOid);
+	values[Anum_pg_type_typsubshandler - 1] = ObjectIdGetDatum(InvalidOid);
 	nulls[Anum_pg_type_typdefaultbin - 1] = true;
 	nulls[Anum_pg_type_typdefault - 1] = true;
 	nulls[Anum_pg_type_typacl - 1] = true;
@@ -162,6 +163,7 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 								 InvalidOid,
 								 InvalidOid,
 								 false,
+								 InvalidOid,
 								 InvalidOid,
 								 InvalidOid,
 								 NULL,
@@ -222,7 +224,8 @@ TypeCreate(Oid newTypeOid,
 		   int32 typeMod,
 		   int32 typNDims,		/* Array dimensions for baseType */
 		   bool typeNotNull,
-		   Oid typeCollation)
+		   Oid typeCollation,
+		   Oid subscriptingHandlerProcedure)
 {
 	Relation	pg_type_desc;
 	Oid			typeObjectId;
@@ -362,6 +365,7 @@ TypeCreate(Oid newTypeOid,
 	values[Anum_pg_type_typtypmod - 1] = Int32GetDatum(typeMod);
 	values[Anum_pg_type_typndims - 1] = Int32GetDatum(typNDims);
 	values[Anum_pg_type_typcollation - 1] = ObjectIdGetDatum(typeCollation);
+	values[Anum_pg_type_typsubshandler - 1] = ObjectIdGetDatum(subscriptingHandlerProcedure);
 
 	/*
 	 * initialize the default binary value for this type.  Check for nulls of
@@ -479,6 +483,7 @@ TypeCreate(Oid newTypeOid,
 								 isImplicitArray,
 								 baseType,
 								 typeCollation,
+								 subscriptingHandlerProcedure,
 								 (defaultTypeBin ?
 								  stringToNode(defaultTypeBin) :
 								  NULL),
@@ -525,6 +530,7 @@ GenerateTypeDependencies(Oid typeNamespace,
 						 bool isImplicitArray,
 						 Oid baseType,
 						 Oid typeCollation,
+						 Oid subscriptingHandlerProcedure,
 						 Node *defaultExpr,
 						 bool rebuild)
 {
@@ -677,6 +683,14 @@ GenerateTypeDependencies(Oid typeNamespace,
 	/* Normal dependency on the default expression. */
 	if (defaultExpr)
 		recordDependencyOnExpr(&myself, defaultExpr, NIL, DEPENDENCY_NORMAL);
+
+	if (OidIsValid(subscriptingHandlerProcedure))
+	{
+		referenced.classId = ProcedureRelationId;
+		referenced.objectId = subscriptingHandlerProcedure;
+		referenced.objectSubId = 0;
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	}
 }
 
 /*

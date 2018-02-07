@@ -190,9 +190,9 @@ select ('[0:2][0:2]={{1,2,3},{4,5,6},{7,8,9}}'::int[])[1:2][2];
 --
 -- check subscription corner cases
 --
--- More subscripts than MAXDIMS(6)
-SELECT ('{}'::int[])[1][2][3][4][5][6][7];
-ERROR:  number of array dimensions (7) exceeds the maximum allowed (6)
+-- More subscripts than MAXDIMS(12)
+SELECT ('{}'::int[])[1][2][3][4][5][6][7][8][9][10][11][12][13];
+ERROR:  number of array dimensions (13) exceeds the maximum allowed (12)
 -- NULL index yields NULL when selecting
 SELECT ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][NULL][1];
  int4 
@@ -216,15 +216,15 @@ SELECT ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][1:NULL][1];
 UPDATE arrtest
   SET c[NULL] = '{"can''t assign"}'
   WHERE array_dims(c) is not null;
-ERROR:  array subscript in assignment must not be null
+ERROR:  subscript in assignment must not be null
 UPDATE arrtest
   SET c[NULL:1] = '{"can''t assign"}'
   WHERE array_dims(c) is not null;
-ERROR:  array subscript in assignment must not be null
+ERROR:  subscript in assignment must not be null
 UPDATE arrtest
   SET c[1:NULL] = '{"can''t assign"}'
   WHERE array_dims(c) is not null;
-ERROR:  array subscript in assignment must not be null
+ERROR:  subscript in assignment must not be null
 -- test slices with empty lower and/or upper index
 CREATE TEMP TABLE arrtest_s (
   a       int2[],

@@ -177,3 +177,37 @@ drop table list_part_1;
 execute pstmt_def_insert(1);
 drop table list_parted, list_part_null;
 deallocate pstmt_def_insert;
+
+--
+-- Test plan cache strategy
+--
+create table test_strategy(a int);
+insert into test_strategy select 1 from generate_series(1,1000) union all select 2;
+create index on test_strategy(a);
+analyze test_strategy;
+
+prepare test_strategy_pp(int) as select count(*) from test_strategy where a = $1;
+
+-- without 5 evaluation pg uses custom plan
+explain (costs off) execute test_strategy_pp(2);
+
+-- we can force to generic plan
+set plancache_mode to force_generic_plan;
+explain (costs off) execute test_strategy_pp(2);
+
+-- we can fix generic plan by 5 execution
+set plancache_mode to default;
+execute test_strategy_pp(1); -- 1x
+execute test_strategy_pp(1); -- 2x
+execute test_strategy_pp(1); -- 3x
+execute test_strategy_pp(1); -- 4x
+execute test_strategy_pp(1); -- 5x
+
+-- we should to get really bad plan
+explain (costs off) execute test_strategy_pp(2);
+
+-- but we can force to custom plan
+set plancache_mode to force_custom_plan;
+explain (costs off) execute test_strategy_pp(2);
+
+drop table test_strategy;

@@ -330,6 +330,12 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+#if defined(USE_SECURETRANSPORT)
+	{"keychain", "PGKEYCHAIN", NULL, NULL,
+		"Keychain", "", 64,
+	offsetof(struct pg_conn, keychain)},
+#endif
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

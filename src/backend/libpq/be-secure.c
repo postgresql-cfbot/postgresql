@@ -45,6 +45,9 @@ char	   *ssl_key_file;
 char	   *ssl_ca_file;
 char	   *ssl_crl_file;
 char	   *ssl_dh_params_file;
+#ifdef USE_SECURETRANSPORT
+char       *ssl_keychain_file;
+#endif
 
 #ifdef USE_SSL
 bool		ssl_loaded_verify_locations = false;

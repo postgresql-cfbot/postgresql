@@ -1,0 +1,514 @@
+/*-------------------------------------------------------------------------
+ *
+ * securetransport_common.h
+ *	  Apple Secure Transport support
+ *
+ * These definitions are used by both frontend and backend code.
+ *
+ * Copyright (c) 2017, PostgreSQL Global Development Group
+ *
+ * IDENTIFICATION
+ *        src/include/common/securetransport.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef SECURETRANSPORT_H
+#define SECURETRANSPORT_H
+
+#include <Security/SecureTransport.h>
+
+/*
+ * pg_SSLciphername
+ *
+ * Translate a SSLCipherSuite code into a string literal suitable for printing
+ * in log/informational messages to the user. Since this implementation of the
+ * Secure Transport lib doesn't support SSLv2/v3 these ciphernames are omitted.
+ *
+ * The SSLCipherSuite enum is defined in Security/CipherSuite.h
+ *
+ * This only removes the TLS_ portion of the SSLCipherSuite enum label for the
+ * ciphers to match what most Secure Transport implementations seem to be doing
+ */
+static const char *
+pg_SSLciphername(SSLCipherSuite cipher)
+{
+	switch (cipher)
+	{
+		case TLS_NULL_WITH_NULL_NULL:
+			return "NULL";
+
+		/* TLS addenda using AES, per RFC 3268 */
+		case TLS_RSA_WITH_AES_128_CBC_SHA:
+			return "RSA_WITH_AES_128_CBC_SHA";
+		case TLS_DH_DSS_WITH_AES_128_CBC_SHA:
+			return "DH_DSS_WITH_AES_128_CBC_SHA";
+		case TLS_DH_RSA_WITH_AES_128_CBC_SHA:
+			return "DH_RSA_WITH_AES_128_CBC_SHA";
+		case TLS_DHE_DSS_WITH_AES_128_CBC_SHA:
+			return "DHE_DSS_WITH_AES_128_CBC_SHA";
+		case TLS_DHE_RSA_WITH_AES_128_CBC_SHA:
+			return "DHE_RSA_WITH_AES_128_CBC_SHA";
+		case TLS_DH_anon_WITH_AES_128_CBC_SHA:
+			return "DH_anon_WITH_AES_128_CBC_SHA";
+		case TLS_RSA_WITH_AES_256_CBC_SHA:
+			return "RSA_WITH_AES_256_CBC_SHA";
+		case TLS_DH_DSS_WITH_AES_256_CBC_SHA:
+			return "DH_DSS_WITH_AES_256_CBC_SHA";
+		case TLS_DH_RSA_WITH_AES_256_CBC_SHA:
+			return "DH_RSA_WITH_AES_256_CBC_SHA";
+		case TLS_DHE_DSS_WITH_AES_256_CBC_SHA:
+			return "DHE_DSS_WITH_AES_256_CBC_SHA";
+		case TLS_DHE_RSA_WITH_AES_256_CBC_SHA:
+			return "DHE_RSA_WITH_AES_256_CBC_SHA";
+		case TLS_DH_anon_WITH_AES_256_CBC_SHA:
+			return "DH_anon_WITH_AES_256_CBC_SHA";
+
+		/* ECDSA addenda, RFC 4492 */
+		case TLS_ECDH_ECDSA_WITH_NULL_SHA:
+			return "ECDH_ECDSA_WITH_NULL_SHA";
+		case TLS_ECDH_ECDSA_WITH_RC4_128_SHA:
+			return "ECDH_ECDSA_WITH_RC4_128_SHA";
+		case TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA:
+			return "ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA:
+			return "ECDH_ECDSA_WITH_AES_128_CBC_SHA";
+		case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA:
+			return "ECDH_ECDSA_WITH_AES_256_CBC_SHA";
+		case TLS_ECDHE_ECDSA_WITH_NULL_SHA:
+			return "ECDHE_ECDSA_WITH_NULL_SHA";
+		case TLS_ECDHE_ECDSA_WITH_RC4_128_SHA:
+			return "ECDHE_ECDSA_WITH_RC4_128_SHA";
+		case TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA:
+			return "ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
+			return "ECDHE_ECDSA_WITH_AES_128_CBC_SHA";
+		case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
+			return "ECDHE_ECDSA_WITH_AES_256_CBC_SHA";
+		case TLS_ECDH_RSA_WITH_NULL_SHA:
+			return "ECDH_RSA_WITH_NULL_SHA";
+		case TLS_ECDH_RSA_WITH_RC4_128_SHA:
+			return "ECDH_RSA_WITH_RC4_128_SHA";
+		case TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA:
+			return "ECDH_RSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA:
+			return "ECDH_RSA_WITH_AES_128_CBC_SHA";
+		case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA:
+			return "ECDH_RSA_WITH_AES_256_CBC_SHA";
+		case TLS_ECDHE_RSA_WITH_NULL_SHA:
+			return "ECDHE_RSA_WITH_NULL_SHA";
+		case TLS_ECDHE_RSA_WITH_RC4_128_SHA:
+			return "ECDHE_RSA_WITH_RC4_128_SHA";
+		case TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA:
+			return "ECDHE_RSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+			return "ECDHE_RSA_WITH_AES_128_CBC_SHA";
+		case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
+			return "ECDHE_RSA_WITH_AES_256_CBC_SHA";
+		case TLS_ECDH_anon_WITH_NULL_SHA:
+			return "ECDH_anon_WITH_NULL_SHA";
+		case TLS_ECDH_anon_WITH_RC4_128_SHA:
+			return "ECDH_anon_WITH_RC4_128_SHA";
+		case TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA:
+			return "ECDH_anon_WITH_3DES_EDE_CBC_SHA";
+		case TLS_ECDH_anon_WITH_AES_128_CBC_SHA:
+			return "ECDH_anon_WITH_AES_128_CBC_SHA";
+		case TLS_ECDH_anon_WITH_AES_256_CBC_SHA:
+			return "ECDH_anon_WITH_AES_256_CBC_SHA";
+
+		/* Server provided RSA certificate for key exchange. */
+		case TLS_RSA_WITH_NULL_MD5:
+			return "RSA_WITH_NULL_MD5";
+		case TLS_RSA_WITH_NULL_SHA:
+			return "RSA_WITH_NULL_SHA";
+		case TLS_RSA_WITH_RC4_128_MD5:
+			return "RSA_WITH_RC4_128_MD5";
+		case TLS_RSA_WITH_RC4_128_SHA:
+			return "RSA_WITH_RC4_128_SHA";
+		case TLS_RSA_WITH_3DES_EDE_CBC_SHA:
+			return "RSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_RSA_WITH_NULL_SHA256:
+			return "RSA_WITH_NULL_SHA256";
+		case TLS_RSA_WITH_AES_128_CBC_SHA256:
+			return "RSA_WITH_AES_128_CBC_SHA256";
+		case TLS_RSA_WITH_AES_256_CBC_SHA256:
+			return "RSA_WITH_AES_256_CBC_SHA256";
+
+		/*
+		 * Server-authenticated (and optionally client-authenticated)
+		 * Diffie-Hellman.
+		 */
+		case TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA:
+			return "DH_DSS_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA:
+			return "DH_RSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA:
+			return "DHE_DSS_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA:
+			return "DHE_RSA_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DH_DSS_WITH_AES_128_CBC_SHA256:
+			return "DH_DSS_WITH_AES_128_CBC_SHA256";
+		case TLS_DH_RSA_WITH_AES_128_CBC_SHA256:
+			return "DH_RSA_WITH_AES_128_CBC_SHA256";
+		case TLS_DHE_DSS_WITH_AES_128_CBC_SHA256:
+			return "DHE_DSS_WITH_AES_128_CBC_SHA256";
+		case TLS_DHE_RSA_WITH_AES_128_CBC_SHA256:
+			return "DHE_RSA_WITH_AES_128_CBC_SHA256";
+		case TLS_DH_DSS_WITH_AES_256_CBC_SHA256:
+			return "DH_DSS_WITH_AES_256_CBC_SHA256";
+		case TLS_DH_RSA_WITH_AES_256_CBC_SHA256:
+			return "DH_RSA_WITH_AES_256_CBC_SHA256";
+		case TLS_DHE_DSS_WITH_AES_256_CBC_SHA256:
+			return "DHE_DSS_WITH_AES_256_CBC_SHA256";
+		case TLS_DHE_RSA_WITH_AES_256_CBC_SHA256:
+			return "DHE_RSA_WITH_AES_256_CBC_SHA256";
+
+		/* Completely anonymous Diffie-Hellman */
+		case TLS_DH_anon_WITH_RC4_128_MD5:
+			return "DH_anon_WITH_RC4_128_MD5";
+		case TLS_DH_anon_WITH_3DES_EDE_CBC_SHA:
+			return "DH_anon_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DH_anon_WITH_AES_128_CBC_SHA256:
+			return "DH_anon_WITH_AES_128_CBC_SHA256";
+		case TLS_DH_anon_WITH_AES_256_CBC_SHA256:
+			return "DH_anon_WITH_AES_256_CBC_SHA256";
+
+		/* Addendum from RFC 4279, TLS PSK */
+		case TLS_PSK_WITH_RC4_128_SHA:
+			return "PSK_WITH_RC4_128_SHA";
+		case TLS_PSK_WITH_3DES_EDE_CBC_SHA:
+			return "PSK_WITH_3DES_EDE_CBC_SHA";
+		case TLS_PSK_WITH_AES_128_CBC_SHA:
+			return "PSK_WITH_AES_128_CBC_SHA";
+		case TLS_PSK_WITH_AES_256_CBC_SHA:
+			return "PSK_WITH_AES_256_CBC_SHA";
+		case TLS_DHE_PSK_WITH_RC4_128_SHA:
+			return "DHE_PSK_WITH_RC4_128_SHA";
+		case TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA:
+			return "DHE_PSK_WITH_3DES_EDE_CBC_SHA";
+		case TLS_DHE_PSK_WITH_AES_128_CBC_SHA:
+			return "DHE_PSK_WITH_AES_128_CBC_SHA";
+		case TLS_DHE_PSK_WITH_AES_256_CBC_SHA:
+			return "DHE_PSK_WITH_AES_256_CBC_SHA";
+		case TLS_RSA_PSK_WITH_RC4_128_SHA:
+			return "RSA_PSK_WITH_RC4_128_SHA";
+		case TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA:
+			return "RSA_PSK_WITH_3DES_EDE_CBC_SHA";
+		case TLS_RSA_PSK_WITH_AES_128_CBC_SHA:
+			return "RSA_PSK_WITH_AES_128_CBC_SHA";
+		case TLS_RSA_PSK_WITH_AES_256_CBC_SHA:
+			return "RSA_PSK_WITH_AES_256_CBC_SHA";
+
+		/* RFC 4785, Pre-Shared Key (PSK) Ciphersuites with NULL Encryption */
+		case TLS_PSK_WITH_NULL_SHA:
+			return "PSK_WITH_NULL_SHA";
+		case TLS_DHE_PSK_WITH_NULL_SHA:
+			return "DHE_PSK_WITH_NULL_SHA";
+		case TLS_RSA_PSK_WITH_NULL_SHA:
+			return "RSA_PSK_WITH_NULL_SHA";
+
+		/*
+		 * Addenda from RFC 5288, AES Galois Counter Mode (GCM) Cipher Suites
+		 * for TLS.
+		 */
+		case TLS_RSA_WITH_AES_128_GCM_SHA256:
+			return "RSA_WITH_AES_128_GCM_SHA256";
+		case TLS_RSA_WITH_AES_256_GCM_SHA384:
+			return "RSA_WITH_AES_256_GCM_SHA384";
+		case TLS_DHE_RSA_WITH_AES_128_GCM_SHA256:
+			return "DHE_RSA_WITH_AES_128_GCM_SHA256";
+		case TLS_DHE_RSA_WITH_AES_256_GCM_SHA384:
+			return "DHE_RSA_WITH_AES_256_GCM_SHA384";
+		case TLS_DH_RSA_WITH_AES_128_GCM_SHA256:
+			return "DH_RSA_WITH_AES_128_GCM_SHA256";
+		case TLS_DH_RSA_WITH_AES_256_GCM_SHA384:
+			return "DH_RSA_WITH_AES_256_GCM_SHA384";
+		case TLS_DHE_DSS_WITH_AES_128_GCM_SHA256:
+			return "DHE_DSS_WITH_AES_128_GCM_SHA256";
+		case TLS_DHE_DSS_WITH_AES_256_GCM_SHA384:
+			return "DHE_DSS_WITH_AES_256_GCM_SHA384";
+		case TLS_DH_DSS_WITH_AES_128_GCM_SHA256:
+			return "DH_DSS_WITH_AES_128_GCM_SHA256";
+		case TLS_DH_DSS_WITH_AES_256_GCM_SHA384:
+			return "DH_DSS_WITH_AES_256_GCM_SHA384";
+		case TLS_DH_anon_WITH_AES_128_GCM_SHA256:
+			return "DH_anon_WITH_AES_128_GCM_SHA256";
+		case TLS_DH_anon_WITH_AES_256_GCM_SHA384:
+			return "DH_anon_WITH_AES_256_GCM_SHA384";
+
+		/* RFC 5487 - PSK with SHA-256/384 and AES GCM */
+		case TLS_PSK_WITH_AES_128_GCM_SHA256:
+			return "PSK_WITH_AES_128_GCM_SHA256";
+		case TLS_PSK_WITH_AES_256_GCM_SHA384:
+			return "PSK_WITH_AES_256_GCM_SHA384";
+		case TLS_DHE_PSK_WITH_AES_128_GCM_SHA256:
+			return "DHE_PSK_WITH_AES_128_GCM_SHA256";
+		case TLS_DHE_PSK_WITH_AES_256_GCM_SHA384:
+			return "DHE_PSK_WITH_AES_256_GCM_SHA384";
+		case TLS_RSA_PSK_WITH_AES_128_GCM_SHA256:
+			return "RSA_PSK_WITH_AES_128_GCM_SHA256";
+		case TLS_RSA_PSK_WITH_AES_256_GCM_SHA384:
+			return "RSA_PSK_WITH_AES_256_GCM_SHA384";
+		case TLS_PSK_WITH_AES_128_CBC_SHA256:
+			return "PSK_WITH_AES_128_CBC_SHA256";
+		case TLS_PSK_WITH_AES_256_CBC_SHA384:
+			return "PSK_WITH_AES_256_CBC_SHA384";
+		case TLS_PSK_WITH_NULL_SHA256:
+			return "PSK_WITH_NULL_SHA256";
+		case TLS_PSK_WITH_NULL_SHA384:
+			return "PSK_WITH_NULL_SHA384";
+		case TLS_DHE_PSK_WITH_AES_128_CBC_SHA256:
+			return "DHE_PSK_WITH_AES_128_CBC_SHA256";
+		case TLS_DHE_PSK_WITH_AES_256_CBC_SHA384:
+			return "DHE_PSK_WITH_AES_256_CBC_SHA384";
+		case TLS_DHE_PSK_WITH_NULL_SHA256:
+			return "DHE_PSK_WITH_NULL_SHA256";
+		case TLS_DHE_PSK_WITH_NULL_SHA384:
+			return "DHE_PSK_WITH_NULL_SHA384";
+		case TLS_RSA_PSK_WITH_AES_128_CBC_SHA256:
+			return "RSA_PSK_WITH_AES_128_CBC_SHA256";
+		case TLS_RSA_PSK_WITH_AES_256_CBC_SHA384:
+			return "RSA_PSK_WITH_AES_256_CBC_SHA384";
+		case TLS_RSA_PSK_WITH_NULL_SHA256:
+			return "RSA_PSK_WITH_NULL_SHA256";
+		case TLS_RSA_PSK_WITH_NULL_SHA384:
+			return "RSA_PSK_WITH_NULL_SHA384";
+
+		/*
+		 * Addenda from RFC 5289, Elliptic Curve Cipher Suites with
+		 * HMAC SHA-256/384.
+		 */
+		case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:
+			return "ECDHE_ECDSA_WITH_AES_128_CBC_SHA256";
+		case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384:
+			return "ECDHE_ECDSA_WITH_AES_256_CBC_SHA384";
+		case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256:
+			return "ECDH_ECDSA_WITH_AES_128_CBC_SHA256";
+		case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384:
+			return "ECDH_ECDSA_WITH_AES_256_CBC_SHA384";
+		case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256:
+			return "ECDHE_RSA_WITH_AES_128_CBC_SHA256";
+		case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384:
+			return "ECDHE_RSA_WITH_AES_256_CBC_SHA384";
+		case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256:
+			return "ECDH_RSA_WITH_AES_128_CBC_SHA256";
+		case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384:
+			return "ECDH_RSA_WITH_AES_256_CBC_SHA384";
+
+		/*
+		 * Addenda from RFC 5289, Elliptic Curve Cipher Suites with
+		 * SHA-256/384 and AES Galois Counter Mode (GCM)
+		 */
+		case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+			return "ECDHE_ECDSA_WITH_AES_128_GCM_SHA256";
+		case TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
+			return "ECDHE_ECDSA_WITH_AES_256_GCM_SHA384";
+		case TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256:
+			return "ECDH_ECDSA_WITH_AES_128_GCM_SHA256";
+		case TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384:
+			return "ECDH_ECDSA_WITH_AES_256_GCM_SHA384";
+		case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+			return "ECDHE_RSA_WITH_AES_128_GCM_SHA256";
+		case TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
+			return "ECDHE_RSA_WITH_AES_256_GCM_SHA384";
+		case TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256:
+			return "ECDH_RSA_WITH_AES_128_GCM_SHA256";
+		case TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384:
+			return "ECDH_RSA_WITH_AES_256_GCM_SHA384";
+
+		default:
+			break;
+	}
+
+	return NULL;
+}
+
+#ifndef FRONTEND
+/*
+ * pg_SSLcipherbits
+ *
+ * Return the number of bits in the encryption for the specified cipher.
+ * Ciphers with NULL encryption are omitted from the switch statement. This
+ * function is currently only used in the libpq backend.
+ */
+static int
+pg_SSLcipherbits(SSLCipherSuite cipher)
+{
+	switch (cipher)
+	{
+		/* TLS addenda using AES, per RFC 3268 */
+		case TLS_RSA_WITH_AES_128_CBC_SHA:
+		case TLS_DH_DSS_WITH_AES_128_CBC_SHA:
+		case TLS_DH_RSA_WITH_AES_128_CBC_SHA:
+		case TLS_DHE_DSS_WITH_AES_128_CBC_SHA:
+		case TLS_DHE_RSA_WITH_AES_128_CBC_SHA:
+		case TLS_DH_anon_WITH_AES_128_CBC_SHA:
+			return 128;
+
+		case TLS_RSA_WITH_AES_256_CBC_SHA:
+		case TLS_DH_DSS_WITH_AES_256_CBC_SHA:
+		case TLS_DH_RSA_WITH_AES_256_CBC_SHA:
+		case TLS_DHE_DSS_WITH_AES_256_CBC_SHA:
+		case TLS_DHE_RSA_WITH_AES_256_CBC_SHA:
+		case TLS_DH_anon_WITH_AES_256_CBC_SHA:
+			return 256;
+
+		/* ECDSA addenda, RFC 4492 */
+		case TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA:
+		case TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA:
+		case TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA:
+		case TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA:
+		case TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA:
+			return 112;
+
+		case TLS_ECDH_ECDSA_WITH_RC4_128_SHA:
+		case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA:
+		case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
+		case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA:
+		case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
+		case TLS_ECDH_anon_WITH_AES_128_CBC_SHA:
+		case TLS_ECDH_anon_WITH_RC4_128_SHA:
+		case TLS_ECDHE_RSA_WITH_RC4_128_SHA:
+		case TLS_ECDHE_ECDSA_WITH_RC4_128_SHA:
+		case TLS_ECDH_RSA_WITH_RC4_128_SHA:
+			return 128;
+
+		case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
+		case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA:
+		case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA:
+		case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
+		case TLS_ECDH_anon_WITH_AES_256_CBC_SHA:
+			return 256;
+
+		/* Server provided RSA certificate for key exchange. */
+		case TLS_RSA_WITH_3DES_EDE_CBC_SHA:
+			return 112;
+		case TLS_RSA_WITH_RC4_128_MD5:
+		case TLS_RSA_WITH_RC4_128_SHA:
+		case TLS_RSA_WITH_AES_128_CBC_SHA256:
+			return 128;
+		case TLS_RSA_WITH_AES_256_CBC_SHA256:
+			return 256;
+
+		/*
+		 * Server-authenticated (and optionally client-authenticated)
+		 * Diffie-Hellman.
+		 */
+		case TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA:
+		case TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA:
+		case TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA:
+		case TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA:
+			return 112;
+		case TLS_DH_DSS_WITH_AES_128_CBC_SHA256:
+		case TLS_DH_RSA_WITH_AES_128_CBC_SHA256:
+		case TLS_DHE_DSS_WITH_AES_128_CBC_SHA256:
+		case TLS_DHE_RSA_WITH_AES_128_CBC_SHA256:
+			return 128;
+		case TLS_DH_DSS_WITH_AES_256_CBC_SHA256:
+		case TLS_DH_RSA_WITH_AES_256_CBC_SHA256:
+		case TLS_DHE_DSS_WITH_AES_256_CBC_SHA256:
+		case TLS_DHE_RSA_WITH_AES_256_CBC_SHA256:
+			return 256;
+
+		/* Completely anonymous Diffie-Hellman */
+		case TLS_DH_anon_WITH_3DES_EDE_CBC_SHA:
+			return 112;
+		case TLS_DH_anon_WITH_RC4_128_MD5:
+		case TLS_DH_anon_WITH_AES_128_CBC_SHA256:
+			return 128;
+		case TLS_DH_anon_WITH_AES_256_CBC_SHA256:
+			return 256;
+
+		/* Addendum from RFC 4279, TLS PSK */
+		case TLS_PSK_WITH_3DES_EDE_CBC_SHA:
+		case TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA:
+		case TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA:
+			return 112;
+		case TLS_PSK_WITH_RC4_128_SHA:
+		case TLS_DHE_PSK_WITH_RC4_128_SHA:
+		case TLS_PSK_WITH_AES_128_CBC_SHA:
+		case TLS_DHE_PSK_WITH_AES_128_CBC_SHA:
+		case TLS_RSA_PSK_WITH_RC4_128_SHA:
+		case TLS_RSA_PSK_WITH_AES_128_CBC_SHA:
+			return 128;
+		case TLS_PSK_WITH_AES_256_CBC_SHA:
+		case TLS_DHE_PSK_WITH_AES_256_CBC_SHA:
+		case TLS_RSA_PSK_WITH_AES_256_CBC_SHA:
+			return 256;
+
+		/*
+		 * Addenda from RFC 5288, AES Galois Counter Mode (GCM) Cipher Suites
+		 * for TLS.
+		 */
+		case TLS_RSA_WITH_AES_128_GCM_SHA256:
+		case TLS_DHE_RSA_WITH_AES_128_GCM_SHA256:
+		case TLS_DH_RSA_WITH_AES_128_GCM_SHA256:
+		case TLS_DHE_DSS_WITH_AES_128_GCM_SHA256:
+		case TLS_DH_DSS_WITH_AES_128_GCM_SHA256:
+		case TLS_DH_anon_WITH_AES_128_GCM_SHA256:
+			return 128;
+
+		case TLS_RSA_WITH_AES_256_GCM_SHA384:
+		case TLS_DHE_RSA_WITH_AES_256_GCM_SHA384:
+		case TLS_DH_RSA_WITH_AES_256_GCM_SHA384:
+		case TLS_DHE_DSS_WITH_AES_256_GCM_SHA384:
+		case TLS_DH_DSS_WITH_AES_256_GCM_SHA384:
+		case TLS_DH_anon_WITH_AES_256_GCM_SHA384:
+			return 256;
+
+		/* RFC 5487 - PSK with SHA-256/384 and AES GCM */
+
+
+		case TLS_PSK_WITH_AES_128_GCM_SHA256:
+		case TLS_DHE_PSK_WITH_AES_128_GCM_SHA256:
+		case TLS_RSA_PSK_WITH_AES_128_GCM_SHA256:
+		case TLS_PSK_WITH_AES_128_CBC_SHA256:
+		case TLS_DHE_PSK_WITH_AES_128_CBC_SHA256:
+		case TLS_RSA_PSK_WITH_AES_128_CBC_SHA256:
+			return 128;
+		case TLS_DHE_PSK_WITH_AES_256_GCM_SHA384:
+		case TLS_PSK_WITH_AES_256_GCM_SHA384:
+		case TLS_RSA_PSK_WITH_AES_256_GCM_SHA384:
+		case TLS_PSK_WITH_AES_256_CBC_SHA384:
+		case TLS_DHE_PSK_WITH_AES_256_CBC_SHA384:
+		case TLS_RSA_PSK_WITH_AES_256_CBC_SHA384:
+			return 256;
+
+		/*
+		 * Addenda from RFC 5289, Elliptic Curve Cipher Suites with
+		 * HMAC SHA-256/384.
+		 */
+		case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:
+		case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256:
+		case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256:
+		case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256:
+			return 128;
+		case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384:
+		case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384:
+		case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384:
+		case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384:
+			return 256;
+
+		/*
+		 * Addenda from RFC 5289, Elliptic Curve Cipher Suites with
+		 * SHA-256/384 and AES Galois Counter Mode (GCM)
+		 */
+		case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+		case TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256:
+		case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+		case TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256:
+			return 128;
+		case TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
+		case TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384:
+		case TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
+		case TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384:
+			return 256;
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+#endif
+
+#endif							/* SECURETRANSPORT_H */

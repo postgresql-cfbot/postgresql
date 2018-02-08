@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 40;
+use Test::More;
 use ServerSetup;
 use File::Copy;
 
@@ -20,6 +20,27 @@ my $common_connstr;
 # of the key stored in the code tree and update its permissions.
 copy("ssl/client.key", "ssl/client_tmp.key");
 chmod 0600, "ssl/client_tmp.key";
+
+# macOS Secure Transport does not support loading CRL files, so skip CRL
+# tests when built with Secure Transport support.
+my $supports_crl_files = ! check_pg_config("#define USE_SECURETRANSPORT 1");
+
+# Test for support of Secure Transport Keychain secure archives
+# This check is currently the same as $supports_crl_files, but clarity when
+# reading code is more important than avoiding the use of an extra variable
+my $supports_keychains = check_pg_config("#define USE_SECURETRANSPORT 1");
+
+#### Setup
+
+if ($supports_keychains)
+{
+	plan tests => 43;
+}
+else
+{
+	plan tests => 40;
+}
+
 
 #### Part 0. Set up the server.
 
@@ -91,18 +112,37 @@ test_connect_ok($common_connstr,
 
 note "testing sslcrl option with a non-revoked cert";
 
-# Invalid CRL filename is the same as no CRL, succeeds
-test_connect_ok($common_connstr,
-	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=invalid");
+if ($supports_crl_files)
+{
+	# Invalid CRL filename is the same as no CRL, succeeds
+	test_connect_ok($common_connstr,
+		"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=invalid");
 
-# A CRL belonging to a different CA is not accepted, fails
-test_connect_fails($common_connstr,
-"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl");
+	# With the correct CRL, succeeds (this cert is not revoked)
+	test_connect_ok($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
+	);
 
-# With the correct CRL, succeeds (this cert is not revoked)
-test_connect_ok($common_connstr,
-"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
-);
+	# A CRL belonging to a different CA is not accepted, fails
+	test_connect_fails($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl");
+}
+else
+{
+	# Invalid CRL filename is the same as no CRL, succeeds
+	test_connect_fails($common_connstr,
+		"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=invalid");
+
+	# With the correct CRL, succeeds (this cert is not revoked)
+	test_connect_fails($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
+	);
+
+	# A CRL belonging to a different CA is not accepted, this should fail iff
+	# CRL files are supported
+	test_connect_fails($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl");
+}
 
 # Check that connecting with verify-full fails, when the hostname doesn't
 # match the hostname in the server's certificate.
@@ -176,9 +216,18 @@ $common_connstr =
 # Without the CRL, succeeds. With it, fails.
 test_connect_ok($common_connstr,
 	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca");
-test_connect_fails($common_connstr,
-"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
-);
+if ($supports_crl_files)
+{
+	test_connect_fails($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
+	);
+}
+else
+{
+	test_connect_fails($common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl"
+	);
+}
 
 ### Part 2. Server-side tests.
 ###
@@ -199,10 +248,20 @@ test_connect_ok($common_connstr,
 test_connect_fails($common_connstr,
 	"user=anotheruser sslcert=ssl/client.crt sslkey=ssl/client_tmp.key");
 
-# revoked client cert
-test_connect_fails($common_connstr,
-"user=ssltestuser sslcert=ssl/client-revoked.crt sslkey=ssl/client-revoked.key"
-);
+if ($supports_crl_files)
+{
+	# revoked client cert
+	test_connect_fails($common_connstr,
+	"user=ssltestuser sslcert=ssl/client-revoked.crt sslkey=ssl/client-revoked.key"
+	);
+}
+else
+{
+	# revoked client cert
+	test_connect_ok($common_connstr,
+	"user=ssltestuser sslcert=ssl/client-revoked.crt sslkey=ssl/client-revoked.key"
+	);
+}
 
 # intermediate client_ca.crt is provided by client, and isn't in server's ssl_ca_file
 switch_server_cert($node, 'server-cn-only', 'root_ca');
@@ -212,6 +271,16 @@ $common_connstr =
 test_connect_ok($common_connstr,
 	"sslmode=require sslcert=ssl/client+client_ca.crt");
 test_connect_fails($common_connstr, "sslmode=require sslcert=ssl/client.crt");
+
+if ($supports_keychains)
+{
+	# empty keychain
+	test_connect_fails("user=ssltestuser keychain=invalid");
+
+	# correct client cert in keychain with and without proper label
+	test_connect_fails("user=ssltestuser keychain=ssl/client.keychain");
+	test_connect_ok("user=ssltestuser sslcert=ssltestuser keychain=ssl/client.keychain");
+}
 
 # clean up
 unlink "ssl/client_tmp.key";

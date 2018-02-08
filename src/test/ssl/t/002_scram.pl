@@ -15,6 +15,9 @@ my $SERVERHOSTADDR = '127.0.0.1';
 my $supports_tls_server_end_point =
 	check_pg_config("#define HAVE_X509_GET_SIGNATURE_NID 1");
 
+my $supports_tls_unique =
+	! check_pg_config("#define USE_SECURETRANSPORT 1");
+
 # Allocation of base connection string shared among multiple tests.
 my $common_connstr;
 
@@ -38,14 +41,27 @@ $ENV{PGPASSWORD} = "pass";
 $common_connstr =
 "user=ssltestuser dbname=trustdb sslmode=require hostaddr=$SERVERHOSTADDR";
 
-# Default settings
-test_connect_ok($common_connstr, '',
-				"SCRAM authentication with default channel binding");
-
 # Channel binding settings
-test_connect_ok($common_connstr,
-	"scram_channel_binding=tls-unique",
-	"SCRAM authentication with tls-unique as channel binding");
+if ($supports_tls_unique)
+{
+	# Default settings
+	test_connect_ok($common_connstr, '',
+					"SCRAM authentication with default channel binding");
+
+	test_connect_ok($common_connstr,
+		"scram_channel_binding=tls-unique",
+		"SCRAM authentication with tls-unique as channel binding");
+}
+else
+{
+	# Default settings
+	test_connect_fails($common_connstr, '',
+					"SCRAM authentication with default channel binding");
+
+	test_connect_fails($common_connstr,
+		"scram_channel_binding=tls-unique",
+		"SCRAM authentication with tls-unique as channel binding");
+}
 test_connect_ok($common_connstr,
 	"scram_channel_binding=''",
 				"SCRAM authentication without channel binding");

@@ -123,6 +123,20 @@ ssl/root+server.crl: ssl/root.crl ssl/server.crl
 ssl/root+client.crl: ssl/root.crl ssl/client.crl
 	cat $^ > $@
 
+#### Keychains
+
+ifeq ($(with_securetransport),yes)
+
+KEYCHAINS := ssl/client.keychain
+
+# This target generates all Keychains
+keychains: $(KEYCHAINS)
+
+PWD=$(shell pwd)
+ssl/client.keychain: ssl/client.crt ssl/client.key
+	certtool i $(PWD)/ssl/client.crt c k=$(PWD)/ssl/client.keychain r=$(PWD)/ssl/client.key p=
+endif
+
 .PHONY: sslfiles-clean
 sslfiles-clean:
 	rm -f $(SSLFILES) ssl/client_ca.srl ssl/server_ca.srl ssl/client_ca-certindex* ssl/server_ca-certindex* ssl/root_ca-certindex* ssl/root_ca.srl ssl/temp_ca.crt ssl/temp_ca_signed.crt

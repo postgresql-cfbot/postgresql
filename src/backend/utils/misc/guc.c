@@ -501,6 +501,7 @@ static char *locale_ctype;
 static char *server_encoding_string;
 static char *server_version_string;
 static int	server_version_num;
+static char *ssl_library_string;
 static char *timezone_string;
 static char *log_timezone_string;
 static char *timezone_abbreviations_string;
@@ -3335,6 +3336,18 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		/* Can't be set in postgresql.conf */
+		{"ssl_library", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows the SSL library used."),
+			NULL,
+			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&ssl_library_string,
+		SSL_LIBRARY,
+		NULL, NULL, NULL
+	},
+
+	{
 		/* Not for general use --- used by SET ROLE */
 		{"role", PGC_USERSET, UNGROUPED,
 			gettext_noop("Sets the current role."),
@@ -3580,6 +3593,18 @@ static struct config_string ConfigureNamesString[] =
 		"",
 		NULL, NULL, NULL
 	},
+
+#ifdef USE_SECURETRANSPORT
+	{
+		{"ssl_keychain_file", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Location of the Keychain file."),
+			NULL
+		},
+		&ssl_keychain_file,
+		"",
+		NULL, NULL, NULL
+	},
+#endif
 
 	{
 		{"stats_temp_directory", PGC_SIGHUP, STATS_COLLECTOR,

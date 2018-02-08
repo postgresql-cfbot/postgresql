@@ -159,7 +159,14 @@ sub switch_server_cert
 	print $sslconf "ssl_ca_file='$cafile.crt'\n";
 	print $sslconf "ssl_cert_file='$certfile.crt'\n";
 	print $sslconf "ssl_key_file='$certfile.key'\n";
-	print $sslconf "ssl_crl_file='root+client.crl'\n";
+	if (check_pg_config("#define USE_SECURETRANSPORT 1"))
+	{
+		print $sslconf "ssl_crl_file=''\n";
+	}
+	else
+	{
+		print $sslconf "ssl_crl_file='root+client.crl'\n";
+	}
 	close $sslconf;
 
 	$node->reload;

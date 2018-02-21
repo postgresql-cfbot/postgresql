@@ -474,13 +474,15 @@ drop table selfconflict;
 
 -- check that the following works:
 -- insert into partitioned_table on conflict do nothing
-create table parted_conflict_test (a int, b char) partition by list (a);
-create table parted_conflict_test_1 partition of parted_conflict_test (b unique) for values in (1);
-insert into parted_conflict_test values (1, 'a') on conflict do nothing;
-insert into parted_conflict_test values (1, 'a') on conflict do nothing;
+create table parted_conflict_test (a int unique, b char) partition by list (a);
+create table parted_conflict_test_1 partition of parted_conflict_test (b unique) for values in (1, 2);
+insert into parted_conflict_test values (1, 'a') on conflict (a) do nothing;
+insert into parted_conflict_test values (1, 'a') on conflict (a) do nothing;
 -- however, on conflict do update is not supported yet
-insert into parted_conflict_test values (1) on conflict (b) do update set a = excluded.a;
+insert into parted_conflict_test values (1, 'a') on conflict (b) do update set a = excluded.a;
+insert into parted_conflict_test values (1, 'a') on conflict (a) do update set b = excluded.b;
 -- but it works OK if we target the partition directly
-insert into parted_conflict_test_1 values (1) on conflict (b) do
-update set a = excluded.a;
+insert into parted_conflict_test_1 values (2, 'a') on conflict (b) do update set a = excluded.a;
+insert into parted_conflict_test_1 values (2, 'b') on conflict (a) do update set b = excluded.b;
+select * from parted_conflict_test order by a;
 drop table parted_conflict_test;

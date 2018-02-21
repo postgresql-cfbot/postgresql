@@ -6504,20 +6504,43 @@ make_modifytable(PlannerInfo *root,
 	}
 	else
 	{
+		RangeTblEntry *rte;
+
 		node->onConflictAction = onconflict->action;
-		node->onConflictSet = onconflict->onConflictSet;
-		node->onConflictWhere = onconflict->onConflictWhere;
 
 		/*
-		 * If a set of unique index inference elements was provided (an
-		 * INSERT...ON CONFLICT "inference specification"), then infer
-		 * appropriate unique indexes (or throw an error if none are
-		 * available).
+		 * Partitioned tables don't yet have the executor support needed
+		 * to handle ON CONFLICT actions that rely on partitioned indexes,
+		 * so leave the following fields unset for them.
 		 */
-		node->arbiterIndexes = infer_arbiter_indexes(root);
 
-		node->exclRelRTI = onconflict->exclRelIndex;
-		node->exclRelTlist = onconflict->exclRelTlist;
+		 /* Must have only one result relation in the case of INSERT. */
+		Assert(list_length(node->resultRelations) == 1);
+		rte = planner_rt_fetch(linitial_int(node->resultRelations), root);
+		Assert(rte->rtekind == RTE_RELATION);
+		if (rte->relkind != RELKIND_PARTITIONED_TABLE)
+		{
+			node->onConflictSet = onconflict->onConflictSet;
+			node->onConflictWhere = onconflict->onConflictWhere;
+
+			/*
+			 * If a set of unique index inference elements was provided (an
+			 * INSERT...ON CONFLICT "inference specification"), then infer
+			 * appropriate unique indexes (or throw an error if none are
+			 * available).
+			 */
+			node->arbiterIndexes = infer_arbiter_indexes(root);
+			node->exclRelRTI = onconflict->exclRelIndex;
+			node->exclRelTlist = onconflict->exclRelTlist;
+		}
+		else
+		{
+			node->onConflictSet = NIL;
+			node->onConflictWhere = NULL;
+			node->arbiterIndexes = NIL;
+			node->exclRelRTI = 0;
+			node->exclRelTlist = NIL;
+		}
 	}
 	node->withCheckOptionLists = withCheckOptionLists;
 	node->returningLists = returningLists;

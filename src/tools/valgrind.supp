@@ -212,3 +212,47 @@
    Memcheck:Cond
    fun:PyObject_Realloc
 }
+
+
+# Accroding to the man page for epoll_pwait:
+# """
+# The sigmask argument may be specified as NULL, in which case epoll_pwait() is
+# equivalent to epoll_wait().
+# """
+# Valgrind seems to be unaware of this and complains about passing NULL as a
+# sigmask, so we need this suppression rule.
+{
+   epoll_pwait_null_sigmask
+   Memcheck:Param
+   epoll_pwait(sigmask)
+   fun:epoll_pwait
+   fun:WaitEventSetWaitBlock
+   fun:WaitEventSetWait
+
+   ...
+   fun:ServerLoop
+}
+
+
+# TODO: why this is harmless?
+{
+   wcstombs
+   Memcheck:Addr16
+   fun:__wcsnlen_sse4_1
+   fun:wcsrtombs
+   fun:wcstombs
+
+   ...
+   fun:ExecInterpExpr
+}
+
+{
+   <insert_a_suppression_name_here>
+   Memcheck:Cond
+   fun:__wcsnlen_sse4_1
+   fun:wcsrtombs
+   fun:wcstombs
+
+   ...
+   fun:ExecInterpExpr
+}

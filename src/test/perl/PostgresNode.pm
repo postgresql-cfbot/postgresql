@@ -82,6 +82,7 @@ package PostgresNode;
 use strict;
 use warnings;
 
+use PostgresClient;
 use Config;
 use Cwd;
 use Exporter 'import';
@@ -1256,6 +1257,26 @@ sub psql
 	{
 		return $ret;
 	}
+}
+
+=pod
+
+=item $node->get_new_session($dbname, $session_name)
+
+Create a new sesson to the database $dbname. $session_name is a name
+of the session. Returns a PostgresClient object.
+=cut
+
+
+sub get_new_session
+{
+	my ($self, $dbname, $sessionname) = @_;
+
+	$sessionname = 'unnamed connection' if (!defined $sessionname);
+	my $client =
+		PostgresClient::connectdb($sessionname, $self->connstr($dbname));
+
+	return $client;
 }
 
 =pod

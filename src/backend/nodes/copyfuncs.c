@@ -3440,6 +3440,7 @@ _copyCreateFunctionStmt(const CreateFunctionStmt *from)
 	COPY_NODE_FIELD(parameters);
 	COPY_NODE_FIELD(returnType);
 	COPY_NODE_FIELD(options);
+	COPY_NODE_FIELD(withClause);
 
 	return newnode;
 }

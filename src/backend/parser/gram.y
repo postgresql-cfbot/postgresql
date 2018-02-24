@@ -7510,7 +7510,7 @@ opt_nulls_order: NULLS_LA FIRST_P			{ $$ = SORTBY_NULLS_FIRST; }
 
 CreateFunctionStmt:
 			CREATE opt_or_replace FUNCTION func_name func_args_with_defaults
-			RETURNS func_return createfunc_opt_list
+			RETURNS func_return createfunc_opt_list opt_definition
 				{
 					CreateFunctionStmt *n = makeNode(CreateFunctionStmt);
 					n->is_procedure = false;
@@ -7519,10 +7519,11 @@ CreateFunctionStmt:
 					n->parameters = $5;
 					n->returnType = $7;
 					n->options = $8;
+					n->withClause = $9;
 					$$ = (Node *)n;
 				}
 			| CREATE opt_or_replace FUNCTION func_name func_args_with_defaults
-			  RETURNS TABLE '(' table_func_column_list ')' createfunc_opt_list
+			  RETURNS TABLE '(' table_func_column_list ')' createfunc_opt_list opt_definition
 				{
 					CreateFunctionStmt *n = makeNode(CreateFunctionStmt);
 					n->is_procedure = false;
@@ -7532,10 +7533,11 @@ CreateFunctionStmt:
 					n->returnType = TableFuncTypeName($9);
 					n->returnType->location = @7;
 					n->options = $11;
+					n->withClause = $12;
 					$$ = (Node *)n;
 				}
 			| CREATE opt_or_replace FUNCTION func_name func_args_with_defaults
-			  createfunc_opt_list
+			  createfunc_opt_list opt_definition
 				{
 					CreateFunctionStmt *n = makeNode(CreateFunctionStmt);
 					n->is_procedure = false;
@@ -7544,6 +7546,7 @@ CreateFunctionStmt:
 					n->parameters = $5;
 					n->returnType = NULL;
 					n->options = $6;
+					n->withClause = $7;
 					$$ = (Node *)n;
 				}
 			| CREATE opt_or_replace PROCEDURE func_name func_args_with_defaults

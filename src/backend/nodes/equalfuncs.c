@@ -1377,6 +1377,7 @@ _equalCreateFunctionStmt(const CreateFunctionStmt *a, const CreateFunctionStmt *
 	COMPARE_NODE_FIELD(parameters);
 	COMPARE_NODE_FIELD(returnType);
 	COMPARE_NODE_FIELD(options);
+	COMPARE_NODE_FIELD(withClause);
 
 	return true;
 }

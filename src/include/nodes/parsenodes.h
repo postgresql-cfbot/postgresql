@@ -2757,6 +2757,7 @@ typedef struct CreateFunctionStmt
 	List	   *parameters;		/* a list of FunctionParameter */
 	TypeName   *returnType;		/* the return type */
 	List	   *options;		/* a list of DefElem */
+	List	   *withClause;		/* a list of DefElem */
 } CreateFunctionStmt;
 
 typedef enum FunctionParameterMode

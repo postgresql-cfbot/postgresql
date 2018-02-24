@@ -789,6 +789,59 @@ compute_function_attributes(ParseState *pstate,
 }
 
 
+/*-------------
+ *	 Interpret the parameters *parameters and return their contents via
+ *	 *isStrict_p and *volatility_p.
+ *
+ *	These parameters supply optional information about a function.
+ *	All have defaults if not specified. Parameters:
+ *
+ *	 * isStrict means the function should not be called when any NULL
+ *	   inputs are present; instead a NULL result value should be assumed.
+ *
+ *	 * volatility tells the optimizer whether the function's result can
+ *	   be assumed to be repeatable over multiple evaluations.
+ *------------
+ */
+static void
+compute_attributes_with_style(ParseState *pstate, bool is_procedure, List *parameters, bool *isStrict_p, char *volatility_p)
+{
+	ListCell   *pl;
+
+	foreach(pl, parameters)
+	{
+		DefElem    *param = (DefElem *) lfirst(pl);
+
+		if (pg_strcasecmp(param->defname, "isstrict") == 0)
+		{
+			if (is_procedure)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+						 errmsg("invalid attribute in procedure definition"),
+						 parser_errposition(pstate, param->location)));
+			*isStrict_p = defGetBoolean(param);
+		}
+		else if (pg_strcasecmp(param->defname, "iscachable") == 0)
+		{
+			/* obsolete spelling of isImmutable */
+			if (is_procedure)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+						 errmsg("invalid attribute in procedure definition"),
+						 parser_errposition(pstate, param->location)));
+			if (defGetBoolean(param))
+				*volatility_p = PROVOLATILE_IMMUTABLE;
+		}
+		else
+			ereport(WARNING,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("unrecognized function attribute \"%s\" ignored",
+							param->defname),
+					 parser_errposition(pstate, param->location)));
+	}
+}
+
+
 /*
  * For a dynamically linked C language object, the form of the clause is
  *
@@ -1053,6 +1106,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 		/* store SQL NULL instead of empty array */
 		trftypes = NULL;
 	}
+
+	compute_attributes_with_style(pstate, stmt->is_procedure, stmt->withClause, &isStrict, &volatility);
 
 	interpret_AS_clause(languageOid, language, funcname, as_clause,
 						&prosrc_str, &probin_str);

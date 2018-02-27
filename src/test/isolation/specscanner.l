@@ -12,7 +12,11 @@
 
 static int	yyline = 1;			/* line number for error reporting */
 
-static char litbuf[1024];
+#define LITBUF_MAX	1024 * 1024 * 10
+#define LITBUF_INIT	1024
+
+static size_t litbufsize;
+static char *litbuf = NULL;
 static int litbufpos = 0;
 
 static void addlitchar(char c);
@@ -40,6 +44,10 @@ space			[ \t\r\f]
 comment			("#"{non_newline}*)
 
 %%
+%{
+	litbuf = pg_malloc(LITBUF_INIT);
+	litbufsize = LITBUF_INIT;
+%}
 
 permutation		{ return PERMUTATION; }
 session			{ return SESSION; }
@@ -100,10 +108,15 @@ teardown		{ return TEARDOWN; }
 static void
 addlitchar(char c)
 {
-	if (litbufpos >= sizeof(litbuf) - 1)
+	if (litbufpos >= litbufsize - 1)
 	{
-		fprintf(stderr, "SQL step too long\n");
-		exit(1);
+		litbufsize += litbufsize;
+		if (litbufsize > LITBUF_MAX)
+		{
+			fprintf(stderr, "SQL step too long\n");
+			exit(1);
+		}
+		litbuf = pg_realloc(litbuf, litbufsize);
 	}
 	litbuf[litbufpos++] = c;
 }

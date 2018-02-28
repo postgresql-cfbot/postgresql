@@ -1143,7 +1143,7 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 
 		default:
 			{
-				elog(ERROR, "unrecognized message type received from parallel worker: %c (message length %d bytes)",
+				elog(ERROR, "unrecognized message type received from parallel worker: %c (message length %zu bytes)",
 					 msgtype, msg->len);
 			}
 	}

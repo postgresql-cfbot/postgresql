@@ -35,9 +35,9 @@
 typedef struct StringInfoData
 {
 	char	   *data;
-	int			len;
-	int			maxlen;
-	int			cursor;
+	size_t		len;
+	size_t		maxlen;
+	size_t		cursor;
 } StringInfoData;
 
 typedef StringInfoData *StringInfo;
@@ -103,7 +103,7 @@ extern void appendStringInfo(StringInfo str, const char *fmt,...) pg_attribute_p
  * pass the return value to enlargeStringInfo() before trying again; see
  * appendStringInfo for standard usage pattern.
  */
-extern int	appendStringInfoVA(StringInfo str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
+extern size_t appendStringInfoVA(StringInfo str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
 
 /*------------------------
  * appendStringInfoString
@@ -141,7 +141,7 @@ extern void appendStringInfoSpaces(StringInfo str, int count);
  * if necessary.
  */
 extern void appendBinaryStringInfo(StringInfo str,
-					   const char *data, int datalen);
+					   const char *data, size_t datalen);
 
 /*------------------------
  * appendBinaryStringInfoNT
@@ -149,12 +149,12 @@ extern void appendBinaryStringInfo(StringInfo str,
  * if necessary. Does not ensure a trailing null-byte exists.
  */
 extern void appendBinaryStringInfoNT(StringInfo str,
-						 const char *data, int datalen);
+						 const char *data, size_t datalen);
 
 /*------------------------
  * enlargeStringInfo
  * Make sure a StringInfo's buffer can hold at least 'needed' more bytes.
  */
-extern void enlargeStringInfo(StringInfo str, int needed);
+extern void enlargeStringInfo(StringInfo str, size_t needed);
 
 #endif							/* STRINGINFO_H */

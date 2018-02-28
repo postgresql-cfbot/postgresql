@@ -45,7 +45,7 @@ makeStringInfo(void)
 void
 initStringInfo(StringInfo str)
 {
-	int			size = 1024;	/* initial default buffer size */
+	size_t		size = 1024;	/* initial default buffer size */
 
 	str->data = (char *) palloc(size);
 	str->maxlen = size;
@@ -80,7 +80,7 @@ appendStringInfo(StringInfo str, const char *fmt,...)
 	for (;;)
 	{
 		va_list		args;
-		int			needed;
+		size_t		needed;
 
 		/* Try to format the data. */
 		va_start(args, fmt);
@@ -110,10 +110,10 @@ appendStringInfo(StringInfo str, const char *fmt,...)
  * to redo va_start before you can rescan the argument list, and we can't do
  * that from here.
  */
-int
+size_t
 appendStringInfoVA(StringInfo str, const char *fmt, va_list args)
 {
-	int			avail;
+	size_t		avail;
 	size_t		nprinted;
 
 	Assert(str != NULL);
@@ -127,24 +127,20 @@ appendStringInfoVA(StringInfo str, const char *fmt, va_list args)
 	if (avail < 16)
 		return 32;
 
-	nprinted = pvsnprintf(str->data + str->len, (size_t) avail, fmt, args);
+	nprinted = pvsnprintf(str->data + str->len, avail, fmt, args);
 
-	if (nprinted < (size_t) avail)
+	if (nprinted < avail)
 	{
 		/* Success.  Note nprinted does not include trailing null. */
-		str->len += (int) nprinted;
+		str->len += nprinted;
 		return 0;
 	}
 
 	/* Restore the trailing null so that str is unmodified. */
 	str->data[str->len] = '\0';
 
-	/*
-	 * Return pvsnprintf's estimate of the space needed.  (Although this is
-	 * given as a size_t, we know it will fit in int because it's not more
-	 * than MaxAllocSize.)
-	 */
-	return (int) nprinted;
+	/* Return pvsnprintf's estimate of the space needed. */
+	return nprinted;
 }
 
 /*
@@ -189,7 +185,7 @@ appendStringInfoSpaces(StringInfo str, int count)
 	if (count > 0)
 	{
 		/* Make more room if needed */
-		enlargeStringInfo(str, count);
+		enlargeStringInfo(str, (size_t) count);
 
 		/* OK, append the spaces */
 		while (--count >= 0)
@@ -205,7 +201,7 @@ appendStringInfoSpaces(StringInfo str, int count)
  * if necessary. Ensures that a trailing null byte is present.
  */
 void
-appendBinaryStringInfo(StringInfo str, const char *data, int datalen)
+appendBinaryStringInfo(StringInfo str, const char *data, size_t datalen)
 {
 	Assert(str != NULL);
 
@@ -231,7 +227,7 @@ appendBinaryStringInfo(StringInfo str, const char *data, int datalen)
  * if necessary. Does not ensure a trailing null-byte exists.
  */
 void
-appendBinaryStringInfoNT(StringInfo str, const char *data, int datalen)
+appendBinaryStringInfoNT(StringInfo str, const char *data, size_t datalen)
 {
 	Assert(str != NULL);
 
@@ -261,21 +257,19 @@ appendBinaryStringInfoNT(StringInfo str, const char *data, int datalen)
  * This is the desired and indeed critical behavior!
  */
 void
-enlargeStringInfo(StringInfo str, int needed)
+enlargeStringInfo(StringInfo str, size_t needed)
 {
-	int			newlen;
+	size_t		newlen;
 
 	/*
 	 * Guard against out-of-range "needed" values.  Without this, we can get
 	 * an overflow or infinite loop in the following.
 	 */
-	if (needed < 0)				/* should not happen */
-		elog(ERROR, "invalid string enlargement request size: %d", needed);
-	if (((Size) needed) >= (MaxAllocSize - (Size) str->len))
+	if (needed >= (MaxAllocHugeSize - str->len))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("out of memory"),
-				 errdetail("Cannot enlarge string buffer containing %d bytes by %d more bytes.",
+				 errdetail("Cannot enlarge string buffer containing %zu bytes by %zu more bytes.",
 						   str->len, needed)));
 
 	needed += str->len + 1;		/* total space required now */
@@ -295,14 +289,14 @@ enlargeStringInfo(StringInfo str, int needed)
 		newlen = 2 * newlen;
 
 	/*
-	 * Clamp to MaxAllocSize in case we went past it.  Note we are assuming
-	 * here that MaxAllocSize <= INT_MAX/2, else the above loop could
+	 * Clamp to MaxAllocHugeSize in case we went past it.  Note we know
+	 * here that MaxAllocHugeSize <= SIZE_MAX/2, else the above loop could
 	 * overflow.  We will still have newlen >= needed.
 	 */
-	if (newlen > (int) MaxAllocSize)
-		newlen = (int) MaxAllocSize;
+	if (newlen > MaxAllocHugeSize)
+		newlen = MaxAllocHugeSize;
 
-	str->data = (char *) repalloc(str->data, newlen);
+	str->data = (char *) repalloc_huge(str->data, newlen);
 
 	str->maxlen = newlen;
 }

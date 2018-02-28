@@ -357,7 +357,7 @@ byteaout(PG_FUNCTION_ARGS)
 	if (bytea_output == BYTEA_OUTPUT_HEX)
 	{
 		/* Print hex format */
-		rp = result = palloc(VARSIZE_ANY_EXHDR(vlena) * 2 + 2 + 1);
+		rp = result = palloc_extended(VARSIZE_ANY_EXHDR(vlena) * 2 + 2 + 1, MCXT_ALLOC_HUGE);
 		*rp++ = '\\';
 		*rp++ = 'x';
 		rp += hex_encode(VARDATA_ANY(vlena), VARSIZE_ANY_EXHDR(vlena), rp);
@@ -366,7 +366,7 @@ byteaout(PG_FUNCTION_ARGS)
 	{
 		/* Print traditional escaped format */
 		char	   *vp;
-		int			len;
+		size_t		len;
 		int			i;
 
 		len = 1;				/* empty string has 1 char */
@@ -380,7 +380,7 @@ byteaout(PG_FUNCTION_ARGS)
 			else
 				len++;
 		}
-		rp = result = (char *) palloc(len);
+		rp = result = (char *) palloc_extended(len, MCXT_ALLOC_HUGE);
 		vp = VARDATA_ANY(vlena);
 		for (i = VARSIZE_ANY_EXHDR(vlena); i != 0; i--, vp++)
 		{

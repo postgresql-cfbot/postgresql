@@ -1032,6 +1032,86 @@ explain (costs off)
   select * from boolindex where not b order by i limit 10;
 
 --
+-- Check for duplicate indexkey with different opclasses
+--
+-- opclass that doesn't have function 9 (GIST_FETCH_PROC) for GiST
+CREATE OPERATOR CLASS test_inet_ops FOR TYPE inet USING gist AS
+        OPERATOR        3       &&,
+        FUNCTION        1       inet_gist_consistent (internal, inet, smallint, oid, internal),
+        FUNCTION        2       inet_gist_union (internal, internal),
+        FUNCTION        3       inet_gist_compress (internal),
+        FUNCTION        4       inet_gist_decompress (internal),
+        FUNCTION        5       inet_gist_penalty (internal, internal, internal),
+        FUNCTION        6       inet_gist_picksplit (internal, internal),
+        FUNCTION        7       inet_gist_same (inet, inet, internal);
+CREATE TABLE t (a inet);
+CREATE INDEX ON t USING gist (a test_inet_ops, a inet_ops);
+INSERT INTO t VALUES ('192.168.0.1');
+VACUUM t;
+SELECT * FROM t WHERE a && '192.168.0.1'; -- should retuan a value
+-- enfoce GiST
+SET enable_seqscan TO false;
+SET enable_bitmapscan TO false;
+EXPLAIN (COSTS OFF) SELECT * FROM t WHERE a && '192.168.0.1'; -- shoudn't be index only scan
+SELECT * FROM t WHERE a && '192.168.0.1'; -- also should return a value
+-- cleanup
+DROP TABLE t;
+DROP OPERATOR CLASS test_inet_ops USING gist;
+
+--
+-- Check for duplicate indexkey with different opclasses
+--
+-- opclass that doesn't have function 9 (GIST_FETCH_PROC) for GiST
+CREATE OPERATOR CLASS test_inet_ops FOR TYPE inet USING gist AS
+        OPERATOR        3       &&,
+        FUNCTION        1       inet_gist_consistent (internal, inet, integer, oid, internal),
+        FUNCTION        2       inet_gist_union (internal, internal),
+        FUNCTION        3       inet_gist_compress (internal),
+        FUNCTION        4       inet_gist_decompress (internal),
+        FUNCTION        5       inet_gist_penalty (internal, internal, internal),
+        FUNCTION        6       inet_gist_picksplit (internal, internal),
+        FUNCTION        7       inet_gist_same (inet, inet, internal);
+CREATE TABLE t (a inet);
+CREATE INDEX ON t USING gist (a test_inet_ops, a inet_ops);
+INSERT INTO t VALUES ('192.168.0.1');
+VACUUM t;
+SELECT * FROM t WHERE a && '192.168.0.1'; -- should retuan a value
+-- enfoce GiST
+SET enable_seqscan TO false;
+SET enable_bitmapscan TO false;
+EXPLAIN (COSTS OFF) SELECT * FROM t WHERE a && '192.168.0.1'; -- shoudn't be index only scan
+SELECT * FROM t WHERE a && '192.168.0.1'; -- also should return a value
+-- cleanup
+DROP TABLE t;
+DROP OPERATOR CLASS test_inet_ops USING gist;
+
+--
+-- Check for duplicate indexkey with different opclasses
+--
+-- opclass that doesn't have function 9 (GIST_FETCH_PROC) for GiST
+CREATE OPERATOR CLASS test_inet_ops FOR TYPE inet USING gist AS
+        OPERATOR        3       &&,
+        FUNCTION        1       inet_gist_consistent (internal, inet, smallint, oid, internal),
+        FUNCTION        2       inet_gist_union (internal, internal),
+        FUNCTION        3       inet_gist_compress (internal),
+        FUNCTION        5       inet_gist_penalty (internal, internal, internal),
+        FUNCTION        6       inet_gist_picksplit (internal, internal),
+        FUNCTION        7       inet_gist_same (inet, inet, internal);
+CREATE TABLE t (a inet);
+CREATE INDEX ON t USING gist (a test_inet_ops, a inet_ops);
+INSERT INTO t VALUES ('192.168.0.1');
+VACUUM t;
+SELECT * FROM t WHERE a && '192.168.0.1'; -- should retuan a value
+-- enfoce GiST
+SET enable_seqscan TO false;
+SET enable_bitmapscan TO false;
+EXPLAIN (COSTS OFF) SELECT * FROM t WHERE a && '192.168.0.1'; -- shoudn't be index only scan
+SELECT * FROM t WHERE a && '192.168.0.1'; -- also should return a value
+-- cleanup
+DROP TABLE t;
+DROP OPERATOR CLASS test_inet_ops USING gist;
+
+--
 -- REINDEX (VERBOSE)
 --
 CREATE TABLE reindex_verbose(id integer primary key);

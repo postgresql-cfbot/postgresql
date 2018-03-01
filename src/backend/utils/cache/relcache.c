@@ -1848,8 +1848,8 @@ LookupOpclassInfo(Oid operatorClassOid,
  *		catalogs.
  *
  * formrdesc is currently used for: pg_database, pg_authid, pg_auth_members,
- * pg_shseclabel, pg_class, pg_attribute, pg_proc, and pg_type
- * (see RelationCacheInitializePhase2/3).
+ * pg_shseclabel, pg_subscription, pg_class, pg_attribute, pg_proc, and
+ * pg_type (see RelationCacheInitializePhase2/3).
  *
  * Note that these catalogs can't have constraints (except attnotnull),
  * default values, rules, or triggers, since we don't cope with any of that.

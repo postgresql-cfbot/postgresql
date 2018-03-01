@@ -82,4 +82,8 @@ extern shm_mq_result shm_mq_wait_for_attach(shm_mq_handle *mqh);
 /* Smallest possible queue. */
 extern PGDLLIMPORT const Size shm_mq_minimum_size;
 
+/* Routines and structures required for local and shared queue type architecture */
+extern void empty_queue(shm_mq_handle *mqh);
+struct local_mq;
+typedef struct local_mq local_mq;
 #endif							/* SHM_MQ_H */

@@ -31,6 +31,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "parser/parse_type.h"
 #include "parser/scansup.h"
 #include "postmaster/syslogger.h"
 #include "rewrite/rewriteHandler.h"
@@ -996,4 +997,25 @@ pg_get_replica_identity_index(PG_FUNCTION_ARGS)
 		PG_RETURN_OID(idxoid);
 	else
 		PG_RETURN_NULL();
+}
+
+/*
+ * pg_to_typemod - extracts typemod from "typename"
+ *
+ * This functions suplements to_regtype to obtain the required arguments for
+ * format_type(type_oid, typemod).
+ */
+Datum
+pg_to_typemod(PG_FUNCTION_ARGS)
+{
+	char	   *typ_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	Oid			oid;
+	int32		result;
+
+	parseTypeString(typ_name, &oid, &result, true);
+
+  if (OidIsValid(oid))
+	  PG_RETURN_INT32(result);
+	else
+	  PG_RETURN_NULL();
 }

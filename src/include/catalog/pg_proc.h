@@ -1222,6 +1222,8 @@ DATA(insert OID = 972  (  hashbpcharextended PGNSP PGUID 12 1 0 0 0 f f f f t f 
 DESCR("hash");
 DATA(insert OID = 1081 (  format_type	   PGNSP PGUID 12 1 0 0 0 f f f f f f s s 2 0 25 "26 23" _null_ _null_ _null_ _null_ _null_ format_type _null_ _null_ _null_ ));
 DESCR("format a type oid and atttypmod to canonical SQL");
+DATA(insert OID = 4569 (  pg_to_typemod	   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 23 "25" _null_ _null_ _null_ _null_ _null_ pg_to_typemod _null_ _null_ _null_ ));
+DESCR("get the typemod of the named type");
 DATA(insert OID = 1084 (  date_in		   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 1082 "2275" _null_ _null_ _null_ _null_ _null_ date_in _null_ _null_ _null_ ));
 DESCR("I/O");
 DATA(insert OID = 1085 (  date_out		   PGNSP PGUID 12 1 0 0 0 f f f f t f s s 1 0 2275 "1082" _null_ _null_ _null_ _null_ _null_ date_out _null_ _null_ _null_ ));

@@ -1908,6 +1908,18 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        </itemizedlist>
      </entry>
     </row>
+    <row>
+     <entry><structfield>sync_replay</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Synchronous replay state of this standby server.  This field will
+     be non-null only if <varname>synchronous_replay_max_lag</varname> is set.
+     If a standby is in <literal>available</literal> state, then it can
+     currently serve synchronous replay queries.  If it is not replaying fast
+     enough or not responding to keepalive messages, it will be
+     in <literal>unavailable</literal> state, and if it is currently
+     transitioning to availability it will be in <literal>joining</literal>
+     state for a short time.</entry>
+    </row>
    </tbody>
    </tgroup>
   </table>

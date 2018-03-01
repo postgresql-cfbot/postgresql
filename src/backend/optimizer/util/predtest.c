@@ -1407,6 +1407,11 @@ static const StrategyNumber BT_refute_table[6][6] = {
 	{none, none, BTEQ, none, none, none}	/* NE */
 };
 
+/* Strip expr of the surrounding RelabelType, if any. */
+#define strip_relabel(expr) \
+		((Node *) (IsA((expr), RelabelType) \
+					? ((RelabelType *) (expr))->arg \
+					: (expr)))
 
 /*
  * operator_predicate_proof
@@ -1503,10 +1508,10 @@ operator_predicate_proof(Expr *predicate, Node *clause, bool refute_it)
 	/*
 	 * We have to match up at least one pair of input expressions.
 	 */
-	pred_leftop = (Node *) linitial(pred_opexpr->args);
-	pred_rightop = (Node *) lsecond(pred_opexpr->args);
-	clause_leftop = (Node *) linitial(clause_opexpr->args);
-	clause_rightop = (Node *) lsecond(clause_opexpr->args);
+	pred_leftop = strip_relabel(linitial(pred_opexpr->args));
+	pred_rightop = strip_relabel(lsecond(pred_opexpr->args));
+	clause_leftop = strip_relabel(linitial(clause_opexpr->args));
+	clause_rightop = strip_relabel(lsecond(clause_opexpr->args));
 
 	if (equal(pred_leftop, clause_leftop))
 	{

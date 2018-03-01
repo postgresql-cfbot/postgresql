@@ -150,3 +150,8 @@ vacuum btree_tall_tbl;
 -- need to insert some rows to cause the fast root page to split.
 insert into btree_tall_tbl (id, t)
   select g, repeat('x', 100) from generate_series(1, 500) g;
+-- Test unsupported btree opclass parameters
+create index on btree_tall_tbl (id int4_ops(foo=1));
+ERROR:  access method "btree" does not support opclass options 
+create index on btree_tall_tbl (id default(foo=1));
+ERROR:  access method "btree" does not support opclass options 

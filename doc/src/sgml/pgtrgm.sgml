@@ -267,6 +267,15 @@ CREATE INDEX trgm_idx ON test_trgm USING GIN (t gin_trgm_ops);
   </para>
 
   <para>
+   GiST opclass <literal>gist_trgm_ops</literal> has one optional parameter
+   <literal>siglen</literal> for specifying signature length in bytes
+   (default signature length is 12 bytes, maximal length is 488 bytes):
+<programlisting>  
+CREATE INDEX trgm_idx ON test_trgm USING GIST (t gist_trgm_ops(siglen=32));
+</programlisting>
+  </para>
+
+  <para>
    At this point, you will have an index on the <structfield>t</structfield> column that
    you can use for similarity searching.  A typical query is
 <programlisting>

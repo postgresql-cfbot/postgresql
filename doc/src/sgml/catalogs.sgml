@@ -3874,6 +3874,17 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        partial index.
       </entry>
      </row>
+
+     <row>
+      <entry><structfield>indoptions</structfield></entry>
+      <entry><type>text[]</type></entry>
+      <entry></entry>
+      <entry>
+       This is an array of <structfield>indnatts</structfield> strings that
+       store per-column opclass options or null.  Each array element is a
+       serialized array of column's opclass options in reloptions format or null.
+      </entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

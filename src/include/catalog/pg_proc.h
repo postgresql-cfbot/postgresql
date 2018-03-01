@@ -4756,22 +4756,24 @@ DATA(insert OID = 3635 (  ts_match_qv			PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2
 DATA(insert OID = 3760 (  ts_match_tt			PGNSP PGUID 12 100 0 0 0 f f f f t f s s 2 0 16 "25 25" _null_ _null_ _null_ _null_ _null_ ts_match_tt _null_ _null_ _null_ ));
 DATA(insert OID = 3761 (  ts_match_tq			PGNSP PGUID 12 100 0 0 0 f f f f t f s s 2 0 16 "25 3615" _null_ _null_ _null_ _null_ _null_ ts_match_tq _null_ _null_ _null_ ));
 
-DATA(insert OID = 3648 (  gtsvector_compress	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ gtsvector_compress _null_ _null_ _null_ ));
+DATA(insert OID = 3648 (  gtsvector_compress	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_compress _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3649 (  gtsvector_decompress	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 1 0 2281 "2281" _null_ _null_ _null_ _null_ _null_ gtsvector_decompress _null_ _null_ _null_ ));
+DATA(insert OID = 3649 (  gtsvector_decompress	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_decompress _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3650 (  gtsvector_picksplit	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_picksplit _null_ _null_ _null_ ));
+DATA(insert OID = 3650 (  gtsvector_picksplit	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 2281 "2281 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_picksplit _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3651 (  gtsvector_union		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 3642 "2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_union _null_ _null_ _null_ ));
+DATA(insert OID = 3651 (  gtsvector_union		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 3642 "2281 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_union _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3652 (  gtsvector_same		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 2281 "3642 3642 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_same _null_ _null_ _null_ ));
+DATA(insert OID = 3652 (  gtsvector_same		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "3642 3642 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_same _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3653 (  gtsvector_penalty		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 2281 "2281 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_penalty _null_ _null_ _null_ ));
+DATA(insert OID = 3653 (  gtsvector_penalty		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 4 0 2281 "2281 2281 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_penalty _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
-DATA(insert OID = 3654 (  gtsvector_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 5 0 16 "2281 3614 21 26 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_consistent _null_ _null_ _null_ ));
+DATA(insert OID = 3654 (  gtsvector_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 6 0 16 "2281 3614 21 26 2281 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_consistent _null_ _null_ _null_ ));
 DESCR("GiST tsvector support");
 DATA(insert OID = 3790 (  gtsvector_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 5 0 16 "2281 3642 23 26 2281" _null_ _null_ _null_ _null_ _null_ gtsvector_consistent_oldsig _null_ _null_ _null_ ));
 DESCR("GiST tsvector support (obsolete)");
+DATA(insert OID = 3696 (  gtsvector_options		PGNSP PGUID 12 1 0 0 0 f f f f t f i s 2 0 2281 "2281 16" _null_ _null_ _null_ _null_ _null_ gtsvector_options _null_ _null_ _null_ ));
+DESCR("GiST tsvector support");
 
 DATA(insert OID = 3656 (  gin_extract_tsvector	PGNSP PGUID 12 1 0 0 0 f f f f t f i s 3 0 2281 "3614 2281 2281" _null_ _null_ _null_ _null_ _null_ gin_extract_tsvector _null_ _null_ _null_ ));
 DESCR("GIN tsvector support");

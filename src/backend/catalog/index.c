@@ -25,6 +25,7 @@
 
 #include "access/amapi.h"
 #include "access/multixact.h"
+#include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/transam.h"
@@ -586,6 +587,7 @@ UpdateIndexRelation(Oid indexoid,
 	int2vector *indoption;
 	Datum		exprsDatum;
 	Datum		predDatum;
+	Datum		indoptionsDatum;
 	Datum		values[Natts_pg_index];
 	bool		nulls[Natts_pg_index];
 	Relation	pg_index;
@@ -632,6 +634,53 @@ UpdateIndexRelation(Oid indexoid,
 	else
 		predDatum = (Datum) 0;
 
+	if (indexInfo->ii_OpclassOptions != NULL)
+	{
+		Datum	   *vals = palloc(sizeof(Datum) * indexInfo->ii_NumIndexAttrs);
+		bool	   *nulls = palloc(sizeof(bool) * indexInfo->ii_NumIndexAttrs);
+		int			dims[1];
+		int			lbs[1];
+
+		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+		{
+			Datum		options = indexInfo->ii_OpclassOptions[i];
+
+			nulls[i] = options == (Datum) 0;
+
+			if (!nulls[i])
+			{
+				FunctionCallInfoData fcinfo;
+				Datum		result;
+				FmgrInfo	flinfo = { 0 };
+
+				InitFunctionCallInfoData(fcinfo, &flinfo, 1, InvalidOid, NULL,
+										 NULL);
+
+				fcinfo.arg[0] = options;
+				fcinfo.argnull[0] = false;
+
+				flinfo.fn_mcxt = CurrentMemoryContext;
+
+				result = array_out(&fcinfo);
+
+				/* Check for null result, since caller is clearly not expecting one */
+				if (fcinfo.isnull)
+					elog(ERROR, "function %p returned NULL", (void *) array_out);
+
+				vals[i] = CStringGetTextDatum(DatumGetCString(result));
+			}
+		}
+
+		dims[0] = indexInfo->ii_NumIndexAttrs;
+		lbs[0] = 1;
+
+		indoptionsDatum = PointerGetDatum(construct_md_array(vals, nulls, 1,
+															 dims, lbs, TEXTOID,
+															 -1, false, 'i'));
+	}
+	else
+		indoptionsDatum = (Datum) 0;
+
 	/*
 	 * open the system catalog index relation
 	 */
@@ -665,6 +714,9 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indpred - 1] = predDatum;
 	if (predDatum == (Datum) 0)
 		nulls[Anum_pg_index_indpred - 1] = true;
+	values[Anum_pg_index_indoptions - 1] = indoptionsDatum;
+	if (indoptionsDatum == (Datum) 0)
+		nulls[Anum_pg_index_indoptions - 1] = true;
 
 	tuple = heap_form_tuple(RelationGetDescr(pg_index), values, nulls);
 
@@ -1139,6 +1191,12 @@ index_create(Relation heapRelation,
 		RelationInitIndexAccessInfo(indexRelation);
 	else
 		Assert(indexRelation->rd_indexcxt != NULL);
+
+	/* Validate opclass-specific options */
+	if (indexInfo->ii_OpclassOptions)
+		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+			(void) index_opclass_options(indexRelation, i + 1,
+										 indexInfo->ii_OpclassOptions[i], true);
 
 	/*
 	 * If this is bootstrap (initdb) time, then we don't actually fill in the
@@ -1776,6 +1834,8 @@ BuildIndexInfo(Relation index)
 		ii->ii_ExclusionProcs = NULL;
 		ii->ii_ExclusionStrats = NULL;
 	}
+
+	ii->ii_OpclassOptions = RelationGetRawOpclassOptions(index);
 
 	/* other info */
 	ii->ii_Unique = indexStruct->indisunique;

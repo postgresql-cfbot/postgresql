@@ -259,14 +259,22 @@
   </para>
 
   <para>
-   Two GiST index operator classes are provided:
-   <literal>gist__int_ops</literal> (used by default) is suitable for
+   Two parametrized GiST index operator classes are provided:
+   <literal>gist__int_ops(numranges)</literal> (used by default) is suitable for
    small- to medium-size data sets, while
-   <literal>gist__intbig_ops</literal> uses a larger signature and is more
+   <literal>gist__intbig_ops(siglen)</literal> uses a larger signature and is more
    suitable for indexing large data sets (i.e., columns containing
    a large number of distinct array values).
    The implementation uses an RD-tree data structure with
    built-in lossy compression.
+   
+   Optional integer parameter <literal>numranges</literal> of 
+   <literal>gist__int_ops</literal> determines 
+   number of ranges in compressed array (100 by default).
+   
+   Optional integer parameter <literal>siglen</literal> of 
+   <literal>gist__intbig_ops</literal> determines
+   signature length in bytes (252 by default, 488 maximum).
   </para>
 
   <para>

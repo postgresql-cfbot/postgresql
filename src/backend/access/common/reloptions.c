@@ -1007,6 +1007,60 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 	return options;
 }
 
+static void
+parseRelOptionsInternal(Datum options, bool validate,
+				 relopt_value *reloptions, int numoptions)
+{
+	ArrayType  *array = DatumGetArrayTypeP(options);
+	Datum	   *optiondatums;
+	int			noptions;
+	int			i;
+
+	deconstruct_array(array, TEXTOID, -1, false, 'i',
+					  &optiondatums, NULL, &noptions);
+
+	for (i = 0; i < noptions; i++)
+	{
+		char	   *text_str = VARDATA(optiondatums[i]);
+		int			text_len = VARSIZE(optiondatums[i]) - VARHDRSZ;
+		int			j;
+
+		/* Search for a match in reloptions */
+		for (j = 0; j < numoptions; j++)
+		{
+			int			kw_len = reloptions[j].gen->namelen;
+
+			if (text_len > kw_len && text_str[kw_len] == '=' &&
+				strncmp(text_str, reloptions[j].gen->name, kw_len) == 0)
+			{
+				parse_one_reloption(&reloptions[j], text_str, text_len,
+									validate);
+				break;
+			}
+		}
+
+		if (j >= numoptions && validate)
+		{
+			char	   *s;
+			char	   *p;
+
+			s = TextDatumGetCString(optiondatums[i]);
+			p = strchr(s, '=');
+			if (p)
+				*p = '\0';
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unrecognized parameter \"%s\"", s)));
+		}
+	}
+
+	/* It's worth avoiding memory leaks in this function */
+	pfree(optiondatums);
+
+	if (((void *) array) != DatumGetPointer(options))
+		pfree(array);
+}
+
 /*
  * Interpret reloptions that are given in text-array format.
  *
@@ -1061,57 +1115,61 @@ parseRelOptions(Datum options, bool validate, relopt_kind kind,
 
 	/* Done if no options */
 	if (PointerIsValid(DatumGetPointer(options)))
-	{
-		ArrayType  *array = DatumGetArrayTypeP(options);
-		Datum	   *optiondatums;
-		int			noptions;
-
-		deconstruct_array(array, TEXTOID, -1, false, 'i',
-						  &optiondatums, NULL, &noptions);
-
-		for (i = 0; i < noptions; i++)
-		{
-			char	   *text_str = VARDATA(optiondatums[i]);
-			int			text_len = VARSIZE(optiondatums[i]) - VARHDRSZ;
-			int			j;
-
-			/* Search for a match in reloptions */
-			for (j = 0; j < numoptions; j++)
-			{
-				int			kw_len = reloptions[j].gen->namelen;
-
-				if (text_len > kw_len && text_str[kw_len] == '=' &&
-					strncmp(text_str, reloptions[j].gen->name, kw_len) == 0)
-				{
-					parse_one_reloption(&reloptions[j], text_str, text_len,
-										validate);
-					break;
-				}
-			}
-
-			if (j >= numoptions && validate)
-			{
-				char	   *s;
-				char	   *p;
-
-				s = TextDatumGetCString(optiondatums[i]);
-				p = strchr(s, '=');
-				if (p)
-					*p = '\0';
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized parameter \"%s\"", s)));
-			}
-		}
-
-		/* It's worth avoiding memory leaks in this function */
-		pfree(optiondatums);
-		if (((void *) array) != DatumGetPointer(options))
-			pfree(array);
-	}
+		parseRelOptionsInternal(options, validate, reloptions, numoptions);
 
 	*numrelopts = numoptions;
 	return reloptions;
+}
+
+/* Parse local unregistered options. */
+relopt_value *
+parseLocalRelOptions(Datum options, bool validate,
+					 relopt_gen *optgen[], int nopts)
+{
+	relopt_value *values = palloc(sizeof(*values) * nopts);
+	int			i;
+
+	for (i = 0; i < nopts; i++)
+	{
+		values[i].gen = optgen[i];
+		values[i].isset = false;
+	}
+
+	if (options != (Datum) 0)
+		parseRelOptionsInternal(options, validate, values, nopts);
+
+	return values;
+}
+
+/*
+ * Parse local options, allocate a bytea struct that's of the specified
+ * 'base_size' plus any extra space that's needed for string variables,
+ * fill its option's fields located at the given offsets and return it.
+ */
+void *
+parseAndFillLocalRelOptions(Datum options, relopt_gen *optgen[], int offsets[],
+							int noptions, size_t base_size, bool validate)
+{
+	relopt_parse_elt *elems = palloc(sizeof(*elems) * noptions);
+	relopt_value *vals;
+	void	   *opts;
+	int			i;
+
+	for (i = 0; i < noptions; i++)
+	{
+		elems[i].optname = optgen[i]->name;
+		elems[i].opttype = optgen[i]->type;
+		elems[i].offset = offsets[i];
+	}
+
+	vals = parseLocalRelOptions(options, validate, optgen, noptions);
+	opts = allocateReloptStruct(base_size, vals, noptions);
+	fillRelOptions(opts, base_size, vals, noptions, validate, elems, noptions);
+
+	if (elems)
+		pfree(elems);
+
+	return opts;
 }
 
 /*

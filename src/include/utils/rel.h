@@ -191,6 +191,7 @@ typedef struct RelationData
 	uint16	   *rd_exclstrats;	/* exclusion ops' strategy numbers, if any */
 	void	   *rd_amcache;		/* available for use by index AM */
 	Oid		   *rd_indcollation;	/* OIDs of index collations */
+	bytea	  **rd_indoptions;	/* parsed opclass-specific options */
 
 	/*
 	 * foreign-table support

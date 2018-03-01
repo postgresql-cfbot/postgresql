@@ -353,6 +353,10 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->nulls_first = NULL;
 			}
 
+			/* Fetch index opclass options */
+			info->opclassoptions =
+				RelationGetParsedOpclassOptions(indexRelation);
+
 			/*
 			 * Fetch the index expressions and predicate, if any.  We must
 			 * modify the copies we obtain from the relcache to have the

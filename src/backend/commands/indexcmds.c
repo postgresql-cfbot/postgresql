@@ -612,6 +612,7 @@ DefineIndex(Oid relationId,
 	indexInfo->ii_ExclusionOps = NULL;
 	indexInfo->ii_ExclusionProcs = NULL;
 	indexInfo->ii_ExclusionStrats = NULL;
+	indexInfo->ii_OpclassOptions = NULL;	/* for now */
 	indexInfo->ii_Unique = stmt->unique;
 	/* In a concurrent build, mark it not-ready-for-inserts */
 	indexInfo->ii_ReadyForInserts = !stmt->concurrent;
@@ -1348,12 +1349,11 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 	ListCell   *nextExclOp;
 	ListCell   *lc;
 	int			attn;
+	int			ncols = list_length(attList);
 
 	/* Allocate space for exclusion operator info, if needed */
 	if (exclusionOpNames)
 	{
-		int			ncols = list_length(attList);
-
 		Assert(list_length(exclusionOpNames) == ncols);
 		indexInfo->ii_ExclusionOps = (Oid *) palloc(sizeof(Oid) * ncols);
 		indexInfo->ii_ExclusionProcs = (Oid *) palloc(sizeof(Oid) * ncols);
@@ -1592,6 +1592,17 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("access method \"%s\" does not support NULLS FIRST/LAST options",
 								accessMethodName)));
+		}
+
+		/* Set up the per-column opclass options (indoptions field). */
+		if (attribute->opclassopts)
+		{
+			if (!indexInfo->ii_OpclassOptions)
+				indexInfo->ii_OpclassOptions = palloc0(sizeof(Datum) * ncols);
+
+			indexInfo->ii_OpclassOptions[attn] =
+				transformRelOptions((Datum) 0, attribute->opclassopts,
+									NULL, NULL, false, false);
 		}
 
 		attn++;

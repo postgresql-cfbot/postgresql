@@ -77,6 +77,7 @@
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -5210,6 +5211,185 @@ GetRelationPublicationActions(Relation relation)
 
 	return pubactions;
 }
+
+/*
+ * RelationGetOpclassOptions -- get parsed opclass-specific options for an index
+ */
+bytea **
+RelationGetParsedOpclassOptions(Relation relation)
+{
+	MemoryContext oldcxt;
+	bytea	  **opts;
+	Datum		indoptionsDatum;
+	Datum	   *indoptions;
+	bool	   *indoptionsnulls;
+	int			indoptionsnum;
+	int			i;
+	int			ncols = relation->rd_rel->relnatts;
+	bool		isnull;
+
+	if (relation->rd_indoptions)
+	{
+		opts = palloc(sizeof(*opts) * ncols);
+
+		for (i = 0; i < ncols; i++)
+		{
+			bytea	   *opt = relation->rd_indoptions[i];
+
+			opts[i] = !opt ? NULL : (bytea *)
+				DatumGetPointer(datumCopy(PointerGetDatum(opt), false, -1));
+		}
+
+		return opts;
+	}
+
+	opts = palloc0(sizeof(*opts) * ncols);
+
+	if (relation->rd_indextuple == NULL ||
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indoptions))
+	{
+		indoptions = NULL;
+		indoptionsnulls = NULL;
+		indoptionsnum = 0;
+	}
+	else
+	{
+		indoptionsDatum = heap_getattr(relation->rd_indextuple,
+									   Anum_pg_index_indoptions,
+									   GetPgIndexDescriptor(),
+									   &isnull);
+		Assert(!isnull);
+
+		deconstruct_array(DatumGetArrayTypeP(indoptionsDatum),
+						  TEXTOID, -1, false, 'i',
+						  &indoptions, &indoptionsnulls, &indoptionsnum);
+
+		Assert(indoptionsnum == ncols);
+	}
+
+	for (i = 0; i < ncols; i++)
+	{
+		Datum		options;
+
+		if (i < indoptionsnum && !indoptionsnulls[i])
+		{
+			FunctionCallInfoData fcinfo;
+			FmgrInfo	flinfo = { 0 };
+			char	   *optionsstr = TextDatumGetCString(indoptions[i]);
+
+			InitFunctionCallInfoData(fcinfo, &flinfo, 3, InvalidOid, NULL, NULL);
+
+			fcinfo.arg[0] = CStringGetDatum(optionsstr);
+			fcinfo.argnull[0] = false;
+			fcinfo.arg[1] = Int32GetDatum(TEXTOID);
+			fcinfo.argnull[1] = false;
+			fcinfo.arg[2] = Int32GetDatum(-1);
+			fcinfo.argnull[2] = false;
+
+			flinfo.fn_mcxt = CurrentMemoryContext;
+
+			options = array_in(&fcinfo);
+
+			if (fcinfo.isnull)
+				elog(ERROR, "function %p returned NULL", (void *) array_in);
+
+			pfree(optionsstr);
+		}
+		else
+		{
+			options = PointerGetDatum(NULL);
+		}
+
+		opts[i] = index_opclass_options(relation, i + 1, options, false);
+
+		if (options != PointerGetDatum(NULL))
+			pfree(DatumGetPointer(options));
+	}
+
+	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+
+	relation->rd_indoptions = palloc(sizeof(*opts) * ncols);
+
+	for (i = 0; i < ncols; i++)
+		relation->rd_indoptions[i] = !opts[i] ? NULL : (bytea *)
+			DatumGetPointer(datumCopy(PointerGetDatum(opts[i]), false, -1));
+
+	MemoryContextSwitchTo(oldcxt);
+
+	return opts;
+}
+
+Datum *
+ExtractRawOpclassOptions(Datum indoptionsDatum, int ncols)
+{
+	Datum	   *indoptions;
+	bool	   *indoptionsnulls;
+	int			indoptionsnum;
+	int			i;
+
+	deconstruct_array(DatumGetArrayTypeP(indoptionsDatum),
+					  TEXTOID, -1, false, 'i',
+					  &indoptions, &indoptionsnulls, &indoptionsnum);
+
+	Assert(indoptionsnum == ncols);
+
+	for (i = 0; i < indoptionsnum; i++)
+	{
+		if (indoptionsnulls[i])
+			indoptions[i] = PointerGetDatum(NULL);
+		else
+		{
+			FunctionCallInfoData fcinfo;
+			FmgrInfo	flinfo = { 0 };
+			char	   *optionsstr = TextDatumGetCString(indoptions[i]);
+
+			InitFunctionCallInfoData(fcinfo, &flinfo, 3, InvalidOid, NULL,
+									 NULL);
+
+			fcinfo.arg[0] = CStringGetDatum(optionsstr);
+			fcinfo.argnull[0] = false;
+			fcinfo.arg[1] = Int32GetDatum(TEXTOID);
+			fcinfo.argnull[1] = false;
+			fcinfo.arg[2] = Int32GetDatum(-1);
+			fcinfo.argnull[2] = false;
+
+			flinfo.fn_mcxt = CurrentMemoryContext;
+
+			indoptions[i] = array_in(&fcinfo);
+
+			/* Check for null result, since caller is clearly not expecting one */
+			if (fcinfo.isnull)
+				elog(ERROR, "function %p returned NULL", (void *) array_in);
+		}
+	}
+
+	return indoptions;
+}
+
+/*
+ * RelationGetIndexOpclassOptions -- get opclass-specific options for an index
+ */
+Datum *
+RelationGetRawOpclassOptions(Relation relation)
+{
+	Datum		indoptionsDatum;
+	bool		isnull;
+
+	/* Quick exit if there is nothing to do. */
+	if (relation->rd_indextuple == NULL ||
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indoptions))
+		return NULL;
+
+	indoptionsDatum = heap_getattr(relation->rd_indextuple,
+								   Anum_pg_index_indoptions,
+								   GetPgIndexDescriptor(),
+								   &isnull);
+	Assert(!isnull);
+
+	return ExtractRawOpclassOptions(indoptionsDatum,
+									relation->rd_rel->relnatts);
+}
+
 
 /*
  * Routines to support ereport() reports of relation-related errors

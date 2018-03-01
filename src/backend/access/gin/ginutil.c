@@ -61,6 +61,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = gincostestimate;
 	amroutine->amoptions = ginoptions;
+	amroutine->amopclassoptions = ginopclassoptions;
 	amroutine->amproperty = NULL;
 	amroutine->amvalidate = ginvalidate;
 	amroutine->ambeginscan = ginbeginscan;
@@ -93,6 +94,7 @@ initGinState(GinState *state, Relation index)
 	state->index = index;
 	state->oneCol = (origTupdesc->natts == 1) ? true : false;
 	state->origTupdesc = origTupdesc;
+	state->opclassOptions = RelationGetParsedOpclassOptions(index);
 
 	for (i = 0; i < origTupdesc->natts; i++)
 	{
@@ -401,9 +403,10 @@ ginCompareEntries(GinState *ginstate, OffsetNumber attnum,
 		return 0;
 
 	/* both not null, so safe to call the compareFn */
-	return DatumGetInt32(FunctionCall2Coll(&ginstate->compareFn[attnum - 1],
+	return DatumGetInt32(FunctionCall3Coll(&ginstate->compareFn[attnum - 1],
 										   ginstate->supportCollation[attnum - 1],
-										   a, b));
+										   a, b,
+										   PointerGetDatum(ginstate->opclassOptions[attnum - 1])));
 }
 
 /*
@@ -439,6 +442,7 @@ typedef struct
 {
 	FmgrInfo   *cmpDatumFunc;
 	Oid			collation;
+	Datum		options;
 	bool		haveDups;
 } cmpEntriesArg;
 
@@ -460,9 +464,10 @@ cmpEntries(const void *a, const void *b, void *arg)
 	else if (bb->isnull)
 		res = -1;				/* not-NULL "<" NULL */
 	else
-		res = DatumGetInt32(FunctionCall2Coll(data->cmpDatumFunc,
+		res = DatumGetInt32(FunctionCall3Coll(data->cmpDatumFunc,
 											  data->collation,
-											  aa->datum, bb->datum));
+											  aa->datum, bb->datum,
+											  data->options));
 
 	/*
 	 * Detect if we have any duplicates.  If there are equal keys, qsort must
@@ -508,11 +513,12 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 	/* OK, call the opclass's extractValueFn */
 	nullFlags = NULL;			/* in case extractValue doesn't set it */
 	entries = (Datum *)
-		DatumGetPointer(FunctionCall3Coll(&ginstate->extractValueFn[attnum - 1],
+		DatumGetPointer(FunctionCall4Coll(&ginstate->extractValueFn[attnum - 1],
 										  ginstate->supportCollation[attnum - 1],
 										  value,
 										  PointerGetDatum(nentries),
-										  PointerGetDatum(&nullFlags)));
+										  PointerGetDatum(&nullFlags),
+										  PointerGetDatum(ginstate->opclassOptions[attnum - 1])));
 
 	/*
 	 * Generate a placeholder if the item contained no keys.
@@ -555,6 +561,7 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 
 		arg.cmpDatumFunc = &ginstate->compareFn[attnum - 1];
 		arg.collation = ginstate->supportCollation[attnum - 1];
+		arg.options = PointerGetDatum(ginstate->opclassOptions[attnum - 1]);
 		arg.haveDups = false;
 		qsort_arg(keydata, *nentries, sizeof(keyEntryData),
 				  cmpEntries, (void *) &arg);
@@ -628,6 +635,14 @@ ginoptions(Datum reloptions, bool validate)
 	pfree(options);
 
 	return (bytea *) rdopts;
+}
+
+bytea *
+ginopclassoptions(Relation index, AttrNumber colno, Datum indoptions,
+				  bool validate)
+{
+	return index_opclass_options_generic(index, colno, GIN_OPCLASSOPTIONS_PROC,
+										 indoptions, validate);
 }
 
 /*

@@ -67,6 +67,8 @@ typedef struct GinState
 	TupleDesc	origTupdesc;
 	TupleDesc	tupdesc[INDEX_MAX_KEYS];
 
+	bytea	  **opclassOptions;	/* per-index-column opclass options */
+
 	/*
 	 * Per-index-column opclass support functions
 	 */
@@ -85,6 +87,8 @@ typedef struct GinState
 
 /* ginutil.c */
 extern bytea *ginoptions(Datum reloptions, bool validate);
+extern bytea *ginopclassoptions(Relation index, AttrNumber colno,
+				  Datum indoptions, bool validate);
 extern void initGinState(GinState *state, Relation index);
 extern Buffer GinNewBuffer(Relation index);
 extern void GinInitBuffer(Buffer b, uint32 f);
@@ -297,6 +301,7 @@ typedef struct GinScanKeyData
 	StrategyNumber strategy;
 	int32		searchMode;
 	OffsetNumber attnum;
+	bytea	   *opclassOptions;
 
 	/*
 	 * Match status data.  curItem is the TID most recently tested (could be a

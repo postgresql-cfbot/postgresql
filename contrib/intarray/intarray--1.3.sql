@@ -363,12 +363,12 @@ RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_int_compress(internal)
+CREATE FUNCTION g_int_compress(internal,internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_int_decompress(internal)
+CREATE FUNCTION g_int_decompress(internal,internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
@@ -393,6 +393,10 @@ RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
+CREATE FUNCTION g_int_options(internal, boolean)
+RETURNS internal
+AS 'MODULE_PATHNAME', 'g_int_options'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 -- Create the operator class for indexing
 
@@ -407,11 +411,12 @@ DEFAULT FOR TYPE _int4 USING gist AS
 	OPERATOR	20	@@ (_int4, query_int),
 	FUNCTION	1	g_int_consistent (internal, _int4, smallint, oid, internal),
 	FUNCTION	2	g_int_union (internal, internal),
-	FUNCTION	3	g_int_compress (internal),
-	FUNCTION	4	g_int_decompress (internal),
+	FUNCTION	3	g_int_compress (internal, internal),
+	FUNCTION	4	g_int_decompress (internal, internal),
 	FUNCTION	5	g_int_penalty (internal, internal, internal),
 	FUNCTION	6	g_int_picksplit (internal, internal),
-	FUNCTION	7	g_int_same (_int4, _int4, internal);
+	FUNCTION	7	g_int_same (_int4, _int4, internal),
+	FUNCTION	10	g_int_options (internal, boolean);
 
 
 ---------------------------------------------
@@ -435,39 +440,44 @@ CREATE TYPE intbig_gkey (
         OUTPUT = _intbig_out
 );
 
-CREATE FUNCTION g_intbig_consistent(internal,_int4,smallint,oid,internal)
+CREATE FUNCTION g_intbig_consistent(internal,_int4,smallint,oid,internal,internal)
 RETURNS bool
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_compress(internal)
+CREATE FUNCTION g_intbig_compress(internal, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_decompress(internal)
+CREATE FUNCTION g_intbig_decompress(internal, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_penalty(internal,internal,internal)
+CREATE FUNCTION g_intbig_penalty(internal,internal,internal,internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_picksplit(internal, internal)
+CREATE FUNCTION g_intbig_picksplit(internal, internal, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_union(internal, internal)
+CREATE FUNCTION g_intbig_union(internal, internal, internal)
 RETURNS intbig_gkey
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION g_intbig_same(intbig_gkey, intbig_gkey, internal)
+CREATE FUNCTION g_intbig_same(intbig_gkey, intbig_gkey, internal, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION g_intbig_options(internal, boolean)
+RETURNS internal
+AS 'MODULE_PATHNAME', 'g_intbig_options'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 -- register the opclass for indexing (not as default)
@@ -482,13 +492,14 @@ AS
 	OPERATOR	13	@,
 	OPERATOR	14	~,
 	OPERATOR	20	@@ (_int4, query_int),
-	FUNCTION	1	g_intbig_consistent (internal, _int4, smallint, oid, internal),
-	FUNCTION	2	g_intbig_union (internal, internal),
-	FUNCTION	3	g_intbig_compress (internal),
-	FUNCTION	4	g_intbig_decompress (internal),
-	FUNCTION	5	g_intbig_penalty (internal, internal, internal),
-	FUNCTION	6	g_intbig_picksplit (internal, internal),
-	FUNCTION	7	g_intbig_same (intbig_gkey, intbig_gkey, internal),
+	FUNCTION	1	g_intbig_consistent (internal, _int4, smallint, oid, internal, internal),
+	FUNCTION	2	g_intbig_union (internal, internal, internal),
+	FUNCTION	3	g_intbig_compress (internal, internal),
+	FUNCTION	4	g_intbig_decompress (internal, internal),
+	FUNCTION	5	g_intbig_penalty (internal, internal, internal, internal),
+	FUNCTION	6	g_intbig_picksplit (internal, internal, internal),
+	FUNCTION	7	g_intbig_same (intbig_gkey, intbig_gkey, internal, internal),
+	FUNCTION	10	g_intbig_options (internal, boolean),
 	STORAGE		intbig_gkey;
 
 --GIN

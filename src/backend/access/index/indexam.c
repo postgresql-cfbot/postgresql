@@ -75,11 +75,14 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
+#include "commands/defrem.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/tqual.h"
 
 
@@ -897,4 +900,73 @@ index_getprocinfo(Relation irel,
 	}
 
 	return locinfo;
+}
+
+/*
+ * Parse opclass-specific options for index column.
+ *
+ *	amoptions	index relation
+ *	attnum		column number
+ *	indoptions	options as text[] datum
+ *	validate	error flag
+ */
+bytea *
+index_opclass_options(Relation relation, AttrNumber attnum, Datum indoptions,
+					  bool validate)
+{
+	amopclassoptions_function amopclassoptions =
+		relation->rd_amroutine->amopclassoptions;
+
+	if (!amopclassoptions)
+	{
+		if (validate && PointerIsValid(DatumGetPointer(indoptions)))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("access method \"%s\" does not support opclass options ",
+							 get_am_name(relation->rd_rel->relam))));
+
+		return NULL;
+	}
+
+	return amopclassoptions(relation, attnum, indoptions, validate);
+}
+
+bytea *
+index_opclass_options_generic(Relation indrel, AttrNumber attnum,
+							  uint16 procnum, Datum reloptions, bool validate)
+{
+	Oid			procid = index_getprocid(indrel, attnum, procnum);
+	FmgrInfo   *procinfo;
+
+	if (!OidIsValid(procid))
+	{
+		StringInfoData opclassname;
+		Oid			opclass;
+		Datum		indclassDatum;
+		oidvector  *indclass;
+		bool		isnull;
+
+		if (!DatumGetPointer(reloptions))
+			return NULL;
+
+		indclassDatum = SysCacheGetAttr(INDEXRELID, indrel->rd_indextuple,
+										Anum_pg_index_indclass, &isnull);
+		Assert(!isnull);
+		indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+		opclass = indclass->values[attnum - 1];
+
+		initStringInfo(&opclassname);
+		get_opclass_name(opclass, InvalidOid, &opclassname);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("operator class%s has no options ", opclassname.data)));
+	}
+
+	procinfo = index_getprocinfo(indrel, attnum, procnum);
+
+	return (bytea *) DatumGetPointer(FunctionCall2(procinfo,
+												   reloptions,
+												   BoolGetDatum(validate)));
 }

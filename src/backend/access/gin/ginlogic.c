@@ -76,7 +76,7 @@ directBoolConsistentFn(GinScanKey key)
 	 */
 	key->recheckCurItem = true;
 
-	return DatumGetBool(FunctionCall8Coll(key->consistentFmgrInfo,
+	return DatumGetBool(FunctionCall9Coll(key->consistentFmgrInfo,
 										  key->collation,
 										  PointerGetDatum(key->entryRes),
 										  UInt16GetDatum(key->strategy),
@@ -85,7 +85,8 @@ directBoolConsistentFn(GinScanKey key)
 										  PointerGetDatum(key->extra_data),
 										  PointerGetDatum(&key->recheckCurItem),
 										  PointerGetDatum(key->queryValues),
-										  PointerGetDatum(key->queryCategories)));
+										  PointerGetDatum(key->queryCategories),
+										  PointerGetDatum(key->opclassOptions)));
 }
 
 /*
@@ -94,7 +95,7 @@ directBoolConsistentFn(GinScanKey key)
 static GinTernaryValue
 directTriConsistentFn(GinScanKey key)
 {
-	return DatumGetGinTernaryValue(FunctionCall7Coll(
+	return DatumGetGinTernaryValue(FunctionCall8Coll(
 													 key->triConsistentFmgrInfo,
 													 key->collation,
 													 PointerGetDatum(key->entryRes),
@@ -103,7 +104,8 @@ directTriConsistentFn(GinScanKey key)
 													 UInt32GetDatum(key->nuserentries),
 													 PointerGetDatum(key->extra_data),
 													 PointerGetDatum(key->queryValues),
-													 PointerGetDatum(key->queryCategories)));
+													 PointerGetDatum(key->queryCategories),
+													 PointerGetDatum(key->opclassOptions)));
 }
 
 /*
@@ -116,7 +118,7 @@ shimBoolConsistentFn(GinScanKey key)
 {
 	GinTernaryValue result;
 
-	result = DatumGetGinTernaryValue(FunctionCall7Coll(
+	result = DatumGetGinTernaryValue(FunctionCall8Coll(
 													   key->triConsistentFmgrInfo,
 													   key->collation,
 													   PointerGetDatum(key->entryRes),
@@ -125,7 +127,8 @@ shimBoolConsistentFn(GinScanKey key)
 													   UInt32GetDatum(key->nuserentries),
 													   PointerGetDatum(key->extra_data),
 													   PointerGetDatum(key->queryValues),
-													   PointerGetDatum(key->queryCategories)));
+													   PointerGetDatum(key->queryCategories),
+													   PointerGetDatum(key->opclassOptions)));
 	if (result == GIN_MAYBE)
 	{
 		key->recheckCurItem = true;

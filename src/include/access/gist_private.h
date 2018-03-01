@@ -94,6 +94,8 @@ typedef struct GISTSTATE
 
 	/* Collations to pass to the support functions */
 	Oid			supportCollation[INDEX_MAX_KEYS];
+
+	bytea	  **opclassoptions;	/* parsed opclass-specific options */
 } GISTSTATE;
 
 
@@ -436,6 +438,8 @@ extern bool gistvalidate(Oid opclassoid);
 #define GIST_DEFAULT_FILLFACTOR		90
 
 extern bytea *gistoptions(Datum reloptions, bool validate);
+extern bytea *gistopclassoptions(Relation index, AttrNumber colno,
+				   Datum options, bool validate);
 extern bool gistproperty(Oid index_oid, int attno,
 			 IndexAMProperty prop, const char *propname,
 			 bool *res, bool *isnull);

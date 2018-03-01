@@ -263,12 +263,17 @@ extern bytea *extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 				  amoptions_function amoptions);
 extern relopt_value *parseRelOptions(Datum options, bool validate,
 				relopt_kind kind, int *numrelopts);
+extern relopt_value *parseLocalRelOptions(Datum options, bool validate,
+					 relopt_gen **gen, int nelems);
 extern void *allocateReloptStruct(Size base, relopt_value *options,
 					 int numoptions);
 extern void fillRelOptions(void *rdopts, Size basesize,
 			   relopt_value *options, int numoptions,
 			   bool validate,
 			   const relopt_parse_elt *elems, int nelems);
+extern void *parseAndFillLocalRelOptions(Datum options, relopt_gen *optgen[],
+							int offsets[], int noptions, size_t base_size,
+							bool validate);
 
 extern bytea *default_reloptions(Datum reloptions, bool validate,
 				   relopt_kind kind);

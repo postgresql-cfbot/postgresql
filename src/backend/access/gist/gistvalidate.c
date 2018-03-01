@@ -108,37 +108,46 @@ gistvalidate(Oid opclassoid)
 		{
 			case GIST_CONSISTENT_PROC:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, false,
-											5, 5, INTERNALOID, opcintype,
-											INT2OID, OIDOID, INTERNALOID);
+											5, 6, INTERNALOID, opcintype,
+											INT2OID, OIDOID, INTERNALOID,
+											INTERNALOID);
 				break;
 			case GIST_UNION_PROC:
 				ok = check_amproc_signature(procform->amproc, opckeytype, false,
-											2, 2, INTERNALOID, INTERNALOID);
+											2, 3, INTERNALOID, INTERNALOID,
+											INTERNALOID);
 				break;
 			case GIST_COMPRESS_PROC:
 			case GIST_DECOMPRESS_PROC:
 			case GIST_FETCH_PROC:
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
-											1, 1, INTERNALOID);
+											1, 2, INTERNALOID, INTERNALOID);
 				break;
 			case GIST_PENALTY_PROC:
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
-											3, 3, INTERNALOID,
-											INTERNALOID, INTERNALOID);
+											3, 4, INTERNALOID,
+											INTERNALOID, INTERNALOID,
+											INTERNALOID);
 				break;
 			case GIST_PICKSPLIT_PROC:
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
-											2, 2, INTERNALOID, INTERNALOID);
+											2, 3, INTERNALOID, INTERNALOID,
+											INTERNALOID);
 				break;
 			case GIST_EQUAL_PROC:
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
-											3, 3, opckeytype, opckeytype,
-											INTERNALOID);
+											3, 4, opckeytype, opckeytype,
+											INTERNALOID, INTERNALOID);
 				break;
 			case GIST_DISTANCE_PROC:
 				ok = check_amproc_signature(procform->amproc, FLOAT8OID, false,
-											5, 5, INTERNALOID, opcintype,
-											INT2OID, OIDOID, INTERNALOID);
+											5, 6, INTERNALOID, opcintype,
+											INT2OID, OIDOID, INTERNALOID,
+											INTERNALOID);
+				break;
+			case GIST_OPCLASSOPT_PROC:
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
+											2, 2, INTERNALOID, BOOLOID);
 				break;
 			default:
 				ereport(INFO,
@@ -259,7 +268,8 @@ gistvalidate(Oid opclassoid)
 			(opclassgroup->functionset & (((uint64) 1) << i)) != 0)
 			continue;			/* got it */
 		if (i == GIST_DISTANCE_PROC || i == GIST_FETCH_PROC ||
-			i == GIST_COMPRESS_PROC || i == GIST_DECOMPRESS_PROC)
+			i == GIST_COMPRESS_PROC || i == GIST_DECOMPRESS_PROC ||
+			i == GIST_OPCLASSOPT_PROC)
 			continue;			/* optional methods */
 		ereport(INFO,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),

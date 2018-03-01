@@ -194,6 +194,7 @@ gistindex_keytest(IndexScanDesc scan,
 			Datum		test;
 			bool		recheck;
 			GISTENTRY	de;
+			bytea	   *options = giststate->opclassoptions[key->sk_attno - 1];
 
 			gistdentryinit(giststate, key->sk_attno - 1, &de,
 						   datum, r, page, offset,
@@ -214,13 +215,14 @@ gistindex_keytest(IndexScanDesc scan,
 			 */
 			recheck = true;
 
-			test = FunctionCall5Coll(&key->sk_func,
+			test = FunctionCall6Coll(&key->sk_func,
 									 key->sk_collation,
 									 PointerGetDatum(&de),
 									 key->sk_argument,
 									 Int16GetDatum(key->sk_strategy),
 									 ObjectIdGetDatum(key->sk_subtype),
-									 PointerGetDatum(&recheck));
+									 PointerGetDatum(&recheck),
+									 PointerGetDatum(options));
 
 			if (!DatumGetBool(test))
 				return false;
@@ -255,6 +257,7 @@ gistindex_keytest(IndexScanDesc scan,
 			Datum		dist;
 			bool		recheck;
 			GISTENTRY	de;
+			bytea	   *options = giststate->opclassoptions[key->sk_attno - 1];
 
 			gistdentryinit(giststate, key->sk_attno - 1, &de,
 						   datum, r, page, offset,
@@ -277,13 +280,14 @@ gistindex_keytest(IndexScanDesc scan,
 			 * about the flag, but are expected to never be lossy.
 			 */
 			recheck = false;
-			dist = FunctionCall5Coll(&key->sk_func,
+			dist = FunctionCall6Coll(&key->sk_func,
 									 key->sk_collation,
 									 PointerGetDatum(&de),
 									 key->sk_argument,
 									 Int16GetDatum(key->sk_strategy),
 									 ObjectIdGetDatum(key->sk_subtype),
-									 PointerGetDatum(&recheck));
+									 PointerGetDatum(&recheck),
+									 PointerGetDatum(options));
 			*recheck_distances_p |= recheck;
 			*distance_p = DatumGetFloat8(dist);
 		}

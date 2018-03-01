@@ -502,10 +502,16 @@ Europe &amp; Russia*@ &amp; !Transportation
      <literal>@</literal>, <literal>~</literal>, <literal>?</literal>
     </para>
     <para>
-     Example of creating such an index:
+     Example of creating such an index with a default signature length of 8 bytes:
     </para>
 <programlisting>
 CREATE INDEX path_gist_idx ON test USING GIST (path);
+</programlisting>
+    <para>
+     Example of creating such an index with a signature length of 100 bytes:
+    </para>
+<programlisting>
+CREATE INDEX path_gist_idx ON test USING GIST (path gist_ltree_ops(siglen=100));
 </programlisting>
    </listitem>
    <listitem>
@@ -515,10 +521,16 @@ CREATE INDEX path_gist_idx ON test USING GIST (path);
      <literal>@</literal>, <literal>~</literal>, <literal>?</literal>
     </para>
     <para>
-     Example of creating such an index:
+     Example of creating such an index with a default signature length of 28 bytes:
     </para>
 <programlisting>
 CREATE INDEX path_gist_idx ON test USING GIST (array_path);
+</programlisting>
+    <para>
+     Example of creating such an index with a signature length of 100 bytes:
+    </para>
+<programlisting>
+CREATE INDEX path_gist_idx ON test USING GIST (array_path gist__ltree_ops(siglen=100));
 </programlisting>
     <para>
      Note: This index type is lossy.

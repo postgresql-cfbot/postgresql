@@ -6,6 +6,7 @@
 #include <limits.h>
 
 #include "access/gist.h"
+#include "access/reloptions.h"
 #include "access/stratnum.h"
 
 #include "_int.h"
@@ -22,6 +23,7 @@ PG_FUNCTION_INFO_V1(g_int_penalty);
 PG_FUNCTION_INFO_V1(g_int_picksplit);
 PG_FUNCTION_INFO_V1(g_int_union);
 PG_FUNCTION_INFO_V1(g_int_same);
+PG_FUNCTION_INFO_V1(g_int_options);
 
 
 /*
@@ -139,6 +141,7 @@ Datum
 g_int_compress(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	IntArrayOptions *opts = (IntArrayOptions *) PG_GETARG_POINTER(1);
 	GISTENTRY  *retval;
 	ArrayType  *r;
 	int			len;
@@ -153,9 +156,9 @@ g_int_compress(PG_FUNCTION_ARGS)
 		CHECKARRVALID(r);
 		PREPAREARR(r);
 
-		if (ARRNELEMS(r) >= 2 * MAXNUMRANGE)
+		if (ARRNELEMS(r) >= 2 * opts->num_ranges)
 			elog(NOTICE, "input array is too big (%d maximum allowed, %d current), use gist__intbig_ops opclass instead",
-				 2 * MAXNUMRANGE - 1, ARRNELEMS(r));
+				 2 * opts->num_ranges - 1, ARRNELEMS(r));
 
 		retval = palloc(sizeof(GISTENTRY));
 		gistentryinit(*retval, PointerGetDatum(r),
@@ -178,7 +181,7 @@ g_int_compress(PG_FUNCTION_ARGS)
 		PG_RETURN_POINTER(entry);
 	}
 
-	if ((len = ARRNELEMS(r)) >= 2 * MAXNUMRANGE)
+	if ((len = ARRNELEMS(r)) >= 2 * opts->num_ranges)
 	{							/* compress */
 		if (r == (ArrayType *) DatumGetPointer(entry->key))
 			r = DatumGetArrayTypePCopy(entry->key);
@@ -191,7 +194,7 @@ g_int_compress(PG_FUNCTION_ARGS)
 
 		len *= 2;
 		cand = 1;
-		while (len > MAXNUMRANGE * 2)
+		while (len > opts->num_ranges * 2)
 		{
 			min = INT_MAX;
 			for (i = 2; i < len; i += 2)
@@ -217,6 +220,7 @@ Datum
 g_int_decompress(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	IntArrayOptions *opts = (IntArrayOptions *) PG_GETARG_POINTER(1);
 	GISTENTRY  *retval;
 	ArrayType  *r;
 	int		   *dr,
@@ -245,7 +249,7 @@ g_int_decompress(PG_FUNCTION_ARGS)
 
 	lenin = ARRNELEMS(in);
 
-	if (lenin < 2 * MAXNUMRANGE)
+	if (lenin < 2 * opts->num_ranges)
 	{							/* not compressed value */
 		if (in != (ArrayType *) DatumGetPointer(entry->key))
 		{
@@ -541,4 +545,21 @@ g_int_picksplit(PG_FUNCTION_ARGS)
 	v->spl_rdatum = PointerGetDatum(datum_r);
 
 	PG_RETURN_POINTER(v);
+}
+
+Datum
+g_int_options(PG_FUNCTION_ARGS)
+{
+	Datum		raw_options = PG_GETARG_DATUM(0);
+	bool		validate = PG_GETARG_BOOL(1);
+	relopt_int	siglen =
+		{ {"numranges", "number of ranges for compression", 0, 0, 9, RELOPT_TYPE_INT },
+			G_INT_NUMRANGES_DEFAULT, 1, G_INT_NUMRANGES_MAX };
+	relopt_gen *optgen[] = { &siglen.gen };
+	int			offsets[] = { offsetof(IntArrayOptions, num_ranges) };
+	IntArrayOptions *options =
+		parseAndFillLocalRelOptions(raw_options, optgen, offsets, 1,
+									sizeof(IntArrayOptions), validate);
+
+	PG_RETURN_POINTER(options);
 }

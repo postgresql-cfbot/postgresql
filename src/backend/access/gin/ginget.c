@@ -178,13 +178,13 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			 * case cmp < 0 => not match and continue scan
 			 *----------
 			 */
-			cmp = DatumGetInt32(FunctionCall4Coll(&btree->ginstate->comparePartialFn[attnum - 1],
+			cmp = DatumGetInt32(FunctionCall5Coll(&btree->ginstate->comparePartialFn[attnum - 1],
 												  btree->ginstate->supportCollation[attnum - 1],
 												  scanEntry->queryKey,
 												  idatum,
 												  UInt16GetDatum(scanEntry->strategy),
-												  PointerGetDatum(scanEntry->extra_data)));
-
+												  PointerGetDatum(scanEntry->extra_data),
+												  PointerGetDatum(btree->ginstate->opclassOptions[attnum - 1])));
 			if (cmp > 0)
 				return true;
 			else if (cmp < 0)
@@ -1460,12 +1460,13 @@ matchPartialInPendingList(GinState *ginstate, Page page,
 		 * case cmp < 0 => not match and continue scan
 		 *----------
 		 */
-		cmp = DatumGetInt32(FunctionCall4Coll(&ginstate->comparePartialFn[entry->attnum - 1],
+		cmp = DatumGetInt32(FunctionCall5Coll(&ginstate->comparePartialFn[entry->attnum - 1],
 											  ginstate->supportCollation[entry->attnum - 1],
 											  entry->queryKey,
 											  datum[off - 1],
 											  UInt16GetDatum(entry->strategy),
-											  PointerGetDatum(entry->extra_data)));
+											  PointerGetDatum(entry->extra_data),
+											  PointerGetDatum(ginstate->opclassOptions[entry->attnum - 1])));
 		if (cmp == 0)
 			return true;
 		else if (cmp > 0)

@@ -14,6 +14,7 @@
 #ifndef RELCACHE_H
 #define RELCACHE_H
 
+#include "postgres.h"
 #include "access/tupdesc.h"
 #include "nodes/bitmapset.h"
 
@@ -50,6 +51,9 @@ extern Oid	RelationGetPrimaryKeyIndex(Relation relation);
 extern Oid	RelationGetReplicaIndex(Relation relation);
 extern List *RelationGetIndexExpressions(Relation relation);
 extern List *RelationGetIndexPredicate(Relation relation);
+extern bytea **RelationGetParsedOpclassOptions(Relation relation);
+extern Datum *RelationGetRawOpclassOptions(Relation relation);
+extern Datum *ExtractRawOpclassOptions(Datum indoptionsDatum, int ncols);
 
 typedef enum IndexAttrBitmapKind
 {

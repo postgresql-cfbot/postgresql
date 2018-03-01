@@ -8,7 +8,15 @@
 #include "utils/memutils.h"
 
 /* number ranges for compression */
-#define MAXNUMRANGE 100
+#define G_INT_NUMRANGES_DEFAULT		100
+#define G_INT_NUMRANGES_MAX			1000
+
+/* gist_int_ops opclass options */
+typedef struct IntArrayOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	int			num_ranges;		/* number of ranges */
+}	IntArrayOptions;
 
 /* useful macros for accessing int4 arrays */
 #define ARRPTR(x)  ( (int32 *) ARR_DATA_PTR(x) )
@@ -47,15 +55,14 @@
 
 
 /* bigint defines */
-#define SIGLENINT  63			/* >122 => key will toast, so very slow!!! */
-#define SIGLEN	( sizeof(int)*SIGLENINT )
-#define SIGLENBIT (SIGLEN*BITS_PER_BYTE)
+#define SIGLEN_DEFAULT		(63 * 4)
+#define SIGLEN_MAX			(122 * 4)		/* key will toast, so very slow!!! */
+#define SIGLENBIT(siglen)	((siglen) * BITS_PER_BYTE)
 
-typedef char BITVEC[SIGLEN];
 typedef char *BITVECP;
 
-#define LOOPBYTE \
-			for(i=0;i<SIGLEN;i++)
+#define LOOPBYTE(siglen) \
+			for (i = 0; i < siglen; i++)
 
 /* beware of multiple evaluation of arguments to these macros! */
 #define GETBYTE(x,i) ( *( (BITVECP)(x) + (int)( (i) / BITS_PER_BYTE ) ) )
@@ -63,8 +70,15 @@ typedef char *BITVECP;
 #define CLRBIT(x,i)   GETBYTE(x,i) &= ~( 0x01 << ( (i) % BITS_PER_BYTE ) )
 #define SETBIT(x,i)   GETBYTE(x,i) |=  ( 0x01 << ( (i) % BITS_PER_BYTE ) )
 #define GETBIT(x,i) ( (GETBYTE(x,i) >> ( (i) % BITS_PER_BYTE )) & 0x01 )
-#define HASHVAL(val) (((unsigned int)(val)) % SIGLENBIT)
-#define HASH(sign, val) SETBIT((sign), HASHVAL(val))
+#define HASHVAL(val, siglen) (((unsigned int)(val)) % SIGLENBIT(siglen))
+#define HASH(sign, val, siglen) SETBIT((sign), HASHVAL(val, siglen))
+
+/* gist_intbig_ops opclass options */
+typedef struct IntArrayBigOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	int			siglen;			/* signature length in bytes */
+}	IntArrayBigOptions;
 
 /*
  * type of index key
@@ -81,7 +95,7 @@ typedef struct
 #define ISALLTRUE(x)	( ((GISTTYPE*)x)->flag & ALLISTRUE )
 
 #define GTHDRSIZE		(VARHDRSZ + sizeof(int32))
-#define CALCGTSIZE(flag) ( GTHDRSIZE+(((flag) & ALLISTRUE) ? 0 : SIGLEN) )
+#define CALCGTSIZE(flag, siglen) ( GTHDRSIZE+(((flag) & ALLISTRUE) ? 0 : (siglen)) )
 
 #define GETSIGN(x)		( (BITVECP)( (char*)x+GTHDRSIZE ) )
 
@@ -109,7 +123,7 @@ bool		inner_int_contains(ArrayType *a, ArrayType *b);
 ArrayType  *inner_int_union(ArrayType *a, ArrayType *b);
 ArrayType  *inner_int_inter(ArrayType *a, ArrayType *b);
 void		rt__int_size(ArrayType *a, float *size);
-void		gensign(BITVEC sign, int *a, int len);
+void		gensign(BITVECP sign, int *a, int len, int siglen);
 
 
 /*****************************************************************************
@@ -155,7 +169,7 @@ typedef struct QUERYTYPE
 #define PG_GETARG_QUERYTYPE_P(n)	  DatumGetQueryTypeP(PG_GETARG_DATUM(n))
 #define PG_GETARG_QUERYTYPE_P_COPY(n) DatumGetQueryTypePCopy(PG_GETARG_DATUM(n))
 
-bool		signconsistent(QUERYTYPE *query, BITVEC sign, bool calcnot);
+bool		signconsistent(QUERYTYPE *query, BITVECP sign, int siglen, bool calcnot);
 bool		execconsistent(QUERYTYPE *query, ArrayType *array, bool calcnot);
 
 bool		gin_bool_consistent(QUERYTYPE *query, bool *check);

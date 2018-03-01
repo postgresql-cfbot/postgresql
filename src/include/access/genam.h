@@ -174,6 +174,13 @@ extern RegProcedure index_getprocid(Relation irel, AttrNumber attnum,
 				uint16 procnum);
 extern FmgrInfo *index_getprocinfo(Relation irel, AttrNumber attnum,
 				  uint16 procnum);
+extern bytea *index_opclass_options(Relation relation, AttrNumber attnum,
+					  Datum indoptions, bool validate);
+extern bytea *index_opclass_options_generic(Relation relation,
+							  AttrNumber attnum, uint16 procnum,
+							  Datum indoptions, bool validate);
+
+
 
 /*
  * index access method support routines (in genam.c)

@@ -382,6 +382,15 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 																 hashvalue);
 				node->hj_CurTuple = NULL;
 
+				/* If still in the first batch, we check the bloom filter. */
+				if ((hashtable->curbatch == 0) &&
+					(! ExecHashBloomCheckValue(hashtable, hashvalue)))
+				{
+						/* no matches; check for possible outer-join fill */
+						node->hj_JoinState = HJ_FILL_OUTER_TUPLE;
+						continue;
+				}
+
 				/*
 				 * The tuple might not belong to the current batch (where
 				 * "current batch" includes the skew buckets if any).
@@ -763,6 +772,19 @@ ExecEndHashJoin(HashJoinState *node)
 	 */
 	if (node->hj_HashTable)
 	{
+		HashJoinTable hashtable = node->hj_HashTable;
+
+		/*
+		 * If there's a bloom filter, print some debug info before destroying the
+		 * hash table.
+		 */
+		if (hashtable->bloomFilter)
+		{
+			BloomFilter filter = hashtable->bloomFilter;
+			elog(LOG, "bloom filter lookups=%lu matches=%lu eliminated=%lu%%",
+					  filter->nlookups, filter->nmatches, 100 - (100 * filter->nmatches) / Max(1,filter->nlookups));
+		}
+
 		ExecHashTableDestroy(node->hj_HashTable);
 		node->hj_HashTable = NULL;
 	}

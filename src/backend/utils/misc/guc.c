@@ -941,6 +941,24 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_hashjoin_bloom", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the use of bloom filters in hash joins."),
+			NULL
+		},
+		&enable_hashjoin_bloom,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"force_hashjoin_bloom", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Forces the use of bloom filters in hash joins."),
+			NULL
+		},
+		&force_hashjoin_bloom,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),
 			gettext_noop("This algorithm attempts to do planning without "

@@ -217,7 +217,7 @@ extern ItemPointer GinDataLeafPageGetItems(Page page, int *nitems, ItemPointerDa
 extern int	GinDataLeafPageGetItemsToTbm(Page page, TIDBitmap *tbm);
 extern BlockNumber createPostingTree(Relation index,
 				  ItemPointerData *items, uint32 nitems,
-				  GinStatsData *buildStats);
+				  GinStatsData *buildStats, Buffer entrybuffer);
 extern void GinDataPageAddPostingItem(Page page, PostingItem *data, OffsetNumber offset);
 extern void GinPageDeletePostingItem(Page page, OffsetNumber offset);
 extern void ginInsertItemPointers(Relation index, BlockNumber rootBlkno,

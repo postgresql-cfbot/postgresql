@@ -85,6 +85,13 @@
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
+#include "utils/varlena.h"
+
+/* GUC variables */
+int synchronous_replay_max_lag;
+int synchronous_replay_lease_time;
+bool synchronous_replay;
+char *synchronous_replay_standby_names;
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
@@ -99,7 +106,9 @@ static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
 
 static void SyncRepQueueInsert(int mode);
 static void SyncRepCancelWait(void);
-static int	SyncRepWakeQueue(bool all, int mode);
+static int	SyncRepWakeQueue(bool all, int mode, XLogRecPtr lsn);
+
+static bool SyncRepCheckForEarlyExit(void);
 
 static bool SyncRepGetSyncRecPtr(XLogRecPtr *writePtr,
 					 XLogRecPtr *flushPtr,
@@ -129,6 +138,229 @@ static bool SyncRepQueueIsOrderedByLSN(int mode);
  */
 
 /*
+ * Check if we can stop waiting for synchronous replay.  We can stop waiting
+ * when the following conditions are met:
+ *
+ * 1.  All walsenders currently in 'joining' or 'available' state have
+ * applied the target LSN.
+ *
+ * 2.  All revoked leases have been acknowledged by the relevant standby or
+ * expired, so we know that the standby has started rejecting synchronous
+ * replay transactions.
+ *
+ * The output parameter 'waitingFor' is set to the number of nodes we are
+ * currently waiting for.  The output parameters 'stallTimeMillis' is set to
+ * the number of milliseconds we need to wait for because a lease has been
+ * revoked.
+ *
+ * Returns true if commit can return control, because every standby has either
+ * applied the LSN or started rejecting synchronous replay transactions.
+ */
+static bool
+SyncReplayCommitCanReturn(XLogRecPtr XactCommitLSN,
+						  int *waitingFor,
+						  long *stallTimeMillis)
+{
+	TimestampTz now = GetCurrentTimestamp();
+	TimestampTz stallTime = 0;
+	int i;
+
+	/* Count how many joining/available nodes we are waiting for. */
+	*waitingFor = 0;
+
+	for (i = 0; i < max_wal_senders; ++i)
+	{
+		WalSnd *walsnd = &WalSndCtl->walsnds[i];
+
+		if (walsnd->pid != 0)
+		{
+			/*
+			 * We need to hold the spinlock to read LSNs, because we can't be
+			 * sure they can be read atomically.
+			 */
+			SpinLockAcquire(&walsnd->mutex);
+			if (walsnd->pid != 0)
+			{
+				switch (walsnd->syncReplayState)
+				{
+				case SYNC_REPLAY_UNAVAILABLE:
+					/* Nothing to wait for. */
+					break;
+				case SYNC_REPLAY_JOINING:
+				case SYNC_REPLAY_AVAILABLE:
+					/*
+					 * We have to wait until this standby tells us that is has
+					 * replayed the commit record.
+					 */
+					if (walsnd->apply < XactCommitLSN)
+						++*waitingFor;
+					break;
+				case SYNC_REPLAY_REVOKING:
+					/*
+					 * We have to hold up commits until this standby
+					 * acknowledges that its lease was revoked, or we know the
+					 * most recently sent lease has expired anyway, whichever
+					 * comes first.  One way or the other, we don't release
+					 * until this standby has started raising an error for
+					 * synchronous replay transactions.
+					 */
+					if (walsnd->revokingUntil > now)
+					{
+						++*waitingFor;
+						stallTime = Max(stallTime, walsnd->revokingUntil);
+					}
+					break;
+				}
+			}
+			SpinLockRelease(&walsnd->mutex);
+		}
+	}
+
+	/*
+	 * If a walsender has exitted uncleanly, then it writes itsrevoking wait
+	 * time into a shared space before it gives up its WalSnd slot.  So we
+	 * have to wait for that too.
+	 */
+	LWLockAcquire(SyncRepLock, LW_SHARED);
+	if (WalSndCtl->revokingUntil > now)
+	{
+		long seconds;
+		int usecs;
+
+		/* Compute how long we have to wait, rounded up to nearest ms. */
+		TimestampDifference(now, WalSndCtl->revokingUntil,
+							&seconds, &usecs);
+		*stallTimeMillis = seconds * 1000 + (usecs + 999) / 1000;
+	}
+	else
+		*stallTimeMillis = 0;
+	LWLockRelease(SyncRepLock);
+
+	/* We are done if we are not waiting for any nodes or stalls. */
+	return *waitingFor == 0 && *stallTimeMillis == 0;
+}
+
+/*
+ * Wait for all standbys in "available" and "joining" standbys to replay
+ * XactCommitLSN, and all "revoking" standbys' leases to be revoked.  By the
+ * time we return, every standby will either have replayed XactCommitLSN or
+ * will have no lease, so an error would be raised if anyone tries to obtain a
+ * snapshot with synchronous_replay = on.
+ */
+static void
+SyncReplayWaitForLSN(XLogRecPtr XactCommitLSN)
+{
+	long stallTimeMillis;
+	int waitingFor;
+	char *ps_display_buffer = NULL;
+
+	for (;;)
+	{
+		/* Reset latch before checking state. */
+		ResetLatch(MyLatch);
+
+		/*
+		 * Join the queue to be woken up if any synchronous replay
+		 * joining/available standby applies XactCommitLSN or the set of
+		 * synchronous replay standbys changes (if we aren't already in the
+		 * queue).  We don't actually know if we need to wait for any peers to
+		 * reach the target LSN yet, but we have to register just in case
+		 * before checking the walsenders' state to avoid a race condition
+		 * that could occur if we did it after calling
+		 * SynchronousReplayCommitCanReturn.  (SyncRepWaitForLSN doesn't have
+		 * to do this because it can check the highest-seen LSN in
+		 * walsndctl->lsn[mode] which is protected by SyncRepLock, the same
+		 * lock as the queues.  We can't do that here, because there is no
+		 * single highest-seen LSN that is useful.  We must check
+		 * walsnd->apply for all relevant walsenders.  Therefore we must
+		 * register for notifications first, so that we can be notified via
+		 * our latch of any standby applying the LSN we're interested in after
+		 * we check but before we start waiting, or we could wait forever for
+		 * something that has already happened.)
+		 */
+		LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
+		if (MyProc->syncRepState != SYNC_REP_WAITING)
+		{
+			MyProc->waitLSN = XactCommitLSN;
+			MyProc->syncRepState = SYNC_REP_WAITING;
+			SyncRepQueueInsert(SYNC_REP_WAIT_SYNC_REPLAY);
+			Assert(SyncRepQueueIsOrderedByLSN(SYNC_REP_WAIT_SYNC_REPLAY));
+		}
+		LWLockRelease(SyncRepLock);
+
+		/* Check if we're done. */
+		if (SyncReplayCommitCanReturn(XactCommitLSN, &waitingFor,
+									  &stallTimeMillis))
+		{
+			SyncRepCancelWait();
+			break;
+		}
+
+		Assert(waitingFor > 0 || stallTimeMillis > 0);
+
+		/* If we aren't actually waiting for any standbys, leave the queue. */
+		if (waitingFor == 0)
+			SyncRepCancelWait();
+
+		/* Update the ps title. */
+		if (update_process_title)
+		{
+			char buffer[80];
+
+			/* Remember the old value if this is our first update. */
+			if (ps_display_buffer == NULL)
+			{
+				int len;
+				const char *ps_display = get_ps_display(&len);
+
+				ps_display_buffer = palloc(len + 1);
+				memcpy(ps_display_buffer, ps_display, len);
+				ps_display_buffer[len] = '\0';
+			}
+
+			snprintf(buffer, sizeof(buffer),
+					 "waiting for %d peer(s) to apply %X/%X%s",
+					 waitingFor,
+					 (uint32) (XactCommitLSN >> 32), (uint32) XactCommitLSN,
+					 stallTimeMillis > 0 ? " (revoking)" : "");
+			set_ps_display(buffer, false);
+		}
+
+		/* Check if we need to exit early due to postmaster death etc. */
+		if (SyncRepCheckForEarlyExit()) /* Calls SyncRepCancelWait() if true. */
+			break;
+
+		/*
+		 * If are still waiting for peers, then we wait for any joining or
+		 * available peer to reach the LSN (or possibly stop being in one of
+		 * those states or go away).
+		 *
+		 * If not, there must be a non-zero stall time, so we wait for that to
+		 * elapse.
+		 */
+		if (waitingFor > 0)
+			WaitLatch(MyLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH, -1,
+					  WAIT_EVENT_SYNC_REPLAY);
+		else
+			WaitLatch(MyLatch, WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT,
+					  stallTimeMillis,
+					  WAIT_EVENT_SYNC_REPLAY_LEASE_REVOKE);
+	}
+
+	/* There is no way out of the loop that could leave us in the queue. */
+	Assert(SHMQueueIsDetached(&(MyProc->syncRepLinks)));
+	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
+	MyProc->waitLSN = 0;
+
+	/* Restore the ps display. */
+	if (ps_display_buffer != NULL)
+	{
+		set_ps_display(ps_display_buffer, false);
+		pfree(ps_display_buffer);
+	}
+}
+
+/*
  * Wait for synchronous replication, if requested by user.
  *
  * Initially backends start in state SYNC_REP_NOT_WAITING and then
@@ -149,11 +381,9 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	const char *old_status;
 	int			mode;
 
-	/* Cap the level for anything other than commit to remote flush only. */
-	if (commit)
-		mode = SyncRepWaitMode;
-	else
-		mode = Min(SyncRepWaitMode, SYNC_REP_WAIT_FLUSH);
+	/* Wait for synchronous replay, if configured. */
+	if (synchronous_replay)
+		SyncReplayWaitForLSN(lsn);
 
 	/*
 	 * Fast exit if user has not requested sync replication.
@@ -166,6 +396,12 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 
 	LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 	Assert(MyProc->syncRepState == SYNC_REP_NOT_WAITING);
+
+	/* Cap the level for anything other than commit to remote flush only. */
+	if (commit)
+		mode = SyncRepWaitMode;
+	else
+		mode = Min(SyncRepWaitMode, SYNC_REP_WAIT_FLUSH);
 
 	/*
 	 * We don't wait for sync rep if WalSndCtl->sync_standbys_defined is not
@@ -227,57 +463,9 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		if (MyProc->syncRepState == SYNC_REP_WAIT_COMPLETE)
 			break;
 
-		/*
-		 * If a wait for synchronous replication is pending, we can neither
-		 * acknowledge the commit nor raise ERROR or FATAL.  The latter would
-		 * lead the client to believe that the transaction aborted, which is
-		 * not true: it's already committed locally. The former is no good
-		 * either: the client has requested synchronous replication, and is
-		 * entitled to assume that an acknowledged commit is also replicated,
-		 * which might not be true. So in this case we issue a WARNING (which
-		 * some clients may be able to interpret) and shut off further output.
-		 * We do NOT reset ProcDiePending, so that the process will die after
-		 * the commit is cleaned up.
-		 */
-		if (ProcDiePending)
-		{
-			ereport(WARNING,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			whereToSendOutput = DestNone;
-			SyncRepCancelWait();
+		/* Check if we need to break early due to cancel/shutdown/death. */
+		if (SyncRepCheckForEarlyExit())
 			break;
-		}
-
-		/*
-		 * It's unclear what to do if a query cancel interrupt arrives.  We
-		 * can't actually abort at this point, but ignoring the interrupt
-		 * altogether is not helpful, so we just terminate the wait with a
-		 * suitable warning.
-		 */
-		if (QueryCancelPending)
-		{
-			QueryCancelPending = false;
-			ereport(WARNING,
-					(errmsg("canceling wait for synchronous replication due to user request"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			SyncRepCancelWait();
-			break;
-		}
-
-		/*
-		 * If the postmaster dies, we'll probably never get an
-		 * acknowledgement, because all the wal sender processes will exit. So
-		 * just bail out.
-		 */
-		if (!PostmasterIsAlive())
-		{
-			ProcDiePending = true;
-			whereToSendOutput = DestNone;
-			SyncRepCancelWait();
-			break;
-		}
 
 		/*
 		 * Wait on latch.  Any condition that should wake us up will set the
@@ -400,14 +588,65 @@ SyncRepInitConfig(void)
 }
 
 /*
+ * Check if the current WALSender process's application_name matches a name in
+ * synchronous_replay_standby_names (including '*' for wildcard).
+ */
+bool
+SyncReplayPotentialStandby(void)
+{
+	char *rawstring;
+	List	   *elemlist;
+	ListCell   *l;
+	bool		found = false;
+
+	/* If the feature is disable, then no. */
+	if (synchronous_replay_max_lag == 0)
+		return false;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(synchronous_replay_standby_names);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		/* syntax error in list */
+		pfree(rawstring);
+		list_free(elemlist);
+		/* GUC machinery will have already complained - no need to do again */
+		return false;
+	}
+
+	foreach(l, elemlist)
+	{
+		char	   *standby_name = (char *) lfirst(l);
+
+		if (pg_strcasecmp(standby_name, application_name) == 0 ||
+			pg_strcasecmp(standby_name, "*") == 0)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+
+	return found;
+}
+
+/*
  * Update the LSNs on each queue based upon our latest state. This
  * implements a simple policy of first-valid-sync-standby-releases-waiter.
+ *
+ * 'am_syncreplay_blocker' should be set to true if the standby managed by
+ * this walsender is in a synchronous replay state that blocks commit (joining
+ * or available).
  *
  * Other policies are possible, which would change what we do here and
  * perhaps also which information we store as well.
  */
 void
-SyncRepReleaseWaiters(void)
+SyncRepReleaseWaiters(bool am_syncreplay_blocker)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
 	XLogRecPtr	writePtr;
@@ -421,13 +660,15 @@ SyncRepReleaseWaiters(void)
 
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
-	 * potential sync standbys then we have nothing to do. If we are still
-	 * starting up, still running base backup or the current flush position is
-	 * still invalid, then leave quickly also.
+	 * potential sync standbys and not in a state that synchronous_replay waits
+	 * for, then we have nothing to do. If we are still starting up, still
+	 * running base backup or the current flush position is still invalid,
+	 * then leave quickly also.
 	 */
-	if (MyWalSnd->sync_standby_priority == 0 ||
-		MyWalSnd->state < WALSNDSTATE_STREAMING ||
-		XLogRecPtrIsInvalid(MyWalSnd->flush))
+	if (!am_syncreplay_blocker &&
+		(MyWalSnd->sync_standby_priority == 0 ||
+		 MyWalSnd->state < WALSNDSTATE_STREAMING ||
+		 XLogRecPtrIsInvalid(MyWalSnd->flush)))
 	{
 		announce_next_takeover = true;
 		return;
@@ -465,9 +706,10 @@ SyncRepReleaseWaiters(void)
 
 	/*
 	 * If the number of sync standbys is less than requested or we aren't
-	 * managing a sync standby then just leave.
+	 * managing a sync standby or a standby in synchronous replay state that
+	 * blocks then just leave.
 	 */
-	if (!got_recptr || !am_sync)
+	if ((!got_recptr || !am_sync) && !am_syncreplay_blocker)
 	{
 		LWLockRelease(SyncRepLock);
 		announce_next_takeover = !am_sync;
@@ -476,23 +718,35 @@ SyncRepReleaseWaiters(void)
 
 	/*
 	 * Set the lsn first so that when we wake backends they will release up to
-	 * this location.
+	 * this location, for backends waiting for synchronous commit.
 	 */
-	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < writePtr)
+	if (got_recptr && am_sync)
 	{
-		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = writePtr;
-		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
+		if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < writePtr)
+		{
+			walsndctl->lsn[SYNC_REP_WAIT_WRITE] = writePtr;
+			numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE, writePtr);
+		}
+		if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < flushPtr)
+		{
+			walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = flushPtr;
+			numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH, flushPtr);
+		}
+		if (walsndctl->lsn[SYNC_REP_WAIT_APPLY] < applyPtr)
+		{
+			walsndctl->lsn[SYNC_REP_WAIT_APPLY] = applyPtr;
+			numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY, applyPtr);
+		}
 	}
-	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < flushPtr)
-	{
-		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = flushPtr;
-		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
-	}
-	if (walsndctl->lsn[SYNC_REP_WAIT_APPLY] < applyPtr)
-	{
-		walsndctl->lsn[SYNC_REP_WAIT_APPLY] = applyPtr;
-		numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY);
-	}
+
+	/*
+	 * Wake backends that are waiting for synchronous_replay, if this walsender
+	 * manages a standby that is in synchronous replay 'available' or 'joining'
+	 * state.
+	 */
+	if (am_syncreplay_blocker)
+		SyncRepWakeQueue(false, SYNC_REP_WAIT_SYNC_REPLAY,
+						 MyWalSnd->apply);
 
 	LWLockRelease(SyncRepLock);
 
@@ -991,9 +1245,8 @@ SyncRepGetStandbyPriority(void)
  * Must hold SyncRepLock.
  */
 static int
-SyncRepWakeQueue(bool all, int mode)
+SyncRepWakeQueue(bool all, int mode, XLogRecPtr lsn)
 {
-	volatile WalSndCtlData *walsndctl = WalSndCtl;
 	PGPROC	   *proc = NULL;
 	PGPROC	   *thisproc = NULL;
 	int			numprocs = 0;
@@ -1010,7 +1263,7 @@ SyncRepWakeQueue(bool all, int mode)
 		/*
 		 * Assume the queue is ordered by LSN
 		 */
-		if (!all && walsndctl->lsn[mode] < proc->waitLSN)
+		if (!all && lsn < proc->waitLSN)
 			return numprocs;
 
 		/*
@@ -1077,7 +1330,7 @@ SyncRepUpdateSyncStandbysDefined(void)
 			int			i;
 
 			for (i = 0; i < NUM_SYNC_REP_WAIT_MODE; i++)
-				SyncRepWakeQueue(true, i);
+				SyncRepWakeQueue(true, i, InvalidXLogRecPtr);
 		}
 
 		/*
@@ -1127,6 +1380,64 @@ SyncRepQueueIsOrderedByLSN(int mode)
 	return true;
 }
 #endif
+
+static bool
+SyncRepCheckForEarlyExit(void)
+{
+	/*
+	 * If a wait for synchronous replication is pending, we can neither
+	 * acknowledge the commit nor raise ERROR or FATAL.  The latter would
+	 * lead the client to believe that the transaction aborted, which is
+	 * not true: it's already committed locally. The former is no good
+	 * either: the client has requested synchronous replication, and is
+	 * entitled to assume that an acknowledged commit is also replicated,
+	 * which might not be true. So in this case we issue a WARNING (which
+	 * some clients may be able to interpret) and shut off further output.
+	 * We do NOT reset ProcDiePending, so that the process will die after
+	 * the commit is cleaned up.
+	 */
+	if (ProcDiePending)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
+				 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+		whereToSendOutput = DestNone;
+		SyncRepCancelWait();
+		return true;
+	}
+
+	/*
+	 * It's unclear what to do if a query cancel interrupt arrives.  We
+	 * can't actually abort at this point, but ignoring the interrupt
+	 * altogether is not helpful, so we just terminate the wait with a
+	 * suitable warning.
+	 */
+	if (QueryCancelPending)
+	{
+		QueryCancelPending = false;
+		ereport(WARNING,
+				(errmsg("canceling wait for synchronous replication due to user request"),
+				 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+		SyncRepCancelWait();
+		return true;
+	}
+
+	/*
+	 * If the postmaster dies, we'll probably never get an
+	 * acknowledgement, because all the wal sender processes will exit. So
+	 * just bail out.
+	 */
+	if (!PostmasterIsAlive())
+	{
+		ProcDiePending = true;
+		whereToSendOutput = DestNone;
+		SyncRepCancelWait();
+		return true;
+	}
+
+	return false;
+}
 
 /*
  * ===========================================================
@@ -1195,6 +1506,31 @@ void
 assign_synchronous_standby_names(const char *newval, void *extra)
 {
 	SyncRepConfig = (SyncRepConfigData *) extra;
+}
+
+bool
+check_synchronous_replay_standby_names(char **newval, void **extra, GucSource source)
+{
+	char	   *rawstring;
+	List	   *elemlist;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		/* syntax error in list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawstring);
+		list_free(elemlist);
+		return false;
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+
+	return true;
 }
 
 void

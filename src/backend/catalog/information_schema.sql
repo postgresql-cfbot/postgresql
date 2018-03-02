@@ -1413,7 +1413,7 @@ CREATE VIEW routines AS
            CAST(current_database() AS sql_identifier) AS routine_catalog,
            CAST(n.nspname AS sql_identifier) AS routine_schema,
            CAST(p.proname AS sql_identifier) AS routine_name,
-           CAST(CASE WHEN p.prorettype <> 0 THEN 'FUNCTION' ELSE 'PROCEDURE' END
+           CAST(CASE p.prokind WHEN 'f' THEN 'FUNCTION' WHEN 'p' THEN 'PROCEDURE' END
              AS character_data) AS routine_type,
            CAST(null AS sql_identifier) AS module_catalog,
            CAST(null AS sql_identifier) AS module_schema,
@@ -1423,8 +1423,7 @@ CREATE VIEW routines AS
            CAST(null AS sql_identifier) AS udt_name,
 
            CAST(
-             CASE WHEN p.prorettype = 0 THEN NULL
-                  WHEN t.typelem <> 0 AND t.typlen = -1 THEN 'ARRAY'
+             CASE WHEN t.typelem <> 0 AND t.typlen = -1 THEN 'ARRAY'
                   WHEN nt.nspname = 'pg_catalog' THEN format_type(t.oid, null)
                   ELSE 'USER-DEFINED' END AS character_data)
              AS data_type,
@@ -1442,7 +1441,7 @@ CREATE VIEW routines AS
            CAST(null AS cardinal_number) AS datetime_precision,
            CAST(null AS character_data) AS interval_type,
            CAST(null AS cardinal_number) AS interval_precision,
-           CAST(CASE WHEN p.prorettype <> 0 THEN current_database() END AS sql_identifier) AS type_udt_catalog,
+           CAST(current_database() AS sql_identifier) AS type_udt_catalog,
            CAST(nt.nspname AS sql_identifier) AS type_udt_schema,
            CAST(t.typname AS sql_identifier) AS type_udt_name,
            CAST(null AS sql_identifier) AS scope_catalog,
@@ -1464,7 +1463,7 @@ CREATE VIEW routines AS
            CAST('GENERAL' AS character_data) AS parameter_style,
            CAST(CASE WHEN p.provolatile = 'i' THEN 'YES' ELSE 'NO' END AS yes_or_no) AS is_deterministic,
            CAST('MODIFIES' AS character_data) AS sql_data_access,
-           CAST(CASE WHEN p.prorettype <> 0 THEN
+           CAST(CASE WHEN p.prokind <> 'p' THEN
              CASE WHEN p.proisstrict THEN 'YES' ELSE 'NO' END END AS yes_or_no) AS is_null_call,
            CAST(null AS character_data) AS sql_path,
            CAST('YES' AS yes_or_no) AS schema_level_routine,

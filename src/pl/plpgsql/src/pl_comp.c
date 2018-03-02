@@ -275,6 +275,7 @@ do_compile(FunctionCallInfo fcinfo,
 	bool		isnull;
 	char	   *proc_source;
 	HeapTuple	typeTup;
+	Form_pg_type typeStruct;
 	PLpgSQL_variable *var;
 	PLpgSQL_rec *rec;
 	int			i;
@@ -364,6 +365,8 @@ do_compile(FunctionCallInfo fcinfo,
 		function->fn_is_trigger = PLPGSQL_EVENT_TRIGGER;
 	else
 		function->fn_is_trigger = PLPGSQL_NOT_TRIGGER;
+
+	function->fn_prokind = procStruct->prokind;
 
 	/*
 	 * Initialize the compiler, particularly the namespace stack.  The
@@ -529,10 +532,6 @@ do_compile(FunctionCallInfo fcinfo,
 			/*
 			 * Lookup the function's return type
 			 */
-			if (rettypeid)
-			{
-				Form_pg_type typeStruct;
-
 				typeTup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(rettypeid));
 				if (!HeapTupleIsValid(typeTup))
 					elog(ERROR, "cache lookup failed for type %u", rettypeid);
@@ -577,7 +576,6 @@ do_compile(FunctionCallInfo fcinfo,
 				}
 
 				ReleaseSysCache(typeTup);
-			}
 			break;
 
 		case PLPGSQL_DML_TRIGGER:
@@ -890,6 +888,7 @@ plpgsql_compile_inline(char *proc_source)
 	function->fn_retset = false;
 	function->fn_retistuple = false;
 	function->fn_retisdomain = false;
+	function->fn_prokind = PROKIND_FUNCTION;
 	/* a bit of hardwired knowledge about type VOID here */
 	function->fn_retbyval = true;
 	function->fn_rettyplen = sizeof(int32);

@@ -3723,6 +3723,7 @@ Parser: "pg_catalog.default"
  pg_catalog | german_stem     | snowball stemmer for german language
  pg_catalog | hungarian_stem  | snowball stemmer for hungarian language
  pg_catalog | italian_stem    | snowball stemmer for italian language
+ pg_catalog | nepali_stem     | snowball stemmer for nepali language
  pg_catalog | norwegian_stem  | snowball stemmer for norwegian language
  pg_catalog | portuguese_stem | snowball stemmer for portuguese language
  pg_catalog | romanian_stem   | snowball stemmer for romanian language

@@ -49,6 +49,7 @@
 #include "snowball/libstemmer/stem_UTF_8_german.h"
 #include "snowball/libstemmer/stem_UTF_8_hungarian.h"
 #include "snowball/libstemmer/stem_UTF_8_italian.h"
+#include "snowball/libstemmer/stem_UTF_8_nepali.h"
 #include "snowball/libstemmer/stem_UTF_8_norwegian.h"
 #include "snowball/libstemmer/stem_UTF_8_porter.h"
 #include "snowball/libstemmer/stem_UTF_8_portuguese.h"
@@ -102,6 +103,7 @@ static const stemmer_module stemmer_modules[] =
 	{"german", PG_UTF8, german_UTF_8_create_env, german_UTF_8_close_env, german_UTF_8_stem},
 	{"hungarian", PG_UTF8, hungarian_UTF_8_create_env, hungarian_UTF_8_close_env, hungarian_UTF_8_stem},
 	{"italian", PG_UTF8, italian_UTF_8_create_env, italian_UTF_8_close_env, italian_UTF_8_stem},
+	{"nepali", PG_UTF8, nepali_UTF_8_create_env, nepali_UTF_8_close_env, nepali_UTF_8_stem},
 	{"norwegian", PG_UTF8, norwegian_UTF_8_create_env, norwegian_UTF_8_close_env, norwegian_UTF_8_stem},
 	{"porter", PG_UTF8, porter_UTF_8_create_env, porter_UTF_8_close_env, porter_UTF_8_stem},
 	{"portuguese", PG_UTF8, portuguese_UTF_8_create_env, portuguese_UTF_8_close_env, portuguese_UTF_8_stem},

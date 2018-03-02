@@ -210,14 +210,18 @@ COMMIT;
 } });
 
 # test expressions
+# command 1..3 and 23 depend on random seed which is used to call srandom.
 pgbench(
-	'-t 1 -Dfoo=-10.1 -Dbla=false -Di=+3 -Dminint=-9223372036854775808 -Dn=null -Dt=t -Df=of -Dd=1.0',
+	'--random-seed=0x1538 -t 1 -Dfoo=-10.1 -Dbla=false -Di=+3 -Dminint=-9223372036854775808 -Dn=null -Dt=t -Df=of -Dd=1.0',
 	0,
 	[ qr{type: .*/001_pgbench_expressions}, qr{processed: 1/1} ],
-	[   qr{command=1.: int 1\d\b},
-	    qr{command=2.: int 1\d\d\b},
-	    qr{command=3.: int 1\d\d\d\b},
-	    qr{command=4.: int 4\b},
+	[   qr{setting random seed to 5432\b},
+		# After explicit seeding, the four * random checks (1-3,20) should be
+		# deterministic, but not necessarily portable.
+		qr{command=1.: int 1\d\b}, # uniform random: 12 on linux
+		qr{command=2.: int 1\d\d\b}, # exponential random: 106 on linux
+		qr{command=3.: int 1\d\d\d\b}, # gaussian random: 1462 on linux
+		qr{command=4.: int 4\b},
 		qr{command=5.: int 5\b},
 		qr{command=6.: int 6\b},
 		qr{command=7.: int 7\b},
@@ -230,7 +234,7 @@ pgbench(
 		qr{command=16.: double 16\b},
 		qr{command=17.: double 17\b},
 		qr{command=18.: int 9223372036854775807\b},
-		qr{command=20.: int [1-9]\b},
+		qr{command=20.: int \d\b}, # zipfian random: 1 on linux
 		qr{command=21.: double -27\b},
 		qr{command=22.: double 1024\b},
 		qr{command=23.: double 1\b},
@@ -259,6 +263,9 @@ pgbench(
 		qr{command=46.: int 46\b},
 		qr{command=47.: boolean true\b},
 		qr{command=48.: boolean true\b},
+		qr{command=53.: int 1\b},    # :scale
+		qr{command=54.: int 0\b},    # :client_id
+		qr{command=55.: int 5432\b}, # :random_seed
 	],
 	'pgbench expressions',
 	{   '001_pgbench_expressions' => q{-- integer functions
@@ -332,6 +339,10 @@ pgbench(
 \set yz debug(case when :zy = 0 then -1 else (1 / :zy) end)
 \set yz debug(case when :zy = 0 or (1 / :zy) < 0 then -1 else (1 / :zy) end)
 \set yz debug(case when :zy > 0 and (1 / :zy) < 0 then (1 / :zy) else 1 end)
+-- check automatic variables
+\set sc debug(:scale)
+\set ci debug(:client_id)
+\set rs debug(:random_seed)
 -- substitute variables of all possible types
 \set v0 NULL
 \set v1 TRUE
@@ -339,6 +350,45 @@ pgbench(
 \set v3 -54.21E-2
 SELECT :v0, :v1, :v2, :v3;
 } });
+
+# random determinism when seeded
+$node->safe_psql('postgres',
+	'CREATE UNLOGGED TABLE seeded_random(rand TEXT NOT NULL, val INTEGER NOT NULL);');
+
+# same value in decimal, octal and hexadecimal
+for my $seed ('5432', '012470', '0x1538', '0X1538')
+{
+    pgbench("--random-seed=$seed -t 1",
+	0,
+	[qr{processed: 1/1}],
+	[qr{setting random seed to 5432\b}],
+	"random seeded with $seed",
+	{ "001_pgbench_random_seed_$seed" => q{-- test random functions
+\set ur random(1000, 1999)
+\set er random_exponential(2000, 2999, 2.0)
+\set gr random_gaussian(3000, 3999, 3.0)
+\set zr random_zipfian(4000, 4999, 2.5)
+INSERT INTO seeded_random(rand, val) VALUES
+  ('uniform', :ur),
+  ('exponential', :er),
+  ('gaussian', :gr),
+  ('zipfian', :zr);
+} });
+}
+
+# check that all runs generated the same 4 values
+my ($ret, $out, $err) =
+  $node->psql('postgres',
+	'SELECT rand, val, COUNT(*) FROM seeded_random GROUP BY rand, val');
+
+ok($ret == 0, "psql seeded_random count ok");
+ok($err eq '', "psql seeded_random count stderr is empty");
+ok($out =~ /uniform\|1\d\d\d\|4/, "psql seeded_random count uniform");
+ok($out =~ /exponential\|2\d\d\d\|4/, "psql seeded_random count exponential");
+ok($out =~ /gaussian\|3\d\d\d\|4/, "psql seeded_random count gaussian");
+ok($out =~ /zipfian\|4\d\d\d\|4/, "psql seeded_random count zipfian");
+
+$node->safe_psql('postgres', 'DROP TABLE seeded_random;');
 
 # backslash commands
 pgbench(

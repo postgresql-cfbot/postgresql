@@ -680,6 +680,45 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
      </varlistentry>
 
      <varlistentry>
+      <term><option>--random-seed=</option><replaceable>SEED</replaceable></term>
+      <listitem>
+       <para>
+        Set random generator seed.  Seeds the system random number generator,
+        which then produces a sequence of initial generator states, one for
+        each thread.
+        Values for <replaceable>SEED</replaceable> may be:
+        <literal>time</literal> (the default, the seed is based on the current time),
+        <literal>rand</literal> (use a strong random source, failing if none
+        is available), or any unsigned octal (<literal>012470</literal>),
+        decimal (<literal>5432</literal>) or
+        hexedecimal (<literal>0x1538</literal>) integer value.
+        The random generator is invoked explicitly from a pgbench script
+        (<literal>random...</literal> functions) or implicitly (for instance option
+        <option>--rate</option> uses it to schedule transactions).
+        When explicitely set, the value used for seeding is shown on the terminal.
+        Any value allowed for <replaceable>SEED</replaceable> may also be
+        provided through the environment variable
+        <literal>PGBENCH_RANDOM_SEED</literal>.
+        To ensure that the provided seed impacts all possible uses, put this option
+        first or use the environment variable.
+      </para>
+      <para>
+        Setting the seed explicitly allows to reproduce a <command>pgbench</command>
+        run exactly, as far as random numbers are concerned.
+        As the random state is managed per thread, this means the exact same
+        <command>pgbench</command> run for an identical invocation if there is one
+        client per thread and there are no external or data dependencies.
+        From a statistical viewpoint reproducing runs exactly is a bad idea because
+        it can hide the performance variability or improve performance unduly,
+        e.g. by hitting the same pages as a previous run.
+        However, it may also be of great help for debugging, for instance
+        re-running a tricky case which leads to an error.
+        Use wisely.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--sampling-rate=<replaceable>rate</replaceable></option></term>
       <listitem>
        <para>
@@ -874,13 +913,18 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
 
      <tbody>
       <row>
-       <entry> <literal>scale</literal> </entry>
-       <entry>current scale factor</entry>
+       <entry> <literal>client_id</literal> </entry>
+       <entry>unique number identifying the client session (starts from zero)</entry>
       </row>
 
       <row>
-       <entry> <literal>client_id</literal> </entry>
-       <entry>unique number identifying the client session (starts from zero)</entry>
+       <entry> <literal>random_seed</literal> </entry>
+       <entry>random generator seed</entry>
+      </row>
+
+      <row>
+       <entry> <literal>scale</literal> </entry>
+       <entry>current scale factor</entry>
       </row>
      </tbody>
     </tgroup>

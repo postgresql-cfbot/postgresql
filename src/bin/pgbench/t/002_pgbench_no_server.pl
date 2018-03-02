@@ -78,6 +78,8 @@ my @options = (
 	[ 'invalid init step', '-i -I dta',
 		[qr{unrecognized initialization step},
 		 qr{allowed steps are} ] ],
+	[ 'bad random seed', '--random-seed=one',
+		[qr{error while scanning 'one' from --random-seed option, expecting an unsigned integer} ] ],
 
 	# loging sub-options
 	[   'sampling => log', '--sampling-rate=0.01',

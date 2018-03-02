@@ -834,6 +834,48 @@ set_cancel_slot_archive(ParallelSlot *slot, ArchiveHandle *AH)
 }
 
 
+
+/**
+ * This function issue shared locks for all tables to be dumped
+ */
+static void
+LockEarly(ArchiveHandle *AH)
+{
+        TocEntry *tocEntry;
+        char* tableNamespace;
+        char* tableName;
+        PQExpBuffer query;
+        PGresult *res;
+        
+        query = createPQExpBuffer();
+        resetPQExpBuffer(query);
+     
+        for( tocEntry = AH->toc->next; tocEntry != AH->toc; tocEntry = tocEntry->next )
+        {
+                
+                if( tocEntry->desc && strcmp( tocEntry->desc, "TABLE DATA") == 0 )
+                {
+                        tableNamespace = tocEntry->namespace;
+                        tableName = tocEntry->tag;
+                        
+                        appendPQExpBuffer(query, 
+                                "lock table %s.%s in access share mode nowait;\n",
+                                PQescapeIdentifier(AH->connection,tableNamespace,strlen(tableNamespace)),
+                                PQescapeIdentifier(AH->connection,tableName,strlen(tableName))
+                                );
+                }
+        }
+        
+        res = PQexec( AH->connection, query->data );
+        if( !res || PQresultStatus(res) != PGRES_COMMAND_OK )
+        {
+                exit_horribly(modulename,"Could not lock the tables to begin the backup job\n\n");
+        }
+        
+        PQclear( res );
+        destroyPQExpBuffer(query);
+}
+
 /*
  * This function is called by both Unix and Windows variants to set up
  * and run a worker process.  Caller should exit the process (or thread)
@@ -867,6 +909,14 @@ RunWorker(ArchiveHandle *AH, ParallelSlot *slot)
 	 */
 	(AH->SetupWorkerPtr) ((Archive *) AH);
 
+        /*
+         * Issue shared locks if --lock-early option is issued at command line
+         */
+        if( ((Archive*)AH)->dopt->lock_early )
+        {    
+                LockEarly(AH);
+        }
+        
 	/*
 	 * Execute commands until done.
 	 */

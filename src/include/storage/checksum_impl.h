@@ -106,6 +106,8 @@
 #define N_SUMS 32
 /* prime multiplier of FNV-1a hash */
 #define FNV_PRIME 16777619
+/* Size of checksum in bytes default 2 bytes (uint16) */
+#define CHKSUMSZ 2
 
 /*
  * Base offsets to initialize each of the parallel FNV hashes into a
@@ -204,4 +206,52 @@ pg_checksum_page(char *page, BlockNumber blkno)
 	 * one. That avoids checksums of zero, which seems like a good idea.
 	 */
 	return (checksum % 65535) + 1;
+}
+
+/*
+ * Compute the checksum for a Postgres SLRU page.  The page must be aligned on a
+ * 4-byte boundary.
+ *
+ * The checksum save itself to the last 2 bytes (CHKSUMSZ = 2 bytes) of the page
+ */
+uint16
+pg_checksum_slru_page(char *page)
+{
+	uint16		checksum;
+	uint8		bytes[2];
+
+	/* Set last 2 bytes to 0 */
+	page[BLCKSZ - 1] = 0;
+	page[BLCKSZ - 2] = 0;
+
+	checksum = (pg_checksum_block(page, BLCKSZ) % 65535) + 1;
+
+	bytes[0] = (checksum & 0X00FF);			/* Least significant bit */
+	bytes[1] = (checksum & 0XFF00) >> 8;	/* Most significant bit */
+
+
+	/* Set last 2 bytes to calculated checksum */
+	page[BLCKSZ - 1] = bytes[0];
+	page[BLCKSZ - 2] = bytes[1];
+
+	return checksum;
+}
+
+
+/*
+ * Get the checksum for a Postgres SLRU page.  The page must be aligned on a
+ * 4-byte boundary.
+ *
+ * The checksum located at last 2 bytes (CHKSUMSZ = 2 bytes) of the page
+ */
+uint16
+pg_getchecksum_slru_page(char *page)
+{
+	uint16		checksum = 0X00000000;
+
+	checksum = checksum | page[BLCKSZ - 2];
+	checksum = checksum << 8 ;
+	checksum = checksum | (page[BLCKSZ - 1] & 0X00FF);
+
+	return checksum;
 }

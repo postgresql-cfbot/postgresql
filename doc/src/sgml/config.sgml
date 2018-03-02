@@ -8547,6 +8547,29 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-ignore-slru-checksum-failure" xreflabel="ignore_slru_checksum_failure">
+      <term><varname>ignore_slru_checksum_failure</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>ignore_slru_checksum_failure</> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Only has effect if <xref linkend="app-initdb-data-checksums"> are enabled.
+       </para>
+       <para>
+        Detection of a checksum failure during a read normally causes
+        <productname>PostgreSQL</> to report an error. Setting <varname>ignore_slru_checksum_failure</>
+        to on causes the system to ignore the failure (but still report a warning), and
+        continue processing. Similary like <varname>ignore_checksum_failure</> but for
+        not relation files. The default setting is <literal>true</>, and it can only be
+        changed by a superuser. For changes, use ALTER SYSTEM and reload configuration:
+        ALTER SYSTEM SET ignore_slru_checksum_failure = off; 
+        SELECT pg_reload_conf(); 
+       </para>
+      </listitem>
+     </varlistentry>
+
     <varlistentry id="guc-zero-damaged-pages" xreflabel="zero_damaged_pages">
       <term><varname>zero_damaged_pages</varname> (<type>boolean</type>)
       <indexterm>

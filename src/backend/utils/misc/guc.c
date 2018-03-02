@@ -3899,7 +3899,7 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&sync_method,
 		DEFAULT_SYNC_METHOD, sync_method_options,
-		NULL, assign_xlog_sync_method, NULL
+		check_xlog_sync_method, assign_xlog_sync_method, NULL
 	},
 
 	{

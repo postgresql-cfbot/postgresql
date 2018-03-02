@@ -32,7 +32,9 @@ CREATE TABLE reloptions_test2(i INT) WITH (fillfactor);
 
 -- Simple ALTER TABLE
 ALTER TABLE reloptions_test SET (fillfactor=31,
-	autovacuum_analyze_scale_factor = 0.3);
+	autovacuum_analyze_scale_factor = 0.3,
+	autovacuum_table_priority = 1
+);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 
 -- Set boolean option to true without specifying value
@@ -40,7 +42,7 @@ ALTER TABLE reloptions_test SET (autovacuum_enabled, fillfactor=32);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 
 -- Check that RESET works well
-ALTER TABLE reloptions_test RESET (fillfactor);
+ALTER TABLE reloptions_test RESET (fillfactor, autovacuum_table_priority);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 
 -- Resetting all values causes the column to become null

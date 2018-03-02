@@ -6250,6 +6250,21 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-autovacuum-table-priority" xreflabel="autovacuum_table_priority">
+      <term><varname>autovacuum_table_priority</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>autovacuum_table_priority</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the priority of the table in automatic
+        <command>VACUUM</command> operations. 0 by default, bigger value gives
+        more priority.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </sect1>
 

@@ -50,23 +50,25 @@ CREATE TABLE reloptions_test2(i INT) WITH (fillfactor);
 ERROR:  invalid value for integer option "fillfactor": true
 -- Simple ALTER TABLE
 ALTER TABLE reloptions_test SET (fillfactor=31,
-	autovacuum_analyze_scale_factor = 0.3);
+	autovacuum_analyze_scale_factor = 0.3,
+	autovacuum_table_priority = 1
+);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
-                                  reloptions                                  
-------------------------------------------------------------------------------
- {autovacuum_enabled=false,fillfactor=31,autovacuum_analyze_scale_factor=0.3}
+                                                reloptions                                                
+----------------------------------------------------------------------------------------------------------
+ {autovacuum_enabled=false,fillfactor=31,autovacuum_analyze_scale_factor=0.3,autovacuum_table_priority=1}
 (1 row)
 
 -- Set boolean option to true without specifying value
 ALTER TABLE reloptions_test SET (autovacuum_enabled, fillfactor=32);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
-                                 reloptions                                  
------------------------------------------------------------------------------
- {autovacuum_analyze_scale_factor=0.3,autovacuum_enabled=true,fillfactor=32}
+                                               reloptions                                                
+---------------------------------------------------------------------------------------------------------
+ {autovacuum_analyze_scale_factor=0.3,autovacuum_table_priority=1,autovacuum_enabled=true,fillfactor=32}
 (1 row)
 
 -- Check that RESET works well
-ALTER TABLE reloptions_test RESET (fillfactor);
+ALTER TABLE reloptions_test RESET (fillfactor, autovacuum_table_priority);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
                           reloptions                           
 ---------------------------------------------------------------

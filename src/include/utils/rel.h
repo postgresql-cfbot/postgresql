@@ -269,6 +269,7 @@ typedef struct AutoVacOpts
 	int			multixact_freeze_max_age;
 	int			multixact_freeze_table_age;
 	int			log_min_duration;
+	int			priority;
 	float8		vacuum_scale_factor;
 	float8		analyze_scale_factor;
 } AutoVacOpts;

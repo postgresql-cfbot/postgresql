@@ -174,15 +174,22 @@ typedef struct avw_dbase
 	PgStat_StatDBEntry *adw_entry;
 } avw_dbase;
 
-/* struct to keep track of tables to vacuum and/or analyze, in 1st pass */
+/* struct for vacuumed or analyzed relation */
 typedef struct av_relation
+{
+	Oid			ar_relid;
+	int			ar_priority;	/* bigger- more important, used for sorting */
+} av_relation;
+
+/* struct to keep track of toast tables to vacuum and/or analyze, in 1st pass */
+typedef struct av_toastrelation
 {
 	Oid			ar_toastrelid;	/* hash key - must be first */
 	Oid			ar_relid;
 	bool		ar_hasrelopts;
 	AutoVacOpts ar_reloptions;	/* copy of AutoVacOpts from the main table's
 								 * reloptions, or NULL if none */
-} av_relation;
+} av_toastrelation;
 
 /* struct to keep track of tables to vacuum and/or analyze, after rechecking */
 typedef struct autovac_table
@@ -1933,6 +1940,16 @@ get_database_list(void)
 	return dblist;
 }
 
+/* qsort comparator for av_relation, using priority */
+static int
+autovac_comparator(const void *a, const void *b)
+{
+	av_relation	   *r1 = (av_relation *) lfirst(*(ListCell **) a);
+	av_relation	   *r2 = (av_relation *) lfirst(*(ListCell **) b);
+
+	return r2->ar_priority - r1->ar_priority;
+}
+
 /*
  * Process a database table-by-table
  *
@@ -1946,7 +1963,7 @@ do_autovacuum(void)
 	HeapTuple	tuple;
 	HeapScanDesc relScan;
 	Form_pg_database dbForm;
-	List	   *table_oids = NIL;
+	List	   *optables = NIL;
 	List	   *orphan_oids = NIL;
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
@@ -2035,7 +2052,7 @@ do_autovacuum(void)
 	/* create hash table for toast <-> main relid mapping */
 	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(av_relation);
+	ctl.entrysize = sizeof(av_toastrelation);
 
 	table_toast_map = hash_create("TOAST to main relid map",
 								  100,
@@ -2115,9 +2132,14 @@ do_autovacuum(void)
 								  effective_multixact_freeze_max_age,
 								  &dovacuum, &doanalyze, &wraparound);
 
-		/* Relations that need work are added to table_oids */
+		/* Relations that need work are added to optables */
 		if (dovacuum || doanalyze)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			av_relation *rel = (av_relation *) palloc(sizeof(av_relation));
+			rel->ar_relid = relid;
+			rel->ar_priority = relopts != NULL ? relopts->priority : 0;
+			optables = lappend(optables, rel);
+		}
 
 		/*
 		 * Remember TOAST associations for the second pass.  Note: we must do
@@ -2126,7 +2148,7 @@ do_autovacuum(void)
 		 */
 		if (OidIsValid(classForm->reltoastrelid))
 		{
-			av_relation *hentry;
+			av_toastrelation *hentry;
 			bool		found;
 
 			hentry = hash_search(table_toast_map,
@@ -2182,7 +2204,7 @@ do_autovacuum(void)
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
 		if (relopts == NULL)
 		{
-			av_relation *hentry;
+			av_toastrelation *hentry;
 			bool		found;
 
 			hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
@@ -2200,7 +2222,12 @@ do_autovacuum(void)
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			av_relation *rel = (av_relation *) palloc(sizeof(av_relation));
+			rel->ar_relid = relid;
+			rel->ar_priority = relopts != NULL ? relopts->priority : 0;
+			optables = lappend(optables, rel);
+		}
 	}
 
 	heap_endscan(relScan);
@@ -2296,6 +2323,9 @@ do_autovacuum(void)
 		MemoryContextSwitchTo(AutovacMemCxt);
 	}
 
+	/* Sort tables by autovacuum priority */
+	optables = list_qsort(optables, autovac_comparator);
+
 	/*
 	 * Create a buffer access strategy object for VACUUM to use.  We want to
 	 * use the same one across all the vacuum operations we perform, since the
@@ -2314,9 +2344,9 @@ do_autovacuum(void)
 	/*
 	 * Perform operations on collected tables.
 	 */
-	foreach(cell, table_oids)
+	foreach(cell, optables)
 	{
-		Oid			relid = lfirst_oid(cell);
+		Oid			relid = ((av_relation *) lfirst(cell))->ar_relid;
 		autovac_table *tab;
 		bool		skipit;
 		int			stdVacuumCostDelay;
@@ -2450,6 +2480,9 @@ do_autovacuum(void)
 		tab->at_datname = get_database_name(MyDatabaseId);
 		if (!tab->at_relname || !tab->at_nspname || !tab->at_datname)
 			goto deleted;
+
+		ereport(DEBUG1, (errmsg("automatic vacuum of table \"%s.%s.%s\"",
+				   tab->at_datname, tab->at_nspname, tab->at_relname)));
 
 		/*
 		 * We will abort vacuuming the current table if something errors out,
@@ -2801,7 +2834,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	if (classForm->relkind == RELKIND_TOASTVALUE &&
 		avopts == NULL && table_toast_map != NULL)
 	{
-		av_relation *hentry;
+		av_toastrelation *hentry;
 		bool		found;
 
 		hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);

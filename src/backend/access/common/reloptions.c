@@ -293,6 +293,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"autovacuum_table_priority",
+			"Sets the priority of the table in autovacuum process",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		0, INT_MIN, INT_MAX
+	},
+	{
+		{
 			"toast_tuple_target",
 			"Sets the target tuple length at which external columns will be toasted",
 			RELOPT_KIND_HEAP,
@@ -1353,6 +1362,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
 		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},
+		{"autovacuum_table_priority", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, priority)},
 		{"toast_tuple_target", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, toast_tuple_target)},
 		{"autovacuum_vacuum_scale_factor", RELOPT_TYPE_REAL,

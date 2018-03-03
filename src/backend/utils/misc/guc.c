@@ -3655,6 +3655,16 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"ssl_passphrase_command", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Command to obtain passphrases for SSL."),
+			NULL
+		},
+		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
 		{"application_name", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Sets the application name to be reported in statistics and logs."),
 			NULL,

@@ -6,6 +6,10 @@ use Test::More tests => 62;
 use ServerSetup;
 use File::Copy;
 
+# SSL tests are not supported without proper build options
+BAIL_OUT("SSL tests not supported without support in build") unless
+	check_pg_config("#define USE_OPENSSL 1");
+
 #### Some configuration
 
 # This is the hostname used to connect to the server. This cannot be a

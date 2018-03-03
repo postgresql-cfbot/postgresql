@@ -8,6 +8,10 @@ use Test::More tests => 6;
 use ServerSetup;
 use File::Copy;
 
+# SSL tests are not supported without proper build
+BAIL_OUT("SSL tests not supported without support in build") unless
+	check_pg_config("#define USE_OPENSSL 1");
+
 # This is the hostname used to connect to the server.
 my $SERVERHOSTADDR = '127.0.0.1';
 

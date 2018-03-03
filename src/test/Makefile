@@ -14,10 +14,24 @@ include $(top_builddir)/src/Makefile.global
 
 SUBDIRS = perl regress isolation modules authentication recovery subscription
 
+# Test suites which are not safe by default, but can be run if enforced
+# by the users via the whitespace-separated list in variable PG_TEST_EXTRA.
+ifeq ($(with_ldap),yes)
+ifneq (,$(filter ldap,$(PG_TEST_EXTRA)))
+SUBDIRS += ldap
+endif
+endif
+ifeq ($(with_openssl),yes)
+ifneq (,$(filter ssl,$(PG_TEST_EXTRA)))
+SUBDIRS += ssl
+endif
+endif
+
 # We don't build or execute examples/, locale/, or thread/ by default,
 # but we do want "make clean" etc to recurse into them.  Likewise for
 # ldap/ and ssl/, because these test suites are not secure to run on a
-# multi-user system.
+# multi-user system, still those can be enforced if wanted using
+# PG_TEST_EXTRA.
 ALWAYS_SUBDIRS = examples ldap locale thread ssl
 
 # We want to recurse to all subdirs for all standard targets, except that

@@ -4,6 +4,10 @@ use TestLib;
 use PostgresNode;
 use Test::More tests => 19;
 
+# LDAP tests are not supported without proper build options
+BAIL_OUT("LDAP tests not supported without support in build") unless
+	check_pg_config("#define USE_LDAP 1");
+
 my ($slapd, $ldap_bin_dir, $ldap_schema_dir);
 
 $ldap_bin_dir = undef;			# usually in PATH

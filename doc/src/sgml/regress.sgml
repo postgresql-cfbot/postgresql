@@ -211,6 +211,23 @@ make installcheck-world
    option <option>--enable-tap-tests</option>.  This is recommended for
    development, but can be omitted if there is no suitable Perl installation.
   </para>
+
+  <para>
+   TAP tests under <filename>src/test/ssl</filename> and
+   <filename>src/test/ldap</filename> are not secure to run on a multi-system
+   environment.  You can decide which test suites to additionally allow by
+   setting the <command>make</command> variable
+   <varname>PG_TEST_EXTRA</varname> to define a list of tests separated
+   by a whitespace.
+<programlisting>
+make -C src/test check PG_TEST_EXTRA='ssl ldap'
+</programlisting>
+   As of now, two test types are supported: <literal>ssl</literal> to allow
+   tests in <filename>src/test/ssl</filename> to be run, and
+   <literal>ldap</literal> for <filename>src/test/ldap</filename>.  Those
+   tests will not be run if the build does not support respectively
+   <acronym>SSL</acronym> and <acronym>LDAP</acronym> even if listed.
+  </para>
   </sect2>
 
   <sect2>

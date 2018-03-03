@@ -176,7 +176,7 @@ static bool estimate_multivariate_ndistinct(PlannerInfo *root,
 static bool convert_to_scalar(Datum value, Oid valuetypid, double *scaledvalue,
 				  Datum lobound, Datum hibound, Oid boundstypid,
 				  double *scaledlobound, double *scaledhibound);
-static double convert_numeric_to_scalar(Datum value, Oid typid);
+static double convert_numeric_to_scalar(Datum value, Oid typid, bool *unknown_type);
 static void convert_string_to_scalar(char *value,
 						 double *scaledvalue,
 						 char *lobound,
@@ -4071,10 +4071,15 @@ convert_to_scalar(Datum value, Oid valuetypid, double *scaledvalue,
 		case REGDICTIONARYOID:
 		case REGROLEOID:
 		case REGNAMESPACEOID:
-			*scaledvalue = convert_numeric_to_scalar(value, valuetypid);
-			*scaledlobound = convert_numeric_to_scalar(lobound, boundstypid);
-			*scaledhibound = convert_numeric_to_scalar(hibound, boundstypid);
-			return true;
+		{
+			bool	unknown_type = false;
+
+			*scaledvalue = convert_numeric_to_scalar(value, valuetypid, &unknown_type);
+			*scaledlobound = convert_numeric_to_scalar(lobound, boundstypid, &unknown_type);
+			*scaledhibound = convert_numeric_to_scalar(hibound, boundstypid, &unknown_type);
+
+			return (!unknown_type);
+		}
 
 			/*
 			 * Built-in string types
@@ -4147,7 +4152,7 @@ convert_to_scalar(Datum value, Oid valuetypid, double *scaledvalue,
  * Do convert_to_scalar()'s work for any numeric data type.
  */
 static double
-convert_numeric_to_scalar(Datum value, Oid typid)
+convert_numeric_to_scalar(Datum value, Oid typid, bool *unknown_type)
 {
 	switch (typid)
 	{
@@ -4185,9 +4190,11 @@ convert_numeric_to_scalar(Datum value, Oid typid)
 
 	/*
 	 * Can't get here unless someone tries to use scalarineqsel() on an
-	 * operator with one numeric and one non-numeric operand.
+	 * operator with one numeric and one non-numeric operand. Or more
+	 * precisely, operand that we don't know how to transform to scalar.
 	 */
-	elog(ERROR, "unsupported type: %u", typid);
+	*unknown_type = true;
+
 	return 0;
 }
 

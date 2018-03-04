@@ -1,0 +1,113 @@
+set enable_seqscan=off;
+CREATE TABLE test_tsrange (
+	i tsrange
+);
+INSERT INTO test_tsrange VALUES
+	( 'empty' ),
+	( '(,)' ),
+	( '[2018-02-02 03:55:08,2018-04-02 03:55:08)' ),
+	( '[2018-02-02 04:55:08,2018-04-02 04:55:08)' ),
+	( '[2018-02-02 05:55:08,2018-04-02 05:55:08)' ),
+	( '[2018-02-02 08:55:08,2018-04-02 08:55:08)' ),
+	( '[2018-02-02 09:55:08,2018-04-02 09:55:08)' ),
+	( '[2018-02-02 10:55:08,2018-04-02 10:55:08)' ),
+	( '[infinity,infinity]' )
+;
+CREATE INDEX idx_tsrange ON test_tsrange USING gin (i);
+SELECT * FROM test_tsrange WHERE i<'[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                            i                            
+---------------------------------------------------------
+ empty
+ (,)
+ ["Fri Feb 02 03:55:08 2018","Mon Apr 02 03:55:08 2018")
+ ["Fri Feb 02 04:55:08 2018","Mon Apr 02 04:55:08 2018")
+ ["Fri Feb 02 05:55:08 2018","Mon Apr 02 05:55:08 2018")
+(5 rows)
+
+SELECT * FROM test_tsrange WHERE i<='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                            i                            
+---------------------------------------------------------
+ empty
+ (,)
+ ["Fri Feb 02 03:55:08 2018","Mon Apr 02 03:55:08 2018")
+ ["Fri Feb 02 04:55:08 2018","Mon Apr 02 04:55:08 2018")
+ ["Fri Feb 02 05:55:08 2018","Mon Apr 02 05:55:08 2018")
+ ["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")
+(6 rows)
+
+SELECT * FROM test_tsrange WHERE i='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                            i                            
+---------------------------------------------------------
+ ["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")
+(1 row)
+
+SELECT * FROM test_tsrange WHERE i>='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                            i                            
+---------------------------------------------------------
+ ["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")
+ ["Fri Feb 02 09:55:08 2018","Mon Apr 02 09:55:08 2018")
+ ["Fri Feb 02 10:55:08 2018","Mon Apr 02 10:55:08 2018")
+ [infinity,infinity]
+(4 rows)
+
+SELECT * FROM test_tsrange WHERE i>'[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                            i                            
+---------------------------------------------------------
+ ["Fri Feb 02 09:55:08 2018","Mon Apr 02 09:55:08 2018")
+ ["Fri Feb 02 10:55:08 2018","Mon Apr 02 10:55:08 2018")
+ [infinity,infinity]
+(3 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test_tsrange WHERE i<'[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: i
+   ->  Bitmap Heap Scan on test_tsrange
+         Recheck Cond: (i < '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+         ->  Bitmap Index Scan on idx_tsrange
+               Index Cond: (i < '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+(6 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test_tsrange WHERE i<='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: i
+   ->  Bitmap Heap Scan on test_tsrange
+         Recheck Cond: (i <= '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+         ->  Bitmap Index Scan on idx_tsrange
+               Index Cond: (i <= '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+(6 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test_tsrange WHERE i='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on test_tsrange
+   Recheck Cond: (i = '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+   ->  Bitmap Index Scan on idx_tsrange
+         Index Cond: (i = '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+(4 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test_tsrange WHERE i>='[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: i
+   ->  Bitmap Heap Scan on test_tsrange
+         Recheck Cond: (i >= '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+         ->  Bitmap Index Scan on idx_tsrange
+               Index Cond: (i >= '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+(6 rows)
+
+EXPLAIN (COSTS OFF) SELECT * FROM test_tsrange WHERE i>'[2018-02-02 08:55:08,2018-04-02 08:55:08)'::tsrange ORDER BY i;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: i
+   ->  Bitmap Heap Scan on test_tsrange
+         Recheck Cond: (i > '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+         ->  Bitmap Index Scan on idx_tsrange
+               Index Cond: (i > '["Fri Feb 02 08:55:08 2018","Mon Apr 02 08:55:08 2018")'::tsrange)
+(6 rows)
+

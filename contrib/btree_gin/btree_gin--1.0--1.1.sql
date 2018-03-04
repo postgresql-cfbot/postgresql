@@ -3,7 +3,7 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "ALTER EXTENSION btree_gin UPDATE TO '1.1'" to load this file. \quit
 
--- macaddr8 datatype support new in 10.0.
+-- macaddr8 datatype support new in 1.0.
 CREATE FUNCTION gin_extract_value_macaddr8(macaddr8, internal)
 RETURNS internal
 AS 'MODULE_PATHNAME'

@@ -14,6 +14,8 @@
 #include "utils/numeric.h"
 #include "utils/timestamp.h"
 #include "utils/varbit.h"
+#include "utils/uuid.h"
+#include "utils/rangetypes.h"
 
 PG_MODULE_MAGIC;
 
@@ -350,6 +352,8 @@ leftmostvalue_text(void)
 
 GIN_SUPPORT(text, true, leftmostvalue_text, bttextcmp)
 
+GIN_SUPPORT(bpchar, true, leftmostvalue_text, bpcharcmp)
+
 static Datum
 leftmostvalue_char(void)
 {
@@ -477,3 +481,79 @@ leftmostvalue_enum(void)
 }
 
 GIN_SUPPORT(anyenum, false, leftmostvalue_enum, gin_enum_cmp)
+
+static Datum
+leftmostvalue_uuid(void)
+{
+	/* palloc0 will create the UUID with all zeroes: "00000000-0000-0000-0000-000000000000" */
+	pg_uuid_t	*retval = (pg_uuid_t *) palloc0(sizeof(pg_uuid_t));
+	return UUIDPGetDatum(retval);
+}
+
+GIN_SUPPORT(uuid, false, leftmostvalue_uuid, uuid_cmp)
+
+static Datum
+leftmostvalue_name(void)
+{
+	NameData* result = (NameData *) palloc0(NAMEDATALEN);
+	return NameGetDatum(result);
+}
+
+GIN_SUPPORT(name, false, leftmostvalue_name, btnamecmp)
+
+static Datum
+leftmostvalue_bool(void)
+{
+	return BoolGetDatum(false);
+}
+
+GIN_SUPPORT(bool, false, leftmostvalue_bool, btboolcmp)
+
+/*
+ * Use a similar trick to that used for numeric for anyrange, since we don't
+ * know the concrete type. We could try to build a fake empty range, but that
+ * seems weaker and more complex than simple using the NULL ref trick.
+ *
+ * Note that we use CallerFInfoFunctionCall2 here so that range_cmp
+ * gets a valid fn_extra to work with. Unlike most other type comparison
+ * routines it needs it, so we can't use DirectFunctionCall2.
+ */
+#define ANYRANGE_IS_LEFTMOST(x) ((x) == NULL)
+
+PG_FUNCTION_INFO_V1(gin_anyrange_cmp);
+
+Datum
+gin_anyrange_cmp(PG_FUNCTION_ARGS)
+{
+	RangeType	*a = (RangeType *) PG_GETARG_POINTER(0);
+	RangeType	*b = (RangeType *) PG_GETARG_POINTER(1);
+	int			res = 0;
+
+	if (ANYRANGE_IS_LEFTMOST(a))
+	{
+		res = (ANYRANGE_IS_LEFTMOST(b)) ? 0 : -1;
+	}
+	else if (ANYRANGE_IS_LEFTMOST(b))
+	{
+		res = 1;
+	}
+	else
+	{
+		res = DatumGetInt32(CallerFInfoFunctionCall2(
+													 range_cmp,
+													 fcinfo->flinfo,
+													 PG_GET_COLLATION(),
+													 RangeTypePGetDatum(a),
+													 RangeTypePGetDatum(b)));
+	}
+
+	PG_RETURN_INT32(res);
+}
+
+static Datum
+leftmostvalue_anyrange(void)
+{
+	return PointerGetDatum(NULL);
+}
+
+GIN_SUPPORT(anyrange, false, leftmostvalue_anyrange, gin_anyrange_cmp)

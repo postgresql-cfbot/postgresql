@@ -39,6 +39,7 @@
 #include "catalog/pg_constraint_fn.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_type.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
@@ -85,6 +86,7 @@ typedef struct
 	List	   *fkconstraints;	/* FOREIGN KEY constraints */
 	List	   *ixconstraints;	/* index-creating constraints */
 	List	   *inh_indexes;	/* cloned indexes from INCLUDING INDEXES */
+	List	   *extstats;		/* cloned extended statistics */
 	List	   *blist;			/* "before list" of things to do before
 								 * creating the table */
 	List	   *alist;			/* "after list" of things to do after creating
@@ -123,6 +125,7 @@ static List *get_opclass(Oid opclass, Oid actual_datatype);
 static void transformIndexConstraints(CreateStmtContext *cxt);
 static IndexStmt *transformIndexConstraint(Constraint *constraint,
 						 CreateStmtContext *cxt);
+static void transformExtendedStatistics(CreateStmtContext *cxt);
 static void transformFKConstraints(CreateStmtContext *cxt,
 					   bool skipValidation,
 					   bool isAddConstraint);
@@ -234,6 +237,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
 	cxt.inh_indexes = NIL;
+	cxt.extstats = NIL;
 	cxt.blist = NIL;
 	cxt.alist = NIL;
 	cxt.pkey = NULL;
@@ -323,6 +327,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Postprocess constraints that give rise to index definitions.
 	 */
 	transformIndexConstraints(&cxt);
+
+	transformExtendedStatistics(&cxt);
 
 	/*
 	 * Postprocess foreign-key constraints.
@@ -1189,6 +1195,37 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		}
 	}
 
+	if (table_like_clause->options & CREATE_TABLE_LIKE_STATISTICS)
+	{
+		List		   *parent_extstats;
+		ListCell	   *l;
+		CreateStatsStmt *stats_stmt;
+
+		parent_extstats = RelationGetStatExtList(relation);
+
+		foreach(l, parent_extstats)
+		{
+			Oid		parent_stat_oid = lfirst_oid(l);
+
+			stats_stmt = generateClonedExtStatsStmt(cxt->relation,
+												RelationGetRelid(relation),
+													parent_stat_oid);
+
+			if (table_like_clause->options & CREATE_TABLE_LIKE_COMMENTS)
+			{
+				comment = GetComment(parent_stat_oid, StatisticExtRelationId, 0);
+
+				/*
+				 * We make use of CreateStatsStmt's stxcomment option, so as
+				 * not to need to know now what name the statistics will have.
+				 */
+				stats_stmt->stxcomment = comment;
+			}
+
+			cxt->extstats = lappend(cxt->extstats, stats_stmt);
+		}
+	}
+
 	/*
 	 * Close the parent rel, but keep our AccessShareLock on it until xact
 	 * commit.  That will prevent someone else from deleting or ALTERing the
@@ -1564,6 +1601,96 @@ generateClonedIndexStmt(RangeVar *heapRel, Oid heapRelid, Relation source_idx,
 	ReleaseSysCache(ht_am);
 
 	return index;
+}
+
+/*
+ * Generate a CreateStatsStmt node using information from an already existing
+ * extended statistic "source_statsid", for the rel identified by heapRel and
+ * heapRelid.
+ */
+CreateStatsStmt *
+generateClonedExtStatsStmt(RangeVar *heapRel, Oid heapRelid,
+						   Oid source_statsid)
+{
+	HeapTuple		ht_stats;
+	Form_pg_statistic_ext statsrec;
+	CreateStatsStmt *stats;
+	List		   *stat_types = NIL;
+	List		   *def_names = NIL;
+	bool			 isnull;
+	Datum			datum;
+	ArrayType	   *arr;
+	char		   *enabled;
+	int				i;
+
+	Assert(OidIsValid(heapRelid));
+	Assert(heapRel != NULL);
+
+	/*
+	 * Fetch pg_statistic_ext tuple of source statistic.
+	 */
+	ht_stats = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(source_statsid));
+	if (!HeapTupleIsValid(ht_stats))
+		elog(ERROR, "cache lookup failed for statistics object %u", source_statsid);
+	statsrec = (Form_pg_statistic_ext) GETSTRUCT(ht_stats);
+
+	/* Determine which statistics types exist */
+	datum = SysCacheGetAttr(STATEXTOID, ht_stats,
+							Anum_pg_statistic_ext_stxkind, &isnull);
+	Assert(!isnull);
+	arr = DatumGetArrayTypeP(datum);
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != CHAROID)
+		elog(ERROR, "stxkind is not a 1-D char array");
+	enabled = (char *) ARR_DATA_PTR(arr);
+	for (i = 0; i < ARR_DIMS(arr)[0]; i++)
+	{
+		if (enabled[i] == STATS_EXT_NDISTINCT)
+			stat_types = lappend(stat_types, makeString("ndistinct"));
+		else if (enabled[i] == STATS_EXT_DEPENDENCIES)
+			stat_types = lappend(stat_types, makeString("dependencies"));
+		else
+			elog(ERROR, "unrecognized statistics kind %c", enabled[i]);
+	}
+
+	/* Determine which columns the statistics are on */
+	for (i = 0; i < statsrec->stxkeys.dim1; i++)
+	{
+		ColumnRef *cref = makeNode(ColumnRef);
+		HeapTuple	attTuple;
+		AttrNumber	attnum = statsrec->stxkeys.values[i];
+		Form_pg_attribute attributeForm;
+
+		attTuple = SearchSysCache2(ATTNUM,
+								   ObjectIdGetDatum(heapRelid),
+								   Int16GetDatum(attnum));
+		if (!HeapTupleIsValid(attTuple))
+			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+				 attnum, heapRelid);
+
+		attributeForm = (Form_pg_attribute) GETSTRUCT(attTuple);
+
+		cref->fields = list_make1(makeString(NameStr(attributeForm->attname)));
+
+		ReleaseSysCache(attTuple);
+
+		def_names = lappend(def_names, cref);
+	}
+
+	/* Begin building the CreateStatsStmt */
+	stats = makeNode(CreateStatsStmt);
+	stats->defnames = NULL;
+	stats->stat_types = stat_types;
+	stats->exprs = def_names;
+	stats->relations = list_make1(heapRel);
+	stats->stxcomment = NULL;
+	stats->if_not_exists = false;
+
+	/* Clean up */
+	ReleaseSysCache(ht_stats);
+
+	return stats;
 }
 
 /*
@@ -2117,6 +2244,15 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	}
 
 	return index;
+}
+
+static void
+transformExtendedStatistics(CreateStmtContext *cxt)
+{
+	ListCell *lc;
+
+	foreach(lc, cxt->extstats)
+		cxt->alist = lappend(cxt->alist, lfirst(lc));
 }
 
 /*
@@ -2695,6 +2831,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
 	cxt.inh_indexes = NIL;
+	cxt.extstats = NIL;
 	cxt.blist = NIL;
 	cxt.alist = NIL;
 	cxt.pkey = NULL;
@@ -2956,6 +3093,8 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 		newcmd->def = (Node *) lfirst(l);
 		newcmds = lappend(newcmds, newcmd);
 	}
+
+	transformExtendedStatistics(&cxt);
 
 	/* Close rel */
 	relation_close(rel, NoLock);

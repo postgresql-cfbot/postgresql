@@ -31,5 +31,8 @@ extern IndexStmt *generateClonedIndexStmt(RangeVar *heapRel, Oid heapOid,
 						Relation source_idx,
 						const AttrNumber *attmap, int attmap_length,
 						Oid *constraintOid);
+extern CreateStatsStmt *generateClonedExtStatsStmt(RangeVar *heapRel,
+						   Oid heapRelid,
+						   Oid source_statsid);
 
 #endif							/* PARSE_UTILCMD_H */

@@ -54,6 +54,7 @@ typedef struct
 
 	cfp		   *blobsTocFH;		/* file handle for blobs.toc */
 	ParallelState *pstate;		/* for parallel backup / restore */
+	bool		discard;		/* target is DEVNULL */
 } lclContext;
 
 typedef struct
@@ -158,6 +159,8 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 
 	ctx->directory = AH->fSpec;
 
+	ctx->discard = strcmp(ctx->directory, DEVNULL) == 0;
+
 	if (AH->mode == archModeWrite)
 	{
 		struct stat st;
@@ -192,9 +195,15 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 			}
 		}
 
-		if (!is_empty && mkdir(ctx->directory, 0700) < 0)
-			exit_horribly(modulename, "could not create directory \"%s\": %s\n",
-						  ctx->directory, strerror(errno));
+		/*
+		 * Create the output directory, unless it exists already and is empty.
+		 * If we are discarding output to the null device, we must not
+		 * create it.
+		 */
+		if (!is_empty && !ctx->discard)
+			if (mkdir(ctx->directory, 0700) < 0)
+				exit_horribly(modulename, "could not create directory \"%s\": %s\n",
+							  ctx->directory, strerror(errno));
 	}
 	else
 	{							/* Read Mode */
@@ -602,8 +611,10 @@ _CloseArchive(ArchiveHandle *AH)
 		/*
 		 * In directory mode, there is no need to sync all the entries
 		 * individually. Just recurse once through all the files generated.
+		 * If we are discarding output to the null device, it does not
+		 * need syncing and would emit a warning if we did.
 		 */
-		if (AH->dosync)
+		if (AH->dosync && !ctx->discard)
 			fsync_dir_recurse(ctx->directory, progname);
 	}
 	AH->FH = NULL;
@@ -659,7 +670,14 @@ _StartBlob(ArchiveHandle *AH, TocEntry *te, Oid oid)
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char		fname[MAXPGPATH];
 
-	snprintf(fname, MAXPGPATH, "%s/blob_%u.dat", ctx->directory, oid);
+	/*
+	 * If we are discarding output to the null device, just use that as
+	 * fname.
+	 */
+	if (ctx->discard)
+		snprintf(fname, MAXPGPATH, DEVNULL);
+	else
+		snprintf(fname, MAXPGPATH, "%s/blob_%u.dat", ctx->directory, oid);
 
 	ctx->dataFH = cfopen_write(fname, PG_BINARY_W, AH->compression);
 
@@ -721,9 +739,18 @@ setFilePath(ArchiveHandle *AH, char *buf, const char *relativeFilename)
 	if (strlen(dname) + 1 + strlen(relativeFilename) + 1 > MAXPGPATH)
 		exit_horribly(modulename, "file name too long: \"%s\"\n", dname);
 
-	strcpy(buf, dname);
-	strcat(buf, "/");
-	strcat(buf, relativeFilename);
+	/*
+	 * If we are discarding output to the null device, we cannot set a file
+	 * path and just set the buffer to the null device.
+	 */
+	if (ctx->discard)
+		strcpy(buf, DEVNULL);
+	else
+	{
+		strcpy(buf, dname);
+		strcat(buf, "/");
+		strcat(buf, relativeFilename);
+	}
 }
 
 /*

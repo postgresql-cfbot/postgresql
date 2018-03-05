@@ -512,7 +512,10 @@ cfopen_write(const char *path, const char *mode, int compression)
 #ifdef HAVE_LIBZ
 		char	   *fname;
 
-		fname = psprintf("%s.gz", path);
+		if (strcmp(path, DEVNULL) != 0)
+			fname = psprintf("%s.gz", path);
+		else
+			fname = pg_strdup(path);
 		fp = cfopen(fname, mode, compression);
 		free_keep_errno(fname);
 #else

@@ -525,7 +525,7 @@ usage(void)
 		   "  -F, --fillfactor=NUM     set fill factor\n"
 		   "  -n, --no-vacuum          do not run VACUUM during initialization\n"
 		   "  -q, --quiet              quiet logging (one message each 5 seconds)\n"
-		   "  -s, --scale=NUM          scaling factor\n"
+		   "  -s, --scale=NUM|SIZE     scaling factor or expected actual data (without overheads) size\n"
 		   "  --foreign-keys           create foreign key constraints between tables\n"
 		   "  --index-tablespace=TABLESPACE\n"
 		   "                           create indexes in the specified tablespace\n"
@@ -553,7 +553,7 @@ usage(void)
 		   "  -P, --progress=NUM       show thread progress report every NUM seconds\n"
 		   "  -r, --report-latencies   report average latency per command\n"
 		   "  -R, --rate=NUM           target rate in transactions per second\n"
-		   "  -s, --scale=NUM          report this scale factor in output\n"
+		   "  -s, --scale=NUM|SIZE     report this scale factor in output\n"
 		   "  -t, --transactions=NUM   number of transactions each client runs (default: 10)\n"
 		   "  -T, --time=NUM           duration of benchmark test in seconds\n"
 		   "  -v, --vacuum-all         vacuum all four standard tables before tests\n"
@@ -667,6 +667,97 @@ gotdigits:
 		fprintf(stderr, "invalid input syntax for integer: \"%s\"\n", str);
 
 	return ((sign < 0) ? -result : result);
+}
+
+/* return a size in bytes, or exit with an error message
+ */
+static int64
+parse_size(char * s, const char * error_message)
+{
+	static struct { char *name; int64 multiplier; }
+		UNITS[17] = {
+			/* IEC units */
+			{ "KiB", 1024 },
+			{ "MiB", 1024 * 1024 },
+			{ "GiB", 1024 * 1024 * 1024 },
+			{ "TiB", (int64) 1024 * 1024 * 1024 * 1024 },
+			{ "PiB", (int64) 1024 * 1024 * 1024 * 1024 * 1024 },
+			/* SI units */
+			{ "kB", 1000 },
+			{ "MB", 1000 * 1000 },
+			{ "GB", 1000 * 1000 * 1000 },
+			{ "TB", (int64) 1000 * 1000 * 1000 * 1000 },
+			{ "PB", (int64) 1000 * 1000 * 1000 * 1000 * 1000 },
+			/* common/convenient JEDEC usage */
+			{ "KB", 1024 },
+			{ "K", 1024 },
+			{ "M", 1024 * 1024 },
+			{ "G", 1024 * 1024 * 1024 },
+			{ "T", (int64) 1024 * 1024 * 1024 * 1024 },
+			{ "P", (int64) 1024 * 1024 * 1024 * 1024 * 1024 },
+			/* unit */
+			{ "B", 1 },
+	};
+
+	int		len = strlen(s), last = -1, i;
+	int64	size;
+	char	clast;
+
+	/* look for the unit */
+	for (i = 0; i < lengthof(UNITS); i++)
+		if (strcmp(s + len - strlen(UNITS[i].name), UNITS[i].name) == 0)
+			break;
+
+	/* found, or not */
+	if (i < lengthof(UNITS))
+	{
+		last = len - strlen(UNITS[i].name);
+		clast = s[last];
+		s[last] = '\0';
+	}
+	else /* assume bytes */
+		i = lengthof(UNITS) - 1;
+
+	if (!is_an_int(s))
+	{
+		fprintf(stderr, "invalid %s: \"%s\"\n", error_message, s);
+		exit(1);
+	}
+
+	size = strtoint64(s) * UNITS[i].multiplier;
+
+	if (last != -1)
+		s[last] = clast;
+
+	return size;
+}
+
+/* parse scale, returning at least 1 */
+static int
+parse_scale(char * s)
+{
+	int scale;
+
+	if (is_an_int(s))
+	{
+		/* standard scaling */
+		scale = atoi(s);
+	}
+	else
+	{
+		/* try data size scaling */
+		int64 size = parse_size(s, "scaling factor");
+		/* size refers to actual data, without overheads */
+		scale = (int) ceil(size / ((naccounts + ntellers + nbranches) * 100.0));
+	}
+
+	if (scale <= 0)
+	{
+		fprintf(stderr, "scale %s too small, rounded to 1\n", s);
+		scale = 1;
+	}
+
+	return scale;
 }
 
 /* random number generator: uniform distribution from min to max inclusive */
@@ -4234,7 +4325,9 @@ printResults(TState *threads, StatsData *total, instr_time total_time,
 	/* Report test parameters. */
 	printf("transaction type: %s\n",
 		   num_scripts == 1 ? sql_script[0].desc : "multiple scripts");
-	printf("scaling factor: %d\n", scale);
+	/* scale to MiB evaluation must be consistent with parse_scale */
+	printf("scaling factor: %d (%.1f MiB of actual data)\n",
+		   scale, (naccounts + ntellers + nbranches) * 100.0 * scale / (1024 * 1024));
 	printf("query mode: %s\n", QUERYMODE[querymode]);
 	printf("number of clients: %d\n", nclients);
 	printf("number of threads: %d\n", nthreads);
@@ -4550,12 +4643,7 @@ main(int argc, char **argv)
 				break;
 			case 's':
 				scale_given = true;
-				scale = atoi(optarg);
-				if (scale <= 0)
-				{
-					fprintf(stderr, "invalid scaling factor: \"%s\"\n", optarg);
-					exit(1);
-				}
+				scale = parse_scale(optarg);
 				break;
 			case 't':
 				benchmarking_option_set = true;

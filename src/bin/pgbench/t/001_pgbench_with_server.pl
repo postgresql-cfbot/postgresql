@@ -81,7 +81,7 @@ pgbench(
 
 # Again, with all possible options
 pgbench(
-'--initialize --init-steps=dtpvg --scale=1 --unlogged-tables --fillfactor=98 --foreign-keys --quiet --tablespace=pg_default --index-tablespace=pg_default',
+'--initialize --init-steps=dtpvg --scale=18M --unlogged-tables --fillfactor=98 --foreign-keys --quiet --tablespace=pg_default --index-tablespace=pg_default',
 	0,
 	[qr{^$}i],
 	[   qr{dropping old tables},
@@ -89,6 +89,7 @@ pgbench(
 		qr{vacuuming},
 		qr{creating primary keys},
 		qr{creating foreign keys},
+		qr{200000 of 200000 tuples}, # scale 2
 		qr{done\.} ],
 	'pgbench scale 1 initialization');
 

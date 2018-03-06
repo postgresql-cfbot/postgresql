@@ -49,7 +49,7 @@
 
 <screen>
 transaction type: &lt;builtin: TPC-B (sort of)&gt;
-scaling factor: 10
+scaling factor: 10 (95.4 MiB of actual data)
 query mode: simple
 number of clients: 10
 number of threads: 1
@@ -281,6 +281,20 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         will switch to using larger integers (<type>bigint</type>),
         in order to be big enough to hold the range of account
         identifiers.
+       </para>
+
+       <para>
+        The scale can also be specified as an expected actual data size in
+        the accounts, tellers and branches tables, without overheads such
+        as headers and indexes, by specifying a unit.
+        For instance, <literal>-s 5G</literal> will approximate the scale
+        required for 5 GiB of data.
+        Note that storage overheads typically represent about 65\% of the actual data,
+        and may vary depending on options.
+        Allowed units are IEC 1024 powers (<literal>KiB MiB GiB TiB PiB</literal>),
+        SI 1000 powers (<literal>kB MB GB TB PB</literal>) and for convenience
+        simple size prefixes <literal>K M G T P</literal> are aliases for the IEC
+        binary sizes.
        </para>
       </listitem>
      </varlistentry>
@@ -1601,7 +1615,7 @@ END;
 <screen>
 starting vacuum...end.
 transaction type: &lt;builtin: TPC-B (sort of)&gt;
-scaling factor: 1
+scaling factor: 1 (9.5 MiB of actual data)
 query mode: simple
 number of clients: 10
 number of threads: 1

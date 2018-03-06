@@ -44,6 +44,7 @@ my @options = (
 	[   'bad #threads', '-j eleven', [qr{invalid number of threads: "eleven"}]
 	],
 	[ 'bad scale', '-i -s two', [qr{invalid scaling factor: "two"}] ],
+	[ 'bad scale size', '-i -s 2stuff', [qr{invalid scaling factor: "2stuff"}] ],
 	[   'invalid #transactions',
 		'-t zil',
 		[qr{invalid number of transactions: "zil"}] ],

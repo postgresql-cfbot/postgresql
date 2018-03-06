@@ -1262,6 +1262,57 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-replication" xreflabel="replication">
+      <term><literal>replication</literal></term>
+      <listitem>
+      <para>
+       This option determines if a backend should use the replication
+       protocol.  For a detailed description about the replication protocol,
+       consult <xref linkend="protocol-replication"/>. The following values,
+       which are case-insensitive, are supported:
+       <variablelist>
+        <varlistentry>
+         <term>
+          <literal>true</literal>, <literal>on</literal>,
+           <literal>yes</literal> or <literal>1</literal>
+         </term>
+         <listitem>
+          <para>
+           The backend goes into physical replication mode, wherein a small
+           set of replication commands can be issued instead of SQL statements.
+           Only the simple query protocol can be used in this case.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry>
+         <term><literal>database</literal></term>
+         <listitem>
+          <para>
+           The backend goes into logical replication mode, as the value
+           instructs the backend to connect to the database specified in
+           the <literal>dbname</literal> parameter.  Only the simple query
+           protocol can be used in this case.
+          </para>
+         </listitem>
+        </varlistentry>
+
+        <varlistentry>
+         <term>
+          <literal>false</literal>, <literal>off</literal>,
+           <literal>no</literal> or <literal>0</literal>
+         </term>
+         <listitem>
+          <para>
+           The backend is a regular one, which is the default behavior.
+          </para>
+         </listitem>
+        </varlistentry>
+       </variablelist>
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-sslmode" xreflabel="sslmode">
       <term><literal>sslmode</literal></term>
       <listitem>

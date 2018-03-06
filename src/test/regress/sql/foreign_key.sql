@@ -1055,3 +1055,66 @@ alter table fktable2 drop constraint fktable2_f1_fkey;
 commit;
 
 drop table pktable2, fktable2;
+
+CREATE SCHEMA createtest;
+CREATE SCHEMA altertest;
+
+-- ALTER CONSTRAINT changing ON UPDATE/DELETE.
+-- Try all combinations and validate the diff with a created constraint
+WITH act(action) AS (
+    SELECT unnest('{NO ACTION,RESTRICT,CASCADE,SET DEFAULT,SET NULL}'::text[])
+)
+SELECT
+    unnest(string_to_array(format($$
+         -- Alter from ON %1$s %2$s to ON %1$s %3$s
+        CREATE TABLE createtest.foo(id integer primary key);
+        CREATE TABLE createtest.bar(foo_id integer DEFAULT 0 REFERENCES createtest.foo ON %1$s %3$s, val text);
+
+        CREATE TABLE altertest.foo(id integer primary key);
+        INSERT INTO altertest.foo VALUES(0),(1),(2),(3);
+
+        <BREAK>
+        CREATE TABLE altertest.bar(foo_id integer DEFAULT 0 REFERENCES altertest.foo ON %1$s %2$s, val text);
+        INSERT INTO altertest.bar VALUES(1, 'A'),(2, 'B');
+
+        <BREAK>
+        ALTER TABLE altertest.bar ALTER CONSTRAINT bar_foo_id_fkey ON %1$s %3$s;
+
+        <BREAK>
+        UPDATE altertest.foo SET id = 10 WHERE id = 1;
+
+        <BREAK>
+        DELETE FROM altertest.foo WHERE id = 2;
+
+        <BREAK>
+        SELECT * FROM altertest.bar;
+
+        <BREAK>
+        -- Do EXCEPT of the "altertest" and "createtest" constraints, if they are equal (as expected), it should return empty
+        SELECT
+            rel.relname, replace(tg.tgname, tg.oid::text, 'OID') AS tgname,
+            tg.tgfoid::regproc, con.conname, con.confupdtype, con.confdeltype, tg.tgdeferrable,
+            regexp_replace(pg_get_constraintdef(con.oid), '(createtest\.|altertest\.)', '') AS condef
+        FROM pg_trigger tg
+            JOIN pg_constraint con ON con.oid = tg.tgconstraint
+            JOIN pg_class rel ON tg.tgrelid = rel.oid
+        WHERE tg.tgrelid IN ('altertest.foo'::regclass, 'altertest.bar'::regclass)
+        EXCEPT
+        SELECT
+            rel.relname, replace(tg.tgname, tg.oid::text, 'OID') AS tgname,
+            tg.tgfoid::regproc, con.conname, con.confupdtype, con.confdeltype, tg.tgdeferrable,
+            regexp_replace(pg_get_constraintdef(con.oid), '(createtest\.|altertest\.)', '') AS condef
+        FROM pg_trigger tg
+            JOIN pg_constraint con ON con.oid = tg.tgconstraint
+            JOIN pg_class rel ON tg.tgrelid = rel.oid
+        WHERE tg.tgrelid IN ('createtest.foo'::regclass, 'createtest.bar'::regclass)
+        ;
+
+        <BREAK>
+        DROP TABLE createtest.bar;
+        DROP TABLE createtest.foo;
+        DROP TABLE altertest.bar;
+        DROP TABLE altertest.foo;
+        $$, m.method, a1.action, a2.action), '<BREAK>'))
+
+FROM unnest('{UPDATE,DELETE}'::text[]) AS m(method), act a1, act a2 \gexec

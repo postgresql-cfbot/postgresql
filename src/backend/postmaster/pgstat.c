@@ -5046,6 +5046,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	 */
 	for (;;)
 	{
+		pg_usleep(100000);
 		switch (fgetc(fpin))
 		{
 				/*

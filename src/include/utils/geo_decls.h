@@ -182,6 +182,7 @@ typedef struct
 extern double point_dt(Point *pt1, Point *pt2);
 extern double point_sl(Point *pt1, Point *pt2);
 extern double pg_hypot(double x, double y);
-extern BOX *box_copy(BOX *box);
+extern BOX *box_copy(const BOX *box);
+extern BOX *box_fill(BOX *box, double xlo, double xhi, double ylo, double yhi);
 
 #endif							/* GEO_DECLS_H */

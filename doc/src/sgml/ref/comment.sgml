@@ -31,7 +31,7 @@ COMMENT ON
   CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> ON <replaceable class="parameter">table_name</replaceable> |
   CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> ON DOMAIN <replaceable class="parameter">domain_name</replaceable> |
   CONVERSION <replaceable class="parameter">object_name</replaceable> |
-  DATABASE <replaceable class="parameter">object_name</replaceable> |
+  DATABASE <replaceable class="parameter">database_specification</replaceable> |
   DOMAIN <replaceable class="parameter">object_name</replaceable> |
   EXTENSION <replaceable class="parameter">object_name</replaceable> |
   EVENT TRIGGER <replaceable class="parameter">object_name</replaceable> |
@@ -73,6 +73,11 @@ COMMENT ON
 * |
 [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ] |
 [ [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ] ] ORDER BY [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ]
+
+<phrase>where <replaceable class="parameter">database_specification</replaceable> is:</phrase>
+
+    <replaceable class="parameter">database_name</replaceable>
+  | CURRENT_DATABASE
 </synopsis>
  </refsynopsisdiv>
 
@@ -315,6 +320,7 @@ COMMENT ON CONVERSION my_conv IS 'Conversion to UTF8';
 COMMENT ON CONSTRAINT bar_col_cons ON bar IS 'Constrains column col';
 COMMENT ON CONSTRAINT dom_col_constr ON DOMAIN dom IS 'Constrains col of domain';
 COMMENT ON DATABASE my_database IS 'Development Database';
+COMMENT ON DATABASE current_database IS 'Comment on current Database';
 COMMENT ON DOMAIN my_domain IS 'Email Address Domain';
 COMMENT ON EXTENSION hstore IS 'implements the hstore data type';
 COMMENT ON FOREIGN DATA WRAPPER mywrapper IS 'my foreign data wrapper';

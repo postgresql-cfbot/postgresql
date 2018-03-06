@@ -65,6 +65,7 @@
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/parsenodes.h"
 #include "parser/parse_func.h"
 #include "parser/parse_type.h"
 #include "utils/acl.h"
@@ -657,10 +658,10 @@ objectNamesToOids(ObjectType objtype, List *objnames)
 		case OBJECT_DATABASE:
 			foreach(cell, objnames)
 			{
-				char	   *dbname = strVal(lfirst(cell));
+				DbSpec	   *dbspec = lfirst(cell);
 				Oid			dbid;
 
-				dbid = get_database_oid(dbname, false);
+				dbid = get_dbspec_oid(dbspec,false);
 				objects = lappend_oid(objects, dbid);
 			}
 			break;

@@ -369,6 +369,26 @@ SELECT * FROM chksetconfig();
 ----+------+------------+-----------
 (0 rows)
 
+--  ALTER ROLE IN DATABASE CURRENT_DATABASE SET/RESET
+ALTER ROLE CURRENT_USER IN DATABASE CURRENT_DATABASE SET application_name to 'FOO';
+ALTER ROLE "current_user" IN DATABASE CURRENT_DATABASE SET application_name to 'FOOFOO';
+ALTER ROLE "Public" IN DATABASE CURRENT_DATABASE SET application_name to 'BARBAR';
+SELECT * FROM chksetconfig();
+     db     |       role       |  rolkeyword  |         setconfig         
+------------+------------------+--------------+---------------------------
+ regression | Public           | -            | {application_name=BARBAR}
+ regression | current_user     | -            | {application_name=FOOFOO}
+ regression | regress_testrol2 | current_user | {application_name=FOO}
+(3 rows)
+
+ALTER ROLE CURRENT_USER IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER ROLE "current_user" IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER ROLE "Public" IN DATABASE CURRENT_DATABASE RESET application_name;
+SELECT * FROM chksetconfig();
+ db | role | rolkeyword | setconfig 
+----+------+------------+-----------
+(0 rows)
+
 ALTER ROLE CURRENT_ROLE SET application_name to 'BAZ'; -- error
 ERROR:  syntax error at or near "CURRENT_ROLE"
 LINE 1: ALTER ROLE CURRENT_ROLE SET application_name to 'BAZ';
@@ -416,6 +436,26 @@ ALTER USER SESSION_USER RESET application_name;
 ALTER USER "current_user" RESET application_name;
 ALTER USER "Public" RESET application_name;
 ALTER USER ALL RESET application_name;
+SELECT * FROM chksetconfig();
+ db | role | rolkeyword | setconfig 
+----+------+------------+-----------
+(0 rows)
+
+--  ALTER USER IN DATABASE CURRENT_DATABASE SET/RESET
+ALTER USER SESSION_USER IN DATABASE CURRENT_DATABASE SET application_name to 'BAR';
+ALTER USER "current_user" IN DATABASE CURRENT_DATABASE SET application_name to 'FOOFOO';
+ALTER USER "Public" IN DATABASE CURRENT_DATABASE SET application_name to 'BARBAR';
+SELECT * FROM chksetconfig();
+     db     |       role       |  rolkeyword  |         setconfig         
+------------+------------------+--------------+---------------------------
+ regression | Public           | -            | {application_name=BARBAR}
+ regression | current_user     | -            | {application_name=FOOFOO}
+ regression | regress_testrol1 | session_user | {application_name=BAR}
+(3 rows)
+
+ALTER USER SESSION_USER IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER USER "current_user" IN DATABASE CURRENT_DATABASE RESET application_name;
+ALTER USER "Public" IN DATABASE CURRENT_DATABASE RESET application_name;
 SELECT * FROM chksetconfig();
  db | role | rolkeyword | setconfig 
 ----+------+------------+-----------

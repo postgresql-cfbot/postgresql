@@ -330,6 +330,23 @@ typedef struct RoleSpec
 } RoleSpec;
 
 /*
+ * DbSpecType - The type of a database name.
+ */
+typedef enum DbSpecType
+{
+	DBSPEC_CSTRING,				/* database name is stored as a C string */
+	DBSPEC_CURRENT_DATABASE		/* database name is CURRENT_DATABASE */
+} DbSpecType;
+
+typedef struct DbSpec
+{
+	NodeTag			type;
+	DbSpecType		dbtype;			/* Type of the database */
+	char			*dbname;		/* filled only for DBSPEC_CSTRING */
+	int				location;		/* token location, or -1 if unknown */
+} DbSpec;
+
+/*
  * FuncCall - a function or aggregate invocation
  *
  * agg_order (if not NIL) indicates we saw 'foo(... ORDER BY ...)', or if
@@ -2457,7 +2474,7 @@ typedef struct AlterRoleSetStmt
 {
 	NodeTag		type;
 	RoleSpec   *role;			/* role */
-	char	   *database;		/* database name, or NULL */
+	DbSpec	   *dbspec;			/* name of database to set */
 	VariableSetStmt *setstmt;	/* SET or RESET subcommand */
 } AlterRoleSetStmt;
 
@@ -3068,14 +3085,14 @@ typedef struct CreatedbStmt
 typedef struct AlterDatabaseStmt
 {
 	NodeTag		type;
-	char	   *dbname;			/* name of database to alter */
-	List	   *options;		/* List of DefElem nodes */
+	DbSpec		*dbspec;		/* name of database to alter */
+	List	   	*options;		/* List of DefElem nodes */
 } AlterDatabaseStmt;
 
 typedef struct AlterDatabaseSetStmt
 {
 	NodeTag		type;
-	char	   *dbname;			/* database name */
+	DbSpec		*dbspec;			/* DbSpec */
 	VariableSetStmt *setstmt;	/* SET or RESET subcommand */
 } AlterDatabaseSetStmt;
 

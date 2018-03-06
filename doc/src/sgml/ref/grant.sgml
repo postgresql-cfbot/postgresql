@@ -39,8 +39,13 @@ GRANT { { USAGE | SELECT | UPDATE }
     TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
 
 GRANT { { CREATE | CONNECT | TEMPORARY | TEMP } [, ...] | ALL [ PRIVILEGES ] }
-    ON DATABASE <replaceable>database_name</replaceable> [, ...]
+    ON DATABASE <replaceable>database_specification</replaceable> [, ...]
     TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+
+<phrase>where <replaceable class="parameter">database_specification</replaceable> can be:</phrase>
+
+    <replaceable class="parameter">database_name</replaceable>
+  | CURRENT_DATABASE
 
 GRANT { USAGE | ALL [ PRIVILEGES ] }
     ON DOMAIN <replaceable>domain_name</replaceable> [, ...]

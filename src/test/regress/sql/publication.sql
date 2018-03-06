@@ -112,6 +112,18 @@ DROP PUBLICATION testpub2;
 SET ROLE regress_publication_user;
 REVOKE CREATE ON DATABASE regression FROM regress_publication_user2;
 
+--- test grant on database current_database
+GRANT CREATE ON DATABASE CURRENT_DATABASE TO regress_publication_user2;
+SET ROLE regress_publication_user2;
+CREATE PUBLICATION testpub2;  -- ok
+DROP PUBLICATION testpub2;
+
+SET ROLE regress_publication_user;
+REVOKE CREATE ON DATABASE CURRENT_DATABASE FROM regress_publication_user2;
+SET ROLE regress_publication_user2;
+CREATE PUBLICATION testpub2;  -- fail
+SET ROLE regress_publication_user;
+
 DROP TABLE testpub_parted;
 DROP VIEW testpub_view;
 DROP TABLE testpub_tbl1;

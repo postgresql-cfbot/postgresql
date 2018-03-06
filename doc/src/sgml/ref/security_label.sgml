@@ -26,7 +26,7 @@ SECURITY LABEL [ FOR <replaceable class="parameter">provider</replaceable> ] ON
   TABLE <replaceable class="parameter">object_name</replaceable> |
   COLUMN <replaceable class="parameter">table_name</replaceable>.<replaceable class="parameter">column_name</replaceable> |
   AGGREGATE <replaceable class="parameter">aggregate_name</replaceable> ( <replaceable>aggregate_signature</replaceable> ) |
-  DATABASE <replaceable class="parameter">object_name</replaceable> |
+  DATABASE <replaceable class="parameter">database_specification</replaceable> |
   DOMAIN <replaceable class="parameter">object_name</replaceable> |
   EVENT TRIGGER <replaceable class="parameter">object_name</replaceable> |
   FOREIGN TABLE <replaceable class="parameter">object_name</replaceable>
@@ -51,6 +51,11 @@ SECURITY LABEL [ FOR <replaceable class="parameter">provider</replaceable> ] ON
 * |
 [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ] |
 [ [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ] ] ORDER BY [ <replaceable>argmode</replaceable> ] [ <replaceable>argname</replaceable> ] <replaceable>argtype</replaceable> [ , ... ]
+
+<phrase>where <replaceable class="parameter">database_specification</replaceable> is:</phrase>
+
+    <replaceable class="parameter">database_name</replaceable>
+  | CURRENT_DATABASE
 </synopsis>
  </refsynopsisdiv>
 

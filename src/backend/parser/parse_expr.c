@@ -2337,6 +2337,7 @@ transformSQLValueFunction(ParseState *pstate, SQLValueFunction *svf)
 		case SVFOP_SESSION_USER:
 		case SVFOP_CURRENT_CATALOG:
 		case SVFOP_CURRENT_SCHEMA:
+		case SVFOP_CURRENT_DATABASE:
 			svf->type = NAMEOID;
 			break;
 	}

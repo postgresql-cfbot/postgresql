@@ -46,9 +46,14 @@ REVOKE [ GRANT OPTION FOR ]
 
 REVOKE [ GRANT OPTION FOR ]
     { { CREATE | CONNECT | TEMPORARY | TEMP } [, ...] | ALL [ PRIVILEGES ] }
-    ON DATABASE <replaceable>database_name</replaceable> [, ...]
+    ON DATABASE <replaceable>database_specification</replaceable> [, ...]
     FROM { [ GROUP ] <replaceable class="parameter">role_name</replaceable> | PUBLIC } [, ...]
     [ CASCADE | RESTRICT ]
+
+<phrase>where <replaceable class="parameter">database_specification</replaceable> can be:</phrase>
+
+    <replaceable class="parameter">database_name</replaceable>
+  | CURRENT_DATABASE
 
 REVOKE [ GRANT OPTION FOR ]
     { USAGE | ALL [ PRIVILEGES ] }

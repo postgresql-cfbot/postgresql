@@ -1908,6 +1908,53 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        </itemizedlist>
      </entry>
     </row>
+    <row>
+     <entry><structfield>spill_txns</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Number of transactions spilled to disk after the memory used by
+      logical decoding exceeds <literal>logical_work_mem</literal>. The
+      counter gets incremented both for toplevel transactions and
+      subtransactions.
+      </entry>
+    </row>
+    <row>
+     <entry><structfield>spill_count</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Number of times transactions were spilled to disk. Transactions
+      may get spilled repeatedly, and this counter gets incremented on every
+      such invocation.
+      </entry>
+    </row>
+    <row>
+     <entry><structfield>spill_bytes</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Amount of decoded transaction data spilled to disk.
+      </entry>
+    </row>
+    <row>
+     <entry><structfield>stream_txns</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Number of in-progress transactions streamed to subscriber after
+      memory used by logical decoding exceeds <literal>logical_work_mem</literal>.
+      Streaming only works with toplevel transactions (subtransactions can't
+      be streamed independently), so the counter does not get incremented for
+      subtransactions.
+      </entry>
+    </row>
+    <row>
+     <entry><structfield>stream_count</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Number of times in-progress transactions were streamed to subscriber.
+      Transactions may get streamed repeatedly, and this counter gets incremented
+      on every such invocation.
+      </entry>
+    </row>
+    <row>
+     <entry><structfield>stream_bytes</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Amount of decoded in-progress transaction data streamed to subscriber.
+      </entry>
+    </row>
    </tbody>
    </tgroup>
   </table>

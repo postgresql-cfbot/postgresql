@@ -95,11 +95,27 @@ static void DecodeXLogTuple(char *data, Size len, ReorderBufferTupleBuf *tup);
 void
 LogicalDecodingProcessRecord(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
-	XLogRecordBuffer buf;
+	XLogRecordBuffer	buf;
+	TransactionId		txid;
 
 	buf.origptr = ctx->reader->ReadRecPtr;
 	buf.endptr = ctx->reader->EndRecPtr;
 	buf.record = record;
+
+	txid = XLogRecGetTopXid(record);
+
+	/*
+	 * If the toplevel_xid is valid, we need to assign the subxact to the
+	 * toplevel transaction. We need to do this for all records, hence we
+	 * do it before the switch.
+	 */
+	if (TransactionIdIsValid(txid))
+	{
+		ReorderBufferAssignChild(ctx->reorder,
+								 record->toplevel_xid,
+								 record->decoded_record->xl_xid,
+								 buf.origptr);
+	}
 
 	/* cast so we get a warning when new rmgrs are added */
 	switch ((RmgrIds) XLogRecGetRmid(record))
@@ -262,23 +278,23 @@ DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				DecodeAbort(ctx, buf, &parsed, xid);
 				break;
 			}
-		case XLOG_XACT_ASSIGNMENT:
+		case XLOG_XACT_INVALIDATIONS:
 			{
-				xl_xact_assignment *xlrec;
-				int			i;
-				TransactionId *sub_xid;
+				TransactionId xid;
+				xl_xact_invalidations *invals;
 
-				xlrec = (xl_xact_assignment *) XLogRecGetData(r);
+				xid = XLogRecGetXid(r);
+				invals = (xl_xact_invalidations *) XLogRecGetData(r);
 
-				sub_xid = &xlrec->xsub[0];
+				/* XXX for now we're issuing invalidations one by one */
+				Assert(invals->nmsgs == 1);
 
-				for (i = 0; i < xlrec->nsubxacts; i++)
-				{
-					ReorderBufferAssignChild(reorder, xlrec->xtop,
-											 *(sub_xid++), buf->origptr);
-				}
-				break;
+				ReorderBufferAddInvalidation(reorder, xid, buf->origptr,
+											 invals->dbId, invals->tsId,
+											 invals->relcacheInitFileInval,
+											 invals->msgs[0]);
 			}
+			break;
 		case XLOG_XACT_PREPARE:
 
 			/*

@@ -1103,8 +1103,6 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	WALInsertLockRelease();
 
-	MarkCurrentTransactionIdLoggedIfAny();
-
 	END_CRIT_SECTION();
 
 	/*
@@ -10627,10 +10625,9 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	 * Mark that start phase has correctly finished for an exclusive backup.
 	 * Session-level locks are updated as well to reflect that state.
 	 *
-	 * Note that CHECK_FOR_INTERRUPTS() must not occur while updating
-	 * backup counters and session-level lock. Otherwise they can be
-	 * updated inconsistently, and which might cause do_pg_abort_backup()
-	 * to fail.
+	 * Note that CHECK_FOR_INTERRUPTS() must not occur while updating backup
+	 * counters and session-level lock. Otherwise they can be updated
+	 * inconsistently, and which might cause do_pg_abort_backup() to fail.
 	 */
 	if (exclusive)
 	{
@@ -10875,11 +10872,11 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	/*
 	 * Clean up session-level lock.
 	 *
-	 * You might think that WALInsertLockRelease() can be called
-	 * before cleaning up session-level lock because session-level
-	 * lock doesn't need to be protected with WAL insertion lock.
-	 * But since CHECK_FOR_INTERRUPTS() can occur in it,
-	 * session-level lock must be cleaned up before it.
+	 * You might think that WALInsertLockRelease() can be called before
+	 * cleaning up session-level lock because session-level lock doesn't need
+	 * to be protected with WAL insertion lock. But since
+	 * CHECK_FOR_INTERRUPTS() can occur in it, session-level lock must be
+	 * cleaned up before it.
 	 */
 	sessionBackupState = SESSION_BACKUP_NONE;
 

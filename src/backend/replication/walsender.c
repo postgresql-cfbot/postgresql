@@ -251,7 +251,7 @@ static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
-
+static void UpdateSpillStats(LogicalDecodingContext *ctx);
 static void XLogRead(char *buf, XLogRecPtr startptr, Size count);
 
 
@@ -923,6 +923,12 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 										WalSndUpdateProgress);
 
 		/*
+		 * Make sure streaming is disabled here - we may have the methods,
+		 * but we don't have anywhere to send the data yet.
+		 */
+		ctx->streaming = false;
+
+		/*
 		 * Signal that we don't need the timeout mechanism. We're just
 		 * creating the replication slot and don't yet accept feedback
 		 * messages or send keepalives. As we possibly need to wait for
@@ -1245,7 +1251,8 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 /*
  * LogicalDecodingContext 'update_progress' callback.
  *
- * Write the current position to the log tracker (see XLogSendPhysical).
+ * Write the current position to the log tracker (see XLogSendPhysical),
+ * and update the spill/stream statistics.
  */
 static void
 WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid)
@@ -1264,6 +1271,12 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
 
 	LagTrackerWrite(lsn, now);
 	sendTime = now;
+
+	/*
+	 * Update statistics about transactions that spilled to disk or
+	 * streamed to subscriber (before being committed).
+	 */
+	UpdateSpillStats(ctx);
 }
 
 /*
@@ -2266,6 +2279,12 @@ InitWalSenderSlot(void)
 			walsnd->applyLag = -1;
 			walsnd->state = WALSNDSTATE_STARTUP;
 			walsnd->latch = &MyProc->procLatch;
+			walsnd->spillTxns = 0;
+			walsnd->spillCount = 0;
+			walsnd->spillBytes = 0;
+			walsnd->streamTxns = 0;
+			walsnd->streamCount = 0;
+			walsnd->streamBytes = 0;
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
 			MyWalSnd = (WalSnd *) walsnd;
@@ -3166,7 +3185,7 @@ offset_to_interval(TimeOffset offset)
 Datum
 pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAL_SENDERS_COLS	11
+#define PG_STAT_GET_WAL_SENDERS_COLS	17
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -3220,6 +3239,12 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		int			priority;
 		int			pid;
 		WalSndState state;
+		int64		spillTxns;
+		int64		spillCount;
+		int64		spillBytes;
+		int64		streamTxns;
+		int64		streamCount;
+		int64		streamBytes;
 		Datum		values[PG_STAT_GET_WAL_SENDERS_COLS];
 		bool		nulls[PG_STAT_GET_WAL_SENDERS_COLS];
 
@@ -3239,6 +3264,12 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		flushLag = walsnd->flushLag;
 		applyLag = walsnd->applyLag;
 		priority = walsnd->sync_standby_priority;
+		spillTxns = walsnd->spillTxns;
+		spillCount = walsnd->spillCount;
+		spillBytes = walsnd->spillBytes;
+		streamTxns = walsnd->streamTxns;
+		streamCount = walsnd->streamCount;
+		streamBytes = walsnd->streamBytes;
 		SpinLockRelease(&walsnd->mutex);
 
 		memset(nulls, 0, sizeof(nulls));
@@ -3315,6 +3346,16 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 					CStringGetTextDatum("sync") : CStringGetTextDatum("quorum");
 			else
 				values[10] = CStringGetTextDatum("potential");
+
+			/* spill to disk */
+			values[11] = Int64GetDatum(spillTxns);
+			values[12] = Int64GetDatum(spillCount);
+			values[13] = Int64GetDatum(spillBytes);
+
+			/* stream over-sized transactions */
+			values[14] = Int64GetDatum(streamTxns);
+			values[15] = Int64GetDatum(streamCount);
+			values[16] = Int64GetDatum(streamBytes);
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -3550,4 +3591,26 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	/* Return the elapsed time since local flush time in microseconds. */
 	Assert(time != 0);
 	return now - time;
+}
+
+static void
+UpdateSpillStats(LogicalDecodingContext *ctx)
+{
+	ReorderBuffer *rb = ctx->reorder;
+
+	SpinLockAcquire(&MyWalSnd->mutex);
+
+	MyWalSnd->spillTxns = rb->spillTxns;
+	MyWalSnd->spillCount = rb->spillCount;
+	MyWalSnd->spillBytes = rb->spillBytes;
+
+	MyWalSnd->streamTxns = rb->streamTxns;
+	MyWalSnd->streamCount = rb->streamCount;
+	MyWalSnd->streamBytes = rb->streamBytes;
+
+	elog(WARNING, "UpdateSpillStats: updating stats %p %ld %ld %ld %ld %ld %ld",
+		 rb, rb->spillTxns, rb->spillCount, rb->spillBytes,
+			 rb->streamTxns, rb->streamCount, rb->streamBytes);
+
+	SpinLockRelease(&MyWalSnd->mutex);
 }

@@ -3924,6 +3924,18 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
 			break;
+		case WAIT_EVENT_LOGICAL_CHANGES_READ:
+			event_name = "ReorderLogicalChangesRead";
+			break;
+		case WAIT_EVENT_LOGICAL_CHANGES_WRITE:
+			event_name = "ReorderLogicalChangesWrite";
+			break;
+		case WAIT_EVENT_LOGICAL_SUBXACT_READ:
+			event_name = "ReorderLogicalSubxactRead";
+			break;
+		case WAIT_EVENT_LOGICAL_SUBXACT_WRITE:
+			event_name = "ReorderLogicalSubxactWrite";
+			break;
 
 			/* no default case, so that compiler will warn */
 	}

@@ -14,6 +14,8 @@
  *
  *-------------------------------------------------------------------------
  */
+#include <sys/types.h>
+#include <unistd.h>
 
 #include "postgres.h"
 

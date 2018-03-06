@@ -3210,7 +3210,6 @@ xl_standby_locks
 xl_tblspc_create_rec
 xl_tblspc_drop_rec
 xl_xact_abort
-xl_xact_assignment
 xl_xact_commit
 xl_xact_dbinfo
 xl_xact_invals

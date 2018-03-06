@@ -61,6 +61,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
+#include "replication/logical.h"
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
@@ -182,6 +183,7 @@ static const char *show_tcp_keepalives_count(void);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
 static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
+static bool check_logical_work_mem(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_work_mem(int *newval, void **extra, GucSource source);
 static bool check_effective_io_concurrency(int *newval, void **extra, GucSource source);
 static void assign_effective_io_concurrency(int newval, void *extra);
@@ -1969,6 +1971,18 @@ static struct config_int ConfigureNamesInt[] =
 		&maintenance_work_mem,
 		65536, 1024, MAX_KILOBYTES,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"logical_work_mem", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the maximum memory to be used for logical decoding."),
+			gettext_noop("This much memory can be used by each internal "
+						 "reorder buffer before spilling to disk or streaming."),
+			GUC_UNIT_KB
+		},
+		&logical_work_mem,
+		-1, -1, MAX_KILOBYTES,
+		check_logical_work_mem, NULL, NULL
 	},
 
 	/*
@@ -10394,6 +10408,28 @@ check_autovacuum_max_workers(int *newval, void **extra, GucSource source)
 {
 	if (MaxConnections + *newval + 1 + max_worker_processes > MAX_BACKENDS)
 		return false;
+	return true;
+}
+
+static bool
+check_logical_work_mem(int *newval, void **extra, GucSource source)
+{
+	/*
+	 * -1 indicates fallback.
+	 *
+	 * If we haven't yet changed the boot_val default of -1, just let it be.
+	 * logical decoding will look to maintenance_work_mem instead.
+	 */
+	if (*newval == -1)
+		return true;
+
+	/*
+	 * We clamp manually-set values to at least 64kB. The maintenance_work_mem
+	 * uses a higher minimum value (1MB), so this is OK.
+	 */
+	if (*newval < 64)
+		*newval = 64;
+
 	return true;
 }
 

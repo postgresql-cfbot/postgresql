@@ -88,11 +88,13 @@ static XLogRecData hdr_rdt;
 static char *hdr_scratch = NULL;
 
 #define SizeOfXlogOrigin	(sizeof(RepOriginId) + sizeof(char))
+#define SizeOfTransactionId	(sizeof(TransactionId) + sizeof(char))
 
 #define HEADER_SCRATCH_SIZE \
 	(SizeOfXLogRecord + \
 	 MaxSizeOfXLogRecordBlockHeader * (XLR_MAX_BLOCK_ID + 1) + \
-	 SizeOfXLogRecordDataHeaderLong + SizeOfXlogOrigin)
+	 SizeOfXLogRecordDataHeaderLong + SizeOfXlogOrigin + \
+	 SizeOfTransactionId)
 
 /*
  * An array of XLogRecData structs, to hold registered data.
@@ -397,7 +399,7 @@ void
 XLogSetRecordFlags(uint8 flags)
 {
 	Assert(begininsert_called);
-	curinsert_flags = flags;
+	curinsert_flags |= flags;
 }
 
 /*
@@ -741,6 +743,21 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		*(scratch++) = (char) XLR_BLOCK_ID_ORIGIN;
 		memcpy(scratch, &replorigin_session_origin, sizeof(replorigin_session_origin));
 		scratch += sizeof(replorigin_session_origin);
+	}
+
+	/* followed by toplevel XID, if not already included in previous record */
+	if (IsSubTransactionAssignmentPending())
+	{
+		TransactionId	xid = GetTopTransactionIdIfAny();
+
+		/* update the flag (later used by XLogInsertRecord) */
+		curinsert_flags |= XLOG_INCLUDE_XID;
+		*(scratch++) = (char) XLR_BLOCK_ID_TOPLEVEL_XID;
+		memcpy(scratch, &xid, sizeof(TransactionId));
+		scratch += sizeof(TransactionId);
+
+		/* and remember we already sent assignment for this subxact */
+		MarkSubTransactionAssigned();
 	}
 
 	/* followed by main data, if any */

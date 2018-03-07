@@ -77,4 +77,12 @@ struct PlanState;
 extern bool planstate_tree_walker(struct PlanState *planstate, bool (*walker) (),
 								  void *context);
 
+extern Node *cast_node_if_cached_impl(Node *node, NodeTag tag);
+
+/*
+ * A more convenient macro for using the function cast_node_if_cached_impl.
+ */
+#define cast_node_if_cached(node, _type_) \
+	(_type_ *) cast_node_if_cached_impl((Node *) (node), T_##_type_)
+
 #endif							/* NODEFUNCS_H */

@@ -7678,6 +7678,19 @@ get_rule_expr(Node *node, deparse_context *context,
 			get_const_expr((Const *) node, context, 0);
 			break;
 
+		case T_CachedExpr:
+			{
+				CachedExpr *cachedexpr = (CachedExpr *) node;
+
+				/*
+				 * Since the cached expression is created only for internal use,
+				 * forget about it and deparse its subexpression.
+				 */
+				get_rule_expr((Node *) cachedexpr->subexpr, context,
+							  showimplicit);
+			}
+			break;
+
 		case T_Param:
 			get_parameter((Param *) node, context);
 			break;
@@ -8903,6 +8916,8 @@ looks_like_function(Node *node)
 		case T_XmlExpr:
 			/* these are all accepted by func_expr_common_subexpr */
 			return true;
+		case T_CachedExpr:
+			return looks_like_function((Node *) ((CachedExpr *) node)->subexpr);
 		default:
 			break;
 	}
@@ -9908,9 +9923,11 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 					foreach(lc, rte->functions)
 					{
 						RangeTblFunction *rtfunc = (RangeTblFunction *) lfirst(lc);
+						FuncExpr   *funcexpr =
+							cast_node_if_cached(rtfunc->funcexpr, FuncExpr);
 
-						if (!IsA(rtfunc->funcexpr, FuncExpr) ||
-							((FuncExpr *) rtfunc->funcexpr)->funcid != F_ARRAY_UNNEST ||
+						if (funcexpr == NULL ||
+							funcexpr->funcid != F_ARRAY_UNNEST ||
 							rtfunc->funccolnames != NIL)
 						{
 							all_unnest = false;
@@ -9925,7 +9942,9 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 						foreach(lc, rte->functions)
 						{
 							RangeTblFunction *rtfunc = (RangeTblFunction *) lfirst(lc);
-							List	   *args = ((FuncExpr *) rtfunc->funcexpr)->args;
+							FuncExpr   *funcexpr =
+								cast_node_if_cached(rtfunc->funcexpr, FuncExpr);
+							List	   *args = funcexpr->args;
 
 							allargs = list_concat(allargs, list_copy(args));
 						}

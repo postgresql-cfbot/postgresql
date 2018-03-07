@@ -827,6 +827,18 @@ clause_selectivity(PlannerInfo *root,
 								jointype,
 								sjinfo);
 	}
+	else if (IsA(clause, CachedExpr))
+	{
+		/*
+		 * Not sure this case is needed, but it can't hurt.
+		 * Calculate selectivity of subexpression.
+		 */
+		s1 = clause_selectivity(root,
+								(Node *) ((CachedExpr *) clause)->subexpr,
+								varRelid,
+								jointype,
+								sjinfo);
+	}
 	else
 	{
 		/*

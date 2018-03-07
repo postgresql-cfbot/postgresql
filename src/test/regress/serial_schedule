@@ -185,5 +185,6 @@ test: partition_prune
 test: reloptions
 test: hash_part
 test: indexing
+test: precalculate_stable_functions
 test: event_trigger
 test: stats

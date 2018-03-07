@@ -229,15 +229,17 @@ get_expr_result_type(Node *expr,
 					 TupleDesc *resultTupleDesc)
 {
 	TypeFuncClass result;
+	FuncExpr   *funcexpr = cast_node_if_cached(expr, FuncExpr);
+	OpExpr	   *opexpr = cast_node_if_cached(expr, OpExpr);
 
-	if (expr && IsA(expr, FuncExpr))
-		result = internal_get_result_type(((FuncExpr *) expr)->funcid,
+	if (funcexpr)
+		result = internal_get_result_type(funcexpr->funcid,
 										  expr,
 										  NULL,
 										  resultTypeId,
 										  resultTupleDesc);
-	else if (expr && IsA(expr, OpExpr))
-		result = internal_get_result_type(get_opcode(((OpExpr *) expr)->opno),
+	else if (opexpr)
+		result = internal_get_result_type(get_opcode(opexpr->opno),
 										  expr,
 										  NULL,
 										  resultTypeId,

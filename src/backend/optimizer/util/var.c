@@ -196,6 +196,11 @@ pull_varnos_walker(Node *node, pull_varnos_context *context)
 		context->sublevels_up--;
 		return result;
 	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
+	}
 	return expression_tree_walker(node, pull_varnos_walker,
 								  (void *) context);
 }
@@ -241,6 +246,11 @@ pull_varattnos_walker(Node *node, pull_varattnos_context *context)
 			context->varattnos =
 				bms_add_member(context->varattnos,
 							   var->varattno - FirstLowInvalidHeapAttributeNumber);
+		return false;
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
 		return false;
 	}
 
@@ -312,6 +322,11 @@ pull_vars_walker(Node *node, pull_vars_context *context)
 		context->sublevels_up--;
 		return result;
 	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
+	}
 	return expression_tree_walker(node, pull_vars_walker,
 								  (void *) context);
 }
@@ -351,6 +366,11 @@ contain_var_clause_walker(Node *node, void *context)
 		if (((PlaceHolderVar *) node)->phlevelsup == 0)
 			return true;		/* abort the tree traversal and return true */
 		/* else fall through to check the contained expr */
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
 	}
 	return expression_tree_walker(node, contain_var_clause_walker, context);
 }
@@ -411,6 +431,11 @@ contain_vars_of_level_walker(Node *node, int *sublevels_up)
 								   0);
 		(*sublevels_up)--;
 		return result;
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
 	}
 	return expression_tree_walker(node,
 								  contain_vars_of_level_walker,
@@ -485,6 +510,11 @@ locate_var_of_level_walker(Node *node,
 								   0);
 		context->sublevels_up--;
 		return result;
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
 	}
 	return expression_tree_walker(node,
 								  locate_var_of_level_walker,
@@ -635,6 +665,11 @@ pull_var_clause_walker(Node *node, pull_var_clause_context *context)
 		}
 		else
 			elog(ERROR, "PlaceHolderVar found where not expected");
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
 	}
 	return expression_tree_walker(node, pull_var_clause_walker,
 								  (void *) context);
@@ -806,6 +841,11 @@ flatten_join_alias_vars_mutator(Node *node,
 		context->inserted_sublink = save_inserted_sublink;
 		context->sublevels_up--;
 		return (Node *) newnode;
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return false;
 	}
 	/* Already-planned tree not supported */
 	Assert(!IsA(node, SubPlan));

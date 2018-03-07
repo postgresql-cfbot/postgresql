@@ -80,6 +80,15 @@
 	 IsA((plansource)->raw_parse_tree->stmt, TransactionStmt))
 
 /*
+ * This flag is used to reuse the already created generic plan with
+ * precalculated bound parameters: we need it to check if the parameter was
+ * precalculated and will be precalculated because the flag PARAM_FLAG_CONST is
+ * replaced by the flag PARAM_FLAG_PRECALCULATED in the generic plan.
+ */
+#define PARAM_FLAG_ALWAYS_PRECALCULATED ( PARAM_FLAG_CONST | \
+										  PARAM_FLAG_PRECALCULATED )
+
+/*
  * This is the head of the backend's list of "saved" CachedPlanSources (i.e.,
  * those that are in long-lived storage and are examined for sinval events).
  * We thread the structs manually instead of using List cells so that we can
@@ -90,9 +99,11 @@ static CachedPlanSource *first_saved_plan = NULL;
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
 					  QueryEnvironment *queryEnv);
-static bool CheckCachedPlan(CachedPlanSource *plansource);
+static bool CheckCachedPlan(CachedPlanSource *plansource,
+							ParamListInfo boundParams);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
-				ParamListInfo boundParams, QueryEnvironment *queryEnv);
+				ParamListInfo boundParams, QueryEnvironment *queryEnv,
+				bool is_generic);
 static bool choose_custom_plan(CachedPlanSource *plansource,
 				   ParamListInfo boundParams);
 static double cached_plan_cost(CachedPlan *plan, bool include_planner);
@@ -105,6 +116,12 @@ static TupleDesc PlanCacheComputeResultDesc(List *stmt_list);
 static void PlanCacheRelCallback(Datum arg, Oid relid);
 static void PlanCacheFuncCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
+static ParamExternData *GetParamExternData(ParamListInfo boundParams,
+										   int paramid,
+										   ParamExternData *workspace);
+static bool IsParamValid(const ParamExternData *prm);
+static bool CheckBoundParams(ParamListInfo firstBoundParams,
+							 ParamListInfo secondBoundParams);
 
 
 /*
@@ -794,7 +811,7 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
  * (We must do this for the "true" result to be race-condition-free.)
  */
 static bool
-CheckCachedPlan(CachedPlanSource *plansource)
+CheckCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams)
 {
 	CachedPlan *plan = plansource->gplan;
 
@@ -845,8 +862,10 @@ CheckCachedPlan(CachedPlanSource *plansource)
 		 */
 		if (plan->is_valid)
 		{
-			/* Successfully revalidated and locked the query. */
-			return true;
+			/*
+			 * Successfully revalidated and locked the query. Check boundParams.
+			 */
+			return CheckBoundParams(plan->boundParams, boundParams);
 		}
 
 		/* Oops, the race case happened.  Release useless locks. */
@@ -867,9 +886,13 @@ CheckCachedPlan(CachedPlanSource *plansource)
  * qlist should be the result value from a previous RevalidateCachedQuery,
  * or it can be set to NIL if we need to re-copy the plansource's query_list.
  *
- * To build a generic, parameter-value-independent plan, pass NULL for
- * boundParams.  To build a custom plan, pass the actual parameter values via
- * boundParams.  For best effect, the PARAM_FLAG_CONST flag should be set on
+ * To build a generic, absolutely parameter-value-independent plan, pass NULL
+ * for boundParams.  To build a generic, parameter-value-independent plan with
+ * CachedExpr nodes for constant parameters, pass the actual parameter values
+ * via boundParams and set genericPlanPrecalculateConstBoundParams to true.  To
+ * build a custom plan, pass the actual parameter values via boundParams and set
+ * genericPlanPrecalculateConstBoundParams to false.
+ * For best effect, the PARAM_FLAG_CONST flag should be set on
  * each parameter value; otherwise the planner will treat the value as a
  * hint rather than a hard constant.
  *
@@ -879,7 +902,8 @@ CheckCachedPlan(CachedPlanSource *plansource)
  */
 static CachedPlan *
 BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
-				ParamListInfo boundParams, QueryEnvironment *queryEnv)
+				ParamListInfo boundParams, QueryEnvironment *queryEnv,
+				bool genericPlanPrecalculateConstBoundParams)
 {
 	CachedPlan *plan;
 	List	   *plist;
@@ -888,6 +912,7 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	MemoryContext plan_context;
 	MemoryContext oldcxt = CurrentMemoryContext;
 	ListCell   *lc;
+	ParamListInfo planBoundParams;
 
 	/*
 	 * Normally the querytree should be valid already, but if it's not,
@@ -931,10 +956,72 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 		snapshot_set = true;
 	}
 
+	/* Specify boundParams for the planner */
+	if (boundParams == NULL)
+	{
+		/* Absolutely parameter-value-independent generic plan */
+		planBoundParams = NULL;
+	}
+	else if (!genericPlanPrecalculateConstBoundParams)
+	{
+		/* Custom plan */
+		planBoundParams = boundParams;
+	}
+	else
+	{
+		/*
+		 * Parameter-value-independent generic plan with precalculated
+		 * parameters.
+		 */
+
+		Size		size = offsetof(ParamListInfoData, params) +
+			boundParams->numParams * sizeof(ParamExternData);
+
+		planBoundParams = (ParamListInfo) palloc(size);
+		memcpy(planBoundParams, boundParams, size);
+
+		/*
+		 * The generic plan should know as little as possible about the
+		 * parameters, and ideally we should pass boundParams as NULL. But
+		 * on ther other hand we need to know whether they are constant or
+		 * not, so that we can insert the CachedExpr nodes into the plan
+		 * where possible.
+		 *
+		 * Therefore let's put PARAM_FLAG_PRECALCULATED instead of
+		 * PARAM_FLAG_CONST for all parameters (for example, to prevent the
+		 * creation of Const nodes instead of them).
+		 */
+		if (planBoundParams->paramFetch)
+		{
+			/*
+			 * Use the same fetch function, but put PARAM_FLAG_PRECALCULATED
+			 * instead of PARAM_FLAG_CONST after its call.
+			 */
+			planBoundParams->paramFetchArg =
+				(void *) planBoundParams->paramFetch;
+			planBoundParams->paramFetch = ParamFetchPrecalculated;
+		}
+		else
+		{
+			int			index;
+
+			for (index = 0; index < planBoundParams->numParams; ++index)
+			{
+				ParamExternData *prm = &planBoundParams->params[index];
+
+				if (OidIsValid(prm->ptype) && (prm->pflags & PARAM_FLAG_CONST))
+				{
+					prm->pflags &= ~PARAM_FLAG_CONST;
+					prm->pflags |= PARAM_FLAG_PRECALCULATED;
+				}
+			}
+		}
+	}
+
 	/*
 	 * Generate the plan.
 	 */
-	plist = pg_plan_queries(qlist, plansource->cursor_options, boundParams);
+	plist = pg_plan_queries(qlist, plansource->cursor_options, planBoundParams);
 
 	/* Release snapshot if we got one */
 	if (snapshot_set)
@@ -1001,6 +1088,30 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	plan->is_oneshot = plansource->is_oneshot;
 	plan->is_saved = false;
 	plan->is_valid = true;
+
+	/*
+	 * Set the precalculation parameters of the generic plan. Copy them into the
+	 * new context if the plan is not one-shot.
+	 */
+	if (planBoundParams != NULL && genericPlanPrecalculateConstBoundParams)
+	{
+		if (!plansource->is_oneshot)
+		{
+			Size		size = offsetof(ParamListInfoData, params) +
+				planBoundParams->numParams * sizeof(ParamExternData);
+
+			plan->boundParams = (ParamListInfo) palloc(size);
+			memcpy(plan->boundParams, planBoundParams, size);
+		}
+		else
+		{
+			plan->boundParams = planBoundParams;
+		}
+	}
+	else
+	{
+		plan->boundParams = NULL;
+	}
 
 	/* assign generation number to new plan */
 	plan->generation = ++(plansource->generation);
@@ -1130,14 +1241,22 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  *
  * Note: if any replanning activity is required, the caller's memory context
  * is used for that work.
+ *
+ * Note: set genericPlanPrecalculateConstBoundParams to true only if you are
+ * sure that the bound parameters will remain (non)constant quite often for the
+ * next calls to this function.  Otherwise the generic plan will be rebuilt each
+ * time when there's a bound parameter that was constant/precalculated for the
+ * previous generic plan and is not constant/precalculated now or vice versa.
  */
 CachedPlan *
 GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
-			  bool useResOwner, QueryEnvironment *queryEnv)
+			  bool useResOwner, QueryEnvironment *queryEnv,
+			  bool genericPlanPrecalculateConstBoundParams)
 {
 	CachedPlan *plan = NULL;
 	List	   *qlist;
 	bool		customplan;
+	ParamListInfo genericPlanBoundParams;
 
 	/* Assert caller is doing things in a sane order */
 	Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
@@ -1154,7 +1273,13 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 
 	if (!customplan)
 	{
-		if (CheckCachedPlan(plansource))
+		/* set the parameters for the generic plan */
+		if (genericPlanPrecalculateConstBoundParams)
+			genericPlanBoundParams = boundParams;
+		else
+			genericPlanBoundParams = NULL;
+
+		if (CheckCachedPlan(plansource, genericPlanBoundParams))
 		{
 			/* We want a generic plan, and we already have a valid one */
 			plan = plansource->gplan;
@@ -1163,7 +1288,8 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		else
 		{
 			/* Build a new generic plan */
-			plan = BuildCachedPlan(plansource, qlist, NULL, queryEnv);
+			plan = BuildCachedPlan(plansource, qlist, genericPlanBoundParams,
+								   queryEnv, true);
 			/* Just make real sure plansource->gplan is clear */
 			ReleaseGenericPlan(plansource);
 			/* Link the new generic plan into the plansource */
@@ -1208,7 +1334,7 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	if (customplan)
 	{
 		/* Build a custom plan */
-		plan = BuildCachedPlan(plansource, qlist, boundParams, queryEnv);
+		plan = BuildCachedPlan(plansource, qlist, boundParams, queryEnv, false);
 		/* Accumulate total costs of custom plans, but 'ware overflow */
 		if (plansource->num_custom_plans < INT_MAX)
 		{
@@ -1902,4 +2028,145 @@ ResetPlanCache(void)
 			}
 		}
 	}
+}
+
+/*
+ * ParamFetchPrecalculated
+ *		Fetch of parameters in generic plans. Use the same fetch function as in
+ *		the custom plan, but after its call put PARAM_FLAG_PRECALCULATED instead
+ *		of PARAM_FLAG_CONST to keep the plan as generic and prevent, for
+ *		example, the creation of a Const node for this parameter.
+ */
+ParamExternData *
+ParamFetchPrecalculated(ParamListInfo params, int paramid, bool speculative,
+						ParamExternData *workspace)
+{
+	/* Fetch back the hook data */
+	ParamFetchHook paramFetch = (ParamFetchHook) params->paramFetchArg;
+	ParamExternData *prm;
+
+	Assert(paramFetch != NULL);
+
+	prm = (*paramFetch) (params, paramid, speculative, workspace);
+	Assert(prm);
+
+	if (OidIsValid(prm->ptype) && (prm->pflags & PARAM_FLAG_CONST))
+	{
+		prm->pflags &= ~PARAM_FLAG_CONST;
+		prm->pflags |= PARAM_FLAG_PRECALCULATED;
+	}
+
+	return prm;
+}
+
+/*
+ * GetParamExternData: get ParamExternData with this paramid from ParamListInfo.
+ *
+ * If the parameter is dynamic, use speculative fetching, so it should avoid
+ * erroring out if parameter is unavailable.
+ */
+static ParamExternData *
+GetParamExternData(ParamListInfo boundParams, int paramid,
+				   ParamExternData *workspace)
+{
+	if (boundParams == NULL)
+		return NULL;
+
+	/*
+	 * Give hook a chance in case parameter is dynamic.  Tell it that this fetch
+	 * is speculative, so it should avoid erroring out if parameter is
+	 * unavailable.
+	 */
+	if (boundParams->paramFetch != NULL)
+		return boundParams->paramFetch(boundParams, paramid, true, workspace);
+
+	return &boundParams->params[paramid - 1];
+}
+
+/*
+ * IsParamValid: return true if prm is not NULL and its ptype is valid.
+ */
+static bool
+IsParamValid(const ParamExternData *prm)
+{
+	return prm && OidIsValid(prm->ptype);
+}
+
+/*
+ * CheckBoundParams
+ *		Check if bound params are compatible in the generic plan:
+ *		1) Check that the parameters with the same paramid are equal in terms of
+ *		   the CachedExpr node: both are constants/precalculated so they have
+ *		   previously been precalculated and will be precalculated, or both are
+ *		   not.
+ *		2) Check that the other parameters are not constants or precalculated,
+ *		   so they have not previously been precalculated and will not be
+ *		   precalculated.
+ */
+static bool
+CheckBoundParams(ParamListInfo firstBoundParams,
+				 ParamListInfo secondBoundParams)
+{
+	int			maxNumParams = 0,
+				paramid;
+	ParamExternData *first_prm,
+					*second_prm;
+	ParamExternData first_prmdata,
+					second_prmdata;
+
+	/* Get the maximum number of parameters to check */
+	if (firstBoundParams && firstBoundParams->numParams > maxNumParams)
+		maxNumParams = firstBoundParams->numParams;
+	if (secondBoundParams && secondBoundParams->numParams > maxNumParams)
+		maxNumParams = secondBoundParams->numParams;
+
+	/*
+	 * If there're parameters with the same paramid, check that they are equal
+	 * in terms of the CachedExpr node: both are constants/precalculated so they
+	 * have previously been precalculated and will be precalculated, or both are
+	 * not.
+	 *
+	 * Check that the other parameters are not constants or precalculated, so
+	 * they have not previously been precalculated and will not be
+	 * precalculated.
+	 */
+	for (paramid = 1; paramid <= maxNumParams; ++paramid)
+	{
+		first_prm = GetParamExternData(firstBoundParams, paramid,
+									   &first_prmdata);
+		second_prm = GetParamExternData(secondBoundParams, paramid,
+										&second_prmdata);
+
+		if (IsParamValid(first_prm) && IsParamValid(second_prm))
+		{
+			/*
+			 * Check that both are constants/precalculated or both are not.
+			 */
+			if ((first_prm->pflags & PARAM_FLAG_ALWAYS_PRECALCULATED) !=
+				(second_prm->pflags & PARAM_FLAG_ALWAYS_PRECALCULATED))
+				return false;
+		}
+		else if (IsParamValid(first_prm))
+		{
+			/*
+			 * The second parameter with this paramid is not
+			 * constant/precalculated, so check that the first one is also not
+			 * constant/precalculated.
+			 */
+			if (first_prm->pflags & PARAM_FLAG_ALWAYS_PRECALCULATED)
+				return false;
+		}
+		else if (IsParamValid(second_prm))
+		{
+			/*
+			 * The first parameter with this paramid is not
+			 * constant/precalculated, so check that the second one is also not
+			 * constant/precalculated.
+			 */
+			if (second_prm->pflags & PARAM_FLAG_ALWAYS_PRECALCULATED)
+				return false;
+		}
+	}
+
+	return true;
 }

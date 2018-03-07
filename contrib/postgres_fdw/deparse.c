@@ -775,6 +775,14 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_UNSAFE;
 			}
 			break;
+		case T_CachedExpr:
+			{
+				CachedExpr *cachedexpr = (CachedExpr *) node;
+
+				return foreign_expr_walker((Node *) cachedexpr->subexpr,
+										   glob_cxt, outer_cxt);
+			}
+			break;
 		default:
 
 			/*
@@ -2313,6 +2321,9 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 			break;
 		case T_Aggref:
 			deparseAggref((Aggref *) node, context);
+			break;
+		case T_CachedExpr:
+			deparseExpr((Expr *) ((CachedExpr *) node)->subexpr, context);
 			break;
 		default:
 			elog(ERROR, "unsupported expression type for deparse: %d",

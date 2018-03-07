@@ -145,6 +145,8 @@ typedef enum NodeTag
 	T_Expr,
 	T_Var,
 	T_Const,
+	T_CacheableExpr,
+	T_CachedExpr,
 	T_Param,
 	T_Aggref,
 	T_GroupingFunc,

@@ -195,6 +195,14 @@ _equalConst(const Const *a, const Const *b)
 }
 
 static bool
+_equalCachedExpr(const CachedExpr *a, const CachedExpr *b)
+{
+	COMPARE_NODE_FIELD(subexpr);
+
+	return true;
+}
+
+static bool
 _equalParam(const Param *a, const Param *b)
 {
 	COMPARE_SCALAR_FIELD(paramkind);
@@ -3031,6 +3039,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_Const:
 			retval = _equalConst(a, b);
+			break;
+		case T_CachedExpr:
+			retval = _equalCachedExpr(a, b);
 			break;
 		case T_Param:
 			retval = _equalParam(a, b);

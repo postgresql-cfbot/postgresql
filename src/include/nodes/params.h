@@ -37,10 +37,15 @@ struct ParseState;
  *	  Although parameter numbers are normally consecutive, we allow
  *	  ptype == InvalidOid to signal an unused array entry.
  *
- *	  pflags is a flags field.  Currently the only used bit is:
+ *	  pflags is a flags field.  Currently used bits are:
+ *
  *	  PARAM_FLAG_CONST signals the planner that it may treat this parameter
- *	  as a constant (i.e., generate a plan that works only for this value
- *	  of the parameter).
+ *			as a constant (i.e., generate a plan that works only for this value
+ *			of the parameter).
+ *
+ *	  PARAM_FLAG_PRECALCULATED signals the planner that it cannot be treated as
+ *			a pure constant, such as PARAM_FLAG_CONST. But it can be used as an
+ *			argument to the CachedExpr node.
  *
  *	  In the dynamic approach, all access to parameter values is done through
  *	  hook functions found in the ParamListInfo struct.  In this case,
@@ -85,7 +90,9 @@ struct ParseState;
  *	  and paramCompileArg is rather arbitrary.
  */
 
-#define PARAM_FLAG_CONST	0x0001	/* parameter is constant */
+#define PARAM_FLAG_CONST			0x0001	/* parameter is constant */
+#define PARAM_FLAG_PRECALCULATED	0x0002	/* parameter is precalculated: it is
+											 * cached in the generic plan */
 
 typedef struct ParamExternData
 {

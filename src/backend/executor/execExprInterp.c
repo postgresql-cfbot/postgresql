@@ -393,6 +393,8 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_AGG_PLAIN_TRANS,
 		&&CASE_EEOP_AGG_ORDERED_TRANS_DATUM,
 		&&CASE_EEOP_AGG_ORDERED_TRANS_TUPLE,
+		&&CASE_EEOP_CACHEDEXPR_IF_CACHED,
+		&&CASE_EEOP_CACHEDEXPR_SUBEXPR_END,
 		&&CASE_EEOP_LAST
 	};
 
@@ -1781,6 +1783,74 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			/* too complex for an inline implementation */
 			ExecEvalAggOrderedTransTuple(state, op, econtext);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_CACHEDEXPR_IF_CACHED)
+		{
+			/*
+			 * Always execute if we do not have a cached result...
+			 */
+			bool		execute = !op->d.cachedexpr.state->isExecuted;
+
+			/*
+			 * ...but sometimes we must execute even if we have the cached
+			 * result.
+			 */
+			if (state->own_execute_cached_expressions)
+			{
+				execute |= *(state->own_execute_cached_expressions);
+			}
+			else
+			{
+				Assert(state->top_execute_cached_expressions);
+				execute |= *(state->top_execute_cached_expressions);
+			}
+
+			if (!execute)
+			{
+				/* use saved result and skip subexpression evaluation */
+				*op->resnull = op->d.cachedexpr.state->resnull;
+				if (!(*op->resnull))
+					*op->resvalue = op->d.cachedexpr.state->resvalue;
+
+				EEO_JUMP(op->d.cachedexpr.state->jumpdone);
+			}
+
+			/* we are ready for subexpression evaluation */
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_CACHEDEXPR_SUBEXPR_END)
+		{
+			int16		restyplen;
+			bool		restypbyval;
+			MemoryContext oldContext;
+
+			/* save result */
+			op->d.cachedexpr.state->resnull = *op->resnull;
+			if (!(*op->resnull))
+			{
+				get_typlenbyval(op->d.cachedexpr.state->restypid, &restyplen,
+								&restypbyval);
+
+				/*
+				 * Switch per-query memory context. It is necessary to save the
+				 * subexpression result between all tuples if its value datum is
+				 * a pointer.
+				 */
+				oldContext = MemoryContextSwitchTo(
+					econtext->ecxt_per_query_memory);
+
+				op->d.cachedexpr.state->resvalue = datumCopy(*op->resvalue,
+															 restypbyval,
+															 restyplen);
+
+				/* switch memory context back */
+				MemoryContextSwitchTo(oldContext);
+			}
+			op->d.cachedexpr.state->isExecuted = true;
 
 			EEO_NEXT();
 		}

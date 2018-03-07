@@ -283,7 +283,14 @@ ExecEvalExpr(ExprState *state,
 			 ExprContext *econtext,
 			 bool *isNull)
 {
-	return state->evalfunc(state, econtext, isNull);
+	Datum		retDatum;
+
+	retDatum = state->evalfunc(state, econtext, isNull);
+	/* update the infomation about cached expressions */
+	if (state->own_execute_cached_expressions)
+		*(state->own_execute_cached_expressions) = false;
+
+	return retDatum;
 }
 #endif
 
@@ -302,7 +309,12 @@ ExecEvalExprSwitchContext(ExprState *state,
 	MemoryContext oldContext;
 
 	oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
 	retDatum = state->evalfunc(state, econtext, isNull);
+	/* update the infomation about cached expressions */
+	if (state->own_execute_cached_expressions)
+		*(state->own_execute_cached_expressions) = false;
+
 	MemoryContextSwitchTo(oldContext);
 	return retDatum;
 }

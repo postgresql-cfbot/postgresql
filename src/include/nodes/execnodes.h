@@ -105,6 +105,25 @@ typedef struct ExprState
 
 	Datum	   *innermost_domainval;
 	bool	   *innermost_domainnull;
+
+	/*
+	 * Usually cached expressions are executed only once and then they use
+	 * cached value until the end of execution. But sometimes the executor is
+	 * used again from the very beginning (for example, for PL/pgSQL simple
+	 * expressions), so the cached expressions must be recalculated in this
+	 * case.
+	 *
+	 * If we do not have an upper state, top_execute_cached_expressions is NULL
+	 * and we use the information from own_execute_cached_expressions.
+	 *
+	 * If not upper states use the information from the upper expression, their
+	 * own_execute_cached_expressions are NULLs. But sometimes we have have
+	 * several own runs (for example, an executor state for the array
+	 * per-element expression) and therefore we need to separate this
+	 * information from the runs of the upper state.
+	 */
+	bool	   *own_execute_cached_expressions;
+	bool	   *top_execute_cached_expressions;
 } ExprState;
 
 

@@ -1120,6 +1120,14 @@ _outConst(StringInfo str, const Const *node)
 }
 
 static void
+_outCachedExpr(StringInfo str, const CachedExpr *node)
+{
+	WRITE_NODE_TYPE("CACHEDEXPR");
+
+	WRITE_NODE_FIELD(subexpr);
+}
+
+static void
 _outParam(StringInfo str, const Param *node)
 {
 	WRITE_NODE_TYPE("PARAM");
@@ -3796,6 +3804,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_Const:
 				_outConst(str, obj);
+				break;
+			case T_CachedExpr:
+				_outCachedExpr(str, obj);
 				break;
 			case T_Param:
 				_outParam(str, obj);

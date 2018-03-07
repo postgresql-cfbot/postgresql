@@ -2145,6 +2145,11 @@ exec_stmt_getdiag(PLpgSQL_execstate *estate, PLpgSQL_stmt_getdiag *stmt)
 				}
 				break;
 
+			case PLPGSQL_GETDIAG_FUNCTION_NAME:
+				exec_assign_c_string(estate, var,
+									 estate->func->fn_signature);
+				break;
+
 			default:
 				elog(ERROR, "unrecognized diagnostic item kind: %d",
 					 diag_item->kind);

@@ -1500,6 +1500,12 @@ GET DIAGNOSTICS integer_var = ROW_COUNT;
          <entry>line(s) of text describing the current call stack
           (see <xref linkend="plpgsql-call-stack"/>)</entry>
         </row>
+        <row>
+         <entry><literal>FUNCTION_NAME</literal></entry>
+         <entry><type>text</type></entry>
+         <entry>text describing the current function signature 
+          (see <xref linkend="plpgsql-call-stack"/>)</entry>
+        </row>
        </tbody>
       </tgroup>
      </table>

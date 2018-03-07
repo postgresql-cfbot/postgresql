@@ -3175,9 +3175,12 @@ disconnect_all(CState *state, int length)
  * Remove old pgbench tables, if any exist
  */
 static void
-initDropTables(PGconn *con)
+initDropTables(PGconn *con, double *drop_sec)
 {
+	instr_time		start,
+					diff;
 	fprintf(stderr, "dropping old tables...\n");
+	INSTR_TIME_SET_CURRENT(start);
 
 	/*
 	 * We drop all the tables in one command, so that whether there are
@@ -3188,13 +3191,16 @@ initDropTables(PGconn *con)
 					 "pgbench_branches, "
 					 "pgbench_history, "
 					 "pgbench_tellers");
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*drop_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
  * Create pgbench's standard tables
  */
 static void
-initCreateTables(PGconn *con)
+initCreateTables(PGconn *con, double *table_sec)
 {
 	/*
 	 * The scale factor at/beyond which 32-bit integers are insufficient for
@@ -3251,8 +3257,11 @@ initCreateTables(PGconn *con)
 		}
 	};
 	int			i;
+	instr_time		start,
+					diff;
 
 	fprintf(stderr, "creating tables...\n");
+	INSTR_TIME_SET_CURRENT(start);
 
 	for (i = 0; i < lengthof(DDLs); i++)
 	{
@@ -3285,13 +3294,16 @@ initCreateTables(PGconn *con)
 
 		executeStatement(con, buffer);
 	}
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*table_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
  * Fill the standard tables with some data
  */
 static void
-initGenerateData(PGconn *con)
+initGenerateData(PGconn *con, double *insert_sec, double *commit_sec)
 {
 	char		sql[256];
 	PGresult   *res;
@@ -3421,28 +3433,42 @@ initGenerateData(PGconn *con)
 		fprintf(stderr, "PQendcopy failed\n");
 		exit(1);
 	}
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*insert_sec = INSTR_TIME_GET_DOUBLE(diff);
 
+	INSTR_TIME_SET_CURRENT(start);
 	executeStatement(con, "commit");
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*commit_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
  * Invoke vacuum on the standard tables
  */
 static void
-initVacuum(PGconn *con)
+initVacuum(PGconn *con, double *vacuum_sec)
 {
+	instr_time		start,
+					diff;
+
 	fprintf(stderr, "vacuuming...\n");
+	INSTR_TIME_SET_CURRENT(start);
 	executeStatement(con, "vacuum analyze pgbench_branches");
 	executeStatement(con, "vacuum analyze pgbench_tellers");
 	executeStatement(con, "vacuum analyze pgbench_accounts");
 	executeStatement(con, "vacuum analyze pgbench_history");
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*vacuum_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
  * Create primary keys on the standard tables
  */
 static void
-initCreatePKeys(PGconn *con)
+initCreatePKeys(PGconn *con, double *pkeys_sec)
 {
 	static const char *const DDLINDEXes[] = {
 		"alter table pgbench_branches add primary key (bid)",
@@ -3450,8 +3476,11 @@ initCreatePKeys(PGconn *con)
 		"alter table pgbench_accounts add primary key (aid)"
 	};
 	int			i;
+	instr_time		start,
+					diff;
 
 	fprintf(stderr, "creating primary keys...\n");
+	INSTR_TIME_SET_CURRENT(start);
 	for (i = 0; i < lengthof(DDLINDEXes); i++)
 	{
 		char		buffer[256];
@@ -3471,13 +3500,16 @@ initCreatePKeys(PGconn *con)
 
 		executeStatement(con, buffer);
 	}
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*pkeys_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
  * Create foreign key constraints between the standard tables
  */
 static void
-initCreateFKeys(PGconn *con)
+initCreateFKeys(PGconn *con, double *fkeys_sec)
 {
 	static const char *const DDLKEYs[] = {
 		"alter table pgbench_tellers add constraint pgbench_tellers_bid_fkey foreign key (bid) references pgbench_branches",
@@ -3487,12 +3519,18 @@ initCreateFKeys(PGconn *con)
 		"alter table pgbench_history add constraint pgbench_history_aid_fkey foreign key (aid) references pgbench_accounts"
 	};
 	int			i;
+	instr_time		start,
+					diff;
 
 	fprintf(stderr, "creating foreign keys...\n");
+	INSTR_TIME_SET_CURRENT(start);
 	for (i = 0; i < lengthof(DDLKEYs); i++)
 	{
 		executeStatement(con, DDLKEYs[i]);
 	}
+	INSTR_TIME_SET_CURRENT(diff);
+	INSTR_TIME_SUBTRACT(diff, start);
+	*fkeys_sec = INSTR_TIME_GET_DOUBLE(diff);
 }
 
 /*
@@ -3533,6 +3571,14 @@ runInitSteps(const char *initialize_steps)
 {
 	PGconn	   *con;
 	const char *step;
+	double	    total_sec = 0.0,
+				drop_sec = 0.0,
+				table_sec = 0.0,
+				insert_sec = 0.0,
+				commit_sec = 0.0,
+				vacuum_sec = 0.0,
+				pkeys_sec = 0.0,
+				fkeys_sec = 0.0;
 
 	if ((con = doConnect()) == NULL)
 		exit(1);
@@ -3542,22 +3588,29 @@ runInitSteps(const char *initialize_steps)
 		switch (*step)
 		{
 			case 'd':
-				initDropTables(con);
+				initDropTables(con, &drop_sec);
+				total_sec += drop_sec;
 				break;
 			case 't':
-				initCreateTables(con);
+				initCreateTables(con, &table_sec);
+				total_sec += table_sec;
 				break;
 			case 'g':
-				initGenerateData(con);
+				initGenerateData(con, &insert_sec, &commit_sec);
+				total_sec += insert_sec;
+				total_sec += commit_sec;
 				break;
 			case 'v':
-				initVacuum(con);
+				initVacuum(con, &vacuum_sec);
+				total_sec += vacuum_sec;
 				break;
 			case 'p':
-				initCreatePKeys(con);
+				initCreatePKeys(con, &pkeys_sec);
+				total_sec += pkeys_sec;
 				break;
 			case 'f':
-				initCreateFKeys(con);
+				initCreateFKeys(con, &fkeys_sec);
+				total_sec += fkeys_sec;
 				break;
 			case ' ':
 				break;			/* ignore */
@@ -3569,8 +3622,13 @@ runInitSteps(const char *initialize_steps)
 		}
 	}
 
-	fprintf(stderr, "done.\n");
 	PQfinish(con);
+	fprintf(stderr, "total time: %.2f s (drop %.2f s, tables %.2f s,"
+				" insert %.2f s, commit %.2f s, primary %.2f s,"
+				" foreign %.2f s, vacuum %.2f s)\n",
+			total_sec, drop_sec, table_sec, insert_sec,
+			commit_sec, pkeys_sec, fkeys_sec, vacuum_sec);
+	fprintf(stderr, "done.\n");
 }
 
 /*

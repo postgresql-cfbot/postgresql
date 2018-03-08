@@ -45,8 +45,8 @@ $node->command_fails([ 'pg_basebackup', '-D', "$tempdir/backup", '-n' ],
 ok(-d "$tempdir/backup", 'backup directory was created and left behind');
 
 open my $conf, '>>', "$pgdata/postgresql.conf";
-print $conf "max_replication_slots = 10\n";
-print $conf "max_wal_senders = 10\n";
+print $conf "max_replication_slots = 5\n";
+print $conf "max_wal_senders = 5\n";
 print $conf "wal_level = replica\n";
 close $conf;
 $node->restart;

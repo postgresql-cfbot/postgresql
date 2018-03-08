@@ -3912,6 +3912,7 @@ RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
 	struct dirent *xlde;
 	char		switchseg[MAXFNAMELEN];
 	XLogSegNo	endLogSegNo;
+	char		path[MAXPGPATH];
 
 	XLByteToPrevSeg(switchpoint, endLogSegNo, wal_segment_size);
 
@@ -3946,9 +3947,14 @@ RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
 			 * - but seems safer to let them be archived and removed later.
 			 */
 			if (!XLogArchiveIsReady(xlde->d_name))
-				RemoveXlogFile(xlde->d_name, InvalidXLogRecPtr, switchpoint);
+			{
+				snprintf(path, sizeof(path), XLOGDIR "/%s", xlde->d_name);
+				if (unlink(path) == 0)
+					XLogArchiveCleanup(xlde->d_name);
+			}
 		}
 	}
+	(void) fsync_fname(XLOGDIR, true);
 
 	FreeDir(xldir);
 }

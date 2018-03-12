@@ -1,0 +1,21 @@
+create extension jsonb_plpython3u cascade;
+NOTICE:  installing required extension "plpython3u"
+create schema test;
+alter extension jsonb_plpython3u set schema test;
+create function test.test(val jsonb) returns jsonb
+language plpython3u
+transform for type jsonb
+as $$
+return val
+$$;
+select test.test('1'::jsonb);
+ test 
+------
+ 1
+(1 row)
+
+drop schema test cascade;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to extension jsonb_plpython3u
+drop cascades to function test.test(jsonb)
+drop extension plpython3u cascade;

@@ -1,0 +1,21 @@
+CREATE EXTENSION jsonb_plperlu CASCADE;
+NOTICE:  installing required extension "plperlu"
+CREATE SCHEMA test;
+alter extension jsonb_plperlu set schema test;
+create function test.test(val jsonb) returns jsonb
+language plperlu
+transform for type jsonb
+as $$
+return val
+$$;
+select test.test('1'::jsonb);
+ test  
+-------
+ "val"
+(1 row)
+
+drop extension plperlu cascade;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to extension jsonb_plperlu
+drop cascades to function test.test(jsonb)
+drop schema test cascade;

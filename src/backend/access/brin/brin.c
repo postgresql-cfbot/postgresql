@@ -33,6 +33,7 @@
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/lsyscache.h"
 
 
 /*
@@ -187,9 +188,19 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 				brinGetTupleForHeapBlock(revmap, lastPageRange, &buf, &off,
 										 NULL, BUFFER_LOCK_SHARE, NULL);
 			if (!lastPageTuple)
-				AutoVacuumRequestWork(AVW_BRINSummarizeRange,
-									  RelationGetRelid(idxRel),
-									  lastPageRange);
+			{
+				bool requested;
+
+				requested = AutoVacuumRequestWork(AVW_BRINSummarizeRange,
+												  RelationGetRelid(idxRel),
+												  lastPageRange);
+
+				if (!requested)
+					ereport(LOG, (errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+								  errmsg("request for autovacuum work item BrinSummarizeRange for \"%s\" failed",
+										 RelationGetRelationName(idxRel))));
+			}
+
 			else
 				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 		}

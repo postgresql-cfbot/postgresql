@@ -343,6 +343,7 @@ static void perform_work_item(AutoVacuumWorkItem *workitem);
 static void autovac_report_activity(autovac_table *tab);
 static void autovac_report_workitem(AutoVacuumWorkItem *workitem,
 						const char *nspname, const char *relname);
+static const char *autovac_get_workitem_name(AutoVacuumWorkItemType type);
 static void av_sighup_handler(SIGNAL_ARGS);
 static void avl_sigusr2_handler(SIGNAL_ARGS);
 static void avl_sigterm_handler(SIGNAL_ARGS);
@@ -3228,11 +3229,12 @@ AutoVacuumingActive(void)
 /*
  * Request one work item to the next autovacuum run processing our database.
  */
-void
+bool
 AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
 					  BlockNumber blkno)
 {
 	int			i;
+	bool		result = false;
 
 	LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
 
@@ -3252,12 +3254,15 @@ AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
 		workitem->avw_database = MyDatabaseId;
 		workitem->avw_relation = relationId;
 		workitem->avw_blockNumber = blkno;
+		result = true;
 
 		/* done */
 		break;
 	}
 
 	LWLockRelease(AutovacuumLock);
+
+	return result;
 }
 
 /*

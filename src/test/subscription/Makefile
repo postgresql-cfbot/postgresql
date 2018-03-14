@@ -13,7 +13,7 @@ subdir = src/test/subscription
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-EXTRA_INSTALL = contrib/hstore
+EXTRA_INSTALL = contrib/hstore src/test/modules/test_subscription
 
 check:
 	$(prove_check)

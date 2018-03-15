@@ -8,9 +8,6 @@
  *
  * src/include/utils/geo_decls.h
  *
- * NOTE
- *	  These routines do *not* use the float types from adt/.
- *
  *	  XXX These routines were not written by a numerical analyst.
  *
  *	  XXX I have made some attempt to flesh out the operators
@@ -24,11 +21,14 @@
 #include <math.h>
 
 #include "fmgr.h"
+#include "utils/float.h"
 
 /*--------------------------------------------------------------------
  * Useful floating point utilities and constants.
- *-------------------------------------------------------------------*/
-
+ *-------------------------------------------------------------------
+ *
+ * XXX They are not NaN-aware.
+ */
 
 #define EPSILON					1.0E-06
 
@@ -57,7 +57,7 @@
  *-------------------------------------------------------------------*/
 typedef struct
 {
-	double		x,
+	float8		x,
 				y;
 } Point;
 
@@ -89,7 +89,7 @@ typedef struct
  *-------------------------------------------------------------------*/
 typedef struct
 {
-	double		A,
+	float8		A,
 				B,
 				C;
 } LINE;
@@ -124,7 +124,7 @@ typedef struct
 typedef struct
 {
 	Point		center;
-	double		radius;
+	float8		radius;
 } CIRCLE;
 
 /*
@@ -178,10 +178,6 @@ typedef struct
  * in geo_ops.c
  */
 
-/* private routines */
-extern double point_dt(Point *pt1, Point *pt2);
-extern double point_sl(Point *pt1, Point *pt2);
-extern double pg_hypot(double x, double y);
-extern BOX *box_copy(BOX *box);
+extern float8 pg_hypot(float8 x, float8 y);
 
 #endif							/* GEO_DECLS_H */

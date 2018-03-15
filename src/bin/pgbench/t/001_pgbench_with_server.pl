@@ -4,13 +4,14 @@ use warnings;
 use PostgresNode;
 use TestLib;
 use Test::More;
+use Time::HiRes qw{time};
 
 # start a pgbench specific server
 my $node = get_new_node('main');
 $node->init;
 $node->start;
 
-# invoke pgbench
+# invoke pgbench, return elapsed time
 sub pgbench
 {
 	my ($opts, $stat, $out, $err, $name, $files) = @_;
@@ -32,10 +33,13 @@ sub pgbench
 			append_to_file($filename, $$files{$fn});
 		}
 	}
+
+	my $t0 = time();
 	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
 
 	# cleanup?
 	#unlink @filenames or die "cannot unlink files (@filenames): $!";
+	return time() - $t0;
 }
 
 # Test concurrent insertion into table with UNIQUE oid column.  DDL expects
@@ -607,7 +611,52 @@ sub check_pgbench_logs
 
 my $bdir = $node->basedir;
 
-# with sampling rate
+# tell pgbench that it is a tap test, to trigger
+# minor behavioral change(s) which simplify some checks
+# on time-related options
+$ENV{PGBENCH_TAP_TEST} = '1';
+
+# The point of this test is coverage of various time-related features
+# (-T, -P, --aggregate-interval, --rate, --latency-limit...), so it is
+# somehow time sensitive.
+# The checks performed are quite loose so as to still pass even under
+# degraded (high load, slow host, valgrind run) testing conditions.
+# The main point is to provide coverage, most of the time.
+my $elapsed = pgbench(
+	"-T 2 -P 1 -l --log-prefix=$bdir/001_pgbench_log_1 --aggregate-interval=1"
+	  . ' -S -b se@2 --rate=20 --latency-limit=1000 -j ' . $nthreads
+	  . ' -c 3 -r',
+	0,
+	[   qr{type: multiple},
+		qr{clients: 3},
+		qr{threads: $nthreads},
+		# the shown duration is really -T argument value
+		qr{duration: 2 s},
+		qr{script 1: .* select only},
+		qr{script 2: .* select only},
+		qr{statement latencies in milliseconds},
+		qr{FROM pgbench_accounts} ],
+	[	qr{vacuum},
+		qr{progress: \d\b} ],
+	'pgbench progress');
+
+# this depends on PGBENCH_TAP_TEST to avoid a shortcut under --rate
+# if there is nothing to do.
+ok($elapsed >= 2.0, "-T 2 leads to at least 2 second run");
+
+# undo tap-test behavioral change
+delete $ENV{PGBENCH_TAP_TEST};
+
+# if the test has gone AWOL, coldly skip these detailed checks.
+if (abs($elapsed - 2.0) < 0.5)
+{
+	# $nthreads threads, 2 seconds, but due to timing imprecision we might get
+	# only 1 or as many as 3 progress reports per thread.
+	check_pgbench_logs("$bdir/001_pgbench_log_1", $nthreads, 1, 3,
+		qr{^\d+ \d{1,2} \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+$});
+}
+
+# with sampling rate, not time sensitive
 pgbench(
 "-n -S -t 50 -c 2 --log --log-prefix=$bdir/001_pgbench_log_2 --sampling-rate=0.5",
 	0,
@@ -615,6 +664,8 @@ pgbench(
 	[qr{^$}],
 	'pgbench logs');
 
+# random 50% of 2*50 transactions, accept between 8 and 92
+# probability of failure is about 2 * 2^-42 (?)
 check_pgbench_logs("$bdir/001_pgbench_log_2", 1, 8, 92,
 	qr{^0 \d{1,2} \d+ \d \d+ \d+$});
 

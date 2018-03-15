@@ -5163,6 +5163,96 @@ main(int argc, char **argv)
 	return 0;
 }
 
+/* display the progress report */
+static void
+doProgressReport(TState *thread, StatsData *plast, int64 *plast_report,
+				 int64 now, int64 thread_start)
+{
+	StatsData	cur;
+	int64		run = now - *plast_report,
+				ntx;
+	double		tps,
+				total_run,
+				latency,
+				sqlat,
+				lag,
+				stdev;
+	char		tbuf[64];
+	int		i;
+
+	/*
+	 * Add up the statistics of all threads.
+	 *
+	 * XXX: No locking. There is no guarantee that we get an
+	 * atomic snapshot of the transaction count and latencies, so
+	 * these figures can well be off by a small amount. The
+	 * progress report's purpose is to give a quick overview of
+	 * how the test is going, so that shouldn't matter too much.
+	 * (If a read from a 64-bit integer is not atomic, you might
+	 * get a "torn" read and completely bogus latencies though!)
+	 */
+	initStats(&cur, 0);
+	for (i = 0; i < nthreads; i++)
+	{
+		mergeSimpleStats(&cur.latency, &thread[i].stats.latency);
+		mergeSimpleStats(&cur.lag, &thread[i].stats.lag);
+		cur.cnt += thread[i].stats.cnt;
+		cur.skipped += thread[i].stats.skipped;
+	}
+
+	/* we count only actually executed transactions */
+	ntx = (cur.cnt - cur.skipped) - (plast->cnt - plast->skipped);
+	total_run = (now - thread_start) / 1000000.0;
+	tps = 1000000.0 * ntx / run;
+	if (ntx > 0)
+	{
+		latency = 0.001 * (cur.latency.sum - plast->latency.sum) / ntx;
+		sqlat = 1.0 * (cur.latency.sum2 - plast->latency.sum2) / ntx;
+		stdev = 0.001 * sqrt(sqlat - 1000000.0 * latency * latency);
+		lag = 0.001 * (cur.lag.sum - plast->lag.sum) / ntx;
+	}
+	else
+	{
+		latency = sqlat = stdev = lag = 0;
+	}
+
+	if (progress_timestamp)
+	{
+		/*
+		 * On some platforms the current system timestamp is
+		 * available in now_time, but rather than get entangled
+		 * with that, we just eat the cost of an extra syscall in
+		 * all cases.
+		 */
+		struct timeval tv;
+
+		gettimeofday(&tv, NULL);
+		snprintf(tbuf, sizeof(tbuf), "%ld.%03ld s",
+				 (long) tv.tv_sec, (long) (tv.tv_usec / 1000));
+	}
+	else
+	{
+		/* round seconds are expected, but the thread may be late */
+		snprintf(tbuf, sizeof(tbuf), "%.1f s", total_run);
+	}
+
+	fprintf(stderr,
+			"progress: %s, %.1f tps, lat %.3f ms stddev %.3f",
+			tbuf, tps, latency, stdev);
+
+	if (throttle_delay)
+	{
+		fprintf(stderr, ", lag %.3f ms", lag);
+		if (latency_limit)
+			fprintf(stderr, ", " INT64_FORMAT " skipped",
+					cur.skipped - plast->skipped);
+	}
+	fprintf(stderr, "\n");
+
+	*plast = cur;
+	*plast_report = now;
+}
+
 static void *
 threadRun(void *arg)
 {
@@ -5422,89 +5512,8 @@ threadRun(void *arg)
 			now = INSTR_TIME_GET_MICROSEC(now_time);
 			if (now >= next_report)
 			{
-				/* generate and show report */
-				StatsData	cur;
-				int64		run = now - last_report,
-							ntx;
-				double		tps,
-							total_run,
-							latency,
-							sqlat,
-							lag,
-							stdev;
-				char		tbuf[64];
-
-				/*
-				 * Add up the statistics of all threads.
-				 *
-				 * XXX: No locking. There is no guarantee that we get an
-				 * atomic snapshot of the transaction count and latencies, so
-				 * these figures can well be off by a small amount. The
-				 * progress report's purpose is to give a quick overview of
-				 * how the test is going, so that shouldn't matter too much.
-				 * (If a read from a 64-bit integer is not atomic, you might
-				 * get a "torn" read and completely bogus latencies though!)
-				 */
-				initStats(&cur, 0);
-				for (i = 0; i < nthreads; i++)
-				{
-					mergeSimpleStats(&cur.latency, &thread[i].stats.latency);
-					mergeSimpleStats(&cur.lag, &thread[i].stats.lag);
-					cur.cnt += thread[i].stats.cnt;
-					cur.skipped += thread[i].stats.skipped;
-				}
-
-				/* we count only actually executed transactions */
-				ntx = (cur.cnt - cur.skipped) - (last.cnt - last.skipped);
-				total_run = (now - thread_start) / 1000000.0;
-				tps = 1000000.0 * ntx / run;
-				if (ntx > 0)
-				{
-					latency = 0.001 * (cur.latency.sum - last.latency.sum) / ntx;
-					sqlat = 1.0 * (cur.latency.sum2 - last.latency.sum2) / ntx;
-					stdev = 0.001 * sqrt(sqlat - 1000000.0 * latency * latency);
-					lag = 0.001 * (cur.lag.sum - last.lag.sum) / ntx;
-				}
-				else
-				{
-					latency = sqlat = stdev = lag = 0;
-				}
-
-				if (progress_timestamp)
-				{
-					/*
-					 * On some platforms the current system timestamp is
-					 * available in now_time, but rather than get entangled
-					 * with that, we just eat the cost of an extra syscall in
-					 * all cases.
-					 */
-					struct timeval tv;
-
-					gettimeofday(&tv, NULL);
-					snprintf(tbuf, sizeof(tbuf), "%ld.%03ld s",
-							 (long) tv.tv_sec, (long) (tv.tv_usec / 1000));
-				}
-				else
-				{
-					/* round seconds are expected, but the thread may be late */
-					snprintf(tbuf, sizeof(tbuf), "%.1f s", total_run);
-				}
-
-				fprintf(stderr,
-						"progress: %s, %.1f tps, lat %.3f ms stddev %.3f",
-						tbuf, tps, latency, stdev);
-
-				if (throttle_delay)
-				{
-					fprintf(stderr, ", lag %.3f ms", lag);
-					if (latency_limit)
-						fprintf(stderr, ", " INT64_FORMAT " skipped",
-								cur.skipped - last.skipped);
-				}
-				fprintf(stderr, "\n");
-
-				last = cur;
-				last_report = now;
+				doProgressReport(thread, &last,
+								 &last_report, now, thread_start);
 
 				/*
 				 * Ensure that the next report is in the future, in case
@@ -5519,6 +5528,35 @@ threadRun(void *arg)
 	}
 
 done:
+	/*
+	 * Force a (last) progress report if last one was over 0.5 second ago
+	 * or no progress was shown since the beginning of the run.
+	 */
+	if (progress && thread->tid == 0)
+	{
+		instr_time	now_time;
+		int64		now;
+
+		INSTR_TIME_SET_CURRENT(now_time);
+		now = INSTR_TIME_GET_MICROSEC(now_time);
+
+		/*
+		 * When tap testing, ensure that the run really lasts as required,
+		 * otherwise there is a shortcut under throttling when there is nothing
+		 * to do.
+		 */
+		if (getenv("PGBENCH_TAP_TEST") != NULL &&
+			duration && now - thread_start < duration * 1000000)
+		{
+			pg_usleep(duration * 1000000 + thread_start - now);
+			INSTR_TIME_SET_CURRENT(now_time);
+			now = INSTR_TIME_GET_MICROSEC(now_time);
+		}
+
+		if (last_report == thread_start || now - last_report >= 500000)
+			doProgressReport(thread, &last, &last_report, now, thread_start);
+	}
+
 	INSTR_TIME_SET_CURRENT(start);
 	disconnect_all(state, nstate);
 	INSTR_TIME_SET_CURRENT(end);

@@ -157,6 +157,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 								  ForeignKeyOptInfo *fkinfo,
 								  int colno);
+extern void promote_child_rel_equivalences(PlannerInfo *root,
+												Relids childrelids);
 extern void add_child_rel_equivalences(PlannerInfo *root,
 						   AppendRelInfo *appinfo,
 						   RelOptInfo *parent_rel,

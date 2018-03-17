@@ -3224,7 +3224,7 @@ float8_numeric(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot convert infinity to numeric")));
 
-	snprintf(buf, sizeof(buf), "%.*g", DBL_DIG, val);
+	snprintf(buf, sizeof(buf), "%.*g", __DBL_DECIMAL_DIG__, val);
 
 	init_var(&result);
 
@@ -3295,7 +3295,7 @@ float4_numeric(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot convert infinity to numeric")));
 
-	snprintf(buf, sizeof(buf), "%.*g", FLT_DIG, val);
+	snprintf(buf, sizeof(buf), "%.*g", __FLT_DECIMAL_DIG__, val);
 
 	init_var(&result);
 

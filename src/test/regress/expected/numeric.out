@@ -753,12 +753,12 @@ SELECT a, ceil(a), ceiling(a), floor(a), round(a) FROM ceil_floor_round;
 DROP TABLE ceil_floor_round;
 -- Check rounding, it should round ties away from zero.
 SELECT i as pow,
-	round((-2.5 * 10 ^ i)::numeric, -i),
-	round((-1.5 * 10 ^ i)::numeric, -i),
-	round((-0.5 * 10 ^ i)::numeric, -i),
-	round((0.5 * 10 ^ i)::numeric, -i),
-	round((1.5 * 10 ^ i)::numeric, -i),
-	round((2.5 * 10 ^ i)::numeric, -i)
+	round((-2.5 * 10::numeric ^ i), -i),
+	round((-1.5 * 10::numeric ^ i), -i),
+	round((-0.5 * 10::numeric ^ i), -i),
+	round((0.5 * 10::numeric ^ i), -i),
+	round((1.5 * 10::numeric ^ i), -i),
+	round((2.5 * 10::numeric ^ i), -i)
 FROM generate_series(-5,5) AS t(i);
  pow |  round   |  round   |  round   |  round  |  round  |  round  
 -----+----------+----------+----------+---------+---------+---------
@@ -2061,5 +2061,39 @@ SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
     sum     
 ------------
  -999900000
+(1 row)
+
+--
+-- Tests for cast from float4, float8
+--
+-- check precision of mantissa not lost
+WITH RECURSIVE
+  f4bit(place) AS (
+    VALUES (1::float4)
+    UNION
+    SELECT place/2::float4
+    FROM f4bit
+    WHERE 1::float4 + place/2::float4 > 1::float4
+  ),
+  f4(epsilon) AS (select min(place) FROM f4bit),
+  f8bit(place) AS (
+    VALUES (1::float8)
+    UNION
+    SELECT place/2::float8
+    FROM f8bit
+    WHERE 1::float8 + place/2::float8 > 1::float8
+  ),
+  f8(epsilon) AS (SELECT min(place) FROM f8bit),
+  testvalues(f4, f8) AS (
+    SELECT 1::float4+f4.epsilon, 1::float8+f8.epsilon
+    FROM f4, f8
+  )
+SELECT
+  f4::numeric > 1::numeric AS f4numericpreserved,
+  f8::numeric > 1::numeric AS f8numericpreserved
+FROM testvalues;
+ f4numericpreserved | f8numericpreserved 
+--------------------+--------------------
+ t                  | t
 (1 row)
 

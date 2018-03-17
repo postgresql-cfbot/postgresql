@@ -150,8 +150,8 @@ execCurrentOf(CurrentOfExpr *cexpr,
 	else
 	{
 		ScanState  *scanstate;
+		Datum		ldatum;
 		bool		lisnull;
-		Oid			tuple_tableoid PG_USED_FOR_ASSERTS_ONLY;
 		ItemPointer tuple_tid;
 
 		/*
@@ -183,19 +183,31 @@ execCurrentOf(CurrentOfExpr *cexpr,
 		if (TupIsNull(scanstate->ss_ScanTupleSlot))
 			return false;
 
-		/* Use slot_getattr to catch any possible mistakes */
-		tuple_tableoid =
-			DatumGetObjectId(slot_getattr(scanstate->ss_ScanTupleSlot,
-										  TableOidAttributeNumber,
-										  &lisnull));
+		/*
+		 * Try to fetch tableoid and CTID from the scan node's current tuple.
+		 * If the scan type hasn't provided a physical tuple, we have to fail.
+		 */
+		if (!slot_getsysattr(scanstate->ss_ScanTupleSlot,
+							 TableOidAttributeNumber,
+							 &ldatum,
+							 &lisnull))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_CURSOR_STATE),
+					 errmsg("cursor \"%s\" is not a simply updatable scan of table \"%s\"",
+							cursor_name, table_name)));
 		Assert(!lisnull);
-		tuple_tid = (ItemPointer)
-			DatumGetPointer(slot_getattr(scanstate->ss_ScanTupleSlot,
-										 SelfItemPointerAttributeNumber,
-										 &lisnull));
-		Assert(!lisnull);
+		Assert(DatumGetObjectId(ldatum) == table_oid);
 
-		Assert(tuple_tableoid == table_oid);
+		if (!slot_getsysattr(scanstate->ss_ScanTupleSlot,
+							 SelfItemPointerAttributeNumber,
+							 &ldatum,
+							 &lisnull))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_CURSOR_STATE),
+					 errmsg("cursor \"%s\" is not a simply updatable scan of table \"%s\"",
+							cursor_name, table_name)));
+		Assert(!lisnull);
+		tuple_tid = (ItemPointer) DatumGetPointer(ldatum);
 
 		*current_tid = *tuple_tid;
 

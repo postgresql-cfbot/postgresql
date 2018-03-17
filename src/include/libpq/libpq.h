@@ -75,6 +75,7 @@ extern int	pq_putbytes(const char *s, size_t len);
 /*
  * prototypes for functions in be-secure.c
  */
+extern char *ssl_library;
 extern char *ssl_cert_file;
 extern char *ssl_key_file;
 extern char *ssl_ca_file;
@@ -100,5 +101,6 @@ extern WaitEventSet *FeBeWaitSet;
 extern char *SSLCipherSuites;
 extern char *SSLECDHCurve;
 extern bool SSLPreferServerCiphers;
+extern char *gnutls_priority;
 
 #endif							/* LIBPQ_H */

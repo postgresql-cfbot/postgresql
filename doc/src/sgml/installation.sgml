@@ -244,9 +244,9 @@ su - postgres
 
     <listitem>
      <para>
-      You need <productname>OpenSSL</productname>, if you want to support
-      encrypted client connections. The minimum required version is
-      0.9.8.
+      If you want to support encrypted client connections (SSL/TLS), you need
+      <productname>OpenSSL</productname> (at least version 0.9.8) or
+      <productname>GnuTLS</productname>.
      </para>
     </listitem>
 
@@ -728,6 +728,29 @@ su - postgres
       </varlistentry>
 
       <varlistentry>
+       <term><option>--with-gnutls</option>
+       <indexterm>
+        <primary>GnuTLS</primary>
+        <seealso>SSL</seealso>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Build with support for <acronym>TLS</acronym>/<acronym>SSL</acronym>
+         (encrypted) connections using the <productname>GnuTLS</productname>
+         package.  <filename>configure</filename> will check for the required
+         header files and libraries to make sure that your
+         <productname>GnuTLS</productname> installation is sufficient before
+         proceeding.
+        </para>
+
+        <para>
+         See also <option>--with-openssl</option> for an alternative.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
        <term><option>--with-gssapi</option></term>
        <listitem>
         <para>
@@ -798,12 +821,16 @@ su - postgres
        </term>
        <listitem>
         <para>
-         Build with support for <acronym>SSL</acronym> (encrypted)
-         connections. This requires the <productname>OpenSSL</productname>
-         package to be installed.  <filename>configure</filename> will check
-         for the required header files and libraries to make sure that
-         your <productname>OpenSSL</productname> installation is sufficient
-         before proceeding.
+         Build with support for <acronym>SSL</acronym>/<acronym>TLS</acronym>
+         (encrypted) connections using the <productname>OpenSSL</productname>
+         package.  <filename>configure</filename> will check for the required
+         header files and libraries to make sure that your
+         <productname>OpenSSL</productname> installation is sufficient before
+         proceeding.
+        </para>
+
+        <para>
+         See also <option>--with-gnutls</option> for an alternative.
         </para>
        </listitem>
       </varlistentry>
@@ -2284,7 +2311,7 @@ ERROR:  could not load library "/opt/dbs/pgsql/lib/plperl.so": Bad address
 
      <listitem>
       <para>
-       OpenSSL is not supported.
+       SSL is not supported.
       </para>
      </listitem>
 

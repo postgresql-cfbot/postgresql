@@ -1789,7 +1789,7 @@ host ... ldap ldapserver=ldap.example.net ldapbasedn="dc=example, dc=net" ldapse
          <para>
           The encryption vector used will only be cryptographically
           strong if <productname>PostgreSQL</productname> is built with support for
-          <productname>OpenSSL</productname>. In other cases, the transmission to the
+          an SSL library (e.g., <productname>OpenSSL</productname>). In other cases, the transmission to the
           RADIUS server should only be considered obfuscated, not secured, and
           external security measures should be applied if necessary.
          </para>

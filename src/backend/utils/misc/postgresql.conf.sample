@@ -100,10 +100,15 @@
 #ssl_cert_file = 'server.crt'
 #ssl_crl_file = ''
 #ssl_key_file = 'server.key'
+#ssl_dh_params_file = ''
+
+# Parameters for OpenSSL.  Leave these commented out if not using OpenSSL.
 #ssl_ciphers = 'HIGH:MEDIUM:+3DES:!aNULL' # allowed SSL ciphers
 #ssl_prefer_server_ciphers = on
 #ssl_ecdh_curve = 'prime256v1'
-#ssl_dh_params_file = ''
+
+# Parameters for GnuTLS.  Leave these commented out if not using GnuTLS.
+#gnutls_priority = 'NORMAL:%SERVER_PRECEDENCE'
 
 
 #------------------------------------------------------------------------------

@@ -2152,10 +2152,14 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   <para>
    <productname>PostgreSQL</productname> has native support for using
    <acronym>SSL</acronym> connections to encrypt client/server communications
-   for increased security. This requires that
-   <productname>OpenSSL</productname> is installed on both client and
-   server systems and that support in <productname>PostgreSQL</productname> is
-   enabled at build time (see <xref linkend="installation"/>).
+   for increased security.  This requires that support in
+   <productname>PostgreSQL</productname> is enabled at build time (see <xref
+   linkend="installation"/>).  <productname>PostgreSQL</productname> supports
+   both <productname>OpenSSL</productname> and
+   <productname>GnuTLS</productname> as the SSL implementation.  This is
+   chosen at build time.  Third-party clients may also use other SSL
+   implementations.  Clients and servers using different SSL implementations
+   are compatible.
   </para>
 
   <sect2 id="ssl-setup">
@@ -2225,6 +2229,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    <title>OpenSSL Configuration</title>
 
   <para>
+   When using <productname>OpenSSL</productname>,
    <productname>PostgreSQL</productname> reads the system-wide
    <productname>OpenSSL</productname> configuration file. By default, this
    file is named <filename>openssl.cnf</filename> and is located in the

@@ -119,6 +119,10 @@ sub mkvcbuild
 	{
 		push(@pgcommonallfiles, 'sha2_openssl.c');
 	}
+	elsif ($solution->{options}->{gnutls})
+	{
+		push(@pgcommonallfiles, 'sha2_gnutls.c');
+	}
 	else
 	{
 		push(@pgcommonallfiles, 'sha2.c');
@@ -245,6 +249,12 @@ sub mkvcbuild
 		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-common.c');
 		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-openssl.c');
 		$libpq->RemoveFile('src/common/sha2_openssl.c');
+	}
+	elsif (!$solution->{options}->{gnutls})
+	{
+		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-common.c');
+		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-gnutls.c');
+		$libpq->RemoveFile('src/common/sha2_gnutls.c');
 	}
 	else
 	{

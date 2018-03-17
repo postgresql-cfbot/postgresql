@@ -339,7 +339,7 @@ extern const char *const *PQsslAttributeNames(PGconn *conn);
  * unencrypted connections or if any other TLS library is in use. */
 extern void *PQgetssl(PGconn *conn);
 
-/* Tell libpq whether it needs to initialize OpenSSL */
+/* Tell libpq whether it needs to initialize the SSL library */
 extern void PQinitSSL(int do_init);
 
 /* More detailed way to tell libpq whether it needs to initialize OpenSSL */

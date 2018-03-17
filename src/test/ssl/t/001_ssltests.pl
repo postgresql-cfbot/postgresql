@@ -6,14 +6,12 @@ use Test::More;
 use ServerSetup;
 use File::Copy;
 
-if ($ENV{with_openssl} eq 'yes')
-{
-	plan tests => 62;
-}
-else
+if ($ENV{with_openssl} ne 'yes' && $ENV{with_gnutls} ne 'yes')
 {
 	plan skip_all => 'SSL not supported by this build';
 }
+
+my $number_of_tests = 61;
 
 #### Some configuration
 
@@ -49,6 +47,15 @@ $node->init;
 $ENV{PGHOST} = $node->host;
 $ENV{PGPORT} = $node->port;
 $node->start;
+
+# Run this before we lock down access below.
+my $result = $node->safe_psql('postgres', "SHOW ssl_library");
+my $expected;
+if ($ENV{'with_openssl'} eq 'yes')		{ $expected = 'OpenSSL'; }
+elsif ($ENV{'with_gnutls'} eq 'yes')	{ $expected = 'GnuTLS'; }
+else									{ $expected = ''; }
+is($result, $expected, 'ssl_library parameter');
+
 configure_test_server_for_ssl($node, $SERVERHOSTADDR, 'trust');
 switch_server_cert($node, 'server-cn-only');
 
@@ -94,12 +101,22 @@ test_connect_fails($common_connstr,
 				   qr/SSL error/,
 				   "connect with wrong server root cert sslmode=verify-full");
 
-# Try with just the server CA's cert. This fails because the root file
-# must contain the whole chain up to the root CA.
-test_connect_fails($common_connstr,
-				   "sslrootcert=ssl/server_ca.crt sslmode=verify-ca",
-				   qr/SSL error/,
-				   "connect with server CA cert, without root CA");
+# Try with just the server CA's cert. This fails with OpenSSL because
+# the root file must contain the whole chain up to the root CA.
+if ($ENV{'with_openssl'} eq 'yes')
+{
+	test_connect_fails($common_connstr,
+					   "sslrootcert=ssl/server_ca.crt sslmode=verify-ca",
+					   qr/SSL error/,
+					   "connect with server CA cert, without root CA");
+	$number_of_tests++;
+}
+else
+{
+	test_connect_ok($common_connstr,
+					"sslrootcert=ssl/server_ca.crt sslmode=verify-ca",
+					"connect with server CA cert, without root CA");
+}
 
 # And finally, with the correct root cert.
 test_connect_ok($common_connstr,
@@ -128,11 +145,21 @@ test_connect_ok($common_connstr,
 				"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=invalid",
 				"sslcrl option with invalid file name");
 
-# A CRL belonging to a different CA is not accepted, fails
-test_connect_fails($common_connstr,
-				   "sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl",
-				   qr/SSL error/,
-				   "CRL belonging to a different CA");
+if ($ENV{'with_openssl'} eq 'yes')
+{
+	# A CRL belonging to a different CA is not accepted, fails
+	test_connect_fails($common_connstr,
+					   "sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl",
+					   qr/SSL error/,
+					   "CRL belonging to a different CA");
+	$number_of_tests++;
+}
+else
+{
+	test_connect_ok($common_connstr,
+					"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl",
+					"CRL belonging to a different CA");
+}
 
 # With the correct CRL, succeeds (this cert is not revoked)
 test_connect_ok($common_connstr,
@@ -282,10 +309,14 @@ test_connect_ok($common_connstr,
 				"sslmode=require sslcert=ssl/client+client_ca.crt",
 				"intermediate client certificate is provided by client");
 test_connect_fails($common_connstr, "sslmode=require sslcert=ssl/client.crt",
-				   qr/SSL error/,
+				   ($ENV{'with_openssl'} eq 'yes' ?
+					qr/SSL error/ :
+					qr/connection requires a valid client certificate/),
 				   "intermediate client certificate is missing");
 
 # clean up
 unlink("ssl/client_tmp.key",
 	   "ssl/client_wrongperms_tmp.key",
 	   "ssl/client-revoked_tmp.key");
+
+done_testing($number_of_tests);

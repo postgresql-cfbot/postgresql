@@ -8,7 +8,7 @@ use Test::More;
 use ServerSetup;
 use File::Copy;
 
-if ($ENV{with_openssl} ne 'yes')
+if ($ENV{with_openssl} ne 'yes' && $ENV{with_gnutls} ne 'yes')
 {
 	plan skip_all => 'SSL not supported by this build';
 }

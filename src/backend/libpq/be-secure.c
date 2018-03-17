@@ -40,6 +40,7 @@
 #include "storage/proc.h"
 
 
+char	   *ssl_library;
 char	   *ssl_cert_file;
 char	   *ssl_key_file;
 char	   *ssl_ca_file;
@@ -58,6 +59,9 @@ char	   *SSLECDHCurve;
 
 /* GUC variable: if false, prefer client ciphers */
 bool		SSLPreferServerCiphers;
+
+/* GUC variable controlling GnuTLS priorities */
+char	   *gnutls_priority;
 
 /* ------------------------------------------------------------ */
 /*			 Procedures common to all secure sessions			*/

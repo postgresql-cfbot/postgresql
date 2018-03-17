@@ -1442,8 +1442,9 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         compressed.
         If set to 0, compression will be disabled (this requires
         <productname>OpenSSL</productname> 1.0.0 or later).
+        <productname>GnuTLS</productname> does not support SSL compression.
         This parameter is ignored if a connection without SSL is made,
-        or if the version of <productname>OpenSSL</productname> used does not support
+        or if the SSL library used does not support
         it.
        </para>
        <para>
@@ -2141,8 +2142,8 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
          <term><literal>library</literal></term>
           <listitem>
            <para>
-            Name of the SSL implementation in use. (Currently, only
-            <literal>"OpenSSL"</literal> is implemented)
+            Name of the SSL implementation in use, e.g.,
+            <literal>OpenSSL</literal> or <literal>GnuTLS</literal>
            </para>
           </listitem>
          </varlistentry>
@@ -2211,11 +2212,11 @@ const char * const * PQsslAttributeNames(const PGconn *conn);
 <synopsis>
 void *PQsslStruct(const PGconn *conn, const char *struct_name);
 </synopsis>
+       The struct(s) available depend on the SSL implementation in use.
       </para>
       <para>
-       The struct(s) available depend on the SSL implementation in use.
-       For OpenSSL, there is one struct, available under the name "OpenSSL",
-       and it returns a pointer to the OpenSSL <literal>SSL</literal> struct.
+       For OpenSSL, there is one struct, available under the name <literal>"OpenSSL"</literal>,
+       and it returns a pointer to the OpenSSL <type>SSL</type> struct.
        To use this function, code along the following lines could be used:
 <programlisting><![CDATA[
 #include <libpq-fe.h>
@@ -2234,11 +2235,30 @@ void *PQsslStruct(const PGconn *conn, const char *struct_name);
         /* use OpenSSL functions to access ssl */
     }
 ]]></programlisting>
-      </para>
-      <para>
        This structure can be used to verify encryption levels, check server
        certificates, and more. Refer to the <productname>OpenSSL</productname>
        documentation for information about this structure.
+      </para>
+      <para>
+       Similarly, for GnuTLS, the <type>gnutls_session_t</type> can be
+       obtained under the name <literal>"GnuTLS"</literal>. For example:
+<programlisting><![CDATA[
+#include <libpq-fe.h>
+#include <gnutls/gnutls.h>
+
+...
+
+    gnutls_session_t ssl;
+
+    dbconn = PQconnectdb(...);
+    ...
+
+    ssl = PQsslStruct(dbconn, "GnuTLS");
+    if (ssl)
+    {
+        /* use GnuTLS functions to access ssl */
+    }
+    ]]></programlisting>
       </para>
      </listitem>
     </varlistentry>
@@ -7632,6 +7652,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
+   When <productname>OpenSSL</productname> is used, then
    <application>libpq</application> reads the system-wide
    <productname>OpenSSL</productname> configuration file. By default, this
    file is named <filename>openssl.cnf</filename> and is located in the
@@ -8007,6 +8028,13 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
+   If you are using <productname>OpenSSL</productname> version 1.1.0 or later
+   and use initialization function <function>OPENSSL_init_ssl()</function> or
+   the implicit initialization, then you don't need to do this.  Similarly,
+   this is not necessary with <productname>GnuTLS</productname>.
+  </para>
+
+  <para>
    <variablelist>
     <varlistentry id="libpq-pqinitopenssl">
      <term>
@@ -8041,6 +8069,10 @@ void PQinitOpenSSL(int do_ssl, int do_crypto);
        before first opening a database connection.  Also be sure that you
        have done that initialization before opening a database connection.
       </para>
+
+      <para>
+       With <productname>GnuTLS</productname>, this function does nothing.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -8061,10 +8093,14 @@ void PQinitSSL(int do_ssl);
       </para>
 
       <para>
-       This function is equivalent to
+       With <productname>OpenSSL</productname>, this function is equivalent to
        <literal>PQinitOpenSSL(do_ssl, do_ssl)</literal>.
        It is sufficient for applications that initialize both or neither
        of <application>OpenSSL</application> and <literal>libcrypto</literal>.
+      </para>
+
+      <para>
+       With <productname>GnuTLS</productname>, this function does nothing.
       </para>
 
       <para>

@@ -115,9 +115,11 @@ typedef struct RI_ConstraintInfo
 	char		confupdtype;	/* foreign key's ON UPDATE action */
 	char		confdeltype;	/* foreign key's ON DELETE action */
 	char		confmatchtype;	/* foreign key's match type */
+	bool		has_array;		/* true if any reftype is EACH_ELEMENT */
 	int			nkeys;			/* number of key columns */
 	int16		pk_attnums[RI_MAX_NUMKEYS]; /* attnums of referenced cols */
 	int16		fk_attnums[RI_MAX_NUMKEYS]; /* attnums of referencing cols */
+	char		fk_reftypes[RI_MAX_NUMKEYS];	/* reference semantics */
 	Oid			pf_eq_oprs[RI_MAX_NUMKEYS]; /* equality operators (PK = FK) */
 	Oid			pp_eq_oprs[RI_MAX_NUMKEYS]; /* equality operators (PK = PK) */
 	Oid			ff_eq_oprs[RI_MAX_NUMKEYS]; /* equality operators (FK = FK) */
@@ -202,7 +204,8 @@ static void ri_GenerateQual(StringInfo buf,
 				const char *sep,
 				const char *leftop, Oid leftoptype,
 				Oid opoid,
-				const char *rightop, Oid rightoptype);
+				const char *rightop, Oid rightoptype,
+				char fkreftype);
 static void ri_add_cast_to(StringInfo buf, Oid typid);
 static void ri_GenerateQualCollation(StringInfo buf, Oid collation);
 static int ri_NullCheck(HeapTuple tup,
@@ -393,6 +396,7 @@ RI_FKey_check(TriggerData *trigdata)
 	if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
 	{
 		StringInfoData querybuf;
+		StringInfoData countbuf;
 		char		pkrelname[MAX_QUOTED_REL_NAME_LEN];
 		char		attname[MAX_QUOTED_NAME_LEN];
 		char		paramname[16];
@@ -405,12 +409,27 @@ RI_FKey_check(TriggerData *trigdata)
 		 *		   FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * corresponding FK attributes.
+		 *
+		 * In case of an array ELEMENT foreign key, the previous query is used
+		 * to count the number of matching rows and see if every combination
+		 * is actually referenced.
+		 * The wrapping query is
+		 *	SELECT 1 WHERE
+		 *	  (SELECT count(DISTINCT y) FROM unnest($1) y)
+		 *	  = (SELECT count(*) FROM (<QUERY>) z)
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
 		quoteRelationName(pkrelname, pk_rel);
 		appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x", pkrelname);
 		querysep = "WHERE";
+
+		if (riinfo->has_array)
+		{
+			initStringInfo(&countbuf);
+			appendStringInfo(&countbuf, "SELECT 1 WHERE ");
+		}
+
 		for (i = 0; i < riinfo->nkeys; i++)
 		{
 			Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
@@ -419,18 +438,41 @@ RI_FKey_check(TriggerData *trigdata)
 			quoteOneName(attname,
 						 RIAttName(pk_rel, riinfo->pk_attnums[i]));
 			sprintf(paramname, "$%d", i + 1);
+
+			/*
+			 * In case of an array ELEMENT foreign key, we check that each
+			 * distinct non-null value in the array is present in the PK
+			 * table.
+			 */
+			if (riinfo->fk_reftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+				appendStringInfo(&countbuf,
+								 "(SELECT pg_catalog.count(DISTINCT y) FROM pg_catalog.unnest(%s) y)",
+								 paramname);
+
 			ri_GenerateQual(&querybuf, querysep,
 							attname, pk_type,
 							riinfo->pf_eq_oprs[i],
-							paramname, fk_type);
+							paramname, fk_type,
+							riinfo->fk_reftypes[i]);
 			querysep = "AND";
 			queryoids[i] = fk_type;
 		}
 		appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
 
-		/* Prepare and save the plan */
-		qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
-							 &qkey, fk_rel, pk_rel, true);
+		if (riinfo->has_array)
+		{
+			appendStringInfo(&countbuf,
+							 " OPERATOR(pg_catalog.=) (SELECT pg_catalog.count(*) FROM (%s) z)",
+							 querybuf.data);
+
+			/* Prepare and save the plan for Array Element Foreign Keys */
+			qplan = ri_PlanCheck(countbuf.data, riinfo->nkeys, queryoids,
+								 &qkey, fk_rel, pk_rel, true);
+		}
+		else
+			/* Prepare and save the plan */
+			qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
+								 &qkey, fk_rel, pk_rel, true);
 	}
 
 	/*
@@ -557,7 +599,8 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 			ri_GenerateQual(&querybuf, querysep,
 							attname, pk_type,
 							riinfo->pp_eq_oprs[i],
-							paramname, pk_type);
+							paramname, pk_type,
+							FKCONSTR_REF_PLAIN);
 			querysep = "AND";
 			queryoids[i] = pk_type;
 		}
@@ -815,7 +858,8 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 					ri_GenerateQual(&querybuf, querysep,
 									paramname, pk_type,
 									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
+									attname, fk_type,
+									riinfo->fk_reftypes[i]);
 					querysep = "AND";
 					queryoids[i] = pk_type;
 				}
@@ -971,7 +1015,8 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 					ri_GenerateQual(&querybuf, querysep,
 									paramname, pk_type,
 									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
+									attname, fk_type,
+									riinfo->fk_reftypes[i]);
 					querysep = "AND";
 					queryoids[i] = pk_type;
 				}
@@ -1150,7 +1195,8 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 					ri_GenerateQual(&qualbuf, qualsep,
 									paramname, pk_type,
 									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
+									attname, fk_type,
+									riinfo->fk_reftypes[i]);
 					querysep = ",";
 					qualsep = "AND";
 					queryoids[i] = pk_type;
@@ -1368,7 +1414,8 @@ ri_setnull(TriggerData *trigdata)
 					ri_GenerateQual(&qualbuf, qualsep,
 									paramname, pk_type,
 									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
+									attname, fk_type,
+									riinfo->fk_reftypes[i]);
 					querysep = ",";
 					qualsep = "AND";
 					queryoids[i] = pk_type;
@@ -1585,7 +1632,8 @@ ri_setdefault(TriggerData *trigdata)
 					ri_GenerateQual(&qualbuf, qualsep,
 									paramname, pk_type,
 									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
+									attname, fk_type,
+									riinfo->fk_reftypes[i]);
 					querysep = ",";
 					qualsep = "AND";
 					queryoids[i] = pk_type;
@@ -1904,6 +1952,14 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 * For MATCH FULL:
 	 *	 (fk.keycol1 IS NOT NULL [OR ...])
 	 *
+	 * In case of an array ELEMENT column, relname is replaced with the
+	 * following subquery:
+	 *
+	 *	 SELECT unnest("keycol1") k1, "keycol1" ak1 [, ...]
+	 *	 FROM ONLY "public"."fk"
+	 *
+	 * where all the columns are renamed in order to prevent name collisions.
+	 *
 	 * We attach COLLATE clauses to the operators when comparing columns
 	 * that have different collations.
 	 *----------
@@ -1921,9 +1977,29 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 
 	quoteRelationName(pkrelname, pk_rel);
 	quoteRelationName(fkrelname, fk_rel);
-	appendStringInfo(&querybuf,
-					 " FROM ONLY %s fk LEFT OUTER JOIN ONLY %s pk ON",
-					 fkrelname, pkrelname);
+
+	if (riinfo->has_array)
+	{
+		appendStringInfo(&querybuf, " FROM ONLY %s fk", fkrelname);
+		for (i = 0; i < riinfo->nkeys; i++)
+		{
+			if (riinfo->fk_reftypes[i] != FKCONSTR_REF_EACH_ELEMENT)
+				continue;
+
+			quoteOneName(fkattname,
+						 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			appendStringInfo(&querybuf,
+							 " CROSS JOIN LATERAL pg_catalog.unnest(fk.%s) a (e)",
+							 fkattname);
+		}
+		appendStringInfo(&querybuf,
+						 " LEFT OUTER JOIN ONLY %s pk ON",
+						 pkrelname);
+	}
+	else
+		appendStringInfo(&querybuf,
+						 " FROM ONLY %s fk LEFT OUTER JOIN ONLY %s pk ON",
+						 fkrelname, pkrelname);
 
 	strcpy(pkattname, "pk.");
 	strcpy(fkattname, "fk.");
@@ -1934,15 +2010,23 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 		Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
 		Oid			pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
 		Oid			fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+		char	   *tmp;
 
 		quoteOneName(pkattname + 3,
 					 RIAttName(pk_rel, riinfo->pk_attnums[i]));
-		quoteOneName(fkattname + 3,
-					 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+		if (riinfo->fk_reftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+			tmp = "a.e";
+		else
+		{
+			quoteOneName(fkattname + 3,
+						 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			tmp = fkattname;
+		}
 		ri_GenerateQual(&querybuf, sep,
 						pkattname, pk_type,
 						riinfo->pf_eq_oprs[i],
-						fkattname, fk_type);
+						tmp, fk_type,
+						FKCONSTR_REF_PLAIN);
 		if (pk_coll != fk_coll)
 			ri_GenerateQualCollation(&querybuf, pk_coll);
 		sep = "AND";
@@ -1958,10 +2042,15 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	sep = "";
 	for (i = 0; i < riinfo->nkeys; i++)
 	{
-		quoteOneName(fkattname, RIAttName(fk_rel, riinfo->fk_attnums[i]));
-		appendStringInfo(&querybuf,
-						 "%sfk.%s IS NOT NULL",
-						 sep, fkattname);
+		if (riinfo->fk_reftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+			appendStringInfo(&querybuf, "%sa.e IS NOT NULL", sep);
+		else
+		{
+			quoteOneName(fkattname, RIAttName(fk_rel, riinfo->fk_attnums[i]));
+			appendStringInfo(&querybuf,
+							 "%sfk.%s IS NOT NULL",
+							 sep, fkattname);
+		}
 		switch (riinfo->confmatchtype)
 		{
 			case FKCONSTR_MATCH_SIMPLE:
@@ -2134,20 +2223,23 @@ quoteRelationName(char *buffer, Relation rel)
 /*
  * ri_GenerateQual --- generate a WHERE clause equating two variables
  *
- * The idea is to append " sep leftop op rightop" to buf.  The complexity
- * comes from needing to be sure that the parser will select the desired
- * operator.  We always name the operator using OPERATOR(schema.op) syntax
- * (readability isn't a big priority here), so as to avoid search-path
- * uncertainties.  We have to emit casts too, if either input isn't already
- * the input type of the operator; else we are at the mercy of the parser's
- * heuristics for ambiguous-operator resolution.
- */
+ * The idea is to append " sep leftop op rightop" to buf, or if fkreftype is
+ * FKCONSTR_REF_EACH_ELEMENT, append " sep rightop @> leftop" to buf.
+ *
+ * The complexity comes from needing to be sure that the parser will select
+ * the desired operator.  We always name the operator using
+ * OPERATOR(schema.op) syntax (readability isn't a big priority here), so as
+ * to avoid search-path uncertainties.  We have to emit casts too, if either
+ * input isn't already the input type of the operator; else we are at the
+ * mercy of the parser's heuristics for ambiguous-operator resolution.
+  */
 static void
 ri_GenerateQual(StringInfo buf,
 				const char *sep,
 				const char *leftop, Oid leftoptype,
 				Oid opoid,
-				const char *rightop, Oid rightoptype)
+				const char *rightop, Oid rightoptype,
+				char fkreftype)
 {
 	HeapTuple	opertup;
 	Form_pg_operator operform;
@@ -2163,14 +2255,62 @@ ri_GenerateQual(StringInfo buf,
 
 	nspname = get_namespace_name(operform->oprnamespace);
 
-	appendStringInfo(buf, " %s %s", sep, leftop);
-	if (leftoptype != operform->oprleft)
-		ri_add_cast_to(buf, operform->oprleft);
-	appendStringInfo(buf, " OPERATOR(%s.", quote_identifier(nspname));
-	appendStringInfoString(buf, oprname);
-	appendStringInfo(buf, ") %s", rightop);
-	if (rightoptype != operform->oprright)
-		ri_add_cast_to(buf, operform->oprright);
+	if (fkreftype == FKCONSTR_REF_EACH_ELEMENT)
+	{
+		Oid			oprright;
+		Oid			oprleft;
+		Oid			oprcommon;
+
+		/*
+		 * we first need to get the array types and decide the more
+		 * appropriate one
+		 */
+
+		/* get array type of refrenced element */
+		oprright = get_array_type(operform->oprleft);
+		if (!OidIsValid(oprright))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find array type for data type %s",
+							format_type_be(operform->oprleft))));
+		/* get array type of refrencing element */
+		oprleft = get_array_type(operform->oprright);
+		if (!OidIsValid(oprleft))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find array type for data type %s",
+							format_type_be(operform->oprright))));
+
+		/*
+		 * compare the two array types and try to find a common supertype
+		 */
+		oprcommon = select_common_type_2args(oprleft, oprright);
+		if (!OidIsValid(oprcommon))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find common type between %s and %s",
+							format_type_be(oprleft), format_type_be(oprright))));
+
+		appendStringInfo(buf, " %s %s", sep, rightop);
+		if (oprleft != oprcommon)
+			ri_add_cast_to(buf, oprcommon);
+		appendStringInfo(buf, " OPERATOR(pg_catalog.");
+		appendStringInfo(buf, " @>");
+		appendStringInfo(buf, ") ARRAY[%s]", leftop);
+		if (oprright != oprcommon)
+			ri_add_cast_to(buf, oprcommon);
+	}
+	else
+	{
+		appendStringInfo(buf, " %s %s", sep, leftop);
+		if (leftoptype != operform->oprleft)
+			ri_add_cast_to(buf, operform->oprleft);
+		appendStringInfo(buf, " OPERATOR(%s.", quote_identifier(nspname));
+		appendStringInfoString(buf, oprname);
+		appendStringInfo(buf, ") %s", rightop);
+		if (rightoptype != operform->oprright)
+			ri_add_cast_to(buf, operform->oprright);
+	}
 
 	ReleaseSysCache(opertup);
 }
@@ -2378,6 +2518,7 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	bool		isNull;
 	ArrayType  *arr;
 	int			numkeys;
+	int			i;
 
 	/*
 	 * On the first call initialize the hashtable
@@ -2456,6 +2597,20 @@ ri_LoadConstraintInfo(Oid constraintOid)
 		pfree(arr);				/* free de-toasted copy, if any */
 
 	adatum = SysCacheGetAttr(CONSTROID, tup,
+							 Anum_pg_constraint_confreftype, &isNull);
+	if (isNull)
+		elog(ERROR, "null confreftype for constraint %u", constraintOid);
+	arr = DatumGetArrayTypeP(adatum);	/* ensure not toasted */
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_DIMS(arr)[0] != numkeys ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != CHAROID)
+		elog(ERROR, "confreftype is not a 1-D char array");
+	memcpy(riinfo->fk_reftypes, ARR_DATA_PTR(arr), numkeys * sizeof(char));
+	if ((Pointer) arr != DatumGetPointer(adatum))
+		pfree(arr);				/* free de-toasted copy, if any */
+
+	adatum = SysCacheGetAttr(CONSTROID, tup,
 							 Anum_pg_constraint_conpfeqop, &isNull);
 	if (isNull)
 		elog(ERROR, "null conpfeqop for constraint %u", constraintOid);
@@ -2497,6 +2652,24 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	memcpy(riinfo->ff_eq_oprs, ARR_DATA_PTR(arr), numkeys * sizeof(Oid));
 	if ((Pointer) arr != DatumGetPointer(adatum))
 		pfree(arr);				/* free de-toasted copy, if any */
+
+	/*
+	 * Fix up some stuff for Array Element Foreign Keys.  We need a has_array
+	 * flag indicating whether there's an array foreign key, and we want to
+	 * set ff_eq_oprs[i] to array_eq() for array columns, because that's what
+	 * makes sense for ri_KeysEqual, and we have no other use for ff_eq_oprs
+	 * in this module.  (If we did, substituting the array comparator at the
+	 * call point in ri_KeysEqual might be more appropriate.)
+	 */
+	riinfo->has_array = false;
+	for (i = 0; i < numkeys; i++)
+	{
+		if (riinfo->fk_reftypes[i] != FKCONSTR_REF_PLAIN)
+		{
+			riinfo->has_array = true;
+			riinfo->ff_eq_oprs[i] = ARRAY_EQ_OP;
+		}
+	}
 
 	ReleaseSysCache(tup);
 
@@ -2871,6 +3044,10 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				appendStringInfoString(&key_names, ", ");
 				appendStringInfoString(&key_values, ", ");
 			}
+
+			if (riinfo->fk_reftypes[idx] == FKCONSTR_REF_EACH_ELEMENT)
+				appendStringInfoString(&key_names, "EACH ELEMENT OF ");
+
 			appendStringInfoString(&key_names, name);
 			appendStringInfoString(&key_values, val);
 		}

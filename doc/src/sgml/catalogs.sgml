@@ -2333,6 +2333,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><structfield>confreftype</structfield></entry>
+      <entry><type>char[]</type></entry>
+      <entry></entry>
+      <entry>If a foreign key, the reference semantics for each column:
+       <literal>p</literal> = plain (simple equality),
+       <literal>e</literal> = each element of referencing array must have a match
+      </entry>
+     </row>
+ 
+     <row>      
       <entry><structfield>conpfeqop</structfield></entry>
       <entry><type>oid[]</type></entry>
       <entry><literal><link linkend="catalog-pg-operator"><structname>pg_operator</structname></link>.oid</literal></entry>
@@ -2377,6 +2387,12 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    </tgroup>
   </table>
 
+  <para>
+    When <structfield>confreftype</structfield> indicates array to scalar
+    foreign key reference semantics, the equality operators listed in
+    <structfield>conpfeqop</structfield> etc are for the array's element type.
+  </para>
+ 
   <para>
    In the case of an exclusion constraint, <structfield>conkey</structfield>
    is only useful for constraint elements that are simple column references.

@@ -2084,6 +2084,10 @@ typedef enum ConstrType			/* types of constraints */
 #define FKCONSTR_MATCH_PARTIAL		'p'
 #define FKCONSTR_MATCH_SIMPLE		's'
 
+ /* Foreign key column reference semantics codes */
+#define FKCONSTR_REF_PLAIN			'p'
+#define FKCONSTR_REF_EACH_ELEMENT	'e'
+
 typedef struct Constraint
 {
 	NodeTag		type;
@@ -2119,6 +2123,7 @@ typedef struct Constraint
 	RangeVar   *pktable;		/* Primary key table */
 	List	   *fk_attrs;		/* Attributes of foreign key */
 	List	   *pk_attrs;		/* Corresponding attrs in PK table */
+	List	   *fk_reftypes;	/* Per-column reference semantics (int List) */
 	char		fk_matchtype;	/* FULL, PARTIAL, SIMPLE */
 	char		fk_upd_action;	/* ON UPDATE action */
 	char		fk_del_action;	/* ON DELETE action */

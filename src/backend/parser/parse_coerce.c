@@ -1385,6 +1385,102 @@ select_common_type(ParseState *pstate, List *exprs, const char *context,
 }
 
 /*
+ * look at select_common_type(); in parse_coerce.c(src/backend/parser/parse_coerce.c)
+ *
+ * select_common_type_2args()
+ *		Determine the common supertype of a list of input expressions.
+ * 'leftOid': left operand's type
+ * 'rightOid': left operand's type
+ */
+Oid
+select_common_type_2args(Oid leftOid, Oid rightOid)
+{
+	TYPCATEGORY leftcategory;
+	TYPCATEGORY rightcategory;
+	bool		leftispreferred;
+	bool		rightispreferred;
+
+	Assert(leftOid != InvalidOid);
+	Assert(rightOid != InvalidOid);
+
+	/*
+	 * If input types are valid and exactly the same, just pick that type.
+	 */
+	if (leftOid != UNKNOWNOID)
+	{
+		if (rightOid == leftOid)
+			return leftOid;
+	}
+
+	/*
+	 * Nope, so set up for the full algorithm.
+	 */
+	leftOid = getBaseType(leftOid);
+	rightOid = getBaseType(rightOid);
+	get_type_category_preferred(leftOid, &leftcategory, &leftispreferred);
+	get_type_category_preferred(rightOid, &rightcategory, &rightispreferred);
+
+	if (rightOid != UNKNOWNOID && rightOid != leftOid)
+	{
+		if (rightcategory != leftcategory)
+		{
+			/* both types in different categories? then not much hope... */
+			return InvalidOid;
+		}
+
+		if (can_coerce_type(1, &rightOid, &leftOid, COERCION_IMPLICIT))
+		{
+			/* can coerce to it implicitly right to left */
+			if (!can_coerce_type(1, &leftOid, &rightOid, COERCION_IMPLICIT))
+			{
+				/*
+				 * can not coerce to it implicitly right to left, thus
+				 * coercion only works one way
+				 */
+				return leftOid;
+			}
+			else
+			{
+				/*
+				 * coercion works both ways, then decide depending on
+				 * preferred flag
+				 */
+				if (leftispreferred)
+					return leftOid;
+				else
+					return rightOid;
+			}
+		}
+		else
+		{
+			/* can not coerce to it implicitly right to left */
+			if (can_coerce_type(1, &leftOid, &rightOid, COERCION_IMPLICIT))
+			{
+				/*
+				 * can coerce to it implicitly right to left, thus coercion
+				 * only works one way
+				 */
+				return rightOid;
+			}
+			else
+			{
+				/* can not coerce either way */
+				return InvalidOid;
+			}
+		}
+	}
+
+	/*
+	 * If all the inputs were UNKNOWN type --- ie, unknown-type literals ---
+	 * then resolve as type TEXT.
+	 */
+	if (leftOid == UNKNOWNOID)
+		leftOid = TEXTOID;
+
+	return leftOid;
+}
+
+/*
  * coerce_to_common_type()
  *		Coerce an expression to the given type.
  *

@@ -7160,6 +7160,7 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 	Relation	pkrel;
 	int16		pkattnum[INDEX_MAX_KEYS];
 	int16		fkattnum[INDEX_MAX_KEYS];
+	char		fkreftypes[INDEX_MAX_KEYS];
 	Oid			pktypoid[INDEX_MAX_KEYS];
 	Oid			fktypoid[INDEX_MAX_KEYS];
 	Oid			opclasses[INDEX_MAX_KEYS];
@@ -7167,10 +7168,12 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 	Oid			ppeqoperators[INDEX_MAX_KEYS];
 	Oid			ffeqoperators[INDEX_MAX_KEYS];
 	int			i;
+	ListCell   *lc;
 	int			numfks,
 				numpks;
 	Oid			indexOid;
 	Oid			constrOid;
+	bool		has_array;
 	bool		old_check_ok;
 	ObjectAddress address;
 	ListCell   *old_pfeqop_item = list_head(fkconstraint->old_conpfeqop);
@@ -7247,6 +7250,7 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 	 */
 	MemSet(pkattnum, 0, sizeof(pkattnum));
 	MemSet(fkattnum, 0, sizeof(fkattnum));
+	MemSet(fkreftypes, 0, sizeof(fkreftypes));
 	MemSet(pktypoid, 0, sizeof(pktypoid));
 	MemSet(fktypoid, 0, sizeof(fktypoid));
 	MemSet(opclasses, 0, sizeof(opclasses));
@@ -7257,6 +7261,53 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 	numfks = transformColumnNameList(RelationGetRelid(rel),
 									 fkconstraint->fk_attrs,
 									 fkattnum, fktypoid);
+
+	/*
+	 * Validate the reference semantics codes, too, and convert list to array
+	 * format to pass to CreateConstraintEntry.
+	 */
+	Assert(list_length(fkconstraint->fk_reftypes) == numfks);
+	has_array = false;
+	i = 0;
+	foreach(lc, fkconstraint->fk_reftypes)
+	{
+		char		reftype = lfirst_int(lc);
+
+		switch (reftype)
+		{
+			case FKCONSTR_REF_PLAIN:
+				/* OK, nothing to do */
+				break;
+			case FKCONSTR_REF_EACH_ELEMENT:
+				/* At most one FK column can be an array reference */
+				if (has_array)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+							 errmsg("foreign keys support only one array column")));
+				has_array = true;
+				break;
+			default:
+				elog(ERROR, "invalid fk_reftype: %d", (int) reftype);
+				break;
+		}
+		fkreftypes[i] = reftype;
+		i++;
+	}
+
+	/*
+	 * Array foreign keys support only UPDATE/DELETE NO ACTION, UPDATE/DELETE
+	 * RESTRICT amd DELETE CASCADE actions
+	 */
+	if (has_array)
+	{
+		if ((fkconstraint->fk_upd_action != FKCONSTR_ACTION_NOACTION &&
+			 fkconstraint->fk_upd_action != FKCONSTR_ACTION_RESTRICT) ||
+			(fkconstraint->fk_del_action != FKCONSTR_ACTION_NOACTION &&
+			 fkconstraint->fk_del_action != FKCONSTR_ACTION_RESTRICT))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+					 errmsg("Array Element Foreign Keys support only NO ACTION and RESTRICT actions")));
+	}
 
 	/*
 	 * If the attribute list for the referenced table was omitted, lookup the
@@ -7342,6 +7393,65 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 		if (amid != BTREE_AM_OID)
 			elog(ERROR, "only b-tree indexes are supported for foreign keys");
 		eqstrategy = BTEqualStrategyNumber;
+
+		/*
+		 * If this is an array foreign key, we must look up the operators for
+		 * the array element type, not the array type itself.
+		 */
+		if (fkreftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+		{
+			Oid			elemopclass;
+
+			/* We check if the array element type exists and is of valid Oid */
+			fktype = get_base_element_type(fktype);
+			if (!OidIsValid(fktype))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+						 errmsg("foreign key constraint \"%s\" cannot be implemented",
+								fkconstraint->conname),
+						 errdetail("Key column \"%s\" has type %s which is not an array type.",
+								   strVal(list_nth(fkconstraint->fk_attrs, i)),
+								   format_type_be(fktypoid[i]))));
+
+			/*
+			 * For the moment, we must also insist that the array's element
+			 * type have a default btree opclass that is in the index's
+			 * opfamily.  This is necessary because ri_triggers.c relies on
+			 * COUNT(DISTINCT x) on the element type, as well as on array_eq()
+			 * on the array type, and we need those operations to have the
+			 * same notion of equality that we're using otherwise.
+			 *
+			 * XXX this restriction is pretty annoying, considering the effort
+			 * that's been put into the rest of the RI mechanisms to make them
+			 * work with nondefault equality operators.  In particular, it
+			 * means that the cast-to-PK-datatype code path isn't useful for
+			 * array-to-scalar references.
+			 */
+			elemopclass = GetDefaultOpClass(fktype, BTREE_AM_OID);
+			if (!OidIsValid(elemopclass) ||
+				get_opclass_family(elemopclass) != opfamily)
+			{
+				/* Get the index opclass's name for the error message. */
+				char	   *opcname;
+
+				cla_ht = SearchSysCache1(CLAOID,
+										 ObjectIdGetDatum(opclasses[i]));
+				if (!HeapTupleIsValid(cla_ht))
+					elog(ERROR, "cache lookup failed for opclass %u",
+						 opclasses[i]);
+				cla_tup = (Form_pg_opclass) GETSTRUCT(cla_ht);
+				opcname = pstrdup(NameStr(cla_tup->opcname));
+				ReleaseSysCache(cla_ht);
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("foreign key constraint \"%s\" cannot be implemented",
+								fkconstraint->conname),
+						 errdetail("Key column \"%s\" has element type %s which does not have a default btree operator class that's compatible with class \"%s\".",
+								   strVal(list_nth(fkconstraint->fk_attrs, i)),
+								   format_type_be(fktype),
+								   opcname)));
+			}
+		}
 
 		/*
 		 * There had better be a primary equality operator for the index.
@@ -7442,6 +7552,13 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 			 * We may assume that pg_constraint.conkey is not changing.
 			 */
 			old_fktype = attr->atttypid;
+			if (fkreftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+			{
+				old_fktype = get_base_element_type(old_fktype);
+				/* this shouldn't happen ... */
+				if (!OidIsValid(old_fktype))
+					elog(ERROR, "old foreign key column is not an array");
+			}
 			new_fktype = fktype;
 			old_pathtype = findFkeyCast(pfeqop_right, old_fktype,
 										&old_castfunc);
@@ -7508,6 +7625,7 @@ ATAddForeignKeyConstraint(AlteredTableInfo *tab, Relation rel,
 									  indexOid,
 									  RelationGetRelid(pkrel),
 									  pkattnum,
+									  fkreftypes,
 									  pfeqoperators,
 									  ppeqoperators,
 									  ffeqoperators,

@@ -137,6 +137,7 @@ typedef struct SpGistScanOpaqueData
 {
 	SpGistState state;			/* see above */
 	MemoryContext tempCxt;		/* short-lived memory context */
+	MemoryContext traversalCxt;	/* traversal memory context for inner consistent method */
 
 	/* Control flags showing whether to search nulls and/or non-nulls */
 	bool		searchNulls;	/* scan matches (all) null entries */

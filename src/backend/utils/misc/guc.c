@@ -32,6 +32,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
@@ -67,6 +68,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/checksum.h"
 #include "storage/dsm_impl.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
@@ -165,6 +167,7 @@ static void assign_syslog_ident(const char *newval, void *extra);
 static void assign_session_replication_role(int newval, void *extra);
 static bool check_temp_buffers(int *newval, void **extra, GucSource source);
 static bool check_bonjour(bool *newval, void **extra, GucSource source);
+static bool check_ignore_checksum_failure(bool *newval, void **extra, GucSource source);
 static bool check_ssl(bool *newval, void **extra, GucSource source);
 static bool check_stage_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_log_stats(bool *newval, void **extra, GucSource source);
@@ -419,6 +422,17 @@ static const struct config_enum_entry password_encryption_options[] = {
 };
 
 /*
+ * data_checksum used to be a boolean, but was only set by initdb so there is
+ * no need to support variants of boolean input.
+ */
+static const struct config_enum_entry data_checksum_options[] = {
+	{"on", DATA_CHECKSUMS_ON, true},
+	{"off", DATA_CHECKSUMS_OFF, true},
+	{"inprogress", DATA_CHECKSUMS_INPROGRESS, true},
+	{NULL, 0, false}
+};
+
+/*
  * Options for enum values stored in other modules
  */
 extern const struct config_enum_entry wal_level_options[];
@@ -513,7 +527,7 @@ static int	max_identifier_length;
 static int	block_size;
 static int	segment_size;
 static int	wal_block_size;
-static bool data_checksums;
+static int	data_checksums_tmp; /* only accessed locally! */
 static bool integer_datetimes;
 static bool assert_enabled;
 
@@ -1031,7 +1045,7 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&ignore_checksum_failure,
 		false,
-		NULL, NULL, NULL
+		check_ignore_checksum_failure, NULL, NULL
 	},
 	{
 		{"zero_damaged_pages", PGC_SUSET, DEVELOPER_OPTIONS,
@@ -1669,17 +1683,6 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL,
 		},
 		&quote_all_identifiers,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
-			gettext_noop("Shows whether data checksums are turned on for this cluster."),
-			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
-		},
-		&data_checksums,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3973,6 +3976,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		&Password_encryption,
 		PASSWORD_TYPE_MD5, password_encryption_options,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether data checksums are turned on for this cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&data_checksums_tmp,
+		DATA_CHECKSUMS_OFF, data_checksum_options,
+		NULL, NULL, show_data_checksums
 	},
 
 	/* End-of-list marker */
@@ -10219,6 +10233,37 @@ check_bonjour(bool *newval, void **extra, GucSource source)
 		return false;
 	}
 #endif
+	return true;
+}
+
+static bool
+check_ignore_checksum_failure(bool *newval, void **extra, GucSource source)
+{
+	if (*newval)
+	{
+		/*
+		 * When data checksums are in progress, the verification of the
+		 * checksums is already ignored until all pages have had checksums
+		 * backfilled, making the effect of ignore_checksum_failure a no-op.
+		 * Allowing it during checksumming in progress can hide the fact that
+		 * checksums become enabled once done, so disallow.
+		 */
+		if (DataChecksumsInProgress())
+		{
+			GUC_check_errdetail("\"ignore_checksum_failure\" cannot be turned on when \"data_checksums\" are in progress.");
+			return false;
+		}
+
+		/*
+		 * While safe, it's nonsensical to allow ignoring checksums when data
+		 * checksums aren't enabled in the first place.
+		 */
+		if (DataChecksumsDisabled())
+		{
+			GUC_check_errdetail("\"ignore_checksum_failure\" cannot be turned on when \"data_checksums\" aren't enabled.");
+			return false;
+		}
+	}
 	return true;
 }
 

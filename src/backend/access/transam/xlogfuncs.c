@@ -24,6 +24,7 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "postmaster/checksumhelper.h"
 #include "replication/walreceiver.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
@@ -697,4 +698,46 @@ pg_backup_start_time(PG_FUNCTION_ARGS)
 								Int32GetDatum(-1));
 
 	PG_RETURN_DATUM(xtime);
+}
+
+Datum
+disable_data_checksums(PG_FUNCTION_ARGS)
+{
+	if (DataChecksumsDisabled())
+		ereport(ERROR,
+				(errmsg("data checksums already disabled")));
+
+	ShutdownChecksumHelperIfRunning();
+
+	SetDataChecksumsOff();
+
+	PG_RETURN_BOOL(DataChecksumsDisabled());
+}
+
+Datum
+enable_data_checksums(PG_FUNCTION_ARGS)
+{
+	int cost_delay = PG_GETARG_INT32(0);
+	int cost_limit = PG_GETARG_INT32(1);
+
+	if (cost_delay < 0)
+		ereport(ERROR,
+				(errmsg("cost delay cannot be less than zero")));
+	if (cost_limit <= 0)
+		ereport(ERROR,
+				(errmsg("cost limit must be a positive value")));
+	/*
+	 * Allow state change from "off" or from "inprogress", since this is how
+	 * we restart the worker if necessary.
+	 */
+	if (DataChecksumsEnabledOrInProgress() && !DataChecksumsInProgress())
+		ereport(ERROR,
+				(errmsg("data checksums already enabled")));
+
+	SetDataChecksumsInProgress();
+	if (!StartChecksumHelperLauncher(cost_delay, cost_limit))
+		ereport(ERROR,
+				(errmsg("failed to start checksum helper process")));
+
+	PG_RETURN_BOOL(DataChecksumsEnabledOrInProgress());
 }

@@ -93,7 +93,15 @@ PageIsVerified(Page page, BlockNumber blkno)
 	 */
 	if (!PageIsNew(page))
 	{
-		if (DataChecksumsEnabled())
+		/*
+		 * If data checksums have been turned on in a running cluster which
+		 * was initdb'd without checksums, or a cluster which has had
+		 * checksums turned off, we hold off on verifying the checksum until
+		 * all pages again are checksummed.  The PageSetChecksum functions
+		 * must continue to write the checksums even though we don't validate
+		 * them yet.
+		 */
+		if (DataChecksumsEnabledOrInProgress() && !DataChecksumsInProgress())
 		{
 			checksum = pg_checksum_page((char *) page, blkno);
 
@@ -1168,7 +1176,7 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 	static char *pageCopy = NULL;
 
 	/* If we don't need a checksum, just return the passed-in data */
-	if (PageIsNew(page) || !DataChecksumsEnabled())
+	if (PageIsNew(page) || !DataChecksumsEnabledOrInProgress())
 		return (char *) page;
 
 	/*
@@ -1195,7 +1203,7 @@ void
 PageSetChecksumInplace(Page page, BlockNumber blkno)
 {
 	/* If we don't need a checksum, just return */
-	if (PageIsNew(page) || !DataChecksumsEnabled())
+	if (PageIsNew(page) || !DataChecksumsEnabledOrInProgress())
 		return;
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);

@@ -8606,7 +8606,8 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
         or hide corruption, or other serious problems</emphasis>.  However, it may allow
         you to get past the error and retrieve undamaged tuples that might still be
         present in the table if the block header is still sane. If the header is
-        corrupt an error will be reported even if this option is enabled. The
+        corrupt an error will be reported even if this option is enabled. This
+        option can only be enabled when data checksums are enabled. The
         default setting is <literal>off</literal>, and it can only be changed by a superuser.
        </para>
       </listitem>

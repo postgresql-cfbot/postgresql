@@ -336,6 +336,8 @@ struct ReorderBuffer
 	 */
 	void	   *private_data;
 
+	bool		output_rewrites;
+
 	/*
 	 * Private memory context.
 	 */

@@ -99,12 +99,19 @@
       </entry>
       <entry><type>real</type></entry>
       <entry>
-       Returns a number that indicates how similar the first string
-       to the most similar word of the second string. The function searches in
-       the second string a most similar word not a most similar substring.  The
-       range of the result is zero (indicating that the two strings are
-       completely dissimilar) to one (indicating that the first string is
-       identical to one of the words of the second string).
+       Returns greatest similarity between trigrams set of the first string and
+       any continuous extent of ordered trigrams set of the second string.
+      </entry>
+     </row>
+     <row>
+      <entry>
+       <function>strict_word_similarity(text, text)</function>
+       <indexterm><primary>strict_word_similarity</primary></indexterm>
+      </entry>
+      <entry><type>real</type></entry>
+      <entry>
+       Same as <function>word_similarity(text, text)</function>, but forces
+       boundaries of extent to match word boundaries.
       </entry>
      </row>
      <row>
@@ -131,6 +138,59 @@
    </tgroup>
   </table>
 
+  <para>
+   <function>word_similarity(text, text)</function> requires further
+   explanation.  Consider following example.
+
+<programlisting>
+# select word_similarity('word', 'two words');
+ word_similarity
+-----------------
+             0.8
+(1 row)
+</programlisting>
+
+   First string set of trigrams is
+   <literal>{"  w"," wo","ord","wor","rd "}</literal>.
+   Second string ordered set of trigrams is
+   <literal>{"  t"," tw",two,"wo ","  w"," wo","wor","ord","rds", ds "}</literal>.
+   The most similar extent of second string ordered set of trigrams is
+   <literal>{"  w"," wo","wor","ord"}</literal>, and the similarity is
+   <literal>0.8</literal>.
+  </para>
+
+  <para>
+   This function can be approximately understood as greatest similarity between
+   first string and any substring of the second string.  However, this function
+   doesn't add paddings to the boundaries of extent.  This is why this function
+   is scoring full-word matching more than word to part of word matching.  This
+   specialty finds its reflection in the function, quite ambiguous though.
+  </para>
+
+  <para>
+   In the same time <function>strict_word_similarity(text, text)</function>
+   has to select extent matching word boundaries.  In the example above,
+   <function>strict_word_similarity(text, text)</function> selects extent
+   <literal>{"  w"," wo","wor","ord","rds", ds "}</literal> which is
+   corresponding to the whole word <literal>'words'</literal>.
+
+<programlisting>
+# select strict_word_similarity('word', 'two words'), similarity('word', 'words');
+ strict_word_similarity | similarity
+------------------------+------------
+               0.571429 |   0.571429
+(1 row)
+</programlisting>
+  </para>
+
+  <para>
+   Comparing to <function>word_similarity(text, text)</function>
+   <function>strict_word_similarity(text, text)</function> is more useful to
+   to find similar subset of whole words, while
+   <function>word_similarity(text, text)</function> is better to search for
+   parts of words.
+  </para>
+
   <table id="pgtrgm-op-table">
    <title><filename>pg_trgm</filename> Operators</title>
    <tgroup cols="3">
@@ -156,9 +216,9 @@
       <entry><type>text</type> <literal>&lt;%</literal> <type>text</type></entry>
       <entry><type>boolean</type></entry>
       <entry>
-       Returns <literal>true</literal> if its first argument has the similar word in
-       the second argument and they have a similarity that is greater than the
-       current word similarity threshold set by
+       Returns <literal>true</literal> if its second argument has continuous
+       extent of ordered trigrams set which similarity to first argument
+       trigram set is greater than the current word similarity threshold set by
        <varname>pg_trgm.word_similarity_threshold</varname> parameter.
       </entry>
      </row>
@@ -167,6 +227,24 @@
       <entry><type>boolean</type></entry>
       <entry>
        Commutator of the <literal>&lt;%</literal> operator.
+      </entry>
+     </row>
+     <row>
+      <entry><type>text</type> <literal>&lt;&lt;%</literal> <type>text</type></entry>
+      <entry><type>boolean</type></entry>
+      <entry>
+       Returns <literal>true</literal> if its second argument has continuous
+       extent of ordered trigrams set which boundaries match word boundaries and
+       similarity to first argument trigram set is greater than the current
+       strict word similarity threshold set by
+       <varname>pg_trgm.strict_word_similarity_threshold</varname> parameter.
+      </entry>
+     </row>
+     <row>
+      <entry><type>text</type> <literal>%&gt;&gt;</literal> <type>text</type></entry>
+      <entry><type>boolean</type></entry>
+      <entry>
+       Commutator of the <literal>&lt;&lt;%</literal> operator.
       </entry>
      </row>
      <row>
@@ -194,6 +272,25 @@
       <entry><type>real</type></entry>
       <entry>
        Commutator of the <literal>&lt;&lt;-&gt;</literal> operator.
+      </entry>
+     </row>
+     <row>
+      <entry>
+       <type>text</type> <literal>&lt;&lt;&lt;-&gt;</literal> <type>text</type>
+      </entry>
+      <entry><type>real</type></entry>
+      <entry>
+       Returns the <quote>distance</quote> between the arguments, that is
+       one minus the <function>strict_word_similarity()</function> value.
+      </entry>
+     </row>
+     <row>
+      <entry>
+       <type>text</type> <literal>&lt;-&gt;&gt;&gt;</literal> <type>text</type>
+      </entry>
+      <entry><type>real</type></entry>
+      <entry>
+       Commutator of the <literal>&lt;&lt;&lt;-&gt;</literal> operator.
       </entry>
      </row>
     </tbody>
@@ -295,23 +392,37 @@ SELECT t, t &lt;-&gt; '<replaceable>word</replaceable>' AS dist
 
   <para>
    Also you can use an index on the <structfield>t</structfield> column for word
-   similarity.  For example:
+   similarity or strict word similarity.  Typical queries are
 <programlisting>
 SELECT t, word_similarity('<replaceable>word</replaceable>', t) AS sml
   FROM test_trgm
   WHERE '<replaceable>word</replaceable>' &lt;% t
   ORDER BY sml DESC, t;
 </programlisting>
-   This will return all values in the text column that have a word
-   which sufficiently similar to <replaceable>word</replaceable>, sorted from best
+   and
+<programlisting>
+SELECT t, strict_word_similarity('<replaceable>word</replaceable>', t) AS sml
+  FROM test_trgm
+  WHERE '<replaceable>word</replaceable>' &lt;&lt;% t
+  ORDER BY sml DESC, t;
+</programlisting>
+   This will return all values in the text column that have an continuous extent
+   in corresponding ordered trigram set which sufficiently similar to
+   trigram set of <replaceable>word</replaceable>, sorted from best
    match to worst.  The index will be used to make this a fast operation
    even over very large data sets.
   </para>
 
   <para>
-   A variant of the above query is
+   A variants of the above query are
 <programlisting>
 SELECT t, '<replaceable>word</replaceable>' &lt;&lt;-&gt; t AS dist
+  FROM test_trgm
+  ORDER BY dist LIMIT 10;
+</programlisting>
+   and
+<programlisting>
+SELECT t, '<replaceable>word</replaceable>' &lt;&lt;&lt;-&gt; t AS dist
   FROM test_trgm
   ORDER BY dist LIMIT 10;
 </programlisting>

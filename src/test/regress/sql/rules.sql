@@ -1170,6 +1170,19 @@ SELECT pg_get_function_arg_default(0, 0);
 SELECT pg_get_function_arg_default('pg_class'::regclass, 0);
 SELECT pg_get_partkeydef(0);
 
+-- test for pg_get_functiondef properly regurgitating SET parameters
+-- Note that the function is kept around to stress pg_dump.
+CREATE FUNCTION func_with_set_params() RETURNS integer
+    AS 'select 1;'
+    LANGUAGE SQL
+    SET search_path TO PG_CATALOG
+    SET extra_float_digits TO 2
+    SET work_mem TO '4MB'
+    SET datestyle to iso, mdy
+    SET local_preload_libraries TO "Mixed/Case", 'c:/"a"/path'
+    IMMUTABLE STRICT;
+SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
+
 -- test rename for a rule defined on a partitioned table
 CREATE TABLE rules_parted_table (a int) PARTITION BY LIST (a);
 CREATE TABLE rules_parted_table_1 PARTITION OF rules_parted_table FOR VALUES IN (1);

@@ -852,6 +852,9 @@ vac_estimate_reltuples(Relation relation,
  *		transaction.  This is OK since postponing the flag maintenance is
  *		always allowable.
  *
+ *		Note: scanned_tuples should count only *live* tuples, since
+ *		pg_class.reltuples is defined that way.
+ *
  *		This routine is shared by VACUUM and ANALYZE.
  */
 void

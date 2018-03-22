@@ -33,6 +33,7 @@ typedef struct
 {
 	SpGistState spgstate;		/* SPGiST's working state */
 	MemoryContext tmpCtx;		/* per-tuple temporary context */
+	int64		indtuples;		/* number of tuples indexed */
 } SpGistBuildState;
 
 
@@ -46,6 +47,9 @@ spgistBuildCallback(Relation index, HeapTuple htup, Datum *values,
 
 	/* Work in temp context, and reset it after each tuple */
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
+
+	/* Update tuple count */
+	buildstate->indtuples += 1;
 
 	/*
 	 * Even though no concurrent insertions can be happening, we still might
@@ -146,7 +150,8 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	SpGistUpdateMetaPage(index);
 
 	result = (IndexBuildResult *) palloc0(sizeof(IndexBuildResult));
-	result->heap_tuples = result->index_tuples = reltuples;
+	result->heap_tuples = reltuples;
+	result->index_tuples = buildstate.indtuples;
 
 	return result;
 }

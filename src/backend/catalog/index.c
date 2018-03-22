@@ -2611,6 +2611,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					/* Normal case, index and unique-check it */
 					indexIt = true;
 					tupleIsAlive = true;
+					reltuples += 1;
 					break;
 				case HEAPTUPLE_RECENTLY_DEAD:
 
@@ -2624,6 +2625,11 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					 * the live tuple at the end of the HOT-chain.  Since this
 					 * breaks semantics for pre-existing snapshots, mark the
 					 * index as unusable for them.
+					 *
+					 * We don't count recently dead tuples as live, even if
+					 * we index them. That is what acquire_sample_rows() does,
+					 * and we want ANALYZE and CREATE INDEX (and VACUUM) to be
+					 * on the same page when computing reltuples.
 					 */
 					if (HeapTupleIsHotUpdated(heapTuple))
 					{
@@ -2646,6 +2652,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					{
 						indexIt = true;
 						tupleIsAlive = true;
+						reltuples += 1;
 						break;
 					}
 
@@ -2685,6 +2692,16 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					}
 
 					/*
+					 * Count HEAPTUPLE_INSERT_IN_PROGRESS tuples as live.
+					 * That's what acquire_sample_rows does, and we want
+					 * the behavior to be consistent.
+					 *
+					 * XXX We do it here not to count the tuple repeatedly
+					 * in case of recheck.
+					 */
+					reltuples += 1;
+
+					/*
 					 * We must index such tuples, since if the index build
 					 * commits then they're good.
 					 */
@@ -2702,6 +2719,7 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 					{
 						indexIt = true;
 						tupleIsAlive = false;
+						reltuples += 1;
 						break;
 					}
 
@@ -2739,6 +2757,17 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 							CHECK_FOR_INTERRUPTS();
 							goto recheck;
 						}
+
+						/*
+						 * Count HEAPTUPLE_DELETE_IN_PROGRESS tuples as live,
+						 * when not deleted by the current transaction. That's
+						 * what acquire_sample_rows does, and we want the
+						 * behavior to be consistent.
+						 *
+						 * XXX We do it here not to count the tuple repeatedly
+						 * in case of recheck.
+						 */
+						reltuples += 1;
 
 						/*
 						 * Otherwise index it but don't check for uniqueness,
@@ -2786,8 +2815,6 @@ IndexBuildHeapRangeScan(Relation heapRelation,
 			/* heap_getnext did the time qual check */
 			tupleIsAlive = true;
 		}
-
-		reltuples += 1;
 
 		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 

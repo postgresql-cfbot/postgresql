@@ -37,6 +37,7 @@ typedef struct
 								 * tuple */
 	char		data[BLCKSZ];	/* cached page */
 	int64		count;			/* number of tuples in cached page */
+	int64		indtuples;		/* number of tuples indexed */
 } BloomBuildState;
 
 /*
@@ -81,6 +82,9 @@ bloomBuildCallback(Relation index, HeapTuple htup, Datum *values,
 	oldCtx = MemoryContextSwitchTo(buildstate->tmpCtx);
 
 	itup = BloomFormTuple(&buildstate->blstate, &htup->t_self, values, isnull);
+
+	/* Update tuple count */
+	buildstate->indtuples += 1;
 
 	/* Try to add next item to cached page */
 	if (BloomPageAddItem(&buildstate->blstate, buildstate->data, itup))
@@ -148,7 +152,8 @@ blbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	MemoryContextDelete(buildstate.tmpCtx);
 
 	result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
-	result->heap_tuples = result->index_tuples = reltuples;
+	result->heap_tuples = reltuples;
+	result->index_tuples = buildstate.indtuples;
 
 	return result;
 }

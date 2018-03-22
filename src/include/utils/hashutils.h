@@ -50,4 +50,39 @@ murmurhash32(uint32 data)
 	return h;
 }
 
+#define	ROTL32(x,r)	((x << r) | (x >> (32 - r)))
+
+/*
+ * Simple inline murmur hash implementation hashing a 32 bit integer and
+ * 32 bit seed, for performance.
+ *
+ * XXX Check this actually produces same results as MurmurHash3_x86_32.
+ */
+static inline uint32
+murmurhash32_seed(uint32 seed, uint32 data)
+{
+	uint32	h = seed;
+	uint32	k = data;
+	uint32	c1 = 0xcc9e2d51;
+	uint32	c2 = 0x1b873593;
+
+	k *= c1;
+	k = ROTL32(k,15);
+	k *= c2;
+
+	h ^= k;
+	h = ROTL32(h,13); 
+	h = h * 5 + 0xe6546b64;
+
+	h ^= sizeof(uint32);
+
+	h ^= h >> 16;
+	h *= 0x85ebca6b;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35;
+	h ^= h >> 16;
+
+	return h;
+}
+
 #endif							/* HASHUTILS_H */

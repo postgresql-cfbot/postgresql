@@ -2038,6 +2038,11 @@ typedef struct HashInstrumentation
 	int			nbatch;			/* number of batches at end of execution */
 	int			nbatch_original;	/* planned number of batches */
 	size_t		space_peak;		/* speak memory usage in bytes */
+	int			bloom_nhashes;		/* number of hash functions */
+	size_t		bloom_nbytes;		/* number of bytes */
+	int			bloom_nlookups;		/* number of lookups */
+	int			bloom_nmatches;		/* number of matches */
+	int			bloom_nbits;		/* number of bits set */
 } HashInstrumentation;
 
 /* ----------------

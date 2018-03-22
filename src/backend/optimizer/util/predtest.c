@@ -17,6 +17,9 @@
 
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_range.h"
+#include "catalog/pg_operator.h"
+#include "access/htup_details.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -26,6 +29,8 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
+#include "utils/rangetypes.h"
 
 
 /*
@@ -1472,6 +1477,67 @@ static const StrategyNumber BT_refute_table[6][6] = {
 	{none, none, BTEQ, none, none, none}	/* NE */
 };
 
+/*
+ * Contruct range type for the comparison operator:
+ * '<=' ->  '(,"$value"]'
+ * '>=' ->  '["$value",)'
+ * '<'  ->  '(,"$value")'
+ * '>'. ->  '("$value",)'
+ * otherwise: NULL
+ */
+static RangeType*
+operator_to_range(TypeCacheEntry *typcache, Oid oper, Const* literal)
+{
+	RangeBound  lower, upper;
+	List*       op_infos = get_op_btree_interpretation(oper);
+	ListCell   *lcp;
+
+	lower.lower = true;
+	upper.lower = false;
+	lower.infinite = true;
+	upper.infinite = true;
+
+	foreach(lcp, op_infos)
+	{
+		OpBtreeInterpretation *op_info = lfirst(lcp);
+
+		switch (op_info->strategy)
+		{
+		  case BTLessStrategyNumber:
+			lower.infinite = true;
+			lower.inclusive = false;
+			upper.infinite = false;
+			upper.inclusive = false;
+			upper.val = literal->constvalue;
+			break;
+		  case BTLessEqualStrategyNumber:
+			lower.infinite = true;
+			lower.inclusive = false;
+			upper.infinite = false;
+			upper.inclusive = true;
+			upper.val = literal->constvalue;
+			break;
+		  case BTGreaterStrategyNumber:
+			lower.infinite = false;
+			lower.inclusive = false;
+			lower.val = literal->constvalue;
+			upper.infinite = true;
+			upper.inclusive = false;
+			break;
+		  case BTGreaterEqualStrategyNumber:
+			lower.infinite = false;
+			lower.inclusive = true;
+			lower.val = literal->constvalue;
+			upper.infinite = true;
+			upper.inclusive = false;
+			break;
+		  default:
+			continue;
+		}
+		break;
+	}
+	return lower.infinite && upper.infinite ? NULL : make_range(typcache, &lower, &upper, false);
+}
 
 /*
  * operator_predicate_proof
@@ -1669,6 +1735,18 @@ operator_predicate_proof(Expr *predicate, Node *clause,
 	{
 		/* Failed to match up any of the subexpressions, so we lose */
 		return false;
+	}
+
+	if (!refute_it && pred_const->consttype == clause_const->consttype)
+	{
+		TypeCacheEntry *typcache = lookup_type_cache(clause_const->consttype, TYPECACHE_RANGE_TYPE)->rng_type;
+		if (typcache != NULL)
+		{
+			RangeType* pred_range = operator_to_range(typcache, pred_op, pred_const);
+			RangeType* clause_range = operator_to_range(typcache, clause_op, clause_const);
+			if (pred_range && clause_range && range_eq_internal(typcache, pred_range, clause_range))
+				return true;
+		}
 	}
 
 	/*

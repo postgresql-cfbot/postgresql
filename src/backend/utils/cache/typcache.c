@@ -277,6 +277,7 @@ static uint64 tupledesc_id_counter = INVALID_TUPLEDESC_IDENTIFIER;
 
 static void load_typcache_tupdesc(TypeCacheEntry *typentry);
 static void load_rangetype_info(TypeCacheEntry *typentry);
+static void lookup_range_for_type(TypeCacheEntry *typentry);
 static void load_domaintype_info(TypeCacheEntry *typentry);
 static int	dcs_cmp(const void *a, const void *b);
 static void decr_dcc_refcount(DomainConstraintCache *dcc);
@@ -755,6 +756,11 @@ lookup_type_cache(Oid type_id, int flags)
 	{
 		load_rangetype_info(typentry);
 	}
+	if ((flags & TYPECACHE_RANGE_TYPE) &&
+		!(typentry->flags & TYPECACHE_RANGE_TYPE))
+	{
+		lookup_range_for_type(typentry);
+	}
 
 	/*
 	 * If requested, get information about a domain type
@@ -810,6 +816,39 @@ load_typcache_tupdesc(TypeCacheEntry *typentry)
 
 	relation_close(rel, AccessShareLock);
 }
+
+/*
+ * Get range type for the correspondent scalar type.
+ * This function performs sequential scan in pg_range table.
+ */
+static void
+lookup_range_for_type(TypeCacheEntry *typentry)
+{
+	Relation	pgRangeRel;
+	Form_pg_range pgRange;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	pgRangeRel = heap_open(RangeRelationId, AccessShareLock);
+
+	scan = systable_beginscan(pgRangeRel, InvalidOid, false,
+							  NULL, 0, NULL);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		pgRange = (Form_pg_range) GETSTRUCT(tuple);
+		if (pgRange->rngsubtype == typentry->type_id)
+		{
+			typentry->rng_type = lookup_type_cache(pgRange->rngtypid, TYPECACHE_RANGE_INFO);
+			break;
+		}
+	}
+	systable_endscan(scan);
+	heap_close(pgRangeRel, AccessShareLock);
+
+	typentry->flags |= TYPECACHE_RANGE_TYPE;
+}
+
 
 /*
  * load_rangetype_info --- helper routine to set up range type information

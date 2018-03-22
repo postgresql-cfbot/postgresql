@@ -98,6 +98,12 @@ typedef struct TypeCacheEntry
 	FmgrInfo	rng_subdiff_finfo;	/* difference function, if any */
 
 	/*
+	 * Get range type for the element type when TYPECACHE_RANGE_TYPE is requested.
+	 * This infotmation is obtained by scan of pg_range table. First match is taken./
+	 */
+	struct TypeCacheEntry *rng_type;
+
+	/*
 	 * Domain's base type and typmod if it's a domain type.  Zeroes if not
 	 * domain, or if information hasn't been requested.
 	 */
@@ -140,6 +146,7 @@ typedef struct TypeCacheEntry
 #define TYPECACHE_DOMAIN_CONSTR_INFO		0x2000
 #define TYPECACHE_HASH_EXTENDED_PROC		0x4000
 #define TYPECACHE_HASH_EXTENDED_PROC_FINFO	0x8000
+#define TYPECACHE_RANGE_TYPE		0x10000
 
 /* This value will not equal any valid tupledesc identifier, nor 0 */
 #define INVALID_TUPLEDESC_IDENTIFIER ((uint64) 1)

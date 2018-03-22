@@ -3,7 +3,20 @@
  *
  * Copyright (c) 2000-2018, PostgreSQL Global Development Group
  *
- * src/bin/psql/conditional.h
+ * src/include/fe_utils/conditional.h
+ *
+ * This file describes a stack of automaton states which
+ * allow a manage nested conditionals.
+ *
+ * It is used by:
+ * - "psql" interpretor for handling \if ... \endif
+ * - "pgbench" interpretor for handling \if ... \endif
+ * - "pgbench" syntax checker to test for proper nesting
+ *
+ * The stack holds the state of enclosing conditionals (are we in
+ * a true branch? in a false branch? have we already encountered
+ * a true branch?) so that the interpreter knows whether to execute
+ * code and whether to evaluate conditions.
  */
 #ifndef CONDITIONAL_H
 #define CONDITIONAL_H
@@ -59,6 +72,8 @@ typedef struct ConditionalStackData *ConditionalStack;
 extern ConditionalStack conditional_stack_create(void);
 
 extern void conditional_stack_destroy(ConditionalStack cstack);
+
+extern int conditional_stack_depth(ConditionalStack cstack);
 
 extern void conditional_stack_push(ConditionalStack cstack, ifState new_state);
 

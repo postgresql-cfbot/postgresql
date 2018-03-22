@@ -3,11 +3,13 @@
  *
  * Copyright (c) 2000-2018, PostgreSQL Global Development Group
  *
- * src/bin/psql/conditional.c
+ * src/fe_utils/conditional.c
+ *
+ * A stack of automaton states to handle nested conditionals.
  */
 #include "postgres_fe.h"
 
-#include "conditional.h"
+#include "fe_utils/conditional.h"
 
 /*
  * create stack
@@ -61,6 +63,27 @@ conditional_stack_pop(ConditionalStack cstack)
 	cstack->head = cstack->head->next;
 	free(p);
 	return true;
+}
+
+/*
+ * Returns current stack depth, for debugging purposes.
+ */
+int
+conditional_stack_depth(ConditionalStack cstack)
+{
+	if (cstack == NULL)
+		return -1;
+	else
+	{
+		IfStackElem	*p = cstack->head;
+		int			depth = 0;
+		while (p != NULL)
+		{
+			depth++;
+			p = p->next;
+		}
+		return depth;
+	}
 }
 
 /*

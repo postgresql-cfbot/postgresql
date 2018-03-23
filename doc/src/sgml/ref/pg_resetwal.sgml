@@ -22,10 +22,22 @@ PostgreSQL documentation
  <refsynopsisdiv>
   <cmdsynopsis>
    <command>pg_resetwal</command>
-   <arg choice="opt"><option>-f</option></arg>
-   <arg choice="opt"><option>-n</option></arg>
+   <group choice="opt">
+    <arg choice="plain"><option>--force</option></arg>
+    <arg choice="plain"><option>-f</option></arg>
+   </group>
+   <group choice="opt">
+    <arg choice="plain"><option>--no-update</option></arg>
+    <arg choice="plain"><option>-n</option></arg>
+   </group>
    <arg rep="repeat"><replaceable>option</replaceable></arg>
-   <arg choice="req"><arg choice="opt"><option>-D</option></arg> <replaceable class="parameter">datadir</replaceable></arg>
+   <arg choice="req">
+    <group choice="opt">
+     <arg choice="plain"><option>--pgdata</option></arg>
+     <arg choice="plain"><option>-D</option></arg>
+    </group>
+    <replaceable class="parameter"> datadir</replaceable>
+   </arg>
   </cmdsynopsis>
  </refsynopsisdiv>
 
@@ -78,6 +90,7 @@ PostgreSQL documentation
   <variablelist>
    <varlistentry>
     <term><option>-f</option></term>
+    <term><option>--force</option></term>
     <listitem>
      <para>
       Force <command>pg_resetwal</command> to proceed even if it cannot determine
@@ -88,6 +101,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-n</option></term>
+    <term><option>--no-update</option></term>
     <listitem>
      <para>
       The <option>-n</option> (no operation) option instructs
@@ -124,6 +138,7 @@ PostgreSQL documentation
   <variablelist>
    <varlistentry>
     <term><option>-c</option> <replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></term>
+    <term><option>--xact-ids=</option><replaceable class="parameter">xid</replaceable>,<replaceable class="parameter">xid</replaceable></term>
     <listitem>
      <para>
       Manually set the oldest and newest transaction IDs for which the commit
@@ -145,6 +160,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-e</option> <replaceable class="parameter">xid_epoch</replaceable></term>
+    <term><option>--epoch=</option><replaceable class="parameter">xid_epoch</replaceable></term>
     <listitem>
      <para>
       Manually set the next transaction ID's epoch.
@@ -165,6 +181,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-l</option> <replaceable class="parameter">walfile</replaceable></term>
+    <term><option>--wal-address=</option><replaceable class="parameter">walfile</replaceable></term>
     <listitem>
      <para>
       Manually set the WAL starting address.
@@ -196,6 +213,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-m</option> <replaceable class="parameter">mxid</replaceable>,<replaceable class="parameter">mxid</replaceable></term>
+    <term><option>--multixact-ids=</option><replaceable class="parameter">mxid</replaceable>,<replaceable class="parameter">mxid</replaceable></term>
     <listitem>
      <para>
       Manually set the next and oldest multitransaction ID.
@@ -217,6 +235,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-o</option> <replaceable class="parameter">oid</replaceable></term>
+    <term><option>--next-oid=</option><replaceable class="parameter">oid</replaceable></term>
     <listitem>
      <para>
       Manually set the next OID.
@@ -232,6 +251,7 @@ PostgreSQL documentation
 
    <varlistentry>
     <term><option>-O</option> <replaceable class="parameter">mxoff</replaceable></term>
+    <term><option>--multixact-offset=</option><replaceable class="parameter">mxoff</replaceable></term>
     <listitem>
      <para>
       Manually set the next multitransaction offset.
@@ -248,7 +268,33 @@ PostgreSQL documentation
    </varlistentry>
 
    <varlistentry>
+    <term><option>-s</option> <replaceable class="parameter">wal_segment_size</replaceable></term>
+    <term><option>--wal-segsize=</option><replaceable class="parameter">wal_segment_size</replaceable></term>
+    <listitem>
+     <para>
+      Manually set the WAL segment size (in megabytes).
+     </para>
+
+     <para>
+      The WAL segment size must be set to a power of 2 between 1 and 1024 (megabytes).
+     </para>
+
+     <note>
+      <para>
+       While <command>pg_resetwal</command> will set the WAL starting address
+       beyond the latest existing WAL segment file, some segment size changes
+       can cause previous WAL file names to be reused.  It is recommended to use
+       <option>-l</option> together with <option>-s</option> to manually set the
+       WAL starting address if WAL file name overlap will cause problems with
+       your archiving strategy.
+      </para>
+     </note>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><option>-x</option> <replaceable class="parameter">xid</replaceable></term>
+    <term><option>--next-xact-id=</option><replaceable class="parameter">xid</replaceable></term>
     <listitem>
      <para>
       Manually set the next transaction ID.

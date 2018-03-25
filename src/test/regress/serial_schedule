@@ -188,3 +188,4 @@ test: indexing
 test: partition_aggregate
 test: event_trigger
 test: stats
+test: fast_default

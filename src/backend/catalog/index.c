@@ -371,6 +371,7 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attcacheoff = -1;
 			to->attnotnull = false;
 			to->atthasdef = false;
+			to->atthasmissing = false;
 			to->attidentity = '\0';
 			to->attislocal = true;
 			to->attinhcount = 0;
@@ -1654,7 +1655,8 @@ index_drop(Oid indexId, bool concurrent)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u", indexId);
 
-	hasexprs = !heap_attisnull(tuple, Anum_pg_index_indexprs);
+	hasexprs = !heap_attisnull(tuple, Anum_pg_index_indexprs,
+							   RelationGetDescr(indexRelation));
 
 	CatalogTupleDelete(indexRelation, &tuple->t_self);
 

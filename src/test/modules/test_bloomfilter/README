@@ -1,0 +1,71 @@
+test_bloomfilter overview
+=========================
+
+test_bloomfilter is a test harness module for testing Bloom filter library set
+membership operations.  It consists of a single SQL-callable function,
+test_bloomfilter(), and regression tests.  Membership tests are performed using
+an artificial dataset that is programmatically generated.
+
+The test_bloomfilter() function displays instrumentation at DEBUG1 elog level
+(WARNING when the false positive rate exceeds a 1% threshold).  This can be
+used to get a sense of the performance characteristics of the Postgres Bloom
+filter implementation under varied conditions.
+
+Bitset size
+-----------
+
+The main bloomfilter.c criteria for sizing its bitset is that the false
+positive rate should not exceed 2% when sufficient bloom_work_mem is available
+(and the caller-supplied estimate of the number of elements turns out to have
+been accurate).  A 2% rate is currently assumed to be good enough for all Bloom
+filter callers.
+
+The traditional guarantee Bloom filters offer is that with an optimal K, there
+will be only a 1% false positive rate with just 9.6 bits of memory per element.
+The 2% worst case guarantee exists because there is a need for some slop, to
+account for implementation inflexibility in bitset sizing.  The bitset is kept
+to a power-of-two number of bits in size, so callers may have their
+bloom_work_mem argument truncated down by almost half -- when that happens, the
+guarantee needs to hold up.  In practice callers that always pass a
+bloom_work_mem that is aligned with a power-of-two bitset size will actually
+get the "9.6 bits per element" 1% false positive rate.  (Under-promising in
+this manner is a fudge that allows the contract to be kept simple.)
+
+Strategy
+--------
+
+Our approach to regression testing is to test that bloomfilter.c has only a 1%
+false positive rate for a single bitset size (2 ^ 23, or 1MB).  We test a
+dataset with 838,861 elements, which works out at 10 bits of memory per
+element.  We round up from 9.6 bits to 10 bits to make sure that we reliably
+get under 1% for regression testing.  Note that a random seed is used in the
+regression tests, because the exact false positive rate is inconsistent across
+platforms, which makes non-deterministic hashing something that the regression
+tests need to be tolerant of anyway.
+
+SQL-callable function
+=====================
+
+The SQL-callable function test_bloomfilter() provides the following arguments:
+
+* "power" is the power-of-two used to size the Bloom filter's bitset.
+
+The minimum valid argument value is 23 (2^23 bits), or 1MB of memory.  The
+maximum valid argument value is 32, or 512MB of memory.  These restrictions
+reflect restrictions in bloomfilter.c itself.
+
+* "nelements" is the number of elements to generate for testing purposes.
+
+Adjust argument value to observe changes in the false positive rate for a given
+Bloom filter bitset size.
+
+* "seed" is a seed value for hashing.
+
+A value < 0 is interpreted as "use random seed".  Varying the seed value (or
+specifying -1) should result in small variations in the total number of false
+positives.
+
+* "tests" is the number of tests to run.
+
+This may be increased when it's useful to perform many tests without the
+overhead of setting up and tearing down a pg_regress database each time.

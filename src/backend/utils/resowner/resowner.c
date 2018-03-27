@@ -562,7 +562,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			if (owner == TopTransactionResourceOwner)
 			{
 				ProcReleaseLocks(isCommit);
-				ReleasePredicateLocks(isCommit);
+				ReleasePredicateLocks(isCommit, false);
 			}
 		}
 		else

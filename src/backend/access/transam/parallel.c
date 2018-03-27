@@ -30,6 +30,7 @@
 #include "optimizer/planmain.h"
 #include "pgstat.h"
 #include "storage/ipc.h"
+#include "storage/predicate.h"
 #include "storage/sinval.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
@@ -86,6 +87,7 @@ typedef struct FixedParallelState
 	PGPROC	   *parallel_master_pgproc;
 	pid_t		parallel_master_pid;
 	BackendId	parallel_master_backend_id;
+	SerializableXactHandle serializable_xact_handle;
 
 	/* Mutex protects remaining fields. */
 	slock_t		mutex;
@@ -150,7 +152,7 @@ static void ParallelWorkerShutdown(int code, Datum arg);
  */
 ParallelContext *
 CreateParallelContext(const char *library_name, const char *function_name,
-					  int nworkers, bool serializable_okay)
+					  int nworkers)
 {
 	MemoryContext oldcontext;
 	ParallelContext *pcxt;
@@ -166,16 +168,6 @@ CreateParallelContext(const char *library_name, const char *function_name,
 	 * background workers.
 	 */
 	if (dynamic_shared_memory_type == DSM_IMPL_NONE)
-		nworkers = 0;
-
-	/*
-	 * If we are running under serializable isolation, we can't use parallel
-	 * workers, at least not until somebody enhances that mechanism to be
-	 * parallel-aware.  Utility statement callers may ask us to ignore this
-	 * restriction because they're always able to safely ignore the fact that
-	 * SIREAD locks do not work with parallelism.
-	 */
-	if (IsolationIsSerializable() && !serializable_okay)
 		nworkers = 0;
 
 	/* We might be running in a short-lived memory context. */
@@ -321,6 +313,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	fps->parallel_master_pgproc = MyProc;
 	fps->parallel_master_pid = MyProcPid;
 	fps->parallel_master_backend_id = MyBackendId;
+	fps->serializable_xact_handle = ShareSerializableXact();
 	SpinLockInit(&fps->mutex);
 	fps->last_xlog_end = 0;
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_FIXED, fps);
@@ -1383,6 +1376,9 @@ ParallelWorkerMain(Datum main_arg)
 	/* Restore reindex state. */
 	reindexspace = shm_toc_lookup(toc, PARALLEL_KEY_REINDEX_STATE, false);
 	RestoreReindexState(reindexspace);
+
+	/* Attach to the leader's serializable transaction, if SERIALIZABLE. */
+	AttachSerializableXact(fps->serializable_xact_handle);
 
 	/*
 	 * We've initialized all of our state now; nothing should change

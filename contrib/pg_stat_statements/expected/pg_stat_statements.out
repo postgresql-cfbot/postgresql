@@ -95,25 +95,25 @@ EXECUTE pgss_test(1);
 (1 row)
 
 DEALLOCATE pgss_test;
-SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
-                       query                       | calls | rows 
----------------------------------------------------+-------+------
- PREPARE pgss_test (int) AS SELECT $1, $2 LIMIT $3 |     1 |    1
- SELECT $1                                        +|     4 |    4
-                                                  +|       | 
-   AS "text"                                       |       | 
- SELECT $1 + $2                                    |     2 |    2
- SELECT $1 + $2 + $3 AS "add"                      |     3 |    3
- SELECT $1 AS "float"                              |     1 |    1
- SELECT $1 AS "int"                                |     2 |    2
- SELECT $1 AS i UNION SELECT $2 ORDER BY i         |     1 |    2
- SELECT $1 || $2                                   |     1 |    1
- SELECT pg_stat_statements_reset()                 |     1 |    1
- WITH t(f) AS (                                   +|     1 |    2
-   VALUES ($1), ($2)                              +|       | 
- )                                                +|       | 
-   SELECT f FROM t ORDER BY f                      |       | 
- select $1::jsonb ? $2                             |     1 |    1
+SELECT query, calls, rows, consts, params, param_types FROM pg_stat_statements ORDER BY query COLLATE "C";
+                       query                       | calls | rows |            consts            | params | param_types 
+---------------------------------------------------+-------+------+------------------------------+--------+-------------
+ PREPARE pgss_test (int) AS SELECT $1, $2 LIMIT $3 |     1 |    1 | [2:3]={'test',1}             | {1}    | {integer}
+ SELECT $1                                        +|     4 |    4 | {'hello'}                    |        | 
+                                                  +|       |      |                              |        | 
+   AS "text"                                       |       |      |                              |        | 
+ SELECT $1 + $2                                    |     2 |    2 | {3,3}                        |        | 
+ SELECT $1 + $2 + $3 AS "add"                      |     3 |    3 | {1,1,1}                      |        | 
+ SELECT $1 AS "float"                              |     1 |    1 | {2.0}                        |        | 
+ SELECT $1 AS "int"                                |     2 |    2 | {1}                          |        | 
+ SELECT $1 AS i UNION SELECT $2 ORDER BY i         |     1 |    2 | {1,2}                        |        | 
+ SELECT $1 || $2                                   |     1 |    1 | {"' '","' !'"}               |        | 
+ SELECT pg_stat_statements_reset()                 |     1 |    1 |                              |        | 
+ WITH t(f) AS (                                   +|     1 |    2 | {1.0,2.0}                    |        | 
+   VALUES ($1), ($2)                              +|       |      |                              |        | 
+ )                                                +|       |      |                              |        | 
+   SELECT f FROM t ORDER BY f                      |       |      |                              |        | 
+ select $1::jsonb ? $2                             |     1 |    1 | {"'{\"a\":1, \"b\":2}'",'b'} |        | 
 (11 rows)
 
 --
@@ -394,5 +394,39 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT $1                                 |     1 |    1
  SELECT pg_stat_statements_reset()         |     1 |    1
 (8 rows)
+
+-- test the constants
+SELECT 42 + 6 AS fortyeight, 'hello ' || 'world' as helloworld;
+ fortyeight | helloworld  
+------------+-------------
+         48 | hello world
+(1 row)
+
+SELECT query, consts
+FROM pg_stat_statements
+WHERE query ~ 'fortyeight'
+  AND query !~ 'pg_stat_statements'
+  AND dbid = (SELECT oid FROM pg_database WHERE datname = current_catalog);
+                        query                         |          consts           
+------------------------------------------------------+---------------------------
+ SELECT $1 + $2 AS fortyeight, $3 || $4 as helloworld | {42,6,"'hello '",'world'}
+(1 row)
+
+-- test the parameters
+PREPARE foo AS SELECT relname FROM pg_class WHERE oid = $1 AND relpages > $2;
+EXECUTE foo (0, 42);
+ relname 
+---------
+(0 rows)
+
+SELECT query, params, param_types
+FROM pg_stat_statements
+WHERE query ~ 'foo'
+  AND query !~ 'pg_stat_statements'
+  AND dbid = (SELECT oid FROM pg_database WHERE datname = current_catalog);
+                                    query                                     | params |  param_types  
+------------------------------------------------------------------------------+--------+---------------
+ PREPARE foo AS SELECT relname FROM pg_class WHERE oid = $1 AND relpages > $2 | {0,42} | {oid,integer}
+(1 row)
 
 DROP EXTENSION pg_stat_statements;

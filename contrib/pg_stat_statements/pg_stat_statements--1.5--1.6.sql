@@ -1,19 +1,25 @@
-/* contrib/pg_stat_statements/pg_stat_statements--1.4.sql */
+/* contrib/pg_stat_statements/pg_stat_statements--1.5--1.6.sql */
 
--- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION pg_stat_statements" to load this file. \quit
+-- complain if script is sourced in psql, rather than via ALTER EXTENSION
+\echo Use "ALTER EXTENSION pg_stat_statements UPDATE TO '1.6'" to load this file. \quit
 
--- Register functions.
-CREATE FUNCTION pg_stat_statements_reset()
-RETURNS void
-AS 'MODULE_PATHNAME'
-LANGUAGE C PARALLEL SAFE;
+/* First we have to remove them from the extension */
+ALTER EXTENSION pg_stat_statements DROP VIEW pg_stat_statements;
+ALTER EXTENSION pg_stat_statements DROP FUNCTION pg_stat_statements(boolean);
 
+/* Then we can drop them */
+DROP VIEW pg_stat_statements;
+DROP FUNCTION pg_stat_statements(boolean);
+
+/* Now redefine */
 CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT userid oid,
     OUT dbid oid,
     OUT queryid bigint,
     OUT query text,
+    OUT consts text[],
+    OUT params text[],
+    OUT param_types regtype[],
     OUT calls int8,
     OUT total_time float8,
     OUT min_time float8,
@@ -35,14 +41,10 @@ CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT blk_write_time float8
 )
 RETURNS SETOF record
-AS 'MODULE_PATHNAME', 'pg_stat_statements_1_3'
+AS 'MODULE_PATHNAME', 'pg_stat_statements_1_6'
 LANGUAGE C STRICT VOLATILE PARALLEL SAFE;
 
--- Register a view on the function for ease of use.
 CREATE VIEW pg_stat_statements AS
   SELECT * FROM pg_stat_statements(true);
 
 GRANT SELECT ON pg_stat_statements TO PUBLIC;
-
--- Don't want this to be available to non-superusers.
-REVOKE ALL ON FUNCTION pg_stat_statements_reset() FROM PUBLIC;

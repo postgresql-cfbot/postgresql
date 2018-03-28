@@ -557,7 +557,6 @@ ExecInitPartitionInfo(ModifyTableState *mtstate,
 			{
 				List	   *onconflset;
 				TupleDesc	tupDesc;
-				bool		found_whole_row;
 
 				leaf_part_rri->ri_onConflict = makeNode(OnConflictSetState);
 
@@ -571,12 +570,10 @@ ExecInitPartitionInfo(ModifyTableState *mtstate,
 				onconflset = (List *) copyObject((Node *) node->onConflictSet);
 				onconflset =
 					map_partition_varattnos(onconflset, INNER_VAR, partrel,
-											firstResultRel, &found_whole_row);
-				Assert(!found_whole_row);
+											firstResultRel, NULL);
 				onconflset =
 					map_partition_varattnos(onconflset, firstVarno, partrel,
-											firstResultRel, &found_whole_row);
-				Assert(!found_whole_row);
+											firstResultRel, NULL);
 
 				/* Finally, adjust this tlist to match the partition. */
 				onconflset = adjust_partition_tlist(onconflset, map);
@@ -609,12 +606,10 @@ ExecInitPartitionInfo(ModifyTableState *mtstate,
 					clause = copyObject((List *) node->onConflictWhere);
 					clause = map_partition_varattnos(clause, INNER_VAR,
 													 partrel, firstResultRel,
-													 &found_whole_row);
-					Assert(!found_whole_row);
+													 NULL);
 					clause = map_partition_varattnos(clause, firstVarno,
 													 partrel, firstResultRel,
-													 &found_whole_row);
-					Assert(!found_whole_row);
+													 NULL);
 					leaf_part_rri->ri_onConflict->oc_WhereClause =
 						ExecInitQual((List *) clause, &mtstate->ps);
 				}

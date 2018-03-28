@@ -558,4 +558,18 @@ create table parted_conflict_1_1 partition of parted_conflict_1 for values from 
 insert into parted_conflict values (40, 'forty');
 insert into parted_conflict_1 values (40, 'cuarenta')
   on conflict (a) do update set b = excluded.b;
+
+-- test whole-row Vars in ON CONFLICT expressions
+create unique index on parted_conflict (a, b);
+alter table parted_conflict add c int;
+truncate parted_conflict;
+insert into parted_conflict values (50, 'cuarenta', 1);
+insert into parted_conflict values (50, 'cuarenta', 2)
+  on conflict (a, b) do update set (a, b, c) = row(excluded.*)
+  where parted_conflict = (50, text 'cuarenta', 1) and
+        excluded = (50, text 'cuarenta', 2);
+
+-- should see (50, 'cuarenta', 2)
+select * from parted_conflict order by a;
+
 drop table parted_conflict;

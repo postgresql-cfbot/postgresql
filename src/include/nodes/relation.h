@@ -71,6 +71,7 @@ typedef struct AggClauseCosts
 typedef enum UpperRelationKind
 {
 	UPPERREL_SETOP,				/* result of UNION/INTERSECT/EXCEPT, if any */
+	UPPERREL_TLIST,				/* result of projecting final scan/join rel */
 	UPPERREL_PARTIAL_GROUP_AGG, /* result of partial grouping/aggregation, if
 								 * any */
 	UPPERREL_GROUP_AGG,			/* result of grouping/aggregation, if any */

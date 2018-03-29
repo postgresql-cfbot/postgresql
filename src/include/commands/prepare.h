@@ -31,6 +31,10 @@ typedef struct
 	CachedPlanSource *plansource;	/* the actual cached plan */
 	bool		from_sql;		/* prepared via SQL, not FE/BE protocol? */
 	TimestampTz prepare_time;	/* the time when the stmt was prepared */
+	RawStmt	   *raw_stmt;
+	int			num_params;
+	Oid		   *param_types;
+	List	   *query_list;
 } PreparedStatement;
 
 

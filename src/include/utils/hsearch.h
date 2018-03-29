@@ -13,7 +13,7 @@
  */
 #ifndef HSEARCH_H
 #define HSEARCH_H
-
+#include "datatype/timestamp.h"
 
 /*
  * Hash functions must have this signature.
@@ -47,6 +47,7 @@ typedef void *(*HashAllocFunc) (Size request);
  * HASHELEMENT is the private part of a hashtable entry.  The caller's data
  * follows the HASHELEMENT structure (on a MAXALIGN'd boundary).  The hash key
  * is expected to be at the start of the caller's hash entry data structure.
+ * If this hash is prunable, PRUNABLE_HASHELEMENT is used instead.
  */
 typedef struct HASHELEMENT
 {
@@ -54,11 +55,25 @@ typedef struct HASHELEMENT
 	uint32		hashvalue;		/* hash function result for this entry */
 } HASHELEMENT;
 
+typedef struct PRUNABLE_HASHELEMENT
+{
+	struct HASHELEMENT *link;	/* link to next entry in same bucket */
+	uint32		hashvalue;		/* hash function result for this entry */
+	TimestampTz	last_access;	/* timestamp of the last usage */
+	int			naccess;		/* takes 0 to 2, counted up when used */
+} PRUNABLE_HASHELEMENT;
+
 /* Hash table header struct is an opaque type known only within dynahash.c */
 typedef struct HASHHDR HASHHDR;
 
 /* Hash table control struct is an opaque type known only within dynahash.c */
 typedef struct HTAB HTAB;
+
+/*
+ * Hash pruning callback. This is called for the entries which is about to be
+ * removed without the owner's intention.
+ */
+typedef bool (*HASH_PRUNE_CB)(HTAB *hashp, void *ent);
 
 /* Parameter data structure for hash_create */
 /* Only those fields indicated by hash_flags need be set */
@@ -77,6 +92,7 @@ typedef struct HASHCTL
 	HashAllocFunc alloc;		/* memory allocator */
 	MemoryContext hcxt;			/* memory context to use for allocations */
 	HASHHDR    *hctl;			/* location of header in shared mem */
+	HASH_PRUNE_CB	prune_cb;	/* pruning callback. see above. */
 } HASHCTL;
 
 /* Flags to indicate which parameters are supplied */
@@ -94,6 +110,7 @@ typedef struct HASHCTL
 #define HASH_SHARED_MEM 0x0800	/* Hashtable is in shared memory */
 #define HASH_ATTACH		0x1000	/* Do not initialize hctl */
 #define HASH_FIXED_SIZE 0x2000	/* Initial size is a hard limit */
+#define HASH_PRUNABLE	0x4000	/* pruning setting */
 
 
 /* max_dsize value to indicate expansible directory */

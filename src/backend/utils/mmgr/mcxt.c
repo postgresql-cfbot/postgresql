@@ -207,6 +207,7 @@ MemoryContextResetChildren(MemoryContext context)
  * but we have to recurse to handle the children.
  * We must also delink the context from its parent, if it has one.
  */
+int hoge = 0;
 void
 MemoryContextDelete(MemoryContext context)
 {

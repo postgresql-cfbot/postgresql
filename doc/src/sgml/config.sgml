@@ -1617,6 +1617,44 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-syscache-memory-target" xreflabel="syscache_memory_target">
+      <term><varname>syscache_memory_target</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>syscache_memory_target</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the maximum amount of memory to which syscache is expanded
+        without pruning. The value defaults to 0, indicating that pruning is
+        always considered. After exceeding this size, syscache pruning is
+        considered according to
+        <xref linkend="guc-syscache-prune-min-age"/>. If you need to keep
+        certain amount of syscache entries with intermittent usage, try
+        increase this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-syscache-prune-min-age" xreflabel="syscache_prune_min_age">
+      <term><varname>syscache_prune_min_age</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>syscache_prune_min_age</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the minimum amount of unused time in seconds at which a
+        syscache entry is considered to be removed. -1 indicates that syscache
+        pruning is disabled at all. The value defaults to 600 seconds
+        (<literal>10 minutes</literal>). The syscache entries that are not
+        used for the duration can be removed to prevent syscache bloat. This
+        behavior is suppressed until the size of syscache exceeds
+        <xref linkend="guc-syscache-memory-target"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

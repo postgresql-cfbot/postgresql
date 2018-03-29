@@ -79,6 +79,7 @@
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/catcache.h"
 #include "utils/guc_tables.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
@@ -2063,6 +2064,49 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&maintenance_work_mem,
 		65536, 1024, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"syscache_memory_target", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the minimum syscache size to keep."),
+			gettext_noop("Syscache is not pruned before exceeding this size."),
+			GUC_UNIT_KB
+		},
+		&syscache_memory_target,
+		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"syscache_prune_min_age", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the minimum duration of an unused syscache entry to remove."),
+			gettext_noop("Syscache entries that live unused for longer than this seconds are considered to be removed."),
+			GUC_UNIT_S
+		},
+		&syscache_prune_min_age,
+		600, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"min_cached_plans", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the minimum number of cached plans kept on memory."),
+			gettext_noop("Timeout invalidation of plancache is not activated until the number of plancaches reaches this value. -1 means timeout invalidation is always active.")
+		},
+		&min_cached_plans,
+		1000, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"plancache_prune_min_age", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the minimum duration of plancache entries to remove."),
+			gettext_noop("Plancache items that live unused for loger than this seconds are considered to be removed."),
+		 	GUC_UNIT_S
+		},
+		&plancache_prune_min_age,
+		600, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

@@ -3573,6 +3573,29 @@ RelationSetNewRelfilenode(Relation relation, char persistence,
 
 #define INITRELCACHESIZE		400
 
+/* callback function for hash pruning */
+static bool
+relcache_prune_cb(HTAB *hashp, void *ent)
+{
+	RelIdCacheEnt  *relent = (RelIdCacheEnt *) ent;
+	Relation		relation;
+
+	/* this relation is requested to be removed.  */
+	RelationIdCacheLookup(relent->reloid, relation);
+
+	/* but cannot remove cache entries currently in use */
+	if (!RelationHasReferenceCountZero(relation))
+		return false;
+
+	/*
+	 * Otherwise we are allowd to forget it unconditionally. see
+	 * RelationForgetRelation
+	 */
+	RelationClearRelation(relation, false);
+
+	return true;
+}
+
 void
 RelationCacheInitialize(void)
 {
@@ -3590,8 +3613,11 @@ RelationCacheInitialize(void)
 	MemSet(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
 	ctl.entrysize = sizeof(RelIdCacheEnt);
+
+	/* use the same setting with syscache */
+	ctl.prune_cb = relcache_prune_cb;
 	RelationIdCache = hash_create("Relcache by OID", INITRELCACHESIZE,
-								  &ctl, HASH_ELEM | HASH_BLOBS);
+								  &ctl, HASH_ELEM | HASH_BLOBS | HASH_PRUNABLE);
 
 	/*
 	 * relation mapper needs to be initialized too

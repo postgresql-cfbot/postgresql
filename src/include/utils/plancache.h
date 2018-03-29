@@ -72,10 +72,11 @@ struct RawStmt;
  * is no way to free memory short of clearing that entire context.  A oneshot
  * plan is always treated as unsaved.
  *
- * Note: the string referenced by commandTag is not subsidiary storage;
- * it is assumed to be a compile-time-constant string.  As with portals,
- * commandTag shall be NULL if and only if the original query string (before
- * rewriting) was an empty string.
+ * Note: the string referenced by commandTag is not subsidiary storage; it is
+ * assumed to be a compile-time-constant string.  As with portals, commandTag
+ * shall be NULL if and only if the original query string (before rewriting)
+ * was an empty string. For memory-saving purpose, this struct is separated
+ * into to parts, the latter is removable in inactive state.
  */
 typedef struct CachedPlanSource
 {
@@ -110,11 +111,13 @@ typedef struct CachedPlanSource
 	bool		is_valid;		/* is the query_list currently valid? */
 	int			generation;		/* increments each time we create a plan */
 	/* If CachedPlanSource has been saved, it is a member of a global list */
+	struct CachedPlanSource *prev_saved;	/* list link, if so */
 	struct CachedPlanSource *next_saved;	/* list link, if so */
 	/* State kept to help decide whether to use custom or generic plans: */
 	double		generic_cost;	/* cost of generic plan, or -1 if not known */
 	double		total_custom_cost;	/* total cost of custom plans so far */
 	int			num_custom_plans;	/* number of plans included in total */
+	TimestampTz	last_access;	/* timestamp of the last usage */
 } CachedPlanSource;
 
 /*
@@ -143,6 +146,9 @@ typedef struct CachedPlan
 	MemoryContext context;		/* context containing this CachedPlan */
 } CachedPlan;
 
+/* GUC variables */
+extern int min_cached_plans;
+extern int plancache_prune_min_age;
 
 extern void InitPlanCache(void);
 extern void ResetPlanCache(void);

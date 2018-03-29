@@ -63,12 +63,14 @@
 #include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
+#include "utils/catcache.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 
 
 /*
@@ -86,6 +88,13 @@
  * guarantee to save a CachedPlanSource without error.
  */
 static CachedPlanSource *first_saved_plan = NULL;
+static CachedPlanSource *last_saved_plan = NULL;
+static int				 num_saved_plans = 0;
+static TimestampTz		 oldest_saved_plan = 0;
+
+/* GUC variables */
+int						 min_cached_plans = 1000;
+int						 plancache_prune_min_age = 600;
 
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
@@ -105,6 +114,7 @@ static TupleDesc PlanCacheComputeResultDesc(List *stmt_list);
 static void PlanCacheRelCallback(Datum arg, Oid relid);
 static void PlanCacheFuncCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
+static void PruneCachedPlan(void);
 
 
 /*
@@ -208,6 +218,8 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->generic_cost = -1;
 	plansource->total_custom_cost = 0;
 	plansource->num_custom_plans = 0;
+	plansource->last_access = GetCatCacheClock();
+	
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -423,6 +435,28 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 	plansource->is_valid = true;
 }
 
+/* moves the plansource to the first in the list */
+static inline void
+MovePlansourceToFirst(CachedPlanSource *plansource)
+{
+	if (first_saved_plan != plansource)
+	{
+		/* delink this element */
+		if (plansource->next_saved)
+			plansource->next_saved->prev_saved = plansource->prev_saved;
+		if (plansource->prev_saved)
+			plansource->prev_saved->next_saved = plansource->next_saved;
+		if (last_saved_plan == plansource)
+			last_saved_plan = plansource->prev_saved;
+
+		/* insert at the beginning */
+		first_saved_plan->prev_saved = plansource;
+		plansource->next_saved = first_saved_plan;
+		plansource->prev_saved = NULL;
+		first_saved_plan = plansource;
+	}
+}
+
 /*
  * SaveCachedPlan: save a cached plan permanently
  *
@@ -470,6 +504,11 @@ SaveCachedPlan(CachedPlanSource *plansource)
 	 * Add the entry to the global list of cached plans.
 	 */
 	plansource->next_saved = first_saved_plan;
+	if (first_saved_plan)
+		first_saved_plan->prev_saved = plansource;
+	else
+		last_saved_plan = plansource;
+	plansource->prev_saved = NULL;
 	first_saved_plan = plansource;
 
 	plansource->is_saved = true;
@@ -492,7 +531,11 @@ DropCachedPlan(CachedPlanSource *plansource)
 	if (plansource->is_saved)
 	{
 		if (first_saved_plan == plansource)
+		{
 			first_saved_plan = plansource->next_saved;
+			if (first_saved_plan)
+				first_saved_plan->prev_saved = NULL;
+		}
 		else
 		{
 			CachedPlanSource *psrc;
@@ -502,9 +545,18 @@ DropCachedPlan(CachedPlanSource *plansource)
 				if (psrc->next_saved == plansource)
 				{
 					psrc->next_saved = plansource->next_saved;
+					if (psrc->next_saved)
+						psrc->next_saved->prev_saved = psrc;
 					break;
 				}
 			}
+		}
+
+		if (last_saved_plan == plansource)
+		{
+			last_saved_plan = plansource->prev_saved;
+			if (last_saved_plan)
+				last_saved_plan->next_saved = NULL;
 		}
 		plansource->is_saved = false;
 	}
@@ -537,6 +589,11 @@ ReleaseGenericPlan(CachedPlanSource *plansource)
 		Assert(plan->magic == CACHEDPLAN_MAGIC);
 		plansource->gplan = NULL;
 		ReleaseCachedPlan(plan, false);
+		if (plansource->is_saved)
+		{
+			Assert (num_saved_plans >= 1);
+			num_saved_plans--;
+		}
 	}
 }
 
@@ -1148,6 +1205,15 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	if (useResOwner && !plansource->is_saved)
 		elog(ERROR, "cannot apply ResourceOwner to non-saved cached plan");
 
+	/* increment access counter and set timestamp */
+	if (plansource->is_saved)
+	{
+		plansource->last_access = GetCatCacheClock();
+
+		/* move this plan to the first of the list if needed */
+		MovePlansourceToFirst(plansource);
+	}
+
 	/* Make sure the querytree list is valid and we have parse-time locks */
 	qlist = RevalidateCachedQuery(plansource, queryEnv);
 
@@ -1156,6 +1222,11 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 
 	if (!customplan)
 	{
+		/* Prune cached plans if needed */
+		if (plansource->is_saved &&
+			(min_cached_plans < 0 || num_saved_plans > min_cached_plans))
+				PruneCachedPlan();
+
 		if (CheckCachedPlan(plansource))
 		{
 			/* We want a generic plan, and we already have a valid one */
@@ -1168,6 +1239,12 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 			plan = BuildCachedPlan(plansource, qlist, NULL, queryEnv);
 			/* Just make real sure plansource->gplan is clear */
 			ReleaseGenericPlan(plansource);
+
+
+			/* Prune cached plans if needed */
+			if (plansource->is_saved)
+				num_saved_plans++;
+
 			/* Link the new generic plan into the plansource */
 			plansource->gplan = plan;
 			plan->refcount++;
@@ -1854,6 +1931,86 @@ static void
 PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue)
 {
 	ResetPlanCache();
+}
+
+/*
+ * PrunePlanCache: invalidate "old" cached plans.
+ */
+static void
+PruneCachedPlan(void)
+{
+	CachedPlanSource *plansource;
+	TimestampTz		  currclock = GetCatCacheClock();
+	long			  age;
+	int				  us;
+	int				  nremoved = 0;
+
+	/* do nothing if not wanted */
+	if (plancache_prune_min_age < 0 || num_saved_plans <= min_cached_plans)
+		return;
+
+	/* Fast check for oldest cache */
+	if (oldest_saved_plan > 0)
+	{
+		TimestampDifference(oldest_saved_plan, currclock, &age, &us);
+		if (age < plancache_prune_min_age)
+			return;
+	}		
+
+	/* last plan is the oldest. */
+	for (plansource = last_saved_plan; plansource; plansource = plansource->prev_saved)
+	{
+		long	plan_age;
+		int		us;
+
+		Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
+
+		/*
+		 * No work if it already doesn't have gplan and move it to the
+		 * beginning so that we don't see it at the next time
+		 */
+		if (!plansource->gplan)
+			continue;
+
+		/*
+		 * Check age for pruning. Can exit immediately when finding a
+		 * not-older element.
+		 */
+		TimestampDifference(plansource->last_access, currclock, &plan_age, &us);
+		if (plan_age <= plancache_prune_min_age)
+		{
+			/* this entry is the next oldest */
+			oldest_saved_plan = plansource->last_access;
+			break;
+		}
+
+		/*
+		 * Here, remove generic plans of this plansrouceif it is not actually
+		 * used and move it to the beginning of the list. Just update
+		 * last_access and move it to the beginning if the plan is used.
+		 */
+		if (plansource->gplan->refcount <= 1)
+		{
+			ReleaseGenericPlan(plansource);
+			nremoved++;
+		}
+
+		plansource->last_access = currclock;
+	}
+
+	/* move the "removed" plansrouces to the beginning of the list */
+	if (plansource != last_saved_plan && plansource)
+	{
+		plansource->next_saved->prev_saved = NULL;
+		first_saved_plan->prev_saved = last_saved_plan;
+ 		last_saved_plan->next_saved = first_saved_plan;
+		first_saved_plan = plansource->next_saved;
+		plansource->next_saved = NULL;
+		last_saved_plan = plansource;
+	}
+
+	if (nremoved > 0)
+		elog(DEBUG1, "plancache removed %d/%d", nremoved, num_saved_plans);
 }
 
 /*

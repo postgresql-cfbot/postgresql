@@ -391,5 +391,10 @@ DATA(insert ( 1700 1700 1703 i f ));
 /* json to/from jsonb */
 DATA(insert (  114 3802    0 a i ));
 DATA(insert ( 3802	114    0 a i ));
+/* jsonb to numeric types */
+DATA(insert ( 3802	1700   4001 e f ));
+DATA(insert ( 3802	23     4002 e f ));
+DATA(insert ( 3802	701    4003 e f ));
+DATA(insert ( 3802	16     4004 e f ));
 
 #endif							/* PG_CAST_H */

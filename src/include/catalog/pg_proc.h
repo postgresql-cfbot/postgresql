@@ -2475,6 +2475,16 @@ DESCR("convert int2 to numeric");
 DATA(insert OID = 1783 ( int2					PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 21 "1700" _null_ _null_ _null_ _null_ _null_ numeric_int2 _null_ _null_ _null_ ));
 DESCR("convert numeric to int2");
 
+
+DATA(insert OID = 4001 ( numeric			PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 1700 "3802" _null_ _null_ _null_ _null_ _null_ jsonb_numeric  _null_ _null_ _null_ ));
+DESCR("convert jsonb to numeric");
+DATA(insert OID = 4002 ( int4				PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 23 "3802" _null_ _null_ _null_ _null_ _null_ jsonb_int4  _null_ _null_ _null_ ));
+DESCR("convert jsonb to int4");
+DATA(insert OID = 4003 ( float8			PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 701 "3802" _null_ _null_ _null_ _null_ _null_ jsonb_float8  _null_ _null_ _null_ ));
+DESCR("convert jsonb to float8");
+DATA(insert OID = 4004 ( bool			PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 16 "3802" _null_ _null_ _null_ _null_ _null_ jsonb_bool  _null_ _null_ _null_ ));
+DESCR("convert jsonb to boolean");
+
 /* formatting */
 DATA(insert OID = 1770 ( to_char			PGNSP PGUID 12 1 0 0 0 f f f t f s s 2 0 25 "1184 25" _null_ _null_ _null_ _null_  _null_ timestamptz_to_char _null_ _null_ _null_ ));
 DESCR("format timestamp with time zone to text");

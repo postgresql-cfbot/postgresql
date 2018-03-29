@@ -4191,3 +4191,36 @@ select ts_headline('[]'::jsonb, tsquery('aaa & bbb'));
  []
 (1 row)
 
+-- casts
+select 'true'::jsonb::bool;
+ bool 
+------
+ t
+(1 row)
+
+select '[]'::jsonb::bool;
+ERROR:  jsonb value must be boolean
+select '1.0'::jsonb::float;
+ float8 
+--------
+      1
+(1 row)
+
+select '[1.0]'::jsonb::float;
+ERROR:  jsonb value must be numeric
+select '12345'::jsonb::int4;
+ int4  
+-------
+ 12345
+(1 row)
+
+select '"hello"'::jsonb::int4;
+ERROR:  jsonb value must be numeric
+select '12345'::jsonb::numeric;
+ numeric 
+---------
+   12345
+(1 row)
+
+select '{}'::jsonb::numeric;
+ERROR:  jsonb value must be numeric

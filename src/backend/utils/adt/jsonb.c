@@ -1845,3 +1845,98 @@ jsonb_object_agg_finalfn(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(out);
 }
+
+
+/*
+ * Extract scalar value from raw-scalar pseudo-array jsonb.
+ */
+static JsonbValue *
+JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res)
+{
+	JsonbIterator *it;
+	JsonbIteratorToken tok PG_USED_FOR_ASSERTS_ONLY;
+	JsonbValue	tmp;
+
+	if (!JsonContainerIsArray(jbc) || !JsonContainerIsScalar(jbc))
+		return NULL;
+
+	/*
+	 * A root scalar is stored as an array of one element, so we get the
+	 * array and then its first (and only) member.
+	 */
+	it = JsonbIteratorInit(jbc);
+
+	tok = JsonbIteratorNext(&it, &tmp, true);
+	Assert(tok == WJB_BEGIN_ARRAY);
+	Assert(tmp.val.array.nElems == 1 && tmp.val.array.rawScalar);
+
+	tok = JsonbIteratorNext(&it, res, true);
+	Assert (tok == WJB_ELEM);
+	Assert(IsAJsonbScalar(res));
+
+	tok = JsonbIteratorNext(&it, &tmp, true);
+	Assert (tok == WJB_END_ARRAY);
+
+	tok = JsonbIteratorNext(&it, &tmp, true);
+	Assert(tok == WJB_DONE);
+
+	return res;
+}
+
+Datum
+jsonb_numeric(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *in = PG_GETARG_JSONB_P(0);
+	JsonbValue	v;
+
+	if (!JsonbExtractScalar(&in->root, &v) || v.type != jbvNumeric)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("jsonb value must be numeric")));
+
+	PG_RETURN_NUMERIC(v.val.numeric);
+}
+
+Datum
+jsonb_int4(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *in = PG_GETARG_JSONB_P(0);
+	JsonbValue  v;
+
+	if (!JsonbExtractScalar(&in->root, &v) || v.type != jbvNumeric)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("jsonb value must be numeric")));
+
+	PG_RETURN_INT32(DatumGetInt32(DirectFunctionCall1(numeric_int4,
+								  NumericGetDatum(v.val.numeric))));
+}
+
+Datum
+jsonb_float8(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *in = PG_GETARG_JSONB_P(0);
+	JsonbValue	v;
+
+	if (!JsonbExtractScalar(&in->root, &v) || v.type != jbvNumeric)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("jsonb value must be numeric")));
+
+	PG_RETURN_FLOAT8(DatumGetFloat8(DirectFunctionCall1(numeric_float8,
+									NumericGetDatum(v.val.numeric))));
+}
+
+Datum
+jsonb_bool(PG_FUNCTION_ARGS)
+{
+	Jsonb	   *in = PG_GETARG_JSONB_P(0);
+	JsonbValue	v;
+
+	if (!JsonbExtractScalar(&in->root, &v) || v.type != jbvBool)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("jsonb value must be boolean")));
+
+	PG_RETURN_BOOL(v.val.boolean);
+}

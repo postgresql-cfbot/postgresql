@@ -206,23 +206,34 @@ static bool MatchNamedCall(HeapTuple proctup, int nargs, List *argnames,
  *		Given a RangeVar describing an existing relation,
  *		select the proper namespace and look up the relation OID.
  *
- * If the schema or relation is not found, return InvalidOid if missing_ok
- * = true, otherwise raise an error.
+ * If the schema or relation is not found, return InvalidOid if the flags contain
+ * RELID_MISSING_OK, otherwise raise an error.
  *
- * If nowait = true, throw an error if we'd have to wait for a lock.
+ * If the flags contain RELID_NOWAIT, throw an error if we'd have to wait for a lock.
+ * If the flags contain RELID_SKIP_LOCKED, return InvalidOid if we'd have to wait for
+ * a lock.  The flags cannot contain both RELID_NOWAIT and RELID_SKIP_LOCKED
+ * together.
+ *
+ * Note that if RELID_MISSING_OK and RELID_SKIP_LOCKED are both specified, a return
+ * value of InvalidOid could either mean the relation is missing or it could not be
+ * locked.
  *
  * Callback allows caller to check permissions or acquire additional locks
  * prior to grabbing the relation lock.
  */
 Oid
 RangeVarGetRelidExtended(const RangeVar *relation, LOCKMODE lockmode,
-						 bool missing_ok, bool nowait,
+						 uint32 flags,
 						 RangeVarGetRelidCallback callback, void *callback_arg)
 {
 	uint64		inval_count;
 	Oid			relId;
 	Oid			oldRelId = InvalidOid;
 	bool		retry = false;
+	bool		missing_ok = ((flags & RELID_MISSING_OK) != 0);
+
+	/* verify that conflicting options are not specified */
+	Assert((flags & RELID_NOWAIT) == 0 || (flags & RELID_SKIP_LOCKED) == 0);
 
 	/*
 	 * We check the catalog name and then ignore it.
@@ -361,20 +372,24 @@ RangeVarGetRelidExtended(const RangeVar *relation, LOCKMODE lockmode,
 		 */
 		if (!OidIsValid(relId))
 			AcceptInvalidationMessages();
-		else if (!nowait)
+		else if ((flags & (RELID_NOWAIT | RELID_SKIP_LOCKED)) == 0)
 			LockRelationOid(relId, lockmode);
 		else if (!ConditionalLockRelationOid(relId, lockmode))
 		{
+			int			elevel = ((flags & RELID_SKIP_LOCKED) != 0) ? DEBUG1 : ERROR;
+
 			if (relation->schemaname)
-				ereport(ERROR,
+				ereport(elevel,
 						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 						 errmsg("could not obtain lock on relation \"%s.%s\"",
 								relation->schemaname, relation->relname)));
 			else
-				ereport(ERROR,
+				ereport(elevel,
 						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 						 errmsg("could not obtain lock on relation \"%s\"",
 								relation->relname)));
+
+			return InvalidOid;
 		}
 
 		/*
@@ -392,15 +407,17 @@ RangeVarGetRelidExtended(const RangeVar *relation, LOCKMODE lockmode,
 		oldRelId = relId;
 	}
 
-	if (!OidIsValid(relId) && !missing_ok)
+	if (!OidIsValid(relId))
 	{
+		int			elevel = missing_ok ? DEBUG1 : ERROR;
+
 		if (relation->schemaname)
-			ereport(ERROR,
+			ereport(elevel,
 					(errcode(ERRCODE_UNDEFINED_TABLE),
 					 errmsg("relation \"%s.%s\" does not exist",
 							relation->schemaname, relation->relname)));
 		else
-			ereport(ERROR,
+			ereport(elevel,
 					(errcode(ERRCODE_UNDEFINED_TABLE),
 					 errmsg("relation \"%s\" does not exist",
 							relation->relname)));

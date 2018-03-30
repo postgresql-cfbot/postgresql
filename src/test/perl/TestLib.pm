@@ -245,15 +245,29 @@ sub append_to_file
 # that.
 sub check_pg_config
 {
-	my ($regexp) = @_;
+	my ($regexp, $value) = @_;
 	my ($stdout, $stderr);
+	my $match;
 	my $result = IPC::Run::run [ 'pg_config', '--includedir' ], '>',
 	  \$stdout, '2>', \$stderr
 	  or die "could not execute pg_config";
 	chomp($stdout);
 
 	open my $pg_config_h, '<', "$stdout/pg_config.h" or die "$!";
-	my $match = (grep {/^$regexp/} <$pg_config_h>);
+	if (defined $value)
+	{
+		while (<$pg_config_h>)
+		{
+			$_ =~ m/^$regexp/;
+			next unless defined $1;
+			$match = $1;
+			last;
+		}
+	}
+	else
+	{
+		$match = (grep {/^$regexp/} <$pg_config_h>);
+	}
 	close $pg_config_h;
 	return $match;
 }

@@ -1552,11 +1552,50 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 		/* Use up all the remaining space on the first page */
 		CurrPos += freespace;
 
+		/*
+		 * Cause all remaining pages in the segment to be flushed, leaving the
+		 * XLog position where it should be at the start of the next segment. In
+		 * the process, the pages will be initialized and physically written to
+		 * the file. That costs a bit of I/O (compared to simply leaving the
+		 * rest of the file unwritten, as was once done), but has an advantage
+		 * that the tail of the file will contain predictable (ideally constant)
+		 * data, so that general-purpose compression tools perform well on it.
+		 * (If left unwritten, the tail contains whatever is left over from the
+		 * file's last use as an earlier segment, and may compress poorly.) The
+		 * I/O cost is of little concern because any period when WAL segments
+		 * are being switched out (for, e.g., checkpoint timeout reasons) before
+		 * they are filled is clearly a low-workload period.
+		 */
 		while (CurrPos < EndPos)
 		{
-			/* initialize the next page (if not initialized already) */
-			WALInsertLockUpdateInsertingAt(CurrPos);
-			AdvanceXLInsertBuffer(CurrPos, false);
+			/*
+			 * This loop only touches full pages that follow the last actually-
+			 * used data in the segment. It will never touch the first page of a
+			 * segment; we would not be here to switch out a segment to which
+			 * nothing at all had been written.
+			 *
+			 * The minimal actions to flush the page would be to call
+			 * WALInsertLockUpdateInsertingAt(CurrPos) followed by
+			 * AdvanceXLInsertBuffer(...). The page would be left initialized
+			 * mostly to zeros, except for the page header (always the short
+			 * variant, as this is never a segment's first page).
+			 *
+			 * The large vistas of zeros are good for compressibility, but
+			 * the short headers interrupting them every XLOG_BLCKSZ (and,
+			 * worse, with values that differ from page to page) are not. The
+			 * effect varies with compression tool, but bzip2 (which compressed
+			 * best among several common tools on scantly-filled WAL segments)
+			 * compresses about an order of magnitude worse if those headers
+			 * are left in place.
+			 *
+			 * Rather than complicating AdvanceXLInsertBuffer itself (which is
+			 * called in heavily-loaded circumstances as well as this lightly-
+			 * loaded one) with variant behavior, we just use GetXLogBuffer
+			 * (which itself calls the two methods we need) to get the pointer
+			 * and re-zero the short header.
+			 */
+			currpos = GetXLogBuffer(CurrPos);
+			MemSet(currpos, 0, SizeOfXLogShortPHD);
 			CurrPos += XLOG_BLCKSZ;
 		}
 	}

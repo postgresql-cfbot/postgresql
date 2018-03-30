@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 1;
+use Test::More tests => 2;
 use File::Copy;
 
 # Initialize master node, doing archives
@@ -49,3 +49,20 @@ $node_standby->poll_query_until('postgres', $caughtup_query)
 my $result =
   $node_standby->safe_psql('postgres', "SELECT count(*) FROM tab_int");
 is($result, qq(1000), 'check content from archives');
+
+# Add some content, switch WAL file and read the last segment of the WAL
+# file which should be zeroed out
+my $current_file = $node_master->safe_psql('postgres',
+	"SELECT pg_walfile_name(pg_current_wal_lsn())");
+$node_master->safe_psql('postgres', "INSERT INTO tab_int VALUES (1)");
+$node_master->safe_psql('postgres', "SELECT pg_switch_wal()");
+
+my $xlog_blcksz = check_pg_config('#define XLOG_BLCKSZ (\d+)', 1);
+
+open my $fh, '<:raw', $node_master->data_dir . '/pg_wal/' . $current_file;
+# SEEK_END is defined as 2, but is not allowed when using strict mode
+seek $fh, ($xlog_blcksz * -1), 2;
+my $len = read($fh, my $bytes, $xlog_blcksz);
+close $fh;
+
+ok($bytes =~ /\A\x00*+\z/, 'make sure wal segment is zeroed');

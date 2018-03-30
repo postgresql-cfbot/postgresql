@@ -343,15 +343,22 @@ BZIP2	= bzip2
 check: temp-install
 
 .PHONY: temp-install
+
+ifneq (,$(TEMP_INSTALL_SYMLINKS))
+temp-install: INSTALL_SYMLINKS=1
+endif
+
 temp-install:
 ifndef NO_TEMP_INSTALL
 ifneq ($(abs_top_builddir),)
 ifeq ($(MAKELEVEL),0)
+ifeq (,$(and $(TEMP_INSTALL_SYMLINKS),$(wildcard $(abs_top_builddir)/tmp_install)))
 	rm -rf '$(abs_top_builddir)'/tmp_install
 	$(MKDIR_P) '$(abs_top_builddir)'/tmp_install/log
-	$(MAKE) -C '$(top_builddir)' DESTDIR='$(abs_top_builddir)'/tmp_install install >'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
+	$(MAKE) -C '$(top_builddir)' DESTDIR='$(abs_top_builddir)'/tmp_install INSTALL_SYMLINKS=$(INSTALL_SYMLINKS) install >'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
 endif
-	$(if $(EXTRA_INSTALL),for extra in $(EXTRA_INSTALL); do $(MAKE) -C '$(top_builddir)'/$$extra DESTDIR='$(abs_top_builddir)'/tmp_install install >>'$(abs_top_builddir)'/tmp_install/log/install.log || exit; done)
+endif
+	$(if $(EXTRA_INSTALL),for extra in $(EXTRA_INSTALL); do $(MAKE) -C '$(top_builddir)'/$$extra DESTDIR='$(abs_top_builddir)'/tmp_install INSTALL_SYMLINKS=$(INSTALL_SYMLINKS) install >>'$(abs_top_builddir)'/tmp_install/log/install.log || exit; done)
 endif
 endif
 
@@ -410,6 +417,15 @@ INSTALL_STLIB	= $(INSTALL_STLIB_ENV) $(INSTALL_DATA) $(INSTALL_STRIP_FLAG)
 INSTALL_SHLIB	= $(INSTALL_SHLIB_ENV) $(INSTALL) $(INSTALL_SHLIB_OPTS) $(INSTALL_STRIP_FLAG)
 # Override in Makefile.port if necessary
 INSTALL_SHLIB_OPTS = -m 755
+
+ifneq ($(INSTALL_SYMLINKS),)
+INSTALL = ln -frs
+INSTALL_PROGRAM = $(INSTALL)
+INSTALL_SCRIPT = $(INSTALL)
+INSTALL_DATA = $(INSTALL)
+INSTALL_STLIB = $(INSTALL)
+INSTALL_SHLIB = $(INSTALL)
+endif
 
 MKDIR_P = @MKDIR_P@
 

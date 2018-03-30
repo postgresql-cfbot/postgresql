@@ -40,7 +40,6 @@
 #endif
 
 static int	validate_exec(const char *path);
-static int	resolve_symlinks(char *path);
 static char *pipe_read_line(char *cmd, char *line, int maxsize);
 
 #ifdef WIN32
@@ -141,7 +140,7 @@ find_my_exec(const char *argv0, char *retpath)
 		canonicalize_path(retpath);
 
 		if (validate_exec(retpath) == 0)
-			return resolve_symlinks(retpath);
+			return 0;
 
 		log_error(_("invalid binary \"%s\""), retpath);
 		return -1;
@@ -151,7 +150,7 @@ find_my_exec(const char *argv0, char *retpath)
 	/* Win32 checks the current directory first for names without slashes */
 	join_path_components(retpath, cwd, argv0);
 	if (validate_exec(retpath) == 0)
-		return resolve_symlinks(retpath);
+		return 0;
 #endif
 
 	/*
@@ -188,7 +187,7 @@ find_my_exec(const char *argv0, char *retpath)
 			switch (validate_exec(retpath))
 			{
 				case 0:			/* found ok */
-					return resolve_symlinks(retpath);
+					return 0;
 				case -1:		/* wasn't even a candidate, keep looking */
 					break;
 				case -2:		/* found but disqualified */
@@ -201,101 +200,6 @@ find_my_exec(const char *argv0, char *retpath)
 
 	log_error(_("could not find a \"%s\" to execute"), argv0);
 	return -1;
-}
-
-
-/*
- * resolve_symlinks - resolve symlinks to the underlying file
- *
- * Replace "path" by the absolute path to the referenced file.
- *
- * Returns 0 if OK, -1 if error.
- *
- * Note: we are not particularly tense about producing nice error messages
- * because we are not really expecting error here; we just determined that
- * the symlink does point to a valid executable.
- */
-static int
-resolve_symlinks(char *path)
-{
-#ifdef HAVE_READLINK
-	struct stat buf;
-	char		orig_wd[MAXPGPATH],
-				link_buf[MAXPGPATH];
-	char	   *fname;
-
-	/*
-	 * To resolve a symlink properly, we have to chdir into its directory and
-	 * then chdir to where the symlink points; otherwise we may fail to
-	 * resolve relative links correctly (consider cases involving mount
-	 * points, for example).  After following the final symlink, we use
-	 * getcwd() to figure out where the heck we're at.
-	 *
-	 * One might think we could skip all this if path doesn't point to a
-	 * symlink to start with, but that's wrong.  We also want to get rid of
-	 * any directory symlinks that are present in the given path. We expect
-	 * getcwd() to give us an accurate, symlink-free path.
-	 */
-	if (!getcwd(orig_wd, MAXPGPATH))
-	{
-		log_error(_("could not identify current directory: %s"),
-				  strerror(errno));
-		return -1;
-	}
-
-	for (;;)
-	{
-		char	   *lsep;
-		int			rllen;
-
-		lsep = last_dir_separator(path);
-		if (lsep)
-		{
-			*lsep = '\0';
-			if (chdir(path) == -1)
-			{
-				log_error4(_("could not change directory to \"%s\": %s"), path, strerror(errno));
-				return -1;
-			}
-			fname = lsep + 1;
-		}
-		else
-			fname = path;
-
-		if (lstat(fname, &buf) < 0 ||
-			!S_ISLNK(buf.st_mode))
-			break;
-
-		rllen = readlink(fname, link_buf, sizeof(link_buf));
-		if (rllen < 0 || rllen >= sizeof(link_buf))
-		{
-			log_error(_("could not read symbolic link \"%s\""), fname);
-			return -1;
-		}
-		link_buf[rllen] = '\0';
-		strcpy(path, link_buf);
-	}
-
-	/* must copy final component out of 'path' temporarily */
-	strlcpy(link_buf, fname, sizeof(link_buf));
-
-	if (!getcwd(path, MAXPGPATH))
-	{
-		log_error(_("could not identify current directory: %s"),
-				  strerror(errno));
-		return -1;
-	}
-	join_path_components(path, path, link_buf);
-	canonicalize_path(path);
-
-	if (chdir(orig_wd) == -1)
-	{
-		log_error4(_("could not change directory to \"%s\": %s"), orig_wd, strerror(errno));
-		return -1;
-	}
-#endif							/* HAVE_READLINK */
-
-	return 0;
 }
 
 

@@ -71,6 +71,13 @@ uninstall:
 # heuristic...
 	rm -rf $(addprefix '$(DESTDIR)$(includedir_server)'/, $(SUBDIRS) *.h)
 
+# location of Catalog.pm
+catalogdir = $(top_srcdir)/src/backend/catalog
+
+reformat-dat-files:
+	$(PERL) -I $(catalogdir) $< catalog/rewrite_dat.pl -o catalog catalog/pg_*.dat
+
+.PHONY: reformat-dat-files
 
 clean:
 	rm -f utils/fmgroids.h utils/fmgrprotos.h utils/errcodes.h parser/gram.h utils/probes.h catalog/schemapg.h

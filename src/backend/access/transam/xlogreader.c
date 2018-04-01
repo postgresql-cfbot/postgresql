@@ -637,38 +637,18 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 							  (uint32) RecPtr);
 		return false;
 	}
-	if (randAccess)
+	/*
+	 * The xl_curr pointer stored in the WAL record header must match its
+	 * position.
+	 */
+	if (record->xl_curr != RecPtr)
 	{
-		/*
-		 * We can't exactly verify the prev-link, but surely it should be less
-		 * than the record's own address.
-		 */
-		if (!(record->xl_prev < RecPtr))
-		{
-			report_invalid_record(state,
-								  "record with incorrect prev-link %X/%X at %X/%X",
-								  (uint32) (record->xl_prev >> 32),
-								  (uint32) record->xl_prev,
-								  (uint32) (RecPtr >> 32), (uint32) RecPtr);
-			return false;
-		}
-	}
-	else
-	{
-		/*
-		 * Record's prev-link should exactly match our previous location. This
-		 * check guards against torn WAL pages where a stale but valid-looking
-		 * WAL record starts on a sector boundary.
-		 */
-		if (record->xl_prev != PrevRecPtr)
-		{
-			report_invalid_record(state,
-								  "record with incorrect prev-link %X/%X at %X/%X",
-								  (uint32) (record->xl_prev >> 32),
-								  (uint32) record->xl_prev,
-								  (uint32) (RecPtr >> 32), (uint32) RecPtr);
-			return false;
-		}
+		report_invalid_record(state,
+							  "record with incorrect xl_curr %X/%X at %X/%X",
+							  (uint32) (record->xl_curr >> 32),
+							  (uint32) record->xl_curr,
+							  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		return false;
 	}
 
 	return true;

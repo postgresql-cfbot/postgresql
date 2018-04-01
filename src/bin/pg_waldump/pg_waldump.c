@@ -536,7 +536,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	BlockNumber blk;
 	int			block_id;
 	uint8		info = XLogRecGetInfo(record);
-	XLogRecPtr	xl_prev = XLogRecGetPrev(record);
+	XLogRecPtr	xl_curr = XLogRecGetCurr(record);
 
 	XLogDumpRecordLen(record, &rec_len, &fpi_len);
 
@@ -544,12 +544,12 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	if (id == NULL)
 		id = psprintf("UNKNOWN (%x)", info & ~XLR_INFO_MASK);
 
-	printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, prev %X/%08X, ",
+	printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, curr %X/%08X, ",
 		   desc->rm_name,
 		   rec_len, XLogRecGetTotalLen(record),
 		   XLogRecGetXid(record),
 		   (uint32) (record->ReadRecPtr >> 32), (uint32) record->ReadRecPtr,
-		   (uint32) (xl_prev >> 32), (uint32) xl_prev);
+		   (uint32) (xl_curr >> 32), (uint32) xl_curr);
 	printf("desc: %s ", id);
 
 	/* the desc routine will printf the description directly to stdout */

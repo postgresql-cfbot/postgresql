@@ -152,7 +152,6 @@ static RelOptInfo *make_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 static void create_ordinary_grouping_paths(PlannerInfo *root,
 							   RelOptInfo *input_rel,
 							   RelOptInfo *grouped_rel,
-							   const AggClauseCosts *agg_costs,
 							   grouping_sets_data *gd,
 							   GroupPathExtraData *extra,
 							   RelOptInfo **partially_grouped_rel_p);
@@ -207,7 +206,6 @@ static void adjust_paths_for_srfs(PlannerInfo *root, RelOptInfo *rel,
 static void add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 						  RelOptInfo *grouped_rel,
 						  RelOptInfo *partially_grouped_rel,
-						  const AggClauseCosts *agg_costs,
 						  grouping_sets_data *gd,
 						  double dNumGroups,
 						  GroupPathExtraData *extra);
@@ -230,7 +228,6 @@ static void create_partitionwise_grouping_paths(PlannerInfo *root,
 									RelOptInfo *input_rel,
 									RelOptInfo *grouped_rel,
 									RelOptInfo *partially_grouped_rel,
-									const AggClauseCosts *agg_costs,
 									grouping_sets_data *gd,
 									PartitionwiseAggregateType patype,
 									GroupPathExtraData *extra);
@@ -2206,12 +2203,13 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	if (final_rel->fdwroutine &&
 		final_rel->fdwroutine->GetForeignUpperPaths)
 		final_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_FINAL,
-													current_rel, final_rel);
+													current_rel, final_rel,
+													NULL);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_FINAL,
-									current_rel, final_rel);
+									current_rel, final_rel, NULL);
 
 	/* Note: currently, we leave it to callers to do set_cheapest() */
 }
@@ -3686,6 +3684,12 @@ create_grouping_paths(PlannerInfo *root,
 		GroupPathExtraData extra;
 
 		/*
+		 * Set agg_costs into the extra so that other routines like FDW can use
+		 * it directly rather than computing it again.
+		 */
+		extra.agg_costs = agg_costs;
+
+		/*
 		 * Determine whether it's possible to perform sort-based
 		 * implementations of grouping.  (Note that if groupClause is empty,
 		 * grouping_is_sortable() is trivially true, and all the
@@ -3732,6 +3736,7 @@ create_grouping_paths(PlannerInfo *root,
 			flags |= GROUPING_CAN_PARTIAL_AGG;
 
 		extra.flags = flags;
+		extra.target = target;
 		extra.target_parallel_safe = target_parallel_safe;
 		extra.havingQual = parse->havingQual;
 		extra.targetList = parse->targetList;
@@ -3748,9 +3753,8 @@ create_grouping_paths(PlannerInfo *root,
 		else
 			extra.patype = PARTITIONWISE_AGGREGATE_NONE;
 
-		create_ordinary_grouping_paths(root, input_rel, grouped_rel,
-									   agg_costs, gd, &extra,
-									   &partially_grouped_rel);
+		create_ordinary_grouping_paths(root, input_rel, grouped_rel, gd,
+									   &extra, &partially_grouped_rel);
 	}
 
 	set_cheapest(grouped_rel);
@@ -3904,9 +3908,7 @@ create_degenerate_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
  */
 static void
 create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
-							   RelOptInfo *grouped_rel,
-							   const AggClauseCosts *agg_costs,
-							   grouping_sets_data *gd,
+							   RelOptInfo *grouped_rel, grouping_sets_data *gd,
 							   GroupPathExtraData *extra,
 							   RelOptInfo **partially_grouped_rel_p)
 {
@@ -3976,8 +3978,8 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	/* Apply partitionwise aggregation technique, if possible. */
 	if (patype != PARTITIONWISE_AGGREGATE_NONE)
 		create_partitionwise_grouping_paths(root, input_rel, grouped_rel,
-											partially_grouped_rel, agg_costs,
-											gd, patype, extra);
+											partially_grouped_rel, gd, patype,
+											extra);
 
 	/* If we are doing partial aggregation only, return. */
 	if (extra->patype == PARTITIONWISE_AGGREGATE_PARTIAL)
@@ -4007,8 +4009,7 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* Build final grouping paths */
 	add_paths_to_grouping_rel(root, input_rel, grouped_rel,
-							  partially_grouped_rel, agg_costs, gd,
-							  dNumGroups, extra);
+							  partially_grouped_rel, gd, dNumGroups, extra);
 
 	/* Give a helpful error if we failed to find any implementation */
 	if (grouped_rel->pathlist == NIL)
@@ -4024,12 +4025,14 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	if (grouped_rel->fdwroutine &&
 		grouped_rel->fdwroutine->GetForeignUpperPaths)
 		grouped_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_GROUP_AGG,
-													  input_rel, grouped_rel);
+													  input_rel, grouped_rel,
+													  extra);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_GROUP_AGG,
-									input_rel, grouped_rel);
+									input_rel, grouped_rel,
+									extra);
 }
 
 /*
@@ -4461,12 +4464,13 @@ create_window_paths(PlannerInfo *root,
 	if (window_rel->fdwroutine &&
 		window_rel->fdwroutine->GetForeignUpperPaths)
 		window_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_WINDOW,
-													 input_rel, window_rel);
+													 input_rel, window_rel,
+													 NULL);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_WINDOW,
-									input_rel, window_rel);
+									input_rel, window_rel, NULL);
 
 	/* Now choose the best path(s) */
 	set_cheapest(window_rel);
@@ -4765,12 +4769,13 @@ create_distinct_paths(PlannerInfo *root,
 	if (distinct_rel->fdwroutine &&
 		distinct_rel->fdwroutine->GetForeignUpperPaths)
 		distinct_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_DISTINCT,
-													   input_rel, distinct_rel);
+													   input_rel, distinct_rel,
+													   NULL);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_DISTINCT,
-									input_rel, distinct_rel);
+									input_rel, distinct_rel, NULL);
 
 	/* Now choose the best path(s) */
 	set_cheapest(distinct_rel);
@@ -4908,12 +4913,13 @@ create_ordered_paths(PlannerInfo *root,
 	if (ordered_rel->fdwroutine &&
 		ordered_rel->fdwroutine->GetForeignUpperPaths)
 		ordered_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_ORDERED,
-													  input_rel, ordered_rel);
+													  input_rel, ordered_rel,
+													  NULL);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_ORDERED,
-									input_rel, ordered_rel);
+									input_rel, ordered_rel, NULL);
 
 	/*
 	 * No need to bother with set_cheapest here; grouping_planner does not
@@ -6181,7 +6187,6 @@ static void
 add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 						  RelOptInfo *grouped_rel,
 						  RelOptInfo *partially_grouped_rel,
-						  const AggClauseCosts *agg_costs,
 						  grouping_sets_data *gd, double dNumGroups,
 						  GroupPathExtraData *extra)
 {
@@ -6191,6 +6196,7 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 	bool		can_hash = (extra->flags & GROUPING_CAN_USE_HASH) != 0;
 	bool		can_sort = (extra->flags & GROUPING_CAN_USE_SORT) != 0;
 	List	   *havingQual = (List *) extra->havingQual;
+	const AggClauseCosts *agg_costs = extra->agg_costs;
 	AggClauseCosts *agg_final_costs = &extra->agg_final_costs;
 
 	if (can_sort)
@@ -6694,7 +6700,8 @@ create_partial_grouping_paths(PlannerInfo *root,
 
 		fdwroutine->GetForeignUpperPaths(root,
 										 UPPERREL_PARTIAL_GROUP_AGG,
-										 input_rel, partially_grouped_rel);
+										 input_rel, partially_grouped_rel,
+										 extra);
 	}
 
 	return partially_grouped_rel;
@@ -7021,7 +7028,6 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 									RelOptInfo *input_rel,
 									RelOptInfo *grouped_rel,
 									RelOptInfo *partially_grouped_rel,
-									const AggClauseCosts *agg_costs,
 									grouping_sets_data *gd,
 									PartitionwiseAggregateType patype,
 									GroupPathExtraData *extra)
@@ -7030,7 +7036,7 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 	int			cnt_parts;
 	List	   *grouped_live_children = NIL;
 	List	   *partially_grouped_live_children = NIL;
-	PathTarget *target = grouped_rel->reltarget;
+	PathTarget *target = extra->target;
 
 	Assert(patype != PARTITIONWISE_AGGREGATE_NONE);
 	Assert(patype != PARTITIONWISE_AGGREGATE_PARTIAL ||
@@ -7063,6 +7069,7 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 			adjust_appendrel_attrs(root,
 								   (Node *) target->exprs,
 								   nappinfos, appinfos);
+		child_extra.target = child_target;
 
 		/* Translate havingQual and targetList. */
 		child_extra.havingQual = (Node *)
@@ -7100,8 +7107,7 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 
 		/* Create grouping paths for this child relation. */
 		create_ordinary_grouping_paths(root, child_input_rel,
-									   child_grouped_rel,
-									   agg_costs, gd, &child_extra,
+									   child_grouped_rel, gd, &child_extra,
 									   &child_partially_grouped_rel);
 
 		if (child_partially_grouped_rel)

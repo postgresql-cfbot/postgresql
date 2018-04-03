@@ -5591,6 +5591,45 @@ DESCR("list of files in the WAL directory");
 DATA(insert OID = 5028 ( satisfies_hash_partition PGNSP PGUID 12 1 0 2276 0 f f f f f i s 4 0 16 "26 23 23 2276" _null_ "{i,i,i,v}" _null_ _null_ _null_ satisfies_hash_partition _null_ _null_ _null_ ));
 DESCR("hash partition CHECK constraint");
 
+/* jsonpath */
+DATA(insert OID =  6052 (  jsonpath_in			PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 6050 "2275" _null_ _null_ _null_ _null_ _null_ jsonpath_in _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID =  6053 (  jsonpath_out			PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 2275 "6050" _null_ _null_ _null_ _null_ _null_ jsonpath_out _null_ _null_ _null_ ));
+DESCR("I/O");
+DATA(insert OID =  6054 (  jsonpath_exists		PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 16 "3802 6050" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_exists2 _null_ _null_ _null_ ));
+DESCR("implementation of @? operator");
+DATA(insert OID =  6055 (  jsonpath_query		PGNSP PGUID 12 1 1000 0 0 f f f t t i s 2 0 3802 "3802 6050" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_query2 _null_ _null_ _null_ ));
+DESCR("implementation of @* operator");
+DATA(insert OID =  6124 (  jsonpath_query_wrapped PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 3802 "3802 6050" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_query_wrapped2 _null_ _null_ _null_ ));
+DESCR("implementation of @# operator");
+DATA(insert OID =  6056 (  jsonpath_exists		PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 16 "3802 6050 3802" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_exists3 _null_ _null_ _null_ ));
+DESCR("jsonpath exists test");
+DATA(insert OID =  6057 (  jsonpath_query		PGNSP PGUID 12 1 1000 0 0 f f f t t i s 3 0 3802 "3802 6050 3802" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_query3 _null_ _null_ _null_ ));
+DESCR("jsonpath object test");
+DATA(insert OID =  6125 (  jsonpath_query_wrapped PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 3802 "3802 6050 3802" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_query_wrapped3 _null_ _null_ _null_ ));
+DESCR("jsonpath query with conditional wrapper");
+DATA(insert OID =  6073 (  jsonpath_predicate	PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 16 "3802 6050" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_predicate2 _null_ _null_ _null_ ));
+DESCR("implementation of @~ operator");
+DATA(insert OID =  6074 (  jsonpath_predicate	PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 16 "3802 6050 3802" _null_ _null_ _null_ _null_ _null_ jsonb_jsonpath_predicate3 _null_ _null_ _null_ ));
+DESCR("jsonpath predicate test");
+
+DATA(insert OID =  6043 (  jsonpath_exists		PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 16 "114 6050" _null_ _null_ _null_ _null_ _null_ json_jsonpath_exists2 _null_ _null_ _null_ ));
+DESCR("implementation of @? operator");
+DATA(insert OID =  6044 (  jsonpath_query		PGNSP PGUID 12 1 1000 0 0 f f f t t i s 2 0 114 "114 6050" _null_ _null_ _null_ _null_ _null_ json_jsonpath_query2 _null_ _null_ _null_ ));
+DESCR("implementation of @* operator");
+DATA(insert OID =  6126 (  jsonpath_query_wrapped PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 114 "114 6050" _null_ _null_ _null_ _null_ _null_ json_jsonpath_query_wrapped2 _null_ _null_ _null_ ));
+DESCR("implementation of @# operator");
+DATA(insert OID =  6045 (  jsonpath_exists		PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 16 "114 6050 114" _null_ _null_ _null_ _null_ _null_ json_jsonpath_exists3 _null_ _null_ _null_ ));
+DESCR("jsonpath exists test");
+DATA(insert OID =  6046 (  jsonpath_query		PGNSP PGUID 12 1 1000 0 0 f f f t t i s 3 0 114 "114 6050 114" _null_ _null_ _null_ _null_ _null_ json_jsonpath_query3 _null_ _null_ _null_ ));
+DESCR("jsonpath query");
+DATA(insert OID =  6127 (  jsonpath_query_wrapped PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 114 "114 6050 114" _null_ _null_ _null_ _null_ _null_ json_jsonpath_query_wrapped3 _null_ _null_ _null_ ));
+DESCR("implementation of @# operator");
+DATA(insert OID =  6049 (  jsonpath_predicate	PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 16 "114 6050" _null_ _null_ _null_ _null_ _null_ json_jsonpath_predicate2 _null_ _null_ _null_ ));
+DESCR("implementation of @~ operator");
+DATA(insert OID =  6069 (  jsonpath_predicate	PGNSP PGUID 12 1 0 0 0 f f f t f i s 3 0 16 "114 6050 114" _null_ _null_ _null_ _null_ _null_ json_jsonpath_predicate3 _null_ _null_ _null_ ));
+DESCR("jsonpath predicate test");
+
 /*
  * Symbolic values for prokind column
  */

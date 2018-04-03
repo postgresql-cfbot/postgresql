@@ -11151,6 +11151,7 @@ table2-mapping
        <row>
         <entry>Operator</entry>
         <entry>Right Operand Type</entry>
+        <entry>Return type</entry>
         <entry>Description</entry>
         <entry>Example</entry>
         <entry>Example Result</entry>
@@ -11160,6 +11161,7 @@ table2-mapping
        <row>
         <entry><literal>-&gt;</literal></entry>
         <entry><type>int</type></entry>
+        <entry><type>json</type> or <type>jsonb</type></entry>
         <entry>Get JSON array element (indexed from zero, negative
         integers count from the end)</entry>
         <entry><literal>'[{"a":"foo"},{"b":"bar"},{"c":"baz"}]'::json-&gt;2</literal></entry>
@@ -11168,6 +11170,7 @@ table2-mapping
        <row>
         <entry><literal>-&gt;</literal></entry>
         <entry><type>text</type></entry>
+        <entry><type>json</type> or <type>jsonb</type></entry>
         <entry>Get JSON object field by key</entry>
         <entry><literal>'{"a": {"b":"foo"}}'::json-&gt;'a'</literal></entry>
         <entry><literal>{"b":"foo"}</literal></entry>
@@ -11175,12 +11178,14 @@ table2-mapping
         <row>
         <entry><literal>-&gt;&gt;</literal></entry>
         <entry><type>int</type></entry>
+        <entry><type>text</type></entry>
         <entry>Get JSON array element as <type>text</type></entry>
         <entry><literal>'[1,2,3]'::json-&gt;&gt;2</literal></entry>
         <entry><literal>3</literal></entry>
        </row>
        <row>
         <entry><literal>-&gt;&gt;</literal></entry>
+        <entry><type>text</type></entry>
         <entry><type>text</type></entry>
         <entry>Get JSON object field as <type>text</type></entry>
         <entry><literal>'{"a":1,"b":2}'::json-&gt;&gt;'b'</literal></entry>
@@ -11189,6 +11194,7 @@ table2-mapping
        <row>
         <entry><literal>#&gt;</literal></entry>
         <entry><type>text[]</type></entry>
+        <entry><type>json</type> or <type>jsonb</type></entry>
         <entry>Get JSON object at specified path</entry>
         <entry><literal>'{"a": {"b":{"c": "foo"}}}'::json#&gt;'{a,b}'</literal></entry>
         <entry><literal>{"c": "foo"}</literal></entry>
@@ -11196,9 +11202,46 @@ table2-mapping
        <row>
         <entry><literal>#&gt;&gt;</literal></entry>
         <entry><type>text[]</type></entry>
+        <entry><type>text</type></entry>
         <entry>Get JSON object at specified path as <type>text</type></entry>
         <entry><literal>'{"a":[1,2,3],"b":[4,5,6]}'::json#&gt;&gt;'{a,2}'</literal></entry>
         <entry><literal>3</literal></entry>
+       </row>
+       <row>
+        <entry><literal>@*</literal></entry>
+        <entry><type>jsonpath</type></entry>
+        <entry><type>setof json</type> or <type>setof jsonb</type></entry>
+        <entry>Get all JSON items returned by JSON path for a specified JSON value</entry>
+        <entry><literal>'{"a":[1,2,3,4,5]}'::json @* '$.a[*] ? (@ > 2)'</literal></entry>
+        <entry><programlisting>
+3
+4
+5
+</programlisting></entry>
+       </row>
+       <row>
+        <entry><literal>@#</literal></entry>
+        <entry><type>jsonpath</type></entry>
+        <entry><type>json</type> or <type>jsonb</type></entry>
+        <entry>Get all JSON items returned by JSON path for a specified JSON value (if there is more than one item, they will be wrapped into an array)</entry>
+        <entry><literal>'{"a":[1,2,3,4,5]}'::json @# '$.a[*] ? (@ > 2)'</literal></entry>
+        <entry><literal>[3, 4, 5]</literal></entry>
+       </row>
+       <row>
+        <entry><literal>@?</literal></entry>
+        <entry><type>jsonpath</type></entry>
+        <entry><type>boolean</type></entry>
+        <entry>Does JSON path return any item for a specified JSON value?</entry>
+        <entry><literal>'{"a":[1,2,3,4,5]}'::json @? '$.a[*] ? (@ > 2)'</literal></entry>
+        <entry><literal>true</literal></entry>
+       </row>
+       <row>
+        <entry><literal>@~</literal></entry>
+        <entry><type>jsonpath</type></entry>
+        <entry><type>boolean</type></entry>
+        <entry>Get JSON path predicate result for a specified JSON value</entry>
+        <entry><literal>'{"a":[1,2,3,4,5]}'::json @~ '$.a[*] > 2'</literal></entry>
+        <entry><literal>true</literal></entry>
        </row>
       </tbody>
      </tgroup>

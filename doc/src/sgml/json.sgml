@@ -536,6 +536,19 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
   </para>
 
   <para>
+   <literal>jsonb_ops</literal> and <literal>jsonb_path_ops</literal> also
+   support queries with <type>jsonpath</type> operators <literal>@?</literal>
+   and <literal>@~</literal>.  The previous example for <literal>@&gt;</literal>
+   operator can be rewritten as follows:
+   <programlisting>
+-- Find documents in which the key "tags" contains array element "qui"
+SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @? '$.tags[*] ? (@ == "qui")';
+SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @~ '$.tags[*] == "qui"';
+</programlisting>
+
+  </para>
+
+  <para>
     <type>jsonb</type> also supports <literal>btree</literal> and <literal>hash</literal>
     indexes.  These are usually useful only if it's important to check
     equality of complete JSON documents.
@@ -582,6 +595,18 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
    linkend="plpython-python23"/> for the PL/Python naming convention).  If you
    use them, <type>jsonb</type> values are mapped to Python dictionaries,
    lists, and scalars, as appropriate.
+  </para>
+ </sect2>
+
+ <sect2 id="json-path">
+  <title><type>jsonpath</type></title>
+  <indexterm>
+    <primary>json</primary>
+    <secondary>path</secondary>
+  </indexterm>
+
+  <para>
+   TODO
   </para>
  </sect2>
 </sect1>

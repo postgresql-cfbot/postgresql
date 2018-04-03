@@ -156,6 +156,9 @@ utils/fmgroids.h: utils/Gen_fmgrtab.pl catalog/Catalog.pm $(top_srcdir)/src/incl
 utils/probes.h: utils/probes.d
 	$(MAKE) -C utils probes.h
 
+utils/adt/jsonpath_gram.h: utils/adt/jsonpath_gram.y
+	$(MAKE) -C utils/adt jsonpath_gram.h
+
 # run this unconditionally to avoid needing to know its dependencies here:
 catalog/schemapg.h: | submake-schemapg
 
@@ -177,7 +180,7 @@ submake-schemapg:
 
 .PHONY: generated-headers
 
-generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/catalog/schemapg.h $(top_builddir)/src/include/storage/lwlocknames.h $(top_builddir)/src/include/utils/errcodes.h $(top_builddir)/src/include/utils/fmgroids.h $(top_builddir)/src/include/utils/fmgrprotos.h $(top_builddir)/src/include/utils/probes.h
+generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/catalog/schemapg.h $(top_builddir)/src/include/storage/lwlocknames.h $(top_builddir)/src/include/utils/errcodes.h $(top_builddir)/src/include/utils/fmgroids.h $(top_builddir)/src/include/utils/fmgrprotos.h $(top_builddir)/src/include/utils/probes.h $(top_builddir)/src/include/utils/jsonpath_gram.h
 
 $(top_builddir)/src/include/parser/gram.h: parser/gram.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
@@ -190,6 +193,11 @@ $(top_builddir)/src/include/catalog/schemapg.h: catalog/schemapg.h
 	  $(LN_S) "$$prereqdir/$(notdir $<)" .
 
 $(top_builddir)/src/include/storage/lwlocknames.h: storage/lmgr/lwlocknames.h
+	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
+	  cd '$(dir $@)' && rm -f $(notdir $@) && \
+	  $(LN_S) "$$prereqdir/$(notdir $<)" .
+
+$(top_builddir)/src/include/utils/jsonpath_gram.h: utils/adt/jsonpath_gram.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
 	  cd '$(dir $@)' && rm -f $(notdir $@) && \
 	  $(LN_S) "$$prereqdir/$(notdir $<)" .
@@ -228,6 +236,7 @@ distprep:
 	$(MAKE) -C replication	repl_gram.c repl_scanner.c syncrep_gram.c syncrep_scanner.c
 	$(MAKE) -C storage/lmgr	lwlocknames.h lwlocknames.c
 	$(MAKE) -C utils	fmgrtab.c fmgroids.h fmgrprotos.h errcodes.h
+	$(MAKE) -C utils/adt	jsonpath_gram.c jsonpath_gram.h jsonpath_scan.c
 	$(MAKE) -C utils/misc	guc-file.c
 	$(MAKE) -C utils/sort	qsort_tuple.c
 
@@ -326,6 +335,7 @@ endif
 clean:
 	rm -f $(LOCALOBJS) postgres$(X) $(POSTGRES_IMP) \
 		$(top_builddir)/src/include/parser/gram.h \
+		$(top_builddir)/src/include/utils/jsonpath_gram.h \
 		$(top_builddir)/src/include/catalog/schemapg.h \
 		$(top_builddir)/src/include/storage/lwlocknames.h \
 		$(top_builddir)/src/include/utils/fmgroids.h \
@@ -362,6 +372,7 @@ maintainer-clean: distclean
 	      utils/fmgrtab.c \
 	      utils/errcodes.h \
 	      utils/misc/guc-file.c \
+	      utils/adt/jsonpath_gram.h \
 	      utils/sort/qsort_tuple.c
 
 

@@ -1204,7 +1204,6 @@ patternsel(PG_FUNCTION_ARGS, Pattern_Type ptype, bool negate)
 	Oid			vartype;
 	Oid			opfamily;
 	Pattern_Prefix_Status pstatus;
-	Const	   *patt;
 	Const	   *prefix = NULL;
 	Selectivity rest_selec = 0;
 	double		nullfrac = 0.0;
@@ -1307,18 +1306,28 @@ patternsel(PG_FUNCTION_ARGS, Pattern_Type ptype, bool negate)
 		nullfrac = stats->stanullfrac;
 	}
 
-	/*
-	 * Pull out any fixed prefix implied by the pattern, and estimate the
-	 * fractional selectivity of the remainder of the pattern.  Unlike many of
-	 * the other functions in this file, we use the pattern operator's actual
-	 * collation for this step.  This is not because we expect the collation
-	 * to make a big difference in the selectivity estimate (it seldom would),
-	 * but because we want to be sure we cache compiled regexps under the
-	 * right cache key, so that they can be re-used at runtime.
-	 */
-	patt = (Const *) other;
-	pstatus = pattern_fixed_prefix(patt, ptype, collation,
-								   &prefix, &rest_selec);
+	if (ptype == Pattern_Type_Prefix)
+	{
+		Assert(consttype == TEXTOID);
+		pstatus = Pattern_Prefix_Partial;
+		rest_selec = 1.0;	/* all */
+		prefix = (Const *) other;
+	}
+	else
+	{
+		/*
+		 * Pull out any fixed prefix implied by the pattern, and estimate the
+		 * fractional selectivity of the remainder of the pattern.  Unlike
+		 * many of the other functions in this file, we use the pattern
+		 * operator's actual collation for this step.  This is not because
+		 * we expect the collation to make a big difference in the selectivity
+		 * estimate (it seldom would), but because we want to be sure we cache
+		 * compiled regexps under the right cache key, so that they can be
+		 * re-used at runtime.
+		 */
+		pstatus = pattern_fixed_prefix((Const *) other, ptype, collation,
+									   &prefix, &rest_selec);
+	}
 
 	/*
 	 * If necessary, coerce the prefix constant to the right type.
@@ -1334,7 +1343,7 @@ patternsel(PG_FUNCTION_ARGS, Pattern_Type ptype, bool negate)
 				break;
 			case BYTEAOID:
 				prefixstr = DatumGetCString(DirectFunctionCall1(byteaout,
-																prefix->constvalue));
+														prefix->constvalue));
 				break;
 			default:
 				elog(ERROR, "unrecognized consttype: %u",
@@ -1449,7 +1458,7 @@ patternsel(PG_FUNCTION_ARGS, Pattern_Type ptype, bool negate)
 	/* result should be in range, but make sure... */
 	CLAMP_PROBABILITY(result);
 
-	if (prefix)
+	if (prefix && prefix->constvalue != constval)
 	{
 		pfree(DatumGetPointer(prefix->constvalue));
 		pfree(prefix);
@@ -1488,6 +1497,16 @@ likesel(PG_FUNCTION_ARGS)
 }
 
 /*
+ *		prefixsel			- selectivity of prefix operator
+ */
+Datum
+prefixsel(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_FLOAT8(patternsel(fcinfo, Pattern_Type_Prefix, false));
+}
+
+/*
+ *
  *		iclikesel			- Selectivity of ILIKE pattern match.
  */
 Datum
@@ -2904,6 +2923,15 @@ Datum
 likejoinsel(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_FLOAT8(patternjoinsel(fcinfo, Pattern_Type_Like, false));
+}
+
+/*
+ *		prefixjoinsel			- Join selectivity of prefix operator
+ */
+Datum
+prefixjoinsel(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_FLOAT8(patternjoinsel(fcinfo, Pattern_Type_Prefix, false));
 }
 
 /*

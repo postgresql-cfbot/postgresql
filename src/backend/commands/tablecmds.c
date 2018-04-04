@@ -7650,8 +7650,43 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 				 errmsg("constraint \"%s\" of relation \"%s\" is not a foreign key constraint",
 						cmdcon->conname, RelationGetRelationName(rel))));
 
+	/*
+	 * Verify for FKCONSTR_ACTION_UNKNOWN, if found, replace by current
+	 * action. We could handle FKCONSTR_ACTION_UNKNOWN bellow, but since
+	 * we already have to handle the case of changing to the same action,
+	 * seems simpler to simple replace FKCONSTR_ACTION_UNKNOWN by the
+	 * current action here.
+	 */
+	if (cmdcon->fk_del_action == FKCONSTR_ACTION_UNKNOWN)
+		cmdcon->fk_del_action = currcon->confdeltype;
+
+	if (cmdcon->fk_upd_action == FKCONSTR_ACTION_UNKNOWN)
+		cmdcon->fk_upd_action = currcon->confupdtype;
+
+	/*
+	 * Do the same for deferrable attributes. But consider that if changed
+	 * only initdeferred attribute and to true, force deferrable to be also
+	 * true. On the other hand, if changed only deferrable attribute and to
+	 * false, force initdeferred to be also false.
+	 */
+	if (!cmdcon->was_deferrable_set)
+		cmdcon->deferrable = cmdcon->initdeferred ? true : currcon->condeferrable;
+
+	if (!cmdcon->was_initdeferred_set)
+		cmdcon->initdeferred = !cmdcon->deferrable ? false : currcon->condeferred;
+
+	/*
+	 * This is a safe check only, should never happen here.
+	 */
+	if (cmdcon->initdeferred && !cmdcon->deferrable)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("constraint declared INITIALLY DEFERRED must be DEFERRABLE")));
+
 	if (currcon->condeferrable != cmdcon->deferrable ||
-		currcon->condeferred != cmdcon->initdeferred)
+		currcon->condeferred != cmdcon->initdeferred ||
+		currcon->confdeltype != cmdcon->fk_del_action ||
+		currcon->confupdtype != cmdcon->fk_upd_action)
 	{
 		HeapTuple	copyTuple;
 		HeapTuple	tgtuple;
@@ -7669,6 +7704,8 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 		copy_con = (Form_pg_constraint) GETSTRUCT(copyTuple);
 		copy_con->condeferrable = cmdcon->deferrable;
 		copy_con->condeferred = cmdcon->initdeferred;
+		copy_con->confdeltype = cmdcon->fk_del_action;
+		copy_con->confupdtype = cmdcon->fk_upd_action;
 		CatalogTupleUpdate(conrel, &copyTuple->t_self, copyTuple);
 
 		InvokeObjectPostAlterHook(ConstraintRelationId,
@@ -7705,23 +7742,104 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 				otherrelids = list_append_unique_oid(otherrelids,
 													 tgform->tgrelid);
 
-			/*
-			 * Update deferrability of RI_FKey_noaction_del,
-			 * RI_FKey_noaction_upd, RI_FKey_check_ins and RI_FKey_check_upd
-			 * triggers, but not others; see createForeignKeyTriggers and
-			 * CreateFKCheckTrigger.
-			 */
-			if (tgform->tgfoid != F_RI_FKEY_NOACTION_DEL &&
-				tgform->tgfoid != F_RI_FKEY_NOACTION_UPD &&
-				tgform->tgfoid != F_RI_FKEY_CHECK_INS &&
-				tgform->tgfoid != F_RI_FKEY_CHECK_UPD)
-				continue;
-
 			copyTuple = heap_copytuple(tgtuple);
 			copy_tg = (Form_pg_trigger) GETSTRUCT(copyTuple);
-
+			/*
+			 * Always set deferrability. Note that it may be overridden bellow
+			 * if the pg_trigger entry is on the referencing depending on the
+			 * action used for ON UPDATE/DELETE. But for check triggers (in
+			 * the referenced table) it is kept as is (since ON UPDATE/DELETE
+			 * actions makes no difference for the check triggers).
+			 */
 			copy_tg->tgdeferrable = cmdcon->deferrable;
 			copy_tg->tginitdeferred = cmdcon->initdeferred;
+
+			/*
+			 * Set ON DELETE action
+			 */
+			if (tgform->tgfoid == F_RI_FKEY_NOACTION_DEL ||
+				tgform->tgfoid == F_RI_FKEY_RESTRICT_DEL ||
+				tgform->tgfoid == F_RI_FKEY_CASCADE_DEL ||
+				tgform->tgfoid == F_RI_FKEY_SETNULL_DEL ||
+				tgform->tgfoid == F_RI_FKEY_SETDEFAULT_DEL)
+			{
+				switch (cmdcon->fk_del_action)
+				{
+					case FKCONSTR_ACTION_NOACTION:
+						copy_tg->tgdeferrable = cmdcon->deferrable;
+						copy_tg->tginitdeferred = cmdcon->initdeferred;
+						copy_tg->tgfoid = F_RI_FKEY_NOACTION_DEL;
+						break;
+					case FKCONSTR_ACTION_RESTRICT:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_RESTRICT_DEL;
+						break;
+					case FKCONSTR_ACTION_CASCADE:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_CASCADE_DEL;
+						break;
+					case FKCONSTR_ACTION_SETNULL:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_SETNULL_DEL;
+						break;
+					case FKCONSTR_ACTION_SETDEFAULT:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_SETDEFAULT_DEL;
+						break;
+					default:
+						elog(ERROR, "unrecognized FK action type: %d",
+							 (int) cmdcon->fk_del_action);
+						break;
+				}
+			}
+
+			/*
+			 * Set ON UPDATE action
+			 */
+			if (tgform->tgfoid == F_RI_FKEY_NOACTION_UPD ||
+				tgform->tgfoid == F_RI_FKEY_RESTRICT_UPD ||
+				tgform->tgfoid == F_RI_FKEY_CASCADE_UPD ||
+				tgform->tgfoid == F_RI_FKEY_SETNULL_UPD ||
+				tgform->tgfoid == F_RI_FKEY_SETDEFAULT_UPD)
+			{
+				switch (cmdcon->fk_upd_action)
+				{
+					case FKCONSTR_ACTION_NOACTION:
+						copy_tg->tgdeferrable = cmdcon->deferrable;
+						copy_tg->tginitdeferred = cmdcon->initdeferred;
+						copy_tg->tgfoid = F_RI_FKEY_NOACTION_UPD;
+						break;
+					case FKCONSTR_ACTION_RESTRICT:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_RESTRICT_UPD;
+						break;
+					case FKCONSTR_ACTION_CASCADE:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_CASCADE_UPD;
+						break;
+					case FKCONSTR_ACTION_SETNULL:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_SETNULL_UPD;
+						break;
+					case FKCONSTR_ACTION_SETDEFAULT:
+						copy_tg->tgdeferrable = false;
+						copy_tg->tginitdeferred = false;
+						copy_tg->tgfoid = F_RI_FKEY_SETDEFAULT_UPD;
+						break;
+					default:
+						elog(ERROR, "unrecognized FK action type: %d",
+							 (int) cmdcon->fk_upd_action);
+						break;
+				}
+			}
+
 			CatalogTupleUpdate(tgrel, &copyTuple->t_self, copyTuple);
 
 			InvokeObjectPostAlterHook(TriggerRelationId,

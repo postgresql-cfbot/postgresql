@@ -184,7 +184,8 @@ static void SplitColQualList(List *qualList,
 							 List **constraintList, CollateClause **collClause,
 							 core_yyscan_t yyscanner);
 static void processCASbits(int cas_bits, int location, const char *constrType,
-			   bool *deferrable, bool *initdeferred, bool *not_valid,
+			   bool *deferrable, bool *was_deferrable_set,
+			   bool *initdeferred, bool *was_initdeferred_set, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
@@ -537,7 +538,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	TableLikeOptionList TableLikeOption
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
-%type <ival>	key_actions key_delete key_match key_update key_action
+%type <ival>	key_actions opt_key_actions
+%type <ival>	key_delete key_match key_update key_action
 %type <ival>	ConstraintAttributeSpec ConstraintAttributeElem
 %type <str>		ExistingIndex
 
@@ -2276,7 +2278,7 @@ alter_table_cmd:
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> ALTER CONSTRAINT ... */
-			| ALTER CONSTRAINT name ConstraintAttributeSpec
+			| ALTER CONSTRAINT name opt_key_actions ConstraintAttributeSpec
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					Constraint *c = makeNode(Constraint);
@@ -2284,9 +2286,11 @@ alter_table_cmd:
 					n->def = (Node *) c;
 					c->contype = CONSTR_FOREIGN; /* others not supported, yet */
 					c->conname = $3;
-					processCASbits($4, @4, "ALTER CONSTRAINT statement",
-									&c->deferrable,
-									&c->initdeferred,
+					c->fk_upd_action = (char) ($4 >> 8);
+					c->fk_del_action = (char) ($4 & 0xFF);
+					processCASbits($5, @4, "ALTER CONSTRAINT statement",
+									&c->deferrable, &c->was_deferrable_set,
+									&c->initdeferred, &c->was_initdeferred_set,
 									NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
@@ -3679,7 +3683,7 @@ ConstraintElem:
 					n->raw_expr = $3;
 					n->cooked_expr = NULL;
 					processCASbits($5, @5, "CHECK",
-								   NULL, NULL, &n->skip_validation,
+								   NULL, NULL, NULL, NULL, &n->skip_validation,
 								   &n->is_no_inherit, yyscanner);
 					n->initially_valid = !n->skip_validation;
 					$$ = (Node *)n;
@@ -3695,8 +3699,8 @@ ConstraintElem:
 					n->indexname = NULL;
 					n->indexspace = $6;
 					processCASbits($7, @7, "UNIQUE",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
 			| UNIQUE ExistingIndex ConstraintAttributeSpec
@@ -3709,8 +3713,8 @@ ConstraintElem:
 					n->indexname = $2;
 					n->indexspace = NULL;
 					processCASbits($3, @3, "UNIQUE",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
 			| PRIMARY KEY '(' columnList ')' opt_definition OptConsTableSpace
@@ -3724,8 +3728,8 @@ ConstraintElem:
 					n->indexname = NULL;
 					n->indexspace = $7;
 					processCASbits($8, @8, "PRIMARY KEY",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
 			| PRIMARY KEY ExistingIndex ConstraintAttributeSpec
@@ -3738,8 +3742,8 @@ ConstraintElem:
 					n->indexname = $3;
 					n->indexspace = NULL;
 					processCASbits($4, @4, "PRIMARY KEY",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
 			| EXCLUDE access_method_clause '(' ExclusionConstraintList ')'
@@ -3756,8 +3760,8 @@ ConstraintElem:
 					n->indexspace		= $7;
 					n->where_clause		= $8;
 					processCASbits($9, @9, "EXCLUDE",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
 			| FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
@@ -3773,7 +3777,8 @@ ConstraintElem:
 					n->fk_upd_action	= (char) ($10 >> 8);
 					n->fk_del_action	= (char) ($10 & 0xFF);
 					processCASbits($11, @11, "FOREIGN KEY",
-								   &n->deferrable, &n->initdeferred,
+								   &n->deferrable, NULL,
+								   &n->initdeferred, NULL,
 								   &n->skip_validation, NULL,
 								   yyscanner);
 					n->initially_valid = !n->skip_validation;
@@ -3849,7 +3854,7 @@ ExclusionWhereClause:
  * We combine the update and delete actions into one value temporarily
  * for simplicity of parsing, and then break them down again in the
  * calling production.  update is in the left 8 bits, delete in the right.
- * Note that NOACTION is the default.
+ * Note that NOACTION is the default. See also opt_key_actions.
  */
 key_actions:
 			key_update
@@ -3862,6 +3867,23 @@ key_actions:
 				{ $$ = ($2 << 8) | ($1 & 0xFF); }
 			| /*EMPTY*/
 				{ $$ = (FKCONSTR_ACTION_NOACTION << 8) | (FKCONSTR_ACTION_NOACTION & 0xFF); }
+		;
+
+/*
+ * Basically the same as key_actions, but using FKCONSTR_ACTION_UNKNOWN
+ * as the default one instead of NOACTION.
+ */
+opt_key_actions:
+			key_update
+				{ $$ = ($1 << 8) | (FKCONSTR_ACTION_UNKNOWN & 0xFF); }
+			| key_delete
+				{ $$ = (FKCONSTR_ACTION_UNKNOWN << 8) | ($1 & 0xFF); }
+			| key_update key_delete
+				{ $$ = ($1 << 8) | ($2 & 0xFF); }
+			| key_delete key_update
+				{ $$ = ($2 << 8) | ($1 & 0xFF); }
+			| /*EMPTY*/
+				{ $$ = (FKCONSTR_ACTION_UNKNOWN << 8) | (FKCONSTR_ACTION_UNKNOWN & 0xFF); }
 		;
 
 key_update: ON UPDATE key_action		{ $$ = $3; }
@@ -5376,8 +5398,8 @@ CreateTrigStmt:
 					n->transitionRels = NIL;
 					n->isconstraint  = true;
 					processCASbits($10, @10, "TRIGGER",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 					n->constrrel = $9;
 					$$ = (Node *)n;
 				}
@@ -5644,8 +5666,8 @@ CreateAssertStmt:
 					n->args = list_make1($6);
 					n->isconstraint  = true;
 					processCASbits($8, @8, "ASSERTION",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
+								   &n->deferrable, NULL, &n->initdeferred, NULL,
+								   NULL, NULL, yyscanner);
 
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -16311,7 +16333,8 @@ SplitColQualList(List *qualList,
  */
 static void
 processCASbits(int cas_bits, int location, const char *constrType,
-			   bool *deferrable, bool *initdeferred, bool *not_valid,
+			   bool *deferrable, bool *was_deferrable_set,
+			   bool *initdeferred, bool *was_initdeferred_set, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner)
 {
 	/* defaults */
@@ -16321,6 +16344,13 @@ processCASbits(int cas_bits, int location, const char *constrType,
 		*initdeferred = false;
 	if (not_valid)
 		*not_valid = false;
+
+	if (was_deferrable_set)
+		*was_deferrable_set = cas_bits & (CAS_DEFERRABLE | CAS_NOT_DEFERRABLE) ? true : false;
+
+	if (was_initdeferred_set)
+		*was_initdeferred_set = cas_bits & (CAS_INITIALLY_DEFERRED
+										    | CAS_INITIALLY_IMMEDIATE) ? true : false;
 
 	if (cas_bits & (CAS_DEFERRABLE | CAS_INITIALLY_DEFERRED))
 	{

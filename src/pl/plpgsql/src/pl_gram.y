@@ -1960,7 +1960,25 @@ stmt_execsql	: K_IMPORT
 						plpgsql_push_back_token(tok);
 						if (tok == '=' || tok == COLON_EQUALS || tok == '[')
 							word_is_not_variable(&($1), @1);
-						$$ = make_execsql_stmt(T_WORD, @1);
+						else if (tok == '(' &&
+								/* check for keywords that can be followed by ( */
+								 ($1.quoted || (strcmp($1.ident, "explain") != 0 &&
+												strcmp($1.ident, "reindex") != 0 &&
+												strcmp($1.ident, "select") != 0 &&
+												strcmp($1.ident, "vacuum") != 0 &&
+												strcmp($1.ident, "values") != 0)))
+						{
+							PLpgSQL_stmt_execsql *new;
+
+							new = palloc0(sizeof(PLpgSQL_stmt_execsql));
+							new->cmd_type = PLPGSQL_STMT_EXECSQL;
+							new->lineno = plpgsql_location_to_lineno(@1);
+							new->sqlstmt = read_sql_stmt(psprintf("CALL %s", quote_identifier(($1).ident)));
+
+							$$ = (PLpgSQL_stmt *)new;
+						}
+						else
+							$$ = make_execsql_stmt(T_WORD, @1);
 					}
 				| T_CWORD
 					{
@@ -1970,7 +1988,19 @@ stmt_execsql	: K_IMPORT
 						plpgsql_push_back_token(tok);
 						if (tok == '=' || tok == COLON_EQUALS || tok == '[')
 							cword_is_not_variable(&($1), @1);
-						$$ = make_execsql_stmt(T_CWORD, @1);
+						else if (tok == '(')
+						{
+							PLpgSQL_stmt_execsql *new;
+
+							new = palloc0(sizeof(PLpgSQL_stmt_execsql));
+							new->cmd_type = PLPGSQL_STMT_EXECSQL;
+							new->lineno = plpgsql_location_to_lineno(@1);
+							new->sqlstmt = read_sql_stmt(psprintf("CALL %s", NameListToQuotedString(($1).idents)));
+
+							$$ = (PLpgSQL_stmt *)new;
+						}
+						else
+							$$ = make_execsql_stmt(T_CWORD, @1);
 					}
 				;
 

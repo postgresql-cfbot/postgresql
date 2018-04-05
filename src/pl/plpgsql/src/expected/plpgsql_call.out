@@ -43,6 +43,8 @@ AS $$
 BEGIN
     CALL test_proc3(y);
     CALL test_proc3($1);
+    test_proc3(y);
+    public.test_proc3(y);
 END;
 $$;
 CALL test_proc4(66);
@@ -51,7 +53,9 @@ SELECT * FROM test1;
 ----
  66
  66
-(2 rows)
+ 66
+ 66
+(4 rows)
 
 -- output arguments
 CREATE PROCEDURE test_proc5(INOUT a text)

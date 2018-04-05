@@ -47,6 +47,8 @@ AS $$
 BEGIN
     CALL test_proc3(y);
     CALL test_proc3($1);
+    test_proc3(y);
+    public.test_proc3(y);
 END;
 $$;
 

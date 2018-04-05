@@ -830,6 +830,7 @@ GatherMergeState
 GatherPath
 GatherState
 Gene
+GeneratePruningStepsContext
 GenerationBlock
 GenerationChunk
 GenerationContext
@@ -1587,6 +1588,7 @@ ParsedText
 ParsedWord
 ParserSetupHook
 ParserState
+PartClauseInfo
 PartitionBoundInfo
 PartitionBoundInfoData
 PartitionBoundSpec
@@ -1599,13 +1601,16 @@ PartitionElem
 PartitionHashBound
 PartitionKey
 PartitionListValue
+PartitionPruneContext
+PartitionPruneStep
+PartitionPruneStepCombine
+PartitionPruneStepOp
 PartitionRangeBound
 PartitionRangeDatum
 PartitionRangeDatumKind
 PartitionScheme
 PartitionSpec
 PartitionTupleRouting
-PartitionedChildRelInfo
 PartitionwiseAggregateType
 PasswordType
 Path
@@ -1752,6 +1757,7 @@ ProjectionPath
 ProtocolVersion
 PrsStorage
 PruneState
+PruneStepResult
 PsqlScanCallbacks
 PsqlScanQuoteType
 PsqlScanResult

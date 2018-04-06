@@ -61,6 +61,7 @@
 #include "replication/slot.h"
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/backend_signal.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -2919,9 +2920,22 @@ ProcessInterrupts(void)
 					 errdetail_recovery_conflict()));
 		}
 		else
-			ereport(FATAL,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("terminating connection due to administrator command")));
+		{
+			if (HasCancelMessage())
+			{
+				char	buffer[MAX_CANCEL_MSG];
+
+				ConsumeCancelMessage(buffer, MAX_CANCEL_MSG);
+				ereport(FATAL,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("terminating connection due to administrator command: %s",
+						 buffer)));
+			}
+			else
+				ereport(FATAL,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("terminating connection due to administrator command")));
+		}
 	}
 	if (ClientConnectionLost)
 	{
@@ -3032,9 +3046,21 @@ ProcessInterrupts(void)
 		if (!DoingCommandRead)
 		{
 			LockErrorCleanup();
-			ereport(ERROR,
-					(errcode(ERRCODE_QUERY_CANCELED),
-					 errmsg("canceling statement due to user request")));
+
+			if (HasCancelMessage())
+			{
+				char	buffer[MAX_CANCEL_MSG];
+
+				ConsumeCancelMessage(buffer, MAX_CANCEL_MSG);
+				ereport(ERROR,
+						(errcode(ERRCODE_QUERY_CANCELED),
+						 errmsg("canceling statement due to user request: %s",
+								buffer)));
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_QUERY_CANCELED),
+						 errmsg("canceling statement due to user request")));
 		}
 	}
 

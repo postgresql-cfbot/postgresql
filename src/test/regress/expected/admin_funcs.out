@@ -1,0 +1,29 @@
+select pg_cancel_backend();
+ERROR:  function pg_cancel_backend() does not exist
+LINE 1: select pg_cancel_backend();
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+select pg_cancel_backend(NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(pg_backend_pid());
+ERROR:  canceling statement due to user request
+select pg_cancel_backend(NULL, NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(NULL, 'suicide is painless');
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(pg_backend_pid(), 'it brings on many changes');
+ERROR:  canceling statement due to user request: it brings on many changes
+select pg_cancel_backend(pg_backend_pid(), NULL);
+ERROR:  canceling statement due to user request

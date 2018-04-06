@@ -108,6 +108,12 @@ DATA(insert OID = 3375 ( "pg_read_all_stats" f t f f f f f -1 _null_ _null_));
 #define DEFAULT_ROLE_READ_ALL_STATS 3375
 DATA(insert OID = 3377 ( "pg_stat_scan_tables" f t f f f f f -1 _null_ _null_));
 #define DEFAULT_ROLE_STAT_SCAN_TABLES	3377
+DATA(insert OID = 3436 ( "pg_read_server_files" f t f f f f f -1 _null_ _null_));
+#define DEFAULT_ROLE_READ_SERVER_FILES	3436
+DATA(insert OID = 3696 ( "pg_write_server_files" f t f f f f f -1 _null_ _null_));
+#define DEFAULT_ROLE_WRITE_SERVER_FILES	3696
+DATA(insert OID = 3877 ( "pg_execute_server_program" f t f f f f f -1 _null_ _null_));
+#define DEFAULT_ROLE_EXECUTE_SERVER_PROGRAM	3877
 DATA(insert OID = 4200 ( "pg_signal_backend" f t f f f f f -1 _null_ _null_));
 #define DEFAULT_ROLE_SIGNAL_BACKENDID	4200
 

@@ -744,14 +744,28 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	/* Compute information relevant to foreign relations. */
 	set_foreign_rel_properties(joinrel, outer_rel, inner_rel);
 
-	/* Build targetlist */
-	build_joinrel_tlist(root, joinrel, outer_rel);
-	build_joinrel_tlist(root, joinrel, inner_rel);
-	/* Add placeholder variables. */
+	appinfos = find_appinfos_by_relids(root, joinrel->relids, &nappinfos);
+
+	/*
+	 * The first pair of joining relations for the parent joinrel may not
+	 * produce a partition-wise join because of the restrictions in
+	 * partition_bounds_merge(). Hence the first pair of joining relations,
+	 * which is used to build the child join and presented here, for the child
+	 * joinrel does not correspond to the first pair of joining relations for
+	 * the parent joinrel. The targetlist built using different pairs have the
+	 * targetlist nodes arranged in different order. An appendrel expects that
+	 * all its children have their targetlists ordered in the same fashion.
+	 * Hence translate the parent's targetlist so that parent and child
+	 * joinrels have their targetlists in sync.
+	 */
+	joinrel->reltarget = copy_pathtarget(parent_joinrel->reltarget);
+	joinrel->reltarget->exprs =
+		(List *) adjust_appendrel_attrs(root,
+										(Node *) parent_joinrel->reltarget->exprs,
+										nappinfos, appinfos);
 	add_placeholders_to_child_joinrel(root, joinrel, parent_joinrel);
 
 	/* Construct joininfo list. */
-	appinfos = find_appinfos_by_relids(root, joinrel->relids, &nappinfos);
 	joinrel->joininfo = (List *) adjust_appendrel_attrs(root,
 														(Node *) parent_joinrel->joininfo,
 														nappinfos,
@@ -850,14 +864,14 @@ static void
 build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 					RelOptInfo *input_rel)
 {
-	Relids		relids;
+	Relids		relids = joinrel->relids;
 	ListCell   *vars;
 
-	/* attrs_needed refers to parent relids and not those of a child. */
-	if (joinrel->top_parent_relids)
-		relids = joinrel->top_parent_relids;
-	else
-		relids = joinrel->relids;
+	/*
+	 * We only see parent joins. Targetlist of a child-join is computed by
+	 * translating corresponding parent join's targetlist.
+	 */
+	Assert(joinrel->reloptkind == RELOPT_JOINREL);
 
 	foreach(vars, input_rel->reltarget->exprs)
 	{
@@ -874,54 +888,24 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 
 		/*
 		 * Otherwise, anything in a baserel or joinrel targetlist ought to be
-		 * a Var. Children of a partitioned table may have ConvertRowtypeExpr
-		 * translating whole-row Var of a child to that of the parent.
-		 * Children of an inherited table or subquery child rels can not
-		 * directly participate in a join, so other kinds of nodes here.
+		 * a Var.  (More general cases can only appear in appendrel child
+		 * rels, which will never be seen here.)
 		 */
-		if (IsA(var, Var))
-		{
-			baserel = find_base_rel(root, var->varno);
-			ndx = var->varattno - baserel->min_attr;
-		}
-		else if (IsA(var, ConvertRowtypeExpr))
-		{
-			ConvertRowtypeExpr *child_expr = (ConvertRowtypeExpr *) var;
-			Var		   *childvar = (Var *) child_expr->arg;
-
-			/*
-			 * Child's whole-row references are converted to look like those
-			 * of parent using ConvertRowtypeExpr. There can be as many
-			 * ConvertRowtypeExpr decorations as the depth of partition tree.
-			 * The argument to the deepest ConvertRowtypeExpr is expected to
-			 * be a whole-row reference of the child.
-			 */
-			while (IsA(childvar, ConvertRowtypeExpr))
-			{
-				child_expr = (ConvertRowtypeExpr *) childvar;
-				childvar = (Var *) child_expr->arg;
-			}
-			Assert(IsA(childvar, Var) &&childvar->varattno == 0);
-
-			baserel = find_base_rel(root, childvar->varno);
-			ndx = 0 - baserel->min_attr;
-		}
-		else
+		if (!IsA(var, Var))
 			elog(ERROR, "unexpected node type in rel targetlist: %d",
 				 (int) nodeTag(var));
 
+		/* Get the Var's original base rel */
+		baserel = find_base_rel(root, var->varno);
 
-		/* Is the target expression still needed above this joinrel? */
+		/* Is it still needed above this joinrel? */
+		ndx = var->varattno - baserel->min_attr;
+
 		if (bms_nonempty_difference(baserel->attr_needed[ndx], relids))
 		{
 			/* Yup, add it to the output */
 			joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs, var);
-
-			/*
-			 * Vars have cost zero, so no need to adjust reltarget->cost. Even
-			 * if it's a ConvertRowtypeExpr, it will be computed only for the
-			 * base relation, costing nothing for a join.
-			 */
+			/* Vars have cost zero, so no need to adjust reltarget->cost */
 			joinrel->reltarget->width += baserel->attr_widths[ndx];
 		}
 	}
@@ -1619,7 +1603,7 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 	 * deduces implied equalities and reorders the joins. Please see
 	 * optimizer/README for details.
 	 */
-	if (!IS_PARTITIONED_REL(outer_rel) || !IS_PARTITIONED_REL(inner_rel) ||
+	if (outer_rel->part_scheme == NULL || inner_rel->part_scheme == NULL ||
 		outer_rel->part_scheme != inner_rel->part_scheme ||
 		!have_partkey_equi_join(outer_rel, inner_rel, jointype, restrictlist))
 	{
@@ -1628,24 +1612,6 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 	}
 
 	part_scheme = outer_rel->part_scheme;
-
-	Assert(REL_HAS_ALL_PART_PROPS(outer_rel) &&
-		   REL_HAS_ALL_PART_PROPS(inner_rel));
-
-	/*
-	 * For now, our partition matching algorithm can match partitions only
-	 * when the partition bounds of the joining relations are exactly same.
-	 * So, bail out otherwise.
-	 */
-	if (outer_rel->nparts != inner_rel->nparts ||
-		!partition_bounds_equal(part_scheme->partnatts,
-								part_scheme->parttyplen,
-								part_scheme->parttypbyval,
-								outer_rel->boundinfo, inner_rel->boundinfo))
-	{
-		Assert(!IS_PARTITIONED_REL(joinrel));
-		return;
-	}
 
 	/*
 	 * This function will be called only once for each joinrel, hence it
@@ -1658,17 +1624,20 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 
 	/*
 	 * Join relation is partitioned using the same partitioning scheme as the
-	 * joining relations and has same bounds.
+	 * joining relations.
+	 *
+	 * Because of restrictions in partition_bounds_merge(), not every pair of
+	 * joining relations (including the one presented to this function) for the
+	 * same joinrel can use partition-wise join or has both the relations
+	 * partitioned. Hence we calculate the partition bounds, number of
+	 * partitions and child-join relations of the join relation when and if we
+	 * find a suitable pair in try_partition_wise_join().
 	 */
 	joinrel->part_scheme = part_scheme;
-	joinrel->boundinfo = outer_rel->boundinfo;
 	partnatts = joinrel->part_scheme->partnatts;
 	joinrel->partexprs = (List **) palloc0(sizeof(List *) * partnatts);
 	joinrel->nullable_partexprs =
 		(List **) palloc0(sizeof(List *) * partnatts);
-	joinrel->nparts = outer_rel->nparts;
-	joinrel->part_rels =
-		(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * joinrel->nparts);
 
 
 	/*

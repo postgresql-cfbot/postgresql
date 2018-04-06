@@ -1951,6 +1951,11 @@ find_partition_scheme(PlannerInfo *root, Relation relation)
 	memcpy(part_scheme->parttypbyval, partkey->parttypbyval,
 		   sizeof(bool) * partnatts);
 
+	part_scheme->partsupfunc =
+		(FmgrInfo *) palloc(sizeof(FmgrInfo) * partnatts);
+	memcpy(part_scheme->partsupfunc, partkey->partsupfunc,
+		   sizeof(FmgrInfo) * partnatts);
+
 	/* Add the partitioning scheme to PlannerInfo. */
 	root->part_schemes = lappend(root->part_schemes, part_scheme);
 

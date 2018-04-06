@@ -15,6 +15,7 @@
 #define RELATION_H
 
 #include "access/sdir.h"
+#include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
@@ -356,6 +357,7 @@ typedef struct PartitionSchemeData
 	/* Cached information about partition key data types. */
 	int16	   *parttyplen;
 	bool	   *parttypbyval;
+	FmgrInfo   *partsupfunc;
 }			PartitionSchemeData;
 
 typedef struct PartitionSchemeData *PartitionScheme;

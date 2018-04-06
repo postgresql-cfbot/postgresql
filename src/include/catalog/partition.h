@@ -69,6 +69,12 @@ extern void update_default_partition_oid(Oid parentId, Oid defaultPartId);
 extern void check_default_allows_bound(Relation parent, Relation defaultRel,
 						   PartitionBoundSpec *new_spec);
 extern List *get_proposed_default_constraint(List *new_part_constaints);
+extern PartitionBoundInfo partition_bounds_merge(int partnatts,
+					   FmgrInfo *partsupfunc, Oid *partcollation,
+					   PartitionBoundInfo outer_bi, int outer_nparts,
+					   PartitionBoundInfo inner_bi, int inner_nparts,
+					   JoinType jointype, List **outer_parts,
+					   List **inner_parts);
 
 /* For tuple routing */
 extern int get_partition_for_tuple(Relation relation, Datum *values,

@@ -1665,7 +1665,17 @@ get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 				 strategy, key->partopcintype[col], key->partopcintype[col],
 				 key->partopfamily[col]);
-		*need_relabel = true;
+
+		/*
+		 * For certain type categories, there don't exist pg_amop entries with
+		 * the given type OID as the operator's left and right operand type.
+		 * Instead, the entries have corresponding pseudo-types listed as the
+		 * left and right operand type; for example, anyenum for an enum type.
+		 * For such cases, it's not necessary to add the RelabelType node,
+		 * because other parts of the sytem won't add one either.
+		 */
+		if (get_typtype(key->partopcintype[col]) != TYPTYPE_PSEUDO)
+			*need_relabel = true;
 	}
 	else
 		*need_relabel = false;

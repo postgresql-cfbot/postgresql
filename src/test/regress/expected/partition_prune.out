@@ -1086,4 +1086,49 @@ explain (costs off) select * from boolpart where a is not unknown;
          Filter: (a IS NOT UNKNOWN)
 (7 rows)
 
+-- array type list partition key
+create table arrpart (a int[]) partition by list (a);
+create table arrpart1 partition of arrpart for values in ('{1}');
+create table arrpart2 partition of arrpart for values in ('{2, 3}', '{4, 5}');
+explain (costs off) select * from arrpart where a = '{1}';
+               QUERY PLAN               
+----------------------------------------
+ Append
+   ->  Seq Scan on arrpart1
+         Filter: (a = '{1}'::integer[])
+(3 rows)
+
+explain (costs off) select * from arrpart where a = '{1, 2}';
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off) select * from arrpart where a in ('{4, 5}', '{1}');
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Append
+   ->  Seq Scan on arrpart1
+         Filter: ((a = '{4,5}'::integer[]) OR (a = '{1}'::integer[]))
+   ->  Seq Scan on arrpart2
+         Filter: ((a = '{4,5}'::integer[]) OR (a = '{1}'::integer[]))
+(5 rows)
+
+drop table arrpart;
+-- enum type list partition key
+create type colors as enum ('green', 'blue');
+create table enumpart (a colors) partition by list (a);
+create table enumpart_green partition of enumpart for values in ('green');
+create table enumpart_blue partition of enumpart for values in ('blue');
+explain (costs off) select * from enumpart where a = 'blue';
+              QUERY PLAN              
+--------------------------------------
+ Append
+   ->  Seq Scan on enumpart_blue
+         Filter: (a = 'blue'::colors)
+(3 rows)
+
+drop table enumpart;
+drop type colors;
 drop table lp, coll_pruning, rlp, mc3p, mc2p, boolpart;

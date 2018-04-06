@@ -152,4 +152,22 @@ explain (costs off) select * from boolpart where a is not true and a is not fals
 explain (costs off) select * from boolpart where a is unknown;
 explain (costs off) select * from boolpart where a is not unknown;
 
+-- array type list partition key
+create table arrpart (a int[]) partition by list (a);
+create table arrpart1 partition of arrpart for values in ('{1}');
+create table arrpart2 partition of arrpart for values in ('{2, 3}', '{4, 5}');
+explain (costs off) select * from arrpart where a = '{1}';
+explain (costs off) select * from arrpart where a = '{1, 2}';
+explain (costs off) select * from arrpart where a in ('{4, 5}', '{1}');
+drop table arrpart;
+
+-- enum type list partition key
+create type colors as enum ('green', 'blue');
+create table enumpart (a colors) partition by list (a);
+create table enumpart_green partition of enumpart for values in ('green');
+create table enumpart_blue partition of enumpart for values in ('blue');
+explain (costs off) select * from enumpart where a = 'blue';
+drop table enumpart;
+drop type colors;
+
 drop table lp, coll_pruning, rlp, mc3p, mc2p, boolpart;

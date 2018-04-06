@@ -17,7 +17,6 @@
 #include <limits.h>
 
 #include "miscadmin.h"
-#include "catalog/partition.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
@@ -28,6 +27,7 @@
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "utils/hsearch.h"
+#include "utils/partcache.h"
 
 
 typedef struct JoinHashEntry

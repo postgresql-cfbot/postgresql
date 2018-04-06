@@ -15,13 +15,13 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
-#include "catalog/partition.h"
 #include "optimizer/clauses.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/prep.h"
 #include "utils/lsyscache.h"
+#include "utils/partcache.h"
 #include "utils/memutils.h"
 
 

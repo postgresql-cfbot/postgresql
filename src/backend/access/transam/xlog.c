@@ -58,6 +58,7 @@
 #include "storage/ipc.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
+#include "storage/pmem.h"
 #include "storage/pmsignal.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
@@ -145,6 +146,9 @@ const struct config_enum_entry sync_method_options[] = {
 #endif
 #ifdef OPEN_DATASYNC_FLAG
 	{"open_datasync", SYNC_METHOD_OPEN_DSYNC, false},
+#endif
+#ifdef USE_LIBPMEM
+	{"pmem_drain", SYNC_METHOD_PMEM_DRAIN, false},
 #endif
 	{NULL, 0, false}
 };
@@ -774,6 +778,7 @@ static const char *xlogSourceNames[] = {"any", "archive", "pg_wal", "stream"};
 static int	openLogFile = -1;
 static XLogSegNo openLogSegNo = 0;
 static uint32 openLogOff = 0;
+static void	*mappedLogFileAddr = NULL;
 
 /*
  * These variables are used similarly to the ones above, but for reading
@@ -788,6 +793,7 @@ static XLogSegNo readSegNo = 0;
 static uint32 readOff = 0;
 static uint32 readLen = 0;
 static XLogSource readSource = 0;	/* XLOG_FROM_* code */
+static void	*mappedReadFileAddr = NULL;
 
 /*
  * Keeps track of which source we're currently reading from. This is
@@ -867,13 +873,15 @@ static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
 
 static void AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic);
 static bool XLogCheckpointNeeded(XLogSegNo new_segno);
+static int do_XLogFileOpen(char *pathname, int flags, void **addr);
 static void XLogWrite(XLogwrtRqst WriteRqst, bool flexible);
 static bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 					   bool find_free, XLogSegNo max_segno,
-					   bool use_lock);
+					   bool use_lock, bool fsync_file);
 static int XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
-			 int source, bool notfoundOk);
-static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source);
+			 int source, bool notfoundOk, void **addr);
+static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source,
+		void **addr);
 static int XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 			 int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
 			 TimeLineID *readTLI);
@@ -2342,6 +2350,15 @@ XLogCheckpointNeeded(XLogSegNo new_segno)
 	return false;
 }
 
+static int
+do_XLogFileOpen(char *pathname, int flags,  void **addr)
+{
+	if (sync_method == SYNC_METHOD_PMEM_DRAIN)
+		return PmemFileOpen(pathname, flags, wal_segment_size, addr);
+	else
+		return BasicOpenFile(pathname, flags);
+}
+
 /*
  * Write and/or fsync the log at least as far as WriteRqst indicates.
  *
@@ -2421,23 +2438,25 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			 * pages here (since we dump what we have at segment end).
 			 */
 			Assert(npages == 0);
-			if (openLogFile >= 0)
+			if (openLogFile >= 0 || mappedLogFileAddr != NULL)
 				XLogFileClose();
 			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
 							wal_segment_size);
 
 			/* create/use new log file */
 			use_existent = true;
-			openLogFile = XLogFileInit(openLogSegNo, &use_existent, true);
+			openLogFile = XLogFileInit(openLogSegNo, &use_existent,
+					true, &mappedLogFileAddr);
 			openLogOff = 0;
 		}
 
 		/* Make sure we have the current logfile open */
-		if (openLogFile < 0)
+		if (openLogFile < 0 && mappedLogFileAddr == NULL)
 		{
 			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
 							wal_segment_size);
-			openLogFile = XLogFileOpen(openLogSegNo);
+			openLogFile = XLogFileOpen(openLogSegNo,
+					&mappedLogFileAddr);
 			openLogOff = 0;
 		}
 
@@ -2474,12 +2493,13 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			/* Need to seek in the file? */
 			if (openLogOff != startoffset)
 			{
-				if (lseek(openLogFile, (off_t) startoffset, SEEK_SET) < 0)
-					ereport(PANIC,
-							(errcode_for_file_access(),
-							 errmsg("could not seek in log file %s to offset %u: %m",
-									XLogFileNameP(ThisTimeLineID, openLogSegNo),
-									startoffset)));
+				if (mappedLogFileAddr == NULL)
+					if (lseek(openLogFile, (off_t) startoffset, SEEK_SET) < 0)
+						ereport(PANIC,
+								(errcode_for_file_access(),
+								 errmsg("could not seek in log file %s to offset %u: %m",
+									 XLogFileNameP(ThisTimeLineID, openLogSegNo),
+									 startoffset)));
 				openLogOff = startoffset;
 			}
 
@@ -2490,6 +2510,13 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			do
 			{
 				errno = 0;
+				if (mappedLogFileAddr != NULL)
+				{
+					pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+					PmemFileWrite((char *)mappedLogFileAddr+openLogOff, from, nleft);
+					pgstat_report_wait_end();
+					break;
+				}
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
 				written = write(openLogFile, from, nleft);
 				pgstat_report_wait_end();
@@ -2586,15 +2613,16 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		if (sync_method != SYNC_METHOD_OPEN &&
 			sync_method != SYNC_METHOD_OPEN_DSYNC)
 		{
-			if (openLogFile >= 0 &&
+			if ((openLogFile >= 0 || mappedLogFileAddr != NULL) &&
 				!XLByteInPrevSeg(LogwrtResult.Write, openLogSegNo,
 								 wal_segment_size))
 				XLogFileClose();
-			if (openLogFile < 0)
+			if (openLogFile < 0 && mappedLogFileAddr == NULL)
 			{
 				XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
 								wal_segment_size);
-				openLogFile = XLogFileOpen(openLogSegNo);
+				openLogFile = XLogFileOpen(openLogSegNo,
+						&mappedLogFileAddr);
 				openLogOff = 0;
 			}
 
@@ -3007,7 +3035,7 @@ XLogBackgroundFlush(void)
 	 */
 	if (WriteRqst.Write <= LogwrtResult.Flush)
 	{
-		if (openLogFile >= 0)
+		if (openLogFile >= 0 || mappedLogFileAddr != NULL)
 		{
 			if (!XLByteInPrevSeg(LogwrtResult.Write, openLogSegNo,
 								 wal_segment_size))
@@ -3178,7 +3206,8 @@ XLogNeedsFlush(XLogRecPtr record)
  * in a critical section.
  */
 int
-XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
+XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock,
+		void **addr)
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
@@ -3188,6 +3217,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	XLogSegNo	max_segno;
 	int			fd;
 	int			nbytes;
+	void	*tmpaddr = NULL;
+	bool	fsync_file = true;
 
 	XLogFilePath(path, ThisTimeLineID, logsegno, wal_segment_size);
 
@@ -3196,16 +3227,20 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	 */
 	if (*use_existent)
 	{
-		fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
-		if (fd < 0)
+		fd = do_XLogFileOpen(path,
+				O_RDWR | PG_BINARY | get_sync_bit(sync_method),
+				&tmpaddr);
+		if (fd < 0 && tmpaddr == NULL)
 		{
 			if (errno != ENOENT)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not open file \"%s\": %m", path)));
 		}
-		else
+		else {
+			*addr = tmpaddr;
 			return fd;
+		}
 	}
 
 	/*
@@ -3221,8 +3256,9 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	unlink(tmppath);
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = BasicOpenFile(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (fd < 0)
+	fd = do_XLogFileOpen(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+			&tmpaddr);
+	if (fd < 0 && tmpaddr == NULL)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", tmppath)));
@@ -3243,40 +3279,53 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	memset(zbuffer, 0, XLOG_BLCKSZ);
 	for (nbytes = 0; nbytes < wal_segment_size; nbytes += XLOG_BLCKSZ)
 	{
-		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
-		if ((int) write(fd, zbuffer, XLOG_BLCKSZ) != (int) XLOG_BLCKSZ)
+		if (tmpaddr != NULL)
 		{
-			int			save_errno = errno;
+			fsync_file = false;
+			pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
+			PmemFileWrite((char *)tmpaddr+nbytes, zbuffer,
+					XLOG_BLCKSZ);
+		}
+		else
+		{
+			errno = 0;
+			pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
+			if ((int) write(fd, zbuffer, XLOG_BLCKSZ) != (int) XLOG_BLCKSZ)
+			{
+				int			save_errno = errno;
 
-			/*
-			 * If we fail to make the file, delete it to release disk space
-			 */
-			unlink(tmppath);
+				/*
+				 * If we fail to make the file, delete it
+				 * to release disk space
+				 */
+				unlink(tmppath);
 
-			close(fd);
+				close(fd);
 
-			/* if write didn't set errno, assume problem is no disk space */
-			errno = save_errno ? save_errno : ENOSPC;
+				/* if write didn't set errno, assume problem is
+				 * no disk space */
+				errno = save_errno ? save_errno : ENOSPC;
 
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tmppath)));
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not write to file \"%s\": %m",
+							 tmppath)));
+			}
 		}
 		pgstat_report_wait_end();
 	}
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (xlog_fsync(fd, tmpaddr) != 0)
 	{
-		close(fd);
+		do_XLogFileClose(fd, tmpaddr);
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	}
 	pgstat_report_wait_end();
 
-	if (close(fd))
+	if (do_XLogFileClose(fd, tmpaddr))
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tmppath)));
@@ -3303,7 +3352,8 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	max_segno = logsegno + CheckPointSegments;
 	if (!InstallXLogFileSegment(&installed_segno, tmppath,
 								*use_existent, max_segno,
-								use_lock))
+								use_lock,
+								fsync_file))
 	{
 		/*
 		 * No need for any more future segments, or InstallXLogFileSegment()
@@ -3317,8 +3367,10 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	*use_existent = false;
 
 	/* Now open original target segment (might not be file I just made) */
-	fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
-	if (fd < 0)
+	fd = do_XLogFileOpen(path,
+			O_RDWR | PG_BINARY | get_sync_bit(sync_method), addr);
+
+	if (fd < 0 && *addr == NULL)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", path)));
@@ -3353,13 +3405,21 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 	int			srcfd;
 	int			fd;
 	int			nbytes;
+	void		*src_addr = NULL, *dst_addr = NULL;
+	bool		fsync_file = true;
 
 	/*
 	 * Open the source file
 	 */
 	XLogFilePath(path, srcTLI, srcsegno, wal_segment_size);
-	srcfd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
-	if (srcfd < 0)
+	if (sync_method == SYNC_METHOD_PMEM_DRAIN)
+		srcfd = MapTransientFile(path, O_RDONLY | PG_BINARY,
+				wal_segment_size, &src_addr);
+
+	if (src_addr == NULL)
+		srcfd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+
+	if (srcfd < 0 && src_addr == NULL)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", path)));
@@ -3372,15 +3432,32 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 	unlink(tmppath);
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = OpenTransientFile(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (fd < 0)
+	if ( src_addr != NULL && sync_method == SYNC_METHOD_PMEM_DRAIN)
+		fd = MapTransientFile(tmppath,
+				O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+				wal_segment_size, &dst_addr);
+	else
+		fd = OpenTransientFile(tmppath,
+				O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+
+	if (fd < 0 && dst_addr == NULL)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not create file \"%s\": %m", tmppath)));
+				 errmsg("could not create file \"%s\": %m",
+					 tmppath)));
 
 	/*
 	 * Do the data copying.
 	 */
+	if (src_addr && dst_addr) {
+		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_READ);
+		PmemFileWrite(dst_addr, src_addr, wal_segment_size);
+		pgstat_report_wait_end();
+		fsync_file = false;
+
+		goto done_copy;
+	}
+
 	for (nbytes = 0; nbytes < wal_segment_size; nbytes += sizeof(buffer))
 	{
 		int			nread;
@@ -3429,29 +3506,42 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tmppath)));
+					 errmsg("could not write to file \"%s\": %m",
+						 tmppath)));
 		}
 		pgstat_report_wait_end();
 	}
 
+done_copy:
 	pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (xlog_fsync(fd, dst_addr) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd))
+	if (dst_addr)
+	{
+		if (UnmapTransientFile(dst_addr, wal_segment_size))
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not unmap file \"%s\": %m",
+						 tmppath)));
+	}
+	else if (CloseTransientFile(fd))
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tmppath)));
 
-	CloseTransientFile(srcfd);
+	if (src_addr)
+		UnmapTransientFile(src_addr, wal_segment_size);
+	else
+		CloseTransientFile(srcfd);
 
 	/*
 	 * Now move the segment into place with its final name.
 	 */
-	if (!InstallXLogFileSegment(&destsegno, tmppath, false, 0, false))
+	if (!InstallXLogFileSegment(&destsegno, tmppath, false, 0, false, fsync_file))
 		elog(ERROR, "InstallXLogFileSegment should not have failed");
 }
 
@@ -3486,7 +3576,7 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 static bool
 InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 					   bool find_free, XLogSegNo max_segno,
-					   bool use_lock)
+					   bool use_lock, bool fsync_file)
 {
 	char		path[MAXPGPATH];
 	struct stat stat_buf;
@@ -3525,7 +3615,7 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 	 * Perform the rename using link if available, paranoidly trying to avoid
 	 * overwriting an existing file (there shouldn't be one).
 	 */
-	if (durable_link_or_rename(tmppath, path, LOG) != 0)
+	if (durable_link_or_rename(tmppath, path, LOG, fsync_file) != 0)
 	{
 		if (use_lock)
 			LWLockRelease(ControlFileLock);
@@ -3543,15 +3633,16 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
  * Open a pre-existing logfile segment for writing.
  */
 int
-XLogFileOpen(XLogSegNo segno)
+XLogFileOpen(XLogSegNo segno, void **addr)
 {
 	char		path[MAXPGPATH];
 	int			fd;
 
 	XLogFilePath(path, ThisTimeLineID, segno, wal_segment_size);
 
-	fd = BasicOpenFile(path, O_RDWR | PG_BINARY | get_sync_bit(sync_method));
-	if (fd < 0)
+	fd = do_XLogFileOpen(path,
+			O_RDWR | PG_BINARY | get_sync_bit(sync_method), addr);
+	if (fd < 0 && *addr == NULL)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not open write-ahead log file \"%s\": %m", path)));
@@ -3567,7 +3658,7 @@ XLogFileOpen(XLogSegNo segno)
  */
 static int
 XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
-			 int source, bool notfoundOk)
+			 int source, bool notfoundOk, void **addr)
 {
 	char		xlogfname[MAXFNAMELEN];
 	char		activitymsg[MAXFNAMELEN + 16];
@@ -3616,8 +3707,8 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlogfname);
 	}
 
-	fd = BasicOpenFile(path, O_RDONLY | PG_BINARY);
-	if (fd >= 0)
+	fd = do_XLogFileOpen(path, O_RDONLY | PG_BINARY, addr);
+	if (fd >= 0 || *addr != NULL)
 	{
 		/* Success! */
 		curFileTLI = tli;
@@ -3649,7 +3740,7 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
  * This version searches for the segment with any TLI listed in expectedTLEs.
  */
 static int
-XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source)
+XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source, void **addr)
 {
 	char		path[MAXPGPATH];
 	ListCell   *cell;
@@ -3689,8 +3780,8 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source)
 		if (source == XLOG_FROM_ANY || source == XLOG_FROM_ARCHIVE)
 		{
 			fd = XLogFileRead(segno, emode, tli,
-							  XLOG_FROM_ARCHIVE, true);
-			if (fd != -1)
+					XLOG_FROM_ARCHIVE, true, addr);
+			if (fd != -1 || *addr != NULL)
 			{
 				elog(DEBUG1, "got WAL segment from archive");
 				if (!expectedTLEs)
@@ -3702,8 +3793,8 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source)
 		if (source == XLOG_FROM_ANY || source == XLOG_FROM_PG_WAL)
 		{
 			fd = XLogFileRead(segno, emode, tli,
-							  XLOG_FROM_PG_WAL, true);
-			if (fd != -1)
+					XLOG_FROM_PG_WAL, true, addr);
+			if (fd != -1 || *addr != NULL)
 			{
 				if (!expectedTLEs)
 					expectedTLEs = tles;
@@ -3721,13 +3812,22 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source)
 	return -1;
 }
 
+int
+do_XLogFileClose(int fd, void *addr)
+{
+	if (!addr)
+		return close(fd);
+
+	return PmemFileClose(addr, wal_segment_size);
+}
+
 /*
  * Close the current logfile segment for writing.
  */
 static void
 XLogFileClose(void)
 {
-	Assert(openLogFile >= 0);
+	Assert(openLogFile >= 0 || mappedLogFileAddr != NULL);
 
 	/*
 	 * WAL segment files will not be re-read in normal operation, so we advise
@@ -3736,15 +3836,16 @@ XLogFileClose(void)
 	 * use the cache to read the WAL segment.
 	 */
 #if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
-	if (!XLogIsNeeded())
+	if (!XLogIsNeeded() && openLogFile > 0)
 		(void) posix_fadvise(openLogFile, 0, 0, POSIX_FADV_DONTNEED);
 #endif
 
-	if (close(openLogFile))
+	if (do_XLogFileClose(openLogFile, mappedLogFileAddr))
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close log file %s: %m",
 						XLogFileNameP(ThisTimeLineID, openLogSegNo))));
+	mappedLogFileAddr = NULL;
 	openLogFile = -1;
 }
 
@@ -3764,6 +3865,7 @@ PreallocXlogFiles(XLogRecPtr endptr)
 	XLogSegNo	_logSegNo;
 	int			lf;
 	bool		use_existent;
+	void		*laddr = NULL;
 	uint64		offset;
 
 	XLByteToPrevSeg(endptr, _logSegNo, wal_segment_size);
@@ -3772,8 +3874,8 @@ PreallocXlogFiles(XLogRecPtr endptr)
 	{
 		_logSegNo++;
 		use_existent = true;
-		lf = XLogFileInit(_logSegNo, &use_existent, true);
-		close(lf);
+		lf = XLogFileInit(_logSegNo, &use_existent, true, &laddr);
+		do_XLogFileClose(lf, laddr);
 		if (!use_existent)
 			CheckpointStats.ckpt_segs_added++;
 	}
@@ -3993,6 +4095,7 @@ RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 	struct stat statbuf;
 	XLogSegNo	endlogSegNo;
 	XLogSegNo	recycleSegNo;
+	bool		fsync_file = true;
 
 	/*
 	 * Initialize info about where to try to recycle to.
@@ -4005,6 +4108,9 @@ RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 
 	snprintf(path, MAXPGPATH, XLOGDIR "/%s", segname);
 
+	if (sync_method == SYNC_METHOD_PMEM_DRAIN)
+		fsync_file = false;
+
 	/*
 	 * Before deleting the file, see if it can be recycled as a future log
 	 * segment. Only recycle normal files, pg_standby for example can create
@@ -4013,7 +4119,7 @@ RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 	if (endlogSegNo <= recycleSegNo &&
 		lstat(path, &statbuf) == 0 && S_ISREG(statbuf.st_mode) &&
 		InstallXLogFileSegment(&endlogSegNo, path,
-							   true, recycleSegNo, true))
+			true, recycleSegNo, true, fsync_file))
 	{
 		ereport(DEBUG2,
 				(errmsg("recycled write-ahead log file \"%s\"",
@@ -4183,9 +4289,10 @@ ReadRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr, int emode,
 		EndRecPtr = xlogreader->EndRecPtr;
 		if (record == NULL)
 		{
-			if (readFile >= 0)
+			if (readFile >= 0 || mappedReadFileAddr != NULL)
 			{
-				close(readFile);
+				do_XLogFileClose(readFile, mappedReadFileAddr);
+				mappedReadFileAddr = NULL;
 				readFile = -1;
 			}
 
@@ -4699,7 +4806,8 @@ UpdateControlFile(void)
 	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE);
 	if (write(fd, ControlFile, sizeof(ControlFileData)) != sizeof(ControlFileData))
 	{
-		/* if write didn't set errno, assume problem is no disk space */
+		/* if write didn't set errno, assume problem is no disk
+		 * space */
 		if (errno == 0)
 			errno = ENOSPC;
 		ereport(PANIC,
@@ -5206,34 +5314,44 @@ BootStrapXLOG(void)
 
 	/* Create first XLOG segment file */
 	use_existent = false;
-	openLogFile = XLogFileInit(1, &use_existent, false);
+	openLogFile = XLogFileInit(1, &use_existent, false, &mappedLogFileAddr);
 
 	/* Write the first page with the initial record */
 	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
-	if (write(openLogFile, page, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+
+	if (mappedLogFileAddr != NULL)
 	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not write bootstrap write-ahead log file: %m")));
+		pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
+		PmemFileWrite(mappedLogFileAddr, page, XLOG_BLCKSZ);
+	}
+	else
+	{
+		pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_WRITE);
+		if (write(openLogFile, page, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+		{
+			/* if write didn't set errno, assume problem is no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not write bootstrap write-ahead log file: %m")));
+		}
 	}
 	pgstat_report_wait_end();
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_BOOTSTRAP_SYNC);
-	if (pg_fsync(openLogFile) != 0)
+	if (xlog_fsync(openLogFile, (void *)mappedLogFileAddr) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync bootstrap write-ahead log file: %m")));
 	pgstat_report_wait_end();
 
-	if (close(openLogFile))
+	if (do_XLogFileClose(openLogFile, mappedLogFileAddr))
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close bootstrap write-ahead log file: %m")));
 
+	mappedLogFileAddr = NULL;
 	openLogFile = -1;
 
 	/* Now create pg_control */
@@ -5649,9 +5767,10 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog)
 	 * If the ending log segment is still open, close it (to avoid problems on
 	 * Windows with trying to rename or delete an open file).
 	 */
-	if (readFile >= 0)
+	if (readFile >= 0 || mappedReadFileAddr != NULL)
 	{
-		close(readFile);
+		do_XLogFileClose(readFile, mappedReadFileAddr);
+		mappedReadFileAddr = NULL;
 		readFile = -1;
 	}
 
@@ -5690,10 +5809,11 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog)
 		 */
 		bool		use_existent = true;
 		int			fd;
+		void		*tmpaddr = NULL;
 
-		fd = XLogFileInit(startLogSegNo, &use_existent, true);
+		fd = XLogFileInit(startLogSegNo, &use_existent, true, &tmpaddr);
 
-		if (close(fd))
+		if (do_XLogFileClose(fd, tmpaddr))
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not close log file %s: %m",
@@ -7843,9 +7963,10 @@ StartupXLOG(void)
 		ShutdownRecoveryTransactionEnvironment();
 
 	/* Shut down xlogreader */
-	if (readFile >= 0)
+	if (readFile >= 0 || mappedReadFileAddr != NULL)
 	{
-		close(readFile);
+		do_XLogFileClose(readFile, mappedReadFileAddr);
+		mappedReadFileAddr = NULL;
 		readFile = -1;
 	}
 	XLogReaderFree(xlogreader);
@@ -10191,6 +10312,9 @@ get_sync_bit(int method)
 		case SYNC_METHOD_FSYNC:
 		case SYNC_METHOD_FSYNC_WRITETHROUGH:
 		case SYNC_METHOD_FDATASYNC:
+#ifdef USE_LIBPMEM
+		case SYNC_METHOD_PMEM_DRAIN:
+#endif
 			return 0;
 #ifdef OPEN_SYNC_FLAG
 		case SYNC_METHOD_OPEN:
@@ -10208,7 +10332,36 @@ get_sync_bit(int method)
 }
 
 /*
- * GUC support
+ * GUC check_hook for xlog_sync_method
+ */
+bool
+check_xlog_sync_method(int *newval, void **extra, GucSource source)
+{
+	bool ret;
+	char tmppath[MAXPGPATH] = {};
+	int val = newval ? *newval : sync_method;
+
+	if (val != SYNC_METHOD_PMEM_DRAIN)
+		return true;
+
+	snprintf(tmppath, MAXPGPATH, "%s/" XLOGDIR "/pmem.tmp", DataDir);
+
+	ret = CheckPmem(tmppath);
+
+	if (!ret)
+	{
+		GUC_check_errcode(ERRCODE_INVALID_PARAMETER_VALUE);
+		GUC_check_errmsg("invalid value for parameter \"wal_sync_method\": \"pmem_drain\"");
+		GUC_check_errmsg("%s isn't stored on persistent memory(pmem_is_pmem() returned false).",
+				XLOGDIR);
+		GUC_check_errhint("Please see also ENVIRONMENT VARIABLES section in man libpmem.");
+	}
+
+	return ret;
+}
+
+/*
+ * GUC assign_hook for xlog_sync_method
  */
 void
 assign_xlog_sync_method(int new_sync_method, void *extra)
@@ -10221,10 +10374,10 @@ assign_xlog_sync_method(int new_sync_method, void *extra)
 		 * changing, close the log file so it will be reopened (with new flag
 		 * bit) at next use.
 		 */
-		if (openLogFile >= 0)
+		if (openLogFile >= 0 || mappedLogFileAddr != NULL)
 		{
 			pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN);
-			if (pg_fsync(openLogFile) != 0)
+			if (xlog_fsync(openLogFile, (void *)mappedLogFileAddr) != 0)
 				ereport(PANIC,
 						(errcode_for_file_access(),
 						 errmsg("could not fsync log segment %s: %m",
@@ -10273,6 +10426,11 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 								XLogFileNameP(ThisTimeLineID, segno))));
 			break;
 #endif
+#ifdef USE_LIBPMEM
+		case SYNC_METHOD_PMEM_DRAIN:
+			PmemFileSync();
+			break;
+#endif
 		case SYNC_METHOD_OPEN:
 		case SYNC_METHOD_OPEN_DSYNC:
 			/* write synced it already */
@@ -10282,6 +10440,17 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 			break;
 	}
 }
+
+int
+xlog_fsync(int fd, void *addr)
+{
+	if (!addr)
+		return pg_fsync(fd);
+
+	PmemFileSync();
+	return 0;
+}
+
 
 /*
  * Return the filename of given log segment, as a palloc'd string.
@@ -11694,7 +11863,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	 * See if we need to switch to a new segment because the requested record
 	 * is not in the currently open one.
 	 */
-	if (readFile >= 0 &&
+	if ((readFile >= 0 || mappedReadFileAddr != NULL) &&
 		!XLByteInSeg(targetPagePtr, readSegNo, wal_segment_size))
 	{
 		/*
@@ -11711,7 +11880,8 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 			}
 		}
 
-		close(readFile);
+		do_XLogFileClose(readFile, mappedReadFileAddr);
+		mappedReadFileAddr = NULL;
 		readFile = -1;
 		readSource = 0;
 	}
@@ -11720,7 +11890,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 
 retry:
 	/* See if we need to retrieve more data */
-	if (readFile < 0 ||
+	if ((readFile < 0 && mappedReadFileAddr == NULL) ||
 		(readSource == XLOG_FROM_STREAM &&
 		 receivedUpto < targetPagePtr + reqLen))
 	{
@@ -11729,8 +11899,9 @@ retry:
 										 private->fetching_ckpt,
 										 targetRecPtr))
 		{
-			if (readFile >= 0)
-				close(readFile);
+			if (readFile >= 0 || mappedReadFileAddr != NULL)
+				do_XLogFileClose(readFile, mappedReadFileAddr);
+			mappedReadFileAddr = NULL;
 			readFile = -1;
 			readLen = 0;
 			readSource = 0;
@@ -11743,7 +11914,7 @@ retry:
 	 * At this point, we have the right segment open and if we're streaming we
 	 * know the requested record is in it.
 	 */
-	Assert(readFile != -1);
+	Assert(readFile != -1 || mappedReadFileAddr != NULL);
 
 	/*
 	 * If the current segment is being streamed from master, calculate how
@@ -11764,30 +11935,44 @@ retry:
 
 	/* Read the requested page */
 	readOff = targetPageOff;
-	if (lseek(readFile, (off_t) readOff, SEEK_SET) < 0)
-	{
-		char		fname[MAXFNAMELEN];
+	if (mappedReadFileAddr == NULL) {
+		if (lseek(readFile, (off_t) readOff, SEEK_SET) < 0)
+		{
+			char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, curFileTLI, readSegNo, wal_segment_size);
-		ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
-				(errcode_for_file_access(),
-				 errmsg("could not seek in log segment %s to offset %u: %m",
-						fname, readOff)));
-		goto next_record_is_invalid;
+			XLogFileName(fname, curFileTLI, readSegNo,
+					wal_segment_size);
+			ereport(emode_for_corrupt_record(emode,
+						targetPagePtr + reqLen),
+					(errcode_for_file_access(),
+					 errmsg("could not seek in log segment %s to offset %u: %m",
+						 fname, readOff)));
+			goto next_record_is_invalid;
+		}
 	}
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
-	if (read(readFile, readBuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
-	{
-		char		fname[MAXFNAMELEN];
+	if (mappedReadFileAddr) {
+		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+		PmemFileRead((char *)mappedReadFileAddr+readOff, readBuf,
+				XLOG_BLCKSZ);
 
-		pgstat_report_wait_end();
-		XLogFileName(fname, curFileTLI, readSegNo, wal_segment_size);
-		ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
-				(errcode_for_file_access(),
-				 errmsg("could not read from log segment %s, offset %u: %m",
-						fname, readOff)));
-		goto next_record_is_invalid;
+	}
+	else {
+		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+		if (read(readFile, readBuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+		{
+			char		fname[MAXFNAMELEN];
+
+			pgstat_report_wait_end();
+			XLogFileName(fname, curFileTLI, readSegNo,
+					wal_segment_size);
+			ereport(emode_for_corrupt_record(emode,
+						targetPagePtr + reqLen),
+					(errcode_for_file_access(),
+					 errmsg("could not read from log segment %s, offset %u: %m",
+						 fname, readOff)));
+			goto next_record_is_invalid;
+		}
 	}
 	pgstat_report_wait_end();
 
@@ -11801,8 +11986,9 @@ retry:
 next_record_is_invalid:
 	lastSourceFailed = true;
 
-	if (readFile >= 0)
-		close(readFile);
+	if (readFile >= 0 || mappedReadFileAddr != NULL)
+		do_XLogFileClose(readFile, mappedReadFileAddr);
+	mappedReadFileAddr = NULL;
 	readFile = -1;
 	readLen = 0;
 	readSource = 0;
@@ -12051,9 +12237,11 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			case XLOG_FROM_ARCHIVE:
 			case XLOG_FROM_PG_WAL:
 				/* Close any old file we might have open. */
-				if (readFile >= 0)
+				if (readFile >= 0 || mappedReadFileAddr != NULL)
 				{
-					close(readFile);
+					do_XLogFileClose(readFile,
+							mappedReadFileAddr);
+					mappedReadFileAddr = NULL;
 					readFile = -1;
 				}
 				/* Reset curFileTLI if random fetch. */
@@ -12066,8 +12254,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				 */
 				readFile = XLogFileReadAnyTLI(readSegNo, DEBUG2,
 											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
-											  currentSource);
-				if (readFile >= 0)
+											  currentSource, &mappedReadFileAddr);
+				if (readFile >= 0 || mappedReadFileAddr != NULL)
 					return true;	/* success! */
 
 				/*
@@ -12131,14 +12319,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						 * info is set correctly and XLogReceiptTime isn't
 						 * changed.
 						 */
-						if (readFile < 0)
+						if (readFile < 0 && mappedReadFileAddr == NULL)
 						{
 							if (!expectedTLEs)
 								expectedTLEs = readTimeLineHistory(receiveTLI);
 							readFile = XLogFileRead(readSegNo, PANIC,
 													receiveTLI,
-													XLOG_FROM_STREAM, false);
-							Assert(readFile >= 0);
+													XLOG_FROM_STREAM, false, &mappedReadFileAddr);
+							Assert(readFile >= 0 || mappedReadFileAddr != NULL);
 						}
 						else
 						{

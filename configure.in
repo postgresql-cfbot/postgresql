@@ -908,6 +908,14 @@ PGAC_ARG_BOOL(with, libxslt, no, [use XSLT support when building contrib/xml2],
 AC_SUBST(with_libxslt)
 
 #
+# PMEM
+#
+PGAC_ARG_BOOL(with, libpmem, no, [use PMEM support for WAL I/O],
+	      [AC_DEFINE([USE_LIBPMEM], 1, [Define to 1 to use PMEM support for WAL I/O. (--with-libpmem)])])
+
+AC_SUBST(with_libpmem)
+
+#
 # tzdata
 #
 PGAC_ARG_REQ(with, system-tzdata,
@@ -1185,6 +1193,10 @@ if test "$with_libxslt" = yes ; then
   AC_CHECK_LIB(xslt, xsltCleanupGlobals, [], [AC_MSG_ERROR([library 'xslt' is required for XSLT support])])
 fi
 
+if test "$with_libpmem" = yes ; then
+  AC_CHECK_LIB(pmem, pmem_map_file, [], [AC_MSG_ERROR([library 'pmem' is required for PMEM support])])
+fi
+
 # Note: We can test for libldap_r only after we know PTHREAD_LIBS
 if test "$with_ldap" = yes ; then
   _LIBS="$LIBS"
@@ -1343,6 +1355,10 @@ fi
 
 if test "$with_libxslt" = yes ; then
   AC_CHECK_HEADER(libxslt/xslt.h, [], [AC_MSG_ERROR([header file <libxslt/xslt.h> is required for XSLT support])])
+fi
+
+if test "$with_libpmem" = yes ; then
+  AC_CHECK_HEADER(libpmem.h, [], [AC_MSG_ERROR([header file <libpmem.h> is required for PMEM support])])
 fi
 
 if test "$with_ldap" = yes ; then

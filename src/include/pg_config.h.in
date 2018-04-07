@@ -365,6 +365,9 @@
 /* Define to 1 if you have the `xslt' library (-lxslt). */
 #undef HAVE_LIBXSLT
 
+/* Define to 1 if you have the `pmem' library (-lpmem). */
+#undef HAVE_LIBPMEM
+
 /* Define to 1 if you have the `z' library (-lz). */
 #undef HAVE_LIBZ
 
@@ -886,6 +889,9 @@
 
 /* Define to 1 to build with LLVM based JIT support. (--with-llvm) */
 #undef USE_LLVM
+
+/* Define to 1 to use PMEM support for WAL I/O. (--with-libpmem) */
+#undef USE_LIBPMEM
 
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES

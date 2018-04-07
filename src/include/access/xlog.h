@@ -27,6 +27,7 @@
 #define SYNC_METHOD_OPEN		2	/* for O_SYNC */
 #define SYNC_METHOD_FSYNC_WRITETHROUGH	3
 #define SYNC_METHOD_OPEN_DSYNC	4	/* for O_DSYNC */
+#define SYNC_METHOD_PMEM_DRAIN	5		/* for Persistent Memory Development Kit */
 extern int	sync_method;
 
 extern PGDLLIMPORT TimeLineID ThisTimeLineID;	/* current TLI */
@@ -226,8 +227,10 @@ extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 extern void XLogFlush(XLogRecPtr RecPtr);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr RecPtr);
-extern int	XLogFileInit(XLogSegNo segno, bool *use_existent, bool use_lock);
-extern int	XLogFileOpen(XLogSegNo segno);
+extern int	XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock,
+		void **addr);
+extern int	XLogFileOpen(XLogSegNo segno, void **addr);
+extern int	do_XLogFileClose(int fd, void *addr);
 
 extern void CheckXLogRemoved(XLogSegNo segno, TimeLineID tli);
 extern XLogSegNo XLogGetLastRemovedSegno(void);
@@ -239,6 +242,7 @@ extern void xlog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *xlog_identify(uint8 info);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno);
+extern int	xlog_fsync(int fd, void *addr);
 
 extern bool RecoveryInProgress(void);
 extern bool HotStandbyActive(void);

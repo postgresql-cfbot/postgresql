@@ -134,7 +134,7 @@ INIT
 
 =over
 
-=item PostgresNode::new($class, $name, $pghost, $pgport)
+=item PostgresNode::new($class, $name, $pghost, $pgport, $bindir)
 
 Create a new PostgresNode instance. Does not initdb or start it.
 
@@ -145,13 +145,14 @@ of finding port numbers, registering instances for cleanup, etc.
 
 sub new
 {
-	my ($class, $name, $pghost, $pgport) = @_;
+	my ($class, $name, $pghost, $pgport, $bindir) = @_;
 	my $testname = basename($0);
 	$testname =~ s/\.[^.]+$//;
 	my $self = {
 		_port    => $pgport,
 		_host    => $pghost,
 		_basedir => "$TestLib::tmp_check/t_${testname}_${name}_data",
+		_bindir  => $bindir,
 		_name    => $name,
 		_logfile => "$TestLib::log_path/${testname}_${name}.log" };
 
@@ -285,6 +286,20 @@ sub data_dir
 
 =pod
 
+=item $node->bin_dir()
+
+Returns the path to the binary directory used by this node.
+
+=cut
+
+sub bin_dir
+{
+	my ($self) = @_;
+	return $self->{_bindir};
+}
+
+=pod
+
 =item $node->archive_dir()
 
 If archiving is enabled, WAL files go here.
@@ -329,6 +344,7 @@ sub info
 	open my $fh, '>', \$_info or die;
 	print $fh "Name: " . $self->name . "\n";
 	print $fh "Data directory: " . $self->data_dir . "\n";
+	print $fh "Binary directory: " . $self->bin_dir . "\n";
 	print $fh "Backup directory: " . $self->backup_dir . "\n";
 	print $fh "Archive directory: " . $self->archive_dir . "\n";
 	print $fh "Connection string: " . $self->connstr . "\n";
@@ -402,17 +418,19 @@ sub init
 	my ($self, %params) = @_;
 	my $port   = $self->port;
 	my $pgdata = $self->data_dir;
+	my $bindir = $self->bin_dir;
 	my $host   = $self->host;
 
 	$params{allows_streaming} = 0 unless defined $params{allows_streaming};
 	$params{has_archiving}    = 0 unless defined $params{has_archiving};
+	$params{pg_regress} = $ENV{PG_REGRESS} unless defined $params{pg_regress};
 
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
-	TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
-		@{ $params{extra} });
-	TestLib::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata);
+	TestLib::system_or_bail("$bindir/initdb", '-D', $pgdata, '-A', 'trust',
+		'-N', @{ $params{extra} });
+	TestLib::system_or_bail($params{pg_regress}, '--config-auth', $pgdata);
 
 	open my $conf, '>>', "$pgdata/postgresql.conf";
 	print $conf "\n# Added by PostgresNode.pm\n";
@@ -503,12 +521,13 @@ sub backup
 {
 	my ($self, $backup_name) = @_;
 	my $backup_path = $self->backup_dir . '/' . $backup_name;
+	my $bindir      = $self->bin_dir;
 	my $port        = $self->port;
 	my $name        = $self->name;
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
-	TestLib::system_or_bail('pg_basebackup', '-D', $backup_path, '-p', $port,
-		'--no-sync');
+	TestLib::system_or_bail("$bindir/pg_basebackup", '-D', $backup_path,
+		'-p', $port, '--no-sync');
 	print "# Backup finished\n";
 }
 
@@ -661,11 +680,12 @@ sub start
 	my ($self) = @_;
 	my $port   = $self->port;
 	my $pgdata = $self->data_dir;
+	my $bindir = $self->bin_dir;
 	my $name   = $self->name;
 	BAIL_OUT("node \"$name\" is already running") if defined $self->{_pid};
 	print("### Starting node \"$name\"\n");
-	my $ret = TestLib::system_log('pg_ctl', '-D', $self->data_dir, '-l',
-		$self->logfile, 'start');
+	my $ret = TestLib::system_log("$bindir/pg_ctl", '-D', $self->data_dir,
+		'-l', $self->logfile, '-w', 'start');
 
 	if ($ret != 0)
 	{
@@ -694,11 +714,13 @@ sub stop
 	my ($self, $mode) = @_;
 	my $port   = $self->port;
 	my $pgdata = $self->data_dir;
+	my $bindir = $self->bin_dir;
 	my $name   = $self->name;
 	$mode = 'fast' unless defined $mode;
 	return unless defined $self->{_pid};
 	print "### Stopping node \"$name\" using mode $mode\n";
-	TestLib::system_or_bail('pg_ctl', '-D', $pgdata, '-m', $mode, 'stop');
+	TestLib::system_or_bail("$bindir/pg_ctl", '-D', $pgdata, '-m', $mode,
+		'stop');
 	$self->_update_pid(0);
 }
 
@@ -715,9 +737,10 @@ sub reload
 	my ($self) = @_;
 	my $port   = $self->port;
 	my $pgdata = $self->data_dir;
+	my $bindir = $self->bin_dir;
 	my $name   = $self->name;
 	print "### Reloading node \"$name\"\n";
-	TestLib::system_or_bail('pg_ctl', '-D', $pgdata, 'reload');
+	TestLib::system_or_bail("$bindir/pg_ctl", '-D', $pgdata, 'reload');
 }
 
 =pod
@@ -733,10 +756,11 @@ sub restart
 	my ($self)  = @_;
 	my $port    = $self->port;
 	my $pgdata  = $self->data_dir;
+	my $bindir  = $self->bin_dir;
 	my $logfile = $self->logfile;
 	my $name    = $self->name;
 	print "### Restarting node \"$name\"\n";
-	TestLib::system_or_bail('pg_ctl', '-D', $pgdata, '-l', $logfile,
+	TestLib::system_or_bail("$bindir/pg_ctl", '-D', $pgdata, '-l', $logfile,
 		'restart');
 	$self->_update_pid(1);
 }
@@ -754,10 +778,11 @@ sub promote
 	my ($self)  = @_;
 	my $port    = $self->port;
 	my $pgdata  = $self->data_dir;
+	my $bindir  = $self->bin_dir;
 	my $logfile = $self->logfile;
 	my $name    = $self->name;
 	print "### Promoting node \"$name\"\n";
-	TestLib::system_or_bail('pg_ctl', '-D', $pgdata, '-l', $logfile,
+	TestLib::system_or_bail("$bindir/pg_ctl", '-D', $pgdata, '-l', $logfile,
 		'promote');
 }
 
@@ -861,12 +886,15 @@ sub _update_pid
 
 =pod
 
-=item PostgresNode->get_new_node(node_name)
+=item PostgresNode->get_new_node(node_name [, $bindir ])
 
 Build a new object of class C<PostgresNode> (or of a subclass, if you have
 one), assigning a free port number.  Remembers the node, to prevent its port
 number from being reused for another node, and to ensure that it gets
 shut down when the test script exits.
+
+<$bindir> can be optionally defined to enforce from where this node should
+use the set of binaries controlling it in the tests.
 
 You should generally use this instead of C<PostgresNode::new(...)>.
 
@@ -878,8 +906,9 @@ which can only create objects of class C<PostgresNode>.
 sub get_new_node
 {
 	my $class = 'PostgresNode';
-	$class = shift if 1 < scalar @_;
+	$class = shift if 2 < scalar @_;
 	my $name  = shift;
+	my $bindir = shift;
 	my $found = 0;
 	my $port  = $last_port_assigned;
 
@@ -922,8 +951,21 @@ sub get_new_node
 
 	print "# Found free port $port\n";
 
+	# Find binary directory for this new node.
+	if (!defined($bindir))
+	{
+		# If caller has not defined the binary directory, find it
+		# from pg_config defined in this environment's PATH.
+		my ($stdout, $stderr);
+		my $result = IPC::Run::run [ 'pg_config', '--bindir' ], '>',
+			\$stdout, '2>', \$stderr
+			or die "could not execute pg_config";
+		chomp($stdout);
+		$bindir = $stdout;
+	}
+
 	# Lock port number found by creating a new node
-	my $node = $class->new($name, $test_pghost, $port);
+	my $node = $class->new($name, $test_pghost, $port, $bindir);
 
 	# Add node to list of nodes
 	push(@all_nodes, $node);
@@ -1128,10 +1170,11 @@ sub psql
 
 	my $stdout            = $params{stdout};
 	my $stderr            = $params{stderr};
+	my $bindir            = $self->bin_dir;
 	my $timeout           = undef;
 	my $timeout_exception = 'psql timed out';
 	my @psql_params =
-	  ('psql', '-XAtq', '-d', $self->connstr($dbname), '-f', '-');
+	  ("$bindir/psql", '-XAtq', '-d', $self->connstr($dbname), '-f', '-');
 
 	# If the caller wants an array and hasn't passed stdout/stderr
 	# references, allocate temporary ones to capture them so we
@@ -1276,8 +1319,9 @@ sub poll_query_until
 	my ($self, $dbname, $query, $expected) = @_;
 
 	$expected = 't' unless defined($expected);    # default value
-
-	my $cmd = [ 'psql', '-XAt', '-c', $query, '-d', $self->connstr($dbname) ];
+	my $bindir = $self->bin_dir;
+	my $cmd = [ "$bindir/psql", '-XAt', '-c', $query, '-d',
+				$self->connstr($dbname) ];
 	my ($stdout, $stderr);
 	my $max_attempts = 180 * 10;
 	my $attempts     = 0;
@@ -1667,8 +1711,9 @@ sub pg_recvlogical_upto
 	croak 'slot name must be specified' unless defined($slot_name);
 	croak 'endpos must be specified'    unless defined($endpos);
 
+	my $bindir = $self->bin_dir;
 	my @cmd = (
-		'pg_recvlogical', '-S', $slot_name, '--dbname',
+		"$bindir/pg_recvlogical", '-S', $slot_name, '--dbname',
 		$self->connstr($dbname));
 	push @cmd, '--endpos', $endpos;
 	push @cmd, '-f', '-', '--no-loop', '--start';

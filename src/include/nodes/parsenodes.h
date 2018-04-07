@@ -151,7 +151,8 @@ typedef struct Query
 
 	List	   *windowClause;	/* a list of WindowClause's */
 
-	List	   *distinctClause; /* a list of SortGroupClause's */
+	List	   *distinctClause; /* a list of SortGroupClause's. Not equivalent
+								 * to non-junk targetList items. */
 
 	List	   *sortClause;		/* a list of SortGroupClause's */
 

@@ -125,6 +125,9 @@ static double preprocess_limit(PlannerInfo *root,
 				 int64 *offset_est, int64 *count_est);
 static bool limit_needed(Query *parse);
 static void remove_useless_groupby_columns(PlannerInfo *root);
+static void remove_useless_distinct_columns(PlannerInfo *root);
+static List *remove_functionally_dependent_clauses(PlannerInfo *root,
+									  List *clauselist);
 static List *preprocess_groupclause(PlannerInfo *root, List *force);
 static List *extract_rollup_sets(List *groupingSets);
 static List *reorder_grouping_sets(List *groupingSets, List *sortclause);
@@ -964,6 +967,9 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 
 	/* Remove any redundant GROUP BY columns */
 	remove_useless_groupby_columns(root);
+
+	/* Likewise for redundant DISTINCT columns */
+	remove_useless_distinct_columns(root);
 
 	/*
 	 * If we have any outer joins, try to reduce them to plain inner joins.
@@ -2941,27 +2947,70 @@ static void
 remove_useless_groupby_columns(PlannerInfo *root)
 {
 	Query	   *parse = root->parse;
-	Bitmapset **groupbyattnos;
-	Bitmapset **surplusvars;
-	ListCell   *lc;
-	int			relid;
-
-	/* No chance to do anything if there are less than two GROUP BY items */
-	if (list_length(parse->groupClause) < 2)
-		return;
 
 	/* Don't fiddle with the GROUP BY clause if the query has grouping sets */
 	if (parse->groupingSets)
 		return;
 
+	parse->groupClause = remove_functionally_dependent_clauses(root,
+														parse->groupClause);
+}
+
+/*
+ * remove_useless_distinct_columns
+ *		Similar to remove_useless_groupby_columns but for the DISTINCT clause
+ */
+static void
+remove_useless_distinct_columns(PlannerInfo *root)
+{
+	Query	   *parse = root->parse;
+
 	/*
-	 * Scan the GROUP BY clause to find GROUP BY items that are simple Vars.
-	 * Fill groupbyattnos[k] with a bitmapset of the column attnos of RTE k
-	 * that are GROUP BY items.
+	 * Don't bother trying to remove anything from a distinctOn clause.  For
+	 * this case, the distinctClauses are closely entwined with the ORDER BY
+	 * clause, so we'd better not meddle with them.  You might think that we
+	 * can just apply the same optimizations to the ORDER BY too, but we can't
+	 * since removing an item there could affect the order of the query
+	 * results.
 	 */
-	groupbyattnos = (Bitmapset **) palloc0(sizeof(Bitmapset *) *
+	if (parse->hasDistinctOn)
+		return;
+
+	parse->distinctClause = remove_functionally_dependent_clauses(root,
+													parse->distinctClause);
+}
+
+/*
+ * remove_functionally_dependent_clauses
+ *		Processes clauselist and removes any items which are deemed to be
+ *		functionally dependent on other clauselist items.
+ *
+ * If any item from the list can be removed, then a new list is built which
+ * does not contain the removed items.  If no item can be removed then the
+ * original list is returned.
+ */
+static List *
+remove_functionally_dependent_clauses(PlannerInfo *root,
+									  List *clauselist)
+{
+	Query	   *parse = root->parse;
+	Bitmapset **clauseattnos;
+	Bitmapset **surplusvars;
+	ListCell   *lc;
+	int			relid;
+
+	/* No chance of removing anything if there are fewer than two items */
+	if (list_length(clauselist) < 2)
+		return clauselist;
+
+	/*
+	 * Scan the clauselist to find items that are simple Vars. Fill
+	 * clauseattnos[k] with a bitmapset of the column attnos of RTE k that are
+	 * in the clauselist.
+	 */
+	clauseattnos = (Bitmapset **) palloc0(sizeof(Bitmapset *) *
 										   (list_length(parse->rtable) + 1));
-	foreach(lc, parse->groupClause)
+	foreach(lc, clauselist)
 	{
 		SortGroupClause *sgc = lfirst_node(SortGroupClause, lc);
 		TargetEntry *tle = get_sortgroupclause_tle(sgc, parse->targetList);
@@ -2971,9 +3020,9 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		 * Ignore non-Vars and Vars from other query levels.
 		 *
 		 * XXX in principle, stable expressions containing Vars could also be
-		 * removed, if all the Vars are functionally dependent on other GROUP
-		 * BY items.  But it's not clear that such cases occur often enough to
-		 * be worth troubling over.
+		 * removed, if all the Vars are functionally dependent on other items
+		 * in the clauselist.  But it's not clear that such cases occur often
+		 * enough to be worth troubling over.
 		 */
 		if (!IsA(var, Var) ||
 			var->varlevelsup > 0)
@@ -2982,15 +3031,16 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		/* OK, remember we have this Var */
 		relid = var->varno;
 		Assert(relid <= list_length(parse->rtable));
-		groupbyattnos[relid] = bms_add_member(groupbyattnos[relid],
-											  var->varattno - FirstLowInvalidHeapAttributeNumber);
+		clauseattnos[relid] = bms_add_member(clauseattnos[relid],
+											 var->varattno - FirstLowInvalidHeapAttributeNumber);
 	}
 
 	/*
 	 * Consider each relation and see if it is possible to remove some of its
-	 * Vars from GROUP BY.  For simplicity and speed, we do the actual removal
-	 * in a separate pass.  Here, we just fill surplusvars[k] with a bitmapset
-	 * of the column attnos of RTE k that are removable GROUP BY items.
+	 * Vars from the clauselist.  For simplicity and speed, we do the actual
+	 * removal in a separate pass.  Here, we just fill surplusvars[k] with a
+	 * bitmapset of the column attnos of RTE k that are removable clauselist
+	 * items.
 	 */
 	surplusvars = NULL;			/* don't allocate array unless required */
 	relid = 0;
@@ -3007,8 +3057,8 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		if (rte->rtekind != RTE_RELATION)
 			continue;
 
-		/* Nothing to do unless this rel has multiple Vars in GROUP BY */
-		relattnos = groupbyattnos[relid];
+		/* Nothing to do unless this rel has multiple Vars in clauselist */
+		relattnos = clauseattnos[relid];
 		if (bms_membership(relattnos) != BMS_MULTIPLE)
 			continue;
 
@@ -3022,7 +3072,7 @@ remove_useless_groupby_columns(PlannerInfo *root)
 
 		/*
 		 * If the primary key is a proper subset of relattnos then we have
-		 * some items in the GROUP BY that can be removed.
+		 * some items in the clauselist that can be removed.
 		 */
 		if (bms_subset_compare(pkattnos, relattnos) == BMS_SUBSET1)
 		{
@@ -3044,15 +3094,15 @@ remove_useless_groupby_columns(PlannerInfo *root)
 	}
 
 	/*
-	 * If we found any surplus Vars, build a new GROUP BY clause without them.
+	 * If we found any surplus Vars, build a new clause list without them.
 	 * (Note: this may leave some TLEs with unreferenced ressortgroupref
 	 * markings, but that's harmless.)
 	 */
 	if (surplusvars != NULL)
 	{
-		List	   *new_groupby = NIL;
+		List	   *new_clauselist = NIL;
 
-		foreach(lc, parse->groupClause)
+		foreach(lc, clauselist)
 		{
 			SortGroupClause *sgc = lfirst_node(SortGroupClause, lc);
 			TargetEntry *tle = get_sortgroupclause_tle(sgc, parse->targetList);
@@ -3066,11 +3116,14 @@ remove_useless_groupby_columns(PlannerInfo *root)
 				var->varlevelsup > 0 ||
 				!bms_is_member(var->varattno - FirstLowInvalidHeapAttributeNumber,
 							   surplusvars[var->varno]))
-				new_groupby = lappend(new_groupby, sgc);
+				new_clauselist = lappend(new_clauselist, sgc);
 		}
 
-		parse->groupClause = new_groupby;
+		return new_clauselist;
 	}
+
+	/* nothing to change, just return the old list */
+	return clauselist;
 }
 
 /*

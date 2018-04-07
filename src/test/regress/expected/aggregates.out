@@ -1017,6 +1017,65 @@ explain (costs off) select * from t3 group by a,b,c;
    ->  Seq Scan on t3
 (3 rows)
 
+--
+-- Test removal of redundant DISTINCT columns
+--
+-- Non-primary-key columns can be removed from DISTINCT clause
+explain (costs off) select distinct a,b,c,d from t1;
+      QUERY PLAN      
+----------------------
+ HashAggregate
+   Group Key: a, b
+   ->  Seq Scan on t1
+(3 rows)
+
+-- No removal can happen if the complete PK is not present in DISTINCT clause
+explain (costs off) select distinct a,c,d from t1;
+      QUERY PLAN      
+----------------------
+ HashAggregate
+   Group Key: a, c, d
+   ->  Seq Scan on t1
+(3 rows)
+
+-- Test removal across multiple relations
+explain (costs off) select distinct t1.a,t1.b,t1.c,t1.d,t2.x,t2.y,t2.z
+from t1 inner join t2 on t1.a = t2.x and t1.b = t2.y;
+                      QUERY PLAN                      
+------------------------------------------------------
+ HashAggregate
+   Group Key: t1.a, t1.b, t2.x, t2.y
+   ->  Hash Join
+         Hash Cond: ((t2.x = t1.a) AND (t2.y = t1.b))
+         ->  Seq Scan on t2
+         ->  Hash
+               ->  Seq Scan on t1
+(7 rows)
+
+-- Test case where t1 can be optimized but not t2
+explain (costs off) select distinct t1.a,t1.b,t1.c,t1.d,t2.x,t2.z
+from t1 inner join t2 on t1.a = t2.x and t1.b = t2.y;
+                      QUERY PLAN                      
+------------------------------------------------------
+ HashAggregate
+   Group Key: t1.a, t1.b, t2.x, t2.z
+   ->  Hash Join
+         Hash Cond: ((t2.x = t1.a) AND (t2.y = t1.b))
+         ->  Seq Scan on t2
+         ->  Hash
+               ->  Seq Scan on t1
+(7 rows)
+
+-- Ensure we don't remove DISTINCT ON items
+explain (costs off) select distinct on (a,b,c) d from t1 order by a,b,c,d;
+          QUERY PLAN          
+------------------------------
+ Unique
+   ->  Sort
+         Sort Key: a, b, c, d
+         ->  Seq Scan on t1
+(4 rows)
+
 drop table t1;
 drop table t2;
 drop table t3;

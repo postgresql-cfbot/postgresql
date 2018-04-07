@@ -68,9 +68,9 @@ static bool reconsider_full_join_clause(PlannerInfo *root,
 
 /*
  * process_equivalence
- *	  The given clause has a mergejoinable operator and can be applied without
- *	  any delay by an outer join, so its two sides can be considered equal
- *	  anywhere they are both computable; moreover that equality can be
+ *	  The given clause has a mergejoinable equality operator and can be applied
+ * 	  without any delay by an outer join, so its two sides can be considered
+ * 	  equal anywhere they are both computable; moreover that equality can be
  *	  extended transitively.  Record this knowledge in the EquivalenceClass
  *	  data structure, if applicable.  Returns true if successful, false if not
  *	  (in which case caller should treat the clause as ordinary, not an
@@ -233,6 +233,7 @@ process_equivalence(PlannerInfo *root,
 	op_input_types(opno, &item1_type, &item2_type);
 
 	opfamilies = restrictinfo->mergeopfamilies;
+	Assert(restrictinfo->is_mj_equality);
 
 	/*
 	 * Sweep through the existing EquivalenceClasses looking for matches to
@@ -273,7 +274,7 @@ process_equivalence(PlannerInfo *root,
 		/*
 		 * A "match" requires matching sets of btree opfamilies.  Use of
 		 * equal() for this test has implications discussed in the comments
-		 * for get_mergejoin_opfamilies().
+		 * for get_equality_opfamilies().
 		 */
 		if (!equal(opfamilies, cur_ec->ec_opfamilies))
 			continue;
@@ -2081,7 +2082,7 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
 				 * to test for member matches first.
 				 */
 				if (opfamilies == NIL)	/* compute if we didn't already */
-					opfamilies = get_mergejoin_opfamilies(eqop);
+					opfamilies = get_equality_opfamilies(eqop);
 				if (equal(opfamilies, ec->ec_opfamilies))
 					return ec;
 				/* Otherwise, done with this EC, move on to the next */

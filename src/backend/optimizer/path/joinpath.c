@@ -22,6 +22,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "utils/lsyscache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -890,6 +891,7 @@ sort_inner_and_outer(PlannerInfo *root,
 	Path	   *cheapest_safe_inner = NULL;
 	List	   *all_pathkeys;
 	ListCell   *l;
+	bool		have_inequality;
 
 	/*
 	 * We only consider the cheapest-total-cost input paths, since we are
@@ -990,7 +992,7 @@ sort_inner_and_outer(PlannerInfo *root,
 	 */
 	all_pathkeys = select_outer_pathkeys_for_merge(root,
 												   extra->mergeclause_list,
-												   joinrel);
+												   joinrel, &have_inequality);
 
 	foreach(l, all_pathkeys)
 	{
@@ -1002,9 +1004,15 @@ sort_inner_and_outer(PlannerInfo *root,
 
 		/* Make a pathkey list with this guy first */
 		if (l != list_head(all_pathkeys))
+		{
+			if (have_inequality && l == list_tail(all_pathkeys))
+				/* Inequality merge clause must be the last, we can't move it */
+				break;
+
 			outerkeys = lcons(front_pathkey,
 							  list_delete_ptr(list_copy(all_pathkeys),
 											  front_pathkey));
+		}
 		else
 			outerkeys = all_pathkeys;	/* no work at first one... */
 

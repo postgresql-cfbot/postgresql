@@ -1773,6 +1773,9 @@ typedef struct NestLoopState
  *		NullInnerTupleSlot prepared null tuple for left outer joins
  *		OuterEContext	   workspace for computing outer tuple's join values
  *		InnerEContext	   workspace for computing inner tuple's join values
+ *		Ineq_Present	   true if the last merge clause is inequalty
+ *		Ineq_JoinLesser	   true if join lesser values for inequality
+ *		Ineq_JoinEqual	   true if join equal values for inequality
  * ----------------
  */
 /* private in nodeMergejoin.c: */
@@ -1783,6 +1786,9 @@ typedef struct MergeJoinState
 	JoinState	js;				/* its first field is NodeTag */
 	int			mj_NumClauses;
 	MergeJoinClause mj_Clauses; /* array of length mj_NumClauses */
+	bool		mj_Ineq_Present;
+	bool		mj_Ineq_JoinLesser;
+	bool		mj_Ineq_JoinEqual;
 	int			mj_JoinState;
 	bool		mj_SkipMarkRestore;
 	bool		mj_ExtraMarks;

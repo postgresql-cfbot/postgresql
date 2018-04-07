@@ -222,7 +222,8 @@ extern List *find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 									 List *restrictinfos);
 extern List *select_outer_pathkeys_for_merge(PlannerInfo *root,
 								List *mergeclauses,
-								RelOptInfo *joinrel);
+								RelOptInfo *joinrel,
+								bool *have_inequality);
 extern List *make_inner_pathkeys_for_merge(PlannerInfo *root,
 							  List *mergeclauses,
 							  List *outer_pathkeys);

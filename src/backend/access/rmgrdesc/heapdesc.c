@@ -75,6 +75,17 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->new_offnum,
 						 xlrec->new_xmax);
 	}
+	else if (info == XLOG_HEAP_TRUNCATE)
+	{
+		xl_heap_truncate *xlrec = (xl_heap_truncate *) rec;
+
+		if (xlrec->flags & XLH_TRUNCATE_CASCADE)
+			appendStringInfo(buf, "cascade ");
+		if (xlrec->flags & XLH_TRUNCATE_RESTART_SEQS)
+			appendStringInfo(buf, "restart_seqs ");
+		appendStringInfo(buf, "nrelids %u", xlrec->nrelids);
+		/* skip the list of relids */
+	}
 	else if (info == XLOG_HEAP_CONFIRM)
 	{
 		xl_heap_confirm *xlrec = (xl_heap_confirm *) rec;
@@ -185,6 +196,9 @@ heap_identify(uint8 info)
 			break;
 		case XLOG_HEAP_HOT_UPDATE | XLOG_HEAP_INIT_PAGE:
 			id = "HOT_UPDATE+INIT";
+			break;
+		case XLOG_HEAP_TRUNCATE:
+			id = "TRUNCATE";
 			break;
 		case XLOG_HEAP_CONFIRM:
 			id = "HEAP_CONFIRM";

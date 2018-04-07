@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 104;
+use Test::More tests => 106;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -15,6 +15,9 @@ program_options_handling_ok('pg_basebackup');
 my $tempdir = TestLib::tempdir;
 
 my $node = get_new_node('main');
+
+# Set umask so test directories and files are created with default permissions
+umask(0077);
 
 # Initialize node without replication settings
 $node->init(extra => [ '--data-checksums' ]);
@@ -41,10 +44,17 @@ $node->command_fails(
 
 ok(!-d "$tempdir/backup", 'backup directory was cleaned up');
 
+# Create a backup directory that is not empty so the next commnd will fail
+# but leave the data directory behind
+mkdir("$tempdir/backup")
+	or BAIL_OUT("unable to create $tempdir/backup");
+append_to_file("$tempdir/backup/dir-not-empty.txt");
+
 $node->command_fails([ 'pg_basebackup', '-D', "$tempdir/backup", '-n' ],
 	'failing run with no-clean option');
 
 ok(-d "$tempdir/backup", 'backup directory was created and left behind');
+rmtree("$tempdir/backup");
 
 open my $conf, '>>', "$pgdata/postgresql.conf";
 print $conf "max_replication_slots = 10\n";
@@ -93,6 +103,15 @@ foreach my $filename (@tempRelationFiles)
 $node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backup", '-X', 'none' ],
 	'pg_basebackup runs');
 ok(-f "$tempdir/backup/PG_VERSION", 'backup was created');
+
+# Permissions on backup should be default
+SKIP:
+{
+	skip "unix-style permissions not supported on Windows", 1 if ($windows_os);
+
+	ok(check_mode_recursive("$tempdir/backup", 0700, 0600),
+	   "check backup dir permissions");
+}
 
 # Only archive_status directory should be copied in pg_wal/.
 is_deeply(
@@ -188,10 +207,16 @@ unlink "$pgdata/$superlongname";
 # skip on Windows.
 SKIP:
 {
-	skip "symlinks not supported on Windows", 17 if ($windows_os);
+	skip "symlinks not supported on Windows", 18 if ($windows_os);
 
 	# Move pg_replslot out of $pgdata and create a symlink to it.
 	$node->stop;
+
+	# Set umask so test directories and files are created with group permissions
+	umask(0027);
+
+	# Enable group permissions on PGDATA
+	chmod_recursive("$pgdata", 0750, 0640);
 
 	rename("$pgdata/pg_replslot", "$tempdir/pg_replslot")
 	  or BAIL_OUT "could not move $pgdata/pg_replslot";
@@ -262,6 +287,10 @@ SKIP:
 			  } readdir($dh)),
 		"tablespace symlink was updated");
 	closedir $dh;
+
+	# Group access should be enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backup1", 0750, 0640),
+	   "check backup dir permissions");
 
 	# Unlogged relation forks other than init should not be copied
 	my ($tblspc1UnloggedBackupPath) = $tblspc1UnloggedPath =~ /[^\/]*\/[^\/]*\/[^\/]*$/g;

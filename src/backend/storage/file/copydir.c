@@ -21,6 +21,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#ifdef HAVE_COPYFILE
+#include <copyfile.h>
+#endif
 
 #include "storage/copydir.h"
 #include "storage/fd.h"
@@ -126,13 +129,71 @@ copydir(char *fromdir, char *todir, bool recurse)
 void
 copy_file(char *fromfile, char *tofile)
 {
-	char	   *buffer;
+#ifdef HAVE_COPYFILE
+	int			ret;
+
+	pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_COPY);
+	ret = copyfile(fromfile, tofile, NULL,
+#ifdef COPYFILE_CLONE
+				   COPYFILE_CLONE
+#else
+				   COPYFILE_DATA
+#endif
+		);
+	pgstat_report_wait_end();
+	if (ret < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not copy file \"%s\" to \"%s\": %m", fromfile, tofile)));
+#else
 	int			srcfd;
 	int			dstfd;
+#ifdef HAVE_COPY_FILE_RANGE
+	struct stat stat;
+	size_t		len;
+#else
+	char	   *buffer;
 	int			nbytes;
 	off_t		offset;
 	off_t		flush_offset;
+#endif
 
+	/*
+	 * Open the files
+	 */
+	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
+	if (srcfd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m", fromfile)));
+
+	dstfd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	if (dstfd < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m", tofile)));
+
+#ifdef HAVE_COPY_FILE_RANGE
+	if (fstat(srcfd, &stat) < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m", fromfile)));
+
+	len = stat.st_size;
+
+	do {
+		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_COPY);
+		ssize_t ret = copy_file_range(srcfd, NULL, dstfd, NULL, len, 0);
+		pgstat_report_wait_end();
+		if (ret < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not copy file \"%s\" to \"%s\": %m",
+							fromfile, tofile)));
+
+		len -= ret;
+	} while (len > 0);
+#else
 	/* Size of copy buffer (read and write requests) */
 #define COPY_BUF_SIZE (8 * BLCKSZ)
 
@@ -150,21 +211,6 @@ copy_file(char *fromfile, char *tofile)
 
 	/* Use palloc to ensure we get a maxaligned buffer */
 	buffer = palloc(COPY_BUF_SIZE);
-
-	/*
-	 * Open the files
-	 */
-	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
-	if (srcfd < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not open file \"%s\": %m", fromfile)));
-
-	dstfd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (dstfd < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not create file \"%s\": %m", tofile)));
 
 	/*
 	 * Do the data copying.
@@ -213,12 +259,14 @@ copy_file(char *fromfile, char *tofile)
 	if (offset > flush_offset)
 		pg_flush_data(dstfd, flush_offset, offset - flush_offset);
 
+	pfree(buffer);
+#endif
+
 	if (CloseTransientFile(dstfd))
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tofile)));
 
 	CloseTransientFile(srcfd);
-
-	pfree(buffer);
+#endif
 }

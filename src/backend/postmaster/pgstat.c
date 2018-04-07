@@ -3744,6 +3744,9 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE:
 			event_name = "ControlFileWriteUpdate";
 			break;
+		case WAIT_EVENT_COPY_FILE_COPY:
+			event_name = "CopyFileCopy";
+			break;
 		case WAIT_EVENT_COPY_FILE_READ:
 			event_name = "CopyFileRead";
 			break;

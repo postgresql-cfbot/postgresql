@@ -17,6 +17,9 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
+#ifdef HAVE_COPYFILE
+#include <copyfile.h>
+#endif
 
 
 #ifdef WIN32
@@ -34,10 +37,32 @@ void
 copyFile(const char *src, const char *dst,
 		 const char *schemaName, const char *relName)
 {
-#ifndef WIN32
+#if defined(HAVE_COPYFILE)
+	if (copyfile(src, dst, NULL,
+#ifdef COPYFILE_CLONE
+				 COPYFILE_CLONE
+#else
+				 COPYFILE_DATA
+#endif
+			) < 0)
+		pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
+				 schemaName, relName, src, dst, strerror(errno));
+#elif defined(WIN32)
+	if (CopyFile(src, dst, true) == 0)
+	{
+		_dosmaperr(GetLastError());
+		pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
+				 schemaName, relName, src, dst, strerror(errno));
+	}
+#else
 	int			src_fd;
 	int			dest_fd;
+#ifdef HAVE_COPY_FILE_RANGE
+	struct stat stat;
+	size_t		len;
+#else
 	char	   *buffer;
+#endif
 
 	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
 		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s\n",
@@ -48,6 +73,22 @@ copyFile(const char *src, const char *dst,
 		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s\n",
 				 schemaName, relName, dst, strerror(errno));
 
+#ifdef HAVE_COPY_FILE_RANGE
+	if (fstat(src_fd, &stat) < 0)
+		pg_fatal("could not stat file \"%s\": %s",
+				 src, strerror(errno));
+
+	len = stat.st_size;
+
+	do {
+		ssize_t ret = copy_file_range(src_fd, NULL, dest_fd, NULL, len, 0);
+		if (ret < 0)
+			pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
+					 schemaName, relName, src, dst, strerror(errno));
+
+		len -= ret;
+	} while (len > 0);
+#else
 	/* copy in fairly large chunks for best efficiency */
 #define COPY_BUF_SIZE (50 * BLCKSZ)
 
@@ -77,19 +118,10 @@ copyFile(const char *src, const char *dst,
 	}
 
 	pg_free(buffer);
+#endif
 	close(src_fd);
 	close(dest_fd);
-
-#else							/* WIN32 */
-
-	if (CopyFile(src, dst, true) == 0)
-	{
-		_dosmaperr(GetLastError());
-		pg_fatal("error while copying relation \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
-				 schemaName, relName, src, dst, strerror(errno));
-	}
-
-#endif							/* WIN32 */
+#endif
 }
 
 

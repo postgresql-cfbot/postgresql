@@ -1418,7 +1418,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <entry>Waiting to apply WAL at recovery because it is delayed.</entry>
         </row>
         <row>
-         <entry morerows="65"><literal>IO</literal></entry>
+         <entry morerows="66"><literal>IO</literal></entry>
          <entry><literal>BufFileRead</literal></entry>
          <entry>Waiting for a read from a buffered file.</entry>
         </row>
@@ -1445,6 +1445,12 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
         <row>
          <entry><literal>ControlFileWriteUpdate</literal></entry>
          <entry>Waiting for a write to update the control file.</entry>
+        </row>
+        <row>
+         <entry><literal>CopyFileCopy</literal></entry>
+         <entry>Waiting for a file copy operation (if the copying is done by
+         an operating system call rather than as separate read and write
+         operations).</entry>
         </row>
         <row>
          <entry><literal>CopyFileRead</literal></entry>

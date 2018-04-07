@@ -1414,16 +1414,24 @@ ExecuteTruncate(TruncateStmt *stmt)
 	}
 
 	/*
-	 * Check foreign key references.  In CASCADE mode, this should be
-	 * unnecessary since we just pulled in all the references; but as a
-	 * cross-check, do it anyway if in an Assert-enabled build.
+	 * Suppress foreign key references check if session replication role is
+	 * set to REPLICA.
 	 */
+	if (SessionReplicationRole != SESSION_REPLICATION_ROLE_REPLICA)
+	{
+
+		/*
+		 * Check foreign key references.  In CASCADE mode, this should be
+		 * unnecessary since we just pulled in all the references; but as a
+		 * cross-check, do it anyway if in an Assert-enabled build.
+		 */
 #ifdef USE_ASSERT_CHECKING
-	heap_truncate_check_FKs(rels, false);
-#else
-	if (stmt->behavior == DROP_RESTRICT)
 		heap_truncate_check_FKs(rels, false);
+#else
+		if (stmt->behavior == DROP_RESTRICT)
+			heap_truncate_check_FKs(rels, false);
 #endif
+	}
 
 	/*
 	 * If we are asked to restart sequences, find all the sequences, lock them

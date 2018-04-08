@@ -372,6 +372,14 @@ DATA(insert OID = 3402 ( pg_dependencies		PGNSP PGUID -1 f b S f t \054 0 0 0 pg
 DESCR("multivariate dependencies");
 #define PGDEPENDENCIESOID	3402
 
+DATA(insert OID = 4001 ( pg_mcv_list		PGNSP PGUID -1 f b S f t \054 0 0 0 pg_mcv_list_in pg_mcv_list_out pg_mcv_list_recv pg_mcv_list_send - - - i x f 0 -1 0 100 _null_ _null_ _null_ ));
+DESCR("multivariate MCV list");
+#define PGMCVLISTOID	4001
+
+DATA(insert OID = 3425 ( pg_histogram		PGNSP PGUID -1 f b S f t \054 0 0 0 pg_histogram_in pg_histogram_out pg_histogram_recv pg_histogram_send - - - i x f 0 -1 0 100 _null_ _null_ _null_ ));
+DESCR("multivariate histogram");
+#define PGHISTOGRAMOID	3425
+
 DATA(insert OID = 32 ( pg_ddl_command	PGNSP PGUID SIZEOF_POINTER t p P f t \054 0 0 0 pg_ddl_command_in pg_ddl_command_out pg_ddl_command_recv pg_ddl_command_send - - - ALIGNOF_POINTER p f 0 -1 0 0 _null_ _null_ _null_ ));
 DESCR("internal type for passing CollectedCommand");
 #define PGDDLCOMMANDOID 32

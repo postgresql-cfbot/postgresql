@@ -271,7 +271,9 @@ struct HeapTupleHeaderData
  * information stored in t_infomask2:
  */
 #define HEAP_NATTS_MASK			0x07FF	/* 11 bits for number of attributes */
-/* bits 0x1800 are available */
+/* bit 0x800 is available */
+#define HEAP_HASCUSTOMCOMPRESSED 0x1000 /* tuple contains custom compressed
+										 * varlena(s) */
 #define HEAP_KEYS_UPDATED		0x2000	/* tuple was updated and key cols
 										 * modified, or tuple deleted */
 #define HEAP_HOT_UPDATED		0x4000	/* tuple was HOT-updated */
@@ -691,6 +693,9 @@ struct MinimalTupleData
 #define HeapTupleHasExternal(tuple) \
 		(((tuple)->t_data->t_infomask & HEAP_HASEXTERNAL) != 0)
 
+#define HeapTupleHasCustomCompressed(tuple) \
+		(((tuple)->t_data->t_infomask2 & HEAP_HASCUSTOMCOMPRESSED) != 0)
+
 #define HeapTupleIsHotUpdated(tuple) \
 		HeapTupleHeaderIsHotUpdated((tuple)->t_data)
 
@@ -806,7 +811,7 @@ extern Size heap_compute_data_size(TupleDesc tupleDesc,
 extern void heap_fill_tuple(TupleDesc tupleDesc,
 				Datum *values, bool *isnull,
 				char *data, Size data_size,
-				uint16 *infomask, bits8 *bit);
+				uint16 *infomask, uint16 *infomask2, bits8 *bit);
 extern bool heap_attisnull(HeapTuple tup, int attnum, TupleDesc tupleDesc);
 extern Datum nocachegetattr(HeapTuple tup, int attnum,
 			   TupleDesc att);

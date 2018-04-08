@@ -102,6 +102,15 @@
 #define INDIRECT_POINTER_SIZE (VARHDRSZ_EXTERNAL + sizeof(varatt_indirect))
 
 /*
+ * va_extinfo in varatt_external contains actual length of the external data
+ * and optional flags
+ */
+#define VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer) \
+	((toast_pointer).va_extinfo & 0x3FFFFFFF)
+#define VARATT_EXTERNAL_IS_CUSTOM_COMPRESSED(toast_pointer) \
+	(((toast_pointer).va_extinfo >> 30) == 0x02)
+
+/*
  * Testing whether an externally-stored value is compressed now requires
  * comparing extsize (the actual length of the external data) to rawsize
  * (the original uncompressed datum's size).  The latter includes VARHDRSZ
@@ -109,7 +118,7 @@
  * saves space, so we expect either equality or less-than.
  */
 #define VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer) \
-	((toast_pointer).va_extsize < (toast_pointer).va_rawsize - VARHDRSZ)
+	(VARATT_EXTERNAL_GET_EXTSIZE(toast_pointer) < (toast_pointer).va_rawsize - VARHDRSZ)
 
 /*
  * Macro to fetch the possibly-unaligned contents of an EXTERNAL datum
@@ -126,6 +135,19 @@ do { \
 	memcpy(&(toast_pointer), VARDATA_EXTERNAL(attre), sizeof(toast_pointer)); \
 } while (0)
 
+/* Hash table control struct is an opaque type known only within dynahash.c */
+typedef struct HTAB HTAB;
+
+/*
+ * Used to pass to preserved compression access methods from
+ * ALTER TABLE SET COMPRESSION into toast_insert_or_update.
+ */
+typedef struct AttrCmPreservedInfo
+{
+	AttrNumber	attnum;
+	List	   *preserved_amoids;
+}			AttrCmPreservedInfo;
+
 /* ----------
  * toast_insert_or_update -
  *
@@ -134,7 +156,7 @@ do { \
  */
 extern HeapTuple toast_insert_or_update(Relation rel,
 					   HeapTuple newtup, HeapTuple oldtup,
-					   int options);
+					   int options, HTAB *preserved_cmlist);
 
 /* ----------
  * toast_delete -
@@ -210,7 +232,7 @@ extern HeapTuple toast_build_flattened_tuple(TupleDesc tupleDesc,
  *	Create a compressed version of a varlena datum, if possible
  * ----------
  */
-extern Datum toast_compress_datum(Datum value);
+extern Datum toast_compress_datum(Datum value, Oid cmoptoid);
 
 /* ----------
  * toast_raw_datum_size -
@@ -235,5 +257,20 @@ extern Size toast_datum_size(Datum value);
  * ----------
  */
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
+
+/*
+ * lookup_compression_am_options -
+ *
+ * Return cached CompressionAmOptions for specified attribute compression.
+ */
+extern CompressionAmOptions *lookup_compression_am_options(Oid acoid);
+
+/*
+ * toast_set_compressed_datum_info -
+ *
+ * Save metadata in compressed datum
+ */
+extern void toast_set_compressed_datum_info(struct varlena *val, Oid cmid,
+									 int32 rawsize);
 
 #endif							/* TUPTOASTER_H */

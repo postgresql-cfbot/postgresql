@@ -568,6 +568,62 @@ my %tests = (
 			exclude_dump_test_schema => 1,
 			exclude_test_table => 1, }, },
 
+	# compression data in binary upgrade mode
+	'ALTER TABLE test_table_compression ALTER COLUMN ... SET COMPRESSION' => {
+		all_runs  => 1,
+		catch_all => 'ALTER TABLE ... commands',
+		regexp    => qr/^
+			\QCREATE TABLE dump_test.test_table_compression (\E\n
+			\s+\Qcol1 text COMPRESSION pglz,\E\n
+			\s+\Qcol2 text,\E\n
+			\s+\Qcol3 text,\E\n
+			\s+\Qcol4 text\E\n
+			\);
+			.*
+			\QINSERT INTO pg_catalog.pg_attr_compression\E\n
+			\s+\QVALUES (\E\d+\Q, 'pglz2', 'dump_test.test_table_compression'::pg_catalog.regclass, 2, NULL);\E\n
+			\QWITH t AS (SELECT oid FROM pg_am WHERE amname = 'pglz2')\E\n
+			\s+\QINSERT INTO pg_catalog.pg_depend SELECT 4001, \E\d+\Q, 0, 2601, t.oid, 0, 'n' FROM t;\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col2\E\n
+			\s+\QSET COMPRESSION pglz2 PRESERVE (pglz2);\E\n
+			.*
+			\QINSERT INTO pg_catalog.pg_attr_compression\E\n
+			\s+\QVALUES (\E\d+\Q, 'pglz', 'dump_test.test_table_compression'::pg_catalog.regclass, 3, '{min_input_size=1000}');\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col3\E\n
+			\s+\QSET COMPRESSION pglz WITH (min_input_size '1000') PRESERVE (pglz);\E\n
+			.*
+			\QINSERT INTO pg_catalog.pg_attr_compression\E\n
+			\s+\QVALUES (\E\d+\Q, 'pglz2', 'dump_test.test_table_compression'::pg_catalog.regclass, 4, '{min_input_size=1000}');\E\n
+			\QWITH t AS (SELECT oid FROM pg_am WHERE amname = 'pglz2')\E\n
+			\s+\QINSERT INTO pg_catalog.pg_depend SELECT 4001, \E\d+\Q, 0, 2601, t.oid, 0, 'n' FROM t;\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col4\E\n
+			\s+\QSET COMPRESSION pglz2 WITH (min_input_size '1000') PRESERVE (pglz2);\E\n
+			/xms,
+		like => {
+			binary_upgrade          => 1, },
+		unlike => {
+			clean                   => 1,
+			clean_if_exists         => 1,
+			createdb                => 1,
+			defaults                => 1,
+			exclude_test_table_data => 1,
+			no_blobs                => 1,
+			no_privs                => 1,
+			no_owner                => 1,
+			only_dump_test_schema   => 1,
+			only_dump_test_table    => 1,
+			pg_dumpall_dbprivs      => 1,
+			schema_only             => 1,
+			section_post_data       => 1,
+			test_schema_plus_blobs  => 1,
+			with_oids               => 1,
+			data_only                => 1,
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+			role                     => 1,
+			section_pre_data         => 1,
+			section_data             => 1, }, },
+
 	'ALTER TABLE ONLY test_table ALTER COLUMN col1 SET STATISTICS 90' => {
 		create_order => 93,
 		create_sql =>
@@ -1263,6 +1319,39 @@ qr/^\QINSERT INTO dump_test.test_table_identity (col1, col2) OVERRIDING SYSTEM V
 		like => {
 			%full_runs,
 			section_pre_data         => 1, }, },
+
+	'CREATE ACCESS METHOD pglz2' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 52,
+		create_sql =>
+		  'CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;',
+		regexp =>
+		  qr/CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;/m,
+		like => {
+			binary_upgrade           => 1,
+			clean                    => 1,
+			clean_if_exists          => 1,
+			createdb                 => 1,
+			defaults                 => 1,
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+			exclude_test_table_data  => 1,
+			no_blobs                 => 1,
+			no_privs                 => 1,
+			no_owner                 => 1,
+			pg_dumpall_dbprivs       => 1,
+			schema_only              => 1,
+			section_pre_data         => 1,
+			with_oids                => 1, },
+		unlike => {
+			only_dump_test_schema    => 1,
+			only_dump_test_table     => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_post_data        => 1,
+			test_schema_plus_blobs   => 1, }, },
 
 	'CREATE COLLATION test0 FROM "C"' => {
 		create_order => 76,
@@ -2132,9 +2221,9 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table (\E\n
 			\s+\Qcol1 integer NOT NULL,\E\n
-			\s+\Qcol2 text,\E\n
-			\s+\Qcol3 text,\E\n
-			\s+\Qcol4 text,\E\n
+			\s+\Qcol2 text COMPRESSION pglz,\E\n
+			\s+\Qcol3 text COMPRESSION pglz,\E\n
+			\s+\Qcol4 text COMPRESSION pglz,\E\n
 			\s+\QCONSTRAINT test_table_col1_check CHECK ((col1 <= 1000))\E\n
 			\Q)\E\n
 			\QWITH (autovacuum_enabled='false', fillfactor='80');\E\n/xm,
@@ -2173,7 +2262,7 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_second_table (\E
 			\n\s+\Qcol1 integer,\E
-			\n\s+\Qcol2 text\E
+			\n\s+\Qcol2 text COMPRESSION pglz\E
 			\n\);
 			/xm,
 		like => {
@@ -2282,7 +2371,7 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 			\n\s+\Qcol1 integer,\E
 			\n\s+\Qcol2 boolean,\E
 			\n\s+\Qcol3 boolean,\E
-			\n\s+\Qcol4 bit(5),\E
+			\n\s+\Qcol4 bit(5) COMPRESSION pglz,\E
 			\n\s+\Qcol5 double precision\E
 			\n\);
 			/xm,
@@ -2302,7 +2391,7 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_identity (\E\n
 			\s+\Qcol1 integer NOT NULL,\E\n
-			\s+\Qcol2 text\E\n
+			\s+\Qcol2 text COMPRESSION pglz\E\n
 			\);
 			.*
 			\QALTER TABLE dump_test.test_table_identity ALTER COLUMN col1 ADD GENERATED ALWAYS AS IDENTITY (\E\n
@@ -2320,6 +2409,49 @@ qr/CREATE TRANSFORM FOR integer LANGUAGE sql \(FROM SQL WITH FUNCTION pg_catalog
 			section_pre_data        => 1, },
 		unlike => {
 			exclude_dump_test_schema => 1, }, },
+
+	'CREATE TABLE test_table_compression' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 53,
+		create_sql   => 'CREATE TABLE dump_test.test_table_compression (
+						   col1 text,
+						   col2 text COMPRESSION pglz2,
+						   col3 text COMPRESSION pglz WITH (min_input_size \'1000\'),
+						   col4 text COMPRESSION pglz2 WITH (min_input_size \'1000\')
+					   );',
+		regexp => qr/^
+			\QCREATE TABLE dump_test.test_table_compression (\E\n
+			\s+\Qcol1 text COMPRESSION pglz,\E\n
+			\s+\Qcol2 text COMPRESSION pglz2,\E\n
+			\s+\Qcol3 text COMPRESSION pglz WITH (min_input_size '1000'),\E\n
+			\s+\Qcol4 text COMPRESSION pglz2 WITH (min_input_size '1000')\E\n
+			\);
+			/xm,
+		like => {
+			clean                   => 1,
+			clean_if_exists         => 1,
+			createdb                => 1,
+			defaults                => 1,
+			exclude_test_table      => 1,
+			exclude_test_table_data => 1,
+			no_blobs                => 1,
+			no_privs                => 1,
+			no_owner                => 1,
+			only_dump_test_schema   => 1,
+			pg_dumpall_dbprivs      => 1,
+			schema_only             => 1,
+			section_pre_data        => 1,
+			test_schema_plus_blobs  => 1,
+			with_oids               => 1, },
+		unlike => {
+			binary_upgrade			 => 1,
+			exclude_dump_test_schema => 1,
+			only_dump_test_table     => 1,
+			pg_dumpall_globals       => 1,
+			pg_dumpall_globals_clean => 1,
+			role                     => 1,
+			section_post_data        => 1, }, },
 
 	'CREATE STATISTICS extended_stats_no_options' => {
 		create_order => 97,

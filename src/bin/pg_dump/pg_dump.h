@@ -84,7 +84,8 @@ typedef enum
 	DO_POLICY,
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
-	DO_SUBSCRIPTION
+	DO_SUBSCRIPTION,
+	DO_ATTRIBUTE_COMPRESSION
 } DumpableObjectType;
 
 /* component types of an object which can be selected for dumping */
@@ -316,6 +317,8 @@ typedef struct _tableInfo
 	char	  **attoptions;		/* per-attribute options */
 	Oid		   *attcollation;	/* per-attribute collation selection */
 	char	  **attfdwoptions;	/* per-attribute fdw options */
+	char	  **attcmoptions;	/* per-attribute compression options */
+	char	  **attcmnames;		/* per-attribute compression method names */
 	bool	   *notnull;		/* NOT NULL constraints on attributes */
 	bool	   *inhNotNull;		/* true if NOT NULL is inherited */
 	struct _attrDefInfo **attrdefs; /* DEFAULT expressions */
@@ -624,6 +627,28 @@ typedef struct _SubscriptionInfo
 	char	   *subpublications;
 } SubscriptionInfo;
 
+typedef struct _AttributeCompressionItem
+{
+	Oid			acoid;
+	char	   *acname;
+	char	   *acoptions;
+	char	   *parsedoptions;
+	bool		iscurrent;
+} AttributeCompressionItem;
+
+/* The AttributeCompressionInfo struct is used to represent attribute compression */
+typedef struct _AttributeCompressionInfo
+{
+	DumpableObject dobj;
+	char	   *acrelid;
+	uint16		acattnum;
+	char	   *attname;
+	char	   *preserve;
+
+	int			nitems;
+	AttributeCompressionItem *items;
+} AttributeCompressionInfo;
+
 /*
  * We build an array of these with an entry for each object that is an
  * extension member according to pg_depend.
@@ -724,5 +749,6 @@ extern void getPublications(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 					 int numTables);
 extern void getSubscriptions(Archive *fout);
+extern void getAttributeCompressionData(Archive *fout);
 
 #endif							/* PG_DUMP_H */

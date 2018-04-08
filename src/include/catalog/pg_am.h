@@ -59,6 +59,7 @@ typedef FormData_pg_am *Form_pg_am;
  * ----------------
  */
 #define AMTYPE_INDEX					'i' /* index access method */
+#define AMTYPE_COMPRESSION				'c' /* compression access method */
 
 /* ----------------
  *		initial contents of pg_am
@@ -83,5 +84,8 @@ DESCR("SP-GiST index access method");
 DATA(insert OID = 3580 (  brin		brinhandler i ));
 DESCR("block range index (BRIN) access method");
 #define BRIN_AM_OID 3580
+DATA(insert OID = 4002 (  pglz		pglzhandler c ));
+DESCR("PGLZ compression access method");
+#define PGLZ_COMPRESSION_AM_OID 4002
 
 #endif							/* PG_AM_H */

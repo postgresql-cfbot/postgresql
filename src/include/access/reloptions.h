@@ -259,7 +259,6 @@ extern void add_string_reloption(bits32 kinds, const char *name, const char *des
 extern Datum transformRelOptions(Datum oldOptions, List *defList,
 					const char *namspace, char *validnsps[],
 					bool ignoreOids, bool isReset);
-extern List *untransformRelOptions(Datum options);
 extern bytea *extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 				  amoptions_function amoptions);
 extern relopt_value *parseRelOptions(Datum options, bool validate,
@@ -270,6 +269,8 @@ extern void fillRelOptions(void *rdopts, Size basesize,
 			   relopt_value *options, int numoptions,
 			   bool validate,
 			   const relopt_parse_elt *elems, int nelems);
+extern char *formatRelOptions(List *options);
+extern List *untransformRelOptions(Datum options);
 
 extern bytea *default_reloptions(Datum reloptions, bool validate,
 				   relopt_kind kind);

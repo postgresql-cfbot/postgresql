@@ -2589,6 +2589,7 @@ _equalColumnDef(const ColumnDef *a, const ColumnDef *b)
 {
 	COMPARE_STRING_FIELD(colname);
 	COMPARE_NODE_FIELD(typeName);
+	COMPARE_NODE_FIELD(compression);
 	COMPARE_SCALAR_FIELD(inhcount);
 	COMPARE_SCALAR_FIELD(is_local);
 	COMPARE_SCALAR_FIELD(is_not_null);
@@ -2604,6 +2605,16 @@ _equalColumnDef(const ColumnDef *a, const ColumnDef *b)
 	COMPARE_NODE_FIELD(constraints);
 	COMPARE_NODE_FIELD(fdwoptions);
 	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
+static bool
+_equalColumnCompression(const ColumnCompression *a, const ColumnCompression *b)
+{
+	COMPARE_STRING_FIELD(amname);
+	COMPARE_NODE_FIELD(options);
+	COMPARE_NODE_FIELD(preserve);
 
 	return true;
 }
@@ -3675,6 +3686,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_ColumnDef:
 			retval = _equalColumnDef(a, b);
+			break;
+		case T_ColumnCompression:
+			retval = _equalColumnCompression(a, b);
 			break;
 		case T_Constraint:
 			retval = _equalConstraint(a, b);

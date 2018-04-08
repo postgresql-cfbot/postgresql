@@ -17,6 +17,7 @@
 #include "access/htup_details.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_opclass.h"
+#include "commands/defrem.h"
 #include "utils/builtins.h"
 #include "utils/syscache.h"
 
@@ -55,52 +56,12 @@ GetIndexAmRoutine(Oid amhandler)
 IndexAmRoutine *
 GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
 {
-	HeapTuple	tuple;
-	Form_pg_am	amform;
 	regproc		amhandler;
 
 	/* Get handler function OID for the access method */
-	tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(amoid));
-	if (!HeapTupleIsValid(tuple))
-	{
-		if (noerror)
-			return NULL;
-		elog(ERROR, "cache lookup failed for access method %u",
-			 amoid);
-	}
-	amform = (Form_pg_am) GETSTRUCT(tuple);
-
-	/* Check if it's an index access method as opposed to some other AM */
-	if (amform->amtype != AMTYPE_INDEX)
-	{
-		if (noerror)
-		{
-			ReleaseSysCache(tuple);
-			return NULL;
-		}
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("access method \"%s\" is not of type %s",
-						NameStr(amform->amname), "INDEX")));
-	}
-
-	amhandler = amform->amhandler;
-
-	/* Complain if handler OID is invalid */
-	if (!RegProcedureIsValid(amhandler))
-	{
-		if (noerror)
-		{
-			ReleaseSysCache(tuple);
-			return NULL;
-		}
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("index access method \"%s\" does not have a handler",
-						NameStr(amform->amname))));
-	}
-
-	ReleaseSysCache(tuple);
+	amhandler = get_am_handler_oid(amoid, AMTYPE_INDEX, noerror);
+	if (noerror && !RegProcedureIsValid(amhandler))
+		return NULL;
 
 	/* And finally, call the handler function to get the API struct. */
 	return GetIndexAmRoutine(amhandler);

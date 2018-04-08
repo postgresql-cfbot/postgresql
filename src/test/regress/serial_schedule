@@ -43,6 +43,7 @@ test: inet
 test: macaddr
 test: macaddr8
 test: tstypes
+test: create_cm
 test: geometry
 test: horology
 test: regex

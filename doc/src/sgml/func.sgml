@@ -13429,7 +13429,7 @@ NULL baz</literallayout>(3 rows)</entry>
       <entry>
        array of the argument type
       </entry>
-      <entry>No</entry>
+      <entry>Yes</entry>
       <entry>input values, including nulls, concatenated into an array</entry>
      </row>
 
@@ -13443,7 +13443,7 @@ NULL baz</literallayout>(3 rows)</entry>
       <entry>
        same as argument data type
       </entry>
-      <entry>No</entry>
+      <entry>Yes</entry>
       <entry>input arrays concatenated into array of one higher dimension
        (inputs must all have same dimensionality,
         and cannot be empty or NULL)</entry>
@@ -13704,7 +13704,7 @@ NULL baz</literallayout>(3 rows)</entry>
       <entry>
        same as argument types
       </entry>
-      <entry>No</entry>
+      <entry>Yes</entry>
       <entry>input values concatenated into a string, separated by delimiter</entry>
      </row>
 

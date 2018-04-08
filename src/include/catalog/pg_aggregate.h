@@ -300,14 +300,14 @@ DATA(insert ( 2243	n 0 bitor		-				bitor	-	-	-				-				-				f f r r 0	1560	0	0		
 DATA(insert ( 2901	n 0 xmlconcat2	-				-		-	-	-				-				-				f f r r 0	142		0	0		0	_null_ _null_ ));
 
 /* array */
-DATA(insert ( 2335	n 0 array_agg_transfn		array_agg_finalfn		-	-	-	-		-				-				t f r r 0	2281	0	0		0	_null_ _null_ ));
-DATA(insert ( 4053	n 0 array_agg_array_transfn array_agg_array_finalfn -	-	-	-		-				-				t f r r 0	2281	0	0		0	_null_ _null_ ));
+DATA(insert ( 2335	n 0 array_agg_transfn		array_agg_finalfn		array_agg_combine		array_agg_serialize			array_agg_deserialize		-		-				-				t f r r 0	2281	0	0		0	_null_ _null_ ));
+DATA(insert ( 4053	n 0 array_agg_array_transfn array_agg_array_finalfn array_agg_array_combine	array_agg_array_serialize	array_agg_array_deserialize	-		-				-				t f r r 0	2281	0	0		0	_null_ _null_ ));
 
 /* text */
-DATA(insert ( 3538	n 0 string_agg_transfn	string_agg_finalfn	-	-	-	-				-				-				f f r r 0	2281	0	0		0	_null_ _null_ ));
+DATA(insert ( 3538	n 0 string_agg_transfn	string_agg_finalfn	string_agg_combine	string_agg_serialize	string_agg_deserialize	-				-				-				f f r r 0	2281	0	0		0	_null_ _null_ ));
 
 /* bytea */
-DATA(insert ( 3545	n 0 bytea_string_agg_transfn	bytea_string_agg_finalfn	-	-	-	-				-				-		f f r r 0	2281	0	0		0	_null_ _null_ ));
+DATA(insert ( 3545	n 0 bytea_string_agg_transfn	bytea_string_agg_finalfn	string_agg_combine	string_agg_serialize	string_agg_deserialize	-				-				-		f f r r 0	2281	0	0		0	_null_ _null_ ));
 
 /* json */
 DATA(insert ( 3175	n 0 json_agg_transfn	json_agg_finalfn			-	-	-	-				-				-				f f r r 0	2281	0	0		0	_null_ _null_ ));

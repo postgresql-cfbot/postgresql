@@ -5600,6 +5600,13 @@ DESCR("disable data checksums");
 DATA(insert OID = 3998 ( pg_enable_data_checksums		PGNSP PGUID 12 1 0 0 0 f f f t f v s 2 0 2278 "23 23" _null_ _null_ "{cost_delay,cost_limit}" _null_ _null_ enable_data_checksums _null_ _null_ _null_ ));
 DESCR("enable data checksums");
 
+/* type subscripting support */
+DATA(insert OID = 4001 (  jsonb_subscript_handler PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 "2281" "2281" _null_ _null_ _null_ _null_ _null_ jsonb_subscript_handler _null_ _null_ _null_ ));
+DESCR("Jsonb subscripting logic");
+
+DATA(insert OID = 4004 (  array_subscript_handler PGNSP PGUID 12 1 0 0 0 f f f t f i s 1 0 "2281" "2281" _null_ _null_ _null_ _null_ _null_ array_subscript_handler _null_ _null_ _null_ ));
+DESCR("Array subscripting logic");
+
 /* collation management functions */
 DATA(insert OID = 3445 ( pg_import_system_collations PGNSP PGUID 12 100 0 0 0 f f f t f v u 1 0 23 "4089" _null_ _null_ _null_ _null_ _null_ pg_import_system_collations _null_ _null_ _null_ ));
 DESCR("import collations from operating system");

@@ -3106,3 +3106,26 @@ get_range_subtype(Oid rangeOid)
 	else
 		return InvalidOid;
 }
+
+/*
+ * get_typsubshandler
+ *
+ *		Given the type OID, return the type's subscripting procedures, if any,
+ *		through pointers in arguments.
+ */
+RegProcedure
+get_typsubsprocs(Oid typid)
+{
+	HeapTuple		tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		RegProcedure handler = ((Form_pg_type) GETSTRUCT(tp))->typsubshandler;
+		ReleaseSysCache(tp);
+
+		return handler;
+	}
+	else
+		return InvalidOid;
+}

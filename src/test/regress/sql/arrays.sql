@@ -106,8 +106,8 @@ select ('[0:2][0:2]={{1,2,3},{4,5,6},{7,8,9}}'::int[])[1:2][2];
 --
 -- check subscription corner cases
 --
--- More subscripts than MAXDIMS(6)
-SELECT ('{}'::int[])[1][2][3][4][5][6][7];
+-- More subscripts than MAXDIMS(12)
+SELECT ('{}'::int[])[1][2][3][4][5][6][7][8][9][10][11][12][13];
 -- NULL index yields NULL when selecting
 SELECT ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][NULL][1];
 SELECT ('{{{1},{2},{3}},{{4},{5},{6}}}'::int[])[1][NULL:1][1];

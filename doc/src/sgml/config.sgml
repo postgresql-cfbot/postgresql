@@ -3141,6 +3141,30 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+      <varlistentry id="guc-max-slot-wal-keep-size" xreflabel="max_slot_wal_keep_size">
+       <term><varname>max_slot_wal_keep_size</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>max_slot_wal_keep_size</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+       <para>
+        Specify the maximum size of WAL files kept in
+        the <filename>pg_wal</filename> directory at checkpoint time, even in
+        case some of them are still claimed by
+        <link linkend="streaming-replication-slots">replication
+        slots</link>. If <varname>max_slot_wal_keep_size</varname> is zero
+        (the default), replication slots retain unlimited size of WAL
+        files.
+       </para>
+
+       <para>
+        This size is counted apart from
+        <xref linkend="guc-wal-keep-segments"/>. 
+       </para>
+       </listitem>
+      </varlistentry>
+
      <varlistentry id="guc-wal-sender-timeout" xreflabel="wal_sender_timeout">
       <term><varname>wal_sender_timeout</varname> (<type>integer</type>)
       <indexterm>

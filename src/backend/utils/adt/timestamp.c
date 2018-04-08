@@ -51,6 +51,9 @@ TimestampTz PgStartTime;
 /* Set at configuration reload */
 TimestampTz PgReloadTime;
 
+/* Set at shared memory (re)initialization */
+TimestampTz PgShmemInitTime;
+
 typedef struct
 {
 	Timestamp	current;
@@ -1558,6 +1561,12 @@ Datum
 pg_conf_load_time(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_TIMESTAMPTZ(PgReloadTime);
+}
+
+Datum
+pg_shmem_init_time(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TIMESTAMPTZ(PgShmemInitTime);
 }
 
 /*

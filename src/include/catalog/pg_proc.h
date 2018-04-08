@@ -4359,6 +4359,9 @@ DESCR("postmaster start time");
 /* config reload time function */
 DATA(insert OID = 2034 (  pg_conf_load_time			PGNSP PGUID 12 1 0 0 0 f f f t f s r 0 0 1184 "" _null_ _null_ _null_ _null_ _null_ pg_conf_load_time _null_ _null_ _null_ ));
 DESCR("configuration load time");
+/* shared memory (re)init time function */
+DATA(insert OID = 2579 (  pg_shmem_init_time		PGNSP PGUID 12 1 0 0 0 f f f f t f s r 0 0 1184 "" _null_ _null_ _null_ _null_ _null_ pg_shmem_init_time _null_ _null_ _null_ ));
+DESCR("shared memory (re)init time");
 
 /* new functions for Y-direction rtree opclasses */
 DATA(insert OID = 2562 (  box_below		   PGNSP PGUID 12 1 0 0 0 f f f t f i s 2 0 16 "603 603" _null_ _null_ _null_ _null_ _null_ box_below _null_ _null_ _null_ ));

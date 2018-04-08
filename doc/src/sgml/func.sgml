@@ -15995,6 +15995,12 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
       </row>
 
       <row>
+       <entry><literal><function>pg_shmem_init_time()</function></literal></entry>
+       <entry><type>timestamp with time zone</type></entry>
+       <entry>shared memory initialization time</entry>
+      </row>
+
+      <row>
        <entry><literal><function>pg_current_logfile(<optional><type>text</type></optional>)</function></literal></entry>
        <entry><type>text</type></entry>
        <entry>Primary log file name, or log in the requested format,

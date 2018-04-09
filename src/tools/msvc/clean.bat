@@ -60,7 +60,6 @@ if %DIST%==1 if exist src\pl\plpython\spiexceptions.h del /q src\pl\plpython\spi
 if %DIST%==1 if exist src\backend\utils\errcodes.h del /q src\backend\utils\errcodes.h
 if %DIST%==1 if exist src\pl\plpgsql\src\plerrcodes.h del /q src\pl\plpgsql\src\plerrcodes.h
 if %DIST%==1 if exist src\pl\tcl\pltclerrcodes.h del /q src\pl\tcl\pltclerrcodes.h
-if %DIST%==1 if exist src\backend\utils\sort\qsort_tuple.c del /q src\backend\utils\sort\qsort_tuple.c
 if %DIST%==1 if exist src\bin\psql\sql_help.c del /q src\bin\psql\sql_help.c
 if %DIST%==1 if exist src\bin\psql\sql_help.h del /q src\bin\psql\sql_help.h
 if %DIST%==1 if exist src\interfaces\ecpg\preproc\preproc.y del /q src\interfaces\ecpg\preproc\preproc.y

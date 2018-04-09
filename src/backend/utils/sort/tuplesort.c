@@ -655,8 +655,33 @@ static void free_sort_tuple(Tuplesortstate *state, SortTuple *stup);
  * reduces to ApplySortComparator(), that is single-key MinimalTuple sorts
  * and Datum sorts.
  */
-#include "qsort_tuple.c"
+#define QS_SUFFIX tuple
+#define QS_TYPE SortTuple
+#define QS_EXTRAPARAMS , SortTupleComparator cmp_tuple, Tuplesortstate *state
+#define QS_EXTRAARGS , cmp_tuple, state
+#define QS_CMPARGS , state
+#define QS_CHECK_FOR_INTERRUPTS
+#define QS_CHECK_PRESORTED
+#define QS_SCOPE static
+#define QS_DEFINE
+#include "lib/qsort_template.h"
 
+#define QS_SUFFIX ssup
+#define QS_TYPE SortTuple
+#define QS_EXTRAPARAMS , SortSupport ssup
+#define QS_EXTRAARGS , ssup
+#define QS_CMPARGS , ssup
+#define QS_CHECK_FOR_INTERRUPTS
+#define QS_CHECK_PRESORTED
+#define QS_SCOPE static
+static inline int
+cmp_ssup(SortTuple *a, SortTuple *b, SortSupport ssup)
+{
+	return ApplySortComparator(a->datum1, a->isnull1,
+								b->datum1, b->isnull1, ssup);
+}
+#define QS_DEFINE
+#include "lib/qsort_template.h"
 
 /*
  *		tuplesort_begin_xxx

@@ -298,6 +298,7 @@ typedef struct PlannerInfo
 	Index		qual_security_level;	/* minimum security_level for quals */
 	/* Note: qual_security_level is zero if there are no securityQuals */
 
+	bool		needBaseTids;	/* true to force outputting baserel CTIDs */
 	bool		hasInheritedTarget; /* true if parse->resultRelation is an
 									 * inheritance child rel */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */

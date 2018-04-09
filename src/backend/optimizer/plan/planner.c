@@ -623,6 +623,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->grouping_map = NULL;
 	root->minmax_aggs = NIL;
 	root->qual_security_level = 0;
+	root->needBaseTids = false;
 	root->hasInheritedTarget = false;
 	root->hasRecursion = hasRecursion;
 	if (hasRecursion)
@@ -1804,6 +1805,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		WindowFuncLists *wflists = NULL;
 		List	   *activeWindows = NIL;
 		grouping_sets_data *gset_data = NULL;
+		List	   *union_or_subpaths;
 		standard_qp_extra qp_extra;
 
 		/* A recursive query should always have setOperations */
@@ -1881,6 +1883,14 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 			preprocess_minmax_aggregates(root, tlist);
 
 		/*
+		 * Preprocess join OR clauses that might be better handled as UNIONs.
+		 * This likewise needs to be close to the query_planner() call.  But
+		 * it doesn't matter which of preprocess_minmax_aggregates() and this
+		 * function we call first, because they treat disjoint sets of cases.
+		 */
+		union_or_subpaths = split_join_or_clauses(root);
+
+		/*
 		 * Figure out whether there's a hard limit on the number of rows that
 		 * query_planner's result subplan needs to return.  Even if we know a
 		 * hard limit overall, it doesn't apply if the query has any
@@ -1913,6 +1923,14 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		 */
 		current_rel = query_planner(root, tlist,
 									standard_qp_callback, &qp_extra);
+
+		/*
+		 * If we found any way to convert a join OR clause to a union, finish
+		 * up generating the path(s) for that, and add them into the topmost
+		 * scan/join relation.
+		 */
+		if (union_or_subpaths)
+			finish_union_or_paths(root, current_rel, union_or_subpaths);
 
 		/*
 		 * Convert the query's result tlist into PathTarget format.

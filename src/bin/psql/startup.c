@@ -194,7 +194,8 @@ main(int argc, char *argv[])
 	if (!pset.popt.topt.fieldSep.separator &&
 		!pset.popt.topt.fieldSep.separator_zero)
 	{
-		pset.popt.topt.fieldSep.separator = pg_strdup(DEFAULT_FIELD_SEP);
+		pset.popt.topt.fieldSep.separator = pg_strdup(get_format_fieldsep(pset.popt.topt.format));
+		pset.popt.topt.fieldSep.is_custom = false;
 		pset.popt.topt.fieldSep.separator_zero = false;
 	}
 	if (!pset.popt.topt.recordSep.separator &&
@@ -436,6 +437,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"echo-all", no_argument, NULL, 'a'},
 		{"no-align", no_argument, NULL, 'A'},
 		{"command", required_argument, NULL, 'c'},
+		{"csv", no_argument, NULL, 2}, /* no single-letter (leave -C for future use) */
 		{"dbname", required_argument, NULL, 'd'},
 		{"echo-queries", no_argument, NULL, 'e'},
 		{"echo-errors", no_argument, NULL, 'b'},
@@ -485,7 +487,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				SetVariable(pset.vars, "ECHO", "all");
 				break;
 			case 'A':
-				pset.popt.topt.format = PRINT_UNALIGNED;
+				do_pset("format", "unaligned", &pset.popt, true);
 				break;
 			case 'b':
 				SetVariable(pset.vars, "ECHO", "errors");
@@ -515,14 +517,13 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 										  optarg);
 				break;
 			case 'F':
-				pset.popt.topt.fieldSep.separator = pg_strdup(optarg);
-				pset.popt.topt.fieldSep.separator_zero = false;
+				do_pset("fieldsep", optarg, &pset.popt, true);
 				break;
 			case 'h':
 				options->host = pg_strdup(optarg);
 				break;
 			case 'H':
-				pset.popt.topt.format = PRINT_HTML;
+				do_pset("format", "html", &pset.popt, true);
 				break;
 			case 'l':
 				options->list_dbs = true;
@@ -569,8 +570,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				SetVariableBool(pset.vars, "QUIET");
 				break;
 			case 'R':
-				pset.popt.topt.recordSep.separator = pg_strdup(optarg);
-				pset.popt.topt.recordSep.separator_zero = false;
+				do_pset("recordsep", optarg, &pset.popt, true);
 				break;
 			case 's':
 				SetVariableBool(pset.vars, "SINGLESTEP");
@@ -625,10 +625,10 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				options->no_psqlrc = true;
 				break;
 			case 'z':
-				pset.popt.topt.fieldSep.separator_zero = true;
+				do_pset("fieldsep_zero", NULL, &pset.popt, true);
 				break;
 			case '0':
-				pset.popt.topt.recordSep.separator_zero = true;
+				do_pset("recordsep_zero", NULL, &pset.popt, true);
 				break;
 			case '1':
 				options->single_txn = true;
@@ -657,6 +657,10 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 
 					exit(EXIT_SUCCESS);
 				}
+				break;
+			case 2:
+				/*  --csv: set both format and field separator */
+				do_pset("format", "csv", &pset.popt, true);
 				break;
 			default:
 		unknown_option:

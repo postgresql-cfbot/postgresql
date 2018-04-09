@@ -261,7 +261,7 @@ select '2000-01-01'::date as party_over
 border                   1
 columns                  0
 expanded                 off
-fieldsep                 '|'
+fieldsep                 ''
 fieldsep_zero            off
 footer                   on
 format                   aligned
@@ -3243,3 +3243,106 @@ last error message: division by zero
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 last error code: 22012
 \unset FETCH_COUNT
+-- test csv format
+prepare q as select 'ab,cd' as col1, 'ab' as "col,2", E'a\tb' as col3, '"' as col4,
+  '""' as col5, 'a"b' as "col""6", E'a\nb' as col7, NULL as col8, 'ab' as "col
+  9",  array['ab', E'cd\nef'] as col10,
+  '{"a":"a,b", "a,b":null, "c":"a,\"b"}'::json as col11
+   from generate_series(1,2);
+\pset format csv
+\pset fieldsep ','
+\pset expanded off
+\t off
+execute q;
+col1,"col,2",col3,col4,col5,"col""6",col7,col8,"col
+  9",col10,col11
+"ab,cd",ab,a	b,"""","""""","a""b","a
+b",,ab,"{ab,""cd
+ef""}","{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+"ab,cd",ab,a	b,"""","""""","a""b","a
+b",,ab,"{ab,""cd
+ef""}","{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+\pset fieldsep '\t'
+execute q;
+col1	col,2	col3	col4	col5	"col""6"	col7	col8	"col
+  9"	col10	col11
+ab,cd	ab	"a	b"	""""	""""""	"a""b"	"a
+b"		ab	"{ab,""cd
+ef""}"	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+ab,cd	ab	"a	b"	""""	""""""	"a""b"	"a
+b"		ab	"{ab,""cd
+ef""}"	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+\t on
+execute q;
+ab,cd	ab	"a	b"	""""	""""""	"a""b"	"a
+b"		ab	"{ab,""cd
+ef""}"	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+ab,cd	ab	"a	b"	""""	""""""	"a""b"	"a
+b"		ab	"{ab,""cd
+ef""}"	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+\t off
+\pset expanded on
+execute q;
+col1	ab,cd
+col,2	ab
+col3	"a	b"
+col4	""""
+col5	""""""
+"col""6"	"a""b"
+col7	"a
+b"
+col8	
+"col
+  9"	ab
+col10	"{ab,""cd
+ef""}"
+col11	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+col1	ab,cd
+col,2	ab
+col3	"a	b"
+col4	""""
+col5	""""""
+"col""6"	"a""b"
+col7	"a
+b"
+col8	
+"col
+  9"	ab
+col10	"{ab,""cd
+ef""}"
+col11	"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+\pset fieldsep ','
+execute q;
+col1,"ab,cd"
+"col,2",ab
+col3,a	b
+col4,""""
+col5,""""""
+"col""6","a""b"
+col7,"a
+b"
+col8,
+"col
+  9",ab
+col10,"{ab,""cd
+ef""}"
+col11,"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+col1,"ab,cd"
+"col,2",ab
+col3,a	b
+col4,""""
+col5,""""""
+"col""6","a""b"
+col7,"a
+b"
+col8,
+"col
+  9",ab
+col10,"{ab,""cd
+ef""}"
+col11,"{""a"":""a,b"", ""a,b"":null, ""c"":""a,\""b""}"
+deallocate q;
+\pset format aligned
+\pset expanded off
+\pset fieldsep '|'
+\t off

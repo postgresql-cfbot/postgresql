@@ -35,7 +35,6 @@
 #include "catalog/pg_type_d.h"
 #include "fe_utils/mbprint.h"
 
-
 /*
  * If the calling program doesn't have any mechanism for setting
  * cancel_pressed, it will have no effect.
@@ -2783,6 +2782,109 @@ print_troff_ms_vertical(const printTableContent *cont, FILE *fout)
 	}
 }
 
+/*************************/
+/* CSV  				 */
+/*************************/
+static void
+csv_escaped_print(const char *text, FILE *fout)
+{
+	const char *p;
+
+	fputc('"', fout);
+	for (p = text; *p; p++)
+	{
+		if (*p == '"')
+			fputc('"', fout);	/* double quotes are doubled */
+		fputc(*p, fout);
+	}
+	fputc('"', fout);
+}
+
+static void
+csv_print_field(const char *text, FILE *fout, const char *sep)
+{
+	/*
+	 * Enclose and escape field contents when one of these conditions is
+	 * met:
+	 * - the field separator is found in the contents
+	 * - the field contains a CR or LF
+	 * - the field contains a double quote
+	 */
+	if ((sep != NULL && *sep != '\0' && strstr(text, sep) != NULL) ||
+		strcspn(text, "\r\n\"") != strlen(text))
+	{
+		csv_escaped_print(text, fout);
+	}
+	else
+		fputs(text, fout);
+}
+
+static void
+print_csv_text(const printTableContent *cont, FILE *fout)
+{
+	const char *const *ptr;
+	const char* fieldsep = cont->opt->fieldSep.separator;
+	const char* const recordsep = cont->opt->recordSep.separator;
+	int i;
+
+	if (cancel_pressed)
+		return;
+
+	/*
+	 * The title and footer are never printed in csv format.
+	 * The header is printed if opt_tuples_only is false.
+	 */
+
+	if (cont->opt->start_table && !cont->opt->tuples_only)
+	{
+		/* print headers */
+		for (ptr = cont->headers; *ptr; ptr++)
+		{
+			if (ptr != cont->headers)
+				fputs(fieldsep, fout);
+			csv_print_field(*ptr, fout, fieldsep);
+		}
+		fputs(recordsep, fout);
+	}
+
+	/* print cells */
+	for (i = 0, ptr = cont->cells; *ptr; i++, ptr++)
+	{
+		if (cancel_pressed)
+			break;
+
+		csv_print_field(*ptr, fout, fieldsep);
+
+		if ((i + 1) % cont->ncolumns)
+			fputs(fieldsep, fout);
+		else
+			fputs(recordsep, fout);
+	}
+}
+
+static void
+print_csv_vertical(const printTableContent *cont, FILE *fout)
+{
+	unsigned int i;
+	const char *const *ptr;
+
+	/* Print records */
+	for (i = 0, ptr = cont->cells; *ptr; i++, ptr++)
+	{
+		if (cancel_pressed)
+			break;
+
+		/* Field name */
+		csv_print_field(cont->headers[i % cont->ncolumns], fout,
+						cont->opt->fieldSep.separator);
+		fputs(cont->opt->fieldSep.separator, fout);
+
+		/* Field value followed by record separator */
+		csv_print_field(*ptr, fout, cont->opt->fieldSep.separator);
+		fputs(cont->opt->recordSep.separator, fout);
+	}
+}
+
 
 /********************************/
 /* Public functions				*/
@@ -3234,6 +3336,12 @@ printTable(const printTableContent *cont,
 			else
 				print_aligned_text(cont, fout, is_pager);
 			break;
+		case PRINT_CSV:
+			if (cont->opt->expanded == 1)
+				print_csv_vertical(cont, fout);
+			else
+				print_csv_text(cont, fout);
+			break;
 		case PRINT_HTML:
 			if (cont->opt->expanded == 1)
 				print_html_vertical(cont, fout);
@@ -3422,6 +3530,21 @@ get_line_style(const printTableOpt *opt)
 		return opt->line_style;
 	else
 		return &pg_asciiformat;
+}
+
+/* returns default fieldSep used by formats */
+const char *
+get_format_fieldsep(enum printFormat format)
+{
+	switch (format)
+	{
+		case PRINT_UNALIGNED:
+			return DEFAULT_FIELD_SEP;
+		case PRINT_CSV:
+			return DEFAULT_FIELD_SEP_CSV;
+		default:
+			return "not used";
+	}
 }
 
 void

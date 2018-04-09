@@ -23,6 +23,9 @@
 #define DEFAULT_PAGER "less"
 #endif
 
+#define DEFAULT_FIELD_SEP "|"
+#define DEFAULT_FIELD_SEP_CSV ","
+
 enum printFormat
 {
 	PRINT_NOTHING = 0,			/* to make sure someone initializes this */
@@ -33,7 +36,8 @@ enum printFormat
 	PRINT_ASCIIDOC,
 	PRINT_LATEX,
 	PRINT_LATEX_LONGTABLE,
-	PRINT_TROFF_MS
+	PRINT_TROFF_MS,
+	PRINT_CSV
 	/* add your favourite output format here ... */
 };
 
@@ -91,6 +95,7 @@ struct separator
 {
 	char	   *separator;
 	bool		separator_zero;
+	bool		is_custom;			/* true, when user set this option */
 };
 
 typedef struct printTableOpt
@@ -158,8 +163,8 @@ typedef struct printTableContent
 	char	   *aligns;			/* Array of alignment specifiers; 'l' or 'r',
 								 * one per column */
 	char	   *align;			/* Pointer to the last added alignment */
-} printTableContent;
 
+} printTableContent;
 typedef struct printQueryOpt
 {
 	printTableOpt topt;			/* the options above */
@@ -210,6 +215,7 @@ extern char column_type_alignment(Oid);
 
 extern void setDecimalLocale(void);
 extern const printTextFormat *get_line_style(const printTableOpt *opt);
+extern const char *get_format_fieldsep(enum printFormat format);
 extern void refresh_utf8format(const printTableOpt *opt);
 
 #endif							/* PRINT_H */

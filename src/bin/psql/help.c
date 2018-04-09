@@ -108,13 +108,14 @@ usage(unsigned short int pager)
 
 	fprintf(output, _("\nOutput format options:\n"));
 	fprintf(output, _("  -A, --no-align           unaligned table output mode\n"));
+	fprintf(output, _("      --csv                Comma-Separated-Values output mode\n"));
 	fprintf(output, _("  -F, --field-separator=STRING\n"
-					  "                           field separator for unaligned output (default: \"%s\")\n"),
-			DEFAULT_FIELD_SEP);
+					  "                           field separator for unaligned (default: \"%s\") or csv (default \"%s\") output\n"),
+			DEFAULT_FIELD_SEP, DEFAULT_FIELD_SEP_CSV);
 	fprintf(output, _("  -H, --html               HTML table output mode\n"));
 	fprintf(output, _("  -P, --pset=VAR[=ARG]     set printing option VAR to ARG (see \\pset command)\n"));
 	fprintf(output, _("  -R, --record-separator=STRING\n"
-					  "                           record separator for unaligned output (default: newline)\n"));
+					  "                           record separator for unaligned or csv output (default: newline)\n"));
 	fprintf(output, _("  -t, --tuples-only        print rows only\n"));
 	fprintf(output, _("  -T, --table-attr=TEXT    set HTML table tag attributes (e.g., width, border)\n"));
 	fprintf(output, _("  -x, --expanded           turn on expanded table output\n"));
@@ -268,14 +269,14 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("Formatting\n"));
 	fprintf(output, _("  \\a                     toggle between unaligned and aligned output mode\n"));
 	fprintf(output, _("  \\C [STRING]            set table title, or unset if none\n"));
-	fprintf(output, _("  \\f [STRING]            show or set field separator for unaligned query output\n"));
+	fprintf(output, _("  \\f [STRING]            show or set field separator for unaligned or csv output\n"));
 	fprintf(output, _("  \\H                     toggle HTML output mode (currently %s)\n"),
 			ON(pset.popt.topt.format == PRINT_HTML));
 	fprintf(output, _("  \\pset [NAME [VALUE]]   set table output option\n"
-					  "                         (NAME := {border|columns|expanded|fieldsep|fieldsep_zero|\n"
+					  "                         (NAME := {border|columns|expanded|fieldsep|fieldsep_zero\n"
 					  "                         footer|format|linestyle|null|numericlocale|pager|\n"
 					  "                         pager_min_lines|recordsep|recordsep_zero|tableattr|title|\n"
-					  "                         tuples_only|unicode_border_linestyle|\n"
+					  "                         tuples_only|unicode_border_linestyle|reset|\n"
 					  "                         unicode_column_linestyle|unicode_header_linestyle})\n"));
 	fprintf(output, _("  \\t [on|off]            show only rows (currently %s)\n"),
 			ON(pset.popt.topt.tuples_only));
@@ -426,8 +427,8 @@ helpVariables(unsigned short int pager)
 	fprintf(output, _("  expanded (or x)\n"
 					  "    expanded output [on, off, auto]\n"));
 	fprintf(output, _("  fieldsep\n"
-					  "    field separator for unaligned output (default \"%s\")\n"),
-			DEFAULT_FIELD_SEP);
+					  "    field separator for unaligned (default: \"%s\") and csv (default \"%s\") output\n"),
+			DEFAULT_FIELD_SEP, DEFAULT_FIELD_SEP_CSV);
 	fprintf(output, _("  fieldsep_zero\n"
 					  "    set field separator for unaligned output to a zero byte\n"));
 	fprintf(output, _("  footer\n"
@@ -443,7 +444,7 @@ helpVariables(unsigned short int pager)
 	fprintf(output, _("  pager\n"
 					  "    control when an external pager is used [yes, no, always]\n"));
 	fprintf(output, _("  recordsep\n"
-					  "    record (line) separator for unaligned output\n"));
+					  "    record (line) separator for unaligned and csv output\n"));
 	fprintf(output, _("  recordsep_zero\n"
 					  "    set record separator for unaligned output to a zero byte\n"));
 	fprintf(output, _("  tableattr (or T)\n"

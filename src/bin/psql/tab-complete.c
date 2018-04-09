@@ -3818,8 +3818,9 @@ psql_completion(const char *text, int start, int end)
 		{"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
 			"footer", "format", "linestyle", "null", "numericlocale",
 			"pager", "pager_min_lines", "recordsep", "recordsep_zero",
-			"tableattr", "title", "tuples_only", "unicode_border_linestyle",
-		"unicode_column_linestyle", "unicode_header_linestyle", NULL};
+			"reset", "tableattr", "title", "tuples_only",
+			"unicode_border_linestyle", "unicode_column_linestyle",
+			"unicode_header_linestyle", NULL};
 
 		COMPLETE_WITH_LIST_CS(my_list);
 	}
@@ -3828,8 +3829,8 @@ psql_completion(const char *text, int start, int end)
 		if (TailMatchesCS1("format"))
 		{
 			static const char *const my_list[] =
-			{"unaligned", "aligned", "wrapped", "html", "asciidoc",
-			"latex", "latex-longtable", "troff-ms", NULL};
+			{"unaligned", "aligned", "csv", "wrapped", "html", "asciidoc",
+			 "latex", "latex-longtable", "troff-ms", NULL};
 
 			COMPLETE_WITH_LIST_CS(my_list);
 		}

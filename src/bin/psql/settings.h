@@ -12,7 +12,6 @@
 #include "variables.h"
 #include "fe_utils/print.h"
 
-#define DEFAULT_FIELD_SEP "|"
 #define DEFAULT_RECORD_SEP "\n"
 
 #if defined(WIN32) || defined(__CYGWIN__)

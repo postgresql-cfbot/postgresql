@@ -563,10 +563,17 @@ hostnossl  <replaceable>database</replaceable>  <replaceable>user</replaceable> 
       <para>
        In addition to the method-specific options listed below, there is one
        method-independent authentication option <literal>clientcert</literal>, which
-       can be specified in any <literal>hostssl</literal> record.  When set
-       to <literal>1</literal>, this option requires the client to present a valid
-       (trusted) SSL certificate, in addition to the other requirements of the
-       authentication method.
+       can be specified in any <literal>hostssl</literal> record.
+       This option can be set to <literal>verify-ca</literal> or
+       <literal>verify-full</literal>. Both options require the client
+       to present a valid (trusted) SSL certificate, while
+       <literal>verify-full</literal> additionally enforces that the
+       <literal>CN</literal> (Common Name) in the certificate matches
+       the username or an applicable mapping.
+       This behaviour is similar to the cert autentication method
+       (see <xref linkend="auth-cert"/> ) but enables pairing
+       the verification of client certificates with any authentication
+       method that supports <literal>hostssl</literal> entries.
       </para>
      </listitem>
     </varlistentry>

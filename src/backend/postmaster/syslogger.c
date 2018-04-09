@@ -307,6 +307,24 @@ SysLoggerMain(int argc, char *argv[])
 		if (got_SIGHUP)
 		{
 			got_SIGHUP = false;
+
+			/* Reopen last logfiles on SIGHUP */
+			if (last_file_name != NULL)
+			{
+				fclose(syslogFile);
+				syslogFile = logfile_open(last_file_name, "a", false);
+				ereport(LOG,
+						(errmsg("Reopen current logfile on SIGHUP")));
+			}
+
+			if (last_csv_file_name != NULL)
+			{
+				fclose(csvlogFile);
+				csvlogFile = logfile_open(last_csv_file_name, "a", false);
+				ereport(LOG,
+						(errmsg("Reopen current CSV logfile on SIGHUP")));
+			}
+
 			ProcessConfigFile(PGC_SIGHUP);
 
 			/*

@@ -13,7 +13,7 @@ drop index gist_pointidx2, gist_pointidx3, gist_pointidx4;
 -- Make sure bad values are refused
 create index gist_pointidx5 on gist_point_tbl using gist(p) with (buffering = invalid_value);
 ERROR:  invalid value for "buffering" option
-DETAIL:  Valid values are "on", "off", and "auto".
+DETAIL:  Valid values are "auto", "on" and "off".
 create index gist_pointidx5 on gist_point_tbl using gist(p) with (fillfactor=9);
 ERROR:  value 9 out of bounds for option "fillfactor"
 DETAIL:  Valid values are between "10" and "100".

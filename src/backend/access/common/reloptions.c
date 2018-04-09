@@ -422,7 +422,16 @@ static relopt_real realRelOpts[] =
 	{{NULL}}
 };
 
-static relopt_string stringRelOpts[] =
+static relopt_enum_element
+view_check_option_enum[] =
+{
+	{ RELOPT_ENUM_DEFAULT, VIEW_OPTION_CHECK_OPTION_NOT_SET },
+	{ "local",		VIEW_OPTION_CHECK_OPTION_LOCAL },
+	{ "cascaded",	VIEW_OPTION_CHECK_OPTION_CASCADED },
+	{ NULL,			0 }
+};
+
+static relopt_enum enumRelOpts[] =
 {
 	{
 		{
@@ -431,10 +440,7 @@ static relopt_string stringRelOpts[] =
 			RELOPT_KIND_GIST,
 			AccessExclusiveLock
 		},
-		4,
-		false,
-		gistValidateBufferingOption,
-		"auto"
+		gist_buffering_option_enum
 	},
 	{
 		{
@@ -443,11 +449,13 @@ static relopt_string stringRelOpts[] =
 			RELOPT_KIND_VIEW,
 			AccessExclusiveLock
 		},
-		0,
-		true,
-		validateWithCheckOption,
-		NULL
+		view_check_option_enum
 	},
+	{{NULL}}
+};
+
+static relopt_string stringRelOpts[] =
+{
 	/* list terminator */
 	{{NULL}}
 };
@@ -494,6 +502,12 @@ initialize_reloptions(void)
 								   realRelOpts[i].gen.lockmode));
 		j++;
 	}
+	for (i = 0; enumRelOpts[i].gen.name; i++)
+	{
+		Assert(DoLockModesConflict(enumRelOpts[i].gen.lockmode,
+								   enumRelOpts[i].gen.lockmode));
+		j++;
+	}
 	for (i = 0; stringRelOpts[i].gen.name; i++)
 	{
 		Assert(DoLockModesConflict(stringRelOpts[i].gen.lockmode,
@@ -528,6 +542,14 @@ initialize_reloptions(void)
 	{
 		relOpts[j] = &realRelOpts[i].gen;
 		relOpts[j]->type = RELOPT_TYPE_REAL;
+		relOpts[j]->namelen = strlen(relOpts[j]->name);
+		j++;
+	}
+
+	for (i = 0; enumRelOpts[i].gen.name; i++)
+	{
+		relOpts[j] = &enumRelOpts[i].gen;
+		relOpts[j]->type = RELOPT_TYPE_ENUM;
 		relOpts[j]->namelen = strlen(relOpts[j]->name);
 		j++;
 	}
@@ -629,6 +651,9 @@ allocate_reloption(bits32 kinds, int type, const char *name, const char *desc)
 		case RELOPT_TYPE_REAL:
 			size = sizeof(relopt_real);
 			break;
+		case RELOPT_TYPE_ENUM:
+			size = sizeof(relopt_enum);
+			break;
 		case RELOPT_TYPE_STRING:
 			size = sizeof(relopt_string);
 			break;
@@ -703,6 +728,23 @@ add_real_reloption(bits32 kinds, const char *name, const char *desc, double defa
 	newoption->default_val = default_val;
 	newoption->min = min_val;
 	newoption->max = max_val;
+
+	add_reloption((relopt_gen *) newoption);
+}
+
+/*
+ * add_enuum_reloption
+ *		Add a new enum reloption
+ */
+void
+add_enum_reloption(bits32 kinds, const char *name, const char *desc,
+				   relopt_enum_element *allowed_values)
+{
+	relopt_enum *newoption;
+
+	newoption = (relopt_enum *) allocate_reloption(kinds, RELOPT_TYPE_ENUM,
+												   name, desc);
+	newoption->allowed_values = allowed_values;
 
 	add_reloption((relopt_gen *) newoption);
 }
@@ -1208,6 +1250,49 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 									   optreal->min, optreal->max)));
 			}
 			break;
+		case RELOPT_TYPE_ENUM:
+			{
+				relopt_enum *opt_enum = (relopt_enum *) option->gen;
+				relopt_enum_element *elem = opt_enum->allowed_values;
+
+				parsed = false;
+
+				for (elem = opt_enum->allowed_values; elem->name; elem++)
+				{
+					if (elem->name != RELOPT_ENUM_DEFAULT &&
+						!pg_strcasecmp(value, elem->name))
+					{
+						option->values.enum_val = elem->value;
+						parsed = true;
+						break;
+					}
+				}
+
+				if (validate && !parsed)
+				{
+					StringInfoData buf;
+
+					initStringInfo(&buf);
+
+					for (elem = opt_enum->allowed_values; elem->name; elem++)
+					{
+						if (elem->name == RELOPT_ENUM_DEFAULT)
+							continue;	/* should be the first in the list */
+
+						appendStringInfo(&buf, "\"%s\"", elem->name);
+
+						if (elem[1].name)
+							appendStringInfo(&buf, elem[2].name ? ", " : " and ");
+					}
+
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for \"%s\" option",
+									option->gen->name),
+							 errdetail("Valid values are %s.", /*str*/ buf.data)));
+				}
+			}
+			break;
 		case RELOPT_TYPE_STRING:
 			{
 				relopt_string *optstring = (relopt_string *) option->gen;
@@ -1300,6 +1385,11 @@ fillRelOptions(void *rdopts, Size basesize,
 						*(double *) itempos = options[i].isset ?
 							options[i].values.real_val :
 							((relopt_real *) options[i].gen)->default_val;
+						break;
+					case RELOPT_TYPE_ENUM:
+						*(int *) itempos = options[i].isset ?
+							options[i].values.enum_val :
+							((relopt_enum *) options[i].gen)->allowed_values[0].value;
 						break;
 					case RELOPT_TYPE_STRING:
 						optstring = (relopt_string *) options[i].gen;
@@ -1413,8 +1503,8 @@ view_reloptions(Datum reloptions, bool validate)
 	static const relopt_parse_elt tab[] = {
 		{"security_barrier", RELOPT_TYPE_BOOL,
 		offsetof(ViewOptions, security_barrier)},
-		{"check_option", RELOPT_TYPE_STRING,
-		offsetof(ViewOptions, check_option_offset)}
+		{"check_option", RELOPT_TYPE_ENUM,
+		offsetof(ViewOptions, check_option)}
 	};
 
 	options = parseRelOptions(reloptions, validate, RELOPT_KIND_VIEW, &numoptions);

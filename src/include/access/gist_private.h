@@ -17,6 +17,7 @@
 #include "access/amapi.h"
 #include "access/gist.h"
 #include "access/itup.h"
+#include "access/reloptions.h"
 #include "fmgr.h"
 #include "lib/pairingheap.h"
 #include "storage/bufmgr.h"
@@ -368,13 +369,18 @@ typedef struct GISTBuildBuffers
 } GISTBuildBuffers;
 
 /*
+ * Definition of items of GiST enum option 'buffering'.
+ */
+extern relopt_enum_element gist_buffering_option_enum[];
+
+/*
  * Storage type for GiST's reloptions
  */
 typedef struct GiSTOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
-	int			bufferingModeOffset;	/* use buffering build? */
+	int			bufferingMode;	/* use buffering build? */
 } GiSTOptions;
 
 /* gist.c */

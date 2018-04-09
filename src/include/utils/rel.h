@@ -348,6 +348,13 @@ typedef struct StdRdOptions
 	((relation)->rd_options ? \
 	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
 
+typedef enum view_option_check_option_value_numbers
+{
+	VIEW_OPTION_CHECK_OPTION_NOT_SET = -1,
+	VIEW_OPTION_CHECK_OPTION_LOCAL = 0,
+	VIEW_OPTION_CHECK_OPTION_CASCADED = 1,
+}	view_option_check_option_value_numbers;
+
 
 /*
  * ViewOptions
@@ -357,7 +364,7 @@ typedef struct ViewOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	bool		security_barrier;
-	int			check_option_offset;
+	int			check_option;
 } ViewOptions;
 
 /*
@@ -376,7 +383,8 @@ typedef struct ViewOptions
  */
 #define RelationHasCheckOption(relation)									\
 	((relation)->rd_options &&												\
-	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0)
+	 ((ViewOptions *) (relation)->rd_options)->check_option !=				\
+	 VIEW_OPTION_CHECK_OPTION_NOT_SET)
 
 /*
  * RelationHasLocalCheckOption
@@ -385,10 +393,8 @@ typedef struct ViewOptions
  */
 #define RelationHasLocalCheckOption(relation)								\
 	((relation)->rd_options &&												\
-	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0 ?	\
-	 strcmp((char *) (relation)->rd_options +								\
-			((ViewOptions *) (relation)->rd_options)->check_option_offset,	\
-			"local") == 0 : false)
+	 ((ViewOptions *) (relation)->rd_options)->check_option ==				\
+	 VIEW_OPTION_CHECK_OPTION_LOCAL)
 
 /*
  * RelationHasCascadedCheckOption
@@ -397,11 +403,8 @@ typedef struct ViewOptions
  */
 #define RelationHasCascadedCheckOption(relation)							\
 	((relation)->rd_options &&												\
-	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0 ?	\
-	 strcmp((char *) (relation)->rd_options +								\
-			((ViewOptions *) (relation)->rd_options)->check_option_offset,	\
-			"cascaded") == 0 : false)
-
+	 ((ViewOptions *) (relation)->rd_options)->check_option ==				\
+	  VIEW_OPTION_CHECK_OPTION_CASCADED)
 
 /*
  * RelationIsValid

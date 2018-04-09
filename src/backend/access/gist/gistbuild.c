@@ -74,6 +74,16 @@ typedef struct
 	GistBufferingMode bufferingMode;
 } GISTBuildState;
 
+/* Definition of GiST enum option 'buffering' */
+relopt_enum_element
+gist_buffering_option_enum[] =
+{
+	{ "auto",	GIST_BUFFERING_AUTO },		/* default */
+	{ "on",		GIST_BUFFERING_STATS },
+	{ "off",	GIST_BUFFERING_DISABLED },
+	{ NULL,		0 }
+};
+
 /* prototypes for private functions */
 static void gistInitBuffering(GISTBuildState *buildstate);
 static int	calculatePagesPerBuffer(GISTBuildState *buildstate, int levelStep);
@@ -126,15 +136,8 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	{
 		/* Get buffering mode from the options string */
 		GiSTOptions *options = (GiSTOptions *) index->rd_options;
-		char	   *bufferingMode = (char *) options + options->bufferingModeOffset;
 
-		if (strcmp(bufferingMode, "on") == 0)
-			buildstate.bufferingMode = GIST_BUFFERING_STATS;
-		else if (strcmp(bufferingMode, "off") == 0)
-			buildstate.bufferingMode = GIST_BUFFERING_DISABLED;
-		else
-			buildstate.bufferingMode = GIST_BUFFERING_AUTO;
-
+		buildstate.bufferingMode = options->bufferingMode;
 		fillfactor = options->fillfactor;
 	}
 	else
@@ -231,25 +234,6 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	result->index_tuples = (double) buildstate.indtuples;
 
 	return result;
-}
-
-/*
- * Validator for "buffering" reloption on GiST indexes. Allows "on", "off"
- * and "auto" values.
- */
-void
-gistValidateBufferingOption(const char *value)
-{
-	if (value == NULL ||
-		(strcmp(value, "on") != 0 &&
-		 strcmp(value, "off") != 0 &&
-		 strcmp(value, "auto") != 0))
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid value for \"buffering\" option"),
-				 errdetail("Valid values are \"on\", \"off\", and \"auto\".")));
-	}
 }
 
 /*

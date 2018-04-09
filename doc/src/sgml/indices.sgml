@@ -1312,6 +1312,13 @@ SELECT target FROM tests WHERE subject = 'some-subject' AND success;
    such cases and allow index-only scans to be generated, but older versions
    will not.
   </para>
+
+  <para>
+   In addition, in some cases index only scan technique may be internally used for optimization of queries including <literal>OFFSET</literal>.
+   That is applicable to queries executed using index scan, not using <literal>GROUP BY</literal>
+   and where all the data values required by a <literal>WHERE</literal> predicate are available in the index.
+   Index type must support index only scans as well.
+  </para>
  </sect1>
 
 

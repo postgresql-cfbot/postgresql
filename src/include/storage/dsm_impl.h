@@ -14,11 +14,10 @@
 #define DSM_IMPL_H
 
 /* Dynamic shared memory implementations. */
-#define DSM_IMPL_NONE			0
-#define DSM_IMPL_POSIX			1
-#define DSM_IMPL_SYSV			2
-#define DSM_IMPL_WINDOWS		3
-#define DSM_IMPL_MMAP			4
+#define DSM_IMPL_POSIX			0
+#define DSM_IMPL_SYSV			1
+#define DSM_IMPL_WINDOWS		2
+#define DSM_IMPL_MMAP			3
 
 /*
  * Determine which dynamic shared memory implementations will be supported

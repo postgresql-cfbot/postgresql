@@ -933,6 +933,16 @@ test_config_settings(void)
 				ok_buffers = 0;
 
 
+	/*
+	 * Server doesn't confirm that the server-default DSM implementation is
+	 * actually workable. Choose a fine one for probing then it is used on the
+	 * new database.
+	 */
+	printf(_("selecting dynamic shared memory implementation ... "));
+	fflush(stdout);
+	dynamic_shared_memory_type = choose_dsm_implementation();
+	printf("%s\n", dynamic_shared_memory_type);
+
 	printf(_("selecting default max_connections ... "));
 	fflush(stdout);
 
@@ -945,10 +955,11 @@ test_config_settings(void)
 				 "\"%s\" --boot -x0 %s "
 				 "-c max_connections=%d "
 				 "-c shared_buffers=%d "
-				 "-c dynamic_shared_memory_type=none "
+				 "-c dynamic_shared_memory_type=%s "
 				 "< \"%s\" > \"%s\" 2>&1",
 				 backend_exec, boot_options,
 				 test_conns, test_buffs,
+				 dynamic_shared_memory_type,
 				 DEVNULL, DEVNULL);
 		status = system(cmd);
 		if (status == 0)
@@ -980,10 +991,11 @@ test_config_settings(void)
 				 "\"%s\" --boot -x0 %s "
 				 "-c max_connections=%d "
 				 "-c shared_buffers=%d "
-				 "-c dynamic_shared_memory_type=none "
+				 "-c dynamic_shared_memory_type=%s "
 				 "< \"%s\" > \"%s\" 2>&1",
 				 backend_exec, boot_options,
 				 n_connections, test_buffs,
+				 dynamic_shared_memory_type,
 				 DEVNULL, DEVNULL);
 		status = system(cmd);
 		if (status == 0)
@@ -995,11 +1007,6 @@ test_config_settings(void)
 		printf("%dMB\n", (n_buffers * (BLCKSZ / 1024)) / 1024);
 	else
 		printf("%dkB\n", n_buffers * (BLCKSZ / 1024));
-
-	printf(_("selecting dynamic shared memory implementation ... "));
-	fflush(stdout);
-	dynamic_shared_memory_type = choose_dsm_implementation();
-	printf("%s\n", dynamic_shared_memory_type);
 }
 
 /*

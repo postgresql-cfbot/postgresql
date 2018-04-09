@@ -28,6 +28,7 @@ static PgBenchExpr *make_boolean_constant(bool bval);
 static PgBenchExpr *make_integer_constant(int64 ival);
 static PgBenchExpr *make_double_constant(double dval);
 static PgBenchExpr *make_variable(char *varname);
+static PgBenchExpr *make_variable_exists(char *varname);
 static PgBenchExpr *make_op(yyscan_t yyscanner, const char *operator,
 		PgBenchExpr *lexpr, PgBenchExpr *rexpr);
 static PgBenchExpr *make_uop(yyscan_t yyscanner, const char *operator, PgBenchExpr *expr);
@@ -59,9 +60,10 @@ static PgBenchExpr *make_case(yyscan_t yyscanner, PgBenchExprList *when_then_lis
 %type <ival> INTEGER_CONST function
 %type <dval> DOUBLE_CONST
 %type <bval> BOOLEAN_CONST
-%type <str> VARIABLE FUNCTION
+%type <str> VARIABLE VAREXISTS FUNCTION
 
-%token NULL_CONST INTEGER_CONST DOUBLE_CONST BOOLEAN_CONST VARIABLE FUNCTION
+%token NULL_CONST INTEGER_CONST DOUBLE_CONST BOOLEAN_CONST
+%token VARIABLE VAREXISTS FUNCTION
 %token AND_OP OR_OP NOT_OP NE_OP LE_OP GE_OP LS_OP RS_OP IS_OP
 %token CASE_KW WHEN_KW THEN_KW ELSE_KW END_KW
 
@@ -140,6 +142,7 @@ expr: '(' expr ')'			{ $$ = $2; }
 	| DOUBLE_CONST			{ $$ = make_double_constant($1); }
 	/* misc */
 	| VARIABLE				{ $$ = make_variable($1); }
+	| VAREXISTS				{ $$ = make_variable_exists($1); }
 	| function '(' elist ')' { $$ = make_func(yyscanner, $1, $3); }
 	| case_control			{ $$ = $1; }
 	;
@@ -212,6 +215,16 @@ make_variable(char *varname)
 }
 
 /* binary operators */
+static PgBenchExpr *
+make_variable_exists(char *varname)
+{
+	PgBenchExpr *expr = pg_malloc(sizeof(PgBenchExpr));
+
+	expr->etype = ENODE_VAREXISTS;
+	expr->u.variable.varname = varname;
+	return expr;
+}
+
 static PgBenchExpr *
 make_op(yyscan_t yyscanner, const char *operator,
 		PgBenchExpr *lexpr, PgBenchExpr *rexpr)

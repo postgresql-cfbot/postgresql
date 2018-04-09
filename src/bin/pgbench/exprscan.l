@@ -191,6 +191,13 @@ notnull			[Nn][Oo][Tt][Nn][Uu][Ll][Ll]
 					yylval->bval = false;
 					return BOOLEAN_CONST;
 				}
+:\{\?{alnum}+\}	{
+					/* no pg_strndup? */
+					yylval->str = pg_strdup(yytext + 3);
+					/* scratch final '}' */
+					yylval->str[strlen(yylval->str)-1] = '\0';
+					return VAREXISTS;
+				}
 {digit}+		{
 					yylval->ival = strtoint64(yytext);
 					return INTEGER_CONST;

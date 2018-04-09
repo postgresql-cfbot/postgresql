@@ -2360,6 +2360,10 @@ evaluateExpr(TState *thread, CState *st, PgBenchExpr *expr, PgBenchValue *retval
 				return true;
 			}
 
+		case ENODE_VAREXISTS:
+				setBoolValue(retval, lookupVariable(st, expr->u.variable.varname) != NULL);
+				return true;
+
 		case ENODE_FUNCTION:
 			return evalFunc(thread, st,
 							expr->u.function.function,

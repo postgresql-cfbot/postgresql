@@ -182,7 +182,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	 */
 	if (entry->conn == NULL)
 	{
-		ForeignServer *server = GetForeignServer(user->serverid);
+		ForeignServer *server = GetForeignServer(user->serverid, false);
 
 		/* Reset all transient state fields, to be sure all are clean */
 		entry->xact_depth = 0;
@@ -1003,7 +1003,7 @@ pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry)
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for user mapping %u", entry->key);
 	umform = (Form_pg_user_mapping) GETSTRUCT(tup);
-	server = GetForeignServer(umform->umserver);
+	server = GetForeignServer(umform->umserver, false);
 	ReleaseSysCache(tup);
 
 	ereport(ERROR,

@@ -368,7 +368,8 @@ AlterForeignServerOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 			aclresult = pg_foreign_data_wrapper_aclcheck(form->srvfdw, newOwnerId, ACL_USAGE);
 			if (aclresult != ACLCHECK_OK)
 			{
-				ForeignDataWrapper *fdw = GetForeignDataWrapper(form->srvfdw);
+				ForeignDataWrapper *fdw = GetForeignDataWrapper(form->srvfdw,
+																false);
 
 				aclcheck_error(aclresult, OBJECT_FDW, fdw->fdwname);
 			}
@@ -1033,7 +1034,8 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 
 	if (stmt->options)
 	{
-		ForeignDataWrapper *fdw = GetForeignDataWrapper(srvForm->srvfdw);
+		ForeignDataWrapper *fdw = GetForeignDataWrapper(srvForm->srvfdw,
+														false);
 		Datum		datum;
 		bool		isnull;
 
@@ -1187,7 +1189,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 							stmt->servername)));
 	}
 
-	fdw = GetForeignDataWrapper(srv->fdwid);
+	fdw = GetForeignDataWrapper(srv->fdwid, false);
 
 	/*
 	 * Insert tuple into pg_user_mapping.
@@ -1299,7 +1301,7 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 		 * Process the options.
 		 */
 
-		fdw = GetForeignDataWrapper(srv->fdwid);
+		fdw = GetForeignDataWrapper(srv->fdwid, false);
 
 		datum = SysCacheGetAttr(USERMAPPINGUSERSERVER,
 								tp,
@@ -1479,7 +1481,7 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
 
-	fdw = GetForeignDataWrapper(server->fdwid);
+	fdw = GetForeignDataWrapper(server->fdwid, false);
 
 	/*
 	 * Insert tuple into pg_foreign_table.
@@ -1542,7 +1544,7 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 	(void) LookupCreationNamespace(stmt->local_schema);
 
 	/* Get the FDW and check it supports IMPORT */
-	fdw = GetForeignDataWrapper(server->fdwid);
+	fdw = GetForeignDataWrapper(server->fdwid, false);
 	if (!OidIsValid(fdw->fdwhandler))
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),

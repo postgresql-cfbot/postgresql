@@ -372,8 +372,8 @@ fileGetOptions(Oid foreigntableid,
 	 * Simplify?)
 	 */
 	table = GetForeignTable(foreigntableid);
-	server = GetForeignServer(table->serverid);
-	wrapper = GetForeignDataWrapper(server->fdwid);
+	server = GetForeignServer(table->serverid, false);
+	wrapper = GetForeignDataWrapper(server->fdwid, false);
 
 	options = NIL;
 	options = list_concat(options, wrapper->options);

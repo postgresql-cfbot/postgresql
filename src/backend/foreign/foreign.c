@@ -32,7 +32,7 @@
  * GetForeignDataWrapper -	look up the foreign-data wrapper by OID.
  */
 ForeignDataWrapper *
-GetForeignDataWrapper(Oid fdwid)
+GetForeignDataWrapper(Oid fdwid, bool missing_ok)
 {
 	Form_pg_foreign_data_wrapper fdwform;
 	ForeignDataWrapper *fdw;
@@ -43,7 +43,11 @@ GetForeignDataWrapper(Oid fdwid)
 	tp = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(fdwid));
 
 	if (!HeapTupleIsValid(tp))
-		elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwid);
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for foreign-data wrapper %u", fdwid);
+		return NULL;
+	}
 
 	fdwform = (Form_pg_foreign_data_wrapper) GETSTRUCT(tp);
 
@@ -82,7 +86,11 @@ GetForeignDataWrapperByName(const char *fdwname, bool missing_ok)
 	if (!OidIsValid(fdwId))
 		return NULL;
 
-	return GetForeignDataWrapper(fdwId);
+	/*
+	 * missing_ok set to true makes no sense here as a lookup has already
+	 * happened.
+	 */
+	return GetForeignDataWrapper(fdwId, false);
 }
 
 
@@ -90,7 +98,7 @@ GetForeignDataWrapperByName(const char *fdwname, bool missing_ok)
  * GetForeignServer - look up the foreign server definition.
  */
 ForeignServer *
-GetForeignServer(Oid serverid)
+GetForeignServer(Oid serverid, bool missing_ok)
 {
 	Form_pg_foreign_server serverform;
 	ForeignServer *server;
@@ -101,7 +109,11 @@ GetForeignServer(Oid serverid)
 	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(serverid));
 
 	if (!HeapTupleIsValid(tp))
-		elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for foreign server %u", serverid);
+		return NULL;
+	}
 
 	serverform = (Form_pg_foreign_server) GETSTRUCT(tp);
 
@@ -152,7 +164,11 @@ GetForeignServerByName(const char *srvname, bool missing_ok)
 	if (!OidIsValid(serverid))
 		return NULL;
 
-	return GetForeignServer(serverid);
+	/*
+	 * missing_ok set to true makes no sense here as a lookup has already
+	 * happened.
+	 */
+	return GetForeignServer(serverid, false);
 }
 
 

@@ -9466,7 +9466,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 					{
 						/* Not expecting any other direct dependencies... */
 						elog(ERROR, "unexpected object depending on column: %s",
-							 getObjectDescription(&foundObject));
+							 getObjectDescription(&foundObject, false));
 					}
 					break;
 				}
@@ -9514,7 +9514,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used by a view or rule"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -9533,7 +9533,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used in a trigger definition"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -9551,7 +9551,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used in a policy definition"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -9612,7 +9612,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				 * a column.
 				 */
 				elog(ERROR, "unexpected object depending on column: %s",
-					 getObjectDescription(&foundObject));
+					 getObjectDescription(&foundObject, false));
 				break;
 
 				/*
@@ -9764,8 +9764,8 @@ ATExecAlterColumnGenericOptions(Relation rel,
 				 errmsg("foreign table \"%s\" does not exist",
 						RelationGetRelationName(rel))));
 	fttableform = (Form_pg_foreign_table) GETSTRUCT(tuple);
-	server = GetForeignServer(fttableform->ftserver);
-	fdw = GetForeignDataWrapper(server->fdwid);
+	server = GetForeignServer(fttableform->ftserver, false);
+	fdw = GetForeignDataWrapper(server->fdwid, false);
 
 	heap_close(ftrel, AccessShareLock);
 	ReleaseSysCache(tuple);
@@ -12667,8 +12667,8 @@ ATExecGenericOptions(Relation rel, List *options)
 				 errmsg("foreign table \"%s\" does not exist",
 						RelationGetRelationName(rel))));
 	tableform = (Form_pg_foreign_table) GETSTRUCT(tuple);
-	server = GetForeignServer(tableform->ftserver);
-	fdw = GetForeignDataWrapper(server->fdwid);
+	server = GetForeignServer(tableform->ftserver, false);
+	fdw = GetForeignDataWrapper(server->fdwid, false);
 
 	memset(repl_val, 0, sizeof(repl_val));
 	memset(repl_null, false, sizeof(repl_null));

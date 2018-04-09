@@ -405,7 +405,8 @@ format_procedure_internal(Oid procedure_oid, bool force_qualify)
  * This can be used to feed get_object_address.
  */
 void
-format_procedure_parts(Oid procedure_oid, List **objnames, List **objargs)
+format_procedure_parts(Oid procedure_oid, List **objnames, List **objargs,
+					   bool missing_ok)
 {
 	HeapTuple	proctup;
 	Form_pg_proc procform;
@@ -415,7 +416,11 @@ format_procedure_parts(Oid procedure_oid, List **objnames, List **objargs)
 	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(procedure_oid));
 
 	if (!HeapTupleIsValid(proctup))
-		elog(ERROR, "cache lookup failed for procedure with OID %u", procedure_oid);
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for procedure with OID %u", procedure_oid);
+		return;
+	}
 
 	procform = (Form_pg_proc) GETSTRUCT(proctup);
 	nargs = procform->pronargs;
@@ -751,7 +756,7 @@ to_regoperator(PG_FUNCTION_ARGS)
  * This exports the useful functionality of regoperatorout for use
  * in other backend modules.  The result is a palloc'd string.
  */
-static char *
+char *
 format_operator_internal(Oid operator_oid, bool force_qualify)
 {
 	char	   *result;
@@ -829,15 +834,20 @@ format_operator_qualified(Oid operator_oid)
 }
 
 void
-format_operator_parts(Oid operator_oid, List **objnames, List **objargs)
+format_operator_parts(Oid operator_oid, List **objnames, List **objargs,
+					  bool missing_ok)
 {
 	HeapTuple	opertup;
 	Form_pg_operator oprForm;
 
 	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(operator_oid));
 	if (!HeapTupleIsValid(opertup))
-		elog(ERROR, "cache lookup failed for operator with OID %u",
-			 operator_oid);
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for operator with OID %u",
+				 operator_oid);
+		return;
+	}
 
 	oprForm = (Form_pg_operator) GETSTRUCT(opertup);
 	*objnames = list_make2(get_namespace_name_or_temp(oprForm->oprnamespace),

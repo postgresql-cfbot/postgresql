@@ -90,7 +90,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/xml.h"
-
+#include "utils/xpath_parser.h"
 
 /* GUC variables */
 int			xmlbinary;
@@ -187,6 +187,7 @@ typedef struct XmlTableBuilderData
 	xmlXPathCompExprPtr xpathcomp;
 	xmlXPathObjectPtr xpathobj;
 	xmlXPathCompExprPtr *xpathscomp;
+	bool		with_default_ns;
 } XmlTableBuilderData;
 #endif
 
@@ -227,6 +228,7 @@ const TableFuncRoutine XmlTableRoutine =
 #define NAMESPACE_XSI "http://www.w3.org/2001/XMLSchema-instance"
 #define NAMESPACE_SQLXML "http://standards.iso.org/iso/9075/2003/sqlxml"
 
+#define DEFAULT_NAMESPACE_NAME		"pgdefnamespace.pgsqlxml.internal"
 
 #ifdef USE_LIBXML
 
@@ -3850,6 +3852,7 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 	int			ndim;
 	Datum	   *ns_names_uris;
 	bool	   *ns_names_uris_nulls;
+	bool		with_default_ns = false;
 	int			ns_count;
 
 	/*
@@ -3860,6 +3863,8 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 	 * first element defining the name, the second one the URI.  Example:
 	 * ARRAY[ARRAY['myns', 'http://example.com'], ARRAY['myns2',
 	 * 'http://example2.com']].
+	 * When the name is empty string, then URI is used as default namespace.
+	 * Example: ARRAY[ARRAY['', 'http://x.y]]
 	 */
 	ndim = namespaces ? ARR_NDIM(namespaces) : 0;
 	if (ndim != 0)
@@ -3899,7 +3904,6 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 				 errmsg("empty XPath expression")));
 
 	string = pg_xmlCharStrndup(datastr, len);
-	xpath_expr = pg_xmlCharStrndup(VARDATA_ANY(xpath_expr_text), xpath_len);
 
 	/*
 	 * In a UTF8 database, skip any xml declaration, which might assert
@@ -3953,6 +3957,26 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 							(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
 							 errmsg("neither namespace name nor URI may be null")));
 				ns_name = TextDatumGetCString(ns_names_uris[i * 2]);
+
+				/* Don't allow same namespace as out internal default namespace name */
+				if (strcmp(ns_name, DEFAULT_NAMESPACE_NAME) == 0)
+					ereport(ERROR,
+								(errcode(ERRCODE_RESERVED_NAME),
+								 errmsg("cannot to use \"%s\" as namespace name",
+										  DEFAULT_NAMESPACE_NAME),
+								 errdetail("\"%s\" is reserved for internal purpose",
+										  DEFAULT_NAMESPACE_NAME)));
+				if (*ns_name == '\0')
+				{
+					if (with_default_ns)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("only one default namespace is allowed")));
+
+					with_default_ns = true;
+					ns_name = DEFAULT_NAMESPACE_NAME;
+				}
+
 				ns_uri = TextDatumGetCString(ns_names_uris[i * 2 + 1]);
 				if (xmlXPathRegisterNs(xpathctx,
 									   (xmlChar *) ns_name,
@@ -3962,6 +3986,16 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 									ns_name, ns_uri)));
 			}
 		}
+
+		if (with_default_ns)
+		{
+			StringInfoData		str;
+
+			transformXPath(&str, text_to_cstring(xpath_expr_text), DEFAULT_NAMESPACE_NAME);
+			xpath_expr = pg_xmlCharStrndup(str.data, str.len);
+		}
+		else
+			xpath_expr = pg_xmlCharStrndup(VARDATA_ANY(xpath_expr_text), xpath_len);
 
 		xpathcomp = xmlXPathCompile(xpath_expr);
 		if (xpathcomp == NULL || xmlerrcxt->err_occurred)
@@ -4207,6 +4241,7 @@ XmlTableInitOpaque(TableFuncScanState *state, int natts)
 	xtCxt->magic = XMLTABLE_CONTEXT_MAGIC;
 	xtCxt->natts = natts;
 	xtCxt->xpathscomp = palloc0(sizeof(xmlXPathCompExprPtr) * natts);
+	xtCxt->with_default_ns = false;
 
 	xmlerrcxt = pg_xml_init(PG_XML_STRICTNESS_ALL);
 
@@ -4299,6 +4334,7 @@ XmlTableSetDocument(TableFuncScanState *state, Datum value)
 #endif							/* not USE_LIBXML */
 }
 
+
 /*
  * XmlTableSetNamespace
  *		Add a namespace declaration
@@ -4309,11 +4345,24 @@ XmlTableSetNamespace(TableFuncScanState *state, const char *name, const char *ur
 #ifdef USE_LIBXML
 	XmlTableBuilderData *xtCxt;
 
-	if (name == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("DEFAULT namespace is not supported")));
 	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableSetNamespace");
+
+	if (name != NULL)
+	{
+		/* Don't allow same namespace as out internal default namespace name */
+		if (strcmp(name, DEFAULT_NAMESPACE_NAME) == 0)
+			ereport(ERROR,
+						(errcode(ERRCODE_RESERVED_NAME),
+						 errmsg("cannot to use \"%s\" as namespace name",
+								  DEFAULT_NAMESPACE_NAME),
+						 errdetail("\"%s\" is reserved for internal purpose",
+								  DEFAULT_NAMESPACE_NAME)));
+	}
+	else
+	{
+		xtCxt->with_default_ns = true;
+		name = DEFAULT_NAMESPACE_NAME;
+	}
 
 	if (xmlXPathRegisterNs(xtCxt->xpathcxt,
 						   pg_xmlCharStrndup(name, strlen(name)),
@@ -4342,6 +4391,14 @@ XmlTableSetRowFilter(TableFuncScanState *state, const char *path)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("row path filter must not be empty string")));
+
+	if (xtCxt->with_default_ns)
+	{
+		StringInfoData		str;
+
+		transformXPath(&str, path, DEFAULT_NAMESPACE_NAME);
+		path = str.data;
+	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 
@@ -4373,6 +4430,14 @@ XmlTableSetColumnFilter(TableFuncScanState *state, const char *path, int colnum)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("column path filter must not be empty string")));
+
+	if (xtCxt->with_default_ns)
+	{
+		StringInfoData		str;
+
+		transformXPath(&str, path, DEFAULT_NAMESPACE_NAME);
+		path = str.data;
+	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 

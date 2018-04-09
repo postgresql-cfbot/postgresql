@@ -46,6 +46,18 @@ static PyObject *PLyDict_FromTuple(PLyDatumToOb *arg, HeapTuple tuple, TupleDesc
 /* conversion from Python objects to Datums */
 static Datum PLyObject_ToBool(PLyObToDatum *arg, PyObject *plrv,
 				 bool *isnull, bool inarray);
+static Datum PLyObject_ToInt16(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray);
+static Datum PLyObject_ToInt32(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray);
+static Datum PLyObject_ToInt64(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray);
+static Datum PLyObject_ToFloat4(PLyObToDatum *arg, PyObject *plrv,
+				   bool *isnull, bool inarray);
+static Datum PLyObject_ToFloat8(PLyObToDatum *arg, PyObject *plrv,
+				   bool *isnull, bool inarray);
+static Datum PLyObject_ToNumeric(PLyObToDatum *arg, PyObject *plrv,
+					bool *isnull, bool inarray);
 static Datum PLyObject_ToBytea(PLyObToDatum *arg, PyObject *plrv,
 				  bool *isnull, bool inarray);
 static Datum PLyObject_ToComposite(PLyObToDatum *arg, PyObject *plrv,
@@ -397,16 +409,35 @@ PLy_output_setup_func(PLyObToDatum *arg, MemoryContext arg_mcxt,
 		{
 			case BOOLOID:
 				arg->func = PLyObject_ToBool;
-				break;
+				return; /* no need to initialize arg->u.scalar */
 			case BYTEAOID:
 				arg->func = PLyObject_ToBytea;
+				return;	/* no need to initialize arg->u.scalar */
+			case INT2OID:
+				arg->func = PLyObject_ToInt16;
+				break;
+			case INT4OID:
+				arg->func = PLyObject_ToInt32;
+				break;
+			case INT8OID:
+				arg->func = PLyObject_ToInt64;
+				break;
+			case FLOAT4OID:
+				arg->func = PLyObject_ToFloat4;
+				break;
+			case FLOAT8OID:
+				arg->func = PLyObject_ToFloat8;
+				break;
+			case NUMERICOID:
+				arg->func = PLyObject_ToNumeric;
 				break;
 			default:
 				arg->func = PLyObject_ToScalar;
-				getTypeInputInfo(typeOid, &typinput, &arg->u.scalar.typioparam);
-				fmgr_info_cxt(typinput, &arg->u.scalar.typfunc, arg_mcxt);
 				break;
 		}
+
+		getTypeInputInfo(typeOid, &typinput, &arg->u.scalar.typioparam);
+		fmgr_info_cxt(typinput, &arg->u.scalar.typfunc, arg_mcxt);
 	}
 }
 
@@ -882,6 +913,210 @@ PLyObject_ToBool(PLyObToDatum *arg, PyObject *plrv,
 	}
 	*isnull = false;
 	return BoolGetDatum(PyObject_IsTrue(plrv));
+}
+
+/* Try to convert python Int to C long. */
+static long
+PLyInt_AsLong(PyObject *plrv, bool *err)
+{
+	long		val = PyInt_AsLong(plrv);
+
+	/* If -1 is returned then OverflowError is possible. */
+	*err = val == -1 && PyErr_Occurred();
+
+	if (*err)
+	{
+		/* Catch OverflowError exception. */
+		if (!PyErr_ExceptionMatches(PyExc_OverflowError))
+			PLy_elog(ERROR, NULL);
+
+		PyErr_Clear();
+	}
+
+	return val;
+}
+
+/*
+ * Convert a Python object to a PostgreSQL int16 datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToInt16(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		bool		err;
+		long		val = PLyInt_AsLong(plrv, &err);
+
+		if (err || val < SHRT_MIN || val > SHRT_MAX)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value \"%s\" is out of range for type %s",
+							PLyObject_AsString(plrv), "smallint")));
+
+		*isnull = false;
+		return Int16GetDatum((int16) val);
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
+}
+
+/*
+ * Convert a Python object to a PostgreSQL int32 datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToInt32(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		bool		err;
+		long		val = PLyInt_AsLong(plrv, &err);
+
+		if (err
+#ifdef HAVE_LONG_INT_64
+			|| val < INT_MIN || val > INT_MAX
+#endif
+		)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value \"%s\" is out of range for type %s",
+							 PLyObject_AsString(plrv), "integer")));
+
+		*isnull = false;
+		return Int32GetDatum((int32) val);
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
+}
+
+/*
+ * Convert a Python object to a PostgreSQL int64 datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToInt64(PLyObToDatum *arg, PyObject *plrv,
+				  bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		bool		err;
+		long		val = PLyInt_AsLong(plrv, &err);
+
+		if (!err)
+		{
+			*isnull = false;
+			return Int64GetDatum((int64) val);
+		}
+
+		/* try to convert via I/O */
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
+}
+
+/*
+ * Convert a Python object to a PostgreSQL float4 datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToFloat4(PLyObToDatum *arg, PyObject *plrv,
+				   bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyFloat_Check(plrv) || PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		*isnull = false;
+		return Float4GetDatum((float)PyFloat_AsDouble(plrv));
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
+}
+
+/*
+ * Convert a Python object to a PostgreSQL float8 datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToFloat8(PLyObToDatum *arg, PyObject *plrv,
+				   bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyFloat_Check(plrv) || PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		*isnull = false;
+		return Float8GetDatum((double)PyFloat_AsDouble(plrv));
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
+}
+
+/*
+ * Convert a Python object to a PostgreSQL numeric datum directly.
+ * If can not convert it directly, fallback to PLyObject_ToScalar
+ * to convert it.
+ */
+static Datum
+PLyObject_ToNumeric(PLyObToDatum *arg, PyObject *plrv,
+					bool *isnull, bool inarray)
+{
+	if (plrv == Py_None)
+	{
+		*isnull = true;
+		return (Datum) 0;
+	}
+
+	if (PyInt_Check(plrv) || PyLong_Check(plrv))
+	{
+		bool		err;
+		long		val = PLyInt_AsLong(plrv, &err);
+
+		if (!err)
+		{
+			*isnull = false;
+			return DirectFunctionCall1(int8_numeric,
+									   Int64GetDatum((int64) val));
+		}
+
+		/* try to convert via I/O */
+	}
+
+	return PLyObject_ToScalar(arg, plrv, isnull, inarray);
 }
 
 /*

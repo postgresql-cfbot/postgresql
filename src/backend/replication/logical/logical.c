@@ -60,6 +60,16 @@ static void shutdown_cb_wrapper(LogicalDecodingContext *ctx);
 static void begin_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn);
 static void commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  XLogRecPtr commit_lsn);
+static void abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				 XLogRecPtr abort_lsn);
+static bool filter_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  TransactionId xid, const char *gid);
+static void prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				   XLogRecPtr prepare_lsn);
+static void commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						   XLogRecPtr commit_lsn);
+static void abort_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  XLogRecPtr abort_lsn);
 static void change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  Relation relation, ReorderBufferChange *change);
 static void truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -127,6 +137,7 @@ StartupDecodingContext(List *output_plugin_options,
 	MemoryContext context,
 				old_context;
 	LogicalDecodingContext *ctx;
+	int			twophase_callbacks;
 
 	/* shorter lines... */
 	slot = MyReplicationSlot;
@@ -187,7 +198,37 @@ StartupDecodingContext(List *output_plugin_options,
 	ctx->reorder->apply_change = change_cb_wrapper;
 	ctx->reorder->apply_truncate = truncate_cb_wrapper;
 	ctx->reorder->commit = commit_cb_wrapper;
+	ctx->reorder->abort = abort_cb_wrapper;
+	ctx->reorder->filter_prepare = filter_prepare_cb_wrapper;
+	ctx->reorder->prepare = prepare_cb_wrapper;
+	ctx->reorder->commit_prepared = commit_prepared_cb_wrapper;
+	ctx->reorder->abort_prepared = abort_prepared_cb_wrapper;
 	ctx->reorder->message = message_cb_wrapper;
+
+	/*
+	 * Check that plugin implements all callbacks necessary to decode
+	 * two-phase transactions - we either have to have all of them or none.
+	 * The filter_prepare callback is optional, but can only be defined when
+	 * two-phase decoding is enabled (i.e. the three other callbacks are
+	 * defined).
+	 */
+	twophase_callbacks = (ctx->callbacks.prepare_cb != NULL) +
+		(ctx->callbacks.commit_prepared_cb != NULL) +
+		(ctx->callbacks.abort_prepared_cb != NULL);
+
+	ctx->enable_twophase = (twophase_callbacks == 3);
+
+	/* Plugins with incorrect number of two-phase callbacks are broken. */
+	if ((twophase_callbacks != 3) && (twophase_callbacks != 0))
+		ereport(ERROR,
+				(errmsg("Output plugin registered only %d twophase callbacks. ",
+						twophase_callbacks)));
+
+	/* filter_prepare is optional, but requires two-phase decoding */
+	if ((ctx->callbacks.filter_prepare_cb != NULL) && (!ctx->enable_twophase))
+		ereport(ERROR,
+				(errmsg("Output plugin does not support two-phase decoding, but "
+						"registered filter_prepared callback.")));
 
 	ctx->out = makeStringInfo();
 	ctx->prepare_write = prepare_write;
@@ -701,6 +742,122 @@ commit_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 }
 
 static void
+abort_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				 XLogRecPtr abort_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "abort";
+	state.report_location = txn->final_lsn; /* beginning of abort record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.abort_cb(ctx, txn, abort_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+				   XLogRecPtr prepare_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "prepare";
+	state.report_location = txn->final_lsn; /* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.prepare_cb(ctx, txn, prepare_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						   XLogRecPtr commit_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "commit_prepared";
+	state.report_location = txn->final_lsn; /* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.commit_prepared_cb(ctx, txn, commit_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
+abort_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  XLogRecPtr abort_lsn)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "abort_prepared";
+	state.report_location = txn->final_lsn; /* beginning of commit record */
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = true;
+	ctx->write_xid = txn->xid;
+	ctx->write_location = txn->end_lsn; /* points to the end of the record */
+
+	/* do the actual work: call callback */
+	ctx->callbacks.abort_prepared_cb(ctx, txn, abort_lsn);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+}
+
+static void
 change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 				  Relation relation, ReorderBufferChange *change)
 {
@@ -775,6 +932,51 @@ truncate_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+}
+
+static bool
+filter_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
+						  TransactionId xid, const char *gid)
+{
+	LogicalDecodingContext *ctx = cache->private_data;
+	LogicalErrorCallbackState state;
+	ErrorContextCallback errcallback;
+	bool		ret;
+
+	/*
+	 * Skip if decoding of twophase at PREPARE time is not enabled. In that
+	 * case all twophase transactions are considered filtered out and will be
+	 * applied as regular transactions at COMMIT PREPARED.
+	 */
+	if (!ctx->enable_twophase)
+		return true;
+
+	/*
+	 * The filter_prepare callback is optional. When not supplied, all
+	 * prepared transactions should go through.
+	 */
+	if (!ctx->callbacks.filter_prepare_cb)
+		return false;
+
+	/* Push callback + info on the error context stack */
+	state.ctx = ctx;
+	state.callback_name = "filter_prepare";
+	state.report_location = InvalidXLogRecPtr;
+	errcallback.callback = output_plugin_error_callback;
+	errcallback.arg = (void *) &state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	/* set output state */
+	ctx->accept_writes = false;
+
+	/* do the actual work: call callback */
+	ret = ctx->callbacks.filter_prepare_cb(ctx, txn, xid, gid);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+
+	return ret;
 }
 
 bool
@@ -1059,4 +1261,246 @@ LogicalConfirmReceivedLocation(XLogRecPtr lsn)
 		MyReplicationSlot->data.confirmed_flush = lsn;
 		SpinLockRelease(&MyReplicationSlot->mutex);
 	}
+}
+
+/*
+ * LogicalLockTransaction
+ *		Make sure the transaction is not aborted during decoding.
+ *
+ * The logical decoding plugins may need to access catalogs (both system
+ * and user-defined), e.g. to get metadata about tuples, do custom
+ * filtering etc. While decoding committed transactions that is not an
+ * issue, but in-progress transactions may abort while being decoded, in
+ * which case the catalog access may fail in various ways (rows from
+ * aborted transactions are eligible for more aggressive cleanup, may
+ * not be accessible through indexes due to breaking HOT chains etc.).
+ *
+ * To prevent these issues, we need to prevent abort of the transaction
+ * while accessing any catalogs. To enforce that, each decoding backend
+ * has to call LogicalLockTransaction prior to any catalog access, and
+ * then LogicalUnlockTransaction immediately after it. The lock function
+ * adds the decoding backend into a "decoding group" for the transaction
+ * on the first call. Subsequent calls update a flag indicating whether
+ * the decoding backend may be accessing any catalogs.
+ *
+ * While aborting an in-progress transaction, the backend is made to wait
+ * for all current members of the decoding group that may be currently
+ * accessing catalogs (see LogicalDecodeRemoveTransaction). Once the
+ * transaction completes (applies to both abort and commit), the group
+ * is destroyed and is not needed anymore (we can check transaction
+ * status directly, instead).
+ *
+ * The function returns true when it's safe to access catalogs, and
+ * false when the transaction aborted (or is being aborted), in which
+ * case the plugin should stop decoding it.
+ *
+ * The decoding backend joins the decoding group only when actually
+ * needed. For example when the transaction did no catalog changes,
+ * or when it's known to already have committed (or aborted), we can
+ * bail out without joining the group.
+ */
+bool
+LogicalLockTransaction(ReorderBufferTXN *txn)
+{
+	bool		ok = false;
+	LWLock	   *leader_lwlock;
+	volatile	PGPROC	*leader = NULL;
+	volatile	PGXACT  *pgxact = NULL;
+
+	/*
+	 * Transactions that have not modified catalogs do not need to
+	 * join the decoding group.
+	 */
+	if (!rbtxn_has_catalog_changes(txn))
+		return true;
+
+	/*
+	 * Check commit status. If a transaction already committed, there
+	 * is no danger when accessing catalogs. If it aborted, we can
+	 * stop decoding it right away.
+	 */
+	if (rbtxn_commit(txn))
+		return true;
+
+	if (rbtxn_rollback(txn))
+		return false;
+
+	/*
+	 * Currently, only 2PC transactions can be decoded before commit
+	 * (at prepare). So regular transactions are automatically safe.
+	 */
+	if (!rbtxn_prepared(txn))
+		return true;
+
+	/*
+	 * Find the PROC handling this XID and join the decoding group.
+	 *
+	 * If this is the first call for this XID, we don't know which
+	 * PROC is executing the transaction (and acting as a leader).
+	 * In that case we need to lookup and possibly also assign
+	 * the leader.
+	 */
+	if (MyProc->decodeGroupLeader == NULL)
+	{
+		leader = AssignDecodeGroupLeader(txn->xid);
+
+		/*
+		 * We have checked if the transaction committed/aborted, but it
+		 * is possible the PROC went away since then, in which case we
+		 * get leader as NULL above. We recheck transaction status,
+		 * expecting it to be either committed or aborted.
+		 *
+		 * If the PROC is available, add ourself as a member of its
+		 * decoding group. Note that we're not holding any locks on PGPROC,
+		 * so it's possible the leader disappears, or starts executing
+		 * another transaction. In that case we're done.
+		 */
+		if (leader == NULL ||
+			!BecomeDecodeGroupMember((PGPROC *)leader, txn->xid))
+			goto lock_cleanup;
+	}
+
+	/*
+	 * We know the leader was executing this XID a while ago, and we
+	 * might have become a member of the decode group as well.
+	 * But we have not been holding any locks on PGPROC so it might
+	 * have committed/aborted, removed us from the decoding group and
+	 * started executing something else since then. So we need to
+	 * recheck that it is indeed still running the right XID.
+	 */
+	leader = BackendXidGetProc(txn->xid);
+	if (!leader)
+		goto lock_cleanup;
+
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+
+	pgxact = &ProcGlobal->allPgXact[leader->pgprocno];
+	if(pgxact->xid != txn->xid)
+	{
+		LWLockRelease(leader_lwlock);
+		goto lock_cleanup;
+	}
+
+	/* ok, we are part of the decode group still */
+	Assert(MyProc->decodeGroupLeader &&
+		   MyProc->decodeGroupLeader == leader);
+
+	/*
+	 * Re-check if we were told to abort by the leader after taking
+	 * the above lock.
+	 */
+	if (leader->decodeAbortPending)
+	{
+		/*
+		 * Remove ourself from the decodeGroupMembership and return
+		 * false so that the decoding plugin also initiates abort
+		 * processing
+		 */
+		RemoveDecodeGroupMemberLocked(MyProc->decodeGroupLeader);
+		MyProc->decodeLocked = false;
+		txn->txn_flags |= RBTXN_ROLLBACK;
+		ok = false;
+	}
+	else
+	{
+		/* ok to logically lock this backend */
+		MyProc->decodeLocked = true;
+		ok = true;
+	}
+	LWLockRelease(leader_lwlock);
+
+	return ok;
+
+	/*
+	 * if we reach lock_cleanup label, then lock was not granted.
+	 * Check XID status and update txn flags appropriately before
+	 * returning
+	 */
+lock_cleanup:
+	Assert(!TransactionIdIsInProgress(txn->xid));
+	if (TransactionIdDidCommit(txn->xid))
+	{
+		txn->txn_flags |= RBTXN_COMMIT;
+		return true;
+	}
+	else
+	{
+		txn->txn_flags |= RBTXN_ROLLBACK;
+		return false;
+	}
+}
+
+/*
+ * LogicalUnlockTransaction
+ *		Indicate that the logical decoding plugin is done accessing
+ *		catalog	information.
+ *
+ *
+ * To prevent issues while decoding of in-progress transactions, we
+ * need to prevent abort of the transaction while accessing any catalogs.
+ * To enforce that, each decoding backend has to call
+ * LogicalLockTransaction prior to any catalog access, and then
+ * LogicalUnlockTransaction immediately after it. This unlock function
+ * removes the decoding backend from a "decoding group" for a given
+ * transaction.
+ */
+void
+LogicalUnlockTransaction(ReorderBufferTXN *txn)
+{
+	LWLock	   *leader_lwlock;
+	PGPROC	   *leader = NULL;
+
+	/*
+	 * If the transaction is known to have aborted, we should have never got
+	 * here (the plugin should have interrupted the decoding).
+	 */
+	Assert(!rbtxn_rollback(txn));
+
+	/* If it's not locked, we're done. */
+	if (!MyProc->decodeLocked)
+		return;
+
+	/*
+	 * Transactions that have not modified catalogs do not need to
+	 * join the decoding group.
+	 */
+	if (!rbtxn_has_catalog_changes(txn))
+		return;
+
+	/*
+	 * Currently, only 2PC transactions can be decoded before commit
+	 * (at prepare). So regular transactions are automatically safe.
+	 */
+	if (!rbtxn_prepared(txn))
+		return;
+
+	/*
+	 * Check commit status. If a transaction already committed, there
+	 * is no danger when accessing catalogs.
+	 */
+	if (rbtxn_commit(txn))
+		return;
+
+	/*
+	 * We're guaranteed to still have a leader here, because we are
+	 * in locked mode, so the leader can't just disappear.
+	 */
+	leader = MyProc->decodeGroupLeader;
+	Assert(leader && MyProc->decodeLocked);
+
+	leader_lwlock = LockHashPartitionLockByProc(leader);
+	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);
+	if (leader->decodeAbortPending)
+	{
+		/*
+		 * Remove ourself from the decodeGroupMembership
+		 */
+		RemoveDecodeGroupMemberLocked(leader);
+
+		txn->txn_flags |= RBTXN_ROLLBACK;
+	}
+	MyProc->decodeLocked = false;
+	LWLockRelease(leader_lwlock);
+	return;
 }

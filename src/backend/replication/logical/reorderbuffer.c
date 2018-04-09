@@ -337,6 +337,11 @@ ReorderBufferReturnTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	}
 
 	/* free data that's contained */
+	if (txn->gid != NULL)
+	{
+		pfree(txn->gid);
+		txn->gid = NULL;
+	}
 
 	if (txn->tuplecid_hash != NULL)
 	{
@@ -637,7 +642,7 @@ AssertTXNLsnOrder(ReorderBuffer *rb)
 		if (prev_first_lsn != InvalidXLogRecPtr)
 			Assert(prev_first_lsn < cur_txn->first_lsn);
 
-		Assert(!cur_txn->is_known_as_subxact);
+		Assert(!rbtxn_is_known_subxact(cur_txn));
 		prev_first_lsn = cur_txn->first_lsn;
 	}
 #endif
@@ -655,7 +660,7 @@ ReorderBufferGetOldestTXN(ReorderBuffer *rb)
 
 	txn = dlist_head_element(ReorderBufferTXN, node, &rb->toplevel_by_lsn);
 
-	Assert(!txn->is_known_as_subxact);
+	Assert(!rbtxn_is_known_subxact(txn));
 	Assert(txn->first_lsn != InvalidXLogRecPtr);
 	return txn;
 }
@@ -689,9 +694,9 @@ ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 		dlist_push_tail(&txn->subtxns, &subtxn->node);
 		txn->nsubtxns++;
 	}
-	else if (!subtxn->is_known_as_subxact)
+	else if (!rbtxn_is_known_subxact(subtxn))
 	{
-		subtxn->is_known_as_subxact = true;
+		subtxn->txn_flags |= RBTXN_IS_SUBXACT;
 		Assert(subtxn->nsubtxns == 0);
 
 		/* remove from lsn order list of top-level transactions */
@@ -752,9 +757,9 @@ ReorderBufferCommitChild(ReorderBuffer *rb, TransactionId xid,
 	subtxn->final_lsn = commit_lsn;
 	subtxn->end_lsn = end_lsn;
 
-	if (!subtxn->is_known_as_subxact)
+	if (!rbtxn_is_known_subxact(subtxn))
 	{
-		subtxn->is_known_as_subxact = true;
+		subtxn->txn_flags |= RBTXN_IS_SUBXACT;
 		Assert(subtxn->nsubtxns == 0);
 
 		/* remove from lsn order list of top-level transactions */
@@ -863,7 +868,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	{
 		ReorderBufferChange *cur_change;
 
-		if (txn->serialized)
+		if (rbtxn_is_serialized(txn))
 		{
 			/* serialize remaining changes */
 			ReorderBufferSerializeTXN(rb, txn);
@@ -892,7 +897,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		{
 			ReorderBufferChange *cur_change;
 
-			if (cur_txn->serialized)
+			if (rbtxn_is_serialized(cur_txn))
 			{
 				/* serialize remaining changes */
 				ReorderBufferSerializeTXN(rb, cur_txn);
@@ -1058,7 +1063,7 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		 * they originally were happening inside another subtxn, so we won't
 		 * ever recurse more than one level deep here.
 		 */
-		Assert(subtxn->is_known_as_subxact);
+		Assert(rbtxn_is_known_subxact(subtxn));
 		Assert(subtxn->nsubtxns == 0);
 
 		ReorderBufferCleanupTXN(rb, subtxn);
@@ -1097,7 +1102,7 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	/*
 	 * Remove TXN from its containing list.
 	 *
-	 * Note: if txn->is_known_as_subxact, we are deleting the TXN from its
+	 * Note: if txn is known as subxact, we are deleting the TXN from its
 	 * parent's list of known subxacts; this leaves the parent's nsubxacts
 	 * count too high, but we don't care.  Otherwise, we are deleting the TXN
 	 * from the LSN-ordered list of toplevel TXNs.
@@ -1112,7 +1117,7 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	Assert(found);
 
 	/* remove entries spilled to disk */
-	if (txn->serialized)
+	if (rbtxn_is_serialized(txn))
 		ReorderBufferRestoreCleanup(rb, txn);
 
 	/* deallocate */
@@ -1129,7 +1134,7 @@ ReorderBufferBuildTupleCidHash(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	dlist_iter	iter;
 	HASHCTL		hash_ctl;
 
-	if (!txn->has_catalog_changes || dlist_is_empty(&txn->tuplecids))
+	if (!rbtxn_has_catalog_changes(txn) || dlist_is_empty(&txn->tuplecids))
 		return;
 
 	memset(&hash_ctl, 0, sizeof(hash_ctl));
@@ -1278,24 +1283,17 @@ ReorderBufferFreeSnap(ReorderBuffer *rb, Snapshot snap)
  * the top and subtransactions (using a k-way merge) and replay the changes in
  * lsn order.
  */
-void
-ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
-					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
-					TimestampTz commit_time,
-					RepOriginId origin_id, XLogRecPtr origin_lsn)
+static void
+ReorderBufferCommitInternal(ReorderBufferTXN *txn,
+							ReorderBuffer *rb, TransactionId xid,
+							XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+							TimestampTz commit_time,
+							RepOriginId origin_id, XLogRecPtr origin_lsn)
 {
-	ReorderBufferTXN *txn;
 	volatile Snapshot snapshot_now;
 	volatile CommandId command_id = FirstCommandId;
 	bool		using_subtxn;
 	ReorderBufferIterTXNState *volatile iterstate = NULL;
-
-	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
-								false);
-
-	/* unknown transaction, nothing to replay */
-	if (txn == NULL)
-		return;
 
 	txn->final_lsn = commit_lsn;
 	txn->end_lsn = end_lsn;
@@ -1373,8 +1371,17 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 				case REORDER_BUFFER_CHANGE_DELETE:
 					Assert(snapshot_now);
 
+					/* Lock transaction before catalog access */
+					if (!LogicalLockTransaction(txn))
+					{
+						elog(LOG, "stopping decoding of %s (%u)",
+							 txn->gid[0] != '\0'? txn->gid:"",
+							 txn->xid);
+						goto change_cleanup;
+					}
 					reloid = RelidByRelfilenode(change->data.tp.relnode.spcNode,
 												change->data.tp.relnode.relNode);
+					LogicalUnlockTransaction(txn);
 
 					/*
 					 * Catalog tuple without data, emitted while catalog was
@@ -1389,7 +1396,13 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 							 relpathperm(change->data.tp.relnode,
 										 MAIN_FORKNUM));
 
+					/* Lock transaction before catalog access */
+					if (!LogicalLockTransaction(txn))
+						goto change_cleanup;
+
 					relation = RelationIdGetRelation(reloid);
+
+					LogicalUnlockTransaction(txn);
 
 					if (relation == NULL)
 						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
@@ -1419,8 +1432,23 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					/* user-triggered change */
 					if (!IsToastRelation(relation))
 					{
+						/*
+						 * Output plugins can access catalog metadata and we
+						 * do not have any control over that. We could ask
+						 * them to call
+						 * LogicalLockTransaction/LogicalUnlockTransaction
+						 * APIs themselves, but that leads to unnecessary
+						 * complications and expectations from plugin
+						 * writers. We avoid this by calling these APIs
+						 * here, thereby ensuring that the in-progress
+						 * transaction will be around for the duration of
+						 * the apply_change call below
+						 */
+						if (!LogicalLockTransaction(txn))
+							goto change_cleanup;
 						ReorderBufferToastReplace(rb, txn, relation, change);
 						rb->apply_change(rb, txn, relation, change);
+						LogicalUnlockTransaction(txn);
 
 						/*
 						 * Only clear reassembled toast chunks if we're sure
@@ -1525,10 +1553,13 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 				}
 
 				case REORDER_BUFFER_CHANGE_MESSAGE:
+					if (!LogicalLockTransaction(txn))
+						goto change_cleanup;
 					rb->message(rb, txn, change->lsn, true,
 								change->data.msg.prefix,
 								change->data.msg.message_size,
 								change->data.msg.message);
+					LogicalUnlockTransaction(txn);
 					break;
 
 				case REORDER_BUFFER_CHANGE_INTERNAL_SNAPSHOT:
@@ -1598,7 +1629,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 					break;
 			}
 		}
-
+change_cleanup:
 		/*
 		 * There's a speculative insertion remaining, just clean in up, it
 		 * can't have been successful, otherwise we'd gotten a confirmation
@@ -1614,8 +1645,26 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		ReorderBufferIterTXNFinish(rb, iterstate);
 		iterstate = NULL;
 
-		/* call commit callback */
-		rb->commit(rb, txn, commit_lsn);
+		/*
+		 * Call abort/commit/prepare callback, depending on the transaction
+		 * state.
+		 *
+		 * If the transaction aborted during apply (which currently can happen
+		 * only for prepared transactions), simply call the abort callback.
+		 *
+		 * Otherwise call either PREPARE (for twophase transactions) or COMMIT
+		 * (for regular ones).
+		 */
+		if (rbtxn_rollback(txn))
+			rb->abort(rb, txn, commit_lsn);
+		else if (rbtxn_prepared(txn))
+			rb->prepare(rb, txn, commit_lsn);
+		else
+			rb->commit(rb, txn, commit_lsn);
+
+		/* remove ourself from the decodeGroupLeader */
+		if (MyProc->decodeGroupLeader)
+			RemoveDecodeGroupMember(MyProc->decodeGroupLeader);
 
 		/* this is just a sanity check against bad output plugin behaviour */
 		if (GetCurrentTransactionIdIfAny() != InvalidTransactionId)
@@ -1642,7 +1691,12 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		if (snapshot_now->copied)
 			ReorderBufferFreeSnap(rb, snapshot_now);
 
-		/* remove potential on-disk data, and deallocate */
+		/*
+		 * remove potential on-disk data, and deallocate.
+		 *
+		 * We remove it even for prepared transactions (GID is enough to
+		 * commit/abort those later).
+		 */
 		ReorderBufferCleanupTXN(rb, txn);
 	}
 	PG_CATCH();
@@ -1674,6 +1728,141 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+}
+
+
+/*
+ * Ask output plugin whether we want to skip this PREPARE and send
+ * this transaction as a regular commit later.
+ */
+bool
+ReorderBufferPrepareNeedSkip(ReorderBuffer *rb, TransactionId xid, const char *gid)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr, false);
+
+	return rb->filter_prepare(rb, txn, xid, gid);
+}
+
+
+/*
+ * Commit a transaction.
+ *
+ * See comments for ReorderBufferCommitInternal()
+ */
+void
+ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
+					XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+					TimestampTz commit_time,
+					RepOriginId origin_id, XLogRecPtr origin_lsn)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
+								false);
+
+	/* unknown transaction, nothing to replay */
+	if (txn == NULL)
+		return;
+
+	ReorderBufferCommitInternal(txn, rb, xid, commit_lsn, end_lsn,
+								commit_time, origin_id, origin_lsn);
+}
+
+/*
+ * Prepare a twophase transaction. It calls ReorderBufferCommitInternal()
+ * since all prepared transactions need to be decoded at PREPARE time.
+ */
+void
+ReorderBufferPrepare(ReorderBuffer *rb, TransactionId xid,
+					 XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+					 TimestampTz commit_time,
+					 RepOriginId origin_id, XLogRecPtr origin_lsn,
+					 char *gid)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
+								false);
+
+	/* unknown transaction, nothing to replay */
+	if (txn == NULL)
+		return;
+
+	txn->txn_flags |= RBTXN_PREPARE;
+	txn->gid = palloc(strlen(gid) + 1); /* trailing '\0' */
+	strcpy(txn->gid, gid);
+
+	ReorderBufferCommitInternal(txn, rb, xid, commit_lsn, end_lsn,
+								commit_time, origin_id, origin_lsn);
+}
+
+/*
+ * Check whether this transaction was sent as prepared to subscribers.
+ * Called while handling commit|abort prepared.
+ */
+bool
+ReorderBufferTxnIsPrepared(ReorderBuffer *rb, TransactionId xid,
+						   const char *gid)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false, NULL, InvalidXLogRecPtr,
+								false);
+
+	/*
+	 * Always call the prepare filter. It's the job of the prepare filter to
+	 * give us the *same* response for a given xid across multiple calls
+	 * (including ones on restart)
+	 */
+	return !(rb->filter_prepare(rb, txn, xid, gid));
+}
+
+/*
+ * Send standalone xact event. This is used to handle COMMIT/ABORT PREPARED.
+ */
+void
+ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
+							XLogRecPtr commit_lsn, XLogRecPtr end_lsn,
+							TimestampTz commit_time,
+							RepOriginId origin_id, XLogRecPtr origin_lsn,
+							char *gid, bool is_commit)
+{
+	ReorderBufferTXN *txn;
+
+	/*
+	 * The transaction may or may not exist (during restarts for example).
+	 * Anyways, 2PC transactions do not contain any reorderbuffers. So allow
+	 * it to be created below.
+	 */
+	txn = ReorderBufferTXNByXid(rb, xid, true, NULL, commit_lsn,
+								true);
+
+	txn->final_lsn = commit_lsn;
+	txn->end_lsn = end_lsn;
+	txn->commit_time = commit_time;
+	txn->origin_id = origin_id;
+	txn->origin_lsn = origin_lsn;
+	/* this txn is obviously prepared */
+	txn->txn_flags |= RBTXN_PREPARE;
+	txn->gid = palloc(strlen(gid) + 1); /* trailing '\0' */
+	strcpy(txn->gid, gid);
+
+	if (is_commit)
+	{
+		txn->txn_flags |= RBTXN_COMMIT_PREPARED;
+		rb->commit_prepared(rb, txn, commit_lsn);
+	}
+	else
+	{
+		txn->txn_flags |= RBTXN_ROLLBACK_PREPARED;
+		rb->abort_prepared(rb, txn, commit_lsn);
+	}
+
+	/* cleanup: make sure there's no cache pollution */
+	ReorderBufferExecuteInvalidations(rb, txn);
+	ReorderBufferCleanupTXN(rb, txn);
 }
 
 /*
@@ -1741,10 +1930,10 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 			 * final_lsn to that of their last change; this causes
 			 * ReorderBufferRestoreCleanup to do the right thing.
 			 */
-			if (txn->serialized && txn->final_lsn == 0)
+			if (rbtxn_is_serialized(txn) && txn->final_lsn == 0)
 			{
 				ReorderBufferChange *last =
-					dlist_tail_element(ReorderBufferChange, node, &txn->changes);
+				dlist_tail_element(ReorderBufferChange, node, &txn->changes);
 
 				txn->final_lsn = last->lsn;
 			}
@@ -1987,7 +2176,7 @@ ReorderBufferXidSetCatalogChanges(ReorderBuffer *rb, TransactionId xid,
 
 	txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
 
-	txn->has_catalog_changes = true;
+	txn->txn_flags |= RBTXN_HAS_CATALOG_CHANGES;
 }
 
 /*
@@ -2004,7 +2193,7 @@ ReorderBufferXidHasCatalogChanges(ReorderBuffer *rb, TransactionId xid)
 	if (txn == NULL)
 		return false;
 
-	return txn->has_catalog_changes;
+	return rbtxn_has_catalog_changes(txn);
 }
 
 /*
@@ -2144,7 +2333,7 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	Assert(spilled == txn->nentries_mem);
 	Assert(dlist_is_empty(&txn->changes));
 	txn->nentries_mem = 0;
-	txn->serialized = true;
+	txn->txn_flags |= RBTXN_IS_SERIALIZED;
 
 	if (fd != -1)
 		CloseTransientFile(fd);
@@ -2660,9 +2849,9 @@ ReorderBufferSerializedPath(char *path, ReplicationSlot *slot, TransactionId xid
 	XLogSegNoOffsetToRecPtr(segno, 0, recptr, wal_segment_size);
 
 	snprintf(path, MAXPGPATH, "pg_replslot/%s/xid-%u-lsn-%X-%X.snap",
-			NameStr(MyReplicationSlot->data.name),
-			xid,
-			(uint32) (recptr >> 32), (uint32) recptr);
+			 NameStr(MyReplicationSlot->data.name),
+			 xid,
+			 (uint32) (recptr >> 32), (uint32) recptr);
 }
 
 /*

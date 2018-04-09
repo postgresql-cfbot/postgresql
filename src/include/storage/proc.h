@@ -200,6 +200,26 @@ struct PGPROC
 	PGPROC	   *lockGroupLeader;	/* lock group leader, if I'm a member */
 	dlist_head	lockGroupMembers;	/* list of members, if I'm a leader */
 	dlist_node	lockGroupLink;	/* my member link, if I'm a member */
+
+	/*
+	 * Support for decoding groups.  Use LockHashPartitionLockByProc on the group
+	 * leader to get the LWLock protecting these fields.
+	 *
+	 * For prepared and uncommitted transactions, decoding backends working on
+	 * the same XID will link themselves up to the corresponding PGPROC
+	 * entry (decodeGroupLeader).
+	 *
+	 * They will remove themselves when they are done decoding.
+	 *
+	 * If the prepared or uncommitted transaction decides to abort, then
+	 * the decodeGroupLeader will set the decodeAbortPending flag allowing
+	 * the decodeGroupMembers to abort their decoding appropriately
+	 */
+	PGPROC	   *decodeGroupLeader;	/* decode group leader, if I'm a member */
+	dlist_head	decodeGroupMembers;	/* list of members, if I'm a leader */
+	dlist_node	decodeGroupLink;	/* my member link, if I'm a member */
+	bool		decodeLocked;		/* is it currently locked by this proc? */
+	bool		decodeAbortPending; /* is the decode group leader aborting? */
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */
@@ -326,5 +346,11 @@ extern PGPROC *AuxiliaryPidGetProc(int pid);
 
 extern void BecomeLockGroupLeader(void);
 extern bool BecomeLockGroupMember(PGPROC *leader, int pid);
+
+extern PGPROC *AssignDecodeGroupLeader(TransactionId xid);
+extern bool BecomeDecodeGroupMember(PGPROC *leader, TransactionId pid);
+extern void RemoveDecodeGroupMember(PGPROC *leader);
+extern void RemoveDecodeGroupMemberLocked(PGPROC *leader);
+extern void LogicalDecodeRemoveTransaction(PGPROC *leader, bool isCommit);
 
 #endif							/* PROC_H */

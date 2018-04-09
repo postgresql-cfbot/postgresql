@@ -679,6 +679,52 @@ worker, and the worker fails to join the lock group unless the given PGPROC
 still has the same PID and is still a lock group leader.  We assume that
 PIDs are not recycled quickly enough for this interlock to fail.
 
+Decode Group Locking
+--------------------
+
+When decoding in-progress transactions, we need to prevent aborts while
+the decoding processes are accessing catalogs, which might lead to issues
+if the transaction modified some of the catalogs.  Currently this applies
+only to two-phase transactions, that may be decoded at PREPARE time, but
+in the future this may be extended to regular transactions too.
+
+To prevent that, the backend executing the abort is made to wait for all
+the decoding backends.  We use an infrastructure which is very similar
+to the above group locking to form groups of backends performing logical
+decoding of the same in-progress transaction.
+
+Decode Group locking adds five new members to each PGPROC:
+decodeGroupLeader, decodeGroupMembers, decodeGroupLink, decodeLocked and
+decodeAbortPending.  A PGPROC's decodeGroupLeader is NULL for processes
+not involved in logical decoding.  When a process wants to decode an
+in-progress transaction then it finds out the PGPROC structure which is
+associated with that transaction ID and makes that PGPROC structure as
+its decodeGroupLeader.  The decodeGroupMembers field is only used in the
+leader; it is a list of the member PGPROCs of the decode group (the
+leader and all backends decoding this transaction ID).
+The decodeGroupLink field is the list link for this list. The decoding
+backend marks itself as decodeLocked while it is accessing catalog
+metadata for its decoding requirements via the LogicalLockTransaction
+API.  It resets the same via the LogicalUnlockTransaction API.
+
+Meanwhile, if the transaction ID of this in-progress transaction decides
+to abort, then the PGPROC corresponding to it sets decodeAbortPending
+on itself and also on all the decodeGroupMembers entries.
+
+The decodeGroupMembers entries stop decoding this transaction and exit.
+When all the decoding backends have exited the abort can proceed.
+
+All five of these fields are considered to be protected by a lock manager
+partition lock.  The partition lock that protects these fields within a given
+lock group is chosen by taking the leader's pgprocno modulo the number of lock
+manager partitions.  Holding this single lock allows safe manipulation of the
+decodeGroupMembers list for the lock group.
+
+The decodeGroupLeader's PGPROC and also its PID is accessible to each
+decoding backend.  And the decoding backend fails to join the decode
+lock group unless the given PGPROC still has the same PID and is still
+a decode group leader.  We assume that PIDs are not recycled quickly
+enough for this interlock to fail.
 
 User Locks (Advisory Locks)
 ---------------------------

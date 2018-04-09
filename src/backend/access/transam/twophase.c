@@ -1508,6 +1508,14 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	ProcArrayRemove(proc, latestXid);
 
 	/*
+	 * Coordinate with logical decoding backends that may be already
+	 * decoding this prepared transaction. When aborting a transaction,
+	 * we need to wait for all of them to leave the decoding group. If
+	 * committing, we simply remove all members from the group.
+	 */
+	LogicalDecodeRemoveTransaction(proc, isCommit);
+
+	/*
 	 * In case we fail while running the callbacks, mark the gxact invalid so
 	 * no one else will try to commit/rollback, and so it will be recycled if
 	 * we fail after this point.  It is still locked by our backend so it

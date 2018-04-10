@@ -138,3 +138,10 @@ pgtypes_fmt_replace(union un_fmt_comb replace_val, int replace_type, char **outp
 	}
 	return 0;
 }
+
+/* Just frees memory (mostly needed for Windows) */
+void
+PGTYPESchar_free(char *ptr)
+{
+	free(ptr);
+}

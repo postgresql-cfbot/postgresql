@@ -119,6 +119,7 @@ double		parallel_setup_cost = DEFAULT_PARALLEL_SETUP_COST;
 int			effective_cache_size = DEFAULT_EFFECTIVE_CACHE_SIZE;
 
 Cost		disable_cost = 1.0e10;
+int		cost_clause_count_limit = 100;
 
 int			max_parallel_workers_per_gather = 2;
 
@@ -4291,21 +4292,75 @@ void
 set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
 	double		nrows;
+	int		clause_count;
+	Selectivity total_sel, prev_total_sel;
+	List *clause_list;
+	ListCell *l;
+	QualCost cost;
 
 	/* Should only be applied to base relations */
 	Assert(rel->relid > 0);
 
-	nrows = rel->tuples *
-		clauselist_selectivity(root,
-							   rel->baserestrictinfo,
-							   0,
-							   JOIN_INNER,
-							   NULL);
-
-	rel->rows = clamp_row_est(nrows);
+	/*
+	 * When 'clause_list' consists of multiple quals, each qual will be
+	 * evaluated different times because earlier quals filter some input
+	 * tuples. At this point, the order of quals in 'clause_list' may be
+	 * different from the order of quals at runtime, we first sort
+	 * 'clause_list' and then loop over 'clause_list' to estimate cost of each
+	 * qual evaluations.
+	 */
 
 	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
+	clause_list = order_qual_clauses(root, rel->baserestrictinfo);
 
+	cost.startup = 0;
+	cost.per_tuple = 0;
+	total_sel = prev_total_sel = 1.0;
+	clause_count = 0;
+	foreach(l, clause_list)
+	{
+		Node	   *qual = (Node *) lfirst(l);
+		List *clause_list_for_sel = NIL;
+		ListCell *temp_l;
+		cost_qual_eval_context context;
+		context.root = root;
+		context.total.startup = 0;
+		context.total.per_tuple = 0;
+
+		if (clause_count < cost_clause_count_limit) {
+			/*
+			 * Make a temporary clause list of quals we have checked so far for
+			 * selectivity calculation
+			 */
+			for (temp_l = list_head(clause_list); ; temp_l = lnext(temp_l))
+			{
+				clause_list_for_sel = lappend(clause_list_for_sel, lfirst(temp_l));
+				if(temp_l == l)
+				{
+					break;
+				}
+			}
+
+			total_sel = clauselist_selectivity(root,
+											   clause_list_for_sel,
+											   0,
+											   JOIN_INNER,
+											   NULL);
+		}
+
+		/* We don't charge any cost for the implicit ANDing at top level ... */
+		cost_qual_eval_walker(qual, &context);
+		cost.startup += context.total.startup * prev_total_sel;
+		cost.per_tuple += context.total.per_tuple * prev_total_sel;
+
+		prev_total_sel = total_sel;
+		clause_count++;
+	}
+
+	nrows = rel->tuples * total_sel;
+
+	rel->rows = clamp_row_est(nrows);
+	rel->baserestrictcost = cost;
 	set_rel_width(root, rel);
 }
 

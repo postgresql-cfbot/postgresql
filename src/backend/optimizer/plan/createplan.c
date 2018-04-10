@@ -166,7 +166,6 @@ static List *fix_indexqual_references(PlannerInfo *root, IndexPath *index_path);
 static List *fix_indexorderby_references(PlannerInfo *root, IndexPath *index_path);
 static Node *fix_indexqual_operand(Node *node, IndexOptInfo *index, int indexcol);
 static List *get_switched_clauses(List *clauses, Relids outerrelids);
-static List *order_qual_clauses(PlannerInfo *root, List *clauses);
 static void copy_generic_path_info(Plan *dest, Path *src);
 static void copy_plan_costsize(Plan *dest, Plan *src);
 static void label_sort_with_costsize(PlannerInfo *root, Sort *plan,
@@ -4901,7 +4900,7 @@ get_switched_clauses(List *clauses, Relids outerrelids)
  * instead of bare clauses.  This is another reason why trying to consider
  * selectivity in the ordering would likely do the wrong thing.
  */
-static List *
+List *
 order_qual_clauses(PlannerInfo *root, List *clauses)
 {
 	typedef struct

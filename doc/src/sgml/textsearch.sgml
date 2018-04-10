@@ -3114,6 +3114,21 @@ CREATE TEXT SEARCH DICTIONARY english_stem (
 
   </sect2>
 
+  <sect2 id="textsearch-shared-dictionaries">
+   <title>Dictionaries in Shared Memory</title>
+
+   <para>
+    Some dictionaries, especially <application>Ispell</application>, consumes
+    a significant amount of memory, in some cases tens of megabytes.  Most of
+    them store the data in text files, and building the in-memory structure is
+    both CPU and time-consuming.  Instead of doing this in each backend when
+    it needs a dictionary for the first time, the compiled dictionary may be
+    stored in dynamic shared memory so that it may be reused by other backends.
+    Currently only <application>Ispell</application> supports loading into
+    dynamic shared memory.
+   </para>
+  </sect2>
+
  </sect1>
 
  <sect1 id="textsearch-configuration">

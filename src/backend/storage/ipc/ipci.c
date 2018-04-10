@@ -44,6 +44,7 @@
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
+#include "tsearch/ts_shared.h"
 #include "utils/backend_random.h"
 #include "utils/snapmgr.h"
 
@@ -150,6 +151,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
+		size = add_size(size, TsearchShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -270,6 +272,11 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	BackendRandomShmemInit();
+
+	/*
+	 * Set up shared memory to tsearch
+	 */
+	TsearchShmemInit();
 
 #ifdef EXEC_BACKEND
 

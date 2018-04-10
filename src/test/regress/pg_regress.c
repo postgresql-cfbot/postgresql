@@ -760,6 +760,13 @@ initialize_environment(void)
 	unsetenv("LANGUAGE");
 	unsetenv("LC_ALL");
 	putenv("LC_MESSAGES=C");
+#ifdef WIN32
+	/*
+	 * Use LANGUAGE instead of LC_MESSAGES since Windows doesn't support
+	 * LC_MESSAGES environment variable.
+	 */
+	putenv("LANGUAGE=C");
+#endif
 
 	/*
 	 * Set encoding as requested

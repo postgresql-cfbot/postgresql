@@ -25,6 +25,10 @@
 #include "common/pg_lzcompress.h"
 #include "replication/origin.h"
 
+#ifndef FRONTEND
+#include "utils/memutils.h"
+#endif
+
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 
 static bool ValidXLogPageHeader(XLogReaderState *state, XLogRecPtr recptr,
@@ -309,7 +313,14 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	 * rest of the header after reading it from the next page.  The xl_tot_len
 	 * check is necessary here to ensure that we enter the "Need to reassemble
 	 * record" code path below; otherwise we might fail to apply
-	 * ValidXLogRecordHeader at all.
+	 * ValidXLogRecordHeader at all.  Note that in much unlucky circumstances,
+	 * the random data read from a recycled segment could allow the set of
+	 * sanity checks to pass.  If the garbage data read in xl_tot_len is
+	 * higher than MaxAllocSize on the backend, then the startup process
+	 * would retry to fetch fresh WAL data.  If this is lower than
+	 * MaxAllocSize, then a more-than-necessary memory allocation will
+	 * happen for a short amount of time, until the WAL reader fails at
+	 * validating the next record's data.
 	 */
 	if (targetRecOff <= XLOG_BLCKSZ - SizeOfXLogRecord)
 	{
@@ -321,7 +332,11 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	else
 	{
 		/* XXX: more validation should be done here */
-		if (total_len < SizeOfXLogRecord)
+		if (total_len < SizeOfXLogRecord
+#ifndef FRONTEND
+			|| !AllocSizeIsValid(total_len)
+#endif
+		)
 		{
 			report_invalid_record(state,
 								  "invalid record length at %X/%X: wanted %u, got %u",

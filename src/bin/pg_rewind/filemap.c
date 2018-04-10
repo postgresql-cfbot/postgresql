@@ -188,7 +188,56 @@ process_source_file(const char *path, file_type_t type, size_t newsize,
 		exists = false;
 	}
 	else
-		exists = true;
+	{
+		int			fd;
+
+		/*
+		 * The file exists on the source and the target.  Now check if
+		 * the file is writable.
+		 */
+		fd = open(localpath, O_WRONLY);
+
+		if (fd < 0)
+		{
+			if (errno == EISDIR)
+			{
+				/*
+				 * No need to worry about directories, those are not
+				 * valid targets for writes.
+				 */
+				exists = true;
+			}
+			else if (errno == EACCES)
+			{
+				/*
+				 * The file exists on the source and the target but it is
+				 * not writable on target.  In order to avoid failures
+				 * mid-flight when processing the data directory, fail
+				 * immediately and let the user know.  This way, if anything
+				 * like a read-only file is found, then pg_rewind complains
+				 * and a successive run can be completed after doing some
+				 * cleanup on this target data directory.
+				 */
+				pg_fatal("file \"%s\" exists on both target and source server, but is not writable on target.\n"
+						 "Please check the permissions on \"%s\" before executing again pg_rewind.\n",
+						 path, localpath);
+			}
+			else
+			{
+				/*
+				 * Complain about anything else, that should not happen,
+				 * even ENOENT which has already been checked above.
+				 */
+				pg_fatal("could not open file \"%s\": %s\n",
+						 localpath, strerror(errno));
+			}
+		}
+		else
+		{
+			exists = true;
+			close(fd);
+		}
+	}
 
 	switch (type)
 	{

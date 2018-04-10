@@ -914,7 +914,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				 * page has been previously WAL-logged, and if not, do that
 				 * now.
 				 */
-				if (RelationNeedsWAL(onerel) &&
+				if (BufferNeedsWAL(onerel, buf) &&
 					PageGetLSN(page) == InvalidXLogRecPtr)
 					log_newpage_buffer(buf, true);
 
@@ -1184,7 +1184,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			}
 
 			/* Now WAL-log freezing if necessary */
-			if (RelationNeedsWAL(onerel))
+			if (BufferNeedsWAL(onerel, buf))
 			{
 				XLogRecPtr	recptr;
 
@@ -1565,7 +1565,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(onerel))
+	if (BufferNeedsWAL(onerel, buffer))
 	{
 		XLogRecPtr	recptr;
 

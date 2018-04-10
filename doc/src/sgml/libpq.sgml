@@ -7551,6 +7551,9 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
   <indexterm zone="libpq-pgservice">
    <primary>.pg_service.conf</primary>
   </indexterm>
+  <indexterm zone="libpq-pgservice">
+   <primary>pg_service.conf.d</primary>
+  </indexterm>
 
   <para>
    The connection service file allows libpq connection parameters to be
@@ -7571,6 +7574,17 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
    <envar>PGSYSCONFDIR</envar>.  If service definitions with the same
    name exist in the user and the system file, the user file takes
    precedence.
+  </para>
+
+  <para>
+   Additional connection service files can be placed in the system-wide
+   directory <filename>`pg_config --sysconfdir`/pg_service.conf.d</filename>
+   or in the subdirectory <filename>pg_service.conf.d</filename> below the
+   directory specified by the environment variable
+   <envar>PGSYSCONFDIR</envar>.  These will have the lowest precedence,
+   following the files described above. Files must end in '.conf' and
+   must not begin with '.'.  Note if a single service is defined in
+   multiple files in this directory, which one gets used is not predictable.
   </para>
 
   <para>

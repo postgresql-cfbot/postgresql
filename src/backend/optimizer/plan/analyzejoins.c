@@ -28,6 +28,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "utils/lsyscache.h"
@@ -37,6 +38,8 @@ static bool join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo);
 static void remove_rel_from_query(PlannerInfo *root, int relid,
 					  Relids joinrelids);
 static List *remove_rel_from_joinlist(List *joinlist, int relid, int *nremoved);
+static bool query_distinctifies_rows(Query *query);
+static bool rel_distinctified_after_join(PlannerInfo *root, RelOptInfo *rel);
 static bool rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel);
 static bool rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel,
 					List *clause_list);
@@ -150,10 +153,12 @@ clause_sides_match_join(RestrictInfo *rinfo, Relids outerrelids,
  *	  it will just duplicate its left input.
  *
  * This is true for a left join for which the join condition cannot match
- * more than one inner-side row.  (There are other possibly interesting
- * cases, but we don't have the infrastructure to prove them.)  We also
- * have to check that the inner side doesn't generate any variables needed
- * above the join.
+ * more than one inner-side row.  We can also allow removal of joins to
+ * relations that may match more than one inner-side row if a DISTINCT or
+ * GROUP BY clause would subsequently remove any duplicates caused by the
+ * join. (There are other possibly interesting cases, but we don't have the
+ * infrastructure to prove them.)  We also have to check that the inner side
+ * doesn't generate any variables needed above the join.
  */
 static bool
 join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
@@ -181,9 +186,10 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 	/*
 	 * Before we go to the effort of checking whether any innerrel variables
 	 * are needed above the join, make a quick check to eliminate cases in
-	 * which we will surely be unable to prove uniqueness of the innerrel.
+	 * which we will surely be unable to remove the join.
 	 */
-	if (!rel_supports_distinctness(root, innerrel))
+	if (!rel_supports_distinctness(root, innerrel) &&
+		!query_distinctifies_rows(root->parse))
 		return false;
 
 	/* Compute the relid set for the join we are considering */
@@ -237,6 +243,16 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 	}
 
 	/*
+	 * Join removal must be disallowed if the baserestrictinfos contain any
+	 * volatile functions.  If we removed this join then there's no chance of
+	 * these functions being executed and some side affects of these may be
+	 * required.
+	 */
+	if (contain_volatile_functions((Node *)
+				extract_actual_clauses(innerrel->baserestrictinfo, false)))
+		return false;
+
+	/*
 	 * Search for mergejoinable clauses that constrain the inner rel against
 	 * either the outer rel or a pseudoconstant.  If an operator is
 	 * mergejoinable then it behaves like equality for some btree opclass, so
@@ -267,6 +283,13 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 			continue;			/* else, ignore; not useful here */
 		}
 
+		/*
+		 * Disallow the join removal completely if the join clause contains
+		 * any volatile functions.
+		 */
+		if (contain_volatile_functions((Node *) restrictinfo->clause))
+			return false;
+
 		/* Ignore if it's not a mergejoinable clause */
 		if (!restrictinfo->can_join ||
 			restrictinfo->mergeopfamilies == NIL)
@@ -283,6 +306,14 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 		/* OK, add to list */
 		clause_list = lappend(clause_list, restrictinfo);
 	}
+
+	/*
+	 * Check to see if the relation cannot possibly cause any duplication in
+	 * the result set due to the query having a DISTINCT or GROUP BY clause
+	 * that would eliminate any duplicate rows produced by the join anyway.
+	 */
+	if (rel_distinctified_after_join(root, innerrel))
+		return true;
 
 	/*
 	 * Now that we have the relevant equality join clauses, try to prove the
@@ -576,6 +607,125 @@ reduce_unique_semijoins(PlannerInfo *root)
 	}
 }
 
+/*
+ * query_distinctifies_rows
+ *		Returns true if the query has any properties that allow duplicate
+ *		results to be removed.
+ *
+ * This function is just a pre-check function to check if the query possibly
+ * has some properties that disallow duplicate rows from appearing in the
+ * result set.  More specifically we're interested in knowing if we can
+ * possibly exercise any means to have fewer duplicate rows in the result set
+ * prior to the de-duplication process.
+ *
+ * It's not critical that we always return false when this is not possible, as
+ * this function just serves as a pre-check to prevent further checks going
+ * ahead with expensive processing if we have no chance of success.
+ *
+ * If this function returns false then rel_tuples_needed must also return
+ * false.
+ */
+static bool
+query_distinctifies_rows(Query *query)
+{
+	/* a query with aggs or wfuncs needs all input rows from the join */
+	if (query->hasAggs || query->hasWindowFuncs)
+		return false;
+
+	/* no distinctification possible if there's no DISTINCT or GROUP BY */
+	if (query->distinctClause == NIL && query->groupClause == NIL)
+		return false;
+
+	/*
+	 * We shouldn't waste too much effort here as rel_distinctified_after_join
+	 * serves as the final check, but perhaps there's some other things common
+	 * enough and cheap enough to check here?
+	 */
+	return true;
+}
+
+/*
+ * rel_distinctified_after_join
+ *		Returns false if tuples from 'rel' are required as input for any part
+ *		of the plan.
+ *
+ * Our aim here is to determine if we can remove the join to 'rel' without
+ * having any affect on the final results.  If 'rel's join partner can match
+ * any single row to more than one of rel's output rows, then the rel would
+ * normally be required to maintain the correct result set.  However, if the
+ * query has a GROUP BY or DISTINCT clause then any row duplication caused
+ * will be removed again.  To complicate the matter we also need to ensure
+ * that the additional rows are not required for anything before the final
+ * resultset is returned.  For example, aggregate functions will see any
+ * duplicate rows, as will windowing functions.  We must also be careful not
+ * to change the number of times a volatile function is evaulated.
+ *
+ * We must only return true if we're completely certain that the tuples are
+ * not needed. If uncertain we'll play it safe and return false.
+ *
+ * Note: If making changes here then query_distinctifies_rows may need updated
+ */
+static bool
+rel_distinctified_after_join(PlannerInfo *root, RelOptInfo *rel)
+{
+	Query	   *query = root->parse;
+	Index		rti;
+
+	/* Aggs and window funcs are sensitive to row duplication from joins */
+	if (query->hasAggs || query->hasWindowFuncs)
+		return false;
+
+	/*
+	 * Ensure we have a DISTINCT or GROUP BY clause to remove duplicates. If
+	 * we have a GROUP BY clause then we'd better make sure there are not any
+	 * volatile functions in it.  If we have both a GROUP BY and a DISTINCT
+	 * clause and we have no aggregates then we shouldn't care too much about
+	 * volatile functions in the distinctClauses as GROUP BY will have done
+	 * all the distinctification work and all the columns in the targetlist
+	 * must be functionally dependant on the GROUP BY clauses anyway.  In the
+	 * case for DISTINCT ON the remaining targetlist items will be evaulated
+	 * after the results have been made distinct, so are only going to be
+	 * evaulated once whether we remove the join or not.
+	 */
+	if (query->groupClause == NIL)
+	{
+		if (query->distinctClause == NIL)
+			return false;
+		else if (contain_volatile_functions((Node *) query->distinctClause))
+			return false;
+	}
+	else if (contain_volatile_functions((Node *) query->groupClause))
+		return false;
+
+	/*
+	 * We must disallow the removal of the join if there are any LATERAL joins
+	 * to a volatile function using Vars from any relation at this level.  If
+	 * we removed these then it could reduce the number of times that the
+	 * volatile function is evaluated.
+	 */
+	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	{
+		RelOptInfo *brel = root->simple_rel_array[rti];
+		RangeTblEntry *rte;
+
+		/* there may be empty slots corresponding to non-baserel RTEs */
+		if (brel == NULL)
+			continue;
+
+		Assert(brel->relid == rti); /* sanity check on array */
+
+		/* ignore RTEs that are "other rels" */
+		if (brel->reloptkind != RELOPT_BASEREL)
+			continue;
+
+		rte = root->simple_rte_array[rti];
+		if (rte->rtekind == RTE_FUNCTION && brel->lateral_vars != NIL &&
+			contain_volatile_functions((Node *) rte->functions))
+			return false;
+	}
+
+	return true;		/* relation not needed */
+}
 
 /*
  * rel_supports_distinctness

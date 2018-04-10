@@ -14,6 +14,7 @@
 #define TS_CACHE_H
 
 #include "utils/guc.h"
+#include "catalog/pg_ts_config_map.h"
 
 
 /*
@@ -66,6 +67,7 @@ typedef struct
 {
 	int			len;
 	Oid		   *dictIds;
+	int32	   *dictOptions;
 } ListDictionary;
 
 typedef struct
@@ -77,7 +79,7 @@ typedef struct
 	Oid			prsId;
 
 	int			lenmap;
-	ListDictionary *map;
+	TSMapElement **map;
 } TSConfigCacheEntry;
 
 

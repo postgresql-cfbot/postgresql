@@ -395,4 +395,33 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT pg_stat_statements_reset()         |     1 |    1
 (8 rows)
 
+-- test to see if any plans have been recorded.
+SELECT
+  CASE WHEN plan_time > 0 THEN 1 ELSE 0 END,
+  CASE WHEN plan_timestamp >= timestamp '1970-01-01 00:00:00' THEN 1 ELSE 0 END
+FROM pg_stat_statements_plans ORDER BY plan_timestamp;
+ case | case 
+------+------
+    1 |    1
+    1 |    1
+    1 |    1
+    1 |    1
+    1 |    1
+    1 |    1
+(6 rows)
+
+-- test if there is some text in the recorded plans.
+SELECT substr(plan, 0, 11) FROM pg_stat_statements_plans ORDER BY plan_timestamp;
+   substr   
+------------
+ Query Text
+ Query Text
+ Query Text
+ Query Text
+ Query Text
+ Query Text
+ Query Text
+ Query Text
+(8 rows)
+
 DROP EXTENSION pg_stat_statements;

@@ -1193,6 +1193,109 @@ static const VersionedQuery Query_for_list_of_subscriptions[] = {
 };
 
 /*
+ * We provide multiple versions of this query, so that some useful
+ * functionality is present even for older versions.
+ */
+static const SchemaQuery Query_for_list_of_selectable_functions[] = {
+	{
+		/* min_server_version */
+		90600,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"p.prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "
+		"AND 'internal'::regtype <> ALL (p.proargtypes) "
+		"AND p.oid NOT IN (SELECT unnest(array[typinput,typoutput,typreceive,typsend,typmodin,typmodout,typanalyze]) FROM pg_type) "
+		"AND p.oid NOT IN (SELECT unnest(array[aggtransfn,aggfinalfn,aggcombinefn,aggserialfn,aggdeserialfn,aggmtransfn,aggminvtransfn,aggmfinalfn]) FROM pg_aggregate) "
+		"AND p.oid NOT IN (SELECT unnest(array[oprcode,oprrest,oprjoin]) FROM pg_operator) "
+		"AND p.oid NOT IN (SELECT unnest(array[lanplcallfoid,laninline,lanvalidator]) FROM pg_language) "
+		"AND p.oid NOT IN (SELECT castfunc FROM pg_cast) "
+		"AND p.oid NOT IN (SELECT amproc FROM pg_amproc) ",
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	{
+		/* min_server_version */
+		90000,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"p.prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "
+		"AND 'internal'::regtype != ALL (p.proargtypes) "
+		"AND p.oid NOT IN (SELECT unnest(array[typinput,typoutput,typreceive,typsend,typmodin,typmodout,typanalyze]) FROM pg_type) "
+		"AND p.oid NOT IN (SELECT unnest(array[aggtransfn,aggfinalfn]) FROM pg_aggregate) "
+		"AND p.oid NOT IN (SELECT unnest(array[oprcode,oprrest,oprjoin]) FROM pg_operator) "
+		"AND p.oid NOT IN (SELECT unnest(array[lanplcallfoid,laninline,lanvalidator]) FROM pg_language) "
+		"AND p.oid NOT IN (SELECT castfunc FROM pg_cast) "
+		"AND p.oid NOT IN (SELECT amproc FROM pg_amproc) "
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	{
+		/* min_server_version */
+		80100,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"p.prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "
+		"'internal'::regtype != ALL ([.proargtypes) "
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	{
+		/* min_server_version */
+		70400,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) "
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	{0, NULL}
+};
+
+/*
+ * This addon is used to find (unqualified) column names to include
+ * alongside the function names from the query above.
+ */
+static const VersionedQuery Query_addon_for_list_of_selectable_attributes[] = {
+	{70400,
+		"    UNION ALL "
+		"   SELECT DISTINCT pg_catalog.quote_ident(attname) "
+		"     FROM pg_catalog.pg_attribute "
+		"    WHERE attnum > 0 "
+		"      AND NOT attisdropped "
+		"      AND substring(pg_catalog.quote_ident(attname),1,%d)='%s'"
+	},
+	{0, NULL}
+};
+
+/*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
  */
@@ -3472,7 +3575,9 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("IS");
 
 /* SELECT */
-	/* naah . . . */
+	else if (TailMatches1("SELECT") || TailMatches2("SELECT", "ALL|DISTINCT"))
+		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_selectable_functions,
+							Query_addon_for_list_of_selectable_attributes);
 
 /* SET, RESET, SHOW */
 	/* Complete with a variable name */
@@ -4079,7 +4184,8 @@ complete_from_versioned_schema_query(const char *text, int state)
  * where %d is the string length of the text and %s the text itself.
  *
  * If both simple_query and schema_query are non-NULL, then we construct
- * a schema query and append the (uninterpreted) string simple_query to it.
+ * a schema query and append the simple_query to it, replacing the %d and %s
+ * as described above.
  *
  * It is assumed that strings should be escaped to become SQL literals
  * (that is, what is in the query is actually ... '%s' ...)
@@ -4226,20 +4332,21 @@ _complete_from_query(const char *simple_query,
 							  " WHERE substring(pg_catalog.quote_ident(nspname) || '.',1,%d) ="
 							  " substring('%s',1,pg_catalog.length(pg_catalog.quote_ident(nspname))+1)) = 1",
 							  char_length, e_text);
-
-			/* If an addon query was provided, use it */
-			if (simple_query)
-				appendPQExpBuffer(&query_buffer, "\n%s", simple_query);
 		}
 		else
 		{
 			Assert(simple_query);
-			/* simple_query is an sprintf-style format string */
-			appendPQExpBuffer(&query_buffer, simple_query,
-							  char_length, e_text,
-							  e_info_charp, e_info_charp,
-							  e_info_charp2, e_info_charp2);
 		}
+
+		/*
+		 * simple_query is an sprintf-style format string (or it could be NULL, but
+		 * only if this is a schema query with no addon).
+		 */
+		if (simple_query)
+			appendPQExpBuffer(&query_buffer, simple_query,
+					  char_length, e_text,
+					  e_info_charp, e_info_charp,
+					  e_info_charp2, e_info_charp2);
 
 		/* Limit the number of records in the result */
 		appendPQExpBuffer(&query_buffer, "\nLIMIT %d",

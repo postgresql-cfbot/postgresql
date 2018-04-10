@@ -1153,7 +1153,7 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 	 * not contain any row that would belong to the new partition, we can
 	 * avoid scanning the default partition.
 	 */
-	if (PartConstraintImpliedByRelConstraint(default_rel, def_part_constraints))
+	if (ConstraintImpliedByRelConstraint(default_rel, def_part_constraints))
 	{
 		ereport(INFO,
 				(errmsg("updated partition constraint for default partition \"%s\" is implied by existing constraints",
@@ -1197,8 +1197,8 @@ check_default_allows_bound(Relation parent, Relation default_rel,
 			 * that it will not contain any row that would belong to the new
 			 * partition, we can avoid scanning the child table.
 			 */
-			if (PartConstraintImpliedByRelConstraint(part_rel,
-													 def_part_constraints))
+			if (ConstraintImpliedByRelConstraint(part_rel,
+												 def_part_constraints))
 			{
 				ereport(INFO,
 						(errmsg("updated partition constraint for default partition \"%s\" is implied by existing constraints",

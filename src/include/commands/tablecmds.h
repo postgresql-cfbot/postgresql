@@ -94,7 +94,7 @@ extern void RangeVarCallbackOwnsTable(const RangeVar *relation,
 
 extern void RangeVarCallbackOwnsRelation(const RangeVar *relation,
 							 Oid relId, Oid oldRelId, void *noCatalogs);
-extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
-									 List *partConstraint);
+extern bool ConstraintImpliedByRelConstraint(Relation scanrel,
+								 List *testConstraint);
 
 #endif							/* TABLECMDS_H */

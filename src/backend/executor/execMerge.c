@@ -174,6 +174,12 @@ ExecMergeMatched(ModifyTableState *mtstate, EState *estate,
 	ListCell   *l;
 	TupleTableSlot *saved_slot = slot;
 
+	/*
+	 * If there are not WHEN MATCHED actions, we are done.
+	 */
+	if (resultRelInfo->ri_mergeState->matchedActionStates == NIL)
+		return true;
+
 	if (mtstate->mt_partition_tuple_routing)
 	{
 		Datum		datum;
@@ -220,12 +226,7 @@ ExecMergeMatched(ModifyTableState *mtstate, EState *estate,
 	 */
 	mergeMatchedActionStates =
 		resultRelInfo->ri_mergeState->matchedActionStates;
-
-	/*
-	 * If there are not WHEN MATCHED actions, we are done.
-	 */
-	if (mergeMatchedActionStates == NIL)
-		return true;
+	Assert(mergeMatchedActionStates != NIL);
 
 	/*
 	 * Make tuple and any needed join variables available to ExecQual and

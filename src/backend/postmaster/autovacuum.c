@@ -347,6 +347,7 @@ static void av_sighup_handler(SIGNAL_ARGS);
 static void avl_sigusr2_handler(SIGNAL_ARGS);
 static void avl_sigterm_handler(SIGNAL_ARGS);
 static void autovac_refresh_stats(void);
+static bool backend_uses_temp_namespace(int backendID, Oid namespaceID);
 
 
 
@@ -2088,10 +2089,8 @@ do_autovacuum(void)
 
 			backendID = GetTempNamespaceBackendId(classForm->relnamespace);
 
-			/* We just ignore it if the owning backend is still active */
-			if (backendID != InvalidBackendId &&
-				(backendID == MyBackendId ||
-				 BackendIdGetProc(backendID) == NULL))
+			/* We just ignore it if the owning backend is still active and using the temp schema */
+			if (!backend_uses_temp_namespace(backendID, classForm->relnamespace))
 			{
 				/*
 				 * The table seems to be orphaned -- although it might be that
@@ -2262,9 +2261,7 @@ do_autovacuum(void)
 			continue;
 		}
 		backendID = GetTempNamespaceBackendId(classForm->relnamespace);
-		if (!(backendID != InvalidBackendId &&
-			  (backendID == MyBackendId ||
-			   BackendIdGetProc(backendID) == NULL)))
+		if (backend_uses_temp_namespace(backendID, classForm->relnamespace))
 		{
 			UnlockRelationOid(relid, AccessExclusiveLock);
 			continue;
@@ -3387,4 +3384,33 @@ autovac_refresh_stats(void)
 	}
 
 	pgstat_clear_snapshot();
+}
+
+/*
+ * backend_uses_temp_namespace
+ *		Check if a backend is using a given temp schema
+ */
+static bool
+backend_uses_temp_namespace(int backendID, Oid namespaceID)
+{
+	PGPROC		*proc;
+
+	if (backendID == InvalidBackendId ||
+		backendID == MyBackendId)
+		return false;
+
+	/* Is the backend alive? */
+	proc = BackendIdGetProc(backendID);
+	if (proc == NULL)
+		return false;
+
+	/* Is the backend connected to this database? */
+	if (proc->databaseId != MyDatabaseId)
+		return false;
+
+	/* Does the backend own the temp schema? */
+	if (proc->tempNamespaceId != namespaceID)
+		return false;
+
+	return true;
 }

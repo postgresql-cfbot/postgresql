@@ -3892,6 +3892,7 @@ InitTempTableNamespace(void)
 	 */
 	myTempNamespace = namespaceId;
 	myTempToastNamespace = toastspaceId;
+	MyProc->tempNamespaceId = namespaceId;
 
 	/* It should not be done already. */
 	AssertState(myTempNamespaceSubID == InvalidSubTransactionId);
@@ -3922,6 +3923,7 @@ AtEOXact_Namespace(bool isCommit, bool parallel)
 		{
 			myTempNamespace = InvalidOid;
 			myTempToastNamespace = InvalidOid;
+			MyProc->tempNamespaceId = InvalidOid;
 			baseSearchPathValid = false;	/* need to rebuild list */
 		}
 		myTempNamespaceSubID = InvalidSubTransactionId;
@@ -3974,6 +3976,7 @@ AtEOSubXact_Namespace(bool isCommit, SubTransactionId mySubid,
 			/* TEMP namespace creation failed, so reset state */
 			myTempNamespace = InvalidOid;
 			myTempToastNamespace = InvalidOid;
+			MyProc->tempNamespaceId = InvalidOid;
 			baseSearchPathValid = false;	/* need to rebuild list */
 		}
 	}

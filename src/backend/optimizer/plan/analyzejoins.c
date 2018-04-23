@@ -155,6 +155,9 @@ clause_sides_match_join(RestrictInfo *rinfo, Relids outerrelids,
  * cases, but we don't have the infrastructure to prove them.)  We also
  * have to check that the inner side doesn't generate any variables needed
  * above the join.
+ *
+ * Note: making this significantly smarter might break planunionor.c.
+ * Study that file before doing so.
  */
 static bool
 join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)

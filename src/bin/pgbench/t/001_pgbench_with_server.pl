@@ -283,6 +283,8 @@ pgbench(
 		qr{command=96.: int 1\b},    # :scale
 		qr{command=97.: int 0\b},    # :client_id
 		qr{command=98.: int 5432\b}, # :random_seed
+		qr{command=99.: boolean false\b}, # var exists
+		qr{command=100.: boolean true\b},
 	],
 	'pgbench expressions',
 	{   '001_pgbench_expressions' => q{-- integer functions
@@ -407,6 +409,9 @@ SELECT :v0, :v1, :v2, :v3;
 \set sc debug(:scale)
 \set ci debug(:client_id)
 \set rs debug(:random_seed)
+-- test variable existence
+\set no debug(:{?no_such_variable})
+\set yes debug(:{?cs})
 } });
 
 # random determinism when seeded

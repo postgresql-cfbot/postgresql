@@ -971,6 +971,8 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       integer constants such as <literal>5432</literal>,
       double constants such as <literal>3.14159</literal>,
       references to variables <literal>:</literal><replaceable>variablename</replaceable>,
+      testing whether a variable exists
+      <literal>:{?</literal><replaceable>variablename</replaceable><literal>}</literal>,
       <link linkend="pgbench-builtin-operators">operators</link>
       with their usual SQL precedence and associativity,
       <link linkend="pgbench-builtin-functions">function calls</link>,

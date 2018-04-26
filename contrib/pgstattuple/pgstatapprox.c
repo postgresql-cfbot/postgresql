@@ -12,12 +12,13 @@
  */
 #include "postgres.h"
 
-#include "access/visibilitymap.h"
 #include "access/transam.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/multixact.h"
 #include "access/htup_details.h"
 #include "catalog/namespace.h"
+#include "commands/vacuum.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -26,7 +27,7 @@
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/tqual.h"
-#include "commands/vacuum.h"
+
 
 PG_FUNCTION_INFO_V1(pgstattuple_approx);
 PG_FUNCTION_INFO_V1(pgstattuple_approx_v1_5);
@@ -158,7 +159,7 @@ statapprox_heap(Relation rel, output_type *stat)
 			 * bother distinguishing tuples inserted/deleted by our own
 			 * transaction.
 			 */
-			switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
+			switch (rel->rd_tableamroutine->snapshot_satisfiesVacuum(&tuple, OldestXmin, buf))
 			{
 				case HEAPTUPLE_LIVE:
 				case HEAPTUPLE_DELETE_IN_PROGRESS:

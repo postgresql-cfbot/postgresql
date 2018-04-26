@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -52,7 +53,7 @@ typedef struct
 	Relation	transientrel;	/* relation to write to */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			hi_options;		/* heap_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	void       *bistate;		/* bulk insert state */
 } DR_transientrel;
 
 static int	matview_maintenance_depth = 0;
@@ -465,7 +466,7 @@ transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	myState->hi_options = HEAP_INSERT_SKIP_FSM | HEAP_INSERT_FROZEN;
 	if (!XLogIsNeeded())
 		myState->hi_options |= HEAP_INSERT_SKIP_WAL;
-	myState->bistate = GetBulkInsertState();
+	myState->bistate = table_getbulkinsertstate(transientrel);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(transientrel) == InvalidBlockNumber);
@@ -478,19 +479,22 @@ static bool
 transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
-	HeapTuple	tuple;
 
 	/*
 	 * get the heap tuple out of the tuple table slot, making sure we have a
 	 * writable copy
 	 */
-	tuple = ExecMaterializeSlot(slot);
+	ExecMaterializeSlot(slot);
 
-	heap_insert(myState->transientrel,
-				tuple,
-				myState->output_cid,
-				myState->hi_options,
-				myState->bistate);
+	table_insert(myState->transientrel,
+				   slot,
+				   myState->output_cid,
+				   myState->hi_options,
+				   myState->bistate,
+				   NULL,
+				   NULL,
+				   NIL,
+				   NULL);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -505,11 +509,11 @@ transientrel_shutdown(DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
 
-	FreeBulkInsertState(myState->bistate);
+	table_freebulkinsertstate(myState->transientrel, myState->bistate);
 
 	/* If we skipped using WAL, must heap_sync before commit */
 	if (myState->hi_options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(myState->transientrel);
+		table_sync(myState->transientrel);
 
 	/* close transientrel, but keep lock until commit */
 	heap_close(myState->transientrel, NoLock);

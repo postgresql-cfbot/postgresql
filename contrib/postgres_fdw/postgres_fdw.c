@@ -3921,7 +3921,7 @@ apply_returning_filter(PgFdwDirectModifyState *dmstate,
 	 */
 	if (dmstate->hasSystemCols)
 	{
-		HeapTuple	resultTup = ExecMaterializeSlot(resultSlot);
+		HeapTuple	resultTup = ExecHeapifySlot(resultSlot);
 
 		/* ctid */
 		if (dmstate->ctidAttno)

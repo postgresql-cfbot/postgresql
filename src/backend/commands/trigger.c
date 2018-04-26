@@ -15,6 +15,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "access/tableam.h"
 #include "access/sysattr.h"
 #include "access/htup_details.h"
 #include "access/xact.h"
@@ -2516,7 +2517,7 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	HeapTuple	oldtuple;
 	TriggerData LocTriggerData;
@@ -2579,17 +2580,21 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 
 void
 ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
-					 HeapTuple trigtuple, List *recheckIndexes,
+					 TupleTableSlot *slot, List *recheckIndexes,
 					 TransitionCaptureState *transition_capture)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 
 	if ((trigdesc && trigdesc->trig_insert_after_row) ||
 		(transition_capture && transition_capture->tcs_insert_new_table))
+	{
+		HeapTuple	trigtuple = ExecHeapifySlot(slot);
+
 		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_INSERT,
 							  true, NULL, trigtuple,
 							  recheckIndexes, NULL,
 							  transition_capture);
+	}
 }
 
 TupleTableSlot *
@@ -2597,7 +2602,7 @@ ExecIRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	HeapTuple	oldtuple;
 	TriggerData LocTriggerData;
@@ -2955,7 +2960,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 					 TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	TriggerData LocTriggerData;
 	HeapTuple	trigtuple;
@@ -2997,7 +3002,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 	if (newSlot != NULL)
 	{
 		slot = ExecFilterJunk(relinfo->ri_junkFilter, newSlot);
-		slottuple = ExecMaterializeSlot(slot);
+		slottuple = ExecHeapifySlot(slot);
 		newtuple = slottuple;
 	}
 
@@ -3068,7 +3073,7 @@ void
 ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
-					 HeapTuple newtuple,
+					 TupleTableSlot *slot,
 					 List *recheckIndexes,
 					 TransitionCaptureState *transition_capture)
 {
@@ -3080,7 +3085,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		  transition_capture->tcs_update_new_table)))
 	{
 		HeapTuple	trigtuple;
-
+		HeapTuple	newtuple = slot ? ExecHeapifySlot(slot) : NULL;
 		/*
 		 * Note: if the UPDATE is converted into a DELETE+INSERT as part of
 		 * update-partition-key operation, then this function is also called
@@ -3111,7 +3116,7 @@ ExecIRUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 					 HeapTuple trigtuple, TupleTableSlot *slot)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
-	HeapTuple	slottuple = ExecMaterializeSlot(slot);
+	HeapTuple	slottuple = ExecHeapifySlot(slot);
 	HeapTuple	newtuple = slottuple;
 	TriggerData LocTriggerData;
 	HeapTuple	oldtuple;
@@ -3244,9 +3249,8 @@ GetTupleForTrigger(EState *estate,
 				   TupleTableSlot **newSlot)
 {
 	Relation	relation = relinfo->ri_RelationDesc;
-	HeapTupleData tuple;
+	TableTuple tuple;
 	HeapTuple	result;
-	Buffer		buffer;
 
 	if (newSlot != NULL)
 	{
@@ -3261,12 +3265,12 @@ GetTupleForTrigger(EState *estate,
 		/*
 		 * lock tuple for update
 		 */
-ltrmark:;
-		tuple.t_self = *tid;
-		test = heap_lock_tuple(relation, &tuple,
-							   estate->es_output_cid,
-							   lockmode, LockWaitBlock,
-							   false, &buffer, &hufd);
+		test = table_lock_tuple(relation, tid, estate->es_snapshot, &tuple,
+								  estate->es_output_cid,
+								  lockmode, LockWaitBlock,
+								  IsolationUsesXactSnapshot() ? 0 : TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+								  &hufd);
+		result = tuple;
 		switch (test)
 		{
 			case HeapTupleSelfUpdated:
@@ -3286,69 +3290,58 @@ ltrmark:;
 							 errhint("Consider using an AFTER trigger instead of a BEFORE trigger to propagate changes to other rows.")));
 
 				/* treat it as deleted; do not process */
-				ReleaseBuffer(buffer);
 				return NULL;
 
 			case HeapTupleMayBeUpdated:
-				break;
 
-			case HeapTupleUpdated:
-				ReleaseBuffer(buffer);
-				if (IsolationUsesXactSnapshot())
-					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("could not serialize access due to concurrent update")));
-				if (ItemPointerIndicatesMovedPartitions(&hufd.ctid))
-					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("tuple to be locked was already moved to another partition due to concurrent update")));
-
-				if (!ItemPointerEquals(&hufd.ctid, &tuple.t_self))
+				if (hufd.traversed)
 				{
-					/* it was updated, so look at the updated version */
 					TupleTableSlot *epqslot;
 
 					epqslot = EvalPlanQual(estate,
 										   epqstate,
 										   relation,
 										   relinfo->ri_RangeTableIndex,
-										   lockmode,
-										   &hufd.ctid,
-										   hufd.xmax);
-					if (!TupIsNull(epqslot))
-					{
-						*tid = hufd.ctid;
-						*newSlot = epqslot;
+										   tuple);
 
-						/*
-						 * EvalPlanQual already locked the tuple, but we
-						 * re-call heap_lock_tuple anyway as an easy way of
-						 * re-fetching the correct tuple.  Speed is hardly a
-						 * criterion in this path anyhow.
-						 */
-						goto ltrmark;
-					}
+					/* If PlanQual failed for updated tuple - we must not process this tuple!*/
+					if (TupIsNull(epqslot))
+						return NULL;
+
+					*newSlot = epqslot;
 				}
+				break;
 
-				/*
-				 * if tuple was deleted or PlanQual failed for updated tuple -
-				 * we must not process this tuple!
-				 */
+			case HeapTupleUpdated:
+				if (IsolationUsesXactSnapshot())
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("could not serialize access due to concurrent update")));
+				elog(ERROR, "wrong heap_lock_tuple status: %u", test);
+				break;
+
+			case HeapTupleDeleted:
+				if (IsolationUsesXactSnapshot())
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("could not serialize access due to concurrent update")));
+				/* tuple was deleted */
 				return NULL;
 
 			case HeapTupleInvisible:
 				elog(ERROR, "attempted to lock invisible tuple");
 
 			default:
-				ReleaseBuffer(buffer);
 				elog(ERROR, "unrecognized heap_lock_tuple status: %u", test);
 				return NULL;	/* keep compiler quiet */
 		}
 	}
 	else
 	{
+		Buffer		buffer;
 		Page		page;
 		ItemId		lp;
+		HeapTupleData tupledata;
 
 		buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 
@@ -3367,16 +3360,16 @@ ltrmark:;
 
 		Assert(ItemIdIsNormal(lp));
 
-		tuple.t_data = (HeapTupleHeader) PageGetItem(page, lp);
-		tuple.t_len = ItemIdGetLength(lp);
-		tuple.t_self = *tid;
-		tuple.t_tableOid = RelationGetRelid(relation);
+		tupledata.t_data = (HeapTupleHeader) PageGetItem(page, lp);
+		tupledata.t_len = ItemIdGetLength(lp);
+		tupledata.t_self = *tid;
+		tupledata.t_tableOid = RelationGetRelid(relation);
 
 		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-	}
 
-	result = heap_copytuple(&tuple);
-	ReleaseBuffer(buffer);
+		result = heap_copytuple(&tupledata);
+		ReleaseBuffer(buffer);
+	}
 
 	return result;
 }
@@ -4185,8 +4178,8 @@ AfterTriggerExecute(AfterTriggerEvent event,
 	AfterTriggerShared evtshared = GetTriggerSharedData(event);
 	Oid			tgoid = evtshared->ats_tgoid;
 	TriggerData LocTriggerData;
-	HeapTupleData tuple1;
-	HeapTupleData tuple2;
+	TableTuple tuple1;
+	TableTuple tuple2;
 	HeapTuple	rettuple;
 	Buffer		buffer1 = InvalidBuffer;
 	Buffer		buffer2 = InvalidBuffer;
@@ -4245,14 +4238,13 @@ AfterTriggerExecute(AfterTriggerEvent event,
 			 * because we start with a minimal tuple that ExecFetchSlotTuple()
 			 * must materialize anyway.
 			 */
-			LocTriggerData.tg_trigtuple =
-				ExecMaterializeSlot(trig_tuple_slot1);
+			LocTriggerData.tg_trigtuple = ExecHeapifySlot(trig_tuple_slot1);
 			LocTriggerData.tg_trigtuplebuf = InvalidBuffer;
 
 			LocTriggerData.tg_newtuple =
 				((evtshared->ats_event & TRIGGER_EVENT_OPMASK) ==
 				 TRIGGER_EVENT_UPDATE) ?
-				ExecMaterializeSlot(trig_tuple_slot2) : NULL;
+				ExecHeapifySlot(trig_tuple_slot2) : NULL;
 			LocTriggerData.tg_newtuplebuf = InvalidBuffer;
 
 			break;
@@ -4260,10 +4252,9 @@ AfterTriggerExecute(AfterTriggerEvent event,
 		default:
 			if (ItemPointerIsValid(&(event->ate_ctid1)))
 			{
-				ItemPointerCopy(&(event->ate_ctid1), &(tuple1.t_self));
-				if (!heap_fetch(rel, SnapshotAny, &tuple1, &buffer1, false, NULL))
+				if (!table_fetch(rel, &(event->ate_ctid1), SnapshotAny, &tuple1, &buffer1, false, NULL))
 					elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
-				LocTriggerData.tg_trigtuple = &tuple1;
+				LocTriggerData.tg_trigtuple = tuple1;
 				LocTriggerData.tg_trigtuplebuf = buffer1;
 			}
 			else
@@ -4277,10 +4268,9 @@ AfterTriggerExecute(AfterTriggerEvent event,
 				AFTER_TRIGGER_2CTID &&
 				ItemPointerIsValid(&(event->ate_ctid2)))
 			{
-				ItemPointerCopy(&(event->ate_ctid2), &(tuple2.t_self));
-				if (!heap_fetch(rel, SnapshotAny, &tuple2, &buffer2, false, NULL))
+				if (!table_fetch(rel, &(event->ate_ctid2), SnapshotAny, &tuple2, &buffer2, false, NULL))
 					elog(ERROR, "failed to fetch tuple2 for AFTER trigger");
-				LocTriggerData.tg_newtuple = &tuple2;
+				LocTriggerData.tg_newtuple = tuple2;
 				LocTriggerData.tg_newtuplebuf = buffer2;
 			}
 			else

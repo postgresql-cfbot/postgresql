@@ -219,7 +219,7 @@ static BlockNumber
 system_time_nextsampleblock(SampleScanState *node)
 {
 	SystemTimeSamplerData *sampler = (SystemTimeSamplerData *) node->tsm_state;
-	HeapScanDesc scan = node->ss.ss_currentScanDesc;
+	HeapPageScanDesc pagescan = node->pagescan;
 	instr_time	cur_time;
 
 	/* First call within scan? */
@@ -232,14 +232,14 @@ system_time_nextsampleblock(SampleScanState *node)
 			SamplerRandomState randstate;
 
 			/* If relation is empty, there's nothing to scan */
-			if (scan->rs_nblocks == 0)
+			if (pagescan->rs_nblocks == 0)
 				return InvalidBlockNumber;
 
 			/* We only need an RNG during this setup step */
 			sampler_random_init_state(sampler->seed, randstate);
 
 			/* Compute nblocks/firstblock/step only once per query */
-			sampler->nblocks = scan->rs_nblocks;
+			sampler->nblocks = pagescan->rs_nblocks;
 
 			/* Choose random starting block within the relation */
 			/* (Actually this is the predecessor of the first block visited) */
@@ -275,7 +275,7 @@ system_time_nextsampleblock(SampleScanState *node)
 	{
 		/* Advance lb, using uint64 arithmetic to forestall overflow */
 		sampler->lb = ((uint64) sampler->lb + sampler->step) % sampler->nblocks;
-	} while (sampler->lb >= scan->rs_nblocks);
+	} while (sampler->lb >= pagescan->rs_nblocks);
 
 	return sampler->lb;
 }

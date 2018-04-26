@@ -710,6 +710,12 @@ RelationIsVisible(Oid relid)
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	relform = (Form_pg_class) GETSTRUCT(reltup);
 
+	if (relform->relkind == RELKIND_EXTERNAL)
+	{
+		ReleaseSysCache(reltup);
+		return false;
+	}
+
 	recomputeNamespacePath();
 
 	/*

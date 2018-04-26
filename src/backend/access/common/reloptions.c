@@ -1014,6 +1014,7 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 			options = index_reloptions(amoptions, datum, false);
 			break;
 		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_EXTERNAL:
 			options = NULL;
 			break;
 		default:

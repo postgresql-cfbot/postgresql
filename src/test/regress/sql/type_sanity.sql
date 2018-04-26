@@ -367,12 +367,12 @@ WHERE relkind NOT IN ('r', 'i', 'S', 't', 'v', 'm', 'c', 'f', 'p') OR
     relpersistence NOT IN ('p', 'u', 't') OR
     relreplident NOT IN ('d', 'n', 'f', 'i');
 
--- Indexes should have an access method, others not.
+-- Except default tables, others should have an access method.
 
 SELECT p1.oid, p1.relname
 FROM pg_class as p1
-WHERE (p1.relkind = 'i' AND p1.relam = 0) OR
-    (p1.relkind != 'i' AND p1.relam != 0);
+WHERE p1.relkind IN ('r', 'i', 'S', 't', 'v', 'm', 'p', 'i', 'I') and
+    p1.relam = 0;
 
 -- **************** pg_attribute ****************
 

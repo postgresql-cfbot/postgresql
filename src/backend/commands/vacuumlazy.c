@@ -1009,7 +1009,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			 * cases impossible (e.g. in-progress insert from the same
 			 * transaction).
 			 */
-			switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
+			switch (onerel->rd_tableamroutine->snapshot_satisfiesVacuum(&tuple, OldestXmin, buf))
 			{
 				case HEAPTUPLE_DEAD:
 
@@ -2236,7 +2236,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
 		tuple.t_len = ItemIdGetLength(itemid);
 		tuple.t_tableOid = RelationGetRelid(rel);
 
-		switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
+		switch (rel->rd_tableamroutine->snapshot_satisfiesVacuum(&tuple, OldestXmin, buf))
 		{
 			case HEAPTUPLE_LIVE:
 				{

@@ -26,6 +26,7 @@
 
 #include "access/multixact.h"
 #include "access/relscan.h"
+#include "access/tableamapi.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
@@ -55,7 +56,7 @@ PG_FUNCTION_INFO_V1(pgrowlocks);
 typedef struct
 {
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	int			ncolumns;
 } MyData;
 
@@ -70,7 +71,7 @@ Datum
 pgrowlocks(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	AttInMetadata *attinmeta;
@@ -124,7 +125,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 			aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
 						   RelationGetRelationName(rel));
 
-		scan = heap_beginscan(rel, GetActiveSnapshot(), 0, NULL);
+		scan = table_beginscan(rel, GetActiveSnapshot(), 0, NULL);
 		mydata = palloc(sizeof(*mydata));
 		mydata->rel = rel;
 		mydata->scan = scan;
@@ -140,7 +141,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 	scan = mydata->scan;
 
 	/* scan the relation */
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	while ((tuple = table_scan_getnext(scan, ForwardScanDirection)) != NULL)
 	{
 		HTSU_Result htsu;
 		TransactionId xmax;
@@ -149,9 +150,9 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		/* must hold a buffer lock to call HeapTupleSatisfiesUpdate */
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-		htsu = HeapTupleSatisfiesUpdate(tuple,
-										GetCurrentCommandId(false),
-										scan->rs_cbuf);
+		htsu = rel->rd_tableamroutine->snapshot_satisfiesUpdate(tuple,
+															 GetCurrentCommandId(false),
+															 scan->rs_cbuf);
 		xmax = HeapTupleHeaderGetRawXmax(tuple->t_data);
 		infomask = tuple->t_data->t_infomask;
 
@@ -305,7 +306,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		}
 	}
 
-	heap_endscan(scan);
+	table_endscan(scan);
 	heap_close(mydata->rel, AccessShareLock);
 
 	SRF_RETURN_DONE(funcctx);

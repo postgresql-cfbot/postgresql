@@ -881,6 +881,7 @@ pg_relation_filenode(PG_FUNCTION_ARGS)
 		case RELKIND_INDEX:
 		case RELKIND_SEQUENCE:
 		case RELKIND_TOASTVALUE:
+		case RELKIND_EXTERNAL:
 			/* okay, these have storage */
 			if (relform->relfilenode)
 				result = relform->relfilenode;
@@ -958,6 +959,7 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 		case RELKIND_INDEX:
 		case RELKIND_SEQUENCE:
 		case RELKIND_TOASTVALUE:
+		case RELKIND_EXTERNAL:
 			/* okay, these have storage */
 
 			/* This logic should match RelationInitPhysicalAddr */

@@ -2432,7 +2432,7 @@ pltcl_process_SPI_result(Tcl_Interp *interp,
 {
 	int			my_rc = TCL_OK;
 	int			loop_rc;
-	HeapTuple  *tuples;
+	TableTuple *tuples;
 	TupleDesc	tupdesc;
 
 	switch (spi_rc)

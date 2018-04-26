@@ -1218,6 +1218,12 @@ addRangeTableEntry(ParseState *pstate,
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
 
+	if (rte->relkind == RELKIND_EXTERNAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("Cannot execute SQL queries on external tables"),
+				 parser_errposition(pstate, exprLocation((Node *)relation))));
+
 	/*
 	 * Build the list of effective column names using user-supplied aliases
 	 * and/or actual column names.

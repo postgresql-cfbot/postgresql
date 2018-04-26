@@ -53,6 +53,7 @@
 #include "access/heapam.h"
 #include "access/reloptions.h"
 #include "access/htup_details.h"
+#include "access/tableam.h"
 #include "access/sysattr.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -403,7 +404,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 {
 #ifdef HAVE_SYMLINK
 	char	   *tablespacename = stmt->tablespacename;
-	HeapScanDesc scandesc;
+	TableScanDesc scandesc;
 	Relation	rel;
 	HeapTuple	tuple;
 	ScanKeyData entry[1];
@@ -418,8 +419,8 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 				Anum_pg_tablespace_spcname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(tablespacename));
-	scandesc = heap_beginscan_catalog(rel, 1, entry);
-	tuple = heap_getnext(scandesc, ForwardScanDirection);
+	scandesc = table_beginscan_catalog(rel, 1, entry);
+	tuple = table_scan_getnext(scandesc, ForwardScanDirection);
 
 	if (!HeapTupleIsValid(tuple))
 	{
@@ -436,7 +437,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 					(errmsg("tablespace \"%s\" does not exist, skipping",
 							tablespacename)));
 			/* XXX I assume I need one or both of these next two calls */
-			heap_endscan(scandesc);
+			table_endscan(scandesc);
 			heap_close(rel, NoLock);
 		}
 		return;
@@ -463,7 +464,7 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	 */
 	CatalogTupleDelete(rel, &tuple->t_self);
 
-	heap_endscan(scandesc);
+	table_endscan(scandesc);
 
 	/*
 	 * Remove any comments or security labels on this tablespace.
@@ -914,7 +915,7 @@ RenameTableSpace(const char *oldname, const char *newname)
 	Oid			tspId;
 	Relation	rel;
 	ScanKeyData entry[1];
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tup;
 	HeapTuple	newtuple;
 	Form_pg_tablespace newform;
@@ -927,8 +928,8 @@ RenameTableSpace(const char *oldname, const char *newname)
 				Anum_pg_tablespace_spcname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(oldname));
-	scan = heap_beginscan_catalog(rel, 1, entry);
-	tup = heap_getnext(scan, ForwardScanDirection);
+	scan = table_beginscan_catalog(rel, 1, entry);
+	tup = table_scan_getnext(scan, ForwardScanDirection);
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -939,7 +940,7 @@ RenameTableSpace(const char *oldname, const char *newname)
 	newtuple = heap_copytuple(tup);
 	newform = (Form_pg_tablespace) GETSTRUCT(newtuple);
 
-	heap_endscan(scan);
+	table_endscan(scan);
 
 	/* Must be owner */
 	if (!pg_tablespace_ownercheck(HeapTupleGetOid(newtuple), GetUserId()))
@@ -957,15 +958,15 @@ RenameTableSpace(const char *oldname, const char *newname)
 				Anum_pg_tablespace_spcname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(newname));
-	scan = heap_beginscan_catalog(rel, 1, entry);
-	tup = heap_getnext(scan, ForwardScanDirection);
+	scan = table_beginscan_catalog(rel, 1, entry);
+	tup = table_scan_getnext(scan, ForwardScanDirection);
 	if (HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("tablespace \"%s\" already exists",
 						newname)));
 
-	heap_endscan(scan);
+	table_endscan(scan);
 
 	/* OK, update the entry */
 	namestrcpy(&(newform->spcname), newname);
@@ -989,7 +990,7 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 {
 	Relation	rel;
 	ScanKeyData entry[1];
-	HeapScanDesc scandesc;
+	TableScanDesc scandesc;
 	HeapTuple	tup;
 	Oid			tablespaceoid;
 	Datum		datum;
@@ -1007,8 +1008,8 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 				Anum_pg_tablespace_spcname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(stmt->tablespacename));
-	scandesc = heap_beginscan_catalog(rel, 1, entry);
-	tup = heap_getnext(scandesc, ForwardScanDirection);
+	scandesc = table_beginscan_catalog(rel, 1, entry);
+	tup = table_scan_getnext(scandesc, ForwardScanDirection);
 	if (!HeapTupleIsValid(tup))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -1049,7 +1050,7 @@ AlterTableSpaceOptions(AlterTableSpaceOptionsStmt *stmt)
 	heap_freetuple(newtuple);
 
 	/* Conclude heap scan. */
-	heap_endscan(scandesc);
+	table_endscan(scandesc);
 	heap_close(rel, NoLock);
 
 	return tablespaceoid;
@@ -1383,7 +1384,7 @@ get_tablespace_oid(const char *tablespacename, bool missing_ok)
 {
 	Oid			result;
 	Relation	rel;
-	HeapScanDesc scandesc;
+	TableScanDesc scandesc;
 	HeapTuple	tuple;
 	ScanKeyData entry[1];
 
@@ -1398,8 +1399,8 @@ get_tablespace_oid(const char *tablespacename, bool missing_ok)
 				Anum_pg_tablespace_spcname,
 				BTEqualStrategyNumber, F_NAMEEQ,
 				CStringGetDatum(tablespacename));
-	scandesc = heap_beginscan_catalog(rel, 1, entry);
-	tuple = heap_getnext(scandesc, ForwardScanDirection);
+	scandesc = table_beginscan_catalog(rel, 1, entry);
+	tuple = table_scan_getnext(scandesc, ForwardScanDirection);
 
 	/* We assume that there can be at most one matching tuple */
 	if (HeapTupleIsValid(tuple))
@@ -1407,7 +1408,7 @@ get_tablespace_oid(const char *tablespacename, bool missing_ok)
 	else
 		result = InvalidOid;
 
-	heap_endscan(scandesc);
+	table_endscan(scandesc);
 	heap_close(rel, AccessShareLock);
 
 	if (!OidIsValid(result) && !missing_ok)
@@ -1429,7 +1430,7 @@ get_tablespace_name(Oid spc_oid)
 {
 	char	   *result;
 	Relation	rel;
-	HeapScanDesc scandesc;
+	TableScanDesc scandesc;
 	HeapTuple	tuple;
 	ScanKeyData entry[1];
 
@@ -1444,8 +1445,8 @@ get_tablespace_name(Oid spc_oid)
 				ObjectIdAttributeNumber,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(spc_oid));
-	scandesc = heap_beginscan_catalog(rel, 1, entry);
-	tuple = heap_getnext(scandesc, ForwardScanDirection);
+	scandesc = table_beginscan_catalog(rel, 1, entry);
+	tuple = table_scan_getnext(scandesc, ForwardScanDirection);
 
 	/* We assume that there can be at most one matching tuple */
 	if (HeapTupleIsValid(tuple))
@@ -1453,7 +1454,7 @@ get_tablespace_name(Oid spc_oid)
 	else
 		result = NULL;
 
-	heap_endscan(scandesc);
+	table_endscan(scandesc);
 	heap_close(rel, AccessShareLock);
 
 	return result;

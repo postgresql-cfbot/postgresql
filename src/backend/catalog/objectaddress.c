@@ -3524,6 +3524,10 @@ getRelationDescription(StringInfo buffer, Oid relid)
 			appendStringInfo(buffer, _("foreign table %s"),
 							 relname);
 			break;
+		case RELKIND_EXTERNAL:
+			appendStringInfo(buffer, _("external table %s"),
+							 relname);
+			break;
 		default:
 			/* shouldn't get here */
 			appendStringInfo(buffer, _("relation %s"),
@@ -3991,6 +3995,9 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId)
 			break;
 		case RELKIND_FOREIGN_TABLE:
 			appendStringInfoString(buffer, "foreign table");
+			break;
+		case RELKIND_EXTERNAL:
+			appendStringInfoString(buffer, "external table");
 			break;
 		default:
 			/* shouldn't get here */

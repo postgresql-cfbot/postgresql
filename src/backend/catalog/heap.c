@@ -255,6 +255,7 @@ heap_create(const char *relname,
 			Oid reltablespace,
 			Oid relid,
 			Oid relfilenode,
+			Oid accessmtd,
 			TupleDesc tupDesc,
 			char relkind,
 			char relpersistence,
@@ -349,6 +350,7 @@ heap_create(const char *relname,
 									 relnamespace,
 									 tupDesc,
 									 relid,
+									 accessmtd,
 									 relfilenode,
 									 reltablespace,
 									 shared_relation,
@@ -1031,6 +1033,7 @@ heap_create_with_catalog(const char *relname,
 						 Oid reltypeid,
 						 Oid reloftypeid,
 						 Oid ownerid,
+						 Oid accessmtd,
 						 TupleDesc tupdesc,
 						 List *cooked_constraints,
 						 char relkind,
@@ -1174,6 +1177,7 @@ heap_create_with_catalog(const char *relname,
 							   reltablespace,
 							   relid,
 							   InvalidOid,
+							   accessmtd,
 							   tupdesc,
 							   relkind,
 							   relpersistence,
@@ -1392,7 +1396,8 @@ heap_create_init_fork(Relation rel)
 {
 	Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
 		   rel->rd_rel->relkind == RELKIND_MATVIEW ||
-		   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
+		   rel->rd_rel->relkind == RELKIND_TOASTVALUE ||
+		   rel->rd_rel->relkind == RELKIND_EXTERNAL);
 	RelationOpenSmgr(rel);
 	smgrcreate(rel->rd_smgr, INIT_FORKNUM, false);
 	log_smgrcreate(&rel->rd_smgr->smgr_rnode.node, INIT_FORKNUM);

@@ -133,6 +133,12 @@ typedef struct RelationData
 	struct HeapTupleData *rd_indextuple;	/* all of pg_index tuple */
 
 	/*
+	 * Underlying table access method support
+	 */
+	Oid			rd_tableamhandler;	/* OID of table AM handler function */
+	struct TableAmRoutine *rd_tableamroutine;	/* table AM's API struct */
+
+	/*
 	 * index access support info (used only for an index relation)
 	 *
 	 * Note: only default support procs for each opclass are cached, namely
@@ -431,6 +437,12 @@ typedef struct ViewOptions
  *		Returns tuple descriptor for a relation.
  */
 #define RelationGetDescr(relation) ((relation)->rd_att)
+
+/*
+ * RelationGetTableamRoutine
+ *		Returns the table AM routine for a relation.
+ */
+#define RelationGettableamRoutine(relation) ((relation)->rd_tableamroutine)
 
 /*
  * RelationGetRelationName

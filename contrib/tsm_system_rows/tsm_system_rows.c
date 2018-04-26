@@ -71,7 +71,7 @@ static BlockNumber system_rows_nextsampleblock(SampleScanState *node);
 static OffsetNumber system_rows_nextsampletuple(SampleScanState *node,
 							BlockNumber blockno,
 							OffsetNumber maxoffset);
-static bool SampleOffsetVisible(OffsetNumber tupoffset, HeapScanDesc scan);
+static bool SampleOffsetVisible(OffsetNumber tupoffset, HeapPageScanDesc scan);
 static uint32 random_relative_prime(uint32 n, SamplerRandomState randstate);
 
 
@@ -209,7 +209,7 @@ static BlockNumber
 system_rows_nextsampleblock(SampleScanState *node)
 {
 	SystemRowsSamplerData *sampler = (SystemRowsSamplerData *) node->tsm_state;
-	HeapScanDesc scan = node->ss.ss_currentScanDesc;
+	HeapPageScanDesc pagescan = node->pagescan;
 
 	/* First call within scan? */
 	if (sampler->doneblocks == 0)
@@ -221,14 +221,14 @@ system_rows_nextsampleblock(SampleScanState *node)
 			SamplerRandomState randstate;
 
 			/* If relation is empty, there's nothing to scan */
-			if (scan->rs_nblocks == 0)
+			if (pagescan->rs_nblocks == 0)
 				return InvalidBlockNumber;
 
 			/* We only need an RNG during this setup step */
 			sampler_random_init_state(sampler->seed, randstate);
 
 			/* Compute nblocks/firstblock/step only once per query */
-			sampler->nblocks = scan->rs_nblocks;
+			sampler->nblocks = pagescan->rs_nblocks;
 
 			/* Choose random starting block within the relation */
 			/* (Actually this is the predecessor of the first block visited) */
@@ -258,7 +258,7 @@ system_rows_nextsampleblock(SampleScanState *node)
 	{
 		/* Advance lb, using uint64 arithmetic to forestall overflow */
 		sampler->lb = ((uint64) sampler->lb + sampler->step) % sampler->nblocks;
-	} while (sampler->lb >= scan->rs_nblocks);
+	} while (sampler->lb >= pagescan->rs_nblocks);
 
 	return sampler->lb;
 }
@@ -278,7 +278,7 @@ system_rows_nextsampletuple(SampleScanState *node,
 							OffsetNumber maxoffset)
 {
 	SystemRowsSamplerData *sampler = (SystemRowsSamplerData *) node->tsm_state;
-	HeapScanDesc scan = node->ss.ss_currentScanDesc;
+	HeapPageScanDesc pagescan = node->pagescan;
 	OffsetNumber tupoffset = sampler->lt;
 
 	/* Quit if we've returned all needed tuples */
@@ -291,7 +291,7 @@ system_rows_nextsampletuple(SampleScanState *node,
 	 */
 
 	/* We rely on the data accumulated in pagemode access */
-	Assert(scan->rs_pageatatime);
+	Assert(pagescan->rs_pageatatime);
 	for (;;)
 	{
 		/* Advance to next possible offset on page */
@@ -308,7 +308,7 @@ system_rows_nextsampletuple(SampleScanState *node,
 		}
 
 		/* Found a candidate? */
-		if (SampleOffsetVisible(tupoffset, scan))
+		if (SampleOffsetVisible(tupoffset, pagescan))
 		{
 			sampler->donetuples++;
 			break;
@@ -327,7 +327,7 @@ system_rows_nextsampletuple(SampleScanState *node,
  * so just look at the info it left in rs_vistuples[].
  */
 static bool
-SampleOffsetVisible(OffsetNumber tupoffset, HeapScanDesc scan)
+SampleOffsetVisible(OffsetNumber tupoffset, HeapPageScanDesc scan)
 {
 	int			start = 0,
 				end = scan->rs_ntuples - 1;

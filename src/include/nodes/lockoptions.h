@@ -43,4 +43,9 @@ typedef enum LockWaitPolicy
 	LockWaitError
 } LockWaitPolicy;
 
+/* Follow tuples whose update is in progress if lock modes don't conflict  */
+#define TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS	0x01
+/* Follow update chain and lock lastest version of tuple */
+#define TUPLE_LOCK_FLAG_FIND_LAST_VERSION		0x02
+
 #endif							/* LOCKOPTIONS_H */

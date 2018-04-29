@@ -1570,10 +1570,14 @@ dpow(PG_FUNCTION_ARGS)
 	 * using something different from our floor() test to decide it's
 	 * invalid).  Other platforms (HPPA) return errno == ERANGE and a large
 	 * (HUGE_VAL) but finite result to signal overflow.
+	 *
+	 * Note that some versions of Visual Studio set errno to EDOM when 
+	 * arg1 or arg2 is a NaN. 
+	 * So we need to except those cases here.
 	 */
 	errno = 0;
 	result = pow(arg1, arg2);
-	if (errno == EDOM && isnan(result))
+	if (errno == EDOM && isnan(result) && !isnan(arg1) && !isnan(arg2))
 	{
 		if ((fabs(arg1) > 1 && arg2 >= 0) || (fabs(arg1) < 1 && arg2 < 0))
 			/* The sign of Inf is not significant in this case. */

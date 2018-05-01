@@ -1581,6 +1581,7 @@ postgresPlanForeignModify(PlannerInfo *root,
 	Relation	rel;
 	StringInfoData sql;
 	List	   *targetAttrs = NIL;
+	List	   *withCheckOptionList = NIL;
 	List	   *returningList = NIL;
 	List	   *retrieved_attrs = NIL;
 	bool		doNothing = false;
@@ -1630,6 +1631,13 @@ postgresPlanForeignModify(PlannerInfo *root,
 	}
 
 	/*
+	 * Extract the relevant WITH CHECK OPTION list if any.
+	 */
+	if (plan->withCheckOptionLists)
+		withCheckOptionList = (List *) list_nth(plan->withCheckOptionLists,
+												subplan_index);
+
+	/*
 	 * Extract the relevant RETURNING list if any.
 	 */
 	if (plan->returningLists)
@@ -1654,12 +1662,14 @@ postgresPlanForeignModify(PlannerInfo *root,
 	{
 		case CMD_INSERT:
 			deparseInsertSql(&sql, root, resultRelation, rel,
-							 targetAttrs, doNothing, returningList,
+							 targetAttrs, doNothing,
+							 withCheckOptionList, returningList,
 							 &retrieved_attrs);
 			break;
 		case CMD_UPDATE:
 			deparseUpdateSql(&sql, root, resultRelation, rel,
-							 targetAttrs, returningList,
+							 targetAttrs,
+							 withCheckOptionList, returningList,
 							 &retrieved_attrs);
 			break;
 		case CMD_DELETE:

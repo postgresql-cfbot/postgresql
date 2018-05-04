@@ -11694,6 +11694,10 @@ retry:
 	Assert(reqLen <= readLen);
 
 	*readTLI = curFileTLI;
+
+	if (!XLogReaderValidatePageHeader(xlogreader, targetPagePtr, readBuf))
+		goto next_record_is_invalid;
+
 	return readLen;
 
 next_record_is_invalid:
@@ -11828,12 +11832,18 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						}
 						else
 						{
-							ptr = tliRecPtr;
+							/*
+							 * Trying from the current RecPtr, not from the
+							 * beginning of the current record. The record may
+							 * be no longer available from the master.
+							 */
+							ptr = RecPtr;
 							tli = tliOfPointInHistory(tliRecPtr, expectedTLEs);
 
 							if (curFileTLI > 0 && tli < curFileTLI)
 								elog(ERROR, "according to history file, WAL location %X/%X belongs to timeline %u, but previous recovered WAL file came from timeline %u",
-									 (uint32) (ptr >> 32), (uint32) ptr,
+									 (uint32) (tliRecPtr >> 32),
+									 (uint32) tliRecPtr,
 									 tli, curFileTLI);
 						}
 						curFileTLI = tli;

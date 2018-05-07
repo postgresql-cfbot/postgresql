@@ -52,7 +52,9 @@ endif
 probes.h: probes.d
 ifeq ($(enable_dtrace), yes)
 	$(DTRACE) -C -h -s $< -o $@.tmp
-	sed -e 's/POSTGRESQL_/TRACE_POSTGRESQL_/g' $@.tmp >$@
+	sed -e 's/POSTGRESQL_/TRACE_POSTGRESQL_/g' \
+	    -e 's/(char \*/(const char */g' \
+	    -e 's/, char \*/, const char */g' $@.tmp >$@
 	rm $@.tmp
 else
 	sed -f $(srcdir)/Gen_dummy_probes.sed $< >$@

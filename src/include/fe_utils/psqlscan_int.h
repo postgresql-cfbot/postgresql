@@ -112,6 +112,7 @@ typedef struct PsqlScanStateData
 	int			start_state;	/* yylex's starting/finishing state */
 	int			paren_depth;	/* depth of nesting in parentheses */
 	int			xcdepth;		/* depth of nesting in slash-star comments */
+	int			semicolons;		/* number of embedded (\;) semi-colons */
 	char	   *dolqstart;		/* current $foo$ quote start string */
 
 	/*

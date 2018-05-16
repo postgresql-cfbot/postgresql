@@ -386,6 +386,16 @@ sub GenerateFiles
 	}
 
 	if (IsNewer(
+			'src/backend/utils/sort/qsort_tuple.c',
+			'src/backend/utils/sort/gen_qsort_tuple.pl'))
+	{
+		print "Generating qsort_tuple.c...\n";
+		system(
+'perl src/backend/utils/sort/gen_qsort_tuple.pl > src/backend/utils/sort/qsort_tuple.c'
+		);
+	}
+
+	if (IsNewer(
 			'src/interfaces/libpq/libpq.rc',
 			'src/interfaces/libpq/libpq.rc.in'))
 	{

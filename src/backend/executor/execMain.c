@@ -259,6 +259,11 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		AfterTriggerBeginQuery();
 
 	/*
+	 * Initialize cached expressions used in the plan
+	 */
+	ExecInitCachedExprs(queryDesc);
+
+	/*
 	 * Initialize the plan state tree
 	 */
 	InitPlan(queryDesc, eflags);

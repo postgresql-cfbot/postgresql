@@ -1455,7 +1455,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		EEO_CASE(EEOP_DOMAIN_CHECK)
 		{
 			/* too complex for an inline implementation */
-			ExecEvalConstraintCheck(state, op);
+			ExecEvalConstraintCheck(state, op, econtext);
 
 			EEO_NEXT();
 		}
@@ -2239,13 +2239,24 @@ void
 ExecEvalParamExec(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 {
 	ParamExecData *prm;
+	int			paramid = op->d.param.paramid;
 
-	prm = &(econtext->ecxt_param_exec_vals[op->d.param.paramid]);
+	if (op->d.param.dynamically_planned)
+		prm = &(state->cachedexprs_vals[paramid]);
+	else
+		prm = &(econtext->ecxt_param_exec_vals[paramid]);
+
 	if (unlikely(prm->execPlan != NULL))
 	{
 		/* Parameter not evaluated yet, so go do it */
-		ExecSetParamPlan(prm->execPlan, econtext);
-		/* ExecSetParamPlan should have processed this param... */
+		if (IsA(prm->execPlan, ExprState))
+			ExecEvalCachedExpr(state, op, econtext);
+		else
+			ExecSetParamPlan(prm->execPlan, econtext);
+		/*
+		 * ExecSetParamPlan/ExecEvalCachedExpr should have processed this
+		 * param...
+		 */
 		Assert(prm->execPlan == NULL);
 	}
 	*op->resvalue = prm->value;
@@ -3508,10 +3519,24 @@ ExecEvalConstraintNotNull(ExprState *state, ExprEvalStep *op)
  * Evaluate a CHECK domain constraint.
  */
 void
-ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op)
+ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op,
+						ExprContext *econtext)
 {
-	if (!*op->d.domaincheck.checknull &&
-		!DatumGetBool(*op->d.domaincheck.checkvalue))
+	if (op->d.domaincheck.check_exprstate)
+	{
+		op->d.domaincheck.checkvalue = ExecEvalExpr(
+											op->d.domaincheck.check_exprstate,
+											econtext,
+											&op->d.domaincheck.checknull);
+	}
+	else
+	{
+		op->d.domaincheck.checkvalue = *(op->resvalue);
+		op->d.domaincheck.checknull = *(op->resnull);
+	}
+
+	if (!op->d.domaincheck.checknull &&
+		!DatumGetBool(op->d.domaincheck.checkvalue))
 		ereport(ERROR,
 				(errcode(ERRCODE_CHECK_VIOLATION),
 				 errmsg("value for domain %s violates check constraint \"%s\"",
@@ -4124,4 +4149,43 @@ ExecEvalAggOrderedTransTuple(ExprState *state, ExprEvalStep *op,
 	pertrans->sortslot->tts_nvalid = pertrans->numInputs;
 	ExecStoreVirtualTuple(pertrans->sortslot);
 	tuplesort_puttupleslot(pertrans->sortstates[setno], pertrans->sortslot);
+}
+
+void
+ExecEvalCachedExpr(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
+{
+	ParamExecData *prm;
+	int			paramid = op->d.param.paramid;
+	MemoryContext oldContext;
+	int16		restyplen;
+	bool		restypbyval;
+
+	if (op->d.param.dynamically_planned)
+		prm = &(state->cachedexprs_vals[paramid]);
+	else
+		prm = &(econtext->ecxt_param_exec_vals[paramid]);
+
+	prm->value = ExecEvalExpr((ExprState *) prm->execPlan, econtext,
+							  &(prm->isnull));
+
+	/* Save result */
+	if (!(prm->isnull))
+	{
+		get_typlenbyval(op->d.param.paramtype, &restyplen, &restypbyval);
+
+		/*
+		 * Switch per-query memory context. It is necessary to save the
+		 * subexpression result between all tuples if its value datum is a
+		 * pointer.
+		 */
+		oldContext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
+
+		prm->value = datumCopy(prm->value, restypbyval, restyplen);
+
+		/* Switch memory context back */
+		MemoryContextSwitchTo(oldContext);
+	}
+
+	/* Mark this cached expression as done */
+	prm->execPlan = NULL;
 }

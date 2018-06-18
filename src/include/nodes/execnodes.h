@@ -54,6 +54,25 @@ typedef Datum (*ExprStateEvalFunc) (struct ExprState *expression,
 /* expression is for use with ExecQual() */
 #define EEO_FLAG_IS_QUAL					(1 << 0)
 
+/*
+ * CachedExprsInfo
+ *
+ * This struct is used to store the ExprStates of subexpressions of cached
+ * expressions. It also stores the assigned PARAM_EXEC slot number of the first
+ * cached expression since the PARAM_EXEC nodes must be the first.
+ */
+typedef struct CachedExprsInfo
+{
+	struct ExprState *subexpr_states;	/* array of states of subexpressions */
+	int			num_cachedexprs;	/* length of array */
+
+	/*
+	 * The paramid of the first cached expression in es_param_exec_vals or
+	 * cachedexprs_vals (it is always 0 in the second case).
+	 */
+	int			first_cached_paramid;
+} CachedExprsInfo;
+
 typedef struct ExprState
 {
 	Node		tag;
@@ -91,6 +110,17 @@ typedef struct ExprState
 
 	/* private state for an evalfunc */
 	void	   *evalfunc_private;
+
+	/*
+	 * Usually plans for all cached expressions are handled during query
+	 * planning and they are compiled separatly. But sometimes they are used in
+	 * dynamically loaded plans (for example, domain constraints plans). In this
+	 * case all information about them is stored in the ExprState of this plan,
+	 * and not in EState.
+	 */
+	ParamExecData *cachedexprs_vals;	/* values of cached expressions */
+	struct CachedExprsInfo cachedexprs_info;	/* to evaluate subexpressions of
+												 * cached expressions */
 
 	/*
 	 * XXX: following fields only needed during "compilation" (ExecInitExpr);
@@ -571,6 +601,9 @@ typedef struct EState
 	 */
 	int			es_jit_flags;
 	struct JitContext *es_jit;
+
+	/* To evaluate subexpressions of cached expressions. */
+	struct CachedExprsInfo es_cachedexprs_info;
 } EState;
 
 
@@ -875,7 +908,7 @@ typedef struct DomainConstraintState
 	NodeTag		type;
 	DomainConstraintType constrainttype;	/* constraint type */
 	char	   *name;			/* name of constraint (for error msgs) */
-	Expr	   *check_expr;		/* for CHECK, a boolean expression */
+	PlannedExpr	*check_expr;		/* for CHECK, a boolean expression */
 	ExprState  *check_exprstate;	/* check_expr's eval state, or NULL */
 } DomainConstraintState;
 

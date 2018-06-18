@@ -701,11 +701,11 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	hjstate->js.ps.qual =
-		ExecInitQual(node->join.plan.qual, (PlanState *) hjstate);
+		ExecInitQual(node->join.plan.qual, (PlanState *) hjstate, NULL);
 	hjstate->js.joinqual =
-		ExecInitQual(node->join.joinqual, (PlanState *) hjstate);
+		ExecInitQual(node->join.joinqual, (PlanState *) hjstate, NULL);
 	hjstate->hashclauses =
-		ExecInitQual(node->hashclauses, (PlanState *) hjstate);
+		ExecInitQual(node->hashclauses, (PlanState *) hjstate, NULL);
 
 	/*
 	 * initialize hash-specific info
@@ -729,12 +729,13 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	hoperators = NIL;
 	foreach(l, node->hashclauses)
 	{
+		/* this is not used for pseudoconstants */
 		OpExpr	   *hclause = lfirst_node(OpExpr, l);
 
 		lclauses = lappend(lclauses, ExecInitExpr(linitial(hclause->args),
-												  (PlanState *) hjstate));
+												  (PlanState *) hjstate, NULL));
 		rclauses = lappend(rclauses, ExecInitExpr(lsecond(hclause->args),
-												  (PlanState *) hjstate));
+												  (PlanState *) hjstate, NULL));
 		hoperators = lappend_oid(hoperators, hclause->opno);
 	}
 	hjstate->hj_OuterHashKeys = lclauses;

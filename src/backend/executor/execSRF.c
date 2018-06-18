@@ -83,7 +83,7 @@ ExecInitTableFunctionResult(Expr *expr,
 	}
 	else
 	{
-		state->elidedFuncState = ExecInitExpr(expr, parent);
+		state->elidedFuncState = ExecInitExpr(expr, parent, NULL);
 	}
 
 	return state;

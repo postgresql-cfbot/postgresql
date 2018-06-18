@@ -2261,6 +2261,11 @@ adjust_appendrel_attrs_mutator(Node *node,
 											  context->appinfos);
 		return (Node *) phv;
 	}
+	if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return copyObject(node);
+	}
 	/* Shouldn't need to handle planner auxiliary nodes here */
 	Assert(!IsA(node, SpecialJoinInfo));
 	Assert(!IsA(node, AppendRelInfo));

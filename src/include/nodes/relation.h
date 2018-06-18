@@ -145,6 +145,9 @@ typedef struct PlannerGlobal
 	bool		parallelModeNeeded; /* parallel mode actually required? */
 
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
+
+	List	   *cachedExprs;	/* list of non-internal cached expressions, or
+								 * NIL */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */

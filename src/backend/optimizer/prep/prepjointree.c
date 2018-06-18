@@ -334,6 +334,13 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 {
 	if (node == NULL)
 		return NULL;
+
+	/*
+	 * It is assumed that we have not yet used the function
+	 * eval_const_expressions.
+	 */
+	Assert(!IsA(node, CachedExpr));
+
 	if (IsA(node, SubLink))
 	{
 		SubLink    *sublink = (SubLink *) node;
@@ -452,7 +459,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		/* Else return it unmodified */
 		return node;
 	}
-	if (not_clause(node))
+	if (not_clause(node, false))
 	{
 		/* If the immediate argument of NOT is EXISTS, try to convert */
 		SubLink    *sublink = (SubLink *) get_notclausearg((Expr *) node);
@@ -519,7 +526,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		/* Else return it unmodified */
 		return node;
 	}
-	if (and_clause(node))
+	if (and_clause(node, false))
 	{
 		/* Recurse into AND clause */
 		List	   *newclauses = NIL;
@@ -545,7 +552,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		else if (list_length(newclauses) == 1)
 			return (Node *) linitial(newclauses);
 		else
-			return (Node *) make_andclause(newclauses);
+			return (Node *) make_andclause(newclauses, false);
 	}
 	/* Stop if not an AND */
 	return node;

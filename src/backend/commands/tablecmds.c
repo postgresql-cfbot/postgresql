@@ -200,7 +200,7 @@ typedef struct NewConstraint
 typedef struct NewColumnValue
 {
 	AttrNumber	attnum;			/* which column */
-	Expr	   *expr;			/* expression to compute */
+	PlannedExpr *expr;			/* expression to compute */
 	ExprState  *exprstate;		/* execution state */
 } NewColumnValue;
 
@@ -4621,9 +4621,11 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	foreach(l, tab->newvals)
 	{
 		NewColumnValue *ex = lfirst(l);
+		PlannedExpr *planned_expr = ex->expr;
 
 		/* expr already planned */
-		ex->exprstate = ExecInitExpr((Expr *) ex->expr, NULL);
+		ex->exprstate = ExecInitExpr((Expr *) planned_expr->expr, NULL,
+									 planned_expr->cachedExprs);
 	}
 
 	notnull_attrs = NIL;
@@ -9052,6 +9054,7 @@ ATPrepAlterColumnType(List **wqueue,
 	ParseState *pstate = make_parsestate(NULL);
 	AclResult	aclresult;
 	bool		is_expr;
+	PlannedExpr *planned_transform;
 
 	if (rel->rd_rel->reloftype && !recursing)
 		ereport(ERROR,
@@ -9164,7 +9167,8 @@ ATPrepAlterColumnType(List **wqueue,
 		assign_expr_collations(pstate, transform);
 
 		/* Plan the expr now so we can accurately assess the need to rewrite. */
-		transform = (Node *) expression_planner((Expr *) transform);
+		planned_transform = expression_planner((Expr *) transform);
+		transform = (Node *) planned_transform->expr;
 
 		/*
 		 * Add a work queue item to make ATRewriteTable update the column
@@ -9172,7 +9176,7 @@ ATPrepAlterColumnType(List **wqueue,
 		 */
 		newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
 		newval->attnum = attnum;
-		newval->expr = (Expr *) transform;
+		newval->expr = planned_transform;
 
 		tab->newvals = lappend(tab->newvals, newval);
 		if (ATColumnChangeRequiresRewrite(transform, attnum))
@@ -9301,6 +9305,8 @@ ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno)
 				return true;
 			expr = (Node *) d->arg;
 		}
+		else if (IsA(expr, CachedExpr))
+			expr = (Node *) ((CachedExpr *) expr)->subexpr;
 		else
 			return true;
 	}
@@ -13733,7 +13739,7 @@ ComputePartitionAttrs(Relation rel, List *partParams, AttrNumber *partattrs,
 				 * expression destructively and we have already saved the
 				 * expression to be stored into the catalog above.
 				 */
-				expr = (Node *) expression_planner((Expr *) expr);
+				expr = (Node *) expression_planner((Expr *) expr)->expr;
 
 				/*
 				 * Partition expression cannot contain mutable functions,

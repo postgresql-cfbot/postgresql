@@ -17,9 +17,6 @@
 #include "access/htup.h"
 #include "nodes/relation.h"
 
-#define is_opclause(clause)		((clause) != NULL && IsA(clause, OpExpr))
-#define is_funcclause(clause)	((clause) != NULL && IsA(clause, FuncExpr))
-
 typedef struct
 {
 	int			numWindowFuncs; /* total number of WindowFuncs found */
@@ -27,21 +24,24 @@ typedef struct
 	List	  **windowFuncs;	/* lists of WindowFuncs for each winref */
 } WindowFuncLists;
 
+extern bool is_opclause(Node *clause, bool check_cachedexpr);
+extern bool is_funcclause(Node *clause, bool check_cachedexpr);
+
 extern Expr *make_opclause(Oid opno, Oid opresulttype, bool opretset,
 			  Expr *leftop, Expr *rightop,
 			  Oid opcollid, Oid inputcollid);
 extern Node *get_leftop(const Expr *clause);
 extern Node *get_rightop(const Expr *clause);
 
-extern bool not_clause(Node *clause);
+extern bool not_clause(Node *clause, bool check_cachedexpr);
 extern Expr *make_notclause(Expr *notclause);
 extern Expr *get_notclausearg(Expr *notclause);
 
-extern bool or_clause(Node *clause);
-extern Expr *make_orclause(List *orclauses);
+extern bool or_clause(Node *clause, bool check_cachedexpr);
+extern Expr *make_orclause(List *orclauses, bool try_to_cache);
 
-extern bool and_clause(Node *clause);
-extern Expr *make_andclause(List *andclauses);
+extern bool and_clause(Node *clause, bool check_cachedexpr);
+extern Expr *make_andclause(List *andclauses, bool try_to_cache);
 extern Node *make_and_qual(Node *qual1, Node *qual2);
 extern Expr *make_ands_explicit(List *andclauses);
 extern List *make_ands_implicit(Expr *clause);
@@ -87,5 +87,7 @@ extern Query *inline_set_returning_function(PlannerInfo *root,
 
 extern List *expand_function_arguments(List *args, Oid result_type,
 						  HeapTuple func_tuple);
+
+extern bool set_non_internal_cachedexprs_walker(Node *node, List **cachedexprs);
 
 #endif							/* CLAUSES_H */

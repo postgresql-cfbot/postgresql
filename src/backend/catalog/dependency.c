@@ -2027,6 +2027,13 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* fall through to examine arguments */
 	}
+	else if (IsA(node, CachedExpr))
+	{
+		CachedExpr *cachedexpr = (CachedExpr *) node;
+
+		return find_expr_references_walker((Node *) cachedexpr->subexpr,
+										   context);
+	}
 
 	return expression_tree_walker(node, find_expr_references_walker,
 								  (void *) context);

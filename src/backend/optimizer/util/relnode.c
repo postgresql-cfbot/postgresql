@@ -886,6 +886,7 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 		 * translating whole-row Var of a child to that of the parent.
 		 * Children of an inherited table or subquery child rels can not
 		 * directly participate in a join, so other kinds of nodes here.
+		 * Do not check for cached expressions because they do not contain vars.
 		 */
 		if (IsA(var, Var))
 		{

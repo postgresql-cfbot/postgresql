@@ -192,7 +192,8 @@ clauselist_selectivity(PlannerInfo *root,
 		 * the simple way we are expecting.)  Most of the tests here can be
 		 * done more efficiently with rinfo than without.
 		 */
-		if (is_opclause(clause) && list_length(((OpExpr *) clause)->args) == 2)
+		if (is_opclause(clause, false) &&
+			list_length(((OpExpr *) clause)->args) == 2)
 		{
 			OpExpr	   *expr = (OpExpr *) clause;
 			bool		varonleft = true;
@@ -688,7 +689,7 @@ clause_selectivity(PlannerInfo *root,
 			/* XXX any way to do better than default? */
 		}
 	}
-	else if (not_clause(clause))
+	else if (not_clause(clause, false))
 	{
 		/* inverse of the selectivity of the underlying clause */
 		s1 = 1.0 - clause_selectivity(root,
@@ -697,7 +698,7 @@ clause_selectivity(PlannerInfo *root,
 									  jointype,
 									  sjinfo);
 	}
-	else if (and_clause(clause))
+	else if (and_clause(clause, false))
 	{
 		/* share code with clauselist_selectivity() */
 		s1 = clauselist_selectivity(root,
@@ -706,7 +707,7 @@ clause_selectivity(PlannerInfo *root,
 									jointype,
 									sjinfo);
 	}
-	else if (or_clause(clause))
+	else if (or_clause(clause, false))
 	{
 		/*
 		 * Selectivities for an OR clause are computed as s1+s2 - s1*s2 to
@@ -728,7 +729,7 @@ clause_selectivity(PlannerInfo *root,
 			s1 = s1 + s2 - s1 * s2;
 		}
 	}
-	else if (is_opclause(clause) || IsA(clause, DistinctExpr))
+	else if (is_opclause(clause, false) || IsA(clause, DistinctExpr))
 	{
 		OpExpr	   *opclause = (OpExpr *) clause;
 		Oid			opno = opclause->opno;
@@ -823,6 +824,18 @@ clause_selectivity(PlannerInfo *root,
 		/* Not sure this case is needed, but it can't hurt */
 		s1 = clause_selectivity(root,
 								(Node *) ((CoerceToDomain *) clause)->arg,
+								varRelid,
+								jointype,
+								sjinfo);
+	}
+	else if (IsA(clause, CachedExpr))
+	{
+		/*
+		 * Not sure this case is needed, but it can't hurt.
+		 * Calculate selectivity of subexpression.
+		 */
+		s1 = clause_selectivity(root,
+								(Node *) ((CachedExpr *) clause)->subexpr,
 								varRelid,
 								jointype,
 								sjinfo);

@@ -757,7 +757,10 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 	if (!IsA(rinfo, RestrictInfo))
 		return false;
 
-	/* Pseudoconstants are not interesting (they couldn't contain a Var) */
+	/*
+	 * Pseudoconstants (including cached expressions) are not interesting (they
+	 * couldn't contain a Var)
+	 */
 	if (rinfo->pseudoconstant)
 		return false;
 
@@ -765,7 +768,7 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 	if (bms_membership(rinfo->clause_relids) != BMS_SINGLETON)
 		return false;
 
-	if (is_opclause(rinfo->clause))
+	if (is_opclause((Node *) rinfo->clause, false))
 	{
 		/* If it's an opclause, check for Var = Const or Const = Var. */
 		OpExpr	   *expr = (OpExpr *) rinfo->clause;
@@ -799,7 +802,7 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 
 		/* OK to proceed with checking "var" */
 	}
-	else if (not_clause((Node *) rinfo->clause))
+	else if (not_clause((Node *) rinfo->clause, false))
 	{
 		/*
 		 * "NOT x" can be interpreted as "x = false", so get the argument and
@@ -819,6 +822,7 @@ dependency_is_compatible_clause(Node *clause, Index relid, AttrNumber *attnum)
 	/*
 	 * We may ignore any RelabelType node above the operand.  (There won't be
 	 * more than one, since eval_const_expressions has been applied already.)
+	 * Do not check for cached expressions because they do not contain vars.
 	 */
 	if (IsA(var, RelabelType))
 		var = (Var *) ((RelabelType *) var)->arg;

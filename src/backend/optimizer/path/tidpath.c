@@ -162,6 +162,8 @@ IsTidEqualAnyClause(ScalarArrayOpExpr *node, int varno)
  *	sub-clauses, in which case we could try to pick the most efficient one.
  *	In practice, such usage seems very unlikely, so we don't bother; we
  *	just exit as soon as we find the first candidate.
+ *
+ *	Do not check for cached expressions because they do not contain vars.
  */
 static List *
 TidQualFromExpr(Node *expr, int varno)
@@ -169,7 +171,7 @@ TidQualFromExpr(Node *expr, int varno)
 	List	   *rlst = NIL;
 	ListCell   *l;
 
-	if (is_opclause(expr))
+	if (is_opclause(expr, false))
 	{
 		/* base case: check for tideq opclause */
 		if (IsTidEqualClause((OpExpr *) expr, varno))
@@ -187,7 +189,7 @@ TidQualFromExpr(Node *expr, int varno)
 		if (((CurrentOfExpr *) expr)->cvarno == varno)
 			rlst = list_make1(expr);
 	}
-	else if (and_clause(expr))
+	else if (and_clause(expr, false))
 	{
 		foreach(l, ((BoolExpr *) expr)->args)
 		{
@@ -196,7 +198,7 @@ TidQualFromExpr(Node *expr, int varno)
 				break;
 		}
 	}
-	else if (or_clause(expr))
+	else if (or_clause(expr, false))
 	{
 		foreach(l, ((BoolExpr *) expr)->args)
 		{

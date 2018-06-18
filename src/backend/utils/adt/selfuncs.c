@@ -1566,7 +1566,7 @@ boolvarsel(PlannerInfo *root, Node *arg, int varRelid)
 		selec = var_eq_const(&vardata, BooleanEqualOperator,
 							 BoolGetDatum(true), false, true, false);
 	}
-	else if (is_funcclause(arg))
+	else if (is_funcclause(arg, true))
 	{
 		/*
 		 * If we have no stats and it's a function call, estimate 0.3333333.
@@ -1828,24 +1828,28 @@ strip_array_coercion(Node *node)
 {
 	for (;;)
 	{
-		if (node && IsA(node, ArrayCoerceExpr))
+		if (node && IsAIfCached(node, ArrayCoerceExpr))
 		{
-			ArrayCoerceExpr *acoerce = (ArrayCoerceExpr *) node;
+			ArrayCoerceExpr *acoerce = castNodeIfCached(ArrayCoerceExpr, node);
 
 			/*
 			 * If the per-element expression is just a RelabelType on top of
 			 * CaseTestExpr, then we know it's a binary-compatible relabeling.
+			 * Such cases are not cached.
 			 */
+			Assert(!(IsAIfCached(acoerce->elemexpr, RelabelType) &&
+					 IsACached(castNodeIfCached(RelabelType, acoerce->elemexpr)->arg,
+							   CaseTestExpr)));
 			if (IsA(acoerce->elemexpr, RelabelType) &&
 				IsA(((RelabelType *) acoerce->elemexpr)->arg, CaseTestExpr))
 				node = (Node *) acoerce->arg;
 			else
 				break;
 		}
-		else if (node && IsA(node, RelabelType))
+		else if (node && IsAIfCached(node, RelabelType))
 		{
 			/* We don't really expect this case, but may as well cope */
-			node = (Node *) ((RelabelType *) node)->arg;
+			node = (Node *) castNodeIfCached(RelabelType, node)->arg;
 		}
 		else
 			break;
@@ -1949,6 +1953,9 @@ scalararraysel(PlannerInfo *root,
 		isEquality = true;
 	else if (oprsel == F_NEQSEL || oprsel == F_NEQJOINSEL)
 		isInequality = true;
+
+	/* Cached expressions are not used during estimation */
+	Assert(!IsA(rightop, CachedExpr));
 
 	/*
 	 * We consider three cases:
@@ -2192,10 +2199,10 @@ estimate_array_length(Node *arrayexpr)
 		arrayval = DatumGetArrayTypeP(arraydatum);
 		return ArrayGetNItems(ARR_NDIM(arrayval), ARR_DIMS(arrayval));
 	}
-	else if (arrayexpr && IsA(arrayexpr, ArrayExpr) &&
-			 !((ArrayExpr *) arrayexpr)->multidims)
+	else if (arrayexpr && IsAIfCached(arrayexpr, ArrayExpr) &&
+			 !castNodeIfCached(ArrayExpr, arrayexpr)->multidims)
 	{
-		return list_length(((ArrayExpr *) arrayexpr)->elements);
+		return list_length(castNodeIfCached(ArrayExpr, arrayexpr)->elements);
 	}
 	else
 	{
@@ -3026,7 +3033,7 @@ mergejoinscansel(PlannerInfo *root, Node *clause,
 	*leftend = *rightend = 1.0;
 
 	/* Deconstruct the merge clause */
-	if (!is_opclause(clause))
+	if (!is_opclause(clause, false))
 		return;					/* shouldn't happen */
 	opno = ((OpExpr *) clause)->opno;
 	left = get_leftop((Expr *) clause);
@@ -4787,7 +4794,7 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 	vardata->vartype = exprType(node);
 
 	/* Look inside any binary-compatible relabeling */
-
+	/* Do not check for cached expressions because they do not contain vars */
 	if (IsA(node, RelabelType))
 		basenode = (Node *) ((RelabelType *) node)->arg;
 	else
@@ -4893,6 +4900,10 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 					if (indexpr_item == NULL)
 						elog(ERROR, "too few entries in indexprs list");
 					indexkey = (Node *) lfirst(indexpr_item);
+
+					/* Index expressions can only contain immutable functions */
+					Assert(!IsA(indexkey, CachedExpr));
+
 					if (indexkey && IsA(indexkey, RelabelType))
 						indexkey = (Node *) ((RelabelType *) indexkey)->arg;
 					if (equal(node, indexkey))
@@ -6571,6 +6582,9 @@ deconstruct_indexquals(IndexPath *path)
 		qinfo->rinfo = rinfo;
 		qinfo->indexcol = indexcol;
 
+		/* This is not used for pseudoconstants */
+		Assert(!IsA(clause, CachedExpr));
+
 		if (IsA(clause, OpExpr))
 		{
 			qinfo->clause_op = ((OpExpr *) clause)->opno;
@@ -6737,6 +6751,9 @@ genericcostestimate(PlannerInfo *root,
 	foreach(l, indexQuals)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+
+		/* This is not used for pseudoconstants */
+		Assert(!IsA(rinfo->clause, CachedExpr));
 
 		if (IsA(rinfo->clause, ScalarArrayOpExpr))
 		{
@@ -7004,6 +7021,9 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			if (indexcol != qinfo->indexcol)
 				break;			/* no quals at all for indexcol */
 		}
+
+		/* This is not used for pseudoconstants */
+		Assert(!IsA(clause, CachedExpr));
 
 		if (IsA(clause, ScalarArrayOpExpr))
 		{
@@ -7543,6 +7563,9 @@ gincost_opexpr(PlannerInfo *root,
 	/* aggressively reduce to a constant, and look through relabeling */
 	operand = estimate_expression_value(root, operand);
 
+	/* cached expressions are not used during estimation */
+	Assert(!IsA(operand, CachedExpr));
+
 	if (IsA(operand, RelabelType))
 		operand = (Node *) ((RelabelType *) operand)->arg;
 
@@ -7605,6 +7628,9 @@ gincost_scalararrayopexpr(PlannerInfo *root,
 
 	/* aggressively reduce to a constant, and look through relabeling */
 	rightop = estimate_expression_value(root, rightop);
+
+	/* cached expressions are not used during estimation */
+	Assert(!IsA(rightop, CachedExpr));
 
 	if (IsA(rightop, RelabelType))
 		rightop = (Node *) ((RelabelType *) rightop)->arg;
@@ -7875,7 +7901,10 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		}
 		else
 		{
-			/* shouldn't be anything else for a GIN index */
+			/*
+			 * Shouldn't be anything else (including cached expressions) for a
+			 * GIN index
+			 */
 			elog(ERROR, "unsupported GIN indexqual type: %d",
 				 (int) nodeTag(clause));
 		}

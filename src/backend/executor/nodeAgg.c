@@ -1240,6 +1240,11 @@ find_unaggregated_cols_walker(Node *node, Bitmapset **colnos)
 		/* do not descend into aggregate exprs */
 		return false;
 	}
+	if (IsA(node, CachedExpr))
+	{
+		/* do not descend into cached exprs since they do not contain vars */
+		return false;
+	}
 	return expression_tree_walker(node, find_unaggregated_cols_walker,
 								  (void *) colnos);
 }
@@ -2237,7 +2242,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 * in the targetlist are found during ExecAssignProjectionInfo, below.
 	 */
 	aggstate->ss.ps.qual =
-		ExecInitQual(node->plan.qual, (PlanState *) aggstate);
+		ExecInitQual(node->plan.qual, (PlanState *) aggstate, NULL);
 
 	/*
 	 * We should now have found all Aggrefs in the targetlist and quals.

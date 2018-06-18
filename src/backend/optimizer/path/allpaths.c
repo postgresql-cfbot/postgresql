@@ -1091,6 +1091,14 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 					/* tell createplan.c to check for gating quals */
 					root->hasPseudoConstantQuals = true;
 				}
+
+				/*
+				 * Store all non-internal cached expressions separatly for the
+				 * executor's purposes.
+				 */
+				set_non_internal_cachedexprs_walker(onecq,
+													&(root->glob->cachedExprs));
+
 				/* reconstitute RestrictInfo with appropriate properties */
 				childquals = lappend(childquals,
 									 make_restrictinfo((Expr *) onecq,

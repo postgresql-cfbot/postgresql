@@ -1447,7 +1447,10 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 			RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
 			continue;
 
-		/* Skip clauses which can not be used for a join. */
+		/*
+		 * Skip clauses which can not be used for a join (including cached
+		 * expressions).
+		 */
 		if (!rinfo->can_join)
 			continue;
 
@@ -1456,7 +1459,7 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 			continue;
 
 		opexpr = (OpExpr *) rinfo->clause;
-		Assert(is_opclause(opexpr));
+		Assert(is_opclause((Node *) opexpr, false));
 
 		/*
 		 * The equi-join between partition keys is strict if equi-join between
@@ -1543,6 +1546,9 @@ match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel, bool strict_op)
 	/* Remove any relabel decorations. */
 	while (IsA(expr, RelabelType))
 		expr = (Expr *) (castNode(RelabelType, expr))->arg;
+
+	/* This is not used for pseudoconstants. */
+	Assert(!IsA(expr, CachedExpr));
 
 	for (cnt = 0; cnt < rel->part_scheme->partnatts; cnt++)
 	{

@@ -273,7 +273,7 @@ ExecInitValuesScan(ValuesScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 
 	/*
 	 * Other node-specific setup

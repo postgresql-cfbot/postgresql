@@ -138,6 +138,13 @@ typedef struct CachedPlan
 	bool		dependsOnRole;	/* is plan specific to that role? */
 	TransactionId saved_xmin;	/* if valid, replan when TransactionXmin
 								 * changes from this value */
+
+	/*
+	 * Used to check whether the generic plan is valid for the new boundParams;
+	 * NULL for the custom plans.
+	 */
+	ParamListInfo boundParams;
+
 	int			generation;		/* parent's generation number for this plan */
 	int			refcount;		/* count of live references to this struct */
 	MemoryContext context;		/* context containing this CachedPlan */
@@ -179,7 +186,11 @@ extern List *CachedPlanGetTargetList(CachedPlanSource *plansource,
 extern CachedPlan *GetCachedPlan(CachedPlanSource *plansource,
 			  ParamListInfo boundParams,
 			  bool useResOwner,
-			  QueryEnvironment *queryEnv);
+			  QueryEnvironment *queryEnv,
+			  bool genericPlanPrecalculateConstBoundParams);
 extern void ReleaseCachedPlan(CachedPlan *plan, bool useResOwner);
+extern ParamExternData *ParamFetchPrecalculated(ParamListInfo params,
+						int paramid, bool speculative,
+						ParamExternData *workspace);
 
 #endif							/* PLANCACHE_H */

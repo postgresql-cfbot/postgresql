@@ -1335,7 +1335,7 @@ CheckMutability(Expr *expr)
 	 *
 	 * We assume here that expression_planner() won't scribble on its input.
 	 */
-	expr = expression_planner(expr);
+	expr = expression_planner(expr)->expr;
 
 	/* Now we can search for non-immutable functions */
 	return contain_mutable_functions((Node *) expr);

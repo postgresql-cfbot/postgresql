@@ -287,7 +287,7 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 		else
 		{
 			Assert(!expression_returns_set((Node *) expr));
-			state->elems[off] = (Node *) ExecInitExpr(expr, &state->ps);
+			state->elems[off] = (Node *) ExecInitExpr(expr, &state->ps, NULL);
 		}
 
 		off++;

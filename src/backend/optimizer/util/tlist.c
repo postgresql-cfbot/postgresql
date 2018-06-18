@@ -20,7 +20,10 @@
 #include "optimizer/tlist.h"
 
 
-/* Test if an expression node represents a SRF call.  Beware multiple eval! */
+/*
+ * Test if an expression node represents a SRF call.  Beware multiple eval!
+ * Do not check for cached expressions because they do not return a set.
+ */
 #define IS_SRF_CALL(node) \
 	((IsA(node, FuncExpr) && ((FuncExpr *) (node))->funcretset) || \
 	 (IsA(node, OpExpr) && ((OpExpr *) (node))->opretset))
@@ -79,11 +82,18 @@ tlist_member_ignore_relabel(Expr *node, List *targetlist)
 	while (node && IsA(node, RelabelType))
 		node = ((RelabelType *) node)->arg;
 
+	/* This is not used for cached expressions */
+	Assert(!IsA(node, CachedExpr));
+
 	foreach(temp, targetlist)
 	{
 		TargetEntry *tlentry = (TargetEntry *) lfirst(temp);
 		Expr	   *tlexpr = tlentry->expr;
 
+		/*
+		 * Do not worry about cached expressions because in any case they cannot
+		 * be equal to a non-cached node (see below).
+		 */
 		while (tlexpr && IsA(tlexpr, RelabelType))
 			tlexpr = ((RelabelType *) tlexpr)->arg;
 

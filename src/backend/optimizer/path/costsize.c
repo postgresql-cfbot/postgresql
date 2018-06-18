@@ -1205,6 +1205,9 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	ntuples = 0;
 	foreach(l, tidquals)
 	{
+		/* This is not used for pseudoconstants */
+		Assert(!IsA(lfirst(l), CachedExpr));
+
 		if (IsA(lfirst(l), ScalarArrayOpExpr))
 		{
 			/* Each element of the array yields 1 tuple */
@@ -3971,6 +3974,27 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 		 * bubbles up through.  Hence, return without recursing into the
 		 * phexpr.
 		 */
+		return false;
+	}
+	else if (IsA(node, CachedExpr))
+	{
+		/*
+		 * Calculate subexpression cost as usual and add it to startup cost
+		 * (because subexpression will be executed only once for all tuples).
+		 */
+		cost_qual_eval_context subexpr_context;
+
+		subexpr_context.root = context->root;
+		subexpr_context.total.startup = 0;
+		subexpr_context.total.per_tuple = 0;
+
+		cost_qual_eval_walker((Node *) ((CachedExpr *) node)->subexpr,
+							  &subexpr_context);
+
+		context->total.startup +=
+			(subexpr_context.total.startup + subexpr_context.total.per_tuple);
+
+		/* do NOT recurse into children */
 		return false;
 	}
 

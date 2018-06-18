@@ -957,6 +957,7 @@ load_domaintype_info(TypeCacheEntry *typentry)
 			char	   *constring;
 			Expr	   *check_expr;
 			DomainConstraintState *r;
+			PlannedExpr *planned_check_expr;
 
 			/* Ignore non-CHECK constraints (presently, shouldn't be any) */
 			if (c->contype != CONSTRAINT_CHECK)
@@ -993,12 +994,13 @@ load_domaintype_info(TypeCacheEntry *typentry)
 			check_expr = (Expr *) stringToNode(constring);
 
 			/* ExecInitExpr will assume we've planned the expression */
-			check_expr = expression_planner(check_expr);
+			planned_check_expr = expression_planner(check_expr);
+			check_expr = planned_check_expr->expr;
 
 			r = makeNode(DomainConstraintState);
 			r->constrainttype = DOM_CONSTRAINT_CHECK;
 			r->name = pstrdup(NameStr(c->conname));
-			r->check_expr = check_expr;
+			r->check_expr = planned_check_expr;
 			r->check_exprstate = NULL;
 
 			MemoryContextSwitchTo(oldcxt);
@@ -1167,7 +1169,17 @@ prep_domain_constraints(List *constraints, MemoryContext execctx)
 		newr->constrainttype = r->constrainttype;
 		newr->name = r->name;
 		newr->check_expr = r->check_expr;
-		newr->check_exprstate = ExecInitExpr(r->check_expr, NULL);
+
+		/* check_expr is NULL if this is NOT NULL Constraint */
+		if (r->check_expr)
+		{
+			newr->check_exprstate = ExecInitExpr(r->check_expr->expr, NULL,
+												 r->check_expr->cachedExprs);
+		}
+		else
+		{
+			newr->check_exprstate = ExecInitExpr(NULL, NULL, NULL);
+		}
 
 		result = lappend(result, newr);
 	}

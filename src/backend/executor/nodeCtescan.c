@@ -272,7 +272,7 @@ ExecInitCteScan(CteScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 
 	return scanstate;
 }

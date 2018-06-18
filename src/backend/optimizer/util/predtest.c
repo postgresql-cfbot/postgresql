@@ -839,14 +839,14 @@ predicate_classify(Node *clause, PredIterInfo info)
 	}
 
 	/* Handle normal AND and OR boolean clauses */
-	if (and_clause(clause))
+	if (and_clause(clause, true))
 	{
 		info->startup_fn = boolexpr_startup_fn;
 		info->next_fn = list_next_fn;
 		info->cleanup_fn = list_cleanup_fn;
 		return CLASS_AND;
 	}
-	if (or_clause(clause))
+	if (or_clause(clause, true))
 	{
 		info->startup_fn = boolexpr_startup_fn;
 		info->next_fn = list_next_fn;
@@ -855,9 +855,9 @@ predicate_classify(Node *clause, PredIterInfo info)
 	}
 
 	/* Handle ScalarArrayOpExpr */
-	if (IsA(clause, ScalarArrayOpExpr))
+	if (IsAIfCached(clause, ScalarArrayOpExpr))
 	{
-		ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+		ScalarArrayOpExpr *saop = castNodeIfCached(ScalarArrayOpExpr, clause);
 		Node	   *arraynode = (Node *) lsecond(saop->args);
 
 		/*
@@ -882,9 +882,10 @@ predicate_classify(Node *clause, PredIterInfo info)
 				return saop->useOr ? CLASS_OR : CLASS_AND;
 			}
 		}
-		else if (arraynode && IsA(arraynode, ArrayExpr) &&
-				 !((ArrayExpr *) arraynode)->multidims &&
-				 list_length(((ArrayExpr *) arraynode)->elements) <= MAX_SAOP_ARRAY_SIZE)
+		else if (arraynode && IsAIfCached(arraynode, ArrayExpr) &&
+				 !castNodeIfCached(ArrayExpr, arraynode)->multidims &&
+				 list_length(castNodeIfCached(ArrayExpr, arraynode)->elements) <=
+				 MAX_SAOP_ARRAY_SIZE)
 		{
 			info->startup_fn = arrayexpr_startup_fn;
 			info->next_fn = arrayexpr_next_fn;
@@ -933,7 +934,7 @@ list_cleanup_fn(PredIterInfo info)
 static void
 boolexpr_startup_fn(Node *clause, PredIterInfo info)
 {
-	info->state = (void *) list_head(((BoolExpr *) clause)->args);
+	info->state = (void *) list_head(castNodeIfCached(BoolExpr, clause)->args);
 }
 
 /*
@@ -953,7 +954,7 @@ typedef struct
 static void
 arrayconst_startup_fn(Node *clause, PredIterInfo info)
 {
-	ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+	ScalarArrayOpExpr *saop = castNodeIfCached(ScalarArrayOpExpr, clause);
 	ArrayConstIterState *state;
 	Const	   *arrayconst;
 	ArrayType  *arrayval;
@@ -1024,8 +1025,9 @@ arrayconst_cleanup_fn(PredIterInfo info)
 }
 
 /*
- * PredIterInfo routines for iterating over a ScalarArrayOpExpr with a
- * one-dimensional ArrayExpr array operand.
+ * PredIterInfo routines for iterating over a (possibly cached)
+ * ScalarArrayOpExpr with a one-dimensional (possibly cached) ArrayExpr array
+ * operand.
  */
 typedef struct
 {
@@ -1036,7 +1038,7 @@ typedef struct
 static void
 arrayexpr_startup_fn(Node *clause, PredIterInfo info)
 {
-	ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+	ScalarArrayOpExpr *saop = castNodeIfCached(ScalarArrayOpExpr, clause);
 	ArrayExprIterState *state;
 	ArrayExpr  *arrayexpr;
 
@@ -1055,7 +1057,7 @@ arrayexpr_startup_fn(Node *clause, PredIterInfo info)
 	state->opexpr.args = list_copy(saop->args);
 
 	/* Initialize iteration variable to first member of ArrayExpr */
-	arrayexpr = (ArrayExpr *) lsecond(saop->args);
+	arrayexpr = castNodeIfCached(ArrayExpr, lsecond(saop->args));
 	state->next = list_head(arrayexpr->elements);
 }
 
@@ -1114,6 +1116,12 @@ predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
 {
 	/* Allow interrupting long proof attempts */
 	CHECK_FOR_INTERRUPTS();
+
+	/*
+	 * We assume the predicate has already been checked to contain only
+	 * immutable functions and operators.
+	 */
+	Assert(!IsA(predicate, CachedExpr));
 
 	/* First try the equal() test */
 	if (equal((Node *) predicate, clause))
@@ -1177,6 +1185,12 @@ predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 	/* Allow interrupting long proof attempts */
 	CHECK_FOR_INTERRUPTS();
 
+	/*
+	 * We assume the predicate has already been checked to contain only
+	 * immutable functions and operators.
+	 */
+	Assert(!IsA(predicate, CachedExpr));
+
 	/* A simple clause can't refute itself */
 	/* Worth checking because of relation_excluded_by_constraints() */
 	if ((Node *) predicate == clause)
@@ -1197,31 +1211,42 @@ predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 			return true;
 
 		/* foo IS NOT NULL refutes foo IS NULL */
-		if (clause && IsA(clause, NullTest) &&
-			((NullTest *) clause)->nulltesttype == IS_NOT_NULL &&
-			!((NullTest *) clause)->argisrow &&
-			equal(((NullTest *) clause)->arg, isnullarg))
+		if (clause && IsAIfCached(clause, NullTest) &&
+			castNodeIfCached(NullTest, clause)->nulltesttype == IS_NOT_NULL &&
+			!castNodeIfCached(NullTest, clause)->argisrow &&
+			equal(castNodeIfCached(NullTest, clause)->arg, isnullarg))
 			return true;
 
 		return false;			/* we can't succeed below... */
 	}
 
 	/* Try the clause-IS-NULL case */
-	if (clause && IsA(clause, NullTest) &&
-		((NullTest *) clause)->nulltesttype == IS_NULL)
+	if (clause && IsAIfCached(clause, NullTest) &&
+		castNodeIfCached(NullTest, clause)->nulltesttype == IS_NULL)
 	{
-		Expr	   *isnullarg = ((NullTest *) clause)->arg;
+		Expr	   *isnullarg = castNodeIfCached(NullTest, clause)->arg;
 
 		/* row IS NULL does not act in the simple way we have in mind */
-		if (((NullTest *) clause)->argisrow)
+		if (castNodeIfCached(NullTest, clause)->argisrow)
 			return false;
 
 		/* foo IS NULL refutes foo IS NOT NULL */
-		if (predicate && IsA(predicate, NullTest) &&
-			((NullTest *) predicate)->nulltesttype == IS_NOT_NULL &&
-			!((NullTest *) predicate)->argisrow &&
-			equal(((NullTest *) predicate)->arg, isnullarg))
-			return true;
+		if (predicate && IsA(predicate, NullTest))
+		{
+			NullTest   *predicate_isnull = (NullTest *) predicate;
+			Expr	   *predicate_isnullarg = predicate_isnull->arg;
+
+			/*
+			 * We assume the predicate has already been checked to contain only
+			 * immutable functions and operators.
+			 */
+			Assert(!IsA(predicate_isnullarg, CachedExpr));
+
+			if (predicate_isnull->nulltesttype == IS_NOT_NULL &&
+				!predicate_isnull->argisrow &&
+				equal(predicate_isnullarg, isnullarg))
+				return true;
+		}
 
 		/* foo IS NULL weakly refutes any predicate that is strict for foo */
 		if (weak &&
@@ -1245,6 +1270,13 @@ extract_not_arg(Node *clause)
 {
 	if (clause == NULL)
 		return NULL;
+
+	/*
+	 * We assume the predicate has already been checked to contain only
+	 * immutable functions and operators.
+	 */
+	Assert(!IsA(clause, CachedExpr));
+
 	if (IsA(clause, BoolExpr))
 	{
 		BoolExpr   *bexpr = (BoolExpr *) clause;
@@ -1273,16 +1305,16 @@ extract_strong_not_arg(Node *clause)
 {
 	if (clause == NULL)
 		return NULL;
-	if (IsA(clause, BoolExpr))
+	if (IsAIfCached(clause, BoolExpr))
 	{
-		BoolExpr   *bexpr = (BoolExpr *) clause;
+		BoolExpr   *bexpr = castNodeIfCached(BoolExpr, clause);
 
 		if (bexpr->boolop == NOT_EXPR)
 			return (Node *) linitial(bexpr->args);
 	}
-	else if (IsA(clause, BooleanTest))
+	else if (IsAIfCached(clause, BooleanTest))
 	{
-		BooleanTest *btest = (BooleanTest *) clause;
+		BooleanTest *btest = castNodeIfCached(BooleanTest, clause);
 
 		if (btest->booltesttype == IS_FALSE)
 			return (Node *) btest->arg;
@@ -1316,10 +1348,10 @@ clause_is_strict_for(Node *clause, Node *subexpr)
 	 * through any nullness-preserving, immutable operation.)  We should not
 	 * see stacked RelabelTypes here.
 	 */
-	if (IsA(clause, RelabelType))
-		clause = (Node *) ((RelabelType *) clause)->arg;
-	if (IsA(subexpr, RelabelType))
-		subexpr = (Node *) ((RelabelType *) subexpr)->arg;
+	if (IsAIfCached(clause, RelabelType))
+		clause = (Node *) castNodeIfCached(RelabelType, clause)->arg;
+	if (IsAIfCached(subexpr, RelabelType))
+		subexpr = (Node *) castNodeIfCached(RelabelType, subexpr)->arg;
 
 	/* Base case */
 	if (equal(clause, subexpr))
@@ -1330,20 +1362,20 @@ clause_is_strict_for(Node *clause, Node *subexpr)
 	 * if any input is forced NULL by subexpr.  This is OK even if the op or
 	 * func isn't immutable, since it won't even be called on NULL input.
 	 */
-	if (is_opclause(clause) &&
-		op_strict(((OpExpr *) clause)->opno))
+	if (is_opclause(clause, true) &&
+		op_strict(castNodeIfCached(OpExpr, clause)->opno))
 	{
-		foreach(lc, ((OpExpr *) clause)->args)
+		foreach(lc, castNodeIfCached(OpExpr, clause)->args)
 		{
 			if (clause_is_strict_for((Node *) lfirst(lc), subexpr))
 				return true;
 		}
 		return false;
 	}
-	if (is_funcclause(clause) &&
-		func_strict(((FuncExpr *) clause)->funcid))
+	if (is_funcclause(clause, true) &&
+		func_strict(castNodeIfCached(FuncExpr, clause)->funcid))
 	{
-		foreach(lc, ((FuncExpr *) clause)->args)
+		foreach(lc, castNodeIfCached(FuncExpr, clause)->args)
 		{
 			if (clause_is_strict_for((Node *) lfirst(lc), subexpr))
 				return true;
@@ -1558,14 +1590,14 @@ operator_predicate_proof(Expr *predicate, Node *clause,
 	 * about DistinctExpr in general, and this probably isn't the first place
 	 * to fix if you want to improve that.
 	 */
-	if (!is_opclause(predicate))
+	if (!is_opclause((Node *) predicate, false))
 		return false;
 	pred_opexpr = (OpExpr *) predicate;
 	if (list_length(pred_opexpr->args) != 2)
 		return false;
-	if (!is_opclause(clause))
+	if (!is_opclause(clause, true))
 		return false;
-	clause_opexpr = (OpExpr *) clause;
+	clause_opexpr = castNodeIfCached(OpExpr, clause);
 	if (list_length(clause_opexpr->args) != 2)
 		return false;
 
@@ -1749,7 +1781,7 @@ operator_predicate_proof(Expr *predicate, Node *clause,
 	fix_opfuncids((Node *) test_expr);
 
 	/* Prepare it for execution */
-	test_exprstate = ExecInitExpr(test_expr, NULL);
+	test_exprstate = ExecInitExpr(test_expr, NULL, NULL);
 
 	/* And execute it. */
 	test_result = ExecEvalExprSwitchContext(test_exprstate,

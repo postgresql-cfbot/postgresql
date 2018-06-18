@@ -645,6 +645,20 @@ _readWindowFunc(void)
 }
 
 /*
+ * _readCachedExpr
+ */
+static CachedExpr *
+_readCachedExpr(void)
+{
+	READ_LOCALS(CachedExpr);
+
+	READ_NODE_FIELD(subexpr);
+	READ_INT_FIELD(cached_id);
+
+	READ_DONE();
+}
+
+/*
  * _readArrayRef
  */
 static ArrayRef *
@@ -1533,6 +1547,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(utilityStmt);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_LOCATION_FIELD(stmt_len);
+	READ_NODE_FIELD(cachedExprs);
 
 	READ_DONE();
 }
@@ -2377,6 +2392,20 @@ _readPlanInvalItem(void)
 }
 
 /*
+ * _readPlannedExpr
+ */
+static PlannedExpr *
+_readPlannedExpr(void)
+{
+	READ_LOCALS(PlannedExpr);
+
+	READ_NODE_FIELD(expr);
+	READ_NODE_FIELD(cachedExprs);
+
+	READ_DONE();
+}
+
+/*
  * _readSubPlan
  */
 static SubPlan *
@@ -2538,6 +2567,8 @@ parseNodeString(void)
 		return_value = _readGroupingFunc();
 	else if (MATCH("WINDOWFUNC", 10))
 		return_value = _readWindowFunc();
+	else if (MATCH("CACHEDEXPR", 10))
+		return_value = _readCachedExpr();
 	else if (MATCH("ARRAYREF", 8))
 		return_value = _readArrayRef();
 	else if (MATCH("FUNCEXPR", 8))
@@ -2724,6 +2755,8 @@ parseNodeString(void)
 		return_value = _readPlanRowMark();
 	else if (MATCH("PLANINVALITEM", 13))
 		return_value = _readPlanInvalItem();
+	else if (MATCH("PLANNEDEXPR", 11))
+		return_value = _readPlannedExpr();
 	else if (MATCH("SUBPLAN", 7))
 		return_value = _readSubPlan();
 	else if (MATCH("ALTERNATIVESUBPLAN", 18))

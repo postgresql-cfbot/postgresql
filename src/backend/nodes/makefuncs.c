@@ -628,3 +628,29 @@ makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols)
 	v->va_cols = va_cols;
 	return v;
 }
+
+/*
+ * makeCachedExpr -
+ *	  create a CachedExpr node.
+ *
+ * This is an auxiliary function for other functions: checking that this
+ * subexpression can be cached is performed earlier in them.
+ *
+ * Pass subexpr as NULL to get a dummy cached expression (for example, cached
+ * case_val in eval_const_expressions_mutator).
+ *
+ * NOTE: the cached ids of all non-internal cached expressions must be set by
+ * the function set_non_internal_cachedexprs_walker after all mutations.
+ * Otherwise all the created cached expressions are considered internal and will
+ * not be cached by themselves.
+ */
+CachedExpr *
+makeCachedExpr(CacheableExpr *subexpr)
+{
+	CachedExpr *cachedexpr = makeNode(CachedExpr);
+
+	cachedexpr->subexpr = subexpr;
+	cachedexpr->cached_id = -1;
+
+	return cachedexpr;
+}

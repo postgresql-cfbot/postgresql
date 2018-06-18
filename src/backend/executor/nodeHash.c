@@ -389,7 +389,7 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	hashstate->ps.qual =
-		ExecInitQual(node->plan.qual, (PlanState *) hashstate);
+		ExecInitQual(node->plan.qual, (PlanState *) hashstate, NULL);
 
 	return hashstate;
 }

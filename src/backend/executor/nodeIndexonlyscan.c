@@ -550,9 +550,9 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	 * sub-parts corresponding to runtime keys (see below).
 	 */
 	indexstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) indexstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) indexstate, NULL);
 	indexstate->indexqual =
-		ExecInitQual(node->indexqual, (PlanState *) indexstate);
+		ExecInitQual(node->indexqual, (PlanState *) indexstate, NULL);
 
 	/*
 	 * If we are just doing EXPLAIN (ie, aren't going to run the plan), stop

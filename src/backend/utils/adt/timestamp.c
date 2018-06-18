@@ -1243,6 +1243,7 @@ intervaltypmodleastfield(int32 typmod)
 Datum
 interval_transform(PG_FUNCTION_ARGS)
 {
+	/* this is not used for cached expressions */
 	FuncExpr   *expr = castNode(FuncExpr, PG_GETARG_POINTER(0));
 	Node	   *ret = NULL;
 	Node	   *typmod;

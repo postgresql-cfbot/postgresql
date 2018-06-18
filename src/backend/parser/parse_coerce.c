@@ -161,6 +161,9 @@ coerce_type(ParseState *pstate, Node *node,
 	CoercionPathType pathtype;
 	Oid			funcId;
 
+	/* This is used only for parser nodes */
+	Assert(!IsA(node, CachedExpr));
+
 	if (targetTypeId == inputTypeId ||
 		node == NULL)
 	{
@@ -990,6 +993,9 @@ coerce_record_to_complex(ParseState *pstate, Node *node,
 	int			i;
 	int			ucolno;
 	ListCell   *arg;
+
+	/* This is used only for parser nodes */
+	Assert(!IsA(node, CachedExpr));
 
 	if (node && IsA(node, RowExpr))
 	{

@@ -2476,9 +2476,9 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 
 	/* initialize frame bound offset expressions */
 	winstate->startOffset = ExecInitExpr((Expr *) node->startOffset,
-										 (PlanState *) winstate);
+										 (PlanState *) winstate, NULL);
 	winstate->endOffset = ExecInitExpr((Expr *) node->endOffset,
-									   (PlanState *) winstate);
+									   (PlanState *) winstate, NULL);
 
 	/* Lookup in_range support functions if needed */
 	if (OidIsValid(node->startInRangeFunc))

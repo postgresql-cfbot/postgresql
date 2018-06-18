@@ -88,6 +88,7 @@ typedef enum NodeTag
 	T_NestLoopParam,
 	T_PlanRowMark,
 	T_PlanInvalItem,
+	T_PlannedExpr,
 
 	/*
 	 * TAGS FOR PLAN STATE NODES (execnodes.h)
@@ -146,6 +147,8 @@ typedef enum NodeTag
 	T_Expr,
 	T_Var,
 	T_Const,
+	T_CacheableExpr,
+	T_CachedExpr,
 	T_Param,
 	T_Aggref,
 	T_GroupingFunc,

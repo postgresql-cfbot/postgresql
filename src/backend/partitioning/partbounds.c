@@ -1767,7 +1767,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 										   (Expr *) lower_val,
 										   (Expr *) upper_val);
 		fix_opfuncids((Node *) test_expr);
-		test_exprstate = ExecInitExpr(test_expr, NULL);
+		test_exprstate = ExecInitExpr(test_expr, NULL, NULL);
 		test_result = ExecEvalExprSwitchContext(test_exprstate,
 												GetPerTupleExprContext(estate),
 												&isNull);

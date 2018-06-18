@@ -201,14 +201,17 @@ MJExamineQuals(List *mergeclauses,
 		Oid			op_righttype;
 		Oid			sortfunc;
 
+		/* This is not used for pseudoconstants */
 		if (!IsA(qual, OpExpr))
 			elog(ERROR, "mergejoin clause is not an OpExpr");
 
 		/*
 		 * Prepare the input expressions for execution.
 		 */
-		clause->lexpr = ExecInitExpr((Expr *) linitial(qual->args), parent);
-		clause->rexpr = ExecInitExpr((Expr *) lsecond(qual->args), parent);
+		clause->lexpr = ExecInitExpr((Expr *) linitial(qual->args), parent,
+									 NULL);
+		clause->rexpr = ExecInitExpr((Expr *) lsecond(qual->args), parent,
+									 NULL);
 
 		/* Set up sort support data */
 		clause->ssup.ssup_cxt = CurrentMemoryContext;
@@ -1524,9 +1527,9 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	mergestate->js.ps.qual =
-		ExecInitQual(node->join.plan.qual, (PlanState *) mergestate);
+		ExecInitQual(node->join.plan.qual, (PlanState *) mergestate, NULL);
 	mergestate->js.joinqual =
-		ExecInitQual(node->join.joinqual, (PlanState *) mergestate);
+		ExecInitQual(node->join.joinqual, (PlanState *) mergestate, NULL);
 	/* mergeclauses are handled below */
 
 	/*

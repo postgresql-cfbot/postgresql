@@ -252,6 +252,7 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 	for (attnum = 0; attnum < num_phys_attrs; attnum++)
 	{
 		Expr	   *defexpr;
+		PlannedExpr *planned_defexpr;
 
 		if (TupleDescAttr(desc, attnum)->attisdropped)
 			continue;
@@ -264,10 +265,12 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 		if (defexpr != NULL)
 		{
 			/* Run the expression through planner */
-			defexpr = expression_planner(defexpr);
+			planned_defexpr = expression_planner(defexpr);
+			defexpr = planned_defexpr->expr;
 
 			/* Initialize executable expression in copycontext */
-			defexprs[num_defaults] = ExecInitExpr(defexpr, NULL);
+			defexprs[num_defaults] = ExecInitExpr(defexpr, NULL,
+												  planned_defexpr->cachedExprs);
 			defmap[num_defaults] = attnum;
 			num_defaults++;
 		}

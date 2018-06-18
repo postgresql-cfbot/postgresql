@@ -200,7 +200,7 @@ ExecInitGroup(Group *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	grpstate->ss.ps.qual =
-		ExecInitQual(node->plan.qual, (PlanState *) grpstate);
+		ExecInitQual(node->plan.qual, (PlanState *) grpstate, NULL);
 
 	/*
 	 * Precompute fmgr lookup data for inner loop

@@ -778,7 +778,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	sstate->parent = parent;
 
 	/* Initialize subexpressions */
-	sstate->testexpr = ExecInitExpr((Expr *) subplan->testexpr, parent);
+	sstate->testexpr = ExecInitExpr((Expr *) subplan->testexpr, parent, NULL);
 	sstate->args = ExecInitExprList(subplan->args, parent);
 
 	/*
@@ -871,13 +871,15 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		 *
 		 * We also extract the combining operators themselves to initialize
 		 * the equality and hashing functions for the hash tables.
+		 *
+		 * This is not used for pseudoconstants.
 		 */
 		if (IsA(subplan->testexpr, OpExpr))
 		{
 			/* single combining operator */
 			oplist = list_make1(subplan->testexpr);
 		}
-		else if (and_clause((Node *) subplan->testexpr))
+		else if (and_clause((Node *) subplan->testexpr, false))
 		{
 			/* multiple combining operators */
 			oplist = castNode(BoolExpr, subplan->testexpr)->args;
@@ -900,6 +902,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		i = 1;
 		foreach(l, oplist)
 		{
+			/* This is not used for pseudoconstants */
 			OpExpr	   *opexpr = lfirst_node(OpExpr, l);
 			Expr	   *expr;
 			TargetEntry *tle;

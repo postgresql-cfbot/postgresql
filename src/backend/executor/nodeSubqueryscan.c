@@ -141,7 +141,7 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	subquerystate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) subquerystate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) subquerystate, NULL);
 
 	return subquerystate;
 }

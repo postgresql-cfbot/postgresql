@@ -1438,19 +1438,31 @@ fix_expr_common(PlannerInfo *root, Node *node)
 				g->cols = cols;
 		}
 	}
+	else if (IsA(node, CachedExpr))
+	{
+		CachedExpr *cachedexpr = (CachedExpr *) node;
+
+		fix_expr_common(root, (Node *) cachedexpr->subexpr);
+	}
 }
 
 /*
  * fix_param_node
- *		Do set_plan_references processing on a Param
+ *		Do set_plan_references processing on a (possibly cached) Param
  *
  * If it's a PARAM_MULTIEXPR, replace it with the appropriate Param from
  * root->multiexpr_params; otherwise no change is needed.
  * Just for paranoia's sake, we make a copy of the node in either case.
  */
 static Node *
-fix_param_node(PlannerInfo *root, Param *p)
+fix_param_node(PlannerInfo *root, Node *node)
 {
+	Param	   *p = castNodeIfCached(Param, node);
+
+	/*
+	 * Do not worry about the cached expression because PARAM_MULTIEXPR cannot
+	 * be cached.
+	 */
 	if (p->paramkind == PARAM_MULTIEXPR)
 	{
 		int			subqueryid = p->paramid >> 16;
@@ -1465,7 +1477,8 @@ fix_param_node(PlannerInfo *root, Param *p)
 			elog(ERROR, "unexpected PARAM_MULTIEXPR ID: %d", p->paramid);
 		return copyObject(list_nth(params, colno - 1));
 	}
-	return (Node *) copyObject(p);
+
+	return (Node *) copyObject(node);
 }
 
 /*
@@ -1533,8 +1546,8 @@ fix_scan_expr_mutator(Node *node, fix_scan_expr_context *context)
 			var->varnoold += context->rtoffset;
 		return (Node *) var;
 	}
-	if (IsA(node, Param))
-		return fix_param_node(context->root, (Param *) node);
+	if (IsAIfCached(node, Param))
+		return fix_param_node(context->root, node);
 	if (IsA(node, Aggref))
 	{
 		Aggref	   *aggref = (Aggref *) node;
@@ -2324,8 +2337,8 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		/* If not supplied by input plans, evaluate the contained expr */
 		return fix_join_expr_mutator((Node *) phv->phexpr, context);
 	}
-	if (IsA(node, Param))
-		return fix_param_node(context->root, (Param *) node);
+	if (IsAIfCached(node, Param))
+		return fix_param_node(context->root, node);
 
 	/* Try matching more complex expressions too, if tlists have any */
 	converted_whole_row = is_converted_whole_row_reference(node);
@@ -2436,8 +2449,8 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		/* If not supplied by input plan, evaluate the contained expr */
 		return fix_upper_expr_mutator((Node *) phv->phexpr, context);
 	}
-	if (IsA(node, Param))
-		return fix_param_node(context->root, (Param *) node);
+	if (IsAIfCached(node, Param))
+		return fix_param_node(context->root, node);
 	if (IsA(node, Aggref))
 	{
 		Aggref	   *aggref = (Aggref *) node;
@@ -2681,6 +2694,7 @@ is_converted_whole_row_reference(Node *node)
 {
 	ConvertRowtypeExpr *convexpr;
 
+	/* Ignore cached ConvertRowtypeExprs because they do not contain vars. */
 	if (!node || !IsA(node, ConvertRowtypeExpr))
 		return false;
 

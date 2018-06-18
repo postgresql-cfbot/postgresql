@@ -363,9 +363,9 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	limitstate->limitOffset = ExecInitExpr((Expr *) node->limitOffset,
-										   (PlanState *) limitstate);
+										   (PlanState *) limitstate, NULL);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
-										  (PlanState *) limitstate);
+										  (PlanState *) limitstate, NULL);
 
 	/*
 	 * Initialize result slot and type. (XXX not actually used, but upper

@@ -52,7 +52,7 @@ extern void mark_partial_aggref(Aggref *agg, AggSplit aggsplit);
 extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
 							 double tuple_fraction);
 
-extern Expr *expression_planner(Expr *expr);
+extern PlannedExpr *expression_planner(Expr *expr);
 
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 

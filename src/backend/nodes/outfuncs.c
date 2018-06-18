@@ -287,6 +287,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(utilityStmt);
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_LOCATION_FIELD(stmt_len);
+	WRITE_NODE_FIELD(cachedExprs);
 }
 
 /*
@@ -1019,6 +1020,15 @@ _outPlanInvalItem(StringInfo str, const PlanInvalItem *node)
 	WRITE_UINT_FIELD(hashValue);
 }
 
+static void
+_outPlannedExpr(StringInfo str, const PlannedExpr *node)
+{
+	WRITE_NODE_TYPE("PLANNEDEXPR");
+
+	WRITE_NODE_FIELD(expr);
+	WRITE_NODE_FIELD(cachedExprs);
+}
+
 /*****************************************************************************
  *
  *	Stuff from primnodes.h.
@@ -1185,6 +1195,15 @@ _outWindowFunc(StringInfo str, const WindowFunc *node)
 	WRITE_BOOL_FIELD(winstar);
 	WRITE_BOOL_FIELD(winagg);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outCachedExpr(StringInfo str, const CachedExpr *node)
+{
+	WRITE_NODE_TYPE("CACHEDEXPR");
+
+	WRITE_NODE_FIELD(subexpr);
+	WRITE_INT_FIELD(cached_id);
 }
 
 static void
@@ -2250,6 +2269,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_BOOL_FIELD(parallelModeOK);
 	WRITE_BOOL_FIELD(parallelModeNeeded);
 	WRITE_CHAR_FIELD(maxParallelHazard);
+	WRITE_NODE_FIELD(cachedExprs);
 }
 
 static void
@@ -3822,6 +3842,9 @@ outNode(StringInfo str, const void *obj)
 			case T_PlanInvalItem:
 				_outPlanInvalItem(str, obj);
 				break;
+			case T_PlannedExpr:
+				_outPlannedExpr(str, obj);
+				break;
 			case T_Alias:
 				_outAlias(str, obj);
 				break;
@@ -3851,6 +3874,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
+				break;
+			case T_CachedExpr:
+				_outCachedExpr(str, obj);
 				break;
 			case T_ArrayRef:
 				_outArrayRef(str, obj);

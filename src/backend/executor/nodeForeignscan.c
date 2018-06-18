@@ -205,9 +205,9 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 	scanstate->fdw_recheck_quals =
-		ExecInitQual(node->fdw_recheck_quals, (PlanState *) scanstate);
+		ExecInitQual(node->fdw_recheck_quals, (PlanState *) scanstate, NULL);
 
 	/*
 	 * Initialize FDW-related state.

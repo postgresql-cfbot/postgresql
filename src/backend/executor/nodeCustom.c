@@ -92,7 +92,7 @@ ExecInitCustomScan(CustomScan *cscan, EState *estate, int eflags)
 
 	/* initialize child expressions */
 	css->ss.ps.qual =
-		ExecInitQual(cscan->scan.plan.qual, (PlanState *) css);
+		ExecInitQual(cscan->scan.plan.qual, (PlanState *) css, NULL);
 
 	/*
 	 * The callback of custom-scan provider applies the final initialization

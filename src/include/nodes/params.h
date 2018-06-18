@@ -37,10 +37,15 @@ struct ParseState;
  *	  Although parameter numbers are normally consecutive, we allow
  *	  ptype == InvalidOid to signal an unused array entry.
  *
- *	  pflags is a flags field.  Currently the only used bit is:
+ *	  pflags is a flags field.  Currently used bits are:
+ *
  *	  PARAM_FLAG_CONST signals the planner that it may treat this parameter
- *	  as a constant (i.e., generate a plan that works only for this value
- *	  of the parameter).
+ *			as a constant (i.e., generate a plan that works only for this value
+ *			of the parameter).
+ *
+ *	  PARAM_FLAG_PRECALCULATED signals the planner that it cannot be treated as
+ *			a pure constant, such as PARAM_FLAG_CONST. But it can be used as an
+ *			argument to the CachedExpr node.
  *
  *	  In the dynamic approach, all access to parameter values is done through
  *	  hook functions found in the ParamListInfo struct.  In this case,
@@ -85,7 +90,9 @@ struct ParseState;
  *	  and paramCompileArg is rather arbitrary.
  */
 
-#define PARAM_FLAG_CONST	0x0001	/* parameter is constant */
+#define PARAM_FLAG_CONST			0x0001	/* parameter is constant */
+#define PARAM_FLAG_PRECALCULATED	0x0002	/* parameter is precalculated: it is
+											 * cached in the generic plan */
 
 typedef struct ParamExternData
 {
@@ -129,14 +136,15 @@ typedef struct ParamListInfoData
  *	  ParamExecData
  *
  *	  ParamExecData entries are used for executor internal parameters
- *	  (that is, values being passed into or out of a sub-query).  The
- *	  paramid of a PARAM_EXEC Param is a (zero-based) index into an
- *	  array of ParamExecData records, which is referenced through
+ *	  (that is, values being passed into or out of a sub-query) or executor
+ *	  cached expressions (that is, the expression is executed only once for all
+ *	  output rows).  The paramid of a PARAM_EXEC Param is a (zero-based) index
+ *	  into an array of ParamExecData records, which is referenced through
  *	  es_param_exec_vals or ecxt_param_exec_vals.
  *
- *	  If execPlan is not NULL, it points to a SubPlanState node that needs
- *	  to be executed to produce the value.  (This is done so that we can have
- *	  lazy evaluation of InitPlans: they aren't executed until/unless a
+ *	  If execPlan is not NULL, it points to a SubPlanState or ExprState node
+ *	  that needs to be executed to produce the value.  (This is done so that we
+ *	  can have lazy evaluation of InitPlans: they aren't executed until/unless a
  *	  result value is needed.)	Otherwise the value is assumed to be valid
  *	  when needed.
  * ----------------

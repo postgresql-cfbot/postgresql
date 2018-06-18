@@ -3871,7 +3871,7 @@ transformPartitionBoundValue(ParseState *pstate, A_Const *con,
 
 	/* Simplify the expression, in case we had a coercion */
 	if (!IsA(value, Const))
-		value = (Node *) expression_planner((Expr *) value);
+		value = (Node *) expression_planner((Expr *) value)->expr;
 
 	/* Fail if we don't have a constant (i.e., non-immutable coercion) */
 	if (!IsA(value, Const))

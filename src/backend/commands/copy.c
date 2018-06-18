@@ -3071,10 +3071,12 @@ BeginCopyFrom(ParseState *pstate,
 			if (defexpr != NULL)
 			{
 				/* Run the expression through planner */
-				defexpr = expression_planner(defexpr);
+				PlannedExpr *planned_defexpr = expression_planner(defexpr);
+				defexpr = planned_defexpr->expr;
 
 				/* Initialize executable expression in copycontext */
-				defexprs[num_defaults] = ExecInitExpr(defexpr, NULL);
+				defexprs[num_defaults] =
+					ExecInitExpr(defexpr, NULL, planned_defexpr->cachedExprs);
 				defmap[num_defaults] = attnum - 1;
 				num_defaults++;
 

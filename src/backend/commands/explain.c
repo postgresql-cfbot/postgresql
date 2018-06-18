@@ -1589,7 +1589,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				List	   *tidquals = ((TidScan *) plan)->tidquals;
 
 				if (list_length(tidquals) > 1)
-					tidquals = list_make1(make_orclause(tidquals));
+					tidquals = list_make1(make_orclause(tidquals, false));
 				show_scan_qual(tidquals, "TID Cond", planstate, ancestors, es);
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)

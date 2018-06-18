@@ -2351,7 +2351,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		{
 			WithCheckOption *wco = (WithCheckOption *) lfirst(ll);
 			ExprState  *wcoExpr = ExecInitQual((List *) wco->qual,
-											   mtstate->mt_plans[i]);
+											   mtstate->mt_plans[i], NULL);
 
 			wcoExprs = lappend(wcoExprs, wcoExpr);
 		}
@@ -2483,7 +2483,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			ExprState  *qualexpr;
 
 			qualexpr = ExecInitQual((List *) node->onConflictWhere,
-									&mtstate->ps);
+									&mtstate->ps, NULL);
 			resultRelInfo->ri_onConflict->oc_WhereClause = qualexpr;
 		}
 	}

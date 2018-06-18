@@ -78,6 +78,8 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 					  ExprEvalStep *scratch,
 					  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
 					  int transno, int setno, int setoff, bool ishash);
+static void ExecInitDynamicallyPlannedCachedExprs(ExprState *state,
+									  List *cachedexprs);
 
 
 /*
@@ -114,9 +116,12 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
  * callers that may or may not have an expression that needs to be compiled.
  * Note that a NULL ExprState pointer *cannot* be handed to ExecEvalExpr,
  * although ExecQual and ExecCheck will accept one (and treat it as "true").
+ *
+ * Initialize cached expressions as dynamically planned if cachedexprs is not
+ * NULL.
  */
 ExprState *
-ExecInitExpr(Expr *node, PlanState *parent)
+ExecInitExpr(Expr *node, PlanState *parent, List *cachedexprs)
 {
 	ExprState  *state;
 	ExprEvalStep scratch = {0};
@@ -133,6 +138,10 @@ ExecInitExpr(Expr *node, PlanState *parent)
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
+
+	/* Initialize dynamically planned cached expressions */
+	if (cachedexprs)
+		ExecInitDynamicallyPlannedCachedExprs(state, cachedexprs);
 
 	/* Compile the expression proper */
 	ExecInitExprRec(node, state, &state->resvalue, &state->resnull);
@@ -153,7 +162,7 @@ ExecInitExpr(Expr *node, PlanState *parent)
  * and instead we may have a ParamListInfo describing PARAM_EXTERN Params.
  */
 ExprState *
-ExecInitExprWithParams(Expr *node, ParamListInfo ext_params)
+ExecInitExprWithParams(Expr *node, ParamListInfo ext_params, List *cachedexprs)
 {
 	ExprState  *state;
 	ExprEvalStep scratch = {0};
@@ -170,6 +179,10 @@ ExecInitExprWithParams(Expr *node, ParamListInfo ext_params)
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
+
+	/* Initialize dynamically planned cached expressions */
+	if (cachedexprs)
+		ExecInitDynamicallyPlannedCachedExprs(state, cachedexprs);
 
 	/* Compile the expression proper */
 	ExecInitExprRec(node, state, &state->resvalue, &state->resnull);
@@ -200,9 +213,12 @@ ExecInitExprWithParams(Expr *node, ParamListInfo ext_params)
  * is false.  This makes ExecQual primarily useful for evaluating WHERE
  * clauses, since SQL specifies that tuples with null WHERE results do not
  * get selected.
+ *
+ * As in ExecInitExpr, initialize cached expressions as dynamically planned if
+ * cachedexprs is not NULL.
  */
 ExprState *
-ExecInitQual(List *qual, PlanState *parent)
+ExecInitQual(List *qual, PlanState *parent, List *cachedexprs)
 {
 	ExprState  *state;
 	ExprEvalStep scratch = {0};
@@ -225,6 +241,10 @@ ExecInitQual(List *qual, PlanState *parent)
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) qual);
+
+	/* Initialize dynamically planned cached expressions */
+	if (cachedexprs)
+		ExecInitDynamicallyPlannedCachedExprs(state, cachedexprs);
 
 	/*
 	 * ExecQual() needs to return false for an expression returning NULL. That
@@ -291,7 +311,7 @@ ExecInitQual(List *qual, PlanState *parent)
  * can just apply ExecInitExpr to produce suitable input for ExecCheck.
  */
 ExprState *
-ExecInitCheck(List *qual, PlanState *parent)
+ExecInitCheck(List *qual, PlanState *parent, List *cachedexprs)
 {
 	/* short-circuit (here and in ExecCheck) for empty restriction list */
 	if (qual == NIL)
@@ -304,7 +324,7 @@ ExecInitCheck(List *qual, PlanState *parent)
 	 * than one entry), and compile normally.  Unlike ExecQual, we can't
 	 * short-circuit on NULL results, so the regular AND behavior is needed.
 	 */
-	return ExecInitExpr(make_ands_explicit(qual), parent);
+	return ExecInitExpr(make_ands_explicit(qual), parent, cachedexprs);
 }
 
 /*
@@ -320,7 +340,7 @@ ExecInitExprList(List *nodes, PlanState *parent)
 	{
 		Expr	   *e = lfirst(lc);
 
-		result = lappend(result, ExecInitExpr(e, parent));
+		result = lappend(result, ExecInitExpr(e, parent, NULL));
 	}
 
 	return result;
@@ -489,12 +509,13 @@ ExecPrepareExpr(Expr *node, EState *estate)
 {
 	ExprState  *result;
 	MemoryContext oldcontext;
+	PlannedExpr *planned_expr;
 
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	node = expression_planner(node);
+	planned_expr = expression_planner(node);
 
-	result = ExecInitExpr(node, NULL);
+	result = ExecInitExpr(planned_expr->expr, NULL, planned_expr->cachedExprs);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -517,12 +538,14 @@ ExecPrepareQual(List *qual, EState *estate)
 {
 	ExprState  *result;
 	MemoryContext oldcontext;
+	PlannedExpr *planned_qual;
 
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	qual = (List *) expression_planner((Expr *) qual);
+	planned_qual = expression_planner((Expr *) qual);
 
-	result = ExecInitQual(qual, NULL);
+	result = ExecInitQual((List *) planned_qual->expr, NULL,
+						  planned_qual->cachedExprs);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -540,12 +563,14 @@ ExecPrepareCheck(List *qual, EState *estate)
 {
 	ExprState  *result;
 	MemoryContext oldcontext;
+	PlannedExpr *planned_qual;
 
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-	qual = (List *) expression_planner((Expr *) qual);
+	planned_qual = expression_planner((Expr *) qual);
 
-	result = ExecInitCheck(qual, NULL);
+	result = ExecInitCheck((List *) planned_qual->expr, NULL,
+						   planned_qual->cachedExprs);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -734,6 +759,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.opcode = EEOP_PARAM_EXEC;
 						scratch.d.param.paramid = param->paramid;
 						scratch.d.param.paramtype = param->paramtype;
+						scratch.d.param.dynamically_planned = false;
 						ExprEvalPushStep(state, &scratch);
 						break;
 					case PARAM_EXTERN:
@@ -761,6 +787,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 							scratch.opcode = EEOP_PARAM_EXTERN;
 							scratch.d.param.paramid = param->paramid;
 							scratch.d.param.paramtype = param->paramtype;
+							scratch.d.param.dynamically_planned = false;
 							ExprEvalPushStep(state, &scratch);
 						}
 						break;
@@ -842,7 +869,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					wfstate->args = ExecInitExprList(wfunc->args,
 													 state->parent);
 					wfstate->aggfilter = ExecInitExpr(wfunc->aggfilter,
-													  state->parent);
+													  state->parent, NULL);
 
 					/*
 					 * Complain if the windowfunc's arguments contain any
@@ -864,6 +891,61 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				scratch.opcode = EEOP_WINDOW_FUNC;
 				scratch.d.window_func.wfstate = wfstate;
 				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
+		case T_CachedExpr:
+			{
+				CachedExpr *cachedexpr = (CachedExpr *) node;
+				int			cached_id = cachedexpr->cached_id;
+
+				if (cached_id < 0)
+				{
+					/*
+					 * This is an internal cached expression. So just add its
+					 * subexpression steps.
+					 */
+					ExecInitExprRec((Expr *) cachedexpr->subexpr, state, resv,
+									resnull);
+				}
+				else
+				{
+					CachedExprsInfo *cachedexprs_info;
+					bool		dynamically_planned;
+
+					if (state->cachedexprs_vals)
+					{
+						cachedexprs_info = &(state->cachedexprs_info);
+						dynamically_planned = true;
+					}
+					else
+					{
+						if (!state->parent)
+						{
+							/* planner messed up */
+							elog(ERROR, "CachedExpr found with no parent plan");
+						}
+
+						if (!state->parent->state)
+						{
+							/* planner messed up */
+							elog(ERROR,
+								 "CachedExpr found with no parent plan's executor state");
+						}
+
+						cachedexprs_info =
+							&(state->parent->state->es_cachedexprs_info);
+						dynamically_planned = false;
+					}
+
+					scratch.opcode = EEOP_PARAM_EXEC;
+					scratch.d.param.paramid =
+						(cachedexprs_info->first_cached_paramid + cached_id);
+					scratch.d.param.paramtype = exprType((const Node *) node);
+					scratch.d.param.dynamically_planned = dynamically_planned;
+					ExprEvalPushStep(state, &scratch);
+				}
+
 				break;
 			}
 
@@ -2350,6 +2432,11 @@ get_last_attnums_walker(Node *node, LastAttnumInfo *info)
 		return false;
 	if (IsA(node, GroupingFunc))
 		return false;
+
+	/* Don't examine cached expressions since they do not contain vars */
+	if (IsA(node, CachedExpr))
+		return false;
+
 	return expression_tree_walker(node, get_last_attnums_walker,
 								  (void *) info);
 }
@@ -2673,14 +2760,9 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 	DomainConstraintRef *constraint_ref;
 	Datum	   *domainval = NULL;
 	bool	   *domainnull = NULL;
-	Datum	   *save_innermost_domainval;
-	bool	   *save_innermost_domainnull;
 	ListCell   *l;
 
 	scratch->d.domaincheck.resulttype = ctest->resulttype;
-	/* we'll allocate workspace only if needed */
-	scratch->d.domaincheck.checkvalue = NULL;
-	scratch->d.domaincheck.checknull = NULL;
 
 	/*
 	 * Evaluate argument - it's fine to directly store it into resv/resnull,
@@ -2721,6 +2803,8 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 	foreach(l, constraint_ref->constraints)
 	{
 		DomainConstraintState *con = (DomainConstraintState *) lfirst(l);
+		PlannedExpr *check_expr = con->check_expr;
+		ExprState  *check_exprstate;
 
 		scratch->d.domaincheck.constraintname = con->name;
 
@@ -2728,18 +2812,10 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 		{
 			case DOM_CONSTRAINT_NOTNULL:
 				scratch->opcode = EEOP_DOMAIN_NOTNULL;
+				scratch->d.domaincheck.check_exprstate = NULL;
 				ExprEvalPushStep(state, scratch);
 				break;
 			case DOM_CONSTRAINT_CHECK:
-				/* Allocate workspace for CHECK output if we didn't yet */
-				if (scratch->d.domaincheck.checkvalue == NULL)
-				{
-					scratch->d.domaincheck.checkvalue =
-						(Datum *) palloc(sizeof(Datum));
-					scratch->d.domaincheck.checknull =
-						(bool *) palloc(sizeof(bool));
-				}
-
 				/*
 				 * If first time through, determine where CoerceToDomainValue
 				 * nodes should read from.
@@ -2772,27 +2848,40 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 					}
 				}
 
-				/*
-				 * Set up value to be returned by CoerceToDomainValue nodes.
-				 * We must save and restore innermost_domainval/null fields,
-				 * in case this node is itself within a check expression for
-				 * another domain.
-				 */
-				save_innermost_domainval = state->innermost_domainval;
-				save_innermost_domainnull = state->innermost_domainnull;
-				state->innermost_domainval = domainval;
-				state->innermost_domainnull = domainnull;
+				check_exprstate = makeNode(ExprState);
+				check_exprstate->expr = check_expr->expr;
+				check_exprstate->parent = state->parent;
+				check_exprstate->ext_params = state->ext_params;
+
+				/* Set up value to be returned by CoerceToDomainValue nodes */
+				check_exprstate->innermost_domainval = domainval;
+				check_exprstate->innermost_domainnull = domainnull;
 
 				/* evaluate check expression value */
-				ExecInitExprRec(con->check_expr, state,
-								scratch->d.domaincheck.checkvalue,
-								scratch->d.domaincheck.checknull);
+				ExecInitDynamicallyPlannedCachedExprs(check_exprstate,
+													  check_expr->cachedExprs);
+				ExecInitExprRec(check_expr->expr, check_exprstate,
+								&check_exprstate->resvalue,
+								&check_exprstate->resnull);
 
-				state->innermost_domainval = save_innermost_domainval;
-				state->innermost_domainnull = save_innermost_domainnull;
+				if (check_exprstate->steps_len == 1 &&
+					check_exprstate->steps[0].opcode == EEOP_DOMAIN_TESTVAL)
+				{
+					/* Trivial, so we need no check work at runtime */
+					check_exprstate = NULL;
+				}
+				else
+				{
+					/* Not trivial, so append a DONE step */
+					scratch->opcode = EEOP_DONE;
+					ExprEvalPushStep(check_exprstate, scratch);
+					/* and ready the subexpression */
+					ExecReadyExpr(check_exprstate);
+				}
 
 				/* now test result */
 				scratch->opcode = EEOP_DOMAIN_CHECK;
+				scratch->d.domaincheck.check_exprstate = check_exprstate;
 				ExprEvalPushStep(state, scratch);
 
 				break;
@@ -3344,4 +3433,151 @@ ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
 	ExecReadyExpr(state);
 
 	return state;
+}
+
+void
+ExecInitCachedExprs(QueryDesc *queryDesc)
+{
+	List	   *cachedexprs = queryDesc->plannedstmt->cachedExprs;
+	EState	   *estate = queryDesc->estate;
+	PlanState  *planstate = queryDesc->planstate;
+	CachedExprsInfo *cachedexprs_info = &(estate->es_cachedexprs_info);
+	MemoryContext oldcontext;
+	int			num_cachedexprs;
+	ListCell   *cell;
+
+	if (cachedexprs == NIL)
+	{
+		/* nothing to do here */
+		return;
+	}
+
+	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+
+	num_cachedexprs = list_length(cachedexprs);
+	cachedexprs_info->subexpr_states = (ExprState *)
+		palloc0(num_cachedexprs * sizeof(ExprState));
+	cachedexprs_info->num_cachedexprs = num_cachedexprs;
+
+	/*
+	 * Set the assigned PARAM_EXEC slot number of the first cached expression
+	 * since the PARAM_EXEC nodes must be the first.
+	 */
+	cachedexprs_info->first_cached_paramid =
+		(list_length(queryDesc->plannedstmt->paramExecTypes) - num_cachedexprs);
+
+	foreach(cell, cachedexprs)
+	{
+		CachedExpr *cachedexpr = (CachedExpr *) lfirst(cell);
+		int			cached_id = cachedexpr->cached_id;
+		int			paramid;
+		Expr	   *subexpr = (Expr *) cachedexpr->subexpr;
+		ExprState  *subexpr_state;
+		ExprEvalStep scratch = {0};
+
+		if (cached_id < 0)
+		{
+			/* planner messed up */
+			elog(ERROR,
+				 "Internal cached expression found in the list of non-internal cached expressions");
+		}
+
+		paramid = cachedexprs_info->first_cached_paramid + cached_id;
+		subexpr_state = &(cachedexprs_info->subexpr_states[cached_id]);
+
+		/* make ExprState for subexpression evaluation */
+		subexpr_state->tag.type = T_ExprState;
+		subexpr_state->expr = subexpr;
+		subexpr_state->parent = planstate;
+		subexpr_state->ext_params = NULL;
+
+		/* Compile the subexpression proper */
+		ExecInitExprRec(subexpr, subexpr_state,
+						&subexpr_state->resvalue,
+						&subexpr_state->resnull);
+
+		/* Finally, append a DONE step */
+		scratch.opcode = EEOP_DONE;
+		ExprEvalPushStep(subexpr_state, &scratch);
+
+		ExecReadyExpr(subexpr_state);
+
+		estate->es_param_exec_vals[paramid].execPlan = subexpr_state;
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+static void
+ExecInitDynamicallyPlannedCachedExprs(ExprState *state, List *cachedexprs)
+{
+	CachedExprsInfo *cachedexprs_info = &(state->cachedexprs_info);
+	int			num_cachedexprs;
+	ListCell   *cell;
+
+	if (cachedexprs == NIL)
+	{
+		/* nothing to do here */
+		return;
+	}
+
+	num_cachedexprs = list_length(cachedexprs);
+	state->cachedexprs_vals = (ParamExecData *)
+		palloc0(num_cachedexprs * sizeof(ParamExecData));
+	cachedexprs_info->subexpr_states = (ExprState *)
+		palloc0(num_cachedexprs * sizeof(ExprState));
+	cachedexprs_info->num_cachedexprs = num_cachedexprs;
+	cachedexprs_info->first_cached_paramid = 0;
+
+	foreach(cell, cachedexprs)
+	{
+		CachedExpr *cachedexpr = (CachedExpr *) lfirst(cell);
+		int			cached_id = cachedexpr->cached_id;
+		Expr	   *subexpr = (Expr *) cachedexpr->subexpr;
+		ExprState  *subexpr_state;
+		ExprEvalStep scratch = {0};
+
+		if (cached_id < 0)
+		{
+			/* planner messed up */
+			elog(ERROR,
+				 "Internal cached expression found in the list of non-internal cached expressions");
+		}
+
+		subexpr_state = &(cachedexprs_info->subexpr_states[cached_id]);
+
+		/* make ExprState for subexpression evaluation */
+		subexpr_state->tag.type = T_ExprState;
+		subexpr_state->expr = subexpr;
+		subexpr_state->parent = state->parent;
+		subexpr_state->ext_params = state->ext_params;
+
+		/* Compile the subexpression proper */
+		ExecInitExprRec(subexpr, subexpr_state,
+						&subexpr_state->resvalue,
+						&subexpr_state->resnull);
+
+		/* Finally, append a DONE step */
+		scratch.opcode = EEOP_DONE;
+		ExprEvalPushStep(subexpr_state, &scratch);
+
+		ExecReadyExpr(subexpr_state);
+
+		state->cachedexprs_vals[cached_id].execPlan = subexpr_state;
+	}
+}
+
+void
+ExecSetDynamicallyPlannedCachedExprs(ExprState *state)
+{
+	CachedExprsInfo *cachedexprs_info = &(state->cachedexprs_info);
+	int			cached_id;
+
+	for (cached_id = 0;
+		 cached_id < cachedexprs_info->num_cachedexprs;
+		 ++cached_id)
+	{
+		state->cachedexprs_vals[cached_id].execPlan =
+			&(cachedexprs_info->subexpr_states[cached_id]);
+	}
 }

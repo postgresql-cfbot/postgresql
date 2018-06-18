@@ -230,18 +230,20 @@ get_expr_result_type(Node *expr,
 {
 	TypeFuncClass result;
 
-	if (expr && IsA(expr, FuncExpr))
-		result = internal_get_result_type(((FuncExpr *) expr)->funcid,
-										  expr,
-										  NULL,
-										  resultTypeId,
-										  resultTupleDesc);
-	else if (expr && IsA(expr, OpExpr))
-		result = internal_get_result_type(get_opcode(((OpExpr *) expr)->opno),
-										  expr,
-										  NULL,
-										  resultTypeId,
-										  resultTupleDesc);
+	if (expr && IsAIfCached(expr, FuncExpr))
+		result = internal_get_result_type(
+							castNodeIfCached(FuncExpr, expr)->funcid,
+							expr,
+							NULL,
+							resultTypeId,
+							resultTupleDesc);
+	else if (expr && IsAIfCached(expr, OpExpr))
+		result = internal_get_result_type(
+							get_opcode(castNodeIfCached(OpExpr, expr)->opno),
+							expr,
+							NULL,
+							resultTypeId,
+							resultTupleDesc);
 	else
 	{
 		/* handle as a generic expression; no chance to resolve RECORD */

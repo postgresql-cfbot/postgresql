@@ -67,7 +67,7 @@ make_restrictinfo(Expr *clause,
 	 * If it's an OR clause, build a modified copy with RestrictInfos inserted
 	 * above each subclause of the top-level AND/OR structure.
 	 */
-	if (or_clause((Node *) clause))
+	if (or_clause((Node *) clause, true))
 		return (RestrictInfo *) make_sub_restrictinfos(clause,
 													   is_pushed_down,
 													   outerjoin_delayed,
@@ -78,7 +78,7 @@ make_restrictinfo(Expr *clause,
 													   nullable_relids);
 
 	/* Shouldn't be an AND clause, else AND/OR flattening messed up */
-	Assert(!and_clause((Node *) clause));
+	Assert(!and_clause((Node *) clause, true));
 
 	return make_restrictinfo_internal(clause,
 									  NULL,
@@ -133,7 +133,8 @@ make_restrictinfo_internal(Expr *clause,
 	 * If it's a binary opclause, set up left/right relids info. In any case
 	 * set up the total clause relids info.
 	 */
-	if (is_opclause(clause) && list_length(((OpExpr *) clause)->args) == 2)
+	if (is_opclause((Node *) clause, true) &&
+		list_length(castNodeIfCached(OpExpr, clause)->args) == 2)
 	{
 		restrictinfo->left_relids = pull_varnos(get_leftop(clause));
 		restrictinfo->right_relids = pull_varnos(get_rightop(clause));
@@ -232,12 +233,12 @@ make_sub_restrictinfos(Expr *clause,
 					   Relids outer_relids,
 					   Relids nullable_relids)
 {
-	if (or_clause((Node *) clause))
+	if (or_clause((Node *) clause, true))
 	{
 		List	   *orlist = NIL;
 		ListCell   *temp;
 
-		foreach(temp, ((BoolExpr *) clause)->args)
+		foreach(temp, castNodeIfCached(BoolExpr, clause)->args)
 			orlist = lappend(orlist,
 							 make_sub_restrictinfos(lfirst(temp),
 													is_pushed_down,
@@ -248,7 +249,8 @@ make_sub_restrictinfos(Expr *clause,
 													outer_relids,
 													nullable_relids));
 		return (Expr *) make_restrictinfo_internal(clause,
-												   make_orclause(orlist),
+												   make_orclause(orlist,
+																 false),
 												   is_pushed_down,
 												   outerjoin_delayed,
 												   pseudoconstant,
@@ -257,12 +259,12 @@ make_sub_restrictinfos(Expr *clause,
 												   outer_relids,
 												   nullable_relids);
 	}
-	else if (and_clause((Node *) clause))
+	else if (and_clause((Node *) clause, true))
 	{
 		List	   *andlist = NIL;
 		ListCell   *temp;
 
-		foreach(temp, ((BoolExpr *) clause)->args)
+		foreach(temp, castNodeIfCached(BoolExpr, clause)->args)
 			andlist = lappend(andlist,
 							  make_sub_restrictinfos(lfirst(temp),
 													 is_pushed_down,
@@ -272,7 +274,7 @@ make_sub_restrictinfos(Expr *clause,
 													 required_relids,
 													 outer_relids,
 													 nullable_relids));
-		return make_andclause(andlist);
+		return make_andclause(andlist, false);
 	}
 	else
 		return (Expr *) make_restrictinfo_internal(clause,

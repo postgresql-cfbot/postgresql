@@ -224,9 +224,10 @@ ExecInitResult(Result *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	resstate->ps.qual =
-		ExecInitQual(node->plan.qual, (PlanState *) resstate);
+		ExecInitQual(node->plan.qual, (PlanState *) resstate, NULL);
 	resstate->resconstantqual =
-		ExecInitQual((List *) node->resconstantqual, (PlanState *) resstate);
+		ExecInitQual((List *) node->resconstantqual, (PlanState *) resstate,
+					 NULL);
 
 	return resstate;
 }

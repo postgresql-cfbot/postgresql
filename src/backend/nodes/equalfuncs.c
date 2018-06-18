@@ -264,6 +264,20 @@ _equalWindowFunc(const WindowFunc *a, const WindowFunc *b)
 }
 
 static bool
+_equalCachedExpr(const CachedExpr *a, const CachedExpr *b)
+{
+	COMPARE_NODE_FIELD(subexpr);
+
+	/*
+	 * Do not compare cached_id because we do not care if both cached
+	 * expressions are internal or not, or if they have the same order in the
+	 * planned statements/expressions.
+	 */
+
+	return true;
+}
+
+static bool
 _equalArrayRef(const ArrayRef *a, const ArrayRef *b)
 {
 	COMPARE_SCALAR_FIELD(refarraytype);
@@ -3036,6 +3050,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_WindowFunc:
 			retval = _equalWindowFunc(a, b);
+			break;
+		case T_CachedExpr:
+			retval = _equalCachedExpr(a, b);
 			break;
 		case T_ArrayRef:
 			retval = _equalArrayRef(a, b);

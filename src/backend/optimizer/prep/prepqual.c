@@ -68,6 +68,12 @@ static Expr *process_duplicate_ors(List *orlist);
  * the motivations for doing this is to ensure that logically equivalent
  * expressions will be seen as physically equal(), so we should always apply
  * the same transformations.
+ *
+ * NOTE: the expression should be processed using
+ * set_non_internal_cachedexprs_walker to store all non-internal cached
+ * expressions separatly for the executor's purposes. Otherwise all the created
+ * cached expressions are considered internal and will not be cached by
+ * themselves.
  */
 Node *
 negate_clause(Node *node)
@@ -165,7 +171,7 @@ negate_clause(Node *node)
 								nargs = lappend(nargs,
 												negate_clause(lfirst(lc)));
 							}
-							return (Node *) make_orclause(nargs);
+							return (Node *) make_orclause(nargs, false);
 						}
 						break;
 					case OR_EXPR:
@@ -178,7 +184,7 @@ negate_clause(Node *node)
 								nargs = lappend(nargs,
 												negate_clause(lfirst(lc)));
 							}
-							return (Node *) make_andclause(nargs);
+							return (Node *) make_andclause(nargs, false);
 						}
 						break;
 					case NOT_EXPR:
@@ -252,6 +258,36 @@ negate_clause(Node *node)
 				return (Node *) newexpr;
 			}
 			break;
+		case T_CachedExpr:
+			{
+				CachedExpr *expr = (CachedExpr *) node;
+				CacheableExpr *subexpr = expr->subexpr;
+				/* Try to simplify its subexpression */
+				Node	   *newsubnode = negate_clause((Node *) subexpr);
+
+				if (IsA(newsubnode, BoolExpr) &&
+					((BoolExpr *) newsubnode)->boolop == NOT_EXPR)
+				{
+					/*
+					 * Simplifying its subexpression did not help so return the
+					 * cached negation of the original node. Make a new
+					 * CachedExpr node for the original subexpression since it
+					 * may used elsewhere else as a non-internal cached
+					 * expression.
+					 */
+					return (Node *) makeCachedExpr((CacheableExpr *)
+						make_notclause((Expr *) makeCachedExpr(subexpr)));
+				}
+				else
+				{
+					/*
+					 * A simplified subexpression may be non-cacheable, so
+					 * return it by itself.
+					 */
+					return newsubnode;
+				}
+			}
+			break;
 		default:
 			/* else fall through */
 			break;
@@ -284,6 +320,12 @@ negate_clause(Node *node)
  * and therefore possesses AND/OR flatness.  Formerly this function included
  * its own flattening logic, but that requires a useless extra pass over the
  * tree.
+ *
+ * NOTE: the expression should be processed using
+ * set_non_internal_cachedexprs_walker to store all non-internal cached
+ * expressions separatly for the executor's purposes. Otherwise all the created
+ * cached expressions are considered internal and will not be cached by
+ * themselves.
  *
  * Returns the modified qualification.
  */
@@ -333,11 +375,26 @@ pull_ands(List *andlist)
 		 * built a new arglist not shared with any other expr. Otherwise we'd
 		 * need a list_copy here.
 		 */
-		if (and_clause(subexpr))
-			out_list = list_concat(out_list,
-								   pull_ands(((BoolExpr *) subexpr)->args));
+		if (and_clause(subexpr, true))
+		{
+			out_list = list_concat(
+						out_list,
+						pull_ands(castNodeIfCached(BoolExpr, subexpr)->args));
+		}
 		else
+		{
+			/*
+			 * Make a new CachedExpr node since the source node can be used
+			 * elsewhere as an internal cached expression.
+			 */
+			if (IsA(subexpr, CachedExpr))
+			{
+				subexpr =
+					(Node *) makeCachedExpr(((CachedExpr *) subexpr)->subexpr);
+			}
+
 			out_list = lappend(out_list, subexpr);
+		}
 	}
 	return out_list;
 }
@@ -365,11 +422,26 @@ pull_ors(List *orlist)
 		 * built a new arglist not shared with any other expr. Otherwise we'd
 		 * need a list_copy here.
 		 */
-		if (or_clause(subexpr))
-			out_list = list_concat(out_list,
-								   pull_ors(((BoolExpr *) subexpr)->args));
+		if (or_clause(subexpr, true))
+		{
+			out_list = list_concat(
+						out_list,
+						pull_ors(castNodeIfCached(BoolExpr, subexpr)->args));
+		}
 		else
+		{
+			/*
+			 * Make a new CachedExpr node since the source node can be used
+			 * elsewhere as an internal cached expression.
+			 */
+			if (IsA(subexpr, CachedExpr))
+			{
+				subexpr =
+					(Node* ) makeCachedExpr(((CachedExpr *) subexpr)->subexpr);
+			}
+
 			out_list = lappend(out_list, subexpr);
+		}
 	}
 	return out_list;
 }
@@ -415,13 +487,13 @@ pull_ors(List *orlist)
 static Expr *
 find_duplicate_ors(Expr *qual, bool is_check)
 {
-	if (or_clause((Node *) qual))
+	if (or_clause((Node *) qual, true))
 	{
 		List	   *orlist = NIL;
 		ListCell   *temp;
 
 		/* Recurse */
-		foreach(temp, ((BoolExpr *) qual)->args)
+		foreach(temp, castNodeIfCached(BoolExpr, qual)->args)
 		{
 			Expr	   *arg = (Expr *) lfirst(temp);
 
@@ -459,13 +531,13 @@ find_duplicate_ors(Expr *qual, bool is_check)
 		/* Now we can look for duplicate ORs */
 		return process_duplicate_ors(orlist);
 	}
-	else if (and_clause((Node *) qual))
+	else if (and_clause((Node *) qual, true))
 	{
 		List	   *andlist = NIL;
 		ListCell   *temp;
 
 		/* Recurse */
-		foreach(temp, ((BoolExpr *) qual)->args)
+		foreach(temp, castNodeIfCached(BoolExpr, qual)->args)
 		{
 			Expr	   *arg = (Expr *) lfirst(temp);
 
@@ -509,7 +581,7 @@ find_duplicate_ors(Expr *qual, bool is_check)
 			return (Expr *) linitial(andlist);
 
 		/* Else we still need an AND node */
-		return make_andclause(andlist);
+		return make_andclause(andlist, true);
 	}
 	else
 		return qual;
@@ -550,9 +622,9 @@ process_duplicate_ors(List *orlist)
 	{
 		Expr	   *clause = (Expr *) lfirst(temp);
 
-		if (and_clause((Node *) clause))
+		if (and_clause((Node *) clause, true))
 		{
-			List	   *subclauses = ((BoolExpr *) clause)->args;
+			List	   *subclauses = castNodeIfCached(BoolExpr, clause)->args;
 			int			nclauses = list_length(subclauses);
 
 			if (reference == NIL || nclauses < num_subclauses)
@@ -588,9 +660,10 @@ process_duplicate_ors(List *orlist)
 		{
 			Expr	   *clause = (Expr *) lfirst(temp2);
 
-			if (and_clause((Node *) clause))
+			if (and_clause((Node *) clause, true))
 			{
-				if (!list_member(((BoolExpr *) clause)->args, refclause))
+				if (!list_member(castNodeIfCached(BoolExpr, clause)->args,
+								 refclause))
 				{
 					win = false;
 					break;
@@ -614,7 +687,7 @@ process_duplicate_ors(List *orlist)
 	 * If no winners, we can't transform the OR
 	 */
 	if (winners == NIL)
-		return make_orclause(orlist);
+		return make_orclause(orlist, true);
 
 	/*
 	 * Generate new OR list consisting of the remaining sub-clauses.
@@ -631,17 +704,22 @@ process_duplicate_ors(List *orlist)
 	{
 		Expr	   *clause = (Expr *) lfirst(temp);
 
-		if (and_clause((Node *) clause))
+		if (and_clause((Node *) clause, true))
 		{
-			List	   *subclauses = ((BoolExpr *) clause)->args;
+			List	   *subclauses = castNodeIfCached(BoolExpr, clause)->args;
 
 			subclauses = list_difference(subclauses, winners);
 			if (subclauses != NIL)
 			{
 				if (list_length(subclauses) == 1)
+				{
 					neworlist = lappend(neworlist, linitial(subclauses));
+				}
 				else
-					neworlist = lappend(neworlist, make_andclause(subclauses));
+				{
+					neworlist = lappend(neworlist,
+										make_andclause(subclauses, true));
+				}
 			}
 			else
 			{
@@ -670,9 +748,14 @@ process_duplicate_ors(List *orlist)
 	if (neworlist != NIL)
 	{
 		if (list_length(neworlist) == 1)
+		{
 			winners = lappend(winners, linitial(neworlist));
+		}
 		else
-			winners = lappend(winners, make_orclause(pull_ors(neworlist)));
+		{
+			winners = lappend(winners,
+							  make_orclause(pull_ors(neworlist), true));
+		}
 	}
 
 	/*
@@ -680,7 +763,20 @@ process_duplicate_ors(List *orlist)
 	 * element and AND/OR flatness.
 	 */
 	if (list_length(winners) == 1)
-		return (Expr *) linitial(winners);
+	{
+		Expr	   *result = linitial(winners);
+
+		/*
+		 * Make a new CachedExpr node since the source node can be used
+		 * elsewhere as an internal cached expression.
+		 */
+		if (IsA(result, CachedExpr))
+			result = (Expr *) makeCachedExpr(((CachedExpr *) result)->subexpr);
+
+		return result;
+	}
 	else
-		return make_andclause(pull_ands(winners));
+	{
+		return make_andclause(pull_ands(winners), true);
+	}
 }

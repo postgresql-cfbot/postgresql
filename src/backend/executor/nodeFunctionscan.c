@@ -494,7 +494,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 
 	/*
 	 * Create a memory context that ExecMakeTableFunctionResult can use to

@@ -188,7 +188,7 @@ ExecInitSeqScan(SeqScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->plan.qual, (PlanState *) scanstate, NULL);
 
 	return scanstate;
 }

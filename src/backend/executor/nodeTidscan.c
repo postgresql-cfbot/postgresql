@@ -74,7 +74,7 @@ TidExprListCreate(TidScanState *tidstate)
 		Expr	   *expr = (Expr *) lfirst(l);
 		TidExpr    *tidexpr = (TidExpr *) palloc0(sizeof(TidExpr));
 
-		if (is_opclause(expr))
+		if (is_opclause((Node *) expr, false))
 		{
 			Node	   *arg1;
 			Node	   *arg2;
@@ -83,10 +83,10 @@ TidExprListCreate(TidScanState *tidstate)
 			arg2 = get_rightop(expr);
 			if (IsCTIDVar(arg1))
 				tidexpr->exprstate = ExecInitExpr((Expr *) arg2,
-												  &tidstate->ss.ps);
+												  &tidstate->ss.ps, NULL);
 			else if (IsCTIDVar(arg2))
 				tidexpr->exprstate = ExecInitExpr((Expr *) arg1,
-												  &tidstate->ss.ps);
+												  &tidstate->ss.ps, NULL);
 			else
 				elog(ERROR, "could not identify CTID variable");
 			tidexpr->isarray = false;
@@ -97,7 +97,7 @@ TidExprListCreate(TidScanState *tidstate)
 
 			Assert(IsCTIDVar(linitial(saex->args)));
 			tidexpr->exprstate = ExecInitExpr(lsecond(saex->args),
-											  &tidstate->ss.ps);
+											  &tidstate->ss.ps, NULL);
 			tidexpr->isarray = true;
 		}
 		else if (expr && IsA(expr, CurrentOfExpr))
@@ -561,7 +561,7 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	tidstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) tidstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) tidstate, NULL);
 
 	TidExprListCreate(tidstate);
 

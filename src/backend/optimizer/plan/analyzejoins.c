@@ -693,7 +693,7 @@ rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *clause_list)
 			 * same operator the subquery would consider; that's all right
 			 * since query_is_distinct_for can resolve such cases.)  The
 			 * caller's mergejoinability test should have selected only
-			 * OpExprs.
+			 * non-cached OpExprs.
 			 */
 			op = castNode(OpExpr, rinfo->clause)->opno;
 
@@ -710,6 +710,12 @@ rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *clause_list)
 			 */
 			if (var && IsA(var, RelabelType))
 				var = (Var *) ((RelabelType *) var)->arg;
+
+			/*
+			 * Pseudoconstant operands do not pass the caller's mergejoinability
+			 * test.
+			 */
+			Assert(!IsA(var, CachedExpr));
 
 			/*
 			 * If inner side isn't a Var referencing a subquery output column,

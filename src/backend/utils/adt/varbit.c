@@ -680,6 +680,7 @@ varbit_send(PG_FUNCTION_ARGS)
 Datum
 varbit_transform(PG_FUNCTION_ARGS)
 {
+	/* this is not used for cached expressions */
 	FuncExpr   *expr = castNode(FuncExpr, PG_GETARG_POINTER(0));
 	Node	   *ret = NULL;
 	Node	   *typmod;

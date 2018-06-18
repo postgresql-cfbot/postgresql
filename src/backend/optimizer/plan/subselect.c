@@ -994,6 +994,10 @@ convert_testexpr_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
+
+	/*
+	 * Do not worry about cached params because PARAM_SUBLINK cannot be cached.
+	 */
 	if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;
@@ -1068,6 +1072,9 @@ subplan_is_hashable(Plan *plan)
 static bool
 testexpr_is_hashable(Node *testexpr)
 {
+	/* This is not used for pseudoconstants. */
+	Assert(!IsA(testexpr, CachedExpr));
+
 	/*
 	 * The testexpr must be a single OpExpr, or an AND-clause containing only
 	 * OpExprs.
@@ -1084,13 +1091,16 @@ testexpr_is_hashable(Node *testexpr)
 		if (hash_ok_operator((OpExpr *) testexpr))
 			return true;
 	}
-	else if (and_clause(testexpr))
+	else if (and_clause(testexpr, false))
 	{
 		ListCell   *l;
 
 		foreach(l, ((BoolExpr *) testexpr)->args)
 		{
 			Node	   *andarg = (Node *) lfirst(l);
+
+			/* This is not used for pseudoconstants. */
+			Assert(!IsA(andarg, CachedExpr));
 
 			if (!IsA(andarg, OpExpr))
 				return false;
@@ -1628,7 +1638,16 @@ simplify_EXISTS_query(PlannerInfo *root, Query *query)
 		query->limitCount = node;
 
 		if (!IsA(node, Const))
+		{
+			/*
+			 * Store all non-internal cached expressions separatly for the
+			 * executor's purposes.
+			 */
+			set_non_internal_cachedexprs_walker(node,
+												&(root->glob->cachedExprs));
+
 			return false;
+		}
 
 		limit = (Const *) node;
 		Assert(limit->consttype == INT8OID);
@@ -1755,6 +1774,7 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 	{
 		OpExpr	   *expr = (OpExpr *) lfirst(lc);
 
+		/* Ignore cached expressions because they do not contain vars */
 		if (IsA(expr, OpExpr) &&
 			hash_ok_operator(expr))
 		{
@@ -1842,7 +1862,16 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 	 * Put back any child-level-only WHERE clauses.
 	 */
 	if (newWhere)
+	{
 		subselect->jointree->quals = (Node *) make_ands_explicit(newWhere);
+
+		/*
+		 * Store all non-internal cached expressions separatly for the
+		 * executor's purposes.
+		 */
+		set_non_internal_cachedexprs_walker(subselect->jointree->quals,
+											&(root->glob->cachedExprs));
+	}
 
 	/*
 	 * Build a new targetlist for the child that emits the expressions we
@@ -1883,6 +1912,15 @@ convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 	subselect->targetList = tlist;
 	*testexpr = (Node *) make_ands_explicit(testlist);
 	*paramIds = paramids;
+
+	/*
+	 * Store all non-internal cached expressions separatly for the executor's
+	 * purposes.
+	 */
+	set_non_internal_cachedexprs_walker((Node *) subselect->targetList,
+										&(root->glob->cachedExprs));
+	set_non_internal_cachedexprs_walker(*testexpr,
+										&(root->glob->cachedExprs));
 
 	return subselect;
 }
@@ -1956,6 +1994,12 @@ replace_correlation_vars_mutator(Node *node, PlannerInfo *root)
  * The isQual argument tells whether or not this expression is a WHERE/HAVING
  * qualifier expression.  If it is, any sublinks appearing at top level need
  * not distinguish FALSE from UNKNOWN return values.
+ *
+ * NOTE: if the expression contains cached expressions, it should be processed
+ * using set_non_internal_cachedexprs_walker to store all non-internal cached
+ * expressions separatly for the executor's purposes. Otherwise all the created
+ * cached expressions are considered internal and will not be cached by
+ * themselves.
  */
 Node *
 SS_process_sublinks(PlannerInfo *root, Node *expr, bool isQual)
@@ -2039,46 +2083,72 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 	 * propagates down in both cases.  (Note that this is unlike the meaning
 	 * of "top level qual" used in most other places in Postgres.)
 	 */
-	if (and_clause(node))
+	if (and_clause(node, true))
 	{
 		List	   *newargs = NIL;
 		ListCell   *l;
+		Node	   *result;
 
 		/* Still at qual top-level */
 		locContext.isTopQual = context->isTopQual;
 
-		foreach(l, ((BoolExpr *) node)->args)
+		foreach(l, castNodeIfCached(BoolExpr, node)->args)
 		{
 			Node	   *newarg;
 
 			newarg = process_sublinks_mutator(lfirst(l), &locContext);
-			if (and_clause(newarg))
-				newargs = list_concat(newargs, ((BoolExpr *) newarg)->args);
+			if (and_clause(newarg, true))
+			{
+				newargs = list_concat(newargs,
+									  castNodeIfCached(BoolExpr, newarg)->args);
+			}
 			else
+			{
 				newargs = lappend(newargs, newarg);
+			}
 		}
-		return (Node *) make_andclause(newargs);
+
+		result = (Node *) make_andclause(newargs, false);
+
+		/* Cache it if the original node was cached */
+		if (IsA(node, CachedExpr))
+			result = (Node *) makeCachedExpr((CacheableExpr *) result);
+
+		return result;
 	}
 
-	if (or_clause(node))
+	if (or_clause(node, true))
 	{
 		List	   *newargs = NIL;
 		ListCell   *l;
+		Node	   *result;
 
 		/* Still at qual top-level */
 		locContext.isTopQual = context->isTopQual;
 
-		foreach(l, ((BoolExpr *) node)->args)
+		foreach(l, castNodeIfCached(BoolExpr, node)->args)
 		{
 			Node	   *newarg;
 
 			newarg = process_sublinks_mutator(lfirst(l), &locContext);
-			if (or_clause(newarg))
-				newargs = list_concat(newargs, ((BoolExpr *) newarg)->args);
+			if (or_clause(newarg, true))
+			{
+				newargs = list_concat(newargs,
+									  castNodeIfCached(BoolExpr, newarg)->args);
+			}
 			else
+			{
 				newargs = lappend(newargs, newarg);
+			}
 		}
-		return (Node *) make_orclause(newargs);
+
+		result = (Node *) make_orclause(newargs, false);
+
+		/* Cache it if the original node was cached */
+		if (IsA(node, CachedExpr))
+			result = (Node *) makeCachedExpr((CacheableExpr *) result);
+
+		return result;
 	}
 
 	/*
@@ -2891,6 +2961,10 @@ finalize_primnode(Node *node, finalize_primnode_context *context)
 {
 	if (node == NULL)
 		return false;
+
+	/*
+	 * Do not worry about cached params because PARAM_EXEC cannot be cached.
+	 */
 	if (IsA(node, Param))
 	{
 		if (((Param *) node)->paramkind == PARAM_EXEC)

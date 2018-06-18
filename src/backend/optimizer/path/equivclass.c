@@ -143,7 +143,10 @@ process_equivalence(PlannerInfo *root,
 		return false;
 
 	/* Extract info from given clause */
-	Assert(is_opclause(clause));
+
+	/* This is not used for pseudoconstants */
+	Assert(is_opclause((Node *) clause, false));
+
 	opno = ((OpExpr *) clause)->opno;
 	collation = ((OpExpr *) clause)->inputcollid;
 	item1 = (Expr *) get_leftop(clause);
@@ -488,12 +491,19 @@ process_equivalence(PlannerInfo *root,
  *
  * Note this code assumes that the expression has already been through
  * eval_const_expressions, so there are no CollateExprs and no redundant
- * RelabelTypes.
+ * RelabelTypes, but there may be cached expressions.
+ *
+ * NOTE: the expression should be processed using
+ * set_non_internal_cachedexprs_walker to store all non-internal cached
+ * expressions separatly for the executor's purposes. Otherwise all the created
+ * cached expressions are considered internal and will not be cached by
+ * themselves.
  */
 Expr *
 canonicalize_ec_expression(Expr *expr, Oid req_type, Oid req_collation)
 {
 	Oid			expr_type = exprType((Node *) expr);
+	bool		cached = false;
 
 	/*
 	 * For a polymorphic-input-type opclass, just keep the same exposed type.
@@ -509,16 +519,20 @@ canonicalize_ec_expression(Expr *expr, Oid req_type, Oid req_collation)
 		exprCollation((Node *) expr) != req_collation)
 	{
 		/*
-		 * Strip any existing RelabelType, then add a new one if needed. This
-		 * is to preserve the invariant of no redundant RelabelTypes.
+		 * Strip any existing (and possibly cached) RelabelType, then add a new
+		 * one if needed. This is to preserve the invariant of no redundant
+		 * RelabelTypes.
 		 *
 		 * If we have to change the exposed type of the stripped expression,
 		 * set typmod to -1 (since the new type may not have the same typmod
 		 * interpretation).  If we only have to change collation, preserve the
 		 * exposed typmod.
 		 */
-		while (expr && IsA(expr, RelabelType))
-			expr = (Expr *) ((RelabelType *) expr)->arg;
+		while (expr && IsAIfCached(expr, RelabelType))
+		{
+			cached |= IsA(expr, CachedExpr);
+			expr = castNodeIfCached(RelabelType, expr)->arg;
+		}
 
 		if (exprType((Node *) expr) != req_type)
 			expr = (Expr *) makeRelabelType(expr,
@@ -532,6 +546,10 @@ canonicalize_ec_expression(Expr *expr, Oid req_type, Oid req_collation)
 											exprTypmod((Node *) expr),
 											req_collation,
 											COERCE_IMPLICIT_CAST);
+
+		/* Cache the new node if it was cached in the original expression */
+		if (cached && !IsA(expr, CachedExpr))
+			expr = (Expr *) makeCachedExpr((CacheableExpr *) expr);
 	}
 
 	return expr;
@@ -1205,7 +1223,8 @@ generate_join_implied_equalities_normal(PlannerInfo *root,
 	 * choices, we prefer simple Var members (possibly with RelabelType) since
 	 * these are (a) cheapest to compute at runtime and (b) most likely to
 	 * have useful statistics. Also, prefer operators that are also
-	 * hashjoinable.
+	 * hashjoinable. Ignore cached RelabelTypes because they do not contain
+	 * vars.
 	 */
 	if (outer_members && inner_members)
 	{
@@ -1693,7 +1712,9 @@ reconsider_outer_join_clause(PlannerInfo *root, RestrictInfo *rinfo,
 				inner_nullable_relids;
 	ListCell   *lc1;
 
-	Assert(is_opclause(rinfo->clause));
+	/* This is not used for pseudoconstants */
+	Assert(is_opclause((Node *) rinfo->clause, false));
+
 	opno = ((OpExpr *) rinfo->clause)->opno;
 	collation = ((OpExpr *) rinfo->clause)->inputcollid;
 
@@ -1823,7 +1844,10 @@ reconsider_full_join_clause(PlannerInfo *root, RestrictInfo *rinfo)
 		return false;
 
 	/* Extract needed info from the clause */
-	Assert(is_opclause(rinfo->clause));
+
+	/* This is not used for pseudoconstants */
+	Assert(is_opclause((Node *) rinfo->clause, false));
+
 	opno = ((OpExpr *) rinfo->clause)->opno;
 	collation = ((OpExpr *) rinfo->clause)->inputcollid;
 	op_input_types(opno, &left_type, &right_type);
@@ -1875,9 +1899,10 @@ reconsider_full_join_clause(PlannerInfo *root, RestrictInfo *rinfo)
 		{
 			coal_em = (EquivalenceMember *) lfirst(lc2);
 			Assert(!coal_em->em_is_child);	/* no children yet */
-			if (IsA(coal_em->em_expr, CoalesceExpr))
+			if (IsAIfCached(coal_em->em_expr, CoalesceExpr))
 			{
-				CoalesceExpr *cexpr = (CoalesceExpr *) coal_em->em_expr;
+				CoalesceExpr *cexpr = castNodeIfCached(CoalesceExpr,
+													   coal_em->em_expr);
 				Node	   *cfirst;
 				Node	   *csecond;
 
@@ -2061,6 +2086,7 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
 				continue;		/* ignore children here */
 
 			/* EM must be a Var, possibly with RelabelType */
+			/* Ignore cached RelabelTypes because they do not contain vars */
 			var = (Var *) em->em_expr;
 			while (var && IsA(var, RelabelType))
 				var = (Var *) ((RelabelType *) var)->arg;

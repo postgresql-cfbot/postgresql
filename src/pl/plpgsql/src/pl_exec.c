@@ -150,7 +150,7 @@ typedef struct					/* lookup key for cast info */
 typedef struct					/* cast_hash table entry */
 {
 	plpgsql_CastHashKey key;	/* hash key --- MUST BE FIRST */
-	Expr	   *cast_expr;		/* cast expression, or NULL if no-op cast */
+	PlannedExpr *cast_expr;		/* cast expression, or NULL if no-op cast */
 	/* ExprState is valid only when cast_lxid matches current LXID */
 	ExprState  *cast_exprstate; /* expression's eval tree */
 	bool		cast_in_use;	/* true while we're executing eval tree */
@@ -2194,6 +2194,12 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 
 				if (argmodes && argmodes[i] == PROARGMODE_INOUT)
 				{
+					/*
+					 * Do not worry about cached params because they are only
+					 * used in prepared statements, PL/pgSQL inline code blocks
+					 * cannot be used here and PL/pgSQL functions cannot be
+					 * inlined.
+					 */
 					if (IsA(n, Param))
 					{
 						Param	   *param = castNode(Param, n);
@@ -6055,9 +6061,16 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 	if (expr->expr_simple_lxid != curlxid)
 	{
 		oldcontext = MemoryContextSwitchTo(estate->simple_eval_estate->es_query_cxt);
+
+		/*
+		 * Initialize cached expressions as dynamically planned since a simple
+		 * expression can be replanned for the same executor state.
+		 */
 		expr->expr_simple_state =
 			ExecInitExprWithParams(expr->expr_simple_expr,
-								   econtext->ecxt_param_list_info);
+								   econtext->ecxt_param_list_info,
+								   expr->expr_simple_cachedexprs);
+
 		expr->expr_simple_in_use = false;
 		expr->expr_simple_lxid = curlxid;
 		MemoryContextSwitchTo(oldcontext);
@@ -6080,6 +6093,12 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 	 * Mark expression as busy for the duration of the ExecEvalExpr call.
 	 */
 	expr->expr_simple_in_use = true;
+
+	/*
+	 * The executor is used (again) from the very beginning, so the cached
+	 * expressions must be (re)calculated.
+	 */
+	ExecSetDynamicallyPlannedCachedExprs(expr->expr_simple_state);
 
 	/*
 	 * Finally we can call the executor to evaluate the expression
@@ -7501,6 +7520,7 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 		/* We've not looked up this coercion before */
 		Node	   *cast_expr;
 		CaseTestExpr *placeholder;
+		PlannedExpr *planned_cast_expr;
 
 		/*
 		 * Since we could easily fail (no such coercion), construct a
@@ -7566,7 +7586,12 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 
 		/* Note: we don't bother labeling the expression tree with collation */
 
-		/* Detect whether we have a no-op (RelabelType) coercion */
+		/*
+		 * Detect whether we have a no-op (RelabelType) coercion.
+		 * Do not check for cached expressions because the parser does not use
+		 * them.
+		 */
+		Assert(!IsA(cast_expr, CachedExpr));
 		if (IsA(cast_expr, RelabelType) &&
 			((RelabelType *) cast_expr)->arg == (Expr *) placeholder)
 			cast_expr = NULL;
@@ -7574,12 +7599,17 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 		if (cast_expr)
 		{
 			/* ExecInitExpr assumes we've planned the expression */
-			cast_expr = (Node *) expression_planner((Expr *) cast_expr);
+			planned_cast_expr = expression_planner((Expr *) cast_expr);
 
 			/* Now copy the tree into cast_hash_context */
 			MemoryContextSwitchTo(estate->cast_hash_context);
 
-			cast_expr = copyObject(cast_expr);
+			planned_cast_expr = copyObject(planned_cast_expr);
+			cast_expr = (Node *) planned_cast_expr->expr;
+		}
+		else
+		{
+			planned_cast_expr = NULL;
 		}
 
 		MemoryContextSwitchTo(oldcontext);
@@ -7589,7 +7619,7 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 														   (void *) &cast_key,
 														   HASH_ENTER, &found);
 		Assert(!found);			/* wasn't there a moment ago */
-		cast_entry->cast_expr = (Expr *) cast_expr;
+		cast_entry->cast_expr = planned_cast_expr;
 		cast_entry->cast_exprstate = NULL;
 		cast_entry->cast_in_use = false;
 		cast_entry->cast_lxid = InvalidLocalTransactionId;
@@ -7614,8 +7644,11 @@ get_cast_hashentry(PLpgSQL_execstate *estate,
 	curlxid = MyProc->lxid;
 	if (cast_entry->cast_lxid != curlxid || cast_entry->cast_in_use)
 	{
+		PlannedExpr *cast_expr = cast_entry->cast_expr;
+
 		oldcontext = MemoryContextSwitchTo(estate->simple_eval_estate->es_query_cxt);
-		cast_entry->cast_exprstate = ExecInitExpr(cast_entry->cast_expr, NULL);
+		cast_entry->cast_exprstate = ExecInitExpr(cast_expr->expr, NULL,
+												  cast_expr->cachedExprs);
 		cast_entry->cast_in_use = false;
 		cast_entry->cast_lxid = curlxid;
 		MemoryContextSwitchTo(oldcontext);
@@ -7780,7 +7813,13 @@ exec_save_simple_expr(PLpgSQL_expr *expr, CachedPlan *cplan)
 			/* If setrefs.c copied up a Const, no need to look further */
 			if (IsA(tle_expr, Const))
 				break;
-			/* Otherwise, it had better be a Param or an outer Var */
+			/*
+			 * Otherwise, it had better be a Param or an outer Var
+			 *
+			 * Do not worry about cached params because they are only used in
+			 * prepared statements, PL/pgSQL inline code blocks cannot be used
+			 * here and PL/pgSQL functions cannot be inlined.
+			 */
 			Assert(IsA(tle_expr, Param) ||(IsA(tle_expr, Var) &&
 										   ((Var *) tle_expr)->varno == OUTER_VAR));
 			/* Descend to the child node */
@@ -7803,6 +7842,7 @@ exec_save_simple_expr(PLpgSQL_expr *expr, CachedPlan *cplan)
 	/* Also stash away the expression result type */
 	expr->expr_simple_type = exprType((Node *) tle_expr);
 	expr->expr_simple_typmod = exprTypmod((Node *) tle_expr);
+	expr->expr_simple_cachedexprs = stmt->cachedExprs;
 }
 
 /*
@@ -7845,6 +7885,7 @@ exec_check_rw_parameter(PLpgSQL_expr *expr, int target_dno)
 	/*
 	 * Top level of expression must be a simple FuncExpr or OpExpr.
 	 */
+	Assert(!IsA(expr->expr_simple_expr, CachedExpr));
 	if (IsA(expr->expr_simple_expr, FuncExpr))
 	{
 		FuncExpr   *fexpr = (FuncExpr *) expr->expr_simple_expr;
@@ -7879,9 +7920,19 @@ exec_check_rw_parameter(PLpgSQL_expr *expr, int target_dno)
 	{
 		Node	   *arg = (Node *) lfirst(lc);
 
-		/* A Param is OK, whether it's the target variable or not */
-		if (arg && IsA(arg, Param))
-			continue;
+		if (arg)
+		{
+			/*
+			 * Cached params are only used in prepared statements, PL/pgSQL
+			 * inline code blocks cannot be used here and PL/pgSQL functions
+			 * cannot be inlined.
+			 */
+			Assert(!IsACached(arg, Param));
+
+			/* A Param is OK, whether it's the target variable or not */
+			if (IsA(arg, Param))
+				continue;
+		}
 		/* Otherwise, argument expression must not reference target */
 		if (contains_target_param(arg, &target_dno))
 			return;
@@ -7899,6 +7950,13 @@ contains_target_param(Node *node, int *target_dno)
 {
 	if (node == NULL)
 		return false;
+
+	/*
+	 * Cached params are only used in prepared statements, PL/pgSQL inline code
+	 * blocks cannot be used here and PL/pgSQL functions cannot be inlined.
+	 */
+	Assert(!IsACached(node, Param));
+
 	if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;

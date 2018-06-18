@@ -311,10 +311,10 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	nlstate->js.ps.qual =
-		ExecInitQual(node->join.plan.qual, (PlanState *) nlstate);
+		ExecInitQual(node->join.plan.qual, (PlanState *) nlstate, NULL);
 	nlstate->js.jointype = node->join.jointype;
 	nlstate->js.joinqual =
-		ExecInitQual(node->join.joinqual, (PlanState *) nlstate);
+		ExecInitQual(node->join.joinqual, (PlanState *) nlstate, NULL);
 
 	/*
 	 * detect whether we need only consider the first matching inner tuple

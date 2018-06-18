@@ -205,6 +205,84 @@ typedef struct Const
 } Const;
 
 /*
+ * CacheableExpr - generic suberclass for expressions that can be cacheable.
+ *
+ * All expression node types that can be cacheable should derive from
+ * CacheableExpr (that is, have CacheableExpr as their first field).  Since
+ * CacheableExpr only contains NodeTag, this is a formality, but it is an easy
+ * form of documentation.
+ *
+ * Expression is cached (= is are calculated once for all output rows, but as
+ * many times as expression is mentioned in query), if:
+ * - it doesn't return a set
+ * - it is not volatile itself
+ * - its arguments are constants or recursively cached expressions.
+ *
+ * In planner if expression can be cached it becomes a part of CachedExpr node.
+ */
+typedef struct CacheableExpr
+{
+	NodeTag		type;
+} CacheableExpr;
+
+/*
+ * CachedExpr - expression node for cached expressions (= they are calculated
+ * once for all output rows, but as many times as function is mentioned in
+ * query).
+ */
+typedef struct CachedExpr
+{
+	Expr		xpr;
+	CacheableExpr *subexpr;		/* expression to be cached */
+
+	/*
+	 * Numeric ID for the cached expression (used by the executor). -1 if the
+	 * cached expression is internal, is used only in other cached expressions
+	 * and is not cached by itself.
+	 */
+	int			cached_id;
+} CachedExpr;
+
+/*
+ * Examine the type of the subexpression of the cached expression.
+ */
+#define IsACached(nodeptr, _type_) \
+	(nodeTag(nodeptr) == T_CachedExpr && \
+	 nodeTag(((CachedExpr *) (nodeptr))->subexpr) == T_##_type_)
+
+/*
+ * If the node is a cached expression and the requested type is not CachedExpr,
+ * examine its subexpression.
+ */
+#define IsAIfCached(nodeptr, _type_) \
+	(nodeTag(nodeptr) == T_##_type_ || IsACached(nodeptr, _type_))
+
+/*
+ * castNodeIfCached(type, ptr) casts ptr (or its subexpression if ptr is a
+ * cached expression and the requested type is not CachedExpr) to "type *", and
+ * if assertions are enabled, verifies that the node has the appropriate type
+ * (using its nodeTag()).
+ */
+
+static inline Node *
+castNodeIfCachedImpl(NodeTag type, void *ptr)
+{
+#ifdef USE_ASSERT_CHECKING
+	Assert(ptr == NULL ||
+		   nodeTag(ptr) == type ||
+		   (nodeTag(ptr) == T_CachedExpr &&
+			(((CachedExpr *) ptr)->subexpr == NULL ||
+			 nodeTag(((CachedExpr *) ptr)->subexpr) == type)));
+#endif							/* USE_ASSERT_CHECKING */
+	if (ptr && nodeTag(ptr) == T_CachedExpr && type != T_CachedExpr)
+		return (Node *) ((CachedExpr *) ptr)->subexpr;
+	return (Node *) ptr;
+}
+
+#define castNodeIfCached(_type_, nodeptr) \
+	((_type_ *) castNodeIfCachedImpl(T_##_type_, nodeptr))
+
+/*
  * Param
  *
  *		paramkind specifies the kind of parameter. The possible values
@@ -241,7 +319,7 @@ typedef enum ParamKind
 
 typedef struct Param
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	ParamKind	paramkind;		/* kind of parameter. See above */
 	int			paramid;		/* numeric ID for parameter */
 	Oid			paramtype;		/* pg_type OID of parameter's datatype */
@@ -396,7 +474,7 @@ typedef struct WindowFunc
  */
 typedef struct ArrayRef
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			refarraytype;	/* type of the array proper */
 	Oid			refelemtype;	/* type of the array elements */
 	int32		reftypmod;		/* typmod of the array (and elements too) */
@@ -446,7 +524,7 @@ typedef enum CoercionForm
  */
 typedef struct FuncExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			funcid;			/* PG_PROC OID of the function */
 	Oid			funcresulttype; /* PG_TYPE OID of result value */
 	bool		funcretset;		/* true if function returns set */
@@ -493,7 +571,7 @@ typedef struct NamedArgExpr
  */
 typedef struct OpExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			opno;			/* PG_OPERATOR OID of the operator */
 	Oid			opfuncid;		/* PG_PROC OID of underlying function */
 	Oid			opresulttype;	/* PG_TYPE OID of result value */
@@ -536,7 +614,7 @@ typedef OpExpr NullIfExpr;
  */
 typedef struct ScalarArrayOpExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			opno;			/* PG_OPERATOR OID of the operator */
 	Oid			opfuncid;		/* PG_PROC OID of underlying function */
 	bool		useOr;			/* true for ANY, false for ALL */
@@ -559,7 +637,7 @@ typedef enum BoolExprType
 
 typedef struct BoolExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	BoolExprType boolop;
 	List	   *args;			/* arguments to this expression */
 	int			location;		/* token location, or -1 if unknown */
@@ -739,7 +817,7 @@ typedef struct AlternativeSubPlan
 
 typedef struct FieldSelect
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	AttrNumber	fieldnum;		/* attribute number of field to extract */
 	Oid			resulttype;		/* type of the field (result type of this
@@ -791,7 +869,7 @@ typedef struct FieldStore
 
 typedef struct RelabelType
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	Oid			resulttype;		/* output type of coercion expression */
 	int32		resulttypmod;	/* output typmod (usually -1) */
@@ -811,7 +889,7 @@ typedef struct RelabelType
 
 typedef struct CoerceViaIO
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	Oid			resulttype;		/* output type of coercion */
 	/* output typmod is not stored, but is presumed -1 */
@@ -835,7 +913,7 @@ typedef struct CoerceViaIO
 
 typedef struct ArrayCoerceExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression (yields an array) */
 	Expr	   *elemexpr;		/* expression representing per-element work */
 	Oid			resulttype;		/* output type of coercion (an array type) */
@@ -860,7 +938,7 @@ typedef struct ArrayCoerceExpr
 
 typedef struct ConvertRowtypeExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	Oid			resulttype;		/* output type (always a composite type) */
 	/* Like RowExpr, we deliberately omit a typmod and collation here */
@@ -907,7 +985,7 @@ typedef struct CollateExpr
  */
 typedef struct CaseExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			casetype;		/* type of expression result */
 	Oid			casecollid;		/* OID of collation, or InvalidOid if none */
 	Expr	   *arg;			/* implicit equality comparison argument */
@@ -937,7 +1015,7 @@ typedef struct CaseWhen
  */
 typedef struct CaseTestExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			typeId;			/* type for substituted value */
 	int32		typeMod;		/* typemod for substituted value */
 	Oid			collation;		/* collation for the substituted value */
@@ -953,7 +1031,7 @@ typedef struct CaseTestExpr
  */
 typedef struct ArrayExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			array_typeid;	/* type of expression result */
 	Oid			array_collid;	/* OID of collation, or InvalidOid if none */
 	Oid			element_typeid; /* common type of array elements */
@@ -987,7 +1065,7 @@ typedef struct ArrayExpr
  */
 typedef struct RowExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	List	   *args;			/* the fields */
 	Oid			row_typeid;		/* RECORDOID or a composite type's ID */
 
@@ -1035,7 +1113,7 @@ typedef enum RowCompareType
 
 typedef struct RowCompareExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	RowCompareType rctype;		/* LT LE GE or GT, never EQ or NE */
 	List	   *opnos;			/* OID list of pairwise comparison ops */
 	List	   *opfamilies;		/* OID list of containing operator families */
@@ -1049,7 +1127,7 @@ typedef struct RowCompareExpr
  */
 typedef struct CoalesceExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			coalescetype;	/* type of expression result */
 	Oid			coalescecollid; /* OID of collation, or InvalidOid if none */
 	List	   *args;			/* the arguments */
@@ -1067,7 +1145,7 @@ typedef enum MinMaxOp
 
 typedef struct MinMaxExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Oid			minmaxtype;		/* common type of arguments and result */
 	Oid			minmaxcollid;	/* OID of collation of result */
 	Oid			inputcollid;	/* OID of collation that function should use */
@@ -1108,7 +1186,7 @@ typedef enum SQLValueFunctionOp
 
 typedef struct SQLValueFunction
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	SQLValueFunctionOp op;		/* which function this is */
 	Oid			type;			/* result type/typmod */
 	int32		typmod;
@@ -1146,7 +1224,7 @@ typedef enum
 
 typedef struct XmlExpr
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	XmlExprOp	op;				/* xml function ID */
 	char	   *name;			/* name in xml(NAME foo ...) syntaxes */
 	List	   *named_args;		/* non-XML expressions for xml_attributes */
@@ -1184,7 +1262,7 @@ typedef enum NullTestType
 
 typedef struct NullTest
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	NullTestType nulltesttype;	/* IS NULL, IS NOT NULL */
 	bool		argisrow;		/* T to perform field-by-field null checks */
@@ -1207,7 +1285,7 @@ typedef enum BoolTestType
 
 typedef struct BooleanTest
 {
-	Expr		xpr;
+	CacheableExpr xpr;
 	Expr	   *arg;			/* input expression */
 	BoolTestType booltesttype;	/* test type */
 	int			location;		/* token location, or -1 if unknown */

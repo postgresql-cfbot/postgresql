@@ -164,8 +164,8 @@ extract_or_clause(RestrictInfo *or_rinfo, RelOptInfo *rel)
 	/*
 	 * Scan each arm of the input OR clause.  Notice we descend into
 	 * or_rinfo->orclause, which has RestrictInfo nodes embedded below the
-	 * toplevel OR/AND structure.  This is useful because we can use the info
-	 * in those nodes to make is_safe_restriction_clause_for()'s checks
+	 * toplevel non-cached OR/AND structure.  This is useful because we can use
+	 * the info in those nodes to make is_safe_restriction_clause_for()'s checks
 	 * cheaper.  We'll strip those nodes from the returned tree, though,
 	 * meaning that fresh ones will be built if the clause is accepted as a
 	 * restriction clause.  This might seem wasteful --- couldn't we re-use
@@ -173,15 +173,15 @@ extract_or_clause(RestrictInfo *or_rinfo, RelOptInfo *rel)
 	 * selectivity and other cached data is computed exactly the same way for
 	 * a restriction clause as for a join clause, which seems undesirable.
 	 */
-	Assert(or_clause((Node *) or_rinfo->orclause));
+	Assert(or_clause((Node *) or_rinfo->orclause, false));
 	foreach(lc, ((BoolExpr *) or_rinfo->orclause)->args)
 	{
 		Node	   *orarg = (Node *) lfirst(lc);
 		List	   *subclauses = NIL;
 		Node	   *subclause;
 
-		/* OR arguments should be ANDs or sub-RestrictInfos */
-		if (and_clause(orarg))
+		/* OR arguments should be non-cached ANDs or sub-RestrictInfos */
+		if (and_clause(orarg, false))
 		{
 			List	   *andargs = ((BoolExpr *) orarg)->args;
 			ListCell   *lc2;
@@ -231,9 +231,14 @@ extract_or_clause(RestrictInfo *or_rinfo, RelOptInfo *rel)
 		 * to preserve AND/OR flatness (ie, no OR directly underneath OR).
 		 */
 		subclause = (Node *) make_ands_explicit(subclauses);
-		if (or_clause(subclause))
-			clauselist = list_concat(clauselist,
-									 list_copy(((BoolExpr *) subclause)->args));
+
+		/* This is not used for pseudoconstants */
+		Assert(!IsA(subclause, CachedExpr));
+
+		if (or_clause(subclause, false))
+			clauselist = list_concat(
+				clauselist,
+				list_copy(((BoolExpr *) subclause)->args));
 		else
 			clauselist = lappend(clauselist, subclause);
 	}
@@ -244,7 +249,7 @@ extract_or_clause(RestrictInfo *or_rinfo, RelOptInfo *rel)
 	 * one arm --- but then the input OR node was also redundant.)
 	 */
 	if (clauselist != NIL)
-		return make_orclause(clauselist);
+		return make_orclause(clauselist, false);
 	return NULL;
 }
 

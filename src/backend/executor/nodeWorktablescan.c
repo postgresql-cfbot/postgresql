@@ -166,7 +166,7 @@ ExecInitWorkTableScan(WorkTableScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 
 	/*
 	 * Do not yet initialize projection info, see ExecWorkTableScan() for

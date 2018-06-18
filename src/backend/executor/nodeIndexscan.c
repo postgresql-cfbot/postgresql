@@ -971,9 +971,9 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	 * in the expression must be found now...)
 	 */
 	indexstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) indexstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) indexstate, NULL);
 	indexstate->indexqualorig =
-		ExecInitQual(node->indexqualorig, (PlanState *) indexstate);
+		ExecInitQual(node->indexqualorig, (PlanState *) indexstate, NULL);
 	indexstate->indexorderbyorig =
 		ExecInitExprList(node->indexorderbyorig, (PlanState *) indexstate);
 
@@ -1230,6 +1230,10 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 		int			indnkeyatts;
 
 		indnkeyatts = IndexRelationGetNumberOfKeyAttributes(index);
+
+		/*
+		 * do not check for cached expressions because they do not contain vars
+		 */
 		if (IsA(clause, OpExpr))
 		{
 			/* indexkey op const or indexkey op expression */
@@ -1276,8 +1280,8 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			 */
 			rightop = (Expr *) get_rightop(clause);
 
-			if (rightop && IsA(rightop, RelabelType))
-				rightop = ((RelabelType *) rightop)->arg;
+			if (rightop && IsAIfCached(rightop, RelabelType))
+				rightop = castNodeIfCached(RelabelType, rightop)->arg;
 
 			Assert(rightop != NULL);
 
@@ -1308,7 +1312,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 				}
 				runtime_keys[n_runtime_keys].scan_key = this_scan_key;
 				runtime_keys[n_runtime_keys].key_expr =
-					ExecInitExpr(rightop, planstate);
+					ExecInitExpr(rightop, planstate, NULL);
 				runtime_keys[n_runtime_keys].key_toastable =
 					TypeIsToastable(op_righttype);
 				n_runtime_keys++;
@@ -1406,8 +1410,12 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 				rightop = (Expr *) lfirst(rargs_cell);
 				rargs_cell = lnext(rargs_cell);
 
-				if (rightop && IsA(rightop, RelabelType))
-					rightop = ((RelabelType *) rightop)->arg;
+				/*
+				 * Do not check for cached expressions because index expressions
+				 * can only contain immutable functions.
+				 */
+				if (rightop && IsAIfCached(rightop, RelabelType))
+					rightop = castNodeIfCached(RelabelType, rightop)->arg;
 
 				Assert(rightop != NULL);
 
@@ -1438,7 +1446,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 					}
 					runtime_keys[n_runtime_keys].scan_key = this_sub_key;
 					runtime_keys[n_runtime_keys].key_expr =
-						ExecInitExpr(rightop, planstate);
+						ExecInitExpr(rightop, planstate, NULL);
 					runtime_keys[n_runtime_keys].key_toastable =
 						TypeIsToastable(op_righttype);
 					n_runtime_keys++;
@@ -1520,8 +1528,8 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			 */
 			rightop = (Expr *) lsecond(saop->args);
 
-			if (rightop && IsA(rightop, RelabelType))
-				rightop = ((RelabelType *) rightop)->arg;
+			if (rightop && IsAIfCached(rightop, RelabelType))
+				rightop = castNodeIfCached(RelabelType, rightop)->arg;
 
 			Assert(rightop != NULL);
 
@@ -1556,7 +1564,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 					}
 					runtime_keys[n_runtime_keys].scan_key = this_scan_key;
 					runtime_keys[n_runtime_keys].key_expr =
-						ExecInitExpr(rightop, planstate);
+						ExecInitExpr(rightop, planstate, NULL);
 
 					/*
 					 * Careful here: the runtime expression is not of
@@ -1574,7 +1582,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 				/* Executor has to expand the array value */
 				array_keys[n_array_keys].scan_key = this_scan_key;
 				array_keys[n_array_keys].array_expr =
-					ExecInitExpr(rightop, planstate);
+					ExecInitExpr(rightop, planstate, NULL);
 				/* the remaining fields were zeroed by palloc0 */
 				n_array_keys++;
 				scanvalue = (Datum) 0;

@@ -375,10 +375,13 @@ print_expr(const Node *expr, const List *rtable)
 		printf("%s", outputstr);
 		pfree(outputstr);
 	}
-	else if (IsA(expr, OpExpr))
+	else if (IsAIfCached(expr, OpExpr))
 	{
 		const OpExpr *e = (const OpExpr *) expr;
 		char	   *opname;
+
+		if (IsA(expr, CachedExpr))
+			e = (const OpExpr *) ((const CachedExpr *) expr)->subexpr;
 
 		opname = get_opname(e->opno);
 		if (list_length(e->args) > 1)
@@ -394,11 +397,14 @@ print_expr(const Node *expr, const List *rtable)
 			print_expr(get_leftop((const Expr *) e), rtable);
 		}
 	}
-	else if (IsA(expr, FuncExpr))
+	else if (IsAIfCached(expr, FuncExpr))
 	{
 		const FuncExpr *e = (const FuncExpr *) expr;
 		char	   *funcname;
 		ListCell   *l;
+
+		if (IsA(expr, CachedExpr))
+			e = (const FuncExpr *) ((const CachedExpr *) expr)->subexpr;
 
 		funcname = get_func_name(e->funcid);
 		printf("%s(", ((funcname != NULL) ? funcname : "(invalid function)"));

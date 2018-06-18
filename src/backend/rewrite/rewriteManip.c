@@ -307,6 +307,10 @@ contains_multiexpr_param(Node *node, void *context)
 {
 	if (node == NULL)
 		return false;
+
+	/*
+	 * Do not check the cached params because PARAM_MULTIEXPR cannot be cached.
+	 */
 	if (IsA(node, Param))
 	{
 		if (((Param *) node)->paramkind == PARAM_MULTIEXPR)
@@ -1342,6 +1346,11 @@ map_variable_attnos_mutator(Node *node,
 									 0);
 		context->sublevels_up--;
 		return (Node *) newnode;
+	}
+	else if (IsA(node, CachedExpr))
+	{
+		/* no vars in cached expressions */
+		return copyObject(node);
 	}
 	return expression_tree_mutator(node, map_variable_attnos_mutator,
 								   (void *) context);

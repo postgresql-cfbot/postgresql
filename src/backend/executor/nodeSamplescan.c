@@ -163,11 +163,11 @@ ExecInitSampleScan(SampleScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 
 	scanstate->args = ExecInitExprList(tsc->args, (PlanState *) scanstate);
 	scanstate->repeatable =
-		ExecInitExpr(tsc->repeatable, (PlanState *) scanstate);
+		ExecInitExpr(tsc->repeatable, (PlanState *) scanstate, NULL);
 
 	/*
 	 * If we don't have a REPEATABLE clause, select a random seed.  We want to

@@ -2102,15 +2102,13 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 
 		if (add_column_mode)
 		{
-			expr2 = expression_planner(expr2);
+			expr2 = expression_planner(expr2)->expr;
 			estate = CreateExecutorState();
 			exprState = ExecPrepareExpr(expr2, estate);
 			econtext = GetPerTupleExprContext(estate);
 
 			missingval = ExecEvalExpr(exprState, econtext,
 									  &missingIsNull);
-
-			FreeExecutorState(estate);
 
 			defAttStruct = TupleDescAttr(rel->rd_att, attnum - 1);
 
@@ -2130,6 +2128,8 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 															 defAttStruct->attbyval,
 															 defAttStruct->attalign));
 			}
+
+			FreeExecutorState(estate);
 
 			valuesAtt[Anum_pg_attribute_atthasmissing - 1] = !missingIsNull;
 			replacesAtt[Anum_pg_attribute_atthasmissing - 1] = true;

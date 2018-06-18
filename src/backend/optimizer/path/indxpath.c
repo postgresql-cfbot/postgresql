@@ -928,6 +928,9 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		{
 			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
+			/* This is not used for pseudoconstants */
+			Assert(!IsA(rinfo->clause, CachedExpr));
+
 			if (IsA(rinfo->clause, ScalarArrayOpExpr))
 			{
 				if (!index->amsearcharray)
@@ -1284,6 +1287,9 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 		if (!restriction_is_or_clause(rinfo))
 			continue;
 
+		/* Its leaves are RestrictInfos and they are not cacheable */
+		Assert(!IsA(rinfo->orclause, CachedExpr));
+
 		/*
 		 * We must be able to match at least one index to each of the arms of
 		 * the OR, else we can't use it.
@@ -1294,8 +1300,8 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 			Node	   *orarg = (Node *) lfirst(j);
 			List	   *indlist;
 
-			/* OR arguments should be ANDs or sub-RestrictInfos */
-			if (and_clause(orarg))
+			/* OR arguments should be non-cached ANDs or sub-RestrictInfos */
+			if (and_clause(orarg, false))
 			{
 				List	   *andargs = ((BoolExpr *) orarg)->args;
 
@@ -2344,6 +2350,9 @@ match_clause_to_indexcol(IndexOptInfo *index,
 	opfamily = index->opfamily[indexcol];
 	idxcollation = index->indexcollations[indexcol];
 
+	/* This is not used for pseudoconstants. */
+	Assert(!IsA(clause, CachedExpr));
+
 	/* First check for boolean-index cases. */
 	if (IsBooleanOpfamily(opfamily))
 	{
@@ -2357,7 +2366,7 @@ match_clause_to_indexcol(IndexOptInfo *index,
 	 * RowCompareExpr, which we pass off to match_rowcompare_to_indexcol().
 	 * Or, if the index supports it, we can handle IS NULL/NOT NULL clauses.
 	 */
-	if (is_opclause(clause))
+	if (is_opclause((Node *) clause, false))
 	{
 		leftop = get_leftop(clause);
 		rightop = get_rightop(clause);
@@ -2698,9 +2707,9 @@ match_clause_to_ordering_op(IndexOptInfo *index,
 	idxcollation = index->indexcollations[indexcol];
 
 	/*
-	 * Clause must be a binary opclause.
+	 * Clause must be a binary non-cached opclause.
 	 */
-	if (!is_opclause(clause))
+	if (!is_opclause((Node *) clause, false))
 		return NULL;
 	leftop = get_leftop(clause);
 	rightop = get_rightop(clause);
@@ -3215,8 +3224,8 @@ match_index_to_operand(Node *operand,
 	 * we can assume there is at most one RelabelType node;
 	 * eval_const_expressions() will have simplified if more than one.
 	 */
-	if (operand && IsA(operand, RelabelType))
-		operand = (Node *) ((RelabelType *) operand)->arg;
+	if (operand && IsAIfCached(operand, RelabelType))
+		operand = (Node *) castNodeIfCached(RelabelType, operand)->arg;
 
 	indkey = index->indexkeys[indexcol];
 	if (indkey != 0)
@@ -3253,6 +3262,11 @@ match_index_to_operand(Node *operand,
 		if (indexpr_item == NULL)
 			elog(ERROR, "wrong number of index expressions");
 		indexkey = (Node *) lfirst(indexpr_item);
+
+		/*
+		 * Index expressions can only contain immutable functions.
+		 */
+		Assert(!IsA(indexkey, CachedExpr));
 
 		/*
 		 * Does it match the operand?  Again, strip any relabeling.
@@ -3333,11 +3347,14 @@ match_boolean_index_clause(Node *clause,
 						   int indexcol,
 						   IndexOptInfo *index)
 {
+	/* This is not used for pseudoconstants. */
+	Assert(!IsA(clause, CachedExpr));
+
 	/* Direct match? */
 	if (match_index_to_operand(clause, indexcol, index))
 		return true;
 	/* NOT clause? */
-	if (not_clause(clause))
+	if (not_clause(clause, false))
 	{
 		if (match_index_to_operand((Node *) get_notclausearg((Expr *) clause),
 								   indexcol, index))
@@ -3589,10 +3606,10 @@ expand_indexqual_conditions(IndexOptInfo *index,
 		}
 
 		/*
-		 * Else it must be an opclause (usual case), ScalarArrayOp,
-		 * RowCompare, or NullTest
+		 * Else it must be an non-cached clause: opclause (usual case),
+		 * ScalarArrayOp, RowCompare, or NullTest
 		 */
-		if (is_opclause(clause))
+		if (is_opclause((Node *) clause, false))
 		{
 			indexquals = list_concat(indexquals,
 									 expand_indexqual_opclause(rinfo,
@@ -3643,6 +3660,9 @@ expand_boolean_index_clause(Node *clause,
 							int indexcol,
 							IndexOptInfo *index)
 {
+	/* This is not used for pseudoconstants. */
+	Assert(!IsA(clause, CachedExpr));
+
 	/* Direct match? */
 	if (match_index_to_operand(clause, indexcol, index))
 	{
@@ -3653,7 +3673,7 @@ expand_boolean_index_clause(Node *clause,
 							 InvalidOid, InvalidOid);
 	}
 	/* NOT clause? */
-	if (not_clause(clause))
+	if (not_clause(clause, false))
 	{
 		Node	   *arg = (Node *) get_notclausearg((Expr *) clause);
 

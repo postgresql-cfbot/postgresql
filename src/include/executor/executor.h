@@ -242,10 +242,13 @@ ExecProcNode(PlanState *node)
 /*
  * prototypes from functions in execExpr.c
  */
-extern ExprState *ExecInitExpr(Expr *node, PlanState *parent);
-extern ExprState *ExecInitExprWithParams(Expr *node, ParamListInfo ext_params);
-extern ExprState *ExecInitQual(List *qual, PlanState *parent);
-extern ExprState *ExecInitCheck(List *qual, PlanState *parent);
+extern ExprState *ExecInitExpr(Expr *node, PlanState *parent,
+			 List *cachedexprs);
+extern ExprState *ExecInitExprWithParams(Expr *node, ParamListInfo ext_params,
+					   List *cachedexprs);
+extern ExprState *ExecInitQual(List *qual, PlanState *parent, List *cachedexpr);
+extern ExprState *ExecInitCheck(List *qual, PlanState *parent,
+			  List *cachedexpr);
 extern List *ExecInitExprList(List *nodes, PlanState *parent);
 extern ExprState *ExecBuildAggTrans(AggState *aggstate, struct AggStatePerPhaseData *phase,
 				  bool doSort, bool doHash);
@@ -263,6 +266,8 @@ extern ExprState *ExecPrepareExpr(Expr *node, EState *estate);
 extern ExprState *ExecPrepareQual(List *qual, EState *estate);
 extern ExprState *ExecPrepareCheck(List *qual, EState *estate);
 extern List *ExecPrepareExprList(List *nodes, EState *estate);
+extern void ExecInitCachedExprs(QueryDesc *queryDesc);
+extern void ExecSetDynamicallyPlannedCachedExprs(ExprState *state);
 
 /*
  * ExecEvalExpr

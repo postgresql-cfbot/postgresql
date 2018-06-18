@@ -349,6 +349,15 @@ typedef struct ExprEvalStep
 		{
 			int			paramid;	/* numeric ID for parameter */
 			Oid			paramtype;	/* OID of parameter's datatype */
+
+			/*
+			 * Usually plans for all cached expressions are handled during query
+			 * planning and they are compiled separatly. But sometimes they are
+			 * used in dynamically loaded plans (for example, domain constraints
+			 * plans). In this case all information about them is stored in
+			 * ExprState, not in EState.
+			 */
+			bool		dynamically_planned;
 		}			param;
 
 		/* for EEOP_PARAM_CALLBACK */
@@ -509,10 +518,12 @@ typedef struct ExprEvalStep
 			/* name of constraint */
 			char	   *constraintname;
 			/* where the result of a CHECK constraint will be stored */
-			Datum	   *checkvalue;
-			bool	   *checknull;
+			Datum		checkvalue;
+			bool		checknull;
 			/* OID of domain type */
 			Oid			resulttype;
+			/* NULL for EEOP_DOMAIN_NOTNULL */
+			ExprState  *check_exprstate;
 		}			domaincheck;
 
 		/* for EEOP_CONVERT_ROWTYPE */
@@ -726,7 +737,8 @@ extern void ExecEvalConvertRowtype(ExprState *state, ExprEvalStep *op,
 					   ExprContext *econtext);
 extern void ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConstraintNotNull(ExprState *state, ExprEvalStep *op);
-extern void ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op,
+						ExprContext *econtext);
 extern void ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubPlan(ExprState *state, ExprEvalStep *op,
@@ -744,5 +756,7 @@ extern void ExecEvalAggOrderedTransDatum(ExprState *state, ExprEvalStep *op,
 							 ExprContext *econtext);
 extern void ExecEvalAggOrderedTransTuple(ExprState *state, ExprEvalStep *op,
 							 ExprContext *econtext);
+extern void ExecEvalCachedExpr(ExprState *state, ExprEvalStep *op,
+				   ExprContext *econtext);
 
 #endif							/* EXEC_EXPR_H */

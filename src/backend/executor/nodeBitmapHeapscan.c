@@ -937,9 +937,9 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate);
+		ExecInitQual(node->scan.plan.qual, (PlanState *) scanstate, NULL);
 	scanstate->bitmapqualorig =
-		ExecInitQual(node->bitmapqualorig, (PlanState *) scanstate);
+		ExecInitQual(node->bitmapqualorig, (PlanState *) scanstate, NULL);
 
 	/*
 	 * Determine the maximum for prefetch_target.  If the tablespace has a

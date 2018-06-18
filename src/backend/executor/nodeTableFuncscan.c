@@ -159,7 +159,7 @@ ExecInitTableFuncScan(TableFuncScan *node, EState *estate, int eflags)
 	 * initialize child expressions
 	 */
 	scanstate->ss.ps.qual =
-		ExecInitQual(node->scan.plan.qual, &scanstate->ss.ps);
+		ExecInitQual(node->scan.plan.qual, &scanstate->ss.ps, NULL);
 
 	/* Only XMLTABLE is supported currently */
 	scanstate->routine = &XmlTableRoutine;
@@ -175,9 +175,9 @@ ExecInitTableFuncScan(TableFuncScan *node, EState *estate, int eflags)
 	scanstate->ns_uris =
 		ExecInitExprList(tf->ns_uris, (PlanState *) scanstate);
 	scanstate->docexpr =
-		ExecInitExpr((Expr *) tf->docexpr, (PlanState *) scanstate);
+		ExecInitExpr((Expr *) tf->docexpr, (PlanState *) scanstate, NULL);
 	scanstate->rowexpr =
-		ExecInitExpr((Expr *) tf->rowexpr, (PlanState *) scanstate);
+		ExecInitExpr((Expr *) tf->rowexpr, (PlanState *) scanstate, NULL);
 	scanstate->colexprs =
 		ExecInitExprList(tf->colexprs, (PlanState *) scanstate);
 	scanstate->coldefexprs =

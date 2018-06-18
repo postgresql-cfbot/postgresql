@@ -5722,7 +5722,7 @@ get_rule_sortgroupclause(Index ref, List *tlist, bool force_colno,
 		 * itself. (We can't skip the parens.)
 		 */
 		bool		need_paren = (PRETTY_PAREN(context)
-								  || IsA(expr, FuncExpr)
+								  || IsAIfCached(expr, FuncExpr)
 								  ||IsA(expr, Aggref)
 								  ||IsA(expr, WindowFunc));
 
@@ -6333,7 +6333,8 @@ get_update_query_targetlist_def(Query *query, List *targetList,
 			 * those there could be an implicit type coercion.  Because we
 			 * would ignore implicit type coercions anyway, we don't need to
 			 * be as careful as processIndirection() is about descending past
-			 * implicit CoerceToDomains.
+			 * implicit CoerceToDomains. Do not check if there're cached
+			 * expressions because PARAM_MULTIEXPR cannot be cached.
 			 */
 			expr = (Node *) tle->expr;
 			while (expr)
@@ -6797,9 +6798,9 @@ get_name_for_var_field(Var *var, int fieldno,
 	 * If it's a RowExpr that was expanded from a whole-row Var, use the
 	 * column names attached to it.
 	 */
-	if (IsA(var, RowExpr))
+	if (IsAIfCached(var, RowExpr))
 	{
-		RowExpr    *r = (RowExpr *) var;
+		RowExpr    *r = castNodeIfCached(RowExpr, var);
 
 		if (fieldno > 0 && fieldno <= list_length(r->colnames))
 			return strVal(list_nth(r->colnames, fieldno - 1));
@@ -6807,6 +6808,9 @@ get_name_for_var_field(Var *var, int fieldno,
 
 	/*
 	 * If it's a Param of type RECORD, try to find what the Param refers to.
+	 *
+	 * Do not check if this is a cached param as we only check PARAM_EXEC and
+	 * they cannot be cached.
 	 */
 	if (IsA(var, Param))
 	{
@@ -7312,7 +7316,7 @@ get_parameter(Param *param, deparse_context *context)
 		 */
 		need_paren = !(IsA(expr, Var) ||
 					   IsA(expr, Aggref) ||
-					   IsA(expr, Param));
+					   IsAIfCached(expr, Param));
 		if (need_paren)
 			appendStringInfoChar(context->buf, '(');
 
@@ -7445,6 +7449,7 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 					bool		is_hipriop;
 					bool		is_lopriparent;
 					bool		is_hipriparent;
+					Node	   *first_parent_arg;
 
 					op = get_simple_binary_op_name((OpExpr *) node);
 					if (!op)
@@ -7473,9 +7478,18 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 
 					/*
 					 * Operators are same priority --- can skip parens only if
-					 * we have (a - b) - c, not a - (b - c).
+					 * we have (a - b) - c, not a - (b - c). Note that the
+					 * arguments can be cached.
 					 */
-					if (node == (Node *) linitial(((OpExpr *) parentNode)->args))
+					first_parent_arg =
+						(Node *) linitial(((OpExpr *) parentNode)->args);
+					if (IsA(first_parent_arg, CachedExpr))
+					{
+						first_parent_arg =
+							(Node *) ((CachedExpr *) first_parent_arg)->subexpr;
+					}
+
+					if (node == first_parent_arg)
 						return true;
 
 					return false;
@@ -7565,6 +7579,16 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 				default:
 					return false;
 			}
+
+		case T_CachedExpr:
+
+			/*
+			 * Since the cached expression is created only for internal use,
+			 * forget about it and process its subexpression.
+			 */
+			return isSimpleNode((Node *) ((CachedExpr *) node)->subexpr,
+								parentNode,
+								prettyFlags);
 
 		default:
 			break;
@@ -7737,6 +7761,19 @@ get_rule_expr(Node *node, deparse_context *context,
 			get_windowfunc_expr((WindowFunc *) node, context);
 			break;
 
+		case T_CachedExpr:
+			{
+				CachedExpr *cachedexpr = (CachedExpr *) node;
+
+				/*
+				 * Since the cached expression is created only for internal use,
+				 * forget about it and deparse its subexpression.
+				 */
+				get_rule_expr((Node *) cachedexpr->subexpr, context,
+							  showimplicit);
+			}
+			break;
+
 		case T_ArrayRef:
 			{
 				ArrayRef   *aref = (ArrayRef *) node;
@@ -7748,8 +7785,9 @@ get_rule_expr(Node *node, deparse_context *context,
 				 * within a composite column.  Since we already punted on
 				 * displaying the FieldStore's target information, just punt
 				 * here too, and display only the assignment source
-				 * expression.
+				 * expression. Such cases are not cached.
 				 */
+				Assert(!IsACached(aref->refexpr, CaseTestExpr));
 				if (IsA(aref->refexpr, CaseTestExpr))
 				{
 					Assert(aref->refassgnexpr);
@@ -7764,7 +7802,7 @@ get_rule_expr(Node *node, deparse_context *context,
 				 * *must* parenthesize to avoid confusion.)
 				 */
 				need_parens = !IsA(aref->refexpr, Var) &&
-					!IsA(aref->refexpr, FieldSelect);
+					!IsAIfCached(aref->refexpr, FieldSelect);
 				if (need_parens)
 					appendStringInfoChar(buf, '(');
 				get_rule_expr((Node *) aref->refexpr, context, showimplicit);
@@ -8000,7 +8038,8 @@ get_rule_expr(Node *node, deparse_context *context,
 				 * WRONG to not parenthesize a Var argument; simplicity is not
 				 * the issue here, having the right number of names is.
 				 */
-				need_parens = !IsA(arg, ArrayRef) &&!IsA(arg, FieldSelect);
+				need_parens = !IsAIfCached(arg, ArrayRef) &&
+							  !IsAIfCached(arg, FieldSelect);
 				if (need_parens)
 					appendStringInfoChar(buf, '(');
 				get_rule_expr(arg, context, true);
@@ -8178,12 +8217,14 @@ get_rule_expr(Node *node, deparse_context *context,
 						 * inline function).  If we don't recognize the form
 						 * of the WHEN clause, just punt and display it as-is.
 						 */
-						if (IsA(w, OpExpr))
+						if (IsAIfCached(w, OpExpr))
 						{
-							List	   *args = ((OpExpr *) w)->args;
+							List	   *args =
+								castNodeIfCached(OpExpr, w)->args;
 
 							if (list_length(args) == 2 &&
-								IsA(strip_implicit_coercions(linitial(args)),
+								IsAIfCached(
+									strip_implicit_coercions(linitial(args)),
 									CaseTestExpr))
 								w = (Node *) lsecond(args);
 						}
@@ -8749,6 +8790,9 @@ get_rule_expr(Node *node, deparse_context *context,
 				save_varprefix = context->varprefix;
 				context->varprefix = false;
 
+				/* Index expressions can only contain immutable functions */
+				Assert(!IsA(iexpr->expr, CachedExpr));
+
 				/*
 				 * Parenthesize the element unless it's a simple Var or a bare
 				 * function call.  Follows pg_get_indexdef_worker().
@@ -8940,6 +8984,8 @@ looks_like_function(Node *node)
 		case T_XmlExpr:
 			/* these are all accepted by func_expr_common_subexpr */
 			return true;
+		case T_CachedExpr:
+			return looks_like_function((Node *) ((CachedExpr *) node)->subexpr);
 		default:
 			break;
 	}
@@ -9575,6 +9621,7 @@ get_sublink_expr(SubLink *sublink, deparse_context *context)
 			sep = "";
 			foreach(l, ((BoolExpr *) sublink->testexpr)->args)
 			{
+				/* this is not used for pseudoconstants */
 				OpExpr	   *opexpr = lfirst_node(OpExpr, l);
 
 				appendStringInfoString(buf, sep);
@@ -10415,12 +10462,16 @@ processIndirection(Node *node, deparse_context *context)
 			 */
 			node = (Node *) linitial(fstore->newvals);
 		}
-		else if (IsA(node, ArrayRef))
+		else if (IsAIfCached(node, ArrayRef))
 		{
-			ArrayRef   *aref = (ArrayRef *) node;
+			ArrayRef   *aref = castNodeIfCached(ArrayRef, node);
 
 			if (aref->refassgnexpr == NULL)
 				break;
+
+			/* Such cases are not cached */
+			Assert(!IsA(node, CachedExpr));
+
 			printSubscripts(aref, context);
 
 			/*

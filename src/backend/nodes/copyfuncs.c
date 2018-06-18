@@ -102,6 +102,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(utilityStmt);
 	COPY_LOCATION_FIELD(stmt_location);
 	COPY_LOCATION_FIELD(stmt_len);
+	COPY_NODE_FIELD(cachedExprs);
 
 	return newnode;
 }
@@ -1190,6 +1191,20 @@ _copyPlanInvalItem(const PlanInvalItem *from)
 	return newnode;
 }
 
+/*
+ * _copyPlannedExpr
+ */
+static PlannedExpr *
+_copyPlannedExpr(const PlannedExpr *from)
+{
+	PlannedExpr *newnode = makeNode(PlannedExpr);
+
+	COPY_NODE_FIELD(expr);
+	COPY_NODE_FIELD(cachedExprs);
+
+	return newnode;
+}
+
 /* ****************************************************************
  *					   primnodes.h copy functions
  * ****************************************************************
@@ -1420,6 +1435,20 @@ _copyWindowFunc(const WindowFunc *from)
 	COPY_SCALAR_FIELD(winstar);
 	COPY_SCALAR_FIELD(winagg);
 	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
+/*
+ * _copyCachedExpr
+ */
+static CachedExpr *
+_copyCachedExpr(const CachedExpr *from)
+{
+	CachedExpr *newnode = makeNode(CachedExpr);
+
+	COPY_NODE_FIELD(subexpr);
+	COPY_SCALAR_FIELD(cached_id);
 
 	return newnode;
 }
@@ -4904,6 +4933,9 @@ copyObjectImpl(const void *from)
 		case T_PlanInvalItem:
 			retval = _copyPlanInvalItem(from);
 			break;
+		case T_PlannedExpr:
+			retval = _copyPlannedExpr(from);
+			break;
 
 			/*
 			 * PRIMITIVE NODES
@@ -4937,6 +4969,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_WindowFunc:
 			retval = _copyWindowFunc(from);
+			break;
+		case T_CachedExpr:
+			retval = _copyCachedExpr(from);
 			break;
 		case T_ArrayRef:
 			retval = _copyArrayRef(from);

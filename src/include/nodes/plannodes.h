@@ -98,6 +98,9 @@ typedef struct PlannedStmt
 	/* statement location in source string (copied from Query) */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
+
+	List	   *cachedExprs;	/* list of non-internal cached expressions, or
+								 * NIL */
 } PlannedStmt;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -1061,5 +1064,21 @@ typedef struct PlanInvalItem
 	int			cacheId;		/* a syscache ID, see utils/syscache.h */
 	uint32		hashValue;		/* hash value of object's cache lookup key */
 } PlanInvalItem;
+
+/*
+ * Planned expression
+ *
+ * Sometimes standalone expressions are planned (see function
+ * expression_planner) and executed (see, for example, the function
+ * ExecPrepareExpr). In these cases we store all the non-internal cached
+ * expressions separatly to initialize and execute them as PARAM_EXEC.
+ */
+typedef struct PlannedExpr
+{
+	NodeTag		type;
+	Expr	   *expr;			/* expression for execution */
+	List	   *cachedExprs;	/* list of non-internal cached expressions, or
+								 * NIL */
+} PlannedExpr;
 
 #endif							/* PLANNODES_H */

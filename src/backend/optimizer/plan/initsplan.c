@@ -1481,7 +1481,7 @@ compute_semijoin_info(SpecialJoinInfo *sjinfo, List *clause)
 		Relids		all_varnos;
 		Oid			opinputtype;
 
-		/* Is it a binary opclause? */
+		/* Is it a binary non-cached opclause? */
 		if (!IsA(op, OpExpr) ||
 			list_length(op->args) != 2)
 		{
@@ -1503,7 +1503,7 @@ compute_semijoin_info(SpecialJoinInfo *sjinfo, List *clause)
 			return;
 		}
 
-		/* Extract data from binary opclause */
+		/* Extract data from binary non-cached opclause */
 		opno = op->opno;
 		left_expr = linitial(op->args);
 		right_expr = lsecond(op->args);
@@ -2343,6 +2343,13 @@ process_implied_equality(PlannerInfo *root,
 	{
 		clause = (Expr *) eval_const_expressions(root, (Node *) clause);
 
+		/*
+		 * Store all non-internal cached expressions separatly for the
+		 * executor's purposes.
+		 */
+		set_non_internal_cachedexprs_walker((Node *) clause,
+											&(root->glob->cachedExprs));
+
 		/* If we produced const TRUE, just drop the clause */
 		if (clause && IsA(clause, Const))
 		{
@@ -2517,7 +2524,9 @@ match_foreign_keys_to_quals(PlannerInfo *root)
 				if (rinfo->outerjoin_delayed)
 					continue;
 
-				/* Only binary OpExprs are useful for consideration */
+				/*
+				 * Only binary non-cached OpExprs are useful for consideration.
+				 */
 				if (!IsA(clause, OpExpr) ||
 					list_length(clause->args) != 2)
 					continue;
@@ -2613,7 +2622,7 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 
 	if (restrictinfo->pseudoconstant)
 		return;
-	if (!is_opclause(clause))
+	if (!is_opclause((Node *) clause, false))
 		return;
 	if (list_length(((OpExpr *) clause)->args) != 2)
 		return;
@@ -2650,7 +2659,7 @@ check_hashjoinable(RestrictInfo *restrictinfo)
 
 	if (restrictinfo->pseudoconstant)
 		return;
-	if (!is_opclause(clause))
+	if (!is_opclause((Node *) clause, false))
 		return;
 	if (list_length(((OpExpr *) clause)->args) != 2)
 		return;

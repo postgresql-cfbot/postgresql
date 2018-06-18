@@ -88,4 +88,6 @@ extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int loc
 
 extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols);
 
+extern CachedExpr *makeCachedExpr(CacheableExpr *subexpr);
+
 #endif							/* MAKEFUNC_H */

@@ -420,7 +420,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate,
 		{
 			WithCheckOption *wco = castNode(WithCheckOption, lfirst(ll));
 			ExprState  *wcoExpr = ExecInitQual(castNode(List, wco->qual),
-											   &mtstate->ps);
+											   &mtstate->ps, NULL);
 
 			wcoExprs = lappend(wcoExprs, wcoExpr);
 		}
@@ -646,7 +646,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate,
 											&found_whole_row);
 					/* We ignore the value of found_whole_row. */
 					leaf_part_rri->ri_onConflict->oc_WhereClause =
-						ExecInitQual((List *) clause, &mtstate->ps);
+						ExecInitQual((List *) clause, &mtstate->ps, NULL);
 				}
 			}
 		}
@@ -1502,7 +1502,7 @@ ExecSetupPartitionPruneState(PlanState *planstate, List *partitionpruneinfo)
 					stateidx = PruneCxtStateIdx(partnatts,
 												step->step.step_id, keyno);
 					context->exprstates[stateidx] =
-						ExecInitExpr(expr, context->planstate);
+						ExecInitExpr(expr, context->planstate, NULL);
 				}
 				keyno++;
 			}

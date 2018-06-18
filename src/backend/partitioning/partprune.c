@@ -386,7 +386,7 @@ gen_partprune_steps(RelOptInfo *rel, List *clauses, bool *contradictory)
 	{
 		List	   *partqual = rel->partition_qual;
 
-		partqual = (List *) expression_planner((Expr *) partqual);
+		partqual = (List *) expression_planner((Expr *) partqual)->expr;
 
 		/* Fix Vars to have the desired varno */
 		if (rel->relid != 1)
@@ -621,7 +621,7 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 		}
 
 		/* Get the BoolExpr's out of the way. */
-		if (IsA(clause, BoolExpr))
+		if (IsAIfCached(clause, BoolExpr))
 		{
 			/*
 			 * Generate steps for arguments.
@@ -631,7 +631,7 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 			 * independently, collect their step IDs to be stored in the
 			 * combine step we'll be creating.
 			 */
-			if (or_clause((Node *) clause))
+			if (or_clause((Node *) clause, true))
 			{
 				List	   *arg_stepids = NIL;
 				bool		all_args_contradictory = true;
@@ -641,7 +641,7 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 				 * Get pruning step for each arg.  If we get contradictory for
 				 * all args, it means the OR expression is false as a whole.
 				 */
-				foreach(lc1, ((BoolExpr *) clause)->args)
+				foreach(lc1, castNodeIfCached(BoolExpr, clause)->args)
 				{
 					Expr	   *arg = lfirst(lc1);
 					bool		arg_contradictory;
@@ -689,7 +689,8 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 						if (partconstr)
 						{
 							partconstr = (List *)
-								expression_planner((Expr *) partconstr);
+								expression_planner((Expr *) partconstr)->expr;
+
 							if (rel->relid != 1)
 								ChangeVarNodes((Node *) partconstr, 1,
 											   rel->relid, 0);
@@ -721,9 +722,9 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 				}
 				continue;
 			}
-			else if (and_clause((Node *) clause))
+			else if (and_clause((Node *) clause, true))
 			{
-				List	   *args = ((BoolExpr *) clause)->args;
+				List	   *args = castNodeIfCached(BoolExpr, clause)->args;
 				List	   *argsteps,
 						   *arg_stepids = NIL;
 				ListCell   *lc1;
@@ -1414,10 +1415,10 @@ match_clause_to_partition_key(RelOptInfo *rel,
 
 		return PARTCLAUSE_MATCH_CLAUSE;
 	}
-	else if (IsA(clause, OpExpr) &&
-			 list_length(((OpExpr *) clause)->args) == 2)
+	else if (IsAIfCached(clause, OpExpr) &&
+			 list_length(castNodeIfCached(OpExpr, clause)->args) == 2)
 	{
-		OpExpr	   *opclause = (OpExpr *) clause;
+		OpExpr	   *opclause = castNodeIfCached(OpExpr, clause);
 		Expr	   *leftop,
 				   *rightop;
 		Oid			op_lefttype,
@@ -1430,11 +1431,11 @@ match_clause_to_partition_key(RelOptInfo *rel,
 		PartClauseInfo *partclause;
 
 		leftop = (Expr *) get_leftop(clause);
-		if (IsA(leftop, RelabelType))
-			leftop = ((RelabelType *) leftop)->arg;
+		if (IsAIfCached(leftop, RelabelType))
+			leftop = castNodeIfCached(RelabelType, leftop)->arg;
 		rightop = (Expr *) get_rightop(clause);
-		if (IsA(rightop, RelabelType))
-			rightop = ((RelabelType *) rightop)->arg;
+		if (IsAIfCached(rightop, RelabelType))
+			rightop = castNodeIfCached(RelabelType, rightop)->arg;
 
 		/* check if the clause matches this partition key */
 		if (equal(leftop, partkey))
@@ -1592,9 +1593,9 @@ match_clause_to_partition_key(RelOptInfo *rel,
 
 		return PARTCLAUSE_MATCH_CLAUSE;
 	}
-	else if (IsA(clause, ScalarArrayOpExpr))
+	else if (IsAIfCached(clause, ScalarArrayOpExpr))
 	{
-		ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+		ScalarArrayOpExpr *saop = castNodeIfCached(ScalarArrayOpExpr, clause);
 		Oid			saop_op = saop->opno;
 		Oid			saop_coll = saop->inputcollid;
 		Expr	   *leftop = (Expr *) linitial(saop->args),
@@ -1604,8 +1605,8 @@ match_clause_to_partition_key(RelOptInfo *rel,
 		ListCell   *lc1;
 		bool		contradictory;
 
-		if (IsA(leftop, RelabelType))
-			leftop = ((RelabelType *) leftop)->arg;
+		if (IsAIfCached(leftop, RelabelType))
+			leftop = castNodeIfCached(RelabelType, leftop)->arg;
 
 		/* Check it matches this partition key */
 		if (!equal(leftop, partkey) ||
@@ -1696,9 +1697,9 @@ match_clause_to_partition_key(RelOptInfo *rel,
 				elem_exprs = lappend(elem_exprs, elem_expr);
 			}
 		}
-		else if (IsA(rightop, ArrayExpr))
+		else if (IsAIfCached(rightop, ArrayExpr))
 		{
-			ArrayExpr  *arrexpr = castNode(ArrayExpr, rightop);
+			ArrayExpr  *arrexpr = castNodeIfCached(ArrayExpr, rightop);
 
 			/*
 			 * For a nested ArrayExpr, we don't know how to get the actual
@@ -1749,13 +1750,13 @@ match_clause_to_partition_key(RelOptInfo *rel,
 			return PARTCLAUSE_UNSUPPORTED;	/* step generation failed */
 		return PARTCLAUSE_MATCH_STEPS;
 	}
-	else if (IsA(clause, NullTest))
+	else if (IsAIfCached(clause, NullTest))
 	{
-		NullTest   *nulltest = (NullTest *) clause;
+		NullTest   *nulltest = castNodeIfCached(NullTest, clause);
 		Expr	   *arg = nulltest->arg;
 
-		if (IsA(arg, RelabelType))
-			arg = ((RelabelType *) arg)->arg;
+		if (IsAIfCached(arg, RelabelType))
+			arg = castNodeIfCached(RelabelType, arg)->arg;
 
 		/* Does arg match with this partition key column? */
 		if (!equal(arg, partkey))
@@ -2705,9 +2706,9 @@ pull_partkey_params(PartitionPruneInfo *pinfo, List *steps)
 		{
 			Expr	   *expr = lfirst(lc2);
 
-			if (IsA(expr, Param))
+			if (IsAIfCached(expr, Param))
 			{
-				Param	   *param = (Param *) expr;
+				Param	   *param = castNodeIfCached(Param, expr);
 
 				switch (param->paramkind)
 				{
@@ -2968,20 +2969,27 @@ match_boolean_partition_clause(Oid partopfamily, Expr *clause, Expr *partkey,
 {
 	Expr	   *leftop;
 
+	/* Partition expressions can only contain immutable functions */
+	Assert(!IsA(partkey, CachedExpr));
+
 	*outconst = NULL;
 
 	if (!IsBooleanOpfamily(partopfamily))
 		return false;
 
-	if (IsA(clause, BooleanTest))
+	if (IsAIfCached(clause, BooleanTest))
 	{
-		BooleanTest *btest = (BooleanTest *) clause;
+		BooleanTest *btest = castNodeIfCached(BooleanTest, clause);
 
 		/* Only IS [NOT] TRUE/FALSE are any good to us */
 		if (btest->booltesttype == IS_UNKNOWN ||
 			btest->booltesttype == IS_NOT_UNKNOWN)
 			return false;
 
+		/*
+		 * Do not worry about cached expressions because in any case they cannot
+		 * be equal to the non-cached partkey (see below).
+		 */
 		leftop = btest->arg;
 		if (IsA(leftop, RelabelType))
 			leftop = ((RelabelType *) leftop)->arg;
@@ -2997,7 +3005,11 @@ match_boolean_partition_clause(Oid partopfamily, Expr *clause, Expr *partkey,
 	}
 	else
 	{
-		bool		is_not_clause = not_clause((Node *) clause);
+		/*
+		 * Do not worry about cached expressions because in any case they cannot
+		 * be equal to the non-cached partkey (see below).
+		 */
+		bool		is_not_clause = not_clause((Node *) clause, false);
 
 		leftop = is_not_clause ? get_notclausearg(clause) : clause;
 
@@ -3059,6 +3071,12 @@ partkey_datum_from_expr(PartitionPruneContext *context,
 				return true;
 			}
 			break;
+
+		case T_CachedExpr:
+			return partkey_datum_from_expr(
+										context,
+										(Expr *) ((CachedExpr *) expr)->subexpr,
+										stateidx, value);
 
 		default:
 			break;

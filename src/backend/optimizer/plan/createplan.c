@@ -3050,13 +3050,13 @@ create_bitmap_subplan(PlannerInfo *root, Path *bitmapqual,
 		else if (list_length(subquals) <= 1)
 			*qual = subquals;
 		else
-			*qual = list_make1(make_orclause(subquals));
+			*qual = list_make1(make_orclause(subquals, false));
 		if (const_true_subindexqual)
 			*indexqual = NIL;
 		else if (list_length(subindexquals) <= 1)
 			*indexqual = subindexquals;
 		else
-			*indexqual = list_make1(make_orclause(subindexquals));
+			*indexqual = list_make1(make_orclause(subindexquals, false));
 		*indexECs = NIL;
 	}
 	else if (IsA(bitmapqual, IndexPath))
@@ -3160,7 +3160,7 @@ create_tidscan_plan(PlannerInfo *root, TidPath *best_path,
 	 */
 	ortidquals = tidquals;
 	if (list_length(ortidquals) > 1)
-		ortidquals = list_make1(make_orclause(ortidquals));
+		ortidquals = list_make1(make_orclause(ortidquals, false));
 	scan_clauses = list_difference(scan_clauses, ortidquals);
 
 	scan_plan = make_tidscan(tlist,
@@ -4266,7 +4266,9 @@ create_hashjoin_plan(PlannerInfo *root,
 		OpExpr	   *clause = (OpExpr *) linitial(hashclauses);
 		Node	   *node;
 
-		Assert(is_opclause(clause));
+		/* This is not used for pseudoconstants */
+		Assert(is_opclause((Node *) clause, false));
+
 		node = (Node *) linitial(clause->args);
 		if (IsA(node, RelabelType))
 			node = (Node *) ((RelabelType *) node)->arg;
@@ -4448,6 +4450,11 @@ replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
 		root->curOuterParams = lappend(root->curOuterParams, nlp);
 		/* And return the replacement Param */
 		return (Node *) param;
+	}
+	if (IsA(node, CachedExpr))
+	{
+		/* Don't examine cached expressions since they do not contain vars */
+		return copyObject(node);
 	}
 	return expression_tree_mutator(node,
 								   replace_nestloop_params_mutator,
@@ -4757,8 +4764,8 @@ fix_indexqual_operand(Node *node, IndexOptInfo *index, int indexcol)
 	/*
 	 * Remove any binary-compatible relabeling of the indexkey
 	 */
-	if (IsA(node, RelabelType))
-		node = (Node *) ((RelabelType *) node)->arg;
+	if (IsAIfCached(node, RelabelType))
+		node = (Node *) castNodeIfCached(RelabelType, node)->arg;
 
 	Assert(indexcol >= 0 && indexcol < index->ncolumns);
 
@@ -4791,8 +4798,13 @@ fix_indexqual_operand(Node *node, IndexOptInfo *index, int indexcol)
 				Node	   *indexkey;
 
 				indexkey = (Node *) lfirst(indexpr_item);
+
+				/* Index expressions can only contain immutable functions */
+				Assert(!IsA(indexkey, CachedExpr));
+
 				if (indexkey && IsA(indexkey, RelabelType))
 					indexkey = (Node *) ((RelabelType *) indexkey)->arg;
+
 				if (equal(node, indexkey))
 				{
 					result = makeVar(INDEX_VAR, indexcol + 1,
@@ -4833,7 +4845,9 @@ get_switched_clauses(List *clauses, Relids outerrelids)
 		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(l);
 		OpExpr	   *clause = (OpExpr *) restrictinfo->clause;
 
-		Assert(is_opclause(clause));
+		/* This is not used for pseudoconstants */
+		Assert(is_opclause((Node *) clause, false));
+
 		if (bms_is_subset(restrictinfo->right_relids, outerrelids))
 		{
 			/*
@@ -5924,7 +5938,11 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 	Expr	   *tlexpr;
 	ListCell   *lc;
 
-	/* We ignore binary-compatible relabeling on both ends */
+	/*
+	 * We ignore binary-compatible relabeling on both ends.
+	 * Do not worry about cached expressions because in any case they cannot be
+	 * equal to the non-pseudoconstant member of EquivalenceClass (see below).
+	 */
 	tlexpr = tle->expr;
 	while (tlexpr && IsA(tlexpr, RelabelType))
 		tlexpr = ((RelabelType *) tlexpr)->arg;
@@ -5936,7 +5954,8 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 
 		/*
 		 * We shouldn't be trying to sort by an equivalence class that
-		 * contains a constant, so no need to consider such cases any further.
+		 * contains a constant (including cached expressions), so no need to
+		 * consider such cases any further.
 		 */
 		if (em->em_is_const)
 			continue;

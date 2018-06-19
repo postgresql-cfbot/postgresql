@@ -1266,6 +1266,8 @@ MemoryContextCounters
 MemoryContextData
 MemoryContextMethods
 MemoryStatsPrintFunc
+MergeAction
+MergeActionState
 MergeAppend
 MergeAppendPath
 MergeAppendState
@@ -1273,6 +1275,7 @@ MergeJoin
 MergeJoinClause
 MergeJoinState
 MergePath
+MergeStmt
 MergeScanSelCache
 MetaCommand
 MinMaxAggInfo

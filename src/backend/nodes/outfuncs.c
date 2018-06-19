@@ -375,6 +375,7 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_BOOL_FIELD(partColsUpdated);
 	WRITE_NODE_FIELD(resultRelations);
+	WRITE_INT_FIELD(mergeTargetRelation);
 	WRITE_INT_FIELD(resultRelIndex);
 	WRITE_INT_FIELD(rootResultRelIndex);
 	WRITE_NODE_FIELD(plans);
@@ -390,6 +391,22 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(onConflictWhere);
 	WRITE_UINT_FIELD(exclRelRTI);
 	WRITE_NODE_FIELD(exclRelTlist);
+	WRITE_NODE_FIELD(mergeSourceTargetList);
+	WRITE_NODE_FIELD(mergeActionList);
+}
+
+static void
+_outMergeWhenClause(StringInfo str, const MergeWhenClause *node)
+{
+	WRITE_NODE_TYPE("MERGEWHENCLAUSE");
+
+	WRITE_BOOL_FIELD(matched);
+	WRITE_ENUM_FIELD(commandType, CmdType);
+	WRITE_NODE_FIELD(condition);
+	WRITE_NODE_FIELD(targetList);
+	WRITE_NODE_FIELD(cols);
+	WRITE_NODE_FIELD(values);
+	WRITE_ENUM_FIELD(override, OverridingKind);
 }
 
 static void
@@ -1761,6 +1778,17 @@ _outOnConflictExpr(StringInfo str, const OnConflictExpr *node)
 	WRITE_NODE_FIELD(exclRelTlist);
 }
 
+static void
+_outMergeAction(StringInfo str, const MergeAction *node)
+{
+	WRITE_NODE_TYPE("MERGEACTION");
+
+	WRITE_BOOL_FIELD(matched);
+	WRITE_ENUM_FIELD(commandType, CmdType);
+	WRITE_NODE_FIELD(qual);
+	WRITE_NODE_FIELD(targetList);
+}
+
 /*****************************************************************************
  *
  *	Stuff from relation.h.
@@ -2168,6 +2196,7 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_NODE_FIELD(partitioned_rels);
 	WRITE_BOOL_FIELD(partColsUpdated);
 	WRITE_NODE_FIELD(resultRelations);
+	WRITE_INT_FIELD(mergeTargetRelation);
 	WRITE_NODE_FIELD(subpaths);
 	WRITE_NODE_FIELD(subroots);
 	WRITE_NODE_FIELD(withCheckOptionLists);
@@ -2175,6 +2204,8 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(onconflict);
 	WRITE_INT_FIELD(epqParam);
+	WRITE_NODE_FIELD(mergeSourceTargetList);
+	WRITE_NODE_FIELD(mergeActionList);
 }
 
 static void
@@ -2989,6 +3020,9 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(setOperations);
 	WRITE_NODE_FIELD(constraintDeps);
 	/* withCheckOptions intentionally omitted, see comment in parsenodes.h */
+	WRITE_INT_FIELD(mergeTarget_relation);
+	WRITE_NODE_FIELD(mergeSourceTargetList);
+	WRITE_NODE_FIELD(mergeActionList);
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_LOCATION_FIELD(stmt_len);
 }
@@ -3707,6 +3741,9 @@ outNode(StringInfo str, const void *obj)
 			case T_ModifyTable:
 				_outModifyTable(str, obj);
 				break;
+			case T_MergeWhenClause:
+				_outMergeWhenClause(str, obj);
+				break;
 			case T_Append:
 				_outAppend(str, obj);
 				break;
@@ -3991,6 +4028,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_OnConflictExpr:
 				_outOnConflictExpr(str, obj);
+				break;
+			case T_MergeAction:
+				_outMergeAction(str, obj);
 				break;
 			case T_Path:
 				_outPath(str, obj);

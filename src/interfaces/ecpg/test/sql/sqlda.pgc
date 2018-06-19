@@ -122,7 +122,7 @@ exec sql end declare section;
 	strcpy(msg, "deallocate");
 	exec sql deallocate prepare st_id1;
 
-	free(outp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	/* SQLDA test for getting ALL records into the sqlda list */
 
@@ -189,8 +189,8 @@ exec sql end declare section;
 	strcpy(msg, "deallocate");
 	exec sql deallocate prepare st_id3;
 
-	free(inp_sqlda);
-	free(outp_sqlda);
+	ECPGfreeSQLDA(inp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	/* SQLDA test for getting one record using an input descriptor
 	 * on a named connection
@@ -229,8 +229,8 @@ exec sql end declare section;
 	strcpy(msg, "deallocate");
 	exec sql deallocate prepare st_id4;
 
-	free(inp_sqlda);
-	free(outp_sqlda);
+	ECPGfreeSQLDA(inp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	strcpy(msg, "disconnect");
 	exec sql disconnect con2;

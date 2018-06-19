@@ -33,12 +33,14 @@
 typedef struct sqlvar_compat sqlvar_t;
 typedef struct sqlda_compat sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_informix(sqlda)
 #else
 
 #include "sqlda-native.h"
 typedef struct sqlvar_struct sqlvar_t;
 typedef struct sqlda_struct sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_native(sqlda)
 #endif
 
 #endif							/* ECPG_SQLDA_H */
@@ -304,7 +306,7 @@ if (sqlca.sqlcode < 0) exit (1);}
 #line 123 "sqlda.pgc"
 
 
-	free(outp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	/* SQLDA test for getting ALL records into the sqlda list */
 
@@ -421,8 +423,8 @@ if (sqlca.sqlcode < 0) exit (1);}
 #line 190 "sqlda.pgc"
 
 
-	free(inp_sqlda);
-	free(outp_sqlda);
+	ECPGfreeSQLDA(inp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	/* SQLDA test for getting one record using an input descriptor
 	 * on a named connection
@@ -490,8 +492,8 @@ if (sqlca.sqlcode < 0) exit (1);}
 #line 230 "sqlda.pgc"
 
 
-	free(inp_sqlda);
-	free(outp_sqlda);
+	ECPGfreeSQLDA(inp_sqlda);
+	ECPGfreeSQLDA(outp_sqlda);
 
 	strcpy(msg, "disconnect");
 	{ ECPGdisconnect(__LINE__, "con2");

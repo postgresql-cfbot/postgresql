@@ -29,3 +29,5 @@ ECPGget_PGconn			 26
 ECPGtransactionStatus		 27
 ECPGset_var			 28
 ECPGget_var			 29
+ECPGfreeSQLDA_native		 30
+ECPGfreeSQLDA_informix		 31

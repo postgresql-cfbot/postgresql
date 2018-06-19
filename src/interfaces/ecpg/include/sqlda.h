@@ -7,12 +7,14 @@
 typedef struct sqlvar_compat sqlvar_t;
 typedef struct sqlda_compat sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_informix(sqlda)
 #else
 
 #include "sqlda-native.h"
 typedef struct sqlvar_struct sqlvar_t;
 typedef struct sqlda_struct sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_native(sqlda)
 #endif
 
 #endif							/* ECPG_SQLDA_H */

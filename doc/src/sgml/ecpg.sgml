@@ -3891,7 +3891,7 @@ EXEC SQL DESCRIBE prepared_statement INTO mysqlda;
      <step><simpara>Fetch rows from the cursor, and store them into an output SQLDA.</simpara></step>
      <step><simpara>Read values from the output SQLDA into the host variables (with conversion if necessary).</simpara></step>
      <step><simpara>Close the cursor.</simpara></step>
-     <step><simpara>Free the memory area allocated for the input SQLDA.</simpara></step>
+     <step><simpara>Free the memory area allocated for the input and output SQLDAs.</simpara></step>
     </procedure>
 
    <sect3>
@@ -4210,6 +4210,18 @@ switch (v.sqltype)
 }
 </programlisting>
     </para>
+    <para>
+     Finally after using output SQLDA, the allocated memory area must be freed explicity.
+<programlisting>
+ECPGfreeSQLDA(sqlda1);
+</programlisting>
+    </para>
+    <para>
+     Alternatively, use the standard C library's free() function as in the example below.
+<programlisting>
+free(sqlda1);
+</programlisting>
+    </para>
    </sect3>
 
    <sect3 id="ecpg-sqlda-input">
@@ -4290,8 +4302,13 @@ EXEC SQL OPEN cur1 USING DESCRIPTOR sqlda2;
 
     <para>
      Finally, after using input SQLDAs, the allocated memory space
-     must be freed explicitly, unlike SQLDAs used for receiving query
-     results.
+     must be freed explicitly.
+<programlisting>
+ECPGfreeSQLDA(sqlda2);
+</programlisting>
+    </para>
+    <para>
+     Alternatively, use the standard C library's free() function as in the example below.
 <programlisting>
 free(sqlda2);
 </programlisting>
@@ -4583,6 +4600,7 @@ main(void)
         }
     }
 
+    ECPGfreeSQLDA(sqlda1);
     EXEC SQL CLOSE cur1;
     EXEC SQL COMMIT;
 
@@ -5870,6 +5888,20 @@ ECPG = ecpg
      <replaceable>connection_name</replaceable> can be <literal>NULL</literal>
      if a single connection is being used.
     </para>
+   </listitem>
+   <listitem>
+     <para>
+      <function>ECPGfreeSQLDA(sqlda_t *<replaceable>sqlda_ptr</replaceable>)</function>
+      free allocated memory area of an SQLDA.
+      Alternatively, you can use the standard C library's free() function.
+     </para>
+     <note>
+     <para>
+      If the result set contains more than one record, an SQLDA corresponding to each records is saved as linked list.
+      There is a possibility to free allocated memory area doubly and cause the application crash,
+      because ECPGfreeSQLDA() releases all SQLDAs associated with the specified the SQLDA.
+     </para>
+     </note>
    </listitem>
   </itemizedlist>
  </sect1>
@@ -8275,7 +8307,7 @@ EXEC SQL INCLUDE sqlda.h;
 
     EXEC SQL CLOSE mycursor;
 
-    free(sqlda); /* The main structure is all to be free(),
+    free(sqlda); /* The main structure is all to be free() or ECPGfreeSQLDA(),
                   * sqlda and sqlda-&gt;sqlvar is in one allocated area */
 </programlisting>
     For more information, see the <literal>sqlda.h</literal> header and the

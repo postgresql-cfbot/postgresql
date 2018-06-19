@@ -31,12 +31,14 @@
 typedef struct sqlvar_compat sqlvar_t;
 typedef struct sqlda_compat sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_informix(sqlda)
 #else
 
 #include "sqlda-native.h"
 typedef struct sqlvar_struct sqlvar_t;
 typedef struct sqlda_struct sqlda_t;
 
+#define ECPGfreeSQLDA(sqlda) ECPGfreeSQLDA_native(sqlda)
 #endif
 
 #endif							/* ECPG_SQLDA_H */
@@ -295,9 +297,9 @@ if (sqlca.sqlcode < 0) exit (1);
 if (sqlca.sqlcode < 0) exit (1);
 #line 127 "describe.pgc"
 
-	free(sqlda1);
-	free(sqlda2);
-	free(sqlda3);
+	ECPGfreeSQLDA(sqlda1);
+	ECPGfreeSQLDA(sqlda2);
+	ECPGfreeSQLDA(sqlda3);
 
 	{ ECPGdeallocate(__LINE__, 0, NULL, "st_id1");
 #line 132 "describe.pgc"
@@ -424,9 +426,9 @@ if (sqlca.sqlcode < 0) exit (1);
 if (sqlca.sqlcode < 0) exit (1);
 #line 180 "describe.pgc"
 
-	free(sqlda1);
-	free(sqlda2);
-	free(sqlda3);
+	ECPGfreeSQLDA(sqlda1);
+	ECPGfreeSQLDA(sqlda2);
+	ECPGfreeSQLDA(sqlda3);
 
 	{ ECPGdeallocate(__LINE__, 0, NULL, "st_id2");
 #line 185 "describe.pgc"

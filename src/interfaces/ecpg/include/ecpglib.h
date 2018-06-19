@@ -11,6 +11,8 @@
 #include "ecpgtype.h"
 #include "sqlca.h"
 #include <string.h>
+#include "sqlda-native.h"
+#include "sqlda-compat.h"
 
 #ifdef ENABLE_NLS
 extern char *ecpg_gettext(const char *msgid) pg_attribute_format_arg(1);
@@ -88,6 +90,9 @@ void	   *ECPGget_var(int number);
 
 /* dynamic result allocation */
 void		ECPGfree_auto_mem(void);
+
+void ECPGfreeSQLDA_native(struct sqlda_struct *);
+void ECPGfreeSQLDA_compat(struct sqlda_compat *);
 
 #ifdef ENABLE_THREAD_SAFETY
 void		ecpg_pthreads_init(void);

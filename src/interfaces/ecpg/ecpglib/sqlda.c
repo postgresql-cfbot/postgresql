@@ -588,3 +588,31 @@ ecpg_set_native_sqlda(int lineno, struct sqlda_struct **_sqlda, const PGresult *
 		offset = next_offset;
 	}
 }
+
+void
+ECPGfreeSQLDA_native(struct sqlda_struct *sqlda_ptr)
+{
+	struct sqlda_struct *ptr1 = sqlda_ptr;
+	struct sqlda_struct *ptr2;
+
+	while (ptr1)
+	{
+		ptr2 = ptr1->desc_next;
+		free(ptr1);
+		ptr1 = ptr2;
+	}
+}
+
+void
+ECPGfreeSQLDA_informix(struct sqlda_compat *sqlda_ptr)
+{
+	struct sqlda_compat *ptr1 = sqlda_ptr;
+	struct sqlda_compat *ptr2;
+
+	while (ptr1)
+	{
+		ptr2 = ptr1->desc_next;
+		free(ptr1);
+		ptr1 = ptr2;
+	}
+}

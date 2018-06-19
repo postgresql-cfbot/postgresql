@@ -125,9 +125,9 @@ exec sql end declare section;
 	strcpy(msg, "deallocate");
 	exec sql deallocate descriptor desc1;
 	exec sql deallocate descriptor desc2;
-	free(sqlda1);
-	free(sqlda2);
-	free(sqlda3);
+	ECPGfreeSQLDA(sqlda1);
+	ECPGfreeSQLDA(sqlda2);
+	ECPGfreeSQLDA(sqlda3);
 
 	exec sql deallocate prepare st_id1;
 
@@ -178,9 +178,9 @@ exec sql end declare section;
 	strcpy(msg, "deallocate");
 	exec sql deallocate descriptor desc1;
 	exec sql deallocate descriptor desc2;
-	free(sqlda1);
-	free(sqlda2);
-	free(sqlda3);
+	ECPGfreeSQLDA(sqlda1);
+	ECPGfreeSQLDA(sqlda2);
+	ECPGfreeSQLDA(sqlda3);
 
 	exec sql deallocate prepare st_id2;
 

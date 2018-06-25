@@ -795,7 +795,7 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	 */
 	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_SYNC);
 	if (pg_fsync(fd) != 0)
-		ereport(ERROR,
+		ereport(promote_ioerr_to_panic(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync relation mapping file \"%s\": %m",
 						mapfilename)));

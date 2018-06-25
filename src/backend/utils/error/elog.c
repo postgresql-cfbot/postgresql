@@ -692,6 +692,17 @@ errcode_for_socket_access(void)
 	return 0;					/* return value does not matter */
 }
 
+/*
+ * PostgreSQL needs to PANIC on EIO in some cases to preserve data integrity.
+ * See explanation on pg_fsync for details. This keeps that logic in one place.
+ */
+int
+promote_ioerr_to_panic(int elevel)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+	return (edata->saved_errno == EIO || edata->saved_errno == ENOSPC) ? elevel : PANIC;
+}
+
 
 /*
  * This macro handles expansion of a format string and associated parameters;

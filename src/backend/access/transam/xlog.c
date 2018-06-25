@@ -3268,7 +3268,14 @@ XLogFileInit(XLogSegNo logsegno, bool *use_existent, bool use_lock)
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
 	if (pg_fsync(fd) != 0)
 	{
+		int save_errno = errno;
+		unlink(tmppath);
 		close(fd);
+		errno = save_errno;
+		/*
+		 * This fsync failure is not PANIC-worthy because it's still a temp
+		 * file at this time.
+		 */
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
@@ -3435,7 +3442,7 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
 	if (pg_fsync(fd) != 0)
-		ereport(ERROR,
+		ereport(promote_ioerr_to_panic(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	pgstat_report_wait_end();

@@ -133,6 +133,8 @@ extern int	errcode(int sqlerrcode);
 extern int	errcode_for_file_access(void);
 extern int	errcode_for_socket_access(void);
 
+extern int  promote_ioerr_to_panic(int elevel);
+
 extern int	errmsg(const char *fmt,...) pg_attribute_printf(1, 2);
 extern int	errmsg_internal(const char *fmt,...) pg_attribute_printf(1, 2);
 
@@ -181,7 +183,6 @@ extern int	err_generic_string(int field, const char *str);
 extern int	geterrcode(void);
 extern int	geterrposition(void);
 extern int	getinternalerrposition(void);
-
 
 /*----------
  * Old-style error reporting API: to be used in this way:

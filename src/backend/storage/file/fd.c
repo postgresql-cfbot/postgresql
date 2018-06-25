@@ -353,6 +353,17 @@ pg_fsync(int fd)
 /*
  * pg_fsync_no_writethrough --- same as fsync except does nothing if
  *	enableFsync is off
+ *
+ * WARNING: It is unsafe to retry fsync() calls without repeating the preceding
+ * writes.  fsync() clears the error flag on some platforms (including Linux,
+ * true up to at least 4.14) when it reports the error to the caller. A second
+ * call may return success even though writes are lost. Many callers test the
+ * return value and PANIC on failure so that redo repeats the writes. It is
+ * safe to ERROR instead if the whole operation can be retried without needing
+ * WAL redo.
+ *
+ * See https://lwn.net/Articles/752063/
+ * and https://www.postgresql.org/message-id/CAMsr%2BYHh%2B5Oq4xziwwoEfhoTZgr07vdGG%2Bhu%3D1adXx59aTeaoQ%40mail.gmail.com
  */
 int
 pg_fsync_no_writethrough(int fd)
@@ -443,7 +454,12 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 		rc = sync_file_range(fd, offset, nbytes,
 							 SYNC_FILE_RANGE_WRITE);
 
-		/* don't error out, this is just a performance optimization */
+		/*
+		 * Don't error out, this is just a performance optimization.
+		 *
+		 * sync_file_range(SYNC_FILE_RANGE_WRITE) won't clear any error flags,
+		 * so we don't have to worry about this impacting fsync reliability.
+		 */
 		if (rc != 0)
 		{
 			ereport(WARNING,
@@ -518,7 +534,12 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 			rc = msync(p, (size_t) nbytes, MS_ASYNC);
 			if (rc != 0)
 			{
-				ereport(WARNING,
+				/*
+				 * We must panic here to preserve fsync reliability,
+				 * as msync may clear the fsync error state on some
+				 * OSes. See pg_fsync_no_writethrough().
+				 */
+				ereport(PANIC,
 						(errcode_for_file_access(),
 						 errmsg("could not flush dirty data: %m")));
 				/* NB: need to fall through to munmap()! */
@@ -1046,11 +1067,17 @@ LruDelete(File file)
 	}
 
 	/*
-	 * Close the file.  We aren't expecting this to fail; if it does, better
-	 * to leak the FD than to mess up our internal state.
+	 * Close the file.  We aren't expecting this to fail; if it does, we need
+	 * to PANIC on I/O errors for non-temporary files in case it's an an
+	 * important file. That's because NFS on Linux may do an implicit fsync()
+	 * on close() which can cause similar issues to those discussed in the
+	 * comments on pg_fsync.
+	 *
+	 * Otherwise, better to leak the FD than to mess up our internal state.
 	 */
 	if (close(vfdP->fd))
-		elog(LOG, "could not close file \"%s\": %m", vfdP->fileName);
+		elog(vfdP->fdstate & FD_DELETE_AT_CLOSE ? LOG : promote_ioerr_to_panic(LOG),
+			 "could not close file \"%s\": %m", vfdP->fileName);
 	vfdP->fd = VFD_CLOSED;
 	--nfile;
 
@@ -1754,7 +1781,14 @@ FileClose(File file)
 	{
 		/* close the file */
 		if (close(vfdP->fd))
-			elog(LOG, "could not close file \"%s\": %m", vfdP->fileName);
+		{
+			/*
+			 * We must panic on failure to close non-temporary files; see
+			 * LruDelete.
+			 */
+			elog(vfdP->fdstate & FD_DELETE_AT_CLOSE ? LOG : promote_ioerr_to_panic(LOG),
+				"could not close file \"%s\": %m", vfdP->fileName);
+		}
 
 		--nfile;
 		vfdP->fd = VFD_CLOSED;
@@ -3249,6 +3283,10 @@ looks_like_temp_rel_name(const char *name)
  * run.  However, aborting on error would result in failure to start for
  * harmless cases such as read-only files in the data directory, and that's
  * not good either.
+ *
+ * Importantly, on Linux (true in 4.14) and some other platforms, fsync errors
+ * will consume the error, causing a subsequent fsync to succeed even though
+ * the writes did not succeed. See pg_fsync_no_writethrough().
  *
  * Note we assume we're chdir'd into PGDATA to begin with.
  */

@@ -1038,7 +1038,7 @@ mdimmedsync(SMgrRelation reln, ForkNumber forknum)
 		MdfdVec    *v = &reln->md_seg_fds[forknum][segno - 1];
 
 		if (FileSync(v->mdfd_vfd, WAIT_EVENT_DATA_FILE_IMMEDIATE_SYNC) < 0)
-			ereport(ERROR,
+			ereport(promote_ioerr_to_panic(ERROR),
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m",
 							FilePathName(v->mdfd_vfd))));
@@ -1265,13 +1265,22 @@ mdsync(void)
 					 * _mdfd_getseg() and for FileSync, since fd.c might have
 					 * closed the file behind our back.
 					 *
-					 * XXX is there any point in allowing more than one retry?
-					 * Don't see one at the moment, but easy to change the
-					 * test here if so.
+					 * It's unsafe to ignore failures for other errors,
+					 * particularly EIO or (undocumented, but possible) ENOSPC.
+					 * The first fsync() will clear any error flag on dirty
+					 * buffers pending writeback and/or the file descriptor, so
+					 * a second fsync report success despite the buffers
+					 * possibly not being written. (Verified on Linux 4.14).
+					 * To cope with this we must PANIC and redo all writes
+					 * since the last successful checkpoint. See discussion at:
+					 *
+					 * https://www.postgresql.org/message-id/CAMsr%2BYHh%2B5Oq4xziwwoEfhoTZgr07vdGG%2Bhu%3D1adXx59aTeaoQ%40mail.gmail.com
+					 *
+					 * for details.
 					 */
 					if (!FILE_POSSIBLY_DELETED(errno) ||
 						failures > 0)
-						ereport(ERROR,
+						ereport(promote_ioerr_to_panic(ERROR),
 								(errcode_for_file_access(),
 								 errmsg("could not fsync file \"%s\": %m",
 										path)));
@@ -1280,6 +1289,7 @@ mdsync(void)
 								(errcode_for_file_access(),
 								 errmsg("could not fsync file \"%s\" but retrying: %m",
 										path)));
+
 					pfree(path);
 
 					/*
@@ -1444,7 +1454,7 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 				(errmsg("could not forward fsync request because request queue is full")));
 
 		if (FileSync(seg->mdfd_vfd, WAIT_EVENT_DATA_FILE_SYNC) < 0)
-			ereport(ERROR,
+			ereport(promote_ioerr_to_panic(ERROR),
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m",
 							FilePathName(seg->mdfd_vfd))));

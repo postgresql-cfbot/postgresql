@@ -830,9 +830,9 @@ SnapBuildDistributeNewCatalogSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 		 * all. We'll add a snapshot when the first change gets queued.
 		 *
 		 * NB: This works correctly even for subtransactions because
-		 * ReorderBufferCommitChild() takes care to pass the parent the base
-		 * snapshot, and while iterating the changequeue we'll get the change
-		 * from the subtxn.
+		 * ReorderBufferAssignChild() takes care to transfer the base snapshot
+		 * to the top-level transaction, and while iterating the changequeue
+		 * we'll get the change from the subtxn.
 		 */
 		if (!ReorderBufferXidHasBaseSnapshot(builder->reorder, txn->xid))
 			continue;
@@ -1094,6 +1094,7 @@ void
 SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xacts *running)
 {
 	ReorderBufferTXN *txn;
+	TransactionId oldest_xmin;
 
 	/*
 	 * If we're not consistent yet, inspect the record to see whether it
@@ -1132,9 +1133,17 @@ SnapBuildProcessRunningXacts(SnapBuild *builder, XLogRecPtr lsn, xl_running_xact
 
 	/*
 	 * Increase shared memory limits, so vacuum can work on tuples we
-	 * prevented from being pruned till now.
+	 * prevented from being pruned till now. We ask reorderbuffer which
+	 * minimal xid might still be running in snapshots of xacts currently
+	 * being reordered. If rb doesn't have any xacts with snapshots, we need
+	 * to care only about xids which will be considered as running by
+	 * snapshots we will produce later, and min of them can't be less than
+	 * oldest running xid in the record we are reading.
 	 */
-	LogicalIncreaseXminForSlot(lsn, running->oldestRunningXid);
+	oldest_xmin = ReorderBufferGetOldestXmin(builder->reorder);
+	if (oldest_xmin == InvalidTransactionId)
+		oldest_xmin = running->oldestRunningXid;
+	LogicalIncreaseXminForSlot(lsn, oldest_xmin);
 
 	/*
 	 * Also tell the slot where we can restart decoding from. We don't want to

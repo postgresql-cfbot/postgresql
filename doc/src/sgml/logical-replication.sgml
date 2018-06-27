@@ -67,6 +67,13 @@
    <listitem>
     <para>
      Replicating between cross platform PostgreSQL instances (for example
+	 Linux to Windows)
+    </para>
+   </listitem>
+   
+   <listitem>
+    <para>
+     Replicating between cross platform PostgreSQL instances (for example
      Linux to Windows)
     </para>
    </listitem>

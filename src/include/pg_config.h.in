@@ -907,6 +907,9 @@
 /* Define to use OpenSSL for random number generation */
 #undef USE_OPENSSL_RANDOM
 
+/* Define to build with Apple Secure Transport support. (--with-securetransport) */
+#undef USE_SECURETRANSPORT
+
 /* Define to 1 to build with PAM support. (--with-pam) */
 #undef USE_PAM
 

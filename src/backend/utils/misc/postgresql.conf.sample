@@ -106,6 +106,7 @@
 #ssl_dh_params_file = ''
 #ssl_passphrase_command = ''
 #ssl_passphrase_command_supports_reload = off
+#ssl_keychain_file = ''
 
 
 #------------------------------------------------------------------------------

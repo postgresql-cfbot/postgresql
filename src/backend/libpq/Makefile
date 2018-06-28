@@ -21,4 +21,9 @@ ifeq ($(with_openssl),yes)
 OBJS += be-secure-openssl.o
 endif
 
+ifeq ($(with_securetransport),yes)
+OBJS += be-secure-securetransport.o
+override CFLAGS += -framework Security -framework CoreFoundation
+endif
+
 include $(top_srcdir)/src/backend/common.mk

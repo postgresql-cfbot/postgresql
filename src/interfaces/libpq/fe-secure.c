@@ -157,7 +157,9 @@ void
 PQinitOpenSSL(int do_ssl, int do_crypto)
 {
 #ifdef USE_SSL
+#ifdef USE_OPENSSL
 	pgtls_init_library(do_ssl, do_crypto);
+#endif
 #endif
 }
 

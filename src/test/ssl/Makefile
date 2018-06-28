@@ -14,6 +14,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 export with_openssl
+export with_securetransport
 
 CERTIFICATES := server_ca server-cn-and-alt-names \
 	server-cn-only server-single-alt-name server-multiple-alt-names \
@@ -32,7 +33,7 @@ SSLFILES := $(CERTIFICATES:%=ssl/%.key) $(CERTIFICATES:%=ssl/%.crt) \
 # This target generates all the key and certificate files.
 sslfiles: $(SSLFILES)
 
-# Openssl requires a directory to put all generated certificates in. We don't
+# OpenSSL requires a directory to put all generated certificates in. We don't
 # use this for anything, but we need a location.
 ssl/new_certs_dir:
 	mkdir ssl/new_certs_dir
@@ -129,6 +130,20 @@ ssl/root+server.crl: ssl/root.crl ssl/server.crl
 	cat $^ > $@
 ssl/root+client.crl: ssl/root.crl ssl/client.crl
 	cat $^ > $@
+
+#### Keychains
+
+ifeq ($(with_securetransport),yes)
+
+KEYCHAINS := ssl/client.keychain
+
+# This target generates all Keychains
+keychains: $(KEYCHAINS)
+
+PWD=$(shell pwd)
+ssl/client.keychain: ssl/client.crt ssl/client.key
+	certtool i $(PWD)/ssl/client.crt c k=$(PWD)/ssl/client.keychain r=$(PWD)/ssl/client.key p=
+endif
 
 .PHONY: sslfiles-clean
 sslfiles-clean:

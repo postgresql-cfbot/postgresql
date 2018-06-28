@@ -22,6 +22,14 @@
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#elif USE_SECURETRANSPORT
+/*
+ * Ideally we should include the Secure Transport headers here but doing so
+ * cause namespace collisions with CoreFoundation on, among others "Size"
+ * and ACL definitions. To avoid polluting with workarounds, use void * for
+ * instead of the actual Secure Transport variables and perform type casting
+ * in the Secure Transport implementation.
+ */
 #endif
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
@@ -183,12 +191,15 @@ typedef struct Port
 	bool		peer_cert_valid;
 
 	/*
-	 * OpenSSL structures. (Keep these last so that the locations of other
-	 * fields are the same whether or not you build with OpenSSL.)
+	 * SSL library structures. (Keep these last so that the locations of
+	 * other fields are the same whether or not you build with SSL.)
 	 */
 #ifdef USE_OPENSSL
 	SSL		   *ssl;
 	X509	   *peer;
+#elif USE_SECURETRANSPORT
+	void	   *ssl;
+	int			ssl_buffered;
 #endif
 } Port;
 
@@ -214,7 +225,7 @@ CD1mpF1Bn5x8vYlLIhkmuquiXsNV6TILOwIBAg==\n\
 
 /*
  * These functions are implemented by the glue code specific to each
- * SSL implementation (e.g. be-secure-openssl.c)
+ * SSL implementation (e.g. be-secure-<implementation>.c)
  */
 
 /*

@@ -330,6 +330,16 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+#if defined(USE_SECURETRANSPORT)
+	{"keychain_use_default", NULL, NULL, NULL,
+		"UseDefaultKeychain", "", 1,
+	offsetof(struct pg_conn, keychain_use_default)},
+
+	{"keychain", "PGKEYCHAIN", NULL, NULL,
+		"Keychain", "", 64,
+	offsetof(struct pg_conn, keychain)},
+#endif
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -3360,6 +3370,9 @@ makeEmptyPGconn(void)
 	conn->allow_ssl_try = true;
 	conn->wait_ssl_try = false;
 	conn->ssl_in_use = false;
+#ifdef USE_SECURETRANSPORT
+	conn->keychain_use_default = true;
+#endif
 #endif
 
 	/*

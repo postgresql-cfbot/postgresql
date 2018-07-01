@@ -666,6 +666,9 @@ bms_get_singleton_member(const Bitmapset *a, int *member)
 
 /*
  * bms_num_members - count members of set
+ *
+ * In situations where the exact count isn't required, bms_membership can be
+ * used to test if the set has 0, 1 or multiple members.
  */
 int
 bms_num_members(const Bitmapset *a)

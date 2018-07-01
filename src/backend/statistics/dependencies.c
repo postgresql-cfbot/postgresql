@@ -992,7 +992,7 @@ dependencies_clauselist_selectivity(PlannerInfo *root,
 	 * of clauses. We must return 1.0 so the calling function's selectivity is
 	 * unaffected.
 	 */
-	if (bms_num_members(clauses_attnums) < 2)
+	if (bms_membership(clauses_attnums) != BMS_MULTIPLE)
 	{
 		pfree(list_attnums);
 		return 1.0;

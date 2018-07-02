@@ -624,6 +624,13 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       <literal>INCLUDING COMMENTS INCLUDING CONSTRAINTS INCLUDING DEFAULTS INCLUDING IDENTITY INCLUDING INDEXES INCLUDING STATISTICS INCLUDING STORAGE</literal>.
      </para>
      <para>
+      If <literal>EXCLUDING</literal> option is specified after
+      <literal>INCLUDING</literal> option, the referenced objects are not copied.
+      This is typically used after <literal>INCLUDING ALL</literal>.  
+      It is legal to specify multiple options for the same kind of object.
+      If they conflict, latter options always override former options.
+     </para>
+     <para>
       Note that unlike <literal>INHERITS</literal>, columns and
       constraints copied by <literal>LIKE</literal> are not merged with similarly
       named columns and constraints.

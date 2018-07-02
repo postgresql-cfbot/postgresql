@@ -3116,6 +3116,28 @@ include_dir 'conf.d'
        </listitem>
       </varlistentry>
 
+     <varlistentry id="guc-wal-recycle" xreflabel="wal_recycle">
+      <term><varname>wal_recycle</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>wal_recycle</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When this parameter is <literal>on</literal>, past log file segments
+        in the <filename>pg_wal</filename> directory are recycled for future
+        use.
+       </para>
+
+       <para>
+        Turning this parameter off causes past log files segments to be deleted
+        when no longer needed. This can improve performance by eliminating
+        read-modify-write operations on old files which are no longer in the
+        filesystem cache.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-sender-timeout" xreflabel="wal_sender_timeout">
       <term><varname>wal_sender_timeout</varname> (<type>integer</type>)
       <indexterm>

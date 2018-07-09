@@ -4,6 +4,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "utils/array.h"
 
 #include "_int.h"
 
@@ -221,6 +222,13 @@ new_intArrayType(int num)
 {
 	ArrayType  *r;
 	int			nbytes = ARR_OVERHEAD_NONULLS(1) + sizeof(int) * num;
+
+	/* if no elements, return a zero-dimensional array */
+	if (num == 0)
+	{
+		r = construct_empty_array(INT4OID);
+		return r;
+	}
 
 	r = (ArrayType *) palloc0(nbytes);
 

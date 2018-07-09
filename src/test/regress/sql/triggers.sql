@@ -2129,3 +2129,20 @@ drop table self_ref;
 drop function dump_insert();
 drop function dump_update();
 drop function dump_delete();
+
+-- Test triggers accessing system columns
+create table sys_col_table(a int) with oids;
+insert into sys_col_table values (1);
+create function sys_col_trig_func() returns trigger as $$
+begin
+	raise notice 'oid of the row did not change';
+	return new;
+end; $$ language plpgsql;
+create trigger sys_col_trig after update on sys_col_table
+	for each row
+	when (new.oid = old.oid)
+	execute procedure sys_col_trig_func();
+update sys_col_table set a = a + 1;
+drop trigger sys_col_trig on sys_col_table;
+drop function sys_col_trig_func;
+drop table sys_col_table;

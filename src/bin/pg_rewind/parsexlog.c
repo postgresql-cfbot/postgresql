@@ -164,6 +164,9 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
 	XLogPageReadPrivate private;
+	bool				first_call;
+	XLogSegNo			current_segno;
+	bool				checkpoint_found = false;
 
 	/*
 	 * The given fork pointer points to the end of the last common record,
@@ -186,21 +189,46 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 	if (xlogreader == NULL)
 		pg_fatal("out of memory\n");
 
-	searchptr = forkptr;
+	/*
+	 * Previously, we used to store pointer to the previous WAL record. But
+	 * that has been removed in PG11. So we must work harder to find the
+	 * previous checkpoint record. We start from the start of the WAL segment
+	 * and read forward until we either we reach "forkptr" or end of the WAL
+	 * segment. If the checkpoint record is found in the same segment as
+	 * "forkptr", then we are done. Otherwise we must back off and search in
+	 * the previous segment.
+	 */
+	XLByteToSeg(forkptr, current_segno, WalSegSz);
+
+	first_call = true;
+
 	for (;;)
 	{
 		uint8		info;
 
-		record = XLogReadRecord(xlogreader, searchptr, &errormsg);
+		/*
+		 * If this is the first call for the current WAL segment, we must use
+		 * XLogFindNextRecord to get the first valid WAL record in this
+		 * segment. Otherwise we continue to fetch the next WAL record.
+		 */
+		if (first_call)
+		{
+			XLogSegNoOffsetToRecPtr(current_segno, 0, searchptr, WalSegSz);
+			searchptr = XLogFindNextRecord(xlogreader, searchptr);
+			record = XLogReadRecord(xlogreader, searchptr, &errormsg);
+			first_call = false;
+		}
+		else
+			record = XLogReadRecord(xlogreader, InvalidXLogRecPtr, &errormsg);
 
 		if (record == NULL)
 		{
 			if (errormsg)
-				pg_fatal("could not find previous WAL record at %X/%X: %s\n",
+				pg_fatal("could not find WAL record at %X/%X: %s\n",
 						 (uint32) (searchptr >> 32), (uint32) (searchptr),
 						 errormsg);
 			else
-				pg_fatal("could not find previous WAL record at %X/%X\n",
+				pg_fatal("could not find WAL record at %X/%X\n",
 						 (uint32) (searchptr >> 32), (uint32) (searchptr));
 		}
 
@@ -210,7 +238,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		 * where the master has been stopped to be rewinded.
 		 */
 		info = XLogRecGetInfo(xlogreader) & ~XLR_INFO_MASK;
-		if (searchptr < forkptr &&
+		if (xlogreader->ReadRecPtr < forkptr &&
 			XLogRecGetRmid(xlogreader) == RM_XLOG_ID &&
 			(info == XLOG_CHECKPOINT_SHUTDOWN ||
 			 info == XLOG_CHECKPOINT_ONLINE))
@@ -218,14 +246,41 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 			CheckPoint	checkPoint;
 
 			memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
-			*lastchkptrec = searchptr;
+			*lastchkptrec = xlogreader->ReadRecPtr;
 			*lastchkpttli = checkPoint.ThisTimeLineID;
 			*lastchkptredo = checkPoint.redo;
-			break;
+			checkpoint_found = true;
+
+			/*
+			 * Continue to search since there might be another checkpoint
+			 * record in the WAL segment.
+			 */
 		}
 
-		/* Walk backwards to previous record. */
-		searchptr = record->xl_prev;
+		/*
+		 * If we've reached the forkptr without seeing a checkpoint then we
+		 * must back off and search in the previous WAL segment. Similarly,
+		 * while searching in any previous WAL segment, if we reach the end of
+		 * the segment, we must continue in the segment prior to that.
+		 */
+		if (xlogreader->ReadRecPtr >= forkptr ||
+			!XLByteInSeg(xlogreader->ReadRecPtr, current_segno, WalSegSz))
+		{
+			if (checkpoint_found)
+				break;
+			else
+				current_segno = current_segno - 1;
+
+			/*
+			 * We must always find a checkpoint record.
+			 */
+			Assert(current_segno > 0);
+
+			/*
+			 * Must find the first valid WAL record in the previous segment.
+			 */
+			first_call = true;
+		}
 	}
 
 	XLogReaderFree(xlogreader);

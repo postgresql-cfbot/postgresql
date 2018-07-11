@@ -2341,8 +2341,7 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 		CreateConstraintEntry(ccname,	/* Constraint Name */
 							  RelationGetNamespace(rel),	/* namespace */
 							  CONSTRAINT_CHECK, /* Constraint Type */
-							  false,	/* Is Deferrable */
-							  false,	/* Is Deferred */
+							  'n',	/* not deferrable */
 							  is_validated,
 							  InvalidOid,	/* no parent constraint */
 							  RelationGetRelid(rel),	/* relation */

@@ -7055,8 +7055,9 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 	/* Create the catalog entries for the constraint */
 	flags = INDEX_CONSTR_CREATE_UPDATE_INDEX |
 		INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS |
-		(stmt->initdeferred ? INDEX_CONSTR_CREATE_INIT_DEFERRED : 0) |
-		(stmt->deferrable ? INDEX_CONSTR_CREATE_DEFERRABLE : 0) |
+		(stmt->deferral == 'a' ? INDEX_CONSTR_CREATE_ALWAYS_DEFERRED : 0) |
+		(stmt->deferral == 'i' ? INDEX_CONSTR_CREATE_INIT_DEFERRED : 0) |
+		(stmt->deferral != 'n' ? INDEX_CONSTR_CREATE_DEFERRABLE : 0) |
 		(stmt->primary ? INDEX_CONSTR_CREATE_MARK_AS_PRIMARY : 0);
 
 	address = index_constraint_create(rel,
@@ -7648,8 +7649,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	constrOid = CreateConstraintEntry(fkconstraint->conname,
 									  RelationGetNamespace(rel),
 									  CONSTRAINT_FOREIGN,
-									  fkconstraint->deferrable,
-									  fkconstraint->initdeferred,
+									  fkconstraint->deferral,
 									  fkconstraint->initially_valid,
 									  parentConstr,
 									  RelationGetRelid(rel),
@@ -7811,8 +7811,7 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 				 errmsg("constraint \"%s\" of relation \"%s\" is not a foreign key constraint",
 						cmdcon->conname, RelationGetRelationName(rel))));
 
-	if (currcon->condeferrable != cmdcon->deferrable ||
-		currcon->condeferred != cmdcon->initdeferred)
+	if (currcon->condeferral != cmdcon->deferral)
 	{
 		HeapTuple	copyTuple;
 		HeapTuple	tgtuple;
@@ -7828,8 +7827,7 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 		 */
 		copyTuple = heap_copytuple(contuple);
 		copy_con = (Form_pg_constraint) GETSTRUCT(copyTuple);
-		copy_con->condeferrable = cmdcon->deferrable;
-		copy_con->condeferred = cmdcon->initdeferred;
+		copy_con->condeferral = cmdcon->deferral;
 		CatalogTupleUpdate(conrel, &copyTuple->t_self, copyTuple);
 
 		InvokeObjectPostAlterHook(ConstraintRelationId,
@@ -7881,8 +7879,7 @@ ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 			copyTuple = heap_copytuple(tgtuple);
 			copy_tg = (Form_pg_trigger) GETSTRUCT(copyTuple);
 
-			copy_tg->tgdeferrable = cmdcon->deferrable;
-			copy_tg->tginitdeferred = cmdcon->initdeferred;
+			copy_tg->tgdeferral = cmdcon->deferral;
 			CatalogTupleUpdate(tgrel, &copyTuple->t_self, copyTuple);
 
 			InvokeObjectPostAlterHook(TriggerRelationId,
@@ -8548,8 +8545,7 @@ validateForeignKeyConstraint(char *conname,
 	trig.tgconstrrelid = RelationGetRelid(pkrel);
 	trig.tgconstrindid = pkindOid;
 	trig.tgconstraint = constraintOid;
-	trig.tgdeferrable = false;
-	trig.tginitdeferred = false;
+	trig.tgdeferral = 'n';
 	/* we needn't fill in remaining fields */
 
 	/*
@@ -8637,8 +8633,7 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->whenClause = NULL;
 	fk_trigger->isconstraint = true;
-	fk_trigger->deferrable = fkconstraint->deferrable;
-	fk_trigger->initdeferred = fkconstraint->initdeferred;
+	fk_trigger->deferral = fkconstraint->deferral;
 	fk_trigger->constrrel = NULL;
 	fk_trigger->args = NIL;
 
@@ -8678,28 +8673,23 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	switch (fkconstraint->fk_del_action)
 	{
 		case FKCONSTR_ACTION_NOACTION:
-			fk_trigger->deferrable = fkconstraint->deferrable;
-			fk_trigger->initdeferred = fkconstraint->initdeferred;
+			fk_trigger->deferral = fkconstraint->deferral;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_noaction_del");
 			break;
 		case FKCONSTR_ACTION_RESTRICT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_restrict_del");
 			break;
 		case FKCONSTR_ACTION_CASCADE:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_cascade_del");
 			break;
 		case FKCONSTR_ACTION_SETNULL:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setnull_del");
 			break;
 		case FKCONSTR_ACTION_SETDEFAULT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setdefault_del");
 			break;
 		default:
@@ -8734,28 +8724,23 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	switch (fkconstraint->fk_upd_action)
 	{
 		case FKCONSTR_ACTION_NOACTION:
-			fk_trigger->deferrable = fkconstraint->deferrable;
-			fk_trigger->initdeferred = fkconstraint->initdeferred;
+			fk_trigger->deferral = fkconstraint->deferral;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_noaction_upd");
 			break;
 		case FKCONSTR_ACTION_RESTRICT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_restrict_upd");
 			break;
 		case FKCONSTR_ACTION_CASCADE:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_cascade_upd");
 			break;
 		case FKCONSTR_ACTION_SETNULL:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setnull_upd");
 			break;
 		case FKCONSTR_ACTION_SETDEFAULT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
+			fk_trigger->deferral = 'n';
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setdefault_upd");
 			break;
 		default:
@@ -11606,8 +11591,7 @@ constraints_equivalent(HeapTuple a, HeapTuple b, TupleDesc tupleDesc)
 	Form_pg_constraint acon = (Form_pg_constraint) GETSTRUCT(a);
 	Form_pg_constraint bcon = (Form_pg_constraint) GETSTRUCT(b);
 
-	if (acon->condeferrable != bcon->condeferrable ||
-		acon->condeferred != bcon->condeferred ||
+	if (acon->condeferral != bcon->condeferral ||
 		strcmp(decompile_conbin(a, tupleDesc),
 			   decompile_conbin(b, tupleDesc)) != 0)
 		return false;
@@ -14608,8 +14592,7 @@ CloneRowTriggersToPartition(Relation parent, Relation partition)
 		trigStmt->whenClause = NULL;	/* passed separately */
 		trigStmt->isconstraint = OidIsValid(trigForm->tgconstraint);
 		trigStmt->transitionRels = NIL; /* not supported at present */
-		trigStmt->deferrable = trigForm->tgdeferrable;
-		trigStmt->initdeferred = trigForm->tginitdeferred;
+		trigStmt->deferral = trigForm->tgdeferral;
 		trigStmt->constrrel = NULL; /* passed separately */
 
 		CreateTrigger(trigStmt, NULL, RelationGetRelid(partition),

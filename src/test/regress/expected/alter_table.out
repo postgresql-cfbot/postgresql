@@ -680,44 +680,44 @@ ALTER TABLE FKTABLE ALTER CONSTRAINT fkdd2 DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE FKTABLE ADD CONSTRAINT fkdi2 FOREIGN KEY(ftest1) REFERENCES pktable
   ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
 ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY IMMEDIATE;
-SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+SELECT conname, tgfoid::regproc, tgtype, tgdeferral
 FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
 WHERE tgrelid = 'pktable'::regclass
 ORDER BY 1,2,3;
- conname |         tgfoid         | tgtype | tgdeferrable | tginitdeferred 
----------+------------------------+--------+--------------+----------------
- fkdd    | "RI_FKey_cascade_del"  |      9 | f            | f
- fkdd    | "RI_FKey_noaction_upd" |     17 | t            | t
- fkdd2   | "RI_FKey_cascade_del"  |      9 | f            | f
- fkdd2   | "RI_FKey_noaction_upd" |     17 | t            | t
- fkdi    | "RI_FKey_cascade_del"  |      9 | f            | f
- fkdi    | "RI_FKey_noaction_upd" |     17 | t            | f
- fkdi2   | "RI_FKey_cascade_del"  |      9 | f            | f
- fkdi2   | "RI_FKey_noaction_upd" |     17 | t            | f
- fknd    | "RI_FKey_cascade_del"  |      9 | f            | f
- fknd    | "RI_FKey_noaction_upd" |     17 | f            | f
- fknd2   | "RI_FKey_cascade_del"  |      9 | f            | f
- fknd2   | "RI_FKey_noaction_upd" |     17 | f            | f
+ conname |         tgfoid         | tgtype | tgdeferral 
+---------+------------------------+--------+------------
+ fkdd    | "RI_FKey_cascade_del"  |      9 | n
+ fkdd    | "RI_FKey_noaction_upd" |     17 | i
+ fkdd2   | "RI_FKey_cascade_del"  |      9 | n
+ fkdd2   | "RI_FKey_noaction_upd" |     17 | i
+ fkdi    | "RI_FKey_cascade_del"  |      9 | n
+ fkdi    | "RI_FKey_noaction_upd" |     17 | d
+ fkdi2   | "RI_FKey_cascade_del"  |      9 | n
+ fkdi2   | "RI_FKey_noaction_upd" |     17 | d
+ fknd    | "RI_FKey_cascade_del"  |      9 | n
+ fknd    | "RI_FKey_noaction_upd" |     17 | n
+ fknd2   | "RI_FKey_cascade_del"  |      9 | n
+ fknd2   | "RI_FKey_noaction_upd" |     17 | n
 (12 rows)
 
-SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+SELECT conname, tgfoid::regproc, tgtype, tgdeferral
 FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
 WHERE tgrelid = 'fktable'::regclass
 ORDER BY 1,2,3;
- conname |       tgfoid        | tgtype | tgdeferrable | tginitdeferred 
----------+---------------------+--------+--------------+----------------
- fkdd    | "RI_FKey_check_ins" |      5 | t            | t
- fkdd    | "RI_FKey_check_upd" |     17 | t            | t
- fkdd2   | "RI_FKey_check_ins" |      5 | t            | t
- fkdd2   | "RI_FKey_check_upd" |     17 | t            | t
- fkdi    | "RI_FKey_check_ins" |      5 | t            | f
- fkdi    | "RI_FKey_check_upd" |     17 | t            | f
- fkdi2   | "RI_FKey_check_ins" |      5 | t            | f
- fkdi2   | "RI_FKey_check_upd" |     17 | t            | f
- fknd    | "RI_FKey_check_ins" |      5 | f            | f
- fknd    | "RI_FKey_check_upd" |     17 | f            | f
- fknd2   | "RI_FKey_check_ins" |      5 | f            | f
- fknd2   | "RI_FKey_check_upd" |     17 | f            | f
+ conname |       tgfoid        | tgtype | tgdeferral 
+---------+---------------------+--------+------------
+ fkdd    | "RI_FKey_check_ins" |      5 | i
+ fkdd    | "RI_FKey_check_upd" |     17 | i
+ fkdd2   | "RI_FKey_check_ins" |      5 | i
+ fkdd2   | "RI_FKey_check_upd" |     17 | i
+ fkdi    | "RI_FKey_check_ins" |      5 | d
+ fkdi    | "RI_FKey_check_upd" |     17 | d
+ fkdi2   | "RI_FKey_check_ins" |      5 | d
+ fkdi2   | "RI_FKey_check_upd" |     17 | d
+ fknd    | "RI_FKey_check_ins" |      5 | n
+ fknd    | "RI_FKey_check_upd" |     17 | n
+ fknd2   | "RI_FKey_check_ins" |      5 | n
+ fknd2   | "RI_FKey_check_upd" |     17 | n
 (12 rows)
 
 -- temp tables should go away by themselves, need not drop them.

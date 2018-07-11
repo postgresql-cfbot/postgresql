@@ -618,7 +618,57 @@ SELECT * FROM unique_tbl;
  3 | threex
 (5 rows)
 
+-- test ALWAYS DEFERRED
+ALTER TABLE unique_tbl DROP CONSTRAINT unique_tbl_i_key;
+ALTER TABLE unique_tbl ADD CONSTRAINT unique_tbl_i_key
+	UNIQUE (i) ALWAYS DEFERRED;
+BEGIN;
+-- should fail at commit time
+UPDATE unique_tbl SET i = 2 WHERE i = 1;
+COMMIT; -- should fail
+ERROR:  duplicate key value violates unique constraint "unique_tbl_i_key"
+DETAIL:  Key (i)=(2) already exists.
+BEGIN;
+-- should fail at commit time
+SET CONSTRAINTS ALL IMMEDIATE;
+UPDATE unique_tbl SET i = 2 WHERE i = 1;
+COMMIT; -- should fail
+ERROR:  duplicate key value violates unique constraint "unique_tbl_i_key"
+DETAIL:  Key (i)=(2) already exists.
+BEGIN;
+SET CONSTRAINTS unique_tbl_i_key IMMEDIATE; -- should fail
+ERROR:  constraint "unique_tbl_i_key" is always deferred
+ROLLBACK;
 DROP TABLE unique_tbl;
+CREATE FUNCTION deferred_trigger_test() RETURNS TRIGGER AS $$
+  BEGIN
+    RAISE EXCEPTION 'deferred_trigger_test() ran';
+  END
+$$ language plpgsql;
+CREATE TABLE deferred_trigger_test_tbl (a TEXT);
+CREATE CONSTRAINT TRIGGER deferred_trigger_test_constraint
+AFTER INSERT OR UPDATE OR DELETE
+ON deferred_trigger_test_tbl
+ALWAYS DEFERRED
+FOR EACH ROW
+EXECUTE PROCEDURE deferred_trigger_test();
+BEGIN;
+INSERT INTO deferred_trigger_test_tbl (a) SELECT 'foo';
+COMMIT; -- should fail
+ERROR:  deferred_trigger_test() ran
+CONTEXT:  PL/pgSQL function deferred_trigger_test() line 3 at RAISE
+BEGIN;
+SET CONSTRAINTS ALL IMMEDIATE;
+INSERT INTO deferred_trigger_test_tbl (a) SELECT 'foo';
+COMMIT; -- should fail
+ERROR:  deferred_trigger_test() ran
+CONTEXT:  PL/pgSQL function deferred_trigger_test() line 3 at RAISE
+BEGIN;
+SET CONSTRAINTS deferred_trigger_test_constraint IMMEDIATE; -- should fail
+ERROR:  constraint "deferred_trigger_test_constraint" is always deferred
+ROLLBACK;
+DROP TABLE deferred_trigger_test_tbl CASCADE;
+DROP FUNCTION deferred_trigger_test();
 --
 -- EXCLUDE constraints
 --

@@ -891,10 +891,14 @@ CREATE VIEW domain_constraints AS
            CAST(current_database() AS sql_identifier) AS domain_catalog,
            CAST(n.nspname AS sql_identifier) AS domain_schema,
            CAST(t.typname AS sql_identifier) AS domain_name,
-           CAST(CASE WHEN condeferrable THEN 'YES' ELSE 'NO' END
+           CAST(CASE WHEN condeferral = 'n' THEN 'NO' ELSE 'YES' END
              AS yes_or_no) AS is_deferrable,
-           CAST(CASE WHEN condeferred THEN 'YES' ELSE 'NO' END
+           CAST(CASE WHEN condeferral = 'i' OR condeferral = 'a' THEN 'YES' ELSE 'NO' END
              AS yes_or_no) AS initially_deferred
+	   /*
+	    * XXX Can we add is_always_deferred here?  Are there
+	    * standards considerations?
+	    */
     FROM pg_namespace rs, pg_namespace n, pg_constraint con, pg_type t
     WHERE rs.oid = con.connamespace
           AND n.oid = t.typnamespace
@@ -1780,9 +1784,9 @@ CREATE VIEW table_constraints AS
                             WHEN 'p' THEN 'PRIMARY KEY'
                             WHEN 'u' THEN 'UNIQUE' END
              AS character_data) AS constraint_type,
-           CAST(CASE WHEN c.condeferrable THEN 'YES' ELSE 'NO' END AS yes_or_no)
+           CAST(CASE WHEN c.condeferral = 'n' THEN 'NO' ELSE 'YES' END AS yes_or_no)
              AS is_deferrable,
-           CAST(CASE WHEN c.condeferred THEN 'YES' ELSE 'NO' END AS yes_or_no)
+           CAST(CASE WHEN c.condeferral = 'i' OR c.condeferral = 'a' THEN 'YES' ELSE 'NO' END AS yes_or_no)
              AS initially_deferred,
            CAST('YES' AS yes_or_no) AS enforced
 

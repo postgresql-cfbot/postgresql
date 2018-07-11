@@ -437,7 +437,58 @@ COMMIT;
 
 SELECT * FROM unique_tbl;
 
+-- test ALWAYS DEFERRED
+ALTER TABLE unique_tbl DROP CONSTRAINT unique_tbl_i_key;
+ALTER TABLE unique_tbl ADD CONSTRAINT unique_tbl_i_key
+	UNIQUE (i) ALWAYS DEFERRED;
+
+BEGIN;
+-- should fail at commit time
+UPDATE unique_tbl SET i = 2 WHERE i = 1;
+COMMIT; -- should fail
+
+BEGIN;
+-- should fail at commit time
+SET CONSTRAINTS ALL IMMEDIATE;
+UPDATE unique_tbl SET i = 2 WHERE i = 1;
+COMMIT; -- should fail
+
+BEGIN;
+SET CONSTRAINTS unique_tbl_i_key IMMEDIATE; -- should fail
+ROLLBACK;
+
 DROP TABLE unique_tbl;
+
+CREATE FUNCTION deferred_trigger_test() RETURNS TRIGGER AS $$
+  BEGIN
+    RAISE EXCEPTION 'deferred_trigger_test() ran';
+  END
+$$ language plpgsql;
+
+CREATE TABLE deferred_trigger_test_tbl (a TEXT);
+
+CREATE CONSTRAINT TRIGGER deferred_trigger_test_constraint
+AFTER INSERT OR UPDATE OR DELETE
+ON deferred_trigger_test_tbl
+ALWAYS DEFERRED
+FOR EACH ROW
+EXECUTE PROCEDURE deferred_trigger_test();
+
+BEGIN;
+INSERT INTO deferred_trigger_test_tbl (a) SELECT 'foo';
+COMMIT; -- should fail
+
+BEGIN;
+SET CONSTRAINTS ALL IMMEDIATE;
+INSERT INTO deferred_trigger_test_tbl (a) SELECT 'foo';
+COMMIT; -- should fail
+
+BEGIN;
+SET CONSTRAINTS deferred_trigger_test_constraint IMMEDIATE; -- should fail
+ROLLBACK;
+
+DROP TABLE deferred_trigger_test_tbl CASCADE;
+DROP FUNCTION deferred_trigger_test();
 
 --
 -- EXCLUDE constraints

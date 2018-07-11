@@ -1016,6 +1016,7 @@ DefineDomain(CreateDomainStmt *stmt)
 			case CONSTR_ATTR_DEFERRABLE:
 			case CONSTR_ATTR_NOT_DEFERRABLE:
 			case CONSTR_ATTR_DEFERRED:
+			case CONSTR_ATTR_ALWAYS_DEFERRED:
 			case CONSTR_ATTR_IMMEDIATE:
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -2602,6 +2603,7 @@ AlterDomainAddConstraint(List *names, Node *newConstraint,
 		case CONSTR_ATTR_DEFERRABLE:
 		case CONSTR_ATTR_NOT_DEFERRABLE:
 		case CONSTR_ATTR_DEFERRED:
+		case CONSTR_ATTR_ALWAYS_DEFERRED:
 		case CONSTR_ATTR_IMMEDIATE:
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -3147,8 +3149,7 @@ domainAddConstraint(Oid domainOid, Oid domainNamespace, Oid baseTypeOid,
 		CreateConstraintEntry(constr->conname,	/* Constraint Name */
 							  domainNamespace,	/* namespace */
 							  CONSTRAINT_CHECK, /* Constraint Type */
-							  false,	/* Is Deferrable */
-							  false,	/* Is Deferred */
+							  'n',		    /* Deferral option */
 							  !constr->skip_validation, /* Is Validated */
 							  InvalidOid,	/* no parent constraint */
 							  InvalidOid,	/* not a relation constraint */

@@ -25,8 +25,8 @@
  *		pg_trigger definition.  cpp turns this into
  *		typedef struct FormData_pg_trigger
  *
- * Note: when tgconstraint is nonzero, tgconstrrelid, tgconstrindid,
- * tgdeferrable, and tginitdeferred are largely redundant with the referenced
+ * Note: when tgconstraint is nonzero, tgconstrrelid, tgconstrindid, and
+ * tgdeferral are largely redundant with the referenced
  * pg_constraint entry.  However, it is possible for a non-deferrable trigger
  * to be associated with a deferrable constraint.
  * ----------------
@@ -44,8 +44,7 @@ CATALOG(pg_trigger,2620,TriggerRelationId)
 	Oid			tgconstrrelid;	/* constraint's FROM table, if any */
 	Oid			tgconstrindid;	/* constraint's supporting index, if any */
 	Oid			tgconstraint;	/* associated pg_constraint entry, if any */
-	bool		tgdeferrable;	/* constraint trigger is deferrable */
-	bool		tginitdeferred; /* constraint trigger is deferred initially */
+	char		tgdeferral;	/* constraint trigger deferral option */
 	int16		tgnargs;		/* # of extra arguments in tgargs */
 
 	/*

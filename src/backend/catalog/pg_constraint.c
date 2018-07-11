@@ -51,8 +51,7 @@ Oid
 CreateConstraintEntry(const char *constraintName,
 					  Oid constraintNamespace,
 					  char constraintType,
-					  bool isDeferrable,
-					  bool isDeferred,
+					  char deferralOption,
 					  bool isValidated,
 					  Oid parentConstrId,
 					  Oid relId,
@@ -184,8 +183,7 @@ CreateConstraintEntry(const char *constraintName,
 	values[Anum_pg_constraint_conname - 1] = NameGetDatum(&cname);
 	values[Anum_pg_constraint_connamespace - 1] = ObjectIdGetDatum(constraintNamespace);
 	values[Anum_pg_constraint_contype - 1] = CharGetDatum(constraintType);
-	values[Anum_pg_constraint_condeferrable - 1] = BoolGetDatum(isDeferrable);
-	values[Anum_pg_constraint_condeferred - 1] = BoolGetDatum(isDeferred);
+	values[Anum_pg_constraint_condeferral - 1] = CharGetDatum(deferralOption);
 	values[Anum_pg_constraint_convalidated - 1] = BoolGetDatum(isValidated);
 	values[Anum_pg_constraint_conrelid - 1] = ObjectIdGetDatum(relId);
 	values[Anum_pg_constraint_contypid - 1] = ObjectIdGetDatum(domainId);
@@ -564,8 +562,7 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 			CreateConstraintEntry(NameStr(constrForm->conname),
 								  constrForm->connamespace,
 								  CONSTRAINT_FOREIGN,
-								  constrForm->condeferrable,
-								  constrForm->condeferred,
+								  constrForm->condeferral,
 								  constrForm->convalidated,
 								  HeapTupleGetOid(tuple),
 								  relationId,
@@ -597,8 +594,7 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 		/* for now this is all we need */
 		fkconstraint->fk_upd_action = constrForm->confupdtype;
 		fkconstraint->fk_del_action = constrForm->confdeltype;
-		fkconstraint->deferrable = constrForm->condeferrable;
-		fkconstraint->initdeferred = constrForm->condeferred;
+		fkconstraint->deferral = constrForm->condeferral;
 
 		createForeignKeyTriggers(rel, constrForm->confrelid, fkconstraint,
 								 constrOid, constrForm->conindid, false);
@@ -1357,7 +1353,7 @@ get_primary_key_attnos(Oid relid, bool deferrableOk, Oid *constraintOid)
 		 * ignore deferrable constraints, then we might as well give up
 		 * searching, since there can only be a single primary key on a table.
 		 */
-		if (con->condeferrable && !deferrableOk)
+		if (con->condeferral != 'n' && !deferrableOk)
 			break;
 
 		/* Extract the conkey array, ie, attnums of PK's columns */

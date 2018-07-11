@@ -307,8 +307,7 @@ Boot_DeclareIndexStmt:
 					stmt->unique = false;
 					stmt->primary = false;
 					stmt->isconstraint = false;
-					stmt->deferrable = false;
-					stmt->initdeferred = false;
+					stmt->deferral = 'n';
 					stmt->transformed = false;
 					stmt->concurrent = false;
 					stmt->if_not_exists = false;
@@ -356,8 +355,7 @@ Boot_DeclareUniqueIndexStmt:
 					stmt->unique = true;
 					stmt->primary = false;
 					stmt->isconstraint = false;
-					stmt->deferrable = false;
-					stmt->initdeferred = false;
+					stmt->deferral = 'n';
 					stmt->transformed = false;
 					stmt->concurrent = false;
 					stmt->if_not_exists = false;

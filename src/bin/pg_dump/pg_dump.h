@@ -410,8 +410,7 @@ typedef struct _triggerInfo
 	Oid			tgconstrrelid;
 	char	   *tgconstrrelname;
 	char		tgenabled;
-	bool		tgdeferrable;
-	bool		tginitdeferred;
+	char		tgdeferral;
 	char	   *tgdef;
 } TriggerInfo;
 
@@ -431,7 +430,7 @@ typedef struct _evttriggerInfo
  * use a different objType for foreign key constraints, to make it easier
  * to sort them the way we want.
  *
- * Note: condeferrable and condeferred are currently only valid for
+ * Note: condeferral is currently only valid for
  * unique/primary-key constraints.  Otherwise that info is in condef.
  */
 typedef struct _constraintInfo
@@ -443,8 +442,7 @@ typedef struct _constraintInfo
 	char	   *condef;			/* definition, if CHECK or FOREIGN KEY */
 	Oid			confrelid;		/* referenced table, if FOREIGN KEY */
 	DumpId		conindex;		/* identifies associated index if any */
-	bool		condeferrable;	/* true if constraint is DEFERRABLE */
-	bool		condeferred;	/* true if constraint is INITIALLY DEFERRED */
+	char		condeferral;	/* 'n' for not deferrable, 'd' for deferrable, 'i' for initially deferred, 'a' for always deferred*/
 	bool		conislocal;		/* true if constraint has local definition */
 	bool		separate;		/* true if must dump as separate item */
 } ConstraintInfo;

@@ -841,10 +841,12 @@ DefineIndex(Oid relationId,
 	if (partitioned && stmt->relation && !stmt->relation->inh)
 		flags |= INDEX_CREATE_INVALID;
 
-	if (stmt->deferrable)
+	if (stmt->deferral != 'n')
 		constr_flags |= INDEX_CONSTR_CREATE_DEFERRABLE;
-	if (stmt->initdeferred)
+	if (stmt->deferral == 'i')
 		constr_flags |= INDEX_CONSTR_CREATE_INIT_DEFERRED;
+	if (stmt->deferral == 'a')
+		constr_flags |= INDEX_CONSTR_CREATE_ALWAYS_DEFERRED;
 
 	indexRelationId =
 		index_create(rel, indexRelationName, indexRelationId, parentIndexId,

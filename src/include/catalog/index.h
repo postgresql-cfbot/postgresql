@@ -73,8 +73,9 @@ extern Oid index_create(Relation heapRelation,
 #define	INDEX_CONSTR_CREATE_MARK_AS_PRIMARY	(1 << 0)
 #define	INDEX_CONSTR_CREATE_DEFERRABLE		(1 << 1)
 #define	INDEX_CONSTR_CREATE_INIT_DEFERRED	(1 << 2)
-#define	INDEX_CONSTR_CREATE_UPDATE_INDEX	(1 << 3)
-#define	INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS	(1 << 4)
+#define	INDEX_CONSTR_CREATE_ALWAYS_DEFERRED	(1 << 3)
+#define	INDEX_CONSTR_CREATE_UPDATE_INDEX	(1 << 4)
+#define	INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS	(1 << 5)
 
 extern ObjectAddress index_constraint_create(Relation heapRelation,
 						Oid indexRelationId,

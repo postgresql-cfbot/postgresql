@@ -517,11 +517,11 @@ ALTER TABLE FKTABLE ADD CONSTRAINT fkdi2 FOREIGN KEY(ftest1) REFERENCES pktable
   ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
 ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY IMMEDIATE;
 
-SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+SELECT conname, tgfoid::regproc, tgtype, tgdeferral
 FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
 WHERE tgrelid = 'pktable'::regclass
 ORDER BY 1,2,3;
-SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+SELECT conname, tgfoid::regproc, tgtype, tgdeferral
 FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
 WHERE tgrelid = 'fktable'::regclass
 ORDER BY 1,2,3;

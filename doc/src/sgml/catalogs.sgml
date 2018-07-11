@@ -2239,17 +2239,15 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
-      <entry><structfield>condeferrable</structfield></entry>
-      <entry><type>bool</type></entry>
+      <entry><structfield>condeferral</structfield></entry>
+      <entry><type>char</type></entry>
       <entry></entry>
-      <entry>Is the constraint deferrable?</entry>
-     </row>
-
-     <row>
-      <entry><structfield>condeferred</structfield></entry>
-      <entry><type>bool</type></entry>
-      <entry></entry>
-      <entry>Is the constraint deferred by default?</entry>
+      <entry>Constraint deferral option:
+            <literal>a</literal> = always deferred,
+            <literal>d</literal> = deferrable,
+            <literal>d</literal> = deferrable initially deferred,
+            <literal>n</literal> = not deferrable
+          </entry>
      </row>
 
      <row>
@@ -7044,17 +7042,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
-      <entry><structfield>tgdeferrable</structfield></entry>
-      <entry><type>bool</type></entry>
+      <entry><structfield>tgdeferrral</structfield></entry>
+      <entry><type>char</type></entry>
       <entry></entry>
-      <entry>True if constraint trigger is deferrable</entry>
-     </row>
-
-     <row>
-      <entry><structfield>tginitdeferred</structfield></entry>
-      <entry><type>bool</type></entry>
-      <entry></entry>
-      <entry>True if constraint trigger is initially deferred</entry>
+      <entry>
+       <structfield>tgdeferral</structfield> is
+       <literal>a</literal>always deferred,
+       <literal>d</literal>deferrable,
+       <literal>i</literal>deferrable initially deferred,
+       <literal>n</literal>not deferrable.
+      </entry>
      </row>
 
      <row>
@@ -7119,7 +7116,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    <para>
     When <structfield>tgconstraint</structfield> is nonzero,
     <structfield>tgconstrrelid</structfield>, <structfield>tgconstrindid</structfield>,
-    <structfield>tgdeferrable</structfield>, and <structfield>tginitdeferred</structfield> are
+    and <structfield>tgdeferral</structfield> are
     largely redundant with the referenced <structname>pg_constraint</structname> entry.
     However, it is possible for a non-deferrable trigger to be associated
     with a deferrable constraint: foreign key constraints can have some

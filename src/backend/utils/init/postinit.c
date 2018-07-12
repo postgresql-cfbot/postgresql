@@ -53,6 +53,7 @@
 #include "utils/acl.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/portal.h"
@@ -745,6 +746,12 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		/* normal multiuser case */
 		Assert(MyProcPort != NULL);
 		PerformAuthentication(MyProcPort);
+		/*
+		 * An external authentication mechanism might have created a role on
+		 * the fly via another connection, so make sure we can see it in the
+		 * catalogs by handling any invalidation messages now.
+		 */
+		AcceptInvalidationMessages();
 		InitializeSessionUserId(username, useroid);
 		am_superuser = superuser();
 	}

@@ -148,3 +148,231 @@ SELECT pg_drop_replication_slot('regression_slot3');
  
 (1 row)
 
+--
+-- Test copy function for logical replication slots
+--
+-- Create original logical slot
+SELECT 'init' FROM pg_create_logical_replication_slot('orig_slot1', 'test_decoding', false);
+ ?column? 
+----------
+ init
+(1 row)
+
+SELECT 'init' FROM pg_create_logical_replication_slot('orig_slot2', 'test_decoding', true);
+ ?column? 
+----------
+ init
+(1 row)
+
+-- Preserve all values of the original slot
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot1', 'copied_slot1_no_change');
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot2', 'copied_slot2_no_change');
+ ?column? 
+----------
+ copy
+(1 row)
+
+-- Change output plugin, preserve the persisitence
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot1', 'copied_slot1_change_plugin', 'pgoutput');
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot2', 'copied_slot2_change_plugin', 'pgoutput');
+ ?column? 
+----------
+ copy
+(1 row)
+
+-- Change both output plugin and persistence
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot1', 'copied_slot1_change_both', 'pgoutput', true);
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot2', 'copied_slot2_change_both', 'pgoutput', false);
+ ?column? 
+----------
+ copy
+(1 row)
+
+-- Check all copied slots status
+SELECT
+    o.slot_name, o.plugin, o.temporary, c.slot_name, c.plugin, c.temporary
+FROM
+    (SELECT * FROM pg_replication_slots WHERE slot_name LIKE 'orig%') as o
+    LEFT JOIN pg_replication_slots as c ON o.restart_lsn = c.restart_lsn  AND o.confirmed_flush_lsn = c.confirmed_flush_lsn
+WHERE
+    o.slot_name != c.slot_name
+ORDER BY o.slot_name, c.slot_name;
+ slot_name  |    plugin     | temporary |         slot_name          |    plugin     | temporary 
+------------+---------------+-----------+----------------------------+---------------+-----------
+ orig_slot1 | test_decoding | f         | copied_slot1_change_both   | pgoutput      | t
+ orig_slot1 | test_decoding | f         | copied_slot1_change_plugin | pgoutput      | f
+ orig_slot1 | test_decoding | f         | copied_slot1_no_change     | test_decoding | f
+ orig_slot2 | test_decoding | t         | copied_slot2_change_both   | pgoutput      | f
+ orig_slot2 | test_decoding | t         | copied_slot2_change_plugin | pgoutput      | t
+ orig_slot2 | test_decoding | t         | copied_slot2_no_change     | test_decoding | t
+(6 rows)
+
+-- Now we have maximum 8 replication slots. Check slots are properly
+-- released even when raise error during creating the target slot.
+SELECT 'copy' FROM pg_copy_logical_replication_slot('orig_slot1', 'failed'); -- error
+ERROR:  all replication slots are in use
+HINT:  Free one or increase max_replication_slots.
+-- temporary slots were dropped automatically
+SELECT pg_drop_replication_slot('orig_slot1');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot1_no_change');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot1_change_plugin');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot2_change_both');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+--
+-- Test copy function for physical replication slots
+--
+-- Create original physical slot
+SELECT 'init' FROM pg_create_physical_replication_slot('orig_slot1', false, false);
+ ?column? 
+----------
+ init
+(1 row)
+
+SELECT 'init' FROM pg_create_physical_replication_slot('orig_slot2', true, false);
+ ?column? 
+----------
+ init
+(1 row)
+
+SELECT 'init' FROM pg_create_physical_replication_slot('orig_slot3', true, true);
+ ?column? 
+----------
+ init
+(1 row)
+
+-- Preserve all values of the original slot
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot1', 'copied_slot1_no_change');
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot2', 'copied_slot2_no_change');
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot3', 'copied_slot3_no_change');
+ ?column? 
+----------
+ copy
+(1 row)
+
+-- Change persistence
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot1', 'copied_slot1_temp', true);
+ ?column? 
+----------
+ copy
+(1 row)
+
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot3', 'copied_slot3_temp', false);
+ ?column? 
+----------
+ copy
+(1 row)
+
+-- Check all copied slots status
+SELECT slot_name, slot_type, temporary FROM pg_replication_slots;
+       slot_name        | slot_type | temporary 
+------------------------+-----------+-----------
+ orig_slot1             | physical  | f
+ orig_slot2             | physical  | f
+ orig_slot3             | physical  | t
+ copied_slot1_no_change | physical  | f
+ copied_slot2_no_change | physical  | f
+ copied_slot3_no_change | physical  | t
+ copied_slot1_temp      | physical  | t
+ copied_slot3_temp      | physical  | f
+(8 rows)
+
+SELECT
+    o.slot_name, c.slot_name
+FROM
+    (SELECT * FROM pg_replication_slots WHERE slot_name LIKE 'orig%') as o
+    LEFT JOIN pg_replication_slots as c ON o.restart_lsn = c.restart_lsn
+WHERE
+    o.slot_name != c.slot_name
+ORDER BY o.slot_name, c.slot_name;
+ slot_name  |       slot_name        
+------------+------------------------
+ orig_slot2 | copied_slot2_no_change
+ orig_slot2 | copied_slot3_no_change
+ orig_slot2 | copied_slot3_temp
+ orig_slot2 | orig_slot3
+ orig_slot3 | copied_slot2_no_change
+ orig_slot3 | copied_slot3_no_change
+ orig_slot3 | copied_slot3_temp
+ orig_slot3 | orig_slot2
+(8 rows)
+
+-- Now we have maximum 8 replication slots. Check slots are properly
+-- released even when raise error during creating the target slot.
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot1', 'failed'); -- error
+ERROR:  all replication slots are in use
+HINT:  Free one or increase max_replication_slots.
+-- temporary slots were dropped automatically
+SELECT pg_drop_replication_slot('orig_slot1');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('orig_slot2');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot1_no_change');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot2_no_change');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_drop_replication_slot('copied_slot3_temp');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+

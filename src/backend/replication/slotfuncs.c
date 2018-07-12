@@ -17,10 +17,12 @@
 #include "miscadmin.h"
 
 #include "access/htup_details.h"
+#include "access/xlog_internal.h"
 #include "replication/decode.h"
 #include "replication/slot.h"
 #include "replication/logical.h"
 #include "replication/logicalfuncs.h"
+#include "storage/ipc.h"
 #include "utils/builtins.h"
 #include "utils/inval.h"
 #include "utils/pg_lsn.h"
@@ -36,6 +38,64 @@ check_permissions(void)
 }
 
 /*
+ * Error cleanup callback for copy replication slot functions. Release
+ * both MyReplicationSlot and the saved replication slot.
+ */
+static void
+copy_replication_slot_callback(int code, Datum arg)
+{
+	ReplicationSlot	*savedslot = (ReplicationSlot *) DatumGetPointer(arg);
+
+	if (MyReplicationSlot)
+		ReplicationSlotRelease();
+
+	/* Release the saved slot if exist while preventing double releasing */
+	if (savedslot && savedslot != MyReplicationSlot)
+	{
+		MyReplicationSlot = savedslot;
+		ReplicationSlotRelease();
+	}
+}
+
+/*
+ * Helper function for creating a new physical replication slot with
+ * given arguments. Return a restart_lsn of new replication slot or
+ * InvalidXLogRecPtr if WAL reservation is not required.
+ */
+static XLogRecPtr
+create_physical_replication_slot(char *name, bool immediately_reserve,
+								 bool temporary, XLogRecPtr restart_lsn)
+{
+	XLogRecPtr	result = InvalidXLogRecPtr;
+
+	Assert(!MyReplicationSlot);
+
+	check_permissions();
+
+	CheckSlotRequirements();
+
+	/* acquire replication slot, this will check for conflicting names */
+	ReplicationSlotCreate(name, false,
+						  temporary ? RS_TEMPORARY : RS_PERSISTENT);
+
+	if (immediately_reserve)
+	{
+		/* Reserve WAL as the user asked for it */
+		ReplicationSlotReserveWal(restart_lsn);
+
+		/* Write this slot to disk */
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
+
+		result = MyReplicationSlot->data.restart_lsn;
+	}
+
+	ReplicationSlotRelease();
+
+	return result;
+}
+
+/*
  * SQL function for creating a new physical (streaming replication)
  * replication slot.
  */
@@ -47,74 +107,158 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 	bool		temporary = PG_GETARG_BOOL(2);
 	Datum		values[2];
 	bool		nulls[2];
+	XLogRecPtr	result_lsn;
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
 	Datum		result;
 
-	Assert(!MyReplicationSlot);
-
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
-	check_permissions();
+	result_lsn = create_physical_replication_slot(NameStr(*name),
+												  immediately_reserve,
+												  temporary,
+												  InvalidXLogRecPtr);
 
-	CheckSlotRequirements();
-
-	/* acquire replication slot, this will check for conflicting names */
-	ReplicationSlotCreate(NameStr(*name), false,
-						  temporary ? RS_TEMPORARY : RS_PERSISTENT);
-
-	values[0] = NameGetDatum(&MyReplicationSlot->data.name);
+	values[0] = NameGetDatum(name);
 	nulls[0] = false;
 
-	if (immediately_reserve)
-	{
-		/* Reserve WAL as the user asked for it */
-		ReplicationSlotReserveWal();
-
-		/* Write this slot to disk */
-		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
-
-		values[1] = LSNGetDatum(MyReplicationSlot->data.restart_lsn);
-		nulls[1] = false;
-	}
+	if (XLogRecPtrIsInvalid(result_lsn))
+		nulls[1] = true;
 	else
 	{
-		nulls[1] = true;
+		values[1] = LSNGetDatum(result_lsn);
+		nulls[1] = false;
 	}
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
 
-	ReplicationSlotRelease();
-
 	PG_RETURN_DATUM(result);
 }
 
-
 /*
- * SQL function for creating a new logical replication slot.
+ * Copy physical replication slot (3 arguments)
+ *
+ * note: this wrapper is necessary to pass the sanity check in opr_sanity,
+ * which checks that all built-in functions that share the implementing C
+ * function take the same number of arguments
  */
 Datum
-pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
+pg_copy_physical_replication_slot_no_temp(PG_FUNCTION_ARGS)
 {
-	Name		name = PG_GETARG_NAME(0);
-	Name		plugin = PG_GETARG_NAME(1);
-	bool		temporary = PG_GETARG_BOOL(2);
+	return pg_copy_physical_replication_slot(fcinfo);
+}
 
-	LogicalDecodingContext *ctx = NULL;
-
-	TupleDesc	tupdesc;
-	HeapTuple	tuple;
-	Datum		result;
+/*
+ * SQL function for copying a physical replication slot.
+ */
+Datum
+pg_copy_physical_replication_slot(PG_FUNCTION_ARGS)
+{
+	Name		src_name = PG_GETARG_NAME(0);
+	Name		dst_name = PG_GETARG_NAME(1);
+	bool		temporary; /* optional argument */
+	bool		immediately_reserve;
+	ReplicationSlot	*saveslot = NULL;
+	XLogRecPtr	restart_lsn;
+	XLogRecPtr	result_lsn;
 	Datum		values[2];
 	bool		nulls[2];
-
-	Assert(!MyReplicationSlot);
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
+
+	/* Acquire the source slot so we own it */
+	ReplicationSlotAcquire(NameStr(*src_name), true);
+
+	/* Check type of replication slot */
+	if (SlotIsLogical(MyReplicationSlot))
+	{
+		ReplicationSlotRelease();
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 (errmsg("cannot copy a logical replication slot to a physical replication slot"))));
+	}
+
+	/* Save values of the source slot */
+	restart_lsn = MyReplicationSlot->data.restart_lsn;
+	temporary = (MyReplicationSlot->data.persistency == RS_TEMPORARY);
+
+	/* Reserve WAL at creation if the source slot already reserves */
+	immediately_reserve = !XLogRecPtrIsInvalid(restart_lsn);
+
+	/* check the optional argument */
+	if (PG_NARGS() >= 3)
+		temporary = PG_GETARG_BOOL(2);
+
+	/*
+	 * To prevent the restart_lsn WAL of the source slot from removal
+	 * during copying a new slot, we copy it while holding the source slot.
+	 * Since we are not allowed to create a new one while holding another
+	 * one, we temporarily save the acquired slot and restore it after
+	 * creation. Set callback function to ensure we release replication
+	 * slots if fail below.
+	 */
+	if (immediately_reserve)
+		saveslot = MyReplicationSlot;
+	else
+		ReplicationSlotRelease();
+
+	PG_ENSURE_ERROR_CLEANUP(copy_replication_slot_callback, (Datum) PointerGetDatum(saveslot));
+	{
+		if (immediately_reserve)
+			MyReplicationSlot = NULL;
+
+		result_lsn = create_physical_replication_slot(NameStr(*dst_name),
+													  immediately_reserve,
+													  temporary,
+													  restart_lsn);
+		Assert(MyReplicationSlot == NULL);
+
+		/*
+		 * Restore source slot, if saved. We must not change the saveslot
+		 * to cancel the callback function.
+		 */
+		if (saveslot)
+			MyReplicationSlot = saveslot;
+	}
+	PG_END_ENSURE_ERROR_CLEANUP(copy_replication_slot_callback, (Datum) PointerGetDatum(saveslot));
+
+	/* Release the source slot, if not yet */
+	if (immediately_reserve)
+		ReplicationSlotRelease();
+
+	values[0] = NameGetDatum(dst_name);
+	nulls[0] = false;
+
+	if (XLogRecPtrIsInvalid(result_lsn))
+		nulls[1] = true;
+	else
+	{
+		values[1] = LSNGetDatum(result_lsn);
+		nulls[1] = false;
+	}
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+
+	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
+}
+
+/*
+ * Helper function for creating a new logical replication slot with
+ * given arguments. Return a confirmed_lsn of new replication slot.
+ */
+static XLogRecPtr
+create_logical_replication_slot(char *name, char *plugin,
+								bool temporary, XLogRecPtr start_lsn)
+{
+	LogicalDecodingContext *ctx = NULL;
+	XLogRecPtr	result;
+
+	Assert(!MyReplicationSlot);
 
 	check_permissions();
 
@@ -128,39 +272,177 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 	 * slots can be created as temporary from beginning as they get dropped on
 	 * error as well.
 	 */
-	ReplicationSlotCreate(NameStr(*name), true,
+	ReplicationSlotCreate(name, true,
 						  temporary ? RS_TEMPORARY : RS_EPHEMERAL);
 
 	/*
 	 * Create logical decoding context, to build the initial snapshot.
 	 */
-	ctx = CreateInitDecodingContext(NameStr(*plugin), NIL,
+	ctx = CreateInitDecodingContext(plugin, NIL,
 									false,	/* do not build snapshot */
+									start_lsn,
 									logical_read_local_xlog_page, NULL, NULL,
 									NULL);
 
 	/* build initial snapshot, might take a while */
 	DecodingContextFindStartpoint(ctx);
 
-	values[0] = CStringGetTextDatum(NameStr(MyReplicationSlot->data.name));
-	values[1] = LSNGetDatum(MyReplicationSlot->data.confirmed_flush);
-
 	/* don't need the decoding context anymore */
 	FreeDecodingContext(ctx);
-
-	memset(nulls, 0, sizeof(nulls));
-
-	tuple = heap_form_tuple(tupdesc, values, nulls);
-	result = HeapTupleGetDatum(tuple);
 
 	/* ok, slot is now fully created, mark it as persistent if needed */
 	if (!temporary)
 		ReplicationSlotPersist();
+
+	result = MyReplicationSlot->data.confirmed_flush;
+
 	ReplicationSlotRelease();
 
-	PG_RETURN_DATUM(result);
+	return result;
 }
 
+/*
+ * SQL function for creating a new logical replication slot.
+ */
+Datum
+pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
+{
+	Name		name = PG_GETARG_NAME(0);
+	Name		plugin = PG_GETARG_NAME(1);
+	bool		temporary = PG_GETARG_BOOL(2);
+	XLogRecPtr	confirmed_flush;
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+	Datum		values[2];
+	bool		nulls[2];
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	confirmed_flush = create_logical_replication_slot(NameStr(*name),
+													  NameStr(*plugin),
+													  temporary,
+													  InvalidXLogRecPtr);
+
+	memset(nulls, 0, sizeof(nulls));
+
+	values[0] = CStringGetTextDatum(NameStr(*name));
+	values[1] = LSNGetDatum(confirmed_flush);
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+
+	PG_RETURN_POINTER(HeapTupleGetDatum(tuple));
+}
+
+/*
+ * Copy logical replication slot (2 arguments)
+ *
+ * note: this wrapper is necessary to pass the sanity check in opr_sanity,
+ * which checks that all built-in functions that share the implementing C
+ * function take the same number of arguments
+ */
+Datum
+pg_copy_logical_replication_slot_no_plugin_temp(PG_FUNCTION_ARGS)
+{
+	return pg_copy_logical_replication_slot(fcinfo);
+}
+
+/*
+ * Copy logical replication slot (3 arguments)
+ *
+ * note: this wrapper is necessary to pass the sanity check in opr_sanity,
+ * which checks that all built-in functions that share the implementing C
+ * function take the same number of arguments
+ */
+Datum
+pg_copy_logical_replication_slot_no_plugin(PG_FUNCTION_ARGS)
+{
+	return pg_copy_logical_replication_slot(fcinfo);
+}
+
+/*
+ * SQL function for copying a logical replication slot.
+ */
+Datum
+pg_copy_logical_replication_slot(PG_FUNCTION_ARGS)
+{
+	Name		src_name = PG_GETARG_NAME(0);
+	Name		dst_name = PG_GETARG_NAME(1);
+	char		*plugin;	/* optional argument */
+	bool		temporary;	/* optional argument */
+	ReplicationSlot *saveslot = NULL;
+	XLogRecPtr	confirmed_flush;
+	XLogRecPtr	restart_lsn;
+	TupleDesc	tupdesc;
+	HeapTuple	tuple;
+	Datum		values[2];
+	bool		nulls[2];
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	/* Acquire the source slot so we own it */
+	ReplicationSlotAcquire(NameStr(*src_name), true);
+
+	/* Check type of replication slot */
+	if (SlotIsPhysical(MyReplicationSlot))
+	{
+		ReplicationSlotRelease();
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 (errmsg("cannot copy a physical replication slot to a logical replication slot"))));
+	}
+
+	/* Save values of the source slot */
+	restart_lsn = MyReplicationSlot->data.restart_lsn;
+	plugin = pstrdup(NameStr(MyReplicationSlot->data.plugin));
+	temporary = (MyReplicationSlot->data.persistency == RS_TEMPORARY);
+
+	/* Check the optional arguments */
+	if (PG_NARGS() >= 3)
+		plugin = NameStr(*(PG_GETARG_NAME(2)));
+	if (PG_NARGS() >= 4)
+		temporary = PG_GETARG_BOOL(3);
+
+	/*
+	 * To prevent the restart_lsn WAL of the source slot from removal
+	 * during copying a new slot, we copy it while holding the source slot.
+	 * Since we are not allowed to create a new one while holding another
+	 * one, we temporarily save the acquired slot and restore it after
+	 * creation. Set callback function to ensure we release replication
+	 * slots if fail below.
+	 */
+	saveslot = MyReplicationSlot;
+	PG_ENSURE_ERROR_CLEANUP(copy_replication_slot_callback, (Datum) PointerGetDatum(saveslot));
+	{
+		MyReplicationSlot = NULL;
+
+		confirmed_flush = create_logical_replication_slot(NameStr(*dst_name),
+														  plugin,
+														  temporary,
+														  restart_lsn);
+		Assert(MyReplicationSlot == NULL);
+
+		/*
+		 * Restore source slot. We must not change the saveslot to cancel the
+		 * callback function.
+		 */
+		MyReplicationSlot = saveslot;
+	}
+	PG_END_ENSURE_ERROR_CLEANUP(copy_replication_slot_callback, (Datum) PointerGetDatum(saveslot));
+
+	/* Release the source slot */
+	ReplicationSlotRelease();
+
+	memset(nulls, 0, sizeof(nulls));
+
+	values[0] = NameGetDatum(dst_name);
+	values[1] = LSNGetDatum(confirmed_flush);
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+
+	PG_RETURN_POINTER(HeapTupleGetDatum(tuple));
+}
 
 /*
  * SQL function for dropping a replication slot.

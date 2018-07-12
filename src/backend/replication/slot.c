@@ -986,11 +986,13 @@ CheckSlotRequirements(void)
 /*
  * Reserve WAL for the currently active slot.
  *
- * Compute and set restart_lsn in a manner that's appropriate for the type of
- * the slot and concurrency safe.
+ * If an lsn to reserve is not requested, compute and set restart_lsn
+ * in a manner that's appropriate for the type of the slot and concurrency safe.
+ * If requested, set restart_lsn and check if the corresponding wal segment
+ * is available.
  */
 void
-ReplicationSlotReserveWal(void)
+ReplicationSlotReserveWal(XLogRecPtr requested_lsn)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
 
@@ -1001,47 +1003,57 @@ ReplicationSlotReserveWal(void)
 	 * The replication slot mechanism is used to prevent removal of required
 	 * WAL. As there is no interlock between this routine and checkpoints, WAL
 	 * segments could concurrently be removed when a now stale return value of
-	 * ReplicationSlotsComputeRequiredLSN() is used. In the unlikely case that
-	 * this happens we'll just retry.
+	 * ReplicationSlotsComputeRequiredLSN() is used. If the lsn to reserve is
+	 * not requested, in the unlikely case that this happens we'll just retry.
 	 */
 	while (true)
 	{
 		XLogSegNo	segno;
 		XLogRecPtr	restart_lsn;
 
-		/*
-		 * For logical slots log a standby snapshot and start logical decoding
-		 * at exactly that position. That allows the slot to start up more
-		 * quickly.
-		 *
-		 * That's not needed (or indeed helpful) for physical slots as they'll
-		 * start replay at the last logged checkpoint anyway. Instead return
-		 * the location of the last redo LSN. While that slightly increases
-		 * the chance that we have to retry, it's where a base backup has to
-		 * start replay at.
-		 */
-		if (!RecoveryInProgress() && SlotIsLogical(slot))
+		if (!XLogRecPtrIsInvalid(requested_lsn))
 		{
-			XLogRecPtr	flushptr;
-
-			/* start at current insert position */
-			restart_lsn = GetXLogInsertRecPtr();
+			/* Set the requested lsn */
 			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
+			slot->data.restart_lsn = requested_lsn;
 			SpinLockRelease(&slot->mutex);
-
-			/* make sure we have enough information to start */
-			flushptr = LogStandbySnapshot();
-
-			/* and make sure it's fsynced to disk */
-			XLogFlush(flushptr);
 		}
 		else
 		{
-			restart_lsn = GetRedoRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
+			/*
+			 * For logical slots log a standby snapshot and start logical decoding
+			 * at exactly that position. That allows the slot to start up more
+			 * quickly.
+			 *
+			 * That's not needed (or indeed helpful) for physical slots as they'll
+			 * start replay at the last logged checkpoint anyway. Instead return
+			 * the location of the last redo LSN. While that slightly increases
+			 * the chance that we have to retry, it's where a base backup has to
+			 * start replay at.
+			 */
+			if (!RecoveryInProgress() && SlotIsLogical(slot))
+			{
+				XLogRecPtr	flushptr;
+
+				/* start at current insert position */
+				restart_lsn = GetXLogInsertRecPtr();
+				SpinLockAcquire(&slot->mutex);
+				slot->data.restart_lsn = restart_lsn;
+				SpinLockRelease(&slot->mutex);
+
+				/* make sure we have enough information to start */
+				flushptr = LogStandbySnapshot();
+
+				/* and make sure it's fsynced to disk */
+				XLogFlush(flushptr);
+			}
+			else
+			{
+				restart_lsn = GetRedoRecPtr();
+				SpinLockAcquire(&slot->mutex);
+				slot->data.restart_lsn = restart_lsn;
+				SpinLockRelease(&slot->mutex);
+			}
 		}
 
 		/* prevent WAL removal as fast as possible */
@@ -1057,6 +1069,19 @@ ReplicationSlotReserveWal(void)
 		XLByteToSeg(slot->data.restart_lsn, segno, wal_segment_size);
 		if (XLogGetLastRemovedSegno() < segno)
 			break;
+
+		/*
+		 * The requested wal lsn is no longer available. We don't want to retry
+		 * it, so raise an error.
+		 */
+		if (!XLogRecPtrIsInvalid(restart_lsn))
+		{
+			char filename[MAXFNAMELEN];
+
+			XLogFileName(filename, ThisTimeLineID, segno, wal_segment_size);
+			ereport(ERROR,
+					(errmsg("could not reserve WAL segment %s", filename)));
+		}
 	}
 }
 

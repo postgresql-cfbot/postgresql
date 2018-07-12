@@ -956,6 +956,16 @@
   prorettype => 'void', proargtypes => 'regclass int8',
   prosrc => 'brin_desummarize_range' },
 
+# Compression access method handlers
+{ oid => '4009', descr => 'pglz compression access method handler',
+  proname => 'pglzhandler', provolatile => 'v',
+  prorettype => 'compression_am_handler', proargtypes => 'internal',
+  prosrc => 'pglzhandler' },
+{ oid => '4010', descr => 'zlib compression access method handler',
+  proname => 'zlibhandler', provolatile => 'v',
+  prorettype => 'compression_am_handler', proargtypes => 'internal',
+  prosrc => 'zlibhandler' },
+
 { oid => '338', descr => 'validate an operator class',
   proname => 'amvalidate', provolatile => 'v', prorettype => 'bool',
   proargtypes => 'oid', prosrc => 'amvalidate' },
@@ -6915,6 +6925,9 @@
   descr => 'bytes required to store the value, perhaps with compression',
   proname => 'pg_column_size', provolatile => 's', prorettype => 'int4',
   proargtypes => 'any', prosrc => 'pg_column_size' },
+{ oid => '4008', descr => 'list of compression methods used by the column',
+  proname => 'pg_column_compression', provolatile => 's', prorettype => 'text',
+  proargtypes => 'regclass text', prosrc => 'pg_column_compression' },
 { oid => '2322',
   descr => 'total disk space usage for the specified tablespace',
   proname => 'pg_tablespace_size', provolatile => 'v', prorettype => 'int8',
@@ -7084,6 +7097,13 @@
 { oid => '3312', descr => 'I/O',
   proname => 'tsm_handler_out', prorettype => 'cstring',
   proargtypes => 'tsm_handler', prosrc => 'tsm_handler_out' },
+{ oid => '4006', descr => 'I/O',
+  proname => 'compression_am_handler_in', proisstrict => 'f',
+  prorettype => 'compression_am_handler', proargtypes => 'cstring',
+  prosrc => 'compression_am_handler_in' },
+{ oid => '4007', descr => 'I/O',
+  proname => 'compression_am_handler_out', prorettype => 'cstring',
+  proargtypes => 'compression_am_handler', prosrc => 'compression_am_handler_out' },
 
 # tablesample method handlers
 { oid => '3313', descr => 'BERNOULLI tablesample method handler',

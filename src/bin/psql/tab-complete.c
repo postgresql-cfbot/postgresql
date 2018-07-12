@@ -2161,11 +2161,14 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET */
 	else if (Matches7("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET") ||
 			 Matches6("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET"))
-		COMPLETE_WITH_LIST5("(", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
+		COMPLETE_WITH_LIST6("(", "COMPRESSION", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET ( */
 	else if (Matches8("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "(") ||
 			 Matches7("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "("))
 		COMPLETE_WITH_LIST2("n_distinct", "n_distinct_inherited");
+	else if (Matches9("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSION", MatchAny) ||
+			 Matches8("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSION", MatchAny))
+		COMPLETE_WITH_CONST("WITH (");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET STORAGE */
 	else if (Matches8("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "STORAGE") ||
 			 Matches7("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "STORAGE"))

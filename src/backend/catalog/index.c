@@ -413,8 +413,9 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attcacheoff = -1;
 			to->atttypmod = exprTypmod(indexkey);
 			to->attislocal = true;
+			to->attcompression = InvalidOid;
 			to->attcollation = (i < numkeyatts) ?
-				collationObjectId[i] : InvalidOid;
+							collationObjectId[i] : InvalidOid;
 
 			ReleaseSysCache(tuple);
 
@@ -501,6 +502,7 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attbyval = typeTup->typbyval;
 			to->attalign = typeTup->typalign;
 			to->attstorage = typeTup->typstorage;
+			to->attcompression = InvalidOid;
 
 			ReleaseSysCache(tuple);
 		}

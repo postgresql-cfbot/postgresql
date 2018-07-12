@@ -49,7 +49,7 @@ static const int dbObjectTypePriority[] =
 	6,							/* DO_FUNC */
 	7,							/* DO_AGG */
 	8,							/* DO_OPERATOR */
-	8,							/* DO_ACCESS_METHOD */
+	7,							/* DO_ACCESS_METHOD */
 	9,							/* DO_OPCLASS */
 	9,							/* DO_OPFAMILY */
 	3,							/* DO_COLLATION */
@@ -85,7 +85,8 @@ static const int dbObjectTypePriority[] =
 	35,							/* DO_POLICY */
 	36,							/* DO_PUBLICATION */
 	37,							/* DO_PUBLICATION_REL */
-	38							/* DO_SUBSCRIPTION */
+	38,							/* DO_SUBSCRIPTION */
+	21							/* DO_ATTRIBUTE_COMPRESSION */
 };
 
 static DumpId preDataBoundId;
@@ -1469,6 +1470,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 			snprintf(buf, bufsize,
 					 "POST-DATA BOUNDARY  (ID %d)",
 					 obj->dumpId);
+			return;
+		case DO_ATTRIBUTE_COMPRESSION:
+			snprintf(buf, bufsize,
+					 "ATTRIBUTE COMPRESSION %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
 			return;
 	}
 	/* shouldn't get here */

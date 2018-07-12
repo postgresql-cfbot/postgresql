@@ -350,6 +350,7 @@ CollectedCommand
 CollectedCommandType
 ColorTrgm
 ColorTrgmInfo
+ColumnCompression
 ColumnCompareData
 ColumnDef
 ColumnIOData
@@ -375,6 +376,8 @@ CompositeIOData
 CompositeTypeStmt
 CompoundAffixFlag
 CompressionAlgorithm
+CompressionAmOptions
+CompressionAmRoutine
 CompressorState
 ConditionVariable
 ConditionalStack

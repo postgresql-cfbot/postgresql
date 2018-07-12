@@ -32,6 +32,8 @@ check2_tbl|f
 check_tbl|f
 circle_tbl|t
 city|f
+cmaltertest|f
+cmtest|f
 copy_tbl|f
 d|f
 d_star|f
@@ -105,6 +107,7 @@ pg_aggregate|t
 pg_am|t
 pg_amop|t
 pg_amproc|t
+pg_attr_compression|t
 pg_attrdef|t
 pg_attribute|t
 pg_auth_members|t

@@ -37,6 +37,9 @@ do "config.pl" if (-f "src/tools/msvc/config.pl");
 
 my $vcver = Mkvcbuild::mkvcbuild($config);
 
+# Check if we only want the project files. If so stop now.
+exit 0 if ($ARGV[0] && $ARGV[0] eq 'ProjectOnly');
+
 # check what sort of build we are doing
 
 my $bconf     = $ENV{CONFIG}   || "Release";

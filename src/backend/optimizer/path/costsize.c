@@ -3446,7 +3446,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 		 * hash-code matches and so very few of the tuples in the bucket will
 		 * actually require eval of the hash quals.  We don't have any good
 		 * way to estimate how many will, but for the moment assume that the
-		 * effective cost per bucket entry is one-tenth what it is for
+		 * effective cost per bucket entry is one-twentieth what it is for
 		 * matchable tuples.
 		 */
 		run_cost += hash_qual_cost.per_tuple *
@@ -3454,10 +3454,10 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 			clamp_row_est(inner_path_rows / virtualbuckets) * 0.05;
 
 		/* Get # of tuples that will pass the basic join */
-		if (path->jpath.jointype == JOIN_SEMI)
-			hashjointuples = outer_matched_rows;
-		else
+		if (path->jpath.jointype == JOIN_ANTI)
 			hashjointuples = outer_path_rows - outer_matched_rows;
+		else
+			hashjointuples = outer_matched_rows;
 	}
 	else
 	{

@@ -4618,6 +4618,31 @@ SELECT * FROM parent WHERE key = 2400;
 
      </variablelist>
     </sect2>
+
+     <sect2 id="runtime-config-query-plancache">
+     <title>Plan Cache Options</title>
+
+     <variablelist>
+
+     <varlistentry id="guc-plancache_mode" xreflabel="plancache_mode">
+      <term><varname>plancache_mode</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>plancache_mode</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Prepared queries have custom and generic plans and the planner 
+        will attempt to choose which is better; this can be set to override 
+        the default behavior. The allowed values are <literal>auto</literal>,
+        <literal>force_custom_plan</literal> and <literal>force_generic_plan</literal>.
+        The default value is <literal>auto</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     </variablelist>
+    </sect2>
    </sect1>
 
    <sect1 id="runtime-config-logging">

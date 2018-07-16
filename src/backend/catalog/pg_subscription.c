@@ -33,6 +33,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/memutils.h"
 #include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -429,12 +430,12 @@ RemoveSubscriptionRel(Oid subid, Oid relid)
 
 
 /*
- * Get all relations for subscription.
+ * Get reloids of all relations for subscription.
  *
- * Returned list is palloc'ed in current memory context.
+ * Returned list is palloc'ed in the specified 'memcxt'
  */
 List *
-GetSubscriptionRelations(Oid subid)
+GetSubscriptionRelids(Oid subid, MemoryContext memcxt)
 {
 	List	   *res = NIL;
 	Relation	rel;
@@ -442,6 +443,7 @@ GetSubscriptionRelations(Oid subid)
 	int			nkeys = 0;
 	ScanKeyData skey[2];
 	SysScanDesc scan;
+	MemoryContext old_context;
 
 	rel = heap_open(SubscriptionRelRelationId, AccessShareLock);
 
@@ -453,20 +455,15 @@ GetSubscriptionRelations(Oid subid)
 	scan = systable_beginscan(rel, InvalidOid, false,
 							  NULL, nkeys, skey);
 
+	old_context = MemoryContextSwitchTo(memcxt);
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
 		Form_pg_subscription_rel subrel;
-		SubscriptionRelState *relstate;
 
 		subrel = (Form_pg_subscription_rel) GETSTRUCT(tup);
-
-		relstate = (SubscriptionRelState *) palloc(sizeof(SubscriptionRelState));
-		relstate->relid = subrel->srrelid;
-		relstate->state = subrel->srsubstate;
-		relstate->lsn = subrel->srsublsn;
-
-		res = lappend(res, relstate);
+		res = lappend_oid(res, subrel->srrelid);
 	}
+	MemoryContextSwitchTo(old_context);
 
 	/* Cleanup */
 	systable_endscan(scan);
@@ -525,4 +522,28 @@ GetSubscriptionNotReadyRelations(Oid subid)
 	heap_close(rel, AccessShareLock);
 
 	return res;
+}
+
+/*
+ * Create a hash table, hashed by subid. Each entry will contain a subset of
+ * relations belonging to the given subscription.
+ */
+HTAB *
+CreateSubscriptionRelHash(void)
+{
+	HASHCTL		ctl;
+
+	MemSet(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(SubscriptionRelEntry);
+
+	/*
+	 * All current users require the allocations to be valid until transaction
+	 * end.
+	 */
+	ctl.hcxt = TopTransactionContext;
+
+	return hash_create("SubscriptionRels",
+					   2,		/* typically, this will be small */
+					   &ctl, HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 }

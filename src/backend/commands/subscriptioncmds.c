@@ -51,6 +51,18 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
+
+/*
+ * Hash table of subscriptions.  Each entry has the relids for a given
+ * subscription that were updated on the last COMMIT.  For a subid, there
+ * exists an entry in this hash table only when the subscription relations are
+ * altered.  Once the transaction ends, the hash table is destroyed and reset
+ * to NIL.  This is done so that during commit, we know exactly which workers
+ * to stop: the relations for the last altered subscription should be compared
+ * with the relations for the last committed subscription changes.
+ */
+static HTAB *committed_subrels_table = NULL;
+
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
 
 /*
@@ -504,9 +516,12 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 {
 	char	   *err;
 	List	   *pubrel_names;
-	List	   *subrel_states;
+	List	   *subrelids;
+	SubscriptionRelEntry *committed_subrels_entry;
+	bool		sub_found;
 	Oid		   *subrel_local_oids;
 	Oid		   *pubrel_local_oids;
+	List	   *stop_relids = NIL;
 	ListCell   *lc;
 	int			off;
 
@@ -525,24 +540,34 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 	/* We are done with the remote side, close connection. */
 	walrcv_disconnect(wrconn);
 
-	/* Get local table list. */
-	subrel_states = GetSubscriptionRelations(sub->oid);
+	/* Get the committed subrels for the given subscription */
+	if (committed_subrels_table == NULL)
+		committed_subrels_table = CreateSubscriptionRelHash();
+	committed_subrels_entry =
+		(SubscriptionRelEntry *) hash_search(committed_subrels_table,
+										 &sub->oid, HASH_ENTER, &sub_found);
+
+	/*
+	 * Get local table list. If we are creating the committed subrel list for
+	 * the first time for this subscription in this transaction, add them into
+	 * the committed_subrels_table, and also make sure the list is maintained
+	 * until transaction end.
+	 */
+	subrelids = GetSubscriptionRelids(sub->oid,
+					sub_found ?  CurrentMemoryContext : TopTransactionContext);
+	if (!sub_found)
+		committed_subrels_entry->relids = subrelids;
 
 	/*
 	 * Build qsorted array of local table oids for faster lookup. This can
 	 * potentially contain all tables in the database so speed of lookup is
 	 * important.
 	 */
-	subrel_local_oids = palloc(list_length(subrel_states) * sizeof(Oid));
+	subrel_local_oids = palloc(list_length(subrelids) * sizeof(Oid));
 	off = 0;
-	foreach(lc, subrel_states)
-	{
-		SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc);
-
-		subrel_local_oids[off++] = relstate->relid;
-	}
-	qsort(subrel_local_oids, list_length(subrel_states),
-		  sizeof(Oid), oid_cmp);
+	foreach(lc, subrelids)
+		subrel_local_oids[off++] = lfirst_oid(lc);
+	qsort(subrel_local_oids, list_length(subrelids), sizeof(Oid), oid_cmp);
 
 	/*
 	 * Walk over the remote tables and try to match them to locally known
@@ -567,7 +592,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		pubrel_local_oids[off++] = relid;
 
 		if (!bsearch(&relid, subrel_local_oids,
-					 list_length(subrel_states), sizeof(Oid), oid_cmp))
+					 list_length(subrelids), sizeof(Oid), oid_cmp))
 		{
 			AddSubscriptionRelState(sub->oid, relid,
 									copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
@@ -585,7 +610,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 	qsort(pubrel_local_oids, list_length(pubrel_names),
 		  sizeof(Oid), oid_cmp);
 
-	for (off = 0; off < list_length(subrel_states); off++)
+	for (off = 0; off < list_length(subrelids); off++)
 	{
 		Oid			relid = subrel_local_oids[off];
 
@@ -594,7 +619,16 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		{
 			RemoveSubscriptionRel(sub->oid, relid);
 
-			logicalrep_worker_stop_at_commit(sub->oid, relid);
+			/*
+			 * If we found an entry in committed_subrels for this subid, that
+			 * means subrelids represents a modified version of the
+			 * committed_subrels_entry->relids. If we didn't find an entry, it
+			 * means this is the first time we are altering the sub, so they
+			 * both have the same committed list; so in that case, we avoid
+			 * another iteration below, and create the stop workers here itself.
+			 */
+			if (!sub_found)
+				stop_relids = lappend_oid(stop_relids, relid);
 
 			ereport(DEBUG1,
 					(errmsg("table \"%s.%s\" removed from subscription \"%s\"",
@@ -603,6 +637,24 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 							sub->name)));
 		}
 	}
+
+	/*
+	 * Now derive the workers to be stopped using the committed reloids. At
+	 * commit time, we will terminate them.
+	 */
+	if (sub_found)
+	{
+		foreach(lc, committed_subrels_entry->relids)
+		{
+			Oid			relid = lfirst_oid(lc);
+
+			if (!bsearch(&relid, pubrel_local_oids,
+						 list_length(pubrel_names), sizeof(Oid), oid_cmp))
+				stop_relids = lappend_oid(stop_relids, relid);
+		}
+	}
+
+	logicalrep_worker_stop_at_commit(sub->oid, stop_relids);
 }
 
 /*
@@ -1171,4 +1223,18 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	walrcv_clear_result(res);
 
 	return tablelist;
+}
+
+/*
+ * Cleanup function for objects maintained during the transaction by
+ * subscription-refresh operation.
+ */
+void
+AtEOXact_Subscription(void)
+{
+	/*
+	 * The hash table must have already been freed because it was allocated in
+	 * TopTransactionContext.
+	 */
+	committed_subrels_table = NULL;
 }

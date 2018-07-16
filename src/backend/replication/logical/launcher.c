@@ -73,13 +73,19 @@ typedef struct LogicalRepCtxStruct
 
 LogicalRepCtxStruct *LogicalRepCtx;
 
-typedef struct LogicalRepWorkerId
+typedef struct StopWorkersData
 {
-	Oid			subid;
-	Oid			relid;
-} LogicalRepWorkerId;
+	int			nestDepth;				/* Sub-transaction nest level */
+	HTAB	   *workers;		/* Workers to be stopped. Hashed by subid */
+	struct StopWorkersData *parent;		/* This need not be an immediate
+										 * subtransaction parent */
+} StopWorkersData;
 
-static List *on_commit_stop_workers = NIL;
+/*
+ * Stack of StopWorkersData elements. Each stack element contains the workers
+ * to be stopped for that subtransaction.
+ */
+static StopWorkersData *on_commit_stop_workers = NULL;
 
 static void ApplyLauncherWakeup(void);
 static void logicalrep_launcher_onexit(int code, Datum arg);
@@ -554,22 +560,49 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 }
 
 /*
- * Request worker for specified sub/rel to be stopped on commit.
+ * Request workers for the specified relids of a subscription to be stopped on
+ * commit. This replaces the earlier saved reloids of a given subscription.
  */
 void
-logicalrep_worker_stop_at_commit(Oid subid, Oid relid)
+logicalrep_worker_stop_at_commit(Oid subid, List *relids)
 {
-	LogicalRepWorkerId *wid;
+	int			nestDepth = GetCurrentTransactionNestLevel();
 	MemoryContext oldctx;
+	SubscriptionRelEntry *subrel_entry;
+	bool		sub_found;
 
 	/* Make sure we store the info in context that survives until commit. */
 	oldctx = MemoryContextSwitchTo(TopTransactionContext);
 
-	wid = palloc(sizeof(LogicalRepWorkerId));
-	wid->subid = subid;
-	wid->relid = relid;
+	/* Check that previous transactions were properly cleaned up. */
+	Assert(on_commit_stop_workers == NULL ||
+		   nestDepth >= on_commit_stop_workers->nestDepth);
 
-	on_commit_stop_workers = lappend(on_commit_stop_workers, wid);
+	/*
+	 * Push a new stack element if we don't already have one for the current
+	 * nestDepth.
+	 */
+	if (on_commit_stop_workers == NULL ||
+		nestDepth > on_commit_stop_workers->nestDepth)
+	{
+		StopWorkersData *newdata = palloc(sizeof(StopWorkersData));
+		newdata->nestDepth = nestDepth;
+		newdata->workers = CreateSubscriptionRelHash();
+		newdata->parent = on_commit_stop_workers;
+		on_commit_stop_workers = newdata;
+	}
+
+	/*
+	 * If there's an existing entry, it means the same subscription was already
+	 * refreshed earlier in the current subtransaction. In that case, replace
+	 * the existing relations with the new ones.
+	 */
+	subrel_entry =
+		(SubscriptionRelEntry *) hash_search(on_commit_stop_workers->workers,
+											 &subid, HASH_ENTER, &sub_found);
+	if (sub_found)
+		list_free(subrel_entry->relids);
+	subrel_entry->relids = list_copy(relids);
 
 	MemoryContextSwitchTo(oldctx);
 }
@@ -823,7 +856,7 @@ ApplyLauncherShmemInit(void)
 bool
 XactManipulatesLogicalReplicationWorkers(void)
 {
-	return (on_commit_stop_workers != NIL);
+	return (on_commit_stop_workers != NULL);
 }
 
 /*
@@ -832,15 +865,25 @@ XactManipulatesLogicalReplicationWorkers(void)
 void
 AtEOXact_ApplyLauncher(bool isCommit)
 {
+
+	Assert(on_commit_stop_workers == NULL ||
+		   (on_commit_stop_workers->nestDepth == 1 &&
+			on_commit_stop_workers->parent == NULL));
+
 	if (isCommit)
 	{
-		ListCell   *lc;
-
-		foreach(lc, on_commit_stop_workers)
+		if (on_commit_stop_workers != NULL)
 		{
-			LogicalRepWorkerId *wid = lfirst(lc);
+			SubscriptionRelEntry *entry;
+			HASH_SEQ_STATUS hash_seq;
+			ListCell   *lc;
 
-			logicalrep_worker_stop(wid->subid, wid->relid);
+			hash_seq_init(&hash_seq, on_commit_stop_workers->workers);
+			while ((entry = (SubscriptionRelEntry *) hash_seq_search(&hash_seq)) != NULL)
+			{
+				foreach(lc, entry->relids)
+					logicalrep_worker_stop(entry->subid, lfirst_oid(lc));
+			}
 		}
 
 		if (on_commit_launcher_wakeup)
@@ -851,8 +894,86 @@ AtEOXact_ApplyLauncher(bool isCommit)
 	 * No need to pfree on_commit_stop_workers.  It was allocated in
 	 * transaction memory context, which is going to be cleaned soon.
 	 */
-	on_commit_stop_workers = NIL;
+	on_commit_stop_workers = NULL;
 	on_commit_launcher_wakeup = false;
+}
+
+/*
+ * On commit, merge the current on_commit_stop_workers list into the
+ * immediate parent, if present.
+ * On rollback, discard the current on_commit_stop_workers list.
+ * Pop out the stack.
+ */
+void
+AtEOSubXact_ApplyLauncher(bool isCommit, int nestDepth)
+{
+	StopWorkersData *parent;
+	HASH_SEQ_STATUS hash_seq;
+	HTAB *workers;
+	SubscriptionRelEntry *entry;
+
+
+	/* Exit immediately if there's no work to do at this level. */
+	if (on_commit_stop_workers == NULL ||
+		on_commit_stop_workers->nestDepth < nestDepth)
+		return;
+
+	Assert(on_commit_stop_workers->nestDepth == nestDepth);
+
+	parent = on_commit_stop_workers->parent;
+	workers = on_commit_stop_workers->workers;
+
+	if (isCommit)
+	{
+		/*
+		 * If the upper stack element is not an immediate parent
+		 * subtransaction, just decrement the notional nesting depth without
+		 * doing any real work.
+		 */
+		if (!parent || parent->nestDepth < nestDepth - 1)
+		{
+			on_commit_stop_workers->nestDepth--;
+			return;
+		}
+
+		/* Else, we need to merge the current workers list into the parent. */
+		hash_seq_init(&hash_seq, workers);
+		while ((entry = (SubscriptionRelEntry *) hash_seq_search(&hash_seq)) != NULL)
+		{
+			bool		sub_found;
+			SubscriptionRelEntry *parent_entry;
+
+			parent_entry =
+				(SubscriptionRelEntry *) hash_search(parent->workers,
+										 &entry->subid, HASH_ENTER, &sub_found);
+			/*
+			 * Replace the parent's workers with the current subtransaction's
+			 * workers.
+			 */
+			if (sub_found)
+				list_free(parent_entry->relids);
+			parent_entry->relids = entry->relids;
+		}
+	}
+	else
+	{
+		/*
+		 * Abandon everything that was done at this nesting level.  Explicitly
+		 * free memory to avoid a transaction-lifespan leak.
+		 */
+		hash_seq_init(&hash_seq, workers);
+		while ((entry = (SubscriptionRelEntry *) hash_seq_search(&hash_seq)) != NULL)
+			list_free(entry->relids);
+
+		hash_destroy(workers);
+	}
+
+	/*
+	 * We have taken care of the current subtransaction workers list for both
+	 * abort or commit. So we are ready to pop the stack.
+	 */
+	pfree(on_commit_stop_workers);
+	on_commit_stop_workers = parent;
 }
 
 /*

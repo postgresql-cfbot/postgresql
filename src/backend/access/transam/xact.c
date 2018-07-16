@@ -33,6 +33,7 @@
 #include "catalog/namespace.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/subscriptioncmds.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/spi.h"
@@ -2128,6 +2129,7 @@ CommitTransaction(void)
 	AtEOXact_HashTables(true);
 	AtEOXact_PgStat(true);
 	AtEOXact_Snapshot(true, false);
+	AtEOXact_Subscription();
 	AtEOXact_ApplyLauncher(true);
 	pgstat_report_xact_timestamp(0);
 
@@ -2607,6 +2609,7 @@ AbortTransaction(void)
 		AtEOXact_ComboCid();
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
+		AtEOXact_Subscription();
 		AtEOXact_ApplyLauncher(false);
 		pgstat_report_xact_timestamp(0);
 	}
@@ -4637,6 +4640,7 @@ CommitSubTransaction(void)
 	AtEOSubXact_HashTables(true, s->nestingLevel);
 	AtEOSubXact_PgStat(true, s->nestingLevel);
 	AtSubCommit_Snapshot(s->nestingLevel);
+	AtEOSubXact_ApplyLauncher(true, s->nestingLevel);
 
 	/*
 	 * We need to restore the upper transaction's read-only state, in case the
@@ -4790,6 +4794,7 @@ AbortSubTransaction(void)
 		AtEOSubXact_HashTables(false, s->nestingLevel);
 		AtEOSubXact_PgStat(false, s->nestingLevel);
 		AtSubAbort_Snapshot(s->nestingLevel);
+		AtEOSubXact_ApplyLauncher(false, s->nestingLevel);
 	}
 
 	/*

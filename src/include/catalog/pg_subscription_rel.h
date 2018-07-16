@@ -23,6 +23,7 @@
 
 #include "access/xlogdefs.h"
 #include "nodes/pg_list.h"
+#include "utils/hsearch.h"
 
 /* ----------------
  *		pg_subscription_rel definition. cpp turns this into
@@ -67,6 +68,12 @@ typedef struct SubscriptionRelState
 	char		state;
 } SubscriptionRelState;
 
+typedef struct SubscriptionRelEntry
+{
+	Oid			subid;		/* hash key - must be first */
+	List	   *relids;		/* Subset of relations in the subscription. */
+} SubscriptionRelEntry;
+
 extern Oid AddSubscriptionRelState(Oid subid, Oid relid, char state,
 						XLogRecPtr sublsn);
 extern Oid UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
@@ -76,6 +83,8 @@ extern char GetSubscriptionRelState(Oid subid, Oid relid,
 extern void RemoveSubscriptionRel(Oid subid, Oid relid);
 
 extern List *GetSubscriptionRelations(Oid subid);
+extern List *GetSubscriptionRelids(Oid subid, MemoryContext memcxt);
 extern List *GetSubscriptionNotReadyRelations(Oid subid);
+extern HTAB *CreateSubscriptionRelHash(void);
 
 #endif							/* PG_SUBSCRIPTION_REL_H */

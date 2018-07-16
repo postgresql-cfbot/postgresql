@@ -25,5 +25,6 @@ extern void DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel);
 
 extern ObjectAddress AlterSubscriptionOwner(const char *name, Oid newOwnerId);
 extern void AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId);
+extern void AtEOXact_Subscription(void);
 
 #endif							/* SUBSCRIPTIONCMDS_H */

@@ -1562,10 +1562,16 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 		 * the table was either created in the current (sub)transaction or has
 		 * a new relfilenode in the current (sub)transaction, then we can just
 		 * truncate it in-place, because a rollback would cause the whole
-		 * table or the current physical file to be thrown away anyway.
+		 * table or the current physical file to be thrown away anyway.  This
+		 * optimization is not safe with wal_level = minimal as there is no
+		 * actual way to know which are the blocks that could have been
+		 * touched by another operation done within this same transaction, be
+		 * it INSERT or COPY.  Non-permanent relations can also safely use
+		 * this optimization as they don't rely on WAL at recovery.
 		 */
-		if (rel->rd_createSubid == mySubid ||
-			rel->rd_newRelfilenodeSubid == mySubid)
+		if ((XLogIsNeeded() || !RelationNeedsWAL(rel)) &&
+			(rel->rd_createSubid == mySubid ||
+			 rel->rd_newRelfilenodeSubid == mySubid))
 		{
 			/* Immediate, non-rollbackable truncation is OK */
 			heap_truncate_one_rel(rel);

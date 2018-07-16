@@ -42,6 +42,7 @@
 #include "parser/parse_relation.h"
 #include "port/pg_bswap.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -2367,13 +2368,23 @@ CopyFrom(CopyState cstate)
 	/*----------
 	 * Check to see if we can avoid writing WAL
 	 *
-	 * If archive logging/streaming is not enabled *and* either
-	 *	- table was created in same transaction as this COPY
+	 * WAL can be skipped if all the following conditions are satisfied:
+	 *	- table was created in same transaction as this COPY.
+	 *  - archive logging/streaming is enabled.
 	 *	- data is being written to relfilenode created in this transaction
 	 * then we can skip writing WAL.  It's safe because if the transaction
 	 * doesn't commit, we'll discard the table (or the new relfilenode file).
 	 * If it does commit, we'll have done the heap_sync at the bottom of this
 	 * routine first.
+	 *  - No triggers are defined on the relation, particularly BEFORE/AFTER
+	 * ROW INSERT triggers could try to write data to the same block copied
+	 * to when the INSERT are WAL-logged.
+	 *  - No actions which write an init block for any of the buffers that
+	 * will be touched during COPY have happened.  Since there is no way of
+	 * knowing at present which ones these are, we must use a simple but
+	 * effective heuristic to ensure safety of the COPY operation for all
+	 * cases, which is in this case to check that the relation copied to has
+	 * zero blocks.
 	 *
 	 * As mentioned in comments in utils/rel.h, the in-same-transaction test
 	 * is not always set correctly, since in rare cases rd_newRelfilenodeSubid
@@ -2404,7 +2415,10 @@ CopyFrom(CopyState cstate)
 		cstate->rel->rd_newRelfilenodeSubid != InvalidSubTransactionId)
 	{
 		hi_options |= HEAP_INSERT_SKIP_FSM;
-		if (!XLogIsNeeded())
+
+		if (!XLogIsNeeded() &&
+			cstate->rel->trigdesc == NULL &&
+			RelationGetNumberOfBlocks(cstate->rel) == 0)
 			hi_options |= HEAP_INSERT_SKIP_WAL;
 	}
 

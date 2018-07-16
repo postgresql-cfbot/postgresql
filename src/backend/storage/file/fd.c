@@ -47,8 +47,9 @@
  * ownership mechanism that provides automatic cleanup for shared files when
  * the last of a group of backends detaches.
  *
- * AllocateFile, AllocateDir, OpenPipeStream and OpenTransientFile are
- * wrappers around fopen(3), opendir(3), popen(3) and open(2), respectively.
+ * AllocateFile, AllocateDir, OpenPipeStream, OpenTransientFile,
+ * WriteTransientFile and ReadTransientFile are wrappers around fopen(3),
+ * opendir(3), popen(3), open(2), write(2) and read(2) respectively.
  * They behave like the corresponding native functions, except that the handle
  * is registered with the current subtransaction, and will be automatically
  * closed at abort. These are intended mainly for short operations like
@@ -2478,6 +2479,98 @@ TryAgain:
 	}
 
 	return NULL;
+}
+
+/*
+ * Write to a file which has been opened using OpenTransientFile or
+ * OpenTransientFilePerm.  Equivalent to write(2).
+ */
+void
+WriteTransientFile(int fd, char *buf, Size count, int elevel,
+				   const char *filename, uint32 wait_event_info)
+{
+	int			r;
+
+	pgstat_report_wait_start(wait_event_info);
+	r = write(fd, buf, count);
+	pgstat_report_wait_end();
+
+	if (r != count)
+	{
+		int         save_errno = errno;
+
+		(void) CloseTransientFile(fd);
+
+		/* if write didn't set errno, assume problem is no disk space */
+		errno = save_errno ? save_errno : ENOSPC;
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m", filename)));
+	}
+}
+
+/*
+ * Read from a file which has been opened using OpenTransientFile or
+ * OpenTransientFilePerm.  Equivalent to read(2).  Returns true on
+ * success and false on failure.
+ */
+bool
+ReadTransientFile(int fd, char *buf, Size count, int elevel,
+				  const char *filename, uint32 wait_event_info)
+{
+	int			r;
+
+	pgstat_report_wait_start(wait_event_info);
+	r = read(fd, buf, count);
+	pgstat_report_wait_end();
+
+	if (r != count)
+	{
+		int         save_errno = errno;
+
+		CloseTransientFile(fd);
+
+		if (r < 0)
+		{
+			errno = save_errno;
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m", filename)));
+		}
+		else
+			ereport(elevel,
+					(errmsg("could not read file \"%s\": read %d of %zu",
+							filename, r, count)));
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Write to a file which has been opened using OpenTransientFile or
+ * OpenTransientFilePerm.  Equivalent to fsync(2).
+ */
+void
+SyncTransientFile(int fd, int elevel, const char *filename,
+				  uint32 wait_event_info)
+{
+	int			status;
+
+	pgstat_report_wait_start(wait_event_info);
+	status = pg_fsync(fd);
+	pgstat_report_wait_end();
+
+	if (status != 0)
+	{
+		int         save_errno = errno;
+
+		(void) CloseTransientFile(fd);
+		errno = save_errno;
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not fsync file \"%s\": %m", filename)));
+	}
 }
 
 /*

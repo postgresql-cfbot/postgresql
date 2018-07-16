@@ -1354,7 +1354,6 @@ RestoreSlotFromDisk(const char *name)
 	char		path[MAXPGPATH + 22];
 	int			fd;
 	bool		restored = false;
-	int			readBytes;
 	pg_crc32c	checksum;
 
 	/* no need to lock here, no concurrent access allowed yet */
@@ -1405,21 +1404,8 @@ RestoreSlotFromDisk(const char *name)
 	END_CRIT_SECTION();
 
 	/* read part of statefile that's guaranteed to be version independent */
-	pgstat_report_wait_start(WAIT_EVENT_REPLICATION_SLOT_READ);
-	readBytes = read(fd, &cp, ReplicationSlotOnDiskConstantSize);
-	pgstat_report_wait_end();
-	if (readBytes != ReplicationSlotOnDiskConstantSize)
-	{
-		int			saved_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = saved_errno;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %u: %m",
-						path, readBytes,
-						(uint32) ReplicationSlotOnDiskConstantSize)));
-	}
+	(void) ReadTransientFile(fd, (char *) &cp, ReplicationSlotOnDiskConstantSize,
+							 PANIC, path, WAIT_EVENT_REPLICATION_SLOT_READ);
 
 	/* verify magic */
 	if (cp.magic != SLOT_MAGIC)
@@ -1443,23 +1429,9 @@ RestoreSlotFromDisk(const char *name)
 						path, cp.length)));
 
 	/* Now that we know the size, read the entire file */
-	pgstat_report_wait_start(WAIT_EVENT_REPLICATION_SLOT_READ);
-	readBytes = read(fd,
-					 (char *) &cp + ReplicationSlotOnDiskConstantSize,
-					 cp.length);
-	pgstat_report_wait_end();
-	if (readBytes != cp.length)
-	{
-		int			saved_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = saved_errno;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %u: %m",
-						path, readBytes, cp.length)));
-	}
-
+	(void) ReadTransientFile(fd, (char *) &cp + ReplicationSlotOnDiskConstantSize,
+							 cp.length, PANIC, path,
+							 WAIT_EVENT_REPLICATION_SLOT_READ);
 	CloseTransientFile(fd);
 
 	/* now verify the CRC */

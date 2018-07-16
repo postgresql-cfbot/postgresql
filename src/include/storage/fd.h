@@ -34,7 +34,9 @@
  *
  * Likewise, use AllocateDir/FreeDir, not opendir/closedir, to allocate
  * open directories (DIR*), and OpenTransientFile/CloseTransient File for an
- * unbuffered file descriptor.
+ * unbuffered file descriptor.  WriteTransientFile should be used instead
+ * of write(2), ReadTransientFile instead of read(2), and SyncTransientFile
+ * instead of fsync(2).
  */
 #ifndef FD_H
 #define FD_H
@@ -105,6 +107,12 @@ extern int	FreeDir(DIR *dir);
 /* Operations to allow use of a plain kernel FD, with automatic cleanup */
 extern int	OpenTransientFile(const char *fileName, int fileFlags);
 extern int	OpenTransientFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
+extern void WriteTransientFile(int fd, char *buf, Size count, int elevel,
+							   const char *filename, uint32 wait_event_info);
+extern bool ReadTransientFile(int fd, char *buf, Size count, int elevel,
+							  const char *filename, uint32 wait_event_info);
+extern void SyncTransientFile(int fd, int elevel,  const char *filename,
+							  uint32 wait_event_info);
 extern int	CloseTransientFile(int fd);
 
 /* If you've really really gotta have a plain kernel FD, use this */

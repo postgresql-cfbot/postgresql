@@ -648,7 +648,7 @@ load_relmap_file(bool shared)
 	if (fd < 0)
 		ereport(FATAL,
 				(errcode_for_file_access(),
-				 errmsg("could not open relation mapping file \"%s\": %m",
+				 errmsg("could not open file \"%s\": %m",
 						mapfilename)));
 
 	/*
@@ -658,13 +658,8 @@ load_relmap_file(bool shared)
 	 * look, the sinval signaling mechanism will make us re-read it before we
 	 * are able to access any relation that's affected by the change.
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_READ);
-	if (read(fd, map, sizeof(RelMapFile)) != sizeof(RelMapFile))
-		ereport(FATAL,
-				(errcode_for_file_access(),
-				 errmsg("could not read relation mapping file \"%s\": %m",
-						mapfilename)));
-	pgstat_report_wait_end();
+	(void) ReadTransientFile(fd, (char *) map, sizeof(RelMapFile), FATAL,
+							 mapfilename, WAIT_EVENT_RELATION_MAP_READ);
 
 	CloseTransientFile(fd);
 
@@ -748,7 +743,7 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not open relation mapping file \"%s\": %m",
+				 errmsg("could not open file \"%s\": %m",
 						mapfilename)));
 
 	if (write_wal)
@@ -774,18 +769,9 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	}
 
 	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_WRITE);
-	if (write(fd, newmap, sizeof(RelMapFile)) != sizeof(RelMapFile))
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to relation mapping file \"%s\": %m",
-						mapfilename)));
-	}
-	pgstat_report_wait_end();
+
+	WriteTransientFile(fd, (char *) newmap, sizeof(RelMapFile), ERROR,
+					   mapfilename, WAIT_EVENT_RELATION_MAP_WRITE);
 
 	/*
 	 * We choose to fsync the data to disk before considering the task done.
@@ -793,18 +779,12 @@ write_relmap_file(bool shared, RelMapFile *newmap,
 	 * issue, but it would complicate checkpointing --- see notes for
 	 * CheckPointRelationMap.
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_SYNC);
-	if (pg_fsync(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not fsync relation mapping file \"%s\": %m",
-						mapfilename)));
-	pgstat_report_wait_end();
+	SyncTransientFile(fd, ERROR, mapfilename, WAIT_EVENT_RELATION_MAP_SYNC);
 
 	if (CloseTransientFile(fd))
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not close relation mapping file \"%s\": %m",
+				 errmsg("could not close file \"%s\": %m",
 						mapfilename)));
 
 	/*

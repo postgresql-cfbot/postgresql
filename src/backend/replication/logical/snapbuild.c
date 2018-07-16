@@ -1609,20 +1609,8 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 		ereport(ERROR,
 				(errmsg("could not open file \"%s\": %m", path)));
 
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
-	if ((write(fd, ondisk, needed_length)) != needed_length)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m", tmppath)));
-	}
-	pgstat_report_wait_end();
+	WriteTransientFile(fd, (char *) ondisk, needed_length, ERROR, tmppath,
+					   WAIT_EVENT_SNAPBUILD_WRITE);
 
 	/*
 	 * fsync the file before renaming so that even if we crash after this we
@@ -1686,7 +1674,6 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	int			fd;
 	char		path[MAXPGPATH];
 	Size		sz;
-	int			readBytes;
 	pg_crc32c	checksum;
 
 	/* no point in loading a snapshot if we're already there */
@@ -1716,22 +1703,9 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	fsync_fname(path, false);
 	fsync_fname("pg_logical/snapshots", true);
 
-
 	/* read statically sized portion of snapshot */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk, SnapBuildOnDiskConstantSize);
-	pgstat_report_wait_end();
-	if (readBytes != SnapBuildOnDiskConstantSize)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %d: %m",
-						path, readBytes, (int) SnapBuildOnDiskConstantSize)));
-	}
+	(void) ReadTransientFile(fd, (char *) &ondisk, SnapBuildOnDiskConstantSize,
+					  ERROR, path, WAIT_EVENT_SNAPBUILD_READ);
 
 	if (ondisk.magic != SNAPBUILD_MAGIC)
 		ereport(ERROR,
@@ -1749,59 +1723,23 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 				SnapBuildOnDiskConstantSize - SnapBuildOnDiskNotChecksummedSize);
 
 	/* read SnapBuild */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk.builder, sizeof(SnapBuild));
-	pgstat_report_wait_end();
-	if (readBytes != sizeof(SnapBuild))
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %d: %m",
-						path, readBytes, (int) sizeof(SnapBuild))));
-	}
+	(void) ReadTransientFile(fd, (char *) &ondisk.builder, sizeof(SnapBuild),
+					  ERROR, path, WAIT_EVENT_SNAPBUILD_READ);
 	COMP_CRC32C(checksum, &ondisk.builder, sizeof(SnapBuild));
 
 	/* restore running xacts (dead, but kept for backward compat) */
 	sz = sizeof(TransactionId) * ondisk.builder.was_running.was_xcnt_space;
 	ondisk.builder.was_running.was_xip =
 		MemoryContextAllocZero(builder->context, sz);
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, ondisk.builder.was_running.was_xip, sz);
-	pgstat_report_wait_end();
-	if (readBytes != sz)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %d: %m",
-						path, readBytes, (int) sz)));
-	}
+	(void) ReadTransientFile(fd, (char *) ondisk.builder.was_running.was_xip, sz,
+					  ERROR, path, WAIT_EVENT_SNAPBUILD_READ);
 	COMP_CRC32C(checksum, ondisk.builder.was_running.was_xip, sz);
 
 	/* restore committed xacts information */
 	sz = sizeof(TransactionId) * ondisk.builder.committed.xcnt;
 	ondisk.builder.committed.xip = MemoryContextAllocZero(builder->context, sz);
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, ondisk.builder.committed.xip, sz);
-	pgstat_report_wait_end();
-	if (readBytes != sz)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read file \"%s\", read %d of %d: %m",
-						path, readBytes, (int) sz)));
-	}
+	(void) ReadTransientFile(fd, (char *) ondisk.builder.committed.xip, sz,
+					  ERROR, path, WAIT_EVENT_SNAPBUILD_READ);
 	COMP_CRC32C(checksum, ondisk.builder.committed.xip, sz);
 
 	CloseTransientFile(fd);

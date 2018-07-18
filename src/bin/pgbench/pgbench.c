@@ -2751,16 +2751,6 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 				st->txn_scheduled = thread->throttle_trigger;
 
 				/*
-				 * stop client if next transaction is beyond pgbench end of
-				 * execution
-				 */
-				if (duration > 0 && st->txn_scheduled > end_time)
-				{
-					st->state = CSTATE_FINISHED;
-					break;
-				}
-
-				/*
 				 * If --latency-limit is used, and this slot is already late
 				 * so that the transaction will miss the latency limit even if
 				 * it completed immediately, we skip this time slot and
@@ -2790,6 +2780,19 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 						break;
 					}
 				}
+
+				/*
+				 * If next transaction is scheduled beyond pgbench end of
+				 * execution, don't start a new transaction. We used to move
+				 * straight to to CSTATE_FINISHED here, but it is pretty
+				 * surprising if the test finished before the specified
+				 * duration is up, even if the clients have nothing left to
+				 * do. (In particular, it caused a regression test to fail,
+				 * which tested that "pgbench -T 2" doesn't return before
+				 * two seconds have passed.)
+				 */
+				if (duration > 0 && st->txn_scheduled > end_time)
+					return;
 
 				st->state = CSTATE_THROTTLE;
 				if (debug)

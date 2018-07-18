@@ -327,7 +327,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
-		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
+		"Target-Session-Attrs", "", 12, /* sizeof("prefer-read") = 12 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
 	/* Terminating entry --- MUST BE LAST */
@@ -1184,7 +1184,8 @@ connectOptions2(PGconn *conn)
 	if (conn->target_session_attrs)
 	{
 		if (strcmp(conn->target_session_attrs, "any") != 0
-			&& strcmp(conn->target_session_attrs, "read-write") != 0)
+			&& strcmp(conn->target_session_attrs, "read-write") != 0
+			&& strcmp(conn->target_session_attrs, "prefer-read") != 0)
 		{
 			conn->status = CONNECTION_BAD;
 			printfPQExpBuffer(&conn->errorMessage,
@@ -2086,8 +2087,23 @@ keep_going:						/* We will come back to here until there is
 					{
 						if (++conn->whichhost >= conn->nconnhost)
 						{
-							conn->whichhost = 0;
-							break;
+							if (conn->read_write_host_index >= 0)
+							{
+								/*
+								 * Go to here means failed to connect to
+								 * read-only servers and now try connect to
+								 * read-write server again. Only under the
+								 * 'prefer-read' scenario will go to here.
+								 */
+								conn->addr_cur = conn->connhost[conn->read_write_host_index].addrlist;
+								conn->whichhost = conn->read_write_host_index;
+								conn->read_write_host_index = -2;
+							}
+							else
+							{
+								conn->whichhost = 0;
+								break;
+							}
 						}
 						conn->addr_cur =
 							conn->connhost[conn->whichhost].addrlist;
@@ -2112,6 +2128,14 @@ keep_going:						/* We will come back to here until there is
 							conn->addr_cur = addr_cur->ai_next;
 							continue;
 						}
+						else if (conn->read_write_host_index >= 0)
+						{
+							conn->addr_cur = conn->connhost[conn->read_write_host_index].addrlist;
+							conn->whichhost = conn->read_write_host_index;
+							conn->read_write_host_index = -2;
+							continue;
+						}
+
 						appendPQExpBuffer(&conn->errorMessage,
 										  libpq_gettext("could not create socket: %s\n"),
 										  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
@@ -2338,6 +2362,14 @@ keep_going:						/* We will come back to here until there is
 						conn->whichhost + 1 < conn->nconnhost)
 					{
 						conn->addr_cur = conn->addr_cur->ai_next;
+						conn->status = CONNECTION_NEEDED;
+						goto keep_going;
+					}
+					else if (conn->read_write_host_index >= 0)
+					{
+						conn->addr_cur = conn->connhost[conn->read_write_host_index].addrlist;
+						conn->whichhost = conn->read_write_host_index;
+						conn->read_write_host_index = -2;
 						conn->status = CONNECTION_NEEDED;
 						goto keep_going;
 					}
@@ -2978,10 +3010,12 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/*
-				 * If a read-write connection is required, see if we have one.
+				 * If a read-write or prefer-read connection is required, see
+				 * if we have one.
 				 */
 				if (conn->target_session_attrs != NULL &&
-					strcmp(conn->target_session_attrs, "read-write") == 0)
+					(strcmp(conn->target_session_attrs, "read-write") == 0 ||
+					 strcmp(conn->target_session_attrs, "prefer-read") == 0))
 				{
 					/*
 					 * We are yet to make a connection. Save all existing
@@ -3042,10 +3076,12 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is requested check for same.
+			 * If a read-write or prefer-read connection is requested check
+			 * for same.
 			 */
 			if (conn->target_session_attrs != NULL &&
-				strcmp(conn->target_session_attrs, "read-write") == 0)
+				(strcmp(conn->target_session_attrs, "read-write") == 0 ||
+				 strcmp(conn->target_session_attrs, "prefer-read") == 0))
 			{
 				if (!saveErrorMessage(conn, &savedMessage))
 					goto error_return;
@@ -3128,53 +3164,134 @@ keep_going:						/* We will come back to here until there is
 					val = PQgetvalue(res, 0, 0);
 					if (strncmp(val, "on", 2) == 0)
 					{
-						const char *displayed_host;
-						const char *displayed_port;
-
-						if (conn->connhost[conn->whichhost].type == CHT_HOST_ADDRESS)
-							displayed_host = conn->connhost[conn->whichhost].hostaddr;
-						else
-							displayed_host = conn->connhost[conn->whichhost].host;
-						displayed_port = conn->connhost[conn->whichhost].port;
-						if (displayed_port == NULL || displayed_port[0] == '\0')
-							displayed_port = DEF_PGPORT_STR;
-
-						PQclear(res);
-						restoreErrorMessage(conn, &savedMessage);
-
-						/* Not writable; close connection. */
-						appendPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("could not make a writable "
-														"connection to server "
-														"\"%s:%s\"\n"),
-										  displayed_host, displayed_port);
-						conn->status = CONNECTION_OK;
-						sendTerminateConn(conn);
-						pqDropConnection(conn, true);
-
-						/* Skip any remaining addresses for this host. */
-						conn->addr_cur = NULL;
-						if (conn->whichhost + 1 < conn->nconnhost)
+						if (strcmp(conn->target_session_attrs, "read-write") == 0)
 						{
-							conn->status = CONNECTION_NEEDED;
+							if (conn->connhost[conn->whichhost].type == CHT_HOST_ADDRESS)
+								displayed_host = conn->connhost[conn->whichhost].hostaddr;
+							else
+								displayed_host = conn->connhost[conn->whichhost].host;
+							displayed_port = conn->connhost[conn->whichhost].port;
+							if (displayed_port == NULL || displayed_port[0] == '\0')
+								displayed_port = DEF_PGPORT_STR;
+
+							PQclear(res);
+							restoreErrorMessage(conn, &savedMessage);
+
+							/* Not writable; close connection. */
+							appendPQExpBuffer(&conn->errorMessage,
+											  libpq_gettext("could not make a writable "
+															"connection to server "
+															"\"%s:%s\"\n"),
+											  displayed_host, displayed_port);
+							conn->status = CONNECTION_OK;
+							sendTerminateConn(conn);
+							pqDropConnection(conn, true);
+
+							/* Skip any remaining addresses for this host. */
+							conn->addr_cur = NULL;
+							if (conn->whichhost + 1 < conn->nconnhost)
+							{
+								conn->status = CONNECTION_NEEDED;
+								goto keep_going;
+							}
+
+							/* No more addresses to try. So we fail. */
+							goto error_return;
+						}
+						else	/* conn->target_session_attrs is prefer-read */
+						{
+							PQclear(res);
+							termPQExpBuffer(&savedMessage);
+
+							/* We can release the address lists now. */
+							release_all_addrinfo(conn);
+
+							/*
+							 * Finish reading any remaining messages before
+							 * being considered as ready.
+							 */
+							conn->status = CONNECTION_CONSUME;
 							goto keep_going;
 						}
-
-						/* No more addresses to try. So we fail. */
-						goto error_return;
 					}
-					PQclear(res);
-					termPQExpBuffer(&savedMessage);
+					else		/* server support read-write */
+					{
+						if (strcmp(conn->target_session_attrs, "read-write") == 0)
+						{
+							PQclear(res);
+							termPQExpBuffer(&savedMessage);
 
-					/* We can release the address lists now. */
-					release_all_addrinfo(conn);
+							/* We can release the address lists now. */
+							release_all_addrinfo(conn);
 
-					/*
-					 * Finish reading any remaining messages before being
-					 * considered as ready.
-					 */
-					conn->status = CONNECTION_CONSUME;
-					goto keep_going;
+							/*
+							 * Finish reading any remaining messages before
+							 * being considered as ready.
+							 */
+							conn->status = CONNECTION_CONSUME;
+							goto keep_going;
+						}
+						else	/* conn->target_session_attrs is prefer-read */
+						{
+							/* is it the last connection? */
+							if ((conn->whichhost + 1 < conn->nconnhost) &&
+								(conn->read_write_host_index != -2))
+							{
+								if (conn->connhost[conn->whichhost].type == CHT_HOST_ADDRESS)
+									displayed_host = conn->connhost[conn->whichhost].hostaddr;
+								else
+									displayed_host = conn->connhost[conn->whichhost].host;
+								displayed_port = conn->connhost[conn->whichhost].port;
+								if (displayed_port == NULL || displayed_port[0] == '\0')
+									displayed_port = DEF_PGPORT_STR;
+
+								PQclear(res);
+								restoreErrorMessage(conn, &savedMessage);
+
+								/* Not read-only; close connection. */
+								appendPQExpBuffer(&conn->errorMessage,
+												  libpq_gettext("could not make a read-only "
+																"connection to server "
+																"\"%s:%s\"\n"),
+												  displayed_host, displayed_port);
+
+								/*
+								 * Connecting to a writable server, close it
+								 * and try to connect to another one.
+								 */
+								conn->status = CONNECTION_OK;
+								sendTerminateConn(conn);
+								pqDropConnection(conn, true);
+
+								/* Skip any remaining addresses for this host. */
+								conn->addr_cur = NULL;
+
+								conn->status = CONNECTION_NEEDED;
+
+								/* Record read-write host index, if not yet */
+								if (conn->read_write_host_index == -1)
+									conn->read_write_host_index = conn->whichhost;
+
+								goto keep_going;
+							}
+							else	/* No more host to connect, keep this
+									 * connection */
+							{
+								PQclear(res);
+								termPQExpBuffer(&savedMessage);
+
+								/* We can release the address lists now. */
+								release_all_addrinfo(conn);
+
+								/*
+								 * Finish reading any remaining messages
+								 * before being considered as ready.
+								 */
+								conn->status = CONNECTION_CONSUME;
+								goto keep_going;
+							}
+						}
+					}
 				}
 
 				/*
@@ -3392,6 +3509,8 @@ makeEmptyPGconn(void)
 		freePGconn(conn);
 		conn = NULL;
 	}
+
+	conn->read_write_host_index = -1;
 
 	return conn;
 }

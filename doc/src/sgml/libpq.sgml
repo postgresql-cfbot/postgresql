@@ -1592,8 +1592,17 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         successful connection; if it returns <literal>on</literal>, the connection
         will be closed.  If multiple hosts were specified in the connection
         string, any remaining servers will be tried just as if the connection
-        attempt had failed.  The default value of this parameter,
-        <literal>any</literal>, regards all connections as acceptable.
+        attempt had failed.
+      </para>
+      <para>
+        If this parameter is set to <literal>prefer-read</literal>, connections
+        where <literal>SHOW transaction_read_only</literal> returns on are
+        preferred. If no such connections can be found, then a connection
+        that allows read-write transactions will be accepted.
+      </para>
+      <para>
+        The default value of this parameter,<literal>any</literal>, regards all
+        connections as acceptable.
       </para>
       </listitem>
     </varlistentry>

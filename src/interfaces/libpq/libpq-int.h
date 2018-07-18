@@ -362,7 +362,7 @@ struct pg_conn
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif
 
-	/* Type of connection to make.  Possible values: any, read-write. */
+	/* Type of connection to make.  Possible values: any, read-write, perfer-read. */
 	char	   *target_session_attrs;
 
 	/* Optional file to write trace info to */
@@ -396,6 +396,7 @@ struct pg_conn
 	int			nconnhost;		/* # of possible hosts */
 	int			whichhost;		/* host we're currently considering */
 	pg_conn_host *connhost;		/* details about each possible host */
+	int 		read_write_host_index; /* index for first read-write host in connhost */
 
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if

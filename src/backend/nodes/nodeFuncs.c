@@ -80,6 +80,8 @@ exprType(const Node *expr)
 		case T_FuncExpr:
 			type = ((const FuncExpr *) expr)->funcresulttype;
 			break;
+		case T_MapExpr:
+			return ((MapExpr *) expr)->resulttype;
 		case T_NamedArgExpr:
 			type = exprType((Node *) ((const NamedArgExpr *) expr)->arg);
 			break;
@@ -750,6 +752,9 @@ exprCollation(const Node *expr)
 		case T_FuncExpr:
 			coll = ((const FuncExpr *) expr)->funccollid;
 			break;
+		case T_MapExpr:
+			coll = ((const MapExpr *) expr)->resultcollid;
+			break;
 		case T_NamedArgExpr:
 			coll = exprCollation((Node *) ((const NamedArgExpr *) expr)->arg);
 			break;
@@ -994,6 +999,9 @@ exprSetCollation(Node *expr, Oid collation)
 		case T_FuncExpr:
 			((FuncExpr *) expr)->funccollid = collation;
 			break;
+		case T_MapExpr:
+			((MapExpr *) expr)->resultcollid = collation;
+			break;
 		case T_NamedArgExpr:
 			Assert(collation == exprCollation((Node *) ((NamedArgExpr *) expr)->arg));
 			break;
@@ -1131,6 +1139,10 @@ exprSetInputCollation(Node *expr, Oid inputcollation)
 			break;
 		case T_FuncExpr:
 			((FuncExpr *) expr)->inputcollid = inputcollation;
+			break;
+		case T_MapExpr:
+			exprSetInputCollation((Node *) ((MapExpr *) expr)->elemexpr,
+								  inputcollation);
 			break;
 		case T_OpExpr:
 			((OpExpr *) expr)->inputcollid = inputcollation;
@@ -1937,6 +1949,16 @@ expression_tree_walker(Node *node,
 					return true;
 			}
 			break;
+		case T_MapExpr:
+			{
+				MapExpr	   *map = (MapExpr *) node;
+
+				if (walker((Node *) map->arrexpr, context))
+					return true;
+				if (walker((Node *) map->elemexpr, context))
+					return true;
+			}
+			break;
 		case T_NamedArgExpr:
 			return walker(((NamedArgExpr *) node)->arg, context);
 		case T_OpExpr:
@@ -2479,6 +2501,9 @@ expression_tree_mutator(Node *node,
 		case T_NextValueExpr:
 		case T_RangeTblRef:
 		case T_SortGroupClause:
+		case T_ColumnRef:
+		case T_ParamRef:
+		case T_A_Const:
 			return (Node *) copyObject(node);
 		case T_WithCheckOption:
 			{
@@ -2566,6 +2591,15 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_MapExpr:
+			{
+				MapExpr	   *expr = (MapExpr *) node;
+				MapExpr	   *newnode;
+
+				FLATCOPY(newnode, expr, MapExpr);
+				MUTATE(newnode->arrexpr, expr->arrexpr, Expr *);
+				return (Node *) newnode;
+			}
 		case T_NamedArgExpr:
 			{
 				NamedArgExpr *nexpr = (NamedArgExpr *) node;
@@ -3060,6 +3094,36 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_A_Expr:
+			{
+				A_Expr	   *expr = (A_Expr *) node;
+				A_Expr	   *newnode;
+
+				FLATCOPY(newnode, expr, A_Expr);
+				MUTATE(newnode->lexpr, expr->lexpr, Node *);
+				MUTATE(newnode->rexpr, expr->rexpr, Node *);
+				return (Node *) newnode;
+			}
+			break;
+		case T_FuncCall:
+			{
+				FuncCall   *fc = (FuncCall *) node;
+				FuncCall   *newnode;
+
+				FLATCOPY(newnode, fc, FuncCall);
+				MUTATE(newnode->args, fc->args, List *);
+				return (Node *) newnode;
+			}
+		case T_TypeCast:
+			{
+				TypeCast   *tc = (TypeCast *) node;
+				TypeCast   *newnode;
+
+				FLATCOPY(newnode, tc, TypeCast);
+				MUTATE(newnode->arg, tc->arg, Node *);
+				return (Node *) newnode;
+			}
+
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));

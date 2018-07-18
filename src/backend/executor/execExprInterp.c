@@ -328,6 +328,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_FUNCEXPR_STRICT,
 		&&CASE_EEOP_FUNCEXPR_FUSAGE,
 		&&CASE_EEOP_FUNCEXPR_STRICT_FUSAGE,
+		&&CASE_EEOP_MAP,
 		&&CASE_EEOP_BOOL_AND_STEP_FIRST,
 		&&CASE_EEOP_BOOL_AND_STEP,
 		&&CASE_EEOP_BOOL_AND_STEP_LAST,
@@ -695,6 +696,13 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			/* not common enough to inline */
 			ExecEvalFuncExprStrictFusage(state, op, econtext);
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_MAP)
+		{
+			ExecEvalMapExpr(state, op, econtext);
 
 			EEO_NEXT();
 		}
@@ -2227,6 +2235,33 @@ ExecEvalFuncExprStrictFusage(ExprState *state, ExprEvalStep *op,
 	*op->resnull = fcinfo->isnull;
 
 	pgstat_end_function_usage(&fcusage, true);
+}
+
+/*
+ * Evaluate a MapExpr expression.
+ *
+ * Source array is in step's result variable.
+ */
+void
+ExecEvalMapExpr(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
+{
+	Datum		arraydatum;
+
+	/* NULL array -> NULL result */
+	if (*op->resnull)
+		return;
+
+	arraydatum = *op->resvalue;
+	Assert(op->d.map.elemexprstate != NULL);
+
+	/*
+	 * Use array_map to apply the sub-expression to each array element.
+	 */
+	*op->resvalue = array_map(arraydatum,
+							  op->d.map.elemexprstate,
+							  econtext,
+							  op->d.map.resultelemtype,
+							  op->d.map.amstate);
 }
 
 /*

@@ -667,6 +667,15 @@ assign_collations_walker(Node *node, assign_collations_context *context)
 															&loccontext);
 						}
 						break;
+					case T_MapExpr:
+						{
+							MapExpr	   *map = (MapExpr *) node;
+
+							(void) expression_tree_walker((Node *) map->elemexpr,
+														  assign_collations_walker,
+														  (void *) &loccontext);
+						}
+						break;
 					default:
 
 						/*

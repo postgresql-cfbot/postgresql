@@ -563,6 +563,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <node>	func_application func_expr_common_subexpr
 %type <node>	func_expr func_expr_windowless
+%type <node>	map_expr
 %type <node>	common_table_expr
 %type <with>	with_clause opt_with_clause
 %type <list>	cte_list
@@ -652,7 +653,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MAP MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
@@ -13478,6 +13479,8 @@ c_expr:		columnref								{ $$ = $1; }
 				}
 			| case_expr
 				{ $$ = $1; }
+			| map_expr
+				{ $$ = $1; }
 			| func_expr
 				{ $$ = $1; }
 			| select_with_parens			%prec UMINUS
@@ -13571,6 +13574,17 @@ c_expr:		columnref								{ $$ = $1; }
 				  g->location = @1;
 				  $$ = (Node *)g;
 			  }
+		;
+
+map_expr:	MAP '(' a_expr FOR IDENT IN_P a_expr ')'
+				{
+					A_MapExpr *m = makeNode(A_MapExpr);
+					m->elemexpr = $3;
+					m->placeholder = $5;
+					m->arrexpr = $7;
+					m->location = @1;
+					$$ = (Node *)m;
+				}
 		;
 
 func_application: func_name '(' ')'
@@ -15440,6 +15454,7 @@ reserved_keyword:
 			| LIMIT
 			| LOCALTIME
 			| LOCALTIMESTAMP
+			| MAP
 			| NOT
 			| NULL_P
 			| OFFSET

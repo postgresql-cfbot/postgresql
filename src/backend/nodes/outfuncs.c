@@ -2800,6 +2800,28 @@ _outFuncCall(StringInfo str, const FuncCall *node)
 }
 
 static void
+_outAMapExpr(StringInfo str, const A_MapExpr *node)
+{
+	WRITE_NODE_TYPE("A_MAPEXPR");
+
+	WRITE_NODE_FIELD(elemexpr);
+	WRITE_STRING_FIELD(placeholder);
+	WRITE_NODE_FIELD(arrexpr);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outMapExpr(StringInfo str, const MapExpr *node)
+{
+	WRITE_NODE_TYPE("MAPEXPR");
+
+	WRITE_NODE_FIELD(elemexpr);
+	WRITE_NODE_FIELD(arrexpr);
+	WRITE_OID_FIELD(resulttype);
+	WRITE_OID_FIELD(resultcollid);
+}
+
+static void
 _outDefElem(StringInfo str, const DefElem *node)
 {
 	WRITE_NODE_TYPE("DEFELEM");
@@ -4284,6 +4306,12 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_FuncCall:
 				_outFuncCall(str, obj);
+				break;
+			case T_A_MapExpr:
+				_outAMapExpr(str, obj);
+				break;
+			case T_MapExpr:
+				_outMapExpr(str, obj);
 				break;
 			case T_DefElem:
 				_outDefElem(str, obj);

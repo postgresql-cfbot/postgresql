@@ -459,6 +459,18 @@ typedef struct FuncExpr
 } FuncExpr;
 
 /*
+ * MapExpr - array map expression
+ */
+typedef struct MapExpr
+{
+	NodeTag		type;
+	Expr	   *elemexpr;		/* expression representing per-element work */
+	Expr	   *arrexpr;		/* source expression of array type */
+	Oid			resulttype;		/* OID of target array type */
+	Oid			resultcollid;	/* OID of collation, or InvalidOid if none */
+} MapExpr;
+
+/*
  * NamedArgExpr - a named argument of a function
  *
  * This node type can only appear in the args list of a FuncCall or FuncExpr

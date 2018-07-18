@@ -92,6 +92,11 @@ typedef enum ExprEvalOp
 	EEOP_FUNCEXPR_STRICT_FUSAGE,
 
 	/*
+	 * Evaluate map expression
+	 */
+	EEOP_MAP,
+
+	/*
 	 * Evaluate boolean AND expression, one step per subexpression. FIRST/LAST
 	 * subexpressions are special-cased for performance.  Since AND always has
 	 * at least two subexpressions, FIRST and LAST never apply to the same
@@ -317,6 +322,13 @@ typedef struct ExprEvalStep
 			PGFunction	fn_addr;	/* actual call address */
 			int			nargs;	/* number of arguments */
 		}			func;
+
+		struct
+		{
+			ExprState  *elemexprstate;	/* null if no per-element work */
+			Oid			resultelemtype; /* element type of result array */
+			struct ArrayMapState *amstate;	/* workspace for array_map */
+		}			map;
 
 		/* for EEOP_BOOL_*_STEP */
 		struct
@@ -695,6 +707,8 @@ extern void ExecEvalFuncExprFusage(ExprState *state, ExprEvalStep *op,
 					   ExprContext *econtext);
 extern void ExecEvalFuncExprStrictFusage(ExprState *state, ExprEvalStep *op,
 							 ExprContext *econtext);
+extern void ExecEvalMapExpr(ExprState *state, ExprEvalStep *op,
+				  ExprContext *econtext);
 extern void ExecEvalParamExec(ExprState *state, ExprEvalStep *op,
 				  ExprContext *econtext);
 extern void ExecEvalParamExecParams(Bitmapset *params, EState *estate);

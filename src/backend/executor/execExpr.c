@@ -886,6 +886,56 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_MapExpr:
+			{
+				MapExpr	   *map = (MapExpr *) node;
+				ExprState  *elemstate;
+				Oid			resultelemtype;
+
+				ExecInitExprRec(map->arrexpr, state, resv, resnull);
+
+				resultelemtype = get_element_type(map->resulttype);
+				if (!OidIsValid(resultelemtype))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("target type is not an array")));
+
+				/* Construct a sub-expression for the per-element expression */
+				elemstate = makeNode(ExprState);
+				elemstate->expr = map->elemexpr;
+				elemstate->parent = state->parent;
+				elemstate->ext_params = state->ext_params;
+				elemstate->innermost_caseval = (Datum *) palloc(sizeof(Datum));
+				elemstate->innermost_casenull = (bool *) palloc(sizeof(bool));
+
+				ExecInitExprRec(map->elemexpr, elemstate,
+								&elemstate->resvalue, &elemstate->resnull);
+
+				/* Append a DONE step and ready the subexpression */
+				scratch.opcode = EEOP_DONE;
+				ExprEvalPushStep(elemstate, &scratch);
+				ExecReadyExpr(elemstate);
+
+				scratch.opcode = EEOP_MAP;
+				scratch.d.map.elemexprstate = elemstate;
+				scratch.d.map.resultelemtype = resultelemtype;
+
+				if (elemstate)
+				{
+					/* Set up workspace for array_map */
+					scratch.d.map.amstate =
+						(ArrayMapState *) palloc0(sizeof(ArrayMapState));
+				}
+				else
+				{
+					/* Don't need workspace if there's no subexpression */
+					scratch.d.map.amstate = NULL;
+				}
+
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
 		case T_OpExpr:
 			{
 				OpExpr	   *op = (OpExpr *) node;

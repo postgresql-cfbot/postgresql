@@ -427,6 +427,8 @@ typedef enum NodeTag
 	T_ParamRef,
 	T_A_Const,
 	T_FuncCall,
+	T_A_MapExpr,
+	T_MapExpr,
 	T_A_Star,
 	T_A_Indices,
 	T_A_Indirection,

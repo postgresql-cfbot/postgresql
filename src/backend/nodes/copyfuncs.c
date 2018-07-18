@@ -2624,6 +2624,32 @@ _copyFuncCall(const FuncCall *from)
 	return newnode;
 }
 
+static A_MapExpr *
+_copyAMapExpr(const A_MapExpr *from)
+{
+	A_MapExpr   *newnode = makeNode(A_MapExpr);
+
+	COPY_NODE_FIELD(elemexpr);
+	COPY_STRING_FIELD(placeholder);
+	COPY_NODE_FIELD(arrexpr);
+	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
+static MapExpr *
+_copyMapExpr(const MapExpr *from)
+{
+	MapExpr   *newnode = makeNode(MapExpr);
+
+	COPY_NODE_FIELD(elemexpr);
+	COPY_NODE_FIELD(arrexpr);
+	COPY_SCALAR_FIELD(resulttype);
+	COPY_SCALAR_FIELD(resultcollid);
+
+	return newnode;
+}
+
 static A_Star *
 _copyAStar(const A_Star *from)
 {
@@ -5498,6 +5524,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_FuncCall:
 			retval = _copyFuncCall(from);
+			break;
+		case T_A_MapExpr:
+			retval = _copyAMapExpr(from);
+			break;
+		case T_MapExpr:
+			retval = _copyMapExpr(from);
 			break;
 		case T_A_Star:
 			retval = _copyAStar(from);

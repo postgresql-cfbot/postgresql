@@ -2350,6 +2350,28 @@ _equalFuncCall(const FuncCall *a, const FuncCall *b)
 }
 
 static bool
+_equalAMapExpr(const A_MapExpr *a, const A_MapExpr *b)
+{
+	COMPARE_NODE_FIELD(elemexpr);
+	COMPARE_STRING_FIELD(placeholder);
+	COMPARE_NODE_FIELD(arrexpr);
+	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
+static bool
+_equalMapExpr(const MapExpr *a, const MapExpr *b)
+{
+	COMPARE_NODE_FIELD(elemexpr);
+	COMPARE_NODE_FIELD(arrexpr);
+	COMPARE_SCALAR_FIELD(resulttype);
+	COMPARE_SCALAR_FIELD(resultcollid);
+
+	return true;
+}
+
+static bool
 _equalAStar(const A_Star *a, const A_Star *b)
 {
 	return true;
@@ -3572,6 +3594,12 @@ equal(const void *a, const void *b)
 			break;
 		case T_FuncCall:
 			retval = _equalFuncCall(a, b);
+			break;
+		case T_A_MapExpr:
+			retval = _equalAMapExpr(a, b);
+			break;
+		case T_MapExpr:
+			retval = _equalMapExpr(a, b);
 			break;
 		case T_A_Star:
 			retval = _equalAStar(a, b);

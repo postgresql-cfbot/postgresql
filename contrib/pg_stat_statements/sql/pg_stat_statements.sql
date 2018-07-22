@@ -195,4 +195,49 @@ DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
+--
+-- Track user activity and reset them
+--
+SELECT pg_stat_statements_reset();
+CREATE ROLE stats_regress_user1;
+CREATE ROLE stats_regress_user2;
+
+SET ROLE stats_regress_user1;
+
+SELECT 1 AS "ONE";
+SELECT 1+1 AS "TWO";
+
+RESET ROLE;
+SET ROLE stats_regress_user2;
+
+SELECT 1 AS "ONE";
+SELECT 1+1 AS "TWO";
+
+RESET ROLE;
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- remove query ('SELECT $1 AS "ONE"') executed by two users
+--
+SELECT pg_stat_statements_reset(NULL,NULL,s.queryid) FROM pg_stat_statements AS s WHERE s.query = 'SELECT $1 AS "ONE"';
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- remove query of a user (stats_regress_user1)
+--
+SELECT pg_stat_statements_reset(r.oid) FROM pg_roles AS r WHERE r.rolname = 'stats_regress_user1';
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- reset all
+--
+SELECT pg_stat_statements_reset();
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- cleanup
+--
+DROP ROLE stats_regress_user1;
+DROP ROLE stats_regress_user2;
+
 DROP EXTENSION pg_stat_statements;

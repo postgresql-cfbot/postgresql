@@ -290,6 +290,7 @@ void		_PG_init(void);
 void		_PG_fini(void);
 
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
+PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
@@ -327,7 +328,7 @@ static char *qtext_fetch(Size query_offset, int query_len,
 			char *buffer, Size buffer_size);
 static bool need_gc_qtexts(void);
 static void gc_qtexts(void);
-static void entry_reset(void);
+static long entry_reset(Oid userid, Oid dbid, uint64 queryid);
 static void AppendJumble(pgssJumbleState *jstate,
 			 const unsigned char *item, Size size);
 static void JumbleQuery(pgssJumbleState *jstate, Query *query);
@@ -1148,7 +1149,16 @@ pgss_store(const char *query, uint64 queryId,
 	 * For utility statements, we just hash the query string to get an ID.
 	 */
 	if (queryId == UINT64CONST(0))
+	{
 		queryId = pgss_hash_string(query, query_len);
+
+		/*
+		 * If we are unlucky enough to get a hash of zero(invalid), use queryID
+		 * as 2 instead, queryID 1 is already in use for normal statements.
+		 */
+		if (queryId == UINT64CONST(0))
+			queryId = UINT64CONST(2);
+	}
 
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();
@@ -1293,7 +1303,32 @@ done:
 }
 
 /*
- * Reset all statement statistics.
+ * Reset statement statistics according to userid, dbid, queryid.
+ */
+Datum
+pg_stat_statements_reset_1_7(PG_FUNCTION_ARGS)
+{
+	Oid			userid;
+	Oid			dbid;
+	uint64		queryid;
+	int64		num_remove;
+
+	if (!pgss || !pgss_hash)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
+
+	userid = PG_ARGISNULL(0) ? 0 : PG_GETARG_OID(0);
+	dbid = PG_ARGISNULL(1) ? 0 : PG_GETARG_OID(1);
+	queryid = (uint64) (PG_ARGISNULL(2) ? 0 : PG_GETARG_INT64(2));
+
+	num_remove = entry_reset(userid, dbid, queryid);
+
+	PG_RETURN_INT64(num_remove);
+}
+
+/*
+ * Reset statement statistics.
  */
 Datum
 pg_stat_statements_reset(PG_FUNCTION_ARGS)
@@ -1302,7 +1337,9 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
-	entry_reset();
+
+	entry_reset(0, 0, 0);
+
 	PG_RETURN_VOID();
 }
 
@@ -2229,52 +2266,82 @@ gc_fail:
 }
 
 /*
- * Release all entries.
+ * Release entries according to parameters.
  */
-static void
-entry_reset(void)
+static long
+entry_reset(Oid userid, Oid dbid, uint64 queryid)
 {
 	HASH_SEQ_STATUS hash_seq;
 	pgssEntry  *entry;
 	FILE	   *qfile;
+	long		num_entries;
+	long		num_remove = 0;
+	pgssHashKey key;
 
 	LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
+	num_entries = hash_get_num_entries(pgss_hash);
 
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	/* If all parameter available, use the fast path */
+	if (userid != 0 && dbid != 0 && queryid != UINT64CONST(0))
 	{
-		hash_search(pgss_hash, &entry->key, HASH_REMOVE, NULL);
+		key.userid = userid;
+		key.dbid = dbid;
+		key.queryid = queryid;
+
+		/* Remove the key out of hash if available */
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);
+		if (entry)				/* found */
+			num_remove++;
+	}
+	else
+	{
+		hash_seq_init(&hash_seq, pgss_hash);
+		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		{
+			if ((!userid || (userid && entry->key.userid == userid)) &&
+				(!dbid || (dbid && entry->key.dbid == dbid)) &&
+				(!queryid || (queryid && entry->key.queryid == queryid)))
+			{
+				hash_search(pgss_hash, &entry->key, HASH_REMOVE, NULL);
+				num_remove++;
+			}
+		}
 	}
 
-	/*
-	 * Write new empty query file, perhaps even creating a new one to recover
-	 * if the file was missing.
-	 */
-	qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
-	if (qfile == NULL)
+	if (num_entries == num_remove)
 	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not create pg_stat_statement file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-		goto done;
-	}
+		/*
+		 * Write new empty query file, perhaps even creating a new one to
+		 * recover if the file was missing.
+		 */
+		qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
+		if (qfile == NULL)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not create pg_stat_statement file \"%s\": %m",
+							PGSS_TEXT_FILE)));
+			goto done;
+		}
 
-	/* If ftruncate fails, log it, but it's not a fatal problem */
-	if (ftruncate(fileno(qfile), 0) != 0)
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not truncate pg_stat_statement file \"%s\": %m",
-						PGSS_TEXT_FILE)));
+		/* If ftruncate fails, log it, but it's not a fatal problem */
+		if (ftruncate(fileno(qfile), 0) != 0)
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not truncate pg_stat_statement file \"%s\": %m",
+							PGSS_TEXT_FILE)));
 
-	FreeFile(qfile);
+		FreeFile(qfile);
 
 done:
-	pgss->extent = 0;
-	/* This counts as a query text garbage collection for our purposes */
-	record_gc_qtexts();
+		pgss->extent = 0;
+		/* This counts as a query text garbage collection for our purposes */
+		record_gc_qtexts();
+	}
 
 	LWLockRelease(pgss->lock);
+
+	return num_remove;
 }
 
 /*

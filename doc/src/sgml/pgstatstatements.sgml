@@ -336,7 +336,7 @@
   <variablelist>
    <varlistentry>
     <term>
-     <function>pg_stat_statements_reset() returns void</function>
+     <function>pg_stat_statements_reset(userid Oid, dbid Oid, queryid bigint) returns bigint</function>
      <indexterm>
       <primary>pg_stat_statements_reset</primary>
      </indexterm>
@@ -344,9 +344,16 @@
 
     <listitem>
      <para>
-      <function>pg_stat_statements_reset</function> discards all statistics
-      gathered so far by <filename>pg_stat_statements</filename>.
-      By default, this function can only be executed by superusers.
+      <function>pg_stat_statements_reset</function> discards statistics
+      gathered so far by <filename>pg_stat_statements</filename> according to 
+      the specified userid, dbid and queryid. Returns the total number of
+      statement statistics that are reset based on the specified input.
+      If any of the parameter is not specified, the default value NULL(invalid)
+      is used and the statistics that match with other parameter(s) will be reset.
+      If no parameter is specified or specify everything as NULL(invalid), it will
+      discard all statistics.
+      By default, this function can only be executed by superusers. Access may
+      be granted to others using <command>GRANT</command>.
      </para>
     </listitem>
    </varlistentry>

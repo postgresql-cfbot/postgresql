@@ -62,7 +62,9 @@
 #include <unistd.h>
 
 #include "access/hash.h"
+#include "access/xact.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_type.h"
 #include "executor/instrument.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -79,6 +81,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/lsyscache.h"
 
 PG_MODULE_MAGIC;
 
@@ -120,7 +123,10 @@ typedef enum pgssVersion
 	PGSS_V1_0 = 0,
 	PGSS_V1_1,
 	PGSS_V1_2,
-	PGSS_V1_3
+	PGSS_V1_3,
+	/* V1_4 only changed parallel safety */
+	/* V1_5 only added privilege management */
+	PGSS_V1_6
 } pgssVersion;
 
 /*
@@ -181,6 +187,14 @@ typedef struct pgssEntry
 	int			query_len;		/* # of valid bytes in query string, or -1 */
 	int			encoding;		/* query text encoding */
 	slock_t		mutex;			/* protects the counters only */
+
+	/* offsets for the constants and parameters, and their types */
+	Size		consts_offset;
+	int			consts_len;
+	Size		params_offset;
+	int			params_len;
+	Size		param_types_offset;
+	int			param_types_len;
 } pgssEntry;
 
 /*
@@ -220,6 +234,9 @@ typedef struct pgssJumbleState
 
 	/* Array of locations of constants that should be removed */
 	pgssLocationLen *clocations;
+
+	/* Array of Oids for constants types */
+	Oid		   *consts_types;
 
 	/* Allocated length of clocations array */
 	int			clocations_buf_size;
@@ -270,6 +287,9 @@ static int	pgss_max;			/* max # statements to track */
 static int	pgss_track;			/* tracking level */
 static bool pgss_track_utility; /* whether to track utility commands */
 static bool pgss_save;			/* whether to save stats across shutdown */
+static bool pgss_collect_constants;	/* whether to collect constant values */
+static bool pgss_collect_parameters;	/* whether to collect parameter values */
+static int	pgss_max_parameters_size;	/* how big the consts and params can be */
 
 
 #define pgss_enabled() \
@@ -292,6 +312,7 @@ void		_PG_fini(void);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
+PG_FUNCTION_INFO_V1(pg_stat_statements_1_6);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 
 static void pgss_shmem_startup(void);
@@ -312,12 +333,17 @@ static void pgss_store(const char *query, uint64 queryId,
 		   int query_location, int query_len,
 		   double total_time, uint64 rows,
 		   const BufferUsage *bufusage,
-		   pgssJumbleState *jstate);
+		   pgssJumbleState *jstate,
+		   const ParamListInfo qparams);
 static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
 							pgssVersion api_version,
 							bool showtext);
 static Size pgss_memsize(void);
-static pgssEntry *entry_alloc(pgssHashKey *key, Size query_offset, int query_len,
+static pgssEntry *entry_alloc(pgssHashKey *key,
+			Size query_offset, int query_len,
+			Size consts_offset, int consts_len,
+			Size params_offset, int params_len,
+			Size param_types_offset, int param_types_len,
 			int encoding, bool sticky);
 static void entry_dealloc(void);
 static bool qtext_store(const char *query, int query_len,
@@ -333,12 +359,15 @@ static void AppendJumble(pgssJumbleState *jstate,
 static void JumbleQuery(pgssJumbleState *jstate, Query *query);
 static void JumbleRangeTable(pgssJumbleState *jstate, List *rtable);
 static void JumbleExpr(pgssJumbleState *jstate, Node *node);
-static void RecordConstLocation(pgssJumbleState *jstate, int location);
+static void RecordConstLocationAndType(pgssJumbleState *jstate, int location, Oid type);
 static char *generate_normalized_query(pgssJumbleState *jstate, const char *query,
-						  int query_loc, int *query_len_p, int encoding);
+						  int query_loc, int *query_len_p,
+						  char **consts, int *consts_len,
+						  int encoding);
 static void fill_in_constant_lengths(pgssJumbleState *jstate, const char *query,
 						 int query_loc);
 static int	comp_location(const void *a, const void *b);
+static Datum CStringGetArrayDatum(Oid arraytype, char *cstring);
 
 
 /*
@@ -408,6 +437,41 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
+	DefineCustomBoolVariable("pg_stat_statements.collect_constants",
+			   "Collect the values of constants into the constants field",
+							 NULL,
+							 &pgss_collect_constants,
+							 true,
+							 PGC_SIGHUP,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("pg_stat_statements.collect_parameters",
+	   "Collect the values of parameters and their types into the parameters and parameter_types fields",
+							 NULL,
+							 &pgss_collect_parameters,
+							 true,
+							 PGC_SIGHUP,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomIntVariable("pg_stat_statements.max_parameters_size",
+				"Defines the maximum total length of the constants and parameters fields",
+							NULL,
+							&pgss_max_parameters_size,
+							1024,
+							-1,
+							INT_MAX,
+							PGC_SIGHUP,
+							0,
+							NULL,
+							NULL,
+							NULL);
+
 	EmitWarningsOnPlaceholders("pg_stat_statements");
 
 	/*
@@ -452,6 +516,32 @@ _PG_fini(void)
 	ExecutorEnd_hook = prev_ExecutorEnd;
 	ProcessUtility_hook = prev_ProcessUtility;
 }
+
+/* This is used for some repetitive code in pgss_shmem_startup */
+#define DESERIALIZE_TEXT(xlen, xoffset) do { \
+	if (xlen < 0) \
+		xoffset = 0; \
+	else \
+	{ \
+		/* Resize buffer as needed */ \
+		if (xlen >= buffer_size) \
+		{ \
+			buffer_size = Max(buffer_size * 2, xlen + 1); \
+			buffer = repalloc(buffer, buffer_size); \
+		} \
+\
+		if (fread(buffer, 1, xlen + 1, file) != xlen + 1) \
+			goto read_error; \
+\
+		/* Should have a trailing null, but let's make sure */ \
+		buffer[xlen] = '\0'; \
+\
+		xoffset = pgss->extent; \
+		if (fwrite(buffer, 1, xlen + 1, qfile) != xlen + 1) \
+			goto write_error; \
+		pgss->extent += xlen + 1; \
+	} \
+} while(0)
 
 /*
  * shmem_startup hook: allocate or attach to shared memory,
@@ -577,7 +667,7 @@ pgss_shmem_startup(void)
 	{
 		pgssEntry	temp;
 		pgssEntry  *entry;
-		Size		query_offset;
+		Size		query_offset, consts_offset, params_offset, param_types_offset;
 
 		if (fread(&temp, sizeof(pgssEntry), 1, file) != 1)
 			goto read_error;
@@ -603,16 +693,24 @@ pgss_shmem_startup(void)
 		if (temp.counters.calls == 0)
 			continue;
 
-		/* Store the query text */
+		/* Store the query text, consts, and params */
 		query_offset = pgss->extent;
 		if (fwrite(buffer, 1, temp.query_len + 1, qfile) != temp.query_len + 1)
 			goto write_error;
 		pgss->extent += temp.query_len + 1;
 
+		/* consts, params, and param_types */
+		DESERIALIZE_TEXT(temp.consts_len, consts_offset);
+		DESERIALIZE_TEXT(temp.params_len, params_offset);
+		DESERIALIZE_TEXT(temp.param_types_len, param_types_offset);
+
 		/* make the hashtable entry (discards old entries if too many) */
-		entry = entry_alloc(&temp.key, query_offset, temp.query_len,
-							temp.encoding,
-							false);
+		entry = entry_alloc(&temp.key,
+							query_offset, temp.query_len,
+							consts_offset, temp.consts_len,
+							params_offset, temp.params_len,
+							param_types_offset, temp.param_types_len,
+							temp.encoding, false);
 
 		/* copy in the actual stats */
 		entry->counters = temp.counters;
@@ -672,6 +770,18 @@ fail:
 	 */
 }
 
+/* This is used for some repetitive code in pgss_shmem_shutdown */
+#define SERIALIZE_TEXT(xlen, xoffset) do { \
+	len = (xlen); \
+	qstr = qtext_fetch((xoffset), len, qbuffer, qbuffer_size); \
+	if (qstr && fwrite(qstr, 1, len + 1, file) != len + 1) \
+	{ \
+		/* note: we assume hash_seq_term won't change errno */ \
+		hash_seq_term(&hash_seq); \
+		goto error; \
+	} \
+} while(0)
+
 /*
  * shmem_shutdown hook: Dump statistics into file.
  *
@@ -727,6 +837,7 @@ pgss_shmem_shutdown(int code, Datum arg)
 		char	   *qstr = qtext_fetch(entry->query_offset, len,
 									   qbuffer, qbuffer_size);
 
+		/* query */
 		if (qstr == NULL)
 			continue;			/* Ignore any entries with bogus texts */
 
@@ -737,6 +848,11 @@ pgss_shmem_shutdown(int code, Datum arg)
 			hash_seq_term(&hash_seq);
 			goto error;
 		}
+
+		/* write out consts, params, and param_types */
+		SERIALIZE_TEXT(entry->consts_len, entry->consts_offset);
+		SERIALIZE_TEXT(entry->params_len, entry->params_offset);
+		SERIALIZE_TEXT(entry->param_types_len, entry->param_types_offset);
 	}
 
 	free(qbuffer);
@@ -810,6 +926,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 	jstate.clocations = (pgssLocationLen *)
 		palloc(jstate.clocations_buf_size * sizeof(pgssLocationLen));
 	jstate.clocations_count = 0;
+	jstate.consts_types = (Oid *) palloc(jstate.clocations_buf_size * sizeof(Oid));
 	jstate.highest_extern_param_id = 0;
 
 	/* Compute query ID and mark the Query node with it */
@@ -839,7 +956,8 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 				   0,
 				   0,
 				   NULL,
-				   &jstate);
+				   &jstate,
+				   NULL);
 }
 
 /*
@@ -946,7 +1064,8 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
 				   queryDesc->estate->es_processed,
 				   &queryDesc->totaltime->bufusage,
-				   NULL);
+				   NULL,
+				   queryDesc->params);
 	}
 
 	if (prev_ExecutorEnd)
@@ -1057,6 +1176,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				   INSTR_TIME_GET_MILLISEC(duration),
 				   rows,
 				   &bufusage,
+				   NULL,
 				   NULL);
 	}
 	else
@@ -1084,6 +1204,92 @@ pgss_hash_string(const char *str, int len)
 											len, 0));
 }
 
+static void
+pgss_CollectParams(ParamListInfo qparams, char **params, char **param_types)
+{
+	Datum	   *params_arr, *ptypes_arr;
+	bool	   *param_nulls;
+	int			paramno;
+	ArrayType  *sql_params_array, *sql_param_types_array;
+	/* these are used for the params, but then reused for the arrays */
+	Oid			typoutput;
+	bool		typisvarlena;
+	int16		typlen;
+	bool		typbyval;
+	char		typalign;
+	uint64		totalsize;
+
+	/* If we don't have any params or if the transaction is aborted, quit */
+	if (!pgss_collect_parameters ||
+			!qparams || qparams->numParams == 0 ||
+			IsAbortedTransactionBlockState())
+	{
+		*params = NULL;
+		*param_types = NULL;
+		return;
+	}
+
+	params_arr = (Datum *) palloc(sizeof(Datum) * qparams->numParams);
+	param_nulls = (bool *) palloc(sizeof(bool) * qparams->numParams);
+	ptypes_arr = (Datum *) palloc(sizeof(Datum) * qparams->numParams);
+
+	totalsize = 0;
+	for (paramno = 0; paramno < qparams->numParams; paramno++)
+	{
+		ParamExternData *prm = &qparams->params[paramno];
+
+		/* Add the param value to the list */
+		if (!prm->isnull && OidIsValid(prm->ptype))
+		{
+			char	   *pstring;
+
+			getTypeOutputInfo(prm->ptype, &typoutput, &typisvarlena);
+			pstring = OidOutputFunctionCall(typoutput, prm->value);
+			params_arr[paramno] = PointerGetDatum(cstring_to_text(pstring));
+			param_nulls[paramno] = false;
+
+			/* Make sure we're not getting too long; abort if so */
+			totalsize += strlen(pstring);
+			if (totalsize > pgss_max_parameters_size && pgss_max_parameters_size >= 0)
+			{
+				*params = NULL;
+				*param_types = NULL;
+				return;
+			}
+		}
+		else
+		{
+			params_arr[paramno] = 0;
+			param_nulls[paramno] = true;
+		}
+
+		/* Add the param type to the list */
+		ptypes_arr[paramno] = ObjectIdGetDatum(prm->ptype);
+	}
+
+	/* Make the params array */
+	{
+		int		dims[1];
+		int		lbs[1];
+
+		dims[0] = qparams->numParams;
+		lbs[0] = 1;
+
+		get_typlenbyvalalign(TEXTOID, &typlen, &typbyval, &typalign);
+		sql_params_array = construct_md_array(params_arr, param_nulls, 1, dims, lbs,
+				TEXTOID, typlen, typbyval, typalign);
+		getTypeOutputInfo(TEXTARRAYOID, &typoutput, &typisvarlena);
+		*params = OidOutputFunctionCall(typoutput, PointerGetDatum(sql_params_array));
+	}
+
+	/* Make the param_types array */
+	get_typlenbyvalalign(OIDOID, &typlen, &typbyval, &typalign);
+	sql_param_types_array = construct_array(ptypes_arr, qparams->numParams,
+			OIDOID, typlen, typbyval, typalign);
+	getTypeOutputInfo(OIDARRAYOID, &typoutput, &typisvarlena);
+	*param_types = OidOutputFunctionCall(typoutput, PointerGetDatum(sql_param_types_array));
+}
+
 /*
  * Store some statistics for a statement.
  *
@@ -1099,12 +1305,15 @@ pgss_store(const char *query, uint64 queryId,
 		   int query_location, int query_len,
 		   double total_time, uint64 rows,
 		   const BufferUsage *bufusage,
-		   pgssJumbleState *jstate)
+		   pgssJumbleState *jstate,
+		   const ParamListInfo qparams)
 {
 	pgssHashKey key;
 	pgssEntry  *entry;
 	char	   *norm_query = NULL;
 	int			encoding = GetDatabaseEncoding();
+	char	   *consts = NULL;
+	bool		need_params = false;
 
 	Assert(query != NULL);
 
@@ -1160,10 +1369,23 @@ pgss_store(const char *query, uint64 queryId,
 
 	entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
 
-	/* Create new entry, if not present */
-	if (!entry)
+	if (pgss_collect_parameters &&
+			entry && entry->params_len == -1 &&
+			qparams && qparams->numParams > 0)
 	{
-		Size		query_offset;
+		/*
+		 * If we had an entry without params, and now we have params, remove
+		 * the entry and create a new one.
+		 */
+		need_params = true;
+	}
+
+	/* Create new entry, if not present */
+	if (!entry || need_params)
+	{
+		char	   *params = NULL, *param_types = NULL;
+		Size		query_offset, consts_offset, params_offset, param_types_offset;
+		int			consts_len = -1, params_len = -1, param_types_len = -1;
 		int			gc_count;
 		bool		stored;
 		bool		do_gc;
@@ -1181,47 +1403,101 @@ pgss_store(const char *query, uint64 queryId,
 			norm_query = generate_normalized_query(jstate, query,
 												   query_location,
 												   &query_len,
+												   &consts, &consts_len,
 												   encoding);
+
 			LWLockAcquire(pgss->lock, LW_SHARED);
 		}
 
-		/* Append new query text to file with only shared lock held */
-		stored = qtext_store(norm_query ? norm_query : query, query_len,
-							 &query_offset, &gc_count);
-
 		/*
-		 * Determine whether we need to garbage collect external query texts
-		 * while the shared lock is still held.  This micro-optimization
-		 * avoids taking the time to decide this while holding exclusive lock.
+		 * If we are given some params, collect them.  We don't need to hold
+		 * the lock while doing so.  It's possible that we just acquired the
+		 * lock after normalizing the query only to release it again here, but
+		 * so what.
 		 */
-		do_gc = need_gc_qtexts();
+		if (pgss_collect_parameters && qparams && qparams->numParams > 0)
+		{
+			LWLockRelease(pgss->lock);
 
-		/* Need exclusive lock to make a new hashtable entry - promote */
-		LWLockRelease(pgss->lock);
-		LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
+			pgss_CollectParams(qparams, &params, &param_types);
+			/* We should always have both params and param_types, or neither */
+			Assert((params == NULL) == (param_types == NULL));
 
-		/*
-		 * A garbage collection may have occurred while we weren't holding the
-		 * lock.  In the unlikely event that this happens, the query text we
-		 * stored above will have been garbage collected, so write it again.
-		 * This should be infrequent enough that doing it while holding
-		 * exclusive lock isn't a performance problem.
-		 */
-		if (!stored || pgss->gc_count != gc_count)
+			if (params)
+				params_len = strlen(params);
+			if (param_types)
+				param_types_len = strlen(param_types);
+
+			LWLockAcquire(pgss->lock, LW_SHARED);
+
+			if (entry)
+			{
+				stored = qtext_store(params, params_len, &params_offset, NULL);
+				stored &= qtext_store(param_types, param_types_len, &param_types_offset, NULL);
+
+				/* If we failed to write to the text file, give up */
+				if (!stored)
+					goto done;
+
+				entry->params_len = params_len;
+				entry->params_offset = params_offset;
+				entry->param_types_len = param_types_len;
+				entry->param_types_offset = param_types_offset;
+			}
+		}
+
+		if (!entry)
+		{
+			/* Append new query text to file with only shared lock held */
 			stored = qtext_store(norm_query ? norm_query : query, query_len,
-								 &query_offset, NULL);
+								 &query_offset, &gc_count);
+			stored &= qtext_store(consts, consts_len, &consts_offset, NULL);
+			stored &= qtext_store(params, params_len, &params_offset, NULL);
+			stored &= qtext_store(param_types, param_types_len, &param_types_offset, NULL);
 
-		/* If we failed to write to the text file, give up */
-		if (!stored)
-			goto done;
+			/*
+			 * Determine whether we need to garbage collect external query texts
+			 * while the shared lock is still held.  This micro-optimization
+			 * avoids taking the time to decide this while holding exclusive lock.
+			 */
+			do_gc = need_gc_qtexts();
 
-		/* OK to create a new hashtable entry */
-		entry = entry_alloc(&key, query_offset, query_len, encoding,
-							jstate != NULL);
+			/* Need exclusive lock to make a new hashtable entry - promote */
+			LWLockRelease(pgss->lock);
+			LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
 
-		/* If needed, perform garbage collection while exclusive lock held */
-		if (do_gc)
-			gc_qtexts();
+			/*
+			 * A garbage collection may have occurred while we weren't holding the
+			 * lock.  In the unlikely event that this happens, the query text we
+			 * stored above will have been garbage collected, so write it again.
+			 * This should be infrequent enough that doing it while holding
+			 * exclusive lock isn't a performance problem.
+			 */
+			if (!stored || pgss->gc_count != gc_count)
+			{
+				stored = qtext_store(norm_query ? norm_query : query, query_len,
+									 &query_offset, NULL);
+				stored &= qtext_store(consts, consts_len, &consts_offset, NULL);
+				stored &= qtext_store(params, strlen(params), &params_offset, NULL);
+				stored &= qtext_store(param_types, strlen(param_types), &param_types_offset, NULL);
+			}
+
+			/* If we failed to write to the text file, give up */
+			if (!stored)
+				goto done;
+
+			/* OK to create a new hashtable entry */
+			entry = entry_alloc(&key,
+								query_offset, query_len,
+								consts_offset, consts_len,
+								params_offset, params_len,
+								param_types_offset, param_types_len,
+								encoding, jstate != NULL);
+
+			/* If needed, perform garbage collection while exclusive lock held */
+			if (do_gc)
+				gc_qtexts();
+		}
 	}
 
 	/* Increment the counts, except when jstate is not NULL */
@@ -1311,7 +1587,10 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_1	18
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS			23	/* maximum of above */
+/* V1_4 only changed parallel safety */
+/* V1_5 only added privilege management */
+#define PG_STAT_STATEMENTS_COLS_V1_6	26
+#define PG_STAT_STATEMENTS_COLS			26		/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1323,6 +1602,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
  * expected API version is identified by embedding it in the C name of the
  * function.  Unfortunately we weren't bright enough to do that for 1.1.
  */
+Datum
+pg_stat_statements_1_6(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_6, showtext);
+
+	return (Datum) 0;
+}
+
 Datum
 pg_stat_statements_1_3(PG_FUNCTION_ARGS)
 {
@@ -1354,6 +1643,15 @@ pg_stat_statements(PG_FUNCTION_ARGS)
 	pg_stat_statements_internal(fcinfo, PGSS_V1_0, true);
 
 	return (Datum) 0;
+}
+
+static Datum
+CStringGetArrayDatum(Oid arraytype, char *cstring)
+{
+	Oid		typInput, typIOParam;
+
+	getTypeInputInfo(arraytype, &typInput, &typIOParam);
+	return OidInputFunctionCall(typInput, cstring, typIOParam, -1);
 }
 
 /* Common code for all versions of pg_stat_statements() */
@@ -1427,6 +1725,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			break;
 		case PG_STAT_STATEMENTS_COLS_V1_3:
 			if (api_version != PGSS_V1_3)
+				elog(ERROR, "incorrect number of output arguments");
+			break;
+		case PG_STAT_STATEMENTS_COLS_V1_6:
+			if (api_version != PGSS_V1_6)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
 		default:
@@ -1545,17 +1847,69 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 					if (enc != qstr)
 						pfree(enc);
+
+					if (api_version >= PGSS_V1_6)
+					{
+						/* consts */
+						char   *cstr, *pstr, *ptstr;
+
+						cstr = qtext_fetch(entry->consts_offset,
+										   entry->consts_len,
+										   qbuffer,
+										   qbuffer_size);
+
+						if (cstr && (entry->consts_len >= 0))
+							values[i++] = CStringGetArrayDatum(TEXTARRAYOID, cstr);
+						else
+							nulls[i++] = true;
+
+						/* params */
+						pstr = qtext_fetch(entry->params_offset,
+										   entry->params_len,
+										   qbuffer,
+										   qbuffer_size);
+
+						if (pstr && (entry->params_len >= 0))
+							values[i++] = CStringGetArrayDatum(TEXTARRAYOID, pstr);
+						else
+							nulls[i++] = true;
+
+						/* param types */
+						ptstr = qtext_fetch(entry->param_types_offset,
+										   entry->param_types_len,
+										   qbuffer,
+										   qbuffer_size);
+
+						if (ptstr && (entry->param_types_len >= 0))
+							values[i++] = CStringGetArrayDatum(REGTYPEARRAYOID, ptstr);
+						else
+							nulls[i++] = true;
+					}
 				}
 				else
 				{
-					/* Just return a null if we fail to find the text */
+					/* Just return nulls if we fail to find the text */
 					nulls[i++] = true;
+					if (api_version >= PGSS_V1_6)
+					{
+						/* consts, params, and param_types */
+						nulls[i++] = true;
+						nulls[i++] = true;
+						nulls[i++] = true;
+					}
 				}
 			}
 			else
 			{
 				/* Query text not requested */
 				nulls[i++] = true;
+				if (api_version >= PGSS_V1_6)
+				{
+					/* consts, params, and param_types */
+					nulls[i++] = true;
+					nulls[i++] = true;
+					nulls[i++] = true;
+				}
 			}
 		}
 		else
@@ -1572,6 +1926,17 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 				values[i++] = CStringGetTextDatum("<insufficient privilege>");
 			else
 				nulls[i++] = true;
+
+			/*
+			 * Just return nulls in this case for constants, parameters, and
+			 * parameter types
+			 */
+			if (api_version >= PGSS_V1_6)
+			{
+				nulls[i++] = true;
+				nulls[i++] = true;
+				nulls[i++] = true;
+			}
 		}
 
 		/* copy counters to a local variable to keep locking time short */
@@ -1630,6 +1995,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 					 api_version == PGSS_V1_1 ? PG_STAT_STATEMENTS_COLS_V1_1 :
 					 api_version == PGSS_V1_2 ? PG_STAT_STATEMENTS_COLS_V1_2 :
 					 api_version == PGSS_V1_3 ? PG_STAT_STATEMENTS_COLS_V1_3 :
+					 api_version == PGSS_V1_6 ? PG_STAT_STATEMENTS_COLS_V1_6 :
 					 -1 /* fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -1676,8 +2042,12 @@ pgss_memsize(void)
  * have made the entry while we waited to get exclusive lock.
  */
 static pgssEntry *
-entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
-			bool sticky)
+entry_alloc(pgssHashKey *key,
+			Size query_offset, int query_len,
+			Size consts_offset, int consts_len,
+			Size params_offset, int params_len,
+			Size param_types_offset, int param_types_len,
+			int encoding, bool sticky)
 {
 	pgssEntry  *entry;
 	bool		found;
@@ -1704,6 +2074,12 @@ entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
 		entry->query_offset = query_offset;
 		entry->query_len = query_len;
 		entry->encoding = encoding;
+		entry->consts_offset = consts_offset;
+		entry->consts_len = consts_len;
+		entry->params_offset = params_offset;
+		entry->params_len = params_len;
+		entry->param_types_offset = param_types_offset;
+		entry->param_types_len = param_types_len;
 	}
 
 	return entry;
@@ -1772,7 +2148,7 @@ entry_dealloc(void)
 		/* In the mean length computation, ignore dropped texts. */
 		if (entry->query_len >= 0)
 		{
-			tottextlen += entry->query_len + 1;
+			tottextlen += entry->query_len + entry->consts_len + entry->params_len + entry->param_types_len + 1;
 			nvalidtexts++;
 		}
 	}
@@ -2031,6 +2407,23 @@ need_gc_qtexts(void)
 	return true;
 }
 
+/* This is used for some repetitive code in gc_qtexts */
+#define WRITE_TEXT(xlen, xoffset) do { \
+	int		len = (xlen); \
+	char   *txt = qtext_fetch((xoffset), len, qbuffer, qbuffer_size); \
+	if (txt && fwrite(txt, 1, len + 1, qfile) != len + 1) \
+	{ \
+		ereport(LOG, \
+				(errcode_for_file_access(), \
+			  errmsg("could not write pg_stat_statement file \"%s\": %m", \
+					 PGSS_TEXT_FILE))); \
+		hash_seq_term(&hash_seq); \
+		goto gc_fail; \
+	} \
+	(xoffset) = extent; \
+	extent += len + 1; \
+} while(0)
+
 /*
  * Garbage-collect orphaned query texts in external file.
  *
@@ -2110,22 +2503,21 @@ gc_qtexts(void)
 			/* Trouble ... drop the text */
 			entry->query_offset = 0;
 			entry->query_len = -1;
+			entry->consts_offset = 0;
+			entry->consts_len = -1;
+			entry->params_offset = 0;
+			entry->params_len = -1;
+			entry->param_types_offset = 0;
+			entry->param_types_len = -1;
 			/* entry will not be counted in mean query length computation */
 			continue;
 		}
 
-		if (fwrite(qry, 1, query_len + 1, qfile) != query_len + 1)
-		{
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not write pg_stat_statement file \"%s\": %m",
-							PGSS_TEXT_FILE)));
-			hash_seq_term(&hash_seq);
-			goto gc_fail;
-		}
+		WRITE_TEXT(entry->query_len, entry->query_offset);
+		WRITE_TEXT(entry->consts_len, entry->consts_offset);
+		WRITE_TEXT(entry->params_len, entry->params_offset);
+		WRITE_TEXT(entry->param_types_len, entry->param_types_offset);
 
-		entry->query_offset = extent;
-		extent += query_len + 1;
 		nentries++;
 	}
 
@@ -2459,8 +2851,8 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 
 				/* We jumble only the constant's type, not its value */
 				APP_JUMB(c->consttype);
-				/* Also, record its parse location for query normalization */
-				RecordConstLocation(jstate, c->location);
+				/* Also, record its parse location and type for query normalization */
+				RecordConstLocationAndType(jstate, c->location, c->consttype);
 			}
 			break;
 		case T_Param:
@@ -2904,7 +3296,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
  * that is currently being walked.
  */
 static void
-RecordConstLocation(pgssJumbleState *jstate, int location)
+RecordConstLocationAndType(pgssJumbleState *jstate, int location, Oid type)
 {
 	/* -1 indicates unknown or undefined location */
 	if (location >= 0)
@@ -2917,10 +3309,20 @@ RecordConstLocation(pgssJumbleState *jstate, int location)
 				repalloc(jstate->clocations,
 						 jstate->clocations_buf_size *
 						 sizeof(pgssLocationLen));
+
+			/* the consts_types array piggybacks on this */
+			jstate->consts_types = (Oid *)
+				repalloc(jstate->consts_types,
+						 jstate->clocations_buf_size *
+						 sizeof(Oid));
 		}
 		jstate->clocations[jstate->clocations_count].location = location;
 		/* initialize lengths to -1 to simplify fill_in_constant_lengths */
 		jstate->clocations[jstate->clocations_count].length = -1;
+
+		/* piggyback the consts_types array */
+		jstate->consts_types[jstate->clocations_count] = type;
+
 		jstate->clocations_count++;
 	}
 }
@@ -2946,7 +3348,9 @@ RecordConstLocation(pgssJumbleState *jstate, int location)
  */
 static char *
 generate_normalized_query(pgssJumbleState *jstate, const char *query,
-						  int query_loc, int *query_len_p, int encoding)
+						  int query_loc, int *query_len_p,
+						  char **consts, int *consts_len,
+						  int encoding)
 {
 	char	   *norm_query;
 	int			query_len = *query_len_p;
@@ -2957,6 +3361,9 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 				n_quer_loc = 0, /* Normalized query byte location */
 				last_off = 0,	/* Offset from start for previous tok */
 				last_tok_len = 0;	/* Length (in bytes) of that tok */
+	Datum	   *consts_arr;		/* A Datum C-array used to make the result */
+	int			consts_count;	/* The exact number of constants collected */
+	uint64		totalsize;		/* Ensure that consts doesn't get too big */
 
 	/*
 	 * Get constants' lengths (core system only gives us locations).  Note
@@ -2975,6 +3382,10 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 
 	/* Allocate result buffer */
 	norm_query = palloc(norm_query_buflen + 1);
+	/* and the consts array */
+	consts_arr = (Datum *) palloc(sizeof(Datum) * jstate->clocations_count);
+	consts_count = 0;
+	totalsize = 0;
 
 	for (i = 0; i < jstate->clocations_count; i++)
 	{
@@ -2989,6 +3400,15 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 
 		if (tok_len < 0)
 			continue;			/* ignore any duplicates */
+
+		totalsize += tok_len;
+		if (pgss_collect_constants &&
+				(totalsize <= pgss_max_parameters_size || pgss_max_parameters_size < 0))
+		{
+			/* Collect the constant */
+			consts_arr[consts_count++] = PointerGetDatum(
+					cstring_to_text_with_len(query + off, tok_len));
+		}
 
 		/* Copy next chunk (what precedes the next constant) */
 		len_to_wrt = off - last_off;
@@ -3012,6 +3432,32 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 	 * remaining bytes of the original query string.
 	 */
 	len_to_wrt = query_len - quer_loc;
+
+	/* Turn the Datum C-array into a text SQL-array, unless it was too big */
+	if (!pgss_collect_constants || consts_count == 0 ||
+			(totalsize > pgss_max_parameters_size && pgss_max_parameters_size >= 0))
+	{
+		/* Use -1 to indicate that consts is null */
+		*consts = NULL;
+		*consts_len = -1;
+	}
+	else
+	{
+		ArrayType  *sql_array;
+		int			dims[1];
+		int			lbs[1];
+		bool		isvarlena;
+		Oid			typOutput;
+
+		dims[0] = consts_count;
+		lbs[0] = 1 + jstate->highest_extern_param_id;
+
+		sql_array = construct_md_array(consts_arr, NULL, 1, dims, lbs,
+									   TEXTOID, -1, false, 'i');
+		getTypeOutputInfo(TEXTARRAYOID, &typOutput, &isvarlena);
+		*consts = OidOutputFunctionCall(typOutput, PointerGetDatum(sql_array));
+		*consts_len = strlen(*consts);
+	}
 
 	Assert(len_to_wrt >= 0);
 	memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);

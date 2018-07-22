@@ -51,7 +51,7 @@ PREPARE pgss_test (int) AS SELECT $1, 'test' LIMIT 1;
 EXECUTE pgss_test(1);
 DEALLOCATE pgss_test;
 
-SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+SELECT query, calls, rows, constants, parameters, parameter_types FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
 -- CRUD: INSERT SELECT UPDATE DELETE on test table
@@ -194,5 +194,24 @@ DROP FUNCTION IF EXISTS PLUS_ONE(INTEGER);
 DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- test the constants
+SELECT 42 + 6 AS fortyeight, 'hello ' || 'world' as helloworld;
+
+SELECT query, constants
+FROM pg_stat_statements
+WHERE query ~ 'fortyeight'
+  AND query !~ 'pg_stat_statements'
+  AND dbid = (SELECT oid FROM pg_database WHERE datname = current_catalog);
+
+-- test the parameters
+PREPARE foo AS SELECT relname FROM pg_class WHERE oid = $1 AND relpages > $2;
+EXECUTE foo (0, 42);
+
+SELECT query, parameters, parameter_types
+FROM pg_stat_statements
+WHERE query ~ 'foo'
+  AND query !~ 'pg_stat_statements'
+  AND dbid = (SELECT oid FROM pg_database WHERE datname = current_catalog);
 
 DROP EXTENSION pg_stat_statements;

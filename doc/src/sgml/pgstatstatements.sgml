@@ -83,6 +83,27 @@
      </row>
 
      <row>
+      <entry><structfield>constants</structfield></entry>
+      <entry><type>text[]</type></entry>
+      <entry></entry>
+      <entry>The list of constants on first invocation of query</entry>
+     </row>
+
+     <row>
+      <entry><structfield>parameters</structfield></entry>
+      <entry><type>text[]</type></entry>
+      <entry></entry>
+      <entry>The list of parameters on first invocation of query</entry>
+     </row>
+
+     <row>
+      <entry><structfield>parameter_types</structfield></entry>
+      <entry><type>regtype[]</type></entry>
+      <entry></entry>
+      <entry>Data types of the parameters</entry>
+     </row>
+
+     <row>
       <entry><structfield>calls</structfield></entry>
       <entry><type>bigint</type></entry>
       <entry></entry>
@@ -248,10 +269,17 @@
    When a constant's value has been ignored for purposes of matching the query
    to other queries, the constant is replaced by a parameter symbol, such
    as <literal>$1</literal>, in the <structname>pg_stat_statements</structname>
-   display.
+   display and added to the <structname>constants</structname> list.
    The rest of the query text is that of the first query that had the
    particular <structfield>queryid</structfield> hash value associated with the
    <structname>pg_stat_statements</structname> entry.
+  </para>
+
+  <para>
+   If a prepared statement contains any parameters, the first execution of the
+   statement will put the values used in <structname>parameters</structname> along
+   with their respective types in <structname>parameter_types</structname>.
+   Subsequent executions do not replace these sample values.
   </para>
 
   <para>
@@ -458,6 +486,56 @@
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>pg_stat_statements.collect_constants</varname> (<type>boolean</type>)
+    </term>
+
+    <listitem>
+     <para>
+      <varname>pg_stat_statements.collect_constants</varname> specifies whether to
+      collect the values of constants when normalizing the query.
+      If it is <literal>off</literal> then no more constants will be collected, but
+      the values already present will not be removed.
+      The default value is <literal>on</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>pg_stat_statements.collect_parameters</varname> (<type>boolean</type>)
+    </term>
+
+    <listitem>
+     <para>
+      <varname>pg_stat_statements.collect_parameters</varname> specifies whether to
+      collect the values of parameters.
+      If it is <literal>off</literal> then no more parameters will be collected, but
+      the values already present will not be removed.
+      The default value is <literal>on</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>pg_stat_statements.max_parameters_size</varname> (<type>integer</type>)
+    </term>
+
+    <listitem>
+     <para>
+      <varname>pg_stat_statements.max_parameters_size</varname> is the maximum
+      width of constants and parameters collected the module.
+      When this option is changed, it affects only future collections. The
+      values already held are not truncated.
+      A value of 0 effectively turns collection off. A value of -1 represents
+      an unlimited length.
+      The default value is -1.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
 
   <para>
@@ -525,6 +603,28 @@ total_time  | 81.42
 rows        | 0
 hit_percent | 34.4947735191637631
 </screen>
+
+    <para>
+    The following example shows how to display constant information for a given
+    query.  Displaying parameter information is done in an analagous method.
+    </para>
+
+<screen>
+bench=# SELECT query FROM pg_stat_statements WHERE queryid = 2169794491;
+                               query                                
+--------------------------------------------------------------------
+ UPDATE pgbench_accounts SET abalance = abalance + $1 WHERE aid = $2;
+
+bench=# SELECT position, value
+bench-# FROM pg_stat_statements AS pss,
+bench-#      unnest(pss.constants) WITH ORDINALITY AS u(value, position)
+bench-# WHERE pss.queryid = 2169794491;
+ position | value 
+----------+-------
+        1 | -3951
+        2 | 66180
+(2 rows)
+</screen>
  </sect2>
 
  <sect2>
@@ -533,6 +633,7 @@ hit_percent | 34.4947735191637631
   <para>
    Takahiro Itagaki <email>itagaki.takahiro@oss.ntt.co.jp</email>.
    Query normalization added by Peter Geoghegan <email>peter@2ndquadrant.com</email>.
+   Sample constants and parameters added by Vik Fearing <email>vik.fearing@2ndquadrant.com</email>.
   </para>
  </sect2>
 

@@ -239,6 +239,16 @@ typedef enum
 } transferMode;
 
 /*
+ * Enumeration to denote reflink modes
+ */
+typedef enum
+{
+	REFLINK_NEVER,
+	REFLINK_AUTO,
+	REFLINK_ALWAYS
+} reflinkMode;
+
+/*
  * Enumeration to denote pg_log modes
  */
 typedef enum
@@ -297,6 +307,7 @@ typedef struct
 	bool		check;			/* true -> ask user for permission to make
 								 * changes */
 	transferMode transfer_mode; /* copy files or link them? */
+	reflinkMode	reflink_mode;
 	int			jobs;
 } UserOpts;
 
@@ -369,10 +380,14 @@ bool		pid_lock_file_exists(const char *datadir);
 
 void copyFile(const char *src, const char *dst,
 		 const char *schemaName, const char *relName);
+bool cloneFile(const char *src, const char *dst,
+		 const char *schemaName, const char *relName,
+		 bool unsupported_ok);
 void linkFile(const char *src, const char *dst,
 		 const char *schemaName, const char *relName);
 void rewriteVisibilityMap(const char *fromfile, const char *tofile,
 					 const char *schemaName, const char *relName);
+void		check_reflink(void);
 void		check_hard_link(void);
 
 /* fopen_priv() is no longer different from fopen() */

@@ -53,6 +53,9 @@ parseCommandLine(int argc, char *argv[])
 		{"retain", no_argument, NULL, 'r'},
 		{"jobs", required_argument, NULL, 'j'},
 		{"verbose", no_argument, NULL, 'v'},
+
+		{"reflink", required_argument, NULL, 1},
+
 		{NULL, 0, NULL, 0}
 	};
 	int			option;			/* Command line option */
@@ -201,6 +204,17 @@ parseCommandLine(int argc, char *argv[])
 			case 'v':
 				pg_log(PG_REPORT, "Running in verbose mode\n");
 				log_opts.verbose = true;
+				break;
+
+			case 1:
+				if (strcmp(optarg, "always") == 0)
+					user_opts.reflink_mode = REFLINK_ALWAYS;
+				else if (strcmp(optarg, "auto") == 0)
+					user_opts.reflink_mode = REFLINK_AUTO;
+				else if (strcmp(optarg, "never") == 0)
+					user_opts.reflink_mode = REFLINK_NEVER;
+				else
+					pg_fatal("invalid reflink mode: %s\n", optarg);
 				break;
 
 			default:

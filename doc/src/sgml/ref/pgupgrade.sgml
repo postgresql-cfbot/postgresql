@@ -183,6 +183,39 @@
      </varlistentry>
 
      <varlistentry>
+      <term><literal><option>--reflink</option>={always|auto|never}</literal></term>
+      <listitem>
+       <para>
+        Determines whether <application>pg_upgrade</application>, when in copy
+        mode, should use efficient file cloning (also known as
+        <quote>reflinks</quote>) on some operating systems and file systems.
+        This can result in near-instantaneous copying of the data files,
+        giving the speed advantages of
+        <option>-k</option>/<option>--link</option> while leaving the old
+        cluster untouched.
+       </para>
+
+       <para>
+        The setting <literal>always</literal> requires the use of relinks.  If
+        they are not supported, the <application>pg_upgrade</application> run
+        will abort.  Use this in production to limit the upgrade run time.
+        The setting <literal>auto</literal> uses reflinks when available,
+        otherwise it falls back to a normal copy.  This is the default.  The
+        setting <literal>never</literal> prevents use of reflinks and always
+        uses a normal copy.  This can be useful to ensure that the upgraded
+        cluster has its disk space fully allocated and not shared with the old
+        cluster.
+       </para>
+
+       <para>
+        At present, reflinks are supported on Linux (kernel 4.5 or later) with
+        Btrfs and XFS (on file systems created with reflink support, which is
+        not the default for XFS at this writing), and on macOS with APFS.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

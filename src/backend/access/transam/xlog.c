@@ -2287,7 +2287,7 @@ assign_checkpoint_completion_target(double newval, void *extra)
  * XLOG segments? Returns the highest segment that should be preallocated.
  */
 static XLogSegNo
-XLOGfileslop(XLogRecPtr PriorRedoPtr)
+XLOGfileslop(XLogRecPtr RedoRecPtr)
 {
 	XLogSegNo	minSegNo;
 	XLogSegNo	maxSegNo;
@@ -2299,9 +2299,9 @@ XLOGfileslop(XLogRecPtr PriorRedoPtr)
 	 * correspond to. Always recycle enough segments to meet the minimum, and
 	 * remove enough segments to stay below the maximum.
 	 */
-	minSegNo = PriorRedoPtr / wal_segment_size +
+	minSegNo = RedoRecPtr / wal_segment_size +
 		ConvertToXSegs(min_wal_size_mb, wal_segment_size) - 1;
-	maxSegNo = PriorRedoPtr / wal_segment_size +
+	maxSegNo = RedoRecPtr / wal_segment_size +
 		ConvertToXSegs(max_wal_size_mb, wal_segment_size) - 1;
 
 	/*
@@ -2316,7 +2316,7 @@ XLOGfileslop(XLogRecPtr PriorRedoPtr)
 	/* add 10% for good measure. */
 	distance *= 1.10;
 
-	recycleSegNo = (XLogSegNo) ceil(((double) PriorRedoPtr + distance) /
+	recycleSegNo = (XLogSegNo) ceil(((double) RedoRecPtr + distance) /
 									wal_segment_size);
 
 	if (recycleSegNo < minSegNo)
@@ -3899,12 +3899,12 @@ RemoveTempXlogFiles(void)
 /*
  * Recycle or remove all log files older or equal to passed segno.
  *
- * endptr is current (or recent) end of xlog, and PriorRedoRecPtr is the
- * redo pointer of the previous checkpoint. These are used to determine
+ * endptr is current (or recent) end of xlog, and RedoRecPtr is the
+ * redo pointer of the last checkpoint. These are used to determine
  * whether we want to recycle rather than delete no-longer-wanted log files.
  */
 static void
-RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
+RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr RedoRecPtr, XLogRecPtr endptr)
 {
 	DIR		   *xldir;
 	struct dirent *xlde;
@@ -3947,7 +3947,7 @@ RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 				/* Update the last removed location in shared memory first */
 				UpdateLastRemovedPtr(xlde->d_name);
 
-				RemoveXlogFile(xlde->d_name, PriorRedoPtr, endptr);
+				RemoveXlogFile(xlde->d_name, RedoRecPtr, endptr);
 			}
 		}
 	}
@@ -4009,9 +4009,11 @@ RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
 			 * remove it yet. It should be OK to remove it - files that are
 			 * not part of our timeline history are not required for recovery
 			 * - but seems safer to let them be archived and removed later.
+			 * Here, switchpoint is a good approximate of RedoRecPtr for
+			 * RemoveXlogFile since we have just done timeline switching.
 			 */
 			if (!XLogArchiveIsReady(xlde->d_name))
-				RemoveXlogFile(xlde->d_name, InvalidXLogRecPtr, switchpoint);
+				RemoveXlogFile(xlde->d_name, switchpoint, switchpoint);
 		}
 	}
 
@@ -4021,14 +4023,12 @@ RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
 /*
  * Recycle or remove a log file that's no longer needed.
  *
- * endptr is current (or recent) end of xlog, and PriorRedoRecPtr is the
- * redo pointer of the previous checkpoint. These are used to determine
+ * endptr is current (or recent) end of xlog, and RedoRecPtr is the
+ * redo pointer of the last checkpoint. These are used to determine
  * whether we want to recycle rather than delete no-longer-wanted log files.
- * If PriorRedoRecPtr is not known, pass invalid, and the function will
- * recycle, somewhat arbitrarily, 10 future segments.
  */
 static void
-RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
+RemoveXlogFile(const char *segname, XLogRecPtr RedoRecPtr, XLogRecPtr endptr)
 {
 	char		path[MAXPGPATH];
 #ifdef WIN32
@@ -4042,10 +4042,7 @@ RemoveXlogFile(const char *segname, XLogRecPtr PriorRedoPtr, XLogRecPtr endptr)
 	 * Initialize info about where to try to recycle to.
 	 */
 	XLByteToSeg(endptr, endlogSegNo, wal_segment_size);
-	if (PriorRedoPtr == InvalidXLogRecPtr)
-		recycleSegNo = endlogSegNo + 10;
-	else
-		recycleSegNo = XLOGfileslop(PriorRedoPtr);
+	recycleSegNo = XLOGfileslop(RedoRecPtr);
 
 	snprintf(path, MAXPGPATH, XLOGDIR "/%s", segname);
 
@@ -9086,7 +9083,7 @@ CreateCheckPoint(int flags)
 		XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 		KeepLogSeg(recptr, &_logSegNo);
 		_logSegNo--;
-		RemoveOldXlogFiles(_logSegNo, PriorRedoPtr, recptr);
+		RemoveOldXlogFiles(_logSegNo, RedoRecPtr, recptr);
 	}
 
 	/*
@@ -9439,7 +9436,7 @@ CreateRestartPoint(int flags)
 		if (RecoveryInProgress())
 			ThisTimeLineID = replayTLI;
 
-		RemoveOldXlogFiles(_logSegNo, PriorRedoPtr, endptr);
+		RemoveOldXlogFiles(_logSegNo, RedoRecPtr, endptr);
 
 		/*
 		 * Make more log segments if needed.  (Do this after recycling old log

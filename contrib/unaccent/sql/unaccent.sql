@@ -16,3 +16,12 @@ SELECT unaccent('unaccent', '³φιλ');
 SELECT ts_lexize('unaccent', 'foobar');
 SELECT ts_lexize('unaccent', '£ΜΛΑ');
 SELECT ts_lexize('unaccent', '³φιλ');
+
+CREATE TEXT SEARCH CONFIGURATION unaccent(
+						COPY=russian
+);
+
+ALTER TEXT SEARCH CONFIGURATION unaccent ALTER MAPPING FOR
+	asciiword, word WITH unaccent MAP russian_stem;
+
+SELECT to_tsvector('unaccent', 'foobar ³φιλι £ΜΛΙ');

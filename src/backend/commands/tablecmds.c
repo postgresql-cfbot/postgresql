@@ -3012,7 +3012,7 @@ rename_constraint_internal(Oid myrelid,
 			|| con->contype == CONSTRAINT_UNIQUE
 			|| con->contype == CONSTRAINT_EXCLUSION))
 		/* rename the index; this renames the constraint as well */
-		RenameRelationInternal(con->conindid, newconname, false);
+		RenameRelationInternal(con->conindid, newconname, false, false);
 	else
 		RenameConstraintById(constraintOid, newconname);
 
@@ -3082,7 +3082,9 @@ RenameRelation(RenameStmt *stmt)
 {
 	Oid			relid;
 	ObjectAddress address;
+    LOCKMODE    lockmode;
 
+    lockmode = stmt->concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock;
 	/*
 	 * Grab an exclusive lock on the target table, index, sequence, view,
 	 * materialized view, or foreign table, which we will NOT release until
@@ -3091,7 +3093,7 @@ RenameRelation(RenameStmt *stmt)
 	 * Lock level used here should match RenameRelationInternal, to avoid lock
 	 * escalation.
 	 */
-	relid = RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
+	relid = RangeVarGetRelidExtended(stmt->relation, lockmode,
 									 stmt->missing_ok ? RVR_MISSING_OK : 0,
 									 RangeVarCallbackForAlterRelation,
 									 (void *) stmt);
@@ -3105,7 +3107,7 @@ RenameRelation(RenameStmt *stmt)
 	}
 
 	/* Do the work */
-	RenameRelationInternal(relid, stmt->newname, false);
+	RenameRelationInternal(relid, stmt->newname, false, stmt->concurrent);
 
 	ObjectAddressSet(address, RelationRelationId, relid);
 
@@ -3122,20 +3124,22 @@ RenameRelation(RenameStmt *stmt)
  *			  sequence, AFAIK there's no need for it to be there.
  */
 void
-RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal)
+RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal, bool concurrent)
 {
 	Relation	targetrelation;
 	Relation	relrelation;	/* for RELATION relation */
 	HeapTuple	reltup;
 	Form_pg_class relform;
 	Oid			namespaceId;
+    LOCKMODE    lockmode;
 
 	/*
 	 * Grab an exclusive lock on the target table, index, sequence, view,
 	 * materialized view, or foreign table, which we will NOT release until
 	 * end of transaction.
 	 */
-	targetrelation = relation_open(myrelid, AccessExclusiveLock);
+    lockmode = concurrent ? ShareUpdateExclusiveLock : AccessExclusiveLock;
+	targetrelation = relation_open(myrelid, lockmode);
 	namespaceId = RelationGetNamespace(targetrelation);
 
 	/*
@@ -7046,7 +7050,7 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 		ereport(NOTICE,
 				(errmsg("ALTER TABLE / ADD CONSTRAINT USING INDEX will rename index \"%s\" to \"%s\"",
 						indexName, constraintName)));
-		RenameRelationInternal(index_oid, constraintName, false);
+		RenameRelationInternal(index_oid, constraintName, false, false);
 	}
 
 	/* Extra checks needed if making primary key */

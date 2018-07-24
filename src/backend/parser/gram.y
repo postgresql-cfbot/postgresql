@@ -8457,6 +8457,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER COLLATION any_name RENAME TO name
@@ -8466,6 +8467,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER CONVERSION_P any_name RENAME TO name
@@ -8475,6 +8477,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DATABASE database_name RENAME TO database_name
@@ -8484,6 +8487,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DOMAIN_P any_name RENAME TO name
@@ -8493,6 +8497,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DOMAIN_P any_name RENAME CONSTRAINT name TO name
@@ -8502,6 +8507,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->subname = $6;
 					n->newname = $8;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN DATA_P WRAPPER name RENAME TO name
@@ -8511,6 +8517,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) makeString($5);
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FUNCTION function_with_argtypes RENAME TO name
@@ -8520,6 +8527,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER GROUP_P RoleId RENAME TO RoleId
@@ -8529,6 +8537,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER opt_procedural LANGUAGE name RENAME TO name
@@ -8538,6 +8547,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) makeString($4);
 					n->newname = $7;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER OPERATOR CLASS any_name USING access_method RENAME TO name
@@ -8547,6 +8557,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) lcons(makeString($6), $4);
 					n->newname = $9;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER OPERATOR FAMILY any_name USING access_method RENAME TO name
@@ -8556,6 +8567,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) lcons(makeString($6), $4);
 					n->newname = $9;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER POLICY name ON qualified_name RENAME TO name
@@ -8566,6 +8578,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER POLICY IF_P EXISTS name ON qualified_name RENAME TO name
@@ -8576,6 +8589,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $5;
 					n->newname = $10;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER PROCEDURE function_with_argtypes RENAME TO name
@@ -8585,6 +8599,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name RENAME TO name
@@ -8594,6 +8609,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER ROUTINE function_with_argtypes RENAME TO name
@@ -8603,6 +8619,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SCHEMA name RENAME TO name
@@ -8612,6 +8629,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SERVER name RENAME TO name
@@ -8621,6 +8639,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SUBSCRIPTION name RENAME TO name
@@ -8630,6 +8649,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE relation_expr RENAME TO name
@@ -8640,6 +8660,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME TO name
@@ -8650,6 +8671,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SEQUENCE qualified_name RENAME TO name
@@ -8660,6 +8682,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SEQUENCE IF_P EXISTS qualified_name RENAME TO name
@@ -8670,6 +8693,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER VIEW qualified_name RENAME TO name
@@ -8680,6 +8704,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER VIEW IF_P EXISTS qualified_name RENAME TO name
@@ -8690,6 +8715,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW qualified_name RENAME TO name
@@ -8700,6 +8726,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $7;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME TO name
@@ -8710,6 +8737,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $9;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER INDEX qualified_name RENAME TO name
@@ -8720,6 +8748,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
+					$$ = (Node *)n;
+				}
+			| ALTER INDEX qualified_name RENAME CONCURRENTLY TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_INDEX;
+					n->relation = $3;
+					n->subname = NULL;
+					n->newname = $7;
+					n->missing_ok = false;
+                    n->concurrent = true;
 					$$ = (Node *)n;
 				}
 			| ALTER INDEX IF_P EXISTS qualified_name RENAME TO name
@@ -8730,6 +8770,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
+                    n->concurrent = false;
+					$$ = (Node *)n;
+				}
+			| ALTER INDEX IF_P EXISTS qualified_name RENAME CONCURRENTLY TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_INDEX;
+					n->relation = $5;
+					n->subname = NULL;
+					n->newname = $9;
+					n->missing_ok = true;
+                    n->concurrent = true;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE relation_expr RENAME TO name
@@ -8740,6 +8792,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $7;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME TO name
@@ -8750,6 +8803,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = NULL;
 					n->newname = $9;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE relation_expr RENAME opt_column name TO name
@@ -8761,6 +8815,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $6;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
@@ -8772,6 +8827,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $8;
 					n->newname = $10;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW qualified_name RENAME opt_column name TO name
@@ -8783,6 +8839,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $7;
 					n->newname = $9;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME opt_column name TO name
@@ -8794,6 +8851,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $9;
 					n->newname = $11;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE relation_expr RENAME CONSTRAINT name TO name
@@ -8804,6 +8862,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $6;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME CONSTRAINT name TO name
@@ -8814,6 +8873,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $8;
 					n->newname = $10;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE relation_expr RENAME opt_column name TO name
@@ -8825,6 +8885,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $7;
 					n->newname = $9;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
@@ -8836,6 +8897,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $9;
 					n->newname = $11;
 					n->missing_ok = true;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER RULE name ON qualified_name RENAME TO name
@@ -8846,6 +8908,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TRIGGER name ON qualified_name RENAME TO name
@@ -8856,6 +8919,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER EVENT TRIGGER name RENAME TO name
@@ -8864,6 +8928,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_EVENT_TRIGGER;
 					n->object = (Node *) makeString($4);
 					n->newname = $7;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER ROLE RoleId RENAME TO RoleId
@@ -8873,6 +8938,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER USER RoleId RENAME TO RoleId
@@ -8882,6 +8948,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLESPACE name RENAME TO name
@@ -8891,6 +8958,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER STATISTICS any_name RENAME TO name
@@ -8900,6 +8968,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH PARSER any_name RENAME TO name
@@ -8909,6 +8978,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $5;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH DICTIONARY any_name RENAME TO name
@@ -8918,6 +8988,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $5;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH TEMPLATE any_name RENAME TO name
@@ -8927,6 +8998,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $5;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH CONFIGURATION any_name RENAME TO name
@@ -8936,6 +9008,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $5;
 					n->newname = $8;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TYPE_P any_name RENAME TO name
@@ -8945,6 +9018,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->object = (Node *) $3;
 					n->newname = $6;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TYPE_P any_name RENAME ATTRIBUTE name TO name opt_drop_behavior
@@ -8957,6 +9031,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->newname = $8;
 					n->behavior = $9;
 					n->missing_ok = false;
+                    n->concurrent = false;
 					$$ = (Node *)n;
 				}
 		;

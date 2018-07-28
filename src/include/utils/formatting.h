@@ -28,4 +28,7 @@ extern char *asc_tolower(const char *buff, size_t nbytes);
 extern char *asc_toupper(const char *buff, size_t nbytes);
 extern char *asc_initcap(const char *buff, size_t nbytes);
 
+extern Datum to_datetime(text *datetxt, const char *fmt, int fmt_len, char *tzn,
+						 bool strict, Oid *typid, int32 *typmod, int *tz);
+
 #endif

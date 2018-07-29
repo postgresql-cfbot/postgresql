@@ -171,6 +171,9 @@ static ProcSignalReason RecoveryConflictReason;
 static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
 
+/* current portal parameters */
+static ParamListInfo debug_query_params = NULL;
+
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
  * ----------------------------------------------------------------
@@ -183,7 +186,7 @@ static void forbidden_in_wal_sender(char firstchar);
 static List *pg_rewrite_query(Query *query);
 static bool check_log_statement(List *stmt_list);
 static int	errdetail_execute(List *raw_parsetree_list);
-static int	errdetail_params(ParamListInfo params);
+static int	errdetail_log_params(ParamListInfo params);
 static int	errdetail_abort(void);
 static int	errdetail_recovery_conflict(void);
 static void start_xact_command(void);
@@ -1771,6 +1774,7 @@ exec_bind_message(StringInfo input_message)
 			params->params[paramno].pflags = PARAM_FLAG_CONST;
 			params->params[paramno].ptype = ptype;
 		}
+		debug_query_params = params;
 	}
 	else
 		params = NULL;
@@ -1850,7 +1854,7 @@ exec_bind_message(StringInfo input_message)
 							*portal_name ? portal_name : "",
 							psrc->query_string),
 					 errhidestmt(true),
-					 errdetail_params(params)));
+					 errdetail_log_params(params)));
 			break;
 	}
 
@@ -1858,6 +1862,7 @@ exec_bind_message(StringInfo input_message)
 		ShowUsage("BIND MESSAGE STATISTICS");
 
 	debug_query_string = NULL;
+	debug_query_params = NULL;
 }
 
 /*
@@ -1934,6 +1939,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 		else
 			prepStmtName = "<unnamed>";
 		portalParams = portal->portalParams;
+		debug_query_params = portalParams;
 	}
 
 	/*
@@ -1985,7 +1991,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 						*portal_name ? portal_name : "",
 						sourceText),
 				 errhidestmt(true),
-				 errdetail_params(portalParams)));
+				 errdetail_log_params(portalParams)));
 		was_logged = true;
 	}
 
@@ -2074,7 +2080,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 							*portal_name ? portal_name : "",
 							sourceText),
 					 errhidestmt(true),
-					 errdetail_params(portalParams)));
+					 errdetail_log_params(portalParams)));
 			break;
 	}
 
@@ -2082,6 +2088,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 		ShowUsage("EXECUTE MESSAGE STATISTICS");
 
 	debug_query_string = NULL;
+	debug_query_params = NULL;
 }
 
 /*
@@ -2200,12 +2207,12 @@ errdetail_execute(List *raw_parsetree_list)
 }
 
 /*
- * errdetail_params
+ * errdetail_log_params
  *
- * Add an errdetail() line showing bind-parameter data, if available.
+ * Add an errdetail_log() line showing bind-parameter data, if available.
  */
 static int
-errdetail_params(ParamListInfo params)
+errdetail_log_params(ParamListInfo params)
 {
 	/* We mustn't call user-defined I/O functions when in an aborted xact */
 	if (params && params->numParams > 0 && !IsAbortedTransactionBlockState())
@@ -2256,7 +2263,7 @@ errdetail_params(ParamListInfo params)
 			pfree(pstring);
 		}
 
-		errdetail("parameters: %s", param_str.data);
+		errdetail_log("parameters: %s", param_str.data);
 
 		pfree(param_str.data);
 
@@ -2925,7 +2932,8 @@ ProcessInterrupts(void)
 		else
 			ereport(FATAL,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("terminating connection due to administrator command")));
+					 errmsg("terminating connection due to administrator command"),
+					 errdetail_log_params(debug_query_params)));
 	}
 	if (ClientConnectionLost)
 	{
@@ -3001,14 +3009,16 @@ ProcessInterrupts(void)
 			LockErrorCleanup();
 			ereport(ERROR,
 					(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
-					 errmsg("canceling statement due to lock timeout")));
+					 errmsg("canceling statement due to lock timeout"),
+					 errdetail_log_params(debug_query_params)));
 		}
 		if (stmt_timeout_occurred)
 		{
 			LockErrorCleanup();
 			ereport(ERROR,
 					(errcode(ERRCODE_QUERY_CANCELED),
-					 errmsg("canceling statement due to statement timeout")));
+					 errmsg("canceling statement due to statement timeout"),
+					 errdetail_log_params(debug_query_params)));
 		}
 		if (IsAutoVacuumWorkerProcess())
 		{
@@ -3932,6 +3942,7 @@ PostgresMain(int argc, char *argv[],
 		 * the storage it points at.
 		 */
 		debug_query_string = NULL;
+		debug_query_params = NULL;
 
 		/*
 		 * Abort the current transaction in order to recover.

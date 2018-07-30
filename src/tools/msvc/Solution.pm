@@ -269,16 +269,14 @@ sub GenerateFiles
 		"LIBPGTYPES");
 
 	chdir('src/backend/utils');
-	my $pg_language_dat = '../../../src/include/catalog/pg_language.dat';
 	my $pg_proc_dat     = '../../../src/include/catalog/pg_proc.dat';
 	if (   IsNewer('fmgr-stamp', 'Gen_fmgrtab.pl')
 		|| IsNewer('fmgr-stamp', '../catalog/Catalog.pm')
-		|| IsNewer('fmgr-stamp', $pg_language_dat)
 		|| IsNewer('fmgr-stamp', $pg_proc_dat)
 		|| IsNewer('fmgr-stamp', '../../../src/include/access/transam.h'))
 	{
 		system(
-			"perl -I ../catalog Gen_fmgrtab.pl -I../../../src/include/ $pg_language_dat $pg_proc_dat"
+			"perl -I ../catalog Gen_fmgrtab.pl -I../../../src/include/ $pg_proc_dat"
 		);
 		open(my $f, '>', 'fmgr-stamp')
 		  || confess "Could not touch fmgr-stamp";
@@ -500,7 +498,9 @@ EOF
 	{
 		chdir('src/backend/catalog');
 		my $bki_srcs = join(' ../../../src/include/catalog/', @bki_srcs);
-		system("perl genbki.pl --set-version=$self->{majorver} $bki_srcs");
+		system(
+"perl genbki.pl -I ../../../src/include/ --set-version=$self->{majorver} $bki_srcs"
+		);
 		open(my $f, '>', 'bki-stamp')
 		  || confess "Could not touch bki-stamp";
 		close($f);

@@ -34,7 +34,10 @@
 #define BKI_FORCE_NOT_NULL
 /* Specifies a default value for a catalog field */
 #define BKI_DEFAULT(value)
-/* Indicates how to perform name lookups for an OID or OID-array field */
+/*
+ * Indicates how to perform name lookups, typically for an OID or
+ * OID-array field
+ */
 #define BKI_LOOKUP(catalog)
 
 /* The following are never defined; they are here only for documentation. */

@@ -191,6 +191,10 @@ sub ParseHeader
 					{
 						$column{default} = $1;
 					}
+					elsif ($attopt =~ /BKI_ARRAY_TYPE\(['"]?([^'"]+)['"]?\)/)
+					{
+						$column{array} = $1;
+					}
 					elsif ($attopt =~ /BKI_LOOKUP\((\w+)\)/)
 					{
 						$column{lookup} = $1;
@@ -448,6 +452,8 @@ sub FindAllOidsFromHeaders
 			foreach my $row (@$catdata)
 			{
 				push @oids, $row->{oid} if defined $row->{oid};
+				push @oids, $row->{array_type_oid}
+					if defined $row->{array_type_oid};
 			}
 		}
 

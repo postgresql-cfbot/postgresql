@@ -98,6 +98,8 @@ foreach my $header (@input_files)
 	if (-e $datfile)
 	{
 		my $data = Catalog::ParseData($datfile, $schema, 0);
+		gen_array_types($schema, $data)
+			if $catname eq 'pg_type';
 		$catalog_data{$catname} = $data;
 
 		# Check for duplicated OIDs while we're at it.
@@ -395,7 +397,8 @@ EOM
 			  if $key eq "oid"
 			  || $key eq "oid_symbol"
 			  || $key eq "descr"
-			  || $key eq "line_number";
+			  || $key eq "line_number"
+			  || $key eq "array_type_oid";
 			die sprintf "unrecognized field name \"%s\" in %s.dat line %s\n",
 			  $key, $catname, $bki_values{line_number}
 			  if (!exists($attnames{$key}));
@@ -569,6 +572,53 @@ exit 0;
 
 #################### Subroutines ########################
 
+
+# If the type specifies an array type OID, generate an entry for the array
+# type using values from the element type, plus some values that are needed
+# for all array types.
+sub gen_array_types
+{
+	my $pgtype_schema = shift;
+	my $types = shift;
+	my @array_types;
+
+	foreach my $elem_type (@$types)
+	{
+		next if !exists $elem_type->{array_type_oid};
+		my %array_type;
+
+		# Specific values derived from the element type.
+		$array_type{oid}     = $elem_type->{array_type_oid};
+		$array_type{typname} = '_' . $elem_type->{typname};
+		$array_type{typelem} = $elem_type->{typname};
+
+		# Arrays require INT alignment, unless the element type requires
+		# DOUBLE alignment.
+		$array_type{typalign} = $elem_type->{typalign} eq 'd' ? 'd' : 'i';
+
+		# Fill in the rest of the values.
+		foreach my $column (@$pgtype_schema)
+		{
+			my $attname = $column->{name};
+
+			# Skip if we already set it above.
+			next if defined $array_type{$attname};
+
+			# If we have a value needed for all arrays, use it, otherwise
+			# copy the value from the element type.
+			if (defined $column->{array})
+			{
+				$array_type{$attname} = $column->{array};
+			}
+			else
+			{
+				$array_type{$attname} = $elem_type->{$attname};
+			}
+		}
+		push @array_types, \%array_type;
+	}
+	push @$types, @array_types;
+}
 
 # For each catalog marked as needing a schema macro, generate the
 # per-user-attribute data to be incorporated into schemapg.h.  Also, for
@@ -830,7 +880,7 @@ sub form_pg_type_symbol
 	# Skip for rowtypes of bootstrap catalogs, since they have their
 	# own naming convention defined elsewhere.
 	return
-	     if $typename eq 'pg_type'
+	  if $typename eq 'pg_type'
 	  or $typename eq 'pg_proc'
 	  or $typename eq 'pg_attribute'
 	  or $typename eq 'pg_class';

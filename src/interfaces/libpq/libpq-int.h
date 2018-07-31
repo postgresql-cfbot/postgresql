@@ -313,7 +313,14 @@ typedef struct pg_conn_host
 								 * password file.  only set if the PGconn's
 								 * pgpass field is NULL. */
 	struct addrinfo *addrlist;	/* list of possible backend addresses */
+	bool		readonly;		/* true if host is proved to be read-only */
 } pg_conn_host;
+
+typedef struct pg_conn_address
+{
+	struct addrinfo *info;
+	int			hostidx;		/* host index in connhost array */
+} pg_conn_address;
 
 /*
  * PGconn stores all the state data associated with a single connection
@@ -365,6 +372,12 @@ struct pg_conn
 	/* Type of connection to make.  Possible values: any, read-write. */
 	char	   *target_session_attrs;
 
+	/* Connection order. Possible values: sequential, random */
+	char	   *hostorder;
+
+	char	   *failover_timeout;
+	time_t		failover_finish_time;
+
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
 
@@ -394,8 +407,10 @@ struct pg_conn
 
 	/* Support for multiple hosts in connection string */
 	int			nconnhost;		/* # of possible hosts */
-	int			whichhost;		/* host we're currently considering */
 	pg_conn_host *connhost;		/* details about each possible host */
+	int			nconnaddr;		/* # of possible addresses */
+	int			whichaddr;		/* address we're currently considering */
+	pg_conn_address *connaddr;	/* plain array of all addresses */
 
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
@@ -411,7 +426,6 @@ struct pg_conn
 	bool		sigpipe_flag;	/* can we mask SIGPIPE via MSG_NOSIGNAL? */
 
 	/* Transient state needed while establishing connection */
-	struct addrinfo *addr_cur;	/* backend address currently being tried */
 	PGSetenvStatusType setenv_state;	/* for 2.0 protocol only */
 	const PQEnvironmentOption *next_eo;
 	bool		send_appname;	/* okay to send application_name? */

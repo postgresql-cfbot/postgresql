@@ -44,6 +44,9 @@
 #include "fe-auth.h"
 
 
+#define CURRENT_HOST(conn) \
+	((conn)->connhost[(conn)->connaddr[(conn)->whichaddr].hostidx])
+
 #ifdef ENABLE_GSS
 /*
  * GSSAPI authentication system.
@@ -558,7 +561,7 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 	 * password, so we can just go ahead here without further distinction.
 	 */
 	conn->password_needed = true;
-	password = conn->connhost[conn->whichhost].password;
+	password = CURRENT_HOST(conn).password;
 	if (password == NULL)
 		password = conn->pgpass;
 	if (password == NULL || password[0] == '\0')
@@ -967,7 +970,7 @@ pg_fe_sendauth(AuthRequest areq, int payloadlen, PGconn *conn)
 				char	   *password;
 
 				conn->password_needed = true;
-				password = conn->connhost[conn->whichhost].password;
+				password = CURRENT_HOST(conn).password;
 				if (password == NULL)
 					password = conn->pgpass;
 				if (password == NULL || password[0] == '\0')

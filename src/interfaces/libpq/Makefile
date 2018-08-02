@@ -57,6 +57,10 @@ else
 OBJS += sha2.o
 endif
 
+ifeq ($(with_gssapi),yes)
+OBJS += fe-gssapi-common.o fe-secure-gssapi.o
+endif
+
 ifeq ($(PORTNAME), cygwin)
 override shlib = cyg$(NAME)$(DLSUFFIX)
 endif

@@ -66,7 +66,7 @@ typedef struct
 #include "datatype/timestamp.h"
 #include "libpq/hba.h"
 #include "libpq/pqcomm.h"
-
+#include "lib/stringinfo.h"
 
 typedef enum CAC_state
 {
@@ -86,6 +86,9 @@ typedef struct
 	gss_cred_id_t cred;			/* GSSAPI connection cred's */
 	gss_ctx_id_t ctx;			/* GSSAPI connection context */
 	gss_name_t	name;			/* GSSAPI client name */
+	bool enc;					/* GSSAPI encryption in use */
+	StringInfoData buf;			/* GSSAPI encryption data buffering */
+	StringInfoData writebuf;	/* GSSAPI nonblocking write buffering */
 #endif
 } pg_gssinfo;
 #endif
@@ -276,6 +279,12 @@ extern char *be_tls_get_peer_finished(Port *port, size_t *len);
  * size, and NULL if there is no certificate available.
  */
 extern char *be_tls_get_certificate_hash(Port *port, size_t *len);
+#endif
+
+#ifdef ENABLE_GSS
+/* Read and write to a GSSAPI-encrypted connection. */
+extern ssize_t be_gssapi_read(Port *port, void *ptr, size_t len);
+extern ssize_t be_gssapi_write(Port *port, void *ptr, size_t len);
 #endif
 
 extern ProtocolVersion FrontendProtocol;

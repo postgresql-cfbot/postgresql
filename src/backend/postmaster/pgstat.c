@@ -3562,6 +3562,9 @@ pgstat_get_wait_client(WaitEventClient w)
 		case WAIT_EVENT_WAL_SENDER_WRITE_DATA:
 			event_name = "WalSenderWriteData";
 			break;
+		case WAIT_EVENT_GSS_OPEN_SERVER:
+			event_name = "GSSOpenServer";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

@@ -1894,7 +1894,7 @@ initMasks(fd_set *rmask)
  * if we detect a communications failure.)
  */
 static int
-ProcessStartupPacket(Port *port, bool SSLdone)
+ProcessStartupPacket(Port *port, bool secure_done)
 {
 	int32		len;
 	void	   *buf;
@@ -1905,11 +1905,11 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 	if (pq_getbytes((char *) &len, 4) == EOF)
 	{
 		/*
-		 * EOF after SSLdone probably means the client didn't like our
+		 * EOF after secure_done probably means the client didn't like our
 		 * response to NEGOTIATE_SSL_CODE.  That's not an error condition, so
 		 * don't clutter the log with a complaint.
 		 */
-		if (!SSLdone)
+		if (!secure_done)
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("incomplete startup packet")));
@@ -1961,7 +1961,7 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 		return STATUS_ERROR;
 	}
 
-	if (proto == NEGOTIATE_SSL_CODE && !SSLdone)
+	if (proto == NEGOTIATE_SSL_CODE && !secure_done)
 	{
 		char		SSLok;
 
@@ -1992,6 +1992,32 @@ retry1:
 #endif
 		/* regular startup packet, cancel, etc packet should follow... */
 		/* but not another SSL negotiation request */
+		return ProcessStartupPacket(port, true);
+	}
+	else if (proto == NEGOTIATE_GSS_CODE && !secure_done)
+	{
+		char GSSok = 'N';
+#ifdef ENABLE_GSS
+		/* No GSSAPI encryption when on Unix socket */
+		if (!IS_AF_UNIX(port->laddr.addr.ss_family))
+			GSSok = 'G';
+#endif
+
+		while (send(port->sock, &GSSok, 1, 0) != 1)
+		{
+			if (errno == EINTR)
+				continue;
+			ereport(COMMERROR,
+					(errcode_for_socket_access(),
+					 errmsg("failed to send GSSAPI negotiation response: %m)")));
+					return STATUS_ERROR; /* close the connection */
+		}
+
+#ifdef ENABLE_GSS
+		if (GSSok == 'G' && secure_open_gssapi(port) == -1)
+			return STATUS_ERROR;
+#endif
+		/* Won't ever see more than one negotiation request */
 		return ProcessStartupPacket(port, true);
 	}
 
@@ -2413,6 +2439,17 @@ ConnCreate(int serverFd)
 		ExitPostmaster(1);
 	}
 #endif
+#ifdef ENABLE_GSS
+	{
+		MemoryContext save = CurrentMemoryContext;
+		CurrentMemoryContext = TopMemoryContext;
+
+		initStringInfo(&port->gss->buf);
+		initStringInfo(&port->gss->writebuf);
+
+		CurrentMemoryContext = save;
+	}
+#endif
 #endif
 
 	return port;
@@ -2429,7 +2466,15 @@ ConnFree(Port *conn)
 	secure_close(conn);
 #endif
 	if (conn->gss)
+	{
+#ifdef ENABLE_GSS
+		if (conn->gss->buf.data)
+			pfree(conn->gss->buf.data);
+		if (conn->gss->writebuf.data)
+			pfree(conn->gss->writebuf.data);
+#endif
 		free(conn->gss);
+	}
 	free(conn);
 }
 
@@ -4760,6 +4805,17 @@ SubPostmasterMain(int argc, char *argv[])
 		ereport(FATAL,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
+#endif
+#ifdef ENABLE_GSS
+	{
+		MemoryContext save = CurrentMemoryContext;
+		CurrentMemoryContext = TopMemoryContext;
+
+		initStringInfo(&port->gss->buf);
+		initStringInfo(&port->gss->writebuf);
+
+		CurrentMemoryContext = save;
+	}
 #endif
 
 	/*

@@ -183,12 +183,18 @@ sub mkvcbuild
 	$postgres->AddLibrary('wldap32.lib') if ($solution->{options}->{ldap});
 	$postgres->FullExportDLL('postgres.lib');
 
-	# The OBJS scraper doesn't know about ifdefs, so remove be-secure-openssl.c
-	# if building without OpenSSL
+	# The OBJS scraper doesn't know about ifdefs, so remove
+	# be-secure-openssl.c if building without OpenSSL, and
+	# be-gssapi-common.c and be-secure-gssapi.c when building with GSSAPI.
 	if (!$solution->{options}->{openssl})
 	{
 		$postgres->RemoveFile('src/backend/libpq/be-secure-common.c');
 		$postgres->RemoveFile('src/backend/libpq/be-secure-openssl.c');
+	}
+	if (!$solution->{options}->{gss})
+	{
+		$postgres->RemoveFile('src/backend/libpq/be-gssapi-common.c');
+		$postgres->RemoveFile('src/backend/libpq/be-secure-gssapi.c');
 	}
 
 	my $snowball = $solution->AddProject('dict_snowball', 'dll', '',
@@ -243,9 +249,10 @@ sub mkvcbuild
 		'src/interfaces/libpq/libpq.rc');
 	$libpq->AddReference($libpgport);
 
-	# The OBJS scraper doesn't know about ifdefs, so remove fe-secure-openssl.c
-	# and sha2_openssl.c if building without OpenSSL, and remove sha2.c if
-	# building with OpenSSL.
+	# The OBJS scraper doesn't know about ifdefs, so remove
+	# fe-secure-openssl.c and sha2_openssl.c if building without OpenSSL, and
+	# remove sha2.c if building with OpenSSL.  Also remove
+	# fe-gssapi-common.c and fe-secure-gssapi.c when building with GSSAPI.
 	if (!$solution->{options}->{openssl})
 	{
 		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-common.c');
@@ -255,6 +262,11 @@ sub mkvcbuild
 	else
 	{
 		$libpq->RemoveFile('src/common/sha2.c');
+	}
+	if (!$solution->{options}->{gss})
+	{
+		$libpq->RemoveFile('src/interfaces/libpq/fe-gssapi-common.c');
+		$libpq->RemoveFile('src/interfaces/libpq/fe-secure-gssapi.c');
 	}
 
 	my $libpqwalreceiver =

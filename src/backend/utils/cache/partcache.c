@@ -594,6 +594,7 @@ RelationBuildPartitionDesc(Relation rel)
 		int			next_index = 0;
 
 		result->oids = (Oid *) palloc0(nparts * sizeof(Oid));
+		result->is_leaf = (bool *) palloc(nparts * sizeof(bool));
 
 		boundinfo = (PartitionBoundInfoData *)
 			palloc0(sizeof(PartitionBoundInfoData));
@@ -782,7 +783,15 @@ RelationBuildPartitionDesc(Relation rel)
 		 * defined by canonicalized representation of the partition bounds.
 		 */
 		for (i = 0; i < nparts; i++)
-			result->oids[mapping[i]] = oids[i];
+		{
+			int			index = mapping[i];
+
+			result->oids[index] = oids[i];
+			/* Record if the partition is a leaf partition */
+			result->is_leaf[index] =
+				(get_rel_relkind(oids[i]) != RELKIND_PARTITIONED_TABLE);
+		}
+
 		pfree(mapping);
 	}
 

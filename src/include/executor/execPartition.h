@@ -31,9 +31,13 @@
  *	tupmap		TupleConversionMap to convert from the parent's rowtype to
  *				this table's rowtype (when extracting the partition key of a
  *				tuple just before routing it through this table)
- *	indexes		Array with partdesc->nparts members (for details on what
- *				individual members represent, see how they are set in
- *				get_partition_dispatch_recurse())
+ *	indexes		Array with partdesc->nparts elements.  For leaf partitions the
+ *				index into the PartitionTupleRouting->partitions array is
+ *				stored.  When the partition is itself a partitioned table then
+ *				we store the index into
+ *				PartitionTupleRouting->partition_dispatch_info.  -1 means
+ *				we've not yet allocated anything in PartitionTupleRouting for
+ *				the partition.
  *-----------------------
  */
 typedef struct PartitionDispatchData
@@ -44,72 +48,114 @@ typedef struct PartitionDispatchData
 	PartitionDesc partdesc;
 	TupleTableSlot *tupslot;
 	TupleConversionMap *tupmap;
-	int		   *indexes;
+	int		   indexes[FLEXIBLE_ARRAY_MEMBER];
 } PartitionDispatchData;
 
 typedef struct PartitionDispatchData *PartitionDispatch;
 
 /*-----------------------
- * PartitionTupleRouting - Encapsulates all information required to execute
- * tuple-routing between partitions.
+ * PartitionTupleRouting - Encapsulates all information required to
+ * route a tuple inserted into a partitioned table to one of its leaf
+ * partitions
  *
- * partition_dispatch_info		Array of PartitionDispatch objects with one
- *								entry for every partitioned table in the
- *								partition tree.
- * num_dispatch					number of partitioned tables in the partition
- *								tree (= length of partition_dispatch_info[])
- * partition_oids				Array of leaf partitions OIDs with one entry
- *								for every leaf partition in the partition tree,
- *								initialized in full by
- *								ExecSetupPartitionTupleRouting.
- * partitions					Array of ResultRelInfo* objects with one entry
- *								for every leaf partition in the partition tree,
- *								initialized lazily by ExecInitPartitionInfo.
- * num_partitions				Number of leaf partitions in the partition tree
- *								(= 'partitions_oid'/'partitions' array length)
- * parent_child_tupconv_maps	Array of TupleConversionMap objects with one
- *								entry for every leaf partition (required to
- *								convert tuple from the root table's rowtype to
- *								a leaf partition's rowtype after tuple routing
- *								is done)
- * child_parent_tupconv_maps	Array of TupleConversionMap objects with one
- *								entry for every leaf partition (required to
- *								convert an updated tuple from the leaf
- *								partition's rowtype to the root table's rowtype
- *								so that tuple routing can be done)
- * child_parent_map_not_required  Array of bool. True value means that a map is
- *								determined to be not required for the given
- *								partition. False means either we haven't yet
- *								checked if a map is required, or it was
- *								determined to be required.
- * subplan_partition_offsets	Integer array ordered by UPDATE subplans. Each
- *								element of this array has the index into the
- *								corresponding partition in partitions array.
- * num_subplan_partition_offsets  Length of 'subplan_partition_offsets' array
- * partition_tuple_slot			TupleTableSlot to be used to manipulate any
- *								given leaf partition's rowtype after that
- *								partition is chosen for insertion by
- *								tuple-routing.
- * root_tuple_slot				TupleTableSlot to be used to transiently hold
- *								copy of a tuple that's being moved across
- *								partitions in the root partitioned table's
- *								rowtype
+ * partition_root			The partitioned table that's the target of the
+ *							command.
+ *
+ * partition_dispatch_info	Array of 'dispatch_allocsize' elements containing
+ *							a pointer to a PartitionDispatch objects for every
+ *							partitioned table touched by tuple routing.  The
+ *							entry for the target partitioned table is *always*
+ *							present as the first entry of this array.  See
+ *							comment for PartitionDispatchData->indexes for
+ *							details on how this array is indexed.
+ *
+ * num_dispatch				The current number of items stored in the
+ *							'partition_dispatch_info' array.  Also serves as
+ *							the index of the next free array element for new
+ *							PartitionDispatch which need to be stored.
+ *
+ * dispatch_allocsize		The current allocated size of the
+ *							'partition_dispatch_info' array.
+ *
+ * partitions				Array of 'partitions_allocsize' elements
+ *							containing pointers to a ResultRelInfos of all
+ *							leaf partitions touched by tuple routing.  Some of
+ *							these are pointers to ResultRelInfos which are
+ *							borrowed out of 'subplan_resultrel_hash'.  The
+ *							remainder have been built especially for tuple
+ *							routing.  See comment for
+ *							PartitionDispatchData->indexes for details on how
+ *							this array is indexed.
+ *
+ * num_partitions			The current number of items stored in the
+ *							'partitions' array.  Also serves as the index of
+ *							the next free array element for new ResultRelInfos
+ *							which need to be stored.
+ *
+ * partitions_allocsize		The current allocated size of the 'partitions'
+ *							array.  Also, if they're non-NULL, marks the size
+ *							of the 'parent_child_tupconv_maps',
+ *							'child_parent_tupconv_maps' and
+ *							'child_parent_map_not_required' arrays.
+ *
+ * parent_child_tupconv_maps	Array of partitions_allocsize elements
+ *							containing information on how to convert tuples of
+ *							partition_root's rowtype to the rowtype of the
+ *							corresponding partition as stored in 'partitions',
+ *							or NULL if no conversion is required.  The entire
+ *							array is only allocated when the first conversion
+ *							map needs to stored.  When not allocated it's set
+ *							to NULL.
+ *
+ * partition_tuple_slot		This is a tuple slot used to store a tuple using
+ *							rowtype of the partition chosen by tuple
+ *							routing.  Maintained separately because partitions
+ *							may have different rowtype.
+ *
+ * Note: The following fields are used only when UPDATE ends up needing to
+ * do tuple routing.
+ *
+ * child_parent_tupconv_maps	As 'parent_child_tupconv_maps' but stores
+ *							conversion maps to translate partition tuples into
+ *							partition_root's rowtype.
+ *
+ * child_parent_map_not_required	True if the corresponding
+ *							child_parent_tupconv_maps element has been
+ *							determined to require no translation or set to
+ *							NULL when child_parent_tupconv_maps is NULL.  This
+ *							is required in order to distinguish tuple
+ *							translations which have been seen to not be
+ *							required due to the TupleDescs being compatible
+ *							with transactions which have yet to be determined.
+ *
+ * subplan_resultrel_hash	Hash table to store subplan ResultRelInfos by Oid.
+ *							This is used to cache ResultRelInfos from subplans
+ *							of a ModifyTable node.  Some of these may be
+ *							useful for tuple routing to save having to build
+ *							duplicates.
+ *
+ * root_tuple_slot			During UPDATE tuple routing, this tuple slot is
+ *							used to transiently store a tuple using the root
+ *							table's rowtype after converting it from the
+ *							tuple's source leaf partition's rowtype.  That is,
+ *							if leaf partition's rowtype is different.
  *-----------------------
  */
 typedef struct PartitionTupleRouting
 {
+	Relation	partition_root;
 	PartitionDispatch *partition_dispatch_info;
 	int			num_dispatch;
-	Oid		   *partition_oids;
+	int			dispatch_allocsize;
 	ResultRelInfo **partitions;
 	int			num_partitions;
+	int			partitions_allocsize;
 	TupleConversionMap **parent_child_tupconv_maps;
 	TupleConversionMap **child_parent_tupconv_maps;
 	bool	   *child_parent_map_not_required;
-	int		   *subplan_partition_offsets;
-	int			num_subplan_partition_offsets;
-	TupleTableSlot *partition_tuple_slot;
+	HTAB	   *subplan_resultrel_hash;
 	TupleTableSlot *root_tuple_slot;
+	TupleTableSlot *partition_tuple_slot;
 } PartitionTupleRouting;
 
 /*
@@ -200,14 +246,15 @@ typedef struct PartitionPruneState
 
 extern PartitionTupleRouting *ExecSetupPartitionTupleRouting(ModifyTableState *mtstate,
 							   Relation rel);
-extern int ExecFindPartition(ResultRelInfo *resultRelInfo,
-				  PartitionDispatch *pd,
+extern int ExecFindPartition(ModifyTableState *mtstate,
+				  ResultRelInfo *resultRelInfo,
+				  PartitionTupleRouting *proute,
 				  TupleTableSlot *slot,
 				  EState *estate);
-extern ResultRelInfo *ExecInitPartitionInfo(ModifyTableState *mtstate,
-					  ResultRelInfo *resultRelInfo,
-					  PartitionTupleRouting *proute,
-					  EState *estate, int partidx);
+extern ResultRelInfo *ExecGetPartitionInfo(ModifyTableState *mtstate,
+					 ResultRelInfo *resultRelInfo,
+					 PartitionTupleRouting *proute,
+					 EState *estate, int partidx);
 extern void ExecInitRoutingInfo(ModifyTableState *mtstate,
 					EState *estate,
 					PartitionTupleRouting *proute,

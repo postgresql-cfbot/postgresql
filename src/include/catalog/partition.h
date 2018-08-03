@@ -26,7 +26,10 @@
 typedef struct PartitionDescData
 {
 	int			nparts;			/* Number of partitions */
-	Oid		   *oids;			/* OIDs of partitions */
+	Oid		   *oids;			/* Array of length 'nparts' containing
+								 * partition OIDs in order of the their bounds */
+	bool	   *is_leaf;		/* Array of 'nparts' elements storing whether
+								 * a partition is a leaf partition or not */
 	PartitionBoundInfo boundinfo;	/* collection of partition bounds */
 } PartitionDescData;
 

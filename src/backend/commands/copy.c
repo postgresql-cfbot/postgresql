@@ -2699,10 +2699,8 @@ CopyFrom(CopyState cstate)
 			 * will get us the ResultRelInfo and TupleConversionMap for the
 			 * partition, respectively.
 			 */
-			leaf_part_index = ExecFindPartition(target_resultRelInfo,
-												proute->partition_dispatch_info,
-												slot,
-												estate);
+			leaf_part_index = ExecFindPartition(mtstate, target_resultRelInfo,
+												proute, slot, estate);
 			Assert(leaf_part_index >= 0 &&
 				   leaf_part_index < proute->num_partitions);
 
@@ -2800,15 +2798,7 @@ CopyFrom(CopyState cstate)
 				 * one.
 				 */
 				resultRelInfo = proute->partitions[leaf_part_index];
-				if (unlikely(resultRelInfo == NULL))
-				{
-					resultRelInfo = ExecInitPartitionInfo(mtstate,
-														  target_resultRelInfo,
-														  proute, estate,
-														  leaf_part_index);
-					proute->partitions[leaf_part_index] = resultRelInfo;
-					Assert(resultRelInfo != NULL);
-				}
+				Assert(resultRelInfo != NULL);
 
 				/* Determine which triggers exist on this partition */
 				has_before_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
@@ -2864,11 +2854,16 @@ CopyFrom(CopyState cstate)
 			 * partition rowtype.  Don't free the already stored tuple as it
 			 * may still be required for a multi-insert batch.
 			 */
-			tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
-											  tuple,
-											  proute->partition_tuple_slot,
-											  &slot,
-											  false);
+			if (proute->parent_child_tupconv_maps)
+			{
+				TupleConversionMap *map =
+				proute->parent_child_tupconv_maps[leaf_part_index];
+
+				tuple = ConvertPartitionTupleSlot(map, tuple,
+												  proute->partition_tuple_slot,
+												  &slot,
+												  false);
+			}
 
 			tuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
 		}

@@ -9886,6 +9886,34 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </entry>
      </row>
 
+     <row>
+      <entry><structfield>wal_status</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+
+      <entry>Availability of WAL records claimed by the
+      slot. <literal>streaming</literal>, <literal>keeping</literal>,
+      <literal>lost</literal>
+      or <literal>unknown</literal>. <literal>streaming</literal> means that
+      the claimed records are available. <literal>keeping</literal> means that
+      some of them are to be removed by the next checkpoint.
+      <literal>lost</literal> means that some of them have been removed. The
+      last two states are seen only when
+      <xref linkend="guc-max-slot-wal-keep-size"/> is not zero. If the slot
+      doesn't have valid restart_lsn, this field
+      is <literal>unknown</literal>.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>remain</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry></entry>
+      <entry>The amount in bytes that WAL location (LSN) can advance until the
+        slot may lose required WAL records.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

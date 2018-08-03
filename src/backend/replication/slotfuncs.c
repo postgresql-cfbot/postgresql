@@ -185,7 +185,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 11
+#define PG_GET_REPLICATION_SLOTS_COLS 13
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -306,6 +306,36 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 			values[i++] = LSNGetDatum(confirmed_flush_lsn);
 		else
 			nulls[i++] = true;
+
+		if (restart_lsn == InvalidXLogRecPtr)
+		{
+			values[i++] = CStringGetTextDatum("unknown");
+			values[i++] = LSNGetDatum(InvalidXLogRecPtr);
+		}
+		else
+		{
+			uint64	remaining_bytes;
+			char *status;
+
+			switch (IsLsnStillAvaiable(restart_lsn, &remaining_bytes))
+			{
+			case 0:
+				status = "lost";
+				break;
+			case 1:
+				status = "streaming";
+				break;
+			case 2:
+				status = "keeping";
+				break;
+			default:
+				status = "unknown";
+				break;
+			}
+
+			values[i++] = CStringGetTextDatum(status);
+			values[i++] = Int64GetDatum(remaining_bytes);
+		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}

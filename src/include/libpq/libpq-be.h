@@ -259,6 +259,7 @@ extern bool be_tls_get_compression(Port *port);
 extern const char *be_tls_get_version(Port *port);
 extern const char *be_tls_get_cipher(Port *port);
 extern void be_tls_get_peerdn_name(Port *port, char *ptr, size_t len);
+extern List *be_tls_list_channel_bindings(void);
 
 /*
  * Get the expected TLS Finished message information from the client, useful

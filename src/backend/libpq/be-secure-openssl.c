@@ -36,6 +36,7 @@
 #include <openssl/ec.h>
 #endif
 
+#include "common/scram-common.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -1182,6 +1183,18 @@ be_tls_get_certificate_hash(Port *port, size_t *len)
 			 errmsg("channel binding type \"tls-server-end-point\" is not supported by this build")));
 	return NULL;
 #endif
+}
+
+/*
+ * Routine to get the list of channel binding types available in this SSL
+ * implementation. For OpenSSL, both tls-unique and tls-server-end-point
+ * are supported.
+ */
+List *
+be_tls_list_channel_bindings(void)
+{
+	return list_make2(pstrdup(SCRAM_CHANNEL_BINDING_TLS_UNIQUE),
+					  pstrdup(SCRAM_CHANNEL_BINDING_TLS_END_POINT));
 }
 
 /*

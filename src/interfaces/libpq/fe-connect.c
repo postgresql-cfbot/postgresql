@@ -20,6 +20,7 @@
 #include <ctype.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include "libpq-fe.h"
 #include "libpq-int.h"
@@ -394,6 +395,10 @@ static void defaultNoticeReceiver(void *arg, const PGresult *res);
 static void defaultNoticeProcessor(void *arg, const char *message);
 static int parseServiceInfo(PQconninfoOption *options,
 				 PQExpBuffer errorMessage);
+static int searchServiceFileDirectory(const char *service,
+						PQconninfoOption *options,
+						PQExpBuffer errorMessage,
+						bool *group_found);
 static int parseServiceFile(const char *serviceFile,
 				 const char *service,
 				 PQconninfoOption *options,
@@ -4632,10 +4637,15 @@ next_file:
 		goto last_file;
 
 	status = parseServiceFile(serviceFile, service, options, errorMessage, &group_found);
-	if (status != 0)
+	if (group_found || status != 0)
 		return status;
 
 last_file:
+
+	status = searchServiceFileDirectory(service, options, errorMessage, &group_found);
+	if (status != 0)
+		return status;
+
 	if (!group_found)
 	{
 		printfPQExpBuffer(errorMessage,
@@ -4644,6 +4654,64 @@ last_file:
 	}
 
 	return 0;
+}
+
+/*
+ * searchServiceFileDirectory: Try to parse every file in pg_service.conf.d
+ * as a pg_service.conf style file.
+ *
+ * Returns 0 on success, nonzero on failure.
+ */
+static int
+searchServiceFileDirectory(const char *service,
+						   PQconninfoOption *options,
+						   PQExpBuffer errorMessage,
+						   bool *group_found)
+{
+	char			serviceDirPath[MAXPGPATH];
+	char			serviceFile[MAXPGPATH];
+	int				status;
+	int				filenamelen;
+	struct stat		stat_buf;
+	struct dirent  *direntry;
+	DIR			   *serviceDir;
+
+	snprintf(serviceDirPath, MAXPGPATH, "%s/pg_service.conf.d",
+			 getenv("PGSYSCONFDIR") ? getenv("PGSYSCONFDIR") : SYSCONFDIR);
+
+	if (stat(serviceDirPath, &stat_buf) != 0 || !S_ISDIR(stat_buf.st_mode))
+		return 0;
+
+	serviceDir = opendir(serviceDirPath);
+	if (serviceDir == NULL)
+		return 0;
+
+	while ((direntry = readdir(serviceDir)) != NULL)
+	{
+		if (direntry->d_name[0] == '.')
+			continue;
+
+		filenamelen = strlen(direntry->d_name);
+		if (filenamelen < 6
+			|| strcmp(direntry->d_name + filenamelen - 5, ".conf"))
+			continue;
+
+		snprintf(serviceFile, MAXPGPATH, "%s/%s", serviceDirPath,
+				 direntry->d_name);
+
+		if (stat(serviceFile, &stat_buf) != 0 || !S_ISREG(stat_buf.st_mode)
+			|| access(serviceFile, R_OK))
+			continue;
+
+		status = parseServiceFile(serviceFile, service, options, errorMessage,
+								  group_found);
+		if (*group_found || status != 0)
+			break;
+	}
+
+	closedir(serviceDir);
+
+	return status;
 }
 
 static int

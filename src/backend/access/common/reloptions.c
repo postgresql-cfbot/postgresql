@@ -319,6 +319,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"values_per_range",
+			"Number of valuesin each page range covered by a BRIN (multi-minmax) index",
+			RELOPT_KIND_BRIN,
+			AccessExclusiveLock
+		},
+		64, 16, 256
+	},
+	{
+		{
 			"gin_pending_list_limit",
 			"Maximum size of the pending list for this GIN index, in kilobytes.",
 			RELOPT_KIND_GIN,
@@ -417,6 +426,24 @@ static relopt_real realRelOpts[] =
 			ShareUpdateExclusiveLock
 		},
 		-1, 0.0, 1e10
+	},
+	{
+		{
+			"n_distinct_per_range",
+			"Number of distinct values in each page range covered by a BRIN (bloom) index",
+			RELOPT_KIND_BRIN,
+			AccessExclusiveLock
+		},
+		-1.0, -0.1, 40000000
+	},
+	{
+		{
+			"false_positive_rate",
+			"False positive rate for each page range covered by a BRIN (bloom) index",
+			RELOPT_KIND_BRIN,
+			AccessExclusiveLock
+		},
+		0.01, 0.001, 1.0
 	},
 	/* list terminator */
 	{{NULL}}

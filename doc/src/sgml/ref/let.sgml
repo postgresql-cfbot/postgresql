@@ -1,0 +1,90 @@
+<!--
+doc/src/sgml/ref/let.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-let">
+ <indexterm zone="sql-let">
+  <primary>LET</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>LET</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>LET</refname>
+  <refpurpose>change a schema variable's value</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+LET <replaceable class="parameter">schema_variable</replaceable> = <replaceable class="parameter">sql_expression</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The <command>LET</command> command updates the specified schema variable' value.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>schema_variable</literal></term>
+    <listitem>
+     <para>
+      The name of schema variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>sql expression</literal></term>
+    <listitem>
+     <para>
+      An SQL expression, the result is cast to the schema variable's type.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>
+   Example:
+<programlisting>
+CREATE VARIABLE myvar AS integer;
+LET myvar = 10;
+LET myvar = (SELECT sum(val) FROM tab);
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <!-- this feels like it needs to be more specific,
+        but I don't know enough to make it so -->
+   <literal>LET</literal> extends syntax defined in the SQL
+   standard. The standard knows <literal>SET</literal> command,
+   that is used for different purpouse in PostgreSQL.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createvariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

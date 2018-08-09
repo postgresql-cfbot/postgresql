@@ -33,6 +33,7 @@
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_type.h"
+#include "commands/schemavariable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -727,6 +728,7 @@ ExecInitExprRec(Expr *node, ExprState *state,
 			{
 				Param	   *param = (Param *) node;
 				ParamListInfo params;
+				AclResult	aclresult;
 
 				switch (param->paramkind)
 				{
@@ -736,6 +738,19 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+					case PARAM_SCHEMA_VARIABLE:
+						/* Check permission to read schema variable */
+						aclresult = pg_variable_aclcheck(param->paramid, GetUserId(), ACL_READ);
+						if (aclresult != ACLCHECK_OK)
+							aclcheck_error(aclresult, OBJECT_VARIABLE,
+											schema_variable_get_name(param->paramid));
+
+						scratch.opcode = EEOP_PARAM_VARIABLE;
+						scratch.d.param.paramid = param->paramid;
+						scratch.d.param.paramtype = param->paramtype;
+						ExprEvalPushStep(state, &scratch);
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

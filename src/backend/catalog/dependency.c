@@ -59,6 +59,7 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
@@ -67,6 +68,7 @@
 #include "commands/proclang.h"
 #include "commands/publicationcmds.h"
 #include "commands/schemacmds.h"
+#include "commands/schemavariable.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
 #include "commands/trigger.h"
@@ -1278,6 +1280,10 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case OCLASS_TRANSFORM:
 			DropTransformById(object->objectId);
+			break;
+
+		case OCLASS_VARIABLE:
+			RemoveVariableById(object->objectId);
 			break;
 
 			/*
@@ -2537,6 +2543,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
+
+		case VariableRelationId:
+			return OCLASS_VARIABLE;
 	}
 
 	/* shouldn't get here */

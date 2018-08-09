@@ -229,13 +229,17 @@ typedef struct Const
  *				of the `paramid' field contain the SubLink's subLinkId, and
  *				the low-order 16 bits contain the column number.  (This type
  *				of Param is also converted to PARAM_EXEC during planning.)
+ *
+ *		PARAM_SCHEMA_VARIABLE:  The parameter is a access to schema variable
+ *				paramid holds varid.
  */
 typedef enum ParamKind
 {
 	PARAM_EXTERN,
 	PARAM_EXEC,
 	PARAM_SUBLINK,
-	PARAM_MULTIEXPR
+	PARAM_MULTIEXPR,
+	PARAM_SCHEMA_VARIABLE
 } ParamKind;
 
 typedef struct Param

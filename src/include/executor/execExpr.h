@@ -138,6 +138,7 @@ typedef enum ExprEvalOp
 	EEOP_PARAM_EXEC,
 	EEOP_PARAM_EXTERN,
 	EEOP_PARAM_CALLBACK,
+	EEOP_PARAM_VARIABLE,
 
 	/* return CaseTestExpr value */
 	EEOP_CASE_TESTVAL,
@@ -344,11 +345,11 @@ typedef struct ExprEvalStep
 			TupleDesc	argdesc;
 		}			nulltest_row;
 
-		/* for EEOP_PARAM_EXEC/EXTERN */
+		/* for EEOP_PARAM_EXEC/EXTERN/VARIABLE */
 		struct
 		{
-			int			paramid;	/* numeric ID for parameter */
-			Oid			paramtype;	/* OID of parameter's datatype */
+			int			paramid;		/* numeric ID for parameter */
+			Oid			paramtype;		/* OID of parameter's datatype */
 		}			param;
 
 		/* for EEOP_PARAM_CALLBACK */

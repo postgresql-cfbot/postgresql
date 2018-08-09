@@ -242,6 +242,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(canSetTag);
 	READ_NODE_FIELD(utilityStmt);
 	READ_INT_FIELD(resultRelation);
+	READ_INT_FIELD(resultVariable);
 	READ_BOOL_FIELD(hasAggs);
 	READ_BOOL_FIELD(hasWindowFuncs);
 	READ_BOOL_FIELD(hasTargetSRFs);
@@ -1485,6 +1486,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(resultRelations);
 	READ_NODE_FIELD(nonleafResultRelations);
 	READ_NODE_FIELD(rootResultRelations);
+	READ_OID_FIELD(resultVariable);
 	READ_NODE_FIELD(subplans);
 	READ_BITMAPSET_FIELD(rewindPlanIDs);
 	READ_NODE_FIELD(rowMarks);

@@ -59,6 +59,7 @@
 #include "access/tuptoaster.h"
 #include "catalog/pg_type.h"
 #include "commands/sequence.h"
+#include "commands/schemavariable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -351,6 +352,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_PARAM_EXEC,
 		&&CASE_EEOP_PARAM_EXTERN,
 		&&CASE_EEOP_PARAM_CALLBACK,
+		&&CASE_EEOP_PARAM_VARIABLE,
 		&&CASE_EEOP_CASE_TESTVAL,
 		&&CASE_EEOP_MAKE_READONLY,
 		&&CASE_EEOP_IOCOERCE,
@@ -1004,6 +1006,20 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			/* allow an extension module to supply a PARAM_EXTERN value */
 			op->d.cparam.paramfunc(state, op, econtext);
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_PARAM_VARIABLE)
+		{
+			Datum	d;
+			bool	isnull;
+
+			d = GetSchemaVariable(op->d.param.paramid, &isnull,
+													  op->d.param.paramtype);
+
+			*op->resvalue = d;
+			*op->resnull = isnull;
+
 			EEO_NEXT();
 		}
 

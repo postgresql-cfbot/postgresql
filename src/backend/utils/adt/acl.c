@@ -315,6 +315,12 @@ aclparse(const char *s, AclItem *aip)
 			case ACL_CONNECT_CHR:
 				read = ACL_CONNECT;
 				break;
+			case ACL_READ_CHR:
+				read = ACL_READ;
+				break;
+			case ACL_WRITE_CHR:
+				read = ACL_WRITE;
+				break;
 			case 'R':			/* ignore old RULE privileges */
 				read = 0;
 				break;
@@ -808,6 +814,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_USAGE;
 			owner_default = ACL_ALL_RIGHTS_TYPE;
 			break;
+		case OBJECT_VARIABLE:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_VARIABLE;
+			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
 			world_default = ACL_NO_RIGHTS;	/* keep compiler quiet */
@@ -902,6 +912,9 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			break;
 		case 'T':
 			objtype = OBJECT_TYPE;
+			break;
+		case 'V':
+			objtype = OBJECT_VARIABLE;
 			break;
 		default:
 			elog(ERROR, "unrecognized objtype abbreviation: %c", objtypec);
@@ -1627,6 +1640,10 @@ convert_priv_string(text *priv_type_text)
 		return ACL_CONNECT;
 	if (pg_strcasecmp(priv_type, "RULE") == 0)
 		return 0;				/* ignore old RULE privileges */
+	if (pg_strcasecmp(priv_type, "READ") == 0)
+		return ACL_READ;
+	if (pg_strcasecmp(priv_type, "WRITE") == 0)
+		return ACL_WRITE;
 
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1721,6 +1738,10 @@ convert_aclright_to_string(int aclright)
 			return "TEMPORARY";
 		case ACL_CONNECT:
 			return "CONNECT";
+		case ACL_READ:
+			return "READ";
+		case ACL_WRITE:
+			return "WRITE";
 		default:
 			elog(ERROR, "unrecognized aclright: %d", aclright);
 			return NULL;

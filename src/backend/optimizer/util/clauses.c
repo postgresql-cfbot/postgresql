@@ -1254,7 +1254,8 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind == PARAM_EXTERN)
+		if (param->paramkind == PARAM_EXTERN ||
+			param->paramkind == PARAM_SCHEMA_VARIABLE)
 			return false;
 
 		if (param->paramkind != PARAM_EXEC ||
@@ -4799,7 +4800,7 @@ substitute_actual_parameters_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
-	if (IsA(node, Param))
+	if (IsA(node, Param) && ((Param *) node)->paramkind != PARAM_SCHEMA_VARIABLE)
 	{
 		Param	   *param = (Param *) node;
 

@@ -335,7 +335,8 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	 */
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
-		parse->commandType == CMD_SELECT &&
+		(parse->commandType == CMD_SELECT ||
+		 parse->commandType == CMD_PLAN_UTILITY) &&
 		!parse->hasModifyingCTE &&
 		max_parallel_workers_per_gather > 0 &&
 		!IsParallelWorker() &&
@@ -351,6 +352,8 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 		glob->maxParallelHazard = PROPARALLEL_UNSAFE;
 		glob->parallelModeOK = false;
 	}
+
+
 
 	/*
 	 * glob->parallelModeNeeded is normally set to false here and changed to
@@ -521,6 +524,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->resultRelations = glob->resultRelations;
 	result->nonleafResultRelations = glob->nonleafResultRelations;
 	result->rootResultRelations = glob->rootResultRelations;
+	result->resultVariable = parse->resultVariable;
 	result->subplans = glob->subplans;
 	result->rewindPlanIDs = glob->rewindPlanIDs;
 	result->rowMarks = glob->finalrowmarks;
@@ -2167,7 +2171,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
 		 * inheritance_planner, add the ModifyTable node.
 		 */
-		if (parse->commandType != CMD_SELECT && !inheritance_update)
+		if (parse->commandType != CMD_SELECT && parse->commandType != CMD_PLAN_UTILITY && !inheritance_update)
 		{
 			List	   *withCheckOptionLists;
 			List	   *returningLists;

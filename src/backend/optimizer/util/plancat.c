@@ -1272,7 +1272,7 @@ get_relation_constraints(PlannerInfo *root,
 	 * descriptor, instead of constraint exclusion which is driven by the
 	 * individual partition's partition constraint.
 	 */
-	if (enable_partition_pruning && root->parse->commandType != CMD_SELECT)
+	if (enable_partition_pruning && root->parse->commandType != CMD_SELECT && root->parse->commandType != CMD_PLAN_UTILITY)
 	{
 		List	   *pcqual = RelationGetPartitionQual(relation);
 

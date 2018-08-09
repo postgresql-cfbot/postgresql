@@ -564,6 +564,8 @@ typedef struct EState
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;
 
+	int			es_result_variable;	/* Oid of target variable */
+
 	/*
 	 * JIT information. es_jit_flags indicates whether JIT should be performed
 	 * and with which options.  es_jit is created on-demand when JITing is

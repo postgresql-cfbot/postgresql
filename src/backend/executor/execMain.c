@@ -43,9 +43,11 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_variable.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -205,11 +207,17 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	estate->es_queryEnv = queryDesc->queryEnv;
 
 	/*
+	 * Result can be stored in schema variable.
+	 */
+	estate->es_result_variable = queryDesc->plannedstmt->resultVariable;
+
+	/*
 	 * If non-read-only query, set the command ID to mark output tuples with
 	 */
 	switch (queryDesc->operation)
 	{
 		case CMD_SELECT:
+		case CMD_PLAN_UTILITY:
 
 			/*
 			 * SELECT FOR [KEY] UPDATE/SHARE and modifying CTEs need to mark
@@ -345,6 +353,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	estate->es_lastoid = InvalidOid;
 
 	sendTuples = (operation == CMD_SELECT ||
+				  OidIsValid(estate->es_result_variable) ||
 				  queryDesc->plannedstmt->hasReturning);
 
 	if (sendTuples)
@@ -922,6 +931,17 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		estate->es_result_relation_info = NULL;
 		estate->es_root_result_relations = NULL;
 		estate->es_num_root_result_relations = 0;
+	}
+
+	if (OidIsValid(estate->es_result_variable))
+	{
+		AclResult	aclresult;
+		Oid			varid = estate->es_result_variable;
+
+		/* Ensure this variable is writeable */
+		aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_WRITE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_VARIABLE, schema_variable_get_name(varid));
 	}
 
 	/*

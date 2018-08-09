@@ -7362,6 +7362,14 @@ get_parameter(Param *param, deparse_context *context)
 		return;
 	}
 
+	/* translate paramid to original schema variable name */
+	if (param->paramkind == PARAM_SCHEMA_VARIABLE)
+	{
+		appendStringInfo(context->buf, "%s",
+							schema_variable_get_name(param->paramid));
+		return;
+	}
+
 	/*
 	 * Not PARAM_EXEC, or couldn't find referent: just print $N.
 	 */

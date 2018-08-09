@@ -1,0 +1,92 @@
+<!--
+doc/src/sgml/ref/drop_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-dropvariable">
+ <indexterm zone="sql-dropvariable">
+  <primary>DROP VARIABLE</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>DROP VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP VARIABLE</refname>
+  <refpurpose>remove a schema variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP VARIABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable> [, ...] [ CASCADE | RESTRICT ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>DROP VARIABLE</command> removes a schema variable.
+   A variable can only be dropped by its owner or a superuser.
+   <!-- this would suggest that we need an alter variable owner to command -->
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>IF EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the variable does not exist. A notice is issued
+      in this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of a schema variable.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To remove the schema variable <literal>var1</literal>:
+
+<programlisting>
+DROP VARIABLE var1;
+</programlisting></para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>DROP VARIABLE</command> is proprietary PostgreSQL command.
+   <!-- create variable is a "PostgreSQL feature",
+        this is a "proprietary PostgreSQL command" ... -->
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createvariable"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

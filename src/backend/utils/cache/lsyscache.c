@@ -1691,6 +1691,18 @@ get_relname_relid(const char *relname, Oid relnamespace)
 						   ObjectIdGetDatum(relnamespace));
 }
 
+/*
+ * get_varname_varid
+ *		Given name and namespace of variable, look up the OID.
+ */
+Oid
+get_varname_varid(const char *varname, Oid varnamespace)
+{
+	return GetSysCacheOid2(VARIABLENAMENSP,
+						   PointerGetDatum(varname),
+						   ObjectIdGetDatum(varnamespace));
+}
+
 #ifdef NOT_USED
 /*
  * get_relnatts

@@ -278,6 +278,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(nonleafResultRelations);
 	WRITE_NODE_FIELD(rootResultRelations);
+	WRITE_OID_FIELD(resultVariable);
 	WRITE_NODE_FIELD(subplans);
 	WRITE_BITMAPSET_FIELD(rewindPlanIDs);
 	WRITE_NODE_FIELD(rowMarks);
@@ -2794,6 +2795,16 @@ _outSelectStmt(StringInfo str, const SelectStmt *node)
 }
 
 static void
+_outLetStmt(StringInfo str, const LetStmt *node)
+{
+	WRITE_NODE_TYPE("LET");
+
+	WRITE_NODE_FIELD(target);
+	WRITE_NODE_FIELD(selectStmt);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
 _outFuncCall(StringInfo str, const FuncCall *node)
 {
 	WRITE_NODE_TYPE("FUNCCALL");
@@ -2971,6 +2982,7 @@ _outQuery(StringInfo str, const Query *node)
 		appendStringInfoString(str, " :utilityStmt <>");
 
 	WRITE_INT_FIELD(resultRelation);
+	WRITE_INT_FIELD(resultVariable);
 	WRITE_BOOL_FIELD(hasAggs);
 	WRITE_BOOL_FIELD(hasWindowFuncs);
 	WRITE_BOOL_FIELD(hasTargetSRFs);
@@ -4190,6 +4202,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_SelectStmt:
 				_outSelectStmt(str, obj);
+				break;
+			case T_LetStmt:
+				_outLetStmt(str, obj);
 				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);

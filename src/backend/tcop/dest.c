@@ -37,6 +37,7 @@
 #include "executor/functions.h"
 #include "executor/tqueue.h"
 #include "executor/tstoreReceiver.h"
+#include "executor/svariableReceiver.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "utils/portal.h"
@@ -143,6 +144,9 @@ CreateDestReceiver(CommandDest dest)
 
 		case DestTupleQueue:
 			return CreateTupleQueueDestReceiver(NULL);
+
+		case DestVariable:
+			return CreateVariableDestReceiver();
 	}
 
 	/* should never get here */
@@ -178,6 +182,7 @@ EndCommand(const char *commandTag, CommandDest dest)
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }
@@ -222,6 +227,7 @@ NullCommand(CommandDest dest)
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }
@@ -268,6 +274,7 @@ ReadyForQuery(CommandDest dest)
 		case DestSQLFunction:
 		case DestTransientRel:
 		case DestTupleQueue:
+		case DestVariable:
 			break;
 	}
 }

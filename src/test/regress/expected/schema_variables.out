@@ -1,0 +1,306 @@
+CREATE VARIABLE var1 AS integer;
+CREATE TEMP VARIABLE var2 AS text;
+DROP VARIABLE var1, var2;
+-- functional interface
+CREATE VARIABLE var1 AS numeric;
+CREATE ROLE var_test_role;
+SET ROLE TO var_test_role;
+-- should to fail
+SELECT var1;
+ERROR:  permission denied for schema variable var1
+SET ROLE TO DEFAULT;
+GRANT READ ON VARIABLE var1 TO var_test_role;
+SET ROLE TO var_test_role;
+-- should to fail
+LET var1 = 10;
+ERROR:  permission denied for schema variable var1
+-- should to work
+SELECT var1;
+ var1 
+------
+     
+(1 row)
+
+SET ROLE TO DEFAULT;
+GRANT WRITE ON VARIABLE var1 TO var_test_role;
+SET ROLE TO var_test_role;
+-- should to work
+LET var1 = 333;
+SET ROLE TO DEFAULT;
+REVOKE ALL ON VARIABLE var1 FROM var_test_role;
+CREATE OR REPLACE FUNCTION secure_var()
+RETURNS int AS $$
+  SELECT public.var1::int;
+$$ LANGUAGE sql SECURITY DEFINER;
+SELECT secure_var();
+ secure_var 
+------------
+        333
+(1 row)
+
+SET ROLE TO var_test_role;
+-- should to fail
+SELECT public.var1;
+ERROR:  permission denied for schema variable var1
+-- should to work;
+SELECT secure_var();
+ secure_var 
+------------
+        333
+(1 row)
+
+SET ROLE TO DEFAULT;
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM generate_series(1,100) g(v) WHERE v = var1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Function Scan on pg_catalog.generate_series g
+   Output: v
+   Function Call: generate_series(1, 100)
+   Filter: ((g.v)::numeric = var1)
+(4 rows)
+
+CREATE VIEW schema_var_view AS SELECT var1;
+SELECT * FROM schema_var_view;
+ var1 
+------
+  333
+(1 row)
+
+\c -
+-- should to work still, but var will be empty
+SELECT * FROM schema_var_view;
+ var1 
+------
+     
+(1 row)
+
+LET var1 = pi();
+SELECT var1;
+       var1       
+------------------
+ 3.14159265358979
+(1 row)
+
+-- we can look on execution plan
+EXPLAIN (VERBOSE, COSTS OFF) LET var1 = pi();
+         QUERY PLAN         
+----------------------------
+ Result
+   Output: 3.14159265358979
+(2 rows)
+
+-- LET can be prepared
+PREPARE var_pp(int, numeric) AS LET var1 = $1 + $2;
+EXECUTE var_pp(100, 1.23456);
+SELECT var1;
+   var1    
+-----------
+ 101.23456
+(1 row)
+
+CREATE VARIABLE var3 AS int;
+CREATE OR REPLACE FUNCTION inc(int)
+RETURNS int AS $$
+BEGIN
+  LET public.var3 = COALESCE(public.var3 + $1, $1);
+  RETURN var3;
+END;
+$$ LANGUAGE plpgsql;
+SELECT inc(1);
+ inc 
+-----
+   1
+(1 row)
+
+SELECT inc(1);
+ inc 
+-----
+   2
+(1 row)
+
+SELECT inc(1);
+ inc 
+-----
+   3
+(1 row)
+
+SELECT inc(1) FROM generate_series(1,10);
+ inc 
+-----
+   4
+   5
+   6
+   7
+   8
+   9
+  10
+  11
+  12
+  13
+(10 rows)
+
+SET ROLE TO var_test_role;
+-- should to fail
+LET var3 = 0;
+ERROR:  permission denied for schema variable var3
+SET ROLE TO DEFAULT;
+DROP VIEW schema_var_view;
+DROP VARIABLE var1 CASCADE;
+DROP VARIABLE var3 CASCADE;
+-- composite variables
+CREATE TYPE sv_xyz AS (x int, y int, z numeric(10,2));
+CREATE VARIABLE v1 AS sv_xyz;
+CREATE VARIABLE v2 AS sv_xyz;
+\d v1
+\d v2
+LET v1 = (1,2,3.14);
+LET v2 = (10,20,3.14*10);
+-- should to work too - there are prepared casts
+LET v1 = (1,2,3.14);
+SELECT v1;
+     v1     
+------------
+ (1,2,3.14)
+(1 row)
+
+SELECT v2;
+      v2       
+---------------
+ (10,20,31.40)
+(1 row)
+
+SELECT (v1).*;
+ x | y |  z   
+---+---+------
+ 1 | 2 | 3.14
+(1 row)
+
+SELECT (v2).*;
+ x  | y  |   z   
+----+----+-------
+ 10 | 20 | 31.40
+(1 row)
+
+SELECT v1.x + v1.z;
+ ?column? 
+----------
+     4.14
+(1 row)
+
+SELECT v2.x + v2.z;
+ ?column? 
+----------
+    41.40
+(1 row)
+
+-- access to composite fields should be safe too
+-- should to fail
+SET ROLE TO var_test_role;
+SELECT v2.x;
+ERROR:  permission denied for schema variable v2
+SET ROLE TO DEFAULT;
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+DROP ROLE var_test_role;
+-- scalar variables should not be in conflict with qualified column
+CREATE VARIABLE varx AS text;
+SELECT varx.relname FROM pg_class varx WHERE varx.relname = 'pg_class';
+ relname  
+----------
+ pg_class
+(1 row)
+
+-- should to fail
+SELECT varx.xxx;
+ERROR:  type text is not composite
+-- variables can be updated under RO transaction
+BEGIN;
+SET TRANSACTION READ ONLY;
+LET varx = 'hello';
+COMMIT;
+SELECT varx;
+ varx  
+-------
+ hello
+(1 row)
+
+DROP VARIABLE varx;
+CREATE TYPE t1 AS (a int, b numeric, c text);
+CREATE VARIABLE v1 AS t1;
+LET v1 = (1, pi(), 'hello');
+SELECT v1;
+             v1             
+----------------------------
+ (1,3.14159265358979,hello)
+(1 row)
+
+LET v1.b = 10.2222;
+SELECT v1;
+        v1         
+-------------------
+ (1,10.2222,hello)
+(1 row)
+
+-- should to fail
+LET v1.x = 10;
+ERROR:  cannot assign to field "x" of column "x" because there is no such column in data type t1
+LINE 1: LET v1.x = 10;
+            ^
+DROP VARIABLE v1;
+DROP TYPE t1;
+-- arrays are supported
+CREATE VARIABLE va1 AS numeric[];
+LET va1 = ARRAY[1.1,2.1];
+LET va1[1] = 10.1;
+SELECT va1;
+    va1     
+------------
+ {10.1,2.1}
+(1 row)
+
+CREATE TYPE ta2 AS (a numeric, b numeric[]);
+CREATE VARIABLE va2 AS ta2;
+LET va2 = (10.1, ARRAY[0.0, 0.0]);
+LET va2.a = 10.2;
+SELECT va2;
+        va2         
+--------------------
+ (10.2,"{0.0,0.0}")
+(1 row)
+
+LET va2.b[1] = 10.3;
+SELECT va2;
+         va2         
+---------------------
+ (10.2,"{10.3,0.0}")
+(1 row)
+
+DROP VARIABLE va1;
+DROP VARIABLE va2;
+DROP TYPE ta2;
+-- default values
+CREATE VARIABLE v1 AS numeric DEFAULT pi();
+LET v1 = v1 * 2;
+SELECT v1;
+        v1        
+------------------
+ 6.28318530717958
+(1 row)
+
+CREATE TYPE t2 AS (a numeric, b text);
+CREATE VARIABLE v2 AS t2 DEFAULT (NULL, 'Hello');
+LET public.v2.a = pi();
+SELECT v2;
+            v2            
+--------------------------
+ (3.14159265358979,Hello)
+(1 row)
+
+-- shoudl fail due dependency
+DROP TYPE t2;
+ERROR:  cannot drop type t2 because other objects depend on it
+DETAIL:  schema variable v2 depends on type t2
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- should be ok
+DROP VARIABLE v1;
+DROP VARIABLE v2;

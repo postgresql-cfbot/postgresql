@@ -99,6 +99,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY createType         SYSTEM "create_type.sgml">
 <!ENTITY createUser         SYSTEM "create_user.sgml">
 <!ENTITY createUserMapping  SYSTEM "create_user_mapping.sgml">
+<!ENTITY createVariable     SYSTEM "create_variable.sgml">
 <!ENTITY createView         SYSTEM "create_view.sgml">
 <!ENTITY deallocate         SYSTEM "deallocate.sgml">
 <!ENTITY declare            SYSTEM "declare.sgml">
@@ -148,6 +149,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY dropUser           SYSTEM "drop_user.sgml">
 <!ENTITY dropUserMapping    SYSTEM "drop_user_mapping.sgml">
 <!ENTITY dropView           SYSTEM "drop_view.sgml">
+<!ENTITY dropVariable       SYSTEM "drop_variable.sgml">
 <!ENTITY end                SYSTEM "end.sgml">
 <!ENTITY execute            SYSTEM "execute.sgml">
 <!ENTITY explain            SYSTEM "explain.sgml">
@@ -155,6 +157,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY grant              SYSTEM "grant.sgml">
 <!ENTITY importForeignSchema SYSTEM "import_foreign_schema.sgml">
 <!ENTITY insert             SYSTEM "insert.sgml">
+<!ENTITY let                SYSTEM "let.sgml">
 <!ENTITY listen             SYSTEM "listen.sgml">
 <!ENTITY load               SYSTEM "load.sgml">
 <!ENTITY lock               SYSTEM "lock.sgml">

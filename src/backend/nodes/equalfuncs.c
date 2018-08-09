@@ -949,6 +949,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(canSetTag);
 	COMPARE_NODE_FIELD(utilityStmt);
 	COMPARE_SCALAR_FIELD(resultRelation);
+	COMPARE_SCALAR_FIELD(resultVariable);
 	COMPARE_SCALAR_FIELD(hasAggs);
 	COMPARE_SCALAR_FIELD(hasWindowFuncs);
 	COMPARE_SCALAR_FIELD(hasTargetSRFs);
@@ -1056,6 +1057,16 @@ _equalSelectStmt(const SelectStmt *a, const SelectStmt *b)
 
 	return true;
 }
+
+static bool
+_equalLetStmt(const LetStmt *a, const LetStmt *b)
+{
+	COMPARE_NODE_FIELD(target);
+	COMPARE_NODE_FIELD(selectStmt);
+
+	return true;
+}
+
 
 static bool
 _equalSetOperationStmt(const SetOperationStmt *a, const SetOperationStmt *b)
@@ -3224,6 +3235,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_SelectStmt:
 			retval = _equalSelectStmt(a, b);
+			break;
+		case T_LetStmt:
+			retval = _equalLetStmt(a, b);
 			break;
 		case T_SetOperationStmt:
 			retval = _equalSetOperationStmt(a, b);

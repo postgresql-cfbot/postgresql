@@ -43,7 +43,7 @@ typedef struct PlannedStmt
 {
 	NodeTag		type;
 
-	CmdType		commandType;	/* select|insert|update|delete|utility */
+	CmdType		commandType;	/* select|let|insert|update|delete|utility */
 
 	uint64		queryId;		/* query identifier (copied from Query) */
 
@@ -80,6 +80,9 @@ typedef struct PlannedStmt
 	 * indicating the roots of the respective partition hierarchies.
 	 */
 	List	   *rootResultRelations;
+
+	/* Oid of target variable for LET command */
+	Oid			resultVariable;
 
 	List	   *subplans;		/* Plan trees for SubPlan expressions; note
 								 * that some could be NULL */

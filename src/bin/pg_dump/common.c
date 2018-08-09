@@ -296,6 +296,10 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 		write_msg(NULL, "reading subscriptions\n");
 	getSubscriptions(fout);
 
+	if (g_verbose)
+		write_msg(NULL, "reading variables\n");
+	getVariables(fout);
+
 	*numTablesPtr = numTables;
 	return tblinfo;
 }

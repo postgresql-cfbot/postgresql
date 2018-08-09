@@ -93,6 +93,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(nonleafResultRelations);
 	COPY_NODE_FIELD(rootResultRelations);
+	COPY_SCALAR_FIELD(resultVariable);
 	COPY_NODE_FIELD(subplans);
 	COPY_BITMAPSET_FIELD(rewindPlanIDs);
 	COPY_NODE_FIELD(rowMarks);
@@ -3000,6 +3001,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(canSetTag);
 	COPY_NODE_FIELD(utilityStmt);
 	COPY_SCALAR_FIELD(resultRelation);
+	COPY_SCALAR_FIELD(resultVariable);
 	COPY_SCALAR_FIELD(hasAggs);
 	COPY_SCALAR_FIELD(hasWindowFuncs);
 	COPY_SCALAR_FIELD(hasTargetSRFs);
@@ -3114,6 +3116,18 @@ _copySelectStmt(const SelectStmt *from)
 	COPY_SCALAR_FIELD(all);
 	COPY_NODE_FIELD(larg);
 	COPY_NODE_FIELD(rarg);
+
+	return newnode;
+}
+
+static LetStmt *
+_copyLetStmt(const LetStmt *from)
+{
+	LetStmt *newnode = makeNode(LetStmt);
+
+	COPY_NODE_FIELD(target);
+	COPY_NODE_FIELD(selectStmt);
+	COPY_LOCATION_FIELD(location);
 
 	return newnode;
 }
@@ -5165,6 +5179,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_SelectStmt:
 			retval = _copySelectStmt(from);
+			break;
+		case T_LetStmt:
+			retval = _copyLetStmt(from);
 			break;
 		case T_SetOperationStmt:
 			retval = _copySetOperationStmt(from);

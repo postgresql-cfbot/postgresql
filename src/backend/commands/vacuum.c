@@ -1393,43 +1393,14 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
 	 */
 	if (!onerel)
 	{
-		int			elevel = 0;
+		int			errcode;
 
-		/*
-		 * Determine the log level.
-		 *
-		 * If the RangeVar is not defined, we do not have enough information
-		 * to provide a meaningful log statement.  Chances are that
-		 * vacuum_rel's caller has intentionally not provided this information
-		 * so that this logging is skipped, anyway.
-		 *
-		 * Otherwise, for autovacuum logs, we emit a LOG if
-		 * log_autovacuum_min_duration is not disabled.  For manual VACUUM, we
-		 * emit a WARNING to match the log statements in the permission
-		 * checks.
-		 */
-		if (relation != NULL)
-		{
-			if (!IsAutoVacuumWorkerProcess())
-				elevel = WARNING;
-			else if (params->log_min_duration >= 0)
-				elevel = LOG;
-		}
+		if (rel_lock)
+			errcode = ERRCODE_UNDEFINED_TABLE;
+		else
+			errcode = ERRCODE_LOCK_NOT_AVAILABLE;
 
-		if (elevel != 0)
-		{
-			if (!rel_lock)
-				ereport(elevel,
-						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
-						 errmsg("skipping vacuum of \"%s\" --- lock not available",
-								relation->relname)));
-			else
-				ereport(elevel,
-						(errcode(ERRCODE_UNDEFINED_TABLE),
-						 errmsg("skipping vacuum of \"%s\" --- relation no longer exists",
-								relation->relname)));
-		}
-
+		report_skipped_relation(relation, params, errcode, SRS_VACUUM);
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		return false;
@@ -1704,4 +1675,74 @@ vacuum_delay_point(void)
 		/* Might have gotten an interrupt while sleeping */
 		CHECK_FOR_INTERRUPTS();
 	}
+}
+
+/*
+ * report_skipped_relation
+ *
+ * This function reports that a relation has been skipped using the given error
+ * code.
+ *
+ * If the RangeVar is not defined, we do not have enough information to provide
+ * a meaningful log statement, and nothing is emitted.  Chances are that the
+ * caller has intentionally not provided this information so that logging is
+ * skipped anyway.
+ *
+ * Otherwise, for autovacuum logs, we emit a LOG if log_autovacuum_min_duration
+ * is not disabled.  For manual commands, we emit a WARNING to match the log
+ * statements in the permission checks for VACUUM and ANALYZE.
+ *
+ * Note that this function currently only accepts the following SQL error codes:
+ * 	ERRCODE_LOCK_NOT_AVAILABLE
+ * 	ERRCODE_UNDEFINED_TABLE
+ */
+void
+report_skipped_relation(RangeVar *relation, VacuumParams *params,
+						int sqlerrcode, SkippedRelStmtType stmttype)
+{
+	int			elevel;
+
+	Assert(params != NULL);
+
+	if (relation == NULL)
+		return;
+	else if (!IsAutoVacuumWorkerProcess())
+		elevel = WARNING;
+	else if (params->log_min_duration >= 0)
+		elevel = LOG;
+	else
+		return;
+
+	if (sqlerrcode == ERRCODE_LOCK_NOT_AVAILABLE)
+	{
+		if (stmttype == SRS_VACUUM)
+			ereport(elevel,
+					(errcode(sqlerrcode),
+					 errmsg("skipping vacuum of \"%s\" --- lock not available",
+							relation->relname)));
+		else if (stmttype == SRS_ANALYZE)
+			ereport(elevel,
+					(errcode(sqlerrcode),
+					 errmsg("skipping analyze of \"%s\" --- lock not available",
+							relation->relname)));
+		else
+			elog(ERROR, "unrecognized statement type: %d", stmttype);
+	}
+	else if (sqlerrcode == ERRCODE_UNDEFINED_TABLE)
+	{
+		if (stmttype == SRS_VACUUM)
+			ereport(elevel,
+					(errcode(sqlerrcode),
+					 errmsg("skipping vacuum of \"%s\" --- relation no longer exists",
+							relation->relname)));
+		else if (stmttype == SRS_ANALYZE)
+			ereport(elevel,
+					(errcode(sqlerrcode),
+					 errmsg("skipping analyze of \"%s\" --- relation no longer exists",
+							relation->relname)));
+		else
+			elog(ERROR, "unrecognized statement type: %d", stmttype);
+	}
+	else
+		elog(ERROR, "unrecognized error code: %d", sqlerrcode);
 }

@@ -2147,6 +2147,7 @@ SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
 Size
+SkippedRelStmtType
 SlabBlock
 SlabChunk
 SlabContext

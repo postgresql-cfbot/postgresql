@@ -147,6 +147,12 @@ typedef struct VacuumParams
 									 * to use default */
 } VacuumParams;
 
+typedef enum SkippedRelStmtType
+{
+	SRS_VACUUM,
+	SRS_ANALYZE
+} SkippedRelStmtType;
+
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
 extern int	vacuum_freeze_min_age;
@@ -185,6 +191,10 @@ extern void vacuum_set_xid_limits(Relation rel,
 					  MultiXactId *mxactFullScanLimit);
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
+extern void report_skipped_relation(RangeVar *relation,
+						VacuumParams *params,
+						int sqlerrcode,
+						SkippedRelStmtType stmttype);
 
 /* in commands/vacuumlazy.c */
 extern void lazy_vacuum_rel(Relation onerel, int options,

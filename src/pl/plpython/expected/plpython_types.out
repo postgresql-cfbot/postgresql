@@ -134,6 +134,158 @@ INFO:  (None, <type 'NoneType'>)
                           
 (1 row)
 
+CREATE FUNCTION test_type_conversion_int4_int2(x int4) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int4_int2(100::int4);
+INFO:  (100, <type 'int'>)
+ test_type_conversion_int4_int2 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_int2(-100::int4);
+INFO:  (-100, <type 'int'>)
+ test_type_conversion_int4_int2 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_int2(1000000::int4);
+INFO:  (1000000, <type 'int'>)
+ERROR:  value "1000000" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int4_int2"
+SELECT * FROM test_type_conversion_int4_int2(-1000000::int4);
+INFO:  (-1000000, <type 'int'>)
+ERROR:  value "-1000000" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int4_int2"
+SELECT * FROM test_type_conversion_int4_int2(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int4_int2 
+--------------------------------
+                               
+(1 row)
+
+CREATE FUNCTION test_type_conversion_int8_int2(x int8) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int8_int2(100::int8);
+INFO:  (100L, <type 'long'>)
+ test_type_conversion_int8_int2 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_int2(-100::int8);
+INFO:  (-100L, <type 'long'>)
+ test_type_conversion_int8_int2 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_int2(1000000::int8);
+INFO:  (1000000L, <type 'long'>)
+ERROR:  value "1000000" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int8_int2"
+SELECT * FROM test_type_conversion_int8_int2(-1000000::int8);
+INFO:  (-1000000L, <type 'long'>)
+ERROR:  value "-1000000" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int8_int2"
+SELECT * FROM test_type_conversion_int8_int2(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int8_int2 
+--------------------------------
+                               
+(1 row)
+
+CREATE FUNCTION test_type_conversion_float8_int2(x float8) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_float8_int2(100::float8);
+INFO:  (100.0, <type 'float'>)
+ test_type_conversion_float8_int2 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int2(-100::float8);
+INFO:  (-100.0, <type 'float'>)
+ test_type_conversion_float8_int2 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int2(100.345::float8);
+INFO:  (100.345, <type 'float'>)
+ test_type_conversion_float8_int2 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int2(-100.678::float8);
+INFO:  (-100.678, <type 'float'>)
+ test_type_conversion_float8_int2 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int2(1000000::float8);
+INFO:  (1000000.0, <type 'float'>)
+ERROR:  value "1000000.0" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_float8_int2"
+SELECT * FROM test_type_conversion_float8_int2(-1000000::float8);
+INFO:  (-1000000.0, <type 'float'>)
+ERROR:  value "-1000000.0" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_float8_int2"
+SELECT * FROM test_type_conversion_float8_int2(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_float8_int2 
+----------------------------------
+                                 
+(1 row)
+
+CREATE FUNCTION test_type_conversion_text_int2(x text) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_text_int2('100');
+INFO:  ('100', <type 'str'>)
+ test_type_conversion_text_int2 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_int2('-100');
+INFO:  ('-100', <type 'str'>)
+ test_type_conversion_text_int2 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_int2('1000000000000000');
+INFO:  ('1000000000000000', <type 'str'>)
+ERROR:  value "1000000000000000" is out of range for type smallint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_int2"
+SELECT * FROM test_type_conversion_text_int2('1.23');
+INFO:  ('1.23', <type 'str'>)
+ERROR:  invalid input syntax for integer: "1.23"
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_int2"
+SELECT * FROM test_type_conversion_text_int2('aaa');
+INFO:  ('aaa', <type 'str'>)
+ERROR:  invalid input syntax for integer: "aaa"
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_int2"
 CREATE FUNCTION test_type_conversion_int4(x int4) RETURNS int4 AS $$
 plpy.info(x, type(x))
 return x
@@ -159,6 +311,132 @@ INFO:  (None, <type 'NoneType'>)
                           
 (1 row)
 
+CREATE FUNCTION test_type_conversion_int8_int4(x int8) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int8_int4(100);
+INFO:  (100L, <type 'long'>)
+ test_type_conversion_int8_int4 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_int4(-100);
+INFO:  (-100L, <type 'long'>)
+ test_type_conversion_int8_int4 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_int4(10000000000000);
+INFO:  (10000000000000L, <type 'long'>)
+ERROR:  value "10000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int8_int4"
+SELECT * FROM test_type_conversion_int8_int4(-10000000000000);
+INFO:  (-10000000000000L, <type 'long'>)
+ERROR:  value "-10000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_int8_int4"
+SELECT * FROM test_type_conversion_int8_int4(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int8_int4 
+--------------------------------
+                               
+(1 row)
+
+CREATE FUNCTION test_type_conversion_numeric_int4(x numeric) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_numeric_int4(100::numeric);
+INFO:  (Decimal('100'), <class 'decimal.Decimal'>)
+ test_type_conversion_numeric_int4 
+-----------------------------------
+                               100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_int4(-100::numeric);
+INFO:  (Decimal('-100'), <class 'decimal.Decimal'>)
+ test_type_conversion_numeric_int4 
+-----------------------------------
+                              -100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_int4(1000000::numeric);
+INFO:  (Decimal('1000000'), <class 'decimal.Decimal'>)
+ test_type_conversion_numeric_int4 
+-----------------------------------
+                           1000000
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_int4(-1000000::numeric);
+INFO:  (Decimal('-1000000'), <class 'decimal.Decimal'>)
+ test_type_conversion_numeric_int4 
+-----------------------------------
+                          -1000000
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_int4(100000000000000000000::numeric);
+INFO:  (Decimal('100000000000000000000'), <class 'decimal.Decimal'>)
+ERROR:  value "100000000000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_numeric_int4"
+SELECT * FROM test_type_conversion_numeric_int4(-100000000000000000000::numeric);
+INFO:  (Decimal('-100000000000000000000'), <class 'decimal.Decimal'>)
+ERROR:  value "-100000000000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_numeric_int4"
+SELECT * FROM test_type_conversion_numeric_int4(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_numeric_int4 
+-----------------------------------
+                                  
+(1 row)
+
+CREATE FUNCTION test_type_conversion_long_int4(x numeric) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return long(x)
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_long_int4(100::numeric);
+INFO:  (Decimal('100'), <class 'decimal.Decimal'>)
+ test_type_conversion_long_int4 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_long_int4(-100::numeric);
+INFO:  (Decimal('-100'), <class 'decimal.Decimal'>)
+ test_type_conversion_long_int4 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_long_int4(1000000::numeric);
+INFO:  (Decimal('1000000'), <class 'decimal.Decimal'>)
+ test_type_conversion_long_int4 
+--------------------------------
+                        1000000
+(1 row)
+
+SELECT * FROM test_type_conversion_long_int4(-1000000::numeric);
+INFO:  (Decimal('-1000000'), <class 'decimal.Decimal'>)
+ test_type_conversion_long_int4 
+--------------------------------
+                       -1000000
+(1 row)
+
+SELECT * FROM test_type_conversion_long_int4(100000000000000000000::numeric);
+INFO:  (Decimal('100000000000000000000'), <class 'decimal.Decimal'>)
+ERROR:  value "100000000000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_long_int4"
+SELECT * FROM test_type_conversion_long_int4(-100000000000000000000::numeric);
+INFO:  (Decimal('-100000000000000000000'), <class 'decimal.Decimal'>)
+ERROR:  value "-100000000000000000000" is out of range for type integer
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_long_int4"
 CREATE FUNCTION test_type_conversion_int8(x int8) RETURNS int8 AS $$
 plpy.info(x, type(x))
 return x
@@ -191,6 +469,104 @@ INFO:  (None, <type 'NoneType'>)
                           
 (1 row)
 
+CREATE FUNCTION test_type_conversion_float8_int8(x float8) RETURNS int8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_float8_int8(100::float8);
+INFO:  (100.0, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(-100::float8);
+INFO:  (-100.0, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(100.345::float8);
+INFO:  (100.345, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(-100.678::float8);
+INFO:  (-100.678, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(100000000000.345::float8);
+INFO:  (100000000000.345, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                     100000000000
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(-100000000000.678::float8);
+INFO:  (-100000000000.678, <type 'float'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                    -100000000000
+(1 row)
+
+SELECT * FROM test_type_conversion_float8_int8(100000000000000000000000::float8);
+INFO:  (1e+23, <type 'float'>)
+ERROR:  value "1e+23" is out of range for type bigint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_float8_int8"
+SELECT * FROM test_type_conversion_float8_int8(-100000000000000000000000::float8);
+INFO:  (-1e+23, <type 'float'>)
+ERROR:  value "-1e+23" is out of range for type bigint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_float8_int8"
+SELECT * FROM test_type_conversion_float8_int8(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_float8_int8 
+----------------------------------
+                                 
+(1 row)
+
+CREATE FUNCTION test_type_conversion_text_int8(x text) RETURNS int8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_text_int8('100');
+INFO:  ('100', <type 'str'>)
+ test_type_conversion_text_int8 
+--------------------------------
+                            100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_int8('-100');
+INFO:  ('-100', <type 'str'>)
+ test_type_conversion_text_int8 
+--------------------------------
+                           -100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_int8('1000000000000000');
+INFO:  ('1000000000000000', <type 'str'>)
+ test_type_conversion_text_int8 
+--------------------------------
+               1000000000000000
+(1 row)
+
+SELECT * FROM test_type_conversion_text_int8('100000000000000000000000');
+INFO:  ('100000000000000000000000', <type 'str'>)
+ERROR:  value "100000000000000000000000" is out of range for type bigint
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_int8"
+SELECT * FROM test_type_conversion_text_int8('aaa');
+INFO:  ('aaa', <type 'str'>)
+ERROR:  invalid input syntax for integer: "aaa"
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_int8"
 CREATE FUNCTION test_type_conversion_numeric(x numeric) RETURNS numeric AS $$
 # print just the class name, not the type, to avoid differences
 # between decimal and cdecimal
@@ -253,6 +629,31 @@ INFO:  ('None', 'NoneType')
                              
 (1 row)
 
+CREATE FUNCTION test_type_conversion_int4_numeric(x int4) RETURNS numeric AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int4_numeric(100::int4);
+INFO:  (100, <type 'int'>)
+ test_type_conversion_int4_numeric 
+-----------------------------------
+                               100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_numeric(-100::int4);
+INFO:  (-100, <type 'int'>)
+ test_type_conversion_int4_numeric 
+-----------------------------------
+                              -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_numeric(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int4_numeric 
+-----------------------------------
+                                  
+(1 row)
+
 CREATE FUNCTION test_type_conversion_float4(x float4) RETURNS float4 AS $$
 plpy.info(x, type(x))
 return x
@@ -283,6 +684,43 @@ INFO:  (None, <type 'NoneType'>)
  test_type_conversion_float4 
 -----------------------------
                             
+(1 row)
+
+CREATE FUNCTION test_type_conversion_text_float4(x text) RETURNS float4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_text_float4('100');
+INFO:  ('100', <type 'str'>)
+ test_type_conversion_text_float4 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float4('-100');
+INFO:  ('-100', <type 'str'>)
+ test_type_conversion_text_float4 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float4('5000.5');
+INFO:  ('5000.5', <type 'str'>)
+ test_type_conversion_text_float4 
+----------------------------------
+                           5000.5
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float4('aaa');
+INFO:  ('aaa', <type 'str'>)
+ERROR:  invalid input syntax for type real: "aaa"
+CONTEXT:  while creating return value
+PL/Python function "test_type_conversion_text_float4"
+SELECT * FROM test_type_conversion_text_float4(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_text_float4 
+----------------------------------
+                                 
 (1 row)
 
 CREATE FUNCTION test_type_conversion_float8(x float8) RETURNS float8 AS $$
@@ -322,6 +760,171 @@ INFO:  (100100100.654321, <type 'float'>)
  test_type_conversion_float8 
 -----------------------------
             100100100.654321
+(1 row)
+
+CREATE FUNCTION test_type_conversion_text_float8(x text) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_text_float8('100');
+INFO:  ('100', <type 'str'>)
+ test_type_conversion_text_float8 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float8('-100');
+INFO:  ('-100', <type 'str'>)
+ test_type_conversion_text_float8 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float8('5000000000.5');
+INFO:  ('5000000000.5', <type 'str'>)
+ test_type_conversion_text_float8 
+----------------------------------
+                     5000000000.5
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float8('100100100.654321');
+INFO:  ('100100100.654321', <type 'str'>)
+ test_type_conversion_text_float8 
+----------------------------------
+                 100100100.654321
+(1 row)
+
+SELECT * FROM test_type_conversion_text_float8(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_text_float8 
+----------------------------------
+                                 
+(1 row)
+
+CREATE FUNCTION test_type_conversion_int4_float8(x int4) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int4_float8(100);
+INFO:  (100, <type 'int'>)
+ test_type_conversion_int4_float8 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_float8(-100);
+INFO:  (-100, <type 'int'>)
+ test_type_conversion_int4_float8 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int4_float8(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int4_float8 
+----------------------------------
+                                 
+(1 row)
+
+CREATE FUNCTION test_type_conversion_int8_float8(x int8) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_int8_float8(100::int8);
+INFO:  (100L, <type 'long'>)
+ test_type_conversion_int8_float8 
+----------------------------------
+                              100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_float8(-100::int8);
+INFO:  (-100L, <type 'long'>)
+ test_type_conversion_int8_float8 
+----------------------------------
+                             -100
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_float8(10000000000000::int8);
+INFO:  (10000000000000L, <type 'long'>)
+ test_type_conversion_int8_float8 
+----------------------------------
+                   10000000000000
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_float8(-10000000000000::int8);
+INFO:  (-10000000000000L, <type 'long'>)
+ test_type_conversion_int8_float8 
+----------------------------------
+                  -10000000000000
+(1 row)
+
+SELECT * FROM test_type_conversion_int8_float8(null);
+INFO:  (None, <type 'NoneType'>)
+ test_type_conversion_int8_float8 
+----------------------------------
+                                 
+(1 row)
+
+CREATE FUNCTION test_type_conversion_numeric_float8(x numeric) RETURNS float8 AS $$
+# print just the class name, not the type, to avoid differences
+# between decimal and cdecimal
+plpy.info(str(x), x.__class__.__name__)
+return x
+$$ LANGUAGE plpythonu;
+SELECT * FROM test_type_conversion_numeric_float8(100);
+INFO:  ('100', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                                 100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(-100);
+INFO:  ('-100', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                                -100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(100.0);
+INFO:  ('100.0', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                                 100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(100.00);
+INFO:  ('100.00', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                                 100
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(5000000000.5);
+INFO:  ('5000000000.5', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                        5000000000.5
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(1234567890.0987654321);
+INFO:  ('1234567890.0987654321', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                    1234567890.09877
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(-1234567890.0987654321);
+INFO:  ('-1234567890.0987654321', 'Decimal')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                   -1234567890.09877
+(1 row)
+
+SELECT * FROM test_type_conversion_numeric_float8(null);
+INFO:  ('None', 'NoneType')
+ test_type_conversion_numeric_float8 
+-------------------------------------
+                                    
 (1 row)
 
 CREATE FUNCTION test_type_conversion_oid(x oid) RETURNS oid AS $$

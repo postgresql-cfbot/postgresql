@@ -63,6 +63,52 @@ SELECT * FROM test_type_conversion_int2(100::int2);
 SELECT * FROM test_type_conversion_int2(-100::int2);
 SELECT * FROM test_type_conversion_int2(null);
 
+CREATE FUNCTION test_type_conversion_int4_int2(x int4) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int4_int2(100::int4);
+SELECT * FROM test_type_conversion_int4_int2(-100::int4);
+SELECT * FROM test_type_conversion_int4_int2(1000000::int4);
+SELECT * FROM test_type_conversion_int4_int2(-1000000::int4);
+SELECT * FROM test_type_conversion_int4_int2(null);
+
+CREATE FUNCTION test_type_conversion_int8_int2(x int8) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int8_int2(100::int8);
+SELECT * FROM test_type_conversion_int8_int2(-100::int8);
+SELECT * FROM test_type_conversion_int8_int2(1000000::int8);
+SELECT * FROM test_type_conversion_int8_int2(-1000000::int8);
+SELECT * FROM test_type_conversion_int8_int2(null);
+
+CREATE FUNCTION test_type_conversion_float8_int2(x float8) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_float8_int2(100::float8);
+SELECT * FROM test_type_conversion_float8_int2(-100::float8);
+SELECT * FROM test_type_conversion_float8_int2(100.345::float8);
+SELECT * FROM test_type_conversion_float8_int2(-100.678::float8);
+SELECT * FROM test_type_conversion_float8_int2(1000000::float8);
+SELECT * FROM test_type_conversion_float8_int2(-1000000::float8);
+SELECT * FROM test_type_conversion_float8_int2(null);
+
+CREATE FUNCTION test_type_conversion_text_int2(x text) RETURNS int2 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_text_int2('100');
+SELECT * FROM test_type_conversion_text_int2('-100');
+SELECT * FROM test_type_conversion_text_int2('1000000000000000');
+SELECT * FROM test_type_conversion_text_int2('1.23');
+SELECT * FROM test_type_conversion_text_int2('aaa');
+
 
 CREATE FUNCTION test_type_conversion_int4(x int4) RETURNS int4 AS $$
 plpy.info(x, type(x))
@@ -72,6 +118,43 @@ $$ LANGUAGE plpythonu;
 SELECT * FROM test_type_conversion_int4(100);
 SELECT * FROM test_type_conversion_int4(-100);
 SELECT * FROM test_type_conversion_int4(null);
+
+
+CREATE FUNCTION test_type_conversion_int8_int4(x int8) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int8_int4(100);
+SELECT * FROM test_type_conversion_int8_int4(-100);
+SELECT * FROM test_type_conversion_int8_int4(10000000000000);
+SELECT * FROM test_type_conversion_int8_int4(-10000000000000);
+SELECT * FROM test_type_conversion_int8_int4(null);
+
+CREATE FUNCTION test_type_conversion_numeric_int4(x numeric) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_numeric_int4(100::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(-100::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(1000000::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(-1000000::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(100000000000000000000::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(-100000000000000000000::numeric);
+SELECT * FROM test_type_conversion_numeric_int4(null);
+
+CREATE FUNCTION test_type_conversion_long_int4(x numeric) RETURNS int4 AS $$
+plpy.info(x, type(x))
+return long(x)
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_long_int4(100::numeric);
+SELECT * FROM test_type_conversion_long_int4(-100::numeric);
+SELECT * FROM test_type_conversion_long_int4(1000000::numeric);
+SELECT * FROM test_type_conversion_long_int4(-1000000::numeric);
+SELECT * FROM test_type_conversion_long_int4(100000000000000000000::numeric);
+SELECT * FROM test_type_conversion_long_int4(-100000000000000000000::numeric);
 
 
 CREATE FUNCTION test_type_conversion_int8(x int8) RETURNS int8 AS $$
@@ -84,6 +167,31 @@ SELECT * FROM test_type_conversion_int8(-100);
 SELECT * FROM test_type_conversion_int8(5000000000);
 SELECT * FROM test_type_conversion_int8(null);
 
+CREATE FUNCTION test_type_conversion_float8_int8(x float8) RETURNS int8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_float8_int8(100::float8);
+SELECT * FROM test_type_conversion_float8_int8(-100::float8);
+SELECT * FROM test_type_conversion_float8_int8(100.345::float8);
+SELECT * FROM test_type_conversion_float8_int8(-100.678::float8);
+SELECT * FROM test_type_conversion_float8_int8(100000000000.345::float8);
+SELECT * FROM test_type_conversion_float8_int8(-100000000000.678::float8);
+SELECT * FROM test_type_conversion_float8_int8(100000000000000000000000::float8);
+SELECT * FROM test_type_conversion_float8_int8(-100000000000000000000000::float8);
+SELECT * FROM test_type_conversion_float8_int8(null);
+
+CREATE FUNCTION test_type_conversion_text_int8(x text) RETURNS int8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_text_int8('100');
+SELECT * FROM test_type_conversion_text_int8('-100');
+SELECT * FROM test_type_conversion_text_int8('1000000000000000');
+SELECT * FROM test_type_conversion_text_int8('100000000000000000000000');
+SELECT * FROM test_type_conversion_text_int8('aaa');
 
 CREATE FUNCTION test_type_conversion_numeric(x numeric) RETURNS numeric AS $$
 # print just the class name, not the type, to avoid differences
@@ -101,6 +209,15 @@ SELECT * FROM test_type_conversion_numeric(1234567890.0987654321);
 SELECT * FROM test_type_conversion_numeric(-1234567890.0987654321);
 SELECT * FROM test_type_conversion_numeric(null);
 
+CREATE FUNCTION test_type_conversion_int4_numeric(x int4) RETURNS numeric AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int4_numeric(100::int4);
+SELECT * FROM test_type_conversion_int4_numeric(-100::int4);
+SELECT * FROM test_type_conversion_int4_numeric(null);
+
 
 CREATE FUNCTION test_type_conversion_float4(x float4) RETURNS float4 AS $$
 plpy.info(x, type(x))
@@ -111,6 +228,17 @@ SELECT * FROM test_type_conversion_float4(100);
 SELECT * FROM test_type_conversion_float4(-100);
 SELECT * FROM test_type_conversion_float4(5000.5);
 SELECT * FROM test_type_conversion_float4(null);
+
+CREATE FUNCTION test_type_conversion_text_float4(x text) RETURNS float4 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_text_float4('100');
+SELECT * FROM test_type_conversion_text_float4('-100');
+SELECT * FROM test_type_conversion_text_float4('5000.5');
+SELECT * FROM test_type_conversion_text_float4('aaa');
+SELECT * FROM test_type_conversion_text_float4(null);
 
 
 CREATE FUNCTION test_type_conversion_float8(x float8) RETURNS float8 AS $$
@@ -123,6 +251,53 @@ SELECT * FROM test_type_conversion_float8(-100);
 SELECT * FROM test_type_conversion_float8(5000000000.5);
 SELECT * FROM test_type_conversion_float8(null);
 SELECT * FROM test_type_conversion_float8(100100100.654321);
+
+CREATE FUNCTION test_type_conversion_text_float8(x text) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_text_float8('100');
+SELECT * FROM test_type_conversion_text_float8('-100');
+SELECT * FROM test_type_conversion_text_float8('5000000000.5');
+SELECT * FROM test_type_conversion_text_float8('100100100.654321');
+SELECT * FROM test_type_conversion_text_float8(null);
+
+CREATE FUNCTION test_type_conversion_int4_float8(x int4) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int4_float8(100);
+SELECT * FROM test_type_conversion_int4_float8(-100);
+SELECT * FROM test_type_conversion_int4_float8(null);
+
+CREATE FUNCTION test_type_conversion_int8_float8(x int8) RETURNS float8 AS $$
+plpy.info(x, type(x))
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_int8_float8(100::int8);
+SELECT * FROM test_type_conversion_int8_float8(-100::int8);
+SELECT * FROM test_type_conversion_int8_float8(10000000000000::int8);
+SELECT * FROM test_type_conversion_int8_float8(-10000000000000::int8);
+SELECT * FROM test_type_conversion_int8_float8(null);
+
+CREATE FUNCTION test_type_conversion_numeric_float8(x numeric) RETURNS float8 AS $$
+# print just the class name, not the type, to avoid differences
+# between decimal and cdecimal
+plpy.info(str(x), x.__class__.__name__)
+return x
+$$ LANGUAGE plpythonu;
+
+SELECT * FROM test_type_conversion_numeric_float8(100);
+SELECT * FROM test_type_conversion_numeric_float8(-100);
+SELECT * FROM test_type_conversion_numeric_float8(100.0);
+SELECT * FROM test_type_conversion_numeric_float8(100.00);
+SELECT * FROM test_type_conversion_numeric_float8(5000000000.5);
+SELECT * FROM test_type_conversion_numeric_float8(1234567890.0987654321);
+SELECT * FROM test_type_conversion_numeric_float8(-1234567890.0987654321);
+SELECT * FROM test_type_conversion_numeric_float8(null);
 
 
 CREATE FUNCTION test_type_conversion_oid(x oid) RETURNS oid AS $$

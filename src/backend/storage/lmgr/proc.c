@@ -1665,6 +1665,7 @@ static void
 CheckDeadLock(void)
 {
 	int			i;
+	bool		shared = true;
 
 	/*
 	 * Acquire exclusive lock on the entire shared lock data structures. Must
@@ -1677,7 +1678,9 @@ CheckDeadLock(void)
 	 * interrupts.
 	 */
 	for (i = 0; i < NUM_LOCK_PARTITIONS; i++)
-		LWLockAcquire(LockHashPartitionLockByIndex(i), LW_EXCLUSIVE);
+		LWLockAcquire(LockHashPartitionLockByIndex(i), LW_SHARED);
+
+retry:
 
 	/*
 	 * Check to see if we've been awoken by anyone in the interim.
@@ -1700,10 +1703,20 @@ CheckDeadLock(void)
 #endif
 
 	/* Run the deadlock check, and set deadlock_state for use by ProcSleep */
-	deadlock_state = DeadLockCheck(MyProc);
+	deadlock_state = DeadLockCheck(MyProc, shared);
 
 	if (deadlock_state == DS_HARD_DEADLOCK)
 	{
+		if (shared)
+		{
+			shared = false;
+			for (i = NUM_LOCK_PARTITIONS; --i >= 0;)
+				LWLockRelease(LockHashPartitionLockByIndex(i));
+			for (i = 0; i < NUM_LOCK_PARTITIONS; i++)
+				LWLockAcquire(LockHashPartitionLockByIndex(i), LW_EXCLUSIVE);
+			goto retry;
+		}
+
 		/*
 		 * Oops.  We have a deadlock.
 		 *

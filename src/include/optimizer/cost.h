@@ -215,6 +215,12 @@ extern Selectivity clause_selectivity(PlannerInfo *root,
 				   int varRelid,
 				   JoinType jointype,
 				   SpecialJoinInfo *sjinfo);
+extern Selectivity clauselist_selectivity_simple(PlannerInfo *root,
+							  List *clauses,
+							  int varRelid,
+							  JoinType jointype,
+							  SpecialJoinInfo *sjinfo,
+							  Bitmapset *estimatedclauses);
 extern void cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 				  RelOptInfo *rel, ParamPathInfo *param_info,
 				  Cost input_startup_cost, Cost input_total_cost,

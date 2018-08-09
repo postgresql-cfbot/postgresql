@@ -1504,6 +1504,7 @@ pg_get_statisticsobj_worker(Oid statextid, bool missing_ok)
 	bool		isnull;
 	bool		ndistinct_enabled;
 	bool		dependencies_enabled;
+	bool		mcv_enabled;
 	int			i;
 
 	statexttup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statextid));
@@ -1539,6 +1540,7 @@ pg_get_statisticsobj_worker(Oid statextid, bool missing_ok)
 
 	ndistinct_enabled = false;
 	dependencies_enabled = false;
+	mcv_enabled = false;
 
 	for (i = 0; i < ARR_DIMS(arr)[0]; i++)
 	{
@@ -1546,6 +1548,8 @@ pg_get_statisticsobj_worker(Oid statextid, bool missing_ok)
 			ndistinct_enabled = true;
 		if (enabled[i] == STATS_EXT_DEPENDENCIES)
 			dependencies_enabled = true;
+		if (enabled[i] == STATS_EXT_MCV)
+			mcv_enabled = true;
 	}
 
 	/*
@@ -1555,13 +1559,27 @@ pg_get_statisticsobj_worker(Oid statextid, bool missing_ok)
 	 * statistics types on a newer postgres version, if the statistics had all
 	 * options enabled on the original version.
 	 */
-	if (!ndistinct_enabled || !dependencies_enabled)
+	if (!ndistinct_enabled || !dependencies_enabled || !mcv_enabled)
 	{
+		bool	gotone = false;
+
 		appendStringInfoString(&buf, " (");
+
 		if (ndistinct_enabled)
+		{
 			appendStringInfoString(&buf, "ndistinct");
-		else if (dependencies_enabled)
-			appendStringInfoString(&buf, "dependencies");
+			gotone = true;
+		}
+
+		if (dependencies_enabled)
+		{
+			appendStringInfo(&buf, "%sdependencies", gotone ? ", " : "");
+			gotone = true;
+		}
+
+		if (mcv_enabled)
+			appendStringInfo(&buf, "%smcv", gotone ? ", " : "");
+
 		appendStringInfoChar(&buf, ')');
 	}
 

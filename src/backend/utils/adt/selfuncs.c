@@ -3735,6 +3735,171 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 }
 
 /*
+ * estimate_num_groups_simple
+ *		Estimate number of groups in a relation.
+ *
+ * A simplified version of estimate_num_groups, assuming all expressions
+ * are only plain Vars from a single relation, and that no filtering is
+ * happenning.
+ */
+double
+estimate_num_groups_simple(PlannerInfo *root, List *vars)
+{
+	List	   *varinfos = NIL;
+	double		numdistinct;
+	ListCell   *l;
+
+	RelOptInfo *rel;
+	double		reldistinct = 1;
+	double		relmaxndistinct = reldistinct;
+	int			relvarcount = 0;
+
+
+	/*
+	 * If no grouping columns, there's exactly one group.  (This can't happen
+	 * for normal cases with GROUP BY or DISTINCT, but it is possible for
+	 * corner cases with set operations.)
+	 */
+	if (vars == NIL)
+		return 1.0;
+
+	/*
+	 * We expect only variables from a single relation.
+	 */
+	Assert(NumRelids((Node *) vars) == 1);
+
+	/*
+	 * Find the unique Vars used, treating an expression as a Var if we can
+	 * find stats for it.  For each one, record the statistical estimate of
+	 * number of distinct values (total in its table).
+	 */
+	numdistinct = 1.0;
+
+	foreach(l, vars)
+	{
+		Var	   *var = (Var *) lfirst(l);
+		VariableStatData vardata;
+
+		Assert(IsA(var, Var));
+
+		/*
+		 * If examine_variable is able to deduce anything about the GROUP BY
+		 * expression, treat it as a single variable even if it's really more
+		 * complicated.
+		 */
+		examine_variable(root, (Node *) var, 0, &vardata);
+		if (HeapTupleIsValid(vardata.statsTuple) || vardata.isunique)
+		{
+			varinfos = add_unique_group_var(root, varinfos,
+											(Node *) var, &vardata);
+			ReleaseVariableStats(vardata);
+			continue;
+		}
+		ReleaseVariableStats(vardata);
+	}
+
+	Assert(varinfos);
+
+	/*
+	 * Get the numdistinct estimate for the Vars of this rel.
+	 *
+	 * We
+	 * iteratively search for multivariate n-distinct with maximum number
+	 * of vars; assuming that each var group is independent of the others,
+	 * we multiply them together.  Any remaining relvarinfos after no more
+	 * multivariate matches are found are assumed independent too, so
+	 * their individual ndistinct estimates are multiplied also.
+	 *
+	 * While iterating, count how many separate numdistinct values we
+	 * apply.  We apply a fudge factor below, but only if we multiplied
+	 * more than one such values.
+	 */
+	while (varinfos)
+	{
+		double		mvndistinct;
+
+		rel = ((GroupVarInfo *) linitial(varinfos))->rel;
+
+		if (estimate_multivariate_ndistinct(root, rel, &varinfos,
+											&mvndistinct))
+		{
+			reldistinct *= mvndistinct;
+			if (relmaxndistinct < mvndistinct)
+				relmaxndistinct = mvndistinct;
+			relvarcount++;
+		}
+		else
+		{
+			foreach(l, varinfos)
+			{
+				GroupVarInfo *varinfo = (GroupVarInfo *) lfirst(l);
+
+				reldistinct *= varinfo->ndistinct;
+				if (relmaxndistinct < varinfo->ndistinct)
+					relmaxndistinct = varinfo->ndistinct;
+				relvarcount++;
+			}
+
+			/* we're done with this relation */
+			varinfos = NIL;
+		}
+	}
+
+	/*
+	 * Sanity check --- don't divide by zero if empty relation.
+	 */
+	Assert(IS_SIMPLE_REL(rel));
+	if (rel->tuples > 0)
+	{
+		/*
+		 * Clamp to size of rel, or size of rel / 10 if multiple Vars. The
+		 * fudge factor is because the Vars are probably correlated but we
+		 * don't know by how much.  We should never clamp to less than the
+		 * largest ndistinct value for any of the Vars, though, since
+		 * there will surely be at least that many groups.
+		 */
+		double		clamp = rel->tuples;
+
+		if (relvarcount > 1)
+		{
+			clamp *= 0.1;
+			if (clamp < relmaxndistinct)
+			{
+				clamp = relmaxndistinct;
+				/* for sanity in case some ndistinct is too large: */
+				if (clamp > rel->tuples)
+					clamp = rel->tuples;
+			}
+		}
+		if (reldistinct > clamp)
+			reldistinct = clamp;
+
+		/*
+		 * We're assuming we are returning all rows.
+		 */
+		reldistinct = clamp_row_est(reldistinct);
+
+		/*
+		 * Update estimate of total distinct groups.
+		 */
+		numdistinct *= reldistinct;
+
+		/* Guard against out-of-range answers */
+		if (numdistinct > rel->tuples)
+			numdistinct = rel->tuples;
+	}
+
+	if (numdistinct < 1.0)
+		numdistinct = 1.0;
+
+	/* Round off */
+	numdistinct = ceil(numdistinct);
+
+	return numdistinct;
+
+}
+
+/*
  * Estimate hash bucket statistics when the specified expression is used
  * as a hash key for the given number of buckets.
  *

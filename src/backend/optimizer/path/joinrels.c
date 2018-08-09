@@ -1318,8 +1318,11 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	/* Guard against stack overflow due to overly deep partition hierarchy. */
 	check_stack_depth();
 
-	/* Nothing to do, if the join relation is not partitioned. */
-	if (!IS_PARTITIONED_REL(joinrel))
+	/*
+	 * Nothing to do, if the join relation is not partitioned, or
+	 * partitionwise joins are not allowed for the join relation.
+	 */
+	if (!IS_PARTITIONED_REL(joinrel) || !joinrel->consider_partitionwise_join)
 		return;
 
 	/*
@@ -1350,6 +1353,12 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 								  joinrel->part_scheme->parttyplen,
 								  joinrel->part_scheme->parttypbyval,
 								  joinrel->boundinfo, rel2->boundinfo));
+
+	/*
+	 * Partitionwise joins should have been allowed for the joining relations.
+	 */
+	Assert(rel1->consider_partitionwise_join &&
+		   rel2->consider_partitionwise_join);
 
 	nparts = joinrel->nparts;
 

@@ -3956,11 +3956,13 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * If this is the topmost grouping relation or if the parent relation is
 	 * doing some form of partitionwise aggregation, then we may be able to do
 	 * it at this level also.  However, if the input relation is not
-	 * partitioned, partitionwise aggregate is impossible, and if it is dummy,
+	 * partitioned or if we are not allowed to generate Append paths for it,
+	 * partitionwise aggregate is impossible, and if it is dummy,
 	 * partitionwise aggregate is pointless.
 	 */
 	if (extra->patype != PARTITIONWISE_AGGREGATE_NONE &&
 		input_rel->part_scheme && input_rel->part_rels &&
+		(IS_SIMPLE_REL(input_rel) || input_rel->consider_partitionwise_join) &&
 		!IS_DUMMY_REL(input_rel))
 	{
 		/*
@@ -6909,12 +6911,14 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 							  scanjoin_targets_contain_srfs);
 
 	/*
-	 * If the relation is partitioned, recursively apply the same changes to
-	 * all partitions and generate new Append paths.  Since Append is not
-	 * projection-capable, that might save a separate Result node, and it also
-	 * is important for partitionwise aggregate.
+	 * If the relation is partitioned and we are allowed to generate Append
+	 * paths for it, recursively apply the same changes to all partitions and
+	 * generate new Append paths.  Since Append is not projection-capable,
+	 * that might save a separate Result node, and it also is important for
+	 * partitionwise aggregate.
 	 */
-	if (rel->part_scheme && rel->part_rels)
+	if (rel->part_scheme && rel->part_rels &&
+		(IS_SIMPLE_REL(rel) || rel->consider_partitionwise_join))
 	{
 		int			partition_idx;
 		List	   *live_children = NIL;

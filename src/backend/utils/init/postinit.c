@@ -266,7 +266,14 @@ PerformAuthentication(Port *port)
 #ifdef USE_SSL
 			if (port->ssl_in_use)
 				ereport(LOG,
-						(errmsg("connection authorized: user=%s database=%s SSL enabled (protocol=%s, cipher=%s, bits=%d, compression=%s)",
+						(port->application_name
+							? errmsg("connection authorized: user=%s database=%s application_name=%s SSL enabled (protocol=%s, cipher=%s, bits=%d, compression=%s)",
+								port->user_name, port->database_name, port->application_name,
+								be_tls_get_version(port),
+								be_tls_get_cipher(port),
+								be_tls_get_cipher_bits(port),
+								be_tls_get_compression(port) ? _("on") : _("off"))
+							: errmsg("connection authorized: user=%s database=%s SSL enabled (protocol=%s, cipher=%s, bits=%d, compression=%s)",
 								port->user_name, port->database_name,
 								be_tls_get_version(port),
 								be_tls_get_cipher(port),
@@ -275,7 +282,10 @@ PerformAuthentication(Port *port)
 			else
 #endif
 				ereport(LOG,
-						(errmsg("connection authorized: user=%s database=%s",
+						(port->application_name
+							? errmsg("connection authorized: user=%s database=%s application_name=%s",
+								port->user_name, port->database_name, port->application_name)
+							: errmsg("connection authorized: user=%s database=%s",
 								port->user_name, port->database_name)));
 		}
 	}

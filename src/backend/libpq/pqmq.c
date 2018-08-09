@@ -168,7 +168,7 @@ mq_putmessage(char msgtype, const char *s, size_t len)
 		if (result != SHM_MQ_WOULD_BLOCK)
 			break;
 
-		WaitLatch(MyLatch, WL_LATCH_SET, 0,
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
 				  WAIT_EVENT_MQ_PUT_MESSAGE);
 		ResetLatch(MyLatch);
 		CHECK_FOR_INTERRUPTS();

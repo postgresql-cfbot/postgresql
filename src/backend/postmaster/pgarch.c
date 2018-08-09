@@ -393,6 +393,8 @@ pgarch_MainLoop(void)
 							   WAIT_EVENT_ARCHIVER_MAIN);
 				if (rc & WL_TIMEOUT)
 					wakened = true;
+				if (rc & WL_POSTMASTER_DEATH)
+					time_to_stop = true;
 			}
 			else
 				wakened = true;
@@ -403,7 +405,7 @@ pgarch_MainLoop(void)
 		 * or after completing one more archiving cycle after receiving
 		 * SIGUSR2.
 		 */
-	} while (PostmasterIsAlive() && !time_to_stop);
+	} while (!time_to_stop);
 }
 
 /*

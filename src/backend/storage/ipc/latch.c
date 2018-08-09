@@ -92,6 +92,13 @@ struct WaitEventSet
 	Latch	   *latch;
 	int			latch_pos;
 
+	/*
+	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
+	 * is set so that we'll exit immediately if postmaster death is detected,
+	 * instead of returning.
+	 */
+	bool		exit_on_postmaster_death;
+
 #if defined(WAIT_USE_EPOLL)
 	int			epoll_fd;
 	/* epoll_wait returns events in a user provided arrays, allocate once */
@@ -370,8 +377,17 @@ WaitLatchOrSocket(volatile Latch *latch, int wakeEvents, pgsocket sock,
 		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
 						  (Latch *) latch, NULL);
 
+	/* Postmaster-managed callers must handle postmaster death somehow. */
+	Assert(!IsUnderPostmaster ||
+		   (wakeEvents & (WL_EXIT_ON_PM_DEATH)) != 0 ||
+		   (wakeEvents & (WL_POSTMASTER_DEATH)) != 0);
+
 	if (wakeEvents & WL_POSTMASTER_DEATH && IsUnderPostmaster)
 		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
+						  NULL, NULL);
+
+	if (wakeEvents & WL_EXIT_ON_PM_DEATH && IsUnderPostmaster)
+		AddWaitEventToSet(set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
 						  NULL, NULL);
 
 	if (wakeEvents & WL_SOCKET_MASK)
@@ -562,6 +578,7 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 
 	set->latch = NULL;
 	set->nevents_space = nevents;
+	set->exit_on_postmaster_death = false;
 
 #if defined(WAIT_USE_EPOLL)
 #ifdef EPOLL_CLOEXEC
@@ -646,6 +663,7 @@ FreeWaitEventSet(WaitEventSet *set)
  * - WL_SOCKET_CONNECTED: Wait for socket connection to be established,
  *	 can be combined with other WL_SOCKET_* events (on non-Windows
  *	 platforms, this is the same as WL_SOCKET_WRITEABLE)
+ * - WL_EXIT_ON_PM_DEATH: Exit immediately if the postmaster dies
  *
  * Returns the offset in WaitEventSet->events (starting from 0), which can be
  * used to modify previously added wait events using ModifyWaitEvent().
@@ -670,6 +688,12 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 
 	/* not enough space */
 	Assert(set->nevents < set->nevents_space);
+
+	if (events == WL_EXIT_ON_PM_DEATH)
+	{
+		events = WL_POSTMASTER_DEATH;
+		set->exit_on_postmaster_death = true;
+	}
 
 	if (latch)
 	{
@@ -926,6 +950,7 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	instr_time	start_time;
 	instr_time	cur_time;
 	long		cur_timeout = -1;
+	int			i;
 
 	Assert(nevents > 0);
 
@@ -986,7 +1011,6 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			occurred_events->user_data =
 				set->events[set->latch_pos].user_data;
 			occurred_events->events = WL_LATCH_SET;
-			occurred_events++;
 			returned_events++;
 
 			break;
@@ -1020,6 +1044,19 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 #endif
 
 	pgstat_report_wait_end();
+
+	/*
+	 * Exit immediately if the postmaster died and the caller asked for
+	 * automatic exit in that case.
+	 */
+	if (set->exit_on_postmaster_death)
+	{
+		for (i = 0; i < returned_events; ++i)
+		{
+			if (occurred_events[i].events == WL_POSTMASTER_DEATH)
+				exit(1);
+		}
+	}
 
 	return returned_events;
 }

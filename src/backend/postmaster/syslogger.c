@@ -165,6 +165,7 @@ SysLoggerMain(int argc, char *argv[])
 	char	   *currentLogFilename;
 	int			currentLogRotationAge;
 	pg_time_t	now;
+	WaitEventSet *wes;
 
 	now = MyStartTime;
 
@@ -286,6 +287,22 @@ SysLoggerMain(int argc, char *argv[])
 	set_next_rotation_time();
 	update_metainfo_datafile();
 
+	/*
+	 * Set up a reusable WaitEventSet object we'll use to wait for our latch,
+	 * and (except on Windows) our socket.
+	 *
+	 * Unlike all other postmaster child processes, we'll ignore postmaster
+	 * death because we want to collect final log output from all backends and
+	 * then exit last.  We'll do that by running until we see EOF on the
+	 * syslog pipe, which implies that all other backends have exited
+	 * (including the postmaster).
+	 */
+	wes = CreateWaitEventSet(CurrentMemoryContext, 2);
+	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+#ifndef WIN32
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, syslogPipe[0], NULL, NULL);
+#endif
+
 	/* main worker loop */
 	for (;;)
 	{
@@ -293,6 +310,7 @@ SysLoggerMain(int argc, char *argv[])
 		int			size_rotation_for = 0;
 		long		cur_timeout;
 		int			cur_flags;
+		WaitEvent	event;
 
 #ifndef WIN32
 		int			rc;
@@ -432,13 +450,10 @@ SysLoggerMain(int argc, char *argv[])
 		 * Sleep until there's something to do
 		 */
 #ifndef WIN32
-		rc = WaitLatchOrSocket(MyLatch,
-							   WL_LATCH_SET | WL_SOCKET_READABLE | cur_flags,
-							   syslogPipe[0],
-							   cur_timeout,
-							   WAIT_EVENT_SYSLOGGER_MAIN);
+		rc = WaitEventSetWait(wes, cur_timeout, &event, 1,
+							  WAIT_EVENT_SYSLOGGER_MAIN);
 
-		if (rc & WL_SOCKET_READABLE)
+		if (rc == 1 && event.events == WL_SOCKET_READABLE)
 		{
 			int			bytesRead;
 
@@ -485,10 +500,8 @@ SysLoggerMain(int argc, char *argv[])
 		 */
 		LeaveCriticalSection(&sysloggerSection);
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | cur_flags,
-						 cur_timeout,
-						 WAIT_EVENT_SYSLOGGER_MAIN);
+		(void) WaitEventSetWait(wes, cur_timeout, &event, 1,
+								WAIT_EVENT_SYSLOGGER_MAIN);
 
 		EnterCriticalSection(&sysloggerSection);
 #endif							/* WIN32 */

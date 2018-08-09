@@ -364,7 +364,8 @@ gather_readnext(GatherState *gatherstate)
 				return NULL;
 
 			/* Nothing to do except wait for developments. */
-			WaitLatch(MyLatch, WL_LATCH_SET, 0, WAIT_EVENT_EXECUTE_GATHER);
+			WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+					  WAIT_EVENT_EXECUTE_GATHER);
 			ResetLatch(MyLatch);
 			nvisited = 0;
 		}

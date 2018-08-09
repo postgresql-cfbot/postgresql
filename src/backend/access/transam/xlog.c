@@ -6189,7 +6189,7 @@ recoveryApplyDelay(XLogReaderState *record)
 			 secs, microsecs / 1000);
 
 		WaitLatch(&XLogCtl->recoveryWakeupLatch,
-				  WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 				  secs * 1000L + microsecs / 1000,
 				  WAIT_EVENT_RECOVERY_APPLY_DELAY);
 	}
@@ -12094,7 +12094,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 							(secs * 1000 + usecs / 1000);
 
 						WaitLatch(&XLogCtl->recoveryWakeupLatch,
-								  WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 								  wait_time, WAIT_EVENT_RECOVERY_WAL_STREAM);
 						ResetLatch(&XLogCtl->recoveryWakeupLatch);
 						now = GetCurrentTimestamp();
@@ -12270,7 +12270,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * to react to a trigger file promptly.
 					 */
 					WaitLatch(&XLogCtl->recoveryWakeupLatch,
-							  WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+							  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 							  5000L, WAIT_EVENT_RECOVERY_WAL_ALL);
 					ResetLatch(&XLogCtl->recoveryWakeupLatch);
 					break;

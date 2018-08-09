@@ -507,7 +507,7 @@ WalReceiverMain(void)
 				 */
 				Assert(wait_fd != PGINVALID_SOCKET);
 				rc = WaitLatchOrSocket(walrcv->latch,
-									   WL_POSTMASTER_DEATH | WL_SOCKET_READABLE |
+									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_LATCH_SET,
 									   wait_fd,
 									   NAPTIME_PER_CYCLE,
@@ -527,15 +527,6 @@ WalReceiverMain(void)
 						pg_memory_barrier();
 						XLogWalRcvSendReply(true, false);
 					}
-				}
-				if (rc & WL_POSTMASTER_DEATH)
-				{
-					/*
-					 * Emergency bailout if postmaster has died.  This is to
-					 * avoid the necessity for manual cleanup of all
-					 * postmaster children.
-					 */
-					exit(1);
 				}
 				if (rc & WL_TIMEOUT)
 				{
@@ -677,13 +668,6 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 	{
 		ResetLatch(walrcv->latch);
 
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (!PostmasterIsAlive())
-			exit(1);
-
 		ProcessWalRcvInterrupts();
 
 		SpinLockAcquire(&walrcv->mutex);
@@ -710,7 +694,7 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 		}
 		SpinLockRelease(&walrcv->mutex);
 
-		WaitLatch(walrcv->latch, WL_LATCH_SET | WL_POSTMASTER_DEATH, 0,
+		WaitLatch(walrcv->latch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
 				  WAIT_EVENT_WAL_RECEIVER_WAIT_START);
 	}
 

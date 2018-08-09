@@ -283,7 +283,7 @@ fsync_fname(const char *fname, bool isdir, const char *progname)
 	 * unsupported operations, e.g. opening a directory under Windows), and
 	 * logging others.
 	 */
-	fd = open(fname, flags);
+	fd = open(fname, flags, 0);
 	if (fd < 0)
 	{
 		if (errno == EACCES || (isdir && errno == EISDIR))

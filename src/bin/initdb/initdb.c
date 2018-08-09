@@ -490,7 +490,11 @@ readfile(const char *path)
 	char	   *buffer;
 	int			c;
 
+#ifdef WIN32
+	if ((infile = fopen(path, "rt")) == NULL)
+#else
 	if ((infile = fopen(path, "r")) == NULL)
+#endif
 	{
 		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
 				progname, path, strerror(errno));

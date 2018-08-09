@@ -192,8 +192,7 @@ extern Tuplesortstate *tuplesort_begin_heap(TupleDesc tupDesc,
 					 int nkeys, AttrNumber *attNums,
 					 Oid *sortOperators, Oid *sortCollations,
 					 bool *nullsFirstFlags,
-					 int workMem, SortCoordinate coordinate,
-					 bool randomAccess);
+					 int workMem, SortCoordinate coordinate, bool randomAccess);
 extern Tuplesortstate *tuplesort_begin_cluster(TupleDesc tupDesc,
 						Relation indexRel, int workMem,
 						SortCoordinate coordinate, bool randomAccess);
@@ -239,6 +238,8 @@ extern bool tuplesort_skiptuples(Tuplesortstate *state, int64 ntuples,
 					 bool forward);
 
 extern void tuplesort_end(Tuplesortstate *state);
+
+extern void tuplesort_reset(Tuplesortstate *state);
 
 extern void tuplesort_get_stats(Tuplesortstate *state,
 					TuplesortInstrumentation *stats);

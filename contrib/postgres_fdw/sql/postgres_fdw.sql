@@ -514,7 +514,17 @@ SELECT t1.c1 FROM ft1 t1 WHERE EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c1)
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
 SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
--- CROSS JOIN, not pushed down
+-- CROSS JOIN, not pushed down.  For this query, essential optimization is top-N
+-- sort.  But it can't be processed at remote side, because we never do LIMIT
+-- push down.  Assuming that sorting is not worth it to push down, CROSS JOIN
+-- is also not pushed down in order to transfer less tuples over network.
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT t1.c3, t2.c3 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c3, t2.c3 OFFSET 100 LIMIT 10;
+SELECT t1.c3, t2.c3 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c3, t2.c3 OFFSET 100 LIMIT 10;
+-- CROSS JOIN, pushed down.  Unlike previous query, remote side is able to
+-- return tuples in given order without full sort, but using index scan and
+-- incremental sort.  This is much cheaper than full sort on local side, even
+-- despite we don't know LIMIT on remote side.
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c1 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;
 SELECT t1.c1, t2.c1 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;

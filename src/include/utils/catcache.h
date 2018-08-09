@@ -22,6 +22,7 @@
 
 #include "access/htup.h"
 #include "access/skey.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
 
@@ -119,6 +120,8 @@ typedef struct catctup
 	bool		dead;			/* dead but not yet removed? */
 	bool		negative;		/* negative cache entry? */
 	HeapTupleData tuple;		/* tuple management header */
+	int			naccess;		/* # of access to this entry, up to 2  */
+	TimestampTz	lastaccess;		/* approx. timestamp of the last usage */
 
 	/*
 	 * The tuple may also be a member of at most one CatCList.  (If a single
@@ -188,6 +191,34 @@ typedef struct catcacheheader
 
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
+
+/* for guc.c, not PGDLLPMPORT'ed */
+extern int cache_prune_min_age;
+extern int cache_memory_target;
+
+/* to use as access timestamp of catcache entries */
+extern TimestampTz catcacheclock;
+
+/*
+ * SetCatCacheClock - set timestamp for catcache access record
+ */
+static inline void
+SetCatCacheClock(TimestampTz ts)
+{
+	catcacheclock = ts;
+}
+
+/*
+ * GetCatCacheClock - get timestamp for catcache access record
+ *
+ * This clock is basically provided for catcache usage, but dynahash has a
+ * similar pruning mechanism and wants to use the same clock.
+ */
+static inline TimestampTz
+GetCatCacheClock(void)
+{
+	return catcacheclock;
+}
 
 extern void CreateCacheMemoryContext(void);
 

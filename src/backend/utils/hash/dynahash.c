@@ -88,6 +88,7 @@
 #include "access/xact.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
+#include "utils/catcache.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"
 
@@ -184,6 +185,12 @@ struct HASHHDR
 	long		ssize;			/* segment size --- must be power of 2 */
 	int			sshift;			/* segment shift = log2(ssize) */
 	int			nelem_alloc;	/* number of entries to allocate at once */
+	bool		prunable;		/* true if prunable */
+	HASH_PRUNE_CB	prune_cb;	/* function to call instead of just deleting */
+
+	/* These fields point to variables to control pruning */
+	int		   *memory_target;	/* pointer to memory target value in kB */
+	int		   *prune_min_age;	/* pointer to prune minimum age value in sec */
 
 #ifdef HASH_STATISTICS
 
@@ -227,16 +234,18 @@ struct HTAB
 	int			sshift;			/* segment shift = log2(ssize) */
 };
 
+#define HASHELEMENT_SIZE(ctlp) MAXALIGN(ctlp->prunable ? sizeof(PRUNABLE_HASHELEMENT) : sizeof(HASHELEMENT))
+
 /*
  * Key (also entry) part of a HASHELEMENT
  */
-#define ELEMENTKEY(helem)  (((char *)(helem)) + MAXALIGN(sizeof(HASHELEMENT)))
+#define ELEMENTKEY(helem, ctlp)  (((char *)(helem)) + HASHELEMENT_SIZE(ctlp))
 
 /*
  * Obtain element pointer given pointer to key
  */
-#define ELEMENT_FROM_KEY(key)  \
-	((HASHELEMENT *) (((char *) (key)) - MAXALIGN(sizeof(HASHELEMENT))))
+#define ELEMENT_FROM_KEY(key, ctlp)										\
+	((HASHELEMENT *) (((char *) (key)) - HASHELEMENT_SIZE(ctlp)))
 
 /*
  * Fast MOD arithmetic, assuming that y is a power of 2 !
@@ -257,6 +266,7 @@ static HASHSEGMENT seg_alloc(HTAB *hashp);
 static bool element_alloc(HTAB *hashp, int nelem, int freelist_idx);
 static bool dir_realloc(HTAB *hashp);
 static bool expand_table(HTAB *hashp);
+static bool prune_entries(HTAB *hashp);
 static HASHBUCKET get_hash_entry(HTAB *hashp, int freelist_idx);
 static void hdefault(HTAB *hashp);
 static int	choose_nelem_alloc(Size entrysize);
@@ -498,6 +508,29 @@ hash_create(const char *tabname, long nelem, HASHCTL *info, int flags)
 		hctl->keysize = info->keysize;
 		hctl->entrysize = info->entrysize;
 	}
+
+	/*
+	 * Set up pruning.
+	 *
+	 * We have two knobs to control pruning and a hash can share them of
+	 * syscache.
+	 *
+	 */
+	if (flags & HASH_PRUNABLE)
+	{
+		hctl->prunable = true;
+		hctl->prune_cb = info->prune_cb;
+		if (info->memory_target)
+			hctl->memory_target = info->memory_target;
+		else
+			hctl->memory_target = &cache_memory_target;
+		if (info->prune_min_age)
+			hctl->prune_min_age = info->prune_min_age;
+		else
+			hctl->prune_min_age = &cache_prune_min_age;
+	}
+	else
+		hctl->prunable = false;
 
 	/* make local copies of heavily-used constant fields */
 	hashp->keysize = hctl->keysize;
@@ -984,7 +1017,7 @@ hash_search_with_hash_value(HTAB *hashp,
 	while (currBucket != NULL)
 	{
 		if (currBucket->hashvalue == hashvalue &&
-			match(ELEMENTKEY(currBucket), keyPtr, keysize) == 0)
+			match(ELEMENTKEY(currBucket, hctl), keyPtr, keysize) == 0)
 			break;
 		prevBucketPtr = &(currBucket->link);
 		currBucket = *prevBucketPtr;
@@ -997,6 +1030,17 @@ hash_search_with_hash_value(HTAB *hashp,
 	if (foundPtr)
 		*foundPtr = (bool) (currBucket != NULL);
 
+	/* Update access counter if needed */
+	if (hctl->prunable && currBucket &&
+		(action == HASH_FIND || action == HASH_ENTER))
+	{
+		PRUNABLE_HASHELEMENT *prunable_elm =
+			(PRUNABLE_HASHELEMENT *) currBucket;
+		if (prunable_elm->naccess < 2)
+			prunable_elm->naccess++;
+		prunable_elm->last_access = GetCatCacheClock();
+	}
+
 	/*
 	 * OK, now what?
 	 */
@@ -1004,7 +1048,8 @@ hash_search_with_hash_value(HTAB *hashp,
 	{
 		case HASH_FIND:
 			if (currBucket != NULL)
-				return (void *) ELEMENTKEY(currBucket);
+				return (void *) ELEMENTKEY(currBucket, hctl);
+
 			return NULL;
 
 		case HASH_REMOVE:
@@ -1033,7 +1078,7 @@ hash_search_with_hash_value(HTAB *hashp,
 				 * element, because someone else is going to reuse it the next
 				 * time something is added to the table
 				 */
-				return (void *) ELEMENTKEY(currBucket);
+				return (void *) ELEMENTKEY(currBucket, hctl);
 			}
 			return NULL;
 
@@ -1045,7 +1090,7 @@ hash_search_with_hash_value(HTAB *hashp,
 		case HASH_ENTER:
 			/* Return existing element if found, else create one */
 			if (currBucket != NULL)
-				return (void *) ELEMENTKEY(currBucket);
+				return (void *) ELEMENTKEY(currBucket, hctl);
 
 			/* disallow inserts if frozen */
 			if (hashp->frozen)
@@ -1075,8 +1120,18 @@ hash_search_with_hash_value(HTAB *hashp,
 
 			/* copy key into record */
 			currBucket->hashvalue = hashvalue;
-			hashp->keycopy(ELEMENTKEY(currBucket), keyPtr, keysize);
+			hashp->keycopy(ELEMENTKEY(currBucket, hctl), keyPtr, keysize);
 
+			/* set access counter */
+			if (hctl->prunable)
+			{
+				PRUNABLE_HASHELEMENT *prunable_elm =
+					(PRUNABLE_HASHELEMENT *) currBucket;
+				if (prunable_elm->naccess < 2)
+					prunable_elm->naccess++;
+				prunable_elm->last_access = GetCatCacheClock();
+			}
+			
 			/*
 			 * Caller is expected to fill the data field on return.  DO NOT
 			 * insert any code that could possibly throw error here, as doing
@@ -1084,7 +1139,7 @@ hash_search_with_hash_value(HTAB *hashp,
 			 * caller's data structure.
 			 */
 
-			return (void *) ELEMENTKEY(currBucket);
+			return (void *) ELEMENTKEY(currBucket, hctl);
 	}
 
 	elog(ERROR, "unrecognized hash action code: %d", (int) action);
@@ -1116,7 +1171,7 @@ hash_update_hash_key(HTAB *hashp,
 					 void *existingEntry,
 					 const void *newKeyPtr)
 {
-	HASHELEMENT *existingElement = ELEMENT_FROM_KEY(existingEntry);
+	HASHELEMENT *existingElement = ELEMENT_FROM_KEY(existingEntry, hashp->hctl);
 	HASHHDR    *hctl = hashp->hctl;
 	uint32		newhashvalue;
 	Size		keysize;
@@ -1200,7 +1255,7 @@ hash_update_hash_key(HTAB *hashp,
 	while (currBucket != NULL)
 	{
 		if (currBucket->hashvalue == newhashvalue &&
-			match(ELEMENTKEY(currBucket), newKeyPtr, keysize) == 0)
+			match(ELEMENTKEY(currBucket, hctl), newKeyPtr, keysize) == 0)
 			break;
 		prevBucketPtr = &(currBucket->link);
 		currBucket = *prevBucketPtr;
@@ -1234,7 +1289,7 @@ hash_update_hash_key(HTAB *hashp,
 
 	/* copy new key into record */
 	currBucket->hashvalue = newhashvalue;
-	hashp->keycopy(ELEMENTKEY(currBucket), newKeyPtr, keysize);
+	hashp->keycopy(ELEMENTKEY(currBucket, hctl), newKeyPtr, keysize);
 
 	/* rest of record is untouched */
 
@@ -1388,8 +1443,8 @@ hash_seq_init(HASH_SEQ_STATUS *status, HTAB *hashp)
 void *
 hash_seq_search(HASH_SEQ_STATUS *status)
 {
-	HTAB	   *hashp;
-	HASHHDR    *hctl;
+	HTAB	   *hashp = status->hashp;
+	HASHHDR    *hctl = hashp->hctl;
 	uint32		max_bucket;
 	long		ssize;
 	long		segment_num;
@@ -1404,15 +1459,13 @@ hash_seq_search(HASH_SEQ_STATUS *status)
 		status->curEntry = curElem->link;
 		if (status->curEntry == NULL)	/* end of this bucket */
 			++status->curBucket;
-		return (void *) ELEMENTKEY(curElem);
+		return (void *) ELEMENTKEY(curElem, hctl);
 	}
 
 	/*
 	 * Search for next nonempty bucket starting at curBucket.
 	 */
 	curBucket = status->curBucket;
-	hashp = status->hashp;
-	hctl = hashp->hctl;
 	ssize = hashp->ssize;
 	max_bucket = hctl->max_bucket;
 
@@ -1458,7 +1511,7 @@ hash_seq_search(HASH_SEQ_STATUS *status)
 	if (status->curEntry == NULL)	/* end of this bucket */
 		++curBucket;
 	status->curBucket = curBucket;
-	return (void *) ELEMENTKEY(curElem);
+	return (void *) ELEMENTKEY(curElem, hctl);
 }
 
 void
@@ -1552,6 +1605,10 @@ expand_table(HTAB *hashp)
 	 */
 	if ((uint32) new_bucket > hctl->high_mask)
 	{
+		/* try pruning before expansion. return true on success */
+		if (hctl->prunable && prune_entries(hashp))
+			return true;
+
 		hctl->low_mask = hctl->high_mask;
 		hctl->high_mask = (uint32) new_bucket | hctl->low_mask;
 	}
@@ -1594,6 +1651,77 @@ expand_table(HTAB *hashp)
 	return true;
 }
 
+static bool
+prune_entries(HTAB *hashp)
+{
+	HASHHDR		   *hctl = hashp->hctl;
+	HASH_SEQ_STATUS status;
+	void 		   *elm;
+	TimestampTz		currclock = GetCatCacheClock();
+	int				nall = 0,
+					nremoved = 0;
+
+	Assert(hctl->prunable);
+
+	/* Return if pruning is currently disabled or not doable */
+	if (*hctl->prune_min_age < 0 || hashp->frozen || has_seq_scans(hashp))
+		return false;
+
+	/*
+	 * we don't prune before reaching this size. We only consider bucket array
+	 * size since it is the significant part of memory usage.
+	 */
+	if (hctl->dsize * sizeof(HASHBUCKET) * hashp->ssize <
+		(Size) *hctl->memory_target * 1024L)
+		return false;
+
+	/* Ok, start pruning. we can use seq scan here. */
+	hash_seq_init(&status, hashp);
+	while ((elm = hash_seq_search(&status)) != NULL)
+	{
+		PRUNABLE_HASHELEMENT *helm =
+			(PRUNABLE_HASHELEMENT *)ELEMENT_FROM_KEY(elm, hctl);
+		long	entry_age;
+		int		us;
+
+		nall++;
+
+		TimestampDifference(helm->last_access, currclock, &entry_age, &us);
+
+		/*
+		 * consider pruning if this entry has not been accessed for a certain
+		 * time
+		 */
+		if (entry_age > *hctl->prune_min_age)
+		{
+			/* Wait for the next chance if this is recently used */
+			if (helm->naccess > 0)
+				helm->naccess--;
+			else
+			{
+				/* just call it if callback is provided, remove otherwise */
+				if (hctl->prune_cb)
+				{
+					if (hctl->prune_cb(hashp, (void *)elm))
+						nremoved++;
+				}
+				else
+				{
+					bool found;
+					
+					hash_search(hashp, elm, HASH_REMOVE, &found);
+					Assert(found);
+					nremoved++;
+				}
+			}
+		}
+	}
+
+	elog(DEBUG1, "removed %d/%d entries from hash \"%s\"",
+		 nremoved, nall, hashp->tabname);
+
+	return nremoved > 0;
+}
 
 static bool
 dir_realloc(HTAB *hashp)
@@ -1667,7 +1795,7 @@ element_alloc(HTAB *hashp, int nelem, int freelist_idx)
 		return false;
 
 	/* Each element has a HASHELEMENT header plus user data. */
-	elementSize = MAXALIGN(sizeof(HASHELEMENT)) + MAXALIGN(hctl->entrysize);
+	elementSize = HASHELEMENT_SIZE(hctl) + MAXALIGN(hctl->entrysize);
 
 	CurrentDynaHashCxt = hashp->hcxt;
 	firstElement = (HASHELEMENT *) hashp->alloc(nelem * elementSize);

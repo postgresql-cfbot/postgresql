@@ -110,11 +110,13 @@ typedef struct CachedPlanSource
 	bool		is_valid;		/* is the query_list currently valid? */
 	int			generation;		/* increments each time we create a plan */
 	/* If CachedPlanSource has been saved, it is a member of a global list */
-	struct CachedPlanSource *next_saved;	/* list link, if so */
+	struct CachedPlanSource *prev_saved;	/* list prev link, if so */
+	struct CachedPlanSource *next_saved;	/* list next link, if so */
 	/* State kept to help decide whether to use custom or generic plans: */
 	double		generic_cost;	/* cost of generic plan, or -1 if not known */
 	double		total_custom_cost;	/* total cost of custom plans so far */
 	int			num_custom_plans;	/* number of plans included in total */
+	TimestampTz	last_access;	/* timestamp of the last usage */
 } CachedPlanSource;
 
 /*
@@ -143,6 +145,9 @@ typedef struct CachedPlan
 	MemoryContext context;		/* context containing this CachedPlan */
 } CachedPlan;
 
+/* GUC variables */
+extern int min_cached_plans;
+extern int plancache_prune_min_age;
 
 extern void InitPlanCache(void);
 extern void ResetPlanCache(void);

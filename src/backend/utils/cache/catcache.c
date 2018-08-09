@@ -71,8 +71,23 @@
 #define CACHE6_elog(a,b,c,d,e,f,g)
 #endif
 
+/*
+ * GUC variable to define the minimum size of hash to cosider entry eviction.
+ * This variable is shared among various cache mechanisms.
+ */
+int cache_memory_target = 0;
+
+/* GUC variable to define the minimum age of entries that will be cosidered to
+ * be evicted in seconds. This variable is shared among various cache
+ * mechanisms.
+ */
+int cache_prune_min_age = 600;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
+
+/* Timestamp used for any operation on caches. */
+TimestampTz	catcacheclock = 0;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 					   int nkeys,
@@ -866,7 +881,128 @@ InitCatCache(int id,
 	 */
 	MemoryContextSwitchTo(oldcxt);
 
+	/* initilize catcache reference clock if haven't done yet */
+	if (catcacheclock == 0)
+		catcacheclock = GetCurrentTimestamp();
+
 	return cp;
+}
+
+/*
+ * CatCacheCleanupOldEntries - Remove infrequently-used entries
+ *
+ * Catcache entries can be left alone for several reasons. We remove them if
+ * they are not accessed for a certain time to prevent catcache from
+ * bloating. The eviction is performed with the similar algorithm with buffer
+ * eviction using access counter. Entries that are accessed several times can
+ * live longer than those that have had no access in the same duration.
+ */
+static bool
+CatCacheCleanupOldEntries(CatCache *cp)
+{
+	int			i;
+	int			nremoved = 0;
+	size_t		hash_size;
+#ifdef CATCACHE_STATS
+	/* These variables are only for debugging purpose */
+	int			ntotal = 0;
+	/*
+	 * nth element in nentries stores the number of cache entries that have
+	 * lived unaccessed for corresponding multiple in ageclass of
+	 * cache_prune_min_age. The index of nremoved_entry is the value of the
+	 * clock-sweep counter, which takes from 0 up to 2.
+	 */
+	double		ageclass[] = {0.05, 0.1, 1.0, 2.0, 3.0, 0.0};
+	int			nentries[] = {0, 0, 0, 0, 0, 0};
+	int			nremoved_entry[3] = {0, 0, 0};
+	int			j;
+#endif
+
+	/* Return immediately if no pruning is wanted */
+	if (cache_prune_min_age < 0)
+		return false;
+
+	/*
+	 * Return without pruning if the size of the hash is below the target.
+	 * Since the area for bucket array is dominant, consider only it.
+	 */
+	hash_size = cp->cc_nbuckets * sizeof(dlist_head);
+	if (hash_size < (Size) cache_memory_target * 1024L)
+		return false;
+	
+	/* Search the whole hash for entries to remove */
+	for (i = 0; i < cp->cc_nbuckets; i++)
+	{
+		dlist_mutable_iter iter;
+
+		dlist_foreach_modify(iter, &cp->cc_bucket[i])
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+			long entry_age;
+			int us;
+
+
+			/*
+			 * Calculate the duration from the time of the last access to the
+			 * "current" time. Since catcacheclock is not advanced within a
+			 * transaction, the entries that are accessed within the current
+			 * transaction won't be pruned.
+			 */
+			TimestampDifference(ct->lastaccess, catcacheclock, &entry_age, &us);
+
+#ifdef CATCACHE_STATS
+			/* count catcache entries for each age class */
+			ntotal++;
+			for (j = 0 ;
+				 ageclass[j] != 0.0 &&
+					 entry_age > cache_prune_min_age * ageclass[j] ;
+				 j++);
+			if (ageclass[j] == 0.0) j--;
+			nentries[j]++;
+#endif
+
+			/*
+			 * Try to remove entries older than cache_prune_min_age seconds.
+			 * Entries that are not accessed after last pruning are removed in
+			 * that seconds, and that has been accessed several times are
+			 * removed after leaving alone for up to three times of the
+			 * duration. We don't try shrink buckets since pruning effectively
+			 * caps catcache expansion in the long term.
+			 */
+			if (entry_age > cache_prune_min_age)
+			{
+#ifdef CATCACHE_STATS
+				Assert (ct->naccess >= 0 && ct->naccess <= 2);
+				nremoved_entry[ct->naccess]++;
+#endif
+				if (ct->naccess > 0)
+					ct->naccess--;
+				else
+				{
+					if (!ct->c_list || ct->c_list->refcount == 0)
+					{
+						CatCacheRemoveCTup(cp, ct);
+						nremoved++;
+					}
+				}
+			}
+		}
+	}
+
+#ifdef CATCACHE_STATS
+	ereport(DEBUG1,
+			(errmsg ("removed %d/%d, age(-%.0fs:%d, -%.0fs:%d, *-%.0fs:%d, -%.0fs:%d, -%.0fs:%d) naccessed(0:%d, 1:%d, 2:%d)",
+					 nremoved, ntotal,
+					 ageclass[0] * cache_prune_min_age, nentries[0],
+					 ageclass[1] * cache_prune_min_age, nentries[1],
+					 ageclass[2] * cache_prune_min_age, nentries[2],
+					 ageclass[3] * cache_prune_min_age, nentries[3],
+					 ageclass[4] * cache_prune_min_age, nentries[4],
+					 nremoved_entry[0], nremoved_entry[1], nremoved_entry[2]),
+			 errhidestmt(true)));
+#endif
+
+	return nremoved > 0;
 }
 
 /*
@@ -1281,6 +1417,11 @@ SearchCatCacheInternal(CatCache *cache,
 		 * near the front of the hashbucket's list.)
 		 */
 		dlist_move_head(bucket, &ct->cache_elem);
+
+		/* Update access information for pruning */
+		if (ct->naccess < 2)
+			ct->naccess++;
+		ct->lastaccess = catcacheclock;
 
 		/*
 		 * If it's a positive entry, bump its refcount and return it. If it's
@@ -1813,7 +1954,6 @@ ReleaseCatCacheList(CatCList *list)
 		CatCacheRemoveCList(list->my_cache, list);
 }
 
-
 /*
  * CatalogCacheCreateEntry
  *		Create a new CatCTup entry, copying the given HeapTuple and other
@@ -1906,6 +2046,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	ct->dead = false;
 	ct->negative = negative;
 	ct->hash_value = hashValue;
+	ct->naccess = 0;
+	ct->lastaccess = catcacheclock;
 
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 
@@ -1913,10 +2055,13 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	CacheHdr->ch_ntup++;
 
 	/*
-	 * If the hash table has become too full, enlarge the buckets array. Quite
-	 * arbitrarily, we enlarge when fill factor > 2.
+	 * If the hash table has become too full, try cleanup by removing
+	 * infrequently used entries to make a room for the new entry. If it
+	 * failed, enlarge the bucket array instead.  Quite arbitrarily, we try
+	 * this when fill factor > 2.
 	 */
-	if (cache->cc_ntup > cache->cc_nbuckets * 2)
+	if (cache->cc_ntup > cache->cc_nbuckets * 2 &&
+		!CatCacheCleanupOldEntries(cache))
 		RehashCatCache(cache);
 
 	return ct;

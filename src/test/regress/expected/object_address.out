@@ -499,3 +499,711 @@ DROP SCHEMA addr_nsp CASCADE;
 NOTICE:  drop cascades to 14 other objects
 DROP OWNED BY regress_addr_user;
 DROP USER regress_addr_user;
+--
+-- Checks for invalid objects
+--
+-- Keep those checks in the same order as getObjectIdentityParts()
+SELECT * FROM pg_identify_object('pg_class'::regclass, 0, 0); -- no relation
+ type | schema | name | identity 
+------+--------+------+----------
+      |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class'::regclass, -8); -- no column for relation
+     type     |   schema   |   name   |      identity       
+--------------+------------+----------+---------------------
+ table column | pg_catalog | pg_class | pg_catalog.pg_class
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_proc'::regclass, 0, 0); -- no function
+ type | schema | name | identity 
+------+--------+------+----------
+      |        |      | 0
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_type'::regclass, 0, 0); -- no type
+ type | schema | name | identity 
+------+--------+------+----------
+ type |        |      | -
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_cast'::regclass, 0, 0); -- no cast
+ type | schema | name | identity 
+------+--------+------+----------
+ cast |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_collation'::regclass, 0, 0); -- no collation
+   type    | schema | name | identity 
+-----------+--------+------+----------
+ collation |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_constraint'::regclass, 0, 0); -- no constraint
+ type | schema | name | identity 
+------+--------+------+----------
+      |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_conversion'::regclass, 0, 0); -- no conversion
+    type    | schema | name | identity 
+------------+--------+------+----------
+ conversion |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_attrdef'::regclass, 0, 0); -- no default attribute
+     type      | schema | name | identity 
+---------------+--------+------+----------
+ default value |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_language'::regclass, 0, 0); -- no language
+   type   | schema | name | identity 
+----------+--------+------+----------
+ language |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+     type     | schema | name | identity 
+--------------+--------+------+----------
+ large object |        |      | 0
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_operator'::regclass, 0, 0); -- no operator
+   type   | schema | name | identity 
+----------+--------+------+----------
+ operator |        |      | 0
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+      type      | schema | name | identity 
+----------------+--------+------+----------
+ operator class |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_opfamily'::regclass, 0, 0); -- no opfamily
+      type       | schema | name | identity 
+-----------------+--------+------+----------
+ operator family |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_am'::regclass, 0, 0); -- no access method
+     type      | schema | name | identity 
+---------------+--------+------+----------
+ access method |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_amop'::regclass, 0, 0); -- no AM operator
+           type            | schema | name | identity 
+---------------------------+--------+------+----------
+ operator of access method |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_amproc'::regclass, 0, 0); -- no AM proc
+           type            | schema | name | identity 
+---------------------------+--------+------+----------
+ function of access method |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_rewrite'::regclass, 0, 0); -- no rewrite
+ type | schema | name | identity 
+------+--------+------+----------
+ rule |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_trigger'::regclass, 0, 0); -- no trigger
+  type   | schema | name | identity 
+---------+--------+------+----------
+ trigger |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_namespace'::regclass, 0, 0); -- no schema
+  type  | schema | name | identity 
+--------+--------+------+----------
+ schema |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+       type        | schema | name | identity 
+-------------------+--------+------+----------
+ statistics object |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+        type        | schema | name | identity 
+--------------------+--------+------+----------
+ text search parser |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+          type          | schema | name | identity 
+------------------------+--------+------+----------
+ text search dictionary |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_ts_template'::regclass, 0, 0); -- no TS template
+         type         | schema | name | identity 
+----------------------+--------+------+----------
+ text search template |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+           type            | schema | name | identity 
+---------------------------+--------+------+----------
+ text search configuration |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_authid'::regclass, 0, 0); -- no role
+ type | schema | name | identity 
+------+--------+------+----------
+ role |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_database'::regclass, 0, 0); -- no database
+   type   | schema | name | identity 
+----------+--------+------+----------
+ database |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_tablespace'::regclass, 0, 0); -- no tablespace
+    type    | schema | name | identity 
+------------+--------+------+----------
+ tablespace |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+         type         | schema | name | identity 
+----------------------+--------+------+----------
+ foreign-data wrapper |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_foreign_server'::regclass, 0, 0); -- no server
+  type  | schema | name | identity 
+--------+--------+------+----------
+ server |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+     type     | schema | name | identity 
+--------------+--------+------+----------
+ user mapping |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_default_acl'::regclass, 0, 0); -- no default ACL
+    type     | schema | name | identity 
+-------------+--------+------+----------
+ default acl |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_extension'::regclass, 0, 0); -- no extension
+   type    | schema | name | identity 
+-----------+--------+------+----------
+ extension |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+     type      | schema | name | identity 
+---------------+--------+------+----------
+ event trigger |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_policy'::regclass, 0, 0); -- no policy
+  type  | schema | name | identity 
+--------+--------+------+----------
+ policy |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_publication'::regclass, 0, 0); -- no publication
+    type     | schema | name | identity 
+-------------+--------+------+----------
+ publication |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+         type         | schema | name | identity 
+----------------------+--------+------+----------
+ publication relation |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_subscription'::regclass, 0, 0); -- no subscription
+     type     | schema | name | identity 
+--------------+--------+------+----------
+ subscription |        |      | 
+(1 row)
+
+SELECT * FROM pg_identify_object('pg_transform'::regclass, 0, 0); -- no transformation
+   type    | schema | name | identity 
+-----------+--------+------+----------
+ transform |        |      | 
+(1 row)
+
+-- Keep those checks in the same order as getObjectDescription()
+SELECT pg_describe_object('pg_class'::regclass, 0, 0); -- no relation
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, -8); -- no column for relation
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_proc'::regclass, 0, 0); -- no function
+ pg_describe_object 
+--------------------
+ function 0
+(1 row)
+
+SELECT pg_describe_object('pg_type'::regclass, 0, 0); -- no type
+ pg_describe_object 
+--------------------
+ type -
+(1 row)
+
+SELECT pg_describe_object('pg_cast'::regclass, 0, 0); -- no cast
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_collation'::regclass, 0, 0); -- no collation
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_constraint'::regclass, 0, 0); -- no constraint
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_conversion'::regclass, 0, 0); -- no conversion
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_attrdef'::regclass, 0, 0); -- no default attribute
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_language'::regclass, 0, 0); -- no language
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+ pg_describe_object 
+--------------------
+ large object 0
+(1 row)
+
+SELECT pg_describe_object('pg_operator'::regclass, 0, 0); -- no operator
+ pg_describe_object 
+--------------------
+ operator 0
+(1 row)
+
+SELECT pg_describe_object('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_opfamily'::regclass, 0, 0); -- no opfamily
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_am'::regclass, 0, 0); -- no access method
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_amop'::regclass, 0, 0); -- no AM operator
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_amproc'::regclass, 0, 0); -- no AM proc
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_rewrite'::regclass, 0, 0); -- no rewrite
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_trigger'::regclass, 0, 0); -- no trigger
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_namespace'::regclass, 0, 0); -- no schema
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_ts_template'::regclass, 0, 0); -- no TS template
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_authid'::regclass, 0, 0); -- no role
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_database'::regclass, 0, 0); -- no database
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_tablespace'::regclass, 0, 0); -- no tablespace
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_foreign_server'::regclass, 0, 0); -- no server
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_default_acl'::regclass, 0, 0); -- no default ACL
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_extension'::regclass, 0, 0); -- no extension
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_policy'::regclass, 0, 0); -- no policy
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_publication'::regclass, 0, 0); -- no publication
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_subscription'::regclass, 0, 0); -- no subscription
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+SELECT pg_describe_object('pg_transform'::regclass, 0, 0); -- no transformation
+ pg_describe_object 
+--------------------
+ 
+(1 row)
+
+-- Keep those checks in the same order as getObjectTypeDescription()
+SELECT * FROM pg_identify_object_as_address('pg_class'::regclass, 0, 0); -- no relation
+ type | object_names | object_args 
+------+--------------+-------------
+      |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_class'::regclass, 'pg_class'::regclass, -8); -- no column for relation
+     type     |     object_names      | object_args 
+--------------+-----------------------+-------------
+ table column | {pg_catalog,pg_class} | {}
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_proc'::regclass, 0, 0); -- no function
+ type | object_names | object_args 
+------+--------------+-------------
+      | {}           | {}
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_type'::regclass, 0, 0); -- no type
+ type | object_names | object_args 
+------+--------------+-------------
+ type | {-}          | {}
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_cast'::regclass, 0, 0); -- no cast
+ type | object_names | object_args 
+------+--------------+-------------
+ cast |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_collation'::regclass, 0, 0); -- no collation
+   type    | object_names | object_args 
+-----------+--------------+-------------
+ collation |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_constraint'::regclass, 0, 0); -- no constraint
+ type | object_names | object_args 
+------+--------------+-------------
+      |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_conversion'::regclass, 0, 0); -- no conversion
+    type    | object_names | object_args 
+------------+--------------+-------------
+ conversion |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_attrdef'::regclass, 0, 0); -- no default attribute
+     type      | object_names | object_args 
+---------------+--------------+-------------
+ default value |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_language'::regclass, 0, 0); -- no language
+   type   | object_names | object_args 
+----------+--------------+-------------
+ language |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+     type     | object_names | object_args 
+--------------+--------------+-------------
+ large object | {0}          | {}
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_operator'::regclass, 0, 0); -- no operator
+   type   | object_names | object_args 
+----------+--------------+-------------
+ operator | {}           | {}
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+      type      | object_names | object_args 
+----------------+--------------+-------------
+ operator class |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_opfamily'::regclass, 0, 0); -- no opfamily
+      type       | object_names | object_args 
+-----------------+--------------+-------------
+ operator family |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_am'::regclass, 0, 0); -- no access method
+     type      | object_names | object_args 
+---------------+--------------+-------------
+ access method |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_amop'::regclass, 0, 0); -- no AM operator
+           type            | object_names | object_args 
+---------------------------+--------------+-------------
+ operator of access method |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_amproc'::regclass, 0, 0); -- no AM proc
+           type            | object_names | object_args 
+---------------------------+--------------+-------------
+ function of access method |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_rewrite'::regclass, 0, 0); -- no rewrite
+ type | object_names | object_args 
+------+--------------+-------------
+ rule |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_trigger'::regclass, 0, 0); -- no trigger
+  type   | object_names | object_args 
+---------+--------------+-------------
+ trigger |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_namespace'::regclass, 0, 0); -- no schema
+  type  | object_names | object_args 
+--------+--------------+-------------
+ schema |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+       type        | object_names | object_args 
+-------------------+--------------+-------------
+ statistics object |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+        type        | object_names | object_args 
+--------------------+--------------+-------------
+ text search parser |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+          type          | object_names | object_args 
+------------------------+--------------+-------------
+ text search dictionary |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_ts_template'::regclass, 0, 0); -- no TS template
+         type         | object_names | object_args 
+----------------------+--------------+-------------
+ text search template |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+           type            | object_names | object_args 
+---------------------------+--------------+-------------
+ text search configuration |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_authid'::regclass, 0, 0); -- no role
+ type | object_names | object_args 
+------+--------------+-------------
+ role |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_database'::regclass, 0, 0); -- no database
+   type   | object_names | object_args 
+----------+--------------+-------------
+ database |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_tablespace'::regclass, 0, 0); -- no tablespace
+    type    | object_names | object_args 
+------------+--------------+-------------
+ tablespace |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+         type         | object_names | object_args 
+----------------------+--------------+-------------
+ foreign-data wrapper |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_foreign_server'::regclass, 0, 0); -- no server
+  type  | object_names | object_args 
+--------+--------------+-------------
+ server |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+     type     | object_names | object_args 
+--------------+--------------+-------------
+ user mapping |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_default_acl'::regclass, 0, 0); -- no default ACL
+    type     | object_names | object_args 
+-------------+--------------+-------------
+ default acl |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_extension'::regclass, 0, 0); -- no extension
+   type    | object_names | object_args 
+-----------+--------------+-------------
+ extension |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+     type      | object_names | object_args 
+---------------+--------------+-------------
+ event trigger |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_policy'::regclass, 0, 0); -- no policy
+  type  | object_names | object_args 
+--------+--------------+-------------
+ policy |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_publication'::regclass, 0, 0); -- no publication
+    type     | object_names | object_args 
+-------------+--------------+-------------
+ publication |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+         type         | object_names | object_args 
+----------------------+--------------+-------------
+ publication relation |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_subscription'::regclass, 0, 0); -- no subscription
+     type     | object_names | object_args 
+--------------+--------------+-------------
+ subscription |              | 
+(1 row)
+
+SELECT * FROM pg_identify_object_as_address('pg_transform'::regclass, 0, 0); -- no transformation
+   type    | object_names | object_args 
+-----------+--------------+-------------
+ transform |              | 
+(1 row)
+

@@ -70,6 +70,23 @@
 /* SQLSTATE codes for errors are defined in a separate file */
 #include "utils/errcodes.h"
 
+/*
+ * Provide a way to prevent "errno" from being accidentally used inside an
+ * elog() or ereport() invocation.  Since we know that some operating systems
+ * define errno as something involving a function call, we'll put a local
+ * variable of the same name as that function in the local scope to force a
+ * compile error.  On platforms that don't define errno in that way, nothing
+ * happens, so we get no warning ... but we can live with that as long as it
+ * happens on some popular platforms.
+ */
+#if defined(errno) && defined(__linux__)
+#define pg_prevent_errno_in_scope() int __errno_location pg_attribute_unused()
+#elif defined(errno) && (defined(__darwin__) || defined(__freebsd__))
+#define pg_prevent_errno_in_scope() int __error pg_attribute_unused()
+#else
+#define pg_prevent_errno_in_scope()
+#endif
+
 
 /*----------
  * New-style error reporting API: to be used in this way:
@@ -103,6 +120,7 @@
 #ifdef HAVE__BUILTIN_CONSTANT_P
 #define ereport_domain(elevel, domain, rest)	\
 	do { \
+		pg_prevent_errno_in_scope(); \
 		if (errstart(elevel, __FILE__, __LINE__, PG_FUNCNAME_MACRO, domain)) \
 			errfinish rest; \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
@@ -112,6 +130,7 @@
 #define ereport_domain(elevel, domain, rest)	\
 	do { \
 		const int elevel_ = (elevel); \
+		pg_prevent_errno_in_scope(); \
 		if (errstart(elevel_, __FILE__, __LINE__, PG_FUNCNAME_MACRO, domain)) \
 			errfinish rest; \
 		if (elevel_ >= ERROR) \
@@ -133,25 +152,25 @@ extern int	errcode(int sqlerrcode);
 extern int	errcode_for_file_access(void);
 extern int	errcode_for_socket_access(void);
 
-extern int	errmsg(const char *fmt,...) pg_attribute_printf(1, 2);
-extern int	errmsg_internal(const char *fmt,...) pg_attribute_printf(1, 2);
+extern int	errmsg(const char *fmt,...) pg_attribute_printf_m(1, 2);
+extern int	errmsg_internal(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
 extern int errmsg_plural(const char *fmt_singular, const char *fmt_plural,
-			  unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
+			  unsigned long n,...) pg_attribute_printf_m(1, 4) pg_attribute_printf_m(2, 4);
 
-extern int	errdetail(const char *fmt,...) pg_attribute_printf(1, 2);
-extern int	errdetail_internal(const char *fmt,...) pg_attribute_printf(1, 2);
+extern int	errdetail(const char *fmt,...) pg_attribute_printf_m(1, 2);
+extern int	errdetail_internal(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
-extern int	errdetail_log(const char *fmt,...) pg_attribute_printf(1, 2);
+extern int	errdetail_log(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
 extern int errdetail_log_plural(const char *fmt_singular,
 					 const char *fmt_plural,
-					 unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
+					 unsigned long n,...) pg_attribute_printf_m(1, 4) pg_attribute_printf_m(2, 4);
 
 extern int errdetail_plural(const char *fmt_singular, const char *fmt_plural,
-				 unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
+				 unsigned long n,...) pg_attribute_printf_m(1, 4) pg_attribute_printf_m(2, 4);
 
-extern int	errhint(const char *fmt,...) pg_attribute_printf(1, 2);
+extern int	errhint(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
 /*
  * errcontext() is typically called in error context callback functions, not
@@ -165,7 +184,7 @@ extern int	errhint(const char *fmt,...) pg_attribute_printf(1, 2);
 
 extern int	set_errcontext_domain(const char *domain);
 
-extern int	errcontext_msg(const char *fmt,...) pg_attribute_printf(1, 2);
+extern int	errcontext_msg(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
 extern int	errhidestmt(bool hide_stmt);
 extern int	errhidecontext(bool hide_ctx);
@@ -198,6 +217,7 @@ extern int	getinternalerrposition(void);
 #ifdef HAVE__BUILTIN_CONSTANT_P
 #define elog(elevel, ...)  \
 	do { \
+		pg_prevent_errno_in_scope(); \
 		elog_start(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		elog_finish(elevel, __VA_ARGS__); \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
@@ -206,6 +226,7 @@ extern int	getinternalerrposition(void);
 #else							/* !HAVE__BUILTIN_CONSTANT_P */
 #define elog(elevel, ...)  \
 	do { \
+		pg_prevent_errno_in_scope(); \
 		elog_start(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		{ \
 			const int elevel_ = (elevel); \
@@ -222,13 +243,13 @@ extern int	getinternalerrposition(void);
 #endif							/* HAVE__VA_ARGS */
 
 extern void elog_start(const char *filename, int lineno, const char *funcname);
-extern void elog_finish(int elevel, const char *fmt,...) pg_attribute_printf(2, 3);
+extern void elog_finish(int elevel, const char *fmt,...) pg_attribute_printf_m(2, 3);
 
 
 /* Support for constructing error strings separately from ereport() calls */
 
 extern void pre_format_elog_string(int errnumber, const char *domain);
-extern char *format_elog_string(const char *fmt,...) pg_attribute_printf(1, 2);
+extern char *format_elog_string(const char *fmt,...) pg_attribute_printf_m(1, 2);
 
 
 /* Support for attaching context information to error reports */
@@ -407,9 +428,9 @@ extern void set_syslog_parameters(const char *ident, int facility);
 #endif
 
 /*
- * Write errors to stderr (or by equal means when stderr is
- * not available). Used before ereport/elog can be used
- * safely (memory context, GUC load etc)
+ * Write errors to stderr (or by comparable means when stderr is not
+ * available).  Used before ereport/elog can be used safely (memory context,
+ * GUC load etc).  Note that this does *not* accept "%m".
  */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 

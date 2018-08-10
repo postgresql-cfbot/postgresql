@@ -13394,7 +13394,7 @@ fi
 $as_echo "$pgac_cv_printf_archetype" >&6; }
 
 cat >>confdefs.h <<_ACEOF
-#define PG_PRINTF_ATTRIBUTE $pgac_cv_printf_archetype
+#define PG_PRINTF_ATTRIBUTE_M $pgac_cv_printf_archetype
 _ACEOF
 
 

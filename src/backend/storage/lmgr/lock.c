@@ -40,6 +40,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "storage/extension_lock.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/sinvaladt.h"
@@ -716,6 +717,13 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	LWLock	   *partitionLock;
 	int			status;
 	bool		log_lock = false;
+
+	/*
+	 * Relation extension locks don't participate in deadlock detection,
+	 * so make sure we don't try to acquire a heavyweight lock while
+	 * holding one.
+	 */
+	Assert(!IsAnyRelationExtensionLockHeld());
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);

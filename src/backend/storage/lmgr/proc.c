@@ -44,6 +44,7 @@
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "storage/condition_variable.h"
+#include "storage/extension_lock.h"
 #include "storage/standby.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -765,6 +766,8 @@ ProcReleaseLocks(bool isCommit)
 		return;
 	/* If waiting, get off wait queue (should only be needed after error) */
 	LockErrorCleanup();
+	/* Release any relation extension lock or wait counts */
+	RelExtLockCleanup();
 	/* Release standard locks, including session-level if aborting */
 	LockReleaseAll(DEFAULT_LOCKMETHOD, !isCommit);
 	/* Release transaction-level advisory locks */

@@ -3,7 +3,7 @@ src/backend/storage/lmgr/README
 Locking Overview
 ================
 
-Postgres uses four types of interprocess locks:
+Postgres uses five types of interprocess locks:
 
 * Spinlocks.  These are intended for *very* short-term locks.  If a lock
 is to be held more than a few dozen instructions, or across any sort of
@@ -36,13 +36,21 @@ Regular locks should be used for all user-driven lock requests.
 
 * SIReadLock predicate locks.  See separate README-SSI file for details.
 
+* Relation extension locks. Only one process can extend a relation at
+a time; we use a specialized lock manager for this purpose, which is
+much simpler than the regular lock manager.  It is similar to the
+lightweight lock mechanism, but is ever simpler because there is only
+one lock mode and only one lock can be taken at a time. A process holding
+a relation extension lock is interruptible, unlike a process holding an
+LWLock.
+
 Acquisition of either a spinlock or a lightweight lock causes query
 cancel and die() interrupts to be held off until all such locks are
 released. No such restriction exists for regular locks, however.  Also
 note that we can accept query cancel and die() interrupts while waiting
-for a regular lock, but we will not accept them while waiting for
-spinlocks or LW locks. It is therefore not a good idea to use LW locks
-when the wait time might exceed a few seconds.
+for a relation extension lock or a regular lock, but we will not accept
+them while waiting for spinlocks or LW locks. It is therefore not a good
+idea to use LW locks when the wait time might exceed a few seconds.
 
 The rest of this README file discusses the regular lock manager in detail.
 

@@ -23,6 +23,7 @@
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
+#include "storage/extension_lock.h"
 #include "utils/index_selfuncs.h"
 #include "utils/lsyscache.h"
 
@@ -248,13 +249,13 @@ SpGistNewBuffer(Relation index)
 	/* Must extend the file */
 	needLock = !RELATION_IS_LOCAL(index);
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index);
 
 	buffer = ReadBuffer(index, P_NEW);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	return buffer;
 }

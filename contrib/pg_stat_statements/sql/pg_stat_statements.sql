@@ -195,4 +195,13 @@ DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
+-- test to see if any plans have been recorded.
+SELECT
+  CASE WHEN plan_time > 0 THEN 1 ELSE 0 END,
+  CASE WHEN plan_timestamp >= timestamp '1970-01-01 00:00:00' THEN 1 ELSE 0 END
+FROM pg_stat_statements_plans ORDER BY plan_timestamp;
+
+-- test if there is some text in the recorded plans.
+SELECT substr(plan, 0, 11) FROM pg_stat_statements_plans ORDER BY plan_timestamp;
+
 DROP EXTENSION pg_stat_statements;

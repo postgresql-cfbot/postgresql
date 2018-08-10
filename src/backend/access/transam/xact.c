@@ -2003,9 +2003,12 @@ CommitTransaction(void)
 	/*
 	 * Mark serializable transaction as complete for predicate locking
 	 * purposes.  This should be done as late as we can put it and still allow
-	 * errors to be raised for failure patterns found at commit.
+	 * errors to be raised for failure patterns found at commit.  This is not
+	 * appropriate in a parallel worker however, because we aren't committing
+	 * the leader's transaction and its serializable state will live on.
 	 */
-	PreCommit_CheckForSerializationFailure();
+	if (!is_parallel_worker)
+		PreCommit_CheckForSerializationFailure();
 
 	/*
 	 * Insert notifications sent by NOTIFY commands into the queue.  This
@@ -2231,9 +2234,12 @@ PrepareTransaction(void)
 	/*
 	 * Mark serializable transaction as complete for predicate locking
 	 * purposes.  This should be done as late as we can put it and still allow
-	 * errors to be raised for failure patterns found at commit.
+	 * errors to be raised for failure patterns found at commit.  This is not
+	 * appropriate for parallel workers however, because we aren't committing
+	 * the leader's transaction and its serializable state will live on.
 	 */
-	PreCommit_CheckForSerializationFailure();
+	if (!IsParallelWorker())
+		PreCommit_CheckForSerializationFailure();
 
 	/* NOTIFY will be handled below */
 

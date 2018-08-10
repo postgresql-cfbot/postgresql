@@ -638,6 +638,23 @@ static const SchemaQuery Query_for_list_of_constraints_with_schema = {
 	NULL
 };
 
+static const SchemaQuery Query_for_list_of_operator_families = {
+	/* min_server_version */
+	0,
+	/* catname */
+	"pg_catalog.pg_opfamily c",
+	/* selcondition */
+	NULL,
+	/* viscondition */
+	"true",
+	/* namespace */
+	"c.opfnamespace",
+	/* result */
+	"pg_catalog.quote_ident(c.opfname)",
+	/* qualresult */
+	NULL
+};
+
 /* Relations supporting INSERT, UPDATE or DELETE */
 static const SchemaQuery Query_for_list_of_updatables = {
 	/* min_server_version */
@@ -1618,7 +1635,7 @@ psql_completion(const char *text, int start, int end)
 		"\\a",
 		"\\connect", "\\conninfo", "\\C", "\\cd", "\\copy",
 		"\\copyright", "\\crosstabview",
-		"\\d", "\\da", "\\dA", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
+		"\\d", "\\da", "\\dA", "\\dAp", "\\dAfo", "\\dAfp", "\\dAf", "\\dAoc", "\\dicp", "\\dip", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
 		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp",
@@ -3635,6 +3652,10 @@ psql_completion(const char *text, int start, int end)
 	}
 	else if (TailMatchesCS1("\\da*"))
 		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
+	else if (TailMatchesCS1("\\dAf*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
+	else if (TailMatchesCS2("\\dAf*", MatchAny))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_operator_families, NULL);
 	else if (TailMatchesCS1("\\dA*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (TailMatchesCS1("\\db*"))

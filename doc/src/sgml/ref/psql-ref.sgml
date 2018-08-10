@@ -1203,6 +1203,95 @@ testdb=&gt;
         </para>
         </listitem>
       </varlistentry>
+      
+      <varlistentry>
+        <term>
+          <literal>\dAf
+          [ <link linkend="app-psql-patterns"><replaceable class="parameter">access-method-pattern</replaceable></link> 
+            [<link linkend="app-psql-patterns"><replaceable class="parameter">operator-family-pattern</replaceable></link>]]
+          </literal>
+        </term>
+
+        <listitem>
+        <para>
+        Lists operator families (<xref linkend="catalog-pg-opfamily-table"/>). If <replaceable class="parameter">access-method-pattern</replaceable> is specified, only
+        families whose access method name matches the pattern are shown.
+        If <replaceable class="parameter">operator-family-pattern</replaceable> is specified, only
+        opereator families associated with whose name matches the pattern are shown.
+        If <literal>+</literal> is appended to the command name, each operator
+        family is listed with it's owner.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>
+          <literal>\dAfo
+            [<link linkend="app-psql-patterns"><replaceable class="parameter">access-method-pattern</replaceable></link>
+              [<link linkend="app-psql-patterns"><replaceable class="parameter">operator-family-pattern</replaceable></link>]]
+          </literal>
+        </term>
+
+        <listitem>
+        <para>
+        Lists operators (<xref linkend="catalog-pg-amop-table"/>) associated with access method operator families.
+        If <replaceable class="parameter">access-method-patttern</replaceable> is specified,
+        only operators associated with access method whose name matches pattern are shown.
+        If <replaceable class="parameter">operator-family-pattern</replaceable> is specified, only
+        opereators associated with families whose name matches the pattern are shown.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>
+          <literal>\dAfp
+            [<link linkend="app-psql-patterns"><replaceable class="parameter">access-method-pattern</replaceable></link>
+              [<link linkend="app-psql-patterns"><replaceable class="parameter">operator-family-pattern</replaceable></link>]]
+          </literal>
+        </term>
+        <listitem>
+        <para>
+        List procedures (<xref linkend="catalog-pg-amproc-table"/>) accociated with access method operator families.
+        If <replaceable class="parameter">access-method-patttern</replaceable> is specified,
+        only procedures associated with access method whose name matches pattern are shown.
+        If <replaceable class="parameter">operator-family-pattern</replaceable> is specified, only
+        procedures associated with families whose name matches the pattern are shown.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term>
+          <literal>\dAop
+            [<link linkend="app-psql-patterns"><replaceable class="parameter">access-method-pattern</replaceable></link>
+              [<link linkend="app-psql-patterns"><replaceable class="parameter">operator-class-pattern</replaceable></link>]]
+          </literal>
+        </term>
+        <listitem>
+        <para>
+        Shows index access method operator classes listed in <xref linkend="catalog-pg-opclass-table"/>.
+        If <replaceable class="parameter">access-method-patttern</replaceable> is specified,
+        only operator classes associated with access method whose name matches pattern are shown.
+        If <replaceable class="parameter">operator-class-pattern</replaceable> is specified, only
+        procedures associated with families whose name matches the pattern are shown.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
+        <term><literal>\dAp [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+
+        <listitem>
+        <para>
+        Shows access method properties listed in <xref
+         linkend="functions-info-indexam-props"/>. If <replaceable
+        class="parameter">pattern</replaceable> is specified, only access
+        methods whose names match the pattern are shown.
+        </para>
+        </listitem>
+      </varlistentry>
 
       <varlistentry>
         <term><literal>\db[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
@@ -1351,6 +1440,35 @@ testdb=&gt;
         </listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><literal>\dip [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+
+        <listitem>
+        <para>
+        Shows index properties listed in <xref
+        linkend="functions-info-index-props"/>. If <replaceable
+        class="parameter">pattern</replaceable> is specified, only access
+        methods whose names match the pattern are shown.
+        </para>
+        </listitem>        
+      </varlistentry>
+
+      <varlistentry>
+        <term>
+          <literal>\dicp [ <link linkend="app-psql-patterns"><replaceable class="parameter">index-name-pattern</replaceable></link>
+                              [ <link linkend="app-psql-patterns"><replaceable class="parameter">column-name-pattern</replaceable></link> ]]
+          </literal>
+        </term>
+
+        <listitem>
+        <para>
+        Shows index column properties listed in <xref
+        linkend="functions-info-index-column-props"/>. If <replaceable
+        class="parameter">column_name</replaceable> is specified, only column
+        with such name is shown.
+        </para>
+        </listitem>
+      </varlistentry>
 
       <varlistentry>
         <term><literal>\des[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>

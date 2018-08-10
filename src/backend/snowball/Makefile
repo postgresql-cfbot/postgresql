@@ -23,13 +23,13 @@ OBJS= $(WIN32RES) dict_snowball.o api.o utilities.o \
 	stem_ISO_8859_1_finnish.o \
 	stem_ISO_8859_1_french.o \
 	stem_ISO_8859_1_german.o \
-	stem_ISO_8859_1_hungarian.o \
 	stem_ISO_8859_1_italian.o \
 	stem_ISO_8859_1_norwegian.o \
 	stem_ISO_8859_1_porter.o \
 	stem_ISO_8859_1_portuguese.o \
 	stem_ISO_8859_1_spanish.o \
 	stem_ISO_8859_1_swedish.o \
+	stem_ISO_8859_2_hungarian.o \
 	stem_ISO_8859_2_romanian.o \
 	stem_KOI8_R_russian.o \
 	stem_UTF_8_danish.o \

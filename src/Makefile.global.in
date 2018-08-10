@@ -244,7 +244,13 @@ CPPFLAGS = @CPPFLAGS@
 
 override CPPFLAGS := $(ICU_CFLAGS) $(CPPFLAGS)
 
+ifdef USE_INSTALLED_ASSETS
+USE_INCLUDEDIR = 1
+endif
 ifdef PGXS
+USE_INCLUDEDIR = 1
+endif
+ifdef USE_INCLUDEDIR
 override CPPFLAGS := -I$(includedir_server) -I$(includedir_internal) $(CPPFLAGS)
 else # not PGXS
 override CPPFLAGS := -I$(top_srcdir)/src/include $(CPPFLAGS)
@@ -305,7 +311,13 @@ with_gnu_ld = @with_gnu_ld@
 # "LDFLAGS := something" anywhere, ditto for LDFLAGS_INTERNAL.
 # These initial assignments must be "=" type, and elsewhere we must only do
 # "LDFLAGS += something" or "LDFLAGS_INTERNAL += something".
+ifdef USE_INSTALLED_ASSETS
+  USE_LIBDIR = 1
+endif
 ifdef PGXS
+  USE_LIBDIR = 1
+endif
+ifdef USE_LIBDIR
   LDFLAGS_INTERNAL = -L$(libdir)
 else
   LDFLAGS_INTERNAL = -L$(top_builddir)/src/port -L$(top_builddir)/src/common

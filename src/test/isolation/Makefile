@@ -9,11 +9,20 @@ subdir = src/test/isolation
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+# we need to build these libs only when we don't use installed ones
+ifndef USE_INSTALLED_ASSETS
+SUBMAKE_LIBPGPORT = submake-libpgport
+SUBMAKE_LIBPQ = submake-libpq
+endif
+
 override CPPFLAGS := -I$(srcdir) -I$(libpq_srcdir) -I$(srcdir)/../regress $(CPPFLAGS)
 
 OBJS =  specparse.o isolationtester.o $(WIN32RES)
 
 all: isolationtester$(X) pg_isolation_regress$(X)
+
+installed_all:
+	USE_INSTALLED_ASSETS=1 $(MAKE) all
 
 # Though we don't install these binaries, build them during installation
 # (including temp-install).  Otherwise, "make -j check-world" and "make -j
@@ -31,7 +40,7 @@ pg_regress.o: | submake-regress
 pg_isolation_regress$(X): isolation_main.o pg_regress.o $(WIN32RES)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
 
-isolationtester$(X): $(OBJS) | submake-libpq submake-libpgport
+isolationtester$(X): $(OBJS) | $(SUBMAKE_LIBPQ) $(SUBMAKE_LIBPGPORT)
 	$(CC) $(CFLAGS) $^ $(libpq_pgport) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
 
 distprep: specparse.c specscanner.c
@@ -49,7 +58,7 @@ clean distclean:
 maintainer-clean: distclean
 	rm -f specparse.c specscanner.c
 
-installcheck: all
+installcheck: installed_all
 	$(pg_isolation_regress_installcheck) --schedule=$(srcdir)/isolation_schedule
 
 check: all

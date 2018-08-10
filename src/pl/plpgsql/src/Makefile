@@ -76,13 +76,16 @@ plerrcodes.h: $(top_srcdir)/src/backend/utils/errcodes.txt generate-plerrcodes.p
 check: submake
 	$(pg_regress_check) $(REGRESS_OPTS) $(REGRESS)
 
-installcheck: submake
+installcheck: installed_submake
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 
 .PHONY: submake
 submake:
 	$(MAKE) -C $(top_builddir)/src/test/regress pg_regress$(X)
 
+.PHONY: installed_submake
+installed_submake:
+	USE_INSTALLED_ASSETS=1 $(MAKE) -C $(top_builddir)/src/test/regress pg_regress$(X)
 
 distprep: pl_gram.h pl_gram.c plerrcodes.h
 

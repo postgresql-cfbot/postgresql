@@ -4231,6 +4231,205 @@ select 1 from (select a.id FROM a left join b on a.b_id = b.id) q,
          Filter: (a.id = i)
 (4 rows)
 
+-- check join removal works without a unique index on the left joined table
+-- when a DISTINCT or GROUP BY is present which would remove row duplication
+explain (costs off)
+select distinct a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a;
+               QUERY PLAN                
+-----------------------------------------
+ HashAggregate
+   Group Key: a.id, a.b_id, b.id, b.c_id
+   ->  Hash Left Join
+         Hash Cond: (a.b_id = b.id)
+         ->  Seq Scan on a
+         ->  Hash
+               ->  Seq Scan on b
+(7 rows)
+
+-- as above but with DISTINCT ON
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+                QUERY PLAN                
+------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: a.id, b.id, a.b_id
+         ->  Hash Left Join
+               Hash Cond: (a.b_id = b.id)
+               ->  Seq Scan on a
+               ->  Hash
+                     ->  Seq Scan on b
+(8 rows)
+
+-- as above but with GROUP BY
+explain (costs off)
+select a.id,b.id from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+             QUERY PLAN             
+------------------------------------
+ HashAggregate
+   Group Key: a.id, b.id
+   ->  Hash Left Join
+         Hash Cond: (a.b_id = b.id)
+         ->  Seq Scan on a
+         ->  Hash
+               ->  Seq Scan on b
+(7 rows)
+
+-- also ensure the removal works with other relation types.
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a
+left join b on a.b_id = b.id
+left join (values(1),(1)) d(a)
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+                QUERY PLAN                
+------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: a.id, b.id, a.b_id
+         ->  Hash Left Join
+               Hash Cond: (a.b_id = b.id)
+               ->  Seq Scan on a
+               ->  Hash
+                     ->  Seq Scan on b
+(8 rows)
+
+-- ensure no join removal when we must aggregate any duplicated rows
+explain (costs off)
+select a.id,b.id,count(*) from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+                   QUERY PLAN                   
+------------------------------------------------
+ HashAggregate
+   Group Key: a.id, b.id
+   ->  Merge Left Join
+         Merge Cond: (a.b_id = d.a)
+         ->  Sort
+               Sort Key: a.b_id
+               ->  Hash Left Join
+                     Hash Cond: (a.b_id = b.id)
+                     ->  Seq Scan on a
+                     ->  Hash
+                           ->  Seq Scan on b
+         ->  Sort
+               Sort Key: d.a
+               ->  Seq Scan on d
+(14 rows)
+
+-- removal of left joins using distinct or group by instead of a unique index
+-- matching the join condition of the left joined table must be disallowed if
+-- the query contains a lateral joined volatile function.  A reduction in the
+-- number of rows produced by the join could affect the number of evaluations
+-- of the volatile function.
+create or replace function vseries(pstart int, pend int) returns setof int as $$
+begin
+	while pstart <= pend
+	loop
+		raise notice '%', pstart;
+		return next pstart;
+		pstart := pstart + 1;
+	end loop;
+end;
+$$ volatile language plpgsql;
+-- ensure join to "d" is not removed (DISTINCT)
+explain (costs off)
+select distinct a.* from a left join d on a.id = d.a, lateral vseries(a.id, a.id);
+              QUERY PLAN               
+---------------------------------------
+ HashAggregate
+   Group Key: a.id, a.b_id
+   ->  Nested Loop
+         ->  Hash Right Join
+               Hash Cond: (d.a = a.id)
+               ->  Seq Scan on d
+               ->  Hash
+                     ->  Seq Scan on a
+         ->  Function Scan on vseries
+(9 rows)
+
+-- ensure join to "d" is not removed (GROUP BY)
+explain (costs off)
+select a.id from a left join d on a.id = d.a, lateral vseries(a.id, a.id) group by a.id;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Group
+   Group Key: a.id
+   ->  Nested Loop
+         ->  Merge Left Join
+               Merge Cond: (a.id = d.a)
+               ->  Index Only Scan using a_pkey on a
+               ->  Sort
+                     Sort Key: d.a
+                     ->  Seq Scan on d
+         ->  Function Scan on vseries
+(10 rows)
+
+-- ensure that the join to "d" is removed when the function is not volatile (DISTINCT)
+explain (costs off)
+select distinct a.* from a left join d on a.id = d.a, lateral generate_series(a.id, a.id);
+                  QUERY PLAN                  
+----------------------------------------------
+ HashAggregate
+   Group Key: a.id, a.b_id
+   ->  Nested Loop
+         ->  Seq Scan on a
+         ->  Function Scan on generate_series
+(5 rows)
+
+-- ensure that the join to "d" is removed when the function is not volatile (GROUP BY)
+explain (costs off)
+select a.id from a left join d on a.id = d.a, lateral generate_series(a.id, a.id) group by a.id;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Group
+   Group Key: a.id
+   ->  Nested Loop
+         ->  Index Only Scan using a_pkey on a
+         ->  Function Scan on generate_series
+(5 rows)
+
+create or replace function notice(pn int) returns int as $$
+begin
+	raise notice '%', pn;
+	return pn;
+end;
+$$ volatile language plpgsql;
+-- ensure join to "d" can be removed despite the volatile function in the target list.
+explain (costs off)
+select distinct on (a.id) notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Result
+   ->  Unique
+         ->  Index Only Scan using a_pkey on a
+(3 rows)
+
+-- ensure the volatile function is just executed once per a.id
+select distinct on (a.id) notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+NOTICE:  0
+NOTICE:  1
+ notice 
+--------
+      0
+      1
+(2 rows)
+
+-- and it should be evaulated multiple times when there's no distinct on.
+select notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+NOTICE:  0
+NOTICE:  0
+NOTICE:  0
+NOTICE:  1
+ notice 
+--------
+      0
+      0
+      0
+      1
+(4 rows)
+
 rollback;
 create temp table parent (k int primary key, pd int);
 create temp table child (k int unique, cd int);

@@ -1412,6 +1412,84 @@ explain (costs off)
 select 1 from (select a.id FROM a left join b on a.b_id = b.id) q,
 			  lateral generate_series(1, q.id) gs(i) where q.id = gs.i;
 
+-- check join removal works without a unique index on the left joined table
+-- when a DISTINCT or GROUP BY is present which would remove row duplication
+explain (costs off)
+select distinct a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a;
+
+-- as above but with DISTINCT ON
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+
+-- as above but with GROUP BY
+explain (costs off)
+select a.id,b.id from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+
+-- also ensure the removal works with other relation types.
+explain (costs off)
+select distinct on (a.id,b.id) a.*,b.* from a
+left join b on a.b_id = b.id
+left join (values(1),(1)) d(a)
+	on a.b_id = d.a order by a.id,b.id,a.b_id;
+
+-- ensure no join removal when we must aggregate any duplicated rows
+explain (costs off)
+select a.id,b.id,count(*) from a left join b on a.b_id = b.id left join d
+	on a.b_id = d.a group by a.id,b.id;
+
+-- removal of left joins using distinct or group by instead of a unique index
+-- matching the join condition of the left joined table must be disallowed if
+-- the query contains a lateral joined volatile function.  A reduction in the
+-- number of rows produced by the join could affect the number of evaluations
+-- of the volatile function.
+
+create or replace function vseries(pstart int, pend int) returns setof int as $$
+begin
+	while pstart <= pend
+	loop
+		raise notice '%', pstart;
+		return next pstart;
+		pstart := pstart + 1;
+	end loop;
+end;
+$$ volatile language plpgsql;
+
+-- ensure join to "d" is not removed (DISTINCT)
+explain (costs off)
+select distinct a.* from a left join d on a.id = d.a, lateral vseries(a.id, a.id);
+
+-- ensure join to "d" is not removed (GROUP BY)
+explain (costs off)
+select a.id from a left join d on a.id = d.a, lateral vseries(a.id, a.id) group by a.id;
+
+-- ensure that the join to "d" is removed when the function is not volatile (DISTINCT)
+explain (costs off)
+select distinct a.* from a left join d on a.id = d.a, lateral generate_series(a.id, a.id);
+
+-- ensure that the join to "d" is removed when the function is not volatile (GROUP BY)
+explain (costs off)
+select a.id from a left join d on a.id = d.a, lateral generate_series(a.id, a.id) group by a.id;
+
+create or replace function notice(pn int) returns int as $$
+begin
+	raise notice '%', pn;
+	return pn;
+end;
+$$ volatile language plpgsql;
+
+-- ensure join to "d" can be removed despite the volatile function in the target list.
+explain (costs off)
+select distinct on (a.id) notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+
+-- ensure the volatile function is just executed once per a.id
+select distinct on (a.id) notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+
+-- and it should be evaulated multiple times when there's no distinct on.
+select notice(a.id) from a left join d on a.id = d.a - d.a order by a.id;
+
 rollback;
 
 create temp table parent (k int primary key, pd int);

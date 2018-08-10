@@ -1019,3 +1019,33 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 	return added_clause;
 #undef WHEREAND
 }
+
+/*
+ * findUnquotedChar
+ *
+ * Scan a string and return a pointer to the first character that
+ * matches a given character, which isn't in double-quotes.
+ *
+ * For example, searching for a colon inside of:
+ *    'hello"this:is:in:quotes"but:this:is:not'
+ * would return a pointer to this ^ colon.  (the one after 'but')
+ *
+ * Returns NULL if not found.
+ *
+ * str: string to scan.
+ * find_char: character to find.
+ */
+const char *
+findUnquotedChar(const char *str, char find_char)
+{
+	const char *p = str;
+	bool inquotes = false;
+
+	while (*p++) {
+		if (*p == '"')
+			inquotes = !inquotes;
+		else if ((*p == find_char) && !inquotes)
+			return p;
+	}
+	return NULL;
+}

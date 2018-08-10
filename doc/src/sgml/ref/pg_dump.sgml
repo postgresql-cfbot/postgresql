@@ -1052,6 +1052,24 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--where=<replaceable class="parameter">table</replaceable>:<replaceable class="parameter">filter_clause</replaceable></option></term>
+      <listitem>
+       <para>
+        When dumping data for any tables matching the <replaceable
+        class="parameter">table</replaceable> pattern, only include rows
+        that meet the <replaceable class="parameter">filter_clause</replaceable> condition.
+        This option is useful when you want to dump only a subset of a particular table.
+        The table pattern is interpreted according to the same rules as for <option>-t</option>.
+        <option>--where</option> can be given more than once to
+        provide different filters for multiple tables.
+        Note that if multiple options refer to the same table, only the first filter_clause will be applied.
+        If necessary, use quotes in your shell to provide an argument that contains spaces.
+        E.g. --where=mytable:"created_at >= '2018-01-01' AND test = 'f'"
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
        <term><option>-?</option></term>
        <term><option>--help</option></term>
        <listitem>

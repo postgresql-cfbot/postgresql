@@ -25,11 +25,30 @@
 void
 simple_oid_list_append(SimpleOidList *list, Oid val)
 {
+	simple_oid_list_append_data(list, val, NULL);
+}
+
+/*
+ * Is OID present in the list?
+ */
+bool
+simple_oid_list_member(SimpleOidList *list, Oid val)
+{
+	return simple_oid_list_find_data(list, val, NULL);
+}
+
+/*
+ * Append an OID to the list, along with extra pointer-sized data.
+ */
+void
+simple_oid_list_append_data(SimpleOidList *list, Oid val, void *extra_data)
+{
 	SimpleOidListCell *cell;
 
 	cell = (SimpleOidListCell *) pg_malloc(sizeof(SimpleOidListCell));
 	cell->next = NULL;
 	cell->val = val;
+	cell->extra_data = extra_data;
 
 	if (list->tail)
 		list->tail->next = cell;
@@ -40,16 +59,21 @@ simple_oid_list_append(SimpleOidList *list, Oid val)
 
 /*
  * Is OID present in the list?
+ * If so, return true, and provide pointer-sized data by setting result of extra_data parameter.
+ * If not, return false.
  */
 bool
-simple_oid_list_member(SimpleOidList *list, Oid val)
+simple_oid_list_find_data(SimpleOidList *list, Oid val, void **extra_data)
 {
 	SimpleOidListCell *cell;
 
 	for (cell = list->head; cell; cell = cell->next)
 	{
-		if (cell->val == val)
+		if (cell->val == val) {
+			if (extra_data)
+				*extra_data = cell->extra_data;
 			return true;
+		}
 	}
 	return false;
 }

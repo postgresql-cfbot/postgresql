@@ -45,8 +45,17 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/time.h>
+#ifndef PGBENCH_USE_SELECT			/* force use of select(2)? */
+#ifdef HAVE_PPOLL
+#define POLL_USING_PPOLL
+#include <poll.h>
+#endif
+#endif
+#ifndef POLL_USING_PPOLL
+#define POLL_USING_SELECT
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#endif
 #endif
 
 #ifdef HAVE_SYS_RESOURCE_H
@@ -92,13 +101,19 @@ static int	pthread_join(pthread_t th, void **thread_return);
 
 /********************************************************************
  * some configurable parameters */
-
-/* max number of clients allowed */
+#ifdef POLL_USING_SELECT	/* using select(2) */
+#define SOCKET_WAIT_METHOD "select"
+typedef fd_set socket_set;
 #ifdef FD_SETSIZE
-#define MAXCLIENTS	(FD_SETSIZE - 10)
+#define MAXCLIENTS	(FD_SETSIZE - 10) /* system limited max number of clients allowed */
 #else
-#define MAXCLIENTS	1024
+#define MAXCLIENTS	1024		/* max number of clients allowed */
 #endif
+#else	/* using ppoll(2) */
+#define SOCKET_WAIT_METHOD "ppoll"
+typedef struct pollfd socket_set;
+#define MAXCLIENTS	-1		/* unlimited number of clients */
+#endif /* POLL_USING_SELECT */
 
 #define DEFAULT_INIT_STEPS "dtgvp"	/* default -I setting */
 
@@ -525,6 +540,13 @@ static void addScript(ParsedScript script);
 static void *threadRun(void *arg);
 static void setalarm(int seconds);
 static void finishCon(CState *st);
+static socket_set *alloc_socket_set(int count);
+static bool error_on_socket(socket_set *sa, int idx, PGconn *con);
+static void free_socket_set(socket_set *sa);
+static bool ignore_socket(socket_set *sa, int idx, PGconn *con);
+static void clear_socket_set(socket_set *sa, int count);
+static void set_socket(socket_set *sa, int fd, int idx);
+static int wait_on_socket_set(socket_set *sa, int nstate, int maxsock, int64 usec);
 
 
 /* callback functions for our flex lexer */
@@ -1143,6 +1165,7 @@ doConnect(void)
 			!have_password)
 		{
 			PQfinish(conn);
+			conn = NULL;
 			simple_prompt("Password: ", password, sizeof(password), false);
 			have_password = true;
 			new_pass = true;
@@ -4903,7 +4926,7 @@ main(int argc, char **argv)
 			case 'c':
 				benchmarking_option_set = true;
 				nclients = atoi(optarg);
-				if (nclients <= 0 || nclients > MAXCLIENTS)
+				if (nclients <= 0 || (MAXCLIENTS != -1 && nclients > MAXCLIENTS))
 				{
 					fprintf(stderr, "invalid number of clients: \"%s\"\n",
 							optarg);
@@ -5614,6 +5637,7 @@ threadRun(void *arg)
 	int64		next_report = last_report + (int64) progress * 1000000;
 	StatsData	last,
 				aggs;
+	socket_set	*sockets = alloc_socket_set(nstate);
 
 	/*
 	 * Initialize throttling rate target for all of the thread's clients.  It
@@ -5657,6 +5681,7 @@ threadRun(void *arg)
 		{
 			if ((state[i].con = doConnect()) == NULL)
 				goto done;
+			set_socket(sockets, PQsocket(state[i].con), i);
 		}
 	}
 
@@ -5673,13 +5698,12 @@ threadRun(void *arg)
 	/* loop till all clients have terminated */
 	while (remains > 0)
 	{
-		fd_set		input_mask;
 		int			maxsock;	/* max socket number to be waited for */
 		int64		min_usec;
 		int64		now_usec = 0;	/* set this only if needed */
 
 		/* identify which client sockets should be checked for input */
-		FD_ZERO(&input_mask);
+		clear_socket_set(sockets, nstate);
 		maxsock = -1;
 		min_usec = PG_INT64_MAX;
 		for (i = 0; i < nstate; i++)
@@ -5728,7 +5752,7 @@ threadRun(void *arg)
 					goto done;
 				}
 
-				FD_SET(sock, &input_mask);
+				set_socket(sockets, sock, i);
 				if (maxsock < sock)
 					maxsock = sock;
 			}
@@ -5765,7 +5789,7 @@ threadRun(void *arg)
 		/*
 		 * If no clients are ready to execute actions, sleep until we receive
 		 * data from the server, or a nap-time specified in the script ends,
-		 * or it's time to print a progress report.  Update input_mask to show
+		 * or it's time to print a progress report.  Update sockets to show
 		 * which client(s) received data.
 		 */
 		if (min_usec > 0)
@@ -5776,11 +5800,7 @@ threadRun(void *arg)
 			{
 				if (maxsock != -1)
 				{
-					struct timeval timeout;
-
-					timeout.tv_sec = min_usec / 1000000;
-					timeout.tv_usec = min_usec % 1000000;
-					nsocks = select(maxsock + 1, &input_mask, NULL, NULL, &timeout);
+					nsocks = wait_on_socket_set(sockets, nstate, maxsock, min_usec);
 				}
 				else			/* nothing active, simple sleep */
 				{
@@ -5789,7 +5809,7 @@ threadRun(void *arg)
 			}
 			else				/* no explicit delay, select without timeout */
 			{
-				nsocks = select(maxsock + 1, &input_mask, NULL, NULL, NULL);
+				nsocks = wait_on_socket_set(sockets, nstate, maxsock, 0);
 			}
 
 			if (nsocks < 0)
@@ -5800,7 +5820,7 @@ threadRun(void *arg)
 					continue;
 				}
 				/* must be something wrong */
-				fprintf(stderr, "select() failed: %s\n", strerror(errno));
+				fprintf(stderr, "%s() failed: %s\n", SOCKET_WAIT_METHOD, strerror(errno));
 				goto done;
 			}
 		}
@@ -5809,7 +5829,7 @@ threadRun(void *arg)
 			/* min_usec == 0, i.e. something needs to be executed */
 
 			/* If we didn't call select(), don't try to read any data */
-			FD_ZERO(&input_mask);
+			clear_socket_set(sockets, nstate);
 		}
 
 		/* ok, advance the state machine of each connection */
@@ -5820,16 +5840,11 @@ threadRun(void *arg)
 			if (st->state == CSTATE_WAIT_RESULT)
 			{
 				/* don't call doCustom unless data is available */
-				int			sock = PQsocket(st->con);
 
-				if (sock < 0)
-				{
-					fprintf(stderr, "invalid socket: %s",
-							PQerrorMessage(st->con));
+				if (error_on_socket(sockets, i, st->con))
 					goto done;
-				}
 
-				if (!FD_ISSET(sock, &input_mask))
+				if (ignore_socket(sockets, i, st->con))
 					continue;
 			}
 			else if (st->state == CSTATE_FINISHED ||
@@ -5967,6 +5982,8 @@ done:
 		fclose(thread->logfile);
 		thread->logfile = NULL;
 	}
+	free_socket_set(sockets);
+	sockets = NULL;
 	return NULL;
 }
 
@@ -5979,6 +5996,135 @@ finishCon(CState *st)
 		st->con = NULL;
 	}
 }
+
+#ifdef POLL_USING_SELECT	/* select(2) based socket polling */
+static socket_set *
+alloc_socket_set(int count)
+{
+	return (socket_set *) pg_malloc0(sizeof(socket_set));
+}
+
+static void
+free_socket_set(socket_set *sa)
+{
+	pg_free(sa);
+}
+
+static bool
+error_on_socket(socket_set *sa, int idx, PGconn *con)
+{
+	if (PQsocket(con) >= 0) return false;
+	fprintf(stderr, "invalid socket: %s", PQerrorMessage(con));
+	return true;
+}
+
+static bool
+ignore_socket(socket_set *sa, int idx, PGconn *con)
+{
+	return !(FD_ISSET(PQsocket(con), sa));
+}
+
+static void
+clear_socket_set(socket_set *sa, int count)
+{
+	FD_ZERO(sa);
+}
+
+static void
+set_socket(socket_set *sa, int fd, int idx)
+{
+	FD_SET(fd, sa);
+}
+
+static int
+wait_on_socket_set(socket_set *sa, int nstate, int maxsock, int64 usec)
+{
+	struct timeval timeout;
+
+	if (usec)
+	{
+		timeout.tv_sec = usec / 1000000;
+		timeout.tv_usec = usec % 1000000;
+		return select(maxsock + 1, sa, NULL, NULL, &timeout);
+	}
+	else
+	{
+		return select(maxsock + 1, sa, NULL, NULL, NULL);
+	}
+}
+#else	/* ppoll(2) based socket polling */
+/* ppoll() will block until timeout or one of POLL_EVENTS occurs. */
+#define POLL_EVENTS (POLLRDHUP|POLLIN|POLLPRI)
+/* ppoll() events returned that we do not want/expect to see. */
+#define POLL_UNWANTED (POLLRDHUP|POLLERR|POLLHUP|POLLNVAL)
+
+static socket_set *
+alloc_socket_set(int count)
+{
+	return (socket_set *) pg_malloc0(sizeof(socket_set) * count);
+}
+
+static void
+free_socket_set(socket_set *sa)
+{
+	pg_free(sa);
+}
+
+static bool
+error_on_socket(socket_set *sa, int idx, PGconn *con)
+{
+	/*
+	 * No error if socket not used or non-error status from PQsocket() and none
+	 * of the unwanted ppoll() return events.
+	 */
+	if (sa[idx].fd == -1 || (PQsocket(con) >= 0 && !(sa[idx].revents & POLL_UNWANTED)))
+		return false;
+	fprintf(stderr, "invalid socket: %s", PQerrorMessage(con));
+	if (debug)
+		fprintf(stderr, "ppoll() fail - errno: %d, socket: %d, events: %x\n",
+			errno, sa[idx].fd, (sa[idx].revents & POLL_UNWANTED));
+	return true;
+}
+
+static bool
+ignore_socket(socket_set *sa, int idx, PGconn *con)
+{
+	return (sa[idx].fd != -1 && !sa[idx].revents);
+}
+
+static void
+clear_socket_set(socket_set *sa, int count)
+{
+	int i = 0;
+	for (i = 0; i < count; i++)
+		set_socket(sa, -1, i);
+}
+
+static void
+set_socket(socket_set *sa, int fd, int idx)
+{
+	sa[idx].fd = fd;
+	sa[idx].events = POLL_EVENTS;
+	sa[idx].revents = 0;
+}
+
+static int
+wait_on_socket_set(socket_set *sa, int nstate, int maxsock, int64 usec)
+{
+	struct timespec timeout;
+
+	if (usec)
+	{
+		timeout.tv_sec = usec / 1000000;
+		timeout.tv_nsec = usec % 1000000000;
+		return ppoll(sa, nstate, &timeout, NULL);
+	}
+	else
+	{
+		return ppoll(sa, nstate, NULL, NULL);
+	}
+}
+#endif	/* PGBENCH_USE_SELECT */
 
 /*
  * Support for duration option: set timer_exceeded after so many seconds.

@@ -65,6 +65,8 @@ extern Agg *make_agg(List *tlist, List *qual,
 		 List *groupingSets, List *chain,
 		 double dNumGroups, Plan *lefttree);
 extern Limit *make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount);
+extern List *order_qual_clauses(PlannerInfo *root, List *clauses);
+
 
 /*
  * prototypes for plan/initsplan.c

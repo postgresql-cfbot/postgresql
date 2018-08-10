@@ -2221,17 +2221,16 @@ SELECT * FROM v1 WHERE a=8;
 
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE v1 SET a=100 WHERE snoop(a) AND leakproof(a) AND a < 7 AND a != 6;
-                                                        QUERY PLAN                                                         
----------------------------------------------------------------------------------------------------------------------------
+                                                                         QUERY PLAN                                                                          
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.t1
    Update on public.t1
    Update on public.t11
    Update on public.t12
    Update on public.t111
-   ->  Index Scan using t1_a_idx on public.t1
+   ->  Seq Scan on public.t1
          Output: 100, t1.b, t1.c, t1.ctid
-         Index Cond: ((t1.a > 5) AND (t1.a < 7))
-         Filter: ((t1.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t1.a) AND leakproof(t1.a))
+         Filter: ((t1.a > 5) AND (t1.a < 7) AND (t1.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t1.a) AND leakproof(t1.a))
          SubPlan 1
            ->  Append
                  ->  Seq Scan on public.t12 t12_1
@@ -2244,19 +2243,16 @@ UPDATE v1 SET a=100 WHERE snoop(a) AND leakproof(a) AND a < 7 AND a != 6;
                        Output: t12_2.a
                  ->  Seq Scan on public.t111 t111_2
                        Output: t111_2.a
-   ->  Index Scan using t11_a_idx on public.t11
+   ->  Seq Scan on public.t11
          Output: 100, t11.b, t11.c, t11.d, t11.ctid
-         Index Cond: ((t11.a > 5) AND (t11.a < 7))
-         Filter: ((t11.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t11.a) AND leakproof(t11.a))
-   ->  Index Scan using t12_a_idx on public.t12
+         Filter: ((t11.a > 5) AND (t11.a < 7) AND (t11.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t11.a) AND leakproof(t11.a))
+   ->  Seq Scan on public.t12
          Output: 100, t12.b, t12.c, t12.e, t12.ctid
-         Index Cond: ((t12.a > 5) AND (t12.a < 7))
-         Filter: ((t12.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t12.a) AND leakproof(t12.a))
-   ->  Index Scan using t111_a_idx on public.t111
+         Filter: ((t12.a > 5) AND (t12.a < 7) AND (t12.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t12.a) AND leakproof(t12.a))
+   ->  Seq Scan on public.t111
          Output: 100, t111.b, t111.c, t111.d, t111.e, t111.ctid
-         Index Cond: ((t111.a > 5) AND (t111.a < 7))
-         Filter: ((t111.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t111.a) AND leakproof(t111.a))
-(33 rows)
+         Filter: ((t111.a > 5) AND (t111.a < 7) AND (t111.a <> 6) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t111.a) AND leakproof(t111.a))
+(29 rows)
 
 UPDATE v1 SET a=100 WHERE snoop(a) AND leakproof(a) AND a < 7 AND a != 6;
 SELECT * FROM v1 WHERE a=100; -- Nothing should have been changed to 100
@@ -2271,17 +2267,16 @@ SELECT * FROM t1 WHERE a=100; -- Nothing should have been changed to 100
 
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE v1 SET a=a+1 WHERE snoop(a) AND leakproof(a) AND a = 8;
-                                               QUERY PLAN                                                
----------------------------------------------------------------------------------------------------------
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.t1
    Update on public.t1
    Update on public.t11
    Update on public.t12
    Update on public.t111
-   ->  Index Scan using t1_a_idx on public.t1
+   ->  Seq Scan on public.t1
          Output: (t1.a + 1), t1.b, t1.c, t1.ctid
-         Index Cond: ((t1.a > 5) AND (t1.a = 8))
-         Filter: ((alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t1.a) AND leakproof(t1.a))
+         Filter: ((t1.a > 5) AND (t1.a = 8) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t1.a) AND leakproof(t1.a))
          SubPlan 1
            ->  Append
                  ->  Seq Scan on public.t12 t12_1
@@ -2294,19 +2289,16 @@ UPDATE v1 SET a=a+1 WHERE snoop(a) AND leakproof(a) AND a = 8;
                        Output: t12_2.a
                  ->  Seq Scan on public.t111 t111_2
                        Output: t111_2.a
-   ->  Index Scan using t11_a_idx on public.t11
+   ->  Seq Scan on public.t11
          Output: (t11.a + 1), t11.b, t11.c, t11.d, t11.ctid
-         Index Cond: ((t11.a > 5) AND (t11.a = 8))
-         Filter: ((alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t11.a) AND leakproof(t11.a))
-   ->  Index Scan using t12_a_idx on public.t12
+         Filter: ((t11.a > 5) AND (t11.a = 8) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t11.a) AND leakproof(t11.a))
+   ->  Seq Scan on public.t12
          Output: (t12.a + 1), t12.b, t12.c, t12.e, t12.ctid
-         Index Cond: ((t12.a > 5) AND (t12.a = 8))
-         Filter: ((alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t12.a) AND leakproof(t12.a))
-   ->  Index Scan using t111_a_idx on public.t111
+         Filter: ((t12.a > 5) AND (t12.a = 8) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t12.a) AND leakproof(t12.a))
+   ->  Seq Scan on public.t111
          Output: (t111.a + 1), t111.b, t111.c, t111.d, t111.e, t111.ctid
-         Index Cond: ((t111.a > 5) AND (t111.a = 8))
-         Filter: ((alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t111.a) AND leakproof(t111.a))
-(33 rows)
+         Filter: ((t111.a > 5) AND (t111.a = 8) AND (alternatives: SubPlan 1 or hashed SubPlan 2) AND snoop(t111.a) AND leakproof(t111.a))
+(29 rows)
 
 UPDATE v1 SET a=a+1 WHERE snoop(a) AND leakproof(a) AND a = 8;
 NOTICE:  snooped value: 8

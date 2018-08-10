@@ -281,25 +281,6 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 	UnlockReleaseBuffer(firstbuffer);
 }
 
-static void
-gistRedoCreateIndex(XLogReaderState *record)
-{
-	XLogRecPtr	lsn = record->EndRecPtr;
-	Buffer		buffer;
-	Page		page;
-
-	buffer = XLogInitBufferForRedo(record, 0);
-	Assert(BufferGetBlockNumber(buffer) == GIST_ROOT_BLKNO);
-	page = (Page) BufferGetPage(buffer);
-
-	GISTInitBuffer(buffer, F_LEAF);
-
-	PageSetLSN(page, lsn);
-
-	MarkBufferDirty(buffer);
-	UnlockReleaseBuffer(buffer);
-}
-
 void
 gist_redo(XLogReaderState *record)
 {
@@ -320,9 +301,6 @@ gist_redo(XLogReaderState *record)
 			break;
 		case XLOG_GIST_PAGE_SPLIT:
 			gistRedoPageSplitRecord(record);
-			break;
-		case XLOG_GIST_CREATE_INDEX:
-			gistRedoCreateIndex(record);
 			break;
 		default:
 			elog(PANIC, "gist_redo: unknown op code %u", info);

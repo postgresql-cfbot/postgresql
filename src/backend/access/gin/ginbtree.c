@@ -392,7 +392,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		/* It will fit, perform the insertion */
 		START_CRIT_SECTION();
 
-		if (RelationNeedsWAL(btree->index))
+		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
 		{
 			XLogBeginInsert();
 			XLogRegisterBuffer(0, stack->buffer, REGBUF_STANDARD);
@@ -413,7 +413,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 			MarkBufferDirty(childbuf);
 		}
 
-		if (RelationNeedsWAL(btree->index))
+		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
 		{
 			XLogRecPtr	recptr;
 			ginxlogInsert xlrec;
@@ -591,7 +591,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		}
 
 		/* write WAL record */
-		if (RelationNeedsWAL(btree->index))
+		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
 		{
 			XLogRecPtr	recptr;
 

@@ -15,6 +15,9 @@ extern bool describeAggregates(const char *pattern, bool verbose, bool showSyste
 /* \dA */
 extern bool describeAccessMethods(const char *pattern, bool verbose);
 
+/* \dQ */
+extern bool describeAssertions(const char *pattern);
+
 /* \db */
 extern bool describeTablespaces(const char *pattern, bool verbose);
 

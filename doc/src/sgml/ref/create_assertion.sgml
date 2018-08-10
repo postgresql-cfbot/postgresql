@@ -1,0 +1,133 @@
+<!--
+doc/src/sgml/ref/create_assertion.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createassertion">
+ <indexterm zone="sql-createassertion">
+  <primary>CREATE ASSERTION</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE ASSERTION</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE ASSERTION</refname>
+  <refpurpose>define a new assertion</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE ASSERTION <replaceable class="parameter">name</replaceable> CHECK ( <replaceable class="parameter">name</replaceable> ) [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE ASSERTION</command> creates an assertion.  An
+   assertion is a check constraint that is independent of a table row
+   and a table.  It can therefore be used to enforce more complex
+   constraints across multiple table rows and across multiple tables.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the assertion to
+      create.  Assertions use the same namespace as constraints on
+      tables.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CHECK ( <replaceable class="parameter">expression</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      The <literal>CHECK</literal> clause specifies an expression producing a
+      Boolean result which the database must satisfy at all times for a
+      data change operation to succeed.  Expressions evaluating
+      to TRUE or UNKNOWN succeed.  Should the result of a data change
+      operation produce a FALSE result an error exception is
+      raised and the change is not made.
+     </para>
+
+     <para>
+      The check expression typically involves subselects in order to
+      read data from tables.  See the examples below.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFERRABLE</literal></term>
+    <term><literal>NOT DEFERRABLE</literal></term>
+    <term><literal>INITIALLY IMMEDIATE</literal></term>
+    <term><literal>INITIALLY DEFERRED</literal></term>
+    <listitem>
+     <para>
+      These clauses control the deferrability of the constraint.  See
+      <xref linkend="sql-createtable"/> for an explanation.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   More specialized constraint forms such as table check constraints,
+   foreign-key constraints, or exclusion constraints should be used
+   instead when applicable, because they will be more efficient.
+  </para>
+
+  <para>
+   Assertion checks are not specially optimized.  For example,
+   checking the row count of a large table in an assertion will be
+   just as slow as implementing the check manually.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Check that the table <literal>table1</literal> has at most 30 rows:
+<programlisting>
+CREATE ASSERTION table1_max30 CHECK ((SELECT count(*) FROM table1) &lt;= 30);
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>CREATE ASSERTION</command> conforms to the SQL standard.
+   The PostgreSQL implementation has certain restrictions on what
+   check expressions are allowed in assertions.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alterassertion"/></member>
+   <member><xref linkend="sql-dropassertion"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

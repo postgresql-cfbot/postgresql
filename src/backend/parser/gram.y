@@ -259,11 +259,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
 		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
 		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
-		CreateAssertStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
+		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropOpClassStmt DropOpFamilyStmt DropPLangStmt DropStmt
-		DropAssertStmt DropCastStmt DropRoleStmt
+		DropCastStmt DropRoleStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
@@ -860,7 +860,7 @@ stmt :
 			| CopyStmt
 			| CreateAmStmt
 			| CreateAsStmt
-			| CreateAssertStmt
+			| CreateAssertionStmt
 			| CreateCastStmt
 			| CreateConversionStmt
 			| CreateDomainStmt
@@ -896,7 +896,6 @@ stmt :
 			| DeleteStmt
 			| DiscardStmt
 			| DoStmt
-			| DropAssertStmt
 			| DropCastStmt
 			| DropOpClassStmt
 			| DropOpFamilyStmt
@@ -5636,44 +5635,27 @@ enable_trigger:
  *
  *		QUERIES :
  *				CREATE ASSERTION ...
- *				DROP ASSERTION ...
  *
  *****************************************************************************/
 
-CreateAssertStmt:
-			CREATE ASSERTION name CHECK '(' a_expr ')'
+CreateAssertionStmt:
+			CREATE ASSERTION any_name CHECK '(' a_expr ')'
 			ConstraintAttributeSpec
 				{
-					CreateTrigStmt *n = makeNode(CreateTrigStmt);
-					n->trigname = $3;
-					n->args = list_make1($6);
-					n->isconstraint  = true;
-					processCASbits($8, @8, "ASSERTION",
-								   &n->deferrable, &n->initdeferred, NULL,
-								   NULL, yyscanner);
-
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("CREATE ASSERTION is not yet implemented")));
-
-					$$ = (Node *)n;
+					CreateAssertionStmt *n = makeNode(CreateAssertionStmt);
+					Constraint *c = makeNode(Constraint);
+					c->contype = CONSTR_CHECK;
+					c->location = @4;
+					c->raw_expr = $6;
+					c->cooked_expr = NULL;
+ 					processCASbits($8, @8, "ASSERTION",
+								   &c->deferrable, &c->initdeferred, NULL,
+ 								   NULL, yyscanner);
+					n->assertion_name = $3;
+					n->constraint = c;
+ 					$$ = (Node *)n;
 				}
 		;
-
-DropAssertStmt:
-			DROP ASSERTION name opt_drop_behavior
-				{
-					DropStmt *n = makeNode(DropStmt);
-					n->objects = NIL;
-					n->behavior = $4;
-					n->removeType = OBJECT_TRIGGER; /* XXX */
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("DROP ASSERTION is not yet implemented")));
-					$$ = (Node *) n;
-				}
-		;
-
 
 /*****************************************************************************
  *
@@ -6328,6 +6310,7 @@ drop_type_any_name:
 			| MATERIALIZED VIEW						{ $$ = OBJECT_MATVIEW; }
 			| INDEX									{ $$ = OBJECT_INDEX; }
 			| FOREIGN TABLE							{ $$ = OBJECT_FOREIGN_TABLE; }
+			| ASSERTION								{ $$ = OBJECT_ASSERTION; }
 			| COLLATION								{ $$ = OBJECT_COLLATION; }
 			| CONVERSION_P							{ $$ = OBJECT_CONVERSION; }
 			| STATISTICS							{ $$ = OBJECT_STATISTIC_EXT; }
@@ -6597,6 +6580,7 @@ comment_type_any_name:
 			| TABLE								{ $$ = OBJECT_TABLE; }
 			| VIEW								{ $$ = OBJECT_VIEW; }
 			| MATERIALIZED VIEW					{ $$ = OBJECT_MATVIEW; }
+			| ASSERTION							{ $$ = OBJECT_ASSERTION; }
 			| COLLATION							{ $$ = OBJECT_COLLATION; }
 			| CONVERSION_P						{ $$ = OBJECT_CONVERSION; }
 			| FOREIGN TABLE						{ $$ = OBJECT_FOREIGN_TABLE; }
@@ -8459,6 +8443,15 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER ASSERTION any_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_ASSERTION;
+					n->object = (Node *) $3;
+					n->newname = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 			| ALTER COLLATION any_name RENAME TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -9043,6 +9036,15 @@ AlterObjectSchemaStmt:
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER ASSERTION any_name SET SCHEMA name
+				{
+					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
+					n->objectType = OBJECT_ASSERTION;
+					n->object = (Node *) $3;
+					n->newschema = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 			| ALTER COLLATION any_name SET SCHEMA name
 				{
 					AlterObjectSchemaStmt *n = makeNode(AlterObjectSchemaStmt);
@@ -9324,6 +9326,14 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 				{
 					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
 					n->objectType = OBJECT_AGGREGATE;
+					n->object = (Node *) $3;
+					n->newowner = $6;
+					$$ = (Node *)n;
+				}
+			| ALTER ASSERTION any_name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_ASSERTION;
 					n->object = (Node *) $3;
 					n->newowner = $6;
 					$$ = (Node *)n;

@@ -7,6 +7,7 @@ Complete list of usable sgml source files in this directory.
 <!-- SQL commands -->
 <!ENTITY abort              SYSTEM "abort.sgml">
 <!ENTITY alterAggregate     SYSTEM "alter_aggregate.sgml">
+<!ENTITY alterAssertion     SYSTEM "alter_assertion.sgml">
 <!ENTITY alterCollation     SYSTEM "alter_collation.sgml">
 <!ENTITY alterConversion    SYSTEM "alter_conversion.sgml">
 <!ENTITY alterDatabase      SYSTEM "alter_database.sgml">
@@ -60,6 +61,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY copyTable          SYSTEM "copy.sgml">
 <!ENTITY createAccessMethod SYSTEM "create_access_method.sgml">
 <!ENTITY createAggregate    SYSTEM "create_aggregate.sgml">
+<!ENTITY createAssertion    SYSTEM "create_assertion.sgml">
 <!ENTITY createCast         SYSTEM "create_cast.sgml">
 <!ENTITY createCollation    SYSTEM "create_collation.sgml">
 <!ENTITY createConversion   SYSTEM "create_conversion.sgml">
@@ -107,6 +109,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY do                 SYSTEM "do.sgml">
 <!ENTITY dropAccessMethod   SYSTEM "drop_access_method.sgml">
 <!ENTITY dropAggregate      SYSTEM "drop_aggregate.sgml">
+<!ENTITY dropAssertion      SYSTEM "drop_assertion.sgml">
 <!ENTITY dropCast           SYSTEM "drop_cast.sgml">
 <!ENTITY dropCollation      SYSTEM "drop_collation.sgml">
 <!ENTITY dropConversion     SYSTEM "drop_conversion.sgml">

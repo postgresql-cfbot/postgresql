@@ -27,6 +27,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -56,7 +57,9 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/fmgroids.h"
 #include "utils/varlena.h"
+
 
 
 /*
@@ -3500,6 +3503,124 @@ PopOverrideSearchPath(void)
 		activeTempCreationPending = baseTempCreationPending;
 	}
 }
+
+
+static Oid
+get_assertion_oid_internal(Relation pg_constraint, char *assertion_name, Oid namespaceId, List *name)
+{
+	SysScanDesc scan;
+	ScanKeyData skey[4];
+	HeapTuple	tuple;
+	Oid			conOid = InvalidOid;
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_constraint_conname,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				PointerGetDatum(assertion_name));
+
+	ScanKeyInit(&skey[1],
+				Anum_pg_constraint_connamespace,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(namespaceId));
+
+	ScanKeyInit(&skey[2],
+				Anum_pg_constraint_conrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				InvalidOid);
+
+	ScanKeyInit(&skey[3],
+				Anum_pg_constraint_contypid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				InvalidOid);
+
+	scan = systable_beginscan(pg_constraint, InvalidOid, false,
+							  NULL, 4, skey);
+
+	/*
+	 * Fetch the constraint tuple from pg_constraint.  There may be
+	 * more than one match, because constraints are not required to
+	 * have unique names; if so, error out.
+	 */
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(tuple);
+
+		if (OidIsValid(con->conrelid) || OidIsValid(con->contypid))
+			ereport(ERROR,
+					(errmsg("constraint \"%s\" is not an assertion",
+							NameListToString(name))));
+
+		if (strcmp(NameStr(con->conname), assertion_name) == 0)
+		{
+			if (OidIsValid(conOid))
+				ereport(ERROR,
+						(errcode(ERRCODE_DUPLICATE_OBJECT),
+								errmsg("there are multiple assertions named \"%s\"",
+									   NameListToString(name))));
+			conOid = HeapTupleGetOid(tuple);
+		}
+	}
+
+	systable_endscan(scan);
+
+	return conOid;
+}
+
+/*
+ * get_assertion_oid
+ *		Find an assertion with the specified name.
+ *		Returns constraint's OID.
+ */
+Oid
+get_assertion_oid(List *name, bool missing_ok)
+{
+	char	   *schemaname;
+	char	   *assertion_name;
+	Oid			namespaceId;
+	Relation	pg_constraint;
+	Oid			conOid = InvalidOid;
+
+	DeconstructQualifiedName(name, &schemaname, &assertion_name);
+
+	pg_constraint = heap_open(ConstraintRelationId, AccessShareLock);
+
+	if (schemaname)
+	{
+		namespaceId = LookupExplicitNamespace(schemaname, missing_ok);
+		conOid = get_assertion_oid_internal(pg_constraint, assertion_name, namespaceId, name);
+	}
+	else
+	{
+		ListCell   *l;
+
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == myTempNamespace)
+				continue;		/* do not look in temp namespace */
+
+			conOid = get_assertion_oid_internal(pg_constraint, assertion_name, namespaceId, name);
+
+			if (OidIsValid(conOid))
+				break;
+		}
+	}
+
+	heap_close(pg_constraint, AccessShareLock);
+
+	/* If no such constraint exists, complain */
+	if (!OidIsValid(conOid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+						errmsg("assertion \"%s\" does not exist",
+							   NameListToString(name))));
+
+	return conOid;
+}
+
 
 
 /*

@@ -58,8 +58,7 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	 * contypid links to the pg_type row for a domain if this is a domain
 	 * constraint.  Otherwise it's 0.
 	 *
-	 * For SQL-style global ASSERTIONs, both conrelid and contypid would be
-	 * zero. This is not presently supported, however.
+	 * For SQL-style global ASSERTIONs, both conrelid and contypid are zero.
 	 */
 	Oid			contypid;		/* domain this constraint constrains */
 
@@ -184,7 +183,7 @@ typedef enum ConstraintCategory
 {
 	CONSTRAINT_RELATION,
 	CONSTRAINT_DOMAIN,
-	CONSTRAINT_ASSERTION		/* for future expansion */
+	CONSTRAINT_ASSERTION
 } ConstraintCategory;
 
 /*

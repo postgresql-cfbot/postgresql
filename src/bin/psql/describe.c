@@ -140,6 +140,66 @@ describeAggregates(const char *pattern, bool verbose, bool showSystem)
 	return true;
 }
 
+/* \dA
+ * Takes an optional regexp to select particular assertions
+ */
+bool
+describeAssertions(const char *pattern)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 90400)
+	{
+		fprintf(stderr, _("The server (version %d.%d) does not support assertions.\n"),
+				pset.sversion / 10000, (pset.sversion / 100) % 100);
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT n.nspname AS \"%s\",\n"
+							  "  c.conname AS \"%s\",\n"
+							  "  pg_catalog.pg_get_constraintdef(c.oid, true) AS \"%s\",\n"
+							  "  pg_catalog.obj_description(c.oid, 'pg_constraint') AS \"%s\"\n"
+							  "FROM pg_catalog.pg_constraint c\n"
+							  "     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.connamespace\n"
+							  "WHERE c.conrelid = 0 AND c.contypid = 0\n",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Definition"),
+					  gettext_noop("Description"));
+
+	if (!pattern)
+		appendPQExpBuffer(&buf, "      AND n.nspname <> 'pg_catalog'\n"
+				"      AND n.nspname <> 'information_schema'\n");
+
+#if TODO
+	processSQLNamePattern(pset.db, &buf, pattern, true, false,
+						  "n.nspname", "c.conname", NULL,
+						  "pg_catalog.pg_constraint_is_visible(c.oid)");
+#endif
+
+	appendPQExpBuffer(&buf, "ORDER BY 1, 2, 3, 4;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of assertions");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+
 /*
  * \dA
  * Takes an optional regexp to select particular access methods
@@ -2558,6 +2618,38 @@ describeOneTableDetails(const char *schemaname,
 
 					appendPQExpBuffer(&buf, ") ON %s FROM %s",
 									  PQgetvalue(result, i, 4),
+									  PQgetvalue(result, i, 1));
+
+					printTableAddFooter(&cont, buf.data);
+				}
+			}
+			PQclear(result);
+		}
+
+		/* print assertions referencing this table (none if no triggers) */
+		if (tableinfo.hastriggers)
+		{
+			printfPQExpBuffer(&buf,
+							  "SELECT conname,\n"
+									  "  pg_catalog.pg_get_constraintdef(c.oid, true) AS condef\n"
+									  "FROM pg_catalog.pg_constraint c\n"
+									  "WHERE c.oid IN (SELECT objid FROM pg_depend WHERE classid = 'pg_constraint'::pg_catalog.regclass AND refclassid = 'pg_class'::pg_catalog.regclass AND refobjid = '%s')\n"
+									  "  AND c.conrelid = 0 AND c.contypid = 0 AND c.contype = 'c'\n"
+									  "ORDER BY 1",
+							  oid);
+			result = PSQLexec(buf.data);
+			if (!result)
+				goto error_return;
+			else
+				tuples = PQntuples(result);
+
+			if (tuples > 0)
+			{
+				printTableAddFooter(&cont, _("Assertions:"));
+				for (i = 0; i < tuples; i++)
+				{
+					printfPQExpBuffer(&buf, "    \"%s\" %s",
+									  PQgetvalue(result, i, 0),
 									  PQgetvalue(result, i, 1));
 
 					printTableAddFooter(&cont, buf.data);

@@ -1818,6 +1818,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_RETURNING:
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
+		case EXPR_KIND_ASSERTION_CHECK:
 			/* okay */
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -3457,6 +3458,7 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "VALUES";
 		case EXPR_KIND_CHECK_CONSTRAINT:
 		case EXPR_KIND_DOMAIN_CHECK:
+		case EXPR_KIND_ASSERTION_CHECK:
 			return "CHECK";
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:

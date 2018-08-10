@@ -1637,6 +1637,7 @@ typedef enum ObjectType
 	OBJECT_AGGREGATE,
 	OBJECT_AMOP,
 	OBJECT_AMPROC,
+	OBJECT_ASSERTION,
 	OBJECT_ATTRIBUTE,			/* type's attribute, when distinct from column */
 	OBJECT_CAST,
 	OBJECT_COLUMN,
@@ -3296,6 +3297,16 @@ typedef struct ReindexStmt
 	const char *name;			/* name of database to reindex */
 	int			options;		/* Reindex options flags */
 } ReindexStmt;
+
+/* ----------------------
+ *      CREATE ASSERTION Statement
+ */
+typedef struct CreateAssertionStmt
+{
+	NodeTag		type;
+	List    	*assertion_name;
+	Constraint	*constraint;
+} CreateAssertionStmt;
 
 /* ----------------------
  *		CREATE CONVERSION Statement

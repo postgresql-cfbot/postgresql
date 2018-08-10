@@ -917,6 +917,37 @@ CREATE TABLE circles (
     of the type specified in the constraint declaration.
    </para>
   </sect2>
+
+  <sect2 id="ddl-constraints-assertions">
+   <title>Assertions</title>
+   
+   <indexterm zone="ddl-constraints-assertions">
+    <primary>assertion</primary>
+   </indexterm>
+
+   <para>
+    An assertion is a constraint that is not part of a table
+    definition.  An assertion can define constraints that evaluate the
+    data across multiple rows of a table beyond what unique and
+    exclusion constraints can do, and assertions can look at the data
+    in multiple tables.
+   </para>
+
+   <para>
+    An assertion is a separate schema object and is created with the
+    command <command>CREATE ASSERTION</command>.  The constraint
+    expression is written as a <literal>CHECK</literal> clause like in
+    check constraints.  For instance, to ensure that there is always
+    at least one entry in the product table:
+<programlisting>
+CREATE ASSERTION products_not_empty CHECK ((SELECT count(*) FROM products) &gt; 0);
+</programlisting>
+    Assertions will often involve aggregate functions computed over
+    entire tables.  Note, however, that this kind of assertion can be
+   quite inefficient and should only be used on tables that are small
+    and change rarely.
+   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="ddl-system-columns">

@@ -700,6 +700,11 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace, GISTSTATE *giststate)
 			GISTInsertStack *item;
 			OffsetNumber downlinkoffnum;
 
+			/*
+			 * Currently internal pages are not deleted during vacuum,
+			 * so we do not need to check if page is deleted
+			 */
+
 			downlinkoffnum = gistchoose(state.r, stack->page, itup, giststate);
 			iid = PageGetItemId(stack->page, downlinkoffnum);
 			idxtuple = (IndexTuple) PageGetItem(stack->page, iid);
@@ -832,6 +837,19 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace, GISTSTATE *giststate)
 					state.stack = stack = stack->parent;
 					continue;
 				}
+			}
+
+			/*
+			 * Leaf pages can be left deleted but still referenced
+			 * until it's space is reused. Downlink to this page may be already
+			 * removed from the internal page, but this scan can posess it.
+			 */
+			if(GistPageIsDeleted(stack->page))
+			{
+				UnlockReleaseBuffer(stack->buffer);
+				xlocked = false;
+				state.stack = stack = stack->parent;
+				continue;
 			}
 
 			/* now state.stack->(page, buffer and blkno) points to leaf page */

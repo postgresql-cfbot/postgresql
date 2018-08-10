@@ -3424,6 +3424,9 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 	ListCell   *l;
 	int			i;
 
+	/* DEBUG */
+	elog(WARNING, "estimate_largest_group (%d exprs) %f", list_length(groupExprs), estimate_largest_group(root, groupExprs, input_rows));
+
 	/*
 	 * We don't ever want to return an estimate of zero groups, as that tends
 	 * to lead to division-by-zero and other unpleasantness.  The input_rows
@@ -3732,6 +3735,265 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		numdistinct = 1.0;
 
 	return numdistinct;
+}
+
+/*
+ * estimate_largest_group	- Estimate size of largest group of rows
+ *
+ * Given a query having a GROUP BY or ORDER BY clause, estimate the size
+ * of the largest group.
+ *
+ * Inputs:
+ *	root - the query
+ *	groupExprs - list of expressions being grouped by
+ *	input_rows - number of rows estimated to arrive at the group/unique
+ *		filter step
+ *
+ * Estimating average size of a group can be done simply as 1/N where
+ * N is the number of groups obtained from estimate_num_groups. But for
+ * various places we are more interested in a worst-case scenario, i.e.
+ * the size of the largest group of rows (which may be significantly
+ * larger than the average group).
+ *
+ * To estimate size of the largest group, we use MCV (and additional
+ * statistics like null_frac) for individual columns.
+ * 
+ * Given the lack of any cross-correlation statistics in the system, it's
+ * impossible to do anything really trustworthy with GROUP BY and ORDER BY
+ * conditions involving multiple Vars.
+ *
+ * Our current approach is as follows:
+ *	1.  Reduce the given expressions to a list of unique Vars used.  For
+ *		example, ORDER BY a, a + b is treated the same as ORDER BY a, b.
+ *		It is clearly correct not to count the same Var more than once.
+ *		It is also reasonable to treat f(x) the same as x: f() cannot
+ *		increase the number of distinct values (unless it is volatile,
+ *		which we consider unlikely for grouping or sorting), but it
+ *		probably won't reduce the number of distinct values much either.
+ *		As a special case, if the expression can be matched to an
+ *		expressional index for which we have statistics, then we treat
+ *		the whole expression as though it were just a Var.
+ *	2.  For Vars within a single source rel, we determine the largest group
+ *		for each (from MCV list, null_frac and ndistinct), and then compute
+ *		the minimum of these values.
+ *	3.  If there are Vars from multiple rels, we repeat step 2 for each such
+ *		rel, and multiply the results together.
+ */
+double
+estimate_largest_group(PlannerInfo *root, List *groupExprs, double input_rows)
+{
+	List	   *varinfos = NIL;
+	double		srf_multiplier = 1.0;
+	ListCell   *l;
+	int			i;
+
+	/* frequency of the largest group */
+	double		min_group_frequency = 1.0;
+	double		max_group_rows;
+
+	/*
+	 * We don't ever want to return an estimate of zero groups, as that tends
+	 * to lead to division-by-zero and other unpleasantness.  The input_rows
+	 * estimate is usually already at least 1, but clamp it just in case it
+	 * isn't.
+	 */
+	input_rows = clamp_row_est(input_rows);
+
+	/*
+	 * If no grouping columns, there's exactly one group.  (This can't happen
+	 * for normal cases with GROUP BY or DISTINCT, but it is possible for
+	 * corner cases with set operations.)
+	 */
+	if (groupExprs == NIL)
+		return input_rows;
+
+	i = 0;
+	foreach(l, groupExprs)
+	{
+		Node	   *groupexpr = (Node *) lfirst(l);
+		double		this_srf_multiplier;
+		VariableStatData vardata;
+		List	   *varshere;
+		ListCell   *l2;
+
+		/*
+		 * Set-returning functions in grouping columns are a bit problematic.
+		 * The code below will effectively ignore their SRF nature and come up
+		 * with a numdistinct estimate as though they were scalar functions.
+		 * We compensate by scaling up the end result by the largest SRF
+		 * rowcount estimate.  (This will be an overestimate if the SRF
+		 * produces multiple copies of any output value, but it seems best to
+		 * assume the SRF's outputs are distinct.  In any case, it's probably
+		 * pointless to worry too much about this without much better
+		 * estimates for SRF output rowcounts than we have today.)
+		 */
+		this_srf_multiplier = expression_returns_set_rows(groupexpr);
+		if (srf_multiplier < this_srf_multiplier)
+			srf_multiplier = this_srf_multiplier;
+
+		/*
+		 * If examine_variable is able to deduce anything about the GROUP BY
+		 * expression, treat it as a single variable even if it's really more
+		 * complicated.
+		 */
+		examine_variable(root, groupexpr, 0, &vardata);
+		if (HeapTupleIsValid(vardata.statsTuple) || vardata.isunique)
+		{
+			varinfos = add_unique_group_var(root, varinfos,
+											groupexpr, &vardata);
+			ReleaseVariableStats(vardata);
+			continue;
+		}
+		ReleaseVariableStats(vardata);
+
+		/*
+		 * Else pull out the component Vars.  Handle PlaceHolderVars by
+		 * recursing into their arguments (effectively assuming that the
+		 * PlaceHolderVar doesn't change the number of groups, which boils
+		 * down to ignoring the possible addition of nulls to the result set).
+		 */
+		varshere = pull_var_clause(groupexpr,
+								   PVC_RECURSE_AGGREGATES |
+								   PVC_RECURSE_WINDOWFUNCS |
+								   PVC_RECURSE_PLACEHOLDERS);
+
+		/*
+		 * If we find any variable-free GROUP BY item, then either it is a
+		 * constant (and we can ignore it) or it contains a volatile function;
+		 * in the latter case we punt and assume that each input row will
+		 * yield a distinct group.
+		 */
+		if (varshere == NIL)
+		{
+			if (contain_volatile_functions(groupexpr))
+				return 1.0;	/* XXX Maybe return srf_multiplier instead? */
+			continue;
+		}
+
+		/*
+		 * Else add variables to varinfos list
+		 */
+		foreach(l2, varshere)
+		{
+			Node	   *var = (Node *) lfirst(l2);
+
+			examine_variable(root, var, 0, &vardata);
+			varinfos = add_unique_group_var(root, varinfos, var, &vardata);
+			ReleaseVariableStats(vardata);
+		}
+	}
+
+	/*
+	 * If now no Vars, we must have an all-constant GROUP BY list, so the
+	 * whole result is one large group.
+	 *
+	 * XXX Apply the srf_multiplier here?
+	 */
+	if (varinfos == NIL)
+		return input_rows;
+
+	/*
+	 * Group Vars by relation and estimate per-relation largest group.
+	 *
+	 * For each iteration of the outer loop, we process the frontmost Var in
+	 * varinfos, plus all other Vars in the same relation.  We remove these
+	 * Vars from the newvarinfos list for the next iteration. This is the
+	 * easiest way to group Vars of same rel together.
+	 */
+	do
+	{
+		GroupVarInfo *varinfo1 = (GroupVarInfo *) linitial(varinfos);
+		List	   *newvarinfos = NIL;
+		List	   *relvarinfos = NIL;
+
+		/*
+		 * Split the list of varinfos in two - one for the current rel, one
+		 * for remaining Vars on other rels.
+		 */
+		relvarinfos = lcons(varinfo1, relvarinfos);
+		for_each_cell(l, lnext(list_head(varinfos)))
+		{
+			GroupVarInfo *varinfo2 = (GroupVarInfo *) lfirst(l);
+
+			if (varinfo2->rel == varinfo1->rel)
+			{
+				/* varinfos on current rel */
+				relvarinfos = lcons(varinfo2, relvarinfos);
+			}
+			else
+			{
+				/* not time to process varinfo2 yet */
+				newvarinfos = lcons(varinfo2, newvarinfos);
+			}
+		}
+
+		/*
+		 * Get the largest group estimate for the Vars of this rel.  For
+		 * each Var we look for MCV first - if there's one, we take the
+		 * frequency of the first (most common) item. If there's no MCV
+		 * for a Var, we assume all groups are about equal, and instead
+		 * use 1/ndistinct.
+		 *
+		 * XXX This should probably consider null_frac.
+		 */
+		foreach(l, relvarinfos)
+		{
+			GroupVarInfo   *varinfo2 = (GroupVarInfo *) lfirst(l);
+			Node		   *var = varinfo2->var;
+			AttStatsSlot	sslot;
+			VariableStatData vardata;
+			double			group_frequency;
+
+			examine_variable(root, var, 0, &vardata);
+			varinfos = add_unique_group_var(root, varinfos, var, &vardata);
+
+			/* assume we have uniformly distributed groups */
+			group_frequency = 1.0 / varinfo2->ndistinct;
+
+			/* but if we have MCV list, we take the first value
+			 *
+			 * XXX We could also sort the MCV items, and take the first
+			 * one (this would help for incremental sort, particularly
+			 * when caring about startup cost, as e.g. for LIMIT). We
+			 * could also produce two values - largest first group and
+			 * largest group in general, and use both for costing.
+			 */
+			if (HeapTupleIsValid(vardata.statsTuple) &&
+				get_attstatsslot(&sslot, vardata.statsTuple,
+								 STATISTIC_KIND_MCV, InvalidOid,
+								 ATTSTATSSLOT_NUMBERS))
+				group_frequency = sslot.numbers[i];
+
+			/*
+			 * TODO perhaps consider null_frac here, depending on NULLS
+			 * FIRST/LAST (again, more relevant to incremental sort).
+			 */
+
+			if (group_frequency < min_group_frequency)
+				min_group_frequency = group_frequency;
+
+			ReleaseVariableStats(vardata);
+		}
+
+		varinfos = newvarinfos;
+	} while (varinfos != NIL);
+
+	/* compute the group size (frequency -> rows) */
+	max_group_rows = min_group_frequency * input_rows;
+
+	/* Now we can account for the effects of any SRFs */
+	max_group_rows *= srf_multiplier;
+
+	/* Round off */
+	max_group_rows = ceil(max_group_rows);
+
+	/* Guard against out-of-range answers */
+	if (max_group_rows > input_rows)
+		max_group_rows = input_rows;
+	if (max_group_rows < 1.0)
+		max_group_rows = 1.0;
+
+	return max_group_rows;
 }
 
 /*

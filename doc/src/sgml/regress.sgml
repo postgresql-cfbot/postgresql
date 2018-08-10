@@ -328,6 +328,23 @@ make check EXTRA_TESTS='collate.icu.utf8 collate.linux.utf8' LANG=en_US.utf8
   </sect2>
 
   <sect2>
+   <title>Extra TAP Tests for Default Collations</title>
+
+   <para>
+    To test the default collations on Linux/glibc platforms,
+    you can run extra TAP tests, as follows:
+<screen>
+make -C src/test/default_collation check-utf8
+</screen>
+    These tests only succeed when run in a database that uses the UTF-8
+    encoding. As these tests are TAP-based, you can only run them if
+    <productname>PostgreSQL</productname> was configured with the
+    <option>--enable-tap-tests</option> option.
+    For details, see <xref linkend="regress-tap"/>.
+   </para>
+  </sect2>
+
+  <sect2>
    <title>Testing Hot Standby</title>
 
   <para>

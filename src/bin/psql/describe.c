@@ -16,7 +16,9 @@
 
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_default_acl_d.h"
+#include "common/pg_collation_fn_common.h"
 #include "fe_utils/string_utils.h"
 
 #include "common.h"
@@ -4074,7 +4076,13 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 
 	if (pset.sversion >= 100000)
 		appendPQExpBuffer(&buf,
-						  ",\n       CASE c.collprovider WHEN 'd' THEN 'default' WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\"",
+						  ",\n       CASE c.collprovider WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' END AS \"%s\"",
+						  COLLPROVIDER_DEFAULT,
+						  get_collprovider_name(COLLPROVIDER_DEFAULT),
+						  COLLPROVIDER_LIBC,
+						  get_collprovider_name(COLLPROVIDER_LIBC),
+						  COLLPROVIDER_ICU,
+						  get_collprovider_name(COLLPROVIDER_ICU),
 						  gettext_noop("Provider"));
 
 	if (verbose)

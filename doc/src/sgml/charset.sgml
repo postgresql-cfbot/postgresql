@@ -537,6 +537,61 @@ SELECT * FROM test1 ORDER BY a || b COLLATE "fr_FR";
     a database.
    </para>
 
+   <para>
+    You can specify the default collation provider with the <option>--locale</option>
+    and <option>--lc-collate</option> options of the <xref linkend="app-initdb"/> or
+    <xref linkend="app-createdb"/> commands, as follows:
+<programlisting>
+--locale=<replaceable>locale</replaceable>[@<replaceable>provider</replaceable>]
+--lc-collate=<replaceable>locale</replaceable>[@<replaceable>provider</replaceable>]
+</programlisting>
+    where <replaceable>provider</replaceable> can take the <literal>icu</literal>
+    or <literal>libc</literal> value, and <replaceable>locale</replaceable> is specified
+    in the <literal>libc</literal> format. You can only specify a single
+    locale provider after the <literal>@</literal> symbol.
+    The <literal>--lc-collate</literal> option overrides the
+    <literal>--locale</literal> setting, regardless of whether it specifies the
+    collation provider.
+   </para>
+
+   <para>
+    If you omit the collation provider options, <literal>libc</literal>
+    provider is used for <literal>C</literal> and <literal>POSIX</literal>
+    locales. For other locales, the default providers are:
+    <itemizedlist spacing="compact">
+     <listitem>
+      <para>
+       <literal>icu</literal> at the cluster level
+      </para>
+     </listitem>
+     <listitem>
+      <para>Default collation provider from the template database at
+      the database level
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <important>
+    <para>
+     You can only use the <literal>icu</literal> collation provider for locales that are
+     supported by <literal>libc</literal> in your operating system and satisfy all
+     restrictions applicable to <literal>icu</literal>.
+    </para>
+   </important>
+
+   <para>
+     When you connect to a database,
+     <productname>PostgreSQL</productname> checks that the selected collation
+     provider and the version of the default collation are supported.
+     You can find the default database collation and the collation provider
+     in <structname>pg_database.datcollate</structname>. For ICU collations, collation version is
+     also stored:
+    <programlisting>
+<replaceable>locale</replaceable>@<replaceable>provider</replaceable>[.<replaceable>version</replaceable>]
+</programlisting>
+   </para>
+
    <sect3>
     <title>Standard Collations</title>
 

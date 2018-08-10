@@ -27,6 +27,7 @@
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
+#include "common/pg_collation_fn_common.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -162,11 +163,8 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 
 	if (collproviderstr)
 	{
-		if (pg_strcasecmp(collproviderstr, "icu") == 0)
-			collprovider = COLLPROVIDER_ICU;
-		else if (pg_strcasecmp(collproviderstr, "libc") == 0)
-			collprovider = COLLPROVIDER_LIBC;
-		else
+		collprovider = get_collprovider(collproviderstr);
+		if (!is_valid_nondefault_collprovider(collprovider))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("unrecognized collation provider: %s",
@@ -192,7 +190,8 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		else
 		{
 			collencoding = GetDatabaseEncoding();
-			check_encoding_locale_matches(collencoding, collcollate, collctype);
+			check_encoding_locale_matches(collencoding, collcollate, collctype,
+										  collprovider);
 		}
 	}
 
@@ -433,26 +432,6 @@ cmpaliases(const void *a, const void *b)
 
 
 #ifdef USE_ICU
-/*
- * Get the ICU language tag for a locale name.
- * The result is a palloc'd string.
- */
-static char *
-get_icu_language_tag(const char *localename)
-{
-	char		buf[ULOC_FULLNAME_CAPACITY];
-	UErrorCode	status;
-
-	status = U_ZERO_ERROR;
-	uloc_toLanguageTag(localename, buf, sizeof(buf), TRUE, &status);
-	if (U_FAILURE(status))
-		ereport(ERROR,
-				(errmsg("could not convert locale name \"%s\" to language tag: %s",
-						localename, u_errorName(status))));
-
-	return pstrdup(buf);
-}
-
 /*
  * Get a comment (specifically, the display name) for an ICU locale.
  * The result is a palloc'd string, or NULL if we can't get a comment
@@ -698,7 +677,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 				name = uloc_getAvailable(i);
 
 			langtag = get_icu_language_tag(name);
-			collcollate = U_ICU_VERSION_MAJOR_NUM >= 54 ? langtag : name;
+			collcollate = get_icu_collate(name, langtag);
 
 			/*
 			 * Be paranoid about not allowing any non-ASCII strings into

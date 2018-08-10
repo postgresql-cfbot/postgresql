@@ -34,6 +34,7 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_subscription.h"
@@ -44,6 +45,7 @@
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
 #include "commands/tablespace.h"
+#include "common/pg_collation_fn_common.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -141,6 +143,14 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	int			notherbackends;
 	int			npreparedxacts;
 	createdb_failure_params fparms;
+	char	   *src_canonname;
+	char		src_collprovider;
+	char	   *dbcanonname = NULL;
+	char		dbcollprovider;
+	char	   *dbcollate_full_name;
+	char	   *icu_wincollate = NULL;
+	char	   *langtag = NULL;
+	const char *collate;
 
 	/* Extract options from the statement node tree */
 	foreach(option, stmt->options)
@@ -350,8 +360,28 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	/* If encoding or locales are defaulted, use source's setting */
 	if (encoding < 0)
 		encoding = src_encoding;
+
+	check_locale_collprovider(src_collate, &src_canonname, &src_collprovider,
+							  NULL);
+
+	if (!is_valid_nondefault_collprovider(src_collprovider))
+		/* This could happen when manually creating a mess in the catalogs. */
+		ereport(FATAL,
+				(errmsg("could not find out the collation provider for datcollate \"%s\" of template database \"%s\"",
+						src_collate, dbtemplate)));
+
 	if (dbcollate == NULL)
-		dbcollate = src_collate;
+	{
+		dbcollate = src_canonname;
+		dbcollprovider = src_collprovider;
+	}
+	else
+	{
+		check_locale_collprovider(dbcollate, &dbcanonname, &dbcollprovider,
+								  NULL);
+		dbcollate = dbcanonname;
+	}
+
 	if (dbctype == NULL)
 		dbctype = src_ctype;
 
@@ -362,18 +392,88 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 				 errmsg("invalid server encoding %d", encoding)));
 
 	/* Check that the chosen locales are valid, and get canonical spellings */
-	if (!check_locale(LC_COLLATE, dbcollate, &canonname))
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("invalid locale name: \"%s\"", dbcollate)));
-	dbcollate = canonname;
-	if (!check_locale(LC_CTYPE, dbctype, &canonname))
+
+	if (!check_locale(LC_CTYPE, dbctype, &canonname, '\0'))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid locale name: \"%s\"", dbctype)));
 	dbctype = canonname;
 
-	check_encoding_locale_matches(encoding, dbcollate, dbctype);
+	/* we always check lc_collate for libc */
+	if (!check_locale(LC_COLLATE, dbcollate, &canonname, COLLPROVIDER_LIBC))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("invalid locale name: \"%s\" (provider \"%s\")",
+						dbcollate, get_collprovider_name(COLLPROVIDER_LIBC))));
+	dbcollate = canonname;
+
+	/* determine the collation provider if we haven't already done it */
+	if (!is_valid_nondefault_collprovider(dbcollprovider))
+	{
+		if (locale_is_c(dbcollate))
+			dbcollprovider = COLLPROVIDER_LIBC;
+		else
+			dbcollprovider = src_collprovider;
+	}
+
+	Assert(is_valid_nondefault_collprovider(dbcollprovider));
+
+#ifndef USE_ICU
+	if (dbcollprovider == COLLPROVIDER_ICU)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ICU is not supported in this build"),
+				 errhint("You need to rebuild PostgreSQL using --with-icu.")));
+#endif
+
+	/* check lc_collate and lc_ctype for icu if we need it */
+	if (dbcollprovider == COLLPROVIDER_ICU)
+	{
+		if (!check_locale(LC_COLLATE, dbcollate, NULL, dbcollprovider))
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("invalid locale name: \"%s\" (provider \"%s\")",
+							dbcollate, get_collprovider_name(dbcollprovider))));
+
+		if (strcmp(dbcollate, dbctype) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("collations with different collate and ctype values are not supported by ICU")));
+	}
+
+	check_encoding_locale_matches(encoding, dbcollate, dbctype, dbcollprovider);
+
+	/* get the collation version */
+
+#ifdef USE_ICU
+	if (dbcollprovider == COLLPROVIDER_ICU)
+	{
+		collate = (const char *) dbcollate;
+#ifdef WIN32
+		if (!locale_is_c(collate))
+		{
+			icu_wincollate = check_icu_winlocale(collate);
+			collate = (const char *) icu_wincollate;
+		}
+#endif							/* WIN32 */
+		langtag = get_icu_language_tag(collate);
+		collate = get_icu_collate(collate, langtag);
+	}
+	else
+#endif							/* USE_ICU */
+	{
+		/* COLLPROVIDER_LIBC */
+		collate = (const char *) dbcollate;
+	}
+
+	dbcollate_full_name = get_full_collation_name(
+						dbcollate, dbcollprovider,
+						get_collation_actual_version(dbcollprovider, collate));
+
+	if (strlen(dbcollate_full_name) >= NAMEDATALEN)
+		ereport(ERROR,
+				(errmsg("the full database collation name \"%s\" is too long",
+						dbcollate_full_name)));
 
 	/*
 	 * Check that the new encoding and locale settings match the source
@@ -395,11 +495,11 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 							pg_encoding_to_char(src_encoding)),
 					 errhint("Use the same encoding as in the template database, or use template0 as template.")));
 
-		if (strcmp(dbcollate, src_collate) != 0)
+		if (strcmp(dbcollate_full_name, src_collate) != 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("new collation (%s) is incompatible with the collation of the template database (%s)",
-							dbcollate, src_collate),
+							dbcollate_full_name, src_collate),
 					 errhint("Use the same collation as in the template database, or use template0 as template.")));
 
 		if (strcmp(dbctype, src_ctype) != 0)
@@ -522,7 +622,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	new_record[Anum_pg_database_datdba - 1] = ObjectIdGetDatum(datdba);
 	new_record[Anum_pg_database_encoding - 1] = Int32GetDatum(encoding);
 	new_record[Anum_pg_database_datcollate - 1] =
-		DirectFunctionCall1(namein, CStringGetDatum(dbcollate));
+		DirectFunctionCall1(namein, CStringGetDatum(dbcollate_full_name));
 	new_record[Anum_pg_database_datctype - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(dbctype));
 	new_record[Anum_pg_database_datistemplate - 1] = BoolGetDatum(dbistemplate);
@@ -690,6 +790,16 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		 */
 		ForceSyncCommit();
 	}
+
+	pfree(src_canonname);
+	pfree(dbcollate_full_name);
+	if (dbcanonname)
+		pfree(dbcanonname);
+	if (langtag)
+		pfree(langtag);
+	if (icu_wincollate)
+		pfree(icu_wincollate);
+
 	PG_END_ENSURE_ERROR_CLEANUP(createdb_failure_callback,
 								PointerGetDatum(&fparms));
 
@@ -719,7 +829,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
  * Note: if you change this policy, fix initdb to match.
  */
 void
-check_encoding_locale_matches(int encoding, const char *collate, const char *ctype)
+check_encoding_locale_matches(int encoding, const char *collate, const char *ctype,
+							  char collprovider)
 {
 	int			ctype_encoding = pg_get_encoding_from_locale(ctype, true);
 	int			collate_encoding = pg_get_encoding_from_locale(collate, true);
@@ -753,6 +864,23 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 						collate),
 				 errdetail("The chosen LC_COLLATE setting requires encoding \"%s\".",
 						   pg_encoding_to_char(collate_encoding))));
+
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+#ifdef USE_ICU
+		if (!(is_encoding_supported_by_icu(encoding) ||
+			  (encoding == PG_SQL_ASCII && superuser())))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("encoding \"%s\" is not supported for ICU locales",
+							pg_encoding_to_char(encoding))));
+#else
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ICU is not supported in this build"),
+				 errhint("You need to rebuild PostgreSQL using --with-icu.")));
+#endif
+	}
 }
 
 /* Error cleanup callback for createdb */

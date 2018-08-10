@@ -339,18 +339,22 @@ SELECT relname, pg_get_indexdef(oid) FROM pg_class WHERE relname LIKE 'collate_t
 CREATE ROLE regress_test_role;
 CREATE SCHEMA test_schema;
 
+-- remove provider modifier and collation version
+CREATE FUNCTION get_lc_collate (text) RETURNS text LANGUAGE sql
+    AS $$ select substring($1 from '(.*)@[^@]+$') $$;
+
 -- We need to do this this way to cope with varying names for encodings:
 do $$
 BEGIN
   EXECUTE 'CREATE COLLATION test0 (provider = icu, locale = ' ||
-          quote_literal(current_setting('lc_collate')) || ');';
+          quote_literal(get_lc_collate(current_setting('lc_collate'))) || ');';
 END
 $$;
 CREATE COLLATION test0 FROM "C"; -- fail, duplicate name
 do $$
 BEGIN
   EXECUTE 'CREATE COLLATION test1 (provider = icu, lc_collate = ' ||
-          quote_literal(current_setting('lc_collate')) ||
+          quote_literal(get_lc_collate(current_setting('lc_collate'))) ||
           ', lc_ctype = ' ||
           quote_literal(current_setting('lc_ctype')) || ');';
 END

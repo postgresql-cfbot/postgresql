@@ -57,8 +57,10 @@ extern void assign_locale_numeric(const char *newval, void *extra);
 extern bool check_locale_time(char **newval, void **extra, GucSource source);
 extern void assign_locale_time(const char *newval, void *extra);
 
-extern bool check_locale(int category, const char *locale, char **canonname);
-extern char *pg_perm_setlocale(int category, const char *locale);
+extern bool check_locale(int category, const char *locale, char **canonname,
+						 char collprovider);
+extern const char *pg_perm_setlocale(int category, const char *locale,
+									 char collprovider);
 extern void check_strxfrm_bug(void);
 
 extern bool lc_collate_is_c(Oid collation);
@@ -102,11 +104,11 @@ typedef struct pg_locale_struct *pg_locale_t;
 
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
-extern char *get_collation_actual_version(char collprovider, const char *collcollate);
-
 #ifdef USE_ICU
 extern int32_t icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes);
 extern int32_t icu_from_uchar(char **result, const UChar *buff_uchar, int32_t len_uchar);
+extern const char *get_icu_default_collate(void);
+extern UCollator *get_default_collation_collator(void);
 #endif
 
 /* These functions convert from/to libc's wchar_t, *not* pg_wchar_t */
@@ -114,5 +116,7 @@ extern size_t wchar2char(char *to, const wchar_t *from, size_t tolen,
 		   pg_locale_t locale);
 extern size_t char2wchar(wchar_t *to, size_t tolen,
 		   const char *from, size_t fromlen, pg_locale_t locale);
+
+extern char get_default_collprovider(void);
 
 #endif							/* _PG_LOCALE_ */

@@ -222,7 +222,7 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>--locale=<replaceable>locale</replaceable></option></term>
+      <term><option>--locale=<replaceable>locale</replaceable>[@<replaceable>provider</replaceable>]</option></term>
       <listitem>
        <para>
         Sets the default locale for the database cluster.  If this
@@ -230,11 +230,16 @@ PostgreSQL documentation
         environment that <command>initdb</command> runs in. Locale
         support is described in <xref linkend="locale"/>.
        </para>
+       <para>
+        Optionally, you can specify the default collation provider after the
+        <literal>@</literal> symbol. Supported values are <literal>icu</literal>
+        and <literal>libc</literal>. For details, see <xref linkend="collation-managing"/>.
+       </para>
       </listitem>
      </varlistentry>
 
      <varlistentry>
-      <term><option>--lc-collate=<replaceable>locale</replaceable></option></term>
+      <term><option>--lc-collate=<replaceable>locale</replaceable>[@<replaceable>provider</replaceable>]</option></term>
       <term><option>--lc-ctype=<replaceable>locale</replaceable></option></term>
       <term><option>--lc-messages=<replaceable>locale</replaceable></option></term>
       <term><option>--lc-monetary=<replaceable>locale</replaceable></option></term>

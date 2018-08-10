@@ -19,7 +19,7 @@ include $(top_builddir)/src/Makefile.global
 PROGRAMS = createdb createuser dropdb dropuser clusterdb vacuumdb reindexdb pg_isready
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
-LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport) $(ICU_LIBS)
 
 all: $(PROGRAMS)
 

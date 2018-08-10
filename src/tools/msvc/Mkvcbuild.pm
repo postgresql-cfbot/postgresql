@@ -51,12 +51,19 @@ my @contrib_excludes = (
 	'snapshot_too_old');
 
 # Set of variables for frontend modules
-my $frontend_defines = { 'initdb' => 'FRONTEND' };
+my $frontend_defines = {
+	'initdb'     => 'FRONTEND',
+	'psql'       => 'FRONTEND',
+	'pg_dump'    => 'FRONTEND',
+        'pg_dumpall' => 'FRONTEND',
+        'pg_restore' => 'FRONTEND',
+	};
 my @frontend_uselibpq = ('pg_ctl', 'pg_upgrade', 'pgbench', 'psql', 'initdb');
 my @frontend_uselibpgport = (
 	'pg_archivecleanup', 'pg_test_fsync',
 	'pg_test_timing',    'pg_upgrade',
 	'pg_waldump',        'pgbench');
+my @iculibs = ('icuin.lib', 'icuuc.lib');
 my @frontend_uselibpgcommon = (
 	'pg_archivecleanup', 'pg_test_fsync',
 	'pg_test_timing',    'pg_upgrade',
@@ -65,8 +72,10 @@ my $frontend_extralibs = {
 	'initdb'     => ['ws2_32.lib'],
 	'pg_restore' => ['ws2_32.lib'],
 	'pgbench'    => ['ws2_32.lib'],
+	'mchar'		 => [@iculibs],
 	'psql'       => ['ws2_32.lib']
 };
+my @frontend_iculibs = ('initdb', 'pg_upgrade');
 my $frontend_extraincludes = {
 	'initdb' => ['src/timezone'],
 	'psql'   => ['src/backend']
@@ -115,9 +124,9 @@ sub mkvcbuild
 	}
 
 	our @pgcommonallfiles = qw(
-	  base64.c config_info.c controldata_utils.c exec.c file_perm.c ip.c
-	  keywords.c md5.c pg_lzcompress.c pgfnames.c psprintf.c relpath.c rmtree.c
-	  saslprep.c scram-common.c string.c unicode_norm.c username.c
+	  base64.c config_info.c controldata_utils.c exec.c file_perm.c ip.c keywords.c
+	  md5.c pg_collation_fn_common.c pg_lzcompress.c pgfnames.c psprintf.c relpath.c
+	  rmtree.c saslprep.c scram-common.c string.c unicode_norm.c username.c
 	  wait_error.c);
 
 	if ($solution->{options}->{openssl})
@@ -150,6 +159,7 @@ sub mkvcbuild
 	$libpgfeutils->AddDefine('FRONTEND');
 	$libpgfeutils->AddIncludeDir('src/interfaces/libpq');
 	$libpgfeutils->AddFiles('src/fe_utils', @pgfeutilsfiles);
+	$libpgfeutils->AddFile('src/common/pg_collation_fn_common.c');
 
 	$postgres = $solution->AddProject('postgres', 'exe', '', 'src/backend');
 	$postgres->AddIncludeDir('src/backend');
@@ -234,6 +244,7 @@ sub mkvcbuild
 		'src/interfaces/libpq');
 	$libpq->AddDefine('FRONTEND');
 	$libpq->AddDefine('UNSAFE_STAT_OK');
+	$libpq->AddDefine('LIBPQ_MAKE');
 	$libpq->AddIncludeDir('src/port');
 	$libpq->AddLibrary('secur32.lib');
 	$libpq->AddLibrary('ws2_32.lib');
@@ -242,6 +253,7 @@ sub mkvcbuild
 	$libpq->ReplaceFile('src/interfaces/libpq/libpqrc.c',
 		'src/interfaces/libpq/libpq.rc');
 	$libpq->AddReference($libpgport);
+	$libpq->AddFile('src/common/pg_collation_fn_common.c');
 
 	# The OBJS scraper doesn't know about ifdefs, so remove fe-secure-openssl.c
 	# and sha2_openssl.c if building without OpenSSL, and remove sha2.c if
@@ -425,6 +437,12 @@ sub mkvcbuild
 	if (!$solution->{options}->{uuid})
 	{
 		push @contrib_excludes, 'uuid-ossp';
+	}
+	else
+	{
+		foreach my $fe (@frontend_iculibs) {
+			push @{$frontend_extralibs->{$fe}}, @iculibs;
+		}
 	}
 
 	# AddProject() does not recognize the constructs used to populate OBJS in

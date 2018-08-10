@@ -397,7 +397,7 @@ CREATE VIEW character_sets AS
            CAST(c.collname AS sql_identifier) AS default_collate_name
     FROM pg_database d
          LEFT JOIN (pg_collation c JOIN pg_namespace nc ON (c.collnamespace = nc.oid))
-             ON (datcollate = collcollate AND datctype = collctype)
+             ON (datcollate = (collcollate || '@libc') AND datctype = collctype)
     WHERE d.datname = current_database()
     ORDER BY char_length(c.collname) DESC, c.collname ASC -- prefer full/canonical name
     LIMIT 1;

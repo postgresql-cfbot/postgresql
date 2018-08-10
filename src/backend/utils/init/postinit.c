@@ -29,9 +29,11 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_tablespace.h"
+#include "common/pg_collation_fn_common.h"
 #include "libpq/auth.h"
 #include "libpq/libpq-be.h"
 #include "mb/pg_wchar.h"
@@ -296,6 +298,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	Form_pg_database dbform;
 	char	   *collate;
 	char	   *ctype;
+	char	   *datcollate;
+	char		collprovider;
+	char	   *collversion;
+	char	   *wincollate = NULL;
+	char	   *langtag = NULL;
+	const char *collcollate;
+	char	   *actual_versionstr;
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -377,26 +386,123 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 					PGC_BACKEND, PGC_S_DYNAMIC_DEFAULT);
 
 	/* assign locale variables */
-	collate = NameStr(dbform->datcollate);
 	ctype = NameStr(dbform->datctype);
+	datcollate = NameStr(dbform->datcollate);
+	check_locale_collprovider(datcollate, &collate, &collprovider,
+							  &collversion);
 
-	if (pg_perm_setlocale(LC_COLLATE, collate) == NULL)
+	if (!is_valid_nondefault_collprovider(collprovider))
+		/* This could happen when manually creating a mess in the catalogs. */
+		ereport(FATAL,
+				(errmsg("could not find out the collation provider for datcollate \"%s\" of database \"%s\"",
+						datcollate, name)));
+
+#ifndef USE_ICU
+	if (collprovider == COLLPROVIDER_ICU)
+		ereport(FATAL,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ICU is not supported in this build"), \
+				 errhint("Recreate the database with libc locale or rebuild PostgreSQL using --with-icu.")));
+#endif
+
+	/* we always check lc_collate for libc */
+	if (pg_perm_setlocale(LC_COLLATE, collate, COLLPROVIDER_LIBC) == NULL)
 		ereport(FATAL,
 				(errmsg("database locale is incompatible with operating system"),
-				 errdetail("The database was initialized with LC_COLLATE \"%s\", "
-						   " which is not recognized by setlocale().", collate),
+				 errdetail("The database was initialized with LC_COLLATE \"%s\" (provider \"%s\"), "
+						   " which is not recognized by setlocale().",
+						   collate, get_collprovider_name(COLLPROVIDER_LIBC)),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
-	if (pg_perm_setlocale(LC_CTYPE, ctype) == NULL)
+	/* check lc_collate and lc_ctype for icu if we need it */
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+		if (pg_perm_setlocale(LC_COLLATE, collate, collprovider) == NULL)
+			ereport(FATAL,
+					(errmsg("database locale is incompatible with operating system"),
+					 errdetail("The database was initialized with LC_COLLATE \"%s\" (provider \"%s\"), "
+							   " which is not recognized by uloc_setDefault().",
+							   collate, get_collprovider_name(collprovider)),
+					 errhint("Recreate the database with another locale or install the missing locale.")));
+
+		/* This could happen when manually creating a mess in the catalogs. */
+		if (strcmp(collate, ctype) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("collations with different collate and ctype values are not supported by ICU")));
+	}
+
+	if (pg_perm_setlocale(LC_CTYPE, ctype, '\0') == NULL)
 		ereport(FATAL,
 				(errmsg("database locale is incompatible with operating system"),
 				 errdetail("The database was initialized with LC_CTYPE \"%s\", "
 						   " which is not recognized by setlocale().", ctype),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
+	/* get the actual version of the collation */
+
+#ifdef USE_ICU
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+		collcollate = (const char *) collate;
+#ifdef WIN32
+		if (!locale_is_c(collcollate))
+		{
+			wincollate = check_icu_winlocale(collcollate);
+			collcollate = (const char *) wincollate;
+		}
+#endif							/* WIN32 */
+		langtag = get_icu_language_tag(collcollate);
+		collcollate = get_icu_collate(collcollate, langtag);
+	}
+	else
+#endif							/* USE_ICU */
+	{
+		/* COLLPROVIDER_LIBC */
+		collcollate = (const char *) collate;
+	}
+
+	actual_versionstr = get_collation_actual_version(collprovider, collcollate);
+
+	/*
+	 * Check the collation version (this matches the version checking in the
+	 * function pg_newlocale_from_collation())
+	 */
+	if (collversion)
+	{
+		if (!actual_versionstr)
+		{
+			/*
+			 * This could happen when manually creating a mess in the catalogs.
+			 */
+			ereport(ERROR,
+					(errmsg("collation \"%s\" (provider \"%s\") has no actual version, but a version was specified",
+							collate, get_collprovider_name(collprovider))));
+		}
+
+		if (strcmp(actual_versionstr, collversion) != 0)
+			ereport(ERROR,
+					(errmsg("collation \"%s\" (provider \"%s\") has version mismatch",
+							collate, get_collprovider_name(collprovider)),
+					 errdetail("The collation in the database was created using version %s, "
+							   "but the operating system provides version %s.",
+							   collversion, actual_versionstr),
+					 errhint("Build PostgreSQL with the right library version.")));
+	}
+
 	/* Make the locale settings visible as GUC variables, too */
-	SetConfigOption("lc_collate", collate, PGC_INTERNAL, PGC_S_OVERRIDE);
+	SetConfigOption("lc_collate", datcollate, PGC_INTERNAL, PGC_S_OVERRIDE);
 	SetConfigOption("lc_ctype", ctype, PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	pfree(collate);
+	if (collversion)
+		pfree(collversion);
+	if (langtag)
+		pfree(langtag);
+	if (actual_versionstr)
+		pfree(actual_versionstr);
+	if (wincollate)
+		pfree(wincollate);
 
 	check_strxfrm_bug();
 

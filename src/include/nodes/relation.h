@@ -193,7 +193,8 @@ typedef struct PlannerInfo
 	 * unreferenced view RTE; or if the RelOptInfo hasn't been made yet.
 	 */
 	struct RelOptInfo **simple_rel_array;	/* All 1-rel RelOptInfos */
-	int			simple_rel_array_size;	/* allocated size of array */
+
+	int			simple_rel_array_size;	/* allocated size of the arrays above */
 
 	/*
 	 * simple_rte_array is the same length as simple_rel_array and holds
@@ -247,6 +248,7 @@ typedef struct PlannerInfo
 	 * join_rel_level is NULL if not in use.
 	 */
 	List	  **join_rel_level; /* lists of join-relation RelOptInfos */
+
 	int			join_cur_level; /* index of list being extended */
 
 	List	   *init_plans;		/* init SubPlans for query */
@@ -278,6 +280,8 @@ typedef struct PlannerInfo
 	List	   *rowMarks;		/* list of PlanRowMarks */
 
 	List	   *placeholder_list;	/* list of PlaceHolderInfos */
+
+	List	   *grouped_var_list;	/* List of GroupedVarInfos. */
 
 	List	   *fkey_list;		/* list of ForeignKeyOptInfos */
 
@@ -467,6 +471,8 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *		direct_lateral_relids - rels this rel has direct LATERAL references to
  *		lateral_relids - required outer rels for LATERAL, as a Relids set
  *			(includes both direct and indirect lateral references)
+ *		gpi - GroupedPathInfo if the relation can produce grouped paths, NULL
+ *		otherwise.
  *
  * If the relation is a base relation it will have these fields set:
  *
@@ -645,6 +651,16 @@ typedef struct RelOptInfo
 	/* (see also lateral_vars and lateral_referencers) */
 	Relids		direct_lateral_relids;	/* rels directly laterally referenced */
 	Relids		lateral_relids; /* minimum parameterization of rel */
+
+	/* Information needed to apply partial aggregation to this rel's paths. */
+	struct RelAggInfo *agg_info;
+
+	/*
+	 * If the relation can produce grouped paths, store them here.
+	 *
+	 * If "grouped" is valid then "agg_info" must be NULL and vice versa.
+	 */
+	struct RelOptInfo *grouped;
 
 	/* information about a base rel (not set for join rels!) */
 	Index		relid;
@@ -1049,6 +1065,64 @@ typedef struct ParamPathInfo
 	List	   *ppi_clauses;	/* join clauses available from outer rels */
 } ParamPathInfo;
 
+/*
+ * RelAggInfo
+ *
+ * RelOptInfo needs information contained here if its paths should be
+ * aggregated.
+ *
+ * "target" will be used as pathtarget for aggregation if "explicit
+ * aggregation" is applied to base relation or join. The same target will will
+ * also --- if the relation is a join --- be used to joinin grouped path to a
+ * non-grouped one.
+ *
+ * These targets contain plain-Var grouping expressions, generic grouping
+ * expressions wrapped in GroupedVar structure, or Aggrefs which are also
+ * wrapped in GroupedVar. Once GroupedVar is evaluated, its value is passed to
+ * the upper paths w/o being evaluated again. If final aggregation appears to
+ * be necessary above the final join, the contained Aggrefs are supposed to
+ * provide the final aggregation plan with input values, i.e. the aggregate
+ * transient state.
+ *
+ * Note: There's a convention that GroupedVars that contain Aggref expressions
+ * are supposed to follow the other expressions of the target. Iterations of
+ * ->exprs may rely on this arrangement.
+ *
+ * "input" contains Vars used either as grouping expressions or aggregate
+ * arguments, plus those used in grouping expressions which are not plain Vars
+ * themselves. Paths providing the aggregation plan with input data should use
+ * this target.
+ *
+ * "group_clauses" and "group_exprs" are lists of SortGroupClause and the
+ * corresponding grouping expressions respectively.
+ *
+ * "agg_exprs" is a list of Aggref nodes for the aggregation of the relation's
+ * paths.
+ *
+ * "rows" is the estimated number of result tuples produced by grouped
+ * paths.
+ */
+typedef struct RelAggInfo
+{
+	NodeTag		type;
+
+	PathTarget *target;			/* Target for grouped paths.. */
+
+	PathTarget *input;			/* pathtarget of paths that generate input for
+								 * aggregation paths. */
+
+	List	   *group_clauses;
+	List	   *group_exprs;
+
+	/*
+	 * TODO Consider removing this field and creating the Aggref, partial or
+	 * simple, when needed, but avoid creating it multiple times (e.g. once
+	 * for hash grouping, other times for sorted grouping).
+	 */
+	List	   *agg_exprs;		/* Aggref expressions. */
+
+	double		rows;
+} RelAggInfo;
 
 /*
  * Type "Path" is used as-is for sequential-scan paths, as well as some other
@@ -1078,6 +1152,10 @@ typedef struct ParamPathInfo
  *
  * "pathkeys" is a List of PathKey nodes (see above), describing the sort
  * ordering of the path's output rows.
+ *
+ * "uniquekeys" is a List of Bitmapset objects, each pointing at a set of
+ * expressions of "pathtarget" whose values within the path output are
+ * distinct.
  */
 typedef struct Path
 {
@@ -1101,6 +1179,10 @@ typedef struct Path
 
 	List	   *pathkeys;		/* sort ordering of path's output */
 	/* pathkeys is a List of PathKey nodes; see above */
+
+	List	   *uniquekeys;		/* list of bitmapsets where each set contains
+								 * positions of unique expressions within
+								 * pathtarget. */
 } Path;
 
 /* Macro for extracting a path's parameterization relids; beware double eval */
@@ -1526,12 +1608,16 @@ typedef struct HashPath
  * ProjectionPath node, which is marked dummy to indicate that we intend to
  * assign the work to the input plan node.  The estimated cost for the
  * ProjectionPath node will account for whether a Result will be used or not.
+ *
+ * force_result field tells that the Result node must be used for some reason
+ * even though the subpath could normally handle the projection.
  */
 typedef struct ProjectionPath
 {
 	Path		path;
 	Path	   *subpath;		/* path representing input source */
 	bool		dummypp;		/* true if no separate Result is needed */
+	bool		force_result;	/* Is Result node required? */
 } ProjectionPath;
 
 /*
@@ -2007,6 +2093,29 @@ typedef struct PlaceHolderVar
 	Index		phlevelsup;		/* > 0 if PHV belongs to outer query */
 } PlaceHolderVar;
 
+
+/*
+ * Similar to the concept of PlaceHolderVar, we treat aggregates and grouping
+ * columns as special variables if grouping is possible below the top-level
+ * join. Likewise, the variable is evaluated below the query targetlist (in
+ * particular, in the targetlist of AGGSPLIT_INITIAL_SERIAL aggregation node
+ * which has base relation or a join as the input) and bubbles up through the
+ * join tree until it reaches AGGSPLIT_FINAL_DESERIAL aggregation node.
+ *
+ * gvexpr is either Aggref or a generic (non-Var) grouping expression. (If a
+ * simple Var, we don't replace it with GroupedVar.)
+ */
+typedef struct GroupedVar
+{
+	Expr		xpr;
+	Expr	   *gvexpr;			/* the represented expression */
+
+	Index		sortgroupref;	/* SortGroupClause.tleSortGroupRef if gvexpr
+								 * is grouping expression. */
+	Index		gvid;			/* GroupedVarInfo */
+	int32		width;			/* Expression width. */
+} GroupedVar;
+
 /*
  * "Special join" info.
  *
@@ -2201,6 +2310,24 @@ typedef struct PlaceHolderInfo
 	Relids		ph_needed;		/* highest level the value is needed at */
 	int32		ph_width;		/* estimated attribute width */
 } PlaceHolderInfo;
+
+/*
+ * Likewise, GroupedVarInfo exists for each distinct GroupedVar.
+ */
+typedef struct GroupedVarInfo
+{
+	NodeTag		type;
+
+	Index		gvid;			/* GroupedVar.gvid */
+	Expr	   *gvexpr;			/* the represented expression. */
+	Index		sortgroupref;	/* If gvexpr is a grouping expression, this is
+								 * the tleSortGroupRef of the corresponding
+								 * SortGroupClause. */
+	Relids		gv_eval_at;		/* lowest level we can evaluate the expression
+								 * at or NULL if it can happen anywhere. */
+	bool		derived;		/* derived from another GroupedVarInfo using
+								 * equeivalence classes? */
+} GroupedVarInfo;
 
 /*
  * This struct describes one potentially index-optimizable MIN/MAX aggregate

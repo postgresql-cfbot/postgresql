@@ -1207,6 +1207,7 @@ _outAggref(StringInfo str, const Aggref *node)
 	WRITE_OID_FIELD(aggcollid);
 	WRITE_OID_FIELD(inputcollid);
 	WRITE_OID_FIELD(aggtranstype);
+	WRITE_OID_FIELD(aggcombinefn);
 	WRITE_NODE_FIELD(aggargtypes);
 	WRITE_NODE_FIELD(aggdirectargs);
 	WRITE_NODE_FIELD(args);
@@ -2297,6 +2298,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(append_rel_list);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(placeholder_list);
+	WRITE_NODE_FIELD(grouped_var_list);
 	WRITE_NODE_FIELD(fkey_list);
 	WRITE_NODE_FIELD(query_pathkeys);
 	WRITE_NODE_FIELD(group_pathkeys);
@@ -2344,6 +2346,7 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_NODE_FIELD(cheapest_parameterized_paths);
 	WRITE_BITMAPSET_FIELD(direct_lateral_relids);
 	WRITE_BITMAPSET_FIELD(lateral_relids);
+	WRITE_NODE_FIELD(agg_info);
 	WRITE_UINT_FIELD(relid);
 	WRITE_OID_FIELD(reltablespace);
 	WRITE_ENUM_FIELD(rtekind, RTEKind);
@@ -2521,6 +2524,18 @@ _outParamPathInfo(StringInfo str, const ParamPathInfo *node)
 }
 
 static void
+_outRelAggInfo(StringInfo str, const RelAggInfo *node)
+{
+	WRITE_NODE_TYPE("RELAGGINFO");
+
+	WRITE_NODE_FIELD(target);
+	WRITE_NODE_FIELD(input);
+	WRITE_NODE_FIELD(group_clauses);
+	WRITE_NODE_FIELD(group_exprs);
+	WRITE_NODE_FIELD(agg_exprs);
+}
+
+static void
 _outRestrictInfo(StringInfo str, const RestrictInfo *node)
 {
 	WRITE_NODE_TYPE("RESTRICTINFO");
@@ -2561,6 +2576,17 @@ _outPlaceHolderVar(StringInfo str, const PlaceHolderVar *node)
 	WRITE_BITMAPSET_FIELD(phrels);
 	WRITE_UINT_FIELD(phid);
 	WRITE_UINT_FIELD(phlevelsup);
+}
+
+static void
+_outGroupedVar(StringInfo str, const GroupedVar *node)
+{
+	WRITE_NODE_TYPE("GROUPEDVAR");
+
+	WRITE_NODE_FIELD(gvexpr);
+	WRITE_UINT_FIELD(sortgroupref);
+	WRITE_UINT_FIELD(gvid);
+	WRITE_INT_FIELD(width);
 }
 
 static void
@@ -2605,6 +2631,18 @@ _outPlaceHolderInfo(StringInfo str, const PlaceHolderInfo *node)
 	WRITE_BITMAPSET_FIELD(ph_lateral);
 	WRITE_BITMAPSET_FIELD(ph_needed);
 	WRITE_INT_FIELD(ph_width);
+}
+
+static void
+_outGroupedVarInfo(StringInfo str, const GroupedVarInfo *node)
+{
+	WRITE_NODE_TYPE("GROUPEDVARINFO");
+
+	WRITE_UINT_FIELD(gvid);
+	WRITE_NODE_FIELD(gvexpr);
+	WRITE_UINT_FIELD(sortgroupref);
+	WRITE_BITMAPSET_FIELD(gv_eval_at);
+	WRITE_BOOL_FIELD(derived);
 }
 
 static void
@@ -4134,11 +4172,17 @@ outNode(StringInfo str, const void *obj)
 			case T_ParamPathInfo:
 				_outParamPathInfo(str, obj);
 				break;
+			case T_RelAggInfo:
+				_outRelAggInfo(str, obj);
+				break;
 			case T_RestrictInfo:
 				_outRestrictInfo(str, obj);
 				break;
 			case T_PlaceHolderVar:
 				_outPlaceHolderVar(str, obj);
+				break;
+			case T_GroupedVar:
+				_outGroupedVar(str, obj);
 				break;
 			case T_SpecialJoinInfo:
 				_outSpecialJoinInfo(str, obj);
@@ -4148,6 +4192,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PlaceHolderInfo:
 				_outPlaceHolderInfo(str, obj);
+				break;
+			case T_GroupedVarInfo:
+				_outGroupedVarInfo(str, obj);
 				break;
 			case T_MinMaxAggInfo:
 				_outMinMaxAggInfo(str, obj);

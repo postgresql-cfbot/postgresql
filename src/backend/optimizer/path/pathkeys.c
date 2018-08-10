@@ -1664,3 +1664,165 @@ has_useful_pathkeys(PlannerInfo *root, RelOptInfo *rel)
 		return true;			/* might be able to use them for ordering */
 	return false;				/* definitely useless */
 }
+
+/*
+ * Add a new set of unique keys to a list of unique key sets, to which keys_p
+ * points. If an identical set is already there, free new_set instead of
+ * adding it.
+ */
+void
+add_uniquekeys(List **keys_p, Bitmapset *new_set)
+{
+	ListCell   *lc;
+
+	foreach(lc, *keys_p)
+	{
+		Bitmapset  *set = (Bitmapset *) lfirst(lc);
+
+		if (bms_equal(new_set, set))
+			break;
+	}
+	if (lc == NULL)
+		*keys_p = lappend(*keys_p, new_set);
+	else
+		bms_free(new_set);
+}
+
+/*
+ * Return true the output of a path having given uniquekeys and target
+ * contains only distinct values of root->group_pathkeys.
+ */
+bool
+match_uniquekeys_to_group_pathkeys(PlannerInfo *root,
+								   List *uniquekeys,
+								   PathTarget *target)
+{
+	Bitmapset  *uniquekeys_all = NULL;
+	ListCell   *l1;
+	int			i;
+	bool	   *is_group_expr;
+
+	/*
+	 * group_pathkeys are essential for this function.
+	 */
+	if (root->group_pathkeys == NIL)
+		return false;
+
+	/*
+	 * The path is not aware of being unique.
+	 */
+	if (uniquekeys == NIL)
+		return false;
+
+	/*
+	 * There can be multiple known unique key sets. Gather pathkeys of all the
+	 * unique expressions the sets may reference.
+	 */
+	foreach(l1, uniquekeys)
+	{
+		Bitmapset  *set = (Bitmapset *) lfirst(l1);
+
+		uniquekeys_all = bms_union(uniquekeys_all, set);
+	}
+
+	/*
+	 * Find pathkeys for the expressions.
+	 */
+	is_group_expr = (bool *)
+		palloc0(list_length(target->exprs) * sizeof(bool));
+
+	i = 0;
+	foreach(l1, target->exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(l1);
+
+		if (bms_is_member(i, uniquekeys_all))
+		{
+			ListCell   *l2;
+			bool		found = false;
+
+			/*
+			 * This is an unique expression, so find its pathkey.
+			 */
+			foreach(l2, root->group_pathkeys)
+			{
+				PathKey    *pk = lfirst_node(PathKey, l2);
+				EquivalenceClass *ec = pk->pk_eclass;
+				ListCell   *l3;
+				EquivalenceMember *em = NULL;
+
+				if (ec->ec_below_outer_join)
+					continue;
+				if (ec->ec_has_volatile)
+					continue;
+
+				foreach(l3, ec->ec_members)
+				{
+					em = lfirst_node(EquivalenceMember, l3);
+
+					if (em->em_nullable_relids)
+						continue;
+
+					if (equal(em->em_expr, expr))
+					{
+						found = true;
+						break;
+					}
+				}
+				if (found)
+					break;
+
+			}
+			is_group_expr[i] = found;
+		}
+
+		i++;
+	}
+
+	/*
+	 * Now check the unique key sets and see if any one matches all items of
+	 * group_pathkeys.
+	 */
+	foreach(l1, uniquekeys)
+	{
+		Bitmapset  *set = (Bitmapset *) lfirst(l1);
+		bool		found = false;
+
+		/*
+		 * Check unique keys associated with this set.
+		 */
+		for (i = 0; i < list_length(target->exprs); i++)
+		{
+			/*
+			 * Is this expression an unique key?
+			 */
+			if (bms_is_member(i, set))
+			{
+				/*
+				 * If the set misses a single grouping pathkey, at least one
+				 * expression of the unique key is outside the grouping
+				 * expressions, and thus the path can generate multiple rows
+				 * with the same grouping expressions.
+				 */
+				if (!is_group_expr[i])
+				{
+					found = true;
+					break;
+				}
+			}
+		}
+
+		/*
+		 * No problem with this set. No need to check the other ones.
+		 */
+		if (!found)
+		{
+			pfree(is_group_expr);
+			return true;
+		}
+	}
+
+	/* No match found. */
+	pfree(is_group_expr);
+	return false;
+}

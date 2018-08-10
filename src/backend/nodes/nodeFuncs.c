@@ -259,6 +259,9 @@ exprType(const Node *expr)
 		case T_PlaceHolderVar:
 			type = exprType((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 			break;
+		case T_GroupedVar:
+			type = exprType((Node *) ((const GroupedVar *) expr)->gvexpr);
+			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
 			type = InvalidOid;	/* keep compiler quiet */
@@ -492,6 +495,8 @@ exprTypmod(const Node *expr)
 			return ((const SetToDefault *) expr)->typeMod;
 		case T_PlaceHolderVar:
 			return exprTypmod((Node *) ((const PlaceHolderVar *) expr)->phexpr);
+		case T_GroupedVar:
+			return exprTypmod((Node *) ((const GroupedVar *) expr)->gvexpr);
 		default:
 			break;
 	}
@@ -902,6 +907,9 @@ exprCollation(const Node *expr)
 			break;
 		case T_PlaceHolderVar:
 			coll = exprCollation((Node *) ((const PlaceHolderVar *) expr)->phexpr);
+			break;
+		case T_GroupedVar:
+			coll = exprCollation((Node *) ((const GroupedVar *) expr)->gvexpr);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -2187,6 +2195,8 @@ expression_tree_walker(Node *node,
 			break;
 		case T_PlaceHolderVar:
 			return walker(((PlaceHolderVar *) node)->phexpr, context);
+		case T_GroupedVar:
+			return walker(((GroupedVar *) node)->gvexpr, context);
 		case T_InferenceElem:
 			return walker(((InferenceElem *) node)->expr, context);
 		case T_AppendRelInfo:
@@ -2993,6 +3003,15 @@ expression_tree_mutator(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_GroupedVar:
+			{
+				GroupedVar *gv = (GroupedVar *) node;
+				GroupedVar *newnode;
+
+				FLATCOPY(newnode, gv, GroupedVar);
+				MUTATE(newnode->gvexpr, gv->gvexpr, Expr *);
+				return (Node *) newnode;
+			}
 		case T_InferenceElem:
 			{
 				InferenceElem *inferenceelemdexpr = (InferenceElem *) node;

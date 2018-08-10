@@ -58,6 +58,7 @@ typedef struct pushdown_safety_info
 
 /* These parameters are set by GUC */
 bool		enable_geqo = false;	/* just in case GUC doesn't set it */
+bool		enable_agg_pushdown;
 int			geqo_threshold;
 int			min_parallel_table_scan_size;
 int			min_parallel_index_scan_size;
@@ -73,16 +74,17 @@ static void set_base_rel_consider_startup(PlannerInfo *root);
 static void set_base_rel_sizes(PlannerInfo *root);
 static void set_base_rel_pathlists(PlannerInfo *root);
 static void set_rel_size(PlannerInfo *root, RelOptInfo *rel,
-			 Index rti, RangeTblEntry *rte);
+			 Index rti, RangeTblEntry *rte, bool grouped);
 static void set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
-				 Index rti, RangeTblEntry *rte);
+				 Index rti, RangeTblEntry *rte,
+				 bool grouped);
 static void set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel,
-				   RangeTblEntry *rte);
+				   RangeTblEntry *rte, bool grouped);
 static void create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel);
 static void set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 						  RangeTblEntry *rte);
 static void set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
-					   RangeTblEntry *rte);
+					   RangeTblEntry *rte, bool grouped);
 static void set_tablesample_rel_size(PlannerInfo *root, RelOptInfo *rel,
 						 RangeTblEntry *rte);
 static void set_tablesample_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
@@ -92,9 +94,11 @@ static void set_foreign_size(PlannerInfo *root, RelOptInfo *rel,
 static void set_foreign_pathlist(PlannerInfo *root, RelOptInfo *rel,
 					 RangeTblEntry *rte);
 static void set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
-					Index rti, RangeTblEntry *rte);
+					Index rti, RangeTblEntry *rte,
+					bool grouped);
 static void set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
-						Index rti, RangeTblEntry *rte);
+						Index rti, RangeTblEntry *rte,
+						bool grouped);
 static void generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 						   List *live_childrels,
 						   List *all_child_pathkeys,
@@ -118,7 +122,8 @@ static void set_namedtuplestore_pathlist(PlannerInfo *root, RelOptInfo *rel,
 							 RangeTblEntry *rte);
 static void set_worktable_pathlist(PlannerInfo *root, RelOptInfo *rel,
 					   RangeTblEntry *rte);
-static RelOptInfo *make_rel_from_joinlist(PlannerInfo *root, List *joinlist);
+static RelOptInfo *make_rel_from_joinlist(PlannerInfo *root,
+					   List *joinlist);
 static bool subquery_is_pushdown_safe(Query *subquery, Query *topquery,
 						  pushdown_safety_info *safetyInfo);
 static bool recurse_pushdown_safe(Node *setOp, Query *topquery,
@@ -140,7 +145,8 @@ static void remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel);
 /*
  * make_one_rel
  *	  Finds all possible access paths for executing a query, returning a
- *	  single rel that represents the join of all base rels in the query.
+ *	  single rel that represents the join of all base rels in the query. If
+ *	  possible, also return a join that contains partial aggregate(s).
  */
 RelOptInfo *
 make_one_rel(PlannerInfo *root, List *joinlist)
@@ -169,12 +175,16 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 		root->all_baserels = bms_add_member(root->all_baserels, brel->relid);
 	}
 
-	/* Mark base rels as to whether we care about fast-start plans */
+	/*
+	 * Mark base rels as to whether we care about fast-start plans. XXX We
+	 * deliberately do not mark grouped rels --- see the comment on
+	 * consider_startup in build_simple_rel().
+	 */
 	set_base_rel_consider_startup(root);
 
 	/*
-	 * Compute size estimates and consider_parallel flags for each base rel,
-	 * then generate access paths.
+	 * Compute size estimates and consider_parallel flags for each plain and
+	 * each grouped base rel, then generate access paths.
 	 */
 	set_base_rel_sizes(root);
 	set_base_rel_pathlists(root);
@@ -231,6 +241,19 @@ set_base_rel_consider_startup(PlannerInfo *root)
 			RelOptInfo *rel = find_base_rel(root, varno);
 
 			rel->consider_param_startup = true;
+
+			if (rel->grouped)
+			{
+				/*
+				 * As for grouped relations, paths differ substantially by the
+				 * AggStrategy. Paths that use AGG_HASHED should not be
+				 * parameterized (because creation of hashtable would have to
+				 * be repeated for different parameters) but paths using
+				 * AGG_SORTED can be. The latter seems to justify considering
+				 * the startup cost for grouped relation in general.
+				 */
+				rel->grouped->consider_param_startup = true;
+			}
 		}
 	}
 }
@@ -278,7 +301,9 @@ set_base_rel_sizes(PlannerInfo *root)
 		if (root->glob->parallelModeOK)
 			set_rel_consider_parallel(root, rel, rte);
 
-		set_rel_size(root, rel, rti, rte);
+		set_rel_size(root, rel, rti, rte, false);
+		if (rel->grouped)
+			set_rel_size(root, rel, rti, rte, true);
 	}
 }
 
@@ -297,7 +322,9 @@ set_base_rel_pathlists(PlannerInfo *root)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 
-		/* there may be empty slots corresponding to non-baserel RTEs */
+		/*
+		 * there may be empty slots corresponding to non-baserel RTEs
+		 */
 		if (rel == NULL)
 			continue;
 
@@ -307,7 +334,20 @@ set_base_rel_pathlists(PlannerInfo *root)
 		if (rel->reloptkind != RELOPT_BASEREL)
 			continue;
 
-		set_rel_pathlist(root, rel, rti, root->simple_rte_array[rti]);
+		set_rel_pathlist(root, rel, rti, root->simple_rte_array[rti], false);
+
+		/*
+		 * Create grouped paths for grouped relation if it exists.
+		 */
+		if (rel->grouped)
+		{
+			Assert(rel->grouped->agg_info != NULL);
+			Assert(rel->grouped->grouped == NULL);
+
+			set_rel_pathlist(root, rel, rti,
+							 root->simple_rte_array[rti],
+							 true);
+		}
 	}
 }
 
@@ -317,8 +357,14 @@ set_base_rel_pathlists(PlannerInfo *root)
  */
 static void
 set_rel_size(PlannerInfo *root, RelOptInfo *rel,
-			 Index rti, RangeTblEntry *rte)
+			 Index rti, RangeTblEntry *rte, bool grouped)
 {
+	/*
+	 * build_simple_rel() should not have created rels that do not match this
+	 * condition.
+	 */
+	Assert(!grouped || rte->rtekind == RTE_RELATION);
+
 	if (rel->reloptkind == RELOPT_BASEREL &&
 		relation_excluded_by_constraints(root, rel, rte))
 	{
@@ -338,7 +384,7 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	else if (rte->inh)
 	{
 		/* It's an "append relation", process accordingly */
-		set_append_rel_size(root, rel, rti, rte);
+		set_append_rel_size(root, rel, rti, rte, grouped);
 	}
 	else
 	{
@@ -348,6 +394,8 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 				if (rte->relkind == RELKIND_FOREIGN_TABLE)
 				{
 					/* Foreign table */
+					/* Not supported yet, see build_simple_rel(). */
+					Assert(!grouped);
 					set_foreign_size(root, rel, rte);
 				}
 				else if (rte->relkind == RELKIND_PARTITIONED_TABLE)
@@ -356,17 +404,22 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 					 * A partitioned table without any partitions is marked as
 					 * a dummy rel.
 					 */
+					if (grouped)
+						rel = rel->grouped;
+
 					set_dummy_rel_pathlist(rel);
 				}
 				else if (rte->tablesample != NULL)
 				{
 					/* Sampled relation */
+					/* Not supported yet, see build_simple_rel(). */
+					Assert(!grouped);
 					set_tablesample_rel_size(root, rel, rte);
 				}
 				else
 				{
 					/* Plain relation */
-					set_plain_rel_size(root, rel, rte);
+					set_plain_rel_size(root, rel, rte, grouped);
 				}
 				break;
 			case RTE_SUBQUERY:
@@ -420,8 +473,16 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
  */
 static void
 set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
-				 Index rti, RangeTblEntry *rte)
+				 Index rti, RangeTblEntry *rte, bool grouped)
 {
+	RelOptInfo *rel_plain = rel;	/* non-grouped relation */
+
+	/*
+	 * add_grouped_base_rels_to_query() should not have created rels that do
+	 * not match this condition.
+	 */
+	Assert(!grouped || rte->rtekind == RTE_RELATION);
+
 	if (IS_DUMMY_REL(rel))
 	{
 		/* We already proved the relation empty, so nothing more to do */
@@ -429,7 +490,7 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	else if (rte->inh)
 	{
 		/* It's an "append relation", process accordingly */
-		set_append_rel_pathlist(root, rel, rti, rte);
+		set_append_rel_pathlist(root, rel, rti, rte, grouped);
 	}
 	else
 	{
@@ -439,17 +500,21 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 				if (rte->relkind == RELKIND_FOREIGN_TABLE)
 				{
 					/* Foreign table */
+					/* Not supported yet, see build_simple_rel(). */
+					Assert(!grouped);
 					set_foreign_pathlist(root, rel, rte);
 				}
 				else if (rte->tablesample != NULL)
 				{
 					/* Sampled relation */
+					/* Not supported yet, see build_simple_rel(). */
+					Assert(!grouped);
 					set_tablesample_rel_pathlist(root, rel, rte);
 				}
 				else
 				{
 					/* Plain relation */
-					set_plain_rel_pathlist(root, rel, rte);
+					set_plain_rel_pathlist(root, rel, rte, grouped);
 				}
 				break;
 			case RTE_SUBQUERY:
@@ -479,6 +544,9 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
+	if (grouped)
+		rel = rel->grouped;
+
 	/*
 	 * If this is a baserel, we should normally consider gathering any partial
 	 * paths we may have created for it.
@@ -491,9 +559,13 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * Also, if this is the topmost scan/join rel (that is, the only baserel),
 	 * we postpone this until the final scan/join targelist is available (see
 	 * grouping_planner).
+	 *
+	 * Note on aggregation push-down: parallel paths are not supported until
+	 * we implement the feature using 2-stage aggregation.
 	 */
 	if (rel->reloptkind == RELOPT_BASEREL &&
-		bms_membership(root->all_baserels) != BMS_SINGLETON)
+		bms_membership(root->all_baserels) != BMS_SINGLETON &&
+		!grouped)
 		generate_gather_paths(root, rel, false);
 
 	/*
@@ -503,6 +575,22 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	if (set_rel_pathlist_hook)
 		(*set_rel_pathlist_hook) (root, rel, rti, rte);
+
+	/*
+	 * Get rid of the grouped relations which have no paths (and to which
+	 * generate_gather_paths() won't add any).
+	 */
+	if (grouped && rel->pathlist == NIL)
+	{
+		/*
+		 * This grouped rel should not contain any partial paths.
+		 */
+		Assert(rel->partial_pathlist == NIL);
+
+		pfree(rel_plain->grouped);
+		rel_plain->grouped = NULL;
+		return;
+	}
 
 	/* Now find the cheapest of the paths for this rel */
 	set_cheapest(rel);
@@ -517,8 +605,12 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
  *	  Set size estimates for a plain relation (no subquery, no inheritance)
  */
 static void
-set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
+				   bool grouped)
 {
+	if (grouped)
+		rel = rel->grouped;
+
 	/*
 	 * Test any partial indexes of rel for applicability.  We must do this
 	 * first since partial unique indexes can affect size estimates.
@@ -692,9 +784,15 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
  *	  Build access paths for a plain relation (no subquery, no inheritance)
  */
 static void
-set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
+set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte,
+					   bool grouped)
 {
 	Relids		required_outer;
+	Path	   *seq_path;
+	RelOptInfo *rel_plain = rel;
+
+	if (grouped)
+		rel = rel->grouped;
 
 	/*
 	 * We don't support pushing join clauses into the quals of a seqscan, but
@@ -703,18 +801,43 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	 */
 	required_outer = rel->lateral_relids;
 
-	/* Consider sequential scan */
-	add_path(rel, create_seqscan_path(root, rel, required_outer, 0));
+	/* Consider sequential scan, both plain and grouped. */
+	seq_path = create_seqscan_path(root, rel, required_outer, 0);
 
-	/* If appropriate, consider parallel sequential scan */
-	if (rel->consider_parallel && required_outer == NULL)
-		create_plain_partial_paths(root, rel);
 
-	/* Consider index scans */
-	create_index_paths(root, rel);
+	/*
+	 * It's probably not good idea to repeat hashed aggregation with different
+	 * parameters, so check if there are no parameters.
+	 */
+	if (!grouped)
+	{
+		/* Try to compute unique keys. */
+		make_uniquekeys(root, seq_path);
+
+		add_path(rel, seq_path);
+	}
+	else if (required_outer == NULL)
+	{
+		/*
+		 * Only AGG_HASHED is suitable here as it does not expect the input
+		 * set to be sorted.
+		 */
+		create_grouped_path(root, rel, seq_path, false, false, AGG_HASHED);
+	}
+
+	/* If appropriate, consider parallel sequential scan (plain or grouped) */
+	if (rel->consider_parallel && required_outer == NULL && !grouped)
+		create_plain_partial_paths(root, rel_plain);
+
+	/*
+	 * Consider index scans, possibly including the grouped and grouped
+	 * partial paths.
+	 */
+	create_index_paths(root, rel, grouped);
 
 	/* Consider TID scans */
-	create_tidscan_paths(root, rel);
+	/* TODO Regression test for these paths. */
+	create_tidscan_paths(root, rel, grouped);
 }
 
 /*
@@ -726,8 +849,7 @@ create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel)
 {
 	int			parallel_workers;
 
-	parallel_workers = compute_parallel_worker(rel, rel->pages, -1,
-											   max_parallel_workers_per_gather);
+	parallel_workers = compute_parallel_worker(rel, rel->pages, -1, max_parallel_workers_per_gather);
 
 	/* If any limit was set to zero, the user doesn't want a parallel scan. */
 	if (parallel_workers <= 0)
@@ -735,6 +857,100 @@ create_plain_partial_paths(PlannerInfo *root, RelOptInfo *rel)
 
 	/* Add an unordered partial path based on a parallel sequential scan. */
 	add_partial_path(rel, create_seqscan_path(root, rel, NULL, parallel_workers));
+}
+
+/*
+ * Apply aggregation to a subpath and add the AggPath to the pathlist.
+ *
+ * "precheck" tells whether the aggregation path should first be checked using
+ * add_path_precheck() / add_partial_path_precheck().
+ *
+ * If "parallel" is true, the aggregation path is considered partial in terms
+ * of parallel execution.
+ *
+ * Caution: Since only grouped relation makes sense as an input for this
+ * function, "rel" is the grouped relation even though "agg_kind" is passed
+ * too. This is different from other functions that receive "agg_kind" and use
+ * it to fetch the grouped relation themselves.
+ *
+ * The return value tells whether the path was added to the pathlist.
+ *
+ * TODO Pass the plain rel and use agg_kind to retrieve the grouped one.
+ */
+bool
+create_grouped_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+					bool precheck, bool parallel, AggStrategy aggstrategy)
+{
+	Path	   *agg_path;
+	RelAggInfo *agg_info = rel->agg_info;
+
+	Assert(agg_info != NULL);
+
+	/*
+	 * We can only support parallel paths if each worker produced a distinct
+	 * set of grouping keys, but such a special case is not known. So this
+	 * list should be empty.
+	 */
+	if (parallel)
+		return false;
+
+	/*
+	 * If the AggPath should be partial, the subpath must be too, and
+	 * therefore the subpath is essentially parallel_safe.
+	 */
+	Assert(subpath->parallel_safe || !parallel);
+
+	/*
+	 * Repeated creation of hash table does not sound like a good idea. Caller
+	 * should avoid asking us to do so.
+	 */
+	Assert(subpath->param_info == NULL || aggstrategy != AGG_HASHED);
+
+	if (aggstrategy == AGG_HASHED)
+		agg_path = (Path *) create_agg_hashed_path(root, subpath,
+												   subpath->rows);
+	else if (aggstrategy == AGG_SORTED)
+		agg_path = (Path *) create_agg_sorted_path(root, subpath,
+												   true,
+												   subpath->rows);
+	else
+		elog(ERROR, "unexpected strategy %d", aggstrategy);
+
+	/* Add the grouped path to the list of grouped base paths. */
+	if (agg_path != NULL)
+	{
+		if (precheck)
+		{
+			List	   *pathkeys;
+
+			/* AGG_HASH is not supposed to generate sorted output. */
+			pathkeys = aggstrategy == AGG_SORTED ? subpath->pathkeys : NIL;
+
+			if (!parallel &&
+				!add_path_precheck(rel, agg_path->startup_cost,
+								   agg_path->total_cost, pathkeys, NULL))
+				return false;
+
+			if (parallel &&
+				!add_partial_path_precheck(rel, agg_path->total_cost,
+										   pathkeys))
+				return false;
+		}
+
+		if (!parallel)
+		{
+			/* Try to compute unique keys. */
+			make_uniquekeys(root, (Path *) agg_path);
+
+			add_path(rel, (Path *) agg_path);
+		}
+		else
+			add_partial_path(rel, (Path *) agg_path);
+
+		return true;
+	}
+
+	return false;
 }
 
 /*
@@ -866,7 +1082,7 @@ set_foreign_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
  */
 static void
 set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
-					Index rti, RangeTblEntry *rte)
+					Index rti, RangeTblEntry *rte, bool grouped)
 {
 	int			parentRTindex = rti;
 	bool		has_live_children;
@@ -1016,10 +1232,50 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
 		 * fields of childrel->reltarget; not clear if that would be useful.
 		 */
-		childrel->reltarget->exprs = (List *)
-			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget->exprs,
-								   1, &appinfo);
+		if (grouped)
+		{
+			RelOptInfo *rel_grouped,
+					   *childrel_grouped;
+
+			Assert(childrel->grouped != NULL);
+
+			childrel_grouped = childrel->grouped;
+			rel_grouped = rel->grouped;
+
+			/*
+			 * Special attention is needed in the grouped case.
+			 *
+			 * copy_simple_rel() didn't create empty target because it's
+			 * better to start with copying one from the parent rel.
+			 */
+			Assert(childrel_grouped->reltarget == NULL &&
+				   childrel_grouped->agg_info == NULL);
+
+			/*
+			 * The parent rel should already have the info that we're setting
+			 * up now for the child.
+			 */
+			Assert(rel_grouped->reltarget != NULL &&
+				   rel_grouped->agg_info != NULL);
+
+			/*
+			 * Translate the targets and grouping expressions so they match
+			 * this child.
+			 */
+			childrel_grouped->agg_info = translate_rel_agg_info(root,
+																rel_grouped->agg_info,
+																&appinfo, 1);
+
+			/*
+			 * The relation paths will generate input for partial aggregation.
+			 */
+			childrel_grouped->reltarget = childrel_grouped->agg_info->input;
+		}
+		else
+			childrel->reltarget->exprs = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) rel->reltarget->exprs,
+									   1, &appinfo);
 
 		/*
 		 * We have to make child entries in the EquivalenceClass data
@@ -1181,19 +1437,42 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 								   1, &appinfo);
 
 		/*
+		 * We have to make child entries in the EquivalenceClass data
+		 * structures as well.  This is needed either if the parent
+		 * participates in some eclass joins (because we will want to consider
+		 * inner-indexscan joins on the individual children) or if the parent
+		 * has useful pathkeys (because we should try to build MergeAppend
+		 * paths that produce those sort orderings).
+		 */
+		if (rel->has_eclass_joins || has_useful_pathkeys(root, rel))
+			add_child_rel_equivalences(root, appinfo, rel, childrel);
+		childrel->has_eclass_joins = rel->has_eclass_joins;
+
+		/*
+		 * Note: we could compute appropriate attr_needed data for the child's
+		 * variables, by transforming the parent's attr_needed through the
+		 * translated_vars mapping.  However, currently there's no need
+		 * because attr_needed is only examined for base relations not
+		 * otherrels.  So we just leave the child's attr_needed empty.
+		 */
+
+		/*
 		 * If parallelism is allowable for this query in general, see whether
 		 * it's allowable for this childrel in particular.  But if we've
 		 * already decided the appendrel is not parallel-safe as a whole,
 		 * there's no point in considering parallelism for this child.  For
 		 * consistency, do this before calling set_rel_size() for the child.
+		 *
+		 * The aggregated relations do not use the consider_parallel flag.
 		 */
-		if (root->glob->parallelModeOK && rel->consider_parallel)
+		if (root->glob->parallelModeOK && rel->consider_parallel &&
+			!grouped)
 			set_rel_consider_parallel(root, childrel, childRTE);
 
 		/*
 		 * Compute the child's size.
 		 */
-		set_rel_size(root, childrel, childRTindex, childRTE);
+		set_rel_size(root, childrel, childRTindex, childRTE, grouped);
 
 		/*
 		 * It is possible that constraint exclusion detected a contradiction
@@ -1299,11 +1578,18 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
  */
 static void
 set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
-						Index rti, RangeTblEntry *rte)
+						Index rti, RangeTblEntry *rte, bool grouped)
 {
 	int			parentRTindex = rti;
 	List	   *live_childrels = NIL;
 	ListCell   *l;
+
+	/*
+	 * TODO Only allow per-child AGGSPLIT_SIMPLE if the partitioning allows
+	 * it, i.e. each partition generates distinct set of grouping keys.
+	 */
+	if (grouped)
+		return;
 
 	/*
 	 * Generate access paths for each member relation, and remember the
@@ -1323,7 +1609,7 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		/* Re-locate the child RTE and RelOptInfo */
 		childRTindex = appinfo->child_relid;
 		childRTE = root->simple_rte_array[childRTindex];
-		childrel = root->simple_rel_array[childRTindex];
+		childrel = find_base_rel(root, childRTindex);
 
 		/*
 		 * If set_append_rel_size() decided the parent appendrel was
@@ -1337,7 +1623,7 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		/*
 		 * Compute the child's access paths.
 		 */
-		set_rel_pathlist(root, childrel, childRTindex, childRTE);
+		set_rel_pathlist(root, childrel, childRTindex, childRTE, grouped);
 
 		/*
 		 * If child is dummy, ignore it.
@@ -1351,13 +1637,9 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 				list_concat(rel->partitioned_child_rels,
 							list_copy(childrel->partitioned_child_rels));
 
-		/*
-		 * Child is live, so add it to the live_childrels list for use below.
-		 */
 		live_childrels = lappend(live_childrels, childrel);
 	}
 
-	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
 }
 
@@ -1794,6 +2076,7 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 						   List *partitioned_rels)
 {
 	ListCell   *lcp;
+	PathTarget *target = NULL;
 
 	foreach(lcp, all_child_pathkeys)
 	{
@@ -1802,23 +2085,25 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		List	   *total_subpaths = NIL;
 		bool		startup_neq_total = false;
 		ListCell   *lcr;
+		Path	   *path;
 
 		/* Select the child paths for this ordering... */
 		foreach(lcr, live_childrels)
 		{
 			RelOptInfo *childrel = (RelOptInfo *) lfirst(lcr);
+			List	   *pathlist = childrel->pathlist;
 			Path	   *cheapest_startup,
 					   *cheapest_total;
 
 			/* Locate the right paths, if they are available. */
 			cheapest_startup =
-				get_cheapest_path_for_pathkeys(childrel->pathlist,
+				get_cheapest_path_for_pathkeys(pathlist,
 											   pathkeys,
 											   NULL,
 											   STARTUP_COST,
 											   false);
 			cheapest_total =
-				get_cheapest_path_for_pathkeys(childrel->pathlist,
+				get_cheapest_path_for_pathkeys(pathlist,
 											   pathkeys,
 											   NULL,
 											   TOTAL_COST,
@@ -1851,19 +2136,28 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/* ... and build the MergeAppend paths */
-		add_path(rel, (Path *) create_merge_append_path(root,
-														rel,
-														startup_subpaths,
-														pathkeys,
-														NULL,
-														partitioned_rels));
+		path = (Path *) create_merge_append_path(root,
+												 rel,
+												 target,
+												 startup_subpaths,
+												 pathkeys,
+												 NULL,
+												 partitioned_rels);
+
+		add_path(rel, path);
+
 		if (startup_neq_total)
-			add_path(rel, (Path *) create_merge_append_path(root,
-															rel,
-															total_subpaths,
-															pathkeys,
-															NULL,
-															partitioned_rels));
+		{
+			path = (Path *) create_merge_append_path(root,
+													 rel,
+													 target,
+													 total_subpaths,
+													 pathkeys,
+													 NULL,
+													 partitioned_rels);
+			add_path(rel, path);
+		}
+
 	}
 }
 
@@ -2665,11 +2959,22 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 		root->initial_rels = initial_rels;
 
 		if (join_search_hook)
-			return (*join_search_hook) (root, levels_needed, initial_rels);
+			return (*join_search_hook) (root, levels_needed,
+										initial_rels);
 		else if (enable_geqo && levels_needed >= geqo_threshold)
+		{
+			/*
+			 * TODO Teach GEQO about grouped relations. Don't forget that
+			 * pathlist can be NIL before set_cheapest() gets called.
+			 *
+			 * This processing makes no difference betweend plain and grouped
+			 * rels, so process them in the same loop.
+			 */
 			return geqo(root, levels_needed, initial_rels);
+		}
 		else
-			return standard_join_search(root, levels_needed, initial_rels);
+			return standard_join_search(root, levels_needed,
+										initial_rels);
 	}
 }
 
@@ -2766,6 +3071,23 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 
 			/* Find and save the cheapest paths for this rel */
 			set_cheapest(rel);
+
+			if (rel->grouped)
+			{
+				RelOptInfo *rel_grouped;
+
+				rel_grouped = rel->grouped;
+
+				Assert(rel_grouped->partial_pathlist == NIL);
+
+				if (rel_grouped->pathlist != NIL)
+					set_cheapest(rel_grouped);
+				else
+				{
+					pfree(rel_grouped);
+					rel->grouped = NULL;
+				}
+			}
 
 #ifdef OPTIMIZER_DEBUG
 			debug_print_rel(root, rel);
@@ -3404,6 +3726,7 @@ create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
 {
 	int			parallel_workers;
 	double		pages_fetched;
+	Path	   *bmhpath;
 
 	/* Compute heap pages for bitmap heap scan */
 	pages_fetched = compute_bitmap_pages(root, rel, bitmapqual, 1.0,
@@ -3415,8 +3738,21 @@ create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
 	if (parallel_workers <= 0)
 		return;
 
-	add_partial_path(rel, (Path *) create_bitmap_heap_path(root, rel,
-														   bitmapqual, rel->lateral_relids, 1.0, parallel_workers));
+	bmhpath = (Path *) create_bitmap_heap_path(root, rel, bitmapqual,
+											   rel->lateral_relids, 1.0,
+											   parallel_workers);
+
+	if (rel->agg_info == NULL)
+		add_partial_path(rel, bmhpath);
+	else
+	{
+		/*
+		 * Only AGG_HASHED is suitable here as it does not expect the input
+		 * set to be sorted.
+		 */
+		create_grouped_path(root, rel, (Path *) bmhpath, false, true,
+							AGG_HASHED);
+	}
 }
 
 /*

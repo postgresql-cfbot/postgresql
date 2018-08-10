@@ -873,6 +873,14 @@ _equalPlaceHolderVar(const PlaceHolderVar *a, const PlaceHolderVar *b)
 }
 
 static bool
+_equalGroupedVar(const GroupedVar *a, const GroupedVar *b)
+{
+	COMPARE_SCALAR_FIELD(gvid);
+
+	return true;
+}
+
+static bool
 _equalSpecialJoinInfo(const SpecialJoinInfo *a, const SpecialJoinInfo *b)
 {
 	COMPARE_BITMAPSET_FIELD(min_lefthand);
@@ -3172,6 +3180,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_PlaceHolderVar:
 			retval = _equalPlaceHolderVar(a, b);
+			break;
+		case T_GroupedVar:
+			retval = _equalGroupedVar(a, b);
 			break;
 		case T_SpecialJoinInfo:
 			retval = _equalSpecialJoinInfo(a, b);

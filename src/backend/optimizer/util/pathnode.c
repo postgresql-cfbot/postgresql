@@ -27,6 +27,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+/* TODO Remove this if create_grouped_path ends up in another module. */
 #include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/parsetree.h"
@@ -56,7 +57,12 @@ static int	append_startup_cost_compare(const void *a, const void *b);
 static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 								 List *pathlist,
 								 RelOptInfo *child_rel);
-
+static Bitmapset *combine_uniquekeys(Path *outerpath, Bitmapset *outerset,
+				   Path *innerpath,
+				   Bitmapset *innerset,
+				   PathTarget *target);
+static void make_uniquekeys_for_unique_index(PathTarget *reltarget,
+								 IndexOptInfo *index, Path *path);
 
 /*****************************************************************************
  *		MISC. PATH UTILITIES
@@ -955,10 +961,15 @@ create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
 					Relids required_outer, int parallel_workers)
 {
 	Path	   *pathnode = makeNode(Path);
+	bool		grouped = rel->agg_info != NULL;
 
 	pathnode->pathtype = T_SeqScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = rel->reltarget;
+	/* For grouped relation only generate the aggregation input. */
+	if (!grouped)
+		pathnode->pathtarget = rel->reltarget;
+	else
+		pathnode->pathtarget = rel->agg_info->input;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = parallel_workers > 0 ? true : false;
@@ -1038,10 +1049,15 @@ create_index_path(PlannerInfo *root,
 	RelOptInfo *rel = index->rel;
 	List	   *indexquals,
 			   *indexqualcols;
+	bool		grouped = rel->agg_info != NULL;
 
 	pathnode->path.pathtype = indexonly ? T_IndexOnlyScan : T_IndexScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	/* For grouped relation only generate the aggregation input. */
+	if (!grouped)
+		pathnode->path.pathtarget = rel->reltarget;
+	else
+		pathnode->path.pathtarget = rel->agg_info->input;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1189,10 +1205,15 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
 					Relids required_outer)
 {
 	TidPath    *pathnode = makeNode(TidPath);
+	bool		grouped = rel->agg_info != NULL;
 
 	pathnode->path.pathtype = T_TidScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	/* For grouped relation only generate the aggregation input. */
+	if (!grouped)
+		pathnode->path.pathtarget = rel->reltarget;
+	else
+		pathnode->path.pathtarget = rel->agg_info->input;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1229,8 +1250,10 @@ create_append_path(PlannerInfo *root,
 	Assert(!parallel_aware || parallel_workers > 0);
 
 	pathnode->path.pathtype = T_Append;
-	pathnode->path.parent = rel;
+
 	pathnode->path.pathtarget = rel->reltarget;
+
+	pathnode->path.parent = rel;
 
 	/*
 	 * When generating an Append path for a partitioned table, there may be
@@ -1341,11 +1364,13 @@ append_startup_cost_compare(const void *a, const void *b)
 /*
  * create_merge_append_path
  *	  Creates a path corresponding to a MergeAppend plan, returning the
- *	  pathnode.
+ *	  pathnode. target can be supplied by caller. If NULL is passed, the field
+ *	  is set to rel->reltarget.
  */
 MergeAppendPath *
 create_merge_append_path(PlannerInfo *root,
 						 RelOptInfo *rel,
+						 PathTarget *target,
 						 List *subpaths,
 						 List *pathkeys,
 						 Relids required_outer,
@@ -1358,7 +1383,7 @@ create_merge_append_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_MergeAppend;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	pathnode->path.pathtarget = target ? target : rel->reltarget;
 	pathnode->path.param_info = get_appendrel_parampathinfo(rel,
 															required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1495,6 +1520,7 @@ create_material_path(RelOptInfo *rel, Path *subpath)
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = subpath->pathkeys;
+	pathnode->path.uniquekeys = subpath->uniquekeys;
 
 	pathnode->subpath = subpath;
 
@@ -1528,7 +1554,9 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	MemoryContext oldcontext;
 	int			numCols;
 
-	/* Caller made a mistake if subpath isn't cheapest_total ... */
+	/*
+	 * Caller made a mistake if subpath isn't cheapest_total.
+	 */
 	Assert(subpath == rel->cheapest_total_path);
 	Assert(subpath->parent == rel);
 	/* ... or if SpecialJoinInfo is the wrong one */
@@ -2149,6 +2177,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
  *	  relations.
  *
  * 'joinrel' is the join relation.
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_nestloop
  * 'extra' contains various information about the join
@@ -2163,6 +2192,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
 NestPath *
 create_nestloop_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2203,7 +2233,7 @@ create_nestloop_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_NestLoop;
 	pathnode->path.parent = joinrel;
-	pathnode->path.pathtarget = joinrel->reltarget;
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2235,6 +2265,7 @@ create_nestloop_path(PlannerInfo *root,
  *	  two relations
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_mergejoin
  * 'extra' contains various information about the join
@@ -2251,6 +2282,7 @@ create_nestloop_path(PlannerInfo *root,
 MergePath *
 create_mergejoin_path(PlannerInfo *root,
 					  RelOptInfo *joinrel,
+					  PathTarget *target,
 					  JoinType jointype,
 					  JoinCostWorkspace *workspace,
 					  JoinPathExtraData *extra,
@@ -2267,7 +2299,7 @@ create_mergejoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_MergeJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2303,6 +2335,7 @@ create_mergejoin_path(PlannerInfo *root,
  *	  Creates a pathnode corresponding to a hash join between two relations.
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_hashjoin
  * 'extra' contains various information about the join
@@ -2317,6 +2350,7 @@ create_mergejoin_path(PlannerInfo *root,
 HashPath *
 create_hashjoin_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2331,7 +2365,7 @@ create_hashjoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_HashJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2413,8 +2447,8 @@ create_projection_path(PlannerInfo *root,
 	 * Note: in the latter case, create_projection_plan has to recheck our
 	 * conclusion; see comments therein.
 	 */
-	if (is_projection_capable_path(subpath) ||
-		equal(oldtarget->exprs, target->exprs))
+	if ((is_projection_capable_path(subpath) ||
+		 equal(oldtarget->exprs, target->exprs)))
 	{
 		/* No separate Result node needed */
 		pathnode->dummypp = true;
@@ -2647,6 +2681,7 @@ create_sort_path(PlannerInfo *root,
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = pathkeys;
+	pathnode->path.uniquekeys = subpath->uniquekeys;
 
 	pathnode->subpath = subpath;
 
@@ -2799,8 +2834,7 @@ create_agg_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Agg;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
@@ -2830,6 +2864,179 @@ create_agg_path(PlannerInfo *root,
 		target->cost.per_tuple * pathnode->path.rows;
 
 	return pathnode;
+}
+
+/*
+ * Apply AGG_SORTED aggregation path to subpath if it's suitably sorted.
+ *
+ * check_pathkeys can be passed FALSE if the function was already called for
+ * given index --- since the target should not change, we can skip the check
+ * of sorting during subsequent calls.
+ *
+ * NULL is returned if sorting of subpath output is not suitable.
+ */
+AggPath *
+create_agg_sorted_path(PlannerInfo *root, Path *subpath,
+					   bool check_pathkeys, double input_rows)
+{
+	RelOptInfo *rel;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Node	   *qual = NULL;
+	AggPath    *result = NULL;
+	RelAggInfo *agg_info;
+
+	rel = subpath->parent;
+	agg_info = rel->agg_info;
+	Assert(agg_info != NULL);
+
+	aggsplit = AGGSPLIT_SIMPLE;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	if (subpath->pathkeys == NIL)
+		return NULL;
+
+	if (!grouping_is_sortable(root->parse->groupClause))
+		return NULL;
+
+	if (check_pathkeys)
+	{
+		ListCell   *lc1;
+		List	   *key_subset = NIL;
+
+		/*
+		 * Find all query pathkeys that our relation does affect.
+		 */
+		foreach(lc1, root->group_pathkeys)
+		{
+			PathKey    *gkey = castNode(PathKey, lfirst(lc1));
+			ListCell   *lc2;
+
+			foreach(lc2, subpath->pathkeys)
+			{
+				PathKey    *skey = castNode(PathKey, lfirst(lc2));
+
+				if (skey == gkey)
+				{
+					key_subset = lappend(key_subset, gkey);
+					break;
+				}
+			}
+		}
+
+		if (key_subset == NIL)
+			return NULL;
+
+		/* Check if AGG_SORTED is useful for the whole query.  */
+		if (!pathkeys_contained_in(key_subset, subpath->pathkeys))
+			return NULL;
+	}
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, (Node *) agg_exprs, aggsplit, &agg_costs);
+
+	if (root->parse->havingQual)
+	{
+		qual = root->parse->havingQual;
+		get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+	}
+
+	Assert(agg_info->group_exprs != NIL);
+	dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+									 input_rows, NULL);
+
+	Assert(agg_info->group_clauses != NIL);
+	result = create_agg_path(root, rel, subpath, target,
+							 AGG_SORTED, aggsplit,
+							 agg_info->group_clauses,
+							 (List *) qual, &agg_costs,
+							 dNumGroups);
+
+	return result;
+}
+
+/*
+ * Apply AGG_HASHED aggregation to subpath.
+ *
+ * Arguments have the same meaning as those of create_agg_sorted_path.
+ */
+AggPath *
+create_agg_hashed_path(PlannerInfo *root, Path *subpath,
+					   double input_rows)
+{
+	RelOptInfo *rel;
+	bool		can_hash;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Size		hashaggtablesize;
+	Query	   *parse = root->parse;
+	Node	   *qual = NULL;
+	AggPath    *result = NULL;
+	RelAggInfo *agg_info;
+
+	rel = subpath->parent;
+	agg_info = rel->agg_info;
+	Assert(agg_info != NULL);
+
+	aggsplit = AGGSPLIT_SIMPLE;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+
+	if (parse->havingQual)
+	{
+		qual = parse->havingQual;
+		get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+	}
+
+	can_hash = (parse->groupClause != NIL &&
+				parse->groupingSets == NIL &&
+				agg_costs.numOrderedAggs == 0 &&
+				grouping_is_hashable(parse->groupClause));
+
+	if (can_hash)
+	{
+		Assert(agg_info->group_exprs != NIL);
+		dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+										 input_rows, NULL);
+
+		hashaggtablesize = estimate_hashagg_tablesize(subpath, &agg_costs,
+													  dNumGroups);
+
+		if (hashaggtablesize < work_mem * 1024L)
+		{
+			/*
+			 * Create the partial aggregation path.
+			 */
+			Assert(agg_info->group_clauses != NIL);
+
+			result = create_agg_path(root, rel, subpath,
+									 target,
+									 AGG_HASHED,
+									 aggsplit,
+									 agg_info->group_clauses,
+									 (List *) qual,
+									 &agg_costs,
+									 dNumGroups);
+
+			/*
+			 * The agg path should require no fewer parameters than the plain
+			 * one.
+			 */
+			result->path.param_info = subpath->param_info;
+		}
+	}
+
+	return result;
 }
 
 /*
@@ -3955,4 +4162,403 @@ reparameterize_pathlist_by_child(PlannerInfo *root,
 	}
 
 	return result;
+}
+
+/*
+ * Find out if path produces an unique set of expressions and set uniquekeys
+ * accordingly.
+ *
+ * TODO Check if any expression of any unique key isn't nullable, whether in
+ * the table / index or by an outer join.
+ */
+void
+make_uniquekeys(PlannerInfo *root, Path *path)
+{
+	RelOptInfo *rel;
+
+	/*
+	 * The unique keys are not interesting if there's no chance to push
+	 * aggregation down to base relations / joins.
+	 */
+	if (root->grouped_var_list == NIL)
+		return;
+
+	/*
+	 * Do not accept repeated calls of the function on the same path.
+	 */
+	if (path->uniquekeys != NIL)
+		return;
+
+	rel = path->parent;
+
+	/*
+	 * Base relations.
+	 */
+	if (IsA(path, IndexPath) ||
+		(IsA(path, Path) &&path->pathtype == T_SeqScan))
+	{
+		ListCell   *lc;
+
+		/*
+		 * Derive grouping keys from unique indexes.
+		 */
+		if (IsA(path, IndexPath) ||IsA(path, Path))
+		{
+			foreach(lc, rel->indexlist)
+			{
+				IndexOptInfo *index = lfirst_node(IndexOptInfo, lc);
+
+				make_uniquekeys_for_unique_index(rel->reltarget, index, path);
+			}
+		}
+#ifdef USE_ASSERT_CHECKING
+		else
+			Assert(false);
+#endif
+		return;
+	}
+
+	if (IsA(path, AggPath))
+	{
+		/*
+		 * The immediate output of aggregation essentially produces an unique
+		 * set of grouping keys.
+		 */
+		make_uniquekeys_for_agg_path(path);
+		return;
+	}
+#ifdef USE_ASSERT_CHECKING
+
+	/*
+	 * TODO Consider other ones, e.g. UniquePath.
+	 */
+	Assert(false);
+#endif
+}
+
+/*
+ * Create uniquekeys for a path that has Aggrefs in its target.
+ * set.
+ *
+ * Besides AggPath, ForeignPath is a known use case for this function.
+ */
+void
+make_uniquekeys_for_agg_path(Path *path)
+{
+	PathTarget *target;
+	ListCell   *lc;
+	Bitmapset  *keyset = NULL;
+	int			i = 0;
+
+	target = path->pathtarget;
+	Assert(target->sortgrouprefs != NULL);
+
+	foreach(lc, target->exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		if (IsA(expr, GroupedVar))
+		{
+			GroupedVar *gvar = castNode(GroupedVar, expr);
+
+			if (!IsA(gvar->gvexpr, Aggref))
+			{
+				/*
+				 * Generic grouping expression.
+				 */
+				keyset = bms_add_member(keyset, i);
+			}
+		}
+		else
+		{
+			Assert(IsA(expr, Var));
+
+			if (target->sortgrouprefs[i] > 0)
+			{
+				/*
+				 * Plain Var grouping expression.
+				 */
+				keyset = bms_add_member(keyset, i);
+			}
+			else
+			{
+				/*
+				 * A column functionally dependent on the GROUP BY clause?
+				 */
+			}
+		}
+
+		i++;
+	}
+
+	add_uniquekeys(&path->uniquekeys, keyset);
+}
+
+/*
+ * Unlike other kinds of path, creation of join path might be rejected due to
+ * inappropriate uniquekeys. Therefore this function only derives uniquekeys
+ * for a join and checks if the join would produce unique grouping
+ * keys. Caller is responsible for adding them to the path if it's eventually
+ * created.
+ */
+List *
+make_uniquekeys_for_join(PlannerInfo *root, Path *outerpath, Path *innerpath,
+						 PathTarget *target, bool *keys_ok)
+{
+	ListCell   *l1;
+	List	   *result = NIL;
+
+	*keys_ok = true;
+
+	/*
+	 * Find out if the join produces unique keys for various combinations of
+	 * input sets of unique keys.
+	 *
+	 * TODO Implement heuristic that picks a few most useful sets on each
+	 * side, to avoid exponential growth of the uniquekeys list as we proceed
+	 * from lower to higher joins. Maybe also discard the resulting sets
+	 * containing unique expressions which are not grouping expressions (and
+	 * of course which are not aggregates) of this join's target.
+	 */
+	foreach(l1, outerpath->uniquekeys)
+	{
+		ListCell   *l2;
+		Bitmapset  *outerset = (Bitmapset *) lfirst(l1);
+
+		foreach(l2, innerpath->uniquekeys)
+		{
+			Bitmapset  *innerset = (Bitmapset *) lfirst(l2);
+			Bitmapset  *joinset;
+
+			joinset = combine_uniquekeys(outerpath, outerset, innerpath,
+										 innerset, target);
+			if (joinset != NULL)
+			{
+				/* Add the set to the path. */
+				add_uniquekeys(&result, joinset);
+			}
+		}
+	}
+
+	if (!match_uniquekeys_to_group_pathkeys(root, result, target))
+		*keys_ok = false;
+
+	return result;
+}
+
+/*
+ * Create join uniquekeys out of the uniquekeys of input paths.
+ */
+static Bitmapset *
+combine_uniquekeys(Path *outerpath, Bitmapset *outerset, Path *innerpath,
+				   Bitmapset *innerset, PathTarget *target)
+{
+	ListCell   *l1;
+	PathTarget *unique_exprs;
+	Expr	   *expr;
+	Index		sortgroupref;
+	int			i;
+	Bitmapset  *result = NULL;
+
+	/*
+	 * TODO sortgroupref is used to improve matching of the input and output
+	 * path. Better solution might be to store the uniquekeys as a list of EC
+	 * pointers, which is how PathKey is implemented.
+	 */
+
+	/*
+	 * Use PathTarget so that we can store both expression and its
+	 * sortgroupref.
+	 */
+	unique_exprs = create_empty_pathtarget();
+
+	/*
+	 * First, collect the expressions corresponding to the uniquekeys of each
+	 * input target.
+	 */
+	i = 0;
+	foreach(l1, outerpath->pathtarget->exprs)
+	{
+		expr = (Expr *) lfirst(l1);
+
+		sortgroupref = 0;
+		if (outerpath->pathtarget->sortgrouprefs)
+			sortgroupref = outerpath->pathtarget->sortgrouprefs[i];
+
+		if (bms_is_member(i, outerset))
+			add_column_to_pathtarget(unique_exprs, expr, sortgroupref);
+
+		i++;
+	}
+	i = 0;
+	foreach(l1, innerpath->pathtarget->exprs)
+	{
+		expr = (Expr *) lfirst(l1);
+
+		sortgroupref = 0;
+		if (innerpath->pathtarget->sortgrouprefs)
+			sortgroupref = innerpath->pathtarget->sortgrouprefs[i];
+
+		if (bms_is_member(i, innerset))
+			add_column_to_pathtarget(unique_exprs, expr, sortgroupref);
+
+		i++;
+	}
+	if (unique_exprs->exprs == NIL)
+		return NULL;
+
+	/*
+	 * Now find each expression in the join target and add the position to the
+	 * output uniquekeys.
+	 */
+	i = 0;
+	foreach(l1, unique_exprs->exprs)
+	{
+		Expr	   *unique_expr = (Expr *) lfirst(l1);
+		Index		sortgroupref = 0;
+		ListCell   *l2;
+		int			j;
+		bool		match = false;
+
+		if (unique_exprs->sortgrouprefs)
+			sortgroupref = unique_exprs->sortgrouprefs[i];
+
+		/*
+		 * As some expressions of the input uniquekeys do not necessarily
+		 * appear in the output target (they could have been there just
+		 * because of the join clause of the current join), we first try to
+		 * find match using sortgroupref. If one expression is gone but other
+		 * one with the same sortgroupref still exists (i.e. one was derived
+		 * from the other), it should always have the same value.
+		 */
+		j = 0;
+		if (sortgroupref > 0)
+		{
+			foreach(l2, target->exprs)
+			{
+				Index		sortgroupref_target = 0;
+
+				if (target->sortgrouprefs)
+					sortgroupref_target = target->sortgrouprefs[j];
+
+				if (sortgroupref_target == sortgroupref)
+				{
+					result = bms_add_member(result, i);
+					match = true;
+					break;
+				}
+			}
+		}
+
+		if (match)
+		{
+			i++;
+			continue;
+		}
+
+		/*
+		 * If sortgroupref didn't help, we need to find the exact expression.
+		 */
+		j = 0;
+		foreach(l2, target->exprs)
+		{
+			Expr	   *expr = (Expr *) lfirst(l2);
+
+			if (equal(expr, unique_expr))
+			{
+				result = bms_add_member(result, i);
+				match = true;
+				break;
+			}
+
+			j++;
+		}
+
+		/*
+		 * We can't construct uniquekeys for the join.
+		 */
+		if (!match)
+			return NULL;
+
+		i++;
+	}
+
+	return result;
+}
+
+void
+free_uniquekeys(List *uniquekeys)
+{
+	ListCell   *lc;
+
+	foreach(lc, uniquekeys)
+		bms_free((Bitmapset *) lc);
+	list_free(uniquekeys);
+}
+
+/*
+ * Create a set of positions of expressions in reltarget if the index is
+ * unique and if reltarget contains all the index columns. Add the set to
+ * uniquekeys if identical one is not already there.
+ */
+static void
+make_uniquekeys_for_unique_index(PathTarget *reltarget, IndexOptInfo *index,
+								 Path *path)
+{
+	int			i;
+	Bitmapset  *new_set = NULL;
+
+	/*
+	 * Give up if the index does not guarantee uniqueness.
+	 */
+	if (!index->unique || !index->immediate ||
+		(index->indpred != NIL && !index->predOK))
+		return;
+
+	/*
+	 * For the index path to be acceptable, reltarget must contain all the
+	 * index columns.
+	 *
+	 * reltarget is not supposed to contain non-var expressions, so the index
+	 * should neither.
+	 */
+	if (index->indexprs != NULL)
+		return;
+
+	for (i = 0; i < index->ncolumns; i++)
+	{
+		int			indkey = index->indexkeys[i];
+		ListCell   *lc;
+		bool		found = false;
+		int			j = 0;
+
+		foreach(lc, reltarget->exprs)
+		{
+			Var		   *var = lfirst_node(Var, lc);
+
+			if (var->varno == index->rel->relid && var->varattno == indkey)
+			{
+				new_set = bms_add_member(new_set, j);
+				found = true;
+				break;
+			}
+
+			j++;
+		}
+
+		/*
+		 * If rel needs less than the whole index key then the values of the
+		 * columns matched so far can be duplicate.
+		 */
+		if (!found)
+		{
+			bms_free(new_set);
+			return;
+		}
+	}
+
+	/*
+	 * Add the set to the path, unless it's already there.
+	 */
+	add_uniquekeys(&path->uniquekeys, new_set);
 }

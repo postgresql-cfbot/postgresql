@@ -88,6 +88,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/var.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
@@ -1064,6 +1065,17 @@ cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
 	{
 		*cost = path->total_cost;
 		*selec = ((BitmapOrPath *) path)->bitmapselectivity;
+	}
+	else if (IsA(path, AggPath))
+	{
+		/*
+		 * If partial aggregation was already applied, use only the input
+		 * path.
+		 *
+		 * TODO Take the aggregation into account, both cost and its effect on
+		 * selectivity (i.e. how it reduces the number of rows).
+		 */
+		cost_bitmap_tree_node(((AggPath *) path)->subpath, cost, selec);
 	}
 	else
 	{
@@ -2287,6 +2299,41 @@ cost_group(Path *path, PlannerInfo *root,
 	path->total_cost = total_cost;
 }
 
+static void
+estimate_join_rows(PlannerInfo *root, Path *path, RelAggInfo *agg_info)
+{
+	bool		grouped = agg_info != NULL;
+
+	if (path->param_info)
+	{
+		double		nrows;
+
+		path->rows = path->param_info->ppi_rows;
+		if (grouped)
+		{
+			nrows = estimate_num_groups(root, agg_info->group_exprs,
+										path->rows, NULL);
+			path->rows = clamp_row_est(nrows);
+		}
+	}
+	else
+	{
+		if (!grouped)
+			path->rows = path->parent->rows;
+		else
+		{
+			/*
+			 * XXX agg_info->rows is an estimate of the output rows if we join
+			 * the non-grouped rels and aggregate the output. However the
+			 * figure can be different if an already grouped rel is joined to
+			 * non-grouped one. Is this worth adding a new field to the
+			 * agg_info?
+			 */
+			path->rows = agg_info->rows;
+		}
+	}
+}
+
 /*
  * initial_cost_nestloop
  *	  Preliminary estimate of the cost of a nestloop join path.
@@ -2408,10 +2455,7 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 		inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
-	if (path->path.param_info)
-		path->path.rows = path->path.param_info->ppi_rows;
-	else
-		path->path.rows = path->path.parent->rows;
+	estimate_join_rows(root, (Path *) path, path->path.parent->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->path.parallel_workers > 0)
@@ -2854,10 +2898,8 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
+	estimate_join_rows(root, (Path *) path,
+					   path->jpath.path.parent->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->jpath.path.parallel_workers > 0)
@@ -3279,10 +3321,8 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	ListCell   *hcl;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
+	estimate_join_rows(root, (Path *) path,
+					   path->jpath.path.parent->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->jpath.path.parallel_workers > 0)
@@ -3805,8 +3845,9 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 	 * estimated execution cost given by pg_proc.procost (remember to multiply
 	 * this by cpu_operator_cost).
 	 *
-	 * Vars and Consts are charged zero, and so are boolean operators (AND,
-	 * OR, NOT). Simplistic, but a lot better than no model at all.
+	 * Vars, GroupedVars and Consts are charged zero, and so are boolean
+	 * operators (AND, OR, NOT). Simplistic, but a lot better than no model at
+	 * all.
 	 *
 	 * Should we try to account for the possibility of short-circuit
 	 * evaluation of AND/OR?  Probably *not*, because that would make the
@@ -4287,11 +4328,13 @@ approx_tuple_count(PlannerInfo *root, JoinPath *path, List *quals)
  *		  restriction clauses).
  *	width: the estimated average output tuple width in bytes.
  *	baserestrictcost: estimated cost of evaluating baserestrictinfo clauses.
+ *	grouped: will partial aggregation be applied to each path?
  */
 void
 set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 {
 	double		nrows;
+	bool		grouped = rel->agg_info != NULL;
 
 	/* Should only be applied to base relations */
 	Assert(rel->relid > 0);
@@ -4302,12 +4345,31 @@ set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 							   0,
 							   JOIN_INNER,
 							   NULL);
-
 	rel->rows = clamp_row_est(nrows);
+
+	/*
+	 * Grouping essentially changes the number of rows.
+	 */
+	if (grouped)
+	{
+		nrows = estimate_num_groups(root,
+									rel->agg_info->group_exprs, nrows,
+									NULL);
+		rel->agg_info->rows = clamp_row_est(nrows);
+	}
 
 	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
 
-	set_rel_width(root, rel);
+	/*
+	 * The grouped target should have the cost and width set immediately on
+	 * creation, see create_rel_agg_info().
+	 */
+	if (!grouped)
+		set_rel_width(root, rel);
+#ifdef USE_ASSERT_CHECKING
+	else
+		Assert(rel->reltarget->width > 0);
+#endif
 }
 
 /*
@@ -4375,12 +4437,23 @@ set_joinrel_size_estimates(PlannerInfo *root, RelOptInfo *rel,
 						   SpecialJoinInfo *sjinfo,
 						   List *restrictlist)
 {
+	double		outer_rows,
+				inner_rows;
+
+	/*
+	 * Take grouping of the input rels into account.
+	 */
+	outer_rows = outer_rel->agg_info ? outer_rel->agg_info->rows :
+		outer_rel->rows;
+	inner_rows = inner_rel->agg_info ? inner_rel->agg_info->rows :
+		inner_rel->rows;
+
 	rel->rows = calc_joinrel_size_estimate(root,
 										   rel,
 										   outer_rel,
 										   inner_rel,
-										   outer_rel->rows,
-										   inner_rel->rows,
+										   outer_rows,
+										   inner_rows,
 										   sjinfo,
 										   restrictlist);
 }
@@ -5257,11 +5330,11 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 	foreach(lc, target->exprs)
 	{
 		Node	   *node = (Node *) lfirst(lc);
+		int32		item_width;
 
 		if (IsA(node, Var))
 		{
 			Var		   *var = (Var *) node;
-			int32		item_width;
 
 			/* We should not see any upper-level Vars here */
 			Assert(var->varlevelsup == 0);
@@ -5289,6 +5362,25 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 			 * No cached data available, so estimate using just the type info.
 			 */
 			item_width = get_typavgwidth(var->vartype, var->vartypmod);
+			Assert(item_width > 0);
+			tuple_width += item_width;
+		}
+		else if (IsA(node, GroupedVar))
+		{
+			GroupedVar *gvar = (GroupedVar *) node;
+			Node	   *expr;
+
+			/*
+			 * Only AggPath can evaluate GroupedVar if it's an aggregate, or
+			 * the AggPath's input path if it's a generic grouping expression.
+			 * In the other cases the GroupedVar we see here only bubbled up
+			 * from a lower AggPath, so it does not add any cost to the path
+			 * that owns this target.
+			 *
+			 * XXX Is the value worth caching in GroupedVar?
+			 */
+			expr = (Node *) gvar->gvexpr;
+			item_width = get_typavgwidth(exprType(expr), exprTypmod(expr));
 			Assert(item_width > 0);
 			tuple_width += item_width;
 		}

@@ -840,3 +840,25 @@ alias_relid_set(PlannerInfo *root, Relids relids)
 	}
 	return result;
 }
+
+/*
+ * Return GroupedVarInfo for given GroupedVar.
+ *
+ * XXX Consider better location of this routine.
+ */
+GroupedVarInfo *
+find_grouped_var_info(PlannerInfo *root, GroupedVar *gvar)
+{
+	ListCell   *l;
+
+	foreach(l, root->grouped_var_list)
+	{
+		GroupedVarInfo *gvi = lfirst_node(GroupedVarInfo, l);
+
+		if (gvi->gvid == gvar->gvid)
+			return gvi;
+	}
+
+	elog(ERROR, "GroupedVarInfo not found");
+	return NULL;				/* keep compiler quiet */
+}

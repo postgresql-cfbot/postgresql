@@ -40,6 +40,7 @@ typedef struct
 	List	   *tlist;			/* underlying target list */
 	int			num_vars;		/* number of plain Var tlist entries */
 	bool		has_ph_vars;	/* are there PlaceHolderVar entries? */
+	bool		has_grp_vars;	/* are there GroupedVar entries? */
 	bool		has_non_vars;	/* are there other entries? */
 	bool		has_conv_whole_rows;	/* are there ConvertRowtypeExpr
 										 * entries encapsulating a whole-row
@@ -1988,6 +1989,7 @@ build_tlist_index(List *tlist)
 	indexed_tlist *itlist;
 	tlist_vinfo *vinfo;
 	ListCell   *l;
+	List	   *tlist_gvars = NIL;
 
 	/* Create data structure with enough slots for all tlist entries */
 	itlist = (indexed_tlist *)
@@ -1996,6 +1998,7 @@ build_tlist_index(List *tlist)
 
 	itlist->tlist = tlist;
 	itlist->has_ph_vars = false;
+	itlist->has_grp_vars = false;
 	itlist->has_non_vars = false;
 	itlist->has_conv_whole_rows = false;
 
@@ -2016,6 +2019,8 @@ build_tlist_index(List *tlist)
 		}
 		else if (tle->expr && IsA(tle->expr, PlaceHolderVar))
 			itlist->has_ph_vars = true;
+		else if (tle->expr && IsA(tle->expr, GroupedVar))
+			tlist_gvars = lappend(tlist_gvars, tle);
 		else if (is_converted_whole_row_reference((Node *) tle->expr))
 			itlist->has_conv_whole_rows = true;
 		else
@@ -2023,6 +2028,42 @@ build_tlist_index(List *tlist)
 	}
 
 	itlist->num_vars = (vinfo - itlist->vars);
+
+	/*
+	 * If the targetlist contains GroupedVars, we may need to match them to
+	 * Aggrefs in the upper plan. Thus the upper planner can always put
+	 * Aggrefs into the targetlists, regardless the subplan(s) contain the
+	 * original Aggrefs or GroupedVar substitutions.
+	 */
+	if (list_length(tlist_gvars) > 0)
+	{
+		List	   *tlist_new;
+
+		/*
+		 * Copy the source list because caller does not expect to see the
+		 * items we're going to add.
+		 */
+		tlist_new = list_copy(itlist->tlist);
+
+		foreach(l, tlist_gvars)
+		{
+			TargetEntry *tle = lfirst_node(TargetEntry, l);
+			TargetEntry *tle_new;
+			GroupedVar *gvar = castNode(GroupedVar, tle->expr);
+
+			/*
+			 * Add the entry to match the Aggref.
+			 */
+			tle_new = flatCopyTargetEntry(tle);
+			tle_new->expr = gvar->gvexpr;
+			tlist_new = lappend(tlist_new, tle_new);
+		}
+
+		itlist->tlist = tlist_new;
+		itlist->has_grp_vars = true;
+
+		list_free(tlist_gvars);
+	}
 
 	return itlist;
 }
@@ -2299,6 +2340,48 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		/* No referent found for Var */
 		elog(ERROR, "variable not found in subplan target lists");
 	}
+	if (IsA(node, GroupedVar) ||IsA(node, Aggref))
+	{
+		bool		try = true;
+
+		/*
+		 * The upper plan targetlist can contain Aggref whose value has
+		 * already been evaluated by the subplan and is being delivered via
+		 * GroupedVar. However this is true only for specific kinds of Aggref.
+		 */
+		if (IsA(node, Aggref))
+		{
+			Aggref	   *aggref = castNode(Aggref, node);
+
+			if (aggref->aggsplit != AGGSPLIT_SIMPLE &&
+				aggref->aggsplit != AGGSPLIT_INITIAL_SERIAL)
+				try = false;
+		}
+
+		if (try)
+		{
+			/* See if the GroupedVar has bubbled up from a lower plan node */
+			if (context->outer_itlist && context->outer_itlist->has_grp_vars)
+			{
+				newvar = search_indexed_tlist_for_non_var((Expr *) node,
+														  context->outer_itlist,
+														  OUTER_VAR);
+				if (newvar)
+					return (Node *) newvar;
+			}
+			if (context->inner_itlist && context->inner_itlist->has_grp_vars)
+			{
+				newvar = search_indexed_tlist_for_non_var((Expr *) node,
+														  context->inner_itlist,
+														  INNER_VAR);
+				if (newvar)
+					return (Node *) newvar;
+			}
+		}
+
+		/* No referent found for GroupedVar */
+		elog(ERROR, "grouped variable not found in subplan target lists");
+	}
 	if (IsA(node, PlaceHolderVar))
 	{
 		PlaceHolderVar *phv = (PlaceHolderVar *) node;
@@ -2461,7 +2544,8 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		/* If no match, just fall through to process it normally */
 	}
 	/* Try matching more complex expressions too, if tlist has any */
-	if (context->subplan_itlist->has_non_vars ||
+	if (context->subplan_itlist->has_grp_vars ||
+		context->subplan_itlist->has_non_vars ||
 		(context->subplan_itlist->has_conv_whole_rows &&
 		 is_converted_whole_row_reference(node)))
 	{

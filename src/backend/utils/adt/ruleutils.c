@@ -7757,6 +7757,35 @@ get_rule_expr(Node *node, deparse_context *context,
 			get_agg_expr((Aggref *) node, context, (Aggref *) node);
 			break;
 
+		case T_GroupedVar:
+			{
+				GroupedVar *gvar = castNode(GroupedVar, node);
+				Expr	   *expr = gvar->gvexpr;
+
+				/*
+				 * GroupedVar that setrefs.c leaves in the tree should only
+				 * exist in the Agg plan targetlist (while the GroupedVars in
+				 * upper plans should have been replaced with Vars). If
+				 * agg_partial is not initialized, the AGGSPLIT_SIMPLE
+				 * aggregate has been pushed down.
+				 */
+				if (IsA(expr, Aggref))
+				{
+					Aggref	   *aggref;
+
+					aggref = (Aggref *) gvar->gvexpr;
+					get_agg_expr(aggref, context, (Aggref *) gvar->gvexpr);
+				}
+				else if (IsA(expr, Var))
+					(void) get_variable((Var *) expr, 0, false, context);
+				else
+				{
+					Assert(IsA(gvar->gvexpr, OpExpr));
+					get_oper_expr((OpExpr *) expr, context);
+				}
+				break;
+			}
+
 		case T_GroupingFunc:
 			{
 				GroupingFunc *gexpr = (GroupingFunc *) node;
@@ -9242,10 +9271,18 @@ get_agg_combine_expr(Node *node, deparse_context *context, void *private)
 	Aggref	   *aggref;
 	Aggref	   *original_aggref = private;
 
-	if (!IsA(node, Aggref))
+	if (IsA(node, Aggref))
+		aggref = (Aggref *) node;
+	else if (IsA(node, GroupedVar))
+	{
+		GroupedVar *gvar = castNode(GroupedVar, node);
+
+		aggref = (Aggref *) gvar->gvexpr;
+		original_aggref = castNode(Aggref, gvar->gvexpr);
+	}
+	else
 		elog(ERROR, "combining Aggref does not point to an Aggref");
 
-	aggref = (Aggref *) node;
 	get_agg_expr(aggref, context, original_aggref);
 }
 

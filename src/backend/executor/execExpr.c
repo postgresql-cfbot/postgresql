@@ -798,6 +798,41 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_GroupedVar:
+
+			/*
+			 * If GroupedVar appears in targetlist of Agg node, it can
+			 * represent either Aggref or grouping expression.
+			 *
+			 * TODO Consider doing this expansion earlier, e.g. in setrefs.c.
+			 */
+			if (state->parent && (IsA(state->parent, AggState)))
+			{
+				GroupedVar *gvar = (GroupedVar *) node;
+
+				if (IsA(gvar->gvexpr, Aggref))
+				{
+					ExecInitExprRec((Expr *) gvar->gvexpr, state,
+									resv, resnull);
+				}
+				else
+					ExecInitExprRec((Expr *) gvar->gvexpr, state,
+									resv, resnull);
+				break;
+			}
+			else
+			{
+				/*
+				 * set_plan_refs should have replaced GroupedVar in the
+				 * targetlist with an ordinary Var.
+				 *
+				 * XXX Should we error out here? There's at least one legal
+				 * case here which we'd have to check: a Result plan with no
+				 * outer plan which represents an empty Append plan.
+				 */
+				break;
+			}
+
 		case T_GroupingFunc:
 			{
 				GroupingFunc *grp_node = (GroupingFunc *) node;

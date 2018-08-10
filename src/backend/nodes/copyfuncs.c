@@ -1433,6 +1433,7 @@ _copyAggref(const Aggref *from)
 	COPY_SCALAR_FIELD(aggcollid);
 	COPY_SCALAR_FIELD(inputcollid);
 	COPY_SCALAR_FIELD(aggtranstype);
+	COPY_SCALAR_FIELD(aggcombinefn);
 	COPY_NODE_FIELD(aggargtypes);
 	COPY_NODE_FIELD(aggdirectargs);
 	COPY_NODE_FIELD(args);
@@ -2285,6 +2286,22 @@ _copyPlaceHolderVar(const PlaceHolderVar *from)
 }
 
 /*
+ * _copyGroupedVar
+ */
+static GroupedVar *
+_copyGroupedVar(const GroupedVar *from)
+{
+	GroupedVar *newnode = makeNode(GroupedVar);
+
+	COPY_NODE_FIELD(gvexpr);
+	COPY_SCALAR_FIELD(sortgroupref);
+	COPY_SCALAR_FIELD(gvid);
+	COPY_SCALAR_FIELD(width);
+
+	return newnode;
+}
+
+/*
  * _copySpecialJoinInfo
  */
 static SpecialJoinInfo *
@@ -2339,6 +2356,20 @@ _copyPlaceHolderInfo(const PlaceHolderInfo *from)
 	COPY_BITMAPSET_FIELD(ph_lateral);
 	COPY_BITMAPSET_FIELD(ph_needed);
 	COPY_SCALAR_FIELD(ph_width);
+
+	return newnode;
+}
+
+static GroupedVarInfo *
+_copyGroupedVarInfo(const GroupedVarInfo *from)
+{
+	GroupedVarInfo *newnode = makeNode(GroupedVarInfo);
+
+	COPY_SCALAR_FIELD(gvid);
+	COPY_NODE_FIELD(gvexpr);
+	COPY_SCALAR_FIELD(sortgroupref);
+	COPY_SCALAR_FIELD(gv_eval_at);
+	COPY_SCALAR_FIELD(derived);
 
 	return newnode;
 }
@@ -5101,6 +5132,9 @@ copyObjectImpl(const void *from)
 		case T_PlaceHolderVar:
 			retval = _copyPlaceHolderVar(from);
 			break;
+		case T_GroupedVar:
+			retval = _copyGroupedVar(from);
+			break;
 		case T_SpecialJoinInfo:
 			retval = _copySpecialJoinInfo(from);
 			break;
@@ -5109,6 +5143,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PlaceHolderInfo:
 			retval = _copyPlaceHolderInfo(from);
+			break;
+		case T_GroupedVarInfo:
+			retval = _copyGroupedVarInfo(from);
 			break;
 
 			/*

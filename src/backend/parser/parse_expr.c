@@ -1849,6 +1849,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_CALL_ARGUMENT:
 			err = _("cannot use subquery in CALL argument");
 			break;
+		case EXPR_KIND_PARTITION_BOUND:
+			err = _("cannot use subquery in partition bound");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -3473,6 +3476,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "WHEN";
 		case EXPR_KIND_PARTITION_EXPRESSION:
 			return "PARTITION BY";
+		case EXPR_KIND_PARTITION_BOUND:
+			return "partition bound";
 		case EXPR_KIND_CALL_ARGUMENT:
 			return "CALL";
 

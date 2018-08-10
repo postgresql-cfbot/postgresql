@@ -469,7 +469,7 @@ gistBuildCallback(Relation index,
 	oldCtx = MemoryContextSwitchTo(buildstate->giststate->tempCxt);
 
 	/* form an index tuple and point it at the heap tuple */
-	itup = gistFormTuple(buildstate->giststate, index, values, isnull, true);
+	itup = gistFormTuple(buildstate->giststate, index, values, isnull, true, false);
 	itup->t_tid = htup->t_self;
 
 	if (buildstate->bufferingMode == GIST_BUFFERING_ACTIVE)

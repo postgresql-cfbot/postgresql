@@ -110,6 +110,17 @@ typedef struct
 	int		   *tleref_to_colnum_map;
 } grouping_sets_data;
 
+/*
+ * Temporary structure for use during WindowClause reordering in order to be
+ * be able to sort WindowClauses on partitioning/ordering prefix.
+ */
+typedef struct
+{
+	WindowClause *wc;
+	List	   *uniqueOrder;	/* A List of unique ordering/partitioning
+								   clauses per Window */
+} WindowClauseSortNode;
+
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
@@ -237,6 +248,7 @@ static void create_partitionwise_grouping_paths(PlannerInfo *root,
 static bool group_by_has_partkey(RelOptInfo *input_rel,
 					 List *targetList,
 					 List *groupClause);
+static int common_prefix_cmp(const void *a, const void *b);
 
 
 /*****************************************************************************
@@ -5254,65 +5266,89 @@ postprocess_setop_tlist(List *new_tlist, List *orig_tlist)
 static List *
 select_active_windows(PlannerInfo *root, WindowFuncLists *wflists)
 {
-	List	   *result;
-	List	   *actives;
+	List	   *result = NIL;
 	ListCell   *lc;
+	WindowClauseSortNode *actives = palloc(sizeof(WindowClauseSortNode)
+									* list_length(root->parse->windowClause));
+	int nActive = 0;
 
 	/* First, make a list of the active windows */
-	actives = NIL;
-	foreach(lc, root->parse->windowClause)
+	foreach (lc, root->parse->windowClause)
 	{
 		WindowClause *wc = lfirst_node(WindowClause, lc);
 
 		/* It's only active if wflists shows some related WindowFuncs */
 		Assert(wc->winref <= wflists->maxWinRef);
-		if (wflists->windowFuncs[wc->winref] != NIL)
-			actives = lappend(actives, wc);
+		if (wflists->windowFuncs[wc->winref] == NIL)
+			continue;
+
+		actives[nActive].wc = wc;
+		actives[nActive].uniqueOrder = list_concat_unique(
+							list_copy(wc->partitionClause), wc->orderClause);
+		nActive++;
 	}
 
 	/*
-	 * Now, ensure that windows with identical partitioning/ordering clauses
-	 * are adjacent in the list.  This is required by the SQL standard, which
-	 * says that only one sort is to be used for such windows, even if they
-	 * are otherwise distinct (eg, different names or framing clauses).
-	 *
-	 * There is room to be much smarter here, for example detecting whether
-	 * one window's sort keys are a prefix of another's (so that sorting for
-	 * the latter would do for the former), or putting windows first that
-	 * match a sort order available for the underlying query.  For the moment
-	 * we are content with meeting the spec.
+	 * Sort windows by their partitioning/ordering clauses, so that the windows
+	 * that need the same sorting are adjacent in the list. This is required by
+	 * the SQL standard, which says that only one sort is to be used for such
+	 * windows, even if they are otherwise distinct (eg, different names or
+	 * framing clauses). Additionally, if the entire list of clauses of one
+	 * window is a prefix of another, put first the window with stronger sorting
+	 * requirements. This way we will first sort for stronger window, and won't
+	 * have to sort again for the weaker one.
 	 */
-	result = NIL;
-	while (actives != NIL)
-	{
-		WindowClause *wc = linitial_node(WindowClause, actives);
-		ListCell   *prev;
-		ListCell   *next;
+	qsort(actives, nActive, sizeof(WindowClauseSortNode), common_prefix_cmp);
 
-		/* Move wc from actives to result */
-		actives = list_delete_first(actives);
-		result = lappend(result, wc);
+	for (; nActive > 0; nActive--)
+		result = lcons(actives[nActive - 1].wc, result);
 
-		/* Now move any matching windows from actives to result */
-		prev = NULL;
-		for (lc = list_head(actives); lc; lc = next)
-		{
-			WindowClause *wc2 = lfirst_node(WindowClause, lc);
-
-			next = lnext(lc);
-			/* framing options are NOT to be compared here! */
-			if (equal(wc->partitionClause, wc2->partitionClause) &&
-				equal(wc->orderClause, wc2->orderClause))
-			{
-				actives = list_delete_cell(actives, lc, prev);
-				result = lappend(result, wc2);
-			}
-			else
-				prev = lc;
-		}
-	}
+	pfree(actives);
 
 	return result;
+}
+
+/*
+ * common_prefix_cmp
+ *	  QSort comparison function for WindowClauseSortNodes
+ *
+ * Sort the windows by the required sorting clauses. First, compare the sort
+ * clauses themselves. Second, if one window's clauses are a prefix of another
+ * one's clauses, put the window with more sort clauses first.
+ */
+static int
+common_prefix_cmp(const void *a, const void *b)
+{
+	WindowClauseSortNode *wcsa = (WindowClauseSortNode *) a;
+	WindowClauseSortNode *wcsb = (WindowClauseSortNode *) b;
+	ListCell *item_a;
+	ListCell *item_b;
+
+	forboth(item_a, wcsa->uniqueOrder, item_b, wcsb->uniqueOrder)
+	{
+		SortGroupClause *sca = lfirst(item_a);
+		SortGroupClause *scb = lfirst(item_b);
+
+		if (sca->tleSortGroupRef > scb->tleSortGroupRef)
+			return -1;
+		else if (sca->tleSortGroupRef < scb->tleSortGroupRef)
+			return 1;
+		else if (sca->sortop > scb->sortop)
+			return -1;
+		else if (sca->sortop < scb->sortop)
+			return 1;
+		else if (sca->nulls_first && !scb->nulls_first)
+			return -1;
+		else if (!sca->nulls_first && scb->nulls_first)
+			return 1;
+	}
+
+	if (list_length(wcsa->uniqueOrder) > list_length(wcsb->uniqueOrder))
+		return -1;
+	else if (list_length(wcsa->uniqueOrder) < list_length(wcsb->uniqueOrder))
+		return 1;
+
+	return 0;
 }
 
 /*

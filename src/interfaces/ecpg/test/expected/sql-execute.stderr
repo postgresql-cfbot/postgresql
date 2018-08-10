@@ -156,15 +156,29 @@
 [NO_PID]: sqlca: code: 0, state: 00000
 [NO_PID]: ecpg_get_data on line 94: RESULT: t offset: -1; array: no
 [NO_PID]: sqlca: code: 0, state: 00000
-[NO_PID]: deallocate_one on line 107: name f
+[NO_PID]: ecpg_execute on line 108: query: select * from test where amount = $1; with 1 parameter(s) on connection main
 [NO_PID]: sqlca: code: 0, state: 00000
-[NO_PID]: ecpg_execute on line 108: query: drop table test; with 0 parameter(s) on connection main
+[NO_PID]: ecpg_execute on line 108: using PQexecPrepared for "select * from test where amount = $1"
 [NO_PID]: sqlca: code: 0, state: 00000
-[NO_PID]: ecpg_execute on line 108: using PQexec
+[NO_PID]: ecpg_free_params on line 108: parameter 1 = 2
 [NO_PID]: sqlca: code: 0, state: 00000
-[NO_PID]: ecpg_process_output on line 108: OK: DROP TABLE
+[NO_PID]: ecpg_process_output on line 108: correctly got 1 tuples with 3 fields
 [NO_PID]: sqlca: code: 0, state: 00000
-[NO_PID]: ECPGtrans on line 109: action "commit"; connection "main"
+[NO_PID]: ecpg_get_data on line 108: RESULT: db: 'r1' offset: -1; array: no
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_get_data on line 108: RESULT: 2 offset: -1; array: no
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_get_data on line 108: RESULT: t offset: -1; array: no
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: deallocate_one on line 121: name f
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_execute on line 122: query: drop table test; with 0 parameter(s) on connection main
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_execute on line 122: using PQexec
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_process_output on line 122: OK: DROP TABLE
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ECPGtrans on line 123: action "commit"; connection "main"
 [NO_PID]: sqlca: code: 0, state: 00000
 [NO_PID]: deallocate_one on line 0: name i
 [NO_PID]: sqlca: code: 0, state: 00000

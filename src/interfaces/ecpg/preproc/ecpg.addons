@@ -283,7 +283,7 @@ ECPG: PrepareStmtPREPAREprepared_nameprep_type_clauseASPreparableStmt block
 		$$.type = NULL;
 		$$.stmt = $4;
 	}
-ECPG: ExecuteStmtEXECUTEprepared_nameexecute_param_clauseexecute_rest block
+ECPG: ExecuteStmtEXECUTEprepared_nameexecute_rest block
 	{ $$ = $2; }
 ECPG: DeclareCursorStmtDECLAREcursor_namecursor_optionsCURSORopt_holdFORSelectStmt block
 	{

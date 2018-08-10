@@ -10785,6 +10785,7 @@ ExecuteStmt: EXECUTE name execute_param_clause
 		;
 
 execute_param_clause: '(' expr_list ')'				{ $$ = $2; }
+					| USING expr_list		{ $$ = $2; }
 					| /* EMPTY */					{ $$ = NIL; }
 					;
 

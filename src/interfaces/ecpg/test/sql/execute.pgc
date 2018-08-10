@@ -104,6 +104,20 @@ exec sql end declare section;
 		printf("name[%d]=%8.8s\tamount[%d]=%d\tletter[%d]=%c\n", i, n, i, a, i, l);
 	}
 
+	/* test the non-standard syntax of passing parameters without USING */
+	exec sql execute f (2) into :name, :amount, :letter;
+
+	for (i=0, j=sqlca.sqlerrd[2]; i<j; i++)
+	{
+		exec sql begin declare section;
+		char n[8], l = letter[i][0];
+		int a = amount[i];
+		exec sql end declare section;
+
+		strncpy(n, name[i], 8);
+		printf("name[%d]=%8.8s\tamount[%d]=%d\tletter[%d]=%c\n", i, n, i, a, i, l);
+	}
+
 	exec sql deallocate f;
 	exec sql drop table test;
 	exec sql commit;

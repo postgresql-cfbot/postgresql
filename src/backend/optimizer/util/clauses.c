@@ -3661,6 +3661,59 @@ eval_const_expressions_mutator(Node *node,
 													  context);
 			}
 			break;
+		case T_Var:
+			if (context->root && context->root->parse->rtable)
+			{
+				Var		   *var;
+				Query	   *query;
+				RangeTblEntry *pointedNode;
+
+				var = (Var *)node;
+				query = context->root->parse;
+
+				if (var->varlevelsup != 0 || var->varattno != 1)
+					break;
+
+				pointedNode = list_nth(query->rtable, var->varno - 1);
+				Assert(IsA(pointedNode, RangeTblEntry));
+
+				if (pointedNode->rtekind == RTE_FUNCTION && list_length(pointedNode->functions) == 1)
+				{
+					Form_pg_type type_form;
+					Node	   *result;
+					RangeTblFunction *tblFunction = linitial_node(RangeTblFunction, pointedNode->functions);
+					FuncExpr   *expr = (FuncExpr *) tblFunction->funcexpr;
+					List	   *args = expr->args;
+					HeapTuple type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(expr->funcresulttype));
+
+					if (!HeapTupleIsValid(type_tuple))
+						elog(ERROR, "cache lookup failed for type %u", expr->funcresulttype);
+
+					type_form = (Form_pg_type) GETSTRUCT(type_tuple);
+
+					if (type_form->typtype != TYPTYPE_BASE)
+					{
+						ReleaseSysCache(type_tuple);
+						break;
+					}
+
+					result = simplify_function(expr->funcid,
+											   expr->funcresulttype,
+											   exprTypmod(expr),
+											   expr->funccollid,
+											   expr->inputcollid,
+											   &args,
+											   expr->funcvariadic,
+											   true,
+											   false,
+											   context);
+
+					ReleaseSysCache(type_tuple);
+
+					if (result) /* successfully simplified it */
+						return (Node *) result;
+			}
+			break;
 		default:
 			break;
 	}

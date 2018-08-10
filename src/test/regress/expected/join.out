@@ -3051,23 +3051,23 @@ select * from
   int4(sin(1)) q1,
   int4(sin(0)) q2
 where q1 = thousand or q2 = thousand;
-                               QUERY PLAN                               
-------------------------------------------------------------------------
- Hash Join
-   Hash Cond: (tenk1.twothousand = int4_tbl.f1)
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Nested Loop
    ->  Nested Loop
-         ->  Nested Loop
-               ->  Function Scan on q1
-               ->  Function Scan on q2
-         ->  Bitmap Heap Scan on tenk1
-               Recheck Cond: ((q1.q1 = thousand) OR (q2.q2 = thousand))
-               ->  BitmapOr
-                     ->  Bitmap Index Scan on tenk1_thous_tenthous
-                           Index Cond: (q1.q1 = thousand)
-                     ->  Bitmap Index Scan on tenk1_thous_tenthous
-                           Index Cond: (q2.q2 = thousand)
-   ->  Hash
-         ->  Seq Scan on int4_tbl
+         ->  Hash Join
+               Hash Cond: (tenk1.twothousand = int4_tbl.f1)
+               ->  Bitmap Heap Scan on tenk1
+                     Recheck Cond: ((1 = thousand) OR (0 = thousand))
+                     ->  BitmapOr
+                           ->  Bitmap Index Scan on tenk1_thous_tenthous
+                                 Index Cond: (1 = thousand)
+                           ->  Bitmap Index Scan on tenk1_thous_tenthous
+                                 Index Cond: (0 = thousand)
+               ->  Hash
+                     ->  Seq Scan on int4_tbl
+         ->  Function Scan on q1
+   ->  Function Scan on q2
 (15 rows)
 
 explain (costs off)
@@ -3076,20 +3076,20 @@ select * from
   int4(sin(1)) q1,
   int4(sin(0)) q2
 where thousand = (q1 + q2);
-                          QUERY PLAN                          
---------------------------------------------------------------
- Hash Join
-   Hash Cond: (tenk1.twothousand = int4_tbl.f1)
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Nested Loop
    ->  Nested Loop
-         ->  Nested Loop
-               ->  Function Scan on q1
-               ->  Function Scan on q2
-         ->  Bitmap Heap Scan on tenk1
-               Recheck Cond: (thousand = (q1.q1 + q2.q2))
-               ->  Bitmap Index Scan on tenk1_thous_tenthous
-                     Index Cond: (thousand = (q1.q1 + q2.q2))
-   ->  Hash
-         ->  Seq Scan on int4_tbl
+         ->  Hash Join
+               Hash Cond: (tenk1.twothousand = int4_tbl.f1)
+               ->  Bitmap Heap Scan on tenk1
+                     Recheck Cond: (thousand = 1)
+                     ->  Bitmap Index Scan on tenk1_thous_tenthous
+                           Index Cond: (thousand = 1)
+               ->  Hash
+                     ->  Seq Scan on int4_tbl
+         ->  Function Scan on q1
+   ->  Function Scan on q2
 (12 rows)
 
 --

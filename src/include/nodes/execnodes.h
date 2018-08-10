@@ -18,6 +18,7 @@
 #include "access/heapam.h"
 #include "access/tupconvert.h"
 #include "executor/instrument.h"
+#include "lib/ilist.h"
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
@@ -824,6 +825,10 @@ typedef struct SubPlanState
 	List	   *args;			/* states of argument expression(s) */
 	HeapTuple	curTuple;		/* copy of most recent tuple from subplan */
 	Datum		curArray;		/* most recent array from ARRAY() subplan */
+
+	MemoryContext hashtablecxt; /* memory context containing hash tables */
+	MemoryContext hashtempcxt;	/* temp memory context for hash tables */
+
 	/* these are used when hashing the subselect's output: */
 	TupleDesc	descRight;		/* subselect desc after projection */
 	ProjectionInfo *projLeft;	/* for projecting lefthand exprs */
@@ -832,17 +837,32 @@ typedef struct SubPlanState
 	TupleHashTable hashnulls;	/* hash table for rows with null(s) */
 	bool		havehashrows;	/* true if hashtable is not empty */
 	bool		havenullrows;	/* true if hashnulls is not empty */
-	MemoryContext hashtablecxt; /* memory context containing hash tables */
-	MemoryContext hashtempcxt;	/* temp memory context for hash tables */
 	ExprContext *innerecontext; /* econtext for computing inner tuples */
 	AttrNumber *keyColIdx;		/* control data for hash tables */
 	Oid		   *tab_eq_funcoids;	/* equality func oids for table
 									 * datatype(s) */
 	FmgrInfo   *tab_hash_funcs; /* hash functions for table datatype(s) */
-	FmgrInfo   *tab_eq_funcs;	/* equality functions for table datatype(s) */
 	FmgrInfo   *lhs_hash_funcs; /* hash functions for lefthand datatype(s) */
 	FmgrInfo   *cur_eq_funcs;	/* equality functions for LHS vs. table */
 	ExprState  *cur_eq_comp;	/* equality comparator for LHS vs. table */
+
+	/* these are for the result cache: */
+	int			numparams;		/* number of input parameters for subplan */
+
+	HTAB	   *resultcachetab;	/* hash table forming the result cache */
+	dlist_head	lru_list;		/* LRU list for cache replacement */
+	size_t		memUsed;		/* amount of memory used by the cache */
+	size_t		memLimit;		/* max cache size, in bytes */
+
+	void	   *currCacheKey;	/* temporary cache key variable */
+
+	bool	   *paramByVals;	/* parameter type information */
+	int16	   *paramLens;
+	FmgrInfo   *param_hash_funcs;	/* hash funcs for param datatype(s) */
+	FmgrInfo   *param_eq_funcs; 	/* equality funcs for param datatype(s) */
+
+	bool		resultByVal;	/* result type information, for the cache */
+	int16		resultLen;
 } SubPlanState;
 
 /* ----------------

@@ -33,6 +33,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
 
 
 typedef struct convert_testexpr_context
@@ -70,6 +71,7 @@ static Node *convert_testexpr_mutator(Node *node,
 						 convert_testexpr_context *context);
 static bool subplan_is_hashable(Plan *plan);
 static bool testexpr_is_hashable(Node *testexpr);
+static bool params_are_hashable(SubPlan *splan);
 static bool hash_ok_operator(OpExpr *expr);
 static bool simplify_EXISTS_query(PlannerInfo *root, Query *query);
 static Query *convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
@@ -844,7 +846,6 @@ build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
 			subplan_is_hashable(plan) &&
 			testexpr_is_hashable(splan->testexpr))
 			splan->useHashTable = true;
-
 		/*
 		 * Otherwise, we have the option to tack a Material node onto the top
 		 * of the subplan, to reduce the cost of reading it repeatedly.  This
@@ -858,6 +859,44 @@ build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
 		else if (splan->parParam == NIL && enable_material &&
 				 !ExecMaterializesOutput(nodeTag(plan)))
 			plan = materialize_finished_plan(plan);
+
+		/*
+		 * If it's a correlated subplan, we can't use an initPlan, but we
+		 * might be able to cache the subplan's result for each combination of
+		 * correlation params.
+		 *
+		 * If the subplan or testexpr contains volatile expressions, caching
+		 * is not possible. Also, if the 'testexpr' is contains any Vars from
+		 * the outer query, no caching, because the result would depend not
+		 * only on the subquery, but also on the Vars. (We could still use
+		 * the cache if we used the outer Vars as part of the cache key, but
+		 * we don't do that.)
+		 *
+		 * Also, the parameters have to be hashable, so that we can use them
+		 * as the key for the hash table to implement the cache.
+		 */
+		if (splan->parParam &&
+			!contain_volatile_functions((Node *) subroot->parse) &&
+			!contain_volatile_functions((Node *) splan->testexpr) &&
+			!contain_var_clause((Node *) splan->testexpr) &&
+			params_are_hashable(splan))
+		{
+			Cost		lookup_cost;
+			int			i;
+
+			Assert(!splan->useHashTable);
+
+			lookup_cost = 0;
+			for (i = 0; i < list_length(splan->args); i++)
+			{
+				lookup_cost += get_func_cost(splan->paramHashFuncs[i]);
+				lookup_cost += get_func_cost(splan->paramEqFuncs[i]);
+			}
+
+			/* Assume a 10% hit ratio. */
+			if (plan->total_cost > lookup_cost + 0.9 * plan->total_cost)
+				splan->useResultCache = true;
+		}
 
 		result = (Node *) splan;
 		isInitPlan = false;
@@ -1145,6 +1184,51 @@ hash_ok_operator(OpExpr *expr)
 	}
 }
 
+/*
+ * Check if all params are hashable
+ */
+static bool
+params_are_hashable(SubPlan *splan)
+{
+	ListCell   *lc;
+	Oid		   *hash_funcs;
+	Oid		   *eq_funcs;
+	int			i;
+
+	hash_funcs = (Oid *) palloc(list_length(splan->args) * sizeof(Oid));
+	eq_funcs = (Oid *) palloc(list_length(splan->args) * sizeof(Oid));
+
+	i = 0;
+	foreach(lc, splan->args)
+	{
+		Node	   *expr = lfirst(lc);
+		Oid			eq_opr;
+		Oid			hash_proc;
+		TypeCacheEntry *typentry;
+
+		typentry = lookup_type_cache(exprType(expr),
+									 TYPECACHE_EQ_OPR | TYPECACHE_HASH_PROC);
+		eq_opr = typentry->eq_opr;
+		hash_proc = typentry->hash_proc;
+		if (!OidIsValid(eq_opr) || !OidIsValid(hash_proc))
+		{
+			pfree(hash_funcs);
+			pfree(eq_funcs);
+			return false;
+		}
+
+		hash_funcs[i] = hash_proc;
+		eq_funcs[i] = get_opcode(eq_opr);
+
+		i++;
+	}
+
+	/* Note: as a side-effect, we filled in the paramHashFuncs and paramEqFuncs arrays. */
+	splan->paramHashFuncs = hash_funcs;
+	splan->paramEqFuncs = eq_funcs;
+
+	return true;
+}
 
 /*
  * SS_process_ctes: process a query's WITH list

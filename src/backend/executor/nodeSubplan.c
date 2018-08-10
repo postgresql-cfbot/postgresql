@@ -10,6 +10,23 @@
  * direct correlation variables from the parent plan level), and "regular"
  * subplans, which are re-evaluated every time their result is required.
  *
+ * There are two ways a SubPlan node can return the result.  The first is
+ * that ExecSubPlan() runs the subquery, and returns its result like any
+ * other expression.  The second way is to return the result in executor
+ * Params.  In this method, the execution happens when ExecSetParamPlan() is
+ * called, and the subquery's results are set as the current values of
+ * executor Params, as indicated by SubPlan->setParam.
+ *
+ * For correlated subplans, which need to be re-evaluated every time the
+ * outer parameter values change, we optionally keep a cache of the results.
+ * If the subplan is called again with the same set of parameters, we can
+ * avoid re-executing the subquery, and return the result from the cache
+ * instead.  This helps a lot if the subplan is expensive, and the same
+ * parameters are used many times.
+ *
+ * TODO: The cache is currently only used in ExecSubPlan, not
+ * ExecSetParamPlan.
+ *
  *
  * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -32,10 +49,14 @@
 #include "access/htup_details.h"
 #include "executor/executor.h"
 #include "executor/nodeSubplan.h"
+#include "lib/ilist.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "utils/array.h"
+#include "utils/datum.h"
+#include "utils/hashutils.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
@@ -52,6 +73,60 @@ static bool findPartialMatch(TupleHashTable hashtable, TupleTableSlot *slot,
 static bool slotAllNulls(TupleTableSlot *slot);
 static bool slotNoNulls(TupleTableSlot *slot);
 
+/*
+ * Subplan result cache.
+ *
+ * If the subplan doesn't contain volatile expressions, we can avoid
+ * executing it repeatedly for the same parameters, by caching the results.
+ *
+ * The cache is a hash table.  The cache key consists of the parameter values.
+ * The number of parameters depends on the subquery, so we keep them at the
+ * end of the struct.
+ *
+ * The cached result is the final result of ExecSubPlan, after evaluating any
+ * 'testexpr' or other sublink-specific processing.  For ARRAY type sublink,
+ * it is the fully formed array, for EXISTS and ROWCOMPARE, it is a boolean.
+ *
+ * The cache is of fixed size.  If it fills up, we throw away old entries,
+ * using a simple LRU policy.
+ */
+typedef struct
+{
+	Datum		result;			/* result of the SubPlan with this param */
+	bool		resultNull;
+
+	dlist_node	lru_link;		/* link in the LRU list. */
+
+	/*
+	 * SubPlan parameters.  These form the cache key.
+	 *
+	 * After the 'params', there is a corresponding array of 'isnull' flags.
+	 * Use SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS to access it.
+	 */
+	Datum		params[FLEXIBLE_ARRAY_MEMBER];
+
+	/* bool		paramNulls[FLEXIBLE_ARRAY_MEMBER]; */
+
+} SubPlanResultCacheEntry;
+
+/* Macros to work with SubPlanResultCacheEntry */
+#define SUBPLAN_RESULT_CACHE_KEY_SIZE(numparams) \
+	((numparams) * sizeof(Datum) + (numparams) * sizeof(bool))
+#define SUBPLAN_RESULT_CACHE_ENTRY_SIZE(numparams) \
+	(offsetof(SubPlanResultCacheEntry, params) + \
+	 SUBPLAN_RESULT_CACHE_KEY_SIZE(numparams))
+
+#define SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(entry, numparams) \
+	((bool *) &(entry)->params[numparams])
+
+static void init_result_cache(SubPlanState *sstate);
+static SubPlanResultCacheEntry * lookup_result_cache(SubPlanState *sstate,
+					SubPlanResultCacheEntry *key, bool *found);
+static uint32 result_cache_hash(const void *key, Size keysize);
+static int result_cache_match(const void *key1, const void *key2, Size keysize);
+static void *result_cache_keycopy(void *dest, const void *src, Size keysize);
+
+static SubPlanState *curr_sstate;
 
 /* ----------------------------------------------------------------
  *		ExecSubPlan
@@ -224,6 +299,10 @@ ExecScanSubPlan(SubPlanState *node,
 	ListCell   *pvar;
 	ListCell   *l;
 	ArrayBuildStateAny *astate = NULL;
+	SubPlanResultCacheEntry *resultCacheEntry = NULL;
+	int			i;
+	Datum	   *currParams;
+	bool	   *currParamNulls;
 
 	/*
 	 * MULTIEXPR subplans, when "executed", just return NULL; but first we
@@ -257,6 +336,12 @@ ExecScanSubPlan(SubPlanState *node,
 									CurrentMemoryContext, true);
 
 	/*
+	 * If first time through, initialize the result cache.
+	 */
+	if (subplan->useResultCache && node->resultcachetab == NULL)
+		init_result_cache(node);
+
+	/*
 	 * We are probably in a short-lived expression-evaluation context. Switch
 	 * to the per-query context for manipulating the child plan's chgParam,
 	 * calling ExecProcNode on it, etc.
@@ -270,6 +355,9 @@ ExecScanSubPlan(SubPlanState *node,
 	 */
 	Assert(list_length(subplan->parParam) == list_length(node->args));
 
+	i = 0;
+	currParams = ((SubPlanResultCacheEntry *) node->currCacheKey)->params;
+	currParamNulls = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS((SubPlanResultCacheEntry *) node->currCacheKey, node->numparams);
 	forboth(l, subplan->parParam, pvar, node->args)
 	{
 		int			paramid = lfirst_int(l);
@@ -279,6 +367,51 @@ ExecScanSubPlan(SubPlanState *node,
 											   econtext,
 											   &(prm->isnull));
 		planstate->chgParam = bms_add_member(planstate->chgParam, paramid);
+
+		if (subplan->useResultCache)
+		{
+			currParams[i] = prm->value;
+			currParamNulls[i] = prm->isnull;
+		}
+
+		i++;
+	}
+
+	/*
+	 * If we're caching the subplan results, check the cache first.
+	 *
+	 * On cache miss, this creates a new entry for this set of parameters.
+	 * We'll fill it with the subplan's result later.
+	 */
+	if (subplan->useResultCache)
+	{
+		bool		found;
+
+		resultCacheEntry = lookup_result_cache(node, node->currCacheKey,
+											   &found);
+		if (found)
+		{
+			/*
+			 * Cache hit. If the result datatype is pass-by-ref, make a copy
+			 * of it in a short-lived memory context.
+			 */
+			if (resultCacheEntry->resultNull)
+			{
+				result = (Datum) 0;
+				*isNull = true;
+			}
+			else
+			{
+				result = datumCopy(resultCacheEntry->result,
+								   node->resultByVal,
+								   node->resultLen);
+				*isNull = false;
+			}
+
+			return result;
+		}
+
+		/* Not found. Fall through to execute the subplan. */
 	}
 
 	/*
@@ -447,6 +580,31 @@ ExecScanSubPlan(SubPlanState *node,
 		{
 			result = (Datum) 0;
 			*isNull = true;
+		}
+	}
+
+	/*
+	 * If we're using the result cache, copy the result of the subplan into
+	 * the cache entry.
+	 */
+	if (resultCacheEntry)
+	{
+		if (*isNull)
+		{
+			resultCacheEntry->result = (Datum) 0;
+			resultCacheEntry->resultNull = true;
+		}
+		else
+		{
+			MemoryContext oldcxt = MemoryContextSwitchTo(node->hashtablecxt);
+
+			resultCacheEntry->result = datumCopy(result,
+												 node->resultByVal,
+												 node->resultLen);
+			resultCacheEntry->resultNull = false;
+			MemoryContextSwitchTo(oldcxt);
+			if (!node->resultByVal)
+				node->memUsed += GetMemoryChunkSpace(DatumGetPointer(resultCacheEntry->result));
 		}
 	}
 
@@ -796,7 +954,6 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	sstate->keyColIdx = NULL;
 	sstate->tab_eq_funcoids = NULL;
 	sstate->tab_hash_funcs = NULL;
-	sstate->tab_eq_funcs = NULL;
 	sstate->lhs_hash_funcs = NULL;
 	sstate->cur_eq_funcs = NULL;
 
@@ -826,6 +983,24 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	}
 
 	/*
+	 * Initialize memory contexts used by the initplan hash table or the
+	 * result cache.
+	 */
+	if (subplan->useHashTable || subplan->useResultCache)
+	{
+		/* We need a memory context to hold the hash table(s) */
+		sstate->hashtablecxt =
+			AllocSetContextCreate(CurrentMemoryContext,
+								  "Subplan HashTable Context",
+								  ALLOCSET_DEFAULT_SIZES);
+		/* and a small one for the hash tables to use as temp storage */
+		sstate->hashtempcxt =
+			AllocSetContextCreate(CurrentMemoryContext,
+								  "Subplan HashTable Temp Context",
+								  ALLOCSET_SMALL_SIZES);
+	}
+
+	/*
 	 * If we are going to hash the subquery output, initialize relevant stuff.
 	 * (We don't create the hashtable until needed, though.)
 	 */
@@ -841,18 +1016,9 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 				   *righttlist;
 		ListCell   *l;
 
-		/* We need a memory context to hold the hash table(s) */
-		sstate->hashtablecxt =
-			AllocSetContextCreate(CurrentMemoryContext,
-								  "Subplan HashTable Context",
-								  ALLOCSET_DEFAULT_SIZES);
-		/* and a small one for the hash tables to use as temp storage */
-		sstate->hashtempcxt =
-			AllocSetContextCreate(CurrentMemoryContext,
-								  "Subplan HashTable Temp Context",
-								  ALLOCSET_SMALL_SIZES);
-		/* and a short-lived exprcontext for function evaluation */
+		/* a short-lived exprcontext for function evaluation */
 		sstate->innerecontext = CreateExprContext(estate);
+
 		/* Silly little array of column numbers 1..n */
 		ncols = list_length(subplan->paramIds);
 		sstate->keyColIdx = (AttrNumber *) palloc(ncols * sizeof(AttrNumber));
@@ -894,7 +1060,6 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		lefttlist = righttlist = NIL;
 		sstate->tab_eq_funcoids = (Oid *) palloc(ncols * sizeof(Oid));
 		sstate->tab_hash_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
-		sstate->tab_eq_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		sstate->lhs_hash_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		sstate->cur_eq_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		i = 1;
@@ -903,7 +1068,6 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 			OpExpr	   *opexpr = lfirst_node(OpExpr, l);
 			Expr	   *expr;
 			TargetEntry *tle;
-			Oid			rhs_eq_oper;
 			Oid			left_hashfn;
 			Oid			right_hashfn;
 
@@ -929,13 +1093,6 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 			sstate->tab_eq_funcoids[i - 1] = opexpr->opfuncid;
 			fmgr_info(opexpr->opfuncid, &sstate->cur_eq_funcs[i - 1]);
 			fmgr_info_set_expr((Node *) opexpr, &sstate->cur_eq_funcs[i - 1]);
-
-			/* Look up the equality function for the RHS type */
-			if (!get_compatible_hash_operators(opexpr->opno,
-											   NULL, &rhs_eq_oper))
-				elog(ERROR, "could not find compatible hash operator for operator %u",
-					 opexpr->opno);
-			fmgr_info(get_opcode(rhs_eq_oper), &sstate->tab_eq_funcs[i - 1]);
 
 			/* Lookup the associated hash functions */
 			if (!get_op_hash_functions(opexpr->opno,
@@ -982,6 +1139,30 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 													 sstate->tab_eq_funcoids,
 													 parent);
 
+	}
+
+	/*
+	 * If we are going to use the result cache, which is keyed by the
+	 * parameters, initialize the equality and hash functions for the
+	 * parameter datatypes. (We don't create the cache itself until needed,
+	 * though.)
+	 */
+	if (subplan->useResultCache)
+	{
+		int			i;
+
+		Assert (!subplan->useHashTable);
+
+		sstate->numparams = list_length(subplan->args);
+		sstate->param_hash_funcs =
+			(FmgrInfo *) palloc(sstate->numparams * sizeof(FmgrInfo));
+		sstate->param_eq_funcs =
+			(FmgrInfo *) palloc(sstate->numparams * sizeof(FmgrInfo));
+		for (i = 0; i < sstate->numparams; i++)
+		{
+			fmgr_info(subplan->paramEqFuncs[i], &sstate->param_eq_funcs[i]);
+			fmgr_info(subplan->paramHashFuncs[i], &sstate->param_hash_funcs[i]);
+		}
 	}
 
 	return sstate;
@@ -1294,4 +1475,263 @@ ExecAlternativeSubPlan(AlternativeSubPlanState *node,
 										   node->subplans, node->active);
 
 	return ExecSubPlan(activesp, econtext, isNull);
+}
+
+
+
+/*-------------------
+ * SubPlan result cache
+ *-------------------
+ */
+
+static void
+init_result_cache(SubPlanState *sstate)
+{
+	HASHCTL		hash_ctl;
+	Size		entrysize = SUBPLAN_RESULT_CACHE_ENTRY_SIZE(sstate->numparams);
+	long		nbuckets;
+	int			i;
+	ListCell   *l;
+	MemoryContext oldcxt;
+
+	nbuckets = 100; /* TODO? */
+
+	/* Limit initial table size request to not more than work_mem */
+	nbuckets = Min(nbuckets, (long) ((work_mem * 1024L) / entrysize));
+
+	/* TODO: should we use a hash_iv like execGrouping.c does? */
+
+	oldcxt = MemoryContextSwitchTo(sstate->hashtablecxt);
+
+	memset(&hash_ctl, 0, sizeof(hash_ctl));
+	hash_ctl.keysize = SUBPLAN_RESULT_CACHE_KEY_SIZE(sstate->numparams);
+	hash_ctl.entrysize = SUBPLAN_RESULT_CACHE_ENTRY_SIZE(sstate->numparams);
+	hash_ctl.hash = result_cache_hash;
+	hash_ctl.match = result_cache_match;
+	hash_ctl.keycopy = result_cache_keycopy;
+	hash_ctl.hcxt = sstate->hashtablecxt;
+
+	sstate->resultcachetab = hash_create("subplan result cache",
+										 100 /* XXX */,
+										 &hash_ctl,
+										 HASH_ELEM | HASH_FUNCTION | HASH_COMPARE | HASH_KEYCOPY | HASH_CONTEXT);
+
+	sstate->paramLens = palloc(sstate->numparams * sizeof(int16));
+	sstate->paramByVals = palloc(sstate->numparams * sizeof(bool));
+
+	sstate->memUsed = 0;
+	sstate->memLimit = work_mem * 1024L;
+
+	i = 0;
+	foreach(l, sstate->subplan->args)
+	{
+		Expr	   *arg = (Expr *) lfirst(l);
+
+		get_typlenbyval(exprType((Node *) arg),
+						&sstate->paramLens[i],
+						&sstate->paramByVals[i]);
+		i++;
+	}
+
+	/*
+	 * Also initialize this temporary cache key, to hold the parameter
+	 * values, while we look up in the cache.
+	 */
+	sstate->currCacheKey = (void *) palloc0(SUBPLAN_RESULT_CACHE_ENTRY_SIZE(sstate->numparams));
+
+	/*
+	 * For all sublink types except EXPR_SUBLINK and ARRAY_SUBLINK, the result is
+	 * a boolean as are the results fo the combining operators.  The cache will store
+	 * the final result, after evaluating any combining operators.
+	 */
+	if (sstate->subplan->subLinkType == EXPR_SUBLINK)
+	{
+		get_typlenbyval(sstate->subplan->firstColType,
+						&sstate->resultLen,
+						&sstate->resultByVal);
+	}
+	else if (sstate->subplan->subLinkType == ARRAY_SUBLINK)
+	{
+		/* array type. They're all varlenas */
+		sstate->resultLen = -1;
+		sstate->resultByVal = false;
+	}
+	else
+	{
+		/* boolean */
+		sstate->resultLen = 1;
+		sstate->resultByVal = true;
+	}
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * Insert or return existing entry in the cache.
+ */
+static SubPlanResultCacheEntry *
+lookup_result_cache(SubPlanState *sstate, SubPlanResultCacheEntry *key, bool *found)
+{
+	MemoryContext oldContext;
+	SubPlanResultCacheEntry *newentry;
+	int			i;
+	SubPlanState *prev_sstate;
+	Datum	   *params = key->params;
+	bool	   *isnulls = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(key, sstate->numparams);
+
+	/* Need to run the hash functions in short-lived context */
+	oldContext = MemoryContextSwitchTo(sstate->hashtempcxt);
+
+	/*
+	 * To keep memory use in check, if there are too many entries in the
+	 * cache, remove the oldest entry to make space.
+	 */
+	while (sstate->memUsed > sstate->memLimit)
+	{
+		SubPlanResultCacheEntry *oldentry;
+		bool		foundold;
+		Datum	   *oldparams;
+		bool	   *oldparamnulls;
+
+		/* Remove the oldest entry */
+		oldentry = dlist_tail_element(SubPlanResultCacheEntry, lru_link, &sstate->lru_list);
+
+		dlist_delete(&oldentry->lru_link);
+
+		if (!sstate->resultByVal && !oldentry->resultNull)
+		{
+			sstate->memUsed -= GetMemoryChunkSpace(DatumGetPointer(oldentry->result));
+			pfree(DatumGetPointer(oldentry->result));
+		}
+
+		/* Remove the entry from the hash table. */
+		prev_sstate = curr_sstate;
+		curr_sstate = sstate;
+		hash_search(sstate->resultcachetab, oldentry, HASH_REMOVE, &foundold);
+		if (!foundold)
+			elog(ERROR, "subplan cache is corrupt");
+		curr_sstate = prev_sstate;
+
+		sstate->memUsed -= SUBPLAN_RESULT_CACHE_ENTRY_SIZE(sstate->numparams);
+
+		/*
+		 * XXX we assume the key is still valid, even though we've removed it from
+		 * the hash table.
+		 */
+		oldparams = oldentry->params;
+		oldparamnulls = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(oldentry, sstate->numparams);
+		for (i = 0; i < sstate->numparams; i++)
+		{
+			if (!sstate->paramByVals[i] && !oldparamnulls[i])
+			{
+				sstate->memUsed -= GetMemoryChunkSpace(DatumGetPointer(oldparams[i]));
+				pfree(DatumGetPointer(oldparams[i]));
+			}
+		}
+	}
+
+	prev_sstate = curr_sstate;
+	curr_sstate = sstate;
+	newentry = hash_search(sstate->resultcachetab, key, HASH_ENTER, found);
+	curr_sstate = prev_sstate;
+
+	if (!(*found))
+	{
+		/*
+		 * We created a new entry.
+		 */
+		Datum	   *newparams = newentry->params;
+
+		sstate->memUsed += SUBPLAN_RESULT_CACHE_ENTRY_SIZE(sstate->numparams);
+
+		dlist_push_head(&sstate->lru_list, &newentry->lru_link);
+
+		/*
+		 * Need to make a copy of the key in the long-lived memory context.
+		 */
+		MemoryContextSwitchTo(sstate->hashtablecxt);
+
+		for (i = 0; i < sstate->numparams; i++)
+		{
+			if (!sstate->paramByVals[i] && !isnulls[i])
+			{
+				newparams[i] = datumCopy(params[i],
+										 sstate->paramByVals[i],
+										 sstate->paramLens[i]);
+				sstate->memUsed += GetMemoryChunkSpace(DatumGetPointer(newparams[i]));
+			}
+		}
+	}
+	else
+	{
+		dlist_delete(&newentry->lru_link);
+		dlist_push_head(&sstate->lru_list, &newentry->lru_link);
+	}
+
+	MemoryContextSwitchTo(oldContext);
+
+	return newentry;
+}
+
+static uint32
+result_cache_hash(const void *key, Size keysize)
+{
+	const SubPlanResultCacheEntry *entry = (const SubPlanResultCacheEntry *) key;
+	SubPlanState *sstate = curr_sstate;
+	int			i;
+	uint32		hash = 0;
+	const Datum *params = entry->params;
+	const bool  *isnulls = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(entry, sstate->numparams);
+
+	for (i = 0; i < sstate->numparams; i++)
+	{
+		uint32		thishash;
+
+		if (isnulls[i])
+			thishash = 0;
+		else
+			thishash = DatumGetUInt32(FunctionCall1(&sstate->param_hash_funcs[i],
+													params[i]));
+		hash = hash_combine(hash, thishash);
+	}
+
+	return hash;
+}
+
+static int
+result_cache_match(const void *key1, const void *key2, Size keysize)
+{
+	const SubPlanResultCacheEntry *entry1 = (const SubPlanResultCacheEntry *) key1;
+	const SubPlanResultCacheEntry *entry2 = (const SubPlanResultCacheEntry *) key2;
+	SubPlanState *sstate = curr_sstate;
+	const Datum *params1 = entry1->params;
+	const bool *isnulls1 = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(entry1, sstate->numparams);
+	const Datum *params2 = entry2->params;
+	const bool *isnulls2 = SUBPLAN_RESULT_CACHE_ENTRY_GET_NULLS(entry2, sstate->numparams);
+	int			i;
+
+	for (i = 0; i < sstate->numparams; i++)
+	{
+		if (isnulls1[i] != isnulls2[i])
+			return 1;
+		else if (!isnulls1[i])
+		{
+			if (!DatumGetBool(FunctionCall2(&sstate->param_eq_funcs[0],
+											params1[i],
+											params2[i])))
+				return 1;
+		}
+	}
+	return 0;	/* they're equal */
+}
+
+static void *
+result_cache_keycopy(void *dest, const void *src, Size keysize)
+{
+	SubPlanResultCacheEntry *destentry = (SubPlanResultCacheEntry *) dest;
+	const SubPlanResultCacheEntry *srcentry = (const SubPlanResultCacheEntry *) src;
+
+	memcpy(destentry->params, srcentry->params, keysize);
+
+	return destentry;
 }

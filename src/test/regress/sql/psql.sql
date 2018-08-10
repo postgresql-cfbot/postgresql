@@ -688,3 +688,30 @@ select 1/(15-unique2) from tenk1 order by unique2 limit 19;
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 
 \unset FETCH_COUNT
+
+-- test csv format
+prepare q as select 'ab,cd' as col1, 'ab' as "col,2", E'a\tb' as col3, '"' as col4,
+  '""' as col5, 'a"b' as "col""6", E'a\nb' as col7, NULL as col8, 'ab' as "col
+  9",  array['ab', E'cd\nef'] as col10,
+  '{"a":"a,b", "a,b":null, "c":"a,\"b"}'::json as col11
+   from generate_series(1,2);
+
+\pset format csv
+\pset fieldsep_csv ','
+\pset expanded off
+\t off
+execute q;
+\pset fieldsep_csv '\t'
+execute q;
+\t on
+execute q;
+\t off
+\pset expanded on
+execute q;
+\pset fieldsep_csv ','
+execute q;
+
+deallocate q;
+\pset format aligned
+\pset expanded off
+\t off

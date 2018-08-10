@@ -148,6 +148,8 @@ main(int argc, char *argv[])
 	pset.popt.topt.unicode_column_linestyle = UNICODE_LINESTYLE_SINGLE;
 	pset.popt.topt.unicode_header_linestyle = UNICODE_LINESTYLE_SINGLE;
 
+	pset.popt.topt.fieldSepCsv = pg_strdup(",");
+
 	refresh_utf8format(&(pset.popt.topt));
 
 	/* We must get COLUMNS here before readline() sets it */
@@ -436,6 +438,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"echo-all", no_argument, NULL, 'a'},
 		{"no-align", no_argument, NULL, 'A'},
 		{"command", required_argument, NULL, 'c'},
+		{"csv", no_argument, NULL, 'C'},
 		{"dbname", required_argument, NULL, 'd'},
 		{"echo-queries", no_argument, NULL, 'e'},
 		{"echo-errors", no_argument, NULL, 'b'},
@@ -476,7 +479,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 
 	memset(options, 0, sizeof *options);
 
-	while ((c = getopt_long(argc, argv, "aAbc:d:eEf:F:h:HlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
+	while ((c = getopt_long(argc, argv, "aAbc:Cd:eEf:F:h:HlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -499,6 +502,9 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 					simple_action_list_append(&options->actions,
 											  ACT_SINGLE_QUERY,
 											  optarg);
+				break;
+			case 'C':
+				pset.popt.topt.format = PRINT_CSV;
 				break;
 			case 'd':
 				options->dbname = pg_strdup(optarg);

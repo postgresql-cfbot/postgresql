@@ -33,7 +33,8 @@ enum printFormat
 	PRINT_ASCIIDOC,
 	PRINT_LATEX,
 	PRINT_LATEX_LONGTABLE,
-	PRINT_TROFF_MS
+	PRINT_TROFF_MS,
+	PRINT_CSV
 	/* add your favourite output format here ... */
 };
 
@@ -112,6 +113,7 @@ typedef struct printTableOpt
 	const printTextFormat *line_style;	/* line style (NULL for default) */
 	struct separator fieldSep;	/* field separator for unaligned text mode */
 	struct separator recordSep; /* record separator for unaligned text mode */
+	char	   *fieldSepCsv;	/* field separator for csv format */
 	bool		numericLocale;	/* locale-aware numeric units separator and
 								 * decimal marker */
 	char	   *tableAttr;		/* attributes for HTML <table ...> */

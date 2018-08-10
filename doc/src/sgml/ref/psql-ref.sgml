@@ -2557,6 +2557,19 @@ lo_import 152801
           </varlistentry>
 
           <varlistentry>
+          <term><literal>fieldsep_csv</literal></term>
+          <listitem>
+          <para>
+          Specifies the field separator to be used in the csv format.
+          When the separator appears in a field value, that field
+          is output inside double quotes according to the csv rules.
+          To set a tab as field separator, type <literal>\pset fieldsep_csv
+          '\t'</literal>. The default is a comma.
+          </para>
+          </listitem>
+          </varlistentry>
+
+          <varlistentry>
           <term><literal>fieldsep_zero</literal></term>
           <listitem>
           <para>
@@ -2585,7 +2598,7 @@ lo_import 152801
           <listitem>
           <para>
           Sets the output format to one of <literal>unaligned</literal>,
-          <literal>aligned</literal>, <literal>wrapped</literal>,
+          <literal>aligned</literal>, <literal>csv</literal>, <literal>wrapped</literal>,
           <literal>html</literal>, <literal>asciidoc</literal>,
           <literal>latex</literal> (uses <literal>tabular</literal>),
           <literal>latex-longtable</literal>, or
@@ -2597,13 +2610,21 @@ lo_import 152801
           <para><literal>unaligned</literal> format writes all columns of a row on one
           line, separated by the currently active field separator. This
           is useful for creating output that might be intended to be read
-          in by other programs (for example, tab-separated or comma-separated
-          format).
+          in by other programs.
           </para>
 
           <para><literal>aligned</literal> format is the standard, human-readable,
           nicely formatted text output;  this is the default.
           </para>
+
+         <para><literal>csv</literal> format writes columns separated by
+         commas, applying the quoting rules described in RFC-4180.
+         Alternative separators can be selected with <command>\pset fieldsep_csv</command>.
+         The output is compatible with the CSV format of the <command>COPY</command>
+         command. The header with column names is output unless the
+         <literal>tuples_only</literal> parameter is <literal>on</literal>.
+         Title and footers are not printed.
+         </para>
 
           <para><literal>wrapped</literal> format is like <literal>aligned</literal> but wraps
           wide data values across lines to make the output fit in the target

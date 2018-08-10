@@ -63,6 +63,7 @@ CreateConstraintEntry(const char *constraintName,
 					  Oid indexRelId,
 					  Oid foreignRelId,
 					  const int16 *foreignKey,
+					  const char *foreignRefType,
 					  const Oid *pfEqOp,
 					  const Oid *ppEqOp,
 					  const Oid *ffEqOp,
@@ -87,6 +88,7 @@ CreateConstraintEntry(const char *constraintName,
 	ArrayType  *conkeyArray;
 	ArrayType  *conincludingArray;
 	ArrayType  *confkeyArray;
+	ArrayType  *confreftypeArray;
 	ArrayType  *conpfeqopArray;
 	ArrayType  *conppeqopArray;
 	ArrayType  *conffeqopArray;
@@ -139,7 +141,11 @@ CreateConstraintEntry(const char *constraintName,
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = Int16GetDatum(foreignKey[i]);
 		confkeyArray = construct_array(fkdatums, foreignNKeys,
-									   INT2OID, 2, true, 's');
+									   INT2OID, sizeof(int16), true, 's');
+		for (i = 0; i < foreignNKeys; i++)
+			fkdatums[i] = CharGetDatum(foreignRefType[i]);
+		confreftypeArray = construct_array(fkdatums, foreignNKeys,
+										   CHAROID, sizeof(char), true, 'c');
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = ObjectIdGetDatum(pfEqOp[i]);
 		conpfeqopArray = construct_array(fkdatums, foreignNKeys,
@@ -156,6 +162,7 @@ CreateConstraintEntry(const char *constraintName,
 	else
 	{
 		confkeyArray = NULL;
+		confreftypeArray = NULL;
 		conpfeqopArray = NULL;
 		conppeqopArray = NULL;
 		conffeqopArray = NULL;
@@ -213,6 +220,11 @@ CreateConstraintEntry(const char *constraintName,
 		values[Anum_pg_constraint_confkey - 1] = PointerGetDatum(confkeyArray);
 	else
 		nulls[Anum_pg_constraint_confkey - 1] = true;
+
+	if (confreftypeArray)
+		values[Anum_pg_constraint_confreftype - 1] = PointerGetDatum(confreftypeArray);
+	else
+		nulls[Anum_pg_constraint_confreftype - 1] = true;
 
 	if (conpfeqopArray)
 		values[Anum_pg_constraint_conpfeqop - 1] = PointerGetDatum(conpfeqopArray);
@@ -452,6 +464,7 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 		AttrNumber	conkey[INDEX_MAX_KEYS];
 		AttrNumber	mapped_conkey[INDEX_MAX_KEYS];
 		AttrNumber	confkey[INDEX_MAX_KEYS];
+		Oid			fkreftypes[INDEX_MAX_KEYS];
 		Oid			conpfeqop[INDEX_MAX_KEYS];
 		Oid			conppeqop[INDEX_MAX_KEYS];
 		Oid			conffeqop[INDEX_MAX_KEYS];
@@ -504,6 +517,20 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 			elog(ERROR, "confkey is not a 1-D smallint array");
 		memcpy(confkey, ARR_DATA_PTR(arr), nelem * sizeof(AttrNumber));
 
+		datum = fastgetattr(tuple, Anum_pg_constraint_confreftype,
+							tupdesc, &isnull);
+		if (isnull)
+			elog(ERROR, "null confreftype");
+		arr = DatumGetArrayTypeP(datum);
+		nelem = ARR_DIMS(arr)[0];
+		if (ARR_NDIM(arr) != 1 ||
+			nelem < 1 ||
+			nelem > INDEX_MAX_KEYS ||
+			ARR_HASNULL(arr) ||
+			ARR_ELEMTYPE(arr) != OIDOID)
+			elog(ERROR, "conpfeqop is not a 1-D OID array");
+		memcpy(fkreftypes, ARR_DATA_PTR(arr), nelem * sizeof(Oid));
+
 		datum = fastgetattr(tuple, Anum_pg_constraint_conpfeqop,
 							tupdesc, &isnull);
 		if (isnull)
@@ -542,8 +569,8 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 			nelem < 1 ||
 			nelem > INDEX_MAX_KEYS ||
 			ARR_HASNULL(arr) ||
-			ARR_ELEMTYPE(arr) != OIDOID)
-			elog(ERROR, "conppeqop is not a 1-D OID array");
+			ARR_ELEMTYPE(arr) != char*)
+			elog(ERROR, "conppeqop is not a string array");
 		memcpy(conppeqop, ARR_DATA_PTR(arr), nelem * sizeof(Oid));
 
 		datum = fastgetattr(tuple, Anum_pg_constraint_conffeqop,
@@ -576,6 +603,7 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 								  constrForm->conindid, /* same index */
 								  constrForm->confrelid,	/* same foreign rel */
 								  confkey,
+								  fkreftypes,
 								  conpfeqop,
 								  conppeqop,
 								  conffeqop,

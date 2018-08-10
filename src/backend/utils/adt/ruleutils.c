@@ -317,6 +317,9 @@ static char *pg_get_viewdef_worker(Oid viewoid,
 static char *pg_get_triggerdef_worker(Oid trigid, bool pretty);
 static void decompile_column_index_array(Datum column_index_array, Oid relId,
 							 StringInfo buf);
+static void decompile_fk_column_index_array(Datum column_index_array,
+								Datum fk_reftype_array,
+								Oid relId, StringInfo buf);
 static char *pg_get_ruledef_worker(Oid ruleoid, int prettyFlags);
 static char *pg_get_indexdef_worker(Oid indexrelid, int colno,
 					   const Oid *excludeOps,
@@ -1942,7 +1945,8 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 	{
 		case CONSTRAINT_FOREIGN:
 			{
-				Datum		val;
+				Datum		colindexes;
+				Datum		reftypes;
 				bool		isnull;
 				const char *string;
 
@@ -1950,13 +1954,21 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 				appendStringInfoString(&buf, "FOREIGN KEY (");
 
 				/* Fetch and build referencing-column list */
-				val = SysCacheGetAttr(CONSTROID, tup,
-									  Anum_pg_constraint_conkey, &isnull);
+				colindexes = SysCacheGetAttr(CONSTROID, tup,
+											 Anum_pg_constraint_conkey,
+											 &isnull);
 				if (isnull)
 					elog(ERROR, "null conkey for constraint %u",
 						 constraintId);
+				reftypes = SysCacheGetAttr(CONSTROID, tup,
+										   Anum_pg_constraint_confreftype,
+										   &isnull);
+				if (isnull)
+					elog(ERROR, "null confreftype for constraint %u",
+						 constraintId);
 
-				decompile_column_index_array(val, conForm->conrelid, &buf);
+				decompile_fk_column_index_array(colindexes, reftypes,
+												conForm->conrelid, &buf);
 
 				/* add foreign relation name */
 				appendStringInfo(&buf, ") REFERENCES %s(",
@@ -1964,13 +1976,15 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 														NIL));
 
 				/* Fetch and build referenced-column list */
-				val = SysCacheGetAttr(CONSTROID, tup,
-									  Anum_pg_constraint_confkey, &isnull);
+				colindexes = SysCacheGetAttr(CONSTROID, tup,
+											 Anum_pg_constraint_confkey,
+											 &isnull);
 				if (isnull)
 					elog(ERROR, "null confkey for constraint %u",
 						 constraintId);
 
-				decompile_column_index_array(val, conForm->confrelid, &buf);
+				decompile_column_index_array(colindexes,
+											 conForm->confrelid, &buf);
 
 				appendStringInfoChar(&buf, ')');
 
@@ -2260,6 +2274,66 @@ decompile_column_index_array(Datum column_index_array, Oid relId,
 	}
 }
 
+ /*
+  * Convert an int16[] Datum and a char[] Datum into a comma-separated list of
+  * column names for the indicated relation, prefixed by appropriate keywords
+  * depending on the foreign key reference semantics indicated by the char[]
+  * entries.  Append the text to buf.
+  */
+static void
+decompile_fk_column_index_array(Datum column_index_array,
+								Datum fk_reftype_array,
+								Oid relId, StringInfo buf)
+{
+	Datum	   *keys;
+	int			nKeys;
+	Datum	   *reftypes;
+	int			nReftypes;
+	int			j;
+
+	/* Extract data from array of int16 */
+	deconstruct_array(DatumGetArrayTypeP(column_index_array),
+					  INT2OID, sizeof(int16), true, 's',
+					  &keys, NULL, &nKeys);
+
+	/* Extract data from array of char */
+	deconstruct_array(DatumGetArrayTypeP(fk_reftype_array),
+					  CHAROID, sizeof(char), true, 'c',
+					  &reftypes, NULL, &nReftypes);
+
+	if (nKeys != nReftypes)
+		elog(ERROR, "wrong confreftype cardinality");
+
+	for (j = 0; j < nKeys; j++)
+	{
+		char	   *colName;
+		const char *prefix;
+
+		colName = get_relid_attribute_name(relId, DatumGetInt16(keys[j]));
+
+		switch (DatumGetChar(reftypes[j]))
+		{
+			case FKCONSTR_REF_PLAIN:
+				prefix = "";
+				break;
+			case FKCONSTR_REF_EACH_ELEMENT:
+				prefix = "EACH ELEMENT OF ";
+				break;
+			default:
+				elog(ERROR, "invalid fk_reftype: %d",
+					 (int) DatumGetChar(reftypes[j]));
+				prefix = NULL;	/* keep compiler quiet */
+				break;
+		}
+
+		if (j == 0)
+			appendStringInfo(buf, "%s%s", prefix,
+							 quote_identifier(colName));
+		else
+			appendStringInfo(buf, ", %s%s", prefix,
+							 quote_identifier(colName));
+	}
+}
 
 /* ----------
  * get_expr			- Decompile an expression tree
@@ -10936,7 +11010,8 @@ void
 generate_operator_clause(StringInfo buf,
 						 const char *leftop, Oid leftoptype,
 						 Oid opoid,
-						 const char *rightop, Oid rightoptype)
+						 const char *rightop, Oid rightoptype,
+						 char fkreftype)
 {
 	HeapTuple	opertup;
 	Form_pg_operator operform;
@@ -10952,14 +11027,62 @@ generate_operator_clause(StringInfo buf,
 
 	nspname = get_namespace_name(operform->oprnamespace);
 
-	appendStringInfoString(buf, leftop);
-	if (leftoptype != operform->oprleft)
-		add_cast_to(buf, operform->oprleft);
-	appendStringInfo(buf, " OPERATOR(%s.", quote_identifier(nspname));
-	appendStringInfoString(buf, oprname);
-	appendStringInfo(buf, ") %s", rightop);
-	if (rightoptype != operform->oprright)
-		add_cast_to(buf, operform->oprright);
+	if (fkreftype == FKCONSTR_REF_EACH_ELEMENT)
+	{
+		Oid			oprright;
+		Oid			oprleft;
+		Oid			oprcommon;
+
+		/*
+		 * we first need to get the array types and decide the more
+		 * appropriate one
+		 */
+
+		/* get array type of refrenced element */
+		oprright = get_array_type(operform->oprleft);
+		if (!OidIsValid(oprright))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find array type for data type %s",
+							format_type_be(operform->oprleft))));
+		/* get array type of refrencing element */
+		oprleft = get_array_type(operform->oprright);
+		if (!OidIsValid(oprleft))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find array type for data type %s",
+							format_type_be(operform->oprright))));
+
+		/*
+		 * compare the two array types and try to find a common supertype
+		 */
+		oprcommon = select_common_type_2args(oprleft, oprright);
+		if (!OidIsValid(oprcommon))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find common type between %s and %s",
+							format_type_be(oprleft), format_type_be(oprright))));
+
+		appendStringInfoString(buf, rightop);
+		if (oprleft != oprcommon)
+			add_cast_to(buf, oprcommon);
+		appendStringInfo(buf, " OPERATOR(pg_catalog.");
+		appendStringInfo(buf, " @>");
+		appendStringInfo(buf, ") ARRAY[%s]", leftop);
+		if (oprright != oprcommon)
+			add_cast_to(buf, oprcommon);
+	}
+	else
+	{
+		appendStringInfoString(buf, leftop);
+		if (leftoptype != operform->oprleft)
+			add_cast_to(buf, operform->oprleft);
+		appendStringInfo(buf, " OPERATOR(%s.", quote_identifier(nspname));
+		appendStringInfoString(buf, oprname);
+		appendStringInfo(buf, ") %s", rightop);
+		if (rightoptype != operform->oprright)
+			add_cast_to(buf, operform->oprright);
+	}
 
 	ReleaseSysCache(opertup);
 }

@@ -580,6 +580,7 @@ static void
 refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 					   int save_sec_context)
 {
+	const RI_ConstraintInfo *riinfo;
 	StringInfoData querybuf;
 	Relation	matviewRel;
 	Relation	tempRel;
@@ -592,6 +593,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	ListCell   *indexoidscan;
 	int16		relnatts;
 	Oid		   *opUsedForQual;
+
+	/*
+	 * Get arguments.
+	 */
+	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
+									trigdata->tg_relation, true);
 
 	initStringInfo(&querybuf);
 	matviewRel = heap_open(matviewOid, NoLock);
@@ -757,7 +764,8 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 				generate_operator_clause(&querybuf,
 										 leftop, attrtype,
 										 op,
-										 rightop, attrtype);
+										 rightop, attrtype,
+										 riinfo->fk_reftypes[i]);
 
 				foundUniqueIndex = true;
 			}

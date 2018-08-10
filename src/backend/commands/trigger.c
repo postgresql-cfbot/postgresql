@@ -743,6 +743,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 											  NULL,
 											  NULL,
 											  NULL,
+											  NULL,
 											  0,
 											  ' ',
 											  ' ',
@@ -1238,6 +1239,7 @@ ConvertTriggerToFK(CreateTrigStmt *stmt, Oid funcoid)
 	char		fk_matchtype = FKCONSTR_MATCH_SIMPLE;
 	List	   *fk_attrs = NIL;
 	List	   *pk_attrs = NIL;
+	List	   *fk_reftypes = NIL;
 	StringInfoData buf;
 	int			funcnum;
 	OldTriggerInfo *info = NULL;
@@ -1267,7 +1269,10 @@ ConvertTriggerToFK(CreateTrigStmt *stmt, Oid funcoid)
 		if (i % 2)
 			fk_attrs = lappend(fk_attrs, arg);
 		else
+		{
 			pk_attrs = lappend(pk_attrs, arg);
+			fk_reftypes = lappend_int(fk_reftypes, FKCONSTR_REF_PLAIN);
+		}
 	}
 
 	/* Prepare description of constraint for use in messages */
@@ -1406,6 +1411,7 @@ ConvertTriggerToFK(CreateTrigStmt *stmt, Oid funcoid)
 			fkcon->conname = constr_name;
 		fkcon->fk_attrs = fk_attrs;
 		fkcon->pk_attrs = pk_attrs;
+		fkcon->fk_reftypes = fk_reftypes;
 		fkcon->fk_matchtype = fk_matchtype;
 		switch (info->funcoids[0])
 		{

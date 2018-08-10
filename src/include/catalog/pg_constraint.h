@@ -117,8 +117,16 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	int16		confkey[1];
 
 	/*
+	 * If a foreign key, the reference semantics for each column
+	 */
+	char		confreftype[1];
+
+	/*
 	 * If a foreign key, the OIDs of the PK = FK equality operators for each
 	 * column of the constraint
+	 *
+	 * Note: for FArray Element Foreign Keys, all these operators are for the
+	 * array's element type.
 	 */
 	Oid			conpfeqop[1];
 
@@ -172,7 +180,9 @@ typedef FormData_pg_constraint *Form_pg_constraint;
 /*
  * Valid values for confupdtype and confdeltype are the FKCONSTR_ACTION_xxx
  * constants defined in parsenodes.h.  Valid values for confmatchtype are
- * the FKCONSTR_MATCH_xxx constants defined in parsenodes.h.
+ * the FKCONSTR_MATCH_xxx constants defined in parsenodes.h.  Valid values
+ * for elements of confreftype[] are the FKCONSTR_REF_xxx constants defined
+ * in parsenodes.h.
  */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
@@ -216,6 +226,7 @@ extern Oid CreateConstraintEntry(const char *constraintName,
 					  Oid indexRelId,
 					  Oid foreignRelId,
 					  const int16 *foreignKey,
+					  const char *foreignRefType,
 					  const Oid *pfEqOp,
 					  const Oid *ppEqOp,
 					  const Oid *ffEqOp,

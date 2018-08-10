@@ -69,7 +69,8 @@ extern char *quote_qualified_identifier(const char *qualifier,
 extern void generate_operator_clause(fmStringInfo buf,
 						 const char *leftop, Oid leftoptype,
 						 Oid opoid,
-						 const char *rightop, Oid rightoptype);
+						 const char *rightop, Oid rightoptype,
+						 char fkreftype);
 
 /* varchar.c */
 extern int	bpchartruelen(char *s, int len);

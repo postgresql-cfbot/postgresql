@@ -39,6 +39,8 @@
 #include "catalog/pg_ts_template.h"
 #include "commands/defrem.h"
 #include "tsearch/ts_cache.h"
+#include "tsearch/ts_public.h"
+#include "tsearch/ts_shared.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/fmgroids.h"
@@ -75,6 +77,7 @@ static TSConfigCacheEntry *lastUsedConfig = NULL;
 char	   *TSCurrentConfig = NULL;
 
 static Oid	TSCurrentConfigCache = InvalidOid;
+static bool has_invalid_dictionary = false;
 
 
 /*
@@ -85,6 +88,10 @@ static Oid	TSCurrentConfigCache = InvalidOid;
  * but given that TS configuration changes are probably infrequent, it
  * doesn't seem worth the trouble to determine that; we just flush all the
  * entries of the related hash table.
+ *
+ * We set has_invalid_dictionary to true to unpin all used segments later on
+ * a first text search function usage.  It isn't safe to call
+ * ts_dict_shmem_release() here since it may call kernel functions.
  *
  * We can use the same function for all TS caches by passing the hash
  * table address as the "arg".
@@ -98,11 +105,43 @@ InvalidateTSCacheCallBack(Datum arg, int cacheid, uint32 hashvalue)
 
 	hash_seq_init(&status, hash);
 	while ((entry = (TSAnyCacheEntry *) hash_seq_search(&status)) != NULL)
+	{
+		if (cacheid == TSDICTOID)
+			has_invalid_dictionary = true;
+
 		entry->isvalid = false;
+	}
 
 	/* Also invalidate the current-config cache if it's pg_ts_config */
 	if (hash == TSConfigCacheHash)
 		TSCurrentConfigCache = InvalidOid;
+}
+
+/*
+ * Unpin shared segments of all dictionary entries.
+ */
+static void
+do_ts_dict_shmem_release(void)
+{
+	HASH_SEQ_STATUS status;
+	TSDictionaryCacheEntry *entry;
+
+	if (!has_invalid_dictionary)
+		return;
+
+	hash_seq_init(&status, TSDictionaryCacheHash);
+	while ((entry = (TSDictionaryCacheEntry *) hash_seq_search(&status)) != NULL)
+	{
+		DictPointerData dict_ptr;
+
+		dict_ptr.id = entry->dictId;
+		dict_ptr.xmin = entry->dict_xmin;
+		dict_ptr.xmax = entry->dict_xmax;
+		dict_ptr.tid = entry->dict_tid;
+		ts_dict_shmem_release(&dict_ptr, false);
+	}
+
+	has_invalid_dictionary = false;
 }
 
 /*
@@ -253,6 +292,13 @@ lookup_ts_dictionary_cache(Oid dictId)
 		Form_pg_ts_template template;
 		MemoryContext saveCtx;
 
+		/*
+		 * It is possible that some invalid entries hold a DSM mapping and we
+		 * need to unpin it to avoid memory leaking.  We will unpin segments of
+		 * all other invalid dictionaries.
+		 */
+		do_ts_dict_shmem_release();
+
 		tpdict = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dictId));
 		if (!HeapTupleIsValid(tpdict))
 			elog(ERROR, "cache lookup failed for text search dictionary %u",
@@ -312,11 +358,15 @@ lookup_ts_dictionary_cache(Oid dictId)
 		MemSet(entry, 0, sizeof(TSDictionaryCacheEntry));
 		entry->dictId = dictId;
 		entry->dictCtx = saveCtx;
+		entry->dict_xmin = HeapTupleHeaderGetRawXmin(tpdict->t_data);
+		entry->dict_xmax = HeapTupleHeaderGetRawXmax(tpdict->t_data);
+		entry->dict_tid = tpdict->t_self;
 
 		entry->lexizeOid = template->tmpllexize;
 
 		if (OidIsValid(template->tmplinit))
 		{
+			DictInitData init_data;
 			List	   *dictoptions;
 			Datum		opt;
 			bool		isnull;
@@ -336,9 +386,15 @@ lookup_ts_dictionary_cache(Oid dictId)
 			else
 				dictoptions = deserialize_deflist(opt);
 
+			init_data.dict_options = dictoptions;
+			init_data.dict.id = dictId;
+			init_data.dict.xmin = entry->dict_xmin;
+			init_data.dict.xmax = entry->dict_xmax;
+			init_data.dict.tid = entry->dict_tid;
+
 			entry->dictData =
 				DatumGetPointer(OidFunctionCall1(template->tmplinit,
-												 PointerGetDatum(dictoptions)));
+												 PointerGetDatum(&init_data)));
 
 			MemoryContextSwitchTo(oldcontext);
 		}

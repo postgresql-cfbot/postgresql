@@ -11028,6 +11028,7 @@ lock_type:	ACCESS SHARE					{ $$ = AccessShareLock; }
 			| SHARE ROW EXCLUSIVE			{ $$ = ShareRowExclusiveLock; }
 			| EXCLUSIVE						{ $$ = ExclusiveLock; }
 			| ACCESS EXCLUSIVE				{ $$ = AccessExclusiveLock; }
+			| ACCESS EXCLUSIVE LOCAL		{ $$ = AccessExclusiveLocalLock; }
 		;
 
 opt_nowait:	NOWAIT							{ $$ = true; }

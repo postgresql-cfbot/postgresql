@@ -66,42 +66,56 @@ static const LOCKMASK LockConflicts[] = {
 	0,
 
 	/* AccessShareLock */
-	LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* RowShareLock */
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* RowExclusiveLock */
 	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* ShareUpdateExclusiveLock */
 	LOCKBIT_ON(ShareUpdateExclusiveLock) |
 	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* ShareLock */
 	LOCKBIT_ON(RowExclusiveLock) | LOCKBIT_ON(ShareUpdateExclusiveLock) |
 	LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* ShareRowExclusiveLock */
 	LOCKBIT_ON(RowExclusiveLock) | LOCKBIT_ON(ShareUpdateExclusiveLock) |
 	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* ExclusiveLock */
 	LOCKBIT_ON(RowShareLock) |
 	LOCKBIT_ON(RowExclusiveLock) | LOCKBIT_ON(ShareUpdateExclusiveLock) |
 	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock),
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
 	/* AccessExclusiveLock */
 	LOCKBIT_ON(AccessShareLock) | LOCKBIT_ON(RowShareLock) |
 	LOCKBIT_ON(RowExclusiveLock) | LOCKBIT_ON(ShareUpdateExclusiveLock) |
 	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
-	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock)
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock),
 
+	/* AccessExclusiveLocalLock */
+	LOCKBIT_ON(AccessShareLock) | LOCKBIT_ON(RowShareLock) |
+	LOCKBIT_ON(RowExclusiveLock) | LOCKBIT_ON(ShareUpdateExclusiveLock) |
+	LOCKBIT_ON(ShareLock) | LOCKBIT_ON(ShareRowExclusiveLock) |
+	LOCKBIT_ON(ExclusiveLock) | LOCKBIT_ON(AccessExclusiveLock) |
+	LOCKBIT_ON(AccessExclusiveLocalLock)
 };
 
 /* Names of lock modes, for debug printouts */
@@ -115,7 +129,8 @@ static const char *const lock_mode_names[] =
 	"ShareLock",
 	"ShareRowExclusiveLock",
 	"ExclusiveLock",
-	"AccessExclusiveLock"
+	"AccessExclusiveLock",
+	"AccessExclusiveLocalLock"
 };
 
 #ifndef LOCK_DEBUG
@@ -123,7 +138,7 @@ static bool Dummy_trace = false;
 #endif
 
 static const LockMethodData default_lockmethod = {
-	AccessExclusiveLock,		/* highest valid lock mode number */
+	AccessExclusiveLocalLock,		/* highest valid lock mode number */
 	LockConflicts,
 	lock_mode_names,
 #ifdef LOCK_DEBUG
@@ -134,7 +149,7 @@ static const LockMethodData default_lockmethod = {
 };
 
 static const LockMethodData user_lockmethod = {
-	AccessExclusiveLock,		/* highest valid lock mode number */
+	AccessExclusiveLocalLock,		/* highest valid lock mode number */
 	LockConflicts,
 	lock_mode_names,
 #ifdef LOCK_DEBUG
@@ -810,7 +825,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	 * transactions can acquire in a standby server. Make sure this definition
 	 * matches the one in GetRunningTransactionLocks().
 	 */
-	if (lockmode >= AccessExclusiveLock &&
+	if (lockmode == AccessExclusiveLock &&
 		locktag->locktag_type == LOCKTAG_RELATION &&
 		!RecoveryInProgress() &&
 		XLogStandbyInfoActive())

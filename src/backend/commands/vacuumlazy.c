@@ -1834,7 +1834,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 		lock_retry = 0;
 		while (true)
 		{
-			if (ConditionalLockRelation(onerel, AccessExclusiveLock))
+			if (ConditionalLockRelation(onerel, AccessExclusiveLocalLock))
 				break;
 
 			/*
@@ -1875,7 +1875,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 			 * numbers alone amounts to assuming that the new pages have the
 			 * same tuple density as existing ones, which is less unlikely.
 			 */
-			UnlockRelation(onerel, AccessExclusiveLock);
+			UnlockRelation(onerel, AccessExclusiveLocalLock);
 			return;
 		}
 
@@ -1890,7 +1890,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 		if (new_rel_pages >= old_rel_pages)
 		{
 			/* can't do anything after all */
-			UnlockRelation(onerel, AccessExclusiveLock);
+			UnlockRelation(onerel, AccessExclusiveLocalLock);
 			return;
 		}
 
@@ -1906,7 +1906,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 		 * that should happen as part of standard invalidation processing once
 		 * they acquire lock on the relation.
 		 */
-		UnlockRelation(onerel, AccessExclusiveLock);
+		UnlockRelation(onerel, AccessExclusiveLocalLock);
 
 		/*
 		 * Update statistics.  Here, it *is* correct to adjust rel_pages
@@ -1962,7 +1962,7 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 
 		/*
 		 * Check if another process requests a lock on our relation. We are
-		 * holding an AccessExclusiveLock here, so they will be waiting. We
+		 * holding an AccessExclusiveLocalLock here, so they will be waiting. We
 		 * only do this once per VACUUM_TRUNCATE_LOCK_CHECK_INTERVAL, and we
 		 * only check if that interval has elapsed once every 32 blocks to
 		 * keep the number of system calls and actual shared lock table
@@ -1979,7 +1979,7 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 			if ((INSTR_TIME_GET_MICROSEC(elapsed) / 1000)
 				>= VACUUM_TRUNCATE_LOCK_CHECK_INTERVAL)
 			{
-				if (LockHasWaitersRelation(onerel, AccessExclusiveLock))
+				if (LockHasWaitersRelation(onerel, AccessExclusiveLocalLock))
 				{
 					ereport(elevel,
 							(errmsg("\"%s\": suspending truncate due to conflicting lock request",

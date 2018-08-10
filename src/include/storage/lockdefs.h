@@ -44,6 +44,8 @@ typedef int LOCKMODE;
 #define ExclusiveLock			7	/* blocks ROW SHARE/SELECT...FOR UPDATE */
 #define AccessExclusiveLock		8	/* ALTER TABLE, DROP TABLE, VACUUM FULL,
 									 * and unqualified LOCK TABLE */
+#define AccessExclusiveLocalLock 9  /* VACUUM, VACUUM FULL, autovacuum and unqualified
+									 * LOCK TABLE (will not be send to standby) */
 
 typedef struct xl_standby_lock
 {

@@ -26,7 +26,7 @@ LOCK [ TABLE ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ] 
 <phrase>where <replaceable class="parameter">lockmode</replaceable> is one of:</phrase>
 
     ACCESS SHARE | ROW SHARE | ROW EXCLUSIVE | SHARE UPDATE EXCLUSIVE
-    | SHARE | SHARE ROW EXCLUSIVE | EXCLUSIVE | ACCESS EXCLUSIVE
+    | SHARE | SHARE ROW EXCLUSIVE | EXCLUSIVE | ACCESS EXCLUSIVE | ACCESS EXCLUSIVE LOCAL
 </synopsis>
  </refsynopsisdiv>
 
@@ -253,8 +253,8 @@ COMMIT WORK;
 
   <para>
    Except for <literal>ACCESS SHARE</literal>, <literal>ACCESS EXCLUSIVE</literal>,
-   and <literal>SHARE UPDATE EXCLUSIVE</literal> lock modes, the
-   <productname>PostgreSQL</productname> lock modes and the
+   <literal>ACCESS EXCLUSIVE LOCAL</literal>, and <literal>SHARE UPDATE EXCLUSIVE</literal>
+   lock modes, the <productname>PostgreSQL</productname> lock modes and the
    <command>LOCK TABLE</command> syntax are compatible with those
    present in <productname>Oracle</productname>.
   </para>

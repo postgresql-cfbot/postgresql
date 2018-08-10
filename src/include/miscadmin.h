@@ -400,7 +400,7 @@ typedef enum
 	CheckpointerProcess,
 	WalWriterProcess,
 	WalReceiverProcess,
-
+	StatsCollectorProcess,
 	NUM_AUXPROCTYPES			/* Must be last! */
 } AuxProcType;
 
@@ -412,6 +412,7 @@ extern AuxProcType MyAuxProcType;
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)
 #define AmWalReceiverProcess()		(MyAuxProcType == WalReceiverProcess)
+#define AmStatsCollectorProcess()	(MyAuxProcType == StatsCollectorProcess)
 
 
 /*****************************************************************************

@@ -145,7 +145,8 @@
 #define BACKEND_TYPE_AUTOVAC	0x0002	/* autovacuum worker process */
 #define BACKEND_TYPE_WALSND		0x0004	/* walsender process */
 #define BACKEND_TYPE_BGWORKER	0x0008	/* bgworker process */
-#define BACKEND_TYPE_ALL		0x000F	/* OR of all the above */
+#define BACKEND_TYPE_STATS		0x0010	/* bgworker process */
+#define BACKEND_TYPE_ALL		0x001F	/* OR of all the above */
 
 #define BACKEND_TYPE_WORKER		(BACKEND_TYPE_AUTOVAC | BACKEND_TYPE_BGWORKER)
 
@@ -551,6 +552,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
+#define StartStatsCollector()	StartChildProcess(StatsCollectorProcess)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -1760,7 +1762,7 @@ ServerLoop(void)
 		/* If we have lost the stats collector, try to start a new one */
 		if (PgStatPID == 0 &&
 			(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
-			PgStatPID = pgstat_start();
+			PgStatPID = StartStatsCollector();
 
 		/* If we have lost the archiver, try to start a new one. */
 		if (PgArchPID == 0 && PgArchStartupAllowed())
@@ -2878,7 +2880,7 @@ reaper(SIGNAL_ARGS)
 			if (PgArchStartupAllowed() && PgArchPID == 0)
 				PgArchPID = pgarch_start();
 			if (PgStatPID == 0)
-				PgStatPID = pgstat_start();
+				PgStatPID = StartStatsCollector();
 
 			/* workers may be scheduled to start now */
 			maybe_start_bgworkers();
@@ -2951,7 +2953,7 @@ reaper(SIGNAL_ARGS)
 				 * nothing left for it to do.
 				 */
 				if (PgStatPID != 0)
-					signal_child(PgStatPID, SIGQUIT);
+					signal_child(PgStatPID, SIGTERM);
 			}
 			else
 			{
@@ -3037,10 +3039,10 @@ reaper(SIGNAL_ARGS)
 		{
 			PgStatPID = 0;
 			if (!EXIT_STATUS_0(exitstatus))
-				LogChildExit(LOG, _("statistics collector process"),
-							 pid, exitstatus);
+				HandleChildCrash(pid, exitstatus,
+								 _("statistics collector process"));
 			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
-				PgStatPID = pgstat_start();
+				PgStatPID = StartStatsCollector();
 			continue;
 		}
 
@@ -3270,7 +3272,7 @@ CleanupBackend(int pid,
 
 /*
  * HandleChildCrash -- cleanup after failed backend, bgwriter, checkpointer,
- * walwriter, autovacuum, or background worker.
+ * walwriter, autovacuum, stats collector or background worker.
  *
  * The objectives here are to clean up our local state about the child
  * process, and to signal all other remaining children to quickdie.
@@ -4949,12 +4951,6 @@ SubPostmasterMain(int argc, char *argv[])
 
 		PgArchiverMain(argc, argv); /* does not return */
 	}
-	if (strcmp(argv[1], "--forkcol") == 0)
-	{
-		/* Do not want to attach to shared memory */
-
-		PgstatCollectorMain(argc, argv);	/* does not return */
-	}
 	if (strcmp(argv[1], "--forklog") == 0)
 	{
 		/* Do not want to attach to shared memory */
@@ -5071,7 +5067,7 @@ sigusr1_handler(SIGNAL_ARGS)
 		 * Likewise, start other special children as needed.
 		 */
 		Assert(PgStatPID == 0);
-		PgStatPID = pgstat_start();
+		PgStatPID = StartStatsCollector();
 
 		ereport(LOG,
 				(errmsg("database system is ready to accept read only connections")));
@@ -5360,6 +5356,10 @@ StartChildProcess(AuxProcType type)
 			case WalReceiverProcess:
 				ereport(LOG,
 						(errmsg("could not fork WAL receiver process: %m")));
+				break;
+			case StatsCollectorProcess:
+				ereport(LOG,
+						(errmsg("could not fork stats collector process: %m")));
 				break;
 			default:
 				ereport(LOG,

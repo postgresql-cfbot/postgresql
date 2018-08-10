@@ -2612,7 +2612,7 @@ The commands accepted in replication mode are:
         <para>
          <filename>pg_dynshmem</filename>, <filename>pg_notify</filename>,
          <filename>pg_replslot</filename>, <filename>pg_serial</filename>,
-         <filename>pg_snapshots</filename>, <filename>pg_stat_tmp</filename>, and
+         <filename>pg_snapshots</filename>, and
          <filename>pg_subtrans</filename> are copied as empty directories (even if
          they are symbolic links).
         </para>

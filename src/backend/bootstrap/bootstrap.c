@@ -335,6 +335,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case WalReceiverProcess:
 				statmsg = pgstat_get_backend_desc(B_WAL_RECEIVER);
 				break;
+			case StatsCollectorProcess:
+				statmsg = pgstat_get_backend_desc(B_STATS_COLLECTOR);
+				break;
 			default:
 				statmsg = "??? process";
 				break;
@@ -467,6 +470,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case WalReceiverProcess:
 			/* don't set signals, walreceiver has its own agenda */
 			WalReceiverMain();
+			proc_exit(1);		/* should never return */
+
+		case StatsCollectorProcess:
+			/* don't set signals, stats collector has its own agenda */
+			PgstatCollectorMain();
 			proc_exit(1);		/* should never return */
 
 		default:

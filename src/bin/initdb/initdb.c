@@ -216,7 +216,6 @@ static const char *const subdirs[] = {
 	"pg_replslot",
 	"pg_tblspc",
 	"pg_stat",
-	"pg_stat_tmp",
 	"pg_xact",
 	"pg_logical",
 	"pg_logical/snapshots",

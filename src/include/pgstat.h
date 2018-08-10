@@ -13,6 +13,7 @@
 
 #include "datatype/timestamp.h"
 #include "fmgr.h"
+#include "lib/dshash.h"
 #include "libpq/pqcomm.h"
 #include "port/atomics.h"
 #include "portability/instr_time.h"
@@ -30,9 +31,6 @@
 #define PGSTAT_STAT_PERMANENT_FILENAME		"pg_stat/global.stat"
 #define PGSTAT_STAT_PERMANENT_TMPFILE		"pg_stat/global.tmp"
 
-/* Default directory to store temporary statistics data in */
-#define PG_STAT_TMP_DIR		"pg_stat_tmp"
-
 /* Values for track_functions GUC variable --- order is significant! */
 typedef enum TrackFunctionsLevel
 {
@@ -48,7 +46,6 @@ typedef enum TrackFunctionsLevel
 typedef enum StatMsgType
 {
 	PGSTAT_MTYPE_DUMMY,
-	PGSTAT_MTYPE_INQUIRY,
 	PGSTAT_MTYPE_TABSTAT,
 	PGSTAT_MTYPE_TABPURGE,
 	PGSTAT_MTYPE_DROPDB,
@@ -215,35 +212,6 @@ typedef struct PgStat_MsgDummy
 {
 	PgStat_MsgHdr m_hdr;
 } PgStat_MsgDummy;
-
-
-/* ----------
- * PgStat_MsgInquiry			Sent by a backend to ask the collector
- *								to write the stats file(s).
- *
- * Ordinarily, an inquiry message prompts writing of the global stats file,
- * the stats file for shared catalogs, and the stats file for the specified
- * database.  If databaseid is InvalidOid, only the first two are written.
- *
- * New file(s) will be written only if the existing file has a timestamp
- * older than the specified cutoff_time; this prevents duplicated effort
- * when multiple requests arrive at nearly the same time, assuming that
- * backends send requests with cutoff_times a little bit in the past.
- *
- * clock_time should be the requestor's current local time; the collector
- * uses this to check for the system clock going backward, but it has no
- * effect unless that occurs.  We assume clock_time >= cutoff_time, though.
- * ----------
- */
-
-typedef struct PgStat_MsgInquiry
-{
-	PgStat_MsgHdr m_hdr;
-	TimestampTz clock_time;		/* observed local clock time */
-	TimestampTz cutoff_time;	/* minimum acceptable file timestamp */
-	Oid			databaseid;		/* requested DB (InvalidOid => shared only) */
-} PgStat_MsgInquiry;
-
 
 /* ----------
  * PgStat_TableEntry			Per-table info in a MsgTabstat
@@ -539,7 +507,6 @@ typedef union PgStat_Msg
 {
 	PgStat_MsgHdr msg_hdr;
 	PgStat_MsgDummy msg_dummy;
-	PgStat_MsgInquiry msg_inquiry;
 	PgStat_MsgTabstat msg_tabstat;
 	PgStat_MsgTabpurge msg_tabpurge;
 	PgStat_MsgDropdb msg_dropdb;
@@ -601,10 +568,13 @@ typedef struct PgStat_StatDBEntry
 
 	/*
 	 * tables and functions must be last in the struct, because we don't write
-	 * the pointers out to the stats file.
+	 * the handles and pointers out to the stats file.
 	 */
-	HTAB	   *tables;
-	HTAB	   *functions;
+	dshash_table_handle tables;
+	dshash_table_handle functions;
+	/* for snapshot tables */
+	HTAB *snapshot_tables;
+	HTAB *snapshot_functions;
 } PgStat_StatDBEntry;
 
 
@@ -710,7 +680,8 @@ typedef enum BackendType
 	B_STARTUP,
 	B_WAL_RECEIVER,
 	B_WAL_SENDER,
-	B_WAL_WRITER
+	B_WAL_WRITER,
+	B_STATS_COLLECTOR
 } BackendType;
 
 
@@ -1160,11 +1131,6 @@ extern int	pgstat_start(void);
 extern void pgstat_reset_all(void);
 extern void allow_immediate_pgstat_restart(void);
 
-#ifdef EXEC_BACKEND
-extern void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();
-#endif
-
-
 /* ----------
  * Functions called from backends
  * ----------
@@ -1217,6 +1183,9 @@ extern PgStat_BackendFunctionEntry *find_funcstat_entry(Oid func_id);
 extern void pgstat_initstats(Relation rel);
 
 extern char *pgstat_clip_activity(const char *raw_activity);
+extern PgStat_StatDBEntry *backend_get_db_entry(Oid dbid, bool oneshot);
+extern HTAB *backend_snapshot_all_db_entries(void);
+extern PgStat_StatTabEntry *backend_get_tab_entry(PgStat_StatDBEntry *dbent, Oid relid, bool oneshot);
 
 /* ----------
  * pgstat_report_wait_start() -
@@ -1352,5 +1321,11 @@ extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgStat_ArchiverStats *pgstat_fetch_stat_archiver(void);
 extern PgStat_GlobalStats *pgstat_fetch_global(void);
+
+/* Main loop */
+extern void PgstatCollectorMain(void) pg_attribute_noreturn();
+
+extern Size StatsShmemSize(void);
+extern void StatsShmemInit(void);
 
 #endif							/* PGSTAT_H */

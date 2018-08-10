@@ -593,6 +593,144 @@ dshash_memhash(const void *v, size_t size, void *arg)
 }
 
 /*
+ * dshash_seq_init/_next/_term
+ *           Sequentially scan trhough dshash table and return all the
+ *           elements one by one, return NULL when no more.
+ *
+ * dshash_seq_term should be called if and only if the scan is abandoned
+ * before completion; if dshash_seq_next returns NULL then it has already done
+ * the end-of-scan cleanup.
+ *
+ * On returning element, it is locked as is the case with dshash_find.
+ * However, the caller must not release the lock. The lock is released as
+ * necessary in continued scan.
+ *
+ * As opposed to the equivalent for dynanash, the caller is not supposed to
+ * delete the returned element before continuing the scan.
+ *
+ * If consistent is set for dshash_seq_init, the whole hash table is
+ * non-exclusively locked. Otherwise a part of the hash table is locked in the
+ * same mode (partition lock).
+ */
+void
+dshash_seq_init(dshash_seq_status *status, dshash_table *hash_table,
+				bool consistent)
+{
+	status->hash_table = hash_table;
+	status->curbucket = 0;
+	status->nbuckets = ((size_t) 1) << hash_table->control->size_log2;
+	status->curitem = NULL;
+	status->curpartition = -1;
+	status->consistent = consistent;
+
+	/*
+	 * Protect all partitions from modification if the caller wants a
+	 * consistent result.
+	 */
+	if (consistent)
+	{
+		int i;
+
+		for (i = 0; i < DSHASH_NUM_PARTITIONS; ++i)
+		{
+			Assert(!LWLockHeldByMe(PARTITION_LOCK(hash_table, i)));
+
+			LWLockAcquire(PARTITION_LOCK(hash_table, i), LW_SHARED);
+		}
+	}
+	ensure_valid_bucket_pointers(hash_table);
+}
+
+void *
+dshash_seq_next(dshash_seq_status *status)
+{
+	dsa_pointer next_item_pointer;
+
+	if (status->curitem == NULL)
+	{
+		Assert (status->curbucket == 0);
+		Assert(!status->hash_table->find_locked);
+
+		/* first shot. grab the first item. */
+		next_item_pointer = status->hash_table->buckets[status->curbucket];
+		status->hash_table->find_locked = true;
+	}
+	else
+		next_item_pointer = status->curitem->next;
+
+	/* Move to the next bucket if we finished the current bucket */
+	while (!DsaPointerIsValid(next_item_pointer))
+	{
+		if (++status->curbucket >= status->nbuckets)
+		{
+			/* all buckets have been scanned. finsih. */
+			dshash_seq_term(status);
+			return NULL;
+		}
+		Assert(status->hash_table->find_locked);
+
+		next_item_pointer = status->hash_table->buckets[status->curbucket];
+
+		/*
+		 * we need a lock on the scanning partition even if the caller don't
+		 * requested a consistent snapshot.
+		 */
+		if (!status->consistent && DsaPointerIsValid(next_item_pointer))
+		{
+			dshash_table_item  *item = dsa_get_address(status->hash_table->area,
+													   next_item_pointer);
+			int next_partition = PARTITION_FOR_HASH(item->hash);
+			if (status->curpartition != next_partition)
+			{
+				if (status->curpartition >= 0)
+					LWLockRelease(PARTITION_LOCK(status->hash_table,
+												 status->curpartition));
+				LWLockAcquire(PARTITION_LOCK(status->hash_table,
+											 next_partition),
+							  LW_SHARED);
+				status->curpartition = next_partition;
+			}
+		}
+	}
+
+	status->curitem =
+		dsa_get_address(status->hash_table->area, next_item_pointer);
+	return ENTRY_FROM_ITEM(status->curitem);
+}
+
+void
+dshash_seq_term(dshash_seq_status *status)
+{
+	Assert(status->hash_table->find_locked);
+	status->hash_table->find_locked = false;
+
+	if (status->consistent)
+	{
+		int i;
+
+		for (i = 0; i < DSHASH_NUM_PARTITIONS; ++i)
+			LWLockRelease(PARTITION_LOCK(status->hash_table, i));
+	}
+	else if (status->curpartition >= 0)
+		LWLockRelease(PARTITION_LOCK(status->hash_table, status->curpartition));
+}
+
+int
+dshash_get_num_entries(dshash_table *hash_table)
+{
+	/* a shotcut implement. should be improved  */
+	dshash_seq_status s;
+	void *p;
+	int n = 0;
+
+	dshash_seq_init(&s, hash_table, false);
+	while ((p = dshash_seq_next(&s)) != NULL)
+		n++;
+
+	return n;
+}
+
+/*
  * Print debugging information about the internal state of the hash table to
  * stderr.  The caller must hold no partition locks.
  */

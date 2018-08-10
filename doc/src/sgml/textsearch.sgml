@@ -374,6 +374,38 @@ SELECT phraseto_tsquery('the cats ate the rats');
    </para>
 
    <para>
+    Range version of the FOLLOWED BY operator having the form
+    <literal>&lt;<replaceable>[N]</replaceable>,<replaceable>[M]</replaceable>&gt;</literal>,
+    where <replaceable>N</replaceable> and <replaceable>M</replaceable> are integers
+    representing for the minimum and maximum difference between the positions of the
+    matching lexemes. <replaceable>N</replaceable> can be omitted as a short version of
+    <literal>&lt;0,<replaceable>M</replaceable>&gt;</literal>. Likewise,
+    <replaceable>M</replaceable> can be omitted to represent a maximum distance
+    between the positions of the matching lexemes limited by maximum distance in
+    <literal>tsquery</literal>. Negative distance is supported to show reverse order
+    of the matching lexemes. Omitted borders are inverted in case of negative distance.
+   </para>
+<programlisting>
+SELECT 'big &lt;1,2&gt; cat'::tsquery;
+      tsquery      
+-------------------
+ 'big' &lt;1,2&gt; 'cat'
+(1 row)
+
+SELECT 'big &lt;,2&gt; cat'::tsquery;
+      tsquery      
+-------------------
+ 'big' &lt;0,2&gt; 'cat'
+(1 row)
+
+SELECT 'big &lt;1,&gt; cat'::tsquery;
+        tsquery        
+-----------------------
+ 'big' &lt;1,16384&gt; 'cat'
+(1 row)
+</programlisting>
+
+   <para>
     Parentheses can be used to control nesting of the <type>tsquery</type>
     operators.  Without parentheses, <literal>|</literal> binds least tightly,
     then <literal>&amp;</literal>, then <literal>&lt;-&gt;</literal>,
@@ -3917,7 +3949,7 @@ Parser: "pg_catalog.default"
     </listitem>
     <listitem>
      <para>The match distance in a <literal>&lt;<replaceable>N</replaceable>&gt;</literal>
-     (FOLLOWED BY) <type>tsquery</type> operator cannot be more than
+     (FOLLOWED BY) <type>tsquery</type> operator cannot be less than -16,384 and more than
      16,384</para>
     </listitem>
     <listitem>

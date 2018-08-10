@@ -28,7 +28,8 @@ tsquery_numnode(PG_FUNCTION_ARGS)
 }
 
 static QTNode *
-join_tsqueries(TSQuery a, TSQuery b, int8 operator, uint16 distance)
+join_tsqueries(TSQuery a, TSQuery b, int8 operator,
+		uint16 distance_from, uint16 distance_to)
 {
 	QTNode	   *res = (QTNode *) palloc0(sizeof(QTNode));
 
@@ -38,7 +39,10 @@ join_tsqueries(TSQuery a, TSQuery b, int8 operator, uint16 distance)
 	res->valnode->type = QI_OPR;
 	res->valnode->qoperator.oper = operator;
 	if (operator == OP_PHRASE)
-		res->valnode->qoperator.distance = distance;
+	{
+		res->valnode->qoperator.operator_data.distance_from = distance_from;
+		res->valnode->qoperator.operator_data.distance_to = distance_to;
+	}
 
 	res->child = (QTNode **) palloc0(sizeof(QTNode *) * 2);
 	res->child[0] = QT2QTN(GETQUERY(b), GETOPERAND(b));
@@ -67,7 +71,7 @@ tsquery_and(PG_FUNCTION_ARGS)
 		PG_RETURN_POINTER(a);
 	}
 
-	res = join_tsqueries(a, b, OP_AND, 0);
+	res = join_tsqueries(a, b, OP_AND, 0, 0);
 
 	query = QTN2QT(res);
 
@@ -97,12 +101,56 @@ tsquery_or(PG_FUNCTION_ARGS)
 		PG_RETURN_POINTER(a);
 	}
 
-	res = join_tsqueries(a, b, OP_OR, 0);
+	res = join_tsqueries(a, b, OP_OR, 0, 0);
 
 	query = QTN2QT(res);
 
 	QTNFree(res);
 	PG_FREE_IF_COPY(a, 0);
+	PG_FREE_IF_COPY(b, 1);
+
+	PG_RETURN_TSQUERY(query);
+}
+
+Datum
+tsquery_phrase_distance_range(PG_FUNCTION_ARGS)
+{
+	TSQuery		a = PG_GETARG_TSQUERY_COPY(0);
+	TSQuery		b = PG_GETARG_TSQUERY_COPY(1);
+	int32		distance_from = PG_GETARG_INT32(2);
+	int32		distance_to = PG_GETARG_INT32(3);
+	QTNode	   *res;
+	TSQuery		query;
+
+	if (distance_from > MAXENTRYPOS || distance_to > MAXENTRYPOS)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("distance in phrase operator should be less than %d",
+					 MAXENTRYPOS)));
+
+	if (distance_from > distance_to)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("Lower bound of range should be less or equal to upper bound")));
+
+	if (a->size == 0)
+	{
+		PG_FREE_IF_COPY(a, 1);
+		PG_RETURN_POINTER(b);
+	}
+	if (b->size == 0)
+	{
+		PG_FREE_IF_COPY(b, 1);
+		PG_RETURN_POINTER(a);
+	}
+
+	res = join_tsqueries(a, b, OP_PHRASE,
+			(int16) distance_from, (int16) distance_to);
+
+	query = QTN2QT(res);
+
+	QTNFree(res);
+	PG_FREE_IF_COPY(a, 1);
 	PG_FREE_IF_COPY(b, 1);
 
 	PG_RETURN_TSQUERY(query);
@@ -111,46 +159,22 @@ tsquery_or(PG_FUNCTION_ARGS)
 Datum
 tsquery_phrase_distance(PG_FUNCTION_ARGS)
 {
-	TSQuery		a = PG_GETARG_TSQUERY_COPY(0);
-	TSQuery		b = PG_GETARG_TSQUERY_COPY(1);
-	QTNode	   *res;
-	TSQuery		query;
-	int32		distance = PG_GETARG_INT32(2);
-
-	if (distance < 0 || distance > MAXENTRYPOS)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("distance in phrase operator should be non-negative and less than %d",
-						MAXENTRYPOS)));
-	if (a->size == 0)
-	{
-		PG_FREE_IF_COPY(a, 1);
-		PG_RETURN_POINTER(b);
-	}
-	else if (b->size == 0)
-	{
-		PG_FREE_IF_COPY(b, 1);
-		PG_RETURN_POINTER(a);
-	}
-
-	res = join_tsqueries(a, b, OP_PHRASE, (uint16) distance);
-
-	query = QTN2QT(res);
-
-	QTNFree(res);
-	PG_FREE_IF_COPY(a, 0);
-	PG_FREE_IF_COPY(b, 1);
-
-	PG_RETURN_TSQUERY(query);
+	PG_RETURN_POINTER(DirectFunctionCall4(
+										  tsquery_phrase_distance_range,
+										  PG_GETARG_DATUM(0),
+										  PG_GETARG_DATUM(1),
+										  PG_GETARG_DATUM(2),
+										  PG_GETARG_DATUM(2)));
 }
 
 Datum
 tsquery_phrase(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_POINTER(DirectFunctionCall3(
-										  tsquery_phrase_distance,
+	PG_RETURN_POINTER(DirectFunctionCall4(
+										  tsquery_phrase_distance_range,
 										  PG_GETARG_DATUM(0),
 										  PG_GETARG_DATUM(1),
+										  Int32GetDatum(1),
 										  Int32GetDatum(1)));
 }
 

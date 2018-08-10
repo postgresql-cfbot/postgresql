@@ -1301,10 +1301,10 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY delimiter cannot be \"%s\"", cstate->delim)));
 
 	/* Check header */
-	if (!cstate->csv_mode && cstate->header_line)
+	if (cstate->binary && cstate->header_line)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("COPY HEADER available only in CSV mode")));
+				 errmsg("cannot specify HEADER in BINARY mode")));
 
 	/* Check quote */
 	if (!cstate->csv_mode && cstate->quote != NULL)
@@ -2041,8 +2041,11 @@ CopyTo(CopyState cstate)
 
 				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-				CopyAttributeOutCSV(cstate, colname, false,
+				if (cstate->csv_mode)
+					CopyAttributeOutCSV(cstate, colname, false,
 									list_length(cstate->attnumlist) == 1);
+				else
+					CopyAttributeOutText(cstate, colname);
 			}
 
 			CopySendEndOfRow(cstate);

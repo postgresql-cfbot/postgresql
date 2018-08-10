@@ -447,6 +447,8 @@
 					# statements running at least this number
 					# of milliseconds
 
+#log_sample_rate = 1  # Fraction of logged statements. 1 means log all
+					# statements.
 
 # - What to Log -
 

@@ -2115,7 +2115,8 @@ check_log_statement(List *stmt_list)
 
 /*
  * check_log_duration
- *		Determine whether current command's duration should be logged
+ *		Determine whether current command's duration should be logged.
+ *		If log_sample_rate < 1.0, log only a sample.
  *
  * Returns:
  *		0 if no logging is needed
@@ -2137,6 +2138,7 @@ check_log_duration(char *msec_str, bool was_logged)
 		int			usecs;
 		int			msecs;
 		bool		exceeded;
+		bool		in_sample;
 
 		TimestampDifference(GetCurrentStatementStartTimestamp(),
 							GetCurrentTimestamp(),
@@ -2153,7 +2155,15 @@ check_log_duration(char *msec_str, bool was_logged)
 					 (secs > log_min_duration_statement / 1000 ||
 					  secs * 1000 + msecs >= log_min_duration_statement)));
 
-		if (exceeded || log_duration)
+		/*
+		 * Do not log if log_sample_rate = 0.
+		 * Log a sample if log_sample_rate <= 1 and avoid unecessary random()
+		 * call if log_sample_rate = 1.
+		 */
+		in_sample = log_sample_rate != 0 &&
+			(log_sample_rate == 1 || random() <= log_sample_rate * MAX_RANDOM_VALUE);
+
+		if (exceeded && in_sample || log_duration)
 		{
 			snprintf(msec_str, 32, "%ld.%03d",
 					 secs * 1000 + msecs, usecs % 1000);

@@ -349,6 +349,7 @@ static void ATRewriteTables(AlterTableStmt *parsetree,
 				List **wqueue, LOCKMODE lockmode);
 static void ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode);
 static AlteredTableInfo *ATGetQueueEntry(List **wqueue, Relation rel);
+static void ATColumnExists(Relation rel, const char *colName, AlteredTableInfo *tab);
 static void ATSimplePermissions(Relation rel, int allowed_targets);
 static void ATWrongRelkindError(Relation rel, int allowed_targets);
 static void ATSimpleRecursion(List **wqueue, Relation rel,
@@ -3700,6 +3701,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			 */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_VIEW | ATT_FOREIGN_TABLE);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode);
+			ATColumnExists(rel, cmd->name, tab);
 			/* No command-specific prep needed */
 			pass = cmd->def ? AT_PASS_ADD_CONSTR : AT_PASS_DROP;
 			break;
@@ -3719,6 +3721,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE);
 			ATPrepDropNotNull(rel, recurse, recursing);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode);
+			ATColumnExists(rel, cmd->name, tab);
 			/* No command-specific prep needed */
 			pass = AT_PASS_DROP;
 			break;
@@ -3726,6 +3729,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE);
 			ATPrepSetNotNull(rel, recurse, recursing);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode);
+			ATColumnExists(rel, cmd->name, tab);
 			/* No command-specific prep needed */
 			pass = AT_PASS_ADD_CONSTR;
 			break;
@@ -3738,12 +3742,14 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_SetOptions:		/* ALTER COLUMN SET ( options ) */
 		case AT_ResetOptions:	/* ALTER COLUMN RESET ( options ) */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_FOREIGN_TABLE);
+			ATColumnExists(rel, cmd->name, tab);
 			/* This command never recurses */
 			pass = AT_PASS_MISC;
 			break;
 		case AT_SetStorage:		/* ALTER COLUMN SET STORAGE */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_FOREIGN_TABLE);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode);
+			ATColumnExists(rel, cmd->name, tab);
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
 			break;
@@ -3751,6 +3757,10 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimplePermissions(rel,
 								ATT_TABLE | ATT_COMPOSITE_TYPE | ATT_FOREIGN_TABLE);
 			ATPrepDropColumn(wqueue, rel, recurse, recursing, cmd, lockmode);
+			if (!cmd->missing_ok)
+			{
+				ATColumnExists(rel, cmd->name, tab);
+			}
 			/* Recursion occurs during execution phase */
 			pass = AT_PASS_DROP;
 			break;
@@ -4956,6 +4966,54 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
 						RelationGetRelationName(rel))));
+}
+
+/*
+ * ATColumnExists
+ *
+ * - Ensure that the targeted column exists
+ */
+static void
+ATColumnExists(Relation rel, const char *colName, AlteredTableInfo *tab)
+{
+	HeapTuple	tuple;
+	List		*subcmds;
+	bool		column_found = false;
+	tuple = SearchSysCacheCopyAttName(RelationGetRelid(rel), colName);
+
+	if (HeapTupleIsValid(tuple))
+	{
+		column_found = true;
+	}
+	else
+	{
+		/* Check that the column is not added in a previous operation */
+		subcmds = tab->subcmds[AT_PASS_ADD_COL];
+		if (subcmds != NULL)
+		{
+			ListCell   *lcmd;
+			ColumnDef  *coldef;
+
+			foreach(lcmd, subcmds)
+			{
+				AlterTableCmd *cmd = castNode(AlterTableCmd, lfirst(lcmd));
+				coldef = (ColumnDef *) cmd->def;
+				if (strcmp(coldef->colname, colName) == 0)
+				{
+					column_found = true;
+					break;
+				}
+			}
+		}
+	}
+
+	if (!column_found)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						colName, RelationGetRelationName(rel))));
+	}
 }
 
 /*

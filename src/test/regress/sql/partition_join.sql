@@ -10,24 +10,38 @@ SET enable_partitionwise_join to true;
 -- partitioned by a single column
 --
 CREATE TABLE prt1 (a int, b int, c varchar) PARTITION BY RANGE(a);
+CREATE TABLE prt1_p0 PARTITION OF prt1 FOR VALUES FROM (MINVALUE) TO (0);
 CREATE TABLE prt1_p1 PARTITION OF prt1 FOR VALUES FROM (0) TO (250);
 CREATE TABLE prt1_p3 PARTITION OF prt1 FOR VALUES FROM (500) TO (600);
 CREATE TABLE prt1_p2 PARTITION OF prt1 FOR VALUES FROM (250) TO (500);
-INSERT INTO prt1 SELECT i, i % 25, to_char(i, 'FM0000') FROM generate_series(0, 599) i WHERE i % 2 = 0;
+CREATE TABLE prt1_p4 PARTITION OF prt1 FOR VALUES FROM (600) TO (800);
+INSERT INTO prt1 SELECT i, i % 25, to_char(i, 'FM0000') FROM generate_series(-250, 799) i WHERE i % 2 = 0;
+CREATE INDEX iprt1_p0_a on prt1_p0(a);
 CREATE INDEX iprt1_p1_a on prt1_p1(a);
 CREATE INDEX iprt1_p2_a on prt1_p2(a);
 CREATE INDEX iprt1_p3_a on prt1_p3(a);
+CREATE INDEX iprt1_p4_a on prt1_p4(a);
 ANALYZE prt1;
 
+-- prt2 have missing starting MINVALUE to -250 range and
+-- extra bounds from 800 to MAXVALUE
 CREATE TABLE prt2 (a int, b int, c varchar) PARTITION BY RANGE(b);
+CREATE TABLE prt2_p0 PARTITION OF prt2 FOR VALUES FROM (-250) TO (0);
 CREATE TABLE prt2_p1 PARTITION OF prt2 FOR VALUES FROM (0) TO (250);
 CREATE TABLE prt2_p2 PARTITION OF prt2 FOR VALUES FROM (250) TO (500);
 CREATE TABLE prt2_p3 PARTITION OF prt2 FOR VALUES FROM (500) TO (600);
-INSERT INTO prt2 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(0, 599) i WHERE i % 3 = 0;
+CREATE TABLE prt2_p4 PARTITION OF prt2 FOR VALUES FROM (600) TO (MAXVALUE);
+INSERT INTO prt2 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(-250, 799) i WHERE i % 3 = 0;
+CREATE INDEX iprt2_p0_b on prt2_p0(b);
 CREATE INDEX iprt2_p1_b on prt2_p1(b);
 CREATE INDEX iprt2_p2_b on prt2_p2(b);
 CREATE INDEX iprt2_p3_b on prt2_p3(b);
+CREATE INDEX iprt2_p4_b on prt2_p4(b);
 ANALYZE prt2;
+
+-- Partition-wise-join is possible with some partition bounds overlap
+-- with each other completely and some partialy for inner,left,right,
+-- full, semi and anti joins
 
 -- inner join
 EXPLAIN (COSTS OFF)
@@ -67,10 +81,18 @@ EXPLAIN (COSTS OFF)
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t2.b FROM prt2 t2 WHERE t2.a = 0) AND t1.b = 0 ORDER BY t1.a;
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t2.b FROM prt2 t2 WHERE t2.a = 0) AND t1.b = 0 ORDER BY t1.a;
 
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt2 t1 WHERE t1.b IN (SELECT t2.a FROM prt1 t2 WHERE t2.b = 0) AND t1.a = 0 ORDER BY t1.b;
+SELECT t1.* FROM prt2 t1 WHERE t1.b IN (SELECT t2.a FROM prt1 t2 WHERE t2.b = 0) AND t1.a = 0 ORDER BY t1.b;
+
 -- Anti-join with aggregates
 EXPLAIN (COSTS OFF)
 SELECT sum(t1.a), avg(t1.a), sum(t1.b), avg(t1.b) FROM prt1 t1 WHERE NOT EXISTS (SELECT 1 FROM prt2 t2 WHERE t1.a = t2.b);
 SELECT sum(t1.a), avg(t1.a), sum(t1.b), avg(t1.b) FROM prt1 t1 WHERE NOT EXISTS (SELECT 1 FROM prt2 t2 WHERE t1.a = t2.b);
+
+EXPLAIN (COSTS OFF)
+SELECT t1.b, t1.c FROM prt2 t1 WHERE NOT EXISTS (SELECT 1 FROM prt1 t2 WHERE t1.b = t2.a) and t1.a = 0;
+SELECT t1.b, t1.c FROM prt2 t1 WHERE NOT EXISTS (SELECT 1 FROM prt1 t2 WHERE t1.b = t2.a) and t1.a = 0;
 
 -- lateral reference
 EXPLAIN (COSTS OFF)
@@ -93,20 +115,30 @@ SELECT t1.a, ss.t2a, ss.t2c FROM prt1 t1 LEFT JOIN LATERAL
 -- partitioned by expression
 --
 CREATE TABLE prt1_e (a int, b int, c int) PARTITION BY RANGE(((a + b)/2));
+CREATE TABLE prt1_e_p0 PARTITION OF prt1_e FOR VALUES FROM (MINVALUE) TO (0);
 CREATE TABLE prt1_e_p1 PARTITION OF prt1_e FOR VALUES FROM (0) TO (250);
 CREATE TABLE prt1_e_p2 PARTITION OF prt1_e FOR VALUES FROM (250) TO (500);
 CREATE TABLE prt1_e_p3 PARTITION OF prt1_e FOR VALUES FROM (500) TO (600);
+CREATE TABLE prt1_e_p4 PARTITION OF prt1_e FOR VALUES FROM (600) TO (MAXVALUE);
 INSERT INTO prt1_e SELECT i, i, i % 25 FROM generate_series(0, 599, 2) i;
+INSERT INTO prt1_e SELECT i, i, i % 25 FROM generate_series(-250, 0, 2) i;
+INSERT INTO prt1_e SELECT i, i, i % 25 FROM generate_series(600, 799, 2) i;
+CREATE INDEX iprt1_e_p0_ab2 on prt1_e_p1(((a+b)/2));
 CREATE INDEX iprt1_e_p1_ab2 on prt1_e_p1(((a+b)/2));
 CREATE INDEX iprt1_e_p2_ab2 on prt1_e_p2(((a+b)/2));
 CREATE INDEX iprt1_e_p3_ab2 on prt1_e_p3(((a+b)/2));
+CREATE INDEX iprt1_e_p4_ab2 on prt1_e_p1(((a+b)/2));
 ANALYZE prt1_e;
 
 CREATE TABLE prt2_e (a int, b int, c int) PARTITION BY RANGE(((b + a)/2));
+CREATE TABLE prt2_e_p0 PARTITION OF prt2_e FOR VALUES FROM (MINVALUE) TO (0);
 CREATE TABLE prt2_e_p1 PARTITION OF prt2_e FOR VALUES FROM (0) TO (250);
 CREATE TABLE prt2_e_p2 PARTITION OF prt2_e FOR VALUES FROM (250) TO (500);
 CREATE TABLE prt2_e_p3 PARTITION OF prt2_e FOR VALUES FROM (500) TO (600);
+CREATE TABLE prt2_e_p4 PARTITION OF prt2_e FOR VALUES FROM (600) TO (MAXVALUE);
 INSERT INTO prt2_e SELECT i, i, i % 25 FROM generate_series(0, 599, 3) i;
+INSERT INTO prt2_e SELECT i, i, i % 25 FROM generate_series(-250, 0, 3) i;
+INSERT INTO prt2_e SELECT i, i, i % 25 FROM generate_series(600, 799, 3) i;
 ANALYZE prt2_e;
 
 EXPLAIN (COSTS OFF)
@@ -163,6 +195,128 @@ SELECT t1.a, t2.b FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT *
 RESET enable_hashjoin;
 RESET enable_nestloop;
 
+-- test default partition behavior for range, partition-wise join is not
+-- possible since more than one partition on one side matches default partition
+-- on the other side. Default partition from prt1 matches default partition and
+-- prt2_p4 from prt2 and default partition from prt2 matches default partition
+-- and prt1_p0 from prt1
+ALTER TABLE prt1 DETACH PARTITION prt1_p3;
+ALTER TABLE prt1 ATTACH PARTITION prt1_p3 DEFAULT;
+ANALYZE prt1;
+ALTER TABLE prt2 DETACH PARTITION prt2_p3;
+ALTER TABLE prt2 ATTACH PARTITION prt2_p3 DEFAULT;
+ANALYZE prt2;
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- partition-wise join should be possible when we drop the first and last
+-- partitions from both sides
+ALTER TABLE prt1 DETACH PARTITION prt1_p0;
+ALTER TABLE prt1 DETACH PARTITION prt1_p4;
+ANALYZE prt1;
+ALTER TABLE prt2 DETACH PARTITION prt2_p0;
+ALTER TABLE prt2 DETACH PARTITION prt2_p4;
+ANALYZE prt2;
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- restore the partitioned tables for rest of the tests
+ALTER TABLE prt1 ATTACH PARTITION prt1_p0 FOR VALUES FROM (MINVALUE) TO (0);
+ALTER TABLE prt1 ATTACH PARTITION prt1_p4 FOR VALUES FROM (600) TO (800);
+ALTER TABLE prt1 DETACH PARTITION prt1_p3;
+ALTER TABLE prt1 ATTACH PARTITION prt1_p3 FOR VALUES FROM (500) TO (600);
+ANALYZE prt1;
+ALTER TABLE prt2 ATTACH PARTITION prt2_p0 FOR VALUES FROM (-250) TO (0);
+ALTER TABLE prt2 ATTACH PARTITION prt2_p4 FOR VALUES FROM (600) TO (MAXVALUE);
+ALTER TABLE prt2 DETACH PARTITION prt2_p3;
+ALTER TABLE prt2 ATTACH PARTITION prt2_p3 FOR VALUES FROM (500) TO (600);
+ANALYZE prt2;
+
+-- Add an extra partition to prt2 , Partition-wise join is possible with
+-- extra partitions on inner side are allowed
+DROP TABLE prt2_p4;
+CREATE TABLE prt2_p4 PARTITION OF prt2 FOR VALUES FROM (600) TO (800);
+CREATE TABLE prt2_p5 PARTITION OF prt2 FOR VALUES FROM (800) TO (1000);
+INSERT INTO prt2 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(600, 999) i WHERE i % 3 = 0;
+ANALYZE prt2;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 INNER JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 INNER JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt1 t1 where exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from prt1 t1 where exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt2 t1 where exists (select 1 from prt1 t2 WHERE t1.b = t2.a) and t1.a = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from prt2 t1 where exists (select 1 from prt1 t2 WHERE t1.b = t2.a) and t1.a = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt1 t1 where not exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from prt1 t1 where not exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- 3-way join when not every pair of joining relation can use partition-wise
+-- join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a, t3.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON (t1.a = t2.b) INNER JOIN prt1 t3 ON (t2.b = t3.a) WHERE t2.a = 0 ORDER BY t1.a, t2.a, t3.c;
+SELECT t1.a, t2.a, t3.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON (t1.a = t2.b) INNER JOIN prt1 t3 ON (t2.b = t3.a) WHERE t2.a = 0 ORDER BY t1.a, t2.a, t3.c;
+
+-- partition-wise join can not handle missing partition on the inner side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHERE t2.a = 0 ORDER BY t2.b;
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 FULL JOIN prt2 t2 ON t1.a = t2.b WHERE coalesce(t1.b, 0) + coalesce(t2.a, 0) = 0 ORDER BY t1.a, t2.a;
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt2 t1 where not exists (select 1 from prt1 t2 WHERE t1.b = t2.a) and t1.a = 0 order by t1.a, t1.b, t1.c;
+
+-- Partition-wise join can not handle the case when one partition from one side
+-- matches with multiple partitions on the other side
+DROP TABLE prt2_p4;
+DROP TABLE prt2_p5;
+CREATE TABLE prt2_p4 PARTITION OF prt2 FOR VALUES FROM (600) TO (700);
+CREATE TABLE prt2_p5 PARTITION OF prt2 FOR VALUES FROM (700) TO (1000);
+INSERT INTO prt2 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(600, 999, 3) i;
+ANALYZE prt2;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 INNER JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a;
+
+-- right join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHERE t2.a = 0 ORDER BY t2.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM prt1 t1 FULL JOIN prt2 t2 ON t1.a = t2.b WHERE t1.b + t2.a = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt1 t1 where exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt2 t1 where exists (select 1 from prt1 t2 WHERE t1.b = t2.a) and t1.a = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt1 t1 where not exists (select 1 from prt2 t2 WHERE t1.a = t2.b) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from prt2 t1 where not exists (select 1 from prt1 t2 WHERE t1.b = t2.a) and t1.a = 0 order by t1.a, t1.b, t1.c;
+
 --
 -- partitioned by multiple columns
 --
@@ -187,34 +341,254 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1_m WHERE prt1_m.c = 0) t1 
 --
 -- tests for list partitioned tables.
 --
-CREATE TABLE plt1 (a int, b int, c text) PARTITION BY LIST(c);
-CREATE TABLE plt1_p1 PARTITION OF plt1 FOR VALUES IN ('0000', '0003', '0004', '0010');
-CREATE TABLE plt1_p2 PARTITION OF plt1 FOR VALUES IN ('0001', '0005', '0002', '0009');
-CREATE TABLE plt1_p3 PARTITION OF plt1 FOR VALUES IN ('0006', '0007', '0008', '0011');
-INSERT INTO plt1 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(0, 599, 2) i;
-ANALYZE plt1;
+\set part_mod 17
+\set cond_mod 47
+\set num_rows 500
 
-CREATE TABLE plt2 (a int, b int, c text) PARTITION BY LIST(c);
-CREATE TABLE plt2_p1 PARTITION OF plt2 FOR VALUES IN ('0000', '0003', '0004', '0010');
-CREATE TABLE plt2_p2 PARTITION OF plt2 FOR VALUES IN ('0001', '0005', '0002', '0009');
-CREATE TABLE plt2_p3 PARTITION OF plt2 FOR VALUES IN ('0006', '0007', '0008', '0011');
-INSERT INTO plt2 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(0, 599, 3) i;
-ANALYZE plt2;
+CREATE TABLE plt1 (a int, b int, c varchar) PARTITION BY LIST(c);
+CREATE TABLE plt1_p1 PARTITION OF plt1 FOR VALUES IN ('0001','0002','0003');
+CREATE TABLE plt1_p2 PARTITION OF plt1 FOR VALUES IN ('0004','0005','0006');
+CREATE TABLE plt1_p3 PARTITION OF plt1 FOR VALUES IN ('0008','0009');
+CREATE TABLE plt1_p4 PARTITION OF plt1 FOR VALUES IN ('0000','0010');
+INSERT INTO plt1 SELECT i, i % :cond_mod, to_char(i % :part_mod, 'FM0000') FROM generate_series(0, :num_rows) i WHERE i % :part_mod NOT IN (7, 11, 12, 13, 14, 15, 16);
+ANALYSE plt1;
+
+-- plt2 have missing starting 0001, additional 0007, missing ending 0010
+-- and additional 0011 and 0012 bounds
+CREATE TABLE plt2 (a int, b int, c varchar) PARTITION BY LIST(c);
+CREATE TABLE plt2_p1 PARTITION OF plt2 FOR VALUES IN ('0002','0003');
+CREATE TABLE plt2_p2 PARTITION OF plt2 FOR VALUES IN ('0004','0005','0006');
+CREATE TABLE plt2_p3 PARTITION OF plt2 FOR VALUES IN ('0007','0008','0009');
+CREATE TABLE plt2_p4 PARTITION OF plt2 FOR VALUES IN ('0000','0011','0012');
+INSERT INTO plt2 SELECT i, i % :cond_mod, to_char(i % :part_mod, 'FM0000') FROM generate_series(0, :num_rows) i WHERE i % :part_mod NOT IN (1, 10, 13, 14, 15, 16);
+ANALYSE plt2;
+
+-- Partition-wise-join is possible with some partition bounds overlap
+-- with each other completely and some partialy for inner,left,right,
+-- full, semi and anti joins
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+
+-- right join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
 
 --
 -- list partitioned by expression
 --
 CREATE TABLE plt1_e (a int, b int, c text) PARTITION BY LIST(ltrim(c, 'A'));
-CREATE TABLE plt1_e_p1 PARTITION OF plt1_e FOR VALUES IN ('0000', '0003', '0004', '0010');
-CREATE TABLE plt1_e_p2 PARTITION OF plt1_e FOR VALUES IN ('0001', '0005', '0002', '0009');
-CREATE TABLE plt1_e_p3 PARTITION OF plt1_e FOR VALUES IN ('0006', '0007', '0008', '0011');
-INSERT INTO plt1_e SELECT i, i, 'A' || to_char(i/50, 'FM0000') FROM generate_series(0, 599, 2) i;
+CREATE TABLE plt1_e_p1 PARTITION OF plt1_e FOR VALUES IN ('0002', '0003');
+CREATE TABLE plt1_e_p2 PARTITION OF plt1_e FOR VALUES IN ('0004', '0005', '0006');
+CREATE TABLE plt1_e_p3 PARTITION OF plt1_e FOR VALUES IN ('0008', '0009');
+CREATE TABLE plt1_e_p4 PARTITION OF plt1_e FOR VALUES IN ('0000');
+INSERT INTO plt1_e SELECT i, i % :cond_mod, to_char(i % :part_mod, 'FM0000') FROM generate_series(0, :num_rows) i WHERE i % :part_mod NOT IN (1, 7, 10, 11, 12, 13, 14, 15, 16);
 ANALYZE plt1_e;
 
 -- test partition matching with N-way join
 EXPLAIN (COSTS OFF)
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM plt1 t1, plt2 t2, plt1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM plt1 t1, plt2 t2, plt1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
+
+-- Add an extra partition to plt2 , Partition-wise join is possible with
+-- partitions on inner side are allowed
+CREATE TABLE plt2_p5 PARTITION OF plt2 FOR VALUES IN ('0013','0014');
+INSERT INTO plt2 SELECT i, i % :cond_mod, to_char(i % :part_mod, 'FM0000') FROM generate_series(0, :num_rows) i WHERE i % :part_mod IN (13, 14);
+ANALYZE plt2;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+
+-- right join, partition-wise join can not handle extra partition on the outer
+-- side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t1.a;
+
+-- full join, partition-wise join can not handle extra partition on the outer
+-- side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- Partition-wise join can not handle the case when one partition from one side
+-- matches with multiple partitions on the other side
+DROP TABLE plt2_p5;
+CREATE TABLE plt2_p5 PARTITION OF plt2 FOR VALUES IN ('0001','0013','0014');
+INSERT INTO plt2 SELECT i, i % :cond_mod, to_char(i % :part_mod, 'FM0000') FROM generate_series(0, :num_rows) i WHERE i % :part_mod IN (1, 13, 14);
+ANALYZE plt2;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+
+-- right join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t2.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- partition have a NULL on one side, Partition-wise join is possible with
+-- NULL when NULL comparision is not strict i.e. NULL=NULL allowed
+-- in this case NULL will be treated as addition partition bounds.
+DROP TABLE plt2_p5;
+DROP TABLE plt2_p4;
+CREATE TABLE plt2_p4 PARTITION OF plt2 FOR VALUES IN ('0000',NULL,'0012');
+INSERT INTO plt2 SELECT i, i % :cond_mod, case when i % :part_mod = 11 then NULL else to_char(i % :part_mod, 'FM0000') end FROM generate_series(0, :num_rows) i WHERE i % :part_mod IN (0,11,12);
+ANALYZE plt2;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+
+-- right join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- partition have a NULL on both side with different partition bounds w.r.t other side
+-- NULL when NULL comparision is not strict i.e. NULL=NULL allowed
+-- Partition-wise join can not handle the case when one partition from one side
+-- matches with multiple partitions on the other side
+DROP TABLE plt1_p3;
+CREATE TABLE plt1_p3 PARTITION OF plt1 FOR VALUES IN (NULL,'0008','0009');
+INSERT INTO plt1 SELECT i, i % :cond_mod, case when i % :part_mod = 7 then NULL else to_char(i % :part_mod, 'FM0000') end FROM generate_series(0, :num_rows) i WHERE i % :part_mod IN (7,8,9);
+ANALYZE plt1;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 INNER JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + t2.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 LEFT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.b + coalesce(t2.b, 0) = 0 ORDER BY t1.a;
+
+-- right join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + t2.b = 0 ORDER BY t2.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1 t1 FULL JOIN plt2 t2 ON t1.c = t2.c WHERE coalesce(t1.b, 0) + coalesce(t2.b, 0) = 0 ORDER BY t1.a, t2.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt1 t1 where not exists (select 1 from plt2 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
+
+EXPLAIN (COSTS OFF)
+select t1.a, t1.b, t1.c from plt2 t1 where not exists (select 1 from plt1 t2 WHERE t1.c = t2.c) and t1.b = 0 order by t1.a, t1.b, t1.c;
 
 -- joins where one of the relations is proven empty
 EXPLAIN (COSTS OFF)
@@ -261,27 +635,18 @@ EXPLAIN (COSTS OFF)
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, pht2 t2, pht1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, pht2 t2, pht1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
 
--- test default partition behavior for range
-ALTER TABLE prt1 DETACH PARTITION prt1_p3;
-ALTER TABLE prt1 ATTACH PARTITION prt1_p3 DEFAULT;
-ANALYZE prt1;
-ALTER TABLE prt2 DETACH PARTITION prt2_p3;
-ALTER TABLE prt2 ATTACH PARTITION prt2_p3 DEFAULT;
-ANALYZE prt2;
-
-EXPLAIN (COSTS OFF)
-SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
-
--- test default partition behavior for list
+-- test default partition behavior for list, should not use partition-wise join
+-- since default partition from one side matches multiple partitions on the
+-- other
 ALTER TABLE plt1 DETACH PARTITION plt1_p3;
 ALTER TABLE plt1 ATTACH PARTITION plt1_p3 DEFAULT;
 ANALYZE plt1;
 ALTER TABLE plt2 DETACH PARTITION plt2_p3;
 ALTER TABLE plt2 ATTACH PARTITION plt2_p3 DEFAULT;
 ANALYZE plt2;
-
 EXPLAIN (COSTS OFF)
 SELECT avg(t1.a), avg(t2.b), t1.c, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c = t2.c WHERE t1.a % 25 = 0 GROUP BY t1.c, t2.c ORDER BY t1.c, t2.c;
+
 --
 -- multiple levels of partitioning
 --

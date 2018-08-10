@@ -358,6 +358,27 @@ switch_server_cert($node, 'server-cn-only', 'root_ca');
 $common_connstr =
   "user=ssltestuser dbname=certdb sslkey=ssl/client_tmp.key sslrootcert=ssl/root+server_ca.crt hostaddr=$SERVERHOSTADDR";
 
+# Check that connecting with auth-optionverify-full in pg_hba :
+# works, iff username matches Common Name
+# fails, iff username doesn't match Common Name.
+$common_connstr =
+"sslrootcert=ssl/root+server_ca.crt sslmode=require dbname=verifydb hostaddr=$SERVERHOSTADDR";
+
+test_connect_ok($common_connstr,
+				"user=ssltestuser sslcert=ssl/client.crt sslkey=ssl/client_tmp.key",
+				"auth_option clientcert=verify-full succeeds with matching username and Common Name");
+
+test_connect_fails($common_connstr,
+				   "user=anotheruser sslcert=ssl/client.crt sslkey=ssl/client_tmp.key",
+				   qr/FATAL/,
+				   "auth_option clientcert=verify-full fails with mismatching username and Common Name");
+
+# Check that connecting with auth-optionverify-ca in pg_hba :
+# works, when username doesn't match Common Name
+test_connect_ok($common_connstr,
+				"user=yetanotheruser sslcert=ssl/client.crt sslkey=ssl/client_tmp.key",
+				"auth_option clientcert=verify-ca succeeds with mismatching username and Common Name");
+
 test_connect_ok(
 	$common_connstr,
 	"sslmode=require sslcert=ssl/client+client_ca.crt",

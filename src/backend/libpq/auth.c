@@ -347,6 +347,7 @@ void
 ClientAuthentication(Port *port)
 {
 	int			status = STATUS_ERROR;
+	int			status_verify_cert_full = STATUS_ERROR;
 	char	   *logdetail = NULL;
 
 	/*
@@ -364,7 +365,7 @@ ClientAuthentication(Port *port)
 	 * current connection, so perform any verifications based on the hba
 	 * options field that should be done *before* the authentication here.
 	 */
-	if (port->hba->clientcert)
+	if (port->hba->clientcert != clientCertOff)
 	{
 		/* If we haven't loaded a root certificate store, fail */
 		if (!secure_loaded_verify_locations())
@@ -600,10 +601,27 @@ ClientAuthentication(Port *port)
 			break;
 	}
 
+	if(port->hba->clientcert == clientCertFull && port->hba->auth_method!=uaCert)
+	{
+		/**
+		 * Make sure we only check the Certificate if it hasn't been checked
+		 * already due to the use of the uaCert authentication method.
+		 */
+#ifdef USE_SSL
+			status_verify_cert_full = CheckCertAuth(port);
+#else
+			Assert(false);
+#endif
+	}
+	else
+	{
+		status_verify_cert_full = STATUS_OK;
+	}
+
 	if (ClientAuthentication_hook)
 		(*ClientAuthentication_hook) (port, status);
 
-	if (status == STATUS_OK)
+	if (status == STATUS_OK && status_verify_cert_full == STATUS_OK)
 		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
 	else
 		auth_failed(port, status, logdetail);
@@ -2738,6 +2756,7 @@ errdetail_for_ldap(LDAP *ldap)
 static int
 CheckCertAuth(Port *port)
 {
+	int status_check_usermap = STATUS_ERROR;
 	Assert(port->ssl);
 
 	/* Make sure we have received a username in the certificate */
@@ -2751,7 +2770,21 @@ CheckCertAuth(Port *port)
 	}
 
 	/* Just pass the certificate CN to the usermap check */
-	return check_usermap(port->hba->usermap, port->user_name, port->peer_cn, false);
+	status_check_usermap = check_usermap(port->hba->usermap, port->user_name, port->peer_cn, false);
+	if (status_check_usermap != STATUS_OK)
+	{
+		/*
+		 * If clientcert=verify-full was specified and the authentication method
+		 * is other than uaCert, log the reason for rejecting the authentication.
+		 */
+		if (port->hba->clientcert == clientCertFull && port->hba->auth_method!=uaCert)
+		{
+			ereport(LOG,
+				(errmsg("certificate validation (clientcert=verify-full) failed for user \"%s\": CN mismatch",
+						port->user_name)));
+		}
+	}
+	return status_check_usermap;
 }
 #endif
 

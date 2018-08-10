@@ -62,6 +62,7 @@
 #include "replication/slot.h"
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/backend_signal.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -2929,9 +2930,33 @@ ProcessInterrupts(void)
 					 errdetail_recovery_conflict()));
 		}
 		else
-			ereport(FATAL,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("terminating connection due to administrator command")));
+		{
+			if (HasBackendSignalFeedback())
+			{
+				char	buffer[MAX_CANCEL_MSG];
+				int		len;
+				int		sqlerrcode = 0;
+				pid_t	pid = 0;
+
+				len = ConsumeBackendSignalFeedback(buffer, MAX_CANCEL_MSG,
+												   &sqlerrcode, &pid);
+				if (len == 0)
+				{
+					sqlerrcode = ERRCODE_ADMIN_SHUTDOWN;
+					buffer[0] = '\0';
+				}
+				ereport(FATAL,
+						(errcode(sqlerrcode),
+						 errmsg("%s%s",
+								buffer, (len > sizeof(buffer) ? "..." : "")),
+						 errdetail("terminating connection due to administrator command by process %d",
+								   pid)));
+			}
+			else
+				ereport(FATAL,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("terminating connection due to administrator command")));
+		}
 	}
 	if (ClientConnectionLost)
 	{
@@ -3042,9 +3067,33 @@ ProcessInterrupts(void)
 		if (!DoingCommandRead)
 		{
 			LockErrorCleanup();
-			ereport(ERROR,
-					(errcode(ERRCODE_QUERY_CANCELED),
-					 errmsg("canceling statement due to user request")));
+
+			if (HasBackendSignalFeedback())
+			{
+				char	buffer[MAX_CANCEL_MSG];
+				int		len;
+				int		sqlerrcode = 0;
+				pid_t	pid = 0;
+
+				len = ConsumeBackendSignalFeedback(buffer, MAX_CANCEL_MSG,
+												   &sqlerrcode, &pid);
+				if (len == 0)
+				{
+					sqlerrcode = ERRCODE_QUERY_CANCELED;
+					buffer[0] = '\0';
+				}
+
+				ereport(ERROR,
+						(errcode(sqlerrcode),
+						 errmsg("%s%s",
+								buffer, (len > sizeof(buffer) ? "..." : "")),
+						 errdetail("canceling statement due to user request by process %d",
+								   pid)));
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_QUERY_CANCELED),
+						 errmsg("canceling statement due to user request")));
 		}
 	}
 

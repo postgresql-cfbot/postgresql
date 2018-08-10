@@ -1,0 +1,22 @@
+select pg_cancel_backend(NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(pg_backend_pid());
+ERROR:  canceling statement due to user request
+select pg_cancel_backend(NULL, NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(NULL, 'suicide is painless');
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(pg_backend_pid(), NULL);
+ERROR:  canceling statement due to user request

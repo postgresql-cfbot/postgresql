@@ -35,9 +35,12 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 	else if (info == XLOG_DBASE_DROP)
 	{
 		xl_dbase_drop_rec *xlrec = (xl_dbase_drop_rec *) rec;
+		int		i;
 
-		appendStringInfo(buf, "dir %u/%u",
-						 xlrec->db_id, xlrec->tablespace_id);
+		appendStringInfo(buf, "dir");
+		for (i = 0; i < xlrec->tablespace_num; i++)
+			appendStringInfo(buf, " %u/%u",
+							 xlrec->db_id, xlrec->tablespace_ids[i]);
 	}
 }
 

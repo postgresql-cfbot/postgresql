@@ -686,7 +686,18 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 
 			if (opcintype == cur_em->em_datatype &&
 				equal(expr, cur_em->em_expr))
-				return cur_ec;	/* Match! */
+			{
+				/*
+				 * Match!
+				 *
+				 * Copy sortref if it wasn't set yet, it's possible if ec was
+				 * constructed from WHERE clause, ie it doesn't have target
+				 * reference at all
+				 */
+				if (cur_ec->ec_sortref == 0 && sortref > 0)
+					cur_ec->ec_sortref = sortref;
+				return cur_ec;
+			}
 		}
 	}
 

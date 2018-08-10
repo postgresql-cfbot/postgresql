@@ -26,6 +26,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/tlist.h"
 #include "utils/lsyscache.h"
+#include "utils/selfuncs.h"
 
 
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
@@ -325,6 +326,218 @@ pathkeys_contained_in(List *keys1, List *keys2)
 			break;
 	}
 	return false;
+}
+
+/************************<DEBUG PART>*************************************/
+bool debug_group_by_reorder_by_pathkeys = true;
+bool debug_group_by_match_order_by = true;
+bool debug_cheapest_group_by = true;
+/************************</DEBUG PART>************************************/
+
+/*
+ * Reorder GROUP BY pathkeys and clauses to match order of pathkeys. Function
+ * returns new lists,  original GROUP BY lists stay untouched.
+ */
+int
+group_keys_reorder_by_pathkeys(List *pathkeys, List **group_pathkeys,
+							   List **group_clauses)
+{
+	List		*new_group_pathkeys= NIL,
+				*new_group_clauses = NIL;
+	ListCell	*key;
+	int			n;
+
+	if (debug_group_by_reorder_by_pathkeys == false)
+		return 0;
+
+	if (pathkeys == NIL || *group_pathkeys == NIL)
+		return 0;
+
+	/*
+	 * For each pathkey it tries to find corresponding GROUP BY pathkey and
+	 * clause.
+	 */
+	foreach(key, pathkeys)
+	{
+		PathKey			*pathkey = (PathKey *) lfirst(key);
+		SortGroupClause	*sgc;
+
+		/*
+		 * Pathkey should use the same allocated struct, so, equiality of
+		 * pointers is enough
+		 */
+		if (!list_member_ptr(*group_pathkeys, pathkey))
+			break;
+
+		new_group_pathkeys = lappend(new_group_pathkeys, pathkey);
+
+		sgc = get_sortgroupref_clause(pathkey->pk_eclass->ec_sortref,
+									  *group_clauses);
+		new_group_clauses = lappend(new_group_clauses, sgc);
+	}
+
+	n = list_length(new_group_pathkeys);
+
+	/*
+	 * Just append the rest of pathkeys and clauses
+	 */
+	*group_pathkeys = list_concat_unique_ptr(new_group_pathkeys,
+												 *group_pathkeys);
+	*group_clauses = list_concat_unique_ptr(new_group_clauses,
+											*group_clauses);
+
+	return n;
+}
+
+/*
+ * Order tail of list of group pathkeys by uniqueness descendetly. It allows to
+ * speedup sorting. Returns newly allocated lists, old ones stay untouched.
+ * n_preordered defines a head of list which order should be prevented.
+ */
+void
+get_cheapest_group_keys_order(PlannerInfo *root, double nrows,
+							  List *target_list,
+							  List **group_pathkeys, List **group_clauses,
+							  int n_preordered)
+{
+	struct
+	{
+		PathKey			*pathkey;
+		SortGroupClause	*sgc;
+		Node			*pathkeyExpr;
+	}
+				   *keys, tmp;
+	int				nkeys = list_length(*group_pathkeys) - n_preordered;
+	List		   *pathkeyExprList = NIL,
+				   *new_group_pathkeys = NIL,
+				   *new_group_clauses = NIL;
+	ListCell	   *cell;
+	int				i = 0, n_keys_to_est;
+
+	if (nkeys < 2)
+		return; /* nothing to do */
+
+	/*
+	 * Will try to match ORDER BY pathkeys in hope that one sort is cheaper than
+	 * two
+	 */
+	if (debug_group_by_match_order_by &&
+		n_preordered == 0 && root->sort_pathkeys)
+	{
+		bool _save_debug_group_by_reorder_by_pathkeys =
+			debug_group_by_reorder_by_pathkeys;  /* DEBUG ONLY, to be removed */
+
+		debug_group_by_reorder_by_pathkeys = true;
+		n_preordered = group_keys_reorder_by_pathkeys(root->sort_pathkeys,
+													  group_pathkeys,
+													  group_clauses);
+		debug_group_by_reorder_by_pathkeys = _save_debug_group_by_reorder_by_pathkeys;
+
+		nkeys = list_length(*group_pathkeys) - n_preordered;
+		if (nkeys < 2)
+			return; /* nothing to do */
+	}
+
+	if (!debug_cheapest_group_by)
+		return;
+
+	keys = palloc(nkeys * sizeof(*keys));
+
+	/*
+	 * Collect information about pathkey for subsequent usage
+	 */
+	for_each_cell(cell, list_nth_cell(*group_pathkeys, n_preordered))
+	{
+		PathKey			*pathkey = (PathKey *) lfirst(cell);
+
+		keys[i].pathkey = pathkey;
+		keys[i].sgc = get_sortgroupref_clause(pathkey->pk_eclass->ec_sortref,
+											  *group_clauses);
+		keys[i].pathkeyExpr = get_sortgroupclause_expr(keys[i].sgc,
+													   target_list);
+		i++;
+	}
+
+	/*
+	 * Find the cheapest to sort order of columns. We will find a first column
+	 * with bigger number of group, then pair (first column in pair is  already
+	 * defined in first step), them triple and so on.
+	 */
+	for(n_keys_to_est = 1; n_keys_to_est <= nkeys - 1; n_keys_to_est++)
+	{
+		ListCell   *tail_cell;
+		int			best_i = 0;
+		double		best_est_num_groups = -1;
+
+		/* expand list of columns and remeber last cell */
+		pathkeyExprList = lappend(pathkeyExprList, NULL);
+		tail_cell = list_tail(pathkeyExprList);
+
+		/*
+		 * Find the best last column - the best means bigger number of groups,
+		 * previous columns are already choosen
+		 */
+		for(i = n_keys_to_est - 1; i < nkeys; i++)
+		{
+			double  est_num_groups;
+
+			lfirst(tail_cell) = keys[i].pathkeyExpr;
+			est_num_groups = estimate_num_groups(root, pathkeyExprList,
+												 nrows, NULL);
+
+			if (est_num_groups > best_est_num_groups)
+			{
+				best_est_num_groups = est_num_groups;
+				best_i = i;
+			}
+		}
+
+		/* Save the best choice */
+		lfirst(tail_cell) = keys[best_i].pathkeyExpr;
+		if (best_i != n_keys_to_est - 1)
+		{
+			tmp = keys[n_keys_to_est - 1];
+			keys[n_keys_to_est - 1] = keys[best_i];
+			keys[best_i] = tmp;
+		}
+	}
+	list_free(pathkeyExprList);
+
+	/*
+	 * Construct result lists, keys array is already ordered to get a cheapest
+	 * sort
+	 */
+	i = 0;
+	foreach(cell, *group_pathkeys)
+	{
+		PathKey	   *pathkey;
+		SortGroupClause *sgc;
+
+		if (i < n_preordered)
+		{
+			pathkey = (PathKey *) lfirst(cell);
+			sgc = get_sortgroupref_clause(pathkey->pk_eclass->ec_sortref,
+										  *group_clauses);
+		}
+		else
+		{
+			pathkey = keys[i - n_preordered].pathkey;
+			sgc = keys[i - n_preordered].sgc;
+		}
+
+		new_group_pathkeys = lappend(new_group_pathkeys, pathkey);
+		new_group_clauses = lappend(new_group_clauses, sgc);
+
+		i++;
+	}
+
+	pfree(keys);
+
+	/* Just append the rest GROUP BY clauses */
+	new_group_clauses = list_concat_unique_ptr(new_group_clauses, *group_clauses);
+
+	*group_pathkeys = new_group_pathkeys;
+	*group_clauses = new_group_clauses;
 }
 
 /*
@@ -1612,6 +1825,39 @@ pathkeys_useful_for_ordering(PlannerInfo *root, List *pathkeys)
 }
 
 /*
+ * pathkeys_useful_for_grouping
+ *		Count the number of pathkeys that are useful for grouping (instead of
+ *		explicit sort)
+ *
+ * Group pathkeys could be reordered, so we don't bother about actual order in
+ * pathkeys
+ */
+static int
+pathkeys_useful_for_grouping(PlannerInfo *root, List *pathkeys)
+{
+	ListCell *key;
+	int		  n = 0;
+
+	if (root->group_pathkeys == NIL)
+		return 0;				/* no special ordering requested */
+
+	if (pathkeys == NIL)
+		return 0;				/* unordered path */
+
+	foreach(key, pathkeys)
+	{
+		PathKey	*pathkey = (PathKey *) lfirst(key);
+
+		if (!list_member_ptr(root->group_pathkeys, pathkey))
+			break;
+
+		n++;
+	}
+
+	return n;
+}
+
+/*
  * truncate_useless_pathkeys
  *		Shorten the given pathkey list to just the useful pathkeys.
  */
@@ -1625,6 +1871,9 @@ truncate_useless_pathkeys(PlannerInfo *root,
 
 	nuseful = pathkeys_useful_for_merging(root, rel, pathkeys);
 	nuseful2 = pathkeys_useful_for_ordering(root, pathkeys);
+	if (nuseful2 > nuseful)
+		nuseful = nuseful2;
+	nuseful2 = pathkeys_useful_for_grouping(root, pathkeys);
 	if (nuseful2 > nuseful)
 		nuseful = nuseful2;
 
@@ -1660,6 +1909,8 @@ has_useful_pathkeys(PlannerInfo *root, RelOptInfo *rel)
 {
 	if (rel->joininfo != NIL || rel->has_eclass_joins)
 		return true;			/* might be able to use pathkeys for merging */
+	if (root->group_pathkeys != NIL)
+		return true;			/* might be able to use pathkeys for grouping */ 
 	if (root->query_pathkeys != NIL)
 		return true;			/* might be able to use them for ordering */
 	return false;				/* definitely useless */

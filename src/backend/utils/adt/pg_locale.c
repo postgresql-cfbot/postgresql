@@ -216,6 +216,11 @@ pg_perm_setlocale(int category, const char *locale)
 			envvar = "LC_MESSAGES";
 			envbuf = lc_messages_envbuf;
 #ifdef WIN32
+			/*
+			 * Use LANGUAGE instead of LC_MESSAGES since Windows doesn't support
+			 * LC_MESSAGES environment variable.
+			 */
+			envvar = "LANGUAGE";
 			result = IsoLocaleName(locale);
 			if (result == NULL)
 				result = (char *) locale;

@@ -24,6 +24,9 @@ typedef struct SnapshotData *Snapshot;
 
 #define InvalidSnapshot		((Snapshot) NULL)
 
+typedef uint64 GlobalCSN;
+extern bool track_global_snapshots;
+
 /*
  * We use SnapshotData structures to represent both "regular" (MVCC)
  * snapshots and "special" snapshots that have non-MVCC semantics.
@@ -112,6 +115,14 @@ typedef struct SnapshotData
 
 	TimestampTz whenTaken;		/* timestamp when snapshot was taken */
 	XLogRecPtr	lsn;			/* position in the WAL stream when taken */
+
+	/*
+	 * GlobalCSN for cross-node snapshot isolation support.
+	 * Will be used only if track_global_snapshots is enabled.
+	 */
+	GlobalCSN	global_csn;
+	/* Did we have our own global_csn or imported one from different node */
+	bool		imported_global_csn;
 } SnapshotData;
 
 /*

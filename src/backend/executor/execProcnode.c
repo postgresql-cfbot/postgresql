@@ -799,11 +799,12 @@ ExecShutdownNode(PlanState *node)
 /*
  * ExecSetTupleBound
  *
- * Set a tuple bound for a planstate node.  This lets child plan nodes
+ * Set a tuple bound for a planstate node. This lets child plan nodes
  * optimize based on the knowledge that the maximum number of tuples that
- * their parent will demand is limited.  The tuple bound for a node may
- * only be changed between scans (i.e., after node initialization or just
- * before an ExecReScan call).
+ * their parent will demand is limited. Also tuples_to_skip may be used by
+ * child nodes to optimize retrieval of tuples which are immediately skipped
+ * by parent (nodeLimit). The tuple bound for a node may only be changed
+ * between scans (i.e., after node initialization or just before an ExecReScan call).
  *
  * Any negative tuples_needed value means "no limit", which should be the
  * default assumption when this is not called at all for a particular node.
@@ -813,7 +814,7 @@ ExecShutdownNode(PlanState *node)
  * only unchanging conditions are tested here.
  */
 void
-ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
+ExecSetTupleBound(int64 tuples_needed, int64 tuples_to_skip, PlanState *child_node)
 {
 	/*
 	 * Since this function recurses, in principle we should check stack depth
@@ -855,7 +856,7 @@ ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
 		int			i;
 
 		for (i = 0; i < maState->ms_nplans; i++)
-			ExecSetTupleBound(tuples_needed, maState->mergeplans[i]);
+			ExecSetTupleBound(tuples_needed, 0, maState->mergeplans[i]);
 	}
 	else if (IsA(child_node, ResultState))
 	{
@@ -869,7 +870,7 @@ ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
 		 * rows will be demanded from the Result child anyway.
 		 */
 		if (outerPlanState(child_node))
-			ExecSetTupleBound(tuples_needed, outerPlanState(child_node));
+			ExecSetTupleBound(tuples_needed, 0, outerPlanState(child_node));
 	}
 	else if (IsA(child_node, SubqueryScanState))
 	{
@@ -880,7 +881,7 @@ ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
 		SubqueryScanState *subqueryState = (SubqueryScanState *) child_node;
 
 		if (subqueryState->ss.ps.qual == NULL)
-			ExecSetTupleBound(tuples_needed, subqueryState->subplan);
+			ExecSetTupleBound(tuples_needed, tuples_to_skip, subqueryState->subplan);
 	}
 	else if (IsA(child_node, GatherState))
 	{
@@ -897,7 +898,7 @@ ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
 		gstate->tuples_needed = tuples_needed;
 
 		/* Also pass down the bound to our own copy of the child plan */
-		ExecSetTupleBound(tuples_needed, outerPlanState(child_node));
+		ExecSetTupleBound(tuples_needed, 0, outerPlanState(child_node));
 	}
 	else if (IsA(child_node, GatherMergeState))
 	{
@@ -906,7 +907,15 @@ ExecSetTupleBound(int64 tuples_needed, PlanState *child_node)
 
 		gstate->tuples_needed = tuples_needed;
 
-		ExecSetTupleBound(tuples_needed, outerPlanState(child_node));
+		ExecSetTupleBound(tuples_needed, 0, outerPlanState(child_node));
+	}
+	else if (IsA(child_node, IndexScanState))
+	{
+		IndexScanState* isState = (IndexScanState *) child_node;
+		
+		/* Simple case of IndexScan could use index-only optimisation while skipping offset. */
+		if (!isState->ss.ps.qual && !isState->ss.ps.ps_ProjInfo && isState->iss_NumOrderByKeys == 0)
+			isState->iss_SkipTuples = isState->iss_SkipTuplesRemaining = tuples_to_skip;
 	}
 
 	/*

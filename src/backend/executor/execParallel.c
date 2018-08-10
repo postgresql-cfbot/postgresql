@@ -1303,8 +1303,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	pwcxt.seg = seg;
 	ExecParallelInitializeWorker(queryDesc->planstate, &pwcxt);
 
-	/* Pass down any tuple bound */
-	ExecSetTupleBound(fpes->tuples_needed, queryDesc->planstate);
+	/* Pass down any tuple bound. Offset cannot be optimized due to parallel execution. */
+	ExecSetTupleBound(fpes->tuples_needed, 0, queryDesc->planstate);
 
 	/*
 	 * Prepare to track buffer usage during query execution.

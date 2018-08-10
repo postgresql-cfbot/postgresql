@@ -300,12 +300,12 @@ recompute_limits(LimitState *node)
 	node->lstate = LIMIT_RESCAN;
 
 	/*
-	 * Notify child node about limit.  Note: think not to "optimize" by
-	 * skipping ExecSetTupleBound if compute_tuples_needed returns < 0.  We
-	 * must update the child node anyway, in case this is a rescan and the
+	 * Notify child node about limit and offset. Note: think not to "optimize"
+	 * by skipping ExecSetTupleBound if compute_tuples_needed < 0 and offset = 0.
+	 * We must update the child node anyway, in case this is a rescan and the
 	 * previous time we got a different result.
 	 */
-	ExecSetTupleBound(compute_tuples_needed(node), outerPlanState(node));
+	ExecSetTupleBound(compute_tuples_needed(node), node->offset, outerPlanState(node));
 }
 
 /*

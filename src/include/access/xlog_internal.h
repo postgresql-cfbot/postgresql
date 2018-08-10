@@ -227,6 +227,7 @@ typedef struct xl_parameter_change
 	int			MaxConnections;
 	int			max_worker_processes;
 	int			max_prepared_xacts;
+	int			max_prepared_foreign_xacts;
 	int			max_locks_per_xact;
 	int			wal_level;
 	bool		wal_log_hints;

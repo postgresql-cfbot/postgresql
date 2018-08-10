@@ -19,6 +19,7 @@
 #include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
+#include "foreign/fdwxact.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -714,7 +715,10 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 */
 	if (partRelInfo->ri_FdwRoutine != NULL &&
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+	{
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+		FdwXactMarkForeignTransactionModified(partRelInfo, 0);
+	}
 
 	MemoryContextSwitchTo(oldContext);
 

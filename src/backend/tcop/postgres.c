@@ -43,6 +43,8 @@
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "executor/spi.h"
+#include "foreign/fdwxact_resolver.h"
+#include "foreign/fdwxact_launcher.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -2906,6 +2908,18 @@ ProcessInterrupts(void)
 
 			/*
 			 * The logical replication launcher can be stopped at any time.
+			 * Use exit status 1 so the background worker is restarted.
+			 */
+			proc_exit(1);
+		}
+		else if (IsFdwXactResolver())
+			ereport(FATAL,
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					 errmsg("terminating foreign transaction resolver due to administrator command")));
+		else if (IsFdwXactLauncher())
+		{
+			/*
+			 * The foreign transaction launcher can be stopped at any time.
 			 * Use exit status 1 so the background worker is restarted.
 			 */
 			proc_exit(1);

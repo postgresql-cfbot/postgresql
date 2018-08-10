@@ -9,7 +9,7 @@
 #
 #-------------------------------------------------------------------------
 
-EXTRA_INSTALL=contrib/test_decoding
+EXTRA_INSTALL=contrib/test_decoding contrib/postgres_fdw
 
 subdir = src/test/recovery
 top_builddir = ../../..

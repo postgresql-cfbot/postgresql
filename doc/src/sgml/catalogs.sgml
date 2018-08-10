@@ -9630,6 +9630,103 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
  </sect1>
 
+ <sect1 id="view-pg-prepared-fdw-xacts">
+  <title><structname>pg_prepared_fdw_xacts</structname></title>
+
+  <indexterm zone="view-pg-prepared-fdw-xacts">
+   <primary>pg_prepared_fdw_xacts</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_prepared_fdw_xacts</structname> displays
+   information about foreign transactions that are currently prepared on
+   foreign servers for atomic distributed transaction commit (see
+   <xref linkend="fdw-transaction-managements"/> for details).
+  </para>
+
+  <para>
+   <structname>pg_prepared_xacts</structname> contains one row per prepared
+   foreign transaction.  An entry is removed when the foreign transaction is
+   committed or rolled back.
+  </para>
+
+  <table>
+   <title><structname>pg_prepared_fdw_xacts</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><structfield>dbid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.oid</literal></entry>
+      <entry>
+       OID of the database which the foreign transaction resides in
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>transaction</structfield></entry>
+      <entry><type>xid</type></entry>
+      <entry></entry>
+      <entry>
+       Transaction id that this foreign transaction associates with
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>serverid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-foreign-server"><structname>pg_foreign_server</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the foreign server that this foreign server is prepared
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>userid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="view-pg-user"><structname>pg_user</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the user that prepared this foreign transaction.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>status</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>
+       Status of foreign transaction: <literal>prepared</literal>, <literal>committing</literal>, <literal>aborting</literal> or <literal>unknown</literal>
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>identifier</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>
+       The identifier of the prepared foreign transaction.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   When the <structname>pg_prepared_xacts</structname> view is accessed, the
+   internal transaction manager data structures are momentarily locked, and
+   a copy is made for the view to display.  This ensures that the
+   view produces a consistent set of results, while not blocking
+   normal operations longer than necessary.  Nonetheless
+   there could be some impact on database performance if this view is
+   frequently accessed.
+  </para>
+
+ </sect1>
+
  <sect1 id="view-pg-publication-tables">
   <title><structname>pg_publication_tables</structname></title>
 

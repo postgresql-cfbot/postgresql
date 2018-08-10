@@ -1413,6 +1413,13 @@ pg_policies| SELECT n.nspname AS schemaname,
    FROM ((pg_policy pol
      JOIN pg_class c ON ((c.oid = pol.polrelid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)));
+pg_prepared_fdw_xacts| SELECT f.dbid,
+    f.transaction,
+    f.serverid,
+    f.userid,
+    f.status,
+    f.identifier
+   FROM pg_prepared_fdw_xacts() f(dbid, transaction, serverid, userid, status, identifier);
 pg_prepared_statements| SELECT p.name,
     p.statement,
     p.prepare_time,
@@ -1821,6 +1828,11 @@ pg_stat_database_conflicts| SELECT d.oid AS datid,
     pg_stat_get_db_conflict_bufferpin(d.oid) AS confl_bufferpin,
     pg_stat_get_db_conflict_startup_deadlock(d.oid) AS confl_deadlock
    FROM pg_database d;
+pg_stat_fdwxact_resolvers| SELECT r.pid,
+    r.dbid,
+    r.last_resolved_time
+   FROM pg_stat_get_fdwxact_resolver() r(pid, dbid, n_entries, last_resolved_time)
+  WHERE (r.pid IS NOT NULL);
 pg_stat_progress_vacuum| SELECT s.pid,
     s.datid,
     d.datname,

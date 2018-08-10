@@ -44,6 +44,8 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
+#include "foreign/fdwxact.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/bufmgr.h"
@@ -2317,6 +2319,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 															 fdw_private,
 															 i,
 															 eflags);
+
+			/* Mark this transaction modified data on the foreign server */
+			FdwXactMarkForeignTransactionModified(resultRelInfo, eflags);
 		}
 
 		resultRelInfo++;

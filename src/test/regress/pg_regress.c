@@ -2286,9 +2286,12 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		 * Adjust the default postgresql.conf for regression testing. The user
 		 * can specify a file to be appended; in any case we expand logging
 		 * and set max_prepared_transactions to enable testing of prepared
-		 * xacts.  (Note: to reduce the probability of unexpected shmmax
-		 * failures, don't set max_prepared_transactions any higher than
-		 * actually needed by the prepared_xacts regression test.)
+		 * xacts.  We also set max_prepared_foreign_transactions and
+		 * max_foreign_transaction_resolvers to enable testing of transaction
+		 * involving multiple foreign servers. (Note: to reduce the probability
+		 * of unexpected shmmax failures, don't set max_prepared_transactions
+		 * any higher than actually needed by the prepared_xacts regression
+		 * test.)
 		 */
 		snprintf(buf, sizeof(buf), "%s/data/postgresql.conf", temp_instance);
 		pg_conf = fopen(buf, "a");
@@ -2303,7 +2306,9 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 		fputs("log_line_prefix = '%m [%p] %q%a '\n", pg_conf);
 		fputs("log_lock_waits = on\n", pg_conf);
 		fputs("log_temp_files = 128kB\n", pg_conf);
-		fputs("max_prepared_transactions = 2\n", pg_conf);
+		fputs("max_prepared_transactions = 3\n", pg_conf);
+		fputs("max_prepared_foreign_transactions = 2\n", pg_conf);
+		fputs("max_foreign_transaction_resolvers = 2\n", pg_conf);
 
 		for (sl = temp_configs; sl != NULL; sl = sl->next)
 		{

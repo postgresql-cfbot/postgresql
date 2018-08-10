@@ -20553,6 +20553,57 @@ SELECT (pg_stat_file('filename')).modification;
 
   </sect2>
 
+  <sect2 id="functions-fdw-transaction">
+   <title>Foreign Transaction Management Functions</title>
+
+   <indexterm>
+    <primary>pg_resolve_fdw_xacts</primary>
+   </indexterm>
+   <indexterm>
+    <primary>pg_remove_fdw_xacts</primary>
+   </indexterm>
+
+   <para>
+    <xref linkend="functions-fdw-transaction-table"/> shows the functions
+    available for foreign transaction management.
+    These functions cannot be executed during recovery. Use of these function
+    is restricted to superusers.
+   </para>
+
+   <table id="functions-fdw-transaction-table">
+    <title>Foreign Transaction Management Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <literal><function>pg_resolve_fdw_xact(<parameter>transaction</parameter> <type>xid</type>, <parameter>userid</parameter> <type>oid</type>, <parameter>userid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>bool</type></entry>
+       <entry>
+        Resolve a foreign transaction. This function search for foreign transaction
+        matching the arguments and resolves then. This function won't resolve
+        a foreign transaction which is in progress, or one that is locked by some
+        other backend.
+       </entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_remove_fdw_xact(<parameter>transaction</parameter> <type>xid</type>, <parameter>serverid</parameter> <type>oid</type>, <parameter>userid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>void</type></entry>
+       <entry>
+        This function works the same as <function>pg_resolve_fdw_xact</function>
+        except it remove foreign transaction entry without resolving.
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+  </sect2>
   </sect1>
 
   <sect1 id="functions-trigger">

@@ -121,6 +121,8 @@
 #temp_buffers = 8MB			# min 800kB
 #max_prepared_transactions = 0		# zero disables the feature
 					# (change requires restart)
+#max_prepared_foreign_transactions = 0	# zero disables the feature
+					# (change requires restart)
 # Caution: it is not advisable to set max_prepared_transactions nonzero unless
 # you actively intend to use prepared transactions.
 #work_mem = 4MB				# min 64kB
@@ -285,6 +287,20 @@
 					# (change requires restart)
 #max_sync_workers_per_subscription = 2	# taken from max_logical_replication_workers
 
+
+#------------------------------------------------------------------------------
+# FOREIGN TRANSACTION
+#------------------------------------------------------------------------------
+
+#foreign_twophase_commit = off
+
+#max_foreign_transaction_resolvers = 0		# max number of resolver process
+						# (change requires restart)
+#foreign_transaction_resolver_timeout = 60s	# in milliseconds; 0 disables
+#foreign_transaction_resolution_retry_interval = 5s	# time to wait before
+							# retrying to resolve
+							# foreign transactions
+							# after a failed attempt
 
 #------------------------------------------------------------------------------
 # QUERY TUNING

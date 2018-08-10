@@ -436,6 +436,43 @@
    </para>
 
   </sect3>
+
+  <sect3>
+   <title>Transaction Management Options</title>
+
+   <para>
+    By default, if the transaction involves with multiple remote server,
+    each transaction on remote server is committed or aborted independently.
+    Some of transactions may fail to commit on remote server while other
+    transactions commit successfully. This may be overridden using
+    following option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>two_phase_commit</literal></term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> allows
+       to use two-phase-commit when transaction commits. This option can
+       only be specified for foreign servers, not per-table.
+       The default is <literal>false</literal>.
+      </para>
+
+      <para>
+       If this option is enabled, <filename>postgres_fdw</filename> prepares
+       transaction on remote server and <productname>PostgreSQL</productname>
+       keeps track of the distributed transaction.
+       <xref linkend="guc-max-prepared-foreign-transactions"/> must be set more
+       than 1 on local server and <xref linkend="guc-max-prepared-transactions"/>
+       must set to more than 1 on remote server.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
+  </sect3>
  </sect2>
 
  <sect2>

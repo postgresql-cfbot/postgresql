@@ -81,6 +81,8 @@ provider postgresql {
 	probe multixact__checkpoint__done(bool);
 	probe twophase__checkpoint__start();
 	probe twophase__checkpoint__done();
+	probe fdwxact__checkpoint__start();
+	probe fdwxact__checkpoint__done();
 
 	probe smgr__md__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
 	probe smgr__md__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);

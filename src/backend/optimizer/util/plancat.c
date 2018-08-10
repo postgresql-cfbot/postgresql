@@ -450,7 +450,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 */
 	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		set_relation_partition_info(root, rel, relation);
-
+	else if (relation->rd_rel->relispartition)
+		rel->partition_qual = RelationGetPartitionQual(relation);
 	heap_close(relation, NoLock);
 
 	/*

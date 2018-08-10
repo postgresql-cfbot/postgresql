@@ -56,6 +56,9 @@
  */
 #define READ_BUF_SIZE (2 * PIPE_CHUNK_SIZE)
 
+/* Log rotation signal file path, relative to $PGDATA */
+#define LOGROTATE_SIGNAL_FILE	"logrotate"
+
 
 /*
  * GUC parameters.  Logging_collector cannot be changed after postmaster
@@ -384,11 +387,18 @@ SysLoggerMain(int argc, char *argv[])
 			}
 		}
 
+		/*
+		 * logrotate signal file alone doesn't cause rotation. We remove the
+		 * file without setting rotation_requested if any.
+		 */
+		if (CheckLogrotateSignal())
+			unlink(LOGROTATE_SIGNAL_FILE);
+
 		if (rotation_requested)
 		{
 			/*
 			 * Force rotation when both values are zero. It means the request
-			 * was sent by pg_rotate_logfile.
+			 * was sent by pg_rotate_logfile or pg_ctl logrotate.
 			 */
 			if (!time_based_rotation && size_rotation_for == 0)
 				size_rotation_for = LOG_DESTINATION_STDERR | LOG_DESTINATION_CSVLOG;
@@ -1421,6 +1431,30 @@ update_metainfo_datafile(void)
  *		signal handler routines
  * --------------------------------
  */
+
+/*
+ * Check to see if a log rotation request has arrived. Should be
+ * called by postmaster after receiving SIGUSR1.
+ */
+bool
+CheckLogrotateSignal(void)
+{
+	struct stat stat_buf;
+
+	if (stat(LOGROTATE_SIGNAL_FILE, &stat_buf) == 0)
+		return true;
+
+	return false;
+}
+
+/*
+ * Remove the file signaling a log rotateion request.
+ */
+void
+RemoveLogrotateSignalFiles(void)
+{
+	unlink(LOGROTATE_SIGNAL_FILE);
+}
 
 /* SIGHUP: set flag to reload config file */
 static void

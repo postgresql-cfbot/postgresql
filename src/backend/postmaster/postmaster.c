@@ -1268,6 +1268,9 @@ PostmasterMain(int argc, char *argv[])
 	 */
 	RemovePromoteSignalFiles();
 
+	/* Do the same for logrotate signal file */
+	RemoveLogrotateSignalFiles();
+
 	/* Remove any outdated file holding the current log filenames. */
 	if (unlink(LOG_METAINFO_DATAFILE) < 0 && errno != ENOENT)
 		ereport(LOG,
@@ -5100,7 +5103,8 @@ sigusr1_handler(SIGNAL_ARGS)
 		signal_child(PgArchPID, SIGUSR1);
 	}
 
-	if (CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE) &&
+	if ((CheckLogrotateSignal() ||
+		 CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE)) &&
 		SysLoggerPID != 0)
 	{
 		/* Tell syslogger to rotate logfile */

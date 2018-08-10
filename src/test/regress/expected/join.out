@@ -1700,18 +1700,19 @@ SELECT '' AS "xxx", *
 -- Non-equi-joins
 --
 SELECT '' AS "xxx", *
-  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k);
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k)
+  ORDER BY J1_TBL.i, J2_TBL.k;
  xxx | i | j |   t   | i | k 
 -----+---+---+-------+---+---
-     | 1 | 4 | one   | 2 | 2
-     | 2 | 3 | two   | 2 | 2
+     | 0 |   | zero  |   | 0
      | 0 |   | zero  | 2 | 2
+     | 0 |   | zero  | 2 | 4
+     | 1 | 4 | one   | 2 | 2
      | 1 | 4 | one   | 2 | 4
+     | 2 | 3 | two   | 2 | 2
      | 2 | 3 | two   | 2 | 4
      | 3 | 2 | three | 2 | 4
      | 4 | 1 | four  | 2 | 4
-     | 0 |   | zero  | 2 | 4
-     | 0 |   | zero  |   | 0
 (9 rows)
 
 --
@@ -1845,6 +1846,171 @@ SELECT '' AS "xxx", *
      | 1 | 4 | one | -1
 (1 row)
 
+--
+-- Full merge join
+--
+set enable_hashjoin to 0;
+-- simple
+select * from j1_tbl full join j2_tbl on j1_tbl.i < j2_tbl.k;
+ i | j |   t   | i | k  
+---+---+-------+---+----
+   | 0 | zero  |   |   
+   |   | null  |   |   
+   |   |       | 0 |   
+   |   |       |   |   
+ 8 | 8 | eight |   |   
+ 7 | 7 | seven |   |   
+ 6 | 6 | six   |   |   
+ 5 | 0 | five  |   |   
+ 4 | 1 | four  |   |   
+ 3 | 2 | three | 2 |  4
+ 2 | 3 | two   | 2 |  4
+ 1 | 4 | one   | 2 |  4
+ 1 | 4 | one   | 2 |  2
+ 0 |   | zero  | 2 |  4
+ 0 |   | zero  | 2 |  2
+   |   |       |   |  0
+   |   |       | 1 | -1
+   |   |       | 3 | -3
+   |   |       | 5 | -5
+   |   |       | 5 | -5
+(20 rows)
+
+-- multiple clauses
+select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k;
+ i | j |   t   | i | k  
+---+---+-------+---+----
+   |   |       | 5 | -5
+   |   |       | 5 | -5
+   |   |       | 3 | -3
+   |   |       | 1 | -1
+   |   |       |   |  0
+ 0 |   | zero  |   |   
+ 1 | 4 | one   |   |   
+ 2 | 3 | two   |   |   
+   |   |       | 2 |  2
+ 3 | 2 | three |   |   
+ 4 | 1 | four  | 2 |  4
+   |   |       | 0 |   
+   |   |       |   |   
+ 5 | 0 | five  |   |   
+ 6 | 6 | six   |   |   
+ 7 | 7 | seven |   |   
+ 8 | 8 | eight |   |   
+   |   | null  |   |   
+   | 0 | zero  |   |   
+(19 rows)
+
+-- multiple inequality clauses
+select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.i and j1_tbl.i < j2_tbl.k;
+ERROR:  FULL JOIN is only supported with merge-joinable or hash-joinable join conditions
+-- outer pathkeys for multiple inequality clauses
+explain (costs off)
+	select * from (select * from j1_tbl order by i) j1_tbl
+	full join j2_tbl
+	on j1_tbl.i > j2_tbl.i and j1_tbl.i > j2_tbl.k;
+ERROR:  FULL JOIN is only supported with merge-joinable or hash-joinable join conditions
+-- suitable root pathkeys
+explain (costs off)
+	select * from j1_tbl join j2_tbl
+	on j1_tbl.i < j2_tbl.i and j1_tbl.i = j2_tbl.k
+	order by j2_tbl.k, j2_tbl.i;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Merge Join
+   Merge Cond: ((j2_tbl.k = j1_tbl.i) AND (j2_tbl.i > j1_tbl.i))
+   ->  Sort
+         Sort Key: j2_tbl.k, j2_tbl.i
+         ->  Seq Scan on j2_tbl
+   ->  Sort
+         Sort Key: j1_tbl.i
+         ->  Seq Scan on j1_tbl
+(8 rows)
+
+-- unsuitable root pathkeys
+explain (costs off)
+	select * from j1_tbl join j2_tbl
+	on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k
+	order by j2_tbl.k, j2_tbl.i;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Sort
+   Sort Key: j1_tbl.i, j2_tbl.i
+   ->  Merge Join
+         Merge Cond: ((j1_tbl.i = j2_tbl.k) AND (j1_tbl.i > j2_tbl.i))
+         ->  Sort
+               Sort Key: j1_tbl.i
+               ->  Seq Scan on j1_tbl
+         ->  Sort
+               Sort Key: j2_tbl.k, j2_tbl.i
+               ->  Seq Scan on j2_tbl
+(10 rows)
+
+-- suitable outer pathkeys
+explain (costs off)
+	select * from j1_tbl
+	full join (select * from j2_tbl order by k, i) j2_tbl
+	on j1_tbl.i < j2_tbl.i and j1_tbl.i = j2_tbl.k;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Merge Full Join
+   Merge Cond: ((j2_tbl.k = j1_tbl.i) AND (j2_tbl.i > j1_tbl.i))
+   ->  Sort
+         Sort Key: j2_tbl.k, j2_tbl.i
+         ->  Seq Scan on j2_tbl
+   ->  Sort
+         Sort Key: j1_tbl.i
+         ->  Seq Scan on j1_tbl
+(8 rows)
+
+-- unsuitable outer pathkeys
+explain (costs off)
+	select * from j1_tbl
+	full join (select * from j2_tbl order by k, i) j2_tbl
+	on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Merge Full Join
+   Merge Cond: ((j1_tbl.i = j2_tbl.k) AND (j1_tbl.i > j2_tbl.i))
+   ->  Sort
+         Sort Key: j1_tbl.i
+         ->  Seq Scan on j1_tbl
+   ->  Materialize
+         ->  Sort
+               Sort Key: j2_tbl.k, j2_tbl.i
+               ->  Seq Scan on j2_tbl
+(9 rows)
+
+-- using an index
+set enable_seqscan to off;
+create index idx_j1_tbl_i on j1_tbl(i);
+analyze j1_tbl;
+explain (costs off) select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.k;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Merge Full Join
+   Merge Cond: (j1_tbl.i > j2_tbl.k)
+   ->  Index Scan using idx_j1_tbl_i on j1_tbl
+   ->  Sort
+         Sort Key: j2_tbl.k
+         ->  Seq Scan on j2_tbl
+(6 rows)
+
+explain (costs off) select * from j1_tbl full join j2_tbl on j1_tbl.i < j2_tbl.k;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Merge Full Join
+   Merge Cond: (j1_tbl.i < j2_tbl.k)
+   ->  Index Scan Backward using idx_j1_tbl_i on j1_tbl
+   ->  Sort
+         Sort Key: j2_tbl.k DESC
+         ->  Seq Scan on j2_tbl
+(6 rows)
+
+drop index idx_j1_tbl_i;
+analyze j1_tbl;
+reset enable_seqscan;
+reset enable_hashjoin;
 --
 -- semijoin selectivity for <>
 --
@@ -5265,43 +5431,51 @@ select c.*,a.*,ss1.q1,ss2.q1,ss3.* from
     lateral (select q1, coalesce(ss1.x,q2) as y from int8_tbl d) ss2
   ) on c.q2 = ss2.q1,
   lateral (select * from int4_tbl i where ss2.y > f1) ss3;
-                                               QUERY PLAN                                                
----------------------------------------------------------------------------------------------------------
- Nested Loop
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Merge Join
    Output: c.q1, c.q2, a.q1, a.q2, b.q1, d.q1, i.f1
-   Join Filter: ((COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)) > i.f1)
-   ->  Hash Right Join
-         Output: c.q1, c.q2, a.q1, a.q2, b.q1, d.q1, (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2))
-         Hash Cond: (d.q1 = c.q2)
-         ->  Nested Loop
-               Output: a.q1, a.q2, b.q1, d.q1, (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2))
-               ->  Hash Right Join
-                     Output: a.q1, a.q2, b.q1, (COALESCE(b.q2, (b2.f1)::bigint))
-                     Hash Cond: (b.q1 = a.q2)
-                     ->  Nested Loop
-                           Output: b.q1, COALESCE(b.q2, (b2.f1)::bigint)
-                           Join Filter: (b.q1 < b2.f1)
-                           ->  Seq Scan on public.int8_tbl b
-                                 Output: b.q1, b.q2
-                           ->  Materialize
-                                 Output: b2.f1
-                                 ->  Seq Scan on public.int4_tbl b2
-                                       Output: b2.f1
-                     ->  Hash
-                           Output: a.q1, a.q2
-                           ->  Seq Scan on public.int8_tbl a
-                                 Output: a.q1, a.q2
-               ->  Seq Scan on public.int8_tbl d
-                     Output: d.q1, COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)
-         ->  Hash
-               Output: c.q1, c.q2
-               ->  Seq Scan on public.int8_tbl c
-                     Output: c.q1, c.q2
-   ->  Materialize
+   Merge Cond: (i.f1 < (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)))
+   ->  Sort
          Output: i.f1
+         Sort Key: i.f1 DESC
          ->  Seq Scan on public.int4_tbl i
                Output: i.f1
-(34 rows)
+   ->  Sort
+         Output: c.q1, c.q2, a.q1, a.q2, b.q1, d.q1, (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2))
+         Sort Key: (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)) DESC
+         ->  Hash Right Join
+               Output: c.q1, c.q2, a.q1, a.q2, b.q1, d.q1, (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2))
+               Hash Cond: (d.q1 = c.q2)
+               ->  Nested Loop
+                     Output: a.q1, a.q2, b.q1, d.q1, (COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2))
+                     ->  Hash Left Join
+                           Output: a.q1, a.q2, b.q1, (COALESCE(b.q2, (b2.f1)::bigint))
+                           Hash Cond: (a.q2 = b.q1)
+                           ->  Seq Scan on public.int8_tbl a
+                                 Output: a.q1, a.q2
+                           ->  Hash
+                                 Output: b.q1, (COALESCE(b.q2, (b2.f1)::bigint))
+                                 ->  Merge Join
+                                       Output: b.q1, COALESCE(b.q2, (b2.f1)::bigint)
+                                       Merge Cond: (b.q1 < b2.f1)
+                                       ->  Sort
+                                             Output: b.q1, b.q2
+                                             Sort Key: b.q1 DESC
+                                             ->  Seq Scan on public.int8_tbl b
+                                                   Output: b.q1, b.q2
+                                       ->  Sort
+                                             Output: b2.f1
+                                             Sort Key: b2.f1 DESC
+                                             ->  Seq Scan on public.int4_tbl b2
+                                                   Output: b2.f1
+                     ->  Seq Scan on public.int8_tbl d
+                           Output: d.q1, COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)
+               ->  Hash
+                     Output: c.q1, c.q2
+                     ->  Seq Scan on public.int8_tbl c
+                           Output: c.q1, c.q2
+(42 rows)
 
 -- check processing of postponed quals (bug #9041)
 explain (verbose, costs off)
@@ -5608,6 +5782,7 @@ rollback;
 --
 -- test planner's ability to mark joins as unique
 --
+set enable_mergejoin to 0;
 create table j1 (id int primary key);
 create table j2 (id int primary key);
 create table j3 (id int);
@@ -5877,6 +6052,7 @@ left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
 set enable_nestloop to 0;
 set enable_hashjoin to 0;
 set enable_sort to 0;
+set enable_mergejoin to 1;
 -- create an index that will be preferred over the PK to perform the join
 create index j1_id1_idx on j1 (id1) where id1 % 1000 = 1;
 explain (costs off) select * from j1 j1

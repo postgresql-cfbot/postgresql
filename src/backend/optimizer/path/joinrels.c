@@ -1452,7 +1452,7 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 			continue;
 
 		/* Skip clauses which are not equality conditions. */
-		if (!rinfo->mergeopfamilies && !OidIsValid(rinfo->hashjoinoperator))
+		if (!rinfo->is_mj_equality && !OidIsValid(rinfo->hashjoinoperator))
 			continue;
 
 		opexpr = (OpExpr *) rinfo->clause;

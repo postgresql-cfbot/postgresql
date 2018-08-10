@@ -1552,8 +1552,8 @@ compute_semijoin_info(SpecialJoinInfo *sjinfo, List *clause)
 		if (all_btree)
 		{
 			/* oprcanmerge is considered a hint... */
-			if (!op_mergejoinable(opno, opinputtype) ||
-				get_mergejoin_opfamilies(opno) == NIL)
+			if (!op_mergejoinable_equality(opno, opinputtype) ||
+				get_btree_equality_opfamilies(opno) == NIL)
 				all_btree = false;
 		}
 		if (all_hash)
@@ -1964,15 +1964,17 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	 * process_equivalence is successful, it will take care of that;
 	 * otherwise, we have to call initialize_mergeclause_eclasses to do it.
 	 */
-	if (restrictinfo->mergeopfamilies)
+	if (restrictinfo->is_mj_equality)
 	{
+		Assert(restrictinfo->mergeopfamilies != NIL);
+
 		if (maybe_equivalence)
 		{
 			if (check_equivalence_delay(root, restrictinfo) &&
 				process_equivalence(root, &restrictinfo, below_outer_join))
 				return;
 			/* EC rejected it, so set left_ec/right_ec the hard way ... */
-			if (restrictinfo->mergeopfamilies)	/* EC might have changed this */
+			if (restrictinfo->is_mj_equality)	/* EC might have changed this */
 				initialize_mergeclause_eclasses(root, restrictinfo);
 			/* ... and fall through to distribute_restrictinfo_to_rels */
 		}
@@ -2014,6 +2016,20 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 		{
 			/* we still need to set up left_ec/right_ec */
 			initialize_mergeclause_eclasses(root, restrictinfo);
+		}
+	}
+	else if (restrictinfo->mergeopfamilies)
+	{
+		/* Not an equality clause, but maybe still mergejoinable? */
+		initialize_mergeclause_eclasses(root, restrictinfo);
+
+		if (maybe_outer_join
+			&& jointype == JOIN_FULL
+			&& restrictinfo->can_join)
+		{
+			root->full_join_clauses = lappend(root->full_join_clauses,
+							  restrictinfo);
+			return;
 		}
 	}
 
@@ -2621,9 +2637,17 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 	opno = ((OpExpr *) clause)->opno;
 	leftarg = linitial(((OpExpr *) clause)->args);
 
-	if (op_mergejoinable(opno, exprType(leftarg)) &&
-		!contain_volatile_functions((Node *) clause))
-		restrictinfo->mergeopfamilies = get_mergejoin_opfamilies(opno);
+	if (!contain_volatile_functions((Node *) clause))
+	{
+		if (op_mergejoinable_equality(opno, exprType(leftarg)))
+		{
+			restrictinfo->mergeopfamilies = get_btree_equality_opfamilies(opno);
+			if (restrictinfo->mergeopfamilies != NIL)
+				restrictinfo->is_mj_equality = true;
+		}
+		else
+			restrictinfo->mergeopfamilies = get_btree_inequality_opfamilies(opno);
+	}
 
 	/*
 	 * Note: op_mergejoinable is just a hint; if we fail to find the operator

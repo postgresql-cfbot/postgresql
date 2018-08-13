@@ -47,7 +47,7 @@
 #include "parser/parse_func.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
-#include "storage/sinval.h"
+#include "storage/sinvaladt.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -3205,6 +3205,45 @@ isOtherTempNamespace(Oid namespaceId)
 }
 
 /*
+ * isTempNamespaceInUse - is the given namespace owned and actively used
+ * by a backend?
+ *
+ * Note: this can be used while scanning relations in pg_class to detect
+ * orphaned temporary tables or namespaces with a backend connected to a
+ * given database.
+ */
+bool
+isTempNamespaceInUse(Oid namespaceId)
+{
+	PGPROC	   *proc;
+	int			backendId;
+
+	Assert(OidIsValid(MyDatabaseId));
+
+	backendId = GetTempNamespaceBackendId(namespaceId);
+
+	if (backendId == InvalidBackendId ||
+		backendId == MyBackendId)
+		return false;
+
+	/* Is the backend alive? */
+	proc = BackendIdGetProc(backendId);
+	if (proc == NULL)
+		return false;
+
+	/* Is the backend connected to the same database we are looking at? */
+	if (proc->databaseId != MyDatabaseId)
+		return false;
+
+	/* Does the backend own the temporary namespace? */
+	if (proc->tempNamespaceId != namespaceId)
+		return false;
+
+	/* all good to go */
+	return true;
+}
+
+/*
  * GetTempNamespaceBackendId - if the given namespace is a temporary-table
  * namespace (either my own, or another backend's), return the BackendId
  * that owns it.  Temporary-toast-table namespaces are included, too.
@@ -3893,6 +3932,16 @@ InitTempTableNamespace(void)
 	myTempNamespace = namespaceId;
 	myTempToastNamespace = toastspaceId;
 
+	/*
+	 * Mark MyProc as owning this namespace which other processes can use to
+	 * decide if a temporary namespace is in use or not.  We assume that
+	 * assignment of namespaceId is an atomic operation.  Even if it is not,
+	 * there is no visible temporary relations associated to it and the
+	 * temporary namespace creation is not committed yet, so none of its
+	 * contents should be seen yet if scanning pg_class or pg_namespace.
+	 */
+	MyProc->tempNamespaceId = namespaceId;
+
 	/* It should not be done already. */
 	AssertState(myTempNamespaceSubID == InvalidSubTransactionId);
 	myTempNamespaceSubID = GetCurrentSubTransactionId();
@@ -3923,6 +3972,15 @@ AtEOXact_Namespace(bool isCommit, bool parallel)
 			myTempNamespace = InvalidOid;
 			myTempToastNamespace = InvalidOid;
 			baseSearchPathValid = false;	/* need to rebuild list */
+
+			/*
+			 * Reset the temporary namespace flag in MyProc. The creation of
+			 * the temporary namespace has failed for some reason and should
+			 * not be seen by other processes as it has not been committed
+			 * yet, hence this would be fine even if not atomic, still we
+			 * assume that it is an atomic assignment.
+			 */
+			MyProc->tempNamespaceId = InvalidOid;
 		}
 		myTempNamespaceSubID = InvalidSubTransactionId;
 	}
@@ -3975,6 +4033,15 @@ AtEOSubXact_Namespace(bool isCommit, SubTransactionId mySubid,
 			myTempNamespace = InvalidOid;
 			myTempToastNamespace = InvalidOid;
 			baseSearchPathValid = false;	/* need to rebuild list */
+
+			/*
+			 * Reset the temporary namespace flag in MyProc. The creation of
+			 * the temporary namespace has failed for some reason and should
+			 * not be seen by other processes as it has not been committed
+			 * yet, hence this would be fine even if not atomic, still we
+			 * assume that it is an atomic assignment.
+			 */
+			MyProc->tempNamespaceId = InvalidOid;
 		}
 	}
 

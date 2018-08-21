@@ -516,6 +516,48 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
     </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><literal>n_distinct_per_range</literal></term>
+    <listitem>
+    <para>
+     Defines the estimated number of distinct non-null values in the block
+     range, used by <acronym>BRIN</acronym> bloom indexes for sizing of the
+     Bloom filter. It behaves similarly to <literal>n_distinct</literal> option
+     for <xref linkend="sql-altertable"/>. When set to a positive value,
+     each block range is assumed to contain this number of distinct non-null
+     values. When set to a negative value, which must be greater than or
+     equal to -1, the number of distinct non-null is assumed linear with
+     the maximum possible number of tuples in the block range (about 290
+     rows per block). The default values is <literal>-0.1</literal>, and
+     the minimum number of distinct non-null values is <literal>128</literal>.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>false_positive_rate</literal></term>
+    <listitem>
+    <para>
+     Defines the desired false positive rate used by <acronym>BRIN</acronym>
+     bloom indexes for sizing of the Bloom filter. The values must be be
+     greater than 0.0 and smaller than 1.0. The default values is 0.01,
+     which is 1% false positive rate.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>values_per_range</literal></term>
+    <listitem>
+    <para>
+     Defines the maximum number of values stored by <acronym>BRIN</acronym>
+     minmax indexes to summarize a block range. Each value may represent
+     eiter a point, or boundary of an interval. Values must be be between
+     16 and 256, and the default value is 64.
+    </para>
+    </listitem>
+   </varlistentry>
    </variablelist>
   </refsect2>
 

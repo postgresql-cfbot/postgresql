@@ -204,8 +204,7 @@ pqParseInput3(PGconn *conn)
 														   PGRES_COMMAND_OK);
 						if (!conn->result)
 						{
-							printfPQExpBuffer(&conn->errorMessage,
-											  libpq_gettext("out of memory"));
+							pqReportOOM(conn);
 							pqSaveErrorResult(conn);
 						}
 					}
@@ -231,8 +230,7 @@ pqParseInput3(PGconn *conn)
 														   PGRES_EMPTY_QUERY);
 						if (!conn->result)
 						{
-							printfPQExpBuffer(&conn->errorMessage,
-											  libpq_gettext("out of memory"));
+							pqReportOOM(conn);
 							pqSaveErrorResult(conn);
 						}
 					}
@@ -248,8 +246,7 @@ pqParseInput3(PGconn *conn)
 															   PGRES_COMMAND_OK);
 							if (!conn->result)
 							{
-								printfPQExpBuffer(&conn->errorMessage,
-												  libpq_gettext("out of memory"));
+								pqReportOOM(conn);
 								pqSaveErrorResult(conn);
 							}
 						}
@@ -328,8 +325,7 @@ pqParseInput3(PGconn *conn)
 															   PGRES_COMMAND_OK);
 							if (!conn->result)
 							{
-								printfPQExpBuffer(&conn->errorMessage,
-												  libpq_gettext("out of memory"));
+								pqReportOOM(conn);
 								pqSaveErrorResult(conn);
 							}
 						}
@@ -363,8 +359,8 @@ pqParseInput3(PGconn *conn)
 					else
 					{
 						/* Set up to report error at end of query */
-						printfPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("server sent data (\"D\" message) without prior row description (\"T\" message)\n"));
+						appendPQExpBufferStr(&conn->errorMessage,
+											 libpq_gettext("server sent data (\"D\" message) without prior row description (\"T\" message)\n"));
 						pqSaveErrorResult(conn);
 						/* Discard the unexpected message */
 						conn->inCursor += msgLength;
@@ -406,9 +402,8 @@ pqParseInput3(PGconn *conn)
 					 */
 					break;
 				default:
-					printfPQExpBuffer(&conn->errorMessage,
-									  libpq_gettext(
-													"unexpected response from server; first received character was \"%c\"\n"),
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("unexpected response from server; first received character was \"%c\"\n"),
 									  id);
 					/* build an error result holding the error message */
 					pqSaveErrorResult(conn);
@@ -428,7 +423,7 @@ pqParseInput3(PGconn *conn)
 		else
 		{
 			/* Trouble --- report it */
-			printfPQExpBuffer(&conn->errorMessage,
+			appendPQExpBuffer(&conn->errorMessage,
 							  libpq_gettext("message contents do not agree with length in message type \"%c\"\n"),
 							  id);
 			/* build an error result holding the error message */
@@ -448,9 +443,8 @@ pqParseInput3(PGconn *conn)
 static void
 handleSyncLoss(PGconn *conn, char id, int msgLength)
 {
-	printfPQExpBuffer(&conn->errorMessage,
-					  libpq_gettext(
-									"lost synchronization with server: got message type \"%c\", length %d\n"),
+	appendPQExpBuffer(&conn->errorMessage,
+					  libpq_gettext("lost synchronization with server: got message type \"%c\", length %d\n"),
 					  id, msgLength);
 	/* build an error result holding the error message */
 	pqSaveErrorResult(conn);
@@ -625,7 +619,7 @@ advance_and_error:
 	if (!errmsg)
 		errmsg = libpq_gettext("out of memory for query result");
 
-	printfPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
+	appendPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
 	pqSaveErrorResult(conn);
 
 	/*
@@ -725,7 +719,7 @@ advance_and_error:
 	 */
 	if (!errmsg)
 		errmsg = libpq_gettext("out of memory");
-	printfPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
+	appendPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
 	pqSaveErrorResult(conn);
 
 	/*
@@ -852,7 +846,7 @@ set_error_result:
 	if (!errmsg)
 		errmsg = libpq_gettext("out of memory for query result");
 
-	printfPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
+	appendPQExpBuffer(&conn->errorMessage, "%s\n", errmsg);
 	pqSaveErrorResult(conn);
 
 	/*
@@ -953,9 +947,10 @@ pqGetErrorNotice3(PGconn *conn, bool isError)
 			res->errMsg = pqResultStrdup(res, workBuf.data);
 		pqClearAsyncResult(conn);	/* redundant, but be safe */
 		conn->result = res;
+
+		/* We also keep a running history of errors in conn->errorMessage. */
 		if (PQExpBufferDataBroken(workBuf))
-			printfPQExpBuffer(&conn->errorMessage,
-							  libpq_gettext("out of memory"));
+			pqReportOOM(conn);
 		else
 			appendPQExpBufferStr(&conn->errorMessage, workBuf.data);
 	}
@@ -1681,8 +1676,7 @@ pqGetCopyData3(PGconn *conn, char **buffer, int async)
 			*buffer = (char *) malloc(msgLength + 1);
 			if (*buffer == NULL)
 			{
-				printfPQExpBuffer(&conn->errorMessage,
-								  libpq_gettext("out of memory\n"));
+				pqReportOOM(conn);
 				return -2;
 			}
 			memcpy(*buffer, &conn->inBuffer[conn->inCursor], msgLength);
@@ -1714,8 +1708,8 @@ pqGetline3(PGconn *conn, char *s, int maxlen)
 		 conn->asyncStatus != PGASYNC_COPY_BOTH) ||
 		conn->copy_is_binary)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("PQgetline: not doing text COPY OUT\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("PQgetline: not doing text COPY OUT\n"));
 		*s = '\0';
 		return EOF;
 	}
@@ -1820,8 +1814,8 @@ pqEndcopy3(PGconn *conn)
 		conn->asyncStatus != PGASYNC_COPY_OUT &&
 		conn->asyncStatus != PGASYNC_COPY_BOTH)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("no COPY in progress\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("no COPY in progress\n"));
 		return 1;
 	}
 
@@ -1854,7 +1848,6 @@ pqEndcopy3(PGconn *conn)
 
 	/* Return to active duty */
 	conn->asyncStatus = PGASYNC_BUSY;
-	resetPQExpBuffer(&conn->errorMessage);
 
 	/*
 	 * Non blocking connections may have to abort at this point.  If everyone
@@ -2092,7 +2085,7 @@ pqFunctionCall3(PGconn *conn, Oid fnid,
 				break;
 			default:
 				/* The backend violates the protocol. */
-				printfPQExpBuffer(&conn->errorMessage,
+				appendPQExpBuffer(&conn->errorMessage,
 								  libpq_gettext("protocol error: id=0x%x\n"),
 								  id);
 				pqSaveErrorResult(conn);

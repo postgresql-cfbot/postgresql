@@ -393,8 +393,7 @@ pqCheckOutBufferSpace(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	printfPQExpBuffer(&conn->errorMessage,
-					  "cannot allocate memory for output buffer\n");
+	pqReportOOM(conn);
 	return EOF;
 }
 
@@ -487,8 +486,7 @@ pqCheckInBufferSpace(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	printfPQExpBuffer(&conn->errorMessage,
-					  "cannot allocate memory for input buffer\n");
+	pqReportOOM(conn);
 	return EOF;
 }
 
@@ -633,8 +631,8 @@ pqReadData(PGconn *conn)
 
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("connection not open\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("connection not open\n"));
 		return -1;
 	}
 
@@ -802,11 +800,10 @@ retry4:
 	 * means the connection has been closed.  Cope.
 	 */
 definitelyEOF:
-	printfPQExpBuffer(&conn->errorMessage,
-					  libpq_gettext(
-									"server closed the connection unexpectedly\n"
-									"\tThis probably means the server terminated abnormally\n"
-									"\tbefore or while processing the request.\n"));
+	appendPQExpBufferStr(&conn->errorMessage,
+						 libpq_gettext("server closed the connection unexpectedly\n"
+									   "\tThis probably means the server terminated abnormally\n"
+									   "\tbefore or while processing the request.\n"));
 
 	/* Come here if lower-level code already set a suitable errorMessage */
 definitelyFailed:
@@ -834,8 +831,8 @@ pqSendSome(PGconn *conn, int len)
 
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("connection not open\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("connection not open\n"));
 		/* Discard queued data; no chance it'll ever be sent */
 		conn->outCount = 0;
 		return -1;
@@ -1005,8 +1002,8 @@ pqWaitTimed(int forRead, int forWrite, PGconn *conn, time_t finish_time)
 
 	if (result == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("timeout expired\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("timeout expired\n"));
 		return 1;
 	}
 
@@ -1050,8 +1047,8 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 		return -1;
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("invalid socket\n"));
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("invalid socket\n"));
 		return -1;
 	}
 
@@ -1073,7 +1070,7 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 	{
 		char		sebuf[256];
 
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("select() failed: %s\n"),
 						  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 	}
@@ -1211,11 +1208,49 @@ PQenv2encoding(void)
 	return encoding;
 }
 
+/*
+ * Report an out-of-memory error by appending a message to conn->errorMessage.
+ *
+ * This task is just common enough, and nontrivial enough, to deserve its own
+ * subroutine.
+ */
+void
+pqReportOOM(PGconn *conn)
+{
+	pqReportOOMBuffer(&conn->errorMessage);
+}
+
+/*
+ * As above, but work with a bare error-message-buffer pointer.
+ */
+void
+pqReportOOMBuffer(PQExpBuffer errorMessage)
+{
+	const char *msg = libpq_gettext("out of memory\n");
+
+	/*
+	 * First just try to append the message.  Even though we're up against
+	 * OOM, this is likely to succeed because of unused space within
+	 * errorMessage's buffer.
+	 */
+	appendPQExpBufferStr(errorMessage, msg);
+
+	/*
+	 * If that didn't succeed, it'll have marked the buffer broken.  Our
+	 * fallback plan is to reset the buffer (hopefully regaining some space)
+	 * and try again.  If still no luck, not much we can do.
+	 */
+	if (PQExpBufferBroken(errorMessage))
+	{
+		resetPQExpBuffer(errorMessage);
+		appendPQExpBufferStr(errorMessage, msg);
+	}
+}
 
 #ifdef ENABLE_NLS
 
 static void
-libpq_binddomain()
+libpq_binddomain(void)
 {
 	static bool already_bound = false;
 

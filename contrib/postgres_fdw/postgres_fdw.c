@@ -1345,7 +1345,7 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 		rtindex = fsplan->scan.scanrelid;
 	else
 		rtindex = bms_next_member(fsplan->fs_relids, -1);
-	rte = rt_fetch(rtindex, estate->es_range_table);
+	rte = exec_rt_fetch(rtindex, estate->es_range_table_array);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
 	/* Get info about foreign table. */
@@ -1732,8 +1732,8 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 										FdwModifyPrivateRetrievedAttrs);
 
 	/* Find RTE. */
-	rte = rt_fetch(resultRelInfo->ri_RangeTableIndex,
-				   mtstate->ps.state->es_range_table);
+	rte = exec_rt_fetch(resultRelInfo->ri_RangeTableIndex,
+						mtstate->ps.state->es_range_table_array);
 
 	/* Construct an execution state. */
 	fmstate = create_foreign_modify(mtstate->ps.state,
@@ -2037,7 +2037,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	 * correspond to this partition if it is one of the UPDATE subplan target
 	 * rels; in that case, we can just use the existing RTE as-is.
 	 */
-	rte = list_nth(estate->es_range_table, resultRelation - 1);
+	rte = exec_rt_fetch(resultRelation, estate->es_range_table_array);
 	if (rte->relid != RelationGetRelid(rel))
 	{
 		rte = copyObject(rte);
@@ -2397,7 +2397,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * ExecCheckRTEPerms() does.
 	 */
 	rtindex = estate->es_result_relation_info->ri_RangeTableIndex;
-	rte = rt_fetch(rtindex, estate->es_range_table);
+	rte = exec_rt_fetch(rtindex, estate->es_range_table_array);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
 	/* Get info about foreign table. */
@@ -5757,7 +5757,7 @@ conversion_error_callback(void *arg)
 			RangeTblEntry *rte;
 			Var		   *var = (Var *) tle->expr;
 
-			rte = rt_fetch(var->varno, estate->es_range_table);
+			rte = exec_rt_fetch(var->varno, estate->es_range_table_array);
 
 			if (var->varattno == 0)
 				is_wholerow = true;

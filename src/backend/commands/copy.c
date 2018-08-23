@@ -2333,6 +2333,8 @@ CopyFrom(CopyState cstate)
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
+	int			i;
+	ListCell   *lc;
 
 #define MAX_BUFFERED_TUPLES 1000
 #define RECHECK_MULTI_INSERT_THRESHOLD 1000
@@ -2482,7 +2484,15 @@ CopyFrom(CopyState cstate)
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;
 	estate->es_result_relation_info = resultRelInfo;
-	estate->es_range_table = cstate->range_table;
+
+	estate->es_range_table_size = list_length(cstate->range_table);
+	estate->es_range_table_array = (RangeTblEntry **) palloc(sizeof(RangeTblEntry *) *
+												estate->es_range_table_size);
+
+	/* Populate the range table array */
+	i = 0;
+	foreach(lc, cstate->range_table)
+		estate->es_range_table_array[i++] = lfirst_node(RangeTblEntry, lc);
 
 	/* Set up a tuple slot too */
 	myslot = ExecInitExtraTupleSlot(estate, tupDesc);

@@ -144,6 +144,8 @@ ExecSerializePlan(Plan *plan, EState *estate)
 {
 	PlannedStmt *pstmt;
 	ListCell   *lc;
+	List	   *rtable;
+	int			i;
 
 	/* We can't scribble on the original plan, so make a copy. */
 	plan = copyObject(plan);
@@ -179,7 +181,13 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->dependsOnRole = false;
 	pstmt->parallelModeNeeded = false;
 	pstmt->planTree = plan;
-	pstmt->rtable = estate->es_range_table;
+
+	/* Transform the range table array into List form */
+	rtable = NIL;
+	for (i = 0; i < estate->es_range_table_size; i++)
+		rtable = lappend(rtable, estate->es_range_table_array[i]);
+
+	pstmt->rtable = rtable;
 	pstmt->resultRelations = NIL;
 	pstmt->nonleafResultRelations = NIL;
 

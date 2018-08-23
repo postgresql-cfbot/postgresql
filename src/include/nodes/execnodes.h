@@ -477,7 +477,8 @@ typedef struct EState
 	ScanDirection es_direction; /* current scan direction */
 	Snapshot	es_snapshot;	/* time qual to use */
 	Snapshot	es_crosscheck_snapshot; /* crosscheck time qual for RI */
-	List	   *es_range_table; /* List of RangeTblEntry */
+	struct RangeTblEntry **es_range_table_array;	/* 0-based range table */
+	int			es_range_table_size;	/* size of the range table array */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
@@ -573,6 +574,22 @@ typedef struct EState
 	struct JitContext *es_jit;
 } EState;
 
+/*
+ *		exec_rt_fetch
+ *
+ * NB: this will crash and burn if handed an out-of-range RT index
+ */
+#define exec_rt_fetch(rangetblidx, rangetbl) rangetbl[(rangetblidx) - 1]
+
+/* XXX moved from parsetree.h. okay??
+ *		getrelid
+ *
+ *		Given the range index of a relation, return the corresponding
+ *		relation OID.  Note that InvalidOid will be returned if the
+ *		RTE is for a non-relation-type RTE.
+ */
+#define getrelid(rangeindex,rangetable) \
+	(exec_rt_fetch(rangeindex, rangetable)->relid)
 
 /*
  * ExecRowMark -

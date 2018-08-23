@@ -107,9 +107,9 @@ static void EvalPlanQualStart(EPQState *epqstate, EState *parentestate,
  * to be changed, however.
  */
 #define GetInsertedColumns(relinfo, estate) \
-	(rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table)->insertedCols)
+	(exec_rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table_array)->insertedCols)
 #define GetUpdatedColumns(relinfo, estate) \
-	(rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table)->updatedCols)
+	(exec_rt_fetch((relinfo)->ri_RangeTableIndex, (estate)->es_range_table_array)->updatedCols)
 
 /* end of local decls */
 
@@ -806,7 +806,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
 	Plan	   *plan = plannedstmt->planTree;
-	List	   *rangeTable = plannedstmt->rtable;
+	RangeTblEntry **rangeTable;
 	EState	   *estate = queryDesc->estate;
 	PlanState  *planstate;
 	TupleDesc	tupType;
@@ -816,12 +816,24 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	/*
 	 * Do permissions checks
 	 */
-	ExecCheckRTPerms(rangeTable, true);
+	ExecCheckRTPerms(plannedstmt->rtable, true);
 
 	/*
 	 * initialize the node's execution state
 	 */
-	estate->es_range_table = rangeTable;
+
+	/* Build the range table array from the rtable List */
+	estate->es_range_table_size = list_length(plannedstmt->rtable);
+	rangeTable = (RangeTblEntry **) palloc(sizeof(RangeTblEntry *) *
+										   estate->es_range_table_size);
+	estate->es_range_table_array = rangeTable;
+
+	/* Populate the range table array */
+	i = 0;
+	foreach(l, plannedstmt->rtable)
+		estate->es_range_table_array[i++] = lfirst_node(RangeTblEntry, l);
+
+
 	estate->es_plannedstmt = plannedstmt;
 
 	/*
@@ -3068,7 +3080,7 @@ EvalPlanQualBegin(EPQState *epqstate, EState *parentestate)
 		/*
 		 * We already have a suitable child EPQ tree, so just reset it.
 		 */
-		int			rtsize = list_length(parentestate->es_range_table);
+		int			rtsize = parentestate->es_range_table_size;
 		PlanState  *planstate = epqstate->planstate;
 
 		MemSet(estate->es_epqScanDone, 0, rtsize * sizeof(bool));
@@ -3113,7 +3125,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	MemoryContext oldcontext;
 	ListCell   *l;
 
-	rtsize = list_length(parentestate->es_range_table);
+	rtsize = parentestate->es_range_table_size;
 
 	epqstate->estate = estate = CreateExecutorState();
 
@@ -3136,7 +3148,8 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	estate->es_direction = ForwardScanDirection;
 	estate->es_snapshot = parentestate->es_snapshot;
 	estate->es_crosscheck_snapshot = parentestate->es_crosscheck_snapshot;
-	estate->es_range_table = parentestate->es_range_table;
+	estate->es_range_table_array = parentestate->es_range_table_array;
+	estate->es_range_table_size = parentestate->es_range_table_size;
 	estate->es_plannedstmt = parentestate->es_plannedstmt;
 	estate->es_junkFilter = parentestate->es_junkFilter;
 	estate->es_output_cid = parentestate->es_output_cid;

@@ -105,7 +105,8 @@ CreateExecutorState(void)
 	estate->es_direction = ForwardScanDirection;
 	estate->es_snapshot = InvalidSnapshot;	/* caller must initialize this */
 	estate->es_crosscheck_snapshot = InvalidSnapshot;	/* no crosscheck */
-	estate->es_range_table = NIL;
+	estate->es_range_table_array = NULL;
+	estate->es_range_table_size = 0;
 	estate->es_plannedstmt = NULL;
 
 	estate->es_junkFilter = NULL;
@@ -672,7 +673,7 @@ ExecOpenScanRelation(EState *estate, Index scanrelid, int eflags)
 	}
 
 	/* Open the relation and acquire lock as needed */
-	reloid = getrelid(scanrelid, estate->es_range_table);
+	reloid = getrelid(scanrelid, estate->es_range_table_array);
 	rel = heap_open(reloid, lockmode);
 
 	/*
@@ -881,7 +882,7 @@ ExecLockNonLeafAppendTables(List *partitioned_rels, EState *estate)
 		ListCell   *l;
 		Index		rti = lfirst_int(lc);
 		bool		is_result_rel = false;
-		Oid			relid = getrelid(rti, estate->es_range_table);
+		Oid			relid = getrelid(rti, estate->es_range_table_array);
 
 		/* If this is a result relation, already locked in InitPlan */
 		foreach(l, stmt->nonleafResultRelations)

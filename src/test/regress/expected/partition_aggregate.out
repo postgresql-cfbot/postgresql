@@ -449,6 +449,38 @@ SELECT t1.x, sum(t1.y), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
  24 |  900 |   100
 (5 rows)
 
+-- Check with whole-row reference; partitionwise aggregation does not apply
+EXPLAIN (COSTS OFF)
+SELECT t1.x, sum(t1.y), count(t1) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t1.x ORDER BY 1, 2, 3;
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Sort
+   Sort Key: t1.x, (sum(t1.y)), (count(((t1.*)::pagg_tab1)))
+   ->  HashAggregate
+         Group Key: t1.x
+         ->  Hash Join
+               Hash Cond: (t1.x = t2.y)
+               ->  Append
+                     ->  Seq Scan on pagg_tab1_p1 t1
+                     ->  Seq Scan on pagg_tab1_p2 t1_1
+                     ->  Seq Scan on pagg_tab1_p3 t1_2
+               ->  Hash
+                     ->  Append
+                           ->  Seq Scan on pagg_tab2_p1 t2
+                           ->  Seq Scan on pagg_tab2_p2 t2_1
+                           ->  Seq Scan on pagg_tab2_p3 t2_2
+(15 rows)
+
+SELECT t1.x, sum(t1.y), count(t1) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t1.x ORDER BY 1, 2, 3;
+ x  | sum  | count 
+----+------+-------
+  0 |  500 |   100
+  6 | 1100 |   100
+ 12 |  700 |   100
+ 18 | 1300 |   100
+ 24 |  900 |   100
+(5 rows)
+
 -- GROUP BY having other matching key
 EXPLAIN (COSTS OFF)
 SELECT t2.y, sum(t1.y), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t2.y ORDER BY 1, 2, 3;
@@ -1049,6 +1081,58 @@ SELECT a, sum(b), count(*) FROM pagg_tab_ml GROUP BY a HAVING avg(b) < 3 ORDER B
 (31 rows)
 
 SELECT a, sum(b), count(*) FROM pagg_tab_ml GROUP BY a HAVING avg(b) < 3 ORDER BY 1, 2, 3;
+ a  | sum  | count 
+----+------+-------
+  0 |    0 |  1000
+  1 | 1000 |  1000
+  2 | 2000 |  1000
+ 10 |    0 |  1000
+ 11 | 1000 |  1000
+ 12 | 2000 |  1000
+ 20 |    0 |  1000
+ 21 | 1000 |  1000
+ 22 | 2000 |  1000
+(9 rows)
+
+-- Check with whole-row reference
+EXPLAIN (COSTS OFF)
+SELECT a, sum(b), count(pagg_tab_ml) FROM pagg_tab_ml GROUP BY a HAVING avg(b) < 3 ORDER BY 1, 2, 3;
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
+ Sort
+   Sort Key: pagg_tab_ml_p1.a, (sum(pagg_tab_ml_p1.b)), (count(((pagg_tab_ml_p1.*)::pagg_tab_ml)))
+   ->  Append
+         ->  HashAggregate
+               Group Key: pagg_tab_ml_p1.a
+               Filter: (avg(pagg_tab_ml_p1.b) < '3'::numeric)
+               ->  Seq Scan on pagg_tab_ml_p1
+         ->  Finalize GroupAggregate
+               Group Key: pagg_tab_ml_p2_s1.a
+               Filter: (avg(pagg_tab_ml_p2_s1.b) < '3'::numeric)
+               ->  Sort
+                     Sort Key: pagg_tab_ml_p2_s1.a
+                     ->  Append
+                           ->  Partial HashAggregate
+                                 Group Key: pagg_tab_ml_p2_s1.a
+                                 ->  Seq Scan on pagg_tab_ml_p2_s1
+                           ->  Partial HashAggregate
+                                 Group Key: pagg_tab_ml_p2_s2.a
+                                 ->  Seq Scan on pagg_tab_ml_p2_s2
+         ->  Finalize GroupAggregate
+               Group Key: pagg_tab_ml_p3_s1.a
+               Filter: (avg(pagg_tab_ml_p3_s1.b) < '3'::numeric)
+               ->  Sort
+                     Sort Key: pagg_tab_ml_p3_s1.a
+                     ->  Append
+                           ->  Partial HashAggregate
+                                 Group Key: pagg_tab_ml_p3_s1.a
+                                 ->  Seq Scan on pagg_tab_ml_p3_s1
+                           ->  Partial HashAggregate
+                                 Group Key: pagg_tab_ml_p3_s2.a
+                                 ->  Seq Scan on pagg_tab_ml_p3_s2
+(31 rows)
+
+SELECT a, sum(b), count(pagg_tab_ml) FROM pagg_tab_ml GROUP BY a HAVING avg(b) < 3 ORDER BY 1, 2, 3;
  a  | sum  | count 
 ----+------+-------
   0 |    0 |  1000

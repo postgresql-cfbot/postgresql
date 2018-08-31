@@ -105,6 +105,17 @@ tlist_member_ignore_relabel(Expr *node, List *targetlist)
 		while (tlexpr && IsA(tlexpr, RelabelType))
 			tlexpr = ((RelabelType *) tlexpr)->arg;
 
+		/*
+		 * The targetlist may contain GroupedVar where caller expects the
+		 * actual expression.
+		 *
+		 * XXX prepare_sort_from_pathkeys() needs this special case. Should
+		 * the same assignment be also added to the other tlist_member_...()
+		 * functions?
+		 */
+		if (IsA(tlexpr, GroupedVar))
+			tlexpr = ((GroupedVar *) tlexpr)->gvexpr;
+
 		if (equal(node, tlexpr))
 			return tlentry;
 	}
@@ -425,7 +436,6 @@ get_sortgrouplist_exprs(List *sgClauses, List *targetList)
 	}
 	return result;
 }
-
 
 /*****************************************************************************
  *		Functions to extract data from a list of SortGroupClauses
@@ -798,6 +808,68 @@ apply_pathtarget_labeling_to_tlist(List *tlist, PathTarget *target)
 		}
 		i++;
 	}
+}
+
+/*
+ * For each aggregate add GroupedVar to the grouped target.
+ *
+ * Caller passes the aggregates in the form of GroupedVarInfos so that we
+ * don't have to look for gvid.
+ */
+void
+add_grouped_vars_to_target(PlannerInfo *root, PathTarget *target,
+						   List *expressions)
+{
+	ListCell   *lc;
+
+	/* Create the vars and add them to the target. */
+	foreach(lc, expressions)
+	{
+		GroupedVarInfo *gvi;
+		GroupedVar *gvar;
+
+		gvi = lfirst_node(GroupedVarInfo, lc);
+		gvar = makeNode(GroupedVar);
+		gvar->gvid = gvi->gvid;
+		gvar->gvexpr = gvi->gvexpr;
+		add_column_to_pathtarget(target, (Expr *) gvar, gvi->sortgroupref);
+	}
+}
+
+/*
+ * Return GroupedVar containing the passed-in expression if one exists, or
+ * NULL if the expression cannot be used as grouping key.
+ *
+ * is_derived reflects the ->derived field of the corresponding
+ * GroupedVarInfo.
+ */
+GroupedVar *
+get_grouping_expression(List *gvis, Expr *expr, bool *is_derived)
+{
+	ListCell   *lc;
+
+	foreach(lc, gvis)
+	{
+		GroupedVarInfo *gvi = lfirst_node(GroupedVarInfo, lc);
+
+		if (IsA(gvi->gvexpr, Aggref))
+			continue;
+
+		if (equal(gvi->gvexpr, expr))
+		{
+			GroupedVar *result = makeNode(GroupedVar);
+
+			Assert(gvi->sortgroupref > 0);
+			result->gvexpr = gvi->gvexpr;
+			result->gvid = gvi->gvid;
+			result->sortgroupref = gvi->sortgroupref;
+			*is_derived = gvi->derived;
+			return result;
+		}
+	}
+
+	/* The expression cannot be used as grouping key. */
+	return NULL;
 }
 
 /*

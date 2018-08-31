@@ -534,6 +534,22 @@ _readVar(void)
 }
 
 /*
+ * _readGroupedVar
+ */
+static GroupedVar *
+_readGroupedVar(void)
+{
+	READ_LOCALS(GroupedVar);
+
+	READ_NODE_FIELD(gvexpr);
+	READ_UINT_FIELD(sortgroupref);
+	READ_UINT_FIELD(gvid);
+	READ_INT_FIELD(width);
+
+	READ_DONE();
+}
+
+/*
  * _readConst
  */
 static Const *
@@ -589,6 +605,7 @@ _readAggref(void)
 	READ_OID_FIELD(aggcollid);
 	READ_OID_FIELD(inputcollid);
 	READ_OID_FIELD(aggtranstype);
+	READ_OID_FIELD(aggcombinefn);
 	READ_NODE_FIELD(aggargtypes);
 	READ_NODE_FIELD(aggdirectargs);
 	READ_NODE_FIELD(args);
@@ -2547,6 +2564,8 @@ parseNodeString(void)
 		return_value = _readTableFunc();
 	else if (MATCH("VAR", 3))
 		return_value = _readVar();
+	else if (MATCH("GROUPEDVAR", 10))
+		return_value = _readGroupedVar();
 	else if (MATCH("CONST", 5))
 		return_value = _readConst();
 	else if (MATCH("PARAM", 5))

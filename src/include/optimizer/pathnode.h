@@ -71,6 +71,7 @@ extern AppendPath *create_append_path(PlannerInfo *root, RelOptInfo *rel,
 				   List *partitioned_rels, double rows);
 extern MergeAppendPath *create_merge_append_path(PlannerInfo *root,
 						 RelOptInfo *rel,
+						 PathTarget *target,
 						 List *subpaths,
 						 List *pathkeys,
 						 Relids required_outer,
@@ -123,6 +124,7 @@ extern Relids calc_non_nestloop_required_outer(Path *outer_path, Path *inner_pat
 
 extern NestPath *create_nestloop_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -134,6 +136,7 @@ extern NestPath *create_nestloop_path(PlannerInfo *root,
 
 extern MergePath *create_mergejoin_path(PlannerInfo *root,
 					  RelOptInfo *joinrel,
+					  PathTarget *target,
 					  JoinType jointype,
 					  JoinCostWorkspace *workspace,
 					  JoinPathExtraData *extra,
@@ -148,6 +151,7 @@ extern MergePath *create_mergejoin_path(PlannerInfo *root,
 
 extern HashPath *create_hashjoin_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -196,6 +200,13 @@ extern AggPath *create_agg_path(PlannerInfo *root,
 				List *qual,
 				const AggClauseCosts *aggcosts,
 				double numGroups);
+extern AggPath *create_agg_sorted_path(PlannerInfo *root,
+					   Path *subpath,
+					   bool check_pathkeys,
+					   double input_rows);
+extern AggPath *create_agg_hashed_path(PlannerInfo *root,
+					   Path *subpath,
+					   double input_rows);
 extern GroupingSetsPath *create_groupingsets_path(PlannerInfo *root,
 						 RelOptInfo *rel,
 						 Path *subpath,
@@ -255,6 +266,14 @@ extern Path *reparameterize_path(PlannerInfo *root, Path *path,
 					double loop_count);
 extern Path *reparameterize_path_by_child(PlannerInfo *root, Path *path,
 							 RelOptInfo *child_rel);
+extern void make_uniquekeys(PlannerInfo *root, Path *path);
+extern void make_uniquekeys_for_agg_path(Path *path);
+extern List *make_uniquekeys_for_join(PlannerInfo *root,
+						 Path *outerpath,
+						 Path *innerpath,
+						 PathTarget *target,
+						 bool *keys_ok);
+extern void free_uniquekeys(List *uniquekeys);
 
 /*
  * prototypes for relnode.c
@@ -270,7 +289,8 @@ extern RelOptInfo *build_join_rel(PlannerInfo *root,
 			   RelOptInfo *outer_rel,
 			   RelOptInfo *inner_rel,
 			   SpecialJoinInfo *sjinfo,
-			   List **restrictlist_ptr);
+			   List **restrictlist_ptr,
+			   bool grouped);
 extern Relids min_join_parameterization(PlannerInfo *root,
 						  Relids joinrelids,
 						  RelOptInfo *outer_rel,
@@ -296,6 +316,11 @@ extern ParamPathInfo *find_param_path_info(RelOptInfo *rel,
 extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 					 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 					 RelOptInfo *parent_joinrel, List *restrictlist,
-					 SpecialJoinInfo *sjinfo, JoinType jointype);
-
+					 SpecialJoinInfo *sjinfo, JoinType jointype,
+					 bool grouped);
+extern RelAggInfo *create_rel_agg_info(PlannerInfo *root, RelOptInfo *rel);
+extern RelAggInfo *translate_rel_agg_info(PlannerInfo *root,
+					   RelAggInfo *agg_info,
+					   AppendRelInfo **appinfos,
+					   int nappinfos);
 #endif							/* PATHNODE_H */

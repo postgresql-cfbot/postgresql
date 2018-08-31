@@ -824,6 +824,12 @@ use_physical_tlist(PlannerInfo *root, Path *path, int flags)
 		return false;
 
 	/*
+	 * Grouped relation's target list contains GroupedVars.
+	 */
+	if (rel->agg_info != NULL)
+		return false;
+
+	/*
 	 * If a bitmap scan's tlist is empty, keep it as-is.  This may allow the
 	 * executor to skip heap page fetches, and in any case, the benefit of
 	 * using a physical tlist instead would be minimal.
@@ -1667,7 +1673,8 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path, int flags)
 	 * therefore can't predict whether it will require an exact tlist. For
 	 * both of these reasons, we have to recheck here.
 	 */
-	if (use_physical_tlist(root, &best_path->path, flags))
+	if (!best_path->force_result &&
+		use_physical_tlist(root, &best_path->path, flags))
 	{
 		/*
 		 * Our caller doesn't really care what tlist we return, so we don't
@@ -1680,7 +1687,8 @@ create_projection_plan(PlannerInfo *root, ProjectionPath *best_path, int flags)
 			apply_pathtarget_labeling_to_tlist(tlist,
 											   best_path->path.pathtarget);
 	}
-	else if (is_projection_capable_path(best_path->subpath))
+	else if (!best_path->force_result &&
+			 is_projection_capable_path(best_path->subpath))
 	{
 		/*
 		 * Our caller requires that we return the exact tlist, but no separate
@@ -5880,6 +5888,21 @@ find_ec_member_for_tle(EquivalenceClass *ec,
 	tlexpr = tle->expr;
 	while (tlexpr && IsA(tlexpr, RelabelType))
 		tlexpr = ((RelabelType *) tlexpr)->arg;
+
+	/*
+	 * GroupedVar can contain either non-Var grouping expression or aggregate.
+	 * The grouping expression might be useful for sorting, however aggregates
+	 * shouldn't currently appear among pathkeys.
+	 */
+	if (IsA(tlexpr, GroupedVar))
+	{
+		GroupedVar *gvar = castNode(GroupedVar, tlexpr);
+
+		if (!IsA(gvar->gvexpr, Aggref))
+			tlexpr = gvar->gvexpr;
+		else
+			return NULL;
+	}
 
 	foreach(lc, ec->ec_members)
 	{

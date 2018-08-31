@@ -104,6 +104,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	Oid			vatype;
 	FuncDetailCode fdresult;
 	char		aggkind = 0;
+	Oid			aggcombinefn = InvalidOid;
 	ParseCallbackState pcbstate;
 
 	/*
@@ -360,6 +361,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 			elog(ERROR, "cache lookup failed for aggregate %u", funcid);
 		classForm = (Form_pg_aggregate) GETSTRUCT(tup);
 		aggkind = classForm->aggkind;
+		aggcombinefn = classForm->aggcombinefn;
 		catDirectArgs = classForm->aggnumdirectargs;
 		ReleaseSysCache(tup);
 
@@ -759,6 +761,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 		aggref->aggstar = agg_star;
 		aggref->aggvariadic = func_variadic;
 		aggref->aggkind = aggkind;
+		aggref->aggcombinefn = aggcombinefn;
 		/* agglevelsup will be set by transformAggregateCall */
 		aggref->aggsplit = AGGSPLIT_SIMPLE; /* planner might change this */
 		aggref->location = location;

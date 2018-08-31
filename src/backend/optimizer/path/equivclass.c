@@ -65,6 +65,19 @@ static bool reconsider_outer_join_clause(PlannerInfo *root,
 static bool reconsider_full_join_clause(PlannerInfo *root,
 							RestrictInfo *rinfo);
 
+typedef struct translate_expr_context
+{
+	Var		  **keys;			/* Dictionary keys. */
+	Var		  **values;			/* Dictionary values */
+	int			nitems;			/* Number of dictionary items. */
+	Relids	   *gv_eval_at_p;	/* See GroupedVarInfo. */
+	Index		relid;			/* Translate into this relid. */
+} translate_expr_context;
+
+static Node *translate_expression_to_rels_mutator(Node *node,
+									 translate_expr_context *context);
+static int	var_dictionary_comparator(const void *a, const void *b);
+
 
 /*
  * process_equivalence
@@ -2510,4 +2523,330 @@ is_redundant_derived_clause(RestrictInfo *rinfo, List *clauselist)
 	}
 
 	return false;
+}
+
+/*
+ * translate_expression_to_rels
+ *		If the appropriate equivalence classes exist, replace vars in
+ *		gvi->gvexpr with vars whose varno is equal to relid.
+ */
+GroupedVarInfo *
+translate_expression_to_rels(PlannerInfo *root, GroupedVarInfo *gvi,
+							 Index relid)
+{
+	List	   *vars;
+	ListCell   *l1;
+	int			i,
+				j;
+	int			nkeys,
+				nkeys_resolved;
+	Var		  **keys,
+			  **values,
+			  **keys_tmp;
+	Var		   *key,
+			   *key_prev;
+	translate_expr_context context;
+	GroupedVarInfo *result;
+
+	/* Can't do anything w/o equivalence classes. */
+	if (root->eq_classes == NIL)
+		return NULL;
+
+	/*
+	 * Before actually trying to modify the expression tree, find out if all
+	 * vars can be translated.
+	 */
+	vars = pull_var_clause((Node *) gvi->gvexpr, PVC_RECURSE_AGGREGATES);
+
+	/* No vars to translate? */
+	if (vars == NIL)
+		return NULL;
+
+	/*
+	 * Search for individual replacement vars as well as the actual expression
+	 * translation will be more efficient if we use a dictionary with the keys
+	 * (i.e. the "source vars") unique and sorted.
+	 */
+	nkeys = list_length(vars);
+	keys = (Var **) palloc(nkeys * sizeof(Var *));
+	i = 0;
+	foreach(l1, vars)
+	{
+		key = lfirst_node(Var, l1);
+		keys[i++] = key;
+	}
+
+	/*
+	 * Sort the keys by varno. varattno decides where varnos are equal.
+	 */
+	if (nkeys > 1)
+		pg_qsort(keys, nkeys, sizeof(Var *), var_dictionary_comparator);
+
+	/*
+	 * Pick unique values and get rid of the vars that need no translation.
+	 */
+	keys_tmp = (Var **) palloc(nkeys * sizeof(Var *));
+	key_prev = NULL;
+	j = 0;
+	for (i = 0; i < nkeys; i++)
+	{
+		key = keys[i];
+
+		if ((key_prev == NULL || (key->varno != key_prev->varno &&
+								  key->varattno != key_prev->varattno)) &&
+			key->varno != relid)
+			keys_tmp[j++] = key;
+
+		key_prev = key;
+	}
+	pfree(keys);
+	keys = keys_tmp;
+	nkeys = j;
+
+	/*
+	 * Is there actually nothing to be translated?
+	 */
+	if (nkeys == 0)
+	{
+		pfree(keys);
+		return NULL;
+	}
+
+	nkeys_resolved = 0;
+
+	/*
+	 * Find the replacement vars.
+	 */
+	values = (Var **) palloc0(nkeys * sizeof(Var *));
+	foreach(l1, root->eq_classes)
+	{
+		EquivalenceClass *ec = lfirst_node(EquivalenceClass, l1);
+		Relids		ec_var_relids;
+		Var		  **ec_vars;
+		int			ec_nvars;
+		ListCell   *l2;
+
+		/* TODO Re-check if any other EC kind should be ignored. */
+		if (ec->ec_has_volatile || ec->ec_below_outer_join || ec->ec_broken)
+			continue;
+
+		/* Single-element EC can hardly help in translations. */
+		if (list_length(ec->ec_members) == 1)
+			continue;
+
+		/*
+		 * Collect all vars of this EC and their varnos.
+		 *
+		 * ec->ec_relids does not help because we're only interested in a
+		 * subset of EC members.
+		 */
+		ec_vars = (Var **) palloc(list_length(ec->ec_members) * sizeof(Var *));
+		ec_nvars = 0;
+		ec_var_relids = NULL;
+		foreach(l2, ec->ec_members)
+		{
+			EquivalenceMember *em = lfirst_node(EquivalenceMember, l2);
+			Var		   *ec_var;
+
+			if (!IsA(em->em_expr, Var))
+				continue;
+
+			ec_var = castNode(Var, em->em_expr);
+			ec_vars[ec_nvars++] = ec_var;
+			ec_var_relids = bms_add_member(ec_var_relids, ec_var->varno);
+		}
+
+		/*
+		 * At least two vars are needed so that the EC is usable for
+		 * translation.
+		 */
+		if (ec_nvars <= 1)
+		{
+			pfree(ec_vars);
+			bms_free(ec_var_relids);
+			continue;
+		}
+
+		/*
+		 * Now check where this EC can help.
+		 */
+		for (i = 0; i < nkeys; i++)
+		{
+			Relids		ec_rest;
+			bool		relid_ok,
+						key_found;
+			Var		   *key = keys[i];
+			Var		   *value = values[i];
+
+			/* Skip this item if it's already resolved. */
+			if (value != NULL)
+				continue;
+
+			/*
+			 * Can't translate if the EC does not mention key->varno.
+			 */
+			if (!bms_is_member(key->varno, ec_var_relids))
+				continue;
+
+			/*
+			 * Besides key, at least one EC member must belong to the relation
+			 * we're translating our expression to.
+			 */
+			ec_rest = bms_copy(ec_var_relids);
+			ec_rest = bms_del_member(ec_rest, key->varno);
+			relid_ok = bms_is_member(relid, ec_rest);
+			bms_free(ec_rest);
+			if (!relid_ok)
+				continue;
+
+			/*
+			 * The preliminary checks passed, so try to find the exact vars.
+			 */
+			key_found = false;
+			for (j = 0; j < ec_nvars; j++)
+			{
+				Var		   *ec_var = ec_vars[j];
+
+				if (!key_found && key->varno == ec_var->varno &&
+					key->varattno == ec_var->varattno)
+					key_found = true;
+
+				/*
+				 *
+				 * Is this Var useful for our dictionary?
+				 *
+				 * XXX Shouldn't ec_var be copied?
+				 */
+				if (value == NULL && ec_var->varno == relid)
+					value = ec_var;
+
+				if (key_found && value != NULL)
+					break;
+			}
+
+			/*
+			 * The replacement Var must have the same data type, otherwise the
+			 * values are not guaranteed to be grouped in the same way as
+			 * values of the original Var.
+			 */
+			if (key_found && value != NULL &&
+				key->vartype == value->vartype)
+			{
+				values[i] = value;
+				nkeys_resolved++;
+
+				if (nkeys_resolved == nkeys)
+					break;
+			}
+		}
+
+		pfree(ec_vars);
+		bms_free(ec_var_relids);
+
+		/* Don't need to check the remaining ECs? */
+		if (nkeys_resolved == nkeys)
+			break;
+	}
+
+	/* Couldn't compose usable dictionary? */
+	if (nkeys_resolved < nkeys)
+	{
+		pfree(keys);
+		pfree(values);
+		return NULL;
+	}
+
+	result = makeNode(GroupedVarInfo);
+	memcpy(result, gvi, sizeof(GroupedVarInfo));
+
+	/*
+	 * translate_expression_to_rels_mutator updates gv_eval_at.
+	 */
+	result->gv_eval_at = bms_copy(result->gv_eval_at);
+
+	/* The dictionary is ready, so perform the translation. */
+	context.keys = keys;
+	context.values = values;
+	context.nitems = nkeys;
+	context.gv_eval_at_p = &result->gv_eval_at;
+	context.relid = relid;
+	result->gvexpr = (Expr *)
+		translate_expression_to_rels_mutator((Node *) gvi->gvexpr, &context);
+	result->derived = true;
+
+	pfree(keys);
+	pfree(values);
+	return result;
+}
+
+static Node *
+translate_expression_to_rels_mutator(Node *node,
+									 translate_expr_context *context)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		Var		   *var = castNode(Var, node);
+		Var		  **key_p;
+		Var		   *value;
+		int			index;
+
+		/*
+		 * Simply return the existing variable if already belongs to the
+		 * relation we're adjusting the expression to.
+		 */
+		if (var->varno == context->relid)
+			return (Node *) var;
+
+		key_p = bsearch(&var, context->keys, context->nitems, sizeof(Var *),
+						var_dictionary_comparator);
+
+		/* We shouldn't have omitted any var from the dictionary. */
+		Assert(key_p != NULL);
+
+		index = key_p - context->keys;
+		Assert(index >= 0 && index < context->nitems);
+		value = context->values[index];
+
+		/* All values should be present in the dictionary. */
+		Assert(value != NULL);
+
+		/* Update gv_eval_at accordingly. */
+		bms_del_member(*context->gv_eval_at_p, var->varno);
+		*context->gv_eval_at_p = bms_add_member(*context->gv_eval_at_p,
+												value->varno);
+
+		return (Node *) value;
+	}
+
+	return expression_tree_mutator(node, translate_expression_to_rels_mutator,
+								   (void *) context);
+}
+
+static int
+var_dictionary_comparator(const void *a, const void *b)
+{
+	Var		  **var1_p,
+			  **var2_p;
+	Var		   *var1,
+			   *var2;
+
+	var1_p = (Var **) a;
+	var1 = castNode(Var, *var1_p);
+	var2_p = (Var **) b;
+	var2 = castNode(Var, *var2_p);
+
+	if (var1->varno < var2->varno)
+		return -1;
+	else if (var1->varno > var2->varno)
+		return 1;
+
+	if (var1->varattno < var2->varattno)
+		return -1;
+	else if (var1->varattno > var2->varattno)
+		return 1;
+
+	return 0;
 }

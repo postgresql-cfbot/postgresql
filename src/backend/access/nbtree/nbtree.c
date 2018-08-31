@@ -28,6 +28,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/condition_variable.h"
+#include "storage/extension_lock.h"
 #include "storage/indexfsm.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
@@ -1016,10 +1017,10 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	{
 		/* Get the current relation length */
 		if (needLock)
-			LockRelationForExtension(rel, ExclusiveLock);
+			LockRelationForExtension(rel);
 		num_pages = RelationGetNumberOfBlocks(rel);
 		if (needLock)
-			UnlockRelationForExtension(rel, ExclusiveLock);
+			UnlockRelationForExtension(rel);
 
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= num_pages)

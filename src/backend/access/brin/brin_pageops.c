@@ -17,6 +17,7 @@
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/extension_lock.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
@@ -634,8 +635,7 @@ brin_page_cleanup(Relation idxrel, Buffer buf)
 	 */
 	if (PageIsNew(page))
 	{
-		LockRelationForExtension(idxrel, ShareLock);
-		UnlockRelationForExtension(idxrel, ShareLock);
+		WaitForRelationExtensionLockToBeFree(idxrel);
 
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(page))
@@ -729,7 +729,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 			 */
 			if (!RELATION_IS_LOCAL(irel))
 			{
-				LockRelationForExtension(irel, ExclusiveLock);
+				LockRelationForExtension(irel);
 				extensionLockHeld = true;
 			}
 			buf = ReadBuffer(irel, P_NEW);
@@ -777,7 +777,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 					brin_initialize_empty_new_buffer(irel, buf);
 
 				if (extensionLockHeld)
-					UnlockRelationForExtension(irel, ExclusiveLock);
+					UnlockRelationForExtension(irel);
 
 				ReleaseBuffer(buf);
 
@@ -795,7 +795,7 @@ brin_getinsertbuffer(Relation irel, Buffer oldbuf, Size itemsz,
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 		if (extensionLockHeld)
-			UnlockRelationForExtension(irel, ExclusiveLock);
+			UnlockRelationForExtension(irel);
 
 		page = BufferGetPage(buf);
 

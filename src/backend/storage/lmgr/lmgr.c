@@ -319,78 +319,6 @@ UnlockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode)
 }
 
 /*
- *		LockRelationForExtension
- *
- * This lock tag is used to interlock addition of pages to relations.
- * We need such locking because bufmgr/smgr definition of P_NEW is not
- * race-condition-proof.
- *
- * We assume the caller is already holding some type of regular lock on
- * the relation, so no AcceptInvalidationMessages call is needed here.
- */
-void
-LockRelationForExtension(Relation relation, LOCKMODE lockmode)
-{
-	LOCKTAG		tag;
-
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
-
-	(void) LockAcquire(&tag, lockmode, false, false);
-}
-
-/*
- *		ConditionalLockRelationForExtension
- *
- * As above, but only lock if we can get the lock without blocking.
- * Returns true iff the lock was acquired.
- */
-bool
-ConditionalLockRelationForExtension(Relation relation, LOCKMODE lockmode)
-{
-	LOCKTAG		tag;
-
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
-
-	return (LockAcquire(&tag, lockmode, false, true) != LOCKACQUIRE_NOT_AVAIL);
-}
-
-/*
- *		RelationExtensionLockWaiterCount
- *
- * Count the number of processes waiting for the given relation extension lock.
- */
-int
-RelationExtensionLockWaiterCount(Relation relation)
-{
-	LOCKTAG		tag;
-
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
-
-	return LockWaiterCount(&tag);
-}
-
-/*
- *		UnlockRelationForExtension
- */
-void
-UnlockRelationForExtension(Relation relation, LOCKMODE lockmode)
-{
-	LOCKTAG		tag;
-
-	SET_LOCKTAG_RELATION_EXTEND(tag,
-								relation->rd_lockInfo.lockRelId.dbId,
-								relation->rd_lockInfo.lockRelId.relId);
-
-	LockRelease(&tag, lockmode, false);
-}
-
-/*
  *		LockPage
  *
  * Obtain a page-level lock.  This is currently used by some index access
@@ -984,12 +912,6 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
 		case LOCKTAG_RELATION:
 			appendStringInfo(buf,
 							 _("relation %u of database %u"),
-							 tag->locktag_field2,
-							 tag->locktag_field1);
-			break;
-		case LOCKTAG_RELATION_EXTEND:
-			appendStringInfo(buf,
-							 _("extension of relation %u of database %u"),
 							 tag->locktag_field2,
 							 tag->locktag_field1);
 			break;

@@ -21,6 +21,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
+#include "storage/extension_lock.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
@@ -327,13 +328,13 @@ GinNewBuffer(Relation index)
 	/* Must extend the file */
 	needLock = !RELATION_IS_LOCAL(index);
 	if (needLock)
-		LockRelationForExtension(index, ExclusiveLock);
+		LockRelationForExtension(index);
 
 	buffer = ReadBuffer(index, P_NEW);
 	LockBuffer(buffer, GIN_EXCLUSIVE);
 
 	if (needLock)
-		UnlockRelationForExtension(index, ExclusiveLock);
+		UnlockRelationForExtension(index);
 
 	return buffer;
 }

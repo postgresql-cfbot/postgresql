@@ -8650,3 +8650,28 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
 
 -- Clean-up
 RESET enable_partitionwise_aggregate;
+-- ===================================================================
+-- test for options option
+-- ===================================================================
+BEGIN;
+CREATE SERVER workmem1 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( options '-c work_mem=64kB' );
+SELECT count(*)
+FROM pg_foreign_server
+WHERE srvname = 'workmem1'
+AND srvoptions @> array['options=-c work_mem=64kB'];
+ count 
+-------
+     1
+(1 row)
+
+ALTER SERVER workmem1 OPTIONS( SET options '-c work_mem=8MB' );
+SELECT count(*)
+FROM pg_foreign_server
+WHERE srvname = 'workmem1'
+AND srvoptions @> array['options=-c work_mem=8MB'];
+ count 
+-------
+     1
+(1 row)
+
+ROLLBACK;

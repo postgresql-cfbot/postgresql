@@ -313,6 +313,17 @@
      </listitem>
     </varlistentry>
 
+    <varlistentry>
+     <term><literal>options</literal></term>
+     <listitem>
+      <para>
+       This option specifies the command-line options to send to the server at connection start. 
+       For example, setting this to <literal>-c geqo=off</literal> sets the session's value of the geqo parameter to off.
+       To set more than one option, specify <literal>-c param=value</literal> repeatedly.
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
 
   </sect3>

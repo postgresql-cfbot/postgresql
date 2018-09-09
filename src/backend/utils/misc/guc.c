@@ -3731,7 +3731,13 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_library,
 #ifdef USE_SSL
+#if defined(USE_OPENSSL)
 		"OpenSSL",
+#elif defined(USE_GNUTLS)
+		"GnuTLS",
+#else
+#error SSL implementation must set ssl_library string
+#endif
 #else
 		"",
 #endif
@@ -3834,6 +3840,25 @@ static struct config_string ConfigureNamesString[] =
 		&SSLECDHCurve,
 #ifdef USE_SSL
 		"prime256v1",
+#else
+		"none",
+#endif
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gnutls_priority", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Sets priorities for the cipher suites supported by GnuTLS."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&gnutls_priority,
+#ifdef USE_SSL
+#if HAVE_DECL_GNUTLS_ALPN_SERVER_PRECEDENCE
+		"NORMAL:%SERVER_PRECEDENCE",
+#else
+		"NORMAL",
+#endif
 #else
 		"none",
 #endif

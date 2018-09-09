@@ -229,10 +229,8 @@ be_tls_init(bool isServerStart)
 		}
 	}
 
-	/*----------
+	/*
 	 * Load the Certificate Revocation List (CRL).
-	 * http://searchsecurity.techtarget.com/sDefinition/0,,sid14_gci803160,00.html
-	 *----------
 	 */
 	if (ssl_crl_file[0])
 	{

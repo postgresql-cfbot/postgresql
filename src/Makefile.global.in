@@ -184,6 +184,7 @@ with_icu	= @with_icu@
 with_perl	= @with_perl@
 with_python	= @with_python@
 with_tcl	= @with_tcl@
+with_gnutls	= @with_gnutls@
 with_openssl	= @with_openssl@
 with_selinux	= @with_selinux@
 with_systemd	= @with_systemd@

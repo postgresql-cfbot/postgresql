@@ -19,9 +19,11 @@
 #define LIBPQ_BE_H
 
 #include <sys/time.h>
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#elif defined(USE_GNUTLS)
+#include <gnutls/gnutls.h>
 #endif
 #ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
@@ -183,12 +185,15 @@ typedef struct Port
 	bool		peer_cert_valid;
 
 	/*
-	 * OpenSSL structures. (Keep these last so that the locations of other
-	 * fields are the same whether or not you build with OpenSSL.)
+	 * SSL library specific structures. (Keep these last so that the locations
+	 * of other fields are the same whether or not you build with SSL.)
 	 */
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL)
 	SSL		   *ssl;
 	X509	   *peer;
+#elif defined(USE_GNUTLS)
+	gnutls_session_t ssl;
+	gnutls_x509_crt_t peer;
 #endif
 } Port;
 
@@ -275,7 +280,7 @@ extern void be_tls_get_peerdn_name(Port *port, char *ptr, size_t len);
 extern char *be_tls_get_certificate_hash(Port *port, size_t *len);
 #endif
 
-#endif	/* USE_SSL */
+#endif							/* USE_SSL */
 
 extern ProtocolVersion FrontendProtocol;
 

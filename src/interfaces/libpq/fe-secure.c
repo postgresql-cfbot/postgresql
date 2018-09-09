@@ -139,7 +139,7 @@ PQsslInUse(PGconn *conn)
 
 /*
  *	Exported function to allow application to tell us it's already
- *	initialized OpenSSL.
+ *	initialized the SSL library.
  */
 void
 PQinitSSL(int do_init)

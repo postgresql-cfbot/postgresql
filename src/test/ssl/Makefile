@@ -13,7 +13,7 @@ subdir = src/test/ssl
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-export with_openssl
+export with_openssl with_gnutls
 
 CERTIFICATES := server_ca server-cn-and-alt-names \
 	server-cn-only server-single-alt-name server-multiple-alt-names \
@@ -72,9 +72,10 @@ ssl/server-ss.crt: ssl/server-cn-only.key ssl/server-cn-only.crt server-cn-only.
 	openssl x509 -req -days 10000 -in ssl/server-ss.csr -signkey ssl/server-cn-only.key -out ssl/server-ss.crt  -extensions v3_req -extfile server-cn-only.config
 	rm ssl/server-ss.csr
 
-# Password-protected version of server-cn-only.key
+# Password-protected version of server-cn-only.key (need to use PKCS#8
+# format instead of traditional OpenSSL format for GnuTLS support)
 ssl/server-password.key: ssl/server-cn-only.key
-	openssl rsa -des -in $< -out $@ -passout 'pass:secret1'
+	openssl pkcs8 -topk8 -in $< -out $@ -passout 'pass:secret1'
 
 # Client certificate, signed by the client CA:
 ssl/client.crt: ssl/client.key ssl/client_ca.crt

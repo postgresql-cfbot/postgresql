@@ -71,14 +71,15 @@ typedef struct
 #endif
 #endif							/* ENABLE_SSPI */
 
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-
 #ifndef OPENSSL_NO_ENGINE
 #define USE_SSL_ENGINE
 #endif
-#endif							/* USE_OPENSSL */
+#elif defined(USE_GNUTLS)
+#include <gnutls/gnutls.h>
+#endif
 
 /*
  * POSTGRES backend dependent Constants.
@@ -463,7 +464,7 @@ struct pg_conn
 	bool		allow_ssl_try;	/* Allowed to try SSL negotiation */
 	bool		wait_ssl_try;	/* Delay SSL negotiation until after
 								 * attempting normal connection */
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL)
 	SSL		   *ssl;			/* SSL status, if have SSL connection */
 	X509	   *peer;			/* X509 cert of server */
 #ifdef USE_SSL_ENGINE
@@ -472,7 +473,10 @@ struct pg_conn
 	void	   *engine;			/* dummy field to keep struct the same if
 								 * OpenSSL version changes */
 #endif
-#endif							/* USE_OPENSSL */
+#elif defined(USE_GNUTLS)
+	gnutls_session_t ssl;		/* SSL status, if have SSL connection */
+	gnutls_x509_crt_t peer;		/* X509 cert of server */
+#endif
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS

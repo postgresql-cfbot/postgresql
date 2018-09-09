@@ -2818,6 +2818,9 @@ ginxlogVacuumDataLeafPage
 gistxlogPage
 gistxlogPageSplit
 gistxlogPageUpdate
+gnutls_datum_t
+gnutls_dh_params_t
+gnutls_x509_crt_t
 grouping_sets_data
 gseg_picksplit_item
 gss_OID

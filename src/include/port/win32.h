@@ -16,7 +16,7 @@
  * get support for GetLocaleInfoEx() with locales. For everything else
  * the minimum version is Windows XP (0x0501).
  */
-#if defined(_MSC_VER) && _MSC_VER >= 1900
+#if defined(_MSC_VER) && _MSC_VER >= 1800
 #define MIN_WINNT 0x0600
 #else
 #define MIN_WINNT 0x0501

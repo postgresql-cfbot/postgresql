@@ -23,8 +23,26 @@
 #include <langinfo.h>
 #endif
 
+#ifdef USE_ICU
+#include <unicode/ucol.h>
+#endif
+
+#include "catalog/pg_collation.h"
+#include "common/pg_collation_fn_common.h"
 #include "mb/pg_wchar.h"
 
+/*
+ * In backend, we will use palloc/pfree.  In frontend, use malloc/free.
+ */
+#ifndef FRONTEND
+#define STRDUP(s) pstrdup(s)
+#define ALLOC(size) palloc(size)
+#define FREE(s) pfree(s)
+#else
+#define STRDUP(s) strdup(s)
+#define ALLOC(size) malloc(size)
+#define FREE(s) free(s)
+#endif
 
 /*
  * This table needs to recognize all the CODESET spellings for supported
@@ -436,3 +454,583 @@ pg_get_encoding_from_locale(const char *ctype, bool write_message)
 }
 
 #endif							/* (HAVE_LANGINFO_H && CODESET) || WIN32 */
+
+/* do not make libpq with icu */
+#ifndef LIBPQ_MAKE
+
+/*
+ * Check if the locale contains the modifier of the collation provider.
+ *
+ * Set up the collation provider according to the appropriate modifier or '\0'.
+ * Set up the collation version to NULL if we don't find it after the collation
+ * provider modifier.
+ *
+ * The malloc'd copy of the locale's canonical name without the modifier of the
+ * collation provider and the collation version is stored in the canonname if
+ * locale is not NULL. The canoname can have the zero length.
+ */
+void
+check_locale_collprovider(const char *locale, char **canonname,
+						  char *collprovider, char **collversion)
+{
+	const char *modifier_sign,
+			   *dot_sign,
+			   *cur_collprovider_end;
+	char		cur_collprovider_name[NAMEDATALEN];
+	int			cur_collprovider_len;
+	char		cur_collprovider;
+
+	/* in case of failure or if we don't find them in the locale name */
+	if (canonname)
+		*canonname = NULL;
+	if (collprovider)
+		*collprovider = '\0';
+	if (collversion)
+		*collversion = NULL;
+
+	if (!locale)
+		return;
+
+	/* find the last occurrence of the modifier sign '@' in the locale */
+	modifier_sign = strrchr(locale, '@');
+
+	if (!modifier_sign)
+	{
+		/* just copy all the name */
+		if (canonname)
+			*canonname = STRDUP(locale);
+		 return;
+	}
+
+	/* check if there's a version after the collation provider modifier */
+	if ((dot_sign = strchr(modifier_sign, '.')) == NULL)
+		cur_collprovider_end = &locale[strlen(locale)];
+	else
+		cur_collprovider_end = dot_sign;
+
+	cur_collprovider_len = cur_collprovider_end - modifier_sign - 1;
+	if (cur_collprovider_len + 1 > NAMEDATALEN)
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("collation provider name is too long: %s"), locale);
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else							/* not FRONTEND */
+		ereport(ERROR,
+				(errmsg("collation provider name is too long: %s", locale)));
+#endif							/* not FRONTEND */
+		return;
+	}
+
+	strncpy(cur_collprovider_name, modifier_sign + 1, cur_collprovider_len);
+	cur_collprovider_name[cur_collprovider_len] = '\0';
+
+	/* check if this is a valid collprovider name */
+	cur_collprovider = get_collprovider(cur_collprovider_name);
+	if (is_valid_nondefault_collprovider(cur_collprovider))
+	{
+		if (collprovider)
+			*collprovider = cur_collprovider;
+
+		if (canonname)
+		{
+			int			canonname_len = modifier_sign - locale;
+
+			*canonname = ALLOC((canonname_len + 1) * sizeof(char));
+			if (*canonname)
+			{
+				strncpy(*canonname, locale, canonname_len);
+				(*canonname)[canonname_len] = '\0';
+			}
+			else
+			{
+#ifdef FRONTEND
+				fprintf(stderr, _("out of memory"));
+				/*
+				 * keep newline separate so there's only one translatable string
+				 */
+				fputc('\n', stderr);
+#else							/* not FRONTEND */
+				ereport(ERROR, (errmsg("out of memory")));
+#endif							/* not FRONTEND */
+			}
+		}
+
+		if (dot_sign && collversion)
+			*collversion = STRDUP(dot_sign + 1);
+	}
+	else
+	{
+		/* just copy all the name */
+		if (canonname)
+			*canonname = STRDUP(locale);
+	}
+}
+
+/*
+ * Return true if locale is "C" or "POSIX";
+ */
+bool
+locale_is_c(const char *locale)
+{
+	return locale && (strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0);
+}
+
+/*
+ * Return locale ended with collation provider modifier and collation version.
+ *
+ * Return NULL if locale is NULL.
+ */
+char *
+get_full_collation_name(const char *locale, char collprovider,
+						const char *collversion)
+{
+	char	   *new_locale;
+	int			old_len,
+				len_with_provider,
+				new_len;
+	const char *collprovider_name;
+
+	if (!locale)
+		return NULL;
+
+	collprovider_name = get_collprovider_name(collprovider);
+	Assert(collprovider_name);
+
+	old_len = strlen(locale);
+	new_len = len_with_provider = old_len + 1 + strlen(collprovider_name);
+	if (collversion && *collversion)
+		new_len += 1 + strlen(collversion);
+
+	new_locale = ALLOC((new_len + 1) * sizeof(char));
+	if (!new_locale)
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("out of memory"));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else							/* not FRONTEND */
+		ereport(ERROR, (errmsg("out of memory")));
+#endif							/* not FRONTEND */
+
+		return NULL;
+	}
+
+	/* add the collation provider modifier */
+	strcpy(new_locale, locale);
+	new_locale[old_len] = '@';
+	strcpy(&new_locale[old_len + 1], collprovider_name);
+
+	/* add the collation version if needed */
+	if (collversion && *collversion)
+	{
+		new_locale[len_with_provider] = '.';
+		strcpy(&new_locale[len_with_provider + 1], collversion);
+	}
+
+	new_locale[new_len] = '\0';
+
+	return new_locale;
+}
+
+/*
+ * Get provider-specific collation version string for the given collation from
+ * the operating system/library.
+ *
+ * A particular provider must always either return a non-NULL string or return
+ * NULL (if it doesn't support versions).  It must not return NULL for some
+ * collcollate and not NULL for others.
+ */
+#ifdef FRONTEND
+void
+get_collation_actual_version(char collprovider, const char *collcollate,
+							 char **collversion, bool *failure)
+{
+	if (failure)
+		*failure = false;
+
+#ifdef USE_ICU
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+		UCollator  *collator = open_collator(collcollate);
+		UVersionInfo versioninfo;
+		char		buf[U_MAX_VERSION_STRING_LENGTH];
+
+		if (collator)
+		{
+			ucol_getVersion(collator, versioninfo);
+			ucol_close(collator);
+
+			u_versionToString(versioninfo, buf);
+			if (collversion)
+				*collversion = STRDUP(buf);
+		}
+		else
+		{
+			if (collversion)
+				*collversion = NULL;
+			if (failure)
+				*failure = true;
+		}
+	}
+	else
+#endif
+	{
+		if (collversion)
+			*collversion = NULL;
+	}
+}
+#else							/* not FRONTEND */
+char *
+get_collation_actual_version(char collprovider, const char *collcollate)
+{
+	char	   *collversion;
+
+#ifdef USE_ICU
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+		UCollator  *collator = open_collator(collcollate);
+		UVersionInfo versioninfo;
+		char		buf[U_MAX_VERSION_STRING_LENGTH];
+
+		ucol_getVersion(collator, versioninfo);
+		ucol_close(collator);
+
+		u_versionToString(versioninfo, buf);
+		collversion = STRDUP(buf);
+	}
+	else
+#endif
+		collversion = NULL;
+
+	return collversion;
+}
+#endif							/* not FRONTEND */
+
+#ifdef USE_ICU
+/*
+ * Open the collator for this icu locale. Return NULL in case of failure.
+ */
+UCollator *
+open_collator(const char *collate)
+{
+	UCollator  *collator;
+	UErrorCode	status;
+	const char *save = uloc_getDefault();
+	char	   *save_dup;
+
+	if (!save)
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("ICU error: uloc_getDefault() failed"));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR, (errmsg("ICU error: uloc_getDefault() failed")));
+#endif
+		return NULL;
+	}
+
+	/* save may be pointing at a modifiable scratch variable, so copy it. */
+	save_dup = STRDUP(save);
+
+	/* set the default locale to root */
+	status = U_ZERO_ERROR;
+	uloc_setDefault(ICU_ROOT_LOCALE, &status);
+	if (U_FAILURE(status))
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("ICU error: failed to set the default locale to \"%s\": %s"),
+				ICU_ROOT_LOCALE, u_errorName(status));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR,
+				(errmsg("ICU error: failed to set the default locale to \"%s\": %s",
+						ICU_ROOT_LOCALE, u_errorName(status))));
+#endif
+		return NULL;
+	}
+
+	/* get a collator for this collate */
+	status = U_ZERO_ERROR;
+	collator = ucol_open(collate, &status);
+	if (U_FAILURE(status))
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("ICU error: could not open collator for locale \"%s\": %s"),
+				collate, u_errorName(status));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR,
+				(errmsg("ICU error: could not open collator for locale \"%s\": %s",
+						collate, u_errorName(status))));
+#endif
+		collator = NULL;
+	}
+
+	/* restore old value of the default locale. */
+	status = U_ZERO_ERROR;
+	uloc_setDefault(save_dup, &status);
+	if (U_FAILURE(status))
+	{
+#ifdef FRONTEND
+		fprintf(stderr, _("ICU error: failed to restore old locale \"%s\": %s"),
+				save_dup, u_errorName(status));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR,
+				(errmsg("ICU error: failed to restore old locale \"%s\": %s",
+						save_dup, u_errorName(status))));
+#endif
+		return NULL;
+	}
+	FREE(save_dup);
+
+	return collator;
+}
+
+/*
+ * Get the ICU language tag for a locale name.
+ * The result is a palloc'd string.
+ * Return NULL in case of failure or if localename is NULL.
+ */
+char *
+get_icu_language_tag(const char *localename)
+{
+	char		buf[ULOC_FULLNAME_CAPACITY];
+	UErrorCode	status = U_ZERO_ERROR;
+
+	if (!localename)
+		return NULL;
+
+	uloc_toLanguageTag(localename, buf, sizeof(buf), TRUE, &status);
+	if (U_FAILURE(status))
+	{
+#ifdef FRONTEND
+		fprintf(stderr,
+				_("ICU error: could not convert locale name \"%s\" to language tag: %s"),
+				localename, u_errorName(status));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR,
+				(errmsg("ICU error: could not convert locale name \"%s\" to language tag: %s",
+						localename, u_errorName(status))));
+#endif
+		return NULL;
+	}
+	return STRDUP(buf);
+}
+
+/*
+ * Get the icu collation name.
+ */
+const char *
+get_icu_collate(const char *locale, const char *langtag)
+{
+	return U_ICU_VERSION_MAJOR_NUM >= 54 ? langtag : locale;
+}
+
+#ifdef WIN32
+/*
+ * Get the Language Code Identifier (LCID) for the Windows locale.
+ *
+ * Return zero in case of failure.
+ */
+static uint32
+get_lcid(const wchar_t *winlocale)
+{
+	/*
+	 * The second argument to the LocaleNameToLCID function is:
+	 * - Prior to Windows 7: reserved; should always be 0.
+	 * - Beginning in Windows 7: use LOCALE_ALLOW_NEUTRAL_NAMES to allow the
+	 *   return of lcids of locales without regions.
+	 */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+	return LocaleNameToLCID(winlocale, LOCALE_ALLOW_NEUTRAL_NAMES);
+#else
+	return LocaleNameToLCID(winlocale, 0);
+#endif
+}
+
+/*
+ * char2wchar_ascii --- convert multibyte characters to wide characters
+ *
+ * This is a simplified version of the char2wchar() function from backend.
+ */
+static size_t
+char2wchar_ascii(wchar_t *to, size_t tolen, const char *from, size_t fromlen)
+{
+	size_t		result;
+
+	if (tolen == 0)
+		return 0;
+
+	/* Win32 API does not work for zero-length input */
+	if (fromlen == 0)
+		result = 0;
+	else
+	{
+		result = MultiByteToWideChar(CP_ACP, 0, from, fromlen, to, tolen - 1);
+		/* A zero return is failure */
+		if (result == 0)
+			result = -1;
+	}
+
+	if (result != -1)
+	{
+		Assert(result < tolen);
+		/* Append trailing null wchar (MultiByteToWideChar() does not) */
+		to[result] = 0;
+	}
+
+	return result;
+}
+
+/*
+ * Get the canonical ICU name for the Windows locale.
+ *
+ * Return a malloc'd string or NULL in case of failure.
+ */
+char *
+check_icu_winlocale(const char *winlocale)
+{
+	uint32		lcid;
+	char		canonname_buf[ULOC_FULLNAME_CAPACITY];
+	UErrorCode	status = U_ZERO_ERROR;
+#if (_MSC_VER >= 1400)			/* VC8.0 or later */
+	_locale_t	loct = NULL;
+#endif
+
+	if (winlocale == NULL)
+		return NULL;
+
+	/* Get the Language Code Identifier (LCID). */
+
+#if (_MSC_VER >= 1400)			/* VC8.0 or later */
+	loct = _create_locale(LC_COLLATE, winlocale);
+
+	if (loct != NULL)
+	{
+#if (_MSC_VER >= 1700)			/* Visual Studio 2012 or later */
+		if ((lcid = get_lcid(loct->locinfo->locale_name[LC_COLLATE])) == 0)
+		{
+			/* there's an error */
+#ifdef FRONTEND
+			fprintf(stderr,
+					_("failed to get the Language Code Identifier (LCID) for locale \"%s\""),
+					winlocale);
+			/* keep newline separate so there's only one translatable string */
+			fputc('\n', stderr);
+#else							/* not FRONTEND */
+			ereport(ERROR,
+					(errmsg("failed to get the Language Code Identifier (LCID) for locale \"%s\"",
+							winlocale)));
+#endif							/* not FRONTEND */
+			_free_locale(loct);
+			return NULL;
+		}
+#else							/* _MSC_VER >= 1400 && _MSC_VER < 1700 */
+		if ((lcid = loct->locinfo->lc_handle[LC_COLLATE]) == 0)
+		{
+			/* there's an error */
+#ifdef FRONTEND
+			fprintf(stderr,
+					_("failed to get the Language Code Identifier (LCID) for locale \"%s\""),
+					winlocale);
+			/* keep newline separate so there's only one translatable string */
+			fputc('\n', stderr);
+#else							/* not FRONTEND */
+			ereport(ERROR,
+					(errmsg("failed to get the Language Code Identifier (LCID) for locale \"%s\"",
+							winlocale)));
+#endif							/* not FRONTEND */
+			_free_locale(loct);
+			return NULL;
+		}
+#endif							/* _MSC_VER >= 1400 && _MSC_VER < 1700 */
+		_free_locale(loct);
+	}
+	else
+#endif							/* VC8.0 or later */
+	{
+		if (strlen(winlocale) == 0)
+		{
+			lcid = LOCALE_USER_DEFAULT;
+		}
+		else
+		{
+			size_t		locale_len = strlen(winlocale);
+			wchar_t	   *wlocale = (wchar_t*) ALLOC(
+				(locale_len + 1) * sizeof(wchar_t));
+			/* Locale names use only ASCII */
+			size_t		locale_wlen = char2wchar_ascii(wlocale, locale_len + 1,
+													   winlocale, locale_len);
+			if (locale_wlen == -1)
+			{
+				/* there's an error */
+#ifdef FRONTEND
+				fprintf(stderr,
+						_("failed to convert locale \"%s\" to wide characters"),
+						winlocale);
+				/* keep newline separate so there's only one translatable string */
+				fputc('\n', stderr);
+#else
+				ereport(ERROR,
+						(errmsg("failed to convert locale \"%s\" to wide characters",
+								winlocale)));
+#endif
+				FREE(wlocale);
+				return NULL;
+			}
+
+			if ((lcid = get_lcid(wlocale)) == 0)
+			{
+				/* there's an error */
+#ifdef FRONTEND
+				fprintf(stderr,
+						_("failed to get the Language Code Identifier (LCID) for locale \"%s\""),
+						winlocale);
+				/* keep newline separate so there's only one translatable string */
+				fputc('\n', stderr);
+#else
+				ereport(ERROR,
+						(errmsg("failed to get the Language Code Identifier (LCID) for locale \"%s\"",
+								winlocale)));
+#endif
+				FREE(wlocale);
+				return NULL;
+			}
+
+			FREE(wlocale);
+		}
+	}
+
+	/* Get the ICU canoname. */
+
+	uloc_getLocaleForLCID(lcid, canonname_buf, sizeof(canonname_buf), &status);
+	if (U_FAILURE(status))
+	{
+#ifdef FRONTEND
+		fprintf(stderr,
+				_("ICU error: failed to get the locale name for LCID 0x%04x: %s"),
+				lcid, u_errorName(status));
+		/* keep newline separate so there's only one translatable string */
+		fputc('\n', stderr);
+#else
+		ereport(ERROR,
+				(errmsg("ICU error: failed to get the locale name for LCID 0x%04x: %s",
+						lcid, u_errorName(status))));
+#endif
+		return NULL;
+	}
+
+	return STRDUP(canonname_buf);
+}
+#endif							/* WIN32 */
+#endif							/* USE_ICU */
+
+#endif							/* not LIBPQ_MAKE */

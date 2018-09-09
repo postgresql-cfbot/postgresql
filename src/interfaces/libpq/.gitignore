@@ -32,3 +32,4 @@
 /unicode_norm.c
 /encnames.c
 /wchar.c
+/pg_collation_fn_common.c

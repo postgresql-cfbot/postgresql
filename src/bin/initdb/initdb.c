@@ -55,6 +55,10 @@
 #include <signal.h>
 #include <time.h>
 
+#ifdef USE_ICU
+#include <unicode/uloc.h>
+#endif
+
 #ifdef HAVE_SHM_OPEN
 #include "sys/mman.h"
 #endif
@@ -65,6 +69,7 @@
 #include "catalog/pg_collation_d.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
+#include "common/pg_collation_fn_common.h"
 #include "common/restricted_token.h"
 #include "common/username.h"
 #include "fe_utils/string_utils.h"
@@ -144,6 +149,8 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static char collprovider = '\0';
+static char *collversion = NULL;
 
 
 /* internal vars */
@@ -268,10 +275,15 @@ static char *escape_quotes(const char *src);
 static char *escape_quotes_bki(const char *src);
 static int	locale_date_order(const char *locale);
 static void check_locale_name(int category, const char *locale,
-				  char **canonname);
-static bool check_locale_encoding(const char *locale, int encoding);
+				  char **canonname, char collprovider);
+static bool check_locale_encoding(const char *locale, int encoding,
+								  char collprovider);
 static void setlocales(void);
 static void usage(const char *progname);
+#ifdef USE_ICU
+static char *check_icu_locale_name(const char *locale);
+#endif
+static void set_collation_version(void);
 void		setup_pgdata(void);
 void		setup_bin_paths(const char *argv0);
 void		setup_data_file_paths(void);
@@ -1388,9 +1400,26 @@ bootstrap_template1(void)
 	char	  **bki_lines;
 	char		headerline[MAXPGPATH];
 	char		buf[64];
+	char	   *lc_collate_full_name;
 
 	printf(_("running bootstrap script ... "));
 	fflush(stdout);
+
+	Assert(lc_collate);
+
+	lc_collate_full_name = get_full_collation_name(lc_collate, collprovider,
+												   collversion);
+
+	if (!lc_collate_full_name)
+		exit(1);				/* get_full_collation_name printed the error */
+
+	if (strlen(lc_collate_full_name) >= NAMEDATALEN)
+	{
+		fprintf(stderr,
+				_("%s: the full collation name \"%s\" is too long\n"),
+				progname, lc_collate_full_name);
+		exit(1);
+	}
 
 	bki_lines = readfile(bki_file);
 
@@ -1433,7 +1462,7 @@ bootstrap_template1(void)
 							  encodingid_to_string(encodingid));
 
 	bki_lines = replace_token(bki_lines, "LC_COLLATE",
-							  escape_quotes_bki(lc_collate));
+							  escape_quotes_bki(lc_collate_full_name));
 
 	bki_lines = replace_token(bki_lines, "LC_CTYPE",
 							  escape_quotes_bki(lc_ctype));
@@ -1475,6 +1504,7 @@ bootstrap_template1(void)
 	PG_CMD_CLOSE;
 
 	free(bki_lines);
+	free(lc_collate_full_name);
 
 	check_ok();
 }
@@ -2225,53 +2255,143 @@ locale_date_order(const char *locale)
  * the locale name, but typically it doesn't.)
  *
  * this should match the backend's check_locale() function
+ *
+ * Set collprovider to '\0' if category is not LC_COLLATE.
  */
 static void
-check_locale_name(int category, const char *locale, char **canonname)
+check_locale_name(int category, const char *locale, char **canonname,
+				  char collprovider)
 {
-	char	   *save;
-	char	   *res;
+	const char *save;
+	const char *res;
+	char	   *save_dup;
+	bool		use_libc PG_USED_FOR_ASSERTS_ONLY =
+		category != LC_COLLATE || collprovider == COLLPROVIDER_LIBC;
+	bool		use_icu =
+		category == LC_COLLATE && collprovider == COLLPROVIDER_ICU;
+	bool		failure = false;
+#ifdef USE_ICU
+	UErrorCode  status;
+	char	   *icu_locale;
+#endif
+
+	Assert(use_libc || use_icu);
+
+#ifndef USE_ICU
+	if (use_icu)
+	{
+		fprintf(stderr,
+				_("%s: ICU is not supported in this build\n"
+				  "You need to rebuild PostgreSQL using --with-icu.\n"),
+				progname);
+		exit(1);
+	}
+#endif
 
 	if (canonname)
 		*canonname = NULL;		/* in case of failure */
 
-	save = setlocale(category, NULL);
-	if (!save)
+#ifdef USE_ICU
+	if (use_icu)
 	{
-		fprintf(stderr, _("%s: setlocale() failed\n"),
-				progname);
-		exit(1);
+		save = uloc_getDefault();
+		if (!save)
+		{
+			fprintf(stderr, _("%s: ICU error: uloc_getDefault() failed\n"),
+					progname);
+			exit(1);
+		}
+	}
+	else
+#endif
+	{
+		/* use_libc */
+		save = setlocale(category, NULL);
+		if (!save)
+		{
+			fprintf(stderr, _("%s: setlocale() failed\n"),
+					progname);
+			exit(1);
+		}
 	}
 
 	/* save may be pointing at a modifiable scratch variable, so copy it. */
-	save = pg_strdup(save);
+	save_dup = pg_strdup(save);
 
 	/* for setlocale() call */
 	if (!locale)
 		locale = "";
 
 	/* set the locale with setlocale, to see if it accepts it. */
-	res = setlocale(category, locale);
+#ifdef USE_ICU
+	if (use_icu)
+	{
+		icu_locale = check_icu_locale_name(locale);
+		if (icu_locale == NULL && locale != NULL)
+		{
+			failure = true;
+			res = NULL;
+		}
+		else
+		{
+			status = U_ZERO_ERROR;
+			uloc_setDefault(icu_locale, &status);
+			res = uloc_getDefault();
+			failure = (U_FAILURE(status) || res == NULL);
+			if (icu_locale)
+				pfree(icu_locale);
+		}
+	}
+	else
+#endif
+	{
+		/* use_libc */
+		res = setlocale(category, locale);
+		failure = (res == NULL);
+	}
 
 	/* save canonical name if requested. */
 	if (res && canonname)
 		*canonname = pg_strdup(res);
 
 	/* restore old value. */
-	if (!setlocale(category, save))
+#ifdef USE_ICU
+	if (use_icu)
 	{
-		fprintf(stderr, _("%s: failed to restore old locale \"%s\"\n"),
-				progname, save);
-		exit(1);
+		status = U_ZERO_ERROR;
+		uloc_setDefault(save_dup, &status);
+		if (U_FAILURE(status))
+		{
+			fprintf(stderr, _("%s: ICU error: failed to restore old locale \"%s\"\n"),
+					progname, save_dup);
+			exit(1);
+		}
 	}
-	free(save);
+	else
+#endif
+	{
+		/* use_libc */
+		if (!setlocale(category, save_dup))
+		{
+			fprintf(stderr, _("%s: failed to restore old locale \"%s\"\n"),
+					progname, save_dup);
+			exit(1);
+		}
+	}
+	free(save_dup);
 
 	/* complain if locale wasn't valid */
-	if (res == NULL)
+	if (failure)
 	{
 		if (*locale)
-			fprintf(stderr, _("%s: invalid locale name \"%s\"\n"),
-					progname, locale);
+		{
+			if (category == LC_COLLATE)
+				fprintf(stderr, _("%s: invalid locale name \"%s\" (provider \"%s\")\n"),
+						progname, locale, get_collprovider_name(collprovider));
+			else
+				fprintf(stderr, _("%s: invalid locale name \"%s\"\n"),
+						progname, locale);
+		}
 		else
 		{
 			/*
@@ -2293,9 +2413,11 @@ check_locale_name(int category, const char *locale, char **canonname)
  * check if the chosen encoding matches the encoding required by the locale
  *
  * this should match the similar check in the backend createdb() function
+ *
+ * Set collprovider to '\0' if category is not LC_COLLATE.
  */
 static bool
-check_locale_encoding(const char *locale, int user_enc)
+check_locale_encoding(const char *locale, int user_enc, char collprovider)
 {
 	int			locale_enc;
 
@@ -2322,6 +2444,25 @@ check_locale_encoding(const char *locale, int user_enc)
 				progname);
 		return false;
 	}
+
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+#ifdef USE_ICU
+		if (!is_encoding_supported_by_icu(user_enc))
+		{
+			fprintf(stderr, _("%s: selected encoding (%s) is not supported for ICU locales\n"),
+					progname, pg_encoding_to_char(user_enc));
+			return false;
+		}
+#else							/* not USE_ICU */
+		fprintf(stderr,
+				_("%s: ICU is not supported in this build\n"
+				  "You need to rebuild PostgreSQL using --with-icu.\n"),
+				progname);
+		exit(1);
+#endif							/* not USE_ICU */
+	}
+
 	return true;
 }
 
@@ -2333,16 +2474,22 @@ check_locale_encoding(const char *locale, int user_enc)
 static void
 setlocales(void)
 {
-	char	   *canonname;
-
-	/* set empty lc_* values to locale config if set */
+	char	   *canonname = NULL;
 
 	if (locale)
 	{
+		/*
+		 * Set up the collation provider if possible and canonicalize the locale
+		 * name.
+		 */
+		check_locale_collprovider(locale, &canonname, &collprovider, NULL);
+		if (!canonname)
+			exit(1);		/* check_locale_collprovider printed the error */
+		locale = canonname;
+
+		/* set empty lc_* values to locale config if set */
 		if (!lc_ctype)
 			lc_ctype = locale;
-		if (!lc_collate)
-			lc_collate = locale;
 		if (!lc_numeric)
 			lc_numeric = locale;
 		if (!lc_time)
@@ -2353,29 +2500,83 @@ setlocales(void)
 			lc_messages = locale;
 	}
 
+	if (lc_collate)
+	{
+		/*
+		 * Set up the collation provider if possible and canonicalize the locale
+		 * name.
+		 */
+		check_locale_collprovider(lc_collate, &canonname, &collprovider, NULL);
+		if (!canonname)
+			exit(1);		/* check_locale_collprovider printed the error */
+		lc_collate = canonname;
+	}
+	else if (canonname)
+	{
+		/* we have already canonicalized the locale name */
+		lc_collate = pstrdup(canonname);
+	}
+
 	/*
 	 * canonicalize locale names, and obtain any missing values from our
 	 * current environment
 	 */
 
-	check_locale_name(LC_CTYPE, lc_ctype, &canonname);
+	check_locale_name(LC_CTYPE, lc_ctype, &canonname, '\0');
 	lc_ctype = canonname;
-	check_locale_name(LC_COLLATE, lc_collate, &canonname);
+
+	/* we always check lc_collate for libc */
+	check_locale_name(LC_COLLATE, lc_collate, &canonname, COLLPROVIDER_LIBC);
+	if (lc_collate)
+		pfree(lc_collate);
 	lc_collate = canonname;
-	check_locale_name(LC_NUMERIC, lc_numeric, &canonname);
+
+	/* determine the collation provider if we haven't already done it */
+	if (!is_valid_nondefault_collprovider(collprovider))
+	{
+#ifdef USE_ICU
+		if (!locale_is_c(lc_collate))
+		{
+			collprovider = COLLPROVIDER_ICU;
+		}
+		else
+#endif
+		{
+			collprovider = COLLPROVIDER_LIBC;
+		}
+	}
+
+	Assert(is_valid_nondefault_collprovider(collprovider));
+
+	/* check lc_collate and lc_ctype for icu if we need it */
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+		check_locale_name(LC_COLLATE, lc_collate, NULL, collprovider);
+		if (strcmp(lc_collate, lc_ctype) != 0)
+		{
+			fprintf(stderr,
+					_("%s: collations with different collate and ctype values are not supported by ICU\n"),
+					progname);
+			exit(1);
+		}
+	}
+
+	check_locale_name(LC_NUMERIC, lc_numeric, &canonname, '\0');
 	lc_numeric = canonname;
-	check_locale_name(LC_TIME, lc_time, &canonname);
+	check_locale_name(LC_TIME, lc_time, &canonname, '\0');
 	lc_time = canonname;
-	check_locale_name(LC_MONETARY, lc_monetary, &canonname);
+	check_locale_name(LC_MONETARY, lc_monetary, &canonname, '\0');
 	lc_monetary = canonname;
 #if defined(LC_MESSAGES) && !defined(WIN32)
-	check_locale_name(LC_MESSAGES, lc_messages, &canonname);
+	check_locale_name(LC_MESSAGES, lc_messages, &canonname, '\0');
 	lc_messages = canonname;
 #else
 	/* when LC_MESSAGES is not available, use the LC_CTYPE setting */
-	check_locale_name(LC_CTYPE, lc_messages, &canonname);
+	check_locale_name(LC_CTYPE, lc_messages, &canonname, '\0');
 	lc_messages = canonname;
 #endif
+
+	set_collation_version();
 }
 
 /*
@@ -2593,6 +2794,9 @@ setup_locale_encoding(void)
 			   lc_time);
 	}
 
+	printf(_("The default collation provider is \"%s\".\n"),
+		   get_collprovider_name(collprovider));
+
 	if (!encoding)
 	{
 		int			ctype_enc;
@@ -2643,8 +2847,8 @@ setup_locale_encoding(void)
 	else
 		encodingid = get_encoding_id(encoding);
 
-	if (!check_locale_encoding(lc_ctype, encodingid) ||
-		!check_locale_encoding(lc_collate, encodingid))
+	if (!check_locale_encoding(lc_ctype, encodingid, '\0') ||
+		!check_locale_encoding(lc_collate, encodingid, collprovider))
 		exit(1);				/* check_locale_encoding printed the error */
 
 }
@@ -3419,4 +3623,114 @@ main(int argc, char *argv[])
 	destroyPQExpBuffer(start_db_cmd);
 
 	return 0;
+}
+
+#ifdef USE_ICU
+/*
+ * If locale is "" return the environment value from setlocale().
+ *
+ * Otherwise return a malloc'd copy of locale if it is not NULL.
+ *
+ * This should match the backend's check_icu_locale() function.
+ */
+static char *
+check_icu_locale_name(const char *locale)
+{
+	char	   *canonname = NULL;
+	char	   *winlocale = NULL;
+	char	   *result;
+
+	/* Windows locales can be in the format ".codepage" */
+	if (locale && (strlen(locale) == 0 || locale[0] == '.'))
+	{
+		check_locale_name(LC_COLLATE, locale, &canonname, COLLPROVIDER_LIBC);
+		locale = (const char *) canonname;
+	}
+
+#ifdef WIN32
+	if (!locale_is_c(locale))
+	{
+		winlocale = check_icu_winlocale(locale);
+
+		if (winlocale == NULL && locale != NULL)
+			exit(1);			/* check_icu_winlocale printed the error */
+		else
+			locale = winlocale;
+	}
+#endif
+
+	result = locale ? pstrdup(locale) : NULL;
+
+	if (canonname)
+		pfree(canonname);
+	if (winlocale)
+		pfree(winlocale);
+
+	return result;
+}
+#endif							/* USE_ICU */
+
+/*
+ * Setup the lc_collate version (get it from the collation provider).
+ */
+static void
+set_collation_version(void)
+{
+	char	   *wincollate = NULL;
+	char	   *langtag = NULL;
+	const char *collate;
+	bool		failure;
+
+	Assert(lc_collate);
+	Assert(is_valid_nondefault_collprovider(collprovider));
+
+	if (collprovider == COLLPROVIDER_ICU)
+	{
+#ifdef USE_ICU
+		collate = (const char *) lc_collate;
+
+#ifdef WIN32
+		if (!locale_is_c(collate))
+		{
+			wincollate = check_icu_winlocale(collate);
+
+			if (wincollate == NULL && collate != NULL)
+				exit(1);		/* check_icu_winlocale printed the error */
+			else
+				collate = (const char *) wincollate;
+		}
+#endif							/* WIN32 */
+
+		langtag = get_icu_language_tag(collate);
+		if (!langtag)
+		{
+			/* get_icu_language_tag printed the main error message */
+			fprintf(stderr, _("Rerun %s with a different locale selection.\n"),
+					progname);
+			exit(1);
+		}
+		collate = get_icu_collate(collate, langtag);
+#else							/* not USE_ICU */
+		fprintf(stderr,
+				_("%s: ICU is not supported in this build\n"
+				  "You need to rebuild PostgreSQL using --with-icu.\n"),
+				progname);
+		exit(1);
+#endif							/* not USE_ICU */
+	}
+	else
+	{
+		/* COLLPROVIDER_LIBC */
+		collate = (const char *) lc_collate;
+	}
+
+	get_collation_actual_version(collprovider, collate, &collversion, &failure);
+	if (failure)
+		/* get_collation_actual_version printed the error */
+		exit(1);
+
+	if (langtag)
+		free(langtag);
+	if (wincollate)
+		free(wincollate);
 }

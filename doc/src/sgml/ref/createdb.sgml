@@ -121,21 +121,33 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>-l <replaceable class="parameter">locale</replaceable></option></term>
-      <term><option>--locale=<replaceable class="parameter">locale</replaceable></option></term>
+      <term><option>-l <replaceable class="parameter">locale</replaceable>[@<replaceable>provider</replaceable>]</option></term>
+      <term><option>--locale=<replaceable class="parameter">locale</replaceable>[@<replaceable>provider</replaceable>]</option></term>
       <listitem>
        <para>
         Specifies the locale to be used in this database.  This is equivalent
         to specifying both <option>--lc-collate</option> and <option>--lc-ctype</option>.
        </para>
+
+       <para>
+        Optionally, you can specify the default collation provider after the
+        <literal>@</literal> symbol. Supported values are <literal>icu</literal>
+        and <literal>libc</literal>. For details, see <xref linkend="collation-managing"/>.
+       </para>
       </listitem>
      </varlistentry>
 
      <varlistentry>
-      <term><option>--lc-collate=<replaceable class="parameter">locale</replaceable></option></term>
+      <term><option>--lc-collate=<replaceable class="parameter">locale</replaceable>[@<replaceable>provider</replaceable>]</option></term>
       <listitem>
        <para>
         Specifies the LC_COLLATE setting to be used in this database.
+       </para>
+
+       <para>
+        Optionally, you can specify the default collation provider after the
+        <literal>@</literal> symbol. Supported values are <literal>icu</literal>
+        and <literal>libc</literal>. For details, see <xref linkend="collation-managing"/>.
        </para>
       </listitem>
      </varlistentry>

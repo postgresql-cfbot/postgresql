@@ -1446,7 +1446,7 @@ typedef int32_t (*ICU_Convert_Func) (UChar *dest, int32_t destCapacity,
 									 UErrorCode *pErrorCode);
 
 static int32_t
-icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
+icu_convert_case(ICU_Convert_Func func, const char *locale,
 				 UChar **buff_dest, UChar *buff_source, int32_t len_source)
 {
 	UErrorCode	status;
@@ -1456,7 +1456,7 @@ icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
 	*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 	status = U_ZERO_ERROR;
 	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-					mylocale->info.icu.locale, &status);
+					locale, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
@@ -1464,7 +1464,7 @@ icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
 		*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 		status = U_ZERO_ERROR;
 		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-						mylocale->info.icu.locale, &status);
+						locale, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,
@@ -1522,8 +1522,15 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 	else
 	{
 		pg_locale_t mylocale = 0;
+		char		collprovider;
+		bool		use_libc PG_USED_FOR_ASSERTS_ONLY,
+					use_icu;
 
-		if (collid != DEFAULT_COLLATION_OID)
+		if (collid == DEFAULT_COLLATION_OID)
+		{
+			collprovider = get_default_collprovider();
+		}
+		else
 		{
 			if (!OidIsValid(collid))
 			{
@@ -1537,25 +1544,43 @@ str_tolower(const char *buff, size_t nbytes, Oid collid)
 						 errhint("Use the COLLATE clause to set the collation explicitly.")));
 			}
 			mylocale = pg_newlocale_from_collation(collid);
+			collprovider = mylocale->provider;
 		}
 
-#ifdef USE_ICU
-		if (mylocale && mylocale->provider == COLLPROVIDER_ICU)
+		use_icu = (collprovider == COLLPROVIDER_ICU &&
+				   GetDatabaseEncoding() != PG_SQL_ASCII);
+		use_libc = (collprovider == COLLPROVIDER_LIBC ||
+					GetDatabaseEncoding() == PG_SQL_ASCII);
+		Assert(use_libc || use_icu);
+
+		if (use_icu)
 		{
+#ifdef USE_ICU
 			int32_t		len_uchar;
 			int32_t		len_conv;
 			UChar	   *buff_uchar;
 			UChar	   *buff_conv;
+			const char *locale;
+
+			if (mylocale)
+				locale = mylocale->info.icu.locale;
+			else
+				locale = get_icu_default_collate();
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToLower, mylocale,
+			len_conv = icu_convert_case(u_strToLower, locale,
 										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 			pfree(buff_uchar);
+#else							/* not USE_ICU */
+			/* shouldn't happen */
+			elog(ERROR, "unsupported collprovider: %c", collprovider);
+#endif							/* not USE_ICU */
 		}
 		else
-#endif
 		{
+			/* use_libc */
+
 			if (pg_database_encoding_max_length() > 1)
 			{
 				wchar_t    *workspace;
@@ -1644,8 +1669,15 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 	else
 	{
 		pg_locale_t mylocale = 0;
+		char		collprovider;
+		bool		use_libc PG_USED_FOR_ASSERTS_ONLY,
+					use_icu;
 
-		if (collid != DEFAULT_COLLATION_OID)
+		if (collid == DEFAULT_COLLATION_OID)
+		{
+			collprovider = get_default_collprovider();
+		}
+		else
 		{
 			if (!OidIsValid(collid))
 			{
@@ -1659,25 +1691,43 @@ str_toupper(const char *buff, size_t nbytes, Oid collid)
 						 errhint("Use the COLLATE clause to set the collation explicitly.")));
 			}
 			mylocale = pg_newlocale_from_collation(collid);
+			collprovider = mylocale->provider;
 		}
 
-#ifdef USE_ICU
-		if (mylocale && mylocale->provider == COLLPROVIDER_ICU)
+		use_icu = (collprovider == COLLPROVIDER_ICU &&
+				   GetDatabaseEncoding() != PG_SQL_ASCII);
+		use_libc = (collprovider == COLLPROVIDER_LIBC ||
+					GetDatabaseEncoding() == PG_SQL_ASCII);
+		Assert(use_libc || use_icu);
+
+		if (use_icu)
 		{
+#ifdef USE_ICU
 			int32_t		len_uchar,
 						len_conv;
 			UChar	   *buff_uchar;
 			UChar	   *buff_conv;
+			const char *locale;
+
+			if (mylocale)
+				locale = mylocale->info.icu.locale;
+			else
+				locale = get_icu_default_collate();
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToUpper, mylocale,
+			len_conv = icu_convert_case(u_strToUpper, locale,
 										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 			pfree(buff_uchar);
+#else							/* not USE_ICU */
+			/* shouldn't happen */
+			elog(ERROR, "unsupported collprovider: %c", collprovider);
+#endif							/* not USE_ICU */
 		}
 		else
-#endif
 		{
+			/* use_libc */
+
 			if (pg_database_encoding_max_length() > 1)
 			{
 				wchar_t    *workspace;
@@ -1767,8 +1817,15 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 	else
 	{
 		pg_locale_t mylocale = 0;
+		char		collprovider;
+		bool		use_libc PG_USED_FOR_ASSERTS_ONLY,
+					use_icu;
 
-		if (collid != DEFAULT_COLLATION_OID)
+		if (collid == DEFAULT_COLLATION_OID)
+		{
+			collprovider = get_default_collprovider();
+		}
+		else
 		{
 			if (!OidIsValid(collid))
 			{
@@ -1782,25 +1839,43 @@ str_initcap(const char *buff, size_t nbytes, Oid collid)
 						 errhint("Use the COLLATE clause to set the collation explicitly.")));
 			}
 			mylocale = pg_newlocale_from_collation(collid);
+			collprovider = mylocale->provider;
 		}
 
-#ifdef USE_ICU
-		if (mylocale && mylocale->provider == COLLPROVIDER_ICU)
+		use_icu = (collprovider == COLLPROVIDER_ICU &&
+				   GetDatabaseEncoding() != PG_SQL_ASCII);
+		use_libc = (collprovider == COLLPROVIDER_LIBC ||
+					GetDatabaseEncoding() == PG_SQL_ASCII);
+		Assert(use_libc || use_icu);
+
+		if (use_icu)
 		{
+#ifdef USE_ICU
 			int32_t		len_uchar,
 						len_conv;
 			UChar	   *buff_uchar;
 			UChar	   *buff_conv;
+			const char *locale;
+
+			if (mylocale)
+				locale = mylocale->info.icu.locale;
+			else
+				locale = get_icu_default_collate();
 
 			len_uchar = icu_to_uchar(&buff_uchar, buff, nbytes);
-			len_conv = icu_convert_case(u_strToTitle_default_BI, mylocale,
+			len_conv = icu_convert_case(u_strToTitle_default_BI, locale,
 										&buff_conv, buff_uchar, len_uchar);
 			icu_from_uchar(&result, buff_conv, len_conv);
 			pfree(buff_uchar);
+#else							/* not USE_ICU */
+			/* shouldn't happen */
+			elog(ERROR, "unsupported collprovider: %c", collprovider);
+#endif							/* not USE_ICU */
 		}
 		else
-#endif
 		{
+			/* use_libc */
+
 			if (pg_database_encoding_max_length() > 1)
 			{
 				wchar_t    *workspace;

@@ -458,6 +458,40 @@ extern int	pg_get_encoding_from_locale(const char *ctype, bool write_message);
 extern int	pg_codepage_to_encoding(UINT cp);
 #endif
 
+/* do not make libpq with icu */
+#ifndef LIBPQ_MAKE
+
+extern void check_locale_collprovider(const char *locale, char **canonname,
+									  char *collprovider, char **collversion);
+extern bool locale_is_c(const char *locale);
+extern char *get_full_collation_name(const char *locale, char collprovider,
+									 const char *collversion);
+
+#ifdef FRONTEND
+extern void get_collation_actual_version(char collprovider,
+										 const char *collcollate,
+										 char **collversion, bool *failure);
+#else
+extern char *get_collation_actual_version(char collprovider,
+										  const char *collcollate);
+#endif
+
+#ifdef USE_ICU
+#define ICU_ROOT_LOCALE "root"
+
+/* Users of this must import unicode/ucol.h too. */
+struct UCollator;
+extern struct UCollator *open_collator(const char *collate);
+
+extern char * get_icu_language_tag(const char *localename);
+extern const char *get_icu_collate(const char *locale, const char *langtag);
+#ifdef WIN32
+extern char * check_icu_winlocale(const char *winlocale);
+#endif							/* WIN32 */
+#endif							/* USE_ICU */
+
+#endif							/* not LIBPQ_MAKE */
+
 /* port/inet_net_ntop.c */
 extern char *inet_net_ntop(int af, const void *src, int bits,
 			  char *dst, size_t size);

@@ -986,6 +986,215 @@ getHashMurmur2(int64 val, uint64 seed)
 	return (int64) result;
 }
 
+/* pseudo-random permutation */
+
+/* 16 so that % 16 can be optimized to & 0x0f */
+#define PRP_PRIMES 16
+/* 27-29 bits mega primes from https://primes.utm.edu/lists/small/millions/ */
+static int64 primes[PRP_PRIMES] = {
+	INT64CONST(122949829),
+	INT64CONST(141650963),
+	INT64CONST(160481219),
+	INT64CONST(179424691),
+	INT64CONST(198491329),
+	INT64CONST(217645199),
+	INT64CONST(236887699),
+	INT64CONST(256203221),
+	INT64CONST(275604547),
+	INT64CONST(295075153),
+	INT64CONST(314606891),
+	INT64CONST(334214467),
+	INT64CONST(353868019),
+	INT64CONST(373587911),
+	INT64CONST(393342743),
+	INT64CONST(413158523)
+};
+
+/* how many "encryption" rounds to apply */
+#define PRP_ROUNDS 4
+
+/* return largest mask in 0 .. n-1 */
+static uint64 compute_prp_mask(uint64 n)
+{
+	n |= n >> 1;
+	n |= n >> 2;
+	n |= n >> 4;
+	n |= n >> 8;
+	n |= n >> 16;
+	n |= n >> 32;
+	return n >> 1;
+}
+
+/*
+ * Calculate (x * y) % m, where x and y in [0, 2^64), m in [1, 2^64).
+ *
+ * If x or y is greater than 2^32, improved interleaved modular
+ * multiplication algorithm is used to avoid overflow.
+ */
+static uint64 modular_multiplicate(uint64 x, uint64 y, const uint64 m)
+{
+	int		i, bits;
+	uint64		r = 0;
+
+	Assert(1 <= m);
+
+	/* Because of (x * y) % m = (x % m * y % m) % m */
+	if (x >= m)
+		x %= m;
+	if (y >= m)
+		y %= m;
+
+	/* Return the trivial result. */
+	if (x == 0 || y == 0 || m == 1)
+		return 0;
+
+	/* Return the result if (x * y) can be multiplicated without overflow. */
+	if ((x | y) < (0xffffffff))
+		return (x * y) % m;
+
+	/* To reduce the for loop in the algorithm below. */
+	if (x < y)
+	{
+		uint64 tmp = x;
+		x = y;
+		y = tmp;
+	}
+
+	/* Interleaved modular multiplication algorithm [1]
+	 *
+	 * This algorithm is usually used in the field of digital circuit
+	 * design.
+	 *
+	 * Input: X, Y, M; 0 <= X, Y <= M;
+	 * Output: R = X *  Y mod M;
+	 * bits: number of bits of Y
+	 * Y[i]: i th bit of Y
+	 *
+	 * 1. R = 0;
+	 * 2. for (i = bits - 1; i >= 0; i--) {
+	 * 3. 	R = 2 * R;
+	 * 4. 	if (Y[i] == 0x1)
+	 * 5. 		R += X;
+	 * 6. 	if (R >= M) R -= M;
+	 * 7.	if (R >= M) R -= M;
+	 *   }
+	 *
+	 * In Steps 3 and 5, overflow should be avoided.
+	 * Steps 6 and 7 can be instead of a modular operation (R %= M).
+	 *
+	 * Reference
+	 * [1] D.N. Amanor, et al, "Efficient hardware architecture for
+	 *    modular multiplication on FPGAs", in Field Programmable
+	 *    Logic and Apllications, 2005. International Conference on,
+	 *    Aug 2005, pp. 539-542.
+	 */
+
+	bits = 64;
+	while (bits > 0 && (y >> (64 - bits) | 0x1) == 0)
+		bits--;
+
+	for (i = bits - 1; i >= 0; i--)
+	{
+		if (r > 0x7fffffffffffffff)
+			/* To avoid overflow, transform from (2 * r) to
+			 * (2 * r) % m, and further transform to
+			 * mathematically equivalent form shown below:
+			 */
+			r = m - ((m - r) << 1);
+		else
+			r <<= 1;
+
+		if ((y >> i) & 0x1)
+		{
+			/* Calculate (r + x) without overflow using same
+			 * transformations described in the above comment.
+			 */
+			if (m > 0x7fffffffffffffff)
+				r = ((m - r) > x) ? r + x : r + x - m;
+			else
+				r = (r > m) ? r - m + x : r + x;
+		}
+
+		r %= m;
+	}
+
+	return r;
+}
+
+/* Donald Knuth linear congruential generator */
+#define DK_LCG_MUL INT64CONST(6364136223846793005)
+#define DK_LCG_INC INT64CONST(1442695040888963407)
+
+/* do not use all small bits */
+#define LCG_SHIFT 13
+
+/*
+ * PRP: parametric pseudo-random permutation
+ *
+ * Result in [0, size) is a permutation for inputs in the same set.
+ *
+ * Note that this function does not pass statistical tests: eg
+ * permutations of 2, 3, 4 or 5 ints are not strictly equiprobable.
+ * However it is inexpensive compared to an actual encryption function,
+ * and the quality is good enough to avoid trivial correlations on
+ * large sizes, which is the expected use case.
+ *
+ * THIS FUNCTION IS NOT CRYPTOGRAPHICALLY SECURE.
+ * PLEASE DO NOT USE FOR SUCH PURPOSE.
+ */
+static int64
+pseudorandom_perm(const int64 data, const int64 isize, const int64 seed)
+{
+	/* computations are performed on unsigned values */
+	uint64 key = (uint64) seed;
+	uint64 size = (uint64) isize;
+	uint64 v = (uint64) data % size;
+	/* size-1: ensures 2 possibly overlapping halves */
+	uint64 mask = compute_prp_mask(size-1);
+
+	unsigned int i, p;
+
+	/* nothing to permute */
+	if (isize == 1)
+		return 0;
+
+	Assert(isize >= 2);
+
+	/* apply 4 rounds of bijective transformations:
+	 * (1) scramble: partial xors on power-or-2 subsets
+	 * (2) scatter: linear modulo
+	 */
+	for (i = 0, p = key % PRP_PRIMES; i < PRP_ROUNDS; i++, p = (p + 1) % PRP_PRIMES)
+	{
+		uint64 t;
+
+		/* first "half" whitening, for v in 0 .. mask */
+		key = key * DK_LCG_MUL + DK_LCG_INC;
+		if (v <= mask)
+			v ^= (key >> LCG_SHIFT) & mask;
+
+		/* second (possibly overlapping) "half" whitening */
+		key = key * DK_LCG_MUL + DK_LCG_INC;
+		t = size - 1 - v;
+		if (t <= mask)
+		{
+			t ^= (key >> LCG_SHIFT) & mask;
+			v = size - 1 - t;
+		}
+
+		/* at most 2 primes are skipped for a given size */
+		while (unlikely(size % primes[p] == 0))
+			p = (p + 1) % PRP_PRIMES;
+
+		/* scatter values with a prime multiplication */
+		key = key * DK_LCG_MUL + DK_LCG_INC;
+		v = (modular_multiplicate((uint64)primes[p], v, size) + (key >> LCG_SHIFT)) % size;
+	}
+
+	/* back to signed */
+	return (int64) v;
+}
+
 /*
  * Initialize the given SimpleStats struct to all zeroes
  */
@@ -2316,6 +2525,26 @@ evalStandardFunc(TState *thread, CState *st,
 					/* cannot get here */
 					Assert(0);
 
+				return true;
+			}
+
+		case PGBENCH_PRPERM:
+			{
+				int64	val, size, seed;
+				Assert(nargs == 3);
+
+				if (!coerceToInt(&vargs[0], &val) ||
+					!coerceToInt(&vargs[1], &size) ||
+					!coerceToInt(&vargs[2], &seed))
+					return false;
+
+				if (size < 1)
+				{
+					fprintf(stderr, "pr_perm size parameter must be >= 1\n");
+					return false;
+				}
+
+				setIntValue(retval, pseudorandom_perm(val, size, seed));
 				return true;
 			}
 

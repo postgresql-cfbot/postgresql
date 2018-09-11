@@ -322,6 +322,14 @@ pgbench(
 		qr{command=96.: int 1\b},       # :scale
 		qr{command=97.: int 0\b},       # :client_id
 		qr{command=98.: int 5432\b},    # :random_seed
+		qr{command=99.: boolean true\b},
+		qr{command=100.: boolean true\b},
+		qr{command=101.: boolean true\b},
+		qr{command=102.: boolean true\b},
+		qr{command=103.: boolean true\b},
+		qr{command=107.: boolean true\b},
+		qr{command=108.: boolean true\b},
+		qr{command=109.: boolean true\b},
 	],
 	'pgbench expressions',
 	{
@@ -447,6 +455,24 @@ SELECT :v0, :v1, :v2, :v3;
 \set sc debug(:scale)
 \set ci debug(:client_id)
 \set rs debug(:random_seed)
+-- pseudo-random permutation
+\set t debug(pr_perm(0, 2) + pr_perm(1, 2) = 1)
+\set t debug(pr_perm(0, 3) + pr_perm(1, 3) + pr_perm(2, 3) = 3)
+\set t debug(pr_perm(0, 4) + pr_perm(1, 4) + pr_perm(2, 4) + pr_perm(3, 4) = 6)
+\set t debug(pr_perm(0, 5) + pr_perm(1, 5) + pr_perm(2, 5) + pr_perm(3, 5) + pr_perm(4, 5) = 10)
+\set t debug(pr_perm(0, 16) + pr_perm(1, 16) + pr_perm(2, 16) + pr_perm(3, 16) + \
+             pr_perm(4, 16) + pr_perm(5, 16) + pr_perm(6, 16) + pr_perm(7, 16) + \
+             pr_perm(8, 16) + pr_perm(9, 16) + pr_perm(10, 16) + pr_perm(11, 16) + \
+             pr_perm(12, 16) + pr_perm(13, 16) + pr_perm(14, 16) + pr_perm(15, 16) = 120)
+-- random sanity check
+\set size random(2, 1000)
+\set v random(0, :size - 1)
+\set p pr_perm(:v, :size)
+\set t debug(0 <= :p and :p < :size and :p = pr_perm(:v + :size, :size) and :p <> pr_perm(:v + 1, :size))
+-- actual values
+\set t debug(pr_perm(:v, 1) = 0)
+\set t debug(pr_perm(0, 2, 5432) = 0 and pr_perm(1, 2, 5432) = 1 and \
+             pr_perm(0, 2, 5431) = 1 and pr_perm(1, 2, 5431) = 0)
 }
 	});
 
@@ -731,6 +757,10 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	[
 		'bad boolean',                     0,
 		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true}
+	],
+	[
+		'invalid pr_perm size',				0,
+		[qr{pr_perm size parameter must be >= 1}], q{\set i pr_perm(0, 0)}
 	],);
 
 

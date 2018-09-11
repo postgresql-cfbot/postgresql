@@ -6387,6 +6387,34 @@ void *PQresultAlloc(PGresult *res, size_t nBytes);
     </listitem>
    </varlistentry>
 
+   <varlistentry id="libpq-pqresultmemsize">
+    <term>
+     <function>PQresultMemsize</function>
+     <indexterm>
+      <primary>PQresultMemsize</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      Retrieves the number of bytes allocated for a <structname>PGresult</structname> object.
+<synopsis>
+size_t PQresultMemsize(const PGresult *res);
+</synopsis>
+     </para>
+
+     <para>
+      The number of bytes includes the memory allocated for the PGresult itself,
+      memory to store data from the server, required internal metadata of a
+      PGresult object and data allocated by <function>PQresultAlloc</function>.
+      That is to say all memory which gets freed by <function>PQclear</function>.
+
+      This information can be used for diagnosing memory consumption and to instruct
+      a garbage collector about the memory consumed behind a wrapping object.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="libpq-pqlibversion">
     <term>
      <function>PQlibVersion</function>

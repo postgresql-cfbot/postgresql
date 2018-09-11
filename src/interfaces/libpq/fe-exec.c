@@ -166,6 +166,7 @@ PQmakeEmptyPGresult(PGconn *conn, ExecStatusType status)
 	result->curBlock = NULL;
 	result->curOffset = 0;
 	result->spaceLeft = 0;
+	result->memsize = sizeof(PGresult);
 
 	if (conn)
 	{
@@ -213,6 +214,12 @@ PQmakeEmptyPGresult(PGconn *conn, ExecStatusType status)
 	}
 
 	return result;
+}
+
+size_t
+PQresultMemsize(const PGresult *res)
+{
+	return res->memsize;
 }
 
 /*
@@ -567,9 +574,11 @@ pqResultAlloc(PGresult *res, size_t nBytes, bool isBinary)
 	 */
 	if (nBytes >= PGRESULT_SEP_ALLOC_THRESHOLD)
 	{
-		block = (PGresult_data *) malloc(nBytes + PGRESULT_BLOCK_OVERHEAD);
+		size_t alloc_size = nBytes + PGRESULT_BLOCK_OVERHEAD;
+		block = (PGresult_data *) malloc(alloc_size);
 		if (!block)
 			return NULL;
+		res->memsize += alloc_size;
 		space = block->space + PGRESULT_BLOCK_OVERHEAD;
 		if (res->curBlock)
 		{
@@ -594,6 +603,7 @@ pqResultAlloc(PGresult *res, size_t nBytes, bool isBinary)
 	block = (PGresult_data *) malloc(PGRESULT_DATA_BLOCKSIZE);
 	if (!block)
 		return NULL;
+	res->memsize += PGRESULT_DATA_BLOCKSIZE;
 	block->next = res->curBlock;
 	res->curBlock = block;
 	if (isBinary)
@@ -711,6 +721,7 @@ PQclear(PGresult *res)
 	res->errFields = NULL;
 	res->events = NULL;
 	res->nEvents = 0;
+	res->memsize = 0;
 	/* res->curBlock was zeroed out earlier */
 
 	/* Free the PGresult structure itself */
@@ -927,6 +938,7 @@ pqAddTuple(PGresult *res, PGresAttValue *tup, const char **errmsgp)
 				realloc(res->tuples, newSize * sizeof(PGresAttValue *));
 		if (!newTuples)
 			return false;		/* malloc or realloc failed */
+		res->memsize += (newSize - res->tupArrSize) * sizeof(PGresAttValue *);
 		res->tupArrSize = newSize;
 		res->tuples = newTuples;
 	}

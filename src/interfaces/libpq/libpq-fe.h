@@ -491,6 +491,7 @@ extern int	PQgetlength(const PGresult *res, int tup_num, int field_num);
 extern int	PQgetisnull(const PGresult *res, int tup_num, int field_num);
 extern int	PQnparams(const PGresult *res);
 extern Oid	PQparamtype(const PGresult *res, int param_num);
+extern size_t	PQresultMemsize(const PGresult *res);
 
 /* Describe prepared statements and portals */
 extern PGresult *PQdescribePrepared(PGconn *conn, const char *stmt);

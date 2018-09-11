@@ -1591,6 +1591,15 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
     </varlistentry>
     </variablelist>
    </para>
+
+   <para>
+    Integer values expected for keywords <literal>port</literal>,
+    <literal>connect_timeout</literal>, <literal>keepalives_idle</literal>,
+    <literal>keepalives_interval</literal> and
+    <literal>keepalives_timeout</literal> are parsed more strictly as
+    of <product>PostgreSQL<product> 12, i.e. values including trailing garbage
+    or overflowing are rejected.
+   </para>
   </sect2>
  </sect1>
 

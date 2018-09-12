@@ -61,7 +61,7 @@ CREATE ACCESS METHOD <replaceable class="parameter">name</replaceable>
     <listitem>
      <para>
       This clause specifies the type of access method to define.
-      Only <literal>INDEX</literal> is supported at present.
+      <literal>INDEX</literal> and <literal>COMPRESSION</literal> types are supported at present.
      </para>
     </listitem>
    </varlistentry>
@@ -79,6 +79,9 @@ CREATE ACCESS METHOD <replaceable class="parameter">name</replaceable>
       be <type>index_am_handler</type>.  The C-level API that the handler
       function must implement varies depending on the type of access method.
       The index access method API is described in <xref linkend="indexam"/>.
+      For <literal>COMPRESSION</literal> access methods, the type must be
+      <type>compression_am_handler</type>. The compression access method API
+      is described in <xref linkend="compression-am"/>.
      </para>
     </listitem>
    </varlistentry>

@@ -65,6 +65,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ] |
   UNIQUE <replaceable class="parameter">index_parameters</replaceable> |
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
+  COMPRESSION <replaceable class="parameter">compression_access_method</replaceable> [ WITH (<replaceable class="parameter">compression_am_options</replaceable>) ] |
   REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
     [ ON DELETE <replaceable class="parameter">action</replaceable> ] [ ON UPDATE <replaceable class="parameter">action</replaceable> ] }
 [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
@@ -917,6 +918,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       the constraint still depends on them. Consequently, some operations on the
       included columns (e.g. <literal>DROP COLUMN</literal>) can cause cascaded
       constraint and index deletion.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>COMPRESSION <replaceable class="parameter">compression_access_method</replaceable> [ WITH (<replaceable class="parameter">compression_am_options</replaceable>) ]</literal></term>
+    <listitem>
+     <para>
+      This clause adds compression to a column. Compression method could be
+      created with <xref linkend="sql-create-access-method"/>. If compression
+      method has options they could be specified by <literal>WITH</literal>
+      parameter.
      </para>
     </listitem>
    </varlistentry>

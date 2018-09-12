@@ -47,7 +47,7 @@
   <title>Basic API Structure for Indexes</title>
 
   <para>
-   Each index access method is described by a row in the
+   Each index access method is described by a row with INDEX type in the
    <link linkend="catalog-pg-am"><structname>pg_am</structname></link>
    system catalog.  The <structname>pg_am</structname> entry
    specifies a name and a <firstterm>handler function</firstterm> for the access

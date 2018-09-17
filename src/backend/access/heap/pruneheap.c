@@ -130,8 +130,11 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 	 * important than sometimes getting a wrong answer in what is after all
 	 * just a heuristic estimate.
 	 */
-	minfree = RelationGetTargetPageFreeSpace(relation,
-											 HEAP_DEFAULT_FILLFACTOR);
+
+	if (IsToastRelation(relation))
+		minfree = ToastGetTargetPageFreeSpace();
+	else
+		minfree = HeapGetTargetPageFreeSpace(relation);
 	minfree = Max(minfree, BLCKSZ / 10);
 
 	if (PageIsFull(page) || PageGetHeapFreeSpace(page) < minfree)

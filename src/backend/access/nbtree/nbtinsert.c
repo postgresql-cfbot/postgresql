@@ -1610,8 +1610,7 @@ _bt_findsplitloc(Relation rel,
 	state.is_rightmost = P_RIGHTMOST(opaque);
 	state.have_split = false;
 	if (state.is_leaf)
-		state.fillfactor = RelationGetFillFactor(rel,
-												 BTREE_DEFAULT_FILLFACTOR);
+		state.fillfactor = BTGetFillFactor(rel);
 	else
 		state.fillfactor = BTREE_NONLEAF_FILLFACTOR;
 	state.newitemonleft = false;	/* these just to keep compiler quiet */

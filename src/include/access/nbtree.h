@@ -489,6 +489,19 @@ typedef BTScanOpaqueData *BTScanOpaque;
 #define SK_BT_DESC			(INDOPTION_DESC << SK_BT_INDOPTION_SHIFT)
 #define SK_BT_NULLS_FIRST	(INDOPTION_NULLS_FIRST << SK_BT_INDOPTION_SHIFT)
 
+typedef struct BTRelOptions
+{
+	int32	varlena_header_;	/* varlena header (do not touch directly!) */
+	int		fillfactor;			/* page fill factor in percent (0..100) */
+	/* fraction of newly inserted tuples prior to trigger index cleanup */
+	float8		vacuum_cleanup_index_scale_factor;
+}	BTRelOptions;
+
+#define BTGetFillFactor(relation) \
+	((relation)->rd_options ? \
+		((BTRelOptions *) (relation)->rd_options)->fillfactor : \
+		BTREE_DEFAULT_FILLFACTOR)
+
 /*
  * external entry points for btree, in nbtree.c
  */

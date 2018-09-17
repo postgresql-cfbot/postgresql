@@ -402,8 +402,7 @@ SpGistGetBuffer(Relation index, int flags, int needSpace, bool *isNew)
 	 * related to the ones already on it.  But fillfactor mustn't cause an
 	 * error for requests that would otherwise be legal.
 	 */
-	needSpace += RelationGetTargetPageFreeSpace(index,
-												SPGIST_DEFAULT_FILLFACTOR);
+	needSpace += (BLCKSZ * (100 - SpGistGetFillFactor(index)) / 100);
 	needSpace = Min(needSpace, SPGIST_PAGE_CAPACITY);
 
 	/* Get the cache entry for this flags setting */
@@ -580,7 +579,28 @@ SpGistInitMetapage(Page page)
 bytea *
 spgoptions(Datum reloptions, bool validate)
 {
-	return default_reloptions(reloptions, validate, RELOPT_KIND_SPGIST);
+	relopt_value       *options;
+	SpGistRelOptions   *rdopts;
+	int					numoptions;
+	static const relopt_parse_elt tab[] = {
+		{"fillfactor", RELOPT_TYPE_INT, offsetof(SpGistRelOptions, fillfactor)},
+	};
+
+	options = parseRelOptions(reloptions, validate, RELOPT_KIND_SPGIST,
+							  &numoptions);
+
+	/* if none set, we're done */
+	if (numoptions == 0)
+		return NULL;
+
+	rdopts = allocateReloptStruct(sizeof(SpGistRelOptions), options, numoptions);
+
+	fillRelOptions((void *) rdopts, sizeof(SpGistRelOptions), options, numoptions,
+				   validate, tab, lengthof(tab));
+
+	pfree(options);
+
+	return (bytea *) rdopts;
 }
 
 /*

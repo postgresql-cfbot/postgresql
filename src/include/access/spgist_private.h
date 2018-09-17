@@ -21,6 +21,17 @@
 #include "utils/relcache.h"
 
 
+typedef struct SpGistRelOptions
+{
+	int32		varlena_header_;	/* varlena header (do not touch directly!) */
+	int			fillfactor;		/* page fill factor in percent (0..100) */
+}	SpGistRelOptions;
+
+#define SpGistGetFillFactor(relation) \
+	((relation)->rd_options ? \
+		((SpGistRelOptions *) (relation)->rd_options)->fillfactor : \
+		SPGIST_DEFAULT_FILLFACTOR)
+
 /* Page numbers of fixed-location pages */
 #define SPGIST_METAPAGE_BLKNO	 (0)	/* metapage */
 #define SPGIST_ROOT_BLKNO		 (1)	/* root for normal entries */
@@ -383,6 +394,11 @@ typedef SpGistDeadTupleData *SpGistDeadTuple;
 #define GBUF_REQ_NULLS(flags)	((flags) & GBUF_NULLS)
 
 /* spgutils.c */
+
+/* reloption parameters */
+#define SPGIST_MIN_FILLFACTOR			10
+#define SPGIST_DEFAULT_FILLFACTOR		80
+
 extern SpGistCache *spgGetCache(Relation index);
 extern void initSpGistState(SpGistState *state, Relation index);
 extern Buffer SpGistNewBuffer(Relation index);

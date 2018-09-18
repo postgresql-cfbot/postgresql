@@ -413,6 +413,20 @@ emptied yet; tuples never move upwards in the tree. The final emptying loops
 through buffers at a given level until all buffers at that level have been
 emptied, and then moves down to the next level.
 
+Bulk delete algorithm (VACUUM)
+------------------------------
+
+Function gistbulkdelete() is responsible for marking empty leaf pages as free
+so that they can be used it allocate newly split pages. To find this pages
+function scans index in physical order.
+
+Physical scan reads the entire index from the first page to last. This scan
+maintains information necessary to collect block numbers of internal pages
+that need cleansing and block number of empty leafs.
+
+After the scan, for each internal pages under exclusive lock, each potentially
+free leaf page is examined. gistbulkdelete() never delete last one reference
+from internal page to preserve balanced tree properties.
 
 Authors:
 	Teodor Sigaev	<teodor@sigaev.ru>

@@ -16,6 +16,7 @@
 
 #include "access/amapi.h"
 #include "access/gist.h"
+#include "access/gistxlog.h"
 #include "access/itup.h"
 #include "fmgr.h"
 #include "lib/pairingheap.h"
@@ -51,6 +52,11 @@ typedef struct
 	char		tupledata[FLEXIBLE_ARRAY_MEMBER];
 } GISTNodeBufferPage;
 
+typedef struct
+{
+	BlockNumber childblkno;		/* hash key */
+	BlockNumber parentblkno;
+} ParentMapEntry;
 #define BUFFER_PAGE_DATA_OFFSET MAXALIGN(offsetof(GISTNodeBufferPage, tupledata))
 /* Returns free space in node buffer page */
 #define PAGE_FREE_SPACE(nbp) (nbp->freespace)
@@ -175,13 +181,6 @@ typedef struct GISTScanOpaqueData
 } GISTScanOpaqueData;
 
 typedef GISTScanOpaqueData *GISTScanOpaque;
-
-/* despite the name, gistxlogPage is not part of any xlog record */
-typedef struct gistxlogPage
-{
-	BlockNumber blkno;
-	int			num;			/* number of index tuples following */
-} gistxlogPage;
 
 /* SplitedPageLayout - gistSplit function result */
 typedef struct SplitedPageLayout
@@ -408,6 +407,17 @@ extern bool gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 
 extern SplitedPageLayout *gistSplit(Relation r, Page page, IndexTuple *itup,
 		  int len, GISTSTATE *giststate);
+
+/* gistxlog.c */
+extern void gist_redo(XLogReaderState *record);
+extern void gist_desc(StringInfo buf, XLogReaderState *record);
+extern const char *gist_identify(uint8 info);
+extern void gist_xlog_startup(void);
+extern void gist_xlog_cleanup(void);
+
+extern XLogRecPtr gistXLogSetDeleted(RelFileNode node, Buffer buffer,
+					TransactionId xid, Buffer internalPageBuffer,
+					OffsetNumber internalPageOffset);
 
 extern XLogRecPtr gistXLogUpdate(Buffer buffer,
 			   OffsetNumber *todelete, int ntodelete,

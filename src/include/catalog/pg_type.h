@@ -52,7 +52,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 * "varlena" type (one that has a length word), -2 to indicate a
 	 * null-terminated C string.
 	 */
-	int16		typlen;
+	int16		typlen BKI_ARRAY_TYPE(-1);
 
 	/*
 	 * typbyval determines whether internal Postgres routines pass a value of
@@ -62,7 +62,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 * typbyval can be false even if the length would allow pass-by-value; for
 	 * example, type macaddr8 is pass-by-ref even when Datum is 8 bytes.
 	 */
-	bool		typbyval;
+	bool		typbyval BKI_ARRAY_TYPE(f);
 
 	/*
 	 * typtype is 'b' for a base type, 'c' for a composite type (e.g., a
@@ -71,7 +71,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 *
 	 * If typtype is 'c', typrelid is the OID of the class' entry in pg_class.
 	 */
-	char		typtype BKI_DEFAULT(b);
+	char		typtype BKI_DEFAULT(b) BKI_ARRAY_TYPE(b);
 
 	/*
 	 * typcategory and typispreferred help the parser distinguish preferred
@@ -81,10 +81,10 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 */
 
 	/* arbitrary type classification */
-	char		typcategory;
+	char		typcategory BKI_ARRAY_TYPE(A);
 
 	/* is type "preferred" within its category? */
-	bool		typispreferred BKI_DEFAULT(f);
+	bool		typispreferred BKI_DEFAULT(f) BKI_ARRAY_TYPE(f);
 
 	/*
 	 * If typisdefined is false, the entry is only a placeholder (forward
@@ -116,19 +116,19 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 * If there is a "true" array type having this type as element type,
 	 * typarray links to it.  Zero if no associated "true" array type.
 	 */
-	Oid			typarray BKI_DEFAULT(0) BKI_LOOKUP(pg_type);
+	Oid			typarray BKI_DEFAULT(0) BKI_ARRAY_TYPE(0) BKI_LOOKUP(pg_type);
 
 	/*
 	 * I/O conversion procedures for the datatype.
 	 */
 
 	/* text format (required) */
-	regproc		typinput BKI_LOOKUP(pg_proc);
-	regproc		typoutput BKI_LOOKUP(pg_proc);
+	regproc		typinput BKI_ARRAY_TYPE(array_in) BKI_LOOKUP(pg_proc);
+	regproc		typoutput BKI_ARRAY_TYPE(array_out) BKI_LOOKUP(pg_proc);
 
 	/* binary format (optional) */
-	regproc		typreceive BKI_LOOKUP(pg_proc);
-	regproc		typsend BKI_LOOKUP(pg_proc);
+	regproc		typreceive BKI_ARRAY_TYPE(array_recv) BKI_LOOKUP(pg_proc);
+	regproc		typsend BKI_ARRAY_TYPE(array_send) BKI_LOOKUP(pg_proc);
 
 	/*
 	 * I/O functions for optional type modifiers.
@@ -139,7 +139,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	/*
 	 * Custom ANALYZE procedure for the datatype (0 selects the default).
 	 */
-	regproc		typanalyze BKI_DEFAULT(-) BKI_LOOKUP(pg_proc);
+	regproc		typanalyze BKI_DEFAULT(-) BKI_ARRAY_TYPE(array_typanalyze) BKI_LOOKUP(pg_proc);
 
 	/* ----------------
 	 * typalign is the alignment required when storing a value of this
@@ -177,7 +177,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 * 'm' MAIN		  like 'x' but try to keep in main tuple
 	 * ----------------
 	 */
-	char		typstorage BKI_DEFAULT(p);
+	char		typstorage BKI_DEFAULT(p) BKI_ARRAY_TYPE(x);
 
 	/*
 	 * This flag represents a "NOT NULL" constraint against this datatype.

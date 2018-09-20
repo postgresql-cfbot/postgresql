@@ -191,6 +191,10 @@ sub ParseHeader
 					{
 						$column{default} = $1;
 					}
+					elsif ($attopt =~ /BKI_ARRAY_TYPE\(['"]?([^'"]+)['"]?\)/)
+					{
+						$column{array} = $1;
+					}
 					elsif ($attopt =~ /BKI_LOOKUP\((\w+)\)/)
 					{
 						$column{lookup} = $1;
@@ -290,6 +294,10 @@ sub ParseData
 		}
 	}
 	close $ifd;
+
+	# Generate array types unless we're just reformatting the file
+	Catalog::GenArrayTypes($schema, $data)
+		if $catname eq 'pg_type' and !$preserve_formatting;
 	return $data;
 }
 
@@ -448,6 +456,8 @@ sub FindAllOidsFromHeaders
 			foreach my $row (@$catdata)
 			{
 				push @oids, $row->{oid} if defined $row->{oid};
+				push @oids, $row->{array_type_oid}
+					if defined $row->{array_type_oid};
 			}
 		}
 
@@ -462,6 +472,53 @@ sub FindAllOidsFromHeaders
 	}
 
 	return \@oids;
+}
+
+# If the type specifies an array type OID, generate an entry for the array
+# type using values from the element type, plus some values that are needed
+# for all array types.
+sub GenArrayTypes
+{
+	my $pgtype_schema = shift;
+	my $types = shift;
+	my @array_types;
+
+	foreach my $elem_type (@$types)
+	{
+		next if !exists $elem_type->{array_type_oid};
+		my %array_type;
+
+		# Specific values derived from the element type.
+		$array_type{oid}     = $elem_type->{array_type_oid};
+		$array_type{typname} = '_' . $elem_type->{typname};
+		$array_type{typelem} = $elem_type->{typname};
+
+		# Arrays require INT alignment, unless the element type requires
+		# DOUBLE alignment.
+		$array_type{typalign} = $elem_type->{typalign} eq 'd' ? 'd' : 'i';
+
+		# Fill in the rest of the values.
+		foreach my $column (@$pgtype_schema)
+		{
+			my $attname = $column->{name};
+
+			# Skip if we already set it above.
+			next if defined $array_type{$attname};
+
+			# If we have a value needed for all arrays, use it, otherwise
+			# copy the value from the element type.
+			if (defined $column->{array})
+			{
+				$array_type{$attname} = $column->{array};
+			}
+			else
+			{
+				$array_type{$attname} = $elem_type->{$attname};
+			}
+		}
+		push @array_types, \%array_type;
+	}
+	push @$types, @array_types;
 }
 
 1;

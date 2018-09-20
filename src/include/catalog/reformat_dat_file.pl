@@ -63,7 +63,7 @@ if ($output_path ne '' && substr($output_path, -1) ne '/')
 }
 
 # Metadata of a catalog entry
-my @METADATA = ('oid', 'oid_symbol', 'descr');
+my @METADATA = ('oid', 'oid_symbol', 'descr', 'array_type_oid');
 
 # Read all the input files into internal data structures.
 # We pass data file names as arguments and then look for matching

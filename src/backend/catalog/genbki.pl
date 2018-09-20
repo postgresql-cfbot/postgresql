@@ -395,7 +395,8 @@ EOM
 			  if $key eq "oid"
 			  || $key eq "oid_symbol"
 			  || $key eq "descr"
-			  || $key eq "line_number";
+			  || $key eq "line_number"
+			  || $key eq "array_type_oid";
 			die sprintf "unrecognized field name \"%s\" in %s.dat line %s\n",
 			  $key, $catname, $bki_values{line_number}
 			  if (!exists($attnames{$key}));

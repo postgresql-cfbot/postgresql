@@ -1739,6 +1739,7 @@ void
 EventTriggerAlterTableRelid(Oid objectId)
 {
 	if (!currentEventTriggerState ||
+		!currentEventTriggerState->currentCommand ||
 		currentEventTriggerState->commandCollectionInhibited)
 		return;
 

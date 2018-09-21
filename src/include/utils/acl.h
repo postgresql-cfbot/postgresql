@@ -295,6 +295,7 @@ extern bool pg_opclass_ownercheck(Oid opc_oid, Oid roleid);
 extern bool pg_opfamily_ownercheck(Oid opf_oid, Oid roleid);
 extern bool pg_database_ownercheck(Oid db_oid, Oid roleid);
 extern bool pg_collation_ownercheck(Oid coll_oid, Oid roleid);
+extern bool pg_constraint_ownercheck(Oid constr_oid, Oid roleid);
 extern bool pg_conversion_ownercheck(Oid conv_oid, Oid roleid);
 extern bool pg_ts_dict_ownercheck(Oid dict_oid, Oid roleid);
 extern bool pg_ts_config_ownercheck(Oid cfg_oid, Oid roleid);

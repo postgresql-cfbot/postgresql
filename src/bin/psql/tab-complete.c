@@ -407,6 +407,24 @@ static const SchemaQuery Query_for_list_of_aggregates[] = {
 	}
 };
 
+static const SchemaQuery Query_for_list_of_assertions = {
+	/* min_server_version */
+	0,
+	/* catname */
+	"pg_catalog.pg_constraint c",
+	/* selcondition */
+	"(c.conrelid = 0 AND c.contypid = 0)",
+	/* viscondition */
+	"TRUE", //TODO: "pg_catalog.pg_constraint_is_visible(c.oid)",
+	/* namespace */
+	"c.connamespace",
+	/* result */
+	"pg_catalog.quote_ident(c.conname)",
+	/* qualresult */
+	NULL
+};
+
+
 static const SchemaQuery Query_for_list_of_datatypes = {
 	.catname = "pg_catalog.pg_type t",
 	/* selcondition --- ignore table rowtypes and array types */
@@ -997,6 +1015,7 @@ typedef struct
 static const pgsql_thing_t words_after_create[] = {
 	{"ACCESS METHOD", NULL, NULL, NULL, THING_NO_ALTER},
 	{"AGGREGATE", NULL, NULL, Query_for_list_of_aggregates},
+	{"ASSERTION", NULL, NULL, &Query_for_list_of_assertions},
 	{"CAST", NULL, NULL, NULL}, /* Casts have complex structures for names, so
 								 * skip it */
 	{"COLLATION", "SELECT pg_catalog.quote_ident(collname) FROM pg_catalog.pg_collation WHERE collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding())) AND substring(pg_catalog.quote_ident(collname),1,%d)='%s'"},
@@ -1423,7 +1442,7 @@ psql_completion(const char *text, int start, int end)
 		"\\a",
 		"\\connect", "\\conninfo", "\\C", "\\cd", "\\copy",
 		"\\copyright", "\\crosstabview",
-		"\\d", "\\da", "\\dA", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
+		"\\d", "\\da", "\\dA", "\\dQ", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
 		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp",
@@ -1573,6 +1592,11 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SCHEMA <name> */
 	else if (Matches3("ALTER", "SCHEMA", MatchAny))
 		COMPLETE_WITH_LIST2("OWNER TO", "RENAME TO");
+
+	// TODO ASSERTION
+
+	else if (Matches3("ALTER", "ASSERTION", MatchAny))
+		COMPLETE_WITH_CONST("RENAME TO ");
 
 	/* ALTER COLLATION <name> */
 	else if (Matches3("ALTER", "COLLATION", MatchAny))
@@ -2709,7 +2733,7 @@ psql_completion(const char *text, int start, int end)
 /* DROP */
 	/* Complete DROP object with CASCADE / RESTRICT */
 	else if (Matches3("DROP",
-					  "COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|PUBLICATION|SCHEMA|SEQUENCE|SERVER|SUBSCRIPTION|STATISTICS|TABLE|TYPE|VIEW",
+					  "ASSERTION|COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|PUBLICATION|SCHEMA|SEQUENCE|SERVER|SUBSCRIPTION|STATISTICS|TABLE|TYPE|VIEW",
 					  MatchAny) ||
 			 Matches4("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 (Matches4("DROP", "AGGREGATE|FUNCTION|PROCEDURE|ROUTINE", MatchAny, MatchAny) &&
@@ -3445,6 +3469,8 @@ psql_completion(const char *text, int start, int end)
 	}
 	else if (TailMatchesCS1("\\da*"))
 		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
+	else if (TailMatchesCS1("\\dQ*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_assertions, NULL);
 	else if (TailMatchesCS1("\\dA*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (TailMatchesCS1("\\db*"))

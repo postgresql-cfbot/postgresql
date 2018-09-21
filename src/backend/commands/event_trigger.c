@@ -88,6 +88,7 @@ typedef enum
 static event_trigger_support_data event_trigger_support[] = {
 	{"ACCESS METHOD", true},
 	{"AGGREGATE", true},
+	{"ASSERTION", true},
 	{"CAST", true},
 	{"CONSTRAINT", true},
 	{"COLLATION", true},
@@ -1103,6 +1104,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 			return false;
 		case OBJECT_ACCESS_METHOD:
 		case OBJECT_AGGREGATE:
+		case OBJECT_ASSERTION:
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
@@ -2214,6 +2216,8 @@ stringify_grant_objtype(ObjectType objtype)
 {
 	switch (objtype)
 	{
+		case OBJECT_ASSERTION:
+			return "ASSERTION";
 		case OBJECT_COLUMN:
 			return "COLUMN";
 		case OBJECT_TABLE:
@@ -2296,6 +2300,8 @@ stringify_adefprivs_objtype(ObjectType objtype)
 {
 	switch (objtype)
 	{
+		case OBJECT_ASSERTION:
+			return "ASSERTIONS";
 		case OBJECT_COLUMN:
 			return "COLUMNS";
 		case OBJECT_TABLE:

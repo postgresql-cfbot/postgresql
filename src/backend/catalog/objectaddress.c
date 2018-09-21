@@ -898,6 +898,11 @@ get_object_address(ObjectType objtype, Node *object,
 				address.objectId = LookupOperWithArgs(castNode(ObjectWithArgs, object), missing_ok);
 				address.objectSubId = 0;
 				break;
+			case OBJECT_ASSERTION:
+				address.classId = ConstraintRelationId;
+				address.objectId = get_assertion_oid(castNode(List, object), missing_ok);
+				address.objectSubId = 0;
+				break;
 			case OBJECT_COLLATION:
 				address.classId = CollationRelationId;
 				address.objectId = get_collation_oid(castNode(List, object), missing_ok);
@@ -2117,6 +2122,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_FOREIGN_TABLE:
 		case OBJECT_COLUMN:
 		case OBJECT_ATTRIBUTE:
+		case OBJECT_ASSERTION:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_STATISTIC_EXT:
@@ -2276,6 +2282,11 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 			if (!pg_namespace_ownercheck(address.objectId, roleid))
 				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
 							   strVal((Value *) object));
+			break;
+		case OBJECT_ASSERTION:
+			if (!pg_constraint_ownercheck(address.objectId, roleid))
+				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
+							   NameListToString(castNode(List, object)));
 			break;
 		case OBJECT_COLLATION:
 			if (!pg_collation_ownercheck(address.objectId, roleid))

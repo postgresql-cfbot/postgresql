@@ -766,6 +766,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'p':
 				success = permissionsList(pattern);
 				break;
+			case 'Q':
+				success = describeAssertions(pattern);
+				break;
 			case 'T':
 				success = describeTypes(pattern, show_verbose, show_system);
 				break;

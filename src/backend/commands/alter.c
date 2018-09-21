@@ -41,6 +41,7 @@
 #include "commands/alter.h"
 #include "commands/collationcmds.h"
 #include "commands/conversioncmds.h"
+#include "commands/constraint.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
@@ -326,6 +327,9 @@ ExecRenameStmt(RenameStmt *stmt)
 {
 	switch (stmt->renameType)
 	{
+		case OBJECT_ASSERTION:
+			return RenameAssertion(stmt);
+
 		case OBJECT_TABCONSTRAINT:
 		case OBJECT_DOMCONSTRAINT:
 			return RenameConstraint(stmt);
@@ -491,6 +495,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 
 			/* generic code path */
 		case OBJECT_AGGREGATE:
+		case OBJECT_ASSERTION:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_FUNCTION:
@@ -838,6 +843,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 
 			/* Generic cases */
 		case OBJECT_AGGREGATE:
+		case OBJECT_ASSERTION:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_FUNCTION:

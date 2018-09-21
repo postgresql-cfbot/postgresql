@@ -1569,6 +1569,25 @@ get_func_retset(Oid funcid)
 }
 
 /*
+ * get_func_lang
+ *		Given procedure id, return the function's language id.
+ */
+Oid
+get_func_lang(Oid funcid)
+{
+	HeapTuple	tp;
+	Oid			result;
+
+	tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for function %u", funcid);
+
+	result = ((Form_pg_proc) GETSTRUCT(tp))->prolang;
+	ReleaseSysCache(tp);
+	return result;
+}
+
+/*
  * func_strict
  *		Given procedure id, return the function's proisstrict flag.
  */

@@ -597,6 +597,13 @@ CloneForeignKeyConstraints(Oid parentId, Oid relationId, List **cloned)
 
 			*cloned = lappend(*cloned, newc);
 		}
+		else if (conCat == CONSTRAINT_ASSERTION
+				 && con->conrelid == InvalidOid
+				 && con->contypid == InvalidOid)
+		{
+			found = true;
+			break;
+		}
 	}
 	systable_endscan(scan);
 
@@ -869,8 +876,7 @@ RemoveConstraintById(Oid conId)
 		 * but we have no such concept at the moment.
 		 */
 	}
-	else
-		elog(ERROR, "constraint %u is not of a known type", conId);
+	/* Else it's an assertion; nothing special for that. */
 
 	/* Fry the constraint itself */
 	CatalogTupleDelete(conDesc, &tup->t_self);
@@ -923,6 +929,16 @@ RenameConstraintById(Oid conId, const char *newname)
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("constraint \"%s\" for domain %s already exists",
 						newname, format_type_be(con->contypid))));
+	if (!OidIsValid(con->conrelid) &&
+		!OidIsValid(con->contypid) &&
+		ConstraintNameIsUsed(CONSTRAINT_ASSERTION,
+							 InvalidOid,
+							 con->connamespace,
+							 newname))
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+						errmsg("assertion \"%s\" already exists",
+							   newname)));
 
 	/* OK, do the rename --- tuple is a copy, so OK to scribble on it */
 	namestrcpy(&(con->conname), newname);

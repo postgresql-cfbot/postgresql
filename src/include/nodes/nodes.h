@@ -418,6 +418,7 @@ typedef enum NodeTag
 	T_DropSubscriptionStmt,
 	T_CreateStatsStmt,
 	T_AlterCollationStmt,
+	T_CreateAssertionStmt,
 	T_CallStmt,
 
 	/*

@@ -35,6 +35,7 @@
 
    &abort;
    &alterAggregate;
+   &alterAssertion;
    &alterCollation;
    &alterConversion;
    &alterDatabase;
@@ -88,6 +89,7 @@
    &copyTable;
    &createAccessMethod;
    &createAggregate;
+   &createAssertion;
    &createCast;
    &createCollation;
    &createConversion;
@@ -135,6 +137,7 @@
    &do;
    &dropAccessMethod;
    &dropAggregate;
+   &dropAssertion;
    &dropCast;
    &dropCollation;
    &dropConversion;

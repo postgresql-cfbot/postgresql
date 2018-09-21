@@ -3363,6 +3363,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AGGREGATE:
 						msg = gettext_noop("permission denied for aggregate %s");
 						break;
+					case OBJECT_ASSERTION:
+						msg = gettext_noop("permission denied for assertion %s");
+						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("permission denied for collation %s");
 						break;
@@ -3493,6 +3496,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 				{
 					case OBJECT_AGGREGATE:
 						msg = gettext_noop("must be owner of aggregate %s");
+						break;
+					case OBJECT_ASSERTION:
+						msg = gettext_noop("must be owner of assertion %s");
 						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("must be owner of collation %s");
@@ -5212,6 +5218,33 @@ pg_collation_ownercheck(Oid coll_oid, Oid roleid)
 	ReleaseSysCache(tuple);
 
 	return has_privs_of_role(roleid, ownerId);
+}
+
+/*
+ * Ownership check for a constraint (specified by OID).
+ */
+bool
+pg_constraint_ownercheck(Oid constr_oid, Oid roleid)
+{
+	HeapTuple   tuple;
+	//Oid           ownerId;
+
+	/* Superusers bypass all permission checking. */
+	if (superuser_arg(roleid))
+		return true;
+
+	tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constr_oid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+			    (errcode(ERRCODE_UNDEFINED_OBJECT),
+			     errmsg("constraint with OID %u does not exist", constr_oid)));
+
+	//FIXME: ownerId = ((Form_pg_constraint) GETSTRUCT(tuple))->conowner;
+
+	ReleaseSysCache(tuple);
+
+	//return has_privs_of_role(roleid, ownerId);
+	return true; // for now
 }
 
 /*

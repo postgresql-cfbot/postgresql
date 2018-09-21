@@ -285,7 +285,20 @@ GRANT SELECT ON administrable_role_authorizations TO PUBLIC;
  * ASSERTIONS view
  */
 
--- feature not supported
+CREATE VIEW assertions AS
+    SELECT CAST(current_database() AS sql_identifier) AS constraint_catalog,
+           CAST(n.nspname AS sql_identifier) AS constraint_schema,
+           CAST(con.conname AS sql_identifier) AS constraint_name,
+           CAST(CASE WHEN condeferrable THEN 'YES' ELSE 'NO' END
+             AS yes_or_no) AS is_deferrable,
+           CAST(CASE WHEN condeferred THEN 'YES' ELSE 'NO' END
+             AS yes_or_no) AS initially_deferred
+    FROM pg_namespace n, pg_constraint con
+    WHERE n.oid = con.connamespace
+          AND con.conrelid = 0 AND con.contypid = 0;
+          -- TODO: AND pg_has_role(con.conowner, 'USAGE');
+
+GRANT SELECT ON assertions TO PUBLIC;
 
 
 /*
@@ -790,7 +803,7 @@ CREATE VIEW constraint_column_usage AS
            CAST(cstrname AS sql_identifier) AS constraint_name
 
     FROM (
-        /* check constraints */
+        /* assertions and check constraints */
         SELECT DISTINCT nr.nspname, r.relname, r.relowner, a.attname, nc.nspname, c.conname
           FROM pg_namespace nr, pg_class r, pg_attribute a, pg_depend d, pg_namespace nc, pg_constraint c
           WHERE nr.oid = r.relnamespace
@@ -802,7 +815,7 @@ CREATE VIEW constraint_column_usage AS
             AND d.objid = c.oid
             AND c.connamespace = nc.oid
             AND c.contype = 'c'
-            AND r.relkind IN ('r', 'p')
+            AND r.relkind IN ('r', 'p', 'v')
             AND NOT a.attisdropped
 
         UNION ALL
@@ -842,20 +855,41 @@ GRANT SELECT ON constraint_column_usage TO PUBLIC;
 
 CREATE VIEW constraint_table_usage AS
     SELECT CAST(current_database() AS sql_identifier) AS table_catalog,
-           CAST(nr.nspname AS sql_identifier) AS table_schema,
-           CAST(r.relname AS sql_identifier) AS table_name,
+           CAST(tblschema AS sql_identifier) AS table_schema,
+           CAST(tblname AS sql_identifier) AS table_name,
            CAST(current_database() AS sql_identifier) AS constraint_catalog,
-           CAST(nc.nspname AS sql_identifier) AS constraint_schema,
-           CAST(c.conname AS sql_identifier) AS constraint_name
+           CAST(cstrschema AS sql_identifier) AS constraint_schema,
+           CAST(cstrname AS sql_identifier) AS constraint_name
 
-    FROM pg_constraint c, pg_namespace nc,
-         pg_class r, pg_namespace nr
+    FROM (
+        /* assertions and check constraints */
+        SELECT DISTINCT nr.nspname, r.relname, r.relowner, nc.nspname, c.conname
+          FROM pg_namespace nr, pg_class r,
+               pg_depend d, pg_namespace nc, pg_constraint c
+         WHERE nr.oid = r.relnamespace
+           AND d.refobjid = r.oid
+           AND c.connamespace = nc.oid
+           AND d.objid = c.oid
+           AND d.refclassid = 'pg_catalog.pg_class'::regclass
+           AND d.classid = 'pg_catalog.pg_constraint'::regclass
+           AND c.contype = 'c'
+           AND r.relkind IN ('r', 'p', 'v')
 
-    WHERE c.connamespace = nc.oid AND r.relnamespace = nr.oid
-          AND ( (c.contype = 'f' AND c.confrelid = r.oid)
+        UNION ALL
+
+        /* unique/primary key constraints */
+        SELECT nr.nspname, r.relname, r.relowner, nc.nspname, c.conname
+          FROM pg_constraint c, pg_namespace nc,
+               pg_class r, pg_namespace nr
+         WHERE c.connamespace = nc.oid
+           AND r.relnamespace = nr.oid
+           AND ( (c.contype = 'f' AND c.confrelid = r.oid)
              OR (c.contype IN ('p', 'u') AND c.conrelid = r.oid) )
-          AND r.relkind IN ('r', 'p')
-          AND pg_has_role(r.relowner, 'USAGE');
+           AND r.relkind IN ('r', 'p')
+
+    ) AS x (tblschema, tblname, tblowner, cstrschema, cstrname)
+
+    WHERE pg_has_role(x.tblowner, 'USAGE');
 
 GRANT SELECT ON constraint_table_usage TO PUBLIC;
 

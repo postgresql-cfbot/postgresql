@@ -3711,6 +3711,10 @@
   proname => 'unique_key_recheck', provolatile => 'v', prorettype => 'trigger',
   proargtypes => '', prosrc => 'unique_key_recheck' },
 
+{ oid => '3996', descr => 'assertion constraint check',
+  proname => 'assertion_check', provolatile => 'v', prorettype => 'trigger',
+  proargtypes => '', prosrc => 'assertion_check' },
+
 # Generic referential integrity constraint triggers
 { oid => '1644', descr => 'referential integrity FOREIGN KEY ... REFERENCES',
   proname => 'RI_FKey_check_ins', provolatile => 'v', prorettype => 'trigger',

@@ -2113,6 +2113,15 @@ _equalCreateSchemaStmt(const CreateSchemaStmt *a, const CreateSchemaStmt *b)
 }
 
 static bool
+_equalCreateAssertionStmt(const CreateAssertionStmt *a, const CreateAssertionStmt *b)
+{
+	COMPARE_NODE_FIELD(assertion_name);
+	COMPARE_NODE_FIELD(constraint);
+
+	return true;
+}
+
+static bool
 _equalCreateConversionStmt(const CreateConversionStmt *a, const CreateConversionStmt *b)
 {
 	COMPARE_NODE_FIELD(conversion_name);
@@ -3509,6 +3518,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_CreateSchemaStmt:
 			retval = _equalCreateSchemaStmt(a, b);
+			break;
+		case T_CreateAssertionStmt:
+			retval = _equalCreateAssertionStmt(a, b);
 			break;
 		case T_CreateConversionStmt:
 			retval = _equalCreateConversionStmt(a, b);

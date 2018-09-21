@@ -116,6 +116,7 @@ extern int	get_func_nargs(Oid funcid);
 extern Oid	get_func_signature(Oid funcid, Oid **argtypes, int *nargs);
 extern Oid	get_func_variadictype(Oid funcid);
 extern bool get_func_retset(Oid funcid);
+extern Oid  get_func_lang(Oid funcid);
 extern bool func_strict(Oid funcid);
 extern char func_volatile(Oid funcid);
 extern char func_parallel(Oid funcid);

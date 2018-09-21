@@ -152,6 +152,20 @@ EOF
     </varlistentry>
 
     <varlistentry>
+      <term><option>--csv</option></term>
+      <listitem>
+      <para>
+      <indexterm>
+       <primary>CSV</primary>
+       <secondary>in psql</secondary>
+      </indexterm>
+      Switches to <acronym>CSV</acronym> output mode. This is equivalent
+      to <command>\pset format csv</command>.
+      </para>
+      </listitem>
+    </varlistentry>
+
+    <varlistentry>
       <term><option>-d <replaceable class="parameter">dbname</replaceable></option></term>
       <term><option>--dbname=<replaceable class="parameter">dbname</replaceable></option></term>
       <listitem>
@@ -2557,6 +2571,19 @@ lo_import 152801
           </varlistentry>
 
           <varlistentry>
+          <term><literal>fieldsep_csv</literal></term>
+          <listitem>
+          <para>
+          Specifies the field separator to be used in the
+          <acronym>CSV</acronym> format. When the separator appears in a field
+          value, that field is output inside double quotes according to
+          <acronym>CSV</acronym> rules. To set a tab as field separator, type
+          <literal>\pset fieldsep_csv '\t'</literal>. The default is a comma.
+          </para>
+          </listitem>
+          </varlistentry>
+
+          <varlistentry>
           <term><literal>fieldsep_zero</literal></term>
           <listitem>
           <para>
@@ -2584,12 +2611,11 @@ lo_import 152801
           <term><literal>format</literal></term>
           <listitem>
           <para>
-          Sets the output format to one of <literal>unaligned</literal>,
-          <literal>aligned</literal>, <literal>wrapped</literal>,
-          <literal>html</literal>, <literal>asciidoc</literal>,
+          Sets the output format to one of <literal>aligned</literal>,
+          <literal>asciidoc</literal>, <literal>csv</literal>, <literal>html</literal>,
           <literal>latex</literal> (uses <literal>tabular</literal>),
-          <literal>latex-longtable</literal>, or
-          <literal>troff-ms</literal>.
+          <literal>latex-longtable</literal>, <literal>troff-ms</literal>,
+          <literal>unaligned</literal>, or <literal>wrapped</literal>.
           Unique abbreviations are allowed.  (That would mean one letter
           is enough.)
           </para>
@@ -2597,13 +2623,26 @@ lo_import 152801
           <para><literal>unaligned</literal> format writes all columns of a row on one
           line, separated by the currently active field separator. This
           is useful for creating output that might be intended to be read
-          in by other programs (for example, tab-separated or comma-separated
-          format).
+          in by other programs.
           </para>
 
           <para><literal>aligned</literal> format is the standard, human-readable,
           nicely formatted text output;  this is the default.
           </para>
+
+         <para><literal>csv</literal> format writes columns separated by
+         commas, applying the quoting rules described in RFC 4180.
+         Alternative separators can be selected with
+         <command>\pset fieldsep_csv</command>.
+         The output is compatible with the CSV format of the
+         <command>COPY</command> command. The header with column names
+         is output unless the <literal>tuples_only</literal> parameter is
+         <literal>on</literal>. Title and footers are not printed.
+         Each row is terminated by the system-dependent end-of-line character,
+         which is typically a single newline (<literal>\n</literal>) for
+         Unix-like systems or a carriage return and newline sequence
+         (<literal>\r\n</literal>) for Microsoft Windows.
+         </para>
 
           <para><literal>wrapped</literal> format is like <literal>aligned</literal> but wraps
           wide data values across lines to make the output fit in the target

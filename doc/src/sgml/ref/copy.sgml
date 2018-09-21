@@ -672,6 +672,10 @@ COPY <replaceable class="parameter">count</replaceable>
 
   <refsect2>
    <title>CSV Format</title>
+   <indexterm>
+    <primary>CSV</primary>
+    <secondary>in COPY</secondary>
+   </indexterm>
 
    <para>
     This format option is used for importing and exporting the Comma

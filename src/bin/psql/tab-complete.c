@@ -3557,7 +3557,7 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatchesCS1("\\pset"))
 	{
 		static const char *const my_list[] =
-		{"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
+		{"border", "columns", "expanded", "fieldsep", "fieldsep_csv", "fieldsep_zero",
 			"footer", "format", "linestyle", "null", "numericlocale",
 			"pager", "pager_min_lines", "recordsep", "recordsep_zero",
 			"tableattr", "title", "tuples_only", "unicode_border_linestyle",
@@ -3570,8 +3570,8 @@ psql_completion(const char *text, int start, int end)
 		if (TailMatchesCS1("format"))
 		{
 			static const char *const my_list[] =
-			{"unaligned", "aligned", "wrapped", "html", "asciidoc",
-			"latex", "latex-longtable", "troff-ms", NULL};
+			{"aligned", "asciidoc", "csv", "html", "latex", "latex-longtable",
+			 "troff-ms", "unaligned", "wrapped", NULL};
 
 			COMPLETE_WITH_LIST_CS(my_list);
 		}

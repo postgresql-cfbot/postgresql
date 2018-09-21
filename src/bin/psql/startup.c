@@ -148,6 +148,8 @@ main(int argc, char *argv[])
 	pset.popt.topt.unicode_column_linestyle = UNICODE_LINESTYLE_SINGLE;
 	pset.popt.topt.unicode_header_linestyle = UNICODE_LINESTYLE_SINGLE;
 
+	pset.popt.topt.fieldSepCsv = pg_strdup(",");
+
 	refresh_utf8format(&(pset.popt.topt));
 
 	/* We must get COLUMNS here before readline() sets it */
@@ -436,6 +438,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"echo-all", no_argument, NULL, 'a'},
 		{"no-align", no_argument, NULL, 'A'},
 		{"command", required_argument, NULL, 'c'},
+		{"csv", no_argument, NULL, 2}, /* no single-letter short form */
 		{"dbname", required_argument, NULL, 'd'},
 		{"echo-queries", no_argument, NULL, 'e'},
 		{"echo-errors", no_argument, NULL, 'b'},
@@ -657,6 +660,10 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 
 					exit(EXIT_SUCCESS);
 				}
+				break;
+			case 2:
+				/*  --csv (only as a long option) */
+				pset.popt.topt.format = PRINT_CSV;
 				break;
 			default:
 		unknown_option:

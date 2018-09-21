@@ -1941,8 +1941,8 @@ exec_command_pset(PsqlScanState scan_state, bool active_branch)
 
 			int			i;
 			static const char *const my_list[] = {
-				"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
-				"footer", "format", "linestyle", "null",
+				"border", "columns", "expanded", "fieldsep", "fieldsep_csv",
+				"fieldsep_zero", "footer", "format", "linestyle", "null",
 				"numericlocale", "pager", "pager_min_lines",
 				"recordsep", "recordsep_zero",
 				"tableattr", "title", "tuples_only",
@@ -3584,6 +3584,9 @@ _align2string(enum printFormat in)
 		case PRINT_TROFF_MS:
 			return "troff-ms";
 			break;
+		case PRINT_CSV:
+			return "csv";
+			break;
 	}
 	return "unknown";
 }
@@ -3639,25 +3642,27 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 	{
 		if (!value)
 			;
-		else if (pg_strncasecmp("unaligned", value, vallen) == 0)
-			popt->topt.format = PRINT_UNALIGNED;
 		else if (pg_strncasecmp("aligned", value, vallen) == 0)
 			popt->topt.format = PRINT_ALIGNED;
-		else if (pg_strncasecmp("wrapped", value, vallen) == 0)
-			popt->topt.format = PRINT_WRAPPED;
-		else if (pg_strncasecmp("html", value, vallen) == 0)
-			popt->topt.format = PRINT_HTML;
 		else if (pg_strncasecmp("asciidoc", value, vallen) == 0)
 			popt->topt.format = PRINT_ASCIIDOC;
+		else if (pg_strncasecmp("csv", value, vallen) == 0)
+			popt->topt.format = PRINT_CSV;
+		else if (pg_strncasecmp("html", value, vallen) == 0)
+			popt->topt.format = PRINT_HTML;
 		else if (pg_strncasecmp("latex", value, vallen) == 0)
 			popt->topt.format = PRINT_LATEX;
 		else if (pg_strncasecmp("latex-longtable", value, vallen) == 0)
 			popt->topt.format = PRINT_LATEX_LONGTABLE;
 		else if (pg_strncasecmp("troff-ms", value, vallen) == 0)
 			popt->topt.format = PRINT_TROFF_MS;
+		else if (pg_strncasecmp("unaligned", value, vallen) == 0)
+			popt->topt.format = PRINT_UNALIGNED;
+		else if (pg_strncasecmp("wrapped", value, vallen) == 0)
+			popt->topt.format = PRINT_WRAPPED;
 		else
 		{
-			psql_error("\\pset: allowed formats are unaligned, aligned, wrapped, html, asciidoc, latex, latex-longtable, troff-ms\n");
+			psql_error("\\pset: allowed formats are aligned, asciidoc, csv, html, latex, latex-longtable, troff-ms, unaligned, wrapped\n");
 			return false;
 		}
 	}
@@ -3782,6 +3787,26 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 			free(popt->topt.fieldSep.separator);
 			popt->topt.fieldSep.separator = pg_strdup(value);
 			popt->topt.fieldSep.separator_zero = false;
+		}
+	}
+
+	else if (strcmp(param, "fieldsep_csv") == 0)
+	{
+		if (value)
+		{
+			/* check for value being non-empty and with an MB length of 1 */
+			if (*value == '\0' || value[PQmblen(value, pset.encoding)] != '\0')
+			{
+				psql_error("\\pset: the CSV field separator must be a single character\n");
+				return false;
+			}
+			if (value[0] == '"' || value[0] == '\n' || value[0] == '\r')
+			{
+				psql_error("\\pset: the CSV field separator must not be a double quote, newline, or carriage return\n");
+				return false;
+			}
+			free(popt->topt.fieldSepCsv);
+			popt->topt.fieldSepCsv = pg_strdup(value);
 		}
 	}
 
@@ -3938,6 +3963,13 @@ printPsetInfo(const char *param, struct printQueryOpt *popt)
 	else if (strcmp(param, "fieldsep_zero") == 0)
 	{
 		printf(_("Field separator is zero byte.\n"));
+	}
+
+	/* show field separator for CSV format */
+	else if (strcmp(param, "fieldsep_csv") == 0)
+	{
+		printf(_("Field separator for CSV is \"%s\".\n"),
+			   popt->topt.fieldSepCsv);
 	}
 
 	/* show disable "(x rows)" footer */
@@ -4134,6 +4166,8 @@ pset_value_string(const char *param, struct printQueryOpt *popt)
 		return pset_quoted_string(popt->topt.fieldSep.separator
 								  ? popt->topt.fieldSep.separator
 								  : "");
+	else if (strcmp(param, "fieldsep_csv") == 0)
+		return pset_quoted_string(popt->topt.fieldSepCsv);
 	else if (strcmp(param, "fieldsep_zero") == 0)
 		return pstrdup(pset_bool_string(popt->topt.fieldSep.separator_zero));
 	else if (strcmp(param, "footer") == 0)

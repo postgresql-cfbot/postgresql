@@ -3243,3 +3243,158 @@ last error message: division by zero
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 last error code: 22012
 \unset FETCH_COUNT
+-- check printing info about access methods
+\dA
+List of access methods
+  Name  | Type  
+--------+-------
+ brin   | Index
+ btree  | Index
+ gin    | Index
+ gist   | Index
+ hash   | Index
+ spgist | Index
+(6 rows)
+
+\dA gin
+List of access methods
+ Name | Type  
+------+-------
+ gin  | Index
+(1 row)
+
+\dA foo
+List of access methods
+ Name | Type 
+------+------
+(0 rows)
+
+\dAp gin
+                    Access method properties
+ AM Name | Can order | Can unique | Can multi col | Can exclude 
+---------+-----------+------------+---------------+-------------
+ gin     | f         | f          | t             | f
+(1 row)
+
+\dAp foo
+                    Access method properties
+ AM Name | Can order | Can unique | Can multi col | Can exclude 
+---------+-----------+------------+---------------+-------------
+(0 rows)
+
+\dAf gin
+                   List of operator families
+ Access method | Operator family schema | Operator family name 
+---------------+------------------------+----------------------
+ gin           | pg_catalog             | array_ops
+ gin           | pg_catalog             | tsvector_ops
+ gin           | pg_catalog             | jsonb_ops
+ gin           | pg_catalog             | jsonb_path_ops
+(4 rows)
+
+\dAf foo
+                   List of operator families
+ Access method | Operator family schema | Operator family name 
+---------------+------------------------+----------------------
+(0 rows)
+
+\dAfo brin uuid_minmax_ops
+                                List operators of family related to access method
+  AM  | Opfamily Schema |  Opfamily Name  | Left type | Right type | Strategy | Operator | Purpose | Sort family 
+------+-----------------+-----------------+-----------+------------+----------+----------+---------+-------------
+ brin | pg_catalog      | uuid_minmax_ops | uuid      | uuid       |        1 | <        | search  | 
+ brin | pg_catalog      | uuid_minmax_ops | uuid      | uuid       |        2 | <=       | search  | 
+ brin | pg_catalog      | uuid_minmax_ops | uuid      | uuid       |        3 | =        | search  | 
+ brin | pg_catalog      | uuid_minmax_ops | uuid      | uuid       |        4 | >=       | search  | 
+ brin | pg_catalog      | uuid_minmax_ops | uuid      | uuid       |        5 | >        | search  | 
+(5 rows)
+
+\dAfo brin bar
+                              List operators of family related to access method
+ AM | Opfamily Schema | Opfamily Name | Left type | Right type | Strategy | Operator | Purpose | Sort family 
+----+-----------------+---------------+-----------+------------+----------+----------+---------+-------------
+(0 rows)
+
+\dAfo foo bar
+                              List operators of family related to access method
+ AM | Opfamily Schema | Opfamily Name | Left type | Right type | Strategy | Operator | Purpose | Sort family 
+----+-----------------+---------------+-----------+------------+----------+----------+---------+-------------
+(0 rows)
+
+\dAfo * pg_catalog.jsonb_path_ops
+                               List operators of family related to access method
+ AM  | Opfamily Schema | Opfamily Name  | Left type | Right type | Strategy | Operator | Purpose | Sort family 
+-----+-----------------+----------------+-----------+------------+----------+----------+---------+-------------
+ gin | pg_catalog      | jsonb_path_ops | jsonb     | jsonb      |        7 | @>       | search  | 
+(1 row)
+
+\dAfp brin uuid_minmax_ops
+                                               List of operator family procedures
+  AM  | Family schema |   Family name   | Left | Right | Number |                           Proc name                           
+------+---------------+-----------------+------+-------+--------+---------------------------------------------------------------
+ brin | pg_catalog    | uuid_minmax_ops | uuid | uuid  |      1 | brin_minmax_opcinfo(internal)
+ brin | pg_catalog    | uuid_minmax_ops | uuid | uuid  |      2 | brin_minmax_add_value(internal, internal, internal, internal)
+ brin | pg_catalog    | uuid_minmax_ops | uuid | uuid  |      3 | brin_minmax_consistent(internal, internal, internal)
+ brin | pg_catalog    | uuid_minmax_ops | uuid | uuid  |      4 | brin_minmax_union(internal, internal, internal)
+(4 rows)
+
+\dAfp brin bar
+                  List of operator family procedures
+ AM | Family schema | Family name | Left | Right | Number | Proc name 
+----+---------------+-------------+------+-------+--------+-----------
+(0 rows)
+
+\dAfp foo bar
+                  List of operator family procedures
+ AM | Family schema | Family name | Left | Right | Number | Proc name 
+----+---------------+-------------+------+-------+--------+-----------
+(0 rows)
+
+\dAfp * pg_catalog.uuid_ops
+                               List of operator family procedures
+  AM   | Family schema | Family name | Left | Right | Number |            Proc name             
+-------+---------------+-------------+------+-------+--------+----------------------------------
+ btree | pg_catalog    | uuid_ops    | uuid | uuid  |      1 | uuid_cmp(uuid, uuid)
+ btree | pg_catalog    | uuid_ops    | uuid | uuid  |      2 | uuid_sortsupport(internal)
+ hash  | pg_catalog    | uuid_ops    | uuid | uuid  |      1 | uuid_hash(uuid)
+ hash  | pg_catalog    | uuid_ops    | uuid | uuid  |      2 | uuid_hash_extended(uuid, bigint)
+(4 rows)
+
+\dAoc brin pg*.oid*
+                                  Index access method operator classes
+ Access method |   Schema   |      Name      |     Family     | Indexed type | Is default | Stored type 
+---------------+------------+----------------+----------------+--------------+------------+-------------
+ brin          | pg_catalog | oid_minmax_ops | oid_minmax_ops | oid          | t          | 
+(1 row)
+
+\dA+
+                        List of access methods
+  Name  | Type  |   Handler   |              Description               
+--------+-------+-------------+----------------------------------------
+ brin   | Index | brinhandler | block range index (BRIN) access method
+ btree  | Index | bthandler   | b-tree index access method
+ gin    | Index | ginhandler  | GIN index access method
+ gist   | Index | gisthandler | GiST index access method
+ hash   | Index | hashhandler | hash index access method
+ spgist | Index | spghandler  | SP-GiST index access method
+(6 rows)
+
+\dA+ gin
+               List of access methods
+ Name | Type  |  Handler   |       Description       
+------+-------+------------+-------------------------
+ gin  | Index | ginhandler | GIN index access method
+(1 row)
+
+\dA+ foo
+       List of access methods
+ Name | Type | Handler | Description 
+------+------+---------+-------------
+(0 rows)
+
+\dAf+ foo
+                       List of operator families
+ Access method | Operator family schema | Operator family name | Owner 
+---------------+------------------------+----------------------+-------
+(0 rows)
+

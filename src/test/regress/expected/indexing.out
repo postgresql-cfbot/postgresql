@@ -1349,3 +1349,28 @@ insert into covidxpart values (4, 1);
 insert into covidxpart values (4, 1);
 ERROR:  duplicate key value violates unique constraint "covidxpart4_a_b_idx"
 DETAIL:  Key (a)=(4) already exists.
+-- Test psql command for displaying information about indexes.
+\dip brinidx
+                                     Index properties
+ Schema |  Name   | Access method | Clusterable | Index scan | Bitmap scan | Backward scan 
+--------+---------+---------------+-------------+------------+-------------+---------------
+ public | brinidx | brin          | f           | f          | t           | f
+(1 row)
+
+\dicp botharrayidx 
+                                                   Index public.botharrayidx
+ Column name | Expr |  Opclass  | ASC | Nulls first | Orderable | Distance orderable | Returnable | Search array | Search nulls 
+-------------+------+-----------+-----+-------------+-----------+--------------------+------------+--------------+--------------
+ i           | i    | array_ops |     |             | f         | f                  | f          | f            | f
+ t           | t    | array_ops |     |             | f         | f                  | f          | f            | f
+Table: array_index_op_test
+Access method: gin
+
+\dicp botharrayidx t
+                                                   Index public.botharrayidx
+ Column name | Expr |  Opclass  | ASC | Nulls first | Orderable | Distance orderable | Returnable | Search array | Search nulls 
+-------------+------+-----------+-----+-------------+-----------+--------------------+------------+--------------+--------------
+ t           | t    | array_ops |     |             | f         | f                  | f          | f            | f
+Table: array_index_op_test
+Access method: gin
+

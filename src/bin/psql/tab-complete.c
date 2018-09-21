@@ -2806,14 +2806,33 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches1("EXECUTE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_prepared_statements);
 
-/* EXPLAIN */
-
-	/*
-	 * Complete EXPLAIN [ANALYZE] [VERBOSE] with list of EXPLAIN-able commands
-	 */
+/*
+ * EXPLAIN [ ( option [, ...] ) ] statement
+ * EXPLAIN [ ANALYZE ] [ VERBOSE ] statement
+ */
 	else if (Matches1("EXPLAIN"))
-		COMPLETE_WITH_LIST7("SELECT", "INSERT", "DELETE", "UPDATE", "DECLARE",
-							"ANALYZE", "VERBOSE");
+		COMPLETE_WITH_LIST8("SELECT", "INSERT", "DELETE", "UPDATE", "DECLARE",
+							"ANALYZE", "VERBOSE", "(");
+	else if (HeadMatches2("EXPLAIN", "("))
+	{
+		if (ends_with(prev_wd, '(') || ends_with(prev_wd, ','))
+			COMPLETE_WITH_LIST7("ANALYZE", "VERBOSE", "COSTS", "BUFFERS",
+								"TIMING", "SUMMARY", "FORMAT");
+		else if (TailMatches1("FORMAT"))
+			COMPLETE_WITH_LIST4("TEXT", "XML", "JSON", "YAML");
+		else if (TailMatches1("ANALYZE|VERBOSE|COSTS|BUFFERS|TIMING|SUMMARY"))
+			COMPLETE_WITH_LIST4(",", ")", "ON", "OFF");
+		else
+			COMPLETE_WITH_LIST2(",", ")");
+	}
+	else if (Matches2("EXPLAIN", MatchAny) && ends_with(prev_wd, ')'))
+	{
+		/*
+		 * get_previous_words treats a parenthesized option list as one word,
+		 * so the above test is correct.
+		 */
+		COMPLETE_WITH_LIST5("SELECT", "INSERT", "DELETE", "UPDATE", "DECLARE");
+	}
 	else if (Matches2("EXPLAIN", "ANALYZE"))
 		COMPLETE_WITH_LIST6("SELECT", "INSERT", "DELETE", "UPDATE", "DECLARE",
 							"VERBOSE");
@@ -3373,33 +3392,48 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_CONST("OPTIONS");
 
 /*
- * VACUUM [ FULL | FREEZE ] [ VERBOSE ] [ table ]
- * VACUUM [ FULL | FREEZE ] [ VERBOSE ] ANALYZE [ table [ (column [, ...] ) ] ]
+ * VACUUM [ ( option [, ...] ) ] [ table_and_columns [, ...] ]
+ * VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ table_and_columns [, ...] ]
  */
 	else if (Matches1("VACUUM"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tpm,
 								   " UNION SELECT 'FULL'"
 								   " UNION SELECT 'FREEZE'"
 								   " UNION SELECT 'ANALYZE'"
 								   " UNION SELECT 'VERBOSE'");
-	else if (Matches2("VACUUM", "FULL|FREEZE"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
+	else if (Matches2("VACUUM", "FULL"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tpm,
+								   " UNION SELECT 'FREEZE'"
 								   " UNION SELECT 'ANALYZE'"
 								   " UNION SELECT 'VERBOSE'");
-	else if (Matches3("VACUUM", "FULL|FREEZE", "ANALYZE"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
-								   " UNION SELECT 'VERBOSE'");
-	else if (Matches3("VACUUM", "FULL|FREEZE", "VERBOSE"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
+	else if (Matches2("VACUUM", "FULL|FREEZE") ||
+			 Matches3("VACUUM", "FULL", "FREEZE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tpm,
+								   " UNION SELECT 'VERBOSE'"
 								   " UNION SELECT 'ANALYZE'");
-	else if (Matches2("VACUUM", "VERBOSE"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
+	else if (Matches2("VACUUM", "VERBOSE") ||
+			 Matches3("VACUUM", "FULL|FREEZE", "VERBOSE") ||
+			 Matches4("VACUUM", "FULL", "FREEZE", "VERBOSE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tpm,
 								   " UNION SELECT 'ANALYZE'");
-	else if (Matches2("VACUUM", "ANALYZE"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm,
-								   " UNION SELECT 'VERBOSE'");
+	else if (HeadMatches2("VACUUM", "("))
+	{
+		if (ends_with(prev_wd, ',') || ends_with(prev_wd, '('))
+			COMPLETE_WITH_LIST5("FULL", "FREEZE", "ANALYZE", "VERBOSE", "DISABLE_PAGE_SKIPPING");
+		else
+			COMPLETE_WITH_LIST2(",", ")");
+	}
+	else if (HeadMatches1("VACUUM") && TailMatches1("("))
+		/* "VACUUM (" should be caught above */
+		COMPLETE_WITH_ATTR(prev2_wd, "");
+	else if (HeadMatches2("VACUUM", MatchAny) && !ends_with(prev_wd, ',') &&
+			 !TailMatches1("ANALYZE") &&
+			 !(previous_words_count == 2 && prev_wd[0] == '(' && ends_with(prev_wd, ')')))
+		/* Comma to support vacuuming multiple tables */
+		/* Parens to support analyzing a partial column list */
+		COMPLETE_WITH_LIST3(",", "(", ")");
 	else if (HeadMatches1("VACUUM"))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tm, NULL);
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tpm, "");
 
 /* WITH [RECURSIVE] */
 
@@ -3410,9 +3444,28 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches1("WITH"))
 		COMPLETE_WITH_CONST("RECURSIVE");
 
-/* ANALYZE */
-	/* Complete with list of tables */
+/*
+ * ANALYZE [ ( option [, ...] ) ] [ table_and_columns [, ...] ]
+ * ANALYZE [ VERBOSE ] [ table_and_columns [, ...] ]
+ */
+	else if (Matches2("ANALYZE", "("))
+		COMPLETE_WITH_CONST("VERBOSE)");
 	else if (Matches1("ANALYZE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tmf,
+								   " UNION SELECT 'VERBOSE'"
+								   " UNION SELECT '('"
+			);
+	else if (HeadMatches1("ANALYZE") && TailMatches1("("))
+		/* "ANALYZE (" should be caught above */
+		COMPLETE_WITH_ATTR(prev2_wd, "");
+	else if (HeadMatches2("ANALYZE", MatchAny) &&
+			 !ends_with(prev_wd, ',') &&
+			 !(previous_words_count == 2 && prev_wd[0] == '(' && ends_with(prev_wd, ')')) &&
+			 !TailMatches1("VERBOSE"))
+		/* Support analyze of multiple tables */
+		/* or analyze table(column1, column2) */
+		COMPLETE_WITH_LIST3(",", "(", ")");
+	else if (HeadMatches1("ANALYZE"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tmf, NULL);
 
 /* WHERE */

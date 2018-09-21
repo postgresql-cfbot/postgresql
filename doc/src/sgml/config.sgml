@@ -3127,10 +3127,8 @@ include_dir 'conf.d'
         Terminate replication connections that are inactive longer
         than the specified number of milliseconds. This is useful for
         the sending server to detect a standby crash or network outage.
-        A value of zero disables the timeout mechanism.  This parameter
-        can only be set in
-        the <filename>postgresql.conf</filename> file or on the server command line.
-        The default value is 60 seconds.
+        A value of zero disables the timeout mechanism. The default value
+        is 60 seconds.
        </para>
       </listitem>
      </varlistentry>

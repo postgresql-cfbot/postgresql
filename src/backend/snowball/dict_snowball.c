@@ -32,13 +32,13 @@
 #include "snowball/libstemmer/stem_ISO_8859_1_finnish.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_french.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_german.h"
-#include "snowball/libstemmer/stem_ISO_8859_1_hungarian.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_italian.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_norwegian.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_porter.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_portuguese.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_spanish.h"
 #include "snowball/libstemmer/stem_ISO_8859_1_swedish.h"
+#include "snowball/libstemmer/stem_ISO_8859_2_hungarian.h"
 #include "snowball/libstemmer/stem_ISO_8859_2_romanian.h"
 #include "snowball/libstemmer/stem_KOI8_R_russian.h"
 #include "snowball/libstemmer/stem_UTF_8_danish.h"
@@ -85,13 +85,13 @@ static const stemmer_module stemmer_modules[] =
 	{"finnish", PG_LATIN1, finnish_ISO_8859_1_create_env, finnish_ISO_8859_1_close_env, finnish_ISO_8859_1_stem},
 	{"french", PG_LATIN1, french_ISO_8859_1_create_env, french_ISO_8859_1_close_env, french_ISO_8859_1_stem},
 	{"german", PG_LATIN1, german_ISO_8859_1_create_env, german_ISO_8859_1_close_env, german_ISO_8859_1_stem},
-	{"hungarian", PG_LATIN1, hungarian_ISO_8859_1_create_env, hungarian_ISO_8859_1_close_env, hungarian_ISO_8859_1_stem},
 	{"italian", PG_LATIN1, italian_ISO_8859_1_create_env, italian_ISO_8859_1_close_env, italian_ISO_8859_1_stem},
 	{"norwegian", PG_LATIN1, norwegian_ISO_8859_1_create_env, norwegian_ISO_8859_1_close_env, norwegian_ISO_8859_1_stem},
 	{"porter", PG_LATIN1, porter_ISO_8859_1_create_env, porter_ISO_8859_1_close_env, porter_ISO_8859_1_stem},
 	{"portuguese", PG_LATIN1, portuguese_ISO_8859_1_create_env, portuguese_ISO_8859_1_close_env, portuguese_ISO_8859_1_stem},
 	{"spanish", PG_LATIN1, spanish_ISO_8859_1_create_env, spanish_ISO_8859_1_close_env, spanish_ISO_8859_1_stem},
 	{"swedish", PG_LATIN1, swedish_ISO_8859_1_create_env, swedish_ISO_8859_1_close_env, swedish_ISO_8859_1_stem},
+	{"hungarian", PG_LATIN2, hungarian_ISO_8859_2_create_env, hungarian_ISO_8859_2_close_env, hungarian_ISO_8859_2_stem},
 	{"romanian", PG_LATIN2, romanian_ISO_8859_2_create_env, romanian_ISO_8859_2_close_env, romanian_ISO_8859_2_stem},
 	{"russian", PG_KOI8R, russian_KOI8_R_create_env, russian_KOI8_R_close_env, russian_KOI8_R_stem},
 	{"danish", PG_UTF8, danish_UTF_8_create_env, danish_UTF_8_close_env, danish_UTF_8_stem},

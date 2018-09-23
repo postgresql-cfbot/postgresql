@@ -328,7 +328,7 @@ static char *pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 						 bool attrsOnly, bool missing_ok);
 static char *pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 							int prettyFlags, bool missing_ok);
-static text *pg_get_expr_worker(text *expr, Oid relid, const char *relname,
+static text *pg_get_expr_worker(FunctionCallInfo fcinfo, text *expr, Oid relid, const char *relname,
 				   int prettyFlags);
 static int print_function_arguments(StringInfo buf, HeapTuple proctup,
 						 bool print_table_args, bool print_defaults);
@@ -2334,7 +2334,7 @@ pg_get_expr(PG_FUNCTION_ARGS)
 	else
 		relname = NULL;
 
-	PG_RETURN_TEXT_P(pg_get_expr_worker(expr, relid, relname, prettyFlags));
+	PG_RETURN_TEXT_P(pg_get_expr_worker(fcinfo, expr, relid, relname, prettyFlags));
 }
 
 Datum
@@ -2359,14 +2359,20 @@ pg_get_expr_ext(PG_FUNCTION_ARGS)
 	else
 		relname = NULL;
 
-	PG_RETURN_TEXT_P(pg_get_expr_worker(expr, relid, relname, prettyFlags));
+	PG_RETURN_TEXT_P(pg_get_expr_worker(fcinfo, expr, relid, relname, prettyFlags));
 }
 
+struct cached_context
+{
+	Oid		relid;
+	List   *context;
+};
+
 static text *
-pg_get_expr_worker(text *expr, Oid relid, const char *relname, int prettyFlags)
+pg_get_expr_worker(FunctionCallInfo fcinfo, text *expr, Oid relid, const char *relname, int prettyFlags)
 {
 	Node	   *node;
-	List	   *context;
+	List	   *context = NIL;
 	char	   *exprstr;
 	char	   *str;
 
@@ -2380,9 +2386,36 @@ pg_get_expr_worker(text *expr, Oid relid, const char *relname, int prettyFlags)
 
 	/* Prepare deparse context if needed */
 	if (OidIsValid(relid))
-		context = deparse_context_for(relname, relid);
-	else
-		context = NIL;
+	{
+		struct cached_context *cc;
+
+		if (fcinfo->flinfo && fcinfo->flinfo->fn_extra)
+		{
+			cc = fcinfo->flinfo->fn_extra;
+			if (cc->relid == relid)
+				context = cc->context;
+		}
+
+		if (!context)
+		{
+			MemoryContext oldcontext = NULL;
+			struct cached_context *cc;
+
+			if (fcinfo->flinfo)
+				oldcontext = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
+
+			context = deparse_context_for(relname, relid);
+
+			if (fcinfo->flinfo)
+			{
+				cc = palloc(sizeof(*cc));
+				cc->relid = relid;
+				cc->context = context;
+				fcinfo->flinfo->fn_extra = cc;
+				MemoryContextSwitchTo(oldcontext);
+			}
+		}
+	}
 
 	/* Deparse */
 	str = deparse_expression_pretty(node, context, false, false,

@@ -1163,7 +1163,7 @@ array_out(PG_FUNCTION_ARGS)
 	 * count total number of curly braces in output string
 	 */
 	for (i = j = 0, k = 1; i < ndim; i++)
-		k *= dims[i], j += k;
+		j += k, k *= dims[i];
 
 	dims_str[0] = '\0';
 

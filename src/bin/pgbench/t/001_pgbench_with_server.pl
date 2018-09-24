@@ -5,9 +5,20 @@ use PostgresNode;
 use TestLib;
 use Test::More;
 
+use constant
+{
+	SQL_ERROR           => 0,
+	META_COMMAND_ERROR  => 1,
+	SYNTAX_ERROR        => 2,
+};
+
 # start a pgbench specific server
 my $node = get_new_node('main');
-$node->init;
+
+# Set to untranslated messages, to be able to compare program output with
+# expected strings.
+$node->init(extra => [ '--locale', 'C' ]);
+
 $node->start;
 
 # invoke pgbench
@@ -136,7 +147,8 @@ pgbench(
 		qr{builtin: TPC-B},
 		qr{clients: 2\b},
 		qr{processed: 10/10},
-		qr{mode: simple}
+		qr{mode: simple},
+		qr{maximum number of tries: 1}
 	],
 	[qr{^$}],
 	'pgbench tpcb-like');
@@ -530,11 +542,12 @@ pgbench(
 # trigger many expression errors
 my @errors = (
 
-	# [ test name, expected status, expected stderr, script ]
+	# [ test name, expected status, error type, expected stderr, script ]
 	# SQL
 	[
 		'sql syntax error',
 		0,
+		SQL_ERROR,
 		[
 			qr{ERROR:  syntax error},
 			qr{prepared statement .* does not exist}
@@ -544,28 +557,36 @@ my @errors = (
 }
 	],
 	[
-		'sql too many args', 1, [qr{statement has too many arguments.*\b9\b}],
+		'sql too many args', 1, SYNTAX_ERROR,
+		[qr{statement has too many arguments.*\b9\b}],
 		q{-- MAX_ARGS=10 for prepared
 \set i 0
 SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 }
 	],
+	[   'sql division by zero', 0, SQL_ERROR, [qr{ERROR:  division by zero}],
+		q{-- SQL division by zero
+SELECT 1 / 0;
+}
+	],
 
 	# SHELL
 	[
-		'shell bad command',                    0,
+		'shell bad command', 0, META_COMMAND_ERROR,
 		[qr{\(shell\) .* meta-command failed}], q{\shell no-such-command}
 	],
 	[
-		'shell undefined variable', 0,
+		'shell undefined variable', 0, META_COMMAND_ERROR,
 		[qr{undefined variable ":nosuchvariable"}],
 		q{-- undefined variable in shell
 \shell echo ::foo :nosuchvariable
 }
 	],
-	[ 'shell missing command', 1, [qr{missing command }], q{\shell} ],
+	[   'shell missing command', 1, SYNTAX_ERROR, [qr{missing command }],
+		q{\shell} ],
 	[
-		'shell too many args', 1, [qr{too many arguments in command "shell"}],
+		'shell too many args', 1, SYNTAX_ERROR,
+		[qr{too many arguments in command "shell"}],
 		q{-- 257 arguments to \shell
 \shell echo \
  0 1 2 3 4 5 6 7 8 9 A B C D E F \
@@ -589,162 +610,232 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 
 	# SET
 	[
-		'set syntax error',                  1,
+		'set syntax error', 1, SYNTAX_ERROR,
 		[qr{syntax error in command "set"}], q{\set i 1 +}
 	],
 	[
-		'set no such function',         1,
+		'set no such function', 1, SYNTAX_ERROR,
 		[qr{unexpected function name}], q{\set i noSuchFunction()}
 	],
 	[
-		'set invalid variable name', 0,
+		'set invalid variable name', 0, META_COMMAND_ERROR,
 		[qr{invalid variable name}], q{\set . 1}
 	],
 	[
-		'set int overflow',                   0,
+		'set int overflow', 0, META_COMMAND_ERROR,
 		[qr{double to int overflow for 100}], q{\set i int(1E32)}
 	],
-	[ 'set division by zero', 0, [qr{division by zero}], q{\set i 1/0} ],
 	[
-		'set bigint out of range', 0,
+		'set division by zero', 0, META_COMMAND_ERROR,
+		[qr{division by zero}], q{\set i 1/0}
+	],
+	[
+		'set bigint out of range', 0, META_COMMAND_ERROR,
 		[qr{bigint out of range}], q{\set i 9223372036854775808 / -1}
 	],
 	[
 		'set undefined variable',
 		0,
+		META_COMMAND_ERROR,
 		[qr{undefined variable "nosuchvariable"}],
 		q{\set i :nosuchvariable}
 	],
-	[ 'set unexpected char', 1, [qr{unexpected character .;.}], q{\set i ;} ],
+	[
+		'set unexpected char', 1, SYNTAX_ERROR,
+		[qr{unexpected character .;.}], q{\set i ;}
+	],
 	[
 		'set too many args',
 		0,
+		META_COMMAND_ERROR,
 		[qr{too many function arguments}],
 		q{\set i least(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16)}
 	],
 	[
-		'set empty random range',          0,
+		'set empty random range', 0, META_COMMAND_ERROR,
 		[qr{empty range given to random}], q{\set i random(5,3)}
 	],
 	[
 		'set random range too large',
 		0,
+		META_COMMAND_ERROR,
 		[qr{random range is too large}],
 		q{\set i random(-9223372036854775808, 9223372036854775807)}
 	],
 	[
 		'set gaussian param too small',
 		0,
+		META_COMMAND_ERROR,
 		[qr{gaussian param.* at least 2}],
 		q{\set i random_gaussian(0, 10, 1.0)}
 	],
 	[
 		'set exponential param greater 0',
 		0,
+		META_COMMAND_ERROR,
 		[qr{exponential parameter must be greater }],
 		q{\set i random_exponential(0, 10, 0.0)}
 	],
 	[
 		'set zipfian param to 1',
 		0,
+		META_COMMAND_ERROR,
 		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
 		q{\set i random_zipfian(0, 10, 1)}
 	],
 	[
 		'set zipfian param too large',
 		0,
+		META_COMMAND_ERROR,
 		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
 		q{\set i random_zipfian(0, 10, 1000000)}
 	],
 	[
-		'set non numeric value',                     0,
+		'set non numeric value', 0, META_COMMAND_ERROR,
 		[qr{malformed variable "foo" value: "bla"}], q{\set i :foo + 1}
 	],
-	[ 'set no expression',    1, [qr{syntax error}],      q{\set i} ],
-	[ 'set missing argument', 1, [qr{missing argument}i], q{\set} ],
+	[ 'set no expression', 1, SYNTAX_ERROR, [qr{syntax error}], q{\set i} ],
 	[
-		'set not a bool',                      0,
+		'set missing argument', 1, SYNTAX_ERROR,
+		[qr{missing argument}i], q{\set}
+	],
+	[
+		'set not a bool', 0, META_COMMAND_ERROR,
 		[qr{cannot coerce double to boolean}], q{\set b NOT 0.0}
 	],
 	[
-		'set not an int',                   0,
+		'set not an int', 0, META_COMMAND_ERROR,
 		[qr{cannot coerce boolean to int}], q{\set i TRUE + 2}
 	],
 	[
-		'set not a double',                    0,
+		'set not a double', 0, META_COMMAND_ERROR,
 		[qr{cannot coerce boolean to double}], q{\set d ln(TRUE)}
 	],
 	[
 		'set case error',
 		1,
+		SYNTAX_ERROR,
 		[qr{syntax error in command "set"}],
 		q{\set i CASE TRUE THEN 1 ELSE 0 END}
 	],
 	[
-		'set random error',                 0,
+		'set random error', 0, META_COMMAND_ERROR,
 		[qr{cannot coerce boolean to int}], q{\set b random(FALSE, TRUE)}
 	],
 	[
-		'set number of args mismatch',        1,
+		'set number of args mismatch', 1, SYNTAX_ERROR,
 		[qr{unexpected number of arguments}], q{\set d ln(1.0, 2.0))}
 	],
 	[
-		'set at least one arg',               1,
+		'set at least one arg', 1, SYNTAX_ERROR,
 		[qr{at least one argument expected}], q{\set i greatest())}
 	],
 
 	# SETSHELL
 	[
-		'setshell not an int',                0,
+		'setshell not an int', 0, META_COMMAND_ERROR,
 		[qr{command must return an integer}], q{\setshell i echo -n one}
 	],
-	[ 'setshell missing arg', 1, [qr{missing argument }], q{\setshell var} ],
 	[
-		'setshell no such command',   0,
+		'setshell missing arg', 1, SYNTAX_ERROR,
+		[qr{missing argument }], q{\setshell var}
+	],
+	[
+		'setshell no such command', 0, META_COMMAND_ERROR,
 		[qr{could not read result }], q{\setshell var no-such-command}
 	],
 
 	# SLEEP
 	[
-		'sleep undefined variable',      0,
+		'sleep undefined variable', 0, META_COMMAND_ERROR,
 		[qr{sleep: undefined variable}], q{\sleep :nosuchvariable}
 	],
 	[
-		'sleep too many args',    1,
+		'sleep too many args', 1, SYNTAX_ERROR,
 		[qr{too many arguments}], q{\sleep too many args}
 	],
 	[
-		'sleep missing arg', 1,
+		'sleep missing arg', 1, SYNTAX_ERROR,
 		[ qr{missing argument}, qr{\\sleep} ], q{\sleep}
 	],
 	[
-		'sleep unknown unit',         1,
+		'sleep unknown unit', 1, SYNTAX_ERROR,
 		[qr{unrecognized time unit}], q{\sleep 1 week}
+	],
+
+	# CONDITIONAL BLOCKS
+	[   'error inside a conditional block', 0, SQL_ERROR,
+		[qr{ERROR:  division by zero}],
+		q{-- error inside a conditional block
+\if true
+SELECT 1 / 0;
+\endif
+}
 	],
 
 	# MISC
 	[
-		'misc invalid backslash command',         1,
+		'misc invalid backslash command', 1, SYNTAX_ERROR,
 		[qr{invalid command .* "nosuchcommand"}], q{\nosuchcommand}
 	],
-	[ 'misc empty script', 1, [qr{empty command list for script}], q{} ],
 	[
-		'bad boolean',                     0,
+		'misc empty script', 1, SYNTAX_ERROR,
+		[qr{empty command list for script}], q{}
+	],
+	[
+		'bad boolean', 0, META_COMMAND_ERROR,
 		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true}
 	],);
 
 
 for my $e (@errors)
 {
-	my ($name, $status, $re, $script) = @$e;
+	my ($name, $status, $error_type, $re, $script) = @$e;
 	my $n = '001_pgbench_error_' . $name;
 	$n =~ s/ /_/g;
+	my $test_name = 'pgbench script error: ' . $name;
+	my $stdout_re;
+
+	if ($status)
+	{
+		# only syntax errors get non-zero exit status
+		# internal error which should never occur
+		die $test_name . ": unexpected error type: " . $error_type . "\n"
+		if ($error_type != SYNTAX_ERROR);
+
+		$stdout_re = [ qr{^$} ];
+	}
+	else
+	{
+		$stdout_re =
+			[ qr{processed: 0/1}, qr{number of failures: 1 \(100.000%\)},
+			  qr{^((?!number of retried)(.|\n))*$} ];
+
+		if ($error_type == SQL_ERROR)
+		{
+			push @$stdout_re,
+				qr{number of serialization failures: 0 \(0.000%\)},
+				qr{number of deadlock failures: 0 \(0.000%\)},
+				qr{number of other SQL failures: 1 \(100.000%\)};
+		}
+		elsif ($error_type == META_COMMAND_ERROR)
+		{
+			push @$stdout_re,
+				qr{number of meta-command failures: 1 \(100.000%\)};
+		}
+		else
+		{
+			# internal error which should never occur
+			die $test_name . ": unexpected error type: " . $error_type . "\n";
+		}
+	}
+
 	pgbench(
-		'-n -t 1 -Dfoo=bla -Dnull=null -Dtrue=true -Done=1 -Dzero=0.0 -Dbadtrue=trueXXX -M prepared',
+		'-n -t 1 -Dfoo=bla -Dnull=null -Dtrue=true -Done=1 -Dzero=0.0 -Dbadtrue=trueXXX -M prepared --failures-detailed --print-errors',
 		$status,
-		[ $status ? qr{^$} : qr{processed: 0/1} ],
+		$stdout_re,
 		$re,
-		'pgbench script error: ' . $name,
+		$test_name,
 		{ $n => $script });
 }
 
@@ -847,6 +938,245 @@ pgbench(
 
 check_pgbench_logs("$bdir/001_pgbench_log_3", 1, 10, 10,
 	qr{^\d \d{1,2} \d+ \d \d+ \d+$});
+
+# abortion of the client if the script contains an incomplete transaction block
+pgbench(
+	'--no-vacuum', 0, [ qr{processed: 1/10} ],
+	[ qr{client 0 aborted: end of script reached without completing the last transaction} ],
+	'incomplete transaction block',
+	{ '001_pgbench_incomplete_transaction_block' => q{BEGIN;SELECT 1;} });
+
+# Rollback of transaction block in case of meta command failure.
+#
+# If the rollback is not performed, we either continue the current transaction
+# block or we terminate it successfully. In the first case we get an abortion of
+# the client (we reached the end of the script with an incomplete transaction
+# block). In the second case we run the second transaction and get a failure in
+# the SQL command (the previous transaction was successful and inserting the
+# same value will get a unique violation error).
+
+$node->safe_psql('postgres',
+	'CREATE UNLOGGED TABLE x_unique (x integer UNIQUE);');
+
+pgbench(
+	'--no-vacuum -t 2 --failures-detailed', 0,
+	[
+		qr{processed: 0/2},
+		qr{number of meta-command failures: 2 \(100.000%\)}
+	],
+	[qr{^$}],
+	'rollback of transaction block in case of meta command failure',
+	{ '001_pgbench_rollback_of_transaction_block_in_case_of_meta_command_failure' => q{
+BEGIN;
+INSERT INTO x_unique VALUES (1);
+\set i 1/0
+END;
+}
+	});
+
+# clean up
+$node->safe_psql('postgres', 'DROP TABLE x_unique');
+
+# Test the concurrent update in the table row and deadlocks.
+
+$node->safe_psql('postgres',
+	'CREATE UNLOGGED TABLE first_client_table (value integer); '
+  . 'CREATE UNLOGGED TABLE xy (x integer, y integer); '
+  . 'INSERT INTO xy VALUES (1, 2);');
+
+# Serialization error and retry
+
+local $ENV{PGOPTIONS} = "-c default_transaction_isolation=repeatable\\ read";
+
+# Check that we have a serialization error and the same random value of the
+# delta variable in the next try
+my $err_pattern =
+	"(client (0|1) sending UPDATE xy SET y = y \\+ -?\\d+\\b).*"
+  . "client \\g2 got an error in command 3 \\(SQL\\) of script 0; "
+  . "ERROR:  could not serialize access due to concurrent update\\b.*"
+  . "\\g1";
+
+pgbench(
+	"-n -c 2 -t 1 -d --max-tries 2",
+	0,
+	[ qr{processed: 2/2\b}, qr{^((?!number of failures)(.|\n))*$},
+	  qr{number of retried: 1\b}, qr{number of retries: 1\b} ],
+	[ qr/$err_pattern/s ],
+	'concurrent update with retrying',
+	{
+		'001_pgbench_serialization' => q{
+-- What's happening:
+-- The first client starts the transaction with the isolation level Repeatable
+-- Read:
+--
+-- BEGIN;
+-- UPDATE xy SET y = ... WHERE x = 1;
+--
+-- The second client starts a similar transaction with the same isolation level:
+--
+-- BEGIN;
+-- UPDATE xy SET y = ... WHERE x = 1;
+-- <waiting for the first client>
+--
+-- The first client commits its transaction, and the second client gets a
+-- serialization error.
+
+\set delta random(-5000, 5000)
+
+-- The second client will stop here
+SELECT pg_advisory_lock(0);
+
+-- Start transaction with concurrent update
+BEGIN;
+UPDATE xy SET y = y + :delta WHERE x = 1 AND pg_advisory_lock(1) IS NOT NULL;
+
+-- Wait for the second client
+DO $$
+DECLARE
+  exists boolean;
+  waiters integer;
+BEGIN
+  -- The second client always comes in second, and the number of rows in the
+  -- table first_client_table reflect this. Here the first client inserts a row,
+  -- so the second client will see a non-empty table when repeating the
+  -- transaction after the serialization error.
+  SELECT EXISTS (SELECT * FROM first_client_table) INTO STRICT exists;
+  IF NOT exists THEN
+	-- Let the second client begin
+	PERFORM pg_advisory_unlock(0);
+	-- And wait until the second client tries to get the same lock
+	LOOP
+	  SELECT COUNT(*) INTO STRICT waiters FROM pg_locks WHERE
+	  locktype = 'advisory' AND objsubid = 1 AND
+	  ((classid::bigint << 32) | objid::bigint = 1::bigint) AND NOT granted;
+	  IF waiters = 1 THEN
+		INSERT INTO first_client_table VALUES (1);
+
+		-- Exit loop
+		EXIT;
+	  END IF;
+	END LOOP;
+  END IF;
+END$$;
+
+COMMIT;
+SELECT pg_advisory_unlock_all();
+}
+	});
+
+# Clean up
+
+$node->safe_psql('postgres', 'DELETE FROM first_client_table;');
+
+local $ENV{PGOPTIONS} = "-c default_transaction_isolation=read\\ committed";
+
+# Deadlock error and retry
+
+# Check that we have a deadlock error
+$err_pattern =
+	"client (0|1) got an error in command (3|5) \\(SQL\\) of script 0; "
+  . "ERROR:  deadlock detected\\b";
+
+pgbench(
+	"-n -c 2 -t 1 --max-tries 2 --print-errors",
+	0,
+	[ qr{processed: 2/2\b}, qr{^((?!number of failures)(.|\n))*$},
+	  qr{number of retried: 1\b}, qr{number of retries: 1\b} ],
+	[ qr{$err_pattern} ],
+	'deadlock with retrying',
+	{
+		'001_pgbench_deadlock' => q{
+-- What's happening:
+-- The first client gets the lock 2.
+-- The second client gets the lock 3 and tries to get the lock 2.
+-- The first client tries to get the lock 3 and one of them gets a deadlock
+-- error.
+--
+-- A client that does not get a deadlock error must hold a lock at the
+-- transaction start. Thus in the end it releases all of its locks before the
+-- client with the deadlock error starts a retry (we do not want any errors
+-- again).
+
+-- Since the client with the deadlock error has not released the blocking locks,
+-- let's do this here.
+SELECT pg_advisory_unlock_all();
+
+-- The second client and the client with the deadlock error stop here
+SELECT pg_advisory_lock(0);
+SELECT pg_advisory_lock(1);
+
+-- The second client and the client with the deadlock error always come after
+-- the first and the number of rows in the table first_client_table reflects
+-- this. Here the first client inserts a row, so in the future the table is
+-- always non-empty.
+DO $$
+DECLARE
+  exists boolean;
+BEGIN
+  SELECT EXISTS (SELECT * FROM first_client_table) INTO STRICT exists;
+  IF exists THEN
+	-- We are the second client or the client with the deadlock error
+
+	-- The first client will take care by itself of this lock (see below)
+	PERFORM pg_advisory_unlock(0);
+
+	PERFORM pg_advisory_lock(3);
+
+	-- The second client can get a deadlock here
+	PERFORM pg_advisory_lock(2);
+  ELSE
+	-- We are the first client
+
+	-- This code should not be used in a new transaction after an error
+	INSERT INTO first_client_table VALUES (1);
+
+	PERFORM pg_advisory_lock(2);
+  END IF;
+END$$;
+
+DO $$
+DECLARE
+  num_rows integer;
+  waiters integer;
+BEGIN
+  -- Check if we are the first client
+  SELECT COUNT(*) FROM first_client_table INTO STRICT num_rows;
+  IF num_rows = 1 THEN
+	-- This code should not be used in a new transaction after an error
+	INSERT INTO first_client_table VALUES (2);
+
+	-- Let the second client begin
+	PERFORM pg_advisory_unlock(0);
+	PERFORM pg_advisory_unlock(1);
+
+	-- Make sure the second client is ready for deadlock
+	LOOP
+	  SELECT COUNT(*) INTO STRICT waiters FROM pg_locks WHERE
+	  locktype = 'advisory' AND
+	  objsubid = 1 AND
+	  ((classid::bigint << 32) | objid::bigint = 2::bigint) AND
+	  NOT granted;
+
+	  IF waiters = 1 THEN
+	    -- Exit loop
+		EXIT;
+	  END IF;
+	END LOOP;
+
+	PERFORM pg_advisory_lock(0);
+    -- And the second client took care by itself of the lock 1
+  END IF;
+END$$;
+
+-- The first client can get a deadlock here
+SELECT pg_advisory_lock(3);
+
+SELECT pg_advisory_unlock_all();
+}
+	});
+
+# Clean up
+$node->safe_psql('postgres', 'DROP TABLE first_client_table, xy;');
 
 # done
 $node->stop;

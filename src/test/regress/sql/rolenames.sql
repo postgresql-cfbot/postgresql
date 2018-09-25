@@ -438,6 +438,67 @@ REVOKE ALL PRIVILEGES ON FUNCTION testagg9(int2) FROM "none"; --error
 
 SELECT proname, proacl FROM pg_proc WHERE proname LIKE 'testagg_';
 
+
+-- DEFAULT MONITORING ROLES
+
+CREATE ROLE regress_role_haspriv;
+CREATE ROLE regress_role_nopriv;
+
+-- pg_read_all_stats
+
+GRANT pg_read_all_stats TO regress_role_haspriv;
+
+SET SESSION AUTHORIZATION regress_role_haspriv;
+-- should not fail because regress_role_haspriv is a member of pg_read_all_stats
+SELECT pg_tablespace_size('pg_global') > 0 AS canread;
+-- should not fail because it is a default tablespace
+SELECT pg_tablespace_size('pg_default') > 0 AS canread;
+-- should be true because regress_role_haspriv is member of pg_read_all_stats
+SELECT COUNT(*) = 0 AS haspriv FROM pg_stat_activity WHERE "query" = '<insufficient privilege>';
+
+SET SESSION AUTHORIZATION regress_role_nopriv;
+-- should fail because regress_role_nopriv has not CREATE permission on this tablespace
+SELECT pg_tablespace_size('pg_global') > 0 AS canread;
+-- should not fail because it is a default tablespace
+SELECT pg_tablespace_size('pg_default') > 0 AS canread;
+-- should be false because current session belongs to superuser
+SELECT COUNT(*) = 0 AS haspriv FROM pg_stat_activity WHERE "query" = '<insufficient privilege>';
+
+RESET SESSION AUTHORIZATION;
+
+REVOKE pg_read_all_stats FROM regress_role_haspriv;
+
+-- pg_read_all_settings
+
+GRANT pg_read_all_settings TO regress_role_haspriv;
+
+BEGIN;
+-- session_preload_libraries is of PGC_SUSET category
+SET LOCAL session_preload_libraries TO 'path-to-preload-libraries';
+-- vacuum_cost_delay is of PGC_USERSET category
+SET LOCAL vacuum_cost_delay TO 40;
+
+SET SESSION AUTHORIZATION regress_role_haspriv;
+-- should not fail because regress_role_haspriv is a member of pg_read_all_settings
+SHOW session_preload_libraries;
+-- should not fail because this config option has not GUC_SUPERUSER_ONLY flag
+SHOW vacuum_cost_delay;
+
+SET SESSION AUTHORIZATION regress_role_nopriv;
+-- should not fail because this config option has not GUC_SUPERUSER_ONLY flag
+SHOW vacuum_cost_delay;
+
+RESET SESSION AUTHORIZATION;
+ROLLBACK;
+
+SET SESSION AUTHORIZATION regress_role_nopriv;
+-- should fail because regress_role_nopriv is not superuser and is not a member of pg_read_all_settings
+SHOW session_preload_libraries;
+
+RESET SESSION AUTHORIZATION;
+
+REVOKE pg_read_all_settings FROM regress_role_haspriv;
+
 -- clean up
 \c
 
@@ -445,3 +506,4 @@ DROP SCHEMA test_roles_schema;
 DROP OWNED BY regress_testrol0, "Public", "current_user", regress_testrol1, regress_testrol2, regress_testrolx CASCADE;
 DROP ROLE regress_testrol0, regress_testrol1, regress_testrol2, regress_testrolx;
 DROP ROLE "Public", "None", "current_user", "session_user", "user";
+DROP ROLE regress_role_haspriv, regress_role_nopriv;

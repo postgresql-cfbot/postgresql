@@ -218,7 +218,7 @@ extern void ExecSetExecProcNode(PlanState *node, ExecProcNodeMtd function);
 extern Node *MultiExecProcNode(PlanState *node);
 extern void ExecEndNode(PlanState *node);
 extern bool ExecShutdownNode(PlanState *node);
-extern void ExecSetTupleBound(int64 tuples_needed, PlanState *child_node);
+extern void ExecSetTupleBound(int64 tuples_needed, int64 tuples_to_skip, PlanState *child_node);
 
 
 /* ----------------------------------------------------------------

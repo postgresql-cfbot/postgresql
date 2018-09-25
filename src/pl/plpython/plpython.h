@@ -27,18 +27,14 @@
  */
 #undef _POSIX_C_SOURCE
 #undef _XOPEN_SOURCE
-#undef HAVE_STRERROR
 #undef HAVE_TZNAME
 
 /*
  * Sometimes python carefully scribbles on our *printf macros.
  * So we undefine them here and redefine them after it's done its dirty deed.
  */
-
-#ifdef USE_REPL_SNPRINTF
 #undef snprintf
 #undef vsnprintf
-#endif
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 /* Python uses #pragma to bring in a non-default libpython on VC++ if
@@ -125,7 +121,6 @@ typedef int Py_ssize_t;
 #include <eval.h>
 
 /* put back our snprintf and vsnprintf */
-#ifdef USE_REPL_SNPRINTF
 #ifdef snprintf
 #undef snprintf
 #endif
@@ -139,7 +134,6 @@ typedef int Py_ssize_t;
 #define vsnprintf				pg_vsnprintf
 #define snprintf				pg_snprintf
 #endif							/* __GNUC__ */
-#endif							/* USE_REPL_SNPRINTF */
 
 /*
  * Used throughout, and also by the Python 2/3 porting layer, so it's easier to

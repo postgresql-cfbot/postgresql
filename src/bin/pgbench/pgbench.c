@@ -4868,6 +4868,8 @@ main(int argc, char **argv)
 	PGresult   *res;
 	char	   *env;
 
+	int			exit_code = 0;
+
 	progname = get_progname(argv[0]);
 
 	if (argc > 1)
@@ -5612,6 +5614,9 @@ main(int argc, char **argv)
 		(void) threadRun(thread);
 #endif							/* ENABLE_THREAD_SAFETY */
 
+		if (thread->state->state == CSTATE_ABORTED)
+			exit_code = 1;
+
 		/* aggregate thread level stats */
 		mergeSimpleStats(&stats.latency, &thread->stats.latency);
 		mergeSimpleStats(&stats.lag, &thread->stats.lag);
@@ -5636,7 +5641,10 @@ main(int argc, char **argv)
 	INSTR_TIME_SUBTRACT(total_time, start_time);
 	printResults(threads, &stats, total_time, conn_total_time, latency_late);
 
-	return 0;
+	if (exit_code != 0)
+		fprintf(stderr, "Run was aborted; the above results are incomplete.\n");
+
+	return exit_code;
 }
 
 static void *

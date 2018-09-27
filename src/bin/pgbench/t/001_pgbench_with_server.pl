@@ -534,7 +534,7 @@ my @errors = (
 	# SQL
 	[
 		'sql syntax error',
-		0,
+		1,
 		[
 			qr{ERROR:  syntax error},
 			qr{prepared statement .* does not exist}
@@ -553,11 +553,11 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 
 	# SHELL
 	[
-		'shell bad command',                    0,
+		'shell bad command',                    1,
 		[qr{\(shell\) .* meta-command failed}], q{\shell no-such-command}
 	],
 	[
-		'shell undefined variable', 0,
+		'shell undefined variable', 1,
 		[qr{undefined variable ":nosuchvariable"}],
 		q{-- undefined variable in shell
 \shell echo ::foo :nosuchvariable
@@ -597,81 +597,81 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 		[qr{unexpected function name}], q{\set i noSuchFunction()}
 	],
 	[
-		'set invalid variable name', 0,
+		'set invalid variable name', 1,
 		[qr{invalid variable name}], q{\set . 1}
 	],
 	[
-		'set int overflow',                   0,
+		'set int overflow',                   1,
 		[qr{double to int overflow for 100}], q{\set i int(1E32)}
 	],
-	[ 'set division by zero', 0, [qr{division by zero}], q{\set i 1/0} ],
+	[ 'set division by zero', 1, [qr{division by zero}], q{\set i 1/0} ],
 	[
-		'set bigint out of range', 0,
+		'set bigint out of range', 1,
 		[qr{bigint out of range}], q{\set i 9223372036854775808 / -1}
 	],
 	[
 		'set undefined variable',
-		0,
+		1,
 		[qr{undefined variable "nosuchvariable"}],
 		q{\set i :nosuchvariable}
 	],
 	[ 'set unexpected char', 1, [qr{unexpected character .;.}], q{\set i ;} ],
 	[
 		'set too many args',
-		0,
+		1,
 		[qr{too many function arguments}],
 		q{\set i least(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16)}
 	],
 	[
-		'set empty random range',          0,
+		'set empty random range',          1,
 		[qr{empty range given to random}], q{\set i random(5,3)}
 	],
 	[
 		'set random range too large',
-		0,
+		1,
 		[qr{random range is too large}],
 		q{\set i random(-9223372036854775808, 9223372036854775807)}
 	],
 	[
 		'set gaussian param too small',
-		0,
+		1,
 		[qr{gaussian param.* at least 2}],
 		q{\set i random_gaussian(0, 10, 1.0)}
 	],
 	[
 		'set exponential param greater 0',
-		0,
+		1,
 		[qr{exponential parameter must be greater }],
 		q{\set i random_exponential(0, 10, 0.0)}
 	],
 	[
 		'set zipfian param to 1',
-		0,
+		1,
 		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
 		q{\set i random_zipfian(0, 10, 1)}
 	],
 	[
 		'set zipfian param too large',
-		0,
+		1,
 		[qr{zipfian parameter must be in range \(0, 1\) U \(1, \d+\]}],
 		q{\set i random_zipfian(0, 10, 1000000)}
 	],
 	[
-		'set non numeric value',                     0,
+		'set non numeric value',                     1,
 		[qr{malformed variable "foo" value: "bla"}], q{\set i :foo + 1}
 	],
 	[ 'set no expression',    1, [qr{syntax error}],      q{\set i} ],
 	[ 'set missing argument', 1, [qr{missing argument}i], q{\set} ],
 	[
-		'set not a bool',                      0,
+		'set not a bool',                      1,
 		[qr{cannot coerce double to boolean}], q{\set b NOT 0.0}
 	],
 	[
-		'set not an int',                   0,
+		'set not an int',                   1,
 		[qr{cannot coerce boolean to int}], q{\set i TRUE + 2}
 	],
 	[
-		'set not a double',                    0,
+		'set not a double',                    1,
 		[qr{cannot coerce boolean to double}], q{\set d ln(TRUE)}
 	],
 	[
@@ -681,7 +681,7 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 		q{\set i CASE TRUE THEN 1 ELSE 0 END}
 	],
 	[
-		'set random error',                 0,
+		'set random error',                 1,
 		[qr{cannot coerce boolean to int}], q{\set b random(FALSE, TRUE)}
 	],
 	[
@@ -695,18 +695,18 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 
 	# SETSHELL
 	[
-		'setshell not an int',                0,
+		'setshell not an int',                1,
 		[qr{command must return an integer}], q{\setshell i echo -n one}
 	],
 	[ 'setshell missing arg', 1, [qr{missing argument }], q{\setshell var} ],
 	[
-		'setshell no such command',   0,
+		'setshell no such command',   1,
 		[qr{could not read result }], q{\setshell var no-such-command}
 	],
 
 	# SLEEP
 	[
-		'sleep undefined variable',      0,
+		'sleep undefined variable',      1,
 		[qr{sleep: undefined variable}], q{\sleep :nosuchvariable}
 	],
 	[
@@ -729,7 +729,7 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	],
 	[ 'misc empty script', 1, [qr{empty command list for script}], q{} ],
 	[
-		'bad boolean',                     0,
+		'bad boolean',                     1,
 		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true}
 	],);
 
@@ -737,12 +737,13 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 for my $e (@errors)
 {
 	my ($name, $status, $re, $script) = @$e;
+	$status != 0 or die;
 	my $n = '001_pgbench_error_' . $name;
 	$n =~ s/ /_/g;
 	pgbench(
 		'-n -t 1 -Dfoo=bla -Dnull=null -Dtrue=true -Done=1 -Dzero=0.0 -Dbadtrue=trueXXX -M prepared',
 		$status,
-		[ $status ? qr{^$} : qr{processed: 0/1} ],
+		[],
 		$re,
 		'pgbench script error: ' . $name,
 		{ $n => $script });

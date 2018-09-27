@@ -689,8 +689,15 @@ other			.
 	 * substitution.  We want these before {self}, also.
 	 */
 
-"\\"[;:]		{
-					/* Force a semicolon or colon into the query buffer */
+"\\";			{
+					/* Count compound commands */
+					cur_state->semicolons++;
+					/* Force a semicolon into the query buffer */
+					psqlscan_emit(cur_state, yytext + 1, 1);
+				}
+
+"\\":			{
+					/* Force a colon into the query buffer */
 					psqlscan_emit(cur_state, yytext + 1, 1);
 				}
 

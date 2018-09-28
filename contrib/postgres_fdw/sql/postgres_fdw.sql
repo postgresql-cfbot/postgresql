@@ -15,6 +15,10 @@ DO $d$
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
+        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
     END;
 $d$;
 
@@ -22,6 +26,7 @@ CREATE USER MAPPING FOR public SERVER testserver1
 	OPTIONS (user 'value', password 'value');
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback;
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback2;
+CREATE USER MAPPING FOR CURRENT_USER SERVER loopback3;
 
 -- ===================================================================
 -- create objects used through FDW loopback server
@@ -55,6 +60,14 @@ CREATE TABLE "S 1"."T 4" (
 	c2 int NOT NULL,
 	c3 text,
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
+);
+CREATE TABLE "S 1"."T 5" (
+       c1 int NOT NULL
+);
+
+CREATE TABLE "S 1"."T 6" (
+       c1 int NOT NULL,
+       CONSTRAINT t6_pkey PRIMARY KEY (c1)
 );
 
 -- Disable autovacuum for these tables to avoid unexpected effects of that
@@ -94,6 +107,7 @@ ANALYZE "S 1"."T 1";
 ANALYZE "S 1"."T 2";
 ANALYZE "S 1"."T 3";
 ANALYZE "S 1"."T 4";
+ANALYZE "S 1"."T 5";
 
 -- ===================================================================
 -- create foreign tables
@@ -141,6 +155,19 @@ CREATE FOREIGN TABLE ft6 (
 	c2 int NOT NULL,
 	c3 text
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
+
+CREATE FOREIGN TABLE ft7_twophase (
+       c1 int NOT NULL
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
+
+CREATE FOREIGN TABLE ft8_twophase (
+       c1 int NOT NULL
+) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 5');
+
+CREATE FOREIGN TABLE ft9_not_twophase (
+       c1 int NOT NULL
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 5');
+
 
 -- A table with oids. CREATE FOREIGN TABLE doesn't support the
 -- WITH OIDS option, but ALTER does.
@@ -2304,7 +2331,6 @@ SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a 
 
 RESET enable_partitionwise_join;
 
-
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
@@ -2354,3 +2380,126 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
 
 -- Clean-up
 RESET enable_partitionwise_aggregate;
+
+-- ===================================================================
+-- test atomic commit across foreign servers
+-- ===================================================================
+
+ALTER SERVER loopback OPTIONS(ADD two_phase_commit 'on');
+ALTER SERVER loopback2 OPTIONS(ADD two_phase_commit 'on');
+ALTER SERVER loopback3 OPTIONS(ADD two_phase_commit 'off');
+
+\det+
+
+-- Check two_phase_commit setting
+SELECT srvname FROM pg_foreign_server WHERE 'two_phase_commit=on' = ANY(srvoptions) or 'two_phase_commit=off' = ANY(srvoptions);
+
+-- Enable atomic commit
+SET foreign_twophase_commit TO on;
+
+-- Modify one 2PC-capable server then commit and rollback.
+BEGIN;
+INSERT INTO ft7_twophase VALUES(1);
+COMMIT;
+SELECT * FROM ft7_twophase;
+
+BEGIN;
+INSERT INTO ft7_twophase VALUES(1);
+ROLLBACK;
+SELECT * FROM ft7_twophase;
+
+-- Modify two 2PC-capable servers then commit and rollback.
+-- This requires to use 2PC when commit.
+BEGIN;
+INSERT INTO ft7_twophase VALUES(2);
+INSERT INTO ft8_twophase VALUES(2);
+COMMIT;
+SELECT * FROM ft7_twophase;
+SELECT * FROM ft8_twophase;
+
+BEGIN;
+INSERT INTO ft7_twophase VALUES(3);
+INSERT INTO ft8_twophase VALUES(3);
+ROLLBACK;
+SELECT * FROM ft7_twophase;
+SELECT * FROM ft8_twophase;
+
+-- Modify both local data and 2PC-capable server then commit and rollback.
+BEGIN;
+INSERT INTO ft7_twophase VALUES(4);
+INSERT INTO "S 1"."T 6" VALUES (4);
+COMMIT;
+SELECT * FROM ft7_twophase;
+SELECT * FROM "S 1"."T 6";
+
+BEGIN;
+INSERT INTO ft7_twophase VALUES(5);
+INSERT INTO "S 1"."T 6" VALUES (5);
+ROLLBACK;
+SELECT * FROM ft7_twophase;
+SELECT * FROM "S 1"."T 6";
+
+-- Modify foreign server and raise an error
+BEGIN;
+INSERT INTO ft7_twophase VALUES(8);
+INSERT INTO ft8_twophase VALUES(NULL); -- violation
+ROLLBACK;
+SELECT * FROM ft7_twophase;
+SELECT * FROM ft8_twophase;
+
+-- Rollback foreign transaction that involves both 2PC-capable
+-- and 2PC-non-capable foreign servers.
+BEGIN;
+INSERT INTO ft8_twophase VALUES(7);
+INSERT INTO ft9_not_twophase VALUES(7);
+ROLLBACK;
+SELECT * FROM ft8_twophase;
+SELECT * FROM ft9_not_twophase;
+
+-- Fails, cannot commit the distributed transaction if 2PC-non-capable
+-- server involved in.
+BEGIN;
+INSERT INTO ft8_twophase VALUES(6);
+INSERT INTO ft9_not_twophase VALUES(6);
+COMMIT; -- error
+SELECT * FROM ft8_twophase;
+SELECT * FROM ft9_not_twophase;
+
+-- Disables atomic commit, and success the same case as above.
+SET foreign_twophase_commit TO off;
+BEGIN;
+INSERT INTO ft8_twophase VALUES(6);
+INSERT INTO ft9_not_twophase VALUES(6);
+COMMIT; -- success
+SELECT * FROM ft8_twophase;
+SELECT * FROM ft9_not_twophase;
+
+-- Enable atomic commit, again.
+SET foreign_twophase_commit TO on;
+
+-- Commit and rollback foreign transactions that are part of
+-- prepare transaction.
+BEGIN;
+INSERT INTO ft7_twophase VALUES(9);
+INSERT INTO ft8_twophase VALUES(9);
+PREPARE TRANSACTION 'gx1';
+COMMIT PREPARED 'gx1';
+SELECT * FROM ft7_twophase;
+SELECT * FROM ft8_twophase;
+
+BEGIN;
+INSERT INTO ft7_twophase VALUES(10);
+INSERT INTO ft8_twophase VALUES(10);
+PREPARE TRANSACTION 'gx1';
+ROLLBACK PREPARED 'gx1';
+SELECT * FROM ft7_twophase;
+SELECT * FROM ft8_twophase;
+
+-- Fails, cannot prepare the transaction if non-supporeted
+-- server involved in.
+BEGIN;
+INSERT INTO ft8_twophase VALUES(11);
+INSERT INTO ft9_not_twophase VALUES(11);
+PREPARE TRANSACTION 'gx1'; -- error
+SELECT * FROM ft8_twophase;
+SELECT * FROM ft9_not_twophase;

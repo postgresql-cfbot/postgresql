@@ -99,6 +99,8 @@
 #include "catalog/pg_control.h"
 #include "common/file_perm.h"
 #include "common/ip.h"
+#include "foreign/fdwxact_resolver.h"
+#include "foreign/fdwxact_launcher.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
@@ -904,6 +906,10 @@ PostmasterMain(int argc, char *argv[])
 		ereport(ERROR,
 				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"replica\" or \"logical\"")));
 
+	if (max_prepared_foreign_xacts > 0 && max_foreign_xact_resolvers == 0)
+		ereport(ERROR,
+				(errmsg("preparing foreign transactions (max_prepared_foreign_transactions > 0) requires maX_foreign_xact_resolvers > 0")));
+
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.
 	 * (Put any slow processing further down, after postmaster.pid creation.)
@@ -979,12 +985,13 @@ PostmasterMain(int argc, char *argv[])
 #endif
 
 	/*
-	 * Register the apply launcher.  Since it registers a background worker,
-	 * it needs to be called before InitializeMaxBackends(), and it's probably
-	 * a good idea to call it before any modules had chance to take the
-	 * background worker slots.
+	 * Register the apply launcher and foreign transaction launcher.  Since
+	 * it registers a background worker, it needs to be called before
+	 * InitializeMaxBackends(), and it's probably a good idea to call it
+	 * before any modules had chance to take the background worker slots.
 	 */
 	ApplyLauncherRegister();
+	FdwXactLauncherRegister();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start

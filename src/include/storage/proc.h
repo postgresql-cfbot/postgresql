@@ -153,6 +153,16 @@ struct PGPROC
 	SHM_QUEUE	syncRepLinks;	/* list link if process is in syncrep queue */
 
 	/*
+	 * Info to allow us to wait for foreign transaction to be resolved, if
+	 * needed.
+	 */
+	TransactionId	fdwXactWaitXid;	/* waiting for foreign transaction involved with
+									 * this transaction id to be resolved */
+	int			fdwXactState;	/* wait state for foreign transaction
+								 * resolution */
+	SHM_QUEUE	fdwXactLinks;	/* list link if process is in queue */
+
+	/*
 	 * All PROCLOCK objects for locks held or awaited by this backend are
 	 * linked into one of these lists, according to the partition number of
 	 * their lock.

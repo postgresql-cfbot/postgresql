@@ -22,9 +22,11 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "executor/executor.h"
 #include "executor/nodeForeignscan.h"
 #include "foreign/fdwapi.h"
+#include "foreign/fdwxact.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -224,7 +226,13 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	 * Tell the FDW to initialize the scan.
 	 */
 	if (node->operation != CMD_SELECT)
+	{
 		fdwroutine->BeginDirectModify(scanstate, eflags);
+
+		/* Mark this transaction modified data on the foreign server */
+		FdwXactMarkForeignTransactionModified(estate->es_result_relation_info,
+										 eflags);
+	}
 	else
 		fdwroutine->BeginForeignScan(scanstate, eflags);
 

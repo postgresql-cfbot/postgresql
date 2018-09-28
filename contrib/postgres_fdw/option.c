@@ -108,7 +108,8 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		 * Validate option value, when we can do so without any context.
 		 */
 		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
-			strcmp(def->defname, "updatable") == 0)
+			strcmp(def->defname, "updatable") == 0 ||
+			strcmp(def->defname, "two_phase_commit") == 0)
 		{
 			/* these accept only boolean values */
 			(void) defGetBoolean(def);
@@ -177,6 +178,8 @@ InitPgFdwOptions(void)
 		/* fetch_size is available on both server and table */
 		{"fetch_size", ForeignServerRelationId, false},
 		{"fetch_size", ForeignTableRelationId, false},
+		/* two phase commit support */
+		{"two_phase_commit", ForeignServerRelationId, false},
 		{NULL, InvalidOid, false}
 	};
 

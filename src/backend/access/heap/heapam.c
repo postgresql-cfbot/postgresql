@@ -2611,6 +2611,10 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		heap_freetuple(heaptup);
 	}
 
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(relation))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 	return HeapTupleGetOid(tup);
 }
 
@@ -3431,6 +3435,10 @@ l1:
 
 	if (old_key_tuple != NULL && old_key_copied)
 		heap_freetuple(old_key_tuple);
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(relation))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	return HeapTupleMayBeUpdated;
 }
@@ -4381,6 +4389,10 @@ l2:
 
 	if (old_key_tuple != NULL && old_key_copied)
 		heap_freetuple(old_key_tuple);
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(relation))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	bms_free(hot_attrs);
 	bms_free(proj_idx_attrs);

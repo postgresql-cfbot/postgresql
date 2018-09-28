@@ -38,6 +38,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
+#include "foreign/fdwxact.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -397,6 +398,10 @@ InitProcess(void)
 	MyProc->waitLSN = 0;
 	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
 	SHMQueueElemInit(&(MyProc->syncRepLinks));
+
+	/* initialize fields for fdw xact */
+	MyProc->fdwXactState = FDW_XACT_NOT_WAITING;
+	SHMQueueElemInit(&(MyProc->fdwXactLinks));
 
 	/* Initialize fields for group XID clearing. */
 	MyProc->procArrayGroupMember = false;
@@ -798,6 +803,9 @@ ProcKill(int code, Datum arg)
 
 	/* Make sure we're out of the sync rep lists */
 	SyncRepCleanupAtProcExit();
+
+	/* Make sure we're out of the fdwxact lists */
+	FdwXactCleanupAtProcExit();
 
 #ifdef USE_ASSERT_CHECKING
 	{

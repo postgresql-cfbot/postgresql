@@ -36,6 +36,8 @@
 
 #define		PROCARRAY_SLOTS_XMIN			0x20	/* replication slot xmin,
 													 * catalog_xmin */
+#define		PROCARRAY_FDW_XACT_XMIN			0x40	/* unresolved distributed
+													   transaciton xmin */
 /*
  * Only flags in PROCARRAY_PROC_FLAGS_MASK are considered when matching
  * PGXACT->vacuumFlags. Other flags are used for different purposes and
@@ -124,4 +126,7 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 								TransactionId *catalog_xmin);
 
+
+extern void ProcArraySetFdwXactUnresolvedXmin(TransactionId xmin);
+extern TransactionId ProcArrayGetFdwXactUnresolvedXmin(void);
 #endif							/* PROCARRAY_H */

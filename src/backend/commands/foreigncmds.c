@@ -28,6 +28,7 @@
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "foreign/fdwapi.h"
+#include "foreign/fdwxact.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "parser/parse_func.h"
@@ -1093,6 +1094,18 @@ RemoveForeignServerById(Oid srvId)
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign server %u", srvId);
 
+	/*
+	 * If there is a foreign prepared transaction with this foreign server,
+	 * dropping it might result in dangling prepared transaction.
+	 */
+	if (fdw_xact_exists(InvalidTransactionId, MyDatabaseId, srvId, InvalidOid))
+	{
+		Form_pg_foreign_server srvForm = (Form_pg_foreign_server) GETSTRUCT(tp);
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transactions on it",
+						NameStr(srvForm->srvname))));
+	}
+
 	CatalogTupleDelete(rel, &tp->t_self);
 
 	ReleaseSysCache(tp);
@@ -1405,6 +1418,16 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 	}
 
 	user_mapping_ddl_aclcheck(useId, srv->serverid, srv->servername);
+
+	/*
+	 * If there is a foreign prepared transaction with this user mapping,
+	 * dropping it might result in dangling prepared transaction.
+	 */
+	if (fdw_xact_exists(InvalidTransactionId, MyDatabaseId, srv->serverid,
+						useId))
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transaction for user \"%s\"",
+						srv->servername, MappingUserName(useId))));
 
 	/*
 	 * Do the deletion

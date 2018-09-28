@@ -41,6 +41,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "commands/trigger.h"
+#include "foreign/fdwxact.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -659,6 +660,10 @@ const char *const config_group_names[] =
 	gettext_noop("Client Connection Defaults / Other Defaults"),
 	/* LOCK_MANAGEMENT */
 	gettext_noop("Lock Management"),
+	/* FDWXACT */
+	gettext_noop("Foreign Transaction Management"),
+	/* FDWXACT_SETTINGS */
+	gettext_noop("Foreign Transaction Management / Settings"),
 	/* COMPAT_OPTIONS */
 	gettext_noop("Version and Platform Compatibility"),
 	/* COMPAT_OPTIONS_PREVIOUS */
@@ -1831,6 +1836,16 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"foreign_twophase_commit", PGC_USERSET, FDWXACT_SETTINGS,
+			gettext_noop("Sets the usage of two-phase commit protocol for distributed transaction."),
+			NULL
+		},
+		&foreign_twophase_commit,
+		false,
+		check_foreign_twophase_commit, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -2232,6 +2247,52 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	/*
+	 * See also CheckRequiredParameterValues() if this parameter changes
+	 */
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_prepared_foreign_xacts,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolver_timeout", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Sets the maximum time to wait for foreign transaction resolution."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&foreign_xact_resolver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_foreign_transaction_resolvers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Maximum number of foreign transaction resolution processes."),
+			NULL
+		},
+		&max_foreign_xact_resolvers,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolution_retry_interval", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+		 gettext_noop("Sets the time to wait before retrying to resolve foreign transaction "
+					  "after a failed attempt."),
+		 NULL,
+		 GUC_UNIT_MS
+		},
+		&foreign_xact_resolution_retry_interval,
+		5000, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

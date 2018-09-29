@@ -1132,6 +1132,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"log_recovery_points", PGC_SIGHUP, LOGGING_WHAT,
+			gettext_noop("Logs each LSN."),
+			NULL
+		},
+		&log_recovery_points,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"log_connections", PGC_SU_BACKEND, LOGGING_WHAT,
 			gettext_noop("Logs each successful connection."),
 			NULL

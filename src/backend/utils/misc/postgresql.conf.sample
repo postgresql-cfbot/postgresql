@@ -458,6 +458,7 @@
 #debug_print_plan = off
 #debug_pretty_print = on
 #log_checkpoints = off
+#log_recovery_points = off
 #log_connections = off
 #log_disconnections = off
 #log_duration = off

@@ -109,6 +109,7 @@ extern bool wal_compression;
 extern bool *wal_consistency_checking;
 extern char *wal_consistency_checking_string;
 extern bool log_checkpoints;
+extern bool log_recovery_points;
 
 extern int	CheckPointSegments;
 

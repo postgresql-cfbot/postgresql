@@ -86,6 +86,8 @@ static void ProcessUtilitySlow(ParseState *pstate,
 				   char *completionTag);
 static void ExecDropStmt(DropStmt *stmt, bool isTopLevel);
 
+bool		Log_recovery_points = false;
+
 
 /*
  * CommandIsReadOnly: is an executable query read-only?
@@ -538,6 +540,9 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_TruncateStmt:
+			if (log_recovery_points)
+				ereport(LOG,
+					(errmsg("recovery_point_lsn: 0/%X", (int) ProcLastRecPtr)));
 			ExecuteTruncate((TruncateStmt *) parsetree);
 			break;
 
@@ -1718,6 +1723,9 @@ ExecDropStmt(DropStmt *stmt, bool isTopLevel)
 			/* fall through */
 
 		case OBJECT_TABLE:
+			if (log_recovery_points)
+				ereport(LOG,
+					(errmsg("recovery_point_lsn: 0/%X", (int) ProcLastRecPtr)));
 		case OBJECT_SEQUENCE:
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:

@@ -471,6 +471,15 @@ start_postmaster(void)
 
 	/* fork succeeded, in child */
 
+#ifdef HAVE_SETSID
+	if (setsid() < 0)
+	{
+		write_stderr(_("%s: could not start server due to setsid() failure: %s\n"),
+					 progname, strerror(errno));
+		exit(1);
+	}
+#endif
+
 	/*
 	 * Since there might be quotes to handle here, it is easier simply to pass
 	 * everything to a shell to process them.  Use exec so that the postmaster

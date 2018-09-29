@@ -244,9 +244,9 @@ EXPLAIN (COSTS off)
             QUERY PLAN             
 -----------------------------------
  GroupAggregate
-   Group Key: a, b, c, d
+   Group Key: a, d, c, b
    ->  Sort
-         Sort Key: a, b, c, d
+         Sort Key: a, d, c, b
          ->  Seq Scan on ndistinct
 (5 rows)
 
@@ -255,9 +255,9 @@ EXPLAIN (COSTS off)
             QUERY PLAN             
 -----------------------------------
  GroupAggregate
-   Group Key: b, c, d
+   Group Key: b, d, c
    ->  Sort
-         Sort Key: b, c, d
+         Sort Key: b, d, c
          ->  Seq Scan on ndistinct
 (5 rows)
 
@@ -281,9 +281,9 @@ EXPLAIN (COSTS off)
             QUERY PLAN             
 -----------------------------------
  GroupAggregate
-   Group Key: a, b
+   Group Key: b, a
    ->  Sort
-         Sort Key: a, b
+         Sort Key: b, a
          ->  Seq Scan on ndistinct
 (5 rows)
 
@@ -292,9 +292,9 @@ EXPLAIN (COSTS off)
             QUERY PLAN             
 -----------------------------------
  GroupAggregate
-   Group Key: a, b, c
+   Group Key: b, a, c
    ->  Sort
-         Sort Key: a, b, c
+         Sort Key: b, a, c
          ->  Seq Scan on ndistinct
 (5 rows)
 
@@ -303,9 +303,9 @@ EXPLAIN (COSTS off)
             QUERY PLAN             
 -----------------------------------
  GroupAggregate
-   Group Key: a, b, c, d
+   Group Key: d, b, a, c
    ->  Sort
-         Sort Key: a, b, c, d
+         Sort Key: d, b, a, c
          ->  Seq Scan on ndistinct
 (5 rows)
 

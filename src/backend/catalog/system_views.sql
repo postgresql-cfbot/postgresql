@@ -1027,6 +1027,14 @@ CREATE OR REPLACE FUNCTION pg_stop_backup (
   RETURNS SETOF record STRICT VOLATILE LANGUAGE internal as 'pg_stop_backup_v2'
   PARALLEL RESTRICTED;
 
+CREATE OR REPLACE FUNCTION
+  pg_cancel_backend(pid int4, message text DEFAULT NULL)
+  RETURNS bool VOLATILE LANGUAGE internal AS 'pg_cancel_backend' PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION
+  pg_terminate_backend(pid int4, message text DEFAULT NULL)
+  RETURNS bool VOLATILE LANGUAGE internal AS 'pg_terminate_backend' PARALLEL SAFE;
+
 -- legacy definition for compatibility with 9.3
 CREATE OR REPLACE FUNCTION
   json_populate_record(base anyelement, from_json json, use_json_as_text boolean DEFAULT false)

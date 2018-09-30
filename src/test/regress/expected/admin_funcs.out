@@ -1,0 +1,30 @@
+select pg_cancel_backend(NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(pg_backend_pid());
+ERROR:  canceling statement due to user request
+select pg_cancel_backend(NULL, NULL);
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select pg_cancel_backend(NULL, 'suicide is painless');
+ pg_cancel_backend 
+-------------------
+ 
+(1 row)
+
+select case
+	when pg_cancel_backend(pg_backend_pid(), 'ソケットをブロッキングモードに設定できませんでした')
+	then pg_sleep(60)
+end;
+ERROR:  message is restricted to ASCII only
+select case
+	when pg_cancel_backend(pg_backend_pid(), NULL)
+	then pg_sleep(60)
+end;
+ERROR:  canceling statement due to user request

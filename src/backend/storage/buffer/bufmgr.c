@@ -733,7 +733,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, &found);
 		if (found)
 			pgBufferUsage.local_blks_hit++;
-		else
+		else if (isExtend)
+			pgBufferUsage.local_blks_written++;
+		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG)
 			pgBufferUsage.local_blks_read++;
 	}
 	else
@@ -746,7 +748,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 							 strategy, &found);
 		if (found)
 			pgBufferUsage.shared_blks_hit++;
-		else
+		else if (isExtend)
+			pgBufferUsage.shared_blks_written++;
+		else if (mode == RBM_NORMAL || mode == RBM_NORMAL_NO_LOG)
 			pgBufferUsage.shared_blks_read++;
 	}
 

@@ -46,7 +46,9 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/atomics.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/postmaster.h"
 #include "replication/syncrep.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
@@ -101,18 +103,22 @@
  *
  * The requests array holds fsync requests sent by backends and not yet
  * absorbed by the checkpointer.
- *
- * Unlike the checkpoint fields, num_backend_writes, num_backend_fsync, and
- * the requests fields are protected by CheckpointerCommLock.
  *----------
  */
 typedef struct
 {
+	uint32		type;
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber segno;			/* see md.c for special values */
+	bool		contains_fd;
+	int			ckpt_started;
+	uint64		open_seq;
 	/* might add a real request-type field later; not needed yet */
 } CheckpointerRequest;
+
+#define CKPT_REQUEST_RNODE			1
+#define CKPT_REQUEST_SYN			2
 
 typedef struct
 {
@@ -126,11 +132,10 @@ typedef struct
 
 	int			ckpt_flags;		/* checkpoint flags, as defined in xlog.h */
 
-	uint32		num_backend_writes; /* counts user backend buffer writes */
-	uint32		num_backend_fsync;	/* counts user backend fsync calls */
+	pg_atomic_uint32 num_backend_writes; /* counts user backend buffer writes */
+	pg_atomic_uint32 num_backend_fsync;	/* counts user backend fsync calls */
+	pg_atomic_uint32 ckpt_cycle; /* cycle */
 
-	int			num_requests;	/* current # of requests */
-	int			max_requests;	/* allocated array size */
 	CheckpointerRequest requests[FLEXIBLE_ARRAY_MEMBER];
 } CheckpointerShmemStruct;
 
@@ -171,8 +176,9 @@ static pg_time_t last_xlog_switch_time;
 static void CheckArchiveTimeout(void);
 static bool IsCheckpointOnSchedule(double progress);
 static bool ImmediateCheckpointRequested(void);
-static bool CompactCheckpointerRequestQueue(void);
 static void UpdateSharedMemoryConfig(void);
+static void SendFsyncRequest(CheckpointerRequest *request, int fd);
+static bool AbsorbFsyncRequest(bool stop_at_current_cycle);
 
 /* Signal handlers */
 
@@ -182,6 +188,11 @@ static void ReqCheckpointHandler(SIGNAL_ARGS);
 static void chkpt_sigusr1_handler(SIGNAL_ARGS);
 static void ReqShutdownHandler(SIGNAL_ARGS);
 
+#ifdef WIN32
+/* State used to track in-progress asynchronous fsync pipe reads. */
+static OVERLAPPED absorb_overlapped;
+static HANDLE *absorb_read_in_progress;
+#endif
 
 /*
  * Main entry point for checkpointer process
@@ -194,6 +205,7 @@ CheckpointerMain(void)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext checkpointer_context;
+	WaitEventSet *wes;
 
 	CheckpointerShmem->checkpointer_pid = MyProcPid;
 
@@ -334,6 +346,21 @@ CheckpointerMain(void)
 	 */
 	ProcGlobal->checkpointerLatch = &MyProc->procLatch;
 
+	/* Create reusable WaitEventSet. */
+	wes = CreateWaitEventSet(TopMemoryContext, 3);
+	AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL,
+					  NULL);
+	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
+#ifndef WIN32
+	AddWaitEventToSet(wes, WL_SOCKET_READABLE, fsync_fds[FSYNC_FD_PROCESS],
+					  NULL, NULL);
+#else
+	absorb_overlapped.hEvent = CreateEvent(NULL, TRUE, TRUE,
+										   "fsync pipe read completion");
+	AddWaitEventToSet(wes, WL_WIN32_HANDLE, PGINVALID_SOCKET, NULL,
+					  &absorb_overlapped.hEvent);
+#endif
+
 	/*
 	 * Loop forever
 	 */
@@ -345,6 +372,7 @@ CheckpointerMain(void)
 		int			elapsed_secs;
 		int			cur_timeout;
 		int			rc;
+		WaitEvent	event;
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -545,16 +573,14 @@ CheckpointerMain(void)
 			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
 		}
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   cur_timeout * 1000L /* convert to ms */ ,
-					   WAIT_EVENT_CHECKPOINTER_MAIN);
+		rc = WaitEventSetWait(wes, cur_timeout * 1000, &event, 1, 0);
+		Assert(rc > 0);
 
 		/*
 		 * Emergency bailout if postmaster has died.  This is to avoid the
 		 * necessity for manual cleanup of all postmaster children.
 		 */
-		if (rc & WL_POSTMASTER_DEATH)
+		if (event.events == WL_POSTMASTER_DEATH)
 			exit(1);
 	}
 }
@@ -892,12 +918,7 @@ CheckpointerShmemSize(void)
 {
 	Size		size;
 
-	/*
-	 * Currently, the size of the requests[] array is arbitrarily set equal to
-	 * NBuffers.  This may prove too large or small ...
-	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(NBuffers, sizeof(CheckpointerRequest)));
 
 	return size;
 }
@@ -920,13 +941,13 @@ CheckpointerShmemInit(void)
 	if (!found)
 	{
 		/*
-		 * First time through, so initialize.  Note that we zero the whole
-		 * requests array; this is so that CompactCheckpointerRequestQueue can
-		 * assume that any pad bytes in the request structs are zeroes.
+		 * First time through, so initialize.
 		 */
 		MemSet(CheckpointerShmem, 0, size);
 		SpinLockInit(&CheckpointerShmem->ckpt_lck);
-		CheckpointerShmem->max_requests = NBuffers;
+		pg_atomic_init_u32(&CheckpointerShmem->ckpt_cycle, 0);
+		pg_atomic_init_u32(&CheckpointerShmem->num_backend_writes, 0);
+		pg_atomic_init_u32(&CheckpointerShmem->num_backend_fsync, 0);
 	}
 }
 
@@ -1102,181 +1123,93 @@ RequestCheckpoint(int flags)
  * is theoretically possible a backend fsync might still be necessary, if
  * the queue is full and contains no duplicate entries.  In that case, we
  * let the backend know by returning false.
+ *
+ * We add the cycle counter to the message.  That is an unsynchronized read
+ * of the shared memory counter, but it doesn't matter if it is arbitrarily
+ * old since it is only used to limit unnecessary extra queue draining in
+ * AbsorbAllFsyncRequests().
  */
-bool
-ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+void
+ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno,
+					File file)
 {
-	CheckpointerRequest *request;
-	bool		too_full;
+	CheckpointerRequest request = {0};
 
 	if (!IsUnderPostmaster)
-		return false;			/* probably shouldn't even get here */
+		elog(ERROR, "ForwardFsyncRequest must not be called in single user mode");
 
 	if (AmCheckpointerProcess())
 		elog(ERROR, "ForwardFsyncRequest must not be called in checkpointer");
 
-	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
-
-	/* Count all backend writes regardless of if they fit in the queue */
-	if (!AmBackgroundWriterProcess())
-		CheckpointerShmem->num_backend_writes++;
+	request.type = CKPT_REQUEST_RNODE;
+	request.rnode = rnode;
+	request.forknum = forknum;
+	request.segno = segno;
+#ifndef WIN32
+	request.contains_fd = file != -1;
+#else
+	/*
+	 * For now we don't try to send duplicate handles to the checkpointer on
+	 * Windows.  That would be possible, but it's not clear whether it would
+	 * actually serve any useful purpose in that kernel without inside
+	 * knowledge of how it tracks errors.  The file will simply be reopened by
+	 * name when required by the checkpointer.
+	 */
+	request.contains_fd = false;
+#endif
 
 	/*
-	 * If the checkpointer isn't running or the request queue is full, the
-	 * backend will have to perform its own fsync request.  But before forcing
-	 * that to happen, we can try to compact the request queue.
+	 * Tell the checkpointer the sequence number of the most recent open, so
+	 * that it can be sure to hold the older file descriptor.
 	 */
-	if (CheckpointerShmem->checkpointer_pid == 0 ||
-		(CheckpointerShmem->num_requests >= CheckpointerShmem->max_requests &&
-		 !CompactCheckpointerRequestQueue()))
-	{
-		/*
-		 * Count the subset of writes where backends have to do their own
-		 * fsync
-		 */
-		if (!AmBackgroundWriterProcess())
-			CheckpointerShmem->num_backend_fsync++;
-		LWLockRelease(CheckpointerCommLock);
-		return false;
-	}
-
-	/* OK, insert request */
-	request = &CheckpointerShmem->requests[CheckpointerShmem->num_requests++];
-	request->rnode = rnode;
-	request->forknum = forknum;
-	request->segno = segno;
-
-	/* If queue is more than half full, nudge the checkpointer to empty it */
-	too_full = (CheckpointerShmem->num_requests >=
-				CheckpointerShmem->max_requests / 2);
-
-	LWLockRelease(CheckpointerCommLock);
-
-	/* ... but not till after we release the lock */
-	if (too_full && ProcGlobal->checkpointerLatch)
-		SetLatch(ProcGlobal->checkpointerLatch);
-
-	return true;
-}
-
-/*
- * CompactCheckpointerRequestQueue
- *		Remove duplicates from the request queue to avoid backend fsyncs.
- *		Returns "true" if any entries were removed.
- *
- * Although a full fsync request queue is not common, it can lead to severe
- * performance problems when it does happen.  So far, this situation has
- * only been observed to occur when the system is under heavy write load,
- * and especially during the "sync" phase of a checkpoint.  Without this
- * logic, each backend begins doing an fsync for every block written, which
- * gets very expensive and can slow down the whole system.
- *
- * Trying to do this every time the queue is full could lose if there
- * aren't any removable entries.  But that should be vanishingly rare in
- * practice: there's one queue entry per shared buffer.
- */
-static bool
-CompactCheckpointerRequestQueue(void)
-{
-	struct CheckpointerSlotMapping
-	{
-		CheckpointerRequest request;
-		int			slot;
-	};
-
-	int			n,
-				preserve_count;
-	int			num_skipped = 0;
-	HASHCTL		ctl;
-	HTAB	   *htab;
-	bool	   *skip_slot;
-
-	/* must hold CheckpointerCommLock in exclusive mode */
-	Assert(LWLockHeldByMe(CheckpointerCommLock));
-
-	/* Initialize skip_slot array */
-	skip_slot = palloc0(sizeof(bool) * CheckpointerShmem->num_requests);
-
-	/* Initialize temporary hash table */
-	MemSet(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(CheckpointerRequest);
-	ctl.entrysize = sizeof(struct CheckpointerSlotMapping);
-	ctl.hcxt = CurrentMemoryContext;
-
-	htab = hash_create("CompactCheckpointerRequestQueue",
-					   CheckpointerShmem->num_requests,
-					   &ctl,
-					   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	request.open_seq = request.contains_fd ? FileGetOpenSeq(file) : (uint64) -1;
 
 	/*
-	 * The basic idea here is that a request can be skipped if it's followed
-	 * by a later, identical request.  It might seem more sensible to work
-	 * backwards from the end of the queue and check whether a request is
-	 * *preceded* by an earlier, identical request, in the hopes of doing less
-	 * copying.  But that might change the semantics, if there's an
-	 * intervening FORGET_RELATION_FSYNC or FORGET_DATABASE_FSYNC request, so
-	 * we do it this way.  It would be possible to be even smarter if we made
-	 * the code below understand the specific semantics of such requests (it
-	 * could blow away preceding entries that would end up being canceled
-	 * anyhow), but it's not clear that the extra complexity would buy us
-	 * anything.
+	 * We read ckpt_started without synchronization.  It is used to prevent
+	 * AbsorbAllFsyncRequests() from reading new values from after a
+	 * checkpoint began.  A slightly out-of-date value here will only cause
+	 * it to do a little bit more work than strictly necessary, but that's
+	 * OK.
 	 */
-	for (n = 0; n < CheckpointerShmem->num_requests; n++)
-	{
-		CheckpointerRequest *request;
-		struct CheckpointerSlotMapping *slotmap;
-		bool		found;
+	request.ckpt_started = CheckpointerShmem->ckpt_started;
 
-		/*
-		 * We use the request struct directly as a hashtable key.  This
-		 * assumes that any padding bytes in the structs are consistently the
-		 * same, which should be okay because we zeroed them in
-		 * CheckpointerShmemInit.  Note also that RelFileNode had better
-		 * contain no pad bytes.
-		 */
-		request = &CheckpointerShmem->requests[n];
-		slotmap = hash_search(htab, request, HASH_ENTER, &found);
-		if (found)
-		{
-			/* Duplicate, so mark the previous occurrence as skippable */
-			skip_slot[slotmap->slot] = true;
-			num_skipped++;
-		}
-		/* Remember slot containing latest occurrence of this request value */
-		slotmap->slot = n;
-	}
-
-	/* Done with the hash table. */
-	hash_destroy(htab);
-
-	/* If no duplicates, we're out of luck. */
-	if (!num_skipped)
-	{
-		pfree(skip_slot);
-		return false;
-	}
-
-	/* We found some duplicates; remove them. */
-	preserve_count = 0;
-	for (n = 0; n < CheckpointerShmem->num_requests; n++)
-	{
-		if (skip_slot[n])
-			continue;
-		CheckpointerShmem->requests[preserve_count++] = CheckpointerShmem->requests[n];
-	}
-	ereport(DEBUG1,
-			(errmsg("compacted fsync request queue from %d entries to %d entries",
-					CheckpointerShmem->num_requests, preserve_count)));
-	CheckpointerShmem->num_requests = preserve_count;
-
-	/* Cleanup. */
-	pfree(skip_slot);
-	return true;
+	SendFsyncRequest(&request, request.contains_fd ? FileGetRawDesc(file) : -1);
 }
 
 /*
  * AbsorbFsyncRequests
- *		Retrieve queued fsync requests and pass them to local smgr.
+ *		Retrieve queued fsync requests and pass them to local smgr. Stop when
+ *		resources would be exhausted by absorbing more.
+ *
+ * This is exported because we want to continue accepting requests during
+ * mdsync().
+ */
+void
+AbsorbFsyncRequests(void)
+{
+	if (!AmCheckpointerProcess())
+		return;
+
+	/* Transfer stats counts into pending pgstats message */
+	BgWriterStats.m_buf_written_backend +=
+		pg_atomic_exchange_u32(&CheckpointerShmem->num_backend_writes, 0);
+	BgWriterStats.m_buf_fsync_backend +=
+		pg_atomic_exchange_u32(&CheckpointerShmem->num_backend_fsync, 0);
+
+	while (true)
+	{
+		if (!FlushFsyncRequestQueueIfNecessary())
+			break;
+
+		if (!AbsorbFsyncRequest(false))
+			break;
+	}
+}
+
+/*
+ * AbsorbAllFsyncRequests
+ *		Retrieve all already pending fsync requests and pass them to local
+ *		smgr.
  *
  * This is exported because it must be called during CreateCheckPoint;
  * we have to be sure we have accepted all pending requests just before
@@ -1284,54 +1217,113 @@ CompactCheckpointerRequestQueue(void)
  * non-checkpointer processes, do nothing if not checkpointer.
  */
 void
-AbsorbFsyncRequests(void)
+AbsorbAllFsyncRequests(void)
 {
-	CheckpointerRequest *requests = NULL;
-	CheckpointerRequest *request;
-	int			n;
-
 	if (!AmCheckpointerProcess())
 		return;
 
-	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
-
 	/* Transfer stats counts into pending pgstats message */
-	BgWriterStats.m_buf_written_backend += CheckpointerShmem->num_backend_writes;
-	BgWriterStats.m_buf_fsync_backend += CheckpointerShmem->num_backend_fsync;
+	BgWriterStats.m_buf_written_backend +=
+		pg_atomic_exchange_u32(&CheckpointerShmem->num_backend_writes, 0);
+	BgWriterStats.m_buf_fsync_backend +=
+		pg_atomic_exchange_u32(&CheckpointerShmem->num_backend_fsync, 0);
 
-	CheckpointerShmem->num_backend_writes = 0;
-	CheckpointerShmem->num_backend_fsync = 0;
-
-	/*
-	 * We try to avoid holding the lock for a long time by copying the request
-	 * array, and processing the requests after releasing the lock.
-	 *
-	 * Once we have cleared the requests from shared memory, we have to PANIC
-	 * if we then fail to absorb them (eg, because our hashtable runs out of
-	 * memory).  This is because the system cannot run safely if we are unable
-	 * to fsync what we have been told to fsync.  Fortunately, the hashtable
-	 * is so small that the problem is quite unlikely to arise in practice.
-	 */
-	n = CheckpointerShmem->num_requests;
-	if (n > 0)
+	for (;;)
 	{
-		requests = (CheckpointerRequest *) palloc(n * sizeof(CheckpointerRequest));
-		memcpy(requests, CheckpointerShmem->requests, n * sizeof(CheckpointerRequest));
+		if (!FlushFsyncRequestQueueIfNecessary())
+			elog(FATAL, "may not happen");
+
+		if (!AbsorbFsyncRequest(true))
+			break;
 	}
+}
+
+/*
+ * AbsorbFsyncRequest
+ *		Retrieve one queued fsync request and pass them to local smgr.
+ */
+static bool
+AbsorbFsyncRequest(bool stop_at_current_cycle)
+{
+	static CheckpointerRequest req;
+	int fd = -1;
+#ifndef WIN32
+	int ret;
+#else
+	DWORD bytes_read;
+#endif
+
+	ReleaseLruFiles();
 
 	START_CRIT_SECTION();
+#ifndef WIN32
+	ret = pg_uds_recv_with_fd(fsync_fds[FSYNC_FD_PROCESS], &req, sizeof(req), &fd);
+	if (ret < 0 && (errno == EWOULDBLOCK || errno == EAGAIN))
+	{
+		END_CRIT_SECTION();
+		return false;
+	}
+	else if (ret < 0)
+		elog(ERROR, "recvmsg failed: %m");
+#else
+	if (!absorb_read_in_progress)
+	{
+		if (!ReadFile(fsyncPipe[FSYNC_FD_PROCESS], &req, sizeof(req), &bytes_read,
+					  &absorb_overlapped))
+		{
+			if (GetLastError() != ERROR_IO_PENDING)
+			{
+				_dosmaperr(GetLastError());
+				elog(ERROR, "can't begin read from fsync pipe: %m");
+			}
 
-	CheckpointerShmem->num_requests = 0;
+			/*
+			 * An asynchronous read has begun.  We'll tell caller to call us
+			 * back when the event indicates completion.
+			 */
+			absorb_read_in_progress = &absorb_overlapped.hEvent;
+			END_CRIT_SECTION();
+			return false;
+		}
+		/* The read completed synchronously.  'req' is now populated. */
+	}
+	if (absorb_read_in_progress)
+	{
+		/* Completed yet? */
+		if (!GetOverlappedResult(fsyncPipe[FSYNC_FD_PROCESS], &absorb_overlapped, &bytes_read,
+								 false))
+		{
+			if (GetLastError() == ERROR_IO_INCOMPLETE)
+			{
+				/* Nope.  Spurious event?  Tell caller to wait some more. */
+				END_CRIT_SECTION();
+				return false;
+			}
+			_dosmaperr(GetLastError());
+			elog(ERROR, "can't complete from fsync pipe: %m");
+		}
+		/* The asynchronous read completed.  'req' is now populated. */
+		absorb_read_in_progress = NULL;
+	}
 
-	LWLockRelease(CheckpointerCommLock);
+	/* Check message size. */
+	if (bytes_read != sizeof(req))
+		elog(ERROR, "unexpected short read on fsync pipe");
+#endif
 
-	for (request = requests; n > 0; request++, n--)
-		RememberFsyncRequest(request->rnode, request->forknum, request->segno);
+	if (req.contains_fd != (fd != -1))
+	{
+		elog(FATAL, "message should have fd associated, but doesn't");
+	}
 
+	RememberFsyncRequest(req.rnode, req.forknum, req.segno, fd, req.open_seq);
 	END_CRIT_SECTION();
 
-	if (requests)
-		pfree(requests);
+	if (stop_at_current_cycle &&
+		req.ckpt_started == CheckpointerShmem->ckpt_started)
+		return false;
+
+	return true;
 }
 
 /*
@@ -1373,4 +1365,135 @@ FirstCallSinceLastCheckpoint(void)
 	ckpt_done = new_done;
 
 	return FirstCall;
+}
+
+uint32
+GetCheckpointSyncCycle(void)
+{
+	return pg_atomic_read_u32(&CheckpointerShmem->ckpt_cycle);
+}
+
+uint32
+IncCheckpointSyncCycle(void)
+{
+	return pg_atomic_fetch_add_u32(&CheckpointerShmem->ckpt_cycle, 1);
+}
+
+void
+CountBackendWrite(void)
+{
+	pg_atomic_fetch_add_u32(&CheckpointerShmem->num_backend_writes, 1);
+}
+
+/*
+ * Send a message to the checkpointer's fsync socket (Unix) or pipe (Windows).
+ * This is essentially a blocking call (there is no CHECK_FOR_INTERRUPTS, and
+ * even if there were it'd be surpressed since callers hold a lock), except
+ * that we don't ignore postmaster death so we need an event loop.
+ *
+ * The code is rather different on Windows, because there we have to do the
+ * write and then wait for it to complete, while on Unix we have to wait until
+ * we can do the write.
+ */
+static void
+SendFsyncRequest(CheckpointerRequest *request, int fd)
+{
+#ifndef WIN32
+	ssize_t ret;
+	int		rc;
+
+	while (true)
+	{
+		ret = pg_uds_send_with_fd(fsync_fds[FSYNC_FD_SUBMIT], request, sizeof(*request),
+								  request->contains_fd ? fd : -1);
+
+		if (ret >= 0)
+		{
+			/*
+			 * Don't think short reads will ever happen in realistic
+			 * implementations, but better make sure that's true...
+			 */
+			if (ret != sizeof(*request))
+				elog(FATAL, "unexpected short write to fsync request socket");
+			break;
+		}
+		else if (errno == EWOULDBLOCK || errno == EAGAIN
+#ifdef __darwin__
+				 || errno == EMSGSIZE || errno == ENOBUFS
+#endif
+				)
+		{
+			/*
+			 * Testing on macOS 10.13 showed occasional EMSGSIZE or
+			 * ENOBUFS errors, which could be handled by retrying.  Unless
+			 * the problem also shows up on other systems, let's handle those
+			 * only for that OS.
+			 */
+
+			/* Blocked on write - wait for socket to become readable */
+			rc = WaitLatchOrSocket(NULL,
+								   WL_SOCKET_WRITEABLE | WL_POSTMASTER_DEATH,
+								   fsync_fds[FSYNC_FD_SUBMIT], -1, 0);
+			if (rc & WL_POSTMASTER_DEATH)
+				exit(1);
+		}
+		else
+			ereport(FATAL, (errmsg("could not send fsync request: %m")));
+	}
+
+#else /* WIN32 */
+	{
+		OVERLAPPED overlapped = {0};
+		DWORD nwritten;
+		int rc;
+
+		overlapped.hEvent = CreateEvent(NULL, TRUE, TRUE, NULL);
+
+		if (!WriteFile(fsyncPipe[FSYNC_FD_SUBMIT], request, sizeof(*request), &nwritten,
+					   &overlapped))
+		{
+			WaitEventSet *wes;
+			WaitEvent event;
+
+			/* Handle unexpected errors. */
+			if (GetLastError() != ERROR_IO_PENDING)
+			{
+				_dosmaperr(GetLastError());
+				CloseHandle(overlapped.hEvent);
+				ereport(FATAL, (errmsg("could not send fsync request: %m")));
+			}
+
+			/* Wait for asynchronous IO to complete. */
+			wes = CreateWaitEventSet(TopMemoryContext, 3);
+			AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL,
+							  NULL);
+			AddWaitEventToSet(wes, WL_WIN32_HANDLE, PGINVALID_SOCKET, NULL,
+							  &overlapped.hEvent);
+			for (;;)
+			{
+				rc = WaitEventSetWait(wes, -1, &event, 1, 0);
+				Assert(rc > 0);
+				if (event.events == WL_POSTMASTER_DEATH)
+					exit(1);
+				if (event.events == WL_WIN32_HANDLE)
+				{
+					if (!GetOverlappedResult(fsyncPipe[FSYNC_FD_SUBMIT], &overlapped,
+											 &nwritten, FALSE))
+					{
+						_dosmaperr(GetLastError());
+						CloseHandle(overlapped.hEvent);
+						ereport(FATAL, (errmsg("could not get result of sending fsync request: %m")));
+					}
+					if (nwritten > 0)
+						break;
+				}
+			}
+			FreeWaitEventSet(wes);
+		}
+
+		CloseHandle(overlapped.hEvent);
+		if (nwritten != sizeof(*request))
+			elog(FATAL, "unexpected short write to fsync request pipe");
+	}
+#endif
 }

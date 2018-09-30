@@ -110,6 +110,7 @@ typedef struct _MdfdVec
 {
 	File		mdfd_vfd;		/* fd number in fd.c's pool */
 	BlockNumber mdfd_segno;		/* segment number, from 0 */
+	uint32		mdfd_dirtied_cycle;
 } MdfdVec;
 
 static MemoryContext MdCxt;		/* context for all MdfdVec objects */
@@ -134,16 +135,16 @@ static MemoryContext MdCxt;		/* context for all MdfdVec objects */
  * (Regular backends do not track pending operations locally, but forward
  * them to the checkpointer.)
  */
-typedef uint16 CycleCtr;		/* can be any convenient integer size */
+typedef uint32 CycleCtr;		/* can be any convenient integer size */
 
 typedef struct
 {
 	RelFileNode rnode;			/* hash table key (must be first!) */
-	CycleCtr	cycle_ctr;		/* mdsync_cycle_ctr of oldest request */
+	CycleCtr	cycle_ctr;		/* sync cycle of oldest request */
 	/* requests[f] has bit n set if we need to fsync segment n of fork f */
 	Bitmapset  *requests[MAX_FORKNUM + 1];
-	/* canceled[f] is true if we canceled fsyncs for fork "recently" */
-	bool		canceled[MAX_FORKNUM + 1];
+	File	   *syncfds[MAX_FORKNUM + 1];
+	int			syncfd_len[MAX_FORKNUM + 1];
 } PendingOperationEntry;
 
 typedef struct
@@ -152,11 +153,12 @@ typedef struct
 	CycleCtr	cycle_ctr;		/* mdckpt_cycle_ctr when request was made */
 } PendingUnlinkEntry;
 
+static uint32 open_fsync_queue_files = 0;
+static bool mdsync_in_progress = false;
 static HTAB *pendingOpsTable = NULL;
 static List *pendingUnlinks = NIL;
 static MemoryContext pendingOpsCxt; /* context for the above  */
 
-static CycleCtr mdsync_cycle_ctr = 0;
 static CycleCtr mdckpt_cycle_ctr = 0;
 
 
@@ -197,6 +199,8 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 			 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 		   MdfdVec *seg);
+static char *mdpath(RelFileNode rnode, ForkNumber forknum, BlockNumber segno);
+static void mdsyncpass(bool include_current);
 
 
 /*
@@ -334,6 +338,7 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	mdfd = &reln->md_seg_fds[forkNum][0];
 	mdfd->mdfd_vfd = fd;
 	mdfd->mdfd_segno = 0;
+	mdfd->mdfd_dirtied_cycle = GetCheckpointSyncCycle() - 1;
 }
 
 /*
@@ -615,6 +620,7 @@ mdopen(SMgrRelation reln, ForkNumber forknum, int behavior)
 	mdfd = &reln->md_seg_fds[forknum][0];
 	mdfd->mdfd_vfd = fd;
 	mdfd->mdfd_segno = 0;
+	mdfd->mdfd_dirtied_cycle = GetCheckpointSyncCycle() - 1;
 
 	Assert(_mdnblocks(reln, forknum, mdfd) <= ((BlockNumber) RELSEG_SIZE));
 
@@ -1048,51 +1054,36 @@ mdimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- *	mdsync() -- Sync previous writes to stable storage.
+ * Do one pass over the the fsync request hashtable and perform the necessary
+ * fsyncs. Increments the mdsync cycle counter.
+ *
+ * If include_current is true perform all fsyncs (this is done if too many
+ * files are open), otherwise only perform the fsyncs belonging to the cycle
+ * valid at call time.
  */
-void
-mdsync(void)
+static void
+mdsyncpass(bool include_current)
 {
-	static bool mdsync_in_progress = false;
-
 	HASH_SEQ_STATUS hstat;
 	PendingOperationEntry *entry;
 	int			absorb_counter;
 
 	/* Statistics on sync times */
-	int			processed = 0;
 	instr_time	sync_start,
 				sync_end,
 				sync_diff;
 	uint64		elapsed;
-	uint64		longest = 0;
-	uint64		total_elapsed = 0;
-
-	/*
-	 * This is only called during checkpoints, and checkpoints should only
-	 * occur in processes that have created a pendingOpsTable.
-	 */
-	if (!pendingOpsTable)
-		elog(ERROR, "cannot sync without a pendingOpsTable");
-
-	/*
-	 * If we are in the checkpointer, the sync had better include all fsync
-	 * requests that were queued by backends up to this point.  The tightest
-	 * race condition that could occur is that a buffer that must be written
-	 * and fsync'd for the checkpoint could have been dumped by a backend just
-	 * before it was visited by BufferSync().  We know the backend will have
-	 * queued an fsync request before clearing the buffer's dirtybit, so we
-	 * are safe as long as we do an Absorb after completing BufferSync().
-	 */
-	AbsorbFsyncRequests();
+	int			processed = CheckpointStats.ckpt_sync_rels;
+	uint64		longest = CheckpointStats.ckpt_longest_sync;
+	uint64		total_elapsed = CheckpointStats.ckpt_agg_sync_time;
 
 	/*
 	 * To avoid excess fsync'ing (in the worst case, maybe a never-terminating
 	 * checkpoint), we want to ignore fsync requests that are entered into the
 	 * hashtable after this point --- they should be processed next time,
-	 * instead.  We use mdsync_cycle_ctr to tell old entries apart from new
-	 * ones: new ones will have cycle_ctr equal to the incremented value of
-	 * mdsync_cycle_ctr.
+	 * instead.  We use GetCheckpointSyncCycle() to tell old entries apart
+	 * from new ones: new ones will have cycle_ctr equal to
+	 * IncCheckpointSyncCycle().
 	 *
 	 * In normal circumstances, all entries present in the table at this point
 	 * will have cycle_ctr exactly equal to the current (about to be old)
@@ -1116,15 +1107,15 @@ mdsync(void)
 		hash_seq_init(&hstat, pendingOpsTable);
 		while ((entry = (PendingOperationEntry *) hash_seq_search(&hstat)) != NULL)
 		{
-			entry->cycle_ctr = mdsync_cycle_ctr;
+			entry->cycle_ctr = GetCheckpointSyncCycle();
 		}
 	}
 
-	/* Advance counter so that new hashtable entries are distinguishable */
-	mdsync_cycle_ctr++;
-
 	/* Set flag to detect failure if we don't reach the end of the loop */
 	mdsync_in_progress = true;
+
+	/* Advance counter so that new hashtable entries are distinguishable */
+	IncCheckpointSyncCycle();
 
 	/* Now scan the hashtable for fsync requests to process */
 	absorb_counter = FSYNCS_PER_ABSORB;
@@ -1132,17 +1123,27 @@ mdsync(void)
 	while ((entry = (PendingOperationEntry *) hash_seq_search(&hstat)) != NULL)
 	{
 		ForkNumber	forknum;
+		bool has_remaining;
 
 		/*
-		 * If the entry is new then don't process it this time; it might
-		 * contain multiple fsync-request bits, but they are all new.  Note
-		 * "continue" bypasses the hash-remove call at the bottom of the loop.
+		 * If processing fsync requests because of too may file handles, close
+		 * regardless of cycle. Otherwise nothing to be closed might be found,
+		 * and we want to make room as quickly as possible so more requests
+		 * can be absorbed.
 		 */
-		if (entry->cycle_ctr == mdsync_cycle_ctr)
-			continue;
+		if (!include_current)
+		{
+			/*
+			 * If the entry is new then don't process it this time; it might
+			 * contain multiple fsync-request bits, but they are all new.  Note
+			 * "continue" bypasses the hash-remove call at the bottom of the loop.
+			 */
+			if (entry->cycle_ctr == GetCheckpointSyncCycle())
+				continue;
 
-		/* Else assert we haven't missed it */
-		Assert((CycleCtr) (entry->cycle_ctr + 1) == mdsync_cycle_ctr);
+			/* Else assert we haven't missed it */
+			Assert((CycleCtr) (entry->cycle_ctr + 1) == GetCheckpointSyncCycle());
+		}
 
 		/*
 		 * Scan over the forks and segments represented by the entry.
@@ -1157,159 +1158,145 @@ mdsync(void)
 		 */
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 		{
-			Bitmapset  *requests = entry->requests[forknum];
 			int			segno;
 
-			entry->requests[forknum] = NULL;
-			entry->canceled[forknum] = false;
-
-			while ((segno = bms_first_member(requests)) >= 0)
+			segno = -1;
+			while ((segno = bms_next_member(entry->requests[forknum], segno)) >= 0)
 			{
-				int			failures;
+				int			returnCode;
+
+				/*
+				 * Temporarily mark as processed. Have to do so before
+				 * absorbing further requests, otherwise we might delete a new
+				 * requests in a new cycle.
+				 */
+				bms_del_member(entry->requests[forknum], segno);
+
+				if (entry->syncfd_len[forknum] <= segno ||
+					entry->syncfds[forknum][segno] == -1)
+				{
+					/*
+					 * Optionally open file, if we want to support not
+					 * transporting fds as well.
+					 */
+					elog(FATAL, "file not opened");
+				}
 
 				/*
 				 * If fsync is off then we don't have to bother opening the
 				 * file at all.  (We delay checking until this point so that
 				 * changing fsync on the fly behaves sensibly.)
+				 *
+				 * XXX: Why is that an important goal? Doesn't give any
+				 * interesting guarantees afaict?
 				 */
-				if (!enableFsync)
-					continue;
-
-				/*
-				 * If in checkpointer, we want to absorb pending requests
-				 * every so often to prevent overflow of the fsync request
-				 * queue.  It is unspecified whether newly-added entries will
-				 * be visited by hash_seq_search, but we don't care since we
-				 * don't need to process them anyway.
-				 */
-				if (--absorb_counter <= 0)
+				if (enableFsync)
 				{
-					AbsorbFsyncRequests();
-					absorb_counter = FSYNCS_PER_ABSORB;
-				}
-
-				/*
-				 * The fsync table could contain requests to fsync segments
-				 * that have been deleted (unlinked) by the time we get to
-				 * them. Rather than just hoping an ENOENT (or EACCES on
-				 * Windows) error can be ignored, what we do on error is
-				 * absorb pending requests and then retry.  Since mdunlink()
-				 * queues a "cancel" message before actually unlinking, the
-				 * fsync request is guaranteed to be marked canceled after the
-				 * absorb if it really was this case. DROP DATABASE likewise
-				 * has to tell us to forget fsync requests before it starts
-				 * deletions.
-				 */
-				for (failures = 0;; failures++) /* loop exits at "break" */
-				{
-					SMgrRelation reln;
-					MdfdVec    *seg;
-					char	   *path;
-					int			save_errno;
-
 					/*
-					 * Find or create an smgr hash entry for this relation.
-					 * This may seem a bit unclean -- md calling smgr?	But
-					 * it's really the best solution.  It ensures that the
-					 * open file reference isn't permanently leaked if we get
-					 * an error here. (You may say "but an unreferenced
-					 * SMgrRelation is still a leak!" Not really, because the
-					 * only case in which a checkpoint is done by a process
-					 * that isn't about to shut down is in the checkpointer,
-					 * and it will periodically do smgrcloseall(). This fact
-					 * justifies our not closing the reln in the success path
-					 * either, which is a good thing since in non-checkpointer
-					 * cases we couldn't safely do that.)
+					 * The fsync table could contain requests to fsync
+					 * segments that have been deleted (unlinked) by the time
+					 * we get to them.  That used to be problematic, but now
+					 * we have a filehandle to the deleted file. That means we
+					 * might fsync an empty file superfluously, in a
+					 * relatively tight window, which is acceptable.
 					 */
-					reln = smgropen(entry->rnode, InvalidBackendId);
-
-					/* Attempt to open and fsync the target segment */
-					seg = _mdfd_getseg(reln, forknum,
-									   (BlockNumber) segno * (BlockNumber) RELSEG_SIZE,
-									   false,
-									   EXTENSION_RETURN_NULL
-									   | EXTENSION_DONT_CHECK_SIZE);
 
 					INSTR_TIME_SET_CURRENT(sync_start);
 
-					if (seg != NULL &&
-						FileSync(seg->mdfd_vfd, WAIT_EVENT_DATA_FILE_SYNC) >= 0)
+					returnCode = FileSync(entry->syncfds[forknum][segno], WAIT_EVENT_DATA_FILE_SYNC);
+
+					if (returnCode < 0)
 					{
-						/* Success; update statistics about sync timing */
-						INSTR_TIME_SET_CURRENT(sync_end);
-						sync_diff = sync_end;
-						INSTR_TIME_SUBTRACT(sync_diff, sync_start);
-						elapsed = INSTR_TIME_GET_MICROSEC(sync_diff);
-						if (elapsed > longest)
-							longest = elapsed;
-						total_elapsed += elapsed;
-						processed++;
-						if (log_checkpoints)
-							elog(DEBUG1, "checkpoint sync: number=%d file=%s time=%.3f msec",
-								 processed,
-								 FilePathName(seg->mdfd_vfd),
-								 (double) elapsed / 1000);
+						/* XXX: decide on policy */
+						bms_add_member(entry->requests[forknum], segno);
 
-						break;	/* out of retry loop */
-					}
-
-					/* Compute file name for use in message */
-					save_errno = errno;
-					path = _mdfd_segpath(reln, forknum, (BlockNumber) segno);
-					errno = save_errno;
-
-					/*
-					 * It is possible that the relation has been dropped or
-					 * truncated since the fsync request was entered.
-					 * Therefore, allow ENOENT, but only if we didn't fail
-					 * already on this file.  This applies both for
-					 * _mdfd_getseg() and for FileSync, since fd.c might have
-					 * closed the file behind our back.
-					 *
-					 * XXX is there any point in allowing more than one retry?
-					 * Don't see one at the moment, but easy to change the
-					 * test here if so.
-					 */
-					if (!FILE_POSSIBLY_DELETED(errno) ||
-						failures > 0)
 						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("could not fsync file \"%s\": %m",
-										path)));
-					else
+										FilePathName(entry->syncfds[forknum][segno]))));
+					}
+
+					/* Success; update statistics about sync timing */
+					INSTR_TIME_SET_CURRENT(sync_end);
+					sync_diff = sync_end;
+					INSTR_TIME_SUBTRACT(sync_diff, sync_start);
+					elapsed = INSTR_TIME_GET_MICROSEC(sync_diff);
+					if (elapsed > longest)
+						longest = elapsed;
+					total_elapsed += elapsed;
+					processed++;
+					if (log_checkpoints)
 						ereport(DEBUG1,
-								(errcode_for_file_access(),
-								 errmsg("could not fsync file \"%s\" but retrying: %m",
-										path)));
-					pfree(path);
+								(errmsg("checkpoint sync: number=%d file=%s time=%.3f msec",
+										processed,
+										FilePathName(entry->syncfds[forknum][segno]),
+										(double) elapsed / 1000),
+								 errhidestmt(true),
+								 errhidecontext(true)));
+				}
 
+				/*
+				 * It shouldn't be possible for a new request to arrive during
+				 * the fsync (on error this will not be reached).
+				 */
+				Assert(!bms_is_member(segno, entry->requests[forknum]));
+
+				/*
+				 * Close file.  XXX: centralize code.
+				 */
+				{
+					open_fsync_queue_files--;
+					FileClose(entry->syncfds[forknum][segno]);
+					entry->syncfds[forknum][segno] = -1;
+				}
+
+				/*
+				 * If in checkpointer, we want to absorb pending requests every so
+				 * often to prevent overflow of the fsync request queue.  It is
+				 * unspecified whether newly-added entries will be visited by
+				 * hash_seq_search, but we don't care since we don't need to process
+				 * them anyway.
+				 */
+				if (absorb_counter-- <= 0)
+				{
 					/*
-					 * Absorb incoming requests and check to see if a cancel
-					 * arrived for this relation fork.
+					 * Don't absorb if too many files are open. This pass will
+					 * soon close some, so check again later.
 					 */
-					AbsorbFsyncRequests();
-					absorb_counter = FSYNCS_PER_ABSORB; /* might as well... */
-
-					if (entry->canceled[forknum])
-						break;
-				}				/* end retry loop */
+					if (open_fsync_queue_files < ((max_safe_fds * 7) / 10))
+						AbsorbFsyncRequests();
+					absorb_counter = FSYNCS_PER_ABSORB;
+				}
 			}
-			bms_free(requests);
 		}
 
 		/*
-		 * We've finished everything that was requested before we started to
-		 * scan the entry.  If no new requests have been inserted meanwhile,
-		 * remove the entry.  Otherwise, update its cycle counter, as all the
-		 * requests now in it must have arrived during this cycle.
+		 * We've finished everything for the file that was requested before we
+		 * started to scan the entry.  If no new requests have been inserted
+		 * meanwhile, remove the entry.  Otherwise, update its cycle counter,
+		 * as all the requests now in it must have arrived during this cycle.
+		 *
+		 * This needs to be checked separately from the above for-each-fork
+		 * loop, as new requests for this relation could have been absorbed.
 		 */
+		has_remaining = false;
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 		{
-			if (entry->requests[forknum] != NULL)
-				break;
+			if (bms_is_empty(entry->requests[forknum]))
+			{
+				if (entry->syncfds[forknum])
+				{
+					pfree(entry->syncfds[forknum]);
+					entry->syncfds[forknum] = NULL;
+				}
+				bms_free(entry->requests[forknum]);
+				entry->requests[forknum] = NULL;
+			}
+			else
+				has_remaining = true;
 		}
-		if (forknum <= MAX_FORKNUM)
-			entry->cycle_ctr = mdsync_cycle_ctr;
+		if (has_remaining)
+			entry->cycle_ctr = GetCheckpointSyncCycle();
 		else
 		{
 			/* Okay to remove it */
@@ -1319,13 +1306,69 @@ mdsync(void)
 		}
 	}							/* end loop over hashtable entries */
 
-	/* Return sync performance metrics for report at checkpoint end */
+	/* Flag successful completion of mdsync */
+	mdsync_in_progress = false;
+
+	/* Maintain sync performance metrics for report at checkpoint end */
 	CheckpointStats.ckpt_sync_rels = processed;
 	CheckpointStats.ckpt_longest_sync = longest;
 	CheckpointStats.ckpt_agg_sync_time = total_elapsed;
+}
 
-	/* Flag successful completion of mdsync */
-	mdsync_in_progress = false;
+/*
+ *	mdsync() -- Sync previous writes to stable storage.
+ */
+void
+mdsync(void)
+{
+	/*
+	 * This is only called during checkpoints, and checkpoints should only
+	 * occur in processes that have created a pendingOpsTable.
+	 */
+	if (!pendingOpsTable)
+		elog(ERROR, "cannot sync without a pendingOpsTable");
+
+	/*
+	 * If we are in the checkpointer, the sync had better include all fsync
+	 * requests that were queued by backends up to this point.  The tightest
+	 * race condition that could occur is that a buffer that must be written
+	 * and fsync'd for the checkpoint could have been dumped by a backend just
+	 * before it was visited by BufferSync().  We know the backend will have
+	 * queued an fsync request before clearing the buffer's dirtybit, so we
+	 * are safe as long as we do an Absorb after completing BufferSync().
+	 */
+	AbsorbAllFsyncRequests();
+
+	mdsyncpass(false);
+}
+
+/*
+ * Flush the fsync request queue enough to make sure there's room for at least
+ * one more entry.
+ */
+bool
+FlushFsyncRequestQueueIfNecessary(void)
+{
+	if (mdsync_in_progress)
+		return false;
+
+	while (true)
+	{
+		if (open_fsync_queue_files >= ((max_safe_fds * 7) / 10))
+		{
+			elog(DEBUG1,
+				 "flush fsync request queue due to %u open files",
+				 open_fsync_queue_files);
+			mdsyncpass(true);
+			elog(DEBUG1,
+				 "flushed fsync request, now at %u open files",
+				 open_fsync_queue_files);
+		}
+		else
+			break;
+	}
+
+	return true;
 }
 
 /*
@@ -1410,10 +1453,36 @@ mdpostckpt(void)
 		 */
 		if (--absorb_counter <= 0)
 		{
-			AbsorbFsyncRequests();
+			/* XXX: Centralize this condition */
+			if (open_fsync_queue_files < ((max_safe_fds * 7) / 10))
+				AbsorbFsyncRequests();
 			absorb_counter = UNLINKS_PER_ABSORB;
 		}
 	}
+}
+
+
+/*
+ * Return the filename for the specified segment of the relation. The
+ * returned string is palloc'd.
+ */
+static char *
+mdpath(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+{
+	char	   *path,
+			   *fullpath;
+
+	path = relpathperm(rnode, forknum);
+
+	if (segno > 0)
+	{
+		fullpath = psprintf("%s.%u", path, segno);
+		pfree(path);
+	}
+	else
+		fullpath = path;
+
+	return fullpath;
 }
 
 /*
@@ -1428,28 +1497,53 @@ mdpostckpt(void)
 static void
 register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 {
+	uint32 cycle;
+
 	/* Temp relations should never be fsync'd */
 	Assert(!SmgrIsTemp(reln));
 
+	pg_memory_barrier();
+	cycle = GetCheckpointSyncCycle();
+
+	/*
+	 * For historical reasons checkpointer keeps track of the number of time
+	 * backends perform writes themselves.
+	 */
+	if (!AmBackgroundWriterProcess())
+		CountBackendWrite();
+
+	/*
+	 * Don't repeatedly register the same segment as dirty.
+	 *
+	 * FIXME: This doesn't correctly deal with overflows yet! We could
+	 * e.g. emit an smgr invalidation every now and then, or use a 64bit
+	 * counter.  Or just error out if the cycle reaches UINT32_MAX.
+	 */
+	if (seg->mdfd_dirtied_cycle == cycle)
+		return;
+
 	if (pendingOpsTable)
 	{
-		/* push it into local pending-ops table */
-		RememberFsyncRequest(reln->smgr_rnode.node, forknum, seg->mdfd_segno);
+		int fd;
+
+		/*
+		 * Push it into local pending-ops table.
+		 *
+		 * Gotta duplicate the fd - we can't have fd.c close it behind our
+		 * back, as that'd lead to loosing error reporting guarantees on
+		 * linux. RememberFsyncRequest() will manage the lifetime.
+		 */
+		ReleaseLruFiles();
+		fd = dup(FileGetRawDesc(seg->mdfd_vfd));
+		if (fd < 0)
+			elog(ERROR, "couldn't dup: %m");
+		RememberFsyncRequest(reln->smgr_rnode.node, forknum, seg->mdfd_segno, fd,
+							 FileGetOpenSeq(seg->mdfd_vfd));
 	}
 	else
-	{
-		if (ForwardFsyncRequest(reln->smgr_rnode.node, forknum, seg->mdfd_segno))
-			return;				/* passed it off successfully */
+		ForwardFsyncRequest(reln->smgr_rnode.node, forknum, seg->mdfd_segno, seg->mdfd_vfd);
 
-		ereport(DEBUG1,
-				(errmsg("could not forward fsync request because request queue is full")));
-
-		if (FileSync(seg->mdfd_vfd, WAIT_EVENT_DATA_FILE_SYNC) < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not fsync file \"%s\": %m",
-							FilePathName(seg->mdfd_vfd))));
-	}
+	seg->mdfd_dirtied_cycle = cycle;
 }
 
 /*
@@ -1471,21 +1565,14 @@ register_unlink(RelFileNodeBackend rnode)
 	{
 		/* push it into local pending-ops table */
 		RememberFsyncRequest(rnode.node, MAIN_FORKNUM,
-							 UNLINK_RELATION_REQUEST);
+							 UNLINK_RELATION_REQUEST,
+							 -1, 0);
 	}
 	else
 	{
-		/*
-		 * Notify the checkpointer about it.  If we fail to queue the request
-		 * message, we have to sleep and try again, because we can't simply
-		 * delete the file now.  Ugly, but hopefully won't happen often.
-		 *
-		 * XXX should we just leave the file orphaned instead?
-		 */
+		/* Notify the checkpointer about it. */
 		Assert(IsUnderPostmaster);
-		while (!ForwardFsyncRequest(rnode.node, MAIN_FORKNUM,
-									UNLINK_RELATION_REQUEST))
-			pg_usleep(10000L);	/* 10 msec seems a good number */
+		ForwardFsyncRequest(rnode.node, MAIN_FORKNUM, UNLINK_RELATION_REQUEST, -1);
 	}
 }
 
@@ -1511,7 +1598,8 @@ register_unlink(RelFileNodeBackend rnode)
  * heavyweight operation anyhow, so we'll live with it.)
  */
 void
-RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
+RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno,
+					 int fd, uint64 open_seq)
 {
 	Assert(pendingOpsTable);
 
@@ -1529,18 +1617,28 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 			/*
 			 * We can't just delete the entry since mdsync could have an
 			 * active hashtable scan.  Instead we delete the bitmapsets; this
-			 * is safe because of the way mdsync is coded.  We also set the
-			 * "canceled" flags so that mdsync can tell that a cancel arrived
-			 * for the fork(s).
+			 * is safe because of the way mdsync is coded.
 			 */
 			if (forknum == InvalidForkNumber)
 			{
 				/* remove requests for all forks */
 				for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 				{
+					int segno;
+
 					bms_free(entry->requests[forknum]);
 					entry->requests[forknum] = NULL;
-					entry->canceled[forknum] = true;
+
+					for (segno = 0; segno < entry->syncfd_len[forknum]; segno++)
+					{
+						if (entry->syncfds[forknum][segno] != -1)
+						{
+							open_fsync_queue_files--;
+							FileClose(entry->syncfds[forknum][segno]);
+							entry->syncfds[forknum][segno] = -1;
+						}
+					}
+
 				}
 			}
 			else
@@ -1548,7 +1646,16 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 				/* remove requests for single fork */
 				bms_free(entry->requests[forknum]);
 				entry->requests[forknum] = NULL;
-				entry->canceled[forknum] = true;
+
+				for (segno = 0; segno < entry->syncfd_len[forknum]; segno++)
+				{
+					if (entry->syncfds[forknum][segno] != -1)
+					{
+						open_fsync_queue_files--;
+						FileClose(entry->syncfds[forknum][segno]);
+						entry->syncfds[forknum][segno] = -1;
+					}
+				}
 			}
 		}
 	}
@@ -1572,7 +1679,6 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 				{
 					bms_free(entry->requests[forknum]);
 					entry->requests[forknum] = NULL;
-					entry->canceled[forknum] = true;
 				}
 			}
 		}
@@ -1624,9 +1730,10 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 		/* if new entry, initialize it */
 		if (!found)
 		{
-			entry->cycle_ctr = mdsync_cycle_ctr;
+			entry->cycle_ctr = GetCheckpointSyncCycle();
 			MemSet(entry->requests, 0, sizeof(entry->requests));
-			MemSet(entry->canceled, 0, sizeof(entry->canceled));
+			MemSet(entry->syncfds, 0, sizeof(entry->syncfds));
+			MemSet(entry->syncfd_len, 0, sizeof(entry->syncfd_len));
 		}
 
 		/*
@@ -1637,6 +1744,69 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 
 		entry->requests[forknum] = bms_add_member(entry->requests[forknum],
 												  (int) segno);
+
+		if (fd >= 0)
+		{
+			File existing_file;
+			File new_file;
+
+			/* make space for entry */
+			if (entry->syncfds[forknum] == NULL)
+			{
+				int i;
+
+				entry->syncfds[forknum] = palloc(sizeof(File) * (segno + 1));
+				entry->syncfd_len[forknum] = segno + 1;
+
+				for (i = 0; i <= segno; i++)
+					entry->syncfds[forknum][i] = -1;
+			}
+			else  if (entry->syncfd_len[forknum] <= segno)
+			{
+				int i;
+
+				entry->syncfds[forknum] = repalloc(entry->syncfds[forknum],
+												   sizeof(File) * (segno + 1));
+
+				/* initialize newly created entries */
+				for (i = entry->syncfd_len[forknum]; i <= segno; i++)
+					entry->syncfds[forknum][i] = -1;
+
+				entry->syncfd_len[forknum] = segno + 1;
+			}
+
+			/*
+			 * If we didn't have a file already, or we did have a file but it
+			 * was opened later than this one, we'll keep the newly arrived
+			 * one.
+			 */
+			existing_file = entry->syncfds[forknum][segno];
+			if (existing_file == -1 || FileGetOpenSeq(existing_file) > open_seq)
+			{
+				char *path = mdpath(entry->rnode, forknum, segno);
+
+				open_fsync_queue_files++;
+				new_file = FileOpenForFd(fd, path, open_seq);
+				/* caller must have reserved entry */
+				entry->syncfds[forknum][segno] = new_file;
+				pfree(path);
+				if (existing_file != -1)
+					FileClose(existing_file);
+			}
+			else
+			{
+				/*
+				 * File is already open. Have to keep the older fd, errors
+				 * might only be reported to it, thus close the one we just
+				 * got.
+				 *
+				 * XXX: check for errrors.
+				 */
+				close(fd);
+			}
+
+			FlushFsyncRequestQueueIfNecessary();
+		}
 
 		MemoryContextSwitchTo(oldcxt);
 	}
@@ -1654,22 +1824,12 @@ ForgetRelationFsyncRequests(RelFileNode rnode, ForkNumber forknum)
 	if (pendingOpsTable)
 	{
 		/* standalone backend or startup process: fsync state is local */
-		RememberFsyncRequest(rnode, forknum, FORGET_RELATION_FSYNC);
+		RememberFsyncRequest(rnode, forknum, FORGET_RELATION_FSYNC, -1, 0);
 	}
 	else if (IsUnderPostmaster)
 	{
-		/*
-		 * Notify the checkpointer about it.  If we fail to queue the cancel
-		 * message, we have to sleep and try again ... ugly, but hopefully
-		 * won't happen often.
-		 *
-		 * XXX should we CHECK_FOR_INTERRUPTS in this loop?  Escaping with an
-		 * error would leave the no-longer-used file still present on disk,
-		 * which would be bad, so I'm inclined to assume that the checkpointer
-		 * will always empty the queue soon.
-		 */
-		while (!ForwardFsyncRequest(rnode, forknum, FORGET_RELATION_FSYNC))
-			pg_usleep(10000L);	/* 10 msec seems a good number */
+		/* Notify the checkpointer about it. */
+		ForwardFsyncRequest(rnode, forknum, FORGET_RELATION_FSYNC, -1);
 
 		/*
 		 * Note we don't wait for the checkpointer to actually absorb the
@@ -1693,14 +1853,12 @@ ForgetDatabaseFsyncRequests(Oid dbid)
 	if (pendingOpsTable)
 	{
 		/* standalone backend or startup process: fsync state is local */
-		RememberFsyncRequest(rnode, InvalidForkNumber, FORGET_DATABASE_FSYNC);
+		RememberFsyncRequest(rnode, InvalidForkNumber, FORGET_DATABASE_FSYNC, -1, 0);
 	}
 	else if (IsUnderPostmaster)
 	{
 		/* see notes in ForgetRelationFsyncRequests */
-		while (!ForwardFsyncRequest(rnode, InvalidForkNumber,
-									FORGET_DATABASE_FSYNC))
-			pg_usleep(10000L);	/* 10 msec seems a good number */
+		ForwardFsyncRequest(rnode, InvalidForkNumber, FORGET_DATABASE_FSYNC, -1);
 	}
 }
 
@@ -1831,6 +1989,7 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 	v = &reln->md_seg_fds[forknum][segno];
 	v->mdfd_vfd = fd;
 	v->mdfd_segno = segno;
+	v->mdfd_dirtied_cycle = GetCheckpointSyncCycle() - 1;
 
 	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
 

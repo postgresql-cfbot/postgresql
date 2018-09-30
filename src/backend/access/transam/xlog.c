@@ -8777,8 +8777,10 @@ CreateCheckPoint(int flags)
 	 * Note: because it is possible for log_checkpoints to change while a
 	 * checkpoint proceeds, we always accumulate stats, even if
 	 * log_checkpoints is currently off.
+	 *
+	 * Note #2: this is reset at the end of the checkpoint, not here, because
+	 * we might have to fsync before getting here (see mdsync()).
 	 */
-	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
 
 	/*
@@ -9141,6 +9143,9 @@ CreateCheckPoint(int flags)
 									 CheckpointStats.ckpt_segs_recycled);
 
 	LWLockRelease(CheckpointLock);
+
+	/* reset stats */
+	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 }
 
 /*

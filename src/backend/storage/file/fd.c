@@ -85,6 +85,7 @@
 #include "catalog/pg_tablespace.h"
 #include "common/file_perm.h"
 #include "pgstat.h"
+#include "port/atomics.h"
 #include "portability/mem.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -180,6 +181,7 @@ int			max_safe_fds = 32;	/* default if not changed */
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
+#define FD_NOT_IN_LRU		(1 << 3)	/* T = not in LRU */
 
 typedef struct vfd
 {
@@ -195,6 +197,7 @@ typedef struct vfd
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
 	mode_t		fileMode;		/* mode to pass to open(2) */
+	uint64		open_seq;		/* sequence number of opened file */
 } Vfd;
 
 /*
@@ -304,7 +307,6 @@ static void LruDelete(File file);
 static void Insert(File file);
 static int	LruInsert(File file);
 static bool ReleaseLruFile(void);
-static void ReleaseLruFiles(void);
 static File AllocateVfd(void);
 static void FreeVfd(File file);
 
@@ -333,6 +335,13 @@ static void unlink_if_exists_fname(const char *fname, bool isdir, int elevel);
 static int	fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel);
 static int	fsync_parent_path(const char *fname, int elevel);
 
+/* Shared memory state. */
+typedef struct
+{
+	pg_atomic_uint64 open_seq;
+} FdSharedData;
+
+static FdSharedData *fd_shared;
 
 /*
  * pg_fsync --- do fsync with or without writethrough
@@ -790,6 +799,21 @@ InitFileAccess(void)
 }
 
 /*
+ * Initialize shared memory state.  This is called after shared memory is
+ * ready.
+ */
+void
+FileShmemInit(void)
+{
+	bool	found;
+
+	Assert(fd_shared == NULL);
+	fd_shared = ShmemInitStruct("fd_shared", sizeof(*fd_shared), &found);
+	if (!found)
+		pg_atomic_init_u64(&fd_shared->open_seq, 0);
+}
+
+/*
  * count_usable_fds --- count how many FDs the system will let us open,
  *		and estimate how many are already open.
  *
@@ -1113,6 +1137,8 @@ LruInsert(File file)
 		{
 			++nfile;
 		}
+		vfdP->open_seq =
+			pg_atomic_fetch_add_u64(&fd_shared->open_seq, 1);
 
 		/*
 		 * Seek to the right position.  We need no special case for seekPos
@@ -1176,7 +1202,7 @@ ReleaseLruFile(void)
  * Release kernel FDs as needed to get under the max_safe_fds limit.
  * After calling this, it's OK to try to open another file.
  */
-static void
+void
 ReleaseLruFiles(void)
 {
 	while (nfile + numAllocatedDescs >= max_safe_fds)
@@ -1289,9 +1315,11 @@ FileAccess(File file)
 		 * We now know that the file is open and that it is not the last one
 		 * accessed, so we need to move it to the head of the Lru ring.
 		 */
-
-		Delete(file);
-		Insert(file);
+		if (!(VfdCache[file].fdstate & FD_NOT_IN_LRU))
+		{
+			Delete(file);
+			Insert(file);
+		}
 	}
 
 	return 0;
@@ -1410,6 +1438,58 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	vfdP->fileSize = 0;
 	vfdP->fdstate = 0x0;
 	vfdP->resowner = NULL;
+	vfdP->open_seq = pg_atomic_fetch_add_u64(&fd_shared->open_seq, 1);
+
+	return file;
+}
+
+/*
+ * Open a File for a pre-existing file descriptor.
+ *
+ * Note that these files will not be closed in an LRU basis, therefore the
+ * caller is responsible for limiting the number of open file descriptors.
+ *
+ * The passed in name is purely for informational purposes.
+ */
+File
+FileOpenForFd(int fd, const char *fileName, uint64 open_seq)
+{
+	char	   *fnamecopy;
+	File		file;
+	Vfd		   *vfdP;
+
+	/*
+	 * We need a malloc'd copy of the file name; fail cleanly if no room.
+	 */
+	fnamecopy = strdup(fileName);
+	if (fnamecopy == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+
+	file = AllocateVfd();
+	vfdP = &VfdCache[file];
+
+	/* Close excess kernel FDs. */
+	ReleaseLruFiles();
+
+	vfdP->fd = fd;
+	++nfile;
+
+	DO_DB(elog(LOG, "FileOpenForFd: success %d/%d (%s)",
+			   file, fd, fnamecopy));
+
+	/* NB: Explicitly not inserted into LRU! */
+
+	vfdP->fileName = fnamecopy;
+	/* Saved flags are adjusted to be OK for re-opening file */
+	vfdP->fileFlags = 0;
+	vfdP->fileMode = 0;
+	vfdP->seekPos = 0;
+	vfdP->fileSize = 0;
+	vfdP->fdstate = FD_NOT_IN_LRU;
+	vfdP->resowner = NULL;
+	vfdP->open_seq = open_seq;
 
 	return file;
 }
@@ -1760,7 +1840,11 @@ FileClose(File file)
 		vfdP->fd = VFD_CLOSED;
 
 		/* remove the file from the lru ring */
-		Delete(file);
+		if (!(vfdP->fdstate & FD_NOT_IN_LRU))
+		{
+			vfdP->fdstate &= ~FD_NOT_IN_LRU;
+			Delete(file);
+		}
 	}
 
 	if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
@@ -2232,6 +2316,10 @@ int
 FileGetRawDesc(File file)
 {
 	Assert(FileIsValid(file));
+
+	if (FileAccess(file))
+		return -1;
+
 	return VfdCache[file].fd;
 }
 
@@ -2253,6 +2341,17 @@ FileGetRawMode(File file)
 {
 	Assert(FileIsValid(file));
 	return VfdCache[file].fileMode;
+}
+
+/*
+ * Get the opening sequence number of this file.  This number is captured
+ * after the file was opened but before anything was written to the file,
+ */
+uint64
+FileGetOpenSeq(File file)
+{
+	Assert(FileIsValid(file));
+	return VfdCache[file].open_seq;
 }
 
 /*
@@ -3572,3 +3671,110 @@ MakePGDirectory(const char *directoryName)
 {
 	return mkdir(directoryName, pg_dir_create_mode);
 }
+
+#ifndef WIN32
+
+/*
+ * Send data over a unix domain socket, optionally (when fd != -1) including a
+ * file descriptor.
+ */
+ssize_t
+pg_uds_send_with_fd(int sock, void *buf, ssize_t buflen, int fd)
+{
+	ssize_t     size;
+	struct msghdr   msg = {0};
+	struct iovec    iov = {0};
+	/* cmsg header, union for correct alignment */
+	union
+	{
+		struct cmsghdr  cmsghdr;
+		char        control[CMSG_SPACE(sizeof (int))];
+	} cmsgu;
+	struct cmsghdr  *cmsg;
+
+	memset(&cmsgu, 0, sizeof(cmsgu));
+	iov.iov_base = buf;
+	iov.iov_len = buflen;
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+	if (fd >= 0)
+	{
+		msg.msg_control = cmsgu.control;
+		msg.msg_controllen = sizeof(cmsgu.control);
+
+		cmsg = CMSG_FIRSTHDR(&msg);
+		cmsg->cmsg_len = CMSG_LEN(sizeof (int));
+		cmsg->cmsg_level = SOL_SOCKET;
+		cmsg->cmsg_type = SCM_RIGHTS;
+
+		*((int *) CMSG_DATA(cmsg)) = fd;
+	}
+
+	size = sendmsg(sock, &msg, 0);
+
+	/* errors are returned directly */
+	return size;
+}
+
+/*
+ * Receive data from a unix domain socket. If a file is sent over the socket,
+ * store it in *fd.
+ */
+ssize_t
+pg_uds_recv_with_fd(int sock, void *buf, ssize_t bufsize, int *fd)
+{
+	ssize_t     size;
+	struct msghdr   msg;
+	struct iovec    iov;
+	/* cmsg header, union for correct alignment */
+	union
+	{
+		struct cmsghdr  cmsghdr;
+		char        control[CMSG_SPACE(sizeof (int))];
+	} cmsgu;
+	struct cmsghdr  *cmsg;
+
+	Assert(fd != NULL);
+
+	iov.iov_base = buf;
+	iov.iov_len = bufsize;
+
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = cmsgu.control;
+	msg.msg_controllen = sizeof(cmsgu.control);
+
+	size = recvmsg (sock, &msg, 0);
+
+	if (size < 0)
+	{
+		*fd = -1;
+		return size;
+	}
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+	if (cmsg && cmsg->cmsg_len == CMSG_LEN(sizeof(int)))
+	{
+		if (cmsg->cmsg_level != SOL_SOCKET)
+			elog(FATAL, "unexpected cmsg_level");
+
+		if (cmsg->cmsg_type != SCM_RIGHTS)
+			elog(FATAL, "unexpected cmsg_type");
+
+		*fd = *((int *) CMSG_DATA(cmsg));
+
+		/* FIXME: check / handle additional cmsg structures */
+	}
+	else
+		*fd = -1;
+
+	return size;
+}
+
+#endif

@@ -525,11 +525,9 @@ typedef struct
 	HANDLE		PostmasterHandle;
 	HANDLE		initial_signal_pipe;
 	HANDLE		syslogPipe[2];
-	HANDLE		fsyncPipe[2];
 #else
 	int			postmaster_alive_fds[2];
 	int			syslogPipe[2];
-	int			fsync_fds[2];
 #endif
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
@@ -572,11 +570,7 @@ int			postmaster_alive_fds[2] = {-1, -1};
 HANDLE		PostmasterHandle;
 #endif
 
-#ifndef WIN32
 int			fsync_fds[2] = {-1, -1};
-#else
-HANDLE		fsyncPipe[2] = {0, 0};
-#endif
 
 /*
  * Postmaster main entry point
@@ -6009,8 +6003,7 @@ extern pg_time_t first_syslogger_file_time;
 #define write_inheritable_socket(dest, src, childpid) ((*(dest) = (src)), true)
 #define read_inheritable_socket(dest, src) (*(dest) = *(src))
 #else
-static bool write_duplicated_handle(HANDLE *dest, HANDLE src, HANDLE child,
-									bool close_source);
+static bool write_duplicated_handle(HANDLE *dest, HANDLE src, HANDLE child);
 static bool write_inheritable_socket(InheritableSocket *dest, SOCKET src,
 						 pid_t childPid);
 static void read_inheritable_socket(SOCKET *dest, InheritableSocket *src);
@@ -6074,20 +6067,11 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->PostmasterHandle = PostmasterHandle;
 	if (!write_duplicated_handle(&param->initial_signal_pipe,
 								 pgwin32_create_signal_listener(childPid),
-								 childProcess, true))
-		return false;
-	if (!write_duplicated_handle(&param->fsyncPipe[0],
-								 fsyncPipe[0],
-								 childProcess, false))
-		return false;
-	if (!write_duplicated_handle(&param->fsyncPipe[1],
-								 fsyncPipe[1],
-								 childProcess, false))
+								 childProcess))
 		return false;
 #else
 	memcpy(&param->postmaster_alive_fds, &postmaster_alive_fds,
 		   sizeof(postmaster_alive_fds));
-	memcpy(&param->fsync_fds, &fsync_fds, sizeof(fsync_fds));
 #endif
 
 	memcpy(&param->syslogPipe, &syslogPipe, sizeof(syslogPipe));
@@ -6108,8 +6092,7 @@ save_backend_variables(BackendParameters *param, Port *port,
  * process instance of the handle to the parameter file.
  */
 static bool
-write_duplicated_handle(HANDLE *dest, HANDLE src, HANDLE childProcess,
-						bool close_source)
+write_duplicated_handle(HANDLE *dest, HANDLE src, HANDLE childProcess)
 {
 	HANDLE		hChild = INVALID_HANDLE_VALUE;
 
@@ -6119,8 +6102,7 @@ write_duplicated_handle(HANDLE *dest, HANDLE src, HANDLE childProcess,
 						 &hChild,
 						 0,
 						 TRUE,
-						 (close_source ? DUPLICATE_CLOSE_SOURCE : 0) |
-						 DUPLICATE_SAME_ACCESS))
+						 DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS))
 	{
 		ereport(LOG,
 				(errmsg_internal("could not duplicate handle to be written to backend parameter file: error code %lu",
@@ -6316,12 +6298,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 #ifdef WIN32
 	PostmasterHandle = param->PostmasterHandle;
 	pgwin32_initial_signal_pipe = param->initial_signal_pipe;
-	fsyncPipe[0] = param->fsyncPipe[0];
-	fsyncPipe[1] = param->fsyncPipe[1];
 #else
 	memcpy(&postmaster_alive_fds, &param->postmaster_alive_fds,
 		   sizeof(postmaster_alive_fds));
-	memcpy(&fsync_fds, &param->fsync_fds, sizeof(fsync_fds));
 #endif
 
 	memcpy(&syslogPipe, &param->syslogPipe, sizeof(syslogPipe));
@@ -6504,12 +6483,11 @@ static void
 InitFsyncFdSocketPair(void)
 {
 	Assert(MyProcPid == PostmasterPid);
-
-#ifndef WIN32
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fsync_fds) < 0)
+	if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fsync_fds) < 0)
 		ereport(FATAL,
 				(errcode_for_file_access(),
 				 errmsg_internal("could not create fsync sockets: %m")));
+
 	/*
 	 * Set O_NONBLOCK on both fds.
 	 */
@@ -6517,69 +6495,14 @@ InitFsyncFdSocketPair(void)
 		ereport(FATAL,
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set fsync process socket to nonblocking mode: %m")));
-#ifndef EXEC_BACKEND
-	if (fcntl(fsync_fds[FSYNC_FD_PROCESS], F_SETFD, FD_CLOEXEC) == -1)
-		ereport(FATAL,
-				(errcode_for_socket_access(),
-				 errmsg_internal("could not set fsync process socket to close-on-exec mode: %m")));
-#endif
 
 	if (fcntl(fsync_fds[FSYNC_FD_SUBMIT], F_SETFL, O_NONBLOCK) == -1)
 		ereport(FATAL,
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set fsync submit socket to nonblocking mode: %m")));
-#ifndef EXEC_BACKEND
-	if (fcntl(fsync_fds[FSYNC_FD_SUBMIT], F_SETFD, FD_CLOEXEC) == -1)
-		ereport(FATAL,
-				(errcode_for_socket_access(),
-				 errmsg_internal("could not set fsync submit socket to close-on-exec mode: %m")));
-#endif
-#else
-	{
-		UCHAR		pipename[MAX_PATH];
-		SECURITY_ATTRIBUTES sa;
 
-		memset(&sa, 0, sizeof(sa));
-
-		/*
-		 * We'll create a named pipe, because anonymous pipes don't allow
-		 * overlapped (= async) IO or message-orient communication.  We'll
-		 * open both ends of it here, and then duplicate them into all child
-		 * processes in save_backend_variables().  First, open the server end.
-		 */
-		snprintf(pipename, sizeof(pipename), "\\\\.\\Pipe\\fsync_pipe.%08x",
-				 GetCurrentProcessId());
-		fsyncPipe[FSYNC_FD_PROCESS] = CreateNamedPipeA(pipename,
-													   PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-													   PIPE_TYPE_MESSAGE | PIPE_WAIT,
-													   1,
-													   4096,
-													   4096,
-													   -1,
-													   &sa);
-		if (!fsyncPipe[FSYNC_FD_PROCESS])
-		{
-			_dosmaperr(GetLastError());
-			ereport(FATAL,
-					(errcode_for_file_access(),
-					 errmsg_internal("could not create server end of fsync pipe: %m")));
-		}
-
-		/* Now open the client end. */
-		fsyncPipe[FSYNC_FD_SUBMIT] = CreateFileA(pipename,
-												 GENERIC_WRITE,
-												 0,
-												 &sa,
-												 OPEN_EXISTING,
-												 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-												 NULL);
-		if (!fsyncPipe[FSYNC_FD_SUBMIT])
-		{
-			_dosmaperr(GetLastError());
-			ereport(FATAL,
-					(errcode_for_file_access(),
-					 errmsg_internal("could not create client end of fsync pipe: %m")));
-		}
-	}
-#endif
+	/*
+	 * FIXME: do DuplicateHandle dance for windows - can that work
+	 * trivially?
+	 */
 }

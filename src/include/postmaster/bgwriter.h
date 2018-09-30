@@ -16,6 +16,7 @@
 #define _BGWRITER_H
 
 #include "storage/block.h"
+#include "storage/fd.h"
 #include "storage/relfilenode.h"
 
 
@@ -31,13 +32,19 @@ extern void CheckpointerMain(void) pg_attribute_noreturn();
 extern void RequestCheckpoint(int flags);
 extern void CheckpointWriteDelay(int flags, double progress);
 
-extern bool ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum,
-					BlockNumber segno);
+extern void ForwardFsyncRequest(RelFileNode rnode, ForkNumber forknum,
+								BlockNumber segno, File file);
 extern void AbsorbFsyncRequests(void);
+extern void AbsorbAllFsyncRequests(void);
 
 extern Size CheckpointerShmemSize(void);
 extern void CheckpointerShmemInit(void);
 
+extern uint32 GetCheckpointSyncCycle(void);
+extern uint32 IncCheckpointSyncCycle(void);
+
 extern bool FirstCallSinceLastCheckpoint(void);
+
+extern void CountBackendWrite(void);
 
 #endif							/* _BGWRITER_H */

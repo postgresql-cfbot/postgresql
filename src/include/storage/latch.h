@@ -128,6 +128,7 @@ typedef struct Latch
 #define WL_POSTMASTER_DEATH  (1 << 4)
 #ifdef WIN32
 #define WL_SOCKET_CONNECTED  (1 << 5)
+#define WL_WIN32_HANDLE		 (1 << 6)
 #else
 /* avoid having to deal with case on platforms not requiring it */
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE

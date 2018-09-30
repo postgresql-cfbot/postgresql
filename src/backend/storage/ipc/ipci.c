@@ -270,6 +270,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	BackendRandomShmemInit();
+	FileShmemInit();
 
 #ifdef EXEC_BACKEND
 

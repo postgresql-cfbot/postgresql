@@ -556,7 +556,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 	 * not on extension.)
 	 */
 	if (rel->rd_smgr->smgr_fsm_nblocks == InvalidBlockNumber ||
-		blkno >= rel->rd_smgr->smgr_fsm_nblocks)
+		rel->rd_smgr->smgr_fsm_nblocks == 0)
 	{
 		if (smgrexists(rel->rd_smgr, FSM_FORKNUM))
 			rel->rd_smgr->smgr_fsm_nblocks = smgrnblocks(rel->rd_smgr,
@@ -564,6 +564,9 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 		else
 			rel->rd_smgr->smgr_fsm_nblocks = 0;
 	}
+	else if (blkno >= rel->rd_smgr->smgr_fsm_nblocks)
+		rel->rd_smgr->smgr_fsm_nblocks = smgrnblocks(rel->rd_smgr,
+													 FSM_FORKNUM);
 
 	/* Handle requests beyond EOF */
 	if (blkno >= rel->rd_smgr->smgr_fsm_nblocks)

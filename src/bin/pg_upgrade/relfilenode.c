@@ -252,9 +252,34 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 		}
 		else if (user_opts.transfer_mode == TRANSFER_MODE_COPY)
 		{
-			pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n",
-				   old_file, new_file);
-			copyFile(old_file, new_file, map->nspname, map->relname);
+			if (user_opts.reflink_mode == REFLINK_ALWAYS)
+			{
+				pg_log(PG_VERBOSE, "cloning \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				cloneFile(old_file, new_file, map->nspname, map->relname, false);
+			}
+			else if (user_opts.reflink_mode == REFLINK_AUTO)
+			{
+				static bool		cloning_ok = true;
+
+				pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				if (cloning_ok &&
+					!cloneFile(old_file, new_file, map->nspname, map->relname, true))
+				{
+					pg_log(PG_VERBOSE, "cloning not supported, switching to copying\n");
+					cloning_ok = false;
+					copyFile(old_file, new_file, map->nspname, map->relname);
+				}
+				else
+					copyFile(old_file, new_file, map->nspname, map->relname);
+			}
+			else
+			{
+				pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				copyFile(old_file, new_file, map->nspname, map->relname);
+			}
 		}
 		else
 		{

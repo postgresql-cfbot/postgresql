@@ -151,6 +151,8 @@ check_new_cluster(void)
 
 	if (user_opts.transfer_mode == TRANSFER_MODE_LINK)
 		check_hard_link();
+	else if (user_opts.transfer_mode == TRANSFER_MODE_COPY && user_opts.reflink_mode != REFLINK_NEVER)
+		check_reflink();
 
 	check_is_install_user(&new_cluster);
 

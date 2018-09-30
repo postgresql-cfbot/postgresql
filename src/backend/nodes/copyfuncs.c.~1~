@@ -2542,7 +2542,6 @@ _copyCommonTableExpr(const CommonTableExpr *from)
 	COPY_NODE_FIELD(ctequery);
 	COPY_LOCATION_FIELD(location);
 	COPY_SCALAR_FIELD(cterecursive);
-	COPY_SCALAR_FIELD(ctematerialized);
 	COPY_SCALAR_FIELD(cterefcount);
 	COPY_NODE_FIELD(ctecolnames);
 	COPY_NODE_FIELD(ctecoltypes);

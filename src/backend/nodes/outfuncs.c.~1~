@@ -3094,7 +3094,6 @@ _outCommonTableExpr(StringInfo str, const CommonTableExpr *node)
 	WRITE_NODE_FIELD(ctequery);
 	WRITE_LOCATION_FIELD(location);
 	WRITE_BOOL_FIELD(cterecursive);
-	WRITE_BOOL_FIELD(ctematerialized);
 	WRITE_INT_FIELD(cterefcount);
 	WRITE_NODE_FIELD(ctecolnames);
 	WRITE_NODE_FIELD(ctecoltypes);

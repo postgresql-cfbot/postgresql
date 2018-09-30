@@ -1146,6 +1146,141 @@ hash_ok_operator(OpExpr *expr)
 }
 
 
+struct inline_cte_walker_ctx
+{
+	const char *ctename;
+	int levelsup;
+	int refcount;
+	Query *ctequery;
+	CommonTableExpr *cte;
+};
+
+static bool inline_cte_walker(Node *node, void *ctxp)
+{
+	struct inline_cte_walker_ctx *ctx = ctxp;
+
+	if (!node)
+		return false;
+
+	if (IsA(node, Query))
+	{
+		/*
+		 * This one is a bit tricky. It's our job to handle the recursion here,
+		 * but we do some of the lifting normally handled by query_tree_walker
+		 * in order to get the sequence of operations right.
+		 *
+		 * First, if the Query we're looking at is the one containing our CTE
+		 * definition, then we don't need to recurse into our own CTE or CTEs
+		 * that are earlier in the list than ours (since cteList has been
+		 * sorted for us into dependency order). We could check whether a
+		 * nested query is hiding ours, but that seems too much of an edge case
+		 * to be worth optimizing (the levelsup check will ensure we don't
+		 * replace any CTEs improperly). So we scan the cteList ourselves
+		 * rather than having query_tree_walker do it.
+		 *
+		 * Second, we want to walk the rangetable _before_ replacing any
+		 * RTE_CTE nodes, in order to avoid re-walking the subquery we just
+		 * inlined. (range_table_walker, if told to visit the RTE nodes at all,
+		 * visits them before their content.) So we have range_table_walker
+		 * ignore the RTE nodes themselves and only walk their contents.
+		 *
+		 * Third, we scan the rangetable for RTE_CTE nodes to replace.
+		 *
+		 * Fourth, we use query_tree_walker to find and walk the rest of the
+		 * query, telling it to ignore the rangetable and CTEs.
+		 *
+		 * Note that ctx->levelsup is -1 on entry the first time, since we need
+		 * the incremented value to be 0 when scanning the content of the query
+		 * containing the definition.
+		 */
+		Query *query = castNode(Query, node);
+		ListCell *lc;
+		bool do_replace = ctx->levelsup >= 0;
+
+		ctx->levelsup++;
+
+		foreach (lc, query->cteList)
+		{
+			CommonTableExpr *cte = lfirst_node(CommonTableExpr, lc);
+
+			if (!do_replace && strcmp(cte->ctename, ctx->ctename) == 0)
+				do_replace = true;
+			else if (do_replace)
+				inline_cte_walker(cte->ctequery, ctxp);
+		}
+
+		range_table_walker(query->rtable, inline_cte_walker, ctxp, 0);
+
+		foreach (lc, query->rtable)
+		{
+			RangeTblEntry *rte = lfirst_node(RangeTblEntry, lc);
+
+			if (rte->rtekind == RTE_CTE &&
+				strcmp(rte->ctename, ctx->ctename) == 0 &&
+				rte->ctelevelsup == ctx->levelsup)
+			{
+				Query *newquery = ctx->ctequery;
+
+				/*
+				 * We need to do some work here that view rewrite does not, and
+				 * in turn we do not do some work that view rewrite does.
+				 *
+				 * Firstly, views can't have outer references but CTEs can
+				 * (especially in the case of CTEs referencing other CTEs), so
+				 * we need to fix up all levelsup attributes inside the CTE
+				 * query.
+				 *
+				 * Secondly, views (and explicit subqueries) currently have
+				 * different behaviour w.r.t. SELECT FOR UPDATE than CTEs do. A
+				 * FOR UPDATE clause is treated as extending into views and
+				 * subqueries, but not into CTEs. We preserve this distinction
+				 * by not trying to push rowmarks into the new subquery.
+				 *
+				 * We avoid copyObject if possible because subquery processing
+				 * copies the query too.
+				 */
+				if (ctx->levelsup > 0)
+				{
+					newquery = copyObject(newquery);
+					IncrementVarSublevelsUp((Node *) newquery, ctx->levelsup, 1);
+				}
+
+				/*
+				 * Here's where we do the actual substitution.
+				 */
+				rte->rtekind = RTE_SUBQUERY;
+				rte->subquery = newquery;
+				rte->security_barrier = false;
+
+				ctx->refcount--;
+			}
+		}
+
+		query_tree_walker(query, inline_cte_walker, ctxp,
+						  QTW_IGNORE_RANGE_TABLE | QTW_IGNORE_CTE_SUBQUERIES);
+
+		ctx->levelsup--;
+
+		return false;
+	}
+
+	return expression_tree_walker(node, inline_cte_walker, ctxp);
+}
+
+static void inline_cte(PlannerInfo *root, CommonTableExpr *cte)
+{
+	struct inline_cte_walker_ctx ctx;
+	ctx.ctequery = castNode(Query, cte->ctequery);
+	ctx.ctename = cte->ctename;
+	ctx.refcount = cte->cterefcount;
+	ctx.levelsup = -1;
+	ctx.cte = cte;
+	inline_cte_walker((Node *) root->parse, &ctx);
+	/* we must replace all references */
+	Assert(ctx.refcount == 0);
+}
+
+
 /*
  * SS_process_ctes: process a query's WITH list
  *
@@ -1178,6 +1313,23 @@ SS_process_ctes(PlannerInfo *root)
 		 */
 		if (cte->cterefcount == 0 && cmdType == CMD_SELECT)
 		{
+			/* Make a dummy entry in cte_plan_ids */
+			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
+			continue;
+		}
+
+		/*
+		 * Consider inlining the CTE rather than planning it separately.
+		 */
+		if (cmdType == CMD_SELECT &&
+			!cte->ctematerialized &&
+			!cte->cterecursive &&
+			!((cte->cterefcount > 1) && contain_volatile_functions(cte->ctequery)) &&
+			(castNode(Query, cte->ctequery)->rowMarks == NIL)
+			)
+		{
+			inline_cte(root, cte);
+
 			/* Make a dummy entry in cte_plan_ids */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
 			continue;

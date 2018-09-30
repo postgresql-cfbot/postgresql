@@ -255,6 +255,17 @@
 				# from standby(s); '*' = all
 #vacuum_defer_cleanup_age = 0	# number of xacts by which cleanup is delayed
 
+#synchronous_replay_max_lag = 0s	# maximum replication delay to tolerate from
+					# standbys before dropping them from the synchronous
+					# replay set; 0 to disable synchronous replay
+
+#synchronous_replay_lease_time = 5s		# how long individual leases granted to
+					# synchronous replay standbys should last; should be 4 times
+					# the max possible clock skew
+
+#synchronous_replay_standby_names = '*'	# standby servers that can join the
+					# synchronous replay set; '*' = all
+
 # - Standby Servers -
 
 # These settings are ignored on a master server.
@@ -285,6 +296,14 @@
 					# (change requires restart)
 #max_sync_workers_per_subscription = 2	# taken from max_logical_replication_workers
 
+# - All Servers -
+
+#synchronous_replay = off			# "on" in any pair of consecutive
+					# transactions guarantees that the second
+					# can see the first (even if the second
+					# is run on a standby), or will raise an
+					# error to report that the standby is
+					# unavailable for synchronous replay
 
 #------------------------------------------------------------------------------
 # QUERY TUNING

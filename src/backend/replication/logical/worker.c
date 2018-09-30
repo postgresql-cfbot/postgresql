@@ -1194,6 +1194,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 						TimestampTz timestamp;
 						bool		reply_requested;
 
+						(void) pq_getmsgint64(&s); /* skip messageNumber */
 						end_lsn = pq_getmsgint64(&s);
 						timestamp = pq_getmsgint64(&s);
 						reply_requested = pq_getmsgbyte(&s);
@@ -1401,6 +1402,7 @@ send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 	pq_sendint64(reply_message, writepos);	/* apply */
 	pq_sendint64(reply_message, now);	/* sendTime */
 	pq_sendbyte(reply_message, requestReply);	/* replyRequested */
+	pq_sendint64(reply_message, -1);		/* replyTo */
 
 	elog(DEBUG2, "sending feedback (force %d) to recv %X/%X, write %X/%X, flush %X/%X",
 		 force,

@@ -42,7 +42,8 @@ typedef int LOCKMODE;
 #define ShareRowExclusiveLock	6	/* like EXCLUSIVE MODE, but allows ROW
 									 * SHARE */
 #define ExclusiveLock			7	/* blocks ROW SHARE/SELECT...FOR UPDATE */
-#define AccessExclusiveLock		8	/* ALTER TABLE, DROP TABLE, VACUUM FULL,
+#define AccessExclusiveLocalLock 8	/* heap truncation by VACUUM */
+#define AccessExclusiveLock		9	/* ALTER TABLE, DROP TABLE, VACUUM FULL,
 									 * and unqualified LOCK TABLE */
 
 typedef struct xl_standby_lock

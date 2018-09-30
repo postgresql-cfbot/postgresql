@@ -10206,4 +10206,13 @@
   proisstrict => 'f', prorettype => 'bool', proargtypes => 'oid int4 int4 any',
   proargmodes => '{i,i,i,v}', prosrc => 'satisfies_hash_partition' },
 
+# function to get tables in partition tree of a given root table
+{ oid => '3423', descr => 'view partition tree tables',
+  proname => 'pg_partition_children', prorows => '1000', proretset => 't',
+  provolatile => 'v', prorettype => 'record', proargtypes => 'regclass',
+  proallargtypes => '{regclass,regclass,regclass,int4,bool}',
+  proargmodes => '{i,o,o,o,o}',
+  proargnames => '{rootrelid,relid,parentid,level,isleaf}',
+  prosrc => 'pg_partition_children' }
+
 ]

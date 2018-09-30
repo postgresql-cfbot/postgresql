@@ -23,13 +23,17 @@
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_partitioned_table.h"
+#include "catalog/pg_type.h"
+#include "funcapi.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/prep.h"
 #include "optimizer/var.h"
 #include "partitioning/partbounds.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/lsyscache.h"
 #include "utils/partcache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -356,4 +360,90 @@ get_proposed_default_constraint(List *new_part_constraints)
 	defPartConstraint = canonicalize_qual(defPartConstraint, true);
 
 	return make_ands_implicit(defPartConstraint);
+}
+
+Datum
+pg_partition_children(PG_FUNCTION_ARGS)
+{
+	Oid		rootrelid = PG_GETARG_OID(0);
+	FuncCallContext *funccxt;
+	ListCell **next;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldcxt;
+		TupleDesc	tupdesc;
+		List   *partitions;
+
+		funccxt = SRF_FIRSTCALL_INIT();
+		oldcxt = MemoryContextSwitchTo(funccxt->multi_call_memory_ctx);
+
+		partitions = find_all_inheritors(rootrelid, NoLock, NULL);
+
+		tupdesc = CreateTemplateTupleDesc(4, false);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "relid",
+						   REGCLASSOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "parentid",
+						   REGCLASSOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "level",
+						   INT4OID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "isleaf",
+						   BOOLOID, -1, 0);
+
+		next = (ListCell **) palloc(sizeof(ListCell *));
+		*next = list_head(partitions);
+
+		funccxt->attinmeta = TupleDescGetAttInMetadata(tupdesc);
+		funccxt->user_fctx = (void *) next;
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	funccxt = SRF_PERCALL_SETUP();
+	next = (ListCell **) funccxt->user_fctx;
+
+	if (*next != NULL)
+	{
+		HeapTuple	tuple;
+		char	   *values[4];
+		Oid			relid = lfirst_oid(*next);
+		char		relkind = get_rel_relkind(relid);
+		List	   *ancestors = get_partition_ancestors(lfirst_oid(*next));
+		Oid			parent = InvalidOid;
+		int			level = 0;
+		ListCell   *lc;
+
+		/* relid */
+		values[0] = psprintf("%u", relid);
+
+		/* parentid */
+		if (ancestors != NIL)
+			parent = linitial_oid(ancestors);
+		if (OidIsValid(parent))
+			values[1] = psprintf("%u", parent);
+		else
+			values[1] = NULL;
+
+		/* level */
+		if (relid != rootrelid)
+		{
+			foreach(lc, ancestors)
+			{
+				level++;
+				if (lfirst_oid(lc) == rootrelid)
+					break;
+			}
+		}
+		values[2] = psprintf("%d", level);
+		values[3] = psprintf("%c", relkind == RELKIND_PARTITIONED_TABLE ?
+									'f' :
+									't');
+
+		tuple = BuildTupleFromCStrings(funccxt->attinmeta, values);
+
+		*next = lnext(*next);
+		SRF_RETURN_NEXT(funccxt, HeapTupleGetDatum(tuple));
+	}
+
+	SRF_RETURN_DONE(funccxt);
 }

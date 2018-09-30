@@ -322,6 +322,7 @@ typedef struct PlannerInfo
 	InheritanceKind inhTargetKind;	/* indicates if the target relation is an
 									 * inheritance child or partition or a
 									 * partitioned table */
+	bool		needBaseTids;	/* true to force outputting baserel CTIDs */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */
 	bool		hasLateralRTEs; /* true if any RTEs are marked LATERAL */
 	bool		hasDeletedRTEs; /* true if any RTE was deleted from jointree */

@@ -1154,6 +1154,22 @@ SELCT 1/0;
     (if successful) or ErrorResponse (if not).
    </para>
 
+   <note>
+      <para>
+      The <productname>PostgreSQL</productname> version 2.0 (v2.0) protocol
+      requires the sender to terminate the <command>COPY</command> data stream
+      with a final <literal>\.</literal> line. In the v3.0 protocol, use of
+      the terminating line is deprecated and optional. The v3.0
+      protocol now encapsulates the data into CopyData messages and terminates
+      the data stream with a CopyDone message. If the terminating line is
+      present, it must appear immediately before the CopyDone message.
+      Any code that fully implements the v3.0 copy-in/copy-out
+      sub-protocol should not send the terminating line but must allow
+      for the terminating line when receiving <command>COPY</command>
+      data. The terminating line will be removed from a future protocol version.
+      </para>
+   </note>
+
    <para>
     In the event of a backend-detected error during copy-in mode (including
     receipt of a CopyFail message), the backend will issue an ErrorResponse
@@ -3928,7 +3944,11 @@ CopyData (F &amp; B)
                 Data that forms part of a <command>COPY</command> data stream.  Messages sent
                 from the backend will always correspond to single data rows,
                 but messages sent by frontends might divide the data stream
-                arbitrarily.
+                arbitrarily. The last CopyData message before CopyDone may contain an optional
+                termination line containing <literal>\.</literal>. This termination line is
+                a holdover from the v2.0 protocol. It is not part of the data stream and should
+                be ignored. See the description of the <command>COPY</command> sub-protocol
+                message flow for more detail.
 </para>
 </listitem>
 </varlistentry>

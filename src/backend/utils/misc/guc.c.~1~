@@ -312,23 +312,6 @@ static const struct config_enum_entry track_function_options[] = {
 	{NULL, 0, false}
 };
 
-/*
- * Accept the usual variants of boolean-ish, along with warn and error.
- */
-static const struct config_enum_entry transform_null_equals_options[] = {
-	{"off", TRANSFORM_NULL_EQUALS_OFF, false},
-	{"false", TRANSFORM_NULL_EQUALS_OFF, true},
-	{"no", TRANSFORM_NULL_EQUALS_OFF, true},
-	{"0", TRANSFORM_NULL_EQUALS_OFF, true},
-	{"warn", TRANSFORM_NULL_EQUALS_WARN, false},
-	{"error", TRANSFORM_NULL_EQUALS_ERR, false},
-	{"on", TRANSFORM_NULL_EQUALS_ON, false},
-	{"true", TRANSFORM_NULL_EQUALS_ON, true},
-	{"yes", TRANSFORM_NULL_EQUALS_ON, true},
-	{"1", TRANSFORM_NULL_EQUALS_ON, true},
-	{NULL, 0, false}
-};
-
 static const struct config_enum_entry xmlbinary_options[] = {
 	{"base64", XMLBINARY_BASE64, false},
 	{"hex", XMLBINARY_HEX, false},
@@ -1430,6 +1413,19 @@ static struct config_bool ConfigureNamesBool[] =
 						 "setup it might impose a non-negligible performance penalty.")
 		},
 		&log_hostname,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"transform_null_equals", PGC_USERSET, COMPAT_OPTIONS_CLIENT,
+			gettext_noop("Treats \"expr=NULL\" as \"expr IS NULL\"."),
+			gettext_noop("When turned on, expressions of the form expr = NULL "
+						 "(or NULL = expr) are treated as expr IS NULL, that is, they "
+						 "return true if expr evaluates to the null value, and false "
+						 "otherwise. The correct behavior of expr = NULL is to always "
+						 "return null (unknown).")
+		},
+		&Transform_null_equals,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4093,20 +4089,6 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&pgstat_track_functions,
 		TRACK_FUNC_OFF, track_function_options,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"transform_null_equals", PGC_USERSET, COMPAT_OPTIONS_CLIENT,
-			gettext_noop("Treats \"expr=NULL\" as \"expr IS NULL\"."),
-			gettext_noop("When set to on, expressions of the form expr = NULL "
-						 "(or NULL = expr) are treated as expr IS NULL. When "
-						 "set to off, warn, or error, they are not, with increasing "
-						 "insistence. The default behavior of expr = NULL is to "
-						 "return null (unknown).")
-		},
-		&transform_null_equals,
-		TRANSFORM_NULL_EQUALS_OFF, transform_null_equals_options,
 		NULL, NULL, NULL
 	},
 

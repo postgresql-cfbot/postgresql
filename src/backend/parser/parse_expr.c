@@ -41,8 +41,8 @@
 
 
 /* GUC parameters */
-bool		operator_precedence_warning = false;
-bool		Transform_null_equals = false;
+bool	operator_precedence_warning = false;
+int		transform_null_equals = TRANSFORM_NULL_EQUALS_OFF;
 
 /*
  * Node-type groups for operator precedence warnings
@@ -850,6 +850,7 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 	Node	   *lexpr = a->lexpr;
 	Node	   *rexpr = a->rexpr;
 	Node	   *result;
+	bool		is_null_equals = false;
 
 	if (operator_precedence_warning)
 	{
@@ -872,17 +873,34 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 	}
 
 	/*
-	 * Special-case "foo = NULL" and "NULL = foo" for compatibility with
+	 * Deal with "foo = NULL" and "NULL = foo" for compatibility with
 	 * standards-broken products (like Microsoft's).  Turn these into IS NULL
 	 * exprs. (If either side is a CaseTestExpr, then the expression was
 	 * generated internally from a CASE-WHEN expression, and
 	 * transform_null_equals does not apply.)
 	 */
-	if (Transform_null_equals &&
-		list_length(a->name) == 1 &&
+	is_null_equals = (list_length(a->name) == 1 &&
 		strcmp(strVal(linitial(a->name)), "=") == 0 &&
 		(exprIsNullConstant(lexpr) || exprIsNullConstant(rexpr)) &&
-		(!IsA(lexpr, CaseTestExpr) &&!IsA(rexpr, CaseTestExpr)))
+		(!IsA(lexpr, CaseTestExpr) &&!IsA(rexpr, CaseTestExpr)));
+
+	/*
+	 * We don't need to handle TRANSFORM_NULL_EQUALS_OFF here because it's a noop
+	 */
+
+	if (is_null_equals && transform_null_equals == TRANSFORM_NULL_EQUALS_WARN)
+		ereport(WARNING,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("= NULL can only produce a NULL"),
+				 parser_errposition(pstate, a->location)));
+
+	if (is_null_equals && transform_null_equals == TRANSFORM_NULL_EQUALS_ERR)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("= NULL does not comply with the SQL specification"),
+				 parser_errposition(pstate, a->location)));
+
+	if (is_null_equals && transform_null_equals == TRANSFORM_NULL_EQUALS_ON)
 	{
 		NullTest   *n = makeNode(NullTest);
 

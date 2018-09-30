@@ -17,10 +17,19 @@
 
 /* GUC parameters */
 extern bool operator_precedence_warning;
-extern bool Transform_null_equals;
 
 extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKind);
 
 extern const char *ParseExprKindName(ParseExprKind exprKind);
+
+typedef enum TransformNullEquals
+{
+	TRANSFORM_NULL_EQUALS_OFF = 0,	/* Disabled */
+	TRANSFORM_NULL_EQUALS_WARN,		/* Issue a warning */
+	TRANSFORM_NULL_EQUALS_ERR,		/* Error out */
+	TRANSFORM_NULL_EQUALS_ON		/* Enabled */
+} TransformNullEquals;
+
+int transform_null_equals;
 
 #endif							/* PARSE_EXPR_H */

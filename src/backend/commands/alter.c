@@ -387,6 +387,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_PUBLICATION:
 		case OBJECT_SUBSCRIPTION:
+		case OBJECT_VARIABLE:
 			{
 				ObjectAddress address;
 				Relation	catalog;
@@ -504,6 +505,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:
+		case OBJECT_VARIABLE:
 			{
 				Relation	catalog;
 				Relation	relation;
@@ -594,6 +596,7 @@ AlterObjectNamespace_oid(Oid classId, Oid objid, Oid nspOid,
 		case OCLASS_TSDICT:
 		case OCLASS_TSTEMPLATE:
 		case OCLASS_TSCONFIG:
+		case OCLASS_VARIABLE:
 			{
 				Relation	catalog;
 
@@ -852,6 +855,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 		case OBJECT_TABLESPACE:
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSCONFIGURATION:
+		case OBJECT_VARIABLE:
 			{
 				Relation	catalog;
 				Relation	relation;

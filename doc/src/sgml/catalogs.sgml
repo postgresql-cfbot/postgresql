@@ -359,6 +359,11 @@
       <entry><link linkend="catalog-pg-user-mapping"><structname>pg_user_mapping</structname></link></entry>
       <entry>mappings of users to foreign servers</entry>
      </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-variable"><structname>pg_variable</structname></link></entry>
+      <entry>schema variables</entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -11301,6 +11306,147 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
    </tgroup>
   </table>
 
+ </sect1>
+
+ <sect1 id="catalog-pg-variable">
+  <title><structname>pg_variable</structname></title>
+
+  <indexterm zone="catalog-pg-variable">
+   <primary>pg_variable</primary>
+  </indexterm>
+
+  <para>
+   The table <structname>pg_variable</structname> holds metadata
+   of schema variables.
+  </para>
+
+  <table>
+   <title><structname>pg_variable</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><structfield>oid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry></entry>
+      <entry>Row identifier (hidden attribute; must be explicitly selected)</entry>
+     </row>
+
+     <row>
+      <entry><structfield>varname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>Name of the schema variable</entry>
+     </row>
+
+     <row>
+      <entry><structfield>varnamespace</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the namespace that contains this variable
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>vartype</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-type"><structname>pg_type</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the data type of this variable.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>vartypmod</structfield></entry>
+      <entry><type>int4</type></entry>
+      <entry></entry>
+      <entry>
+       <structfield>vartypmod</structfield> records type-specific data
+       supplied at table creation time (for example, the maximum
+       length of a <type>varchar</type> column).  It is passed to
+       type-specific input functions and length coercion functions.
+       The value will generally be -1 for types that do not need <structfield>vartypmod</structfield>.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>varowner</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.oid</literal></entry>
+      <entry>Owner of the variable</entry>
+     </row>
+
+     <row>
+      <entry><structfield>varcollation</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-collation"><structname>pg_collation</structname></link>.oid</literal></entry>
+      <entry>
+       The defined collation of the variable, or zero if the variable is
+       not of a collatable data type.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>varcisnotnull</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry></entry>
+      <entry>
+       True if schema variable doesn't allow to store null value. Default value is false.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>varistransact</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry></entry>
+      <entry>
+       True, when variable is transactional. That means - if transactional
+       variable was modified inside a transaction, and this transaction was
+       not commited, then the value of schema variable is reverted to value
+       before start of transaction. Default is false.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>vareoxaction</structfield></entry>
+      <entry><type>char</type></entry>
+      <entry></entry>
+      <entry>
+       <literal>n</literal> = no action, <literal>d</literal> = drop variable,
+       <literal>r</literal> = reset variable
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>vardefexpr</structfield></entry>
+      <entry><type>pg_node_tree</type></entry>
+      <entry></entry>
+      <entry>The internal representation of the variable default value</entry>
+     </row>
+
+     <row>
+      <entry><structfield>varacl</structfield></entry>
+      <entry><type>aclitem[]</type></entry>
+      <entry></entry>
+      <entry>
+       Access privileges; see
+       <xref linkend="sql-grant"/> and
+       <xref linkend="sql-revoke"/>
+       for details
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect1>
 
 </chapter>

@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -37,6 +38,7 @@
 #include "utils/date.h"
 #include "utils/lsyscache.h"
 #include "utils/timestamp.h"
+#include "utils/typcache.h"
 #include "utils/xml.h"
 
 
@@ -116,6 +118,9 @@ static Node *transformXmlSerialize(ParseState *pstate, XmlSerialize *xs);
 static Node *transformBooleanTest(ParseState *pstate, BooleanTest *b);
 static Node *transformCurrentOfExpr(ParseState *pstate, CurrentOfExpr *cexpr);
 static Node *transformColumnRef(ParseState *pstate, ColumnRef *cref);
+static Node *makeParamSchemaVariable(ParseState *pstate,
+						  Oid varid, Oid typid, int32 typmod, Oid collid,
+						  char *attrname, int location);
 static Node *transformWholeRowRef(ParseState *pstate, RangeTblEntry *rte,
 					 int location);
 static Node *transformIndirection(ParseState *pstate, A_Indirection *ind);
@@ -512,6 +517,9 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 	char	   *nspname = NULL;
 	char	   *relname = NULL;
 	char	   *colname = NULL;
+	Oid			varid = InvalidOid;
+	char	   *attrname = NULL;
+	bool		not_unique;
 	RangeTblEntry *rte;
 	int			levels_up;
 	enum
@@ -749,6 +757,15 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 			break;
 	}
 
+	varid = identify_variable(cref->fields, &attrname, &not_unique);
+
+	if (not_unique)
+		ereport(ERROR,
+				(errcode(ERRCODE_AMBIGUOUS_PARAMETER),
+				 errmsg("schema variable reference \"%s\" is ambiguous",
+						NameListToString(cref->fields)),
+				 parser_errposition(pstate, cref->location)));
+
 	/*
 	 * Now give the PostParseColumnRefHook, if any, a chance.  We pass the
 	 * translation-so-far so that it can throw an error if it wishes in the
@@ -771,6 +788,72 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 					 errmsg("column reference \"%s\" is ambiguous",
 							NameListToString(cref->fields)),
 					 parser_errposition(pstate, cref->location)));
+	}
+
+	if (OidIsValid(varid))
+	{
+		Oid		typid;
+		int32	typmod;
+		Oid		collid;
+
+		get_schema_variable_type_typmod_collid(varid, &typid, &typmod, &collid);
+
+		if (node != NULL)
+		{
+			/*
+			 * some collision can be solved simply here to reduce errors
+			 * based on simply existence of some variables. Often error
+			 * can be using alias same like variable name. In this case,
+			 * when we found column reference, and we found reference to
+			 * possible composite variable, but the variable is not composite,
+			 * then we can ignore the variable as simply improper, and we
+			 * use column reference only.
+			 */
+			if (attrname)
+			{
+				if (type_is_rowtype(typid))
+				{
+					TupleDesc		tupdesc;
+					bool			found = false;
+					int			i;
+
+					/* slow part, I hope it will not be to often */
+					tupdesc = lookup_rowtype_tupdesc(typid, typmod);
+					for (i = 0; i < tupdesc->natts; i++)
+					{
+						if (namestrcmp(&(TupleDescAttr(tupdesc, i)->attname), attrname) == 0 &&
+								!TupleDescAttr(tupdesc, i)->attisdropped)
+						{
+							found = true;
+							break;
+						}
+					}
+
+					FreeTupleDesc(tupdesc);
+
+					/* there are not composite variable with this field */
+					if (!found)
+						varid = InvalidOid;
+				}
+				else
+					/* there are not composite variable with this name */
+					varid = InvalidOid;
+			}
+
+			/* Raise error if varid is still valid. It should be really amigonuous */
+			if (OidIsValid(varid))
+				ereport(ERROR,
+						(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+						 errmsg("column reference \"%s\" is ambiguous",
+								NameListToString(cref->fields)),
+						 errdetail("The qualified identifier can be column reference or schema variable reference"),
+						 parser_errposition(pstate, cref->location)));
+		}
+
+		if (OidIsValid(varid))
+			node = makeParamSchemaVariable(pstate,
+											varid, typid, typmod, collid,
+											attrname, cref->location);
 	}
 
 	/*
@@ -805,6 +888,74 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 	}
 
 	return node;
+}
+
+/*
+ * Generate param variable for reference to schema variable
+ */
+static Node *
+makeParamSchemaVariable(ParseState *pstate,
+						  Oid varid, Oid typid, int32 typmod, Oid collid,
+						  char *attrname, int location)
+{
+	Param	   *param;
+
+	param = makeNode(Param);
+
+	param->paramkind = PARAM_VARIABLE;
+	param->paramvarid = varid;
+	param->paramtype = typid;
+	param->paramtypmod = typmod;
+	param->paramcollid = collid;
+
+	/*
+	 * There are two access to schema variables - direct, used by simple
+	 * plpgsql expressions, where there are not necessary to emulate stability.
+	 * Buffered access is used elsewhere. We should to ensure stable values,
+	 * and because schema variables are global, then we should to work with
+	 * copied values instead direct access to variables. For direct access
+	 * the varid is best for access. For buffered access we need to assign
+	 * index to buffer - later, when we will know what variables are used.
+	 * Now, we just remember, so we use schema variables.
+	 */
+	pstate->p_hasSchemaVariable = true;
+
+	if (attrname != NULL)
+	{
+		TupleDesc		tupdesc;
+		int		i;
+
+		tupdesc = lookup_rowtype_tupdesc(typid, typmod);
+
+		for (i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+
+			if (strcmp(attrname, NameStr(att->attname)) == 0 &&
+				!att->attisdropped)
+			{
+				/* Success, so generate a FieldSelect expression */
+				FieldSelect *fselect = makeNode(FieldSelect);
+
+				fselect->arg = (Expr *) param;
+				fselect->fieldnum = i + 1;
+				fselect->resulttype = att->atttypid;
+				fselect->resulttypmod = att->atttypmod;
+				/* save attribute's collation for parse_collate.c */
+				fselect->resultcollid = att->attcollation;
+
+				ReleaseTupleDesc(tupdesc);
+				return (Node *) fselect;
+			}
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("could not identify column \"%s\" in variable", attrname),
+				 parser_errposition(pstate, location)));
+	}
+
+	return (Node *) param;
 }
 
 static Node *
@@ -1818,6 +1969,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_RETURNING:
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
+		case EXPR_KIND_LET:
 			/* okay */
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -1826,6 +1978,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("cannot use subquery in DEFAULT expression");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -3460,6 +3613,7 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "CHECK";
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			return "DEFAULT";
 		case EXPR_KIND_INDEX_EXPRESSION:
 			return "index expression";
@@ -3475,6 +3629,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "PARTITION BY";
 		case EXPR_KIND_CALL_ARGUMENT:
 			return "CALL";
+		case EXPR_KIND_LET:
+			return "LET";
 
 			/*
 			 * There is intentionally no default: case here, so that the

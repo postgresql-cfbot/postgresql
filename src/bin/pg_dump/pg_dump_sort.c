@@ -1383,6 +1383,10 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "POST-DATA BOUNDARY  (ID %d)",
 					 obj->dumpId);
 			return;
+		case DO_VARIABLE:
+			snprintf(buf, bufsize,
+					 "VARIABLE %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
 	}
 	/* shouldn't get here */
 	snprintf(buf, bufsize,

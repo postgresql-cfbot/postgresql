@@ -105,6 +105,7 @@ main(int argc, char **argv)
 		{"trigger", 1, NULL, 'T'},
 		{"use-list", 1, NULL, 'L'},
 		{"username", 1, NULL, 'U'},
+		{"variable", 1, NULL, 'A'},
 		{"verbose", 0, NULL, 'v'},
 		{"single-transaction", 0, NULL, '1'},
 
@@ -150,13 +151,18 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "acCd:ef:F:h:I:j:lL:n:N:Op:P:RsS:t:T:U:vwWx1",
+	while ((c = getopt_long(argc, argv, "A:acCd:ef:F:h:I:j:lL:n:N:Op:P:RsS:t:T:U:vwWx1",
 							cmdopts, NULL)) != -1)
 	{
 		switch (c)
 		{
 			case 'a':			/* Dump data only */
 				opts->dataOnly = 1;
+				break;
+			case 'A':			/* vAriable */
+				opts->selTypes = 1;
+				opts->selVariable = 1;
+				simple_string_list_append(&opts->variableNames, optarg);
 				break;
 			case 'c':			/* clean (i.e., drop) schema prior to create */
 				opts->dropSchema = 1;
@@ -463,6 +469,7 @@ usage(const char *progname)
 
 	printf(_("\nOptions controlling the restore:\n"));
 	printf(_("  -a, --data-only              restore only the data, no schema\n"));
+	printf(_("  -A, --variable=NAME          restore named schema variable\n"));
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 create the target database\n"));
 	printf(_("  -e, --exit-on-error          exit on error, default is to continue\n"));

@@ -71,6 +71,26 @@
 typedef key_t IpcMemoryKey;		/* shared memory key passed to shmget(2) */
 typedef int IpcMemoryId;		/* shared memory ID returned by shmget(2) */
 
+/*
+ * How does a given IpcMemoryId relate to this PostgreSQL process?
+ *
+ * One could recycle unattached segments of different data directories if we
+ * distinguished that case from other SHMSTATE_FOREIGN cases.  Doing so would
+ * cause us to visit less of the key space, making us less likely to detect a
+ * SHMSTATE_ATTACHED key.  It would also complicate the concurrency analysis,
+ * in that postmasters of different data directories could simultaneously
+ * attempt to recycle a given key.  We'll waste keys longer in some cases, but
+ * avoiding the problems of the alternative justifies that loss.
+ */
+enum IpcMemoryState
+{
+	SHMSTATE_ANALYSIS_FAILURE,	/* unexpected failure to analyze the ID */
+	SHMSTATE_ATTACHED,			/* pertinent to DataDir, has attached PIDs */
+	SHMSTATE_EEXISTS,			/* no segment of that ID */
+	SHMSTATE_FOREIGN,			/* exists, but not pertinent to DataDir */
+	SHMSTATE_UNATTACHED			/* pertinent to DataDir, no attached PIDs */
+};
+
 
 unsigned long UsedShmemSegID = 0;
 void	   *UsedShmemSegAddr = NULL;
@@ -83,6 +103,7 @@ static void *AnonymousShmem = NULL;
 static void *InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size);
 static void IpcMemoryDetach(int status, Datum shmaddr);
 static void IpcMemoryDelete(int status, Datum shmId);
+static enum IpcMemoryState IpcMemoryAnalyze(IpcMemoryId shmId);
 static PGShmemHeader *PGSharedMemoryAttach(IpcMemoryKey key,
 					 IpcMemoryId *shmid);
 
@@ -288,7 +309,23 @@ IpcMemoryDelete(int status, Datum shmId)
 bool
 PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 {
-	IpcMemoryId shmId = (IpcMemoryId) id2;
+	switch (IpcMemoryAnalyze((IpcMemoryId) id2))
+	{
+		case SHMSTATE_EEXISTS:
+		case SHMSTATE_FOREIGN:
+		case SHMSTATE_UNATTACHED:
+			return false;
+		case SHMSTATE_ANALYSIS_FAILURE:
+		case SHMSTATE_ATTACHED:
+			return true;
+	}
+	return true;
+}
+
+/* See comment at enum IpcMemoryState. */
+static enum IpcMemoryState
+IpcMemoryAnalyze(IpcMemoryId shmId)
+{
 	struct shmid_ds shmStat;
 	struct stat statbuf;
 	PGShmemHeader *hdr;
@@ -305,7 +342,7 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 		 * exists.
 		 */
 		if (errno == EINVAL)
-			return false;
+			return SHMSTATE_EEXISTS;
 
 		/*
 		 * EACCES implies that the segment belongs to some other userid, which
@@ -313,7 +350,7 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 		 * is relevant to our data directory).
 		 */
 		if (errno == EACCES)
-			return false;
+			return SHMSTATE_FOREIGN;
 
 		/*
 		 * Some Linux kernel versions (in fact, all of them as of July 2007)
@@ -324,7 +361,7 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 		 */
 #ifdef HAVE_LINUX_EIDRM_BUG
 		if (errno == EIDRM)
-			return false;
+			return SHMSTATE_EEXISTS;
 #endif
 
 		/*
@@ -332,12 +369,8 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 		 * only likely case is EIDRM, which implies that the segment has been
 		 * IPC_RMID'd but there are still processes attached to it.
 		 */
-		return true;
+		return SHMSTATE_ANALYSIS_FAILURE;
 	}
-
-	/* If it has no attached processes, it's not in use */
-	if (shmStat.shm_nattch == 0)
-		return false;
 
 	/*
 	 * Try to attach to the segment and see if it matches our data directory.
@@ -345,12 +378,17 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 	 * several postmasters under the same userid.
 	 */
 	if (stat(DataDir, &statbuf) < 0)
-		return true;			/* if can't stat, be conservative */
+		return SHMSTATE_ANALYSIS_FAILURE;	/* can't stat; be conservative */
 
+	/*
+	 * If we can't attach, be conservative.  This may fail if postmaster.pid
+	 * furnished the shmId and another user created a world-readable segment
+	 * of the same shmId.  It shouldn't fail if PGSharedMemoryAttach()
+	 * furnished the shmId, because that function tests shmat().
+	 */
 	hdr = (PGShmemHeader *) shmat(shmId, NULL, PG_SHMAT_FLAGS);
-
 	if (hdr == (PGShmemHeader *) -1)
-		return true;			/* if can't attach, be conservative */
+		return SHMSTATE_ANALYSIS_FAILURE;
 
 	if (hdr->magic != PGShmemMagic ||
 		hdr->device != statbuf.st_dev ||
@@ -358,16 +396,15 @@ PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2)
 	{
 		/*
 		 * It's either not a Postgres segment, or not one for my data
-		 * directory.  In either case it poses no threat.
+		 * directory.
 		 */
 		shmdt((void *) hdr);
-		return false;
+		return SHMSTATE_FOREIGN;
 	}
 
-	/* Trouble --- looks a lot like there's still live backends */
 	shmdt((void *) hdr);
 
-	return true;
+	return shmStat.shm_nattch == 0 ? SHMSTATE_UNATTACHED : SHMSTATE_ATTACHED;
 }
 
 #ifdef USE_ANONYMOUS_SHMEM
@@ -543,19 +580,16 @@ AnonymousShmemDetach(int status, Datum arg)
  * standard header.  Also, register an on_shmem_exit callback to release
  * the storage.
  *
- * Dead Postgres segments are recycled if found, but we do not fail upon
- * collision with non-Postgres shmem segments.  The idea here is to detect and
- * re-use keys that may have been assigned by a crashed postmaster or backend.
- *
- * makePrivate means to always create a new segment, rather than attach to
- * or recycle any existing segment.
+ * Dead Postgres segments pertinent to this DataDir are recycled if found, but
+ * we do not fail upon collision with foreign shmem segments.  The idea here
+ * is to detect and re-use keys that may have been assigned by a crashed
+ * postmaster or backend.
  *
  * The port number is passed for possible use as a key (for SysV, we use
- * it to generate the starting shmem key).  In a standalone backend,
- * zero will be passed.
+ * it to generate the starting shmem key).
  */
 PGShmemHeader *
-PGSharedMemoryCreate(Size size, bool makePrivate, int port,
+PGSharedMemoryCreate(Size size, int port,
 					 PGShmemHeader **shim)
 {
 	IpcMemoryKey NextShmemSegID;
@@ -592,11 +626,18 @@ PGSharedMemoryCreate(Size size, bool makePrivate, int port,
 	/* Make sure PGSharedMemoryAttach doesn't fail without need */
 	UsedShmemSegAddr = NULL;
 
-	/* Loop till we find a free IPC key */
-	NextShmemSegID = port * 1000;
+	/*
+	 * Loop till we find a free IPC key.  Trust CreateDataDirLockFile() to
+	 * ensure no more than one postmaster per data directory can enter this
+	 * loop simultaneously.  (CreateDataDirLockFile() does not ensure that,
+	 * but prefer fixing it over coping here.)
+	 */
+	NextShmemSegID = 1 + port * 1000;
 
-	for (NextShmemSegID++;; NextShmemSegID++)
+	for (;;)
 	{
+		dsm_handle	hdr_dsm;
+
 		/* Try to create new segment */
 		memAddress = InternalIpcMemoryCreate(NextShmemSegID, sysvsize);
 		if (memAddress)
@@ -604,58 +645,62 @@ PGSharedMemoryCreate(Size size, bool makePrivate, int port,
 
 		/* Check shared memory and possibly remove and recreate */
 
-		if (makePrivate)		/* a standalone backend shouldn't do this */
-			continue;
-
 		if ((memAddress = PGSharedMemoryAttach(NextShmemSegID, &shmid)) == NULL)
-			continue;			/* can't attach, not one of mine */
-
-		/*
-		 * If I am not the creator and it belongs to an extant process,
-		 * continue.
-		 */
-		hdr = (PGShmemHeader *) memAddress;
-		if (hdr->creatorPID != getpid())
 		{
-			if (kill(hdr->creatorPID, 0) == 0 || errno != ESRCH)
-			{
-				shmdt(memAddress);
-				continue;		/* segment belongs to a live process */
-			}
-		}
-
-		/*
-		 * The segment appears to be from a dead Postgres process, or from a
-		 * previous cycle of life in this same process.  Zap it, if possible,
-		 * and any associated dynamic shared memory segments, as well. This
-		 * probably shouldn't fail, but if it does, assume the segment belongs
-		 * to someone else after all, and continue quietly.
-		 */
-		if (hdr->dsm_control != 0)
-			dsm_cleanup_using_control_segment(hdr->dsm_control);
-		shmdt(memAddress);
-		if (shmctl(shmid, IPC_RMID, NULL) < 0)
+			NextShmemSegID++;
 			continue;
+		}
+		hdr_dsm = ((PGShmemHeader *) memAddress)->dsm_control;
+		shmdt(memAddress);
+		memAddress = NULL;
 
-		/*
-		 * Now try again to create the segment.
-		 */
-		memAddress = InternalIpcMemoryCreate(NextShmemSegID, sysvsize);
-		if (memAddress)
-			break;				/* successful create and attach */
+		switch (IpcMemoryAnalyze(shmid))
+		{
+			case SHMSTATE_ANALYSIS_FAILURE:
+			case SHMSTATE_ATTACHED:
+				ereport(FATAL,
+						(errcode(ERRCODE_LOCK_FILE_EXISTS),
+						 errmsg("pre-existing shared memory block (key %lu, ID %lu) is still in use",
+								(unsigned long) NextShmemSegID,
+								(unsigned long) shmid),
+						 errhint("Terminate any old server processes associated with data directory \"%s\".",
+								 DataDir)));
+			case SHMSTATE_EEXISTS:
 
-		/*
-		 * Can only get here if some other process managed to create the same
-		 * shmem key before we did.  Let him have that one, loop around to try
-		 * next key.
-		 */
+				/*
+				 * To our surprise, some other process deleted the segment
+				 * between InternalIpcMemoryCreate() and IpcMemoryAnalyze().
+				 * Moments earlier, we would have seen SHMSTATE_FOREIGN.  Try
+				 * that same ID again.
+				 */
+				elog(LOG,
+					 "shared memory block (key %lu, ID %lu) deleted during startup",
+					 (unsigned long) NextShmemSegID,
+					 (unsigned long) shmid);
+				break;
+			case SHMSTATE_FOREIGN:
+				NextShmemSegID++;
+				break;
+			case SHMSTATE_UNATTACHED:
+
+				/*
+				 * The segment pertains to DataDir, and every process that had
+				 * used it has died or detached.  Zap it, if possible, and any
+				 * associated dynamic shared memory segments, as well.  This
+				 * shouldn't fail, but if it does, assume the segment belongs
+				 * to someone else after all, and try the next candidate.
+				 * Otherwise, try again to create the segment.  That may fail
+				 * if some other process creates the same shmem key before we
+				 * do, in which case we'll try the next key.
+				 */
+				if (hdr_dsm != 0)
+					dsm_cleanup_using_control_segment(hdr_dsm);
+				if (shmctl(shmid, IPC_RMID, NULL) < 0)
+					NextShmemSegID++;
+		}
 	}
 
-	/*
-	 * OK, we created a new segment.  Mark it as created by this process. The
-	 * order of assignments here is critical so that another Postgres process
-	 * can't see the header as valid but belonging to an invalid PID!
-	 */
+	/* Initialize new segment. */
 	hdr = (PGShmemHeader *) memAddress;
 	hdr->creatorPID = getpid();
 	hdr->magic = PGShmemMagic;
@@ -816,7 +861,10 @@ PGSharedMemoryDetach(void)
 /*
  * Attach to shared memory and make sure it has a Postgres header
  *
- * Returns attach address if OK, else NULL
+ * Returns attach address if OK, else NULL.  Treat a NULL return value like
+ * SHMSTATE_FOREIGN.  (EACCES is common.  ENOENT, a narrow possibility,
+ * implies SHMSTATE_EEXISTS, but one can safely treat SHMSTATE_EEXISTS like
+ * SHMSTATE_FOREIGN.)
  */
 static PGShmemHeader *
 PGSharedMemoryAttach(IpcMemoryKey key, IpcMemoryId *shmid)

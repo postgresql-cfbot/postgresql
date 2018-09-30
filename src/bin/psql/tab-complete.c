@@ -228,6 +228,13 @@ do { \
 	COMPLETE_WITH_LIST(list); \
 } while (0)
 
+#define COMPLETE_CURRENT_WORD() \
+do { \
+	completion_case_sensitive = true; \
+	completion_charp = text; \
+	matches = completion_matches(text, complete_from_const); \
+} while (0)
+
 #define COMPLETE_WITH_CS(...) \
 do { \
 	static const char *const list[] = { __VA_ARGS__, NULL }; \
@@ -910,6 +917,63 @@ static const VersionedQuery Query_for_list_of_subscriptions[] = {
 	{0, NULL}
 };
 
+static const SchemaQuery Query_for_list_of_selectable_functions[] = {
+	/* For servers since 8.4, which introduced the unnest function. */
+	{
+		/* min_server_version */
+		80400,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"NOT pg_catalog.arrayoverlap( "
+		"	ARRAY(SELECT oid FROM pg_catalog.pg_type WHERE typnamespace IN (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = 'pg_catalog') "
+		"		AND typname = ANY (ARRAY['internal', 'event_trigger', 'internal','opaque', 'unknown', 'pg_ddl_command', 'language_handler','tsm_handler', 'index_am_handler', 'fdw_handler'])), "
+		"	ARRAY(SELECT p.prorettype UNION SELECT pg_catalog.unnest(proargtypes)))",
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	/* For older servers since 7.4. */
+	{
+		/* min_server_version */
+		70400,
+		/* catname */
+		"pg_catalog.pg_proc p",
+		/* selcondition */
+		"prorettype NOT IN ('trigger'::regtype, 'internal'::regtype) ",
+		/* viscondition */
+		"pg_catalog.pg_function_is_visible(p.oid)",
+		/* namespace */
+		"p.pronamespace",
+		/* result */
+		"pg_catalog.quote_ident(p.proname)||'('",
+		/* qualresult */
+		NULL
+	},
+	{0, NULL}
+};
+
+/*
+ * This addon is used to find (unqualified) column names to include
+ * alongside the function names from the query above.
+ */
+static const VersionedQuery Query_addon_for_list_of_selectable_attributes[] = {
+	{70400,
+		"    UNION ALL "
+		"   SELECT DISTINCT pg_catalog.quote_ident(attname) "
+		"     FROM pg_catalog.pg_attribute "
+		"    WHERE attnum > 0 "
+		"      AND NOT attisdropped "
+		"      AND substring(pg_catalog.quote_ident(attname),1,%d)='%s'"
+	},
+	{0, NULL}
+};
+
 /*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
@@ -1241,6 +1305,40 @@ ends_with(const char *s, char c)
 }
 
 /*
+ * Get the last keyword matching a pattern.
+ */
+static const char *
+last_keyword(int previous_words_count, char **previous_words,
+			 const char *keyword_pattern) {
+	int i;
+
+	for (i = 0; i < previous_words_count; i++) {
+		if (word_matches(keyword_pattern, previous_words[i], false)) {
+			return previous_words[i];
+		}
+	}
+
+	return NULL;
+}
+
+/*
+ * Was the last keyword one of the expected ones?  For example,
+ * LastKeywordMatchesImpl(...,
+ * 						  "SELECT|FROM|WHERE|GROUP|ORDER", "SELECT")
+ * is true if SELECT is the most recent of those keywords to appear.
+ */
+static bool
+LastKeywordMatchesImpl(int previous_words_count, char **previous_words,
+					   const char *keyword_pattern,
+					   const char *accepted_pattern) {
+	const char *last_kw = last_keyword(previous_words_count, previous_words,
+									   keyword_pattern);
+	if (!last_kw)
+		return false;
+	return word_matches(last_kw, accepted_pattern, false);
+}
+
+/*
  * The completion function.
  *
  * According to readline spec this gets passed the text entered so far and its
@@ -1309,6 +1407,18 @@ psql_completion(const char *text, int start, int end)
 #define HeadMatchesCS(...) \
 	HeadMatchesImpl(true, previous_words_count, previous_words, \
 					VA_ARGS_NARGS(__VA_ARGS__), __VA_ARGS__)
+
+	/* Macro for matching last keyword, case-insensitively. */
+#define LastKeywordMatches(keywords, pattern) \
+	(LastKeywordMatchesImpl(previous_words_count, previous_words, \
+							keywords, pattern))
+
+	/*
+	 * Macro for determining (loosely) which part of a DML query we are
+	 * currently in.
+	 */
+#define CurrentQueryPartMatches(pattern) \
+	(LastKeywordMatches("SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|GROUP|ORDER|HAVING", pattern))
 
 	/* Known command-starting keywords. */
 	static const char *const sql_commands[] = {
@@ -1391,6 +1501,13 @@ psql_completion(const char *text, int start, int end)
 		else
 			matches = complete_from_variables(text, ":", "", true);
 	}
+
+	/*
+	 * If current word ends with a comma, add a space; this will expedite
+	 * completions after commas for SELECT, etc.
+	 */
+	if (ends_with(text, ','))
+		COMPLETE_CURRENT_WORD();
 
 	/* If no previous word, suggest one of the basic sql commands */
 	else if (previous_words_count == 0)
@@ -3110,7 +3227,11 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("IS");
 
 /* SELECT */
-	/* naah . . . */
+	else if (HeadMatches("SELECT|WITH") &&
+			 CurrentQueryPartMatches("SELECT") &&
+			 (ends_with(prev_wd, ',') || TailMatches("SELECT|ALL|DISTINCT")))
+		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_selectable_functions,
+											 Query_addon_for_list_of_selectable_attributes);
 
 /* SET, RESET, SHOW */
 	/* Complete with a variable name */
@@ -3720,7 +3841,8 @@ complete_from_versioned_schema_query(const char *text, int state)
  * where %d is the string length of the text and %s the text itself.
  *
  * If both simple_query and schema_query are non-NULL, then we construct
- * a schema query and append the (uninterpreted) string simple_query to it.
+ * a schema query and append the simple_query to it, replacing the %d and %s
+ * as described above.
  *
  * It is assumed that strings should be escaped to become SQL literals
  * (that is, what is in the query is actually ... '%s' ...)
@@ -3867,20 +3989,21 @@ _complete_from_query(const char *simple_query,
 							  " WHERE substring(pg_catalog.quote_ident(nspname) || '.',1,%d) ="
 							  " substring('%s',1,pg_catalog.length(pg_catalog.quote_ident(nspname))+1)) = 1",
 							  char_length, e_text);
-
-			/* If an addon query was provided, use it */
-			if (simple_query)
-				appendPQExpBuffer(&query_buffer, "\n%s", simple_query);
 		}
 		else
 		{
 			Assert(simple_query);
-			/* simple_query is an sprintf-style format string */
-			appendPQExpBuffer(&query_buffer, simple_query,
-							  char_length, e_text,
-							  e_info_charp, e_info_charp,
-							  e_info_charp2, e_info_charp2);
 		}
+
+		/*
+		 * simple_query is an sprintf-style format string (or it could be NULL, but
+		 * only if this is a schema query with no addon).
+		 */
+		if (simple_query)
+			appendPQExpBuffer(&query_buffer, simple_query,
+					  char_length, e_text,
+					  e_info_charp, e_info_charp,
+					  e_info_charp2, e_info_charp2);
 
 		/* Limit the number of records in the result */
 		appendPQExpBuffer(&query_buffer, "\nLIMIT %d",

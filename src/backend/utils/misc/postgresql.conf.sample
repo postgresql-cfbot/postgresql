@@ -126,6 +126,8 @@
 #work_mem = 4MB				# min 64kB
 #maintenance_work_mem = 64MB		# min 1MB
 #autovacuum_work_mem = -1		# min 1MB, or -1 to use maintenance_work_mem
+#cache_memory_target = 0kB	# in kB
+#cache_prune_min_age = 600s	# -1 disables pruning
 #max_stack_depth = 2MB			# min 100kB
 #dynamic_shared_memory_type = posix	# the default is the first option
 					# supported by the operating system:

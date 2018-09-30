@@ -938,6 +938,11 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (subdbid, subname, subowner, subenabled, subslotname, subpublications)
     ON pg_subscription TO public;
 
+-- XXXXXXXXXXXXXXXXXXXXXX
+CREATE VIEW pg_syscache_sizes AS
+  SELECT *
+  FROM pg_get_syscache_sizes();
+
 
 --
 -- We have a few function definitions in here, too.

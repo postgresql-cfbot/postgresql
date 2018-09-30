@@ -22,6 +22,7 @@
 
 #include "access/htup.h"
 #include "access/skey.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
 
@@ -61,6 +62,7 @@ typedef struct catcache
 	slist_node	cc_next;		/* list link */
 	ScanKeyData cc_skey[CATCACHE_MAXKEYS];	/* precomputed key info for heap
 											 * scans */
+	int			cc_tupsize;		/* total amount of catcache tuples */
 
 	/*
 	 * Keep these at the end, so that compiling catcache.c with CATCACHE_STATS
@@ -119,7 +121,9 @@ typedef struct catctup
 	bool		dead;			/* dead but not yet removed? */
 	bool		negative;		/* negative cache entry? */
 	HeapTupleData tuple;		/* tuple management header */
-
+	int			naccess;		/* # of access to this entry, up to 2  */
+	TimestampTz	lastaccess;		/* approx. timestamp of the last usage */
+	int			size;			/* palloc'ed size off this tuple */
 	/*
 	 * The tuple may also be a member of at most one CatCList.  (If a single
 	 * catcache is list-searched with varying numbers of keys, we may have to
@@ -189,6 +193,28 @@ typedef struct catcacheheader
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
 
+/* for guc.c, not PGDLLPMPORT'ed */
+extern int cache_prune_min_age;
+extern int cache_memory_target;
+
+/* to use as access timestamp of catcache entries */
+extern TimestampTz catcacheclock;
+
+/*
+ * SetCatCacheClock - set timestamp for catcache access record
+ */
+static inline void
+SetCatCacheClock(TimestampTz ts)
+{
+	catcacheclock = ts;
+}
+
+static inline TimestampTz
+GetCatCacheClock(void)
+{
+	return catcacheclock;
+}
+
 extern void CreateCacheMemoryContext(void);
 
 extern CatCache *InitCatCache(int id, Oid reloid, Oid indexoid,
@@ -227,5 +253,6 @@ extern void PrepareToInvalidateCacheTuple(Relation relation,
 
 extern void PrintCatCacheLeakWarning(HeapTuple tuple);
 extern void PrintCatCacheListLeakWarning(CatCList *list);
+extern int CatCacheGetSize(CatCache *cache);
 
 #endif							/* CATCACHE_H */

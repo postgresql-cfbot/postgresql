@@ -713,6 +713,9 @@ void
 SetCurrentStatementStartTimestamp(void)
 {
 	stmtStartTimestamp = GetCurrentTimestamp();
+
+	/* Set this timestamp as aproximated current time */
+	SetCatCacheClock(stmtStartTimestamp);
 }
 
 /*

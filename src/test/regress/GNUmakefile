@@ -28,6 +28,11 @@ EXTRADEFS = '-DHOST_TUPLE="$(host_tuple)"' \
 	'-DSHELLPROG="$(SHELL)"' \
 	'-DDLSUFFIX="$(DLSUFFIX)"'
 
+# we need to build libpgport only when we don't use installed libs
+ifndef USE_INSTALLED_ASSETS
+SUBMAKE_LIBPGPORT = submake-libpgport
+endif
+
 ##
 ## Prepare for tests
 ##
@@ -36,15 +41,19 @@ EXTRADEFS = '-DHOST_TUPLE="$(host_tuple)"' \
 
 all: pg_regress$(X)
 
-pg_regress$(X): pg_regress.o pg_regress_main.o $(WIN32RES) | submake-libpgport
+pg_regress$(X): pg_regress.o pg_regress_main.o $(WIN32RES) | $(SUBMAKE_LIBPGPORT)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+
+.PHONY: installed_all
+installed_all:
+	USE_INSTALLED_ASSETS=1 $(MAKE) all
 
 # dependencies ensure that path changes propagate
 pg_regress.o: pg_regress.c $(top_builddir)/src/port/pg_config_paths.h
 pg_regress.o: override CPPFLAGS += -I$(top_builddir)/src/port $(EXTRADEFS)
 
 # note: because of the submake dependency, this rule's action is really a no-op
-$(top_builddir)/src/port/pg_config_paths.h: | submake-libpgport
+$(top_builddir)/src/port/pg_config_paths.h: | $(SUBMAKE_LIBPGPORT)
 	$(MAKE) -C $(top_builddir)/src/port pg_config_paths.h
 
 install: all installdirs
@@ -67,7 +76,7 @@ include $(top_srcdir)/src/Makefile.shlib
 all: all-lib
 
 # Ensure parallel safety if a build is started in this directory
-$(OBJS): | submake-libpgport submake-generated-headers
+$(OBJS): | $(SUBMAKE_LIBPGPORT) submake-generated-headers
 
 # Test input and expected files.  These are created by pg_regress itself, so we
 # don't have a rule to create them.  We do need rules to clean them however.
@@ -109,7 +118,7 @@ $(top_builddir)/contrib/spi/refint$(DLSUFFIX): | submake-contrib-spi ;
 
 $(top_builddir)/contrib/spi/autoinc$(DLSUFFIX): | submake-contrib-spi ;
 
-submake-contrib-spi: | submake-libpgport submake-generated-headers
+submake-contrib-spi: | $(SUBMAKE_LIBPGPORT) submake-generated-headers
 	$(MAKE) -C $(top_builddir)/contrib/spi
 
 .PHONY: submake-contrib-spi
@@ -134,16 +143,16 @@ check: all tablespace-setup
 check-tests: all tablespace-setup | temp-install
 	$(pg_regress_check) $(REGRESS_OPTS) $(MAXCONNOPT) $(TESTS) $(EXTRA_TESTS)
 
-installcheck: all tablespace-setup
+installcheck: installed_all tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/serial_schedule $(EXTRA_TESTS)
 
-installcheck-parallel: all tablespace-setup
+installcheck-parallel: installed_all tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
-installcheck-tests: all tablespace-setup
+installcheck-tests: installed_all tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(TESTS) $(EXTRA_TESTS)
 
-standbycheck: all
+standbycheck: installed_all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/standby_schedule --use-existing
 
 # old interfaces follow...

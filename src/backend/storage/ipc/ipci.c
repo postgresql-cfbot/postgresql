@@ -46,7 +46,7 @@
 #include "storage/spin.h"
 #include "utils/backend_random.h"
 #include "utils/snapmgr.h"
-
+#include "utils/catcache.h"
 
 shmem_startup_hook_type shmem_startup_hook = NULL;
 
@@ -150,6 +150,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
+		size = add_size(size, CatCacheShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -270,6 +271,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	BackendRandomShmemInit();
+	CatCacheShmemInit();
 
 #ifdef EXEC_BACKEND
 

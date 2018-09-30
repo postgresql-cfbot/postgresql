@@ -71,6 +71,15 @@
 #define CACHE6_elog(a,b,c,d,e,f,g)
 #endif
 
+/* proto: dummy shared struct data */
+typedef struct CatcacheSharedVar
+{
+	int32 var;
+}CatcacheSharedVar;
+
+
+static CatcacheSharedVar *catcacheSharedVar = NULL; 
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
 
@@ -624,6 +633,33 @@ CatCacheInvalidate(CatCache *cache, uint32 hashValue)
  * ----------------------------------------------------------------
  */
 
+/*
+ * Report space needed for dummy shared memory areas
+ */
+Size
+CatCacheShmemSize(void)
+{
+	Size size;
+	size = sizeof(CatcacheSharedVar);
+	return size;
+}
+
+
+/*
+ * Initialize dummy shared memory areas
+ */
+void
+CatCacheShmemInit(void)
+{
+	bool found;
+
+	catcacheSharedVar = (CatcacheSharedVar *)ShmemInitStruct("Shared CatCache data (dummy)",sizeof(CatcacheSharedVar), &found);
+
+	if (!found)
+	{
+		catcacheSharedVar->var = 1;
+	}
+}
 
 /*
  * Standard routine for creating cache context if it doesn't exist yet
@@ -1261,6 +1297,8 @@ SearchCatCacheInternal(CatCache *cache,
 	 * dlist within the loop, because we don't continue the loop afterwards.
 	 */
 	bucket = &cache->cc_bucket[hashIndex];
+	LWLockAcquire(CatCacheVarLock,LW_SHARED);
+	
 	dlist_foreach(iter, bucket)
 	{
 		ct = dlist_container(CatCTup, cache_elem, iter.cur);
@@ -1298,7 +1336,7 @@ SearchCatCacheInternal(CatCache *cache,
 #ifdef CATCACHE_STATS
 			cache->cc_hits++;
 #endif
-
+			LWLockRelease(CatCacheVarLock);
 			return &ct->tuple;
 		}
 		else
@@ -1309,11 +1347,11 @@ SearchCatCacheInternal(CatCache *cache,
 #ifdef CATCACHE_STATS
 			cache->cc_neg_hits++;
 #endif
-
+			LWLockRelease(CatCacheVarLock);
 			return NULL;
 		}
 	}
-
+	LWLockRelease(CatCacheVarLock);
 	return SearchCatCacheMiss(cache, nkeys, hashValue, hashIndex, v1, v2, v3, v4);
 }
 
@@ -1382,6 +1420,8 @@ SearchCatCacheMiss(CatCache *cache,
 								  cur_skey);
 
 	ct = NULL;
+	
+	LWLockAcquire(CatCacheVarLock,LW_EXCLUSIVE);
 
 	while (HeapTupleIsValid(ntp = systable_getnext(scandesc)))
 	{
@@ -1394,6 +1434,8 @@ SearchCatCacheMiss(CatCache *cache,
 		ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
 		break;					/* assume only one match */
 	}
+
+	LWLockRelease(CatCacheVarLock);
 
 	systable_endscan(scandesc);
 
@@ -1414,9 +1456,11 @@ SearchCatCacheMiss(CatCache *cache,
 		if (IsBootstrapProcessingMode())
 			return NULL;
 
+		LWLockAcquire(CatCacheVarLock,LW_EXCLUSIVE);
 		ct = CatalogCacheCreateEntry(cache, NULL, arguments,
 									 hashValue, hashIndex,
 									 true);
+		LWLockRelease(CatCacheVarLock);
 
 		CACHE4_elog(DEBUG2, "SearchCatCache(%s): Contains %d/%d tuples",
 					cache->cc_relname, cache->cc_ntup, CacheHdr->ch_ntup);

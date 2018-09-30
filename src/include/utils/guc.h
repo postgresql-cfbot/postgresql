@@ -252,6 +252,7 @@ extern PGDLLIMPORT int log_min_messages;
 extern PGDLLIMPORT int client_min_messages;
 extern int	log_min_duration_statement;
 extern int	log_temp_files;
+extern double	log_sample_rate;
 
 extern int	temp_file_limit;
 

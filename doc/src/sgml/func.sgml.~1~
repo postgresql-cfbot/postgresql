@@ -14826,7 +14826,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
        <function>
          lag(<replaceable class="parameter">value</replaceable> <type>anyelement</type>
              [, <replaceable class="parameter">offset</replaceable> <type>integer</type>
-             [, <replaceable class="parameter">default</replaceable> <type>anyelement</type> ]]) [null_treatment]
+             [, <replaceable class="parameter">default</replaceable> <type>anyelement</type> ]])
        </function>
       </entry>
       <entry>
@@ -14855,7 +14855,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
        <function>
          lead(<replaceable class="parameter">value</replaceable> <type>anyelement</type>
               [, <replaceable class="parameter">offset</replaceable> <type>integer</type>
-              [, <replaceable class="parameter">default</replaceable> <type>anyelement</type> ]]) [null_treatment]
+              [, <replaceable class="parameter">default</replaceable> <type>anyelement</type> ]])
        </function>
       </entry>
       <entry>
@@ -14881,7 +14881,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
        <indexterm>
         <primary>first_value</primary>
        </indexterm>
-       <function>first_value(<replaceable class="parameter">value</replaceable> <type>any</type>) [null_treatment]</function>
+       <function>first_value(<replaceable class="parameter">value</replaceable> <type>any</type>)</function>
       </entry>
       <entry>
        <type>same type as <replaceable class="parameter">value</replaceable></type>
@@ -14897,7 +14897,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
        <indexterm>
         <primary>last_value</primary>
        </indexterm>
-       <function>last_value(<replaceable class="parameter">value</replaceable> <type>any</type>) [null_treatment]</function>
+       <function>last_value(<replaceable class="parameter">value</replaceable> <type>any</type>)</function>
       </entry>
       <entry>
        <type>same type as <replaceable class="parameter">value</replaceable></type>
@@ -14914,7 +14914,7 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
         <primary>nth_value</primary>
        </indexterm>
        <function>
-         nth_value(<replaceable class="parameter">value</replaceable> <type>any</type>, <replaceable class="parameter">nth</replaceable> <type>integer</type>) [from_first_last] [null_treatment]
+         nth_value(<replaceable class="parameter">value</replaceable> <type>any</type>, <replaceable class="parameter">nth</replaceable> <type>integer</type>)
        </function>
       </entry>
       <entry>
@@ -14929,23 +14929,6 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
     </tbody>
    </tgroup>
   </table>
-  
-  <para>
-  In <xref linkend="functions-window-table"/>, <replaceable>null_treatment</replaceable> is one of:
-  <synopsis>
-    RESPECT NULLS
-    IGNORE NULLS
-  </synopsis>
-
-  and <replaceable>from_first_last</replaceable> is one of:
-  <synopsis>
-    FROM FIRST
-    FROM LAST
-  </synopsis>
-  <literal>RESPECT NULLS</literal> specifies the default behavior to include nulls in the result.
-  <literal>IGNORE NULLS</literal> ignores any null values when determining a result.
-  <literal>FROM FIRST</literal> specifies the default ordering, and <literal>FROM LAST</literal> reverses the ordering.
-  </para>
 
   <para>
    All of the functions listed in
@@ -14981,6 +14964,22 @@ SELECT xmlagg(x) FROM (SELECT x FROM test ORDER BY y DESC) AS tab;
    <literal>ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING</literal>.
    Other frame specifications can be used to obtain other effects.
   </para>
+
+  <note>
+   <para>
+    The SQL standard defines a <literal>RESPECT NULLS</literal> or
+    <literal>IGNORE NULLS</literal> option for <function>lead</function>, <function>lag</function>,
+    <function>first_value</function>, <function>last_value</function>, and
+    <function>nth_value</function>.  This is not implemented in
+    <productname>PostgreSQL</productname>: the behavior is always the
+    same as the standard's default, namely <literal>RESPECT NULLS</literal>.
+    Likewise, the standard's <literal>FROM FIRST</literal> or <literal>FROM LAST</literal>
+    option for <function>nth_value</function> is not implemented: only the
+    default <literal>FROM FIRST</literal> behavior is supported.  (You can achieve
+    the result of <literal>FROM LAST</literal> by reversing the <literal>ORDER BY</literal>
+    ordering.)
+   </para>
+  </note>
 
   <para>
    <function>cume_dist</function> computes the fraction of partition rows that

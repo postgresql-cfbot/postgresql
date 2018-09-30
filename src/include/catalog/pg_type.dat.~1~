@@ -600,15 +600,5 @@
   typname => 'anyrange', typlen => '-1', typbyval => 'f', typtype => 'p',
   typcategory => 'P', typinput => 'anyrange_in', typoutput => 'anyrange_out',
   typreceive => '-', typsend => '-', typalign => 'd', typstorage => 'x' },
-{ oid => '4142',
-  typname => 'ignorenulls', descr => 'boolean wrapper, \'true\'/\'false\'',
-  typlen => '1', typbyval => 't', typtype => 'b', typcategory => 'B',
-  typinput => 'boolin', typoutput => 'boolout', typreceive => 'boolrecv',
-  typsend => 'boolsend', typalign => 'c' },
-{ oid => '4187',
-  typname => 'fromlast', descr => 'boolean wrapper, \'true\'/\'false\'',
-  typlen => '1', typbyval => 't', typtype => 'b', typcategory => 'B',
-  typinput => 'boolin', typoutput => 'boolout', typreceive => 'boolrecv',
-  typsend => 'boolsend', typalign => 'c' },
 
 ]

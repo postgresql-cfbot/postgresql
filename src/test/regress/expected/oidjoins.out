@@ -897,12 +897,44 @@ WHERE	seqtypid != 0 AND
 ------+----------
 (0 rows)
 
+SELECT	ctid, classid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	classid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class pk WHERE pk.oid = fk.classid);
+ ctid | classid 
+------+---------
+(0 rows)
+
+SELECT	ctid, objid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	objid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_database pk WHERE pk.oid = fk.objid);
+ ctid | objid 
+------+-------
+(0 rows)
+
 SELECT	ctid, refclassid
 FROM	pg_catalog.pg_shdepend fk
 WHERE	refclassid != 0 AND
 	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class pk WHERE pk.oid = fk.refclassid);
  ctid | refclassid 
 ------+------------
+(0 rows)
+
+SELECT	ctid, refobjid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	refobjid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_authid pk WHERE pk.oid = fk.refobjid);
+ ctid | refobjid 
+------+----------
+(0 rows)
+
+SELECT	ctid, objoid
+FROM	pg_catalog.pg_shdescription fk
+WHERE	objoid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_database pk WHERE pk.oid = fk.objoid);
+ ctid | objoid 
+------+--------
 (0 rows)
 
 SELECT	ctid, classoid

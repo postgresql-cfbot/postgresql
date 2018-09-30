@@ -38,7 +38,14 @@ typedef struct
 static bool rank_up(WindowObject winobj);
 static Datum leadlag_common(FunctionCallInfo fcinfo,
 			   bool forward, bool withoffset, bool withdefault);
-
+static Datum leadlag_common_ignore_nulls(FunctionCallInfo fcinfo,
+			   bool forward, bool withoffset, bool withdefault);
+static Datum
+window_nth_value_ignorenulls_common(FunctionCallInfo fcinfo, int32 nth,
+									bool fromlast);
+static Datum
+window_nth_value_respectnulls_common(FunctionCallInfo fcinfo, int32 nth,
+									bool fromlast);
 
 /*
  * utility routine for *_rank functions.
@@ -328,6 +335,79 @@ leadlag_common(FunctionCallInfo fcinfo,
 	PG_RETURN_DATUM(result);
 }
 
+static Datum
+leadlag_common_ignore_nulls(FunctionCallInfo fcinfo,
+			   bool forward, bool withoffset, bool withdefault)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	int32		offset;
+	Datum		result;
+	bool		isnull;
+	bool		isout = false;
+	int32		notnull_offset = 0, tmp_offset = 0;
+
+	if (withoffset)
+	{
+		offset = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+		if (isnull)
+			PG_RETURN_NULL();
+		if (offset < 0)
+		{
+			offset = abs(offset);
+			forward = !forward;
+		} else if (offset == 0)
+		{
+			result = WinGetFuncArgInPartition(winobj, 0, 0,
+											  WINDOW_SEEK_CURRENT,
+											  false,
+											  &isnull, &isout);
+			if (isnull || isout)
+				PG_RETURN_NULL();
+			else
+				PG_RETURN_DATUM(result);
+		}
+	}
+	else
+		offset = 1;
+
+	while (notnull_offset < offset)
+	{
+		tmp_offset++;
+		result = WinGetFuncArgInPartition(winobj, 0,
+									  (forward ? tmp_offset : -tmp_offset),
+									  WINDOW_SEEK_CURRENT,
+									  false,
+									  &isnull, &isout);
+		if (isout)
+			goto out_of_frame;
+		else if (!isnull)
+			notnull_offset++;
+	}
+
+	result = WinGetFuncArgInPartition(winobj, 0,
+									  (forward ? tmp_offset : -tmp_offset),
+									  WINDOW_SEEK_CURRENT,
+									  false,
+									  &isnull, &isout);
+	if (isout)
+		goto out_of_frame;
+	else
+		PG_RETURN_DATUM(result);
+
+	out_of_frame:
+	/*
+	* target row is out of the partition; supply default value if
+	* provided. Otherwise return NULL.
+	*/
+	if (withdefault)
+	{
+		result = WinGetFuncArgCurrent(winobj, 2, &isnull);
+		PG_RETURN_DATUM(result);
+	}
+	else
+		PG_RETURN_NULL();
+}
+
 /*
  * lag
  * returns the value of VE evaluated on a row that is 1
@@ -361,6 +441,24 @@ Datum
 window_lag_with_offset_and_default(PG_FUNCTION_ARGS)
 {
 	return leadlag_common(fcinfo, false, true, true);
+}
+
+Datum
+window_lag_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, false, false, false);
+}
+
+Datum
+window_lag_with_offset_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, false, true, false);
+}
+
+Datum
+window_lag_with_offset_and_default_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, false, true, true);
 }
 
 /*
@@ -398,6 +496,24 @@ window_lead_with_offset_and_default(PG_FUNCTION_ARGS)
 	return leadlag_common(fcinfo, true, true, true);
 }
 
+Datum
+window_lead_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, true, false, false);
+}
+
+Datum
+window_lead_with_offset_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, true, true, false);
+}
+
+Datum
+window_lead_with_offset_and_default_nulls_opt(PG_FUNCTION_ARGS)
+{
+	return leadlag_common_ignore_nulls(fcinfo, true, true, true);
+}
+
 /*
  * first_value
  * return the value of VE evaluated on the first row of the
@@ -417,6 +533,31 @@ window_first_value(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_DATUM(result);
+}
+
+Datum
+window_first_value_nulls_opt(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	Datum		result;
+	bool		isnull,
+				isout;
+	int64		pos;
+
+	isout = false;
+	pos = 0;
+
+	while (!isout)
+	{
+		result = WinGetFuncArgInFrame(winobj, 0,
+								  pos, WINDOW_SEEK_HEAD, false,
+								  &isnull, &isout);
+		if (!isnull)
+			PG_RETURN_DATUM(result);
+		pos++;
+	}
+
+	PG_RETURN_NULL();
 }
 
 /*
@@ -440,23 +581,44 @@ window_last_value(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(result);
 }
 
+Datum
+window_last_value_nulls_opt(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	Datum		result;
+	bool		isnull,
+				isout;
+	int64		pos;
+
+	isout = false;
+	pos = 0;
+
+	while (!isout)
+	{
+		result = WinGetFuncArgInFrame(winobj, 0,
+								  pos, WINDOW_SEEK_TAIL, false,
+								  &isnull, &isout);
+		if (!isnull)
+			PG_RETURN_DATUM(result);
+		pos--;
+	}
+
+	PG_RETURN_NULL();
+}
+
 /*
  * nth_value
  * return the value of VE evaluated on the n-th row from the first
  * row of the window frame, per spec.
  */
-Datum
-window_nth_value(PG_FUNCTION_ARGS)
+static Datum
+window_nth_value_respectnulls_common(FunctionCallInfo fcinfo, int32 nth,
+									bool fromlast)
 {
 	WindowObject winobj = PG_WINDOW_OBJECT();
 	bool		const_offset;
 	Datum		result;
 	bool		isnull;
-	int32		nth;
-
-	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
-	if (isnull)
-		PG_RETURN_NULL();
 	const_offset = get_fn_expr_arg_stable(fcinfo->flinfo, 1);
 
 	if (nth <= 0)
@@ -464,11 +626,111 @@ window_nth_value(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_NTH_VALUE),
 				 errmsg("argument of nth_value must be greater than zero")));
 
-	result = WinGetFuncArgInFrame(winobj, 0,
-								  nth - 1, WINDOW_SEEK_HEAD, const_offset,
-								  &isnull, NULL);
+	result = WinGetFuncArgInFrame(winobj,
+								   0,
+								  nth - 1,
+								  fromlast ? WINDOW_SEEK_TAIL : WINDOW_SEEK_HEAD, const_offset,
+								  &isnull,
+								  NULL);
 	if (isnull)
 		PG_RETURN_NULL();
 
 	PG_RETURN_DATUM(result);
+}
+
+static Datum
+window_nth_value_ignorenulls_common(FunctionCallInfo fcinfo, int32 nth,
+									bool fromlast)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	Datum		result;
+	bool		isnull,
+				isout;
+	int32		tmp_offset, notnull_offset = 0;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (fromlast)
+		tmp_offset = 1;
+	else
+		tmp_offset = -1;
+
+	if (isnull)
+		PG_RETURN_NULL();
+
+	if (nth <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_NTH_VALUE),
+				 errmsg("argument of nth_value must be greater than zero")));
+
+	while (notnull_offset < nth)
+	{
+		fromlast ? tmp_offset-- : tmp_offset++;
+		result = WinGetFuncArgInFrame(winobj, 0,
+									  tmp_offset, fromlast ? WINDOW_SEEK_TAIL : WINDOW_SEEK_HEAD,
+									  false, &isnull, &isout);
+		if (isout)
+			PG_RETURN_NULL();
+		if (!isnull)
+			notnull_offset++;
+	}
+
+	result = WinGetFuncArgInFrame(winobj, 0,
+								  tmp_offset, fromlast ? WINDOW_SEEK_TAIL : WINDOW_SEEK_HEAD,
+								  false, &isnull, &isout);
+	if (isout || isnull)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+window_nth_value(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(window_nth_value_respectnulls_common(fcinfo, nth, false));
+}
+
+Datum
+window_nth_value_with_first_opt(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(window_nth_value_respectnulls_common(fcinfo, nth, true));
+}
+
+Datum
+window_nth_value_with_nulls_opt(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(window_nth_value_ignorenulls_common(fcinfo, nth, false));
+}
+
+Datum
+window_nth_value_with_first_nulls_opts(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(window_nth_value_ignorenulls_common(fcinfo, nth, true));
 }

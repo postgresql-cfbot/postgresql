@@ -449,10 +449,26 @@ SELECT	ctid, seqtypid
 FROM	pg_catalog.pg_sequence fk
 WHERE	seqtypid != 0 AND
 	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_type pk WHERE pk.oid = fk.seqtypid);
+SELECT	ctid, classid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	classid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class pk WHERE pk.oid = fk.classid);
+SELECT	ctid, objid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	objid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_database pk WHERE pk.oid = fk.objid);
 SELECT	ctid, refclassid
 FROM	pg_catalog.pg_shdepend fk
 WHERE	refclassid != 0 AND
 	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class pk WHERE pk.oid = fk.refclassid);
+SELECT	ctid, refobjid
+FROM	pg_catalog.pg_shdepend fk
+WHERE	refobjid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_authid pk WHERE pk.oid = fk.refobjid);
+SELECT	ctid, objoid
+FROM	pg_catalog.pg_shdescription fk
+WHERE	objoid != 0 AND
+	NOT EXISTS(SELECT 1 FROM pg_catalog.pg_database pk WHERE pk.oid = fk.objoid);
 SELECT	ctid, classoid
 FROM	pg_catalog.pg_shdescription fk
 WHERE	classoid != 0 AND

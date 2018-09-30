@@ -73,7 +73,9 @@ WHERE p1.typtype not in ('c','d','p') AND p1.typname NOT LIKE E'\\_%'
  3361 | pg_ndistinct
  3402 | pg_dependencies
   210 | smgr
-(4 rows)
+ 4142 | ignorenulls
+ 4187 | fromlast
+(6 rows)
 
 -- Make sure typarray points to a varlena array type of our own base
 SELECT p1.oid, p1.typname as basetype, p2.typname as arraytype,
@@ -166,10 +168,12 @@ WHERE p1.typinput = p2.oid AND p1.typtype in ('b', 'p') AND NOT
     (p1.typelem != 0 AND p1.typlen < 0) AND NOT
     (p2.prorettype = p1.oid AND NOT p2.proretset)
 ORDER BY 1;
- oid  |  typname  | oid | proname 
-------+-----------+-----+---------
- 1790 | refcursor |  46 | textin
-(1 row)
+ oid  |   typname   | oid  | proname 
+------+-------------+------+---------
+ 1790 | refcursor   |   46 | textin
+ 4142 | ignorenulls | 1242 | boolin
+ 4187 | fromlast    | 1242 | boolin
+(3 rows)
 
 -- Varlena array types will point to array_in
 -- Exception as of 8.1: int2vector and oidvector have their own I/O routines
@@ -217,10 +221,12 @@ WHERE p1.typoutput = p2.oid AND p1.typtype in ('b', 'p') AND NOT
       (p2.oid = 'array_out'::regproc AND
        p1.typelem != 0 AND p1.typlen = -1)))
 ORDER BY 1;
- oid  |  typname  | oid | proname 
-------+-----------+-----+---------
- 1790 | refcursor |  47 | textout
-(1 row)
+ oid  |   typname   | oid  | proname 
+------+-------------+------+---------
+ 1790 | refcursor   |   47 | textout
+ 4142 | ignorenulls | 1243 | boolout
+ 4187 | fromlast    | 1243 | boolout
+(3 rows)
 
 SELECT p1.oid, p1.typname, p2.oid, p2.proname
 FROM pg_type AS p1, pg_proc AS p2
@@ -280,10 +286,12 @@ WHERE p1.typreceive = p2.oid AND p1.typtype in ('b', 'p') AND NOT
     (p1.typelem != 0 AND p1.typlen < 0) AND NOT
     (p2.prorettype = p1.oid AND NOT p2.proretset)
 ORDER BY 1;
- oid  |  typname  | oid  | proname  
-------+-----------+------+----------
- 1790 | refcursor | 2414 | textrecv
-(1 row)
+ oid  |   typname   | oid  | proname  
+------+-------------+------+----------
+ 1790 | refcursor   | 2414 | textrecv
+ 4142 | ignorenulls | 2436 | boolrecv
+ 4187 | fromlast    | 2436 | boolrecv
+(3 rows)
 
 -- Varlena array types will point to array_recv
 -- Exception as of 8.1: int2vector and oidvector have their own I/O routines
@@ -340,10 +348,12 @@ WHERE p1.typsend = p2.oid AND p1.typtype in ('b', 'p') AND NOT
       (p2.oid = 'array_send'::regproc AND
        p1.typelem != 0 AND p1.typlen = -1)))
 ORDER BY 1;
- oid  |  typname  | oid  | proname  
-------+-----------+------+----------
- 1790 | refcursor | 2415 | textsend
-(1 row)
+ oid  |   typname   | oid  | proname  
+------+-------------+------+----------
+ 1790 | refcursor   | 2415 | textsend
+ 4142 | ignorenulls | 2437 | boolsend
+ 4187 | fromlast    | 2437 | boolsend
+(3 rows)
 
 SELECT p1.oid, p1.typname, p2.oid, p2.proname
 FROM pg_type AS p1, pg_proc AS p2

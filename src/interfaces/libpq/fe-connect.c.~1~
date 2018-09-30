@@ -909,15 +909,14 @@ count_comma_separated_elems(const char *input)
 /*
  * Parse a simple comma-separated list.
  *
- * Note: this parsing must be consistent with count_comma_separated_elems.
- *
- * On each call, returns a malloc'd copy of the next element,
+ * On each call, returns a malloc'd copy of the next element, and sets *more
+ * to indicate whether there are any more elements in the list after this,
  * and updates *startptr to point to the next element, if any.
  *
  * On out of memory, returns NULL.
  */
 static char *
-parse_comma_separated_list(char **startptr)
+parse_comma_separated_list(char **startptr, bool *more)
 {
 	char	   *p;
 	char	   *s = *startptr;
@@ -931,6 +930,7 @@ parse_comma_separated_list(char **startptr)
 	e = s;
 	while (*e != '\0' && *e != ',')
 		++e;
+	*more = (*e == ',');
 
 	len = e - s;
 	p = (char *) malloc(sizeof(char) * (len + 1));
@@ -942,22 +942,6 @@ parse_comma_separated_list(char **startptr)
 	*startptr = e + 1;
 
 	return p;
-}
-
-/* tell whether it is an ipv4 or possibly ipv6 address */
-static bool
-look_like_an_ip(const char *str)
-{
-	int b0, b1, b2, b3;
-	char garbage;
-
-	if (sscanf(str, "%d.%d.%d.%d%c", &b0, &b1, &b2, &b3, &garbage) == 4 &&
-		0 <= b0 && b0 < 256 && 0 <= b1 && b1 < 256 &&
-		0 <= b2 && b2 < 256 && 0 <= b3 && b3 < 256)
-		return true;
-	else
-		/* ":" cannot appear in a host name */
-		return strchr(str, ':') != NULL;
 }
 
 /*
@@ -975,27 +959,16 @@ connectOptions2(PGconn *conn)
 
 	/*
 	 * Allocate memory for details about each host to which we might possibly
-	 * try to connect.  For that, count the number of elements in the host
-	 * options or assume one host if not set.
+	 * try to connect.  For that, count the number of elements in the hostaddr
+	 * or host options.  If neither is given, assume one host.
 	 */
 	conn->whichhost = 0;
-
-	if (conn->pghost && conn->pghost[0] != '\0')
+	if (conn->pghostaddr && conn->pghostaddr[0] != '\0')
+		conn->nconnhost = count_comma_separated_elems(conn->pghostaddr);
+	else if (conn->pghost && conn->pghost[0] != '\0')
 		conn->nconnhost = count_comma_separated_elems(conn->pghost);
 	else
 		conn->nconnhost = 1;
-
-	/* check that hostaddr length is compatible */
-	if (conn->pghostaddr && conn->pghostaddr[0] != '\0' &&
-		count_comma_separated_elems(conn->pghostaddr) != conn->nconnhost)
-	{
-		conn->status = CONNECTION_BAD;
-		appendPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("host and hostaddr list must be of equal length, got %d and %d\n"),
-						  conn->nconnhost, count_comma_separated_elems(conn->pghostaddr));
-		return false;
-	}
-
 	conn->connhost = (pg_conn_host *)
 		calloc(conn->nconnhost, sizeof(pg_conn_host));
 	if (conn->connhost == NULL)
@@ -1005,85 +978,81 @@ connectOptions2(PGconn *conn)
 	 * We now have one pg_conn_host structure per possible host.  Fill in the
 	 * host and hostaddr fields for each, by splitting the parameter strings.
 	 */
-	if (conn->pghost != NULL && conn->pghost[0] != '\0')
-	{
-		char	   *s = conn->pghost;
-
-		for (i = 0; i < conn->nconnhost; i++)
-		{
-			conn->connhost[i].host = parse_comma_separated_list(&s);
-			if (conn->connhost[i].host == NULL)
-				goto oom_error;
-		}
-	}
-
-	/* we know that the number or host/hostaddr matches. */
 	if (conn->pghostaddr != NULL && conn->pghostaddr[0] != '\0')
 	{
 		char	   *s = conn->pghostaddr;
+		bool		more = true;
 
-		for (i = 0; i < conn->nconnhost; i++)
+		for (i = 0; i < conn->nconnhost && more; i++)
 		{
-			conn->connhost[i].hostaddr = parse_comma_separated_list(&s);
+			conn->connhost[i].hostaddr = parse_comma_separated_list(&s, &more);
 			if (conn->connhost[i].hostaddr == NULL)
 				goto oom_error;
+		}
+
+		/*
+		 * If hostaddr was given, the array was allocated according to the
+		 * number of elements in the hostaddr list, so it really should be the
+		 * right size.
+		 */
+		Assert(!more);
+		Assert(i == conn->nconnhost);
+	}
+
+	if (conn->pghost != NULL && conn->pghost[0] != '\0')
+	{
+		char	   *s = conn->pghost;
+		bool		more = true;
+
+		for (i = 0; i < conn->nconnhost && more; i++)
+		{
+			conn->connhost[i].host = parse_comma_separated_list(&s, &more);
+			if (conn->connhost[i].host == NULL)
+				goto oom_error;
+		}
+
+		/* Check for wrong number of host items. */
+		if (more || i != conn->nconnhost)
+		{
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("could not match %d host names to %d hostaddr values\n"),
+							  count_comma_separated_elems(conn->pghost), conn->nconnhost);
+			return false;
 		}
 	}
 
 	/*
-	 * Now, for each host slot, fill in the default address if necessary,
-	 * identify the type of address spec, and make some sanity checks.
+	 * Now, for each host slot, identify the type of address spec, and fill in
+	 * the default address if nothing was given.
 	 */
 	for (i = 0; i < conn->nconnhost; i++)
 	{
 		pg_conn_host *ch = &conn->connhost[i];
 
-		if (ch->host == NULL || ch->host[0] == '\0')
+		if (ch->hostaddr != NULL && ch->hostaddr[0] != '\0')
+			ch->type = CHT_HOST_ADDRESS;
+		else if (ch->host != NULL && ch->host[0] != '\0')
+		{
+			ch->type = CHT_HOST_NAME;
+#ifdef HAVE_UNIX_SOCKETS
+			if (is_absolute_path(ch->host))
+				ch->type = CHT_UNIX_SOCKET;
+#endif
+		}
+		else
 		{
 			if (ch->host)
 				free(ch->host);
 #ifdef HAVE_UNIX_SOCKETS
 			ch->host = strdup(DEFAULT_PGSOCKET_DIR);
+			ch->type = CHT_UNIX_SOCKET;
 #else
 			ch->host = strdup(DefaultHost);
+			ch->type = CHT_HOST_NAME;
 #endif
 			if (ch->host == NULL)
 				goto oom_error;
-		}
-
-#ifdef HAVE_UNIX_SOCKETS
-		if (is_absolute_path(ch->host))
-			ch->type = CHT_UNIX_SOCKET;
-		else
-#endif
-		if (look_like_an_ip(ch->host))
-			ch->type = CHT_HOST_ADDRESS;
-		else
-			ch->type = CHT_HOST_NAME;
-
-		if (ch->hostaddr != NULL && ch->hostaddr[0] != '\0')
-		{
-			/* hostaddr only allowed on host names */
-			if (ch->type != CHT_HOST_NAME)
-			{
-				conn->status = CONNECTION_BAD;
-				appendPQExpBuffer(&conn->errorMessage,
-								  libpq_gettext("host \"%s\" cannot have an hostaddr \"%s\"\n"),
-								  ch->host, ch->hostaddr);
-				return false;
-			}
-
-			if (!look_like_an_ip(ch->hostaddr))
-			{
-				conn->status = CONNECTION_BAD;
-				appendPQExpBuffer(&conn->errorMessage,
-								  libpq_gettext("hostaddr \"%s\" is not a numeric IP address\n"),
-								  ch->hostaddr);
-				return false;
-			}
-
-			/* hostaddr superseedes name for this connection */
-			ch->type = CHT_HOST_ADDRESS;
 		}
 	}
 
@@ -1096,40 +1065,36 @@ connectOptions2(PGconn *conn)
 	 */
 	if (conn->pgport != NULL && conn->pgport[0] != '\0')
 	{
-		int			count = count_comma_separated_elems(conn->pgport);
+		char	   *s = conn->pgport;
+		bool		more = true;
 
-		if (count > 1)
+		for (i = 0; i < conn->nconnhost && more; i++)
 		{
-			char	   *s = conn->pgport;
+			conn->connhost[i].port = parse_comma_separated_list(&s, &more);
+			if (conn->connhost[i].port == NULL)
+				goto oom_error;
+		}
 
-			/* there must be exactly as many ports as there were hosts. */
-			if (count != conn->nconnhost)
+		/*
+		 * If exactly one port was given, use it for every host.  Otherwise,
+		 * there must be exactly as many ports as there were hosts.
+		 */
+		if (i == 1 && !more)
+		{
+			for (i = 1; i < conn->nconnhost; i++)
 			{
-				conn->status = CONNECTION_BAD;
-				printfPQExpBuffer(&conn->errorMessage,
-								  libpq_gettext("could not match %d port numbers to %d hosts\n"),
-								  count, conn->nconnhost);
-				return false;
-			}
-
-			for (i = 0; i < conn->nconnhost; i++)
-			{
-				conn->connhost[i].port = parse_comma_separated_list(&s);
+				conn->connhost[i].port = strdup(conn->connhost[0].port);
 				if (conn->connhost[i].port == NULL)
 					goto oom_error;
 			}
 		}
-		else
+		else if (more || i != conn->nconnhost)
 		{
-			Assert(count == 1);
-
-			/* If exactly one port was given, use it for every host. */
-			for (i = 0; i < conn->nconnhost; i++)
-			{
-				conn->connhost[i].port = strdup(conn->pgport);
-				if (conn->connhost[i].port == NULL)
-					goto oom_error;
-			}
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("could not match %d port numbers to %d hosts\n"),
+							  count_comma_separated_elems(conn->pgport), conn->nconnhost);
+			return false;
 		}
 	}
 
@@ -2155,7 +2120,6 @@ keep_going:						/* We will come back to here until there is
 		int			thisport;
 		int			ret;
 		char		portstr[MAXPGPATH];
-		char		*addr;
 
 		if (conn->whichhost + 1 >= conn->nconnhost)
 		{
@@ -2217,13 +2181,13 @@ keep_going:						/* We will come back to here until there is
 
 			case CHT_HOST_ADDRESS:
 				hint.ai_flags = AI_NUMERICHOST;
-				addr =  (ch->hostaddr != NULL && ch->hostaddr[0] != '\0') ? ch->hostaddr : ch->host;
-				ret = pg_getaddrinfo_all(addr, portstr, &hint, &conn->addrlist);
+				ret = pg_getaddrinfo_all(ch->hostaddr, portstr, &hint,
+										 &conn->addrlist);
 				if (ret || !conn->addrlist)
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("could not parse network address \"%s\": %s\n"),
-									  addr, gai_strerror(ret));
+									  ch->hostaddr, gai_strerror(ret));
 					goto keep_going;
 				}
 				break;
@@ -6197,10 +6161,12 @@ PQhost(const PGconn *conn)
 
 	if (conn->connhost != NULL)
 	{
-		/* always true, defaults are filled in by Options2 */
 		if (conn->connhost[conn->whichhost].host != NULL &&
 			conn->connhost[conn->whichhost].host[0] != '\0')
 			return conn->connhost[conn->whichhost].host;
+		else if (conn->connhost[conn->whichhost].hostaddr != NULL &&
+				 conn->connhost[conn->whichhost].hostaddr[0] != '\0')
+			return conn->connhost[conn->whichhost].hostaddr;
 	}
 
 	return "";

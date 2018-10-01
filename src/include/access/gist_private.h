@@ -241,6 +241,7 @@ typedef struct
 {
 	Relation	r;
 	Size		freespace;		/* free space to be left */
+	bool		is_build;
 
 	GISTInsertStack *stack;
 } GISTInsertState;
@@ -387,9 +388,9 @@ extern MemoryContext createTempGistContext(void);
 extern GISTSTATE *initGISTstate(Relation index);
 extern void freeGISTstate(GISTSTATE *giststate);
 extern void gistdoinsert(Relation r,
-			 IndexTuple itup,
-			 Size freespace,
-			 GISTSTATE *GISTstate);
+						 IndexTuple itup,
+						 Size freespace,
+						 GISTSTATE* giststate, bool is_build);
 
 /* A List of these is returned from gistplacetopage() in *splitinfo */
 typedef struct
@@ -404,7 +405,8 @@ extern bool gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 				OffsetNumber oldoffnum, BlockNumber *newblkno,
 				Buffer leftchildbuf,
 				List **splitinfo,
-				bool markleftchild);
+				bool markleftchild,
+				bool is_build);
 
 extern SplitedPageLayout *gistSplit(Relation r, Page page, IndexTuple *itup,
 		  int len, GISTSTATE *giststate);

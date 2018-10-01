@@ -44,8 +44,6 @@ gist_desc(StringInfo buf, XLogReaderState *record)
 		case XLOG_GIST_PAGE_SPLIT:
 			out_gistxlogPageSplit(buf, (gistxlogPageSplit *) rec);
 			break;
-		case XLOG_GIST_CREATE_INDEX:
-			break;
 	}
 }
 
@@ -61,9 +59,6 @@ gist_identify(uint8 info)
 			break;
 		case XLOG_GIST_PAGE_SPLIT:
 			id = "PAGE_SPLIT";
-			break;
-		case XLOG_GIST_CREATE_INDEX:
-			id = "CREATE_INDEX";
 			break;
 	}
 

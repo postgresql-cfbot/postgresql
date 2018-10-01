@@ -2511,12 +2511,8 @@ CopyFrom(CopyState cstate)
 	/*
 	 * If there are any triggers with transition tables on the named relation,
 	 * we need to be prepared to capture transition tuples.
-	 *
-	 * Because partition tuple routing would like to know about whether
-	 * transition capture is active, we also set it in mtstate, which is
-	 * passed to ExecFindPartition below.
 	 */
-	cstate->transition_capture = mtstate->mt_transition_capture =
+	cstate->transition_capture =
 		MakeTransitionCaptureState(cstate->rel->trigdesc,
 								   RelationGetRelid(cstate->rel),
 								   CMD_INSERT);
@@ -2526,7 +2522,18 @@ CopyFrom(CopyState cstate)
 	 * CopyFrom tuple routing.
 	 */
 	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
 		proute = ExecSetupPartitionTupleRouting(NULL, cstate->rel);
+
+		/*
+		 * If we are capturing transition tuples, they may need to be
+		 * converted from partition format back to partitioned table format
+		 * (this is only ever necessary if a BEFORE trigger modifies the
+		 * tuple).
+		 */
+		if (cstate->transition_capture != NULL)
+			ExecSetupChildParentMapForLeaf(proute);
+	}
 
 	/*
 	 * It's more efficient to prepare a bunch of tuples for insertion, and
@@ -2693,8 +2700,10 @@ CopyFrom(CopyState cstate)
 			 * will get us the ResultRelInfo and TupleConversionMap for the
 			 * partition, respectively.
 			 */
-			leaf_part_index = ExecFindPartition(mtstate, target_resultRelInfo,
-												proute, slot, estate);
+			leaf_part_index = ExecFindPartition(target_resultRelInfo,
+												proute->partition_dispatch_info,
+												slot,
+												estate);
 			Assert(leaf_part_index >= 0 &&
 				   leaf_part_index < proute->num_partitions);
 
@@ -2792,7 +2801,15 @@ CopyFrom(CopyState cstate)
 				 * one.
 				 */
 				resultRelInfo = proute->partitions[leaf_part_index];
-				Assert(resultRelInfo != NULL);
+				if (unlikely(resultRelInfo == NULL))
+				{
+					resultRelInfo = ExecInitPartitionInfo(mtstate,
+														  target_resultRelInfo,
+														  proute, estate,
+														  leaf_part_index);
+					proute->partitions[leaf_part_index] = resultRelInfo;
+					Assert(resultRelInfo != NULL);
+				}
 
 				/* Determine which triggers exist on this partition */
 				has_before_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
@@ -2829,7 +2846,8 @@ CopyFrom(CopyState cstate)
 					 */
 					cstate->transition_capture->tcs_original_insert_tuple = NULL;
 					cstate->transition_capture->tcs_map =
-						PartitionTupRoutingGetToParentMap(proute, leaf_part_index);
+						TupConvMapForLeaf(proute, target_resultRelInfo,
+										  leaf_part_index);
 				}
 				else
 				{
@@ -2847,13 +2865,11 @@ CopyFrom(CopyState cstate)
 			 * partition rowtype.  Don't free the already stored tuple as it
 			 * may still be required for a multi-insert batch.
 			 */
-			tuple =
-				ConvertPartitionTupleSlot(PartitionTupRoutingGetToChildMap(proute,
-																		   leaf_part_index),
-										  tuple,
-										  proute->partition_tuple_slot,
-										  &slot,
-										  false);
+			tuple = ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[leaf_part_index],
+											  tuple,
+											  proute->partition_tuple_slot,
+											  &slot,
+											  false);
 
 			tuple->t_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
 		}

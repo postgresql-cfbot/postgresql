@@ -68,7 +68,6 @@ static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 						ResultRelInfo *targetRelInfo,
 						TupleTableSlot *slot);
 static ResultRelInfo *getTargetResultRelInfo(ModifyTableState *node);
-static void ExecSetupChildParentMapForTcs(ModifyTableState *mtstate);
 static void ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate);
 static TupleConversionMap *tupconv_map_for_subplan(ModifyTableState *node,
 						int whichplan);
@@ -1667,7 +1666,7 @@ ExecSetupTransitionCaptureState(ModifyTableState *mtstate, EState *estate)
 	if (mtstate->mt_transition_capture != NULL ||
 		mtstate->mt_oc_transition_capture != NULL)
 	{
-		ExecSetupChildParentMapForTcs(mtstate);
+		ExecSetupChildParentMapForSubplan(mtstate);
 
 		/*
 		 * Install the conversion map for the first plan for UPDATE and DELETE
@@ -1710,21 +1709,13 @@ ExecPrepareTupleRouting(ModifyTableState *mtstate,
 	 * value is to be used as an index into the arrays for the ResultRelInfo
 	 * and TupleConversionMap for the partition.
 	 */
-	partidx = ExecFindPartition(targetRelInfo,
-								proute->partition_dispatch_info,
-								slot,
-								estate);
+	partidx = ExecFindPartition(mtstate, targetRelInfo, proute, slot, estate);
 	Assert(partidx >= 0 && partidx < proute->num_partitions);
 
-	/*
-	 * Get the ResultRelInfo corresponding to the selected partition; if not
-	 * yet there, initialize it.
-	 */
+	Assert(proute->partitions[partidx] != NULL);
+	/* Get the ResultRelInfo corresponding to the selected partition. */
 	partrel = proute->partitions[partidx];
-	if (partrel == NULL)
-		partrel = ExecInitPartitionInfo(mtstate, targetRelInfo,
-										proute, estate,
-										partidx);
+	Assert(partrel != NULL);
 
 	/*
 	 * Check whether the partition is routable if we didn't yet
@@ -1769,7 +1760,7 @@ ExecPrepareTupleRouting(ModifyTableState *mtstate,
 			 */
 			mtstate->mt_transition_capture->tcs_original_insert_tuple = NULL;
 			mtstate->mt_transition_capture->tcs_map =
-				TupConvMapForLeaf(proute, targetRelInfo, partidx);
+				PartitionTupRoutingGetToParentMap(proute, partidx);
 		}
 		else
 		{
@@ -1784,16 +1775,14 @@ ExecPrepareTupleRouting(ModifyTableState *mtstate,
 	if (mtstate->mt_oc_transition_capture != NULL)
 	{
 		mtstate->mt_oc_transition_capture->tcs_map =
-			TupConvMapForLeaf(proute, targetRelInfo, partidx);
+			PartitionTupRoutingGetToParentMap(proute, partidx);
 	}
 
 	/*
 	 * Convert the tuple, if necessary.
 	 */
-	ConvertPartitionTupleSlot(proute->parent_child_tupconv_maps[partidx],
-							  tuple,
-							  proute->partition_tuple_slot,
-							  &slot,
+	ConvertPartitionTupleSlot(PartitionTupRoutingGetToChildMap(proute, partidx),
+							  tuple, proute->partition_tuple_slot, &slot,
 							  true);
 
 	/* Initialize information needed to handle ON CONFLICT DO UPDATE. */
@@ -1831,17 +1820,6 @@ ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate)
 	int			i;
 
 	/*
-	 * First check if there is already a per-subplan array allocated. Even if
-	 * there is already a per-leaf map array, we won't require a per-subplan
-	 * one, since we will use the subplan offset array to convert the subplan
-	 * index to per-leaf index.
-	 */
-	if (mtstate->mt_per_subplan_tupconv_maps ||
-		(mtstate->mt_partition_tuple_routing &&
-		 mtstate->mt_partition_tuple_routing->child_parent_tupconv_maps))
-		return;
-
-	/*
 	 * Build array of conversion maps from each child's TupleDesc to the one
 	 * used in the target relation.  The map pointers may be NULL when no
 	 * conversion is necessary, which is hopefully a common case.
@@ -1863,78 +1841,17 @@ ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate)
 }
 
 /*
- * Initialize the child-to-root tuple conversion map array required for
- * capturing transition tuples.
- *
- * The map array can be indexed either by subplan index or by leaf-partition
- * index.  For transition tables, we need a subplan-indexed access to the map,
- * and where tuple-routing is present, we also require a leaf-indexed access.
- */
-static void
-ExecSetupChildParentMapForTcs(ModifyTableState *mtstate)
-{
-	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
-
-	/*
-	 * If partition tuple routing is set up, we will require partition-indexed
-	 * access. In that case, create the map array indexed by partition; we
-	 * will still be able to access the maps using a subplan index by
-	 * converting the subplan index to a partition index using
-	 * subplan_partition_offsets. If tuple routing is not set up, it means we
-	 * don't require partition-indexed access. In that case, create just a
-	 * subplan-indexed map.
-	 */
-	if (proute)
-	{
-		/*
-		 * If a partition-indexed map array is to be created, the subplan map
-		 * array has to be NULL.  If the subplan map array is already created,
-		 * we won't be able to access the map using a partition index.
-		 */
-		Assert(mtstate->mt_per_subplan_tupconv_maps == NULL);
-
-		ExecSetupChildParentMapForLeaf(proute);
-	}
-	else
-		ExecSetupChildParentMapForSubplan(mtstate);
-}
-
-/*
  * For a given subplan index, get the tuple conversion map.
  */
 static TupleConversionMap *
 tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
 {
-	/*
-	 * If a partition-index tuple conversion map array is allocated, we need
-	 * to first get the index into the partition array. Exactly *one* of the
-	 * two arrays is allocated. This is because if there is a partition array
-	 * required, we don't require subplan-indexed array since we can translate
-	 * subplan index into partition index. And, we create a subplan-indexed
-	 * array *only* if partition-indexed array is not required.
-	 */
+	/* If nobody else set the per-subplan array of maps, do so ourselves. */
 	if (mtstate->mt_per_subplan_tupconv_maps == NULL)
-	{
-		int			leaf_index;
-		PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
+		ExecSetupChildParentMapForSubplan(mtstate);
 
-		/*
-		 * If subplan-indexed array is NULL, things should have been arranged
-		 * to convert the subplan index to partition index.
-		 */
-		Assert(proute && proute->subplan_partition_offsets != NULL &&
-			   whichplan < proute->num_subplan_partition_offsets);
-
-		leaf_index = proute->subplan_partition_offsets[whichplan];
-
-		return TupConvMapForLeaf(proute, getTargetResultRelInfo(mtstate),
-								 leaf_index);
-	}
-	else
-	{
-		Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
-		return mtstate->mt_per_subplan_tupconv_maps[whichplan];
-	}
+	Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
+	return mtstate->mt_per_subplan_tupconv_maps[whichplan];
 }
 
 /* ----------------------------------------------------------------

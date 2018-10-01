@@ -37,7 +37,6 @@
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planner.h"
-#include "optimizer/predtest.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
@@ -1053,12 +1052,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 				/* Restriction reduces to constant TRUE, so drop it */
 				continue;
 			}
-
-			/* We can skip any quals that are implied by any partition bound. */
-			if (childrel->partition_qual != NIL &&
-				predicate_implied_by(list_make1(rinfo->clause), childrel->partition_qual, false))
-				continue;
-
 			/* might have gotten an AND clause, if so flatten it */
 			foreach(lc2, make_ands_implicit((Expr *) childqual))
 			{

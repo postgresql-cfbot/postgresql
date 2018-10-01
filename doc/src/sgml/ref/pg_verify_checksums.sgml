@@ -71,6 +71,26 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-d <replaceable>oid</replaceable></option></term>
+      <term><option>--dboid=<replaceable>oid</replaceable></option></term>
+      <listitem>
+       <para>
+        Only validate checksums in the relations in the database with specified OID.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-g</option></term>
+      <term><option>--globel-only</option></term>
+      <listitem>
+       <para>
+        Only validate checksums in the relations in the shared database.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-r <replaceable>relfilenode</replaceable></option></term>
       <listitem>
        <para>

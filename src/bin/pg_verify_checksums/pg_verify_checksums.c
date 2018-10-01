@@ -28,6 +28,8 @@ static int64 badblocks = 0;
 static ControlFileData *ControlFile;
 
 static char *only_relfilenode = NULL;
+static char *only_dboid = NULL;
+static bool only_global = false;
 static bool verbose = false;
 
 static const char *progname;
@@ -41,6 +43,8 @@ usage(void)
 	printf(_("\nOptions:\n"));
 	printf(_(" [-D, --pgdata=]DATADIR  data directory\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
+	printf(_("  -d, --dboid=OID        check only relations in database with specified OID\n"));
+	printf(_("  -g, --global-only      check only shared relations\n"));
 	printf(_("  -r RELFILENODE         check only relation with specified relfilenode\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
@@ -198,7 +202,13 @@ scan_directory(const char *basedir, const char *subdir)
 #else
 		else if (S_ISDIR(st.st_mode) || pgwin32_is_junction(fn))
 #endif
+		{
+			if (atoi(de->d_name) != 0 && strcmp(subdir, "pg_tblspc") &&
+				only_dboid && strcmp(only_dboid, de->d_name) != 0)
+				continue;
+
 			scan_directory(path, de->d_name);
+		}
 	}
 	closedir(dir);
 }
@@ -208,6 +218,8 @@ main(int argc, char *argv[])
 {
 	static struct option long_options[] = {
 		{"pgdata", required_argument, NULL, 'D'},
+		{"dboid", required_argument, NULL, 'd'},
+		{"global-only", no_argument, NULL, 'g'},
 		{"verbose", no_argument, NULL, 'v'},
 		{NULL, 0, NULL, 0}
 	};
@@ -235,7 +247,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:r:v", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "D:r:d:gv", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -252,6 +264,17 @@ main(int argc, char *argv[])
 					exit(1);
 				}
 				only_relfilenode = pstrdup(optarg);
+				break;
+			case 'd':
+				if (atoi(optarg) <= 0)
+				{
+					fprintf(stderr, _("%s: invalid database oid specification, must be numeric: %s\n"), progname, optarg);
+					exit(1);
+				}
+				only_dboid = pstrdup(optarg);
+				break;
+			case 'g':
+				only_global = true;
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
@@ -307,9 +330,13 @@ main(int argc, char *argv[])
 	}
 
 	/* Scan all files */
-	scan_directory(DataDir, "global");
-	scan_directory(DataDir, "base");
-	scan_directory(DataDir, "pg_tblspc");
+	if (!only_dboid)
+		scan_directory(DataDir, "global");
+	if (!only_global)
+	{
+		scan_directory(DataDir, "base");
+		scan_directory(DataDir, "pg_tblspc");
+	}
 
 	printf(_("Checksum scan completed\n"));
 	printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);

@@ -166,9 +166,10 @@ _equalVar(const Var *a, const Var *b)
 	COMPARE_SCALAR_FIELD(vartypmod);
 	COMPARE_SCALAR_FIELD(varcollid);
 	COMPARE_SCALAR_FIELD(varlevelsup);
-	COMPARE_SCALAR_FIELD(varnoold);
-	COMPARE_SCALAR_FIELD(varoattno);
-	COMPARE_LOCATION_FIELD(location);
+	/*
+	 * Parse location and old varno/varattno may differ even when
+	 * the variables are logically the same.
+	 */
 
 	return true;
 }

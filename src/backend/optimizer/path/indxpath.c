@@ -2964,7 +2964,8 @@ ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
  * relation_has_unique_index_for
  *	  Determine whether the relation provably has at most one row satisfying
  *	  a set of equality conditions, because the conditions constrain all
- *	  columns of some unique index.
+ *	  columns of some unique index. If index_info is not null, it is set to
+ *	  point to a new UniqueIndexInfo containing the index and conditions.
  *
  * The conditions can be represented in either or both of two ways:
  * 1. A list of RestrictInfo nodes, where the caller has already determined
@@ -2985,7 +2986,8 @@ ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
 bool
 relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 							  List *restrictlist,
-							  List *exprlist, List *oprlist)
+							  List *exprlist, List *oprlist,
+							  UniqueIndexInfo **index_info)
 {
 	ListCell   *ic;
 
@@ -3041,6 +3043,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 	{
 		IndexOptInfo *ind = (IndexOptInfo *) lfirst(ic);
 		int			c;
+		List *matched_restrictlist = NIL;
 
 		/*
 		 * If the index is not unique, or not immediately enforced, or if it's
@@ -3089,6 +3092,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 				if (match_index_to_operand(rexpr, c, ind))
 				{
 					matched = true; /* column is unique */
+					matched_restrictlist = lappend(matched_restrictlist, rinfo);
 					break;
 				}
 			}
@@ -3131,7 +3135,22 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 
 		/* Matched all columns of this index? */
 		if (c == ind->ncolumns)
+		{
+			if (index_info != NULL)
+			{
+				/* This may be called in GEQO memory context. */
+				MemoryContext oldContext = MemoryContextSwitchTo(root->planner_cxt);
+				*index_info = palloc(sizeof(UniqueIndexInfo));
+				(*index_info)->index = ind;
+				(*index_info)->clauses = list_copy(matched_restrictlist);
+				MemoryContextSwitchTo(oldContext);
+			}
+			if (matched_restrictlist)
+				pfree(matched_restrictlist);
 			return true;
+		}
+		if (matched_restrictlist)
+			pfree(matched_restrictlist);
 	}
 
 	return false;

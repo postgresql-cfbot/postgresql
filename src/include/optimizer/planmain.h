@@ -103,13 +103,19 @@ extern void match_foreign_keys_to_quals(PlannerInfo *root);
 /*
  * prototypes for plan/analyzejoins.c
  */
-extern List *remove_useless_joins(PlannerInfo *root, List *joinlist);
+extern List *remove_useless_left_joins(PlannerInfo *root, List *joinlist);
 extern void reduce_unique_semijoins(PlannerInfo *root);
 extern bool query_supports_distinctness(Query *query);
 extern bool query_is_distinct_for(Query *query, List *colnos, List *opids);
+
+typedef struct UniqueIndexInfo UniqueIndexInfo;
 extern bool innerrel_is_unique(PlannerInfo *root,
 				   Relids joinrelids, Relids outerrelids, RelOptInfo *innerrel,
-				   JoinType jointype, List *restrictlist, bool force_cache);
+				   JoinType jointype, List *restrictlist, bool force_cache,
+				   UniqueIndexInfo **index_info);
+
+extern void remove_useless_self_joins(PlannerInfo *root, List **jointree,
+									  List *tlist);
 
 /*
  * prototypes for plan/setrefs.c

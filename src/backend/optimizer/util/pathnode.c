@@ -1585,7 +1585,8 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	if (rel->rtekind == RTE_RELATION && sjinfo->semi_can_btree &&
 		relation_has_unique_index_for(root, rel, NIL,
 									  sjinfo->semi_rhs_exprs,
-									  sjinfo->semi_operators))
+									  sjinfo->semi_operators,
+									  NULL /*index_info*/))
 	{
 		pathnode->umethod = UNIQUE_PATH_NOOP;
 		pathnode->path.rows = rel->rows;

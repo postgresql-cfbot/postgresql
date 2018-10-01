@@ -1528,6 +1528,37 @@ select * from
   int8_tbl x join (int4_tbl x cross join int4_tbl y(ff)) j on q1 = f1; -- ok
 
 --
+-- test that semi- or inner self-joins on a unique column are removed
+--
+
+create table sj (a int unique, b int);
+insert into sj values (1, null), (null, 2), (2, 1);
+analyze sj;
+
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+
+explain (costs off)
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+
+explain (costs off)
+select * from sj p
+where exists (select * from sj q
+				where q.a = p.a and q.b < 10);
+
+-- subselect that references the removed relation
+explain (costs off)
+select t1.a, (select a from sj where a = t2.a and a = t1.a)
+from sj t1, sj t2
+where t1.a = t2.a;
+
+-- equality to different constants
+create unique index sj_ab on sj(a, b);
+
+explain (costs off)
+select * from sj t1, sj t2
+where t1.a = t2.a and t1.b = 1 and t2.b = 2;
+
+--
 -- Test hints given on incorrect column references are useful
 --
 
@@ -1967,6 +1998,9 @@ inner join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
 explain (verbose, costs off)
 select * from j1
 left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
+
+-- !!!FIXME this test doesn't break if I set skip_mark_restore to true.
+-- Also should avoid unique self join removal by using two different relations.
 
 -- validate logic in merge joins which skips mark and restore.
 -- it should only do this if all quals which were used to detect the unique

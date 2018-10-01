@@ -4307,11 +4307,13 @@ explain (costs off)
 select p.* from
   (parent p left join child c on (p.k = c.k)) join parent x on p.k = x.k
   where p.k = 1 and p.k = 2;
-        QUERY PLAN        
---------------------------
+                   QUERY PLAN                   
+------------------------------------------------
  Result
    One-Time Filter: false
-(2 rows)
+   ->  Index Scan using parent_pkey on parent x
+         Index Cond: (k = 1)
+(4 rows)
 
 -- bug 5255: this is not optimizable by join removal
 begin;
@@ -4426,6 +4428,67 @@ select * from
  q1 | q2 | f1 | ff 
 ----+----+----+----
 (0 rows)
+
+--
+-- test that semi- or inner self-joins on a unique column are removed
+--
+create table sj (a int unique, b int);
+insert into sj values (1, null), (null, 2), (2, 1);
+analyze sj;
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+ a | b 
+---+---
+ 2 | 1
+(1 row)
+
+explain (costs off)
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on sj q
+   Filter: ((a IS NOT NULL) AND (b = (a - 1)))
+(2 rows)
+
+explain (costs off)
+select * from sj p
+where exists (select * from sj q
+				where q.a = p.a and q.b < 10);
+                QUERY PLAN                
+------------------------------------------
+ Seq Scan on sj q
+   Filter: ((a IS NOT NULL) AND (b < 10))
+(2 rows)
+
+-- subselect that references the removed relation
+explain (costs off)
+select t1.a, (select a from sj where a = t2.a and a = t1.a)
+from sj t1, sj t2
+where t1.a = t2.a;
+                QUERY PLAN                
+------------------------------------------
+ Seq Scan on sj t2
+   Filter: (a IS NOT NULL)
+   SubPlan 1
+     ->  Result
+           One-Time Filter: (t2.a = t2.a)
+           ->  Seq Scan on sj
+                 Filter: (a = t2.a)
+(7 rows)
+
+-- equality to different constants
+create unique index sj_ab on sj(a, b);
+explain (costs off)
+select * from sj t1, sj t2
+where t1.a = t2.a and t1.b = 1 and t2.b = 2;
+          QUERY PLAN          
+------------------------------
+ Nested Loop
+   Join Filter: (t1.a = t2.a)
+   ->  Seq Scan on sj t1
+         Filter: (b = 1)
+   ->  Seq Scan on sj t2
+         Filter: (b = 2)
+(6 rows)
 
 --
 -- Test hints given on incorrect column references are useful
@@ -5871,6 +5934,8 @@ left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
          Output: j2.id1, j2.id2
 (8 rows)
 
+-- !!!FIXME this test doesn't break if I set skip_mark_restore to true.
+-- Also should avoid unique self join removal by using two different relations.
 -- validate logic in merge joins which skips mark and restore.
 -- it should only do this if all quals which were used to detect the unique
 -- are present as join quals, and not plain quals.
@@ -5882,14 +5947,11 @@ create index j1_id1_idx on j1 (id1) where id1 % 1000 = 1;
 explain (costs off) select * from j1 j1
 inner join j1 j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
 where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1;
-                 QUERY PLAN                 
---------------------------------------------
- Merge Join
-   Merge Cond: (j1.id1 = j2.id1)
-   Join Filter: (j1.id2 = j2.id2)
-   ->  Index Scan using j1_id1_idx on j1
-   ->  Index Scan using j1_id1_idx on j1 j2
-(5 rows)
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Seq Scan on j1 j2
+   Filter: ((id1 IS NOT NULL) AND (id2 IS NOT NULL) AND ((id1 % 1000) = 1))
+(2 rows)
 
 select * from j1 j1
 inner join j1 j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2

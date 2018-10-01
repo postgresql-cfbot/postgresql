@@ -1137,6 +1137,11 @@ relation_open(Oid relationId, LOCKMODE lockmode)
 	if (!RelationIsValid(r))
 		elog(ERROR, "could not open relation with OID %u", relationId);
 
+	if (lockmode == NoLock &&
+		!CheckRelationLockedByMe(r, AccessShareLock, true))
+		elog(WARNING, "relation_open: no lock held on %s",
+			 RelationGetRelationName(r));
+
 	/* Make note that we've accessed a temporary relation */
 	if (RelationUsesLocalBuffers(r))
 		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
@@ -1182,6 +1187,11 @@ try_relation_open(Oid relationId, LOCKMODE lockmode)
 
 	if (!RelationIsValid(r))
 		elog(ERROR, "could not open relation with OID %u", relationId);
+
+	if (lockmode == NoLock &&
+		!CheckRelationLockedByMe(r, AccessShareLock, true))
+		elog(WARNING, "try_relation_open: no lock held on %s",
+			 RelationGetRelationName(r));
 
 	/* Make note that we've accessed a temporary relation */
 	if (RelationUsesLocalBuffers(r))
@@ -8083,6 +8093,10 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed, bool *
 	}
 
 	idx_rel = RelationIdGetRelation(replidindex);
+
+	if (!CheckRelationLockedByMe(idx_rel, AccessShareLock, true))
+		elog(WARNING, "ExtractReplicaIdentity: no lock held on %s",
+			 RelationGetRelationName(idx_rel));
 
 	/* deform tuple, so we have fast access to columns */
 	heap_deform_tuple(tp, desc, values, nulls);

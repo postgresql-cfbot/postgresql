@@ -98,6 +98,9 @@ test: rules psql_crosstab amutils
 test: select_parallel
 test: write_parallel
 
+# this one runs parallel workers too
+test: agg_pushdown
+
 # no relation related tests can be put in this group
 test: publication subscription
 

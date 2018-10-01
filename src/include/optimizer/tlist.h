@@ -16,7 +16,6 @@
 
 #include "nodes/relation.h"
 
-
 extern TargetEntry *tlist_member(Expr *node, List *targetlist);
 extern TargetEntry *tlist_member_ignore_relabel(Expr *node, List *targetlist);
 
@@ -41,7 +40,6 @@ extern Node *get_sortgroupclause_expr(SortGroupClause *sgClause,
 						 List *targetList);
 extern List *get_sortgrouplist_exprs(List *sgClauses,
 						List *targetList);
-
 extern SortGroupClause *get_sortgroupref_clause(Index sortref,
 						List *clauses);
 extern SortGroupClause *get_sortgroupref_clause_noerr(Index sortref,
@@ -64,6 +62,13 @@ extern void apply_pathtarget_labeling_to_tlist(List *tlist, PathTarget *target);
 extern void split_pathtarget_at_srfs(PlannerInfo *root,
 						 PathTarget *target, PathTarget *input_target,
 						 List **targets, List **targets_contain_srfs);
+
+/* TODO Find the best location (position and in some cases even file) for the
+ * following ones. */
+extern void add_aggregates_to_target(PlannerInfo *root, PathTarget *target,
+						 List *expressions);
+extern bool is_grouping_expression(List *gvis, Expr *expr,
+					   Index *sortgroupref, bool *is_derived);
 
 /* Convenience macro to get a PathTarget with valid cost/width fields */
 #define create_pathtarget(root, tlist) \

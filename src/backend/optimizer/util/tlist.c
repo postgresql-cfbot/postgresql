@@ -426,7 +426,6 @@ get_sortgrouplist_exprs(List *sgClauses, List *targetList)
 	return result;
 }
 
-
 /*****************************************************************************
  *		Functions to extract data from a list of SortGroupClauses
  *
@@ -798,6 +797,62 @@ apply_pathtarget_labeling_to_tlist(List *tlist, PathTarget *target)
 		}
 		i++;
 	}
+}
+
+/*
+ * For each aggregate grouping expression or aggregate to the grouped target.
+ *
+ * Caller passes the expressions in the form of GroupedVarInfos so that we
+ * don't have to look for gvid.
+ */
+void
+add_aggregates_to_target(PlannerInfo *root, PathTarget *target,
+						 List *expressions)
+{
+	ListCell   *lc;
+
+	/* Create the vars and add them to the target. */
+	foreach(lc, expressions)
+	{
+		GroupedVarInfo *gvi;
+
+		gvi = lfirst_node(GroupedVarInfo, lc);
+		add_column_to_pathtarget(target, (Expr *) gvi->gvexpr,
+								 gvi->sortgroupref);
+	}
+}
+
+/*
+ * Find out if expr can be used as grouping expression in reltarget.
+ *
+ * sortgroupref and is_derived reflect the ->sortgroupref and ->derived fields
+ * of the corresponding GroupedVarInfo.
+ */
+bool
+is_grouping_expression(List *gvis, Expr *expr, Index *sortgroupref,
+					   bool *is_derived)
+{
+	ListCell   *lc;
+
+	foreach(lc, gvis)
+	{
+		GroupedVarInfo *gvi = lfirst_node(GroupedVarInfo, lc);
+
+		if (IsA(gvi->gvexpr, Aggref))
+			continue;
+
+		if (equal(gvi->gvexpr, expr))
+		{
+			Assert(gvi->sortgroupref > 0);
+
+			*sortgroupref = gvi->sortgroupref;
+			*is_derived = gvi->derived;
+			return true;
+		}
+	}
+
+	/* The expression cannot be used as grouping key. */
+	return false;
 }
 
 /*

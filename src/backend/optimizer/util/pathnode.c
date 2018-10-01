@@ -17,6 +17,8 @@
 #include <math.h>
 
 #include "miscadmin.h"
+#include "access/sysattr.h"
+#include "catalog/pg_constraint.h"
 #include "foreign/fdwapi.h"
 #include "nodes/extensible.h"
 #include "nodes/nodeFuncs.h"
@@ -27,6 +29,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+/* TODO Remove this if create_grouped_path ends up in another module. */
 #include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/parsetree.h"
@@ -56,7 +59,8 @@ static int	append_startup_cost_compare(const void *a, const void *b);
 static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 								 List *pathlist,
 								 RelOptInfo *child_rel);
-
+static EquivalenceClass *get_uniquekey_for_expr(PlannerInfo *root,
+					   Expr *expr);
 
 /*****************************************************************************
  *		MISC. PATH UTILITIES
@@ -951,14 +955,14 @@ add_partial_path_precheck(RelOptInfo *parent_rel, Cost total_cost,
  *	  pathnode.
  */
 Path *
-create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
+create_seqscan_path(PlannerInfo *root, RelOptInfo *rel, PathTarget *target,
 					Relids required_outer, int parallel_workers)
 {
 	Path	   *pathnode = makeNode(Path);
 
 	pathnode->pathtype = T_SeqScan;
 	pathnode->parent = rel;
-	pathnode->pathtarget = rel->reltarget;
+	pathnode->pathtarget = target ? target : rel->reltarget;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = parallel_workers > 0 ? true : false;
@@ -1041,7 +1045,11 @@ create_index_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = indexonly ? T_IndexOnlyScan : T_IndexScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	/* For grouped relation only generate the aggregation input. */
+	if (!IS_GROUPED_REL(rel))
+		pathnode->path.pathtarget = rel->reltarget;
+	else
+		pathnode->path.pathtarget = rel->agg_info->input;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1192,7 +1200,11 @@ create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
 
 	pathnode->path.pathtype = T_TidScan;
 	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	/* For grouped relation only generate the aggregation input. */
+	if (!IS_GROUPED_REL(rel))
+		pathnode->path.pathtarget = rel->reltarget;
+	else
+		pathnode->path.pathtarget = rel->agg_info->input;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1229,8 +1241,10 @@ create_append_path(PlannerInfo *root,
 	Assert(!parallel_aware || parallel_workers > 0);
 
 	pathnode->path.pathtype = T_Append;
-	pathnode->path.parent = rel;
+
 	pathnode->path.pathtarget = rel->reltarget;
+
+	pathnode->path.parent = rel;
 
 	/*
 	 * When generating an Append path for a partitioned table, there may be
@@ -1341,7 +1355,8 @@ append_startup_cost_compare(const void *a, const void *b)
 /*
  * create_merge_append_path
  *	  Creates a path corresponding to a MergeAppend plan, returning the
- *	  pathnode.
+ *	  pathnode. target can be supplied by caller. If NULL is passed, the field
+ *	  is set to rel->reltarget.
  */
 MergeAppendPath *
 create_merge_append_path(PlannerInfo *root,
@@ -1495,6 +1510,7 @@ create_material_path(RelOptInfo *rel, Path *subpath)
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = subpath->pathkeys;
+	pathnode->path.uniquekeys = subpath->uniquekeys;
 
 	pathnode->subpath = subpath;
 
@@ -1528,7 +1544,9 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	MemoryContext oldcontext;
 	int			numCols;
 
-	/* Caller made a mistake if subpath isn't cheapest_total ... */
+	/*
+	 * Caller made a mistake if subpath isn't cheapest_total.
+	 */
 	Assert(subpath == rel->cheapest_total_path);
 	Assert(subpath->parent == rel);
 	/* ... or if SpecialJoinInfo is the wrong one */
@@ -2149,6 +2167,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
  *	  relations.
  *
  * 'joinrel' is the join relation.
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_nestloop
  * 'extra' contains various information about the join
@@ -2163,6 +2182,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
 NestPath *
 create_nestloop_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2203,7 +2223,7 @@ create_nestloop_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_NestLoop;
 	pathnode->path.parent = joinrel;
-	pathnode->path.pathtarget = joinrel->reltarget;
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2235,6 +2255,7 @@ create_nestloop_path(PlannerInfo *root,
  *	  two relations
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_mergejoin
  * 'extra' contains various information about the join
@@ -2251,6 +2272,7 @@ create_nestloop_path(PlannerInfo *root,
 MergePath *
 create_mergejoin_path(PlannerInfo *root,
 					  RelOptInfo *joinrel,
+					  PathTarget *target,
 					  JoinType jointype,
 					  JoinCostWorkspace *workspace,
 					  JoinPathExtraData *extra,
@@ -2267,7 +2289,7 @@ create_mergejoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_MergeJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2303,6 +2325,7 @@ create_mergejoin_path(PlannerInfo *root,
  *	  Creates a pathnode corresponding to a hash join between two relations.
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_hashjoin
  * 'extra' contains various information about the join
@@ -2317,6 +2340,7 @@ create_mergejoin_path(PlannerInfo *root,
 HashPath *
 create_hashjoin_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2331,7 +2355,7 @@ create_hashjoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_HashJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2413,8 +2437,8 @@ create_projection_path(PlannerInfo *root,
 	 * Note: in the latter case, create_projection_plan has to recheck our
 	 * conclusion; see comments therein.
 	 */
-	if (is_projection_capable_path(subpath) ||
-		equal(oldtarget->exprs, target->exprs))
+	if ((is_projection_capable_path(subpath) ||
+		 equal(oldtarget->exprs, target->exprs)))
 	{
 		/* No separate Result node needed */
 		pathnode->dummypp = true;
@@ -2647,6 +2671,7 @@ create_sort_path(PlannerInfo *root,
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = pathkeys;
+	pathnode->path.uniquekeys = subpath->uniquekeys;
 
 	pathnode->subpath = subpath;
 
@@ -2799,8 +2824,7 @@ create_agg_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Agg;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
@@ -2830,6 +2854,179 @@ create_agg_path(PlannerInfo *root,
 		target->cost.per_tuple * pathnode->path.rows;
 
 	return pathnode;
+}
+
+/*
+ * Apply AGG_SORTED aggregation path to subpath if it's suitably sorted.
+ *
+ * check_pathkeys can be passed FALSE if the function was already called for
+ * given index --- since the target should not change, we can skip the check
+ * of sorting during subsequent calls.
+ *
+ * NULL is returned if sorting of subpath output is not suitable.
+ */
+AggPath *
+create_agg_sorted_path(PlannerInfo *root, Path *subpath,
+					   bool check_pathkeys, double input_rows)
+{
+	RelOptInfo *rel;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Node	   *qual = NULL;
+	AggPath    *result = NULL;
+	RelAggInfo *agg_info;
+
+	rel = subpath->parent;
+	agg_info = rel->agg_info;
+	Assert(agg_info != NULL);
+
+	aggsplit = AGGSPLIT_SIMPLE;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	if (subpath->pathkeys == NIL)
+		return NULL;
+
+	if (!grouping_is_sortable(root->parse->groupClause))
+		return NULL;
+
+	if (check_pathkeys)
+	{
+		ListCell   *lc1;
+		List	   *key_subset = NIL;
+
+		/*
+		 * Find all query pathkeys that our relation does affect.
+		 */
+		foreach(lc1, root->group_pathkeys)
+		{
+			PathKey    *gkey = castNode(PathKey, lfirst(lc1));
+			ListCell   *lc2;
+
+			foreach(lc2, subpath->pathkeys)
+			{
+				PathKey    *skey = castNode(PathKey, lfirst(lc2));
+
+				if (skey == gkey)
+				{
+					key_subset = lappend(key_subset, gkey);
+					break;
+				}
+			}
+		}
+
+		if (key_subset == NIL)
+			return NULL;
+
+		/* Check if AGG_SORTED is useful for the whole query.  */
+		if (!pathkeys_contained_in(key_subset, subpath->pathkeys))
+			return NULL;
+	}
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, (Node *) agg_exprs, aggsplit, &agg_costs);
+
+	if (root->parse->havingQual)
+	{
+		qual = root->parse->havingQual;
+		get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+	}
+
+	Assert(agg_info->group_exprs != NIL);
+	dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+									 input_rows, NULL);
+
+	Assert(agg_info->group_clauses != NIL);
+	result = create_agg_path(root, rel, subpath, target,
+							 AGG_SORTED, aggsplit,
+							 agg_info->group_clauses,
+							 (List *) qual, &agg_costs,
+							 dNumGroups);
+
+	return result;
+}
+
+/*
+ * Apply AGG_HASHED aggregation to subpath.
+ *
+ * Arguments have the same meaning as those of create_agg_sorted_path.
+ */
+AggPath *
+create_agg_hashed_path(PlannerInfo *root, Path *subpath,
+					   double input_rows)
+{
+	RelOptInfo *rel;
+	bool		can_hash;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Size		hashaggtablesize;
+	Query	   *parse = root->parse;
+	Node	   *qual = NULL;
+	AggPath    *result = NULL;
+	RelAggInfo *agg_info;
+
+	rel = subpath->parent;
+	agg_info = rel->agg_info;
+	Assert(agg_info != NULL);
+
+	aggsplit = AGGSPLIT_SIMPLE;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+
+	if (parse->havingQual)
+	{
+		qual = parse->havingQual;
+		get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+	}
+
+	can_hash = (parse->groupClause != NIL &&
+				parse->groupingSets == NIL &&
+				agg_costs.numOrderedAggs == 0 &&
+				grouping_is_hashable(parse->groupClause));
+
+	if (can_hash)
+	{
+		Assert(agg_info->group_exprs != NIL);
+		dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+										 input_rows, NULL);
+
+		hashaggtablesize = estimate_hashagg_tablesize(subpath, &agg_costs,
+													  dNumGroups);
+
+		if (hashaggtablesize < work_mem * 1024L)
+		{
+			/*
+			 * Create the aggregation path.
+			 */
+			Assert(agg_info->group_clauses != NIL);
+
+			result = create_agg_path(root, rel, subpath,
+									 target,
+									 AGG_HASHED,
+									 aggsplit,
+									 agg_info->group_clauses,
+									 (List *) qual,
+									 &agg_costs,
+									 dNumGroups);
+
+			/*
+			 * The agg path should require no fewer parameters than the plain
+			 * one.
+			 */
+			result->path.param_info = subpath->param_info;
+		}
+	}
+
+	return result;
 }
 
 /*
@@ -3519,7 +3716,7 @@ reparameterize_path(PlannerInfo *root, Path *path,
 	switch (path->pathtype)
 	{
 		case T_SeqScan:
-			return create_seqscan_path(root, rel, required_outer, 0);
+			return create_seqscan_path(root, rel, NULL, required_outer, 0);
 		case T_SampleScan:
 			return (Path *) create_samplescan_path(root, rel, required_outer);
 		case T_IndexScan:
@@ -3952,6 +4149,356 @@ reparameterize_pathlist_by_child(PlannerInfo *root,
 		}
 
 		result = lappend(result, path);
+	}
+
+	return result;
+}
+
+/*
+ * Construct the common uniquekeys produced by paths of base relation.
+ *
+ * If special cases like UniquePath are implemented someday, they'll have to
+ * be implemented separate.
+ */
+List *
+make_baserel_uniquekeys(PlannerInfo *root, RelOptInfo *rel)
+{
+	RangeTblEntry *rte;
+	Bitmapset  *pkattnos;
+	Oid			constraintOid;
+	List	   *pk_vars = NIL;
+	int			pkattno;
+	AttrNumber	attno;
+	ListCell   *l;
+	List	   *result = NIL;
+
+	/*
+	 * The unique keys are not interesting if there's no chance to push
+	 * aggregation down to base relations.
+	 */
+	if (root->grouped_var_list == NIL)
+		return NIL;
+
+	/*
+	 * Called on the correct reloptkind?
+	 */
+	Assert(rel->reloptkind == RELOPT_BASEREL);
+
+	rte = root->simple_rte_array[rel->relid];
+
+	/*
+	 * uniquekeys are currently not supported for inheritance parent relation.
+	 */
+	if (rte->inh)
+		return NIL;
+
+	/*
+	 * Check if the rel emits all attributes of the PK. While doing so,
+	 * collect the vars for further processing.
+	 *
+	 * XXX Currently we only honor primary key. As for the relation unique
+	 * constraint, we'd have to pay special attention to nullable columns, and
+	 * also we'd have to be ready to accept multiple uniquekeys lists per
+	 * path.
+	 */
+	pkattnos = get_primary_key_attnos(rte->relid, false, &constraintOid);
+	if (pkattnos == NULL)
+		return NIL;
+
+	while ((pkattno = bms_first_member(pkattnos)) >= 0)
+	{
+		Var		   *pk_var = NULL;
+
+		attno = pkattno + FirstLowInvalidHeapAttributeNumber;
+
+		foreach(l, rel->reltarget->exprs)
+		{
+			if (IsA(lfirst(l), Var))
+			{
+				pk_var = lfirst_node(Var, l);
+
+				/*
+				 * XXX It's mentioned elsewhere in the planner code that varno
+				 * is not guaranteed to be equal to relid due to lateral
+				 * references. So test it as well.
+				 */
+				if (pk_var->varno == rel->relid && pk_var->varattno == attno)
+					break;
+			}
+		}
+		if (l)
+			pk_vars = lappend(pk_vars, pk_var);
+		else
+		{
+			/*
+			 * At least one PK attribute not emitted by the relation.
+			 */
+			list_free(pk_vars);
+			return NIL;
+		}
+	}
+
+	/*
+	 * Try to find the EC for each PK attribute.
+	 */
+	foreach(l, pk_vars)
+	{
+		EquivalenceClass *uniquekey;
+
+		uniquekey = get_uniquekey_for_expr(root,
+										   (Expr *) lfirst_node(Var, l));
+
+		if (uniquekey)
+		{
+			/*
+			 * Avoid adding duplicate values to uniquekeys (the duplicates
+			 * shouldn't break matchingw to the grouping expression, but would
+			 * make it less efficient).
+			 */
+			result = list_append_unique_ptr(result, uniquekey);
+		}
+		else
+		{
+			list_free(pk_vars);
+			list_free(result);
+			return NIL;
+		}
+	}
+
+	list_free(pk_vars);
+	return result;
+}
+
+/*
+ * Construct the uniquekeys for join path.
+ *
+ * This function should only be applied to join of two non-grouped paths or to
+ * join of a grouped path to non-grouped one. In contrast, create_grouped_path
+ * takes care of cases where two non-grouped relations are joined and the
+ * result is aggregated.
+ *
+ * Returns NIL if uniquekeys could not be built.
+ */
+void
+set_join_uniquekeys(PlannerInfo *root, Path *joinpath, Path *outer_path,
+					Path *inner_path)
+{
+	RelOptInfo *joinrel = joinpath->parent;
+	ListCell   *l;
+	EquivalenceClass *uniquekey;
+	List	   *result = NIL;
+
+	/* The function should not be called more than once on the same path. */
+	Assert(joinpath->uniquekeys == NIL);
+
+	/*
+	 * The unique keys are not interesting if there's no chance to push
+	 * aggregation down to join relations.
+	 */
+	if (root->grouped_var_list == NIL)
+		return;
+
+	/*
+	 * uniquekeys are currently not supported for inheritance parent relation.
+	 */
+	if (joinrel->reloptkind == RELOPT_OTHER_JOINREL)
+		return;
+
+	/*
+	 * If one input path has no uniquekeys, it can duplicate rows of the
+	 * other.
+	 */
+	if (outer_path->uniquekeys == NIL || inner_path->uniquekeys == NIL)
+		return;
+
+	/*
+	 * To form uniquekeys of a join we only need to combine unique keys of the
+	 * input paths. Note that we should not need to care about outer joins
+	 * because there should be no nullable expressions in the input
+	 * uniquekeys.
+	 */
+	foreach(l, outer_path->uniquekeys)
+	{
+		uniquekey = lfirst_node(EquivalenceClass, l);
+
+		/*
+		 * It's likely for a join to contain multiple members of the same EC.
+		 * We do not need the duplicate keys for the evaluation below, so
+		 * eliminate them right away.
+		 */
+		result = list_append_unique_ptr(result, uniquekey);
+	}
+	foreach(l, inner_path->uniquekeys)
+	{
+		uniquekey = lfirst_node(EquivalenceClass, l);
+		result = list_append_unique_ptr(result, uniquekey);
+	}
+
+	/*
+	 * Only return the keys if they are useful.
+	 */
+	if (!match_uniquekeys_to_groupkeys(root, result))
+	{
+		list_free(result);
+		result = NIL;
+	}
+
+	joinpath->uniquekeys = result;
+}
+
+/*
+ * Return true if path having given uniquekeys cannot duplicate the query
+ * grouping expressions.
+ *
+ * TODO Does this need to be in a separate function?
+ */
+bool
+match_uniquekeys_to_groupkeys(PlannerInfo *root, List *uniquekeys)
+{
+	ListCell   *l;
+
+	/*
+	 * Empty uniquekeys means that we should return false, but no caller
+	 * should pass such a value.
+	 */
+	Assert(uniquekeys != NIL);
+
+	/*
+	 * The join must not duplicate grouping keys. In other words, there must
+	 * be no uniquekey that is not present in the grouping keys.
+	 */
+	foreach(l, uniquekeys)
+	{
+		ListCell   *l2;
+		EquivalenceClass *uniquekey = lfirst_node(EquivalenceClass, l);
+
+		foreach(l2, root->group_pathkeys)
+		{
+			PathKey    *pk = lfirst_node(PathKey, l2);
+
+			if (pk->pk_eclass == uniquekey)
+				break;
+		}
+		if (l2 == NULL)
+		{
+			/*
+			 * Found an uniquekey that is not a grouping expression. This is
+			 * sufficient to duplicate the grouping expressions.
+			 */
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * Construct the common uniquekeys produced by paths of a grouped base or join
+ * relation.
+ */
+List *
+make_grouped_rel_uniquekeys(PlannerInfo *root, PathTarget *target)
+{
+	ListCell   *l;
+	List	   *result = NIL;
+
+	foreach(l, target->exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(l);
+		EquivalenceClass *uniquekey;
+
+		/*
+		 * Aggrefs should be located at the end of the target. Once we hit the
+		 * first one, we're done with grouping expressions.
+		 */
+		if (IsA(expr, Aggref))
+			break;
+
+		uniquekey = get_uniquekey_for_expr(root, expr);
+
+		if (uniquekey)
+			result = list_append_unique_ptr(result, uniquekey);
+		else
+		{
+			list_free(result);
+			return NIL;
+		}
+	}
+
+	return result;
+}
+
+/*
+ * Return an EC eligible to be a "unique key", which contains given
+ * expression.
+ */
+static EquivalenceClass *
+get_uniquekey_for_expr(PlannerInfo *root, Expr *expr)
+{
+	ListCell   *l;
+	EquivalenceClass *result = NULL;
+
+	/*
+	 * Since the uniquekeys will eventually be matched to group_pathkeys,
+	 * search for the EC there rather than in eq_classes. By using
+	 * group_pathkeys we also make sure that pointer equality is sufficient to
+	 * match the final join uniquekeys to group_pathkeys, although the planner
+	 * tries to avoid duplicating the ECs anyway.
+	 */
+	foreach(l, root->group_pathkeys)
+	{
+		ListCell   *l2;
+		PathKey    *pk = lfirst_node(PathKey, l);
+		EquivalenceClass *ec = pk->pk_eclass;
+
+		/*
+		 * TODO Exclude any other ECs?
+		 */
+		if (ec->ec_has_volatile || ec->ec_below_outer_join)
+			continue;
+
+		/*
+		 * Do not iterate the EC members if pk_var cannot be there.
+		 */
+		if (IsA(expr, Var) &&
+			!bms_is_member(((Var *) expr)->varno, ec->ec_relids))
+			continue;
+
+		foreach(l2, ec->ec_members)
+		{
+			EquivalenceMember *em = lfirst_node(EquivalenceMember, l2);
+
+			/*
+			 * expr should originate from RELOPT_BASEREL.
+			 */
+			if (em->em_is_child)
+				continue;
+
+			/*
+			 * If the attribute can become NULL above the base relation, the
+			 * PK values are not guaranteed to be unique in the upper
+			 * relations.
+			 */
+			if (!bms_is_empty(em->em_nullable_relids))
+				continue;
+
+			if (equal(em->em_expr, expr))
+			{
+				/*
+				 * Accept this EC.
+				 */
+				result = ec;
+				break;
+			}
+		}
+		if (l2 != NULL)
+		{
+			/*
+			 * This EC is ok, so no need to check the following ones.
+			 */
+			break;
+		}
 	}
 
 	return result;

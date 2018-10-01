@@ -824,6 +824,12 @@ use_physical_tlist(PlannerInfo *root, Path *path, int flags)
 		return false;
 
 	/*
+	 * Grouped relation's target list contains Aggrefs.
+	 */
+	if (IS_GROUPED_REL(rel))
+		return false;
+
+	/*
 	 * If a bitmap scan's tlist is empty, keep it as-is.  This may allow the
 	 * executor to skip heap page fetches, and in any case, the benefit of
 	 * using a physical tlist instead would be minimal.

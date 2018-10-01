@@ -32,6 +32,7 @@
 #include "optimizer/predtest.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
@@ -75,7 +76,6 @@ typedef struct
 	IndexOptInfo *index;		/* index we're considering */
 	int			indexcol;		/* index column we want to match to */
 } ec_member_matches_arg;
-
 
 static void consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 							IndexOptInfo *index,
@@ -272,8 +272,7 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * non-parameterized paths.  Plain paths go directly to add_path(),
 		 * bitmap paths are added to bitindexpaths to be handled below.
 		 */
-		get_index_paths(root, rel, index, &rclauseset,
-						&bitindexpaths);
+		get_index_paths(root, rel, index, &rclauseset, &bitindexpaths);
 
 		/*
 		 * Identify the join clauses that can match the index.  For the moment
@@ -306,11 +305,18 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	}
 
 	/*
+	 * It does not seem too efficient to aggregate the individual paths and
+	 * then AND them together.
+	 */
+	if (IS_GROUPED_REL(rel))
+		return;
+
+	/*
 	 * Generate BitmapOrPaths for any suitable OR-clauses present in the
 	 * restriction list.  Add these to bitindexpaths.
 	 */
-	indexpaths = generate_bitmap_or_paths(root, rel,
-										  rel->baserestrictinfo, NIL);
+	indexpaths = generate_bitmap_or_paths(root, rel, rel->baserestrictinfo,
+										  NIL);
 	bitindexpaths = list_concat(bitindexpaths, indexpaths);
 
 	/*
@@ -715,7 +721,6 @@ bms_equal_any(Relids relids, List *relids_list)
 	return false;
 }
 
-
 /*
  * get_index_paths
  *	  Given an index and a set of index clauses for it, construct IndexPaths.
@@ -746,6 +751,10 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * clauses only if the index AM supports them natively, and skip any such
 	 * clauses for index columns after the first (so that we produce ordered
 	 * paths if possible).
+	 *
+	 * These paths are good candidates for AGG_SORTED, so pass the output
+	 * lists for this strategy. AGG_HASHED should be applied to paths with no
+	 * pathkeys.
 	 */
 	indexpaths = build_index_paths(root, rel,
 								   index, clauses,
@@ -758,6 +767,9 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * If we skipped any lower-order ScalarArrayOpExprs on an index with an AM
 	 * that supports them, then try again including those clauses.  This will
 	 * produce paths with more selectivity but no ordering.
+	 *
+	 * As for the grouping paths, only AGG_HASHED is considered due to the
+	 * missing ordering.
 	 */
 	if (skip_lower_saop)
 	{
@@ -799,6 +811,9 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * If there were ScalarArrayOpExpr clauses that the index can't handle
 	 * natively, generate bitmap scan paths relying on executor-managed
 	 * ScalarArrayOpExpr.
+	 *
+	 * As for grouping, only AGG_HASHED is possible here. Again, because
+	 * there's no ordering.
 	 */
 	if (skip_nonnative_saop)
 	{
@@ -851,7 +866,7 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
  * 'useful_predicate' indicates whether the index has a useful predicate
  * 'scantype' indicates whether we need plain or bitmap scan support
  * 'skip_nonnative_saop' indicates whether to accept SAOP if index AM doesn't
- * 'skip_lower_saop' indicates whether to accept non-first-column SAOP
+ * 'skip_lower_saop' indicates whether to accept non-first-column SAOP.
  */
 static List *
 build_index_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -876,6 +891,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	bool		index_is_ordered;
 	bool		index_only_scan;
 	int			indexcol;
+	AggPath    *agg_path;
+	RelAggInfo *agg_info = rel->agg_info;
 
 	/*
 	 * Check that index supports the desired scan type(s)
@@ -1029,6 +1046,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * in the current clauses, OR the index ordering is potentially useful for
 	 * later merging or final output ordering, OR the index has a useful
 	 * predicate, OR an index-only scan is possible.
+	 *
+	 * This is where grouped path start to be considered.
 	 */
 	if (index_clauses != NIL || useful_pathkeys != NIL || useful_predicate ||
 		index_only_scan)
@@ -1046,7 +1065,53 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 								  outer_relids,
 								  loop_count,
 								  false);
-		result = lappend(result, ipath);
+
+		if (!IS_GROUPED_REL(rel))
+			result = lappend(result, ipath);
+		else
+		{
+			/*
+			 * Try to create the grouped paths if caller is interested in
+			 * them.
+			 *
+			 * Do not waste cycles if there's no uniquekeys to be assigned to
+			 * the AggPath.
+			 */
+			if (useful_pathkeys != NIL && agg_info->uniquekeys != NIL)
+			{
+				agg_path = create_agg_sorted_path(root,
+												  (Path *) ipath,
+												  true,
+												  ipath->path.rows);
+
+				if (agg_path != NULL)
+				{
+					agg_path->path.uniquekeys = agg_info->uniquekeys;
+					result = lappend(result, agg_path);
+				}
+			}
+
+			/*
+			 * Hashed aggregation should not be parameterized: the cost of
+			 * repeated creation of the hashtable (for different parameter
+			 * values) is probably not worth.
+			 *
+			 * Do not waste cycles if there's no uniquekeys to be assigned to
+			 * the AggPath.
+			 */
+			if (outer_relids != NULL && agg_info->uniquekeys != NIL)
+			{
+				agg_path = create_agg_hashed_path(root,
+												  (Path *) ipath,
+												  ipath->path.rows);
+
+				if (agg_path != NULL)
+				{
+					agg_path->path.uniquekeys = agg_info->uniquekeys;
+					result = lappend(result, agg_path);
+				}
+			}
+		}
 
 		/*
 		 * If appropriate, consider parallel index scan.  We don't allow
@@ -1103,7 +1168,34 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									  outer_relids,
 									  loop_count,
 									  false);
-			result = lappend(result, ipath);
+
+			if (!IS_GROUPED_REL(rel))
+				result = lappend(result, ipath);
+
+			/*
+			 * Do not waste cycles if there's no uniquekeys to be assigned to
+			 * the AggPath.
+			 */
+			else if (agg_info->uniquekeys != NIL)
+			{
+				/*
+				 * As the input set ordering does not matter to AGG_HASHED,
+				 * only AGG_SORTED makes sense here. (The AGG_HASHED path we'd
+				 * create here should already exist.)
+				 *
+				 * pathkeys are new, so check them.
+				 */
+				agg_path = create_agg_sorted_path(root,
+												  (Path *) ipath,
+												  true,
+												  ipath->path.rows);
+
+				if (agg_path != NULL)
+				{
+					agg_path->path.uniquekeys = agg_info->uniquekeys;
+					result = lappend(result, agg_path);
+				}
+			}
 
 			/* If appropriate, consider parallel index scan */
 			if (index->amcanparallel &&
@@ -1127,7 +1219,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				 * using parallel workers, just free it.
 				 */
 				if (ipath->path.parallel_workers > 0)
-					add_partial_path(rel, (Path *) ipath);
+				{
+					if (!IS_GROUPED_REL(rel))
+						add_partial_path(rel, (Path *) ipath);
+				}
 				else
 					pfree(ipath);
 			}

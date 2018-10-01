@@ -66,6 +66,8 @@ query_planner(PlannerInfo *root, List *tlist,
 	 */
 	if (parse->jointree->fromlist == NIL)
 	{
+		RelOptInfo *final_rel;
+
 		/* We need a dummy joinrel to describe the empty set of baserels */
 		final_rel = build_empty_join_rel(root);
 
@@ -114,6 +116,7 @@ query_planner(PlannerInfo *root, List *tlist,
 	root->full_join_clauses = NIL;
 	root->join_info_list = NIL;
 	root->placeholder_list = NIL;
+	root->grouped_var_list = NIL;
 	root->fkey_list = NIL;
 	root->initial_rels = NIL;
 
@@ -199,6 +202,11 @@ query_planner(PlannerInfo *root, List *tlist,
 	joinlist = remove_useless_joins(root, joinlist);
 
 	/*
+	 * No rels should disappear now, so we can initialize all_baserels.
+	 */
+	setup_all_baserels(root);
+
+	/*
 	 * Also, reduce any semijoins with unique inner rels to plain inner joins.
 	 * Likewise, this can't be done until now for lack of needed info.
 	 */
@@ -230,6 +238,16 @@ query_planner(PlannerInfo *root, List *tlist,
 	 * restriction OR clauses from.
 	 */
 	extract_restriction_or_clauses(root);
+
+	/*
+	 * If the query result can be grouped, check if any grouping can be
+	 * performed below the top-level join. If so, setup root->grouped_var_list
+	 * and create RelOptInfo for base relations capable to do the grouping.
+	 *
+	 * The base relations should be fully initialized now, so that we have
+	 * enough info to decide whether grouping is possible.
+	 */
+	add_grouped_base_rels_to_query(root);
 
 	/*
 	 * We should now have size estimates for every actual table involved in

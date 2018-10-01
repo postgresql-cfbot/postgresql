@@ -21,6 +21,7 @@
  * allpaths.c
  */
 extern PGDLLIMPORT bool enable_geqo;
+extern PGDLLIMPORT bool enable_agg_pushdown;
 extern PGDLLIMPORT int geqo_threshold;
 extern PGDLLIMPORT int min_parallel_table_scan_size;
 extern PGDLLIMPORT int min_parallel_index_scan_size;
@@ -50,11 +51,15 @@ extern PGDLLIMPORT join_search_hook_type join_search_hook;
 
 extern RelOptInfo *make_one_rel(PlannerInfo *root, List *joinlist);
 extern void set_dummy_rel_pathlist(RelOptInfo *rel);
-extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
+extern RelOptInfo *standard_join_search(PlannerInfo *root,
+					 int levels_needed,
 					 List *initial_rels);
 
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 					  bool override_rows);
+
+extern bool add_grouped_path(PlannerInfo *root, RelOptInfo *rel,
+				 Path *subpath, AggStrategy aggstrategy);
 extern int compute_parallel_worker(RelOptInfo *rel, double heap_pages,
 						double index_pages, int max_workers);
 extern void create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -92,7 +97,8 @@ extern Expr *adjust_rowcompare_for_index(RowCompareExpr *clause,
  * tidpath.h
  *	  routines to generate tid paths
  */
-extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel);
+extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel,
+					 bool grouped);
 
 /*
  * joinpath.c
@@ -101,7 +107,8 @@ extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel);
 extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 					 RelOptInfo *outerrel, RelOptInfo *innerrel,
 					 JoinType jointype, SpecialJoinInfo *sjinfo,
-					 List *restrictlist);
+					 List *restrictlist,
+					 bool do_aggregate);
 
 /*
  * joinrels.c

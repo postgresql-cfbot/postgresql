@@ -88,4 +88,6 @@ extern Query *inline_set_returning_function(PlannerInfo *root,
 extern List *expand_function_arguments(List *args, Oid result_type,
 						  HeapTuple func_tuple);
 
+extern GroupedVarInfo *translate_expression_to_rels(PlannerInfo *root,
+							 GroupedVarInfo *gvi, Index relid);
 #endif							/* CLAUSES_H */

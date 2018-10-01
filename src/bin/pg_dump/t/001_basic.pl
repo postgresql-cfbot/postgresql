@@ -4,7 +4,7 @@ use warnings;
 use Config;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 70;
+use Test::More tests => 72;
 
 my $tempdir       = TestLib::tempdir;
 my $tempdir_short = TestLib::tempdir_short;
@@ -150,3 +150,8 @@ command_fails_like(
 	[ 'pg_dumpall', '--if-exists' ],
 	qr/\Qpg_dumpall: option --if-exists requires option -c\/--clean\E/,
 	'pg_dumpall: option --if-exists requires option -c/--clean');
+
+command_fails_like(
+	[ 'pg_dumpall', '--exclude-database' ],
+	qr/\Qpg_dumpall: option '--exclude-database' requires an argument\E/,
+	"pg_dumpall: option '--exclude-database' requires an argument");

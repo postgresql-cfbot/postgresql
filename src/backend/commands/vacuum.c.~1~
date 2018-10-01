@@ -1690,7 +1690,7 @@ vacuum_rel(Oid relid, RangeVar *relation, int options, VacuumParams *params)
  */
 void
 vac_open_indexes(Relation relation, LOCKMODE lockmode,
-				 int *nindexes, Relation **Irel, Oid idx)
+				 int *nindexes, Relation **Irel)
 {
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
@@ -1698,10 +1698,7 @@ vac_open_indexes(Relation relation, LOCKMODE lockmode,
 
 	Assert(lockmode != NoLock);
 
-	if (OidIsValid(idx))
-		indexoidlist = list_make1_oid(idx);
-	else
-		indexoidlist = RelationGetIndexList(relation);
+	indexoidlist = RelationGetIndexList(relation);
 
 	/* allocate enough memory for all indexes */
 	i = list_length(indexoidlist);

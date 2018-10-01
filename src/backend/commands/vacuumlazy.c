@@ -258,7 +258,7 @@ lazy_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	vacrelstats->lock_waiter_detected = false;
 
 	/* Open all indexes of the relation */
-	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
+	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel, InvalidOid);
 	vacrelstats->hasindex = (nindexes > 0);
 
 	/* Do the vacuuming */

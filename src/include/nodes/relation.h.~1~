@@ -1930,16 +1930,8 @@ typedef struct RestrictInfo
 	Selectivity outer_selec;	/* selectivity for outer join semantics; -1 if
 								 * not yet set */
 
-	/*
-	 * The following two fields are used for clauses on which it is possible to
-	 * perform a merge join.
-	 * If mergeopfamilies is not NIL, the clause is mergejoinable. Its operator
-	 * may be either equality or inequality in some btree opfamilies. These
-	 * opfamilies are stored in mergeopfamilies, and for equality clauses,
-	 * is_mj_equality is set to true.
-	 */
+	/* valid if clause is mergejoinable, else NIL */
 	List	   *mergeopfamilies;	/* opfamilies containing clause operator */
-	bool		is_mj_equality;		/* is this a mergejoinable equality clause? */
 
 	/* cache space for mergeclause processing; NULL if not yet set */
 	EquivalenceClass *left_ec;	/* EquivalenceClass containing lefthand */

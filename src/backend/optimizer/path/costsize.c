@@ -2848,6 +2848,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	double		mergejointuples,
 				rescannedtuples;
 	double		rescanratio;
+	bool		have_inequality;
 
 	/* Protect some assumptions below that rowcounts aren't zero or NaN */
 	if (inner_path_rows <= 0 || isnan(inner_path_rows))
@@ -2901,6 +2902,13 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		path->skip_mark_restore = false;
 
 	/*
+	 * Check whether one of join clauses is an inequality. It can only
+	 * be the last one, as required by our merge join algorithm.
+	 */
+	have_inequality = list_tail(mergeclauses) != NULL
+		&& !((RestrictInfo *) lfirst(list_tail(mergeclauses)))->is_mj_equality;
+
+	/*
 	 * Get approx # tuples passing the mergequals.  We use approx_tuple_count
 	 * here because we need an estimate done with JOIN_INNER semantics.
 	 */
@@ -2929,18 +2937,25 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	 * when we should not.  Can we do better without expensive selectivity
 	 * computations?
 	 *
+	 * Also, if merge clauses contain inequality, n_i matches all m_k where i <= k.
+	 * From that we derive: rescanned tuples = (m1 - 1) * n1 + (m2 - 1) * (n1 + n2)
+	 * + ... =  m1 * n1 + m2 * (n1 + n2) + ... - n1 - (n1 + n2) - ...
+	 * In the limit case of n_i = 1, n1 + (n1 + n2) + ... = sum(n_i) ^ 2 / 2.
+	 * Therefore, rescanned tuples = size of join - (inner_rows) ^ 2 / 2.
+	 *
 	 * The whole issue is moot if we are working from a unique-ified outer
 	 * input, or if we know we don't need to mark/restore at all.
 	 */
-	if (IsA(outer_path, UniquePath) ||path->skip_mark_restore)
+	if (have_inequality)
+		rescannedtuples = mergejointuples - inner_path_rows * inner_path_rows / 2.;
+	else if (IsA(outer_path, UniquePath) ||path->skip_mark_restore)
 		rescannedtuples = 0;
 	else
-	{
 		rescannedtuples = mergejointuples - inner_path_rows;
-		/* Must clamp because of possible underestimate */
-		if (rescannedtuples < 0)
-			rescannedtuples = 0;
-	}
+
+	/* Must clamp because of possible underestimate */
+	if (rescannedtuples < 0)
+		rescannedtuples = 0;
 	/* We'll inflate various costs this much to account for rescanning */
 	rescanratio = 1.0 + (rescannedtuples / inner_path_rows);
 

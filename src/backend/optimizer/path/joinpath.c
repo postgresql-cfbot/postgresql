@@ -892,6 +892,7 @@ sort_inner_and_outer(PlannerInfo *root,
 	Path	   *cheapest_safe_inner = NULL;
 	List	   *all_pathkeys;
 	ListCell   *l;
+	bool		have_inequality = false;
 
 	/*
 	 * We only consider the cheapest-total-cost input paths, since we are
@@ -992,7 +993,7 @@ sort_inner_and_outer(PlannerInfo *root,
 	 */
 	all_pathkeys = select_outer_pathkeys_for_merge(root,
 												   extra->mergeclause_list,
-												   joinrel);
+												   joinrel, &have_inequality);
 
 	foreach(l, all_pathkeys)
 	{
@@ -1004,9 +1005,15 @@ sort_inner_and_outer(PlannerInfo *root,
 
 		/* Make a pathkey list with this guy first */
 		if (l != list_head(all_pathkeys))
+		{
+			if (have_inequality && l == list_tail(all_pathkeys))
+				/* Inequality merge clause must be the last, we can't move it */
+				break;
+
 			outerkeys = lcons(front_pathkey,
 							  list_delete_ptr(list_copy(all_pathkeys),
 											  front_pathkey));
+		}
 		else
 			outerkeys = all_pathkeys;	/* no work at first one... */
 
@@ -1924,6 +1931,8 @@ hash_inner_and_outer(PlannerInfo *root,
  * We examine each restrictinfo clause known for the join to see
  * if it is mergejoinable and involves vars from the two sub-relations
  * currently of interest.
+ *
+ * We also allow no more than one inequality clause.
  */
 static List *
 select_mergejoin_clauses(PlannerInfo *root,
@@ -1937,6 +1946,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 	List	   *result_list = NIL;
 	bool		isouterjoin = IS_OUTER_JOIN(jointype);
 	bool		have_nonmergeable_joinclause = false;
+	bool		have_inequality = false;
 	ListCell   *l;
 
 	foreach(l, restrictlist)
@@ -2003,6 +2013,21 @@ select_mergejoin_clauses(PlannerInfo *root,
 		{
 			have_nonmergeable_joinclause = true;
 			continue;			/* can't handle redundant eclasses */
+		}
+
+		/*
+		 * Check that there is at most one inequality clause. We don't care
+		 * about the order of the clauses here, this is handled by
+		 * select_outer_pathkeys_for_merge().
+		 */
+		if (!restrictinfo->is_mj_equality)
+		{
+			if (have_inequality)
+			{
+				have_nonmergeable_joinclause = true;
+				continue;
+			}
+			have_inequality = true;
 		}
 
 		result_list = lappend(result_list, restrictinfo);

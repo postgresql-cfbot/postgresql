@@ -663,6 +663,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 {
 	TransactionId *xids;
 	int			nxids;
+	TransactionId nextXid;
 	int			i;
 
 	Assert(standbyState >= STANDBY_INITIALIZED);
@@ -875,9 +876,16 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	 * hold a lock while examining it.  We still acquire the lock to modify
 	 * it, though.
 	 */
-	AdvanceNextFullTransactionIdPastXid(latestObservedXid, true);
+	nextXid = latestObservedXid;
+	TransactionIdAdvance(nextXid);
+	if (TransactionIdFollows(nextXid, ShmemVariableCache->nextXid))
+	{
+		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextXid = nextXid;
+		LWLockRelease(XidGenLock);
+	}
 
-	Assert(TransactionIdIsValid(XidFromFullTransactionId(ShmemVariableCache->nextFullXid)));
+	Assert(TransactionIdIsValid(ShmemVariableCache->nextXid));
 
 	KnownAssignedXidsDisplay(trace_recovery(DEBUG3));
 	if (standbyState == STANDBY_SNAPSHOT_READY)
@@ -1965,7 +1973,7 @@ GetRunningTransactionData(void)
 
 	latestCompletedXid = ShmemVariableCache->latestCompletedXid;
 
-	oldestRunningXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	oldestRunningXid = ShmemVariableCache->nextXid;
 
 	/*
 	 * Spin over procArray collecting all xids
@@ -2054,7 +2062,7 @@ GetRunningTransactionData(void)
 	CurrentRunningXacts->xcnt = count - subcount;
 	CurrentRunningXacts->subxcnt = subcount;
 	CurrentRunningXacts->subxid_overflow = suboverflowed;
-	CurrentRunningXacts->nextXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	CurrentRunningXacts->nextXid = ShmemVariableCache->nextXid;
 	CurrentRunningXacts->oldestRunningXid = oldestRunningXid;
 	CurrentRunningXacts->latestCompletedXid = latestCompletedXid;
 
@@ -2099,7 +2107,7 @@ GetOldestActiveTransactionId(void)
 	 * have already completed), when we spin over it.
 	 */
 	LWLockAcquire(XidGenLock, LW_SHARED);
-	oldestRunningXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	oldestRunningXid = ShmemVariableCache->nextXid;
 	LWLockRelease(XidGenLock);
 
 	/*
@@ -2167,7 +2175,7 @@ GetOldestSafeDecodingTransactionId(bool catalogOnly)
 	 * a safe, albeit pessimal, value.
 	 */
 	LWLockAcquire(XidGenLock, LW_SHARED);
-	oldestSafeXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+	oldestSafeXid = ShmemVariableCache->nextXid;
 
 	/*
 	 * If there's already a slot pegging the xmin horizon, we can start with
@@ -3221,10 +3229,12 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
 		 */
 		latestObservedXid = xid;
 
-		/* ShmemVariableCache->nextFullXid must be beyond any observed xid */
-		AdvanceNextFullTransactionIdPastXid(latestObservedXid, false);
+		/* ShmemVariableCache->nextXid must be beyond any observed xid */
 		next_expected_xid = latestObservedXid;
 		TransactionIdAdvance(next_expected_xid);
+		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextXid = next_expected_xid;
+		LWLockRelease(XidGenLock);
 	}
 }
 

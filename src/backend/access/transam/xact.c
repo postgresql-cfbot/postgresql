@@ -5512,14 +5512,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	 * hold a lock while checking this. We still acquire the lock to modify
 	 * it, though.
 	 */
-	if (TransactionIdFollowsOrEquals(max_xid,
-									 ShmemVariableCache->nextXid))
-	{
-		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
-		ShmemVariableCache->nextXid = max_xid;
-		TransactionIdAdvance(ShmemVariableCache->nextXid);
-		LWLockRelease(XidGenLock);
-	}
+	AdvanceNextFullTransactionIdPastXid(max_xid, true);
 
 	Assert(((parsed->xinfo & XACT_XINFO_HAS_ORIGIN) == 0) ==
 		   (origin_id == InvalidRepOriginId));
@@ -5671,15 +5664,7 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 	max_xid = TransactionIdLatest(xid,
 								  parsed->nsubxacts,
 								  parsed->subxacts);
-
-	if (TransactionIdFollowsOrEquals(max_xid,
-									 ShmemVariableCache->nextXid))
-	{
-		LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
-		ShmemVariableCache->nextXid = max_xid;
-		TransactionIdAdvance(ShmemVariableCache->nextXid);
-		LWLockRelease(XidGenLock);
-	}
+	AdvanceNextFullTransactionIdPastXid(max_xid, true);
 
 	if (standbyState == STANDBY_DISABLED)
 	{

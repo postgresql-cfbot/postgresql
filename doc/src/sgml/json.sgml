@@ -570,6 +570,45 @@ SELECT jdoc-&gt;'guid', jdoc-&gt;'name' FROM api WHERE jdoc @&gt; '{"tags": ["qu
   </para>
  </sect2>
 
+ <sect2 id="jsonb-subscripting">
+  <title><type>jsonb</type> Subscripting</title>
+  <para>
+   <type>jsonb</type> data type supports array-style subscripting expressions
+   to extract or update particular element. It's possible to use multiple
+   subscripting expressions to extract nested values. In this case a chain of
+   subscripting expressions follows the same rules as the
+   <literal>path</literal> argument in <literal>jsonb_set</literal> function,
+   e.g. in case of arrays it is a 0-based operation or that negative integers
+   that appear in <literal>path</literal> count from the end of JSON arrays.
+   The result of subscripting expressions is always jsonb data type. An
+   example of subscripting syntax:
+<programlisting>
+-- Extract value by key
+SELECT ('{"a": 1}'::jsonb)['a'];
+
+-- Extract nested value by key path
+SELECT ('{"a": {"b": {"c": 1}}}'::jsonb)['a']['b']['c'];
+
+-- Extract element by index
+SELECT ('[1, "2", null]'::jsonb)[1];
+
+-- Update value by key
+UPDATE table_name SET jsonb_field['key'] = 1;
+
+-- Select records using where clause with subscripting. Since the result of
+-- subscripting is jsonb and we basically want to compare two jsonb objects, we
+-- need to put the value in double quotes to be able to convert it to jsonb.
+SELECT * FROM table_name WHERE jsonb_field['key'] = '"value"';
+</programlisting>
+
+  There is no special indexing support for such kind of expressions, but you
+  always can create a functional index that includes it
+<programlisting>
+CREATE INDEX idx ON table_name ((jsonb_field['key']));
+</programlisting>
+  </para>
+ </sect2>
+
  <sect2>
   <title>Transforms</title>
 

@@ -959,7 +959,7 @@ process_matched_tle(TargetEntry *src_tle,
 
 	/*----------
 	 * Multiple assignments to same attribute.  Allow only if all are
-	 * FieldStore or SubscriptingRef assignment operations.  This is a bit
+	 * FieldStore or ArrayRef assignment operations.  This is a bit
 	 * tricky because what we may actually be looking at is a nest of
 	 * such nodes; consider
 	 *		UPDATE tab SET col.fld1.subfld1 = x, col.fld2.subfld2 = y
@@ -967,7 +967,7 @@ process_matched_tle(TargetEntry *src_tle,
 	 *		FieldStore(col, fld1, FieldStore(placeholder, subfld1, x))
 	 *		FieldStore(col, fld2, FieldStore(placeholder, subfld2, y))
 	 * However, we can ignore the substructure and just consider the top
-	 * FieldStore or SubscriptingRef from each assignment, because it works to
+	 * FieldStore or ArrayRef from each assignment, because it works to
 	 * combine these as
 	 *		FieldStore(FieldStore(col, fld1,
 	 *							  FieldStore(placeholder, subfld1, x)),
@@ -977,7 +977,7 @@ process_matched_tle(TargetEntry *src_tle,
 	 *
 	 * For FieldStore, instead of nesting we can generate a single
 	 * FieldStore with multiple target fields.  We must nest when
-	 * SubscriptingRefs are involved though.
+	 * ArrayRefs are involved though.
 	 *
 	 * As a further complication, the destination column might be a domain,
 	 * resulting in each assignment containing a CoerceToDomain node over a
@@ -1056,13 +1056,13 @@ process_matched_tle(TargetEntry *src_tle,
 		}
 		newexpr = (Node *) fstore;
 	}
-	else if (IsA(src_expr, SubscriptingRef))
+	else if (IsA(src_expr, ArrayRef))
 	{
-		SubscriptingRef *sbsref = makeNode(SubscriptingRef);
+		ArrayRef   *aref = makeNode(ArrayRef);
 
-		memcpy(sbsref, src_expr, sizeof(SubscriptingRef));
-		sbsref->refexpr = (Expr *) prior_expr;
-		newexpr = (Node *) sbsref;
+		memcpy(aref, src_expr, sizeof(ArrayRef));
+		aref->refexpr = (Expr *) prior_expr;
+		newexpr = (Node *) aref;
 	}
 	else
 	{
@@ -1099,16 +1099,14 @@ get_assignment_input(Node *node)
 
 		return (Node *) fstore->arg;
 	}
-	else if (IsA(node, SubscriptingRef))
+	else if (IsA(node, ArrayRef))
 	{
-		SubscriptingRef   *sbsref = (SubscriptingRef *) node;
+		ArrayRef   *aref = (ArrayRef *) node;
 
-		if (sbsref->refassgnexpr == NULL)
+		if (aref->refassgnexpr == NULL)
 			return NULL;
-
-		return (Node *) sbsref->refexpr;
+		return (Node *) aref->refexpr;
 	}
-
 	return NULL;
 }
 

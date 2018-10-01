@@ -10176,6 +10176,21 @@
   proargnames => '{max_data_alignment,database_block_size,blocks_per_segment,wal_block_size,bytes_per_wal_segment,max_identifier_length,max_index_columns,max_toast_chunk_size,large_object_chunk_size,float4_pass_by_value,float8_pass_by_value,data_page_checksum_version}',
   prosrc => 'pg_control_init' },
 
+# type subscripting support
+{ oid => '4001',
+  descr => 'Jsonb subscripting logic',
+  proname => 'jsonb_subscript_handler',
+  prorettype => 'internal',
+  proargtypes => 'internal',
+  prosrc => 'jsonb_subscript_handler' },
+
+{ oid => '4004',
+  descr => 'Array subscripting logic',
+  proname => 'array_subscript_handler',
+  prorettype => 'internal',
+  proargtypes => 'internal',
+  prosrc => 'array_subscript_handler' },
+
 # collation management functions
 { oid => '3445', descr => 'import collations from operating system',
   proname => 'pg_import_system_collations', procost => '100',

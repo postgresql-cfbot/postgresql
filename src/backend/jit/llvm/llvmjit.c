@@ -83,7 +83,7 @@ LLVMValueRef FuncSlotGetsomeattrs;
 LLVMValueRef FuncSlotGetmissingattrs;
 LLVMValueRef FuncHeapGetsysattr;
 LLVMValueRef FuncMakeExpandedObjectReadOnlyInternal;
-LLVMValueRef FuncExecEvalArrayRefSubscript;
+LLVMValueRef FuncExecEvalSubscriptingRef;
 LLVMValueRef FuncExecAggTransReparent;
 LLVMValueRef FuncExecAggInitGroup;
 
@@ -824,7 +824,7 @@ llvm_create_types(void)
 	FuncSlotGetmissingattrs = LLVMGetNamedFunction(mod, "slot_getmissingattrs");
 	FuncHeapGetsysattr = LLVMGetNamedFunction(mod, "heap_getsysattr");
 	FuncMakeExpandedObjectReadOnlyInternal = LLVMGetNamedFunction(mod, "MakeExpandedObjectReadOnlyInternal");
-	FuncExecEvalArrayRefSubscript = LLVMGetNamedFunction(mod, "ExecEvalArrayRefSubscript");
+	FuncExecEvalSubscriptingRef = LLVMGetNamedFunction(mod, "ExecEvalSubscriptingRef");
 	FuncExecAggTransReparent = LLVMGetNamedFunction(mod, "ExecAggTransReparent");
 	FuncExecAggInitGroup = LLVMGetNamedFunction(mod, "ExecAggInitGroup");
 

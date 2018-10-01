@@ -214,6 +214,12 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 */
 	Oid			typcollation BKI_DEFAULT(0);
 
+	/*
+	 * Type specific subscripting logic. If typsubshandler is none, it means
+	 * that this type doesn't support subscripting.
+	 */
+	regproc		typsubshandler BKI_DEFAULT(-) BKI_LOOKUP(pg_proc);
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 
 	/*
@@ -321,7 +327,8 @@ extern ObjectAddress TypeCreate(Oid newTypeOid,
 		   int32 typeMod,
 		   int32 typNDims,
 		   bool typeNotNull,
-		   Oid typeCollation);
+		   Oid typeCollation,
+		   Oid subscriptingParseProcedure);
 
 extern void GenerateTypeDependencies(Oid typeNamespace,
 						 Oid typeObjectId,
@@ -339,6 +346,7 @@ extern void GenerateTypeDependencies(Oid typeNamespace,
 						 bool isImplicitArray,
 						 Oid baseType,
 						 Oid typeCollation,
+						 Oid subscriptingParseProcedure,
 						 Node *defaultExpr,
 						 bool rebuild);
 

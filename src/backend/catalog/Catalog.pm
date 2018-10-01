@@ -383,6 +383,7 @@ sub GenerateArrayTypes
 		# Arrays require INT alignment, unless the element type requires
 		# DOUBLE alignment.
 		$array_type{typalign} = $elem_type->{typalign} eq 'd' ? 'd' : 'i';
+		$array_type{typsubshandler} = 'array_subscript_handler';
 
 		# Fill in the rest of the array entry's fields.
 		foreach my $column (@$pgtype_schema)

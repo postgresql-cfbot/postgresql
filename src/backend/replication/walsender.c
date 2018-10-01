@@ -1216,20 +1216,13 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 
 		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
 
-		wakeEvents = WL_LATCH_SET | WL_POSTMASTER_DEATH |
+		wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH |
 			WL_SOCKET_WRITEABLE | WL_SOCKET_READABLE | WL_TIMEOUT;
 
 		/* Sleep until something happens or we time out */
 		WaitLatchOrSocket(MyLatch, wakeEvents,
 						  MyProcPort->sock, sleeptime,
 						  WAIT_EVENT_WAL_SENDER_WRITE_DATA);
-
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (!PostmasterIsAlive())
-			exit(1);
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -1309,13 +1302,6 @@ WalSndWaitForWal(XLogRecPtr loc)
 	for (;;)
 	{
 		long		sleeptime;
-
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (!PostmasterIsAlive())
-			exit(1);
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -1408,8 +1394,8 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 */
 		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
 
-		wakeEvents = WL_LATCH_SET | WL_POSTMASTER_DEATH |
-			WL_SOCKET_READABLE | WL_TIMEOUT;
+		wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH |
+					 WL_SOCKET_READABLE | WL_TIMEOUT;
 
 		if (pq_is_send_pending())
 			wakeEvents |= WL_SOCKET_WRITEABLE;
@@ -2124,13 +2110,6 @@ WalSndLoop(WalSndSendDataCallback send_data)
 	 */
 	for (;;)
 	{
-		/*
-		 * Emergency bailout if postmaster has died.  This is to avoid the
-		 * necessity for manual cleanup of all postmaster children.
-		 */
-		if (!PostmasterIsAlive())
-			exit(1);
-
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
 
@@ -2220,8 +2199,8 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			long		sleeptime;
 			int			wakeEvents;
 
-			wakeEvents = WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT |
-				WL_SOCKET_READABLE;
+			wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT |
+						 WL_SOCKET_READABLE;
 
 			/*
 			 * Use fresh timestamp, not last_processed, to reduce the chance

@@ -411,6 +411,27 @@ test1
 
 SELECT * FROM instead_of_insert_tbl;
 
+-- test header line feature
+create temp table copytest3 (
+	c1 int,
+	"col with , comma" text,
+	"col with "" quote"  int);
+
+copy copytest3 from stdin csv header;
+this is just a line full of junk that would error out if parsed
+1,a,1
+2,b,2
+\.
+
+copy copytest3 to stdout csv header;
+
+copy copytest3 from stdin header;
+this is just a line full of junk that would error out if parsed
+3	c	3
+4	d	4
+\.
+
+copy copytest3 to stdout with (format text, header true);
 
 -- clean up
 DROP TABLE forcetest;

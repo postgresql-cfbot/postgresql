@@ -16,6 +16,7 @@
 
 #include "nodes/plannodes.h"
 #include "nodes/relation.h"
+#include "utils/relcache.h"
 
 
 /*
@@ -39,6 +40,9 @@ extern Expr *canonicalize_qual(Expr *qual, bool is_check);
  * prototypes for preptlist.c
  */
 extern List *preprocess_targetlist(PlannerInfo *root);
+extern List *add_rowmark_columns(PlannerInfo *root,
+								 List *tlist,
+								 List *rowMarks);
 
 extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
 
@@ -47,7 +51,21 @@ extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
  */
 extern RelOptInfo *plan_set_operations(PlannerInfo *root);
 
-extern void expand_inherited_tables(PlannerInfo *root);
+extern void expand_inherited_rtentry(PlannerInfo *root,
+						 RelOptInfo *rel,
+						 RangeTblEntry *rte,
+						 Index rti);
+extern Index add_inheritance_child_to_query(PlannerInfo *root,
+							   RangeTblEntry *parentrte,
+							   Relation childrel,
+							   AppendRelInfo *appinfo,
+							   PlanRowMark *top_parentrc,
+							   RangeTblEntry **childrte_p);
+extern Index get_inheritance_root_parent(PlannerInfo *root, RelOptInfo *rel);
+extern void make_inh_translation_list(TupleDesc old_tupdesc,
+						  TupleDesc new_tupdesc,
+						  Oid from_rel, Oid to_rel,
+						  Index newvarno, List **translated_vars);
 
 extern Node *adjust_appendrel_attrs(PlannerInfo *root, Node *node,
 					   int nappinfos, AppendRelInfo **appinfos);

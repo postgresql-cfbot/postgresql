@@ -15,6 +15,7 @@
 #define PATHNODE_H
 
 #include "nodes/bitmapset.h"
+#include "nodes/plannodes.h"
 #include "nodes/relation.h"
 
 
@@ -261,6 +262,8 @@ extern Path *reparameterize_path_by_child(PlannerInfo *root, Path *path,
  */
 extern void setup_simple_rel_arrays(PlannerInfo *root);
 extern void setup_append_rel_array(PlannerInfo *root);
+extern void expand_planner_arrays_for_inheritance(PlannerInfo *root,
+										   int num_children);
 extern RelOptInfo *build_simple_rel(PlannerInfo *root, int relid,
 				 RelOptInfo *parent);
 extern RelOptInfo *find_base_rel(PlannerInfo *root, int relid);
@@ -297,5 +300,15 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 					 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 					 RelOptInfo *parent_joinrel, List *restrictlist,
 					 SpecialJoinInfo *sjinfo, JoinType jointype);
+extern RelOptInfo *build_dummy_partition_rel(PlannerInfo *root,
+									RelOptInfo *parent,
+									int partidx);
+RelOptInfo *build_inheritance_child_rel(PlannerInfo *root, Index childRTindex,
+							RelOptInfo *parent);
+extern RelOptInfo *build_partition_rel(PlannerInfo *root,
+									   RelOptInfo *parent,
+									   Oid partoid,
+									   Index rootRTindex,
+									   PlanRowMark *rootrc);
 
 #endif							/* PATHNODE_H */

@@ -65,7 +65,7 @@ static bool infer_collation_opclass_match(InferenceElem *elem, Relation idxRel,
 							  List *idxExprs);
 static int32 get_rel_data_width(Relation rel, int32 *attr_widths);
 static List *get_relation_constraints(PlannerInfo *root,
-						 Oid relationObjectId, RelOptInfo *rel,
+						 Oid relationObjectId, Index varno,
 						 bool include_notnull);
 static List *build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 				  Relation heapRelation);
@@ -99,14 +99,13 @@ static void set_baserel_partition_key_exprs(Relation relation,
  * cases these are left as zeroes, but sometimes we need to compute attr
  * widths here, and we may as well cache the results for costsize.c.
  *
- * If inhparent is true, all we need to do is set up the attr arrays:
+ * If rte->inh is true, all we need to do is set up the attr arrays:
  * the RelOptInfo actually represents the appendrel formed by an inheritance
  * tree, and so the parent rel's physical size and index information isn't
  * important for it.
  */
 void
-get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
-				  RelOptInfo *rel)
+get_relation_info(PlannerInfo *root, RangeTblEntry *rte, RelOptInfo *rel)
 {
 	Index		varno = rel->relid;
 	Relation	relation;
@@ -118,7 +117,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 * the rewriter or when expand_inherited_rtentry() added it to the query's
 	 * rangetable.
 	 */
-	relation = heap_open(relationObjectId, NoLock);
+	relation = heap_open(rte->relid, NoLock);
 
 	/* Temporary and unlogged relations are inaccessible during recovery. */
 	if (!RelationNeedsWAL(relation) && RecoveryInProgress())
@@ -142,7 +141,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 * must leave it zero for now to avoid bollixing the total_table_pages
 	 * calculation.
 	 */
-	if (!inhparent)
+	if (!rte->inh)
 		estimate_rel_size(relation, rel->attr_widths - rel->min_attr,
 						  &rel->pages, &rel->tuples, &rel->allvisfrac);
 
@@ -153,7 +152,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 * Make list of indexes.  Ignore indexes on system catalogs if told to.
 	 * Don't bother with indexes for an inheritance parent, either.
 	 */
-	if (inhparent ||
+	if (rte->inh ||
 		(IgnoreSystemIndexes && IsSystemRelation(relation)))
 		hasindex = false;
 	else
@@ -442,14 +441,22 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	}
 
 	/* Collect info about relation's foreign keys, if relevant */
-	get_relation_foreign_keys(root, rel, relation, inhparent);
+	get_relation_foreign_keys(root, rel, relation, rte->inh);
 
 	/*
 	 * Collect info about relation's partitioning scheme, if any. Only
 	 * inheritance parents may be partitioned.
 	 */
-	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	if (rte->inh && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
 		set_relation_partition_info(root, rel, relation);
+		if (!root->partColsUpdated)
+			root->partColsUpdated =
+				has_partition_attrs(relation, rte->updatedCols, NULL);
+	}
+
+	rel->tupdesc = RelationGetDescr(relation);
+	rel->reltype = RelationGetForm(relation)->reltype;
 
 	heap_close(relation, NoLock);
 
@@ -459,7 +466,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 * removing an index, or adding a hypothetical index to the indexlist.
 	 */
 	if (get_relation_info_hook)
-		(*get_relation_info_hook) (root, relationObjectId, inhparent, rel);
+		(*get_relation_info_hook) (root, rte->relid, rte->inh, rel);
 }
 
 /*
@@ -1173,11 +1180,10 @@ get_relation_data_width(Oid relid, int32 *attr_widths)
  */
 static List *
 get_relation_constraints(PlannerInfo *root,
-						 Oid relationObjectId, RelOptInfo *rel,
+						 Oid relationObjectId, Index varno,
 						 bool include_notnull)
 {
 	List	   *result = NIL;
-	Index		varno = rel->relid;
 	Relation	relation;
 	TupleConstr *constr;
 
@@ -1262,36 +1268,6 @@ get_relation_constraints(PlannerInfo *root,
 					result = lappend(result, ntest);
 				}
 			}
-		}
-	}
-
-	/*
-	 * Append partition predicates, if any.
-	 *
-	 * For selects, partition pruning uses the parent table's partition bound
-	 * descriptor, instead of constraint exclusion which is driven by the
-	 * individual partition's partition constraint.
-	 */
-	if (enable_partition_pruning && root->parse->commandType != CMD_SELECT)
-	{
-		List	   *pcqual = RelationGetPartitionQual(relation);
-
-		if (pcqual)
-		{
-			/*
-			 * Run the partition quals through const-simplification similar to
-			 * check constraints.  We skip canonicalize_qual, though, because
-			 * partition quals should be in canonical form already; also,
-			 * since the qual is in implicit-AND format, we'd have to
-			 * explicitly convert it to explicit-AND format and back again.
-			 */
-			pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
-
-			/* Fix Vars to have the desired varno */
-			if (varno != 1)
-				ChangeVarNodes((Node *) pcqual, 1, varno, 0);
-
-			result = list_concat(result, pcqual);
 		}
 	}
 
@@ -1385,15 +1361,15 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
  */
 bool
 relation_excluded_by_constraints(PlannerInfo *root,
-								 RelOptInfo *rel, RangeTblEntry *rte)
+								 List *baserestrictinfo,
+								 Index varno,
+								 Oid table_oid,
+								 bool is_child)
 {
 	List	   *safe_restrictions;
 	List	   *constraint_pred;
 	List	   *safe_constraints;
 	ListCell   *lc;
-
-	/* As of now, constraint exclusion works only with simple relations. */
-	Assert(IS_SIMPLE_REL(rel));
 
 	/*
 	 * Regardless of the setting of constraint_exclusion, detect
@@ -1404,9 +1380,9 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	 * this, we'd miss some optimizations that 9.5 and earlier found via much
 	 * more roundabout methods.)
 	 */
-	if (list_length(rel->baserestrictinfo) == 1)
+	if (list_length(baserestrictinfo) == 1)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) linitial(rel->baserestrictinfo);
+		RestrictInfo *rinfo = (RestrictInfo *) linitial(baserestrictinfo);
 		Expr	   *clause = rinfo->clause;
 
 		if (clause && IsA(clause, Const) &&
@@ -1421,31 +1397,15 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	switch (constraint_exclusion)
 	{
 		case CONSTRAINT_EXCLUSION_OFF:
-
-			/*
-			 * Don't prune if feature turned off -- except if the relation is
-			 * a partition.  While partprune.c-style partition pruning is not
-			 * yet in use for all cases (update/delete is not handled), it
-			 * would be a UI horror to use different user-visible controls
-			 * depending on such a volatile implementation detail.  Therefore,
-			 * for partitioned tables we use enable_partition_pruning to
-			 * control this behavior.
-			 */
-			if (root->inhTargetKind == INHKIND_PARTITIONED)
-				break;
 			return false;
 
 		case CONSTRAINT_EXCLUSION_PARTITION:
 
 			/*
 			 * When constraint_exclusion is set to 'partition' we only handle
-			 * OTHER_MEMBER_RELs, or BASERELs in cases where the result target
-			 * is an inheritance parent or a partitioned table.
+			 * OTHER_MEMBER_RELs.
 			 */
-			if ((rel->reloptkind != RELOPT_OTHER_MEMBER_REL) &&
-				!(rel->reloptkind == RELOPT_BASEREL &&
-				  root->inhTargetKind != INHKIND_NONE &&
-				  rel->relid == root->parse->resultRelation))
+			if (!is_child)
 				return false;
 			break;
 
@@ -1462,7 +1422,7 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	 * expecting to see any in its predicate argument.
 	 */
 	safe_restrictions = NIL;
-	foreach(lc, rel->baserestrictinfo)
+	foreach(lc, baserestrictinfo)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
@@ -1478,24 +1438,10 @@ relation_excluded_by_constraints(PlannerInfo *root,
 		return true;
 
 	/*
-	 * Only plain relations have constraints.  In a partitioning hierarchy,
-	 * but not with regular table inheritance, it's OK to assume that any
-	 * constraints that hold for the parent also hold for every child; for
-	 * instance, table inheritance allows the parent to have constraints
-	 * marked NO INHERIT, but table partitioning does not.  We choose to check
-	 * whether the partitioning parents can be excluded here; doing so
-	 * consumes some cycles, but potentially saves us the work of excluding
-	 * each child individually.
-	 */
-	if (rte->rtekind != RTE_RELATION ||
-		(rte->inh && rte->relkind != RELKIND_PARTITIONED_TABLE))
-		return false;
-
-	/*
 	 * OK to fetch the constraint expressions.  Include "col IS NOT NULL"
 	 * expressions for attnotnull columns, in case we can refute those.
 	 */
-	constraint_pred = get_relation_constraints(root, rte->relid, rel, true);
+	constraint_pred = get_relation_constraints(root, table_oid, varno, true);
 
 	/*
 	 * We do not currently enforce that CHECK constraints contain only
@@ -1526,7 +1472,7 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	 * We need strong refutation because we have to prove that the constraints
 	 * would yield false, not just NULL.
 	 */
-	if (predicate_refuted_by(safe_constraints, rel->baserestrictinfo, false))
+	if (predicate_refuted_by(safe_constraints, baserestrictinfo, false))
 		return true;
 
 	return false;
@@ -1901,16 +1847,20 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 							Relation relation)
 {
 	PartitionDesc partdesc;
-	PartitionKey partkey;
 
 	Assert(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 
 	partdesc = RelationGetPartitionDesc(relation);
-	partkey = RelationGetPartitionKey(relation);
 	rel->part_scheme = find_partition_scheme(root, relation);
 	Assert(partdesc != NULL && rel->part_scheme != NULL);
-	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
 	rel->nparts = partdesc->nparts;
+
+	/*
+	 * Since we must've taken a lock on the table, it's okay to simply copy
+	 * the pointers to relcache data here.
+	 */
+	rel->part_oids = partdesc->oids;
+	rel->boundinfo = partdesc->boundinfo;
 	set_baserel_partition_key_exprs(relation, rel);
 	rel->partition_qual = RelationGetPartitionQual(relation);
 }

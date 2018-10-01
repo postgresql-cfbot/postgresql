@@ -724,6 +724,16 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	preprocess_rowmarks(root);
 
 	/*
+	 * Expand any rangetable entries that are inheritance sets into "append
+	 * relations".  This can add entries to the rangetable, but they must be
+	 * plain base relations not joins, so it's OK (and marginally more
+	 * efficient) to do it after checking for join RTEs.  We must do it after
+	 * pulling up subqueries, else we'd fail to handle inherited tables in
+	 * subqueries.
+	 */
+	expand_inherited_tables(root);
+
+	/*
 	 * Set hasHavingQual to remember if HAVING clause is present.  Needed
 	 * because preprocess_expression will reduce a constant-true condition to
 	 * an empty qual list ... but "HAVING TRUE" is not a semantic no-op.
@@ -2370,7 +2380,7 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc->allMarkTypes = (1 << newrc->markType);
 		newrc->strength = rc->strength;
 		newrc->waitPolicy = rc->waitPolicy;
-		newrc->isParent = has_subclass(rte->relid);
+		newrc->isParent = false;
 
 		prowmarks = lappend(prowmarks, newrc);
 	}
@@ -2395,9 +2405,7 @@ preprocess_rowmarks(PlannerInfo *root)
 		newrc->allMarkTypes = (1 << newrc->markType);
 		newrc->strength = LCS_NONE;
 		newrc->waitPolicy = LockWaitBlock;	/* doesn't matter */
-		newrc->isParent = rte->rtekind == RTE_RELATION ?
-							has_subclass(rte->relid) :
-							false;
+		newrc->isParent = false;
 
 		prowmarks = lappend(prowmarks, newrc);
 	}
@@ -5928,19 +5936,8 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	rte->inFromCl = true;
 	query->rtable = list_make1(rte);
 
-	/* Set up RTE/RelOptInfo arrays. */
-
-	/* Arrays are accessed using RT indexes (1..N) */
-	root->simple_rel_array_size = list_length(query->rtable) + 1;
-
-	/* simple_rel_array is initialized to all NULLs */
-	root->simple_rel_array = (RelOptInfo **)
-		palloc0(root->simple_rel_array_size * sizeof(RelOptInfo *));
-
-	/* simple_rte_array is an array equivalent of the rtable list */
-	root->simple_rte_array = (RangeTblEntry **)
-		palloc0(root->simple_rel_array_size * sizeof(RangeTblEntry *));
-	root->simple_rte_array[1] = rte;
+	/* Set up RTE/RelOptInfo arrays */
+	setup_simple_rel_arrays(root);
 
 	/* Build RelOptInfo */
 	rel = build_simple_rel(root, 1, NULL);

@@ -16,6 +16,7 @@
 
 #include "catalog/pg_type.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_inherits.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
@@ -132,6 +133,58 @@ add_base_rels_to_query(PlannerInfo *root, Node *jtnode)
 			 (int) nodeTag(jtnode));
 }
 
+/*
+ * add_rel_partitions_to_query
+ *		create range table entries and "otherrel" RelOptInfos and for the
+ *		partitions of 'rel' specified by the caller
+ *
+ * To store the objects thus created, various arrays in 'root' are expanded
+ * by repalloc'ing them.
+ */
+void
+add_rel_partitions_to_query(PlannerInfo *root, RelOptInfo *rel,
+							bool scan_all_parts,
+							Bitmapset *partindexes)
+{
+	int			i;
+	Index		rootRTindex;
+	PlanRowMark *rootrc = NULL;
+
+	rootRTindex = get_inheritance_root_parent(root, rel);
+	if (root->rowMarks)
+		rootrc = get_plan_rowmark(root->rowMarks, rootRTindex);
+
+	expand_planner_arrays_for_inheritance(root,
+										  scan_all_parts ? rel->nparts :
+										  bms_num_members(partindexes));
+
+	/* And add the partitions to the relation. */
+	rel->part_rels = (RelOptInfo **)
+				palloc0(sizeof(RelOptInfo *) * rel->nparts);
+	if (scan_all_parts)
+	{
+		for (i = 0; i < rel->nparts; i++)
+		{
+			rel->part_rels[i] = build_partition_rel(root, rel,
+													rel->part_oids[i],
+													rootRTindex,
+													rootrc);
+			rel->live_parts = bms_add_member(rel->live_parts, i);
+		}
+	}
+	else
+	{
+		rel->live_parts = partindexes;
+		i = -1;
+		while ((i = bms_next_member(partindexes, i)) >= 0)
+			rel->part_rels[i] = build_partition_rel(root, rel,
+													rel->part_oids[i],
+													rootRTindex,
+													rootrc);
+	}
+
+
+}
 
 /*****************************************************************************
  *
@@ -617,6 +670,7 @@ create_lateral_join_info(PlannerInfo *root)
 		}
 	}
 
+#ifdef NOT_USED
 	/*
 	 * Lastly, propagate lateral_relids and lateral_referencers from appendrel
 	 * parent rels to their child rels.  We intentionally give each child rel
@@ -674,6 +728,7 @@ create_lateral_join_info(PlannerInfo *root)
 			}
 		}
 	}
+#endif
 }
 
 

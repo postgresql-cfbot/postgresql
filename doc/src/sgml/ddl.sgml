@@ -3933,16 +3933,6 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
     <xref linkend="guc-enable-partition-pruning"/> setting.
    </para>
 
-   <note>
-    <para>
-     Currently, pruning of partitions during the planning of an
-     <command>UPDATE</command> or <command>DELETE</command> command is
-     implemented using the constraint exclusion method (however, it is
-     controlled by the <literal>enable_partition_pruning</literal> rather than
-     <literal>constraint_exclusion</literal>) &mdash; see the following section
-     for details and caveats that apply.
-    </para>
-
     <para>
      Execution-time partition pruning currently occurs for the
      <literal>Append</literal> and <literal>MergeAppend</literal> node types.
@@ -3964,9 +3954,8 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
 
    <para>
     <firstterm>Constraint exclusion</firstterm> is a query optimization
-    technique similar to partition pruning.  While it is primarily used
-    for partitioning implemented using the legacy inheritance method, it can be
-    used for other purposes, including with declarative partitioning.
+    technique similar to partition pruning.  It is primarily used
+    for partitioning implemented using the legacy inheritance method.
    </para>
 
    <para>

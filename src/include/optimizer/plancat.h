@@ -25,8 +25,8 @@ typedef void (*get_relation_info_hook_type) (PlannerInfo *root,
 extern PGDLLIMPORT get_relation_info_hook_type get_relation_info_hook;
 
 
-extern void get_relation_info(PlannerInfo *root, Oid relationObjectId,
-				  bool inhparent, RelOptInfo *rel);
+extern void get_relation_info(PlannerInfo *root, RangeTblEntry *rte,
+						RelOptInfo *rel);
 
 extern List *infer_arbiter_indexes(PlannerInfo *root);
 
@@ -36,7 +36,10 @@ extern void estimate_rel_size(Relation rel, int32 *attr_widths,
 extern int32 get_relation_data_width(Oid relid, int32 *attr_widths);
 
 extern bool relation_excluded_by_constraints(PlannerInfo *root,
-								 RelOptInfo *rel, RangeTblEntry *rte);
+								 List *baserestrictinfo,
+								 Index varno,
+								 Oid table_oid,
+								 bool is_child);
 
 extern List *build_physical_tlist(PlannerInfo *root, RelOptInfo *rel);
 

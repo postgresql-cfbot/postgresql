@@ -45,7 +45,9 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
+#include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/predtest.h"
 #include "optimizer/prep.h"
@@ -437,26 +439,26 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		 * is, not pruned already).
 		 */
 		subplan_map = (int *) palloc(nparts * sizeof(int));
+		memset(subplan_map, -1, nparts * sizeof(int));
 		subpart_map = (int *) palloc(nparts * sizeof(int));
-		present_parts = NULL;
+		memset(subpart_map, -1, nparts * sizeof(int));
+		Assert(IS_SIMPLE_REL(subpart));
+		present_parts = bms_copy(subpart->live_parts);
 
-		for (i = 0; i < nparts; i++)
+		i = -1;
+		while ((i = bms_next_member(present_parts, i)) >= 0)
 		{
 			RelOptInfo *partrel = subpart->part_rels[i];
-			int			subplanidx = relid_subplan_map[partrel->relid] - 1;
-			int			subpartidx = relid_subpart_map[partrel->relid] - 1;
+			int			subplanidx;
+			int			subpartidx;
 
+			subplanidx = relid_subplan_map[partrel->relid] - 1;
+			subpartidx = relid_subpart_map[partrel->relid] - 1;
 			subplan_map[i] = subplanidx;
 			subpart_map[i] = subpartidx;
+			/* Record finding this subplan  */
 			if (subplanidx >= 0)
-			{
-				present_parts = bms_add_member(present_parts, i);
-
-				/* Record finding this subplan  */
 				subplansfound = bms_add_member(subplansfound, subplanidx);
-			}
-			else if (subpartidx >= 0)
-				present_parts = bms_add_member(present_parts, i);
 		}
 
 		rte = root->simple_rte_array[subpart->relid];
@@ -548,61 +550,67 @@ gen_partprune_steps(RelOptInfo *rel, List *clauses, bool *contradictory)
  *
  * Callers must ensure that 'rel' is a partitioned table.
  */
-Relids
-prune_append_rel_partitions(RelOptInfo *rel)
+void
+prune_append_rel_partitions(PlannerInfo *root, RelOptInfo *rel)
 {
-	Relids		result;
 	List	   *clauses = rel->baserestrictinfo;
 	List	   *pruning_steps;
-	bool		contradictory;
+	bool		contradictory,
+				scan_all_parts = false;
 	PartitionPruneContext context;
-	Bitmapset  *partindexes;
-	int			i;
+	Bitmapset  *partindexes = NULL;
 
-	Assert(clauses != NIL);
 	Assert(rel->part_scheme != NULL);
 
 	/* If there are no partitions, return the empty set */
 	if (rel->nparts == 0)
-		return NULL;
+		return;
 
-	/*
-	 * Process clauses.  If the clauses are found to be contradictory, we can
-	 * return the empty set.
-	 */
-	pruning_steps = gen_partprune_steps(rel, clauses, &contradictory);
-	if (contradictory)
-		return NULL;
-
-	/* Set up PartitionPruneContext */
-	context.strategy = rel->part_scheme->strategy;
-	context.partnatts = rel->part_scheme->partnatts;
-	context.nparts = rel->nparts;
-	context.boundinfo = rel->boundinfo;
-	context.partcollation = rel->part_scheme->partcollation;
-	context.partsupfunc = rel->part_scheme->partsupfunc;
-	context.stepcmpfuncs = (FmgrInfo *) palloc0(sizeof(FmgrInfo) *
+	if (enable_partition_pruning && clauses != NIL)
+	{
+		/*
+		 * Process clauses.  If the clauses are found to be contradictory, we
+		 * can return the empty set.
+		 */
+		pruning_steps = gen_partprune_steps(rel, clauses, &contradictory);
+		if (!contradictory)
+		{
+			context.strategy = rel->part_scheme->strategy;
+			context.partnatts = rel->part_scheme->partnatts;
+			context.nparts = rel->nparts;
+			context.boundinfo = rel->boundinfo;
+			context.partcollation = rel->part_scheme->partcollation;
+			context.partsupfunc = rel->part_scheme->partsupfunc;
+			context.stepcmpfuncs = (FmgrInfo *)
+										palloc0(sizeof(FmgrInfo) *
 												context.partnatts *
 												list_length(pruning_steps));
-	context.ppccontext = CurrentMemoryContext;
+			context.ppccontext = CurrentMemoryContext;
 
-	/* These are not valid when being called from the planner */
-	context.partrel = NULL;
-	context.planstate = NULL;
-	context.exprstates = NULL;
-	context.exprhasexecparam = NULL;
-	context.evalexecparams = false;
+			/* These are not valid when being called from the planner */
+			context.partrel = NULL;
+			context.planstate = NULL;
+			context.exprstates = NULL;
+			context.exprhasexecparam = NULL;
+			context.evalexecparams = false;
 
-	/* Actual pruning happens here. */
-	partindexes = get_matching_partitions(&context, pruning_steps);
+			/* Actual pruning happens here. */
+			partindexes = get_matching_partitions(&context, pruning_steps);
 
-	/* Add selected partitions' RT indexes to result. */
-	i = -1;
-	result = NULL;
-	while ((i = bms_next_member(partindexes, i)) >= 0)
-		result = bms_add_member(result, rel->part_rels[i]->relid);
+			/* No need to add partitions if all were pruned. */
+			if (bms_is_empty(partindexes))
+				return;
+		}
+	}
+	else
+		scan_all_parts = true;
 
-	return result;
+	/*
+	 * Build selected partitions' range table entries, RelOptInfos, and
+	 * AppendRelInfos.
+	 */
+	if (scan_all_parts || !bms_is_empty(partindexes))
+		add_rel_partitions_to_query(root, rel, scan_all_parts, partindexes);
 }
 
 /*

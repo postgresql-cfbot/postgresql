@@ -16,6 +16,10 @@
 
 #include <limits.h>
 
+#include "access/heapam.h"
+#include "catalog/partition.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_inherits.h"
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
@@ -23,11 +27,15 @@
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
+#include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "partitioning/partbounds.h"
+#include "rewrite/rewriteManip.h"
+#include "storage/lockdefs.h"
 #include "utils/hsearch.h"
+#include "utils/rel.h"
 
 
 typedef struct JoinHashEntry
@@ -89,6 +97,13 @@ setup_simple_rel_arrays(PlannerInfo *root)
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
 
+		/*
+		 * If a table has no inheritance children, then turn off
+		 * inheritance so that further plannig steps process it as a
+		 * regular table.
+		 */
+		if (rte->rtekind == RTE_RELATION && !has_subclass(rte->relid))
+			rte->inh = false;
 		root->simple_rte_array[rti++] = rte;
 	}
 }
@@ -142,6 +157,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 
 	/* Rel should not exist already */
 	Assert(relid > 0 && relid < root->simple_rel_array_size);
+
 	if (root->simple_rel_array[relid] != NULL)
 		elog(ERROR, "rel %d already exists", relid);
 
@@ -224,7 +240,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	{
 		case RTE_RELATION:
 			/* Table --- retrieve statistics from the system catalogs */
-			get_relation_info(root, rte->relid, rte->inh, rel);
+			get_relation_info(root, rte, rel);
 			break;
 		case RTE_SUBQUERY:
 		case RTE_FUNCTION:
@@ -265,51 +281,29 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		root->qual_security_level = Max(root->qual_security_level,
 										list_length(rte->securityQuals));
 
+#ifdef NOT_USED
 	/*
 	 * If this rel is an appendrel parent, recurse to build "other rel"
 	 * RelOptInfos for its children.  They are "other rels" because they are
 	 * not in the main join tree, but we will need RelOptInfos to plan access
 	 * to them.
 	 */
-	if (rte->inh)
+	if (rte->inh && rte->rtekind == RTE_SUBQUERY)
 	{
 		ListCell   *l;
-		int			nparts = rel->nparts;
-		int			cnt_parts = 0;
-
-		if (nparts > 0)
-			rel->part_rels = (RelOptInfo **)
-				palloc(sizeof(RelOptInfo *) * nparts);
 
 		foreach(l, root->append_rel_list)
 		{
 			AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
-			RelOptInfo *childrel;
 
 			/* append_rel_list contains all append rels; ignore others */
 			if (appinfo->parent_relid != relid)
 				continue;
 
-			childrel = build_simple_rel(root, appinfo->child_relid,
-										rel);
-
-			/* Nothing more to do for an unpartitioned table. */
-			if (!rel->part_scheme)
-				continue;
-
-			/*
-			 * The order of partition OIDs in append_rel_list is the same as
-			 * the order in the PartitionDesc, so the order of part_rels will
-			 * also match the PartitionDesc.  See expand_partitioned_rtentry.
-			 */
-			Assert(cnt_parts < nparts);
-			rel->part_rels[cnt_parts] = childrel;
-			cnt_parts++;
+			(void) build_simple_rel(root, appinfo->child_relid, rel);
 		}
-
-		/* We should have seen all the child partitions. */
-		Assert(cnt_parts == nparts);
 	}
+#endif
 
 	return rel;
 }
@@ -1747,6 +1741,9 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		joinrel->partexprs[cnt] = partexpr;
 		joinrel->nullable_partexprs[cnt] = nullable_partexpr;
 	}
+
+	/* Partitions will be added by try_partitionwise_join. */
+	joinrel->live_parts = NULL;
 }
 
 /*
@@ -1770,4 +1767,237 @@ build_child_join_reltarget(PlannerInfo *root,
 	childrel->reltarget->cost.startup = parentrel->reltarget->cost.startup;
 	childrel->reltarget->cost.per_tuple = parentrel->reltarget->cost.per_tuple;
 	childrel->reltarget->width = parentrel->reltarget->width;
+}
+
+/* Expand the PlannerInfo arrays to hold new inheritance children objects. */
+void
+expand_planner_arrays_for_inheritance(PlannerInfo *root, int num_children)
+{
+	int		new_size = root->simple_rel_array_size + num_children;
+
+	root->simple_rte_array = (RangeTblEntry **)
+							repalloc(root->simple_rte_array,
+									 sizeof(RangeTblEntry *) * new_size);
+	root->simple_rel_array = (RelOptInfo **)
+								repalloc(root->simple_rel_array,
+										 sizeof(RelOptInfo *) * new_size);
+	if (root->append_rel_array)
+		root->append_rel_array = (AppendRelInfo **)
+									repalloc(root->append_rel_array,
+									 sizeof(AppendRelInfo *) * new_size);
+	else
+		root->append_rel_array = (AppendRelInfo **)
+									palloc0(sizeof(AppendRelInfo *) *
+											new_size);
+
+	/* Set the contents of just allocated memory to 0. */
+	MemSet(root->simple_rte_array + root->simple_rel_array_size,
+		   0, sizeof(RangeTblEntry *) * num_children);
+	MemSet(root->simple_rel_array + root->simple_rel_array_size,
+		   0, sizeof(RelOptInfo *) * num_children);
+	MemSet(root->append_rel_array + root->simple_rel_array_size,
+		   0, sizeof(AppendRelInfo *) * num_children);
+	root->simple_rel_array_size = new_size;
+}
+
+/*
+ * build_dummy_partition_rel
+ *		Build a RelOptInfo and AppendRelInfo for a pruned partition
+ *
+ * This does not result in opening the relation or a range table entry being
+ * created.  Also, the RelOptInfo thus created is not stored anywhere else
+ * beside the parent's part_rels array.
+ *
+ * The only reason this exists is because partition-wise join, in some cases,
+ * needs a RelOptInfo to represent an empty relation that's on the nullable
+ * side of an outer join, so that a Path representing the outer join can be
+ * created.
+ */
+RelOptInfo *
+build_dummy_partition_rel(PlannerInfo *root, RelOptInfo *parent, int partidx)
+{
+	RelOptInfo *rel;
+
+	Assert(parent->part_rels[partidx] == NULL);
+
+	/* Create minimally valid-looking RelOptInfo with parent's relid. */
+	rel = makeNode(RelOptInfo);
+	rel->reloptkind = RELOPT_OTHER_MEMBER_REL;
+	rel->relid = parent->relid;
+	rel->relids = bms_copy(parent->relids);
+	if (parent->top_parent_relids)
+		rel->top_parent_relids = parent->top_parent_relids;
+	else
+		rel->top_parent_relids = bms_copy(parent->relids);
+	rel->reltarget = copy_pathtarget(parent->reltarget);
+	parent->part_rels[partidx] = rel;
+	mark_dummy_rel(rel);
+
+	/*
+	 * Now we'll need a (noop) AppendRelInfo for parent, because we're setting
+	 * the dummy partition's relid to be same as the parent's.
+	 */
+	if (root->append_rel_array[parent->relid] == NULL)
+	{
+		AppendRelInfo *appinfo = makeNode(AppendRelInfo);
+
+		appinfo->parent_relid = parent->relid;
+		appinfo->child_relid = parent->relid;
+		appinfo->parent_reltype = parent->reltype;
+		appinfo->child_reltype = parent->reltype;
+		/* leaving translated_vars to NIL to mean no translation needed */
+		appinfo->parent_reloid = root->simple_rte_array[parent->relid]->relid;
+		root->append_rel_array[parent->relid] = appinfo;
+	}
+
+	return rel;
+}
+
+/*
+ * build_partition_rel
+ *		This adds a valid partition to the query by adding it to the
+ *		range table and creating planner data structures for it
+ */
+RelOptInfo *
+build_partition_rel(PlannerInfo *root,
+					RelOptInfo *parent,
+					Oid partoid,
+					Index rootRTindex,
+					PlanRowMark *rootrc)
+{
+	RangeTblEntry *parentrte = root->simple_rte_array[parent->relid];
+	RangeTblEntry *partrte;
+	Relation	partrel;
+	PartitionDesc partdesc;
+	Index		partRTindex = 0;
+	AppendRelInfo *appinfo;
+	int			lockmode;
+
+	/* Determine the correct lockmode to use. */
+	if (rootRTindex == root->parse->resultRelation)
+		lockmode = RowExclusiveLock;
+	else if (rootrc && RowMarkRequiresRowShareLock(rootrc->markType))
+		lockmode = RowShareLock;
+	else
+		lockmode = AccessShareLock;
+
+	partrel = heap_open(partoid, lockmode);
+	Assert(!RELATION_IS_OTHER_TEMP(partrel));
+	partdesc = RelationGetPartitionDesc(partrel);
+	if (partdesc && partdesc->nparts == 0)
+	{
+		heap_close(partrel, NoLock);
+		return NULL;
+	}
+
+	appinfo = makeNode(AppendRelInfo);
+	appinfo->parent_relid = parent->relid;
+	appinfo->child_relid = 0;	/* Set to correct value below. */
+	appinfo->parent_reltype = parent->reltype;
+	appinfo->child_reltype = partrel->rd_rel->reltype;
+	make_inh_translation_list(parent->tupdesc,
+							  RelationGetDescr(partrel),
+							  parentrte->relid, partoid,
+							  parent->relid,
+							  &appinfo->translated_vars);
+	appinfo->parent_reloid = parentrte->relid;
+
+	partRTindex = add_inheritance_child_to_query(root, parentrte, partrel,
+												 appinfo, rootrc, &partrte);
+	heap_close(partrel, NoLock);
+
+	Assert(partrte != NULL);
+
+	/* Fix up the AppendRelInfo with correct child RT index. */
+	appinfo->child_relid = partRTindex;
+	ChangeVarNodes((Node *) appinfo->translated_vars, parent->relid,
+				   partRTindex, 0);
+
+	root->append_rel_list = lappend(root->append_rel_list, appinfo);
+	root->simple_rte_array[partRTindex] = partrte;
+	root->append_rel_array[partRTindex] = appinfo;
+
+	return build_inheritance_child_rel(root, partRTindex, parent);
+}
+
+RelOptInfo *
+build_inheritance_child_rel(PlannerInfo *root, Index childRTindex,
+							RelOptInfo *parent)
+{
+	Relids		top_parent_relids = parent->top_parent_relids;
+	int			rootParentRTindex = top_parent_relids ?
+									bms_singleton_member(top_parent_relids) :
+									parent->relid;
+	AppendRelInfo *appinfo = root->append_rel_array[childRTindex];
+	/* Build the RelOptInfo. */
+	RelOptInfo *childrel = build_simple_rel(root, childRTindex, parent);
+
+	/*
+	 * Propagate lateral_relids and lateral_referencers from appendrel
+	 * parent rels to their child rels.  We intentionally give each child rel
+	 * the same minimum parameterization, even though it's quite possible that
+	 * some don't reference all the lateral rels.  This is because any append
+	 * path for the parent will have to have the same parameterization for
+	 * every child anyway, and there's no value in forcing extra
+	 * reparameterize_path() calls.  Similarly, a lateral reference to the
+	 * parent prevents use of otherwise-movable join rels for each child.
+	 */
+	childrel->direct_lateral_relids = parent->direct_lateral_relids;
+	childrel->lateral_relids = parent->lateral_relids;
+	childrel->lateral_referencers = parent->lateral_referencers;
+
+		/*
+		 * Copy/Modify targetlist. Even if this child is deemed empty, we need
+		 * its targetlist in case it falls on nullable side in a child-join
+		 * because of partitionwise join.
+		 *
+		 * NB: the resulting childrel->reltarget->exprs may contain arbitrary
+		 * expressions, which otherwise would not occur in a rel's targetlist.
+		 * Code that might be looking at an appendrel child must cope with
+		 * such.  (Normally, a rel's targetlist would only include Vars and
+		 * PlaceHolderVars.)  XXX we do not bother to update the cost or width
+		 * fields of childrel->reltarget; not clear if that would be useful.
+		 */
+		if (rootParentRTindex == root->parse->resultRelation)
+		{
+			Query	   *parse,
+					   *orig_parse = root->parse;
+			List	   *tlist;
+			List	   *other_exprs;
+			ListCell   *lc2;
+
+			parse = (Query *)
+					adjust_appendrel_attrs(root,
+										   (Node *) root->parse,
+										   1, &appinfo);
+			root->parse = parse;
+			tlist = preprocess_targetlist(root);
+			build_base_rel_tlists(root, tlist);
+			root->parse = orig_parse;
+
+			/*
+			 * Now add members of parent's reltarget->exprs, not already in
+			 * child's.
+			 */
+			other_exprs = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) parent->reltarget->exprs,
+									   1, &appinfo);
+			foreach(lc2, other_exprs)
+			{
+				if (!list_member(childrel->reltarget->exprs, lfirst(lc2)))
+					childrel->reltarget->exprs =
+								lappend(childrel->reltarget->exprs,
+										lfirst(lc2));
+			}
+		}
+		else
+		{
+			childrel->reltarget->exprs = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) parent->reltarget->exprs,
+									   1, &appinfo);
+		}
+
+	return childrel;
 }

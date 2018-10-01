@@ -15,6 +15,7 @@
 #define RELATION_H
 
 #include "access/sdir.h"
+#include "access/tupdesc.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "nodes/params.h"
@@ -319,9 +320,6 @@ typedef struct PlannerInfo
 	Index		qual_security_level;	/* minimum security_level for quals */
 	/* Note: qual_security_level is zero if there are no securityQuals */
 
-	InheritanceKind inhTargetKind;	/* indicates if the target relation is an
-									 * inheritance child or partition or a
-									 * partitioned table */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */
 	bool		hasLateralRTEs; /* true if any RTEs are marked LATERAL */
 	bool		hasDeletedRTEs; /* true if any RTE was deleted from jointree */
@@ -343,6 +341,9 @@ typedef struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* RelOptInfo of child joinrels of an inherited update/delete operation */
+	List	   *inh_target_child_rels;
 } PlannerInfo;
 
 
@@ -699,11 +700,15 @@ typedef struct RelOptInfo
 	int			nparts;			/* number of partitions */
 	struct PartitionBoundInfoData *boundinfo;	/* Partition bounds */
 	List	   *partition_qual; /* partition constraint */
+	Oid		   *part_oids;		/* partition OIDs */
 	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of partitions,
 									 * stored in the same order of bounds */
+	Bitmapset  *live_parts;		/* unpruned parts; NULL if all are live */
 	List	  **partexprs;		/* Non-nullable partition key expressions. */
 	List	  **nullable_partexprs; /* Nullable partition key expressions. */
 	List	   *partitioned_child_rels; /* List of RT indexes. */
+	TupleDesc	tupdesc;
+	Oid			reltype;
 } RelOptInfo;
 
 /*

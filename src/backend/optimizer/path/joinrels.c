@@ -1376,6 +1376,11 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		AppendRelInfo **appinfos;
 		int			nappinfos;
 
+		if (child_rel1 == NULL)
+			child_rel1 = build_dummy_partition_rel(root, rel1, cnt_parts);
+		if (child_rel2 == NULL)
+			child_rel2 = build_dummy_partition_rel(root, rel2, cnt_parts);
+
 		/* We should never try to join two overlapping sets of rels. */
 		Assert(!bms_overlap(child_rel1->relids, child_rel2->relids));
 		child_joinrelids = bms_union(child_rel1->relids, child_rel2->relids);
@@ -1414,6 +1419,9 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
 									child_joinrel, child_sjinfo,
 									child_restrictlist);
+		if (!IS_DUMMY_REL(child_joinrel))
+			joinrel->live_parts = bms_add_member(joinrel->live_parts,
+												 cnt_parts);
 	}
 }
 

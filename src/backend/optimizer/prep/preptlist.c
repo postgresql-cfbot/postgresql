@@ -76,7 +76,6 @@ preprocess_targetlist(PlannerInfo *root)
 	RangeTblEntry *target_rte = NULL;
 	Relation	target_relation = NULL;
 	List	   *tlist;
-	ListCell   *lc;
 
 	/*
 	 * If there is a result relation, open it so we can look for missing
@@ -118,12 +117,78 @@ preprocess_targetlist(PlannerInfo *root)
 		tlist = expand_targetlist(tlist, command_type,
 								  result_relation, target_relation);
 
+
+	tlist = add_rowmark_columns(root, tlist, root->rowMarks);
+
 	/*
-	 * Add necessary junk columns for rowmarked rels.  These values are needed
-	 * for locking of rels selected FOR UPDATE/SHARE, and to do EvalPlanQual
-	 * rechecking.  See comments for PlanRowMark in plannodes.h.
+	 * If the query has a RETURNING list, add resjunk entries for any Vars
+	 * used in RETURNING that belong to other relations.  We need to do this
+	 * to make these Vars available for the RETURNING calculation.  Vars that
+	 * belong to the result rel don't need to be added, because they will be
+	 * made to refer to the actual heap tuple.
 	 */
-	foreach(lc, root->rowMarks)
+	if (parse->returningList && list_length(parse->rtable) > 1)
+	{
+		List	   *vars;
+		ListCell   *l;
+
+		vars = pull_var_clause((Node *) parse->returningList,
+							   PVC_RECURSE_AGGREGATES |
+							   PVC_RECURSE_WINDOWFUNCS |
+							   PVC_INCLUDE_PLACEHOLDERS);
+		foreach(l, vars)
+		{
+			Var		   *var = (Var *) lfirst(l);
+			TargetEntry *tle;
+
+			if (IsA(var, Var) &&
+				var->varno == result_relation)
+				continue;		/* don't need it */
+
+			if (tlist_member((Expr *) var, tlist))
+				continue;		/* already got it */
+
+			tle = makeTargetEntry((Expr *) var,
+								  list_length(tlist) + 1,
+								  NULL,
+								  true);
+
+			tlist = lappend(tlist, tle);
+		}
+		list_free(vars);
+	}
+
+	/*
+	 * If there's an ON CONFLICT UPDATE clause, preprocess its targetlist too
+	 * while we have the relation open.
+	 */
+	if (parse->onConflict)
+		parse->onConflict->onConflictSet =
+			expand_targetlist(parse->onConflict->onConflictSet,
+							  CMD_UPDATE,
+							  result_relation,
+							  target_relation);
+
+	if (target_relation)
+		heap_close(target_relation, NoLock);
+
+	return tlist;
+}
+
+/*
+ * add_rowmark_columns
+ *
+ * Add necessary junk columns for rowmarked rels.  These values are needed
+ * for locking of rels selected FOR UPDATE/SHARE, and to do EvalPlanQual
+ * rechecking.  See comments for PlanRowMark in plannodes.h.
+ */
+List *
+add_rowmark_columns(PlannerInfo *root, List *tlist, List *rowMarks)
+{
+	List	   *range_table = root->parse->rtable;
+	ListCell   *lc;
+
+	foreach(lc, rowMarks)
 	{
 		PlanRowMark *rc = (PlanRowMark *) lfirst(lc);
 		Var		   *var;
@@ -182,58 +247,6 @@ preprocess_targetlist(PlannerInfo *root)
 			tlist = lappend(tlist, tle);
 		}
 	}
-
-	/*
-	 * If the query has a RETURNING list, add resjunk entries for any Vars
-	 * used in RETURNING that belong to other relations.  We need to do this
-	 * to make these Vars available for the RETURNING calculation.  Vars that
-	 * belong to the result rel don't need to be added, because they will be
-	 * made to refer to the actual heap tuple.
-	 */
-	if (parse->returningList && list_length(parse->rtable) > 1)
-	{
-		List	   *vars;
-		ListCell   *l;
-
-		vars = pull_var_clause((Node *) parse->returningList,
-							   PVC_RECURSE_AGGREGATES |
-							   PVC_RECURSE_WINDOWFUNCS |
-							   PVC_INCLUDE_PLACEHOLDERS);
-		foreach(l, vars)
-		{
-			Var		   *var = (Var *) lfirst(l);
-			TargetEntry *tle;
-
-			if (IsA(var, Var) &&
-				var->varno == result_relation)
-				continue;		/* don't need it */
-
-			if (tlist_member((Expr *) var, tlist))
-				continue;		/* already got it */
-
-			tle = makeTargetEntry((Expr *) var,
-								  list_length(tlist) + 1,
-								  NULL,
-								  true);
-
-			tlist = lappend(tlist, tle);
-		}
-		list_free(vars);
-	}
-
-	/*
-	 * If there's an ON CONFLICT UPDATE clause, preprocess its targetlist too
-	 * while we have the relation open.
-	 */
-	if (parse->onConflict)
-		parse->onConflict->onConflictSet =
-			expand_targetlist(parse->onConflict->onConflictSet,
-							  CMD_UPDATE,
-							  result_relation,
-							  target_relation);
-
-	if (target_relation)
-		heap_close(target_relation, NoLock);
 
 	return tlist;
 }

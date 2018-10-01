@@ -302,11 +302,8 @@ typedef enum
 
 	/*
 	 * CSTATE_START_TX performs start-of-transaction processing.  Establishes
-	 * a new connection for the transaction, in --connect mode, records
-	 * the transaction start time, and proceed to the first command.
-	 *
-	 * Note: once a script is started, it will either error or run till
-	 * its end, where it may be interrupted.
+	 * a new connection for the transaction, in --connect mode, and records
+	 * the transaction start time.
 	 */
 	CSTATE_START_TX,
 
@@ -339,10 +336,9 @@ typedef enum
 	/*
 	 * CSTATE_END_TX performs end-of-transaction processing.  Calculates
 	 * latency, and logs the transaction.  In --connect mode, closes the
-	 * current connection.
-	 *
-	 * Then either starts over in CSTATE_CHOOSE_SCRIPT, or enters CSTATE_FINISHED
-	 * if we have no more work to do.
+	 * current connection.  Chooses the next script to execute and starts over
+	 * in CSTATE_START_THROTTLE state, or enters CSTATE_FINISHED if we have no
+	 * more work to do.
 	 */
 	CSTATE_END_TX,
 
@@ -2788,6 +2784,12 @@ evaluateSleep(CState *st, int argc, char **argv, int *usecs)
 static void
 doCustom(TState *thread, CState *st, StatsData *agg)
 {
+	PGresult   *res;
+	Command    *command;
+	instr_time	now;
+	bool		end_tx_processed = false;
+	int64		wait;
+
 	/*
 	 * gettimeofday() isn't free, so we get the current timestamp lazily the
 	 * first time it's needed, and reuse the same value throughout this
@@ -2796,44 +2798,37 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 	 * means "not set yet".  Reset "now" when we execute shell commands or
 	 * expressions, which might take a non-negligible amount of time, though.
 	 */
-	instr_time	now;
 	INSTR_TIME_SET_ZERO(now);
 
 	/*
 	 * Loop in the state machine, until we have to wait for a result from the
-	 * server or have to sleep for throttling or \sleep.
+	 * server (or have to sleep, for throttling or for \sleep).
 	 *
 	 * Note: In the switch-statement below, 'break' will loop back here,
 	 * meaning "continue in the state machine".  Return is used to return to
-	 * the caller, giving the thread opportunity to move forward another client.
+	 * the caller.
 	 */
 	for (;;)
 	{
-		PGresult   *res;
-		Command    *command;
-
 		switch (st->state)
 		{
 				/*
 				 * Select transaction to run.
 				 */
 			case CSTATE_CHOOSE_SCRIPT:
+
 				st->use_file = chooseScript(thread);
 
 				if (debug)
 					fprintf(stderr, "client %d executing script \"%s\"\n", st->id,
 							sql_script[st->use_file].desc);
 
-				/* check stack consistency */
-				Assert(conditional_stack_empty(st->cstack));
-
-				if (timer_exceeded)
-					st->state = CSTATE_FINISHED;
-				else if (throttle_delay > 0)
+				if (throttle_delay > 0)
 					st->state = CSTATE_START_THROTTLE;
 				else
 					st->state = CSTATE_START_TX;
-
+				/* check consistency */
+				Assert(conditional_stack_empty(st->cstack));
 				break;
 
 				/*
@@ -2851,9 +2846,20 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 				 * away.
 				 */
 				Assert(throttle_delay > 0);
+				wait = getPoissonRand(thread, throttle_delay);
 
-				thread->throttle_trigger += getPoissonRand(thread, throttle_delay);
+				thread->throttle_trigger += wait;
 				st->txn_scheduled = thread->throttle_trigger;
+
+				/*
+				 * stop client if next transaction is beyond pgbench end of
+				 * execution
+				 */
+				if (duration > 0 && st->txn_scheduled > end_time)
+				{
+					st->state = CSTATE_FINISHED;
+					break;
+				}
 
 				/*
 				 * If --latency-limit is used, and this slot is already late
@@ -2868,19 +2874,17 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 
 					if (INSTR_TIME_IS_ZERO(now))
 						INSTR_TIME_SET_CURRENT(now);
-
 					now_us = INSTR_TIME_GET_MICROSEC(now);
-
 					while (thread->throttle_trigger < now_us - latency_limit &&
 						   (nxacts <= 0 || st->cnt < nxacts))
 					{
 						processXactStats(thread, st, &now, true, agg);
 						/* next rendez-vous */
-						thread->throttle_trigger += getPoissonRand(thread, throttle_delay);
+						wait = getPoissonRand(thread, throttle_delay);
+						thread->throttle_trigger += wait;
 						st->txn_scheduled = thread->throttle_trigger;
 					}
-
-					/* stop client if -t was exceeded in the previous skip loop */
+					/* stop client if -t exceeded */
 					if (nxacts > 0 && st->cnt >= nxacts)
 					{
 						st->state = CSTATE_FINISHED;
@@ -2888,35 +2892,23 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					}
 				}
 
-				/*
-				 * stop client if next transaction is beyond pgbench end of
-				 * execution.
-				 */
-				if (duration > 0 && st->txn_scheduled > end_time)
-				{
-					st->state = CSTATE_FINISHED;
-					break;
-				}
-
 				st->state = CSTATE_THROTTLE;
+				if (debug)
+					fprintf(stderr, "client %d throttling " INT64_FORMAT " us\n",
+							st->id, wait);
 				break;
 
 				/*
 				 * Wait until it's time to start next transaction.
 				 */
 			case CSTATE_THROTTLE:
-
 				if (INSTR_TIME_IS_ZERO(now))
 					INSTR_TIME_SET_CURRENT(now);
-
 				if (INSTR_TIME_GET_MICROSEC(now) < st->txn_scheduled)
-					return;		/* still sleeping, nothing to do here */
+					return;		/* Still sleeping, nothing to do here */
 
-				/* done sleeping, but do not start if transaction if we are done */
-				if (timer_exceeded)
-					st->state = CSTATE_FINISHED;
-				else
-					st->state = CSTATE_START_TX;
+				/* Else done sleeping, start the transaction */
+				st->state = CSTATE_START_TX;
 				break;
 
 				/* Start new transaction */
@@ -2947,21 +2939,28 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					memset(st->prepared, 0, sizeof(st->prepared));
 				}
 
-				/* record transaction start time.  */
-				if (INSTR_TIME_IS_ZERO(now))
-					INSTR_TIME_SET_CURRENT(now);
-				st->txn_begin = now;
-
 				/*
-				 * When not throttling, this is also the transaction's
-				 * scheduled start time.
+				 * Record transaction start time under logging, progress or
+				 * throttling.
 				 */
-				if (!throttle_delay)
-					st->txn_scheduled = INSTR_TIME_GET_MICROSEC(now);
+				if (use_log || progress || throttle_delay || latency_limit ||
+					per_script_stats)
+				{
+					if (INSTR_TIME_IS_ZERO(now))
+						INSTR_TIME_SET_CURRENT(now);
+					st->txn_begin = now;
+
+					/*
+					 * When not throttling, this is also the transaction's
+					 * scheduled start time.
+					 */
+					if (!throttle_delay)
+						st->txn_scheduled = INSTR_TIME_GET_MICROSEC(now);
+				}
 
 				/* Begin with the first command */
-				st->state = CSTATE_START_COMMAND;
 				st->command = 0;
+				st->state = CSTATE_START_COMMAND;
 				break;
 
 				/*
@@ -2980,12 +2979,17 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					break;
 				}
 
-				/* record statement start time. */
-				if (INSTR_TIME_IS_ZERO(now))
-					INSTR_TIME_SET_CURRENT(now);
-				st->stmt_begin = now;
+				/*
+				 * Record statement start time if per-command latencies are
+				 * requested
+				 */
+				if (is_latencies)
+				{
+					if (INSTR_TIME_IS_ZERO(now))
+						INSTR_TIME_SET_CURRENT(now);
+					st->stmt_begin = now;
+				}
 
-				/* execute the command */
 				if (command->type == SQL_COMMAND)
 				{
 					if (!sendCommand(st, command))
@@ -3030,7 +3034,6 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 
 						if (INSTR_TIME_IS_ZERO(now))
 							INSTR_TIME_SET_CURRENT(now);
-
 						st->sleep_until = INSTR_TIME_GET_MICROSEC(now) + usec;
 						st->state = CSTATE_SLEEP;
 						break;
@@ -3081,7 +3084,10 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 							}
 							else	/* elif */
 							{
-								/* we should get here only if the "elif" needed evaluation */
+								/*
+								 * we should get here only if the "elif"
+								 * needed evaluation
+								 */
 								Assert(conditional_stack_peek(st->cstack) == IFSTATE_FALSE);
 								conditional_stack_poke(st->cstack, cond ? IFSTATE_TRUE : IFSTATE_FALSE);
 							}
@@ -3113,23 +3119,43 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					}
 					else if (command->meta == META_SETSHELL)
 					{
-						if (!runShellCommand(st, argv[1], argv + 2, argc - 2))
+						bool		ret = runShellCommand(st, argv[1], argv + 2, argc - 2);
+
+						if (timer_exceeded) /* timeout */
+						{
+							st->state = CSTATE_FINISHED;
+							break;
+						}
+						else if (!ret)	/* on error */
 						{
 							commandFailed(st, "setshell", "execution of meta-command failed");
 							st->state = CSTATE_ABORTED;
 							break;
 						}
-						/* else success */
+						else
+						{
+							/* succeeded */
+						}
 					}
 					else if (command->meta == META_SHELL)
 					{
-						if (!runShellCommand(st, NULL, argv + 1, argc - 1))
+						bool		ret = runShellCommand(st, NULL, argv + 1, argc - 1);
+
+						if (timer_exceeded) /* timeout */
+						{
+							st->state = CSTATE_FINISHED;
+							break;
+						}
+						else if (!ret)	/* on error */
 						{
 							commandFailed(st, "shell", "execution of meta-command failed");
 							st->state = CSTATE_ABORTED;
 							break;
 						}
-						/* else success */
+						else
+						{
+							/* succeeded */
+						}
 					}
 
 			move_to_end_command:
@@ -3231,7 +3257,6 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					}
 
 					if (st->state != CSTATE_SKIP_COMMAND)
-						/* out of quick skip command loop */
 						break;
 				}
 				break;
@@ -3284,7 +3309,7 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 				if (INSTR_TIME_IS_ZERO(now))
 					INSTR_TIME_SET_CURRENT(now);
 				if (INSTR_TIME_GET_MICROSEC(now) < st->sleep_until)
-					return;		/* still sleeping, nothing to do here */
+					return;		/* Still sleeping, nothing to do here */
 				/* Else done sleeping. */
 				st->state = CSTATE_END_COMMAND;
 				break;
@@ -3299,14 +3324,17 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 				 * in thread-local data structure, if per-command latencies
 				 * are requested.
 				 */
-				if (INSTR_TIME_IS_ZERO(now))
-					INSTR_TIME_SET_CURRENT(now);
+				if (is_latencies)
+				{
+					if (INSTR_TIME_IS_ZERO(now))
+						INSTR_TIME_SET_CURRENT(now);
 
-				/* XXX could use a mutex here, but we choose not to */
-				command = sql_script[st->use_file].commands[st->command];
-				addToSimpleStats(&command->stats,
-								 INSTR_TIME_GET_DOUBLE(now) -
-								 INSTR_TIME_GET_DOUBLE(st->stmt_begin));
+					/* XXX could use a mutex here, but we choose not to */
+					command = sql_script[st->use_file].commands[st->command];
+					addToSimpleStats(&command->stats,
+									 INSTR_TIME_GET_DOUBLE(now) -
+									 INSTR_TIME_GET_DOUBLE(st->stmt_begin));
+				}
 
 				/* Go ahead with next command, to be executed or skipped */
 				st->command++;
@@ -3315,15 +3343,19 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 				break;
 
 				/*
-				 * End of transaction (end of script, really).
+				 * End of transaction.
 				 */
 			case CSTATE_END_TX:
 
 				/* transaction finished: calculate latency and do log */
 				processXactStats(thread, st, &now, false, agg);
 
-				/* missing \endif... cannot happen if CheckConditional was okay */
-				Assert(conditional_stack_empty(st->cstack));
+				/* conditional stack must be empty */
+				if (!conditional_stack_empty(st->cstack))
+				{
+					fprintf(stderr, "end of script reached within a conditional, missing \\endif\n");
+					exit(1);
+				}
 
 				if (is_connect)
 				{
@@ -3337,17 +3369,26 @@ doCustom(TState *thread, CState *st, StatsData *agg)
 					st->state = CSTATE_FINISHED;
 					break;
 				}
+
+				/*
+				 * No transaction is underway anymore.
+				 */
+				st->state = CSTATE_CHOOSE_SCRIPT;
+
+				/*
+				 * If we paced through all commands in the script in this
+				 * loop, without returning to the caller even once, do it now.
+				 * This gives the thread a chance to process other
+				 * connections, and to do progress reporting.  This can
+				 * currently only happen if the script consists entirely of
+				 * meta-commands.
+				 */
+				if (end_tx_processed)
+					return;
 				else
 				{
-					/* next transaction */
-					st->state = CSTATE_CHOOSE_SCRIPT;
-
-					/*
-					 * Ensure that we always return on this point, so as
-					 * to avoid an infinite loop if the script only contains
-					 * meta commands.
-					 */
-					return;
+					end_tx_processed = true;
+					break;
 				}
 
 				/*
@@ -5717,7 +5758,7 @@ threadRun(void *arg)
 
 	if (!is_connect)
 	{
-		/* make connections to the database before starting */
+		/* make connections to the database */
 		for (i = 0; i < nstate; i++)
 		{
 			if ((state[i].con = doConnect()) == NULL)
@@ -5753,7 +5794,14 @@ threadRun(void *arg)
 		{
 			CState	   *st = &state[i];
 
-			if (st->state == CSTATE_SLEEP || st->state == CSTATE_THROTTLE)
+			if (st->state == CSTATE_THROTTLE && timer_exceeded)
+			{
+				/* interrupt client that has not started a transaction */
+				st->state = CSTATE_FINISHED;
+				finishCon(st);
+				remains--;
+			}
+			else if (st->state == CSTATE_SLEEP || st->state == CSTATE_THROTTLE)
 			{
 				/* a nap from the script, or under throttling */
 				int64		this_usec;

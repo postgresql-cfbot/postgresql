@@ -54,6 +54,10 @@ typedef struct TSDictionaryCacheEntry
 	Oid			dictId;
 	bool		isvalid;
 
+	TransactionId dict_xmin;		/* XMIN of the dictionary's tuple */
+	TransactionId dict_xmax;		/* XMAX of the dictionary's tuple */
+	ItemPointerData dict_tid;		/* TID of the dictionary's tuple */
+
 	/* most frequent fmgr call */
 	Oid			lexizeOid;
 	FmgrInfo	lexize;

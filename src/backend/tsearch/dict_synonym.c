@@ -91,7 +91,7 @@ compareSyn(const void *a, const void *b)
 Datum
 dsynonym_init(PG_FUNCTION_ARGS)
 {
-	List	   *dictoptions = (List *) PG_GETARG_POINTER(0);
+	DictInitData *init_data = (DictInitData *) PG_GETARG_POINTER(0);
 	DictSyn    *d;
 	ListCell   *l;
 	char	   *filename = NULL;
@@ -104,7 +104,7 @@ dsynonym_init(PG_FUNCTION_ARGS)
 	char	   *line = NULL;
 	uint16		flags = 0;
 
-	foreach(l, dictoptions)
+	foreach(l, init_data->dict_options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(l);
 

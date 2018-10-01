@@ -201,14 +201,14 @@ locate_stem_module(DictSnowball *d, const char *lang)
 Datum
 dsnowball_init(PG_FUNCTION_ARGS)
 {
-	DictInitData *init_data = (DictInitData *) PG_GETARG_POINTER(0);
+	List	   *dictoptions = (List *) PG_GETARG_POINTER(0);
 	DictSnowball *d;
 	bool		stoploaded = false;
 	ListCell   *l;
 
 	d = (DictSnowball *) palloc0(sizeof(DictSnowball));
 
-	foreach(l, init_data->dict_options)
+	foreach(l, dictoptions)
 	{
 		DefElem    *defel = (DefElem *) lfirst(l);
 

@@ -39,6 +39,7 @@
 #include "nodes/makefuncs.h"
 #include "parser/parse_func.h"
 #include "tsearch/ts_cache.h"
+#include "tsearch/ts_shared.h"
 #include "tsearch/ts_utils.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -386,17 +387,25 @@ verify_dictoptions(Oid tmplId, List *dictoptions)
 	}
 	else
 	{
+		DictInitData init_data;
+
 		/*
 		 * Copy the options just in case init method thinks it can scribble on
 		 * them ...
 		 */
 		dictoptions = copyObject(dictoptions);
 
+		init_data.dict_options = dictoptions;
+		init_data.dict.id = InvalidOid;
+		init_data.dict.xmin = InvalidTransactionId;
+		init_data.dict.xmax = InvalidTransactionId;
+		ItemPointerSetInvalid(&init_data.dict.tid);
+
 		/*
 		 * Call the init method and see if it complains.  We don't worry about
 		 * it leaking memory, since our command will soon be over anyway.
 		 */
-		(void) OidFunctionCall1(initmethod, PointerGetDatum(dictoptions));
+		(void) OidFunctionCall1(initmethod, PointerGetDatum(&init_data));
 	}
 
 	ReleaseSysCache(tup);
@@ -502,6 +511,7 @@ RemoveTSDictionaryById(Oid dictId)
 {
 	Relation	relation;
 	HeapTuple	tup;
+	DictPointerData dict;
 
 	relation = heap_open(TSDictionaryRelationId, RowExclusiveLock);
 
@@ -512,6 +522,18 @@ RemoveTSDictionaryById(Oid dictId)
 			 dictId);
 
 	CatalogTupleDelete(relation, &tup->t_self);
+
+	/*
+	 * We need to release the dictionary's DSM segment.  The segment still may
+	 * leak.  It may happen if some backend used the dictionary before dropping,
+	 * the backend will hold its DSM segment till disconnecting or calling
+	 * lookup_ts_dictionary_cache().
+	 */
+	dict.id = dictId;
+	dict.xmin = HeapTupleHeaderGetRawXmin(tup->t_data);
+	dict.xmax = HeapTupleHeaderGetRawXmax(tup->t_data);
+	dict.tid = tup->t_self;
+	ts_dict_shmem_release(&dict, true);
 
 	ReleaseSysCache(tup);
 
@@ -536,6 +558,7 @@ AlterTSDictionary(AlterTSDictionaryStmt *stmt)
 	bool		repl_null[Natts_pg_ts_dict];
 	bool		repl_repl[Natts_pg_ts_dict];
 	ObjectAddress address;
+	DictPointerData dict;
 
 	dictId = get_ts_dict_oid(stmt->dictname, false);
 
@@ -621,6 +644,18 @@ AlterTSDictionary(AlterTSDictionaryStmt *stmt)
 	InvokeObjectPostAlterHook(TSDictionaryRelationId, dictId, 0);
 
 	ObjectAddressSet(address, TSDictionaryRelationId, dictId);
+
+	/*
+	 * We need to release the dictionary's DSM segment.  The segment isn't valid
+	 * anymor.  The segment still may leak.  It may happen if some backend used
+	 * the dictionary before dropping, the backend will hold its DSM segment
+	 * till disconnecting or calling lookup_ts_dictionary_cache().
+	 */
+	dict.id = dictId;
+	dict.xmin = HeapTupleHeaderGetRawXmin(tup->t_data);
+	dict.xmax = HeapTupleHeaderGetRawXmax(tup->t_data);
+	dict.tid = tup->t_self;
+	ts_dict_shmem_release(&dict, true);
 
 	/*
 	 * NOTE: because we only support altering the options, not the template,

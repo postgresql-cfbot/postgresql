@@ -11007,7 +11007,7 @@ Branch: REL9_4_STABLE [c2b06ab17] 2015-01-30 22:45:58 -0500
 
       <listitem>
        <para>
-        Add <xref linkend="recovery-target"/>
+        Add <varname>recovery_target</varname>
         option <option>immediate</option> to stop <link
         linkend="wal"><acronym>WAL</acronym></link> recovery as soon as a
         consistent state is reached (MauMau, Heikki Linnakangas)

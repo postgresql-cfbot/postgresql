@@ -321,10 +321,11 @@ pg_create_restore_point(PG_FUNCTION_ARGS)
 
 	restore_name_str = text_to_cstring(restore_name);
 
-	if (strlen(restore_name_str) >= MAXFNAMELEN)
+	if (strlen(restore_name_str) >= MAXRESTOREPOINTNAMELEN)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("value too long for restore point (maximum %d characters)", MAXFNAMELEN - 1)));
+				 errmsg("value too long for restore point (maximum %d characters)",
+						MAXRESTOREPOINTNAMELEN - 1)));
 
 	restorepoint = XLogRestorePoint(restore_name_str);
 

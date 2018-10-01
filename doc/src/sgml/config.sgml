@@ -3202,11 +3202,11 @@ include_dir 'conf.d'
         <varname>application_name</varname> setting of the standby, as set in the
         standby's connection information.  In case of a physical replication
         standby, this should be set in the <varname>primary_conninfo</varname>
-        setting in <filename>recovery.conf</filename>; the default
-        is <literal>walreceiver</literal>.  For logical replication, this can
-        be set in the connection information of the subscription, and it
-        defaults to the subscription name.  For other replication stream
-        consumers, consult their documentation.
+        setting; the default is <literal>walreceiver</literal>.
+        For logical replication, this can be set in the connection
+        information of the subscription, and it defaults to the
+        subscription name.  For other replication stream consumers,
+        consult their documentation.
        </para>
        <para>
         This parameter specifies a list of standby servers using

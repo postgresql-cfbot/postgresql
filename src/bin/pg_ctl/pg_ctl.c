@@ -1115,7 +1115,7 @@ do_promote(void)
 	 * checkpoint is still possible by writing a file called
 	 * "fallback_promote" instead of "promote"
 	 */
-	snprintf(promote_file, MAXPGPATH, "%s/promote", pg_data);
+	snprintf(promote_file, MAXPGPATH, "%s/promote.signal", pg_data);
 
 	if ((prmfile = fopen(promote_file, "w")) == NULL)
 	{

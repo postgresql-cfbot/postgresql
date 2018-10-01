@@ -11,23 +11,44 @@
 
    <para>
     This chapter describes the settings available in the
-    <filename>recovery.conf</filename><indexterm><primary>recovery.conf</primary></indexterm>
-    file. They apply only for the duration of the
+    <filename>postgresql.conf</filename>
+    file that apply only for the duration of the
     recovery.  They must be reset for any subsequent recovery you wish to
     perform.  They cannot be changed once recovery has begun.
    </para>
 
    <para>
-     Settings in <filename>recovery.conf</filename> are specified in the format
-     <literal>name = 'value'</literal>. One parameter is specified per line.
-     Hash marks (<literal>#</literal>) designate the rest of the
-     line as a comment.  To embed a single quote in a parameter
-     value, write two quotes (<literal>''</literal>).
+    The database server can also be started <literal>in recovery</literal>, a term that covers
+    using the server as a standby or for executing a targeted recovery. Typically
+    standby mode would be used to provide high availability and/or read
+    scalability, whereas a targeted recovery is used to recover from data loss.
    </para>
 
    <para>
-    A sample file, <filename>share/recovery.conf.sample</filename>,
-    is provided in the installation's <filename>share/</filename> directory.
+     To start the server in standby mode create file
+    called <filename>standby.signal</filename><indexterm><primary>standby.signal</primary></indexterm>
+    in the data directory. The server will enter recovery and
+    will not stop recovery when the end of archived WAL is reached, but
+    will keep trying to continue recovery by connecting to the sending server as
+    specified by the <varname>primary_conninfo</varname> setting and/or by
+    fetching new WAL segments using <varname>restore_command</varname>
+    In this mode you may use parameters
+    in both <xref linkend="archive-recovery-settings" /> and
+    <xref linkend="standby-settings"/> sections. Parameters from
+    <xref linkend="recovery-target-settings"/> will not be used.
+   </para>
+
+   <para>
+    To start the server in targeted recovery create a file called
+    <filename>recovery.signal</filename><indexterm><primary>recovery.signal</primary></indexterm>
+    in the data directory.
+    If both <filename>standby.signal</filename> and <filename>recovery.signal</filename> files are
+    created, standby mode takes precedence. Targeted recovery mode will end when
+    end of archived WAL is reached, or when <varname>recovery_target</varname> is reached.
+    In this mode you may use parameters from both
+    <xref linkend="archive-recovery-settings"/> and
+    <xref linkend="recovery-target-settings"/> sections. Parameters from
+    <xref linkend="standby-settings"/> will not be used.
    </para>
 
   <sect1 id="archive-recovery-settings">
@@ -45,7 +66,7 @@
        <para>
         The local shell command to execute to retrieve an archived segment of
         the WAL file series. This parameter is required for archive recovery,
-        but optional for streaming replication.
+        but optional for standby mode.
         Any <literal>%f</literal> in the string is
         replaced by the name of the file to retrieve from the archive,
         and any <literal>%p</literal> is replaced by the copy destination path name
@@ -154,99 +175,101 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
     <title>Recovery Target Settings</title>
 
      <para>
-      By default, recovery will recover to the end of the WAL log. The
-      following parameters can be used to specify an earlier stopping point.
-      At most one of <varname>recovery_target</varname>,
-      <varname>recovery_target_lsn</varname>, <varname>recovery_target_name</varname>,
-      <varname>recovery_target_time</varname>, or <varname>recovery_target_xid</varname>
-      can be used; if more than one of these is specified in the configuration
-      file, the last entry will be used.
+      By default, recovery will process to the end of the WAL log. An earlier
+      stopping point may be specified using <varname>recovery_target_type</varname>
+      and in most cases also <varname>recovery_target_value</varname>, plus the optional
+      parameters <varname>recovery_target_inclusive</varname>,
+      <varname>recovery_target_timeline</varname> and <varname>recovery_target_action</varname>.
      </para>
 
      <variablelist>
-     <varlistentry id="recovery-target" xreflabel="recovery_target">
-      <term><varname>recovery_target</varname><literal> = 'immediate'</literal>
+      <varlistentry id="recovery-target-type" xreflabel="recovery_target_type">
+       <term><varname>recovery_target_type</varname> (<type>enum</type>)
       <indexterm>
-        <primary><varname>recovery_target</varname> recovery parameter</primary>
+        <primary><varname>recovery_target_type</varname> targeted recovery parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        This parameter specifies that recovery should end as soon as a
-        consistent state is reached, i.e. as early as possible. When restoring
-        from an online backup, this means the point where taking the backup
-        ended.
+        <varname>recovery_target_type</varname> specifies the search criteria used for a
+        a targeted recovery. The default value is <literal>none</literal>. Valid
+        values are <literal>none</literal>, <literal>immediate</literal>,
+        <literal>name</literal>, <literal>timestamp</literal>,
+        <literal>xid</literal> and <literal>lsn</literal>.
        </para>
-       <para>
-        Technically, this is a string parameter, but <literal>'immediate'</literal>
-        is currently the only allowed value.
-       </para>
-      </listitem>
-     </varlistentry>
 
-     <varlistentry id="recovery-target-name" xreflabel="recovery_target_name">
-      <term><varname>recovery_target_name</varname> (<type>string</type>)
-      <indexterm>
-        <primary><varname>recovery_target_name</varname> recovery parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
        <para>
-        This parameter specifies the named restore point (created with
-        <function>pg_create_restore_point()</function>) to which recovery will proceed.
+        Target-type <literal>none</literal> specifies that recovery will not stop
+        until it runs out of WAL, which is the default setting. When not in targeted
+        recovery this is the only meaningful setting.
        </para>
-      </listitem>
-     </varlistentry>
 
-     <varlistentry id="recovery-target-time" xreflabel="recovery_target_time">
-      <term><varname>recovery_target_time</varname> (<type>timestamp</type>)
-      <indexterm>
-        <primary><varname>recovery_target_time</varname> recovery parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
        <para>
-        This parameter specifies the time stamp up to which recovery
-        will proceed.
+        Target-type <literal>immediate</literal> specifies that recovery should end as
+        soon as a consistent state is reached, i.e. as early as possible. When restoring
+        from an online backup, this means the point where taking the backup ended.
+        For this target-type, no additional target-specifiers influence the stopping
+        point.
+       </para>
+
+       <para>
+        Target-type <literal>name</literal> specifies that recovery will
+        proceed to the point specified by <varname>recovery_target_value</varname>
+        when interpreted as the name of a restore point created with
+        <function>pg_create_restore_point()</function>.
+         The precise stopping point is also influenced by
+        <xref linkend="recovery-target-inclusive"/> and
+        <xref linkend="recovery-target-timeline"/>.
+       </para>
+
+       <para>
+        Target-type <literal>timestamp</literal> specifies that recovery will
+        proceed to the point specified by <varname>recovery_target_value</varname>
+        when interpreted as the timestamp of a transaction commit or abort.
         The precise stopping point is also influenced by
-        <xref linkend="recovery-target-inclusive"/>.
+        <xref linkend="recovery-target-inclusive"/> and
+        <xref linkend="recovery-target-timeline"/>.
        </para>
-      </listitem>
-     </varlistentry>
 
-     <varlistentry id="recovery-target-xid" xreflabel="recovery_target_xid">
-      <term><varname>recovery_target_xid</varname> (<type>string</type>)
-      <indexterm>
-        <primary><varname>recovery_target_xid</varname> recovery parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
        <para>
-        This parameter specifies the transaction ID up to which recovery
-        will proceed. Keep in mind
+        Target-type <literal>xid</literal> specifies that recovery will
+        proceed to the point specified by <varname>recovery_target_value</varname>
+        when interpreted as the transaction ID of a transaction commit or abort.
+        Keep in mind
         that while transaction IDs are assigned sequentially at transaction
         start, transactions can complete in a different numeric order.
         The transactions that will be recovered are those that committed
         before (and optionally including) the specified one.
         The precise stopping point is also influenced by
-        <xref linkend="recovery-target-inclusive"/>.
+        <xref linkend="recovery-target-inclusive"/> and
+        <xref linkend="recovery-target-timeline"/>.
+       </para>
+
+       <para>
+        Target-type <literal>lsn</literal> specifies that recovery will
+        proceed to the point specified by <varname>recovery_target_value</varname>
+        when interpreted as the LSN of any WAL record, parsed using the system
+        data type <link linkend="datatype-pg-lsn"><type>pg_lsn</type></link>.
+        The precise stopping point is also influenced by
+        <xref linkend="recovery-target-inclusive"/> and
+        <xref linkend="recovery-target-timeline"/>.
        </para>
       </listitem>
      </varlistentry>
 
-     <varlistentry id="recovery-target-lsn" xreflabel="recovery_target_lsn">
-      <term><varname>recovery_target_lsn</varname> (<type>pg_lsn</type>)
+     <varlistentry id="recovery-target-value"
+                   xreflabel="recovery_target_value">
+      <term><varname>recovery_target_value</varname> (<type>string</type>)
       <indexterm>
-        <primary><varname>recovery_target_lsn</varname> recovery parameter</primary>
+        <primary><varname>recovery_target_value</varname> targeted recovery search parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        This parameter specifies the LSN of the write-ahead log location up
-        to which recovery will proceed. The precise stopping point is also
-        influenced by <xref linkend="recovery-target-inclusive"/>. This
-        parameter is parsed using the system data type
-        <link linkend="datatype-pg-lsn"><type>pg_lsn</type></link>.
+        Specifies the stopping point for targeted recovery. The string value
+        is interpreted according to strict rules according to the value of
+        <varname>recovery_target_type</varname>. An empty string may be an
+        invalid value in some cases.
        </para>
       </listitem>
      </varlistentry>
@@ -270,9 +293,9 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         Specifies whether to stop just after the specified recovery target
         (<literal>true</literal>), or just before the recovery target
         (<literal>false</literal>).
-        Applies when <xref linkend="recovery-target-lsn"/>,
-        <xref linkend="recovery-target-time"/>, or
-        <xref linkend="recovery-target-xid"/> is specified.
+        Applies when <xref linkend="recovery-target-type"/> is specified
+        to <literal>lsn</literal>, <literal>timestamp</literal> or
+        <literal>xid</literal>.
         This setting controls whether transactions
         having exactly the target WAL location (LSN), commit time, or transaction ID, respectively, will
         be included in the recovery.  Default is <literal>true</literal>.
@@ -336,11 +359,11 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         since the last checkpoint next time it is started).
        </para>
        <para>
-        Note that because <filename>recovery.conf</filename> will not be renamed when
-        <varname>recovery_target_action</varname> is set to <literal>shutdown</literal>,
+        Note that because <filename>recovery.signal</filename> will not be
+        removed when <varname>recovery_target_action</varname> is set to <literal>shutdown</literal>,
         any subsequent start will end with immediate shutdown unless the
-        configuration is changed or the <filename>recovery.conf</filename> file is
-        removed manually.
+        configuration is changed or the <filename>recovery.signal</filename>
+        file is removed manually.
        </para>
        <para>
         This setting has no effect if no recovery target is set.
@@ -358,24 +381,9 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
     <title>Standby Server Settings</title>
      <variablelist>
 
-       <varlistentry id="standby-mode" xreflabel="standby_mode">
-        <term><varname>standby_mode</varname> (<type>boolean</type>)
-        <indexterm>
-          <primary><varname>standby_mode</varname> recovery parameter</primary>
-        </indexterm>
-        </term>
-        <listitem>
-         <para>
-          Specifies whether to start the <productname>PostgreSQL</productname> server as
-          a standby. If this parameter is <literal>on</literal>, the server will
-          not stop recovery when the end of archived WAL is reached, but
-          will keep trying to continue recovery by fetching new WAL segments
-          using <varname>restore_command</varname>
-          and/or by connecting to the primary server as specified by the
-          <varname>primary_conninfo</varname> setting.
-         </para>
-        </listitem>
-       </varlistentry>
+       <para>
+        New values for those parameters are considered only at restart of the server
+       </para>
        <varlistentry id="primary-conninfo" xreflabel="primary_conninfo">
         <term><varname>primary_conninfo</varname> (<type>string</type>)
         <indexterm>
@@ -385,7 +393,7 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         <listitem>
          <para>
           Specifies a connection string to be used for the standby server
-          to connect with the primary. This string is in the format
+          to connect with a sending server. This string is in the format
           described in <xref linkend="libpq-connstring"/>. If any option is
           unspecified in this string, then the corresponding environment
           variable (see <xref linkend="libpq-envars"/>) is checked. If the
@@ -394,12 +402,12 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
          </para>
          <para>
           The connection string should specify the host name (or address)
-          of the primary server, as well as the port number if it is not
+          of the sending server, as well as the port number if it is not
           the same as the standby server's default.
           Also specify a user name corresponding to a suitably-privileged role
-          on the primary (see
+          on the sending server (see
           <xref linkend="streaming-replication-authentication"/>).
-          A password needs to be provided too, if the primary demands password
+          A password needs to be provided too, if the sender demands password
           authentication.  It can be provided in the
           <varname>primary_conninfo</varname> string, or in a separate
           <filename>~/.pgpass</filename> file on the standby server (use
@@ -412,6 +420,7 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
          </para>
         </listitem>
        </varlistentry>
+
        <varlistentry id="primary-slot-name" xreflabel="primary_slot_name">
         <term><varname>primary_slot_name</varname> (<type>string</type>)
         <indexterm>
@@ -421,7 +430,7 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         <listitem>
          <para>
           Optionally specifies an existing replication slot to be used when
-          connecting to the primary via streaming replication to control
+          connecting to the sending server via streaming replication to control
           resource removal on the upstream node
           (see <xref linkend="streaming-replication-slots"/>).
           This setting has no effect if <varname>primary_conninfo</varname> is not
@@ -429,10 +438,11 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
          </para>
         </listitem>
        </varlistentry>
-       <varlistentry id="trigger-file" xreflabel="trigger_file">
-        <term><varname>trigger_file</varname> (<type>string</type>)
+
+       <varlistentry id="promote-signal-file" xreflabel="promote_signal_file">
+        <term><varname>promote_signal_file</varname> (<type>string</type>)
         <indexterm>
-          <primary><varname>trigger_file</varname> recovery parameter</primary>
+          <primary><varname>promote_signal_file</varname> recovery parameter</primary>
         </indexterm>
         </term>
         <listitem>
@@ -440,7 +450,6 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
           Specifies a trigger file whose presence ends recovery in the
           standby.  Even if this value is not set, you can still promote
           the standby using <command>pg_ctl promote</command>.
-          This setting has no effect if <varname>standby_mode</varname> is <literal>off</literal>.
          </para>
         </listitem>
        </varlistentry>
@@ -454,7 +463,7 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
       <listitem>
        <para>
         By default, a standby server restores WAL records from the
-        primary as soon as possible. It may be useful to have a time-delayed
+        sending server as soon as possible. It may be useful to have a time-delayed
         copy of the data, offering opportunities to correct data loss errors.
         This parameter allows you to delay recovery by a fixed period of time,
         measured in milliseconds if no unit is specified.  For example, if

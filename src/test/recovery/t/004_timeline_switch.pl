@@ -42,12 +42,10 @@ $node_master->teardown_node;
 $node_standby_1->promote;
 
 # Switch standby 2 to replay from standby 1
-rmtree($node_standby_2->data_dir . '/recovery.conf');
 my $connstr_1 = $node_standby_1->connstr;
 $node_standby_2->append_conf(
-	'recovery.conf', qq(
+	'postgresql.conf', qq(
 primary_conninfo='$connstr_1 application_name=@{[$node_standby_2->name]}'
-standby_mode=on
 recovery_target_timeline='latest'
 ));
 $node_standby_2->restart;

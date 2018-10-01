@@ -635,8 +635,6 @@ of a backup previously created on that node with $node->backup.
 
 Does not start the node after initializing it.
 
-A recovery.conf is not created.
-
 Streaming replication can be enabled on this node by passing the keyword
 parameter has_streaming => 1. This is disabled by default.
 
@@ -831,13 +829,14 @@ sub enable_streaming
 	my ($self, $root_node) = @_;
 	my $root_connstr = $root_node->connstr;
 	my $name         = $self->name;
+	my $pgdata  	 = $self->data_dir;
 
 	print "### Enabling streaming replication for node \"$name\"\n";
 	$self->append_conf(
-		'recovery.conf', qq(
+		'postgresql.conf', qq(
 primary_conninfo='$root_connstr application_name=$name'
-standby_mode=on
 ));
+	$self->request_standby_mode();
 	return;
 }
 
@@ -863,10 +862,25 @@ sub enable_restoring
 	  : qq{cp "$path/%f" "%p"};
 
 	$self->append_conf(
-		'recovery.conf', qq(
+		'postgresql.conf', qq(
 restore_command = '$copy_command'
-standby_mode = on
 ));
+	$self->request_standby_mode();
+	return;
+}
+
+# routine to place standby.signal file
+sub request_standby_mode
+{
+	my ($self) = @_;
+	my $signalfile = $self->data_dir . "/standby.signal";
+
+	open my $standbysignal, ">>$signalfile";
+	print $standbysignal "\n# Allow replication (set up by PostgresNode.pm)\n";
+	close $standbysignal;
+
+	chmod($self->group_access() ? 0640 : 0600, $signalfile)
+	  or die("unable to set permissions for $signalfile");
 	return;
 }
 

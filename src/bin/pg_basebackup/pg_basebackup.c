@@ -131,8 +131,11 @@ static int	has_xlogendptr = 0;
 static volatile LONG has_xlogendptr = 0;
 #endif
 
-/* Contents of recovery.conf to be generated */
+/* Contents of configuration file to be generated */
 static PQExpBuffer recoveryconfcontents = NULL;
+
+#define PG_AUTOCONF_FILENAME		"postgresql.auto.conf"
+#define STANDBY_SIGNAL_FILE 		"standby.signal"
 
 /* Function headers */
 static void usage(void);
@@ -346,7 +349,8 @@ usage(void)
 	printf(_("  -r, --max-rate=RATE    maximum transfer rate to transfer data directory\n"
 			 "                         (in kB/s, or use suffix \"k\" or \"M\")\n"));
 	printf(_("  -R, --write-recovery-conf\n"
-			 "                         write recovery.conf for replication\n"));
+			 "                         append replication config to " PG_AUTOCONF_FILENAME "\n"
+			 "                         and place " STANDBY_SIGNAL_FILE " file\n"));
 	printf(_("  -T, --tablespace-mapping=OLDDIR=NEWDIR\n"
 			 "                         relocate tablespace in OLDDIR to NEWDIR\n"));
 	printf(_("      --waldir=WALDIR    location for the write-ahead log directory\n"));
@@ -974,6 +978,9 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 	bool		basetablespace = PQgetisnull(res, rownum, 0);
 	bool		in_tarhdr = true;
 	bool		skip_file = false;
+	bool		is_postgresql_auto_conf = false;
+	bool		found_postgresql_auto_conf = false;
+	int			file_padding_len = 0;
 	size_t		tarhdrsz = 0;
 	pgoff_t		filesz = 0;
 
@@ -1113,8 +1120,8 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 		{
 			/*
 			 * End of chunk. If requested, and this is the base tablespace,
-			 * write recovery.conf into the tarfile. When done, close the file
-			 * (but not stdout).
+			 * write configuration file into the tarfile. When done, close the
+			 * file (but not stdout).
 			 *
 			 * Also, write two completely empty blocks at the end of the tar
 			 * file, as required by some tar programs.
@@ -1126,19 +1133,31 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 			if (basetablespace && writerecoveryconf)
 			{
 				char		header[512];
-				int			padding;
 
-				tarCreateHeader(header, "recovery.conf", NULL,
-								recoveryconfcontents->len,
-								pg_file_create_mode, 04000, 02000,
+				if (!found_postgresql_auto_conf)
+				{
+					int			padding;
+
+					tarCreateHeader(header, PG_AUTOCONF_FILENAME, NULL,
+									recoveryconfcontents->len,
+									pg_file_create_mode, 04000, 02000,
+									time(NULL));
+
+					padding = ((recoveryconfcontents->len + 511) & ~511) - recoveryconfcontents->len;
+
+					WRITE_TAR_DATA(header, sizeof(header));
+					WRITE_TAR_DATA(recoveryconfcontents->data, recoveryconfcontents->len);
+					if (padding)
+						WRITE_TAR_DATA(zerobuf, padding);
+				}
+
+				tarCreateHeader(header, STANDBY_SIGNAL_FILE, NULL,
+								0,	/* zero-length file */
+								0600, 04000, 02000,
 								time(NULL));
 
-				padding = ((recoveryconfcontents->len + 511) & ~511) - recoveryconfcontents->len;
-
 				WRITE_TAR_DATA(header, sizeof(header));
-				WRITE_TAR_DATA(recoveryconfcontents->data, recoveryconfcontents->len);
-				if (padding)
-					WRITE_TAR_DATA(zerobuf, padding);
+				WRITE_TAR_DATA(zerobuf, 511);
 			}
 
 			/* 2 * 512 bytes empty data at end of file */
@@ -1182,8 +1201,8 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 		if (!writerecoveryconf || !basetablespace)
 		{
 			/*
-			 * When not writing recovery.conf, or when not working on the base
-			 * tablespace, we never have to look for an existing recovery.conf
+			 * When not writing config file, or when not working on the base
+			 * tablespace, we never have to look for an existing configuration
 			 * file in the stream.
 			 */
 			WRITE_TAR_DATA(copybuf, r);
@@ -1191,7 +1210,7 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 		else
 		{
 			/*
-			 * Look for a recovery.conf in the existing tar stream. If it's
+			 * Look for a config file in the existing tar stream. If it's
 			 * there, we must skip it so we can later overwrite it with our
 			 * own version of the file.
 			 *
@@ -1235,29 +1254,46 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 					{
 						/*
 						 * We have the complete header structure in tarhdr,
-						 * look at the file metadata: - the subsequent file
-						 * contents have to be skipped if the filename is
-						 * recovery.conf - find out the size of the file
-						 * padded to the next multiple of 512
+						 * look at the file metadata: we may want append
+						 * recovery info into PG_AUTOCONF_FILENAME and skip
+						 * standby signal file In both cases we must calculate
+						 * tar padding
 						 */
-						int			padding;
-
-						skip_file = (strcmp(&tarhdr[0], "recovery.conf") == 0);
+						skip_file = (strcmp(&tarhdr[0], STANDBY_SIGNAL_FILE) == 0);
+						is_postgresql_auto_conf = (strcmp(&tarhdr[0], PG_AUTOCONF_FILENAME) == 0);
 
 						filesz = read_tar_number(&tarhdr[124], 12);
+						file_padding_len = ((filesz + 511) & ~511) - filesz;
 
-						padding = ((filesz + 511) & ~511) - filesz;
-						filesz += padding;
+						if (is_postgresql_auto_conf && writerecoveryconf)
+						{
+							/* replace tar header */
+							char		header[512];
+
+							tarCreateHeader(header, PG_AUTOCONF_FILENAME, NULL,
+											filesz + recoveryconfcontents->len,
+											pg_file_create_mode, 04000, 02000,
+											time(NULL));
+
+							WRITE_TAR_DATA(header, sizeof(header));
+						}
+						else
+						{
+							/* copy stream with padding */
+							filesz += file_padding_len;
+
+							if (!skip_file)
+							{
+								/*
+								 * If we're not skipping the file, write the
+								 * tar header unmodified.
+								 */
+								WRITE_TAR_DATA(tarhdr, 512);
+							}
+						}
 
 						/* Next part is the file, not the header */
 						in_tarhdr = false;
-
-						/*
-						 * If we're not skipping the file, write the tar
-						 * header unmodified.
-						 */
-						if (!skip_file)
-							WRITE_TAR_DATA(tarhdr, 512);
 					}
 				}
 				else
@@ -1281,6 +1317,32 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 						pos += bytes2write;
 						filesz -= bytes2write;
 					}
+					else if (is_postgresql_auto_conf && writerecoveryconf)
+					{
+						/* append recovery conf to PG_AUTOCONF_FILENAME */
+						int			padding;
+						int			tailsize;
+
+						tailsize = (512 - file_padding_len) + recoveryconfcontents->len;
+						padding = ((tailsize + 511) & ~511) - tailsize;
+
+						WRITE_TAR_DATA(recoveryconfcontents->data, recoveryconfcontents->len);
+
+						if (padding)
+						{
+							char		zerobuf[512];
+
+							MemSet(zerobuf, 0, sizeof(zerobuf));
+							WRITE_TAR_DATA(zerobuf, padding);
+						}
+
+						/* skip original file padding */
+						is_postgresql_auto_conf = false;
+						skip_file = true;
+						filesz += file_padding_len;
+
+						found_postgresql_auto_conf = true;
+					}
 					else
 					{
 						/*
@@ -1289,6 +1351,7 @@ ReceiveTarFile(PGconn *conn, PGresult *res, int rownum)
 						 */
 						in_tarhdr = true;
 						skip_file = false;
+						is_postgresql_auto_conf = false;
 						tarhdrsz = 0;
 						filesz = 0;
 					}
@@ -1614,7 +1677,7 @@ escape_quotes(const char *src)
 }
 
 /*
- * Create a recovery.conf file in memory using a PQExpBuffer
+ * Create a configuration file in memory using a PQExpBuffer
  */
 static void
 GenerateRecoveryConf(PGconn *conn)
@@ -1637,8 +1700,6 @@ GenerateRecoveryConf(PGconn *conn)
 		fprintf(stderr, _("%s: out of memory\n"), progname);
 		disconnect_and_exit(1);
 	}
-
-	appendPQExpBufferStr(recoveryconfcontents, "standby_mode = 'on'\n");
 
 	initPQExpBuffer(&conninfo_buf);
 	for (option = connOptions; option && option->keyword; option++)
@@ -1698,8 +1759,9 @@ GenerateRecoveryConf(PGconn *conn)
 
 
 /*
- * Write a recovery.conf file into the directory specified in basedir,
+ * Write the configuration file into the directory specified in basedir,
  * with the contents already collected in memory.
+ * Then write the signal file into the basedir also.
  */
 static void
 WriteRecoveryConf(void)
@@ -1707,9 +1769,9 @@ WriteRecoveryConf(void)
 	char		filename[MAXPGPATH];
 	FILE	   *cf;
 
-	sprintf(filename, "%s/recovery.conf", basedir);
+	snprintf(filename, MAXPGPATH, "%s/%s", basedir, PG_AUTOCONF_FILENAME);
 
-	cf = fopen(filename, "w");
+	cf = fopen(filename, "a");
 	if (cf == NULL)
 	{
 		fprintf(stderr, _("%s: could not create file \"%s\": %s\n"), progname, filename, strerror(errno));
@@ -1721,6 +1783,16 @@ WriteRecoveryConf(void)
 		fprintf(stderr,
 				_("%s: could not write to file \"%s\": %s\n"),
 				progname, filename, strerror(errno));
+		disconnect_and_exit(1);
+	}
+
+	fclose(cf);
+
+	snprintf(filename, MAXPGPATH, "%s/%s", basedir, STANDBY_SIGNAL_FILE);
+	cf = fopen(filename, "w");
+	if (cf == NULL)
+	{
+		fprintf(stderr, _("%s: could not create file \"%s\": %s\n"), progname, filename, strerror(errno));
 		disconnect_and_exit(1);
 	}
 
@@ -1780,7 +1852,7 @@ BaseBackup(void)
 	}
 
 	/*
-	 * Build contents of recovery.conf if requested
+	 * Build contents of configuration file if requested
 	 */
 	if (writerecoveryconf)
 		GenerateRecoveryConf(conn);
@@ -2094,7 +2166,7 @@ BaseBackup(void)
 #endif
 	}
 
-	/* Free the recovery.conf contents */
+	/* Free the configuration file contents */
 	destroyPQExpBuffer(recoveryconfcontents);
 
 	/*

@@ -87,6 +87,42 @@ typedef enum
 	RECOVERY_TARGET_IMMEDIATE
 } RecoveryTargetType;
 
+#define RecoveryTargetText(t) ( \
+	t == RECOVERY_TARGET_UNSET ? "unset" : ( \
+	t == RECOVERY_TARGET_XID   ? "xid" : ( \
+	t == RECOVERY_TARGET_TIME  ? "timestamp" : ( \
+	t == RECOVERY_TARGET_NAME  ? "name" : ( \
+	t == RECOVERY_TARGET_LSN   ? "lsn" : ( \
+	t == RECOVERY_TARGET_IMMEDIATE ? "immediate" : \
+					"none" ))))))
+
+/*
+ * Recovery target action.
+ */
+typedef enum
+{
+	RECOVERY_TARGET_ACTION_PAUSE,
+	RECOVERY_TARGET_ACTION_PROMOTE,
+	RECOVERY_TARGET_ACTION_SHUTDOWN
+} RecoveryTargetAction;
+
+#define RecoveryTargetActionText(t) ( \
+	t == RECOVERY_TARGET_ACTION_PAUSE   ? "pause" : ( \
+	t == RECOVERY_TARGET_ACTION_PROMOTE ? "promote" : ( \
+						"shutdown" )))
+/*
+ * Recovery target TimeLine goal
+ */
+typedef enum
+{
+	RECOVERY_TARGET_TIMELINE_CONTROLFILE,
+	RECOVERY_TARGET_TIMELINE_LATEST,
+	RECOVERY_TARGET_TIMELINE_NUMERIC
+}			RecoveryTargetTimeLineGoal;
+
+/* Max length of named restore points */
+#define MAXRESTOREPOINTNAMELEN 64
+
 extern XLogRecPtr ProcLastRecPtr;
 extern XLogRecPtr XactLastRecEnd;
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
@@ -111,6 +147,36 @@ extern char *wal_consistency_checking_string;
 extern bool log_checkpoints;
 
 extern int	CheckPointSegments;
+
+/* options previously taken from recovery.conf for archive recovery */
+extern char *recoveryRestoreCommand;
+extern char *recoveryEndCommand;
+extern char *archiveCleanupCommand;
+extern char *recoveryTargetTypeString;
+extern RecoveryTargetType recoveryTarget;
+extern char *recoveryTargetValue;
+extern bool recoveryTargetInclusive;
+extern RecoveryTargetAction recoveryTargetAction;
+extern TransactionId recoveryTargetXid;
+extern TimestampTz recoveryTargetTime;
+extern char *recoveryTargetName;
+extern XLogRecPtr recoveryTargetLSN;
+extern int	recovery_min_apply_delay;
+
+/* option set locally in Startup process only when signal files exist */
+extern bool StandbyModeRequested;
+extern bool StandbyMode;
+
+/* options for WALreceiver.c */
+extern char *PrimaryConnInfo;
+extern char *PrimarySlotName;
+
+extern char *PromoteSignalFile;
+
+extern char *recoveryTargetTLIString;
+extern RecoveryTargetTimeLineGoal recoveryTargetTimeLineGoal;
+extern TimeLineID recoveryTargetTLIRequested;
+extern TimeLineID recoveryTargetTLI;
 
 /* Archive modes */
 typedef enum ArchiveMode
@@ -240,6 +306,8 @@ extern const char *xlog_identify(uint8 info);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno);
 
+extern void logRecoveryParameters(void);
+extern void validateRecoveryParameters(void);
 extern bool RecoveryInProgress(void);
 extern bool HotStandbyActive(void);
 extern bool HotStandbyActiveInReplay(void);

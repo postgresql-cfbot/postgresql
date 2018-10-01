@@ -37,7 +37,7 @@ if ($verbose)
 
 my %replace_line = (
 	'ExecuteStmtEXECUTEnameexecute_param_clause' =>
-	  'EXECUTE prepared_name execute_param_clause execute_rest',
+	  'EXECUTE prepared_name execute_rest',
 
 	'ExecuteStmtCREATEOptTempTABLEcreate_as_targetASEXECUTEnameexecute_param_clause'
 	  => 'CREATE OptTemp TABLE create_as_target AS EXECUTE prepared_name execute_param_clause',

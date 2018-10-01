@@ -1881,7 +1881,16 @@ Iresult:        Iconst				{ $$ = $1; }
 						}
                 ;
 
+/*
+ * The backend grammar supports EXECUTE <stmt> USING, but in ECPG, we also
+ * support optional INTO, before or after the USING clause. This replaces the
+ * opt_execute_param_clause rule in the backend grammar.
+ *
+ * We also support the non-standard EXECUTE <stmt> (<params>) syntax. To keep
+ * things simple, any INTO clause must come after the params with that syntax.
+ */
 execute_rest: /* EMPTY */	{ $$ = EMPTY; }
+	| '(' using_list ')' opt_ecpg_into { $$ = EMPTY; }
 	| ecpg_using opt_ecpg_into  { $$ = EMPTY; }
 	| ecpg_into ecpg_using  { $$ = EMPTY; }
 	| ecpg_into				{ $$ = EMPTY; }

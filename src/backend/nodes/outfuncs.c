@@ -1125,6 +1125,7 @@ _outTableFunc(StringInfo str, const TableFunc *node)
 
 	WRITE_NODE_FIELD(ns_uris);
 	WRITE_NODE_FIELD(ns_names);
+	WRITE_STRING_FIELD(default_ns_name);
 	WRITE_NODE_FIELD(docexpr);
 	WRITE_NODE_FIELD(rowexpr);
 	WRITE_NODE_FIELD(colnames);

@@ -121,6 +121,7 @@ _equalTableFunc(const TableFunc *a, const TableFunc *b)
 {
 	COMPARE_NODE_FIELD(ns_uris);
 	COMPARE_NODE_FIELD(ns_names);
+	COMPARE_STRING_FIELD(default_ns_name);
 	COMPARE_NODE_FIELD(docexpr);
 	COMPARE_NODE_FIELD(rowexpr);
 	COMPARE_NODE_FIELD(colnames);

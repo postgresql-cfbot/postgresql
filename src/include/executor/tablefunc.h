@@ -55,6 +55,8 @@ typedef struct TableFuncRoutine
 	void		(*SetDocument) (struct TableFuncScanState *state, Datum value);
 	void		(*SetNamespace) (struct TableFuncScanState *state, const char *name,
 								 const char *uri);
+	void		(*SetDefaultNamespaceName) (struct TableFuncScanState *state,
+											const char *name);
 	void		(*SetRowFilter) (struct TableFuncScanState *state, const char *path);
 	void		(*SetColumnFilter) (struct TableFuncScanState *state,
 									const char *path, int colnum);

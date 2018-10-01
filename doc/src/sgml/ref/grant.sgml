@@ -183,6 +183,9 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
    Also, these initial default privilege settings can be changed using the
    <xref linkend="sql-alterdefaultprivileges"/>
    command.
+   <xref linkend="default-privileges"/> summarizes the hardcoded
+   default privileges granted to all object's types with
+   their associated <command>psql</command> backslash commands.
   </para>
 
   <para>
@@ -533,7 +536,8 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
                           : admin=arw/miriam        
 (1 row)
 </programlisting>
-    The entries shown by <command>\dp</command> are interpreted thus:
+    The entries shown by <application>psql</application> backslash-commands,
+    like <command>\dp</command>, are interpreted thus:
 <literallayout class="monospaced">
 rolename=xxxx -- privileges granted to a role
         =xxxx -- privileges granted to PUBLIC
@@ -594,6 +598,95 @@ GRANT SELECT (col1), UPDATE (col1) ON mytable TO miriam_rw;
     access privileges display.  A <literal>*</literal> will appear only when
     grant options have been explicitly granted to someone.
    </para>
+
+   <table id="default-privileges">
+    <title>Default hardcoded access privileges per object's type, as shown by <command>psql</command></title>
+    <tgroup cols="4">
+     <thead>
+      <row>
+       <entry>Object's type</entry>
+       <entry><command>psql</command> <literal>\</literal>-command</entry>
+       <entry>Owner</entry>
+       <entry><literal>PUBLIC</literal></entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry><literal>DATABASE</literal></entry>
+       <entry><literal>\l</literal></entry>
+       <entry><literal>CTc</literal></entry>
+       <entry><literal>Tc</literal></entry>
+      </row>
+      <row>
+       <entry><literal>DOMAIN</literal></entry>
+       <entry><literal>\dD+</literal></entry>
+       <entry><literal>U</literal></entry>
+       <entry><literal>U</literal></entry>
+      </row>
+      <row>
+       <entry><literal>FUNCTION</literal> or <literal>PROCEDURE</literal></entry>
+       <entry><literal>\df+</literal></entry>
+       <entry><literal>X</literal></entry>
+       <entry><literal>X</literal></entry>
+      </row>
+      <row>
+       <entry><literal>FOREIGN DATA WRAPPER</literal></entry>
+       <entry><literal>\dew+</literal></entry>
+       <entry><literal>U</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>FOREIGN SERVER</literal></entry>
+       <entry><literal>\des+</literal></entry>
+       <entry><literal>U</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>LANGUAGE</literal></entry>
+       <entry><literal>\dL+</literal></entry>
+       <entry><literal>U</literal></entry>
+       <entry><literal>U</literal></entry>
+      </row>
+      <row>
+       <entry><literal>LARGE OBJECT</literal></entry>
+       <entry></entry>
+       <entry><literal>rw</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>SCHEMA</literal></entry>
+       <entry><literal>\dn+</literal></entry>
+       <entry><literal>UC</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+      <entry><literal>SEQUENCE</literal></entry>
+      <entry><literal>\dp</literal></entry>
+      <entry><literal>rwU</literal></entry>
+      <entry></entry>
+     </row>
+      <row>
+       <entry><literal>TABLE</literal> and relation-like objects</entry>
+       <entry><literal>\dp</literal></entry>
+       <entry><literal>arwdDxt</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>TABLESPACE</literal></entry>
+       <entry><literal>\db+</literal></entry>
+       <entry><literal>C</literal></entry>
+       <entry></entry>
+      </row>
+      <row>
+       <entry><literal>TYPE</literal></entry>
+       <entry><literal>\dT+</literal></entry>
+       <entry><literal>U</literal></entry>
+       <entry><literal>U</literal></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
  </refsect1>
 
  <refsect1 id="sql-grant-examples">

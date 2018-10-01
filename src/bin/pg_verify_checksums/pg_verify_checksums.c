@@ -1,7 +1,7 @@
 /*
  * pg_verify_checksums
  *
- * Verifies page level checksums in an offline cluster
+ * Verifies page level checksums in a cluster
  *
  *	Copyright (c) 2010-2018, PostgreSQL Global Development Group
  *
@@ -25,7 +25,9 @@
 static int64 files = 0;
 static int64 blocks = 0;
 static int64 badblocks = 0;
+static int64 skippedblocks = 0;
 static ControlFileData *ControlFile;
+static XLogRecPtr checkpointLSN;
 
 static char *only_relfilenode = NULL;
 static bool verbose = false;
@@ -54,6 +56,7 @@ static const char *const skip[] = {
 	"pg_filenode.map",
 	"pg_internal.init",
 	"PG_VERSION",
+	"pgsql_tmp",
 	NULL,
 };
 
@@ -67,8 +70,14 @@ skipfile(const char *fn)
 		return true;
 
 	for (f = skip; *f; f++)
+	{
 		if (strcmp(*f, fn) == 0)
 			return true;
+		if (strcmp(*f, "pg_internal.init") == 0)
+			if (strncmp(*f, fn, strlen(*f)) == 0)
+				return true;
+	}
+
 	return false;
 }
 
@@ -79,10 +88,17 @@ scan_file(const char *fn, BlockNumber segmentno)
 	PageHeader	header = (PageHeader) buf.data;
 	int			f;
 	BlockNumber blockno;
+	bool		block_retry = false;
 
 	f = open(fn, O_RDONLY | PG_BINARY, 0);
 	if (f < 0)
 	{
+		if (errno == ENOENT)
+		{
+			/* File was removed in the meantime */
+			return;
+		}
+
 		fprintf(stderr, _("%s: could not open file \"%s\": %s\n"),
 				progname, fn, strerror(errno));
 		exit(1);
@@ -97,26 +113,79 @@ scan_file(const char *fn, BlockNumber segmentno)
 
 		if (r == 0)
 			break;
+		if (r < 0)
+		{
+			fprintf(stderr, _("%s: could not read block %u in file \"%s\": %s\n"),
+					progname, blockno, fn, strerror(errno));
+			return;
+		}
 		if (r != BLCKSZ)
 		{
-			fprintf(stderr, _("%s: could not read block %u in file \"%s\": read %d of %d\n"),
-					progname, blockno, fn, r, BLCKSZ);
-			exit(1);
+			/* Skip partially read blocks */
+			skippedblocks++;
+			continue;
 		}
-		blocks++;
 
 		/* New pages have no checksum yet */
 		if (PageIsNew(header))
+		{
+			skippedblocks++;
 			continue;
+		}
+
+		blocks++;
 
 		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
 		if (csum != header->pd_checksum)
 		{
+			/*
+			 * Retry the block on the first failure.  It's
+			 * possible that we read the first 4K page of
+			 * the block just before postgres updated the
+			 * entire block so it ends up looking torn to
+			 * us.  We only need to retry once because the
+			 * LSN should be updated to something we can
+			 * ignore on the next pass.  If the error
+			 * happens again then it is a true validation
+			 * failure.
+			 */
+			if (!block_retry)
+			{
+				/* Seek to the beginning of the failed block */
+				if (lseek(f, -BLCKSZ, SEEK_CUR) == -1)
+				{
+					fprintf(stderr, _("%s: could not lseek in file \"%s\": %m\n"),
+							progname, fn);
+					exit(1);
+				}
+
+				/* Set flag so we know a retry was attempted */
+				block_retry = true;
+
+				/* Reset loop to validate the block again */
+				blockno--;
+
+				continue;
+			}
+
+			/* The checksum verification failed on retry as well.
+			 * Check if the page has been modified since the
+			 * checkpoint and skip it in this case.
+			 */
+			if (PageGetLSN(buf.data) > checkpointLSN)
+			{
+				block_retry = false;
+				blocks--;
+				skippedblocks++;
+				continue;
+			}
+
 			if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
 				fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X\n"),
 						progname, fn, blockno, csum, header->pd_checksum);
 			badblocks++;
 		}
+		block_retry = false;
 	}
 
 	if (verbose)
@@ -152,6 +221,12 @@ scan_directory(const char *basedir, const char *subdir)
 		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);
 		if (lstat(fn, &st) < 0)
 		{
+			if (errno == ENOENT)
+			{
+				/* File was removed in the meantime */
+				continue;
+			}
+
 			fprintf(stderr, _("%s: could not stat file \"%s\": %s\n"),
 					progname, fn, strerror(errno));
 			exit(1);
@@ -285,18 +360,11 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	/* Check if cluster is running */
+	/* Check if checksums are enabled */
 	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
 	if (!crc_ok)
 	{
 		fprintf(stderr, _("%s: pg_control CRC value is incorrect\n"), progname);
-		exit(1);
-	}
-
-	if (ControlFile->state != DB_SHUTDOWNED &&
-		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
-	{
-		fprintf(stderr, _("%s: cluster must be shut down to verify checksums\n"), progname);
 		exit(1);
 	}
 
@@ -305,6 +373,9 @@ main(int argc, char *argv[])
 		fprintf(stderr, _("%s: data checksums are not enabled in cluster\n"), progname);
 		exit(1);
 	}
+
+	/* Get checkpoint LSN */
+	checkpointLSN = ControlFile->checkPoint;
 
 	/* Scan all files */
 	scan_directory(DataDir, "global");
@@ -315,6 +386,8 @@ main(int argc, char *argv[])
 	printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
 	printf(_("Files scanned:  %s\n"), psprintf(INT64_FORMAT, files));
 	printf(_("Blocks scanned: %s\n"), psprintf(INT64_FORMAT, blocks));
+	if (skippedblocks > 0)
+		printf(_("Blocks skipped: %s\n"), psprintf(INT64_FORMAT, skippedblocks));
 	printf(_("Bad checksums:  %s\n"), psprintf(INT64_FORMAT, badblocks));
 
 	if (badblocks > 0)

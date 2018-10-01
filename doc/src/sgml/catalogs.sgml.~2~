@@ -6563,9 +6563,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
         An array containing codes for the enabled statistic kinds;
         valid values are:
         <literal>d</literal> for n-distinct statistics,
-        <literal>f</literal> for functional dependency statistics,
-        <literal>m</literal> for most common values (MCV) list statistics, and
-        <literal>h</literal> for histogram statistics
+        <literal>f</literal> for functional dependency statistics, and
+        <literal>m</literal> for most common values (MCV) list statistics
       </entry>
      </row>
 
@@ -6595,15 +6594,6 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <entry>
        MCV (most-common values) list statistics, serialized as
        <structname>pg_mcv_list</structname> type.
-      </entry>
-     </row>
-
-     <row>
-      <entry><structfield>stxhistogram</structfield></entry>
-      <entry><type>pg_histogram</type></entry>
-      <entry></entry>
-      <entry>
-       Histogram, serialized as <structname>pg_histogram</structname> type.
       </entry>
      </row>
 

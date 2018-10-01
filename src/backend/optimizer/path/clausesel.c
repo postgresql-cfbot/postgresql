@@ -105,9 +105,6 @@ clauselist_selectivity(PlannerInfo *root,
 	Selectivity s1 = 1.0;
 	RelOptInfo *rel;
 	Bitmapset  *estimatedclauses = NULL;
-	RangeQueryClause *rqlist = NULL;
-	ListCell   *l;
-	int			listidx;
 
 	/*
 	 * If there's exactly one clause, just go directly to
@@ -125,6 +122,25 @@ clauselist_selectivity(PlannerInfo *root,
 	if (rel && rel->rtekind == RTE_RELATION && rel->statlist != NIL)
 	{
 		/*
+		 * Estimate selectivity on any clauses applicable by stats tracking
+		 * actual values first, then apply functional dependencies on the
+		 * remaining clauses.  The reasoning for this particular order is that
+		 * the more complex stats can track more complex correlations between
+		 * the attributes, and may be considered more reliable.
+		 *
+		 * For example MCV list can give us an exact selectivity for values in
+		 * two columns, while functional dependencies can only provide
+		 * information about overall strength of the dependency.
+		 *
+		 * 'estimatedclauses' is a bitmap of 0-based list positions of clauses
+		 * used that way, so that we can ignore them later (not to estimate
+		 * them twice).
+		 */
+		s1 *= statext_clauselist_selectivity(root, clauses, varRelid,
+											 jointype, sjinfo, rel,
+											 &estimatedclauses);
+
+		/*
 		 * Perform selectivity estimations on any clauses found applicable by
 		 * dependencies_clauselist_selectivity.  'estimatedclauses' will be
 		 * filled with the 0-based list positions of clauses used that way, so
@@ -133,17 +149,72 @@ clauselist_selectivity(PlannerInfo *root,
 		s1 *= dependencies_clauselist_selectivity(root, clauses, varRelid,
 												  jointype, sjinfo, rel,
 												  &estimatedclauses);
-
-		/*
-		 * This would be the place to apply any other types of extended
-		 * statistics selectivity estimations for remaining clauses.
-		 */
 	}
 
 	/*
 	 * Apply normal selectivity estimates for remaining clauses. We'll be
 	 * careful to skip any clauses which were already estimated above.
-	 *
+	 */
+	return s1 * clauselist_selectivity_simple(root, clauses, varRelid,
+											  jointype, sjinfo,
+											  estimatedclauses);
+}
+
+/*
+ * clauselist_selectivity_simple -
+ *	  Compute the selectivity of an implicitly-ANDed list of boolean
+ *	  expression clauses.  The list can be empty, in which case 1.0
+ *	  must be returned.  List elements may be either RestrictInfos
+ *	  or bare expression clauses --- the former is preferred since
+ *	  it allows caching of results.
+ *
+ * See clause_selectivity() for the meaning of the additional parameters.
+ *
+ * Our basic approach is to take the product of the selectivities of the
+ * subclauses.  However, that's only right if the subclauses have independent
+ * probabilities, and in reality they are often NOT independent.  So,
+ * we want to be smarter where we can.
+ *
+ * We also recognize "range queries", such as "x > 34 AND x < 42".  Clauses
+ * are recognized as possible range query components if they are restriction
+ * opclauses whose operators have scalarltsel or a related function as their
+ * restriction selectivity estimator.  We pair up clauses of this form that
+ * refer to the same variable.  An unpairable clause of this kind is simply
+ * multiplied into the selectivity product in the normal way.  But when we
+ * find a pair, we know that the selectivities represent the relative
+ * positions of the low and high bounds within the column's range, so instead
+ * of figuring the selectivity as hisel * losel, we can figure it as hisel +
+ * losel - 1.  (To visualize this, see that hisel is the fraction of the range
+ * below the high bound, while losel is the fraction above the low bound; so
+ * hisel can be interpreted directly as a 0..1 value but we need to convert
+ * losel to 1-losel before interpreting it as a value.  Then the available
+ * range is 1-losel to hisel.  However, this calculation double-excludes
+ * nulls, so really we need hisel + losel + null_frac - 1.)
+ *
+ * If either selectivity is exactly DEFAULT_INEQ_SEL, we forget this equation
+ * and instead use DEFAULT_RANGE_INEQ_SEL.  The same applies if the equation
+ * yields an impossible (negative) result.
+ *
+ * A free side-effect is that we can recognize redundant inequalities such
+ * as "x < 4 AND x < 5"; only the tighter constraint will be counted.
+ *
+ * Of course this is all very dependent on the behavior of the inequality
+ * selectivity functions; perhaps some day we can generalize the approach.
+ */
+Selectivity
+clauselist_selectivity_simple(PlannerInfo *root,
+							  List *clauses,
+							  int varRelid,
+							  JoinType jointype,
+							  SpecialJoinInfo *sjinfo,
+							  Bitmapset *estimatedclauses)
+{
+	Selectivity s1 = 1.0;
+	RangeQueryClause *rqlist = NULL;
+	ListCell   *l;
+	int			listidx;
+
+	/*
 	 * Anything that doesn't look like a potential rangequery clause gets
 	 * multiplied into s1 and forgotten. Anything that does gets inserted into
 	 * an rqlist entry.

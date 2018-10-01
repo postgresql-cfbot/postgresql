@@ -23,9 +23,7 @@
  */
 #include "postgres.h"
 
-#include "access/htup_details.h"
 #include "catalog/pg_type.h"
-#include "catalog/pg_proc.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
@@ -37,8 +35,6 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
-#include "utils/syscache.h"
-#include "utils/lsyscache.h"
 
 
 typedef struct pullup_replace_vars_context
@@ -89,8 +85,6 @@ static bool is_simple_subquery(Query *subquery, RangeTblEntry *rte,
 				   JoinExpr *lowest_outer_join,
 				   bool deletion_ok);
 static Node *pull_up_simple_values(PlannerInfo *root, Node *jtnode,
-					  RangeTblEntry *rte);
-static Node *pull_up_simple_function(PlannerInfo *root, Node *jtnode,
 					  RangeTblEntry *rte);
 static bool is_simple_values(PlannerInfo *root, RangeTblEntry *rte,
 				 bool deletion_ok);
@@ -604,54 +598,6 @@ inline_set_returning_functions(PlannerInfo *root)
 	}
 }
 
-static bool
-is_simple_stable_function(RangeTblEntry *rte)
-{
-	Form_pg_type type_form;
-	RangeTblFunction *tblFunction = linitial_node(RangeTblFunction, rte->functions);
-	FuncExpr   *expr = (FuncExpr *) tblFunction->funcexpr;
-	HeapTuple tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(expr->funcresulttype));
-	bool		result = false;
-
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for type %u", expr->funcresulttype);
-
-	type_form = (Form_pg_type) GETSTRUCT(tuple);
-
-	if (type_form->typtype == TYPTYPE_BASE &&
-		!type_is_array(expr->funcresulttype))
-	{
-		Form_pg_proc func_form;
-		ListCell   *arg;
-		bool		has_nonconst_input = false;
-		bool		has_null_input = false;
-
-		ReleaseSysCache(tuple);
-		tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(expr->funcid));
-		if (!HeapTupleIsValid(tuple))
-			elog(ERROR, "cache lookup failed for function %u", expr->funcid);
-		func_form = (Form_pg_proc) GETSTRUCT(tuple);
-
-		foreach(arg, expr->args)
-		{
-			if (IsA(lfirst(arg), Const))
-				has_null_input |= ((Const *) lfirst(arg))->constisnull;
-			else
-				has_nonconst_input = true;
-		}
-
-		result = func_form->prorettype != RECORDOID &&
-				 func_form->prokind == PROKIND_FUNCTION &&
-				 !func_form->proretset &&
-				 func_form->provolatile == PROVOLATILE_IMMUTABLE &&
-				 !has_null_input &&
-				 !has_nonconst_input;
-	}
-
-	ReleaseSysCache(tuple);
-	return result;
-}
-
 /*
  * pull_up_subqueries
  *		Look for subqueries in the rangetable that can be pulled up into
@@ -781,11 +727,6 @@ pull_up_subqueries_recurse(PlannerInfo *root, Node *jtnode,
 			containing_appendrel == NULL &&
 			is_simple_values(root, rte, deletion_ok))
 			return pull_up_simple_values(root, jtnode, rte);
-
-		if (rte->rtekind == RTE_FUNCTION &&
-				list_length(rte->functions) == 1 &&
-				is_simple_stable_function(rte))
-			return pull_up_simple_function(root, jtnode, rte);
 
 		/* Otherwise, do nothing at this node. */
 	}
@@ -1705,107 +1646,6 @@ pull_up_simple_values(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
 	{
 		tlist = lappend(tlist,
 						makeTargetEntry((Expr *) lfirst(lc),
-										attrno,
-										NULL,
-										false));
-		attrno++;
-	}
-	rvcontext.root = root;
-	rvcontext.targetlist = tlist;
-	rvcontext.target_rte = rte;
-	rvcontext.relids = NULL;
-	rvcontext.outer_hasSubLinks = &parse->hasSubLinks;
-	rvcontext.varno = varno;
-	rvcontext.need_phvs = false;
-	rvcontext.wrap_non_vars = false;
-	/* initialize cache array with indexes 0 .. length(tlist) */
-	rvcontext.rv_cache = palloc0((list_length(tlist) + 1) *
-								 sizeof(Node *));
-
-	/*
-	 * Replace all of the top query's references to the RTE's outputs with
-	 * copies of the adjusted VALUES expressions, being careful not to replace
-	 * any of the jointree structure. (This'd be a lot cleaner if we could use
-	 * query_tree_mutator.)  Much of this should be no-ops in the dummy Query
-	 * that surrounds a VALUES RTE, but it's not enough code to be worth
-	 * removing.
-	 */
-	parse->targetList = (List *)
-		pullup_replace_vars((Node *) parse->targetList, &rvcontext);
-	parse->returningList = (List *)
-		pullup_replace_vars((Node *) parse->returningList, &rvcontext);
-	if (parse->onConflict)
-	{
-		parse->onConflict->onConflictSet = (List *)
-			pullup_replace_vars((Node *) parse->onConflict->onConflictSet,
-								&rvcontext);
-		parse->onConflict->onConflictWhere =
-			pullup_replace_vars(parse->onConflict->onConflictWhere,
-								&rvcontext);
-
-		/*
-		 * We assume ON CONFLICT's arbiterElems, arbiterWhere, exclRelTlist
-		 * can't contain any references to a subquery
-		 */
-	}
-	replace_vars_in_jointree((Node *) parse->jointree, &rvcontext, NULL);
-	Assert(parse->setOperations == NULL);
-	parse->havingQual = pullup_replace_vars(parse->havingQual, &rvcontext);
-
-	/*
-	 * There should be no appendrels to fix, nor any join alias Vars, nor any
-	 * outer joins and hence no PlaceHolderVars.
-	 */
-	Assert(root->append_rel_list == NIL);
-	Assert(list_length(parse->rtable) == 1);
-	Assert(root->join_info_list == NIL);
-	Assert(root->placeholder_list == NIL);
-
-	/*
-	 * Return NULL to signal deletion of the VALUES RTE from the parent
-	 * jointree (and set hasDeletedRTEs to ensure cleanup later).
-	 */
-	root->hasDeletedRTEs = true;
-	return NULL;
-}
-
-static Node *
-pull_up_simple_function(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
-{
-	Query	   *parse = root->parse;
-	int			varno = ((RangeTblRef *) jtnode)->rtindex;
-	List	   *functions_list;
-	List	   *tlist;
-	AttrNumber	attrno;
-	pullup_replace_vars_context rvcontext;
-	ListCell   *lc;
-
-	Assert(rte->rtekind == RTE_FUNCTION);
-	Assert(list_length(rte->functions) == 1);
-
-	/*
-	 * Need a modifiable copy of the functions list to hack on, just in case it's
-	 * multiply referenced.
-	 */
-	functions_list = copyObject(rte->functions);
-
-	/*
-	 * The FUNCTION RTE can't contain any Vars of level zero, let alone any that
-	 * are join aliases, so no need to flatten join alias Vars.
-	 */
-	Assert(!contain_vars_of_level((Node *) functions, 0));
-
-	/*
-	 * Set up required context data for pullup_replace_vars.  In particular,
-	 * we have to make the VALUES list look like a subquery targetlist.
-	 */
-	tlist = NIL;
-	attrno = 1;
-	foreach(lc, functions_list)
-	{
-		RangeTblFunction *rtf = (RangeTblFunction *)lfirst(lc);
-		tlist = lappend(tlist,
-						makeTargetEntry((Expr *) rtf->funcexpr,
 										attrno,
 										NULL,
 										false));

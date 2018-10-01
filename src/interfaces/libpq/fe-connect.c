@@ -322,7 +322,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
-		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
+		"Target-Session-Attrs", "", 12, /* sizeof("prefer-read") = 12 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
 	/* Terminating entry --- MUST BE LAST */
@@ -1240,7 +1240,8 @@ connectOptions2(PGconn *conn)
 	if (conn->target_session_attrs)
 	{
 		if (strcmp(conn->target_session_attrs, "any") != 0
-			&& strcmp(conn->target_session_attrs, "read-write") != 0)
+			&& strcmp(conn->target_session_attrs, "read-write") != 0
+			&& strcmp(conn->target_session_attrs, "prefer-read") != 0)
 		{
 			conn->status = CONNECTION_BAD;
 			printfPQExpBuffer(&conn->errorMessage,
@@ -2083,6 +2084,7 @@ PQconnectPoll(PGconn *conn)
 		case CONNECTION_SSL_STARTUP:
 		case CONNECTION_NEEDED:
 		case CONNECTION_CHECK_WRITABLE:
+		case CONNECTION_CHECK_READONLY:
 		case CONNECTION_CONSUME:
 			break;
 
@@ -2123,13 +2125,28 @@ keep_going:						/* We will come back to here until there is
 
 		if (conn->whichhost + 1 >= conn->nconnhost)
 		{
-			/*
-			 * Oops, no more hosts.  An appropriate error message is already
-			 * set up, so just set the right status.
-			 */
-			goto error_return;
+			if (conn->read_write_host_index >= 0)
+			{
+				/*
+				 * Go to here means failed to connect to
+				 * read-only servers and now try connect to
+				 * read-write server again. Only under the
+				 * 'prefer-read' scenario will go to here.
+				 */
+				conn->whichhost = conn->read_write_host_index;
+				conn->read_write_host_index = -2;
+			}
+			else
+			{
+				/*
+				 * Oops, no more hosts.  An appropriate error message is already
+				 * set up, so just set the right status.
+				 */
+				goto error_return;
+			}
 		}
-		conn->whichhost++;
+		else
+			conn->whichhost++;
 
 		/* Drop any address info for previous host */
 		release_conn_addrinfo(conn);
@@ -2317,6 +2334,7 @@ keep_going:						/* We will come back to here until there is
 							conn->try_next_addr = true;
 							goto keep_going;
 						}
+
 						appendPQExpBuffer(&conn->errorMessage,
 										  libpq_gettext("could not create socket: %s\n"),
 										  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
@@ -3158,7 +3176,8 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/*
-				 * If a read-write connection is required, see if we have one.
+				 * If a read-write or prefer-read connection is required,
+				 * see if we have one.
 				 *
 				 * Servers before 7.4 lack the transaction_read_only GUC, but
 				 * by the same token they don't have any read-only mode, so we
@@ -3166,7 +3185,8 @@ keep_going:						/* We will come back to here until there is
 				 */
 				if (conn->sversion >= 70400 &&
 					conn->target_session_attrs != NULL &&
-					strcmp(conn->target_session_attrs, "read-write") == 0)
+					(strcmp(conn->target_session_attrs, "read-write") == 0 ||
+					 strcmp(conn->target_session_attrs, "prefer-read") == 0))
 				{
 					/*
 					 * Save existing error messages across the PQsendQuery
@@ -3185,9 +3205,38 @@ keep_going:						/* We will come back to here until there is
 						restoreErrorMessage(conn, &savedMessage);
 						goto error_return;
 					}
-					conn->status = CONNECTION_CHECK_WRITABLE;
+
+					if (strcmp(conn->target_session_attrs, "read-write") == 0)
+						conn->status = CONNECTION_CHECK_WRITABLE;
+					else
+						conn->status = CONNECTION_CHECK_READONLY;
+
 					restoreErrorMessage(conn, &savedMessage);
 					return PGRES_POLLING_READING;
+				}
+
+				/*
+				 * Requested type is prefer-read then record this connection index
+				 * and try the other before considering it later
+				 */
+				if ((conn->target_session_attrs != NULL) &&
+						(strcmp(conn->target_session_attrs, "prefer-read") == 0) &&
+						(conn->read_write_host_index != -2))
+				{
+					/* Close connection politely. */
+					conn->status = CONNECTION_OK;
+					sendTerminateConn(conn);
+
+					/* Record it */
+					if (conn->read_write_host_index == -1)
+						conn->read_write_host_index = conn->whichhost;
+
+					/*
+					 * Try next host if any, but we don't want to consider
+					 * additional addresses for this host.
+					 */
+					conn->try_next_host = true;
+					goto keep_going;
 				}
 
 				/* We can release the address list now. */
@@ -3226,9 +3275,9 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is required, see if we have one.
-			 * (This should match the stanza in the CONNECTION_AUTH_OK case
-			 * above.)
+			 * If a read-write or prefer-read connection is required,
+			 * see if we have one. (This should match the stanza in the
+			 * CONNECTION_AUTH_OK case above.)
 			 *
 			 * Servers before 7.4 lack the transaction_read_only GUC, but by
 			 * the same token they don't have any read-only mode, so we may
@@ -3236,7 +3285,8 @@ keep_going:						/* We will come back to here until there is
 			 */
 			if (conn->sversion >= 70400 &&
 				conn->target_session_attrs != NULL &&
-				strcmp(conn->target_session_attrs, "read-write") == 0)
+				((strcmp(conn->target_session_attrs, "read-write") == 0) ||
+				 (strcmp(conn->target_session_attrs, "prefer-read") == 0)))
 			{
 				if (!saveErrorMessage(conn, &savedMessage))
 					goto error_return;
@@ -3248,9 +3298,38 @@ keep_going:						/* We will come back to here until there is
 					restoreErrorMessage(conn, &savedMessage);
 					goto error_return;
 				}
-				conn->status = CONNECTION_CHECK_WRITABLE;
+
+				if (strcmp(conn->target_session_attrs, "read-write") == 0)
+					conn->status = CONNECTION_CHECK_WRITABLE;
+				else
+					conn->status = CONNECTION_CHECK_READONLY;
+
 				restoreErrorMessage(conn, &savedMessage);
 				return PGRES_POLLING_READING;
+			}
+
+			/*
+			 * Requested type is prefer-read then record this connection index
+			 * and try the other before considering it later
+			 */
+			if ((conn->target_session_attrs != NULL) &&
+					(strcmp(conn->target_session_attrs, "prefer-read") == 0) &&
+					(conn->read_write_host_index != -2))
+			{
+				/* Close connection politely. */
+				conn->status = CONNECTION_OK;
+				sendTerminateConn(conn);
+
+				/* Record it */
+				if (conn->read_write_host_index == -1)
+					conn->read_write_host_index = conn->whichhost;
+
+				/*
+				 * Try next host if any, but we don't want to consider
+				 * additional addresses for this host.
+				 */
+				conn->try_next_host = true;
+				goto keep_going;
 			}
 
 			/* We can release the address list now. */
@@ -3291,13 +3370,16 @@ keep_going:						/* We will come back to here until there is
 				return PGRES_POLLING_OK;
 			}
 		case CONNECTION_CHECK_WRITABLE:
+		case CONNECTION_CHECK_READONLY:
 			{
+				ConnStatusType oldstatus;
 				const char *displayed_host;
 				const char *displayed_port;
 
 				if (!saveErrorMessage(conn, &savedMessage))
 					goto error_return;
 
+				oldstatus = conn->status;
 				conn->status = CONNECTION_OK;
 				if (!PQconsumeInput(conn))
 				{
@@ -3307,7 +3389,7 @@ keep_going:						/* We will come back to here until there is
 
 				if (PQisBusy(conn))
 				{
-					conn->status = CONNECTION_CHECK_WRITABLE;
+					conn->status = oldstatus;
 					restoreErrorMessage(conn, &savedMessage);
 					return PGRES_POLLING_READING;
 				}
@@ -3319,11 +3401,24 @@ keep_going:						/* We will come back to here until there is
 					char	   *val;
 
 					val = PQgetvalue(res, 0, 0);
-					if (strncmp(val, "on", 2) == 0)
+
+					/*
+					 * Server is read-only and requested mode is read-write, ignore it.
+					 * Server is read-write and requested mode is prefer-read, record
+					 * it for the first time and try to consume in the next scan (it means
+					 * no read-only server is found in the first scan).
+					 */
+					if (((strncmp(val, "on", 2) == 0) &&
+							(oldstatus == CONNECTION_CHECK_WRITABLE)) ||
+						((strncmp(val, "off", 3) == 0) &&
+							(oldstatus == CONNECTION_CHECK_READONLY) &&
+							(conn->read_write_host_index != -2)))
 					{
-						/* Not writable; fail this connection. */
+						/* Not a requested type; fail this connection. */
 						const char *displayed_host;
 						const char *displayed_port;
+						const char *type = (oldstatus == CONNECTION_CHECK_READONLY) ?
+											"read-only" : "writable";
 
 						PQclear(res);
 						restoreErrorMessage(conn, &savedMessage);
@@ -3338,14 +3433,19 @@ keep_going:						/* We will come back to here until there is
 							displayed_port = DEF_PGPORT_STR;
 
 						appendPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("could not make a writable "
+										  libpq_gettext("could not make a %s "
 														"connection to server "
 														"\"%s:%s\"\n"),
-										  displayed_host, displayed_port);
+										  type, displayed_host, displayed_port);
 
 						/* Close connection politely. */
 						conn->status = CONNECTION_OK;
 						sendTerminateConn(conn);
+
+						/* Record read-write host index */
+						if ((oldstatus == CONNECTION_CHECK_READONLY) &&
+								(conn->read_write_host_index == -1))
+							conn->read_write_host_index = conn->whichhost;
 
 						/*
 						 * Try next host if any, but we don't want to consider
@@ -3355,7 +3455,7 @@ keep_going:						/* We will come back to here until there is
 						goto keep_going;
 					}
 
-					/* Session is read-write, so we're good. */
+					/* Session is requested type, so we're good. */
 					PQclear(res);
 					termPQExpBuffer(&savedMessage);
 
@@ -3567,6 +3667,8 @@ makeEmptyPGconn(void)
 		freePGconn(conn);
 		conn = NULL;
 	}
+
+	conn->read_write_host_index = -1;
 
 	return conn;
 }

@@ -1130,7 +1130,7 @@ DeadLockReport(void)
 						 pgstat_get_backend_current_activity(info->pid, false));
 	}
 
-	pgstat_report_deadlock();
+	pgstat_report_deadlock(false);
 
 	ereport(ERROR,
 			(errcode(ERRCODE_T_R_DEADLOCK_DETECTED),

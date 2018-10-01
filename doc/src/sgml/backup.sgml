@@ -1116,11 +1116,9 @@ SELECT pg_stop_backup();
    <para>
     The contents of the directories <filename>pg_dynshmem/</filename>,
     <filename>pg_notify/</filename>, <filename>pg_serial/</filename>,
-    <filename>pg_snapshots/</filename>, <filename>pg_stat_tmp/</filename>,
+    <filename>pg_snapshots/</filename>,
     and <filename>pg_subtrans/</filename> (but not the directories themselves) can be
     omitted from the backup as they will be initialized on postmaster startup.
-    If <xref linkend="guc-stats-temp-directory"/> is set and is under the data
-    directory then the contents of that directory can also be omitted.
    </para>
 
    <para>

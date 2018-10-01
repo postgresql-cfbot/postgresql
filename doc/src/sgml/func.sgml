@@ -15953,8 +15953,7 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
  PG_VERSION      | 15
  pg_wal          | 16
  pg_hba.conf     | 17
- pg_stat_tmp     | 18
- pg_subtrans     | 19
+ pg_subtrans     | 18
 (19 rows)
 </programlisting>
   </para>

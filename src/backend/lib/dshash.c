@@ -384,6 +384,17 @@ dshash_get_hash_table_handle(dshash_table *hash_table)
 void *
 dshash_find(dshash_table *hash_table, const void *key, bool exclusive)
 {
+	return dshash_find_extended(hash_table, key, NULL, exclusive, false);
+}
+
+/*
+ * Addition to dshash_find, returns immediately when nowait is true and lock
+ * was not acquired. Lock status is set to *lock_failed if any.
+ */
+void *
+dshash_find_extended(dshash_table *hash_table, const void *key,
+					 bool *lock_acquired, bool exclusive, bool nowait)
+{
 	dshash_hash hash;
 	size_t		partition;
 	dshash_table_item *item;
@@ -394,8 +405,23 @@ dshash_find(dshash_table *hash_table, const void *key, bool exclusive)
 	Assert(hash_table->control->magic == DSHASH_MAGIC);
 	Assert(!hash_table->find_locked);
 
-	LWLockAcquire(PARTITION_LOCK(hash_table, partition),
-				  exclusive ? LW_EXCLUSIVE : LW_SHARED);
+	if (nowait)
+	{
+		if (!LWLockConditionalAcquire(PARTITION_LOCK(hash_table, partition),
+									  exclusive ? LW_EXCLUSIVE : LW_SHARED))
+		{
+			if (lock_acquired)
+				*lock_acquired = false;
+			return NULL;
+		}
+	}
+	else
+		LWLockAcquire(PARTITION_LOCK(hash_table, partition),
+					  exclusive ? LW_EXCLUSIVE : LW_SHARED);
+
+	if (lock_acquired)
+		*lock_acquired = true;
+
 	ensure_valid_bucket_pointers(hash_table);
 
 	/* Search the active bucket. */
@@ -431,6 +457,22 @@ dshash_find_or_insert(dshash_table *hash_table,
 					  const void *key,
 					  bool *found)
 {
+	return dshash_find_or_insert_extended(hash_table, key, found, false);
+}
+
+/*
+ * Addition to dshash_find_or_insert, returns NULL if nowait is true and lock
+ * was not acquired.
+ *
+ * Notes above dshash_find_extended() regarding locking and error handling
+ * equally apply here.
+ */
+void *
+dshash_find_or_insert_extended(dshash_table *hash_table,
+							   const void *key,
+							   bool *found,
+							   bool nowait)
+{
 	dshash_hash hash;
 	size_t		partition_index;
 	dshash_partition *partition;
@@ -444,8 +486,16 @@ dshash_find_or_insert(dshash_table *hash_table,
 	Assert(!hash_table->find_locked);
 
 restart:
-	LWLockAcquire(PARTITION_LOCK(hash_table, partition_index),
-				  LW_EXCLUSIVE);
+	if (nowait)
+	{
+		if (!LWLockConditionalAcquire(
+				PARTITION_LOCK(hash_table, partition_index),
+				LW_EXCLUSIVE))
+			return NULL;
+	}
+	else
+		LWLockAcquire(PARTITION_LOCK(hash_table, partition_index),
+					  LW_EXCLUSIVE);
 	ensure_valid_bucket_pointers(hash_table);
 
 	/* Search the active bucket. */
@@ -590,6 +640,144 @@ dshash_hash
 dshash_memhash(const void *v, size_t size, void *arg)
 {
 	return tag_hash(v, size);
+}
+
+/*
+ * dshash_seq_init/_next/_term
+ *           Sequentially scan trhough dshash table and return all the
+ *           elements one by one, return NULL when no more.
+ *
+ * dshash_seq_term should be called if and only if the scan is abandoned
+ * before completion; if dshash_seq_next returns NULL then it has already done
+ * the end-of-scan cleanup.
+ *
+ * On returning element, it is locked as is the case with dshash_find.
+ * However, the caller must not release the lock. The lock is released as
+ * necessary in continued scan.
+ *
+ * As opposed to the equivalent for dynanash, the caller is not supposed to
+ * delete the returned element before continuing the scan.
+ *
+ * If consistent is set for dshash_seq_init, the whole hash table is
+ * non-exclusively locked. Otherwise a part of the hash table is locked in the
+ * same mode (partition lock).
+ */
+void
+dshash_seq_init(dshash_seq_status *status, dshash_table *hash_table,
+				bool consistent)
+{
+	status->hash_table = hash_table;
+	status->curbucket = 0;
+	status->nbuckets = ((size_t) 1) << hash_table->control->size_log2;
+	status->curitem = NULL;
+	status->curpartition = -1;
+	status->consistent = consistent;
+
+	/*
+	 * Protect all partitions from modification if the caller wants a
+	 * consistent result.
+	 */
+	if (consistent)
+	{
+		int i;
+
+		for (i = 0; i < DSHASH_NUM_PARTITIONS; ++i)
+		{
+			Assert(!LWLockHeldByMe(PARTITION_LOCK(hash_table, i)));
+
+			LWLockAcquire(PARTITION_LOCK(hash_table, i), LW_SHARED);
+		}
+	}
+	ensure_valid_bucket_pointers(hash_table);
+}
+
+void *
+dshash_seq_next(dshash_seq_status *status)
+{
+	dsa_pointer next_item_pointer;
+
+	if (status->curitem == NULL)
+	{
+		Assert (status->curbucket == 0);
+		Assert(!status->hash_table->find_locked);
+
+		/* first shot. grab the first item. */
+		next_item_pointer = status->hash_table->buckets[status->curbucket];
+		status->hash_table->find_locked = true;
+	}
+	else
+		next_item_pointer = status->curitem->next;
+
+	/* Move to the next bucket if we finished the current bucket */
+	while (!DsaPointerIsValid(next_item_pointer))
+	{
+		if (++status->curbucket >= status->nbuckets)
+		{
+			/* all buckets have been scanned. finsih. */
+			dshash_seq_term(status);
+			return NULL;
+		}
+		Assert(status->hash_table->find_locked);
+
+		next_item_pointer = status->hash_table->buckets[status->curbucket];
+
+		/*
+		 * we need a lock on the scanning partition even if the caller don't
+		 * requested a consistent snapshot.
+		 */
+		if (!status->consistent && DsaPointerIsValid(next_item_pointer))
+		{
+			dshash_table_item  *item = dsa_get_address(status->hash_table->area,
+													   next_item_pointer);
+			int next_partition = PARTITION_FOR_HASH(item->hash);
+			if (status->curpartition != next_partition)
+			{
+				if (status->curpartition >= 0)
+					LWLockRelease(PARTITION_LOCK(status->hash_table,
+												 status->curpartition));
+				LWLockAcquire(PARTITION_LOCK(status->hash_table,
+											 next_partition),
+							  LW_SHARED);
+				status->curpartition = next_partition;
+			}
+		}
+	}
+
+	status->curitem =
+		dsa_get_address(status->hash_table->area, next_item_pointer);
+	return ENTRY_FROM_ITEM(status->curitem);
+}
+
+void
+dshash_seq_term(dshash_seq_status *status)
+{
+	Assert(status->hash_table->find_locked);
+	status->hash_table->find_locked = false;
+
+	if (status->consistent)
+	{
+		int i;
+
+		for (i = 0; i < DSHASH_NUM_PARTITIONS; ++i)
+			LWLockRelease(PARTITION_LOCK(status->hash_table, i));
+	}
+	else if (status->curpartition >= 0)
+		LWLockRelease(PARTITION_LOCK(status->hash_table, status->curpartition));
+}
+
+int
+dshash_get_num_entries(dshash_table *hash_table)
+{
+	/* a shotcut implement. should be improved  */
+	dshash_seq_status s;
+	void *p;
+	int n = 0;
+
+	dshash_seq_init(&s, hash_table, false);
+	while ((p = dshash_seq_next(&s)) != NULL)
+		n++;
+
+	return n;
 }
 
 /*

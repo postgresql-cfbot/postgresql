@@ -77,9 +77,6 @@ static bool is_checksummed_file(const char *fullpath, const char *filename);
 /* Was the backup currently in-progress initiated in recovery mode? */
 static bool backup_started_in_recovery = false;
 
-/* Relative path of temporary statistics directory */
-static char *statrelpath = NULL;
-
 /*
  * Size of each block sent into the tar stream for larger files.
  */
@@ -121,13 +118,6 @@ static bool noverify_checksums = false;
  */
 static const char *excludeDirContents[] =
 {
-	/*
-	 * Skip temporary statistics files. PG_STAT_TMP_DIR must be skipped even
-	 * when stats_temp_directory is set because PGSS_TEXT_FILE is always
-	 * created there.
-	 */
-	PG_STAT_TMP_DIR,
-
 	/*
 	 * It is generally not useful to backup the contents of this directory
 	 * even if the intention is to restore to another master. See backup.sgml
@@ -223,10 +213,7 @@ perform_base_backup(basebackup_options *opt)
 	TimeLineID	endtli;
 	StringInfo	labelfile;
 	StringInfo	tblspc_map_file = NULL;
-	int			datadirpathlen;
 	List	   *tablespaces = NIL;
-
-	datadirpathlen = strlen(DataDir);
 
 	backup_started_in_recovery = RecoveryInProgress();
 
@@ -253,18 +240,6 @@ perform_base_backup(basebackup_options *opt)
 		tablespaceinfo *ti;
 
 		SendXlogRecPtrResult(startptr, starttli);
-
-		/*
-		 * Calculate the relative path of temporary statistics directory in
-		 * order to skip the files which are located in that directory later.
-		 */
-		if (is_absolute_path(pgstat_stat_directory) &&
-			strncmp(pgstat_stat_directory, DataDir, datadirpathlen) == 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory + datadirpathlen + 1);
-		else if (strncmp(pgstat_stat_directory, "./", 2) != 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory);
-		else
-			statrelpath = pgstat_stat_directory;
 
 		/* Add a node for the base directory at the end */
 		ti = palloc0(sizeof(tablespaceinfo));
@@ -1173,17 +1148,6 @@ sendDir(const char *path, int basepathlen, bool sizeonly, List *tablespaces,
 
 		if (excludeFound)
 			continue;
-
-		/*
-		 * Exclude contents of directory specified by statrelpath if not set
-		 * to the default (pg_stat_tmp) which is caught in the loop above.
-		 */
-		if (statrelpath != NULL && strcmp(pathbuf, statrelpath) == 0)
-		{
-			elog(DEBUG1, "contents of directory \"%s\" excluded from backup", statrelpath);
-			size += _tarWriteDir(pathbuf, basepathlen, &statbuf, sizeonly);
-			continue;
-		}
 
 		/*
 		 * We can skip pg_wal, the WAL segments need to be fetched from the

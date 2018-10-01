@@ -121,12 +121,6 @@ Item
 </row>
 
 <row>
- <entry><filename>pg_stat_tmp</filename></entry>
- <entry>Subdirectory containing temporary files for the statistics
-  subsystem</entry>
-</row>
-
-<row>
  <entry><filename>pg_subtrans</filename></entry>
  <entry>Subdirectory containing subtransaction status data</entry>
 </row>

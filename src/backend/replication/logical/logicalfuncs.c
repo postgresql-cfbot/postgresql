@@ -154,14 +154,26 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	name = PG_GETARG_NAME(0);
 
 	if (PG_ARGISNULL(1))
-		upto_lsn = InvalidXLogRecPtr;
+		upto_lsn = InvalidXLogRecPtr;	/* unlimited */
 	else
+	{
 		upto_lsn = PG_GETARG_LSN(1);
+		if (XLogRecPtrIsInvalid(upto_lsn))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid upper limit wal lsn")));
+	}
 
 	if (PG_ARGISNULL(2))
-		upto_nchanges = InvalidXLogRecPtr;
+		upto_nchanges = 0;	/* unlimited */
 	else
+	{
 		upto_nchanges = PG_GETARG_INT32(2);
+		if (upto_nchanges <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("argument of upto_nchanges must be greater than zero")));
+	}
 
 	if (PG_ARGISNULL(3))
 		ereport(ERROR,

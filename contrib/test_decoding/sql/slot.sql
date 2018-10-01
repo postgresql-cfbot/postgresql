@@ -28,6 +28,10 @@ end';
 SELECT pg_drop_replication_slot('regression_slot_t');
 SELECT pg_drop_replication_slot('regression_slot_t2');
 
+-- error
+SELECT data FROM pg_logical_slot_get_changes('regression_slot_p', '0/0', NULL); -- invalid upto_lsn
+SELECT data FROM pg_logical_slot_get_changes('regression_slot_p', NULL, 0); -- invalid upto_nchanges
+
 -- permanent slot has survived
 SELECT pg_drop_replication_slot('regression_slot_p');
 

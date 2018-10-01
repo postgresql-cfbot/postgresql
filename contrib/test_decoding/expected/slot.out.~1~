@@ -48,11 +48,6 @@ SELECT pg_drop_replication_slot('regression_slot_t');
 ERROR:  replication slot "regression_slot_t" does not exist
 SELECT pg_drop_replication_slot('regression_slot_t2');
 ERROR:  replication slot "regression_slot_t2" does not exist
--- error
-SELECT data FROM pg_logical_slot_get_changes('regression_slot_p', '0/0', NULL); -- invalid upto_lsn
-ERROR:  invalid upper limit wal lsn
-SELECT data FROM pg_logical_slot_get_changes('regression_slot_p', NULL, 0); -- invalid upto_nchanges
-ERROR:  argument of upto_nchanges must be greater than zero
 -- permanent slot has survived
 SELECT pg_drop_replication_slot('regression_slot_p');
  pg_drop_replication_slot 

@@ -39,9 +39,12 @@
 #include "nodes/makefuncs.h"
 #include "parser/parse_func.h"
 #include "tsearch/ts_cache.h"
+#include "tsearch/ts_public.h"
 #include "tsearch/ts_utils.h"
+#include "tsearch/ts_configmap.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -935,11 +938,22 @@ makeConfigurationDependencies(HeapTuple tuple, bool removeOld,
 		while (HeapTupleIsValid((maptup = systable_getnext(scan))))
 		{
 			Form_pg_ts_config_map cfgmap = (Form_pg_ts_config_map) GETSTRUCT(maptup);
+			TSMapElement *mapdicts = JsonbToTSMap(DatumGetJsonbP(&cfgmap->mapdicts));
+			Oid		   *dictionaryOids = TSMapGetDictionaries(mapdicts);
+			Oid		   *currentOid = dictionaryOids;
 
-			referenced.classId = TSDictionaryRelationId;
-			referenced.objectId = cfgmap->mapdict;
-			referenced.objectSubId = 0;
-			add_exact_object_address(&referenced, addrs);
+			while (*currentOid != InvalidOid)
+			{
+				referenced.classId = TSDictionaryRelationId;
+				referenced.objectId = *currentOid;
+				referenced.objectSubId = 0;
+				add_exact_object_address(&referenced, addrs);
+
+				currentOid++;
+			}
+
+			pfree(dictionaryOids);
+			TSMapElementFree(mapdicts);
 		}
 
 		systable_endscan(scan);
@@ -1091,8 +1105,7 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 
 			mapvalues[Anum_pg_ts_config_map_mapcfg - 1] = cfgOid;
 			mapvalues[Anum_pg_ts_config_map_maptokentype - 1] = cfgmap->maptokentype;
-			mapvalues[Anum_pg_ts_config_map_mapseqno - 1] = cfgmap->mapseqno;
-			mapvalues[Anum_pg_ts_config_map_mapdict - 1] = cfgmap->mapdict;
+			mapvalues[Anum_pg_ts_config_map_mapdicts - 1] = JsonbPGetDatum(&cfgmap->mapdicts);
 
 			newmaptup = heap_form_tuple(mapRel->rd_att, mapvalues, mapnulls);
 
@@ -1195,7 +1208,7 @@ AlterTSConfiguration(AlterTSConfigurationStmt *stmt)
 	relMap = heap_open(TSConfigMapRelationId, RowExclusiveLock);
 
 	/* Add or drop mappings */
-	if (stmt->dicts)
+	if (stmt->dicts || stmt->dict_map)
 		MakeConfigurationMapping(stmt, tup, relMap);
 	else if (stmt->tokentype)
 		DropConfigurationMapping(stmt, tup, relMap);
@@ -1271,6 +1284,59 @@ getTokenTypes(Oid prsId, List *tokennames)
 }
 
 /*
+ * Parse parse node extracted from dictionary mapping and transform it into
+ * internal representation of dictionary mapping.
+ */
+static TSMapElement *
+ParseTSMapConfig(DictMapElem *elem)
+{
+	TSMapElement *result = palloc0(sizeof(TSMapElement));
+
+	if (elem->kind == DICT_MAP_CASE)
+	{
+		TSMapCase  *caseObject = palloc0(sizeof(TSMapCase));
+		DictMapCase *caseASTObject = elem->data;
+
+		caseObject->condition = ParseTSMapConfig(caseASTObject->condition);
+		caseObject->command = ParseTSMapConfig(caseASTObject->command);
+
+		if (caseASTObject->elsebranch)
+			caseObject->elsebranch = ParseTSMapConfig(caseASTObject->elsebranch);
+
+		caseObject->match = caseASTObject->match;
+
+		caseObject->condition->parent = result;
+		caseObject->command->parent = result;
+
+		result->type = TSMAP_CASE;
+		result->value.objectCase = caseObject;
+	}
+	else if (elem->kind == DICT_MAP_EXPRESSION)
+	{
+		TSMapExpression *expression = palloc0(sizeof(TSMapExpression));
+		DictMapExprElem *expressionAST = elem->data;
+
+		expression->left = ParseTSMapConfig(expressionAST->left);
+		expression->right = ParseTSMapConfig(expressionAST->right);
+		expression->operator = expressionAST->oper;
+
+		result->type = TSMAP_EXPRESSION;
+		result->value.objectExpression = expression;
+	}
+	else if (elem->kind == DICT_MAP_KEEP)
+	{
+		result->value.objectExpression = NULL;
+		result->type = TSMAP_KEEP;
+	}
+	else if (elem->kind == DICT_MAP_DICTIONARY)
+	{
+		result->value.objectDictionary = get_ts_dict_oid(elem->data, false);
+		result->type = TSMAP_DICTIONARY;
+	}
+	return result;
+}
+
+/*
  * ALTER TEXT SEARCH CONFIGURATION ADD/ALTER MAPPING
  */
 static void
@@ -1286,8 +1352,9 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 	Oid			prsId;
 	int		   *tokens,
 				ntoken;
-	Oid		   *dictIds;
-	int			ndict;
+	Oid		   *dictIds = NULL;
+	int			ndict = 0;
+	TSMapElement *config = NULL;
 	ListCell   *c;
 
 	prsId = ((Form_pg_ts_config) GETSTRUCT(tup))->cfgparser;
@@ -1326,15 +1393,18 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 	/*
 	 * Convert list of dictionary names to array of dict OIDs
 	 */
-	ndict = list_length(stmt->dicts);
-	dictIds = (Oid *) palloc(sizeof(Oid) * ndict);
-	i = 0;
-	foreach(c, stmt->dicts)
+	if (stmt->dicts)
 	{
-		List	   *names = (List *) lfirst(c);
+		ndict = list_length(stmt->dicts);
+		dictIds = (Oid *) palloc(sizeof(Oid) * ndict);
+		i = 0;
+		foreach(c, stmt->dicts)
+		{
+			List	   *names = (List *) lfirst(c);
 
-		dictIds[i] = get_ts_dict_oid(names, false);
-		i++;
+			dictIds[i] = get_ts_dict_oid(names, false);
+			i++;
+		}
 	}
 
 	if (stmt->replace)
@@ -1356,6 +1426,10 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 		while (HeapTupleIsValid((maptup = systable_getnext(scan))))
 		{
 			Form_pg_ts_config_map cfgmap = (Form_pg_ts_config_map) GETSTRUCT(maptup);
+			Datum		repl_val[Natts_pg_ts_config_map];
+			bool		repl_null[Natts_pg_ts_config_map];
+			bool		repl_repl[Natts_pg_ts_config_map];
+			HeapTuple	newtup;
 
 			/*
 			 * check if it's one of target token types
@@ -1379,25 +1453,21 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 			/*
 			 * replace dictionary if match
 			 */
-			if (cfgmap->mapdict == dictOld)
-			{
-				Datum		repl_val[Natts_pg_ts_config_map];
-				bool		repl_null[Natts_pg_ts_config_map];
-				bool		repl_repl[Natts_pg_ts_config_map];
-				HeapTuple	newtup;
+			config = JsonbToTSMap(DatumGetJsonbP(&cfgmap->mapdicts));
+			TSMapReplaceDictionary(config, dictOld, dictNew);
 
-				memset(repl_val, 0, sizeof(repl_val));
-				memset(repl_null, false, sizeof(repl_null));
-				memset(repl_repl, false, sizeof(repl_repl));
+			memset(repl_val, 0, sizeof(repl_val));
+			memset(repl_null, false, sizeof(repl_null));
+			memset(repl_repl, false, sizeof(repl_repl));
 
-				repl_val[Anum_pg_ts_config_map_mapdict - 1] = ObjectIdGetDatum(dictNew);
-				repl_repl[Anum_pg_ts_config_map_mapdict - 1] = true;
+			repl_val[Anum_pg_ts_config_map_mapdicts - 1] = JsonbPGetDatum(TSMapToJsonb(config));
+			repl_repl[Anum_pg_ts_config_map_mapdicts - 1] = true;
 
-				newtup = heap_modify_tuple(maptup,
-										   RelationGetDescr(relMap),
-										   repl_val, repl_null, repl_repl);
-				CatalogTupleUpdate(relMap, &newtup->t_self, newtup);
-			}
+			newtup = heap_modify_tuple(maptup,
+									   RelationGetDescr(relMap),
+									   repl_val, repl_null, repl_repl);
+			CatalogTupleUpdate(relMap, &newtup->t_self, newtup);
+			pfree(config);
 		}
 
 		systable_endscan(scan);
@@ -1407,24 +1477,22 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 		/*
 		 * Insertion of new entries
 		 */
+		config = ParseTSMapConfig(stmt->dict_map);
+
 		for (i = 0; i < ntoken; i++)
 		{
-			for (j = 0; j < ndict; j++)
-			{
-				Datum		values[Natts_pg_ts_config_map];
-				bool		nulls[Natts_pg_ts_config_map];
+			Datum		values[Natts_pg_ts_config_map];
+			bool		nulls[Natts_pg_ts_config_map];
 
-				memset(nulls, false, sizeof(nulls));
-				values[Anum_pg_ts_config_map_mapcfg - 1] = ObjectIdGetDatum(cfgId);
-				values[Anum_pg_ts_config_map_maptokentype - 1] = Int32GetDatum(tokens[i]);
-				values[Anum_pg_ts_config_map_mapseqno - 1] = Int32GetDatum(j + 1);
-				values[Anum_pg_ts_config_map_mapdict - 1] = ObjectIdGetDatum(dictIds[j]);
+			memset(nulls, false, sizeof(nulls));
+			values[Anum_pg_ts_config_map_mapcfg - 1] = ObjectIdGetDatum(cfgId);
+			values[Anum_pg_ts_config_map_maptokentype - 1] = Int32GetDatum(tokens[i]);
+			values[Anum_pg_ts_config_map_mapdicts - 1] = JsonbPGetDatum(TSMapToJsonb(config));
 
-				tup = heap_form_tuple(relMap->rd_att, values, nulls);
-				CatalogTupleInsert(relMap, tup);
+			tup = heap_form_tuple(relMap->rd_att, values, nulls);
+			CatalogTupleInsert(relMap, tup);
 
-				heap_freetuple(tup);
-			}
+			heap_freetuple(tup);
 		}
 	}
 

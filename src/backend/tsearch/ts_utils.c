@@ -20,7 +20,6 @@
 #include "tsearch/ts_locale.h"
 #include "tsearch/ts_utils.h"
 
-
 /*
  * Given the base name and extension of a tsearch config file, return
  * its full path name.  The base name is assumed to be user-supplied,

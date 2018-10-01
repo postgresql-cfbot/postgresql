@@ -31,6 +31,7 @@ typedef enum relopt_type
 	RELOPT_TYPE_BOOL,
 	RELOPT_TYPE_INT,
 	RELOPT_TYPE_REAL,
+	RELOPT_TYPE_ENUM,
 	RELOPT_TYPE_STRING
 } relopt_type;
 
@@ -81,6 +82,7 @@ typedef struct relopt_value
 		bool		bool_val;
 		int			int_val;
 		double		real_val;
+		int			enum_val;
 		char	   *string_val; /* allocated separately */
 	}			values;
 } relopt_value;
@@ -107,6 +109,25 @@ typedef struct relopt_real
 	double		min;
 	double		max;
 } relopt_real;
+
+/*
+ * relopt_enum_element_definition - An element that defines enum name-value
+ * pair. An array of such elements defines acceptable values of enum option,
+ * and their internal numeric representation
+ */
+typedef struct relopt_enum_element_definition
+{
+	const char *text_value;
+	int			numeric_value;
+} relopt_enum_element_definition;
+
+typedef struct relopt_enum
+{
+	relopt_gen	gen;
+	relopt_enum_element_definition *enum_def; /* Null terminated array of enum
+											   * elements definitions */
+	int			default_val; /* Value that is used when option is not defined */
+} relopt_enum;
 
 /* validation routines for strings */
 typedef void (*validate_string_relopt) (const char *value);
@@ -253,6 +274,8 @@ extern void add_int_reloption(bits32 kinds, const char *name, const char *desc,
 				  int default_val, int min_val, int max_val);
 extern void add_real_reloption(bits32 kinds, const char *name, const char *desc,
 				   double default_val, double min_val, double max_val);
+extern void add_enum_reloption(bits32 kinds, const char *name, const char *desc,
+					relopt_enum_element_definition *enum_def, int default_val);
 extern void add_string_reloption(bits32 kinds, const char *name, const char *desc,
 					 const char *default_val, validate_string_relopt validator);
 

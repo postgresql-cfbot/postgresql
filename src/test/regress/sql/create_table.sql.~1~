@@ -422,18 +422,13 @@ DROP TABLE partitioned, partitioned2;
 CREATE TABLE list_parted (
 	a int
 ) PARTITION BY LIST (a);
+-- syntax allows only string literal, numeric literal and null to be
+-- specified for a partition bound value
 CREATE TABLE part_1 PARTITION OF list_parted FOR VALUES IN ('1');
 CREATE TABLE part_2 PARTITION OF list_parted FOR VALUES IN (2);
-CREATE TABLE part_3 PARTITION OF list_parted FOR VALUES IN ((2+1));
 CREATE TABLE part_null PARTITION OF list_parted FOR VALUES IN (null);
-\d+ list_parted
-
--- forbidden expressions for partition bound
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (somename);
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (a);
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (sum(a));
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN ((select 1));
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (generate_series(4, 6));
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN (int '1');
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ('1'::int);
 
 -- syntax does not allow empty list of values for list partitions
 CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ();
@@ -458,8 +453,7 @@ CREATE TABLE moneyp (
 	a money
 ) PARTITION BY LIST (a);
 CREATE TABLE moneyp_10 PARTITION OF moneyp FOR VALUES IN (10);
-CREATE TABLE moneyp_11 PARTITION OF moneyp FOR VALUES IN ('11');
-CREATE TABLE moneyp_12 PARTITION OF moneyp FOR VALUES IN (to_char(12, '99')::int);
+CREATE TABLE moneyp_10 PARTITION OF moneyp FOR VALUES IN ('10');
 DROP TABLE moneyp;
 
 -- immutable cast should work, though

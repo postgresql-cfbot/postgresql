@@ -464,12 +464,138 @@ SELECT 'a & g' <-> 'b <-> d'::tsquery;
  ( 'a' & 'g' ) <-> ( 'b' <-> 'd' )
 (1 row)
 
+SELECT tsquery_phrase('a <3> g', 'b & d');
+        tsquery_phrase         
+-------------------------------
+ 'a' <3> 'g' <-> ( 'b' & 'd' )
+(1 row)
+
 SELECT tsquery_phrase('a <3> g', 'b & d', 10);
          tsquery_phrase         
 --------------------------------
  'a' <3> 'g' <10> ( 'b' & 'd' )
 (1 row)
 
+SELECT tsquery_phrase('a <3> g', 'b & d', -10);
+         tsquery_phrase          
+---------------------------------
+ 'a' <3> 'g' <-10> ( 'b' & 'd' )
+(1 row)
+
+SELECT tsquery_phrase('a <3> g', 'b & d', 10, 12);
+          tsquery_phrase           
+-----------------------------------
+ 'a' <3> 'g' <10,12> ( 'b' & 'd' )
+(1 row)
+
+SELECT tsquery_phrase('a <3> g', 'b & d', 10, -5);
+ERROR:  Lower bound of range should be less or equal to upper bound
+SELECT tsquery_phrase('a <3> g', 'b & d', -10, 5);
+          tsquery_phrase           
+-----------------------------------
+ 'a' <3> 'g' <-10,5> ( 'b' & 'd' )
+(1 row)
+
+SELECT tsquery_phrase('a <3> g', 'b & d', -10, -3);
+           tsquery_phrase           
+------------------------------------
+ 'a' <3> 'g' <-10,-3> ( 'b' & 'd' )
+(1 row)
+
+SELECT 'a <-1000> b'::tsquery;
+     tsquery     
+-----------------
+ 'a' <-1000> 'b'
+(1 row)
+
+SELECT 'a <,-1000> b'::tsquery;
+        tsquery         
+------------------------
+ 'a' <-16384,-1000> 'b'
+(1 row)
+
+SELECT 'a <-1000,> b'::tsquery;
+      tsquery      
+-------------------
+ 'a' <-1000,0> 'b'
+(1 row)
+
+SELECT 'a <1000> b'::tsquery;
+    tsquery     
+----------------
+ 'a' <1000> 'b'
+(1 row)
+
+SELECT 'a <,1000> b'::tsquery;
+     tsquery      
+------------------
+ 'a' <0,1000> 'b'
+(1 row)
+
+SELECT 'a <1000,> b'::tsquery;
+       tsquery        
+----------------------
+ 'a' <1000,16384> 'b'
+(1 row)
+
+SELECT 'a <-10000000> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <-10000000> b'::tsquery;
+               ^
+SELECT 'a <,-10000000> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <,-10000000> b'::tsquery;
+               ^
+SELECT 'a <-10000000,> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <-10000000,> b'::tsquery;
+               ^
+SELECT 'a <10000000> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <10000000> b'::tsquery;
+               ^
+SELECT 'a <,10000000> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <,10000000> b'::tsquery;
+               ^
+SELECT 'a <10000000,> b'::tsquery;
+ERROR:  distance in phrase operator should not be less than -16384 and no greater than 16384
+LINE 1: SELECT 'a <10000000,> b'::tsquery;
+               ^
+SELECT 'a <--> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <--> b"
+LINE 1: SELECT 'a <--> b'::tsquery;
+               ^
+SELECT 'a <--1> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <--1> b"
+LINE 1: SELECT 'a <--1> b'::tsquery;
+               ^
+SELECT 'a <,> b'::tsquery;
+        tsquery         
+------------------------
+ 'a' <-16384,16384> 'b'
+(1 row)
+
+SELECT 'a <-,> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <-,> b"
+LINE 1: SELECT 'a <-,> b'::tsquery;
+               ^
+SELECT 'a <,-> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <,-> b"
+LINE 1: SELECT 'a <,-> b'::tsquery;
+               ^
+SELECT 'a <--1,> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <--1,> b"
+LINE 1: SELECT 'a <--1,> b'::tsquery;
+               ^
+SELECT 'a <,--1> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <,--1> b"
+LINE 1: SELECT 'a <,--1> b'::tsquery;
+               ^
+SELECT 'a <> b'::tsquery;
+ERROR:  syntax error in tsquery: "a <> b"
+LINE 1: SELECT 'a <> b'::tsquery;
+               ^
 -- tsvector-tsquery operations
 SELECT 'a b:89  ca:23A,64b d:34c'::tsvector @@ 'd:AC & ca' as "true";
  true 
@@ -1018,6 +1144,186 @@ SELECT 'a:1 b:3'::tsvector @@ 'a <0> a:*'::tsquery AS "true";
  true 
 ------
  t
+(1 row)
+
+SELECT 'a:1 b:2'::tsvector @@ 'a <1,2> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ 'a <1,2> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ 'a <1,2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ 'a <,2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ 'a <2,> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ '!a <1,2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ '!a <2,> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ '!a <2,> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ '!a <,2> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ '!a <,2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ 'a <1,2> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ 'a <2,> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ 'a <2,> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'a:1 b:4'::tsvector @@ 'a <,2> !b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'a:1 b:3'::tsvector @@ 'a <,2> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:2'::tsvector @@ 'a <-2,-1> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,-1> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,-1> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ 'a <,-2> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ '!a <-2,-1> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ '!a <,-2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ '!a <,-2> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ '!a <-2,> b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ '!a <-2,> b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,-1> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ 'a <,-2> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ 'a <,-2> !b'::tsquery AS "false";
+ false 
+-------
+ f
+(1 row)
+
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,> !b'::tsquery AS "true";
+ true 
+------
+ t
+(1 row)
+
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,> !b'::tsquery AS "false";
+ false 
+-------
+ f
 (1 row)
 
 -- tsvector editing operations

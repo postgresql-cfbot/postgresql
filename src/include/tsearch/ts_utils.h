@@ -70,7 +70,7 @@ extern TSQuery parse_tsquery(char *buf,
 extern void pushValue(TSQueryParserState state,
 		  char *strval, int lenval, int16 weight, bool prefix);
 extern void pushStop(TSQueryParserState state);
-extern void pushOperator(TSQueryParserState state, int8 oper, int16 distance);
+extern void pushOperator(TSQueryParserState state, int8 oper, OperatorData operator_data);
 
 /*
  * parse plain text and lexize words

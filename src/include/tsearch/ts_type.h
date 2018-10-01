@@ -82,6 +82,7 @@ typedef struct
 #define WEP_SETWEIGHT(x,v)	( (x) = ( (v) << 14 ) | ( (x) & 0x3fff ) )
 #define WEP_SETPOS(x,v)		( (x) = ( (x) & 0xc000 ) | ( (v) & 0x3fff ) )
 
+#define MINENTRYPOS (-(1<<14))
 #define MAXENTRYPOS (1<<14)
 #define MAXNUMPOS	(256)
 #define LIMITPOS(x) ( ( (x) >= MAXENTRYPOS ) ? (MAXENTRYPOS-1) : (x) )
@@ -176,11 +177,19 @@ extern const int tsearch_op_priority[OP_COUNT];
 /* get QueryOperator priority */
 #define QO_PRIORITY(x)	OP_PRIORITY(((QueryOperator *) (x))->oper)
 
+/* Additional data for operators */
+typedef struct OperatorData {
+	int16 distance_from;
+	int16 distance_to;
+} OperatorData;
+
+#define OPERATOR_DATA_INITIALIZE(x,v) { (x).distance_from = (x).distance_to = (v); }
+
 typedef struct
 {
 	QueryItemType type;
 	int8		oper;			/* see above */
-	int16		distance;		/* distance between agrs for OP_PHRASE */
+	OperatorData  operator_data; /* data for operator */
 	uint32		left;			/* pointer to left operand. Right operand is
 								 * item + 1, left operand is placed
 								 * item+item->left */

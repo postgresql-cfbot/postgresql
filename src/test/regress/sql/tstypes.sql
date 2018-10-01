@@ -84,7 +84,34 @@ SELECT 'a' <-> 'b & d'::tsquery;
 SELECT 'a & g' <-> 'b & d'::tsquery;
 SELECT 'a & g' <-> 'b | d'::tsquery;
 SELECT 'a & g' <-> 'b <-> d'::tsquery;
+SELECT tsquery_phrase('a <3> g', 'b & d');
 SELECT tsquery_phrase('a <3> g', 'b & d', 10);
+SELECT tsquery_phrase('a <3> g', 'b & d', -10);
+SELECT tsquery_phrase('a <3> g', 'b & d', 10, 12);
+SELECT tsquery_phrase('a <3> g', 'b & d', 10, -5);
+SELECT tsquery_phrase('a <3> g', 'b & d', -10, 5);
+SELECT tsquery_phrase('a <3> g', 'b & d', -10, -3);
+
+SELECT 'a <-1000> b'::tsquery;
+SELECT 'a <,-1000> b'::tsquery;
+SELECT 'a <-1000,> b'::tsquery;
+SELECT 'a <1000> b'::tsquery;
+SELECT 'a <,1000> b'::tsquery;
+SELECT 'a <1000,> b'::tsquery;
+SELECT 'a <-10000000> b'::tsquery;
+SELECT 'a <,-10000000> b'::tsquery;
+SELECT 'a <-10000000,> b'::tsquery;
+SELECT 'a <10000000> b'::tsquery;
+SELECT 'a <,10000000> b'::tsquery;
+SELECT 'a <10000000,> b'::tsquery;
+SELECT 'a <--> b'::tsquery;
+SELECT 'a <--1> b'::tsquery;
+SELECT 'a <,> b'::tsquery;
+SELECT 'a <-,> b'::tsquery;
+SELECT 'a <,-> b'::tsquery;
+SELECT 'a <--1,> b'::tsquery;
+SELECT 'a <,--1> b'::tsquery;
+SELECT 'a <> b'::tsquery;
 
 -- tsvector-tsquery operations
 
@@ -191,6 +218,39 @@ SELECT 'a:1 b:3'::tsvector @@ 'a <1> b'::tsquery AS "false";
 SELECT 'a:1 b:3'::tsvector @@ 'a <2> b'::tsquery AS "true";
 SELECT 'a:1 b:3'::tsvector @@ 'a <3> b'::tsquery AS "false";
 SELECT 'a:1 b:3'::tsvector @@ 'a <0> a:*'::tsquery AS "true";
+
+SELECT 'a:1 b:2'::tsvector @@ 'a <1,2> b'::tsquery AS "true";
+SELECT 'a:1 b:3'::tsvector @@ 'a <1,2> b'::tsquery AS "true";
+SELECT 'a:1 b:4'::tsvector @@ 'a <1,2> b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ 'a <,2> b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ 'a <2,> b'::tsquery AS "true";
+SELECT 'a:1 b:3'::tsvector @@ '!a <1,2> b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ '!a <2,> b'::tsquery AS "false";
+SELECT 'a:1 b:3'::tsvector @@ '!a <2,> b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ '!a <,2> b'::tsquery AS "true";
+SELECT 'a:1 b:3'::tsvector @@ '!a <,2> b'::tsquery AS "false";
+SELECT 'a:1 b:3'::tsvector @@ 'a <1,2> !b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ 'a <2,> !b'::tsquery AS "false";
+SELECT 'a:1 b:3'::tsvector @@ 'a <2,> !b'::tsquery AS "false";
+SELECT 'a:1 b:4'::tsvector @@ 'a <,2> !b'::tsquery AS "true";
+SELECT 'a:1 b:3'::tsvector @@ 'a <,2> !b'::tsquery AS "false";
+
+SELECT 'b:1 a:2'::tsvector @@ 'a <-2,-1> b'::tsquery AS "true";
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,-1> b'::tsquery AS "true";
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,-1> b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,> b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ 'a <,-2> b'::tsquery AS "true";
+SELECT 'b:1 a:3'::tsvector @@ '!a <-2,-1> b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ '!a <,-2> b'::tsquery AS "false";
+SELECT 'b:1 a:3'::tsvector @@ '!a <,-2> b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ '!a <-2,> b'::tsquery AS "true";
+SELECT 'b:1 a:3'::tsvector @@ '!a <-2,> b'::tsquery AS "false";
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,-1> !b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ 'a <,-2> !b'::tsquery AS "false";
+SELECT 'b:1 a:3'::tsvector @@ 'a <,-2> !b'::tsquery AS "false";
+SELECT 'b:1 a:4'::tsvector @@ 'a <-2,> !b'::tsquery AS "true";
+SELECT 'b:1 a:3'::tsvector @@ 'a <-2,> !b'::tsquery AS "false";
+
 
 -- tsvector editing operations
 

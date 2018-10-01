@@ -2484,7 +2484,6 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			Size		nleft;
 			int			written;
 
-#ifndef HAVE_PWRITE
 			/* Need to seek in the file? */
 			if (openLogOff != startoffset)
 			{
@@ -2496,7 +2495,6 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 									startoffset)));
 				openLogOff = startoffset;
 			}
-#endif
 
 			/* OK to write the page(s) */
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
@@ -2506,11 +2504,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			{
 				errno = 0;
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-#ifdef HAVE_PWRITE
-				written = pwrite(openLogFile, from, nleft, startoffset);
-#else
 				written = write(openLogFile, from, nleft);
-#endif
 				pgstat_report_wait_end();
 				if (written <= 0)
 				{
@@ -2525,7 +2519,6 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 				}
 				nleft -= written;
 				from += written;
-				startoffset += written;
 			} while (nleft > 0);
 
 			/* Update state for write */
@@ -11834,7 +11827,6 @@ retry:
 
 	/* Read the requested page */
 	readOff = targetPageOff;
-#ifndef HAVE_PREAD
 	if (lseek(readFile, (off_t) readOff, SEEK_SET) < 0)
 	{
 		char		fname[MAXFNAMELEN];
@@ -11848,14 +11840,9 @@ retry:
 						fname, readOff)));
 		goto next_record_is_invalid;
 	}
-#endif
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
-#ifdef HAVE_PREAD
-	r = pread(readFile, readBuf, XLOG_BLCKSZ, (off_t) readOff);
-#else
 	r = read(readFile, readBuf, XLOG_BLCKSZ);
-#endif
 	if (r != XLOG_BLCKSZ)
 	{
 		char		fname[MAXFNAMELEN];

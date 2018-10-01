@@ -26,6 +26,7 @@ extern int varstr_levenshtein_less_equal(const char *source, int slen,
 							  const char *target, int tlen,
 							  int ins_c, int del_c, int sub_c,
 							  int max_d, bool trusted);
+extern List *stringToQualifiedNameList(const char *string);
 extern List *textToQualifiedNameList(text *textval);
 extern bool SplitIdentifierString(char *rawstring, char separator,
 					  List **namelist);

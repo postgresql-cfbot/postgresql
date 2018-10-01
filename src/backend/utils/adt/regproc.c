@@ -1680,43 +1680,6 @@ text_regclass(PG_FUNCTION_ARGS)
 }
 
 
-/*
- * Given a C string, parse it into a qualified-name list.
- */
-List *
-stringToQualifiedNameList(const char *string)
-{
-	char	   *rawname;
-	List	   *result = NIL;
-	List	   *namelist;
-	ListCell   *l;
-
-	/* We need a modifiable copy of the input string. */
-	rawname = pstrdup(string);
-
-	if (!SplitIdentifierString(rawname, '.', &namelist))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_NAME),
-				 errmsg("invalid name syntax")));
-
-	if (namelist == NIL)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_NAME),
-				 errmsg("invalid name syntax")));
-
-	foreach(l, namelist)
-	{
-		char	   *curname = (char *) lfirst(l);
-
-		result = lappend(result, makeString(pstrdup(curname)));
-	}
-
-	pfree(rawname);
-	list_free(namelist);
-
-	return result;
-}
-
 /*****************************************************************************
  *	 SUPPORT ROUTINES														 *
  *****************************************************************************/

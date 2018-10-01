@@ -20,6 +20,8 @@
  *
  * INSTR_TIME_SET_CURRENT(t)		set t to current time
  *
+ * INSTR_TIME_SET_CURRENT_LAZY(t)	set t to current time if t is zero
+ *
  * INSTR_TIME_ADD(x, y)				x += y
  *
  * INSTR_TIME_SUBTRACT(x, y)		x -= y
@@ -244,5 +246,10 @@ GetTimerFrequency(void)
 }
 
 #endif							/* WIN32 */
+
+/* same macro on all platforms */
+#define INSTR_TIME_SET_CURRENT_LAZY(t) \
+	if (INSTR_TIME_IS_ZERO(t)) \
+		INSTR_TIME_SET_CURRENT(t)
 
 #endif							/* INSTR_TIME_H */

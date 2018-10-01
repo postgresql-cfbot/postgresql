@@ -26,11 +26,21 @@ use Test::More;
 
 use Exporter 'import';
 our @EXPORT = qw(
+  set_backend
   configure_test_server_for_ssl
   switch_server_cert
   test_connect_fails
   test_connect_ok
 );
+
+our $current_backend;
+
+sub set_backend
+{
+	my ($backend) = @_;
+
+	$current_backend = $backend;
+}
 
 # Define a couple of helper functions to test connecting to the server.
 
@@ -56,7 +66,7 @@ sub test_connect_fails
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($common_connstr, $connstr, $expected_stderr, $test_name) = @_;
+	my ($common_connstr, $connstr, $test_name, %expected_stderr) = @_;
 
 	my $cmd = [
 		'psql', '-X', '-A', '-t', '-c',
@@ -64,7 +74,7 @@ sub test_connect_fails
 		'-d', "$common_connstr $connstr"
 	];
 
-	command_fails_like($cmd, $expected_stderr, $test_name);
+	command_fails_like($cmd, $expected_stderr{$current_backend}, $test_name);
 	return;
 }
 
@@ -114,6 +124,7 @@ sub configure_test_server_for_ssl
 	print $conf "log_hostname=on\n";
 	print $conf "listen_addresses='$serverhost'\n";
 	print $conf "log_statement=all\n";
+	print $conf "ssl_keychain_use_default=on\n";
 
 	# enable SSL and set up server key
 	print $conf "include 'sslconfig.conf'";
@@ -155,7 +166,14 @@ sub switch_server_cert
 	print $sslconf "ssl_ca_file='$cafile.crt'\n";
 	print $sslconf "ssl_cert_file='$certfile.crt'\n";
 	print $sslconf "ssl_key_file='$certfile.key'\n";
-	print $sslconf "ssl_crl_file='root+client.crl'\n";
+	if (check_pg_config("#define USE_SECURETRANSPORT 1"))
+	{
+		print $sslconf "ssl_crl_file=''\n";
+	}
+	else
+	{
+		print $sslconf "ssl_crl_file='root+client.crl'\n";
+	}
 	close $sslconf;
 
 	$node->restart;

@@ -474,8 +474,19 @@ struct pg_conn
 	void	   *engine;			/* dummy field to keep struct the same if
 								 * OpenSSL version changes */
 #endif
-#endif							/* USE_OPENSSL */
-#endif							/* USE_SSL */
+#endif   /* USE_OPENSSL */
+
+#ifdef USE_SECURETRANSPORT
+	char	   *keychain;
+	bool		keychain_use_default;
+
+	void	   *ssl;		/* SSL context reference */
+	void	   *st_rootcert;
+	ssize_t		ssl_buffered;
+	int			ssl_key_bits;
+#endif   /* USE_SECURETRANSPORT */
+
+#endif   /* USE_SSL */
 
 #ifdef ENABLE_GSS
 	gss_ctx_id_t gctx;			/* GSS context */
@@ -728,6 +739,7 @@ extern ssize_t pgtls_write(PGconn *conn, const void *ptr, size_t len);
  *
  * This is not supported with old versions of OpenSSL that don't have
  * the X509_get_signature_nid() function.
+ * It's also not supported with Apple Secure Transport.
  */
 #if defined(USE_OPENSSL) && defined(HAVE_X509_GET_SIGNATURE_NID)
 #define HAVE_PGTLS_GET_PEER_CERTIFICATE_HASH

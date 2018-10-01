@@ -46,6 +46,10 @@ char	   *ssl_crl_file;
 char	   *ssl_dh_params_file;
 char	   *ssl_passphrase_command;
 bool		ssl_passphrase_command_supports_reload;
+#ifdef USE_SECURETRANSPORT
+char       *ssl_keychain_file;
+bool		ssl_keychain_use_default = false;
+#endif
 
 #ifdef USE_SSL
 bool		ssl_loaded_verify_locations = false;

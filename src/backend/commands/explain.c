@@ -111,6 +111,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static void show_scan_direction(ExplainState *es, ScanDirection direction);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 						ExplainState *es);
 static void ExplainScanTarget(Scan *plan, ExplainState *es);
@@ -1245,13 +1246,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SeqScan:
 		case T_SampleScan:
 		case T_BitmapHeapScan:
-		case T_TidScan:
 		case T_SubqueryScan:
 		case T_FunctionScan:
 		case T_TableFuncScan:
 		case T_ValuesScan:
 		case T_CteScan:
 		case T_WorkTableScan:
+			ExplainScanTarget((Scan *) plan, es);
+			break;
+		case T_TidScan:
+			show_scan_direction(es, ((TidScan *) plan)->direction);
 			ExplainScanTarget((Scan *) plan, es);
 			break;
 		case T_ForeignScan:
@@ -2867,25 +2871,21 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 /*
- * Add some additional details about an IndexScan or IndexOnlyScan
+ * Show the direction of a scan.
  */
 static void
-ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
-						ExplainState *es)
+show_scan_direction(ExplainState *es, ScanDirection direction)
 {
-	const char *indexname = explain_get_index_name(indexid);
-
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
-		if (ScanDirectionIsBackward(indexorderdir))
+		if (ScanDirectionIsBackward(direction))
 			appendStringInfoString(es->str, " Backward");
-		appendStringInfo(es->str, " using %s", indexname);
 	}
 	else
 	{
 		const char *scandir;
 
-		switch (indexorderdir)
+		switch (direction)
 		{
 			case BackwardScanDirection:
 				scandir = "Backward";
@@ -2901,8 +2901,24 @@ ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 				break;
 		}
 		ExplainPropertyText("Scan Direction", scandir, es);
-		ExplainPropertyText("Index Name", indexname, es);
 	}
+}
+
+/*
+ * Add some additional details about an IndexScan or IndexOnlyScan
+ */
+static void
+ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
+						ExplainState *es)
+{
+	const char *indexname = explain_get_index_name(indexid);
+
+	show_scan_direction(es, indexorderdir);
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+		appendStringInfo(es->str, " using %s", indexname);
+	else
+		ExplainPropertyText("Index Name", indexname, es);
 }
 
 /*

@@ -116,6 +116,39 @@ FETCH FIRST FROM c;
 (1 row)
 
 ROLLBACK;
+-- check that ordering on a tidscan doesn't require a sort
+EXPLAIN (COSTS OFF)
+SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,2)', '(0,1)', '(0,3)']::tid[]) ORDER BY ctid;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Tid Scan on tidscan
+   TID Cond: (ctid = ANY ('{"(0,2)","(0,1)","(0,3)"}'::tid[]))
+(2 rows)
+
+SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,2)', '(0,1)', '(0,3)']::tid[]) ORDER BY ctid;
+ ctid  | id 
+-------+----
+ (0,1) |  1
+ (0,2) |  2
+ (0,3) |  3
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,2)', '(0,1)', '(0,3)']::tid[]) ORDER BY ctid DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Tid Scan Backward on tidscan
+   TID Cond: (ctid = ANY ('{"(0,2)","(0,1)","(0,3)"}'::tid[]))
+(2 rows)
+
+SELECT ctid, * FROM tidscan WHERE ctid = ANY(ARRAY['(0,2)', '(0,1)', '(0,3)']::tid[]) ORDER BY ctid DESC;
+ ctid  | id 
+-------+----
+ (0,3) |  3
+ (0,2) |  2
+ (0,1) |  1
+(3 rows)
+
 -- tidscan via CURRENT OF
 BEGIN;
 DECLARE c CURSOR FOR SELECT ctid, * FROM tidscan;
@@ -177,3 +210,315 @@ UPDATE tidscan SET id = -id WHERE CURRENT OF c RETURNING *;
 ERROR:  cursor "c" is not positioned on a row
 ROLLBACK;
 DROP TABLE tidscan;
+-- tests for tidrangescans
+CREATE TABLE tidrangescan(id integer, data text);
+INSERT INTO tidrangescan SELECT i,'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' FROM generate_series(1,1000) AS s(i);
+DELETE FROM tidrangescan WHERE substring(ctid::text from ',(\d+)\)')::integer > 10 OR substring(ctid::text from '\((\d+),')::integer >= 10;;
+VACUUM tidrangescan;
+-- range scans with upper bound
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid < '(1,0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid < '(1,0)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid < '(1,0)';
+  ctid  |                                       data                                       
+--------+----------------------------------------------------------------------------------
+ (0,1)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,2)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,3)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,4)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,5)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,6)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,7)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,8)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,9)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,10) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(10 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid <= '(1,5)';
+             QUERY PLAN             
+------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid <= '(1,5)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid <= '(1,5)';
+  ctid  |                                       data                                       
+--------+----------------------------------------------------------------------------------
+ (0,1)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,2)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,3)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,4)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,5)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,6)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,7)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,8)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,9)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (0,10) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (1,1)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (1,2)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (1,3)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (1,4)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (1,5)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(15 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid < '(0,0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid < '(0,0)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid < '(0,0)';
+ ctid | data 
+------+------
+(0 rows)
+
+-- range scans with lower bound
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid > '(9,8)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid > '(9,8)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid > '(9,8)';
+  ctid  |                                       data                                       
+--------+----------------------------------------------------------------------------------
+ (9,9)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (9,10) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE '(9,8)' < ctid;
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: ('(9,8)'::tid < ctid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE '(9,8)' < ctid;
+  ctid  |                                       data                                       
+--------+----------------------------------------------------------------------------------
+ (9,9)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (9,10) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid >= '(9,8)';
+             QUERY PLAN             
+------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid >= '(9,8)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid >= '(9,8)';
+  ctid  |                                       data                                       
+--------+----------------------------------------------------------------------------------
+ (9,8)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (9,9)  | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (9,10) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid >= '(100,0)';
+              QUERY PLAN              
+--------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (ctid >= '(100,0)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid >= '(100,0)';
+ ctid | data 
+------+------
+(0 rows)
+
+-- range scans with both bounds
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE ctid > '(4,4)' AND '(4,7)' >= ctid;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: ((ctid > '(4,4)'::tid) AND ('(4,7)'::tid >= ctid))
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE ctid > '(4,4)' AND '(4,7)' >= ctid;
+ ctid  |                                       data                                       
+-------+----------------------------------------------------------------------------------
+ (4,5) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,6) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,7) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)';
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: (('(4,7)'::tid >= ctid) AND (ctid > '(4,4)'::tid))
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)';
+ ctid  |                                       data                                       
+-------+----------------------------------------------------------------------------------
+ (4,5) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,6) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,7) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(3 rows)
+
+-- combinations
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)' OR ctid = '(2,2)';
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: ((('(4,7)'::tid >= ctid) AND (ctid > '(4,4)'::tid)) OR (ctid = '(2,2)'::tid))
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)' OR ctid = '(2,2)';
+ ctid  |                                       data                                       
+-------+----------------------------------------------------------------------------------
+ (2,2) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,5) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,6) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,7) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(4 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)' OR ctid = '(2,2)' AND data = 'foo';
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Tid Scan on tidrangescan
+   TID Cond: ((('(4,7)'::tid >= ctid) AND (ctid > '(4,4)'::tid)) OR (ctid = '(2,2)'::tid))
+   Filter: ((('(4,7)'::tid >= ctid) AND (ctid > '(4,4)'::tid)) OR ((ctid = '(2,2)'::tid) AND (data = 'foo'::text)))
+(3 rows)
+
+SELECT ctid, data FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)' OR ctid = '(2,2)' AND data = 'foo';
+ ctid  |                                       data                                       
+-------+----------------------------------------------------------------------------------
+ (4,5) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,6) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ (4,7) | xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+(3 rows)
+
+-- ordering with no quals should use tid range scan
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan ORDER BY ctid ASC;
+        QUERY PLAN        
+--------------------------
+ Tid Scan on tidrangescan
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan ORDER BY ctid DESC;
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan Backward on tidrangescan
+(1 row)
+
+-- min/max
+EXPLAIN (COSTS OFF)
+SELECT MIN(ctid) FROM tidrangescan;
+                 QUERY PLAN                 
+--------------------------------------------
+ Result
+   InitPlan 1 (returns $0)
+     ->  Limit
+           ->  Tid Scan on tidrangescan
+                 Filter: (ctid IS NOT NULL)
+(5 rows)
+
+SELECT MIN(ctid) FROM tidrangescan;
+  min  
+-------
+ (0,1)
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT MAX(ctid) FROM tidrangescan;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)
+     ->  Limit
+           ->  Tid Scan Backward on tidrangescan
+                 Filter: (ctid IS NOT NULL)
+(5 rows)
+
+SELECT MAX(ctid) FROM tidrangescan;
+  max   
+--------
+ (9,10)
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT MIN(ctid) FROM tidrangescan WHERE ctid > '(5,0)';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)
+     ->  Limit
+           ->  Tid Scan on tidrangescan
+                 TID Cond: (ctid > '(5,0)'::tid)
+                 Filter: (ctid IS NOT NULL)
+(6 rows)
+
+SELECT MIN(ctid) FROM tidrangescan WHERE ctid > '(5,0)';
+  min  
+-------
+ (5,1)
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT MAX(ctid) FROM tidrangescan WHERE ctid < '(5,0)';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Result
+   InitPlan 1 (returns $0)
+     ->  Limit
+           ->  Tid Scan Backward on tidrangescan
+                 TID Cond: (ctid < '(5,0)'::tid)
+                 Filter: (ctid IS NOT NULL)
+(6 rows)
+
+SELECT MAX(ctid) FROM tidrangescan WHERE ctid < '(5,0)';
+  max   
+--------
+ (4,10)
+(1 row)
+
+-- empty table
+CREATE TABLE tidrangescan_empty(id integer, data text);
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan_empty WHERE ctid < '(1, 0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan_empty
+   TID Cond: (ctid < '(1,0)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan_empty WHERE ctid < '(1, 0)';
+ ctid | data 
+------+------
+(0 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid, data FROM tidrangescan_empty WHERE ctid > '(9, 0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Scan on tidrangescan_empty
+   TID Cond: (ctid > '(9,0)'::tid)
+(2 rows)
+
+SELECT ctid, data FROM tidrangescan_empty WHERE ctid > '(9, 0)';
+ ctid | data 
+------+------
+(0 rows)
+

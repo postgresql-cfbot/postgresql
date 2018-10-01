@@ -583,6 +583,7 @@ _copyTidScan(const TidScan *from)
 	 * copy remainder of node
 	 */
 	COPY_NODE_FIELD(tidquals);
+	COPY_SCALAR_FIELD(direction);
 
 	return newnode;
 }

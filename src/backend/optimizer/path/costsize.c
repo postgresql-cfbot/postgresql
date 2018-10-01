@@ -1185,8 +1185,11 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	Cost		cpu_per_tuple;
 	QualCost	tid_qual_cost;
 	int			ntuples;
+	int			nrandompages;
+	int			nseqpages;
 	ListCell   *l;
 	double		spc_random_page_cost;
+	double		spc_seq_page_cost;
 
 	/* Should only be applied to base relations */
 	Assert(baserel->relid > 0);
@@ -1200,6 +1203,8 @@ cost_tidscan(Path *path, PlannerInfo *root,
 
 	/* Count how many tuples we expect to retrieve */
 	ntuples = 0;
+	nrandompages = 0;
+	nseqpages = 0;
 	foreach(l, tidquals)
 	{
 		if (IsA(lfirst(l), ScalarArrayOpExpr))
@@ -1207,19 +1212,37 @@ cost_tidscan(Path *path, PlannerInfo *root,
 			/* Each element of the array yields 1 tuple */
 			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) lfirst(l);
 			Node	   *arraynode = (Node *) lsecond(saop->args);
+			int			array_len = estimate_array_length(arraynode);
 
-			ntuples += estimate_array_length(arraynode);
+			ntuples += array_len;
+			nrandompages += array_len;
 		}
 		else if (IsA(lfirst(l), CurrentOfExpr))
 		{
 			/* CURRENT OF yields 1 tuple */
 			isCurrentOf = true;
 			ntuples++;
+			nrandompages++;
 		}
 		else
 		{
-			/* It's just CTID = something, count 1 tuple */
-			ntuples++;
+			/*
+			 * For anything else, we'll use the normal selectivity estimate.
+			 * Count the first page as a random page, the rest as sequential.
+			 */
+			Selectivity selectivity = clause_selectivity(root, lfirst(l),
+														 baserel->relid,
+														 JOIN_INNER,
+														 NULL);
+			BlockNumber pages = selectivity * baserel->pages;
+
+			if (pages <= 0)
+				pages = 1;
+
+			/* TODO decide what the costs should be */
+			ntuples += selectivity * baserel->tuples;
+			nseqpages += pages - 1;
+			nrandompages++;
 		}
 	}
 
@@ -1248,10 +1271,10 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	/* fetch estimated page cost for tablespace containing table */
 	get_tablespace_page_costs(baserel->reltablespace,
 							  &spc_random_page_cost,
-							  NULL);
+							  &spc_seq_page_cost);
 
-	/* disk costs --- assume each tuple on a different page */
-	run_cost += spc_random_page_cost * ntuples;
+	/* disk costs */
+	run_cost += spc_random_page_cost * nrandompages + spc_seq_page_cost + nseqpages;
 
 	/* Add scanning CPU costs */
 	get_restriction_qual_cost(root, baserel, param_info, &qpqual_cost);

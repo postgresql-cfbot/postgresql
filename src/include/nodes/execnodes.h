@@ -1477,6 +1477,8 @@ typedef struct BitmapHeapScanState
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
+typedef struct TidRange TidRange;
+
 /* ----------------
  *	 TidScanState information
  *
@@ -1493,10 +1495,11 @@ typedef struct TidScanState
 	ScanState	ss;				/* its first field is NodeTag */
 	List	   *tss_tidexprs;
 	bool		tss_isCurrentOf;
-	int			tss_NumTids;
+	int			tss_NumRanges;
 	int			tss_TidPtr;
-	ItemPointerData *tss_TidList;
-	HeapTupleData tss_htup;
+	TidRange   *tss_TidRanges;
+	bool		tss_inScan;
+	HeapTupleData tss_htup;		/* for current-of and single TID fetches */
 } TidScanState;
 
 /* ----------------

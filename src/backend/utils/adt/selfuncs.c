@@ -572,6 +572,30 @@ scalarineqsel(PlannerInfo *root, Oid operator, bool isgt, bool iseq,
 
 	if (!HeapTupleIsValid(vardata->statsTuple))
 	{
+		/*
+		 * There are no stats for system columns, but for CTID we can estimate
+		 * based on table size.
+		 */
+		if (vardata->var && IsA(vardata->var, Var) &&
+			((Var *) vardata->var)->varattno == SelfItemPointerAttributeNumber)
+		{
+			ItemPointer itemptr;
+			BlockNumber block;
+
+			/* If the relation's empty, we're going to read all of it. */
+			if (vardata->rel->pages == 0)
+				return 1.0;
+
+			itemptr = (ItemPointer) DatumGetPointer(constval);
+			block = ItemPointerGetBlockNumberNoCheck(itemptr);
+			selec = block / (double) vardata->rel->pages;
+			if (isgt)
+				selec = 1.0 - selec;
+
+			CLAMP_PROBABILITY(selec);
+			return selec;
+		}
+
 		/* no stats available, so default result */
 		return DEFAULT_INEQ_SEL;
 	}
@@ -1785,6 +1809,15 @@ nulltestsel(PlannerInfo *root, NullTestType nulltesttype, Node *arg,
 					 (int) nulltesttype);
 				return (Selectivity) 0; /* keep compiler quiet */
 		}
+	}
+	else if (vardata.var && IsA(vardata.var, Var) &&
+			 ((Var *) vardata.var)->varattno == SelfItemPointerAttributeNumber)
+	{
+		/*
+		 * There are no stats for system columns, but we know CTID is never
+		 * NULL.
+		 */
+		selec = (nulltesttype == IS_NULL) ? 0.0 : 1.0;
 	}
 	else
 	{

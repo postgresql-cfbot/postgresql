@@ -22,7 +22,9 @@
  */
 #include "postgres.h"
 
+#include "access/relscan.h"
 #include "access/sysattr.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "executor/execdebug.h"
 #include "executor/nodeTidscan.h"
@@ -39,19 +41,76 @@
 	 ((Var *) (node))->varattno == SelfItemPointerAttributeNumber && \
 	 ((Var *) (node))->varlevelsup == 0)
 
+typedef enum
+{
+	TIDEXPR_CURRENT_OF,
+	TIDEXPR_IN_ARRAY,
+	TIDEXPR_EQ,
+	TIDEXPR_LT,
+	TIDEXPR_GT,
+	TIDEXPR_BETWEEN,
+	TIDEXPR_ANY
+}			TidExprType;
+
 /* one element in tss_tidexprs */
 typedef struct TidExpr
 {
+	TidExprType type;
 	ExprState  *exprstate;		/* ExprState for a TID-yielding subexpr */
-	bool		isarray;		/* if true, it yields tid[] not just tid */
-	CurrentOfExpr *cexpr;		/* alternatively, we can have CURRENT OF */
+	ExprState  *exprstate2;		/* For TIDEXPR_BETWEEN */
+	CurrentOfExpr *cexpr;		/* For TIDEXPR_CURRENT_OF */
+	bool		strict;			/* Indicates < rather than <=, or > rather */
+	bool		strict2;		/* than >= */
 } TidExpr;
 
+typedef struct TidRange
+{
+	ItemPointerData first;
+	ItemPointerData last;
+}			TidRange;
+
+static ExprState *MakeTidOpExprState(OpExpr *expr, TidScanState *tidstate, bool *strict, bool *invert);
 static void TidExprListCreate(TidScanState *tidstate);
+static TidRange * EnlargeTidRangeArray(TidRange * tidRanges, int numRanges, int *numAllocRanges);
+static bool SetTidLowerBound(ItemPointer tid, bool strict, int nblocks, ItemPointer lowerBound);
+static bool SetTidUpperBound(ItemPointer tid, bool strict, int nblocks, ItemPointer upperBound);
 static void TidListEval(TidScanState *tidstate);
+static bool MergeTidRanges(TidRange * a, TidRange * b);
 static int	itemptr_comparator(const void *a, const void *b);
+static int	tidrange_comparator(const void *a, const void *b);
+static HeapScanDesc BeginTidRangeScan(TidScanState *node, TidRange * range);
+static HeapTuple NextInTidRange(HeapScanDesc scandesc, ScanDirection direction, TidRange * range);
 static TupleTableSlot *TidNext(TidScanState *node);
 
+
+/*
+ * Create an ExprState corresponding to the value part of a TID comparison.
+ * If the comparison operator is > or <, strict is set.
+ * If the comparison is of the form VALUE op CTID, then invert is set.
+ */
+static ExprState *
+MakeTidOpExprState(OpExpr *expr, TidScanState *tidstate, bool *strict, bool *invert)
+{
+	Node	   *arg1 = get_leftop((Expr *) expr);
+	Node	   *arg2 = get_rightop((Expr *) expr);
+	ExprState  *exprstate = NULL;
+
+	*invert = false;
+
+	if (IsCTIDVar(arg1))
+		exprstate = ExecInitExpr((Expr *) arg2, &tidstate->ss.ps);
+	else if (IsCTIDVar(arg2))
+	{
+		exprstate = ExecInitExpr((Expr *) arg1, &tidstate->ss.ps);
+		*invert = true;
+	}
+	else
+		elog(ERROR, "could not identify CTID variable");
+
+	*strict = expr->opno == TIDLessOperator || expr->opno == TIDGreaterOperator;
+
+	return exprstate;
+}
 
 /*
  * Extract the qual subexpressions that yield TIDs to search for,
@@ -69,6 +128,14 @@ TidExprListCreate(TidScanState *tidstate)
 	tidstate->tss_tidexprs = NIL;
 	tidstate->tss_isCurrentOf = false;
 
+	if (!node->tidquals)
+	{
+		TidExpr    *tidexpr = (TidExpr *) palloc0(sizeof(TidExpr));
+
+		tidexpr->type = TIDEXPR_ANY;
+		tidstate->tss_tidexprs = lappend(tidstate->tss_tidexprs, tidexpr);
+	}
+
 	foreach(l, node->tidquals)
 	{
 		Expr	   *expr = (Expr *) lfirst(l);
@@ -76,20 +143,16 @@ TidExprListCreate(TidScanState *tidstate)
 
 		if (is_opclause(expr))
 		{
-			Node	   *arg1;
-			Node	   *arg2;
+			OpExpr	   *opexpr = (OpExpr *) expr;
+			bool		invert;
 
-			arg1 = get_leftop(expr);
-			arg2 = get_rightop(expr);
-			if (IsCTIDVar(arg1))
-				tidexpr->exprstate = ExecInitExpr((Expr *) arg2,
-												  &tidstate->ss.ps);
-			else if (IsCTIDVar(arg2))
-				tidexpr->exprstate = ExecInitExpr((Expr *) arg1,
-												  &tidstate->ss.ps);
+			tidexpr->exprstate = MakeTidOpExprState(opexpr, tidstate, &tidexpr->strict, &invert);
+			if (opexpr->opno == TIDLessOperator || opexpr->opno == TIDLessEqOperator)
+				tidexpr->type = invert ? TIDEXPR_GT : TIDEXPR_LT;
+			else if (opexpr->opno == TIDGreaterOperator || opexpr->opno == TIDGreaterEqOperator)
+				tidexpr->type = invert ? TIDEXPR_LT : TIDEXPR_GT;
 			else
-				elog(ERROR, "could not identify CTID variable");
-			tidexpr->isarray = false;
+				tidexpr->type = TIDEXPR_EQ;
 		}
 		else if (expr && IsA(expr, ScalarArrayOpExpr))
 		{
@@ -98,14 +161,45 @@ TidExprListCreate(TidScanState *tidstate)
 			Assert(IsCTIDVar(linitial(saex->args)));
 			tidexpr->exprstate = ExecInitExpr(lsecond(saex->args),
 											  &tidstate->ss.ps);
-			tidexpr->isarray = true;
+			tidexpr->type = TIDEXPR_IN_ARRAY;
 		}
 		else if (expr && IsA(expr, CurrentOfExpr))
 		{
 			CurrentOfExpr *cexpr = (CurrentOfExpr *) expr;
 
 			tidexpr->cexpr = cexpr;
+			tidexpr->type = TIDEXPR_CURRENT_OF;
 			tidstate->tss_isCurrentOf = true;
+		}
+		else if (and_clause((Node *) expr))
+		{
+			OpExpr	   *arg1;
+			OpExpr	   *arg2;
+			bool		invert;
+			bool		invert2;
+
+			Assert(list_length(((BoolExpr *) expr)->args) == 2);
+			arg1 = (OpExpr *) linitial(((BoolExpr *) expr)->args);
+			arg2 = (OpExpr *) lsecond(((BoolExpr *) expr)->args);
+			tidexpr->exprstate = MakeTidOpExprState(arg1, tidstate, &tidexpr->strict, &invert);
+			tidexpr->exprstate2 = MakeTidOpExprState(arg2, tidstate, &tidexpr->strict2, &invert2);
+
+			/* If the LHS is not the lower bound, swap them. */
+			if (invert == (arg1->opno == TIDGreaterOperator || arg1->opno == TIDGreaterEqOperator))
+			{
+				bool		temp_strict;
+				ExprState  *temp_es;
+
+				temp_es = tidexpr->exprstate;
+				tidexpr->exprstate = tidexpr->exprstate2;
+				tidexpr->exprstate2 = temp_es;
+
+				temp_strict = tidexpr->strict;
+				tidexpr->strict = tidexpr->strict2;
+				tidexpr->strict2 = temp_strict;
+			}
+
+			tidexpr->type = TIDEXPR_BETWEEN;
 		}
 		else
 			elog(ERROR, "could not identify CTID expression");
@@ -116,6 +210,113 @@ TidExprListCreate(TidScanState *tidstate)
 	/* CurrentOfExpr could never appear OR'd with something else */
 	Assert(list_length(tidstate->tss_tidexprs) == 1 ||
 		   !tidstate->tss_isCurrentOf);
+}
+
+static TidRange *
+EnlargeTidRangeArray(TidRange * tidRanges, int numRanges, int *numAllocRanges)
+{
+	if (numRanges >= *numAllocRanges)
+	{
+		*numAllocRanges *= 2;
+		tidRanges = (TidRange *)
+			repalloc(tidRanges,
+					 *numAllocRanges * sizeof(TidRange));
+	}
+	return tidRanges;
+}
+
+/*
+ * Set a lower bound tid, taking into account the strictness of the bound.
+ * Return false if the lower bound is outside the size of the table.
+ */
+static bool
+SetTidLowerBound(ItemPointer tid, bool strict, int nblocks, ItemPointer lowerBound)
+{
+	OffsetNumber offset;
+
+	if (tid == NULL)
+	{
+		ItemPointerSetBlockNumber(lowerBound, 0);
+		ItemPointerSetOffsetNumber(lowerBound, 1);
+		return true;
+	}
+
+	if (ItemPointerGetBlockNumberNoCheck(tid) > nblocks)
+		return false;
+
+	*lowerBound = *tid;
+	offset = ItemPointerGetOffsetNumberNoCheck(tid);
+
+	if (strict)
+		ItemPointerSetOffsetNumber(lowerBound, OffsetNumberNext(offset));
+	else if (offset == 0)
+		ItemPointerSetOffsetNumber(lowerBound, 1);
+
+	return true;
+}
+
+/*
+ * Set an upper bound tid, taking into account the strictness of the bound.
+ * Return false if the bound excludes anything from the table.
+ */
+static bool
+SetTidUpperBound(ItemPointer tid, bool strict, int nblocks, ItemPointer upperBound)
+{
+	OffsetNumber offset;
+
+	/* If the table is empty, the range must be empty. */
+	if (nblocks == 0)
+		return false;
+
+	if (tid == NULL)
+	{
+		ItemPointerSetBlockNumber(upperBound, nblocks - 1);
+		ItemPointerSetOffsetNumber(upperBound, MaxOffsetNumber);
+		return true;
+	}
+
+	*upperBound = *tid;
+	offset = ItemPointerGetOffsetNumberNoCheck(tid);
+
+	/*
+	 * If the expression was non-strict (<=) and the offset is 0, then just
+	 * pretend it was strict, because offset 0 doesn't exist and we may as
+	 * well exclude that block.
+	 */
+	if (!strict && offset == 0)
+		strict = true;
+
+	if (strict)
+	{
+		if (offset == 0)
+		{
+			BlockNumber block = ItemPointerGetBlockNumberNoCheck(upperBound);
+
+			/*
+			 * If the upper bound was already block 0, then there is no valid
+			 * range.
+			 */
+			if (block == 0)
+				return false;
+
+			ItemPointerSetBlockNumber(upperBound, block - 1);
+			ItemPointerSetOffsetNumber(upperBound, MaxOffsetNumber);
+		}
+		else
+			ItemPointerSetOffsetNumber(upperBound, OffsetNumberPrev(offset));
+	}
+
+	/*
+	 * If the upper bound is beyond the last block of the table, truncate it
+	 * to the last TID of the last block.
+	 */
+	if (ItemPointerGetBlockNumberNoCheck(upperBound) > nblocks)
+	{
+		ItemPointerSetBlockNumber(upperBound, nblocks - 1);
+		ItemPointerSetOffsetNumber(upperBound, MaxOffsetNumber);
+	}
+
+	return true;
 }
 
 /*
@@ -129,9 +330,9 @@ TidListEval(TidScanState *tidstate)
 {
 	ExprContext *econtext = tidstate->ss.ps.ps_ExprContext;
 	BlockNumber nblocks;
-	ItemPointerData *tidList;
-	int			numAllocTids;
-	int			numTids;
+	TidRange   *tidRanges;
+	int			numAllocRanges;
+	int			numRanges;
 	ListCell   *l;
 
 	/*
@@ -147,10 +348,9 @@ TidListEval(TidScanState *tidstate)
 	 * are simple OpExprs or CurrentOfExprs.  If there are any
 	 * ScalarArrayOpExprs, we may have to enlarge the array.
 	 */
-	numAllocTids = list_length(tidstate->tss_tidexprs);
-	tidList = (ItemPointerData *)
-		palloc(numAllocTids * sizeof(ItemPointerData));
-	numTids = 0;
+	numAllocRanges = list_length(tidstate->tss_tidexprs);
+	tidRanges = (TidRange *) palloc0(numAllocRanges * sizeof(TidRange));
+	numRanges = 0;
 
 	foreach(l, tidstate->tss_tidexprs)
 	{
@@ -158,7 +358,7 @@ TidListEval(TidScanState *tidstate)
 		ItemPointer itemptr;
 		bool		isNull;
 
-		if (tidexpr->exprstate && !tidexpr->isarray)
+		if (tidexpr->exprstate && tidexpr->type == TIDEXPR_EQ)
 		{
 			itemptr = (ItemPointer)
 				DatumGetPointer(ExecEvalExprSwitchContext(tidexpr->exprstate,
@@ -168,17 +368,76 @@ TidListEval(TidScanState *tidstate)
 				ItemPointerIsValid(itemptr) &&
 				ItemPointerGetBlockNumber(itemptr) < nblocks)
 			{
-				if (numTids >= numAllocTids)
-				{
-					numAllocTids *= 2;
-					tidList = (ItemPointerData *)
-						repalloc(tidList,
-								 numAllocTids * sizeof(ItemPointerData));
-				}
-				tidList[numTids++] = *itemptr;
+				tidRanges = EnlargeTidRangeArray(tidRanges, numRanges, &numAllocRanges);
+				tidRanges[numRanges].first = *itemptr;
+				tidRanges[numRanges].last = *itemptr;
+				numRanges++;
 			}
 		}
-		else if (tidexpr->exprstate && tidexpr->isarray)
+		else if (tidexpr->exprstate && tidexpr->type == TIDEXPR_LT)
+		{
+			bool		upper_isNull;
+			ItemPointer upper_itemptr = (ItemPointer)
+			DatumGetPointer(ExecEvalExprSwitchContext(tidexpr->exprstate,
+													  econtext,
+													  &upper_isNull));
+
+			if (upper_isNull)
+				continue;
+
+			tidRanges = EnlargeTidRangeArray(tidRanges, numRanges, &numAllocRanges);
+
+			SetTidLowerBound(NULL, false, nblocks, &tidRanges[numRanges].first);
+			if (SetTidUpperBound(upper_itemptr, tidexpr->strict, nblocks, &tidRanges[numRanges].last))
+				numRanges++;
+		}
+		else if (tidexpr->exprstate && tidexpr->type == TIDEXPR_GT)
+		{
+			bool		lower_isNull;
+			ItemPointer lower_itemptr = (ItemPointer)
+			DatumGetPointer(ExecEvalExprSwitchContext(tidexpr->exprstate,
+													  econtext,
+													  &lower_isNull));
+
+			if (lower_isNull)
+				continue;
+
+			tidRanges = EnlargeTidRangeArray(tidRanges, numRanges, &numAllocRanges);
+
+			if (SetTidLowerBound(lower_itemptr, tidexpr->strict, nblocks, &tidRanges[numRanges].first) &&
+				SetTidUpperBound(NULL, false, nblocks, &tidRanges[numRanges].last))
+				numRanges++;
+		}
+		else if (tidexpr->exprstate && tidexpr->type == TIDEXPR_BETWEEN)
+		{
+			bool		lower_isNull,
+						upper_isNull;
+			ItemPointer lower_itemptr = (ItemPointer)
+			DatumGetPointer(ExecEvalExprSwitchContext(tidexpr->exprstate,
+													  econtext,
+													  &lower_isNull));
+			ItemPointer upper_itemptr = (ItemPointer)
+			DatumGetPointer(ExecEvalExprSwitchContext(tidexpr->exprstate2,
+													  econtext,
+													  &upper_isNull));
+
+			if (lower_isNull || upper_isNull)
+				continue;
+
+			tidRanges = EnlargeTidRangeArray(tidRanges, numRanges, &numAllocRanges);
+
+			if (SetTidLowerBound(lower_itemptr, tidexpr->strict, nblocks, &tidRanges[numRanges].first) &&
+				SetTidUpperBound(upper_itemptr, tidexpr->strict2, nblocks, &tidRanges[numRanges].last))
+				numRanges++;
+		}
+		else if (tidexpr->type == TIDEXPR_ANY)
+		{
+			tidRanges = EnlargeTidRangeArray(tidRanges, numRanges, &numAllocRanges);
+			SetTidLowerBound(NULL, false, nblocks, &tidRanges[numRanges].first);
+			SetTidUpperBound(NULL, false, nblocks, &tidRanges[numRanges].last);
+			numRanges++;
+		}
+		else if (tidexpr->exprstate && tidexpr->type == TIDEXPR_IN_ARRAY)
 		{
 			Datum		arraydatum;
 			ArrayType  *itemarray;
@@ -196,12 +455,12 @@ TidListEval(TidScanState *tidstate)
 			deconstruct_array(itemarray,
 							  TIDOID, sizeof(ItemPointerData), false, 's',
 							  &ipdatums, &ipnulls, &ndatums);
-			if (numTids + ndatums > numAllocTids)
+			if (numRanges + ndatums > numAllocRanges)
 			{
-				numAllocTids = numTids + ndatums;
-				tidList = (ItemPointerData *)
-					repalloc(tidList,
-							 numAllocTids * sizeof(ItemPointerData));
+				numAllocRanges = numRanges + ndatums;
+				tidRanges = (TidRange *)
+					repalloc(tidRanges,
+							 numAllocRanges * sizeof(TidRange));
 			}
 			for (i = 0; i < ndatums; i++)
 			{
@@ -210,13 +469,15 @@ TidListEval(TidScanState *tidstate)
 					itemptr = (ItemPointer) DatumGetPointer(ipdatums[i]);
 					if (ItemPointerIsValid(itemptr) &&
 						ItemPointerGetBlockNumber(itemptr) < nblocks)
-						tidList[numTids++] = *itemptr;
+						tidRanges[numRanges].first = *itemptr;
+					tidRanges[numRanges].last = *itemptr;
+					numRanges++;
 				}
 			}
 			pfree(ipdatums);
 			pfree(ipnulls);
 		}
-		else
+		else if (tidexpr->type == TIDEXPR_CURRENT_OF)
 		{
 			ItemPointerData cursor_tid;
 
@@ -225,16 +486,20 @@ TidListEval(TidScanState *tidstate)
 							  RelationGetRelid(tidstate->ss.ss_currentRelation),
 							  &cursor_tid))
 			{
-				if (numTids >= numAllocTids)
-				{
-					numAllocTids *= 2;
-					tidList = (ItemPointerData *)
-						repalloc(tidList,
-								 numAllocTids * sizeof(ItemPointerData));
-				}
-				tidList[numTids++] = cursor_tid;
+				/*
+				 * A current-of TidExpr only exists by itself, and we should
+				 * already have allocated a tidList entry for it.  We don't
+				 * need to check whether the tidList array needs to be
+				 * resized.
+				 */
+				Assert(numRanges < numAllocRanges);
+				tidRanges[numRanges].first = cursor_tid;
+				tidRanges[numRanges].last = cursor_tid;
+				numRanges++;
 			}
 		}
+		else
+			Assert(false);
 	}
 
 	/*
@@ -243,28 +508,52 @@ TidListEval(TidScanState *tidstate)
 	 * the list.  Sorting makes it easier to detect duplicates, and as a bonus
 	 * ensures that we will visit the heap in the most efficient way.
 	 */
-	if (numTids > 1)
+	if (numRanges > 1)
 	{
-		int			lastTid;
+		int			lastRange;
 		int			i;
 
 		/* CurrentOfExpr could never appear OR'd with something else */
 		Assert(!tidstate->tss_isCurrentOf);
 
-		qsort((void *) tidList, numTids, sizeof(ItemPointerData),
-			  itemptr_comparator);
-		lastTid = 0;
-		for (i = 1; i < numTids; i++)
+		qsort((void *) tidRanges, numRanges, sizeof(TidRange), tidrange_comparator);
+		lastRange = 0;
+		for (i = 1; i < numRanges; i++)
 		{
-			if (!ItemPointerEquals(&tidList[lastTid], &tidList[i]))
-				tidList[++lastTid] = tidList[i];
+			if (!MergeTidRanges(&tidRanges[lastRange], &tidRanges[i]))
+				tidRanges[++lastRange] = tidRanges[i];
 		}
-		numTids = lastTid + 1;
+		numRanges = lastRange + 1;
 	}
 
-	tidstate->tss_TidList = tidList;
-	tidstate->tss_NumTids = numTids;
+	tidstate->tss_TidRanges = tidRanges;
+	tidstate->tss_NumRanges = numRanges;
 	tidstate->tss_TidPtr = -1;
+}
+
+/*
+ * If two ranges overlap, merge them into one.
+ * Assumes the two ranges are already ordered by (first, last).
+ * Returns true if they were merged.
+ */
+static bool
+MergeTidRanges(TidRange * a, TidRange * b)
+{
+	ItemPointerData a_last = a->last;
+	ItemPointerData b_last;
+
+	if (!ItemPointerIsValid(&a_last))
+		a_last = a->first;
+
+	if (itemptr_comparator(&a_last, &b->first) <= 0)
+		return false;
+
+	b_last = b->last;
+	if (!ItemPointerIsValid(&b_last))
+		b_last = b->first;
+
+	a->last = b->last;
+	return true;
 }
 
 /*
@@ -291,6 +580,86 @@ itemptr_comparator(const void *a, const void *b)
 	return 0;
 }
 
+/*
+ * qsort comparator for TidRange items
+ */
+static int
+tidrange_comparator(const void *a, const void *b)
+{
+	const		TidRange *tra = (const TidRange *) a;
+	const		TidRange *trb = (const TidRange *) b;
+	int			cmp_first = itemptr_comparator(&tra->first, &trb->first);
+
+	if (cmp_first != 0)
+		return cmp_first;
+	else
+		return itemptr_comparator(&tra->last, &trb->last);
+}
+
+static HeapScanDesc
+BeginTidRangeScan(TidScanState *node, TidRange * range)
+{
+	HeapScanDesc scandesc = node->ss.ss_currentScanDesc;
+	BlockNumber first_block = ItemPointerGetBlockNumberNoCheck(&range->first);
+	BlockNumber last_block = ItemPointerGetBlockNumberNoCheck(&range->last);
+
+	if (!scandesc)
+	{
+		EState	   *estate = node->ss.ps.state;
+
+		scandesc = heap_beginscan_strat(node->ss.ss_currentRelation,
+										estate->es_snapshot,
+										0, NULL,
+										false, false);
+		node->ss.ss_currentScanDesc = scandesc;
+	}
+	else
+		heap_rescan(scandesc, NULL);
+
+	heap_setscanlimits(scandesc, first_block, last_block - first_block + 1);
+	node->tss_inScan = true;
+	return scandesc;
+}
+
+static HeapTuple
+NextInTidRange(HeapScanDesc scandesc, ScanDirection direction, TidRange * range)
+{
+	BlockNumber first_block = ItemPointerGetBlockNumber(&range->first);
+	OffsetNumber first_offset = ItemPointerGetOffsetNumber(&range->first);
+	BlockNumber last_block = ItemPointerGetBlockNumber(&range->last);
+	OffsetNumber last_offset = ItemPointerGetOffsetNumber(&range->last);
+	HeapTuple	tuple;
+
+	for (;;)
+	{
+		BlockNumber block;
+		OffsetNumber offset;
+
+		tuple = heap_getnext(scandesc, direction);
+		if (!tuple)
+			break;
+
+		/* Check that the tuple is within the required range. */
+		block = ItemPointerGetBlockNumber(&tuple->t_self);
+		offset = ItemPointerGetOffsetNumber(&tuple->t_self);
+
+		/*
+		 * TODO if scanning forward, can stop as soon as we see a tuple
+		 * greater than last_offset
+		 */
+		/* similarly with backward, less than, first_offset */
+		if (block == first_block && offset < first_offset)
+			continue;
+
+		if (block == last_block && offset > last_offset)
+			continue;
+
+		break;
+	}
+
+	return tuple;
+}
+
 /* ----------------------------------------------------------------
  *		TidNext
  *
@@ -302,6 +671,7 @@ itemptr_comparator(const void *a, const void *b)
 static TupleTableSlot *
 TidNext(TidScanState *node)
 {
+	HeapScanDesc scandesc;
 	EState	   *estate;
 	ScanDirection direction;
 	Snapshot	snapshot;
@@ -309,105 +679,149 @@ TidNext(TidScanState *node)
 	HeapTuple	tuple;
 	TupleTableSlot *slot;
 	Buffer		buffer = InvalidBuffer;
-	ItemPointerData *tidList;
-	int			numTids;
+	int			numRanges;
 	bool		bBackward;
 
 	/*
 	 * extract necessary information from tid scan node
 	 */
+	scandesc = node->ss.ss_currentScanDesc;
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	snapshot = estate->es_snapshot;
 	heapRelation = node->ss.ss_currentRelation;
 	slot = node->ss.ss_ScanTupleSlot;
 
-	/*
-	 * First time through, compute the list of TIDs to be visited
-	 */
-	if (node->tss_TidList == NULL)
+	/* First time through, compute the list of TID ranges to be visited */
+	if (node->tss_TidRanges == NULL)
+	{
 		TidListEval(node);
 
-	tidList = node->tss_TidList;
-	numTids = node->tss_NumTids;
-
-	/*
-	 * We use node->tss_htup as the tuple pointer; note this can't just be a
-	 * local variable here, as the scan tuple slot will keep a pointer to it.
-	 */
-	tuple = &(node->tss_htup);
-
-	/*
-	 * Initialize or advance scan position, depending on direction.
-	 */
-	bBackward = ScanDirectionIsBackward(direction);
-	if (bBackward)
-	{
-		if (node->tss_TidPtr < 0)
-		{
-			/* initialize for backward scan */
-			node->tss_TidPtr = numTids - 1;
-		}
-		else
-			node->tss_TidPtr--;
-	}
-	else
-	{
-		if (node->tss_TidPtr < 0)
-		{
-			/* initialize for forward scan */
-			node->tss_TidPtr = 0;
-		}
-		else
-			node->tss_TidPtr++;
+		node->tss_TidPtr = -1;
 	}
 
-	while (node->tss_TidPtr >= 0 && node->tss_TidPtr < numTids)
-	{
-		tuple->t_self = tidList[node->tss_TidPtr];
+	numRanges = node->tss_NumRanges;
 
-		/*
-		 * For WHERE CURRENT OF, the tuple retrieved from the cursor might
-		 * since have been updated; if so, we should fetch the version that is
-		 * current according to our snapshot.
-		 */
+	/* If the plan direction is backward, invert the direction. */
+	if (ScanDirectionIsBackward(((TidScan *) node->ss.ps.plan)->direction))
+	{
+		if (ScanDirectionIsForward(direction))
+			direction = BackwardScanDirection;
+		else if (ScanDirectionIsBackward(direction))
+			direction = ForwardScanDirection;
+	}
+
+	tuple = NULL;
+	for (;;)
+	{
+		TidRange   *currentRange;
+
+		if (!node->tss_inScan)
+		{
+			/* Initialize or advance scan position, depending on direction. */
+			bBackward = ScanDirectionIsBackward(direction);
+			if (bBackward)
+			{
+				if (node->tss_TidPtr < 0)
+				{
+					/* initialize for backward scan */
+					node->tss_TidPtr = numRanges - 1;
+				}
+				else
+					node->tss_TidPtr--;
+			}
+			else
+			{
+				if (node->tss_TidPtr < 0)
+				{
+					/* initialize for forward scan */
+					node->tss_TidPtr = 0;
+				}
+				else
+					node->tss_TidPtr++;
+			}
+		}
+
+		if (node->tss_TidPtr >= numRanges || node->tss_TidPtr < 0)
+			break;
+
+		currentRange = &node->tss_TidRanges[node->tss_TidPtr];
+
+		/* TODO ranges of size 1 should also use a simple tuple fetch */
 		if (node->tss_isCurrentOf)
-			heap_get_latest_tid(heapRelation, snapshot, &tuple->t_self);
-
-		if (heap_fetch(heapRelation, snapshot, tuple, &buffer, false, NULL))
 		{
 			/*
-			 * Store the scanned tuple in the scan tuple slot of the scan
-			 * state.  Eventually we will only do this and not return a tuple.
+			 * We use node->tss_htup as the tuple pointer; note this can't
+			 * just be a local variable here, as the scan tuple slot will keep
+			 * a pointer to it.
 			 */
-			ExecStoreBufferHeapTuple(tuple,	/* tuple to store */
-									 slot,	/* slot to store in */
-									 buffer);	/* buffer associated with
-												 * tuple */
+			tuple = &(node->tss_htup);
+			tuple->t_self = currentRange->first;
 
 			/*
-			 * At this point we have an extra pin on the buffer, because
-			 * ExecStoreHeapTuple incremented the pin count. Drop our local
-			 * pin.
+			 * For WHERE CURRENT OF, the tuple retrieved from the cursor might
+			 * since have been updated; if so, we should fetch the version
+			 * that is current according to our snapshot.
 			 */
-			ReleaseBuffer(buffer);
+			if (node->tss_isCurrentOf)
+				heap_get_latest_tid(heapRelation, snapshot, &tuple->t_self);
 
-			return slot;
+			if (heap_fetch(heapRelation, snapshot, tuple, &buffer, false, NULL))
+			{
+				/*
+				 * Store the scanned tuple in the scan tuple slot of the scan
+				 * state.  Eventually we will only do this and not return a
+				 * tuple.
+				 */
+				ExecStoreBufferHeapTuple(tuple, /* tuple to store */
+										 slot,	/* slot to store in */
+										 buffer);	/* buffer associated with
+													 * tuple */
+
+				/*
+				 * At this point we have an extra pin on the buffer, because
+				 * ExecStoreHeapTuple incremented the pin count. Drop our
+				 * local pin.
+				 */
+				ReleaseBuffer(buffer);
+
+				return slot;
+			}
+			else
+			{
+				tuple = NULL;
+			}
 		}
-		/* Bad TID or failed snapshot qual; try next */
-		if (bBackward)
-			node->tss_TidPtr--;
 		else
-			node->tss_TidPtr++;
+		{
+			if (!node->tss_inScan)
+				scandesc = BeginTidRangeScan(node, currentRange);
 
-		CHECK_FOR_INTERRUPTS();
+			tuple = NextInTidRange(scandesc, direction, currentRange);
+			if (tuple)
+				break;
+
+			node->tss_inScan = false;
+		}
 	}
 
 	/*
-	 * if we get here it means the tid scan failed so we are at the end of the
-	 * scan..
+	 * save the tuple and the buffer returned to us by the access methods in
+	 * our scan tuple slot and return the slot.  Note: we pass 'false' because
+	 * tuples returned by heap_getnext() are pointers onto disk pages and were
+	 * not created with palloc() and so should not be pfree()'d.  Note also
+	 * that ExecStoreHeapTuple will increment the refcount of the buffer; the
+	 * refcount will not be dropped until the tuple table slot is cleared.
 	 */
-	return ExecClearTuple(slot);
+	if (tuple)
+		ExecStoreBufferHeapTuple(tuple, /* tuple to store */
+								 slot,	/* slot to store in */
+								 scandesc->rs_cbuf);	/* buffer associated
+														 * with this tuple */
+	else
+		ExecClearTuple(slot);
+
+	return slot;
 }
 
 /*
@@ -460,11 +874,13 @@ ExecTidScan(PlanState *pstate)
 void
 ExecReScanTidScan(TidScanState *node)
 {
-	if (node->tss_TidList)
-		pfree(node->tss_TidList);
-	node->tss_TidList = NULL;
-	node->tss_NumTids = 0;
+	if (node->tss_TidRanges)
+		pfree(node->tss_TidRanges);
+
+	node->tss_TidRanges = NULL;
+	node->tss_NumRanges = 0;
 	node->tss_TidPtr = -1;
+	node->tss_inScan = false;
 
 	ExecScanReScan(&node->ss);
 }
@@ -479,6 +895,8 @@ ExecReScanTidScan(TidScanState *node)
 void
 ExecEndTidScan(TidScanState *node)
 {
+	HeapScanDesc scan = node->ss.ss_currentScanDesc;
+
 	/*
 	 * Free the exprcontext
 	 */
@@ -489,6 +907,10 @@ ExecEndTidScan(TidScanState *node)
 	 */
 	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
 	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+
+	/* close heap scan */
+	if (scan != NULL)
+		heap_endscan(scan);
 
 	/*
 	 * close the heap relation.
@@ -529,11 +951,12 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	ExecAssignExprContext(estate, &tidstate->ss.ps);
 
 	/*
-	 * mark tid list as not computed yet
+	 * mark tid range list as not computed yet
 	 */
-	tidstate->tss_TidList = NULL;
-	tidstate->tss_NumTids = 0;
+	tidstate->tss_TidRanges = NULL;
+	tidstate->tss_NumRanges = 0;
 	tidstate->tss_TidPtr = -1;
+	tidstate->tss_inScan = false;
 
 	/*
 	 * open the base relation and acquire appropriate lock on it.

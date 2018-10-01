@@ -211,6 +211,9 @@ extern List *build_join_pathkeys(PlannerInfo *root,
 					RelOptInfo *joinrel,
 					JoinType jointype,
 					List *outer_pathkeys);
+extern List *build_tidscan_pathkeys(PlannerInfo *root,
+					   RelOptInfo *rel,
+					   ScanDirection direction);
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 							  List *sortclauses,
 							  List *tlist);

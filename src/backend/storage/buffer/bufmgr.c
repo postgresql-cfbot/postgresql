@@ -31,6 +31,9 @@
 #include "postgres.h"
 
 #include <sys/file.h>
+#ifdef MPROTECT_BUFFERS
+#include <sys/mman.h>
+#endif
 #include <unistd.h>
 
 #include "access/xlog.h"
@@ -176,6 +179,75 @@ static PrivateRefCountEntry *NewPrivateRefCountEntry(Buffer buffer);
 static PrivateRefCountEntry *GetPrivateRefCountEntry(Buffer buffer, bool do_move);
 static inline int32 GetPrivateRefCount(Buffer buffer);
 static void ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref);
+
+#ifdef MPROTECT_BUFFERS
+#define ShouldMemoryProtect(buf) (IsUnderPostmaster &&		  \
+								  IsNormalProcessingMode() && \
+								  !BufferIsLocal(buf->buf_id+1) && \
+								  !BufferIsInvalid(buf->buf_id+1))
+
+static inline void BufferMProtect(volatile BufferDesc *bufHdr, int protectionLevel)
+{
+	if (ShouldMemoryProtect(bufHdr))
+	{
+		if (mprotect(BufHdrGetBlock(bufHdr), BLCKSZ, protectionLevel))
+		{
+			ereport(ERROR,
+					(errmsg("unable to set memory level to %d, error %d, "
+							"block size %d, ptr %ld", protectionLevel,
+							errno, BLCKSZ, (long int) BufHdrGetBlock(bufHdr))));
+		}
+	}
+}
+#endif
+
+static inline void ReleaseContentLock(volatile BufferDesc *buf)
+{
+	LWLockRelease(BufferDescriptorGetContentLock(buf));
+
+#ifdef MPROTECT_BUFFERS
+	/* make the buffer read-only after releasing content lock */
+	if (!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)))
+		BufferMProtect(buf, PROT_READ);
+#endif
+}
+
+
+static inline void AcquireContentLock(volatile BufferDesc *buf, LWLockMode mode)
+{
+#ifdef MPROTECT_BUFFERS
+	const bool newAcquisition =
+		!LWLockHeldByMe(BufferDescriptorGetContentLock(buf));
+
+	LWLockAcquire(BufferDescriptorGetContentLock(buf), mode);
+
+	/* new acquisition of content lock, allow read/write memory access */
+	if (newAcquisition)
+		BufferMProtect(buf, PROT_READ|PROT_WRITE);
+#else
+	LWLockAcquire(BufferDescriptorGetContentLock(buf), mode);
+#endif
+}
+
+static inline bool ConditionalAcquireContentLock(volatile BufferDesc *buf,
+												 LWLockMode mode)
+{
+#ifdef MPROTECT_BUFFERS
+	const bool newAcquisition =
+		!LWLockHeldByMe(BufferDescriptorGetContentLock(buf));
+
+	if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf), mode))
+	{
+		/* new acquisition of lock, allow read/write memory access */
+		if (newAcquisition)
+			BufferMProtect( buf, PROT_READ | PROT_WRITE );
+		return true;
+	}
+	return false;
+#else
+	return LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf), mode);
+#endif
+}
 
 /*
  * Ensure that the PrivateRefCountArray has sufficient space to store one more
@@ -779,8 +851,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (!isLocalBuf)
 			{
 				if (mode == RBM_ZERO_AND_LOCK)
-					LWLockAcquire(BufferDescriptorGetContentLock(bufHdr),
-								  LW_EXCLUSIVE);
+					AcquireContentLock(bufHdr, LW_EXCLUSIVE);
 				else if (mode == RBM_ZERO_AND_CLEANUP_LOCK)
 					LockBufferForCleanup(BufferDescriptorGetBuffer(bufHdr));
 			}
@@ -932,7 +1003,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if ((mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK) &&
 		!isLocalBuf)
 	{
-		LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_EXCLUSIVE);
+		AcquireContentLock((bufHdr), LW_EXCLUSIVE);
 	}
 
 	if (isLocalBuf)
@@ -1102,8 +1173,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			 * happens to be trying to split the page the first one got from
 			 * StrategyGetBuffer.)
 			 */
-			if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
-										 LW_SHARED))
+			if (ConditionalAcquireContentLock(buf, LW_SHARED))
 			{
 				/*
 				 * If using a nondefault strategy, and writing the buffer
@@ -1125,7 +1195,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 						StrategyRejectBuffer(strategy, buf))
 					{
 						/* Drop lock/pin and loop around for another buffer */
-						LWLockRelease(BufferDescriptorGetContentLock(buf));
+						ReleaseContentLock(buf);
 						UnpinBuffer(buf, true);
 						continue;
 					}
@@ -1138,7 +1208,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 														  smgr->smgr_rnode.node.relNode);
 
 				FlushBuffer(buf, NULL);
-				LWLockRelease(BufferDescriptorGetContentLock(buf));
+				ReleaseContentLock(buf);
 
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
 											  &buf->tag);
@@ -1618,6 +1688,9 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 				break;
 			}
 		}
+#ifdef MPROTECT_BUFFERS
+		BufferMProtect(buf, PROT_READ);
+#endif
 	}
 	else
 	{
@@ -1672,6 +1745,9 @@ PinBuffer_Locked(BufferDesc *buf)
 	buf_state = pg_atomic_read_u32(&buf->state);
 	Assert(buf_state & BM_LOCKED);
 	buf_state += BUF_REFCOUNT_ONE;
+#ifdef MPROTECT_BUFFERS
+	BufferMProtect(buf, PROT_READ);
+#endif
 	UnlockBufHdr(buf, buf_state);
 
 	b = BufferDescriptorGetBuffer(buf);
@@ -1747,6 +1823,9 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 			 */
 			buf_state = LockBufHdr(buf);
 
+#ifdef MPROTECT_BUFFERS
+			BufferMProtect(buf, PROT_NONE);
+#endif
 			if ((buf_state & BM_PIN_COUNT_WAITER) &&
 				BUF_STATE_GET_REFCOUNT(buf_state) == 1)
 			{
@@ -2389,11 +2468,11 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	 * buffer is clean by the time we've locked it.)
 	 */
 	PinBuffer_Locked(bufHdr);
-	LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
+	AcquireContentLock(bufHdr, LW_SHARED);
 
 	FlushBuffer(bufHdr, NULL);
 
-	LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+	ReleaseContentLock(bufHdr);
 
 	tag = bufHdr->tag;
 
@@ -3217,9 +3296,9 @@ FlushRelationBuffers(Relation rel)
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
-			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
+			AcquireContentLock(bufHdr, LW_SHARED);
 			FlushBuffer(bufHdr, rel->rd_smgr);
-			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+			ReleaseContentLock(bufHdr);
 			UnpinBuffer(bufHdr, true);
 		}
 		else
@@ -3271,9 +3350,9 @@ FlushDatabaseBuffers(Oid dbid)
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
-			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
+			AcquireContentLock(bufHdr, LW_SHARED);
 			FlushBuffer(bufHdr, NULL);
-			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+			ReleaseContentLock(bufHdr);
 			UnpinBuffer(bufHdr, true);
 		}
 		else
@@ -3554,11 +3633,11 @@ LockBuffer(Buffer buffer, int mode)
 	buf = GetBufferDescriptor(buffer - 1);
 
 	if (mode == BUFFER_LOCK_UNLOCK)
-		LWLockRelease(BufferDescriptorGetContentLock(buf));
+		ReleaseContentLock(buf);
 	else if (mode == BUFFER_LOCK_SHARE)
-		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_SHARED);
+		AcquireContentLock(buf, LW_SHARED);
 	else if (mode == BUFFER_LOCK_EXCLUSIVE)
-		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_EXCLUSIVE);
+		AcquireContentLock(buf, LW_EXCLUSIVE);
 	else
 		elog(ERROR, "unrecognized buffer lock mode: %d", mode);
 }
@@ -3579,8 +3658,7 @@ ConditionalLockBuffer(Buffer buffer)
 
 	buf = GetBufferDescriptor(buffer - 1);
 
-	return LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
-									LW_EXCLUSIVE);
+	return ConditionalAcquireContentLock(buf, LW_EXCLUSIVE);
 }
 
 /*
@@ -3913,6 +3991,9 @@ StartBufferIO(BufferDesc *buf, bool forInput)
 	}
 
 	buf_state |= BM_IO_IN_PROGRESS;
+#ifdef MPROTECT_BUFFERS
+    BufferMProtect(buf, forInput ? PROT_WRITE|PROT_READ : PROT_READ);
+#endif
 	UnlockBufHdr(buf, buf_state);
 
 	InProgressBuf = buf;
@@ -3958,6 +4039,11 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 
 	InProgressBuf = NULL;
 
+#ifdef MPROTECT_BUFFERS
+	/* XXX: should this be PROT_NONE if called from AbortBufferIO? */
+	if (!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)))
+		BufferMProtect(buf, PROT_READ);
+#endif
 	LWLockRelease(BufferDescriptorGetIOLock(buf));
 }
 

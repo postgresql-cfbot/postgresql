@@ -697,17 +697,12 @@ typedef struct SubPlan
 	int32		firstColTypmod; /* Typmod of first column of subplan result */
 	Oid			firstColCollation;	/* Collation of first column of subplan
 									 * result */
-	/* Information about parameter types, for caching subplan's results */
-	Oid		   *paramHashFuncs;	/* hash functions for Params */
-	Oid		   *paramEqFuncs;	/* equality operators to compare Params with */
 	/* Information about execution strategy: */
 	bool		useHashTable;	/* true to store subselect output in a hash
 								 * table (implies we are doing "IN") */
 	bool		unknownEqFalse; /* true if it's okay to return FALSE when the
 								 * spec result is UNKNOWN; this allows much
 								 * simpler handling of null values */
-	bool		useResultCache;	/* true to maintain a cache subselect's output
-								 * for params (implies we are doing "EXPR") */
 	bool		parallel_safe;	/* is the subplan parallel-safe? */
 	/* Note: parallel_safe does not consider contents of testexpr or args */
 	/* Information for passing params into and out of the subselect: */

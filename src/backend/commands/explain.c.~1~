@@ -1044,13 +1044,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			pname = sname = "Index Scan";
 			break;
 		case T_IndexOnlyScan:
-			{
-				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
-				if (indexonlyscan->distinctPrefix > 0)
-					pname = sname = "Index Skip Scan";
-				else
-					pname = sname = "Index Only Scan";
-			}
+			pname = sname = "Index Only Scan";
 			break;
 		case T_BitmapIndexScan:
 			pname = sname = "Bitmap Index Scan";
@@ -1278,14 +1272,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_IndexOnlyScan:
 			{
 				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
-
-				if (indexonlyscan->distinctPrefix > 0)
-				{
-					if (es->format != EXPLAIN_FORMAT_TEXT)
-						ExplainPropertyInteger("Distinct Prefix", NULL,
-											   indexonlyscan->distinctPrefix,
-											   es);
-				}
 
 				ExplainIndexScanDetails(indexonlyscan->indexid,
 										indexonlyscan->indexorderdir,

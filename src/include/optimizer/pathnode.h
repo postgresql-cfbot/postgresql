@@ -186,6 +186,11 @@ extern UpperUniquePath *create_upper_unique_path(PlannerInfo *root,
 						 Path *subpath,
 						 int numCols,
 						 double numGroups);
+extern IndexPath *create_skipscan_unique_path(PlannerInfo *root,
+				  RelOptInfo *rel,
+				  Path *subpath,
+				  int numCols,
+				  double numGroups);
 extern AggPath *create_agg_path(PlannerInfo *root,
 				RelOptInfo *rel,
 				Path *subpath,

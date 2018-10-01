@@ -156,7 +156,9 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 	dst->startup += add->startup;
 	dst->total += add->total;
 	dst->ntuples += add->ntuples;
-	dst->ntuples2 += add->ntuples2;
+	dst->node_ntuples1 += add->node_ntuples1;
+	dst->node_ntuples2 += add->node_ntuples2;
+	dst->node_ntuples3 += add->node_ntuples3;
 	dst->nloops += add->nloops;
 	dst->nfiltered1 += add->nfiltered1;
 	dst->nfiltered2 += add->nfiltered2;

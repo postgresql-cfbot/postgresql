@@ -3675,33 +3675,6 @@ eval_const_expressions_mutator(Node *node,
 													  context);
 			}
 			break;
-		case T_ConvertRowtypeExpr:
-			{
-				ConvertRowtypeExpr *cre = castNode(ConvertRowtypeExpr, node);
-				Node		   *arg;
-				ConvertRowtypeExpr *newcre;
-
-				arg = eval_const_expressions_mutator((Node *) cre->arg,
-													 context);
-
-				/*
-				 * In case of a nested ConvertRowtypeExpr, we can convert the
-				 * leaf row directly to the topmost row format without any
-				 * intermediate conversions.
-				 */
-				while (arg != NULL && IsA(arg, ConvertRowtypeExpr))
-					arg = (Node *) castNode(ConvertRowtypeExpr, arg)->arg;
-
-				newcre = makeNode(ConvertRowtypeExpr);
-				newcre->arg = (Expr *) arg;
-				newcre->resulttype = cre->resulttype;
-				newcre->convertformat = cre->convertformat;
-				newcre->location = cre->location;
-
-				if (arg != NULL && IsA(arg, Const))
-					return ece_evaluate_expr((Node *) newcre);
-				return (Node *) newcre;
-			}
 		default:
 			break;
 	}

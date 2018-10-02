@@ -75,19 +75,12 @@ CREATE TABLE persons4 OF person_type (
     name WITH OPTIONS DEFAULT ''  -- error, specified more than once
 );
 ERROR:  column "name" specified more than once
+\set VERBOSITY terse
 DROP TYPE person_type RESTRICT;
 ERROR:  cannot drop type person_type because other objects depend on it
-DETAIL:  table persons depends on type person_type
-function get_all_persons() depends on type person_type
-table persons2 depends on type person_type
-table persons3 depends on type person_type
-HINT:  Use DROP ... CASCADE to drop the dependent objects too.
 DROP TYPE person_type CASCADE;
 NOTICE:  drop cascades to 4 other objects
-DETAIL:  drop cascades to table persons
-drop cascades to function get_all_persons()
-drop cascades to table persons2
-drop cascades to table persons3
+\set VERBOSITY default
 CREATE TABLE persons5 OF stuff; -- only CREATE TYPE AS types may be used
 ERROR:  type stuff is not a composite type
 DROP TABLE stuff;

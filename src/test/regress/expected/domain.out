@@ -643,10 +643,10 @@ update domnotnull set col1 = null; -- fails
 ERROR:  domain dnotnulltest does not allow null values
 alter domain dnotnulltest drop not null;
 update domnotnull set col1 = null;
+\set VERBOSITY terse
 drop domain dnotnulltest cascade;
 NOTICE:  drop cascades to 2 other objects
-DETAIL:  drop cascades to column col1 of table domnotnull
-drop cascades to column col2 of table domnotnull
+\set VERBOSITY default
 -- Test ALTER DOMAIN .. DEFAULT ..
 create table domdeftest (col1 ddef1);
 insert into domdeftest default values;

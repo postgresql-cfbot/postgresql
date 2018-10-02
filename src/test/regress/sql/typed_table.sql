@@ -43,8 +43,10 @@ CREATE TABLE persons4 OF person_type (
     name WITH OPTIONS DEFAULT ''  -- error, specified more than once
 );
 
+\set VERBOSITY terse
 DROP TYPE person_type RESTRICT;
 DROP TYPE person_type CASCADE;
+\set VERBOSITY default
 
 CREATE TABLE persons5 OF stuff; -- only CREATE TYPE AS types may be used
 

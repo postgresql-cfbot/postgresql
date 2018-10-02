@@ -114,16 +114,44 @@ typedef struct BTMetaPageData
 
 #define BTREE_METAPAGE	0		/* first page is meta */
 #define BTREE_MAGIC		0x053162	/* magic number of btree pages */
-#define BTREE_VERSION	3		/* current version number */
-#define BTREE_MIN_VERSION	2	/* minimal supported version number */
+#define BTREE_VERSION	4		/* current version number */
+#define BTREE_MIN_VERSION	4	/* minimal supported version number */
+
+/*
+ * Heap TID behaves as a final key value within nbtree as of
+ * BTREE_VERSION 4.  This ensures that all entries keys are unique
+ * and relocatable.  By default, heap TIDs are sorted in DESC sort
+ * order within nbtree indexes.  ASC heap TID ordering may be
+ * useful during testing.
+ *
+ * DESC order was chosen because it allowed BTREE_VERSION 4 to
+ * maintain compatibility with unspecified BTREE_VERSION 2 + 3
+ * behavior that dependency management nevertheless relied on.
+ * However, DESC order also seems like it might be slightly better
+ * on its own merits, since continually splitting the same leaf
+ * page may cut down on the total number of FPIs generated when
+ * continually inserting tuples with the same user-visible
+ * attribute values.
+#define BTREE_ASC_HEAP_TID
+ */
 
 /*
  * Maximum size of a btree index entry, including its tuple header.
  *
  * We actually need to be able to fit three items on every page,
  * so restrict any one item to 1/3 the per-page available space.
+ *
+ * There are rare cases where _bt_suffix_truncate() will need to
+ * enlarge a heap index tuple to make space for a tie-breaker heap
+ * TID attribute, which we account for here.
  */
 #define BTMaxItemSize(page) \
+	MAXALIGN_DOWN((PageGetPageSize(page) - \
+				   MAXALIGN(SizeOfPageHeaderData + \
+							3*sizeof(ItemIdData)  + \
+							3*MAXALIGN(sizeof(ItemPointerData))) - \
+				   MAXALIGN(sizeof(BTPageOpaqueData))) / 3)
+#define BTMaxItemSizeOld(page) \
 	MAXALIGN_DOWN((PageGetPageSize(page) - \
 				   MAXALIGN(SizeOfPageHeaderData + 3*sizeof(ItemIdData)) - \
 				   MAXALIGN(sizeof(BTPageOpaqueData))) / 3)
@@ -133,11 +161,19 @@ typedef struct BTMetaPageData
  * For pages above the leaf level, we use a fixed 70% fillfactor.
  * The fillfactor is applied during index build and when splitting
  * a rightmost page; when splitting non-rightmost pages we try to
- * divide the data equally.
+ * divide the data equally.  When splitting a page that's entirely
+ * filled with a single value (duplicates), the leaf-page
+ * fillfactor is overridden, and is applied regardless of whether
+ * the page is a rightmost page.
  */
 #define BTREE_MIN_FILLFACTOR		10
 #define BTREE_DEFAULT_FILLFACTOR	90
 #define BTREE_NONLEAF_FILLFACTOR	70
+#ifndef BTREE_ASC_HEAP_TID
+#define BTREE_SINGLEVAL_FILLFACTOR	1
+#else
+#define BTREE_SINGLEVAL_FILLFACTOR	99
+#endif
 
 /*
  *	In general, the btree code tries to localize its knowledge about
@@ -204,21 +240,23 @@ typedef struct BTMetaPageData
  * real offset (downlinks only need to store a block number).  The offset
  * field only stores the number of attributes when the INDEX_ALT_TID_MASK
  * bit is set (we never assume that pivot tuples must explicitly store the
- * number of attributes, and currently do not bother storing the number of
- * attributes unless indnkeyatts actually differs from indnatts).
- * INDEX_ALT_TID_MASK is only used for pivot tuples at present, though it's
- * possible that it will be used within non-pivot tuples in the future.  Do
- * not assume that a tuple with INDEX_ALT_TID_MASK set must be a pivot
- * tuple.
+ * number of attributes).  INDEX_ALT_TID_MASK is only used for pivot tuples
+ * at present, though it's possible that it will be used within non-pivot
+ * tuples in the future.  Do not assume that a tuple with INDEX_ALT_TID_MASK
+ * set must be a pivot tuple.  A pivot tuple must have INDEX_ALT_TID_MASK set
+ * as of BTREE_VERSION 4, however.
  *
  * The 12 least significant offset bits are used to represent the number of
- * attributes in INDEX_ALT_TID_MASK tuples, leaving 4 bits that are reserved
- * for future use (BT_RESERVED_OFFSET_MASK bits). BT_N_KEYS_OFFSET_MASK should
- * be large enough to store any number <= INDEX_MAX_KEYS.
+ * attributes in INDEX_ALT_TID_MASK tuples, leaving 4 status bits
+ * (BT_RESERVED_OFFSET_MASK bits): BT_HEAP_TID_ATTR, plus 3 bits that are
+ * reserved for future use.  BT_N_KEYS_OFFSET_MASK should be large enough to
+ * store any number <= INDEX_MAX_KEYS.
  */
 #define INDEX_ALT_TID_MASK			INDEX_AM_RESERVED_BIT
 #define BT_RESERVED_OFFSET_MASK		0xF000
 #define BT_N_KEYS_OFFSET_MASK		0x0FFF
+/* Reserved to indicate if heap TID is represented at end of tuple */
+#define BT_HEAP_TID_ATTR			0x1000
 
 /* Get/set downlink block number */
 #define BTreeInnerTupleGetDownLink(itup) \
@@ -241,14 +279,15 @@ typedef struct BTMetaPageData
 	} while(0)
 
 /*
- * Get/set number of attributes within B-tree index tuple. Asserts should be
- * removed when BT_RESERVED_OFFSET_MASK bits will be used.
+ * Get/set number of attributes within B-tree index tuple.
+ *
+ * Note that this does not include an implicit tie-breaker heap-TID
+ * attribute, if any.
  */
 #define BTreeTupleGetNAtts(itup, rel)	\
 	( \
 		(itup)->t_info & INDEX_ALT_TID_MASK ? \
 		( \
-			AssertMacro((ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_RESERVED_OFFSET_MASK) == 0), \
 			ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_N_KEYS_OFFSET_MASK \
 		) \
 		: \
@@ -257,8 +296,40 @@ typedef struct BTMetaPageData
 #define BTreeTupleSetNAtts(itup, n) \
 	do { \
 		(itup)->t_info |= INDEX_ALT_TID_MASK; \
-		Assert(((n) & BT_RESERVED_OFFSET_MASK) == 0); \
 		ItemPointerSetOffsetNumber(&(itup)->t_tid, (n) & BT_N_KEYS_OFFSET_MASK); \
+	} while(0)
+
+/*
+ * Get tie-breaker heap TID attribute, if any.  Macro works with both pivot
+ * and non-pivot tuples.
+ *
+ * Assumes that any tuple without INDEX_ALT_TID_MASK set has a t_tid that
+ * points to the heap, and that all pivot tuples have INDEX_ALT_TID_MASK set
+ * (since all pivot tuples must as of BTREE_VERSION 4).  When non-pivot
+ * tuples use the INDEX_ALT_TID_MASK representation in the future, they'll
+ * probably also contain a heap TID at the end of the tuple.  We avoid
+ * assuming that a tuple with INDEX_ALT_TID_MASK set is necessarily a pivot
+ * tuple.
+ */
+#define BTreeTupleGetHeapTID(itup) \
+	( \
+	  (itup)->t_info & INDEX_ALT_TID_MASK && \
+	  (ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_HEAP_TID_ATTR) != 0 ? \
+	  ( \
+		(ItemPointer) (((char *) (itup) + IndexTupleSize(itup)) - \
+					   MAXALIGN(sizeof(ItemPointerData))) \
+	  ) \
+	  : (itup)->t_info & INDEX_ALT_TID_MASK ? NULL : (ItemPointer) &((itup)->t_tid) \
+	)
+/*
+ * Set the heap TID attribute for a tuple that uses the INDEX_ALT_TID_MASK
+ * representation (currently limited to pivot tuples)
+ */
+#define BTreeTupleSetAltHeapTID(itup) \
+	do { \
+		Assert((itup)->t_info & INDEX_ALT_TID_MASK); \
+		ItemPointerSetOffsetNumber(&(itup)->t_tid, \
+								   ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) | BT_HEAP_TID_ATTR); \
 	} while(0)
 
 /*
@@ -560,15 +631,18 @@ extern int	_bt_pagedel(Relation rel, Buffer buf);
  * prototypes for functions in nbtsearch.c
  */
 extern BTStack _bt_search(Relation rel,
-		   int keysz, ScanKey scankey, bool nextkey,
+		   int keysz, ScanKey scankey, ItemPointer scantid, bool nextkey,
 		   Buffer *bufP, int access, Snapshot snapshot);
 extern Buffer _bt_moveright(Relation rel, Buffer buf, int keysz,
-			  ScanKey scankey, bool nextkey, bool forupdate, BTStack stack,
-			  int access, Snapshot snapshot);
+			  ScanKey scankey, ItemPointer scantid, bool nextkey,
+			  bool forupdate, BTStack stack, int access, Snapshot snapshot);
 extern OffsetNumber _bt_binsrch(Relation rel, Buffer buf, int keysz,
-			ScanKey scankey, bool nextkey);
+			ScanKey scankey, ItemPointer scantid, OffsetNumber low,
+			bool nextkey);
 extern int32 _bt_compare(Relation rel, int keysz, ScanKey scankey,
-			Page page, OffsetNumber offnum);
+			ItemPointer scantid, Page page, OffsetNumber offnum);
+extern int32 _bt_tuple_compare(Relation rel, int keysz, ScanKey scankey,
+				  ItemPointer scantid, IndexTuple itup);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
@@ -601,7 +675,8 @@ extern bytea *btoptions(Datum reloptions, bool validate);
 extern bool btproperty(Oid index_oid, int attno,
 		   IndexAMProperty prop, const char *propname,
 		   bool *res, bool *isnull);
-extern IndexTuple _bt_nonkey_truncate(Relation rel, IndexTuple itup);
+extern IndexTuple _bt_suffix_truncate(Relation rel, IndexTuple lastleft,
+					IndexTuple firstright);
 extern bool _bt_check_natts(Relation rel, Page page, OffsetNumber offnum);
 
 /*

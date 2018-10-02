@@ -5896,8 +5896,8 @@ inner join j1 j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
 where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1;
  id1 | id2 | id1 | id2 
 -----+-----+-----+-----
-   1 |   1 |   1 |   1
    1 |   2 |   1 |   2
+   1 |   1 |   1 |   1
 (2 rows)
 
 reset enable_nestloop;

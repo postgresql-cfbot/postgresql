@@ -98,7 +98,9 @@ DELETE FROM ro_view18;
 UPDATE ro_view19 SET last_value=1000;
 UPDATE ro_view20 SET b=upper(b);
 
+\set VERBOSITY terse
 DROP TABLE base_tbl CASCADE;
+\set VERBOSITY default
 DROP VIEW ro_view10, ro_view12, ro_view18;
 DROP SEQUENCE uv_seq CASCADE;
 

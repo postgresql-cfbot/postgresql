@@ -2207,6 +2207,8 @@ SpecialJoinInfo
 SpinDelayStatus
 SplitInterval
 SplitLR
+SplitMode
+SplitPoint
 SplitVar
 SplitedPageLayout
 StackElem

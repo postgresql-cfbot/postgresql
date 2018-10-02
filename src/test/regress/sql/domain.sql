@@ -381,7 +381,9 @@ alter domain dnotnulltest drop not null;
 
 update domnotnull set col1 = null;
 
+\set VERBOSITY terse
 drop domain dnotnulltest cascade;
+\set VERBOSITY default
 
 -- Test ALTER DOMAIN .. DEFAULT ..
 create table domdeftest (col1 ddef1);

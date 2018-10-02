@@ -125,7 +125,9 @@ SELECT * FROM trunc_fa;
 SELECT * FROM trunc_faa;
 ROLLBACK;
 
+\set VERBOSITY terse
 DROP TABLE trunc_f CASCADE;
+\set VERBOSITY default
 
 -- Test ON TRUNCATE triggers
 

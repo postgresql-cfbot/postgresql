@@ -34,30 +34,47 @@ Differences to the Lehman & Yao algorithm
 We have made the following changes in order to incorporate the L&Y algorithm
 into Postgres:
 
-The requirement that all btree keys be unique is too onerous,
-but the algorithm won't work correctly without it.  Fortunately, it is
-only necessary that keys be unique on a single tree level, because L&Y
-only use the assumption of key uniqueness when re-finding a key in a
-parent page (to determine where to insert the key for a split page).
-Therefore, we can use the link field to disambiguate multiple
-occurrences of the same user key: only one entry in the parent level
-will be pointing at the page we had split.  (Indeed we need not look at
-the real "key" at all, just at the link field.)  We can distinguish
-items at the leaf level in the same way, by examining their links to
-heap tuples; we'd never have two items for the same heap tuple.
+The requirement that all btree keys be unique is satisfied by treating
+heap TID as a tie-breaker attribute.  Logical duplicates are sorted in
+descending item pointer order.  We don't use btree keys to
+disambiguate downlinks from the internal pages during a page split,
+though: only one entry in the parent level will be pointing at the
+page we just split, so the link fields can be used to re-find
+downlinks in the parent via a linear search.
 
-Lehman and Yao assume that the key range for a subtree S is described
-by Ki < v <= Ki+1 where Ki and Ki+1 are the adjacent keys in the parent
-page.  This does not work for nonunique keys (for example, if we have
-enough equal keys to spread across several leaf pages, there *must* be
-some equal bounding keys in the first level up).  Therefore we assume
-Ki <= v <= Ki+1 instead.  A search that finds exact equality to a
-bounding key in an upper tree level must descend to the left of that
-key to ensure it finds any equal keys in the preceding page.  An
-insertion that sees the high key of its target page is equal to the key
-to be inserted has a choice whether or not to move right, since the new
-key could go on either page.  (Currently, we try to find a page where
-there is room for the new key without a split.)
+Lehman and Yao require that the key range for a subtree S is described
+by Ki < v <= Ki+1 where Ki and Ki+1 are the adjacent keys in the
+parent page, but do not account for the need to search the tree based
+only on leading index attributes in a composite index.  Since heap TID
+is always used to make btree keys unique (even in unique indexes),
+every btree index is treated as a composite index internally.  A
+search that finds exact equality to a pivot tuple in an upper tree
+level must descend to the left of that key to ensure it finds any
+equal keys, even when scan values were provided for all attributes.
+An insertion that sees that the high key of its target page is equal
+to the key to be inserted cannot move right, since the downlink for
+the right sibling in the parent must always be strictly less than
+right sibling keys (this is always possible because the leftmost
+downlink on any non-leaf level is always a negative infinity
+downlink).
+
+We might be able to avoid moving left in the event of a full match on
+all attributes up to and including the heap TID attribute, but that
+would be a very narrow win, since it's rather unlikely that heap TID
+will be an exact match.  We can avoid moving left unnecessarily when
+all user-visible keys are equal by avoiding exact equality;  a
+sentinel value that's less than any possible heap TID is used by most
+index scans.  This is effective because of suffix truncation.  An
+"extra" heap TID attribute in pivot tuples is almost always avoided.
+All truncated attributes compare as minus infinity, even against a
+sentinel value, and the sentinel value is less than any real TID
+value, so an unnecessary move to the left is avoided regardless of
+whether or not a heap TID is present in the otherwise-equal pivot
+tuple.  Consistently moving left on full equality is also needed by
+page deletion, which re-finds a leaf page by descending the tree while
+searching on the leaf page's high key.  If we wanted to avoid moving
+left without breaking page deletion, we'd have to avoid suffix
+truncation, which could never be worth it.
 
 Lehman and Yao don't require read locks, but assume that in-memory
 copies of tree pages are unshared.  Postgres shares in-memory buffers
@@ -610,21 +627,25 @@ scanned to decide whether to return the entry and whether the scan can
 stop (see _bt_checkkeys()).
 
 We use term "pivot" index tuples to distinguish tuples which don't point
-to heap tuples, but rather used for tree navigation.  Pivot tuples includes
-all tuples on non-leaf pages and high keys on leaf pages.  Note that pivot
-index tuples are only used to represent which part of the key space belongs
-on each page, and can have attribute values copied from non-pivot tuples
-that were deleted and killed by VACUUM some time ago.  In principle, we could
-truncate away attributes that are not needed for a page high key during a leaf
-page split, provided that the remaining attributes distinguish the last index
-tuple on the post-split left page as belonging on the left page, and the first
-index tuple on the post-split right page as belonging on the right page.  This
-optimization is sometimes called suffix truncation, and may appear in a future
-release. Since the high key is subsequently reused as the downlink in the
-parent page for the new right page, suffix truncation can increase index
-fan-out considerably by keeping pivot tuples short.  INCLUDE indexes similarly
-truncate away non-key attributes at the time of a leaf page split,
-increasing fan-out.
+to heap tuples, that are used only for tree navigation.  Pivot tuples
+includes all tuples on non-leaf pages and high keys on leaf pages.  Note
+that pivot index tuples are only used to represent which part of the key
+space belongs on each page, and can have attribute values copied from
+non-pivot tuples that were deleted and killed by VACUUM some time ago.
+
+We truncate away attributes that are not needed for a page high key during
+a leaf page split, provided that the remaining attributes distinguish the
+last index tuple on the post-split left page as belonging on the left
+page, and the first index tuple on the post-split right page as belonging
+on the right page.  A truncated tuple logically retains the truncated
+suffix key attributes, which implicitly have "negative infinity" as their
+value.  This optimization is called suffix truncation.  Since the high key
+is subsequently reused as the downlink in the parent page for the new
+right page, suffix truncation can increase index fan-out considerably by
+keeping pivot tuples short.  INCLUDE indexes are guaranteed to have
+non-key attributes truncated at the time of a leaf page split, but may
+also have some key attributes truncated away, based on the usual criteria
+for key attributes.
 
 Notes About Data Representation
 -------------------------------
@@ -658,4 +679,19 @@ downlink.  The first data item on each such page has no lower bound
 routines must treat it accordingly.  The actual key stored in the
 item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
-than key.
+than key.  Suffix truncation's negative infinity attributes behave in
+the same way.
+
+Non-leaf pages only truly need to truncate their first item to zero
+attributes at the leftmost level, since that truly is negative infinity.
+All other negative infinity items are only really negative infinity
+within the subtree that the page is at the root of (or is a leftmost
+page within).  We truncate away all attributes of the first item on
+non-leaf pages just the same, to save a little space.  If we ever
+avoided zero-truncating items on pages where that doesn't accurately
+represent the absolute separation of the keyspace, we'd be left with
+"low key" items on internal pages -- a key value that can be used as a
+lower bound on items on the page, much like the high key is an upper
+bound. (Actually, that would even be true of "true" negative infinity
+items.  One can think of rightmost pages as implicitly containing
+"positive infinity" high keys.)

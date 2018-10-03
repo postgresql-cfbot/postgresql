@@ -634,7 +634,29 @@ expand_vacuum_rel(VacuumRelation *vrel, int options)
 		 * below, as well as find_all_inheritors's expectation that the caller
 		 * holds some lock on the starting relation.
 		 */
-		relid = RangeVarGetRelid(vrel->relation, AccessShareLock, false);
+		relid = RangeVarGetRelidExtended(vrel->relation,
+										 AccessShareLock,
+										 (options & VACOPT_SKIP_LOCKED) ? RVR_SKIP_LOCKED : 0,
+										 NULL, NULL);
+
+		/*
+		 * If the lock is unavailable, emit the same log statement that
+		 * vacuum_rel() and analyze_rel() would.
+		 */
+		if (!OidIsValid(relid))
+		{
+			if (options & VACOPT_VACUUM)
+				ereport(WARNING,
+						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+						 errmsg("skipping vacuum of \"%s\" --- lock not available",
+								vrel->relation->relname)));
+			else
+				ereport(WARNING,
+						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+						 errmsg("skipping analyze of \"%s\" --- lock not available",
+								vrel->relation->relname)));
+			return vacrels;
+		}
 
 		/*
 		 * To check whether the relation is a partitioned table and its

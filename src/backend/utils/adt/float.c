@@ -21,6 +21,7 @@
 
 #include "catalog/pg_type.h"
 #include "common/int.h"
+#include "common/ryu.h"
 #include "libpq/pqformat.h"
 #include "utils/array.h"
 #include "utils/float.h"
@@ -244,6 +245,13 @@ float4out(PG_FUNCTION_ARGS)
 {
 	float4		num = PG_GETARG_FLOAT4(0);
 	char	   *ascii;
+
+	if (extra_float_digits > 0)
+	{
+		ascii = (char *) palloc(24);
+		ryu_f2s_buffered(num, ascii);
+		PG_RETURN_CSTRING(ascii);
+	}
 
 	if (isnan(num))
 		PG_RETURN_CSTRING(pstrdup("NaN"));
@@ -480,6 +488,13 @@ char *
 float8out_internal(double num)
 {
 	char	   *ascii;
+
+	if (extra_float_digits > 0)
+	{
+		ascii = (char *) palloc(32);
+		ryu_d2s_buffered(num, ascii);
+		return ascii;
+	}
 
 	if (isnan(num))
 		return pstrdup("NaN");

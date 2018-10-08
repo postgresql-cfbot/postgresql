@@ -190,6 +190,7 @@ extern void ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 extern LockTupleMode ExecUpdateLockMode(EState *estate, ResultRelInfo *relinfo);
 extern ExecRowMark *ExecFindRowMark(EState *estate, Index rti, bool missing_ok);
 extern ExecAuxRowMark *ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist);
+extern Relation ExecRowMarkGetRelation(EState *estate, ExecRowMark *erm);
 extern TupleTableSlot *EvalPlanQual(EState *estate, EPQState *epqstate,
 			 Relation relation, Index rti, int lockmode,
 			 ItemPointer tid, TransactionId priorXmax);

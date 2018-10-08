@@ -74,6 +74,7 @@ lnext:
 	{
 		ExecAuxRowMark *aerm = (ExecAuxRowMark *) lfirst(lc);
 		ExecRowMark *erm = aerm->rowmark;
+		Relation relation;
 		HeapTuple  *testTuple;
 		Datum		datum;
 		bool		isNull;
@@ -122,19 +123,22 @@ lnext:
 		if (isNull)
 			elog(ERROR, "ctid is NULL");
 
+		/* access the tuple's relation */
+		relation = ExecRowMarkGetRelation(estate, erm);
+
 		/* requests for foreign tables must be passed to their FDW */
-		if (erm->relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		if (relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 		{
 			FdwRoutine *fdwroutine;
 			bool		updated = false;
 
-			fdwroutine = GetFdwRoutineForRelation(erm->relation, false);
+			fdwroutine = GetFdwRoutineForRelation(relation, false);
 			/* this should have been checked already, but let's be safe */
 			if (fdwroutine->RefetchForeignRow == NULL)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot lock rows in foreign table \"%s\"",
-								RelationGetRelationName(erm->relation))));
+								RelationGetRelationName(relation))));
 			copyTuple = fdwroutine->RefetchForeignRow(estate,
 													  erm,
 													  datum,
@@ -180,7 +184,7 @@ lnext:
 				break;
 		}
 
-		test = heap_lock_tuple(erm->relation, &tuple,
+		test = heap_lock_tuple(relation, &tuple,
 							   estate->es_output_cid,
 							   lockmode, erm->waitPolicy, true,
 							   &buffer, &hufd);
@@ -230,7 +234,7 @@ lnext:
 				}
 
 				/* updated, so fetch and lock the updated version */
-				copyTuple = EvalPlanQualFetch(estate, erm->relation,
+				copyTuple = EvalPlanQualFetch(estate, relation,
 											  lockmode, erm->waitPolicy,
 											  &hufd.ctid, hufd.xmax);
 
@@ -286,6 +290,7 @@ lnext:
 		{
 			ExecAuxRowMark *aerm = (ExecAuxRowMark *) lfirst(lc);
 			ExecRowMark *erm = aerm->rowmark;
+			Relation relation;
 			HeapTupleData tuple;
 			Buffer		buffer;
 
@@ -309,13 +314,16 @@ lnext:
 				continue;
 			}
 
+			/* access the tuple's relation */
+			relation = ExecRowMarkGetRelation(estate, erm);
+
 			/* foreign tables should have been fetched above */
-			Assert(erm->relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE);
+			Assert(relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE);
 			Assert(ItemPointerIsValid(&(erm->curCtid)));
 
 			/* okay, fetch the tuple */
 			tuple.t_self = erm->curCtid;
-			if (!heap_fetch(erm->relation, SnapshotAny, &tuple, &buffer,
+			if (!heap_fetch(relation, SnapshotAny, &tuple, &buffer,
 							false, NULL))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 

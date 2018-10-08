@@ -34,6 +34,7 @@
 
 struct PlanState;				/* forward references in this file */
 struct ParallelHashJoinState;
+struct ExecRowMark;
 struct ExprState;
 struct ExprContext;
 struct RangeTblEntry;			/* avoid including parsenodes.h here */
@@ -491,6 +492,8 @@ typedef struct EState
 	Index		es_range_table_size;	/* size of the range table arrays */
 	Relation   *es_relations;	/* Array of per-range-table-entry Relation
 								 * pointers, or NULL if not yet opened */
+	struct ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
+										 * ExecRowMarks, or NULL if none */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
@@ -536,8 +539,6 @@ typedef struct EState
 	MemoryContext es_query_cxt; /* per-query context in which EState lives */
 
 	List	   *es_tupleTable;	/* List of TupleTableSlots */
-
-	List	   *es_rowMarks;	/* List of ExecRowMarks */
 
 	uint64		es_processed;	/* # of tuples processed */
 	Oid			es_lastoid;		/* last oid processed (by INSERT) */
@@ -596,23 +597,28 @@ typedef struct EState
  * ExecRowMark -
  *	   runtime representation of FOR [KEY] UPDATE/SHARE clauses
  *
- * When doing UPDATE, DELETE, or SELECT FOR [KEY] UPDATE/SHARE, we will have an
- * ExecRowMark for each non-target relation in the query (except inheritance
- * parent RTEs, which can be ignored at runtime).  Virtual relations such as
- * subqueries-in-FROM will have an ExecRowMark with relation == NULL.  See
- * PlanRowMark for details about most of the fields.  In addition to fields
- * directly derived from PlanRowMark, we store an activity flag (to denote
- * inactive children of inheritance trees), curCtid, which is used by the
- * WHERE CURRENT OF code, and ermExtra, which is available for use by the plan
- * node that sources the relation (e.g., for a foreign table the FDW can use
- * ermExtra to hold information).
+ * When doing UPDATE, DELETE, or SELECT FOR [KEY] UPDATE/SHARE, we will have
+ * an ExecRowMark for each non-target relation in the query (except
+ * inheritance parent RTEs, which can be ignored at runtime).  See PlanRowMark
+ * for details about most of the fields.  In addition to fields directly
+ * derived from PlanRowMark, we store an activity flag (to denote inactive
+ * children of inheritance trees); a "checked" flag (to denote whether we've
+ * verified the relation is of appropriate type to be marked); curCtid, which
+ * is used by the WHERE CURRENT OF code; and ermExtra, which is available for
+ * use by the plan node that sources the relation (e.g., for a foreign table
+ * the FDW can use ermExtra to hold information).
  *
- * EState->es_rowMarks is a list of these structs.
+ * For performance reasons, we don't open or verify the relkind of tables
+ * that are never accessed in a query; this is important in partitioned
+ * tables with many partitions.  Use ExecRowMarkGetRelation to do that.
+ *
+ * EState->es_rowmarks is an array of these structs, indexed by RT index,
+ * with NULLs for irrelevant RT indexes.  es_rowmarks itself is NULL if
+ * there are no rowmarks.
  */
 typedef struct ExecRowMark
 {
-	Relation	relation;		/* opened and suitably locked relation */
-	Oid			relid;			/* its OID (or InvalidOid, if subquery) */
+	Oid			relid;			/* relation's OID (InvalidOid if subquery) */
 	Index		rti;			/* its range table index */
 	Index		prti;			/* parent range table index, if child */
 	Index		rowmarkId;		/* unique identifier for resjunk columns */
@@ -620,6 +626,7 @@ typedef struct ExecRowMark
 	LockClauseStrength strength;	/* LockingClause's strength, or LCS_NONE */
 	LockWaitPolicy waitPolicy;	/* NOWAIT and SKIP LOCKED */
 	bool		ermActive;		/* is this mark relevant for current tuple? */
+	bool		ermChecked;		/* have we verified relation's relkind? */
 	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
 	void	   *ermExtra;		/* available for use by relation source node */
 } ExecRowMark;
@@ -629,7 +636,7 @@ typedef struct ExecRowMark
  *	   additional runtime representation of FOR [KEY] UPDATE/SHARE clauses
  *
  * Each LockRows and ModifyTable node keeps a list of the rowmarks it needs to
- * deal with.  In addition to a pointer to the related entry in es_rowMarks,
+ * deal with.  In addition to a pointer to the related entry in es_rowmarks,
  * this struct carries the column number(s) of the resjunk columns associated
  * with the rowmark (see comments for PlanRowMark for more detail).  In the
  * case of ModifyTable, there has to be a separate ExecAuxRowMark list for
@@ -638,7 +645,7 @@ typedef struct ExecRowMark
  */
 typedef struct ExecAuxRowMark
 {
-	ExecRowMark *rowmark;		/* related entry in es_rowMarks */
+	ExecRowMark *rowmark;		/* related entry in es_rowmarks */
 	AttrNumber	ctidAttNo;		/* resno of ctid junk attribute, if any */
 	AttrNumber	toidAttNo;		/* resno of tableoid junk attribute, if any */
 	AttrNumber	wholeAttNo;		/* resno of whole-row junk attribute, if any */

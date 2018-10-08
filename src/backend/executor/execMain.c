@@ -909,61 +909,43 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	}
 
 	/*
-	 * Next, build the ExecRowMark list from the PlanRowMark(s), if any.
+	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.
 	 */
-	estate->es_rowMarks = NIL;
-	foreach(l, plannedstmt->rowMarks)
+	if (plannedstmt->rowMarks)
 	{
-		PlanRowMark *rc = (PlanRowMark *) lfirst(l);
-		Oid			relid;
-		Relation	relation;
-		ExecRowMark *erm;
-
-		/* ignore "parent" rowmarks; they are irrelevant at runtime */
-		if (rc->isParent)
-			continue;
-
-		/* get relation's OID (will produce InvalidOid if subquery) */
-		relid = exec_rt_fetch(rc->rti, estate)->relid;
-
-		/* open relation, if we need to access it for this mark type */
-		switch (rc->markType)
+		estate->es_rowmarks = (ExecRowMark **)
+			palloc0(estate->es_range_table_size * sizeof(ExecRowMark *));
+		foreach(l, plannedstmt->rowMarks)
 		{
-			case ROW_MARK_EXCLUSIVE:
-			case ROW_MARK_NOKEYEXCLUSIVE:
-			case ROW_MARK_SHARE:
-			case ROW_MARK_KEYSHARE:
-			case ROW_MARK_REFERENCE:
-				relation = ExecGetRangeTableRelation(estate, rc->rti);
-				break;
-			case ROW_MARK_COPY:
-				/* no physical table access is required */
-				relation = NULL;
-				break;
-			default:
-				elog(ERROR, "unrecognized markType: %d", rc->markType);
-				relation = NULL;	/* keep compiler quiet */
-				break;
+			PlanRowMark *rc = (PlanRowMark *) lfirst(l);
+			Oid			relid;
+			ExecRowMark *erm;
+
+			/* ignore "parent" rowmarks; they are irrelevant at runtime */
+			if (rc->isParent)
+				continue;
+
+			/* get relation's OID (will produce InvalidOid if subquery) */
+			relid = exec_rt_fetch(rc->rti, estate)->relid;
+
+			erm = (ExecRowMark *) palloc(sizeof(ExecRowMark));
+			erm->relid = relid;
+			erm->rti = rc->rti;
+			erm->prti = rc->prti;
+			erm->rowmarkId = rc->rowmarkId;
+			erm->markType = rc->markType;
+			erm->strength = rc->strength;
+			erm->waitPolicy = rc->waitPolicy;
+			erm->ermActive = false;
+			erm->ermChecked = false;
+			ItemPointerSetInvalid(&(erm->curCtid));
+			erm->ermExtra = NULL;
+
+			Assert(erm->rti > 0 && erm->rti <= estate->es_range_table_size &&
+				   estate->es_rowmarks[erm->rti - 1] == NULL);
+
+			estate->es_rowmarks[erm->rti - 1] = erm;
 		}
-
-		/* Check that relation is a legal target for marking */
-		if (relation)
-			CheckValidRowMarkRel(relation, rc->markType);
-
-		erm = (ExecRowMark *) palloc(sizeof(ExecRowMark));
-		erm->relation = relation;
-		erm->relid = relid;
-		erm->rti = rc->rti;
-		erm->prti = rc->prti;
-		erm->rowmarkId = rc->rowmarkId;
-		erm->markType = rc->markType;
-		erm->strength = rc->strength;
-		erm->waitPolicy = rc->waitPolicy;
-		erm->ermActive = false;
-		ItemPointerSetInvalid(&(erm->curCtid));
-		erm->ermExtra = NULL;
-
-		estate->es_rowMarks = lappend(estate->es_rowMarks, erm);
 	}
 
 	/*
@@ -2394,13 +2376,12 @@ ExecUpdateLockMode(EState *estate, ResultRelInfo *relinfo)
 ExecRowMark *
 ExecFindRowMark(EState *estate, Index rti, bool missing_ok)
 {
-	ListCell   *lc;
-
-	foreach(lc, estate->es_rowMarks)
+	if (rti > 0 && rti <= estate->es_range_table_size &&
+		estate->es_rowmarks != NULL)
 	{
-		ExecRowMark *erm = (ExecRowMark *) lfirst(lc);
+		ExecRowMark *erm = estate->es_rowmarks[rti - 1];
 
-		if (erm->rti == rti)
+		if (erm)
 			return erm;
 	}
 	if (!missing_ok)
@@ -2454,6 +2435,20 @@ ExecBuildAuxRowMark(ExecRowMark *erm, List *targetlist)
 	}
 
 	return aerm;
+}
+
+Relation
+ExecRowMarkGetRelation(EState *estate, ExecRowMark *erm)
+{
+	Relation relation = ExecGetRangeTableRelation(estate, erm->rti);
+
+	/* Check that relation is a legal target for marking, if we haven't */
+	if (!erm->ermChecked)
+	{
+		CheckValidRowMarkRel(relation, erm->markType);
+		erm->ermChecked = true;
+	}
+	return relation;
 }
 
 
@@ -2929,9 +2924,8 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 
 		if (erm->markType == ROW_MARK_REFERENCE)
 		{
+			Relation relation = ExecRowMarkGetRelation(epqstate->estate, erm);
 			HeapTuple	copyTuple;
-
-			Assert(erm->relation != NULL);
 
 			/* fetch the tuple's ctid */
 			datum = ExecGetJunkAttribute(epqstate->origslot,
@@ -2942,18 +2936,18 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 				continue;
 
 			/* fetch requests on foreign tables must be passed to their FDW */
-			if (erm->relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			if (relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 			{
 				FdwRoutine *fdwroutine;
 				bool		updated = false;
 
-				fdwroutine = GetFdwRoutineForRelation(erm->relation, false);
+				fdwroutine = GetFdwRoutineForRelation(relation, false);
 				/* this should have been checked already, but let's be safe */
 				if (fdwroutine->RefetchForeignRow == NULL)
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 errmsg("cannot lock rows in foreign table \"%s\"",
-									RelationGetRelationName(erm->relation))));
+									RelationGetRelationName(relation))));
 				copyTuple = fdwroutine->RefetchForeignRow(epqstate->estate,
 														  erm,
 														  datum,
@@ -2973,7 +2967,7 @@ EvalPlanQualFetchRowMarks(EPQState *epqstate)
 				Buffer		buffer;
 
 				tuple.t_self = *((ItemPointer) DatumGetPointer(datum));
-				if (!heap_fetch(erm->relation, SnapshotAny, &tuple, &buffer,
+				if (!heap_fetch(relation, SnapshotAny, &tuple, &buffer,
 								false, NULL))
 					elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 
@@ -3131,6 +3125,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	estate->es_range_table_array = parentestate->es_range_table_array;
 	estate->es_range_table_size = parentestate->es_range_table_size;
 	estate->es_relations = parentestate->es_relations;
+	estate->es_rowmarks = parentestate->es_rowmarks;
 	estate->es_plannedstmt = parentestate->es_plannedstmt;
 	estate->es_junkFilter = parentestate->es_junkFilter;
 	estate->es_output_cid = parentestate->es_output_cid;
@@ -3148,7 +3143,6 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	}
 	/* es_result_relation_info must NOT be copied */
 	/* es_trig_target_relations must NOT be copied */
-	estate->es_rowMarks = parentestate->es_rowMarks;
 	estate->es_top_eflags = parentestate->es_top_eflags;
 	estate->es_instrument = parentestate->es_instrument;
 	/* es_auxmodifytables must NOT be copied */

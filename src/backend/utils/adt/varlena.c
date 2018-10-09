@@ -3219,26 +3219,19 @@ name_text(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text(NameStr(*s)));
 }
 
-
 /*
- * textToQualifiedNameList - convert a text object to list of names
- *
- * This implements the input parsing needed by nextval() and other
- * functions that take a text parameter representing a qualified name.
- * We split the name at dots, downcase if not double-quoted, and
- * truncate names if they're too long.
+ * Given a C string, parse it into a qualified-name list.
  */
 List *
-textToQualifiedNameList(text *textval)
+stringToQualifiedNameList(const char *string)
 {
 	char	   *rawname;
 	List	   *result = NIL;
 	List	   *namelist;
 	ListCell   *l;
 
-	/* Convert to C string (handles possible detoasting). */
-	/* Note we rely on being able to modify rawname below. */
-	rawname = text_to_cstring(textval);
+	/* We need a modifiable copy of the input string. */
+	rawname = pstrdup(string);
 
 	if (!SplitIdentifierString(rawname, '.', &namelist))
 		ereport(ERROR,
@@ -3259,6 +3252,31 @@ textToQualifiedNameList(text *textval)
 
 	pfree(rawname);
 	list_free(namelist);
+
+	return result;
+}
+
+
+/*
+ * textToQualifiedNameList - convert a text object to list of names
+ *
+ * This implements the input parsing needed by nextval() and other
+ * functions that take a text parameter representing a qualified name.
+ * We split the name at dots, downcase if not double-quoted, and
+ * truncate names if they're too long.
+ */
+List *
+textToQualifiedNameList(text *textval)
+{
+	char	   *rawname;
+	List	   *result = NIL;
+
+	/* Convert to C string (handles possible detoasting). */
+	/* Note we rely on being able to modify rawname below. */
+	rawname = text_to_cstring(textval);
+
+	result = stringToQualifiedNameList(rawname);
+	pfree(rawname);
 
 	return result;
 }

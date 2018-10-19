@@ -138,6 +138,15 @@ ShutdownRecoveryTransactionEnvironment(void)
 	VirtualXactLockTableCleanup();
 }
 
+/*
+ * SendHotStandbyExitSignal
+ *		Signal backends that the server has exited Hot Standby.
+ */
+void
+SendHotStandbyExitSignal(void)
+{
+	SendSignalToAllBackends(PROCSIG_HOTSTANDBY_EXIT);
+}
 
 /*
  * -----------------------------------------------------

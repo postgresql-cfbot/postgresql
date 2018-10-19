@@ -357,6 +357,8 @@ static List *upperPendingNotifies = NIL;	/* list of upper-xact lists */
  */
 volatile sig_atomic_t notifyInterruptPending = false;
 
+volatile sig_atomic_t hotStandbyExitInterruptPending = false;
+
 /* True if we've registered an on_shmem_exit cleanup */
 static bool unlistenExitRegistered = false;
 
@@ -1735,6 +1737,53 @@ ProcessNotifyInterrupt(void)
 
 	while (notifyInterruptPending)
 		ProcessIncomingNotify();
+}
+
+
+/*
+ * HandleHotStandbyExitInterrupt
+ *
+ *		Signal handler portion of interrupt handling. Let the backend know
+ *		that the server has exited the recovery mode.
+ */
+void
+HandleHotStandbyExitInterrupt(void)
+{
+	/*
+	 * Note: this is called by a SIGNAL HANDLER. You must be very wary what
+	 * you do here.
+	 */
+
+	/* signal that work needs to be done */
+	hotStandbyExitInterruptPending = true;
+
+	/* make sure the event is processed in due course */
+	SetLatch(MyLatch);
+}
+
+
+/*
+ * ProcessHotStandbyExitInterrupt
+ *
+ *		This is called just after waiting for a frontend command.  If a
+ *		interrupt arrives (via HandleHotStandbyExitInterrupt()) while reading,
+ *		the read will be interrupted via the process's latch, and this routine
+ *		will get called.
+ */
+void
+ProcessHotStandbyExitInterrupt(void)
+{
+	hotStandbyExitInterruptPending = false;
+
+	SetConfigOption("session_read_only",
+					DefaultXactReadOnly ? "on" : "off",
+					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	/*
+	 * Flush output buffer so that clients receive the ParameterStatus
+	 * message as soon as possible.
+	 */
+	pq_flush();
 }
 
 

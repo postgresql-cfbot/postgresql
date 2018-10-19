@@ -1579,6 +1579,9 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        <para>
         If this parameter is set to <literal>read-write</literal>, only a
         connection in which read-write transactions are accepted by default
+        is considered acceptable.
+        If this parameter is set to <literal>read-only</literal>, only a
+        connection in which read-write transactions are rejected by default
         is considered acceptable.  The query
         <literal>SHOW transaction_read_only</literal> will be sent upon any
         successful connection; if it returns <literal>on</literal>, the connection
@@ -1929,6 +1932,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        before 8.1;
        <varname>IntervalStyle</varname> was not reported by releases before 8.4;
        <varname>application_name</varname> was not reported by releases before 9.0.)
+       <varname>session_read_only</> was not reported by releases before 12.0.)
        Note that
        <varname>server_version</varname>,
        <varname>server_encoding</varname> and

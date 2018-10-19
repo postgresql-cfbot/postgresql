@@ -292,6 +292,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
+	if (CheckProcSignal(PROCSIG_HOTSTANDBY_EXIT))
+		HandleHotStandbyExitInterrupt();
+
 	SetLatch(MyLatch);
 
 	latch_sigusr1_handler();

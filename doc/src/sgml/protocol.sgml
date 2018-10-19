@@ -1291,6 +1291,7 @@ SELCT 1/0;
     before 8.1;
     <varname>IntervalStyle</varname> was not reported by releases before 8.4;
     <varname>application_name</varname> was not reported by releases before 9.0.)
+    <varname>session_read_only</> was not reported by releases before 12.0.)
     Note that
     <varname>server_version</varname>,
     <varname>server_encoding</varname> and
@@ -1586,7 +1587,7 @@ PostgreSQL is <literal>tls-server-end-point</literal>.
    user-supplied password in the transmitted password hash.  While this
    prevents the password hash from being successfully retransmitted in
    a later session, it does not prevent a fake server between the real
-   server and client from passing through the server's random value 
+   server and client from passing through the server's random value
    and successfully authenticating.
   </para>
 

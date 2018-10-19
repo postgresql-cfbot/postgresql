@@ -1240,7 +1240,8 @@ connectOptions2(PGconn *conn)
 	if (conn->target_session_attrs)
 	{
 		if (strcmp(conn->target_session_attrs, "any") != 0
-			&& strcmp(conn->target_session_attrs, "read-write") != 0)
+			&& strcmp(conn->target_session_attrs, "read-write") != 0
+			&& strcmp(conn->target_session_attrs, "read-only") != 0)
 		{
 			conn->status = CONNECTION_BAD;
 			printfPQExpBuffer(&conn->errorMessage,
@@ -3158,15 +3159,19 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/*
-				 * If a read-write connection is required, see if we have one.
+				 * If a read-write or a read-only connection is required,
+				 * see if we have one.
 				 *
 				 * Servers before 7.4 lack the transaction_read_only GUC, but
 				 * by the same token they don't have any read-only mode, so we
-				 * may just skip the test in that case.
+				 * may just skip the test in that case.  Servers starting
+				 * with 12.0 report the session_read_only value via a
+				 * parameter status message.
 				 */
-				if (conn->sversion >= 70400 &&
+				if (conn->sversion >= 70400 && conn->sversion < 120000 &&
 					conn->target_session_attrs != NULL &&
-					strcmp(conn->target_session_attrs, "read-write") == 0)
+					(strcmp(conn->target_session_attrs, "read-write") == 0 ||
+					 strcmp(conn->target_session_attrs, "read-only") == 0))
 				{
 					/*
 					 * Save existing error messages across the PQsendQuery
@@ -3188,6 +3193,36 @@ keep_going:						/* We will come back to here until there is
 					conn->status = CONNECTION_CHECK_WRITABLE;
 					restoreErrorMessage(conn, &savedMessage);
 					return PGRES_POLLING_READING;
+				}
+
+				if (conn->sversion >= 120000 &&
+					conn->target_session_attrs != NULL &&
+					((strcmp(conn->target_session_attrs, "read-write") == 0 &&
+					  conn->session_read_only) ||
+					 (strcmp(conn->target_session_attrs, "read-only") == 0 &&
+					  !conn->session_read_only)))
+				{
+					/* Not suitable; close connection. */
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not make a suitable "
+													"connection to server "
+													"\"%s:%s\"\n"),
+									  conn->connhost[conn->whichhost].host,
+									  conn->connhost[conn->whichhost].port);
+					conn->status = CONNECTION_OK;
+					sendTerminateConn(conn);
+					pqDropConnection(conn, true);
+
+					/* Skip any remaining addresses for this host. */
+					conn->addr_cur = NULL;
+					if (conn->whichhost + 1 < conn->nconnhost)
+					{
+						conn->status = CONNECTION_NEEDED;
+						goto keep_going;
+					}
+
+					/* No more addresses to try. So we fail. */
+					goto error_return;
 				}
 
 				/* We can release the address list now. */
@@ -3226,9 +3261,9 @@ keep_going:						/* We will come back to here until there is
 			}
 
 			/*
-			 * If a read-write connection is required, see if we have one.
-			 * (This should match the stanza in the CONNECTION_AUTH_OK case
-			 * above.)
+			 * If a read-write or a read-only connection is required,
+			 * see if we have one. (This should match the stanza in
+			 * the CONNECTION_AUTH_OK case above.)
 			 *
 			 * Servers before 7.4 lack the transaction_read_only GUC, but by
 			 * the same token they don't have any read-only mode, so we may
@@ -3236,7 +3271,8 @@ keep_going:						/* We will come back to here until there is
 			 */
 			if (conn->sversion >= 70400 &&
 				conn->target_session_attrs != NULL &&
-				strcmp(conn->target_session_attrs, "read-write") == 0)
+				(strcmp(conn->target_session_attrs, "read-write") == 0 ||
+				 strcmp(conn->target_session_attrs, "read-only") == 0))
 			{
 				if (!saveErrorMessage(conn, &savedMessage))
 					goto error_return;
@@ -3317,9 +3353,22 @@ keep_going:						/* We will come back to here until there is
 					PQntuples(res) == 1)
 				{
 					char	   *val;
+					char	   *expected_val;
+					int			expected_len;
+
+					if (strcmp(conn->target_session_attrs, "read-write") == 0)
+					{
+						expected_val = "on";
+						expected_len = 2;
+					}
+					else
+					{
+						expected_val = "off";
+						expected_len = 3;
+					}
 
 					val = PQgetvalue(res, 0, 0);
-					if (strncmp(val, "on", 2) == 0)
+					if (strncmp(val, expected_val, expected_len) == 0)
 					{
 						/* Not writable; fail this connection. */
 						const char *displayed_host;
@@ -3337,8 +3386,12 @@ keep_going:						/* We will come back to here until there is
 						if (displayed_port == NULL || displayed_port[0] == '\0')
 							displayed_port = DEF_PGPORT_STR;
 
+						PQclear(res);
+						restoreErrorMessage(conn, &savedMessage);
+
+						/* Not suitable; close connection. */
 						appendPQExpBuffer(&conn->errorMessage,
-										  libpq_gettext("could not make a writable "
+										  libpq_gettext("could not make a suiteable "
 														"connection to server "
 														"\"%s:%s\"\n"),
 										  displayed_host, displayed_port);
@@ -3533,6 +3586,7 @@ makeEmptyPGconn(void)
 	conn->setenv_state = SETENV_STATE_IDLE;
 	conn->client_encoding = PG_SQL_ASCII;
 	conn->std_strings = false;	/* unless server says differently */
+	conn->session_read_only = false;	/* unless server says differently */
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;

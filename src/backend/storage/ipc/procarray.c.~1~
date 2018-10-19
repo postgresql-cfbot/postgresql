@@ -2973,36 +2973,6 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 }
 
 /*
- * SendSignalToAllBackends --- send a signal to all backends.
- */
-void
-SendSignalToAllBackends(ProcSignalReason reason)
-{
-	ProcArrayStruct *arrayP = procArray;
-	int			index;
-	pid_t		pid = 0;
-
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-
-	for (index = 0; index < arrayP->numProcs; index++)
-	{
-		int pgprocno = arrayP->pgprocnos[index];
-		volatile PGPROC *proc = &allProcs[pgprocno];
-		VirtualTransactionId procvxid;
-
-		GET_VXID_FROM_PGPROC(procvxid, *proc);
-
-		pid = proc->pid;
-		if (pid != 0)
-		{
-			(void) SendProcSignal(pid, reason, procvxid.backendId);
-		}
-	}
-
-	LWLockRelease(ProcArrayLock);
-}
-
-/*
  * ProcArraySetReplicationSlotXmin
  *
  * Install limits to future computations of the xmin horizon to prevent vacuum

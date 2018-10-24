@@ -1119,6 +1119,13 @@ LANGUAGE INTERNAL
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'jsonb_insert';
 
+CREATE OR REPLACE FUNCTION
+  pg_promote(wait boolean DEFAULT true, wait_seconds integer DEFAULT 60)
+RETURNS boolean
+LANGUAGE INTERNAL
+STRICT VOLATILE
+AS 'pg_promote';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather
@@ -1138,6 +1145,7 @@ REVOKE EXECUTE ON FUNCTION pg_rotate_logfile() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_reload_conf() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_current_logfile() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_current_logfile(text) FROM public;
+REVOKE EXECUTE ON FUNCTION pg_promote(boolean, integer) FROM public;
 
 REVOKE EXECUTE ON FUNCTION pg_stat_reset() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_stat_reset_shared(text) FROM public;

@@ -214,7 +214,11 @@ $cur_master->psql(
 	INSERT INTO t_009_tbl VALUES (22, 'issued to ${cur_master_name}');
 	PREPARE TRANSACTION 'xact_009_10';");
 $cur_master->teardown_node;
-$cur_standby->promote;
+
+# promote standby using "pg_promote" and wait until it is promoted
+$cur_standby->safe_psql('postgres', 'SELECT pg_promote(false)');
+$cur_standby->poll_query_until('postgres', "SELECT NOT pg_is_in_recovery()")
+	or die "standby never exited recovery";
 
 # change roles
 note "Now paris is master and london is standby";

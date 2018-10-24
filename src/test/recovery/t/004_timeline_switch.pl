@@ -37,9 +37,12 @@ $node_master->safe_psql('postgres',
 $node_master->wait_for_catchup($node_standby_1, 'replay',
 	$node_master->lsn('write'));
 
-# Stop and remove master, and promote standby 1, switching it to a new timeline
+# Stop and remove master
 $node_master->teardown_node;
-$node_standby_1->promote;
+
+# promote standby 1 using "pg_promote", switching it to a new timeline
+$node_standby_1->safe_psql('postgres',
+	"SELECT pg_promote(wait_seconds => 300)");
 
 # Switch standby 2 to replay from standby 1
 rmtree($node_standby_2->data_dir . '/recovery.conf');

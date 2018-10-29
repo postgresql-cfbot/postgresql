@@ -19,9 +19,11 @@
 #include "catalog/pg_authid.h"
 #include "miscadmin.h"
 #include "postmaster/syslogger.h"
+#include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/signal_message.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
@@ -29,9 +31,11 @@
 /*
  * Send a signal to another backend.
  *
- * The signal is delivered if the user is either a superuser or the same
- * role as the backend being signaled. For "dangerous" signals, an explicit
- * check for superuser needs to be done prior to calling this function.
+ * The signal is delivered if the user is either a superuser or the same role
+ * as the backend being signaled. For "dangerous" signals, an explicit check
+ * for superuser needs to be done prior to calling this function. If msg is
+ * set, the contents will be passed as a message to the backend in the error
+ * message.
  *
  * Returns 0 on success, 1 on general failure, 2 on normal permission error
  * and 3 if the caller needs to be a superuser.
@@ -45,7 +49,7 @@
 #define SIGNAL_BACKEND_NOPERMISSION 2
 #define SIGNAL_BACKEND_NOSUPERUSER 3
 static int
-pg_signal_backend(int pid, int sig)
+pg_signal_backend(int pid, int sig, char *msg)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
 
@@ -76,6 +80,30 @@ pg_signal_backend(int pid, int sig)
 	if (!has_privs_of_role(GetUserId(), proc->roleId) &&
 		!has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID))
 		return SIGNAL_BACKEND_NOPERMISSION;
+
+	/* If the user supplied a message to the signalled backend */
+	if (msg != NULL)
+	{
+		char *tmp = msg;
+
+		/*
+		 * The message to pass to the signalled backend is currently restricted
+		 * to ASCII only, since the sending backend might use an encoding which
+		 * is incompatible with the receiving with regards to conversion.
+		 */
+		while (*tmp != '\0')
+		{
+			if (!isascii(*tmp))
+				ereport(ERROR,
+						(errmsg("message is restricted to ASCII only")));
+			tmp++;
+		}
+
+		if (sig == SIGINT)
+			SetBackendCancelMessage(pid, msg);
+		else
+			SetBackendTerminationMessage(pid, msg);
+	}
 
 	/*
 	 * Can the process we just validated above end, followed by the pid being
@@ -110,7 +138,19 @@ pg_signal_backend(int pid, int sig)
 Datum
 pg_cancel_backend(PG_FUNCTION_ARGS)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGINT);
+	int			r;
+	pid_t		pid;
+	char 	   *msg = NULL;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	pid = PG_GETARG_INT32(0);
+
+	if (PG_NARGS() == 2 && !PG_ARGISNULL(1))
+		msg = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	r = pg_signal_backend(pid, SIGINT, msg);
 
 	if (r == SIGNAL_BACKEND_NOSUPERUSER)
 		ereport(ERROR,
@@ -134,7 +174,19 @@ pg_cancel_backend(PG_FUNCTION_ARGS)
 Datum
 pg_terminate_backend(PG_FUNCTION_ARGS)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGTERM);
+	int			r;
+	pid_t		pid;
+	char 	   *msg = NULL;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	pid = PG_GETARG_INT32(0);
+
+	if (PG_NARGS() == 2 && !PG_ARGISNULL(1))
+		msg = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	r = pg_signal_backend(pid, SIGTERM, msg);
 
 	if (r == SIGNAL_BACKEND_NOSUPERUSER)
 		ereport(ERROR,
@@ -146,7 +198,7 @@ pg_terminate_backend(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 (errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend"))));
 
-	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+	return (r == SIGNAL_BACKEND_SUCCESS);
 }
 
 /*

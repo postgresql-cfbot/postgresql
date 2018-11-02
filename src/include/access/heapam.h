@@ -16,6 +16,7 @@
 
 #include "access/sdir.h"
 #include "access/skey.h"
+#include "access/xact.h"
 #include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
@@ -107,6 +108,18 @@ typedef struct ParallelHeapScanDescData *ParallelHeapScanDesc;
  */
 #define HeapScanIsValid(scan) PointerIsValid(scan)
 
+/*
+ *	simple_heap_insert - insert a tuple
+ *
+ * Currently, this routine differs from heap_insert only in supplying
+ * a default command ID and not allowing access to the speedup options.
+ *
+ * This should be used rather than using heap_insert directly in most places
+ * where we are modifying system catalogs.
+ */
+#define simple_heap_insert(relation, tup) \
+	heap_insert(relation, tup, GetCurrentCommandId(true), 0, NULL)
+
 extern HeapScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 			   int nkeys, ScanKey key);
 extern HeapScanDesc heap_beginscan_catalog(Relation relation, int nkeys,
@@ -176,7 +189,6 @@ extern bool heap_tuple_needs_freeze(HeapTupleHeader tuple, TransactionId cutoff_
 						MultiXactId cutoff_multi, Buffer buf);
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
 
-extern Oid	simple_heap_insert(Relation relation, HeapTuple tup);
 extern void simple_heap_delete(Relation relation, ItemPointer tid);
 extern void simple_heap_update(Relation relation, ItemPointer otid,
 				   HeapTuple tup);

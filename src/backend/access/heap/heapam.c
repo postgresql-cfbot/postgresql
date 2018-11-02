@@ -2410,6 +2410,11 @@ ReleaseBulkInsertStatePin(BulkInsertState bistate)
 /*
  *	heap_insert		- insert tuple into a heap
  *
+ *  NB: simple_heap_insert macro should be used rather than using heap_insert
+ *  directly in most places where we are modifying system catalogs.
+ *  Currently, this routine differs from heap_insert only in supplying
+ *  a default command ID and not allowing access to the speedup options.
+ *
  * The new tuple is stamped with current transaction ID and the specified
  * command ID.
  *
@@ -2984,21 +2989,6 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 		tuples[i]->t_self = heaptuples[i]->t_self;
 
 	pgstat_count_heap_insert(relation, ntuples);
-}
-
-/*
- *	simple_heap_insert - insert a tuple
- *
- * Currently, this routine differs from heap_insert only in supplying
- * a default command ID and not allowing access to the speedup options.
- *
- * This should be used rather than using heap_insert directly in most places
- * where we are modifying system catalogs.
- */
-Oid
-simple_heap_insert(Relation relation, HeapTuple tup)
-{
-	return heap_insert(relation, tup, GetCurrentCommandId(true), 0, NULL);
 }
 
 /*

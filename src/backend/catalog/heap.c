@@ -3121,7 +3121,8 @@ RelationTruncateIndexes(Relation heapRelation)
 /*
  *	 heap_truncate
  *
- *	 This routine deletes all data within all the specified relations.
+ *	 This routine deletes all data within all the specified relations,
+ *	 ignoring any that don't have any storage to begin with
  *
  * This is not transaction-safe!  There is another, transaction-safe
  * implementation in commands/tablecmds.c.  We now use this only for
@@ -3151,8 +3152,12 @@ heap_truncate(List *relids)
 	{
 		Relation	rel = lfirst(cell);
 
-		/* Truncate the relation */
-		heap_truncate_one_rel(rel);
+		/*
+		 * Truncate the relation.  Regular and partitioned tables can be
+		 * temporary relations, but only regular tables have storage.
+		 */
+		if (rel->rd_rel->relkind == RELKIND_RELATION)
+			heap_truncate_one_rel(rel);
 
 		/* Close the relation, but keep exclusive lock on it until commit */
 		heap_close(rel, NoLock);

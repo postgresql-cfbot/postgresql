@@ -151,3 +151,14 @@ select whoami();
 select pg_temp.whoami();
 
 drop table public.whereami;
+
+-- for partitioned temp tables, ON COMMIT action should ignore storage-less
+-- partitioned parent table
+begin;
+create temp table temp_parted_oncommit_test (a int) partition by list (a) on commit delete rows;
+create temp table temp_parted_oncommit_test1 partition of temp_parted_oncommit_test for values in (1) on commit delete rows;
+insert into temp_parted_oncommit_test values (1);
+commit;
+-- temp_parted_oncommit_test1 must've been emptied during the commit
+select * from temp_parted_oncommit_test;
+drop table temp_parted_oncommit_test;

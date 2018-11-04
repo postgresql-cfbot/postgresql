@@ -327,6 +327,51 @@ pathkeys_contained_in(List *keys1, List *keys2)
 	return false;
 }
 
+
+/*
+ * pathkeys_common_contained_in
+ *    Same as pathkeys_contained_in, but also sets length of longest
+ *    common prefix of keys1 and keys2.
+ */
+bool
+pathkeys_common_contained_in(List *keys1, List *keys2, int *n_common)
+{
+	int			n = 0;
+	ListCell   *key1,
+			   *key2;
+
+	forboth(key1, keys1, key2, keys2)
+	{
+		PathKey    *pathkey1 = (PathKey *) lfirst(key1);
+		PathKey    *pathkey2 = (PathKey *) lfirst(key2);
+
+		if (pathkey1 != pathkey2)
+		{
+			*n_common = n;
+			return false;
+		}
+		n++;
+	}
+
+	*n_common = n;
+	return (key1 == NULL);
+}
+
+
+/*
+ * pathkeys_common
+ *    Returns length of longest common prefix of keys1 and keys2.
+ */
+int
+pathkeys_common(List *keys1, List *keys2)
+{
+	int		n;
+
+	(void) pathkeys_common_contained_in(keys1, keys2, &n);
+	return n;
+}
+
+
 /*
  * get_cheapest_path_for_pathkeys
  *	  Find the cheapest path (according to the specified criterion) that
@@ -1596,19 +1641,23 @@ right_merge_direction(PlannerInfo *root, PathKey *pathkey)
 static int
 pathkeys_useful_for_ordering(PlannerInfo *root, List *pathkeys)
 {
+	int	n_common_pathkeys;
+
 	if (root->query_pathkeys == NIL)
 		return 0;				/* no special ordering requested */
 
 	if (pathkeys == NIL)
 		return 0;				/* unordered path */
 
-	if (pathkeys_contained_in(root->query_pathkeys, pathkeys))
-	{
-		/* It's useful ... or at least the first N keys are */
-		return list_length(root->query_pathkeys);
-	}
+	(void) pathkeys_common_contained_in(root->query_pathkeys, pathkeys,
+										&n_common_pathkeys);
 
-	return 0;					/* path ordering not useful */
+	/*
+	 * Return the number of path keys in common, or 0 if there are none.
+	 * Any leading common pathkeys could be useful for ordering because
+	 * we can use the incremental sort.
+	 */
+	return n_common_pathkeys;
 }
 
 /*

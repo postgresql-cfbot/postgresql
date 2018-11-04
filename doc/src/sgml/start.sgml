@@ -19,9 +19,8 @@
 
    <para>
     If you are not sure whether <productname>PostgreSQL</productname>
-    is already available or whether you can use it for your
-    experimentation then you can install it yourself.  Doing so is not
-    hard and it can be a good exercise.
+    is already available for your experimentation,
+    you can install it yourself, which is not hard.
     <productname>PostgreSQL</productname> can be installed by any
     unprivileged user; no superuser (<systemitem>root</systemitem>)
     access is required.
@@ -83,7 +82,7 @@
 
      <listitem>
       <para>
-       The user's client (frontend) application that wants to perform
+       The user's client (frontend), an application that wants to perform
        database operations.  Client applications can be very diverse
        in nature:  a client could be a text-oriented tool, a graphical
        application, a web server that accesses the database to
@@ -153,7 +152,7 @@
 <screen>
 <prompt>$</prompt> <userinput>createdb mydb</userinput>
 </screen>
-    If this produces no response then this step was successful and you can skip over the
+    If this exits without any error message then this step was successful and you can skip over the
     remainder of this section.
    </para>
 
@@ -240,12 +239,14 @@ createdb: database creation failed: ERROR:  permission denied to create database
    <para>
     You can also create databases with other names.
     <productname>PostgreSQL</productname> allows you to create any
-    number of databases at a given site.  Database names must have an
-    alphabetic first character and are limited to 63 bytes in
-    length.  A convenient choice is to create a database with the same
-    name as your current user name.  Many tools assume that database
-    name as the default, so it can save you some typing.  To create
-    that database, simply type:
+    number of databases at a given site. However, if you would like to create databases with
+    names that do not start with an alphabetic character, you will need to quote it like so: "1234".
+    Database names are limited to 63 bytes in length. Database names longer than 63 bytes will be 
+    truncated. You can change this limit by modifying the NAMEDATALEN variable, 
+    but that would require recompiling <productname>PostgreSQL</productname>.
+    A convenient choice is to create a database with the same name as your current user name. 
+    Many tools assume that database name as the default, so it 
+    can save you some typing. To create that database, simply type:
 <screen>
 <prompt>$</prompt> <userinput>createdb</userinput>
 </screen>
@@ -355,7 +356,7 @@ mydb=#
    <para>
     The last line printed out by <command>psql</command> is the
     prompt, and it indicates that <command>psql</command> is listening
-    to you and that you can type <acronym>SQL</acronym> queries into a
+    to you and that you can type commands and <acronym>SQL</acronym> queries into a
     work space maintained by <command>psql</command>.  Try out these
     commands:
     <indexterm><primary>version</primary></indexterm>

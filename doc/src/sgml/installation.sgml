@@ -75,7 +75,7 @@ su - postgres
       <application>make</application> programs or older <acronym>GNU</acronym> <application>make</application> versions will <emphasis>not</emphasis> work.
       (<acronym>GNU</acronym> <application>make</application> is sometimes installed under
       the name <filename>gmake</filename>.)  To test for <acronym>GNU</acronym>
-      <application>make</application> enter:
+      <application>make</application> and check its version, enter:
 <screen>
 <userinput>make --version</userinput>
 </screen>
@@ -385,8 +385,8 @@ su - postgres
     This script will run a number of tests to determine values for various
     system dependent variables and detect any quirks of your
     operating system, and finally will create several files in the
-    build tree to record what it found.  You can also run
-    <filename>configure</filename> in a directory outside the source
+    build tree to record what it found.  If it does not print any error messages, configuration was successful.
+    You can also run <filename>configure</filename> in a directory outside the source
     tree, if you want to keep the build directory separate.  This
     procedure is also called a
     <indexterm><primary>VPATH</primary></indexterm><firstterm>VPATH</firstterm>
@@ -1610,6 +1610,17 @@ su - postgres
 <screen>
 All of PostgreSQL successfully made. Ready to install.
 </screen>
+    If you see an error message like:
+<screen>
+ERROR: `flex' is missing on your system. It is needed to create the
+file `bootscanner.c'. You can either get flex from a GNU mirror site
+or download an official distribution of PostgreSQL, which contains
+pre-packaged flex output.
+</screen>
+    then packages which are required to build 
+    <productname>PostgreSQL</productname> are missing. 
+    See <xref linkend="install-requirements"/> for a list of requirements. 
+
    </para>
 
   <para>

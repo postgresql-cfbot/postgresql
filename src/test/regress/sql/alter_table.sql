@@ -2607,6 +2607,18 @@ alter table temp_part_parent attach partition temp_part_child default; -- ok
 drop table perm_part_parent cascade;
 drop table temp_part_parent cascade;
 
+-- check that adding partitions to a table while it is being used is prevented
+create table check_not_in_use (a int) partition by list (a);
+create or replace function add_part_func () returns trigger language plpgsql as $$
+  begin
+    execute 'create table check_not_in_use1 (a int)';
+    execute 'alter table check_not_in_use attach partition check_not_in_use1 default';
+  end $$;
+create trigger add_part_trig before insert on check_not_in_use
+  for each statement execute procedure add_part_func();
+insert into check_not_in_use values (1);
+drop table check_not_in_use;
+
 -- test case where the partitioning operator is a SQL function whose
 -- evaluation results in the table's relcache being rebuilt partway through
 -- the execution of an ATTACH PARTITION command

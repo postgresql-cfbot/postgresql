@@ -730,3 +730,14 @@ create temp table temp_part partition of perm_parted default; -- error
 create temp table temp_part partition of temp_parted default; -- ok
 drop table perm_parted cascade;
 drop table temp_parted cascade;
+
+-- check that adding partitions to a table while it is being used is prevented
+create table check_not_in_use (a int) partition by list (a);
+create function add_part_func () returns trigger language plpgsql as $$
+  begin
+   execute 'create table check_not_in_use1 partition of check_not_in_use default';
+  end $$;
+create trigger add_part_trig before insert on check_not_in_use
+  for each statement execute procedure add_part_func();
+insert into check_not_in_use values (1);
+drop table check_not_in_use;

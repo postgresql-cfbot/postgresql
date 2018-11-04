@@ -224,6 +224,12 @@ my %pgdump_runs = (
 			"--file=$tempdir/pg_dumpall_dbprivs.sql",
 		],
 	},
+	pg_dumpall_exclude => {
+		dump_cmd => [
+			'pg_dumpall', '-v', "--file=$tempdir/pg_dumpall_exclude.sql",
+			'--exclude-database', '*dump*', '--no-sync',
+		],
+	},
 	no_blobs => {
 		dump_cmd => [
 			'pg_dump',                      '--no-sync',
@@ -387,6 +393,7 @@ my %full_runs = (
 	no_owner                 => 1,
 	no_privs                 => 1,
 	pg_dumpall_dbprivs       => 1,
+	pg_dumpall_exclude       => 1,
 	schema_only              => 1,
 	with_oids                => 1,);
 
@@ -452,6 +459,7 @@ my %tests = (
 			pg_dumpall_dbprivs       => 1,
 			pg_dumpall_globals       => 1,
 			pg_dumpall_globals_clean => 1,
+			pg_dumpall_exclude       => 1,
 		},
 	},
 
@@ -1386,6 +1394,7 @@ my %tests = (
 		regexp       => qr/^CREATE ROLE regress_dump_test_role;/m,
 		like         => {
 			pg_dumpall_dbprivs       => 1,
+			pg_dumpall_exclude       => 1,
 			pg_dumpall_globals       => 1,
 			pg_dumpall_globals_clean => 1,
 		},
@@ -2515,6 +2524,7 @@ my %tests = (
 			no_owner                => 1,
 			only_dump_test_schema   => 1,
 			pg_dumpall_dbprivs      => 1,
+			pg_dumpall_exclude      => 1,
 			schema_only             => 1,
 			section_post_data       => 1,
 			test_schema_plus_blobs  => 1,
@@ -2586,6 +2596,7 @@ my %tests = (
 			no_privs                 => 1,
 			no_owner                 => 1,
 			pg_dumpall_dbprivs       => 1,
+			pg_dumpall_exclude       => 1,
 			role                     => 1,
 			schema_only              => 1,
 			section_post_data        => 1,

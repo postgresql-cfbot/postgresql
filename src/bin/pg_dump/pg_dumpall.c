@@ -52,6 +52,8 @@ static PGconn *connectDatabase(const char *dbname, const char *connstr, const ch
 static char *constructConnStr(const char **keywords, const char **values);
 static PGresult *executeQuery(PGconn *conn, const char *query);
 static void executeCommand(PGconn *conn, const char *query);
+static void expand_dbname_patterns(PGconn *conn, SimpleStringList *patterns,
+								   SimpleStringList *names);
 
 static char pg_dump_bin[MAXPGPATH];
 static const char *progname;
@@ -86,6 +88,9 @@ static char role_catalog[10];
 
 static FILE *OPF;
 static char *filename = NULL;
+
+static SimpleStringList database_exclude_patterns = {NULL, NULL};
+static SimpleStringList database_exclude_names = {NULL, NULL};
 
 #define exit_nicely(code) exit(code)
 
@@ -123,6 +128,7 @@ main(int argc, char *argv[])
 		{"column-inserts", no_argument, &column_inserts, 1},
 		{"disable-dollar-quoting", no_argument, &disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &disable_triggers, 1},
+		{"exclude-database", required_argument, NULL, 5},
 		{"if-exists", no_argument, &if_exists, 1},
 		{"inserts", no_argument, &inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -318,6 +324,10 @@ main(int argc, char *argv[])
 				appendPQExpBufferStr(pgdumpopts, " --no-sync");
 				break;
 
+			case 5:
+				simple_string_list_append(&database_exclude_patterns, optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -329,6 +339,16 @@ main(int argc, char *argv[])
 	{
 		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
 				progname, argv[optind]);
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit_nicely(1);
+	}
+
+	if (database_exclude_patterns.head != NULL &&
+		(globals_only || roles_only || tablespaces_only))
+	{
+		fprintf(stderr, _("%s: option --exclude-database cannot be used together with -g/--globals-only, -r/--roles-only or -t/--tablespaces-only\n"),
+				progname);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit_nicely(1);
@@ -447,6 +467,12 @@ main(int argc, char *argv[])
 			exit_nicely(1);
 		}
 	}
+
+	/*
+	 * Get a list of database names that match the exclude patterns
+	 */
+	expand_dbname_patterns(conn, &database_exclude_patterns,
+						   &database_exclude_names);
 
 	/*
 	 * Open the output file if required, otherwise use stdout
@@ -614,6 +640,7 @@ help(void)
 	printf(_("  --column-inserts             dump data as INSERT commands with column names\n"));
 	printf(_("  --disable-dollar-quoting     disable dollar quoting, use SQL standard quoting\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
+	printf(_("  --exclude-database=PATTERN   exclude databases whose name matches PATTERN\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --inserts                    dump data as INSERT commands, rather than COPY\n"));
 	printf(_("  --load-via-partition-root    load partitions via the root table\n"));
@@ -1351,6 +1378,47 @@ dumpUserConfig(PGconn *conn, const char *username)
 	destroyPQExpBuffer(buf);
 }
 
+/*
+ * Find a list of database names that match the given patterns.
+ * This is similar to code in pg_dump.c for handling matching table names.
+ */
+static void
+expand_dbname_patterns(PGconn *conn,
+					   SimpleStringList *patterns,
+					   SimpleStringList *names)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+
+	if (patterns->head == NULL)
+		return;					/* nothing to do */
+
+	query = createPQExpBuffer();
+
+	/*
+	 * The loop below runs multiple SELECTs might sometimes result in
+	 * duplicate entries in the OID list, but we don't care.
+	 */
+
+	for (SimpleStringListCell *cell = patterns->head; cell; cell = cell->next)
+	{
+		appendPQExpBuffer(query,
+						  "SELECT datname FROM pg_catalog.pg_database n\n");
+		processSQLNamePattern(conn, query, cell->val, false,
+							  false, NULL, "datname", NULL, NULL);
+
+		res = executeQuery(conn, query->data);
+		for (int i = 0; i < PQntuples(res); i++)
+		{
+			simple_string_list_append(names, PQgetvalue(res, i, 0));
+		}
+
+		PQclear(res);
+		resetPQExpBuffer(query);
+	}
+
+	destroyPQExpBuffer(query);
+}
 
 /*
  * Dump contents of databases.
@@ -1387,6 +1455,15 @@ dumpDatabases(PGconn *conn)
 		/* Skip template0, even if it's not marked !datallowconn. */
 		if (strcmp(dbname, "template0") == 0)
 			continue;
+
+		/* Skip any explicitly excluded database */
+		if (simple_string_list_member(&database_exclude_names, dbname))
+		{
+			if (verbose)
+				fprintf(stderr, _("%s: excluding database \"%s\"...\n"),
+						progname, dbname);
+			continue;
+		}
 
 		if (verbose)
 			fprintf(stderr, _("%s: dumping database \"%s\"...\n"), progname, dbname);

@@ -1809,7 +1809,6 @@ _outPathInfo(StringInfo str, const Path *node)
 	WRITE_FLOAT_FIELD(startup_cost, "%.2f");
 	WRITE_FLOAT_FIELD(total_cost, "%.2f");
 	WRITE_NODE_FIELD(pathkeys);
-	WRITE_NODE_FIELD(uniquekeys);
 }
 
 /*
@@ -2298,7 +2297,6 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(append_rel_list);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(placeholder_list);
-	WRITE_NODE_FIELD(grouped_var_list);
 	WRITE_NODE_FIELD(fkey_list);
 	WRITE_NODE_FIELD(query_pathkeys);
 	WRITE_NODE_FIELD(group_pathkeys);
@@ -2346,8 +2344,6 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_NODE_FIELD(cheapest_parameterized_paths);
 	WRITE_BITMAPSET_FIELD(direct_lateral_relids);
 	WRITE_BITMAPSET_FIELD(lateral_relids);
-	WRITE_NODE_FIELD(agg_info);
-	WRITE_NODE_FIELD(grouped);
 	WRITE_UINT_FIELD(relid);
 	WRITE_OID_FIELD(reltablespace);
 	WRITE_ENUM_FIELD(rtekind, RTEKind);
@@ -2525,22 +2521,6 @@ _outParamPathInfo(StringInfo str, const ParamPathInfo *node)
 	WRITE_NODE_FIELD(ppi_clauses);
 }
 
-/*
- * Note we do NOT print plain_rel, else we'd be in infinite recursion.
- */
-static void
-_outRelAggInfo(StringInfo str, const RelAggInfo *node)
-{
-	WRITE_NODE_TYPE("RELAGGINFO");
-
-	WRITE_NODE_FIELD(target);
-	WRITE_NODE_FIELD(input);
-	WRITE_NODE_FIELD(group_clauses);
-	WRITE_NODE_FIELD(group_exprs);
-	WRITE_NODE_FIELD(agg_exprs);
-	WRITE_NODE_FIELD(uniquekeys);
-}
-
 static void
 _outRestrictInfo(StringInfo str, const RestrictInfo *node)
 {
@@ -2626,17 +2606,6 @@ _outPlaceHolderInfo(StringInfo str, const PlaceHolderInfo *node)
 	WRITE_BITMAPSET_FIELD(ph_lateral);
 	WRITE_BITMAPSET_FIELD(ph_needed);
 	WRITE_INT_FIELD(ph_width);
-}
-
-static void
-_outGroupedVarInfo(StringInfo str, const GroupedVarInfo *node)
-{
-	WRITE_NODE_TYPE("GROUPEDVARINFO");
-
-	WRITE_NODE_FIELD(gvexpr);
-	WRITE_UINT_FIELD(sortgroupref);
-	WRITE_BITMAPSET_FIELD(gv_eval_at);
-	WRITE_BOOL_FIELD(derived);
 }
 
 static void
@@ -4182,9 +4151,6 @@ outNode(StringInfo str, const void *obj)
 			case T_ParamPathInfo:
 				_outParamPathInfo(str, obj);
 				break;
-			case T_RelAggInfo:
-				_outRelAggInfo(str, obj);
-				break;
 			case T_RestrictInfo:
 				_outRestrictInfo(str, obj);
 				break;
@@ -4199,9 +4165,6 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PlaceHolderInfo:
 				_outPlaceHolderInfo(str, obj);
-				break;
-			case T_GroupedVarInfo:
-				_outGroupedVarInfo(str, obj);
 				break;
 			case T_MinMaxAggInfo:
 				_outMinMaxAggInfo(str, obj);

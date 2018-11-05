@@ -64,6 +64,9 @@ CATALOG(pg_operator,2617,OperatorRelationId)
 	/* OID of negator oper, or 0 if none */
 	Oid			oprnegate BKI_DEFAULT(0) BKI_LOOKUP(pg_operator);
 
+	/* OID of oper to act on physical args, or 0 if not implemented */
+	Oid			oprphys BKI_DEFAULT(0) BKI_LOOKUP(pg_operator);
+
 	/* OID of underlying function */
 	regproc		oprcode BKI_LOOKUP(pg_proc);
 

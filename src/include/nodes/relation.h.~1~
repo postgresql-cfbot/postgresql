@@ -192,7 +192,6 @@ typedef struct PlannerInfo
 	 * unreferenced view RTE; or if the RelOptInfo hasn't been made yet.
 	 */
 	struct RelOptInfo **simple_rel_array;	/* All 1-rel RelOptInfos */
-
 	int			simple_rel_array_size;	/* allocated size of array */
 
 	/*
@@ -247,7 +246,6 @@ typedef struct PlannerInfo
 	 * join_rel_level is NULL if not in use.
 	 */
 	List	  **join_rel_level; /* lists of join-relation RelOptInfos */
-
 	int			join_cur_level; /* index of list being extended */
 
 	List	   *init_plans;		/* init SubPlans for query */
@@ -279,8 +277,6 @@ typedef struct PlannerInfo
 	List	   *rowMarks;		/* list of PlanRowMarks */
 
 	List	   *placeholder_list;	/* list of PlaceHolderInfos */
-
-	List	   *grouped_var_list;	/* List of GroupedVarInfos. */
 
 	List	   *fkey_list;		/* list of ForeignKeyOptInfos */
 
@@ -615,9 +611,6 @@ typedef enum RelOptKind
 	 (rel)->reloptkind == RELOPT_OTHER_JOINREL || \
 	 (rel)->reloptkind == RELOPT_OTHER_UPPER_REL)
 
-/* Does the given relation contain only grouped paths? */
-#define IS_GROUPED_REL(rel) ((rel)->agg_info != NULL)
-
 typedef struct RelOptInfo
 {
 	NodeTag		type;
@@ -651,16 +644,6 @@ typedef struct RelOptInfo
 	/* (see also lateral_vars and lateral_referencers) */
 	Relids		direct_lateral_relids;	/* rels directly laterally referenced */
 	Relids		lateral_relids; /* minimum parameterization of rel */
-
-	/* Information needed to apply aggregation to this rel's paths. */
-	struct RelAggInfo *agg_info;
-
-	/*
-	 * If the relation can produce grouped paths, store them here.
-	 *
-	 * If "grouped" is valid then "agg_info" must be NULL and vice versa.
-	 */
-	struct RelOptInfo *grouped;
 
 	/* information about a base rel (not set for join rels!) */
 	Index		relid;
@@ -1069,61 +1052,6 @@ typedef struct ParamPathInfo
 	List	   *ppi_clauses;	/* join clauses available from outer rels */
 } ParamPathInfo;
 
-/*
- * RelAggInfo
- *
- * RelOptInfo needs information contained here if its paths should be
- * aggregated.
- *
- * "target" will be used as pathtarget for aggregation if "explicit
- * aggregation" is applied to base relation or join. The same target will also
- * --- if the relation is a join --- be used to joinin grouped path to a
- * non-grouped one.
- *
- * These targets contain plain-Var grouping expressions and Aggrefs which.
- * Once Aggref is evaluated, its value is passed to the upper paths w/o being
- * evaluated again.
- *
- * Note: There's a convention that Aggref expressions are supposed to follow
- * the other expressions of the target. Iterations of ->exprs may rely on this
- * arrangement.
- *
- * "input" contains Vars used either as grouping expressions or aggregate
- * arguments, plus those used in grouping expressions which are not plain Vars
- * themselves. Paths providing the aggregation plan with input data should use
- * this target.
- *
- * "group_clauses" and "group_exprs" are lists of SortGroupClause and the
- * corresponding grouping expressions respectively.
- *
- * "agg_exprs" is a list of Aggref nodes for the aggregation of the relation's
- * paths.
- *
- * "plain_rel" is pointer to the non-grouped relation whose grouping this
- * structure describes.
- *
- * "uniquekeys" is what we assign to Path.uniquekeys if it's AggPath. In
- * contrast, if joining grouped path to non-grouped, we need to calculate
- * uniquekeys per-path.
- */
-typedef struct RelAggInfo
-{
-	NodeTag		type;
-
-	PathTarget *target;			/* Target for grouped paths.. */
-
-	PathTarget *input;			/* pathtarget of paths that generate input for
-								 * aggregation paths. */
-
-	List	   *group_clauses;
-	List	   *group_exprs;
-
-	List	   *agg_exprs;		/* Aggref expressions. */
-
-	RelOptInfo *plain_rel;
-
-	List	   *uniquekeys;
-} RelAggInfo;
 
 /*
  * Type "Path" is used as-is for sequential-scan paths, as well as some other
@@ -1153,12 +1081,6 @@ typedef struct RelAggInfo
  *
  * "pathkeys" is a List of PathKey nodes (see above), describing the sort
  * ordering of the path's output rows.
- *
- * "uniquekeys" is a List of EquivalenceClass objects. A row composed of items
- *	of this list is unique across the output of this path. This is often
- *	identical for all paths of the same relations, but not always. For
- *	example, grouped join can have uniquekeys if it's an output of Agg plan
- *	but no uniquekeys if it's a join of grouped and non-grouped relation.
  */
 typedef struct Path
 {
@@ -1182,9 +1104,6 @@ typedef struct Path
 
 	List	   *pathkeys;		/* sort ordering of path's output */
 	/* pathkeys is a List of PathKey nodes; see above */
-
-	List	   *uniquekeys;		/* Description of an unique output row of this
-								 * path. */
 } Path;
 
 /* Macro for extracting a path's parameterization relids; beware double eval */
@@ -2286,24 +2205,6 @@ typedef struct PlaceHolderInfo
 } PlaceHolderInfo;
 
 /*
- * GroupedVarInfo exists for each expression that can be used as an aggregate
- * or grouping expression evaluated below a join.
- */
-typedef struct GroupedVarInfo
-{
-	NodeTag		type;
-
-	Expr	   *gvexpr;			/* the represented expression. */
-	Index		sortgroupref;	/* If gvexpr is a grouping expression, this is
-								 * the tleSortGroupRef of the corresponding
-								 * SortGroupClause. */
-	Relids		gv_eval_at;		/* lowest level we can evaluate the expression
-								 * at or NULL if it can happen anywhere. */
-	bool		derived;		/* derived from another GroupedVarInfo using
-								 * equeivalence classes? */
-} GroupedVarInfo;
-
-/*
  * This struct describes one potentially index-optimizable MIN/MAX aggregate
  * function.  MinMaxAggPath contains a list of these, and if we accept that
  * path, the list is stored into root->minmax_aggs for use during setrefs.c.
@@ -2410,7 +2311,6 @@ typedef struct SemiAntiJoinFactors
  * sjinfo is extra info about special joins for selectivity estimation
  * semifactors is as shown above (only valid for SEMI/ANTI/inner_unique joins)
  * param_source_rels are OK targets for parameterization of result paths
- * do_aggregate tells whether the join output should be aggregated.
  */
 typedef struct JoinPathExtraData
 {
@@ -2420,7 +2320,6 @@ typedef struct JoinPathExtraData
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;
 	Relids		param_source_rels;
-	bool		do_aggregate;
 } JoinPathExtraData;
 
 /*

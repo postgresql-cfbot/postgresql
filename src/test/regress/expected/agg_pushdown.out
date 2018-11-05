@@ -1,0 +1,128 @@
+BEGIN;
+CREATE TABLE agg_pushdown_parent (
+	i int primary key,
+	x int);
+CREATE TABLE agg_pushdown_child1 (
+	j int primary key,
+	parent int references agg_pushdown_parent,
+	v double precision);
+CREATE INDEX ON agg_pushdown_child1(parent);
+CREATE TABLE agg_pushdown_child2 (
+	k int primary key,
+	parent int references agg_pushdown_parent,
+	v double precision);
+INSERT INTO agg_pushdown_parent(i)
+SELECT n
+FROM generate_series(0, 7) AS s(n);
+INSERT INTO agg_pushdown_child1(j, parent, v)
+SELECT 64 * i + n, i, random()
+FROM generate_series(0, 63) AS s(n), agg_pushdown_parent;
+INSERT INTO agg_pushdown_child2(k, parent, v)
+SELECT 64 * i + n, i, random()
+FROM generate_series(0, 63) AS s(n), agg_pushdown_parent;
+ANALYZE;
+SET enable_agg_pushdown TO on;
+-- Perform scan of a table and aggregate the result. In addition, check that
+-- functionally dependent column (c.x) can be referenced by SELECT although
+-- GROUP BY references p.i.
+EXPLAIN (COSTS off)
+SELECT p.x, avg(c1.v) FROM agg_pushdown_parent AS p JOIN agg_pushdown_child1
+AS c1 ON c1.parent = p.i GROUP BY p.i;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Hash Join
+   Hash Cond: (p.i = c1.parent)
+   ->  Seq Scan on agg_pushdown_parent p
+   ->  Hash
+         ->  HashAggregate
+               Group Key: c1.parent
+               ->  Seq Scan on agg_pushdown_child1 c1
+(7 rows)
+
+-- Scan index on agg_pushdown_child1(parent) column and aggregate the result
+-- using AGG_SORTED strategy.
+SET enable_seqscan TO off;
+EXPLAIN (COSTS off)
+SELECT p.i, avg(c1.v) FROM agg_pushdown_parent AS p JOIN agg_pushdown_child1
+AS c1 ON c1.parent = p.i GROUP BY p.i;
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Nested Loop
+   ->  GroupAggregate
+         Group Key: c1.parent
+         ->  Index Scan using agg_pushdown_child1_parent_idx on agg_pushdown_child1 c1
+   ->  Index Only Scan using agg_pushdown_parent_pkey on agg_pushdown_parent p
+         Index Cond: (i = c1.parent)
+(6 rows)
+
+SET enable_seqscan TO on;
+-- Perform nestloop join between agg_pushdown_child1 and agg_pushdown_child2
+-- and aggregate the result.
+SET enable_nestloop TO on;
+SET enable_hashjoin TO off;
+SET enable_mergejoin TO off;
+EXPLAIN (COSTS off)
+SELECT p.i, avg(c1.v + c2.v) FROM agg_pushdown_parent AS p JOIN
+agg_pushdown_child1 AS c1 ON c1.parent = p.i JOIN agg_pushdown_child2 AS c2 ON
+c2.parent = p.i WHERE c1.j = c2.k GROUP BY p.i;
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Nested Loop
+   ->  HashAggregate
+         Group Key: c1.parent
+         ->  Nested Loop
+               ->  Seq Scan on agg_pushdown_child1 c1
+               ->  Index Scan using agg_pushdown_child2_pkey on agg_pushdown_child2 c2
+                     Index Cond: (k = c1.j)
+                     Filter: (c1.parent = parent)
+   ->  Index Only Scan using agg_pushdown_parent_pkey on agg_pushdown_parent p
+         Index Cond: (i = c1.parent)
+(10 rows)
+
+-- The same for hash join.
+SET enable_nestloop TO off;
+SET enable_hashjoin TO on;
+EXPLAIN (COSTS off)
+SELECT p.i, avg(c1.v + c2.v) FROM agg_pushdown_parent AS p JOIN
+agg_pushdown_child1 AS c1 ON c1.parent = p.i JOIN agg_pushdown_child2 AS c2 ON
+c2.parent = p.i WHERE c1.j = c2.k GROUP BY p.i;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Join
+   Hash Cond: (p.i = c1.parent)
+   ->  Seq Scan on agg_pushdown_parent p
+   ->  Hash
+         ->  HashAggregate
+               Group Key: c1.parent
+               ->  Hash Join
+                     Hash Cond: ((c1.parent = c2.parent) AND (c1.j = c2.k))
+                     ->  Seq Scan on agg_pushdown_child1 c1
+                     ->  Hash
+                           ->  Seq Scan on agg_pushdown_child2 c2
+(11 rows)
+
+-- The same for merge join.
+SET enable_hashjoin TO off;
+SET enable_mergejoin TO on;
+SET enable_seqscan TO off;
+EXPLAIN (COSTS off)
+SELECT p.i, avg(c1.v + c2.v) FROM agg_pushdown_parent AS p JOIN
+agg_pushdown_child1 AS c1 ON c1.parent = p.i JOIN agg_pushdown_child2 AS c2 ON
+c2.parent = p.i WHERE c1.j = c2.k GROUP BY p.i;
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Merge Join
+   Merge Cond: (c1.parent = p.i)
+   ->  Sort
+         Sort Key: c1.parent
+         ->  HashAggregate
+               Group Key: c1.parent
+               ->  Merge Join
+                     Merge Cond: (c1.j = c2.k)
+                     Join Filter: (c1.parent = c2.parent)
+                     ->  Index Scan using agg_pushdown_child1_pkey on agg_pushdown_child1 c1
+                     ->  Index Scan using agg_pushdown_child2_pkey on agg_pushdown_child2 c2
+   ->  Index Only Scan using agg_pushdown_parent_pkey on agg_pushdown_parent p
+(12 rows)
+
+ROLLBACK;

@@ -143,6 +143,9 @@ static double get_number_of_groups(PlannerInfo *root,
 					 double path_rows,
 					 grouping_sets_data *gd,
 					 List *target_list);
+static Size estimate_hashagg_tablesize(Path *path,
+						   const AggClauseCosts *agg_costs,
+						   double dNumGroups);
 static RelOptInfo *create_grouping_paths(PlannerInfo *root,
 					  RelOptInfo *input_rel,
 					  PathTarget *target,
@@ -1861,6 +1864,23 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		else
 			root->limit_tuples = limit_tuples;
 
+		/* Set up data needed by standard_qp_callback */
+		qp_extra.tlist = tlist;
+		qp_extra.activeWindows = activeWindows;
+		qp_extra.groupClause = (gset_data
+								? (gset_data->rollups ? linitial_node(RollupData, gset_data->rollups)->groupClause : NIL)
+								: parse->groupClause);
+
+		/*
+		 * Generate the best unsorted and presorted paths for the scan/join
+		 * portion of this Query, ie the processing represented by the
+		 * FROM/WHERE clauses.  (Note there may not be any presorted paths.)
+		 * We also generate (in standard_qp_callback) pathkey representations
+		 * of the query's sort clause, distinct clause, etc.
+		 */
+		current_rel = query_planner(root, tlist,
+									standard_qp_callback, &qp_extra);
+
 		/*
 		 * Convert the query's result tlist into PathTarget format.
 		 *
@@ -1972,38 +1992,6 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 			scanjoin_targets_contain_srfs = NIL;
 		}
 
-		/*
-		 * Save the various upper-rel PathTargets we just computed into
-		 * root->upper_targets[]. It provides a convenient place for
-		 * extensions to get at the info. Also the aggregate push-down feature
-		 * uses the target of UPPERREL_GROUP_AGG for the final join instead of
-		 * constructing the target on its own.
-		 *
-		 * For consistency, we save all the intermediate targets, even though
-		 * some of the corresponding upperrels might not be needed for this
-		 * query.
-		 */
-		root->upper_targets[UPPERREL_FINAL] = final_target;
-		root->upper_targets[UPPERREL_WINDOW] = sort_input_target;
-		root->upper_targets[UPPERREL_GROUP_AGG] = grouping_target;
-
-		/* Set up data needed by standard_qp_callback */
-		qp_extra.tlist = tlist;
-		qp_extra.activeWindows = activeWindows;
-		qp_extra.groupClause = (gset_data
-								? (gset_data->rollups ? linitial_node(RollupData, gset_data->rollups)->groupClause : NIL)
-								: parse->groupClause);
-
-		/*
-		 * Generate the best unsorted and presorted paths for the scan/join
-		 * portion of this Query, ie the processing represented by the
-		 * FROM/WHERE clauses.  (Note there may not be any presorted paths.)
-		 * We also generate (in standard_qp_callback) pathkey representations
-		 * of the query's sort clause, distinct clause, etc.
-		 */
-		current_rel = query_planner(root, tlist,
-									standard_qp_callback, &qp_extra);
-
 		/* Apply scan/join target. */
 		scanjoin_target_same_exprs = list_length(scanjoin_targets) == 1
 			&& equal(scanjoin_target->exprs, current_rel->reltarget->exprs);
@@ -2011,6 +1999,17 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 									   scanjoin_targets_contain_srfs,
 									   scanjoin_target_parallel_safe,
 									   scanjoin_target_same_exprs);
+
+		/*
+		 * Save the various upper-rel PathTargets we just computed into
+		 * root->upper_targets[].  The core code doesn't use this, but it
+		 * provides a convenient place for extensions to get at the info.  For
+		 * consistency, we save all the intermediate targets, even though some
+		 * of the corresponding upperrels might not be needed for this query.
+		 */
+		root->upper_targets[UPPERREL_FINAL] = final_target;
+		root->upper_targets[UPPERREL_WINDOW] = sort_input_target;
+		root->upper_targets[UPPERREL_GROUP_AGG] = grouping_target;
 
 		/*
 		 * If we have grouping and/or aggregation, consider ways to implement
@@ -3629,6 +3628,40 @@ get_number_of_groups(PlannerInfo *root,
 	}
 
 	return dNumGroups;
+}
+
+/*
+ * estimate_hashagg_tablesize
+ *	  estimate the number of bytes that a hash aggregate hashtable will
+ *	  require based on the agg_costs, path width and dNumGroups.
+ *
+ * XXX this may be over-estimating the size now that hashagg knows to omit
+ * unneeded columns from the hashtable. Also for mixed-mode grouping sets,
+ * grouping columns not in the hashed set are counted here even though hashagg
+ * won't store them. Is this a problem?
+ */
+static Size
+estimate_hashagg_tablesize(Path *path, const AggClauseCosts *agg_costs,
+						   double dNumGroups)
+{
+	Size		hashentrysize;
+
+	/* Estimate per-hash-entry space at tuple width... */
+	hashentrysize = MAXALIGN(path->pathtarget->width) +
+		MAXALIGN(SizeofMinimalTupleHeader);
+
+	/* plus space for pass-by-ref transition values... */
+	hashentrysize += agg_costs->transitionSpace;
+	/* plus the per-hash-entry overhead */
+	hashentrysize += hash_agg_entry_size(agg_costs->numAggs);
+
+	/*
+	 * Note that this disregards the effect of fill-factor and growth policy
+	 * of the hash-table. That's probably ok, given default the default
+	 * fill-factor is relatively high. It'd be hard to meaningfully factor in
+	 * "double-in-size" growth policies here.
+	 */
+	return hashentrysize * dNumGroups;
 }
 
 /*

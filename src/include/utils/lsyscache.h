@@ -105,6 +105,7 @@ extern bool op_strict(Oid opno);
 extern char op_volatile(Oid opno);
 extern Oid	get_commutator(Oid opno);
 extern Oid	get_negator(Oid opno);
+extern Oid	get_oprphys(Oid opno);
 extern RegProcedure get_oprrest(Oid opno);
 extern RegProcedure get_oprjoin(Oid opno);
 extern char *get_func_name(Oid funcid);

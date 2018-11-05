@@ -250,10 +250,11 @@ TidQualFromBaseRestrictinfo(RelOptInfo *rel)
  *	  Candidate paths are added to the rel's pathlist (using add_path).
  */
 void
-create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel)
+create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel, bool grouped)
 {
 	Relids		required_outer;
 	List	   *tidquals;
+	Path	   *tidpath;
 
 	/*
 	 * We don't support pushing join clauses into the quals of a tidscan, but
@@ -263,8 +264,25 @@ create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel)
 	required_outer = rel->lateral_relids;
 
 	tidquals = TidQualFromBaseRestrictinfo(rel);
+	if (!tidquals)
+		return;
 
-	if (tidquals)
-		add_path(rel, (Path *) create_tidscan_path(root, rel, tidquals,
-												   required_outer));
+	tidpath = (Path *) create_tidscan_path(root, rel, tidquals,
+										   required_outer);
+
+	if (!grouped)
+		add_path(rel, tidpath);
+
+	/*
+	 * Do not waste cycles if there's no uniquekeys to be assigned to the
+	 * AggPath.
+	 */
+	else if (required_outer == NULL && rel->agg_info->uniquekeys != NIL)
+	{
+		/*
+		 * Only AGG_HASHED is suitable here as it does not expect the input
+		 * set to be sorted.
+		 */
+		add_grouped_path(root, rel, tidpath, AGG_HASHED);
+	}
 }

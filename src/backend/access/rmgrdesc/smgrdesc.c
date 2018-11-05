@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "catalog/storage_undo.h"
 #include "catalog/storage_xlog.h"
 
 
@@ -27,6 +28,14 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) rec;
 		char	   *path = relpathperm(xlrec->rnode, xlrec->forkNum);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_PRECREATE)
+	{
+		xl_smgr_precreate *xlrec = (xl_smgr_precreate *) rec;
+		char	   *path = relpathperm(xlrec->rnode, 0); // TODO xlrec->forkNum);
 
 		appendStringInfoString(buf, path);
 		pfree(path);
@@ -49,6 +58,9 @@ smgr_identify(uint8 info)
 
 	switch (info & ~XLR_INFO_MASK)
 	{
+		case XLOG_SMGR_PRECREATE:
+			id = "PRECREATE";
+			break;
 		case XLOG_SMGR_CREATE:
 			id = "CREATE";
 			break;
@@ -58,4 +70,16 @@ smgr_identify(uint8 info)
 	}
 
 	return id;
+}
+
+void
+smgr_undo_desc(StringInfo buf, UnpackedUndoRecord *record)
+{
+	if (record->uur_type == UNDO_SMGR_CREATE)
+	{
+		appendStringInfo(buf, "CREATE dbid=%u, tsid=%u, relfile=%u",
+						 record->uur_dbid,
+						 record->uur_tsid,
+						 record->uur_relfilenode);
+	}
 }

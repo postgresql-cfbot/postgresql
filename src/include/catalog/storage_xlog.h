@@ -29,6 +29,7 @@
 /* XLOG gives us high 4 bits */
 #define XLOG_SMGR_CREATE	0x10
 #define XLOG_SMGR_TRUNCATE	0x20
+#define XLOG_SMGR_PRECREATE	0x40
 
 typedef struct xl_smgr_create
 {
@@ -49,6 +50,11 @@ typedef struct xl_smgr_truncate
 	RelFileNode rnode;
 	int			flags;
 } xl_smgr_truncate;
+
+typedef struct xl_smgr_precreate
+{
+	RelFileNode rnode;
+} xl_smgr_precreate;
 
 extern void log_smgrcreate(RelFileNode *rnode, ForkNumber forkNum);
 

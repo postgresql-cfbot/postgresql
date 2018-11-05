@@ -460,7 +460,6 @@ static void SetNewSxactGlobalXmin(void);
 static void ClearOldPredicateLocks(void);
 static void ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
 						   bool summarize);
-static bool XidIsConcurrent(TransactionId xid);
 static void CheckTargetForConflictsIn(PREDICATELOCKTARGETTAG *targettag);
 static void FlagRWConflict(SERIALIZABLEXACT *reader, SERIALIZABLEXACT *writer);
 static void OnConflict_CheckForSerializationFailure(const SERIALIZABLEXACT *reader,
@@ -3852,7 +3851,7 @@ ReleaseOneSerializableXact(SERIALIZABLEXACT *sxact, bool partial,
  * that to this function to save the overhead of checking the snapshot's
  * subxip array.
  */
-static bool
+bool
 XidIsConcurrent(TransactionId xid)
 {
 	Snapshot	snap;

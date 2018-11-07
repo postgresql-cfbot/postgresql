@@ -237,9 +237,6 @@
 /* Define to 1 if you have isinf(). */
 #define HAVE_ISINF 1
 
-/* Define to 1 if you have the `kqueue' function. */
-#undef HAVE_KQUEUE
-
 /* Define to 1 if you have the <langinfo.h> header file. */
 /* #undef HAVE_LANGINFO_H */
 
@@ -486,12 +483,6 @@
 
 /* Define to 1 if you have the syslog interface. */
 /* #undef HAVE_SYSLOG */
-
-/* Define to 1 if you have the <sys/epoll.h> header file. */
-/* #undef HAVE_SYS_EPOLL_H */
-
-/* Define to 1 if you have the <sys/event.h> header file. */
-/* #undef HAVE_SYS_EVENT_H */
 
 /* Define to 1 if you have the <sys/ipc.h> header file. */
 /* #undef HAVE_SYS_IPC_H */

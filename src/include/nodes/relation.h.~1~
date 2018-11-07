@@ -310,8 +310,7 @@ typedef struct PlannerInfo
 
 	MemoryContext planner_cxt;	/* context holding PlannerInfo */
 
-	double		total_table_pages;	/* # of pages in all non-dummy tables of
-									 * query */
+	double		total_table_pages;	/* # of pages in all tables of query */
 
 	double		tuple_fraction; /* tuple_fraction passed to query_planner */
 	double		limit_tuples;	/* limit_tuples passed to query_planner */

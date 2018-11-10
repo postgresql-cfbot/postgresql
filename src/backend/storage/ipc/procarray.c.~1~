@@ -799,10 +799,21 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 		qsort(xids, nxids, sizeof(TransactionId), xidComparator);
 
 		/*
-		 * Add the sorted snapshot into KnownAssignedXids.
+		 * Add the sorted snapshot into KnownAssignedXids.  The running-xacts
+		 * snapshot may include duplicated xids because of prepared
+		 * transactions, so ignore them.
 		 */
 		for (i = 0; i < nxids; i++)
+		{
+			if (i > 0 && TransactionIdEquals(xids[i - 1], xids[i]))
+			{
+				elog(DEBUG1,
+					 "found duplicated transaction %u for KnownAssignedXids insertion",
+					 xids[i]);
+				continue;
+			}
 			KnownAssignedXidsAdd(xids[i], xids[i], true);
+		}
 
 		KnownAssignedXidsDisplay(trace_recovery(DEBUG3));
 	}
@@ -1910,9 +1921,10 @@ ProcArrayInstallRestoredXmin(TransactionId xmin, PGPROC *proc)
  * This is never executed during recovery so there is no need to look at
  * KnownAssignedXids.
  *
- * If dummy entries for prepared transactions are found in the proc array
- * make sure to discard any duplicates as a transaction finishing to
- * prepare may cause two entries with the same TransactionId to be found.
+ * Dummy PGXACTs from prepared transaction are included, meaning that this
+ * may return entries with duplicated TransactionId values coming from
+ * transaction finishing to prepare.  Nothing is done about duplicated
+ * entries here to not hold on ProcArrayLock more than necessary.
  *
  * We don't worry about updating other counters, we want to keep this as
  * simple as possible and leave GetSnapshotData() as the primary code for
@@ -1936,7 +1948,6 @@ GetRunningTransactionData(void)
 	int			count;
 	int			subcount;
 	bool		suboverflowed;
-	bool		found_dummy = false;
 
 	Assert(!RecoveryInProgress());
 
@@ -1985,7 +1996,6 @@ GetRunningTransactionData(void)
 	{
 		int			pgprocno = arrayP->pgprocnos[index];
 		volatile PGXACT *pgxact = &allPgXact[pgprocno];
-		volatile PGPROC *proc = &allProcs[pgprocno];
 		TransactionId xid;
 
 		/* Fetch xid just once - see GetNewTransactionId */
@@ -2010,13 +2020,6 @@ GetRunningTransactionData(void)
 			suboverflowed = true;
 
 		/*
-		 * Mark that a dummy entry has been found, and that it is necessary to
-		 * check for duplicates entries.
-		 */
-		if (proc->pid == 0)
-			found_dummy = true;
-
-		/*
 		 * If we wished to exclude xids this would be the right place for it.
 		 * Procs with the PROC_IN_VACUUM flag set don't usually assign xids,
 		 * but they do during truncation at the end when they get the lock and
@@ -2025,34 +2028,6 @@ GetRunningTransactionData(void)
 		 */
 
 		xids[count++] = xid;
-	}
-
-	/*
-	 * If some dummy entries have been found, it is possible that a two-phase
-	 * transaction just finishing to prepare has a duplicated entry with still
-	 * the active transaction entry in the procArray. There is no need to
-	 * remove any duplicates if no dummy entries have been found.
-	 */
-	if (found_dummy && count > 1)
-	{
-		TransactionId last = 0;
-		int			idx1,
-					idx2;
-		int			former_count;
-
-		qsort(xids, count, sizeof(TransactionId), xidComparator);
-
-		/* remove duplicate xids */
-		former_count = count;
-		idx1 = idx2 = 0;
-		while (idx1 < former_count)
-		{
-			if (TransactionIdEquals(xids[idx1], last))
-				last = xids[idx2++] = xids[idx1];
-			else
-				count--;
-			idx1++;
-		}
 	}
 
 	/*
@@ -2085,40 +2060,6 @@ GetRunningTransactionData(void)
 				 * its subxids, so we don't need to check if any of the
 				 * subxids are smaller than oldestRunningXid
 				 */
-			}
-		}
-
-		/*
-		 * Per the first array scanning, we know that there are dummy proc
-		 * array entries, so sort and scan again the result, removing this
-		 * time all subxids.
-		 */
-		if (found_dummy && subcount > 1)
-		{
-			TransactionId last = 0;
-			int			idx1,
-						idx2;
-			int			former_count;
-
-			qsort(&xids[count], count - subcount,
-				  sizeof(TransactionId), xidComparator);
-
-			/*
-			 * Remove duplicate subxids, beginning from the position they have
-			 * been added.
-			 */
-			former_count = count;
-			idx1 = idx2 = count - subcount;
-			while (idx1 < former_count)
-			{
-				if (TransactionIdEquals(xids[idx1], last))
-					last = xids[idx2++] = xids[idx1];
-				else
-				{
-					count--;
-					subcount--;
-				}
-				idx1++;
 			}
 		}
 	}

@@ -151,7 +151,7 @@ extern void psql_yyset_column(int column_no, yyscan_t yyscanner);
  * XXX perhaps \f (formfeed) should be treated as a newline as well?
  *
  * XXX if you change the set of whitespace characters, fix scanner_isspace()
- * to agree, and see also the plpgsql lexer.
+ * to agree.
  */
 
 space			[ \t\n\r\f]
@@ -417,17 +417,19 @@ other			.
 					ECHO;
 				}
 
-<xc>{xcinside}	{
+<xc>{
+{xcinside}		{
 					ECHO;
 				}
 
-<xc>{op_chars}	{
+{op_chars}		{
 					ECHO;
 				}
 
-<xc>\*+			{
+\*+				{
 					ECHO;
 				}
+} /* <xc> */
 
 {xbstart}		{
 					BEGIN(xb);

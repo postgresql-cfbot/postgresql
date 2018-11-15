@@ -1651,11 +1651,12 @@ ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate, int nsubplans)
 	MemoryContextReset(prunestate->prune_context);
 
 	/*
-	 * If any subplans were pruned, we must re-sequence the subplan indexes so
-	 * that ExecFindMatchingSubPlans properly returns the indexes from the
-	 * subplans which will remain after execution of this function.
+	 * If further pruning is required and we pruned subplans above then we
+	 * must re-sequence the subplan indexes so that ExecFindMatchingSubPlans
+	 * properly returns the indexes from the subplans which will remain after
+	 * execution of this function.
 	 */
-	if (bms_num_members(result) < nsubplans)
+	if (prunestate->do_exec_prune && bms_num_members(result) < nsubplans)
 	{
 		int		   *new_subplan_indexes;
 		Bitmapset  *new_other_subplans;
@@ -1664,23 +1665,29 @@ ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate, int nsubplans)
 
 		/*
 		 * First we must build a temporary array which maps old subplan
-		 * indexes to new ones.  While we're at it, also recompute the
-		 * other_subplans set, since indexes in it may change.
+		 * indexes to new ones.  For convenience of initialization, we use
+		 * a 1-based array and leave newly pruned items as 0.
 		 */
-		new_subplan_indexes = (int *) palloc(sizeof(int) * nsubplans);
+		new_subplan_indexes = (int *) palloc0(sizeof(int) * nsubplans);
 		new_other_subplans = NULL;
-		newidx = 0;
-		for (i = 0; i < nsubplans; i++)
+		newidx = 1;
+		i = -1;
+		while ((i = bms_next_member(result, i)) >= 0)
 		{
-			if (bms_is_member(i, result))
-				new_subplan_indexes[i] = newidx++;
-			else
-				new_subplan_indexes[i] = -1;	/* Newly pruned */
+			Assert(i < nsubplans);
 
-			if (bms_is_member(i, prunestate->other_subplans))
-				new_other_subplans = bms_add_member(new_other_subplans,
-													new_subplan_indexes[i]);
+			new_subplan_indexes[i] = newidx++;
 		}
+
+		/*
+		 * We must also recompute the other_subplans set, since indexes in
+		 * it may change.
+		 */
+		i = -1;
+		while ((i = bms_next_member(prunestate->other_subplans, i)) >= 0)
+			new_other_subplans = bms_add_member(new_other_subplans,
+												new_subplan_indexes[i] - 1);
+
 		bms_free(prunestate->other_subplans);
 		prunestate->other_subplans = new_other_subplans;
 
@@ -1728,9 +1735,9 @@ ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate, int nsubplans)
 					if (oldidx >= 0)
 					{
 						Assert(oldidx < nsubplans);
-						pprune->subplan_map[k] = new_subplan_indexes[oldidx];
+						pprune->subplan_map[k] = new_subplan_indexes[oldidx] - 1;
 
-						if (new_subplan_indexes[oldidx] >= 0)
+						if (new_subplan_indexes[oldidx] > 0)
 							pprune->present_parts =
 								bms_add_member(pprune->present_parts, k);
 					}

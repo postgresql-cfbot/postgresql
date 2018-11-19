@@ -570,7 +570,7 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->hi_options = HEAP_INSERT_SKIP_FSM |
 		(XLogIsNeeded() ? 0 : HEAP_INSERT_SKIP_WAL);
-	myState->bistate = GetBulkInsertState();
+	myState->bistate = GetBulkInsertState(NULL);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);

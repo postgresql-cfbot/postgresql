@@ -23,6 +23,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
@@ -489,6 +490,18 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,		/* no ACL (same as relation) */
 		OBJECT_STATISTIC_EXT,
 		true
+	},
+	{
+		AttrCompressionRelationId,
+		AttrCompressionIndexId,
+		ATTCOMPRESSIONOID,
+		-1,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		false
 	}
 };
 
@@ -3548,6 +3561,37 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
+		case OCLASS_ATTR_COMPRESSION:
+			{
+				char	   *attname;
+				HeapTuple	tup;
+				Form_pg_attr_compression acform;
+
+				tup = SearchSysCache1(ATTCOMPRESSIONOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for attribute compression %u", object->objectId);
+
+				acform = (Form_pg_attr_compression) GETSTRUCT(tup);
+				if (OidIsValid(acform->acrelid))
+				{
+					appendStringInfo(&buffer, _("compression on "));
+					getRelationDescription(&buffer, acform->acrelid);
+
+					attname = get_attname(acform->acrelid, acform->acattnum, true);
+					if (attname)
+					{
+						appendStringInfo(&buffer, _(" column %s"), attname);
+						pfree(attname);
+					}
+				}
+				else
+					appendStringInfo(&buffer, _("attribute compression %u"), object->objectId);
+
+				ReleaseSysCache(tup);
+
+				break;
+			}
+
 		case OCLASS_TRANSFORM:
 			{
 				HeapTuple	trfTup;
@@ -4070,6 +4114,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_TRANSFORM:
 			appendStringInfoString(&buffer, "transform");
+			break;
+
+		case OCLASS_ATTR_COMPRESSION:
+			appendStringInfoString(&buffer, "attribute compression");
 			break;
 
 			/*
@@ -4613,6 +4661,15 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 				systable_endscan(amscan);
 				heap_close(amprocDesc, AccessShareLock);
+				break;
+			}
+
+		case OCLASS_ATTR_COMPRESSION:
+			{
+				appendStringInfo(&buffer, "%u",
+								 object->objectId);
+				if (objname)
+					*objname = list_make1(psprintf("%u", object->objectId));
 				break;
 			}
 

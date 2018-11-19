@@ -385,10 +385,12 @@ Further details appear in <xref linkend="storage-toast-inmemory"/>.
 </para>
 
 <para>
-The compression technique used for either in-line or out-of-line compressed
+The default compression technique used for either in-line or out-of-line compressed
 data is a fairly simple and very fast member
 of the LZ family of compression techniques.  See
-<filename>src/common/pg_lzcompress.c</filename> for the details.
+<filename>src/common/pg_lzcompress.c</filename> for the details. Also custom
+compressions could be used. Look at <xref linkend="compression-am"/> for
+more information.
 </para>
 
 <sect2 id="storage-toast-ondisk">

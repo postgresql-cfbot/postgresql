@@ -57,7 +57,7 @@
 
      <row>
       <entry><link linkend="catalog-pg-am"><structname>pg_am</structname></link></entry>
-      <entry>index access methods</entry>
+      <entry>access methods</entry>
      </row>
 
      <row>
@@ -68,6 +68,11 @@
      <row>
       <entry><link linkend="catalog-pg-amproc"><structname>pg_amproc</structname></link></entry>
       <entry>access method support functions</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-attr-compression"><structname>pg_attr_compression</structname></link></entry>
+      <entry>table columns compression relationships and options</entry>
      </row>
 
      <row>
@@ -587,8 +592,10 @@
    The catalog <structname>pg_am</structname> stores information about
    relation access methods.  There is one row for each access method supported
    by the system.
-   Currently, only indexes have access methods.  The requirements for index
-   access methods are discussed in detail in <xref linkend="indexam"/>.
+   Currently, compression and index access methods are supported.
+   The requirements for index access methods are discussed in detail
+   in <xref linkend="indexam"/>, for compression access methods
+   could be found in <xref linkend="compression-am"/>.
   </para>
 
   <table>
@@ -892,6 +899,12 @@
 
  </sect1>
 
+ <sect1 id="catalog-pg-attr-compression">
+  <title><structname>pg_attr_compression</structname></title>
+  <indexterm zone="catalog-pg-attr-compression">
+   <primary>pg_attr_compression</primary>
+  </indexterm>
+ </sect1>
 
  <sect1 id="catalog-pg-attrdef">
   <title><structname>pg_attrdef</structname></title>

@@ -3769,6 +3769,10 @@ PostgresMain(int argc, char *argv[],
 	 * handler in the postmaster to reserve the signal. (Of course, this isn't
 	 * an issue for signals that are locally generated, such as SIGALRM and
 	 * SIGPIPE.)
+	 *
+	 * Also note: signals that are set to SIG_IGN here should be reset in
+	 * OpenPipeStream, so that exec'd programs see a standard signal
+	 * environment.
 	 */
 	if (am_walsender)
 		WalSndSignals();

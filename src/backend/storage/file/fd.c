@@ -2271,11 +2271,17 @@ OpenTransientFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
  * Routines that want to initiate a pipe stream should use OpenPipeStream
  * rather than plain popen().  This lets fd.c deal with freeing FDs if
  * necessary.  When done, call ClosePipeStream rather than pclose.
+ *
+ * This function also ensures that the popen'd program is run with default
+ * SIGPIPE and SIGUSR2 processing, rather than the SIG_IGN settings the
+ * backend normally uses.  This ensures desirable response to, eg, closing
+ * a read pipe early.
  */
 FILE *
 OpenPipeStream(const char *command, const char *mode)
 {
 	FILE	   *file;
+	int			save_errno;
 
 	DO_DB(elog(LOG, "OpenPipeStream: Allocated %d (%s)",
 			   numAllocatedDescs, command));
@@ -2293,8 +2299,15 @@ OpenPipeStream(const char *command, const char *mode)
 TryAgain:
 	fflush(stdout);
 	fflush(stderr);
+	pqsignal(SIGPIPE, SIG_DFL);
+	pqsignal(SIGUSR2, SIG_DFL);
 	errno = 0;
-	if ((file = popen(command, mode)) != NULL)
+	file = popen(command, mode);
+	save_errno = errno;
+	pqsignal(SIGPIPE, SIG_IGN);
+	pqsignal(SIGUSR2, SIG_IGN);
+	errno = save_errno;
+	if (file != NULL)
 	{
 		AllocateDesc *desc = &allocatedDescs[numAllocatedDescs];
 
@@ -2307,8 +2320,6 @@ TryAgain:
 
 	if (errno == EMFILE || errno == ENFILE)
 	{
-		int			save_errno = errno;
-
 		ereport(LOG,
 				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 				 errmsg("out of file descriptors: %m; release and retry")));

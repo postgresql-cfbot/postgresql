@@ -655,9 +655,6 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	{
 		int options = HEAP_INSERT_SKIP_FSM;
 
-		if (!state->rs_use_wal)
-			options |= HEAP_INSERT_SKIP_WAL;
-
 		/*
 		 * The new relfilenode's relcache entrye doesn't have the necessary
 		 * information to determine whether a relation should emit data for

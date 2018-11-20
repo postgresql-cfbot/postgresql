@@ -188,6 +188,14 @@ typedef struct RelationData
 
 	/* use "struct" here to avoid needing to include pgstat.h: */
 	struct PgStat_TableStatus *pgstat_info; /* statistics collection area */
+
+	/*
+	 * no_pending_sync is true if this relation is known not to have pending
+	 * syncs.  Elsewise searching for registered sync is required if
+	 * pending_sync is NULL.
+	 */
+	bool				   no_pending_sync;
+	struct PendingRelSync *pending_sync;
 } RelationData;
 
 

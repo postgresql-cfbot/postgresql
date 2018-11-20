@@ -49,6 +49,9 @@ typedef struct PgFdwRelationInfo
 	/* Bitmap of attr numbers we need to fetch from the remote server. */
 	Bitmapset  *attrs_used;
 
+	/* PARAM_EXEC Param representing the remote table OID of a target rel */
+	Param	   *tableoid_param;
+
 	/* Cost and selectivity of local_conds. */
 	QualCost	local_conds_cost;
 	Selectivity local_conds_sel;

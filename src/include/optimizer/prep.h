@@ -40,6 +40,9 @@ extern Expr *canonicalize_qual(Expr *qual, bool is_check);
  */
 extern List *preprocess_targetlist(PlannerInfo *root);
 
+extern Param *generate_foreign_param(Oid paramtype, int32 paramtypmod,
+					   Oid paramcollation);
+
 extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
 
 /*

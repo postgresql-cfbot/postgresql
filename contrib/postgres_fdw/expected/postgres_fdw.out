@@ -5497,15 +5497,15 @@ INSERT INTO ft2 (c1,c2,c3)
   SELECT id, id % 10, to_char(id, 'FM00000') FROM generate_series(2001, 2010) id;
 EXPLAIN (verbose, costs off)
 UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *;            -- can't be pushed down
-                                                QUERY PLAN                                                
-----------------------------------------------------------------------------------------------------------
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
  Update on public.ft2
    Output: c1, c2, c3, c4, c5, c6, c7, c8
-   Remote SQL: UPDATE "S 1"."T 1" SET c3 = $2 WHERE ctid = $1 RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: UPDATE "S 1"."T 1" SET c3 = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
    ->  Foreign Scan on public.ft2
-         Output: c1, c2, NULL::integer, 'bar'::text, c4, c5, c6, c7, c8, ctid
+         Output: c1, c2, NULL::integer, 'bar'::text, c4, c5, c6, c7, c8, ctid, $0
          Filter: (postgres_fdw_abs(ft2.c1) > 2000)
-         Remote SQL: SELECT "C 1", c2, c4, c5, c6, c7, c8, ctid FROM "S 1"."T 1" FOR UPDATE
+         Remote SQL: SELECT "C 1", c2, c4, c5, c6, c7, c8, ctid, tableoid FROM "S 1"."T 1" FOR UPDATE
 (7 rows)
 
 UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *;
@@ -5532,13 +5532,13 @@ UPDATE ft2 SET c3 = 'baz'
 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Update on public.ft2
    Output: ft2.c1, ft2.c2, ft2.c3, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8, ft4.c1, ft4.c2, ft4.c3, ft5.c1, ft5.c2, ft5.c3
-   Remote SQL: UPDATE "S 1"."T 1" SET c3 = $2 WHERE ctid = $1 RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: UPDATE "S 1"."T 1" SET c3 = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
    ->  Nested Loop
-         Output: ft2.c1, ft2.c2, NULL::integer, 'baz'::text, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8, ft2.ctid, ft4.*, ft5.*, ft4.c1, ft4.c2, ft4.c3, ft5.c1, ft5.c2, ft5.c3
+         Output: ft2.c1, ft2.c2, NULL::integer, 'baz'::text, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8, ft2.ctid, ($0), ft4.*, ft5.*, ft4.c1, ft4.c2, ft4.c3, ft5.c1, ft5.c2, ft5.c3
          Join Filter: (ft2.c2 === ft4.c1)
          ->  Foreign Scan on public.ft2
-               Output: ft2.c1, ft2.c2, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8, ft2.ctid
-               Remote SQL: SELECT "C 1", c2, c4, c5, c6, c7, c8, ctid FROM "S 1"."T 1" WHERE (("C 1" > 2000)) FOR UPDATE
+               Output: ft2.c1, ft2.c2, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8, ft2.ctid, $0
+               Remote SQL: SELECT "C 1", c2, c4, c5, c6, c7, c8, ctid, tableoid FROM "S 1"."T 1" WHERE (("C 1" > 2000)) FOR UPDATE
          ->  Foreign Scan
                Output: ft4.*, ft4.c1, ft4.c2, ft4.c3, ft5.*, ft5.c1, ft5.c2, ft5.c3
                Relations: (public.ft4) INNER JOIN (public.ft5)
@@ -5570,24 +5570,24 @@ DELETE FROM ft2
   USING ft4 INNER JOIN ft5 ON (ft4.c1 === ft5.c1)
   WHERE ft2.c1 > 2000 AND ft2.c2 = ft4.c1
   RETURNING ft2.c1, ft2.c2, ft2.c3;       -- can't be pushed down
-                                                                                                                                                                     QUERY PLAN                                                                                                                                                                     
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                                           QUERY PLAN                                                                                                                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Delete on public.ft2
    Output: ft2.c1, ft2.c2, ft2.c3
-   Remote SQL: DELETE FROM "S 1"."T 1" WHERE ctid = $1 RETURNING "C 1", c2, c3
+   Remote SQL: DELETE FROM "S 1"."T 1" WHERE ctid = $1 AND tableoid = $2 RETURNING "C 1", c2, c3
    ->  Foreign Scan
-         Output: ft2.ctid, ft4.*, ft5.*
+         Output: ft2.ctid, ($0), ft4.*, ft5.*
          Filter: (ft4.c1 === ft5.c1)
          Relations: ((public.ft2) INNER JOIN (public.ft4)) INNER JOIN (public.ft5)
-         Remote SQL: SELECT r1.ctid, CASE WHEN (r2.*)::text IS NOT NULL THEN ROW(r2.c1, r2.c2, r2.c3) END, CASE WHEN (r3.*)::text IS NOT NULL THEN ROW(r3.c1, r3.c2, r3.c3) END, r2.c1, r3.c1 FROM (("S 1"."T 1" r1 INNER JOIN "S 1"."T 3" r2 ON (((r1.c2 = r2.c1)) AND ((r1."C 1" > 2000)))) INNER JOIN "S 1"."T 4" r3 ON (TRUE)) FOR UPDATE OF r1
+         Remote SQL: SELECT r1.ctid, CASE WHEN (r2.*)::text IS NOT NULL THEN ROW(r2.c1, r2.c2, r2.c3) END, CASE WHEN (r3.*)::text IS NOT NULL THEN ROW(r3.c1, r3.c2, r3.c3) END, r2.c1, r3.c1, r1.tableoid FROM (("S 1"."T 1" r1 INNER JOIN "S 1"."T 3" r2 ON (((r1.c2 = r2.c1)) AND ((r1."C 1" > 2000)))) INNER JOIN "S 1"."T 4" r3 ON (TRUE)) FOR UPDATE OF r1
          ->  Nested Loop
-               Output: ft2.ctid, ft4.*, ft5.*, ft4.c1, ft5.c1
+               Output: ft2.ctid, ft4.*, ft5.*, ft4.c1, ft5.c1, ($0)
                ->  Nested Loop
-                     Output: ft2.ctid, ft4.*, ft4.c1
+                     Output: ft2.ctid, ($0), ft4.*, ft4.c1
                      Join Filter: (ft2.c2 = ft4.c1)
                      ->  Foreign Scan on public.ft2
-                           Output: ft2.ctid, ft2.c2
-                           Remote SQL: SELECT c2, ctid FROM "S 1"."T 1" WHERE (("C 1" > 2000)) FOR UPDATE
+                           Output: ft2.ctid, $0, ft2.c2
+                           Remote SQL: SELECT c2, ctid, tableoid FROM "S 1"."T 1" WHERE (("C 1" > 2000)) FOR UPDATE
                      ->  Foreign Scan on public.ft4
                            Output: ft4.*, ft4.c1
                            Remote SQL: SELECT c1, c2, c3 FROM "S 1"."T 3"
@@ -6088,6 +6088,87 @@ SELECT * FROM ft1 ORDER BY c6 ASC NULLS FIRST, c1 OFFSET 15 LIMIT 10;
    40 |  42 | 00040_trig_update | Tue Feb 10 00:00:00 1970 PST | Tue Feb 10 00:00:00 1970 | 0    | 0          | foo
 (10 rows)
 
+-- Test UPDATE/DELETE in the case where the remote target is
+-- an inheritance tree
+CREATE TABLE p1 (a int, b int);
+CREATE TABLE c1 (LIKE p1) INHERITS (p1);
+NOTICE:  merging column "a" with inherited definition
+NOTICE:  merging column "b" with inherited definition
+CREATE TABLE c2 (LIKE p1) INHERITS (p1);
+NOTICE:  merging column "a" with inherited definition
+NOTICE:  merging column "b" with inherited definition
+CREATE FOREIGN TABLE fp1 (a int, b int)
+  SERVER loopback OPTIONS (table_name 'p1');
+INSERT INTO c1 VALUES (0, 1);
+INSERT INTO c2 VALUES (1, 1);
+SELECT tableoid::regclass, ctid, * FROM fp1;
+ tableoid | ctid  | a | b 
+----------+-------+---+---
+ fp1      | (0,1) | 0 | 1
+ fp1      | (0,1) | 1 | 1
+(2 rows)
+
+-- Update statement should not be pushed down to the remote side
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fp1 SET b = b + 1 WHERE a = 0 AND random() <= 1;
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Update on public.fp1
+   Remote SQL: UPDATE public.p1 SET b = $3 WHERE ctid = $1 AND tableoid = $2
+   ->  Foreign Scan on public.fp1
+         Output: a, (b + 1), ctid, $0
+         Filter: (random() <= '1'::double precision)
+         Remote SQL: SELECT a, b, ctid, tableoid FROM public.p1 WHERE ((a = 0)) FOR UPDATE
+(6 rows)
+
+UPDATE fp1 SET b = b + 1 WHERE a = 0 AND random() <= 1;
+-- Only one tuple should be updated
+SELECT tableoid::regclass, ctid, * FROM fp1;
+ tableoid | ctid  | a | b 
+----------+-------+---+---
+ fp1      | (0,2) | 0 | 2
+ fp1      | (0,1) | 1 | 1
+(2 rows)
+
+-- Recreate the table data
+TRUNCATE c1;
+TRUNCATE c2;
+INSERT INTO c1 VALUES (0, 1);
+INSERT INTO c2 VALUES (1, 1);
+SELECT tableoid::regclass, ctid, * FROM fp1;
+ tableoid | ctid  | a | b 
+----------+-------+---+---
+ fp1      | (0,1) | 0 | 1
+ fp1      | (0,1) | 1 | 1
+(2 rows)
+
+-- Delete statement should not be pushed down to the remote side
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM fp1 WHERE a = 1 AND random() <= 1;
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Delete on public.fp1
+   Remote SQL: DELETE FROM public.p1 WHERE ctid = $1 AND tableoid = $2
+   ->  Foreign Scan on public.fp1
+         Output: ctid, $0
+         Filter: (random() <= '1'::double precision)
+         Remote SQL: SELECT ctid, tableoid FROM public.p1 WHERE ((a = 1)) FOR UPDATE
+(6 rows)
+
+DELETE FROM fp1 WHERE a = 1 AND random() <= 1;
+-- Only one tuple should be deleted
+SELECT tableoid::regclass, ctid, * FROM fp1;
+ tableoid | ctid  | a | b 
+----------+-------+---+---
+ fp1      | (0,1) | 0 | 1
+(1 row)
+
+-- cleanup
+DROP FOREIGN TABLE fp1;
+DROP TABLE p1 CASCADE;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to table c1
+drop cascades to table c2
 -- ===================================================================
 -- test check constraints
 -- ===================================================================
@@ -6229,13 +6310,13 @@ SELECT * FROM foreign_tbl;
 
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 5;
-                                      QUERY PLAN                                       
----------------------------------------------------------------------------------------
+                                            QUERY PLAN                                            
+--------------------------------------------------------------------------------------------------
  Update on public.foreign_tbl
-   Remote SQL: UPDATE public.base_tbl SET b = $2 WHERE ctid = $1 RETURNING a, b
+   Remote SQL: UPDATE public.base_tbl SET b = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING a, b
    ->  Foreign Scan on public.foreign_tbl
-         Output: foreign_tbl.a, (foreign_tbl.b + 5), foreign_tbl.ctid
-         Remote SQL: SELECT a, b, ctid FROM public.base_tbl WHERE ((a < b)) FOR UPDATE
+         Output: foreign_tbl.a, (foreign_tbl.b + 5), foreign_tbl.ctid, $0
+         Remote SQL: SELECT a, b, ctid, tableoid FROM public.base_tbl WHERE ((a < b)) FOR UPDATE
 (5 rows)
 
 UPDATE rw_view SET b = b + 5; -- should fail
@@ -6243,13 +6324,13 @@ ERROR:  new row violates check option for view "rw_view"
 DETAIL:  Failing row contains (20, 20).
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 15;
-                                      QUERY PLAN                                       
----------------------------------------------------------------------------------------
+                                            QUERY PLAN                                            
+--------------------------------------------------------------------------------------------------
  Update on public.foreign_tbl
-   Remote SQL: UPDATE public.base_tbl SET b = $2 WHERE ctid = $1 RETURNING a, b
+   Remote SQL: UPDATE public.base_tbl SET b = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING a, b
    ->  Foreign Scan on public.foreign_tbl
-         Output: foreign_tbl.a, (foreign_tbl.b + 15), foreign_tbl.ctid
-         Remote SQL: SELECT a, b, ctid FROM public.base_tbl WHERE ((a < b)) FOR UPDATE
+         Output: foreign_tbl.a, (foreign_tbl.b + 15), foreign_tbl.ctid, $0
+         Remote SQL: SELECT a, b, ctid, tableoid FROM public.base_tbl WHERE ((a < b)) FOR UPDATE
 (5 rows)
 
 UPDATE rw_view SET b = b + 15; -- ok
@@ -6316,14 +6397,14 @@ SELECT * FROM foreign_tbl;
 
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 5;
-                                       QUERY PLAN                                       
-----------------------------------------------------------------------------------------
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
  Update on public.parent_tbl
    Foreign Update on public.foreign_tbl
-     Remote SQL: UPDATE public.child_tbl SET b = $2 WHERE ctid = $1 RETURNING a, b
+     Remote SQL: UPDATE public.child_tbl SET b = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING a, b
    ->  Foreign Scan on public.foreign_tbl
-         Output: foreign_tbl.a, (foreign_tbl.b + 5), foreign_tbl.ctid
-         Remote SQL: SELECT a, b, ctid FROM public.child_tbl WHERE ((a < b)) FOR UPDATE
+         Output: foreign_tbl.a, (foreign_tbl.b + 5), foreign_tbl.ctid, $0
+         Remote SQL: SELECT a, b, ctid, tableoid FROM public.child_tbl WHERE ((a < b)) FOR UPDATE
 (6 rows)
 
 UPDATE rw_view SET b = b + 5; -- should fail
@@ -6331,14 +6412,14 @@ ERROR:  new row violates check option for view "rw_view"
 DETAIL:  Failing row contains (20, 20).
 EXPLAIN (VERBOSE, COSTS OFF)
 UPDATE rw_view SET b = b + 15;
-                                       QUERY PLAN                                       
-----------------------------------------------------------------------------------------
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
  Update on public.parent_tbl
    Foreign Update on public.foreign_tbl
-     Remote SQL: UPDATE public.child_tbl SET b = $2 WHERE ctid = $1 RETURNING a, b
+     Remote SQL: UPDATE public.child_tbl SET b = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING a, b
    ->  Foreign Scan on public.foreign_tbl
-         Output: foreign_tbl.a, (foreign_tbl.b + 15), foreign_tbl.ctid
-         Remote SQL: SELECT a, b, ctid FROM public.child_tbl WHERE ((a < b)) FOR UPDATE
+         Output: foreign_tbl.a, (foreign_tbl.b + 15), foreign_tbl.ctid, $0
+         Remote SQL: SELECT a, b, ctid, tableoid FROM public.child_tbl WHERE ((a < b)) FOR UPDATE
 (6 rows)
 
 UPDATE rw_view SET b = b + 15; -- ok
@@ -6808,13 +6889,13 @@ BEFORE UPDATE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 EXPLAIN (verbose, costs off)
 UPDATE rem1 set f2 = '';          -- can't be pushed down
-                             QUERY PLAN                              
----------------------------------------------------------------------
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
  Update on public.rem1
-   Remote SQL: UPDATE public.loc1 SET f2 = $2 WHERE ctid = $1
+   Remote SQL: UPDATE public.loc1 SET f2 = $3 WHERE ctid = $1 AND tableoid = $2
    ->  Foreign Scan on public.rem1
-         Output: f1, ''::text, ctid, rem1.*
-         Remote SQL: SELECT f1, f2, ctid FROM public.loc1 FOR UPDATE
+         Output: f1, ''::text, ctid, $0, rem1.*
+         Remote SQL: SELECT f1, f2, ctid, tableoid FROM public.loc1 FOR UPDATE
 (5 rows)
 
 EXPLAIN (verbose, costs off)
@@ -6832,13 +6913,13 @@ AFTER UPDATE ON rem1
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 EXPLAIN (verbose, costs off)
 UPDATE rem1 set f2 = '';          -- can't be pushed down
-                                  QUERY PLAN                                   
--------------------------------------------------------------------------------
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
  Update on public.rem1
-   Remote SQL: UPDATE public.loc1 SET f2 = $2 WHERE ctid = $1 RETURNING f1, f2
+   Remote SQL: UPDATE public.loc1 SET f2 = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING f1, f2
    ->  Foreign Scan on public.rem1
-         Output: f1, ''::text, ctid, rem1.*
-         Remote SQL: SELECT f1, f2, ctid FROM public.loc1 FOR UPDATE
+         Output: f1, ''::text, ctid, $0, rem1.*
+         Remote SQL: SELECT f1, f2, ctid, tableoid FROM public.loc1 FOR UPDATE
 (5 rows)
 
 EXPLAIN (verbose, costs off)
@@ -6866,13 +6947,13 @@ UPDATE rem1 set f2 = '';          -- can be pushed down
 
 EXPLAIN (verbose, costs off)
 DELETE FROM rem1;                 -- can't be pushed down
-                             QUERY PLAN                              
----------------------------------------------------------------------
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
  Delete on public.rem1
-   Remote SQL: DELETE FROM public.loc1 WHERE ctid = $1
+   Remote SQL: DELETE FROM public.loc1 WHERE ctid = $1 AND tableoid = $2
    ->  Foreign Scan on public.rem1
-         Output: ctid, rem1.*
-         Remote SQL: SELECT f1, f2, ctid FROM public.loc1 FOR UPDATE
+         Output: ctid, $0, rem1.*
+         Remote SQL: SELECT f1, f2, ctid, tableoid FROM public.loc1 FOR UPDATE
 (5 rows)
 
 DROP TRIGGER trig_row_before_delete ON rem1;
@@ -6890,13 +6971,13 @@ UPDATE rem1 set f2 = '';          -- can be pushed down
 
 EXPLAIN (verbose, costs off)
 DELETE FROM rem1;                 -- can't be pushed down
-                               QUERY PLAN                               
-------------------------------------------------------------------------
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
  Delete on public.rem1
-   Remote SQL: DELETE FROM public.loc1 WHERE ctid = $1 RETURNING f1, f2
+   Remote SQL: DELETE FROM public.loc1 WHERE ctid = $1 AND tableoid = $2 RETURNING f1, f2
    ->  Foreign Scan on public.rem1
-         Output: ctid, rem1.*
-         Remote SQL: SELECT f1, f2, ctid FROM public.loc1 FOR UPDATE
+         Output: ctid, $0, rem1.*
+         Remote SQL: SELECT f1, f2, ctid, tableoid FROM public.loc1 FOR UPDATE
 (5 rows)
 
 DROP TRIGGER trig_row_after_delete ON rem1;
@@ -7147,12 +7228,12 @@ select * from bar where f1 in (select f1 from foo) for share;
 -- Check UPDATE with inherited target and an inherited source table
 explain (verbose, costs off)
 update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
-                                         QUERY PLAN                                          
----------------------------------------------------------------------------------------------
+                                            QUERY PLAN                                             
+---------------------------------------------------------------------------------------------------
  Update on public.bar
    Update on public.bar
    Foreign Update on public.bar2
-     Remote SQL: UPDATE public.loct2 SET f2 = $2 WHERE ctid = $1
+     Remote SQL: UPDATE public.loct2 SET f2 = $3 WHERE ctid = $1 AND tableoid = $2
    ->  Hash Join
          Output: bar.f1, (bar.f2 + 100), bar.ctid, foo.ctid, foo.*, foo.tableoid
          Inner Unique: true
@@ -7171,12 +7252,12 @@ update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
                                  Output: foo2.ctid, foo2.*, foo2.tableoid, foo2.f1
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
    ->  Hash Join
-         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, foo.ctid, foo.*, foo.tableoid
+         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, ($0), foo.ctid, foo.*, foo.tableoid
          Inner Unique: true
          Hash Cond: (bar2.f1 = foo.f1)
          ->  Foreign Scan on public.bar2
-               Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid
-               Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 FOR UPDATE
+               Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid, $0
+               Remote SQL: SELECT f1, f2, f3, ctid, tableoid FROM public.loct2 FOR UPDATE
          ->  Hash
                Output: foo.ctid, foo.*, foo.tableoid, foo.f1
                ->  HashAggregate
@@ -7208,12 +7289,12 @@ update bar set f2 = f2 + 100
 from
   ( select f1 from foo union all select f1+3 from foo ) ss
 where bar.f1 = ss.f1;
-                                      QUERY PLAN                                      
---------------------------------------------------------------------------------------
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
  Update on public.bar
    Update on public.bar
    Foreign Update on public.bar2
-     Remote SQL: UPDATE public.loct2 SET f2 = $2 WHERE ctid = $1
+     Remote SQL: UPDATE public.loct2 SET f2 = $3 WHERE ctid = $1 AND tableoid = $2
    ->  Hash Join
          Output: bar.f1, (bar.f2 + 100), bar.ctid, (ROW(foo.f1))
          Hash Cond: (foo.f1 = bar.f1)
@@ -7233,14 +7314,14 @@ where bar.f1 = ss.f1;
                ->  Seq Scan on public.bar
                      Output: bar.f1, bar.f2, bar.ctid
    ->  Merge Join
-         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, (ROW(foo.f1))
+         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, ($0), (ROW(foo.f1))
          Merge Cond: (bar2.f1 = foo.f1)
          ->  Sort
-               Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid
+               Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid, ($0)
                Sort Key: bar2.f1
                ->  Foreign Scan on public.bar2
-                     Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid
-                     Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 FOR UPDATE
+                     Output: bar2.f1, bar2.f2, bar2.f3, bar2.ctid, $0
+                     Remote SQL: SELECT f1, f2, f3, ctid, tableoid FROM public.loct2 FOR UPDATE
          ->  Sort
                Output: (ROW(foo.f1)), foo.f1
                Sort Key: foo.f1
@@ -7438,17 +7519,17 @@ AFTER UPDATE OR DELETE ON bar2
 FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 explain (verbose, costs off)
 update bar set f2 = f2 + 100;
-                                      QUERY PLAN                                      
---------------------------------------------------------------------------------------
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
  Update on public.bar
    Update on public.bar
    Foreign Update on public.bar2
-     Remote SQL: UPDATE public.loct2 SET f2 = $2 WHERE ctid = $1 RETURNING f1, f2, f3
+     Remote SQL: UPDATE public.loct2 SET f2 = $3 WHERE ctid = $1 AND tableoid = $2 RETURNING f1, f2, f3
    ->  Seq Scan on public.bar
          Output: bar.f1, (bar.f2 + 100), bar.ctid
    ->  Foreign Scan on public.bar2
-         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, bar2.*
-         Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 FOR UPDATE
+         Output: bar2.f1, (bar2.f2 + 100), bar2.f3, bar2.ctid, $0, bar2.*
+         Remote SQL: SELECT f1, f2, f3, ctid, tableoid FROM public.loct2 FOR UPDATE
 (9 rows)
 
 update bar set f2 = f2 + 100;
@@ -7466,18 +7547,18 @@ NOTICE:  trig_row_after(23, skidoo) AFTER ROW UPDATE ON bar2
 NOTICE:  OLD: (7,277,77),NEW: (7,377,77)
 explain (verbose, costs off)
 delete from bar where f2 < 400;
-                                         QUERY PLAN                                          
----------------------------------------------------------------------------------------------
+                                              QUERY PLAN                                               
+-------------------------------------------------------------------------------------------------------
  Delete on public.bar
    Delete on public.bar
    Foreign Delete on public.bar2
-     Remote SQL: DELETE FROM public.loct2 WHERE ctid = $1 RETURNING f1, f2, f3
+     Remote SQL: DELETE FROM public.loct2 WHERE ctid = $1 AND tableoid = $2 RETURNING f1, f2, f3
    ->  Seq Scan on public.bar
          Output: bar.ctid
          Filter: (bar.f2 < 400)
    ->  Foreign Scan on public.bar2
-         Output: bar2.ctid, bar2.*
-         Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 WHERE ((f2 < 400)) FOR UPDATE
+         Output: bar2.ctid, $0, bar2.*
+         Remote SQL: SELECT f1, f2, f3, ctid, tableoid FROM public.loct2 WHERE ((f2 < 400)) FOR UPDATE
 (10 rows)
 
 delete from bar where f2 < 400;

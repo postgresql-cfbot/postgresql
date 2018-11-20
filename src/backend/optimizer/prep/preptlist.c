@@ -55,6 +55,7 @@
 
 static List *expand_targetlist(List *tlist, int command_type,
 				  Index result_relation, Relation rel);
+static void fix_foreign_params(PlannerInfo *root, List *tlist);
 
 
 /*
@@ -106,7 +107,13 @@ preprocess_targetlist(PlannerInfo *root)
 	 * keep it that way to avoid changing APIs used by FDWs.
 	 */
 	if (command_type == CMD_UPDATE || command_type == CMD_DELETE)
+	{
 		rewriteTargetListUD(parse, target_rte, target_relation);
+
+		/* The FDW might have added Params; fix such Params, if any */
+		if (target_rte->relkind == RELKIND_FOREIGN_TABLE)
+			fix_foreign_params(root, parse->targetList);
+	}
 
 	/*
 	 * for heap_form_tuple to work, the targetlist must match the exact order
@@ -412,6 +419,57 @@ expand_targetlist(List *tlist, int command_type,
 	}
 
 	return new_tlist;
+}
+
+
+/*
+ * Generate a new Param node needed for an UPDATE/DELETE on a foreign table
+ *
+ * This is used by the FDW to build PARAM_EXEC Params representing extra
+ * information to ensure that it can identify the exact row to update or
+ * delete.
+ */
+Param *
+generate_foreign_param(Oid paramtype, int32 paramtypmod, Oid paramcollation)
+{
+	Param	   *retval;
+
+	retval = makeNode(Param);
+	retval->paramkind = PARAM_EXEC;
+	/* paramid will be filled in by fix_foreign_params */
+	retval->paramid = -1;
+	retval->paramtype = paramtype;
+	retval->paramtypmod = paramtypmod;
+	retval->paramcollid = paramcollation;
+	retval->location = -1;
+
+	return retval;
+}
+
+/*
+ * Fix the paramids of PARAM_EXEC Params the FDW added to the tlist, if any.
+ */
+static void
+fix_foreign_params(PlannerInfo *root, List *tlist)
+{
+	ListCell   *lc;
+
+	foreach(lc, tlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+		Param	   *param = (Param *) tle->expr;
+
+		if (tle->resjunk && IsA(param, Param) &&
+			param->paramkind == PARAM_EXEC &&
+			param->paramid == -1)
+		{
+			param->paramid = list_length(root->glob->paramExecTypes);
+			root->glob->paramExecTypes =
+				lappend_oid(root->glob->paramExecTypes, param->paramtype);
+			root->glob->foreignParamIDs =
+				bms_add_member(root->glob->foreignParamIDs, param->paramid);
+		}
+	}
 }
 
 

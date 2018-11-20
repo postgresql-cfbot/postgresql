@@ -1228,6 +1228,39 @@ SELECT * FROM ft1 ORDER BY c6 DESC NULLS FIRST, c1 OFFSET 15 LIMIT 10;
 EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 ORDER BY c6 ASC NULLS FIRST, c1 OFFSET 15 LIMIT 10;
 SELECT * FROM ft1 ORDER BY c6 ASC NULLS FIRST, c1 OFFSET 15 LIMIT 10;
 
+-- Test UPDATE/DELETE in the case where the remote target is
+-- an inheritance tree
+CREATE TABLE p1 (a int, b int);
+CREATE TABLE c1 (LIKE p1) INHERITS (p1);
+CREATE TABLE c2 (LIKE p1) INHERITS (p1);
+CREATE FOREIGN TABLE fp1 (a int, b int)
+  SERVER loopback OPTIONS (table_name 'p1');
+INSERT INTO c1 VALUES (0, 1);
+INSERT INTO c2 VALUES (1, 1);
+SELECT tableoid::regclass, ctid, * FROM fp1;
+-- Update statement should not be pushed down to the remote side
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fp1 SET b = b + 1 WHERE a = 0 AND random() <= 1;
+UPDATE fp1 SET b = b + 1 WHERE a = 0 AND random() <= 1;
+-- Only one tuple should be updated
+SELECT tableoid::regclass, ctid, * FROM fp1;
+-- Recreate the table data
+TRUNCATE c1;
+TRUNCATE c2;
+INSERT INTO c1 VALUES (0, 1);
+INSERT INTO c2 VALUES (1, 1);
+SELECT tableoid::regclass, ctid, * FROM fp1;
+-- Delete statement should not be pushed down to the remote side
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM fp1 WHERE a = 1 AND random() <= 1;
+DELETE FROM fp1 WHERE a = 1 AND random() <= 1;
+-- Only one tuple should be deleted
+SELECT tableoid::regclass, ctid, * FROM fp1;
+
+-- cleanup
+DROP FOREIGN TABLE fp1;
+DROP TABLE p1 CASCADE;
+
 -- ===================================================================
 -- test check constraints
 -- ===================================================================

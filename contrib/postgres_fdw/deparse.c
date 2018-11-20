@@ -130,6 +130,7 @@ static void deparseTargetList(StringInfo buf,
 				  Relation rel,
 				  bool is_returning,
 				  Bitmapset *attrs_used,
+				  bool tableoid_needed,
 				  bool qualify_col,
 				  List **retrieved_attrs);
 static void deparseExplicitTargetList(List *tlist,
@@ -901,6 +902,25 @@ build_tlist_to_deparse(RelOptInfo *foreignrel)
 												  PVC_RECURSE_PLACEHOLDERS));
 	}
 
+	/* Also, add the Param representing the remote table OID, if it exists. */
+	if (fpinfo->tableoid_param)
+	{
+		TargetEntry *tle;
+
+		/*
+		 * Core code should have contained the Param in the given relation's
+		 * reltarget.
+		 */
+		Assert(list_member(foreignrel->reltarget->exprs,
+						   fpinfo->tableoid_param));
+
+		tle = makeTargetEntry((Expr *) copyObject(fpinfo->tableoid_param),
+							  list_length(tlist) + 1,
+							  NULL,
+							  false);
+		tlist = lappend(tlist, tle);
+	}
+
 	return tlist;
 }
 
@@ -1052,7 +1072,9 @@ deparseSelectSql(List *tlist, bool is_subquery, List **retrieved_attrs,
 		Relation	rel = heap_open(rte->relid, NoLock);
 
 		deparseTargetList(buf, rte, foreignrel->relid, rel, false,
-						  fpinfo->attrs_used, false, retrieved_attrs);
+						  fpinfo->attrs_used,
+						  fpinfo->tableoid_param ? true : false,
+						  false, retrieved_attrs);
 		heap_close(rel, NoLock);
 	}
 }
@@ -1093,6 +1115,8 @@ deparseFromExpr(List *quals, deparse_expr_cxt *context)
  * This is used for both SELECT and RETURNING targetlists; the is_returning
  * parameter is true only for a RETURNING targetlist.
  *
+ * For SELECT, the target list contains remote tableoid if tableoid_needed.
+ *
  * The tlist text is appended to buf, and we also create an integer List
  * of the columns being retrieved, which is returned to *retrieved_attrs.
  *
@@ -1105,6 +1129,7 @@ deparseTargetList(StringInfo buf,
 				  Relation rel,
 				  bool is_returning,
 				  Bitmapset *attrs_used,
+				  bool tableoid_needed,
 				  bool qualify_col,
 				  List **retrieved_attrs)
 {
@@ -1146,7 +1171,7 @@ deparseTargetList(StringInfo buf,
 
 	/*
 	 * Add ctid and oid if needed.  We currently don't support retrieving any
-	 * other system columns.
+	 * other system columns, except tableoid, which is retrieved if required.
 	 */
 	if (bms_is_member(SelfItemPointerAttributeNumber - FirstLowInvalidHeapAttributeNumber,
 					  attrs_used))
@@ -1179,6 +1204,20 @@ deparseTargetList(StringInfo buf,
 
 		*retrieved_attrs = lappend_int(*retrieved_attrs,
 									   ObjectIdAttributeNumber);
+	}
+	if (tableoid_needed)
+	{
+		Assert(bms_is_member(SelfItemPointerAttributeNumber - FirstLowInvalidHeapAttributeNumber,
+							 attrs_used));
+		Assert(!first);
+		Assert(!is_returning);
+		Assert(!qualify_col);
+
+		appendStringInfoString(buf, ", ");
+		appendStringInfoString(buf, "tableoid");
+
+		*retrieved_attrs = lappend_int(*retrieved_attrs,
+									   TableOidAttributeNumber);
 	}
 
 	/* Don't generate bad syntax if no undropped columns */
@@ -1728,7 +1767,8 @@ deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
 	deparseRelation(buf, rel);
 	appendStringInfoString(buf, " SET ");
 
-	pindex = 2;					/* ctid is always the first param */
+	pindex = 3;					/* ctid and tableoid are always the two
+								 * leading params */
 	first = true;
 	foreach(lc, targetAttrs)
 	{
@@ -1742,7 +1782,7 @@ deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
 		appendStringInfo(buf, " = $%d", pindex);
 		pindex++;
 	}
-	appendStringInfoString(buf, " WHERE ctid = $1");
+	appendStringInfoString(buf, " WHERE ctid = $1 AND tableoid = $2");
 
 	deparseReturningList(buf, rte, rtindex, rel,
 						 rel->trigdesc && rel->trigdesc->trig_update_after_row,
@@ -1858,7 +1898,7 @@ deparseDeleteSql(StringInfo buf, RangeTblEntry *rte,
 {
 	appendStringInfoString(buf, "DELETE FROM ");
 	deparseRelation(buf, rel);
-	appendStringInfoString(buf, " WHERE ctid = $1");
+	appendStringInfoString(buf, " WHERE ctid = $1 AND tableoid = $2");
 
 	deparseReturningList(buf, rte, rtindex, rel,
 						 rel->trigdesc && rel->trigdesc->trig_delete_after_row,
@@ -1974,7 +2014,7 @@ deparseReturningList(StringInfo buf, RangeTblEntry *rte,
 
 	if (attrs_used != NULL)
 		deparseTargetList(buf, rte, rtindex, rel, true, attrs_used, false,
-						  retrieved_attrs);
+						  false, retrieved_attrs);
 	else
 		*retrieved_attrs = NIL;
 }
@@ -2147,8 +2187,8 @@ deparseColumnRef(StringInfo buf, int varno, int varattno, RangeTblEntry *rte,
 		}
 
 		appendStringInfoString(buf, "ROW(");
-		deparseTargetList(buf, rte, varno, rel, false, attrs_used, qualify_col,
-						  &retrieved_attrs);
+		deparseTargetList(buf, rte, varno, rel, false, attrs_used, false,
+						  qualify_col, &retrieved_attrs);
 		appendStringInfoChar(buf, ')');
 
 		/* Complete the CASE WHEN statement started above. */
@@ -2514,6 +2554,22 @@ deparseConst(Const *node, deparse_expr_cxt *context, int showtype)
 static void
 deparseParam(Param *node, deparse_expr_cxt *context)
 {
+	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) context->foreignrel->fdw_private;
+
+	/*
+	 * If the Param is the one representing the remote table OID, the value
+	 * needs to be produced; fetch the remote table OID, instead.
+	 */
+	if (equal(node, (Node *) fpinfo->tableoid_param))
+	{
+		Assert(bms_is_member(context->root->parse->resultRelation,
+							 context->foreignrel->relids));
+		Assert(bms_membership(context->foreignrel->relids) == BMS_MULTIPLE);
+		ADD_REL_QUALIFIER(context->buf, context->root->parse->resultRelation);
+		appendStringInfoString(context->buf, "tableoid");
+		return;
+	}
+
 	if (context->params_list)
 	{
 		int			pindex = 0;

@@ -440,6 +440,15 @@ AddForeignUpdateTargets(Query *parsetree,
     </para>
 
     <para>
+     This function may also add to the targetlist <structname>Param</structname>
+     nodes representing extra target information, in which case
+     <function>IterateForeignScan</function> must set the values of these parameters
+     for each row fetched from the foreign source; it's recommended to use
+     <function>generate_foreign_param</function> to build the
+     <structname>Param</structname> nodes.
+    </para>
+
+    <para>
      Although this function is called during planning, the
      information provided is a bit different from that available to other
      planning routines.

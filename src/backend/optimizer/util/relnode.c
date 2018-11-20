@@ -28,6 +28,7 @@
 #include "optimizer/tlist.h"
 #include "partitioning/partbounds.h"
 #include "utils/hsearch.h"
+#include "utils/lsyscache.h"
 
 
 typedef struct JoinHashEntry
@@ -912,6 +913,23 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 		Var		   *var = (Var *) lfirst(vars);
 		RelOptInfo *baserel;
 		int			ndx;
+
+		/* Params are needed for final output, so add them to the output. */
+		if (IsA(var, Param))
+		{
+			Param	   *param = (Param *) var;
+
+			Assert(IS_FOREIGN_PARAM(root, param));
+			joinrel->reltarget->exprs =
+				lappend(joinrel->reltarget->exprs, param);
+			/*
+			 * Estimate using the type info  (Note: keep this in sync with
+			 * set_rel_width())
+			 */
+			joinrel->reltarget->width +=
+				get_typavgwidth(param->paramtype, param->paramtypmod);
+			continue;
+		}
 
 		/*
 		 * Ignore PlaceHolderVars in the input tlists; we'll make our own

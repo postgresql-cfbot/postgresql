@@ -30,7 +30,6 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
-#include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/var.h"
 #include "optimizer/tlist.h"
@@ -68,8 +67,6 @@ enum FdwScanPrivateIndex
 	FdwScanPrivateSelectSql,
 	/* Integer list of attribute numbers retrieved by the SELECT */
 	FdwScanPrivateRetrievedAttrs,
-	/* Param ID for remote table OID for target rel (-1 if none) */
-	FdwScanPrivateTableOidParamId,
 	/* Integer representing the desired fetch_size */
 	FdwScanPrivateFetchSize,
 
@@ -136,7 +133,6 @@ typedef struct PgFdwScanState
 	/* extracted fdw_private data */
 	char	   *query;			/* text of SELECT command */
 	List	   *retrieved_attrs;	/* list of retrieved attribute numbers */
-	int			tableoid_param_id;	/* Param ID for remote table OID */
 
 	/* for remote query execution */
 	PGconn	   *conn;			/* connection for the scan */
@@ -151,7 +147,6 @@ typedef struct PgFdwScanState
 	HeapTuple  *tuples;			/* array of currently-retrieved tuples */
 	int			num_tuples;		/* # of tuples in array */
 	int			next_tuple;		/* index of next one to return */
-	bool		set_tableoid_param;	/* Do we need to set the Param? */
 
 	/* batch-level state, for optimizing rewinds and avoiding useless fetch */
 	int			fetch_ct_2;		/* Min(# of fetches done, 2) */
@@ -184,7 +179,6 @@ typedef struct PgFdwModifyState
 
 	/* info about parameters for prepared statement */
 	AttrNumber	ctidAttno;		/* attnum of input resjunk ctid column */
-	AttrNumber	tableoidAttno;	/* attnum of input resjunk tableoid column */
 	int			p_nums;			/* number of parameters to transmit */
 	FmgrInfo   *p_flinfo;		/* output conversion functions for them */
 
@@ -399,7 +393,6 @@ static PgFdwModifyState *create_foreign_modify(EState *estate,
 static void prepare_foreign_modify(PgFdwModifyState *fmstate);
 static const char **convert_prep_stmt_params(PgFdwModifyState *fmstate,
 						 ItemPointer tupleid,
-						 Oid tableoid,
 						 TupleTableSlot *slot);
 static void store_returning_result(PgFdwModifyState *fmstate,
 					   TupleTableSlot *slot, PGresult *res);
@@ -602,29 +595,6 @@ postgresGetForeignRelSize(PlannerInfo *root,
 		pull_varattnos((Node *) rinfo->clause, baserel->relid,
 					   &fpinfo->attrs_used);
 	}
-
-	/*
-	 * If the table is an UPDATE/DELETE target, the table's reltarget would
-	 * have contained a Param representing the remote table OID of the target;
-	 * get the Param and save a copy of it in fpinfo for use later.
-	 */
-	if (baserel->relid == root->parse->resultRelation)
-	{
-		foreach(lc, baserel->reltarget->exprs)
-		{
-			Param	   *param = (Param *) lfirst(lc);
-
-			if (IsA(param, Param))
-			{
-				Assert(IS_FOREIGN_PARAM(root, param));
-				fpinfo->tableoid_param = (Param *) copyObject(param);
-				break;
-			}
-		}
-		Assert(fpinfo->tableoid_param);
-	}
-	else
-		fpinfo->tableoid_param = NULL;
 
 	/*
 	 * Compute the selectivity and cost of the local_conds, so we don't have
@@ -1169,7 +1139,6 @@ postgresGetForeignPlan(PlannerInfo *root,
 	List	   *fdw_scan_tlist = NIL;
 	List	   *fdw_recheck_quals = NIL;
 	List	   *retrieved_attrs;
-	int			tableoid_param_id;
 	StringInfoData sql;
 	ListCell   *lc;
 
@@ -1309,19 +1278,12 @@ postgresGetForeignPlan(PlannerInfo *root,
 	/* Remember remote_exprs for possible use by postgresPlanDirectModify */
 	fpinfo->final_remote_exprs = remote_exprs;
 
-	/* Get the Param ID for the remote table OID, if it exists */
-	if (fpinfo->tableoid_param)
-		tableoid_param_id = fpinfo->tableoid_param->paramid;
-	else
-		tableoid_param_id = -1;
-
 	/*
 	 * Build the fdw_private list that will be available to the executor.
 	 * Items in the list must match order in enum FdwScanPrivateIndex.
 	 */
-	fdw_private = list_make4(makeString(sql.data),
+	fdw_private = list_make3(makeString(sql.data),
 							 retrieved_attrs,
-							 makeInteger(tableoid_param_id),
 							 makeInteger(fpinfo->fetch_size));
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
 		fdw_private = lappend(fdw_private,
@@ -1405,8 +1367,6 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 									 FdwScanPrivateSelectSql));
 	fsstate->retrieved_attrs = (List *) list_nth(fsplan->fdw_private,
 												 FdwScanPrivateRetrievedAttrs);
-	fsstate->tableoid_param_id = intVal(list_nth(fsplan->fdw_private,
-												 FdwScanPrivateTableOidParamId));
 	fsstate->fetch_size = intVal(list_nth(fsplan->fdw_private,
 										  FdwScanPrivateFetchSize));
 
@@ -1421,27 +1381,16 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	/*
 	 * Get info we'll need for converting data fetched from the foreign server
 	 * into local representation and error reporting during that process.
-	 * Also, determine whether we need to set the Param for the remote table
-	 * OID.
 	 */
 	if (fsplan->scan.scanrelid > 0)
 	{
 		fsstate->rel = node->ss.ss_currentRelation;
 		fsstate->tupdesc = RelationGetDescr(fsstate->rel);
-
-		fsstate->set_tableoid_param =
-			fsstate->tableoid_param_id >= 0 ? true : false;
 	}
 	else
 	{
 		fsstate->rel = NULL;
 		fsstate->tupdesc = node->ss.ss_ScanTupleSlot->tts_tupleDescriptor;
-
-		/*
-		 * No need to set the Param since the value will be produced as a
-		 * tlist entry of fdw_scan_tlist, even if it exists.
-		 */
-		fsstate->set_tableoid_param = false;
 	}
 
 	fsstate->attinmeta = TupleDescGetAttInMetadata(fsstate->tupdesc);
@@ -1470,7 +1419,6 @@ postgresIterateForeignScan(ForeignScanState *node)
 {
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
-	HeapTuple	tuple;
 
 	/*
 	 * If this is the first call after Begin or ReScan, we need to create the
@@ -1493,28 +1441,11 @@ postgresIterateForeignScan(ForeignScanState *node)
 	}
 
 	/*
-	 * Get the next tuple.
-	 */
-	tuple = fsstate->tuples[fsstate->next_tuple++];
-
-	/*
-	 * Set the Param for the remote table OID, if necessary.
-	 */
-	if (fsstate->set_tableoid_param)
-	{
-		ExprContext *econtext = node->ss.ps.ps_ExprContext;
-		ParamExecData *prm = &(econtext->ecxt_param_exec_vals[fsstate->tableoid_param_id]);
-
-		Assert(OidIsValid(tuple->t_tableOid));
-		prm->execPlan = NULL;
-		prm->value = ObjectIdGetDatum(tuple->t_tableOid);
-		prm->isnull = false;
-	}
-
-	/*
 	 * Return the next tuple.
 	 */
-	ExecStoreHeapTuple(tuple, slot, false);
+	ExecStoreHeapTuple(fsstate->tuples[fsstate->next_tuple++],
+					   slot,
+					   false);
 
 	return slot;
 }
@@ -1609,17 +1540,14 @@ postgresAddForeignUpdateTargets(Query *parsetree,
 								Relation target_relation)
 {
 	Var		   *var;
-	Param	   *param;
 	const char *attrname;
 	TargetEntry *tle;
 
 	/*
-	 * In postgres_fdw, what we need is the ctid, same as for a regular table,
-	 * and the remote table OID, which is needed since the remote table might
-	 * be an inheritance tree.
+	 * In postgres_fdw, what we need is the ctid, same as for a regular table.
 	 */
 
-	/* Make a Var representing the ctid value */
+	/* Make a Var representing the desired value */
 	var = makeVar(parsetree->resultRelation,
 				  SelfItemPointerAttributeNumber,
 				  TIDOID,
@@ -1631,20 +1559,6 @@ postgresAddForeignUpdateTargets(Query *parsetree,
 	attrname = "ctid";
 
 	tle = makeTargetEntry((Expr *) var,
-						  list_length(parsetree->targetList) + 1,
-						  pstrdup(attrname),
-						  true);
-
-	/* ... and add it to the query's targetlist */
-	parsetree->targetList = lappend(parsetree->targetList, tle);
-
-	/* Make a Param representing the tableoid value */
-	param = generate_foreign_param(OIDOID, -1, InvalidOid);
-
-	/* Wrap it in a resjunk TLE with the right name ... */
-	attrname = "remotetableoid";
-
-	tle = makeTargetEntry((Expr *) param,
 						  list_length(parsetree->targetList) + 1,
 						  pstrdup(attrname),
 						  true);
@@ -1854,7 +1768,7 @@ postgresExecForeignInsert(EState *estate,
 		prepare_foreign_modify(fmstate);
 
 	/* Convert parameters needed by prepared statement to text form */
-	p_values = convert_prep_stmt_params(fmstate, NULL, InvalidOid, slot);
+	p_values = convert_prep_stmt_params(fmstate, NULL, slot);
 
 	/*
 	 * Execute the prepared statement.
@@ -1910,7 +1824,6 @@ postgresExecForeignUpdate(EState *estate,
 {
 	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
 	Datum		datum;
-	Datum		datum2;
 	bool		isNull;
 	const char **p_values;
 	PGresult   *res;
@@ -1928,18 +1841,9 @@ postgresExecForeignUpdate(EState *estate,
 	if (isNull)
 		elog(ERROR, "ctid is NULL");
 
-	/* Get the tableoid that was passed up as a resjunk column */
-	datum2 = ExecGetJunkAttribute(planSlot,
-								  fmstate->tableoidAttno,
-								  &isNull);
-	/* shouldn't ever get a null result... */
-	if (isNull)
-		elog(ERROR, "tableoid is NULL");
-
 	/* Convert parameters needed by prepared statement to text form */
 	p_values = convert_prep_stmt_params(fmstate,
 										(ItemPointer) DatumGetPointer(datum),
-										DatumGetObjectId(datum2),
 										slot);
 
 	/*
@@ -1996,7 +1900,6 @@ postgresExecForeignDelete(EState *estate,
 {
 	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
 	Datum		datum;
-	Datum		datum2;
 	bool		isNull;
 	const char **p_values;
 	PGresult   *res;
@@ -2014,18 +1917,9 @@ postgresExecForeignDelete(EState *estate,
 	if (isNull)
 		elog(ERROR, "ctid is NULL");
 
-	/* Get the tableoid that was passed up as a resjunk column */
-	datum2 = ExecGetJunkAttribute(planSlot,
-								  fmstate->tableoidAttno,
-								  &isNull);
-	/* shouldn't ever get a null result... */
-	if (isNull)
-		elog(ERROR, "tableoid is NULL");
-
 	/* Convert parameters needed by prepared statement to text form */
 	p_values = convert_prep_stmt_params(fmstate,
 										(ItemPointer) DatumGetPointer(datum),
-										DatumGetObjectId(datum2),
 										NULL);
 
 	/*
@@ -3446,7 +3340,7 @@ create_foreign_modify(EState *estate,
 		fmstate->attinmeta = TupleDescGetAttInMetadata(tupdesc);
 
 	/* Prepare for output conversion of parameters used in prepared stmt. */
-	n_params = list_length(fmstate->target_attrs) + 2;
+	n_params = list_length(fmstate->target_attrs) + 1;
 	fmstate->p_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo) * n_params);
 	fmstate->p_nums = 0;
 
@@ -3462,17 +3356,6 @@ create_foreign_modify(EState *estate,
 
 		/* First transmittable parameter will be ctid */
 		getTypeOutputInfo(TIDOID, &typefnoid, &isvarlena);
-		fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
-		fmstate->p_nums++;
-
-		/* Find the tableoid resjunk column in the subplan's result */
-		fmstate->tableoidAttno = ExecFindJunkAttributeInTlist(subplan->targetlist,
-															  "remotetableoid");
-		if (!AttributeNumberIsValid(fmstate->tableoidAttno))
-			elog(ERROR, "could not find junk tableoid column");
-
-		/* Second transmittable parameter will be tableoid */
-		getTypeOutputInfo(OIDOID, &typefnoid, &isvarlena);
 		fmgr_info(typefnoid, &fmstate->p_flinfo[fmstate->p_nums]);
 		fmstate->p_nums++;
 	}
@@ -3548,7 +3431,6 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
  *		Create array of text strings representing parameter values
  *
  * tupleid is ctid to send, or NULL if none
- * tableoid is tableoid to send, or InvalidOid if none
  * slot is slot to get remaining parameters from, or NULL if none
  *
  * Data is constructed in temp_cxt; caller should reset that after use.
@@ -3556,7 +3438,6 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 static const char **
 convert_prep_stmt_params(PgFdwModifyState *fmstate,
 						 ItemPointer tupleid,
-						 Oid tableoid,
 						 TupleTableSlot *slot)
 {
 	const char **p_values;
@@ -3573,17 +3454,6 @@ convert_prep_stmt_params(PgFdwModifyState *fmstate,
 		/* don't need set_transmission_modes for TID output */
 		p_values[pindex] = OutputFunctionCall(&fmstate->p_flinfo[pindex],
 											  PointerGetDatum(tupleid));
-		pindex++;
-	}
-
-	/* 2nd parameter should be tableoid, if it's in use */
-	if (OidIsValid(tableoid))
-	{
-		Assert(tupleid != NULL);
-
-		/* don't need set_transmission_modes for OID output */
-		p_values[pindex] = OutputFunctionCall(&fmstate->p_flinfo[pindex],
-											  ObjectIdGetDatum(tableoid));
 		pindex++;
 	}
 
@@ -3975,17 +3845,6 @@ init_returning_filter(PgFdwDirectModifyState *dmstate,
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(lc);
 		Var		   *var = (Var *) tle->expr;
-
-		/*
-		 * No need to set the Param for the remote table OID; ignore it.
-		 */
-		if (IsA(var, Param))
-		{
-			/* We would not retrieve the remote table OID anymore. */
-			Assert(!list_member_int(dmstate->retrieved_attrs, i));
-			i++;
-			continue;
-		}
 
 		Assert(IsA(var, Var));
 
@@ -5025,39 +4884,6 @@ foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel, JoinType jointype,
 	/* Mark that this join can be pushed down safely */
 	fpinfo->pushdown_safe = true;
 
-	/*
-	 * If the join relation contains an UPDATE/DELETE target, either of the
-	 * input relations would have saved the Param representing the remote
-	 * table OID of the target; get the Param and remember it in fpinfo for
-	 * use later.
-	 */
-	if ((root->parse->commandType == CMD_UPDATE ||
-		 root->parse->commandType == CMD_DELETE) &&
-		bms_is_member(root->parse->resultRelation, joinrel->relids))
-	{
-		if (bms_is_member(root->parse->resultRelation,
-						  outerrel->relids))
-		{
-			Assert(fpinfo_o->tableoid_param);
-			fpinfo->tableoid_param = fpinfo_o->tableoid_param;
-		}
-		else
-		{
-			Assert(bms_is_member(root->parse->resultRelation,
-								 innerrel->relids));
-			Assert(fpinfo_i->tableoid_param);
-			fpinfo->tableoid_param = fpinfo_i->tableoid_param;
-		}
-
-		/*
-		 * Core code should have contained the Param in the join relation's
-		 * reltarget.
-		 */
-		Assert(list_member(joinrel->reltarget->exprs, fpinfo->tableoid_param));
-	}
-	else
-		fpinfo->tableoid_param = NULL;
-
 	/* Get user mapping */
 	if (fpinfo->use_remote_estimate)
 	{
@@ -5731,7 +5557,6 @@ make_tuple_from_result_row(PGresult *res,
 	bool	   *nulls;
 	ItemPointer ctid = NULL;
 	Oid			oid = InvalidOid;
-	Oid			tableoid = InvalidOid;
 	ConversionLocation errpos;
 	ErrorContextCallback errcallback;
 	MemoryContext oldcontext;
@@ -5825,17 +5650,6 @@ make_tuple_from_result_row(PGresult *res,
 				oid = DatumGetObjectId(datum);
 			}
 		}
-		else if (i == TableOidAttributeNumber)
-		{
-			/* tableoid */
-			if (valstr != NULL)
-			{
-				Datum		datum;
-
-				datum = DirectFunctionCall1(oidin, CStringGetDatum(valstr));
-				tableoid = DatumGetObjectId(datum);
-			}
-		}
 		errpos.cur_attno = 0;
 
 		j++;
@@ -5885,16 +5699,6 @@ make_tuple_from_result_row(PGresult *res,
 	if (OidIsValid(oid))
 		HeapTupleSetOid(tuple, oid);
 
-	/*
-	 * If we have a table OID to return, install it.  (Note that this is not
-	 * really right because the installed value is the value on the remote
-	 * side, not the local side, but we do this for use by
-	 * postgresIterateForeignScan().  The correct value will be re-installed
-	 * in ForeignNext() if necessary.)
-	 */
-	if (OidIsValid(tableoid))
-		tuple->t_tableOid = tableoid;
-
 	/* Clean up */
 	MemoryContextReset(temp_context);
 
@@ -5911,7 +5715,6 @@ conversion_error_callback(void *arg)
 	const char *attname = NULL;
 	const char *relname = NULL;
 	bool		is_wholerow = false;
-	bool		is_tableoid = false;
 	ConversionLocation *errpos = (ConversionLocation *) arg;
 
 	if (errpos->rel)
@@ -5926,8 +5729,6 @@ conversion_error_callback(void *arg)
 			attname = "ctid";
 		else if (errpos->cur_attno == ObjectIdAttributeNumber)
 			attname = "oid";
-		else if (errpos->cur_attno == TableOidAttributeNumber)
-			is_tableoid = true;
 
 		relname = RelationGetRelationName(errpos->rel);
 	}
@@ -5944,10 +5745,8 @@ conversion_error_callback(void *arg)
 
 		/*
 		 * Target list can have Vars and expressions.  For Vars, we can get
-		 * its relation, however for expressions we can't, except for the
-		 * Param representing the remote table OID, in which case we can.
-		 * Thus for expressions other than the Param, just show generic
-		 * context message.
+		 * its relation, however for expressions we can't.  Thus for
+		 * expressions, just show generic context message.
 		 */
 		if (IsA(tle->expr, Var))
 		{
@@ -5963,20 +5762,6 @@ conversion_error_callback(void *arg)
 
 			relname = get_rel_name(rte->relid);
 		}
-		else if (IsA(tle->expr, Param))
-		{
-			RangeTblEntry *rte;
-			ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
-
-			Assert(((Param *) tle->expr)->paramid == ((PgFdwScanState *) fsstate->fdw_state)->tableoid_param_id);
-			Assert(resultRelInfo);
-
-			is_tableoid = true;
-
-			rte = exec_rt_fetch(resultRelInfo->ri_RangeTableIndex, estate);
-
-			relname = get_rel_name(rte->relid);
-		}
 		else
 			errcontext("processing expression at position %d in select list",
 					   errpos->cur_attno);
@@ -5986,8 +5771,6 @@ conversion_error_callback(void *arg)
 	{
 		if (is_wholerow)
 			errcontext("whole-row reference to foreign table \"%s\"", relname);
-		else if (is_tableoid)
-			errcontext("remote tableoid of foreign table \"%s\"", relname);
 		else if (attname)
 			errcontext("column \"%s\" of foreign table \"%s\"", attname, relname);
 	}

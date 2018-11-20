@@ -71,6 +71,7 @@ extern int	pq_getbyte(void);
 extern int	pq_peekbyte(void);
 extern int	pq_getbyte_if_available(unsigned char *c);
 extern int	pq_putbytes(const char *s, size_t len);
+extern bool pq_is_client_connected(void);
 
 /*
  * prototypes for functions in be-secure.c
@@ -102,6 +103,7 @@ extern WaitEventSet *FeBeWaitSet;
 extern char *SSLCipherSuites;
 extern char *SSLECDHCurve;
 extern bool SSLPreferServerCiphers;
+extern int client_connection_check_interval;
 
 /*
  * prototypes for functions in be-secure-common.c

@@ -3072,6 +3072,16 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"client_connection_check_interval", PGC_USERSET, CLIENT_CONN_OTHER,
+			gettext_noop("Sets the time interval for checking connection with the client."),
+			gettext_noop("A value of -1 disables this feature. Zero selects a suitable default value."),
+			GUC_UNIT_MS
+		},
+		&client_connection_check_interval,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

@@ -7677,6 +7677,27 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-client-connection-check-interval" xreflabel="client_connection_check_interval">
+      <term><varname>client_connection_check_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>client_connection_check_interval</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter sets a time interval (in milliseconds) between periodic 
+        verification of the connection with the client during the execution
+        of the query. In case when the client aborts the connection,
+        the execution of the query will be terminated.
+       </para>
+       <para>
+        If value is -1, then this option is disabled, and the backend will
+        detect client disconnection only when trying to send him a response
+        to the query. Zero selects a suitable default value (1 second).
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
    </sect1>

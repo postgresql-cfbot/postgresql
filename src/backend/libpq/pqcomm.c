@@ -120,6 +120,7 @@
  */
 int			Unix_socket_permissions;
 char	   *Unix_socket_group;
+int 		client_connection_check_interval;
 
 /* Where the Unix socket files are (list of palloc'd strings) */
 static List *sock_paths = NIL;
@@ -1925,4 +1926,26 @@ pq_setkeepalivescount(int count, Port *port)
 #endif
 
 	return STATUS_OK;
+}
+
+bool pq_is_client_connected(void)
+{
+	CheckClientConnectionPending = false;
+	if (IsUnderPostmaster &&
+		MyProcPort != NULL && !PqCommReadingMsg && !PqCommBusy)
+	{
+		char nextbyte;
+		int r;
+
+		r = recv(MyProcPort->sock, &nextbyte, 1, MSG_PEEK | MSG_DONTWAIT);
+
+		if (r == 0 || (r == -1 &&
+			errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+		{
+			ClientConnectionLost = true;
+			InterruptPending = true;
+			return false;
+		}
+	}
+	return true;
 }

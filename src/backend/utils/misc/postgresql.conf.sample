@@ -623,6 +623,9 @@
 
 #dynamic_library_path = '$libdir'
 
+#client_connection_check_interval = 1000	# set time interval between
+											# connection checks, in ms
+											# 0 is disabled
 
 #------------------------------------------------------------------------------
 # LOCK MANAGEMENT

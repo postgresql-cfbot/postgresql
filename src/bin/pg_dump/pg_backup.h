@@ -72,6 +72,7 @@ typedef struct _restoreOptions
 	int			dropSchema;
 	int			disable_dollar_quoting;
 	int			dump_inserts;
+	int			dump_inserts_multiple;
 	int			column_inserts;
 	int			if_exists;
 	int			no_comments;	/* Skip comments */
@@ -145,6 +146,7 @@ typedef struct _dumpOptions
 	/* flags for various command-line long options */
 	int			disable_dollar_quoting;
 	int			dump_inserts;
+	int			dump_inserts_multiple;
 	int			column_inserts;
 	int			if_exists;
 	int			no_comments;

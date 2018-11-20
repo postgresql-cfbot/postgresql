@@ -780,7 +780,10 @@ PostgreSQL documentation
         non-<productname>PostgreSQL</productname> databases.
         However, since this option generates a separate command for each row,
         an error in reloading a row causes only that row to be lost rather
-        than the entire table contents.
+        than the entire table contents. The number of row per insert statement
+        can also be specified to make the dump file smaller and faster
+        to reload but lack single row data lost on error while reloading rather entire affected
+        insert statement data lost.
         Note that
         the restore might fail altogether if you have rearranged column order.
         The <option>--column-inserts</option> option is safe against column

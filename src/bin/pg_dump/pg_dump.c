@@ -359,7 +359,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
-		{"inserts", no_argument, &dopt.dump_inserts, 1},
+		{"inserts", optional_argument, NULL, 8},
 		{"lock-wait-timeout", required_argument, NULL, 2},
 		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
@@ -562,6 +562,20 @@ main(int argc, char **argv)
 				dosync = false;
 				break;
 
+			case 8:			/* inserts values number */
+				if (optarg)
+				{
+					dopt.dump_inserts_multiple = atoi(optarg);
+					if (dopt.dump_inserts_multiple < 0)
+					{
+						write_msg(NULL, "insert values must be positive number\n");
+						exit_nicely(1);
+					}
+				}
+				else
+					dopt.dump_inserts = 1;
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -609,7 +623,7 @@ main(int argc, char **argv)
 		exit_nicely(1);
 	}
 
-	if (dopt.dump_inserts && dopt.oids)
+	if ((dopt.dump_inserts || dopt.dump_inserts_multiple) && dopt.oids)
 	{
 		write_msg(NULL, "options --inserts/--column-inserts and -o/--oids cannot be used together\n");
 		write_msg(NULL, "(The INSERT command cannot set OIDs.)\n");
@@ -619,7 +633,8 @@ main(int argc, char **argv)
 	if (dopt.if_exists && !dopt.outputClean)
 		exit_horribly(NULL, "option --if-exists requires option -c/--clean\n");
 
-	if (dopt.do_nothing && !(dopt.dump_inserts || dopt.column_inserts))
+	if (dopt.do_nothing && !(dopt.dump_inserts || dopt.column_inserts ||
+		dopt.dump_inserts_multiple))
 		exit_horribly(NULL, "option --on-conflict-do-nothing requires option --inserts or --column-inserts\n");
 
 	/* Identify archive format to emit */
@@ -889,6 +904,7 @@ main(int argc, char **argv)
 	ropt->use_setsessauth = dopt.use_setsessauth;
 	ropt->disable_dollar_quoting = dopt.disable_dollar_quoting;
 	ropt->dump_inserts = dopt.dump_inserts;
+	ropt->dump_inserts_multiple = dopt.dump_inserts_multiple;
 	ropt->no_comments = dopt.no_comments;
 	ropt->no_publications = dopt.no_publications;
 	ropt->no_security_labels = dopt.no_security_labels;
@@ -2074,6 +2090,193 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 }
 
 /*
+ * Dump table data using multiple values INSERT commands.
+ */
+static int
+dumpTableData_insert_multiple(Archive *fout, void *dcontext)
+{
+	TableDataInfo *tdinfo = (TableDataInfo *) dcontext;
+	TableInfo  *tbinfo = tdinfo->tdtable;
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer q = createPQExpBuffer();
+	PQExpBuffer i = createPQExpBuffer();
+	PQExpBuffer insertStmt = NULL;
+	PGresult   *res;
+	int			tuple;
+	int			nfields;
+	int			field;
+	int			ntuple;
+	int			ltuple;
+
+	appendPQExpBuffer(q, "DECLARE _pg_dump_cursor CURSOR FOR "
+					  "SELECT * FROM ONLY %s",
+					  fmtQualifiedDumpable(tbinfo));
+	if (tdinfo->filtercond)
+		appendPQExpBuffer(q, " %s", tdinfo->filtercond);
+
+	ExecuteSqlStatement(fout, q->data);
+	appendPQExpBuffer(i, "FETCH %d FROM _pg_dump_cursor",
+					  dopt->dump_inserts_multiple);
+	while (1)
+	{
+		res = ExecuteSqlQuery(fout, i->data, PGRES_TUPLES_OK);
+		nfields = PQnfields(res);
+		ntuple = PQntuples(res);
+		ltuple = ntuple-1;
+			if (ntuple  > 0)
+			{
+				if (insertStmt == NULL)
+				{
+					TableInfo  *targettab;
+
+					insertStmt = createPQExpBuffer();
+
+					/*
+					 * When load-via-partition-root is set, get the root table
+					 * name for the partition table, so that we can reload data
+					 * through the root table.
+					 */
+					if (dopt->load_via_partition_root && tbinfo->ispartition)
+						targettab = getRootTableInfo(tbinfo);
+					else
+						targettab = tbinfo;
+
+					appendPQExpBuffer(insertStmt, "INSERT INTO %s ",
+									  fmtQualifiedDumpable(targettab));
+
+					/* corner case for zero-column table */
+					if (nfields == 0)
+					{
+						appendPQExpBufferStr(insertStmt, "DEFAULT VALUES;\n");
+					}
+					else
+					{
+						/* append the list of column names if required */
+					if (dopt->column_inserts)
+					{
+						appendPQExpBufferChar(insertStmt, '(');
+						for (field = 0; field < nfields; field++)
+						{
+							if (field > 0)
+								appendPQExpBufferStr(insertStmt, ", ");
+							appendPQExpBufferStr(insertStmt,
+												 fmtId(PQfname(res, field)));
+						}
+						appendPQExpBufferStr(insertStmt, ") ");
+					}
+
+					if (tbinfo->needs_override)
+						appendPQExpBufferStr(insertStmt, "OVERRIDING SYSTEM VALUE ");
+
+					appendPQExpBufferStr(insertStmt, "VALUES ");
+					}
+				}
+			archputs(insertStmt->data, fout);
+			for (tuple = 0; tuple < ntuple ; tuple++)
+			{
+
+			/* if it is zero-column table then we're done */
+			if (nfields == 0)
+				continue;
+			if (tuple == 0)
+				archputs("(", fout);
+			else
+				archputs(", (", fout);
+
+			for (field = 0; field < nfields; field++)
+			{
+				if (field > 0)
+					archputs(", ", fout);
+				if (PQgetisnull(res, tuple, field))
+				{
+					archputs("NULL", fout);
+					continue;
+				}
+
+				/* XXX This code is partially duplicated in ruleutils.c */
+				switch (PQftype(res, field))
+				{
+					case INT2OID:
+					case INT4OID:
+					case INT8OID:
+					case OIDOID:
+					case FLOAT4OID:
+					case FLOAT8OID:
+					case NUMERICOID:
+						{
+							/*
+							 * These types are printed without quotes unless
+							 * they contain values that aren't accepted by the
+							 * scanner unquoted (e.g., 'NaN').  Note that
+							 * strtod() and friends might accept NaN, so we
+							 * can't use that to test.
+							 *
+							 * In reality we only need to defend against
+							 * infinity and NaN, so we need not get too crazy
+							 * about pattern matching here.
+							 */
+							const char *s = PQgetvalue(res, tuple, field);
+
+							if (strspn(s, "0123456789 +-eE.") == strlen(s))
+								archputs(s, fout);
+							else
+								archprintf(fout, "'%s'", s);
+						}
+						break;
+
+					case BITOID:
+					case VARBITOID:
+						archprintf(fout, "B'%s'",
+								   PQgetvalue(res, tuple, field));
+						break;
+
+					case BOOLOID:
+						if (strcmp(PQgetvalue(res, tuple, field), "t") == 0)
+							archputs("true", fout);
+						else
+							archputs("false", fout);
+						break;
+
+					default:
+						/* All other types are printed as string literals. */
+						resetPQExpBuffer(q);
+						appendStringLiteralAH(q,
+											  PQgetvalue(res, tuple, field),
+											  fout);
+						archputs(q->data, fout);
+						break;
+				}
+					}
+			if (tuple < ltuple)
+				archputs(")\n", fout);
+
+			}
+			if (!dopt->do_nothing)
+				archputs(");\n", fout);
+			else
+				archputs(") ON CONFLICT DO NOTHING;\n", fout);
+			}
+		if (PQntuples(res) <= 0)
+		{
+			PQclear(res);
+			break;
+		}
+		PQclear(res);
+	}
+
+	archputs("\n\n", fout);
+
+	ExecuteSqlStatement(fout, "CLOSE _pg_dump_cursor");
+
+	destroyPQExpBuffer(q);
+	destroyPQExpBuffer(i);
+	if (insertStmt != NULL)
+		destroyPQExpBuffer(insertStmt);
+
+	return 1;
+}
+
+/*
  * getRootTableInfo:
  *     get the root TableInfo for the given partition table.
  */
@@ -2112,7 +2315,7 @@ dumpTableData(Archive *fout, TableDataInfo *tdinfo)
 	char	   *copyStmt;
 	const char *copyFrom;
 
-	if (!dopt->dump_inserts)
+	if (!dopt->dump_inserts && !dopt->dump_inserts_multiple)
 	{
 		/* Dump/restore using COPY */
 		dumpFn = dumpTableData_copy;
@@ -2139,6 +2342,12 @@ dumpTableData(Archive *fout, TableDataInfo *tdinfo)
 						  fmtCopyColumnList(tbinfo, clistBuf),
 						  (tdinfo->oids && tbinfo->hasoids) ? "WITH OIDS " : "");
 		copyStmt = copyBuf->data;
+	}
+	else if (dopt->dump_inserts_multiple)
+	{
+		/* Restore using multiple values INSERT */
+		dumpFn = dumpTableData_insert_multiple;
+		copyStmt = NULL;
 	}
 	else
 	{

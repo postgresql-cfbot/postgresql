@@ -100,7 +100,7 @@ my %replace_line = (
 	'returning_clauseRETURNINGtarget_list' =>
 	  'RETURNING target_list opt_ecpg_into',
 	'ExecuteStmtEXECUTEnameexecute_param_clause' =>
-	  'EXECUTE prepared_name execute_param_clause execute_rest',
+	  'EXECUTE prepared_name execute_rest',
 	'ExecuteStmtCREATEOptTempTABLEcreate_as_targetASEXECUTEnameexecute_param_clause'
 	  => 'CREATE OptTemp TABLE create_as_target AS EXECUTE prepared_name execute_param_clause',
 	'PrepareStmtPREPAREnameprep_type_clauseASPreparableStmt' =>

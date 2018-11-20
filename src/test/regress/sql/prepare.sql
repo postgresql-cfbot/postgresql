@@ -36,6 +36,9 @@ PREPARE q2(text) AS
 
 EXECUTE q2('postgres');
 
+-- the SQL standard way of passing parameters, with USING
+EXECUTE q2 USING 'postgres';
+
 PREPARE q3(text, int, float, boolean, oid, smallint) AS
 	SELECT * FROM tenk1 WHERE string4 = $1 AND (four = $2 OR
 	ten = $3::bigint OR true = $4 OR oid = $5 OR odd = $6::int)

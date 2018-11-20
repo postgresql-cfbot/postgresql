@@ -302,29 +302,64 @@ if (sqlca.sqlcode < 0) sqlprint();}
 		printf("name[%d]=%8.8s\tamount[%d]=%d\tletter[%d]=%c\n", i, n, i, a, i, l);
 	}
 
-	{ ECPGdeallocate(__LINE__, 0, NULL, "f");
-#line 107 "execute.pgc"
+	/* test the non-standard syntax of passing parameters without USING */
+	{ ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_execute, "f", 
+	ECPGt_const,"2",(long)1,(long)1,strlen("2"), 
+	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EOIT, 
+	ECPGt_char,(name),(long)8,(long)8,(8)*sizeof(char), 
+	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, 
+	ECPGt_int,(amount),(long)1,(long)8,sizeof(int), 
+	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, 
+	ECPGt_char,(letter),(long)1,(long)8,(1)*sizeof(char), 
+	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EORT);
+#line 108 "execute.pgc"
 
 if (sqlca.sqlcode < 0) sqlprint();}
-#line 107 "execute.pgc"
+#line 108 "execute.pgc"
+
+
+	for (i=0, j=sqlca.sqlerrd[2]; i<j; i++)
+	{
+		/* exec sql begin declare section */
+		    
+		   
+		
+#line 113 "execute.pgc"
+ char n [ 8 ] , l = letter [ i ] [ 0 ] ;
+ 
+#line 114 "execute.pgc"
+ int a = amount [ i ] ;
+/* exec sql end declare section */
+#line 115 "execute.pgc"
+
+
+		strncpy(n, name[i], 8);
+		printf("name[%d]=%8.8s\tamount[%d]=%d\tletter[%d]=%c\n", i, n, i, a, i, l);
+	}
+
+	{ ECPGdeallocate(__LINE__, 0, NULL, "f");
+#line 121 "execute.pgc"
+
+if (sqlca.sqlcode < 0) sqlprint();}
+#line 121 "execute.pgc"
 
 	{ ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "drop table test", ECPGt_EOIT, ECPGt_EORT);
-#line 108 "execute.pgc"
+#line 122 "execute.pgc"
 
 if (sqlca.sqlcode < 0) sqlprint();}
-#line 108 "execute.pgc"
+#line 122 "execute.pgc"
 
 	{ ECPGtrans(__LINE__, NULL, "commit");
-#line 109 "execute.pgc"
+#line 123 "execute.pgc"
 
 if (sqlca.sqlcode < 0) sqlprint();}
-#line 109 "execute.pgc"
+#line 123 "execute.pgc"
 
 	{ ECPGdisconnect(__LINE__, "CURRENT");
-#line 110 "execute.pgc"
+#line 124 "execute.pgc"
 
 if (sqlca.sqlcode < 0) sqlprint();}
-#line 110 "execute.pgc"
+#line 124 "execute.pgc"
 
 
 	return 0;

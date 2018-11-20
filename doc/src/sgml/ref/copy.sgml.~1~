@@ -366,17 +366,6 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     </listitem>
    </varlistentry>
 
-   <varlistentry>
-    <term><literal>IGNORE_CONFLICTS</literal></term>
-    <listitem>
-     <para>
-      specifies ignore to error up to specified amount .
-      Instead write the error record to failed record file and 
-      precede to the next record
-     </para>
-    </listitem>
-   </varlistentry>
-
   </variablelist>
  </refsect1>
 

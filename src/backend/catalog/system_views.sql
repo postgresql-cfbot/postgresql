@@ -903,6 +903,35 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
 		LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_progress_cluster AS
+    SELECT
+        S.pid AS pid,
+        S.datid AS datid,
+        D.datname AS datname,
+        S.relid AS relid,
+        CASE S.param1 WHEN 1 THEN 'CLUSTER'
+                      WHEN 2 THEN 'VACUUM FULL'
+                      END AS command,
+        CASE S.param2 WHEN 0 THEN 'initializing'
+                      WHEN 1 THEN 'scanning heap'
+                      WHEN 2 THEN 'sorting tuples'
+                      WHEN 3 THEN 'writing new heap'
+                      WHEN 4 THEN 'scan heap and write new heap'
+                      WHEN 5 THEN 'swapping relation files'
+                      WHEN 6 THEN 'rebuilding index'
+                      WHEN 7 THEN 'performing final cleanup'
+                      END AS phase,
+        CASE S.param3 WHEN 1 THEN 'index scan'
+                      WHEN 2 THEN 'seq scan'
+                      END AS scan_method,
+        S.param4 AS cluster_index_relid,
+        S.param5 AS heap_tuples_total,
+        S.param6 AS heap_tuples_scanned,
+        S.param7 AS heap_tuples_vacuumed,
+        S.param8 AS heap_tuples_recently_dead
+    FROM pg_stat_get_progress_info('CLUSTER') AS S
+        LEFT JOIN pg_database D ON S.datid = D.oid;
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,

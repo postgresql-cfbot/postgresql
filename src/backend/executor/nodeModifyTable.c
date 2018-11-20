@@ -46,6 +46,7 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
@@ -243,6 +244,84 @@ ExecCheckTIDVisible(EState *estate,
 	ReleaseBuffer(buffer);
 }
 
+HeapTuple
+ExecComputeStoredGenerated(EState *estate, TupleTableSlot *slot)
+{
+	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	Relation	rel = resultRelInfo->ri_RelationDesc;
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			natts = tupdesc->natts;
+	Datum	   *values;
+	bool	   *nulls;
+	bool	   *replaces;
+	bool		any_changes = false;
+
+	values = palloc(sizeof(*values) * natts);
+	nulls = palloc(sizeof(*nulls) * natts);
+	replaces = palloc0(sizeof(*replaces) * natts);
+
+	/*
+	 * If first time through for this result relation, build expression
+	 * nodetrees for rel's stored generation expressions.  Keep them in the
+	 * per-query memory context so they'll survive throughout the query.
+	 */
+	if (resultRelInfo->ri_GeneratedExprs == NULL)
+	{
+		MemoryContext oldContext;
+
+		oldContext = MemoryContextSwitchTo(estate->es_query_cxt);
+		resultRelInfo->ri_GeneratedExprs =
+			(ExprState **) palloc(natts * sizeof(ExprState *));
+
+		for (int i = 0; i < natts; i++)
+		{
+			if (TupleDescAttr(tupdesc, i)->attgenerated == ATTRIBUTE_GENERATED_STORED)
+			{
+				Expr	   *expr;
+
+				expr = (Expr *) build_column_default(rel, i + 1);
+				Assert(expr);
+
+				resultRelInfo->ri_GeneratedExprs[i] = ExecPrepareExpr(expr, estate);
+			}
+		}
+
+		MemoryContextSwitchTo(oldContext);
+	}
+
+	for (int i = 0; i < natts; i++)
+	{
+		if (TupleDescAttr(tupdesc, i)->attgenerated == ATTRIBUTE_GENERATED_STORED)
+		{
+			ExprContext *econtext;
+			Datum		val;
+			bool		isnull;
+
+			econtext = GetPerTupleExprContext(estate);
+			econtext->ecxt_scantuple = slot;
+
+			val = ExecEvalExprSwitchContext(resultRelInfo->ri_GeneratedExprs[i], econtext, &isnull);
+
+			values[i] = val;
+			nulls[i] = isnull;
+			replaces[i] = true;
+			any_changes = true;
+		}
+	}
+
+	if (any_changes)
+	{
+		HeapTuple	tuple;
+
+		tuple = ExecFetchSlotTuple(slot);
+		tuple = heap_modify_tuple(tuple, tupdesc, values, nulls, replaces);
+		ExecStoreHeapTuple(tuple, slot, false);
+		return tuple;
+	}
+
+	return NULL;
+}
+
 /* ----------------------------------------------------------------
  *		ExecInsert
  *
@@ -364,6 +443,16 @@ ExecInsert(ModifyTableState *mtstate,
 		 * t_tableOid before evaluating them.
 		 */
 		tuple->t_tableOid = RelationGetRelid(resultRelationDesc);
+
+		/*
+		 * Compute stored generated columns
+		 */
+		if (resultRelationDesc->rd_att->constr &&
+			resultRelationDesc->rd_att->constr->has_generated)
+		{
+			ExecComputeStoredGenerated(estate, slot);
+			tuple = ExecMaterializeSlot(slot);
+		}
 
 		/*
 		 * Check any RLS WITH CHECK policies.
@@ -1019,6 +1108,16 @@ ExecUpdate(ModifyTableState *mtstate,
 		 * t_tableOid before evaluating them.
 		 */
 		tuple->t_tableOid = RelationGetRelid(resultRelationDesc);
+
+		/*
+		 * Compute stored generated columns
+		 */
+		if (resultRelationDesc->rd_att->constr &&
+			resultRelationDesc->rd_att->constr->has_generated)
+		{
+			ExecComputeStoredGenerated(estate, slot);
+			tuple = ExecMaterializeSlot(slot);
+		}
 
 		/*
 		 * Check any RLS UPDATE WITH CHECK policies

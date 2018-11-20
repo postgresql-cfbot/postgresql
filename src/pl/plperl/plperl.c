@@ -1791,6 +1791,11 @@ plperl_modify_tuple(HV *hvTD, TriggerData *tdata, HeapTuple otup)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot set system attribute \"%s\"",
 							key)));
+		if (attr->attgenerated)
+			ereport(ERROR,
+					(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+					 errmsg("cannot set generated column \"%s\"",
+							key)));
 
 		modvalues[attn - 1] = plperl_sv_to_datum(val,
 												 attr->atttypid,
@@ -3041,7 +3046,7 @@ plperl_hash_from_tuple(HeapTuple tuple, TupleDesc tupdesc)
 		Oid			typoutput;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
 			continue;
 
 		attname = NameStr(att->attname);

@@ -1987,6 +1987,11 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 			{
 				if (field > 0)
 					archputs(", ", fout);
+				if (tbinfo->attgenerated[field])
+				{
+					archputs("DEFAULT", fout);
+					continue;
+				}
 				if (PQgetisnull(res, tuple, field))
 				{
 					archputs("NULL", fout);
@@ -8135,6 +8140,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_attnotnull;
 	int			i_atthasdef;
 	int			i_attidentity;
+	int			i_attgenerated;
 	int			i_attisdropped;
 	int			i_attlen;
 	int			i_attalign;
@@ -8187,6 +8193,13 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 						  "a.attalign,\n"
 						  "a.attislocal,\n"
 						  "pg_catalog.format_type(t.oid, a.atttypmod) AS atttypname,\n");
+
+		if (fout->remoteVersion >= 120000)
+			appendPQExpBuffer(q,
+							  "a.attgenerated,\n");
+		else
+			appendPQExpBuffer(q,
+							  "'' AS attgenerated,\n");
 
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBuffer(q,
@@ -8260,6 +8273,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		i_attnotnull = PQfnumber(res, "attnotnull");
 		i_atthasdef = PQfnumber(res, "atthasdef");
 		i_attidentity = PQfnumber(res, "attidentity");
+		i_attgenerated = PQfnumber(res, "attgenerated");
 		i_attisdropped = PQfnumber(res, "attisdropped");
 		i_attlen = PQfnumber(res, "attlen");
 		i_attalign = PQfnumber(res, "attalign");
@@ -8277,6 +8291,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attstorage = (char *) pg_malloc(ntups * sizeof(char));
 		tbinfo->typstorage = (char *) pg_malloc(ntups * sizeof(char));
 		tbinfo->attidentity = (char *) pg_malloc(ntups * sizeof(char));
+		tbinfo->attgenerated = (char *) pg_malloc(ntups * sizeof(char));
 		tbinfo->attisdropped = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attlen = (int *) pg_malloc(ntups * sizeof(int));
 		tbinfo->attalign = (char *) pg_malloc(ntups * sizeof(char));
@@ -8303,6 +8318,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attstorage[j] = *(PQgetvalue(res, j, i_attstorage));
 			tbinfo->typstorage[j] = *(PQgetvalue(res, j, i_typstorage));
 			tbinfo->attidentity[j] = *(PQgetvalue(res, j, i_attidentity));
+			tbinfo->attgenerated[j] = *(PQgetvalue(res, j, i_attgenerated));
 			tbinfo->needs_override = tbinfo->needs_override || (tbinfo->attidentity[j] == ATTRIBUTE_IDENTITY_ALWAYS);
 			tbinfo->attisdropped[j] = (PQgetvalue(res, j, i_attisdropped)[0] == 't');
 			tbinfo->attlen[j] = atoi(PQgetvalue(res, j, i_attlen));
@@ -15578,6 +15594,23 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 										  tbinfo->atttypnames[j]);
 					}
 
+					if (has_default)
+					{
+						if (tbinfo->attgenerated[j] == ATTRIBUTE_GENERATED_STORED)
+							appendPQExpBuffer(q, " GENERATED ALWAYS AS (%s) STORED",
+											  tbinfo->attrdefs[j]->adef_expr);
+						else if (tbinfo->attgenerated[j] == ATTRIBUTE_GENERATED_VIRTUAL)
+							appendPQExpBuffer(q, " GENERATED ALWAYS AS (%s)",
+											  tbinfo->attrdefs[j]->adef_expr);
+						else
+							appendPQExpBuffer(q, " DEFAULT %s",
+											  tbinfo->attrdefs[j]->adef_expr);
+					}
+
+
+					if (has_notnull)
+						appendPQExpBufferStr(q, " NOT NULL");
+
 					/* Add collation if not default for the type */
 					if (OidIsValid(tbinfo->attcollation[j]))
 					{
@@ -15588,13 +15621,6 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 							appendPQExpBuffer(q, " COLLATE %s",
 											  fmtQualifiedDumpable(coll));
 					}
-
-					if (has_default)
-						appendPQExpBuffer(q, " DEFAULT %s",
-										  tbinfo->attrdefs[j]->adef_expr);
-
-					if (has_notnull)
-						appendPQExpBufferStr(q, " NOT NULL");
 				}
 			}
 
@@ -18141,6 +18167,7 @@ fmtCopyColumnList(const TableInfo *ti, PQExpBuffer buffer)
 	int			numatts = ti->numatts;
 	char	  **attnames = ti->attnames;
 	bool	   *attisdropped = ti->attisdropped;
+	char	   *attgenerated = ti->attgenerated;
 	bool		needComma;
 	int			i;
 
@@ -18149,6 +18176,8 @@ fmtCopyColumnList(const TableInfo *ti, PQExpBuffer buffer)
 	for (i = 0; i < numatts; i++)
 	{
 		if (attisdropped[i])
+			continue;
+		if (attgenerated[i])
 			continue;
 		if (needComma)
 			appendPQExpBufferStr(buffer, ", ");

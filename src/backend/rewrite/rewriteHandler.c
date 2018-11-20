@@ -20,6 +20,7 @@
  */
 #include "postgres.h"
 
+#include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_type.h"
@@ -38,6 +39,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 
 /* We use a list of these to detect recursion in RewriteQuery */
@@ -830,6 +832,13 @@ rewriteTargetListIU(List *targetList,
 
 			if (att_tup->attidentity == ATTRIBUTE_IDENTITY_BY_DEFAULT && override == OVERRIDING_USER_VALUE)
 				apply_default = true;
+
+			if (att_tup->attgenerated && !apply_default)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("cannot insert into column \"%s\"", NameStr(att_tup->attname)),
+						 errdetail("Column \"%s\" is a generated column.",
+								   NameStr(att_tup->attname))));
 		}
 
 		if (commandType == CMD_UPDATE)
@@ -840,9 +849,24 @@ rewriteTargetListIU(List *targetList,
 						 errmsg("column \"%s\" can only be updated to DEFAULT", NameStr(att_tup->attname)),
 						 errdetail("Column \"%s\" is an identity column defined as GENERATED ALWAYS.",
 								   NameStr(att_tup->attname))));
+
+			if (att_tup->attgenerated && new_tle && !apply_default)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("column \"%s\" can only be updated to DEFAULT", NameStr(att_tup->attname)),
+						 errdetail("Column \"%s\" is a generated column.",
+								   NameStr(att_tup->attname))));
 		}
 
-		if (apply_default)
+		if (att_tup->attgenerated)
+		{
+			/*
+			 * virtual generated column stores a null value; stored generated
+			 * column will be fixed in executor
+			 */
+			new_tle = NULL;
+		}
+		else if (apply_default)
 		{
 			Node	   *new_expr;
 
@@ -1147,13 +1171,12 @@ build_column_default(Relation rel, int attrno)
 		}
 	}
 
-	if (expr == NULL)
-	{
-		/*
-		 * No per-column default, so look for a default for the type itself.
-		 */
+	/*
+	 * No per-column default, so look for a default for the type itself.  But
+	 * not for generated columns.
+	 */
+	if (expr == NULL && !att_tup->attgenerated)
 		expr = get_typdefault(atttype);
-	}
 
 	if (expr == NULL)
 		return NULL;			/* No default anywhere */
@@ -3676,6 +3699,103 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 }
 
 
+static Node *
+expand_generated_columns_in_expr_mutator(Node *node, Relation rel)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		Var *v = (Var *) node;
+		AttrNumber	attnum = v->varattno;
+
+		if (attnum > 0 && TupleDescAttr(RelationGetDescr(rel), attnum - 1)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		{
+			node = build_column_default(rel, attnum);
+			if (node == NULL)
+				elog(ERROR, "no generation expression found for column number %d of table \"%s\"",
+					 attnum, RelationGetRelationName(rel));
+			ChangeVarNodes(node, 1, v->varno, 0);
+		}
+
+		return node;
+	}
+	else
+		return expression_tree_mutator(node, expand_generated_columns_in_expr_mutator, rel);
+}
+
+
+Node *
+expand_generated_columns_in_expr(Node *node, Relation rel)
+{
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+
+	if (tupdesc->constr && tupdesc->constr->has_generated)
+		return expression_tree_mutator(node,
+									   expand_generated_columns_in_expr_mutator,
+									   rel);
+	else
+		return node;
+}
+
+typedef struct
+{
+	/* list of range tables, innermost last */
+	List       *rtables;
+} expand_generated_context;
+
+static Node *
+expand_generated_columns_in_query_mutator(Node *node, expand_generated_context *context)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		Var *v = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+		List	   *rtable = list_nth_node(List,
+										   context->rtables,
+										   list_length(context->rtables) - v->varlevelsup - 1);
+
+		relid = rt_fetch(v->varno, rtable)->relid;
+		attnum = v->varattno;
+
+		if (!relid || !attnum)
+			return node;
+
+		if (get_attgenerated(relid, attnum) == ATTRIBUTE_GENERATED_VIRTUAL)
+		{
+			Relation rt_entry_relation = heap_open(relid, NoLock);
+
+			node = build_column_default(rt_entry_relation, attnum);
+			ChangeVarNodes(node, 1, v->varno, v->varlevelsup);
+
+			heap_close(rt_entry_relation, NoLock);
+		}
+
+		return node;
+	}
+	else if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+		Node	   *result;
+
+		context->rtables = lappend(context->rtables, query->rtable);
+		result = (Node *) query_tree_mutator(query,
+											 expand_generated_columns_in_query_mutator,
+											 context,
+											 QTW_DONT_COPY_QUERY);
+		context->rtables = list_truncate(context->rtables, list_length(context->rtables) - 1);
+		return result;
+	}
+	else
+		return expression_tree_mutator(node, expand_generated_columns_in_query_mutator, context);
+}
+
+
 /*
  * QueryRewrite -
  *	  Primary entry point to the query rewriter.
@@ -3730,6 +3850,24 @@ QueryRewrite(Query *parsetree)
 
 	/*
 	 * Step 3
+	 *
+	 * Expand generated columns.
+	 */
+	foreach(l, querylist)
+	{
+		Query	   *query = (Query *) lfirst(l);
+		expand_generated_context context;
+
+		context.rtables = list_make1(query->rtable);
+
+		query = query_tree_mutator(query,
+								   expand_generated_columns_in_query_mutator,
+								   &context,
+								   QTW_DONT_COPY_QUERY);
+	}
+
+	/*
+	 * Step 4
 	 *
 	 * Determine which, if any, of the resulting queries is supposed to set
 	 * the command-result tag; and update the canSetTag fields accordingly.

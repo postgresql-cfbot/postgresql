@@ -743,6 +743,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (colDef->identity)
 			attr->attidentity = colDef->identity;
+
+		if (colDef->generated)
+			attr->attgenerated = colDef->generated;
 	}
 
 	/*
@@ -787,6 +790,27 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * complaining about deadlock risks.
 	 */
 	rel = relation_open(relationId, AccessExclusiveLock);
+
+	/*
+	 * Now add any newly specified column default and generation expressions
+	 * to the new relation.  These are passed to us in the form of raw
+	 * parsetrees; we need to transform them to executable expression trees
+	 * before they can be added. The most convenient way to do that is to
+	 * apply the parser's transformExpr routine, but transformExpr doesn't
+	 * work unless we have a pre-existing relation. So, the transformation has
+	 * to be postponed to this final step of CREATE TABLE.
+	 *
+	 * This needs to be before processing the partitioning clauses because
+	 * those could refer to generated columns.
+	 */
+	if (rawDefaults)
+		AddRelationNewConstraints(rel, rawDefaults, NIL,
+								  true, true, false, queryString);
+
+	/*
+	 * Make column generation expressions visible for use by partitioning.
+	 */
+	CommandCounterIncrement();
 
 	/* Process and store partition bound, if any. */
 	if (stmt->partbound)
@@ -980,16 +1004,12 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
-	 * Now add any newly specified column default values and CHECK constraints
-	 * to the new relation.  These are passed to us in the form of raw
-	 * parsetrees; we need to transform them to executable expression trees
-	 * before they can be added. The most convenient way to do that is to
-	 * apply the parser's transformExpr routine, but transformExpr doesn't
-	 * work unless we have a pre-existing relation. So, the transformation has
-	 * to be postponed to this final step of CREATE TABLE.
+	 * Now add any newly specified CHECK constraints to the new relation.
+	 * Same as for defaults above, but these need to come after partitioning
+	 * is set up.
 	 */
-	if (rawDefaults || stmt->constraints)
-		AddRelationNewConstraints(rel, rawDefaults, stmt->constraints,
+	if (stmt->constraints)
+		AddRelationNewConstraints(rel, NIL, stmt->constraints,
 								  true, true, false, queryString);
 
 	ObjectAddressSet(address, RelationRelationId, relationId);
@@ -2163,6 +2183,13 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->is_not_null |= attribute->attnotnull;
 				/* Default and other constraints are handled below */
 				newattno[parent_attno - 1] = exist_attno;
+
+				/* Check for GENERATED conflicts */
+				if (def->generated != attribute->attgenerated)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("inherited column \"%s\" has a generation conflict",
+									attributeName)));
 			}
 			else
 			{
@@ -2180,6 +2207,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->storage = attribute->attstorage;
 				def->raw_default = NULL;
 				def->cooked_default = NULL;
+				def->generated = attribute->attgenerated;
 				def->collClause = NULL;
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
@@ -4650,7 +4678,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		{
 			case CONSTR_CHECK:
 				needscan = true;
-				con->qualstate = ExecPrepareExpr((Expr *) con->qual, estate);
+				con->qualstate = ExecPrepareExpr((Expr *) expand_generated_columns_in_expr(con->qual,
+																				  newrel ? newrel : oldrel),
+												 estate);
 				break;
 			case CONSTR_FOREIGN:
 				/* Nothing to do here */
@@ -5549,6 +5579,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.atthasdef = false;
 	attribute.atthasmissing = false;
 	attribute.attidentity = colDef->identity;
+	attribute.attgenerated = colDef->generated;
 	attribute.attisdropped = false;
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
@@ -5958,6 +5989,18 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
+	/*
+	 * Virtual generated columns don't use the attnotnull field but use a full
+	 * CHECK constraint instead.  We could implement here that it finds that
+	 * CHECK constraint and drops it, which is kind of what the SQL standard
+	 * would require anyway, but that would be quite a bit more work.
+	 */
+	if (attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot use DROP NOT NULL on virtual generated column \"%s\"",
+						colName)));
+
 	if (attTup->attidentity)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
@@ -6107,6 +6150,17 @@ ATExecSetNotNull(AlteredTableInfo *tab, Relation rel,
 						colName)));
 
 	/*
+	 * XXX We might want to convert this to a CHECK constraint like we do in
+	 * transformColumnDefinition().
+	 */
+	if (((Form_pg_attribute) GETSTRUCT(tuple))->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot use SET NOT NULL on virtual generated column \"%s\"",
+						colName),
+				 errhint("Add a CHECK constraint instead.")));
+
+	/*
 	 * Okay, actually perform the catalog change ... if needed
 	 */
 	if (!((Form_pg_attribute) GETSTRUCT(tuple))->attnotnull)
@@ -6168,6 +6222,12 @@ ATExecColumnDefault(Relation rel, const char *colName,
 				 errmsg("column \"%s\" of relation \"%s\" is an identity column",
 						colName, RelationGetRelationName(rel)),
 				 newDefault ? 0 : errhint("Use ALTER TABLE ... ALTER COLUMN ... DROP IDENTITY instead.")));
+
+	if (TupleDescAttr(tupdesc, attnum - 1)->attgenerated)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is a generated column",
+						colName, RelationGetRelationName(rel))));
 
 	/*
 	 * Remove any old default for the column.  We use RESTRICT here for
@@ -7484,6 +7544,41 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	checkFkeyPermissions(pkrel, pkattnum, numpks);
 
 	/*
+	 * Check some things for generated columns.
+	 */
+	for (i = 0; i < numfks; i++)
+	{
+		char		attgenerated = TupleDescAttr(RelationGetDescr(rel), fkattnum[i] - 1)->attgenerated;
+
+		if (attgenerated)
+		{
+			/*
+			 * Check restrictions on UPDATE/DELETE actions, per SQL standard
+			 */
+			if (fkconstraint->fk_upd_action == FKCONSTR_ACTION_SETNULL ||
+				fkconstraint->fk_upd_action == FKCONSTR_ACTION_SETDEFAULT ||
+				fkconstraint->fk_upd_action == FKCONSTR_ACTION_CASCADE)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid ON UPDATE action for foreign key constraint containing generated column")));
+			if (fkconstraint->fk_del_action == FKCONSTR_ACTION_SETNULL ||
+				fkconstraint->fk_del_action == FKCONSTR_ACTION_SETDEFAULT)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid ON DELETE action for foreign key constraint containing generated column")));
+		}
+
+		/*
+		 * FKs on virtual columns are not supported, does not have support in
+		 * ri_triggers.c
+		 */
+		if (attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("foreign key constraints on virtual generated columns are not supported")));
+	}
+
+	/*
 	 * Look up the equality operators to use in the constraint.
 	 *
 	 * Note that we have to be careful about the difference between the actual
@@ -8487,7 +8582,7 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	EState	   *estate;
 	Datum		val;
 	char	   *conbin;
-	Expr	   *origexpr;
+	Node	   *origexpr;
 	ExprState  *exprstate;
 	TupleDesc	tupdesc;
 	HeapScanDesc scan;
@@ -8522,8 +8617,8 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 		elog(ERROR, "null conbin for constraint %u",
 			 HeapTupleGetOid(constrtup));
 	conbin = TextDatumGetCString(val);
-	origexpr = (Expr *) stringToNode(conbin);
-	exprstate = ExecPrepareExpr(origexpr, estate);
+	origexpr = stringToNode(conbin);
+	exprstate = ExecPrepareExpr((Expr *) expand_generated_columns_in_expr(origexpr, rel), estate);
 
 	econtext = GetPerTupleExprContext(estate);
 	tupdesc = RelationGetDescr(rel);
@@ -9172,8 +9267,9 @@ ATPrepAlterColumnType(List **wqueue,
 					   list_make1_oid(rel->rd_rel->reltype),
 					   false);
 
-	if (tab->relkind == RELKIND_RELATION ||
-		tab->relkind == RELKIND_PARTITIONED_TABLE)
+	if ((tab->relkind == RELKIND_RELATION ||
+		 tab->relkind == RELKIND_PARTITIONED_TABLE) &&
+		attTup->attgenerated != ATTRIBUTE_GENERATED_VIRTUAL)
 	{
 		/*
 		 * Set up an expression to transform the old data value to the new
@@ -9447,10 +9543,18 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 											COERCE_IMPLICIT_CAST,
 											-1);
 		if (defaultexpr == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("default for column \"%s\" cannot be cast automatically to type %s",
-							colName, format_type_be(targettype))));
+		{
+			if (attTup->attgenerated)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("generation expression for column \"%s\" cannot be cast automatically to type %s",
+								colName, format_type_be(targettype))));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("default for column \"%s\" cannot be cast automatically to type %s",
+								colName, format_type_be(targettype))));
+		}
 	}
 	else
 		defaultexpr = NULL;
@@ -9525,6 +9629,21 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						 * not do anything to it.
 						 */
 						Assert(foundObject.objectSubId == 0);
+					}
+					else if (relKind == RELKIND_RELATION &&
+							 foundObject.objectSubId != 0 &&
+							 get_attgenerated(foundObject.objectId, foundObject.objectSubId))
+					{
+						/*
+						 * Changing the type of a column that is used by a
+						 * generated column is not allowed by SQL standard.
+						 * It might be doable with some thinking and effort.
+						 */
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("cannot alter type of a column used by a generated column"),
+								 errdetail("Column \"%s\" is used by generated column \"%s\".",
+										   colName, get_attname(foundObject.objectId, foundObject.objectSubId, false))));
 					}
 					else
 					{
@@ -9670,7 +9789,8 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	/*
 	 * Now scan for dependencies of this column on other things.  The only
 	 * thing we should find is the dependency on the column datatype, which we
-	 * want to remove, and possibly a collation dependency.
+	 * want to remove, possibly a collation dependency, and dependencies on
+	 * other columns if it is a generated column.
 	 */
 	ScanKeyInit(&key[0],
 				Anum_pg_depend_classid,
@@ -9691,15 +9811,26 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	while (HeapTupleIsValid(depTup = systable_getnext(scan)))
 	{
 		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
+		ObjectAddress foundObject;
 
-		if (foundDep->deptype != DEPENDENCY_NORMAL)
+		foundObject.classId = foundDep->refclassid;
+		foundObject.objectId = foundDep->refobjid;
+		foundObject.objectSubId = foundDep->refobjsubid;
+
+		if (foundDep->deptype != DEPENDENCY_NORMAL &&
+			foundDep->deptype != DEPENDENCY_AUTO)
 			elog(ERROR, "found unexpected dependency type '%c'",
 				 foundDep->deptype);
 		if (!(foundDep->refclassid == TypeRelationId &&
 			  foundDep->refobjid == attTup->atttypid) &&
 			!(foundDep->refclassid == CollationRelationId &&
-			  foundDep->refobjid == attTup->attcollation))
-			elog(ERROR, "found unexpected dependency for column");
+			  foundDep->refobjid == attTup->attcollation) &&
+			!(foundDep->refclassid == RelationRelationId &&
+			  foundDep->refobjid == RelationGetRelid(rel) &&
+			  foundDep->refobjsubid != 0)
+			)
+			elog(ERROR, "found unexpected dependency for column: %s",
+				 getObjectDescription(&foundObject));
 
 		CatalogTupleDelete(depRel, &depTup->t_self);
 	}
@@ -13806,6 +13937,18 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 								pelem->name),
 						 parser_errposition(pstate, pelem->location)));
 
+			/*
+			 * Some generated columns could perhaps be supported in partition
+			 * expressions instead; see below.
+			 */
+			if (attform->attgenerated)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("using generated column in partition key is not supported"),
+						 errdetail("Column \"%s\" is a generated column.",
+								   pelem->name),
+						 parser_errposition(pstate, pelem->location)));
+
 			partattrs[attn] = attform->attnum;
 			atttype = attform->atttypid;
 			attcollation = attform->attcollation;
@@ -13891,6 +14034,36 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 						ereport(ERROR,
 								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 								 errmsg("partition key expressions cannot contain system column references")));
+				}
+
+				/*
+				 * Generated columns in partition key expressions:
+				 *
+				 * - Stored generated columns cannot work: They are computed
+				 *   after BEFORE triggers, but partition routing is done
+				 *   before all triggers.
+				 *
+				 * - Virtual generated columns could work.  But there is a
+				 *   problem when dropping such a table: Dropping a table
+				 *   calls relation_open(), which causes partition keys to be
+				 *   constructed for the partcache, but at that point the
+				 *   generation expression is already deleted (through
+				 *   dependencies), so this will fail.  So if you remove the
+				 *   restriction below, things will appear to work, but you
+				 *   can't drop the table. :-(
+				 */
+				i = -1;
+				while ((i = bms_next_member(expr_attrs, i)) >= 0)
+				{
+					AttrNumber  attno = i + FirstLowInvalidHeapAttributeNumber;
+
+					if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("using generated column in partition key is not supported"),
+								 errdetail("Column \"%s\" is a generated column.",
+										   get_attname(RelationGetRelid(rel), attno, false)),
+								 parser_errposition(pstate, pelem->location)));
 				}
 
 				/*

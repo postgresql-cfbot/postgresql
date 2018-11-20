@@ -750,6 +750,9 @@ DefineIndex(Oid relationId,
 	/*
 	 * We disallow indexes on system columns other than OID.  They would not
 	 * necessarily get updated correctly, and they don't seem useful anyway.
+	 *
+	 * Also disallow virtual generated columns in indexes (use expression
+	 * index instead).
 	 */
 	for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 	{
@@ -759,10 +762,16 @@ DefineIndex(Oid relationId,
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("index creation on system columns is not supported")));
+
+		if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("index creation on virtual generated columns is not supported")));
 	}
 
 	/*
-	 * Also check for system columns used in expressions or predicates.
+	 * Also check for system and generated columns used in expressions or
+	 * predicates.
 	 */
 	if (indexInfo->ii_Expressions || indexInfo->ii_Predicate)
 	{
@@ -779,6 +788,22 @@ DefineIndex(Oid relationId,
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("index creation on system columns is not supported")));
+		}
+
+		/*
+		 * XXX Virtual generated columns in index expressions or predicates
+		 * could be supported, but it needs support in
+		 * RelationGetIndexExpressions() and RelationGetIndexPredicate().
+		 */
+		i = -1;
+		while ((i = bms_next_member(indexattrs, i)) >= 0)
+		{
+			AttrNumber  attno = i + FirstLowInvalidHeapAttributeNumber;
+
+			if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("index creation on virtual generated columns is not supported")));
 		}
 	}
 

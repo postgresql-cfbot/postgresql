@@ -122,6 +122,57 @@ CREATE TEXT SEARCH DICTIONARY thesaurus (
 
 SELECT ts_lexize('thesaurus', 'one');
 
+-- test dictionary pipeline in configuration
+CREATE TEXT SEARCH CONFIGURATION english_union(
+						COPY=english
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_union ALTER MAPPING FOR
+	asciiword
+	WITH english_stem UNION simple;
+
+SELECT to_tsvector('english_union', 'book');
+SELECT to_tsvector('english_union', 'books');
+SELECT to_tsvector('english_union', 'booking');
+
+CREATE TEXT SEARCH CONFIGURATION english_intersect(
+						COPY=english
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_intersect ALTER MAPPING FOR
+	asciiword
+	WITH english_stem INTERSECT simple;
+
+SELECT to_tsvector('english_intersect', 'book');
+SELECT to_tsvector('english_intersect', 'books');
+SELECT to_tsvector('english_intersect', 'booking');
+
+CREATE TEXT SEARCH CONFIGURATION english_except(
+						COPY=english
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_except ALTER MAPPING FOR
+	asciiword
+	WITH simple EXCEPT english_stem;
+
+SELECT to_tsvector('english_except', 'book');
+SELECT to_tsvector('english_except', 'books');
+SELECT to_tsvector('english_except', 'booking');
+
+CREATE TEXT SEARCH CONFIGURATION english_branches(
+						COPY=english
+);
+
+ALTER TEXT SEARCH CONFIGURATION english_branches ALTER MAPPING FOR
+	asciiword
+	WITH CASE ispell WHEN MATCH THEN KEEP
+		ELSE english_stem
+	END;
+
+SELECT to_tsvector('english_branches', 'book');
+SELECT to_tsvector('english_branches', 'books');
+SELECT to_tsvector('english_branches', 'booking');
+
 -- Test ispell dictionary in configuration
 CREATE TEXT SEARCH CONFIGURATION ispell_tst (
 						COPY=english
@@ -193,6 +244,50 @@ ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR
 SELECT to_tsvector('thesaurus_tst', 'one postgres one two one two three one');
 SELECT to_tsvector('thesaurus_tst', 'Supernovae star is very new star and usually called supernovae (abbreviation SN)');
 SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a tickets');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN MATCH THEN KEEP ELSE english_stem
+END;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH thesaurus UNION english_stem;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH simple UNION thesaurus;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN MATCH THEN simple UNION thesaurus
+	ELSE simple
+END;
+\dF+ thesaurus_tst
+SELECT to_tsvector('thesaurus_tst', 'one two');
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+SELECT to_tsvector('thesaurus_tst', 'one two four');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN NO MATCH THEN simple ELSE thesaurus
+END;
+\dF+ thesaurus_tst
+SELECT to_tsvector('thesaurus_tst', 'one two');
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+SELECT to_tsvector('thesaurus_tst', 'one two books');
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING
+	REPLACE simple WITH english_stem;
+SELECT to_tsvector('thesaurus_tst', 'one two');
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+SELECT to_tsvector('thesaurus_tst', 'one two books');
+
+CREATE TEXT SEARCH CONFIGURATION operators_tst (
+						COPY=thesaurus_tst
+);
+
+ALTER TEXT SEARCH CONFIGURATION operators_tst ALTER MAPPING FOR asciiword WITH english_stem UNION simple;
+SELECT to_tsvector('operators_tst', 'The Mysterious Rings of Supernova 1987A');
+
+ALTER TEXT SEARCH CONFIGURATION operators_tst ALTER MAPPING FOR asciiword WITH english_stem UNION (synonym, simple);
+SELECT to_tsvector('operators_tst', 'The Mysterious Rings of Supernova 1987A Postgres');
 
 -- invalid: non-lowercase quoted identifiers
 CREATE TEXT SEARCH DICTIONARY tsdict_case

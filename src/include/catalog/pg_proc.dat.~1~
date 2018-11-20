@@ -8834,19 +8834,6 @@
   prorettype => 'regconfig', proargtypes => '',
   prosrc => 'get_current_ts_config' },
 
-{ oid => '8891', descr => 'returns text representation of dictionary configuration map',
-  proname => 'dictionary_mapping_to_text', provolatile => 's',
-  prorettype => 'text', proargtypes => 'regconfig int4',
-  prosrc => 'dictionary_mapping_to_text' },
-
-{ oid => '8892', descr => 'debug function for a text search configuration',
-  proname => 'ts_debug', provolatile => 's',
-  prorettype => 'record', proargtypes => 'regconfig text',
-  proallargtypes => '{regconfig,text,text,text,text,_regdictionary,text,text,_text}',
-  proargmodes => '{i,i,o,o,o,o,o,o,o}',
-  proargnames => '{ftsconfig,inputext,alias,description,token,dictionaries,configuration,command,lexemes}',
-  prosrc => 'ts_debug' },
-
 { oid => '3736', descr => 'I/O',
   proname => 'regconfigin', provolatile => 's', prorettype => 'regconfig',
   proargtypes => 'cstring', prosrc => 'regconfigin' },

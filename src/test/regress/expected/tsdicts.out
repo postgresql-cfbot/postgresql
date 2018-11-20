@@ -450,6 +450,105 @@ SELECT ts_lexize('thesaurus', 'one');
  {1}
 (1 row)
 
+-- test dictionary pipeline in configuration
+CREATE TEXT SEARCH CONFIGURATION english_union(
+						COPY=english
+);
+ALTER TEXT SEARCH CONFIGURATION english_union ALTER MAPPING FOR
+	asciiword
+	WITH english_stem UNION simple;
+SELECT to_tsvector('english_union', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_union', 'books');
+    to_tsvector     
+--------------------
+ 'book':1 'books':1
+(1 row)
+
+SELECT to_tsvector('english_union', 'booking');
+     to_tsvector      
+----------------------
+ 'book':1 'booking':1
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION english_intersect(
+						COPY=english
+);
+ALTER TEXT SEARCH CONFIGURATION english_intersect ALTER MAPPING FOR
+	asciiword
+	WITH english_stem INTERSECT simple;
+SELECT to_tsvector('english_intersect', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_intersect', 'books');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+SELECT to_tsvector('english_intersect', 'booking');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION english_except(
+						COPY=english
+);
+ALTER TEXT SEARCH CONFIGURATION english_except ALTER MAPPING FOR
+	asciiword
+	WITH simple EXCEPT english_stem;
+SELECT to_tsvector('english_except', 'book');
+ to_tsvector 
+-------------
+ 
+(1 row)
+
+SELECT to_tsvector('english_except', 'books');
+ to_tsvector 
+-------------
+ 'books':1
+(1 row)
+
+SELECT to_tsvector('english_except', 'booking');
+ to_tsvector 
+-------------
+ 'booking':1
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION english_branches(
+						COPY=english
+);
+ALTER TEXT SEARCH CONFIGURATION english_branches ALTER MAPPING FOR
+	asciiword
+	WITH CASE ispell WHEN MATCH THEN KEEP
+		ELSE english_stem
+	END;
+SELECT to_tsvector('english_branches', 'book');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_branches', 'books');
+ to_tsvector 
+-------------
+ 'book':1
+(1 row)
+
+SELECT to_tsvector('english_branches', 'booking');
+     to_tsvector      
+----------------------
+ 'book':1 'booking':1
+(1 row)
+
 -- Test ispell dictionary in configuration
 CREATE TEXT SEARCH CONFIGURATION ispell_tst (
 						COPY=english
@@ -608,6 +707,163 @@ SELECT to_tsvector('thesaurus_tst', 'Booking tickets is looking like a booking a
                       to_tsvector                      
 -------------------------------------------------------
  'card':3,10 'invit':2,9 'like':6 'look':5 'order':1,8
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN MATCH THEN KEEP ELSE english_stem
+END;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+              to_tsvector              
+---------------------------------------
+ '1987a':6 'mysteri':2 'ring':3 'sn':5
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH thesaurus UNION english_stem;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+                     to_tsvector                     
+-----------------------------------------------------
+ '1987a':6 'mysteri':2 'ring':3 'sn':5 'supernova':5
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH simple UNION thesaurus;
+SELECT to_tsvector('thesaurus_tst', 'The Mysterious Rings of Supernova 1987A');
+                              to_tsvector                               
+------------------------------------------------------------------------
+ '1987a':6 'mysterious':2 'of':4 'rings':3 'sn':5 'supernova':5 'the':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN MATCH THEN simple UNION thesaurus
+	ELSE simple
+END;
+\dF+ thesaurus_tst
+            Text search configuration "public.thesaurus_tst"
+Parser: "pg_catalog.default"
+      Token      |                     Dictionaries                      
+-----------------+-------------------------------------------------------
+ asciihword      | synonym, thesaurus, english_stem
+ asciiword       | CASE thesaurus WHEN MATCH THEN simple UNION thesaurus+
+                 | ELSE simple                                          +
+                 | END
+ email           | simple
+ file            | simple
+ float           | simple
+ host            | simple
+ hword           | english_stem
+ hword_asciipart | synonym, thesaurus, english_stem
+ hword_numpart   | simple
+ hword_part      | english_stem
+ int             | simple
+ numhword        | simple
+ numword         | simple
+ sfloat          | simple
+ uint            | simple
+ url             | simple
+ url_path        | simple
+ version         | simple
+ word            | english_stem
+
+SELECT to_tsvector('thesaurus_tst', 'one two');
+      to_tsvector       
+------------------------
+ '12':1 'one':1 'two':2
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+            to_tsvector            
+-----------------------------------
+ '123':1 'one':1 'three':3 'two':2
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two four');
+           to_tsvector           
+---------------------------------
+ '12':1 'four':3 'one':1 'two':2
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING FOR asciiword WITH CASE
+	thesaurus WHEN NO MATCH THEN simple ELSE thesaurus
+END;
+\dF+ thesaurus_tst
+      Text search configuration "public.thesaurus_tst"
+Parser: "pg_catalog.default"
+      Token      |               Dictionaries               
+-----------------+------------------------------------------
+ asciihword      | synonym, thesaurus, english_stem
+ asciiword       | CASE thesaurus WHEN NO MATCH THEN simple+
+                 | ELSE thesaurus                          +
+                 | END
+ email           | simple
+ file            | simple
+ float           | simple
+ host            | simple
+ hword           | english_stem
+ hword_asciipart | synonym, thesaurus, english_stem
+ hword_numpart   | simple
+ hword_part      | english_stem
+ int             | simple
+ numhword        | simple
+ numword         | simple
+ sfloat          | simple
+ uint            | simple
+ url             | simple
+ url_path        | simple
+ version         | simple
+ word            | english_stem
+
+SELECT to_tsvector('thesaurus_tst', 'one two');
+ to_tsvector 
+-------------
+ '12':1
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+ to_tsvector 
+-------------
+ '123':1
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two books');
+   to_tsvector    
+------------------
+ '12':1 'books':2
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION thesaurus_tst ALTER MAPPING
+	REPLACE simple WITH english_stem;
+SELECT to_tsvector('thesaurus_tst', 'one two');
+ to_tsvector 
+-------------
+ '12':1
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two three');
+ to_tsvector 
+-------------
+ '123':1
+(1 row)
+
+SELECT to_tsvector('thesaurus_tst', 'one two books');
+   to_tsvector   
+-----------------
+ '12':1 'book':2
+(1 row)
+
+CREATE TEXT SEARCH CONFIGURATION operators_tst (
+						COPY=thesaurus_tst
+);
+ALTER TEXT SEARCH CONFIGURATION operators_tst ALTER MAPPING FOR asciiword WITH english_stem UNION simple;
+SELECT to_tsvector('operators_tst', 'The Mysterious Rings of Supernova 1987A');
+                                     to_tsvector                                      
+--------------------------------------------------------------------------------------
+ '1987a':6 'mysteri':2 'mysterious':2 'of':4 'ring':3 'rings':3 'supernova':5 'the':1
+(1 row)
+
+ALTER TEXT SEARCH CONFIGURATION operators_tst ALTER MAPPING FOR asciiword WITH english_stem UNION (synonym, simple);
+SELECT to_tsvector('operators_tst', 'The Mysterious Rings of Supernova 1987A Postgres');
+                                                to_tsvector                                                
+-----------------------------------------------------------------------------------------------------------
+ '1987a':6 'mysteri':2 'mysterious':2 'of':4 'pgsql':7 'postgr':7 'ring':3 'rings':3 'supernova':5 'the':1
 (1 row)
 
 -- invalid: non-lowercase quoted identifiers

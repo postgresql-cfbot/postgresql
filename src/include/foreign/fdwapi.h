@@ -12,6 +12,7 @@
 #ifndef FDWAPI_H
 #define FDWAPI_H
 
+#include "access/fdwxact.h"
 #include "access/parallel.h"
 #include "nodes/execnodes.h"
 #include "nodes/relation.h"
@@ -168,6 +169,14 @@ typedef bool (*IsForeignScanParallelSafe_function) (PlannerInfo *root,
 typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
+typedef bool (*PrepareForeignTransaction_function) (FdwXactState *state);
+typedef bool (*CommitForeignTransaction_function) (FdwXactState *state);
+typedef bool (*RollbackForeignTransaction_function) (FdwXactState *state);
+typedef bool (*ResolveForeignTransaction_function) (FdwXactState *state,
+													bool is_commit);
+typedef bool (*IsTwoPhaseCommitEnabled_function) (Oid serverid);
+typedef char *(*GetPrepareId_function) (TransactionId xid, Oid serverid,
+										Oid userid, int *prep_id_len);
 
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
@@ -235,6 +244,14 @@ typedef struct FdwRoutine
 	/* Support functions for IMPORT FOREIGN SCHEMA */
 	ImportForeignSchema_function ImportForeignSchema;
 
+	/* Support functions for distributed transactions */
+	PrepareForeignTransaction_function PrepareForeignTransaction;
+	CommitForeignTransaction_function CommitForeignTransaction;
+	RollbackForeignTransaction_function RollbackForeignTransaction;
+	ResolveForeignTransaction_function ResolveForeignTransaction;
+	IsTwoPhaseCommitEnabled_function IsTwoPhaseCommitEnabled;
+	GetPrepareId_function GetPrepareId;
+
 	/* Support functions for parallelism under Gather node */
 	IsForeignScanParallelSafe_function IsForeignScanParallelSafe;
 	EstimateDSMForeignScan_function EstimateDSMForeignScan;
@@ -246,7 +263,6 @@ typedef struct FdwRoutine
 	/* Support functions for path reparameterization. */
 	ReparameterizeForeignPathByChild_function ReparameterizeForeignPathByChild;
 } FdwRoutine;
-
 
 /* Functions in foreign/foreign.c */
 extern FdwRoutine *GetFdwRoutine(Oid fdwhandler);

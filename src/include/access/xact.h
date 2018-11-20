@@ -98,6 +98,18 @@ extern int	MyXactFlags;
  */
 #define XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK	(1U << 1)
 
+/*
+ * XACT_FLAGS_WROTENONTEMPREL - set when we wrote data on non-temporary
+ * relation.
+ */
+#define XACT_FLAGS_WROTENONTEMPREL				(1U << 2)
+
+/*
+ * XACT_FLAGS_FDWNONPREPARE - set when we wrote data on foreign table of which
+ * server isn't capable of two-phase commit
+ * relation.
+ */
+#define XACT_FLAGS_FDWNOPREPARE				(1U << 3)
 
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules

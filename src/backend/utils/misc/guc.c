@@ -27,6 +27,7 @@
 #endif
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
 #include "access/transam.h"
@@ -377,6 +378,25 @@ static const struct config_enum_entry synchronous_commit_options[] = {
 };
 
 /*
+ * Although only "required", "prefer", and "disabled" are documented,
+ *  we accept all the likely variants of "on" and "off".
+ */
+static const struct config_enum_entry distributed_atomic_commit_options[] = {
+	{"required", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, false},
+	{"prefer", DISTRIBUTED_ATOMIC_COMMIT_PREFER, false},
+	{"disabled", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, false},
+	{"on", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, false},
+	{"off", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, false},
+	{"true", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
+	{"false", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
+	{"yes", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
+	{"no", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
+	{"1", DISTRIBUTED_ATOMIC_COMMIT_REQUIRED, true},
+	{"0", DISTRIBUTED_ATOMIC_COMMIT_DISABLED, true},
+	{NULL, 0, false}
+};
+
+/*
  * Although only "on", "off", "try" are documented, we accept all the likely
  * variants of "on" and "off".
  */
@@ -658,6 +678,10 @@ const char *const config_group_names[] =
 	gettext_noop("Client Connection Defaults / Other Defaults"),
 	/* LOCK_MANAGEMENT */
 	gettext_noop("Lock Management"),
+	/* FDWXACT */
+	gettext_noop("Foreign Transaction Management"),
+	/* FDWXACT_SETTINGS */
+	gettext_noop("Foreign Transaction Management / Settings"),
 	/* COMPAT_OPTIONS */
 	gettext_noop("Version and Platform Compatibility"),
 	/* COMPAT_OPTIONS_PREVIOUS */
@@ -2240,6 +2264,52 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	/*
+	 * See also CheckRequiredParameterValues() if this parameter changes
+	 */
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_prepared_foreign_xacts,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolver_timeout", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Sets the maximum time to wait for foreign transaction resolution."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&foreign_xact_resolver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_foreign_transaction_resolvers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Maximum number of foreign transaction resolution processes."),
+			NULL
+		},
+		&max_foreign_xact_resolvers,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolution_retry_interval", PGC_SIGHUP, RESOURCES_ASYNCHRONOUS,
+		 gettext_noop("Sets the time to wait before retrying to resolve foreign transaction "
+					  "after a failed attempt."),
+		 NULL,
+		 GUC_UNIT_MS
+		},
+		&foreign_xact_resolution_retry_interval,
+		5000, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4060,6 +4130,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&synchronous_commit,
 		SYNCHRONOUS_COMMIT_ON, synchronous_commit_options,
 		NULL, assign_synchronous_commit, NULL
+	},
+
+	{
+		{"distributed_atomic_commit", PGC_USERSET, FDWXACT_SETTINGS,
+		 gettext_noop("Use of distributed atomic commit for the current transaction."),
+			NULL
+		},
+		&distributed_atomic_commit,
+		DISTRIBUTED_ATOMIC_COMMIT_DISABLED, distributed_atomic_commit_options,
+		check_distributed_atomic_commit, NULL, NULL
 	},
 
 	{

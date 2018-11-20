@@ -3611,7 +3611,6 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
 
      </variablelist>
     </sect2>
-
    </sect1>
 
    <sect1 id="runtime-config-query">
@@ -7825,6 +7824,148 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
      </varlistentry>
 
      </variablelist>
+   </sect1>
+
+   <sect1 id="runtime-config-distributed-transaction">
+    <title>Distributed Transaction Management</title>
+
+    <sect2 id="runtime-config-distributed-transaction-settings">
+     <title>Setting</title>
+     <variablelist>
+
+      <varlistentry id="guc-distributed-atomic-commit" xreflabel="distributed_atomic_commit">
+       <term><varname>distributed_atomic_commit</varname> (<type>enum</type>)
+        <indexterm>
+         <primary><varname>distributed_atomic_commit</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Specifies whether transaction commit will wait for all involving foreign transaction
+         to be resolved before the command returns a "success" indication to the client.
+         Valid values are <literal>required</literal>, <literal>prefer</literal> and
+         <literal>disabled</literal>. The default setting is <literal>disabled</literal>.
+         When <literal>disabled</literal>, there can be risk of database consistency among
+         distributed transaction if some foreign server crashes during committing the
+         distributed transaction. When set to <literal>required</literal> the distributed
+         transaction requires that all written servers can use two-phase commit protocol.
+         That is, the transaction fails if any of servers returns <literal>false</literal>
+         from <function>IsTwoPhaseCommitEnabled</function> or does not support transaction
+         management callback routines(described in
+         <xref linkend="fdw-callbacks-transaction-managements"/>).
+         When set to <literal>prefer</literal> the distributed transaction requires
+         two-phase commit protocol where available but without failing when it is not
+         available.
+        </para>
+
+        <para>
+         Both <varname>max_prepared_foreign_transactions</varname> and
+         <varname>max_foreign_transaction_resolvers</varname> must be non-zero value to
+         set this parameter either <literal>required</literal> or <literal>prefer</literal>.
+        </para>
+
+        <para>
+         This parameter can be changed at any time; the behavior for any one transaction
+         is determined by the setting in effect when it commits.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="guc-max-prepared-foreign-transactions" xreflabel="max_prepared_foreign_transactions">
+       <term><varname>max_prepared_foreign_transactions</varname> (<type>integer</type>)
+        <indexterm>
+         <primary><varname>max_prepared_foreign_transactions</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Sets the maximum number of foreign transactions that can be prepared
+         simultaneously. A single local transaction can give rise to multiple
+         foreign transaction. If <literal>N</literal> local transactions each
+         across <literal>K</literal> foreign server this value need to be set
+         <literal>N * K</literal>, not just <literal>N</literal>.
+         This parameter can only be set at server start.
+        </para>
+        <para>
+         When running a standby server, you must set this parameter to the
+         same or higher value than on the master server. Otherwise, queries
+         will not be allowed in the standby server.
+        </para>
+       </listitem>
+      </varlistentry>
+
+     </variablelist>
+    </sect2>
+
+    <sect2 id="runtime-config-foreign-transaction-resolver">
+     <title>Foreign Transaction Resolvers</title>
+
+     <para>
+      These settings control the behavior of a foreign transaction resolver.
+     </para>
+
+     <variablelist>
+      <varlistentry id="guc-max-foreign-transaction-resolvers" xreflabel="max_foreign_transaction_resolvers">
+       <term><varname>max_foreign_transaction_resolvers</varname> (<type>int</type>)
+        <indexterm>
+         <primary><varname>max_foreign_transaction_resolvers</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Specifies maximum number of foreign transaction resolution workers. A foreign transaction
+         resolver is responsible for foreign transaction resolution on one database.
+        </para>
+        <para>
+         Foreign transaction resolution workers are taken from the pool defined by
+         <varname>max_worker_processes</varname>.
+        </para>
+        <para>
+         The default value is 0.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="foreign-transaction-resolution-rety-interval" xreflabel="foreign_transaction_resolution_retry_interval">
+       <term><varname>foreign_transaction_resolution_retry_interval</varname> (<type>integer</type>)
+        <indexterm>
+         <primary><varname>foreign_transaction_resolution_interval</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Specify how long the foreign transaction resolver should wait when the last resolution
+         fails before retrying to resolve foreign transaction. This parameter can only be set in the
+         <filename>postgresql.conf</filename> file or on the server command line.
+        </para>
+        <para>
+         The default value is 10 seconds.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="foreign-transaction-resolver-timeout" xreflabel="foreign_transaction_resolver_timeout">
+       <term><varname>foreign_transaction_resolver_timeout</varname> (<type>integer</type>)
+        <indexterm>
+         <primary><varname>foreign_transaction_resolver_timeout</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Terminate foreign transaction resolver processes that don't have any foreign
+         transactions to resolve longer than the specified number of milliseconds.
+         A value of zero disables the timeout mechanism.  You should set this value to
+         zero only if you set <varname>max_foreign_transaction_resolvers</varname> as
+         much as databases you have. This parameter can only be set in the
+         <filename>postgresql.conf</filename> file or on the server command line.
+        </para>
+        <para>
+         The default value is 60 seconds.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </sect2>
    </sect1>
 
    <sect1 id="runtime-config-compatible">

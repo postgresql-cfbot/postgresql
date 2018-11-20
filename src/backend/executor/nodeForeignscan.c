@@ -22,6 +22,8 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
+#include "access/xact.h"
 #include "executor/executor.h"
 #include "executor/nodeForeignscan.h"
 #include "foreign/fdwapi.h"
@@ -230,9 +232,32 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	 * Tell the FDW to initialize the scan.
 	 */
 	if (node->operation != CMD_SELECT)
+	{
+		RangeTblEntry	*rte;
+
+		rte = exec_rt_fetch(estate->es_result_relation_info->ri_RangeTableIndex,
+							estate);
+
+		/* Remember the transaction modifies data on a foreign server*/
+		RegisterFdwXactByRelId(rte->relid, true);
+
 		fdwroutine->BeginDirectModify(scanstate, eflags);
+	}
 	else
+	{
+		RangeTblEntry	*rte;
+		int rtindex = (scanrelid > 0) ?
+			scanrelid :
+			bms_next_member(node->fs_relids, -1);
+
+		rte = exec_rt_fetch(rtindex, estate);
+
+		/* Remember the transaction accesses to a foreign server */
+		RegisterFdwXactByRelId(rte->relid, false);
+
 		fdwroutine->BeginForeignScan(scanstate, eflags);
+
+	}
 
 	return scanstate;
 }

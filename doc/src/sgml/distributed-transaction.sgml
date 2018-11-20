@@ -1,0 +1,157 @@
+<!-- doc/src/sgml/distributed-transaction.sgml -->
+
+<chapter id="distributed-transaction">
+ <title>Distributed Transaction Management</title>
+
+ <para>
+  This chapter explains what distributed transaction management is, and how it can be configured
+  in PostgreSQL.
+ </para>
+
+ <sect1 id="atomic-commit">
+  <title>Atomic Commit</title>
+
+  <para>
+   Atomic commit is an operation that applies a set of changes as a single operation
+   globally. <productname>PostgreSQL</productname> provides a way to perform a transaction
+   with foreign resources using <literal>Foreign Data Wrapper</literal>. Using the
+   <productname>PostgreSQL</productname>'s atomic commit ensures that all changes
+   on foreign servers end in either commit or rollback using the transaction callback
+   routines (see <xref linkend="fdw-callbacks-transaction-managements"/>).
+  </para>
+
+  <sect2>
+   <title>Atomic Commit Using Two-phase Commit Protocol</title>
+
+   <para>
+    To achieve commit among all foreign servers automatially,
+    <productname>PostgreSQL</productname> employs Two-phase commit protocol, which is a
+    type of atomic commitment protocol (ACP). Using Two-phase commit protocol, the commit
+    sequence of distributed transaction performs with the following steps.
+    <orderedlist>
+     <listitem>
+      <para>
+       Prepare all transactions on foreign servers.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Commit locally.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Resolve all prepared transaction on foreign servers.
+      </para>
+     </listitem>
+    </orderedlist>
+
+   </para>
+
+   <para>
+    At the first step, <productname>PostgreSQL</productname> distributed transaction manager
+    prepares all transaction on the foreign servers if two-phase commit is required.
+    Two-phase commit is required only if the transaction modifies data on two or more
+    servers including the local server itself and user requests it by
+    <xref linkend="guc-distributed-atomic-commit"/>. If all preparations on foreign servers
+    got successful go to the next step. Any failure happens in this step
+    <productname>PostgreSQL</productname> changes over rollback, then rollback all transactions
+    on both local and foreign servers.
+   </para>
+
+   <para>
+    At the local commit step, <productname>PostgreSQL</productname> commit the transaction
+    locally. Any failure happens in this step <productname>PostgreSQL</productname> changes
+    over rollback, then rollback all transactions on both local and foreign servers.
+   </para>
+
+   <para>
+    At the final step, prepared transactions are resolved by a foreign Transaction
+    resolver process.
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Foreign Transaction Resolution</title>
+
+   <para>
+    Foreign transaction resolutions are performed by foreign transaction resolver process.
+    They commit all prepared transaction on foreign servers if the coordinator received
+    an agreement message from all foreign server during the first step. On the other hand,
+    if any foreign server failed to prepare the transaction, it rollbacks all prepared
+    transactions.
+   </para>
+
+   <para>
+    One foreign transaction resolver is responsible for transaction resolutions on one
+    database of the coordinator side. On failure during resolution, they retries to
+    resolve after <varname>foreign_transaction_resolution_interval</varname>.
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>In-doubt Transactions</title>
+
+   <para>
+    The atomic commit mechanism ensures that all foreign servers either commit or rollback
+    using two-phase commit protocol. However, if the second phase fails for whatever reason
+    the transaction becomes in-doubt. The transactions becomes in-doubt in the following
+    situations:
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      A local <productname>PostgreSQL</productname> server crashes during atomic commit
+      operation.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      A local <productname>PostgreSQL</productname> server got a cancellation by user during
+      atomic commit.
+     </para>
+    </listitem>
+   </itemizedlist>
+
+   In-doubt transactions are automatically handled by foreign transaction resolver process
+   when there is no online transaction requesting resolutions.
+   <function>pg_resolve_fdw_xact</function> provides a way to resolve transactions on foreign
+   servers manually that participated the distributed transaction manually.
+   </para>
+
+   <para>
+    The atomic commit operation is crash-safe. The being processed foreign transactions at
+    crash are processed by a foreign transaction resolvers as an in-doubt transaction
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Monitoring</title>
+   <para>
+    The monitoring information about foreign transaction resolvers is visible in
+    <link linkend="pg-stat-fdwxact-resolver-view"><literal>pg_stat_fdwxact_resolver</literal></link>
+    view. This view contains one row for every foreign Transaction resolver worker.
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Configuration Settings</title>
+
+   <para>
+    Atomic commit requires several configuration options to be set.
+   </para>
+
+   <para>
+    On the coordinator side, <xref linkend="guc-max-prepared-foreign-transactions"/> and
+    <xref linkend="guc-max-foreign-transaction-resolvers"/> must be non-zero value.
+    Additionally the <varname>max_worker_processes</varname> may need to be adjusted to
+    accommodate for foreign transaction resolver workers, at least
+    (<varname>max_foreign_transaction_resolvers</varname> + <literal>1</literal>).
+    Note that some extensions and parallel queries also take worker slots from
+    <varname>max_worker_processes</varname>.
+   </para>
+
+  </sect2>
+ </sect1>
+</chapter>

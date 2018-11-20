@@ -291,6 +291,9 @@ CREATE VIEW pg_prepared_xacts AS
 CREATE VIEW pg_prepared_statements AS
     SELECT * FROM pg_prepared_statement() AS P;
 
+CREATE VIEW pg_prepared_fdw_xacts AS
+       SELECT * FROM pg_prepared_fdw_xacts() AS F;
+
 CREATE VIEW pg_seclabels AS
 SELECT
 	l.objoid, l.classoid, l.objsubid,
@@ -772,6 +775,14 @@ CREATE VIEW pg_stat_subscription AS
     FROM pg_subscription su
             LEFT JOIN pg_stat_get_subscription(NULL) st
                       ON (st.subid = su.oid);
+
+CREATE VIEW pg_stat_fdwxact_resolvers AS
+    SELECT
+            r.pid,
+            r.dbid,
+            r.last_resolved_time
+    FROM pg_stat_get_fdwxact_resolver() r
+    WHERE r.pid IS NOT NULL;
 
 CREATE VIEW pg_stat_ssl AS
     SELECT

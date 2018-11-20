@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
@@ -1093,6 +1094,18 @@ RemoveForeignServerById(Oid srvId)
 	if (!HeapTupleIsValid(tp))
 		elog(ERROR, "cache lookup failed for foreign server %u", srvId);
 
+	/*
+	 * If there is a foreign prepared transaction with this foreign server,
+	 * dropping it might result in dangling prepared transaction.
+	 */
+	if (fdw_xact_exists(InvalidTransactionId, MyDatabaseId, srvId, InvalidOid))
+	{
+		Form_pg_foreign_server srvForm = (Form_pg_foreign_server) GETSTRUCT(tp);
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transactions on it",
+						NameStr(srvForm->srvname))));
+	}
+
 	CatalogTupleDelete(rel, &tp->t_self);
 
 	ReleaseSysCache(tp);
@@ -1407,6 +1420,16 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 	user_mapping_ddl_aclcheck(useId, srv->serverid, srv->servername);
 
 	/*
+	 * If there is a foreign prepared transaction with this user mapping,
+	 * dropping it might result in dangling prepared transaction.
+	 */
+	if (fdw_xact_exists(InvalidTransactionId, MyDatabaseId, srv->serverid,
+						useId))
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transaction for user \"%s\"",
+						srv->servername, MappingUserName(useId))));
+
+	/*
 	 * Do the deletion
 	 */
 	object.classId = UserMappingRelationId;
@@ -1558,6 +1581,13 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 				(errcode(ERRCODE_FDW_NO_SCHEMAS),
 				 errmsg("foreign-data wrapper \"%s\" does not support IMPORT FOREIGN SCHEMA",
 						fdw->fdwname)));
+
+	/*
+	 * Remember the transaction accesses to a foreign server. Normally during
+	 * ImportForeignSchema we don't modify data on foreign servers, so remember it
+	 * as not-modified server.
+	 */
+	RegisterFdwXactByServerId(server->serverid, false);
 
 	/* Call FDW to get a list of commands */
 	cmd_list = fdw_routine->ImportForeignSchema(stmt, server->serverid);

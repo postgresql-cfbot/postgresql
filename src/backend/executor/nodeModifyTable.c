@@ -37,6 +37,7 @@
 
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "commands/trigger.h"
@@ -44,6 +45,7 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/bufmgr.h"
@@ -478,6 +480,10 @@ ExecInsert(ModifyTableState *mtstate,
 								HEAP_INSERT_SPECULATIVE,
 								NULL);
 
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 			/* insert index entries for tuple */
 			recheckIndexes = ExecInsertIndexTuples(slot, &(tuple->t_self),
 												   estate, true, &specConflict,
@@ -522,6 +528,10 @@ ExecInsert(ModifyTableState *mtstate,
 			newId = heap_insert(resultRelationDesc, tuple,
 								estate->es_output_cid,
 								0, NULL);
+
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -715,6 +725,11 @@ ldelete:;
 							 true /* wait for commit */ ,
 							 &hufd,
 							 changingPart);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -1204,6 +1219,11 @@ lreplace:;
 							 estate->es_crosscheck_snapshot,
 							 true /* wait for commit */ ,
 							 &hufd, &lockmode);
+
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case HeapTupleSelfUpdated:
@@ -2218,6 +2238,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
 		{
 			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
+			Oid			relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+			/* Remember the transaction modifies data on a foreign server*/
+			RegisterFdwXactByRelId(relid, true);
 
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
 															 resultRelInfo,

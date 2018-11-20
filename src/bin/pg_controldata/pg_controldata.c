@@ -306,6 +306,8 @@ main(int argc, char *argv[])
 		   ControlFile->max_worker_processes);
 	printf(_("max_prepared_xacts setting:           %d\n"),
 		   ControlFile->max_prepared_xacts);
+	printf(_("max_prepared_foreign_transactions setting:   %d\n"),
+		   ControlFile->max_prepared_foreign_xacts);
 	printf(_("max_locks_per_xact setting:           %d\n"),
 		   ControlFile->max_locks_per_xact);
 	printf(_("track_commit_timestamp setting:       %s\n"),

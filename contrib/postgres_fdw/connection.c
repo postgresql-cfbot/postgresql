@@ -14,9 +14,12 @@
 
 #include "postgres_fdw.h"
 
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
-#include "catalog/pg_user_mapping.h"
 #include "access/xact.h"
+#include "catalog/pg_user_mapping.h"
+#include "commands/defrem.h"
+#include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -45,7 +48,7 @@
  */
 typedef Oid ConnCacheKey;
 
-typedef struct ConnCacheEntry
+struct ConnCacheEntry
 {
 	ConnCacheKey key;			/* hash key (must be first) */
 	PGconn	   *conn;			/* connection to foreign server, or NULL */
@@ -56,9 +59,21 @@ typedef struct ConnCacheEntry
 	bool		have_error;		/* have any subxacts aborted in this xact? */
 	bool		changing_xact_state;	/* xact state change in process */
 	bool		invalidated;	/* true if reconnect is pending */
+	bool		xact_got_connection;
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
-} ConnCacheEntry;
+};
+
+/*
+ * Foreign transaction state using postgres_fdw.
+ */
+typedef struct PgFdwXactState
+{
+	Oid		serverid;
+	Oid		userid;
+	Oid		umid;
+	ConnCacheEntry	*conn;
+} PgFdwXactState;
 
 /*
  * Connection cache (initialized on first use)
@@ -69,17 +84,13 @@ static HTAB *ConnectionHash = NULL;
 static unsigned int cursor_number = 0;
 static unsigned int prep_stmt_number = 0;
 
-/* tracks whether any work is needed in callback functions */
-static bool xact_got_connection = false;
-
 /* prototypes of private functions */
 static PGconn *connect_pg_server(ForeignServer *server, UserMapping *user);
 static void disconnect_pg_server(ConnCacheEntry *entry);
 static void check_conn_params(const char **keywords, const char **values, UserMapping *user);
 static void configure_remote_session(PGconn *conn);
 static void do_sql_command(PGconn *conn, const char *sql);
-static void begin_remote_xact(ConnCacheEntry *entry);
-static void pgfdw_xact_callback(XactEvent event, void *arg);
+static void begin_remote_xact(ConnCacheEntry *entry, Oid serverid, Oid userid);
 static void pgfdw_subxact_callback(SubXactEvent event,
 					   SubTransactionId mySubid,
 					   SubTransactionId parentSubid,
@@ -91,24 +102,20 @@ static bool pgfdw_exec_cleanup_query(PGconn *conn, const char *query,
 						 bool ignore_errors);
 static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 						 PGresult **result);
+static void pgfdw_cleanup_after_transaction(ConnCacheEntry *entry);
+static ConnCacheEntry *GetConnectionState(Oid umid, bool will_prep_stmt,
+										  bool start_transaction);
+static ConnCacheEntry *GetConnectionCacheEntry(Oid umid);
 
-
-/*
- * Get a PGconn which can be used to execute queries on the remote PostgreSQL
- * server with the user's authorization.  A new connection is established
- * if we don't already have a suitable one, and a transaction is opened at
- * the right subtransaction nesting depth if we didn't do that already.
- *
- * will_prep_stmt must be true if caller intends to create any prepared
- * statements.  Since those don't go away automatically at transaction end
- * (not even on error), we need this flag to cue manual cleanup.
- */
-PGconn *
-GetConnection(UserMapping *user, bool will_prep_stmt)
+static ConnCacheEntry *
+GetConnectionCacheEntry(Oid umid)
 {
-	bool		found;
 	ConnCacheEntry *entry;
-	ConnCacheKey key;
+	ConnCacheKey	key;
+	bool			found;
+
+	/* Create hash key for the entry.  Assume no pad bytes in key struct */
+	key = umid;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -128,7 +135,6 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 		 * Register some callback functions that manage connection cleanup.
 		 * This should be done just once in each backend.
 		 */
-		RegisterXactCallback(pgfdw_xact_callback, NULL);
 		RegisterSubXactCallback(pgfdw_subxact_callback, NULL);
 		CacheRegisterSyscacheCallback(FOREIGNSERVEROID,
 									  pgfdw_inval_callback, (Datum) 0);
@@ -136,16 +142,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 									  pgfdw_inval_callback, (Datum) 0);
 	}
 
-	/* Set flag that we did GetConnection during the current transaction */
-	xact_got_connection = true;
-
-	/* Create hash key for the entry.  Assume no pad bytes in key struct */
-	key = user->umid;
-
 	/*
 	 * Find or create cached entry for requested connection.
 	 */
 	entry = hash_search(ConnectionHash, &key, HASH_ENTER, &found);
+
 	if (!found)
 	{
 		/*
@@ -154,6 +155,17 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 		 */
 		entry->conn = NULL;
 	}
+
+	return entry;
+}
+
+
+static ConnCacheEntry *
+GetConnectionState(Oid umid, bool will_prep_stmt, bool start_transaction)
+{
+	ConnCacheEntry *entry;
+
+	entry = GetConnectionCacheEntry(umid);
 
 	/* Reject further use of connections which failed abort cleanup. */
 	pgfdw_reject_incomplete_xact_state_change(entry);
@@ -182,6 +194,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	 */
 	if (entry->conn == NULL)
 	{
+		UserMapping	*user = GetUserMappingByOid(umid);
 		ForeignServer *server = GetForeignServer(user->serverid);
 
 		/* Reset all transient state fields, to be sure all are clean */
@@ -190,6 +203,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 		entry->have_error = false;
 		entry->changing_xact_state = false;
 		entry->invalidated = false;
+		entry->xact_got_connection = false;
 		entry->server_hashvalue =
 			GetSysCacheHashValue1(FOREIGNSERVEROID,
 								  ObjectIdGetDatum(server->serverid));
@@ -200,6 +214,15 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 		/* Now try to make the connection */
 		entry->conn = connect_pg_server(server, user);
 
+		Assert(entry->conn);
+
+		if (!entry->conn)
+		{
+			elog(DEBUG3, "attempt to connection to server \"%s\" by postgres_fdw failed",
+				 server->servername);
+			return NULL;
+		}
+
 		elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 			 entry->conn, server->servername, user->umid, user->userid);
 	}
@@ -207,10 +230,38 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	/*
 	 * Start a new transaction or subtransaction if needed.
 	 */
-	begin_remote_xact(entry);
+	if (start_transaction)
+	{
+		UserMapping		*user = GetUserMappingByOid(umid);
+
+		begin_remote_xact(entry, user->serverid, user->userid);
+
+		/* Set flag that we did GetConnection during the current transaction */
+		entry->xact_got_connection = true;
+	}
 
 	/* Remember if caller will prepare statements */
 	entry->have_prep_stmt |= will_prep_stmt;
+
+	return entry;
+}
+
+/*
+ * Get a PGconn which can be used to execute queries on the remote PostgreSQL
+ * server with the user's authorization.  A new connection is established
+ * if we don't already have a suitable one, and a transaction is opened at
+ * the right subtransaction nesting depth if we didn't do that already.
+ *
+ * will_prep_stmt must be true if caller intends to create any prepared
+ * statements.  Since those don't go away automatically at transaction end
+ * (not even on error), we need this flag to cue manual cleanup.
+ */
+PGconn *
+GetConnection(Oid umid, bool will_prep_stmt, bool start_transaction)
+{
+	ConnCacheEntry *entry;
+
+	entry = GetConnectionState(umid, will_prep_stmt, start_transaction);
 
 	return entry->conn;
 }
@@ -414,7 +465,7 @@ do_sql_command(PGconn *conn, const char *sql)
  * control which remote queries share a snapshot.
  */
 static void
-begin_remote_xact(ConnCacheEntry *entry)
+begin_remote_xact(ConnCacheEntry *entry, Oid serverid, Oid userid)
 {
 	int			curlevel = GetCurrentTransactionNestLevel();
 
@@ -644,193 +695,6 @@ pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 }
 
 /*
- * pgfdw_xact_callback --- cleanup at main-transaction end.
- */
-static void
-pgfdw_xact_callback(XactEvent event, void *arg)
-{
-	HASH_SEQ_STATUS scan;
-	ConnCacheEntry *entry;
-
-	/* Quick exit if no connections were touched in this transaction. */
-	if (!xact_got_connection)
-		return;
-
-	/*
-	 * Scan all connection cache entries to find open remote transactions, and
-	 * close them.
-	 */
-	hash_seq_init(&scan, ConnectionHash);
-	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
-	{
-		PGresult   *res;
-
-		/* Ignore cache entry if no open connection right now */
-		if (entry->conn == NULL)
-			continue;
-
-		/* If it has an open remote transaction, try to close it */
-		if (entry->xact_depth > 0)
-		{
-			bool		abort_cleanup_failure = false;
-
-			elog(DEBUG3, "closing remote transaction on connection %p",
-				 entry->conn);
-
-			switch (event)
-			{
-				case XACT_EVENT_PARALLEL_PRE_COMMIT:
-				case XACT_EVENT_PRE_COMMIT:
-
-					/*
-					 * If abort cleanup previously failed for this connection,
-					 * we can't issue any more commands against it.
-					 */
-					pgfdw_reject_incomplete_xact_state_change(entry);
-
-					/* Commit all remote transactions during pre-commit */
-					entry->changing_xact_state = true;
-					do_sql_command(entry->conn, "COMMIT TRANSACTION");
-					entry->changing_xact_state = false;
-
-					/*
-					 * If there were any errors in subtransactions, and we
-					 * made prepared statements, do a DEALLOCATE ALL to make
-					 * sure we get rid of all prepared statements. This is
-					 * annoying and not terribly bulletproof, but it's
-					 * probably not worth trying harder.
-					 *
-					 * DEALLOCATE ALL only exists in 8.3 and later, so this
-					 * constrains how old a server postgres_fdw can
-					 * communicate with.  We intentionally ignore errors in
-					 * the DEALLOCATE, so that we can hobble along to some
-					 * extent with older servers (leaking prepared statements
-					 * as we go; but we don't really support update operations
-					 * pre-8.3 anyway).
-					 */
-					if (entry->have_prep_stmt && entry->have_error)
-					{
-						res = PQexec(entry->conn, "DEALLOCATE ALL");
-						PQclear(res);
-					}
-					entry->have_prep_stmt = false;
-					entry->have_error = false;
-					break;
-				case XACT_EVENT_PRE_PREPARE:
-
-					/*
-					 * We disallow remote transactions that modified anything,
-					 * since it's not very reasonable to hold them open until
-					 * the prepared transaction is committed.  For the moment,
-					 * throw error unconditionally; later we might allow
-					 * read-only cases.  Note that the error will cause us to
-					 * come right back here with event == XACT_EVENT_ABORT, so
-					 * we'll clean up the connection state at that point.
-					 */
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot prepare a transaction that modified remote tables")));
-					break;
-				case XACT_EVENT_PARALLEL_COMMIT:
-				case XACT_EVENT_COMMIT:
-				case XACT_EVENT_PREPARE:
-					/* Pre-commit should have closed the open transaction */
-					elog(ERROR, "missed cleaning up connection during pre-commit");
-					break;
-				case XACT_EVENT_PARALLEL_ABORT:
-				case XACT_EVENT_ABORT:
-
-					/*
-					 * Don't try to clean up the connection if we're already
-					 * in error recursion trouble.
-					 */
-					if (in_error_recursion_trouble())
-						entry->changing_xact_state = true;
-
-					/*
-					 * If connection is already unsalvageable, don't touch it
-					 * further.
-					 */
-					if (entry->changing_xact_state)
-						break;
-
-					/*
-					 * Mark this connection as in the process of changing
-					 * transaction state.
-					 */
-					entry->changing_xact_state = true;
-
-					/* Assume we might have lost track of prepared statements */
-					entry->have_error = true;
-
-					/*
-					 * If a command has been submitted to the remote server by
-					 * using an asynchronous execution function, the command
-					 * might not have yet completed.  Check to see if a
-					 * command is still being processed by the remote server,
-					 * and if so, request cancellation of the command.
-					 */
-					if (PQtransactionStatus(entry->conn) == PQTRANS_ACTIVE &&
-						!pgfdw_cancel_query(entry->conn))
-					{
-						/* Unable to cancel running query. */
-						abort_cleanup_failure = true;
-					}
-					else if (!pgfdw_exec_cleanup_query(entry->conn,
-													   "ABORT TRANSACTION",
-													   false))
-					{
-						/* Unable to abort remote transaction. */
-						abort_cleanup_failure = true;
-					}
-					else if (entry->have_prep_stmt && entry->have_error &&
-							 !pgfdw_exec_cleanup_query(entry->conn,
-													   "DEALLOCATE ALL",
-													   true))
-					{
-						/* Trouble clearing prepared statements. */
-						abort_cleanup_failure = true;
-					}
-					else
-					{
-						entry->have_prep_stmt = false;
-						entry->have_error = false;
-					}
-
-					/* Disarm changing_xact_state if it all worked. */
-					entry->changing_xact_state = abort_cleanup_failure;
-					break;
-			}
-		}
-
-		/* Reset state to show we're out of a transaction */
-		entry->xact_depth = 0;
-
-		/*
-		 * If the connection isn't in a good idle state, discard it to
-		 * recover. Next GetConnection will open a new connection.
-		 */
-		if (PQstatus(entry->conn) != CONNECTION_OK ||
-			PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
-			entry->changing_xact_state)
-		{
-			elog(DEBUG3, "discarding connection %p", entry->conn);
-			disconnect_pg_server(entry);
-		}
-	}
-
-	/*
-	 * Regardless of the event type, we can now mark ourselves as out of the
-	 * transaction.  (Note: if we are here during PRE_COMMIT or PRE_PREPARE,
-	 * this saves a useless scan of the hashtable during COMMIT or PREPARE.)
-	 */
-	xact_got_connection = false;
-
-	/* Also reset cursor numbering for next transaction */
-	cursor_number = 0;
-}
-
-/*
  * pgfdw_subxact_callback --- cleanup at subtransaction end.
  */
 static void
@@ -846,10 +710,6 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 		  event == SUBXACT_EVENT_ABORT_SUB))
 		return;
 
-	/* Quick exit if no connections were touched in this transaction. */
-	if (!xact_got_connection)
-		return;
-
 	/*
 	 * Scan all connection cache entries to find open remote subtransactions
 	 * of the current level, and close them.
@@ -859,6 +719,10 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
 	{
 		char		sql[100];
+
+		/* Exit if no connections were touched in this transaction. */
+		if (!entry->xact_got_connection)
+			continue;
 
 		/*
 		 * We only care about connections with open remote subtransactions of
@@ -1192,4 +1056,303 @@ exit:	;
 	else
 		*result = last_res;
 	return timed_out;
+}
+
+/*
+ * Prepare a transaction on foreign server.
+ *
+ * This function is called only at the pre-commit phase of the local transaction.
+ */
+bool
+postgresPrepareForeignTransaction(FdwXactState *state)
+{
+	PgFdwXactState *rstate;
+	ConnCacheEntry *entry = NULL;
+	bool		result = false;
+	PGresult	*res;
+	StringInfo	command;
+
+	entry = GetConnectionCacheEntry(state->umid);
+
+	/* The transaction should have been started */
+	Assert(entry->xact_got_connection && entry->conn);
+
+	pgfdw_reject_incomplete_xact_state_change(entry);
+
+	rstate = (PgFdwXactState *) palloc0(sizeof(PgFdwXactState));
+	rstate->serverid = state->serverid;
+	rstate->userid = state->userid;
+	rstate->umid = state->umid;
+	rstate->conn = entry;
+	state->fdw_state = (void *)rstate;
+
+	command = makeStringInfo();
+	appendStringInfo(command, "PREPARE TRANSACTION '%s'", state->fdwxact_id);
+
+	/* Do commit foreign transaction */
+	entry->changing_xact_state = true;
+	res = pgfdw_exec_query(entry->conn, command->data);
+	entry->changing_xact_state = false;
+
+	if (PQresultStatus(res) == PGRES_COMMAND_OK)
+	{
+		result = true;
+		elog(DEBUG1, "prepared foreign transaction on server %u with ID %s",
+			 state->serverid, state->fdwxact_id);
+	}
+
+	if (entry->have_prep_stmt && entry->have_error)
+	{
+		res = PQexec(entry->conn, "DEALLOCATE ALL");
+		PQclear(res);
+	}
+
+	pgfdw_cleanup_after_transaction(entry);
+
+	return result;
+}
+
+/*
+ * Commit a transaction on foreign server.
+ *
+ * This function is called both at the pre-commit phase of the local transaction.
+ */
+bool
+postgresCommitForeignTransaction(FdwXactState *state)
+{
+	PgFdwXactState *rstate;
+	ConnCacheEntry *entry = NULL;
+	bool		result = false;
+	PGresult	*res;
+
+	entry = GetConnectionCacheEntry(state->umid);
+
+	if (!entry || !entry->conn || !entry->xact_got_connection)
+		return true;
+
+	rstate = (PgFdwXactState *) palloc0(sizeof(PgFdwXactState));
+	rstate->serverid = state->serverid;
+	rstate->userid = state->userid;
+	rstate->umid = state->umid;
+	rstate->conn = entry;
+	state->fdw_state = (void *)rstate;
+
+	/*
+	 * If abort cleanup previously failed for this connection,
+	 * we can't issue any more commands against it.
+	 */
+	pgfdw_reject_incomplete_xact_state_change(entry);
+
+	entry->changing_xact_state = true;
+	res = pgfdw_exec_query(entry->conn, "COMMIT TRANSACTION");
+	entry->changing_xact_state = false;
+
+	if (PQresultStatus(res) == PGRES_COMMAND_OK)
+		result = true;
+
+	/*
+	 * If there were any errors in subtransactions, and we ma
+	 * made prepared statements, do a DEALLOCATE ALL to make
+	 * sure we get rid of all prepared statements. This is
+	 * annoying and not terribly bulletproof, but it's
+	 * probably not worth trying harder.
+	 *
+	 * DEALLOCATE ALL only exists in 8.3 and later, so this
+	 * constrains how old a server postgres_fdw can
+	 * communicate with.  We intentionally ignore errors in
+	 * the DEALLOCATE, so that we can hobble along to some
+	 * extent with older servers (leaking prepared statements
+	 * as we go; but we don't really support update operations
+	 * pre-8.3 anyway).
+	 */
+	if (entry->have_prep_stmt && entry->have_error)
+	{
+		res = PQexec(entry->conn, "DEALLOCATE ALL");
+		PQclear(res);
+	}
+
+	/* Cleanup transaction status */
+	pgfdw_cleanup_after_transaction(entry);
+
+	return result;
+}
+
+/*
+ * Rollback a transaction on foreign server.
+ *
+ * This function is called each time when aborting.
+ */
+bool
+postgresRollbackForeignTransaction(FdwXactState *state)
+{
+	PgFdwXactState *rstate = (PgFdwXactState *) state->fdw_state;
+	ConnCacheEntry *entry = NULL;
+	bool abort_cleanup_failure = false;
+
+	if (rstate)
+		entry = rstate->conn;
+	else
+		entry = GetConnectionCacheEntry(state->umid);
+
+	if (!entry || !entry->conn)
+		return true;
+
+	/*
+	 * Don't try to clean up the connection if we're already
+	 * in error recursion trouble.
+	 */
+	if (in_error_recursion_trouble())
+		entry->changing_xact_state = true;
+
+	/*
+	 * If connection is before starting transaction or is already unsalvageable,
+	 * do only the cleanup and don't touch it further.
+	 */
+	if (entry->changing_xact_state || !entry->xact_got_connection)
+	{
+		pgfdw_cleanup_after_transaction(entry);
+		return true;
+	}
+
+	/*
+	 * Mark this connection as in the process of changing
+	 * transaction state.
+	 */
+	entry->changing_xact_state = true;
+
+	/* Assume we might have lost track of prepared statements */
+	entry->have_error = true;
+
+	/*
+	 * If a command has been submitted to the remote server by
+	 * using an asynchronous execution function, the command
+	 * might not have yet completed.  Check to see if a
+	 * command is still being processed by the remote server,
+	 * and if so, request cancellation of the command.
+	 */
+	if (PQtransactionStatus(entry->conn) == PQTRANS_ACTIVE &&
+		!pgfdw_cancel_query(entry->conn))
+	{
+		/* Unable to cancel running query. */
+		abort_cleanup_failure = true;
+	}
+	else if (!pgfdw_exec_cleanup_query(entry->conn,
+									   "ABORT TRANSACTION",
+									   false))
+	{
+		/* Unable to abort remote transaction. */
+		abort_cleanup_failure = true;
+	}
+	else if (entry->have_prep_stmt && entry->have_error &&
+			 !pgfdw_exec_cleanup_query(entry->conn,
+									   "DEALLOCATE ALL",
+									   true))
+	{
+		/* Trouble clearing prepared statements. */
+		abort_cleanup_failure = true;
+	}
+
+	/* Disarm changing_xact_state if it all worked. */
+	entry->changing_xact_state = abort_cleanup_failure;
+
+	/* Cleanup transaction status */
+	pgfdw_cleanup_after_transaction(entry);
+
+	return !abort_cleanup_failure;
+}
+
+/*
+ * Resolve a prepared transaction on foreign server.
+ *
+ * This function is called after committed locally by either a foreign transaction
+ * resolver or pg_resolve_fdw_xact.
+ */
+bool
+postgresResolveForeignTransaction(FdwXactState *state, bool is_commit)
+{
+	ConnCacheEntry *entry = NULL;
+	StringInfo	command;
+	bool result = true;
+	PGresult	*res;
+
+	entry = GetConnectionState(state->umid, false, false);
+
+	if (!entry->conn)
+		return false;
+
+	command = makeStringInfo();
+	appendStringInfo(command, "%s PREPARED '%s'",
+					 is_commit ? "COMMIT" : "ROLLBACK",
+					 state->fdwxact_id);
+
+	res = pgfdw_exec_query(entry->conn, command->data);
+
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		int		sqlstate;
+		char	*diag_sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+
+		if (diag_sqlstate)
+		{
+			sqlstate = MAKE_SQLSTATE(diag_sqlstate[0],
+									 diag_sqlstate[1],
+									 diag_sqlstate[2],
+									 diag_sqlstate[3],
+									 diag_sqlstate[4]);
+		}
+		else
+			sqlstate = ERRCODE_CONNECTION_FAILURE;
+
+		/*
+		 * If we tried to COMMIT/ABORT a prepared transaction and the prepared
+		 * transaction was missing on the foreign server, it was probably
+		 * resolved by some other means. Anyway, it should be considered as resolved.
+		 */
+		result = (sqlstate == ERRCODE_UNDEFINED_OBJECT);
+
+		/*
+		 * The command failed, raise a warning to log the reason of failure.
+		 * We may not be in a transaction here, so raising error doesn't
+		 * help.
+		 */
+		pgfdw_report_error(WARNING, res, entry->conn, false, command->data);
+	}
+
+	elog(DEBUG1, "%s prepared foreign transaction on server %u with ID %s",
+		 is_commit ? "commit" : "rollback",
+		 state->serverid,
+		 state->fdwxact_id);
+
+	/* Cleanup transaction status */
+	pgfdw_cleanup_after_transaction(entry);
+
+	return result;
+}
+
+/* Cleanup at main-transaction end */
+static void
+pgfdw_cleanup_after_transaction(ConnCacheEntry *entry)
+{
+	/* Reset state to show we're out of a transaction */
+	entry->xact_depth = 0;
+	entry->have_prep_stmt = false;
+	entry->have_error  = false;
+	entry->xact_got_connection = false;
+
+	/*
+	 * If the connection isn't in a good idle state, discard it to
+	 * recover. Next GetConnection will open a new connection.
+	 */
+	if (PQstatus(entry->conn) != CONNECTION_OK ||
+		PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
+		entry->changing_xact_state)
+	{
+		elog(DEBUG3, "discarding connection %p", entry->conn);
+		disconnect_pg_server(entry);
+	}
+
+	entry->changing_xact_state = false;
+
+	/* Also reset cursor numbering for next transaction */
+	cursor_number = 0;
 }

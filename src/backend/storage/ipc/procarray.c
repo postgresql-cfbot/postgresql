@@ -91,6 +91,8 @@ typedef struct ProcArrayStruct
 	TransactionId replication_slot_xmin;
 	/* oldest catalog xmin of any replication slot */
 	TransactionId replication_slot_catalog_xmin;
+	/* local transaction id of oldest unresolved distributed transaction */
+	TransactionId fdwxact_unresolved_xmin;
 
 	/* indexes into allPgXact[], has PROCARRAY_MAXPROCS entries */
 	int			pgprocnos[FLEXIBLE_ARRAY_MEMBER];
@@ -246,6 +248,7 @@ CreateSharedProcArray(void)
 		procArray->lastOverflowedXid = InvalidTransactionId;
 		procArray->replication_slot_xmin = InvalidTransactionId;
 		procArray->replication_slot_catalog_xmin = InvalidTransactionId;
+		procArray->fdwxact_unresolved_xmin = InvalidTransactionId;
 	}
 
 	allProcs = ProcGlobal->allProcs;
@@ -1327,6 +1330,7 @@ GetOldestXmin(Relation rel, int flags)
 
 	TransactionId replication_slot_xmin = InvalidTransactionId;
 	TransactionId replication_slot_catalog_xmin = InvalidTransactionId;
+	TransactionId fdwxact_unresolved_xmin = InvalidTransactionId;
 
 	/*
 	 * If we're not computing a relation specific limit, or if a shared
@@ -1392,6 +1396,7 @@ GetOldestXmin(Relation rel, int flags)
 	 */
 	replication_slot_xmin = procArray->replication_slot_xmin;
 	replication_slot_catalog_xmin = procArray->replication_slot_catalog_xmin;
+	fdwxact_unresolved_xmin = procArray->fdwxact_unresolved_xmin;
 
 	if (RecoveryInProgress())
 	{
@@ -1440,6 +1445,15 @@ GetOldestXmin(Relation rel, int flags)
 		TransactionIdIsValid(replication_slot_xmin) &&
 		NormalTransactionIdPrecedes(replication_slot_xmin, result))
 		result = replication_slot_xmin;
+
+	/*
+	 * Check whether there are unresolved distributed transaction
+	 * requiring an older xmin.
+	 */
+	if (!(flags & PROCARRAY_FDW_XACT_XMIN) &&
+		TransactionIdIsValid(fdwxact_unresolved_xmin) &&
+		NormalTransactionIdPrecedes(fdwxact_unresolved_xmin, result))
+		result = fdwxact_unresolved_xmin;
 
 	/*
 	 * After locks have been released and defer_cleanup_age has been applied,
@@ -3030,6 +3044,38 @@ ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 	LWLockRelease(ProcArrayLock);
 }
 
+/*
+ * ProcArraySetFdwXactUnresolvedXmin
+ *
+ * Install limits to future computations fo the xmin horizon to prevent
+ * vacuum clog from affected transactions still needed by resolving
+ * distributed transaction.
+ */
+void
+ProcArraySetFdwXactUnresolvedXmin(TransactionId xmin)
+{
+
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	procArray->fdwxact_unresolved_xmin = xmin;
+	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * ProcArrayGetFdwXactUnresolvedXmin
+ *
+ * Return the current unresolved xmin limits.
+ */
+TransactionId
+ProcArrayGetFdwXactUnresolvedXmin(void)
+{
+	TransactionId xmin;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	xmin = procArray->fdwxact_unresolved_xmin;
+	LWLockRelease(ProcArrayLock);
+
+	return xmin;
+}
 
 #define XidCacheRemove(i) \
 	do { \

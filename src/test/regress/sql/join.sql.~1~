@@ -157,8 +157,7 @@ SELECT '' AS "xxx", *
 --
 
 SELECT '' AS "xxx", *
-  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k)
-  ORDER BY J1_TBL.i, J2_TBL.k;
+  FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i <= J2_TBL.k);
 
 
 --
@@ -193,66 +192,6 @@ SELECT '' AS "xxx", *
 
 SELECT '' AS "xxx", *
   FROM J1_TBL LEFT JOIN J2_TBL USING (i) WHERE (i = 1);
-
---
--- Full merge join
---
-
-set enable_hashjoin to 0;
-
--- simple
-select * from j1_tbl full join j2_tbl on j1_tbl.i < j2_tbl.k;
-
--- multiple clauses
-select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k;
-
--- multiple inequality clauses
-select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.i and j1_tbl.i < j2_tbl.k;
-
--- outer pathkeys for multiple inequality clauses
-explain (costs off)
-	select * from (select * from j1_tbl order by i) j1_tbl
-	full join j2_tbl
-	on j1_tbl.i > j2_tbl.i and j1_tbl.i > j2_tbl.k;
-
--- suitable root pathkeys
-explain (costs off)
-	select * from j1_tbl join j2_tbl
-	on j1_tbl.i < j2_tbl.i and j1_tbl.i = j2_tbl.k
-	order by j2_tbl.k, j2_tbl.i;
-
--- unsuitable root pathkeys
-explain (costs off)
-	select * from j1_tbl join j2_tbl
-	on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k
-	order by j2_tbl.k, j2_tbl.i;
-
--- suitable outer pathkeys
-explain (costs off)
-	select * from j1_tbl
-	full join (select * from j2_tbl order by k, i) j2_tbl
-	on j1_tbl.i < j2_tbl.i and j1_tbl.i = j2_tbl.k;
-
--- unsuitable outer pathkeys
-explain (costs off)
-	select * from j1_tbl
-	full join (select * from j2_tbl order by k, i) j2_tbl
-	on j1_tbl.i > j2_tbl.i and j1_tbl.i = j2_tbl.k;
-
--- using an index
-set enable_seqscan to off;
-create index idx_j1_tbl_i on j1_tbl(i);
-analyze j1_tbl;
-
-explain (costs off) select * from j1_tbl full join j2_tbl on j1_tbl.i > j2_tbl.k;
-explain (costs off) select * from j1_tbl full join j2_tbl on j1_tbl.i < j2_tbl.k;
-
-drop index idx_j1_tbl_i;
-analyze j1_tbl;
-
-reset enable_seqscan;
-
-reset enable_hashjoin;
 
 --
 -- semijoin selectivity for <>
@@ -1942,8 +1881,6 @@ rollback;
 -- test planner's ability to mark joins as unique
 --
 
-set enable_mergejoin to 0;
-
 create table j1 (id int primary key);
 create table j2 (id int primary key);
 create table j3 (id int);
@@ -2044,7 +1981,6 @@ left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
 set enable_nestloop to 0;
 set enable_hashjoin to 0;
 set enable_sort to 0;
-set enable_mergejoin to 1;
 
 -- create an index that will be preferred over the PK to perform the join
 create index j1_id1_idx on j1 (id1) where id1 % 1000 = 1;

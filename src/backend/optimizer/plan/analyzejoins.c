@@ -238,11 +238,10 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 	}
 
 	/*
-	 * Search for mergejoinable clauses that constrain the inner rel against
-	 * either the outer rel or a pseudoconstant.  If an operator is
-	 * mergejoinable then it behaves like equality for some btree opclass, so
-	 * it's what we want.  The mergejoinability test also eliminates clauses
-	 * containing volatile functions, which we couldn't depend on.
+	 * Search for mergejoinable equality clauses that constrain the inner rel
+	 * against either the outer rel or a pseudoconstant. Mergejoinable equality
+	 * clauses are based on equality operators for some btree opclass, and don't
+	 * contain volatile functions, so it's what we want.
 	 */
 	foreach(l, innerrel->joininfo)
 	{
@@ -267,10 +266,10 @@ join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo)
 			continue;			/* else, ignore; not useful here */
 		}
 
-		/* Ignore if it's not a mergejoinable clause */
+		/* Ignore if it's not a mergejoinable equality clause */
 		if (!restrictinfo->can_join ||
-			restrictinfo->mergeopfamilies == NIL)
-			continue;			/* not mergejoinable */
+			!restrictinfo->is_mj_equality)
+			continue;
 
 		/*
 		 * Check if clause has the form "outer op inner" or "inner op outer",
@@ -1087,11 +1086,10 @@ is_innerrel_unique_for(PlannerInfo *root,
 	ListCell   *lc;
 
 	/*
-	 * Search for mergejoinable clauses that constrain the inner rel against
-	 * the outer rel.  If an operator is mergejoinable then it behaves like
-	 * equality for some btree opclass, so it's what we want.  The
-	 * mergejoinability test also eliminates clauses containing volatile
-	 * functions, which we couldn't depend on.
+	 * Search for mergejoinable equality clauses that constrain the inner rel
+	 * against either the outer rel. Mergejoinable equality clauses are based
+	 * on equality operators for some btree opclass, and don't contain volatile
+	 * functions, so it's what we want.
 	 */
 	foreach(lc, restrictlist)
 	{
@@ -1105,9 +1103,9 @@ is_innerrel_unique_for(PlannerInfo *root,
 			RINFO_IS_PUSHED_DOWN(restrictinfo, joinrelids))
 			continue;
 
-		/* Ignore if it's not a mergejoinable clause */
+		/* Ignore if it's not a mergejoinable equality clause */
 		if (!restrictinfo->can_join ||
-			restrictinfo->mergeopfamilies == NIL)
+			!restrictinfo->is_mj_equality)
 			continue;			/* not mergejoinable */
 
 		/*

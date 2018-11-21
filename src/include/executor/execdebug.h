@@ -105,7 +105,7 @@
 #define MJ_debugtup(slot)				debugtup(slot, NULL)
 #define MJ_dump(state)					ExecMergeTupleDump(state)
 #define MJ_DEBUG_COMPARE(res) \
-  MJ1_printf("  MJCompare() returns %d\n", (res))
+  MJ1_printf("  MJTestTuples() returns %d\n", (res))
 #define MJ_DEBUG_QUAL(clause, res) \
   MJ2_printf("  ExecQual(%s, econtext) returns %s\n", \
 			 CppAsString(clause), T_OR_F(res))

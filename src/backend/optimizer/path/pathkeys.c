@@ -199,7 +199,7 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 	if (!OidIsValid(equality_op))	/* shouldn't happen */
 		elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
 			 BTEqualStrategyNumber, opcintype, opcintype, opfamily);
-	opfamilies = get_mergejoin_opfamilies(equality_op);
+	opfamilies = get_btree_equality_opfamilies(equality_op);
 	if (!opfamilies)			/* certainly should find some */
 		elog(ERROR, "could not find opfamilies for equality operator %u",
 			 equality_op);
@@ -990,6 +990,44 @@ update_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 }
 
 /*
+ * Determine the sort order required by an inequality merge clause.
+ */
+static int
+get_merge_sort_strategy(RestrictInfo *rinfo)
+{
+	Oid opfamily = linitial_oid(rinfo->mergeopfamilies);
+	Oid opno;
+	int join_strategy;
+	Oid lefttype;
+	Oid righttype;
+	bool sort_ascending;
+
+	Assert(IsA(rinfo->clause, OpExpr));
+	opno = ((OpExpr *) rinfo->clause)->opno;
+	get_op_opfamily_properties(opno, opfamily,
+							   false /* ordering_op */ , &join_strategy,
+							   &lefttype, &righttype);
+	switch (join_strategy)
+	{
+		case BTLessEqualStrategyNumber:
+		case BTLessStrategyNumber:
+			sort_ascending = false;
+			break;
+		case BTGreaterEqualStrategyNumber:
+		case BTGreaterStrategyNumber:
+			sort_ascending = true;
+			break;
+		default:
+			elog(ERROR, "unknown merge join clause strategy %d\n", join_strategy);
+	}
+
+	if (!rinfo->outer_is_left)
+		sort_ascending = !sort_ascending;
+
+	return sort_ascending ? BTLessStrategyNumber : BTGreaterStrategyNumber;
+}
+
+/*
  * find_mergeclauses_for_outer_pathkeys
  *	  This routine attempts to find a list of mergeclauses that can be
  *	  used with a specified ordering for the join's outer relation.
@@ -1028,6 +1066,7 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 		PathKey    *pathkey = (PathKey *) lfirst(i);
 		EquivalenceClass *pathkey_ec = pathkey->pk_eclass;
 		List	   *matched_restrictinfos = NIL;
+		RestrictInfo *matched_ineq = NULL;
 		ListCell   *j;
 
 		/*----------
@@ -1065,6 +1104,10 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 		 * has to delete duplicates when it constructs the inner pathkeys
 		 * list, and we also have to deal with such cases specially in
 		 * create_mergejoin_plan().
+		 *
+		 * For inequality merge clauses, make sure that the direction of
+		 * pathkey is compatible with the merge clause operator. Also, allow
+		 * no more than one inequality clause.
 		 *----------
 		 */
 		foreach(j, restrictinfos)
@@ -1074,9 +1117,29 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 
 			clause_ec = rinfo->outer_is_left ?
 				rinfo->left_ec : rinfo->right_ec;
-			if (clause_ec == pathkey_ec)
+
+			if (clause_ec != pathkey_ec)
+				continue;
+
+			if (rinfo->is_mj_equality)
 				matched_restrictinfos = lappend(matched_restrictinfos, rinfo);
+			else if (pathkey->pk_strategy == get_merge_sort_strategy(rinfo))
+			{
+				if (matched_ineq)
+					break; /* can't match more than one inequality clause */
+
+				matched_ineq = rinfo;
+			}
 		}
+
+		/*
+		 * If we did find usable mergeclause(s) for this sort-key position,
+		 * add them to result list. If present, add inequality clause to
+		 * the final position.
+		 */
+		mergeclauses = list_concat(mergeclauses, matched_restrictinfos);
+		if (matched_ineq)
+			mergeclauses = lappend(mergeclauses, matched_ineq);
 
 		/*
 		 * If we didn't find a mergeclause, we're done --- any additional
@@ -1087,10 +1150,11 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 			break;
 
 		/*
-		 * If we did find usable mergeclause(s) for this sort-key position,
-		 * add them to result list.
+		 * If we already have an inequality clause, we can't add any more
+		 * clauses after it.
 		 */
-		mergeclauses = list_concat(mergeclauses, matched_restrictinfos);
+		if (matched_ineq)
+			break;
 	}
 
 	return mergeclauses;
@@ -1110,6 +1174,7 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
  * select_mergejoin_clauses())
  *
  * Returns a pathkeys list that can be applied to the outer relation.
+ * If there is an inequality clause, *have_inequality is set to true.
  *
  * Since we assume here that a sort is required, there is no particular use
  * in matching any available ordering of the outerrel.  (joinpath.c has an
@@ -1123,19 +1188,44 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 List *
 select_outer_pathkeys_for_merge(PlannerInfo *root,
 								List *mergeclauses,
-								RelOptInfo *joinrel)
+								RelOptInfo *joinrel,
+								bool *have_inequality)
 {
-	List	   *pathkeys = NIL;
+	List	   *eq_pathkeys = NIL;
 	int			nClauses = list_length(mergeclauses);
 	EquivalenceClass **ecs;
 	int		   *scores;
 	int			necs;
 	ListCell   *lc;
 	int			j;
+	PathKey	   *ineq_pathkey = NULL;
+	int ineq_strategy = BTLessStrategyNumber;
+	RestrictInfo *ineq_clause = NULL;
+	int ineq_ec_index = -1;
+
+	*have_inequality = false;
 
 	/* Might have no mergeclauses */
 	if (nClauses == 0)
 		return NIL;
+
+	/* Check if we have an inequality clause. */
+	foreach (lc, mergeclauses)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		Assert(rinfo->mergeopfamilies);
+		if (!rinfo->is_mj_equality)
+		{
+			/*
+			 * Found an inequality clause, determine which sort strategy
+			 * it requires.
+			 */
+			ineq_clause = rinfo;
+			*have_inequality = true;
+			ineq_strategy = get_merge_sort_strategy(ineq_clause);
+			break;
+		}
+	}
 
 	/*
 	 * Make arrays of the ECs used by the mergeclauses (dropping any
@@ -1160,12 +1250,20 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		else
 			oeclass = rinfo->right_ec;
 
-		/* reject duplicates */
+		/* Find the outer EC in the array. */
 		for (j = 0; j < necs; j++)
 		{
 			if (ecs[j] == oeclass)
 				break;
 		}
+		/*
+		 * Remember the index of the EC that corresponds to the
+		 * inequality clause.
+		 */
+		if (rinfo == ineq_clause)
+			ineq_ec_index = j;
+
+		/* If we have already processed this EC, no need to do it again. */
 		if (j < necs)
 			continue;
 
@@ -1181,15 +1279,27 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 				score++;
 		}
 
+		/* Add the EC to the arrays. */
 		ecs[necs] = oeclass;
 		scores[necs] = score;
 		necs++;
 	}
 
+	/* If there is an inequality clause, its EC index must be valid. */
+	Assert(ineq_clause == NULL || (ineq_ec_index >= 0 && ineq_ec_index < necs));
+
 	/*
 	 * Find out if we have all the ECs mentioned in query_pathkeys; if so we
 	 * can generate a sort order that's also useful for final output. There is
 	 * no percentage in a partial match, though, so we have to have 'em all.
+	 *
+	 * Moreover, the pathkey that corresponds to the inequality merge clause
+	 * must have a particular sort direction, so we check this too.
+	 *
+	 * If the inequality pathkey is included in root pathkeys, and some pathkeys
+	 * required by merge clauses are not included, we will not be able to produce
+	 * the required ordering, because these omitted pathkeys will have to go
+	 * before the inequality pathkey.
 	 */
 	if (root->query_pathkeys)
 	{
@@ -1205,13 +1315,36 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 			}
 			if (j >= necs)
 				break;			/* didn't find match */
+
+			if (j == ineq_ec_index)
+			{
+				if (lc != list_tail(root->query_pathkeys))
+					break; /* The inequality pathkey must be the last one. */
+
+				if (query_pathkey->pk_strategy != ineq_strategy)
+					break; /* The inequality pathkey has wrong  direction. */
+
+				/*
+				 * root->query_pathkeys shouldn't be redundant, so this pathkey
+				 * must be the first one we see for this equivalence class.
+				 */
+				Assert(ineq_pathkey == 0);
+
+				/*
+				 * The inequality pathkey will be processed separately, so store
+				 * it to ineq_pathkey.
+				 */
+				ineq_pathkey = query_pathkey;
+			}
 		}
-		/* if we got to the end of the list, we have them all */
+
+		/*
+		 * If we got to the end of the list, we have all the root pathkeys.
+		 * Copy them to the resulting list, skipping the inequality pathkey.
+		 * Mark the corresponding ECs as already emitted.
+		 */
 		if (lc == NULL)
 		{
-			/* copy query_pathkeys as starting point for our output */
-			pathkeys = list_copy(root->query_pathkeys);
-			/* mark their ECs as already-emitted */
 			foreach(lc, root->query_pathkeys)
 			{
 				PathKey    *query_pathkey = (PathKey *) lfirst(lc);
@@ -1225,14 +1358,18 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 						break;
 					}
 				}
+
+				if (query_pathkey != ineq_pathkey)
+					eq_pathkeys = lappend(eq_pathkeys, query_pathkey);
 			}
 		}
 	}
 
 	/*
-	 * Add remaining ECs to the list in popularity order, using a default sort
-	 * ordering.  (We could use qsort() here, but the list length is usually
-	 * so small it's not worth it.)
+	 * Add remaining ECs to the list in popularity order. (We could use qsort()
+	 * here, but the list length is usually so small it's not worth it.) Use
+	 * a default sort ordering for the equality clauses, and the ordering we
+	 * computed earlier for the inequality clause.
 	 */
 	for (;;)
 	{
@@ -1240,6 +1377,7 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 		int			best_score;
 		EquivalenceClass *ec;
 		PathKey    *pathkey;
+		int 		strategy;
 
 		best_j = 0;
 		best_score = scores[0];
@@ -1255,20 +1393,35 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 			break;				/* all done */
 		ec = ecs[best_j];
 		scores[best_j] = -1;
+		strategy = best_j == ineq_ec_index ? ineq_strategy : BTLessStrategyNumber;
 		pathkey = make_canonical_pathkey(root,
 										 ec,
 										 linitial_oid(ec->ec_opfamilies),
-										 BTLessStrategyNumber,
-										 false);
+										 strategy,
+										 strategy == BTGreaterStrategyNumber);
 		/* can't be redundant because no duplicate ECs */
-		Assert(!pathkey_is_redundant(pathkey, pathkeys));
-		pathkeys = lappend(pathkeys, pathkey);
+		Assert(!pathkey_is_redundant(pathkey, eq_pathkeys));
+
+		/*
+		 * The equality pathkeys are added to the list, and the inequality one is
+		 * recorded separately.
+		 */
+		if (best_j == ineq_ec_index)
+		{
+			Assert(ineq_pathkey == NULL);
+			ineq_pathkey = pathkey;
+		}
+		else
+			eq_pathkeys = lappend(eq_pathkeys, pathkey);
 	}
 
 	pfree(ecs);
 	pfree(scores);
 
-	return pathkeys;
+	if (ineq_pathkey)
+		return lappend(eq_pathkeys, ineq_pathkey);
+
+	return eq_pathkeys;
 }
 
 /*
@@ -1489,6 +1642,10 @@ trim_mergeclauses_for_inner_pathkeys(PlannerInfo *root,
  * one of the directions happens to match an ORDER BY key, in which case
  * that direction should be preferred, in hopes of avoiding a final sort step.
  * right_merge_direction() implements this heuristic.
+ *
+ * Note that a merge join on an inequality clause can be performed only for
+ * a particular ordering of inputs, so we keep both sort directions if such
+ * clause is present.
  */
 static int
 pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
@@ -1500,11 +1657,8 @@ pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(i);
 		bool		matched = false;
+		bool		right_direction = right_merge_direction(root, pathkey);
 		ListCell   *j;
-
-		/* If "wrong" direction, not useful for merging */
-		if (!right_merge_direction(root, pathkey))
-			break;
 
 		/*
 		 * First look into the EquivalenceClass of the pathkey, to see if
@@ -1513,7 +1667,16 @@ pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
 		 */
 		if (rel->has_eclass_joins &&
 			eclass_useful_for_merging(root, pathkey->pk_eclass, rel))
+		{
+			/*
+			 * If "wrong" direction, not useful for merging on an equality
+			 * clause.
+			 */
+			if (!right_direction)
+				return useful;
+
 			matched = true;
+		}
 		else
 		{
 			/*
@@ -1529,8 +1692,13 @@ pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
 					continue;
 				update_mergeclause_eclasses(root, restrictinfo);
 
-				if (pathkey->pk_eclass == restrictinfo->left_ec ||
-					pathkey->pk_eclass == restrictinfo->right_ec)
+				/*
+				 * Consider pathkey useful if it has the "right" direction,
+				 * or if the correspoinding join clause is an inequality.
+				 */
+				if ((pathkey->pk_eclass == restrictinfo->left_ec
+					|| pathkey->pk_eclass == restrictinfo->right_ec)
+					&& (right_direction || !restrictinfo->is_mj_equality))
 				{
 					matched = true;
 					break;

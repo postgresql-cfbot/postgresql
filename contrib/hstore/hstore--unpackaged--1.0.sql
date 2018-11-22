@@ -71,6 +71,7 @@ ALTER EXTENSION hstore ADD operator #<=#(hstore,hstore);
 ALTER EXTENSION hstore ADD operator family btree_hstore_ops using btree;
 ALTER EXTENSION hstore ADD operator class btree_hstore_ops using btree;
 ALTER EXTENSION hstore ADD function hstore_hash(hstore);
+ALTER EXTENSION hstore ADD function hstore_hash_extended(hstore,int8);
 ALTER EXTENSION hstore ADD operator family hash_hstore_ops using hash;
 ALTER EXTENSION hstore ADD operator class hash_hstore_ops using hash;
 ALTER EXTENSION hstore ADD type ghstore;

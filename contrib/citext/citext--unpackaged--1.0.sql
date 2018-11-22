@@ -33,6 +33,7 @@ ALTER EXTENSION citext ADD operator <(citext,citext);
 ALTER EXTENSION citext ADD operator <=(citext,citext);
 ALTER EXTENSION citext ADD function citext_cmp(citext,citext);
 ALTER EXTENSION citext ADD function citext_hash(citext);
+ALTER EXTENSION citext ADD function citext_hash_extended(citext,int8);
 ALTER EXTENSION citext ADD operator family citext_ops using btree;
 ALTER EXTENSION citext ADD operator class citext_ops using btree;
 ALTER EXTENSION citext ADD operator family citext_ops using hash;

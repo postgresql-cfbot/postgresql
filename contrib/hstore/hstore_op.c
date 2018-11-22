@@ -1253,3 +1253,23 @@ hstore_hash(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(hs, 0);
 	PG_RETURN_DATUM(hval);
 }
+
+PG_FUNCTION_INFO_V1(hstore_hash_extended);
+Datum
+hstore_hash_extended(PG_FUNCTION_ARGS)
+{
+	HStore	   *hs = PG_GETARG_HSTORE_P(0);
+	Datum		hval = hash_any_extended((unsigned char *) VARDATA(hs),
+								VARSIZE(hs) - VARHDRSZ,
+								PG_GETARG_INT64(1));
+
+	/* Same approach as hstore_hash */
+	Assert(VARSIZE(hs) ==
+		   (HS_COUNT(hs) != 0 ?
+			CALCDATASIZE(HS_COUNT(hs),
+						 HSE_ENDPOS(ARRPTR(hs)[2 * HS_COUNT(hs) - 1])) :
+			HSHRDSIZE));
+
+	PG_FREE_IF_COPY(hs, 0);
+	PG_RETURN_DATUM(hval);
+}

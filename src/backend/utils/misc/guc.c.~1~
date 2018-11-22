@@ -1723,16 +1723,6 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"synchronous_replay", PGC_USERSET, REPLICATION_STANDBY,
-		 gettext_noop("Enables synchronous replay."),
-		 NULL
-		},
-		&synchronous_replay,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
 		{"syslog_sequence_numbers", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Add sequence number to syslog messages to avoid duplicate suppression."),
 			NULL
@@ -3081,28 +3071,6 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"synchronous_replay_max_lag", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("Sets the maximum allowed replay lag before standbys are removed from the synchronous replay set."),
-			NULL,
-			GUC_UNIT_MS
-		},
-		&synchronous_replay_max_lag,
-		0, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"synchronous_replay_lease_time", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("Sets the duration of read leases granted to synchronous replay standbys."),
-			NULL,
-			GUC_UNIT_MS
-		},
-		&synchronous_replay_lease_time,
-		5000, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
@@ -3826,17 +3794,6 @@ static struct config_string ConfigureNamesString[] =
 		&SyncRepStandbyNames,
 		"",
 		check_synchronous_standby_names, assign_synchronous_standby_names, NULL
-	},
-
-	{
-		{"synchronous_replay_standby_names", PGC_SIGHUP, REPLICATION_MASTER,
-			gettext_noop("List of names of potential synchronous replay standbys."),
-			NULL,
-			GUC_LIST_INPUT
-		},
-		&synchronous_replay_standby_names,
-		"*",
-		check_synchronous_replay_standby_names, NULL, NULL
 	},
 
 	{

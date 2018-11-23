@@ -47,7 +47,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "postmaster/bgwriter.h"
+#include "postmaster/checkpointer.h"
 #include "replication/slot.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"

@@ -77,6 +77,18 @@ typedef struct SMgrRelationData
 
 typedef SMgrRelationData *SMgrRelation;
 
+/*
+ * A tag identifying a file to be flushed at the next checkpoint.  This is
+ * convertible to the file's path, but it's convenient to have a small fixed
+ * sized object to use as a hash table key.
+ */
+typedef struct SmgrFileTag
+{
+	RelFileNode node;
+	ForkNumber forknum;
+	int segno;
+} SmgrFileTag;
+
 #define SmgrIsTemp(smgr) \
 	RelFileNodeBackendIsTemp((smgr)->smgr_rnode)
 
@@ -106,9 +118,9 @@ extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber forknum,
 			 BlockNumber nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
-extern void smgrpreckpt(void);
-extern void smgrsync(void);
-extern void smgrpostckpt(void);
+extern void smgrpath(const SmgrFileTag *file_tag, char *out);
+extern void smgrregdirtyblock(SMgrRelation reln, ForkNumber forknum,
+							  BlockNumber blocknum);
 extern void AtEOXact_SMgr(void);
 
 
@@ -134,13 +146,11 @@ extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 		   BlockNumber nblocks);
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
-extern void mdpreckpt(void);
-extern void mdsync(void);
-extern void mdpostckpt(void);
+extern void mdpath(const SmgrFileTag *tag, char *out);
+extern void mdregdirtyblock(SMgrRelation reln, ForkNumber forknum,
+							BlockNumber blocknum);
 
-extern void SetForwardFsyncRequests(void);
-extern void RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum,
-					 BlockNumber segno);
+extern bool FlushFsyncRequestQueueIfNecessary(void);
 extern void ForgetRelationFsyncRequests(RelFileNode rnode, ForkNumber forknum);
 extern void ForgetDatabaseFsyncRequests(Oid dbid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);

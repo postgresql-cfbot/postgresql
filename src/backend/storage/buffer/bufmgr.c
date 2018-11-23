@@ -42,11 +42,13 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/checkpointer.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
+#include "storage/smgrsync.h"
 #include "storage/standby.h"
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
@@ -176,6 +178,7 @@ static PrivateRefCountEntry *NewPrivateRefCountEntry(Buffer buffer);
 static PrivateRefCountEntry *GetPrivateRefCountEntry(Buffer buffer, bool do_move);
 static inline int32 GetPrivateRefCount(Buffer buffer);
 static void ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref);
+static void ScheduleBufferTagForFsync(const BufferTag *tag, SMgrRelation reln);
 
 /*
  * Ensure that the PrivateRefCountArray has sufficient space to store one more
@@ -1140,6 +1143,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
 
+				ScheduleBufferTagForFsync(&buf->tag, NULL);
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
 											  &buf->tag);
 
@@ -2399,6 +2403,7 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 
 	UnpinBuffer(bufHdr, true);
 
+	ScheduleBufferTagForFsync(&tag, NULL);
 	ScheduleBufferTagForWriteback(wb_context, &tag);
 
 	return result | BUF_WRITTEN;
@@ -2660,6 +2665,11 @@ BufferGetTag(Buffer buffer, RelFileNode *rnode, ForkNumber *forknum,
  *
  * If the caller has an smgr reference for the buffer's relation, pass it
  * as the second parameter.  If not, pass NULL.
+ *
+ * The caller must call ScheduleBufferTagForFsync() after releasing the
+ * content lock, but before clearing the BM_DIRTY flag.  This ensures that a
+ * concurrent checkpoint will either receive the fsync request, or consider it
+ * dirty and flush it (again) itself.
  */
 static void
 FlushBuffer(BufferDesc *buf, SMgrRelation reln)
@@ -3221,6 +3231,7 @@ FlushRelationBuffers(Relation rel)
 			FlushBuffer(bufHdr, rel->rd_smgr);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr, true);
+			ScheduleBufferTagForFsync(&bufHdr->tag, rel->rd_smgr);
 		}
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -3275,6 +3286,7 @@ FlushDatabaseBuffers(Oid dbid)
 			FlushBuffer(bufHdr, NULL);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr, true);
+			ScheduleBufferTagForFsync(&bufHdr->tag, NULL);
 		}
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -4235,6 +4247,19 @@ WritebackContextInit(WritebackContext *context, int *max_pending)
 
 	context->max_pending = max_pending;
 	context->nr_pending = 0;
+}
+
+/*
+ * Register a block that is dirty in the kernel page cache, for later fsync.
+ */
+static void
+ScheduleBufferTagForFsync(const BufferTag *tag, SMgrRelation reln)
+{
+	/* Open if not already passed in. */
+	if (reln == NULL)
+		reln = smgropen(tag->rnode, InvalidBackendId);
+
+	smgrregdirtyblock(reln, tag->forkNum, tag->blockNum);
 }
 
 /*

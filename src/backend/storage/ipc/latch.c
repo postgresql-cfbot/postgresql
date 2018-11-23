@@ -878,6 +878,12 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 	{
 		*handle = PostmasterHandle;
 	}
+#ifdef WIN32
+	else if (event->events == WL_WIN32_HANDLE)
+	{
+		*handle = *(HANDLE *)event->user_data;
+	}
+#endif
 	else
 	{
 		int			flags = FD_CLOSE;	/* always check for errors/EOF */
@@ -1452,6 +1458,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 			occurred_events++;
 			returned_events++;
 		}
+	}
+	else if (cur_event->events & WL_WIN32_HANDLE)
+	{
+		occurred_events->events |= WL_WIN32_HANDLE;
+		occurred_events++;
+		returned_events++;
 	}
 
 	return returned_events;

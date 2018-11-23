@@ -21,6 +21,7 @@
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/smgr.h"
+#include "storage/smgrsync.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
@@ -59,9 +60,9 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_pre_ckpt) (void);	/* may be NULL */
-	void		(*smgr_sync) (void);	/* may be NULL */
-	void		(*smgr_post_ckpt) (void);	/* may be NULL */
+	void		(*smgr_path) (const SmgrFileTag *tag, char *out);
+	void		(*smgr_regdirtyblock) (SMgrRelation reln, ForkNumber forknum,
+									   BlockNumber blocknum);
 } f_smgr;
 
 
@@ -82,9 +83,8 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-		.smgr_pre_ckpt = mdpreckpt,
-		.smgr_sync = mdsync,
-		.smgr_post_ckpt = mdpostckpt
+		.smgr_path = mdpath,
+		.smgr_regdirtyblock = mdregdirtyblock
 	}
 };
 
@@ -104,6 +104,15 @@ static void smgrshutdown(int code, Datum arg);
 static void add_to_unowned_list(SMgrRelation reln);
 static void remove_from_unowned_list(SMgrRelation reln);
 
+/*
+ * For now there is only one implementation.  If more are added, we'll need to
+ * be able to dispatch based on a file tag.
+ */
+static inline int
+which_for_file_tag(const SmgrFileTag *tag)
+{
+	return 0;
+}
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -117,6 +126,8 @@ void
 smgrinit(void)
 {
 	int			i;
+
+	smgrsync_init();
 
 	for (i = 0; i < NSmgr; i++)
 	{
@@ -751,50 +762,22 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
 }
 
-
 /*
- *	smgrpreckpt() -- Prepare for checkpoint.
+ * smgrpath() -- Expand a tag to a path.
  */
 void
-smgrpreckpt(void)
+smgrpath(const SmgrFileTag *tag, char *out)
 {
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_pre_ckpt)
-			smgrsw[i].smgr_pre_ckpt();
-	}
+	smgrsw[which_for_file_tag(tag)].smgr_path(tag, out);
 }
 
 /*
- *	smgrsync() -- Sync files to disk during checkpoint.
+ * smgrregdirtblock() -- Register a dirty block for later fsync.
  */
 void
-smgrsync(void)
+smgrregdirtyblock(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_sync)
-			smgrsw[i].smgr_sync();
-	}
-}
-
-/*
- *	smgrpostckpt() -- Post-checkpoint cleanup.
- */
-void
-smgrpostckpt(void)
-{
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_post_ckpt)
-			smgrsw[i].smgr_post_ckpt();
-	}
+	smgrsw[reln->smgr_which].smgr_regdirtyblock(reln, forknum, blocknum);
 }
 
 /*

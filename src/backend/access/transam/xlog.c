@@ -44,6 +44,7 @@
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/checkpointer.h"
 #include "postmaster/walwriter.h"
 #include "postmaster/startup.h"
 #include "replication/basebackup.h"
@@ -64,6 +65,7 @@
 #include "storage/procarray.h"
 #include "storage/reinit.h"
 #include "storage/smgr.h"
+#include "storage/smgrsync.h"
 #include "storage/spin.h"
 #include "utils/backend_random.h"
 #include "utils/builtins.h"
@@ -8757,8 +8759,10 @@ CreateCheckPoint(int flags)
 	 * Note: because it is possible for log_checkpoints to change while a
 	 * checkpoint proceeds, we always accumulate stats, even if
 	 * log_checkpoints is currently off.
+	 *
+	 * Note #2: this is reset at the end of the checkpoint, not here, because
+	 * we might have to fsync before getting here (see smgrsync()).
 	 */
-	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
 
 	/*
@@ -9121,6 +9125,9 @@ CreateCheckPoint(int flags)
 									 CheckpointStats.ckpt_segs_recycled);
 
 	LWLockRelease(CheckpointLock);
+
+	/* reset stats */
+	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 }
 
 /*

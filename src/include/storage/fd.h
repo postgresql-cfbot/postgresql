@@ -62,6 +62,7 @@ extern int	max_safe_fds;
 /* Operations on virtual Files --- equivalent to Unix kernel file ops */
 extern File PathNameOpenFile(const char *fileName, int fileFlags);
 extern File PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
+extern File FileOpenForFd(int fd, const char *fileName, uint64 open_seq);
 extern File OpenTemporaryFile(bool interXact);
 extern void FileClose(File file);
 extern int	FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info);
@@ -75,6 +76,8 @@ extern char *FilePathName(File file);
 extern int	FileGetRawDesc(File file);
 extern int	FileGetRawFlags(File file);
 extern mode_t FileGetRawMode(File file);
+extern uint64 FileGetOpenSeq(File file);
+extern void FileSetOpenSeq(File file, uint64 seq);
 
 /* Operations used for sharing named temporary files */
 extern File PathNameCreateTemporaryFile(const char *name, bool error_on_failure);
@@ -113,6 +116,7 @@ extern int	MakePGDirectory(const char *directoryName);
 
 /* Miscellaneous support routines */
 extern void InitFileAccess(void);
+extern void FileShmemInit(void);
 extern void set_max_safe_fds(void);
 extern void closeAllVfds(void);
 extern void SetTempTablespaces(Oid *tableSpaces, int numSpaces);
@@ -124,6 +128,7 @@ extern void AtEOSubXact_Files(bool isCommit, SubTransactionId mySubid,
 				  SubTransactionId parentSubid);
 extern void RemovePgTempFiles(void);
 extern bool looks_like_temp_rel_name(const char *name);
+extern void ReleaseLruFiles(void);
 
 extern int	pg_fsync(int fd);
 extern int	pg_fsync_no_writethrough(int fd);
@@ -140,5 +145,11 @@ extern int data_sync_elevel(int elevel);
 /* Filename components */
 #define PG_TEMP_FILES_DIR "pgsql_tmp"
 #define PG_TEMP_FILE_PREFIX "pgsql_tmp"
+
+#ifndef WIN32
+/* XXX; This should probably go elsewhere */
+ssize_t pg_uds_send_with_fd(int sock, void *buf, ssize_t buflen, int fd);
+ssize_t pg_uds_recv_with_fd(int sock, void *buf, ssize_t bufsize, int *fd);
+#endif
 
 #endif							/* FD_H */

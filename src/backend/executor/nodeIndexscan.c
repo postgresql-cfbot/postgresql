@@ -199,7 +199,7 @@ IndexNextWithReorder(IndexScanState *node)
 	 * with just Asserting here because the system will not try to run the
 	 * plan backwards if ExecSupportsBackwardScan() says it won't work.
 	 * Currently, that is guaranteed because no index AMs support both
-	 * amcanorderbyop and amcanbackward; if any ever do,
+	 * ammatchorderby and amcanbackward; if any ever do,
 	 * ExecSupportsBackwardScan() will need to consider indexorderbys
 	 * explicitly.
 	 */
@@ -1149,7 +1149,7 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
  * 5. NullTest ("indexkey IS NULL/IS NOT NULL").  We just fill in the
  * ScanKey properly.
  *
- * This code is also used to prepare ORDER BY expressions for amcanorderbyop
+ * This code is also used to prepare ORDER BY expressions for ammatchorderby
  * indexes.  The behavior is exactly the same, except that we have to look up
  * the operator differently.  Note that only cases 1 and 2 are currently
  * possible for ORDER BY.

@@ -111,3 +111,235 @@ create index btree_idx_err on btree_test(a) with (vacuum_cleanup_index_scale_fac
 -- Simple ALTER INDEX
 alter index btree_idx1 set (vacuum_cleanup_index_scale_factor = 70.0);
 select reloptions from pg_class WHERE oid = 'btree_idx1'::regclass;
+
+---
+--- Test B-tree distance ordering
+---
+
+SET enable_bitmapscan = OFF;
+
+-- temporarily disable bt_i4_index index on bt_i4_heap(seqno)
+UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'bt_i4_index'::regclass;
+
+CREATE INDEX bt_i4_heap_random_idx ON bt_i4_heap USING btree(random, seqno);
+
+-- test unsupported orderings (by non-first index attribute or by more than one order keys)
+EXPLAIN (COSTS OFF) SELECT * FROM bt_i4_heap ORDER BY seqno <-> 0;
+EXPLAIN (COSTS OFF) SELECT * FROM bt_i4_heap ORDER BY random <-> 0, seqno <-> 0;
+EXPLAIN (COSTS OFF) SELECT * FROM bt_i4_heap ORDER BY random <-> 0, random <-> 1;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 4000000;
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 4000000;
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 10000000;
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 0;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM bt_i4_heap
+WHERE
+	random > 1000000 AND (random, seqno) < (6000000, 0) AND
+	random IN (1809552, 1919087, 2321799, 2648497, 3000193, 3013326, 4157193, 4488889, 5257716, 5593978, NULL)
+ORDER BY random <-> 3000000;
+
+SELECT * FROM bt_i4_heap
+WHERE
+	random > 1000000 AND (random, seqno) < (6000000, 0) AND
+	random IN (1809552, 1919087, 2321799, 2648497, 3000193, 3013326, 4157193, 4488889, 5257716, 5593978, NULL)
+ORDER BY random <-> 3000000;
+
+DROP INDEX bt_i4_heap_random_idx;
+
+CREATE INDEX bt_i4_heap_random_idx ON bt_i4_heap USING btree(random DESC, seqno);
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 4000000;
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 10000000;
+
+SELECT * FROM bt_i4_heap
+WHERE random > 1000000 AND (random, seqno) < (6000000, 0)
+ORDER BY random <-> 0;
+
+DROP INDEX bt_i4_heap_random_idx;
+
+-- test parallel KNN scan
+
+-- Serializable isolation would disable parallel query, so explicitly use an
+-- arbitrary other level.
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers = 4;
+SET max_parallel_workers_per_gather = 4;
+SET cpu_operator_cost = 0;
+
+RESET enable_indexscan;
+
+CREATE TABLE bt_knn_test AS SELECT i * 10 AS i FROM generate_series(1, 1000000) i;
+CREATE INDEX bt_knn_test_idx ON bt_knn_test (i);
+ALTER TABLE bt_knn_test SET (parallel_workers = 4);
+ANALYZE bt_knn_test;
+
+EXPLAIN (COSTS OFF)
+SELECT i FROM bt_knn_test WHERE i > 8000000;
+
+CREATE TABLE bt_knn_test2 AS
+	SELECT row_number() OVER (ORDER BY i * 10 <-> 4000003) AS n, i * 10 AS i
+	FROM generate_series(1, 1000000) i;
+
+EXPLAIN (COSTS OFF)
+WITH bt_knn_test1 AS (
+	SELECT row_number() OVER () AS n, i
+	FROM bt_knn_test
+	ORDER BY i <-> 4000003
+)
+SELECT * FROM bt_knn_test1 t1 JOIN bt_knn_test2 t2 USING (n) WHERE t1.i <> t2.i;
+
+WITH bt_knn_test1 AS (
+	SELECT row_number() OVER () AS n, i
+	FROM bt_knn_test
+	ORDER BY i <-> 4000003
+)
+SELECT * FROM bt_knn_test1 t1 JOIN bt_knn_test2 t2 USING (n) WHERE t1.i <> t2.i;
+
+DROP TABLE bt_knn_test;
+CREATE TABLE bt_knn_test AS SELECT i FROM generate_series(1, 10) i, generate_series(1, 100000) j;
+CREATE INDEX bt_knn_test_idx ON bt_knn_test (i);
+ALTER TABLE bt_knn_test SET (parallel_workers = 4);
+ANALYZE bt_knn_test;
+
+EXPLAIN (COSTS OFF)
+WITH
+t1 AS (
+	SELECT row_number() OVER () AS n, i
+	FROM bt_knn_test
+	WHERE i IN (3, 4, 7, 8, 2)
+	ORDER BY i <-> 4
+),
+t2 AS (
+	SELECT i * 100000 + j AS n, (ARRAY[4, 3, 2, 7, 8])[i + 1] AS i
+	FROM generate_series(0, 4) i, generate_series(1, 100000) j
+)
+SELECT * FROM t1 JOIN t2 USING (n) WHERE t1.i <> t2.i;
+
+WITH
+t1 AS (
+	SELECT row_number() OVER () AS n, i
+	FROM bt_knn_test
+	WHERE i IN (3, 4, 7, 8, 2)
+	ORDER BY i <-> 4
+),
+t2 AS (
+	SELECT i * 100000 + j AS n, (ARRAY[4, 3, 2, 7, 8])[i + 1] AS i
+	FROM generate_series(0, 4) i, generate_series(1, 100000) j
+)
+SELECT * FROM t1 JOIN t2 USING (n) WHERE t1.i <> t2.i;
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers;
+RESET max_parallel_workers_per_gather;
+RESET cpu_operator_cost;
+
+ROLLBACK;
+
+-- enable bt_i4_index index on bt_i4_heap(seqno)
+UPDATE pg_index SET indisvalid = true WHERE indexrelid = 'bt_i4_index'::regclass;
+
+
+CREATE TABLE tenk3 AS SELECT thousand, tenthous FROM tenk1;
+
+INSERT INTO tenk3 VALUES (NULL, 1), (NULL, 2), (NULL, 3);
+
+-- Test distance ordering by ASC index
+CREATE INDEX tenk3_idx ON tenk3 USING btree(thousand, tenthous);
+
+EXPLAIN (COSTS OFF)
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000)
+ORDER BY thousand <-> 998;
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000)
+ORDER BY thousand <-> 998;
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000)
+ORDER BY thousand <-> 0;
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000) AND thousand < 1000
+ORDER BY thousand <-> 10000;
+
+SELECT thousand, tenthous FROM tenk3
+ORDER BY thousand <-> 500
+OFFSET 9970;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM tenk3
+WHERE thousand > 100 AND thousand < 800 AND
+	thousand = ANY(ARRAY[0, 123, 234, 345, 456, 678, 901, NULL]::int2[])
+ORDER BY thousand <-> 300::int8;
+
+SELECT * FROM tenk3
+WHERE thousand > 100 AND thousand < 800 AND
+	thousand = ANY(ARRAY[0, 123, 234, 345, 456, 678, 901, NULL]::int2[])
+ORDER BY thousand <-> 300::int8;
+
+DROP INDEX tenk3_idx;
+
+-- Test distance ordering by DESC index
+CREATE INDEX tenk3_idx ON tenk3 USING btree(thousand DESC, tenthous);
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000)
+ORDER BY thousand <-> 998;
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000)
+ORDER BY thousand <-> 0;
+
+SELECT thousand, tenthous FROM tenk3
+WHERE (thousand, tenthous) >= (997, 5000) AND thousand < 1000
+ORDER BY thousand <-> 10000;
+
+SELECT thousand, tenthous FROM tenk3
+ORDER BY thousand <-> 500
+OFFSET 9970;
+
+DROP INDEX tenk3_idx;
+
+DROP TABLE tenk3;
+
+-- Test distance ordering on by-ref types
+CREATE TABLE knn_btree_ts (ts timestamp);
+
+INSERT INTO knn_btree_ts
+SELECT timestamp '2017-05-03 00:00:00' + tenthous * interval '1 hour'
+FROM tenk1;
+
+CREATE INDEX knn_btree_ts_idx ON knn_btree_ts USING btree(ts);
+
+SELECT ts, ts <-> timestamp '2017-05-01 00:00:00' FROM knn_btree_ts ORDER BY 2 LIMIT 20;
+SELECT ts, ts <-> timestamp '2018-01-01 00:00:00' FROM knn_btree_ts ORDER BY 2 LIMIT 20;
+
+DROP TABLE knn_btree_ts;
+
+RESET enable_bitmapscan;

@@ -388,7 +388,7 @@ typedef struct SampleScan
  * indexorderbyops is a list of the OIDs of the operators used to sort the
  * ORDER BY expressions.  This is used together with indexorderbyorig to
  * recheck ordering at run time.  (Note that indexorderby, indexorderbyorig,
- * and indexorderbyops are used for amcanorderbyop cases, not amcanorder.)
+ * and indexorderbyops are used for ammatchorderby cases, not amcanorder.)
  *
  * indexorderdir specifies the scan ordering, for indexscans on amcanorder
  * indexes (for other indexes it should be "don't care").

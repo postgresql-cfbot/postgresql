@@ -25,6 +25,7 @@ SELECT m / 2::float8 FROM money_data;
 SELECT m * 2::float4 FROM money_data;
 SELECT 2::float4 * m FROM money_data;
 SELECT m / 2::float4 FROM money_data;
+SELECT m <-> '$123.45' FROM money_data;
 
 -- All true
 SELECT m = '$123.00' FROM money_data;

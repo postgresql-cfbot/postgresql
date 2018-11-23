@@ -1604,3 +1604,214 @@ SELECT make_timestamp(2014,12,28,6,30,45.887);
  Sun Dec 28 06:30:45.887 2014
 (1 row)
 
+-- distance operators
+SELECT '' AS  "0", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL;
+ERROR:  interval out of range
+SELECT '' AS "63", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+ 63 |               Distance                
+----+---------------------------------------
+    | @ 11356 days
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 58 secs
+    | @ 1453 days 6 hours 27 mins 58.6 secs
+    | @ 1453 days 6 hours 27 mins 58.5 secs
+    | @ 1453 days 6 hours 27 mins 58.4 secs
+    | @ 1493 days
+    | @ 1492 days 20 hours 55 mins 55 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1333 days 6 hours 27 mins 59 secs
+    | @ 231 days 18 hours 19 mins 20 secs
+    | @ 324 days 15 hours 45 mins 59 secs
+    | @ 324 days 10 hours 45 mins 58 secs
+    | @ 324 days 11 hours 45 mins 57 secs
+    | @ 324 days 20 hours 45 mins 56 secs
+    | @ 324 days 21 hours 45 mins 55 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 28 mins
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1333 days 5 hours 27 mins 59 secs
+    | @ 1453 days 6 hours 27 mins 59 secs
+    | @ 1452 days 6 hours 27 mins 59 secs
+    | @ 1451 days 6 hours 27 mins 59 secs
+    | @ 1450 days 6 hours 27 mins 59 secs
+    | @ 1449 days 6 hours 27 mins 59 secs
+    | @ 1448 days 6 hours 27 mins 59 secs
+    | @ 1447 days 6 hours 27 mins 59 secs
+    | @ 765901 days 6 hours 27 mins 59 secs
+    | @ 695407 days 6 hours 27 mins 59 secs
+    | @ 512786 days 6 hours 27 mins 59 secs
+    | @ 330165 days 6 hours 27 mins 59 secs
+    | @ 111019 days 6 hours 27 mins 59 secs
+    | @ 74495 days 6 hours 27 mins 59 secs
+    | @ 37971 days 6 hours 27 mins 59 secs
+    | @ 1447 days 6 hours 27 mins 59 secs
+    | @ 35077 days 17 hours 32 mins 1 sec
+    | @ 1801 days 6 hours 27 mins 59 secs
+    | @ 1800 days 6 hours 27 mins 59 secs
+    | @ 1799 days 6 hours 27 mins 59 secs
+    | @ 1495 days 6 hours 27 mins 59 secs
+    | @ 1494 days 6 hours 27 mins 59 secs
+    | @ 1493 days 6 hours 27 mins 59 secs
+    | @ 1435 days 6 hours 27 mins 59 secs
+    | @ 1434 days 6 hours 27 mins 59 secs
+    | @ 1130 days 6 hours 27 mins 59 secs
+    | @ 1129 days 6 hours 27 mins 59 secs
+    | @ 399 days 6 hours 27 mins 59 secs
+    | @ 398 days 6 hours 27 mins 59 secs
+    | @ 33 days 6 hours 27 mins 59 secs
+    | @ 32 days 6 hours 27 mins 59 secs
+(63 rows)
+
+SELECT '' AS  "0", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL;
+ERROR:  interval out of range
+SELECT '' AS "63", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+ 63 |               Distance                
+----+---------------------------------------
+    | @ 11356 days 1 hour 23 mins 45 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 43 secs
+    | @ 1453 days 7 hours 51 mins 43.6 secs
+    | @ 1453 days 7 hours 51 mins 43.5 secs
+    | @ 1453 days 7 hours 51 mins 43.4 secs
+    | @ 1493 days 1 hour 23 mins 45 secs
+    | @ 1492 days 22 hours 19 mins 40 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1333 days 7 hours 51 mins 44 secs
+    | @ 231 days 16 hours 55 mins 35 secs
+    | @ 324 days 17 hours 9 mins 44 secs
+    | @ 324 days 12 hours 9 mins 43 secs
+    | @ 324 days 13 hours 9 mins 42 secs
+    | @ 324 days 22 hours 9 mins 41 secs
+    | @ 324 days 23 hours 9 mins 40 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 45 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1333 days 6 hours 51 mins 44 secs
+    | @ 1453 days 7 hours 51 mins 44 secs
+    | @ 1452 days 7 hours 51 mins 44 secs
+    | @ 1451 days 7 hours 51 mins 44 secs
+    | @ 1450 days 7 hours 51 mins 44 secs
+    | @ 1449 days 7 hours 51 mins 44 secs
+    | @ 1448 days 7 hours 51 mins 44 secs
+    | @ 1447 days 7 hours 51 mins 44 secs
+    | @ 765901 days 7 hours 51 mins 44 secs
+    | @ 695407 days 7 hours 51 mins 44 secs
+    | @ 512786 days 7 hours 51 mins 44 secs
+    | @ 330165 days 7 hours 51 mins 44 secs
+    | @ 111019 days 7 hours 51 mins 44 secs
+    | @ 74495 days 7 hours 51 mins 44 secs
+    | @ 37971 days 7 hours 51 mins 44 secs
+    | @ 1447 days 7 hours 51 mins 44 secs
+    | @ 35077 days 16 hours 8 mins 16 secs
+    | @ 1801 days 7 hours 51 mins 44 secs
+    | @ 1800 days 7 hours 51 mins 44 secs
+    | @ 1799 days 7 hours 51 mins 44 secs
+    | @ 1495 days 7 hours 51 mins 44 secs
+    | @ 1494 days 7 hours 51 mins 44 secs
+    | @ 1493 days 7 hours 51 mins 44 secs
+    | @ 1435 days 7 hours 51 mins 44 secs
+    | @ 1434 days 7 hours 51 mins 44 secs
+    | @ 1130 days 7 hours 51 mins 44 secs
+    | @ 1129 days 7 hours 51 mins 44 secs
+    | @ 399 days 7 hours 51 mins 44 secs
+    | @ 398 days 7 hours 51 mins 44 secs
+    | @ 33 days 7 hours 51 mins 44 secs
+    | @ 32 days 7 hours 51 mins 44 secs
+(63 rows)
+
+SELECT '' AS  "0", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL;
+ERROR:  interval out of range
+SELECT '' AS "63", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+ 63 |                Distance                
+----+----------------------------------------
+    | @ 11355 days 14 hours 23 mins 45 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 43 secs
+    | @ 1452 days 20 hours 51 mins 43.6 secs
+    | @ 1452 days 20 hours 51 mins 43.5 secs
+    | @ 1452 days 20 hours 51 mins 43.4 secs
+    | @ 1492 days 14 hours 23 mins 45 secs
+    | @ 1492 days 11 hours 19 mins 40 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1332 days 21 hours 51 mins 44 secs
+    | @ 232 days 2 hours 55 mins 35 secs
+    | @ 324 days 6 hours 9 mins 44 secs
+    | @ 324 days 1 hour 9 mins 43 secs
+    | @ 324 days 2 hours 9 mins 42 secs
+    | @ 324 days 11 hours 9 mins 41 secs
+    | @ 324 days 12 hours 9 mins 40 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 45 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1332 days 20 hours 51 mins 44 secs
+    | @ 1452 days 20 hours 51 mins 44 secs
+    | @ 1451 days 20 hours 51 mins 44 secs
+    | @ 1450 days 20 hours 51 mins 44 secs
+    | @ 1449 days 20 hours 51 mins 44 secs
+    | @ 1448 days 20 hours 51 mins 44 secs
+    | @ 1447 days 20 hours 51 mins 44 secs
+    | @ 1446 days 20 hours 51 mins 44 secs
+    | @ 765900 days 20 hours 51 mins 44 secs
+    | @ 695406 days 20 hours 51 mins 44 secs
+    | @ 512785 days 20 hours 51 mins 44 secs
+    | @ 330164 days 20 hours 51 mins 44 secs
+    | @ 111018 days 20 hours 51 mins 44 secs
+    | @ 74494 days 20 hours 51 mins 44 secs
+    | @ 37970 days 20 hours 51 mins 44 secs
+    | @ 1446 days 20 hours 51 mins 44 secs
+    | @ 35078 days 3 hours 8 mins 16 secs
+    | @ 1800 days 20 hours 51 mins 44 secs
+    | @ 1799 days 20 hours 51 mins 44 secs
+    | @ 1798 days 20 hours 51 mins 44 secs
+    | @ 1494 days 20 hours 51 mins 44 secs
+    | @ 1493 days 20 hours 51 mins 44 secs
+    | @ 1492 days 20 hours 51 mins 44 secs
+    | @ 1434 days 20 hours 51 mins 44 secs
+    | @ 1433 days 20 hours 51 mins 44 secs
+    | @ 1129 days 20 hours 51 mins 44 secs
+    | @ 1128 days 20 hours 51 mins 44 secs
+    | @ 398 days 20 hours 51 mins 44 secs
+    | @ 397 days 20 hours 51 mins 44 secs
+    | @ 32 days 20 hours 51 mins 44 secs
+    | @ 31 days 20 hours 51 mins 44 secs
+(63 rows)
+

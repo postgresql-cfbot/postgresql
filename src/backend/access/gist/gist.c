@@ -18,6 +18,7 @@
 #include "access/gistscan.h"
 #include "catalog/pg_collation.h"
 #include "miscadmin.h"
+#include "optimizer/paths.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "nodes/execnodes.h"
@@ -63,7 +64,6 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amstrategies = 0;
 	amroutine->amsupport = GISTNProcs;
 	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;
@@ -97,6 +97,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->ammatchorderby = match_orderbyop_pathkeys;
 
 	PG_RETURN_POINTER(amroutine);
 }

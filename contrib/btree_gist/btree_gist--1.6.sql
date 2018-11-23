@@ -84,152 +84,6 @@ CREATE TYPE gbtreekey_var (
 	STORAGE = EXTENDED
 );
 
---distance operators
-
-CREATE FUNCTION cash_dist(money, money)
-RETURNS money
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = money,
-	RIGHTARG = money,
-	PROCEDURE = cash_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION date_dist(date, date)
-RETURNS int4
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = date,
-	RIGHTARG = date,
-	PROCEDURE = date_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION float4_dist(float4, float4)
-RETURNS float4
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = float4,
-	RIGHTARG = float4,
-	PROCEDURE = float4_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION float8_dist(float8, float8)
-RETURNS float8
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = float8,
-	RIGHTARG = float8,
-	PROCEDURE = float8_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION int2_dist(int2, int2)
-RETURNS int2
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = int2,
-	RIGHTARG = int2,
-	PROCEDURE = int2_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION int4_dist(int4, int4)
-RETURNS int4
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = int4,
-	RIGHTARG = int4,
-	PROCEDURE = int4_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION int8_dist(int8, int8)
-RETURNS int8
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = int8,
-	RIGHTARG = int8,
-	PROCEDURE = int8_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION interval_dist(interval, interval)
-RETURNS interval
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = interval,
-	RIGHTARG = interval,
-	PROCEDURE = interval_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION oid_dist(oid, oid)
-RETURNS oid
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = oid,
-	RIGHTARG = oid,
-	PROCEDURE = oid_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION time_dist(time, time)
-RETURNS interval
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = time,
-	RIGHTARG = time,
-	PROCEDURE = time_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION ts_dist(timestamp, timestamp)
-RETURNS interval
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = timestamp,
-	RIGHTARG = timestamp,
-	PROCEDURE = ts_dist,
-	COMMUTATOR = '<->'
-);
-
-CREATE FUNCTION tstz_dist(timestamptz, timestamptz)
-RETURNS interval
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE OPERATOR <-> (
-	LEFTARG = timestamptz,
-	RIGHTARG = timestamptz,
-	PROCEDURE = tstz_dist,
-	COMMUTATOR = '<->'
-);
-
 
 --
 --
@@ -1568,3 +1422,194 @@ AS
 ALTER OPERATOR FAMILY gist_cidr_ops USING gist ADD
 	OPERATOR	6	<> (inet, inet) ;
 	-- no fetch support, the compress function is lossy
+
+--
+--
+--
+-- uuid ops
+--
+--
+---- define the GiST support methods
+CREATE FUNCTION gbt_uuid_consistent(internal,uuid,int2,oid,internal)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_fetch(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_compress(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_penalty(internal,internal,internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_picksplit(internal, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_union(internal, internal)
+RETURNS gbtreekey32
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_uuid_same(gbtreekey32, gbtreekey32, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+-- Create the operator class
+CREATE OPERATOR CLASS gist_uuid_ops
+DEFAULT FOR TYPE uuid USING gist
+AS
+	OPERATOR	1	<   ,
+	OPERATOR	2	<=  ,
+	OPERATOR	3	=   ,
+	OPERATOR	4	>=  ,
+	OPERATOR	5	>   ,
+	FUNCTION	1	gbt_uuid_consistent (internal, uuid, int2, oid, internal),
+	FUNCTION	2	gbt_uuid_union (internal, internal),
+	FUNCTION	3	gbt_uuid_compress (internal),
+	FUNCTION	4	gbt_decompress (internal),
+	FUNCTION	5	gbt_uuid_penalty (internal, internal, internal),
+	FUNCTION	6	gbt_uuid_picksplit (internal, internal),
+	FUNCTION	7	gbt_uuid_same (gbtreekey32, gbtreekey32, internal),
+	STORAGE		gbtreekey32;
+
+-- These are "loose" in the opfamily for consistency with the rest of btree_gist
+ALTER OPERATOR FAMILY gist_uuid_ops USING gist ADD
+	OPERATOR	6	<>  (uuid, uuid) ,
+	FUNCTION	9 (uuid, uuid) gbt_uuid_fetch (internal) ;
+
+
+-- Add support for indexing macaddr8 columns
+
+-- define the GiST support methods
+CREATE FUNCTION gbt_macad8_consistent(internal,macaddr8,int2,oid,internal)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_compress(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_fetch(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_penalty(internal,internal,internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_picksplit(internal, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_union(internal, internal)
+RETURNS gbtreekey16
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_macad8_same(gbtreekey16, gbtreekey16, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+-- Create the operator class
+CREATE OPERATOR CLASS gist_macaddr8_ops
+DEFAULT FOR TYPE macaddr8 USING gist
+AS
+	OPERATOR	1	< ,
+	OPERATOR	2	<= ,
+	OPERATOR	3	= ,
+	OPERATOR	4	>= ,
+	OPERATOR	5	> ,
+	FUNCTION	1	gbt_macad8_consistent (internal, macaddr8, int2, oid, internal),
+	FUNCTION	2	gbt_macad8_union (internal, internal),
+	FUNCTION	3	gbt_macad8_compress (internal),
+	FUNCTION	4	gbt_decompress (internal),
+	FUNCTION	5	gbt_macad8_penalty (internal, internal, internal),
+	FUNCTION	6	gbt_macad8_picksplit (internal, internal),
+	FUNCTION	7	gbt_macad8_same (gbtreekey16, gbtreekey16, internal),
+	STORAGE		gbtreekey16;
+
+ALTER OPERATOR FAMILY gist_macaddr8_ops USING gist ADD
+	OPERATOR	6	<> (macaddr8, macaddr8) ,
+	FUNCTION	9 (macaddr8, macaddr8) gbt_macad8_fetch (internal);
+
+--
+--
+--
+-- enum ops
+--
+--
+--
+-- define the GiST support methods
+CREATE FUNCTION gbt_enum_consistent(internal,anyenum,int2,oid,internal)
+RETURNS bool
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_compress(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_fetch(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_penalty(internal,internal,internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_picksplit(internal, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_union(internal, internal)
+RETURNS gbtreekey8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION gbt_enum_same(gbtreekey8, gbtreekey8, internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+-- Create the operator class
+CREATE OPERATOR CLASS gist_enum_ops
+DEFAULT FOR TYPE anyenum USING gist
+AS
+	OPERATOR	1	<  ,
+	OPERATOR	2	<= ,
+	OPERATOR	3	=  ,
+	OPERATOR	4	>= ,
+	OPERATOR	5	>  ,
+	FUNCTION	1	gbt_enum_consistent (internal, anyenum, int2, oid, internal),
+	FUNCTION	2	gbt_enum_union (internal, internal),
+	FUNCTION	3	gbt_enum_compress (internal),
+	FUNCTION	4	gbt_decompress (internal),
+	FUNCTION	5	gbt_enum_penalty (internal, internal, internal),
+	FUNCTION	6	gbt_enum_picksplit (internal, internal),
+	FUNCTION	7	gbt_enum_same (gbtreekey8, gbtreekey8, internal),
+	STORAGE		gbtreekey8;
+
+ALTER OPERATOR FAMILY gist_enum_ops USING gist ADD
+	OPERATOR	6	<> (anyenum, anyenum) ,
+	FUNCTION	9 (anyenum, anyenum) gbt_enum_fetch (internal) ;

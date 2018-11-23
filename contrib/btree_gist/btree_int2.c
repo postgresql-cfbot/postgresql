@@ -90,26 +90,6 @@ static const gbtree_ninfo tinfo =
 };
 
 
-PG_FUNCTION_INFO_V1(int2_dist);
-Datum
-int2_dist(PG_FUNCTION_ARGS)
-{
-	int16		a = PG_GETARG_INT16(0);
-	int16		b = PG_GETARG_INT16(1);
-	int16		r;
-	int16		ra;
-
-	if (pg_sub_s16_overflow(a, b, &r) ||
-		r == PG_INT16_MIN)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("smallint out of range")));
-
-	ra = Abs(r);
-
-	PG_RETURN_INT16(ra);
-}
-
 
 /**************************************************
  * int16 ops

@@ -30,6 +30,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
   amoprighttype => 'int2', amopstrategy => '5', amopopr => '>(int2,int2)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
+  amoprighttype => 'int2', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int2,int2)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int24
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
@@ -47,6 +51,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
   amoprighttype => 'int4', amopstrategy => '5', amopopr => '>(int2,int4)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
+  amoprighttype => 'int4', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int2,int4)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int28
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
@@ -64,6 +72,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
   amoprighttype => 'int8', amopstrategy => '5', amopopr => '>(int2,int8)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int2',
+  amoprighttype => 'int8', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int2,int8)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # default operators int4
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
@@ -81,6 +93,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
   amoprighttype => 'int4', amopstrategy => '5', amopopr => '>(int4,int4)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
+  amoprighttype => 'int4', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int4,int4)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int42
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
@@ -98,6 +114,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
   amoprighttype => 'int2', amopstrategy => '5', amopopr => '>(int4,int2)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
+  amoprighttype => 'int2', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int4,int2)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int48
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
@@ -115,6 +135,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
   amoprighttype => 'int8', amopstrategy => '5', amopopr => '>(int4,int8)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int4',
+  amoprighttype => 'int8', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int4,int8)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # default operators int8
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
@@ -132,6 +156,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
   amoprighttype => 'int8', amopstrategy => '5', amopopr => '>(int8,int8)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
+  amoprighttype => 'int8', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int8,int8)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int82
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
@@ -149,6 +177,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
   amoprighttype => 'int2', amopstrategy => '5', amopopr => '>(int8,int2)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
+  amoprighttype => 'int2', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int8,int2)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators int84
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
@@ -166,6 +198,10 @@
 { amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
   amoprighttype => 'int4', amopstrategy => '5', amopopr => '>(int8,int4)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/integer_ops', amoplefttype => 'int8',
+  amoprighttype => 'int4', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(int8,int4)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # btree oid_ops
 
@@ -179,6 +215,10 @@
   amopstrategy => '4', amopopr => '>=(oid,oid)', amopmethod => 'btree' },
 { amopfamily => 'btree/oid_ops', amoplefttype => 'oid', amoprighttype => 'oid',
   amopstrategy => '5', amopopr => '>(oid,oid)', amopmethod => 'btree' },
+{ amopfamily => 'btree/oid_ops', amoplefttype => 'oid',
+  amoprighttype => 'oid', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(oid,oid)', amopmethod => 'btree',
+  amopsortfamily => 'btree/oid_ops' },
 
 # btree tid_ops
 
@@ -229,6 +269,10 @@
 { amopfamily => 'btree/float_ops', amoplefttype => 'float4',
   amoprighttype => 'float4', amopstrategy => '5', amopopr => '>(float4,float4)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/float_ops', amoplefttype => 'float4',
+  amoprighttype => 'float4', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(float4,float4)', amopmethod => 'btree',
+  amopsortfamily => 'btree/float_ops' },
 
 # crosstype operators float48
 { amopfamily => 'btree/float_ops', amoplefttype => 'float4',
@@ -246,6 +290,10 @@
 { amopfamily => 'btree/float_ops', amoplefttype => 'float4',
   amoprighttype => 'float8', amopstrategy => '5', amopopr => '>(float4,float8)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/float_ops', amoplefttype => 'float4',
+  amoprighttype => 'float8', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(float4,float8)', amopmethod => 'btree',
+  amopsortfamily => 'btree/float_ops' },
 
 # default operators float8
 { amopfamily => 'btree/float_ops', amoplefttype => 'float8',
@@ -263,6 +311,10 @@
 { amopfamily => 'btree/float_ops', amoplefttype => 'float8',
   amoprighttype => 'float8', amopstrategy => '5', amopopr => '>(float8,float8)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/float_ops', amoplefttype => 'float8',
+  amoprighttype => 'float8', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(float8,float8)', amopmethod => 'btree',
+  amopsortfamily => 'btree/float_ops' },
 
 # crosstype operators float84
 { amopfamily => 'btree/float_ops', amoplefttype => 'float8',
@@ -280,6 +332,10 @@
 { amopfamily => 'btree/float_ops', amoplefttype => 'float8',
   amoprighttype => 'float4', amopstrategy => '5', amopopr => '>(float8,float4)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/float_ops', amoplefttype => 'float8',
+  amoprighttype => 'float4', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(float8,float4)', amopmethod => 'btree',
+  amopsortfamily => 'btree/float_ops' },
 
 # btree char_ops
 
@@ -389,6 +445,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
   amoprighttype => 'date', amopstrategy => '5', amopopr => '>(date,date)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
+  amoprighttype => 'date', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(date,date)', amopmethod => 'btree',
+  amopsortfamily => 'btree/integer_ops' },
 
 # crosstype operators vs timestamp
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
@@ -406,6 +466,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
   amoprighttype => 'timestamp', amopstrategy => '5',
   amopopr => '>(date,timestamp)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
+  amoprighttype => 'timestamp', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(date,timestamp)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # crosstype operators vs timestamptz
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
@@ -423,6 +487,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
   amoprighttype => 'timestamptz', amopstrategy => '5',
   amopopr => '>(date,timestamptz)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'date',
+  amoprighttype => 'timestamptz', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(date,timestamptz)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # default operators timestamp
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
@@ -440,6 +508,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
   amoprighttype => 'timestamp', amopstrategy => '5',
   amopopr => '>(timestamp,timestamp)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
+  amoprighttype => 'timestamp', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamp,timestamp)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # crosstype operators vs date
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
@@ -457,6 +529,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
   amoprighttype => 'date', amopstrategy => '5', amopopr => '>(timestamp,date)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
+  amoprighttype => 'date', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamp,date)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # crosstype operators vs timestamptz
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
@@ -474,6 +550,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
   amoprighttype => 'timestamptz', amopstrategy => '5',
   amopopr => '>(timestamp,timestamptz)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamp',
+  amoprighttype => 'timestamptz', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamp,timestamptz)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # default operators timestamptz
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
@@ -491,6 +571,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
   amoprighttype => 'timestamptz', amopstrategy => '5',
   amopopr => '>(timestamptz,timestamptz)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
+  amoprighttype => 'timestamptz', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamptz,timestamptz)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # crosstype operators vs date
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
@@ -508,6 +592,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
   amoprighttype => 'date', amopstrategy => '5',
   amopopr => '>(timestamptz,date)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
+  amoprighttype => 'date', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamptz,date)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # crosstype operators vs timestamp
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
@@ -525,6 +613,10 @@
 { amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
   amoprighttype => 'timestamp', amopstrategy => '5',
   amopopr => '>(timestamptz,timestamp)', amopmethod => 'btree' },
+{ amopfamily => 'btree/datetime_ops', amoplefttype => 'timestamptz',
+  amoprighttype => 'timestamp', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(timestamptz,timestamp)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # btree time_ops
 
@@ -543,6 +635,10 @@
 { amopfamily => 'btree/time_ops', amoplefttype => 'time',
   amoprighttype => 'time', amopstrategy => '5', amopopr => '>(time,time)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/time_ops', amoplefttype => 'time',
+  amoprighttype => 'time', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(time,time)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # btree timetz_ops
 
@@ -579,6 +675,10 @@
 { amopfamily => 'btree/interval_ops', amoplefttype => 'interval',
   amoprighttype => 'interval', amopstrategy => '5',
   amopopr => '>(interval,interval)', amopmethod => 'btree' },
+{ amopfamily => 'btree/interval_ops', amoplefttype => 'interval',
+  amoprighttype => 'interval', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(interval,interval)', amopmethod => 'btree',
+  amopsortfamily => 'btree/interval_ops' },
 
 # btree macaddr
 
@@ -754,6 +854,10 @@
 { amopfamily => 'btree/money_ops', amoplefttype => 'money',
   amoprighttype => 'money', amopstrategy => '5', amopopr => '>(money,money)',
   amopmethod => 'btree' },
+{ amopfamily => 'btree/money_ops', amoplefttype => 'money',
+  amoprighttype => 'money', amopstrategy => '6', amoppurpose => 'o',
+  amopopr => '<->(money,money)', amopmethod => 'btree',
+  amopsortfamily => 'btree/money_ops' },
 
 # btree array_ops
 

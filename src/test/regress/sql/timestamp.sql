@@ -230,3 +230,11 @@ SELECT '' AS to_char_11, to_char(d1, 'FMIYYY FMIYY FMIY FMI FMIW FMIDDD FMID')
 
 -- timestamp numeric fields constructor
 SELECT make_timestamp(2014,12,28,6,30,45.887);
+
+-- distance operators
+SELECT '' AS  "0", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT '' AS "63", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+SELECT '' AS  "0", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT '' AS "63", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);
+SELECT '' AS  "0", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL;
+SELECT '' AS "63", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMP_TBL WHERE isfinite(d1);

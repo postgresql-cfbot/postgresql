@@ -123,6 +123,12 @@ SELECT m / 2::float4 FROM money_data;
    $61.50
 (1 row)
 
+SELECT m <-> '$123.45' FROM money_data;
+ ?column? 
+----------
+    $0.45
+(1 row)
+
 -- All true
 SELECT m = '$123.00' FROM money_data;
  ?column? 

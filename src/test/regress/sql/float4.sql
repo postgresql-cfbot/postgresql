@@ -81,3 +81,6 @@ UPDATE FLOAT4_TBL
    WHERE FLOAT4_TBL.f1 > '0.0';
 
 SELECT '' AS five, * FROM FLOAT4_TBL;
+
+SELECT '' AS five, f.f1, f.f1 <-> '1004.3' AS dist FROM FLOAT4_TBL f;
+SELECT '' AS five, f.f1, f.f1 <-> '1004.3'::float8 AS dist FROM FLOAT4_TBL f;

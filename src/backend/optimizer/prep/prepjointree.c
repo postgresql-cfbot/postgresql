@@ -454,13 +454,14 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 	}
 	if (not_clause(node))
 	{
-		/* If the immediate argument of NOT is EXISTS, try to convert */
-		SubLink    *sublink = (SubLink *) get_notclausearg((Expr *) node);
+		Node       *arg = (Node *) get_notclausearg((Expr *) node);
 		JoinExpr   *j;
 		Relids		child_rels;
 
-		if (sublink && IsA(sublink, SubLink))
+		/* If the immediate argument of NOT is EXISTS, try to convert */
+		if (arg && IsA(arg, SubLink))
 		{
+			SubLink    *sublink = (SubLink *) arg;
 			if (sublink->subLinkType == EXISTS_SUBLINK)
 			{
 				if ((j = convert_EXISTS_sublink_to_join(root, sublink, true,
@@ -515,6 +516,16 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					return NULL;
 				}
 			}
+		}
+		else if (not_clause(arg))
+		{
+			/* NOT NOT (expr) => (expr)  */
+			return pull_up_sublinks_qual_recurse(root,
+												 (Node *) get_notclausearg((Expr *) arg),
+												 jtlink1,
+												 available_rels1,
+												 jtlink2,
+												 available_rels2);
 		}
 		/* Else return it unmodified */
 		return node;

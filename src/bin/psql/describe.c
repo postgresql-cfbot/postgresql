@@ -3659,6 +3659,183 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 	return true;
 }
 
+/*
+ * listPartitions()
+ *
+ * handler for \dP, \dPt and \dPi
+ */
+bool
+listPartitions(const char *pattern, bool verbose, bool show_indexes, bool show_tables)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, true, false, false, false, false};
+	const char *size_function;
+	const char *relkind_str;
+	const char *object_name;
+	const char *objects_name;
+
+	/*
+	 * Note: Declarative table partitions are only supported as of Pg 10.0.
+	 */
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+
+		psql_error("The server (version %s) does not support declarative table partitioning.\n",
+				   formatPGVersionNumber(pset.sversion, false,
+										 sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	if (show_indexes)
+	{
+		size_function = "pg_table_size";
+		relkind_str = CppAsString2(RELKIND_PARTITIONED_INDEX);
+		object_name = gettext_noop("index");
+		objects_name = gettext_noop("indexes");
+	}
+	else if (show_tables)
+	{
+		size_function = "pg_table_size";
+		relkind_str = CppAsString2(RELKIND_PARTITIONED_TABLE);
+		object_name = gettext_noop("table");
+		objects_name = gettext_noop("tables");
+	}
+	else
+	{
+		size_function = "pg_total_relation_size";
+		relkind_str = CppAsString2(RELKIND_PARTITIONED_TABLE);
+		object_name = gettext_noop("relation");
+		objects_name = gettext_noop("relations");
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT n.nspname as \"%s\",\n"
+					  "  c.relname as \"%s\",\n"
+					  "  pg_catalog.pg_get_userbyid(c.relowner) as \"%s\"",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Owner"));
+
+	if (show_indexes)
+		appendPQExpBuffer(&buf,
+						  ",\n c2.relname as \"%s\"",
+						  gettext_noop("Table"));
+
+	if (verbose)
+	{
+		if (pset.sversion < 120000)
+		{
+			appendPQExpBuffer(&buf,
+							  ",\n  (WITH RECURSIVE d\n"
+							  "        AS (SELECT inhrelid AS oid\n"
+							  "              FROM pg_catalog.pg_inherits\n"
+							  "             WHERE inhparent = c.oid\n"
+							  "            UNION ALL\n"
+							  "            SELECT inhrelid\n"
+							  "              FROM pg_catalog.pg_inherits i\n"
+							  "                   JOIN d ON i.inhparent = d.oid)\n"
+							  "         SELECT pg_catalog.pg_size_pretty(sum(pg_catalog.%s("
+							  "oid))) FROM d) AS \"%s\""
+							  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
+							  size_function,
+							  gettext_noop("Size"),
+							  gettext_noop("Description"));
+		}
+		else
+		{
+			/* PostgreSQL 12 has pg_partition_tree function */
+			appendPQExpBuffer(&buf,
+							  ",\n  (SELECT pg_catalog.pg_size_pretty(sum(pg_catalog.%s("
+							  "relid)))\n"
+							  "     FROM pg_catalog.pg_partition_tree(c.oid)) AS \"%s\""
+							  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
+							  size_function,
+							  gettext_noop("Size"),
+							  gettext_noop("Description"));
+		}
+	}
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_class c"
+						 "\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace");
+
+	if (show_indexes)
+		appendPQExpBufferStr(&buf,
+							 "\n     LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid"
+							 "\n     LEFT JOIN pg_catalog.pg_class c2 ON i.indrelid = c2.oid");
+
+	appendPQExpBuffer(&buf, "\nWHERE c.relkind IN (%s)\n",
+						 relkind_str);
+
+	if (!pattern)
+		appendPQExpBufferStr(&buf, "      AND n.nspname <> 'pg_catalog'\n"
+							 "      AND n.nspname <> 'information_schema'\n");
+
+	/*
+	 * TOAST objects are suppressed unconditionally.  Since we don't provide
+	 * any way to select RELKIND_TOASTVALUE above, we would never show toast
+	 * tables in any case; it seems a bit confusing to allow their indexes to
+	 * be shown.  Use plain \d if you really need to look at a TOAST
+	 * table/index.
+	 */
+	appendPQExpBufferStr(&buf, "      AND n.nspname !~ '^pg_toast'\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, true, false,
+						  "n.nspname", "c.relname", NULL,
+						  "pg_catalog.pg_table_is_visible(c.oid)");
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	/*
+	 * Most functions in this file are content to print an empty table when
+	 * there are no matching objects.  We intentionally deviate from that
+	 * here, but only in !quiet mode, for historical reasons.
+	 */
+	if (PQntuples(res) == 0 && !pset.quiet)
+	{
+		if (pattern)
+			/* translator: objects_name is "indexes", "tables" or "relations" */
+			psql_error("Did not find any partitioned %s named \"%s\".\n",
+					   objects_name,
+					   pattern);
+		else
+			/* translator: object_name is "index", "table" or "relation" */
+			psql_error("Did not find any partitioned %s.\n",
+					  object_name);
+	}
+	else
+	{
+		PQExpBufferData title;
+
+		initPQExpBuffer(&title);
+
+		/* translator: objects_name is "indexes", "tables" or "relations" */
+		appendPQExpBuffer(&title, _("List of partitioned %s"), objects_name);
+
+		myopt.nullPrint = NULL;
+		myopt.title = title.data;
+		myopt.translate_header = true;
+		myopt.translate_columns = translate_columns;
+		myopt.n_translate_columns = lengthof(translate_columns);
+
+		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+		termPQExpBuffer(&title);
+	}
+
+	PQclear(res);
+	return true;
+}
 
 /*
  * \dL

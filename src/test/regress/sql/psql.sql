@@ -688,3 +688,30 @@ select 1/(15-unique2) from tenk1 order by unique2 limit 19;
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 
 \unset FETCH_COUNT
+
+create role testrole_partitioning;
+set role to testrole_partitioning;
+
+create table testtable_apple(logdate date);
+create table testtable_orange(logdate date);
+create index testtable_apple_index on testtable_apple(logdate);
+create index testtable_orange_index on testtable_orange(logdate);
+
+create table testpart_apple(logdate date) partition by range(logdate);
+create table testpart_orange(logdate date) partition by range(logdate);
+
+create index testpart_apple_index on testpart_apple(logdate);
+create index testpart_orange_index on testpart_orange(logdate);
+
+-- only partition related object should be displayed
+\dP test*apple*
+\dPt test*apple*
+\dPi test*apple*
+
+drop table testtable_apple;
+drop table testtable_orange;
+drop table testpart_apple;
+drop table testpart_orange;
+
+set role to default;
+drop role testrole_partitioning;

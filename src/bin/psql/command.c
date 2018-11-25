@@ -782,6 +782,27 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'p':
 				success = permissionsList(pattern);
 				break;
+			case 'P':
+				switch (cmd[2])
+				{
+					case 'i':
+						/* show indexes only */
+						success = listPartitions(pattern, show_verbose, true, false);
+						break;
+					case 't':
+						/* show tables only */
+						success = listPartitions(pattern, show_verbose, false, true);
+						break;
+					case '+':
+					case '\0':
+						/* show relations - tables + indexes */
+						success = listPartitions(pattern, show_verbose, false, false);
+						break;
+					default:
+						status = PSQL_CMD_UNKNOWN;
+						break;
+				}
+				break;
 			case 'T':
 				success = describeTypes(pattern, show_verbose, show_system);
 				break;

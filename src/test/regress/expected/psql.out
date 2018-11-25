@@ -3243,3 +3243,41 @@ last error message: division by zero
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 last error code: 22012
 \unset FETCH_COUNT
+create role testrole_partitioning;
+set role to testrole_partitioning;
+create table testtable_apple(logdate date);
+create table testtable_orange(logdate date);
+create index testtable_apple_index on testtable_apple(logdate);
+create index testtable_orange_index on testtable_orange(logdate);
+create table testpart_apple(logdate date) partition by range(logdate);
+create table testpart_orange(logdate date) partition by range(logdate);
+create index testpart_apple_index on testpart_apple(logdate);
+create index testpart_orange_index on testpart_orange(logdate);
+-- only partition related object should be displayed
+\dP test*apple*
+          List of partitioned relations
+ Schema |      Name      |         Owner         
+--------+----------------+-----------------------
+ public | testpart_apple | testrole_partitioning
+(1 row)
+
+\dPt test*apple*
+           List of partitioned tables
+ Schema |      Name      |         Owner         
+--------+----------------+-----------------------
+ public | testpart_apple | testrole_partitioning
+(1 row)
+
+\dPi test*apple*
+                      List of partitioned indexes
+ Schema |         Name         |         Owner         |     Table      
+--------+----------------------+-----------------------+----------------
+ public | testpart_apple_index | testrole_partitioning | testpart_apple
+(1 row)
+
+drop table testtable_apple;
+drop table testtable_orange;
+drop table testpart_apple;
+drop table testpart_orange;
+set role to default;
+drop role testrole_partitioning;

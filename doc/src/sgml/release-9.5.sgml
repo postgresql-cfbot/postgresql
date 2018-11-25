@@ -7305,7 +7305,7 @@ Branch: REL9_4_STABLE [a9613ee69] 2016-03-06 02:43:26 +0900
 
     <listitem>
      <para>
-      Ignore <xref linkend="recovery-min-apply-delay"/> parameter until
+      Ignore <xref linkend="guc-recovery-min-apply-delay"/> parameter until
       recovery has reached a consistent state (Michael Paquier)
      </para>
 
@@ -9096,9 +9096,9 @@ Add GUC and storage parameter to set the maximum size of GIN pending list.
 2015-03-15 [51c11a7] Andres..: Remove pause_at_recovery_target recovery.conf s..
 -->
        <para>
-        Add <link linkend="recovery-config"><filename>recovery.conf</filename></link>
+        Add <filename>recovery.conf</filename>
         parameter <link
-        linkend="recovery-target-action"><varname>recovery_target_action</varname></link>
+        linkend="guc-recovery-target-action"><varname>recovery_target_action</varname></link>
         to control post-recovery activity (Petr Jel&iacute;nek)
        </para>
 
@@ -9200,7 +9200,7 @@ Add GUC and storage parameter to set the maximum size of GIN pending list.
 -->
        <para>
         Allow <filename>recovery.conf</filename>'s <link
-        linkend="primary-conninfo"><varname>primary_conninfo</varname></link> setting to
+        linkend="guc-primary-conninfo"><varname>primary_conninfo</varname></link> setting to
         use connection <acronym>URI</acronym>s, e.g. <literal>postgres://</literal>
         (Alexander Shulgin)
        </para>

@@ -79,6 +79,10 @@ GRANT { USAGE | ALL [ PRIVILEGES ] }
     ON TYPE <replaceable>type_name</replaceable> [, ...]
     TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
 
+GRANT { READ | WRITE | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+
 <phrase>where <replaceable class="parameter">role_specification</replaceable> can be:</phrase>
 
     [ GROUP ] <replaceable class="parameter">role_name</replaceable>
@@ -167,6 +171,7 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
    foreign servers,
    large objects,
    schemas,
+   schema variable
    or tablespaces.
    For other types of objects, the default privileges
    granted to <literal>PUBLIC</literal> are as follows:
@@ -386,6 +391,24 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
     </varlistentry>
 
     <varlistentry>
+     <term><literal>READ</literal></term>
+     <listitem>
+      <para>
+       Allows to read a schema variable.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>WRITE</literal></term>
+     <listitem>
+      <para>
+       Allows to set a schema variable.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><literal>ALL PRIVILEGES</literal></term>
      <listitem>
       <para>
@@ -550,6 +573,8 @@ rolename=xxxx -- privileges granted to a role
             C -- CREATE
             c -- CONNECT
             T -- TEMPORARY
+            S -- READ
+            w -- WRITE
       arwdDxt -- ALL PRIVILEGES (for tables, varies for other objects)
             * -- grant option for preceding privilege
 

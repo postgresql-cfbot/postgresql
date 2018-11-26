@@ -69,7 +69,9 @@ typedef enum ParseExprKind
 	EXPR_KIND_TRIGGER_WHEN,		/* WHEN condition in CREATE TRIGGER */
 	EXPR_KIND_POLICY,			/* USING or WITH CHECK expr in policy */
 	EXPR_KIND_PARTITION_EXPRESSION, /* PARTITION BY expression */
-	EXPR_KIND_CALL_ARGUMENT		/* procedure argument in CALL */
+	EXPR_KIND_CALL_ARGUMENT,		/* procedure argument in CALL */
+	EXPR_KIND_VARIABLE_DEFAULT,	/* default value for schema variable */
+	EXPR_KIND_LET				/* LET assignment (should be same like UPDATE) */
 } ParseExprKind;
 
 
@@ -202,6 +204,7 @@ struct ParseState
 	bool		p_hasTargetSRFs;
 	bool		p_hasSubLinks;
 	bool		p_hasModifyingCTE;
+	bool		p_hasSchemaVariable;
 
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 

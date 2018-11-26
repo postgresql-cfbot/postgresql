@@ -39,6 +39,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -751,6 +752,70 @@ RelationIsVisible(Oid relid)
 	}
 
 	ReleaseSysCache(reltup);
+
+	return visible;
+}
+
+/*
+ * VariableIsVisible
+ *		Determine whether a variable (identified by OID) is visible in the
+ *		current search path.  Visible means "would be found by searching
+ *		for the unqualified variable name".
+ */
+bool
+VariableIsVisible(Oid varid)
+{
+	HeapTuple	vartup;
+	Form_pg_variable varform;
+	Oid			varnamespace;
+	bool		visible;
+
+	vartup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+	if (!HeapTupleIsValid(vartup))
+		elog(ERROR, "cache lookup failed for schema variable %u", varid);
+	varform = (Form_pg_variable) GETSTRUCT(vartup);
+
+	recomputeNamespacePath();
+
+	/*
+	 * Quick check: if it ain't in the path at all, it ain't visible. Items in
+	 * the system namespace are surely in the path and so we needn't even do
+	 * list_member_oid() for them.
+	 */
+	varnamespace = varform->varnamespace;
+	if (varnamespace != PG_CATALOG_NAMESPACE &&
+		!list_member_oid(activeSearchPath, varnamespace))
+		visible = false;
+	else
+	{
+		/*
+		 * If it is in the path, it might still not be visible; it could be
+		 * hidden by another relation of the same name earlier in the path. So
+		 * we must do a slow check for conflicting relations.
+		 */
+		char	   *varname = NameStr(varform->varname);
+		ListCell   *l;
+
+		visible = false;
+		foreach(l, activeSearchPath)
+		{
+			Oid			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == varnamespace)
+			{
+				/* Found it first in path */
+				visible = true;
+				break;
+			}
+			if (OidIsValid(get_varname_varid(varname, namespaceId)))
+			{
+				/* Found something else first in path */
+				break;
+			}
+		}
+	}
+
+	ReleaseSysCache(vartup);
 
 	return visible;
 }
@@ -2777,6 +2842,202 @@ TSConfigIsVisible(Oid cfgid)
 	return visible;
 }
 
+/*
+ * When we know a variable name, then we can find variable simply
+ */
+Oid
+lookup_variable(const char *nspname, const char *varname, bool missing_ok)
+{
+	Oid			namespaceId;
+	Oid			varoid		= InvalidOid;
+	ListCell   *l;
+
+	if (nspname)
+	{
+		namespaceId = LookupExplicitNamespace(nspname, missing_ok);
+		if (!OidIsValid(namespaceId))
+			return InvalidOid;
+
+		varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+								  PointerGetDatum(varname),
+								  ObjectIdGetDatum(namespaceId));
+	}
+	else
+	{
+		/* search for it in search path */
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+									  PointerGetDatum(varname),
+									  ObjectIdGetDatum(namespaceId));
+
+			if (OidIsValid(varoid))
+				break;
+		}
+	}
+
+	if (!OidIsValid(varoid) && !missing_ok)
+	{
+		if (nspname)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("variable \"%s\".\"%s\" does not exist",
+								nspname, varname)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("variable \"%s\" does not exist",
+								varname)));
+	}
+
+	return varoid;
+}
+
+List *
+NamesFromList(List *names)
+{
+	ListCell *l;
+	List	*result = NIL;
+
+	foreach(l, names)
+	{
+		Node *n = lfirst(l);
+
+		if (IsA(n, String))
+		{
+			result = lappend(result, n);
+		}
+		else
+			break;
+	}
+
+	return result;
+}
+
+/*
+ * identify_variable
+ *
+ * Returns oid of not ambigonuous variable specified by qualified path
+ * or InvalidOid. When the path is ambigonuous, then not_uniq flag is
+ * is true.
+ */
+Oid
+identify_variable(List *names, char **attrname, bool *not_uniq)
+{
+	char   *a = NULL;
+	char   *b = NULL;
+	char   *c = NULL;
+	char   *d = NULL;
+	Oid		varoid_without_attr;
+	Oid		varoid_with_attr;
+
+	*not_uniq = false;
+
+	switch (list_length(names))
+	{
+		case 1:
+			a = strVal(linitial(names));
+			return lookup_variable(NULL, a, true);
+
+		case 2:
+			a = strVal(linitial(names));
+			b = strVal(lsecond(names));
+
+			/*
+			 * a.b can mean "schema"."variable" or "variable"."field",
+			 * Check both variants, and returns InvalidOid with not_uniq
+			 * flag, when both interpretations are possible.
+			 */
+			varoid_without_attr = lookup_variable(a, b, true);
+			varoid_with_attr = lookup_variable(NULL, a, true);
+
+			if (OidIsValid(varoid_without_attr) && OidIsValid(varoid_with_attr))
+			{
+				*not_uniq = true;
+				return InvalidOid;
+			}
+			else if (OidIsValid(varoid_without_attr))
+			{
+				*attrname = NULL;
+				return varoid_without_attr;
+			}
+			else
+			{
+				*attrname = b;
+				return varoid_with_attr;
+			}
+			break;
+
+		case 3:
+			a = strVal(linitial(names));
+			b = strVal(lsecond(names));
+			c = strVal(lthird(names));
+
+			/*
+			 * a.b.c can mean "catalog"."schema"."variable" or "schema"."variable"."field",
+			 * Check both variants, and returns InvalidOid with not_uniq
+			 * flag, when both interpretations are possible.
+			 */
+			varoid_without_attr = lookup_variable(b, c, true);
+			varoid_with_attr = lookup_variable(a, b, true);
+
+			if (OidIsValid(varoid_without_attr) && OidIsValid(varoid_with_attr))
+			{
+				*not_uniq = true;
+				return InvalidOid;
+			}
+			else if (OidIsValid(varoid_without_attr))
+			{
+				*attrname = NULL;
+
+				/*
+				 * We in this case a "a" is used as catalog name, check it.
+				 */
+				if (strcmp(a, get_database_name(MyDatabaseId)) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cross-database references are not implemented: %s",
+									NameListToString(names))));
+
+				return varoid_without_attr;
+			}
+			else
+			{
+				*attrname = c;
+				return varoid_with_attr;
+			}
+			break;
+
+		case 4:
+			a = strVal(linitial(names));
+			b = strVal(lsecond(names));
+			c = strVal(lthird(names));
+			d = strVal(lfourth(names));
+
+			/*
+			 * We in this case a "a" is used as catalog name, check it.
+			 */
+			if (strcmp(a, get_database_name(MyDatabaseId)) != 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cross-database references are not implemented: %s",
+								NameListToString(names))));
+
+			*attrname = d;
+			return lookup_variable(b, c, true);
+
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("improper qualified name (too many dotted names): %s",
+							NameListToString(names))));
+			break;
+	}
+}
 
 /*
  * DeconstructQualifiedName
@@ -4491,4 +4752,15 @@ pg_is_other_temp_schema(PG_FUNCTION_ARGS)
 	Oid			oid = PG_GETARG_OID(0);
 
 	PG_RETURN_BOOL(isOtherTempNamespace(oid));
+}
+
+Datum
+pg_variable_is_visible(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(VARIABLEOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(VariableIsVisible(oid));
 }

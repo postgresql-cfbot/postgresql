@@ -34,6 +34,7 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "utils/array.h"
@@ -1656,6 +1657,18 @@ get_relname_relid(const char *relname, Oid relnamespace)
 	return GetSysCacheOid2(RELNAMENSP, Anum_pg_class_oid,
 						   PointerGetDatum(relname),
 						   ObjectIdGetDatum(relnamespace));
+}
+
+/*
+ * get_varname_varid
+ *		Given name and namespace of variable, look up the OID.
+ */
+Oid
+get_varname_varid(const char *varname, Oid varnamespace)
+{
+	return GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+						   PointerGetDatum(varname),
+						   ObjectIdGetDatum(varnamespace));
 }
 
 #ifdef NOT_USED

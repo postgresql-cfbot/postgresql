@@ -33,6 +33,7 @@
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_type.h"
+#include "commands/schemavariable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -737,6 +738,56 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+
+					case PARAM_VARIABLE:
+						{
+							int			es_num_schema_variables = 0;
+							SchemaVariableValue *es_schema_variables = NULL;
+
+							if (state->parent && state->parent->state)
+							{
+								es_schema_variables = state->parent->state->es_schema_variables;
+								es_num_schema_variables = state->parent->state->es_num_schema_variables;
+							}
+
+							/*
+							 * We should to use schema variable buffer, when it is
+							 * available.
+							 */
+							if (es_schema_variables)
+							{
+								SchemaVariableValue *var;
+
+								/* check params, unexpected */
+								if (param->paramid >= es_num_schema_variables)
+									elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+								var = &es_schema_variables[param->paramid];
+
+								/* unexpected */
+								if (var->typid != param->paramtype)
+									elog(ERROR, "type of buffered value is different than PARAM_VARIABLE type");
+
+								/* In this case, the parameter is like a constant */
+								scratch.opcode = EEOP_CONST;
+								scratch.d.constval.value = var->value;
+								scratch.d.constval.isnull = var->isnull;
+								ExprEvalPushStep(state, &scratch);
+							}
+							else
+							{
+								/*
+								 * When we have not a full PlanState (plpgsql simple
+								 * expr evaluation, then we should to use direct access.
+								 */
+								scratch.opcode = EEOP_PARAM_VARIABLE;
+								scratch.d.vparam.varid = param->paramvarid;
+								scratch.d.vparam.vartype = param->paramtype;
+								ExprEvalPushStep(state, &scratch);
+							}
+						}
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

@@ -43,7 +43,10 @@ typedef struct Alias
 	List	   *colnames;		/* optional list of column aliases */
 } Alias;
 
-/* What to do at commit time for temporary relations */
+/*
+ * What to do at commit time for temporary relations or
+ * persistent/temporary variable.
+ */
 typedef enum OnCommitAction
 {
 	ONCOMMIT_NOOP,				/* No ON COMMIT clause (do nothing) */
@@ -51,6 +54,13 @@ typedef enum OnCommitAction
 	ONCOMMIT_DELETE_ROWS,		/* ON COMMIT DELETE ROWS */
 	ONCOMMIT_DROP				/* ON COMMIT DROP */
 } OnCommitAction;
+
+typedef enum VariableEOXAction
+{
+	VARIABLE_EOX_NOOP,			/* Do nothing */
+	VARIABLE_EOX_DROP,			/* ON TRANSACTION END DROP */
+	VARIABLE_EOX_RESET			/* ON TRANSACTION END RESET */
+} VariableEOXAction;
 
 /*
  * RangeVar - range variable, used in FROM clauses
@@ -232,13 +242,17 @@ typedef struct Const
  *				of the `paramid' field contain the SubLink's subLinkId, and
  *				the low-order 16 bits contain the column number.  (This type
  *				of Param is also converted to PARAM_EXEC during planning.)
+ *
+ *		PARAM_VARIABLE:  The parameter is a access to schema variable
+ *				paramid holds varid.
  */
 typedef enum ParamKind
 {
 	PARAM_EXTERN,
 	PARAM_EXEC,
 	PARAM_SUBLINK,
-	PARAM_MULTIEXPR
+	PARAM_MULTIEXPR,
+	PARAM_VARIABLE
 } ParamKind;
 
 typedef struct Param
@@ -249,6 +263,7 @@ typedef struct Param
 	Oid			paramtype;		/* pg_type OID of parameter's datatype */
 	int32		paramtypmod;	/* typmod value, if known */
 	Oid			paramcollid;	/* OID of collation, or InvalidOid if none */
+	Oid			paramvarid;		/* OID of schema variable if it is used */
 	int			location;		/* token location, or -1 if unknown */
 } Param;
 

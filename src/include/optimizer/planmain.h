@@ -120,5 +120,6 @@ extern void extract_query_dependencies(Node *query,
 						   List **relationOids,
 						   List **invalItems,
 						   bool *hasRowSecurity);
+extern void pull_up_has_schema_variable(PlannerInfo *root);
 
 #endif							/* PLANMAIN_H */

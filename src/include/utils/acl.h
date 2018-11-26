@@ -147,9 +147,11 @@ typedef ArrayType Acl;
 #define ACL_CREATE_CHR			'C'
 #define ACL_CREATE_TEMP_CHR		'T'
 #define ACL_CONNECT_CHR			'c'
+#define ACL_READ_CHR			'S' /* 'R' is occupated by old RULE priv */
+#define ACL_WRITE_CHR			'W'
 
 /* string holding all privilege code chars, in order by bitmask position */
-#define ACL_ALL_RIGHTS_STR	"arwdDxtXUCTc"
+#define ACL_ALL_RIGHTS_STR	"arwdDxtXUCTcSW"
 
 /*
  * Bitmasks defining "all rights" for each supported object type
@@ -166,6 +168,7 @@ typedef ArrayType Acl;
 #define ACL_ALL_RIGHTS_SCHEMA		(ACL_USAGE|ACL_CREATE)
 #define ACL_ALL_RIGHTS_TABLESPACE	(ACL_CREATE)
 #define ACL_ALL_RIGHTS_TYPE			(ACL_USAGE)
+#define ACL_ALL_RIGHTS_VARIABLE		(ACL_READ|ACL_WRITE)
 
 /* operation codes for pg_*_aclmask */
 typedef enum
@@ -255,6 +258,8 @@ extern AclMode pg_foreign_server_aclmask(Oid srv_oid, Oid roleid,
 						  AclMode mask, AclMaskHow how);
 extern AclMode pg_type_aclmask(Oid type_oid, Oid roleid,
 				AclMode mask, AclMaskHow how);
+extern AclMode pg_variable_aclmask(Oid var_oid, Oid roleid,
+				AclMode mask, AclMaskHow how);
 
 extern AclResult pg_attribute_aclcheck(Oid table_oid, AttrNumber attnum,
 					  Oid roleid, AclMode mode);
@@ -271,6 +276,7 @@ extern AclResult pg_tablespace_aclcheck(Oid spc_oid, Oid roleid, AclMode mode);
 extern AclResult pg_foreign_data_wrapper_aclcheck(Oid fdw_oid, Oid roleid, AclMode mode);
 extern AclResult pg_foreign_server_aclcheck(Oid srv_oid, Oid roleid, AclMode mode);
 extern AclResult pg_type_aclcheck(Oid type_oid, Oid roleid, AclMode mode);
+extern AclResult pg_variable_aclcheck(Oid type_oid, Oid roleid, AclMode mode);
 
 extern void aclcheck_error(AclResult aclerr, ObjectType objtype,
 			   const char *objectname);
@@ -307,6 +313,7 @@ extern bool pg_extension_ownercheck(Oid ext_oid, Oid roleid);
 extern bool pg_publication_ownercheck(Oid pub_oid, Oid roleid);
 extern bool pg_subscription_ownercheck(Oid sub_oid, Oid roleid);
 extern bool pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid);
+extern bool pg_variable_ownercheck(Oid stat_oid, Oid roleid);
 extern bool has_createrole_privilege(Oid roleid);
 extern bool has_bypassrls_privilege(Oid roleid);
 

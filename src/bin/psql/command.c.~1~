@@ -1957,8 +1957,8 @@ exec_command_pset(PsqlScanState scan_state, bool active_branch)
 
 			int			i;
 			static const char *const my_list[] = {
-				"border", "columns", "expanded", "fieldsep", "fieldsep_csv",
-				"fieldsep_zero", "footer", "format", "linestyle", "null",
+				"border", "columns", "expanded", "fieldsep", "fieldsep_zero",
+				"footer", "format", "linestyle", "null",
 				"numericlocale", "pager", "pager_min_lines",
 				"recordsep", "recordsep_zero",
 				"tableattr", "title", "tuples_only",
@@ -3616,9 +3616,6 @@ _align2string(enum printFormat in)
 		case PRINT_ASCIIDOC:
 			return "asciidoc";
 			break;
-		case PRINT_CSV:
-			return "csv";
-			break;
 		case PRINT_HTML:
 			return "html";
 			break;
@@ -3699,7 +3696,6 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 			/* remember to update error message below when adding more */
 			{"aligned", PRINT_ALIGNED},
 			{"asciidoc", PRINT_ASCIIDOC},
-			{"csv", PRINT_CSV},
 			{"html", PRINT_HTML},
 			{"latex", PRINT_LATEX},
 			{"troff-ms", PRINT_TROFF_MS},
@@ -3741,7 +3737,7 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 			}
 			else
 			{
-				psql_error("\\pset: allowed formats are aligned, asciidoc, csv, html, latex, latex-longtable, troff-ms, unaligned, wrapped\n");
+				psql_error("\\pset: allowed formats are aligned, asciidoc, html, latex, latex-longtable, troff-ms, unaligned, wrapped\n");
 				return false;
 			}
 		}
@@ -3875,27 +3871,6 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 		free(popt->topt.fieldSep.separator);
 		popt->topt.fieldSep.separator = NULL;
 		popt->topt.fieldSep.separator_zero = true;
-	}
-
-	/* field separator for CSV format */
-	else if (strcmp(param, "fieldsep_csv") == 0)
-	{
-		if (value)
-		{
-			/* CSV separator has to be a one-byte character */
-			if (strlen(value) != 1)
-			{
-				psql_error("\\pset: the CSV field separator must be a single character\n");
-				return false;
-			}
-			if (value[0] == '"' || value[0] == '\n' || value[0] == '\r')
-			{
-				psql_error("\\pset: the CSV field separator cannot be a double quote, a newline, or a carriage return\n");
-				return false;
-			}
-			free(popt->topt.fieldSepCsv);
-			popt->topt.fieldSepCsv = pg_strdup(value);
-		}
 	}
 
 	/* record separator for unaligned text */
@@ -4044,13 +4019,6 @@ printPsetInfo(const char *param, struct printQueryOpt *popt)
 	else if (strcmp(param, "fieldsep_zero") == 0)
 	{
 		printf(_("Field separator is zero byte.\n"));
-	}
-
-	/* show field separator for CSV format */
-	else if (strcmp(param, "fieldsep_csv") == 0)
-	{
-		printf(_("Field separator for CSV is \"%s\".\n"),
-			   popt->topt.fieldSepCsv);
 	}
 
 	/* show disable "(x rows)" footer */
@@ -4247,8 +4215,6 @@ pset_value_string(const char *param, struct printQueryOpt *popt)
 		return pset_quoted_string(popt->topt.fieldSep.separator
 								  ? popt->topt.fieldSep.separator
 								  : "");
-	else if (strcmp(param, "fieldsep_csv") == 0)
-		return pset_quoted_string(popt->topt.fieldSepCsv);
 	else if (strcmp(param, "fieldsep_zero") == 0)
 		return pstrdup(pset_bool_string(popt->topt.fieldSep.separator_zero));
 	else if (strcmp(param, "footer") == 0)

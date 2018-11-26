@@ -1737,6 +1737,110 @@ print_aligned_vertical(const printTableContent *cont,
 
 
 /**********************/
+/* CSV format		  */
+/**********************/
+
+
+static void
+csv_escaped_print(const char *str, FILE *fout)
+{
+	const char *p;
+
+	fputc('"', fout);
+	for (p = str; *p; p++)
+	{
+		if (*p == '"')
+			fputc('"', fout);	/* double quotes are doubled */
+		fputc(*p, fout);
+	}
+	fputc('"', fout);
+}
+
+static void
+csv_print_field(const char *str, FILE *fout, const char *sep)
+{
+	/*----------------
+	 * Enclose and escape field contents when one of these conditions is met:
+	 * - the field separator is found in the contents.
+	 * - the field contains a CR or LF.
+	 * - the field contains a double quote.
+	 *----------------
+	 */
+	if ((sep != NULL && *sep != '\0' && strstr(str, sep) != NULL) ||
+		strcspn(str, "\r\n\"") != strlen(str))
+		csv_escaped_print(str, fout);
+	else
+		fputs(str, fout);
+}
+
+static void
+print_csv_text(const printTableContent *cont, FILE *fout)
+{
+	const char *const *ptr;
+	int			i;
+
+	if (cancel_pressed)
+		return;
+
+	/*
+	 * The title and footer are never printed in csv format. The header is
+	 * printed if opt_tuples_only is false.
+	 *
+	 * Despite RFC 4180 saying that end of lines are CRLF, terminate lines
+	 * with '\n', which prints out as the system-dependent EOL string in text
+	 * mode (typically LF on Unix and CRLF on Windows).
+	 */
+	if (cont->opt->start_table && !cont->opt->tuples_only)
+	{
+		/* print headers */
+		for (ptr = cont->headers; *ptr; ptr++)
+		{
+			if (ptr != cont->headers)
+				fputs(cont->opt->fieldSepCsv, fout);
+			csv_print_field(*ptr, fout, cont->opt->fieldSepCsv);
+		}
+		fputc('\n', fout);
+	}
+
+	/* print cells */
+	for (i = 0, ptr = cont->cells; *ptr; i++, ptr++)
+	{
+		csv_print_field(*ptr, fout, cont->opt->fieldSepCsv);
+		if ((i + 1) % cont->ncolumns)
+			fputs(cont->opt->fieldSepCsv, fout);
+		else
+			fputc('\n', fout);
+	}
+}
+
+static void
+print_csv_vertical(const printTableContent *cont, FILE *fout)
+{
+	const char *const *ptr;
+	int			i;
+
+	/* print records */
+	for (i = 0, ptr = cont->cells; *ptr; i++, ptr++)
+	{
+		if (cancel_pressed)
+			return;
+
+		/* print name of column */
+		csv_print_field(cont->headers[i % cont->ncolumns], fout,
+						cont->opt->fieldSepCsv);
+
+		/* print field separator */
+		fputs(cont->opt->fieldSepCsv, fout);
+
+		/* print field value */
+		csv_print_field(*ptr, fout, cont->opt->fieldSepCsv);
+
+		fputc('\n', fout);
+	}
+}
+
+
+/**********************/
 /* HTML printing ******/
 /**********************/
 
@@ -3233,6 +3337,12 @@ printTable(const printTableContent *cont,
 				print_aligned_vertical(cont, fout, is_pager);
 			else
 				print_aligned_text(cont, fout, is_pager);
+			break;
+		case PRINT_CSV:
+			if (cont->opt->expanded == 1)
+				print_csv_vertical(cont, fout);
+			else
+				print_csv_text(cont, fout);
 			break;
 		case PRINT_HTML:
 			if (cont->opt->expanded == 1)

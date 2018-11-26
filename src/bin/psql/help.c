@@ -108,6 +108,7 @@ usage(unsigned short int pager)
 
 	fprintf(output, _("\nOutput format options:\n"));
 	fprintf(output, _("  -A, --no-align           unaligned table output mode\n"));
+	fprintf(output, _("      --csv                CSV (Comma-Separated Values) table output mode\n"));
 	fprintf(output, _("  -F, --field-separator=STRING\n"
 					  "                           field separator for unaligned output (default: \"%s\")\n"),
 			DEFAULT_FIELD_SEP);
@@ -272,10 +273,10 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\H                     toggle HTML output mode (currently %s)\n"),
 			ON(pset.popt.topt.format == PRINT_HTML));
 	fprintf(output, _("  \\pset [NAME [VALUE]]   set table output option\n"
-					  "                         (NAME := {border|columns|expanded|fieldsep|fieldsep_zero|\n"
-					  "                         footer|format|linestyle|null|numericlocale|pager|\n"
-					  "                         pager_min_lines|recordsep|recordsep_zero|tableattr|title|\n"
-					  "                         tuples_only|unicode_border_linestyle|\n"
+					  "                         (NAME := {border|columns|expanded|fieldsep|fieldsep_csv|\n"
+					  "                         fieldsep_zero|footer|format|linestyle|null|numericlocale|\n"
+					  "                         pager|pager_min_lines|recordsep|recordsep_zero|tableattr|\n"
+					  "                         title|tuples_only|unicode_border_linestyle|\n"
 					  "                         unicode_column_linestyle|unicode_header_linestyle})\n"));
 	fprintf(output, _("  \\t [on|off]            show only rows (currently %s)\n"),
 			ON(pset.popt.topt.tuples_only));

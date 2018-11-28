@@ -1,0 +1,96 @@
+src/backend/utils/misc/README
+
+Implementation Notes on Globals and Signal/Event Handling
+=========================================================
+
+The approch to signal handling in PostgreSQL is designed to strictly conform
+with the C89 standard and designed to run with as few platform assumptions as
+possible.
+
+The primary constraint in signal handling is that things are interruptable.
+This means that the signal handler may be interrupted at any point and that
+execution may return to it at a later point in time.  In C89 and C99, the only
+allowed write operation from a signal handler is to write to a volatile
+variable of type sig_atomic_t, which is defined in the C89 standard as a type
+supporting writes in signal handlers.  C89 guarantees at least 8 bits for
+sig_atomic_t though the number of bits used is implementation defined.
+
+How PostgreSQL Handles Signals
+------------------------------
+
+Most signals (except SIGSEGV, and SIGKILL) are blocked by PostgreSQL
+during process startup.  Certain signals are given specific meaning and
+trapped by signal handlers.  The primary signal handlers of the backends, 
+located in src/backend/tcop/postgres.c, typically just write to variables of
+sig_atomic_t (as documented below) and return control back to the main code.
+An exception is made for SIGQUIT which is used by the postmaster to terminate
+backend sessions quickly when another backend dies so that the postmaster
+may re-initialize shared memory and otherwise return to a known-good state.
+
+The signals are then checked later when the CHECK_FOR_INTERRUPTS() macro is
+called.  This macro conditionally calls CheckPendingInterrupts in 
+src/backend/tcop/postgres.c if InterruptPending is set.  This allows for
+query cancellation and process termination to be done, under ordiary cases,
+in a timely and orderly way, without posing problems for shared resources such
+as shard memory and semaphores.
+
+CHECK_FOR_INTERRUPTS() may be called only when there is no more cleanup to do
+because the query or process may be aborted.  However query cancellation
+requests and SIGTERM signals will not be processed until the next time this is
+called.
+
+Reserved Signal Meanings
+------------------------
+
+SIGHUP  - Reload config file (Postmaster Only)
+SIGINT  - (Postmaster) Fast shutdown, (Backend) Cancel Query
+SIGQUIT - (Postmaster) Immediate Shutdown, (Backend) Exit Immediately
+SIGUSR1 - Pending IPC or LWLock event
+SIGTERM - Terminate backend gracefully
+SIGINFO - Parent died
+SIGPWR  - Parent died (alternative)
+
+A few other signals, such as SIGUSR2 may have different meanings in different
+worker processes.  In the case of SIGUSR2, we use it to promote a postmaster,
+but also to exit a checkpointer or to stop replication.  In general CPU-based
+interrupts (such as SIGILL) are not caught or handled by PostgreSQL.
+
+
+Global Interrupt Flags
+----------------------
+
+The following flags are defined in  src/backend/utils/init/globals.c for use in
+signal handling, listed here with their uses and meanings.  All are defined as
+volatile sig_atomic_t in global automatic storage.  All are initialized as false
+when the database starts up.
+
+- InterruptPending:  If true, a signal or interrupt condition awaits processing.
+- QueryCancelPending: Cancel the query when safe to do so
+- ProcDiePending: Terminate the backend when safe to do so.
+- ClientConnectionLost:  The client connection was lost.
+- IdleInTransactionSessionTimeoutPending: Terminate backend due to timeout.
+- ConfigReloadPending: When safe to do so, reload the config file
+
+Some background processes have their own interrupt variables.
+
+Checking and Handling Interrupts
+--------------------------------
+
+CHECK_FOR_SIGNALS() may cause a non-local exit because the function it wraps
+utilizes PostgreSQL's built-in exception framework (ereport) to abort queries
+and can call exit() to exit a orocess.
+
+For this reason, it is imperative that CHECK_FOR_INTERRUPTS() is not called in
+places that require additional cleanup, such as dynamic shared memory, temporary
+files, or any other shared resource.  Instead CHECK_FOR_INTERRUPTS() should be
+called at the next point when it is safe to do so.
+
+If we must be able to abort due to the possibility of signals but only after
+cleaning up the shared resources, then the correct way to approach things is to
+check the flags above.  In all current cases, only three flags are needed:
+InterruptPending, QueryCancelPending, and ProcDiePending.
+
+Because InterruptPending will always be set when QueryCancelPending and
+ProcDiePending are set, checking it first is a useful operation where the number
+of possible calls are very high.  In cases where the number of calls are lower,
+this micro-optimization may be omitted.

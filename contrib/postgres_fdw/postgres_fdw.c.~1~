@@ -25,7 +25,6 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
-#include "nodes/parsenodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/clauses.h"
 #include "optimizer/pathnode.h"
@@ -307,10 +306,6 @@ static void postgresBeginForeignModify(ModifyTableState *mtstate,
 						   List *fdw_private,
 						   int subplan_index,
 						   int eflags);
-static TupleTableSlot *perform_one_foreign_dml(EState *estate,
-						ResultRelInfo *resultRelInfo,
-						TupleTableSlot *slot, TupleTableSlot *planslot,
-						CmdType commandtype);
 static TupleTableSlot *postgresExecForeignInsert(EState *estate,
 						  ResultRelInfo *resultRelInfo,
 						  TupleTableSlot *slot,
@@ -1754,50 +1749,26 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 }
 
 /*
- * perform_one_foreign_dml
- *  	Execute a prepared DML statement once on the foreign server using
- *  	parameters from the given plan slot. The execution is expected to
- *  	affect only one row on the foreign server.
+ * postgresExecForeignInsert
+ *		Insert one row into a foreign table
  */
 static TupleTableSlot *
-perform_one_foreign_dml(EState *estate, ResultRelInfo *resultRelInfo,
-						TupleTableSlot *slot, TupleTableSlot *planSlot,
-						CmdType commandtype)
+postgresExecForeignInsert(EState *estate,
+						  ResultRelInfo *resultRelInfo,
+						  TupleTableSlot *slot,
+						  TupleTableSlot *planSlot)
 {
 	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
-	ItemPointer	ctid;
 	const char **p_values;
 	PGresult   *res;
 	int			n_rows;
-
-	Assert(commandtype == CMD_INSERT ||
-		   commandtype == CMD_UPDATE ||
-		   commandtype == CMD_DELETE);
 
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
 		prepare_foreign_modify(fmstate);
 
-	if (commandtype == CMD_UPDATE || commandtype == CMD_DELETE)
-	{
-		Datum		datum;
-		bool		isNull;
-
-		/* Get the ctid that was passed up as a resjunk column */
-		datum = ExecGetJunkAttribute(planSlot,
-									 fmstate->ctidAttno,
-									 &isNull);
-		/* shouldn't ever get a null result... */
-		if (isNull)
-			elog(ERROR, "ctid is NULL");
-
-		ctid = (ItemPointer) DatumGetPointer(datum);
-	}
-	else
-		ctid = NULL;
-
 	/* Convert parameters needed by prepared statement to text form */
-	p_values = convert_prep_stmt_params(fmstate, ctid, slot);
+	p_values = convert_prep_stmt_params(fmstate, NULL, slot);
 
 	/*
 	 * Execute the prepared statement.
@@ -1842,20 +1813,6 @@ perform_one_foreign_dml(EState *estate, ResultRelInfo *resultRelInfo,
 }
 
 /*
- * postgresExecForeignInsert
- *		Insert one row into a foreign table
- */
-static TupleTableSlot *
-postgresExecForeignInsert(EState *estate,
-						  ResultRelInfo *resultRelInfo,
-						  TupleTableSlot *slot,
-						  TupleTableSlot *planSlot)
-{
-	return perform_one_foreign_dml(estate, resultRelInfo, slot, planSlot,
-								   CMD_INSERT);
-}
-
-/*
  * postgresExecForeignUpdate
  *		Update one row in a foreign table
  */
@@ -1865,8 +1822,70 @@ postgresExecForeignUpdate(EState *estate,
 						  TupleTableSlot *slot,
 						  TupleTableSlot *planSlot)
 {
-	return perform_one_foreign_dml(estate, resultRelInfo, slot, planSlot,
-								   CMD_UPDATE);
+	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
+	Datum		datum;
+	bool		isNull;
+	const char **p_values;
+	PGresult   *res;
+	int			n_rows;
+
+	/* Set up the prepared statement on the remote server, if we didn't yet */
+	if (!fmstate->p_name)
+		prepare_foreign_modify(fmstate);
+
+	/* Get the ctid that was passed up as a resjunk column */
+	datum = ExecGetJunkAttribute(planSlot,
+								 fmstate->ctidAttno,
+								 &isNull);
+	/* shouldn't ever get a null result... */
+	if (isNull)
+		elog(ERROR, "ctid is NULL");
+
+	/* Convert parameters needed by prepared statement to text form */
+	p_values = convert_prep_stmt_params(fmstate,
+										(ItemPointer) DatumGetPointer(datum),
+										slot);
+
+	/*
+	 * Execute the prepared statement.
+	 */
+	if (!PQsendQueryPrepared(fmstate->conn,
+							 fmstate->p_name,
+							 fmstate->p_nums,
+							 p_values,
+							 NULL,
+							 NULL,
+							 0))
+		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+
+	/*
+	 * Get the result, and check for success.
+	 *
+	 * We don't use a PG_TRY block here, so be careful not to throw error
+	 * without releasing the PGresult.
+	 */
+	res = pgfdw_get_result(fmstate->conn, fmstate->query);
+	if (PQresultStatus(res) !=
+		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
+		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
+
+	/* Check number of rows affected, and fetch RETURNING tuple if any */
+	if (fmstate->has_returning)
+	{
+		n_rows = PQntuples(res);
+		if (n_rows > 0)
+			store_returning_result(fmstate, slot, res);
+	}
+	else
+		n_rows = atoi(PQcmdTuples(res));
+
+	/* And clean up */
+	PQclear(res);
+
+	MemoryContextReset(fmstate->temp_cxt);
+
+	/* Return NULL if nothing was updated on the remote end */
+	return (n_rows > 0) ? slot : NULL;
 }
 
 /*
@@ -1879,8 +1898,70 @@ postgresExecForeignDelete(EState *estate,
 						  TupleTableSlot *slot,
 						  TupleTableSlot *planSlot)
 {
-	return perform_one_foreign_dml(estate, resultRelInfo, slot, planSlot,
-								   CMD_DELETE);
+	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
+	Datum		datum;
+	bool		isNull;
+	const char **p_values;
+	PGresult   *res;
+	int			n_rows;
+
+	/* Set up the prepared statement on the remote server, if we didn't yet */
+	if (!fmstate->p_name)
+		prepare_foreign_modify(fmstate);
+
+	/* Get the ctid that was passed up as a resjunk column */
+	datum = ExecGetJunkAttribute(planSlot,
+								 fmstate->ctidAttno,
+								 &isNull);
+	/* shouldn't ever get a null result... */
+	if (isNull)
+		elog(ERROR, "ctid is NULL");
+
+	/* Convert parameters needed by prepared statement to text form */
+	p_values = convert_prep_stmt_params(fmstate,
+										(ItemPointer) DatumGetPointer(datum),
+										NULL);
+
+	/*
+	 * Execute the prepared statement.
+	 */
+	if (!PQsendQueryPrepared(fmstate->conn,
+							 fmstate->p_name,
+							 fmstate->p_nums,
+							 p_values,
+							 NULL,
+							 NULL,
+							 0))
+		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+
+	/*
+	 * Get the result, and check for success.
+	 *
+	 * We don't use a PG_TRY block here, so be careful not to throw error
+	 * without releasing the PGresult.
+	 */
+	res = pgfdw_get_result(fmstate->conn, fmstate->query);
+	if (PQresultStatus(res) !=
+		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
+		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
+
+	/* Check number of rows affected, and fetch RETURNING tuple if any */
+	if (fmstate->has_returning)
+	{
+		n_rows = PQntuples(res);
+		if (n_rows > 0)
+			store_returning_result(fmstate, slot, res);
+	}
+	else
+		n_rows = atoi(PQcmdTuples(res));
+
+	/* And clean up */
+	PQclear(res);
+
+	MemoryContextReset(fmstate->temp_cxt);
+
+	/* Return NULL if nothing was deleted on the remote end */
+	return (n_rows > 0) ? slot : NULL;
 }
 
 /*

@@ -10994,7 +10994,6 @@ lock_type:	ACCESS SHARE					{ $$ = AccessShareLock; }
 			| SHARE							{ $$ = ShareLock; }
 			| SHARE ROW EXCLUSIVE			{ $$ = ShareRowExclusiveLock; }
 			| EXCLUSIVE						{ $$ = ExclusiveLock; }
-			| ACCESS EXCLUSIVE LOCAL		{ $$ = AccessExclusiveLocalLock; }
 			| ACCESS EXCLUSIVE				{ $$ = AccessExclusiveLock; }
 		;
 

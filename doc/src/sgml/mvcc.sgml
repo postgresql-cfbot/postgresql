@@ -854,8 +854,8 @@ ERROR:  could not serialize access due to read/write dependencies among transact
        </term>
        <listitem>
         <para>
-         Conflicts with the <literal>ACCESS EXCLUSIVE</literal> lock
-         mode only.
+         Conflicts with the <literal>ACCESS EXCLUSIVE LOCAL</literal> and
+         <literal>ACCESS EXCLUSIVE</literal> lock modes.
         </para>
 
         <para>
@@ -872,8 +872,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
        </term>
        <listitem>
         <para>
-         Conflicts with the <literal>EXCLUSIVE</literal> and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         Conflicts with the <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>
+         lock modes.
         </para>
 
         <para>
@@ -894,8 +895,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
        <listitem>
         <para>
          Conflicts with the <literal>SHARE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>
+         lock modes.
         </para>
 
         <para>
@@ -917,8 +919,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <para>
          Conflicts with the <literal>SHARE UPDATE EXCLUSIVE</literal>,
          <literal>SHARE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>
+         lock modes.
          This mode protects a table against
          concurrent schema changes and <command>VACUUM</command> runs.
         </para>
@@ -942,8 +945,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <para>
          Conflicts with the <literal>ROW EXCLUSIVE</literal>,
          <literal>SHARE UPDATE EXCLUSIVE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>,
+         <literal>ACCESS EXCLUSIVE</literal> and <literal>ACCESS EXCLUSIVE
+         LOCAL</literal> lock modes.
          This mode protects a table against concurrent data changes.
         </para>
 
@@ -963,8 +967,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
          Conflicts with the <literal>ROW EXCLUSIVE</literal>,
          <literal>SHARE UPDATE EXCLUSIVE</literal>,
          <literal>SHARE</literal>, <literal>SHARE ROW
-         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>
+         lock modes.
          This mode protects a table against concurrent data changes, and
          is self-exclusive so that only one session can hold it at a time.
         </para>
@@ -985,8 +990,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
          Conflicts with the <literal>ROW SHARE</literal>, <literal>ROW
          EXCLUSIVE</literal>, <literal>SHARE UPDATE
          EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
-         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal> lock modes.
+         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>
+         lock modes.
          This mode allows only concurrent <literal>ACCESS SHARE</literal> locks,
          i.e., only reads from the table can proceed in parallel with a
          transaction holding this lock mode.
@@ -1000,6 +1006,31 @@ ERROR:  could not serialize access due to read/write dependencies among transact
 
       <varlistentry>
        <term>
+        <literal>ACCESS EXCLUSIVE LOCAL</literal>
+       </term>
+       <listitem>
+        <para>
+         Conflicts with locks of all modes (<literal>ACCESS
+         SHARE</literal>, <literal>ROW SHARE</literal>, <literal>ROW
+         EXCLUSIVE</literal>, <literal>SHARE UPDATE
+         EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
+         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>).
+         This mode guarantees that the
+         holder is the only transaction accessing the table in any way.
+        </para>
+
+        <para>
+         Acquired by the <command>VACUUM</command> and autovacuum workers on
+         shortening of table heap.  Similar to <literal>ACCESS EXCLUSIVE</literal>,
+         but doesn't generate WAL record, because standby can perform heap
+         shortening with lower lock level.
+          </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>
         <literal>ACCESS EXCLUSIVE</literal>
        </term>
        <listitem>
@@ -1008,8 +1039,8 @@ ERROR:  could not serialize access due to read/write dependencies among transact
          SHARE</literal>, <literal>ROW SHARE</literal>, <literal>ROW
          EXCLUSIVE</literal>, <literal>SHARE UPDATE
          EXCLUSIVE</literal>, <literal>SHARE</literal>, <literal>SHARE
-         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, and
-         <literal>ACCESS EXCLUSIVE</literal>).
+         ROW EXCLUSIVE</literal>, <literal>EXCLUSIVE</literal>, <literal>ACCESS
+         EXCLUSIVE LOCAL</literal> and <literal>ACCESS EXCLUSIVE</literal>).
          This mode guarantees that the
          holder is the only transaction accessing the table in any way.
         </para>
@@ -1029,9 +1060,11 @@ ERROR:  could not serialize access due to read/write dependencies among transact
       </varlistentry>
      </variablelist>
 
+
      <tip>
       <para>
-       Only an <literal>ACCESS EXCLUSIVE</literal> lock blocks a
+       Only <literal>ACCESS EXCLUSIVE LOCAL</literal> and
+       <literal>ACCESS EXCLUSIVE</literal> locks block a
        <command>SELECT</command> (without <option>FOR UPDATE/SHARE</option>)
        statement.
       </para>
@@ -1068,6 +1101,7 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry>SHARE</entry>
         <entry>SHARE ROW EXCLUSIVE</entry>
         <entry>EXCLUSIVE</entry>
+        <entry>ACCESS EXCLUSIVE LOCAL</entry>
         <entry>ACCESS EXCLUSIVE</entry>
        </row>
       </thead>
@@ -1082,6 +1116,7 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry align="center"></entry>
         <entry align="center"></entry>
         <entry align="center">X</entry>
+        <entry align="center">X</entry>
        </row>
        <row>
         <entry>ROW SHARE</entry>
@@ -1091,6 +1126,7 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry align="center"></entry>
         <entry align="center"></entry>
         <entry align="center"></entry>
+        <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
        </row>
@@ -1104,12 +1140,14 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
+        <entry align="center">X</entry>
        </row>
        <row>
         <entry>SHARE UPDATE EXCLUSIVE</entry>
         <entry align="center"></entry>
         <entry align="center"></entry>
         <entry align="center"></entry>
+        <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
@@ -1126,11 +1164,13 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
+        <entry align="center">X</entry>
        </row>
        <row>
         <entry>SHARE ROW EXCLUSIVE</entry>
         <entry align="center"></entry>
         <entry align="center"></entry>
+        <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
@@ -1148,9 +1188,23 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
+        <entry align="center">X</entry>
+       </row>
+       <row>
+        <entry>ACCESS EXCLUSIVE LOCAL</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
+        <entry align="center">X</entry>
        </row>
        <row>
         <entry>ACCESS EXCLUSIVE</entry>
+        <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>
         <entry align="center">X</entry>

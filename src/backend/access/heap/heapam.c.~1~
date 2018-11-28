@@ -9378,36 +9378,6 @@ heap_sync(Relation rel)
 }
 
 /*
- * Mask DEAD tuples at a HEAP page
- *
- * We introduce this function for wal_consistency_checking satisfaction at
- * Hot Standby node.
- *
- * DEAD tuple on a master node has t_cid and t_infomask, which can not be
- * obtained by WAL records applying on a Hot Standby node.
- */
-static void
-mask_dead_tuples(Page page)
-{
-	OffsetNumber	offnum;
-
-	for (offnum = FirstOffsetNumber; offnum <= PageGetMaxOffsetNumber(page); offnum = OffsetNumberNext(offnum))
-	{
-		ItemId	lp = PageGetItemId(page, offnum);
-		char*	htup_begin;
-
-		if (!ItemIdIsDead(lp))
-			continue;
-
-		if (!ItemIdHasStorage(lp))
-			continue;
-
-		htup_begin = (char *) PageGetItem(page, lp);
-		memset(htup_begin, MASK_MARKER, ItemIdGetLength(lp));
-	}
-}
-
-/*
  * Mask a heap page before performing consistency checks on it.
  */
 void
@@ -9420,7 +9390,6 @@ heap_mask(char *pagedata, BlockNumber blkno)
 
 	mask_page_hint_bits(page);
 	mask_unused_space(page);
-	mask_dead_tuples(page);
 
 	for (off = 1; off <= PageGetMaxOffsetNumber(page); off++)
 	{

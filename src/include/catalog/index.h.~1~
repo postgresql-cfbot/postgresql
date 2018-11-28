@@ -154,9 +154,5 @@ extern void SerializeReindexState(Size maxsize, char *start_address);
 extern void RestoreReindexState(void *reindexstate);
 
 extern void IndexSetParentIndex(Relation idx, Oid parentOid);
-extern bool htid2IndexDatum(Relation hrel, Relation irel, ItemPointer htid, Datum *values, bool *isnull);
-extern void quick_vacuum_index(Relation irel, Relation hrel,
-				   ItemPointer dead_tuples,
-				   int num_dead_tuples);
 
 #endif							/* INDEX_H */

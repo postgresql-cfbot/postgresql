@@ -68,11 +68,27 @@ typedef struct ForeignTable
 	List	   *options;		/* ftoptions as DefElem list */
 } ForeignTable;
 
+/* Flags for GetForeignServerExtended */
+typedef enum ForeignServerExtendedOptions
+{
+	FSV_MISSING_OK = 1 << 0		/* no error if missing */
+} ForeignServerExtendedOptions;
+
+/* Flags for GetForeignDataWrapperExtended */
+typedef enum ForeignDataWrapperExtendedOptions
+{
+	FDW_MISSING_OK = 1 << 0		/* no error if missing */
+} ForeignDataWrapperExtendedOptions;
+
 
 extern ForeignServer *GetForeignServer(Oid serverid);
+extern ForeignServer *GetForeignServerExtended(Oid serverid,
+							uint32 flags);
 extern ForeignServer *GetForeignServerByName(const char *name, bool missing_ok);
 extern UserMapping *GetUserMapping(Oid userid, Oid serverid);
 extern ForeignDataWrapper *GetForeignDataWrapper(Oid fdwid);
+extern ForeignDataWrapper *GetForeignDataWrapperExtended(Oid fdwid,
+							uint32 flags);
 extern ForeignDataWrapper *GetForeignDataWrapperByName(const char *name,
 							bool missing_ok);
 extern ForeignTable *GetForeignTable(Oid relid);

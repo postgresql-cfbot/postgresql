@@ -124,7 +124,7 @@ sepgsql_schema_drop(Oid namespaceId)
 	object.classId = NamespaceRelationId;
 	object.objectId = namespaceId;
 	object.objectSubId = 0;
-	audit_name = getObjectIdentity(&object);
+	audit_name = getObjectIdentity(&object, false);
 
 	sepgsql_avc_check_perms(&object,
 							SEPG_CLASS_DB_SCHEMA,
@@ -149,7 +149,7 @@ sepgsql_schema_relabel(Oid namespaceId, const char *seclabel)
 	object.classId = NamespaceRelationId;
 	object.objectId = namespaceId;
 	object.objectSubId = 0;
-	audit_name = getObjectIdentity(&object);
+	audit_name = getObjectIdentity(&object, false);
 
 	/*
 	 * check db_schema:{setattr relabelfrom} permission
@@ -187,7 +187,7 @@ check_schema_perms(Oid namespaceId, uint32 required, bool abort_on_violation)
 	object.classId = NamespaceRelationId;
 	object.objectId = namespaceId;
 	object.objectSubId = 0;
-	audit_name = getObjectIdentity(&object);
+	audit_name = getObjectIdentity(&object, false);
 
 	result = sepgsql_avc_check_perms(&object,
 									 SEPG_CLASS_DB_SCHEMA,

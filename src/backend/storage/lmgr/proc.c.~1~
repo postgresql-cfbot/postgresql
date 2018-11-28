@@ -405,11 +405,6 @@ InitProcess(void)
 	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
 	SHMQueueElemInit(&(MyProc->syncRepLinks));
 
-	/* Initialize fields for SERIALIZABLE on standbys */
-	MyProc->waitSnapshotToken = 0;
-	MyProc->snapshotSafety = SNAPSHOT_SAFETY_UNKNOWN;
-	SHMQueueElemInit(&(MyProc->safetyLinks));
-
 	/* Initialize fields for group XID clearing. */
 	MyProc->procArrayGroupMember = false;
 	MyProc->procArrayGroupMemberXid = InvalidTransactionId;

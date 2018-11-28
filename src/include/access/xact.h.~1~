@@ -143,7 +143,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XLOG_XACT_COMMIT_PREPARED	0x30
 #define XLOG_XACT_ABORT_PREPARED	0x40
 #define XLOG_XACT_ASSIGNMENT		0x50
-#define XLOG_XACT_SNAPSHOT_SAFETY   0x60
+/* free opcode 0x60 */
 /* free opcode 0x70 */
 
 /* mask for filtering opcodes out of xl_info */
@@ -164,7 +164,6 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_ORIGIN			(1U << 5)
 #define XACT_XINFO_HAS_AE_LOCKS			(1U << 6)
 #define XACT_XINFO_HAS_GID				(1U << 7)
-#define XACT_XINFO_HAS_SNAPSHOT_SAFETY	(1U << 8)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -260,12 +259,6 @@ typedef struct xl_xact_origin
 	TimestampTz origin_timestamp;
 } xl_xact_origin;
 
-typedef struct xl_xact_snapshot_safety
-{
-	SnapshotToken token;
-	SnapshotSafety safety;
-} xl_xact_snapshot_safety;
-
 typedef struct xl_xact_commit
 {
 	TimestampTz xact_time;		/* time of commit */
@@ -278,7 +271,6 @@ typedef struct xl_xact_commit
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
-	/* xl_xact_snapshot_safety follows if XINFO_HAS_SNAPSHOT_SAFETY */
 } xl_xact_commit;
 #define MinSizeOfXactCommit (offsetof(xl_xact_commit, xact_time) + sizeof(TimestampTz))
 
@@ -326,9 +318,6 @@ typedef struct xl_xact_parsed_commit
 
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
-
-	SnapshotToken snapshot_token;
-	SnapshotSafety snapshot_safety;
 } xl_xact_parsed_commit;
 
 typedef xl_xact_parsed_commit xl_xact_parsed_prepare;
@@ -428,10 +417,6 @@ extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 				   int nrels, RelFileNode *rels,
 				   int xactflags, TransactionId twophase_xid,
 				   const char *twophase_gid);
-
-extern XLogRecPtr XactLogSnapshotSafetyRecord(SnapshotToken token,
-											  SnapshotSafety safety);
-
 extern void xact_redo(XLogReaderState *record);
 
 /* xactdesc.c */

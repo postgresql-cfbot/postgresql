@@ -279,6 +279,7 @@
 #define SxactIsDeferrableWaiting(sxact) (((sxact)->flags & SXACT_FLAG_DEFERRABLE_WAITING) != 0)
 #define SxactIsROSafe(sxact) (((sxact)->flags & SXACT_FLAG_RO_SAFE) != 0)
 #define SxactIsROUnsafe(sxact) (((sxact)->flags & SXACT_FLAG_RO_UNSAFE) != 0)
+#define SxactIsHypothetical(sxact) (((sxact)->flags & SXACT_FLAG_HYPOTHETICAL) != 0)
 
 /*
  * Compute the hash code associated with a PREDICATELOCKTARGETTAG.
@@ -433,7 +434,8 @@ static void SummarizeOldestCommittedSxact(void);
 static Snapshot GetSafeSnapshot(Snapshot snapshot);
 static Snapshot GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 									  VirtualTransactionId *sourcevxid,
-									  int sourcepid);
+									  int sourcepid,
+									  SnapshotSafety *snapshot_safety);
 static bool PredicateLockExists(const PREDICATELOCKTARGETTAG *targettag);
 static bool GetParentPredicateLockTag(const PREDICATELOCKTARGETTAG *tag,
 						  PREDICATELOCKTARGETTAG *parent);
@@ -1186,6 +1188,9 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
+		SHMQueueInit(&PredXact->snapshotSafetyWaitList);
+		PredXact->NewestSnapshotToken = 0;
+		PredXact->NewestSnapshotSafety = SNAPSHOT_SAFE;
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -1468,6 +1473,7 @@ static Snapshot
 GetSafeSnapshot(Snapshot origSnapshot)
 {
 	Snapshot	snapshot;
+	SnapshotSafety snapshot_safety;
 
 	Assert(XactReadOnly && XactDeferrable);
 
@@ -1480,10 +1486,36 @@ GetSafeSnapshot(Snapshot origSnapshot)
 		 * one passed to it, but we avoid assuming that here.
 		 */
 		snapshot = GetSerializableTransactionSnapshotInt(origSnapshot,
-														 NULL, InvalidPid);
-
-		if (MySerializableXact == InvalidSerializableXact)
-			return snapshot;	/* no concurrent r/w xacts; it's safe */
+														 NULL, InvalidPid,
+														 &snapshot_safety);
+		if (RecoveryInProgress())
+		{
+			/*
+			 * Check if the most recently replayed COMMIT record was either
+			 * known to be safe because it had no concurrent r/w xacts on the
+			 * primary, or has subsequently been declared safe by a snapshot
+			 * safety record.
+			 */
+			if (snapshot_safety == SNAPSHOT_SAFE)
+			{
+				elog(WARNING, "got a safe snapshot!");
+				return snapshot;
+			}
+			else if (snapshot_safety == SNAPSHOT_UNSAFE)
+			{
+				/*
+				 * TODO:  This can only happen if the master ran out of memory
+				 * while trying to create a hypothetical transaction, right?
+				 * Should we wait or error out?
+				 */
+				continue;
+			}
+		}
+		else
+		{
+			if (MySerializableXact == InvalidSerializableXact)
+				return snapshot;	/* no concurrent r/w xacts; it's safe */
+	}
 
 		LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
@@ -1491,20 +1523,48 @@ GetSafeSnapshot(Snapshot origSnapshot)
 		 * Wait for concurrent transactions to finish. Stop early if one of
 		 * them marked us as conflicted.
 		 */
-		MySerializableXact->flags |= SXACT_FLAG_DEFERRABLE_WAITING;
-		while (!(SHMQueueEmpty(&MySerializableXact->possibleUnsafeConflicts) ||
-				 SxactIsROUnsafe(MySerializableXact)))
+		if (RecoveryInProgress())
 		{
-			LWLockRelease(SerializableXactHashLock);
-			ProcWaitForSignal(WAIT_EVENT_SAFE_SNAPSHOT);
-			LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			/*
+			 * Running on a standby.  Wait for a the primary to tell us the
+			 * result of testing a hypothetical transaction whose
+			 * serializability matches the snapshot we have.
+			 */
+			Assert(snapshot_safety == SNAPSHOT_SAFETY_UNKNOWN);
+			Assert(!SHMQueueIsDetached(&MyProc->safetyLinks));
+			while (MyProc->snapshotSafety == SNAPSHOT_SAFETY_UNKNOWN)
+			{
+				LWLockRelease(SerializableXactHashLock);
+				ProcWaitForSignal(WAIT_EVENT_SAFE_SNAPSHOT);
+				LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			}
+			if (MyProc->snapshotSafety == SNAPSHOT_SAFE)
+			{
+				LWLockRelease(SerializableXactHashLock);
+				break;				/* success */
+			}
 		}
-		MySerializableXact->flags &= ~SXACT_FLAG_DEFERRABLE_WAITING;
-
-		if (!SxactIsROUnsafe(MySerializableXact))
+		else
 		{
-			LWLockRelease(SerializableXactHashLock);
-			break;				/* success */
+			/*
+			 * Running on primary.  Wait for a signal from one of the backends
+			 * that we possibly conflict with.
+			 */
+			MySerializableXact->flags |= SXACT_FLAG_DEFERRABLE_WAITING;
+			while (!(SHMQueueEmpty(&MySerializableXact->possibleUnsafeConflicts) ||
+					 SxactIsROUnsafe(MySerializableXact)))
+			{
+				LWLockRelease(SerializableXactHashLock);
+				ProcWaitForSignal(WAIT_EVENT_SAFE_SNAPSHOT);
+				LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			}
+			MySerializableXact->flags &= ~SXACT_FLAG_DEFERRABLE_WAITING;
+
+			if (!SxactIsROUnsafe(MySerializableXact))
+			{
+				LWLockRelease(SerializableXactHashLock);
+				break;				/* success */
+			}
 		}
 
 		LWLockRelease(SerializableXactHashLock);
@@ -1519,10 +1579,62 @@ GetSafeSnapshot(Snapshot origSnapshot)
 	/*
 	 * Now we have a safe snapshot, so we don't need to do any further checks.
 	 */
-	Assert(SxactIsROSafe(MySerializableXact));
+	Assert(RecoveryInProgress() || SxactIsROSafe(MySerializableXact));
 	ReleasePredicateLocks(false);
 
 	return snapshot;
+}
+
+  /*
+   * When the primary server has determined the safety of a hypothetical
+   * snapshot which was previously reported as SNAPSHOT_SAFETY_UNKNOWN in a
+   * COMMIT record, it emits a WAL record that causes the recovery process on
+   * standbys to call this function.  Here, we will wake up any backend that is
+   * currently waiting in GetSafeSnapshot to learn about the safety of a
+   * snapshot taken after that point in the transaction stream.
+   */
+void
+NotifyHypotheticalSnapshotSafety(SnapshotToken token, SnapshotSafety safety)
+{
+	PGPROC	   *proc;
+	PGPROC	   *next;
+
+	Assert(AmStartupProcess());
+	elog(LOG, "NotifyHypotheticalSnapshotSafety token = %ld, safety = %d", token, safety);
+
+	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+
+	/*
+	 * Walk the list of processes that are waiting in GetSafeSnapshot on a
+	 * standby, and find any that are waiting to learn the safety of a
+	 * snapshot taken at a point in time when this token appeared onthe most
+	 * recently replayed SSI transaction.  If we find any of those, tell them
+	 * the final status for and wake them up.
+	 */
+	proc = (PGPROC *) SHMQueueNext(&PredXact->snapshotSafetyWaitList,
+								   &PredXact->snapshotSafetyWaitList,
+								   offsetof(PGPROC, safetyLinks));
+	while (proc != NULL)
+	{
+		next = (PGPROC *) SHMQueueNext(&PredXact->snapshotSafetyWaitList,
+									   &proc->safetyLinks,
+									   offsetof(PGPROC, safetyLinks));
+		if (proc->waitSnapshotToken == token)
+		{
+			SHMQueueDelete(&proc->safetyLinks);
+			proc->snapshotSafety = safety;
+			ProcSendSignal(proc->pid);
+		}
+		proc = next;
+	}
+
+	/*
+	 * If this happens to be the most recently replayed snapshot token then
+	 * remember this safety value.
+	 */
+	if (PredXact->NewestSnapshotToken == token)
+		PredXact->NewestSnapshotSafety = safety;
+	LWLockRelease(SerializableXactHashLock);
 }
 
 /*
@@ -1593,16 +1705,17 @@ GetSerializableTransactionSnapshot(Snapshot snapshot)
 
 	/*
 	 * Can't use serializable mode while recovery is still active, as it is,
-	 * for example, on a hot standby.  We could get here despite the check in
-	 * check_XactIsoLevel() if default_transaction_isolation is set to
-	 * serializable, so phrase the hint accordingly.
+	 * for example, on a hot standby, unless DEFERRABLE mode is active.  In
+	 * that case, DEFERRABLE is the default, so this error should should only
+	 * be reachable if the user has explicitly asked for NOT DEFERRABLE via
+	 * SET transaction_deferrable or SET/BEGIN TRANSACTION ISOLATION LEVEL.
 	 */
-	if (RecoveryInProgress())
+	if (RecoveryInProgress() && (!XactReadOnly || !XactDeferrable))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot use serializable mode in a hot standby"),
-				 errdetail("\"default_transaction_isolation\" is set to \"serializable\"."),
-				 errhint("You can use \"SET default_transaction_isolation = 'repeatable read'\" to change the default.")));
+				 errmsg("cannot use serializable not deferrable mode in a hot standby"),
+				 errdetail("Serializable transactions must be DEFERRABLE when run on hot standby servers."),
+				 errhint("You can use \"SET transaction_deferrable = true\", use DEFERRABLE when specifying the transaction isolation level, or avoid explicitly specifying NOT DEFERRABLE.")));
 
 	/*
 	 * A special optimization is available for SERIALIZABLE READ ONLY
@@ -1613,7 +1726,7 @@ GetSerializableTransactionSnapshot(Snapshot snapshot)
 		return GetSafeSnapshot(snapshot);
 
 	return GetSerializableTransactionSnapshotInt(snapshot,
-												 NULL, InvalidPid);
+												 NULL, InvalidPid, NULL);
 }
 
 /*
@@ -1645,7 +1758,7 @@ SetSerializableTransactionSnapshot(Snapshot snapshot,
 				 errmsg("a snapshot-importing transaction must not be READ ONLY DEFERRABLE")));
 
 	(void) GetSerializableTransactionSnapshotInt(snapshot, sourcevxid,
-												 sourcepid);
+												 sourcepid, NULL);
 }
 
 /*
@@ -1656,11 +1769,17 @@ SetSerializableTransactionSnapshot(Snapshot snapshot,
  * loaded up.  HOWEVER: to avoid race conditions, we must check that the
  * source xact is still running after we acquire SerializableXactHashLock.
  * We do that by calling ProcArrayInstallImportedXmin.
+ *
+ * If snapshot_safety is a non-NULL, then the safety of this snapshot if used
+ * on a standby server is written to it.  If it is SNAPSHOT_SAFE, then the
+ * snapshot may be safely used.  If it is SNAPSHOT_SAFETY_UNKNOWN, then the
+ * caller must wait for the safety to be announced in the WAL.
  */
 static Snapshot
 GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 									  VirtualTransactionId *sourcevxid,
-									  int sourcepid)
+									  int sourcepid,
+									  SnapshotSafety *snapshot_safety)
 {
 	PGPROC	   *proc;
 	VirtualTransactionId vxid;
@@ -1670,8 +1789,6 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 
 	/* We only do this for serializable transactions.  Once. */
 	Assert(MySerializableXact == InvalidSerializableXact);
-
-	Assert(!RecoveryInProgress());
 
 	/*
 	 * Since all parts of a serializable transaction must use the same
@@ -1712,6 +1829,30 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 			LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 		}
 	} while (!sxact);
+
+	/*
+	 * Note the snapshot safety information for standbys.  This can be used to
+	 * know if the returned snapshot is already known to be safe/unsafe, or if
+	 * we must wait for notification of the final safety determination.
+	 */
+	if (snapshot_safety != NULL)
+	{
+		*snapshot_safety = PredXact->NewestSnapshotSafety;
+		if (*snapshot_safety == SNAPSHOT_SAFETY_UNKNOWN)
+		{
+			/*
+			 * We must put the this process into the waitlist while we hold
+			 * the lock or there would be a race condition where we might miss
+			 * a notification.  The caller must wait for
+			 * MyProc->snapshotSafety to be set to a final value.
+			 */
+			MyProc->snapshotSafety = SNAPSHOT_SAFETY_UNKNOWN;
+			MyProc->waitSnapshotToken = PredXact->NewestSnapshotToken;
+			if (SHMQueueIsDetached(&MyProc->safetyLinks))
+				SHMQueueInsertBefore(&PredXact->snapshotSafetyWaitList,
+									 &MyProc->safetyLinks);
+		}
+	}
 
 	/* Get the snapshot, or check that it's safe to use */
 	if (!sourcevxid)
@@ -3181,6 +3322,7 @@ SetNewSxactGlobalXmin(void)
 	for (sxact = FirstPredXact(); sxact != NULL; sxact = NextPredXact(sxact))
 	{
 		if (!SxactIsRolledBack(sxact)
+			&& !SxactIsHypothetical(sxact)
 			&& !SxactIsCommitted(sxact)
 			&& sxact != OldCommittedSxact)
 		{
@@ -3476,11 +3618,34 @@ ReleasePredicateLocks(bool isCommit)
 
 			/*
 			 * Wake up the process for a waiting DEFERRABLE transaction if we
-			 * now know it's either safe or conflicted.
+			 * now know it's either safe or conflicted.  This releases
+			 * SERIALIZABLE READ ONLY DEFERRABLE transactions on the primary.
 			 */
 			if (SxactIsDeferrableWaiting(roXact) &&
 				(SxactIsROUnsafe(roXact) || SxactIsROSafe(roXact)))
 				ProcSendSignal(roXact->pid);
+
+			/*
+			 * If a hypothetical transaction is now known to be safe or
+			 * unsafe, we can report that in the WAL for the benefit of
+			 * standbys and recycle it.  This releases SERIALIZABLE READ ONLY
+			 * DEFERRABLE transactions that are waiting for the status of this
+			 * particular hypothetical tranasactions on any standby that
+			 * replays it.
+			 */
+			if (SxactIsHypothetical(roXact) &&
+				(SxactIsROUnsafe(roXact) || SxactIsROSafe(roXact)))
+			{
+				SnapshotSafety safety;
+
+				if (SxactIsROSafe(roXact))
+					safety = SNAPSHOT_SAFE;
+				else
+					safety = SNAPSHOT_UNSAFE;
+				XactLogSnapshotSafetyRecord(roXact->SeqNo.lastCommitBeforeSnapshot,
+											safety);
+				ReleasePredXact(roXact);
+			}
 
 			possibleUnsafeConflict = nextConflict;
 		}
@@ -4741,6 +4906,80 @@ PreCommit_CheckForSerializationFailure(void)
 	MySerializableXact->prepareSeqNo = ++(PredXact->LastSxactCommitSeqNo);
 	MySerializableXact->flags |= SXACT_FLAG_PREPARED;
 
+	/*
+	 * For the benefit of hot standby servers that want to take a safe
+	 * SERIALIZABLE READ ONLY DEFERRABLE snapshot, we will check whether a
+	 * hypothetical read-only serializable transaction that starts after this
+	 * transaction commits would be safe.
+	 */
+	if (PredXact->WritableSxactCount == (XactReadOnly ? 0 : 1))
+	{
+		/*
+		 * There are no concurrent writable SERIALIZABLE transactions.  A
+		 * read-only snapshot taken immediately after this one commits is
+		 * safe.
+		 */
+		MySerializableXact->snapshotSafetyAfterThisCommit = SNAPSHOT_SAFE;
+	}
+	else
+	{
+		SERIALIZABLEXACT *sxact;
+		SERIALIZABLEXACT *othersxact;
+
+		/*
+		 * We can't yet determine whether a read-only transaction beginning
+		 * now would be safe.  Create a hypothetical SERIALIZABLEXACT and let
+		 * ReleasePredicateLocks report on its safety once that can be
+		 * determined.
+		 */
+		sxact = CreatePredXact();
+		if (sxact == NULL)
+		{
+			/* Out of space.  Don't allow SERIALIZABLE on standbys. */
+			MySerializableXact->snapshotSafetyAfterThisCommit =
+				SNAPSHOT_UNSAFE;
+		}
+		else
+		{
+			SetInvalidVirtualTransactionId(sxact->vxid);
+			sxact->SeqNo.lastCommitBeforeSnapshot =
+				MySerializableXact->prepareSeqNo;
+			sxact->prepareSeqNo = InvalidSerCommitSeqNo;
+			sxact->commitSeqNo = InvalidSerCommitSeqNo;
+			SHMQueueInit(&(sxact->outConflicts));
+			SHMQueueInit(&(sxact->inConflicts));
+			SHMQueueInit(&(sxact->possibleUnsafeConflicts));
+			sxact->topXid = InvalidTransactionId;
+			sxact->finishedBefore = InvalidTransactionId;
+			sxact->xmin = MySerializableXact->xmin;
+			sxact->pid = InvalidPid;
+			SHMQueueInit(&(sxact->predicateLocks));
+			SHMQueueElemInit(&(sxact->finishedLink));
+			sxact->flags = SXACT_FLAG_READ_ONLY | SXACT_FLAG_HYPOTHETICAL;
+
+			/* Register concurrent r/w transactions as possible conflicts. */
+			for (othersxact = FirstPredXact();
+				 othersxact != NULL;
+				 othersxact = NextPredXact(othersxact))
+			{
+				if (othersxact != MySerializableXact
+					&& !SxactIsCommitted(othersxact)
+					&& !SxactIsDoomed(othersxact)
+					&& !SxactIsReadOnly(othersxact))
+				{
+					SetPossibleUnsafeConflict(sxact, othersxact);
+				}
+			}
+
+			/*
+			 * The status will be reported in a later WAL record once it has
+			 * been determined.
+			 */
+			MySerializableXact->snapshotSafetyAfterThisCommit =
+				SNAPSHOT_SAFETY_UNKNOWN;
+		}
+	}
+
 	LWLockRelease(SerializableXactHashLock);
 }
 
@@ -5002,4 +5241,42 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 
 		CreatePredicateLock(&lockRecord->target, targettaghash, sxact);
 	}
+}
+
+/*
+ * Accessor for the hypothetical snapshot safety information needed for commit
+ * records generated on primary servers.  This is used by XlactLogCommitRecord
+ * to receive the safety level computed by
+ * PreCommit_CheckForSerializationFailure in a committing SSI transaction.
+ */
+void
+GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafety *safety)
+{
+	*token = MySerializableXact->prepareSeqNo;
+	*safety = MySerializableXact->snapshotSafetyAfterThisCommit;
+}
+
+void
+BeginSnapshotSafetyReplay(void)
+{
+	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+}
+
+/*
+ * Used in recovery when replaying commit records.  On a hot standby, these
+ * values must be set atomically with ProcArray updates, mirroring the code
+ * in GetSerializableTransactionSnapshotInt.  This is done by wrapping both
+ * in BeginSnapshotSafetyReplay/CompleteSnapshotSafetyReplay.
+ */
+void
+SetNewestSnapshotSafety(SnapshotToken token, SnapshotSafety safety)
+{
+	PredXact->NewestSnapshotToken = token;
+	PredXact->NewestSnapshotSafety = safety;
+}
+
+void
+CompleteSnapshotSafetyReplay(void)
+{
+	LWLockRelease(SerializableXactHashLock);
 }

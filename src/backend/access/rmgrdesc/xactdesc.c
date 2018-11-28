@@ -123,6 +123,17 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 		data += sizeof(xl_xact_origin);
 	}
+
+	if (parsed->xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+	{
+		xl_xact_snapshot_safety *xl_snapshot_safety =
+			(xl_xact_snapshot_safety *) data;
+
+		parsed->snapshot_token = xl_snapshot_safety->token;
+		parsed->snapshot_safety = xl_snapshot_safety->safety;
+
+		data += sizeof(xl_xact_snapshot_safety);
+	}
 }
 
 void
@@ -209,6 +220,27 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 	}
 }
 
+static const char *
+xact_snapshot_safety_to_string(SnapshotSafety snapshot_safety)
+{
+	const char *string = "<unknown>";
+
+	switch(snapshot_safety)
+	{
+	case SNAPSHOT_SAFE:
+		string = "SNAPSHOT_SAFE";
+		break;
+	case SNAPSHOT_UNSAFE:
+		string = "SNAPSHOT_UNSAFE";
+		break;
+	case SNAPSHOT_SAFETY_UNKNOWN:
+		string = "SNAPSHOT_SAFETY_UNKNOWN";
+		break;
+	}
+
+	return string;
+}
+
 static void
 xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId origin_id)
 {
@@ -258,6 +290,13 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 						 (uint32) parsed.origin_lsn,
 						 timestamptz_to_str(parsed.origin_timestamp));
 	}
+
+	if (parsed.xinfo & XACT_XINFO_HAS_SNAPSHOT_SAFETY)
+	{
+		appendStringInfo(buf, "; snapshot safety: %s, token: %lx",
+						 xact_snapshot_safety_to_string(parsed.snapshot_safety),
+						 parsed.snapshot_token);
+	}
 }
 
 static void
@@ -304,6 +343,14 @@ xact_desc_assignment(StringInfo buf, xl_xact_assignment *xlrec)
 		appendStringInfo(buf, " %u", xlrec->xsub[i]);
 }
 
+static void
+xact_desc_snapshot_safety(StringInfo buf, xl_xact_snapshot_safety *xlrec)
+{
+	appendStringInfo(buf, "snapshot safety: %s, token: %lx",
+					 xact_snapshot_safety_to_string(xlrec->safety),
+					 xlrec->token);
+}
+
 void
 xact_desc(StringInfo buf, XLogReaderState *record)
 {
@@ -335,6 +382,12 @@ xact_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfo(buf, "xtop %u: ", xlrec->xtop);
 		xact_desc_assignment(buf, xlrec);
 	}
+	else if (info == XLOG_XACT_SNAPSHOT_SAFETY)
+	{
+		xl_xact_snapshot_safety *xlrec = (xl_xact_snapshot_safety *) rec;
+
+		xact_desc_snapshot_safety(buf, xlrec);
+	}
 }
 
 const char *
@@ -361,6 +414,9 @@ xact_identify(uint8 info)
 			break;
 		case XLOG_XACT_ASSIGNMENT:
 			id = "ASSIGNMENT";
+			break;
+		case XLOG_XACT_SNAPSHOT_SAFETY:
+			id = "SNAPSHOT_SAFETY";
 			break;
 	}
 

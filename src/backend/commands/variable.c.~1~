@@ -541,6 +541,14 @@ check_XactIsoLevel(int *newval, void **extra, GucSource source)
 			GUC_check_errmsg("SET TRANSACTION ISOLATION LEVEL must not be called in a subtransaction");
 			return false;
 		}
+		/* Can't go to serializable mode while recovery is still active */
+		if (newXactIsoLevel == XACT_SERIALIZABLE && RecoveryInProgress())
+		{
+			GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+			GUC_check_errmsg("cannot use serializable mode in a hot standby");
+			GUC_check_errhint("You can use REPEATABLE READ instead.");
+			return false;
+		}
 	}
 
 	return true;

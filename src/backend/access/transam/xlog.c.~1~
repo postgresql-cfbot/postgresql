@@ -5169,8 +5169,6 @@ BootStrapXLOG(void)
 	checkPoint.newestCommitTsXid = InvalidTransactionId;
 	checkPoint.time = (pg_time_t) time(NULL);
 	checkPoint.oldestActiveXid = InvalidTransactionId;
-//	checkPoint.newestSnapshotToken = 0;
-//	checkPoint.newestSnapshotSafety = SNAPSHOT_SAFE;
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
@@ -5180,8 +5178,6 @@ BootStrapXLOG(void)
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
-//	SetNewestSnapshotSafety(checkPoint.newestSnapshotToken,
-//							checkPoint.newestSnapshotSafety);
 
 	/* Set up the XLOG page header */
 	page->xlp_magic = XLOG_PAGE_MAGIC;
@@ -6623,9 +6619,6 @@ StartupXLOG(void)
 					 checkPoint.newestCommitTsXid);
 	XLogCtl->ckptXidEpoch = checkPoint.nextXidEpoch;
 	XLogCtl->ckptXid = checkPoint.nextXid;
-	/* TODO: figure out checkpoint protocol */
-//	SetNewestSnapshotSafety(checkPoint.newestSnapshotToken,
-//							checkPoint.newestSnapshotSafety);
 
 	/*
 	 * Initialize replication slots, before there's a chance to remove

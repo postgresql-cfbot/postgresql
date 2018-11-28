@@ -13,6 +13,8 @@
 #ifndef _PG_TS_PUBLIC_H_
 #define _PG_TS_PUBLIC_H_
 
+#include "nodes/pg_list.h"
+#include "storage/itemptr.h"
 #include "tsearch/ts_type.h"
 
 /*
@@ -81,10 +83,70 @@ extern void readstoplist(const char *fname, StopList *s,
 extern bool searchstoplist(StopList *s, char *key);
 
 /*
- * Interface with dictionaries
+ * API for text search dictionaries.
+ *
+ * API functions to handle a text search dictionary are defined by a text search
+ * template.  Currently an existing template cannot be altered in order to
+ * define another functions.  API consists of the following functions:
+ *	- init function - optional function which initializes internal structures of
+ *	  the dictionary.  It accepts DictInitData structure as an argument and must
+ *	  return a custom palloc'd structure which stores content of the processed
+ *	  dictionary and is used in lexize function.
+ *	- lexize function - normalizes a single word (token) using specific
+ *	  dictionary.  It must return a palloc'd array of TSLexeme the last entry of
+ *	  which is the terminating entry and accepts the following arguments:
+ *	  - dictData - pointer to a custom structure returned by init function or
+ *		NULL if init function wasn't defined by the template.
+ *	  - token - string which represents a token to normalize, isn't
+ *		null-terminated.
+ *	  - length - length of token.
+ *	  - dictState - pointer to a DictSubState structure which stores current
+ *		state of a set of tokens processing and allows to normalize phrases.
  */
 
-/* return struct for any lexize function */
+/*
+ * A preprocessed dictionary can be stored in shared memory using DSM.  Does
+ * the dictionary want it decides init function.  A DSM segment is released if
+ * the dictionary was altered or droppped.  But still there is a situation when
+ * we haven't a way to prevent a segment leaking.  It may happen if the
+ * dictionary was dropped, some backend used the dictionary before dropping, the
+ * backend will hold its DSM segment till disconnecting or calling
+ * lookup_ts_dictionary_cache(), where invalid segment is unpinned.
+ *
+ * DictPointerData is a structure to search a dictionary's DSM segment.  We
+ * need xmin, xmax and tid to be sure that the content in the DSM segment still
+ * valid.
+ */
+typedef struct
+{
+	Oid			id;				/* OID of dictionary which is processed */
+	TransactionId xmin;			/* XMIN of the dictionary's tuple */
+	TransactionId xmax;			/* XMAX of the dictionary's tuple */
+	ItemPointerData tid;		/* TID of the dictionary's tuple */
+} DictPointerData;
+
+/*
+ * API structure for a dictionary initialization.  It is passed as an argument
+ * to a template's init function.
+ */
+typedef struct
+{
+	/*
+	 * A dictionary option list for a template's init method. Should go first
+	 * for backward compatibility.
+	 */
+	List	   *dict_options;
+	/*
+	 * A dictionary information used to allocate, search and release its DSM
+	 * segment.
+	 */
+	DictPointerData dict;
+} DictInitData;
+
+/*
+ * Return struct for any lexize function.  They are combined into an array, the
+ * last entry is the terminating entry.
+ */
 typedef struct
 {
 	/*----------
@@ -108,7 +170,8 @@ typedef struct
 
 	uint16		flags;			/* See flag bits below */
 
-	char	   *lexeme;			/* C string */
+	char	   *lexeme;			/* C string or NULL if it is a terminating
+								 * entry */
 } TSLexeme;
 
 /* Flag bits that can appear in TSLexeme.flags */

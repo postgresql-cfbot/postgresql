@@ -82,7 +82,7 @@ extern LLVMValueRef FuncVarsizeAny;
 extern LLVMValueRef FuncSlotGetmissingattrs;
 extern LLVMValueRef FuncSlotGetsomeattrsInt;
 extern LLVMValueRef FuncMakeExpandedObjectReadOnlyInternal;
-extern LLVMValueRef FuncExecEvalArrayRefSubscript;
+extern LLVMValueRef FuncExecEvalSubscriptingRef;
 extern LLVMValueRef FuncExecEvalSysVar;
 extern LLVMValueRef FuncExecAggTransReparent;
 extern LLVMValueRef FuncExecAggInitGroup;

@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 36;
+use Test::More tests => 45;
 
 # Initialize node with checksums enabled.
 my $node = get_new_node('node_checksum');
@@ -48,10 +48,10 @@ append_to_file "$pgdata/global/99999_vm.123", "";
 command_ok(['pg_verify_checksums',  '-D', $pgdata],
 		   "succeeds with offline cluster");
 
-# Checks cannot happen with an online cluster
+# Checksums pass on an online cluster
 $node->start;
-command_fails(['pg_verify_checksums',  '-D', $pgdata],
-			  "fails with online cluster");
+command_ok(['pg_verify_checksums',  '-D', $pgdata],
+		   "succeeds with online cluster");
 
 # Create table to corrupt and get its relfilenode
 $node->safe_psql('postgres',
@@ -73,27 +73,6 @@ $node->stop;
 command_ok(['pg_verify_checksums',  '-D', $pgdata,
 	'-r', $relfilenode_corrupted],
 	"succeeds for single relfilenode with offline cluster");
-
-# Time to create some corruption
-open my $file, '+<', "$pgdata/$file_corrupted";
-seek($file, $pageheader_size, 0);
-syswrite($file, '\0\0\0\0\0\0\0\0\0');
-close $file;
-
-# Global checksum checks fail
-$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata],
-						  1,
-						  [qr/Bad checksums:.*1/],
-						  [qr/checksum verification failed/],
-						  'fails with corrupted data');
-
-# Checksum checks on single relfilenode fail
-$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata, '-r',
-							$relfilenode_corrupted],
-						  1,
-						  [qr/Bad checksums:.*1/],
-						  [qr/checksum verification failed/],
-						  'fails for corrupted data on single relfilenode');
 
 # Utility routine to check that pg_verify_checksums is able to detect
 # correctly-named relation files filled with some corrupted data.
@@ -129,3 +108,46 @@ fail_corrupt($node, "99990_vm");
 fail_corrupt($node, "99990_init.123");
 fail_corrupt($node, "99990_fsm.123");
 fail_corrupt($node, "99990_vm.123");
+
+# Time to create some corruption
+open my $file, '+<', "$pgdata/$file_corrupted";
+seek($file, $pageheader_size, 0);
+syswrite($file, '\0\0\0\0\0\0\0\0\0');
+close $file;
+
+# Global checksum checks fail
+$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata],
+						  1,
+						  [qr/Bad checksums:.*1/],
+						  [qr/checksum verification failed/],
+						  'fails with corrupted data');
+
+# Checksum checks on single relfilenode fail
+$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata, '-r',
+							$relfilenode_corrupted],
+						  1,
+						  [qr/Bad checksums:.*1/],
+						  [qr/checksum verification failed/],
+						  'fails for corrupted data on single relfilenode');
+
+# Start node again to test online verification correctly finds failures
+$node->stop;
+
+# Global online checksum checks fail
+$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata],
+						  1,
+						  [qr/Bad checksums:.*1/],
+						  [qr/checksum verification failed/],
+						  'fails with corrupted data');
+
+# Online checksum checks on single relfilenode fail
+$node->command_checks_all([ 'pg_verify_checksums', '-D', $pgdata, '-r',
+							$relfilenode_corrupted],
+						  1,
+						  [qr/Bad checksums:.*1/],
+						  [qr/checksum verification failed/],
+						  'fails for corrupted data on single relfilenode');
+
+# Authorized relation files filled with corrupted data cause the
+# online checksum checks to fail.
+fail_corrupt($node, "99991");

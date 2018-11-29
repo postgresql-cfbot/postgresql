@@ -1535,6 +1535,70 @@ select * from
   int8_tbl x join (int4_tbl x cross join int4_tbl y(ff)) j on q1 = f1; -- ok
 
 --
+-- test that semi- or inner self-joins on a unique column are removed
+--
+
+-- enable only nestloop to get more predictable plans
+set enable_hashjoin to off;
+set enable_mergejoin to off;
+
+create table sj (a int unique, b int);
+insert into sj values (1, null), (null, 2), (2, 1);
+analyze sj;
+
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+
+explain (costs off)
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+
+explain (costs off)
+select * from sj p
+where exists (select * from sj q
+				where q.a = p.a and q.b < 10);
+
+-- subselect that references the removed relation
+explain (costs off)
+select t1.a, (select a from sj where a = t2.a and a = t1.a)
+from sj t1, sj t2
+where t1.a = t2.a;
+
+-- Test that a non-EC-derived join clause is processed correctly. Use an
+-- outer join so that we can't form an EC.
+explain (costs off) select * from sj p join sj q on p.a = q.a
+  left join sj r on p.a + q.a = r.a;
+
+-- Check that attr_needed is updated correctly after self-join removal. In
+-- this test, k1.b is required at either j1 or j2. If this info is lost,
+-- join targetlist for (k1, k2) will not contain k1.b. Use index scan for
+-- k1 so that we don't get 'b' from physical tlist used for seqscan. Also
+-- disable reordering of joins because this test depends on a particular
+-- join tree.
+create table sk (a int, b int);
+create index sk_a_idx on sk(a);
+set join_collapse_limit to 1;
+set enable_seqscan to off;
+explain (costs off) select 1 from
+	(sk k1 join sk k2 on k1.a = k2.a)
+	join (sj j1 join sj j2 on j1.a = j2.a) on j1.b = k1.b;
+explain (costs off) select 1 from
+	(sk k1 join sk k2 on k1.a = k2.a)
+	join (sj j1 join sj j2 on j1.a = j2.a) on j2.b = k1.b;
+reset join_collapse_limit;
+reset enable_seqscan;
+
+-- If index conditions are different for each side, we won't select the same
+-- row on both sides, so the join can't be removed.
+create table sl(a int, b int);
+create unique index sl_ab on sl(a, b);
+
+explain (costs off)
+select * from sl t1, sl t2
+where t1.a = t2.a and t1.b = 1 and t2.b = 2;
+
+reset enable_hashjoin;
+reset enable_mergejoin;
+
+--
 -- Test hints given on incorrect column references are useful
 --
 
@@ -1974,6 +2038,9 @@ inner join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
 explain (verbose, costs off)
 select * from j1
 left join j2 on j1.id1 = j2.id1 where j1.id2 = 1;
+
+-- !!!FIXME this test doesn't break if I set skip_mark_restore to true.
+-- Also should avoid unique self join removal by using two different relations.
 
 -- validate logic in merge joins which skips mark and restore.
 -- it should only do this if all quals which were used to detect the unique

@@ -71,9 +71,20 @@ extern void debug_print_rel(PlannerInfo *root, RelOptInfo *rel);
  *	  routines to generate index paths
  */
 extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel);
+/*
+ * UniqueIndexInfo describes a unique index and its corresponding clauses
+ * that guarantee the uniqueness of a relation.
+ */
+typedef struct UniqueIndexInfo
+{
+	IndexOptInfo *index;
+	List *clauses;
+} UniqueIndexInfo;
+
 extern bool relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 							  List *restrictlist,
-							  List *exprlist, List *oprlist);
+							  List *exprlist, List *oprlist,
+							  UniqueIndexInfo **info);
 extern bool indexcol_is_bool_constant_for_query(IndexOptInfo *index,
 									int indexcol);
 extern bool match_index_to_operand(Node *operand, int indexcol,

@@ -38,14 +38,10 @@ typedef struct JoinHashEntry
 
 static void build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 					RelOptInfo *input_rel);
-static List *build_joinrel_restrictlist(PlannerInfo *root,
-						   RelOptInfo *joinrel,
-						   RelOptInfo *outer_rel,
-						   RelOptInfo *inner_rel);
 static void build_joinrel_joinlist(RelOptInfo *joinrel,
 					   RelOptInfo *outer_rel,
 					   RelOptInfo *inner_rel);
-static List *subbuild_joinrel_restrictlist(RelOptInfo *joinrel,
+static List *subbuild_joinrel_restrictlist(Relids joinrelids,
 							  List *joininfo_list,
 							  List *new_restrictlist);
 static List *subbuild_joinrel_joinlist(RelOptInfo *joinrel,
@@ -548,7 +544,7 @@ build_join_rel(PlannerInfo *root,
 		 */
 		if (restrictlist_ptr)
 			*restrictlist_ptr = build_joinrel_restrictlist(root,
-														   joinrel,
+														   joinrel->relids,
 														   outer_rel,
 														   inner_rel);
 		return joinrel;
@@ -651,7 +647,7 @@ build_join_rel(PlannerInfo *root,
 	 * caller might or might not need the restrictlist, but I need it anyway
 	 * for set_joinrel_size_estimates().)
 	 */
-	restrictlist = build_joinrel_restrictlist(root, joinrel,
+	restrictlist = build_joinrel_restrictlist(root, joinrel->relids,
 											  outer_rel, inner_rel);
 	if (restrictlist_ptr)
 		*restrictlist_ptr = restrictlist;
@@ -973,7 +969,7 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
  *	  the various joinlist entries ultimately refer to RestrictInfos
  *	  pushed into them by distribute_restrictinfo_to_rels().
  *
- * 'joinrel' is a join relation node
+ * 'joinrelids' is a join relation id set
  * 'outer_rel' and 'inner_rel' are a pair of relations that can be joined
  *		to form joinrel.
  *
@@ -986,9 +982,9 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
  * RestrictInfo nodes are no longer context-dependent.  Instead, just include
  * the original nodes in the lists made for the join relation.
  */
-static List *
+List *
 build_joinrel_restrictlist(PlannerInfo *root,
-						   RelOptInfo *joinrel,
+						   Relids joinrelids,
 						   RelOptInfo *outer_rel,
 						   RelOptInfo *inner_rel)
 {
@@ -999,8 +995,8 @@ build_joinrel_restrictlist(PlannerInfo *root,
 	 * eliminating any duplicates (important since we will see many of the
 	 * same clauses arriving from both input relations).
 	 */
-	result = subbuild_joinrel_restrictlist(joinrel, outer_rel->joininfo, NIL);
-	result = subbuild_joinrel_restrictlist(joinrel, inner_rel->joininfo, result);
+	result = subbuild_joinrel_restrictlist(joinrelids, outer_rel->joininfo, NIL);
+	result = subbuild_joinrel_restrictlist(joinrelids, inner_rel->joininfo, result);
 
 	/*
 	 * Add on any clauses derived from EquivalenceClasses.  These cannot be
@@ -1009,7 +1005,7 @@ build_joinrel_restrictlist(PlannerInfo *root,
 	 */
 	result = list_concat(result,
 						 generate_join_implied_equalities(root,
-														  joinrel->relids,
+														  joinrelids,
 														  outer_rel->relids,
 														  inner_rel));
 
@@ -1035,7 +1031,7 @@ build_joinrel_joinlist(RelOptInfo *joinrel,
 }
 
 static List *
-subbuild_joinrel_restrictlist(RelOptInfo *joinrel,
+subbuild_joinrel_restrictlist(Relids joinrelids,
 							  List *joininfo_list,
 							  List *new_restrictlist)
 {
@@ -1045,7 +1041,7 @@ subbuild_joinrel_restrictlist(RelOptInfo *joinrel,
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
 
-		if (bms_is_subset(rinfo->required_relids, joinrel->relids))
+		if (bms_is_subset(rinfo->required_relids, joinrelids))
 		{
 			/*
 			 * This clause becomes a restriction clause for the joinrel, since

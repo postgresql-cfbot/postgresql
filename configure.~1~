@@ -709,7 +709,6 @@ UUID_EXTRA_OBJS
 with_uuid
 with_systemd
 with_selinux
-with_securetransport
 with_openssl
 with_ldap
 with_krb_srvnam
@@ -856,7 +855,6 @@ with_bsd_auth
 with_ldap
 with_bonjour
 with_openssl
-with_securetransport
 with_selinux
 with_systemd
 with_readline
@@ -1557,7 +1555,6 @@ Optional Packages:
   --with-ldap             build with LDAP support
   --with-bonjour          build with Bonjour support
   --with-openssl          build with OpenSSL support
-  --with-securetransport  build with Apple Secure Transport support
   --with-selinux          build with SELinux support
   --with-systemd          build with systemd support
   --without-readline      do not use GNU Readline nor BSD Libedit for editing
@@ -7915,41 +7912,6 @@ $as_echo "$with_openssl" >&6; }
 
 
 #
-# Apple Secure Transport
-#
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with Apple Secure Transport support" >&5
-$as_echo_n "checking whether to build with Apple Secure Transport support... " >&6; }
-
-
-
-# Check whether --with-securetransport was given.
-if test "${with_securetransport+set}" = set; then :
-  withval=$with_securetransport;
-  case $withval in
-    yes)
-
-$as_echo "#define USE_SECURETRANSPORT 1" >>confdefs.h
-
-      ;;
-    no)
-      :
-      ;;
-    *)
-      as_fn_error $? "no argument expected for --with-securetransport option" "$LINENO" 5
-      ;;
-  esac
-
-else
-  with_securetransport=no
-
-fi
-
-
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_securetransport" >&5
-$as_echo "$with_securetransport" >&6; }
-
-
-#
 # SELinux
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with SELinux support" >&5
@@ -13133,41 +13095,6 @@ else
 fi
 
 
-fi
-
-if test "$with_securetransport" = yes ; then
-  ac_fn_c_check_header_mongrel "$LINENO" "Security/Security.h" "ac_cv_header_Security_Security_h" "$ac_includes_default"
-if test "x$ac_cv_header_Security_Security_h" = xyes; then :
-
-else
-  as_fn_error $? "header file <Security/Security.h> is required for Apple Secure Transport" "$LINENO" 5
-fi
-
-
-  ac_fn_c_check_header_mongrel "$LINENO" "CoreFoundation/CoreFoundation.h" "ac_cv_header_CoreFoundation_CoreFoundation_h" "$ac_includes_default"
-if test "x$ac_cv_header_CoreFoundation_CoreFoundation_h" = xyes; then :
-
-else
-  as_fn_error $? "header file <CoreFoundation/CoreFoundation.h> is required for Apple Secure Transport" "$LINENO" 5
-fi
-
-
-        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
-#include <Security/Security.h>
-int
-main ()
-{
-int p = kTLSProtocol13;
-  ;
-  return 0;
-}
-_ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-  $as_echo "#define HAVE_KTLSPROTOCOL13 1" >>confdefs.h
-
-fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 fi
 
 if test "$with_pam" = yes ; then

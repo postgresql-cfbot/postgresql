@@ -348,24 +348,20 @@ static void
 tfuncInitialize(TableFuncScanState *tstate, ExprContext *econtext, Datum doc)
 {
 	const TableFuncRoutine *routine = tstate->routine;
-	TableFunc *tablefunc = ((TableFuncScan *) (tstate->ss.ps.plan))->tablefunc;
 	TupleDesc	tupdesc;
 	ListCell   *lc1,
 			   *lc2;
 	bool		isnull;
 	int			colno;
 	Datum		value;
-	int			ordinalitycol = tablefunc->ordinalitycol;
-	char	   *default_ns_name = tablefunc->default_ns_name;
+	int			ordinalitycol =
+	((TableFuncScan *) (tstate->ss.ps.plan))->tablefunc->ordinalitycol;
 
 	/*
 	 * Install the document as a possibly-toasted Datum into the tablefunc
 	 * context.
 	 */
 	routine->SetDocument(tstate, doc);
-
-	if (default_ns_name)
-		routine->SetDefaultNamespaceName(tstate, default_ns_name);
 
 	/* Evaluate namespace specifications */
 	forboth(lc1, tstate->ns_uris, lc2, tstate->ns_names)

@@ -84,6 +84,8 @@ typedef struct TableFunc
 	NodeTag		type;
 	List	   *ns_uris;		/* list of namespace URI expressions */
 	List	   *ns_names;		/* list of namespace names or NULL */
+	char	   *default_ns_name;	/* namespace name that should be used as
+									 * default namespace */
 	Node	   *docexpr;		/* input document expression */
 	Node	   *rowexpr;		/* row filter expression */
 	List	   *colnames;		/* column names (list of String) */

@@ -19,7 +19,8 @@ include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -DFRONTEND -I$(libpq_srcdir) $(CPPFLAGS)
 
-OBJS = mbprint.o print.o psqlscan.o simple_list.o string_utils.o conditional.o
+OBJS = mbprint.o print.o psqlscan.o simple_list.o string_utils.o conditional.o \
+	pg_collation_fn_common.o
 
 all: libpgfeutils.a
 
@@ -33,6 +34,13 @@ psqlscan.c: FLEX_FIX_WARNING=yes
 
 distprep: psqlscan.c
 
+# Pull in pg_collation_fn_common.c from src/common. That exposes us to
+# risks of version skew if we link to a shared library. Do it the
+# hard way, instead, so that we're statically linked.
+
+pg_collation_fn_common.c: % : $(top_srcdir)/src/common/%
+	rm -f $@ && $(LN_S) $< .
+
 # libpgfeutils could be useful to contrib, so install it
 install: all installdirs
 	$(INSTALL_STLIB) libpgfeutils.a '$(DESTDIR)$(libdir)/libpgfeutils.a'
@@ -45,6 +53,7 @@ uninstall:
 
 clean distclean:
 	rm -f libpgfeutils.a $(OBJS) lex.backup
+	rm -f pg_collation_fn_common.c
 
 # psqlscan.c is supposed to be in the distribution tarball,
 # so do not clean it in the clean/distclean rules

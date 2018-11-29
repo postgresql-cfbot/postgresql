@@ -3,3 +3,4 @@
 # .c files that are symlinked in from elsewhere
 /encnames.c
 /wchar.c
+/pg_collation_fn_common.c

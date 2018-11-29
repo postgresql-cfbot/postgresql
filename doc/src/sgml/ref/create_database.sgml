@@ -25,7 +25,7 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
     [ [ WITH ] [ OWNER [=] <replaceable class="parameter">user_name</replaceable> ]
            [ TEMPLATE [=] <replaceable class="parameter">template</replaceable> ]
            [ ENCODING [=] <replaceable class="parameter">encoding</replaceable> ]
-           [ LC_COLLATE [=] <replaceable class="parameter">lc_collate</replaceable> ]
+           [ LC_COLLATE [=] <replaceable class="parameter">lc_collate</replaceable>[@<replaceable class="parameter">provider</replaceable>] ]
            [ LC_CTYPE [=] <replaceable class="parameter">lc_ctype</replaceable> ]
            [ TABLESPACE [=] <replaceable class="parameter">tablespace_name</replaceable> ]
            [ ALLOW_CONNECTIONS [=] <replaceable class="parameter">allowconn</replaceable> ]
@@ -112,13 +112,17 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
       </listitem>
      </varlistentry>
      <varlistentry>
-      <term><replaceable class="parameter">lc_collate</replaceable></term>
+      <term><replaceable class="parameter">lc_collate</replaceable>[@<replaceable class="parameter">provider</replaceable>]</term>
       <listitem>
        <para>
         Collation order (<literal>LC_COLLATE</literal>) to use in the new database.
         This affects the sort order applied to strings, e.g. in queries with
         ORDER BY, as well as the order used in indexes on text columns.
         The default is to use the collation order of the template database.
+        Optionally, you can specify the default collation provider after the
+        <literal>@</literal> symbol, as explained in
+        <xref linkend="collation-managing"/>. Supported values are <literal>icu</literal>
+        and <literal>libc</literal>.
         See below for additional restrictions.
        </para>
       </listitem>

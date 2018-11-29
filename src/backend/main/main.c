@@ -32,6 +32,7 @@
 #endif
 
 #include "bootstrap/bootstrap.h"
+#include "catalog/pg_collation.h"
 #include "common/username.h"
 #include "port/atomics.h"
 #include "postmaster/postmaster.h"
@@ -306,8 +307,8 @@ startup_hacks(const char *progname)
 static void
 init_locale(const char *categoryname, int category, const char *locale)
 {
-	if (pg_perm_setlocale(category, locale) == NULL &&
-		pg_perm_setlocale(category, "C") == NULL)
+	if (pg_perm_setlocale(category, locale, COLLPROVIDER_LIBC) == NULL &&
+		pg_perm_setlocale(category, "C", COLLPROVIDER_LIBC) == NULL)
 		elog(FATAL, "could not adopt \"%s\" locale nor C locale for %s",
 			 locale, categoryname);
 }

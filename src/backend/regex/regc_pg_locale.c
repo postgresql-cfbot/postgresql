@@ -16,6 +16,7 @@
  */
 
 #include "catalog/pg_collation.h"
+#include "common/pg_collation_fn_common.h"
 #include "utils/pg_locale.h"
 
 /*
@@ -240,8 +241,13 @@ pg_set_regex_collation(Oid collation)
 	}
 	else
 	{
+		char collprovider;
+
 		if (collation == DEFAULT_COLLATION_OID)
+		{
 			pg_regex_locale = 0;
+			collprovider = get_default_collprovider();
+		}
 		else if (OidIsValid(collation))
 		{
 			/*
@@ -250,6 +256,7 @@ pg_set_regex_collation(Oid collation)
 			 * have to be considered below.
 			 */
 			pg_regex_locale = pg_newlocale_from_collation(collation);
+			collprovider = pg_regex_locale->provider;
 		}
 		else
 		{
@@ -263,24 +270,35 @@ pg_set_regex_collation(Oid collation)
 					 errhint("Use the COLLATE clause to set the collation explicitly.")));
 		}
 
-#ifdef USE_ICU
-		if (pg_regex_locale && pg_regex_locale->provider == COLLPROVIDER_ICU)
-			pg_regex_strategy = PG_REGEX_LOCALE_ICU;
-		else
-#endif
-		if (GetDatabaseEncoding() == PG_UTF8)
+		Assert(is_valid_nondefault_collprovider(collprovider));
+
+		if (collprovider == COLLPROVIDER_ICU)
 		{
-			if (pg_regex_locale)
-				pg_regex_strategy = PG_REGEX_LOCALE_WIDE_L;
-			else
-				pg_regex_strategy = PG_REGEX_LOCALE_WIDE;
+#ifdef USE_ICU
+			pg_regex_strategy = PG_REGEX_LOCALE_ICU;
+#else
+			/* shouldn't happen */
+			elog(ERROR, "unsupported collprovider: %c", collprovider);
+#endif
 		}
 		else
 		{
-			if (pg_regex_locale)
-				pg_regex_strategy = PG_REGEX_LOCALE_1BYTE_L;
+			/* COLLPROVIDER_LIBC */
+
+			if (GetDatabaseEncoding() == PG_UTF8)
+			{
+				if (pg_regex_locale)
+					pg_regex_strategy = PG_REGEX_LOCALE_WIDE_L;
+				else
+					pg_regex_strategy = PG_REGEX_LOCALE_WIDE;
+			}
 			else
-				pg_regex_strategy = PG_REGEX_LOCALE_1BYTE;
+			{
+				if (pg_regex_locale)
+					pg_regex_strategy = PG_REGEX_LOCALE_1BYTE_L;
+				else
+					pg_regex_strategy = PG_REGEX_LOCALE_1BYTE;
+			}
 		}
 
 		pg_regex_collation = collation;

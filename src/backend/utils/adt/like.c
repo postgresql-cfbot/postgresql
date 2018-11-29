@@ -167,6 +167,9 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 				plen;
 	pg_locale_t locale = 0;
 	bool		locale_is_c = false;
+	char		collprovider = COLLPROVIDER_LIBC;
+	bool		use_libc PG_USED_FOR_ASSERTS_ONLY;
+	bool		use_icu;
 
 	if (lc_ctype_is_c(collation))
 		locale_is_c = true;
@@ -184,7 +187,18 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 					 errhint("Use the COLLATE clause to set the collation explicitly.")));
 		}
 		locale = pg_newlocale_from_collation(collation);
+		collprovider = locale->provider;
 	}
+	else
+	{
+		collprovider = get_default_collprovider();
+	}
+
+	use_icu = (collprovider == COLLPROVIDER_ICU &&
+			   GetDatabaseEncoding() != PG_SQL_ASCII);
+	use_libc = (collprovider == COLLPROVIDER_LIBC ||
+				GetDatabaseEncoding() == PG_SQL_ASCII);
+	Assert(use_libc || use_icu);
 
 	/*
 	 * For efficiency reasons, in the single byte case we don't call lower()
@@ -194,7 +208,7 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 	 * way.
 	 */
 
-	if (pg_database_encoding_max_length() > 1 || (locale && locale->provider == COLLPROVIDER_ICU))
+	if (pg_database_encoding_max_length() > 1 || use_icu)
 	{
 		/* lower's result is never packed, so OK to use old macros here */
 		pat = DatumGetTextPP(DirectFunctionCall1Coll(lower, collation,

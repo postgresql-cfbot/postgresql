@@ -403,8 +403,6 @@ const pg_enc2gettext pg_enc2gettext_tbl[] =
 };
 
 
-#ifndef FRONTEND
-
 /*
  * Table of encoding names for ICU
  *
@@ -457,6 +455,7 @@ is_encoding_supported_by_icu(int encoding)
 	return (pg_enc2icu_tbl[encoding] != NULL);
 }
 
+#ifndef FRONTEND
 const char *
 get_encoding_name_for_icu(int encoding)
 {
@@ -475,7 +474,6 @@ get_encoding_name_for_icu(int encoding)
 
 	return icu_encoding_name;
 }
-
 #endif							/* not FRONTEND */
 
 

@@ -58,6 +58,7 @@ main(int argc, char *argv[])
 	char	   *lc_collate = NULL;
 	char	   *lc_ctype = NULL;
 	char	   *locale = NULL;
+	char	   *canonname = NULL;
 
 	PQExpBufferData sql;
 
@@ -153,7 +154,15 @@ main(int argc, char *argv[])
 					progname);
 			exit(1);
 		}
-		lc_ctype = locale;
+
+		/*
+		 * remove the collation provider modifier from the locale for lc_ctype
+		 */
+		check_locale_collprovider(locale, &canonname, NULL, NULL);
+		if (!canonname)
+			exit(1);		/* check_locale_collprovider printed the error */
+		lc_ctype = canonname;
+
 		lc_collate = locale;
 	}
 
@@ -240,6 +249,9 @@ main(int argc, char *argv[])
 	}
 
 	PQfinish(conn);
+
+	if (canonname)
+		pfree(canonname);
 
 	exit(0);
 }

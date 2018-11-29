@@ -4562,7 +4562,6 @@ internal_forkexec(int argc, char *argv[], Port *port)
 	SECURITY_ATTRIBUTES sa;
 	char		paramHandleStr[32];
 	win32_deadchild_waitinfo *childinfo;
-	UINT		errorMode;
 
 	/* Make sure caller set up argv properly */
 	Assert(argc >= 3);
@@ -4630,20 +4629,14 @@ retry:
 	/*
 	 * Create the subprocess in a suspended state. This will be resumed later,
 	 * once we have written out the parameter file.
-	 *
-	 * Start the subprocess with the default error mode, so that a crash before
-	 * main() generates a crash dump.
 	 */
-	errorMode = SetErrorMode(0);
 	if (!CreateProcess(NULL, cmdLine, NULL, NULL, TRUE, CREATE_SUSPENDED,
 					   NULL, NULL, &si, &pi))
 	{
 		elog(LOG, "CreateProcess call failed: %m (error code %lu)",
 			 GetLastError());
-		SetErrorMode(errorMode);
 		return -1;
 	}
-	SetErrorMode(errorMode);
 
 	if (!save_backend_variables(param, port, pi.hProcess, pi.dwProcessId))
 	{

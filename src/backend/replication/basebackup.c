@@ -195,6 +195,10 @@ static const char *const noChecksumFiles[] = {
 	"pg_filenode.map",
 	"pg_internal.init",
 	"PG_VERSION",
+#ifdef EXEC_BACKEND
+	"config_exec_params",
+	"config_exec_params.new",
+#endif
 	NULL,
 };
 

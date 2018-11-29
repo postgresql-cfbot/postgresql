@@ -151,6 +151,9 @@ typedef struct GISTENTRY
 #define GistPageGetNSN(page) ( PageXLogRecPtrGet(GistPageGetOpaque(page)->nsn))
 #define GistPageSetNSN(page, val) ( PageXLogRecPtrSet(GistPageGetOpaque(page)->nsn, val))
 
+#define GistPageGetDeleteXid(page) ( ((PageHeader) (page))->pd_prune_xid )
+#define GistPageSetDeleteXid(page, val) ( ((PageHeader) (page))->pd_prune_xid = val)
+
 /*
  * Vector of GISTENTRY structs; user-defined methods union and picksplit
  * take it as one of their arguments

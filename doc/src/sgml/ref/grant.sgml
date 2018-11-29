@@ -533,7 +533,8 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
                           : admin=arw/miriam        
 (1 row)
 </programlisting>
-    The entries shown by <command>\dp</command> are interpreted thus:
+    The entries shown by <application>psql</application> backslash-commands,
+    like <command>\dp</command>, are interpreted thus:
 <literallayout class="monospaced">
 rolename=xxxx -- privileges granted to a role
         =xxxx -- privileges granted to PUBLIC

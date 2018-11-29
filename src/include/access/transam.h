@@ -44,6 +44,32 @@
 #define TransactionIdStore(xid, dest)	(*(dest) = (xid))
 #define StoreInvalidTransactionId(dest) (*(dest) = InvalidTransactionId)
 
+#define EpochFromFullTransactionId(x)	((uint32) ((x).value >> 32))
+#define XidFromFullTransactionId(x)		((uint32) (x).value)
+#define U64FromFullTransactionId(x)		((x).value)
+#define FullTransactionIdPrecedes(a, b)	((a).value < (b).value)
+#define FullTransactionIdPrecedesOrEquals(a, b)	((a).value <= (b).value)
+
+/*
+ * A 64 bit value that contains an epoch and a TransactionId.  This is
+ * wrapped in a struct to prevent implicit conversion to/from TransactionId.
+ * Allowing such conversions seems likely to be error-prone.
+ */
+typedef struct FullTransactionId
+{
+	uint64  value;
+} FullTransactionId;
+
+static inline FullTransactionId
+MakeFullTransactionId(uint32 epoch, TransactionId xid)
+{
+	FullTransactionId result;
+
+	result.value = ((uint64) epoch) << 32 | xid;
+
+	return result;
+}
+
 /* advance a transaction ID variable, handling wraparound correctly */
 #define TransactionIdAdvance(dest)	\
 	do { \
@@ -51,6 +77,16 @@
 		if ((dest) < FirstNormalTransactionId) \
 			(dest) = FirstNormalTransactionId; \
 	} while(0)
+
+/* advance a FullTransactionId variable, stepping over special XIDs */
+static inline void
+FullTransactionIdAdvance(FullTransactionId *dest)
+{
+	dest->value++;
+	if (XidFromFullTransactionId(*dest) < FirstNormalTransactionId)
+		*dest = MakeFullTransactionId(EpochFromFullTransactionId(*dest),
+									  FirstNormalTransactionId);
+}
 
 /* back up a transaction ID variable, handling wraparound correctly */
 #define TransactionIdRetreat(dest)	\
@@ -114,12 +150,12 @@ typedef struct VariableCacheData
 	/*
 	 * These fields are protected by XidGenLock.
 	 */
-	TransactionId nextXid;		/* next XID to assign */
+	FullTransactionId nextFullXid;	/* next XID to assign */
 
 	TransactionId oldestXid;	/* cluster-wide minimum datfrozenxid */
 	TransactionId xidVacLimit;	/* start forcing autovacuums here */
 	TransactionId xidWarnLimit; /* start complaining here */
-	TransactionId xidStopLimit; /* refuse to advance nextXid beyond here */
+	TransactionId xidStopLimit; /* refuse to advance nextFullXid beyond here */
 	TransactionId xidWrapLimit; /* where the world ends */
 	Oid			oldestXidDB;	/* database with minimum datfrozenxid */
 
@@ -143,6 +179,7 @@ typedef struct VariableCacheData
 } VariableCacheData;
 
 typedef VariableCacheData *VariableCache;
+
 
 
 /* ----------------
@@ -176,11 +213,21 @@ extern XLogRecPtr TransactionIdGetCommitLSN(TransactionId xid);
 
 /* in transam/varsup.c */
 extern TransactionId GetNewTransactionId(bool isSubXact);
-extern TransactionId ReadNewTransactionId(void);
+extern void AdvanceNextFullTransactionIdPastXid(TransactionId xid, bool lock_free_check);
+extern FullTransactionId ReadNextFullTransactionId(void);
 extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 					  Oid oldest_datoid);
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
 extern bool ForceTransactionIdLimitUpdate(void);
 extern Oid	GetNewObjectId(void);
+
+/*
+ * For callers that just need the XID part of the next transaction ID.
+ */
+static inline TransactionId
+ReadNewTransactionId(void)
+{
+	return XidFromFullTransactionId(ReadNextFullTransactionId());
+}
 
 #endif							/* TRAMSAM_H */

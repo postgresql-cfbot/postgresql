@@ -1289,3 +1289,80 @@ ALTER TABLE fk_partitioned_fk ATTACH PARTITION fk_partitioned_fk_2
   FOR VALUES IN (1600);
 
 -- leave these tables around intentionally
+
+-- ALTER CONSTRAINT changing ON UPDATE/DELETE.
+-- Try all combinations and validate the diff with a created constraint
+CREATE SCHEMA createtest; -- created constraints with target action, validation
+CREATE SCHEMA altertest;  -- created with source and altered to target, test
+
+DO
+$test_alter_con$
+DECLARE
+    v_result json;
+    method text;
+    from_action text;
+    to_action text;
+BEGIN
+    FOR method, from_action, to_action IN
+        WITH act(action) AS (
+            SELECT unnest('{NO ACTION,RESTRICT,CASCADE,SET DEFAULT,SET NULL}'::text[])
+        )
+        SELECT
+            m.method, a1.action, a2.action
+        FROM unnest('{UPDATE,DELETE}'::text[]) AS m(method), act a1, act a2
+    LOOP
+        EXECUTE format(
+            $sql$
+                 -- Alter from ON %1$s %2$s to ON %1$s %3$s
+                CREATE TABLE createtest.foo(id integer primary key);
+                CREATE TABLE createtest.bar(foo_id integer DEFAULT 0 REFERENCES createtest.foo ON %1$s %3$s, val text);
+
+                CREATE TABLE altertest.foo(id integer primary key);
+                INSERT INTO altertest.foo VALUES(0),(1),(2),(3);
+
+                CREATE TABLE altertest.bar(foo_id integer DEFAULT 0 REFERENCES altertest.foo ON %1$s %2$s, val text);
+
+                ALTER TABLE altertest.bar ALTER CONSTRAINT bar_foo_id_fkey ON %1$s %3$s;
+
+            $sql$, method, from_action, to_action);
+
+        SELECT json_agg(t)
+        INTO v_result
+        FROM (
+            -- Do EXCEPT of the "altertest" and "createtest" constraints, if they are equal (as expected), it should return empty
+            SELECT
+                rel.relname, replace(tg.tgname, tg.oid::text, 'OID') AS tgname,
+                tg.tgfoid::regproc, con.conname, con.confupdtype, con.confdeltype, tg.tgdeferrable,
+                regexp_replace(pg_get_constraintdef(con.oid), '(createtest\.|altertest\.)', '') AS condef
+            FROM pg_trigger tg
+                JOIN pg_constraint con ON con.oid = tg.tgconstraint
+                JOIN pg_class rel ON tg.tgrelid = rel.oid
+            WHERE tg.tgrelid IN ('altertest.foo'::regclass, 'altertest.bar'::regclass)
+            EXCEPT
+            SELECT
+                rel.relname, replace(tg.tgname, tg.oid::text, 'OID') AS tgname,
+                tg.tgfoid::regproc, con.conname, con.confupdtype, con.confdeltype, tg.tgdeferrable,
+                regexp_replace(pg_get_constraintdef(con.oid), '(createtest\.|altertest\.)', '') AS condef
+            FROM pg_trigger tg
+                JOIN pg_constraint con ON con.oid = tg.tgconstraint
+                JOIN pg_class rel ON tg.tgrelid = rel.oid
+            WHERE tg.tgrelid IN ('createtest.foo'::regclass, 'createtest.bar'::regclass)
+        ) t;
+
+        DROP TABLE createtest.bar;
+        DROP TABLE createtest.foo;
+        DROP TABLE altertest.bar;
+        DROP TABLE altertest.foo;
+
+        IF (v_result IS NULL) THEN
+            RAISE INFO 'ON % from % to %: OK.', method, from_action, to_action;
+        ELSE
+            RAISE EXCEPTION 'ON % from % to %. FAILED! Unmatching rows: %', method, from_action, to_action, v_result;
+        END IF;
+    END LOOP;
+END;
+$test_alter_con$
+;
+
+DROP SCHEMA createtest;
+DROP SCHEMA altertest;

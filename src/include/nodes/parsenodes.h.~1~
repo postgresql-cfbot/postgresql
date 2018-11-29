@@ -2090,7 +2090,6 @@ typedef enum ConstrType			/* types of constraints */
 #define FKCONSTR_ACTION_CASCADE		'c'
 #define FKCONSTR_ACTION_SETNULL		'n'
 #define FKCONSTR_ACTION_SETDEFAULT	'd'
-#define FKCONSTR_ACTION_UNKNOWN		'u' /* unknown is used only for ALTER CONSTRAINT */
 
 /* Foreign key matchtype codes */
 #define FKCONSTR_MATCH_FULL			'f'
@@ -2107,10 +2106,6 @@ typedef struct Constraint
 	bool		deferrable;		/* DEFERRABLE? */
 	bool		initdeferred;	/* INITIALLY DEFERRED? */
 	int			location;		/* token location, or -1 if unknown */
-
-	/* Fields used by ALTER CONSTRAINT to verify if a change was actually made */
-	bool		was_deferrable_set;		/* Was DEFERRABLE informed? */
-	bool		was_initdeferred_set;	/* Was INITIALLY DEFERRED informed? */
 
 	/* Fields used for constraints with expressions (CHECK and DEFAULT): */
 	bool		is_no_inherit;	/* is constraint non-inheritable? */

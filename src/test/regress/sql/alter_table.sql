@@ -514,6 +514,16 @@ FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
 WHERE tgrelid = 'fktable'::regclass
 ORDER BY 1,2,3;
 
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 INITIALLY IMMEDIATE;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 NOT DEFERRABLE;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+
 -- temp tables should go away by themselves, need not drop them.
 
 -- test check constraint adding

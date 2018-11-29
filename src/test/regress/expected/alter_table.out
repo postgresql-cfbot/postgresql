@@ -714,6 +714,28 @@ ORDER BY 1,2,3;
  fknd2   | "RI_FKey_check_upd" |     17 | f            | f
 (12 rows)
 
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+                                      pg_get_constraintdef                                       
+-------------------------------------------------------------------------------------------------
+ FOREIGN KEY (ftest1) REFERENCES pktable(ptest1) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED
+(1 row)
+
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 INITIALLY IMMEDIATE;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+                             pg_get_constraintdef                             
+------------------------------------------------------------------------------
+ FOREIGN KEY (ftest1) REFERENCES pktable(ptest1) ON DELETE CASCADE DEFERRABLE
+(1 row)
+
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 NOT DEFERRABLE;
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass AND conname = 'fkdi2';
+                       pg_get_constraintdef                        
+-------------------------------------------------------------------
+ FOREIGN KEY (ftest1) REFERENCES pktable(ptest1) ON DELETE CASCADE
+(1 row)
+
 -- temp tables should go away by themselves, need not drop them.
 -- test check constraint adding
 create table atacc1 ( test int );

@@ -321,17 +321,6 @@ pgbench(
 		qr{command=98.: int 5432\b},    # :random_seed
 		qr{command=99.: int -9223372036854775808\b},    # min int
 		qr{command=100.: int 9223372036854775807\b},    # max int
-		qr{command=101.: boolean true\b},
-		qr{command=102.: boolean true\b},
-		qr{command=103.: boolean true\b},
-		qr{command=104.: boolean true\b},
-		qr{command=105.: boolean true\b},
-		qr{command=109.: boolean true\b},
-		qr{command=110.: boolean true\b},
-		qr{command=111.: boolean true\b},
-		qr{command=112.: boolean true\b},
-		qr{command=113.: int 9223372036854775797\b},
-		qr{command=114.: boolean true\b},
 	],
 	'pgbench expressions',
 	{
@@ -459,37 +448,6 @@ SELECT :v0, :v1, :v2, :v3;
 -- minint constant parsing
 \set min debug(-9223372036854775808)
 \set max debug(-(:min + 1))
--- pseudo-random permutation
-\set t debug(pr_perm(0, 2) + pr_perm(1, 2) = 1)
-\set t debug(pr_perm(0, 3) + pr_perm(1, 3) + pr_perm(2, 3) = 3)
-\set t debug(pr_perm(0, 4) + pr_perm(1, 4) + pr_perm(2, 4) + pr_perm(3, 4) = 6)
-\set t debug(pr_perm(0, 5) + pr_perm(1, 5) + pr_perm(2, 5) + pr_perm(3, 5) + pr_perm(4, 5) = 10)
-\set t debug(pr_perm(0, 16) + pr_perm(1, 16) + pr_perm(2, 16) + pr_perm(3, 16) + \
-             pr_perm(4, 16) + pr_perm(5, 16) + pr_perm(6, 16) + pr_perm(7, 16) + \
-             pr_perm(8, 16) + pr_perm(9, 16) + pr_perm(10, 16) + pr_perm(11, 16) + \
-             pr_perm(12, 16) + pr_perm(13, 16) + pr_perm(14, 16) + pr_perm(15, 16) = 120)
--- random sanity check
-\set size random(2, 1000)
-\set v random(0, :size - 1)
-\set p pr_perm(:v, :size)
-\set t debug(0 <= :p and :p < :size and :p = pr_perm(:v + :size, :size) and :p <> pr_perm(:v + 1, :size))
--- actual values
-\set t debug(pr_perm(:v, 1) = 0)
-\set t debug(pr_perm(0, 2, 5432) = 0 and pr_perm(1, 2, 5432) = 1 and \
-             pr_perm(0, 2, 5431) = 1 and pr_perm(1, 2, 5431) = 0)
--- ~50 bits test to exercise full modular multiplication
-\set t debug(pr_perm(0, 1000000000000000, 54321) = 9406454989259 and \
-             pr_perm(1999999999999999, 1000000000000000, 54321) = 54570773902028 and \
-             pr_perm(2500000000000000, 1000000000000000, 54321) = 771082311307468)
--- 63 bits tests
-\set size debug(:max - 10)
-\set ok debug(pr_perm(:size-1, :size, 5432) = 7214172101785397543 and \
-              pr_perm(:size-2, :size, 5432) = 4060085360303920649 and \
-              pr_perm(:size-3, :size, 5432) =  919477102797071521 and \
-              pr_perm(:size-4, :size, 5432) = 7588404289602340497 and \
-              pr_perm(:size-5, :size, 5432) = 5568354808723584469 and \
-              pr_perm(:size-6, :size, 5432) = 2410458883211907565 and \
-              pr_perm(:size-7, :size, 5432) = 1738667467693569814)
 }
 	});
 
@@ -780,10 +738,6 @@ SELECT LEAST(:i, :i, :i, :i, :i, :i, :i, :i, :i, :i, :i);
 	[
 		'bad boolean',                     2,
 		[qr{malformed variable.*trueXXX}], q{\set b :badtrue or true}
-	],
-	[
-		'invalid pr_perm size',				2,
-		[qr{pr_perm size parameter must be >= 1}], q{\set i pr_perm(0, 0)}
 	],);
 
 

@@ -306,6 +306,16 @@ my @script_tests = (
 		'double overflow 3',
 		[qr{double constant overflow}],
 		{ 'overflow-3.sql' => "\\set d .1E310\n" }
+	],
+	[
+		'not enough arguments for pr_perm',
+		[qr{unexpected number of arguments \(pr_perm\)}],
+		{ 'bad-pr_perm-1.sql' => "\\set i pr_perm(1)\n" }
+	],
+	[
+		'too many arguments for pr_perm',
+		[qr{unexpected number of arguments \(pr_perm\)}],
+		{ 'bad-pr_perm-2.sql' => "\\set i pr_perm(1, 2, 3, 4)\n" }
 	],);
 
 for my $t (@script_tests)

@@ -1041,14 +1041,11 @@ with r(a,b) as
   (values (1,row(1,2)), (1,row(null,null)), (1,null),
           (null,row(1,2)), (null,row(null,null)), (null,null) )
 select r, r is null as isnull, r is not null as isnotnull from r;
-                        QUERY PLAN                        
-----------------------------------------------------------
- CTE Scan on r
-   Output: r.*, (r.* IS NULL), (r.* IS NOT NULL)
-   CTE r
-     ->  Values Scan on "*VALUES*"
-           Output: "*VALUES*".column1, "*VALUES*".column2
-(5 rows)
+                                                                                                         QUERY PLAN                                                                                                          
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Values Scan on "*VALUES*"
+   Output: ROW("*VALUES*".column1, "*VALUES*".column2), (("*VALUES*".column1 IS NULL) AND ("*VALUES*".column2 IS NOT DISTINCT FROM NULL)), (("*VALUES*".column1 IS NOT NULL) AND ("*VALUES*".column2 IS DISTINCT FROM NULL))
+(2 rows)
 
 with r(a,b) as
   (values (1,row(1,2)), (1,row(null,null)), (1,null),

@@ -3135,10 +3135,8 @@ RETURNING *;
    Conflict Resolution: UPDATE
    Conflict Arbiter Indexes: hat_data_unique_idx
    Conflict Filter: ((excluded.hat_color <> 'forbidden'::bpchar) AND (hat_data.* <> excluded.*))
-   CTE data
-     ->  Values Scan on "*VALUES*"
-   ->  CTE Scan on data
-(7 rows)
+   ->  Values Scan on "*VALUES*"
+(5 rows)
 
 SELECT * FROM hat_data WHERE hat_name IN ('h8', 'h9', 'h7') ORDER BY hat_name;
   hat_name  | hat_color  

@@ -1312,25 +1312,31 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 					   RelOptInfo *joinrel, SpecialJoinInfo *parent_sjinfo,
 					   List *parent_restrictlist)
 {
-	int			nparts;
 	int			cnt_parts;
+	PartitionScheme part_scheme;
+	PartitionBoundInfo join_boundinfo;
+	List	   *parts1;
+	List	   *parts2;
+	ListCell   *lc1;
+	ListCell   *lc2;
 
 	/* Guard against stack overflow due to overly deep partition hierarchy. */
 	check_stack_depth();
 
 	/* Nothing to do, if the join relation is not partitioned. */
-	if (!IS_PARTITIONED_REL(joinrel))
+	if (joinrel->part_scheme == NULL)
 		return;
 
 	/* The join relation should have consider_partitionwise_join set. */
 	Assert(joinrel->consider_partitionwise_join);
 
 	/*
-	 * Since this join relation is partitioned, all the base relations
-	 * participating in this join must be partitioned and so are all the
-	 * intermediate join relations.
+	 * We can not perform partition-wise join if either of the joining
+	 * relations is not partitioned.
 	 */
-	Assert(IS_PARTITIONED_REL(rel1) && IS_PARTITIONED_REL(rel2));
+	if (!IS_PARTITIONED_REL(rel1) || !IS_PARTITIONED_REL(rel2))
+		return;
+
 	Assert(REL_HAS_ALL_PART_PROPS(rel1) && REL_HAS_ALL_PART_PROPS(rel2));
 
 	/* The joining relations should have consider_partitionwise_join set. */
@@ -1343,38 +1349,73 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	 */
 	Assert(joinrel->part_scheme == rel1->part_scheme &&
 		   joinrel->part_scheme == rel2->part_scheme);
+	part_scheme = joinrel->part_scheme;
 
 	/*
-	 * Since we allow partitionwise join only when the partition bounds of the
-	 * joining relations exactly match, the partition bounds of the join
-	 * should match those of the joining relations.
+	 * Get the list of matching partitions to be joined along with the
+	 * partition bounds of the join relation. Because of the restrictions
+	 * imposed by partition matching algorithm, not every pair of joining
+	 * relations for this join will be able to use partition-wise join. But all
+	 * those pairs which can use partition-wise join will produce the same
+	 * partition bounds for the join relation.
 	 */
-	Assert(partition_bounds_equal(joinrel->part_scheme->partnatts,
-								  joinrel->part_scheme->parttyplen,
-								  joinrel->part_scheme->parttypbyval,
-								  joinrel->boundinfo, rel1->boundinfo));
-	Assert(partition_bounds_equal(joinrel->part_scheme->partnatts,
-								  joinrel->part_scheme->parttyplen,
-								  joinrel->part_scheme->parttypbyval,
-								  joinrel->boundinfo, rel2->boundinfo));
+	join_boundinfo = partition_bounds_merge(part_scheme->partnatts,
+											part_scheme->partsupfunc,
+											part_scheme->partcollation,
+											rel1, rel2,
+											parent_sjinfo->jointype,
+											&parts1, &parts2);
 
-	nparts = joinrel->nparts;
+	if (join_boundinfo == NULL)
+		return;
+
+	if (joinrel->boundinfo == NULL)
+	{
+		Assert(joinrel->nparts == 0 && joinrel->part_rels == NULL);
+		joinrel->boundinfo = join_boundinfo;
+		joinrel->nparts = list_length(parts1);
+		Assert(joinrel->nparts == list_length(parts2));
+		joinrel->part_rels =
+			(RelOptInfo **) palloc0(sizeof(RelOptInfo *) *
+									joinrel->nparts);
+	}
+	else
+	{
+		Assert(partition_bounds_equal(part_scheme->partnatts,
+									  part_scheme->parttyplen,
+									  part_scheme->parttypbyval,
+									  join_boundinfo, joinrel->boundinfo));
+		/*
+		 * Every pair of joining relations should result in the same number
+		 * of child-joins.
+		 */
+		Assert(joinrel->nparts == list_length(parts1));
+		Assert(joinrel->nparts == list_length(parts2));
+		Assert(joinrel->part_rels);
+	}
 
 	/*
 	 * Create child-join relations for this partitioned join, if those don't
 	 * exist. Add paths to child-joins for a pair of child relations
 	 * corresponding to the given pair of parent relations.
 	 */
-	for (cnt_parts = 0; cnt_parts < nparts; cnt_parts++)
+	cnt_parts = 0;
+	forboth(lc1, parts1, lc2, parts2)
 	{
-		RelOptInfo *child_rel1 = rel1->part_rels[cnt_parts];
-		RelOptInfo *child_rel2 = rel2->part_rels[cnt_parts];
+		int			part1 = lfirst_int(lc1);
+		int			part2 = lfirst_int(lc2);
+		RelOptInfo *child_rel1;
+		RelOptInfo *child_rel2;
 		SpecialJoinInfo *child_sjinfo;
 		List	   *child_restrictlist;
 		RelOptInfo *child_joinrel;
 		Relids		child_joinrelids;
 		AppendRelInfo **appinfos;
 		int			nappinfos;
+
+		Assert(part1 >= 0 && part2 >= 0);
+		child_rel1 = rel1->part_rels[part1];
+		child_rel2 = rel2->part_rels[part2];
 
 		/* We should never try to join two overlapping sets of rels. */
 		Assert(!bms_overlap(child_rel1->relids, child_rel2->relids));
@@ -1409,12 +1450,24 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			joinrel->part_rels[cnt_parts] = child_joinrel;
 		}
 
+		/*
+		 * For every pair of joining relations, the set of matching partitions
+		 * would change. However, the base relation partitions constituting
+		 * the given child should remain same for all the joining pairs. Since
+		 * the order in which children are stored in the array of child-joins,
+		 * depends upon partition bounds of the join, which are same for all
+		 * the joining pairs, every joining pair yields the child-joins in the
+		 * same order.
+		 */
 		Assert(bms_equal(child_joinrel->relids, child_joinrelids));
 
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
 									child_joinrel, child_sjinfo,
 									child_restrictlist);
+		cnt_parts++;
 	}
+
+	Assert(cnt_parts == joinrel->nparts);
 }
 
 /*

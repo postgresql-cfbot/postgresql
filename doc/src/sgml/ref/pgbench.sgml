@@ -470,7 +470,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
             <para><literal>extended</literal>: use extended query protocol.</para>
            </listitem>
            <listitem>
-            <para><literal>prepared</literal>: use extended query protocol with prepared statements.</para>
+            <para><literal>prepared</literal>: use extended query protocol with named prepared statements.</para>
            </listitem>
           </itemizedlist>
         The default is simple query protocol.  (See <xref linkend="protocol"/>

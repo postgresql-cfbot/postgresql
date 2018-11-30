@@ -492,7 +492,7 @@ typedef enum QueryMode
 {
 	QUERY_SIMPLE,				/* simple query */
 	QUERY_EXTENDED,				/* extended query */
-	QUERY_PREPARED,				/* extended query with named prepared statements */
+	QUERY_PREPARED,				/* extended query with prepared statements */
 	NUM_QUERYMODE
 } QueryMode;
 

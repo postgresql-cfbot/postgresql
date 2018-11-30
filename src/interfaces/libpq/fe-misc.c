@@ -35,6 +35,7 @@
 
 #ifdef WIN32
 #include "win32.h"
+#include <windows.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
@@ -45,6 +46,7 @@
 #endif
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#include <sys/timeb.h>
 #endif
 
 #include "libpq-fe.h"
@@ -59,6 +61,169 @@ static int	pqSendSome(PGconn *conn, int len);
 static int pqSocketCheck(PGconn *conn, int forRead, int forWrite,
 			  time_t end_time);
 static int	pqSocketPoll(int sock, int forRead, int forWrite, time_t end_time);
+
+static void getTraceLogFilename(PGconn *conn,char* filename);
+static void traceLog_fputnbytes(PGconn *conn, const char *head, const char *str, size_t n);
+static void fputnbytes(FILE *f, const char *str, size_t n);
+static void getCurrentTime(char* currenttime,int type);
+#define	TRACELOG_TIME_SIZE	28
+
+/*
+ * getCurrentTime: get current time for trace log output
+ *
+ * type=0 currenttime formate %Y-%m-%d_%H%M%S
+ * type=1 currenttime formate %Y/%m/%d %H:%M:%S.%Milliseconds
+ */
+static void
+getCurrentTime(char* currenttime,int type)
+{
+#ifdef WIN32
+	SYSTEMTIME localTime;
+	GetLocalTime(&localTime);
+	if(type==0)
+		snprintf(currenttime,TRACELOG_TIME_SIZE,"%4d-%02d-%02d_%02d%02d%02d",
+				localTime.wYear,localTime.wMonth,localTime.wDay,
+				localTime.wHour,localTime.wMinute,localTime.wSecond);
+	else if(type==1)
+		snprintf(currenttime,TRACELOG_TIME_SIZE,"%4d/%02d/%02d %02d:%02d:%02d.%03d",
+				localTime.wYear,localTime.wMonth,localTime.wDay,
+				localTime.wHour,localTime.wMinute,localTime.wSecond,
+				localTime.wMilliseconds);
+#else
+	struct timeb localTime;
+	struct tm *tm;
+	ftime(&localTime);
+	tm = localtime(&localTime.time);
+	if(type == 0)
+		snprintf(currenttime, TRACELOG_TIME_SIZE,"%4d-%02d-%02d_%02d%02d%02d",
+				1900+ tm->tm_year,1 + tm->tm_mon, tm->tm_mday,
+				tm->tm_hour, tm->tm_min, tm->tm_sec);
+	else if(type==1)
+		snprintf(currenttime, TRACELOG_TIME_SIZE,"%4d/%02d/%02d %02d:%02d:%02d.%03d",
+				1900+ tm->tm_year,1 + tm->tm_mon, tm->tm_mday,
+				tm->tm_hour, tm->tm_min, tm->tm_sec, localTime.millitm);
+#endif
+}
+
+/*
+ * getTraceLogFilename: build trace log file name
+ * The name is libpq-%ProcessID-%Y-%m-%d_%H%M%S.log.
+ */
+static void
+getTraceLogFilename(PGconn *conn,char* filename)
+{
+	char		currenttime[TRACELOG_TIME_SIZE];    /* %Y-%m-%d_%H%M%S */
+	getCurrentTime(currenttime,0);
+
+#ifdef WIN32
+	snprintf(filename, MAXPGPATH, "%s\\libpq-%d-%s.log", conn->logdir,getpid(),currenttime);
+#else
+	snprintf(filename, MAXPGPATH, "%s/libpq-%d-%s.log", conn->logdir,getpid(),currenttime);
+#endif
+}
+
+/* 
+ * initTraceLog: initialize a trace log file
+ */
+void
+initTraceLog(PGconn *conn)
+{
+	char		logfilename[MAXPGPATH];
+	getTraceLogFilename(conn,logfilename);
+	conn->traceDebug=fopen(logfilename,"w");
+	fprintf(conn->traceDebug, "Maximum log size is %d B.\n", conn->logsize);
+}
+
+/*
+ * traceLog_fprintf: output trace log to file
+ * If PQtrace() is called, PQtrace() is output followed by libpq trace log.
+ */
+void
+traceLog_fprintf(PGconn *conn, bool addTime, const char *fmt,...)
+{
+	char		logfilename[MAXPGPATH];
+	char		msgBuf[MAXPGPATH];
+	va_list		args;
+	int			ret;
+	char		currenttime[TRACELOG_TIME_SIZE];
+
+	va_start(args, fmt);
+	vsnprintf(msgBuf, sizeof(msgBuf), fmt, args);
+	msgBuf[sizeof(msgBuf) - 1] = '\0';
+	va_end(args);
+
+	if(conn->Pfdebug)
+	{
+		fprintf(conn->Pfdebug, "%s", msgBuf);
+	}
+	else if(conn->traceDebug)
+	{
+		if((int)ftell(conn->traceDebug) >= conn->logsize)
+		{
+			fclose(conn->traceDebug);
+			getTraceLogFilename(conn,logfilename);
+			conn->traceDebug = fopen(logfilename,"w");
+			if(conn->traceDebug == NULL)
+				return;
+		}
+
+		/* Select trace log message style */
+		if(addTime)
+		{
+			getCurrentTime(currenttime,1);
+			ret = fprintf(conn->traceDebug, "%s  %s\n", msgBuf, currenttime);
+		}
+		else
+		{
+			ret = fprintf(conn->traceDebug, "%s",msgBuf);
+		}
+
+		if(ret < 0)
+		{
+			fclose(conn->traceDebug);
+			conn->traceDebug = NULL;
+			return;
+		}
+		fflush(conn->traceDebug);
+	}
+}
+/*
+ * traceLog_fputnbytes: output trace log to file using fputnbytes()
+ */
+static void
+traceLog_fputnbytes(PGconn *conn,const char *head, const char *str, size_t n)
+{
+	char		logfilename[MAXPGPATH];
+	int			ret;
+
+	if (conn->Pfdebug)
+	{
+		fprintf(conn->Pfdebug, "%s", head);
+		fputnbytes(conn->Pfdebug,str, n);
+		fprintf(conn->Pfdebug, "\n");
+	}
+	else if(conn->traceDebug)
+	{
+		if((int)ftell(conn->traceDebug) >= conn->logsize)
+		{
+			fclose(conn->traceDebug);
+			getTraceLogFilename(conn,logfilename);
+			conn->traceDebug = fopen(logfilename,"w");
+			if(conn->traceDebug == NULL)
+				return;
+		}
+		ret = fprintf(conn->traceDebug, "%s", head);
+		if(ret < 0)
+		{
+			fclose(conn->traceDebug);
+			conn->traceDebug = NULL;
+			return;
+		}
+		fputnbytes(conn->traceDebug,str,n);
+		fprintf(conn->traceDebug,"\n");
+		fflush(conn->traceDebug);
+	}
+}
 
 /*
  * PQlibVersion: return the libpq version number
@@ -98,8 +263,8 @@ pqGetc(char *result, PGconn *conn)
 
 	*result = conn->inBuffer[conn->inCursor++];
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> %c\n", *result);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "From backend> %c\n", *result);
 
 	return 0;
 }
@@ -114,8 +279,8 @@ pqPutc(char c, PGconn *conn)
 	if (pqPutMsgBytes(&c, 1, conn))
 		return EOF;
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> %c\n", c);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "To backend> %c\n", c);
 
 	return 0;
 }
@@ -152,9 +317,9 @@ pqGets_internal(PQExpBuffer buf, PGconn *conn, bool resetbuffer)
 
 	conn->inCursor = ++inCursor;
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> \"%s\"\n",
-				buf->data);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "From backend> \"%s\"\n",
+						buf->data);
 
 	return 0;
 }
@@ -181,8 +346,8 @@ pqPuts(const char *s, PGconn *conn)
 	if (pqPutMsgBytes(s, strlen(s) + 1, conn))
 		return EOF;
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> \"%s\"\n", s);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "To backend> \"%s\"\n", s);
 
 	return 0;
 }
@@ -194,6 +359,7 @@ pqPuts(const char *s, PGconn *conn)
 int
 pqGetnchar(char *s, size_t len, PGconn *conn)
 {
+	char		buf[100];
 	if (len > (size_t) (conn->inEnd - conn->inCursor))
 		return EOF;
 
@@ -202,11 +368,10 @@ pqGetnchar(char *s, size_t len, PGconn *conn)
 
 	conn->inCursor += len;
 
-	if (conn->Pfdebug)
+	if(conn->Pfdebug||conn->traceDebug)
 	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
+		sprintf(buf, "From backend (%lu)> ", (unsigned long) len);
+		traceLog_fputnbytes(conn,buf,s, len);
 	}
 
 	return 0;
@@ -223,14 +388,14 @@ pqGetnchar(char *s, size_t len, PGconn *conn)
 int
 pqSkipnchar(size_t len, PGconn *conn)
 {
+	char		buf[100];
 	if (len > (size_t) (conn->inEnd - conn->inCursor))
 		return EOF;
 
-	if (conn->Pfdebug)
+	if (conn->Pfdebug||conn->traceDebug)
 	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, conn->inBuffer + conn->inCursor, len);
-		fprintf(conn->Pfdebug, "\n");
+		sprintf(buf, "From backend (%lu)> ", (unsigned long) len);
+		traceLog_fputnbytes(conn,buf,conn->inBuffer + conn->inCursor, len);
 	}
 
 	conn->inCursor += len;
@@ -245,14 +410,14 @@ pqSkipnchar(size_t len, PGconn *conn)
 int
 pqPutnchar(const char *s, size_t len, PGconn *conn)
 {
+	char		buf[100];
 	if (pqPutMsgBytes(s, len, conn))
 		return EOF;
 
-	if (conn->Pfdebug)
+	if(conn->Pfdebug||conn->traceDebug)
 	{
-		fprintf(conn->Pfdebug, "To backend> ");
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
+		sprintf(buf,"To backend (%lu)> ", (unsigned long) len);
+		traceLog_fputnbytes(conn,buf,s,len);
 	}
 
 	return 0;
@@ -292,8 +457,8 @@ pqGetInt(int *result, size_t bytes, PGconn *conn)
 			return EOF;
 	}
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend (#%lu)> %d\n", (unsigned long) bytes, *result);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "From backend (#%lu)> %d\n", (unsigned long) bytes, *result);
 
 	return 0;
 }
@@ -328,8 +493,8 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 			return EOF;
 	}
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend (%lu#)> %d\n", (unsigned long) bytes, value);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "To backend (%lu#)> %d\n", (unsigned long) bytes, value);
 
 	return 0;
 }
@@ -548,9 +713,9 @@ pqPutMsgStart(char msg_type, bool force_len, PGconn *conn)
 	conn->outMsgEnd = endPos;
 	/* length word, if needed, will be filled in by pqPutMsgEnd */
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg %c\n",
-				msg_type ? msg_type : ' ');
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "To backend> Msg %c\n",
+						msg_type ? msg_type : ' ');
 
 	return 0;
 }
@@ -586,9 +751,9 @@ pqPutMsgBytes(const void *buf, size_t len, PGconn *conn)
 int
 pqPutMsgEnd(PGconn *conn)
 {
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg complete, length %u\n",
-				conn->outMsgEnd - conn->outCount);
+	if(conn->Pfdebug||conn->traceDebug)
+		traceLog_fprintf(conn, false, "To backend> Msg complete, length %u\n",
+						conn->outMsgEnd - conn->outCount);
 
 	/* Fill in length word if needed */
 	if (conn->outMsgStart >= 0)
@@ -677,9 +842,17 @@ pqReadData(PGconn *conn)
 	}
 
 	/* OK, try to read some data */
+
 retry3:
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "Start receiving message from backend:");
+
 	nread = pqsecure_read(conn, conn->inBuffer + conn->inEnd,
 						  conn->inBufSize - conn->inEnd);
+
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "End receiving message from backend:");
+
 	if (nread < 0)
 	{
 		if (SOCK_ERRNO == EINTR)
@@ -767,9 +940,16 @@ retry3:
 	 * Still not sure that it's EOF, because some data could have just
 	 * arrived.
 	 */
+
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "Start receiving message from backend:");
 retry4:
 	nread = pqsecure_read(conn, conn->inBuffer + conn->inEnd,
 						  conn->inBufSize - conn->inEnd);
+
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "End receiving message from backend:");
+
 	if (nread < 0)
 	{
 		if (SOCK_ERRNO == EINTR)
@@ -846,6 +1026,9 @@ pqSendSome(PGconn *conn, int len)
 	{
 		int			sent;
 
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "Start sending message to backend:");
+
 #ifndef WIN32
 		sent = pqsecure_write(conn, ptr, len);
 #else
@@ -857,6 +1040,9 @@ pqSendSome(PGconn *conn, int len)
 		 */
 		sent = pqsecure_write(conn, ptr, Min(len, 65536));
 #endif
+
+	if (conn->traceDebug)
+		traceLog_fprintf(conn, true, "End sending message to backend:");
 
 		if (sent < 0)
 		{
@@ -962,6 +1148,9 @@ pqFlush(PGconn *conn)
 {
 	if (conn->Pfdebug)
 		fflush(conn->Pfdebug);
+
+	if (conn->traceDebug)
+		fflush(conn->traceDebug);
 
 	if (conn->outCount > 0)
 		return pqSendSome(conn, conn->outCount);

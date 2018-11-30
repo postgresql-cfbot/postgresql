@@ -500,6 +500,11 @@ struct pg_conn
 
 	/* Buffer for receiving various parts of messages */
 	PQExpBufferData workBuffer; /* expansible string */
+
+	char	   *logsize_str;		/* Trace log maximum size (string) */
+	int			logsize;		/* Trace log maximum size */
+	char	   *logdir;			/* Trace log directory to save log */
+	FILE	   *traceDebug;			/* Trace log file to write trace info */
 };
 
 /* PGcancel stores all data necessary to cancel a connection. A copy of this
@@ -665,6 +670,10 @@ extern int	pq_block_sigpipe(sigset_t *osigset, bool *sigpipe_pending);
 extern void pq_reset_sigpipe(sigset_t *osigset, bool sigpipe_pending,
 				 bool got_epipe);
 #endif
+
+/* libpq trace log  */
+extern void initTraceLog(PGconn *conn);
+extern void traceLog_fprintf(PGconn *conn, bool addTime, const char *fmt,...) pg_attribute_printf(3, 4);
 
 /* === SSL === */
 

@@ -392,7 +392,7 @@ endif
 
 # against installed postmaster
 ifndef NO_INSTALLCHECK
-installcheck: submake $(REGRESS_PREP)
+installcheck: $(REGRESS_PREP)
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 endif
 

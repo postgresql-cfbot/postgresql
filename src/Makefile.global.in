@@ -245,14 +245,16 @@ PG_SYSROOT = @PG_SYSROOT@
 
 override CPPFLAGS := $(ICU_CFLAGS) $(CPPFLAGS)
 
-ifdef PGXS
+# For PGXS and in the installcheck mode (when we use the installed assets)
+# we need to target already installed headers and libraries
+ifneq (,$(PGXS)$(USE_INSTALLED_ASSETS))
 override CPPFLAGS := -I$(includedir_server) -I$(includedir_internal) $(CPPFLAGS)
-else # not PGXS
+else # not PGXS and not USE_INSTALLED_ASSETS
 override CPPFLAGS := -I$(top_srcdir)/src/include $(CPPFLAGS)
 ifdef VPATH
 override CPPFLAGS := -I$(top_builddir)/src/include $(CPPFLAGS)
 endif
-endif # not PGXS
+endif # not PGXS and USE_INSTALLED_ASSETS
 
 CC = @CC@
 GCC = @GCC@
@@ -306,7 +308,7 @@ with_gnu_ld = @with_gnu_ld@
 # "LDFLAGS := something" anywhere, ditto for LDFLAGS_INTERNAL.
 # These initial assignments must be "=" type, and elsewhere we must only do
 # "LDFLAGS += something" or "LDFLAGS_INTERNAL += something".
-ifdef PGXS
+ifneq (,$(PGXS)$(USE_INSTALLED_ASSETS))
   LDFLAGS_INTERNAL = -L$(libdir)
 else
   LDFLAGS_INTERNAL = -L$(top_builddir)/src/port -L$(top_builddir)/src/common
@@ -379,6 +381,9 @@ endif
 # install tree just once in any recursive "make check".  The additional test
 # on abs_top_builddir prevents doing anything foolish to the root directory.
 
+# In the installcheck mode we should use what is already installed
+# in the DESTDIR (namely, pg_regress).
+
 check: temp-install
 
 .PHONY: temp-install
@@ -421,7 +426,7 @@ ifeq ($(enable_tap_tests),yes)
 define prove_installcheck
 rm -rf '$(CURDIR)'/tmp_check
 $(MKDIR_P) '$(CURDIR)'/tmp_check
-cd $(srcdir) && TESTDIR='$(CURDIR)' PATH="$(bindir):$$PATH" PGPORT='6$(DEF_PGPORT)' top_builddir='$(CURDIR)/$(top_builddir)' PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
+cd $(srcdir) && TESTDIR='$(CURDIR)' PATH="$(bindir):$$PATH" PGPORT='6$(DEF_PGPORT)' top_builddir='$(CURDIR)/$(top_builddir)' PG_REGRESS='$(DESTDIR)$(pgxsdir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
 endef
 
 define prove_check
@@ -564,6 +569,8 @@ endif
 #
 # Commonly used submake targets
 
+# build these libraries only when we are not going to use the installed ones
+ifndef USE_INSTALLED_ASSETS
 submake-libpq: | submake-generated-headers
 	$(MAKE) -C $(libpq_builddir) all
 
@@ -575,6 +582,7 @@ submake-libpgfeutils: | submake-generated-headers
 	$(MAKE) -C $(top_builddir)/src/port all
 	$(MAKE) -C $(top_builddir)/src/common all
 	$(MAKE) -C $(top_builddir)/src/fe_utils all
+endif
 
 .PHONY: submake-libpq submake-libpgport submake-libpgfeutils
 
@@ -617,7 +625,7 @@ pg_regress_check = \
     $(TEMP_CONF) \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
 pg_regress_installcheck = \
-    $(top_builddir)/src/test/regress/pg_regress \
+   '$(DESTDIR)$(pgxsdir)/src/test/regress/pg_regress' \
     --inputdir=$(srcdir) \
     --bindir='$(bindir)' \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)

@@ -15,6 +15,9 @@ OBJS =  specparse.o isolationtester.o $(WIN32RES)
 
 all: isolationtester$(X) pg_isolation_regress$(X)
 
+all-installcheck:
+	USE_INSTALLED_ASSETS=1 $(MAKE) all
+
 # Though we don't install these binaries, build them during installation
 # (including temp-install).  Otherwise, "make -j check-world" and "make -j
 # installcheck-world" would spawn multiple, concurrent builds in this
@@ -49,7 +52,7 @@ clean distclean:
 maintainer-clean: distclean
 	rm -f specparse.c specscanner.c
 
-installcheck: all
+installcheck: all-installcheck
 	$(pg_isolation_regress_installcheck) --schedule=$(srcdir)/isolation_schedule
 
 check: all
@@ -59,7 +62,7 @@ check: all
 # It only makes sense to run these if set up to use prepared transactions,
 # via TEMP_CONFIG for the check case, or via the postgresql.conf for the
 # installcheck case.
-installcheck-prepared-txns: all temp-install
+installcheck-prepared-txns: all-installcheck temp-install
 	$(pg_isolation_regress_installcheck) --schedule=$(srcdir)/isolation_schedule prepared-transactions
 
 check-prepared-txns: all temp-install

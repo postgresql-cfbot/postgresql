@@ -76,7 +76,7 @@ plerrcodes.h: $(top_srcdir)/src/backend/utils/errcodes.txt generate-plerrcodes.p
 check: submake
 	$(pg_regress_check) $(REGRESS_OPTS) $(REGRESS)
 
-installcheck: submake
+installcheck:
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 
 .PHONY: submake

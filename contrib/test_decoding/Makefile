@@ -46,7 +46,7 @@ regresscheck: | submake-regress submake-test_decoding temp-install
 	    --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf \
 	    $(REGRESSCHECKS)
 
-regresscheck-install-force: | submake-regress submake-test_decoding temp-install
+regresscheck-install-force: | temp-install
 	$(pg_regress_installcheck) \
 	    $(REGRESSCHECKS)
 
@@ -58,7 +58,7 @@ isolationcheck: | submake-isolation submake-test_decoding temp-install
 	    --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf \
 	    $(ISOLATIONCHECKS)
 
-isolationcheck-install-force: all | submake-isolation submake-test_decoding temp-install
+isolationcheck-install-force: | submake-isolation temp-install
 	$(pg_isolation_regress_installcheck) \
 	    $(ISOLATIONCHECKS)
 

@@ -22,8 +22,7 @@
 
 static void usage(void);
 static void check_required_directory(char **dirpath, char **configpath,
-						 const char *envVarName, const char *cmdLineOption,
-						 const char *description, const char *defaultValue);
+						 const char *envVarName, const char *cmdLineOption, const char *description);
 #define FIX_DEFAULT_READ_ONLY "-c default_transaction_read_only=false"
 
 
@@ -53,7 +52,6 @@ parseCommandLine(int argc, char *argv[])
 		{"link", no_argument, NULL, 'k'},
 		{"retain", no_argument, NULL, 'r'},
 		{"jobs", required_argument, NULL, 'j'},
-		{"socketdir", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
 
@@ -65,7 +63,6 @@ parseCommandLine(int argc, char *argv[])
 	FILE	   *fp;
 	char	  **filename;
 	time_t		run_time = time(NULL);
-	char		default_sockdir[MAXPGPATH];
 
 	user_opts.transfer_mode = TRANSFER_MODE_COPY;
 
@@ -105,7 +102,7 @@ parseCommandLine(int argc, char *argv[])
 	if ((log_opts.internal = fopen_priv(INTERNAL_LOG_FILE, "a")) == NULL)
 		pg_fatal("could not write to log file \"%s\"\n", INTERNAL_LOG_FILE);
 
-	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:ko:O:p:P:rs:U:v",
+	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:ko:O:p:P:rU:v",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -191,11 +188,6 @@ parseCommandLine(int argc, char *argv[])
 				log_opts.retain = true;
 				break;
 
-			case 's':
-				user_opts.socketdir = pg_malloc0(MAXPGPATH);
-				strlcpy(user_opts.socketdir, optarg, MAXPGPATH);
-				break;
-
 			case 'U':
 				pg_free(os_info.user);
 				os_info.user = pg_strdup(optarg);
@@ -253,18 +245,13 @@ parseCommandLine(int argc, char *argv[])
 
 	/* Get values from env if not already set */
 	check_required_directory(&old_cluster.bindir, NULL, "PGBINOLD", "-b",
-							 _("old cluster binaries reside"), NULL);
+							 _("old cluster binaries reside"));
 	check_required_directory(&new_cluster.bindir, NULL, "PGBINNEW", "-B",
-							 _("new cluster binaries reside"), NULL);
+							 _("new cluster binaries reside"));
 	check_required_directory(&old_cluster.pgdata, &old_cluster.pgconfig,
-							 "PGDATAOLD", "-d", _("old cluster data resides"),
-							 NULL);
+							 "PGDATAOLD", "-d", _("old cluster data resides"));
 	check_required_directory(&new_cluster.pgdata, &new_cluster.pgconfig,
-							 "PGDATANEW", "-D", _("new cluster data resides"),
-							 NULL);
-	getcwd(default_sockdir, MAXPGPATH);
-	check_required_directory(&user_opts.socketdir, NULL, "PGSOCKETDIR", "-s",
-							 _("sockets will be created"), default_sockdir);
+							 "PGDATANEW", "-D", _("new cluster data resides"));
 
 #ifdef WIN32
 
@@ -310,7 +297,6 @@ usage(void)
 	printf(_("  -P, --new-port=PORT           new cluster port number (default %d)\n"), new_cluster.port);
 	printf(_("  -r, --retain                  retain SQL and log files after success\n"));
 	printf(_("  -U, --username=NAME           cluster superuser (default \"%s\")\n"), os_info.user);
-	printf(_("  -s, --socketdir=DIR           socket directory during upgrades (default CWD)\n"));
 	printf(_("  -v, --verbose                 enable verbose internal logging\n"));
 	printf(_("  -V, --version                 display version information, then exit\n"));
 	printf(_("  --clone                       clone instead of copying files to new cluster\n"));
@@ -356,33 +342,29 @@ usage(void)
  *	envVarName	  - the name of an environment variable to get if dirpath is NULL
  *	cmdLineOption - the command line option corresponds to this directory (-o, -O, -n, -N)
  *	description   - a description of this directory option
- *	defaultValue  - a default value to assign in case the environment variable
- *                  isn't set
  *
  * We use the last two arguments to construct a meaningful error message if the
- * user hasn't provided the required directory name, and a default isn't
- * specified.
+ * user hasn't provided the required directory name.
  */
 static void
 check_required_directory(char **dirpath, char **configpath,
 						 const char *envVarName, const char *cmdLineOption,
-						 const char *description, const char *defaultValue)
+						 const char *description)
 {
 	if (*dirpath == NULL || strlen(*dirpath) == 0)
 	{
 		const char *envVar;
 
 		if ((envVar = getenv(envVarName)) && strlen(envVar))
+		{
 			*dirpath = pg_strdup(envVar);
-		else if (defaultValue)
-			*dirpath = pg_strdup(defaultValue);
+			if (configpath)
+				*configpath = pg_strdup(envVar);
+		}
 		else
 			pg_fatal("You must identify the directory where the %s.\n"
 					 "Please use the %s command-line option or the %s environment variable.\n",
 					 description, cmdLineOption, envVarName);
-
-		if (configpath)
-			*configpath = pg_strdup(*dirpath);
 	}
 
 	/*
@@ -480,7 +462,12 @@ get_sock_dir(ClusterInfo *cluster, bool live_check)
 	if (GET_MAJOR_VERSION(cluster->major_version) >= 901)
 	{
 		if (!live_check)
-			cluster->sockdir = user_opts.socketdir;
+		{
+			/* Use the current directory for the socket */
+			cluster->sockdir = pg_malloc(MAXPGPATH);
+			if (!getcwd(cluster->sockdir, MAXPGPATH))
+				pg_fatal("could not determine current directory\n");
+		}
 		else
 		{
 			/*

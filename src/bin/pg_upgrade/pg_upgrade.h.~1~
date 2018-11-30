@@ -299,8 +299,6 @@ typedef struct
 								 * changes */
 	transferMode transfer_mode; /* copy files or link them? */
 	int			jobs;
-	char	   *socketdir;		/* directory to use for sockets, NULL means
-								 * using the default of CWD */
 } UserOpts;
 
 typedef struct

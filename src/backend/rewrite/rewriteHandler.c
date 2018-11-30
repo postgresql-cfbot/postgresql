@@ -1591,7 +1591,7 @@ ApplyRetrieveRule(Query *parsetree,
 
 	rte->rtekind = RTE_SUBQUERY;
 	rte->subquery = rule_action;
-	rte->security_barrier = RelationIsSecurityView(relation);
+	rte->security_barrier = ViewIsSecurityView(relation);
 	/* Clear fields that should not be set in a subquery RTE */
 	rte->relid = InvalidOid;
 	rte->relkind = 0;
@@ -3178,7 +3178,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 
 		ChangeVarNodes(viewqual, base_rt_index, new_rt_index, 0);
 
-		if (RelationIsSecurityView(view))
+		if (ViewIsSecurityView(view))
 		{
 			/*
 			 * The view's quals go in front of existing barrier quals: those
@@ -3214,8 +3214,8 @@ rewriteTargetView(Query *parsetree, Relation view)
 	 */
 	if (parsetree->commandType != CMD_DELETE)
 	{
-		bool		has_wco = RelationHasCheckOption(view);
-		bool		cascaded = RelationHasCascadedCheckOption(view);
+		bool		has_wco = ViewHasCheckOption(view);
+		bool		cascaded = ViewHasCascadedCheckOption(view);
 
 		/*
 		 * If the parent view has a cascaded check option, treat this view as

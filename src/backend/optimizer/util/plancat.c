@@ -146,7 +146,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 						  &rel->pages, &rel->tuples, &rel->allvisfrac);
 
 	/* Retrieve the parallel_workers reloption, or -1 if not set. */
-	rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
+	rel->rel_parallel_workers = HeapGetParallelWorkers(relation, -1);
 
 	/*
 	 * Make list of indexes.  Ignore indexes on system catalogs if told to.

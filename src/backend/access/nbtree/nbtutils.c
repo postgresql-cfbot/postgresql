@@ -2053,7 +2053,31 @@ BTreeShmemInit(void)
 bytea *
 btoptions(Datum reloptions, bool validate)
 {
-	return default_reloptions(reloptions, validate, RELOPT_KIND_BTREE);
+	relopt_value *options;
+	BTRelOptions *rdopts;
+	int			numoptions;
+	static const relopt_parse_elt tab[] = {
+		{"fillfactor", RELOPT_TYPE_INT, offsetof(BTRelOptions, fillfactor)},
+		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
+		offsetof(BTRelOptions, vacuum_cleanup_index_scale_factor)}
+
+	};
+
+	options = parseRelOptions(reloptions, validate, RELOPT_KIND_BTREE,
+							  &numoptions);
+
+	/* if none set, we're done */
+	if (numoptions == 0)
+		return NULL;
+
+	rdopts = allocateReloptStruct(sizeof(BTRelOptions), options, numoptions);
+
+	fillRelOptions((void *) rdopts, sizeof(BTRelOptions), options, numoptions,
+				   validate, tab, lengthof(tab));
+
+	pfree(options);
+
+	return (bytea *) rdopts;
 }
 
 /*

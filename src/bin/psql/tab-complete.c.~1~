@@ -1349,8 +1349,8 @@ psql_completion(const char *text, int start, int end)
 		"\\d", "\\da", "\\dA", "\\dAp", "\\dAf", "\\dAfo", "\\dAfp", "\\dAoc",
 		"\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
 		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
-		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dicp", "\\dip",
-		"\\dl", "\\dL", "\\dm", "\\dn", "\\do", "\\dO", "\\dp",
+		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
+		"\\dm", "\\dn", "\\do", "\\dO", "\\dp",
 		"\\drds", "\\dRs", "\\dRp", "\\ds", "\\dS",
 		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dy",
 		"\\e", "\\echo", "\\ef", "\\elif", "\\else", "\\encoding",
@@ -3431,10 +3431,6 @@ psql_completion(const char *text, int start, int end)
 	}
 	else if (TailMatchesCS("\\da*"))
 		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
-	else if (TailMatchesCS("\\dAf*"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
-	else if (TailMatchesCS("\\dAf*", MatchAny))
-		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_operator_families, NULL);
 	else if (TailMatchesCS("\\dA*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (TailMatchesCS("\\db*"))

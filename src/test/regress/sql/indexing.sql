@@ -753,3 +753,7 @@ create unique index on covidxpart4 (a);
 alter table covidxpart attach partition covidxpart4 for values in (4);
 insert into covidxpart values (4, 1);
 insert into covidxpart values (4, 1);
+
+-- Test psql command for displaying information about indexes.
+\dip brinidx
+\dicp botharrayidx

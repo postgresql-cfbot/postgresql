@@ -1460,34 +1460,6 @@ testdb=&gt;
         </listitem>
       </varlistentry>
 
-      <varlistentry>
-        <term><literal>\dip [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
-
-        <listitem>
-        <para>
-        Shows index properties listed in
-        <xref linkend="functions-info-index-props"/>.
-        If <replaceable class="parameter">pattern</replaceable> is
-        specified, only access methods whose names match the pattern are shown.
-        </para>
-        </listitem>
-      </varlistentry>
-
-      <varlistentry>
-        <term>
-          <literal>\dicp [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link>]
-          </literal>
-        </term>
-
-        <listitem>
-        <para>
-        Shows index column properties listed in
-        <xref linkend="functions-info-index-column-props"/>.
-        If <replaceable class="parameter">pattern</replaceable> is
-        specified, only access methods whose names match the pattern are shown.
-        </para>
-        </listitem>
-      </varlistentry>
 
       <varlistentry>
         <term><literal>\des[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>

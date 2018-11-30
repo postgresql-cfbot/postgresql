@@ -77,7 +77,6 @@ static void computeRegionDelta(PageData *pageData,
 static void computeDelta(PageData *pageData, Page curpage, Page targetpage);
 static void applyPageRedo(Page page, const char *delta, Size deltaSize);
 
-static void standard_page_layout_check(Buffer buf);
 
 /*
  * Write next fragment into pageData's delta.
@@ -542,65 +541,4 @@ generic_mask(char *page, BlockNumber blkno)
 	mask_page_lsn_and_checksum(page);
 
 	mask_unused_space(page);
-}
-
-/*
- * Check page layout.
- * Caller must lock the buffer
- */
-static void
-standard_page_layout_check(Buffer buf)
-{
-	PageHeader ph = (PageHeader) BufferGetPage(buf);
-
-	Assert((ph->pd_lower >= SizeOfPageHeaderData) &&
-		   (ph->pd_lower <= ph->pd_upper) &&
-		   (ph->pd_upper <= ph->pd_special) &&
-		   (ph->pd_special <= BLCKSZ) &&
-		   (ph->pd_special == MAXALIGN(ph->pd_special)));
-}
-
-/*
- * Function to write generic xlog for every existing block of a relation.
- * Caller is responsible for locking the relation exclusively.
- */
-void
-generic_log_relation(Relation rel)
-{
-	BlockNumber blkno;
-	BlockNumber nblocks;
-
-	nblocks = RelationGetNumberOfBlocks(rel);
-
-	elog(DEBUG2, "generic_log_relation '%s', nblocks %u BEGIN.",
-		 RelationGetRelationName(rel), nblocks);
-
-	for (blkno = 0; blkno < nblocks; )
-	{
-		GenericXLogState	*state;
-		Buffer				buffer[MAX_GENERIC_XLOG_PAGES];
-		int					counter,
-							blocks_pack;
-
-		CHECK_FOR_INTERRUPTS();
-
-		blocks_pack = ((nblocks-blkno) < MAX_GENERIC_XLOG_PAGES) ?
-						(nblocks-blkno) : MAX_GENERIC_XLOG_PAGES;
-
-		state = GenericXLogStart(rel);
-
-		for (counter = 0 ; counter < blocks_pack; counter++)
-		{
-			buffer[counter] = ReadBuffer(rel, blkno++);
-			standard_page_layout_check(buffer[counter]);
-			LockBuffer(buffer[counter], BUFFER_LOCK_EXCLUSIVE);
-			GenericXLogRegisterBuffer(state, buffer[counter], GENERIC_XLOG_FULL_IMAGE);
-		}
-
-		GenericXLogFinish(state);
-
-		for (counter = 0 ; counter < blocks_pack; counter++)
-			UnlockReleaseBuffer(buffer[counter]);
-	}
-	elog(DEBUG2, "generic_log_relation '%s' END.", RelationGetRelationName(rel));
 }

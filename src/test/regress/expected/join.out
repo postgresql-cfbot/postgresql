@@ -2227,20 +2227,17 @@ explain (costs off)
 select * from int8_tbl i1 left join (int8_tbl i2 join
   (select 123 as x) ss on i2.q1 = x) on i1.q2 = i2.q2
 order by 1, 2;
-                   QUERY PLAN                    
--------------------------------------------------
+                QUERY PLAN                 
+-------------------------------------------
  Sort
    Sort Key: i1.q1, i1.q2
    ->  Hash Left Join
          Hash Cond: (i1.q2 = i2.q2)
          ->  Seq Scan on int8_tbl i1
          ->  Hash
-               ->  Hash Join
-                     Hash Cond: (i2.q1 = (123))
-                     ->  Seq Scan on int8_tbl i2
-                     ->  Hash
-                           ->  Result
-(11 rows)
+               ->  Seq Scan on int8_tbl i2
+                     Filter: (q1 = 123)
+(8 rows)
 
 select * from int8_tbl i1 left join (int8_tbl i2 join
   (select 123 as x) ss on i2.q1 = x) on i1.q2 = i2.q2
@@ -3141,23 +3138,18 @@ select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   left join tenk1 t2
   on (subq1.y1 = t2.unique1)
 where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
-                              QUERY PLAN                               
------------------------------------------------------------------------
+                           QUERY PLAN                            
+-----------------------------------------------------------------
  Nested Loop
    Join Filter: (t1.stringu1 > t2.stringu2)
    ->  Nested Loop
-         Join Filter: ((0) = i1.f1)
-         ->  Nested Loop
-               ->  Nested Loop
-                     Join Filter: ((1) = (1))
-                     ->  Result
-                     ->  Result
-               ->  Index Scan using tenk1_unique2 on tenk1 t1
-                     Index Cond: ((unique2 = (11)) AND (unique2 < 42))
          ->  Seq Scan on int4_tbl i1
+               Filter: (f1 = 0)
+         ->  Index Scan using tenk1_unique2 on tenk1 t1
+               Index Cond: ((unique2 = (11)) AND (unique2 < 42))
    ->  Index Scan using tenk1_unique1 on tenk1 t2
          Index Cond: (unique1 = (3))
-(14 rows)
+(9 rows)
 
 select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   tenk1 t1
@@ -3596,7 +3588,7 @@ select t1.* from
                ->  Hash Right Join
                      Output: i8.q2
                      Hash Cond: ((NULL::integer) = i8b1.q2)
-                     ->  Hash Left Join
+                     ->  Hash Join
                            Output: i8.q2, (NULL::integer)
                            Hash Cond: (i8.q1 = i8b2.q1)
                            ->  Seq Scan on public.int8_tbl i8
@@ -4018,10 +4010,10 @@ select * from
               QUERY PLAN               
 ---------------------------------------
  Nested Loop Left Join
-   Join Filter: ((1) = COALESCE((1)))
    ->  Result
    ->  Hash Full Join
          Hash Cond: (a1.unique1 = (1))
+         Filter: (1 = COALESCE((1)))
          ->  Seq Scan on tenk1 a1
          ->  Hash
                ->  Result

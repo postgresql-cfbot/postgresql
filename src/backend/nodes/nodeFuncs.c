@@ -2319,10 +2319,6 @@ range_table_walker(List *rtable,
 				if (walker(rte->tablesample, context))
 					return true;
 				break;
-			case RTE_CTE:
-			case RTE_NAMEDTUPLESTORE:
-				/* nothing to do */
-				break;
 			case RTE_SUBQUERY:
 				if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
 					if (walker(rte->subquery, context))
@@ -2344,6 +2340,11 @@ range_table_walker(List *rtable,
 			case RTE_VALUES:
 				if (walker(rte->values_lists, context))
 					return true;
+				break;
+			case RTE_CTE:
+			case RTE_NAMEDTUPLESTORE:
+			case RTE_RESULT:
+				/* nothing to do */
 				break;
 		}
 
@@ -3150,10 +3151,6 @@ range_table_mutator(List *rtable,
 					   TableSampleClause *);
 				/* we don't bother to copy eref, aliases, etc; OK? */
 				break;
-			case RTE_CTE:
-			case RTE_NAMEDTUPLESTORE:
-				/* nothing to do */
-				break;
 			case RTE_SUBQUERY:
 				if (!(flags & QTW_IGNORE_RT_SUBQUERIES))
 				{
@@ -3183,6 +3180,11 @@ range_table_mutator(List *rtable,
 				break;
 			case RTE_VALUES:
 				MUTATE(newrte->values_lists, rte->values_lists, List *);
+				break;
+			case RTE_CTE:
+			case RTE_NAMEDTUPLESTORE:
+			case RTE_RESULT:
+				/* nothing to do */
 				break;
 		}
 		MUTATE(newrte->securityQuals, rte->securityQuals, List *);

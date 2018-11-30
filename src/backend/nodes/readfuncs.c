@@ -1410,6 +1410,9 @@ _readRangeTblEntry(void)
 			READ_NODE_FIELD(coltypmods);
 			READ_NODE_FIELD(colcollations);
 			break;
+		case RTE_RESULT:
+			/* no extra fields */
+			break;
 		default:
 			elog(ERROR, "unrecognized RTE kind: %d",
 				 (int) local_node->rtekind);

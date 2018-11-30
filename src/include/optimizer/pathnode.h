@@ -68,7 +68,9 @@ extern AppendPath *create_append_path(PlannerInfo *root, RelOptInfo *rel,
 				   List *subpaths, List *partial_subpaths,
 				   Relids required_outer,
 				   int parallel_workers, bool parallel_aware,
-				   List *partitioned_rels, double rows);
+				   List *partitioned_rels, double rows,
+				   List *translate_from, List *translate_to,
+				   bool is_proxy);
 extern MergeAppendPath *create_merge_append_path(PlannerInfo *root,
 						 RelOptInfo *rel,
 						 List *subpaths,

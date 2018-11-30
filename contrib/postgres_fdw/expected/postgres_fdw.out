@@ -8348,14 +8348,11 @@ SELECT t1.a,t2.b,t3.c FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) INNER J
 -- left outer join + nullable clasue
 EXPLAIN (COSTS OFF)
 SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10) t2 ON (t1.a = t2.b and t1.b = t2.a) WHERE t1.a < 10 ORDER BY 1,2,3;
-                                    QUERY PLAN                                     
------------------------------------------------------------------------------------
- Sort
-   Sort Key: t1.a, ftprt2_p1.b, ftprt2_p1.c
-   ->  Append
-         ->  Foreign Scan
-               Relations: (public.ftprt1_p1 t1) LEFT JOIN (public.ftprt2_p1 fprt2)
-(5 rows)
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Foreign Scan
+   Relations: (public.ftprt1_p1 t1) LEFT JOIN (public.ftprt2_p1 fprt2)
+(2 rows)
 
 SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10) t2 ON (t1.a = t2.b and t1.b = t2.a) WHERE t1.a < 10 ORDER BY 1,2,3;
  a | b |  c   

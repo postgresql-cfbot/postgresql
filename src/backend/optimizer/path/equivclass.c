@@ -2095,6 +2095,54 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
 
 
 /*
+ * promote_child_rel_equivalences
+ *		Remove em_is_child marker from any eclass members belonging to
+ *		childrelids
+ */
+void
+promote_child_rel_equivalences(PlannerInfo *root, Relids childrelids)
+{
+	ListCell   *lc1;
+
+	foreach(lc1, root->eq_classes)
+	{
+		EquivalenceClass *ec = lfirst_node(EquivalenceClass, lc1);
+		ListCell   *lc2;
+
+		/*
+		 * No need to search in eclasses with volatile expressions, there will
+		 * be no child exprs in here.
+		 */
+		if (ec->ec_has_volatile)
+			continue;
+
+		foreach(lc2, ec->ec_members)
+		{
+			EquivalenceMember *em = lfirst_node(EquivalenceMember, lc2);
+
+			if (!em->em_is_child)
+				continue;		/* ignore non-child members */
+
+			if (em->em_is_const)
+				continue;		/* ignore consts here */
+
+			/* skip if it doesn't reference these childrelids */
+			if (!bms_overlap(em->em_relids, childrelids))
+				continue;
+
+			em->em_is_child = false;
+
+			/*
+			 * The eclass will need to be updated to say which relids it
+			 * contains members for.  These were previously not set due to the
+			 * member belonging to a child rel.
+			 */
+			ec->ec_relids = bms_add_members(ec->ec_relids, em->em_relids);
+		}
+	}
+}
+
+/*
  * add_child_rel_equivalences
  *	  Search for EC members that reference the parent_rel, and
  *	  add transformed members referencing the child_rel.

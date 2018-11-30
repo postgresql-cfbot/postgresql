@@ -1221,11 +1221,15 @@ create_append_path(PlannerInfo *root,
 				   List *subpaths, List *partial_subpaths,
 				   Relids required_outer,
 				   int parallel_workers, bool parallel_aware,
-				   List *partitioned_rels, double rows)
+				   List *partitioned_rels, double rows,
+				   List *translate_from, List *translate_to,
+				   bool is_proxy)
 {
 	AppendPath *pathnode = makeNode(AppendPath);
 	ListCell   *l;
 
+	/* Might both be NIL, but must contain the same number of elements. */
+	Assert(list_length(translate_from) == list_length(translate_to));
 	Assert(!parallel_aware || parallel_workers > 0);
 
 	pathnode->path.pathtype = T_Append;
@@ -1253,8 +1257,26 @@ create_append_path(PlannerInfo *root,
 	pathnode->path.parallel_aware = parallel_aware;
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_workers = parallel_workers;
-	pathnode->path.pathkeys = NIL;	/* result is always considered unsorted */
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
+	pathnode->translate_from = translate_from;
+	pathnode->translate_to = translate_to;
+	pathnode->subpaths = subpaths;
+	pathnode->is_proxy = is_proxy;
+
+	/*
+	 * If this is a proxy Append, there can be only one subpath, so we're able
+	 * to use its PathKeys.
+	 */
+	if (is_proxy)
+	{
+		Assert(list_length(subpaths) == 1);
+		pathnode->path.pathkeys = ((Path *) linitial(subpaths))->pathkeys;
+	}
+	else
+	{
+		Assert(translate_from == NIL);
+		pathnode->path.pathkeys = NIL;
+	}
 
 	/*
 	 * For parallel append, non-partial paths are sorted by descending total
@@ -3591,7 +3613,10 @@ reparameterize_path(PlannerInfo *root, Path *path,
 									   apath->path.parallel_workers,
 									   apath->path.parallel_aware,
 									   apath->partitioned_rels,
-									   -1);
+									   -1,
+									   apath->translate_from,
+									   apath->translate_to,
+									   apath->is_proxy);
 			}
 		default:
 			break;

@@ -52,6 +52,7 @@
 #include "parser/parsetree.h"
 #include "parser/parse_agg.h"
 #include "rewrite/rewriteManip.h"
+#include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "utils/rel.h"
 #include "utils/selfuncs.h"
@@ -6057,6 +6058,138 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 									  NULL, 1.0, false);
 
 	return (seqScanAndSortPath.total_cost < indexScanPath->path.total_cost);
+}
+
+/*
+ * plan_lazy_vacuum_workers_index_workers
+ *		Use the planner to decide how many parallel worker processes
+ *		VACUUM and autovacuum should request for use
+ *
+ * tableOid is the table begin vacuumed which must not be non-tables or
+ * special system tables.
+ * nworkers_requested is the number of workers requested in VACUUM option
+ * by user. it's 0 if not requested.
+ *
+ * Return value is the number of parallel worker processes to request.  It
+ * may be unsafe to proceed if this is 0.  Note that this does not include the
+ * leader participating as a worker (value is always a number of parallel
+ * worker processes).
+ *
+ * Note: caller had better already hold some type of lock on the table and
+ * index.
+ */
+int
+plan_lazy_vacuum_workers(Oid tableOid, int nworkers_requested)
+{
+	int				parallel_workers;
+	PlannerInfo 	*root;
+	Query	   		*query;
+	PlannerGlobal 	*glob;
+	RangeTblEntry 	*rte;
+	RelOptInfo 		*rel;
+	Relation		heap;
+	BlockNumber		nblocks;
+
+	/* Return immediately when parallelism disabled */
+	if (max_parallel_maintenance_workers == 0)
+		return 0;
+
+	/* Set up largely-dummy planner state */
+	query = makeNode(Query);
+	query->commandType = CMD_SELECT;
+
+	glob = makeNode(PlannerGlobal);
+
+	root = makeNode(PlannerInfo);
+	root->parse = query;
+	root->glob = glob;
+	root->query_level = 1;
+	root->planner_cxt = CurrentMemoryContext;
+	root->wt_param_id = -1;
+
+	/*
+	 * Build a minimal RTE.
+	 *
+	 * Set the target's table to be an inheritance parent.  This is a kludge
+	 * that prevents problems within get_relation_info(), which does not
+	 * expect that any IndexOptInfo is currently undergoing REINDEX.
+	 */
+	rte = makeNode(RangeTblEntry);
+	rte->rtekind = RTE_RELATION;
+	rte->relid = tableOid;
+	rte->relkind = RELKIND_RELATION;	/* Don't be too picky. */
+	rte->lateral = false;
+	rte->inh = true;
+	rte->inFromCl = true;
+	query->rtable = list_make1(rte);
+
+	/* Set up RTE/RelOptInfo arrays */
+	setup_simple_rel_arrays(root);
+
+	/* Build RelOptInfo */
+	rel = build_simple_rel(root, 1, NULL);
+
+	heap = heap_open(tableOid, NoLock);
+	nblocks = RelationGetNumberOfBlocks(heap);
+
+	/*
+	 * If the number of workers is requested accept it (though still cap
+	 * at max_parallel_maitenance_workers).
+	 */
+	if (nworkers_requested > 0)
+	{
+		parallel_workers = Min(nworkers_requested,
+							   max_parallel_maintenance_workers);
+
+		if (parallel_workers != nworkers_requested)
+			ereport(NOTICE,
+					(errmsg("%d vacuum parallel worker requested but cappped by max_parallel_maintenance_workers",
+							nworkers_requested),
+					 errhint("Increase max_parallel_workers")));
+
+		goto done;
+	}
+
+	/*
+	 * If paralell_workers storage parameter is set for the table, accept that
+	 * as the number of parallel worker process to launch (though still cap
+	 * at max_parallel_maintenance_workers). Note that we deliberately do not
+	 * consider any other factor when parallel_workers is set. (e.g., memory
+	 * use by workers.)
+	 */
+	if (rel->rel_parallel_workers != -1)
+	{
+		parallel_workers = Min(rel->rel_parallel_workers,
+							   max_parallel_maintenance_workers);
+		goto done;
+	}
+
+	/*
+	 * Determine number of workers to scan the heap relation using generic
+	 * model.
+	 */
+	parallel_workers = compute_parallel_worker(rel,
+											   nblocks,
+											   -1,
+											   max_parallel_maintenance_workers);
+	/*
+	 * Cap workers based on available maintenance_work_mem as needed.
+	 *
+	 * Note that each tuplesort participant receives an even share of the
+	 * total maintenance_work_mem budget.  Aim to leave participants
+	 * (including the leader as a participant) with no less than 32MB of
+	 * memory.  This leaves cases where maintenance_work_mem is set to 64MB
+	 * immediately past the threshold of being capable of launching a single
+	 * parallel worker to sort.
+	 */
+	while (parallel_workers > 0 &&
+		   maintenance_work_mem / (parallel_workers + 1) < 32768L)
+		parallel_workers--;
+
+done:
+	heap_close(heap, NoLock);
+
+	return parallel_workers;
 }
 
 /*

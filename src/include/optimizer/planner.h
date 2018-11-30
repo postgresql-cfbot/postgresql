@@ -60,5 +60,6 @@ extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 
 extern bool plan_cluster_use_sort(Oid tableOid, Oid indexOid);
 extern int	plan_create_index_workers(Oid tableOid, Oid indexOid);
+extern int	plan_lazy_vacuum_workers(Oid tableOid, int nworkers_requested);
 
 #endif							/* PLANNER_H */

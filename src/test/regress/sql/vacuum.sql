@@ -103,6 +103,9 @@ VACUUM (SKIP_LOCKED) vactst;
 VACUUM (SKIP_LOCKED, FULL) vactst;
 ANALYZE (SKIP_LOCKED) vactst;
 
+-- parallel option
+VACUUM (PARALLEL 1) vactst;
+
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;

@@ -2186,11 +2186,10 @@ include_dir 'conf.d'
        <listitem>
         <para>
          Sets the maximum number of parallel workers that can be
-         started by a single utility command.  Currently, the parallel
-         utility commands that supports the use of parallel worker are
-         <command>CREATE INDEX</command>, and only when
-         building a B-tree index and <command>VACUUM</command> without
-         <literal>FULL</literal>.  Parallel workers are taken from the
+         started by a single utility command.  Currently, the only
+         parallel utility command that supports the use of parallel
+         workers is <command>CREATE INDEX</command>, and only when
+         building a B-tree index.  Parallel workers are taken from the
          pool of processes established by <xref
          linkend="guc-max-worker-processes"/>, limited by <xref
          linkend="guc-max-parallel-workers"/>.  Note that the requested

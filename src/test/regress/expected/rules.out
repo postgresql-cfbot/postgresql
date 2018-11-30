@@ -1836,13 +1836,21 @@ pg_stat_progress_vacuum| SELECT s.pid,
             ELSE NULL::text
         END AS phase,
     s.param2 AS heap_blks_total,
-    s.param3 AS heap_blks_scanned,
-    s.param4 AS heap_blks_vacuumed,
-    s.param5 AS index_vacuum_count,
+    w.heap_blks_scanned,
+    w.heap_blks_vacuumed,
+    w.index_vacuum_count,
     s.param6 AS max_dead_tuples,
-    s.param7 AS num_dead_tuples
-   FROM (pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10)
-     LEFT JOIN pg_database d ON ((s.datid = d.oid)));
+    w.num_dead_tuples
+   FROM ((pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, leader_pid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10)
+     LEFT JOIN pg_database d ON ((s.datid = d.oid)))
+     LEFT JOIN ( SELECT pg_stat_get_progress_info.leader_pid,
+            max(pg_stat_get_progress_info.param3) AS heap_blks_scanned,
+            max(pg_stat_get_progress_info.param4) AS heap_blks_vacuumed,
+            max(pg_stat_get_progress_info.param5) AS index_vacuum_count,
+            max(pg_stat_get_progress_info.param7) AS num_dead_tuples
+           FROM pg_stat_get_progress_info('VACUUM'::text) pg_stat_get_progress_info(pid, datid, relid, leader_pid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10)
+          GROUP BY pg_stat_get_progress_info.leader_pid) w ON ((s.pid = w.leader_pid)))
+  WHERE (s.pid = s.leader_pid);
 pg_stat_replication| SELECT s.pid,
     s.usesysid,
     u.rolname AS usename,

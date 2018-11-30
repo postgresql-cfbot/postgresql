@@ -348,14 +348,6 @@ static relopt_int intRelOpts[] =
 		},
 		-1, 0, 1024
 	},
-	{
-		{
-			"autovacuum_vacuum_parallel_workers",
-			"Number of parallel processes that can be used to vacuum for this relation",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		}, -1, 0, 1024
-	},
 
 	/* list terminator */
 	{{NULL}}
@@ -1400,8 +1392,6 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_scale_factor)},
 		{"autovacuum_analyze_scale_factor", RELOPT_TYPE_REAL,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_scale_factor)},
-		{"autovacuum_vacuum_parallel_workers", RELOPT_TYPE_INT,
-		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_parallel_workers)},
 		{"user_catalog_table", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, user_catalog_table)},
 		{"parallel_workers", RELOPT_TYPE_INT,

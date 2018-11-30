@@ -30,6 +30,24 @@ SELECT ''::text AS five, unique1, unique2, stringu1
 SELECT ''::text AS five, unique1, unique2, stringu1
 		FROM onek
 		ORDER BY unique1 LIMIT 5 OFFSET 900;
+--
+-- PERCENT
+-- Check the PERCENT option of limit clause
+--
+
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 50
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY;
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 60 AND unique1 < 63
+		ORDER BY unique1 FETCH FIRST 50 PERCENT ROWS ONLY;
+SELECT ''::text AS three, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 100
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY OFFSET 20;
+SELECT ''::text AS eleven, unique1, unique2, stringu1
+		FROM onek WHERE unique1 < 50
+		ORDER BY unique1 DESC FETCH FIRST 10  PERCENT ROWS ONLY OFFSET 39;
+
 
 -- Test null limit and offset.  The planner would discard a simple null
 -- constant, so to ensure executor is exercised, do this:
@@ -38,7 +56,6 @@ select * from int8_tbl offset (case when random() < 0.5 then null::bigint end);
 
 -- Test assorted cases involving backwards fetch from a LIMIT plan node
 begin;
-
 declare c1 cursor for select * from int8_tbl limit 10;
 fetch all in c1;
 fetch 1 in c1;
@@ -70,6 +87,15 @@ fetch backward 1 in c4;
 fetch backward all in c4;
 fetch backward 1 in c4;
 fetch all in c4;
+
+
+declare c6 cursor for select * from int8_tbl fetch first 50 percent rows only;
+fetch all in c6;
+fetch 1 in c6;
+fetch backward 1 in c6;
+fetch backward all in c6;
+fetch backward 1 in c6;
+fetch all in c6;
 
 rollback;
 
@@ -141,3 +167,6 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
 
 select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
   from tenk1 group by thousand order by thousand limit 3;
+
+select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
+  from tenk1 group by thousand order by thousand FETCH FIRST 1 PERCENT ROWS ONLY;

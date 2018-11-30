@@ -105,7 +105,7 @@ CREATE TABLE student (
 ) INHERITS (person);
 NOTICE:  DDL test: type simple, tag CREATE TABLE
 CREATE TABLE stud_emp (
-	percent 	int4
+	"percent" 	int4
 ) INHERITS (emp, student);
 NOTICE:  merging multiple inherited definitions of column "id"
 NOTICE:  merging multiple inherited definitions of column "name"

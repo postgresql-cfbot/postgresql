@@ -164,6 +164,7 @@ static List *makeOrderedSetArgs(List *directargs, List *orderedargs,
 static void insertSelectOptions(SelectStmt *stmt,
 								List *sortClause, List *lockingClause,
 								Node *limitOffset, Node *limitCount,
+								void *limitOption,
 								WithClause *withClause,
 								core_yyscan_t yyscanner);
 static Node *makeSetOp(SetOperation op, bool all, Node *larg, Node *rarg);
@@ -387,7 +388,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				target_list opt_target_list insert_column_list set_target_list
 				set_clause_list set_clause
 				def_list operator_def_list indirection opt_indirection
-				reloption_list group_clause TriggerFuncArgs select_limit
+				reloption_list group_clause TriggerFuncArgs select_limit limit_clause
 				opt_select_limit opclass_item_list opclass_drop_list
 				opclass_purpose opt_opfamily transaction_mode_list_or_empty
 				OptTableFuncElementList TableFuncElementList opt_type_modifiers
@@ -449,7 +450,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				comment_type_any_name comment_type_name
 				security_label_type_any_name security_label_type_name
 
-%type <node>	fetch_args limit_clause select_limit_value
+%type <node>	fetch_args select_limit_value
 				offset_clause select_offset_value
 				select_fetch_first_value I_or_F_const
 %type <ival>	row_or_rows first_or_next
@@ -662,7 +663,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PERCENT PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -11185,7 +11186,7 @@ select_no_parens:
 			| select_clause sort_clause
 				{
 					insertSelectOptions((SelectStmt *) $1, $2, NIL,
-										NULL, NULL, NULL,
+										NULL, NULL, NULL, NULL,
 										yyscanner);
 					$$ = $1;
 				}
@@ -11193,6 +11194,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $1, $2, $3,
 										list_nth($4, 0), list_nth($4, 1),
+										(list_nth($4, 2)),
 										NULL,
 										yyscanner);
 					$$ = $1;
@@ -11201,6 +11203,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $1, $2, $4,
 										list_nth($3, 0), list_nth($3, 1),
+										list_nth($3, 2),
 										NULL,
 										yyscanner);
 					$$ = $1;
@@ -11209,7 +11212,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $2, NULL, NIL,
 										NULL, NULL,
-										$1,
+										NULL, $1,
 										yyscanner);
 					$$ = $2;
 				}
@@ -11217,7 +11220,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $2, $3, NIL,
 										NULL, NULL,
-										$1,
+										NULL, $1,
 										yyscanner);
 					$$ = $2;
 				}
@@ -11225,6 +11228,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $2, $3, $4,
 										list_nth($5, 0), list_nth($5, 1),
+										list_nth($5, 2),
 										$1,
 										yyscanner);
 					$$ = $2;
@@ -11233,6 +11237,7 @@ select_no_parens:
 				{
 					insertSelectOptions((SelectStmt *) $2, $3, $5,
 										list_nth($4, 0), list_nth($4, 1),
+										list_nth($4, 2),
 										$1,
 										yyscanner);
 					$$ = $2;
@@ -11519,20 +11524,20 @@ sortby:		a_expr USING qual_all_Op opt_nulls_order
 
 
 select_limit:
-			limit_clause offset_clause			{ $$ = list_make2($2, $1); }
-			| offset_clause limit_clause		{ $$ = list_make2($1, $2); }
-			| limit_clause						{ $$ = list_make2(NULL, $1); }
-			| offset_clause						{ $$ = list_make2($1, NULL); }
+			limit_clause offset_clause			{ $$ = list_make3($2, list_nth($1, 0), list_nth($1, 1)); }
+			| offset_clause limit_clause		{ $$ = list_make3($1, list_nth($2, 0), list_nth($2, 1)); }
+			| limit_clause						{ $$ = list_make3(NULL, list_nth($1, 0), list_nth($1, 1)); }
+			| offset_clause						{ $$ = list_make3($1, NULL, NULL); }
 		;
 
 opt_select_limit:
 			select_limit						{ $$ = $1; }
-			| /* EMPTY */						{ $$ = list_make2(NULL,NULL); }
+			| /* EMPTY */						{ $$ = list_make3(NULL, NULL, NULL); }
 		;
 
 limit_clause:
 			LIMIT select_limit_value
-				{ $$ = $2; }
+				{ $$ = list_make2($2, NULL); }
 			| LIMIT select_limit_value ',' select_offset_value
 				{
 					/* Disabled because it was too confusing, bjm 2002-02-18 */
@@ -11550,9 +11555,11 @@ limit_clause:
 			 * we can see the ONLY token in the lookahead slot.
 			 */
 			| FETCH first_or_next select_fetch_first_value row_or_rows ONLY
-				{ $$ = $3; }
+				{ $$ = list_make2($3, makeString("EXACT_NUMBER")); }
+			| FETCH first_or_next select_fetch_first_value  PERCENT row_or_rows ONLY
+				{ $$ = list_make2($3, makeString("PERCENTAGE")); }
 			| FETCH first_or_next row_or_rows ONLY
-				{ $$ = makeIntConst(1, -1); }
+				{ $$ = list_make2(makeIntConst(1, -1), NULL); }
 		;
 
 offset_clause:
@@ -15419,6 +15426,7 @@ reserved_keyword:
 			| ONLY
 			| OR
 			| ORDER
+			| PERCENT
 			| PLACING
 			| PRIMARY
 			| REFERENCES
@@ -15802,6 +15810,7 @@ static void
 insertSelectOptions(SelectStmt *stmt,
 					List *sortClause, List *lockingClause,
 					Node *limitOffset, Node *limitCount,
+					void *limitOption,
 					WithClause *withClause,
 					core_yyscan_t yyscanner)
 {
@@ -15839,6 +15848,17 @@ insertSelectOptions(SelectStmt *stmt,
 					 errmsg("multiple LIMIT clauses not allowed"),
 					 parser_errposition(exprLocation(limitCount))));
 		stmt->limitCount = limitCount;
+	}
+	if (limitOption)
+	{
+		if (stmt->limitOption)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("multiple LIMIT options not allowed")));
+		if (strcmp(strVal(limitOption), "PERCENTAGE") == 0)
+			stmt->limitOption = PERCENTAGE;
+		else
+			stmt->limitOption = EXACT_NUMBER;
 	}
 	if (withClause)
 	{

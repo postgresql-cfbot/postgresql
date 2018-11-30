@@ -217,6 +217,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 {
 	XLogRecord *record;
 	XLogRecPtr	targetPagePtr;
+	XLogSegNo	targetSegNo;
 	bool		randAccess;
 	uint32		len,
 				total_len;
@@ -270,6 +271,18 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	targetPagePtr = RecPtr - (RecPtr % XLOG_BLCKSZ);
 	targetRecOff = RecPtr % XLOG_BLCKSZ;
 
+	/*
+	 * checkpoint can remove the segment currently looking for.  make sure the
+	 * current segment is still exists. We check this only once per record.
+	 */
+	XLByteToSeg(targetPagePtr, targetSegNo, state->wal_segment_size);
+	if (targetSegNo <= XLogGetLastRemovedSegno())
+		ereport(ERROR,
+				(errcode(ERRCODE_NO_DATA),
+				 errmsg("WAL record at %X/%X no longer available",
+						(uint32)(RecPtr >> 32), (uint32) RecPtr),
+				 errdetail("The segment for the record has been removed.")));
+			
 	/*
 	 * Read the page containing the record into state->readBuf. Request enough
 	 * byte to cover the whole record header, or at least the part of it that

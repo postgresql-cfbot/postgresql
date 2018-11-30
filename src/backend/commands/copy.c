@@ -40,7 +40,11 @@
 #include "miscadmin.h"
 #include "optimizer/clauses.h"
 #include "optimizer/planner.h"
+#include "optimizer/prep.h"
 #include "nodes/makefuncs.h"
+#include "parser/parse_coerce.h"
+#include "parser/parse_collate.h"
+#include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "port/pg_bswap.h"
 #include "rewrite/rewriteHandler.h"
@@ -150,6 +154,7 @@ typedef struct CopyStateData
 	bool		convert_selectively;	/* do selective binary conversion? */
 	List	   *convert_select; /* list of column names (can be NIL) */
 	bool	   *convert_select_flags;	/* per-column CSV/TEXT CS flags */
+	Node	   *filterClause;	/* FILTER condition (or NULL) */
 
 	/* these are just for error messages, see CopyFromErrorCallback */
 	const char *cur_relname;	/* table name for error messages */
@@ -180,6 +185,7 @@ typedef struct CopyStateData
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;	/* is any of defexprs volatile? */
 	List	   *range_table;
+	ExprState  *qualexpr;
 
 	TransitionCaptureState *transition_capture;
 
@@ -801,6 +807,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	Relation	rel;
 	Oid			relid;
 	RawStmt    *query = NULL;
+	Node    *filterClause = NULL;
 
 	/*
 	 * Disallow COPY to/from file or program except to users with the
@@ -853,6 +860,30 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		rte = addRangeTableEntryForRelation(pstate, rel, lockmode,
 											NULL, false, false);
 		rte->requiredPerms = (is_from ? ACL_INSERT : ACL_SELECT);
+
+		if (stmt->filterClause)
+		{
+			/* add rte to column namespace  */
+			addRTEtoQuery(pstate, rte, false, true, true);
+
+			/* Transform the raw expression tree */
+			filterClause = transformExpr(pstate, stmt->filterClause, EXPR_KIND_COPY_FILTER);
+
+			if (contain_volatile_functions(filterClause))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("function in FILTER clause should not be volatile")));
+
+			/*  Make sure it yields a boolean result. */
+			filterClause = coerce_to_boolean(pstate, filterClause, "FILTER");
+			/* we have to fix its collations too */
+			assign_expr_collations(pstate, filterClause);
+
+			filterClause = eval_const_expressions(NULL, filterClause);
+
+			filterClause = (Node *) canonicalize_qual((Expr *) filterClause, false);
+			filterClause = (Node *) make_ands_implicit((Expr *) filterClause);
+		}
 
 		tupDesc = RelationGetDescr(rel);
 		attnums = CopyGetAttnums(tupDesc, rel, stmt->attlist);
@@ -1002,6 +1033,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 		cstate = BeginCopyFrom(pstate, rel, stmt->filename, stmt->is_program,
 							   NULL, stmt->attlist, stmt->options);
+		cstate->filterClause = filterClause;
 		*processed = CopyFrom(cstate);	/* copy from file to database */
 		EndCopyFrom(cstate);
 	}
@@ -2531,6 +2563,10 @@ CopyFrom(CopyState cstate)
 	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		proute = ExecSetupPartitionTupleRouting(NULL, cstate->rel);
 
+	if (cstate->filterClause)
+		cstate->qualexpr = ExecInitQual(castNode(List, cstate->filterClause),
+												&mtstate->ps);
+
 	/*
 	 * It's more efficient to prepare a bunch of tuples for insertion, and
 	 * insert them in one heap_multi_insert() call, than call heap_insert()
@@ -2678,6 +2714,13 @@ CopyFrom(CopyState cstate)
 		/* Place tuple in tuple slot --- but slot shouldn't free it */
 		slot = myslot;
 		ExecStoreHeapTuple(tuple, slot, false);
+
+		if (cstate->filterClause)
+		{
+			econtext->ecxt_scantuple = myslot;
+			if (!ExecQual(cstate->qualexpr, econtext))
+				continue;
+		}
 
 		/* Determine the partition to heap_insert the tuple into */
 		if (proute)

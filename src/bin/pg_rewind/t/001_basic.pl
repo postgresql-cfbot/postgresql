@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 10;
+use Test::More tests => 15;
 
 use RewindTest;
 
@@ -103,5 +103,6 @@ in master, before promotion
 # Run the test in both modes
 run_test('local');
 run_test('remote');
+run_test('archive');
 
 exit(0);

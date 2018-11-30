@@ -14,6 +14,7 @@
 #include "datapagemap.h"
 
 #include "access/timeline.h"
+#include "catalog/pg_control.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
 
@@ -32,11 +33,10 @@ extern int	targetNentries;
 
 /* in parsexlog.c */
 extern void extractPageMap(const char *datadir, XLogRecPtr startpoint,
-			   int tliIndex, XLogRecPtr endpoint);
-extern void findLastCheckpoint(const char *datadir, XLogRecPtr searchptr,
-				   int tliIndex,
-				   XLogRecPtr *lastchkptrec, TimeLineID *lastchkpttli,
-				   XLogRecPtr *lastchkptredo);
+			   int tliIndex, ControlFileData *targetCF, const char *restoreCommand);
+extern void findLastCheckpoint(const char *datadir, ControlFileData *targetCF, XLogRecPtr searchptr,
+				   int tliIndex, XLogRecPtr *lastchkptrec, TimeLineID *lastchkpttli,
+				   XLogRecPtr *lastchkptredo, const char *restoreCommand);
 extern XLogRecPtr readOneRecord(const char *datadir, XLogRecPtr ptr,
 			  int tliIndex);
 

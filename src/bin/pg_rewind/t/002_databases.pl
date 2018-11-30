@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 6;
+use Test::More tests => 9;
 
 use RewindTest;
 
@@ -59,5 +59,6 @@ template1
 # Run the test in both modes.
 run_test('local');
 run_test('remote');
+run_test('archive');
 
 exit(0);

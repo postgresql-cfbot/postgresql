@@ -19,11 +19,13 @@
 #include "file_ops.h"
 #include "filemap.h"
 #include "logging.h"
+#include "guc-file-fe.h"
 
 #include "access/timeline.h"
 #include "access/xlog_internal.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
+#include "common/controldata_utils.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/restricted_token.h"
@@ -52,11 +54,13 @@ int			WalSegSz;
 char	   *datadir_target = NULL;
 char	   *datadir_source = NULL;
 char	   *connstr_source = NULL;
+char	   *restore_command = NULL;
 
 bool		debug = false;
 bool		showprogress = false;
 bool		dry_run = false;
 bool		do_sync = true;
+bool		restore_wals = false;
 
 /* Target history */
 TimeLineHistoryEntry *targetHistory;
@@ -75,6 +79,9 @@ usage(const char *progname)
 	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"));
 	printf(_("                                 safely to disk\n"));
 	printf(_("  -P, --progress                 write progress messages\n"));
+	printf(_("  -r, --use-recovery-conf        use restore_command in the recovery.conf to\n"));
+	printf(_("                                 retreive WALs from archive\n"));
+	printf(_("  -R, --restore-command=COMMAND  restore command\n"));
 	printf(_("      --debug                    write a lot of debug messages\n"));
 	printf(_("  -V, --version                  output version information, then exit\n"));
 	printf(_("  -?, --help                     show this help, then exit\n"));
@@ -94,9 +101,12 @@ main(int argc, char **argv)
 		{"dry-run", no_argument, NULL, 'n'},
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
+		{"use-recovery-conf", no_argument, NULL, 'r'},
+		{"restore-command", required_argument, NULL, 'R'},
 		{"debug", no_argument, NULL, 3},
 		{NULL, 0, NULL, 0}
 	};
+	char		recfile_fullpath[MAXPGPATH];
 	int			option_index;
 	int			c;
 	XLogRecPtr	divergerec;
@@ -129,7 +139,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:nNP", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "DR:nNPr", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -139,6 +149,10 @@ main(int argc, char **argv)
 
 			case 'P':
 				showprogress = true;
+				break;
+			
+			case 'r':
+				restore_wals = true;
 				break;
 
 			case 'n':
@@ -155,6 +169,10 @@ main(int argc, char **argv)
 
 			case 'D':			/* -D or --target-pgdata */
 				datadir_target = pg_strdup(optarg);
+				break;
+
+			case 'R':
+				restore_command = pg_strdup(optarg);
 				break;
 
 			case 1:				/* --source-pgdata */
@@ -222,6 +240,71 @@ main(int argc, char **argv)
 	}
 
 	umask(pg_mode_mask);
+
+	if (restore_command != NULL)
+	{
+		pg_log(PG_DEBUG, "using command line restore_command=\'%s\'.\n", restore_command);
+	}
+	else if (restore_wals)
+	{
+		FILE	   *recovery_conf_file;
+
+		/* 
+		 * Look for recovery.conf in the target data directory and
+		 * try to get restore_command from there.
+		 */
+		snprintf(recfile_fullpath, sizeof(recfile_fullpath), "%s/%s", datadir_target, RECOVERY_COMMAND_FILE);
+		recovery_conf_file = fopen(recfile_fullpath, "r");
+
+		if (recovery_conf_file == NULL)
+		{
+			fprintf(stderr, _("%s: option -r/--use-recovery-conf is specified, but recovery.conf is absent in the target directory\n"),
+					progname);
+			fprintf(stdout, _("You have to add recovery.conf or pass restore_command with -R/--restore-command option.\n"));
+			exit(1);
+		}
+		else
+		{
+			ConfigVariable *item,
+						   *head = NULL,
+						   *tail = NULL;
+			bool			config_is_parsed;
+
+			/*
+			 * We pass a fullpath to the recovery.conf as calling_file here, since
+			 * parser will use its parent directory as base for all further includes
+			 * if any exist.
+			 */
+			config_is_parsed = ParseConfigFile(RECOVERY_COMMAND_FILE, true,
+											   recfile_fullpath, 0, 0,
+											   PG_WARNING, &head, &tail);
+			fclose(recovery_conf_file);
+
+			if (config_is_parsed)
+			{
+				for (item = head; item; item = item->next)
+				{
+					if (strcmp(item->name, "restore_command") == 0)
+					{
+						if (restore_command != NULL)
+						{
+							pfree(restore_command);
+							restore_command = NULL;
+						}
+						restore_command = pstrdup(item->value);
+						pg_log(PG_DEBUG, "using restore_command=\'%s\' from recovery.conf.\n", restore_command);
+					}
+				}
+
+				if (restore_command == NULL)
+					pg_fatal("could not find restore_command in recovery.conf file %s\n", recfile_fullpath);
+			}
+			else
+				pg_fatal("could not parse recovery.conf file %s\n", recfile_fullpath);
+
+			FreeConfigVariables(head);
+		}
+	}
 
 	/* Connect to remote server */
 	if (connstr_source)
@@ -294,9 +377,9 @@ main(int argc, char **argv)
 		exit(0);
 	}
 
-	findLastCheckpoint(datadir_target, divergerec,
+	findLastCheckpoint(datadir_target, &ControlFile_target, divergerec,
 					   lastcommontliIndex,
-					   &chkptrec, &chkpttli, &chkptredo);
+					   &chkptrec, &chkpttli, &chkptredo, restore_command);
 	printf(_("rewinding from last common checkpoint at %X/%X on timeline %u\n"),
 		   (uint32) (chkptrec >> 32), (uint32) chkptrec,
 		   chkpttli);
@@ -319,7 +402,7 @@ main(int argc, char **argv)
 	 */
 	pg_log(PG_PROGRESS, "reading WAL in target\n");
 	extractPageMap(datadir_target, chkptrec, lastcommontliIndex,
-				   ControlFile_target.checkPoint);
+				   &ControlFile_target, restore_command);
 	filemap_finalize();
 
 	if (showprogress)

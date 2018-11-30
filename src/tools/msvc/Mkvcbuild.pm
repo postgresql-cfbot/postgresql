@@ -73,6 +73,7 @@ my $frontend_extraincludes = {
 };
 my $frontend_extrasource = {
 	'psql' => ['src/bin/psql/psqlscanslash.l'],
+	'pg_rewind' => ['src/bin/pg_rewind/guc-file-fe.l'],
 	'pgbench' =>
 	  [ 'src/bin/pgbench/exprscan.l', 'src/bin/pgbench/exprparse.y' ]
 };

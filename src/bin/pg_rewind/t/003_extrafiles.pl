@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 4;
+use Test::More tests => 6;
 
 use File::Find;
 
@@ -87,5 +87,6 @@ sub run_test
 # Run the test in both modes.
 run_test('local');
 run_test('remote');
+run_test('archive');
 
 exit(0);

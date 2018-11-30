@@ -39,9 +39,7 @@ use Carp;
 use Config;
 use Exporter 'import';
 use File::Copy;
-use File::Glob ':bsd_glob';
-use File::Path qw(remove_tree make_path);
-use File::Spec::Functions 'catpath';
+use File::Path qw(rmtree);
 use IPC::Run qw(run);
 use PostgresNode;
 use TestLib;
@@ -251,48 +249,6 @@ sub run_pg_rewind
 				"--no-sync"
 			],
 			'pg_rewind remote');
-	}
-	elsif ($test_mode eq "archive")
-	{
-
-		# Do rewind using a local pgdata as source and
-		# specified directory with target WALs archive.
-		my $wals_archive_dir = catpath(${TestLib::tmp_check}, 'master_wals_archive');
-		my $test_master_datadir = $node_master->data_dir;
-		my @wal_files = bsd_glob catpath($test_master_datadir, 'pg_wal', '0000000*');
-		my $restore_command;
-
-		remove_tree($wals_archive_dir);
-		make_path($wals_archive_dir) or die;
-
-		# Move all old master WAL files to the archive.
-		# Old master should be stopped at this point.
-		foreach my $wal_file (@wal_files)
-		{
-			move($wal_file, "$wals_archive_dir/") or die;
-		}
-
-		if ($windows_os)
-		{
-			$restore_command = "copy $wals_archive_dir\\\%f \%p";
-		}
-		else
-		{
-			$restore_command = "cp $wals_archive_dir/\%f \%p";
-		}
-
-		# Stop the new master and be ready to perform the rewind.
-		$node_standby->stop;
-		command_ok(
-			[
-				'pg_rewind',
-				"--debug",
-				"--source-pgdata=$standby_pgdata",
-				"--target-pgdata=$master_pgdata",
-				"--no-sync",
-				"-R", $restore_command
-			],
-			'pg_rewind archive');
 	}
 	else
 	{

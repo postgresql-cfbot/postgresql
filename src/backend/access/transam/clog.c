@@ -38,8 +38,8 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
+#include "bestatus.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "pg_trace.h"
 #include "storage/proc.h"
 

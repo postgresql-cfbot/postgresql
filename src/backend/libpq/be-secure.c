@@ -29,9 +29,9 @@
 #include <arpa/inet.h>
 #endif
 
+#include "bestatus.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
 #include "storage/ipc.h"

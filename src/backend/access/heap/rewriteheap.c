@@ -115,11 +115,11 @@
 #include "access/xact.h"
 #include "access/xloginsert.h"
 
+#include "bestatus.h"
+
 #include "catalog/catalog.h"
 
 #include "lib/ilist.h"
-
-#include "pgstat.h"
 
 #include "replication/logical.h"
 #include "replication/slot.h"

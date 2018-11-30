@@ -28,7 +28,7 @@
 #include "miscadmin.h"
 #include "access/xlogutils.h"
 #include "access/xlog.h"
-#include "pgstat.h"
+#include "bestatus.h"
 #include "portability/instr_time.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"

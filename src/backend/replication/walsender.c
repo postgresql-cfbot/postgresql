@@ -56,6 +56,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
 
+#include "bestatus.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
@@ -65,7 +66,6 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "nodes/replnodes.h"
-#include "pgstat.h"
 #include "replication/basebackup.h"
 #include "replication/decode.h"
 #include "replication/logical.h"

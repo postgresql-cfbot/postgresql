@@ -25,6 +25,7 @@
  */
 #include "postgres.h"
 
+#include "bestatus.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"

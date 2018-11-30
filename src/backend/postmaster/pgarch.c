@@ -34,6 +34,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "bestatus.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -66,7 +67,6 @@
  * Local data
  * ----------
  */
-static time_t last_pgarch_start_time;
 static time_t last_sigterm_time = 0;
 
 /*
@@ -85,7 +85,6 @@ static volatile sig_atomic_t ready_to_stop = false;
 static pid_t pgarch_forkexec(void);
 #endif
 
-NON_EXEC_STATIC void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void pgarch_exit(SIGNAL_ARGS);
 static void ArchSigHupHandler(SIGNAL_ARGS);
 static void ArchSigTermHandler(SIGNAL_ARGS);
@@ -102,75 +101,6 @@ static void pgarch_archiveDone(char *xlog);
  * Public functions called from postmaster follow
  * ------------------------------------------------------------
  */
-
-/*
- * pgarch_start
- *
- *	Called from postmaster at startup or after an existing archiver
- *	died.  Attempt to fire up a fresh archiver process.
- *
- *	Returns PID of child process, or 0 if fail.
- *
- *	Note: if fail, we will be called again from the postmaster main loop.
- */
-int
-pgarch_start(void)
-{
-	time_t		curtime;
-	pid_t		pgArchPid;
-
-	/*
-	 * Do nothing if no archiver needed
-	 */
-	if (!XLogArchivingActive())
-		return 0;
-
-	/*
-	 * Do nothing if too soon since last archiver start.  This is a safety
-	 * valve to protect against continuous respawn attempts if the archiver is
-	 * dying immediately at launch. Note that since we will be re-called from
-	 * the postmaster main loop, we will get another chance later.
-	 */
-	curtime = time(NULL);
-	if ((unsigned int) (curtime - last_pgarch_start_time) <
-		(unsigned int) PGARCH_RESTART_INTERVAL)
-		return 0;
-	last_pgarch_start_time = curtime;
-
-#ifdef EXEC_BACKEND
-	switch ((pgArchPid = pgarch_forkexec()))
-#else
-	switch ((pgArchPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork archiver: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgArchiverMain(0, NULL);
-			break;
-#endif
-
-		default:
-			return (int) pgArchPid;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
 
 /* ------------------------------------------------------------
  * Local functions called by archiver follow
@@ -211,8 +141,8 @@ pgarch_forkexec(void)
  *	The argc/argv parameters are valid only in EXEC_BACKEND case.  However,
  *	since we don't use 'em, it hardly matters...
  */
-NON_EXEC_STATIC void
-PgArchiverMain(int argc, char *argv[])
+void
+PgArchiverMain(void)
 {
 	/*
 	 * Ignore all signals usually bound to some action in the postmaster,
@@ -244,8 +174,27 @@ PgArchiverMain(int argc, char *argv[])
 static void
 pgarch_exit(SIGNAL_ARGS)
 {
-	/* SIGQUIT means curl up and die ... */
-	exit(1);
+	PG_SETMASK(&BlockSig);
+
+	/*
+	 * We DO NOT want to run proc_exit() callbacks -- we're here because
+	 * shared memory may be corrupted, so we don't want to try to clean up our
+	 * transaction.  Just nail the windows shut and get out of town.  Now that
+	 * there's an atexit callback to prevent third-party code from breaking
+	 * things by calling exit() directly, we have to reset the callbacks
+	 * explicitly to make this work as intended.
+	 */
+	on_exit_reset();
+
+	/*
+	 * Note we do exit(2) not exit(0).  This is to force the postmaster into a
+	 * system reset cycle if some idiot DBA sends a manual SIGQUIT to a random
+	 * backend.  This is necessary precisely because we don't clean up our
+	 * shared memory state.  (The "dead man switch" mechanism in pmsignal.c
+	 * should ensure the postmaster sees this as a crash, too, but no harm in
+	 * being doubly sure.)
+	 */
+	exit(2);
 }
 
 /* SIGHUP signal handler for archiver process */
@@ -465,7 +414,7 @@ pgarch_ArchiverCopyLoop(void)
 				 * Tell the collector about the WAL file that we successfully
 				 * archived
 				 */
-				pgstat_send_archiver(xlog, false);
+				pgstat_update_archiver(xlog, false);
 
 				break;			/* out of inner retry loop */
 			}
@@ -475,7 +424,7 @@ pgarch_ArchiverCopyLoop(void)
 				 * Tell the collector about the WAL file that we failed to
 				 * archive
 				 */
-				pgstat_send_archiver(xlog, true);
+				pgstat_update_archiver(xlog, true);
 
 				if (++failures >= NUM_ARCHIVE_RETRIES)
 				{

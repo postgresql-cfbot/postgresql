@@ -39,6 +39,7 @@
 #include "access/parallel.h"
 #include "access/printtup.h"
 #include "access/xact.h"
+#include "bestatus.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
@@ -3159,6 +3160,12 @@ ProcessInterrupts(void)
 
 	if (ParallelMessagePending)
 		HandleParallelMessages();
+
+	if (IdleStatsUpdateTimeoutPending)
+	{
+		IdleStatsUpdateTimeoutPending = false;
+		pgstat_update_stat(true);
+	}
 }
 
 
@@ -3733,6 +3740,7 @@ PostgresMain(int argc, char *argv[],
 	sigjmp_buf	local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
 	bool		disable_idle_in_transaction_timeout = false;
+	bool		disable_idle_stats_update_timeout = false;
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4173,9 +4181,17 @@ PostgresMain(int argc, char *argv[],
 			}
 			else
 			{
-				ProcessCompletedNotifies();
-				pgstat_report_stat(false);
+				long stats_timeout;
 
+				ProcessCompletedNotifies();
+
+				stats_timeout = pgstat_update_stat(false);
+				if (stats_timeout > 0)
+				{
+					disable_idle_stats_update_timeout = true;
+					enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT,
+										 stats_timeout);
+				}
 				set_ps_display("idle", false);
 				pgstat_report_activity(STATE_IDLE, NULL);
 			}
@@ -4210,12 +4226,18 @@ PostgresMain(int argc, char *argv[],
 		DoingCommandRead = false;
 
 		/*
-		 * (5) turn off the idle-in-transaction timeout
+		 * (5) turn off the idle-in-transaction timeout and stats update timeout
 		 */
 		if (disable_idle_in_transaction_timeout)
 		{
 			disable_timeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT, false);
 			disable_idle_in_transaction_timeout = false;
+		}
+
+		if (disable_idle_stats_update_timeout)
+		{
+			disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+			disable_idle_stats_update_timeout = false;
 		}
 
 		/*

@@ -63,9 +63,9 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "bestatus.h"
 #include "catalog/index.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
 #include "utils/rel.h"

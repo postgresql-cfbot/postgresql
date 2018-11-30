@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "access/sysattr.h"
+#include "bestatus.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
@@ -28,7 +29,6 @@
 #include "common/keywords.h"
 #include "funcapi.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "parser/scansup.h"
 #include "postmaster/syslogger.h"
 #include "rewrite/rewriteHandler.h"

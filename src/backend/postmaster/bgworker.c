@@ -16,8 +16,8 @@
 
 #include "libpq/pqsignal.h"
 #include "access/parallel.h"
+#include "bestatus.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "port/atomics.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"

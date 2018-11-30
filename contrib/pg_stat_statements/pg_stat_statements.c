@@ -62,6 +62,7 @@
 #include <unistd.h>
 
 #include "access/hash.h"
+#include "bestatus.h"
 #include "catalog/pg_authid.h"
 #include "executor/instrument.h"
 #include "funcapi.h"

@@ -32,8 +32,6 @@
  */
 extern int	pgarch_start(void);
 
-#ifdef EXEC_BACKEND
-extern void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
-#endif
+extern void PgArchiverMain(void) pg_attribute_noreturn();
 
 #endif							/* _PGARCH_H */

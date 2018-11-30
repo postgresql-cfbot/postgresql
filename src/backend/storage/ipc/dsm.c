@@ -198,6 +198,15 @@ dsm_postmaster_startup(PGShmemHeader *shim)
 }
 
 /*
+ * clear dsm_init state on child start.
+ */
+void
+dsm_child_init(void)
+{
+	dsm_init_done = false;
+}
+
+/*
  * Determine whether the control segment from the previous postmaster
  * invocation still exists.  If so, remove the dynamic shared memory
  * segments to which it refers, and then the control segment itself.
@@ -424,6 +433,15 @@ dsm_set_control_handle(dsm_handle h)
 #endif
 
 /*
+ * Return if dsm feature is available on this process.
+ */
+bool
+dsm_is_available(void)
+{
+	return dsm_control != NULL;
+}
+
+/*
  * Create a new dynamic shared memory segment.
  *
  * If there is a non-NULL CurrentResourceOwner, the new segment is associated
@@ -440,8 +458,7 @@ dsm_create(Size size, int flags)
 	uint32		i;
 	uint32		nitems;
 
-	/* Unsafe in postmaster (and pointless in a stand-alone backend). */
-	Assert(IsUnderPostmaster);
+	Assert(dsm_is_available());
 
 	if (!dsm_init_done)
 		dsm_backend_startup();
@@ -537,8 +554,7 @@ dsm_attach(dsm_handle h)
 	uint32		i;
 	uint32		nitems;
 
-	/* Unsafe in postmaster (and pointless in a stand-alone backend). */
-	Assert(IsUnderPostmaster);
+	Assert(dsm_is_available());
 
 	if (!dsm_init_done)
 		dsm_backend_startup();

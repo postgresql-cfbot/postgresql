@@ -13,11 +13,11 @@
 
 #include "postgres.h"
 
+#include "bestatus.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqmq.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 

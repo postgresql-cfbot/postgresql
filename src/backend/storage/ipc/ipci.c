@@ -150,6 +150,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
+		size = add_size(size, StatsShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -282,7 +283,12 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 
 	/* Initialize dynamic shared memory facilities. */
 	if (!IsUnderPostmaster)
+	{
 		dsm_postmaster_startup(shim);
+
+		/* Stats collector uses dynamic shared memory  */
+		StatsShmemInit();
+	}
 
 	/*
 	 * Now give loadable modules a chance to set up their shmem allocations

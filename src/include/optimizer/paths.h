@@ -161,7 +161,8 @@ extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 extern void add_child_rel_equivalences(PlannerInfo *root,
 						   AppendRelInfo *appinfo,
 						   RelOptInfo *parent_rel,
-						   RelOptInfo *child_rel);
+						   RelOptInfo *child_rel,
+						   bool child_is_target);
 extern List *generate_implied_equalities_for_column(PlannerInfo *root,
 									   RelOptInfo *rel,
 									   ec_matches_callback_type callback,

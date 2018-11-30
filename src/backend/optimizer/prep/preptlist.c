@@ -65,9 +65,13 @@ static List *expand_targetlist(List *tlist, int command_type,
  *
  * As a side effect, if there's an ON CONFLICT UPDATE clause, its targetlist
  * is also preprocessed (and updated in-place).
+ *
+ * inheritance_expanded specifies whether inheritance tables are expanded
+ * as of calling this function.  Caller must specify it because that affects
+ * which row marking related junk columns get added to the targetlist.
  */
 List *
-preprocess_targetlist(PlannerInfo *root)
+preprocess_targetlist(PlannerInfo *root, bool inheritance_expanded)
 {
 	Query	   *parse = root->parse;
 	int			result_relation = parse->resultRelation;
@@ -132,6 +136,15 @@ preprocess_targetlist(PlannerInfo *root)
 
 		/* child rels use the same junk attrs as their parents */
 		if (rc->rti != rc->prti)
+			continue;
+
+		/*
+		 * For inheritance parent row marks, we defer adding junk columns
+		 * until we've added child row marks, because some children might
+		 * require different row mark types which will change the parent row
+		 * mark's allMarkTypes fields.
+		 */
+		if (rc->isParent && !inheritance_expanded)
 			continue;
 
 		if (rc->allMarkTypes & ~(1 << ROW_MARK_COPY))

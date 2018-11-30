@@ -616,64 +616,6 @@ create_lateral_join_info(PlannerInfo *root)
 				bms_add_member(brel2->lateral_referencers, rti);
 		}
 	}
-
-	/*
-	 * Lastly, propagate lateral_relids and lateral_referencers from appendrel
-	 * parent rels to their child rels.  We intentionally give each child rel
-	 * the same minimum parameterization, even though it's quite possible that
-	 * some don't reference all the lateral rels.  This is because any append
-	 * path for the parent will have to have the same parameterization for
-	 * every child anyway, and there's no value in forcing extra
-	 * reparameterize_path() calls.  Similarly, a lateral reference to the
-	 * parent prevents use of otherwise-movable join rels for each child.
-	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
-	{
-		RelOptInfo *brel = root->simple_rel_array[rti];
-		RangeTblEntry *brte = root->simple_rte_array[rti];
-
-		/*
-		 * Skip empty slots. Also skip non-simple relations i.e. dead
-		 * relations.
-		 */
-		if (brel == NULL || !IS_SIMPLE_REL(brel))
-			continue;
-
-		/*
-		 * In the case of table inheritance, the parent RTE is directly linked
-		 * to every child table via an AppendRelInfo.  In the case of table
-		 * partitioning, the inheritance hierarchy is expanded one level at a
-		 * time rather than flattened.  Therefore, an other member rel that is
-		 * a partitioned table may have children of its own, and must
-		 * therefore be marked with the appropriate lateral info so that those
-		 * children eventually get marked also.
-		 */
-		Assert(brte);
-		if (brel->reloptkind == RELOPT_OTHER_MEMBER_REL &&
-			(brte->rtekind != RTE_RELATION ||
-			 brte->relkind != RELKIND_PARTITIONED_TABLE))
-			continue;
-
-		if (brte->inh)
-		{
-			foreach(lc, root->append_rel_list)
-			{
-				AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(lc);
-				RelOptInfo *childrel;
-
-				if (appinfo->parent_relid != rti)
-					continue;
-				childrel = root->simple_rel_array[appinfo->child_relid];
-				Assert(childrel->reloptkind == RELOPT_OTHER_MEMBER_REL);
-				Assert(childrel->direct_lateral_relids == NULL);
-				childrel->direct_lateral_relids = brel->direct_lateral_relids;
-				Assert(childrel->lateral_relids == NULL);
-				childrel->lateral_relids = brel->lateral_relids;
-				Assert(childrel->lateral_referencers == NULL);
-				childrel->lateral_referencers = brel->lateral_referencers;
-			}
-		}
-	}
 }
 
 

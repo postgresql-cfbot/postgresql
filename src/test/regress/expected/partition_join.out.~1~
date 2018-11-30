@@ -1780,7 +1780,7 @@ WHERE EXISTS (
                Filter: (c IS NULL)
          ->  Nested Loop
                ->  Seq Scan on int4_tbl
-               ->  Subquery Scan on ss
+               ->  Subquery Scan on ss_1
                      ->  Limit
                            ->  Seq Scan on int8_tbl int8_tbl_1
    ->  Nested Loop Semi Join
@@ -1788,7 +1788,7 @@ WHERE EXISTS (
                Filter: (c IS NULL)
          ->  Nested Loop
                ->  Seq Scan on int4_tbl
-               ->  Subquery Scan on ss
+               ->  Subquery Scan on ss_2
                      ->  Limit
                            ->  Seq Scan on int8_tbl int8_tbl_2
 (28 rows)

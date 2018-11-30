@@ -1998,12 +1998,7 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 	/*
 	 * During setrefs.c, we'll need the grouping_map to fix up the cols lists
 	 * in GroupingFunc nodes.  Save it for setrefs.c to use.
-	 *
-	 * This doesn't work if we're in an inheritance subtree (see notes in
-	 * create_modifytable_plan).  Fortunately we can't be because there would
-	 * never be grouping in an UPDATE/DELETE; but let's Assert that.
 	 */
-	Assert(root->inhTargetKind == INHKIND_NONE);
 	Assert(root->grouping_map == NULL);
 	root->grouping_map = grouping_map;
 
@@ -2160,12 +2155,7 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 	 * with InitPlan output params.  (We can't just do that locally in the
 	 * MinMaxAgg node, because path nodes above here may have Agg references
 	 * as well.)  Save the mmaggregates list to tell setrefs.c to do that.
-	 *
-	 * This doesn't work if we're in an inheritance subtree (see notes in
-	 * create_modifytable_plan).  Fortunately we can't be because there would
-	 * never be aggregates in an UPDATE/DELETE; but let's Assert that.
 	 */
-	Assert(root->inhTargetKind == INHKIND_NONE);
 	Assert(root->minmax_aggs == NIL);
 	root->minmax_aggs = best_path->mmaggregates;
 

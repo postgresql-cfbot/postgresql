@@ -26,7 +26,7 @@ extern PGDLLIMPORT get_relation_info_hook_type get_relation_info_hook;
 
 
 extern void get_relation_info(PlannerInfo *root, Oid relationObjectId,
-				  bool inhparent, RelOptInfo *rel);
+				  bool inhparent, Bitmapset *updatedCols, RelOptInfo *rel);
 
 extern List *infer_arbiter_indexes(PlannerInfo *root);
 

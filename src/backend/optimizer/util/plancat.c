@@ -106,7 +106,7 @@ static void set_baserel_partition_key_exprs(Relation relation,
  */
 void
 get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
-				  RelOptInfo *rel)
+				  Bitmapset *updatedCols, RelOptInfo *rel)
 {
 	Index		varno = rel->relid;
 	Relation	relation;
@@ -444,11 +444,31 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	get_relation_foreign_keys(root, rel, relation, inhparent);
 
 	/*
-	 * Collect info about relation's partitioning scheme, if any. Only
-	 * inheritance parents may be partitioned.
+	 * Collect some additional information for inheritance parents.
 	 */
-	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		set_relation_partition_info(root, rel, relation);
+	if (inhparent)
+	{
+		/*
+		 * We'll need the TupleDesc when initializing the child relation.
+		 * A copy is being made because concurrent changes might drop
+		 * the relcache entry.  That's possible because ALTER TABLE
+		 * child_table NO INHERIT parent_table only requires an
+		 * AccessShareLock on parent_table.
+		 */
+		rel->tupdesc = CreateTupleDescCopy(RelationGetDescr(relation));
+		rel->reltype = RelationGetForm(relation)->reltype;
+
+		/*
+		 * If partitioned, also save the information of partitioning scheme,
+		 * and whether the query updates any of the partition key columns.
+		 */
+		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			set_relation_partition_info(root, rel, relation);
+			root->partColsUpdated |= has_partition_attrs(relation, updatedCols,
+														 NULL);
+		}
+	}
 
 	heap_close(relation, NoLock);
 
@@ -1264,36 +1284,6 @@ get_relation_constraints(PlannerInfo *root,
 		}
 	}
 
-	/*
-	 * Append partition predicates, if any.
-	 *
-	 * For selects, partition pruning uses the parent table's partition bound
-	 * descriptor, instead of constraint exclusion which is driven by the
-	 * individual partition's partition constraint.
-	 */
-	if (enable_partition_pruning && root->parse->commandType != CMD_SELECT)
-	{
-		List	   *pcqual = RelationGetPartitionQual(relation);
-
-		if (pcqual)
-		{
-			/*
-			 * Run the partition quals through const-simplification similar to
-			 * check constraints.  We skip canonicalize_qual, though, because
-			 * partition quals should be in canonical form already; also,
-			 * since the qual is in implicit-AND format, we'd have to
-			 * explicitly convert it to explicit-AND format and back again.
-			 */
-			pcqual = (List *) eval_const_expressions(root, (Node *) pcqual);
-
-			/* Fix Vars to have the desired varno */
-			if (varno != 1)
-				ChangeVarNodes((Node *) pcqual, 1, varno, 0);
-
-			result = list_concat(result, pcqual);
-		}
-	}
-
 	heap_close(relation, NoLock);
 
 	return result;
@@ -1420,31 +1410,15 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	switch (constraint_exclusion)
 	{
 		case CONSTRAINT_EXCLUSION_OFF:
-
-			/*
-			 * Don't prune if feature turned off -- except if the relation is
-			 * a partition.  While partprune.c-style partition pruning is not
-			 * yet in use for all cases (update/delete is not handled), it
-			 * would be a UI horror to use different user-visible controls
-			 * depending on such a volatile implementation detail.  Therefore,
-			 * for partitioned tables we use enable_partition_pruning to
-			 * control this behavior.
-			 */
-			if (root->inhTargetKind == INHKIND_PARTITIONED)
-				break;
 			return false;
 
 		case CONSTRAINT_EXCLUSION_PARTITION:
 
 			/*
 			 * When constraint_exclusion is set to 'partition' we only handle
-			 * OTHER_MEMBER_RELs, or BASERELs in cases where the result target
-			 * is an inheritance parent or a partitioned table.
+			 * OTHER_MEMBER_RELs.
 			 */
-			if ((rel->reloptkind != RELOPT_OTHER_MEMBER_REL) &&
-				!(rel->reloptkind == RELOPT_BASEREL &&
-				  root->inhTargetKind != INHKIND_NONE &&
-				  rel->relid == root->parse->resultRelation))
+			if (rel->reloptkind != RELOPT_OTHER_MEMBER_REL)
 				return false;
 			break;
 
@@ -1899,16 +1873,20 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 							Relation relation)
 {
 	PartitionDesc partdesc;
-	PartitionKey partkey;
 
 	Assert(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 
 	partdesc = RelationGetPartitionDesc(relation);
-	partkey = RelationGetPartitionKey(relation);
 	rel->part_scheme = find_partition_scheme(root, relation);
 	Assert(partdesc != NULL && rel->part_scheme != NULL);
-	rel->boundinfo = partition_bounds_copy(partdesc->boundinfo, partkey);
 	rel->nparts = partdesc->nparts;
+
+	/*
+	 * Since we must've taken a lock on the table, it's okay to simply copy
+	 * the pointers to relcache data here.
+	 */
+	rel->part_oids = partdesc->oids;
+	rel->boundinfo = partdesc->boundinfo;
 	set_baserel_partition_key_exprs(relation, rel);
 	rel->partition_qual = RelationGetPartitionQual(relation);
 }

@@ -22,6 +22,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -2104,12 +2105,18 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
  *
  * parent_rel and child_rel could be derived from appinfo, but since the
  * caller has already computed them, we might as well just pass them in.
+ *
+ * If 'child_is_target' is true then the child EC members *replace* the
+ * corresponding parent members.  In that case, 'root' is the child target
+ * relation's dedicated PlannerInfo so it makes sense to remove the parent
+ * ECs altogether, because they're of no use.
  */
 void
 add_child_rel_equivalences(PlannerInfo *root,
 						   AppendRelInfo *appinfo,
 						   RelOptInfo *parent_rel,
-						   RelOptInfo *child_rel)
+						   RelOptInfo *child_rel,
+						   bool child_is_target)
 {
 	ListCell   *lc1;
 
@@ -2117,6 +2124,8 @@ add_child_rel_equivalences(PlannerInfo *root,
 	{
 		EquivalenceClass *cur_ec = (EquivalenceClass *) lfirst(lc1);
 		ListCell   *lc2;
+		ListCell   *prev;
+		ListCell   *next;
 
 		/*
 		 * If this EC contains a volatile expression, then generating child
@@ -2134,12 +2143,18 @@ add_child_rel_equivalences(PlannerInfo *root,
 			!bms_is_subset(parent_rel->relids, cur_ec->ec_relids))
 			continue;
 
-		foreach(lc2, cur_ec->ec_members)
+		prev = NULL;
+		for (lc2 = list_head(cur_ec->ec_members); lc2 != NULL; lc2 = next)
 		{
 			EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc2);
 
+			next = lnext(lc2);
+
 			if (cur_em->em_is_const)
+			{
+				prev = lc2;
 				continue;		/* ignore consts here */
+			}
 
 			/* Does it reference parent_rel? */
 			if (bms_overlap(cur_em->em_relids, parent_rel->relids))
@@ -2177,10 +2192,17 @@ add_child_rel_equivalences(PlannerInfo *root,
 														  child_rel->relids);
 				}
 
+				/* Delete the parent EC member. */
+				if (child_is_target)
+					cur_ec->ec_members = list_delete_cell(cur_ec->ec_members,
+														  lc2, prev);
+
 				(void) add_eq_member(cur_ec, child_expr,
 									 new_relids, new_nullable_relids,
-									 true, cur_em->em_datatype);
+									 !child_is_target, cur_em->em_datatype);
 			}
+			else
+				prev = lc2;
 		}
 	}
 }

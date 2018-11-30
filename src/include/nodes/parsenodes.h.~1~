@@ -2934,13 +2934,11 @@ typedef struct RuleStmt
  *		Notify Statement
  * ----------------------
  */
-
 typedef struct NotifyStmt
 {
 	NodeTag		type;
 	char	   *conditionname;	/* condition name to notify */
 	char	   *payload;		/* the payload string, or NULL if none */
-	char	   *collapse_mode;	/* the collapse mode (empty string by default, which is equivalent to 'maybe') */
 } NotifyStmt;
 
 /* ----------------------

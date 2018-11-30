@@ -21,7 +21,8 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable class="parameter">payload</replaceable> ]
+NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable class="parameter">payload</replaceable> [ , <replaceable class="parameter">collapse_mode</replaceable> ] ]
+
 </synopsis>
  </refsynopsisdiv>
 
@@ -94,20 +95,6 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
   </para>
 
   <para>
-   If the same channel name is signaled multiple times from the same
-   transaction with identical payload strings, the
-   database server can decide to deliver a single notification only.
-   On the other hand, notifications with distinct payload strings will
-   always be delivered as distinct notifications. Similarly, notifications from
-   different transactions will never get folded into one notification.
-   Except for dropping later instances of duplicate notifications,
-   <command>NOTIFY</command> guarantees that notifications from the same
-   transaction get delivered in the order they were sent.  It is also
-   guaranteed that messages from different transactions are delivered in
-   the order in which the transactions committed.
-  </para>
-
-  <para>
    It is common for a client that executes <command>NOTIFY</command>
    to be listening on the same notification channel itself.  In that case
    it will get back a notification event, just like all the other
@@ -121,6 +108,41 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
    are the same, the notification event is one's own work bouncing
    back, and can be ignored.
   </para>
+
+</refsect1>
+
+<refsect1>
+
+  <title>Ordering and collapsing of notifications</title>
+
+  <para>
+   If the same channel name is signaled multiple times from the same
+   transaction with identical payload strings, the
+   database server can decide to deliver a single notification only,
+   when the value of the <literal>collapse_mode</literal> parameter is 
+   <literal>'maybe'</literal> or <literal>''</literal> (the empty string).
+
+   If the <literal>'never'</literal> collapse mode is specified, the server will 
+   deliver all notifications, including duplicates. Turning off deduplication 
+   in this way can considerably speed up transactions that emit large numbers 
+   of notifications.
+   
+   Removal of duplicate notifications takes place within transaction block,
+   finished with <literal>COMMIT</literal>, <literal>END</literal> or <literal>SAVEPOINT</literal>.
+  </para>
+
+  <para>
+   Notifications with distinct payload strings will
+   always be delivered as distinct notifications. Similarly, notifications from
+   different transactions will never get folded into one notification.
+   Except for dropping later instances of duplicate notifications,
+   <command>NOTIFY</command> guarantees that notifications from the same
+   transaction get delivered in the order they were sent.  It is also
+   guaranteed that messages from different transactions are delivered in
+   the order in which the transactions committed.
+  </para>
+
+
  </refsect1>
 
  <refsect1>
@@ -144,6 +166,16 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
       In the default configuration it must be shorter than 8000 bytes.
       (If binary data or large amounts of information need to be communicated,
       it's best to put it in a database table and send the key of the record.)
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term><replaceable class="parameter">collapse_mode</replaceable></term>
+    <listitem>
+     <para>
+      The collapse mode to apply when identical notifications are issued within 
+      a transaction. The acceptable values are <literal>'maybe'</literal> (the 
+      default) and <literal>'never'</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -190,6 +222,11 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
     to use than the <command>NOTIFY</command> command if you need to work with
     non-constant channel names and payloads.
    </para>
+   <para>
+    There is a three-argument version, <literal>pg_notify(<type>text</type>,
+    <type>text</type>, <type>text</type>)</literal> where the third argument takes 
+    the value of the <literal>collapse_mode</literal> parameter. 
+   </para>
   </refsect2>
  </refsect1>
 
@@ -210,6 +247,21 @@ Asynchronous notification "virtual" with payload "This is the payload" received 
 LISTEN foo;
 SELECT pg_notify('fo' || 'o', 'pay' || 'load');
 Asynchronous notification "foo" with payload "payload" received from server process with PID 14728.
+
+/* Identical messages from same (sub-) transaction can be eliminated - unless you use the 'never' collapse mode */
+LISTEN bar;
+BEGIN;
+NOTIFY bar, 'Coffee please';
+NOTIFY bar, 'Coffee please';
+NOTIFY bar, 'Milk please';
+NOTIFY bar, 'Milk please', 'never';
+SAVEPOINT s;
+NOTIFY bar, 'Coffee please';
+COMMIT;
+Asynchronous notification "bar" with payload "Coffee please" received from server process with PID 31517.
+Asynchronous notification "bar" with payload "Milk please" received from server process with PID 31517.
+Asynchronous notification "bar" with payload "Milk please" received from server process with PID 31517.
+Asynchronous notification "bar" with payload "Coffee please" received from server process with PID 31517.
 </programlisting></para>
  </refsect1>
 

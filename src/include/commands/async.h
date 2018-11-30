@@ -32,8 +32,16 @@ extern void NotifyMyFrontEnd(const char *channel,
 				 const char *payload,
 				 int32 srcPid);
 
+/* collapse mode argument to NOTIFY and pg_notify() */
+typedef enum NotifyCollapseMode {
+	NOTIFY_COLLAPSE_MODE_MAYBE,
+	NOTIFY_COLLAPSE_MODE_NEVER,
+	NOTIFY_COLLAPSE_MODE_ALWAYS
+} NotifyCollapseMode;
+extern NotifyCollapseMode str2collapse_mode(const char *mode_str);
+
 /* notify-related SQL statements */
-extern void Async_Notify(const char *channel, const char *payload);
+extern void Async_Notify(const char *channel, const char *payload, NotifyCollapseMode collapse_mode);
 extern void Async_Listen(const char *channel);
 extern void Async_Unlisten(const char *channel);
 extern void Async_UnlistenAll(void);
@@ -53,5 +61,6 @@ extern void HandleNotifyInterrupt(void);
 
 /* process interrupts */
 extern void ProcessNotifyInterrupt(void);
+
 
 #endif							/* ASYNC_H */

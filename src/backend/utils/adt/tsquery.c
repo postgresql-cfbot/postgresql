@@ -42,6 +42,12 @@ typedef enum
 	WAITFIRSTOPERAND = 3
 } ts_parserstate;
 
+/* Contains additional information for tokens being parsed */
+typedef union TokenData {
+	int16 weight;				/*weight for operand */
+	OperatorData operator_data; /* data for operator */
+} TokenData;
+
 /*
  * token types for parsing
  */
@@ -63,9 +69,9 @@ typedef enum
  * *strval, *lenval and *weight are filled in when return value is PT_VAL
  *
  */
-typedef ts_tokentype (*ts_tokenizer) (TSQueryParserState state, int8 *operator,
-									  int *lenval, char **strval,
-									  int16 *weight, bool *prefix);
+typedef ts_tokentype (*ts_tokenizer)(TSQueryParserState state, int8 *operator,
+									 int *lenval, char **strval,
+									 TokenData *token_data, bool *prefix);
 
 struct TSQueryParserStateData
 {
@@ -152,18 +158,23 @@ get_modifiers(char *buf, int16 *weight, bool *prefix)
  * The buffer should begin with '<' char
  */
 static bool
-parse_phrase_operator(TSQueryParserState pstate, int16 *distance)
+parse_phrase_operator(TSQueryParserState pstate, OperatorData *operator_data)
 {
 	enum
 	{
 		PHRASE_OPEN = 0,
-		PHRASE_DIST,
+		PHRASE_DIST_FROM,
+		PHRASE_DIST_TO,
 		PHRASE_CLOSE,
 		PHRASE_FINISH
 	}			state = PHRASE_OPEN;
 	char	   *ptr = pstate->buf;
 	char	   *endptr;
-	long		l = 1;			/* default distance */
+	bool		negative_distance = false;
+	int32		distance_from = 0;
+	int32		distance_to = MAXENTRYPOS;
+	bool		distance_from_set = false;
+	bool		distance_to_set = false;
 
 	while (*ptr)
 	{
@@ -172,37 +183,126 @@ parse_phrase_operator(TSQueryParserState pstate, int16 *distance)
 			case PHRASE_OPEN:
 				if (t_iseq(ptr, '<'))
 				{
-					state = PHRASE_DIST;
+					state = PHRASE_DIST_FROM;
 					ptr++;
 				}
 				else
 					return false;
 				break;
 
-			case PHRASE_DIST:
-				if (t_iseq(ptr, '-'))
+			case PHRASE_DIST_FROM:
+				/* <-> */
+				if (t_iseq(ptr, '-') && !negative_distance)
 				{
-					state = PHRASE_CLOSE;
-					ptr++;
-					continue;
+					/* make sure '-' doesn't mean negative number */
+					if (t_iseq(ptr + 1, '>'))
+					{
+						distance_from_set = true;
+						distance_to_set = true;
+						state = PHRASE_CLOSE;
+						ptr++;
+						distance_from = 1;
+						distance_to = 1;
+					}
+					else
+					{
+						negative_distance = true;
+						ptr++;
+					}
 				}
+				else if (t_iseq(ptr, ',') && !negative_distance)
+				{
+					ptr++;
+					state = PHRASE_DIST_TO;
+				}
+				else if (t_isdigit(ptr)) /* <N...> */
+				{
+					errno = 0;
+					distance_from = strtol(ptr, &endptr, 10);
+					distance_from_set = true;
+					if (negative_distance)
+					{
+						distance_from = -distance_from;
+						negative_distance = false;
+					}
 
-				if (!t_isdigit(ptr))
-					return false;
-
-				errno = 0;
-				l = strtol(ptr, &endptr, 10);
-				if (ptr == endptr)
-					return false;
-				else if (errno == ERANGE || l < 0 || l > MAXENTRYPOS)
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("distance in phrase operator should not be greater than %d",
-									MAXENTRYPOS)));
+					if (ptr == endptr)
+					{
+						return false;
+					}
+					else if (errno == ERANGE || distance_from < MINENTRYPOS || distance_from > MAXENTRYPOS)
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("distance in phrase operator should not be less than %d and no greater than %d",
+									MINENTRYPOS, MAXENTRYPOS)));
+					}
+					else
+					{
+						ptr = endptr;
+						if (t_iseq(ptr, ','))
+						{
+							/* <N,...> */
+							ptr++;
+							state = PHRASE_DIST_TO;
+						}
+						else /* <N> is equal <N,N> */
+						{
+							distance_to_set = true;
+							distance_to = distance_from;
+							state = PHRASE_CLOSE;
+						}
+					}
+				}
 				else
 				{
+					return false;
+				}
+				break;
+
+			case PHRASE_DIST_TO:
+				if (t_iseq(ptr, '-') && !negative_distance)
+				{
+					negative_distance = true;
+					ptr++;
+				}
+				else if (t_isdigit(ptr))
+				{
+					errno = 0;
+					distance_to = strtol(ptr, &endptr, 10);
+					distance_to_set = true;
+					if (negative_distance)
+					{
+						distance_to = -distance_to;
+						negative_distance = false;
+					}
+
+					if (ptr == endptr)
+					{
+						return false;
+					}
+					else if (errno == ERANGE || distance_to < MINENTRYPOS || distance_to > MAXENTRYPOS)
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("distance in phrase operator should not be less than %d and no greater than %d",
+									MINENTRYPOS, MAXENTRYPOS)));
+					}
+					else if (distance_from_set && distance_to < distance_from)
+					{
+						return false;
+					}
+					else
+					{
+						state = PHRASE_CLOSE;
+						ptr = endptr;
+					}
+				}
+				else
+				{
+					if (negative_distance)
+						return false;
 					state = PHRASE_CLOSE;
-					ptr = endptr;
 				}
 				break;
 
@@ -213,11 +313,28 @@ parse_phrase_operator(TSQueryParserState pstate, int16 *distance)
 					ptr++;
 				}
 				else
+				{
 					return false;
+				}
 				break;
 
 			case PHRASE_FINISH:
-				*distance = (int16) l;
+				if (!distance_from_set && !distance_to_set)
+				{
+					distance_from = MINENTRYPOS;
+					distance_to = MAXENTRYPOS;
+					distance_to_set = distance_from_set = true;
+				}
+				if (!distance_from_set)
+				{
+					distance_from = distance_to < 0 ? MINENTRYPOS : 0;
+				}
+				if (!distance_to_set)
+				{
+					distance_to = distance_from < 0 ? 0 : MAXENTRYPOS;
+				}
+				operator_data->distance_from = (int16) distance_from;
+				operator_data->distance_to = (int16) distance_to;
 				pstate->buf = ptr;
 				return true;
 		}
@@ -278,9 +395,9 @@ parse_or_operator(TSQueryParserState pstate)
 static ts_tokentype
 gettoken_query_standard(TSQueryParserState state, int8 *operator,
 						int *lenval, char **strval,
-						int16 *weight, bool *prefix)
+						TokenData *token_data, bool *prefix)
 {
-	*weight = 0;
+	OPERATOR_DATA_INITIALIZE(token_data->operator_data, 0);
 	*prefix = false;
 
 	while (true)
@@ -320,7 +437,7 @@ gettoken_query_standard(TSQueryParserState state, int8 *operator,
 					if (gettoken_tsvector(state->valstate, strval, lenval,
 										  NULL, NULL, &state->buf))
 					{
-						state->buf = get_modifiers(state->buf, weight, prefix);
+						state->buf = get_modifiers(state->buf, &token_data->weight, prefix);
 						state->state = WAITOPERATOR;
 						return PT_VAL;
 					}
@@ -351,7 +468,7 @@ gettoken_query_standard(TSQueryParserState state, int8 *operator,
 					*operator = OP_OR;
 					return PT_OPR;
 				}
-				else if (parse_phrase_operator(state, weight))
+				else if (parse_phrase_operator(state, &token_data->operator_data))
 				{
 					/* weight var is used as storage for distance */
 					state->state = WAITOPERAND;
@@ -382,9 +499,9 @@ gettoken_query_standard(TSQueryParserState state, int8 *operator,
 static ts_tokentype
 gettoken_query_websearch(TSQueryParserState state, int8 *operator,
 						 int *lenval, char **strval,
-						 int16 *weight, bool *prefix)
+						 TokenData *token_data, bool *prefix)
 {
-	*weight = 0;
+	OPERATOR_DATA_INITIALIZE(token_data->operator_data, 0);
 	*prefix = false;
 
 	while (true)
@@ -502,7 +619,7 @@ gettoken_query_websearch(TSQueryParserState state, int8 *operator,
 					{
 						/* put implicit <-> after an operand */
 						*operator = OP_PHRASE;
-						*weight = 1;
+						OPERATOR_DATA_INITIALIZE(token_data->operator_data, 1);
 					}
 					else
 					{
@@ -523,9 +640,9 @@ gettoken_query_websearch(TSQueryParserState state, int8 *operator,
 static ts_tokentype
 gettoken_query_plain(TSQueryParserState state, int8 *operator,
 					 int *lenval, char **strval,
-					 int16 *weight, bool *prefix)
+					 TokenData *token_data, bool *prefix)
 {
-	*weight = 0;
+	OPERATOR_DATA_INITIALIZE(token_data->operator_data, 0);
 	*prefix = false;
 
 	if (*state->buf == '\0')
@@ -542,7 +659,7 @@ gettoken_query_plain(TSQueryParserState state, int8 *operator,
  * Push an operator to state->polstr
  */
 void
-pushOperator(TSQueryParserState state, int8 oper, int16 distance)
+pushOperator(TSQueryParserState state, int8 oper, OperatorData operator_data)
 {
 	QueryOperator *tmp;
 
@@ -551,7 +668,8 @@ pushOperator(TSQueryParserState state, int8 oper, int16 distance)
 	tmp = (QueryOperator *) palloc0(sizeof(QueryOperator));
 	tmp->type = QI_OPR;
 	tmp->oper = oper;
-	tmp->distance = (oper == OP_PHRASE) ? distance : 0;
+	if (oper == OP_PHRASE)
+		tmp->operator_data = operator_data;
 	/* left is filled in later with findoprnd */
 
 	state->polstr = lcons(tmp, state->polstr);
@@ -643,17 +761,17 @@ pushStop(TSQueryParserState state)
 typedef struct OperatorElement
 {
 	int8		op;
-	int16		distance;
+	OperatorData operator_data;
 } OperatorElement;
 
 static void
-pushOpStack(OperatorElement *stack, int *lenstack, int8 op, int16 distance)
+pushOpStack(OperatorElement *stack, int *lenstack, int8 op, OperatorData operator_data)
 {
 	if (*lenstack == STACKDEPTH)	/* internal error */
 		elog(ERROR, "tsquery stack too small");
 
 	stack[*lenstack].op = op;
-	stack[*lenstack].distance = distance;
+	stack[*lenstack].operator_data = operator_data;
 
 	(*lenstack)++;
 }
@@ -673,7 +791,7 @@ cleanOpStack(TSQueryParserState state,
 
 		(*lenstack)--;
 		pushOperator(state, stack[*lenstack].op,
-					 stack[*lenstack].distance);
+					 stack[*lenstack].operator_data);
 	}
 }
 
@@ -693,7 +811,7 @@ makepol(TSQueryParserState state,
 	char	   *strval = NULL;
 	OperatorElement opstack[STACKDEPTH];
 	int			lenstack = 0;
-	int16		weight = 0;
+	TokenData	token_data;
 	bool		prefix;
 
 	/* since this function recurses, it could be driven to stack overflow */
@@ -701,16 +819,16 @@ makepol(TSQueryParserState state,
 
 	while ((type = state->gettoken(state, &operator,
 								   &lenval, &strval,
-								   &weight, &prefix)) != PT_END)
+								   &token_data, &prefix)) != PT_END)
 	{
 		switch (type)
 		{
 			case PT_VAL:
-				pushval(opaque, state, strval, lenval, weight, prefix);
+				pushval(opaque, state, strval, lenval, token_data.weight, prefix);
 				break;
 			case PT_OPR:
 				cleanOpStack(state, opstack, &lenstack, operator);
-				pushOpStack(opstack, &lenstack, operator, weight);
+				pushOpStack(opstack, &lenstack, operator, token_data.operator_data);
 				break;
 			case PT_OPEN:
 				makepol(state, pushval, opaque);
@@ -1069,7 +1187,8 @@ infix(INFIX *in, int parentPriority, bool rightPhraseOp)
 	{
 		int8		op = in->curpol->qoperator.oper;
 		int			priority = QO_PRIORITY(in->curpol);
-		int16		distance = in->curpol->qoperator.distance;
+		int16		distance_from = in->curpol->qoperator.operator_data.distance_from;
+		int16		distance_to = in->curpol->qoperator.operator_data.distance_to;
 		INFIX		nrm;
 		bool		needParenthesis = false;
 
@@ -1096,8 +1215,13 @@ infix(INFIX *in, int parentPriority, bool rightPhraseOp)
 		in->curpol = nrm.curpol;
 		infix(in, priority, false);
 
-		/* print operator & right operand */
-		RESIZEBUF(in, 3 + (2 + 10 /* distance */ ) + (nrm.cur - nrm.buf));
+		/*
+		 * print operator & right operand
+		 * Required size is calculated as 3 for " <op> ", 2 for "<,>"
+		 * and 11 for each distance in phrase operator with minus sign.
+		 * (nrm.cur - nrm.buf) is length of the operand
+		 */
+		RESIZEBUF(in, 3 + (2 + 22) + (nrm.cur - nrm.buf));
 		switch (op)
 		{
 			case OP_OR:
@@ -1107,10 +1231,12 @@ infix(INFIX *in, int parentPriority, bool rightPhraseOp)
 				sprintf(in->cur, " & %s", nrm.buf);
 				break;
 			case OP_PHRASE:
-				if (distance != 1)
-					sprintf(in->cur, " <%d> %s", distance, nrm.buf);
-				else
+				if (distance_from == 1 && distance_to == 1)
 					sprintf(in->cur, " <-> %s", nrm.buf);
+				else if (distance_from == distance_to)
+					sprintf(in->cur, " <%d> %s", distance_from, nrm.buf);
+				else
+					sprintf(in->cur, " <%d,%d> %s", distance_from, distance_to, nrm.buf);
 				break;
 			default:
 				/* OP_NOT is handled in above if-branch */
@@ -1195,7 +1321,10 @@ tsquerysend(PG_FUNCTION_ARGS)
 			case QI_OPR:
 				pq_sendint8(&buf, item->qoperator.oper);
 				if (item->qoperator.oper == OP_PHRASE)
-					pq_sendint16(&buf, item->qoperator.distance);
+				{
+					pq_sendint16(&buf, item->qoperator.operator_data.distance_from);
+					pq_sendint16(&buf, item->qoperator.operator_data.distance_to);
+				}
 				break;
 			default:
 				elog(ERROR, "unrecognized tsquery node type: %d", item->type);
@@ -1298,7 +1427,10 @@ tsqueryrecv(PG_FUNCTION_ARGS)
 
 			item->qoperator.oper = oper;
 			if (oper == OP_PHRASE)
-				item->qoperator.distance = (int16) pq_getmsgint(buf, sizeof(int16));
+			{
+				item->qoperator.operator_data.distance_from = (int16) pq_getmsgint(buf, sizeof(int16));
+				item->qoperator.operator_data.distance_to = (int16) pq_getmsgint(buf, sizeof(int16));
+			}
 		}
 		else
 			elog(ERROR, "unrecognized tsquery node type: %d", item->type);

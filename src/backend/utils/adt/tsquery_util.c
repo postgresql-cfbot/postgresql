@@ -121,8 +121,16 @@ QTNodeCompare(QTNode *an, QTNode *bn)
 					return res;
 		}
 
-		if (ao->oper == OP_PHRASE && ao->distance != bo->distance)
-			return (ao->distance > bo->distance) ? -1 : 1;
+		if (ao->oper == OP_PHRASE)
+		{
+			if (ao->operator_data.distance_from != bo->operator_data.distance_from)
+				return (ao->operator_data.distance_from > bo->operator_data.distance_from) ? -1 : 1;
+
+			if (ao->operator_data.distance_to != bo->operator_data.distance_to)
+				return (ao->operator_data.distance_to > bo->operator_data.distance_to) ? -1 : 1;
+
+			return 0;
+		}
 
 		return 0;
 	}

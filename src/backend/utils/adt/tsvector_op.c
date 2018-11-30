@@ -1431,6 +1431,97 @@ checkcondition_str(void *checkval, QueryOperand *val, ExecPhraseData *data)
 #define TSPO_BOTH		0x04	/* emit positions appearing in both L&R */
 
 static bool
+TS_phrase_output_range(ExecPhraseData *data,
+		ExecPhraseData *Ldata,
+		ExecPhraseData *Rdata,
+		int from,
+		int to,
+		int max_npos)
+{
+	int Lindex = 0;
+	int Rindex = 0;
+
+	if ((Ldata->npos == 0 && Ldata->negate && Rdata->npos != 0) ||
+		(Rdata->npos == 0 && Rdata->negate && Ldata->npos != 0))
+	{
+		if (data != NULL)
+		{
+			int npos;
+			ExecPhraseData *LRdata;
+
+			if (Ldata->npos == 0)
+			{
+				npos = Rdata->npos;
+				LRdata = Rdata;
+			}
+			else
+			{
+				npos = Ldata->npos;
+				LRdata = Ldata;
+			}
+
+			for (Rindex = 0; Rindex < npos; Rindex++)
+			{
+				int end = WEP_GETPOS(LRdata->pos[Rindex]);
+				int start = end - LRdata->width;
+				if (data->pos == NULL)
+				{
+					data->pos = (WordEntryPos *)palloc(max_npos * sizeof(WordEntryPos));
+					data->allocated = true;
+				}
+				data->pos[data->npos++] = end;
+				data->width = end - start;
+			}
+		}
+		return true;
+	}
+
+	for (Lindex = 0; Lindex < Ldata->npos; Lindex++)
+	{
+		int Lend = WEP_GETPOS(Ldata->pos[Lindex]);
+		int Lstart = Lend - Ldata->width;
+
+		for (Rindex = 0; Rindex < Rdata->npos; Rindex++)
+		{
+			int Rend = WEP_GETPOS(Rdata->pos[Rindex]);
+			int Rstart = Rend - Rdata->width;
+
+			int from_pos = from < 0 ? Lstart + from : Lend + from + Rdata->width;
+			int to_pos = to < 0 ? Lstart + to : Lend + to + Rdata->width;
+
+			bool negate = Ldata->negate || Rdata->negate;
+			bool inside = from_pos <= Rend && Rend <= to_pos;
+
+			if ((!negate && inside) || (negate && !inside))
+			{
+				if (data != NULL)
+				{
+					if (data->pos == NULL)
+					{
+						data->pos = (WordEntryPos *)palloc(max_npos * sizeof(WordEntryPos));
+						data->allocated = true;
+					}
+					data->pos[data->npos++] = Max(Lend, Rend);
+					data->width = Max(Lend, Rend) - Min(Lstart, Rstart);
+				}
+				else
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	if (data && data->npos > 0)
+	{
+		Assert(data->npos <= max_npos);
+		return true;
+	}
+
+	return false;
+}
+
+static bool
 TS_phrase_output(ExecPhraseData *data,
 				 ExecPhraseData *Ldata,
 				 ExecPhraseData *Rdata,
@@ -1649,15 +1740,10 @@ TS_phrase_execute(QueryItem *curitem, void *arg, uint32 flags,
 
 			if (curitem->qoperator.oper == OP_PHRASE)
 			{
-				/*
-				 * Compute Loffset and Roffset suitable for phrase match, and
-				 * compute overall width of whole phrase match.
-				 */
-				Loffset = curitem->qoperator.distance + Rdata.width;
-				Roffset = 0;
-				if (data)
-					data->width = curitem->qoperator.distance +
-						Ldata.width + Rdata.width;
+				return TS_phrase_output_range(data, &Ldata, &Rdata,
+						curitem->qoperator.operator_data.distance_from,
+						curitem->qoperator.operator_data.distance_to,
+						Ldata.npos + Rdata.npos);
 			}
 			else
 			{
@@ -1665,6 +1751,7 @@ TS_phrase_execute(QueryItem *curitem, void *arg, uint32 flags,
 				 * For OP_AND, set output width and alignment like OP_OR (see
 				 * comment below)
 				 */
+				Assert(curitem->qoperator.oper == OP_AND);
 				maxwidth = Max(Ldata.width, Rdata.width);
 				Loffset = maxwidth - Ldata.width;
 				Roffset = maxwidth - Rdata.width;

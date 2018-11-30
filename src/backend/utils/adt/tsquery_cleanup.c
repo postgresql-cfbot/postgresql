@@ -234,13 +234,15 @@ clean_NOT(QueryItem *ptr, int *len)
  * '((x <-> a) | a) <-> y' will become 'x <2> y'.
  */
 static NODE *
-clean_stopword_intree(NODE *node, int *ladd, int *radd)
+clean_stopword_intree(NODE *node, int *ladd_from, int *radd_from,
+		int *ladd_to, int *radd_to)
 {
 	/* since this function recurses, it could be driven to stack overflow. */
 	check_stack_depth();
 
 	/* default output parameters indicate no change in parent distance */
-	*ladd = *radd = 0;
+	*ladd_from = *radd_from = 0;
+	*ladd_to = *radd_to = 0;
 
 	if (node->valnode->type == QI_VAL)
 		return node;
@@ -255,7 +257,8 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 	if (node->valnode->qoperator.oper == OP_NOT)
 	{
 		/* NOT doesn't change pattern width, so just report child distances */
-		node->right = clean_stopword_intree(node->right, ladd, radd);
+		node->right = clean_stopword_intree(node->right, ladd_from, radd_from,
+				ladd_to, radd_to);
 		if (!node->right)
 		{
 			freetree(node);
@@ -266,19 +269,28 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 	{
 		NODE	   *res = node;
 		bool		isphrase;
-		int			ndistance,
-					lladd,
-					lradd,
-					rladd,
-					rradd;
+		int			ndistance_from,
+					ndistance_to,
+					lladd_from,
+					lradd_from,
+					lladd_to,
+					lradd_to,
+					rladd_from,
+					rradd_from,
+					rladd_to,
+					rradd_to;
 
 		/* First, recurse */
-		node->left = clean_stopword_intree(node->left, &lladd, &lradd);
-		node->right = clean_stopword_intree(node->right, &rladd, &rradd);
+		node->left = clean_stopword_intree(node->left,
+				&lladd_from, &lradd_from, &lladd_to, &lradd_to);
+		node->right = clean_stopword_intree(node->right,
+				&rladd_from, &rradd_from, &rladd_to, &rradd_to);
 
 		/* Check if current node is OP_PHRASE, get its distance */
 		isphrase = (node->valnode->qoperator.oper == OP_PHRASE);
-		ndistance = isphrase ? node->valnode->qoperator.distance : 0;
+		ndistance_from = isphrase ? node->valnode->qoperator.operator_data.distance_from : 0;
+		ndistance_to = isphrase ? node->valnode->qoperator.operator_data.distance_to : 0;
+
 
 		if (node->left == NULL && node->right == NULL)
 		{
@@ -293,9 +305,15 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 			 * corresponds to what TS_execute will do in non-stopword cases.
 			 */
 			if (isphrase)
-				*ladd = *radd = lladd + ndistance + rladd;
+			{
+				*ladd_from = *radd_from = lladd_from + ndistance_from + rladd_from;
+				*ladd_to =  *radd_to =  lladd_to + ndistance_to + rladd_to;
+			}
 			else
-				*ladd = *radd = Max(lladd, rladd);
+			{
+				*ladd_from = *radd_from = Max(lladd_from, rladd_from);
+				*ladd_to = *radd_to = Max(lladd_to, rladd_to);
+			}
 			freetree(node);
 			return NULL;
 		}
@@ -306,14 +324,18 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 			if (isphrase)
 			{
 				/* operator's own distance must propagate to left */
-				*ladd = lladd + ndistance + rladd;
-				*radd = rradd;
+				*ladd_from = lladd_from + ndistance_from + rladd_from;
+				*ladd_to = lladd_to + ndistance_to + rladd_to;
+				*radd_from = rradd_from;
+				*radd_to = rradd_to;
 			}
 			else
 			{
 				/* at non-phrase op, just forget the left subnode entirely */
-				*ladd = rladd;
-				*radd = rradd;
+				*ladd_from = rladd_from;
+				*ladd_to = rladd_to;
+				*radd_from = rradd_from;
+				*radd_to = rradd_to;
 			}
 			res = node->right;
 			pfree(node);
@@ -325,14 +347,18 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 			if (isphrase)
 			{
 				/* operator's own distance must propagate to right */
-				*ladd = lladd;
-				*radd = lradd + ndistance + rradd;
+				*ladd_from =  lladd_from;
+				*ladd_to =  lladd_to;
+				*radd_from = lradd_from + ndistance_from +  rradd_from;
+				*radd_to = lradd_to + ndistance_to + rradd_to;
 			}
 			else
 			{
 				/* at non-phrase op, just forget the right subnode entirely */
-				*ladd = lladd;
-				*radd = lradd;
+				*ladd_from = lladd_from;
+				*ladd_to = lladd_to;
+				*radd_from = lradd_from;
+				*radd_to = lradd_to;
 			}
 			res = node->left;
 			pfree(node);
@@ -340,10 +366,15 @@ clean_stopword_intree(NODE *node, int *ladd, int *radd)
 		else if (isphrase)
 		{
 			/* Absorb appropriate corrections at this level */
-			node->valnode->qoperator.distance += lradd + rladd;
+			node->valnode->qoperator.operator_data.distance_from +=
+				lradd_from + rladd_from;
+			node->valnode->qoperator.operator_data.distance_to +=
+				lradd_to + rladd_to;
 			/* Propagate up any unaccounted-for corrections */
-			*ladd = lladd;
-			*radd = rradd;
+			*ladd_from = lladd_from;
+			*ladd_to =  lladd_to;
+			*radd_from = rradd_from;
+			*radd_to = rradd_to;
 		}
 		else
 		{
@@ -390,8 +421,10 @@ cleanup_tsquery_stopwords(TSQuery in)
 				commonlen,
 				i;
 	NODE	   *root;
-	int			ladd,
-				radd;
+	int			ladd_from,
+				radd_from;
+	int			ladd_to,
+				radd_to;
 	TSQuery		out;
 	QueryItem  *items;
 	char	   *operands;
@@ -400,7 +433,7 @@ cleanup_tsquery_stopwords(TSQuery in)
 		return in;
 
 	/* eliminate stop words */
-	root = clean_stopword_intree(maketree(GETQUERY(in)), &ladd, &radd);
+	root = clean_stopword_intree(maketree(GETQUERY(in)), &ladd_from, &radd_from, &ladd_to, &radd_to);
 	if (root == NULL)
 	{
 		ereport(NOTICE,

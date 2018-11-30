@@ -487,12 +487,14 @@ pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, 
 				cntvar = 0,
 				cntpos = 0,
 				cnt = 0;
+	OperatorData operator_data;
 	MorphOpaque *data = (MorphOpaque *) DatumGetPointer(opaque);
 
 	prs.lenwords = 4;
 	prs.curwords = 0;
 	prs.pos = 0;
 	prs.words = (ParsedWord *) palloc(sizeof(ParsedWord) * prs.lenwords);
+	OPERATOR_DATA_INITIALIZE(operator_data, 0);
 
 	parsetext(data->cfg_id, &prs, strval, lenval);
 
@@ -511,7 +513,10 @@ pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, 
 					/* put placeholders for each missing stop word */
 					pushStop(state);
 					if (cntpos)
-						pushOperator(state, data->qoperator, 1);
+					{
+						OPERATOR_DATA_INITIALIZE(operator_data, 1);
+						pushOperator(state, data->qoperator, operator_data);
+					}
 					cntpos++;
 					pos++;
 				}
@@ -539,20 +544,21 @@ pushval_morph(Datum opaque, TSQueryParserState state, char *strval, int lenval, 
 							  ((prs.words[count].flags & TSL_PREFIX) || prefix));
 					pfree(prs.words[count].word);
 					if (cnt)
-						pushOperator(state, OP_AND, 0);
+						pushOperator(state, OP_AND, operator_data);
 					cnt++;
 					count++;
 				}
 
 				if (cntvar)
-					pushOperator(state, OP_OR, 0);
+					pushOperator(state, OP_OR, operator_data);
 				cntvar++;
 			}
 
 			if (cntpos)
 			{
 				/* distance may be useful */
-				pushOperator(state, data->qoperator, 1);
+				OPERATOR_DATA_INITIALIZE(operator_data, 1);
+				pushOperator(state, data->qoperator, operator_data);
 			}
 
 			cntpos++;

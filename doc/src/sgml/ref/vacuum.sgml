@@ -28,6 +28,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
 
     FULL
     FREEZE
+    FREEZE_ONLY
     VERBOSE
     ANALYZE
     DISABLE_PAGE_SKIPPING
@@ -117,6 +118,24 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       <xref linkend="guc-vacuum-freeze-min-age"/> and
       <xref linkend="guc-vacuum-freeze-table-age"/> parameters
       set to zero.  Aggressive freezing is always performed when the
+      table is rewritten, so this option is redundant when <literal>FULL</literal>
+      is specified.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FREEZE_ONLY</literal></term>
+    <listitem>
+     <para>
+      <command>VACUUM</command> removes dead tuples and prunes HOT-updated
+      tuples chain for live tuples. If the table has any dead tuple it removes
+      them on both table and its indexes.
+      This option is same as <literal>FREEZE</literal> except for it disables
+      removing dead tuples, so it does only freezing tuples and pruning
+      HOT-updated tuple chains. This is intended to be used when necessary to
+      prevent transaction ID wraparound as quick as possible.
+      Aggressive freezing is always performed when the
       table is rewritten, so this option is redundant when <literal>FULL</literal>
       is specified.
      </para>

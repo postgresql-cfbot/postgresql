@@ -188,7 +188,8 @@ extern void heap_update_snapshot(HeapScanDesc scan, Snapshot snapshot);
 extern void heap_page_prune_opt(Relation relation, Buffer buffer);
 extern int heap_page_prune(Relation relation, Buffer buffer,
 				TransactionId OldestXmin,
-				bool report_stats, TransactionId *latestRemovedXid);
+				bool report_stats, TransactionId *latestRemovedXid,
+				bool prune_root);
 extern void heap_page_prune_execute(Buffer buffer,
 						OffsetNumber *redirected, int nredirected,
 						OffsetNumber *nowdead, int ndead,

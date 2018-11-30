@@ -35,6 +35,7 @@ typedef struct
 	int			nredirected;	/* numbers of entries in arrays below */
 	int			ndead;
 	int			nunused;
+	bool		prune_root;		/* do we prune whole chain or root item? */
 	/* arrays that accumulate indexes of items to be changed */
 	OffsetNumber redirected[MaxHeapTuplesPerPage * 2];
 	OffsetNumber nowdead[MaxHeapTuplesPerPage];
@@ -53,6 +54,8 @@ static void heap_prune_record_redirect(PruneState *prstate,
 						   OffsetNumber offnum, OffsetNumber rdoffnum);
 static void heap_prune_record_dead(PruneState *prstate, OffsetNumber offnum);
 static void heap_prune_record_unused(PruneState *prstate, OffsetNumber offnum);
+static void heap_prune_advance_latest_removed_xid(PruneState *prstate, Page page,
+												  OffsetNumber offnum);
 
 
 /*
@@ -152,7 +155,8 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 															 * needed */
 
 			/* OK to prune */
-			(void) heap_page_prune(relation, buffer, OldestXmin, true, &ignore);
+			(void) heap_page_prune(relation, buffer, OldestXmin, true, &ignore,
+								   true);
 		}
 
 		/* And release buffer lock */
@@ -179,7 +183,8 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
  */
 int
 heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
-				bool report_stats, TransactionId *latestRemovedXid)
+				bool report_stats, TransactionId *latestRemovedXid,
+				bool prune_root)
 {
 	int			ndeleted = 0;
 	Page		page = BufferGetPage(buffer);
@@ -201,6 +206,7 @@ heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
 	prstate.new_prune_xid = InvalidTransactionId;
 	prstate.latestRemovedXid = *latestRemovedXid;
 	prstate.nredirected = prstate.ndead = prstate.nunused = 0;
+	prstate.prune_root = prune_root;
 	memset(prstate.marked, 0, sizeof(prstate.marked));
 
 	/* Scan the page */
@@ -537,11 +543,7 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 		 * find another DEAD tuple is a fairly unusual corner case.)
 		 */
 		if (tupdead)
-		{
 			latestdead = offnum;
-			HeapTupleHeaderAdvanceLatestRemovedXid(htup,
-												   &prstate->latestRemovedXid);
-		}
 		else if (!recent_dead)
 			break;
 
@@ -580,6 +582,7 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 		 */
 		for (i = 1; (i < nchain) && (chainitems[i - 1] != latestdead); i++)
 		{
+			heap_prune_advance_latest_removed_xid(prstate, dp, chainitems[i]);
 			heap_prune_record_unused(prstate, chainitems[i]);
 			ndeleted++;
 		}
@@ -598,7 +601,13 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 		 * redirect the root to the correct chain member.
 		 */
 		if (i >= nchain)
-			heap_prune_record_dead(prstate, rootoffnum);
+		{
+			if (prstate->prune_root)
+			{
+				heap_prune_advance_latest_removed_xid(prstate, dp, rootoffnum);
+				heap_prune_record_dead(prstate, rootoffnum);
+			}
+		}
 		else
 			heap_prune_record_redirect(prstate, rootoffnum, chainitems[i]);
 	}
@@ -611,10 +620,34 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 		 * redirect item.  We can clean up by setting the redirect item to
 		 * DEAD state.
 		 */
-		heap_prune_record_dead(prstate, rootoffnum);
+		if (prstate->prune_root)
+			heap_prune_record_dead(prstate, rootoffnum);
 	}
 
 	return ndeleted;
+}
+
+/*
+ * Advance latestRemovedXid using by the given page and offset. This
+ * function is used for the deleted tuples in the HOT chain. Since the
+ * root line pointer can be redirected we skip it.
+ */
+static void
+heap_prune_advance_latest_removed_xid(PruneState *prstate, Page page,
+									  OffsetNumber offnum)
+{
+	ItemId		lp;
+	HeapTupleHeader	htup;
+
+	lp = PageGetItemId(page, offnum);
+	Assert(ItemIdIsNormal(lp) || ItemIdIsRedirected(lp));
+
+	if (ItemIdIsRedirected(lp))
+		return;
+
+	htup = (HeapTupleHeader) PageGetItem(page, lp);
+	HeapTupleHeaderAdvanceLatestRemovedXid(htup,
+										   &prstate->latestRemovedXid);
 }
 
 /* Record lowest soon-prunable XID */

@@ -91,7 +91,7 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 	/* sanity checks on options */
 	Assert(vacstmt->options & (VACOPT_VACUUM | VACOPT_ANALYZE));
 	Assert((vacstmt->options & VACOPT_VACUUM) ||
-		   !(vacstmt->options & (VACOPT_FULL | VACOPT_FREEZE)));
+		   !(vacstmt->options & (VACOPT_FULL | VACOPT_FREEZE | VACOPT_FREEZE_ONLY)));
 	Assert(!(vacstmt->options & VACOPT_SKIPTOAST));
 
 	/*
@@ -113,10 +113,11 @@ ExecVacuum(VacuumStmt *vacstmt, bool isTopLevel)
 	}
 
 	/*
-	 * All freeze ages are zero if the FREEZE option is given; otherwise pass
-	 * them as -1 which means to use the default values.
+	 * All freeze ages are zero if either the FREEZE option or the FREEZE_ONLY
+	 * option is given; otherwise pass them as -1 which means to use the default
+	 * values.
 	 */
-	if (vacstmt->options & VACOPT_FREEZE)
+	if (vacstmt->options & (VACOPT_FREEZE | VACOPT_FREEZE_ONLY))
 	{
 		params.freeze_min_age = 0;
 		params.freeze_table_age = 0;

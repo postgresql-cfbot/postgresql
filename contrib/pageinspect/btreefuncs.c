@@ -29,6 +29,7 @@
 
 #include "pageinspect.h"
 
+#include "access/genam.h"
 #include "access/nbtree.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
@@ -242,6 +243,7 @@ bt_page_stats(PG_FUNCTION_ARGS)
  */
 struct user_args
 {
+	Relation	rel;
 	Page		page;
 	OffsetNumber offset;
 };
@@ -253,9 +255,9 @@ struct user_args
  * ------------------------------------------------------
  */
 static Datum
-bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset)
+bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset, Relation rel)
 {
-	char	   *values[6];
+	char	   *values[7];
 	HeapTuple	tuple;
 	ItemId		id;
 	IndexTuple	itup;
@@ -264,6 +266,8 @@ bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset)
 	int			dlen;
 	char	   *dump;
 	char	   *ptr;
+	ItemPointer htid;
+	BTPageOpaque opaque;
 
 	id = PageGetItemId(page, offset);
 
@@ -282,16 +286,53 @@ bt_page_print_tuples(FuncCallContext *fctx, Page page, OffsetNumber offset)
 	values[j++] = psprintf("%c", IndexTupleHasVarwidths(itup) ? 't' : 'f');
 
 	ptr = (char *) itup + IndexInfoFindDataOffset(itup->t_info);
-	dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
-	dump = palloc0(dlen * 3 + 1);
-	values[j] = dump;
-	for (off = 0; off < dlen; off++)
+	if (rel)
 	{
-		if (off > 0)
-			*dump++ = ' ';
-		sprintf(dump, "%02x", *(ptr + off) & 0xff);
-		dump += 2;
+		TupleDesc	itupdesc = RelationGetDescr(rel);
+		Datum		datvalues[INDEX_MAX_KEYS];
+		bool		isnull[INDEX_MAX_KEYS];
+		int			natts;
+		int			indnkeyatts;
+
+		natts = BTreeTupleGetNAtts(itup, rel);
+
+		itupdesc->natts = natts;
+		memset(&isnull, 0xFF, sizeof(isnull));
+		index_deform_tuple(itup, itupdesc, datvalues, isnull);
+		indnkeyatts = rel->rd_index->indnkeyatts;
+		rel->rd_index->indnkeyatts = natts;
+		values[j++] = BuildIndexValueDescription(rel, datvalues, isnull);
+		itupdesc->natts = IndexRelationGetNumberOfAttributes(rel);
+		rel->rd_index->indnkeyatts = indnkeyatts;
 	}
+	else
+	{
+		dlen = IndexTupleSize(itup) - IndexInfoFindDataOffset(itup->t_info);
+		dump = palloc0(dlen * 3 + 1);
+		values[j++] = dump;
+		for (off = 0; off < dlen; off++)
+		{
+			if (off > 0)
+				*dump++ = ' ';
+			sprintf(dump, "%02x", *(ptr + off) & 0xff);
+			dump += 2;
+		}
+	}
+
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	if (P_ISLEAF(opaque) && offset >= P_FIRSTDATAKEY(opaque))
+		htid = &itup->t_tid;
+	else if (_bt_heapkeyspace(rel))
+		htid = BTreeTupleGetHeapTID(itup);
+	else
+		htid = NULL;
+
+	if (htid)
+		values[j] = psprintf("(%u,%u)",
+							 ItemPointerGetBlockNumberNoCheck(htid),
+							 ItemPointerGetOffsetNumberNoCheck(htid));
+	else
+		values[j] = NULL;
 
 	tuple = BuildTupleFromCStrings(fctx->attinmeta, values);
 
@@ -365,11 +406,11 @@ bt_page_items(PG_FUNCTION_ARGS)
 
 		uargs = palloc(sizeof(struct user_args));
 
+		uargs->rel = rel;
 		uargs->page = palloc(BLCKSZ);
 		memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
 
 		UnlockReleaseBuffer(buffer);
-		relation_close(rel, AccessShareLock);
 
 		uargs->offset = FirstOffsetNumber;
 
@@ -396,12 +437,13 @@ bt_page_items(PG_FUNCTION_ARGS)
 
 	if (fctx->call_cntr < fctx->max_calls)
 	{
-		result = bt_page_print_tuples(fctx, uargs->page, uargs->offset);
+		result = bt_page_print_tuples(fctx, uargs->page, uargs->offset, uargs->rel);
 		uargs->offset++;
 		SRF_RETURN_NEXT(fctx, result);
 	}
 	else
 	{
+		relation_close(uargs->rel, AccessShareLock);
 		pfree(uargs->page);
 		pfree(uargs);
 		SRF_RETURN_DONE(fctx);
@@ -481,7 +523,7 @@ bt_page_items_bytea(PG_FUNCTION_ARGS)
 
 	if (fctx->call_cntr < fctx->max_calls)
 	{
-		result = bt_page_print_tuples(fctx, uargs->page, uargs->offset);
+		result = bt_page_print_tuples(fctx, uargs->page, uargs->offset, NULL);
 		uargs->offset++;
 		SRF_RETURN_NEXT(fctx, result);
 	}
@@ -560,7 +602,7 @@ bt_metap(PG_FUNCTION_ARGS)
 	 * Get values of extended metadata if available, use default values
 	 * otherwise.
 	 */
-	if (metad->btm_version == BTREE_VERSION)
+	if (metad->btm_version >= BTREE_META_VERSION)
 	{
 		values[j++] = psprintf("%u", metad->btm_oldest_btpo_xact);
 		values[j++] = psprintf("%f", metad->btm_last_cleanup_num_heap_tuples);

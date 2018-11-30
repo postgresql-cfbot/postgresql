@@ -441,8 +441,8 @@ ALTER SERVER s1 OWNER TO regress_test_indirect;
 RESET ROLE;
 DROP ROLE regress_test_indirect;                            -- ERROR
 ERROR:  role "regress_test_indirect" cannot be dropped because some objects depend on it
-DETAIL:  owner of server s1
-privileges for foreign-data wrapper foo
+DETAIL:  privileges for foreign-data wrapper foo
+owner of server s1
 \des+
                                                                                  List of foreign servers
  Name |           Owner           | Foreign-data wrapper |                   Access privileges                   |  Type  | Version |             FDW options              | Description 
@@ -1998,9 +1998,9 @@ DROP TABLE temp_parted;
 DROP SCHEMA foreign_schema CASCADE;
 DROP ROLE regress_test_role;                                -- ERROR
 ERROR:  role "regress_test_role" cannot be dropped because some objects depend on it
-DETAIL:  privileges for server s4
+DETAIL:  owner of user mapping for regress_test_role on server s6
 privileges for foreign-data wrapper foo
-owner of user mapping for regress_test_role on server s6
+privileges for server s4
 DROP SERVER t1 CASCADE;
 NOTICE:  drop cascades to user mapping for public on server t1
 DROP USER MAPPING FOR regress_test_role SERVER s6;

@@ -532,6 +532,11 @@ findDependentObjects(const ObjectAddress *object,
 	else
 		nkeys = 2;
 
+	/*
+	 * Note that we rely on DependDependerIndexId scan order to make
+	 * diagnostic messages deterministic.  (e.g., objsubid = 0 entries will be
+	 * processed before other entries for the same dependent object.)
+	 */
 	scan = systable_beginscan(*depRel, DependDependerIndexId, true,
 							  NULL, nkeys, key);
 
@@ -727,6 +732,11 @@ findDependentObjects(const ObjectAddress *object,
 	else
 		nkeys = 2;
 
+	/*
+	 * Note that we rely on DependReferenceIndexId scan order to make
+	 * diagnostic messages deterministic.  (e.g., refobjsubid = 0 entries will
+	 * be processed before other entries for the same referenced object.)
+	 */
 	scan = systable_beginscan(*depRel, DependReferenceIndexId, true,
 							  NULL, nkeys, key);
 

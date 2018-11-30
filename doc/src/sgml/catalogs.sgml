@@ -2943,6 +2943,20 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </entry>
      </row>
 
+     <row>
+      <entry><structfield>depcreate</structfield></entry>
+      <entry><type>int4</type></entry>
+      <entry></entry>
+      <entry>
+       A per-backend sequentially assigned number for this dependency
+       relationship.  Used as a tiebreaker in the event of multiple
+       internal dependency relationships of otherwise equal
+       precedence.  Identifiers are assigned in descending order to
+       ensure that the most recently entered dependency is the one
+       referenced by <literal>HINT</literal> fields.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -3060,7 +3074,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        that the system itself depends on the referenced object, and so
        that object must never be deleted.  Entries of this type are
        created only by <command>initdb</command>.  The columns for the
-       dependent object contain zeroes.
+       dependent object and the <structfield>depcreate</structfield>
+       column contain zeroes.
       </para>
      </listitem>
     </varlistentry>

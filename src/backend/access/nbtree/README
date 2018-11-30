@@ -28,36 +28,59 @@ right-link to find the new page containing the key range you're looking
 for.  This might need to be repeated, if the page has been split more than
 once.
 
+The requirement that all btree keys be unique is satisfied by treating heap
+TID as a tiebreaker attribute.  Logical duplicates are sorted in heap item
+pointer order.  We don't use btree keys to disambiguate downlinks from the
+internal pages during a page split, though: only one entry in the parent
+level will be pointing at the page we just split, so the link fields can be
+used to re-find downlinks in the parent via a linear search.  (This is
+actually a legacy of when heap TID was not treated as part of the keyspace,
+but it does no harm to keep things that way.)
+
+Lehman and Yao talk about pairs of "separator" keys and downlinks in
+internal pages rather than tuples or records.  We use the term "pivot"
+tuple to distinguish tuples which don't point to heap tuples, that are
+used only for tree navigation.  Pivot tuples include all tuples on
+non-leaf pages and high keys on leaf pages.  Note that pivot tuples are
+only used to represent which part of the key space belongs on each page,
+and can have attribute values copied from non-pivot tuples that were
+deleted and killed by VACUUM some time ago.  A pivot tuple may contain a
+"separator" key and downlink, just a separator key (in practice the
+downlink will be garbage), or just a downlink.  We aren't always clear on
+which case applies, but it should be obvious from context.
+
+Lehman and Yao require that the key range for a subtree S is described by
+Ki < v <= Ki+1 where Ki and Ki+1 are the adjacent keys in the parent page.
+A search where the scan key is equal to a pivot tuple in an upper tree
+level must descend to the left of that pivot to ensure it finds any equal
+keys.  Pivot tuples are always a _strict_ lower bound on items on their
+downlink page; the equal item(s) being searched for must therefore be to
+the left of that downlink page on the next level down.  (It's possible to
+arrange for internal page tuples to be strict lower bounds in all cases
+because their values come from leaf tuples, which are guaranteed unique by
+the use of heap TID as a tiebreaker.  We also make use of hard-coded
+negative infinity values in internal pages.  Rightmost pages don't have a
+high key, though they conceptually have a positive infinity high key).  A
+handy property of this design is that there is never any need to
+distinguish between equality in the case where all attributes/keys are used
+in a scan from equality where only some prefix is used.
+
+In practice, exact equality with pivot tuples on internal pages is
+extremely rare when all attributes (including even the heap TID attribute)
+are used in a search.  This is due to suffix truncation: truncated
+attributes are treated as having the value negative infinity, and
+truncation almost always manages to at least truncate away the trailing
+heap TID attribute.  While Lehman and Yao don't have anything to say about
+suffix truncation, the design used by nbtree is perfectly complementary.
+The later section on suffix truncation will be helpful if it's unclear how
+the Lehman & Yao invariants work with a real world example involving
+suffix truncation.
+
 Differences to the Lehman & Yao algorithm
 -----------------------------------------
 
 We have made the following changes in order to incorporate the L&Y algorithm
 into Postgres:
-
-The requirement that all btree keys be unique is too onerous,
-but the algorithm won't work correctly without it.  Fortunately, it is
-only necessary that keys be unique on a single tree level, because L&Y
-only use the assumption of key uniqueness when re-finding a key in a
-parent page (to determine where to insert the key for a split page).
-Therefore, we can use the link field to disambiguate multiple
-occurrences of the same user key: only one entry in the parent level
-will be pointing at the page we had split.  (Indeed we need not look at
-the real "key" at all, just at the link field.)  We can distinguish
-items at the leaf level in the same way, by examining their links to
-heap tuples; we'd never have two items for the same heap tuple.
-
-Lehman and Yao assume that the key range for a subtree S is described
-by Ki < v <= Ki+1 where Ki and Ki+1 are the adjacent keys in the parent
-page.  This does not work for nonunique keys (for example, if we have
-enough equal keys to spread across several leaf pages, there *must* be
-some equal bounding keys in the first level up).  Therefore we assume
-Ki <= v <= Ki+1 instead.  A search that finds exact equality to a
-bounding key in an upper tree level must descend to the left of that
-key to ensure it finds any equal keys in the preceding page.  An
-insertion that sees the high key of its target page is equal to the key
-to be inserted has a choice whether or not to move right, since the new
-key could go on either page.  (Currently, we try to find a page where
-there is room for the new key without a split.)
 
 Lehman and Yao don't require read locks, but assume that in-memory
 copies of tree pages are unshared.  Postgres shares in-memory buffers
@@ -142,9 +165,9 @@ Lehman and Yao assume fixed-size keys, but we must deal with
 variable-size keys.  Therefore there is not a fixed maximum number of
 keys per page; we just stuff in as many as will fit.  When we split a
 page, we try to equalize the number of bytes, not items, assigned to
-each of the resulting pages.  Note we must include the incoming item in
-this calculation, otherwise it is possible to find that the incoming
-item doesn't fit on the split page where it needs to go!
+pages (though suffix truncation is also considered).  Note we must include
+the incoming item in this calculation, otherwise it is possible to find
+that the incoming item doesn't fit on the split page where it needs to go!
 
 The Deletion Algorithm
 ----------------------
@@ -598,33 +621,113 @@ the order of multiple keys for a given column is unspecified.)  An
 insertion scankey uses the same array-of-ScanKey data structure, but the
 sk_func pointers point to btree comparison support functions (ie, 3-way
 comparators that return int4 values interpreted as <0, =0, >0).  In an
-insertion scankey there is exactly one entry per index column.  Insertion
-scankeys are built within the btree code (eg, by _bt_mkscankey()) and are
-used to locate the starting point of a scan, as well as for locating the
-place to insert a new index tuple.  (Note: in the case of an insertion
-scankey built from a search scankey, there might be fewer keys than
-index columns, indicating that we have no constraints for the remaining
-index columns.)  After we have located the starting point of a scan, the
-original search scankey is consulted as each index entry is sequentially
-scanned to decide whether to return the entry and whether the scan can
-stop (see _bt_checkkeys()).
+insertion scankey there is exactly one entry per index column.  There is
+also other data about the rules used to locate where to begin the scan,
+such as whether or not the scan is a "nextkey" scan.  Insertion scankeys
+are built within the btree code (eg, by _bt_mkscankey()) and are used to
+locate the starting point of a scan, as well as for locating the place to
+insert a new index tuple.  (Note: in the case of an insertion scankey built
+from a search scankey, there might be fewer keys than index columns,
+indicating that we have no constraints for the remaining index columns.)
+After we have located the starting point of a scan, the original search
+scankey is consulted as each index entry is sequentially scanned to decide
+whether to return the entry and whether the scan can stop (see
+_bt_checkkeys()).
 
-We use term "pivot" index tuples to distinguish tuples which don't point
-to heap tuples, but rather used for tree navigation.  Pivot tuples includes
-all tuples on non-leaf pages and high keys on leaf pages.  Note that pivot
-index tuples are only used to represent which part of the key space belongs
-on each page, and can have attribute values copied from non-pivot tuples
-that were deleted and killed by VACUUM some time ago.  In principle, we could
-truncate away attributes that are not needed for a page high key during a leaf
-page split, provided that the remaining attributes distinguish the last index
-tuple on the post-split left page as belonging on the left page, and the first
-index tuple on the post-split right page as belonging on the right page.  This
-optimization is sometimes called suffix truncation, and may appear in a future
-release. Since the high key is subsequently reused as the downlink in the
-parent page for the new right page, suffix truncation can increase index
-fan-out considerably by keeping pivot tuples short.  INCLUDE indexes similarly
-truncate away non-key attributes at the time of a leaf page split,
-increasing fan-out.
+Notes about suffix truncation
+-----------------------------
+
+We truncate away suffix key attributes that are not needed for a page high
+key during a leaf page split when the remaining attributes distinguish the
+last index tuple on the post-split left page as belonging on the left page,
+and the first index tuple on the post-split right page as belonging on the
+right page.  A truncated tuple logically retains all key attributes, though
+they implicitly have "negative infinity" as their value, and have no
+storage overhead.  Since the high key is subsequently reused as the
+downlink in the parent page for the new right page, suffix truncation makes
+pivot tuples short.  INCLUDE indexes are guaranteed to have non-key
+attributes truncated at the time of a leaf page split, but may also have
+some key attributes truncated away, based on the usual criteria for key
+attributes.  They are not a special case, since non-key attributes are
+merely payload to B-Tree searches.
+
+The goal of suffix truncation of key attributes is to improve index
+fan-out.  The technique was first described by Bayer and Unterauer (R.Bayer
+and K.Unterauer, Prefix B-Trees, ACM Transactions on Database Systems, Vol
+2, No. 1, March 1977, pp 11-26).  The Postgres implementation is loosely
+based on their paper.  Note that Postgres only implements what the paper
+refers to as simple prefix B-Trees.  Note also that the paper assumes that
+the tree has keys that consist of single strings that maintain the "prefix
+property", much like strings that are stored in a suffix tree (comparisons
+of earlier bytes must always be more significant than comparisons of later
+bytes, and, in general, the strings must compare in a way that doesn't
+break transitive consistency as they're split into pieces).  Suffix
+truncation in Postgres currently only works at the whole-attribute
+granularity, but it would be straightforward to invent opclass
+infrastructure that manufactures a smaller attribute value in the case of
+variable-length types, such as text.  An opclass support function could
+manufacture the shortest possible key value that still correctly separates
+each half of a leaf page split.
+
+There is sophisticated criteria for choosing a leaf page split point.  The
+general idea is to make suffix truncation effective without unduly
+influencing the balance of space for each half of the page split.  The
+choice of leaf split point can be thought of as a choice among points
+"between" items on the page to be split, at least if you pretend that the
+incoming tuple was placed on the page already, without provoking a split.
+The split point between two index tuples with differences that appear as
+early as possible allows us to truncate away as many attributes as
+possible.
+
+Obviously suffix truncation is valuable because it makes pivot tuples
+smaller, which delays splits of internal pages, but that isn't the only
+reason why it's effective.  There are cases where suffix truncation can
+leave a B-Tree significantly smaller in size than it would have otherwise
+been, without actually making any pivot tuple smaller due to restrictions
+relating to alignment.  The criteria for choosing a leaf page split point
+for suffix truncation is often also predictive of future space utilization.
+Furthermore, even truncation that doesn't make pivot tuples smaller still
+prevents pivot tuples from being more restrictive than truly necessary in
+how they describe which values belong on which leaf pages.
+
+While it's not possible to correctly perform suffix truncation during
+internal page splits, it's still useful to be discriminating when splitting
+an internal page.  The split point that implies a downlink be inserted in
+the parent that's the smallest one available within an acceptable range of
+the optimal fillfactor-wise split point is chosen.  This idea also comes
+from the Prefix B-Tree paper.  This process has much in common with to what
+happens at the leaf level to make suffix truncation effective.  The overall
+effect is that suffix truncation tends to produce smaller and less
+discriminating pivot tuples, especially early in the lifetime of the index,
+while biasing internal page splits makes the earlier, less discriminating
+pivot tuples end up in the root page, delaying root page splits.
+
+With v4 B-Trees, every tuple at the leaf level must be individually
+locatable by an insertion scankey that's fully filled-out by
+_bt_mkscankey().  Heap TID is treated as a tie-breaker key attribute to
+make this work.  Suffix truncation must occasionally make a pivot tuple
+*larger* than the leaf tuple that it's based on, since a heap TID must be
+appended when nothing else distinguishes each side of a leaf split.  This
+is not represented in the same way as it is at the leaf level (we must
+append an additional attribute), since pivot tuples already use the generic
+IndexTuple fields to describe which child page they point to, and how many
+attributes are in the pivot tuple.  Adding a heap TID attribute during a
+leaf page split should only occur when there is an entire page full of
+duplicates, though, since the logic for selecting a split point will do all
+it can to avoid this outcome --- it may apply "many duplicates" mode, or
+"single value" mode.
+
+Avoiding appending a heap TID to a pivot tuple is about much more than just
+saving a single MAXALIGN() quantum in each of the pages that store the new
+pivot.  It's worth going out of our way to avoid having a single value (or
+composition of key values) span two leaf pages when that isn't truly
+necessary, since if that's allowed to happen every point index scan will
+have to visit both pages.  It also makes it less likely that VACUUM will be
+able to perform page deletion on either page.  Finally, it's not unheard of
+for unique indexes to have pages full of duplicates in the event of extreme
+contention (which appears as buffer lock contention) --- this is also
+ameliorated.  These are all examples of how "false sharing" across B-Tree
+pages can cause performance problems.
 
 Notes About Data Representation
 -------------------------------
@@ -637,20 +740,26 @@ don't need to renumber any existing pages when splitting the root.)
 
 The Postgres disk block data format (an array of items) doesn't fit
 Lehman and Yao's alternating-keys-and-pointers notion of a disk page,
-so we have to play some games.
+so we have to play some games.  (Presumably things are explained this
+way because of internal page splits, which conceptually split at the
+middle of an existing pivot tuple -- the tuple's "separator" key goes on
+the left side of the split as the left side's new high key, while the
+tuple's pointer/downlink goes on the right side as the first/minus
+infinity downlink.)
 
 On a page that is not rightmost in its tree level, the "high key" is
 kept in the page's first item, and real data items start at item 2.
 The link portion of the "high key" item goes unused.  A page that is
-rightmost has no "high key", so data items start with the first item.
-Putting the high key at the left, rather than the right, may seem odd,
-but it avoids moving the high key as we add data items.
+rightmost has no "high key" (it's implicitly positive infinity), so
+data items start with the first item.  Putting the high key at the
+left, rather than the right, may seem odd, but it avoids moving the
+high key as we add data items.
 
 On a leaf page, the data items are simply links to (TIDs of) tuples
 in the relation being indexed, with the associated key values.
 
 On a non-leaf page, the data items are down-links to child pages with
-bounding keys.  The key in each data item is the *lower* bound for
+bounding keys.  The key in each data item is a strict lower bound for
 keys on that child page, so logically the key is to the left of that
 downlink.  The high key (if present) is the upper bound for the last
 downlink.  The first data item on each such page has no lower bound
@@ -658,4 +767,5 @@ downlink.  The first data item on each such page has no lower bound
 routines must treat it accordingly.  The actual key stored in the
 item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
-than key.
+than key.  Suffix truncation's negative infinity attributes behave in
+the same way.

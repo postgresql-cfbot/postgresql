@@ -24,3 +24,25 @@ CREATE FUNCTION bt_metap(IN relname text,
     OUT last_cleanup_num_tuples real)
 AS 'MODULE_PATHNAME', 'bt_metap'
 LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- bt_page_items()
+--
+DROP FUNCTION bt_page_items(IN relname text, IN blkno int4,
+    OUT itemoffset smallint,
+    OUT ctid tid,
+    OUT itemlen smallint,
+    OUT nulls bool,
+    OUT vars bool,
+    OUT data text);
+CREATE FUNCTION bt_page_items(IN relname text, IN blkno int4,
+    OUT itemoffset smallint,
+    OUT ctid tid,
+    OUT itemlen smallint,
+    OUT nulls bool,
+    OUT vars bool,
+    OUT data text,
+    OUT htid tid)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'bt_page_items'
+LANGUAGE C STRICT PARALLEL SAFE;

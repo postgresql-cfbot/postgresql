@@ -34,6 +34,7 @@
 #include "utils/snapmgr.h"
 
 static void _bt_cachemetadata(Relation rel, BTMetaPageData *metad);
+static BTMetaPageData *_bt_getmeta(Relation rel, Buffer metabuf);
 static bool _bt_mark_page_halfdead(Relation rel, Buffer buf, BTStack stack);
 static bool _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf,
 						 bool *rightsib_empty);
@@ -77,7 +78,9 @@ _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level)
 }
 
 /*
- *	_bt_upgrademetapage() -- Upgrade a meta-page from an old format to the new.
+ *	_bt_upgrademetapage() -- Upgrade a meta-page from an old format to version
+ *	3, the last version that can be updated without broadly affecting on-disk
+ *	compatibility.  (A REINDEX is required to upgrade to version 4.)
  *
  *		This routine does purely in-memory image upgrade.  Caller is
  *		responsible for locking, WAL-logging etc.
@@ -93,11 +96,11 @@ _bt_upgrademetapage(Page page)
 
 	/* It must be really a meta page of upgradable version */
 	Assert(metaopaque->btpo_flags & BTP_META);
-	Assert(metad->btm_version < BTREE_VERSION);
+	Assert(metad->btm_version < BTREE_META_VERSION);
 	Assert(metad->btm_version >= BTREE_MIN_VERSION);
 
 	/* Set version number and fill extra fields added into version 3 */
-	metad->btm_version = BTREE_VERSION;
+	metad->btm_version = BTREE_META_VERSION;
 	metad->btm_oldest_btpo_xact = InvalidTransactionId;
 	metad->btm_last_cleanup_num_heap_tuples = -1.0;
 
@@ -107,41 +110,77 @@ _bt_upgrademetapage(Page page)
 }
 
 /*
- * Cache metadata from meta page to rel->rd_amcache.
+ * Cache metadata from input meta page to rel->rd_amcache.
  */
 static void
-_bt_cachemetadata(Relation rel, BTMetaPageData *metad)
+_bt_cachemetadata(Relation rel, BTMetaPageData *input)
 {
+	BTMetaPageData *cached_metad;
+
 	/* We assume rel->rd_amcache was already freed by caller */
 	Assert(rel->rd_amcache == NULL);
 	rel->rd_amcache = MemoryContextAlloc(rel->rd_indexcxt,
 										 sizeof(BTMetaPageData));
 
-	/*
-	 * Meta page should be of supported version (should be already checked by
-	 * caller).
-	 */
-	Assert(metad->btm_version >= BTREE_MIN_VERSION &&
-		   metad->btm_version <= BTREE_VERSION);
+	/* Meta page should be of supported version */
+	Assert(input->btm_version >= BTREE_MIN_VERSION &&
+		   input->btm_version <= BTREE_VERSION);
 
-	if (metad->btm_version == BTREE_VERSION)
+	cached_metad = (BTMetaPageData *) rel->rd_amcache;
+	if (input->btm_version >= BTREE_META_VERSION)
 	{
-		/* Last version of meta-data, no need to upgrade */
-		memcpy(rel->rd_amcache, metad, sizeof(BTMetaPageData));
+		/* Version with compatible meta-data, no need to upgrade */
+		memcpy(cached_metad, input, sizeof(BTMetaPageData));
 	}
 	else
 	{
-		BTMetaPageData *cached_metad = (BTMetaPageData *) rel->rd_amcache;
-
 		/*
 		 * Upgrade meta-data: copy available information from meta-page and
 		 * fill new fields with default values.
+		 *
+		 * Note that we cannot upgrade to BTREE_VERSION/version 4 without a
+		 * REINDEX, since extensive on-disk changes are required.
 		 */
-		memcpy(rel->rd_amcache, metad, offsetof(BTMetaPageData, btm_oldest_btpo_xact));
-		cached_metad->btm_version = BTREE_VERSION;
+		memcpy(cached_metad, input, offsetof(BTMetaPageData, btm_oldest_btpo_xact));
+		cached_metad->btm_version = BTREE_META_VERSION;
 		cached_metad->btm_oldest_btpo_xact = InvalidTransactionId;
 		cached_metad->btm_last_cleanup_num_heap_tuples = -1.0;
 	}
+}
+
+/*
+ * Get metadata from share-locked buffer containing metapage, while performing
+ * standard sanity checks.  Sanity checks here must match _bt_getroot().
+ */
+static BTMetaPageData *
+_bt_getmeta(Relation rel, Buffer metabuf)
+{
+	Page		metapg;
+	BTPageOpaque metaopaque;
+	BTMetaPageData *metad;
+
+	metapg = BufferGetPage(metabuf);
+	metaopaque = (BTPageOpaque) PageGetSpecialPointer(metapg);
+	metad = BTPageGetMeta(metapg);
+
+	/* sanity-check the metapage */
+	if (!P_ISMETA(metaopaque) ||
+		metad->btm_magic != BTREE_MAGIC)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("index \"%s\" is not a btree",
+						RelationGetRelationName(rel))));
+
+	if (metad->btm_version < BTREE_MIN_VERSION ||
+		metad->btm_version > BTREE_VERSION)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("version mismatch in index \"%s\": file version %d, "
+						"current version %d, minimal supported version %d",
+						RelationGetRelationName(rel),
+						metad->btm_version, BTREE_VERSION, BTREE_MIN_VERSION)));
+
+	return metad;
 }
 
 /*
@@ -186,7 +225,7 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 	START_CRIT_SECTION();
 
 	/* upgrade meta-page if needed */
-	if (metad->btm_version < BTREE_VERSION)
+	if (metad->btm_version < BTREE_META_VERSION)
 		_bt_upgrademetapage(metapg);
 
 	/* update cleanup-related information */
@@ -202,6 +241,8 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
+		Assert(metad->btm_version >= BTREE_META_VERSION);
+		md.version = metad->btm_version;
 		md.root = metad->btm_root;
 		md.level = metad->btm_level;
 		md.fastroot = metad->btm_fastroot;
@@ -376,7 +417,7 @@ _bt_getroot(Relation rel, int access)
 		START_CRIT_SECTION();
 
 		/* upgrade metapage if needed */
-		if (metad->btm_version < BTREE_VERSION)
+		if (metad->btm_version < BTREE_META_VERSION)
 			_bt_upgrademetapage(metapg);
 
 		metad->btm_root = rootblkno;
@@ -400,6 +441,8 @@ _bt_getroot(Relation rel, int access)
 			XLogRegisterBuffer(0, rootbuf, REGBUF_WILL_INIT);
 			XLogRegisterBuffer(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
+			Assert(metad->btm_version >= BTREE_META_VERSION);
+			md.version = metad->btm_version;
 			md.root = rootblkno;
 			md.level = 0;
 			md.fastroot = rootblkno;
@@ -595,37 +638,12 @@ _bt_getrootheight(Relation rel)
 {
 	BTMetaPageData *metad;
 
-	/*
-	 * We can get what we need from the cached metapage data.  If it's not
-	 * cached yet, load it.  Sanity checks here must match _bt_getroot().
-	 */
 	if (rel->rd_amcache == NULL)
 	{
 		Buffer		metabuf;
-		Page		metapg;
-		BTPageOpaque metaopaque;
 
 		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
-		metapg = BufferGetPage(metabuf);
-		metaopaque = (BTPageOpaque) PageGetSpecialPointer(metapg);
-		metad = BTPageGetMeta(metapg);
-
-		/* sanity-check the metapage */
-		if (!P_ISMETA(metaopaque) ||
-			metad->btm_magic != BTREE_MAGIC)
-			ereport(ERROR,
-					(errcode(ERRCODE_INDEX_CORRUPTED),
-					 errmsg("index \"%s\" is not a btree",
-							RelationGetRelationName(rel))));
-
-		if (metad->btm_version < BTREE_MIN_VERSION ||
-			metad->btm_version > BTREE_VERSION)
-			ereport(ERROR,
-					(errcode(ERRCODE_INDEX_CORRUPTED),
-					 errmsg("version mismatch in index \"%s\": file version %d, "
-							"current version %d, minimal supported version %d",
-							RelationGetRelationName(rel),
-							metad->btm_version, BTREE_VERSION, BTREE_MIN_VERSION)));
+		metad = _bt_getmeta(rel, metabuf);
 
 		/*
 		 * If there's no root page yet, _bt_getroot() doesn't expect a cache
@@ -642,17 +660,68 @@ _bt_getrootheight(Relation rel)
 		 * Cache the metapage data for next time
 		 */
 		_bt_cachemetadata(rel, metad);
-
+		/* We shouldn't have cached it if any of these fail */
+		Assert(metad->btm_magic == BTREE_MAGIC);
+		Assert(metad->btm_version >= BTREE_META_VERSION);
+		Assert(metad->btm_fastroot != P_NONE);
 		_bt_relbuf(rel, metabuf);
 	}
 
+	/* Get cached page */
 	metad = (BTMetaPageData *) rel->rd_amcache;
-	/* We shouldn't have cached it if any of these fail */
-	Assert(metad->btm_magic == BTREE_MAGIC);
-	Assert(metad->btm_version == BTREE_VERSION);
-	Assert(metad->btm_fastroot != P_NONE);
 
 	return metad->btm_fastlevel;
+}
+
+/*
+ *	_bt_heapkeyspace() -- is heap TID being treated as a key?
+ *
+ *		This is used to determine the rules that must be used to descend a
+ *		btree.  Version 4 indexes treat heap TID as a tie-breaker attribute.
+ *		pg_upgrade'd version 3 indexes need extra steps to preserve reasonable
+ *		performance when inserting a new BTScanInsert-wise duplicate tuple
+ *		among many leaf pages already full of such duplicates.
+ */
+bool
+_bt_heapkeyspace(Relation rel)
+{
+	BTMetaPageData *metad;
+
+	if (rel->rd_amcache == NULL)
+	{
+		Buffer		metabuf;
+
+		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
+		metad = _bt_getmeta(rel, metabuf);
+
+		/*
+		 * If there's no root page yet, _bt_getroot() doesn't expect a cache
+		 * to be made, so just stop here.  (XXX perhaps _bt_getroot() should
+		 * be changed to allow this case.)
+		 */
+		if (metad->btm_root == P_NONE)
+		{
+			uint32		btm_version = metad->btm_version;
+
+			_bt_relbuf(rel, metabuf);
+			return btm_version > BTREE_META_VERSION;
+		}
+
+		/*
+		 * Cache the metapage data for next time
+		 */
+		_bt_cachemetadata(rel, metad);
+		/* We shouldn't have cached it if any of these fail */
+		Assert(metad->btm_magic == BTREE_MAGIC);
+		Assert(metad->btm_version >= BTREE_META_VERSION);
+		Assert(metad->btm_fastroot != P_NONE);
+		_bt_relbuf(rel, metabuf);
+	}
+
+	/* Get cached page */
+	metad = (BTMetaPageData *) rel->rd_amcache;
+
+	return metad->btm_version > BTREE_META_VERSION;
 }
 
 /*
@@ -1370,7 +1439,7 @@ _bt_pagedel(Relation rel, Buffer buf)
 			 */
 			if (!stack)
 			{
-				ScanKey		itup_scankey;
+				BTScanInsert itup_scankey;
 				ItemId		itemid;
 				IndexTuple	targetkey;
 				Buffer		lbuf;
@@ -1420,12 +1489,20 @@ _bt_pagedel(Relation rel, Buffer buf)
 				}
 
 				/* we need an insertion scan key for the search, so build one */
-				itup_scankey = _bt_mkscankey(rel, targetkey);
-				/* find the leftmost leaf page containing this key */
-				stack = _bt_search(rel,
-								   IndexRelationGetNumberOfKeyAttributes(rel),
-								   itup_scankey, false, &lbuf, BT_READ, NULL);
-				/* don't need a pin on the page */
+				itup_scankey = _bt_mkscankey(rel, targetkey, false);
+				/* get stack to leaf page by searching index */
+				stack = _bt_search(rel, itup_scankey, &lbuf, BT_READ, NULL);
+
+				/*
+				 * Search will reliably relocate same leaf page.
+				 *
+				 * (However, prior to version 4 the search is for the leftmost
+				 * leaf page containing this key, which is okay because we
+				 * will tiebreak on downlink block number.)
+				 */
+				Assert(!itup_scankey->heapkeyspace ||
+					   BufferGetBlockNumber(buf) == BufferGetBlockNumber(lbuf));
+				/* don't need a lock or second pin on the page */
 				_bt_relbuf(rel, lbuf);
 
 				/*
@@ -1970,7 +2047,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 	if (BufferIsValid(metabuf))
 	{
 		/* upgrade metapage if needed */
-		if (metad->btm_version < BTREE_VERSION)
+		if (metad->btm_version < BTREE_META_VERSION)
 			_bt_upgrademetapage(metapg);
 		metad->btm_fastroot = rightsib;
 		metad->btm_fastlevel = targetlevel;
@@ -2018,6 +2095,8 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 		{
 			XLogRegisterBuffer(4, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
+			Assert(metad->btm_version >= BTREE_META_VERSION);
+			xlmeta.version = metad->btm_version;
 			xlmeta.root = metad->btm_root;
 			xlmeta.level = metad->btm_level;
 			xlmeta.fastroot = metad->btm_fastroot;

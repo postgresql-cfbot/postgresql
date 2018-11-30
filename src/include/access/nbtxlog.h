@@ -28,8 +28,7 @@
 #define XLOG_BTREE_INSERT_META	0x20	/* same, plus update metapage */
 #define XLOG_BTREE_SPLIT_L		0x30	/* add index tuple with split */
 #define XLOG_BTREE_SPLIT_R		0x40	/* as above, new item on right */
-#define XLOG_BTREE_SPLIT_L_HIGHKEY 0x50 /* as above, include truncated highkey */
-#define XLOG_BTREE_SPLIT_R_HIGHKEY 0x60 /* as above, include truncated highkey */
+/* 0x50 and 0x60 are unused */
 #define XLOG_BTREE_DELETE		0x70	/* delete leaf index tuples for a page */
 #define XLOG_BTREE_UNLINK_PAGE	0x80	/* delete a half-dead page */
 #define XLOG_BTREE_UNLINK_PAGE_META 0x90	/* same, and update metapage */
@@ -47,6 +46,7 @@
  */
 typedef struct xl_btree_metadata
 {
+	uint32		version;
 	BlockNumber root;
 	uint32		level;
 	BlockNumber fastroot;
@@ -82,20 +82,16 @@ typedef struct xl_btree_insert
  *
  * Note: the four XLOG_BTREE_SPLIT xl_info codes all use this data record.
  * The _L and _R variants indicate whether the inserted tuple went into the
- * left or right split page (and thus, whether newitemoff and the new item
- * are stored or not).  The _HIGHKEY variants indicate that we've logged
- * explicitly left page high key value, otherwise redo should use right page
- * leftmost key as a left page high key.  _HIGHKEY is specified for internal
- * pages where right page leftmost key is suppressed, and for leaf pages
- * of covering indexes where high key have non-key attributes truncated.
+ * left or right split page (and thus, whether newitemoff and the new item are
+ * stored or not).  We always explicitly log the left page high key value.
  *
  * Backup Blk 0: original page / new left page
  *
  * The left page's data portion contains the new item, if it's the _L variant.
- * (In the _R variants, the new item is one of the right page's tuples.)
- * If level > 0, an IndexTuple representing the HIKEY of the left page
- * follows.  We don't need this on leaf pages, because it's the same as the
- * leftmost key in the new right page.
+ * In the _R variants, the new item is one of the right page's tuples.  An
+ * IndexTuple representing the HIKEY of the left page follows.  We don't need
+ * this on leaf pages, because it's the same as the leftmost key in the new
+ * right page.
  *
  * Backup Blk 1: new right page
  *

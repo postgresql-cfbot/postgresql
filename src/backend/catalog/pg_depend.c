@@ -29,6 +29,8 @@
 #include "utils/rel.h"
 #include "utils/tqual.h"
 
+/* Per-backend pg_depend tiebreaker value */
+static int32 depcreate = INT32_MAX;
 
 static bool isObjectPinned(const ObjectAddress *object, Relation rel);
 
@@ -93,7 +95,10 @@ recordMultipleDependencies(const ObjectAddress *depender,
 		{
 			/*
 			 * Record the Dependency.  Note we don't bother to check for
-			 * duplicate dependencies; there's no harm in them.
+			 * duplicate dependencies; there's no harm in them.  Note that
+			 * depcreate ensures deterministic processing among dependencies
+			 * of otherwise equal precedence (e.g., among multiple entries of
+			 * the same refclassid + refobjid + refobjsubid).
 			 */
 			values[Anum_pg_depend_classid - 1] = ObjectIdGetDatum(depender->classId);
 			values[Anum_pg_depend_objid - 1] = ObjectIdGetDatum(depender->objectId);
@@ -104,6 +109,7 @@ recordMultipleDependencies(const ObjectAddress *depender,
 			values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
 
 			values[Anum_pg_depend_deptype - 1] = CharGetDatum((char) behavior);
+			values[Anum_pg_depend_depcreate - 1] = Int32GetDatum(depcreate--);
 
 			tup = heap_form_tuple(dependDesc->rd_att, values, nulls);
 
@@ -114,6 +120,9 @@ recordMultipleDependencies(const ObjectAddress *depender,
 			CatalogTupleInsertWithInfo(dependDesc, tup, indstate);
 
 			heap_freetuple(tup);
+			/* avoid signed underflow */
+			if (depcreate == INT_MIN)
+				depcreate = INT_MAX;
 		}
 	}
 

@@ -167,6 +167,8 @@ BTArrayKeyInfo
 BTBuildState
 BTCycleId
 BTIndexStat
+BTInsertionKey
+BTInsertionKeyData
 BTLeader
 BTMetaPageData
 BTOneVacInfo
@@ -2207,6 +2209,8 @@ SpecialJoinInfo
 SpinDelayStatus
 SplitInterval
 SplitLR
+SplitMode
+SplitPoint
 SplitVar
 SplitedPageLayout
 StackElem

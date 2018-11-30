@@ -61,6 +61,7 @@ CATALOG(pg_depend,2608,DependRelationId)
 	 * field.  See DependencyType in catalog/dependency.h.
 	 */
 	char		deptype;		/* see codes in dependency.h */
+	int32		depcreate;		/* per-backend identifier; tiebreaker */
 } FormData_pg_depend;
 
 /* ----------------

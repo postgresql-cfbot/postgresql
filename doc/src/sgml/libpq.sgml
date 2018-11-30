@@ -964,49 +964,43 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>host</literal></term>
       <listitem>
        <para>
-        Name of host to connect to.<indexterm><primary>host name</primary></indexterm>
-        If a host name begins with a slash, it specifies Unix-domain
-        communication rather than TCP/IP communication; the value is the
-        name of the directory in which the socket file is stored.
+        Comma-separated list of hosts to connect to.<indexterm><primary>host name</primary></indexterm>
+        Each specified host will be tried in turn in the order given.
+        See <xref linkend="libpq-multiple-hosts"/> for details.
+        Each item may be a host name that will be resolved with a look-up,
+        a numeric IP address (IPv4 in the standard format, e.g.,
+        <literal>172.28.40.9</literal>, or IPv6 if supported by your machine)
+        that will be used directly, or
+        the name of a directory which contains the socket file for Unix-domain
+        communication rather than TCP/IP communication
+        (the specification must then begin with a slash);
+       </para>
+
+       <para>
         The default behavior when <literal>host</literal> is
-        not specified, or is empty, is to connect to a Unix-domain
+        not specified, or an item is empty, is to connect to a Unix-domain
         socket<indexterm><primary>Unix domain socket</primary></indexterm> in
         <filename>/tmp</filename> (or whatever socket directory was specified
-        when <productname>PostgreSQL</productname> was built). On machines without
-        Unix-domain sockets, the default is to connect to <literal>localhost</literal>.
-       </para>
-       <para>
-        A comma-separated list of host names is also accepted, in which case
-        each host name in the list is tried in order; an empty item in the
-        list selects the default behavior as explained above. See
-        <xref linkend="libpq-multiple-hosts"/> for details.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="libpq-connect-hostaddr" xreflabel="hostaddr">
-      <term><literal>hostaddr</literal></term>
-      <listitem>
-       <para>
-        Numeric IP address of host to connect to.  This should be in the
-        standard IPv4 address format, e.g., <literal>172.28.40.9</literal>.  If
-        your machine supports IPv6, you can also use those addresses.
-        TCP/IP communication is
-        always used when a nonempty string is specified for this parameter.
+        when <productname>PostgreSQL</productname> was built).
+        On machines without Unix-domain sockets, the default is to connect to
+        <literal>localhost</literal>.
        </para>
 
        <para>
-        Using <literal>hostaddr</literal> instead of <literal>host</literal> allows the
-        application to avoid a host name look-up, which might be important
-        in applications with time constraints. However, a host name is
-        required for GSSAPI or SSPI authentication
-        methods, as well as for <literal>verify-full</literal> SSL
-        certificate verification.  The following rules are used:
+        To shortcut host name lookups, see parameter
+        <xref linkend="libpq-connect-hostaddr"/>.
+       </para>
+
+       <para>
+        When connecting, the following rules apply:
         <itemizedlist>
          <listitem>
           <para>
-           If <literal>host</literal> is specified
-           without <literal>hostaddr</literal>, a host name lookup occurs.
+           If an item in <literal>host</literal> has a corresponding empty
+           item in <literal>hostaddr</literal>, it is used:
+           For an IP address or a Unix-domain socket, it is done directly.
+           For a host name, a lookup occurs, and the resulting set of IPs will
+           be tried in turn.
            (When using <function>PQconnectPoll</function>, the lookup occurs
            when <function>PQconnectPoll</function> first considers this host
            name, and it may cause <function>PQconnectPoll</function> to block
@@ -1015,45 +1009,48 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
          </listitem>
          <listitem>
           <para>
-           If <literal>hostaddr</literal> is specified without <literal>host</literal>,
-           the value for <literal>hostaddr</literal> gives the server network address.
-           The connection attempt will fail if the authentication
-           method requires a host name.
-          </para>
-         </listitem>
-         <listitem>
-          <para>
-           If both <literal>host</literal> and <literal>hostaddr</literal> are specified,
-           the value for <literal>hostaddr</literal> gives the server network address.
-           The value for <literal>host</literal> is ignored unless the
-           authentication method requires it, in which case it will be
-           used as the host name.
+           If an item in <literal>host</literal> has a corresponding non-empty
+           item in <literal>hostaddr</literal>, the later network address is
+           used and the host name may be used for authentication purposes.
           </para>
          </listitem>
         </itemizedlist>
-        Note that authentication is likely to fail if <literal>host</literal>
-        is not the name of the server at network address <literal>hostaddr</literal>.
-        Also, when both <literal>host</literal> and <literal>hostaddr</literal>
-        are specified, <literal>host</literal>
-        is used to identify the connection in a password file (see
-        <xref linkend="libpq-pgpass"/>).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-hostaddr" xreflabel="hostaddr">
+      <term><literal>hostaddr</literal></term>
+      <listitem>
+       <para>
+        Comma-separated numeric IP addresses corresponding one-to-one to
+        <literal>host</literal>, to avoid a host name look-up when non empty.
+        This may be desirable for testing, to work around NAT settings, or for
+        better performance.
        </para>
 
        <para>
-        A comma-separated list of <literal>hostaddr</literal> values is also
-        accepted, in which case each host in the list is tried in order.
-        An empty item in the list causes the corresponding host name to be
-        used, or the default host name if that is empty as well. See
-        <xref linkend="libpq-multiple-hosts"/> for details.
+        Parameter <literal>hostaddr</literal> must be either empty or a
+        list of the same length as <literal>host</literal>.
+        A non empty IP in <literal>hostaddr</literal> overrides any
+        corresponding item in <literal>host</literal>.
        </para>
+
        <para>
-        Without either a host name or host address,
-        <application>libpq</application> will connect using a
-        local Unix-domain socket; or on machines without Unix-domain
-        sockets, it will attempt to connect to <literal>localhost</literal>.
+        If a host name is required for GSSAPI or SSPI authentication
+        methods, for <literal>verify-full</literal> SSL certificate
+        verification, or to identify the connection in
+        a password file (see <xref linkend="libpq-pgpass"/>),
+        the corresponding host name provided by <literal>host</literal> is used.
        </para>
-       </listitem>
-      </varlistentry>
+
+       <para>
+        When both <literal>host</literal> and <literal>hostaddr</literal> parameters
+        are set, note that authentication is likely to fail if <literal>host</literal>
+        is not the name of the server at network address <literal>hostaddr</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
 
       <varlistentry id="libpq-connect-port" xreflabel="port">
        <term><literal>port</literal></term>
@@ -1062,10 +1059,10 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         Port number to connect to at the server host, or socket file
         name extension for Unix-domain
         connections.<indexterm><primary>port</primary></indexterm>
-        If multiple hosts were given in the <literal>host</literal> or
-        <literal>hostaddr</literal> parameters, this parameter may specify a
-        comma-separated list of ports of the same length as the host list, or
-        it may specify a single port number to be used for all hosts.
+        If multiple hosts were given in the <literal>host</literal> parameter,
+        this parameter may specify a comma-separated list of ports of the same
+        length as the host list, or it may specify a single port number to be
+        used for all hosts.
         An empty string, or an empty item in a comma-separated list,
         specifies the default port number established
         when <productname>PostgreSQL</productname> was built.

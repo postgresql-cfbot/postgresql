@@ -1350,22 +1350,6 @@ SELECT am.amname AS index_method,
     ORDER BY index_method, opfamily_name, opfamily_operator;
 </programlisting>
   </para>
-
-  <sect2 id="indexes-index-skip-scans">
-    <title>Index Skip Scans</title>
-
-    <indexterm zone="indexes-index-skip-scans">
-      <primary>index</primary>
-      <secondary>index-skip scans</secondary>
-    </indexterm>
-    <indexterm zone="indexes-index-skip-scans">
-      <primary>index-skip scan</primary>
-    </indexterm>
-
-    <para>
-      TODO
-    </para>
-  </sect2>
  </sect1>
 
 

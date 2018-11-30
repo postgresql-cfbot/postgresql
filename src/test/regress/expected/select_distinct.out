@@ -244,3 +244,28 @@ SELECT null IS NOT DISTINCT FROM null as "yes";
  t
 (1 row)
 
+-- index skip scan
+SELECT DISTINCT four FROM tenk1;
+ four 
+------
+    0
+    1
+    2
+    3
+(4 rows)
+
+SELECT DISTINCT four FROM tenk1 WHERE four = 1;
+ four 
+------
+    1
+(1 row)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT DISTINCT four FROM tenk1;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Index Only Scan using tenk1_four on public.tenk1
+   Output: four
+   Scan mode: Skip scan
+(3 rows)
+

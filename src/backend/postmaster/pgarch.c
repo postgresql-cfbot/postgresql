@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -427,6 +428,9 @@ pgarch_ArchiverCopyLoop(void)
 
 		for (;;)
 		{
+			struct stat	stat_buf;
+			char		pathname[MAXPGPATH];
+
 			/*
 			 * Do not initiate any more archive commands after receiving
 			 * SIGTERM, nor after the postmaster has died unexpectedly. The
@@ -453,6 +457,25 @@ pgarch_ArchiverCopyLoop(void)
 			{
 				ereport(WARNING,
 						(errmsg("archive_mode enabled, yet archive_command is not set")));
+				return;
+			}
+
+			/*
+			 * In the event of a system crash, archive status files may be
+			 * left behind as their removals are not durable, cleaning up
+			 * orphan entries here is the cheapest method.  So check that
+			 * the segment trying to be archived still exists.
+			 */
+			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
+			if (stat(pathname, &stat_buf) != 0)
+			{
+				char		xlogready[MAXPGPATH];
+
+				StatusFilePath(xlogready, xlog, ".ready");
+				if (durable_unlink(xlogready, WARNING) == 0)
+					ereport(WARNING,
+							(errmsg("removed orphan archive status file %s",
+									xlogready)));
 				return;
 			}
 

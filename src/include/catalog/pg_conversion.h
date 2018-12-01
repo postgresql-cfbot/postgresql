@@ -23,30 +23,41 @@
 
 #include "catalog/objectaddress.h"
 
-/* ----------------------------------------------------------------
- *		pg_conversion definition.
- *
- *		cpp turns this into typedef struct FormData_pg_namespace
- *
- *	conname				name of the conversion
- *	connamespace		name space which the conversion belongs to
- *	conowner			owner of the conversion
- *	conforencoding		FOR encoding id
- *	contoencoding		TO encoding id
- *	conproc				OID of the conversion proc
- *	condefault			true if this is a default conversion
- * ----------------------------------------------------------------
+/* ----------------
+ *		pg_conversion definition.  cpp turns this into
+ *		typedef struct FormData_pg_conversion
+ * ----------------
  */
 CATALOG(pg_conversion,2607,ConversionRelationId)
 {
-	Oid			oid;			/* oid */
+	/* oid */
+	Oid			oid;
+
+	/* name of the conversion */
 	NameData	conname;
-	Oid			connamespace;
-	Oid			conowner;
-	int32		conforencoding;
-	int32		contoencoding;
-	regproc		conproc;
-	bool		condefault;
+
+	/* name space which the conversion belongs to */
+	Oid			connamespace BKI_DEFAULT(PGNSP);
+
+	/* owner of the conversion */
+	Oid			conowner BKI_DEFAULT(PGUID);
+
+	/*
+	 * Note: The encoding lookups don't refer to other catalogs,
+	 * but to values found in mb/pg_wchar.h
+	 */
+
+	/* FOR encoding id */
+	int32		conforencoding BKI_LOOKUP(encoding);
+
+	/* TO encoding id */
+	int32		contoencoding BKI_LOOKUP(encoding);
+
+	/* OID of the conversion proc */
+	regproc		conproc BKI_LOOKUP(pg_proc);
+
+	/* true if this is a default conversion */
+	bool		condefault BKI_DEFAULT(t);
 } FormData_pg_conversion;
 
 /* ----------------

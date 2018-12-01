@@ -164,6 +164,14 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>-s</option></term>
+      <term><option>--socketdir=</option><replaceable>dir</replaceable></term>
+      <listitem><para>directory to use for sockets during upgrade, default is
+      current working directory; environment variable <envar>PGSOCKETDIR</envar>
+      </para></listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-U</option> <replaceable>username</replaceable></term>
       <term><option>--username=</option><replaceable>username</replaceable></term>
       <listitem><para>cluster's install user name; environment

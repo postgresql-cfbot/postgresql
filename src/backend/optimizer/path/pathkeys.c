@@ -25,6 +25,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/tlist.h"
+#include "partitioning/partbounds.h"
 #include "utils/lsyscache.h"
 
 
@@ -544,6 +545,64 @@ build_index_pathkeys(PlannerInfo *root,
 		i++;
 	}
 
+	return retval;
+}
+
+/*
+ * build_partition_pathkeys
+ *	  Build a pathkeys list that describes the ordering induced by the
+ *	  partitions of 'partrel'.  (Callers must ensure that this partitioned
+ *	  table guarantees that lower order tuples never will be found in a
+ *	  later partition.).  Sets *partialkeys to false if pathkeys were only
+ *	  built for a prefix of the partition key, otherwise sets it to true.
+ */
+List *
+build_partition_pathkeys(PlannerInfo *root, RelOptInfo *partrel,
+						 ScanDirection scandir, bool *partialkeys)
+{
+	PartitionScheme		partscheme;
+	List	   *retval = NIL;
+	int			i;
+
+	partscheme = partrel->part_scheme;
+
+	for (i = 0; i < partscheme->partnatts; i++)
+	{
+		PathKey    *cpathkey;
+		Expr	   *keyCol = linitial(partrel->partexprs[i]);
+
+		/*
+		 * OK, try to make a canonical pathkey for this part key.  Note we're
+		 * underneath any outer joins, so nullable_relids should be NULL.
+		 */
+		cpathkey = make_pathkey_from_sortinfo(root,
+											  keyCol,
+											  NULL,
+											  partscheme->partopfamily[i],
+											  partscheme->partopcintype[i],
+											  partscheme->partcollation[i],
+											 ScanDirectionIsBackward(scandir),
+											 ScanDirectionIsBackward(scandir),
+											  0,
+											  partrel->relids,
+											  false);
+
+		/*
+		 * When unable to create the pathkey we'll just need to return
+		 * whatever ones we have so far.
+		 */
+		if (cpathkey == NULL)
+		{
+			*partialkeys = true;
+			return retval;
+		}
+
+		/* Add it to list, unless it's redundant. */
+		if (!pathkey_is_redundant(cpathkey, retval))
+			retval = lappend(retval, cpathkey);
+	}
+
+	*partialkeys = false;
 	return retval;
 }
 

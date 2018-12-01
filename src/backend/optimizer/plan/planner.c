@@ -3899,6 +3899,7 @@ create_degenerate_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 							   grouped_rel,
 							   paths,
 							   NIL,
+							   NIL,
 							   NULL,
 							   0,
 							   false,
@@ -6878,7 +6879,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 		 * node, which would cause this relation to stop appearing to be a
 		 * dummy rel.)
 		 */
-		rel->pathlist = list_make1(create_append_path(root, rel, NIL, NIL,
+		rel->pathlist = list_make1(create_append_path(root, rel, NIL, NIL, NIL,
 													  NULL, 0, false, NIL,
 													  -1));
 		rel->partial_pathlist = NIL;

@@ -1219,7 +1219,7 @@ AppendPath *
 create_append_path(PlannerInfo *root,
 				   RelOptInfo *rel,
 				   List *subpaths, List *partial_subpaths,
-				   Relids required_outer,
+				   List *pathkeys, Relids required_outer,
 				   int parallel_workers, bool parallel_aware,
 				   List *partitioned_rels, double rows)
 {
@@ -1253,7 +1253,7 @@ create_append_path(PlannerInfo *root,
 	pathnode->path.parallel_aware = parallel_aware;
 	pathnode->path.parallel_safe = rel->consider_parallel;
 	pathnode->path.parallel_workers = parallel_workers;
-	pathnode->path.pathkeys = NIL;	/* result is always considered unsorted */
+	pathnode->path.pathkeys = pathkeys;
 	pathnode->partitioned_rels = list_copy(partitioned_rels);
 
 	/*
@@ -1263,16 +1263,29 @@ create_append_path(PlannerInfo *root,
 	 * costs.  There may be some paths that require to do startup work by a
 	 * single worker.  In such case, it's better for workers to choose the
 	 * expensive ones first, whereas the leader should choose the cheapest
-	 * startup plan.
+	 * startup plan.  Note: We mustn't fiddle with the order of subpaths
+	 * when the Append has valid pathkeys.  The order they're listed in
+	 * is critical to keeping the pathkeys valid.
 	 */
 	if (pathnode->path.parallel_aware)
 	{
+		Assert(pathkeys == NIL);
+
 		subpaths = list_qsort(subpaths, append_total_cost_compare);
 		partial_subpaths = list_qsort(partial_subpaths,
 									  append_startup_cost_compare);
 	}
 	pathnode->first_partial_path = list_length(subpaths);
 	pathnode->subpaths = list_concat(subpaths, partial_subpaths);
+
+	/*
+	 * Apply query-wide LIMIT if known and path is for sole base relation.
+	 * (Handling this at this low level is a bit klugy.)
+	 */
+	if (root != NULL && bms_equal(rel->relids, root->all_baserels))
+		pathnode->limit_tuples = root->limit_tuples;
+	else
+		pathnode->limit_tuples = -1.0;
 
 	foreach(l, pathnode->subpaths)
 	{
@@ -1287,7 +1300,7 @@ create_append_path(PlannerInfo *root,
 
 	Assert(!parallel_aware || pathnode->path.parallel_safe);
 
-	cost_append(pathnode);
+	cost_append(root, pathnode);
 
 	/* If the caller provided a row estimate, override the computed value. */
 	if (rows >= 0)
@@ -3587,7 +3600,7 @@ reparameterize_path(PlannerInfo *root, Path *path,
 				}
 				return (Path *)
 					create_append_path(root, rel, childpaths, partialpaths,
-									   required_outer,
+									   NIL, required_outer,
 									   apath->path.parallel_workers,
 									   apath->path.parallel_aware,
 									   apath->partitioned_rels,

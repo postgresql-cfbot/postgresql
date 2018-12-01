@@ -1321,6 +1321,7 @@ typedef struct AppendPath
 
 	/* Index of first partial path in subpaths */
 	int			first_partial_path;
+	double		limit_tuples;	/* hard limit on output tuples, or -1 */
 } AppendPath;
 
 #define IS_DUMMY_PATH(p) \

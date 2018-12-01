@@ -104,6 +104,7 @@ static Path *get_cheapest_parameterized_child_path(PlannerInfo *root,
 									  Relids required_outer);
 static void accumulate_append_subpath(Path *path,
 						  List **subpaths, List **special_subpaths);
+static Path *get_singleton_append_subpath(Path *path);
 static void set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 					  Index rti, RangeTblEntry *rte);
 static void set_function_pathlist(PlannerInfo *root, RelOptInfo *rel,
@@ -1638,7 +1639,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	if (subpaths_valid)
 		add_path(rel, (Path *) create_append_path(root, rel, subpaths, NIL,
-												  NULL, 0, false,
+												  NIL, NULL, 0, false,
 												  partitioned_rels, -1));
 
 	/*
@@ -1680,7 +1681,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 
 		/* Generate a partial append path. */
 		appendpath = create_append_path(root, rel, NIL, partial_subpaths,
-										NULL, parallel_workers,
+										NIL, NULL, parallel_workers,
 										enable_parallel_append,
 										partitioned_rels, -1);
 
@@ -1730,7 +1731,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 
 		appendpath = create_append_path(root, rel, pa_nonpartial_subpaths,
 										pa_partial_subpaths,
-										NULL, parallel_workers, true,
+										NIL, NULL, parallel_workers, true,
 										partitioned_rels, partial_rows);
 		add_partial_path(rel, (Path *) appendpath);
 	}
@@ -1792,7 +1793,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 		if (subpaths_valid)
 			add_path(rel, (Path *)
 					 create_append_path(root, rel, subpaths, NIL,
-										required_outer, 0, false,
+										NIL, required_outer, 0, false,
 										partitioned_rels, -1));
 	}
 }
@@ -1827,6 +1828,28 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 						   List *partitioned_rels)
 {
 	ListCell   *lcp;
+	List	   *partition_pathkeys = NIL;
+	List	   *partition_pathkeys_desc = NIL;
+	bool		partition_pathkeys_partial = true;
+	bool		partition_pathkeys_desc_partial = true;
+
+	/*
+	 * Some partitioned table setups may allow us to use an Append node
+	 * instead of a MergeAppend.  This is possible in cases such as RANGE
+	 * partitioned tables where it's guaranteed that an earlier partition must
+	 * contain rows which come earlier in the sort order.
+	 */
+	if (rel->part_scheme != NULL && IS_SIMPLE_REL(rel) &&
+		partitions_are_ordered(root, rel))
+	{
+		partition_pathkeys = build_partition_pathkeys(root, rel,
+													  ForwardScanDirection,
+												&partition_pathkeys_partial);
+
+		partition_pathkeys_desc = build_partition_pathkeys(root, rel,
+													BackwardScanDirection,
+											&partition_pathkeys_desc_partial);
+	}
 
 	foreach(lcp, all_child_pathkeys)
 	{
@@ -1835,6 +1858,29 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		List	   *total_subpaths = NIL;
 		bool		startup_neq_total = false;
 		ListCell   *lcr;
+		bool		partition_order;
+		bool		partition_order_desc;
+
+		/*
+		 * Determine if these pathkeys are contained in the partition pathkeys
+		 * for both ascending and decending partition order.  If the
+		 * partitioned pathkeys happened to be contained in pathkeys then this
+		 * is fine too, providing that the partition pathkeys are complete and
+		 * not just a prefix of the partition order.  In this case an Append
+		 * scan cannot produce any out of order tuples.
+		 */
+		partition_order = pathkeys_contained_in(pathkeys,
+												partition_pathkeys) ||
+						(!partition_pathkeys_partial &&
+						 pathkeys_contained_in(partition_pathkeys, pathkeys));
+
+		partition_order_desc = !partition_order &&
+								(pathkeys_contained_in(pathkeys,
+												partition_pathkeys_desc) ||
+						(!partition_pathkeys_desc_partial &&
+							pathkeys_contained_in(partition_pathkeys_desc,
+												  pathkeys)));
+
 
 		/* Select the child paths for this ordering... */
 		foreach(lcr, live_childrels)
@@ -1877,26 +1923,81 @@ generate_mergeappend_paths(PlannerInfo *root, RelOptInfo *rel,
 			if (cheapest_startup != cheapest_total)
 				startup_neq_total = true;
 
-			accumulate_append_subpath(cheapest_startup,
-									  &startup_subpaths, NULL);
-			accumulate_append_subpath(cheapest_total,
-									  &total_subpaths, NULL);
+			/*
+			 * When in partition order or decending partition order don't
+			 * flatten any sub-partition's paths unless they're an Append or
+			 * MergeAppend with a single subpath.  For the desceding order
+			 * case we build the path list in reverse so that the Append scan
+			 * correctly scans the partitions in reverse order.
+			 */
+			if (partition_order)
+			{
+				/* Do the Append/MergeAppend flattening, when possible */
+				cheapest_startup = get_singleton_append_subpath(cheapest_startup);
+				cheapest_total = get_singleton_append_subpath(cheapest_total);
+
+				startup_subpaths = lappend(startup_subpaths, cheapest_startup);
+				total_subpaths = lappend(total_subpaths, cheapest_total);
+			}
+			else if (partition_order_desc)
+			{
+				cheapest_startup = get_singleton_append_subpath(cheapest_startup);
+				cheapest_total = get_singleton_append_subpath(cheapest_total);
+
+				startup_subpaths = lcons(cheapest_startup, startup_subpaths);
+				total_subpaths = lcons(cheapest_total, total_subpaths);
+			}
+			else
+			{
+				accumulate_append_subpath(cheapest_startup,
+										  &startup_subpaths, NULL);
+				accumulate_append_subpath(cheapest_total,
+										  &total_subpaths, NULL);
+			}
 		}
 
-		/* ... and build the MergeAppend paths */
-		add_path(rel, (Path *) create_merge_append_path(root,
+		/* Build simple Append paths if in partition asc/desc order */
+		if (partition_order || partition_order_desc)
+		{
+			add_path(rel, (Path *) create_append_path(root,
 														rel,
 														startup_subpaths,
+														NIL,
 														pathkeys,
 														NULL,
-														partitioned_rels));
-		if (startup_neq_total)
-			add_path(rel, (Path *) create_merge_append_path(root,
+														0,
+														false,
+														partitioned_rels,
+														-1));
+			if (startup_neq_total)
+				add_path(rel, (Path *) create_append_path(root,
 															rel,
 															total_subpaths,
+															NIL,
+															pathkeys,
+															NULL,
+															0,
+															false,
+															partitioned_rels,
+															-1));
+		}
+		else
+		{
+			/* else just build the MergeAppend paths */
+			add_path(rel, (Path *) create_merge_append_path(root,
+															rel,
+															startup_subpaths,
 															pathkeys,
 															NULL,
 															partitioned_rels));
+			if (startup_neq_total)
+				add_path(rel, (Path *) create_merge_append_path(root,
+																rel,
+																total_subpaths,
+																pathkeys,
+																NULL,
+																partitioned_rels));
+		}
 	}
 }
 
@@ -2038,6 +2139,34 @@ accumulate_append_subpath(Path *path, List **subpaths, List **special_subpaths)
 }
 
 /*
+ * get_singleton_append_subpath
+ *		Returns the singleton subpath of an Append/MergeAppend or
+ *		return 'path' if it's not a single sub-path Append/MergeAppend.
+ */
+static Path *
+get_singleton_append_subpath(Path *path)
+{
+	if (IsA(path, AppendPath))
+	{
+		AppendPath *apath = (AppendPath *) path;
+
+		Assert(!apath->path.parallel_aware);
+
+		if (list_length(apath->subpaths) == 1)
+			return (Path *) linitial(apath->subpaths);
+	}
+	else if (IsA(path, MergeAppendPath))
+	{
+		MergeAppendPath *mpath = (MergeAppendPath *) path;
+
+		if (list_length(mpath->subpaths) == 1)
+			return (Path *) linitial(mpath->subpaths);
+	}
+
+	return path;
+}
+
+/*
  * set_dummy_rel_pathlist
  *	  Build a dummy path for a relation that's been excluded by constraints
  *
@@ -2057,7 +2186,7 @@ set_dummy_rel_pathlist(RelOptInfo *rel)
 	rel->pathlist = NIL;
 	rel->partial_pathlist = NIL;
 
-	add_path(rel, (Path *) create_append_path(NULL, rel, NIL, NIL, NULL,
+	add_path(rel, (Path *) create_append_path(NULL, rel, NIL, NIL, NIL, NULL,
 											  0, false, NIL, -1));
 
 	/*

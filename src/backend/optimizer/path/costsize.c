@@ -1837,7 +1837,7 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
  *	  Determines and returns the cost of an Append node.
  */
 void
-cost_append(AppendPath *apath)
+cost_append(PlannerInfo *root, AppendPath *apath)
 {
 	ListCell   *l;
 
@@ -1849,27 +1849,64 @@ cost_append(AppendPath *apath)
 
 	if (!apath->path.parallel_aware)
 	{
-		Path	   *subpath = (Path *) linitial(apath->subpaths);
-
+		Path	   *isubpath = (Path *) linitial(apath->subpaths);
+		List	   *pathkeys = apath->path.pathkeys;
 		/*
 		 * Startup cost of non-parallel-aware Append is the startup cost of
-		 * first subpath.
+		 * the first subpath. This may be overwritten below if the initial
+		 * path requires a sort.
 		 */
-		apath->path.startup_cost = subpath->startup_cost;
+		apath->path.startup_cost = isubpath->startup_cost;
 
-		/* Compute rows and costs as sums of subplan rows and costs. */
+		/*
+		 * Compute rows and costs as sums of subplan rows and costs taking
+		 * into account the cost of any sorts which may be required on
+		 * subplans.
+		 */
 		foreach(l, apath->subpaths)
 		{
 			Path	   *subpath = (Path *) lfirst(l);
 
 			apath->path.rows += subpath->rows;
-			apath->path.total_cost += subpath->total_cost;
+
+			if (pathkeys != NIL &&
+				!pathkeys_contained_in(pathkeys, subpath->pathkeys))
+			{
+				Path		sort_path;	/* dummy for result of cost_sort */
+
+				/*
+				 * We'll need to insert a Sort node, so include cost for that.
+				 */
+				cost_sort(&sort_path,
+						  root,
+						  pathkeys,
+						  subpath->total_cost,
+						  subpath->parent->tuples,
+						  subpath->pathtarget->width,
+						  0.0,
+						  work_mem,
+						  apath->limit_tuples);
+				apath->path.total_cost += sort_path.total_cost;
+
+				/*
+				 * When the first subpath needs sorted, set the startup cost
+				 * of the sort as the startup cost of the Append
+				 */
+				if (subpath == isubpath)
+					apath->path.startup_cost = sort_path.startup_cost;
+			}
+			else
+			{
+				apath->path.total_cost += subpath->total_cost;
+			}
 		}
 	}
 	else						/* parallel-aware */
 	{
 		int			i = 0;
 		double		parallel_divisor = get_parallel_divisor(&apath->path);
+
+		Assert(apath->path.pathkeys == NIL);
 
 		/* Calculate startup cost. */
 		foreach(l, apath->subpaths)

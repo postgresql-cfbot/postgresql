@@ -159,8 +159,8 @@ extern int	SPI_unregister_relation(const char *name);
 extern int	SPI_register_trigger_data(TriggerData *tdata);
 
 extern void SPI_start_transaction(void);
-extern void SPI_commit(void);
-extern void SPI_rollback(void);
+extern void SPI_commit(bool chain);
+extern void SPI_rollback(bool chain);
 
 extern void SPICleanup(void);
 extern void AtEOXact_SPI(bool isCommit);

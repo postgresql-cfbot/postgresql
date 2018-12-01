@@ -533,6 +533,7 @@ typedef struct PLpgSQL_stmt_commit
 {
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
+	bool		chain;
 } PLpgSQL_stmt_commit;
 
 /*
@@ -542,6 +543,7 @@ typedef struct PLpgSQL_stmt_rollback
 {
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
+	bool		chain;
 } PLpgSQL_stmt_rollback;
 
 /*

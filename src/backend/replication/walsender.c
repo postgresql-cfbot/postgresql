@@ -1763,6 +1763,8 @@ ProcessStandbyReplyMessage(void)
 				applyLag;
 	bool		clearLagTimes;
 	TimestampTz now;
+	TimestampTz	sendTimestamp;
+	char	   *sendTime;
 
 	static bool fullyAppliedLastTime = false;
 
@@ -1770,14 +1772,20 @@ ProcessStandbyReplyMessage(void)
 	writePtr = pq_getmsgint64(&reply_message);
 	flushPtr = pq_getmsgint64(&reply_message);
 	applyPtr = pq_getmsgint64(&reply_message);
-	(void) pq_getmsgint64(&reply_message);	/* sendTime; not used ATM */
+	sendTimestamp = pq_getmsgint64(&reply_message);	/* sendtime by standby  */
 	replyRequested = pq_getmsgbyte(&reply_message);
 
-	elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s",
+	/* Copy because timestamptz_to_str returns a static buffer */
+	sendTime = pstrdup(timestamptz_to_str(sendTimestamp));
+
+	elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s replytime %s",
 		 (uint32) (writePtr >> 32), (uint32) writePtr,
 		 (uint32) (flushPtr >> 32), (uint32) flushPtr,
 		 (uint32) (applyPtr >> 32), (uint32) applyPtr,
-		 replyRequested ? " (reply requested)" : "");
+		 replyRequested ? " (reply requested)" : "",
+		 sendTime);
+
+	pfree(sendTime);
 
 	/* See if we can compute the round-trip lag for these positions. */
 	now = GetCurrentTimestamp();
@@ -1824,6 +1832,7 @@ ProcessStandbyReplyMessage(void)
 			walsnd->flushLag = flushLag;
 		if (applyLag != -1 || clearLagTimes)
 			walsnd->applyLag = applyLag;
+		walsnd->replyTime = sendTimestamp;
 		SpinLockRelease(&walsnd->mutex);
 	}
 
@@ -2265,6 +2274,7 @@ InitWalSenderSlot(void)
 			walsnd->applyLag = -1;
 			walsnd->state = WALSNDSTATE_STARTUP;
 			walsnd->latch = &MyProc->procLatch;
+			walsnd->replyTime = 0;
 			SpinLockRelease(&walsnd->mutex);
 			/* don't need the lock anymore */
 			MyWalSnd = (WalSnd *) walsnd;
@@ -3179,7 +3189,7 @@ offset_to_interval(TimeOffset offset)
 Datum
 pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAL_SENDERS_COLS	11
+#define PG_STAT_GET_WAL_SENDERS_COLS	12
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -3233,6 +3243,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		int			priority;
 		int			pid;
 		WalSndState state;
+		TimestampTz	replyTime;
 		Datum		values[PG_STAT_GET_WAL_SENDERS_COLS];
 		bool		nulls[PG_STAT_GET_WAL_SENDERS_COLS];
 
@@ -3252,6 +3263,7 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		flushLag = walsnd->flushLag;
 		applyLag = walsnd->applyLag;
 		priority = walsnd->sync_standby_priority;
+		replyTime = walsnd->replyTime;
 		SpinLockRelease(&walsnd->mutex);
 
 		memset(nulls, 0, sizeof(nulls));
@@ -3328,6 +3340,11 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 					CStringGetTextDatum("sync") : CStringGetTextDatum("quorum");
 			else
 				values[10] = CStringGetTextDatum("potential");
+
+			if (replyTime == 0)
+				nulls[11] = true;
+			else
+				values[11] = TimestampTzGetDatum(replyTime);
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

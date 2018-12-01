@@ -75,6 +75,11 @@ typedef struct WalSnd
 	 * SyncRepLock.
 	 */
 	int			sync_standby_priority;
+
+	/*
+	 * timestamp of the latest message, reported by standby server
+	*/
+	TimestampTz	replyTime;
 } WalSnd;
 
 extern WalSnd *MyWalSnd;

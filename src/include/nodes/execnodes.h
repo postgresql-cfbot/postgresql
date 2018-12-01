@@ -367,7 +367,16 @@ typedef struct JunkFilter
 	AttrNumber *jf_cleanMap;
 	TupleTableSlot *jf_resultSlot;
 	AttrNumber	jf_junkAttNo;
+	AttrNumber	jf_otherJunkAttNo;
 } JunkFilter;
+
+typedef struct MergeState
+{
+	/* List of MERGE MATCHED action states */
+	List		   *matchedActionStates;
+	/* List of MERGE NOT MATCHED action states */
+	List		   *notMatchedActionStates;
+} MergeState;
 
 /*
  * OnConflictSetState
@@ -472,7 +481,38 @@ typedef struct ResultRelInfo
 
 	/* Additional information specific to partition tuple routing */
 	struct PartitionRoutingInfo *ri_PartitionInfo;
+
+	int         ri_PartitionLeafIndex;
+
+	/* for running MERGE on this result relation */
+	MergeState *ri_mergeState;
+
+	/*
+	 * While executing MERGE, the target relation is processed twice; once
+	 * as a target relation and once to run a join between the target and the
+	 * source. We generate two different RTEs for these two purposes, one with
+	 * rte->inh set to false and other with rte->inh set to true.
+	 *
+	 * Since the plan re-evaluated by EvalPlanQual uses the join RTE, we must
+	 * install the updated tuple in the scan corresponding to that RTE. The
+	 * following member tracks the index of the second RTE for EvalPlanQual
+	 * purposes. ri_mergeTargetRTI is non-zero only when MERGE is in-progress.
+	 * We use ri_mergeTargetRTI to run EvalPlanQual for MERGE and
+	 * ri_RangeTableIndex elsewhere.
+	 */
+	Index		ri_mergeTargetRTI;
 } ResultRelInfo;
+
+/*
+ * Get the Range table index for EvalPlanQual.
+ *
+ * We use the ri_mergeTargetRTI if set, otherwise use ri_RangeTableIndex.
+ * ri_mergeTargetRTI should really be ever set iff we're running MERGE.
+ */
+#define GetEPQRangeTableIndex(r) \
+	(((r)->ri_mergeTargetRTI > 0)  \
+	 ? (r)->ri_mergeTargetRTI \
+	 : (r)->ri_RangeTableIndex)
 
 /* ----------------
  *	  EState information
@@ -1026,10 +1066,20 @@ typedef struct PlanState
 #define outerPlanState(node)		(((PlanState *)(node))->lefttree)
 
 /* Macros for inline access to certain instrumentation counters */
-#define InstrCountTuples2(node, delta) \
+#define InstrCountNodeTuples1(node, delta) \
 	do { \
 		if (((PlanState *)(node))->instrument) \
-			((PlanState *)(node))->instrument->ntuples2 += (delta); \
+			((PlanState *)(node))->instrument->node_ntuples1 += (delta); \
+	} while (0)
+#define InstrCountNodeTuples2(node, delta) \
+	do { \
+		if (((PlanState *)(node))->instrument) \
+			((PlanState *)(node))->instrument->node_ntuples2 += (delta); \
+	} while (0)
+#define InstrCountNodeTuples3(node, delta) \
+	do { \
+		if (((PlanState *)(node))->instrument) \
+			((PlanState *)(node))->instrument->node_ntuples3 += (delta); \
 	} while (0)
 #define InstrCountFiltered1(node, delta) \
 	do { \
@@ -1088,13 +1138,27 @@ typedef struct ProjectSetState
 } ProjectSetState;
 
 /* ----------------
+ *	 MergeActionState information
+ * ----------------
+ */
+typedef struct MergeActionState
+{
+	NodeTag		type;
+	bool		matched;		/* true=MATCHED, false=NOT MATCHED */
+	ExprState  *whenqual;		/* WHEN AND conditions */
+	CmdType		commandType;	/* INSERT/UPDATE/DELETE/DO NOTHING */
+	ProjectionInfo *proj;		/* tuple projection info */
+	TupleDesc	tupDesc;		/* tuple descriptor for projection */
+} MergeActionState;
+
+/* ----------------
  *	 ModifyTableState information
  * ----------------
  */
 typedef struct ModifyTableState
 {
 	PlanState	ps;				/* its first field is NodeTag */
-	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
+	CmdType		operation;		/* INSERT, UPDATE, DELETE or MERGE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	bool		mt_done;		/* are we done? */
 	PlanState **mt_plans;		/* subplans (one per target rel) */
@@ -1118,6 +1182,8 @@ typedef struct ModifyTableState
 	 */
 	TupleTableSlot *mt_root_tuple_slot;
 
+	TupleTableSlot *mt_mergeproj;	/* MERGE action projection target */
+
 	/* Tuple-routing support info */
 	struct PartitionTupleRouting *mt_partition_tuple_routing;
 
@@ -1129,6 +1195,9 @@ typedef struct ModifyTableState
 
 	/* Per plan map for tuple conversion from child to root */
 	TupleConversionMap **mt_per_subplan_tupconv_maps;
+
+	/* Flags showing which subcommands are present INS/UPD/DEL/DO NOTHING */
+	int			mt_merge_subcommands;
 } ModifyTableState;
 
 /* ----------------

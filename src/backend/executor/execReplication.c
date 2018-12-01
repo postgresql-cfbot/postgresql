@@ -479,7 +479,8 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
 		slot = ExecBRUpdateTriggers(estate, epqstate, resultRelInfo,
-									&hsearchslot->tuple->t_self, NULL, slot);
+									&hsearchslot->tuple->t_self, NULL, slot,
+									NULL);
 
 		if (slot == NULL)		/* "do nothing" */
 			skip_tuple = true;
@@ -543,7 +544,7 @@ ExecSimpleRelationDelete(EState *estate, EPQState *epqstate,
 	{
 		skip_tuple = !ExecBRDeleteTriggers(estate, epqstate, resultRelInfo,
 										   &hsearchslot->tuple->t_self, NULL,
-										   NULL);
+										   NULL, NULL);
 	}
 
 	if (!skip_tuple)

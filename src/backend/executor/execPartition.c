@@ -440,6 +440,190 @@ ExecFindPartition(ModifyTableState *mtstate,
 }
 
 /*
+ * Given OID of the partition leaf, return the index of the leaf at the current
+ * partition subroot. We ignore all non-leaf partitions. The caller must handle
+ * the case where the desired leaf partition is not a direct partition of the
+ * current subroot we're looking at.
+ */
+static ResultRelInfo *
+ExecSearchPartitionLeavesByOid(ModifyTableState *mtstate,
+					   ResultRelInfo *rootResultRelInfo,
+					   PartitionTupleRouting *proute,
+					   PartitionDispatch dispatch,
+					   EState *estate,
+					   Oid partoid)
+{
+	int partidx;
+	PartitionDesc partdesc = dispatch->partdesc;
+	ResultRelInfo *rri;
+
+	rri = NULL;
+	for (partidx = 0; partidx < partdesc->nparts; partidx++)
+	{
+		if (partdesc->oids[partidx] == partoid)
+		{
+			Assert(partdesc->is_leaf[partidx]);
+			break;
+		}
+	}
+
+	/*
+	 * If found, then do the necessary initialisation and return.
+	 */
+	if (partidx < partdesc->nparts)
+	{
+
+		/*
+		 * Look to see if we've already got a ResultRelInfo for this
+		 * partition.
+		 */
+		if (likely(dispatch->indexes[partidx] >= 0))
+		{
+			/* ResultRelInfo already built */
+			Assert(dispatch->indexes[partidx] < proute->num_partitions);
+			rri = proute->partitions[dispatch->indexes[partidx]];
+		}
+		else
+		{
+			bool		found = false;
+
+			/*
+			 * We have not yet set up a ResultRelInfo for this partition,
+			 * but if we have a subplan hash table, we might have one
+			 * there.  If not, we'll have to create one.
+			 */
+			if (proute->subplan_resultrel_htab)
+			{
+				Oid			partoid = partdesc->oids[partidx];
+				SubplanResultRelHashElem   *elem;
+
+				elem = hash_search(proute->subplan_resultrel_htab,
+						&partoid, HASH_FIND, NULL);
+				if (elem)
+				{
+					found = true;
+					rri = elem->rri;
+
+					/* Verify this ResultRelInfo allows INSERTs */
+					CheckValidResultRel(rri, CMD_INSERT);
+
+					/* Set up the PartitionRoutingInfo for it */
+					ExecInitRoutingInfo(mtstate, estate, proute, dispatch,
+							rri, partidx);
+				}
+			}
+
+			/* We need to create a new one. */
+			if (!found)
+				rri = ExecInitPartitionInfo(mtstate, estate, proute,
+						dispatch,
+						rootResultRelInfo, partidx);
+		}
+	}
+
+	/* Could be NULL if no matching partition found at the current level. */
+	return rri;
+}
+
+/*
+ * Helper function to recursively search a partition with the given OID in the
+ * partition hierarchy.
+ */
+static ResultRelInfo *
+ExecFindPartitionByOidRecurse(ModifyTableState *mtstate,
+					   ResultRelInfo *rootResultRelInfo,
+					   PartitionTupleRouting *proute,
+					   PartitionDispatch dispatch,
+					   EState *estate,
+					   Oid partoid)
+{
+	PartitionDispatch *pd = proute->partition_dispatch_info;
+	int partidx;
+	ResultRelInfo *rri;
+	PartitionDesc partdesc;
+
+	/*
+	 * If the desired partition is a leaf partition of the current (sub)-root
+	 * then we're done.
+	 */
+	rri = ExecSearchPartitionLeavesByOid(mtstate, rootResultRelInfo, proute,
+			dispatch, estate, partoid);
+	if (rri)
+		return rri;
+
+	/*
+	 * Else recursively search each of the subpartitions.
+	 */
+	partdesc = dispatch->partdesc;
+	for (partidx = 0; partidx < partdesc->nparts; partidx++)
+	{
+		PartitionDispatch subdispatch;
+
+		if (partdesc->is_leaf[partidx])
+			continue;
+
+		/*
+		 * Partition is a sub-partitioned table; get the PartitionDispatch
+		 */
+		if (likely(dispatch->indexes[partidx] >= 0))
+		{
+			/* Already built. */
+			Assert(dispatch->indexes[partidx] < proute->num_dispatch);
+
+			/*
+			 * Move down to the next partition level and search again
+			 * until we find a leaf partition that matches this tuple
+			 */
+			subdispatch = pd[dispatch->indexes[partidx]];
+		}
+		else
+		{
+			/*
+			 * Create the new PartitionDispatch.  We pass the current one
+			 * in as the parent PartitionDispatch
+			 */
+			subdispatch = ExecInitPartitionDispatchInfo(proute,
+					partdesc->oids[partidx],
+					dispatch, partidx);
+			Assert(dispatch->indexes[partidx] >= 0 &&
+					dispatch->indexes[partidx] < proute->num_dispatch);
+		}
+		rri = ExecFindPartitionByOidRecurse(mtstate, rootResultRelInfo, proute,
+				subdispatch, estate, partoid);
+		if (rri)
+			return rri;
+	}
+
+	return NULL;
+}
+
+/*
+ * Given OID of the partition leaf, return the index of the leaf in the
+ * partition hierarchy.
+ *
+ * XXX This is an O(N) operation and further optimization would be beneficial
+ */
+ResultRelInfo *
+ExecFindPartitionByOid(ModifyTableState *mtstate,
+					   ResultRelInfo *rootResultRelInfo,
+					   PartitionTupleRouting *proute,
+					   EState *estate,
+					   Oid partoid)
+{
+	PartitionDispatch  *pd = proute->partition_dispatch_info;
+	PartitionDispatch	dispatch = pd[0];
+	ResultRelInfo	   *rri;
+
+	/*
+	 * Recursively search starting at the root partition.
+	 */
+	rri = ExecFindPartitionByOidRecurse(mtstate, rootResultRelInfo, proute,
+			dispatch, estate, partoid);
+	Assert(rri);
+	return rri;
+}
+
+/*
  * ExecHashSubPlanResultRelsByOid
  *		Build a hash table to allow fast lookups of subplan ResultRelInfos by
  *		partition Oid.  We also populate the subplan ResultRelInfo with an
@@ -521,6 +705,8 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 					  node ? node->rootRelation : 1,
 					  rootrel,
 					  estate->es_instrument);
+
+	leaf_part_rri->ri_PartitionLeafIndex = partidx;
 
 	/*
 	 * Verify result relation is a valid target for an INSERT.  An UPDATE of a
@@ -847,6 +1033,96 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		lappend(estate->es_tuple_routing_result_relations,
 				leaf_part_rri);
 
+	/*
+	 * Initialize information about this partition that's needed to handle
+	 * MERGE.
+	 */
+	if (node && node->operation == CMD_MERGE)
+	{
+		TupleDesc	partrelDesc = RelationGetDescr(partrel);
+		TupleConversionMap *map =
+			leaf_part_rri->ri_PartitionInfo->pi_RootToPartitionMap;
+		int			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		Relation	firstResultRel = mtstate->resultRelInfo[0].ri_RelationDesc;
+
+		/*
+		 * If the root parent and partition have the same tuple
+		 * descriptor, just reuse the original MERGE state for partition.
+		 */
+		if (map == NULL)
+		{
+			leaf_part_rri->ri_mergeState = rootResultRelInfo->ri_mergeState;
+		}
+		else
+		{
+			/* Convert expressions contain partition's attnos. */
+			List	   *conv_tl, *conv_qual;
+			ListCell   *l;
+			List	   *matchedActionStates = NIL;
+			List	   *notMatchedActionStates = NIL;
+
+			foreach (l, node->mergeActionList)
+			{
+				MergeAction *action = lfirst_node(MergeAction, l);
+				MergeActionState *action_state = makeNode(MergeActionState);
+				TupleDesc	tupDesc;
+				ExprContext *econtext;
+
+				action_state->matched = action->matched;
+				action_state->commandType = action->commandType;
+
+				conv_qual = (List *) action->qual;
+				conv_qual = map_partition_varattnos(conv_qual,
+							firstVarno, partrel,
+							firstResultRel, NULL);
+
+				action_state->whenqual = ExecInitQual(conv_qual, &mtstate->ps);
+
+				conv_tl = (List *) action->targetList;
+				conv_tl = map_partition_varattnos(conv_tl,
+							firstVarno, partrel,
+							firstResultRel, NULL);
+
+				/* conv_tl may be NIL for DELETE action */
+				if (conv_tl != NIL)
+				{
+					conv_tl = adjust_partition_tlist( conv_tl, map);
+
+					tupDesc = ExecTypeFromTL(conv_tl);
+					action_state->tupDesc = tupDesc;
+
+					/* build action projection state */
+					econtext = mtstate->ps.ps_ExprContext;
+					action_state->proj =
+						ExecBuildProjectionInfo(conv_tl, econtext,
+								mtstate->mt_mergeproj,
+								&mtstate->ps,
+								partrelDesc);
+				}
+
+				if (action_state->matched)
+					matchedActionStates =
+						lappend(matchedActionStates, action_state);
+				else
+					notMatchedActionStates =
+						lappend(notMatchedActionStates, action_state);
+			}
+			leaf_part_rri->ri_mergeState->matchedActionStates =
+				matchedActionStates;
+			leaf_part_rri->ri_mergeState->notMatchedActionStates =
+				notMatchedActionStates;
+		}
+
+		/*
+		 * get_partition_dispatch_recurse() and expand_partitioned_rtentry()
+		 * fetch the leaf OIDs in the same order. So we can safely derive the
+		 * index of the merge target relation corresponding to this partition
+		 * by simply adding partidx + 1 to the root's merge target relation.
+		 */
+		leaf_part_rri->ri_mergeTargetRTI = node->mergeTargetRelation +
+			partidx + 1;
+	}
+
 	MemoryContextSwitchTo(oldcxt);
 
 	return leaf_part_rri;
@@ -910,7 +1186,8 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 * from partition's rowtype to the root partition table's.
 	 */
 	if (mtstate &&
-		(mtstate->mt_transition_capture || mtstate->mt_oc_transition_capture))
+		(mtstate->mt_transition_capture || mtstate->mt_oc_transition_capture ||
+		 mtstate->operation == CMD_MERGE))
 	{
 		partrouteinfo->pi_PartitionToRootMap =
 			convert_tuples_by_name(RelationGetDescr(partRelInfo->ri_RelationDesc),

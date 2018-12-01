@@ -111,6 +111,7 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static void show_scan_direction(ExplainState *es, ScanDirection scandir);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 						ExplainState *es);
 static void ExplainScanTarget(Scan *plan, ExplainState *es);
@@ -1271,13 +1272,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SeqScan:
 		case T_SampleScan:
 		case T_BitmapHeapScan:
-		case T_TidScan:
 		case T_SubqueryScan:
 		case T_FunctionScan:
 		case T_TableFuncScan:
 		case T_ValuesScan:
 		case T_CteScan:
 		case T_WorkTableScan:
+			ExplainScanTarget((Scan *) plan, es);
+			break;
+		case T_TidScan:
+			show_scan_direction(es, ((TidScan *) plan)->scandir);
 			ExplainScanTarget((Scan *) plan, es);
 			break;
 		case T_ForeignScan:
@@ -2893,6 +2897,40 @@ show_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 /*
+ * Show the direction of a scan.
+ */
+static void
+show_scan_direction(ExplainState *es, ScanDirection scandir)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		if (ScanDirectionIsBackward(scandir))
+			appendStringInfoString(es->str, " Backward");
+	}
+	else
+	{
+		const char *scandirstr;
+
+		switch (scandir)
+		{
+			case BackwardScanDirection:
+				scandirstr = "Backward";
+				break;
+			case NoMovementScanDirection:
+				scandirstr = "NoMovement";
+				break;
+			case ForwardScanDirection:
+				scandirstr = "Forward";
+				break;
+			default:
+				scandirstr = "???";
+				break;
+		}
+		ExplainPropertyText("Scan Direction", scandirstr, es);
+	}
+}
+
+/*
  * Add some additional details about an IndexScan or IndexOnlyScan
  */
 static void
@@ -2901,34 +2939,12 @@ ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 {
 	const char *indexname = explain_get_index_name(indexid);
 
-	if (es->format == EXPLAIN_FORMAT_TEXT)
-	{
-		if (ScanDirectionIsBackward(indexorderdir))
-			appendStringInfoString(es->str, " Backward");
-		appendStringInfo(es->str, " using %s", indexname);
-	}
-	else
-	{
-		const char *scandir;
+	show_scan_direction(es, indexorderdir);
 
-		switch (indexorderdir)
-		{
-			case BackwardScanDirection:
-				scandir = "Backward";
-				break;
-			case NoMovementScanDirection:
-				scandir = "NoMovement";
-				break;
-			case ForwardScanDirection:
-				scandir = "Forward";
-				break;
-			default:
-				scandir = "???";
-				break;
-		}
-		ExplainPropertyText("Scan Direction", scandir, es);
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+		appendStringInfo(es->str, " using %s", indexname);
+	else
 		ExplainPropertyText("Index Name", indexname, es);
-	}
 }
 
 /*

@@ -478,13 +478,15 @@ typedef struct BitmapHeapScan
  *		tid scan node
  *
  * tidquals is an implicitly OR'ed list of qual expressions of the form
- * "CTID = pseudoconstant" or "CTID = ANY(pseudoconstant_array)".
+ * "CTID = pseudoconstant", "CTID = ANY(pseudoconstant_array)", or
+ * "(CTID OP pseudoconstant AND ...)" for OP in >, >=, <, <=.
  * ----------------
  */
 typedef struct TidScan
 {
 	Scan		scan;
 	List	   *tidquals;		/* qual(s) involving CTID = something */
+	ScanDirection scandir;
 } TidScan;
 
 /* ----------------

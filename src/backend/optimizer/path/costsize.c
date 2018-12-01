@@ -1184,9 +1184,12 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	QualCost	qpqual_cost;
 	Cost		cpu_per_tuple;
 	QualCost	tid_qual_cost;
-	int			ntuples;
+	double		ntuples;
+	double		nrandompages;
+	double		nseqpages;
 	ListCell   *l;
 	double		spc_random_page_cost;
+	double		spc_seq_page_cost;
 
 	/* Should only be applied to base relations */
 	Assert(baserel->relid > 0);
@@ -1198,8 +1201,10 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	else
 		path->rows = baserel->rows;
 
-	/* Count how many tuples we expect to retrieve */
-	ntuples = 0;
+	/* Count how many tuples and pages we expect to scan */
+	ntuples = 0.0;
+	nrandompages = 0.0;
+	nseqpages = 0.0;
 	foreach(l, tidquals)
 	{
 		if (IsA(lfirst(l), ScalarArrayOpExpr))
@@ -1207,20 +1212,46 @@ cost_tidscan(Path *path, PlannerInfo *root,
 			/* Each element of the array yields 1 tuple */
 			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) lfirst(l);
 			Node	   *arraynode = (Node *) lsecond(saop->args);
+			int			array_len = estimate_array_length(arraynode);
 
-			ntuples += estimate_array_length(arraynode);
+			ntuples += array_len;
+			nrandompages += array_len;
 		}
 		else if (IsA(lfirst(l), CurrentOfExpr))
 		{
 			/* CURRENT OF yields 1 tuple */
 			isCurrentOf = true;
-			ntuples++;
+			ntuples += 1.0;
+			nrandompages += 1.0;
 		}
 		else
 		{
-			/* It's just CTID = something, count 1 tuple */
-			ntuples++;
+			/* For anything else, we'll use the normal selectivity estimate. */
+			Selectivity selectivity = clause_selectivity(root, lfirst(l),
+														 baserel->relid,
+														 JOIN_INNER,
+														 NULL);
+			double		pages = ceil(selectivity * baserel->pages);
+
+			if (pages <= 0.0)
+				pages = 1.0;
+
+			/*
+			 * The first page in a range requires a random seek, but each
+			 * subsequent page is just a normal sequential page read.
+			 */
+			ntuples += selectivity * baserel->tuples;
+			nseqpages += pages - 1.0;
+			nrandompages += 1.0;
 		}
+	}
+
+	/* An empty tidquals list means we're going to scan the whole table. */
+	if (tidquals == NIL)
+	{
+		ntuples += baserel->tuples;
+		nseqpages += baserel->pages - 1.0;
+		nrandompages += 1.0;
 	}
 
 	/*
@@ -1248,15 +1279,21 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	/* fetch estimated page cost for tablespace containing table */
 	get_tablespace_page_costs(baserel->reltablespace,
 							  &spc_random_page_cost,
-							  NULL);
+							  &spc_seq_page_cost);
 
-	/* disk costs --- assume each tuple on a different page */
-	run_cost += spc_random_page_cost * ntuples;
+	/* disk costs */
+	run_cost += spc_random_page_cost * nrandompages + spc_seq_page_cost * nseqpages;
 
 	/* Add scanning CPU costs */
 	get_restriction_qual_cost(root, baserel, param_info, &qpqual_cost);
 
-	/* XXX currently we assume TID quals are a subset of qpquals */
+	/*
+	 * XXX currently we assume TID quals are a subset of qpquals at this
+	 * point; they will be removed (if possible) when we create the plan, so
+	 * we subtract their cost from the total qpqual cost.  (If the TID quals
+	 * can't be removed, this is a mistake and we're going to underestimate
+	 * the CPU cost a bit.)
+	 */
 	startup_cost += qpqual_cost.startup + tid_qual_cost.per_tuple;
 	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple -
 		tid_qual_cost.per_tuple;

@@ -581,6 +581,72 @@ scalarineqsel(PlannerInfo *root, Oid operator, bool isgt, bool iseq,
 
 	if (!HeapTupleIsValid(vardata->statsTuple))
 	{
+		/*
+		 * There are no stats for system columns, but for CTID we can estimate
+		 * based on table size.
+		 */
+		if (vardata->var && IsA(vardata->var, Var) &&
+			((Var *) vardata->var)->varattno == SelfItemPointerAttributeNumber)
+		{
+			ItemPointer itemptr;
+			double		block;
+			double		density;
+
+			/* If the relation's empty, we're going to include all of it. */
+			if (vardata->rel->pages == 0)
+				return 1.0;
+
+			itemptr = (ItemPointer) DatumGetPointer(constval);
+			block = ItemPointerGetBlockNumberNoCheck(itemptr);
+
+			/*
+			 * Determine the average number of tuples per page.  We naively
+			 * assume there will never be any dead tuples or empty space at
+			 * the start or in the middle of the page.  This is likely fine
+			 * for the purposes here.
+			 *
+			 * Since the last page will, on average, be only half full, we can
+			 * estimate it to have half as many tuples as earlier pages.  So
+			 * give it half the weight of a regular page.
+			 */
+			density = vardata->rel->tuples / (vardata->rel->pages - 0.5);
+
+			/* If it's the last page, it has half the density. */
+			if (block >= vardata->rel->pages - 1)
+				density *= 0.5;
+
+			/* Add a fraction of a block to take the offset into account. */
+			if (density > 0.0)
+			{
+				OffsetNumber offset = ItemPointerGetOffsetNumberNoCheck(itemptr);
+
+				block += Min(offset / density, 1.0);
+			}
+
+			/*
+			 * Again, the last page has only half weight when converting the
+			 * relative block number to a selectivity.
+			 */
+			selec = block / (vardata->rel->pages - 0.5);
+
+			/*
+			 * We'll have one less tuple for "<" and one additional tuple for
+			 * ">=", the latter of which we'll reverse the selectivity for
+			 * below, so we can simply subtract a tuple here.  We can easily
+			 * detect these two cases by iseq being equal to isgt.  They'll
+			 * either both be true or both be false.
+			 */
+			if (iseq == isgt && vardata->rel->tuples >= 1.0)
+				selec -= (1 / vardata->rel->tuples);
+
+			/* Finally, reverse the selectivity for the ">", ">=" case. */
+			if (isgt)
+				selec = 1.0 - selec;
+
+			CLAMP_PROBABILITY(selec);
+			return selec;
+		}
+
 		/* no stats available, so default result */
 		return DEFAULT_INEQ_SEL;
 	}
@@ -1794,6 +1860,15 @@ nulltestsel(PlannerInfo *root, NullTestType nulltesttype, Node *arg,
 					 (int) nulltesttype);
 				return (Selectivity) 0; /* keep compiler quiet */
 		}
+	}
+	else if (vardata.var && IsA(vardata.var, Var) &&
+			 ((Var *) vardata.var)->varattno == SelfItemPointerAttributeNumber)
+	{
+		/*
+		 * There are no stats for system columns, but we know CTID is never
+		 * NULL.
+		 */
+		selec = (nulltesttype == IS_NULL) ? 0.0 : 1.0;
 	}
 	else
 	{

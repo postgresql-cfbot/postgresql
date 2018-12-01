@@ -575,11 +575,27 @@ heapgettup(HeapScanDesc scan,
 			 * forward scanners.
 			 */
 			scan->rs_syncscan = false;
-			/* start from last page of the scan */
-			if (scan->rs_startblock > 0)
-				page = scan->rs_startblock - 1;
+
+			/*
+			 * When scanning the whole relation, start from the last page of
+			 * the scan.
+			 */
+			if (scan->rs_numblocks == InvalidBlockNumber)
+			{
+				if (scan->rs_startblock > 0)
+					page = scan->rs_startblock - 1;
+				else
+					page = scan->rs_nblocks - 1;
+			}
 			else
-				page = scan->rs_nblocks - 1;
+			{
+				/*
+				 * Otherwise, if scanning just a subset of the relation, start
+				 * at the final block in the range.
+				 */
+				page = scan->rs_startblock + scan->rs_numblocks - 1;
+			}
+
 			heapgetpage(scan, page);
 		}
 		else
@@ -876,11 +892,27 @@ heapgettup_pagemode(HeapScanDesc scan,
 			 * forward scanners.
 			 */
 			scan->rs_syncscan = false;
-			/* start from last page of the scan */
-			if (scan->rs_startblock > 0)
-				page = scan->rs_startblock - 1;
+
+			/*
+			 * When scanning the whole relation, start from the last page of
+			 * the scan.
+			 */
+			if (scan->rs_numblocks == InvalidBlockNumber)
+			{
+				if (scan->rs_startblock > 0)
+					page = scan->rs_startblock - 1;
+				else
+					page = scan->rs_nblocks - 1;
+			}
 			else
-				page = scan->rs_nblocks - 1;
+			{
+				/*
+				 * Otherwise, if scanning just a subset of the relation, start
+				 * at the final block in the range.
+				 */
+				page = scan->rs_startblock + scan->rs_numblocks - 1;
+			}
+
 			heapgetpage(scan, page);
 		}
 		else

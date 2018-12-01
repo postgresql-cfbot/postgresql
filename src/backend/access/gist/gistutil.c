@@ -160,7 +160,7 @@ gistMakeUnionItVec(GISTSTATE *giststate, IndexTuple *itvec, int len,
 
 	evec = (GistEntryVector *) palloc((len + 2) * sizeof(GISTENTRY) + GEVHDRSZ);
 
-	for (i = 0; i < giststate->tupdesc->natts; i++)
+	for (i = 0; i < giststate->truncTupdesc->natts; i++)
 	{
 		int			j;
 
@@ -221,7 +221,7 @@ gistunion(Relation r, IndexTuple *itvec, int len, GISTSTATE *giststate)
 
 	gistMakeUnionItVec(giststate, itvec, len, attr, isnull);
 
-	return gistFormTuple(giststate, r, attr, isnull, false);
+	return gistFormTuple(giststate, r, attr, isnull, false, true);
 }
 
 /*
@@ -296,7 +296,7 @@ gistDeCompressAtt(GISTSTATE *giststate, Relation r, IndexTuple tuple, Page p,
 {
 	int			i;
 
-	for (i = 0; i < r->rd_att->natts; i++)
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		Datum		datum;
 
@@ -329,7 +329,7 @@ gistgetadjusted(Relation r, IndexTuple oldtup, IndexTuple addtup, GISTSTATE *gis
 	gistDeCompressAtt(giststate, r, addtup, NULL,
 					  (OffsetNumber) 0, addentries, addisnull);
 
-	for (i = 0; i < r->rd_att->natts; i++)
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		gistMakeUnionKey(giststate, i,
 						 oldentries + i, oldisnull[i],
@@ -355,7 +355,7 @@ gistgetadjusted(Relation r, IndexTuple oldtup, IndexTuple addtup, GISTSTATE *gis
 	if (neednew)
 	{
 		/* need to update key */
-		newtup = gistFormTuple(giststate, r, attr, isnull, false);
+		newtup = gistFormTuple(giststate, r, attr, isnull, false, true);
 		newtup->t_tid = oldtup->t_tid;
 	}
 
@@ -442,7 +442,7 @@ gistchoose(Relation r, Page p, IndexTuple it,	/* it has compressed entry */
 		zero_penalty = true;
 
 		/* Loop over index attributes. */
-		for (j = 0; j < r->rd_att->natts; j++)
+		for (j = 0; j < IndexRelationGetNumberOfKeyAttributes(r); j++)
 		{
 			Datum		datum;
 			float		usize;
@@ -470,7 +470,7 @@ gistchoose(Relation r, Page p, IndexTuple it,	/* it has compressed entry */
 				result = i;
 				best_penalty[j] = usize;
 
-				if (j < r->rd_att->natts - 1)
+				if (j < IndexRelationGetNumberOfKeyAttributes(r) - 1)
 					best_penalty[j + 1] = -1;
 
 				/* we have new best, so reset keep-it decision */
@@ -500,7 +500,7 @@ gistchoose(Relation r, Page p, IndexTuple it,	/* it has compressed entry */
 		 * If we looped past the last column, and did not update "result",
 		 * then this tuple is exactly as good as the prior best tuple.
 		 */
-		if (j == r->rd_att->natts && result != i)
+		if (j == IndexRelationGetNumberOfKeyAttributes(r) && result != i)
 		{
 			if (keep_current_best == -1)
 			{
@@ -570,7 +570,7 @@ gistdentryinit(GISTSTATE *giststate, int nkey, GISTENTRY *e,
 
 IndexTuple
 gistFormTuple(GISTSTATE *giststate, Relation r,
-			  Datum attdata[], bool isnull[], bool isleaf)
+			  Datum attdata[], bool isnull[], bool isleaf, bool isTruncated)
 {
 	Datum		compatt[INDEX_MAX_KEYS];
 	int			i;
@@ -579,7 +579,7 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 	/*
 	 * Call the compress method on each attribute.
 	 */
-	for (i = 0; i < r->rd_att->natts; i++)
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		if (isnull[i])
 			compatt[i] = (Datum) 0;
@@ -602,7 +602,23 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 		}
 	}
 
-	res = index_form_tuple(giststate->tupdesc, compatt, isnull);
+	if (!isTruncated)
+	{
+		/*
+		 * Allocate each included attribute.
+		 */
+		for (; i < r->rd_att->natts; i++)
+		{
+			if (isnull[i])
+				compatt[i] = (Datum) 0;
+			else
+			{
+				compatt[i] = attdata[i];
+			}
+		}
+	}
+
+	res = index_form_tuple(isTruncated?giststate->truncTupdesc:giststate->tupdesc, compatt, isnull);
 
 	/*
 	 * The offset number on tuples on internal pages is unused. For historical
@@ -644,7 +660,7 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 	bool		isnull[INDEX_MAX_KEYS];
 	int			i;
 
-	for (i = 0; i < r->rd_att->natts; i++)
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		Datum		datum;
 
@@ -678,6 +694,14 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 			isnull[i] = true;
 			fetchatt[i] = (Datum) 0;
 		}
+	}
+
+	/*
+	 * Get each included attribute.
+	 */
+	for (; i < r->rd_att->natts; i++)
+	{
+		fetchatt[i] = index_getattr(tuple, i + 1, giststate->tupdesc, &isnull[i]);
 	}
 	MemoryContextSwitchTo(oldcxt);
 

@@ -769,12 +769,14 @@ gistgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
  *
  * Opclasses that implement a fetch function support index-only scans.
  * Opclasses without compression functions also support index-only scans.
+ * Included attributes can be returned.
  */
 bool
 gistcanreturn(Relation index, int attno)
 {
 	if (OidIsValid(index_getprocid(index, attno, GIST_FETCH_PROC)) ||
-		!OidIsValid(index_getprocid(index, attno, GIST_COMPRESS_PROC)))
+		!OidIsValid(index_getprocid(index, attno, GIST_COMPRESS_PROC))||
+		attno > IndexRelationGetNumberOfKeyAttributes(index))
 		return true;
 	else
 		return false;

@@ -79,6 +79,8 @@ typedef struct GISTSTATE
 	MemoryContext tempCxt;		/* short-term context for calling functions */
 
 	TupleDesc	tupdesc;		/* index's tuple descriptor */
+	TupleDesc	truncTupdesc;	/* truncated tuple descriptor
+								 * for internal pages */
 	TupleDesc	fetchTupdesc;	/* tuple descriptor for tuples returned in an
 								 * index-only scan */
 
@@ -458,7 +460,8 @@ extern IndexTuple gistgetadjusted(Relation r,
 				IndexTuple addtup,
 				GISTSTATE *giststate);
 extern IndexTuple gistFormTuple(GISTSTATE *giststate,
-			  Relation r, Datum *attdata, bool *isnull, bool isleaf);
+			  Relation r, Datum *attdata, bool *isnull, bool isleaf,
+			  bool isTruncated);
 
 extern OffsetNumber gistchoose(Relation r, Page p,
 		   IndexTuple it,

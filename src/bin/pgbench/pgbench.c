@@ -501,12 +501,15 @@ static const char *QUERYMODE[] = {"simple", "extended", "prepared"};
 
 typedef struct
 {
-	char	   *line;			/* text of command line */
+	char	   *first_line;		/* first line for short display */
+	PQExpBufferData	lines;		/* full multi-line text of command */
 	int			command_num;	/* unique index of this Command struct */
 	int			type;			/* command type (SQL_COMMAND or META_COMMAND) */
 	MetaCommand meta;			/* meta command identifier, or META_NONE */
 	int			argc;			/* number of command words */
 	char	   *argv[MAX_ARGS]; /* command word list */
+	int			compound;       /* last compound command (number of \;) */
+	char	  **gset;           /* per-compound command prefix */
 	PgBenchExpr *expr;			/* parsed expression, if needed */
 	SimpleStats stats;			/* time spent in this command */
 } Command;
@@ -1732,6 +1735,107 @@ valueTruth(PgBenchValue *pval)
 	}
 }
 
+/* read all responses from backend, storing into variable or discarding */
+static bool
+read_response(CState *st, char **gset)
+{
+	PGresult   *res;
+	int			compound = 0;
+
+	while ((res = PQgetResult(st->con)) != NULL)
+	{
+		switch (PQresultStatus(res))
+		{
+			case PGRES_COMMAND_OK: /* non-SELECT commands */
+			case PGRES_EMPTY_QUERY: /* may be used for testing no-op overhead */
+				if (gset[compound] != NULL)
+				{
+					fprintf(stderr,
+							"client %d file %d command %d compound %d: "
+							"\\gset/cset expects a row\n",
+							st->id, st->use_file, st->command, compound);
+					st->ecnt++;
+					return false;
+				}
+				break; /* OK */
+
+			case PGRES_TUPLES_OK:
+				if (gset[compound] != NULL)
+				{
+					/* store result into variables if required */
+					int ntuples = PQntuples(res),
+						nfields = PQnfields(res),
+						f;
+
+					if (ntuples != 1)
+					{
+						fprintf(stderr,
+								"client %d file %d command %d compound %d: "
+								"expecting one row, got %d\n",
+								st->id, st->use_file, st->command, compound, ntuples);
+						st->ecnt++;
+						PQclear(res);
+						discard_response(st);
+						return false;
+					}
+
+					for (f = 0; f < nfields ; f++)
+					{
+						char *varname = PQfname(res, f);
+						/* prefix varname if required, will be freed below */
+						if (*gset[compound] != '\0')
+							varname = psprintf("%s%s", gset[compound], varname);
+
+						/* store result as a string */
+						if (!putVariable(st, "gset", varname,
+										 PQgetvalue(res, 0, f)))
+						{
+							/* internal error, should it rather abort? */
+							fprintf(stderr,
+									"client %d file %d command %d compound %d: "
+									"error storing into var %s\n",
+									st->id, st->use_file, st->command, compound,
+									varname);
+							st->ecnt++;
+							PQclear(res);
+							discard_response(st);
+							return false;
+						}
+
+						/* free varname only if allocated because of prefix */
+						if (*gset[compound] != '\0')
+							free(varname);
+					}
+				}
+				/* otherwise the result is simply thrown away by PQclear below */
+				break;	/* OK */
+
+			default:
+				/* everything else is unexpected, so probably an error */
+				fprintf(stderr,
+						"client %d file %d aborted in command %d compound %d: %s",
+						st->id, st->use_file, st->command, compound,
+						PQerrorMessage(st->con));
+				st->ecnt++;
+				PQclear(res);
+				discard_response(st);
+				return false;
+		}
+
+		PQclear(res);
+		compound += 1;
+	}
+
+	if (compound == 0)
+	{
+		fprintf(stderr, "client %d command %d: no results\n", st->id, st->command);
+		st->ecnt++;
+		return false;
+	}
+
+	return true;
+}
+
 /* get a value as an int, tell if there is a problem */
 static bool
 coerceToInt(PgBenchValue *pval, int64 *ival)
@@ -2862,8 +2966,6 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 	 */
 	for (;;)
 	{
-		PGresult   *res;
-
 		switch (st->state)
 		{
 				/* Select transaction (script) to run.  */
@@ -3141,24 +3243,11 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				if (PQisBusy(st->con))
 					return;		/* don't have the whole result yet */
 
-				/* Read and discard the query result */
-				res = PQgetResult(st->con);
-				switch (PQresultStatus(res))
-				{
-					case PGRES_COMMAND_OK:
-					case PGRES_TUPLES_OK:
-					case PGRES_EMPTY_QUERY:
-						/* OK */
-						PQclear(res);
-						discard_response(st);
-						st->state = CSTATE_END_COMMAND;
-						break;
-					default:
-						commandFailed(st, "SQL", PQerrorMessage(st->con));
-						PQclear(res);
-						st->state = CSTATE_ABORTED;
-						break;
-				}
+				/* read, store or discard the query results */
+				if (read_response(st, sql_script[st->use_file].commands[st->command]->gset))
+					st->state = CSTATE_END_COMMAND;
+				else
+					st->state = CSTATE_ABORTED;
 				break;
 
 				/*
@@ -3976,7 +4065,7 @@ runInitSteps(const char *initialize_steps)
 
 /*
  * Replace :param with $n throughout the command's SQL text, which
- * is a modifiable string in cmd->argv[0].
+ * is a modifiable string in cmd->lines.
  */
 static bool
 parseQuery(Command *cmd)
@@ -3984,8 +4073,7 @@ parseQuery(Command *cmd)
 	char	   *sql,
 			   *p;
 
-	/* We don't want to scribble on cmd->argv[0] until done */
-	sql = pg_strdup(cmd->argv[0]);
+	sql = pg_strdup(cmd->lines.data);
 
 	cmd->argc = 1;
 
@@ -4009,7 +4097,7 @@ parseQuery(Command *cmd)
 		if (cmd->argc >= MAX_ARGS)
 		{
 			fprintf(stderr, "statement has too many arguments (maximum is %d): %s\n",
-					MAX_ARGS - 1, cmd->argv[0]);
+					MAX_ARGS - 1, cmd->lines.data);
 			pg_free(name);
 			return false;
 		}
@@ -4021,7 +4109,7 @@ parseQuery(Command *cmd)
 		cmd->argc++;
 	}
 
-	pg_free(cmd->argv[0]);
+	Assert(cmd->argv[0] == NULL);
 	cmd->argv[0] = sql;
 	return true;
 }
@@ -4080,22 +4168,10 @@ syntax_error(const char *source, int lineno,
 	exit(1);
 }
 
-/*
- * Parse a SQL command; return a Command struct, or NULL if it's a comment
- *
- * On entry, psqlscan.l has collected the command into "buf", so we don't
- * really need to do much here except check for comment and set up a
- * Command struct.
- */
-static Command *
-process_sql_command(PQExpBuffer buf, const char *source)
+static char *
+skip_sql_comments(char *p)
 {
-	Command    *my_command;
-	char	   *p;
-	char	   *nlpos;
-
 	/* Skip any leading whitespace, as well as "--" style comments */
-	p = buf->data;
 	for (;;)
 	{
 		if (isspace((unsigned char) *p))
@@ -4115,35 +4191,121 @@ process_sql_command(PQExpBuffer buf, const char *source)
 	if (*p == '\0')
 		return NULL;
 
+	return p;
+}
+
+/*
+ * Parse a SQL command; return a Command struct, or NULL if it's a comment
+ *
+ * On entry, psqlscan.l has collected the command into "buf", so we don't
+ * really need to do much here except check for comment and set up a
+ * Command struct.
+ */
+static Command *
+create_sql_command(PQExpBuffer buf, const char *source, int compounds)
+{
+	Command    *my_command;
+	char	   *p = skip_sql_comments(buf->data);
+
+	if (p == NULL)
+		return NULL;
+
 	/* Allocate and initialize Command structure */
 	my_command = (Command *) pg_malloc0(sizeof(Command));
 	my_command->command_num = num_commands++;
 	my_command->type = SQL_COMMAND;
 	my_command->meta = META_NONE;
+	my_command->argc = 0;
+	my_command->compound = compounds;
+	my_command->gset = pg_malloc0(sizeof(char *) * (compounds+1));
 	initSimpleStats(&my_command->stats);
 
-	/*
-	 * Install query text as the sole argv string.  If we are using a
-	 * non-simple query mode, we'll extract parameters from it later.
-	 */
-	my_command->argv[0] = pg_strdup(p);
-	my_command->argc = 1;
+	my_command->first_line = NULL;
+
+	initPQExpBuffer(&my_command->lines);
+	appendPQExpBufferStr(&my_command->lines, p);
+
+	return my_command;
+}
+
+/*
+ * append "more" text to current compound command which may have been
+ * interrupted by \cset.
+ */
+static void
+append_sql_command(Command *my_command, char *more, int compounds)
+{
+	int		nc;
+
+	Assert(my_command->type == SQL_COMMAND && my_command->lines.len > 0);
+
+	more = skip_sql_comments(more);
+
+	if (more == NULL)
+		return;
+
+	/* append command text, embedding a ';' in place of the \cset */
+	appendPQExpBufferChar(&my_command->lines, ';');
+	appendPQExpBufferStr(&my_command->lines, more);
+
+	/* update number of compounds and extend array of prefixes */
+	nc = my_command->compound + 1 + compounds;
+	my_command->gset =
+		pg_realloc(my_command->gset, sizeof(char *) * (nc+1));
+	memset(my_command->gset + my_command->compound + 1, 0,
+		   sizeof(char *) * (compounds + 1));
+	my_command->compound = nc;
+}
+
+/*
+ * compute a shorten summary line for display
+ */
+static char *
+summary_line(const char *lines)
+{
+#define BUFLEN 60
+	char buf[BUFLEN];
+	char   *pos;
+
+	strncpy(buf, lines, BUFLEN-1);
+	buf[BUFLEN-1] = '\0';
+
+	pos = strchr(buf, '\n');
+	if (pos != NULL)
+		buf[pos - buf] = '\0';
+	pos = strchr(buf, '\r');
+	if (pos != NULL)
+		buf[pos - buf] = '\0';
+
+	return pg_strdup(buf);
+}
+
+static void
+postprocess_sql_command(Command *my_command)
+{
+	Assert(my_command->type == SQL_COMMAND);
 
 	/*
 	 * If SQL command is multi-line, we only want to save the first line as
-	 * the "line" label.
+	 * the "line" label for display.
 	 */
-	nlpos = strchr(p, '\n');
-	if (nlpos)
-	{
-		my_command->line = pg_malloc(nlpos - p + 1);
-		memcpy(my_command->line, p, nlpos - p);
-		my_command->line[nlpos - p] = '\0';
-	}
-	else
-		my_command->line = pg_strdup(p);
+	my_command->first_line = summary_line(my_command->lines.data);
 
-	return my_command;
+	/* parse query if necessary */
+	switch (querymode)
+	{
+		case QUERY_SIMPLE:
+			my_command->argv[0] = my_command->lines.data;
+			my_command->argc++;
+			break;
+		case QUERY_EXTENDED:
+		case QUERY_PREPARED:
+			if (!parseQuery(my_command))
+				exit(1);
+			break;
+		default:
+			exit(1);
+	}
 }
 
 /*
@@ -4201,7 +4363,7 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 		if (my_command->meta == META_SET)
 		{
 			if (!expr_lex_one_word(sstate, &word_buf, &word_offset))
-				syntax_error(source, lineno, my_command->line, my_command->argv[0],
+				syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 							 "missing argument", NULL, -1);
 
 			offsets[j] = word_offset;
@@ -4222,10 +4384,11 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 		my_command->expr = expr_parse_result;
 
 		/* Save line, trimming any trailing newline */
-		my_command->line = expr_scanner_get_substring(sstate,
-													  start_offset,
-													  expr_scanner_offset(sstate),
-													  true);
+		my_command->first_line =
+			expr_scanner_get_substring(sstate,
+									   start_offset,
+									   expr_scanner_offset(sstate),
+									   true);
 
 		expr_scanner_finish(yyscanner);
 
@@ -4238,7 +4401,7 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 	while (expr_lex_one_word(sstate, &word_buf, &word_offset))
 	{
 		if (j >= MAX_ARGS)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "too many arguments", NULL, -1);
 
 		offsets[j] = word_offset;
@@ -4247,19 +4410,20 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 	}
 
 	/* Save line, trimming any trailing newline */
-	my_command->line = expr_scanner_get_substring(sstate,
-												  start_offset,
-												  expr_scanner_offset(sstate),
-												  true);
+	my_command->first_line =
+		expr_scanner_get_substring(sstate,
+								   start_offset,
+								   expr_scanner_offset(sstate),
+								   true);
 
 	if (my_command->meta == META_SLEEP)
 	{
 		if (my_command->argc < 2)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "missing argument", NULL, -1);
 
 		if (my_command->argc > 3)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "too many arguments", NULL,
 						 offsets[3] - start_offset);
 
@@ -4288,7 +4452,7 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 			if (pg_strcasecmp(my_command->argv[2], "us") != 0 &&
 				pg_strcasecmp(my_command->argv[2], "ms") != 0 &&
 				pg_strcasecmp(my_command->argv[2], "s") != 0)
-				syntax_error(source, lineno, my_command->line, my_command->argv[0],
+				syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 							 "unrecognized time unit, must be us, ms or s",
 							 my_command->argv[2], offsets[2] - start_offset);
 		}
@@ -4296,25 +4460,32 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 	else if (my_command->meta == META_SETSHELL)
 	{
 		if (my_command->argc < 3)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "missing argument", NULL, -1);
 	}
 	else if (my_command->meta == META_SHELL)
 	{
 		if (my_command->argc < 2)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "missing command", NULL, -1);
 	}
 	else if (my_command->meta == META_ELSE || my_command->meta == META_ENDIF)
 	{
 		if (my_command->argc != 1)
-			syntax_error(source, lineno, my_command->line, my_command->argv[0],
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "unexpected argument", NULL, -1);
+	}
+	else if (pg_strcasecmp(my_command->argv[0], "gset") == 0 ||
+			 pg_strcasecmp(my_command->argv[0], "cset") == 0)
+	{
+		if (my_command->argc > 2)
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
+						 "at most one argument expected", NULL, -1);
 	}
 	else
 	{
 		/* my_command->meta == META_NONE */
-		syntax_error(source, lineno, my_command->line, my_command->argv[0],
+		syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 					 "invalid command", NULL, -1);
 	}
 
@@ -4393,6 +4564,9 @@ ParseScript(const char *script, const char *desc, int weight)
 	PQExpBufferData line_buf;
 	int			alloc_num;
 	int			index;
+	bool		is_compound = false;
+	int			lineno;
+	int			start_offset;
 
 #define COMMANDS_ALLOC_NUM 128
 	alloc_num = COMMANDS_ALLOC_NUM;
@@ -4416,6 +4590,7 @@ ParseScript(const char *script, const char *desc, int weight)
 	 * stdstrings should be true, which is a bit riskier.
 	 */
 	psql_scan_setup(sstate, script, strlen(script), 0, true);
+	start_offset = expr_scanner_offset(sstate) - 1;
 
 	initPQExpBuffer(&line_buf);
 
@@ -4425,31 +4600,28 @@ ParseScript(const char *script, const char *desc, int weight)
 	{
 		PsqlScanResult sr;
 		promptStatus_t prompt;
-		Command    *command;
+		Command    *command = NULL;
 
 		resetPQExpBuffer(&line_buf);
+		lineno = expr_scanner_get_lineno(sstate, start_offset);
+
+		sstate->semicolons = 0;
 
 		sr = psql_scan(sstate, &line_buf, &prompt);
 
-		/* If we collected a SQL command, process that */
-		command = process_sql_command(&line_buf, desc);
-		if (command)
+		if (is_compound)
 		{
-			ps.commands[index] = command;
-			index++;
-
-			if (index >= alloc_num)
-			{
-				alloc_num += COMMANDS_ALLOC_NUM;
-				ps.commands = (Command **)
-					pg_realloc(ps.commands, sizeof(Command *) * alloc_num);
-			}
+			/* a multi-line command ended with \cset */
+			append_sql_command(ps.commands[index-1], line_buf.data,
+							   sstate->semicolons);
+			is_compound = false;
 		}
-
-		/* If we reached a backslash, process that */
-		if (sr == PSCAN_BACKSLASH)
+		else
 		{
-			command = process_backslash_command(sstate, desc);
+			/* If we collected a new SQL command, process that */
+			command = create_sql_command(&line_buf, desc, sstate->semicolons);
+
+			/* store new command */
 			if (command)
 			{
 				ps.commands[index] = command;
@@ -4460,6 +4632,67 @@ ParseScript(const char *script, const char *desc, int weight)
 					alloc_num += COMMANDS_ALLOC_NUM;
 					ps.commands = (Command **)
 						pg_realloc(ps.commands, sizeof(Command *) * alloc_num);
+				}
+			}
+		}
+
+		if (sr == PSCAN_BACKSLASH)
+		{
+			command = process_backslash_command(sstate, desc);
+
+			if (command)
+			{
+				char * bs_cmd = command->argv[0];
+
+				/* merge gset variants into preceeding SQL command */
+				if (pg_strcasecmp(bs_cmd, "gset") == 0 ||
+					pg_strcasecmp(bs_cmd, "cset") == 0)
+				{
+					int		cindex;
+					Command *sql_cmd;
+
+					is_compound = bs_cmd[0] == 'c';
+
+					if (index == 0)
+						syntax_error(desc, lineno, NULL, NULL,
+									 "\\gset/cset cannot start a script",
+									 NULL, -1);
+
+					sql_cmd = ps.commands[index-1];
+
+					if (sql_cmd->type != SQL_COMMAND)
+						syntax_error(desc, lineno, NULL, NULL,
+									 "\\gset/cset must follow a SQL command",
+									 sql_cmd->first_line, -1);
+
+					/* this \gset applies to the last sub-command */
+					cindex = sql_cmd->compound;
+
+					if (sql_cmd->gset[cindex] != NULL)
+						syntax_error(desc, lineno, NULL, NULL,
+									 "\\gset/cset cannot follow one another",
+									 NULL, -1);
+
+					/* get variable prefix */
+					if (command->argc <= 1 || command->argv[1][0] == '\0')
+						sql_cmd->gset[cindex] = "";
+					else
+						sql_cmd->gset[cindex] = command->argv[1];
+
+					/* cleanup unused backslash command */
+					pg_free(command);
+				}
+				else /* any other backslash command is a Command */
+				{
+					ps.commands[index] = command;
+					index++;
+
+					if (index >= alloc_num)
+					{
+						alloc_num += COMMANDS_ALLOC_NUM;
+						ps.commands = (Command **)
+							pg_realloc(ps.commands, sizeof(Command *) * alloc_num);
+					}
 				}
 			}
 		}
@@ -4819,7 +5052,7 @@ printResults(TState *threads, StatsData *total, instr_time total_time,
 					printf("   %11.3f  %s\n",
 						   (cstats->count > 0) ?
 						   1000.0 * cstats->sum / cstats->count : 0.0,
-						   (*commands)->line);
+						   (*commands)->first_line);
 				}
 			}
 		}
@@ -5290,28 +5523,19 @@ main(int argc, char **argv)
 		internal_script_used = true;
 	}
 
-	/* if not simple query mode, parse the script(s) to find parameters */
-	if (querymode != QUERY_SIMPLE)
-	{
-		for (i = 0; i < num_scripts; i++)
-		{
-			Command   **commands = sql_script[i].commands;
-			int			j;
-
-			for (j = 0; commands[j] != NULL; j++)
-			{
-				if (commands[j]->type != SQL_COMMAND)
-					continue;
-				if (!parseQuery(commands[j]))
-					exit(1);
-			}
-		}
-	}
-
-	/* compute total_weight */
+	/* complete SQL command initializations and collect total weight */
 	for (i = 0; i < num_scripts; i++)
+	{
+		Command   **commands = sql_script[i].commands;
+		int			j;
+
+		for (j = 0; commands[j] != NULL; j++)
+			if (commands[j]->type == SQL_COMMAND)
+				postprocess_sql_command(commands[j]);
+
 		/* cannot overflow: weight is 32b, total_weight 64b */
 		total_weight += sql_script[i].weight;
+	}
 
 	if (total_weight == 0 && !is_init_mode)
 	{

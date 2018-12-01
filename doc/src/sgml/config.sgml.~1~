@@ -281,10 +281,6 @@ UPDATE pg_settings SET setting = reset_val WHERE name = 'configuration_parameter
      </listitem>
     </itemizedlist>
 
-    <para>
-     Also values on other sessions can be set using the SQL
-     function <function>pg_set_backend_setting</function>.
-    </para>
    </sect2>
 
    <sect2>
@@ -6653,21 +6649,6 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         Enables collection of statistics on database activity.
         This parameter is on by default, because the autovacuum
         daemon needs the collected information.
-        Only superusers can change this setting.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry id="guc-track-syscache-usage-interval" xreflabel="track_syscache_usage_interval">
-      <term><varname>track_syscache_usage_interval</varname> (<type>integer</type>)
-      <indexterm>
-       <primary><varname>track_syscache_usage_interval</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Specifies the interval to collect system cache usage statistics in
-        milliseconds. This parameter is 0 by default, which means disabled.
         Only superusers can change this setting.
        </para>
       </listitem>

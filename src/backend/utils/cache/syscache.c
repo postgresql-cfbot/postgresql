@@ -20,6 +20,9 @@
  */
 #include "postgres.h"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "catalog/indexing.h"
@@ -1534,6 +1537,27 @@ RelationSupportsSysCache(Oid relid)
 	return false;
 }
 
+/*
+ * SysCacheGetStats - returns stats of specified syscache
+ *
+ * This routine returns the address of its local static memory.
+ */
+SysCacheStats *
+SysCacheGetStats(int cacheId)
+{
+	static SysCacheStats stats;
+
+	Assert(cacheId >=0 && cacheId < SysCacheSize);
+
+	memset(&stats, 0, sizeof(stats));
+
+	stats.reloid = cacheinfo[cacheId].reloid;
+	stats.indoid = cacheinfo[cacheId].indoid;
+
+	CatCacheGetStats(SysCache[cacheId], &stats);
+
+	return &stats;
+}
 
 /*
  * OID comparator for pg_qsort

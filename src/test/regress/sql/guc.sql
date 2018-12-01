@@ -133,6 +133,94 @@ SHOW vacuum_cost_delay;
 SHOW datestyle;
 SELECT '2006-08-13 12:34:56'::timestamptz;
 
+-- NONXACT followed by SET, SET LOCAL through COMMIT
+BEGIN;
+SELECT set_config('work_mem', '128kB', false, true); -- NONXACT
+SET work_mem to '256kB';
+SET LOCAL work_mem to '512kB';
+SHOW work_mem;	-- must see 512kB
+COMMIT;
+SHOW work_mem;	-- must see 256kB
+
+-- NONXACT followed by SET, SET LOCAL through ROLLBACK
+BEGIN;
+SELECT set_config('work_mem', '128kB', false, true); -- NONXACT
+SET work_mem to '256kB';
+SET LOCAL work_mem to '512kB';
+SHOW work_mem;	-- must see 512kB
+ROLLBACK;
+SHOW work_mem;	-- must see 128kB
+
+-- SET, SET LOCAL followed by NONXACT through COMMIT
+BEGIN;
+SET work_mem to '256kB';
+SET LOCAL work_mem to '512kB';
+SELECT set_config('work_mem', '128kB', false, true); -- NONXACT
+SHOW work_mem;	-- must see 128kB
+COMMIT;
+SHOW work_mem;	-- must see 128kB
+
+-- SET, SET LOCAL followed by NONXACT through ROLLBACK
+BEGIN;
+SET work_mem to '256kB';
+SET LOCAL work_mem to '512kB';
+SELECT set_config('work_mem', '128kB', false, true); -- NONXACT
+SHOW work_mem;	-- must see 128kB
+ROLLBACK;
+SHOW work_mem;	-- must see 128kB
+
+-- NONXACT and SAVEPOINT
+SET work_mem TO '64kB';
+BEGIN;
+SET work_mem TO '128kB';
+SAVEPOINT a;
+SELECT set_config('work_mem', '256kB', false, true); -- NONXACT
+SHOW work_mem;
+SET LOCAL work_mem TO '384kB';
+RELEASE SAVEPOINT a;
+SHOW work_mem; -- will see 384kB
+COMMIT;
+SHOW work_mem; -- will see 256kB
+--
+SET work_mem TO '64kB';
+BEGIN;
+SET work_mem TO '128kB';
+SAVEPOINT a;
+SELECT set_config('work_mem', '256kB', false, true); -- NONXACT
+SHOW work_mem;
+SET LOCAL work_mem TO '384kB';
+ROLLBACK TO SAVEPOINT a;
+SHOW work_mem; -- will see 256kB
+ROLLBACK;
+SHOW work_mem; -- will see 256kB
+--
+SET work_mem TO '64kB';
+BEGIN;
+SET work_mem TO '128kB';
+SET LOCAL work_mem TO '384kB';
+SAVEPOINT a;
+SELECT set_config('work_mem', '256kB', false, true); -- NONXACT
+SHOW work_mem;
+SET LOCAL work_mem TO '384kB';
+RELEASE SAVEPOINT a;
+SHOW work_mem; -- will see 384kB
+ROLLBACK;
+SHOW work_mem; -- will see 256kB
+--
+SET work_mem TO '64kB';
+BEGIN;
+SET work_mem TO '128kB';
+SET LOCAL work_mem TO '384kB';
+SAVEPOINT a;
+SELECT set_config('work_mem', '256kB', false, true); -- NONXACT
+SHOW work_mem;
+SET LOCAL work_mem TO '384kB';
+ROLLBACK TO SAVEPOINT a;
+SHOW work_mem; -- will see 256kB
+COMMIT;
+SHOW work_mem; -- will see 256kB
+
+SET work_mem TO DEFAULT;
 --
 -- Test RESET.  We use datestyle because the reset value is forced by
 -- pg_regress, so it doesn't depend on the installation's configuration.

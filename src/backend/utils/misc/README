@@ -169,10 +169,14 @@ Entry to a function with a SET option:
 Plain SET command:
 
 	If no stack entry of current level:
-		Push new stack entry w/prior value and state SET
+		Push new stack entry w/prior value and state SET or
+		push new stack entry w/o value and state NONXACT.
 	else if stack entry's state is SAVE, SET, or LOCAL:
 		change stack state to SET, don't change saved value
 		(here we are forgetting effects of prior set action)
+	else if stack entry's state is NONXACT:
+		change stack state to NONXACT_SET, set the current value to
+		prior.
 	else (entry must have state SET+LOCAL):
 		discard its masked value, change state to SET
 		(here we are forgetting effects of prior SET and SET LOCAL)
@@ -185,13 +189,20 @@ SET LOCAL command:
 	else if stack entry's state is SAVE or LOCAL or SET+LOCAL:
 		no change to stack entry
 		(in SAVE case, SET LOCAL will be forgotten at func exit)
+	else if stack entry's state is NONXACT:
+		set current value to both prior and masked slots. set state
+		NONXACT+LOCAL.
 	else (entry must have state SET):
 		put current active into its masked slot, set state SET+LOCAL
 	Now set new value.
 
+Setting by NONXACT action (no command exists):
+	Always blow away existing stack then create a new NONXACT entry.	
+
 Transaction or subtransaction abort:
 
-	Pop stack entries, restoring prior value, until top < subxact depth
+	Pop stack entries, restoring prior value unless the stack entry's
+	state is NONXACT, until top < subxact depth
 
 Transaction or subtransaction commit (incl. successful function exit):
 
@@ -199,9 +210,9 @@ Transaction or subtransaction commit (incl. successful function exit):
 
 		if entry's state is SAVE:
 			pop, restoring prior value
-		else if level is 1 and entry's state is SET+LOCAL:
+		else if level is 1 and entry's state is SET+LOCAL or NONXACT+LOCAL:
 			pop, restoring *masked* value
-		else if level is 1 and entry's state is SET:
+		else if level is 1 and entry's state is SET or NONXACT+SET:
 			pop, discarding old value
 		else if level is 1 and entry's state is LOCAL:
 			pop, restoring prior value
@@ -210,9 +221,9 @@ Transaction or subtransaction commit (incl. successful function exit):
 		else
 			merge entries of level N-1 and N as specified below
 
-The merged entry will have level N-1 and prior = older prior, so easiest
-to keep older entry and free newer.  There are 12 possibilities since
-we already handled level N state = SAVE:
+The merged entry will have level N-1 and prior = older prior, so
+easiest to keep older entry and free newer.  Disregarding to NONXACT,
+here are 12 possibilities since we already handled level N state = SAVE:
 
 N-1		N
 
@@ -232,6 +243,7 @@ SET+LOCAL	SET		discard top prior and second masked, state SET
 SET+LOCAL	LOCAL		discard top prior, no change to stack entry
 SET+LOCAL	SET+LOCAL	discard top prior, copy masked, state S+L
 
+(TODO: states involving NONXACT)
 
 RESET is executed like a SET, but using the reset_val as the desired new
 value.  (We do not provide a RESET LOCAL command, but SET LOCAL TO DEFAULT

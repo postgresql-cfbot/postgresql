@@ -216,37 +216,6 @@ static ConfigVariable *ProcessConfigFileInternal(GucContext context,
 						  bool applySettings, int elevel);
 
 
-/* Enum and struct to command GUC setting to another backend */
-typedef enum
-{
-	REMGUC_VACANT,
-	REMGUC_REQUEST,
-	REMGUC_INPROCESS,
-	REMGUC_DONE,
-	REMGUC_CANCELING,
-	REMGUC_CANCELED,
-} remote_guc_status;
-
-#define GUC_REMOTE_MAX_VALUE_LEN  1024		/* an arbitrary value */
-#define GUC_REMOTE_CANCEL_TIMEOUT 5000		/* in milliseconds */
-
-typedef struct
-{
-	remote_guc_status	 state;
-	char name[NAMEDATALEN];
-	char value[GUC_REMOTE_MAX_VALUE_LEN];
-	int	 sourcepid;
-	int	 targetpid;
-	Oid	 userid;
-	bool success;
-	volatile Latch *sender_latch;
-	LWLock	lock;
-} GucRemoteSetting;
-
-static GucRemoteSetting *remote_setting;
-
-volatile bool RemoteGucChangePending = false;
-
 /*
  * Options for enum values defined in this module.
  *
@@ -3164,16 +3133,6 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"track_syscache_usage_interval", PGC_SUSET, STATS_COLLECTOR,
-			gettext_noop("Sets the interval between syscache usage collection, in milliseconds. Zero disables syscache usage tracking."),
-			NULL
-		},
-		&pgstat_track_syscache_usage_interval,
-		0, 0, INT_MAX / 2,
-		NULL, &pgstat_track_syscache_assign_hook, NULL
-	},
-
-	{
 		{"gin_pending_list_limit", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the maximum size of the pending list for GIN index."),
 			NULL,
@@ -4739,6 +4698,7 @@ discard_stack_value(struct config_generic *gconf, config_var_value *val)
 	set_extra_field(gconf, &(val->extra), NULL);
 }
 
+
 /*
  * Fetch the sorted array pointer (exported for help_config.c's use ONLY)
  */
@@ -5530,22 +5490,6 @@ push_old_value(struct config_generic *gconf, GucAction action)
 
 	/* Do we already have a stack entry of the current nest level? */
 	stack = gconf->stack;
-
-	/* NONXACT action make existing stack useles */
-	if (action == GUC_ACTION_NONXACT)
-	{
-		while (stack)
-		{
-			GucStack *prev = stack->prev;
-
-			discard_stack_value(gconf, &stack->prior);
-			discard_stack_value(gconf, &stack->masked);
-			pfree(stack);
-			stack = prev;
-		}
-		stack = gconf->stack = NULL;
-	}
-
 	if (stack && stack->nest_level >= GUCNestLevel)
 	{
 		/* Yes, so adjust its state if necessary */
@@ -5553,62 +5497,27 @@ push_old_value(struct config_generic *gconf, GucAction action)
 		switch (action)
 		{
 			case GUC_ACTION_SET:
-				if (stack->state == GUC_NONXACT)
+				/* SET overrides any prior action at same nest level */
+				if (stack->state == GUC_SET_LOCAL)
 				{
-					/* NONXACT rollbacks to the current value */
-					stack->scontext = gconf->scontext;
-					set_stack_value(gconf, &stack->prior);
-					stack->state = GUC_NONXACT_SET;
+					/* must discard old masked value */
+					discard_stack_value(gconf, &stack->masked);
 				}
-				else 
-				{
-					/* SET overrides other prior actions at same nest level */
-					if (stack->state == GUC_SET_LOCAL)
-					{
-						/* must discard old masked value */
-						discard_stack_value(gconf, &stack->masked);
-					}
-					stack->state = GUC_SET;
-				}
-
+				stack->state = GUC_SET;
 				break;
-
 			case GUC_ACTION_LOCAL:
 				if (stack->state == GUC_SET)
 				{
-					/* SET followed by SET LOCAL, remember it's value */
+					/* SET followed by SET LOCAL, remember SET's value */
 					stack->masked_scontext = gconf->scontext;
 					set_stack_value(gconf, &stack->masked);
 					stack->state = GUC_SET_LOCAL;
-				}
-				else if (stack->state == GUC_NONXACT)
-				{
-					/*
-					 * NONXACT followed by SET LOCAL, both prior and masked
-					 * are set to the current value
-					 */
-					stack->scontext = gconf->scontext;
-					set_stack_value(gconf, &stack->prior);
-					stack->masked_scontext = stack->scontext;
-					stack->masked = stack->prior;
-					stack->state = GUC_NONXACT_LOCAL;
-				}
-				else if (stack->state == GUC_NONXACT_SET)
-				{
-					/* NONXACT_SET followed by SET LOCAL, set masked */
-					stack->masked_scontext = gconf->scontext;
-					set_stack_value(gconf, &stack->masked);
-					stack->state = GUC_NONXACT_LOCAL;
 				}
 				/* in all other cases, no change to stack entry */
 				break;
 			case GUC_ACTION_SAVE:
 				/* Could only have a prior SAVE of same variable */
 				Assert(stack->state == GUC_SAVE);
-				break;
-
-			case GUC_ACTION_NONXACT:
-				Assert(false);
 				break;
 		}
 		Assert(guc_dirty);		/* must be set already */
@@ -5625,7 +5534,6 @@ push_old_value(struct config_generic *gconf, GucAction action)
 
 	stack->prev = gconf->stack;
 	stack->nest_level = GUCNestLevel;
-		
 	switch (action)
 	{
 		case GUC_ACTION_SET:
@@ -5637,15 +5545,10 @@ push_old_value(struct config_generic *gconf, GucAction action)
 		case GUC_ACTION_SAVE:
 			stack->state = GUC_SAVE;
 			break;
-		case GUC_ACTION_NONXACT:
-			stack->state = GUC_NONXACT;
-			break;
 	}
 	stack->source = gconf->source;
 	stack->scontext = gconf->scontext;
-
-	if (action != GUC_ACTION_NONXACT)
-		set_stack_value(gconf, &stack->prior);
+	set_stack_value(gconf, &stack->prior);
 
 	gconf->stack = stack;
 
@@ -5740,31 +5643,22 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 			 * stack entries to avoid leaking memory.  If we do set one of
 			 * those flags, unused fields will be cleaned up after restoring.
 			 */
-			if (!isCommit)
-			{
-				/* GUC_NONXACT does't rollback */
-				if (stack->state != GUC_NONXACT)
-					restorePrior = true;
-			}
+			if (!isCommit)		/* if abort, always restore prior value */
+				restorePrior = true;
 			else if (stack->state == GUC_SAVE)
 				restorePrior = true;
 			else if (stack->nest_level == 1)
 			{
 				/* transaction commit */
-				if (stack->state == GUC_SET_LOCAL ||
-					stack->state == GUC_NONXACT_LOCAL)
+				if (stack->state == GUC_SET_LOCAL)
 					restoreMasked = true;
-				else if (stack->state == GUC_SET ||
-						 stack->state == GUC_NONXACT_SET)
+				else if (stack->state == GUC_SET)
 				{
 					/* we keep the current active value */
 					discard_stack_value(gconf, &stack->prior);
 				}
-				else if (stack->state != GUC_NONXACT)
-				{
-					/* must be GUC_LOCAL */
+				else			/* must be GUC_LOCAL */
 					restorePrior = true;
-				}
 			}
 			else if (prev == NULL ||
 					 prev->nest_level < stack->nest_level - 1)
@@ -5786,27 +5680,11 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 						break;
 
 					case GUC_SET:
-						if (prev->state == GUC_SET ||
-							prev->state == GUC_NONXACT_SET)
-						{
-							discard_stack_value(gconf, &stack->prior);
-						}
-						else if (prev->state == GUC_NONXACT)
-						{
-							prev->scontext = stack->scontext;
-							prev->prior = stack->prior;
-							prev->state = GUC_NONXACT_SET;
-						}
-						else if (prev->state == GUC_SET_LOCAL ||
-								 prev->state == GUC_NONXACT_LOCAL)
-						{
-							discard_stack_value(gconf, &stack->prior);
+						/* next level always becomes SET */
+						discard_stack_value(gconf, &stack->prior);
+						if (prev->state == GUC_SET_LOCAL)
 							discard_stack_value(gconf, &prev->masked);
-							if (prev->state == GUC_SET_LOCAL)
-								prev->state = GUC_SET;
-							else
-								prev->state = GUC_NONXACT_SET;
-						}
+						prev->state = GUC_SET;
 						break;
 
 					case GUC_LOCAL:
@@ -5817,16 +5695,6 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 							prev->masked = stack->prior;
 							prev->state = GUC_SET_LOCAL;
 						}
-						else if (prev->state == GUC_NONXACT)
-						{
-							prev->prior = stack->masked;
-							prev->scontext = stack->masked_scontext;
-							prev->masked = stack->masked;
-							prev->masked_scontext = stack->masked_scontext;
-							discard_stack_value(gconf, &stack->prior);
-							discard_stack_value(gconf, &stack->masked);
-							prev->state = GUC_NONXACT_SET;
-						}
 						else
 						{
 							/* else just forget this stack level */
@@ -5835,32 +5703,15 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 						break;
 
 					case GUC_SET_LOCAL:
-						if (prev->state == GUC_NONXACT)
-						{
-							prev->prior = stack->prior;
-							prev->masked = stack->prior;
-							discard_stack_value(gconf, &stack->prior);
-							discard_stack_value(gconf, &stack->masked);
-							prev->state = GUC_NONXACT_SET;
-						}
-						else if (prev->state != GUC_NONXACT_SET)
-						{
-							/* prior state at this level no longer wanted */
-							discard_stack_value(gconf, &stack->prior);
-							/* copy down the masked state */
-							prev->masked_scontext = stack->masked_scontext;
-							if (prev->state == GUC_SET_LOCAL)
-								discard_stack_value(gconf, &prev->masked);
-							prev->masked = stack->masked;
-							prev->state = GUC_SET_LOCAL;
-						}
+						/* prior state at this level no longer wanted */
+						discard_stack_value(gconf, &stack->prior);
+						/* copy down the masked state */
+						prev->masked_scontext = stack->masked_scontext;
+						if (prev->state == GUC_SET_LOCAL)
+							discard_stack_value(gconf, &prev->masked);
+						prev->masked = stack->masked;
+						prev->state = GUC_SET_LOCAL;
 						break;
-					case GUC_NONXACT:
-					case GUC_NONXACT_SET:
-					case GUC_NONXACT_LOCAL:
-						Assert(false);
-						break;
-						
 				}
 			}
 
@@ -8141,8 +7992,7 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	char	   *name;
 	char	   *value;
 	char	   *new_value;
-	int			set_action = GUC_ACTION_SET;
-
+	bool		is_local;
 
 	if (PG_ARGISNULL(0))
 		ereport(ERROR,
@@ -8162,27 +8012,18 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	 * Get the desired state of is_local. Default to false if provided value
 	 * is NULL
 	 */
-	if (!PG_ARGISNULL(2) && PG_GETARG_BOOL(2))
-		set_action = GUC_ACTION_LOCAL;
-
-	/*
-	 * Get the desired state of is_nonxact. Default to false if provided value
-	 * is NULL
-	 */
-	if (!PG_ARGISNULL(3) && PG_GETARG_BOOL(3))
-	{
-		if (set_action == GUC_ACTION_LOCAL)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("Only one of is_local and is_nonxact can be true")));
-		set_action = GUC_ACTION_NONXACT;
-	}
+	if (PG_ARGISNULL(2))
+		is_local = false;
+	else
+		is_local = PG_GETARG_BOOL(2);
 
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
 	(void) set_config_option(name,
 							 value,
 							 (superuser() ? PGC_SUSET : PGC_USERSET),
-							 PGC_S_SESSION, set_action, true, 0, false);
+							 PGC_S_SESSION,
+							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
+							 true, 0, false);
 
 	/* get the new current value */
 	new_value = GetConfigOptionByName(name, NULL, false);
@@ -8190,6 +8031,7 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	/* Convert return string to text */
 	PG_RETURN_TEXT_P(cstring_to_text(new_value));
 }
+
 
 /*
  * Common code for DefineCustomXXXVariable subroutines: allocate the
@@ -8389,13 +8231,6 @@ reapply_stacked_values(struct config_generic *variable,
 										 WARNING, false);
 				break;
 
-			case GUC_NONXACT:
-				(void) set_config_option(name, curvalue,
-										 curscontext, cursource,
-										 GUC_ACTION_NONXACT, true,
-										 WARNING, false);
-				break;
-
 			case GUC_LOCAL:
 				(void) set_config_option(name, curvalue,
 										 curscontext, cursource,
@@ -8415,33 +8250,6 @@ reapply_stacked_values(struct config_generic *variable,
 										 GUC_ACTION_LOCAL, true,
 										 WARNING, false);
 				break;
-
-			case GUC_NONXACT_SET:
-				/* first, apply the masked value as SET */
-				(void) set_config_option(name, stack->masked.val.stringval,
-										 stack->masked_scontext, PGC_S_SESSION,
-										 GUC_ACTION_NONXACT, true,
-										 WARNING, false);
-				/* then apply the current value as LOCAL */
-				(void) set_config_option(name, curvalue,
-										 curscontext, cursource,
-										 GUC_ACTION_SET, true,
-										 WARNING, false);
-				break;
-
-			case GUC_NONXACT_LOCAL:
-				/* first, apply the masked value as SET */
-				(void) set_config_option(name, stack->masked.val.stringval,
-										 stack->masked_scontext, PGC_S_SESSION,
-										 GUC_ACTION_NONXACT, true,
-										 WARNING, false);
-				/* then apply the current value as LOCAL */
-				(void) set_config_option(name, curvalue,
-										 curscontext, cursource,
-										 GUC_ACTION_LOCAL, true,
-										 WARNING, false);
-				break;
-
 		}
 
 		/* If we successfully made a stack entry, adjust its nest level */
@@ -10418,373 +10226,6 @@ GUCArrayReset(ArrayType *array)
 	}
 
 	return newarray;
-}
-
-Size
-GucShmemSize(void)
-{
-	Size size;
-
-	size = sizeof(GucRemoteSetting);
-
-	return size;
-}
-
-void
-GucShmemInit(void)
-{
-	Size	size;
-	bool	found;
-
-	size = sizeof(GucRemoteSetting);
-	remote_setting = (GucRemoteSetting *)
-		ShmemInitStruct("GUC remote setting", size, &found);
-
-	if (!found)
-	{
-		MemSet(remote_setting, 0, size);
-		LWLockInitialize(&remote_setting->lock, LWLockNewTrancheId());
-	}
-
-	LWLockRegisterTranche(remote_setting->lock.tranche, "guc_remote");
-}
-
-/*
- * set_backend_config: SQL callable function to set GUC variable of remote
- * session.
- */
-Datum
-set_backend_config(PG_FUNCTION_ARGS)
-{
-	int		pid   = PG_GETARG_INT32(0);
-	char   *name  = text_to_cstring(PG_GETARG_TEXT_P(1));
-	char   *value = text_to_cstring(PG_GETARG_TEXT_P(2));
-	TimestampTz	cancel_start;
-	PgBackendStatus *beentry;
-	int beid;
-	int rc;
-
-	if (strlen(name) >= NAMEDATALEN)
-		ereport(ERROR,
-				(errcode(ERRCODE_NAME_TOO_LONG),
-				 errmsg("name of GUC variable is too long")));
-	if (strlen(value) >= GUC_REMOTE_MAX_VALUE_LEN)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("value is too long"),
-				 errdetail("Maximum acceptable length of value is %d",
-					 GUC_REMOTE_MAX_VALUE_LEN - 1)));
-
-	/* find beentry for given pid */
-	beentry = NULL;
-	for (beid = 1;
-		 (beentry = pgstat_fetch_stat_beentry(beid)) &&
-			 beentry->st_procpid != pid ;
-		 beid++);
-
-	/*
-	 * This will be checked out by SendProcSignal but do here to emit
-	 * appropriate message message.
-	 */
-	if (!beentry)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("process PID %d not found", pid)));
-
-	/* allow only client backends */
-	if (beentry->st_backendType != B_BACKEND)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("not a client backend")));
-	
-	/*
-	 * Wait if someone is sending a request. We need to wait with timeout
-	 * since the current user of the struct doesn't wake me up.
-	 */
-	LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-	while (remote_setting->state != REMGUC_VACANT)
-	{
-		LWLockRelease(&remote_setting->lock);
-		rc = WaitLatch(&MyProc->procLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   200, PG_WAIT_ACTIVITY);
-
-		if (rc & WL_POSTMASTER_DEATH)
-			return (Datum) BoolGetDatum(false);
-
-		CHECK_FOR_INTERRUPTS();
-
-		LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-	}
-
-	/* my turn, send a request */
-	Assert(remote_setting->state == REMGUC_VACANT);
-
-	remote_setting->state = REMGUC_REQUEST;
-	remote_setting->sourcepid = MyProcPid;
-	remote_setting->targetpid = pid;
-	remote_setting->userid = GetUserId();
-
-	strncpy(remote_setting->name, name, NAMEDATALEN);
-	remote_setting->name[NAMEDATALEN - 1] = 0;
-	strncpy(remote_setting->value, value, GUC_REMOTE_MAX_VALUE_LEN);
-	remote_setting->value[GUC_REMOTE_MAX_VALUE_LEN - 1] = 0;
-	remote_setting->sender_latch = MyLatch;
-
-	LWLockRelease(&remote_setting->lock);
-
-	if (SendProcSignal(pid, PROCSIG_REMOTE_GUC, InvalidBackendId) < 0)
-	{
-		remote_setting->state = REMGUC_VACANT;
-		ereport(ERROR,
-				(errmsg("could not signal backend with PID %d: %m", pid)));
-	}
-
-	/*
-	 * This request is processed only while idle time of peer so it may take a
-	 * long time before we get a response.
-	 */
-	LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-	while (remote_setting->state != REMGUC_DONE)
-	{
-		LWLockRelease(&remote_setting->lock);
-		rc = WaitLatch(&MyProc->procLatch,
-					   WL_LATCH_SET | WL_POSTMASTER_DEATH,
-					   -1, PG_WAIT_ACTIVITY);
-
-		/* don't care of the state in the case.. */
-		if (rc & WL_POSTMASTER_DEATH)
-			return (Datum) BoolGetDatum(false);
-
-		LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-
-		/* get out if we got a query cancel request */
-		if (QueryCancelPending)
-			break;
-	}
-
-	/*
-	 * Cancel the requset if possible. We cannot cancel the request in the
-	 * case peer have processed it. We don't see QueryCancelPending but the
-	 * request status so that the case is handled properly.
-	 */
-	if (remote_setting->state == REMGUC_REQUEST)
-	{
-		Assert(QueryCancelPending);
-
-		remote_setting->state = REMGUC_CANCELING;
-		LWLockRelease(&remote_setting->lock);
-
-		if (SendProcSignal(pid,
-						   PROCSIG_REMOTE_GUC, InvalidBackendId) < 0)
-		{
-			remote_setting->state = REMGUC_VACANT;
-			ereport(ERROR,
-					(errmsg("could not signal backend with PID %d: %m",
-							pid)));
-		}
-
-		/* Peer must respond shortly, don't sleep for a long time. */
-		
-		cancel_start = GetCurrentTimestamp();
-
-		LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-		while (remote_setting->state != REMGUC_CANCELED &&
-			   !TimestampDifferenceExceeds(cancel_start, GetCurrentTimestamp(),
-										   GUC_REMOTE_CANCEL_TIMEOUT))
-		{
-			LWLockRelease(&remote_setting->lock);
-			rc = WaitLatch(&MyProc->procLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   GUC_REMOTE_CANCEL_TIMEOUT, PG_WAIT_ACTIVITY);
-
-			/* don't care of the state in the case.. */
-			if (rc & WL_POSTMASTER_DEATH)
-				return (Datum) BoolGetDatum(false);
-
-			LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-		}
-
-		if (remote_setting->state != REMGUC_CANCELED)
-		{
-			remote_setting->state = REMGUC_VACANT;
-			ereport(ERROR, (errmsg("failed cancelling remote GUC request")));
-		}
-
-		remote_setting->state = REMGUC_VACANT;
-		LWLockRelease(&remote_setting->lock);
-
-		ereport(INFO,
-				(errmsg("remote GUC change request to PID %d is canceled",
-							  pid)));
-
-		return (Datum) BoolGetDatum(false);
-	}
-
-	Assert (remote_setting->state == REMGUC_DONE);
-
-	/* ereport exits on query cancel, we need this before that */
-	remote_setting->state = REMGUC_VACANT;
-
-	if (QueryCancelPending)
-		ereport(INFO,
-				(errmsg("remote GUC change request to PID %d already completed",
-						pid)));
-				
-	if (!remote_setting->success)
-		ereport(ERROR,
-				(errmsg("%s", remote_setting->value)));
-
-	LWLockRelease(&remote_setting->lock);
-
-	return (Datum) BoolGetDatum(true);
-}
-
-
-void
-HandleRemoteGucSetInterrupt(void)
-{
-	LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-
-	/* check if any request is being sent to me */
-	if (remote_setting->targetpid == MyProcPid)
-	{
-		switch (remote_setting->state)
-		{
-		case REMGUC_REQUEST:
-			InterruptPending = true;
-			RemoteGucChangePending = true;
-			break;
-		case REMGUC_CANCELING:
-			InterruptPending = true;
-			RemoteGucChangePending = true;
-			remote_setting->state = REMGUC_CANCELED;
-			SetLatch(remote_setting->sender_latch);
-			break;
-		default:
-			break;
-		}
-	}
-	LWLockRelease(&remote_setting->lock);
-}
-
-void
-HandleGucRemoteChanges(void)
-{
-	MemoryContext currentcxt = CurrentMemoryContext;
-	bool	canceling = false;
-	bool	process_request = true;
-	int		saveInterruptHoldoffCount = 0;
-	int		saveQueryCancelHoldoffCount = 0;
-
-	RemoteGucChangePending = false;
-	LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-
-	/* skip if this request is no longer for me */
-	if (remote_setting->targetpid != MyProcPid)
-		process_request = false;
-	else
-	{
-		switch (remote_setting->state)
-		{
-		case REMGUC_REQUEST:
-			remote_setting->state = REMGUC_INPROCESS;
-			break;
-		case REMGUC_CANCELING:
-			/*
-			 * This request is already canceled but entered this function
-			 * before receiving signal. Cancel the request here.
-			 */
-			remote_setting->state = REMGUC_CANCELED;
-			remote_setting->success = false;
-			canceling = true;
-			break;
-		case REMGUC_VACANT:
-		case REMGUC_CANCELED:
-		case REMGUC_INPROCESS:
-		case REMGUC_DONE:
-			/* Just ignore the cases */
-			process_request = false;
-			break;
-		}
-	}
-
-	LWLockRelease(&remote_setting->lock);
-
-	if (!process_request)
-		return;
-
-	if (canceling)
-	{
-		SetLatch(remote_setting->sender_latch);
-		return;
-	}
-
-
-	/* Okay, actually modify variable */
-	remote_setting->success = true;
-
-	PG_TRY();
-	{
-		bool 	has_privilege;
-		bool 	is_superuser;
-		bool end_transaction = false;
-		/*
-		 * XXXX: ERROR resets the following varialbes but we don't want that.
-		 */
-		saveInterruptHoldoffCount = InterruptHoldoffCount;
-		saveQueryCancelHoldoffCount = QueryCancelHoldoffCount;
-
-		/* superuser_arg requires a transaction */
-		if (!IsTransactionState())
-		{
-			StartTransactionCommand();
-			end_transaction  = true;
-		}
-		is_superuser = superuser_arg(remote_setting->userid);
-		has_privilege = is_superuser ||
-			has_privs_of_role(remote_setting->userid, GetUserId());
-
-		if (end_transaction)
-			CommitTransactionCommand();
-
-		if (!has_privilege)
-			elog(ERROR, "role %u is not allowed to set GUC variables on the session with PID %d",
-				 remote_setting->userid, MyProcPid);
-		
-		(void) set_config_option(remote_setting->name, remote_setting->value,
-								 is_superuser ? PGC_SUSET : PGC_USERSET,
-								 PGC_S_SESSION, GUC_ACTION_NONXACT,
-								 true, ERROR, false);
-	}
-	PG_CATCH();
-	{
-		ErrorData *errdata;
-		MemoryContextSwitchTo(currentcxt);
-		errdata = CopyErrorData();
-		remote_setting->success = false;
-		strncpy(remote_setting->value, errdata->message,
-				GUC_REMOTE_MAX_VALUE_LEN);
-		remote_setting->value[GUC_REMOTE_MAX_VALUE_LEN - 1] = 0;
-		FlushErrorState();
-
-		/* restore the saved value */
-		InterruptHoldoffCount = saveInterruptHoldoffCount ;
-		QueryCancelHoldoffCount = saveQueryCancelHoldoffCount;
-		
-	}
-	PG_END_TRY();
-
-	ereport(LOG,
-			(errmsg("GUC variable \"%s\" is changed to \"%s\" by request from another backend with PID %d",
-					remote_setting->name, remote_setting->value,
-					remote_setting->sourcepid)));
-
-	LWLockAcquire(&remote_setting->lock, LW_EXCLUSIVE);
-	remote_setting->state = REMGUC_DONE;
-	LWLockRelease(&remote_setting->lock);
-
-	SetLatch(remote_setting->sender_latch);
 }
 
 /*

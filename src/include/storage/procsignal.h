@@ -42,6 +42,9 @@ typedef enum
 	PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
 	PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK,
 
+	/* Remote GUC setting */
+	PROCSIG_REMOTE_GUC,
+
 	NUM_PROCSIGNALS				/* Must be last! */
 } ProcSignalReason;
 

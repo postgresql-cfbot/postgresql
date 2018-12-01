@@ -833,7 +833,8 @@ typedef enum
 	WAIT_EVENT_REPLICATION_ORIGIN_DROP,
 	WAIT_EVENT_REPLICATION_SLOT_DROP,
 	WAIT_EVENT_SAFE_SNAPSHOT,
-	WAIT_EVENT_SYNC_REP
+	WAIT_EVENT_SYNC_REP,
+	WAIT_EVENT_REMOTE_GUC
 } WaitEventIPC;
 
 /* ----------
@@ -1134,6 +1135,7 @@ extern bool pgstat_track_activities;
 extern bool pgstat_track_counts;
 extern int	pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
+extern int	pgstat_track_syscache_usage_interval;
 extern char *pgstat_stat_directory;
 extern char *pgstat_stat_tmpname;
 extern char *pgstat_stat_filename;
@@ -1218,7 +1220,8 @@ extern PgStat_BackendFunctionEntry *find_funcstat_entry(Oid func_id);
 extern void pgstat_initstats(Relation rel);
 
 extern char *pgstat_clip_activity(const char *raw_activity);
-
+extern void pgstat_get_syscachestat_filename(bool permanent,
+					bool tempname, int backendid, char *filename, int len);
 /* ----------
  * pgstat_report_wait_start() -
  *
@@ -1353,5 +1356,6 @@ extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgStat_ArchiverStats *pgstat_fetch_stat_archiver(void);
 extern PgStat_GlobalStats *pgstat_fetch_global(void);
-
+extern long pgstat_write_syscache_stats(bool force);
+extern void pgstat_track_syscache_assign_hook(int newval, void *extra);
 #endif							/* PGSTAT_H */

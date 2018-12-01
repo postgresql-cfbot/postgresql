@@ -115,7 +115,10 @@ typedef enum
 	GUC_SAVE,					/* entry caused by function SET option */
 	GUC_SET,					/* entry caused by plain SET command */
 	GUC_LOCAL,					/* entry caused by SET LOCAL command */
-	GUC_SET_LOCAL				/* entry caused by SET then SET LOCAL */
+	GUC_NONXACT,				/* entry caused by non-transactional ops */
+	GUC_SET_LOCAL,				/* entry caused by SET then SET LOCAL */
+	GUC_NONXACT_SET,			/* entry caused by NONXACT then SET */
+	GUC_NONXACT_LOCAL			/* entry caused by NONXACT then (SET)LOCAL */
 } GucStackState;
 
 typedef struct guc_stack

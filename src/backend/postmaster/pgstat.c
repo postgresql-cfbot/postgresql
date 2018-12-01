@@ -66,6 +66,7 @@
 #include "utils/ps_status.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 #include "utils/tqual.h"
 
@@ -125,6 +126,7 @@
 bool		pgstat_track_activities = false;
 bool		pgstat_track_counts = false;
 int			pgstat_track_functions = TRACK_FUNC_OFF;
+int			pgstat_track_syscache_usage_interval = 0;
 int			pgstat_track_activity_query_size = 1024;
 
 /* ----------
@@ -236,6 +238,11 @@ typedef struct TwoPhasePgStatRecord
 	bool		t_shared;		/* is it a shared catalog? */
 	bool		t_truncated;	/* was the relation truncated? */
 } TwoPhasePgStatRecord;
+
+/* bitmap symbols to specify target file types remove */
+#define PGSTAT_REMFILE_DBSTAT	1		/* remove only databsae stats files */
+#define PGSTAT_REMFILE_SYSCACHE	2		/* remove only syscache stats files */
+#define PGSTAT_REMFILE_ALL		3		/* remove both type of files */
 
 /*
  * Info about current "snapshot" of stats file
@@ -631,10 +638,13 @@ startup_failed:
 }
 
 /*
- * subroutine for pgstat_reset_all
+ * remove stats files
+ *
+ * clean up stats files in specified directory. target is one of
+ * PGSTAT_REFILE_DBSTAT/SYSCACHE/ALL and restricts files to remove.
  */
 static void
-pgstat_reset_remove_files(const char *directory)
+pgstat_reset_remove_files(const char *directory, int target)
 {
 	DIR		   *dir;
 	struct dirent *entry;
@@ -645,24 +655,38 @@ pgstat_reset_remove_files(const char *directory)
 	{
 		int			nchars;
 		Oid			tmp_oid;
+		int			filetype = 0;
 
 		/*
 		 * Skip directory entries that don't match the file names we write.
 		 * See get_dbstat_filename for the database-specific pattern.
 		 */
 		if (strncmp(entry->d_name, "global.", 7) == 0)
+		{
+			filetype = PGSTAT_REMFILE_DBSTAT;
 			nchars = 7;
+		}
 		else
 		{
+			char head[2];
+			
 			nchars = 0;
-			(void) sscanf(entry->d_name, "db_%u.%n",
-						  &tmp_oid, &nchars);
-			if (nchars <= 0)
-				continue;
+			(void) sscanf(entry->d_name, "%c%c_%u.%n",
+						  head, head + 1, &tmp_oid, &nchars);
+
 			/* %u allows leading whitespace, so reject that */
-			if (strchr("0123456789", entry->d_name[3]) == NULL)
+			if (nchars < 3 || !isdigit(entry->d_name[3]))
 				continue;
+
+			if  (strncmp(head, "db", 2) == 0)
+				filetype = PGSTAT_REMFILE_DBSTAT;
+			else if (strncmp(head, "cc", 2) == 0)
+				filetype = PGSTAT_REMFILE_SYSCACHE;
 		}
+
+		/* skip if this is not a target */
+		if ((filetype & target) == 0)
+			continue;
 
 		if (strcmp(entry->d_name + nchars, "tmp") != 0 &&
 			strcmp(entry->d_name + nchars, "stat") != 0)
@@ -684,8 +708,9 @@ pgstat_reset_remove_files(const char *directory)
 void
 pgstat_reset_all(void)
 {
-	pgstat_reset_remove_files(pgstat_stat_directory);
-	pgstat_reset_remove_files(PGSTAT_STAT_PERMANENT_DIRECTORY);
+	pgstat_reset_remove_files(pgstat_stat_directory, PGSTAT_REMFILE_ALL);
+	pgstat_reset_remove_files(PGSTAT_STAT_PERMANENT_DIRECTORY,
+							  PGSTAT_REMFILE_ALL);
 }
 
 #ifdef EXEC_BACKEND
@@ -3682,6 +3707,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
 			break;
+		case WAIT_EVENT_REMOTE_GUC:
+			event_name = "RemoteGUC";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 
@@ -4285,6 +4313,9 @@ PgstatCollectorMain(int argc, char *argv[])
 	 */
 	pgStatRunningInCollector = true;
 	pgStatDBHash = pgstat_read_statsfiles(InvalidOid, true, true);
+
+	/* Remove left-over syscache stats files */
+	pgstat_reset_remove_files(pgstat_stat_directory, PGSTAT_REMFILE_SYSCACHE);
 
 	/*
 	 * Loop to process messages until we get SIGQUIT or detect ungraceful
@@ -6375,4 +6406,164 @@ pgstat_clip_activity(const char *raw_activity)
 	activity[cliplen] = '\0';
 
 	return activity;
+}
+
+/*
+ * return the filename for a syscache stat file; filename is the output
+ * buffer, of length len.
+ */
+void
+pgstat_get_syscachestat_filename(bool permanent, bool tempname, int backendid,
+								 char *filename, int len)
+{
+	int			printed;
+
+	/* NB -- pgstat_reset_remove_files knows about the pattern this uses */
+	printed = snprintf(filename, len, "%s/cc_%u.%s",
+					   permanent ? PGSTAT_STAT_PERMANENT_DIRECTORY :
+					   pgstat_stat_directory,
+					   backendid,
+					   tempname ? "tmp" : "stat");
+	if (printed >= len)
+		elog(ERROR, "overlength pgstat path");
+}
+
+/*
+ * pgstat_write_syscache_stats() -
+ *		Write the syscache statistics files.
+ *
+ * If 'force' is false, this function skips writing a file and resturns the
+ * time remaining in the current interval in milliseconds. If'force' is true,
+ * writes a file regardless of the remaining time and reset the interval.
+ */
+long
+pgstat_write_syscache_stats(bool force)
+{
+	static TimestampTz last_report = 0;
+	TimestampTz now;
+	long elapsed;
+	long secs;
+	int	 usecs;
+	int	cacheId;
+	FILE	*fpout;
+	char	statfile[MAXPGPATH];
+	char	tmpfile[MAXPGPATH];
+
+	/* Return if we don't want it */
+	if (!force && pgstat_track_syscache_usage_interval <= 0)
+		return 0;
+
+	
+	/* Check aginst the in*/
+	now = GetCurrentTransactionStopTimestamp();
+	TimestampDifference(last_report, now, &secs, &usecs);
+	elapsed = secs * 1000 + usecs / 1000;
+
+	if (!force && elapsed < pgstat_track_syscache_usage_interval)
+	{
+		/* not yet the time, inform the remaining time to the caller */
+		return pgstat_track_syscache_usage_interval - elapsed;
+	}
+
+	/* now write the file */
+	last_report = now;
+
+	pgstat_get_syscachestat_filename(false, true,
+									 MyBackendId, tmpfile, MAXPGPATH);
+	pgstat_get_syscachestat_filename(false, false,
+									 MyBackendId, statfile, MAXPGPATH);
+
+	/*
+	 * This function can be called from ProcessInterrupts(). Inhibit recursive
+	 * interrupts to avoid recursive entry.
+	 */
+	HOLD_INTERRUPTS();
+
+	fpout = AllocateFile(tmpfile, PG_BINARY_W);
+	if (fpout == NULL)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not open temporary statistics file \"%s\": %m",
+						tmpfile)));
+		/*
+		 * Failure writing this file is not critical. Just skip this time and
+		 * tell caller to wait for the next interval.
+		 */
+		RESUME_INTERRUPTS();
+		return pgstat_track_syscache_usage_interval;
+	}
+
+	/* write out every catcache stats */
+	for (cacheId = 0 ; cacheId < SysCacheSize ; cacheId++)
+	{
+		SysCacheStats *stats;
+		
+		stats = SysCacheGetStats(cacheId);
+		Assert (stats);
+
+		/* write error is checked later using ferror() */
+		fputc('T', fpout);
+		(void)fwrite(&cacheId, sizeof(int), 1, fpout);
+		(void)fwrite(&last_report, sizeof(TimestampTz), 1, fpout);
+		(void)fwrite(stats, sizeof(*stats), 1, fpout);
+	}
+	fputc('E', fpout);
+
+	if (ferror(fpout))
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not write syscache statistics file \"%s\": %m",
+						tmpfile)));
+		FreeFile(fpout);
+		unlink(tmpfile);
+	}
+	else if (FreeFile(fpout) < 0)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not close syscache statistics file \"%s\": %m",
+						tmpfile)));
+		unlink(tmpfile);
+	}
+	else if (rename(tmpfile, statfile) < 0)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not rename syscache statistics file \"%s\" to \"%s\": %m",
+						tmpfile, statfile)));
+		unlink(tmpfile);
+	}
+
+	RESUME_INTERRUPTS();
+	return 0;
+}
+
+/*
+ * GUC assignment callback for track_syscache_usage_interval.
+ *
+ * Make a statistics file immedately when syscache statistics is turned
+ * on. Remove it as soon as turned off as well.
+ */
+void
+pgstat_track_syscache_assign_hook(int newval, void *extra)
+{
+	if (newval > 0)
+	{
+		/*
+		 * Immediately create a stats file. It's safe since we're not midst
+		 * accessing syscache.
+		 */
+		pgstat_write_syscache_stats(true);
+	}
+	else
+	{
+		/* Turned off, immediately remove the statsfile */
+		char	fname[MAXPGPATH];
+
+		pgstat_get_syscachestat_filename(false, false, MyBackendId,
+										 fname, MAXPGPATH);
+		unlink(fname);		/* don't care of the result */
+	}
 }

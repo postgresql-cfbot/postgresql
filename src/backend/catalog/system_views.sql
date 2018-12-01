@@ -474,7 +474,7 @@ CREATE VIEW pg_settings AS
 CREATE RULE pg_settings_u AS
     ON UPDATE TO pg_settings
     WHERE new.name = old.name DO
-    SELECT set_config(old.name, new.setting, 'f');
+    SELECT set_config(old.name, new.setting, 'f', 'f');
 
 CREATE RULE pg_settings_n AS
     ON UPDATE TO pg_settings
@@ -903,6 +903,22 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
 		LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_syscache AS
+    SELECT
+		S.pid				AS pid,
+		S.relid::regclass	AS relname,
+		S.indid::regclass	AS cache_name,
+		S.size				AS size,
+		S.ntup				AS ntuples,
+		S.searches			AS searches,
+		S.hits				AS hits,
+		S.neg_hits			AS neg_hits,
+		S.ageclass			AS ageclass,
+		S.last_update		AS last_update
+	FROM pg_stat_activity A
+	JOIN LATERAL (SELECT A.pid, * FROM pg_get_syscache_stats(A.pid)) S
+		ON (A.pid = S.pid);
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,
@@ -1031,6 +1047,11 @@ CREATE OR REPLACE FUNCTION
   pg_promote(wait boolean DEFAULT true, wait_seconds integer DEFAULT 60)
   RETURNS boolean STRICT VOLATILE LANGUAGE INTERNAL AS 'pg_promote'
   PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION set_config (
+		setting_name text, new_value text, is_local boolean, is_nonxact boolean DEFAULT false)
+		RETURNS text STRICT VOLATILE LANGUAGE internal AS 'set_config_by_name'
+		PARALLEL UNSAFE;
 
 -- legacy definition for compatibility with 9.3
 CREATE OR REPLACE FUNCTION
@@ -1182,6 +1203,7 @@ GRANT EXECUTE ON FUNCTION pg_ls_waldir() TO pg_monitor;
 GRANT EXECUTE ON FUNCTION pg_ls_archive_statusdir() TO pg_monitor;
 GRANT EXECUTE ON FUNCTION pg_ls_tmpdir() TO pg_monitor;
 GRANT EXECUTE ON FUNCTION pg_ls_tmpdir(oid) TO pg_monitor;
+GRANT EXECUTE ON FUNCTION pg_get_syscache_stats(int) TO pg_monitor;
 
 GRANT pg_read_all_settings TO pg_monitor;
 GRANT pg_read_all_stats TO pg_monitor;

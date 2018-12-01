@@ -14,6 +14,8 @@
  */
 #include "postgres.h"
 
+#include <sys/stat.h>
+
 #include "access/htup_details.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
@@ -28,6 +30,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/inet.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
@@ -1881,4 +1884,135 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(
 									  heap_form_tuple(tupdesc, values, nulls)));
+}
+
+Datum
+pgstat_get_syscache_stats(PG_FUNCTION_ARGS)
+{
+#define PG_GET_SYSCACHE_SIZE 9
+	int					pid	 = PG_GETARG_INT32(0);
+	ReturnSetInfo	   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc			tupdesc;
+	Tuplestorestate    *tupstore;
+	MemoryContext		per_query_ctx;
+	MemoryContext		oldcontext;
+	PgBackendStatus	   *beentry;
+	int					beid;
+	char				fname[MAXPGPATH];
+	FILE   			   *fpin;
+	char c;
+
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+	
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* find beentry for given pid*/
+	beentry = NULL;
+	for (beid = 1;
+		 (beentry = pgstat_fetch_stat_beentry(beid)) &&
+			 beentry->st_procpid != pid ;
+		 beid++);
+
+	/*
+	 * we silently return empty result on failure or insufficient privileges
+	 */
+	if (!beentry ||
+		(!has_privs_of_role(GetUserId(), beentry->st_userid) &&
+		 !is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_STATS)))
+		goto no_data;
+
+	pgstat_get_syscachestat_filename(false, false, beid, fname, MAXPGPATH);
+
+	if ((fpin = AllocateFile(fname, PG_BINARY_R)) == NULL)
+	{
+		if (errno != ENOENT)
+			ereport(WARNING,
+					(errcode_for_file_access(),
+					 errmsg("could not open statistics file \"%s\": %m",
+							fname)));
+		/* also return empty on no statistics file */
+		goto no_data;
+	}
+
+	/* read the statistics file into tuplestore */
+	while ((c = fgetc(fpin)) == 'T')
+	{
+		TimestampTz last_update;
+		SysCacheStats stats;
+		int cacheid;
+		Datum values[PG_GET_SYSCACHE_SIZE];
+		bool nulls[PG_GET_SYSCACHE_SIZE] = {0};
+		Datum datums[SYSCACHE_STATS_NAGECLASSES * 2];
+		bool arrnulls[SYSCACHE_STATS_NAGECLASSES * 2] = {0};
+		int	dims[] = {SYSCACHE_STATS_NAGECLASSES, 2};
+		int lbs[] = {1, 1};
+		ArrayType *arr;
+		int i, j;
+
+		fread(&cacheid, sizeof(int), 1, fpin);
+		fread(&last_update, sizeof(TimestampTz), 1, fpin);
+		if (fread(&stats, 1, sizeof(stats), fpin) != sizeof(stats))
+		{
+			ereport(WARNING, 
+					(errmsg("corrupted syscache statistics file \"%s\"",
+							fname)));
+			goto no_data;
+		}
+
+		i = 0;
+		values[i++] = ObjectIdGetDatum(stats.reloid);
+		values[i++] = ObjectIdGetDatum(stats.indoid);
+		values[i++] = Int64GetDatum(stats.size);
+		values[i++] = Int64GetDatum(stats.ntuples);
+		values[i++] = Int64GetDatum(stats.nsearches);
+		values[i++] = Int64GetDatum(stats.nhits);
+		values[i++] = Int64GetDatum(stats.nneg_hits);
+
+		for (j = 0 ; j < SYSCACHE_STATS_NAGECLASSES ; j++)
+		{
+			datums[j * 2] = Int32GetDatum((int32) stats.ageclasses[j]);
+			datums[j * 2 + 1] = Int32GetDatum((int32) stats.nclass_entries[j]);
+		}			
+
+		arr = construct_md_array(datums, arrnulls, 2, dims, lbs,
+							  INT4OID, sizeof(int32), true, 'i');
+		values[i++] = PointerGetDatum(arr);
+
+		values[i++] = TimestampTzGetDatum(last_update);
+
+		Assert (i == PG_GET_SYSCACHE_SIZE);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* check for the end of file. abandon the result if file is broken */
+	if (c != 'E' || fgetc(fpin) != EOF)
+		tuplestore_clear(tupstore);
+
+	FreeFile(fpin);
+
+no_data:
+	tuplestore_donestoring(tupstore);
+	return (Datum) 0;
 }

@@ -18694,6 +18694,20 @@ SELECT collation for ('foo' COLLATE "de_DE");
        <entry><type>text</type></entry>
        <entry>set parameter and return new value</entry>
       </row>
+      <row>
+       <entry>
+        <indexterm>
+         <primary>pg_set_backend_setting</primary>
+        </indexterm>
+        <literal><function>pg_set_backend_config(
+            				<parameter>process_id</parameter>,
+                            <parameter>setting_name</parameter>,
+                            <parameter>new_value</parameter>)
+							</function></literal>
+       </entry>
+       <entry><type>bool</type></entry>
+       <entry>set parameter on another session</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -18747,6 +18761,22 @@ SELECT set_config('log_statement_stats', 'off', false);
  set_config
 ------------
  off
+(1 row)
+</programlisting>
+   </para>
+
+   <para>
+    <function>pg_set_backend_config</function> sets the parameter
+    <parameter>setting_name</parameter> to
+    <parameter>new_value</parameter> on the other session with PID
+    <parameter>process_id</parameter>. The setting is always session-local and
+    returns true if succeeded.  An example:
+<programlisting>
+SELECT pg_set_backend_config(2134, 'work_mem', '16MB');
+
+pg_set_backend_config
+------------
+ t
 (1 row)
 </programlisting>
    </para>

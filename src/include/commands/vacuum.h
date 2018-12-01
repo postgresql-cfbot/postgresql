@@ -200,6 +200,12 @@ extern void analyze_rel(Oid relid, RangeVar *relation, int options,
 			VacuumParams *params, List *va_cols, bool in_outer_xact,
 			BufferAccessStrategy bstrategy);
 extern bool std_typanalyze(VacAttrStats *stats);
+extern int analyze_mcv_list(int *mcv_counts,
+				 int num_mcv,
+				 double stadistinct,
+				 double stanullfrac,
+				 int samplerows,
+				 double totalrows);
 
 /* in utils/misc/sampling.c --- duplicate of declarations in utils/sampling.h */
 extern double anl_random_fract(void);

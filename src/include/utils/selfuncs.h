@@ -209,6 +209,8 @@ extern void mergejoinscansel(PlannerInfo *root, Node *clause,
 extern double estimate_num_groups(PlannerInfo *root, List *groupExprs,
 					double input_rows, List **pgset);
 
+extern double estimate_num_groups_simple(PlannerInfo *root, List *vars);
+
 extern void estimate_hash_bucket_stats(PlannerInfo *root,
 						   Node *hashkey, double nbuckets,
 						   Selectivity *mcv_freq,
@@ -219,6 +221,10 @@ extern void genericcostestimate(PlannerInfo *root, IndexPath *path,
 					double loop_count,
 					List *qinfos,
 					GenericCosts *costs);
+
+extern bool convert_to_scalar(Datum value, Oid valuetypid, double *scaledvalue,
+				  Datum lobound, Datum hibound, Oid boundstypid,
+				  double *scaledlobound, double *scaledhibound);
 
 /* Functions in array_selfuncs.c */
 

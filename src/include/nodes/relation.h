@@ -858,9 +858,14 @@ typedef struct StatisticExtInfo
 
 	Oid			statOid;		/* OID of the statistics row */
 	RelOptInfo *rel;			/* back-link to statistic's table */
-	char		kind;			/* statistic kind of this entry */
+	int			kinds;			/* statistic kinds of this entry */
 	Bitmapset  *keys;			/* attnums of the columns covered */
 } StatisticExtInfo;
+
+#define STATS_EXT_INFO_NDISTINCT			1
+#define STATS_EXT_INFO_DEPENDENCIES			2
+#define STATS_EXT_INFO_MCV					4
+#define STATS_EXT_INFO_HISTOGRAM			8
 
 /*
  * EquivalenceClasses

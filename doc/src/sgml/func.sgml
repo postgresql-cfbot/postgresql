@@ -21274,4 +21274,166 @@ CREATE EVENT TRIGGER test_table_rewrite_oid
   </sect2>
   </sect1>
 
+  <sect1 id="functions-statistics">
+   <title>Statistics Information Functions</title>
+
+   <indexterm zone="functions-statistics">
+    <primary>function</primary>
+    <secondary>statistics</secondary>
+   </indexterm>
+
+   <para>
+    To inspect statistics defined using <command>CREATE STATISTICS</command>
+    command, <productname>PostgreSQL</productname> provides multiple functions.
+   </para>
+
+  <sect2 id="functions-statistics-mcv">
+   <title>Inspecting MCV lists</title>
+
+   <indexterm>
+     <primary>pg_mcv_list_items</primary>
+     <secondary>pg_mcv_list</secondary>
+   </indexterm>
+
+   <para>
+    <function>pg_mcv_list_items</function> returns a list of all items
+    stored in a multi-column <literal>MCV</literal> list, and returns the
+    following columns:
+
+    <informaltable>
+     <tgroup cols="3">
+      <thead>
+       <row>
+        <entry>Name</entry>
+        <entry>Type</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+
+      <tbody>
+       <row>
+        <entry><literal>index</literal></entry>
+        <entry><type>int</type></entry>
+        <entry>index of the item in the <literal>MCV</literal> list</entry>
+       </row>
+       <row>
+        <entry><literal>values</literal></entry>
+        <entry><type>text[]</type></entry>
+        <entry>values stored in the MCV item</entry>
+       </row>
+       <row>
+        <entry><literal>nulls</literal></entry>
+        <entry><type>boolean[]</type></entry>
+        <entry>flags identifying <literal>NULL</literal> values</entry>
+       </row>
+       <row>
+        <entry><literal>frequency</literal></entry>
+        <entry><type>double precision</type></entry>
+        <entry>frequency of this <literal>MCV</literal> item</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </informaltable>
+   </para>
+
+   <para>
+    The <function>pg_mcv_list_items</function> function can be used like this:
+
+<programlisting>
+SELECT m.* FROM pg_statistic_ext,
+                pg_mcv_list_items(stxmcv) m WHERE stxname = 'stts';
+</programlisting>
+
+     Values of the <type>pg_mcv_list</type> can be obtained only from the
+     <literal>pg_statistic.stxmcv</literal> column.
+   </para>
+  </sect2>
+
+  <sect2 id="functions-statistics-histogram">
+   <title>Inspecting histograms</title>
+
+   <indexterm>
+     <primary>pg_histogram</primary>
+     <secondary>pg_histogram_buckets</secondary>
+   </indexterm>
+
+   <para>
+    <function>pg_histogram_buckets</function> returns a list of all buckets
+    stored in a multi-column histogram, and returns the following columns:
+
+    <informaltable>
+     <tgroup cols="3">
+      <thead>
+       <row>
+        <entry>Name</entry>
+        <entry>Type</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+        <entry><literal>index</literal></entry>
+        <entry><type>int</type></entry>
+        <entry>index of the item in the histogram buckets</entry>
+       </row>
+       <row>
+        <entry><literal>minvals</literal></entry>
+        <entry><type>text[]</type></entry>
+        <entry>lower boundaries of the histogram bucket</entry>
+       </row>
+       <row>
+        <entry><literal>maxvals</literal></entry>
+        <entry><type>text[]</type></entry>
+        <entry>upper boundaries of the histogram bucket</entry>
+       </row>
+       <row>
+        <entry><literal>nullsonly</literal></entry>
+        <entry><type>boolean[]</type></entry>
+        <entry>flags identifying <literal>NULL</literal>-only dimensions</entry>
+       </row>
+       <row>
+        <entry><literal>mininclusive</literal></entry>
+        <entry><type>boolean[]</type></entry>
+        <entry>flags identifying which lower boundaries are inclusive</entry>
+       </row>
+       <row>
+        <entry><literal>maxinclusive</literal></entry>
+        <entry><type>boolean[]</type></entry>
+        <entry>flags identifying which upper boundaries are inclusive</entry>
+       </row>
+       <row>
+        <entry><literal>frequency</literal></entry>
+        <entry><type>double precision</type></entry>
+        <entry>frequency of this histogram bucket</entry>
+       </row>
+       <row>
+        <entry><literal>density</literal></entry>
+        <entry><type>double precision</type></entry>
+        <entry>density of this histogram bucket (frequency / volume)</entry>
+       </row>
+       <row>
+        <entry><literal>bucket_volume</literal></entry>
+        <entry><type>double precision</type></entry>
+        <entry>volume of this histogram bucket (a measure of size)</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </informaltable>
+   </para>
+
+   <para>
+    The <function>pg_histogram_buckets</function> function can be used like this:
+
+<programlisting>
+SELECT m.* FROM pg_statistic_ext,
+                pg_histogram_buckets(stxhistogram) m WHERE stxname = 'stts3';
+</programlisting>
+
+     Values of the <type>pg_histogram</type> can be obtained only from the
+     <literal>pg_statistic.stxhistogram</literal> column.
+   </para>
+  </sect2>
+
+  </sect1>
+
 </chapter>

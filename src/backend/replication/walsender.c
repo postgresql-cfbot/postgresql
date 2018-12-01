@@ -930,6 +930,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 		}
 
 		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
+										InvalidXLogRecPtr,
 										logical_read_xlog_page,
 										WalSndPrepareWrite, WalSndWriteData,
 										WalSndUpdateProgress);
@@ -972,7 +973,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	}
 	else if (cmd->kind == REPLICATION_KIND_PHYSICAL && reserve_wal)
 	{
-		ReplicationSlotReserveWal();
+		ReplicationSlotReserveWal(InvalidXLogRecPtr);
 
 		ReplicationSlotMarkDirty();
 

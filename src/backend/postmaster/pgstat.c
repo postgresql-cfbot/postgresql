@@ -2908,6 +2908,8 @@ pgstat_bestart(void)
 		strlcpy(beentry->st_sslstatus->ssl_version, be_tls_get_version(MyProcPort), NAMEDATALEN);
 		strlcpy(beentry->st_sslstatus->ssl_cipher, be_tls_get_cipher(MyProcPort), NAMEDATALEN);
 		be_tls_get_peerdn_name(MyProcPort, beentry->st_sslstatus->ssl_clientdn, NAMEDATALEN);
+		be_tls_get_peer_serial(MyProcPort, beentry->st_sslstatus->ssl_client_serial, NAMEDATALEN);
+		be_tls_get_issuer_name(MyProcPort, beentry->st_sslstatus->ssl_issuer_dn, NAMEDATALEN);
 	}
 	else
 	{

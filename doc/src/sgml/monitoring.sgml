@@ -2206,8 +2206,24 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       used, or NULL if no client certificate was supplied or if SSL
       is not in use on this connection. This field is truncated if the
       DN field is longer than <symbol>NAMEDATALEN</symbol> (64 characters
-      in a standard build)
+      in a standard build).
      </entry>
+    </row>
+    <row>
+     <entry><structfield>clientserial</structfield></entry>
+     <entry><type>numeric</type></entry>
+     <entry>Serial number of the client certificate, or NULL if no client
+     certificate was supplied or if SSL is not in use on this connection.  The
+     combination of certificate serial number and certificate issuer uniquely
+     identifies a certificate (unless the issuer erroneously reuses serial
+     numbers).</entry>
+    </row>
+    <row>
+     <entry><structfield>issuerdn</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>DN of the issuer of the client certificate, or NULL if no client
+     certificate was supplied or if SSL is not in use on this connection.
+     This field is truncated like <structfield>clientdn</structfield>.</entry>
     </row>
    </tbody>
    </tgroup>

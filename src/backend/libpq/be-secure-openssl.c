@@ -1117,6 +1117,35 @@ be_tls_get_peerdn_name(Port *port, char *ptr, size_t len)
 		ptr[0] = '\0';
 }
 
+void
+be_tls_get_issuer_name(Port *port, char *ptr, size_t len)
+{
+	if (port->peer)
+		strlcpy(ptr, X509_NAME_to_cstring(X509_get_issuer_name(port->peer)), len);
+	else
+		ptr[0] = '\0';
+}
+
+void
+be_tls_get_peer_serial(Port *port, char *ptr, size_t len)
+{
+	if (port->peer)
+	{
+		ASN1_INTEGER *serial;
+		BIGNUM	   *b;
+		char	   *decimal;
+
+		serial = X509_get_serialNumber(port->peer);
+		b = ASN1_INTEGER_to_BN(serial, NULL);
+		decimal = BN_bn2dec(b);
+		BN_free(b);
+		strlcpy(ptr, decimal, len);
+		OPENSSL_free(decimal);
+	}
+	else
+		ptr[0] = '\0';
+}
+
 #ifdef HAVE_X509_GET_SIGNATURE_NID
 char *
 be_tls_get_certificate_hash(Port *port, size_t *len)

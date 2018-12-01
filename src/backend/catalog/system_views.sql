@@ -781,7 +781,9 @@ CREATE VIEW pg_stat_ssl AS
             S.sslcipher AS cipher,
             S.sslbits AS bits,
             S.sslcompression AS compression,
-            S.sslclientdn AS clientdn
+            S.sslclientdn AS clientdn,
+            S.sslclientserial AS clientserial,
+            S.sslissuerdn AS issuerdn
     FROM pg_stat_get_activity(NULL) AS S;
 
 CREATE VIEW pg_replication_slots AS

@@ -154,7 +154,7 @@ static BufferAccessStrategy vac_strategy;
 static void lazy_scan_heap(Relation onerel, int options,
 			   LVRelStats *vacrelstats, Relation *Irel, int nindexes,
 			   bool aggressive);
-static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
+static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats, BlockNumber nblocks);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_index(Relation indrel,
 				  IndexBulkDeleteResult **stats,
@@ -759,7 +759,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			pgstat_progress_update_multi_param(2, hvp_index, hvp_val);
 
 			/* Remove tuples from heap */
-			lazy_vacuum_heap(onerel, vacrelstats);
+			lazy_vacuum_heap(onerel, vacrelstats, nblocks);
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
@@ -897,7 +897,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			MarkBufferDirty(buf);
 			UnlockReleaseBuffer(buf);
 
-			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			RecordPageWithFreeSpace(onerel, blkno, freespace, nblocks);
 			continue;
 		}
 
@@ -936,7 +936,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 			}
 
 			UnlockReleaseBuffer(buf);
-			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			RecordPageWithFreeSpace(onerel, blkno, freespace, nblocks);
 			continue;
 		}
 
@@ -1333,7 +1333,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * taken if there are no indexes.)
 		 */
 		if (vacrelstats->num_dead_tuples == prev_dead_count)
-			RecordPageWithFreeSpace(onerel, blkno, freespace);
+			RecordPageWithFreeSpace(onerel, blkno, freespace, nblocks);
 	}
 
 	/* report that everything is scanned and vacuumed */
@@ -1395,7 +1395,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		/* Remove tuples from heap */
 		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 									 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
-		lazy_vacuum_heap(onerel, vacrelstats);
+		lazy_vacuum_heap(onerel, vacrelstats, nblocks);
 		vacrelstats->num_index_scans++;
 	}
 
@@ -1466,9 +1466,10 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
  * Note: the reason for doing this as a second pass is we cannot remove
  * the tuples until we've removed their index entries, and we want to
  * process index entry removal in batches as large as possible.
+ * Note: nblocks is passed as an optimization for RecordPageWithFreeSpace().
  */
 static void
-lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
+lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats, BlockNumber nblocks)
 {
 	int			tupindex;
 	int			npages;
@@ -1505,7 +1506,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		freespace = PageGetHeapFreeSpace(page);
 
 		UnlockReleaseBuffer(buf);
-		RecordPageWithFreeSpace(onerel, tblk, freespace);
+		RecordPageWithFreeSpace(onerel, tblk, freespace, nblocks);
 		npages++;
 	}
 

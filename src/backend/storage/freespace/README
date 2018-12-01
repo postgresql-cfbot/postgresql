@@ -5,10 +5,11 @@ Free Space Map
 
 The purpose of the free space map is to quickly locate a page with enough
 free space to hold a tuple to be stored; or to determine that no such page
-exists and the relation must be extended by one page.  As of PostgreSQL 8.4
-each relation has its own, extensible free space map stored in a separate
-"fork" of its relation.  This eliminates the disadvantages of the former
-fixed-size FSM.
+exists and the relation must be extended by one page.  For very small heap
+relations, we simply iterate through all the pages in descending order.
+Otherwise, each relation (except for hash indexes) has its own, extensible
+free space map stored in a separate "fork" of its relation.  This eliminates
+the disadvantages of the fixed-size FSM used in PostgreSQL 8.3 and earlier.
 
 It is important to keep the map small so that it can be searched rapidly.
 Therefore, we don't attempt to record the exact free space on a page.
@@ -192,5 +193,3 @@ TODO
 ----
 
 - fastroot to avoid traversing upper nodes with just 1 child
-- use a different system for tables that fit into one FSM page, with a
-  mechanism to switch to the real thing as it grows.

@@ -14,10 +14,11 @@
 #include <sys/stat.h>
 #include "catalog/pg_class_d.h"
 #include "access/transam.h"
+#include "storage/freespace.h"
 
 
 static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace);
-static void transfer_relfile(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit);
+static Size transfer_relfile(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit);
 
 
 /*
@@ -144,6 +145,7 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 	int			mapnum;
 	bool		vm_crashsafe_match = true;
 	bool		vm_must_add_frozenbit = false;
+	Size		first_seg_size = 0;
 
 	/*
 	 * Do the old and new cluster disagree on the crash-safetiness of the vm
@@ -165,18 +167,22 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 		if (old_tablespace == NULL ||
 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
 		{
-			/* transfer primary file */
-			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit);
+			/* Transfer main fork and return size of the first segment. */
+			first_seg_size = transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit);
 
 			/* fsm/vm files added in PG 8.4 */
 			if (GET_MAJOR_VERSION(old_cluster.major_version) >= 804)
 			{
 				/*
-				 * Copy/link any fsm and vm files, if they exist
+				 * Copy/link any fsm and vm files, if they exist and if they would
+				 * be created in the new cluster.
 				 */
-				transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit);
+				if (maps[mapnum].relkind != RELKIND_RELATION ||
+					first_seg_size > HEAP_FSM_CREATION_THRESHOLD * BLCKSZ ||
+					GET_MAJOR_VERSION(new_cluster.major_version) <= 1100)
+					(void) transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit);
 				if (vm_crashsafe_match)
-					transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit);
+					(void) transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit);
 			}
 		}
 	}
@@ -190,7 +196,7 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
  * is true, visibility map forks are converted and rewritten, even in link
  * mode.
  */
-static void
+static Size
 transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit)
 {
 	char		old_file[MAXPGPATH];
@@ -198,6 +204,8 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 	int			segno;
 	char		extent_suffix[65];
 	struct stat statbuf;
+	int			sret;
+	Size		first_seg_size = 0;
 
 	/*
 	 * Now copy/link any related segments as well. Remember, PG breaks large
@@ -226,25 +234,28 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 				 type_suffix,
 				 extent_suffix);
 
-		/* Is it an extent, fsm, or vm file? */
-		if (type_suffix[0] != '\0' || segno != 0)
-		{
-			/* Did file open fail? */
-			if (stat(old_file, &statbuf) != 0)
-			{
-				/* File does not exist?  That's OK, just return */
-				if (errno == ENOENT)
-					return;
-				else
-					pg_fatal("error while checking for file existence \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
-							 map->nspname, map->relname, old_file, new_file,
-							 strerror(errno));
-			}
+		sret = stat(old_file, &statbuf);
 
+		/* Save the size of the first segment of the main fork. */
+		if (type_suffix[0] == '\0' && segno == 0)
+			first_seg_size = statbuf.st_size;
+
+		/* The file must be an extent, fsm, or vm. */
+		else if (sret == 0)
+		{
 			/* If file is empty, just return */
 			if (statbuf.st_size == 0)
-				return;
+				return first_seg_size;
 		}
+
+		/* Did file open fail? */
+		else if (errno == ENOENT)
+			/* File does not exist?  That's OK, just return */
+			return first_seg_size;
+		else
+			pg_fatal("error while checking for file existence \"%s.%s\" (\"%s\" to \"%s\"): %s\n",
+					 map->nspname, map->relname, old_file, new_file,
+					 strerror(errno));
 
 		unlink(new_file);
 

@@ -1,0 +1,37 @@
+--
+-- Free Space Map test
+--
+
+CREATE TABLE fsm_check_size (num int);
+
+-- 1 heap block
+-- No FSM
+INSERT INTO fsm_check_size values (0);
+VACUUM fsm_check_size;
+SELECT pg_relation_size('fsm_check_size', 'main') as heap_size, pg_relation_size('fsm_check_size', 'fsm') AS fsm_size;
+
+-- Extend table with enough blocks to exceed the FSM threshold
+-- FSM is created and extended to 3 blocks
+INSERT INTO fsm_check_size SELECT g from generate_series(1,3000) g;
+VACUUM fsm_check_size;
+SELECT pg_relation_size('fsm_check_size', 'fsm') AS fsm_size;
+
+-- Truncate heap to 1 block
+-- No change in FSM
+DELETE FROM fsm_check_size where num > 0;
+VACUUM fsm_check_size;
+SELECT pg_relation_size('fsm_check_size', 'main') as heap_size, pg_relation_size('fsm_check_size', 'fsm') AS fsm_size;
+
+-- Truncate heap to 0 blocks
+-- FSM now truncated to 2 blocks
+DELETE FROM fsm_check_size;
+VACUUM fsm_check_size;
+SELECT pg_relation_size('fsm_check_size', 'main') as heap_size, pg_relation_size('fsm_check_size', 'fsm') AS fsm_size;
+
+-- Extend heap to 1 block
+-- FSM is extended to 3 blocks
+INSERT INTO fsm_check_size values (0);
+VACUUM fsm_check_size;
+SELECT pg_relation_size('fsm_check_size', 'main') as heap_size, pg_relation_size('fsm_check_size', 'fsm') AS fsm_size;
+
+DROP TABLE fsm_check_size;

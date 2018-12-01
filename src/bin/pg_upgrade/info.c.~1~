@@ -200,7 +200,6 @@ create_rel_filename_map(const char *old_data, const char *new_data,
 
 	map->old_db_oid = old_db->db_oid;
 	map->new_db_oid = new_db->db_oid;
-	map->relkind = old_rel->relkind;
 
 	/*
 	 * old_relfilenode might differ from pg_class.oid (and hence
@@ -419,7 +418,6 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 	char	   *nspname = NULL;
 	char	   *relname = NULL;
 	char	   *tablespace = NULL;
-	char	   *relkind = NULL;
 	int			i_spclocation,
 				i_nspname,
 				i_relname,
@@ -427,8 +425,7 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 				i_indtable,
 				i_toastheap,
 				i_relfilenode,
-				i_reltablespace,
-				i_relkind;
+				i_reltablespace;
 	char		query[QUERY_ALLOC];
 	char	   *last_namespace = NULL,
 			   *last_tablespace = NULL;
@@ -497,7 +494,7 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 	 */
 	snprintf(query + strlen(query), sizeof(query) - strlen(query),
 			 "SELECT all_rels.*, n.nspname, c.relname, "
-			 "  c.relfilenode, c.reltablespace, c.relkind, %s "
+			 "  c.relfilenode, c.reltablespace, %s "
 			 "FROM (SELECT * FROM regular_heap "
 			 "      UNION ALL "
 			 "      SELECT * FROM toast_heap "
@@ -529,7 +526,6 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 	i_relfilenode = PQfnumber(res, "relfilenode");
 	i_reltablespace = PQfnumber(res, "reltablespace");
 	i_spclocation = PQfnumber(res, "spclocation");
-	i_relkind = PQfnumber(res, "relkind");
 
 	for (relnum = 0; relnum < ntups; relnum++)
 	{
@@ -558,9 +554,6 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 
 		relname = PQgetvalue(res, relnum, i_relname);
 		curr->relname = pg_strdup(relname);
-
-		relkind = PQgetvalue(res, relnum, i_relkind);
-		curr->relkind = relkind[0];
 
 		curr->relfilenode = atooid(PQgetvalue(res, relnum, i_relfilenode));
 		curr->tblsp_alloc = false;

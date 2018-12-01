@@ -69,6 +69,11 @@ test: create_aggregate create_function_3 create_cast constraints triggers inheri
 test: sanity_check
 
 # ----------
+# fsm does a vacuum, and running it in parallel seems to prevent heap truncation.
+# ----------
+test: fsm
+
+# ----------
 # Believe it or not, select creates a table, subsequent
 # tests need.
 # ----------

@@ -147,6 +147,7 @@ typedef struct
 	char	   *tablespace;		/* tablespace path; "" for cluster default */
 	bool		nsp_alloc;		/* should nspname be freed? */
 	bool		tblsp_alloc;	/* should tablespace be freed? */
+	char		relkind;		/* relation relkind -- see pg_class.h */
 } RelInfo;
 
 typedef struct
@@ -173,9 +174,12 @@ typedef struct
 	 */
 	Oid			old_relfilenode;
 	Oid			new_relfilenode;
-	/* the rest are used only for logging and error reporting */
+
+	/* These are used only for logging and error reporting. */
 	char	   *nspname;		/* namespaces */
 	char	   *relname;
+
+	char		relkind;		/* relation relkind -- see pg_class.h */
 } FileNameMap;
 
 /*

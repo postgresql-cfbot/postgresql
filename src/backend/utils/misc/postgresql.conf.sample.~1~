@@ -708,7 +708,7 @@
 
 # - Other Platforms and Clients -
 
-#transform_null_equals = off	# off, warn, error, or on
+#transform_null_equals = off
 
 
 #------------------------------------------------------------------------------

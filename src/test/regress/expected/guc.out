@@ -767,3 +767,58 @@ NOTICE:  text search configuration "no_such_config" does not exist
 select func_with_bad_set();
 ERROR:  invalid value for parameter "default_text_search_config": "no_such_config"
 reset check_function_bodies;
+set transform_null_equals = off;
+select 1=null as transform_null_equals_off;
+ transform_null_equals_off 
+---------------------------
+ 
+(1 row)
+
+select null=null as transform_null_equals_off;
+ transform_null_equals_off 
+---------------------------
+ 
+(1 row)
+
+set transform_null_equals = warn;
+select 1=null as transform_null_equals_warn;
+WARNING:  = NULL can only produce a NULL
+LINE 1: select 1=null as transform_null_equals_warn;
+                ^
+ transform_null_equals_warn 
+----------------------------
+ 
+(1 row)
+
+select null=null as transform_null_equals_warn;
+WARNING:  = NULL can only produce a NULL
+LINE 1: select null=null as transform_null_equals_warn;
+                   ^
+ transform_null_equals_warn 
+----------------------------
+ 
+(1 row)
+
+set transform_null_equals = error;
+select 1=null as transform_null_equals_error;
+ERROR:  = NULL does not comply with the SQL specification
+LINE 1: select 1=null as transform_null_equals_error;
+                ^
+select null=null as transform_null_equals_error;
+ERROR:  = NULL does not comply with the SQL specification
+LINE 1: select null=null as transform_null_equals_error;
+                   ^
+set transform_null_equals = on;
+select 1=null as transform_null_equals_on;
+ transform_null_equals_on 
+--------------------------
+ f
+(1 row)
+
+select null=null as transform_null_equals_on;
+ transform_null_equals_on 
+--------------------------
+ t
+(1 row)
+
+reset transform_null_equals;

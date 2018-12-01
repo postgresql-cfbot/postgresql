@@ -288,3 +288,29 @@ set default_text_search_config = no_such_config;
 select func_with_bad_set();
 
 reset check_function_bodies;
+
+set transform_null_equals = off;
+
+select 1=null as transform_null_equals_off;
+
+select null=null as transform_null_equals_off;
+
+set transform_null_equals = warn;
+
+select 1=null as transform_null_equals_warn;
+
+select null=null as transform_null_equals_warn;
+
+set transform_null_equals = error;
+
+select 1=null as transform_null_equals_error;
+
+select null=null as transform_null_equals_error;
+
+set transform_null_equals = on;
+
+select 1=null as transform_null_equals_on;
+
+select null=null as transform_null_equals_on;
+
+reset transform_null_equals;

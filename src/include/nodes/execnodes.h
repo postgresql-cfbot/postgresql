@@ -2288,12 +2288,15 @@ typedef struct LimitState
 	PlanState	ps;				/* its first field is NodeTag */
 	ExprState  *limitOffset;	/* OFFSET parameter, or NULL if none */
 	ExprState  *limitCount;		/* COUNT parameter, or NULL if none */
+	LimitOption	limitOption;	/* limit specification type */
 	int64		offset;			/* current OFFSET value */
 	int64		count;			/* current COUNT, if any */
 	bool		noCount;		/* if true, ignore count */
 	LimitStateCond lstate;		/* state machine status, as above */
 	int64		position;		/* 1-based index of last tuple returned */
 	TupleTableSlot *subSlot;	/* tuple last obtained from subplan */
+	ExprState  *eqfunction;		/* tuple equality qual in case of WITH TIES option */
+	TupleTableSlot *last_slot;	/* slot for evaluation of ties */
 } LimitState;
 
 #endif							/* EXECNODES_H */

@@ -1136,6 +1136,10 @@ _copyLimit(const Limit *from)
 	 */
 	COPY_NODE_FIELD(limitOffset);
 	COPY_NODE_FIELD(limitCount);
+	COPY_SCALAR_FIELD(limitOption);
+	COPY_SCALAR_FIELD(numCols);
+	COPY_POINTER_FIELD(uniqColIdx, from->numCols * sizeof(AttrNumber));
+	COPY_POINTER_FIELD(uniqOperators, from->numCols * sizeof(Oid));
 
 	return newnode;
 }
@@ -3021,6 +3025,7 @@ _copyQuery(const Query *from)
 	COPY_NODE_FIELD(sortClause);
 	COPY_NODE_FIELD(limitOffset);
 	COPY_NODE_FIELD(limitCount);
+	COPY_SCALAR_FIELD(limitOption);
 	COPY_NODE_FIELD(rowMarks);
 	COPY_NODE_FIELD(setOperations);
 	COPY_NODE_FIELD(constraintDeps);
@@ -3105,6 +3110,7 @@ _copySelectStmt(const SelectStmt *from)
 	COPY_NODE_FIELD(sortClause);
 	COPY_NODE_FIELD(limitOffset);
 	COPY_NODE_FIELD(limitCount);
+	COPY_SCALAR_FIELD(limitOption);
 	COPY_NODE_FIELD(lockingClause);
 	COPY_NODE_FIELD(withClause);
 	COPY_SCALAR_FIELD(op);

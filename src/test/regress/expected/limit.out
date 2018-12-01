@@ -503,3 +503,38 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
  45020 | 45020
 (3 rows)
 
+--
+-- FETCH FIRST
+-- Check the WITH TIES clause
+--
+SELECT ''::text AS two, unique1, unique2, stringu1 , thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 ROW WITH TIES;
+ two | unique1 | unique2 | stringu1 | thousand 
+-----+---------+---------+----------+----------
+     |     800 |       9 | UEAAAA   |        0
+     |     200 |      95 | SHAAAA   |        0
+     |     500 |     262 | GTAAAA   |        0
+     |     400 |     309 | KPAAAA   |        0
+     |     300 |     374 | OLAAAA   |        0
+     |     600 |     402 | CXAAAA   |        0
+     |     700 |     434 | YAAAAA   |        0
+     |     900 |     913 | QIAAAA   |        0
+     |     100 |     946 | WDAAAA   |        0
+     |       0 |     998 | AAAAAA   |        0
+(10 rows)
+
+SELECT ''::text AS two, unique1, unique2, stringu1, thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 ROW ONLY;
+ two | unique1 | unique2 | stringu1 | thousand 
+-----+---------+---------+----------+----------
+     |     200 |      95 | SHAAAA   |        0
+     |     500 |     262 | GTAAAA   |        0
+(2 rows)
+
+-- should fail
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 50
+		FETCH FIRST 2 ROW WITH TIES;
+ERROR:  WITH TIES options can not be specified without ORDER BY clause

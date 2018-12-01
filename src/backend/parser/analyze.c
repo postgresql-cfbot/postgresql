@@ -1302,6 +1302,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 											EXPR_KIND_OFFSET, "OFFSET");
 	qry->limitCount = transformLimitClause(pstate, stmt->limitCount,
 										   EXPR_KIND_LIMIT, "LIMIT");
+	qry->limitOption = stmt->limitOption;
 
 	/* transform window clauses after we have seen all window functions */
 	qry->windowClause = transformWindowDefinitions(pstate,
@@ -1548,6 +1549,7 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 											EXPR_KIND_OFFSET, "OFFSET");
 	qry->limitCount = transformLimitClause(pstate, stmt->limitCount,
 										   EXPR_KIND_LIMIT, "LIMIT");
+	qry->limitOption = stmt->limitOption;
 
 	if (stmt->lockingClause)
 		ereport(ERROR,
@@ -1783,6 +1785,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 											EXPR_KIND_OFFSET, "OFFSET");
 	qry->limitCount = transformLimitClause(pstate, limitCount,
 										   EXPR_KIND_LIMIT, "LIMIT");
+	qry->limitOption = stmt->limitOption;
 
 	qry->rtable = pstate->p_rtable;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);

@@ -41,6 +41,7 @@ static TupleTableSlot *			/* return: a tuple or NULL */
 ExecLimit(PlanState *pstate)
 {
 	LimitState *node = castNode(LimitState, pstate);
+	ExprContext *econtext = node->ps.ps_ExprContext;
 	ScanDirection direction;
 	TupleTableSlot *slot;
 	PlanState  *outerPlan;
@@ -131,7 +132,8 @@ ExecLimit(PlanState *pstate)
 				 * the state machine state to record having done so.
 				 */
 				if (!node->noCount &&
-					node->position - node->offset >= node->count)
+					node->position - node->offset >= node->count &&
+					node->limitOption == WITH_ONLY)
 				{
 					node->lstate = LIMIT_WINDOWEND;
 
@@ -145,17 +147,64 @@ ExecLimit(PlanState *pstate)
 					return NULL;
 				}
 
-				/*
-				 * Get next tuple from subplan, if any.
-				 */
-				slot = ExecProcNode(outerPlan);
-				if (TupIsNull(slot))
+				else if (!node->noCount &&
+						 node->position - node->offset >= node->count &&
+						 node->limitOption == WITH_TIES)
 				{
-					node->lstate = LIMIT_SUBPLANEOF;
-					return NULL;
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+					/*
+					 * Test if the new tuple and the last tuple match.
+					 * If so we return the tuple.
+					 */
+					econtext->ecxt_innertuple = slot;
+					econtext->ecxt_outertuple = node->last_slot;
+					if (ExecQualAndReset(node->eqfunction, econtext))
+					{
+						ExecCopySlot(node->last_slot, slot);
+						node->subSlot = slot;
+						node->position++;
+					}
+					else
+					{
+						node->lstate = LIMIT_WINDOWEND;
+
+						/*
+						* If we know we won't need to back up, we can release
+						* resources at this point.
+						*/
+						if (!(node->ps.state->es_top_eflags & EXEC_FLAG_BACKWARD))
+							(void) ExecShutdownNode(outerPlan);
+
+						return NULL;
+					}
+
 				}
-				node->subSlot = slot;
-				node->position++;
+				else
+				{
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+					if (node->limitOption == WITH_TIES)
+					{
+						ExecCopySlot(node->last_slot, slot);
+					}
+					node->subSlot = slot;
+					node->position++;
+				}
 			}
 			else
 			{
@@ -311,7 +360,8 @@ recompute_limits(LimitState *node)
 	 * must update the child node anyway, in case this is a rescan and the
 	 * previous time we got a different result.
 	 */
-	ExecSetTupleBound(compute_tuples_needed(node), outerPlanState(node));
+	if(node->limitOption == WITH_ONLY)
+		ExecSetTupleBound(compute_tuples_needed(node), outerPlanState(node));
 }
 
 /*
@@ -374,6 +424,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 										   (PlanState *) limitstate);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
 										  (PlanState *) limitstate);
+	limitstate->limitOption = node->limitOption;
 
 	/*
 	 * Initialize result type.
@@ -389,6 +440,24 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * node appropriately
 	 */
 	limitstate->ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Initialize the equality evaluation, to detect ties.
+	 */
+	if (node->limitOption == WITH_TIES)
+	{
+		TupleDesc       scanDesc;
+		const TupleTableSlotOps *ops;
+		scanDesc = limitstate->ps.ps_ResultTupleDesc;
+		ops = ExecGetResultSlotOps(outerPlanState(limitstate), NULL);
+		limitstate->last_slot = ExecInitExtraTupleSlot(estate, scanDesc, ops);
+		limitstate->eqfunction =
+			execTuplesMatchPrepare(ExecGetResultType(outerPlanState(limitstate)),
+								   node->numCols,
+								   node->uniqColIdx,
+								   node->uniqOperators,
+								   &limitstate->ps);
+	}
 
 	return limitstate;
 }

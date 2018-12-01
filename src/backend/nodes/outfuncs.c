@@ -981,12 +981,34 @@ _outLockRows(StringInfo str, const LockRows *node)
 static void
 _outLimit(StringInfo str, const Limit *node)
 {
+	int			i;
 	WRITE_NODE_TYPE("LIMIT");
 
 	_outPlanInfo(str, (const Plan *) node);
 
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_ENUM_FIELD(limitOption, LimitOption);
+	WRITE_INT_FIELD(numCols);
+	if (node->numCols > 0)
+	{
+		appendStringInfoString(str, " :uniqColIdx");
+		for (i = 0; i < node->numCols; i++)
+			appendStringInfo(str, " %d", node->uniqColIdx[i]);
+
+		appendStringInfoString(str, " :uniqOperators");
+		for (i = 0; i < node->numCols; i++)
+			appendStringInfo(str, " %u", node->uniqOperators[i]);
+	}
+	else
+	{
+		appendStringInfoString(str, " :uniqColIdx");
+		appendStringInfo(str, " NULL");
+
+		appendStringInfoString(str, " :uniqOperators");
+		appendStringInfo(str, " NULL");
+	}
+
 }
 
 static void
@@ -2786,6 +2808,7 @@ _outSelectStmt(StringInfo str, const SelectStmt *node)
 	WRITE_NODE_FIELD(sortClause);
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_ENUM_FIELD(limitOption, LimitOption);
 	WRITE_NODE_FIELD(lockingClause);
 	WRITE_NODE_FIELD(withClause);
 	WRITE_ENUM_FIELD(op, SetOperation);
@@ -2995,6 +3018,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(sortClause);
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_ENUM_FIELD(limitOption, LimitOption);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(setOperations);
 	WRITE_NODE_FIELD(constraintDeps);

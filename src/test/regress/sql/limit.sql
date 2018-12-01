@@ -141,3 +141,20 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
 
 select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
   from tenk1 group by thousand order by thousand limit 3;
+
+--
+-- FETCH FIRST
+-- Check the WITH TIES clause
+--
+
+SELECT ''::text AS two, unique1, unique2, stringu1 , thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 ROW WITH TIES;
+
+SELECT ''::text AS two, unique1, unique2, stringu1, thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 ROW ONLY;
+-- should fail
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 50
+		FETCH FIRST 2 ROW WITH TIES;

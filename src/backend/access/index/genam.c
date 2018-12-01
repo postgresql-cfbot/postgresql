@@ -25,6 +25,7 @@
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -423,6 +424,17 @@ systable_getnext(SysScanDesc sysscan)
 	else
 		htup = heap_getnext(sysscan->scan, ForwardScanDirection);
 
+	/*
+	 * If CheckXidAlive is valid, then we check if it aborted. If it did, we
+	 * error out
+	 */
+	if (TransactionIdIsValid(CheckXidAlive) &&
+			!TransactionIdIsInProgress(CheckXidAlive) &&
+			!TransactionIdDidCommit(CheckXidAlive))
+			ereport(ERROR,
+				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+				 errmsg("transaction aborted during system catalog scan")));
+
 	return htup;
 }
 
@@ -476,6 +488,18 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 		result = HeapTupleSatisfiesVisibility(tup, freshsnap, scan->rs_cbuf);
 		LockBuffer(scan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 	}
+
+	/*
+	 * If CheckXidAlive is valid, then we check if it aborted. If it did, we
+	 * error out
+	 */
+	if (TransactionIdIsValid(CheckXidAlive) &&
+			!TransactionIdIsInProgress(CheckXidAlive) &&
+			!TransactionIdDidCommit(CheckXidAlive))
+			ereport(ERROR,
+				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+				 errmsg("transaction aborted during system catalog scan")));
+
 	return result;
 }
 
@@ -592,6 +616,17 @@ systable_getnext_ordered(SysScanDesc sysscan, ScanDirection direction)
 	/* See notes in systable_getnext */
 	if (htup && sysscan->iscan->xs_recheck)
 		elog(ERROR, "system catalog scans with lossy index conditions are not implemented");
+
+	/*
+	 * If CheckXidAlive is valid, then we check if it aborted. If it did, we
+	 * error out
+	 */
+	if (TransactionIdIsValid(CheckXidAlive) &&
+			!TransactionIdIsInProgress(CheckXidAlive) &&
+			!TransactionIdDidCommit(CheckXidAlive))
+			ereport(ERROR,
+				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+				 errmsg("transaction aborted during system catalog scan")));
 
 	return htup;
 }

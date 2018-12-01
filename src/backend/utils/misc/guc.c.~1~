@@ -1015,17 +1015,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"enable_predicate_propagation", PGC_USERSET, QUERY_TUNING_OTHER,
-			gettext_noop("When two expressions are equivalent (such as with "
-						 "equijoined keys) then the planner applies predicates "
-						 "on one expression to the other expression."),
-			gettext_noop("If false, planner does not copy predicates.")
-		},
-		&enable_predicate_propagation,
-		true,
-		NULL, NULL, NULL
-	},
-	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),
 			gettext_noop("This algorithm attempts to do planning without "

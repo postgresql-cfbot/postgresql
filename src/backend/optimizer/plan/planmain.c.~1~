@@ -167,13 +167,6 @@ query_planner(PlannerInfo *root, List *tlist,
 	reconsider_outer_join_clauses(root);
 
 	/*
-	 * Use the list of equijoined keys to transfer quals between relations.
-	 * For example: A=B AND f(A) implies A=B AND f(A) and f(B), under some
-	 * restrictions on f.
-	 */
-	generate_implied_quals(root);
-
-	/*
 	 * If we formed any equivalence classes, generate additional restriction
 	 * clauses as appropriate.  (Implied join clauses are formed on-the-fly
 	 * later.)

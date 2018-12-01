@@ -168,8 +168,10 @@ CREATE OPERATOR >>> (procedure = leak2, leftarg = integer, rightarg = integer,
 -- This should not show any "leak" notices before failing.
 EXPLAIN (COSTS OFF) SELECT * FROM atest12 WHERE a >>> 0;
 
+SET enable_predicate_propagation TO off;
 -- This plan should use hashjoin, as it will expect many rows to be selected.
 EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y WHERE x.a = y.b;
+RESET enable_predicate_propagation;
 
 -- Now regress_priv_user1 grants sufficient access to regress_priv_user2.
 SET SESSION AUTHORIZATION regress_priv_user1;

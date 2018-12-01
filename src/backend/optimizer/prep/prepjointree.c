@@ -909,6 +909,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->cte_plan_ids = NIL;
 	subroot->multiexpr_params = NIL;
 	subroot->eq_classes = NIL;
+	subroot->non_eq_clauses = NIL;
 	subroot->append_rel_list = NIL;
 	subroot->rowMarks = NIL;
 	memset(subroot->upper_rels, 0, sizeof(subroot->upper_rels));

@@ -28,6 +28,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -60,6 +61,7 @@
 									 * failed archiver; in seconds. */
 
 #define NUM_ARCHIVE_RETRIES 3
+#define NUM_STATUS_CLEANUP_RETRIES 3
 
 
 /* ----------
@@ -424,9 +426,13 @@ pgarch_ArchiverCopyLoop(void)
 	while (pgarch_readyXlog(xlog))
 	{
 		int			failures = 0;
+		int			failures_unlink = 0;
 
 		for (;;)
 		{
+			struct stat	stat_buf;
+			char		pathname[MAXPGPATH];
+
 			/*
 			 * Do not initiate any more archive commands after receiving
 			 * SIGTERM, nor after the postmaster has died unexpectedly. The
@@ -454,6 +460,43 @@ pgarch_ArchiverCopyLoop(void)
 				ereport(WARNING,
 						(errmsg("archive_mode enabled, yet archive_command is not set")));
 				return;
+			}
+
+			/*
+			 * Since archive status files are not durably removed, a system
+			 * crash could leave behind .ready files for WAL segments that
+			 * have already been recycled or removed.  In this case, simply
+			 * remove the orphan status file and move on.
+			 */
+			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
+			if (stat(pathname, &stat_buf) != 0 && errno == ENOENT)
+			{
+				char		xlogready[MAXPGPATH];
+
+				StatusFilePath(xlogready, xlog, ".ready");
+				if (durable_unlink(xlogready, WARNING) == 0)
+				{
+					ereport(WARNING,
+							(errmsg("removed orphan archive status file \"%s\"",
+									xlogready)));
+
+					/* leave loop and move to the next status file */
+					break;
+				}
+
+				if (++failures_unlink >= NUM_STATUS_CLEANUP_RETRIES)
+				{
+					ereport(WARNING,
+							(errmsg("removal of orphan archive status file \"%s\" failed too many times, will try again later",
+									xlogready)));
+
+					/* give up cleanup of orphan status files */
+					return;
+				}
+
+				/* wait a bit before retrying */
+				pg_usleep(1000000L);
+				continue;
 			}
 
 			if (pgarch_archiveXlog(xlog))

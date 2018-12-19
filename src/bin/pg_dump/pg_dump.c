@@ -47,12 +47,14 @@
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_default_acl_d.h"
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
 #include "catalog/pg_proc_d.h"
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
+#include "common/pg_collation_fn_common.h"
 #include "libpq/libpq-fs.h"
 #include "storage/block.h"
 
@@ -13261,9 +13263,10 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	int			i_collprovider;
 	int			i_collcollate;
 	int			i_collctype;
-	const char *collprovider;
+	const char *collproviderstr;
 	const char *collcollate;
 	const char *collctype;
+	const char *collprovider_name;
 
 	/* Skip if not to be dumped */
 	if (!collinfo->dobj.dump || dopt->dataOnly)
@@ -13301,9 +13304,20 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	i_collcollate = PQfnumber(res, "collcollate");
 	i_collctype = PQfnumber(res, "collctype");
 
-	collprovider = PQgetvalue(res, 0, i_collprovider);
+	collproviderstr = PQgetvalue(res, 0, i_collprovider);
 	collcollate = PQgetvalue(res, 0, i_collcollate);
 	collctype = PQgetvalue(res, 0, i_collctype);
+
+ 	/*
+	 * Use COLLPROVIDER_DEFAULT to allow dumping pg_catalog; not accepted on
+	 * input
+	 */
+	collprovider_name = get_collprovider_name(collproviderstr[0]);
+	if (!collprovider_name)
+		exit_horribly(NULL,
+					  "unrecognized collation provider: %s\n",
+					  collproviderstr);
+
 
 	appendPQExpBuffer(delq, "DROP COLLATION %s;\n",
 					  fmtQualifiedDumpable(collinfo));
@@ -13311,18 +13325,7 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	appendPQExpBuffer(q, "CREATE COLLATION %s (",
 					  fmtQualifiedDumpable(collinfo));
 
-	appendPQExpBufferStr(q, "provider = ");
-	if (collprovider[0] == 'c')
-		appendPQExpBufferStr(q, "libc");
-	else if (collprovider[0] == 'i')
-		appendPQExpBufferStr(q, "icu");
-	else if (collprovider[0] == 'd')
-		/* to allow dumping pg_catalog; not accepted on input */
-		appendPQExpBufferStr(q, "default");
-	else
-		exit_horribly(NULL,
-					  "unrecognized collation provider: %s\n",
-					  collprovider);
+	appendPQExpBuffer(q, "provider = %s", collprovider_name);
 
 	if (strcmp(collcollate, collctype) == 0)
 	{

@@ -56,7 +56,10 @@
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_control.h"
+#include "catalog/pg_database.h"
+#include "common/pg_collation_fn_common.h"
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
 #include "utils/lsyscache.h"
@@ -132,6 +135,10 @@ static HTAB *collation_cache = NULL;
 static char *IsoLocaleName(const char *);	/* MSVC specific */
 #endif
 
+#ifdef USE_ICU
+static char *check_icu_locale(const char *locale);
+#endif
+
 
 /*
  * pg_perm_setlocale
@@ -146,13 +153,45 @@ static char *IsoLocaleName(const char *);	/* MSVC specific */
  * also be unset to fully ensure that, but that has to be done elsewhere after
  * all the individual LC_XXX variables have been set correctly.  (Thank you
  * Perl for making this kluge necessary.)
+ *
+ * Set collprovider to '\0' if category is not LC_COLLATE.
  */
-char *
-pg_perm_setlocale(int category, const char *locale)
+const char *
+pg_perm_setlocale(int category, const char *locale, char collprovider)
 {
-	char	   *result;
+	const char *result;
 	const char *envvar;
 	char	   *envbuf;
+	bool		use_libc PG_USED_FOR_ASSERTS_ONLY =
+		category != LC_COLLATE || collprovider == COLLPROVIDER_LIBC;
+	bool		use_icu =
+		category == LC_COLLATE && collprovider == COLLPROVIDER_ICU;
+
+	Assert(use_libc || use_icu);
+
+	if (use_icu)
+	{
+#ifdef USE_ICU
+		UErrorCode  status = U_ZERO_ERROR;
+		char	   *icu_locale = check_icu_locale(locale);
+
+		if (icu_locale == NULL && locale != NULL)
+			return NULL;		/* fall out immediately on failure */
+
+		uloc_setDefault(icu_locale, &status);
+		if (U_FAILURE(status))
+			return NULL;		/* fall out immediately on failure */
+
+		result = uloc_getDefault();
+		if (icu_locale)
+			pfree(icu_locale);
+		return result;
+#else							/* not USE_ICU */
+		return NULL;			/* fall out immediately on failure */
+#endif							/* not USE_ICU */
+	}
+
+	/* use libc */
 
 #ifndef WIN32
 	result = setlocale(category, locale);
@@ -167,7 +206,7 @@ pg_perm_setlocale(int category, const char *locale)
 #ifdef LC_MESSAGES
 	if (category == LC_MESSAGES)
 	{
-		result = (char *) locale;
+		result = locale;
 		if (locale == NULL || locale[0] == '\0')
 			return result;
 	}
@@ -218,7 +257,7 @@ pg_perm_setlocale(int category, const char *locale)
 #ifdef WIN32
 			result = IsoLocaleName(locale);
 			if (result == NULL)
-				result = (char *) locale;
+				result = locale;
 #endif							/* WIN32 */
 			break;
 #endif							/* LC_MESSAGES */
@@ -259,34 +298,102 @@ pg_perm_setlocale(int category, const char *locale)
  * it seems that on most implementations that's the only thing it's good for;
  * we could wish that setlocale gave back a canonically spelled version of
  * the locale name, but typically it doesn't.)
+ *
+ * Set collprovider to '\0' if category is not LC_COLLATE.
  */
 bool
-check_locale(int category, const char *locale, char **canonname)
+check_locale(int category, const char *locale, char **canonname,
+			 char collprovider)
 {
-	char	   *save;
-	char	   *res;
+	const char *save;
+	const char *res;
+	char	   *save_dup;
+	bool		use_libc PG_USED_FOR_ASSERTS_ONLY =
+		category != LC_COLLATE || collprovider == COLLPROVIDER_LIBC;
+	bool		use_icu =
+		category == LC_COLLATE && collprovider == COLLPROVIDER_ICU;
+#ifdef USE_ICU
+	UErrorCode  status;
+	char	   *icu_locale;
+#endif
+
+	Assert(use_libc || use_icu);
 
 	if (canonname)
 		*canonname = NULL;		/* in case of failure */
 
-	save = setlocale(category, NULL);
-	if (!save)
-		return false;			/* won't happen, we hope */
+#ifndef USE_ICU
+	/* cannot use icu functions */
+	if (use_icu)
+		return false;
+#endif
+
+#ifdef USE_ICU
+	if (use_icu)
+	{
+		save = uloc_getDefault();
+		if (!save)
+			return false;			/* won't happen, we hope */
+	}
+	else
+#endif
+	{
+		/* use_libc */
+		save = setlocale(category, NULL);
+		if (!save)
+			return false;			/* won't happen, we hope */
+	}
 
 	/* save may be pointing at a modifiable scratch variable, see above. */
-	save = pstrdup(save);
+	save_dup = pstrdup(save);
 
 	/* set the locale with setlocale, to see if it accepts it. */
-	res = setlocale(category, locale);
+#ifdef USE_ICU
+	if (use_icu)
+	{
+		icu_locale = check_icu_locale(locale);
+
+		if (icu_locale == NULL && locale != NULL)
+			return false;		/* won't happen, we hope */
+
+		status = U_ZERO_ERROR;
+		uloc_setDefault(icu_locale, &status);
+		if (U_FAILURE(status))
+			return false;	/* won't happen, we hope */
+
+		res = uloc_getDefault();
+		if (icu_locale)
+			pfree(icu_locale);
+	}
+	else
+#endif
+	{
+		/* use_libc */
+		res = setlocale(category, locale);
+	}
 
 	/* save canonical name if requested. */
 	if (res && canonname)
 		*canonname = pstrdup(res);
 
 	/* restore old value. */
-	if (!setlocale(category, save))
-		elog(WARNING, "failed to restore old locale \"%s\"", save);
-	pfree(save);
+#ifdef USE_ICU
+	if (use_icu)
+	{
+		status = U_ZERO_ERROR;
+		uloc_setDefault(save_dup, &status);
+		if (U_FAILURE(status))
+			elog(WARNING, "ICU error: failed to restore old locale \"%s\"",
+				 save_dup);
+	}
+	else
+#endif
+	{
+		/* use_libc */
+		if (!setlocale(category, save_dup))
+			elog(WARNING, "failed to restore old locale \"%s\"", save_dup);
+	}
+	pfree(save_dup);
 
 	return (res != NULL);
 }
@@ -306,7 +413,7 @@ check_locale(int category, const char *locale, char **canonname)
 bool
 check_locale_monetary(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_MONETARY, *newval, NULL);
+	return check_locale(LC_MONETARY, *newval, NULL, '\0');
 }
 
 void
@@ -318,7 +425,7 @@ assign_locale_monetary(const char *newval, void *extra)
 bool
 check_locale_numeric(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_NUMERIC, *newval, NULL);
+	return check_locale(LC_NUMERIC, *newval, NULL, '\0');
 }
 
 void
@@ -330,7 +437,7 @@ assign_locale_numeric(const char *newval, void *extra)
 bool
 check_locale_time(char **newval, void **extra, GucSource source)
 {
-	return check_locale(LC_TIME, *newval, NULL);
+	return check_locale(LC_TIME, *newval, NULL, '\0');
 }
 
 void
@@ -366,7 +473,7 @@ check_locale_messages(char **newval, void **extra, GucSource source)
 	 * On Windows, we can't even check the value, so accept blindly
 	 */
 #if defined(LC_MESSAGES) && !defined(WIN32)
-	return check_locale(LC_MESSAGES, *newval, NULL);
+	return check_locale(LC_MESSAGES, *newval, NULL, '\0');
 #else
 	return true;
 #endif
@@ -380,7 +487,7 @@ assign_locale_messages(const char *newval, void *extra)
 	 * We ignore failure, as per comment above.
 	 */
 #ifdef LC_MESSAGES
-	(void) pg_perm_setlocale(LC_MESSAGES, newval);
+	(void) pg_perm_setlocale(LC_MESSAGES, newval, '\0');
 #endif
 }
 
@@ -1096,21 +1203,14 @@ lookup_collation_cache(Oid collation, bool set_flags)
 		/* Attempt to set the flags */
 		HeapTuple	tp;
 		Form_pg_collation collform;
-		const char *collcollate;
-		const char *collctype;
 
 		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collation));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for collation %u", collation);
 		collform = (Form_pg_collation) GETSTRUCT(tp);
 
-		collcollate = NameStr(collform->collcollate);
-		collctype = NameStr(collform->collctype);
-
-		cache_entry->collate_is_c = ((strcmp(collcollate, "C") == 0) ||
-									 (strcmp(collcollate, "POSIX") == 0));
-		cache_entry->ctype_is_c = ((strcmp(collctype, "C") == 0) ||
-								   (strcmp(collctype, "POSIX") == 0));
+		cache_entry->collate_is_c = locale_is_c(NameStr(collform->collcollate));
+		cache_entry->ctype_is_c = locale_is_c(NameStr(collform->collctype));
 
 		cache_entry->flags_valid = true;
 
@@ -1141,20 +1241,28 @@ lc_collate_is_c(Oid collation)
 	if (collation == DEFAULT_COLLATION_OID)
 	{
 		static int	result = -1;
-		char	   *localeptr;
+		char		collprovider;
 
 		if (result >= 0)
 			return (bool) result;
-		localeptr = setlocale(LC_COLLATE, NULL);
-		if (!localeptr)
-			elog(ERROR, "invalid LC_COLLATE setting");
 
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
+		collprovider = get_default_collprovider();
+		Assert(is_valid_nondefault_collprovider(collprovider));
+
+		if (collprovider == COLLPROVIDER_ICU)
+		{
 			result = false;
+		}
+		else
+		{
+			/* COLLPROVIDER_LIBC */
+			char	   *localeptr = setlocale(LC_COLLATE, NULL);
+
+			if (!localeptr)
+				elog(ERROR, "invalid LC_COLLATE setting");
+
+			result = locale_is_c(localeptr);
+		}
 		return (bool) result;
 	}
 
@@ -1191,20 +1299,28 @@ lc_ctype_is_c(Oid collation)
 	if (collation == DEFAULT_COLLATION_OID)
 	{
 		static int	result = -1;
-		char	   *localeptr;
+		char		collprovider;
 
 		if (result >= 0)
 			return (bool) result;
-		localeptr = setlocale(LC_CTYPE, NULL);
-		if (!localeptr)
-			elog(ERROR, "invalid LC_CTYPE setting");
 
-		if (strcmp(localeptr, "C") == 0)
-			result = true;
-		else if (strcmp(localeptr, "POSIX") == 0)
-			result = true;
-		else
+		collprovider = get_default_collprovider();
+		Assert(is_valid_nondefault_collprovider(collprovider));
+
+		if (collprovider == COLLPROVIDER_ICU)
+		{
 			result = false;
+		}
+		else
+		{
+			/* COLLPROVIDER_LIBC */
+			char	   *localeptr = setlocale(LC_CTYPE, NULL);
+
+			if (!localeptr)
+				elog(ERROR, "invalid LC_CTYPE setting");
+
+			result = locale_is_c(localeptr);
+		}
 		return (bool) result;
 	}
 
@@ -1365,25 +1481,15 @@ pg_newlocale_from_collation(Oid collid)
 		else if (collform->collprovider == COLLPROVIDER_ICU)
 		{
 #ifdef USE_ICU
-			UCollator  *collator;
-			UErrorCode	status;
-
 			if (strcmp(collcollate, collctype) != 0)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("collations with different collate and ctype values are not supported by ICU")));
 
-			status = U_ZERO_ERROR;
-			collator = ucol_open(collcollate, &status);
-			if (U_FAILURE(status))
-				ereport(ERROR,
-						(errmsg("could not open collator for locale \"%s\": %s",
-								collcollate, u_errorName(status))));
-
 			/* We will leak this string if we get an error below :-( */
 			result.info.icu.locale = MemoryContextStrdup(TopMemoryContext,
 														 collcollate);
-			result.info.icu.ucol = collator;
+			result.info.icu.ucol = open_collator(collcollate);
 #else							/* not USE_ICU */
 			/* could get here if a collation was created by a build with ICU */
 			ereport(ERROR,
@@ -1438,46 +1544,6 @@ pg_newlocale_from_collation(Oid collid)
 	}
 
 	return cache_entry->locale;
-}
-
-/*
- * Get provider-specific collation version string for the given collation from
- * the operating system/library.
- *
- * A particular provider must always either return a non-NULL string or return
- * NULL (if it doesn't support versions).  It must not return NULL for some
- * collcollate and not NULL for others.
- */
-char *
-get_collation_actual_version(char collprovider, const char *collcollate)
-{
-	char	   *collversion;
-
-#ifdef USE_ICU
-	if (collprovider == COLLPROVIDER_ICU)
-	{
-		UCollator  *collator;
-		UErrorCode	status;
-		UVersionInfo versioninfo;
-		char		buf[U_MAX_VERSION_STRING_LENGTH];
-
-		status = U_ZERO_ERROR;
-		collator = ucol_open(collcollate, &status);
-		if (U_FAILURE(status))
-			ereport(ERROR,
-					(errmsg("could not open collator for locale \"%s\": %s",
-							collcollate, u_errorName(status))));
-		ucol_getVersion(collator, versioninfo);
-		ucol_close(collator);
-
-		u_versionToString(versioninfo, buf);
-		collversion = pstrdup(buf);
-	}
-	else
-#endif
-		collversion = NULL;
-
-	return collversion;
 }
 
 
@@ -1759,5 +1825,127 @@ char2wchar(wchar_t *to, size_t tolen, const char *from, size_t fromlen,
 				 errhint("The server's LC_CTYPE locale is probably incompatible with the database encoding.")));
 	}
 
+	return result;
+}
+
+#ifdef USE_ICU
+/*
+ * If locale is "" return the environment value from setlocale().
+ *
+ * Otherwise return a malloc'd copy of locale if it is not NULL.
+ */
+static char *
+check_icu_locale(const char *locale)
+{
+	char	   *canonname = NULL;
+	char	   *winlocale = NULL;
+	char	   *result;
+
+	/* Windows locales can be in the format ".codepage" */
+	if (locale && (strlen(locale) == 0 || locale[0] == '.'))
+	{
+		check_locale(LC_COLLATE, locale, &canonname, COLLPROVIDER_LIBC);
+		locale = (const char *) canonname;
+	}
+
+#ifdef WIN32
+	if (!locale_is_c(locale))
+	{
+		winlocale = check_icu_winlocale(locale);
+		locale = (const char *) winlocale;
+	}
+#endif
+
+	result = locale ? pstrdup(locale) : NULL;
+
+	if (canonname)
+		pfree(canonname);
+	if (winlocale)
+		pfree(winlocale);
+
+	return result;
+}
+
+/*
+ * Get the default icu collation.
+ */
+const char *
+get_icu_default_collate(void)
+{
+	/* Cache the result so we only have to compute it once. */
+	static char result[NAMEDATALEN];
+	static bool cached = false;
+	const char *locale,
+			   *collate;
+	char	   *langtag;
+
+	if (cached)
+		return result;
+
+	locale = uloc_getDefault();
+	if (!locale)
+		ereport(ERROR, (errmsg("ICU error: uloc_getDefault() failed")));
+
+	langtag = get_icu_language_tag(locale);
+	collate = get_icu_collate(locale, langtag);
+
+	if (strlen(collate) >= NAMEDATALEN)
+		ereport(FATAL,
+				(errmsg("the default ICU collation name \"%s\" is too long", collate)));
+
+	strcpy(result, collate);
+	cached = true;
+
+	pfree(langtag);
+	return result;
+}
+
+/*
+ * Get the collator for the default ICU collation.
+ */
+UCollator *
+get_default_collation_collator(void)
+{
+	/* Cache the result so we only have to compute it once. */
+	static UCollator *collator = NULL;
+
+	if (collator)
+		return collator;
+
+	collator = open_collator(get_icu_default_collate());
+	return collator;
+}
+#endif							/* USE_ICU */
+
+/*
+ * Get the default collation provider.
+ */
+char
+get_default_collprovider(void)
+{
+	/* Cache the result so we only have to compute it once. */
+	static char	result = '\0';
+	HeapTuple	tp;
+	Form_pg_database dbform;
+	char	   *datcollate;
+
+	if (result)
+		return result;
+
+	tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+
+	dbform = (Form_pg_database) GETSTRUCT(tp);
+	datcollate = NameStr(dbform->datcollate);
+	check_locale_collprovider(datcollate, NULL, &result, NULL);
+
+	if (!is_valid_nondefault_collprovider(result))
+		/* This could happen when manually creating a mess in the catalogs. */
+		ereport(FATAL,
+				(errmsg("could not find out the collation provider for datcollate \"%s\" of database \"%s\"",
+						datcollate, NameStr(dbform->datname))));
+
+	ReleaseSysCache(tp);
 	return result;
 }

@@ -1,1 +1,2 @@
 /psqlscan.c
+/pg_collation_fn_common.c

@@ -344,6 +344,18 @@ static const SchemaQuery Query_for_list_of_datatypes = {
 	.qualresult = "pg_catalog.quote_ident(t.typname)",
 };
 
+static const SchemaQuery Query_for_list_of_composite_datatypes = {
+	.catname = "pg_catalog.pg_type t",
+	/* selcondition --- only get free-standing composite types */
+	.selcondition = "(SELECT c.relkind = " CppAsString2(RELKIND_COMPOSITE_TYPE)
+	" FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid) "
+	"AND t.typname !~ '^_'",
+	.viscondition = "pg_catalog.pg_type_is_visible(t.oid)",
+	.namespace = "t.typnamespace",
+	.result = "pg_catalog.format_type(t.oid, NULL)",
+	.qualresult = "pg_catalog.quote_ident(t.typname)",
+};
+
 static const SchemaQuery Query_for_list_of_domains = {
 	.catname = "pg_catalog.pg_type t",
 	.selcondition = "t.typtype = 'd'",
@@ -2412,6 +2424,23 @@ psql_completion(const char *text, int start, int end)
 	/* Limited completion support for partition bound specification */
 	else if (TailMatches("PARTITION", "OF", MatchAny))
 		COMPLETE_WITH("FOR VALUES", "DEFAULT");
+	/* Complete after CREATE TABLE <name> */
+	else if (TailMatches("CREATE", "TABLE", MatchAny) ||
+			 TailMatches("CREATE", "TEMP|TEMPORARY|UNLOGGED", "TABLE", MatchAny))
+		COMPLETE_WITH("(", "OF", "PARTITION OF");
+	/* Complete with list of composite types after CREATE TABLE <name> OF */
+	else if (TailMatches("CREATE", "TABLE", MatchAny, "OF") ||
+			 TailMatches("CREATE", "TEMP|TEMPORARY|UNLOGGED", "TABLE", MatchAny, "OF"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_composite_datatypes, NULL);
+	/* Complete options after CREATE TABLE name (...) */
+	else if (TailMatches("CREATE", "TABLE", MatchAny, "(*)") ||
+			 TailMatches("CREATE", "UNLOGGED", "TABLE", MatchAny, "(*)"))
+		COMPLETE_WITH("INHERITS (", "PARTITION BY", "WITH (", "TABLESPACE");
+	else if (TailMatches("CREATE", "TEMP|TEMPORARY", "TABLE", MatchAny, "(*)"))
+		COMPLETE_WITH("INHERITS (", "PARTITION BY", "WITH (", "ON COMMIT", "TABLESPACE");
+	/* Complete ON COMMIT actions for temp tables */
+	else if (TailMatches("CREATE", "TEMP|TEMPORARY", "TABLE", MatchAny, "(*)", "ON", "COMMIT"))
+		COMPLETE_WITH("PRESERVE ROWS", "DELETE ROWS", "DROP");
 
 /* CREATE TABLESPACE */
 	else if (Matches("CREATE", "TABLESPACE", MatchAny))

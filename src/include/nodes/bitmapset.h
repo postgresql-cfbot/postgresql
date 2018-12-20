@@ -29,10 +29,24 @@ struct List;
  * Data representation
  */
 
-/* The unit size can be adjusted by changing these three declarations: */
+/*
+ * Determine the best bitmap word size based on the processor's word size.
+ * 64-bit bitmapwords are faster on 64-bit machines.  That's unlikely to also
+ * be true on 32-bit machines, so let's keep them 32-bit for those.
+ */
+#if SIZEOF_VOID_P == 8
+
+#define BITS_PER_BITMAPWORD 64
+typedef uint64 bitmapword;		/* must be an unsigned type */
+typedef int64 signedbitmapword; /* must be the matching signed type */
+
+#else
+
 #define BITS_PER_BITMAPWORD 32
 typedef uint32 bitmapword;		/* must be an unsigned type */
 typedef int32 signedbitmapword; /* must be the matching signed type */
+
+#endif
 
 typedef struct Bitmapset
 {

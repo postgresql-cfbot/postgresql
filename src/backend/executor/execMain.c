@@ -1837,11 +1837,9 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
 							TupleTableSlot *slot,
 							EState *estate)
 {
-	Relation	rel = resultRelInfo->ri_RelationDesc;
-	Relation	orig_rel = rel;
-	TupleDesc	tupdesc = RelationGetDescr(rel);
-	char	   *val_desc;
-	Bitmapset  *modifiedCols;
+	Oid			root_relid;
+	TupleDesc	tupdesc;
+	char	   *valdsc;
 	Bitmapset  *insertedCols;
 	Bitmapset  *updatedCols;
 
@@ -1851,11 +1849,13 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
 	 */
 	if (resultRelInfo->ri_PartitionRoot)
 	{
-		TupleDesc	old_tupdesc = RelationGetDescr(rel);
+		TupleDesc	old_tupdesc;
 		AttrNumber *map;
 
-		rel = resultRelInfo->ri_PartitionRoot;
-		tupdesc = RelationGetDescr(rel);
+		root_relid = RelationGetRelid(resultRelInfo->ri_PartitionRoot);
+
+		old_tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+		tupdesc = RelationGetDescr(resultRelInfo->ri_PartitionRoot);
 		/* a reverse map */
 		map = convert_tuples_by_name_map_if_req(old_tupdesc, tupdesc,
 												gettext_noop("could not convert row type"));
@@ -1868,20 +1868,24 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
 			slot = execute_attr_map_slot(map, slot,
 										 MakeTupleTableSlot(tupdesc, &TTSOpsVirtual));
 	}
+	else
+	{
+		root_relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+		tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+	}
 
 	insertedCols = GetInsertedColumns(resultRelInfo, estate);
 	updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-	modifiedCols = bms_union(insertedCols, updatedCols);
-	val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
-											 slot,
-											 tupdesc,
-											 modifiedCols,
-											 64);
+	valdsc = ExecBuildSlotValueDescription(root_relid,
+										   slot,
+										   tupdesc,
+										   bms_union(insertedCols, updatedCols),
+										   64);
 	ereport(ERROR,
 			(errcode(ERRCODE_CHECK_VIOLATION),
 			 errmsg("new row for relation \"%s\" violates partition constraint",
-					RelationGetRelationName(orig_rel)),
-			 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0));
+					RelationGetRelationName(resultRelInfo->ri_RelationDesc)),
+			 valdsc ? errdetail("Failing row contains %s.", valdsc) : 0));
 }
 
 /*

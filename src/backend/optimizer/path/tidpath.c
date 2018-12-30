@@ -4,13 +4,15 @@
  *	  Routines to determine which TID conditions are usable for scanning
  *	  a given relation, and create TidPaths accordingly.
  *
- * What we are looking for here is WHERE conditions of the form
- * "CTID = pseudoconstant", which can be implemented by just fetching
- * the tuple directly via heap_fetch().  We can also handle OR'd conditions
- * such as (CTID = const1) OR (CTID = const2), as well as ScalarArrayOpExpr
- * conditions of the form CTID = ANY(pseudoconstant_array).  In particular
- * this allows
- *		WHERE ctid IN (tid1, tid2, ...)
+ * What we are looking for here is WHERE conditions of the forms:
+ * - "CTID = pseudoconstant", which can be implemented by just fetching
+ *    the tuple directly via heap_fetch().
+ * - "CTID IN (pseudoconstant, ...)" or "CTID = ANY(pseudoconstant_array)"
+ * - "CTID > pseudoconstant", etc. for >, >=, <, and <=.
+ * - "CTID > pseudoconstant AND CTID < pseudoconstant AND ...", etc.
+ *
+ * We can also handle OR'd conditions of the above form, such as
+ * "(CTID = const1) OR (CTID >= const2) OR CTID IN (...)".
  *
  * We also support "WHERE CURRENT OF cursor" conditions (CurrentOfExpr),
  * which amount to "CTID = run-time-determined-TID".  These could in
@@ -46,33 +48,48 @@
 #include "optimizer/restrictinfo.h"
 
 
+static bool IsTidVar(Var *var, int varno);
+static bool IsTidBinaryExpression(OpExpr *node, int varno);
 static bool IsTidEqualClause(OpExpr *node, int varno);
+static bool IsTidRangeClause(OpExpr *node, int varno);
 static bool IsTidEqualAnyClause(ScalarArrayOpExpr *node, int varno);
+static List *MakeTidRangeQuals(List *quals);
+static List *TidCompoundRangeQualFromExpr(Node *expr, int varno);
 static List *TidQualFromExpr(Node *expr, int varno);
 static List *TidQualFromBaseRestrictinfo(RelOptInfo *rel);
 
 
+/* Quick check to see if `var` looks like CTID. */
+static bool
+IsTidVar(Var *var, int varno)
+{
+	return (var->varattno == SelfItemPointerAttributeNumber &&
+			var->vartype == TIDOID &&
+			var->varno == varno &&
+			var->varlevelsup == 0);
+}
+
 /*
  * Check to see if an opclause is of the form
- *		CTID = pseudoconstant
+ *		CTID OP pseudoconstant
  * or
- *		pseudoconstant = CTID
+ *		pseudoconstant OP CTID
+ * where OP is assumed to be a binary.  We don't check opno -- that's usually
+ * done by the caller -- but we check the numer of arguments.
  *
  * We check that the CTID Var belongs to relation "varno".  That is probably
  * redundant considering this is only applied to restriction clauses, but
  * let's be safe.
  */
 static bool
-IsTidEqualClause(OpExpr *node, int varno)
+IsTidBinaryExpression(OpExpr *node, int varno)
 {
 	Node	   *arg1,
 			   *arg2,
 			   *other;
 	Var		   *var;
 
-	/* Operator must be tideq */
-	if (node->opno != TIDEqualOperator)
-		return false;
+	/* Operator must be the expected one */
 	if (list_length(node->args) != 2)
 		return false;
 	arg1 = linitial(node->args);
@@ -83,19 +100,13 @@ IsTidEqualClause(OpExpr *node, int varno)
 	if (arg1 && IsA(arg1, Var))
 	{
 		var = (Var *) arg1;
-		if (var->varattno == SelfItemPointerAttributeNumber &&
-			var->vartype == TIDOID &&
-			var->varno == varno &&
-			var->varlevelsup == 0)
+		if (IsTidVar(var, varno))
 			other = arg2;
 	}
 	if (!other && arg2 && IsA(arg2, Var))
 	{
 		var = (Var *) arg2;
-		if (var->varattno == SelfItemPointerAttributeNumber &&
-			var->vartype == TIDOID &&
-			var->varno == varno &&
-			var->varlevelsup == 0)
+		if (IsTidVar(var, varno))
 			other = arg1;
 	}
 	if (!other)
@@ -108,6 +119,38 @@ IsTidEqualClause(OpExpr *node, int varno)
 		return false;
 
 	return true;				/* success */
+}
+
+/*
+ * Check to see if a clause is of the form
+ *		CTID = pseudoconstant
+ * or
+ *		pseudoconstant = CTID
+ */
+static bool
+IsTidEqualClause(OpExpr *node, int varno)
+{
+	if (node->opno != TIDEqualOperator)
+		return false;
+	return IsTidBinaryExpression(node, varno);
+}
+
+/*
+ * Check to see if a clause is of the form
+ *		CTID op pseudoconstant
+ * or
+ *		pseudoconstant op CTID
+ * where op is a range comparison operator like >, >=, <, or <=.
+ */
+static bool
+IsTidRangeClause(OpExpr *node, int varno)
+{
+	if (node->opno != TIDLessOperator &&
+		node->opno != TIDLessEqOperator &&
+		node->opno != TIDGreaterOperator &&
+		node->opno != TIDGreaterEqOperator)
+		return false;
+	return IsTidBinaryExpression(node, varno);
 }
 
 /*
@@ -134,10 +177,7 @@ IsTidEqualAnyClause(ScalarArrayOpExpr *node, int varno)
 	{
 		Var		   *var = (Var *) arg1;
 
-		if (var->varattno == SelfItemPointerAttributeNumber &&
-			var->vartype == TIDOID &&
-			var->varno == varno &&
-			var->varlevelsup == 0)
+		if (IsTidVar(var, varno))
 		{
 			/* The other argument must be a pseudoconstant */
 			if (is_pseudo_constant_clause(arg2))
@@ -146,6 +186,46 @@ IsTidEqualAnyClause(ScalarArrayOpExpr *node, int varno)
 	}
 
 	return false;
+}
+
+/*
+ * Turn a list of range quals into the expected structure: if there's more than
+ * one, wrap them in a top-level AND-clause.
+ */
+static List *
+MakeTidRangeQuals(List *quals)
+{
+	if (list_length(quals) == 1)
+		return quals;
+	else
+		return list_make1(make_andclause(quals));
+}
+
+/*
+ * TidCompoundRangeQualFromExpr
+ *
+ * 		Extract a compound CTID range condition from the given qual expression
+ */
+static List *
+TidCompoundRangeQualFromExpr(Node *expr, int varno)
+{
+	ListCell   *l;
+	List	   *found_quals = NIL;
+
+	foreach(l, ((BoolExpr *) expr)->args)
+	{
+		Node	   *clause = (Node *) lfirst(l);
+
+		/* If this clause contains a range qual, add it to the list. */
+		if (is_opclause(clause) && IsTidRangeClause((OpExpr *) clause, varno))
+			found_quals = lappend(found_quals, clause);
+	}
+
+	/* If we found any, make an AND clause out of them. */
+	if (found_quals)
+		return MakeTidRangeQuals(found_quals);
+	else
+		return NIL;
 }
 
 /*
@@ -174,6 +254,8 @@ TidQualFromExpr(Node *expr, int varno)
 		/* base case: check for tideq opclause */
 		if (IsTidEqualClause((OpExpr *) expr, varno))
 			rlst = list_make1(expr);
+		else if (IsTidRangeClause((OpExpr *) expr, varno))
+			rlst = list_make1(expr);
 	}
 	else if (expr && IsA(expr, ScalarArrayOpExpr))
 	{
@@ -189,11 +271,18 @@ TidQualFromExpr(Node *expr, int varno)
 	}
 	else if (and_clause(expr))
 	{
-		foreach(l, ((BoolExpr *) expr)->args)
+		/* look for a range qual in the clause */
+		rlst = TidCompoundRangeQualFromExpr(expr, varno);
+
+		/* if no range qual was found, look for any other TID qual */
+		if (rlst == NIL)
 		{
-			rlst = TidQualFromExpr((Node *) lfirst(l), varno);
-			if (rlst)
-				break;
+			foreach(l, ((BoolExpr *) expr)->args)
+			{
+				rlst = TidQualFromExpr((Node *) lfirst(l), varno);
+				if (rlst)
+					break;
+			}
 		}
 	}
 	else if (or_clause(expr))
@@ -217,17 +306,24 @@ TidQualFromExpr(Node *expr, int varno)
 }
 
 /*
- *	Extract a set of CTID conditions from the rel's baserestrictinfo list
+ * Extract a set of CTID conditions from the rel's baserestrictinfo list
+ *
+ * Normally we just use the first RestrictInfo item with some usable quals,
+ * but it's also possible for a good compound range qual, such as
+ * "CTID > ? AND CTID < ?", to be split across multiple items.  So we look for
+ * range quals in all items and use them if any were found.
  */
 static List *
 TidQualFromBaseRestrictinfo(RelOptInfo *rel)
 {
 	List	   *rlst = NIL;
 	ListCell   *l;
+	List	   *found_quals = NIL;
 
 	foreach(l, rel->baserestrictinfo)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+		Node	   *clause = (Node *) rinfo->clause;
 
 		/*
 		 * If clause must wait till after some lower-security-level
@@ -236,10 +332,24 @@ TidQualFromBaseRestrictinfo(RelOptInfo *rel)
 		if (!restriction_is_securely_promotable(rinfo, rel))
 			continue;
 
-		rlst = TidQualFromExpr((Node *) rinfo->clause, rel->relid);
+		/* If this clause contains a range qual, add it to the list. */
+		if (is_opclause(clause) &&
+			IsTidRangeClause((OpExpr *) clause, rel->relid))
+		{
+			found_quals = lappend(found_quals, clause);
+			continue;
+		}
+
+		/* Look for other TID quals. */
+		rlst = TidQualFromExpr((Node *) clause, rel->relid);
 		if (rlst)
 			break;
 	}
+
+	/* Use a range qual if any were found. */
+	if (found_quals)
+		rlst = MakeTidRangeQuals(found_quals);
+
 	return rlst;
 }
 
@@ -247,12 +357,17 @@ TidQualFromBaseRestrictinfo(RelOptInfo *rel)
  * create_tidscan_paths
  *	  Create paths corresponding to direct TID scans of the given rel.
  *
+ *	  Path keys will be set to "CTID ASC" by default, or "CTID DESC" if it
+ *	  looks more useful.
+ *
  *	  Candidate paths are added to the rel's pathlist (using add_path).
  */
 void
 create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel)
 {
 	Relids		required_outer;
+	List	   *pathkeys = NIL;
+	ScanDirection scandir = ForwardScanDirection;
 	List	   *tidquals;
 
 	/*
@@ -264,7 +379,37 @@ create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel)
 
 	tidquals = TidQualFromBaseRestrictinfo(rel);
 
-	if (tidquals)
-		add_path(rel, (Path *) create_tidscan_path(root, rel, tidquals,
-												   required_outer));
+	/*
+	 * Look for a suitable direction by trying both forward and backward
+	 * pathkeys.  But don't set any pathkeys if neither direction helps the
+	 * scan (we don't want to generate tid paths for everything).
+	 */
+	if (has_useful_pathkeys(root, rel))
+	{
+		pathkeys = build_tidscan_pathkeys(root, rel, ForwardScanDirection);
+		if (!pathkeys_contained_in(pathkeys, root->query_pathkeys))
+		{
+			pathkeys = build_tidscan_pathkeys(root, rel, BackwardScanDirection);
+			if (pathkeys_contained_in(pathkeys, root->query_pathkeys))
+				scandir = BackwardScanDirection;
+			else
+				pathkeys = NIL;
+		}
+	}
+	else if (tidquals)
+	{
+		/*
+		 * Otherwise, default to a forward scan -- but only if tid quals were
+		 * found (we don't want to generate tid paths for everything).
+		 */
+		pathkeys = build_tidscan_pathkeys(root, rel, ForwardScanDirection);
+	}
+
+	/*
+	 * If there are tidquals or some useful pathkeys were found, then it's
+	 * worth generating a tidscan path.
+	 */
+	if (tidquals || pathkeys)
+		add_path(rel, (Path *) create_tidscan_path(root, rel, tidquals, pathkeys,
+												   scandir, required_outer));
 }

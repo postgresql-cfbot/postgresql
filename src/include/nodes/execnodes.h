@@ -1537,15 +1537,18 @@ typedef struct BitmapHeapScanState
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
+typedef struct TidRange TidRange;
+
 /* ----------------
  *	 TidScanState information
  *
- *		tidexprs	   list of TidExpr structs (see nodeTidscan.c)
- *		isCurrentOf    scan has a CurrentOfExpr qual
- *		NumTids		   number of tids in this scan
- *		TidPtr		   index of currently fetched tid
- *		TidList		   evaluated item pointers (array of size NumTids)
- *		htup		   currently-fetched tuple, if any
+ *		tidexprs		list of TidExpr structs (see nodeTidscan.c)
+ *		isCurrentOf		scan has a CurrentOfExpr qual
+ *		NumTidRanges	number of tid ranges in this scan
+ *		CurrentTidRange	index of current tid range
+ *		TidRanges		evaluated item pointers (array of size NumTidRanges)
+ *		inScan			currently in a range scan
+ *		htup			currently-fetched tuple, if any
  * ----------------
  */
 typedef struct TidScanState
@@ -1553,10 +1556,11 @@ typedef struct TidScanState
 	ScanState	ss;				/* its first field is NodeTag */
 	List	   *tss_tidexprs;
 	bool		tss_isCurrentOf;
-	int			tss_NumTids;
-	int			tss_TidPtr;
-	ItemPointerData *tss_TidList;
-	HeapTupleData tss_htup;
+	int			tss_NumTidRanges;
+	int			tss_CurrentTidRange;
+	TidRange   *tss_TidRanges;
+	bool		tss_inScan;		/* for range scans */
+	HeapTupleData tss_htup;		/* for current-of and single TID fetches */
 } TidScanState;
 
 /* ----------------

@@ -3378,11 +3378,15 @@ eval_const_expressions_mutator(Node *node,
 		case T_ArrayRef:
 		case T_ArrayExpr:
 		case T_RowExpr:
+		case T_MinMaxExpr:
 			{
 				/*
 				 * Generic handling for node types whose own processing is
 				 * known to be immutable, and for which we need no smarts
 				 * beyond "simplify if all inputs are constants".
+				 *
+				 * For MinMaxExpr, we assume btree comparison functions are
+				 * immutable.  See comment in contain_mutable_functions_walker.
 				 */
 
 				/* Copy the node and const-simplify its arguments */

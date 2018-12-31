@@ -1018,14 +1018,14 @@ COMMENT ON FUNCTION ts_debug(text) IS
 --
 
 CREATE OR REPLACE FUNCTION
-  pg_start_backup(label text, fast boolean DEFAULT false, exclusive boolean DEFAULT true)
+  pg_start_backup(label text, fast boolean DEFAULT false)
   RETURNS pg_lsn STRICT VOLATILE LANGUAGE internal AS 'pg_start_backup'
   PARALLEL RESTRICTED;
 
 CREATE OR REPLACE FUNCTION pg_stop_backup (
-        exclusive boolean, wait_for_archive boolean DEFAULT true,
-        OUT lsn pg_lsn, OUT labelfile text, OUT spcmapfile text)
-  RETURNS SETOF record STRICT VOLATILE LANGUAGE internal as 'pg_stop_backup_v2'
+  wait_for_archive boolean DEFAULT true, OUT lsn pg_lsn, OUT labelfile text,
+  OUT spcmapfile text)
+  RETURNS SETOF record STRICT VOLATILE LANGUAGE internal as 'pg_stop_backup'
   PARALLEL RESTRICTED;
 
 CREATE OR REPLACE FUNCTION
@@ -1133,9 +1133,8 @@ AS 'jsonb_insert';
 -- can later change who can access these functions, or leave them as only
 -- available to superuser / cluster owner, if they choose.
 --
-REVOKE EXECUTE ON FUNCTION pg_start_backup(text, boolean, boolean) FROM public;
-REVOKE EXECUTE ON FUNCTION pg_stop_backup() FROM public;
-REVOKE EXECUTE ON FUNCTION pg_stop_backup(boolean, boolean) FROM public;
+REVOKE EXECUTE ON FUNCTION pg_start_backup(text, boolean) FROM public;
+REVOKE EXECUTE ON FUNCTION pg_stop_backup(boolean) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_create_restore_point(text) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_switch_wal() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_wal_replay_pause() FROM public;

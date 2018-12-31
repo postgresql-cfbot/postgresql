@@ -447,8 +447,4 @@ extern void process_session_preload_libraries(void);
 extern void pg_bindtextdomain(const char *domain);
 extern bool has_rolreplication(Oid roleid);
 
-/* in access/transam/xlog.c */
-extern bool BackupInProgress(void);
-extern void CancelBackup(void);
-
 #endif							/* MISCADMIN_H */

@@ -158,6 +158,10 @@ isnt(slurp_file("$tempdir/backup/backup_label"),
 	'DONOTCOPY', 'existing backup_label not copied');
 rmtree("$tempdir/backup");
 
+# Now delete the bogus backup_label file since it will interfere with startup
+unlink("$pgdata/backup_label")
+  or BAIL_OUT("unable to unlink $pgdata/backup_label");
+
 $node->command_ok(
 	[
 		'pg_basebackup', '-D', "$tempdir/backup2", '--waldir',

@@ -18949,17 +18949,38 @@ SELECT set_config('log_statement_stats', 'off', false);
       </row>
       <row>
        <entry>
-        <literal><function>pg_start_backup(<parameter>label</parameter> <type>text</type> <optional>, <parameter>fast</parameter> <type>boolean</type> </optional>)</function></literal>
+        <literal><function>pg_start_backup(<parameter>label</parameter> <type>text</type> <optional>, <parameter>fast</parameter> <type>boolean</type> <optional>, <parameter>exclusive</parameter> <type>boolean</type> </optional></optional>)</function></literal>
         </entry>
        <entry><type>pg_lsn</type></entry>
        <entry>Prepare for performing on-line backup (restricted to superusers by default, but other users can be granted EXECUTE to run the function)</entry>
       </row>
       <row>
        <entry>
-        <literal><function>pg_stop_backup(<optional> <parameter>wait_for_archive</parameter> <type>boolean</type> </optional>)</function></literal>
+        <literal><function>pg_stop_backup()</function></literal>
+        </entry>
+       <entry><type>pg_lsn</type></entry>
+       <entry>Finish performing exclusive on-line backup (restricted to superusers by default, but other users can be granted EXECUTE to run the function)</entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_stop_backup(<parameter>exclusive</parameter> <type>boolean</type> <optional>, <parameter>wait_for_archive</parameter> <type>boolean</type> </optional>)</function></literal>
         </entry>
        <entry><type>setof record</type></entry>
-       <entry>Finish performing on-line backup (restricted to superusers by default, but other users can be granted EXECUTE to run the function)</entry>
+       <entry>Finish performing exclusive or non-exclusive on-line backup (restricted to superusers by default, but other users can be granted EXECUTE to run the function)</entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_is_in_backup()</function></literal>
+        </entry>
+       <entry><type>bool</type></entry>
+       <entry>True if an on-line exclusive backup is still in progress.</entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_backup_start_time()</function></literal>
+        </entry>
+       <entry><type>timestamp with time zone</type></entry>
+       <entry>Get start time of an on-line exclusive backup in progress.</entry>
       </row>
       <row>
        <entry>
@@ -18996,9 +19017,16 @@ SELECT set_config('log_statement_stats', 'off', false);
    <para>
     <function>pg_start_backup</function> accepts an arbitrary user-defined label for
     the backup.  (Typically this would be the name under which the backup dump
-    file will be stored.) It returns the backup's starting write-ahead
-    log location as a <type>pg_lsn</type> which can be ignored by the user, but is
-    provided in case it is useful.
+    file will be stored.) When used in exclusive mode, the function writes a
+    backup label file (<filename>backup_label</filename>) and, if there are any links
+    in the <filename>pg_tblspc/</filename> directory, a tablespace map file
+    (<filename>tablespace_map</filename>) into the database cluster's data directory,
+    performs a checkpoint, and then returns the backup's starting write-ahead
+    log location as text.  The user can ignore this result value, but it is
+    provided in case it is useful. When used in non-exclusive mode, the
+    contents of these files are instead returned by the
+    <function>pg_stop_backup</function> function, and should be written to the backup
+    by the caller.
 
 <programlisting>
 postgres=# select pg_start_backup('label_goes_here');
@@ -19014,10 +19042,12 @@ postgres=# select pg_start_backup('label_goes_here');
    </para>
 
    <para>
-    The contents of the <filename>backup_label</filename> and
-    <filename>tablespace_map</filename> are returned in the result of
-    <function>pg_stop_backup</function>, and should be written to files in the
-    backup (and not in the data directory).  There is an optional
+    In an exclusive backup, <function>pg_stop_backup</function> removes the label file
+    and, if it exists, the <filename>tablespace_map</filename> file created by
+    <function>pg_start_backup</function>. In a non-exclusive backup, the contents of
+    the <filename>backup_label</filename> and <filename>tablespace_map</filename> are returned
+    in the result of the function, and should be written to files in the
+    backup (and not in the data directory).  There is an optional second
     parameter of type <type>boolean</type>.  If false, the <function>pg_stop_backup</function>
     will return immediately after the backup is completed without waiting for
     WAL to be archived.  This behavior is only useful for backup

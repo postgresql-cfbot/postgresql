@@ -338,8 +338,7 @@ extern void assign_checkpoint_completion_target(double newval, void *extra);
 typedef enum SessionBackupState
 {
 	SESSION_BACKUP_NONE,
-	SESSION_BACKUP_EXCLUSIVE,
-	SESSION_BACKUP_NON_EXCLUSIVE
+	SESSION_BACKUP_RUNNING,
 } SessionBackupState;
 
 extern XLogRecPtr do_pg_start_backup(const char *backupidstr, bool fast,

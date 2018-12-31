@@ -1035,10 +1035,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <entry>Waiting to read or update old snapshot control information.</entry>
         </row>
         <row>
-         <entry><literal>BackendRandomLock</literal></entry>
-         <entry>Waiting to generate a random number.</entry>
-        </row>
-        <row>
          <entry><literal>LogicalRepWorkerLock</literal></entry>
          <entry>Waiting for action on logical replication worker to finish.</entry>
         </row>

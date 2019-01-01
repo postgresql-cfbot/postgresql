@@ -45,6 +45,7 @@
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
 #include "utils/backend_random.h"
+#include "utils/catcache.h"
 #include "utils/snapmgr.h"
 
 
@@ -150,6 +151,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
 		size = add_size(size, BackendRandomShmemSize());
+		size = add_size(size, CatCacheShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -270,6 +272,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	BackendRandomShmemInit();
+	CatCacheShmemInit();
 
 #ifdef EXEC_BACKEND
 

@@ -186,10 +186,31 @@ typedef struct catcacheheader
 } CatCacheHeader;
 
 
+/*
+ * the 1st and 2nd field is same as CatCacheHeader so that it can be
+ * casted into CatCachHeader
+ */
+typedef struct shm_catcacheheader
+{
+	slist_head	ch_caches;		/* head of list of CatCache structs */
+	int			ch_ntup;		/* # of tuples in all caches */
+	bool	    ch_initilized;	/* CatCache structs are initilized ? */
+}ShmCatCacheHeader;
+
+
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
 
+/* GUC parameter: A value of 0 means catalog cache is built per backend */
+extern int shared_catcache_mem;
+
+extern ShmCatCacheHeader *ShmCacheHdr;
+
 extern void CreateCacheMemoryContext(void);
+
+extern void CatCacheShmemInit(void);
+
+extern Size CatCacheShmemSize(void);
 
 extern CatCache *InitCatCache(int id, Oid reloid, Oid indexoid,
 			 int nkeys, const int *key,

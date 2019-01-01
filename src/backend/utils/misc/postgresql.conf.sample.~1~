@@ -136,8 +136,6 @@
 					#   windows
 					#   mmap
 					# (change requires restart)
-#shared_catcache_mem = 0MB		# zero disables the feature
-		       			# (change requires restart) 
 
 # - Disk -
 

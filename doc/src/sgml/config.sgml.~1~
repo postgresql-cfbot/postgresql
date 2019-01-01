@@ -1662,22 +1662,6 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
-     <varlistentry id="guc-shared-catcache-mem" xreflabel="shared_catcache_mem">
-      <term><varname>shared_catcache_mem</varname> (<type>integer</type>)
-      <indexterm>
-       <primary><varname>shared_catcache_mem</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Specifies the amount of shared catalog cache. It defaults to 0,
-        which indicates the catalog cache is not shared but created per
-        backend. When the number of backends is enourmous, the setting
-        alleviates the amount of memory usage.
-       </para>
-      </listitem>
-     </varlistentry>
-
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

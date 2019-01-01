@@ -25,7 +25,6 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
-#include "lib/dshash.h"
 #include "miscadmin.h"
 #ifdef CATCACHE_STATS
 #include "storage/ipc.h"		/* for on_proc_exit */
@@ -42,14 +41,6 @@
 #include "utils/syscache.h"
 #include "utils/tqual.h"
 
-/* GUC parameter: A value of 0 means catalog cache is built per backend */
-int shared_catcache_mem;
-
-/* Pointer to Postmaster-initilized shared memory */
-typedef void *ShmemCatCachePointer; 
-
-/* Unit of shared_catcache_mem is megabyte */
-#define SHM_CATCACHE_SIZE ((size_t)(1024 * 1024 * shared_catcache_mem))
 
  /* #define CACHEDEBUG */	/* turns DEBUG elogs on */
 
@@ -83,21 +74,6 @@ typedef void *ShmemCatCachePointer;
 
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
-ShmCatCacheHeader *ShmCacheHdr = NULL;
-
-/*
- * stuffs for shared catcaches 
- */
-
-static char *ShmCatCPtr = NULL;
-
-static dsa_area *catcdsa_area = NULL;
-
-static CatCache *InitSharedCatCache(int id, Oid reloid,
-			 Oid indexoid,
-			 int nkeys,
-			 const int *key,
-			   int nbuckets);
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 					   int nkeys,
@@ -433,14 +409,8 @@ CatCachePrintStats(int code, Datum arg)
 	long		cc_invals = 0;
 	long		cc_lsearches = 0;
 	long		cc_lhits = 0;
-	CatCacheHeader	*CHdr = CacheHdr;
-			
-	if (shared_catcache_mem != 0) {
-		LWLockAcquire(CatCacheHdrLock, LW_SHARED);
-		CHdr = (CatCacheHeader *)ShmCacheHdr;
-	}
 
-	slist_foreach(iter, &CHdr->ch_caches)
+	slist_foreach(iter, &CacheHdr->ch_caches)
 	{
 		CatCache   *cache = slist_container(CatCache, cc_next, iter.cur);
 
@@ -469,7 +439,7 @@ CatCachePrintStats(int code, Datum arg)
 		cc_lhits += cache->cc_lhits;
 	}
 	elog(DEBUG2, "catcache totals: %d tup, %ld srch, %ld+%ld=%ld hits, %ld+%ld=%ld loads, %ld invals, %ld lsrch, %ld lhits",
-		 CHdr->ch_ntup,
+		 CacheHdr->ch_ntup,
 		 cc_searches,
 		 cc_hits,
 		 cc_neg_hits,
@@ -480,9 +450,6 @@ CatCachePrintStats(int code, Datum arg)
 		 cc_invals,
 		 cc_lsearches,
 		 cc_lhits);
-
-	if (shared_catcache_mem != 0)
-		LWLockRelease(CatCacheHdrLock);
 }
 #endif							/* CATCACHE_STATS */
 
@@ -785,8 +752,7 @@ CatalogCacheFlushCatalog(Oid catId)
 /*
  *		InitCatCache
  *
- *	This allocates and initializes a cache for a system catalog relation
- *  either on CacheMemoryContext or on DSA.
+ *	This allocates and initializes a cache for a system catalog relation.
  *	Actually, the cache is only partially initialized to avoid opening the
  *	relation.  The relation will be opened and the rest of the cache
  *	structure initialized on the first access.
@@ -815,11 +781,6 @@ InitCatCache(int id,
 	size_t		sz;
 	int			i;
 
-
-	if (shared_catcache_mem != 0)
-		return InitSharedCatCache(id, reloid, indexoid, nkeys, key, nbuckets);
-	   
-
 	/*
 	 * nbuckets is the initial number of hash buckets to use in this catcache.
 	 * It will be enlarged later if it becomes too full.
@@ -843,8 +804,7 @@ InitCatCache(int id,
 	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
 
 	/*
-	 * if catcache memory is not shared and first time through,
-	 * initialize the cache group header.
+	 * if first time through, initialize the cache group header
 	 */
 	if (CacheHdr == NULL)
 	{
@@ -901,9 +861,6 @@ InitCatCache(int id,
 
 	return cp;
 }
-
-
-
 
 /*
  * Enlarge a catcache, doubling the number of buckets.
@@ -1116,6 +1073,7 @@ InitCatCachePhase2(CatCache *cache, bool touch_index)
 		UnlockRelationOid(cache->cc_reloid, AccessShareLock);
 	}
 }
+
 
 /*
  *		IndexScanOK
@@ -1945,11 +1903,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 
 	cache->cc_ntup++;
-	
-	if (shared_catcache_mem == 0)
-		CacheHdr->ch_ntup++;
-	else
-		ShmCacheHdr->ch_ntup++;
+	CacheHdr->ch_ntup++;
 
 	/*
 	 * If the hash table has become too full, enlarge the buckets array. Quite
@@ -2146,190 +2100,4 @@ PrintCatCacheListLeakWarning(CatCList *list)
 	elog(WARNING, "cache reference leak: cache %s (%d), list %p has count %d",
 		 list->my_cache->cc_relname, list->my_cache->id,
 		 list, list->refcount);
-}
-
-/*
- *       Functions used if shared_catcache_mem is nonzero value
- */
-
-
-/*
- * CatCacheShmemInit
- *
- * This is called during shared-memory initialization 
- * Fixed-size data structure for catalog cache header is initilized.
- * The other shared area is supposed to be used as DSA area 
- * for CatCache, CatCList, CatCTup. 
- *
- */
-void
-CatCacheShmemInit(void)
-{
-	bool foundhdr;
-	bool foundcat;
-	
-	/* do nothing if catalog cache is not shared */
-	if (shared_catcache_mem == 0)
-		return;
-
-	/*initialize shared version CacheHdr */
-	ShmCacheHdr = (ShmCatCacheHeader *)
-		ShmemInitStruct("Catlog Cache Header", sizeof(ShmCatCacheHeader), &foundhdr);
-
-	ShmCatCPtr = 
-		ShmemInitStruct("Catalog Cache",SHM_CATCACHE_SIZE , &foundcat);
-	
-
-	if (!IsUnderPostmaster)
-	{
-		Assert(!foundhdr);
-		Assert(!foundcat);
-
-		/* First time through ... */
-		slist_init(&ShmCacheHdr->ch_caches);
-		ShmCacheHdr->ch_ntup = 0;
-		ShmCacheHdr->ch_initilized = false;
-
-		/*
-		 * XXX: the lwlock tranche for dsa area might not be necessary
-		 * because we alredy register tranche for static shared memory
-		 */
-   		LWLockRegisterTranche(LWTRANCHE_CATCACHE_DSA, "catcache_dsa");
-
-#ifdef CATCACHE_STATS
-		/* set up to dump stats at backend exit */
-		on_proc_exit(CatCachePrintStats, 0);
-#endif
-	}
-	else 
-	{
-		Assert(foundhdr);
-		Assert(foundcat);
-	}
-}
-
-/*
- * CatCacheShmemsize
- *
- * Compute the size of shared memory for the catalog cache header
- * and fixed-size area for CatCache, CatCList, CatCTup
- */
-Size
-CatCacheShmemSize(void)
-{	
-	Size size = 0;
-	
-	/* size of cache header */
-	size = add_size(size, sizeof(ShmCatCacheHeader));
-	
-	/* size of catalog cache area */
-	size = add_size(size, SHM_CATCACHE_SIZE);
-	return   size;
-}
-
-
-/*
- * InitSharedCatCache
- *
- * the lock handling for ShmCacheHdr is done by InitCatalogCache()  
- */
-static CatCache *
-InitSharedCatCache(int id,
-			 Oid reloid,
-			 Oid indexoid,
-			 int nkeys,
-			 const int *key,
-			 int nbuckets)
-{
-	CatCache   *cp;
-	MemoryContext oldcxt;
-	size_t		sz;
-	int			i;
-	dsa_pointer dsa_ptr;
-
-	Assert(shared_catcache_mem != 0);
-
-	/*
-	 * first switch to the cache context so our allocations do not vanish at
-	 * the end of a transaction
-	 */
-	if (!CacheMemoryContext)
-		CreateCacheMemoryContext();
-	
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
-	
-	/* if first time through */
-	if (catcdsa_area == NULL) {
-
-		/*
-		 * Create a new DSA area in Postmaster-initilized shared memory space,
-		 * whose pointer is common to the all of backends.
-		 */
-		catcdsa_area = dsa_create_in_place(ShmCatCPtr, SHM_CATCACHE_SIZE,
-										   LWTRANCHE_CATCACHE_DSA, NULL);
-		CACHE1_elog(DEBUG2,"DSA area for CatCache is created");
-
-		dsa_set_size_limit(catcdsa_area, SHM_CATCACHE_SIZE);
-		CACHE2_elog(DEBUG2, "Limit size of DSA area is set to %lu",
-					SHM_CATCACHE_SIZE);
-
-		/* this area should remian even if no session attaches it */
-		dsa_pin(catcdsa_area);
- 	}
-	/*
-	 * Allocate a new cache structure, aligning to a cacheline boundary
-	 *
-	 */
-	sz = sizeof(CatCache) + PG_CACHE_LINE_SIZE;
-
-	dsa_ptr = dsa_allocate0(catcdsa_area, sz);
-
-	cp = (CatCache *)
-		CACHELINEALIGN(dsa_get_address(catcdsa_area, dsa_ptr));  
-
-	/*
-	 * TODO:
-	 * in the shared catcache hash table is built based on dshash
-	 * cc_bucket become a pointer to dshash table and  
-	 */
-	cp->cc_bucket = palloc0(nbuckets * sizeof(dlist_head));
-
-	/*
-	 * initialize the cache's relation information for the relation
-	 * corresponding to this cache, and initialize some of the new cache's
-	 * other internal fields.  But don't open the relation yet.
-	 */
-	cp->id = id;
-	cp->cc_relname = "(not known yet)";
-	cp->cc_reloid = reloid;
-	cp->cc_indexoid = indexoid;
-	cp->cc_relisshared = false; /* temporary */
-	cp->cc_tupdesc = (TupleDesc) NULL;
-	cp->cc_ntup = 0;
-	cp->cc_nbuckets = nbuckets;
-	cp->cc_nkeys = nkeys;
-	for (i = 0; i < nkeys; ++i)
-		cp->cc_keyno[i] = key[i];
-
-	/*
-	 * new cache is initialized as far as we can go for now. print some
-	 * debugging information, if appropriate.
-	 */
-	InitCatCache_DEBUG2;
-
-	/*
-	 * add completed cache to top of group header's list
-	 */
-	slist_push_head(&ShmCacheHdr->ch_caches, &cp->cc_next);
-
-#ifdef CACHEDEBUG
-	dsa_dump(catcdsa_area);
-#endif
-
-	/*
-	 * back to the old context before we return...
-	 */
-	MemoryContextSwitchTo(oldcxt);
-
-	return cp;
 }

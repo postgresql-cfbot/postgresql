@@ -73,8 +73,6 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
-#include "storage/lmgr.h"
-#include "utils/dsa.h"
 #include "utils/rel.h"
 #include "utils/catcache.h"
 #include "utils/syscache.h"
@@ -973,8 +971,6 @@ static const struct cachedesc cacheinfo[] = {
 	}
 };
 
-int shared_catcache_mem;
-
 static CatCache *SysCache[SysCacheSize];
 
 static bool CacheInitialized = false;
@@ -987,7 +983,6 @@ static int	SysCacheRelationOidSize;
 static Oid	SysCacheSupportingRelOid[SysCacheSize * 2];
 static int	SysCacheSupportingRelOidSize;
 
-static void AttachCatalogCache(void);
 static int	oid_compare(const void *a, const void *b);
 
 
@@ -1010,33 +1005,20 @@ InitCatalogCache(void)
 					 "SysCacheSize does not match syscache.c's array");
 
 	Assert(!CacheInitialized);
-   
+
 	SysCacheRelationOidSize = SysCacheSupportingRelOidSize = 0;
 
-	if (shared_catcache_mem != 0)
-		LWLockAcquire(CatCacheHdrLock, LW_EXCLUSIVE);
-
-	/* if shared CatCache is already created, just set pointer to SysCache */
-	if (shared_catcache_mem != 0 && ShmCacheHdr->ch_initilized == true)
-		AttachCatalogCache();
-	else
-	{
-		for (cacheId = 0; cacheId < SysCacheSize; cacheId++)
-		{
-			SysCache[cacheId] = InitCatCache(cacheId,
-											 cacheinfo[cacheId].reloid,
-											 cacheinfo[cacheId].indoid,
-											 cacheinfo[cacheId].nkeys,
-											 cacheinfo[cacheId].key,
-											 cacheinfo[cacheId].nbuckets);
-			if (!PointerIsValid(SysCache[cacheId]))
-				elog(ERROR, "could not initialize cache %u (%d)",
-					 cacheinfo[cacheId].reloid, cacheId);
-		}
-	}
-	
 	for (cacheId = 0; cacheId < SysCacheSize; cacheId++)
 	{
+		SysCache[cacheId] = InitCatCache(cacheId,
+										 cacheinfo[cacheId].reloid,
+										 cacheinfo[cacheId].indoid,
+										 cacheinfo[cacheId].nkeys,
+										 cacheinfo[cacheId].key,
+										 cacheinfo[cacheId].nbuckets);
+		if (!PointerIsValid(SysCache[cacheId]))
+			elog(ERROR, "could not initialize cache %u (%d)",
+				 cacheinfo[cacheId].reloid, cacheId);
 		/* Accumulate data for OID lists, too */
 		SysCacheRelationOid[SysCacheRelationOidSize++] =
 			cacheinfo[cacheId].reloid;
@@ -1071,12 +1053,6 @@ InitCatalogCache(void)
 	SysCacheSupportingRelOidSize = j + 1;
 
 	CacheInitialized = true;
-	
-	/* if shared_catcache_mem == 0, ShmCacheHdr is not created  */
-	if (shared_catcache_mem != 0 && ShmCacheHdr->ch_initilized == false)
-		ShmCacheHdr->ch_initilized = true;	
-	if (shared_catcache_mem != 0)
-		LWLockRelease(CatCacheHdrLock);
 }
 
 /*
@@ -1558,26 +1534,6 @@ RelationSupportsSysCache(Oid relid)
 	return false;
 }
 
-/*
- * attach shared CatCache
- */
-static void
-AttachCatalogCache(void)
-{
-   	slist_iter	iter;
-	int cacheId = SysCacheSize - 1 ;
-	
-	Assert(ShmCacheHdr->ch_initilized == true);	
-
-	/* list of CatCache pointer is in descending order of cacheId */
-	slist_foreach(iter, &ShmCacheHdr->ch_caches)
-	{
-		SysCache[cacheId] = slist_container(CatCache, cc_next, iter.cur);
-		if (!PointerIsValid(SysCache[cacheId--]))
-			elog(ERROR, "could not attach cache %u (%d)",
-				 cacheinfo[cacheId + 1].reloid, cacheId);
-	}
-}
 
 /*
  * OID comparator for pg_qsort

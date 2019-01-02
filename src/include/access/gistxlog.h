@@ -17,13 +17,15 @@
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
 
+/* XLog stuff */
+
 #define XLOG_GIST_PAGE_UPDATE		0x00
 #define XLOG_GIST_DELETE			0x10 /* delete leaf index tuples for a page */
  /* #define XLOG_GIST_NEW_ROOT			 0x20 */	/* not used anymore */
 #define XLOG_GIST_PAGE_SPLIT		0x30
  /* #define XLOG_GIST_INSERT_COMPLETE	 0x40 */	/* not used anymore */
 #define XLOG_GIST_CREATE_INDEX		0x50
- /* #define XLOG_GIST_PAGE_DELETE		 0x60 */	/* not used anymore */
+#define XLOG_GIST_PAGE_DELETE		0x60
 
 /*
  * Backup Blk 0: updated page.
@@ -75,6 +77,12 @@ typedef struct gistxlogPageSplit
 	 * follow: 1. gistxlogPage and array of IndexTupleData per page
 	 */
 } gistxlogPageSplit;
+
+typedef struct gistxlogPageDelete
+{
+   TransactionId deleteXid; /* last Xid which could see page in scan */
+   OffsetNumber downlinkOffset; /* Offset of the downlink referencing this page */
+} gistxlogPageDelete;
 
 extern void gist_redo(XLogReaderState *record);
 extern void gist_desc(StringInfo buf, XLogReaderState *record);

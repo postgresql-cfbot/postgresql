@@ -38,7 +38,7 @@ static bool gistinserttuples(GISTInsertState *state, GISTInsertStack *stack,
 				 bool unlockbuf, bool unlockleftchild);
 static void gistfinishsplit(GISTInsertState *state, GISTInsertStack *stack,
 				GISTSTATE *giststate, List *splitinfo, bool releasebuf);
-static void gistvacuumpage(Relation rel, Page page, Buffer buffer,
+static void gistprunepage(Relation rel, Page page, Buffer buffer,
 			   Relation heapRel);
 
 
@@ -261,7 +261,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 	 */
 	if (is_split && GistPageIsLeaf(page) && GistPageHasGarbage(page))
 	{
-		gistvacuumpage(rel, page, buffer, heapRel);
+		gistprunepage(rel, page, buffer, heapRel);
 		is_split = gistnospace(page, itup, ntup, oldoffnum, freespace);
 	}
 
@@ -704,6 +704,11 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 			GISTInsertStack *item;
 			OffsetNumber downlinkoffnum;
 
+			/*
+			 * Currently internal pages are not deleted during vacuum,
+			 * so we do not need to check if page is deleted
+			 */
+
 			downlinkoffnum = gistchoose(state.r, stack->page, itup, giststate);
 			iid = PageGetItemId(stack->page, downlinkoffnum);
 			idxtuple = (IndexTuple) PageGetItem(stack->page, iid);
@@ -836,6 +841,19 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 					state.stack = stack = stack->parent;
 					continue;
 				}
+			}
+
+			/*
+			 * Leaf pages can be left deleted but still referenced
+			 * until it's space is reused. Downlink to this page may be already
+			 * removed from the internal page, but this scan can posess it.
+			 */
+			if(GistPageIsDeleted(stack->page))
+			{
+				UnlockReleaseBuffer(stack->buffer);
+				xlocked = false;
+				state.stack = stack = stack->parent;
+				continue;
 			}
 
 			/* now state.stack->(page, buffer and blkno) points to leaf page */
@@ -1544,11 +1562,11 @@ freeGISTstate(GISTSTATE *giststate)
 }
 
 /*
- * gistvacuumpage() -- try to remove LP_DEAD items from the given page.
+ * gistprunepage() -- try to remove LP_DEAD items from the given page.
  * Function assumes that buffer is exclusively locked.
  */
 static void
-gistvacuumpage(Relation rel, Page page, Buffer buffer, Relation heapRel)
+gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 {
 	OffsetNumber deletable[MaxIndexTuplesPerPage];
 	int			ndeletable = 0;

@@ -259,6 +259,22 @@ bms_make_singleton(int x)
 }
 
 /*
+ * bms_make_singleton - preallocate an empty bitmapset
+ */
+Bitmapset *
+bms_make_empty(int size)
+{
+	Bitmapset  *result;
+	int			wordnum;
+
+	if (size < 0)
+		elog(ERROR, "negative bitmapset member not allowed");
+	wordnum = WORDNUM(size - 1);
+	result = (Bitmapset *) palloc0(BITMAPSET_SIZE(wordnum + 1));
+	return result;
+}
+
+/*
  * bms_free - free a bitmapset
  *
  * Same as pfree except for allowing NULL input

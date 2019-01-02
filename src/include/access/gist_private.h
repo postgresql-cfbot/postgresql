@@ -412,12 +412,17 @@ extern bool gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 extern SplitedPageLayout *gistSplit(Relation r, Page page, IndexTuple *itup,
 		  int len, GISTSTATE *giststate);
 
+/* gistxlog.c */
+extern XLogRecPtr gistXLogSetDeleted(RelFileNode node, Buffer buffer,
+					TransactionId xid, Buffer internalPageBuffer,
+					OffsetNumber internalPageOffset);
+
 extern XLogRecPtr gistXLogUpdate(Buffer buffer,
 			   OffsetNumber *todelete, int ntodelete,
 			   IndexTuple *itup, int ntup,
 			   Buffer leftchild);
 
-XLogRecPtr gistXLogDelete(Buffer buffer, OffsetNumber *todelete,
+extern XLogRecPtr gistXLogDelete(Buffer buffer, OffsetNumber *todelete,
 			   int ntodelete, RelFileNode hnode);
 
 extern XLogRecPtr gistXLogSplit(bool page_is_leaf,

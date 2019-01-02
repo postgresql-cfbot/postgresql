@@ -23,6 +23,7 @@
 #include "storage/lmgr.h"
 #include "utils/float.h"
 #include "utils/syscache.h"
+#include "utils/snapmgr.h"
 #include "utils/lsyscache.h"
 
 
@@ -807,7 +808,7 @@ gistNewBuffer(Relation r)
 
 			gistcheckpage(r, buffer);
 
-			if (GistPageIsDeleted(page))
+			if (GistPageIsDeleted(page) && TransactionIdPrecedes(GistPageGetDeleteXid(page), RecentGlobalDataXmin))
 				return buffer;	/* OK to use */
 
 			LockBuffer(buffer, GIST_UNLOCK);

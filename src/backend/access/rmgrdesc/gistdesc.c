@@ -76,6 +76,9 @@ gist_identify(uint8 info)
 		case XLOG_GIST_CREATE_INDEX:
 			id = "CREATE_INDEX";
 			break;
+		case XLOG_GIST_PAGE_DELETE:
+			id = "PAGE_DELETE";
+			break;
 	}
 
 	return id;

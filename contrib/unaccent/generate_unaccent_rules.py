@@ -21,8 +21,27 @@
 # command line argument -- will be parsed and used.
 #
 # [1] http://unicode.org/Public/8.0.0/ucd/UnicodeData.txt
-# [2] http://unicode.org/cldr/trac/export/12304/tags/release-28/common/transforms/Latin-ASCII.xml
+# [2] http://unicode.org/cldr/trac/export/12304/tags/release-34/common/transforms/Latin-ASCII.xml
+#     (Ideally you should use the latest release).
 
+# BEGIN: Python 2/3 compatibility - Remove when Python 2 compatibility dropped
+# Approach is to be Python3 compatible with Python2 "backports"
+from __future__ import unicode_literals
+from __future__ import print_function
+import codecs
+import sys
+
+if sys.version_info[0] <= 2:
+    # Encode stdout as UTF-8, so we can just print to it
+    sys.stdout = codecs.getwriter('utf8')(sys.stdout)
+
+    # Map Python 2's chr to unichr
+    chr = unichr
+
+    # Python 2 and 3 compatible bytes call
+    def bytes(source, encoding='ascii', errors='strict'):
+        return source.encode(encoding=encoding, errors=errors)
+# END: Python 2/3 compatibility - Remove when Python 2 compatibility dropped
 
 import re
 import argparse
@@ -38,14 +57,41 @@ PLAIN_LETTER_RANGES = ((ord('a'), ord('z')), # Latin lower case
                        (0x03b1, 0x03c9),     # GREEK SMALL LETTER ALPHA, GREEK SMALL LETTER OMEGA
                        (0x0391, 0x03a9))     # GREEK CAPITAL LETTER ALPHA, GREEK CAPITAL LETTER OMEGA
 
+# Combining marks follow a "base" character, and result in a composite
+# character. Example: "U&'A\0300'"produces "À".There are three types of
+# combining marks: enclosing (Me), non-spacing combining (Mn), spacing
+# combining (Mc). We identify the ranges of marks we feel safe removing.
+# References:
+#   https://en.wikipedia.org/wiki/Combining_character
+#   https://www.unicode.org/charts/PDF/U0300.pdf
+#   https://www.unicode.org/charts/PDF/U20D0.pdf
+COMBINING_MARK_RANGES = ((0x0300, 0x0362),  # Mn: Accents, IPA
+                         (0x20dd, 0x20E0),  # Me: Symbols
+                         (0x20e2, 0x20e4),) # Me: Screen, keycap, triangle
+
 def print_record(codepoint, letter):
-    print (unichr(codepoint) + "\t" + letter).encode("UTF-8")
+    if letter:
+        output = chr(codepoint) + "\t" + letter
+    else:
+        output = chr(codepoint)
+
+    print(output)
 
 class Codepoint:
     def __init__(self, id, general_category, combining_ids):
         self.id = id
         self.general_category = general_category
         self.combining_ids = combining_ids
+
+def is_mark_to_remove(codepoint):
+    """Return true if this is a combining mark to remove."""
+    if not is_mark(codepoint):
+        return False
+
+    for begin, end in COMBINING_MARK_RANGES:
+        if codepoint.id >= begin and codepoint.id <= end:
+            return True
+    return False
 
 def is_plain_letter(codepoint):
     """Return true if codepoint represents a "plain letter"."""
@@ -116,15 +162,20 @@ def parse_cldr_latin_ascii_transliterator(latinAsciiFilePath):
     charactersSet = set()
 
     # RegEx to parse rules
-    rulePattern = re.compile(ur'^(?:(.)|(\\u[0-9a-fA-F]{4})) \u2192 (?:\'(.+)\'|(.+)) ;')
+    rulePattern = re.compile(r'^(?:(.)|(\\u[0-9a-fA-F]{4})) \u2192 (?:\'(.+)\'|(.+)) ;')
 
     # construct tree from XML
     transliterationTree = ET.parse(latinAsciiFilePath)
     transliterationTreeRoot = transliterationTree.getroot()
 
-    for rule in transliterationTreeRoot.findall("./transforms/transform/tRule"):
-        matches = rulePattern.search(rule.text)
+    rules = []
+    for element in transliterationTreeRoot.findall(
+      "./transforms/transform/tRule"
+      ):
+        rules.extend(element.text.strip().split("\n"))
 
+    for rule in rules:
+        matches = rulePattern.search(rule)
         # The regular expression capture four groups corresponding
         # to the characters.
         #
@@ -134,7 +185,9 @@ def parse_cldr_latin_ascii_transliterator(latinAsciiFilePath):
         # Group 3: plain "trg" char. Empty if group 4 is not.
         # Group 4: plain "trg" char between quotes. Empty if group 3 is not.
         if matches is not None:
-            src = matches.group(1) if matches.group(1) is not None else matches.group(2).decode('unicode-escape')
+            src = matches.group(1) if matches.group(1) is not None else bytes(
+                matches.group(2), 'UTF-8'
+                ).decode('unicode-escape')
             trg = matches.group(3) if matches.group(3) is not None else matches.group(4)
 
             # "'" and """ are escaped
@@ -195,12 +248,14 @@ def main(args):
            len(codepoint.combining_ids) > 1:
             if is_letter_with_marks(codepoint, table):
                 charactersSet.add((codepoint.id,
-                             unichr(get_plain_letter(codepoint, table).id)))
+                             chr(get_plain_letter(codepoint, table).id)))
             elif args.noLigaturesExpansion is False and is_ligature(codepoint, table):
                 charactersSet.add((codepoint.id,
-                             "".join(unichr(combining_codepoint.id)
+                             "".join(chr(combining_codepoint.id)
                                      for combining_codepoint \
                                      in get_plain_letters(codepoint, table))))
+        elif is_mark_to_remove(codepoint):
+            charactersSet.add((codepoint.id, None))
 
     # add CLDR Latin-ASCII characters
     if not args.noLigaturesExpansion:

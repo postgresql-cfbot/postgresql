@@ -564,6 +564,104 @@ REFRESH MATERIALIZED VIEW mvtest_mv_foo;
 REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv_foo;
 DROP OWNED BY regress_user_mvtest CASCADE;
 DROP ROLE regress_user_mvtest;
+-- create a new test table
+CREATE TABLE mvtest_t2 (id int NOT NULL PRIMARY KEY, type text NOT NULL, amt numeric NOT NULL);
+INSERT INTO mvtest_t2 VALUES
+  (1, 'x', 2),
+  (2, 'x', 3),
+  (3, 'y', 5),
+  (4, 'y', 7),
+  (5, 'z', 11);
+-- define trigger functions
+CREATE FUNCTION notify_changes() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+message TEXT := TG_ARGV[0];
+BEGIN
+  IF (TG_OP = 'DELETE') THEN
+    RAISE NOTICE 'DELETE %', concat_ws(' ', message, (SELECT array_to_json(array_agg(old_table)) FROM old_table));
+  ELSIF (TG_OP = 'TRUNCATE') THEN
+    RAISE NOTICE 'TRUNCATE %', message;
+  ELSIF (TG_OP = 'UPDATE') THEN
+    RAISE NOTICE 'UPDATE %', concat_ws(' ', message, (SELECT array_to_json(array_agg(new_table)) FROM new_table), (SELECT array_to_json(array_agg(old_table)) FROM old_table));
+  ELSIF (TG_OP = 'INSERT') THEN
+    RAISE NOTICE 'INSERT %', concat_ws(' ', message, (SELECT array_to_json(array_agg(new_table)) FROM new_table));
+  END IF;
+RETURN NULL;
+END
+$$;
+CREATE FUNCTION notify_changes_row() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+message TEXT := TG_ARGV[0];
+BEGIN
+  IF (TG_OP = 'DELETE') THEN
+    RAISE NOTICE 'DELETE %', concat_ws(' ', message, row_to_json(OLD));
+  ELSIF (TG_OP = 'UPDATE') THEN
+    RAISE NOTICE 'UPDATE %', concat_ws(' ', message, row_to_json(NEW), row_to_json(OLD));
+  ELSIF (TG_OP = 'INSERT') THEN
+    RAISE NOTICE 'INSERT %', concat_ws(' ', message, row_to_json(NEW));
+  END IF;
+RETURN NULL;
+END
+$$;
+-- create materialized view WITH NO DATA
+CREATE MATERIALIZED VIEW mvtest_t2_no_data_view AS SELECT * FROM mvtest_t2 ORDER BY id WITH NO DATA;
+CREATE UNIQUE INDEX mvtest_t2_no_data_view_id ON mvtest_t2_no_data_view (id);
+-- register triggers
+CREATE TRIGGER mvtest_t2_no_data_view_insert AFTER INSERT ON mvtest_t2_no_data_view REFERENCING NEW TABLE AS new_table FOR EACH STATEMENT EXECUTE FUNCTION notify_changes('mvtest_t2_no_data_view_insert');
+CREATE TRIGGER mvtest_t2_no_data_view_update AFTER UPDATE ON mvtest_t2_no_data_view REFERENCING NEW TABLE AS new_table OLD TABLE AS old_table FOR EACH STATEMENT EXECUTE FUNCTION notify_changes('mvtest_t2_no_data_view_update');
+CREATE TRIGGER mvtest_t2_no_data_view_delete AFTER DELETE ON mvtest_t2_no_data_view REFERENCING OLD TABLE AS old_table FOR EACH STATEMENT EXECUTE FUNCTION notify_changes('mvtest_t2_no_data_view_delete');
+CREATE TRIGGER mvtest_t2_no_data_view_truncate AFTER TRUNCATE ON mvtest_t2_no_data_view FOR EACH STATEMENT EXECUTE FUNCTION notify_changes('mvtest_t2_no_data_view_truncate');
+CREATE TRIGGER mvtest_t2_no_data_view_insert_row AFTER INSERT ON mvtest_t2_no_data_view FOR EACH ROW EXECUTE FUNCTION notify_changes_row('mvtest_t2_no_data_view_insert_row');
+CREATE TRIGGER mvtest_t2_no_data_view_update_row AFTER UPDATE ON mvtest_t2_no_data_view FOR EACH ROW EXECUTE FUNCTION notify_changes_row('mvtest_t2_no_data_view_update_row');
+CREATE TRIGGER mvtest_t2_no_data_view_delete_row AFTER DELETE ON mvtest_t2_no_data_view FOR EACH ROW EXECUTE FUNCTION notify_changes_row('mvtest_t2_no_data_view_delete_row');
+-- try to select from view without data, it should error
+SELECT * FROM mvtest_t2_no_data_view;
+ERROR:  materialized view "mvtest_t2_no_data_view" has not been populated
+HINT:  Use the REFRESH MATERIALIZED VIEW command.
+-- we should be able to do initial REFRESH MATERIALIZED VIEW CONCURRENTLY and triggers should be called
+REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_t2_no_data_view;
+NOTICE:  DELETE mvtest_t2_no_data_view_delete
+NOTICE:  UPDATE mvtest_t2_no_data_view_update
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":2,"type":"x","amt":3}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":5,"type":"z","amt":11}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":4,"type":"y","amt":7}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":1,"type":"x","amt":2}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":3,"type":"y","amt":5}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert [{"id":2,"type":"x","amt":3},{"id":5,"type":"z","amt":11},{"id":4,"type":"y","amt":7},{"id":1,"type":"x","amt":2},{"id":3,"type":"y","amt":5}]
+-- now materialized view should have data
+SELECT * FROM mvtest_t2_no_data_view ORDER BY id;
+ id | type | amt 
+----+------+-----
+  1 | x    |   2
+  2 | x    |   3
+  3 | y    |   5
+  4 | y    |   7
+  5 | z    |  11
+(5 rows)
+
+-- update the original table
+INSERT INTO mvtest_t2 VALUES (7, 'k', 10);
+DELETE FROM mvtest_t2 WHERE id=2;
+UPDATE mvtest_t2 SET amt=5 WHERE id=4;
+-- refresh
+REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_t2_no_data_view;
+NOTICE:  DELETE mvtest_t2_no_data_view_delete_row {"id":2,"type":"x","amt":3}
+NOTICE:  DELETE mvtest_t2_no_data_view_delete [{"id":2,"type":"x","amt":3}]
+NOTICE:  UPDATE mvtest_t2_no_data_view_update_row {"id":4,"type":"y","amt":5} {"id":4,"type":"y","amt":7}
+NOTICE:  UPDATE mvtest_t2_no_data_view_update [{"id":4,"type":"y","amt":5}] [{"id":4,"type":"y","amt":7}]
+NOTICE:  INSERT mvtest_t2_no_data_view_insert_row {"id":7,"type":"k","amt":10}
+NOTICE:  INSERT mvtest_t2_no_data_view_insert [{"id":7,"type":"k","amt":10}]
+-- materialized view should have updated data
+SELECT * FROM mvtest_t2_no_data_view ORDER BY id;
+ id | type | amt 
+----+------+-----
+  1 | x    |   2
+  3 | y    |   5
+  4 | y    |   5
+  5 | z    |  11
+  7 | k    |  10
+(5 rows)
+
 -- make sure that create WITH NO DATA works via SPI
 BEGIN;
 CREATE FUNCTION mvtest_func()

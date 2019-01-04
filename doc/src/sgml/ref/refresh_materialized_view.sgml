@@ -67,10 +67,6 @@ REFRESH MATERIALIZED VIEW [ CONCURRENTLY ] <replaceable class="parameter">name</
       expressions nor include a <literal>WHERE</literal> clause.
      </para>
      <para>
-      This option may not be used when the materialized view is not already
-      populated.
-     </para>
-     <para>
       Even with this option only one <literal>REFRESH</literal> at a time may
       run against any one materialized view.
      </para>
@@ -99,6 +95,14 @@ REFRESH MATERIALIZED VIEW [ CONCURRENTLY ] <replaceable class="parameter">name</
    order the generated rows based on this property. If you want the data
    to be ordered upon generation, you must use an <literal>ORDER BY</literal>
    clause in the backing query.
+  </para>
+
+  <para>
+   Refresh with the <literal>CONCURRENTLY</literal> option fires
+   any <literal>INSERT</literal>, <literal>UPDATE</literal>, and
+   <literal>DELETE</literal> triggers defined on the materialized view.
+   Refresh without this option refreshes all data at once and does not
+   fire any triggers.
   </para>
  </refsect1>
 

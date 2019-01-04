@@ -172,12 +172,6 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 				 errmsg("\"%s\" is not a materialized view",
 						RelationGetRelationName(matviewRel))));
 
-	/* Check that CONCURRENTLY is not specified if not populated. */
-	if (concurrent && !RelationIsPopulated(matviewRel))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("CONCURRENTLY cannot be used when the materialized view is not populated")));
-
 	/* Check that conflicting options have not been specified. */
 	if (concurrent && stmt->skipData)
 		ereport(ERROR,
@@ -565,9 +559,11 @@ make_temptable_name_n(char *tempname, int n)
  * the old record (if matched) and the ROW from the new table as a single
  * column of complex record type (if matched).
  *
- * Once we have the diff table, we perform set-based DELETE and INSERT
+ * Once we have the diff table, we perform set-based DELETE, UPDATE, and INSERT
  * operations against the materialized view, and discard both temporary
- * tables.
+ * tables.  We do all of those operations so that any triggers called because
+ * of these operations represent reasonable calls one would expect to see when
+ * syncing the materialized view to new data.
  *
  * Everything from the generation of the new data to applying the differences
  * takes place under cover of an ExclusiveLock, since it seems as though we
@@ -590,6 +586,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	bool		foundUniqueIndex;
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
+	AttrNumber	relattno;
 	int16		relnatts;
 	Oid		   *opUsedForQual;
 
@@ -779,8 +776,9 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	Assert(foundUniqueIndex);
 
 	appendStringInfoString(&querybuf,
-						   " AND newdata OPERATOR(pg_catalog.*=) mv) "
+						   ") "
 						   "WHERE newdata IS NULL OR mv IS NULL "
+						   "OR newdata OPERATOR(pg_catalog.*<>) mv "
 						   "ORDER BY tid");
 
 	/* Create the temporary "diff" table. */
@@ -803,7 +801,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 
 	OpenMatViewIncrementalMaintenance();
 
-	/* Deletes must come before inserts; do them first. */
+	/* We do deletes first. */
 	resetStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
 					 "DELETE FROM %s mv WHERE ctid OPERATOR(pg_catalog.=) ANY "
@@ -814,7 +812,38 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 	if (SPI_exec(querybuf.data, 0) != SPI_OK_DELETE)
 		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
 
-	/* Inserts go last. */
+	/* Then we do updates. */
+	resetStringInfo(&querybuf);
+	appendStringInfo(&querybuf, "UPDATE %s mv SET (", matviewname);
+
+	for (relattno = 1; relattno <= relnatts; relattno++)
+	{
+		Form_pg_attribute attribute = TupleDescAttr(tupdesc, relattno - 1);
+		char	   *attributeName = NameStr(attribute->attname);
+
+		/* Ignore dropped */
+		if (attribute->attisdropped)
+			continue;
+
+		if (relattno == 1)
+		{
+			appendStringInfo(&querybuf, "%s", quote_identifier(attributeName));
+		}
+		else
+		{
+			appendStringInfo(&querybuf, ", %s", quote_identifier(attributeName));
+		}
+	}
+
+	appendStringInfo(&querybuf,
+					 ") = ROW((diff.newdata).*) FROM %s diff "
+					 "WHERE diff.tid IS NOT NULL AND diff.newdata IS NOT NULL "
+					 "AND mv.ctid OPERATOR(pg_catalog.=) diff.tid",
+					 diffname);
+	if (SPI_exec(querybuf.data, 0) != SPI_OK_UPDATE)
+		elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+	/* Inserts and updates go last. */
 	resetStringInfo(&querybuf);
 	appendStringInfo(&querybuf,
 					 "INSERT INTO %s SELECT (diff.newdata).* "

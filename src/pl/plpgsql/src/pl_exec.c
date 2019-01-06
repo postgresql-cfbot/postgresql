@@ -4774,8 +4774,9 @@ exec_stmt_commit(PLpgSQL_execstate *estate, PLpgSQL_stmt_commit *stmt)
 {
 	HoldPinnedPortals();
 
-	SPI_commit();
-	SPI_start_transaction();
+	SPI_commit(stmt->chain);
+	if (!stmt->chain)
+		SPI_start_transaction();
 
 	estate->simple_eval_estate = NULL;
 	plpgsql_create_econtext(estate);
@@ -4793,8 +4794,9 @@ exec_stmt_rollback(PLpgSQL_execstate *estate, PLpgSQL_stmt_rollback *stmt)
 {
 	HoldPinnedPortals();
 
-	SPI_rollback();
-	SPI_start_transaction();
+	SPI_rollback(stmt->chain);
+	if (!stmt->chain)
+		SPI_start_transaction();
 
 	estate->simple_eval_estate = NULL;
 	plpgsql_create_econtext(estate);

@@ -590,7 +590,7 @@ PLy_commit(PyObject *self, PyObject *args)
 
 	HoldPinnedPortals();
 
-	SPI_commit();
+	SPI_commit(false);
 	SPI_start_transaction();
 
 	/* was cleared at transaction end, reset pointer */
@@ -606,7 +606,7 @@ PLy_rollback(PyObject *self, PyObject *args)
 
 	HoldPinnedPortals();
 
-	SPI_rollback();
+	SPI_rollback(false);
 	SPI_start_transaction();
 
 	/* was cleared at transaction end, reset pointer */

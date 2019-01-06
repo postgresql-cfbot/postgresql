@@ -218,7 +218,7 @@ SPI_start_transaction(void)
 }
 
 void
-SPI_commit(void)
+SPI_commit(bool chain)
 {
 	MemoryContext oldcontext = CurrentMemoryContext;
 
@@ -250,14 +250,24 @@ SPI_commit(void)
 	while (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
+	if (chain)
+		SaveTransactionCharacteristics();
+
 	CommitTransactionCommand();
+
+	if (chain)
+	{
+		StartTransactionCommand();
+		RestoreTransactionCharacteristics();
+	}
+
 	MemoryContextSwitchTo(oldcontext);
 
 	_SPI_current->internal_xact = false;
 }
 
 void
-SPI_rollback(void)
+SPI_rollback(bool chain)
 {
 	MemoryContext oldcontext = CurrentMemoryContext;
 
@@ -274,7 +284,17 @@ SPI_rollback(void)
 
 	_SPI_current->internal_xact = true;
 
+	if (chain)
+		SaveTransactionCharacteristics();
+
 	AbortCurrentTransaction();
+
+	if (chain)
+	{
+		StartTransactionCommand();
+		RestoreTransactionCharacteristics();
+	}
+
 	MemoryContextSwitchTo(oldcontext);
 
 	_SPI_current->internal_xact = false;

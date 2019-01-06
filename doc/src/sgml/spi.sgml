@@ -4389,7 +4389,7 @@ int SPI_freeplan(SPIPlanPtr <parameter>plan</parameter>)
 
  <refsynopsisdiv>
 <synopsis>
-void SPI_commit(void)
+void SPI_commit(bool <parameter>chain</parameter>)
 </synopsis>
  </refsynopsisdiv>
 
@@ -4402,7 +4402,10 @@ void SPI_commit(void)
    command <command>COMMIT</command>.  After a transaction is committed, a new
    transaction has to be started
    using <function>SPI_start_transaction</function> before further database
-   actions can be executed.
+   actions can be executed.  If <parameter>chain</parameter> is true, then a
+   new transaction is immediately started with the same transaction
+   characteristics as the just finished one, like with the SQL command
+   <command>COMMIT AND CHAIN</command>.
   </para>
 
   <para>
@@ -4429,7 +4432,7 @@ void SPI_commit(void)
 
  <refsynopsisdiv>
 <synopsis>
-void SPI_rollback(void)
+void SPI_rollback(bool <parameter>chain</parameter>)
 </synopsis>
  </refsynopsisdiv>
 
@@ -4442,7 +4445,10 @@ void SPI_rollback(void)
    command <command>ROLLBACK</command>.  After a transaction is rolled back, a
    new transaction has to be started
    using <function>SPI_start_transaction</function> before further database
-   actions can be executed.
+   actions can be executed.  If <parameter>chain</parameter> is true, then a
+   new transaction is immediately started with the same transaction
+   characteristics as the just finished one, like with the SQL command
+   <command>COMMIT AND CHAIN</command>.
   </para>
 
   <para>

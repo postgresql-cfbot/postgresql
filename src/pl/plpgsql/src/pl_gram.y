@@ -219,6 +219,8 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %type <ival>	opt_scrollable
 %type <fetch>	opt_fetch_direction
 
+%type <ival>	opt_transaction_chain
+
 %type <keyword>	unreserved_keyword
 
 
@@ -252,6 +254,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_ABSOLUTE
 %token <keyword>	K_ALIAS
 %token <keyword>	K_ALL
+%token <keyword>	K_AND
 %token <keyword>	K_ARRAY
 %token <keyword>	K_ASSERT
 %token <keyword>	K_BACKWARD
@@ -259,6 +262,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_BY
 %token <keyword>	K_CALL
 %token <keyword>	K_CASE
+%token <keyword>	K_CHAIN
 %token <keyword>	K_CLOSE
 %token <keyword>	K_COLLATE
 %token <keyword>	K_COLUMN
@@ -2177,28 +2181,36 @@ stmt_null		: K_NULL ';'
 					}
 				;
 
-stmt_commit		: K_COMMIT ';'
+stmt_commit		: K_COMMIT opt_transaction_chain ';'
 					{
 						PLpgSQL_stmt_commit *new;
 
 						new = palloc(sizeof(PLpgSQL_stmt_commit));
 						new->cmd_type = PLPGSQL_STMT_COMMIT;
 						new->lineno = plpgsql_location_to_lineno(@1);
+						new->chain = $2;
 
 						$$ = (PLpgSQL_stmt *)new;
 					}
 				;
 
-stmt_rollback	: K_ROLLBACK ';'
+stmt_rollback	: K_ROLLBACK opt_transaction_chain ';'
 					{
 						PLpgSQL_stmt_rollback *new;
 
 						new = palloc(sizeof(PLpgSQL_stmt_rollback));
 						new->cmd_type = PLPGSQL_STMT_ROLLBACK;
 						new->lineno = plpgsql_location_to_lineno(@1);
+						new->chain = $2;
 
 						$$ = (PLpgSQL_stmt *)new;
 					}
+				;
+
+opt_transaction_chain:
+			K_AND K_CHAIN			{ $$ = true; }
+			| K_AND K_NO K_CHAIN	{ $$ = false; }
+			| /* EMPTY */			{ $$ = false; }
 				;
 
 stmt_set	: K_SET
@@ -2455,10 +2467,12 @@ any_identifier	: T_WORD
 unreserved_keyword	:
 				K_ABSOLUTE
 				| K_ALIAS
+				| K_AND
 				| K_ARRAY
 				| K_ASSERT
 				| K_BACKWARD
 				| K_CALL
+				| K_CHAIN
 				| K_CLOSE
 				| K_COLLATE
 				| K_COLUMN

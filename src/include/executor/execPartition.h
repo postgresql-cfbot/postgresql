@@ -149,5 +149,10 @@ extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
 								int nsubplans);
+extern ResultRelInfo *ExecFindPartitionByOid(ModifyTableState *mtstate,
+					   ResultRelInfo *rootResultRelInfo,
+					   PartitionTupleRouting *proute,
+					   EState *estate,
+					   Oid partoid);
 
 #endif							/* EXECPARTITION_H */

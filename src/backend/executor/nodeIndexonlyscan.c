@@ -162,7 +162,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			/*
 			 * Rats, we have to visit the heap to check visibility.
 			 */
-			InstrCountTuples2(node, 1);
+			InstrCountNodeTuples1(node, 1);
 			tuple = index_fetch_heap(scandesc);
 			if (tuple == NULL)
 				continue;		/* no visible tuple, try next index entry */

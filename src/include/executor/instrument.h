@@ -57,7 +57,10 @@ typedef struct Instrumentation
 	double		startup;		/* Total startup time (in seconds) */
 	double		total;			/* Total total time (in seconds) */
 	double		ntuples;		/* Total tuples produced */
-	double		ntuples2;		/* Secondary node-specific tuple counter */
+	/* Additional node-specific tuple counters */
+	double		node_ntuples1;
+	double		node_ntuples2;
+	double		node_ntuples3;
 	double		nloops;			/* # of run cycles for this node */
 	double		nfiltered1;		/* # tuples removed by scanqual or joinqual */
 	double		nfiltered2;		/* # tuples removed by "other" quals */

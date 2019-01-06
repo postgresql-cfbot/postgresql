@@ -814,6 +814,49 @@ $$ LANGUAGE plpgsql;
     happen in a plain SQL command.
    </para>
   </sect2>
+
+  <sect2 id="plpgsql-declaration-pragma">
+   <title>Block level PRAGMA</title>
+
+   <para>
+    A <application>PL/pgSQL</application> function supports pragma on block
+    level. Pragma is a compiler directive, that can be used by
+    <application>PL/pgSQL</application> compiler, or by any extensions that
+    can work with <application>PL/pgSQL</application> code.
+   </para>
+
+<synopsis>
+<literal>PRAGMA</literal> <replaceable>name</replaceable>;
+<literal>PRAGMA</literal> <replaceable>name</replaceable> ( <optional> <replaceable>argument_name</replaceable> =&gt; </optional> <replaceable>value</replaceable> );
+</synopsis>
+
+   <para>
+    The pragma can be used for <application>plpgsql_check</application>
+    enabling/disabling code checking or for storing additional information:
+
+<programlisting>
+DECLARE
+  PRAGMA plpgsql_check(off);
+BEGIN
+  -- code inside block will not be checked by plpgsql_check
+  ...
+
+
+DECLARE
+  -- force routine volatility detection
+  PRAGMA plpgsql_check(volatility => volatile);
+  PRAGMA plpgsql_check(temporary_table => 'tmp_tab', '(a int, b int, c int)');
+BEGIN
+  ...
+</programlisting>
+
+    More details are described in related extension's description.
+   </para>
+
+   <para>
+    Unknown pragma is ignored.
+   </para>
+  </sect2>
   </sect1>
 
   <sect1 id="plpgsql-expressions">

@@ -111,6 +111,11 @@ static	PLpgSQL_expr	*read_cursor_args(PLpgSQL_var *cursor,
 static	List			*read_raise_options(void);
 static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 
+/*
+ * local variable for collection pragmas inside one declare block
+ */
+static List		   *pragmas;
+
 %}
 
 %expect 0
@@ -146,6 +151,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 			char *label;
 			int  n_initvars;
 			int  *initvarnos;
+			List *pragmas;
 		}						declhdr;
 		struct
 		{
@@ -166,6 +172,8 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 		PLpgSQL_diag_item		*diagitem;
 		PLpgSQL_stmt_fetch		*fetch;
 		PLpgSQL_case_when		*casewhen;
+		PLpgSQL_pragma			*pragma;
+		PLpgSQL_pragma_arg		*pragma_arg;
 }
 
 %type <declhdr> decl_sect
@@ -221,6 +229,9 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 
 %type <keyword>	unreserved_keyword
 
+%type <list>	pragma_args
+%type <pragma_arg> pragma_arg
+%type <pragma_arg> pragma_val
 
 /*
  * Basic non-keyword token types.  These are hard-wired into the core lexer.
@@ -321,6 +332,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_PG_EXCEPTION_CONTEXT
 %token <keyword>	K_PG_EXCEPTION_DETAIL
 %token <keyword>	K_PG_EXCEPTION_HINT
+%token <keyword>	K_PRAGMA
 %token <keyword>	K_PRINT_STRICT_PARAMS
 %token <keyword>	K_PRIOR
 %token <keyword>	K_QUERY
@@ -417,6 +429,7 @@ pl_block		: decl_sect K_BEGIN proc_sect exception_sect K_END opt_label
 						new->label		= $1.label;
 						new->n_initvars = $1.n_initvars;
 						new->initvarnos = $1.initvarnos;
+						new->pragmas	= $1.pragmas;
 						new->body		= $3;
 						new->exceptions	= $4;
 
@@ -435,6 +448,7 @@ decl_sect		: opt_block_label
 						$$.label	  = $1;
 						$$.n_initvars = 0;
 						$$.initvarnos = NULL;
+						$$.pragmas	  = NIL;
 					}
 				| opt_block_label decl_start
 					{
@@ -442,6 +456,7 @@ decl_sect		: opt_block_label
 						$$.label	  = $1;
 						$$.n_initvars = 0;
 						$$.initvarnos = NULL;
+						$$.pragmas	  = NIL;
 					}
 				| opt_block_label decl_start decl_stmts
 					{
@@ -449,6 +464,9 @@ decl_sect		: opt_block_label
 						$$.label	  = $1;
 						/* Remember variables declared in decl_stmts */
 						$$.n_initvars = plpgsql_add_initdatums(&($$.initvarnos));
+
+						/* there are nothing special work, use local list only */
+						$$.pragmas = pragmas;
 					}
 				;
 
@@ -577,6 +595,112 @@ decl_statement	: decl_varname decl_const decl_datatype decl_collate decl_notnull
 						else
 							new->cursor_explicit_argrow = $5->dno;
 						new->cursor_options = CURSOR_OPT_FAST_PLAN | $2;
+					}
+				| K_PRAGMA any_identifier ';'
+					{
+						PLpgSQL_pragma *new = palloc0(sizeof(PLpgSQL_pragma));
+
+						new->name = $2;
+						new->args = NIL;
+
+						pragmas = lappend(pragmas, new);
+					}
+				| K_PRAGMA any_identifier '(' pragma_args ')' ';'
+					{
+						PLpgSQL_pragma *new = palloc0(sizeof(PLpgSQL_pragma));
+
+						new->name = $2;
+						new->args = $4;
+
+						pragmas = lappend(pragmas, new);
+					}
+				;
+
+pragma_args		: pragma_args ',' pragma_arg
+					{
+						$$ = lappend($1, $3);
+					}
+				| pragma_arg
+					{
+						$$ = list_make1($1);
+					}
+				;
+
+pragma_arg		: pragma_val
+					{
+						$1->argname = NULL;
+						$$ = $1;
+					}
+				| any_identifier EQUALS_GREATER pragma_val
+					{
+						$3->argname = $1;
+						$$ = $3;
+					}
+				;
+
+pragma_val		: T_WORD
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_IDENT;
+						new->val.ident = $1.ident;
+						$$ = new;
+					}
+				| unreserved_keyword
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_IDENT;
+						new->val.ident = pstrdup($1);
+						$$ = new;
+					}
+				| T_DATUM
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						if ($1.ident)
+						{
+							new->type = PLPGSQL_PRAGMA_ARG_QUAL_IDENT;
+							new->val.idents = $1.idents;
+						}
+						else
+						{
+							new->type = PLPGSQL_PRAGMA_ARG_IDENT;
+							new->val.ident = $1.ident;
+						}
+						$$ = new;
+					}
+				| T_CWORD
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_QUAL_IDENT;
+						new->val.idents = $1.idents;
+						$$ = new;
+					}
+				| SCONST
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_SCONST;
+						new->val.str = $1;
+						$$ = new;
+					}
+				| FCONST
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_FCONST;
+						new->val.fval = atof($1);
+						$$ = new;
+					}
+				| ICONST
+					{
+						PLpgSQL_pragma_arg *new = palloc0(sizeof(PLpgSQL_pragma_arg));
+
+						new->type = PLPGSQL_PRAGMA_ARG_ICONST;
+						new->val.ival = $1;
+						$$ = new;
 					}
 				;
 
@@ -2395,11 +2519,13 @@ expr_until_loop :
 opt_block_label	:
 					{
 						plpgsql_ns_push(NULL, PLPGSQL_LABEL_BLOCK);
+						pragmas = NIL;
 						$$ = NULL;
 					}
 				| LESS_LESS any_identifier GREATER_GREATER
 					{
 						plpgsql_ns_push($2, PLPGSQL_LABEL_BLOCK);
+						pragmas = NIL;
 						$$ = $2;
 					}
 				;

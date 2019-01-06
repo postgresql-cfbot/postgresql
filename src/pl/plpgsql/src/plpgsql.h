@@ -491,6 +491,7 @@ typedef struct PLpgSQL_stmt_block
 	int			n_initvars;		/* Length of initvarnos[] */
 	int		   *initvarnos;		/* dnos of variables declared in this block */
 	PLpgSQL_exception_block *exceptions;
+	List	   *pragmas;		/* list of pragmas */
 } PLpgSQL_stmt_block;
 
 /*
@@ -1118,6 +1119,35 @@ typedef struct PLwdatum
 	bool		quoted;
 	List	   *idents;			/* valid if composite name */
 } PLwdatum;
+
+typedef enum PLpgSQL_pragma_arg_type
+{
+	PLPGSQL_PRAGMA_ARG_IDENT,
+	PLPGSQL_PRAGMA_ARG_QUAL_IDENT,
+	PLPGSQL_PRAGMA_ARG_SCONST,
+	PLPGSQL_PRAGMA_ARG_FCONST,
+	PLPGSQL_PRAGMA_ARG_ICONST,
+} PLpgSQL_pragma_arg_type;
+
+typedef struct PLpgSQL_pragma_arg
+{
+	char	   *argname;
+	PLpgSQL_pragma_arg_type type;
+	union
+	{
+		char	   *ident;
+		List	   *idents;
+		int			ival;
+		double		fval;
+		char	   *str;
+	} val;
+} PLpgSQL_pragma_arg;
+
+typedef struct PLpgSQL_pragma
+{
+	char	   *name;			/* name of pragma */
+	List	   *args;
+} PLpgSQL_pragma;
 
 /**********************************************************************
  * Global variable declarations

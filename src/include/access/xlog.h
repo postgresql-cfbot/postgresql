@@ -310,6 +310,7 @@ extern XLogRecPtr GetInsertRecPtr(void);
 extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void GetNextXidAndEpoch(TransactionId *xid, uint32 *epoch);
+extern uint32 GetEpochForXid(TransactionId xid);
 extern void RemovePromoteSignalFiles(void);
 
 extern bool CheckPromoteSignal(void);

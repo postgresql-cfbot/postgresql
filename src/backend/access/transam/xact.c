@@ -30,6 +30,7 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
+#include "access/undoinsert.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
@@ -66,6 +67,7 @@
 #include "utils/timestamp.h"
 #include "pg_trace.h"
 
+#define	AtAbort_ResetUndoBuffers() ResetUndoBuffers()
 
 /*
  *	User-tweakable parameters
@@ -189,6 +191,10 @@ typedef struct TransactionStateData
 	bool		startedInRecovery;	/* did we start in recovery? */
 	bool		didLogXid;		/* has xid been included in WAL record? */
 	int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
+
+	 /* start and end undo record location for each persistence level */
+	UndoRecPtr	start_urec_ptr[UndoPersistenceLevels];
+	UndoRecPtr	latest_urec_ptr[UndoPersistenceLevels];
 	struct TransactionStateData *parent;	/* back link to parent */
 } TransactionStateData;
 
@@ -909,6 +915,26 @@ bool
 IsInParallelMode(void)
 {
 	return CurrentTransactionState->parallelModeLevel != 0;
+}
+
+/*
+ * SetCurrentUndoLocation
+ */
+void
+SetCurrentUndoLocation(UndoRecPtr urec_ptr)
+{
+	UndoLogControl *log = UndoLogGet(UndoRecPtrGetLogNo(urec_ptr), false);
+	UndoPersistence upersistence = log->meta.persistence;
+
+	Assert(AmAttachedToUndoLog(log) || InRecovery);
+	/*
+	 * Set the start undo record pointer for first undo record in a
+	 * subtransaction.
+	 */
+	if (!UndoRecPtrIsValid(CurrentTransactionState->start_urec_ptr[upersistence]))
+		CurrentTransactionState->start_urec_ptr[upersistence] = urec_ptr;
+	CurrentTransactionState->latest_urec_ptr[upersistence] = urec_ptr;
+
 }
 
 /*
@@ -2631,6 +2657,7 @@ AbortTransaction(void)
 		AtEOXact_HashTables(false);
 		AtEOXact_PgStat(false);
 		AtEOXact_ApplyLauncher(false);
+		AtAbort_ResetUndoBuffers();
 		pgstat_report_xact_timestamp(0);
 	}
 
@@ -4815,6 +4842,7 @@ AbortSubTransaction(void)
 		AtEOSubXact_PgStat(false, s->nestingLevel);
 		AtSubAbort_Snapshot(s->nestingLevel);
 		AtEOSubXact_ApplyLauncher(false, s->nestingLevel);
+		AtAbort_ResetUndoBuffers();
 	}
 
 	/*

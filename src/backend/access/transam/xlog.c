@@ -31,6 +31,7 @@
 #include "access/transam.h"
 #include "access/tuptoaster.h"
 #include "access/twophase.h"
+#include "access/undolog.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "access/xloginsert.h"
@@ -6699,6 +6700,9 @@ StartupXLOG(void)
 	 */
 	restoreTwoPhaseData();
 
+	/* Recover undo log meta data corresponding to this checkpoint. */
+	StartupUndoLogs(ControlFile->checkPointCopy.redo);
+
 	lastFullPageWrites = checkPoint.fullPageWrites;
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
@@ -7321,7 +7325,13 @@ StartupXLOG(void)
 	 * end-of-recovery steps fail.
 	 */
 	if (InRecovery)
+	{
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
+		ResetUndoLogs(UNDO_UNLOGGED);
+	}
+
+	/* Always reset temporary undo logs. */
+	ResetUndoLogs(UNDO_TEMP);
 
 	/*
 	 * We don't need the latch anymore. It's not strictly necessary to disown
@@ -8319,6 +8329,36 @@ GetNextXidAndEpoch(TransactionId *xid, uint32 *epoch)
 }
 
 /*
+ * GetEpochForXid - get the epoch associated with the xid
+ */
+uint32
+GetEpochForXid(TransactionId xid)
+{
+	uint32		ckptXidEpoch;
+	TransactionId ckptXid;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	ckptXidEpoch = XLogCtl->ckptXidEpoch;
+	ckptXid = XLogCtl->ckptXid;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	/*
+	 * Xid can be on either side when near wrap-around.  Xid is certainly
+	 * logically later than ckptXid.  So if it's numerically less, it must
+	 * have wrapped into the next epoch.  OTOH, if it is numerically more,
+	 * but logically lesser, then it belongs to previous epoch.
+	 */
+	if (xid > ckptXid &&
+		TransactionIdPrecedes(xid, ckptXid))
+		ckptXidEpoch--;
+	else if (xid < ckptXid &&
+			 TransactionIdFollows(xid, ckptXid))
+		ckptXidEpoch++;
+
+	return ckptXidEpoch;
+}
+
+/*
  * This must be called ONCE during postmaster or standalone-backend shutdown
  */
 void
@@ -9026,6 +9066,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointBuffers(flags);	/* performs all required fsyncs */
+	CheckPointUndoLogs(checkPointRedo, ControlFile->checkPointCopy.redo);
 	CheckPointReplicationOrigin();
 	/* We deliberately delay 2PC checkpointing as long as possible */
 	CheckPointTwoPhase(checkPointRedo);
@@ -9732,6 +9773,9 @@ xlog_redo(XLogReaderState *record)
 		XLogCtl->ckptXid = checkPoint.nextXid;
 		SpinLockRelease(&XLogCtl->info_lck);
 
+		/* Write an undo log metadata snapshot. */
+		CheckPointUndoLogs(checkPoint.redo, ControlFile->checkPointCopy.redo);
+
 		/*
 		 * We should've already switched to the new TLI before replaying this
 		 * record.
@@ -9790,6 +9834,9 @@ xlog_redo(XLogReaderState *record)
 		XLogCtl->ckptXidEpoch = checkPoint.nextXidEpoch;
 		XLogCtl->ckptXid = checkPoint.nextXid;
 		SpinLockRelease(&XLogCtl->info_lck);
+
+		/* Write an undo log metadata snapshot. */
+		CheckPointUndoLogs(checkPoint.redo, ControlFile->checkPointCopy.redo);
 
 		/* TLI should not change in an on-line checkpoint */
 		if (checkPoint.ThisTimeLineID != ThisTimeLineID)

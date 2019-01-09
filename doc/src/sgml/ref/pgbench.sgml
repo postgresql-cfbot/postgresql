@@ -929,7 +929,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
 
       <row>
        <entry> <literal>default_seed</literal> </entry>
-       <entry>seed used in hash functions by default</entry>
+       <entry>seed used in hash and pseudo-random permutation functions by default</entry>
       </row>
 
       <row>
@@ -1390,6 +1390,13 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
        <entry><literal>1024.0</literal></entry>
       </row>
       <row>
+       <entry><literal><function>pr_perm(<replaceable>i</replaceable>, <replaceable>size</replaceable> [, <replaceable>seed</replaceable> ] )</function></literal></entry>
+       <entry>integer</entry>
+       <entry>pseudo-random permutation in [0,size)</entry>
+       <entry><literal>pr_perm(0, 4)</literal></entry>
+       <entry><literal>0</literal>, <literal>1</literal>, <literal>2</literal> or <literal>3</literal></entry>
+      </row>
+      <row>
        <entry><literal><function>random(<replaceable>lb</replaceable>, <replaceable>ub</replaceable>)</function></literal></entry>
        <entry>integer</entry>
        <entry>uniformly-distributed random integer in <literal>[lb, ub]</literal></entry>
@@ -1548,6 +1555,24 @@ f(x) = PHI(2.0 * parameter * (x - mu) / (max - min + 1)) /
 \set k1 abs(hash(:r, :default_seed + 123)) % 1000000
 \set k2 abs(hash(:r, :default_seed + 321)) % 1000000
 </programlisting>
+  </para>
+
+  <para>
+    Function <literal>pr_perm</literal> implements a pseudo-random permutation.
+    It allows to mix the output of non uniform random functions so that
+    values drawn more often are not trivially correlated.
+    It permutes integers in [0, size) using a seed by applying rounds of
+    simple invertible functions, similarly to an encryption function,
+    although beware that it is not at all cryptographically secure.
+    Compared to <literal>hash</literal> functions discussed above, the function
+    ensures that a perfect permutation is applied: there are no collisions
+    nor holes in the output values.
+    Values outside the interval are interpreted modulo the size.
+    The function errors if size is not positive.
+    If no seed is provided, <literal>:default_seed</literal> is used.
+    For a given size and seed, the function is fully deterministic: if two
+    permutations on the same size must not be correlated, use distinct seeds
+    as outlined in the previous example about hash functions.
   </para>
 
   <para>

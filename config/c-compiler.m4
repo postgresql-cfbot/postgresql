@@ -327,6 +327,26 @@ fi])# PGAC_C_BUILTIN_BSWAP64
 
 
 
+# PGAC_C_BUILTIN_CLZLL
+# -------------------------
+# Check if the C compiler understands __builtin_clzll(),
+# and define HAVE__BUILTIN_CLZLL if so.
+# Both GCC & CLANG seem to have one.
+AC_DEFUN([PGAC_C_BUILTIN_CLZLL],
+[AC_CACHE_CHECK(for __builtin_clzll, pgac_cv__builtin_clzll,
+[AC_COMPILE_IFELSE([AC_LANG_SOURCE(
+[static unsigned long int x = __builtin_clzll(0xaabbccddeeff0011);]
+)],
+[pgac_cv__builtin_clzll=yes],
+[pgac_cv__builtin_clzll=no])])
+if test x"$pgac_cv__builtin_clzll" = xyes ; then
+AC_DEFINE(HAVE__BUILTIN_CLZLL, 1,
+          [Define to 1 if your compiler understands __builtin_clzll.])
+fi])# PGAC_C_BUILTIN_CLZLL
+
+
+
+
 # PGAC_C_BUILTIN_CONSTANT_P
 # -------------------------
 # Check if the C compiler understands __builtin_constant_p(),

@@ -74,6 +74,7 @@ my %catalog_data;
 my @toast_decls;
 my @index_decls;
 my %oidcounts;
+my $max_proc_oid = 6200;
 
 foreach my $header (@input_files)
 {
@@ -230,6 +231,13 @@ foreach my $row (@{ $catalog_data{pg_opfamily} })
 my %procoids;
 foreach my $row (@{ $catalog_data{pg_proc} })
 {
+	# Warn if a large OID has been newly assigned.
+	if ($row->{oid} > $max_proc_oid)
+	{
+		warn sprintf "Consider using an OID smaller than %d for %s (see commit 8ff5f824dca75)\n",
+			$max_proc_oid, $row->{proname};
+	}
+
 	# Generate an entry under just the proname (corresponds to regproc lookup)
 	my $prokey = $row->{proname};
 	if (defined $procoids{$prokey})

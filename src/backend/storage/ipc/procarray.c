@@ -2683,18 +2683,20 @@ CancelVirtualTransaction(VirtualTransactionId vxid, ProcSignalReason sigmode)
 
 		GET_VXID_FROM_PGPROC(procvxid, *proc);
 
-		if (procvxid.backendId == vxid.backendId &&
-			procvxid.localTransactionId == vxid.localTransactionId)
+		if (procvxid.backendId == vxid.backendId)
 		{
-			proc->recoveryConflictPending = true;
-			pid = proc->pid;
-			if (pid != 0)
+			if (procvxid.localTransactionId == vxid.localTransactionId)
 			{
-				/*
-				 * Kill the pid if it's still here. If not, that's what we
-				 * wanted so ignore any errors.
-				 */
-				(void) SendProcSignal(pid, sigmode, vxid.backendId);
+				proc->recoveryConflictPending = true;
+				pid = proc->pid;
+				if (pid != 0)
+				{
+					/*
+					 * Kill the pid if it's still here. If not, that's what we
+					 * wanted so ignore any errors.
+					 */
+					(void) SendProcSignal(pid, sigmode, vxid.backendId);
+				}
 			}
 			break;
 		}

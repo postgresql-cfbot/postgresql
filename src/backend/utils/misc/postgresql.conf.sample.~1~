@@ -392,7 +392,6 @@
 
 # - Other Planner Options -
 
-#array_optimization_size_limit = 100
 #default_statistics_target = 100	# range 1-10000
 #constraint_exclusion = partition	# on, off, or partition
 #cursor_tuple_fraction = 0.1		# range 0.0-1.0

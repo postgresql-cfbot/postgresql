@@ -301,6 +301,13 @@ select x <= 5, x in (1,3,5)
 from integers
 $$);
 
+set array_optimization_size_limit to 1;
+select * from test_predtest($$
+select x <= 3, x in (1,3)
+from integers
+$$);
+set array_optimization_size_limit to default;
+
 select * from test_predtest($$
 select x <= 5, x in (1,3,5,7)
 from integers

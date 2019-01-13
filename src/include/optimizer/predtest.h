@@ -16,6 +16,8 @@
 
 #include "nodes/primnodes.h"
 
+#define ARRAY_OPTIMIZATION_SIZE_LIMIT		100
+extern PGDLLIMPORT int array_optimization_size_limit;
 
 extern bool predicate_implied_by(List *predicate_list, List *clause_list,
 					 bool weak);

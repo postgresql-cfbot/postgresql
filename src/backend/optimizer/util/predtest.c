@@ -33,9 +33,8 @@
  * likely to require O(N^2) time, and more often than not fail anyway.
  * So we set an arbitrary limit on the number of array elements that
  * we will allow to be treated as an AND or OR clause.
- * XXX is it worth exposing this as a GUC knob?
  */
-#define MAX_SAOP_ARRAY_SIZE		100
+int array_optimization_size_limit = ARRAY_OPTIMIZATION_SIZE_LIMIT;
 
 /*
  * To avoid redundant coding in predicate_implied_by_recurse and
@@ -812,11 +811,11 @@ predicate_refuted_by_recurse(Node *clause, Node *predicate,
  * If the expression is classified as AND- or OR-type, then *info is filled
  * in with the functions needed to iterate over its components.
  *
- * This function also implements enforcement of MAX_SAOP_ARRAY_SIZE: if a
+ * This function also implements enforcement of array_optimization_size_limit: if a
  * ScalarArrayOpExpr's array has too many elements, we just classify it as an
  * atom.  (This will result in its being passed as-is to the simple_clause
  * functions, which will fail to prove anything about it.)	Note that we
- * cannot just stop after considering MAX_SAOP_ARRAY_SIZE elements; in general
+ * cannot just stop after considering array_optimization_size_limit elements; in general
  * that would result in wrong proofs, rather than failing to prove anything.
  */
 static PredClass
@@ -874,7 +873,7 @@ predicate_classify(Node *clause, PredIterInfo info)
 
 			arrayval = DatumGetArrayTypeP(((Const *) arraynode)->constvalue);
 			nelems = ArrayGetNItems(ARR_NDIM(arrayval), ARR_DIMS(arrayval));
-			if (nelems <= MAX_SAOP_ARRAY_SIZE)
+			if (nelems <= array_optimization_size_limit)
 			{
 				info->startup_fn = arrayconst_startup_fn;
 				info->next_fn = arrayconst_next_fn;
@@ -884,7 +883,7 @@ predicate_classify(Node *clause, PredIterInfo info)
 		}
 		else if (arraynode && IsA(arraynode, ArrayExpr) &&
 				 !((ArrayExpr *) arraynode)->multidims &&
-				 list_length(((ArrayExpr *) arraynode)->elements) <= MAX_SAOP_ARRAY_SIZE)
+				 list_length(((ArrayExpr *) arraynode)->elements) <= array_optimization_size_limit)
 		{
 			info->startup_fn = arrayexpr_startup_fn;
 			info->next_fn = arrayexpr_next_fn;

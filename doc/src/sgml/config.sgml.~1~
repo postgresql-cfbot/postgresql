@@ -4933,23 +4933,6 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
 
      <variablelist>
 
-     <varlistentry id="guc-array-optimization-size-limit" xreflabel="array_optimization_size_limit">
-      <term><varname>array_optimization_size_limit</varname> (<type>integer</type>)
-      <indexterm>
-       <primary><varname>array_optimization_size_limit</varname> configuration parameter</primary>
-      </indexterm>
-      </term>
-      <listitem>
-       <para>
-        Sets the array size limit beyond which predicate optimization is not used.
-        The optimizer evaluates scalar array expressions to determine if they can
-        be treated as AND or OR clauses. This optimization proving is only performed
-        if the array contains at most this many items.
-        The default is <literal>100</literal>.
-       </para>
-      </listitem>
-     </varlistentry>
-
      <varlistentry id="guc-default-statistics-target" xreflabel="default_statistics_target">
       <term><varname>default_statistics_target</varname> (<type>integer</type>)
       <indexterm>

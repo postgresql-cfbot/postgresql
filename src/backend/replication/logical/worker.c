@@ -255,7 +255,7 @@ slot_fill_defaults(LogicalRepRelMapEntry *rel, EState *estate,
 	{
 		Expr	   *defexpr;
 
-		if (TupleDescAttr(desc, attnum)->attisdropped)
+		if (TupleDescAttr(desc, attnum)->attisdropped || TupleDescAttr(desc, attnum)->attgenerated)
 			continue;
 
 		if (rel->attrmap[attnum] >= 0)
@@ -1695,7 +1695,6 @@ ApplyWorkerMain(Datum main_arg)
 		RepOriginId originid;
 		TimeLineID	startpointTLI;
 		char	   *err;
-		int			server_version;
 
 		myslotname = MySubscription->slotname;
 
@@ -1729,8 +1728,7 @@ ApplyWorkerMain(Datum main_arg)
 		 * We don't really use the output identify_system for anything but it
 		 * does some initializations on the upstream so let's still call it.
 		 */
-		(void) walrcv_identify_system(wrconn, &startpointTLI,
-									  &server_version);
+		(void) walrcv_identify_system(wrconn, &startpointTLI);
 
 	}
 

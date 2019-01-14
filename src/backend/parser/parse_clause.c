@@ -213,6 +213,10 @@ setTargetTable(ParseState *pstate, RangeVar *relation,
 	pstate->p_target_relation = parserOpenTable(pstate, relation,
 												RowExclusiveLock);
 
+	if (pstate->p_target_relation->rd_att->constr &&
+		pstate->p_target_relation->rd_att->constr->has_generated_virtual)
+		pstate->p_hasGeneratedVirtual = true;
+
 	/*
 	 * Now build an RTE.
 	 */

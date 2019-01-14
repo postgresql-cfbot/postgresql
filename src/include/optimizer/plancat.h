@@ -57,4 +57,6 @@ extern Selectivity join_selectivity(PlannerInfo *root,
 
 extern bool has_row_triggers(PlannerInfo *root, Index rti, CmdType event);
 
+extern bool has_stored_generated_columns(PlannerInfo *root, Index rti);
+
 #endif							/* PLANCAT_H */

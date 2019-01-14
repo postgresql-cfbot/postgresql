@@ -514,6 +514,14 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("grouping operations are not allowed in partition key expressions");
 
 			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+
+			if (isAgg)
+				err = _("aggregate functions are not allowed in column generation expressions");
+			else
+				err = _("grouping operations are not allowed in column generation expressions");
+
+			break;
 
 		case EXPR_KIND_CALL_ARGUMENT:
 			if (isAgg)
@@ -901,6 +909,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_CALL_ARGUMENT:
 			err = _("window functions are not allowed in CALL arguments");
+			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+			err = _("window functions are not allowed in column generation expressions");
 			break;
 
 			/*

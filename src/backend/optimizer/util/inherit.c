@@ -264,6 +264,10 @@ expand_partitioned_rtentry(PlannerInfo *root, RangeTblEntry *parentrte,
 	if (!root->partColsUpdated)
 		root->partColsUpdated =
 			has_partition_attrs(parentrel, parentrte->updatedCols, NULL);
+	/*
+	 * There shouldn't be any generated columns in the partition key.
+	 */
+	Assert(!has_partition_attrs(parentrel, parentrte->extraUpdatedCols, NULL));
 
 	/* First expand the partitioned table itself. */
 	expand_single_inheritance_child(root, parentrte, parentRTindex, parentrel,
@@ -404,6 +408,8 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 														 appinfo->translated_vars);
 			childrte->updatedCols = translate_col_privs(parentrte->updatedCols,
 														appinfo->translated_vars);
+			childrte->extraUpdatedCols = translate_col_privs(parentrte->extraUpdatedCols,
+															 appinfo->translated_vars);
 		}
 	}
 

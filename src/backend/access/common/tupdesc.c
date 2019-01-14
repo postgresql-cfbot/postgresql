@@ -132,6 +132,7 @@ CreateTupleDescCopy(TupleDesc tupdesc)
 		att->atthasdef = false;
 		att->atthasmissing = false;
 		att->attidentity = '\0';
+		att->attgenerated = '\0';
 	}
 
 	/* We can copy the tuple type identification, too */
@@ -166,6 +167,8 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 		TupleConstr *cpy = (TupleConstr *) palloc0(sizeof(TupleConstr));
 
 		cpy->has_not_null = constr->has_not_null;
+		cpy->has_generated_stored = constr->has_generated_stored;
+		cpy->has_generated_virtual = constr->has_generated_virtual;
 
 		if ((cpy->num_defval = constr->num_defval) > 0)
 		{
@@ -248,6 +251,7 @@ TupleDescCopy(TupleDesc dst, TupleDesc src)
 		att->atthasdef = false;
 		att->atthasmissing = false;
 		att->attidentity = '\0';
+		att->attgenerated = '\0';
 	}
 	dst->constr = NULL;
 
@@ -301,6 +305,7 @@ TupleDescCopyEntry(TupleDesc dst, AttrNumber dstAttno,
 	dstAtt->atthasdef = false;
 	dstAtt->atthasmissing = false;
 	dstAtt->attidentity = '\0';
+	dstAtt->attgenerated = '\0';
 }
 
 /*
@@ -457,6 +462,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attidentity != attr2->attidentity)
 			return false;
+		if (attr1->attgenerated != attr2->attgenerated)
+			return false;
 		if (attr1->attisdropped != attr2->attisdropped)
 			return false;
 		if (attr1->attislocal != attr2->attislocal)
@@ -476,6 +483,10 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 		if (constr2 == NULL)
 			return false;
 		if (constr1->has_not_null != constr2->has_not_null)
+			return false;
+		if (constr1->has_generated_stored != constr2->has_generated_stored)
+			return false;
+		if (constr1->has_generated_virtual != constr2->has_generated_virtual)
 			return false;
 		n = constr1->num_defval;
 		if (n != (int) constr2->num_defval)
@@ -639,6 +650,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->atthasdef = false;
 	att->atthasmissing = false;
 	att->attidentity = '\0';
+	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
@@ -698,6 +710,7 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	att->atthasdef = false;
 	att->atthasmissing = false;
 	att->attidentity = '\0';
+	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
@@ -854,6 +867,8 @@ BuildDescForRelation(List *schema)
 		TupleConstr *constr = (TupleConstr *) palloc0(sizeof(TupleConstr));
 
 		constr->has_not_null = true;
+		constr->has_generated_stored = false;
+		constr->has_generated_virtual = false;
 		constr->defval = NULL;
 		constr->missing = NULL;
 		constr->num_defval = 0;

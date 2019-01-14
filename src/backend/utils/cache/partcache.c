@@ -28,6 +28,7 @@
 #include "optimizer/clauses.h"
 #include "optimizer/planner.h"
 #include "partitioning/partbounds.h"
+#include "rewrite/rewriteHandler.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -126,6 +127,8 @@ RelationBuildPartitionKey(Relation relation)
 		exprString = TextDatumGetCString(datum);
 		expr = stringToNode(exprString);
 		pfree(exprString);
+
+		expr = expand_generated_columns_in_expr(expr, relation);
 
 		/*
 		 * Run the expressions through const-simplification since the planner

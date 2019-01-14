@@ -621,6 +621,15 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 					 parser_errposition(pstate, location)));
 	}
 
+	if (pstate->p_expr_kind == EXPR_KIND_GENERATED_COLUMN &&
+		func_volatile(funcid) != PROVOLATILE_IMMUTABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot use function %s in column generation expression",
+						func_signature_string(funcname, nargs, argnames, actual_arg_types)),
+				 errdetail("Functions used in a column generation expression must be immutable."),
+				 parser_errposition(pstate, location)));
+
 	/*
 	 * If there are default arguments, we have to include their types in
 	 * actual_arg_types for the purpose of checking generic type consistency.
@@ -2369,6 +2378,9 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			break;
 		case EXPR_KIND_CALL_ARGUMENT:
 			err = _("set-returning functions are not allowed in CALL arguments");
+			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+			err = _("set-returning functions are not allowed in column generation expressions");
 			break;
 
 			/*

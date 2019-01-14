@@ -44,6 +44,8 @@ typedef struct tupleConstr
 	uint16		num_defval;
 	uint16		num_check;
 	bool		has_not_null;
+	bool		has_generated_stored;
+	bool		has_generated_virtual;
 } TupleConstr;
 
 /*

@@ -453,6 +453,7 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->hasAggs = pstate->p_hasAggs;
 	if (pstate->p_hasAggs)
 		parseCheckAggregates(pstate, qry);
+	qry->hasGeneratedVirtual = pstate->p_hasGeneratedVirtual;
 
 	assign_query_collations(pstate, qry);
 
@@ -880,6 +881,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasGeneratedVirtual = pstate->p_hasGeneratedVirtual;
 
 	assign_query_collations(pstate, qry);
 
@@ -1321,6 +1323,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasAggs = pstate->p_hasAggs;
 	if (pstate->p_hasAggs || qry->groupClause || qry->groupingSets || qry->havingQual)
 		parseCheckAggregates(pstate, qry);
+	qry->hasGeneratedVirtual = pstate->p_hasGeneratedVirtual;
 
 	foreach(l, stmt->lockingClause)
 	{
@@ -1793,6 +1796,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasAggs = pstate->p_hasAggs;
 	if (pstate->p_hasAggs || qry->groupClause || qry->groupingSets || qry->havingQual)
 		parseCheckAggregates(pstate, qry);
+	qry->hasGeneratedVirtual = pstate->p_hasGeneratedVirtual;
 
 	foreach(l, lockingClause)
 	{
@@ -2279,6 +2283,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasGeneratedVirtual = pstate->p_hasGeneratedVirtual;
 
 	assign_query_collations(pstate, qry);
 
@@ -2296,6 +2301,7 @@ transformUpdateTargetList(ParseState *pstate, List *origTlist)
 	RangeTblEntry *target_rte;
 	ListCell   *orig_tl;
 	ListCell   *tl;
+	TupleDesc	tupdesc = pstate->p_target_relation->rd_att;
 
 	tlist = transformTargetList(pstate, origTlist,
 								EXPR_KIND_UPDATE_SOURCE);
@@ -2353,6 +2359,33 @@ transformUpdateTargetList(ParseState *pstate, List *origTlist)
 	}
 	if (orig_tl != NULL)
 		elog(ERROR, "UPDATE target count mismatch --- internal error");
+
+	/*
+	 * Record in extraUpdatedCols generated columns referencing updated base
+	 * columns.
+	 */
+	if (tupdesc->constr &&
+		(tupdesc->constr->has_generated_stored ||
+		 tupdesc->constr->has_generated_virtual))
+	{
+		for (int i = 0; i < tupdesc->constr->num_defval; i++)
+		{
+			AttrDefault defval = tupdesc->constr->defval[i];
+			Node	   *expr;
+			Bitmapset  *attrs_used = NULL;
+
+			/* skip if not generated column */
+			if (!TupleDescAttr(tupdesc, defval.adnum - 1)->attgenerated)
+				continue;
+
+			expr = stringToNode(defval.adbin);
+			pull_varattnos(expr, 1, &attrs_used);
+
+			if (bms_overlap(target_rte->updatedCols, attrs_used))
+				target_rte->extraUpdatedCols = bms_add_member(target_rte->extraUpdatedCols,
+															  defval.adnum - FirstLowInvalidHeapAttributeNumber);
+		}
+	}
 
 	return tlist;
 }

@@ -2381,6 +2381,7 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_BITMAPSET_FIELD(selectedCols);
 	COPY_BITMAPSET_FIELD(insertedCols);
 	COPY_BITMAPSET_FIELD(updatedCols);
+	COPY_BITMAPSET_FIELD(extraUpdatedCols);
 	COPY_NODE_FIELD(securityQuals);
 
 	return newnode;
@@ -2878,6 +2879,7 @@ _copyColumnDef(const ColumnDef *from)
 	COPY_NODE_FIELD(cooked_default);
 	COPY_SCALAR_FIELD(identity);
 	COPY_NODE_FIELD(identitySequence);
+	COPY_SCALAR_FIELD(generated);
 	COPY_NODE_FIELD(collClause);
 	COPY_SCALAR_FIELD(collOid);
 	COPY_NODE_FIELD(constraints);
@@ -2901,6 +2903,7 @@ _copyConstraint(const Constraint *from)
 	COPY_NODE_FIELD(raw_expr);
 	COPY_STRING_FIELD(cooked_expr);
 	COPY_SCALAR_FIELD(generated_when);
+	COPY_SCALAR_FIELD(generated_kind);
 	COPY_NODE_FIELD(keys);
 	COPY_NODE_FIELD(including);
 	COPY_NODE_FIELD(exclusions);
@@ -3006,6 +3009,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(hasModifyingCTE);
 	COPY_SCALAR_FIELD(hasForUpdate);
 	COPY_SCALAR_FIELD(hasRowSecurity);
+	COPY_SCALAR_FIELD(hasGeneratedVirtual);
 	COPY_NODE_FIELD(cteList);
 	COPY_NODE_FIELD(rtable);
 	COPY_NODE_FIELD(jointree);

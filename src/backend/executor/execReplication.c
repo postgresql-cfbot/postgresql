@@ -19,6 +19,7 @@
 #include "access/xact.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/nodeModifyTable.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
@@ -417,6 +418,14 @@ ExecSimpleRelationInsert(EState *estate, TupleTableSlot *slot)
 	{
 		List	   *recheckIndexes = NIL;
 
+		/* Compute stored generated columns */
+		if (rel->rd_att->constr &&
+			rel->rd_att->constr->has_generated_stored)
+		{
+			if (ExecComputeStoredGenerated(estate, slot))
+				tuple = ExecFetchSlotHeapTuple(slot, true, NULL);
+		}
+
 		/* Check the constraints of the tuple */
 		if (rel->rd_att->constr)
 			ExecConstraints(resultRelInfo, slot, estate);
@@ -488,6 +497,14 @@ ExecSimpleRelationUpdate(EState *estate, EPQState *epqstate,
 	if (!skip_tuple)
 	{
 		List	   *recheckIndexes = NIL;
+
+		/* Compute stored generated columns */
+		if (rel->rd_att->constr &&
+			rel->rd_att->constr->has_generated_stored)
+		{
+			if (ExecComputeStoredGenerated(estate, slot))
+				tuple = ExecFetchSlotHeapTuple(slot, true, NULL);
+		}
 
 		/* Check the constraints of the tuple */
 		if (rel->rd_att->constr)

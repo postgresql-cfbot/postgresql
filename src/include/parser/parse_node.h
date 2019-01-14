@@ -69,7 +69,8 @@ typedef enum ParseExprKind
 	EXPR_KIND_TRIGGER_WHEN,		/* WHEN condition in CREATE TRIGGER */
 	EXPR_KIND_POLICY,			/* USING or WITH CHECK expr in policy */
 	EXPR_KIND_PARTITION_EXPRESSION, /* PARTITION BY expression */
-	EXPR_KIND_CALL_ARGUMENT		/* procedure argument in CALL */
+	EXPR_KIND_CALL_ARGUMENT,	/* procedure argument in CALL */
+	EXPR_KIND_GENERATED_COLUMN,	/* generation expression for a column */
 } ParseExprKind;
 
 
@@ -202,6 +203,7 @@ struct ParseState
 	bool		p_hasTargetSRFs;
 	bool		p_hasSubLinks;
 	bool		p_hasModifyingCTE;
+	bool		p_hasGeneratedVirtual;
 
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 

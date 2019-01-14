@@ -68,6 +68,12 @@ CREATE TABLE trigger_test (
 -- Make certain dropped attributes are handled correctly
 ALTER TABLE trigger_test DROP dropme;
 
+CREATE TABLE trigger_test_generated (
+	i int,
+	j int GENERATED ALWAYS AS (i * 2) VIRTUAL,
+	k int GENERATED ALWAYS AS (i * 2) STORED
+);
+
 CREATE VIEW trigger_test_view AS SELECT i, v FROM trigger_test;
 
 CREATE FUNCTION trigger_data() returns trigger language pltcl as $_$
@@ -121,6 +127,13 @@ FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
 CREATE TRIGGER statement_trigger
 BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON trigger_test
 FOR EACH STATEMENT EXECUTE PROCEDURE trigger_data(42,'statement trigger');
+
+CREATE TRIGGER show_trigger_data_trig_before
+BEFORE INSERT OR UPDATE OR DELETE ON trigger_test_generated
+FOR EACH ROW EXECUTE PROCEDURE trigger_data();
+CREATE TRIGGER show_trigger_data_trig_after
+AFTER INSERT OR UPDATE OR DELETE ON trigger_test_generated
+FOR EACH ROW EXECUTE PROCEDURE trigger_data();
 
 CREATE TRIGGER show_trigger_data_view_trig
 INSTEAD OF INSERT OR UPDATE OR DELETE ON trigger_test_view

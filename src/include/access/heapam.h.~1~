@@ -101,8 +101,6 @@ extern Relation heap_openrv_extended(const RangeVar *relation,
 typedef struct HeapScanDescData *HeapScanDesc;
 typedef struct ParallelHeapScanDescData *ParallelHeapScanDesc;
 
-extern double target_index_deletion_factor;
-
 /*
  * HeapScanIsValid
  *		True iff the heap scan is valid.

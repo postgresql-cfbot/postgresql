@@ -2075,13 +2075,6 @@ if (!triggered)
    </para>
 
    <para>
-    Note that even when <varname>hot_standby_feedback</varname> is on,
-    <command>VACUUM</command> may take <literal>ACCESS EXCLUSIVE</literal>,
-    which is WAL-logged and conflicts with read-only queries on standby.
-    This problem is fixed in <productname>PostgreSQL</productname> 12.
-   </para>
-
-   <para>
     Another option is to increase <xref linkend="guc-vacuum-defer-cleanup-age"/>
     on the primary server, so that dead rows will not be cleaned up as quickly
     as they normally would be.  This will allow more time for queries to

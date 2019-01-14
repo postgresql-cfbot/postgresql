@@ -18,6 +18,7 @@
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
 #include "catalog/pg_default_acl_d.h"
+#include "catalog/pg_index.h"
 #include "fe_utils/string_utils.h"
 
 #include "common.h"
@@ -44,6 +45,9 @@ static bool describeOneTSConfig(const char *oid, const char *nspname,
 					const char *pnspname, const char *prsname);
 static void printACLColumn(PQExpBuffer buf, const char *colname);
 static bool listOneExtensionContents(const char *extname, const char *oid);
+static bool describeOneIndexColumnProperties(const char *oid, const char *nspname,
+								 const char *idxname, const char *amname,
+								 const char *tabname);
 
 
 /*----------------
@@ -5610,4 +5614,567 @@ printACLColumn(PQExpBuffer buf, const char *colname)
 		appendPQExpBuffer(buf,
 						  "pg_catalog.array_to_string(%s, '\\n') AS \"%s\"",
 						  colname, gettext_noop("Access privileges"));
+}
+
+/*
+ * \dAp
+ * Describes access method properties.
+ *
+ * Takes an optional regexp to select particular access methods
+ */
+bool
+describeAccessMethodProperties(const char *pattern)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, false, false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  pset.sversion >= 90600 ?
+					  "SELECT a.amname AS \"%s\",\n"
+					  "  pg_catalog.pg_indexam_has_property(a.oid, 'can_order') AS \"%s\",\n"
+					  "  pg_catalog.pg_indexam_has_property(a.oid, 'can_unique') AS \"%s\",\n"
+					  "  pg_catalog.pg_indexam_has_property(a.oid, 'can_multi_col') AS \"%s\",\n"
+					  "  pg_catalog.pg_indexam_has_property(a.oid, 'can_exclude') AS \"%s\",\n"
+					  :
+					  "SELECT a.amname AS \"%s\",\n"
+					  "  a.amcanorder AS \"%s\",\n"
+					  "  a.amcanunique AS \"%s\",\n"
+					  "  a.amcanmulticol AS \"%s\",\n"
+					  "  a.amgettuple <> 0 AS \"%s\",\n",
+					  gettext_noop("AM"),
+					  gettext_noop("Can order"),
+					  gettext_noop("Support unique indexes"),
+					  gettext_noop("Support indexes with multiple columns"),
+					  gettext_noop("Support exclusion constraints"));
+
+	appendPQExpBuffer(&buf,
+					  pset.sversion >= 110000
+						? "pg_catalog.pg_indexam_has_property(a.oid, 'can_include') AS \"%s\""
+						: "FALSE AS \"%s\"",
+					  gettext_noop("Can include non-key columns"));
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_am a\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false, false,
+						  NULL, "amname", NULL, NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("Access method properties");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dAfo
+ * Lists operators associated with access method operator families.
+ *
+ * Takes an optional regexp to select particular access methods
+ * and operator families
+ */
+bool
+listFamilyClassOperators(const char *access_method_pattern,
+						 const char *family_pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	bool		have_where = false;
+
+	static const bool translate_columns[] = {false, false, false, false, false,
+											 false, false, true, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT DISTINCT\n"
+					  "  am.amname AS \"%s\",\n"
+					  "  nsf.nspname AS \"%s\",\n"
+					  "  of.opfname AS \"%s\",\n"
+					  "  pg_catalog.format_type(o.amoplefttype, NULL) AS \"%s\",\n"
+					  "  pg_catalog.format_type(o.amoprighttype, NULL) AS \"%s\",\n"
+					  "  CASE WHEN pg_catalog.pg_operator_is_visible(op.oid) \n"
+					  "    THEN op.oprname::pg_catalog.text \n"
+					  "    ELSE o.amopopr::pg_catalog.regoper::pg_catalog.text \n"
+					  "  END AS \"%s\"\n",
+					  gettext_noop("AM"),
+					  gettext_noop("Opfamily Schema"),
+					  gettext_noop("Opfamily Name"),
+					  gettext_noop("Left type"),
+					  gettext_noop("Right type"),
+					  gettext_noop("Operator"));
+
+	if (verbose)
+		appendPQExpBuffer(&buf,
+					  ", o.amopstrategy AS \"%s\",\n"
+					  "  CASE o.amoppurpose\n"
+					  "    WHEN 'o' THEN '%s'\n"
+					  "    WHEN 's' THEN '%s'\n"
+					  "  END AS \"%s\",\n"
+					  "  ofs.opfname AS \"%s\"\n",
+					  gettext_noop("Strategy"),
+					  gettext_noop("ordering"),
+					  gettext_noop("search"),
+					  gettext_noop("Purpose"),
+					  gettext_noop("Sort family"));
+	appendPQExpBuffer(&buf,
+					  "FROM pg_catalog.pg_amop o\n"
+					  "  LEFT JOIN pg_catalog.pg_operator op ON op.oid = o.amopopr\n"
+					  "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = o.amopfamily\n"
+					  "  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod AND am.oid = o.amopmethod\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid\n");
+	if (verbose)
+		appendPQExpBuffer(&buf,
+					  "  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n");
+
+	if (access_method_pattern)
+		have_where = processSQLNamePattern(pset.db, &buf, access_method_pattern,
+										   false, false, NULL, "am.amname",
+										   NULL, NULL);
+
+	if (family_pattern)
+		processSQLNamePattern(pset.db, &buf, family_pattern, have_where, false,
+							  "nsf.nspname", "of.opfname", NULL, NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2, 3, 4, 5, 6;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List operators of family related to access method");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dAfp
+ * Lists procedures associated with access method operator families.
+ *
+ * Takes an optional regexp to select particular access methods
+ * and operator families
+ */
+bool
+listOperatorFamilyProcedures(const char *access_method_pattern,
+							 const char *family_pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	bool		have_where = false;
+	static const bool translate_columns[] = {false, false, false, false, false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT DISTINCT\n"
+					  "  am.amname AS \"%s\",\n"
+					  "  ns.nspname AS \"%s\",\n"
+					  "  of.opfname AS \"%s\",\n"
+					  "  pg_catalog.format_type(ap.amproclefttype, NULL) AS \"%s\",\n"
+					  "  pg_catalog.format_type(ap.amprocrighttype, NULL) AS \"%s\",\n"
+					  "  ap.amprocnum AS \"%s\"\n",
+					  gettext_noop("AM"),
+					  gettext_noop("Family schema"),
+					  gettext_noop("Family name"),
+					  gettext_noop("Left"),
+					  gettext_noop("Right"),
+					  gettext_noop("Number"));
+	if (verbose)
+		appendPQExpBuffer(&buf,
+					  ", ap.amproc::pg_catalog.regproc::pg_catalog.text AS \"%s\"\n",
+					  gettext_noop("Proc name"));
+	appendPQExpBuffer(&buf,
+					  "FROM pg_catalog.pg_amproc ap\n"
+					  "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = ap.amprocfamily\n"
+					  "  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace ns ON of.opfnamespace = ns.oid\n");
+
+	if (access_method_pattern)
+		have_where = processSQLNamePattern(pset.db, &buf, access_method_pattern,
+										   false, false, NULL, "am.amname",
+										   NULL, NULL);
+	if (family_pattern)
+		processSQLNamePattern(pset.db, &buf, family_pattern, have_where, false,
+							  "ns.nspname", "of.opfname", NULL, NULL);
+
+	appendPQExpBufferStr(&buf,
+						 "ORDER BY 1, 2, 3, 4, 5, 6;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of operator family procedures");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dAoc
+ * List index access method operator classes.
+ * Takes an optional regexp to select particular access method and operator class.
+ */
+bool
+describeAccessMethodOperatorClasses(const char *access_method_pattern,
+									const char *opclass_pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	bool		have_where = false;
+	static const bool translate_columns[] = {false, false, false, false, false,
+											 false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT"
+					  "  am.amname AS \"%s\",\n"
+					  "  n.nspname AS \"%s\",\n"
+					  "  c.opcname AS \"%s\",\n",
+					  gettext_noop("Access method"),
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"));
+	if (verbose)
+		appendPQExpBuffer(&buf,
+						  "  pg_catalog.pg_get_userbyid(c.opcowner) AS \"%s\",\n",
+						  gettext_noop("Owner"));
+	appendPQExpBuffer(&buf,
+					  "  (CASE WHEN pg_catalog.pg_opfamily_is_visible(of.oid) THEN '' ELSE ofn.nspname || '.' END) || of.opfname AS \"%s\",\n"
+					  "  c.opcintype::pg_catalog.regtype AS \"%s\"\n",
+					  gettext_noop("Family"),
+					  gettext_noop("Indexed type"));
+	if (verbose)
+		appendPQExpBuffer(&buf,
+					  ", c.opcdefault AS \"%s\",\n"
+					  "  (CASE WHEN c.opckeytype = 0 OR c.opckeytype = c.opcintype\n"
+					  "    THEN NULL\n"
+					  "    ELSE c.opckeytype\n"
+					  "  END)::pg_catalog.regtype AS \"%s\"\n",
+					  gettext_noop("Is default"),
+					  gettext_noop("Stored type"));
+	appendPQExpBuffer(&buf,
+					  "FROM pg_catalog.pg_opclass c\n"
+					  "  LEFT JOIN pg_catalog.pg_am am on am.oid = c.opcmethod\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.opcnamespace\n"
+					  "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = c.opcfamily\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace ofn ON ofn.oid = of.opfnamespace\n");
+
+	if (access_method_pattern)
+		have_where = processSQLNamePattern(pset.db, &buf, access_method_pattern,
+										   false, false, NULL, "am.amname", NULL, NULL);
+	if (opclass_pattern)
+		processSQLNamePattern(pset.db, &buf, opclass_pattern, have_where, false,
+							  "n.nspname", "c.opcname", NULL, NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1,2,3;");
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("Index access method operator classes");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dip
+ * Describes index properties.
+ *
+ * Takes an optional regexp to select particular index.
+ */
+bool
+describeIndexProperties(const char *pattern, bool showSystem)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	static const bool translate_columns[] = {false, false, false, false, false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT"
+					  "  n.nspname AS \"%s\",\n"
+					  "  c.relname AS \"%s\",\n"
+					  "  am.amname AS \"%s\",\n",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Access method"));
+	appendPQExpBuffer(&buf,
+					pset.sversion >= 90600 ?
+					  "  pg_catalog.pg_index_has_property(c.oid, 'clusterable') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_has_property(c.oid, 'index_scan') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_has_property(c.oid, 'bitmap_scan')  AS \"%s\",\n"
+					  "  pg_catalog.pg_index_has_property(c.oid, 'backward_scan') AS \"%s\"\n"
+					  :
+					  "  am.amclusterable AS \"%s\",\n"
+					  "  am.amgettuple <> 0 AS \"%s\",\n"
+					  "  am.amgetbitmap <> 0 AS \"%s\",\n"
+					  "  am.amcanbackward AS \"%s\"\n",
+					  gettext_noop("Clusterable"),
+					  gettext_noop("Index scan"),
+					  gettext_noop("Bitmap scan"),
+					  gettext_noop("Backward scan"));
+	appendPQExpBufferStr(&buf,
+					  "FROM pg_catalog.pg_class c\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n"
+					  "  LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam\n"
+					  "WHERE c.relkind='i'\n"
+					  "  AND n.nspname !~ 'pg_toast'\n");
+
+	if (!showSystem && !pattern)
+		appendPQExpBufferStr(&buf,
+							 "  AND n.nspname <> 'pg_catalog'\n"
+							 "  AND n.nspname <> 'information_schema'\n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, true, false,
+						  "n.nspname", "c.relname", NULL, NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("Index properties");
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dicp
+ * Describes index index column properties.
+ *
+ * Takes an optional regexp to select particular index.
+ */
+bool
+describeIndexColumnProperties(const char *index_pattern, bool showSystem)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	int			i;
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT DISTINCT c.oid,\n"
+					  "  n.nspname,\n"
+					  "  c.relname,\n"
+					  "  am.amname,\n"
+					  "  c2.relname\n"
+					  "FROM pg_catalog.pg_class c\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = relnamespace\n"
+					  "  LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam\n"
+					  "  LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid\n"
+					  "  LEFT JOIN pg_catalog.pg_class c2 ON i.indrelid = c2.oid\n");
+
+	appendPQExpBufferStr(&buf, "WHERE c.relkind='i'\n");
+
+	if (!showSystem && !index_pattern)
+		appendPQExpBufferStr(&buf, "AND n.nspname <> 'pg_catalog'\n"
+							 "AND n.nspname <> 'information_schema'\n");
+
+	processSQLNamePattern(pset.db, &buf, index_pattern, true, false,
+						  "n.nspname", "c.relname", NULL,
+						  "pg_catalog.pg_table_is_visible(c.oid)");
+
+	appendPQExpBufferStr(&buf, "ORDER BY 2, 3;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	if (PQntuples(res) == 0)
+	{
+		if (!pset.quiet)
+		{
+			if (index_pattern)
+				psql_error("Did not find any index named \"%s\"\n",
+						   index_pattern);
+			else
+				psql_error("Did not find any relations.\n");
+		}
+		PQclear(res);
+		return false;
+	}
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		const char *oid = PQgetvalue(res, i, 0);
+		const char *nspname = PQgetvalue(res, i, 1);
+		const char *idxname = PQgetvalue(res, i, 2);
+		const char *amname = PQgetvalue(res, i, 3);
+		const char *tabname = PQgetvalue(res, i, 4);
+
+		if (!describeOneIndexColumnProperties(oid, nspname, idxname, amname,
+											  tabname))
+		{
+			PQclear(res);
+			return false;
+		}
+		if (cancel_pressed)
+		{
+			PQclear(res);
+			return false;
+		}
+	}
+
+	PQclear(res);
+	return true;
+}
+
+static bool
+describeOneIndexColumnProperties(const char *oid,
+								 const char *nspname,
+								 const char *idxname,
+								 const char *amname,
+								 const char *tabname)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	char	   *footers[3] = {NULL, NULL};
+	static const bool translate_columns[] = {false, false, false, false, false,
+											 false, false, false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+				  "SELECT\n"
+				  "  a.attname AS \"%s\",\n"
+				  "  pg_catalog.pg_get_indexdef(i.indexrelid, a.attnum, true) AS \"%s\",\n"
+				  "  CASE WHEN pg_catalog.pg_opclass_is_visible(o.oid) THEN '' ELSE n.nspname || '.' END || o.opcname AS \"%s\",\n",
+				  gettext_noop("Column name"),
+				  gettext_noop("Expr"),
+				  gettext_noop("Opclass"));
+
+	if (pset.sversion >= 90600)
+		appendPQExpBuffer(&buf,
+					  "  CASE\n"
+					  "    WHEN pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'orderable') = true \n"
+					  "    THEN pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'asc')\n"
+					  "    ELSE NULL"
+					  "  END AS \"%s\","
+					  "  CASE\n"
+					  "    WHEN pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'orderable') = true \n"
+					  "    THEN pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'nulls_first')\n"
+					  "    ELSE NULL"
+					  "  END AS \"%s\","
+					  "  pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'orderable') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'distance_orderable') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'returnable') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'search_array') AS \"%s\",\n"
+					  "  pg_catalog.pg_index_column_has_property(c.oid, a.attnum, 'search_nulls') AS \"%s\"\n",
+					  gettext_noop("ASC"),
+					  gettext_noop("Nulls first"),
+					  gettext_noop("Orderable"),
+					  gettext_noop("Distance orderable"),
+					  gettext_noop("Returnable"),
+					  gettext_noop("Search array"),
+					  gettext_noop("Search nulls"));
+	else
+		appendPQExpBuffer(&buf,
+					  "  CASE WHEN am.amcanorder THEN (i.indoption[a.attnum - 1] & %d) =  0 ELSE NULL END AS \"%s\",\n" /* INDOPTION_DESC */
+					  "  CASE WHEN am.amcanorder THEN (i.indoption[a.attnum - 1] & %d) <> 0 ELSE NULL END AS \"%s\",\n" /* INDOPTION_NULLS_FIRST */
+					  "  am.amcanorder AS \"%s\",\n"
+					  "  am.amcanorderbyop AS \"%s\",\n"
+					  "  am.amsearcharray AS \"%s\",\n"
+					  "  am.amsearchnulls AS \"%s\"\n",
+					  INDOPTION_DESC,
+					  gettext_noop("ASC"),
+					  INDOPTION_NULLS_FIRST,
+					  gettext_noop("Nulls first"),
+					  gettext_noop("Orderable"),
+					  gettext_noop("Distance orderable"),
+					  gettext_noop("Search array"),
+					  gettext_noop("Search nulls"));
+
+	appendPQExpBuffer(&buf,
+					  "FROM pg_catalog.pg_class c\n"
+					  "  LEFT JOIN pg_catalog.pg_index i ON i.indexrelid = c.oid\n"
+					  "  LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid\n"
+					  "  LEFT JOIN pg_catalog.pg_opclass o ON o.oid = (i.indclass::pg_catalog.oid[])[a.attnum - 1]\n"
+					  "  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = o.opcnamespace\n");
+	if (pset.sversion < 90600)
+		appendPQExpBuffer(&buf,
+					  "  LEFT JOIN pg_catalog.pg_am am ON am.oid = c.relam\n");
+	appendPQExpBuffer(&buf,
+					  "WHERE c.oid = %s\n"
+					  "ORDER BY a.attnum",
+					  oid);
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+	if (PQntuples(res) == 0)
+	{
+		PQclear(res);
+		return true;
+	}
+
+	myopt.nullPrint = NULL;
+	myopt.title = psprintf(_("Index %s.%s"), nspname, idxname);
+	footers[0] = psprintf(_("Table: %s"), tabname);
+	footers[1] = psprintf(_("Access method: %s"), amname);
+	myopt.footers = footers;
+	myopt.topt.default_footer = false;
+	myopt.translate_header = true;
+	myopt.translate_columns = translate_columns;
+	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+	PQclear(res);
+	return true;
 }

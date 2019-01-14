@@ -111,4 +111,28 @@ bool		describePublications(const char *pattern);
 /* \dRs */
 bool		describeSubscriptions(const char *pattern, bool verbose);
 
+/* \dAfp */
+extern bool listOperatorFamilyProcedures(const char *access_method_pattern,
+										 const char *family_pattern,
+										 bool verbose);
+
+/* \dAfo */
+extern bool listFamilyClassOperators(const char *accessMethod_pattern,
+									 const char *family_pattern, bool verbose);
+
+/* \dAp */
+extern bool describeAccessMethodProperties(const char *pattern);
+
+/* \dAoc */
+extern bool describeAccessMethodOperatorClasses(const char *access_method_pattern,
+												const char *opclass_pattern,
+												bool verbose);
+
+/* \dip */
+extern bool describeIndexProperties(const char *pattern, bool showSystem);
+
+/* \dicp */
+extern bool describeIndexColumnProperties(const char *indexPattern,
+										  bool showSystem);
+
 #endif							/* DESCRIBE_H */

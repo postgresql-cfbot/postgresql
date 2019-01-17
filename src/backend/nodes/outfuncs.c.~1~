@@ -3419,8 +3419,6 @@ _outConstraint(StringInfo str, const Constraint *node)
 	WRITE_BOOL_FIELD(deferrable);
 	WRITE_BOOL_FIELD(initdeferred);
 	WRITE_LOCATION_FIELD(location);
-	WRITE_BOOL_FIELD(was_deferrable_set);
-	WRITE_BOOL_FIELD(was_initdeferred_set);
 
 	appendStringInfoString(str, " :contype ");
 	switch (node->contype)

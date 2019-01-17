@@ -82,6 +82,7 @@ extern void createForeignKeyTriggers(Relation rel, Oid refRelOid,
 
 extern void register_on_commit_action(Oid relid, OnCommitAction action);
 extern void remove_on_commit_action(Oid relid);
+extern bool every_on_commit_is_on_commit_drop(void);
 
 extern void PreCommit_on_commit_actions(void);
 extern void AtEOXact_on_commit_actions(bool isCommit);

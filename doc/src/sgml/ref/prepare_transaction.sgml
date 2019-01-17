@@ -97,8 +97,9 @@ PREPARE TRANSACTION <replaceable class="parameter">transaction_id</replaceable>
   </para>
 
   <para>
-   It is not currently allowed to <command>PREPARE</command> a transaction that
-   has executed any operations involving temporary tables,
+   It is not currently allowed to <command>PREPARE</command> a transaction
+   that has executed any operations involving temporary tables (except when
+   all involved temporary tables are <literal>ON COMMIT DROP</literal>),
    created any cursors <literal>WITH HOLD</literal>, or executed
    <command>LISTEN</command>, <command>UNLISTEN</command>, or
    <command>NOTIFY</command>.

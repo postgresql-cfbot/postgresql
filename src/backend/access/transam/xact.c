@@ -2272,11 +2272,19 @@ PrepareTransaction(void)
 	 * XXX In principle this could be relaxed to allow some useful special
 	 * cases, such as a temp table created and dropped all within the
 	 * transaction.  That seems to require much more bookkeeping though.
+	 *
+	 * A special case of this situation is using ON COMMIT DROP, where the
+	 * call to PreCommit_on_commit_actions() is then responsible for
+	 * performing the DROP table within the transaction and before we get
+	 * here.
 	 */
-	if ((MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL))
+	if ((MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL)
+		&& !every_on_commit_is_on_commit_drop())
+	{
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot PREPARE a transaction that has operated on temporary tables")));
+				 errmsg("cannot PREPARE a transaction that has operated on temporary tables that are not ON COMMIT DROP")));
+	}
 
 	/*
 	 * Likewise, don't allow PREPARE after pg_export_snapshot.  This could be

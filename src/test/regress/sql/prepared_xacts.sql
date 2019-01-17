@@ -156,3 +156,64 @@ SELECT gid FROM pg_prepared_xacts;
 DROP TABLE pxtest2;
 DROP TABLE pxtest3;  -- will still be there if prepared xacts are disabled
 DROP TABLE pxtest4;
+
+-- we should be able to prepare a transaction with on commit drop temporary
+-- tables
+begin;
+create temp table pxtesttemp(id serial, f1 text) on commit drop;
+insert into pxtesttemp(f1) values('regress'), ('temp') returning *;
+prepare transaction 'regress temp';
+commit prepared 'regress temp';
+
+-- There should be no prepared transactions
+SELECT gid FROM pg_prepared_xacts;
+
+-- The temporary table should be gone now
+SELECT relname FROM pg_class WHERE relname = 'pxtesttemp';
+
+-- other kinds of temporary tables are not supported though.
+begin;
+create temp table pxtesttemp(id serial, f1 text) on commit delete rows;
+insert into pxtesttemp(f1) values('regress'), ('temp') returning *;
+prepare transaction 'regress temp';
+
+-- There should be no prepared transactions
+SELECT gid FROM pg_prepared_xacts;
+
+begin;
+create temp table pxtesttemp1(id serial, f1 text) on commit drop;
+create temp table pxtesttemp2(id serial, f1 text) on commit delete rows;
+insert into pxtesttemp1(f1) values('regress'), ('temp') returning *;
+prepare transaction 'regress temp';
+
+-- There should be no prepared transactions
+SELECT gid FROM pg_prepared_xacts;
+
+-- Test with two temporary tables on commit drop now
+begin;
+create temp table pxtesttemp1(id serial, f1 text) on commit drop;
+create temp table pxtesttemp2(id serial, f1 text) on commit drop;
+insert into pxtesttemp1(f1) values('regress'), ('temp');
+insert into pxtesttemp2(f1) values('regress'), ('temp');
+prepare transaction 'regress temp';
+rollback prepared 'regress temp';
+
+-- There should be no prepared transactions
+SELECT gid FROM pg_prepared_xacts;
+
+-- Now test with a temp table that exists in the session, and a temp table
+-- that exists only within the prepared transaction.
+create temp table pxtesttemp1(id serial, f1 text);
+insert into pxtesttemp1(f1) values('regress'), ('temp') returning *;
+
+begin;
+create temp table pxtesttemp2(id serial, f1 text) on commit drop;
+insert into pxtesttemp2(f1) values('regress'), ('temp');
+prepare transaction 'regress temp';
+rollback prepared 'regress temp';
+
+-- cleanup
+drop table pxtesttemp1;
+
+-- There should be no prepared transactions
+SELECT gid FROM pg_prepared_xacts;

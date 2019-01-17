@@ -13220,26 +13220,6 @@ remove_on_commit_action(Oid relid)
 }
 
 /*
- * Return true when every temp relation known in the current session is marked
- * ON COMMIT DROP. This allows to then PREPARE TRANSACTION, for instance,
- * because we know that at prepare time the temp table is dropped already.
- */
-bool
-every_on_commit_is_on_commit_drop()
-{
-	ListCell   *l;
-
-	foreach(l, on_commits)
-	{
-		OnCommitItem *oc = (OnCommitItem *) lfirst(l);
-
-		if (oc->oncommit != ONCOMMIT_DROP)
-			return false;
-	}
-	return true;
-}
-
-/*
  * Perform ON COMMIT actions.
  *
  * This is invoked just before actually committing, since it's possible

@@ -95,6 +95,30 @@ COPY x from stdin WITH DELIMITER AS ':' NULL AS E'\\X' ENCODING 'sql_ascii';
 4008:8:Delimiter:\::\:
 \.
 
+COPY x (a, b, c, d, e) from stdin (START 2);
+50001	22	32	42	52
+50002	23	33	43	53
+50003	24	34	44	54
+50004	25	35	45	55
+50005	26	36	46	56
+\.
+
+COPY x (a, b, c, d, e) from stdin (END 3);
+60001	22	32	42	52
+60002	23	33	43	53
+60003	24	34	44	54
+60004	25	35	45	55
+60005	26	36	46	56
+\.
+
+COPY x (a, b, c, d, e) from stdin (START 2 , END 3);
+70001	22	32	42	52
+70002	23	33	43	53
+70003	24	34	44	54
+70004	25	35	45	55
+70005	26	36	46	56
+\.
+
 -- check results of copy in
 SELECT * FROM x;
 

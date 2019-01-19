@@ -49,6 +49,9 @@ CONTEXT:  COPY x, line 1: "2002	232	40	50	60	70	80"
 COPY x (b, c, d, e) from stdin delimiter ',' null 'x';
 COPY x from stdin WITH DELIMITER AS ';' NULL AS '';
 COPY x from stdin WITH DELIMITER AS ':' NULL AS E'\\X' ENCODING 'sql_ascii';
+COPY x (a, b, c, d, e) from stdin (START 2);
+COPY x (a, b, c, d, e) from stdin (END 3);
+COPY x (a, b, c, d, e) from stdin (START 2 , END 3);
 -- check results of copy in
 SELECT * FROM x;
    a   | b  |     c      |   d    |          e           
@@ -73,12 +76,21 @@ SELECT * FROM x;
   4006 |  6 | BackslashN | \N     | before trigger fired
   4007 |  7 | XX         | XX     | before trigger fired
   4008 |  8 | Delimiter  | :      | before trigger fired
+ 50002 | 23 | 33         | 43     | before trigger fired
+ 50003 | 24 | 34         | 44     | before trigger fired
+ 50004 | 25 | 35         | 45     | before trigger fired
+ 50005 | 26 | 36         | 46     | before trigger fired
+ 60001 | 22 | 32         | 42     | before trigger fired
+ 60002 | 23 | 33         | 43     | before trigger fired
+ 60003 | 24 | 34         | 44     | before trigger fired
+ 70002 | 23 | 33         | 43     | before trigger fired
+ 70003 | 24 | 34         | 44     | before trigger fired
      1 |  1 | stuff      | test_1 | after trigger fired
      2 |  2 | stuff      | test_2 | after trigger fired
      3 |  3 | stuff      | test_3 | after trigger fired
      4 |  4 | stuff      | test_4 | after trigger fired
      5 |  5 | stuff      | test_5 | after trigger fired
-(25 rows)
+(34 rows)
 
 -- check copy out
 COPY x TO stdout;
@@ -102,6 +114,15 @@ COPY x TO stdout;
 4006	6	BackslashN	\\N	before trigger fired
 4007	7	XX	XX	before trigger fired
 4008	8	Delimiter	:	before trigger fired
+50002	23	33	43	before trigger fired
+50003	24	34	44	before trigger fired
+50004	25	35	45	before trigger fired
+50005	26	36	46	before trigger fired
+60001	22	32	42	before trigger fired
+60002	23	33	43	before trigger fired
+60003	24	34	44	before trigger fired
+70002	23	33	43	before trigger fired
+70003	24	34	44	before trigger fired
 1	1	stuff	test_1	after trigger fired
 2	2	stuff	test_2	after trigger fired
 3	3	stuff	test_3	after trigger fired
@@ -128,6 +149,15 @@ N	before trigger fired
 BackslashN	before trigger fired
 XX	before trigger fired
 Delimiter	before trigger fired
+33	before trigger fired
+34	before trigger fired
+35	before trigger fired
+36	before trigger fired
+32	before trigger fired
+33	before trigger fired
+34	before trigger fired
+33	before trigger fired
+34	before trigger fired
 stuff	after trigger fired
 stuff	after trigger fired
 stuff	after trigger fired
@@ -154,6 +184,15 @@ I'm null	before trigger fired
 6	before trigger fired
 7	before trigger fired
 8	before trigger fired
+23	before trigger fired
+24	before trigger fired
+25	before trigger fired
+26	before trigger fired
+22	before trigger fired
+23	before trigger fired
+24	before trigger fired
+23	before trigger fired
+24	before trigger fired
 1	after trigger fired
 2	after trigger fired
 3	after trigger fired

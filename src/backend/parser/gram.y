@@ -3093,6 +3093,14 @@ copy_opt_item:
 				{
 					$$ = makeDefElem("encoding", (Node *)makeString($2), @1);
 				}
+			| START Iconst
+				{
+					$$ = makeDefElem("start", (Node *)makeInteger($2), @1);
+				}
+			| END_P Iconst
+				{
+					$$ = makeDefElem("end", (Node *)makeInteger($2), @1);
+				}
 		;
 
 /* The following exist for backward compatibility with very old versions */

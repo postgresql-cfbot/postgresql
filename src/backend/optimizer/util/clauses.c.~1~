@@ -4682,9 +4682,6 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 	Query	   *querytree;
 	Node	   *newexpr;
 	int		   *usecounts;
-	double	   *paramcosts;
-	Cost		total_param_cost;
-	double		func_cost;
 	ListCell   *arg;
 	int			i;
 
@@ -4876,19 +4873,8 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 	 * substituted.
 	 */
 	usecounts = (int *) palloc0(funcform->pronargs * sizeof(int));
-	paramcosts = (double *) palloc0(funcform->pronargs * sizeof(double));
 	newexpr = substitute_actual_parameters(newexpr, funcform->pronargs,
 										   args, usecounts);
-
-	/*
-	 * Get the cost of the function without parameters.
-	 *
-	 * Calculation based on how costsize.c performs lookup for function costs
-	 * via 'cost_qual_eval_walker'.
-	 */
-	func_cost = get_func_cost(funcid) * cpu_operator_cost;
-
-	total_param_cost = 0.0;
 
 	/* Now check for parameter usage */
 	i = 0;
@@ -4915,10 +4901,10 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 			 */
 			if (contain_subplans(param))
 				goto fail;
-
 			cost_qual_eval(&eval_cost, list_make1(param), NULL);
-			paramcosts[i] = (eval_cost.startup + eval_cost.per_tuple);
-			total_param_cost += (eval_cost.startup + eval_cost.per_tuple);
+			if (eval_cost.startup + eval_cost.per_tuple >
+				10 * cpu_operator_cost)
+				goto fail;
 
 			/*
 			 * Check volatility last since this is more expensive than the
@@ -4928,19 +4914,6 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 				goto fail;
 		}
 		i++;
-	}
-
-	/*
-	 * If the cost of the function is greater than the sum of all the param
-	 * costs, then inline. Otherwise, check the cost of each param.
-	 */
-	if (func_cost * INLINE_FUNC_COST_FACTOR < total_param_cost)
-	{
-		for (i = 0; i < funcform->pronargs; i++)
-		{
-			if (paramcosts[i] > 10 * cpu_operator_cost)
-				goto fail;
-		}
 	}
 
 	/*

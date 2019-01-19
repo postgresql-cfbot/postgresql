@@ -20,6 +20,8 @@
 #define is_opclause(clause)		((clause) != NULL && IsA(clause, OpExpr))
 #define is_funcclause(clause)	((clause) != NULL && IsA(clause, FuncExpr))
 
+#define INLINE_FUNC_COST_FACTOR 1
+
 typedef struct
 {
 	int			numWindowFuncs; /* total number of WindowFuncs found */

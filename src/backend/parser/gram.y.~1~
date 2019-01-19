@@ -632,7 +632,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
 	EXTENSION EXTERNAL EXTRACT
 
-	FALSE_P FAMILY FETCH FILE_P FILTER FIRST_P FLOAT_P FOLLOWING FOR
+	FALSE_P FAMILY FETCH FILTER FIRST_P FLOAT_P FOLLOWING FOR
 	FORCE FOREIGN FORWARD FREEZE FROM FULL FUNCTION FUNCTIONS
 
 	GENERATED GLOBAL GRANT GRANTED GREATEST GROUP_P GROUPING GROUPS
@@ -650,7 +650,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
-	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOG_P LOGGED
+	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
 	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
@@ -3092,14 +3092,6 @@ copy_opt_item:
 			| ENCODING Sconst
 				{
 					$$ = makeDefElem("encoding", (Node *)makeString($2), @1);
-				}
-			| ON CONFLICT LOG_P Iconst
-				{
-					$$ = makeDefElem("on_conflict_log", (Node *)makeInteger($4), @1);
-				}
-			| LOG_P FILE_P NAME_P Sconst
-				{
-					$$ = makeDefElem("log_file_name", (Node *)makeString($4), @1);
 				}
 		;
 
@@ -15058,7 +15050,6 @@ unreserved_keyword:
 			| EXTENSION
 			| EXTERNAL
 			| FAMILY
-			| FILE_P
 			| FILTER
 			| FIRST_P
 			| FOLLOWING
@@ -15107,7 +15098,6 @@ unreserved_keyword:
 			| LOCATION
 			| LOCK_P
 			| LOCKED
-			| LOG_P
 			| LOGGED
 			| MAPPING
 			| MATCH

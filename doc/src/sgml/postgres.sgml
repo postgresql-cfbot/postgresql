@@ -251,6 +251,7 @@
   &custom-scan;
   &geqo;
   &indexam;
+  &compression-am;
   &generic-wal;
   &btree;
   &gist;

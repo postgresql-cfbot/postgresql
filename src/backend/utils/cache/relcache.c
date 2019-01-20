@@ -573,6 +573,10 @@ RelationBuildTupleDesc(Relation relation)
 			ndef++;
 		}
 
+		/* mark tupledesc as it contains attributes with custom compression */
+		if (attp->attcompression)
+			relation->rd_att->tdflags |= TD_ATTR_CUSTOM_COMPRESSED;
+
 		/* Likewise for a missing value */
 		if (attp->atthasmissing)
 		{

@@ -311,6 +311,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
 %type <ival>	opt_nowait_or_skip
+%type <ival>	AccessMethodType
 
 %type <list>	OptRoleList AlterOptRoleList
 %type <defelt>	CreateOptRoleElem AlterOptRoleElem
@@ -399,6 +400,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				publication_name_list
+				optCompressionParameters
 				vacuum_relation_list opt_vacuum_relation_list
 
 %type <list>	group_by_list
@@ -585,6 +587,10 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound partbound_datum_list range_datum_list
 %type <defelt>		hash_partbound_elem
 
+%type <node>	optColumnCompression alterColumnCompression
+%type <str>		compressionClause
+%type <list>	optCompressionPreserve
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -617,9 +623,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
 	CLUSTER COALESCE COLLATE COLLATION COLUMN COLUMNS COMMENT COMMENTS COMMIT
-	COMMITTED CONCURRENTLY CONFIGURATION CONFLICT CONNECTION CONSTRAINT
-	CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY COST CREATE
-	CROSS CSV CUBE CURRENT_P
+	COMMITTED COMPRESSION CONCURRENTLY CONFIGURATION CONFLICT
+	CONNECTION CONSTRAINT CONSTRAINTS CONTENT_P CONTINUE_P CONVERSION_P COPY
+	COST CREATE CROSS CSV CUBE CURRENT_P
 	CURRENT_CATALOG CURRENT_DATE CURRENT_ROLE CURRENT_SCHEMA
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
@@ -2213,6 +2219,15 @@ alter_table_cmd:
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET (COMPRESSION <cm> [WITH (<options>)]) */
+			| ALTER opt_column ColId SET alterColumnCompression
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetCompression;
+					n->name = $3;
+					n->def = $5;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
 			| DROP opt_column IF_P EXISTS ColId opt_drop_behavior
 				{
@@ -3366,11 +3381,12 @@ TypedTableElement:
 			| TableConstraint					{ $$ = $1; }
 		;
 
-columnDef:	ColId Typename create_generic_options ColQualList
+columnDef:	ColId Typename optColumnCompression create_generic_options ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3379,8 +3395,8 @@ columnDef:	ColId Typename create_generic_options ColQualList
 					n->raw_default = NULL;
 					n->cooked_default = NULL;
 					n->collOid = InvalidOid;
-					n->fdwoptions = $3;
-					SplitColQualList($4, &n->constraints, &n->collClause,
+					n->fdwoptions = $4;
+					SplitColQualList($5, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
 					$$ = (Node *)n;
@@ -3422,6 +3438,43 @@ columnOptions:	ColId ColQualList
 									 yyscanner);
 					n->location = @1;
 					$$ = (Node *)n;
+				}
+		;
+
+optCompressionPreserve:
+			PRESERVE '(' name_list ')' { $$ = $3; }
+			| /*EMPTY*/ { $$ = NULL; }
+		;
+
+optCompressionParameters:
+			WITH '(' generic_option_list ')' { $$ = $3; }
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
+compressionClause:
+			COMPRESSION name { $$ = pstrdup($2); }
+		;
+
+optColumnCompression:
+			compressionClause optCompressionParameters
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->amname = $1;
+					n->options = (List *) $2;
+					n->preserve = NIL;
+					$$ = (Node *) n;
+				}
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
+alterColumnCompression:
+			compressionClause optCompressionParameters optCompressionPreserve
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->amname = $1;
+					n->options = (List *) $2;
+					n->preserve = (List *) $3;
+					$$ = (Node *) n;
 				}
 		;
 
@@ -3630,6 +3683,7 @@ TableLikeOption:
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
 				| STATISTICS		{ $$ = CREATE_TABLE_LIKE_STATISTICS; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
+				| COMPRESSION		{ $$ = CREATE_TABLE_LIKE_COMPRESSION; }
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
@@ -5306,12 +5360,17 @@ row_security_cmd:
  *
  *****************************************************************************/
 
-CreateAmStmt: CREATE ACCESS METHOD name TYPE_P INDEX HANDLER handler_name
+AccessMethodType:
+			INDEX			{ $$ = AMTYPE_INDEX; }
+	   |	COMPRESSION		{ $$ = AMTYPE_COMPRESSION; }
+	   ;
+
+CreateAmStmt: CREATE ACCESS METHOD name TYPE_P AccessMethodType HANDLER handler_name
 				{
 					CreateAmStmt *n = makeNode(CreateAmStmt);
 					n->amname = $4;
 					n->handler_name = $8;
-					n->amtype = AMTYPE_INDEX;
+					n->amtype = $6;
 					$$ = (Node *) n;
 				}
 		;
@@ -15009,6 +15068,7 @@ unreserved_keyword:
 			| COMMENTS
 			| COMMIT
 			| COMMITTED
+			| COMPRESSION
 			| CONFIGURATION
 			| CONFLICT
 			| CONNECTION

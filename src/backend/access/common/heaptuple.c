@@ -179,6 +179,7 @@ fill_val(Form_pg_attribute att,
 		 int *bitmask,
 		 char **dataP,
 		 uint16 *infomask,
+		 uint16 *infomask2,
 		 Datum datum,
 		 bool isnull)
 {
@@ -208,6 +209,9 @@ fill_val(Form_pg_attribute att,
 
 		**bit |= *bitmask;
 	}
+
+	if (OidIsValid(att->attcompression))
+		*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
 
 	/*
 	 * XXX we use the att_align macros on the pointer value itself, not on an
@@ -247,6 +251,15 @@ fill_val(Form_pg_attribute att,
 				/* no alignment, since it's short by definition */
 				data_length = VARSIZE_EXTERNAL(val);
 				memcpy(data, val, data_length);
+
+				if (VARATT_IS_EXTERNAL_ONDISK(val))
+				{
+					struct varatt_external toast_pointer;
+
+					VARATT_EXTERNAL_GET_POINTER(toast_pointer, val);
+					if (VARATT_EXTERNAL_IS_CUSTOM_COMPRESSED(toast_pointer))
+						*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
+				}
 			}
 		}
 		else if (VARATT_IS_SHORT(val))
@@ -270,6 +283,9 @@ fill_val(Form_pg_attribute att,
 											  att->attalign);
 			data_length = VARSIZE(val);
 			memcpy(data, val, data_length);
+
+			if (VARATT_IS_CUSTOM_COMPRESSED(val))
+				*infomask2 |= HEAP_HASCUSTOMCOMPRESSED;
 		}
 	}
 	else if (att->attlen == -2)
@@ -306,7 +322,7 @@ void
 heap_fill_tuple(TupleDesc tupleDesc,
 				Datum *values, bool *isnull,
 				char *data, Size data_size,
-				uint16 *infomask, bits8 *bit)
+				uint16 *infomask, uint16 *infomask2, bits8 *bit)
 {
 	bits8	   *bitP;
 	int			bitmask;
@@ -330,6 +346,7 @@ heap_fill_tuple(TupleDesc tupleDesc,
 	}
 
 	*infomask &= ~(HEAP_HASNULL | HEAP_HASVARWIDTH | HEAP_HASEXTERNAL);
+	*infomask2 &= ~HEAP_HASCUSTOMCOMPRESSED;
 
 	for (i = 0; i < numberOfAttributes; i++)
 	{
@@ -340,6 +357,7 @@ heap_fill_tuple(TupleDesc tupleDesc,
 				 &bitmask,
 				 &data,
 				 infomask,
+				 infomask2,
 				 values ? values[i] : PointerGetDatum(NULL),
 				 isnull ? isnull[i] : true);
 	}
@@ -754,6 +772,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 	int			bitMask = 0;
 	char	   *targetData;
 	uint16	   *infoMask;
+	uint16	   *infoMask2;
 
 	Assert((targetHeapTuple && !targetMinimalTuple)
 		   || (!targetHeapTuple && targetMinimalTuple));
@@ -866,6 +885,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 								  + offsetof(HeapTupleHeaderData, t_bits));
 		targetData = (char *) (*targetHeapTuple)->t_data + hoff;
 		infoMask = &(targetTHeader->t_infomask);
+		infoMask2 = &(targetTHeader->t_infomask2);
 	}
 	else
 	{
@@ -884,6 +904,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 								  + offsetof(MinimalTupleData, t_bits));
 		targetData = (char *) *targetMinimalTuple + hoff;
 		infoMask = &((*targetMinimalTuple)->t_infomask);
+		infoMask2 = &((*targetMinimalTuple)->t_infomask2);
 	}
 
 	if (targetNullLen > 0)
@@ -936,6 +957,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 					 &bitMask,
 					 &targetData,
 					 infoMask,
+					 infoMask2,
 					 attrmiss[attnum].am_value,
 					 false);
 		}
@@ -946,6 +968,7 @@ expand_tuple(HeapTuple *targetHeapTuple,
 					 &bitMask,
 					 &targetData,
 					 infoMask,
+					 infoMask2,
 					 (Datum) 0,
 					 true);
 		}
@@ -1095,6 +1118,7 @@ heap_form_tuple(TupleDesc tupleDescriptor,
 					(char *) td + hoff,
 					data_len,
 					&td->t_infomask,
+					&td->t_infomask2,
 					(hasnull ? td->t_bits : NULL));
 
 	return tuple;
@@ -1417,6 +1441,7 @@ heap_form_minimal_tuple(TupleDesc tupleDescriptor,
 					(char *) tuple + hoff,
 					data_len,
 					&tuple->t_infomask,
+					&tuple->t_infomask2,
 					(hasnull ? tuple->t_bits : NULL));
 
 	return tuple;

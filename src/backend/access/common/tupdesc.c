@@ -21,6 +21,7 @@
 
 #include "access/hash.h"
 #include "access/htup_details.h"
+#include "access/reloptions.h"
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
@@ -73,6 +74,7 @@ CreateTemplateTupleDesc(int natts)
 	desc->constr = NULL;
 	desc->tdtypeid = RECORDOID;
 	desc->tdtypmod = -1;
+	desc->tdflags = 0;
 	desc->tdrefcount = -1;		/* assume not reference-counted */
 
 	return desc;
@@ -95,7 +97,16 @@ CreateTupleDesc(int natts, Form_pg_attribute *attrs)
 	desc = CreateTemplateTupleDesc(natts);
 
 	for (i = 0; i < natts; ++i)
+	{
 		memcpy(TupleDescAttr(desc, i), attrs[i], ATTRIBUTE_FIXED_PART_SIZE);
+
+		/*
+		 * If even one of attributes is compressed we save information about
+		 * it to TupleDesc flags
+		 */
+		if (OidIsValid(attrs[i]->attcompression))
+			desc->tdflags |= TD_ATTR_CUSTOM_COMPRESSED;
+	}
 
 	return desc;
 }
@@ -137,6 +148,7 @@ CreateTupleDescCopy(TupleDesc tupdesc)
 	/* We can copy the tuple type identification, too */
 	desc->tdtypeid = tupdesc->tdtypeid;
 	desc->tdtypmod = tupdesc->tdtypmod;
+	desc->tdflags = tupdesc->tdflags;
 
 	return desc;
 }
@@ -216,6 +228,7 @@ CreateTupleDescCopyConstr(TupleDesc tupdesc)
 	/* We can copy the tuple type identification, too */
 	desc->tdtypeid = tupdesc->tdtypeid;
 	desc->tdtypmod = tupdesc->tdtypmod;
+	desc->tdflags = tupdesc->tdflags;
 
 	return desc;
 }
@@ -301,6 +314,7 @@ TupleDescCopyEntry(TupleDesc dst, AttrNumber dstAttno,
 	dstAtt->atthasdef = false;
 	dstAtt->atthasmissing = false;
 	dstAtt->attidentity = '\0';
+	dstAtt->attcompression = InvalidOid;
 }
 
 /*
@@ -415,6 +429,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 		return false;
 	if (tupdesc1->tdtypeid != tupdesc2->tdtypeid)
 		return false;
+	if (tupdesc1->tdflags != tupdesc2->tdflags)
+		return false;
 
 	for (i = 0; i < tupdesc1->natts; i++)
 	{
@@ -464,6 +480,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 		if (attr1->attinhcount != attr2->attinhcount)
 			return false;
 		if (attr1->attcollation != attr2->attcollation)
+			return false;
+		if (attr1->attcompression != attr2->attcompression)
 			return false;
 		/* attacl, attoptions and attfdwoptions are not even present... */
 	}
@@ -550,6 +568,7 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 	}
 	else if (tupdesc2->constr != NULL)
 		return false;
+
 	return true;
 }
 
@@ -655,6 +674,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attalign = typeForm->typalign;
 	att->attstorage = typeForm->typstorage;
 	att->attcollation = typeForm->typcollation;
+	att->attcompression = InvalidOid;
 
 	ReleaseSysCache(tuple);
 }

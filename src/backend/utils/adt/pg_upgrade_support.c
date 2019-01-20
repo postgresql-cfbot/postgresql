@@ -117,6 +117,16 @@ binary_upgrade_set_next_pg_authid_oid(PG_FUNCTION_ARGS)
 }
 
 Datum
+binary_upgrade_set_next_attr_compression_oid(PG_FUNCTION_ARGS)
+{
+	Oid			acoid = PG_GETARG_OID(0);
+
+	CHECK_IS_BINARY_UPGRADE;
+	binary_upgrade_next_attr_compression_oid = acoid;
+	PG_RETURN_VOID();
+}
+
+Datum
 binary_upgrade_create_empty_extension(PG_FUNCTION_ARGS)
 {
 	text	   *extName;

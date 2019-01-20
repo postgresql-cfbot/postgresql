@@ -968,9 +968,98 @@ untransformRelOptions(Datum options)
 			val = (Node *) makeString(pstrdup(p));
 		}
 		result = lappend(result, makeDefElem(pstrdup(s), val, -1));
+		pfree(s);
 	}
 
 	return result;
+}
+
+/*
+ * helper function for qsort to compare DefElem
+ */
+static int
+compare_options(const void *a, const void *b)
+{
+	DefElem    *da = (DefElem *) lfirst(*(ListCell **) a);
+	DefElem    *db = (DefElem *) lfirst(*(ListCell **) b);
+
+	return strcmp(da->defname, db->defname);
+}
+
+/*
+ * Convert a DefElem list to the text array format that is used in
+ * pg_foreign_data_wrapper, pg_foreign_server, pg_user_mapping,
+ * pg_foreign_table and pg_attr_compression
+ *
+ * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
+ * if the list is empty.
+ *
+ * Note: The array is usually stored to database without further
+ * processing, hence any validation should be done before this
+ * conversion.
+ */
+Datum
+optionListToArray(List *options, bool sorted)
+{
+	ArrayBuildState *astate = NULL;
+	ListCell   *cell;
+	List	   *resoptions = NIL;
+	int			len = list_length(options);
+
+	/* sort by option name if needed */
+	if (sorted && len > 1)
+		resoptions = list_qsort(options, compare_options);
+	else
+		resoptions = options;
+
+	foreach(cell, resoptions)
+	{
+		DefElem    *def = lfirst(cell);
+		const char *value;
+		Size		len;
+		text	   *t;
+
+		value = defGetString(def);
+		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
+		t = palloc(len + 1);
+		SET_VARSIZE(t, len);
+		sprintf(VARDATA(t), "%s=%s", def->defname, value);
+
+		astate = accumArrayResult(astate, PointerGetDatum(t),
+								  false, TEXTOID,
+								  CurrentMemoryContext);
+	}
+
+	/* free if the the modified version of list was used */
+	if (resoptions != options)
+		list_free(resoptions);
+
+	if (astate)
+		return makeArrayResult(astate, CurrentMemoryContext);
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Return human readable list of reloptions
+ */
+char *
+formatRelOptions(List *options)
+{
+	StringInfoData buf;
+	ListCell   *cell;
+
+	initStringInfo(&buf);
+
+	foreach(cell, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(cell);
+
+		appendStringInfo(&buf, "%s%s=%s", buf.len > 0 ? ", " : "",
+						 def->defname, defGetString(def));
+	}
+
+	return buf.data;
 }
 
 /*

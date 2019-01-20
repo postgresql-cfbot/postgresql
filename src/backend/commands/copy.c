@@ -2677,7 +2677,7 @@ CopyFrom(CopyState cstate)
 	values = (Datum *) palloc(tupDesc->natts * sizeof(Datum));
 	nulls = (bool *) palloc(tupDesc->natts * sizeof(bool));
 
-	bistate = GetBulkInsertState();
+	bistate = GetBulkInsertState(NULL);
 	econtext = GetPerTupleExprContext(estate);
 
 	/* Set up callback to identify error line number */

@@ -36,7 +36,6 @@
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
-#include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "mb/pg_wchar.h"
@@ -49,7 +48,6 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
 #include "parser/parse_oper.h"
-#include "pgstat.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -372,15 +370,6 @@ DefineIndex(Oid relationId,
 	LOCKMODE	lockmode;
 	Snapshot	snapshot;
 	int			i;
-
-
-	/*
-	 * Start progress report.  If we're building a partition, this was already
-	 * done.
-	 */
-	if (!OidIsValid(parentIndexId))
-		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX,
-									  relationId);
 
 	/*
 	 * count key attributes in index
@@ -878,11 +867,6 @@ DefineIndex(Oid relationId,
 	if (!OidIsValid(indexRelationId))
 	{
 		heap_close(rel, NoLock);
-
-		/* If this is the top-level index, we're done */
-		if (!OidIsValid(parentIndexId))
-			pgstat_progress_end_command();
-
 		return address;
 	}
 
@@ -907,9 +891,6 @@ DefineIndex(Oid relationId,
 			bool		invalidate_parent = false;
 			TupleDesc	parentDesc;
 			Oid		   *opfamOids;
-
-			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
-										 nparts);
 
 			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
 
@@ -1060,8 +1041,6 @@ DefineIndex(Oid relationId,
 								skip_build, quiet);
 				}
 
-				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
-											 i + 1);
 				pfree(attmap);
 			}
 
@@ -1096,8 +1075,6 @@ DefineIndex(Oid relationId,
 		 * Indexes on partitioned tables are not themselves built, so we're
 		 * done here.
 		 */
-		if (!OidIsValid(parentIndexId))
-			pgstat_progress_end_command();
 		return address;
 	}
 
@@ -1105,11 +1082,6 @@ DefineIndex(Oid relationId,
 	{
 		/* Close the heap and we're done, in the non-concurrent case */
 		heap_close(rel, NoLock);
-
-		/* If this is the top-level index, we're done. */
-		if (!OidIsValid(parentIndexId))
-			pgstat_progress_end_command();
-
 		return address;
 	}
 
@@ -1161,9 +1133,7 @@ DefineIndex(Oid relationId,
 	 * exclusive lock on our table.  The lock code will detect deadlock and
 	 * error out properly.
 	 */
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_WAIT_1);
-	WaitForLockers(heaplocktag, ShareLock, true);
+	WaitForLockers(heaplocktag, ShareLock);
 
 	/*
 	 * At this moment we are sure that there are no transactions with the
@@ -1199,8 +1169,6 @@ DefineIndex(Oid relationId,
 	indexInfo->ii_BrokenHotChain = false;
 
 	/* Now build the index */
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_BUILD);
 	index_build(rel, indexRelation, indexInfo, stmt->primary, false, true);
 
 	/* Close both the relations, but keep the locks */
@@ -1229,9 +1197,7 @@ DefineIndex(Oid relationId,
 	 * We once again wait until no transaction can have the table open with
 	 * the index marked as read-only for updates.
 	 */
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_WAIT_2);
-	WaitForLockers(heaplocktag, ShareLock, true);
+	WaitForLockers(heaplocktag, ShareLock);
 
 	/*
 	 * Now take the "reference snapshot" that will be used by validate_index()
@@ -1254,8 +1220,6 @@ DefineIndex(Oid relationId,
 	/*
 	 * Scan the index and the heap, insert any missing index entries.
 	 */
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_VALIDATE);
 	validate_index(relationId, indexRelationId, snapshot);
 
 	/*
@@ -1319,9 +1283,6 @@ DefineIndex(Oid relationId,
 	old_snapshots = GetCurrentVirtualXIDs(limitXmin, true, false,
 										  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
 										  &n_old_snapshots);
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_WAIT_3);
-	pgstat_progress_update_param(PROGRESS_WAITFOR_TOTAL, n_old_snapshots);
 
 	for (i = 0; i < n_old_snapshots; i++)
 	{
@@ -1358,8 +1319,6 @@ DefineIndex(Oid relationId,
 
 		if (VirtualTransactionIdIsValid(old_snapshots[i]))
 			VirtualXactLock(old_snapshots[i], true);
-
-		pgstat_progress_update_param(PROGRESS_WAITFOR_DONE, i);
 	}
 
 	/*
@@ -1381,8 +1340,6 @@ DefineIndex(Oid relationId,
 	 * Last thing to do is release the session-level lock on the parent table.
 	 */
 	UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
-
-	pgstat_progress_end_command();
 
 	return address;
 }

@@ -1590,7 +1590,7 @@ index_drop(Oid indexId, bool concurrent)
 		 * to acquire an exclusive lock on our table.  The lock code will
 		 * detect deadlock and error out properly.
 		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock);
+		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
 
 		/*
 		 * No more predicate locks will be acquired on this index, and we're
@@ -1634,7 +1634,7 @@ index_drop(Oid indexId, bool concurrent)
 		 * Wait till every transaction that saw the old index state has
 		 * finished.
 		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock);
+		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
 
 		/*
 		 * Re-open relations to allow us to complete our actions.

@@ -904,6 +904,24 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
 		LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_progress_create_index AS
+	SELECT
+		s.pid AS pid, S.datid AS datid, D.datname AS datname,
+		S.relid AS relid,
+		CASE s.param1 WHEN 0 THEN 'initializing'
+					  WHEN 1 THEN 'waiting for lockers 1'
+					  WHEN 2 THEN 'building index'
+					  WHEN 3 THEN 'waiting for lockers 2'
+					  WHEN 4 THEN 'validating index'
+					  WHEN 5 THEN 'waiting for lockers 3'
+					  END as phase,
+		S.param2 AS procs_to_wait_for,
+		S.param3 AS procs_waited_for,
+		S.param4 AS partitions_to_build,
+		S.param5 AS partitions_built
+	FROM pg_stat_get_progress_info('CREATE INDEX') AS S
+		LEFT JOIN pg_database D ON S.datid = D.oid;
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,

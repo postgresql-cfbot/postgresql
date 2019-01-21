@@ -59,6 +59,23 @@ typedef struct dshash_parameters
 struct dshash_table_item;
 typedef struct dshash_table_item dshash_table_item;
 
+/*
+ * Sequential scan state of dshash. The detail is exposed since the storage
+ * size should be known to users but it should be considered as an opaque
+ * type by callers.
+ */
+typedef struct dshash_seq_status
+{
+	dshash_table	   *hash_table;
+	int					curbucket;
+	int					nbuckets;
+	dshash_table_item  *curitem;
+	dsa_pointer			pnextitem;
+	int					curpartition;
+	bool				consistent;
+	bool				exclusive;
+} dshash_seq_status;
+
 /* Creating, sharing and destroying from hash tables. */
 extern dshash_table *dshash_create(dsa_area *area,
 			  const dshash_parameters *params,
@@ -70,16 +87,24 @@ extern dshash_table *dshash_attach(dsa_area *area,
 extern void dshash_detach(dshash_table *hash_table);
 extern dshash_table_handle dshash_get_hash_table_handle(dshash_table *hash_table);
 extern void dshash_destroy(dshash_table *hash_table);
-
 /* Finding, creating, deleting entries. */
 extern void *dshash_find(dshash_table *hash_table,
 			const void *key, bool exclusive);
+extern void *dshash_find_extended(dshash_table *hash_table, const void *key,
+			bool exclusive, bool nowait, bool *lock_acquired);
 extern void *dshash_find_or_insert(dshash_table *hash_table,
-					  const void *key, bool *found);
+			const void *key, bool *found);
+extern void *dshash_find_or_insert_extended(dshash_table *hash_table,
+			const void *key, bool *found, bool nowait);
 extern bool dshash_delete_key(dshash_table *hash_table, const void *key);
 extern void dshash_delete_entry(dshash_table *hash_table, void *entry);
 extern void dshash_release_lock(dshash_table *hash_table, void *entry);
 
+/* seq scan support */
+extern void dshash_seq_init(dshash_seq_status *status, dshash_table *hash_table,
+							bool consistent, bool exclusive);
+extern void *dshash_seq_next(dshash_seq_status *status);
+extern void dshash_seq_term(dshash_seq_status *status);
 /* Convenience hash and compare functions wrapping memcmp and tag_hash. */
 extern int	dshash_memcmp(const void *a, const void *b, size_t size, void *arg);
 extern dshash_hash dshash_memhash(const void *v, size_t size, void *arg);

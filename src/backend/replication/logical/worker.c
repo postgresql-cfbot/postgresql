@@ -31,6 +31,8 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 
+#include "bestatus.h"
+
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_subscription.h"
@@ -42,17 +44,20 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 
+#include "funcapi.h"
+
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
 
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
 
 #include "nodes/makefuncs.h"
 
 #include "optimizer/planner.h"
 
 #include "parser/parse_relation.h"
-
+#include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/walwriter.h"
@@ -493,7 +498,7 @@ apply_handle_commit(StringInfo s)
 		replorigin_session_origin_timestamp = commit_data.committime;
 
 		CommitTransactionCommand();
-		pgstat_report_stat(false);
+		pgstat_update_stat(false);
 
 		store_flush_position(commit_data.end_lsn);
 	}
@@ -1327,6 +1332,8 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 			}
 
 			send_feedback(last_received, requestReply, requestReply);
+
+			pgstat_update_stat(false);
 		}
 	}
 }

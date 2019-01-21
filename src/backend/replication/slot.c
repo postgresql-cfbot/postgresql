@@ -41,9 +41,9 @@
 
 #include "access/transam.h"
 #include "access/xlog_internal.h"
+#include "bestatus.h"
 #include "common/string.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "replication/slot.h"
 #include "storage/fd.h"
 #include "storage/proc.h"

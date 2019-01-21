@@ -43,6 +43,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "bestatus.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -371,7 +372,7 @@ CheckpointerMain(void)
 		{
 			checkpoint_requested = false;
 			do_checkpoint = true;
-			BgWriterStats.m_requested_checkpoints++;
+			BgWriterStats.requested_checkpoints++;
 		}
 		if (shutdown_requested)
 		{
@@ -397,7 +398,7 @@ CheckpointerMain(void)
 		if (elapsed_secs >= CheckPointTimeout)
 		{
 			if (!do_checkpoint)
-				BgWriterStats.m_timed_checkpoints++;
+				BgWriterStats.timed_checkpoints++;
 			do_checkpoint = true;
 			flags |= CHECKPOINT_CAUSE_TIME;
 		}
@@ -515,13 +516,13 @@ CheckpointerMain(void)
 		CheckArchiveTimeout();
 
 		/*
-		 * Send off activity statistics to the stats collector.  (The reason
-		 * why we re-use bgwriter-related code for this is that the bgwriter
-		 * and checkpointer used to be just one process.  It's probably not
-		 * worth the trouble to split the stats support into two independent
-		 * stats message types.)
+		 * Update activity statistics.  (The reason why we re-use
+		 * bgwriter-related code for this is that the bgwriter and
+		 * checkpointer used to be just one process.  It's probably not worth
+		 * the trouble to split the stats support into two independent
+		 * functions.)
 		 */
-		pgstat_send_bgwriter();
+		pgstat_update_bgwriter();
 
 		/*
 		 * Sleep until we are signaled or it's time for another checkpoint or
@@ -682,9 +683,9 @@ CheckpointWriteDelay(int flags, double progress)
 		CheckArchiveTimeout();
 
 		/*
-		 * Report interim activity statistics to the stats collector.
+		 * Register interim activity statistics.
 		 */
-		pgstat_send_bgwriter();
+		pgstat_update_bgwriter();
 
 		/*
 		 * This sleep used to be connected to bgwriter_delay, typically 200ms.
@@ -1284,8 +1285,8 @@ AbsorbFsyncRequests(void)
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
 
 	/* Transfer stats counts into pending pgstats message */
-	BgWriterStats.m_buf_written_backend += CheckpointerShmem->num_backend_writes;
-	BgWriterStats.m_buf_fsync_backend += CheckpointerShmem->num_backend_fsync;
+	BgWriterStats.buf_written_backend += CheckpointerShmem->num_backend_writes;
+	BgWriterStats.buf_fsync_backend += CheckpointerShmem->num_backend_fsync;
 
 	CheckpointerShmem->num_backend_writes = 0;
 	CheckpointerShmem->num_backend_fsync = 0;

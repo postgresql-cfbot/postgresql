@@ -28,6 +28,7 @@
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
+#include "bestatus.h"
 #include "catalog/pg_statistic.h"
 #include "commands/tablespace.h"
 #include "executor/execdebug.h"
@@ -35,7 +36,6 @@
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "port/atomics.h"
 #include "utils/dynahash.h"
 #include "utils/memutils.h"

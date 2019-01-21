@@ -126,7 +126,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 
-#include "pgstat.h"
+#include "bestatus.h"
 
 #include "replication/logical.h"
 #include "replication/reorderbuffer.h"

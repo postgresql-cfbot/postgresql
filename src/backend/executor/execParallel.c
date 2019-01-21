@@ -48,7 +48,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
-#include "pgstat.h"
+#include "bestatus.h"
 
 /*
  * Magic numbers for parallel executor communication.  We use constants

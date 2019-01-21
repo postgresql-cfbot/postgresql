@@ -71,6 +71,7 @@
 #include "access/reloptions.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "bestatus.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
@@ -969,7 +970,7 @@ rebuild_database_list(Oid newdb)
 		PgStat_StatDBEntry *entry;
 
 		/* only consider this database if it has a pgstat entry */
-		entry = pgstat_fetch_stat_dbentry(newdb);
+		entry = pgstat_fetch_stat_dbentry(newdb, true);
 		if (entry != NULL)
 		{
 			/* we assume it isn't found because the hash was just created */
@@ -978,6 +979,7 @@ rebuild_database_list(Oid newdb)
 			/* hash_search already filled in the key */
 			db->adl_score = score++;
 			/* next_worker is filled in later */
+			pfree(entry);
 		}
 	}
 
@@ -993,7 +995,7 @@ rebuild_database_list(Oid newdb)
 		 * skip databases with no stat entries -- in particular, this gets rid
 		 * of dropped databases
 		 */
-		entry = pgstat_fetch_stat_dbentry(avdb->adl_datid);
+		entry = pgstat_fetch_stat_dbentry(avdb->adl_datid, true);
 		if (entry == NULL)
 			continue;
 
@@ -1005,6 +1007,7 @@ rebuild_database_list(Oid newdb)
 			db->adl_score = score++;
 			/* next_worker is filled in later */
 		}
+		pfree(entry);
 	}
 
 	/* finally, insert all qualifying databases not previously inserted */
@@ -1017,7 +1020,7 @@ rebuild_database_list(Oid newdb)
 		PgStat_StatDBEntry *entry;
 
 		/* only consider databases with a pgstat entry */
-		entry = pgstat_fetch_stat_dbentry(avdb->adw_datid);
+		entry = pgstat_fetch_stat_dbentry(avdb->adw_datid, true);
 		if (entry == NULL)
 			continue;
 
@@ -1029,6 +1032,7 @@ rebuild_database_list(Oid newdb)
 			db->adl_score = score++;
 			/* next_worker is filled in later */
 		}
+		pfree(entry);
 	}
 	nelems = score;
 
@@ -1227,7 +1231,7 @@ do_start_worker(void)
 			continue;			/* ignore not-at-risk DBs */
 
 		/* Find pgstat entry if any */
-		tmp->adw_entry = pgstat_fetch_stat_dbentry(tmp->adw_datid);
+		tmp->adw_entry = pgstat_fetch_stat_dbentry(tmp->adw_datid, true);
 
 		/*
 		 * Skip a database with no pgstat entry; it means it hasn't seen any
@@ -1265,16 +1269,22 @@ do_start_worker(void)
 				break;
 			}
 		}
-		if (skipit)
-			continue;
+		if (!skipit)
+		{
+			/* Remember the db with oldest autovac time. */
+			if (avdb == NULL ||
+				tmp->adw_entry->last_autovac_time <
+				avdb->adw_entry->last_autovac_time)
+			{
+				if (avdb)
+					pfree(avdb->adw_entry);
+				avdb = tmp;
+			}
+		}
 
-		/*
-		 * Remember the db with oldest autovac time.  (If we are here, both
-		 * tmp->entry and db->entry must be non-null.)
-		 */
-		if (avdb == NULL ||
-			tmp->adw_entry->last_autovac_time < avdb->adw_entry->last_autovac_time)
-			avdb = tmp;
+		/* Immediately free it if not used */
+		if(avdb != tmp)
+			pfree(tmp->adw_entry);
 	}
 
 	/* Found a database -- process it */
@@ -1963,7 +1973,7 @@ do_autovacuum(void)
 	 * may be NULL if we couldn't find an entry (only happens if we are
 	 * forcing a vacuum for anti-wrap purposes).
 	 */
-	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
+	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId, true);
 
 	/* Start a transaction so our commands have one to play into. */
 	StartTransactionCommand();
@@ -2013,7 +2023,7 @@ do_autovacuum(void)
 	MemoryContextSwitchTo(AutovacMemCxt);
 
 	/* The database hash where pgstat keeps shared relations */
-	shared = pgstat_fetch_stat_dbentry(InvalidOid);
+	shared = pgstat_fetch_stat_dbentry(InvalidOid, true);
 
 	classRel = heap_open(RelationRelationId, AccessShareLock);
 
@@ -2099,6 +2109,8 @@ do_autovacuum(void)
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
 								  effective_multixact_freeze_max_age,
 								  &dovacuum, &doanalyze, &wraparound);
+		if (tabentry)
+			pfree(tabentry);
 
 		/* Relations that need work are added to table_oids */
 		if (dovacuum || doanalyze)
@@ -2178,10 +2190,11 @@ do_autovacuum(void)
 		/* Fetch the pgstat entry for this table */
 		tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
 											 shared, dbentry);
-
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
 								  effective_multixact_freeze_max_age,
 								  &dovacuum, &doanalyze, &wraparound);
+		if (tabentry)
+			pfree(tabentry);
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
@@ -2750,12 +2763,10 @@ get_pgstat_tabentry_relid(Oid relid, bool isshared, PgStat_StatDBEntry *shared,
 	if (isshared)
 	{
 		if (PointerIsValid(shared))
-			tabentry = hash_search(shared->tables, &relid,
-								   HASH_FIND, NULL);
+			tabentry = backend_get_tab_entry(shared, relid, true);
 	}
 	else if (PointerIsValid(dbentry))
-		tabentry = hash_search(dbentry->tables, &relid,
-							   HASH_FIND, NULL);
+		tabentry = backend_get_tab_entry(dbentry, relid, true);
 
 	return tabentry;
 }
@@ -2787,8 +2798,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	/* use fresh stats */
 	autovac_refresh_stats();
 
-	shared = pgstat_fetch_stat_dbentry(InvalidOid);
-	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
+	shared = pgstat_fetch_stat_dbentry(InvalidOid, true);
+	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId, true);
 
 	/* fetch the relation's relcache entry */
 	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
@@ -2819,6 +2830,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
 							  effective_multixact_freeze_max_age,
 							  &dovacuum, &doanalyze, &wraparound);
+	if (tabentry)
+		pfree(tabentry);
 
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
@@ -2909,7 +2922,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	}
 
 	heap_freetuple(classTup);
-
+	pfree(shared);
+	pfree(dbentry);
 	return tab;
 }
 

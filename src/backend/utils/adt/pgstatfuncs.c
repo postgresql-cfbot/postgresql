@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "bestatus.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "common/ip.h"
@@ -33,7 +34,7 @@
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 /* Global bgwriter statistics, from bgwriter.c */
-extern PgStat_MsgBgWriter bgwriterStats;
+extern PgStat_BgWriter bgwriterStats;
 
 Datum
 pg_stat_get_numscans(PG_FUNCTION_ARGS)
@@ -1176,7 +1177,7 @@ pg_stat_get_db_xact_commit(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_xact_commit);
@@ -1192,7 +1193,7 @@ pg_stat_get_db_xact_rollback(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_xact_rollback);
@@ -1208,7 +1209,7 @@ pg_stat_get_db_blocks_fetched(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_blocks_fetched);
@@ -1224,7 +1225,7 @@ pg_stat_get_db_blocks_hit(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_blocks_hit);
@@ -1240,7 +1241,7 @@ pg_stat_get_db_tuples_returned(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_tuples_returned);
@@ -1256,7 +1257,7 @@ pg_stat_get_db_tuples_fetched(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_tuples_fetched);
@@ -1272,7 +1273,7 @@ pg_stat_get_db_tuples_inserted(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_tuples_inserted);
@@ -1288,7 +1289,7 @@ pg_stat_get_db_tuples_updated(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_tuples_updated);
@@ -1304,7 +1305,7 @@ pg_stat_get_db_tuples_deleted(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_tuples_deleted);
@@ -1319,7 +1320,7 @@ pg_stat_get_db_stat_reset_time(PG_FUNCTION_ARGS)
 	TimestampTz result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = dbentry->stat_reset_timestamp;
@@ -1337,7 +1338,7 @@ pg_stat_get_db_temp_files(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = dbentry->n_temp_files;
@@ -1353,7 +1354,7 @@ pg_stat_get_db_temp_bytes(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = dbentry->n_temp_bytes;
@@ -1368,7 +1369,7 @@ pg_stat_get_db_conflict_tablespace(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_conflict_tablespace);
@@ -1383,7 +1384,7 @@ pg_stat_get_db_conflict_lock(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_conflict_lock);
@@ -1398,7 +1399,7 @@ pg_stat_get_db_conflict_snapshot(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_conflict_snapshot);
@@ -1413,7 +1414,7 @@ pg_stat_get_db_conflict_bufferpin(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_conflict_bufferpin);
@@ -1428,7 +1429,7 @@ pg_stat_get_db_conflict_startup_deadlock(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_conflict_startup_deadlock);
@@ -1443,7 +1444,7 @@ pg_stat_get_db_conflict_all(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (
@@ -1463,7 +1464,7 @@ pg_stat_get_db_deadlocks(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = (int64) (dbentry->n_deadlocks);
@@ -1479,7 +1480,7 @@ pg_stat_get_db_blk_read_time(PG_FUNCTION_ARGS)
 	PgStat_StatDBEntry *dbentry;
 
 	/* convert counter from microsec to millisec for display */
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = ((double) dbentry->n_block_read_time) / 1000.0;
@@ -1495,7 +1496,7 @@ pg_stat_get_db_blk_write_time(PG_FUNCTION_ARGS)
 	PgStat_StatDBEntry *dbentry;
 
 	/* convert counter from microsec to millisec for display */
-	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid, false)) == NULL)
 		result = 0;
 	else
 		result = ((double) dbentry->n_block_write_time) / 1000.0;
@@ -1850,6 +1851,9 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 	/* Get statistics about the archiver process */
 	archiver_stats = pgstat_fetch_stat_archiver();
 
+	if (archiver_stats == NULL)
+		PG_RETURN_NULL();
+
 	/* Fill values and NULLs */
 	values[0] = Int64GetDatum(archiver_stats->archived_count);
 	if (*(archiver_stats->last_archived_wal) == '\0')
@@ -1879,6 +1883,5 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 		values[6] = TimestampTzGetDatum(archiver_stats->stat_reset_timestamp);
 
 	/* Returns the record as Datum */
-	PG_RETURN_DATUM(HeapTupleGetDatum(
-									  heap_form_tuple(tupdesc, values, nulls)));
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }

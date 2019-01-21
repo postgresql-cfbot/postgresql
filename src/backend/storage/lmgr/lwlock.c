@@ -76,8 +76,8 @@
  */
 #include "postgres.h"
 
+#include "bestatus.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "pg_trace.h"
 #include "postmaster/postmaster.h"
 #include "replication/slot.h"
@@ -521,6 +521,9 @@ RegisterLWLockTranches(void)
 	LWLockRegisterTranche(LWTRANCHE_TBM, "tbm");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_APPEND, "parallel_append");
 	LWLockRegisterTranche(LWTRANCHE_PARALLEL_HASH_JOIN, "parallel_hash_join");
+	LWLockRegisterTranche(LWTRANCHE_STATS_DSA, "stats table dsa");
+	LWLockRegisterTranche(LWTRANCHE_STATS_DB, "db stats");
+	LWLockRegisterTranche(LWTRANCHE_STATS_FUNC_TABLE, "table/func stats");
 
 	/* Register named tranches. */
 	for (i = 0; i < NamedLWLockTrancheRequests; i++)

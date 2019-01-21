@@ -36,9 +36,9 @@
 #include <openssl/ec.h>
 #endif
 
+#include "bestatus.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/latch.h"
 #include "tcop/tcopprot.h"

@@ -32,6 +32,7 @@
 
 #include "access/relscan.h"
 #include "access/xact.h"
+#include "bestatus.h"
 #include "executor/execdebug.h"
 #include "executor/execParallel.h"
 #include "executor/nodeGather.h"
@@ -39,7 +40,6 @@
 #include "executor/tqueue.h"
 #include "miscadmin.h"
 #include "optimizer/planmain.h"
-#include "pgstat.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 

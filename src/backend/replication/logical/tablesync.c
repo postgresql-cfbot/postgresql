@@ -86,10 +86,11 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
-#include "pgstat.h"
 
 #include "access/heapam.h"
 #include "access/xact.h"
+
+#include "bestatus.h"
 
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
@@ -97,15 +98,16 @@
 #include "commands/copy.h"
 
 #include "parser/parse_relation.h"
+#include "pgstat.h"
 
 #include "replication/logicallauncher.h"
 #include "replication/logicalrelation.h"
 #include "replication/walreceiver.h"
 #include "replication/worker_internal.h"
 
-#include "utils/snapmgr.h"
 #include "storage/ipc.h"
 
+#include "utils/snapmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -128,7 +130,7 @@ finish_sync_worker(void)
 	if (IsTransactionState())
 	{
 		CommitTransactionCommand();
-		pgstat_report_stat(false);
+		pgstat_update_stat(true);
 	}
 
 	/* And flush all writes. */
@@ -144,6 +146,9 @@ finish_sync_worker(void)
 	/* Find the main apply worker and signal it. */
 	logicalrep_worker_wakeup(MyLogicalRepWorker->subid, InvalidOid);
 
+	/* clean up retained statistics */
+	pgstat_update_stat(true);
+	
 	/* Stop gracefully */
 	proc_exit(0);
 }
@@ -525,7 +530,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 	if (started_tx)
 	{
 		CommitTransactionCommand();
-		pgstat_report_stat(false);
+		pgstat_update_stat(false);
 	}
 }
 
@@ -863,7 +868,7 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 										   MyLogicalRepWorker->relstate,
 										   MyLogicalRepWorker->relstate_lsn);
 				CommitTransactionCommand();
-				pgstat_report_stat(false);
+				pgstat_update_stat(false);
 
 				/*
 				 * We want to do the table data sync in a single transaction.

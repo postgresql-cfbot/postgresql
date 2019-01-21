@@ -45,9 +45,9 @@
 #include <unistd.h>
 
 #include "access/xlog.h"
+#include "bestatus.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "postmaster/walwriter.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"

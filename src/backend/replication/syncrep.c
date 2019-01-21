@@ -75,8 +75,8 @@
 #include <unistd.h>
 
 #include "access/xact.h"
+#include "bestatus.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"

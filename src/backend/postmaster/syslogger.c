@@ -31,11 +31,11 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include "bestatus.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
-#include "pgstat.h"
 #include "pgtime.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/postmaster.h"

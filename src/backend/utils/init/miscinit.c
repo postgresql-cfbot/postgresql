@@ -31,12 +31,12 @@
 #endif
 
 #include "access/htup_details.h"
+#include "bestatus.h"
 #include "catalog/pg_authid.h"
 #include "common/file_perm.h"
 #include "libpq/libpq.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
 #include "storage/fd.h"

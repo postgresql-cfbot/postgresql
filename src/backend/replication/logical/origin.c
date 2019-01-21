@@ -77,13 +77,12 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/xact.h"
-
+#include "bestatus.h"
 #include "catalog/indexing.h"
 #include "nodes/execnodes.h"
 
 #include "replication/origin.h"
 #include "replication/logical.h"
-#include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"

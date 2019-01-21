@@ -43,8 +43,8 @@
 #include <poll.h>
 #endif
 
+#include "bestatus.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "port/atomics.h"
 #include "portability/instr_time.h"
 #include "postmaster/postmaster.h"

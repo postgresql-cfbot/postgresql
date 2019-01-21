@@ -108,12 +108,12 @@
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
+#include "bestatus.h"
 #include "executor/executor.h"
 #include "executor/hashjoin.h"
 #include "executor/nodeHash.h"
 #include "executor/nodeHashjoin.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #include "utils/memutils.h"
 #include "utils/sharedtuplestore.h"
 

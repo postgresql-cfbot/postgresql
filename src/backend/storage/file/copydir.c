@@ -22,10 +22,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "bestatus.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 
 /*
  * copydir: copy a directory

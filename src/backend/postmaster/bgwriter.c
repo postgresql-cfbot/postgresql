@@ -40,6 +40,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "bestatus.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -267,9 +268,9 @@ BackgroundWriterMain(void)
 		can_hibernate = BgBufferSync(&wb_context);
 
 		/*
-		 * Send off activity statistics to the stats collector
+		 * Update activity statistics.
 		 */
-		pgstat_send_bgwriter();
+		pgstat_update_bgwriter();
 
 		if (FirstCallSinceLastCheckpoint())
 		{

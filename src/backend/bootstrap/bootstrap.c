@@ -22,6 +22,7 @@
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "bestatus.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
@@ -338,6 +339,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case WalReceiverProcess:
 				statmsg = pgstat_get_backend_desc(B_WAL_RECEIVER);
 				break;
+			case ArchiverProcess:
+				statmsg = pgstat_get_backend_desc(B_ARCHIVER);
+				break;
 			default:
 				statmsg = "??? process";
 				break;
@@ -414,6 +418,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		CreateAuxProcessResourceOwner();
 
 		/* Initialize backend status information */
+		pgstat_bearray_initialize();
 		pgstat_initialize();
 		pgstat_bestart();
 
@@ -454,6 +459,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case BgWriterProcess:
 			/* don't set signals, bgwriter has its own agenda */
 			BackgroundWriterMain();
+			proc_exit(1);		/* should never return */
+
+		case ArchiverProcess:
+			/* don't set signals, bgwriter has its own agenda */
+			PgArchiverMain();
 			proc_exit(1);		/* should never return */
 
 		case CheckpointerProcess:

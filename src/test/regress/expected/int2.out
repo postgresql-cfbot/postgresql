@@ -242,6 +242,39 @@ SELECT '' AS five, i.f1, i.f1 / int4 '2' AS x FROM INT2_TBL i;
       | -32767 | -16383
 (5 rows)
 
+-- distance
+SELECT '' AS five, i.f1, i.f1 <-> int2 '2' AS x FROM INT2_TBL i;
+ERROR:  smallint out of range
+SELECT '' AS four, i.f1, i.f1 <-> int2 '2' AS x FROM INT2_TBL i
+WHERE f1 > -32767;
+ four |  f1   |   x   
+------+-------+-------
+      |     0 |     2
+      |  1234 |  1232
+      | -1234 |  1236
+      | 32767 | 32765
+(4 rows)
+
+SELECT '' AS five, i.f1, i.f1 <-> int4 '2' AS x FROM INT2_TBL i;
+ five |   f1   |   x   
+------+--------+-------
+      |      0 |     2
+      |   1234 |  1232
+      |  -1234 |  1236
+      |  32767 | 32765
+      | -32767 | 32769
+(5 rows)
+
+SELECT '' AS five, i.f1, i.f1 <-> int8 '2' AS x FROM INT2_TBL i;
+ five |   f1   |   x   
+------+--------+-------
+      |      0 |     2
+      |   1234 |  1232
+      |  -1234 |  1236
+      |  32767 | 32765
+      | -32767 | 32769
+(5 rows)
+
 -- corner cases
 SELECT (-1::int2<<15)::text;
   text  

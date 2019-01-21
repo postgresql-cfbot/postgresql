@@ -200,6 +200,19 @@
   planner relies on them for optimization purposes.
  </para>
 
+ <para>
+  To implement the distance ordered (nearest-neighbor) search, we only need
+  to define a distance operator (usually it called &lt;-&gt;) with a correpsonding
+  operator family for distance comparison in the index's operator class.
+  These operators must satisfy the following assumptions for all non-null
+  values A,B,C of the datatype:
+
+  A &lt;-&gt; B = B &lt;-&gt; A						symmetric law
+  if A = B, then A &lt;-&gt; C = B &lt;-&gt; C		distance equivalence
+  if (A &lt;= B and B &lt;= C) or (A &gt;= B and B &gt;= C),
+  then A &lt;-&gt; B &lt;= A &lt;-&gt; C			monotonicity
+ </para>
+
 </sect1>
 
 <sect1 id="btree-support-funcs">

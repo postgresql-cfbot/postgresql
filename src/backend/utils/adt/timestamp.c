@@ -2672,6 +2672,86 @@ timestamp_mi(PG_FUNCTION_ARGS)
 	PG_RETURN_INTERVAL_P(result);
 }
 
+Datum
+timestamp_distance(PG_FUNCTION_ARGS)
+{
+	Timestamp	a = PG_GETARG_TIMESTAMP(0);
+	Timestamp	b = PG_GETARG_TIMESTAMP(1);
+	Interval   *r;
+
+	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
+	{
+		Interval   *p = palloc(sizeof(Interval));
+
+		p->day = INT_MAX;
+		p->month = INT_MAX;
+		p->time = PG_INT64_MAX;
+		PG_RETURN_INTERVAL_P(p);
+	}
+	else
+		r = DatumGetIntervalP(DirectFunctionCall2(timestamp_mi,
+												  PG_GETARG_DATUM(0),
+												  PG_GETARG_DATUM(1)));
+	PG_RETURN_INTERVAL_P(abs_interval(r));
+}
+
+Interval *
+timestamp_dist_internal(Timestamp a, Timestamp b)
+{
+	Interval   *r;
+
+	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
+	{
+		r = palloc(sizeof(Interval));
+
+		r->day = INT_MAX;
+		r->month = INT_MAX;
+		r->time = PG_INT64_MAX;
+
+		return r;
+	}
+
+	r = DatumGetIntervalP(DirectFunctionCall2(timestamp_mi,
+											  TimestampGetDatum(a),
+											  TimestampGetDatum(b)));
+
+	return abs_interval(r);
+}
+
+Datum
+timestamptz_distance(PG_FUNCTION_ARGS)
+{
+	TimestampTz a = PG_GETARG_TIMESTAMPTZ(0);
+	TimestampTz b = PG_GETARG_TIMESTAMPTZ(1);
+
+	PG_RETURN_INTERVAL_P(timestamp_dist_internal(a, b));
+}
+
+Datum
+timestamp_dist_timestamptz(PG_FUNCTION_ARGS)
+{
+	Timestamp	ts1 = PG_GETARG_TIMESTAMP(0);
+	TimestampTz	tstz2 = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz	tstz1;
+
+	tstz1 = timestamp2timestamptz(ts1);
+
+	PG_RETURN_INTERVAL_P(timestamp_dist_internal(tstz1, tstz2));
+}
+
+Datum
+timestamptz_dist_timestamp(PG_FUNCTION_ARGS)
+{
+	TimestampTz	tstz1 = PG_GETARG_TIMESTAMPTZ(0);
+	Timestamp	ts2 = PG_GETARG_TIMESTAMP(1);
+	TimestampTz	tstz2;
+
+	tstz2 = timestamp2timestamptz(ts2);
+
+	PG_RETURN_INTERVAL_P(timestamp_dist_internal(tstz1, tstz2));
+}
+
+
 /*
  *	interval_justify_interval()
  *
@@ -3541,6 +3621,29 @@ interval_avg(PG_FUNCTION_ARGS)
 							   Float8GetDatum((double) N.time));
 }
 
+Interval *
+abs_interval(Interval *a)
+{
+	static Interval zero = {0, 0, 0};
+
+	if (DatumGetBool(DirectFunctionCall2(interval_lt,
+										 IntervalPGetDatum(a),
+										 IntervalPGetDatum(&zero))))
+		a = DatumGetIntervalP(DirectFunctionCall1(interval_um,
+												  IntervalPGetDatum(a)));
+
+	return a;
+}
+
+Datum
+interval_distance(PG_FUNCTION_ARGS)
+{
+	Datum		diff = DirectFunctionCall2(interval_mi,
+										   PG_GETARG_DATUM(0),
+										   PG_GETARG_DATUM(1));
+
+	PG_RETURN_INTERVAL_P(abs_interval(DatumGetIntervalP(diff)));
+}
 
 /* timestamp_age()
  * Calculate time difference while retaining year/month fields.

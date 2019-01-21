@@ -207,6 +207,21 @@ SELECT '' AS fortyfive, r1.*, r2.*
            | 34 years        | 6 years
 (45 rows)
 
+SELECT '' AS ten, f1 <-> interval '@ 2 day 3 hours' FROM INTERVAL_TBL;
+ ten |          ?column?          
+-----+----------------------------
+     | 2 days 02:59:00
+     | 2 days -02:00:00
+     | 8 days -03:00:00
+     | 34 years -2 days -03:00:00
+     | 3 mons -2 days -03:00:00
+     | 2 days 03:00:14
+     | 1 day 00:56:56
+     | 6 years -2 days -03:00:00
+     | 5 mons -2 days -03:00:00
+     | 5 mons -2 days +09:00:00
+(10 rows)
+
 -- Test intervals that are large enough to overflow 64 bits in comparisons
 CREATE TEMP TABLE INTERVAL_TBL_OF (f1 interval);
 INSERT INTO INTERVAL_TBL_OF (f1) VALUES

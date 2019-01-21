@@ -40,4 +40,6 @@ SELECT '' AS four, o.* FROM OID_TBL o WHERE o.f1 >= '1234';
 
 SELECT '' AS three, o.* FROM OID_TBL o WHERE o.f1 > '1234';
 
+SELECT '' AS eight, f1, f1 <-> oid '123' FROM OID_TBL;
+
 DROP TABLE OID_TBL;

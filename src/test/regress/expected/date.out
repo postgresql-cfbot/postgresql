@@ -1477,3 +1477,64 @@ select make_time(10, 55, 100.1);
 ERROR:  time field value out of range: 10:55:100.1
 select make_time(24, 0, 2.1);
 ERROR:  time field value out of range: 24:00:2.1
+-- distance operators
+SELECT '' AS "Fifteen", f1 <-> date '2001-02-03' AS "Distance" FROM DATE_TBL;
+ Fifteen | Distance 
+---------+----------
+         |    16006
+         |    15941
+         |     1802
+         |     1801
+         |     1800
+         |     1799
+         |     1436
+         |     1435
+         |     1434
+         |      308
+         |      307
+         |      306
+         |    13578
+         |    13944
+         |    14311
+(15 rows)
+
+SELECT '' AS "Fifteen", f1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM DATE_TBL;
+ Fifteen |               Distance                
+---------+---------------------------------------
+         | @ 16006 days 1 hour 23 mins 45 secs
+         | @ 15941 days 1 hour 23 mins 45 secs
+         | @ 1802 days 1 hour 23 mins 45 secs
+         | @ 1801 days 1 hour 23 mins 45 secs
+         | @ 1800 days 1 hour 23 mins 45 secs
+         | @ 1799 days 1 hour 23 mins 45 secs
+         | @ 1436 days 1 hour 23 mins 45 secs
+         | @ 1435 days 1 hour 23 mins 45 secs
+         | @ 1434 days 1 hour 23 mins 45 secs
+         | @ 308 days 1 hour 23 mins 45 secs
+         | @ 307 days 1 hour 23 mins 45 secs
+         | @ 306 days 1 hour 23 mins 45 secs
+         | @ 13577 days 22 hours 36 mins 15 secs
+         | @ 13943 days 22 hours 36 mins 15 secs
+         | @ 14310 days 22 hours 36 mins 15 secs
+(15 rows)
+
+SELECT '' AS "Fifteen", f1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM DATE_TBL;
+ Fifteen |               Distance                
+---------+---------------------------------------
+         | @ 16005 days 14 hours 23 mins 45 secs
+         | @ 15940 days 14 hours 23 mins 45 secs
+         | @ 1801 days 14 hours 23 mins 45 secs
+         | @ 1800 days 14 hours 23 mins 45 secs
+         | @ 1799 days 14 hours 23 mins 45 secs
+         | @ 1798 days 14 hours 23 mins 45 secs
+         | @ 1435 days 14 hours 23 mins 45 secs
+         | @ 1434 days 14 hours 23 mins 45 secs
+         | @ 1433 days 14 hours 23 mins 45 secs
+         | @ 307 days 14 hours 23 mins 45 secs
+         | @ 306 days 14 hours 23 mins 45 secs
+         | @ 305 days 15 hours 23 mins 45 secs
+         | @ 13578 days 8 hours 36 mins 15 secs
+         | @ 13944 days 8 hours 36 mins 15 secs
+         | @ 14311 days 8 hours 36 mins 15 secs
+(15 rows)
+

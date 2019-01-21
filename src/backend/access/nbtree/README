@@ -659,3 +659,20 @@ routines must treat it accordingly.  The actual key stored in the
 item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
 than key.
+
+Nearest-neighbor search
+-----------------------
+
+There is a special scan strategy for nearest-neighbor (kNN) search,
+that is used in queries with ORDER BY distance clauses like this:
+SELECT * FROM tab WHERE col > const1 ORDER BY col <-> const2 LIMIT k.
+But, unlike GiST, B-tree supports only a one ordering operator on the
+first index column.
+
+At the beginning of kNN scan, we need to determine which strategy we
+will use --- a special bidirectional or a ordinary unidirectional.
+If the point from which we measure the distance falls into the scan range,
+we use bidirectional scan starting from this point, else we use simple
+unidirectional scan in the right direction.  Algorithm of a bidirectional
+scan is very simple: at each step we advancing scan in that direction,
+which has the nearest point.

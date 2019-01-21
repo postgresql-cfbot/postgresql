@@ -750,6 +750,7 @@ macaddr8_gt(macaddr8,macaddr8)
 macaddr8_ge(macaddr8,macaddr8)
 macaddr8_ne(macaddr8,macaddr8)
 macaddr8_cmp(macaddr8,macaddr8)
+oiddist(oid,oid)
 -- restore normal output mode
 \a\t
 -- List of functions used by libpq's fe-lobj.c
@@ -1332,7 +1333,7 @@ WHERE pp.oid = ap.amproc AND po.oid = o.oprcode AND o.oid = ao.amopopr AND
     ao.amoprighttype = ap.amprocrighttype AND
     ap.amprocnum = 1 AND
     (pp.provolatile != po.provolatile OR
-     pp.proleakproof != po.proleakproof)
+     (NOT pp.proleakproof AND po.proleakproof))
 ORDER BY 1;
                    proc                    | vp | lp |              opr              | vo | lo 
 -------------------------------------------+----+----+-------------------------------+----+----
@@ -1862,6 +1863,7 @@ ORDER BY 1, 2, 3;
         403 |            5 | *>
         403 |            5 | >
         403 |            5 | ~>~
+        403 |            6 | <->
         405 |            1 | =
         783 |            1 | <<
         783 |            1 | @@
@@ -1971,7 +1973,7 @@ ORDER BY 1, 2, 3;
        4000 |           26 | >>
        4000 |           27 | >>=
        4000 |           28 | ^@
-(123 rows)
+(124 rows)
 
 -- Check that all opclass search operators have selectivity estimators.
 -- This is not absolutely required, but it seems a reasonable thing

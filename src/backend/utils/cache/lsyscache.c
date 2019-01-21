@@ -3131,9 +3131,6 @@ get_index_column_opclass(Oid index_oid, int attno)
 {
 	HeapTuple	tuple;
 	Form_pg_index rd_index PG_USED_FOR_ASSERTS_ONLY;
-	Datum		datum;
-	bool		isnull;
-	oidvector  *indclass;
 	Oid			opclass;
 
 	/* First we need to know the column's opclass. */
@@ -3147,12 +3144,22 @@ get_index_column_opclass(Oid index_oid, int attno)
 	/* caller is supposed to guarantee this */
 	Assert(attno > 0 && attno <= rd_index->indnatts);
 
-	datum = SysCacheGetAttr(INDEXRELID, tuple,
-							Anum_pg_index_indclass, &isnull);
-	Assert(!isnull);
+	if (attno >= 1 && attno <= rd_index->indnkeyatts)
+	{
+		oidvector  *indclass;
+		bool		isnull;
+		Datum		datum = SysCacheGetAttr(INDEXRELID, tuple,
+											Anum_pg_index_indclass,
+											&isnull);
+		Assert(!isnull);
 
-	indclass = ((oidvector *) DatumGetPointer(datum));
-	opclass = indclass->values[attno - 1];
+		indclass = ((oidvector *) DatumGetPointer(datum));
+		opclass = indclass->values[attno - 1];
+	}
+	else
+	{
+		opclass = InvalidOid;
+	}
 
 	ReleaseSysCache(tuple);
 

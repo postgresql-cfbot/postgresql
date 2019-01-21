@@ -17,6 +17,7 @@
 
 #include <math.h>
 
+#include "access/amapi.h"
 #include "access/stratnum.h"
 #include "access/sysattr.h"
 #include "catalog/pg_am.h"
@@ -156,6 +157,10 @@ static void match_clause_to_index(IndexOptInfo *index,
 static bool match_clause_to_indexcol(IndexOptInfo *index,
 						 int indexcol,
 						 RestrictInfo *rinfo);
+static Expr *match_clause_to_ordering_op(IndexOptInfo *index,
+							int indexcol,
+							Expr *clause,
+							Oid pk_opfamily);
 static bool is_indexable_operator(Oid expr_op, Oid opfamily,
 					  bool indexkey_on_left);
 static bool match_rowcompare_to_indexcol(IndexOptInfo *index,
@@ -166,8 +171,6 @@ static bool match_rowcompare_to_indexcol(IndexOptInfo *index,
 static void match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 						List **orderby_clauses_p,
 						List **clause_columns_p);
-static Expr *match_clause_to_ordering_op(IndexOptInfo *index,
-							int indexcol, Expr *clause, Oid pk_opfamily);
 static bool ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
 						   EquivalenceClass *ec, EquivalenceMember *em,
 						   void *arg);
@@ -987,6 +990,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * if we are only trying to build bitmap indexscans, nor if we have to
 	 * assume the scan is unordered.
 	 */
+	useful_pathkeys = NIL;
+	orderbyclauses = NIL;
+	orderbyclausecols = NIL;
+
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
 								!found_lower_saop_clause &&
 								has_useful_pathkeys(root, rel));
@@ -997,10 +1004,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 											  ForwardScanDirection);
 		useful_pathkeys = truncate_useless_pathkeys(root, rel,
 													index_pathkeys);
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
-	else if (index->amcanorderbyop && pathkeys_possibly_useful)
+
+	if (useful_pathkeys == NIL &&
+		index->ammatchorderby && pathkeys_possibly_useful)
 	{
 		/* see if we can generate ordering operators for query_pathkeys */
 		match_pathkeys_to_index(index, root->query_pathkeys,
@@ -1010,12 +1017,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			useful_pathkeys = root->query_pathkeys;
 		else
 			useful_pathkeys = NIL;
-	}
-	else
-	{
-		useful_pathkeys = NIL;
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
 
 	/*
@@ -2576,6 +2577,99 @@ match_rowcompare_to_indexcol(IndexOptInfo *index,
 	return false;
 }
 
+Expr *
+match_orderbyop_pathkey(IndexOptInfo *index, PathKey *pathkey, int *indexcol_p)
+{
+	ListCell   *lc;
+
+	/* Pathkey must request default sort order for the target opfamily */
+	if (pathkey->pk_strategy != BTLessStrategyNumber ||
+		pathkey->pk_nulls_first)
+		return NULL;
+
+	/* If eclass is volatile, no hope of using an indexscan */
+	if (pathkey->pk_eclass->ec_has_volatile)
+		return NULL;
+
+	/*
+	 * Try to match eclass member expression(s) to index.  Note that child
+	 * EC members are considered, but only when they belong to the target
+	 * relation.  (Unlike regular members, the same expression could be a
+	 * child member of more than one EC.  Therefore, the same index could
+	 * be considered to match more than one pathkey list, which is OK
+	 * here.  See also get_eclass_for_sort_expr.)
+	 */
+	foreach(lc, pathkey->pk_eclass->ec_members)
+	{
+		EquivalenceMember *member = castNode(EquivalenceMember, lfirst(lc));
+		int			indexcol;
+		int			indexcol_min;
+		int			indexcol_max;
+
+		/* No possibility of match if it references other relations */
+		if (!bms_equal(member->em_relids, index->rel->relids))
+			continue;
+
+		/* If *indexcol_p is non-negative then try to match only to it */
+		if (*indexcol_p >= 0)
+		{
+			indexcol_min = *indexcol_p;
+			indexcol_max = *indexcol_p + 1;
+		}
+		else	/* try to match all columns */
+		{
+			indexcol_min = 0;
+			indexcol_max = index->ncolumns;
+		}
+
+		/*
+		 * We allow any column of the GiST index to match each pathkey;
+		 * they don't have to match left-to-right as you might expect.
+		 */
+		for (indexcol = indexcol_min; indexcol < indexcol_max; indexcol++)
+		{
+			Expr	   *expr = match_clause_to_ordering_op(index,
+														   indexcol,
+														   member->em_expr,
+														   pathkey->pk_opfamily);
+			if (expr)
+			{
+				*indexcol_p = indexcol;
+				return expr;	/* don't want to look at remaining members */
+			}
+		}
+	}
+
+	return NULL;
+}
+
+bool
+match_orderbyop_pathkeys(IndexOptInfo *index, List *pathkeys,
+						 List **orderby_clauses_p, List **clause_columns_p)
+{
+	ListCell   *lc;
+
+	foreach(lc, pathkeys)
+	{
+		PathKey	   *pathkey = castNode(PathKey, lfirst(lc));
+		Expr	   *expr;
+		int			indexcol = -1;	/* match all index columns */
+
+		expr = match_orderbyop_pathkey(index, pathkey, &indexcol);
+
+		/*
+		 * Note: for any failure to match, we just return NIL immediately.
+		 * There is no value in matching just some of the pathkeys.
+		 */
+		if (!expr)
+			return false;
+
+		*orderby_clauses_p = lappend(*orderby_clauses_p, expr);
+		*clause_columns_p = lappend_int(*clause_columns_p, indexcol);
+	}
+
+	return true;	/* success */
+}
 
 /****************************************************************************
  *				----  ROUTINES TO CHECK ORDERING OPERATORS	----
@@ -2601,86 +2695,24 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 {
 	List	   *orderby_clauses = NIL;
 	List	   *clause_columns = NIL;
-	ListCell   *lc1;
+	ammatchorderby_function ammatchorderby =
+			(ammatchorderby_function) index->ammatchorderby;
 
-	*orderby_clauses_p = NIL;	/* set default results */
-	*clause_columns_p = NIL;
-
-	/* Only indexes with the amcanorderbyop property are interesting here */
-	if (!index->amcanorderbyop)
-		return;
-
-	foreach(lc1, pathkeys)
+	/* Only indexes with the ammatchorderby function are interesting here */
+	if (ammatchorderby &&
+		ammatchorderby(index, pathkeys, &orderby_clauses, &clause_columns))
 	{
-		PathKey    *pathkey = (PathKey *) lfirst(lc1);
-		bool		found = false;
-		ListCell   *lc2;
+		Assert(list_length(pathkeys) == list_length(orderby_clauses));
+		Assert(list_length(pathkeys) == list_length(clause_columns));
 
-		/*
-		 * Note: for any failure to match, we just return NIL immediately.
-		 * There is no value in matching just some of the pathkeys.
-		 */
-
-		/* Pathkey must request default sort order for the target opfamily */
-		if (pathkey->pk_strategy != BTLessStrategyNumber ||
-			pathkey->pk_nulls_first)
-			return;
-
-		/* If eclass is volatile, no hope of using an indexscan */
-		if (pathkey->pk_eclass->ec_has_volatile)
-			return;
-
-		/*
-		 * Try to match eclass member expression(s) to index.  Note that child
-		 * EC members are considered, but only when they belong to the target
-		 * relation.  (Unlike regular members, the same expression could be a
-		 * child member of more than one EC.  Therefore, the same index could
-		 * be considered to match more than one pathkey list, which is OK
-		 * here.  See also get_eclass_for_sort_expr.)
-		 */
-		foreach(lc2, pathkey->pk_eclass->ec_members)
-		{
-			EquivalenceMember *member = (EquivalenceMember *) lfirst(lc2);
-			int			indexcol;
-
-			/* No possibility of match if it references other relations */
-			if (!bms_equal(member->em_relids, index->rel->relids))
-				continue;
-
-			/*
-			 * We allow any column of the index to match each pathkey; they
-			 * don't have to match left-to-right as you might expect.  This is
-			 * correct for GiST, which is the sole existing AM supporting
-			 * amcanorderbyop.  We might need different logic in future for
-			 * other implementations.
-			 */
-			for (indexcol = 0; indexcol < index->ncolumns; indexcol++)
-			{
-				Expr	   *expr;
-
-				expr = match_clause_to_ordering_op(index,
-												   indexcol,
-												   member->em_expr,
-												   pathkey->pk_opfamily);
-				if (expr)
-				{
-					orderby_clauses = lappend(orderby_clauses, expr);
-					clause_columns = lappend_int(clause_columns, indexcol);
-					found = true;
-					break;
-				}
-			}
-
-			if (found)			/* don't want to look at remaining members */
-				break;
-		}
-
-		if (!found)				/* fail if no match for this pathkey */
-			return;
+		*orderby_clauses_p = orderby_clauses;	/* success! */
+		*clause_columns_p = clause_columns;
 	}
-
-	*orderby_clauses_p = orderby_clauses;	/* success! */
-	*clause_columns_p = clause_columns;
+	else
+	{
+		*orderby_clauses_p = NIL;	/* set default results */
+		*clause_columns_p = NIL;
+	}
 }
 
 /*

@@ -464,3 +464,11 @@ insert into tmptz values ('2017-01-18 00:00+00');
 explain (costs off)
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
+
+-- distance operators
+SELECT '' AS  "0", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMPTZ_TBL;
+SELECT '' AS "63", d1 <-> date '2001-02-03' AS "Distance" FROM TIMESTAMPTZ_TBL WHERE isfinite(d1);
+SELECT '' AS  "0", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMPTZ_TBL;
+SELECT '' AS "63", d1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM TIMESTAMPTZ_TBL WHERE isfinite(d1);
+SELECT '' AS  "0", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMPTZ_TBL;
+SELECT '' AS "63", d1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM TIMESTAMPTZ_TBL WHERE isfinite(d1);

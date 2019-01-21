@@ -32,7 +32,10 @@ typedef uint16 StrategyNumber;
 #define BTGreaterEqualStrategyNumber	4
 #define BTGreaterStrategyNumber			5
 
-#define BTMaxStrategyNumber				5
+#define BTMaxStrategyNumber				5		/* number of canonical B-tree strategies */
+
+#define BtreeKNNSearchStrategyNumber	6		/* for <-> (distance) */
+#define BtreeMaxStrategyNumber			6		/* number of extended B-tree strategies */
 
 
 /*

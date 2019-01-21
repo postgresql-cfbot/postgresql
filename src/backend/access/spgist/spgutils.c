@@ -32,10 +32,6 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
-extern Expr *spgcanorderbyop(IndexOptInfo *index,
-				PathKey *pathkey, int pathkeyno,
-				Expr *orderby_clause, int *indexcol_p);
-
 /*
  * SP-GiST handler function: return IndexAmRoutine with access method parameters
  * and callbacks.
@@ -48,7 +44,6 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amstrategies = 0;
 	amroutine->amsupport = SPGISTNProc;
 	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = false;
@@ -82,6 +77,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->ammatchorderby = match_orderbyop_pathkeys;
 
 	PG_RETURN_POINTER(amroutine);
 }

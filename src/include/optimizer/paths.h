@@ -87,6 +87,10 @@ extern Expr *adjust_rowcompare_for_index(RowCompareExpr *clause,
 							int indexcol,
 							List **indexcolnos,
 							bool *var_on_left_p);
+extern Expr *match_orderbyop_pathkey(IndexOptInfo *index, PathKey *pathkey,
+									 int *indexcol_p);
+extern bool match_orderbyop_pathkeys(IndexOptInfo *index, List *pathkeys,
+						 List **orderby_clauses_p, List **clause_columns_p);
 
 /*
  * tidpath.h

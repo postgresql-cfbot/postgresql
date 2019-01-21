@@ -21,6 +21,9 @@
  */
 struct PlannerInfo;
 struct IndexPath;
+struct IndexOptInfo;
+struct PathKey;
+struct Expr;
 
 /* Likewise, this file shouldn't depend on execnodes.h. */
 struct IndexInfo;
@@ -140,6 +143,12 @@ typedef void (*ammarkpos_function) (IndexScanDesc scan);
 /* restore marked scan position */
 typedef void (*amrestrpos_function) (IndexScanDesc scan);
 
+/* does AM support ORDER BY result of an operator on indexed column? */
+typedef bool (*ammatchorderby_function) (struct IndexOptInfo *index,
+										 List *pathkeys,
+										 List **orderby_clauses_p,
+										 List **clause_columns_p);
+
 /*
  * Callback function signatures - for parallel index scans.
  */
@@ -170,8 +179,6 @@ typedef struct IndexAmRoutine
 	uint16		amsupport;
 	/* does AM support ORDER BY indexed column's value? */
 	bool		amcanorder;
-	/* does AM support ORDER BY result of an operator on indexed column? */
-	bool		amcanorderbyop;
 	/* does AM support backward scanning? */
 	bool		amcanbackward;
 	/* does AM support UNIQUE indexes? */
@@ -221,7 +228,8 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
-
+	ammatchorderby_function ammatchorderby; /* can be NULL */
+	
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */
 	aminitparallelscan_function aminitparallelscan; /* can be NULL */

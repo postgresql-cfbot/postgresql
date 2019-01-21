@@ -469,3 +469,17 @@ oidvectorgt(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(cmp > 0);
 }
+
+Datum
+oiddist(PG_FUNCTION_ARGS)
+{
+	Oid			a = PG_GETARG_OID(0);
+	Oid			b = PG_GETARG_OID(1);
+	Oid			res;
+
+	if (a < b)
+		res = b - a;
+	else
+		res = a - b;
+	PG_RETURN_OID(res);
+}

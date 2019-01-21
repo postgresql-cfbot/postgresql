@@ -11,8 +11,9 @@ OBJS =  btree_gist.o btree_utils_num.o btree_utils_var.o btree_int2.o \
 
 EXTENSION = btree_gist
 DATA = btree_gist--unpackaged--1.0.sql btree_gist--1.0--1.1.sql \
-       btree_gist--1.1--1.2.sql btree_gist--1.2.sql btree_gist--1.2--1.3.sql \
-       btree_gist--1.3--1.4.sql btree_gist--1.4--1.5.sql
+       btree_gist--1.1--1.2.sql btree_gist--1.2--1.3.sql \
+       btree_gist--1.3--1.4.sql btree_gist--1.4--1.5.sql \
+       btree_gist--1.5--1.6.sql btree_gist--1.6.sql
 PGFILEDESC = "btree_gist - B-tree equivalent GiST operator classes"
 
 REGRESS = init int2 int4 int8 float4 float8 cash oid timestamp timestamptz \

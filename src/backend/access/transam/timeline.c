@@ -426,7 +426,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	 * Perform the rename using link if available, paranoidly trying to avoid
 	 * overwriting an existing file (there shouldn't be one).
 	 */
-	durable_link_or_rename(tmppath, path, ERROR);
+	durable_link_or_rename(tmppath, path, ERROR, true);
 
 	/* The history file can be archived immediately. */
 	if (XLogArchivingActive())
@@ -505,7 +505,7 @@ writeTimeLineHistoryFile(TimeLineID tli, char *content, int size)
 	 * Perform the rename using link if available, paranoidly trying to avoid
 	 * overwriting an existing file (there shouldn't be one).
 	 */
-	durable_link_or_rename(tmppath, path, ERROR);
+	durable_link_or_rename(tmppath, path, ERROR, true);
 }
 
 /*

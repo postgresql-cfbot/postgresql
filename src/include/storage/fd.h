@@ -45,6 +45,13 @@
 typedef int File;
 
 
+/*
+ * Default mode for created files, unless something else is specified using
+ * the *Perm() function variants.
+ */
+#define PG_FILE_MODE_DEFAULT	(S_IRUSR | S_IWUSR)
+
+
 /* GUC parameter */
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
@@ -104,6 +111,13 @@ extern int	OpenTransientFile(const char *fileName, int fileFlags);
 extern int	OpenTransientFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
 extern int	CloseTransientFile(int fd);
 
+/* Operations to allow use of a memory-mapped file */
+extern int	MapTransientFile(const char *fileName, int fileFlags, size_t fsize,
+		void **addr);
+extern int	MapTransientFilePerm(const char *fileName, int fileFlags, int fileMode,
+		size_t fsize, void **addr);
+extern int	UnmapTransientFile(void *addr, size_t fsize);
+
 /* If you've really really gotta have a plain kernel FD, use this */
 extern int	BasicOpenFile(const char *fileName, int fileFlags);
 extern int	BasicOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
@@ -133,7 +147,8 @@ extern void pg_flush_data(int fd, off_t offset, off_t amount);
 extern void fsync_fname(const char *fname, bool isdir);
 extern int	durable_rename(const char *oldfile, const char *newfile, int loglevel);
 extern int	durable_unlink(const char *fname, int loglevel);
-extern int	durable_link_or_rename(const char *oldfile, const char *newfile, int loglevel);
+extern int	durable_link_or_rename(const char *oldfile, const char *newfile,
+		int loglevel, bool fsync_fname);
 extern void SyncDataDirectory(void);
 extern int data_sync_elevel(int elevel);
 

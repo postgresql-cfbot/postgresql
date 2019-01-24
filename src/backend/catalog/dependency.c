@@ -228,28 +228,40 @@ deleteObjectsInList(ObjectAddresses *targetObjects, Relation *depRel,
 	int			i;
 
 	/*
-	 * Keep track of objects for event triggers, if necessary.
+	 * Invoke pre-deletion callbacks and keep track of objects for event
+	 * triggers, if necessary.
 	 */
-	if (trackDroppedObjectsNeeded() && !(flags & PERFORM_DELETION_INTERNAL))
+	for (i = 0; i < targetObjects->numrefs; i++)
 	{
-		for (i = 0; i < targetObjects->numrefs; i++)
+		const ObjectAddress *thisobj = &targetObjects->refs[i];
+		Oid			objectClass = getObjectClass(thisobj);
+
+		if (trackDroppedObjectsNeeded() && !(flags & PERFORM_DELETION_INTERNAL))
 		{
-			const ObjectAddress *thisobj = &targetObjects->refs[i];
-			const ObjectAddressExtra *extra = &targetObjects->extras[i];
-			bool		original = false;
-			bool		normal = false;
-
-			if (extra->flags & DEPFLAG_ORIGINAL)
-				original = true;
-			if (extra->flags & DEPFLAG_NORMAL)
-				normal = true;
-			if (extra->flags & DEPFLAG_REVERSE)
-				normal = true;
-
-			if (EventTriggerSupportsObjectClass(getObjectClass(thisobj)))
+			if (EventTriggerSupportsObjectClass(objectClass))
 			{
+				bool		original = false;
+				bool		normal = false;
+				const ObjectAddressExtra *extra = &targetObjects->extras[i];
+
+				if (extra->flags & DEPFLAG_ORIGINAL)
+					original = true;
+				if (extra->flags & DEPFLAG_NORMAL ||
+					extra->flags & DEPFLAG_REVERSE)
+					normal = true;
+
 				EventTriggerSQLDropAddObject(thisobj, original, normal);
 			}
+		}
+
+		/* Invoke class-specific pre-deletion checks */
+		switch (objectClass)
+		{
+			case OCLASS_CLASS:
+				pre_drop_class_check(thisobj->objectId, thisobj->objectSubId);
+				break;
+			default:
+				break;
 		}
 	}
 

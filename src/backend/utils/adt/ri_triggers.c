@@ -56,6 +56,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/rls.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -240,7 +241,7 @@ static void ri_ExtractValues(Relation rel, HeapTuple tup,
 static void ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				   Relation pk_rel, Relation fk_rel,
 				   HeapTuple violator, TupleDesc tupdesc,
-				   int queryno) pg_attribute_noreturn();
+				   int queryno, bool partgone) pg_attribute_noreturn();
 
 
 /* ----------
@@ -398,18 +399,22 @@ RI_FKey_check(TriggerData *trigdata)
 		char		paramname[16];
 		const char *querysep;
 		Oid			queryoids[RI_MAX_NUMKEYS];
+		const char *pk_only;
 
 		/* ----------
 		 * The query string built is
-		 *	SELECT 1 FROM ONLY <pktable> x WHERE pkatt1 = $1 [AND ...]
+		 *	SELECT 1 FROM [ONLY] <pktable> x WHERE pkatt1 = $1 [AND ...]
 		 *		   FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * corresponding FK attributes.
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
+		pk_only = pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+			"" : "ONLY ";
 		quoteRelationName(pkrelname, pk_rel);
-		appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x", pkrelname);
+		appendStringInfo(&querybuf, "SELECT 1 FROM %s%s x",
+						 pk_only, pkrelname);
 		querysep = "WHERE";
 		for (i = 0; i < riinfo->nkeys; i++)
 		{
@@ -533,19 +538,23 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 		char		attname[MAX_QUOTED_NAME_LEN];
 		char		paramname[16];
 		const char *querysep;
+		const char *pk_only;
 		Oid			queryoids[RI_MAX_NUMKEYS];
 
 		/* ----------
 		 * The query string built is
-		 *	SELECT 1 FROM ONLY <pktable> x WHERE pkatt1 = $1 [AND ...]
+		 *	SELECT 1 FROM [ONLY] <pktable> x WHERE pkatt1 = $1 [AND ...]
 		 *		   FOR KEY SHARE OF x
 		 * The type id's for the $ parameters are those of the
 		 * PK attributes themselves.
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
+		pk_only = pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+			"" : "ONLY ";
 		quoteRelationName(pkrelname, pk_rel);
-		appendStringInfo(&querybuf, "SELECT 1 FROM ONLY %s x", pkrelname);
+		appendStringInfo(&querybuf, "SELECT 1 FROM %s%s x",
+						 pk_only, pkrelname);
 		querysep = "WHERE";
 		for (i = 0; i < riinfo->nkeys; i++)
 		{
@@ -1711,6 +1720,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	RangeTblEntry *fkrte;
 	const char *sep;
 	const char *fk_only;
+	const char *pk_only;
 	int			i;
 	int			save_nestlevel;
 	char		workmembuf[32];
@@ -1770,7 +1780,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	/*----------
 	 * The query string built is:
 	 *	SELECT fk.keycols FROM [ONLY] relname fk
-	 *	 LEFT OUTER JOIN ONLY pkrelname pk
+	 *	 LEFT OUTER JOIN [ONLY] pkrelname pk
 	 *	 ON (pk.pkkeycol1=fk.keycol1 [AND ...])
 	 *	 WHERE pk.pkkeycol1 IS NULL AND
 	 * For MATCH SIMPLE:
@@ -1797,9 +1807,11 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	quoteRelationName(fkrelname, fk_rel);
 	fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
 		"" : "ONLY ";
+	pk_only = pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+		"" : "ONLY ";
 	appendStringInfo(&querybuf,
-					 " FROM %s%s fk LEFT OUTER JOIN ONLY %s pk ON",
-					 fk_only, fkrelname, pkrelname);
+					 " FROM %s%s fk LEFT OUTER JOIN %s%s pk ON",
+					 fk_only, fkrelname, pk_only, pkrelname);
 
 	strcpy(pkattname, "pk.");
 	strcpy(fkattname, "fk.");
@@ -1952,7 +1964,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 		ri_ReportViolation(&fake_riinfo,
 						   pk_rel, fk_rel,
 						   tuple, tupdesc,
-						   RI_PLAN_CHECK_LOOKUPPK);
+						   RI_PLAN_CHECK_LOOKUPPK, false);
 	}
 
 	if (SPI_finish() != SPI_OK_FINISH)
@@ -1964,6 +1976,179 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	AtEOXact_GUC(true, save_nestlevel);
 
 	return true;
+}
+
+/* ----------
+ * RI_Final_Check -
+ *
+ */
+void
+RI_Final_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
+{
+	const RI_ConstraintInfo *riinfo;
+	StringInfoData querybuf;
+	char		pkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char		pkattname[MAX_QUOTED_NAME_LEN + 3];
+	char		fkattname[MAX_QUOTED_NAME_LEN + 3];
+	const char *sep;
+	const char *fk_only;
+	int			spi_result;
+	SPIPlanPtr	qplan;
+	int			i;
+
+	riinfo = ri_FetchConstraintInfo(trigger, fk_rel, false);
+
+	/* XXX handle the non-permission case?? */
+
+	/*----------
+	 * The query string built is:
+	 *  SELECT fk.keycols FROM [ONLY] relname fk
+	 *    JOIN pkrelname pk
+	 *    ON (pk.pkkeycol1=fk.keycol1 [AND ...])
+	 *    WHERE (<partition constraint>) AND
+	 * For MATCH SIMPLE:
+	 *   (fk.keycol1 IS NOT NULL [AND ...])
+	 * For MATCH FULL:
+	 *   (fk.keycol1 IS NOT NULL [OR ...])
+	 *
+	 * We attach COLLATE clauses to the operators when comparing columns
+	 * that have different collations.
+	 *----------
+	 */
+	initStringInfo(&querybuf);
+	appendStringInfoString(&querybuf, "SELECT ");
+	sep = "";
+	for (i = 0; i < riinfo->nkeys; i++)
+	{
+		quoteOneName(fkattname,
+					 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+		appendStringInfo(&querybuf, "%sfk.%s", sep, fkattname);
+		sep = ", ";
+	}
+
+	quoteRelationName(pkrelname, pk_rel);
+	quoteRelationName(fkrelname, fk_rel);
+	fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+		"" : "ONLY ";
+	appendStringInfo(&querybuf,
+					 " FROM %s%s fk JOIN %s pk ON",
+					 fk_only, fkrelname, pkrelname);
+	strcpy(pkattname, "pk.");
+	strcpy(fkattname, "fk.");
+	sep = "(";
+	for (i = 0; i < riinfo->nkeys; i++)
+	{
+		Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
+		Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+		Oid			pk_coll = RIAttCollation(pk_rel, riinfo->pk_attnums[i]);
+		Oid			fk_coll = RIAttCollation(fk_rel, riinfo->fk_attnums[i]);
+
+		quoteOneName(pkattname + 3,
+					 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+		quoteOneName(fkattname + 3,
+					 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+		ri_GenerateQual(&querybuf, sep,
+						pkattname, pk_type,
+						riinfo->pf_eq_oprs[i],
+						fkattname, fk_type);
+		if (pk_coll != fk_coll)
+			ri_GenerateQualCollation(&querybuf, pk_coll);
+		sep = "AND";
+	}
+
+	appendStringInfo(&querybuf, ") WHERE %s AND (",
+					 pg_get_partconstrdef_string(RelationGetRelid(pk_rel),
+												 "pk"));
+
+	sep = "";
+	for (i = 0; i < riinfo->nkeys; i++)
+	{
+		quoteOneName(fkattname, RIAttName(fk_rel, riinfo->fk_attnums[i]));
+		appendStringInfo(&querybuf,
+						 "%sfk.%s IS NOT NULL",
+						 sep, fkattname);
+		switch (riinfo->confmatchtype)
+		{
+			case FKCONSTR_MATCH_SIMPLE:
+				sep = " AND ";
+				break;
+			case FKCONSTR_MATCH_FULL:
+				sep = " OR ";
+				break;
+			case FKCONSTR_MATCH_PARTIAL:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("MATCH PARTIAL not yet implemented")));
+				break;
+			default:
+				elog(ERROR, "unrecognized confmatchtype: %d",
+					 riinfo->confmatchtype);
+				break;
+		}
+	}
+	appendStringInfoChar(&querybuf, ')');
+
+	/*
+	 * RI_Initial_Check changes work_mem here.
+	 */
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		elog(ERROR, "SPI_connect failed");
+
+	/*
+	 * Generate the plan.  We don't need to cache it, and there are no
+	 * arguments to the plan.
+	 */
+	qplan = SPI_prepare(querybuf.data, 0, NULL);
+
+	if (qplan == NULL)
+		elog(ERROR, "SPI_prepare returned %s for %s",
+			 SPI_result_code_string(SPI_result), querybuf.data);
+
+	/*
+	 * Run the plan.  For safety we force a current snapshot to be used. (In
+	 * transaction-snapshot mode, this arguably violates transaction isolation
+	 * rules, but we really haven't got much choice.) We don't need to
+	 * register the snapshot, because SPI_execute_snapshot will see to it. We
+	 * need at most one tuple returned, so pass limit = 1.
+	 */
+	spi_result = SPI_execute_snapshot(qplan,
+									  NULL, NULL,
+									  GetLatestSnapshot(),
+									  InvalidSnapshot,
+									  true, false, 1);
+
+	/* Check result */
+	if (spi_result != SPI_OK_SELECT)
+		elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
+
+	/* Did we find a tuple that would violate the constraint? */
+	if (SPI_processed > 0)
+	{
+		HeapTuple	tuple = SPI_tuptable->vals[0];
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+		RI_ConstraintInfo fake_riinfo;
+
+		/*
+		 * The columns to look at in the result tuple are 1..N, not whatever
+		 * they are in the fk_rel.  Hack up riinfo so that ri_ReportViolation
+		 * will behave properly.
+		 *
+		 * In addition to this, we have to pass the correct tupdesc to
+		 * ri_ReportViolation, overriding its normal habit of using the pk_rel
+		 * or fk_rel's tupdesc.
+		 */
+		memcpy(&fake_riinfo, riinfo, sizeof(RI_ConstraintInfo));
+		for (i = 0; i < fake_riinfo.nkeys; i++)
+			fake_riinfo.pk_attnums[i] = i + 1;
+
+		ri_ReportViolation(&fake_riinfo, pk_rel, fk_rel,
+						   tuple, tupdesc, 0, true);
+	}
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		elog(ERROR, "SPI_finish failed");
 }
 
 
@@ -2167,6 +2352,7 @@ ri_FetchConstraintInfo(Trigger *trigger, Relation trig_rel, bool rel_is_pk)
 	/* Find or create a hashtable entry for the constraint */
 	riinfo = ri_LoadConstraintInfo(constraintOid);
 
+#if 0
 	/* Do some easy cross-checks against the trigger call data */
 	if (rel_is_pk)
 	{
@@ -2175,6 +2361,7 @@ ri_FetchConstraintInfo(Trigger *trigger, Relation trig_rel, bool rel_is_pk)
 			elog(ERROR, "wrong pg_constraint entry for trigger \"%s\" on table \"%s\"",
 				 trigger->tgname, RelationGetRelationName(trig_rel));
 	}
+#endif
 
 	return riinfo;
 }
@@ -2480,7 +2667,7 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 						   pk_rel, fk_rel,
 						   new_tuple ? new_tuple : old_tuple,
 						   NULL,
-						   qkey->constr_queryno);
+						   qkey->constr_queryno, false);
 
 	return SPI_processed != 0;
 }
@@ -2524,7 +2711,7 @@ static void
 ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				   Relation pk_rel, Relation fk_rel,
 				   HeapTuple violator, TupleDesc tupdesc,
-				   int queryno)
+				   int queryno, bool partgone)
 {
 	StringInfoData key_names;
 	StringInfoData key_values;
@@ -2564,9 +2751,13 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 	 *
 	 * Check table-level permissions next and, failing that, column-level
 	 * privileges.
+	 *
+	 * When a partition at the referenced side is being detached/dropped, we
+	 * needn't check, since the user must be the table owner anyway.
 	 */
-
-	if (check_enable_rls(rel_oid, InvalidOid, true) != RLS_ENABLED)
+	if (partgone)
+		has_perm = true;
+	else if (check_enable_rls(rel_oid, InvalidOid, true) != RLS_ENABLED)
 	{
 		aclresult = pg_class_aclcheck(rel_oid, GetUserId(), ACL_SELECT);
 		if (aclresult != ACLCHECK_OK)
@@ -2616,7 +2807,16 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 		}
 	}
 
-	if (onfk)
+	if (partgone)
+		ereport(ERROR,
+				(errcode(ERRCODE_FOREIGN_KEY_VIOLATION),
+				 errmsg("removing partition \"%s\" violates foreign key constraint \"%s\"",
+						RelationGetRelationName(pk_rel),
+						NameStr(riinfo->conname)),
+				 errdetail("Key (%s)=(%s) still referenced from table \"%s\".",
+						   key_names.data, key_values.data,
+						   RelationGetRelationName(fk_rel))));
+	else if (onfk)
 		ereport(ERROR,
 				(errcode(ERRCODE_FOREIGN_KEY_VIOLATION),
 				 errmsg("insert or update on table \"%s\" violates foreign key constraint \"%s\"",

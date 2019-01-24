@@ -302,10 +302,12 @@ CreateConstraintEntry(const char *constraintName,
 	if (OidIsValid(indexRelId) && constraintType == CONSTRAINT_FOREIGN)
 	{
 		/*
-		 * Register normal dependency on the unique index that supports a
-		 * foreign-key constraint.  (Note: for indexes associated with unique
-		 * or primary-key constraints, the dependency runs the other way, and
-		 * is not made here.)
+		 * Register dependency on the unique index that supports a foreign-key
+		 * constraint.  (Note: for indexes associated with unique or
+		 * primary-key constraints, the dependency runs the other way, and is
+		 * not made here.)  For standalone constraints, this is a normal
+		 * dependency; for a constraint that is implementation part of a
+		 * larger one, it's internal-auto.
 		 */
 		ObjectAddress relobject;
 
@@ -313,7 +315,10 @@ CreateConstraintEntry(const char *constraintName,
 		relobject.objectId = indexRelId;
 		relobject.objectSubId = 0;
 
-		recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+		recordDependencyOn(&conobject, &relobject,
+						   OidIsValid(parentConstrId) ?
+						   DEPENDENCY_INTERNAL_AUTO :
+						   DEPENDENCY_NORMAL);
 	}
 
 	if (foreignNKeys > 0)

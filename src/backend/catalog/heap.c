@@ -1782,6 +1782,28 @@ RemoveAttrDefaultById(Oid attrdefId)
 }
 
 /*
+ * Checks to be run before just dropping a relation.
+ */
+void
+pre_drop_class_check(Oid relationId, Oid objectSubId)
+{
+	Relation	relation;
+
+	/* caller must hold strong lock already, if they're dropping */
+	relation = relation_open(relationId, NoLock);
+
+	/*
+	 * For leaf partitions, this is our last chance to verify any foreign keys
+	 * that may point to the partition as referenced table.
+	 */
+	if (relation->rd_rel->relkind == RELKIND_RELATION &&
+		relation->rd_rel->relispartition)
+		CheckNoForeignKeyRefs(relation, true);
+
+	relation_close(relation, NoLock);
+}
+
+/*
  * heap_drop_with_catalog	- removes specified relation from catalogs
  *
  * Note that this routine is not responsible for dropping objects that are

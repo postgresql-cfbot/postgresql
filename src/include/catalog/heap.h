@@ -77,6 +77,8 @@ extern void heap_create_init_fork(Relation rel);
 
 extern void heap_drop_with_catalog(Oid relid);
 
+extern void pre_drop_class_check(Oid relationId, Oid objectSubId);
+
 extern void heap_truncate(List *relids);
 
 extern void heap_truncate_one_rel(Relation rel);

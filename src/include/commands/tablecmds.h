@@ -52,6 +52,8 @@ extern void AlterRelationNamespaceInternal(Relation classRel, Oid relOid,
 
 extern void CheckTableNotInUse(Relation rel, const char *stmt);
 
+extern void CheckNoForeignKeyRefs(Relation partition, bool isDrop);
+
 extern void ExecuteTruncate(TruncateStmt *stmt);
 extern void ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 					DropBehavior behavior, bool restart_seqs);
@@ -75,10 +77,6 @@ extern void find_composite_type_dependencies(Oid typeOid,
 								 const char *origTypeName);
 
 extern void check_of_type(HeapTuple typetuple);
-
-extern void createForeignKeyTriggers(Relation rel, Oid refRelOid,
-						 Constraint *fkconstraint, Oid constraintOid,
-						 Oid indexOid, bool create_action);
 
 extern void register_on_commit_action(Oid relid, OnCommitAction action);
 extern void remove_on_commit_action(Oid relid);

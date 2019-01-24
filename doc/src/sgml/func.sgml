@@ -10999,9 +10999,9 @@ $$ AS data;
 
 SELECT xmltable.*
   FROM xmlelements, XMLTABLE('/root' PASSING data COLUMNS element text);
-       element        
-----------------------
-   Hello2a2   bbbCC  
+         element         
+-------------------------
+   Hello2a2   bbbxxxCC  
 ]]></screen>
     </para>
 

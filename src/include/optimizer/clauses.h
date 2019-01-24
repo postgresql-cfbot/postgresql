@@ -88,4 +88,6 @@ extern Query *inline_set_returning_function(PlannerInfo *root,
 extern List *expand_function_arguments(List *args, Oid result_type,
 						  HeapTuple func_tuple);
 
+extern Expr *evaluate_expr(Expr *expr, Oid result_type, int32 result_typmod,
+						   Oid result_collation);
 #endif							/* CLAUSES_H */

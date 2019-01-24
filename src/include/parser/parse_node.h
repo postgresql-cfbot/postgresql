@@ -70,7 +70,8 @@ typedef enum ParseExprKind
 	EXPR_KIND_POLICY,			/* USING or WITH CHECK expr in policy */
 	EXPR_KIND_PARTITION_EXPRESSION, /* PARTITION BY expression */
 	EXPR_KIND_CALL_ARGUMENT,		/* procedure argument in CALL */
-	EXPR_KIND_COPY_WHERE		/* WHERE condition in COPY FROM */
+	EXPR_KIND_COPY_WHERE,		/* WHERE condition in COPY FROM */
+	EXPR_KIND_PARTITION_BOUND 	/* partition bound value */
 } ParseExprKind;
 
 

@@ -111,12 +111,12 @@ main (void)
  /* declare C cursor for select name , accs , byte from empl where idnum = $1  */
 #line 58 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare C cursor for select name , accs , byte from empl where idnum = $1 ", 
+  { ECPGopen("C", NULL, __LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare C cursor for select name , accs , byte from empl where idnum = $1 ", 
 	ECPGt_long,&(empl.idnum),(long)1,(long)1,sizeof(long), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EOIT, ECPGt_EORT);}
 #line 59 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch C", ECPGt_EOIT, 
+  { ECPGfetch("C", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch C", ECPGt_EOIT, 
 	ECPGt_char,(empl.name),(long)21,(long)1,(21)*sizeof(char), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, 
 	ECPGt_short,&(empl.accs),(long)1,(long)1,sizeof(short), 
@@ -133,7 +133,7 @@ main (void)
 
   printf ("name=%s, accs=%d byte=%s\n", empl.name, empl.accs, empl.byte);
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "close C", ECPGt_EOIT, ECPGt_EORT);}
+  { ECPGclose("C", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "close C", ECPGt_EOIT, ECPGt_EORT);}
 #line 69 "binary.pgc"
 
 
@@ -142,12 +142,12 @@ main (void)
  /* declare B binary cursor for select name , accs , byte from empl where idnum = $1  */
 #line 72 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare B binary cursor for select name , accs , byte from empl where idnum = $1 ", 
+  { ECPGopen("B", NULL, __LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare B binary cursor for select name , accs , byte from empl where idnum = $1 ", 
 	ECPGt_long,&(empl.idnum),(long)1,(long)1,sizeof(long), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EOIT, ECPGt_EORT);}
 #line 73 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch B", ECPGt_EOIT, 
+  { ECPGfetch("B", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch B", ECPGt_EOIT, 
 	ECPGt_char,(empl.name),(long)21,(long)1,(21)*sizeof(char), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, 
 	ECPGt_short,&(empl.accs),(long)1,(long)1,sizeof(short), 
@@ -162,7 +162,7 @@ main (void)
       exit (sqlca.sqlcode);
     }
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "close B", ECPGt_EOIT, ECPGt_EORT);}
+  { ECPGclose("B", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "close B", ECPGt_EOIT, ECPGt_EORT);}
 #line 81 "binary.pgc"
 
 
@@ -176,12 +176,12 @@ main (void)
  /* declare A binary cursor for select byte from empl where idnum = $1  */
 #line 89 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare A binary cursor for select byte from empl where idnum = $1 ", 
+  { ECPGopen("A", NULL, __LINE__, 0, 1, NULL, 0, ECPGst_normal, "declare A binary cursor for select byte from empl where idnum = $1 ", 
 	ECPGt_long,&(empl.idnum),(long)1,(long)1,sizeof(long), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EOIT, ECPGt_EORT);}
 #line 90 "binary.pgc"
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch A", ECPGt_EOIT, 
+  { ECPGfetch("A", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "fetch A", ECPGt_EOIT, 
 	ECPGt_char,&(pointer),(long)0,(long)1,(1)*sizeof(char), 
 	ECPGt_NO_INDICATOR, NULL , 0L, 0L, 0L, ECPGt_EORT);}
 #line 91 "binary.pgc"
@@ -192,7 +192,7 @@ main (void)
       exit (sqlca.sqlcode);
     }
 
-  { ECPGdo(__LINE__, 0, 1, NULL, 0, ECPGst_normal, "close A", ECPGt_EOIT, ECPGt_EORT);}
+  { ECPGclose("A", __LINE__, 0, 1, NULL, 0, ECPGst_normal, "close A", ECPGt_EOIT, ECPGt_EORT);}
 #line 98 "binary.pgc"
 
 

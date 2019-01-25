@@ -1044,6 +1044,17 @@ testdb=&gt;
         </para>
         </tip>
 
+        <tip>
+        <para>
+        As an alternative to <literal>\copy ... to 'filename' | program 'command'</literal>,
+        an equivalent <acronym>SQL</acronym> <literal>COPY ... TO STDOUT</literal> command
+        terminated by <literal>\g filename</literal> or <literal>\g |program</literal>
+        may be used to the same effect. The latter form has the advantages that it
+        can span multiple lines and allows for variable interpolation, both in the query
+        and in the argument following <literal>\g</literal>.
+        </para>
+        </tip>
+
         </listitem>
       </varlistentry>
 

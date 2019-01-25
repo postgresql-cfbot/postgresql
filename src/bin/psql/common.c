@@ -1092,20 +1092,49 @@ ProcessResult(PGresult **results)
 			 * connection out of its COPY state, then call PQresultStatus()
 			 * once and report any error.
 			 *
-			 * If pset.copyStream is set, use that as data source/sink,
-			 * otherwise use queryFout or cur_cmd_source as appropriate.
+			 * For COPY OUT, direct the output to pset.copyStream if it's set,
+			 * otherwise to pset.gfname if it's set, otherwise to queryFout.
+			 * For COPY IN, use pset.copyStream as data source if it's set,
+			 * otherwise cur_cmd_source.
 			 */
-			FILE	   *copystream = pset.copyStream;
+			FILE	   *copystream;
 			PGresult   *copy_result;
 
 			SetCancelConn();
 			if (result_status == PGRES_COPY_OUT)
 			{
-				if (!copystream)
+				bool is_pipe;
+
+				if (pset.copyStream)
+				{
+					/* instantiated by \copy */
+					copystream = pset.copyStream;
+				}
+				else if (pset.gfname)
+				{
+					/*
+					 * COPY TO STDOUT \g [|]file may be used as an alternative
+					 * to \copy
+					 */
+					if (!openQueryOutputFile(pset.gfname, &copystream, &is_pipe))
+					{
+						copystream = NULL; /* will discard the COPY data entirely */
+						is_pipe = false;
+					}
+					if (is_pipe)
+						disable_sigpipe_trap();
+				}
+				else
+				{
+					/* fall back to the generic query output stream */
 					copystream = pset.queryFout;
+				}
+
 				success = handleCopyOut(pset.db,
 										copystream,
-										&copy_result) && success;
+										&copy_result)
+					&& success
+					&& (copystream != NULL);
 
 				/*
 				 * Suppress status printing if the report would go to the same
@@ -1117,11 +1146,25 @@ ProcessResult(PGresult **results)
 					PQclear(copy_result);
 					copy_result = NULL;
 				}
+
+				if (pset.gfname && copystream != NULL)
+				{
+					/* close \g argument file/pipe */
+					if (is_pipe)
+					{
+						pclose(copystream);
+						restore_sigpipe_trap();
+					}
+					else
+					{
+						fclose(copystream);
+					}
+				}
 			}
 			else
 			{
-				if (!copystream)
-					copystream = pset.cur_cmd_source;
+				/* COPY IN */
+				copystream = pset.copyStream ? pset.copyStream : pset.cur_cmd_source;
 				success = handleCopyIn(pset.db,
 									   copystream,
 									   PQbinaryTuples(*results),

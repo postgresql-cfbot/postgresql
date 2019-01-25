@@ -629,7 +629,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			{
 				UnlistenStmt *stmt = (UnlistenStmt *) parsetree;
 
-				PreventCommandDuringRecovery("UNLISTEN");
+				/* allow UNLISTEN during recovery, which is a noop */
 				CheckRestrictedOperation("UNLISTEN");
 				if (stmt->conditionname)
 					Async_Unlisten(stmt->conditionname);

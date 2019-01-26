@@ -23,6 +23,7 @@
 #include "nodes/nodeFuncs.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/pg_locale.h"
 #include "utils/varlena.h"
 #include "mb/pg_wchar.h"
 
@@ -708,6 +709,22 @@ bpcharoctetlen(PG_FUNCTION_ARGS)
  * need to be so careful.
  *****************************************************************************/
 
+static void
+check_collation_set(Oid collid)
+{
+	if (!OidIsValid(collid))
+	{
+		/*
+		 * This typically means that the parser could not resolve a conflict
+		 * of implicit collations, so report it that way.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for string comparison"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+	}
+}
+
 Datum
 bpchareq(PG_FUNCTION_ARGS)
 {
@@ -716,10 +733,19 @@ bpchareq(PG_FUNCTION_ARGS)
 	int			len1,
 				len2;
 	bool		result;
+	Oid			collid = PG_GET_COLLATION();
+
+	check_collation_set(collid);
 
 	len1 = bcTruelen(arg1);
 	len2 = bcTruelen(arg2);
 
+	if (collid != DEFAULT_COLLATION_OID &&
+		!pg_newlocale_from_collation(collid)->deterministic)
+		result = (varstr_cmp(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2,
+							 collid) == 0);
+	else
+	{
 	/*
 	 * Since we only care about equality or not-equality, we can avoid all the
 	 * expense of strcoll() here, and just do bitwise comparison.
@@ -728,6 +754,7 @@ bpchareq(PG_FUNCTION_ARGS)
 		result = false;
 	else
 		result = (memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), len1) == 0);
+	}
 
 	PG_FREE_IF_COPY(arg1, 0);
 	PG_FREE_IF_COPY(arg2, 1);
@@ -743,10 +770,17 @@ bpcharne(PG_FUNCTION_ARGS)
 	int			len1,
 				len2;
 	bool		result;
+	Oid			collid = PG_GET_COLLATION();
 
 	len1 = bcTruelen(arg1);
 	len2 = bcTruelen(arg2);
 
+	if (collid != DEFAULT_COLLATION_OID &&
+		!pg_newlocale_from_collation(collid)->deterministic)
+		result = (varstr_cmp(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2,
+							 collid) != 0);
+	else
+	{
 	/*
 	 * Since we only care about equality or not-equality, we can avoid all the
 	 * expense of strcoll() here, and just do bitwise comparison.
@@ -755,6 +789,7 @@ bpcharne(PG_FUNCTION_ARGS)
 		result = true;
 	else
 		result = (memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), len1) != 0);
+	}
 
 	PG_FREE_IF_COPY(arg1, 0);
 	PG_FREE_IF_COPY(arg2, 1);
@@ -933,12 +968,52 @@ Datum
 hashbpchar(PG_FUNCTION_ARGS)
 {
 	BpChar	   *key = PG_GETARG_BPCHAR_PP(0);
+	Oid			collid = PG_GET_COLLATION();
 	char	   *keydata;
 	int			keylen;
 	Datum		result;
 
+	if (!collid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for string hashing"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
 	keydata = VARDATA_ANY(key);
 	keylen = bcTruelen(key);
+
+	if (collid != DEFAULT_COLLATION_OID)
+	{
+		pg_locale_t	mylocale = pg_newlocale_from_collation(collid);
+
+		if (mylocale && !mylocale->deterministic)
+		{
+			if (mylocale->provider == COLLPROVIDER_ICU)
+			{
+#ifdef USE_ICU
+				int32_t		ulen = -1;
+				UChar	   *uchar = NULL;
+				Size		bsize;
+				uint8_t	   *buf;
+
+				ulen = icu_to_uchar(&uchar, keydata, keylen);
+
+				bsize = ucol_getSortKey(mylocale->info.icu.ucol,
+										uchar, ulen, NULL, 0);
+				buf = palloc(bsize);
+				ucol_getSortKey(mylocale->info.icu.ucol,
+								uchar, ulen, buf, bsize);
+
+				result = hash_any(buf, bsize);
+
+				return result;
+#else
+				/* shouldn't happen */
+				elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+#endif
+			}
+		}
+	}
 
 	result = hash_any((unsigned char *) keydata, keylen);
 
@@ -952,12 +1027,54 @@ Datum
 hashbpcharextended(PG_FUNCTION_ARGS)
 {
 	BpChar	   *key = PG_GETARG_BPCHAR_PP(0);
+	Oid			collid = PG_GET_COLLATION();
 	char	   *keydata;
 	int			keylen;
 	Datum		result;
 
+	if (!collid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for string hashing"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
 	keydata = VARDATA_ANY(key);
 	keylen = bcTruelen(key);
+
+	if (collid != DEFAULT_COLLATION_OID)
+	{
+		pg_locale_t	mylocale = pg_newlocale_from_collation(collid);
+
+		if (mylocale && !mylocale->deterministic)
+		{
+			if (mylocale->provider == COLLPROVIDER_ICU)
+			{
+#ifdef USE_ICU
+				int32_t		ulen = -1;
+				UChar	   *uchar = NULL;
+				Size		bsize;
+				uint8_t	   *buf;
+
+				ulen = icu_to_uchar(&uchar, VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
+
+				bsize = ucol_getSortKey(mylocale->info.icu.ucol,
+										uchar, ulen, NULL, 0);
+				buf = palloc(bsize);
+				ucol_getSortKey(mylocale->info.icu.ucol,
+								uchar, ulen, buf, bsize);
+
+				result = hash_any_extended(buf, bsize, PG_GETARG_INT64(1));
+
+				PG_FREE_IF_COPY(key, 0);
+
+				return result;
+#else
+				/* shouldn't happen */
+				elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+#endif
+			}
+		}
+	}
 
 	result = hash_any_extended((unsigned char *) keydata, keylen,
 							   PG_GETARG_INT64(1));

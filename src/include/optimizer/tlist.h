@@ -48,6 +48,7 @@ extern SortGroupClause *get_sortgroupref_clause_noerr(Index sortref,
 							  List *clauses);
 
 extern Oid *extract_grouping_ops(List *groupClause);
+extern Oid *extract_grouping_collations(List *groupClause, List *tlist);
 extern AttrNumber *extract_grouping_cols(List *groupClause, List *tlist);
 extern bool grouping_is_sortable(List *groupClause);
 extern bool grouping_is_hashable(List *groupClause);

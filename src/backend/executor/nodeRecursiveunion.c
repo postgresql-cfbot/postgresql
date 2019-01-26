@@ -43,6 +43,7 @@ build_hash_table(RecursiveUnionState *rustate)
 											 node->dupColIdx,
 											 rustate->eqfuncoids,
 											 rustate->hashfunctions,
+											 node->dupCollations,
 											 node->numGroups,
 											 0,
 											 rustate->tableContext,

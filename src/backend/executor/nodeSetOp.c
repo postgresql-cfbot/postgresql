@@ -132,6 +132,7 @@ build_hash_table(SetOpState *setopstate)
 												node->dupColIdx,
 												setopstate->eqfuncoids,
 												setopstate->hashfunctions,
+												node->dupCollations,
 												node->numGroups,
 												0,
 												setopstate->tableContext,
@@ -553,6 +554,7 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 								   node->numCols,
 								   node->dupColIdx,
 								   node->dupOperators,
+								   node->dupCollations,
 								   &setopstate->ps);
 
 	if (node->strategy == SETOP_HASHED)

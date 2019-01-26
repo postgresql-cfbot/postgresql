@@ -847,11 +847,12 @@ CREATE COLLATION german (provider = libc, locale = 'de_DE');
 
    <para>
     Note that while this system allows creating collations that <quote>ignore
-    case</quote> or <quote>ignore accents</quote> or similar (using
-    the <literal>ks</literal> key), PostgreSQL does not at the moment allow
-    such collations to act in a truly case- or accent-insensitive manner.  Any
-    strings that compare equal according to the collation but are not
-    byte-wise equal will be sorted according to their byte values.
+    case</quote> or <quote>ignore accents</quote> or similar (using the
+    <literal>ks</literal> key), in order for such such collations to act in a
+    truly case- or accent-insensitive manner, they also need to be declared as not
+    <firstterm>deterministic</firstterm> in <command>CREATE COLLATION</command>.
+    Otherwise, any strings that compare equal according to the collation but
+    are not byte-wise equal will be sorted according to their byte values.
    </para>
 
    <note>

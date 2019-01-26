@@ -747,15 +747,14 @@ process_ordered_aggregate_single(AggState *aggstate,
 
 		/*
 		 * If DISTINCT mode, and not distinct from prior, skip it.
-		 *
-		 * Note: we assume equality functions don't care about collation.
 		 */
 		if (isDistinct &&
 			haveOldVal &&
 			((oldIsNull && *isNull) ||
 			 (!oldIsNull && !*isNull &&
 			  oldAbbrevVal == newAbbrevVal &&
-			  DatumGetBool(FunctionCall2(&pertrans->equalfnOne,
+			  DatumGetBool(FunctionCall2Coll(&pertrans->equalfnOne,
+											 pertrans->aggCollation,
 										 oldVal, *newVal)))))
 		{
 			/* equal to prior, so forget this one */
@@ -1283,6 +1282,7 @@ build_hash_table(AggState *aggstate)
 												 perhash->hashGrpColIdxHash,
 												 perhash->eqfuncoids,
 												 perhash->hashfunctions,
+												 perhash->aggnode->grpCollations,
 												 perhash->aggnode->numGroups,
 												 additionalsize,
 												 aggstate->hashcontext->ecxt_per_tuple_memory,
@@ -2376,6 +2376,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 											   length,
 											   aggnode->grpColIdx,
 											   aggnode->grpOperators,
+											   aggnode->grpCollations,
 											   (PlanState *) aggstate);
 				}
 
@@ -2387,6 +2388,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 											   aggnode->numCols,
 											   aggnode->grpColIdx,
 											   aggnode->grpOperators,
+											   aggnode->grpCollations,
 											   (PlanState *) aggstate);
 				}
 			}
@@ -3141,6 +3143,7 @@ build_pertrans_for_aggref(AggStatePerTrans pertrans,
 									   numDistinctCols,
 									   pertrans->sortColIdx,
 									   ops,
+									   pertrans->sortCollations,
 									   &aggstate->ss.ps);
 		pfree(ops);
 	}

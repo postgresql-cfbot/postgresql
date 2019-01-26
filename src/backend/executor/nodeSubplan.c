@@ -511,6 +511,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 										  node->keyColIdx,
 										  node->tab_eq_funcoids,
 										  node->tab_hash_funcs,
+										  node->tab_collations,
 										  nbuckets,
 										  0,
 										  node->hashtablecxt,
@@ -533,6 +534,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 											  node->keyColIdx,
 											  node->tab_eq_funcoids,
 											  node->tab_hash_funcs,
+											  node->tab_collations,
 											  nbuckets,
 											  0,
 											  node->hashtablecxt,
@@ -633,6 +635,7 @@ execTuplesUnequal(TupleTableSlot *slot1,
 				  int numCols,
 				  AttrNumber *matchColIdx,
 				  FmgrInfo *eqfunctions,
+				  const Oid *collations,
 				  MemoryContext evalContext)
 {
 	MemoryContext oldContext;
@@ -670,8 +673,8 @@ execTuplesUnequal(TupleTableSlot *slot1,
 			continue;			/* can't prove anything here */
 
 		/* Apply the type-specific equality function */
-
-		if (!DatumGetBool(FunctionCall2(&eqfunctions[i],
+		if (!DatumGetBool(FunctionCall2Coll(&eqfunctions[i],
+											collations[i],
 										attr1, attr2)))
 		{
 			result = true;		/* they are unequal */
@@ -713,6 +716,7 @@ findPartialMatch(TupleHashTable hashtable, TupleTableSlot *slot,
 		if (!execTuplesUnequal(slot, hashtable->tableslot,
 							   numCols, keyColIdx,
 							   eqfunctions,
+							   hashtable->tab_collations,
 							   hashtable->tempcxt))
 		{
 			TermTupleHashIterator(&hashiter);
@@ -808,6 +812,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	sstate->tab_eq_funcoids = NULL;
 	sstate->tab_hash_funcs = NULL;
 	sstate->tab_eq_funcs = NULL;
+	sstate->tab_collations = NULL;
 	sstate->lhs_hash_funcs = NULL;
 	sstate->cur_eq_funcs = NULL;
 
@@ -906,6 +911,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 		sstate->tab_eq_funcoids = (Oid *) palloc(ncols * sizeof(Oid));
 		sstate->tab_hash_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		sstate->tab_eq_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
+		sstate->tab_collations = (Oid *) palloc(ncols * sizeof(Oid));
 		sstate->lhs_hash_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		sstate->cur_eq_funcs = (FmgrInfo *) palloc(ncols * sizeof(FmgrInfo));
 		i = 1;
@@ -956,6 +962,9 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 			fmgr_info(left_hashfn, &sstate->lhs_hash_funcs[i - 1]);
 			fmgr_info(right_hashfn, &sstate->tab_hash_funcs[i - 1]);
 
+			/* Set collation */
+			sstate->tab_collations[i - 1] = opexpr->inputcollid;
+
 			i++;
 		}
 
@@ -992,6 +1001,7 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 													 ncols,
 													 sstate->keyColIdx,
 													 sstate->tab_eq_funcoids,
+													 sstate->tab_collations,
 													 parent);
 
 	}

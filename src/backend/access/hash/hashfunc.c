@@ -27,7 +27,9 @@
 #include "postgres.h"
 
 #include "access/hash.h"
+#include "catalog/pg_collation.h"
 #include "utils/builtins.h"
+#include "utils/pg_locale.h"
 
 /*
  * Datatype-specific hash functions.
@@ -242,7 +244,49 @@ Datum
 hashtext(PG_FUNCTION_ARGS)
 {
 	text	   *key = PG_GETARG_TEXT_PP(0);
+	Oid			collid = PG_GET_COLLATION();
 	Datum		result;
+
+	if (!collid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for string hashing"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
+	if (collid != DEFAULT_COLLATION_OID)
+	{
+		pg_locale_t	mylocale = pg_newlocale_from_collation(collid);
+
+		if (mylocale && !mylocale->deterministic)
+		{
+			if (mylocale->provider == COLLPROVIDER_ICU)
+			{
+#ifdef USE_ICU
+				int32_t		ulen = -1;
+				UChar	   *uchar = NULL;
+				Size		bsize;
+				uint8_t	   *buf;
+
+				ulen = icu_to_uchar(&uchar, VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
+
+				bsize = ucol_getSortKey(mylocale->info.icu.ucol,
+										uchar, ulen, NULL, 0);
+				buf = palloc(bsize);
+				ucol_getSortKey(mylocale->info.icu.ucol,
+								uchar, ulen, buf, bsize);
+
+				result = hash_any(buf, bsize);
+
+				PG_FREE_IF_COPY(key, 0);
+
+				return result;
+#else
+				/* shouldn't happen */
+				elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+#endif
+			}
+		}
+	}
 
 	/*
 	 * Note: this is currently identical in behavior to hashvarlena, but keep
@@ -262,7 +306,49 @@ Datum
 hashtextextended(PG_FUNCTION_ARGS)
 {
 	text	   *key = PG_GETARG_TEXT_PP(0);
+	Oid			collid = PG_GET_COLLATION();
 	Datum		result;
+
+	if (!collid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDETERMINATE_COLLATION),
+				 errmsg("could not determine which collation to use for string hashing"),
+				 errhint("Use the COLLATE clause to set the collation explicitly.")));
+
+	if (collid != DEFAULT_COLLATION_OID)
+	{
+		pg_locale_t	mylocale = pg_newlocale_from_collation(collid);
+
+		if (mylocale && !mylocale->deterministic)
+		{
+			if (mylocale->provider == COLLPROVIDER_ICU)
+			{
+#ifdef USE_ICU
+				int32_t		ulen = -1;
+				UChar	   *uchar = NULL;
+				Size		bsize;
+				uint8_t	   *buf;
+
+				ulen = icu_to_uchar(&uchar, VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
+
+				bsize = ucol_getSortKey(mylocale->info.icu.ucol,
+										uchar, ulen, NULL, 0);
+				buf = palloc(bsize);
+				ucol_getSortKey(mylocale->info.icu.ucol,
+								uchar, ulen, buf, bsize);
+
+				result = hash_any_extended(buf, bsize, PG_GETARG_INT64(1));
+
+				PG_FREE_IF_COPY(key, 0);
+
+				return result;
+#else
+				/* shouldn't happen */
+				elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+#endif
+			}
+		}
+	}
 
 	/* Same approach as hashtext */
 	result = hash_any_extended((unsigned char *) VARDATA_ANY(key),

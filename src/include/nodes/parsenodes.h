@@ -3144,7 +3144,7 @@ typedef struct ClusterStmt
  * and VACOPT_ANALYZE must be set in options.
  * ----------------------
  */
-typedef enum VacuumOption
+typedef enum VacuumFlag
 {
 	VACOPT_VACUUM = 1 << 0,		/* do VACUUM */
 	VACOPT_ANALYZE = 1 << 1,	/* do ANALYZE */
@@ -3153,8 +3153,15 @@ typedef enum VacuumOption
 	VACOPT_FULL = 1 << 4,		/* FULL (non-concurrent) vacuum */
 	VACOPT_SKIP_LOCKED = 1 << 5,	/* skip if cannot get lock */
 	VACOPT_SKIPTOAST = 1 << 6,	/* don't process the TOAST table, if any */
-	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7	/* don't skip any pages */
-} VacuumOption;
+	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7,	/* don't skip any pages */
+	VACOPT_PARALLEL = 1 << 8	/* do lazy VACUUM in parallel */
+} VacuumFlag;
+
+typedef struct VacuumOptions
+{
+	VacuumFlag	flags;	/* OR of VacuumFlag */
+	int			nworkers;	/* # of parallel vacuum workers */
+} VacuumOptions;
 
 /*
  * Info about a single target table of VACUUM/ANALYZE.
@@ -3173,9 +3180,9 @@ typedef struct VacuumRelation
 
 typedef struct VacuumStmt
 {
-	NodeTag		type;
-	int			options;		/* OR of VacuumOption flags */
-	List	   *rels;			/* list of VacuumRelation, or NIL for all */
+	NodeTag			type;
+	VacuumOptions	options;
+	List		   *rels;			/* list of VacuumRelation, or NIL for all */
 } VacuumStmt;
 
 /* ----------------------

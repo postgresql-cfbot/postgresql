@@ -3,7 +3,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 30;
+use Test::More tests => 34;
 
 program_help_ok('vacuumdb');
 program_version_ok('vacuumdb');
@@ -48,6 +48,14 @@ $node->issues_sql_like(
 $node->command_fails(
 	[ 'vacuumdb', '--analyze-only', '--disable-page-skipping', 'postgres' ],
 	'--analyze-only and --disable-page-skipping specified together');
+$node->issues_sql_like(
+	[ 'vacuumdb', '-P2', 'postgres' ],
+	qr/statement: VACUUM \(PARALLEL 2\);/,
+	'vacuumdb -P2');
+$node->issues_sql_like(
+	[ 'vacuumdb', '-P', 'postgres' ],
+	qr/statement: VACUUM \(PARALLEL\);/,
+	'vacuumdb -P');
 $node->command_ok([qw(vacuumdb -Z --table=pg_am dbname=template1)],
 	'vacuumdb with connection string');
 

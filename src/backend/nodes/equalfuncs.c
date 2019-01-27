@@ -1668,8 +1668,10 @@ _equalDropdbStmt(const DropdbStmt *a, const DropdbStmt *b)
 static bool
 _equalVacuumStmt(const VacuumStmt *a, const VacuumStmt *b)
 {
-	COMPARE_SCALAR_FIELD(options);
-	COMPARE_NODE_FIELD(rels);
+	if (a->options.flags != b->options.flags)
+		return false;
+	if (a->options.nworkers != b->options.nworkers)
+		return false;
 
 	return true;
 }

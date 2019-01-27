@@ -30,6 +30,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     FREEZE
     VERBOSE
     ANALYZE
+    PARALLEL [ <replaceable class="parameter">N</replaceable> ]
     DISABLE_PAGE_SKIPPING
     SKIP_LOCKED
 
@@ -138,6 +139,24 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
      <para>
       Updates statistics used by the planner to determine the most
       efficient way to execute a query.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL <replaceable class="parameter">N</replaceable></literal></term>
+    <listitem>
+     <para>
+      Vacuum index and cleanup index in parallel
+      <replaceable class="parameter">N</replaceable> background workers (for the detail
+      of each vacuum phases, please refer to <xref linkend="vacuum-phases"/>. If the
+      parallel degree <replaceable class="parameter">N</replaceable> is omitted,
+      then <command>VACUUM</command> decides the number of workers based on
+      number of indexes on the relation which further limited by
+      <xref linkend="guc-max-parallel-workers-maintenance"/>. Also if this option
+      is specified multile times, the last parallel degree
+      <replaceable class="parameter">N</replaceable> is considered into the account.
+      This option can not use with  <literal>FULL</literal> option.
      </para>
     </listitem>
    </varlistentry>
@@ -258,6 +277,15 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     physically shrink to occupy less disk space and allow faster table
     scans. <command>VACUUM FULL</command> will usually shrink the table
     more than a plain <command>VACUUM</command> would.
+   </para>
+
+   <para>
+    Setting a value for <literal>parallel_workers</literal> via
+    <xref linkend="sql-altertable"/> also controls how many parallel
+    worker processes will be requested by a <command>VACUUM</command>
+    against the table. This setting is overwritten by setting
+    <replaceable class="parameter">N</replaceable> of <literal>PARALLEL</literal>
+    option.
    </para>
 
    <para>

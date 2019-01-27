@@ -42,6 +42,8 @@ typedef struct vacuumingOptions
 	bool		freeze;
 	bool		disable_page_skipping;
 	bool		skip_locked;
+	int			parallel_workers;	/* -1: disabled, 0: PARALLEL without number of
+									 * workers. */
 } vacuumingOptions;
 
 
@@ -110,6 +112,7 @@ main(int argc, char *argv[])
 		{"full", no_argument, NULL, 'f'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"jobs", required_argument, NULL, 'j'},
+		{"parallel", optional_argument, NULL, 'P'},
 		{"maintenance-db", required_argument, NULL, 2},
 		{"analyze-in-stages", no_argument, NULL, 3},
 		{"disable-page-skipping", no_argument, NULL, 4},
@@ -137,6 +140,7 @@ main(int argc, char *argv[])
 
 	/* initialize options to all false */
 	memset(&vacopts, 0, sizeof(vacopts));
+	vacopts.parallel_workers = -1;
 
 	progname = get_progname(argv[0]);
 
@@ -144,7 +148,7 @@ main(int argc, char *argv[])
 
 	handle_help_version_opts(argc, argv, "vacuumdb", help);
 
-	while ((c = getopt_long(argc, argv, "h:p:U:wWeqd:zZFat:fvj:", long_options, &optindex)) != -1)
+	while ((c = getopt_long(argc, argv, "h:p:P::U:wWeqd:zZFat:fvj:", long_options, &optindex)) != -1)
 	{
 		switch (c)
 		{
@@ -211,6 +215,25 @@ main(int argc, char *argv[])
 					exit(1);
 				}
 				break;
+			case 'P':
+				{
+					int parallel_workers = 0;
+
+					if (optarg != NULL)
+					{
+						parallel_workers = atoi(optarg);
+						if (parallel_workers <= 0)
+						{
+							fprintf(stderr, _("%s: number of parallel workers must be at least 1\n"),
+									progname);
+							exit(1);
+						}
+					}
+
+					/* allow to set 0, meaning PARALLEL without the parallel degree */
+					vacopts.parallel_workers = parallel_workers;
+					break;
+				}
 			case 2:
 				maintenance_db = pg_strdup(optarg);
 				break;
@@ -267,7 +290,20 @@ main(int argc, char *argv[])
 					progname, "disable-page-skipping");
 			exit(1);
 		}
+		if (vacopts.parallel_workers >= 0)
+		{
+			fprintf(stderr, _("%s: cannot use the \"%s\" option when performing only analyze\n"),
+					progname, "parallel");
+			exit(1);
+		}
 		/* allow 'and_analyze' with 'analyze_only' */
+	}
+
+	if (vacopts.full && vacopts.parallel_workers >= 0)
+	{
+		fprintf(stderr, _("%s: cannot use the \"%s\" option with \"%s\" option"),
+				progname, "full", "parallel");
+		exit(1);
 	}
 
 	setup_cancel_handler();
@@ -737,6 +773,16 @@ prepare_vacuum_command(PQExpBuffer sql, PGconn *conn,
 				appendPQExpBuffer(sql, "%sANALYZE", sep);
 				sep = comma;
 			}
+			if (vacopts->parallel_workers > 0)
+			{
+				appendPQExpBuffer(sql, "%sPARALLEL %d", sep, vacopts->parallel_workers);
+				sep = comma;
+			}
+			if (vacopts->parallel_workers == 0)
+			{
+				appendPQExpBuffer(sql, "%sPARALLEL", sep);
+				sep = comma;
+			}
 			if (sep != paren)
 				appendPQExpBufferChar(sql, ')');
 		}
@@ -1075,6 +1121,7 @@ help(const char *progname)
 	printf(_("  -f, --full                      do full vacuuming\n"));
 	printf(_("  -F, --freeze                    freeze row transaction information\n"));
 	printf(_("  -j, --jobs=NUM                  use this many concurrent connections to vacuum\n"));
+	printf(_("  -P, --parallel=NUM              do parallel vacuuming\n"));
 	printf(_("  -q, --quiet                     don't write any messages\n"));
 	printf(_("      --skip-locked               skip relations that cannot be immediately locked\n"));
 	printf(_("  -t, --table='TABLE[(COLUMNS)]'  vacuum specific table(s) only\n"));

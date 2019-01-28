@@ -835,15 +835,6 @@ AC_MSG_RESULT([$with_openssl])
 AC_SUBST(with_openssl)
 
 #
-# Apple Secure Transport
-#
-AC_MSG_CHECKING([whether to build with Apple Secure Transport support])
-PGAC_ARG_BOOL(with, securetransport, no, [build with Apple Secure Transport support],
-			  [AC_DEFINE([USE_SECURETRANSPORT], 1, [Define to build with Apple Secure Transport support.  (--with-securetransport)])])
-AC_MSG_RESULT([$with_securetransport])
-AC_SUBST(with_securetransport)
-
-#
 # SELinux
 #
 AC_MSG_CHECKING([whether to build with SELinux support])
@@ -1397,18 +1388,6 @@ fi
 if test "$with_openssl" = yes ; then
   AC_CHECK_HEADER(openssl/ssl.h, [], [AC_MSG_ERROR([header file <openssl/ssl.h> is required for OpenSSL])])
   AC_CHECK_HEADER(openssl/err.h, [], [AC_MSG_ERROR([header file <openssl/err.h> is required for OpenSSL])])
-fi
-
-if test "$with_securetransport" = yes ; then
-  AC_CHECK_HEADER(Security/Security.h, [], [AC_MSG_ERROR([header file <Security/Security.h> is required for Apple Secure Transport])])
-  AC_CHECK_HEADER(CoreFoundation/CoreFoundation.h, [], [AC_MSG_ERROR([header file <CoreFoundation/CoreFoundation.h> is required for Apple Secure Transport])])
-  dnl Ideally we should be able to use AC_CHECK_DECLS here but it fails to
-  dnl pick up the Corefoundation style enums, so run a compilation to be more
-  dnl fail-safe
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
-  [#include <Security/Security.h>],
-  [int p = kTLSProtocol13;])],
-  [AC_DEFINE(HAVE_KTLSPROTOCOL13, 1, [])], [])
 fi
 
 if test "$with_pam" = yes ; then

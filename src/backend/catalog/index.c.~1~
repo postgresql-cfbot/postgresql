@@ -1361,54 +1361,26 @@ index_constraint_create(Relation heapRelation,
 	 */
 	if (deferrable)
 	{
-		CreateTrigStmt *insert_trigger, *update_trigger;
+		CreateTrigStmt *trigger;
 
-		TriggerTransition *ins = makeNode(TriggerTransition);
-		ins->name = "pg_inserted_transition_table";
-		ins->isNew = true;
-		ins->isTable = true;
+		trigger = makeNode(CreateTrigStmt);
+		trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
+			"PK_ConstraintTrigger" :
+			"Unique_ConstraintTrigger";
+		trigger->relation = NULL;
+		trigger->funcname = SystemFuncName("unique_key_recheck");
+		trigger->args = NIL;
+		trigger->row = true;
+		trigger->timing = TRIGGER_TYPE_AFTER;
+		trigger->events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
+		trigger->columns = NIL;
+		trigger->whenClause = NULL;
+		trigger->isconstraint = true;
+		trigger->deferrable = true;
+		trigger->initdeferred = initdeferred;
+		trigger->constrrel = NULL;
 
-		insert_trigger = makeNode(CreateTrigStmt);
-		insert_trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
-			"PK_ConstraintTrigger_i" :
-			"Unique_ConstraintTrigger_i";
-		insert_trigger->relation = NULL;
-		insert_trigger->funcname = SystemFuncName("unique_key_recheck");
-		insert_trigger->args = NIL;
-		insert_trigger->row = false;
-		insert_trigger->timing = TRIGGER_TYPE_AFTER;
-		insert_trigger->events = TRIGGER_TYPE_INSERT;
-		insert_trigger->columns = NIL;
-		insert_trigger->whenClause = NULL;
-		insert_trigger->isconstraint = true;
-		insert_trigger->deferrable = true;
-		insert_trigger->initdeferred = initdeferred;
-		insert_trigger->constrrel = NULL;
-		insert_trigger->transitionRels = list_make1(ins);
-
-		(void) CreateTrigger(insert_trigger, NULL, RelationGetRelid(heapRelation),
-							 InvalidOid, conOid, indexRelationId, InvalidOid,
-							 InvalidOid, NULL, true, false);
-
-		update_trigger = makeNode(CreateTrigStmt);
-		update_trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
-			"PK_ConstraintTrigger_u" :
-			"Unique_ConstraintTrigger_u";
-		update_trigger->relation = NULL;
-		update_trigger->funcname = SystemFuncName("unique_key_recheck");
-		update_trigger->args = NIL;
-		update_trigger->row = false;
-		update_trigger->timing = TRIGGER_TYPE_AFTER;
-		update_trigger->events = TRIGGER_TYPE_UPDATE;
-		update_trigger->columns = NIL;
-		update_trigger->whenClause = NULL;
-		update_trigger->isconstraint = true;
-		update_trigger->deferrable = true;
-		update_trigger->initdeferred = initdeferred;
-		update_trigger->constrrel = NULL;
-		update_trigger->transitionRels = list_make1(ins);
-
-		(void) CreateTrigger(update_trigger, NULL, RelationGetRelid(heapRelation),
+		(void) CreateTrigger(trigger, NULL, RelationGetRelid(heapRelation),
 							 InvalidOid, conOid, indexRelationId, InvalidOid,
 							 InvalidOid, NULL, true, false);
 	}

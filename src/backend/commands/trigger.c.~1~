@@ -503,6 +503,15 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("transition tables cannot be specified for triggers with column lists")));
 
+			/*
+			 * We disallow constraint triggers with transition tables, to
+			 * protect the assumption that such triggers can't be deferred.
+			 * See notes with AfterTriggers data structures, below.
+			 *
+			 * Currently this is enforced by the grammar, so just Assert here.
+			 */
+			Assert(!stmt->isconstraint);
+
 			if (tt->isNew)
 			{
 				if (!(TRIGGER_FOR_INSERT(tgtype) ||

@@ -47,7 +47,7 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	IndexInfo  *indexInfo;
 	EState	   *estate;
 	ExprContext *econtext;
-	TupleTableSlot *slot;
+	TupleTableSlot *slot = NULL;
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 
@@ -63,54 +63,18 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 						funcname)));
 
 	if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
-		!TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
+		!TRIGGER_FIRED_FOR_STATEMENT(trigdata->tg_event))
 		ereport(ERROR,
 				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
-				 errmsg("function \"%s\" must be fired AFTER ROW",
+				 errmsg("function \"%s\" must be fired AFTER STATEMENT",
 						funcname)));
 
-	/*
-	 * Get the new data that was inserted/updated.
-	 */
-	if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
-		new_row = trigdata->tg_trigtuple;
-	else if (TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
-		new_row = trigdata->tg_newtuple;
-	else
-	{
+	if (! TRIGGER_FIRED_BY_INSERT(trigdata->tg_event) &&
+		! TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
 		ereport(ERROR,
 				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
 				 errmsg("function \"%s\" must be fired for INSERT or UPDATE",
 						funcname)));
-		new_row = NULL;			/* keep compiler quiet */
-	}
-
-	/*
-	 * If the new_row is now dead (ie, inserted and then deleted within our
-	 * transaction), we can skip the check.  However, we have to be careful,
-	 * because this trigger gets queued only in response to index insertions;
-	 * which means it does not get queued for HOT updates.  The row we are
-	 * called for might now be dead, but have a live HOT child, in which case
-	 * we still need to make the check --- effectively, we're applying the
-	 * check against the live child row, although we can use the values from
-	 * this row since by definition all columns of interest to us are the
-	 * same.
-	 *
-	 * This might look like just an optimization, because the index AM will
-	 * make this identical test before throwing an error.  But it's actually
-	 * needed for correctness, because the index AM will also throw an error
-	 * if it doesn't find the index entry for the row.  If the row's dead then
-	 * it's possible the index entry has also been marked dead, and even
-	 * removed.
-	 */
-	tmptid = new_row->t_self;
-	if (!heap_hot_search(&tmptid, trigdata->tg_relation, SnapshotSelf, NULL))
-	{
-		/*
-		 * All rows in the HOT chain are dead, so skip the check.
-		 */
-		return PointerGetDatum(NULL);
-	}
 
 	/*
 	 * Open the index, acquiring a RowExclusiveLock, just as if we were going
@@ -122,14 +86,6 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	indexInfo = BuildIndexInfo(indexRel);
 
 	/*
-	 * The heap tuple must be put into a slot for FormIndexDatum.
-	 */
-	slot = MakeSingleTupleTableSlot(RelationGetDescr(trigdata->tg_relation),
-									&TTSOpsHeapTuple);
-
-	ExecStoreHeapTuple(new_row, slot, false);
-
-	/*
 	 * Typically the index won't have expressions, but if it does we need an
 	 * EState to evaluate them.  We need it for exclusion constraints too,
 	 * even if they are just on simple columns.
@@ -139,49 +95,101 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	{
 		estate = CreateExecutorState();
 		econtext = GetPerTupleExprContext(estate);
-		econtext->ecxt_scantuple = slot;
 	}
 	else
 		estate = NULL;
 
 	/*
-	 * Form the index values and isnull flags for the index entry that we need
-	 * to check.
-	 *
-	 * Note: if the index uses functions that are not as immutable as they are
-	 * supposed to be, this could produce an index tuple different from the
-	 * original.  The index AM can catch such errors by verifying that it
-	 * finds a matching index entry with the tuple's TID.  For exclusion
-	 * constraints we check this in check_exclusion_constraint().
+	 * Iterate over transition table.
 	 */
-	FormIndexDatum(indexInfo, slot, estate, values, isnull);
+	tuplestore_select_read_pointer(trigdata->tg_newtable,0);
+	if (!tuplestore_gettupleslot(trigdata->tg_newtable, true, true, slot))
+		ereport(ERROR,
+				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+				 errmsg("unexpected end of tuplestore")));
 
-	/*
-	 * Now do the appropriate check.
-	 */
-	if (indexInfo->ii_ExclusionOps == NULL)
+	ereport(ERROR, (errmsg_internal("start walking transition table")));
+
+	while (! TupIsNull(slot))
 	{
+		ereport(WARNING, (errmsg_internal("start loop transition table")));
+		new_row = slot->tts_ops->get_heap_tuple(slot);
+
 		/*
-		 * Note: this is not a real insert; it is a check that the index entry
-		 * that has already been inserted is unique.  Passing t_self is
-		 * correct even if t_self is now dead, because that is the TID the
-		 * index will know about.
+		 * If the new_row is now dead (ie, inserted and then deleted within our
+		 * transaction), we can skip the check.  However, we have to be careful,
+		 * because this trigger gets queued only in response to index insertions;
+		 * which means it does not get queued for HOT updates.  The row we are
+		 * called for might now be dead, but have a live HOT child, in which case
+		 * we still need to make the check --- effectively, we're applying the
+		 * check against the live child row, although we can use the values from
+		 * this row since by definition all columns of interest to us are the
+		 * same.
+		 *
+		 * This might look like just an optimization, because the index AM will
+		 * make this identical test before throwing an error.  But it's actually
+		 * needed for correctness, because the index AM will also throw an error
+		 * if it doesn't find the index entry for the row.  If the row's dead then
+		 * it's possible the index entry has also been marked dead, and even
+		 * removed.
 		 */
-		index_insert(indexRel, values, isnull, &(new_row->t_self),
-					 trigdata->tg_relation, UNIQUE_CHECK_EXISTING,
-					 indexInfo);
-	}
-	else
-	{
+		tmptid = new_row->t_self;
+		if (!heap_hot_search(&tmptid, trigdata->tg_relation, SnapshotSelf, NULL))
+		{
+			/*
+			 * All rows in the HOT chain are dead, so skip the check.
+			 */
+			continue;
+		}
+
+		if (estate != NULL)
+			econtext->ecxt_scantuple = slot;
+
 		/*
-		 * For exclusion constraints we just do the normal check, but now it's
-		 * okay to throw error.  In the HOT-update case, we must use the live
-		 * HOT child's TID here, else check_exclusion_constraint will think
-		 * the child is a conflict.
+		 * Form the index values and isnull flags for the index entry that we need
+		 * to check.
+		 *
+		 * Note: if the index uses functions that are not as immutable as they are
+		 * supposed to be, this could produce an index tuple different from the
+		 * original.  The index AM can catch such errors by verifying that it
+		 * finds a matching index entry with the tuple's TID.  For exclusion
+		 * constraints we check this in check_exclusion_constraint().
 		 */
-		check_exclusion_constraint(trigdata->tg_relation, indexRel, indexInfo,
-								   &tmptid, values, isnull,
-								   estate, false);
+		FormIndexDatum(indexInfo, slot, estate, values, isnull);
+
+		/*
+		 * Now do the appropriate check.
+		 */
+		if (indexInfo->ii_ExclusionOps == NULL)
+		{
+			/*
+			 * Note: this is not a real insert; it is a check that the index entry
+			 * that has already been inserted is unique.  Passing t_self is
+			 * correct even if t_self is now dead, because that is the TID the
+			 * index will know about.
+			 */
+			index_insert(indexRel, values, isnull, &(new_row->t_self),
+						 trigdata->tg_relation, UNIQUE_CHECK_EXISTING,
+						 indexInfo);
+		}
+		else
+		{
+			/*
+			 * For exclusion constraints we just do the normal check, but now it's
+			 * okay to throw error.  In the HOT-update case, we must use the live
+			 * HOT child's TID here, else check_exclusion_constraint will think
+			 * the child is a conflict.
+			 */
+			check_exclusion_constraint(trigdata->tg_relation, indexRel, indexInfo,
+									   &tmptid, values, isnull,
+									   estate, false);
+		}
+
+		ExecDropSingleTupleTableSlot(slot);
+
+		ereport(WARNING, (errmsg_internal("end loop transition table")));
+		if (!tuplestore_gettupleslot(trigdata->tg_newtable, true, true, slot))
+			break;
 	}
 
 	/*
@@ -191,7 +199,6 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	if (estate != NULL)
 		FreeExecutorState(estate);
 
-	ExecDropSingleTupleTableSlot(slot);
 
 	index_close(indexRel, RowExclusiveLock);
 

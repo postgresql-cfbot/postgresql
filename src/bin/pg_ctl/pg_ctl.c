@@ -26,6 +26,7 @@
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
+#include "fe_utils/logging.h"
 #include "getopt_long.h"
 #include "utils/pidfile.h"
 
@@ -2231,7 +2232,7 @@ get_control_dbstate(void)
 {
 	DBState		ret;
 	bool		crc_ok;
-	ControlFileData *control_file_data = get_controlfile(pg_data, progname, &crc_ok);
+	ControlFileData *control_file_data = get_controlfile(pg_data, &crc_ok);
 
 	if (!crc_ok)
 	{
@@ -2274,6 +2275,7 @@ main(int argc, char **argv)
 
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_ctl"));
+	pg_logging_init(argv[0]);
 	start_time = time(NULL);
 
 	/*

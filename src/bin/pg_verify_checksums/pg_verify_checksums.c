@@ -15,6 +15,7 @@
 
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "fe_utils/logging.h"
 #include "getopt_long.h"
 #include "pg_getopt.h"
 #include "storage/bufpage.h"
@@ -90,8 +91,7 @@ scan_file(const char *fn, BlockNumber segmentno)
 	f = open(fn, O_RDONLY | PG_BINARY, 0);
 	if (f < 0)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\": %s\n"),
-				progname, fn, strerror(errno));
+		pg_log_error("could not open file \"%s\": %m", fn);
 		exit(1);
 	}
 
@@ -106,8 +106,8 @@ scan_file(const char *fn, BlockNumber segmentno)
 			break;
 		if (r != BLCKSZ)
 		{
-			fprintf(stderr, _("%s: could not read block %u in file \"%s\": read %d of %d\n"),
-					progname, blockno, fn, r, BLCKSZ);
+			pg_log_error("could not read block %u in file \"%s\": read %d of %d",
+						 blockno, fn, r, BLCKSZ);
 			exit(1);
 		}
 		blocks++;
@@ -120,15 +120,14 @@ scan_file(const char *fn, BlockNumber segmentno)
 		if (csum != header->pd_checksum)
 		{
 			if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
-				fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X\n"),
-						progname, fn, blockno, csum, header->pd_checksum);
+				pg_log_error("checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X",
+							 fn, blockno, csum, header->pd_checksum);
 			badblocks++;
 		}
 	}
 
 	if (verbose)
-		fprintf(stderr,
-				_("%s: checksums verified in file \"%s\"\n"), progname, fn);
+		pg_log_info("checksums verified in file \"%s\"", fn);
 
 	close(f);
 }
@@ -144,8 +143,7 @@ scan_directory(const char *basedir, const char *subdir)
 	dir = opendir(path);
 	if (!dir)
 	{
-		fprintf(stderr, _("%s: could not open directory \"%s\": %s\n"),
-				progname, path, strerror(errno));
+		pg_log_error("could not open directory \"%s\": %m", path);
 		exit(1);
 	}
 	while ((de = readdir(dir)) != NULL)
@@ -172,8 +170,7 @@ scan_directory(const char *basedir, const char *subdir)
 		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);
 		if (lstat(fn, &st) < 0)
 		{
-			fprintf(stderr, _("%s: could not stat file \"%s\": %s\n"),
-					progname, fn, strerror(errno));
+			pg_log_error("could not stat file \"%s\": %m", fn);
 			exit(1);
 		}
 		if (S_ISREG(st.st_mode))
@@ -200,8 +197,8 @@ scan_directory(const char *basedir, const char *subdir)
 				segmentno = atoi(segmentpath);
 				if (segmentno == 0)
 				{
-					fprintf(stderr, _("%s: invalid segment number %d in file name \"%s\"\n"),
-							progname, segmentno, fn);
+					pg_log_error("invalid segment number %d in file name \"%s\"",
+								 segmentno, fn);
 					exit(1);
 				}
 			}
@@ -241,7 +238,7 @@ main(int argc, char *argv[])
 	bool		crc_ok;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_verify_checksums"));
-
+	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
 
 	if (argc > 1)
@@ -271,7 +268,7 @@ main(int argc, char *argv[])
 			case 'r':
 				if (atoi(optarg) == 0)
 				{
-					fprintf(stderr, _("%s: invalid relfilenode specification, must be numeric: %s\n"), progname, optarg);
+					pg_log_error("invalid relfilenode specification, must be numeric: %s", optarg);
 					exit(1);
 				}
 				only_relfilenode = pstrdup(optarg);
@@ -292,7 +289,7 @@ main(int argc, char *argv[])
 		/* If no DataDir was specified, and none could be found, error out */
 		if (DataDir == NULL)
 		{
-			fprintf(stderr, _("%s: no data directory specified\n"), progname);
+			pg_log_error("no data directory specified");
 			fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 			exit(1);
 		}
@@ -301,31 +298,31 @@ main(int argc, char *argv[])
 	/* Complain if any arguments remain */
 	if (optind < argc)
 	{
-		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
-				progname, argv[optind]);
+		pg_log_error("too many command-line arguments (first is \"%s\")",
+					 argv[optind]);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
 	}
 
 	/* Check if cluster is running */
-	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
+	ControlFile = get_controlfile(DataDir, &crc_ok);
 	if (!crc_ok)
 	{
-		fprintf(stderr, _("%s: pg_control CRC value is incorrect\n"), progname);
+		pg_log_error("pg_control CRC value is incorrect");
 		exit(1);
 	}
 
 	if (ControlFile->state != DB_SHUTDOWNED &&
 		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
 	{
-		fprintf(stderr, _("%s: cluster must be shut down to verify checksums\n"), progname);
+		pg_log_error("cluster must be shut down to verify checksums");
 		exit(1);
 	}
 
 	if (ControlFile->data_checksum_version == 0)
 	{
-		fprintf(stderr, _("%s: data checksums are not enabled in cluster\n"), progname);
+		pg_log_error("data checksums are not enabled in cluster");
 		exit(1);
 	}
 

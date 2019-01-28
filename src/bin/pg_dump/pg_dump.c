@@ -62,6 +62,7 @@
 #include "pg_backup_utils.h"
 #include "pg_dump.h"
 #include "fe_utils/connect.h"
+#include "fe_utils/logging.h"
 #include "fe_utils/string_utils.h"
 
 
@@ -91,8 +92,6 @@ typedef enum OidOptions
 } OidOptions;
 
 /* global decls */
-bool		g_verbose;			/* User wants verbose narration of our
-								 * activities. */
 static bool dosync = true;		/* Issue fsync() to make dump durable on disk. */
 
 /* subquery used to convert user ID (eg, datdba) to user name */
@@ -304,6 +303,7 @@ main(int argc, char **argv)
 	int			optindex;
 	RestoreOptions *ropt;
 	Archive    *fout;			/* the script file */
+	bool		g_verbose = false;
 	const char *dumpencoding = NULL;
 	const char *dumpsnapshot = NULL;
 	char	   *use_role = NULL;
@@ -382,14 +382,14 @@ main(int argc, char **argv)
 	};
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_dump"));
+	pg_logging_init(argv[0]);
+	pg_logging_set_level(PG_LOG_WARNING);
 
 	/*
 	 * Initialize what we need for parallel execution, especially for thread
 	 * support on Windows.
 	 */
 	init_parallel_dump_utils();
-
-	g_verbose = false;
 
 	strcpy(g_comment_start, "-- ");
 	g_comment_end[0] = '\0';
@@ -506,6 +506,7 @@ main(int argc, char **argv)
 
 			case 'v':			/* verbose */
 				g_verbose = true;
+				pg_logging_set_level(PG_LOG_INFO);
 				break;
 
 			case 'w':
@@ -524,7 +525,7 @@ main(int argc, char **argv)
 				compressLevel = atoi(optarg);
 				if (compressLevel < 0 || compressLevel > 9)
 				{
-					write_msg(NULL, "compression level must be in range 0..9\n");
+					pg_log_error("compression level must be in range 0..9");
 					exit_nicely(1);
 				}
 				break;
@@ -573,8 +574,8 @@ main(int argc, char **argv)
 	/* Complain if any arguments remain */
 	if (optind < argc)
 	{
-		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
-				progname, argv[optind]);
+		pg_log_error("too many command-line arguments (first is \"%s\")",
+					 argv[optind]);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit_nicely(1);
@@ -594,21 +595,21 @@ main(int argc, char **argv)
 
 	if (dopt.dataOnly && dopt.schemaOnly)
 	{
-		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used together\n");
+		pg_log_error("options -s/--schema-only and -a/--data-only cannot be used together");
 		exit_nicely(1);
 	}
 
 	if (dopt.dataOnly && dopt.outputClean)
 	{
-		write_msg(NULL, "options -c/--clean and -a/--data-only cannot be used together\n");
+		pg_log_error("options -c/--clean and -a/--data-only cannot be used together");
 		exit_nicely(1);
 	}
 
 	if (dopt.if_exists && !dopt.outputClean)
-		exit_horribly(NULL, "option --if-exists requires option -c/--clean\n");
+		fatal("option --if-exists requires option -c/--clean");
 
 	if (dopt.do_nothing && !(dopt.dump_inserts || dopt.column_inserts))
-		exit_horribly(NULL, "option --on-conflict-do-nothing requires option --inserts or --column-inserts\n");
+		fatal("option --on-conflict-do-nothing requires option --inserts or --column-inserts");
 
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
@@ -630,8 +631,7 @@ main(int argc, char **argv)
 
 #ifndef HAVE_LIBZ
 	if (compressLevel != 0)
-		write_msg(NULL, "WARNING: requested compression not available in this "
-				  "installation -- archive will be uncompressed\n");
+		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
 	compressLevel = 0;
 #endif
 
@@ -652,11 +652,11 @@ main(int argc, char **argv)
 		|| numWorkers > MAXIMUM_WAIT_OBJECTS
 #endif
 		)
-		exit_horribly(NULL, "invalid number of parallel jobs\n");
+		fatal("invalid number of parallel jobs");
 
 	/* Parallel backup only in the directory archive format so far */
 	if (archiveFormat != archDirectory && numWorkers > 1)
-		exit_horribly(NULL, "parallel backup only supported by the directory format\n");
+		fatal("parallel backup only supported by the directory format");
 
 	/* Open the output file */
 	fout = CreateArchive(filename, archiveFormat, compressLevel, dosync,
@@ -670,6 +670,7 @@ main(int argc, char **argv)
 
 	/* Let the archiver know how noisy to be */
 	fout->verbose = g_verbose;
+
 
 	/*
 	 * We allow the server to be back to 8.0, and up to any minor release of
@@ -710,15 +711,13 @@ main(int argc, char **argv)
 	/* check the version for the synchronized snapshots feature */
 	if (numWorkers > 1 && fout->remoteVersion < 90200
 		&& !dopt.no_synchronized_snapshots)
-		exit_horribly(NULL,
-					  "Synchronized snapshots are not supported by this server version.\n"
-					  "Run with --no-synchronized-snapshots instead if you do not need\n"
-					  "synchronized snapshots.\n");
+		fatal("Synchronized snapshots are not supported by this server version.\n"
+			  "Run with --no-synchronized-snapshots instead if you do not need\n"
+			  "synchronized snapshots.");
 
 	/* check the version when a snapshot is explicitly specified by user */
 	if (dumpsnapshot && fout->remoteVersion < 90200)
-		exit_horribly(NULL,
-					  "Exported snapshots are not supported by this server version.\n");
+		fatal("Exported snapshots are not supported by this server version.");
 
 	/*
 	 * Find the last built-in OID, if needed (prior to 8.1)
@@ -730,8 +729,7 @@ main(int argc, char **argv)
 	else
 		g_last_builtin_oid = FirstNormalObjectId - 1;
 
-	if (g_verbose)
-		write_msg(NULL, "last built-in OID is %u\n", g_last_builtin_oid);
+	pg_log_info("last built-in OID is %u", g_last_builtin_oid);
 
 	/* Expand schema selection patterns into OID lists */
 	if (schema_include_patterns.head != NULL)
@@ -740,7 +738,7 @@ main(int argc, char **argv)
 									&schema_include_oids,
 									strict_names);
 		if (schema_include_oids.head == NULL)
-			exit_horribly(NULL, "no matching schemas were found\n");
+			fatal("no matching schemas were found");
 	}
 	expand_schema_name_patterns(fout, &schema_exclude_patterns,
 								&schema_exclude_oids,
@@ -754,7 +752,7 @@ main(int argc, char **argv)
 								   &table_include_oids,
 								   strict_names);
 		if (table_include_oids.head == NULL)
-			exit_horribly(NULL, "no matching tables were found\n");
+			fatal("no matching tables were found");
 	}
 	expand_table_name_patterns(fout, &table_exclude_patterns,
 							   &table_exclude_oids,
@@ -1016,8 +1014,8 @@ setup_connection(Archive *AH, const char *dumpencoding,
 	if (dumpencoding)
 	{
 		if (PQsetClientEncoding(conn, dumpencoding) < 0)
-			exit_horribly(NULL, "invalid client encoding \"%s\" specified\n",
-						  dumpencoding);
+			fatal("invalid client encoding \"%s\" specified",
+				  dumpencoding);
 	}
 
 	/*
@@ -1152,10 +1150,9 @@ setup_connection(Archive *AH, const char *dumpencoding,
 			 !dopt->no_synchronized_snapshots)
 	{
 		if (AH->isStandby && AH->remoteVersion < 100000)
-			exit_horribly(NULL,
-						  "Synchronized snapshots on standby servers are not supported by this server version.\n"
-						  "Run with --no-synchronized-snapshots instead if you do not need\n"
-						  "synchronized snapshots.\n");
+			fatal("Synchronized snapshots on standby servers are not supported by this server version.\n"
+				  "Run with --no-synchronized-snapshots instead if you do not need\n"
+				  "synchronized snapshots.");
 
 
 		AH->sync_snapshot_id = get_synchronized_snapshot(AH);
@@ -1222,7 +1219,7 @@ parseArchiveFormat(const char *format, ArchiveMode *mode)
 	else if (pg_strcasecmp(format, "tar") == 0)
 		archiveFormat = archTar;
 	else
-		exit_horribly(NULL, "invalid output format \"%s\" specified\n", format);
+		fatal("invalid output format \"%s\" specified", format);
 	return archiveFormat;
 }
 
@@ -1260,7 +1257,7 @@ expand_schema_name_patterns(Archive *fout,
 
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 		if (strict_names && PQntuples(res) == 0)
-			exit_horribly(NULL, "no matching schemas were found for pattern \"%s\"\n", cell->val);
+			fatal("no matching schemas were found for pattern \"%s\"", cell->val);
 
 		for (i = 0; i < PQntuples(res); i++)
 		{
@@ -1324,7 +1321,7 @@ expand_table_name_patterns(Archive *fout,
 		PQclear(ExecuteSqlQueryForSingleRow(fout,
 											ALWAYS_SECURE_SEARCH_PATH_SQL));
 		if (strict_names && PQntuples(res) == 0)
-			exit_horribly(NULL, "no matching tables were found for pattern \"%s\"\n", cell->val);
+			fatal("no matching tables were found for pattern \"%s\"", cell->val);
 
 		for (i = 0; i < PQntuples(res); i++)
 		{
@@ -1738,9 +1735,8 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 	char	   *copybuf;
 	const char *column_list;
 
-	if (g_verbose)
-		write_msg(NULL, "dumping contents of table \"%s.%s\"\n",
-				  tbinfo->dobj.namespace->dobj.name, classname);
+	pg_log_info("dumping contents of table \"%s.%s\"",
+				tbinfo->dobj.namespace->dobj.name, classname);
 
 	/*
 	 * Specify the column list explicitly so that we have no possibility of
@@ -1840,9 +1836,9 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 	if (ret == -2)
 	{
 		/* copy data transfer failed */
-		write_msg(NULL, "Dumping the contents of table \"%s\" failed: PQgetCopyData() failed.\n", classname);
-		write_msg(NULL, "Error message from server: %s", PQerrorMessage(conn));
-		write_msg(NULL, "The command was: %s\n", q->data);
+		pg_log_error("Dumping the contents of table \"%s\" failed: PQgetCopyData() failed.", classname);
+		pg_log_error("Error message from server: %s", PQerrorMessage(conn));
+		pg_log_error("The command was: %s", q->data);
 		exit_nicely(1);
 	}
 
@@ -1850,16 +1846,16 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 	res = PQgetResult(conn);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
-		write_msg(NULL, "Dumping the contents of table \"%s\" failed: PQgetResult() failed.\n", classname);
-		write_msg(NULL, "Error message from server: %s", PQerrorMessage(conn));
-		write_msg(NULL, "The command was: %s\n", q->data);
+		pg_log_error("Dumping the contents of table \"%s\" failed: PQgetResult() failed.", classname);
+		pg_log_error("Error message from server: %s", PQerrorMessage(conn));
+		pg_log_error("The command was: %s", q->data);
 		exit_nicely(1);
 	}
 	PQclear(res);
 
 	/* Do this to ensure we've pumped libpq back to idle state */
 	if (PQgetResult(conn) != NULL)
-		write_msg(NULL, "WARNING: unexpected extra results during COPY of table \"%s\"\n",
+		pg_log_warning("unexpected extra results during COPY of table \"%s\"",
 				  classname);
 
 	destroyPQExpBuffer(q);
@@ -2560,8 +2556,7 @@ dumpDatabase(Archive *fout)
 				minmxid;
 	char	   *qdatname;
 
-	if (g_verbose)
-		write_msg(NULL, "saving database definition\n");
+	pg_log_info("saving database definition");
 
 	/* Fetch the database-level properties for this database */
 	if (fout->remoteVersion >= 90600)
@@ -3006,8 +3001,7 @@ dumpEncoding(Archive *AH)
 	const char *encname = pg_encoding_to_char(AH->encoding);
 	PQExpBuffer qry = createPQExpBuffer();
 
-	if (g_verbose)
-		write_msg(NULL, "saving encoding = %s\n", encname);
+	pg_log_info("saving encoding = %s", encname);
 
 	appendPQExpBufferStr(qry, "SET client_encoding = ");
 	appendStringLiteralAH(qry, encname, AH);
@@ -3033,9 +3027,8 @@ dumpStdStrings(Archive *AH)
 	const char *stdstrings = AH->std_strings ? "on" : "off";
 	PQExpBuffer qry = createPQExpBuffer();
 
-	if (g_verbose)
-		write_msg(NULL, "saving standard_conforming_strings = %s\n",
-				  stdstrings);
+	pg_log_info("saving standard_conforming_strings = %s",
+				stdstrings);
 
 	appendPQExpBuffer(qry, "SET standard_conforming_strings = '%s';\n",
 					  stdstrings);
@@ -3074,7 +3067,7 @@ dumpSearchPath(Archive *AH)
 									  "SELECT pg_catalog.current_schemas(false)");
 
 	if (!parsePGArray(PQgetvalue(res, 0, 0), &schemanames, &nschemanames))
-		exit_horribly(NULL, "could not parse result of current_schemas()\n");
+		fatal("could not parse result of current_schemas()");
 
 	/*
 	 * We use set_config(), not a simple "SET search_path" command, because
@@ -3093,8 +3086,7 @@ dumpSearchPath(Archive *AH)
 	appendStringLiteralAH(qry, path->data, AH);
 	appendPQExpBufferStr(qry, ", false);\n");
 
-	if (g_verbose)
-		write_msg(NULL, "saving search_path = %s\n", path->data);
+	pg_log_info("saving search_path = %s", path->data);
 
 	ArchiveEntry(AH, nilCatalogId, createDumpId(),
 				 "SEARCHPATH", NULL, NULL, "",
@@ -3135,9 +3127,7 @@ getBlobs(Archive *fout)
 	int			i_initlomacl;
 	int			i_initrlomacl;
 
-	/* Verbose message */
-	if (g_verbose)
-		write_msg(NULL, "reading large objects\n");
+	pg_log_info("reading large objects");
 
 	/* Fetch BLOB OIDs, and owner/ACL data if >= 9.0 */
 	if (fout->remoteVersion >= 90600)
@@ -3320,8 +3310,7 @@ dumpBlobs(Archive *fout, void *arg)
 	int			i;
 	int			cnt;
 
-	if (g_verbose)
-		write_msg(NULL, "saving large objects\n");
+	pg_log_info("saving large objects");
 
 	/*
 	 * Currently, we re-fetch all BLOB OIDs using a cursor.  Consider scanning
@@ -3357,7 +3346,7 @@ dumpBlobs(Archive *fout, void *arg)
 			/* Open the BLOB */
 			loFd = lo_open(conn, blobOid, INV_READ);
 			if (loFd == -1)
-				exit_horribly(NULL, "could not open large object %u: %s",
+				fatal("could not open large object %u: %s",
 							  blobOid, PQerrorMessage(conn));
 
 			StartBlob(fout, blobOid);
@@ -3367,7 +3356,7 @@ dumpBlobs(Archive *fout, void *arg)
 			{
 				cnt = lo_read(conn, loFd, buf, LOBBUFSIZE);
 				if (cnt < 0)
-					exit_horribly(NULL, "error reading large object %u: %s",
+					fatal("error reading large object %u: %s",
 								  blobOid, PQerrorMessage(conn));
 
 				WriteData(fout, buf, cnt);
@@ -3419,10 +3408,9 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_POLICY))
 			continue;
 
-		if (g_verbose)
-			write_msg(NULL, "reading row security enabled for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading row security enabled for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		/*
 		 * Get row security enabled information for the table. We represent
@@ -3451,10 +3439,9 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 			polinfo->polwithcheck = NULL;
 		}
 
-		if (g_verbose)
-			write_msg(NULL, "reading policies for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading policies for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		resetPQExpBuffer(query);
 
@@ -3602,7 +3589,7 @@ dumpPolicy(Archive *fout, PolicyInfo *polinfo)
 		cmd = " FOR DELETE";
 	else
 	{
-		write_msg(NULL, "unexpected policy command type: %c\n",
+		pg_log_error("unexpected policy command type: %c",
 				  polinfo->polcmd);
 		exit_nicely(1);
 	}
@@ -3730,7 +3717,7 @@ getPublications(Archive *fout)
 			(strcmp(PQgetvalue(res, i, i_pubtruncate), "t") == 0);
 
 		if (strlen(pubinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of publication \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of publication \"%s\" appears to be invalid",
 					  pubinfo[i].dobj.name);
 
 		/* Decide whether we want to dump it */
@@ -3869,10 +3856,9 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 			continue;
 
-		if (g_verbose)
-			write_msg(NULL, "reading publication membership for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading publication membership for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		resetPQExpBuffer(query);
 
@@ -4016,7 +4002,7 @@ getSubscriptions(Archive *fout)
 							  PGRES_TUPLES_OK);
 		n = atoi(PQgetvalue(res, 0, 0));
 		if (n > 0)
-			write_msg(NULL, "WARNING: subscriptions not dumped because current user is not a superuser\n");
+			pg_log_warning("subscriptions not dumped because current user is not a superuser");
 		PQclear(res);
 		return;
 	}
@@ -4070,7 +4056,7 @@ getSubscriptions(Archive *fout)
 			pg_strdup(PQgetvalue(res, i, i_subpublications));
 
 		if (strlen(subinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of subscription \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of subscription \"%s\" appears to be invalid",
 					  subinfo[i].dobj.name);
 
 		/* Decide whether we want to dump it */
@@ -4114,8 +4100,7 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 	/* Build list of quoted publications and append them to query. */
 	if (!parsePGArray(subinfo->subpublications, &pubnames, &npubnames))
 	{
-		write_msg(NULL,
-				  "WARNING: could not parse subpublications array\n");
+		pg_log_warning("could not parse subpublications array");
 		if (pubnames)
 			free(pubnames);
 		pubnames = NULL;
@@ -4383,7 +4368,7 @@ binary_upgrade_extension_member(PQExpBuffer upgrade_buffer,
 		extobj = NULL;
 	}
 	if (extobj == NULL)
-		exit_horribly(NULL, "could not find parent extension for %s %s\n",
+		fatal("could not find parent extension for %s %s",
 					  objtype, objname);
 
 	appendPQExpBufferStr(upgrade_buffer,
@@ -4515,7 +4500,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 			nsinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
 
 		if (strlen(nsinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of schema \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of schema \"%s\" appears to be invalid",
 					  nsinfo[i].dobj.name);
 	}
 
@@ -4538,7 +4523,7 @@ findNamespace(Archive *fout, Oid nsoid)
 
 	nsinfo = findNamespaceByOid(nsoid);
 	if (nsinfo == NULL)
-		exit_horribly(NULL, "schema with OID %u does not exist\n", nsoid);
+		fatal("schema with OID %u does not exist", nsoid);
 	return nsinfo;
 }
 
@@ -4863,7 +4848,7 @@ getTypes(Archive *fout, int *numTypes)
 		}
 
 		if (strlen(tyinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of data type \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of data type \"%s\" appears to be invalid",
 					  tyinfo[i].dobj.name);
 	}
 
@@ -4948,7 +4933,7 @@ getOperators(Archive *fout, int *numOprs)
 		oprinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
 
 		if (strlen(oprinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of operator \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of operator \"%s\" appears to be invalid",
 					  oprinfo[i].dobj.name);
 	}
 
@@ -5250,7 +5235,7 @@ getOpclasses(Archive *fout, int *numOpclasses)
 		opcinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
 
 		if (strlen(opcinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of operator class \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of operator class \"%s\" appears to be invalid",
 					  opcinfo[i].dobj.name);
 	}
 
@@ -5334,7 +5319,7 @@ getOpfamilies(Archive *fout, int *numOpfamilies)
 		opfinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
 
 		if (strlen(opfinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of operator family \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of operator family \"%s\" appears to be invalid",
 					  opfinfo[i].dobj.name);
 	}
 
@@ -5503,7 +5488,7 @@ getAggregates(Archive *fout, int *numAggs)
 						  atooid(PQgetvalue(res, i, i_aggnamespace)));
 		agginfo[i].aggfn.rolname = pg_strdup(PQgetvalue(res, i, i_rolname));
 		if (strlen(agginfo[i].aggfn.rolname) == 0)
-			write_msg(NULL, "WARNING: owner of aggregate function \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of aggregate function \"%s\" appears to be invalid",
 					  agginfo[i].aggfn.dobj.name);
 		agginfo[i].aggfn.lang = InvalidOid; /* not currently interesting */
 		agginfo[i].aggfn.prorettype = InvalidOid;	/* not saved */
@@ -5763,8 +5748,7 @@ getFuncs(Archive *fout, int *numFuncs)
 			finfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
 
 		if (strlen(finfo[i].rolname) == 0)
-			write_msg(NULL,
-					  "WARNING: owner of function \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of function \"%s\" appears to be invalid",
 					  finfo[i].dobj.name);
 	}
 
@@ -6548,7 +6532,7 @@ getTables(Archive *fout, int *numTables)
 
 		/* Emit notice if join for owner failed */
 		if (strlen(tblinfo[i].rolname) == 0)
-			write_msg(NULL, "WARNING: owner of table \"%s\" appears to be invalid\n",
+			pg_log_warning("owner of table \"%s\" appears to be invalid",
 					  tblinfo[i].dobj.name);
 	}
 
@@ -6590,7 +6574,7 @@ getOwnedSeqs(Archive *fout, TableInfo tblinfo[], int numTables)
 
 		owning_tab = findTableByOid(seqinfo->owning_tab);
 		if (owning_tab == NULL)
-			exit_horribly(NULL, "failed sanity check, parent table with OID %u of sequence with OID %u not found\n",
+			fatal("failed sanity check, parent table with OID %u of sequence with OID %u not found",
 						  seqinfo->owning_tab, seqinfo->dobj.catId.oid);
 
 		/*
@@ -6734,10 +6718,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			!tbinfo->interesting)
 			continue;
 
-		if (g_verbose)
-			write_msg(NULL, "reading indexes for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading indexes for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		/*
 		 * The point of the messy-looking outer join is to find a constraint
@@ -7136,10 +7119,9 @@ getConstraints(Archive *fout, TableInfo tblinfo[], int numTables)
 			!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 			continue;
 
-		if (g_verbose)
-			write_msg(NULL, "reading foreign key constraints for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading foreign key constraints for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		resetPQExpBuffer(query);
 		if (fout->remoteVersion >= 110000)
@@ -7356,7 +7338,7 @@ getRules(Archive *fout, int *numRules)
 		ruletableoid = atooid(PQgetvalue(res, i, i_ruletable));
 		ruleinfo[i].ruletable = findTableByOid(ruletableoid);
 		if (ruleinfo[i].ruletable == NULL)
-			exit_horribly(NULL, "failed sanity check, parent table with OID %u of pg_rewrite entry with OID %u not found\n",
+			fatal("failed sanity check, parent table with OID %u of pg_rewrite entry with OID %u not found",
 						  ruletableoid, ruleinfo[i].dobj.catId.oid);
 		ruleinfo[i].dobj.namespace = ruleinfo[i].ruletable->dobj.namespace;
 		ruleinfo[i].dobj.dump = ruleinfo[i].ruletable->dobj.dump;
@@ -7439,10 +7421,9 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 			!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
 			continue;
 
-		if (g_verbose)
-			write_msg(NULL, "reading triggers for table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("reading triggers for table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		resetPQExpBuffer(query);
 		if (fout->remoteVersion >= 90000)
@@ -7573,7 +7554,7 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 					if (OidIsValid(tginfo[j].tgconstrrelid))
 					{
 						if (PQgetisnull(res, j, i_tgconstrrelname))
-							exit_horribly(NULL, "query produced null referenced table name for foreign key trigger \"%s\" on table \"%s\" (OID of table: %u)\n",
+							fatal("query produced null referenced table name for foreign key trigger \"%s\" on table \"%s\" (OID of table: %u)",
 										  tginfo[j].dobj.name,
 										  tbinfo->dobj.name,
 										  tginfo[j].tgconstrrelid);
@@ -8127,10 +8108,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		 * we must read the attribute names in attribute number order! because
 		 * we will use the attnum to index into the attnames array later.
 		 */
-		if (g_verbose)
-			write_msg(NULL, "finding the columns and types of table \"%s.%s\"\n",
-					  tbinfo->dobj.namespace->dobj.name,
-					  tbinfo->dobj.name);
+		pg_log_info("finding the columns and types of table \"%s.%s\"",
+					tbinfo->dobj.namespace->dobj.name,
+					tbinfo->dobj.name);
 
 		resetPQExpBuffer(q);
 
@@ -8255,8 +8235,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		for (j = 0; j < ntups; j++)
 		{
 			if (j + 1 != atoi(PQgetvalue(res, j, i_attnum)))
-				exit_horribly(NULL,
-							  "invalid column numbering in table \"%s\"\n",
+				fatal("invalid column numbering in table \"%s\"",
 							  tbinfo->dobj.name);
 			tbinfo->attnames[j] = pg_strdup(PQgetvalue(res, j, i_attname));
 			tbinfo->atttypnames[j] = pg_strdup(PQgetvalue(res, j, i_atttypname));
@@ -8292,10 +8271,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			AttrDefInfo *attrdefs;
 			int			numDefaults;
 
-			if (g_verbose)
-				write_msg(NULL, "finding default expressions of table \"%s.%s\"\n",
-						  tbinfo->dobj.namespace->dobj.name,
-						  tbinfo->dobj.name);
+			pg_log_info("finding default expressions of table \"%s.%s\"",
+						tbinfo->dobj.namespace->dobj.name,
+						tbinfo->dobj.name);
 
 			printfPQExpBuffer(q, "SELECT tableoid, oid, adnum, "
 							  "pg_catalog.pg_get_expr(adbin, adrelid) AS adsrc "
@@ -8315,8 +8293,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 				adnum = atoi(PQgetvalue(res, j, 2));
 
 				if (adnum <= 0 || adnum > ntups)
-					exit_horribly(NULL,
-								  "invalid adnum value %d for table \"%s\"\n",
+					fatal("invalid adnum value %d for table \"%s\"",
 								  adnum, tbinfo->dobj.name);
 
 				/*
@@ -8381,10 +8358,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			ConstraintInfo *constrs;
 			int			numConstrs;
 
-			if (g_verbose)
-				write_msg(NULL, "finding check constraints for table \"%s.%s\"\n",
-						  tbinfo->dobj.namespace->dobj.name,
-						  tbinfo->dobj.name);
+			pg_log_info("finding check constraints for table \"%s.%s\"",
+						tbinfo->dobj.namespace->dobj.name,
+						tbinfo->dobj.name);
 
 			resetPQExpBuffer(q);
 			if (fout->remoteVersion >= 90200)
@@ -8431,11 +8407,11 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			numConstrs = PQntuples(res);
 			if (numConstrs != tbinfo->ncheck)
 			{
-				write_msg(NULL, ngettext("expected %d check constraint on table \"%s\" but found %d\n",
-										 "expected %d check constraints on table \"%s\" but found %d\n",
-										 tbinfo->ncheck),
+				pg_log_error(ngettext("expected %d check constraint on table \"%s\" but found %d",
+									  "expected %d check constraints on table \"%s\" but found %d",
+									  tbinfo->ncheck),
 						  tbinfo->ncheck, tbinfo->dobj.name, numConstrs);
-				write_msg(NULL, "(The system catalogs might be corrupted.)\n");
+				pg_log_error("(The system catalogs might be corrupted.)");
 				exit_nicely(1);
 			}
 
@@ -10010,7 +9986,7 @@ dumpType(Archive *fout, TypeInfo *tyinfo)
 	else if (tyinfo->typtype == TYPTYPE_PSEUDO && !tyinfo->isDefined)
 		dumpUndefinedType(fout, tyinfo);
 	else
-		write_msg(NULL, "WARNING: typtype of data type \"%s\" appears to be invalid\n",
+		pg_log_warning("typtype of data type \"%s\" appears to be invalid",
 				  tyinfo->dobj.name);
 }
 
@@ -11370,7 +11346,7 @@ format_function_arguments_old(Archive *fout,
 					argmode = "INOUT ";
 					break;
 				default:
-					write_msg(NULL, "WARNING: bogus value in proargmodes array\n");
+					pg_log_warning("bogus value in proargmodes array");
 					argmode = "";
 					break;
 			}
@@ -11715,7 +11691,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		if (!parsePGArray(proallargtypes, &allargtypes, &nitems) ||
 			nitems < finfo->nargs)
 		{
-			write_msg(NULL, "WARNING: could not parse proallargtypes array\n");
+			pg_log_warning("could not parse proallargtypes array");
 			if (allargtypes)
 				free(allargtypes);
 			allargtypes = NULL;
@@ -11731,7 +11707,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		if (!parsePGArray(proargmodes, &argmodes, &nitems) ||
 			nitems != nallargs)
 		{
-			write_msg(NULL, "WARNING: could not parse proargmodes array\n");
+			pg_log_warning("could not parse proargmodes array");
 			if (argmodes)
 				free(argmodes);
 			argmodes = NULL;
@@ -11745,7 +11721,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		if (!parsePGArray(proargnames, &argnames, &nitems) ||
 			nitems != nallargs)
 		{
-			write_msg(NULL, "WARNING: could not parse proargnames array\n");
+			pg_log_warning("could not parse proargnames array");
 			if (argnames)
 				free(argnames);
 			argnames = NULL;
@@ -11756,7 +11732,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 	{
 		if (!parsePGArray(proconfig, &configitems, &nconfigitems))
 		{
-			write_msg(NULL, "WARNING: could not parse proconfig array\n");
+			pg_log_warning("could not parse proconfig array");
 			if (configitems)
 				free(configitems);
 			configitems = NULL;
@@ -11836,7 +11812,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		else if (provolatile[0] == PROVOLATILE_STABLE)
 			appendPQExpBufferStr(q, " STABLE");
 		else if (provolatile[0] != PROVOLATILE_VOLATILE)
-			exit_horribly(NULL, "unrecognized provolatile value for function \"%s\"\n",
+			fatal("unrecognized provolatile value for function \"%s\"",
 						  finfo->dobj.name);
 	}
 
@@ -11880,7 +11856,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		else if (proparallel[0] == PROPARALLEL_RESTRICTED)
 			appendPQExpBufferStr(q, " PARALLEL RESTRICTED");
 		else if (proparallel[0] != PROPARALLEL_UNSAFE)
-			exit_horribly(NULL, "unrecognized proparallel value for function \"%s\"\n",
+			fatal("unrecognized proparallel value for function \"%s\"",
 						  finfo->dobj.name);
 	}
 
@@ -12014,7 +11990,7 @@ dumpCast(Archive *fout, CastInfo *cast)
 	{
 		funcInfo = findFuncByOid(cast->castfunc);
 		if (funcInfo == NULL)
-			exit_horribly(NULL, "could not find function definition for function with OID %u\n",
+			fatal("could not find function definition for function with OID %u",
 						  cast->castfunc);
 	}
 
@@ -12053,10 +12029,10 @@ dumpCast(Archive *fout, CastInfo *cast)
 				free(fsig);
 			}
 			else
-				write_msg(NULL, "WARNING: bogus value in pg_cast.castfunc or pg_cast.castmethod field\n");
+				pg_log_warning("bogus value in pg_cast.castfunc or pg_cast.castmethod field");
 			break;
 		default:
-			write_msg(NULL, "WARNING: bogus value in pg_cast.castmethod field\n");
+			pg_log_warning("bogus value in pg_cast.castmethod field");
 	}
 
 	if (cast->castcontext == 'a')
@@ -12124,14 +12100,14 @@ dumpTransform(Archive *fout, TransformInfo *transform)
 	{
 		fromsqlFuncInfo = findFuncByOid(transform->trffromsql);
 		if (fromsqlFuncInfo == NULL)
-			exit_horribly(NULL, "could not find function definition for function with OID %u\n",
+			fatal("could not find function definition for function with OID %u",
 						  transform->trffromsql);
 	}
 	if (OidIsValid(transform->trftosql))
 	{
 		tosqlFuncInfo = findFuncByOid(transform->trftosql);
 		if (tosqlFuncInfo == NULL)
-			exit_horribly(NULL, "could not find function definition for function with OID %u\n",
+			fatal("could not find function definition for function with OID %u",
 						  transform->trftosql);
 	}
 
@@ -12150,7 +12126,7 @@ dumpTransform(Archive *fout, TransformInfo *transform)
 					  transformType, lanname);
 
 	if (!transform->trffromsql && !transform->trftosql)
-		write_msg(NULL, "WARNING: bogus transform definition, at least one of trffromsql and trftosql should be nonzero\n");
+		pg_log_warning("bogus transform definition, at least one of trffromsql and trftosql should be nonzero");
 
 	if (transform->trffromsql)
 	{
@@ -12167,7 +12143,7 @@ dumpTransform(Archive *fout, TransformInfo *transform)
 			free(fsig);
 		}
 		else
-			write_msg(NULL, "WARNING: bogus value in pg_transform.trffromsql field\n");
+			pg_log_warning("bogus value in pg_transform.trffromsql field");
 	}
 
 	if (transform->trftosql)
@@ -12188,7 +12164,7 @@ dumpTransform(Archive *fout, TransformInfo *transform)
 			free(fsig);
 		}
 		else
-			write_msg(NULL, "WARNING: bogus value in pg_transform.trftosql field\n");
+			pg_log_warning("bogus value in pg_transform.trftosql field");
 	}
 
 	appendPQExpBuffer(defqry, ");\n");
@@ -12504,7 +12480,7 @@ getFormattedOperatorName(Archive *fout, const char *oproid)
 	oprInfo = findOprByOid(atooid(oproid));
 	if (oprInfo == NULL)
 	{
-		write_msg(NULL, "WARNING: could not find operator with OID %s\n",
+		pg_log_warning("could not find operator with OID %s",
 				  oproid);
 		return NULL;
 	}
@@ -12569,7 +12545,7 @@ dumpAccessMethod(Archive *fout, AccessMethodInfo *aminfo)
 			appendPQExpBuffer(q, "TYPE INDEX ");
 			break;
 		default:
-			write_msg(NULL, "WARNING: invalid type \"%c\" of access method \"%s\"\n",
+			pg_log_warning("invalid type \"%c\" of access method \"%s\"",
 					  aminfo->amtype, qamname);
 			destroyPQExpBuffer(q);
 			destroyPQExpBuffer(delq);
@@ -13320,8 +13296,7 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 		/* to allow dumping pg_catalog; not accepted on input */
 		appendPQExpBufferStr(q, "default");
 	else
-		exit_horribly(NULL,
-					  "unrecognized collation provider: %s\n",
+		fatal("unrecognized collation provider: %s\n",
 					  collprovider);
 
 	if (strcmp(collcollate, collctype) == 0)
@@ -13792,7 +13767,7 @@ dumpAgg(Archive *fout, AggInfo *agginfo)
 
 	if (!convertok)
 	{
-		write_msg(NULL, "WARNING: aggregate function %s could not be dumped correctly for this database version; ignored\n",
+		pg_log_warning("aggregate function %s could not be dumped correctly for this database version; ignored",
 				  aggsig);
 
 		if (aggfullsig)
@@ -13847,7 +13822,7 @@ dumpAgg(Archive *fout, AggInfo *agginfo)
 					appendPQExpBufferStr(details, ",\n    FINALFUNC_MODIFY = READ_WRITE");
 					break;
 				default:
-					exit_horribly(NULL, "unrecognized aggfinalmodify value for aggregate \"%s\"\n",
+					fatal("unrecognized aggfinalmodify value for aggregate \"%s\"",
 								  agginfo->aggfn.dobj.name);
 					break;
 			}
@@ -13903,7 +13878,7 @@ dumpAgg(Archive *fout, AggInfo *agginfo)
 					appendPQExpBufferStr(details, ",\n    MFINALFUNC_MODIFY = READ_WRITE");
 					break;
 				default:
-					exit_horribly(NULL, "unrecognized aggmfinalmodify value for aggregate \"%s\"\n",
+					fatal("unrecognized aggmfinalmodify value for aggregate \"%s\"",
 								  agginfo->aggfn.dobj.name);
 					break;
 			}
@@ -13928,7 +13903,7 @@ dumpAgg(Archive *fout, AggInfo *agginfo)
 		else if (proparallel[0] == PROPARALLEL_RESTRICTED)
 			appendPQExpBufferStr(details, ",\n    PARALLEL = restricted");
 		else if (proparallel[0] != PROPARALLEL_UNSAFE)
-			exit_horribly(NULL, "unrecognized proparallel value for function \"%s\"\n",
+			fatal("unrecognized proparallel value for function \"%s\"",
 						  agginfo->aggfn.dobj.name);
 	}
 
@@ -14637,8 +14612,7 @@ dumpDefaultACL(Archive *fout, DefaultACLInfo *daclinfo)
 			break;
 		default:
 			/* shouldn't get here */
-			exit_horribly(NULL,
-						  "unrecognized object type in default privileges: %d\n",
+			fatal("unrecognized object type in default privileges: %d",
 						  (int) daclinfo->defaclobjtype);
 			type = "";			/* keep compiler quiet */
 	}
@@ -14656,7 +14630,7 @@ dumpDefaultACL(Archive *fout, DefaultACLInfo *daclinfo)
 								 daclinfo->defaclrole,
 								 fout->remoteVersion,
 								 q))
-		exit_horribly(NULL, "could not parse default ACL list (%s)\n",
+		fatal("could not parse default ACL list (%s)",
 					  daclinfo->defaclacl);
 
 	if (daclinfo->dobj.dump & DUMP_COMPONENT_ACL)
@@ -14737,8 +14711,7 @@ dumpACL(Archive *fout, CatalogId objCatId, DumpId objDumpId,
 		if (!buildACLCommands(name, subname, nspname, type,
 							  initacls, initracls, owner,
 							  "", fout->remoteVersion, sql))
-			exit_horribly(NULL,
-						  "could not parse initial GRANT ACL list (%s) or initial REVOKE ACL list (%s) for object \"%s\" (%s)\n",
+			fatal("could not parse initial GRANT ACL list (%s) or initial REVOKE ACL list (%s) for object \"%s\" (%s)",
 						  initacls, initracls, name, type);
 		appendPQExpBuffer(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(false);\n");
 	}
@@ -14746,8 +14719,7 @@ dumpACL(Archive *fout, CatalogId objCatId, DumpId objDumpId,
 	if (!buildACLCommands(name, subname, nspname, type,
 						  acls, racls, owner,
 						  "", fout->remoteVersion, sql))
-		exit_horribly(NULL,
-					  "could not parse GRANT ACL list (%s) or REVOKE ACL list (%s) for object \"%s\" (%s)\n",
+		fatal("could not parse GRANT ACL list (%s) or REVOKE ACL list (%s) for object \"%s\" (%s)",
 					  acls, racls, name, type);
 
 	if (sql->len > 0)
@@ -15241,17 +15213,17 @@ createViewAsClause(Archive *fout, TableInfo *tbinfo)
 	if (PQntuples(res) != 1)
 	{
 		if (PQntuples(res) < 1)
-			exit_horribly(NULL, "query to obtain definition of view \"%s\" returned no data\n",
+			fatal("query to obtain definition of view \"%s\" returned no data",
 						  tbinfo->dobj.name);
 		else
-			exit_horribly(NULL, "query to obtain definition of view \"%s\" returned more than one definition\n",
+			fatal("query to obtain definition of view \"%s\" returned more than one definition",
 						  tbinfo->dobj.name);
 	}
 
 	len = PQgetlength(res, 0, 0);
 
 	if (len == 0)
-		exit_horribly(NULL, "definition of view \"%s\" appears to be empty (length zero)\n",
+		fatal("definition of view \"%s\" appears to be empty (length zero)",
 					  tbinfo->dobj.name);
 
 	/* Strip off the trailing semicolon so that other things may follow. */
@@ -15333,8 +15305,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 
 
 	if (tbinfo->hasoids)
-		write_msg(NULL,
-				  "WARNING: WITH OIDS is not supported anymore (table \"%s\")\n",
+		pg_log_warning("WITH OIDS is not supported anymore (table \"%s\")",
 				  qrelname);
 
 	if (dopt->binary_upgrade)
@@ -15461,7 +15432,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 			 * parent.
 			 */
 			if (tbinfo->numParents != 1)
-				exit_horribly(NULL, "invalid number of parents %d for table \"%s\"\n",
+				fatal("invalid number of parents %d for table \"%s\"",
 							  tbinfo->numParents, tbinfo->dobj.name);
 
 			appendPQExpBuffer(q, " PARTITION OF %s",
@@ -16134,7 +16105,7 @@ getAttrName(int attrnum, TableInfo *tblInfo)
 		case TableOidAttributeNumber:
 			return "tableoid";
 	}
-	exit_horribly(NULL, "invalid column number %d for table \"%s\"\n",
+	fatal("invalid column number %d for table \"%s\"",
 				  attrnum, tblInfo->dobj.name);
 	return NULL;				/* keep compiler quiet */
 }
@@ -16400,7 +16371,7 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 		indxinfo = (IndxInfo *) findObjectByDumpId(coninfo->conindex);
 
 		if (indxinfo == NULL)
-			exit_horribly(NULL, "missing index for constraint \"%s\"\n",
+			fatal("missing index for constraint \"%s\"",
 						  coninfo->dobj.name);
 
 		if (dopt->binary_upgrade)
@@ -16623,7 +16594,7 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 	}
 	else
 	{
-		exit_horribly(NULL, "unrecognized constraint type: %c\n",
+		fatal("unrecognized constraint type: %c",
 					  coninfo->contype);
 	}
 
@@ -16755,8 +16726,8 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 
 	if (PQntuples(res) != 1)
 	{
-		write_msg(NULL, ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)\n",
-								 "query to get data of sequence \"%s\" returned %d rows (expected 1)\n",
+		pg_log_error(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
+							  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
 								 PQntuples(res)),
 				  tbinfo->dobj.name, PQntuples(res));
 		exit_nicely(1);
@@ -16789,7 +16760,7 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 	}
 	else
 	{
-		exit_horribly(NULL, "unrecognized sequence type: %s\n", seqtype);
+		fatal("unrecognized sequence type: %s", seqtype);
 		default_minv = default_maxv = 0;	/* keep compiler quiet */
 	}
 
@@ -16911,7 +16882,7 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 		TableInfo  *owning_tab = findTableByOid(tbinfo->owning_tab);
 
 		if (owning_tab == NULL)
-			exit_horribly(NULL, "failed sanity check, parent table with OID %u of sequence with OID %u not found\n",
+			fatal("failed sanity check, parent table with OID %u of sequence with OID %u not found",
 						  tbinfo->owning_tab, tbinfo->dobj.catId.oid);
 
 		if (owning_tab->dobj.dump & DUMP_COMPONENT_DEFINITION)
@@ -16976,8 +16947,8 @@ dumpSequenceData(Archive *fout, TableDataInfo *tdinfo)
 
 	if (PQntuples(res) != 1)
 	{
-		write_msg(NULL, ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)\n",
-								 "query to get data of sequence \"%s\" returned %d rows (expected 1)\n",
+		pg_log_error(ngettext("query to get data of sequence \"%s\" returned %d row (expected 1)",
+							  "query to get data of sequence \"%s\" returned %d rows (expected 1)",
 								 PQntuples(res)),
 				  tbinfo->dobj.name, PQntuples(res));
 		exit_nicely(1);
@@ -17072,7 +17043,7 @@ dumpTrigger(Archive *fout, TriggerInfo *tginfo)
 			appendPQExpBufferStr(query, "INSTEAD OF");
 		else
 		{
-			write_msg(NULL, "unexpected tgtype value: %d\n", tginfo->tgtype);
+			pg_log_error("unexpected tgtype value: %d", tginfo->tgtype);
 			exit_nicely(1);
 		}
 
@@ -17146,7 +17117,7 @@ dumpTrigger(Archive *fout, TriggerInfo *tginfo)
 			if (p + tlen >= tgargs + lentgargs)
 			{
 				/* hm, not found before end of bytea value... */
-				write_msg(NULL, "invalid argument string (%s) for trigger \"%s\" on table \"%s\"\n",
+				pg_log_error("invalid argument string (%s) for trigger \"%s\" on table \"%s\"",
 						  tginfo->tgargs,
 						  tginfo->dobj.name,
 						  tbinfo->dobj.name);
@@ -17376,7 +17347,7 @@ dumpRule(Archive *fout, RuleInfo *rinfo)
 
 		if (PQntuples(res) != 1)
 		{
-			write_msg(NULL, "query to get rule \"%s\" for table \"%s\" failed: wrong number of rows returned\n",
+			pg_log_error("query to get rule \"%s\" for table \"%s\" failed: wrong number of rows returned",
 					  rinfo->dobj.name, tbinfo->dobj.name);
 			exit_nicely(1);
 		}
@@ -17539,7 +17510,7 @@ getExtensionMembership(Archive *fout, ExtensionInfo extinfo[],
 		if (ext == NULL)
 		{
 			/* shouldn't happen */
-			fprintf(stderr, "could not find referenced extension %u\n", extId);
+			pg_log_warning("could not find referenced extension %u", extId);
 			continue;
 		}
 
@@ -17751,8 +17722,7 @@ getDependencies(Archive *fout)
 	DumpableObject *dobj,
 			   *refdobj;
 
-	if (g_verbose)
-		write_msg(NULL, "reading dependency data\n");
+	pg_log_info("reading dependency data");
 
 	query = createPQExpBuffer();
 
@@ -17807,7 +17777,7 @@ getDependencies(Archive *fout)
 		if (dobj == NULL)
 		{
 #ifdef NOT_USED
-			fprintf(stderr, "no referencing object %u %u\n",
+			pg_log_warning("no referencing object %u %u",
 					objId.tableoid, objId.oid);
 #endif
 			continue;
@@ -17818,7 +17788,7 @@ getDependencies(Archive *fout)
 		if (refdobj == NULL)
 		{
 #ifdef NOT_USED
-			fprintf(stderr, "no referenced object %u %u\n",
+			pg_log_warning("no referenced object %u %u",
 					refobjId.tableoid, refobjId.oid);
 #endif
 			continue;
@@ -18183,5 +18153,5 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 	res = appendReloptionsArray(buffer, reloptions, prefix, fout->encoding,
 								fout->std_strings);
 	if (!res)
-		write_msg(NULL, "WARNING: could not parse reloptions array\n");
+		pg_log_warning("could not parse reloptions array");
 }

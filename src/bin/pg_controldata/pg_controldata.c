@@ -24,6 +24,7 @@
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "fe_utils/logging.h"
 #include "pg_getopt.h"
 #include "getopt_long.h"
 
@@ -107,7 +108,7 @@ main(int argc, char *argv[])
 	int			WalSegSz;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_controldata"));
-
+	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
 
 	if (argc > 1)
@@ -164,7 +165,7 @@ main(int argc, char *argv[])
 	}
 
 	/* get a copy of the control file */
-	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
+	ControlFile = get_controlfile(DataDir, &crc_ok);
 	if (!crc_ok)
 		printf(_("WARNING: Calculated CRC checksum does not match value stored in file.\n"
 				 "Either the file is corrupt, or it has a different layout than this program\n"

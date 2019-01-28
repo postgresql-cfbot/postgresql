@@ -11,6 +11,7 @@
 
 #include "postgres_fe.h"
 #include "common.h"
+#include "fe_utils/logging.h"
 
 #define DEFAULT_CONNECT_TIMEOUT "3"
 
@@ -65,6 +66,7 @@ main(int argc, char **argv)
 
 	progname = get_progname(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pgscripts"));
+	pg_logging_init(argv[0]);
 	handle_help_version_opts(argc, argv, progname, help);
 
 	while ((c = getopt_long(argc, argv, "d:h:p:qt:U:", long_options, NULL)) != -1)
@@ -102,8 +104,8 @@ main(int argc, char **argv)
 
 	if (optind < argc)
 	{
-		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
-				progname, argv[optind]);
+		pg_log_error("too many command-line arguments (first is \"%s\")",
+					 argv[optind]);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 
 		/*
@@ -139,7 +141,7 @@ main(int argc, char **argv)
 		opts = PQconninfoParse(pgdbname, &errmsg);
 		if (opts == NULL)
 		{
-			fprintf(stderr, _("%s: %s"), progname, errmsg);
+			pg_log_error("%s", errmsg);
 			exit(PQPING_NO_ATTEMPT);
 		}
 	}
@@ -147,7 +149,7 @@ main(int argc, char **argv)
 	defs = PQconndefaults();
 	if (defs == NULL)
 	{
-		fprintf(stderr, _("%s: could not fetch default options\n"), progname);
+		pg_log_error("could not fetch default options");
 		exit(PQPING_NO_ATTEMPT);
 	}
 

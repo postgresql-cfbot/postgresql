@@ -15,11 +15,13 @@ subdir = src/bin/pg_verify_checksums
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils
+
 OBJS= pg_verify_checksums.o $(WIN32RES)
 
 all: pg_verify_checksums
 
-pg_verify_checksums: $(OBJS) | submake-libpgport
+pg_verify_checksums: $(OBJS) | submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs

@@ -93,29 +93,15 @@ vwrite_msg(const char *modulename, const char *fmt, va_list ap)
 	vfprintf(stderr, _(fmt), ap);
 }
 
-/*
- * Fail and die, with a message to stderr.  Parameters as for write_msg.
- *
- * Note that on_exit_nicely callbacks will get run.
- */
-void
-exit_horribly(const char *modulename, const char *fmt,...)
-{
-	va_list		ap;
-
-	va_start(ap, fmt);
-	vwrite_msg(modulename, fmt, ap);
-	va_end(ap);
-
-	exit_nicely(1);
-}
-
 /* Register a callback to be run when exit_nicely is invoked. */
 void
 on_exit_nicely(on_exit_nicely_callback function, void *arg)
 {
 	if (on_exit_nicely_index >= MAX_ON_EXIT_NICELY)
-		exit_horribly(NULL, "out of on_exit_nicely slots\n");
+	{
+		pg_log_fatal("out of on_exit_nicely slots");
+		exit_nicely(1);
+	}
 	on_exit_nicely_list[on_exit_nicely_index].function = function;
 	on_exit_nicely_list[on_exit_nicely_index].arg = arg;
 	on_exit_nicely_index++;

@@ -15,6 +15,8 @@
 #ifndef PG_BACKUP_UTILS_H
 #define PG_BACKUP_UTILS_H
 
+#include "fe_utils/logging.h"
+
 typedef enum					/* bits returned by set_dump_section */
 {
 	DUMP_PRE_DATA = 0x01,
@@ -33,6 +35,6 @@ extern void vwrite_msg(const char *modulename, const char *fmt, va_list ap) pg_a
 extern void on_exit_nicely(on_exit_nicely_callback function, void *arg);
 extern void exit_nicely(int code) pg_attribute_noreturn();
 
-extern void exit_horribly(const char *modulename, const char *fmt,...) pg_attribute_printf(2, 3) pg_attribute_noreturn();
+#define fatal(...) do { pg_log_error(__VA_ARGS__); exit_nicely(1); } while(0)
 
 #endif							/* PG_BACKUP_UTILS_H */

@@ -41,6 +41,7 @@
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
 #include "common/restricted_token.h"
+#include "fe_utils/logging.h"
 #include "fe_utils/string_utils.h"
 
 #ifdef HAVE_LANGINFO_H
@@ -79,13 +80,14 @@ main(int argc, char **argv)
 	bool		live_check = false;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_upgrade"));
+	pg_logging_init(argv[0]);
 
 	/* Set default restrictive mask until new cluster permissions are read */
 	umask(PG_MODE_MASK_OWNER);
 
 	parseCommandLine(argc, argv);
 
-	get_restricted_token(os_info.progname);
+	get_restricted_token();
 
 	adjust_data_dir(&old_cluster);
 	adjust_data_dir(&new_cluster);

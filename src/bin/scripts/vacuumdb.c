@@ -19,6 +19,7 @@
 #include "catalog/pg_class_d.h"
 
 #include "common.h"
+#include "fe_utils/logging.h"
 #include "fe_utils/simple_list.h"
 #include "fe_utils/string_utils.h"
 
@@ -141,6 +142,7 @@ main(int argc, char *argv[])
 	progname = get_progname(argv[0]);
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pgscripts"));
+	pg_logging_init(argv[0]);
 
 	handle_help_version_opts(argc, argv, "vacuumdb", help);
 
@@ -200,14 +202,13 @@ main(int argc, char *argv[])
 				concurrentCons = atoi(optarg);
 				if (concurrentCons <= 0)
 				{
-					fprintf(stderr, _("%s: number of parallel jobs must be at least 1\n"),
-							progname);
+					pg_log_error("number of parallel jobs must be at least 1");
 					exit(1);
 				}
 				if (concurrentCons > FD_SETSIZE - 1)
 				{
-					fprintf(stderr, _("%s: too many parallel jobs requested (maximum: %d)\n"),
-							progname, FD_SETSIZE - 1);
+					pg_log_error("too many parallel jobs requested (maximum: %d)",
+								 FD_SETSIZE - 1);
 					exit(1);
 				}
 				break;
@@ -241,8 +242,8 @@ main(int argc, char *argv[])
 
 	if (optind < argc)
 	{
-		fprintf(stderr, _("%s: too many command-line arguments (first is \"%s\")\n"),
-				progname, argv[optind]);
+		pg_log_error("too many command-line arguments (first is \"%s\")",
+					 argv[optind]);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 		exit(1);
 	}
@@ -251,14 +252,14 @@ main(int argc, char *argv[])
 	{
 		if (vacopts.full)
 		{
-			fprintf(stderr, _("%s: cannot use the \"%s\" option when performing only analyze\n"),
-					progname, "full");
+			pg_log_error("cannot use the \"%s\" option when performing only analyze",
+						 "full");
 			exit(1);
 		}
 		if (vacopts.freeze)
 		{
-			fprintf(stderr, _("%s: cannot use the \"%s\" option when performing only analyze\n"),
-					progname, "freeze");
+			pg_log_error("cannot use the \"%s\" option when performing only analyze",
+						 "freeze");
 			exit(1);
 		}
 		if (vacopts.disable_page_skipping)
@@ -280,14 +281,12 @@ main(int argc, char *argv[])
 	{
 		if (dbname)
 		{
-			fprintf(stderr, _("%s: cannot vacuum all databases and a specific one at the same time\n"),
-					progname);
+			pg_log_error("cannot vacuum all databases and a specific one at the same time");
 			exit(1);
 		}
 		if (tables.head != NULL)
 		{
-			fprintf(stderr, _("%s: cannot vacuum specific table(s) in all databases\n"),
-					progname);
+			pg_log_error("cannot vacuum specific table(s) in all databases");
 			exit(1);
 		}
 
@@ -790,12 +789,11 @@ run_vacuum_command(PGconn *conn, const char *sql, bool echo,
 	if (!status)
 	{
 		if (table)
-			fprintf(stderr,
-					_("%s: vacuuming of table \"%s\" in database \"%s\" failed: %s"),
-					progname, table, PQdb(conn), PQerrorMessage(conn));
+			pg_log_error("vacuuming of table \"%s\" in database \"%s\" failed: %s",
+						 table, PQdb(conn), PQerrorMessage(conn));
 		else
-			fprintf(stderr, _("%s: vacuuming of database \"%s\" failed: %s"),
-					progname, PQdb(conn), PQerrorMessage(conn));
+			pg_log_error("vacuuming of database \"%s\" failed: %s",
+						 PQdb(conn), PQerrorMessage(conn));
 
 		if (!async)
 		{
@@ -929,8 +927,8 @@ ProcessQueryResult(PGconn *conn, PGresult *result, const char *progname)
 	{
 		char	   *sqlState = PQresultErrorField(result, PG_DIAG_SQLSTATE);
 
-		fprintf(stderr, _("%s: vacuuming of database \"%s\" failed: %s"),
-				progname, PQdb(conn), PQerrorMessage(conn));
+		pg_log_error("vacuuming of database \"%s\" failed: %s",
+					 PQdb(conn), PQerrorMessage(conn));
 
 		if (sqlState && strcmp(sqlState, ERRCODE_UNDEFINED_TABLE) != 0)
 		{

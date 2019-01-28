@@ -247,6 +247,13 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			rel->attr_widths = (int32 *)
 				palloc0((rel->max_attr - rel->min_attr + 1) * sizeof(int32));
 			break;
+		case RTE_RESULT:
+			/* RTE_RESULT has no columns, nor could it have whole-row Var */
+			rel->min_attr = 0;
+			rel->max_attr = -1;
+			rel->attr_needed = NULL;
+			rel->attr_widths = NULL;
+			break;
 		default:
 			elog(ERROR, "unrecognized RTE kind: %d",
 				 (int) rte->rtekind);
@@ -1105,36 +1112,6 @@ subbuild_joinrel_joinlist(RelOptInfo *joinrel,
 	}
 
 	return new_joininfo;
-}
-
-
-/*
- * build_empty_join_rel
- *		Build a dummy join relation describing an empty set of base rels.
- *
- * This is used for queries with empty FROM clauses, such as "SELECT 2+2" or
- * "INSERT INTO foo VALUES(...)".  We don't try very hard to make the empty
- * joinrel completely valid, since no real planning will be done with it ---
- * we just need it to carry a simple Result path out of query_planner().
- */
-RelOptInfo *
-build_empty_join_rel(PlannerInfo *root)
-{
-	RelOptInfo *joinrel;
-
-	/* The dummy join relation should be the only one ... */
-	Assert(root->join_rel_list == NIL);
-
-	joinrel = makeNode(RelOptInfo);
-	joinrel->reloptkind = RELOPT_JOINREL;
-	joinrel->relids = NULL;		/* empty set */
-	joinrel->rows = 1;			/* we produce one row for such cases */
-	joinrel->rtekind = RTE_JOIN;
-	joinrel->reltarget = create_empty_pathtarget();
-
-	root->join_rel_list = lappend(root->join_rel_list, joinrel);
-
-	return joinrel;
 }
 
 

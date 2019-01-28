@@ -88,6 +88,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/var.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
@@ -2291,6 +2292,30 @@ cost_group(Path *path, PlannerInfo *root,
 }
 
 /*
+ * estimate_join_rows
+ *		Set rows of a join path according to its parent relation or according
+ *		to parameters. If agg_info is passed, the join path is grouped.
+ */
+static void
+estimate_join_rows(PlannerInfo *root, Path *path, RelAggInfo *agg_info)
+{
+	if (path->param_info)
+	{
+		path->rows = path->param_info->ppi_rows;
+		if (agg_info)
+		{
+			double		nrows;
+
+			nrows = estimate_num_groups(root, agg_info->group_exprs,
+										path->rows, NULL);
+			path->rows = clamp_row_est(nrows);
+		}
+	}
+	else
+		path->rows = path->parent->rows;
+}
+
+/*
  * initial_cost_nestloop
  *	  Preliminary estimate of the cost of a nestloop join path.
  *
@@ -2411,10 +2436,7 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 		inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
-	if (path->path.param_info)
-		path->path.rows = path->path.param_info->ppi_rows;
-	else
-		path->path.rows = path->path.parent->rows;
+	estimate_join_rows(root, (Path *) path, extra->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->path.parallel_workers > 0)
@@ -2857,10 +2879,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
+	estimate_join_rows(root, (Path *) path, extra->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->jpath.path.parallel_workers > 0)
@@ -3287,10 +3306,7 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	ListCell   *hcl;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
+	estimate_join_rows(root, (Path *) path, extra->agg_info);
 
 	/* For partial paths, scale row estimate. */
 	if (path->jpath.path.parallel_workers > 0)
@@ -4295,27 +4311,59 @@ approx_tuple_count(PlannerInfo *root, JoinPath *path, List *quals)
  *		  restriction clauses).
  *	width: the estimated average output tuple width in bytes.
  *	baserestrictcost: estimated cost of evaluating baserestrictinfo clauses.
+ *
+ * If "agg_info" is passed, it means that "rel" is a grouped relation for
+ * which "agg_info" provides the information needed for size estimate.
  */
 void
-set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
+set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel,
+						   RelAggInfo *agg_info)
 {
 	double		nrows;
+	bool		grouped = agg_info != NULL;
 
 	/* Should only be applied to base relations */
 	Assert(rel->relid > 0);
 
-	nrows = rel->tuples *
-		clauselist_selectivity(root,
-							   rel->baserestrictinfo,
-							   0,
-							   JOIN_INNER,
-							   NULL);
+	if (!grouped)
+	{
+		nrows = rel->tuples *
+			clauselist_selectivity(root,
+								   rel->baserestrictinfo,
+								   0,
+								   JOIN_INNER,
+								   NULL);
+		rel->rows = clamp_row_est(nrows);
+	}
 
-	rel->rows = clamp_row_est(nrows);
+	/*
+	 * Only set the estimate for grouped base rel if aggregation can take
+	 * place. (Aggregation is the only way to build grouped base relation.)
+	 */
+	else if (!bms_equal(rel->relids, root->all_baserels))
+	{
+		/*
+		 * Grouping essentially changes the number of rows.
+		 */
+		nrows = estimate_num_groups(root,
+									agg_info->group_exprs,
+									agg_info->input_rows,
+									NULL);
+		rel->rows = clamp_row_est(nrows);
+	}
 
 	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
 
-	set_rel_width(root, rel);
+	/*
+	 * The grouped target should have the cost and width set immediately on
+	 * creation, see create_rel_agg_info().
+	 */
+	if (!grouped)
+		set_rel_width(root, rel);
+#ifdef USE_ASSERT_CHECKING
+	else
+		Assert(rel->reltarget->width > 0);
+#endif
 }
 
 /*
@@ -4879,7 +4927,7 @@ set_subquery_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 	}
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -4917,7 +4965,7 @@ set_function_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 	}
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -4939,7 +4987,7 @@ set_tablefunc_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 	rel->tuples = 100;
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -4970,7 +5018,7 @@ set_values_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 	rel->tuples = list_length(rte->values_lists);
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -5008,7 +5056,7 @@ set_cte_size_estimates(PlannerInfo *root, RelOptInfo *rel, double cte_rows)
 	}
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -5041,7 +5089,7 @@ set_namedtuplestore_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 		rel->tuples = 1000;
 
 	/* Now estimate number of output rows, etc */
-	set_baserel_size_estimates(root, rel);
+	set_baserel_size_estimates(root, rel, NULL);
 }
 
 /*
@@ -5265,11 +5313,11 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 	foreach(lc, target->exprs)
 	{
 		Node	   *node = (Node *) lfirst(lc);
+		int32		item_width;
 
 		if (IsA(node, Var))
 		{
 			Var		   *var = (Var *) node;
-			int32		item_width;
 
 			/* We should not see any upper-level Vars here */
 			Assert(var->varlevelsup == 0);
@@ -5297,6 +5345,20 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 			 * No cached data available, so estimate using just the type info.
 			 */
 			item_width = get_typavgwidth(var->vartype, var->vartypmod);
+			Assert(item_width > 0);
+			tuple_width += item_width;
+		}
+		else if (IsA(node, Aggref))
+		{
+			/*
+			 * If the target is evaluated by AggPath, it'll care of cost
+			 * estimate. If the target is above AggPath (typically target of a
+			 * join relation that contains grouped relation), the cost of
+			 * Aggref should not be accounted for again.
+			 *
+			 * On the other hand, width is always needed.
+			 */
+			item_width = get_typavgwidth(exprType(node), exprTypmod(node));
 			Assert(item_width > 0);
 			tuple_width += item_width;
 		}

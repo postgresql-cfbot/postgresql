@@ -182,13 +182,15 @@ gimme_tree(PlannerInfo *root, Gene *tour, int num_gene)
 	for (rel_count = 0; rel_count < num_gene; rel_count++)
 	{
 		int			cur_rel_index;
+		RelOptInfoSet *cur_relset;
 		RelOptInfo *cur_rel;
 		Clump	   *cur_clump;
 
 		/* Get the next input relation */
 		cur_rel_index = (int) tour[rel_count];
-		cur_rel = (RelOptInfo *) list_nth(private->initial_rels,
-										  cur_rel_index - 1);
+		cur_relset = (RelOptInfoSet *) list_nth(private->initial_rels,
+												cur_rel_index - 1);
+		cur_rel = cur_relset->rel_plain;
 
 		/* Make it into a single-rel clump */
 		cur_clump = (Clump *) palloc(sizeof(Clump));
@@ -251,16 +253,24 @@ merge_clump(PlannerInfo *root, List *clumps, Clump *new_clump, int num_gene,
 			desirable_join(root, old_clump->joinrel, new_clump->joinrel))
 		{
 			RelOptInfo *joinrel;
+			RelOptInfoSet *oldset,
+					   *newset;
 
 			/*
 			 * Construct a RelOptInfo representing the join of these two input
 			 * relations.  Note that we expect the joinrel not to exist in
 			 * root->join_rel_list yet, and so the paths constructed for it
 			 * will only include the ones we want.
+			 *
+			 * TODO Consider using make_join_rel_common() (possibly renamed)
+			 * here instead of wrapping the joinrels into RelOptInfoSet.
 			 */
-			joinrel = make_join_rel(root,
-									old_clump->joinrel,
-									new_clump->joinrel);
+			oldset = makeNode(RelOptInfoSet);
+			oldset->rel_plain = old_clump->joinrel;
+			newset = makeNode(RelOptInfoSet);
+			newset->rel_plain = new_clump->joinrel;
+
+			joinrel = make_join_rel(root, oldset, newset);
 
 			/* Keep searching if join order is not valid */
 			if (joinrel)

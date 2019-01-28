@@ -136,7 +136,6 @@ test: rules
 test: psql_crosstab
 test: select_parallel
 test: write_parallel
-test: agg_pushdown
 test: publication
 test: subscription
 test: amutils

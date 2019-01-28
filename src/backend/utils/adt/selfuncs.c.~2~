@@ -4885,12 +4885,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 		case BMS_MULTIPLE:
 			if (varRelid == 0)
 			{
-				RelOptInfoSet *relset;
-
 				/* treat it as a variable of a join relation */
-				relset = find_join_rel(root, varnos);
-				if (relset)
-					vardata->rel = relset->rel_plain;
+				vardata->rel = find_join_rel(root, varnos);
 				node = basenode;	/* strip any relabeling */
 			}
 			else if (bms_is_member(varRelid, varnos))
@@ -5748,13 +5744,7 @@ find_join_input_rel(PlannerInfo *root, Relids relids)
 			rel = find_base_rel(root, bms_singleton_member(relids));
 			break;
 		case BMS_MULTIPLE:
-			{
-				RelOptInfoSet *relset;
-
-				relset = find_join_rel(root, relids);
-				if (relset)
-					rel = relset->rel_plain;
-			}
+			rel = find_join_rel(root, relids);
 			break;
 	}
 

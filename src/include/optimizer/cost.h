@@ -72,6 +72,7 @@ extern PGDLLIMPORT bool enable_partitionwise_aggregate;
 extern PGDLLIMPORT bool enable_parallel_append;
 extern PGDLLIMPORT bool enable_parallel_hash;
 extern PGDLLIMPORT bool enable_partition_pruning;
+extern PGDLLIMPORT bool enable_agg_pushdown;
 extern PGDLLIMPORT int constraint_exclusion;
 
 extern double clamp_row_est(double nrows);
@@ -174,7 +175,8 @@ extern void compute_semi_anti_join_factors(PlannerInfo *root,
 							   SpecialJoinInfo *sjinfo,
 							   List *restrictlist,
 							   SemiAntiJoinFactors *semifactors);
-extern void set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel);
+extern void set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel,
+						   RelAggInfo *agg_info);
 extern double get_parameterized_baserel_size(PlannerInfo *root,
 							   RelOptInfo *rel,
 							   List *param_clauses);

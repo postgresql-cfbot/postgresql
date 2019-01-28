@@ -278,6 +278,8 @@ typedef struct PlannerInfo
 
 	List	   *placeholder_list;	/* list of PlaceHolderInfos */
 
+	List	   *grouped_var_list;	/* List of GroupedVarInfos. */
+
 	List	   *fkey_list;		/* list of ForeignKeyOptInfos */
 
 	List	   *query_pathkeys; /* desired pathkeys for query_planner() */
@@ -290,7 +292,7 @@ typedef struct PlannerInfo
 	List	   *part_schemes;	/* Canonicalised partition schemes used in the
 								 * query. */
 
-	List	   *initial_rels;	/* RelOptInfos we are now trying to join */
+	List	   *initial_rels;	/* RelOptInfoSets we are now trying to join */
 
 	/* Use fetch_upper_rel() to get any particular upper rel */
 	List	   *upper_rels[UPPERREL_FINAL + 1]; /* upper-rel RelOptInfos */
@@ -303,6 +305,12 @@ typedef struct PlannerInfo
 	 * use in relabeling the topmost tlist of the finished Plan.
 	 */
 	List	   *processed_tlist;
+
+	/*
+	 * The maximum ressortgroupref among target entries in processed_list.
+	 * Useful when adding extra grouping expressions for partial aggregation.
+	 */
+	int			max_sortgroupref;
 
 	/* Fields filled during create_plan() for use in setrefs.c */
 	AttrNumber *grouping_map;	/* for GroupingFunc fixup */
@@ -727,6 +735,82 @@ typedef struct RelOptInfo
 #define REL_HAS_ALL_PART_PROPS(rel)	\
 	((rel)->part_scheme && (rel)->boundinfo && (rel)->nparts > 0 && \
 	 (rel)->part_rels && (rel)->partexprs && (rel)->nullable_partexprs)
+
+/*
+ * RelAggInfo
+ *
+ * RelOptInfo needs information contained here if its paths should be
+ * aggregated.
+ *
+ * "target" will be used as pathtarget for aggregation if "explicit
+ * aggregation" is applied to base relation or join. The same target will also
+ * --- if the relation is a join --- be used to joinin grouped path to a
+ * non-grouped one.
+ *
+ * These targets contain plain-Var grouping expressions and Aggrefs which.
+ * Once Aggref is evaluated, its value is passed to the upper paths w/o being
+ * evaluated again.
+ *
+ * Note: There's a convention that Aggref expressions are supposed to follow
+ * the other expressions of the target. Iterations of ->exprs may rely on this
+ * arrangement.
+ *
+ * "input" contains Vars used either as grouping expressions or aggregate
+ * arguments. Paths providing the aggregation plan with input data should use
+ * this target.
+ *
+ * "input_rows" is the estimated number of input rows for AggPath. It's
+ * actually just a workspace for users of the structure, i.e. not initialized
+ * when instance of the structure is created.
+ *
+ * "group_clauses" and "group_exprs" are lists of SortGroupClause and the
+ * corresponding grouping expressions respectively.
+ *
+ * "agg_exprs" is a list of Aggref nodes for the aggregation of the relation's
+ * paths.
+ */
+typedef struct RelAggInfo
+{
+	NodeTag		type;
+
+	struct PathTarget *target;	/* Target for grouped paths.. */
+
+	struct PathTarget *input;	/* pathtarget of paths that generate input for
+								 * aggregation paths. */
+	double		input_rows;
+
+	List	   *group_clauses;
+	List	   *group_exprs;
+
+	List	   *agg_exprs;		/* Aggref expressions. */
+} RelAggInfo;
+
+/*
+ * RelOptInfoSet
+ *
+ *		Structure to use where RelOptInfo for other UpperRelationKind than
+ *		UPPERREL_FINAL may be needed. Currently we only need UPPERREL_FINAL
+ *		and UPPERREL_PARTIAL_GROUP_AGG.
+ *
+ *		rel_plain should always be initialized. Code paths that do not
+ *		distinguish between plain and grouped relation use rel_plain,
+ *		e.g. has_legal_joinclause().
+ *
+ *		agg_info is initialized iff rel_grouped is.
+ *
+ *		XXX Is RelOptInfoPair more appropriate name?
+ */
+typedef struct RelOptInfoSet
+{
+	NodeTag		type;
+
+	RelOptInfo *rel_plain;		/* UPPERREL_FINAL */
+	RelOptInfo *rel_grouped;	/* UPPERREL_PARTIAL_GROUP_AGG */
+
+	RelAggInfo *agg_info;		/* Information needed to create rel_grouped
+								 * and its paths. It seems just convenient to
+								 * store it here. */
+} RelOptInfoSet;
 
 /*
  * IndexOptInfo
@@ -2205,6 +2289,26 @@ typedef struct PlaceHolderInfo
 } PlaceHolderInfo;
 
 /*
+ * GroupedVarInfo exists for each expression that can be used as an aggregate
+ * or grouping expression evaluated below a join.
+ */
+typedef struct GroupedVarInfo
+{
+	NodeTag		type;
+
+	Expr	   *gvexpr;			/* the represented expression. */
+	Aggref	   *agg_partial;	/* if gvexpr is aggregate, agg_partial is the
+								 * corresponding partial aggregate */
+	Index		sortgroupref;	/* If gvexpr is a grouping expression, this is
+								 * the tleSortGroupRef of the corresponding
+								 * SortGroupClause. */
+	Relids		gv_eval_at;		/* lowest level we can evaluate the expression
+								 * at or NULL if it can happen anywhere. */
+	bool		derived;		/* derived from another GroupedVarInfo using
+								 * equeivalence classes? */
+} GroupedVarInfo;
+
+/*
  * This struct describes one potentially index-optimizable MIN/MAX aggregate
  * function.  MinMaxAggPath contains a list of these, and if we accept that
  * path, the list is stored into root->minmax_aggs for use during setrefs.c.
@@ -2311,6 +2415,11 @@ typedef struct SemiAntiJoinFactors
  * sjinfo is extra info about special joins for selectivity estimation
  * semifactors is as shown above (only valid for SEMI/ANTI/inner_unique joins)
  * param_source_rels are OK targets for parameterization of result paths
+ * agg_info passes information necessary for joins to produce partially
+ *		grouped data.
+ * rel_agg_input describes the AggPath input relation if the join output
+ *		should be aggregated. If NULL is passed, do not aggregate the join
+ *		output.
  */
 typedef struct JoinPathExtraData
 {
@@ -2320,6 +2429,8 @@ typedef struct JoinPathExtraData
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;
 	Relids		param_source_rels;
+	RelAggInfo *agg_info;
+	RelOptInfo *rel_agg_input;
 } JoinPathExtraData;
 
 /*

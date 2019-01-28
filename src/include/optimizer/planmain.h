@@ -37,7 +37,7 @@ typedef void (*query_pathkeys_callback) (PlannerInfo *root, void *extra);
 /*
  * prototypes for plan/planmain.c
  */
-extern RelOptInfo *query_planner(PlannerInfo *root, List *tlist,
+extern RelOptInfoSet *query_planner(PlannerInfo *root, List *tlist,
 			  query_pathkeys_callback qp_callback, void *qp_extra);
 
 /*
@@ -78,6 +78,7 @@ extern void add_base_rels_to_query(PlannerInfo *root, Node *jtnode);
 extern void build_base_rel_tlists(PlannerInfo *root, List *final_tlist);
 extern void add_vars_to_targetlist(PlannerInfo *root, List *vars,
 					   Relids where_needed, bool create_new_ph);
+extern void setup_aggregate_pushdown(PlannerInfo *root);
 extern void find_lateral_references(PlannerInfo *root);
 extern void create_lateral_join_info(PlannerInfo *root);
 extern List *deconstruct_jointree(PlannerInfo *root);

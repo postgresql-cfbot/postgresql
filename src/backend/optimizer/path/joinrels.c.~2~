@@ -17,41 +17,30 @@
 #include "miscadmin.h"
 #include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
-#include "optimizer/cost.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
-#include "optimizer/tlist.h"
 #include "partitioning/partbounds.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
-#include "utils/selfuncs.h"
 
 
 static void make_rels_by_clause_joins(PlannerInfo *root,
-						  RelOptInfoSet *old_relset,
+						  RelOptInfo *old_rel,
 						  ListCell *other_rels);
 static void make_rels_by_clauseless_joins(PlannerInfo *root,
-							  RelOptInfoSet *old_relset,
+							  RelOptInfo *old_rel,
 							  ListCell *other_rels);
-static void set_grouped_joinrel_target(PlannerInfo *root, RelOptInfo *joinrel,
-						   RelAggInfo *agg_info);
 static bool has_join_restriction(PlannerInfo *root, RelOptInfo *rel);
 static bool has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel);
 static bool is_dummy_rel(RelOptInfo *rel);
 static bool restriction_is_constant_false(List *restrictlist,
 							  RelOptInfo *joinrel,
 							  bool only_pushed_down);
-static RelOptInfo *make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
-					 RelAggInfo *agg_info, RelOptInfo *rel_agg_input);
-static void make_join_rel_common_grouped(PlannerInfo *root, RelOptInfoSet *relset1,
-							 RelOptInfoSet *relset2,
-							 RelAggInfo *agg_info);
+static RelOptInfo *make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2);
 static void populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 							RelOptInfo *rel2, RelOptInfo *joinrel,
-							SpecialJoinInfo *sjinfo, List *restrictlist,
-							RelAggInfo *agg_info,
-							RelOptInfo *rel_agg_input);
+							SpecialJoinInfo *sjinfo, List *restrictlist);
 static void try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1,
 					   RelOptInfo *rel2, RelOptInfo *joinrel,
 					   SpecialJoinInfo *parent_sjinfo,
@@ -63,6 +52,7 @@ static SpecialJoinInfo *build_child_join_sjinfo(PlannerInfo *root,
 						Relids left_relids, Relids right_relids);
 static int match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
 							 bool strict_op);
+
 
 /*
  * join_search_one_level
@@ -98,15 +88,7 @@ join_search_one_level(PlannerInfo *root, int level)
 	 */
 	foreach(r, joinrels[level - 1])
 	{
-		RelOptInfoSet *old_relset = (RelOptInfoSet *) lfirst(r);
-		RelOptInfo *old_rel;
-
-		/*
-		 * Both rel_plain and rel_grouped should have the same clauses, so it
-		 * does not matter which one we use here. The only difference is that
-		 * rel_grouped is not guaranteed to exist, so use rel_plain.
-		 */
-		old_rel = old_relset->rel_plain;
+		RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
 
 		if (old_rel->joininfo != NIL || old_rel->has_eclass_joins ||
 			has_join_restriction(root, old_rel))
@@ -132,7 +114,7 @@ join_search_one_level(PlannerInfo *root, int level)
 				other_rels = list_head(joinrels[1]);
 
 			make_rels_by_clause_joins(root,
-									  old_relset,
+									  old_rel,
 									  other_rels);
 		}
 		else
@@ -150,7 +132,7 @@ join_search_one_level(PlannerInfo *root, int level)
 			 * avoid the duplicated effort.
 			 */
 			make_rels_by_clauseless_joins(root,
-										  old_relset,
+										  old_rel,
 										  list_head(joinrels[1]));
 		}
 	}
@@ -176,8 +158,7 @@ join_search_one_level(PlannerInfo *root, int level)
 
 		foreach(r, joinrels[k])
 		{
-			RelOptInfoSet *old_relset = (RelOptInfoSet *) lfirst(r);
-			RelOptInfo *old_rel = old_relset->rel_plain;
+			RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
 			ListCell   *other_rels;
 			ListCell   *r2;
 
@@ -197,8 +178,7 @@ join_search_one_level(PlannerInfo *root, int level)
 
 			for_each_cell(r2, other_rels)
 			{
-				RelOptInfoSet *new_relset = (RelOptInfoSet *) lfirst(r2);
-				RelOptInfo *new_rel = new_relset->rel_plain;
+				RelOptInfo *new_rel = (RelOptInfo *) lfirst(r2);
 
 				if (!bms_overlap(old_rel->relids, new_rel->relids))
 				{
@@ -210,7 +190,7 @@ join_search_one_level(PlannerInfo *root, int level)
 					if (have_relevant_joinclause(root, old_rel, new_rel) ||
 						have_join_order_restriction(root, old_rel, new_rel))
 					{
-						(void) make_join_rel(root, old_relset, new_relset);
+						(void) make_join_rel(root, old_rel, new_rel);
 					}
 				}
 			}
@@ -244,10 +224,10 @@ join_search_one_level(PlannerInfo *root, int level)
 		 */
 		foreach(r, joinrels[level - 1])
 		{
-			RelOptInfoSet *old_relset = (RelOptInfoSet *) lfirst(r);
+			RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
 
 			make_rels_by_clauseless_joins(root,
-										  old_relset,
+										  old_rel,
 										  list_head(joinrels[1]));
 		}
 
@@ -293,31 +273,25 @@ join_search_one_level(PlannerInfo *root, int level)
  * 'other_rels': the first cell in a linked list containing the other
  * rels to be considered for joining
  *
- * 'rel_plain' is what we use of RelOptInfoSet because it's guaranteed to
- * exists. However the test should have the same result if we used the
- * corresponding 'rel_grouped'.
- *
  * Currently, this is only used with initial rels in other_rels, but it
  * will work for joining to joinrels too.
  */
 static void
 make_rels_by_clause_joins(PlannerInfo *root,
-						  RelOptInfoSet *old_relset,
+						  RelOptInfo *old_rel,
 						  ListCell *other_rels)
 {
 	ListCell   *l;
 
 	for_each_cell(l, other_rels)
 	{
-		RelOptInfo *old_rel = old_relset->rel_plain;
-		RelOptInfoSet *other_relset = (RelOptInfoSet *) lfirst(l);
-		RelOptInfo *other_rel = other_relset->rel_plain;
+		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 
 		if (!bms_overlap(old_rel->relids, other_rel->relids) &&
 			(have_relevant_joinclause(root, old_rel, other_rel) ||
 			 have_join_order_restriction(root, old_rel, other_rel)))
 		{
-			(void) make_join_rel(root, old_relset, other_relset);
+			(void) make_join_rel(root, old_rel, other_rel);
 		}
 	}
 }
@@ -333,62 +307,27 @@ make_rels_by_clause_joins(PlannerInfo *root,
  * 'other_rels': the first cell of a linked list containing the
  * other rels to be considered for joining
  *
- * 'rel_plain' is what we use of RelOptInfoSet because it's guaranteed to
- * exists. However the test should have the same result if we used the
- * corresponding 'rel_grouped'.
- *
  * Currently, this is only used with initial rels in other_rels, but it would
  * work for joining to joinrels too.
  */
 static void
 make_rels_by_clauseless_joins(PlannerInfo *root,
-							  RelOptInfoSet *old_relset,
+							  RelOptInfo *old_rel,
 							  ListCell *other_rels)
 {
 	ListCell   *l;
 
 	for_each_cell(l, other_rels)
 	{
-		RelOptInfo *old_rel = old_relset->rel_plain;
-		RelOptInfoSet *other_relset = (RelOptInfoSet *) lfirst(l);
-		RelOptInfo *other_rel = other_relset->rel_plain;
+		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 
 		if (!bms_overlap(other_rel->relids, old_rel->relids))
 		{
-			(void) make_join_rel(root, old_relset, other_relset);
+			(void) make_join_rel(root, old_rel, other_rel);
 		}
 	}
 }
 
-/*
- * Set joinrel's reltarget according to agg_info and estimate the number of
- * rows.
- */
-static void
-set_grouped_joinrel_target(PlannerInfo *root, RelOptInfo *joinrel,
-						   RelAggInfo *agg_info)
-{
-	Assert(agg_info != NULL);
-
-	/*
-	 * build_join_rel() does not create the target for grouped relation.
-	 */
-	Assert(joinrel->reltarget == NULL);
-
-	joinrel->reltarget = agg_info->target;
-
-	/*
-	 * Grouping essentially changes the number of rows.
-	 *
-	 * XXX We do not distinguish whether two plain rels are joined and the
-	 * result is aggregated, or the aggregation has been already applied to
-	 * one of the input rels. Is this worth extra effort, e.g. maintaining a
-	 * separate RelOptInfo for each case (one difficulty that would introduce
-	 * is construction of AppendPath)?
-	 */
-	joinrel->rows = estimate_num_groups(root, agg_info->group_exprs,
-										agg_info->input_rows, NULL);
-}
 
 /*
  * join_is_legal
@@ -721,18 +660,9 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 /*
  * make_join_rel_common
  *     The workhorse of make_join_rel().
- *
- *	   'agg_info' contains the reltarget of grouped relation and everything we
- *	   need to aggregate the join result. If NULL, then the join relation
- *	   should not be grouped.
- *
- *	   'rel_agg_input' describes the AggPath input relation if the join output
- *		should be aggregated. If NULL is passed, do not aggregate the join
- *		output.
  */
 static RelOptInfo *
-make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
-					 RelAggInfo *agg_info, RelOptInfo *rel_agg_input)
+make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 {
 	Relids		joinrelids;
 	SpecialJoinInfo *sjinfo;
@@ -740,14 +670,9 @@ make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	SpecialJoinInfo sjinfo_data;
 	RelOptInfo *joinrel;
 	List	   *restrictlist;
-	bool		grouped = agg_info != NULL;
-	bool		do_aggregate = rel_agg_input != NULL;
 
 	/* We should never try to join two overlapping sets of rels. */
 	Assert(!bms_overlap(rel1->relids, rel2->relids));
-
-	/* do_aggregate implies the output to be grouped. */
-	Assert(!do_aggregate || grouped);
 
 	/* Construct Relids set that identifies the joinrel. */
 	joinrelids = bms_union(rel1->relids, rel2->relids);
@@ -798,18 +723,7 @@ make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 	 * goes with this particular joining.
 	 */
 	joinrel = build_join_rel(root, joinrelids, rel1, rel2, sjinfo,
-							 &restrictlist, agg_info);
-
-	if (grouped)
-	{
-		/*
-		 * Make sure the grouped joinrel has reltarget initialized. Caller
-		 * should supply the target for grouped relation, so build_join_rel()
-		 * should have omitted its creation.
-		 */
-		if (joinrel->reltarget == NULL)
-			set_grouped_joinrel_target(root, joinrel, agg_info);
-	}
+							 &restrictlist);
 
 	/*
 	 * If we've already proven this join is empty, we needn't consider any
@@ -823,70 +737,11 @@ make_join_rel_common(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 
 	/* Add paths to the join relation. */
 	populate_joinrel_with_paths(root, rel1, rel2, joinrel, sjinfo,
-								restrictlist, agg_info, rel_agg_input);
+								restrictlist);
 
 	bms_free(joinrelids);
 
 	return joinrel;
-}
-
-static void
-make_join_rel_common_grouped(PlannerInfo *root, RelOptInfoSet *relset1,
-							 RelOptInfoSet *relset2,
-							 RelAggInfo *agg_info)
-{
-	RelOptInfo *rel1_grouped = NULL;
-	RelOptInfo *rel2_grouped = NULL;
-	bool		rel1_grouped_useful = false;
-	bool		rel2_grouped_useful = false;
-
-	/*
-	 * Retrieve the grouped relations.
-	 *
-	 * Dummy rel may indicates a join relation that is able to generate
-	 * grouped paths as such (i.e. it has valid agg_info), but for which the
-	 * path actually could not be created (e.g. only AGG_HASHED strategy was
-	 * possible but work_mem was not sufficient for hash table).
-	 */
-	if (relset1->rel_grouped)
-		rel1_grouped = relset1->rel_grouped;
-	if (relset2->rel_grouped)
-		rel2_grouped = relset2->rel_grouped;
-
-	rel1_grouped_useful = rel1_grouped != NULL && !IS_DUMMY_REL(rel1_grouped);
-	rel2_grouped_useful = rel2_grouped != NULL && !IS_DUMMY_REL(rel2_grouped);
-
-	/*
-	 * Nothing to do?
-	 */
-	if (!rel1_grouped_useful && !rel2_grouped_useful)
-		return;
-
-	/*
-	 * At maximum one input rel can be grouped (here we don't care if any rel
-	 * is eventually dummy, the existence of grouped rel indicates that
-	 * aggregates can be pushed down to it). If both were grouped, then
-	 * grouping of one side would change the occurrence of the other side's
-	 * aggregate transient states on the input of the final aggregation. This
-	 * can be handled by adjusting the transient states, but it's not worth
-	 * the effort because it's hard to find a use case for this kind of join.
-	 *
-	 * XXX If the join of two grouped rels is implemented someday, note that
-	 * both rels can have aggregates, so it'd be hard to join grouped rel to
-	 * non-grouped here: 1) such a "mixed join" would require a special
-	 * target, 2) both AGGSPLIT_FINAL_DESERIAL and AGGSPLIT_SIMPLE aggregates
-	 * could appear in the target of the final aggregation node, originating
-	 * from the grouped and the non-grouped input rel respectively.
-	 */
-	if (rel1_grouped && rel2_grouped)
-		return;
-
-	if (rel1_grouped_useful)
-		make_join_rel_common(root, rel1_grouped, relset2->rel_plain, agg_info,
-							 NULL);
-	else if (rel2_grouped_useful)
-		make_join_rel_common(root, relset1->rel_plain, rel2_grouped, agg_info,
-							 NULL);
 }
 
 /*
@@ -897,101 +752,14 @@ make_join_rel_common_grouped(PlannerInfo *root, RelOptInfoSet *relset1,
  *	   (The join rel may already contain paths generated from other
  *	   pairs of rels that add up to the same set of base rels.)
  *
- *	   In addition to creating an ordinary join relation, try to create a
- *	   grouped one. There are two strategies to achieve that: join a grouped
- *	   relation to plain one, or join two plain relations and apply partial
- *	   aggregation to the result.
- *
- * NB: will return NULL if attempted join is not valid.  This can happen when
- * working with outer joins, or with IN or EXISTS clauses that have been
- * turned into joins. Besides that, NULL is also returned if caller is
- * interested in a grouped relation but there's no useful grouped input
- * relation.
- *
- * Only the plain relation is returned.
- *
- * TODO geqo is the only caller interested in the result. We'll need to return
- * RelOptInfoSet if geqo adopts the aggregate pushdown technique.
+ * NB: will return NULL if attempted join is not valid.  This can happen
+ * when working with outer joins, or with IN or EXISTS clauses that have been
+ * turned into joins.
  */
 RelOptInfo *
-make_join_rel(PlannerInfo *root, RelOptInfoSet *relset1,
-			  RelOptInfoSet *relset2)
+make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 {
-	Relids		joinrelids;
-	RelAggInfo *agg_info;
-	RelOptInfoSet *joinrelset;
-	RelOptInfo *joinrel_plain;
-	RelOptInfo *rel1 = relset1->rel_plain;
-	RelOptInfo *rel2 = relset2->rel_plain;
-
-	/* 1) form the plain join. */
-	joinrel_plain = make_join_rel_common(root, rel1, rel2, NULL, NULL);
-
-	if (joinrel_plain == NULL)
-		return joinrel_plain;
-
-	/*
-	 * We're done if there are no grouping expressions nor aggregates.
-	 */
-	if (root->grouped_var_list == NIL)
-		return joinrel_plain;
-
-	/*
-	 * If the same grouped joinrel was already formed, just with the base rels
-	 * divided between rel1 and rel2 in a different way, we should already
-	 * have the matching agg_info.
-	 */
-	joinrelids = bms_union(rel1->relids, rel2->relids);
-	joinrelset = find_join_rel(root, joinrelids);
-
-	/*
-	 * At the moment we know that non-grouped join exists, so the containing
-	 * joinrelset should have been fetched.
-	 */
-	Assert(joinrelset != NULL);
-
-	if (joinrelset->rel_grouped != NULL)
-	{
-		/*
-		 * The same agg_info should be used for all the rels consisting of
-		 * exactly joinrelids.
-		 */
-		agg_info = joinrelset->agg_info;
-	}
-	else
-	{
-		/*
-		 * agg_info must be created from scratch.
-		 */
-		agg_info = create_rel_agg_info(root, joinrel_plain);
-
-		/*
-		 * The number of aggregate input rows is simply the number of rows of
-		 * the non-grouped relation, which should have been estimated by now.
-		 */
-		if (agg_info != NULL)
-			agg_info->input_rows = joinrel_plain->rows;
-	}
-
-	/*
-	 * Cannot we build grouped join?
-	 */
-	if (agg_info == NULL)
-		return joinrel_plain;
-
-	/*
-	 * 2) join two plain rels and aggregate the join paths. Aggregate
-	 * push-down only makes sense if the join is not the final one.
-	 */
-	if (bms_nonempty_difference(root->all_baserels, joinrelids))
-		make_join_rel_common(root, rel1, rel2, agg_info, joinrel_plain);
-
-	/*
-	 * 3) combine plain and grouped relations.
-	 */
-	make_join_rel_common_grouped(root, relset1, relset2, agg_info);
-
-	return joinrel_plain;
+	return make_join_rel_common(root, rel1, rel2);
 }
 
 /*
@@ -1004,11 +772,8 @@ make_join_rel(PlannerInfo *root, RelOptInfoSet *relset1,
 static void
 populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 							RelOptInfo *rel2, RelOptInfo *joinrel,
-							SpecialJoinInfo *sjinfo, List *restrictlist,
-							RelAggInfo *agg_info, RelOptInfo *rel_agg_input)
+							SpecialJoinInfo *sjinfo, List *restrictlist)
 {
-	bool		grouped = agg_info != NULL;
-
 	/*
 	 * Consider paths using each rel as both outer and inner.  Depending on
 	 * the join type, a provably empty outer or inner rel might mean the join
@@ -1038,10 +803,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			}
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_INNER, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_INNER, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			break;
 		case JOIN_LEFT:
 			if (is_dummy_rel(rel1) ||
@@ -1055,10 +820,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 				mark_dummy_rel(rel2);
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_LEFT, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_RIGHT, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			break;
 		case JOIN_FULL:
 			if ((is_dummy_rel(rel1) && is_dummy_rel(rel2)) ||
@@ -1069,10 +834,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			}
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_FULL, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			add_paths_to_joinrel(root, joinrel, rel2, rel1,
 								 JOIN_FULL, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 
 			/*
 			 * If there are join quals that aren't mergeable or hashable, we
@@ -1105,7 +870,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 				}
 				add_paths_to_joinrel(root, joinrel, rel1, rel2,
 									 JOIN_SEMI, sjinfo,
-									 restrictlist, agg_info, rel_agg_input);
+									 restrictlist);
 			}
 
 			/*
@@ -1128,10 +893,10 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 				}
 				add_paths_to_joinrel(root, joinrel, rel1, rel2,
 									 JOIN_UNIQUE_INNER, sjinfo,
-									 restrictlist, agg_info, rel_agg_input);
+									 restrictlist);
 				add_paths_to_joinrel(root, joinrel, rel2, rel1,
 									 JOIN_UNIQUE_OUTER, sjinfo,
-									 restrictlist, agg_info, rel_agg_input);
+									 restrictlist);
 			}
 			break;
 		case JOIN_ANTI:
@@ -1146,7 +911,7 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 				mark_dummy_rel(rel2);
 			add_paths_to_joinrel(root, joinrel, rel1, rel2,
 								 JOIN_ANTI, sjinfo,
-								 restrictlist, agg_info, rel_agg_input);
+								 restrictlist);
 			break;
 		default:
 			/* other values not expected here */
@@ -1154,16 +919,8 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 			break;
 	}
 
-	/*
-	 * The aggregate push-down feature currently does not support
-	 * partition-wise aggregation.
-	 */
-	if (grouped)
-		return;
-
-	/* Apply partition-wise join technique, if possible. */
-	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo,
-						   restrictlist);
+	/* Apply partitionwise join technique, if possible. */
+	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo, restrictlist);
 }
 
 
@@ -1363,8 +1120,7 @@ has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel)
 
 	foreach(lc, root->initial_rels)
 	{
-		RelOptInfoSet *relset2 = lfirst_node(RelOptInfoSet, lc);
-		RelOptInfo *rel2 = relset2->rel_plain;
+		RelOptInfo *rel2 = (RelOptInfo *) lfirst(lc);
 
 		/* ignore rels that are already in "rel" */
 		if (bms_overlap(rel->relids, rel2->relids))
@@ -1695,7 +1451,7 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
 									child_joinrel, child_sjinfo,
-									child_restrictlist, NULL, NULL);
+									child_restrictlist);
 	}
 }
 

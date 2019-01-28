@@ -63,7 +63,7 @@ static int	gimme_number_generations(int pool_size);
  *	  similar to a constrained Traveling Salesman Problem (TSP)
  */
 
-RelOptInfo *
+RelOptInfoSet *
 geqo(PlannerInfo *root, int number_of_rels, List *initial_rels)
 {
 	GeqoPrivateData private;
@@ -74,6 +74,7 @@ geqo(PlannerInfo *root, int number_of_rels, List *initial_rels)
 	Pool	   *pool;
 	int			pool_size,
 				number_generations;
+	RelOptInfoSet *result;
 
 #ifdef GEQO_DEBUG
 	int			status_interval;
@@ -296,7 +297,9 @@ geqo(PlannerInfo *root, int number_of_rels, List *initial_rels)
 	/* ... clear root pointer to our private storage */
 	root->join_search_private = NULL;
 
-	return best_rel;
+	result = makeNode(RelOptInfoSet);
+	result->rel_plain = best_rel;
+	return result;
 }
 
 

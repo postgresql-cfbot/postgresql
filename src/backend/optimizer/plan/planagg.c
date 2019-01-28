@@ -348,6 +348,7 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	List	   *tlist;
 	NullTest   *ntest;
 	SortGroupClause *sortcl;
+	RelOptInfoSet *final_relset;
 	RelOptInfo *final_rel;
 	Path	   *sorted_path;
 	Cost		path_cost;
@@ -441,7 +442,8 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	subroot->tuple_fraction = 1.0;
 	subroot->limit_tuples = 1.0;
 
-	final_rel = query_planner(subroot, tlist, minmax_qp_callback, NULL);
+	final_relset = query_planner(subroot, tlist, minmax_qp_callback, NULL);
+	final_rel = final_relset->rel_plain;
 
 	/*
 	 * Since we didn't go through subquery_planner() to handle the subquery,

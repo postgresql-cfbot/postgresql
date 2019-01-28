@@ -35,7 +35,8 @@ extern bool add_partial_path_precheck(RelOptInfo *parent_rel,
 						  Cost total_cost, List *pathkeys);
 
 extern Path *create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
-					Relids required_outer, int parallel_workers);
+					Relids required_outer, int parallel_workers,
+					RelOptInfo *rel_grouped, RelAggInfo *agg_info);
 extern Path *create_samplescan_path(PlannerInfo *root, RelOptInfo *rel,
 					   Relids required_outer);
 extern IndexPath *create_index_path(PlannerInfo *root,
@@ -49,7 +50,9 @@ extern IndexPath *create_index_path(PlannerInfo *root,
 				  bool indexonly,
 				  Relids required_outer,
 				  double loop_count,
-				  bool partial_path);
+				  bool partial_path,
+				  RelOptInfo *rel_grouped,
+				  RelAggInfo *agg_info);
 extern BitmapHeapPath *create_bitmap_heap_path(PlannerInfo *root,
 						RelOptInfo *rel,
 						Path *bitmapqual,
@@ -123,6 +126,7 @@ extern Relids calc_non_nestloop_required_outer(Path *outer_path, Path *inner_pat
 
 extern NestPath *create_nestloop_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -134,6 +138,7 @@ extern NestPath *create_nestloop_path(PlannerInfo *root,
 
 extern MergePath *create_mergejoin_path(PlannerInfo *root,
 					  RelOptInfo *joinrel,
+					  PathTarget *target,
 					  JoinType jointype,
 					  JoinCostWorkspace *workspace,
 					  JoinPathExtraData *extra,
@@ -148,6 +153,7 @@ extern MergePath *create_mergejoin_path(PlannerInfo *root,
 
 extern HashPath *create_hashjoin_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -196,6 +202,12 @@ extern AggPath *create_agg_path(PlannerInfo *root,
 				List *qual,
 				const AggClauseCosts *aggcosts,
 				double numGroups);
+extern AggPath *create_agg_sorted_path(PlannerInfo *root,
+					   Path *subpath,
+					   RelAggInfo *agg_info);
+extern AggPath *create_agg_hashed_path(PlannerInfo *root,
+					   Path *subpath,
+					   RelAggInfo *agg_info);
 extern GroupingSetsPath *create_groupingsets_path(PlannerInfo *root,
 						 RelOptInfo *rel,
 						 Path *subpath,
@@ -263,14 +275,16 @@ extern void setup_simple_rel_arrays(PlannerInfo *root);
 extern void setup_append_rel_array(PlannerInfo *root);
 extern RelOptInfo *build_simple_rel(PlannerInfo *root, int relid,
 				 RelOptInfo *parent);
+extern void build_simple_grouped_rel(PlannerInfo *root, RelOptInfoSet *rel);
 extern RelOptInfo *find_base_rel(PlannerInfo *root, int relid);
-extern RelOptInfo *find_join_rel(PlannerInfo *root, Relids relids);
+extern RelOptInfoSet *find_join_rel(PlannerInfo *root, Relids relids);
 extern RelOptInfo *build_join_rel(PlannerInfo *root,
 			   Relids joinrelids,
 			   RelOptInfo *outer_rel,
 			   RelOptInfo *inner_rel,
 			   SpecialJoinInfo *sjinfo,
-			   List **restrictlist_ptr);
+			   List **restrictlist_ptr,
+			   RelAggInfo *agg_info);
 extern Relids min_join_parameterization(PlannerInfo *root,
 						  Relids joinrelids,
 						  RelOptInfo *outer_rel,
@@ -297,5 +311,5 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 					 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 					 RelOptInfo *parent_joinrel, List *restrictlist,
 					 SpecialJoinInfo *sjinfo, JoinType jointype);
-
+extern RelAggInfo *create_rel_agg_info(PlannerInfo *root, RelOptInfo *rel);
 #endif							/* PATHNODE_H */

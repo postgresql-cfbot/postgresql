@@ -78,7 +78,7 @@ typedef struct
 
 
 /* routines in geqo_main.c */
-extern RelOptInfo *geqo(PlannerInfo *root,
+extern RelOptInfoSet *geqo(PlannerInfo *root,
 	 int number_of_rels, List *initial_rels);
 
 /* routines in geqo_eval.c */

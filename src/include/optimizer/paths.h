@@ -21,6 +21,7 @@
  * allpaths.c
  */
 extern PGDLLIMPORT bool enable_geqo;
+extern PGDLLIMPORT bool enable_agg_pushdown;
 extern PGDLLIMPORT int geqo_threshold;
 extern PGDLLIMPORT int min_parallel_table_scan_size;
 extern PGDLLIMPORT int min_parallel_index_scan_size;
@@ -29,7 +30,9 @@ extern PGDLLIMPORT int min_parallel_index_scan_size;
 typedef void (*set_rel_pathlist_hook_type) (PlannerInfo *root,
 											RelOptInfo *rel,
 											Index rti,
-											RangeTblEntry *rte);
+											RangeTblEntry *rte,
+											RelOptInfo *rel_grouped,
+											RelAggInfo *agg_info);
 extern PGDLLIMPORT set_rel_pathlist_hook_type set_rel_pathlist_hook;
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
@@ -42,19 +45,24 @@ typedef void (*set_join_pathlist_hook_type) (PlannerInfo *root,
 extern PGDLLIMPORT set_join_pathlist_hook_type set_join_pathlist_hook;
 
 /* Hook for plugins to replace standard_join_search() */
-typedef RelOptInfo *(*join_search_hook_type) (PlannerInfo *root,
-											  int levels_needed,
-											  List *initial_rels);
+typedef RelOptInfoSet *(*join_search_hook_type) (PlannerInfo *root,
+												 int levels_needed,
+												 List *initial_rels);
 extern PGDLLIMPORT join_search_hook_type join_search_hook;
 
 
-extern RelOptInfo *make_one_rel(PlannerInfo *root, List *joinlist);
+extern RelOptInfoSet *make_one_rel(PlannerInfo *root, List *joinlist);
 extern void set_dummy_rel_pathlist(RelOptInfo *rel);
-extern RelOptInfo *standard_join_search(PlannerInfo *root, int levels_needed,
+extern RelOptInfoSet *standard_join_search(PlannerInfo *root,
+					 int levels_needed,
 					 List *initial_rels);
 
 extern void generate_gather_paths(PlannerInfo *root, RelOptInfo *rel,
 					  bool override_rows);
+
+extern bool add_grouped_path(PlannerInfo *root, RelOptInfo *rel,
+				 Path *subpath, AggStrategy aggstrategy,
+				 RelAggInfo *agg_info);
 extern int compute_parallel_worker(RelOptInfo *rel, double heap_pages,
 						double index_pages, int max_workers);
 extern void create_partial_bitmap_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -70,7 +78,8 @@ extern void debug_print_rel(PlannerInfo *root, RelOptInfo *rel);
  * indxpath.c
  *	  routines to generate index paths
  */
-extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel);
+extern void create_index_paths(PlannerInfo *root, RelOptInfo *rel,
+				   RelOptInfo *rel_grouped, RelAggInfo *agg_info);
 extern bool relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 							  List *restrictlist,
 							  List *exprlist, List *oprlist);
@@ -101,7 +110,9 @@ extern void create_tidscan_paths(PlannerInfo *root, RelOptInfo *rel);
 extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 					 RelOptInfo *outerrel, RelOptInfo *innerrel,
 					 JoinType jointype, SpecialJoinInfo *sjinfo,
-					 List *restrictlist);
+					 List *restrictlist,
+					 RelAggInfo *agg_info,
+					 RelOptInfo *rel_agg_input);
 
 /*
  * joinrels.c
@@ -109,7 +120,7 @@ extern void add_paths_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
  */
 extern void join_search_one_level(PlannerInfo *root, int level);
 extern RelOptInfo *make_join_rel(PlannerInfo *root,
-			  RelOptInfo *rel1, RelOptInfo *rel2);
+			  RelOptInfoSet *relset1, RelOptInfoSet *relset2);
 extern bool have_join_order_restriction(PlannerInfo *root,
 							RelOptInfo *rel1, RelOptInfo *rel2);
 extern bool have_dangerous_phv(PlannerInfo *root,

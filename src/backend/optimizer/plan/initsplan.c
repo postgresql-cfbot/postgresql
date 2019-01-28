@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/sysattr.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_class.h"
 #include "nodes/nodeFuncs.h"
@@ -27,6 +28,7 @@
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "parser/analyze.h"
 #include "rewrite/rewriteManip.h"
@@ -46,6 +48,8 @@ typedef struct PostponedQual
 } PostponedQual;
 
 
+static void create_aggregate_grouped_var_infos(PlannerInfo *root);
+static void create_grouping_expr_grouped_var_infos(PlannerInfo *root);
 static void extract_lateral_references(PlannerInfo *root, RelOptInfo *brel,
 						   Index rtindex);
 static List *deconstruct_recurse(PlannerInfo *root, Node *jtnode,
@@ -96,10 +100,9 @@ static void check_hashjoinable(RestrictInfo *restrictinfo);
  * jtnode.  Internally, the function recurses through the jointree.
  *
  * At the end of this process, there should be one baserel RelOptInfo for
- * every non-join RTE that is used in the query.  Therefore, this routine
- * is the only place that should call build_simple_rel with reloptkind
- * RELOPT_BASEREL.  (Note: build_simple_rel recurses internally to build
- * "other rel" RelOptInfos for the members of any appendrels we find here.)
+ * every non-grouped non-join RTE that is used in the query. (Note:
+ * build_simple_rel recurses internally to build "other rel" RelOptInfos for
+ * the members of any appendrels we find here.)
  */
 void
 add_base_rels_to_query(PlannerInfo *root, Node *jtnode)
@@ -241,6 +244,261 @@ add_vars_to_targetlist(PlannerInfo *root, List *vars,
 	}
 }
 
+/*
+ * Add GroupedVarInfo to grouped_var_list for each aggregate as well as for
+ * each possible grouping expression.
+ *
+ * root->group_pathkeys must be setup before this function is called.
+ */
+extern void
+setup_aggregate_pushdown(PlannerInfo *root)
+{
+	ListCell   *lc;
+
+	/*
+	 * Isn't user interested in the aggregate push-down feature?
+	 */
+	if (!enable_agg_pushdown)
+		return;
+
+	/* The feature can only be applied to grouped aggregation. */
+	if (!root->parse->groupClause)
+		return;
+
+	/*
+	 * Grouping sets require multiple different groupings but the base
+	 * relation can only generate one.
+	 */
+	if (root->parse->groupingSets)
+		return;
+
+	/*
+	 * SRF is not allowed in the aggregate argument and we don't even want it
+	 * in the GROUP BY clause, so forbid it in general. It needs to be
+	 * analyzed if evaluation of a GROUP BY clause containing SRF below the
+	 * query targetlist would be correct. Currently it does not seem to be an
+	 * important use case.
+	 */
+	if (root->parse->hasTargetSRFs)
+		return;
+
+	/* Create GroupedVarInfo per (distinct) aggregate. */
+	create_aggregate_grouped_var_infos(root);
+
+	/* Isn't there any aggregate to be pushed down? */
+	if (root->grouped_var_list == NIL)
+		return;
+
+	/* Create GroupedVarInfo per grouping expression. */
+	create_grouping_expr_grouped_var_infos(root);
+
+	/* Isn't there any useful grouping expression for aggregate push-down? */
+	if (root->grouped_var_list == NIL)
+		return;
+
+	/*
+	 * Now that we know that grouping can be pushed down, search for the
+	 * maximum sortgroupref. The base relations may need it if extra grouping
+	 * expressions get added to them.
+	 */
+	Assert(root->max_sortgroupref == 0);
+	foreach(lc, root->processed_tlist)
+	{
+		TargetEntry *te = lfirst_node(TargetEntry, lc);
+
+		if (te->ressortgroupref > root->max_sortgroupref)
+			root->max_sortgroupref = te->ressortgroupref;
+	}
+}
+
+/*
+ * Create GroupedVarInfo for each distinct aggregate.
+ *
+ * If any aggregate is not suitable, set root->grouped_var_list to NIL and
+ * return.
+ */
+static void
+create_aggregate_grouped_var_infos(PlannerInfo *root)
+{
+	List	   *tlist_exprs;
+	ListCell   *lc;
+
+	Assert(root->grouped_var_list == NIL);
+
+	tlist_exprs = pull_var_clause((Node *) root->processed_tlist,
+								  PVC_INCLUDE_AGGREGATES |
+								  PVC_INCLUDE_WINDOWFUNCS);
+
+	/*
+	 * Although GroupingFunc is related to root->parse->groupingSets, this
+	 * field does not necessarily reflect its presence.
+	 */
+	foreach(lc, tlist_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		if (IsA(expr, GroupingFunc))
+			return;
+	}
+
+	/*
+	 * Aggregates within the HAVING clause need to be processed in the same
+	 * way as those in the main targetlist.
+	 *
+	 * Note that the contained aggregates will be pushed down, but the
+	 * containing HAVING clause must be ignored until the aggregation is
+	 * finalized.
+	 */
+	if (root->parse->havingQual != NULL)
+	{
+		List	   *having_exprs;
+
+		having_exprs = pull_var_clause((Node *) root->parse->havingQual,
+									   PVC_INCLUDE_AGGREGATES);
+		if (having_exprs != NIL)
+			tlist_exprs = list_concat(tlist_exprs, having_exprs);
+	}
+
+	if (tlist_exprs == NIL)
+		return;
+
+	foreach(lc, tlist_exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		Aggref	   *aggref;
+		ListCell   *lc2;
+		GroupedVarInfo *gvi;
+		bool		exists;
+
+		/*
+		 * tlist_exprs may also contain Vars or WindowFuncs, but we only need
+		 * Aggrefs.
+		 */
+		if (IsA(expr, Var) ||IsA(expr, WindowFunc))
+			continue;
+
+		aggref = castNode(Aggref, expr);
+
+		/* TODO Think if (some of) these can be handled. */
+		if (aggref->aggvariadic ||
+			aggref->aggdirectargs || aggref->aggorder ||
+			aggref->aggdistinct)
+		{
+			/*
+			 * Aggregation push-down is not useful if at least one aggregate
+			 * cannot be evaluated below the top-level join.
+			 *
+			 * XXX Is it worth freeing the GroupedVarInfos and their subtrees?
+			 */
+			root->grouped_var_list = NIL;
+			break;
+		}
+
+		/* Does GroupedVarInfo for this aggregate already exist? */
+		exists = false;
+		foreach(lc2, root->grouped_var_list)
+		{
+			gvi = lfirst_node(GroupedVarInfo, lc2);
+
+			if (equal(expr, gvi->gvexpr))
+			{
+				exists = true;
+				break;
+			}
+		}
+
+		/* Construct a new GroupedVarInfo if does not exist yet. */
+		if (!exists)
+		{
+			Relids		relids;
+
+			gvi = makeNode(GroupedVarInfo);
+			gvi->gvexpr = (Expr *) copyObject(aggref);
+
+			/* Find out where the aggregate should be evaluated. */
+			relids = pull_varnos((Node *) aggref);
+			if (!bms_is_empty(relids))
+				gvi->gv_eval_at = relids;
+			else
+				gvi->gv_eval_at = NULL;
+
+			root->grouped_var_list = lappend(root->grouped_var_list, gvi);
+		}
+	}
+
+	list_free(tlist_exprs);
+}
+
+/*
+ * Create GroupedVarInfo for each expression usable as grouping key.
+ *
+ * In addition to the expressions of the query targetlist, group_pathkeys is
+ * also considered the source of grouping expressions. That increases the
+ * chance to get the relation output grouped.
+ */
+static void
+create_grouping_expr_grouped_var_infos(PlannerInfo *root)
+{
+	ListCell   *l1,
+			   *l2;
+	List	   *exprs = NIL;
+	List	   *sortgrouprefs = NIL;
+
+	/*
+	 * Make sure GroupedVarInfo exists for each expression usable as grouping
+	 * key.
+	 */
+	foreach(l1, root->parse->groupClause)
+	{
+		SortGroupClause *sgClause;
+		TargetEntry *te;
+		Index		sortgroupref;
+
+		sgClause = lfirst_node(SortGroupClause, l1);
+		te = get_sortgroupclause_tle(sgClause, root->processed_tlist);
+		sortgroupref = te->ressortgroupref;
+
+		Assert(sortgroupref > 0);
+
+		/*
+		 * Non-zero sortgroupref does not necessarily imply grouping
+		 * expression: data can also be sorted by aggregate.
+		 */
+		if (IsA(te->expr, Aggref))
+			continue;
+
+		/*
+		 * The aggregate push-down feature currently supports only plain Vars
+		 * as grouping expressions.
+		 */
+		if (!IsA(te->expr, Var))
+		{
+			root->grouped_var_list = NIL;
+			return;
+		}
+
+		exprs = lappend(exprs, te->expr);
+		sortgrouprefs = lappend_int(sortgrouprefs, sortgroupref);
+	}
+
+	/*
+	 * Construct GroupedVarInfo for each expression.
+	 */
+	forboth(l1, exprs, l2, sortgrouprefs)
+	{
+		Var		   *var = lfirst_node(Var, l1);
+		int			sortgroupref = lfirst_int(l2);
+		GroupedVarInfo *gvi = makeNode(GroupedVarInfo);
+
+		gvi->gvexpr = (Expr *) copyObject(var);
+		gvi->sortgroupref = sortgroupref;
+
+		/* Find out where the expression should be evaluated. */
+		gvi->gv_eval_at = bms_make_singleton(var->varno);
+
+		root->grouped_var_list = lappend(root->grouped_var_list, gvi);
+	}
+}
 
 /*****************************************************************************
  *

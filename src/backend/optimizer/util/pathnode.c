@@ -17,6 +17,8 @@
 #include <math.h>
 
 #include "miscadmin.h"
+#include "access/sysattr.h"
+#include "catalog/pg_constraint.h"
 #include "foreign/fdwapi.h"
 #include "nodes/extensible.h"
 #include "nodes/nodeFuncs.h"
@@ -57,7 +59,6 @@ static int	append_startup_cost_compare(const void *a, const void *b);
 static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 								 List *pathlist,
 								 RelOptInfo *child_rel);
-
 
 /*****************************************************************************
  *		MISC. PATH UTILITIES
@@ -953,13 +954,15 @@ add_partial_path_precheck(RelOptInfo *parent_rel, Cost total_cost,
  */
 Path *
 create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
-					Relids required_outer, int parallel_workers)
+					Relids required_outer, int parallel_workers,
+					RelOptInfo *rel_grouped, RelAggInfo *agg_info)
 {
 	Path	   *pathnode = makeNode(Path);
 
 	pathnode->pathtype = T_SeqScan;
-	pathnode->parent = rel;
-	pathnode->pathtarget = rel->reltarget;
+	pathnode->parent = rel_grouped == NULL ? rel : rel_grouped;
+	pathnode->pathtarget = rel_grouped == NULL ? rel->reltarget :
+		agg_info->input;
 	pathnode->param_info = get_baserel_parampathinfo(root, rel,
 													 required_outer);
 	pathnode->parallel_aware = parallel_workers > 0 ? true : false;
@@ -1019,6 +1022,10 @@ create_samplescan_path(PlannerInfo *root, RelOptInfo *rel, Relids required_outer
  *		estimates of caching behavior.
  * 'partial_path' is true if constructing a parallel index scan path.
  *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
+ *
  * Returns the new path node.
  */
 IndexPath *
@@ -1033,7 +1040,9 @@ create_index_path(PlannerInfo *root,
 				  bool indexonly,
 				  Relids required_outer,
 				  double loop_count,
-				  bool partial_path)
+				  bool partial_path,
+				  RelOptInfo *rel_grouped,
+				  RelAggInfo *agg_info)
 {
 	IndexPath  *pathnode = makeNode(IndexPath);
 	RelOptInfo *rel = index->rel;
@@ -1041,8 +1050,9 @@ create_index_path(PlannerInfo *root,
 			   *indexqualcols;
 
 	pathnode->path.pathtype = indexonly ? T_IndexOnlyScan : T_IndexScan;
-	pathnode->path.parent = rel;
-	pathnode->path.pathtarget = rel->reltarget;
+	pathnode->path.parent = rel_grouped == NULL ? rel : rel_grouped;
+	pathnode->path.pathtarget = rel_grouped == NULL ? rel->reltarget :
+		agg_info->input;
 	pathnode->path.param_info = get_baserel_parampathinfo(root, rel,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
@@ -1186,8 +1196,8 @@ create_bitmap_or_path(PlannerInfo *root,
  *	  Creates a path corresponding to a scan by TID, returning the pathnode.
  */
 TidPath *
-create_tidscan_path(PlannerInfo *root, RelOptInfo *rel, List *tidquals,
-					Relids required_outer)
+create_tidscan_path(PlannerInfo *root, RelOptInfo *rel,
+					List *tidquals, Relids required_outer)
 {
 	TidPath    *pathnode = makeNode(TidPath);
 
@@ -1342,7 +1352,8 @@ append_startup_cost_compare(const void *a, const void *b)
 /*
  * create_merge_append_path
  *	  Creates a path corresponding to a MergeAppend plan, returning the
- *	  pathnode.
+ *	  pathnode. target can be supplied by caller. If NULL is passed, the field
+ *	  is set to rel->reltarget.
  */
 MergeAppendPath *
 create_merge_append_path(PlannerInfo *root,
@@ -1529,7 +1540,9 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	MemoryContext oldcontext;
 	int			numCols;
 
-	/* Caller made a mistake if subpath isn't cheapest_total ... */
+	/*
+	 * Caller made a mistake if subpath isn't cheapest_total.
+	 */
 	Assert(subpath == rel->cheapest_total_path);
 	Assert(subpath->parent == rel);
 	/* ... or if SpecialJoinInfo is the wrong one */
@@ -2150,6 +2163,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
  *	  relations.
  *
  * 'joinrel' is the join relation.
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_nestloop
  * 'extra' contains various information about the join
@@ -2164,6 +2178,7 @@ calc_non_nestloop_required_outer(Path *outer_path, Path *inner_path)
 NestPath *
 create_nestloop_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2204,7 +2219,7 @@ create_nestloop_path(PlannerInfo *root,
 
 	pathnode->path.pathtype = T_NestLoop;
 	pathnode->path.parent = joinrel;
-	pathnode->path.pathtarget = joinrel->reltarget;
+	pathnode->path.pathtarget = target;
 	pathnode->path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2236,6 +2251,7 @@ create_nestloop_path(PlannerInfo *root,
  *	  two relations
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_mergejoin
  * 'extra' contains various information about the join
@@ -2252,6 +2268,7 @@ create_nestloop_path(PlannerInfo *root,
 MergePath *
 create_mergejoin_path(PlannerInfo *root,
 					  RelOptInfo *joinrel,
+					  PathTarget *target,
 					  JoinType jointype,
 					  JoinCostWorkspace *workspace,
 					  JoinPathExtraData *extra,
@@ -2268,7 +2285,7 @@ create_mergejoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_MergeJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2304,6 +2321,7 @@ create_mergejoin_path(PlannerInfo *root,
  *	  Creates a pathnode corresponding to a hash join between two relations.
  *
  * 'joinrel' is the join relation
+ * 'target' is the join path target
  * 'jointype' is the type of join required
  * 'workspace' is the result from initial_cost_hashjoin
  * 'extra' contains various information about the join
@@ -2318,6 +2336,7 @@ create_mergejoin_path(PlannerInfo *root,
 HashPath *
 create_hashjoin_path(PlannerInfo *root,
 					 RelOptInfo *joinrel,
+					 PathTarget *target,
 					 JoinType jointype,
 					 JoinCostWorkspace *workspace,
 					 JoinPathExtraData *extra,
@@ -2332,7 +2351,7 @@ create_hashjoin_path(PlannerInfo *root,
 
 	pathnode->jpath.path.pathtype = T_HashJoin;
 	pathnode->jpath.path.parent = joinrel;
-	pathnode->jpath.path.pathtarget = joinrel->reltarget;
+	pathnode->jpath.path.pathtarget = target;
 	pathnode->jpath.path.param_info =
 		get_joinrel_parampathinfo(root,
 								  joinrel,
@@ -2414,8 +2433,8 @@ create_projection_path(PlannerInfo *root,
 	 * Note: in the latter case, create_projection_plan has to recheck our
 	 * conclusion; see comments therein.
 	 */
-	if (is_projection_capable_path(subpath) ||
-		equal(oldtarget->exprs, target->exprs))
+	if ((is_projection_capable_path(subpath) ||
+		 equal(oldtarget->exprs, target->exprs)))
 	{
 		/* No separate Result node needed */
 		pathnode->dummypp = true;
@@ -2800,8 +2819,7 @@ create_agg_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Agg;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
@@ -2831,6 +2849,152 @@ create_agg_path(PlannerInfo *root,
 		target->cost.per_tuple * pathnode->path.rows;
 
 	return pathnode;
+}
+
+/*
+ * Apply AGG_SORTED aggregation path to subpath if it's suitably sorted.
+ *
+ * NULL is returned if sorting of subpath output is not suitable.
+ */
+AggPath *
+create_agg_sorted_path(PlannerInfo *root, Path *subpath,
+					   RelAggInfo *agg_info)
+{
+	RelOptInfo *rel;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	ListCell   *lc1;
+	List	   *key_subset = NIL;
+	AggPath    *result = NULL;
+
+	rel = subpath->parent;
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	if (subpath->pathkeys == NIL)
+		return NULL;
+
+	if (!grouping_is_sortable(root->parse->groupClause))
+		return NULL;
+
+	/*
+	 * Find all query pathkeys that our relation does affect.
+	 */
+	foreach(lc1, root->group_pathkeys)
+	{
+		PathKey    *gkey = castNode(PathKey, lfirst(lc1));
+		ListCell   *lc2;
+
+		foreach(lc2, subpath->pathkeys)
+		{
+			PathKey    *skey = castNode(PathKey, lfirst(lc2));
+
+			if (skey == gkey)
+			{
+				key_subset = lappend(key_subset, gkey);
+				break;
+			}
+		}
+	}
+
+	if (key_subset == NIL)
+		return NULL;
+
+	/* Check if AGG_SORTED is useful for the whole query.  */
+	if (!pathkeys_contained_in(key_subset, subpath->pathkeys))
+		return NULL;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, (Node *) agg_exprs, aggsplit, &agg_costs);
+
+	Assert(agg_info->group_exprs != NIL);
+	dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+									 subpath->rows, NULL);
+
+	/*
+	 * qual is NIL because the HAVING clause cannot be evaluated until the
+	 * final value of the aggregate is known.
+	 */
+	result = create_agg_path(root, rel, subpath, target,
+							 AGG_SORTED, aggsplit,
+							 agg_info->group_clauses,
+							 NIL,
+							 &agg_costs,
+							 dNumGroups);
+
+	return result;
+}
+
+/*
+ * Apply AGG_HASHED aggregation to subpath.
+ *
+ * Arguments have the same meaning as those of create_agg_sorted_path.
+ */
+AggPath *
+create_agg_hashed_path(PlannerInfo *root, Path *subpath,
+					   RelAggInfo *agg_info)
+{
+	RelOptInfo *rel;
+	bool		can_hash;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Size		hashaggtablesize;
+	Query	   *parse = root->parse;
+	AggPath    *result = NULL;
+
+	rel = subpath->parent;
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, agg_exprs, aggsplit, &agg_costs);
+
+	can_hash = (parse->groupClause != NIL &&
+				parse->groupingSets == NIL &&
+				agg_costs.numOrderedAggs == 0 &&
+				grouping_is_hashable(parse->groupClause));
+
+	if (can_hash)
+	{
+		Assert(agg_info->group_exprs != NIL);
+		dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+										 subpath->rows, NULL);
+
+		hashaggtablesize = estimate_hashagg_tablesize(subpath, &agg_costs,
+													  dNumGroups);
+
+		if (hashaggtablesize < work_mem * 1024L)
+		{
+			/*
+			 * qual is NIL because the HAVING clause cannot be evaluated until
+			 * the final value of the aggregate is known.
+			 */
+			result = create_agg_path(root, rel, subpath,
+									 target,
+									 AGG_HASHED,
+									 aggsplit,
+									 agg_info->group_clauses,
+									 NIL,
+									 &agg_costs,
+									 dNumGroups);
+
+			/*
+			 * The agg path should require no fewer parameters than the plain
+			 * one.
+			 */
+			result->path.param_info = subpath->param_info;
+		}
+	}
+
+	return result;
 }
 
 /*
@@ -3518,7 +3682,8 @@ reparameterize_path(PlannerInfo *root, Path *path,
 	switch (path->pathtype)
 	{
 		case T_SeqScan:
-			return create_seqscan_path(root, rel, required_outer, 0);
+			return create_seqscan_path(root, rel, required_outer, 0, NULL,
+									   NULL);
 		case T_SampleScan:
 			return (Path *) create_samplescan_path(root, rel, required_outer);
 		case T_IndexScan:

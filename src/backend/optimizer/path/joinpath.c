@@ -120,7 +120,9 @@ add_paths_to_joinrel(PlannerInfo *root,
 					 RelOptInfo *innerrel,
 					 JoinType jointype,
 					 SpecialJoinInfo *sjinfo,
-					 List *restrictlist)
+					 List *restrictlist,
+					 RelAggInfo *agg_info,
+					 RelOptInfo *rel_agg_input)
 {
 	JoinPathExtraData extra;
 	bool		mergejoin_allowed = true;
@@ -143,6 +145,8 @@ add_paths_to_joinrel(PlannerInfo *root,
 	extra.mergeclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;
+	extra.agg_info = agg_info;
+	extra.rel_agg_input = rel_agg_input;
 
 	/*
 	 * See if the inner relation is provably unique for this outer rel.
@@ -376,6 +380,8 @@ try_nestloop_path(PlannerInfo *root,
 	Relids		outerrelids;
 	Relids		inner_paramrels = PATH_REQ_OUTER(inner_path);
 	Relids		outer_paramrels = PATH_REQ_OUTER(outer_path);
+	bool		do_aggregate = extra->rel_agg_input != NULL;
+	bool		success = false;
 
 	/*
 	 * Paths are parameterized by top-level parents, so run parameterization
@@ -422,10 +428,37 @@ try_nestloop_path(PlannerInfo *root,
 	initial_cost_nestloop(root, &workspace, jointype,
 						  outer_path, inner_path, extra);
 
-	if (add_path_precheck(joinrel,
-						  workspace.startup_cost, workspace.total_cost,
-						  pathkeys, required_outer))
+	/*
+	 * If the join output should be aggregated, the precheck is skipped
+	 * because it makes little sense to compare the new join path to existing,
+	 * already aggregated paths. Since we don't have row count estimate yet,
+	 * it's hard to involve AggPath in the precheck.
+	 */
+	if ((!do_aggregate &&
+		 add_path_precheck(joinrel,
+						   workspace.startup_cost, workspace.total_cost,
+						   pathkeys, required_outer)) ||
+		do_aggregate)
 	{
+		PathTarget *target;
+		Path	   *path;
+		RelOptInfo *parent_rel;
+
+		if (!do_aggregate)
+		{
+			target = joinrel->reltarget;
+			parent_rel = joinrel;
+		}
+		else
+		{
+			/*
+			 * If the join output is subject to aggregation, the path must
+			 * generate aggregation input.
+			 */
+			target = extra->agg_info->input;
+			parent_rel = extra->rel_agg_input;
+		}
+
 		/*
 		 * If the inner path is parameterized, it is parameterized by the
 		 * topmost parent of the outer rel, not the outer rel itself.  Fix
@@ -447,21 +480,57 @@ try_nestloop_path(PlannerInfo *root,
 			}
 		}
 
-		add_path(joinrel, (Path *)
-				 create_nestloop_path(root,
-									  joinrel,
-									  jointype,
-									  &workspace,
-									  extra,
-									  outer_path,
-									  inner_path,
-									  extra->restrictlist,
-									  pathkeys,
-									  required_outer));
+		path = (Path *) create_nestloop_path(root,
+											 parent_rel,
+											 target,
+											 jointype,
+											 &workspace,
+											 extra,
+											 outer_path,
+											 inner_path,
+											 extra->restrictlist,
+											 pathkeys,
+											 required_outer);
+
+		if (!do_aggregate)
+		{
+			add_path(joinrel, path);
+			success = true;
+		}
+		else
+		{
+			/*
+			 * Non-grouped rel had to be passed to create_nestloop_path() so
+			 * that row estimate reflects the aggregation input data, however
+			 * even the aggregation input path should eventually be owned by
+			 * the grouped joinrel.
+			 */
+			path->parent = joinrel;
+
+			/*
+			 * Try both AGG_HASHED and AGG_SORTED aggregation.
+			 *
+			 * AGG_HASHED should not be parameterized because we don't want to
+			 * create the hashtable again for each set of parameters.
+			 */
+			if (required_outer == NULL)
+				success = add_grouped_path(root, joinrel, path,
+										   AGG_HASHED, extra->agg_info);
+
+			/*
+			 * Don't try AGG_SORTED if add_grouped_path() would reject it
+			 * anyway.
+			 */
+			if (pathkeys != NIL)
+				success = success ||
+					add_grouped_path(root, joinrel, path, AGG_SORTED,
+									 extra->agg_info);
+		}
 	}
-	else
+
+	if (!success)
 	{
-		/* Waste no memory when we reject a path here */
+		/* Waste no memory when we reject path(s) here */
 		bms_free(required_outer);
 	}
 }
@@ -538,6 +607,7 @@ try_partial_nestloop_path(PlannerInfo *root,
 	add_partial_path(joinrel, (Path *)
 					 create_nestloop_path(root,
 										  joinrel,
+										  joinrel->reltarget,
 										  jointype,
 										  &workspace,
 										  extra,
@@ -568,8 +638,11 @@ try_mergejoin_path(PlannerInfo *root,
 {
 	Relids		required_outer;
 	JoinCostWorkspace workspace;
+	bool		grouped = extra->agg_info != NULL;
+	bool		do_aggregate = extra->rel_agg_input != NULL;
+	bool		success = false;
 
-	if (is_partial)
+	if (!grouped && is_partial)
 	{
 		try_partial_mergejoin_path(root,
 								   joinrel,
@@ -617,26 +690,73 @@ try_mergejoin_path(PlannerInfo *root,
 						   outersortkeys, innersortkeys,
 						   extra);
 
-	if (add_path_precheck(joinrel,
-						  workspace.startup_cost, workspace.total_cost,
-						  pathkeys, required_outer))
+	/*
+	 * See comments in try_nestloop_path().
+	 */
+	if ((!do_aggregate &&
+		 add_path_precheck(joinrel,
+						   workspace.startup_cost, workspace.total_cost,
+						   pathkeys, required_outer)) ||
+		do_aggregate)
 	{
-		add_path(joinrel, (Path *)
-				 create_mergejoin_path(root,
-									   joinrel,
-									   jointype,
-									   &workspace,
-									   extra,
-									   outer_path,
-									   inner_path,
-									   extra->restrictlist,
-									   pathkeys,
-									   required_outer,
-									   mergeclauses,
-									   outersortkeys,
-									   innersortkeys));
+		PathTarget *target;
+		Path	   *path;
+		RelOptInfo *parent_rel;
+
+		if (!do_aggregate)
+		{
+			target = joinrel->reltarget;
+			parent_rel = joinrel;
+		}
+		else
+		{
+			target = extra->agg_info->input;
+			parent_rel = extra->rel_agg_input;
+		}
+
+		path = (Path *) create_mergejoin_path(root,
+											  parent_rel,
+											  target,
+											  jointype,
+											  &workspace,
+											  extra,
+											  outer_path,
+											  inner_path,
+											  extra->restrictlist,
+											  pathkeys,
+											  required_outer,
+											  mergeclauses,
+											  outersortkeys,
+											  innersortkeys);
+
+		if (!do_aggregate)
+		{
+			add_path(joinrel, path);
+			success = true;
+		}
+		else
+		{
+			/* See comment in try_nestloop_path() */
+			path->parent = joinrel;
+
+			if (required_outer == NULL)
+				success = add_grouped_path(root,
+										   joinrel,
+										   path,
+										   AGG_HASHED,
+										   extra->agg_info);
+
+			if (pathkeys != NIL)
+				success = success ||
+					add_grouped_path(root,
+									 joinrel,
+									 path,
+									 AGG_SORTED,
+									 extra->agg_info);
+		}
 	}
-	else
+
+	if (!success)
 	{
 		/* Waste no memory when we reject a path here */
 		bms_free(required_outer);
@@ -700,6 +820,7 @@ try_partial_mergejoin_path(PlannerInfo *root,
 	add_partial_path(joinrel, (Path *)
 					 create_mergejoin_path(root,
 										   joinrel,
+										   joinrel->reltarget,
 										   jointype,
 										   &workspace,
 										   extra,
@@ -729,6 +850,9 @@ try_hashjoin_path(PlannerInfo *root,
 {
 	Relids		required_outer;
 	JoinCostWorkspace workspace;
+	bool		grouped = extra->agg_info != NULL;
+	bool		do_aggregate = extra->rel_agg_input != NULL;
+	bool		success = false;
 
 	/*
 	 * Check to see if proposed path is still parameterized, and reject if the
@@ -745,30 +869,79 @@ try_hashjoin_path(PlannerInfo *root,
 	}
 
 	/*
+	 * Parameterized execution of grouped path would mean repeated hashing of
+	 * the output of the hashjoin output, so forget about AGG_HASHED if there
+	 * are any parameters. And AGG_SORTED makes no sense because the hash join
+	 * output is not sorted.
+	 */
+	if (required_outer && grouped)
+		return;
+
+	/*
 	 * See comments in try_nestloop_path().  Also note that hashjoin paths
 	 * never have any output pathkeys, per comments in create_hashjoin_path.
 	 */
 	initial_cost_hashjoin(root, &workspace, jointype, hashclauses,
 						  outer_path, inner_path, extra, false);
 
-	if (add_path_precheck(joinrel,
-						  workspace.startup_cost, workspace.total_cost,
-						  NIL, required_outer))
+
+	/*
+	 * See comments in try_nestloop_path().
+	 */
+	if ((!do_aggregate &&
+		 add_path_precheck(joinrel,
+						   workspace.startup_cost, workspace.total_cost,
+						   NIL, required_outer)) ||
+		do_aggregate)
 	{
-		add_path(joinrel, (Path *)
-				 create_hashjoin_path(root,
-									  joinrel,
-									  jointype,
-									  &workspace,
-									  extra,
-									  outer_path,
-									  inner_path,
-									  false,	/* parallel_hash */
-									  extra->restrictlist,
-									  required_outer,
-									  hashclauses));
+		PathTarget *target;
+		Path	   *path = NULL;
+		RelOptInfo *parent_rel;
+
+		if (!do_aggregate)
+		{
+			target = joinrel->reltarget;
+			parent_rel = joinrel;
+		}
+		else
+		{
+			target = extra->agg_info->input;
+			parent_rel = extra->rel_agg_input;
+		}
+
+		path = (Path *) create_hashjoin_path(root,
+											 parent_rel,
+											 target,
+											 jointype,
+											 &workspace,
+											 extra,
+											 outer_path,
+											 inner_path,
+											 false, /* parallel_hash */
+											 extra->restrictlist,
+											 required_outer,
+											 hashclauses);
+
+		if (!do_aggregate)
+		{
+			add_path(joinrel, path);
+			success = true;
+		}
+		else
+		{
+			/* See comment in try_nestloop_path() */
+			path->parent = joinrel;
+
+			/*
+			 * As the hashjoin path is not sorted, only try AGG_HASHED.
+			 */
+			if (add_grouped_path(root, joinrel, path, AGG_HASHED,
+								 extra->agg_info))
+				success = true;
+		}
 	}
-	else
+
+	if (!success)
 	{
 		/* Waste no memory when we reject a path here */
 		bms_free(required_outer);
@@ -824,6 +997,7 @@ try_partial_hashjoin_path(PlannerInfo *root,
 	add_partial_path(joinrel, (Path *)
 					 create_hashjoin_path(root,
 										  joinrel,
+										  joinrel->reltarget,
 										  jointype,
 										  &workspace,
 										  extra,
@@ -892,6 +1066,7 @@ sort_inner_and_outer(PlannerInfo *root,
 	Path	   *cheapest_safe_inner = NULL;
 	List	   *all_pathkeys;
 	ListCell   *l;
+	bool		grouped = extra->agg_info != NULL;
 
 	/*
 	 * We only consider the cheapest-total-cost input paths, since we are
@@ -1051,7 +1226,7 @@ sort_inner_and_outer(PlannerInfo *root,
 		 * If we have partial outer and parallel safe inner path then try
 		 * partial mergejoin path.
 		 */
-		if (cheapest_partial_outer && cheapest_safe_inner)
+		if (!grouped && cheapest_partial_outer && cheapest_safe_inner)
 			try_partial_mergejoin_path(root,
 									   joinrel,
 									   cheapest_partial_outer,
@@ -1341,6 +1516,7 @@ match_unsorted_outer(PlannerInfo *root,
 	Path	   *inner_cheapest_total = innerrel->cheapest_total_path;
 	Path	   *matpath = NULL;
 	ListCell   *lc1;
+	bool		grouped = extra->agg_info != NULL;
 
 	/*
 	 * Nestloop only supports inner, left, semi, and anti joins.  Also, if we
@@ -1516,7 +1692,8 @@ match_unsorted_outer(PlannerInfo *root,
 	 * parameterized. Similarly, we can't handle JOIN_FULL and JOIN_RIGHT,
 	 * because they can produce false null extended rows.
 	 */
-	if (joinrel->consider_parallel &&
+	if (!grouped &&
+		joinrel->consider_parallel &&
 		save_jointype != JOIN_UNIQUE_OUTER &&
 		save_jointype != JOIN_FULL &&
 		save_jointype != JOIN_RIGHT &&

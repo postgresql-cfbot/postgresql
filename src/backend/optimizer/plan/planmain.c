@@ -52,13 +52,15 @@
  * qp_callback once we have completed merging the query's equivalence classes.
  * (We cannot construct canonical pathkeys until that's done.)
  */
-RelOptInfo *
+RelOptInfoSet *
 query_planner(PlannerInfo *root, List *tlist,
 			  query_pathkeys_callback qp_callback, void *qp_extra)
 {
 	Query	   *parse = root->parse;
 	List	   *joinlist;
+	RelOptInfoSet *final_rel_set;
 	RelOptInfo *final_rel;
+	RelOptInfoSet *final_relset;
 
 	/*
 	 * If the query has an empty join tree, then it's something easy like
@@ -66,6 +68,8 @@ query_planner(PlannerInfo *root, List *tlist,
 	 */
 	if (parse->jointree->fromlist == NIL)
 	{
+		RelOptInfo *final_rel;
+
 		/* We need a dummy joinrel to describe the empty set of baserels */
 		final_rel = build_empty_join_rel(root);
 
@@ -95,7 +99,9 @@ query_planner(PlannerInfo *root, List *tlist,
 		root->canon_pathkeys = NIL;
 		(*qp_callback) (root, qp_extra);
 
-		return final_rel;
+		final_relset = makeNode(RelOptInfoSet);
+		final_relset->rel_plain = final_rel;
+		return final_relset;
 	}
 
 	/*
@@ -114,6 +120,7 @@ query_planner(PlannerInfo *root, List *tlist,
 	root->full_join_clauses = NIL;
 	root->join_info_list = NIL;
 	root->placeholder_list = NIL;
+	root->grouped_var_list = NIL;
 	root->fkey_list = NIL;
 	root->initial_rels = NIL;
 
@@ -199,6 +206,11 @@ query_planner(PlannerInfo *root, List *tlist,
 	joinlist = remove_useless_joins(root, joinlist);
 
 	/*
+	 * No rels should disappear now, so we can initialize all_baserels.
+	 */
+	/* setup_all_baserels(root); */
+
+	/*
 	 * Also, reduce any semijoins with unique inner rels to plain inner joins.
 	 * Likewise, this can't be done until now for lack of needed info.
 	 */
@@ -232,14 +244,25 @@ query_planner(PlannerInfo *root, List *tlist,
 	extract_restriction_or_clauses(root);
 
 	/*
+	 * If the query result can be grouped, check if any grouping can be
+	 * performed below the top-level join. If so, setup
+	 * root->grouped_var_list.
+	 *
+	 * The base relations should be fully initialized now, so that we have
+	 * enough info to decide whether grouping is possible.
+	 */
+	setup_aggregate_pushdown(root);
+
+	/*
 	 * Ready to do the primary planning.
 	 */
-	final_rel = make_one_rel(root, joinlist);
+	final_rel_set = make_one_rel(root, joinlist);
+	final_rel = final_rel_set->rel_plain;
 
 	/* Check that we got at least one usable path */
 	if (!final_rel || !final_rel->cheapest_total_path ||
 		final_rel->cheapest_total_path->param_info != NULL)
 		elog(ERROR, "failed to construct the join relation");
 
-	return final_rel;
+	return final_rel_set;
 }

@@ -33,6 +33,7 @@
 #include "optimizer/predtest.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/tlist.h"
 #include "optimizer/var.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
@@ -78,13 +79,14 @@ typedef struct
 	int			indexcol;		/* index column we want to match to */
 } ec_member_matches_arg;
 
-
 static void consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 							IndexOptInfo *index,
 							IndexClauseSet *rclauseset,
 							IndexClauseSet *jclauseset,
 							IndexClauseSet *eclauseset,
-							List **bitindexpaths);
+							List **bitindexpaths,
+							RelOptInfo *rel_grouped,
+							RelAggInfo *agg_info);
 static void consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
 							   IndexOptInfo *index,
 							   IndexClauseSet *rclauseset,
@@ -93,7 +95,9 @@ static void consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
 							   List **bitindexpaths,
 							   List *indexjoinclauses,
 							   int considered_clauses,
-							   List **considered_relids);
+							   List **considered_relids,
+							   RelOptInfo *rel_grouped,
+							   RelAggInfo *agg_info);
 static void get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
 					 IndexOptInfo *index,
 					 IndexClauseSet *rclauseset,
@@ -101,19 +105,24 @@ static void get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
 					 IndexClauseSet *eclauseset,
 					 List **bitindexpaths,
 					 Relids relids,
-					 List **considered_relids);
+					 List **considered_relids,
+					 RelOptInfo *rel_grouped,
+					 RelAggInfo *agg_info);
 static bool eclass_already_used(EquivalenceClass *parent_ec, Relids oldrelids,
 					List *indexjoinclauses);
 static bool bms_equal_any(Relids relids, List *relids_list);
 static void get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				IndexOptInfo *index, IndexClauseSet *clauses,
-				List **bitindexpaths);
+				List **bitindexpaths, RelOptInfo *rel_grouped,
+				RelAggInfo *agg_info);
 static List *build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				  IndexOptInfo *index, IndexClauseSet *clauses,
 				  bool useful_predicate,
 				  ScanTypeControl scantype,
 				  bool *skip_nonnative_saop,
-				  bool *skip_lower_saop);
+				  bool *skip_lower_saop,
+				  RelOptInfo *rel_grouped,
+				  RelAggInfo *agg_info);
 static List *build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 				   List *clauses, List *other_clauses);
 static List *generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -217,6 +226,10 @@ static Const *string_to_const(const char *str, Oid datatype);
  *
  * 'rel' is the relation for which we want to generate index paths
  *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
+ *
  * Note: check_index_predicates() must have been run previously for this rel.
  *
  * Note: in cases involving LATERAL references in the relation's tlist, it's
@@ -229,7 +242,8 @@ static Const *string_to_const(const char *str, Oid datatype);
  * as meaning "unparameterized so far as the indexquals are concerned".
  */
 void
-create_index_paths(PlannerInfo *root, RelOptInfo *rel)
+create_index_paths(PlannerInfo *root, RelOptInfo *rel, RelOptInfo *rel_grouped,
+				   RelAggInfo *agg_info)
 {
 	List	   *indexpaths;
 	List	   *bitindexpaths;
@@ -239,6 +253,7 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	IndexClauseSet jclauseset;
 	IndexClauseSet eclauseset;
 	ListCell   *lc;
+	bool		grouped = rel_grouped != NULL;
 
 	/* Skip the whole mess if no indexes */
 	if (rel->indexlist == NIL)
@@ -274,8 +289,8 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * non-parameterized paths.  Plain paths go directly to add_path(),
 		 * bitmap paths are added to bitindexpaths to be handled below.
 		 */
-		get_index_paths(root, rel, index, &rclauseset,
-						&bitindexpaths);
+		get_index_paths(root, rel, index, &rclauseset, &bitindexpaths,
+						rel_grouped, agg_info);
 
 		/*
 		 * Identify the join clauses that can match the index.  For the moment
@@ -304,15 +319,24 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 										&rclauseset,
 										&jclauseset,
 										&eclauseset,
-										&bitjoinpaths);
+										&bitjoinpaths,
+										rel_grouped,
+										agg_info);
 	}
+
+	/*
+	 * It does not seem too efficient to aggregate the individual paths and
+	 * then AND them together.
+	 */
+	if (grouped)
+		return;
 
 	/*
 	 * Generate BitmapOrPaths for any suitable OR-clauses present in the
 	 * restriction list.  Add these to bitindexpaths.
 	 */
-	indexpaths = generate_bitmap_or_paths(root, rel,
-										  rel->baserestrictinfo, NIL);
+	indexpaths = generate_bitmap_or_paths(root, rel, rel->baserestrictinfo,
+										  NIL);
 	bitindexpaths = list_concat(bitindexpaths, indexpaths);
 
 	/*
@@ -434,6 +458,10 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
  * 'jclauseset' is the collection of indexable simple join clauses
  * 'eclauseset' is the collection of indexable clauses from EquivalenceClasses
  * '*bitindexpaths' is the list to add bitmap paths to
+ *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
  */
 static void
 consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
@@ -441,7 +469,9 @@ consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 							IndexClauseSet *rclauseset,
 							IndexClauseSet *jclauseset,
 							IndexClauseSet *eclauseset,
-							List **bitindexpaths)
+							List **bitindexpaths,
+							RelOptInfo *rel_grouped,
+							RelAggInfo *agg_info)
 {
 	int			considered_clauses = 0;
 	List	   *considered_relids = NIL;
@@ -477,7 +507,9 @@ consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 									   bitindexpaths,
 									   jclauseset->indexclauses[indexcol],
 									   considered_clauses,
-									   &considered_relids);
+									   &considered_relids,
+									   rel_grouped,
+									   agg_info);
 		/* Consider each applicable eclass join clause */
 		considered_clauses += list_length(eclauseset->indexclauses[indexcol]);
 		consider_index_join_outer_rels(root, rel, index,
@@ -485,7 +517,9 @@ consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 									   bitindexpaths,
 									   eclauseset->indexclauses[indexcol],
 									   considered_clauses,
-									   &considered_relids);
+									   &considered_relids,
+									   rel_grouped,
+									   agg_info);
 	}
 }
 
@@ -500,6 +534,10 @@ consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
  * 'indexjoinclauses' is a list of RestrictInfos for join clauses
  * 'considered_clauses' is the total number of clauses considered (so far)
  * '*considered_relids' is a list of all relids sets already considered
+ *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
  */
 static void
 consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
@@ -510,7 +548,9 @@ consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
 							   List **bitindexpaths,
 							   List *indexjoinclauses,
 							   int considered_clauses,
-							   List **considered_relids)
+							   List **considered_relids,
+							   RelOptInfo *rel_grouped,
+							   RelAggInfo *agg_info)
 {
 	ListCell   *lc;
 
@@ -577,7 +617,9 @@ consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
 								 rclauseset, jclauseset, eclauseset,
 								 bitindexpaths,
 								 bms_union(clause_relids, oldrelids),
-								 considered_relids);
+								 considered_relids,
+								 rel_grouped,
+								 agg_info);
 		}
 
 		/* Also try this set of relids by itself */
@@ -585,7 +627,9 @@ consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
 							 rclauseset, jclauseset, eclauseset,
 							 bitindexpaths,
 							 clause_relids,
-							 considered_relids);
+							 considered_relids,
+							 rel_grouped,
+							 agg_info);
 	}
 }
 
@@ -601,6 +645,10 @@ consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
  *		'bitindexpaths', 'considered_relids' as above
  * 'relids' is the current set of relids to consider (the target rel plus
  *		one or more outer rels)
+ *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
  */
 static void
 get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -610,7 +658,9 @@ get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
 					 IndexClauseSet *eclauseset,
 					 List **bitindexpaths,
 					 Relids relids,
-					 List **considered_relids)
+					 List **considered_relids,
+					 RelOptInfo *rel_grouped,
+					 RelAggInfo *agg_info)
 {
 	IndexClauseSet clauseset;
 	int			indexcol;
@@ -667,7 +717,8 @@ get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	Assert(clauseset.nonempty);
 
 	/* Build index path(s) using the collected set of clauses */
-	get_index_paths(root, rel, index, &clauseset, bitindexpaths);
+	get_index_paths(root, rel, index, &clauseset, bitindexpaths,
+					rel_grouped, agg_info);
 
 	/*
 	 * Remember we considered paths for this set of relids.  We use lcons not
@@ -717,7 +768,6 @@ bms_equal_any(Relids relids, List *relids_list)
 	return false;
 }
 
-
 /*
  * get_index_paths
  *	  Given an index and a set of index clauses for it, construct IndexPaths.
@@ -732,16 +782,23 @@ bms_equal_any(Relids relids, List *relids_list)
  * paths, and then make a separate attempt to include them in bitmap paths.
  * Furthermore, we should consider excluding lower-order ScalarArrayOpExpr
  * quals so as to create ordered paths.
+ *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
  */
 static void
 get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				IndexOptInfo *index, IndexClauseSet *clauses,
-				List **bitindexpaths)
+				List **bitindexpaths,
+				RelOptInfo *rel_grouped,
+				RelAggInfo *agg_info)
 {
 	List	   *indexpaths;
 	bool		skip_nonnative_saop = false;
 	bool		skip_lower_saop = false;
 	ListCell   *lc;
+	bool		grouped = rel_grouped != NULL;
 
 	/*
 	 * Build simple index paths using the clauses.  Allow ScalarArrayOpExpr
@@ -754,7 +811,40 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 								   index->predOK,
 								   ST_ANYSCAN,
 								   &skip_nonnative_saop,
-								   &skip_lower_saop);
+								   &skip_lower_saop,
+								   rel_grouped,
+								   agg_info);
+
+	/*
+	 * If the relation is grouped, apply the partial aggregation.
+	 *
+	 * Only AGG_SORTED strategy is used, so we ignore bitmap paths, as well as
+	 * indexes that can only produce them.
+	 */
+	if (grouped && index->amhasgettuple)
+	{
+		foreach(lc, indexpaths)
+		{
+			IndexPath  *ipath = (IndexPath *) lfirst(lc);
+			Path	   *subpath = &ipath->path;
+
+			if (subpath->pathkeys != NIL)
+			{
+				AggPath    *agg_path;
+
+				agg_path = create_agg_sorted_path(root,
+												  subpath,
+												  agg_info);
+				if (agg_path)
+					add_path(rel_grouped, (Path *) agg_path);
+			}
+		}
+
+		/*
+		 * Nothing more to do for grouped relation.
+		 */
+		return;
+	}
 
 	/*
 	 * If we skipped any lower-order ScalarArrayOpExprs on an index with an AM
@@ -769,7 +859,9 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 												   index->predOK,
 												   ST_ANYSCAN,
 												   &skip_nonnative_saop,
-												   NULL));
+												   NULL,
+												   rel_grouped,
+												   agg_info));
 	}
 
 	/*
@@ -809,7 +901,9 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									   false,
 									   ST_BITMAPSCAN,
 									   NULL,
-									   NULL);
+									   NULL,
+									   rel_grouped,
+									   agg_info);
 		*bitindexpaths = list_concat(*bitindexpaths, indexpaths);
 	}
 }
@@ -853,7 +947,15 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
  * 'useful_predicate' indicates whether the index has a useful predicate
  * 'scantype' indicates whether we need plain or bitmap scan support
  * 'skip_nonnative_saop' indicates whether to accept SAOP if index AM doesn't
- * 'skip_lower_saop' indicates whether to accept non-first-column SAOP
+ * 'skip_lower_saop' indicates whether to accept non-first-column SAOP.
+ *
+ * If 'rel_grouped' is passed, apply partial aggregation to each path and add
+ * the path to this relation instead of 'rel'. 'rel_agg_input' describes the
+ * aggregation input. 'agg_info' must be passed in such a case too.
+ *
+ * XXX When enabling the aggregate push-down for partial paths, we'll need the
+ * function to return the aggregation input paths in a separate list instead
+ * of calling add_partial_path() on them immediately.
  */
 static List *
 build_index_paths(PlannerInfo *root, RelOptInfo *rel,
@@ -861,7 +963,9 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				  bool useful_predicate,
 				  ScanTypeControl scantype,
 				  bool *skip_nonnative_saop,
-				  bool *skip_lower_saop)
+				  bool *skip_lower_saop,
+				  RelOptInfo *rel_grouped,
+				  RelAggInfo *agg_info)
 {
 	List	   *result = NIL;
 	IndexPath  *ipath;
@@ -878,6 +982,12 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	bool		index_is_ordered;
 	bool		index_only_scan;
 	int			indexcol;
+	bool		include_partial;
+
+	/*
+	 * Grouped partial paths are not supported yet.
+	 */
+	include_partial = rel_grouped == NULL;
 
 	/*
 	 * Check that index supports the desired scan type(s)
@@ -1047,14 +1157,16 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 								  index_only_scan,
 								  outer_relids,
 								  loop_count,
-								  false);
+								  false,
+								  rel_grouped,
+								  agg_info);
 		result = lappend(result, ipath);
 
 		/*
 		 * If appropriate, consider parallel index scan.  We don't allow
 		 * parallel index scan for bitmap index scans.
 		 */
-		if (index->amcanparallel &&
+		if (include_partial && index->amcanparallel &&
 			rel->consider_parallel && outer_relids == NULL &&
 			scantype != ST_BITMAPSCAN)
 		{
@@ -1070,7 +1182,9 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									  index_only_scan,
 									  outer_relids,
 									  loop_count,
-									  true);
+									  true,
+									  rel_grouped,
+									  agg_info);
 
 			/*
 			 * if, after costing the path, we find that it's not worth using
@@ -1104,11 +1218,13 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									  index_only_scan,
 									  outer_relids,
 									  loop_count,
-									  false);
+									  false,
+									  rel_grouped,
+									  agg_info);
 			result = lappend(result, ipath);
 
 			/* If appropriate, consider parallel index scan */
-			if (index->amcanparallel &&
+			if (include_partial && index->amcanparallel &&
 				rel->consider_parallel && outer_relids == NULL &&
 				scantype != ST_BITMAPSCAN)
 			{
@@ -1122,7 +1238,9 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 										  index_only_scan,
 										  outer_relids,
 										  loop_count,
-										  true);
+										  true,
+										  rel_grouped,
+										  agg_info);
 
 				/*
 				 * if, after costing the path, we find that it's not worth
@@ -1243,6 +1361,8 @@ build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 									   index, &clauseset,
 									   useful_predicate,
 									   ST_BITMAPSCAN,
+									   NULL,
+									   NULL,
 									   NULL,
 									   NULL);
 		result = list_concat(result, indexpaths);

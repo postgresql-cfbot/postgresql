@@ -887,6 +887,18 @@ use_physical_tlist(PlannerInfo *root, Path *path, int flags)
 		}
 	}
 
+	/*
+	 * If aggregate was pushed down, the target can contain aggregates. The
+	 * original target must be preserved then.
+	 */
+	foreach(lc, path->pathtarget->exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		if (IsA(expr, Aggref))
+			return false;
+	}
+
 	return true;
 }
 

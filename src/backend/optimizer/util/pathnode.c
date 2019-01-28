@@ -3411,6 +3411,7 @@ LimitPath *
 create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 				  Path *subpath,
 				  Node *limitOffset, Node *limitCount,
+				  LimitOption limitOption,
 				  int64 offset_est, int64 count_est)
 {
 	LimitPath  *pathnode = makeNode(LimitPath);
@@ -3432,6 +3433,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->subpath = subpath;
 	pathnode->limitOffset = limitOffset;
 	pathnode->limitCount = limitCount;
+	pathnode->limitOption = limitOption;
 
 	/*
 	 * Adjust the output rows count and costs according to the offset/limit.
@@ -3473,6 +3475,20 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 			count_rows = (double) count_est;
 		else
 			count_rows = clamp_row_est(subpath->rows * 0.10);
+		if (limitOption == WITH_TIES)
+		{
+			double	numGroups;
+			double	avgGroupSize;
+			List	*groupExprs;
+
+			groupExprs = get_sortgrouplist_exprs(root->parse->sortClause,
+												  root->parse->targetList);
+
+			numGroups = estimate_num_groups(root, groupExprs, subpath->rows,
+											NULL);
+			avgGroupSize = subpath->rows / numGroups;
+			count_rows = Max(avgGroupSize, count_est + (avgGroupSize/2));
+		}
 		if (count_rows > pathnode->path.rows)
 			count_rows = pathnode->path.rows;
 		if (subpath->rows > 0)

@@ -2155,7 +2155,9 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 
 		plan = (Plan *) make_limit(plan,
 								   subparse->limitOffset,
-								   subparse->limitCount);
+								   subparse->limitCount,
+								   subparse->limitOption,
+								   0, NULL, NULL);
 
 		/* Must apply correct cost/width data to Limit node */
 		plan->startup_cost = mminfo->path->startup_cost;
@@ -2454,13 +2456,40 @@ create_limit_plan(PlannerInfo *root, LimitPath *best_path, int flags)
 {
 	Limit	   *plan;
 	Plan	   *subplan;
+	int			numsortkeys = 0;
+	AttrNumber *sortColIdx = NULL;
+	Oid		   *sortOperators = NULL;
 
 	/* Limit doesn't project, so tlist requirements pass through */
 	subplan = create_plan_recurse(root, best_path->subpath, flags);
 
+	if (best_path->limitOption == WITH_TIES)
+	{
+		Query	   *parse = root->parse;
+		ListCell   *l;
+
+		numsortkeys = list_length(parse->sortClause);
+		sortColIdx = (AttrNumber *) palloc(numsortkeys * sizeof(AttrNumber));
+		sortOperators = (Oid *) palloc(numsortkeys * sizeof(Oid));
+
+		numsortkeys = 0;
+		foreach(l, parse->sortClause)
+		{
+			SortGroupClause *sortcl = (SortGroupClause *) lfirst(l);
+			TargetEntry *tle = get_sortgroupclause_tle(sortcl, parse->targetList);
+
+			sortColIdx[numsortkeys] = tle->resno;
+			sortOperators[numsortkeys] = sortcl->eqop;
+			numsortkeys++;
+		}
+
+	}
+
 	plan = make_limit(subplan,
 					  best_path->limitOffset,
-					  best_path->limitCount);
+					  best_path->limitCount,
+					  best_path->limitOption,
+					  numsortkeys, sortColIdx, sortOperators);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -6325,7 +6354,8 @@ make_lockrows(Plan *lefttree, List *rowMarks, int epqParam)
  *	  Build a Limit plan node
  */
 Limit *
-make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount)
+make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount, LimitOption limitOption,
+			int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators)
 {
 	Limit	   *node = makeNode(Limit);
 	Plan	   *plan = &node->plan;
@@ -6337,6 +6367,10 @@ make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount)
 
 	node->limitOffset = limitOffset;
 	node->limitCount = limitCount;
+	node->limitOption = limitOption;
+	node->numCols = ordNumCols;
+	node->uniqColIdx = ordColIdx;
+	node->uniqOperators = ordOperators;
 
 	return node;
 }

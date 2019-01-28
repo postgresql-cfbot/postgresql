@@ -186,18 +186,18 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT 50 phv, * FROM prt1 WHERE prt1.b = 0)
 -- Join with pruned partitions from joining relations
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.a < 450 AND t2.b > 250 AND t1.b = 0 ORDER BY t1.a, t2.b;
-                        QUERY PLAN                         
------------------------------------------------------------
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
  Sort
    Sort Key: t1.a
    ->  Append
          ->  Hash Join
                Hash Cond: (t2.b = t1.a)
                ->  Seq Scan on prt2_p2 t2
-                     Filter: (b > 250)
+                     Filter: ((b > 250) AND (b < 450))
                ->  Hash
                      ->  Seq Scan on prt1_p2 t1
-                           Filter: ((a < 450) AND (b = 0))
+                           Filter: ((a < 450) AND (a > 250) AND (b = 0))
 (10 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.a < 450 AND t2.b > 250 AND t1.b = 0 ORDER BY t1.a, t2.b;

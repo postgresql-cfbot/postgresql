@@ -3149,7 +3149,7 @@ where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
          Join Filter: ((0) = i1.f1)
          ->  Nested Loop
                ->  Nested Loop
-                     Join Filter: ((11 < 42) AND ((1) = (1)))
+                     Join Filter: ((1) = (1))
                      ->  Result
                      ->  Result
                ->  Index Scan using tenk1_unique2 on tenk1 t1
@@ -5931,22 +5931,23 @@ where exists (select 1 from tenk1 t3
 ---------------------------------------------------------------------------------
  Nested Loop
    Output: t1.unique1, t2.hundred
-   ->  Nested Loop
+   ->  Hash Join
          Output: t1.unique1, t3.tenthous
-         Join Filter: (t1.unique1 = t3.thousand)
-         ->  Index Only Scan using onek_unique1 on public.onek t1
-               Output: t1.unique1
-               Index Cond: (t1.unique1 < 1)
+         Hash Cond: (t3.thousand = t1.unique1)
          ->  HashAggregate
                Output: t3.thousand, t3.tenthous
                Group Key: t3.thousand, t3.tenthous
                ->  Index Only Scan using tenk1_thous_tenthous on public.tenk1 t3
                      Output: t3.thousand, t3.tenthous
-                     Index Cond: (t3.thousand < 1)
+         ->  Hash
+               Output: t1.unique1
+               ->  Index Only Scan using onek_unique1 on public.onek t1
+                     Output: t1.unique1
+                     Index Cond: (t1.unique1 < 1)
    ->  Index Only Scan using tenk1_hundred on public.tenk1 t2
          Output: t2.hundred
          Index Cond: (t2.hundred = t3.tenthous)
-(17 rows)
+(18 rows)
 
 -- ... unless it actually is unique
 create table j3 as select unique1, tenthous from onek;
@@ -5964,17 +5965,16 @@ where exists (select 1 from j3
    Output: t1.unique1, t2.hundred
    ->  Nested Loop
          Output: t1.unique1, j3.tenthous
-         Join Filter: (t1.unique1 = j3.unique1)
          ->  Index Only Scan using onek_unique1 on public.onek t1
                Output: t1.unique1
                Index Cond: (t1.unique1 < 1)
          ->  Index Only Scan using j3_unique1_tenthous_idx on public.j3
                Output: j3.unique1, j3.tenthous
-               Index Cond: (j3.unique1 < 1)
+               Index Cond: (j3.unique1 = t1.unique1)
    ->  Index Only Scan using tenk1_hundred on public.tenk1 t2
          Output: t2.hundred
          Index Cond: (t2.hundred = j3.tenthous)
-(14 rows)
+(13 rows)
 
 drop table j3;
 --

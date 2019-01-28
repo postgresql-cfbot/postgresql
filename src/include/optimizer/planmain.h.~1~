@@ -101,7 +101,6 @@ extern RestrictInfo *build_implied_join_equality(Oid opno,
 							Relids nullable_relids,
 							Index security_level);
 extern void match_foreign_keys_to_quals(PlannerInfo *root);
-extern void generate_implied_quals(PlannerInfo *root);
 
 /*
  * prototypes for plan/analyzejoins.c

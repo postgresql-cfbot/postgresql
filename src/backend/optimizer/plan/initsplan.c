@@ -78,6 +78,15 @@ static bool check_redundant_nullability_qual(PlannerInfo *root, Node *clause);
 static void check_mergejoinable(RestrictInfo *restrictinfo);
 static void check_hashjoinable(RestrictInfo *restrictinfo);
 
+static bool subexpression_matching_walker(Node *hayStack, void *context);
+static bool subexpression_match(Expr *expr1, Expr *expr2);
+static Node *replace_expression_mutator(Node *node, void *context);
+static bool op_in_eclass_opfamily(Oid opno, EquivalenceClass *eclass);
+static void gen_implied_qual(PlannerInfo *root,
+				 RestrictInfo *old_rinfo,
+				 Node *old_expr,
+				 Node *new_expr);
+static void gen_implied_quals(PlannerInfo *root, RestrictInfo *rinfo);
 
 /*****************************************************************************
  *
@@ -2019,6 +2028,14 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 
 	/* No EC special case applies, so push it into the clause lists */
 	distribute_restrictinfo_to_rels(root, restrictinfo);
+
+	/*
+	 * The predicate propagation code (gen_implied_quals()) might be able to
+	 * derive other clauses from this, though, so remember this qual for later.
+	 * (We cannot do predicate propagation yet, because we haven't built all
+	 * the equivalence classes yet.)
+	 */
+	root->non_eq_clauses = lappend(root->non_eq_clauses, restrictinfo);
 }
 
 /*
@@ -2586,6 +2603,379 @@ match_foreign_keys_to_quals(PlannerInfo *root)
 	}
 	/* Replace fkey_list, thereby discarding any useless entries */
 	root->fkey_list = newlist;
+}
+
+/*
+ * Structs and Methods to support searching of matching subexpressions.
+ */
+typedef struct subexpression_matching_context
+{
+	Expr *needle;	/* This is the expression being searched */
+} subexpression_matching_context;
+
+/*
+ * subexpression_matching_walker
+ *	  Check if the expression 'needle' in context is a sub-expression
+ *	  of hayStack.
+ */
+static bool
+subexpression_matching_walker(Node *hayStack, void *context)
+{
+	subexpression_matching_context *ctx =
+		(subexpression_matching_context *) context;
+
+	Assert(context);
+	Assert(ctx->needle);
+
+	if (!hayStack)
+	{
+		return false;
+	}
+
+	if (equal(ctx->needle, hayStack))
+	{
+		return true;
+	}
+
+	return expression_tree_walker(hayStack,
+					subexpression_matching_walker,
+					(void *) context);
+}
+
+/*
+ * subexpression_match
+ *	  Check if expr1 is a subexpression of expr2.
+ *	  For example, expr1 = (x + 2) and expr2 = (x + 2 ) * 100 + 20 would
+ *	  return true.
+ */
+static bool
+subexpression_match(Expr *expr1, Expr *expr2)
+{
+	subexpression_matching_context ctx;
+	ctx.needle = expr1;
+	return subexpression_matching_walker((Node *) expr2, (void *) &ctx);
+}
+
+/*
+ * Structs and Methods to support replacing expressions.
+ */
+typedef struct
+{
+	Node *replaceThis;
+	Node *withThis;
+	int numReplacementsDone;
+} ReplaceExpressionMutatorReplacement;
+
+/*
+ * replace_expression_mutator
+ *	  Copy an expression tree, but replace all occurrences of one node with
+ *	  another.
+ *
+ *	  The replacement is passed in the context as a pointer to
+ *	  ReplaceExpressionMutatorReplacement
+ *
+ *	  context should be ReplaceExpressionMutatorReplacement*
+ */
+static Node *
+replace_expression_mutator(Node *node, void *context)
+{
+	ReplaceExpressionMutatorReplacement *repl;
+
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, RestrictInfo))
+	{
+		RestrictInfo *info = (RestrictInfo *) node;
+
+		return replace_expression_mutator((Node *) info->clause, context);
+	}
+
+	repl = (ReplaceExpressionMutatorReplacement *) context;
+	if (equal(node, repl->replaceThis))
+	{
+		repl->numReplacementsDone++;
+		return copyObject(repl->withThis);
+	}
+	return expression_tree_mutator(node,
+					replace_expression_mutator,
+					(void *) context);
+}
+
+/*
+ * op_in_eclass_opfamily
+ *		Return true iff operator 'opno' is in eclass's operator family.
+ *
+ * This function only considers search operators, not ordering operators.
+ */
+static bool
+op_in_eclass_opfamily(Oid opno, EquivalenceClass *eclass)
+{
+	ListCell	*lc;
+
+	foreach(lc, eclass->ec_opfamilies)
+	{
+		Oid		opfamily = lfirst_oid(lc);
+
+		if (op_in_opfamily(opno, opfamily))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Generate implied qual
+ * Input:
+ *	root - planner information
+ *	old_rinfo - old clause to infer from
+ *	old_expr - the expression to be replaced
+ *	new_expr - new expression replacing it
+ */
+static void
+gen_implied_qual(PlannerInfo *root,
+				 RestrictInfo *old_rinfo,
+				 Node *old_expr,
+				 Node *new_expr)
+{
+	Node	   *new_clause;
+	ReplaceExpressionMutatorReplacement ctx;
+	Relids		new_qualscope;
+	ListCell   *lc;
+	RestrictInfo *new_rinfo;
+
+	/* Expression types must match */
+	Assert(exprType(old_expr) == exprType(new_expr)
+		   && exprTypmod(old_expr) == exprTypmod(new_expr));
+
+	/*
+	 * Clone the clause, replacing first node with the second.
+	 */
+	ctx.replaceThis = old_expr;
+	ctx.withThis = new_expr;
+	ctx.numReplacementsDone = 0;
+	new_clause = (Node *) replace_expression_mutator((Node *) old_rinfo->clause, &ctx);
+
+	if (ctx.numReplacementsDone == 0)
+		return;
+
+	new_qualscope = pull_varnos(new_clause);
+	if (new_qualscope == NULL)
+		return;
+
+	if (subexpression_match((Expr *) new_expr, old_rinfo->clause))
+		return;
+
+	/* No inferences may be performed across an outer join */
+	if (old_rinfo->outer_relids != NULL)
+		return;
+
+	/*
+	 * Have we seen this clause before? This is needed to avoid infinite
+	 * recursion.
+	 */
+	foreach(lc, root->non_eq_clauses)
+	{
+		RestrictInfo *r = (RestrictInfo *) lfirst(lc);
+
+		if (equal(r->clause, new_clause))
+			return;
+	}
+
+	/*
+	 * Ok, we're good to go. Construct a new RestrictInfo, and pass it to
+	 * distribute_qual_to_rels().
+	 */
+	new_rinfo = make_restrictinfo((Expr *) new_clause,
+								  old_rinfo->is_pushed_down,
+								  old_rinfo->outerjoin_delayed,
+								  old_rinfo->pseudoconstant,
+								  old_rinfo->security_level,
+								  new_qualscope,
+								  old_rinfo->outer_relids,
+								  old_rinfo->nullable_relids);
+
+	check_mergejoinable(new_rinfo);
+	check_hashjoinable(new_rinfo);
+
+	/*
+	 * If it's a join clause (either naturally, or because delayed by
+	 * outer-join rules), add vars used in the clause to targetlists of their
+	 * relations, so that they will be emitted by the plan nodes that scan
+	 * those relations (else they won't be available at the join node!).
+	 */
+	if (bms_membership(new_qualscope) == BMS_MULTIPLE)
+	{
+		List	   *vars = pull_var_clause(new_clause,
+										   PVC_RECURSE_AGGREGATES |
+										   PVC_INCLUDE_PLACEHOLDERS);
+
+		add_vars_to_targetlist(root, vars, new_qualscope, false);
+		list_free(vars);
+	}
+
+	/*
+	 * If the clause has a mergejoinable operator, set the EquivalenceClass
+	 * links. Otherwise, a mergejoinable operator with NULL left_ec/right_ec
+	 * will cause update_mergeclause_eclasses fails at assertion.
+	 */
+	if (new_rinfo->mergeopfamilies)
+		initialize_mergeclause_eclasses(root, new_rinfo);
+
+	distribute_restrictinfo_to_rels(root, new_rinfo);
+}
+
+/*
+ * gen_implied_quals
+ *	  Generate all qualifications that are implied by the given RestrictInfo and
+ *	  the equivalence classes.
+
+ * Input:
+ * - root: planner info structure
+ * - rinfo: clause to derive more quals from.
+ */
+static void
+gen_implied_quals(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	Expr	   *clause = rinfo->clause;
+	Oid			opno,
+				collation,
+				item1_type,
+				item2_type;
+	Expr	   *item1;
+	Expr	   *item2;
+	ListCell   *lcec;
+
+	/* Reject if it is potentially postponable by security considerations */
+	if (rinfo->security_level > 0 && !rinfo->leakproof)
+		return;
+
+	if (rinfo->pseudoconstant)
+		return;
+	if (contain_volatile_functions((Node *) clause) ||
+		contain_subplans((Node *) clause))
+		return;
+
+	if (is_opclause(clause))
+	{
+		if (list_length(((OpExpr *) clause)->args) != 2)
+			return;
+		opno = ((OpExpr *) clause)->opno;
+		collation = ((OpExpr *) clause)->inputcollid;
+		item1 = (Expr *) get_leftop(clause);
+		item2 = (Expr *) get_rightop(clause);
+	}
+	else if (clause && IsA(clause, ScalarArrayOpExpr))
+	{
+		if (list_length(((ScalarArrayOpExpr *) clause)->args) != 2)
+			return;
+		opno = ((ScalarArrayOpExpr *) clause)->opno;
+		collation = ((ScalarArrayOpExpr *) clause)->inputcollid;
+		item1 = (Expr *) get_leftscalararrayop(clause);
+		item2 = (Expr *) get_rightscalararrayop(clause);
+	}
+	else
+		return;
+
+	item1 = canonicalize_ec_expression(item1,
+									   exprType((Node *) item1),
+									   collation);
+	item2 = canonicalize_ec_expression(item2,
+									   exprType((Node *) item2),
+									   collation);
+	op_input_types(opno, &item1_type, &item2_type);
+
+	/*
+	 * Find every equivalence class that's relevant for this RestrictInfo.
+	 *
+	 * Relevant means that some member of the equivalence class appears in the
+	 * clause, that we can replace it with another member.
+	 */
+	foreach(lcec, root->eq_classes)
+	{
+		EquivalenceClass *eclass = (EquivalenceClass *) lfirst(lcec);
+		ListCell   *lcem1;
+
+		/*
+		 * Only generate derived clauses using operators from the same operator
+		 * family.
+		 */
+		if (!op_in_eclass_opfamily(opno, eclass))
+			continue;
+
+		/* Single-member ECs won't generate any deductions */
+		if (list_length(eclass->ec_members) <= 1)
+			continue;
+
+		if (!bms_overlap(eclass->ec_relids, rinfo->clause_relids))
+			continue;
+
+		foreach(lcem1, eclass->ec_members)
+		{
+			EquivalenceMember *em1 = (EquivalenceMember *) lfirst(lcem1);
+			ListCell   *lcem2;
+
+			if (!bms_overlap(em1->em_relids, rinfo->clause_relids))
+				continue;
+
+			/*
+			 * Skip if this EquivalenceMember does not match neither left expr
+			 * nor right expr.
+			 */
+			if (!((item1_type == em1->em_datatype && equal(item1, em1->em_expr)) ||
+					(item2_type == em1->em_datatype && equal(item2, em1->em_expr))))
+				continue;
+
+			/* now try to apply to others in the equivalence class */
+			foreach(lcem2, eclass->ec_members)
+			{
+				EquivalenceMember *em2 = (EquivalenceMember *) lfirst(lcem2);
+
+				if (em2 == em1)
+					continue;
+
+				if (exprType((Node *) em1->em_expr) == exprType((Node *) em2->em_expr)
+					&& exprTypmod((Node *) em1->em_expr) == exprTypmod((Node *) em2->em_expr))
+				{
+					gen_implied_qual(root,
+									 rinfo,
+									 (Node *) em1->em_expr,
+									 (Node *) em2->em_expr);
+				}
+			}
+		}
+	}
+}
+
+/*
+ * generate_implied_quals
+ *	  Generate all qualifications that are implied by the RestrictInfo in
+ *	  root->non_eq_clauses and the equivalence classes.
+ *
+ *	  Note that we require types to be the same.  We could try converting them
+ *	  (introducing relabel nodes) as long as the conversion is a widening
+ *	  conversion (clause on int4 can be applied to int2 type by widening the
+ *	  int2 to an int4 when creating the replicated clause)
+ *	  likewise, is varchar(10) vs varchar(50) an issue at this point?
+ */
+void
+generate_implied_quals(PlannerInfo *root)
+{
+	ListCell   *lc;
+
+	if (!enable_predicate_propagation)
+		return;
+
+	foreach(lc, root->non_eq_clauses)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+		gen_implied_quals(root, rinfo);
+
+		/*
+		 * NOTE: gen_implied_quals() can append more quals to the list! We
+		 * will process those as well, as we iterate.
+		 */
+	}
 }
 
 

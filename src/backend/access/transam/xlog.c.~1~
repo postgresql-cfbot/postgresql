@@ -7630,10 +7630,8 @@ StartupXLOG(void)
 		 * the completed version of the same segment later, it will fail. (We
 		 * used to do that in 9.4 and below, and it caused such problems).
 		 *
-		 * As a compromise, we rename the last segment with the new timeline and
-		 * .partial suffix, and archive it. The timeline is added in case there
-		 * are multiple promotions from the same timeline before a stable
-		 * primary emerges.  Archive recovery will never try to read
+		 * As a compromise, we rename the last segment with the .partial
+		 * suffix, and archive it. Archive recovery will never try to read
 		 * .partial segments, so they will normally go unused. But in the odd
 		 * PITR case, the administrator can copy them manually to the pg_wal
 		 * directory (removing the suffix). They can be useful in debugging,
@@ -7661,10 +7659,8 @@ StartupXLOG(void)
 				char		partialpath[MAXPGPATH];
 
 				XLogFilePath(origpath, EndOfLogTLI, endLogSegNo, wal_segment_size);
-				snprintf(partialfname, MAXFNAMELEN, "%s.%08X.partial",
-						 origfname, ThisTimeLineID);
-				snprintf(partialpath, MAXPGPATH, "%s.%08X.partial", origpath,
-						 ThisTimeLineID);
+				snprintf(partialfname, MAXFNAMELEN, "%s.partial", origfname);
+				snprintf(partialpath, MAXPGPATH, "%s.partial", origpath);
 
 				/*
 				 * Make sure there's no .done or .ready file for the .partial

@@ -23,8 +23,6 @@
  */
 #include "postgres.h"
 
-#include <math.h>
-
 #include "access/htup_details.h"
 #include "catalog/pg_statistic_ext.h"
 #include "utils/fmgrprotos.h"
@@ -39,7 +37,6 @@
 static double ndistinct_for_combination(double totalrows, int numrows,
 						  HeapTuple *rows, VacAttrStats **stats,
 						  int k, int *combination);
-static double estimate_ndistinct(double totalrows, int numrows, int d, int f1);
 static int	n_choose_k(int n, int k);
 static int	num_combinations(int n);
 
@@ -509,31 +506,6 @@ ndistinct_for_combination(double totalrows, int numrows, HeapTuple *rows,
 		f1 += 1;
 
 	return estimate_ndistinct(totalrows, numrows, d, f1);
-}
-
-/* The Duj1 estimator (already used in analyze.c). */
-static double
-estimate_ndistinct(double totalrows, int numrows, int d, int f1)
-{
-	double		numer,
-				denom,
-				ndistinct;
-
-	numer = (double) numrows * (double) d;
-
-	denom = (double) (numrows - f1) +
-		(double) f1 * (double) numrows / totalrows;
-
-	ndistinct = numer / denom;
-
-	/* Clamp to sane range in case of roundoff error */
-	if (ndistinct < (double) d)
-		ndistinct = (double) d;
-
-	if (ndistinct > totalrows)
-		ndistinct = totalrows;
-
-	return floor(ndistinct + 0.5);
 }
 
 /*

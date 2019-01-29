@@ -455,7 +455,7 @@ rows = (outer_cardinality * inner_cardinality) * selectivity
    <secondary>multivariate</secondary>
   </indexterm>
 
-  <sect2>
+  <sect2 id="functional-dependencies">
    <title>Functional Dependencies</title>
 
    <para>
@@ -540,7 +540,7 @@ EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 1;
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="multivariate-ndistinct-counts">
    <title>Multivariate N-Distinct Counts</title>
 
    <para>
@@ -585,6 +585,224 @@ EXPLAIN (ANALYZE, TIMING OFF) SELECT COUNT(*) FROM t GROUP BY a, b;
    </para>
 
   </sect2>
+
+  <sect2 id="mcv-lists">
+   <title>MCV lists</title>
+
+   <para>
+    As explained in <xref linkend="functional-dependencies"/>, functional
+    dependencies are very cheap and efficient type of statistics, but their
+    main limitation is their global nature (only tracking dependencies at
+    the column level, not between individual column values).
+   </para>
+
+   <para>
+    This section introduces multivariate variant of <acronym>MCV</acronym>
+    (most-common values) lists, a straightforward extension of the per-column
+    statistics described in <xref linkend="row-estimation-examples"/>. This
+    statistics addresses the limitation by storing individual values, but it
+    is naturally more expensive, both in terms of building the statistics in
+    <command>ANALYZE</command>, storage and planning time.
+   </para>
+
+   <para>
+    Let's look at the query from <xref linkend="functional-dependencies"/>
+    again, but this time with a <acronym>MCV</acronym> list created on the
+    same set of columns (be sure to drop the functional dependencies, to
+    make sure the planner uses the newly created statistics).
+
+<programlisting>
+DROP STATISTICS stts;
+CREATE STATISTICS stts2 (mcv) ON a, b FROM t;
+ANALYZE t;
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 1;
+                                   QUERY PLAN
+-------------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=100 width=8) (actual rows=100 loops=1)
+   Filter: ((a = 1) AND (b = 1))
+   Rows Removed by Filter: 9900
+</programlisting>
+
+    The estimate is as accurate as with the functional dependencies, mostly
+    thanks to the table being fairly small and having a simple distribution
+    with a low number of distinct values. Before looking at the second query,
+    which was not handled by functional dependencies particularly well,
+    let's inspect the <acronym>MCV</acronym> list a bit.
+   </para>
+
+   <para>
+    Inspecting the <acronym>MCV</acronym> list is possible using
+    <function>pg_mcv_list_items</function> set-returning function.
+
+<programlisting>
+SELECT m.* FROM pg_statistic_ext,
+                pg_mcv_list_items(stxmcv) m WHERE stxname = 'stts2';
+ index |  values  | nulls | frequency | base_frequency 
+-------+----------+-------+-----------+----------------
+     0 | {0, 0}   | {f,f} |      0.01 |         0.0001
+     1 | {1, 1}   | {f,f} |      0.01 |         0.0001
+   ...
+    49 | {49, 49} | {f,f} |      0.01 |         0.0001
+    50 | {50, 50} | {f,f} |      0.01 |         0.0001
+   ...
+    97 | {97, 97} | {f,f} |      0.01 |         0.0001
+    98 | {98, 98} | {f,f} |      0.01 |         0.0001
+    99 | {99, 99} | {f,f} |      0.01 |         0.0001
+(100 rows)
+</programlisting>
+
+    Which confirms there are 100 distinct combinations in the two columns,
+    and all of them are about equally likely (1% frequency for each one).
+    The base frequency is the frequency computed from per-column statistics,
+    as if there were no multi-column statistics. Had there been any null
+    values in either of the columns, this would be identified in the
+    <structfield>nulls</structfield> column.
+   </para>
+
+   <para>
+    When estimating the selectivity, the planner applies all the conditions
+    on items in the <acronym>MCV</acronym> list, and then sums the frequencies
+    of the matching ones. See <function>mcv_clauselist_selectivity</function>
+    in <filename>src/backend/statistics/mcv.c</filename> for details.
+   </para>
+
+   <para>
+    Compared to functional dependencies, <acronym>MCV</acronym> lists have two
+    major advantages. Firstly, the list stores actual values, making it possible
+    to decide which combinations are compatible.
+
+<programlisting>
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 10;
+                                 QUERY PLAN
+---------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=1 width=8) (actual rows=0 loops=1)
+   Filter: ((a = 1) AND (b = 10))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+    Secondly, <acronym>MCV</acronym> lists handle a wider range of clause types,
+    not just equality clauses like functional dependencies. See for example the
+    example range query, presented earlier:
+
+<programlisting>
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a &lt;= 49 AND b &gt; 49;
+                                QUERY PLAN
+---------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=1 width=8) (actual rows=0 loops=1)
+   Filter: ((a &lt;= 49) AND (b &gt; 49))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+   </para>
+
+  </sect2>
+
+  <sect2 id="mv-histograms">
+   <title>Histograms</title>
+
+   <para>
+    <acronym>MCV</acronym> lists, introduced in <xref linkend="mcv-lists"/>,
+    work very well for columns with only a few distinct values, and for
+    columns with only few common values. In those cases, <acronym>MCV</acronym>
+    lists are a very accurate approximation of the real distribution.
+    Histograms, briefly described in <xref linkend="row-estimation-examples"/>,
+    are meant to address the high-cardinality case.
+   </para>
+
+   <para>
+    Although the example data we've used in <xref linkend="mcv-lists"/> does
+    not quality as a high-cardinality case, we can try creating a histogram
+    instead of the <acronym>MCV</acronym> list. With the histogram in place,
+    you may get a plan like this:
+
+<programlisting>
+DROP STATISTICS stts2;
+CREATE STATISTICS stts3 (histogram) ON a, b FROM t;
+ANALYZE t;
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 1;
+                                  QUERY PLAN
+-------------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=100 width=8) (actual rows=100 loops=1)
+   Filter: ((a = 1) AND (b = 1))
+   Rows Removed by Filter: 9900
+</programlisting>
+
+    Which seems quite accurate. For other combinations of values the
+    estimates may be worse, as illustrated by the following query:
+
+<programlisting>
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 10;
+                                 QUERY PLAN                                 
+-----------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=100 width=8) (actual rows=0 loops=1)
+   Filter: ((a = 1) AND (b = 10))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+    This happens due to histograms tracking ranges of values, which makes it
+    impossible to decide how tuples with the exact combination of values there
+    are in the bucket.
+   </para>
+
+   <para>
+    It's also possible to build <acronym>MCV</acronym> lists and a histogram, in
+    which case <command>ANALYZE</command> will build a <acronym>MCV</acronym> lists
+    with the most frequent values, and a histogram on the remaining part of the
+    sample.
+
+<programlisting>
+DROP STATISTICS stts3;
+CREATE STATISTICS stts4 (mcv, histogram) ON a, b FROM t;
+ANALYZE t;
+EXPLAIN (ANALYZE, TIMING OFF) SELECT * FROM t WHERE a = 1 AND b = 10;
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Seq Scan on t  (cost=0.00..195.00 rows=1 width=8) (actual rows=0 loops=1)
+   Filter: ((a = 1) AND (b = 10))
+   Rows Removed by Filter: 10000
+</programlisting>
+
+    In this case the <acronym>MCV</acronym> list and histogram are treated as a
+    single composed statistics.
+   </para>
+
+   <para>
+    Similarly to <acronym>MCV</acronym> lists, it is possible to inspect
+    histograms using a function called <function>pg_histogram_buckets</function>,
+    which simply lists buckets of a histogram, along with information about
+    boundaries, frequencies, volume etc. When applied to the histogram from
+    <varname>stts3</varname>, you should get something like this:
+
+<programlisting>
+SELECT m.* FROM pg_statistic_ext,
+                pg_histogram_buckets(stxhistogram) m WHERE stxname = 'stts3';
+ index | minvals | maxvals | nullsonly | mininclusive | maxinclusive | frequency | density  | bucket_volume 
+-------+---------+---------+-----------+--------------+--------------+-----------+----------+---------------
+     0 | {0,0}   | {3,1}   | {f,f}     | {t,t}        | {f,f}        |      0.01 |    2.635 |      0.003795
+     1 | {50,0}  | {99,51} | {f,f}     | {t,t}        | {t,f}        |      0.01 | 0.034444 |      0.290323
+     2 | {0,25}  | {26,37} | {f,f}     | {t,t}        | {f,f}        |      0.01 | 0.292778 |      0.034156
+...
+    61 | {60,56} | {99,62} | {f,f}     | {t,t}        | {t,f}        |      0.02 | 0.752857 |      0.026565
+    62 | {35,25} | {50,37} | {f,f}     | {t,t}        | {f,f}        |      0.02 | 0.878333 |       0.02277
+    63 | {81,85} | {87,99} | {f,f}     | {t,t}        | {f,t}        |      0.02 | 1.756667 |      0.011385
+(64 rows)
+</programlisting>
+
+    Which shows that there are 64 buckets, with frequencies ranging between 1%
+    and 2%. The <structfield>minvals</structfield> and <structfield>maxvals</structfield>
+    show the bucket boundaries, <structfield>nullsonly</structfield> shows which
+    columns contain only null values (in the given bucket).
+   </para>
+
+   <para>
+    Similarly to <acronym>MCV</acronym> lists, the planner applies all conditions
+    to the buckets, and sums the frequencies of the matching ones. For details,
+    see <function>histogram_clauselist_selectivity</function> function in
+    <filename>src/backend/statistics/histogram.c</filename>.
+   </para>
+
+  </sect2>
+
  </sect1>
 
  <sect1 id="planner-stats-security">

@@ -1125,6 +1125,17 @@ LANGUAGE INTERNAL
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'jsonb_insert';
 
+CREATE OR REPLACE FUNCTION
+  pg_histogram_buckets(histogram pg_histogram, otype integer DEFAULT 0,
+            OUT index integer, OUT minvals text[], OUT maxvals text[],
+            OUT nullsonly boolean[], OUT mininclusive boolean[],
+            OUT maxinclusive boolean[], OUT frequency double precision,
+            OUT density double precision, OUT bucket_volume double precision)
+RETURNS SETOF record
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'pg_histogram_buckets';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

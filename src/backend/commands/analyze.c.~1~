@@ -1751,6 +1751,12 @@ static void compute_scalar_stats(VacAttrStatsP stats,
 					 double totalrows);
 static int	compare_scalars(const void *a, const void *b, void *arg);
 static int	compare_mcvs(const void *a, const void *b);
+static int analyze_mcv_list(int *mcv_counts,
+				 int num_mcv,
+				 double stadistinct,
+				 double stanullfrac,
+				 int samplerows,
+				 double totalrows);
 
 
 /*
@@ -2847,7 +2853,7 @@ compare_mcvs(const void *a, const void *b)
  * number that are significantly more common than the values not in the list,
  * and which are therefore deemed worth storing in the table's MCV list.
  */
-int
+static int
 analyze_mcv_list(int *mcv_counts,
 				 int num_mcv,
 				 double stadistinct,

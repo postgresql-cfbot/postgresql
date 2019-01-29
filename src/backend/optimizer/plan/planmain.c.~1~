@@ -223,18 +223,13 @@ query_planner(PlannerInfo *root, List *tlist,
 	 * jointree preprocessing, but the necessary information isn't available
 	 * until we've built baserel data structures and classified qual clauses.
 	 */
-	joinlist = remove_useless_left_joins(root, joinlist);
+	joinlist = remove_useless_joins(root, joinlist);
 
 	/*
 	 * Also, reduce any semijoins with unique inner rels to plain inner joins.
 	 * Likewise, this can't be done until now for lack of needed info.
 	 */
 	reduce_unique_semijoins(root);
-
-	/*
-	 * Remove self joins on a unique column.
-	 */
-	remove_useless_self_joins(root, &joinlist, tlist);
 
 	/*
 	 * Now distribute "placeholders" to base rels as needed.  This has to be

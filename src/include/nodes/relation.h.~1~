@@ -514,10 +514,8 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * populate these fields, for base rels; but someday they might be used for
  * join rels too:
  *
- *		unique_for_rels - list of (Relids, UniqueIndexInfo*) lists, where Relids
- * 					is a set of other rels for which this one has been proven
- *					unique, and UniqueIndexInfo* stores information about the
- * 					index that makes it unique,	if any.
+ *		unique_for_rels - list of Relid sets, each one being a set of other
+ *					rels for which this one has been proven unique
  *		non_unique_for_rels - list of Relid sets, each one being a set of
  *					other rels for which we have tried and failed to prove
  *					this one unique

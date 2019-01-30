@@ -28,6 +28,8 @@ static bool auto_explain_log_verbose = false;
 static bool auto_explain_log_buffers = false;
 static bool auto_explain_log_triggers = false;
 static bool auto_explain_log_timing = true;
+static bool auto_explain_log_costs = true;
+static bool auto_explain_log_duration = true;
 static int	auto_explain_log_format = EXPLAIN_FORMAT_TEXT;
 static int	auto_explain_log_level = LOG;
 static bool auto_explain_log_nested_statements = false;
@@ -144,6 +146,29 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
+
+	DefineCustomBoolVariable("auto_explain.log_costs",
+							 "Include costs in plans.",
+							 NULL,
+							 &auto_explain_log_costs,
+							 true,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomBoolVariable("auto_explain.log_duration",
+							 "Log the duration of the query.",
+							 NULL,
+							 &auto_explain_log_duration,
+							 true,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 
 	DefineCustomEnumVariable("auto_explain.log_format",
 							 "EXPLAIN format to be used for plan logging.",
@@ -356,6 +381,7 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			es->timing = (es->analyze && auto_explain_log_timing);
 			es->summary = es->analyze;
 			es->format = auto_explain_log_format;
+			es->costs = auto_explain_log_costs;
 
 			ExplainBeginOutput(es);
 			ExplainQueryText(es, queryDesc);
@@ -383,10 +409,15 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			 * reported.  This isn't ideal but trying to do it here would
 			 * often result in duplication.
 			 */
-			ereport(auto_explain_log_level,
-					(errmsg("duration: %.3f ms  plan:\n%s",
-							msec, es->str->data),
-					 errhidestmt(true)));
+			if (auto_explain_log_duration)
+				ereport(auto_explain_log_level,
+						(errmsg("duration: %.3f ms  plan:\n%s",
+								msec, es->str->data),
+						 errhidestmt(true)));
+			else
+				ereport(auto_explain_log_level,
+						(errmsg("plan:\n%s", es->str->data),
+						 errhidestmt(true)));
 
 			pfree(es->str->data);
 		}

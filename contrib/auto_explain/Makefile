@@ -4,6 +4,8 @@ MODULE_big = auto_explain
 OBJS = auto_explain.o $(WIN32RES)
 PGFILEDESC = "auto_explain - logging facility for execution plans"
 
+REGRESS = auto_explain
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

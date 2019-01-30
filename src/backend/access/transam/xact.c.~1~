@@ -5302,7 +5302,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	 * Check if the caller would like to ask standbys for immediate feedback
 	 * once this commit is applied.
 	 */
-	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY || synchronous_replay)
+	if (synchronous_commit >= SYNCHRONOUS_COMMIT_REMOTE_APPLY)
 		xl_xinfo.xinfo |= XACT_COMPLETION_APPLY_FEEDBACK;
 
 	/*

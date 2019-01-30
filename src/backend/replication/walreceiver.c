@@ -58,6 +58,7 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
@@ -140,9 +141,10 @@ static void WalRcvDie(int code, Datum arg);
 static void XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len);
 static void XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr);
 static void XLogWalRcvFlush(bool dying);
-static void XLogWalRcvSendReply(bool force, bool requestReply);
+static void XLogWalRcvSendReply(bool force, bool requestReply, int64 replyTo);
 static void XLogWalRcvSendHSFeedback(bool immed);
-static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
+static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime,
+								  TimestampTz *syncReplayLease);
 
 /* Signal handlers */
 static void WalRcvSigHupHandler(SIGNAL_ARGS);
@@ -476,7 +478,7 @@ WalReceiverMain(void)
 					}
 
 					/* Let the master know that we received some data. */
-					XLogWalRcvSendReply(false, false);
+					XLogWalRcvSendReply(false, false, -1);
 
 					/*
 					 * If we've written some records, flush them to disk and
@@ -521,7 +523,7 @@ WalReceiverMain(void)
 						 */
 						walrcv->force_reply = false;
 						pg_memory_barrier();
-						XLogWalRcvSendReply(true, false);
+						XLogWalRcvSendReply(true, false, -1);
 					}
 				}
 				if (rc & WL_TIMEOUT)
@@ -570,7 +572,7 @@ WalReceiverMain(void)
 						}
 					}
 
-					XLogWalRcvSendReply(requestReply, requestReply);
+					XLogWalRcvSendReply(requestReply, requestReply, -1);
 					XLogWalRcvSendHSFeedback(false);
 				}
 			}
@@ -862,6 +864,8 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 	XLogRecPtr	walEnd;
 	TimestampTz sendTime;
 	bool		replyRequested;
+	TimestampTz syncReplayLease;
+	int64		messageNumber;
 
 	resetStringInfo(&incoming_message);
 
@@ -881,7 +885,7 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 				dataStart = pq_getmsgint64(&incoming_message);
 				walEnd = pq_getmsgint64(&incoming_message);
 				sendTime = pq_getmsgint64(&incoming_message);
-				ProcessWalSndrMessage(walEnd, sendTime);
+				ProcessWalSndrMessage(walEnd, sendTime, NULL);
 
 				buf += hdrlen;
 				len -= hdrlen;
@@ -891,7 +895,8 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 		case 'k':				/* Keepalive */
 			{
 				/* copy message to StringInfo */
-				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(char);
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int64) +
+					sizeof(char) + sizeof(int64);
 				if (len != hdrlen)
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -899,15 +904,17 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
 
 				/* read the fields */
+				messageNumber = pq_getmsgint64(&incoming_message);
 				walEnd = pq_getmsgint64(&incoming_message);
 				sendTime = pq_getmsgint64(&incoming_message);
 				replyRequested = pq_getmsgbyte(&incoming_message);
+				syncReplayLease = pq_getmsgint64(&incoming_message);
 
-				ProcessWalSndrMessage(walEnd, sendTime);
+				ProcessWalSndrMessage(walEnd, sendTime, &syncReplayLease);
 
 				/* If the primary requested a reply, send one immediately */
 				if (replyRequested)
-					XLogWalRcvSendReply(true, false);
+					XLogWalRcvSendReply(true, false, messageNumber);
 				break;
 			}
 		default:
@@ -1070,7 +1077,7 @@ XLogWalRcvFlush(bool dying)
 		/* Also let the master know that we made some progress */
 		if (!dying)
 		{
-			XLogWalRcvSendReply(false, false);
+			XLogWalRcvSendReply(false, false, -1);
 			XLogWalRcvSendHSFeedback(false);
 		}
 	}
@@ -1088,9 +1095,12 @@ XLogWalRcvFlush(bool dying)
  * If 'requestReply' is true, requests the server to reply immediately upon
  * receiving this message. This is used for heartbearts, when approaching
  * wal_receiver_timeout.
+ *
+ * If this is a reply to a specific message from the upstream server, then
+ * 'replyTo' should include the message number, otherwise -1.
  */
 static void
-XLogWalRcvSendReply(bool force, bool requestReply)
+XLogWalRcvSendReply(bool force, bool requestReply, int64 replyTo)
 {
 	static XLogRecPtr writePtr = 0;
 	static XLogRecPtr flushPtr = 0;
@@ -1137,6 +1147,7 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	pq_sendint64(&reply_message, applyPtr);
 	pq_sendint64(&reply_message, GetCurrentTimestamp());
 	pq_sendbyte(&reply_message, requestReply ? 1 : 0);
+	pq_sendint64(&reply_message, replyTo);
 
 	/* Send it */
 	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X%s",
@@ -1269,14 +1280,55 @@ XLogWalRcvSendHSFeedback(bool immed)
  * Update shared memory status upon receiving a message from primary.
  *
  * 'walEnd' and 'sendTime' are the end-of-WAL and timestamp of the latest
- * message, reported by primary.
+ * message, reported by primary.  'syncReplayLease' is a pointer to the time
+ * the primary promises that this standby can safely claim to be causally
+ * consistent, to 0 if it cannot, or a NULL pointer for no change.
  */
 static void
-ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)
+ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime,
+					  TimestampTz *syncReplayLease)
 {
 	WalRcvData *walrcv = WalRcv;
 
 	TimestampTz lastMsgReceiptTime = GetCurrentTimestamp();
+
+	/* Sanity check for the syncReplayLease time. */
+	if (syncReplayLease != NULL && *syncReplayLease != 0)
+	{
+		/*
+		 * Deduce max_clock_skew from the syncReplayLease and sendTime since
+		 * we don't have access to the primary's GUC.  The primary already
+		 * substracted 25% from synchronous_replay_lease_time to represent
+		 * max_clock_skew, so we have 75%.  A third of that will give us 25%.
+		 */
+		int64 diffMillis = (*syncReplayLease - sendTime) / 1000;
+		int64 max_clock_skew = diffMillis / 3;
+		if (sendTime > TimestampTzPlusMilliseconds(lastMsgReceiptTime,
+												   max_clock_skew))
+		{
+			/*
+			 * The primary's clock is more than max_clock_skew + network
+			 * latency ahead of the standby's clock.  (If the primary's clock
+			 * is more than max_clock_skew ahead of the standby's clock, but
+			 * by less than the network latency, then there isn't much we can
+			 * do to detect that; but it still seems useful to have this basic
+			 * sanity check for wildly misconfigured servers.)
+			 */
+			ereport(LOG,
+					(errmsg("the primary server's clock time is too far ahead for synchronous_replay"),
+					 errhint("Check your servers' NTP configuration or equivalent.")));
+
+			syncReplayLease = NULL;
+		}
+		/*
+		 * We could also try to detect cases where sendTime is more than
+		 * max_clock_skew in the past according to the standby's clock, but
+		 * that is indistinguishable from network latency/buffering, so we
+		 * could produce misleading error messages; if we do nothing, the
+		 * consequence is 'standby is not available for synchronous replay'
+		 * errors which should cause the user to investigate.
+		 */
+	}
 
 	/* Update shared-memory status */
 	SpinLockAcquire(&walrcv->mutex);
@@ -1285,6 +1337,8 @@ ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)
 	walrcv->latestWalEnd = walEnd;
 	walrcv->lastMsgSendTime = sendTime;
 	walrcv->lastMsgReceiptTime = lastMsgReceiptTime;
+	if (syncReplayLease != NULL)
+		walrcv->syncReplayLease = *syncReplayLease;
 	SpinLockRelease(&walrcv->mutex);
 
 	if (log_min_messages <= DEBUG2)
@@ -1322,7 +1376,7 @@ ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)
  * This is called by the startup process whenever interesting xlog records
  * are applied, so that walreceiver can check if it needs to send an apply
  * notification back to the master which may be waiting in a COMMIT with
- * synchronous_commit = remote_apply.
+ * synchronous_commit = remote_apply or synchronous_relay = on.
  */
 void
 WalRcvForceReply(void)

@@ -117,7 +117,7 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 	static XLogRecPtr last_written_lsn = InvalidXLogRecPtr;
 	static XLogRecPtr last_fsync_lsn = InvalidXLogRecPtr;
 
-	char		replybuf[1 + 8 + 8 + 8 + 8 + 1 + 8];
+	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int			len = 0;
 
 	/*
@@ -150,8 +150,6 @@ sendFeedback(PGconn *conn, TimestampTz now, bool force, bool replyRequested)
 	len += 8;
 	replybuf[len] = replyRequested ? 1 : 0; /* replyRequested */
 	len += 1;
-	fe_sendint64(-1, &replybuf[len]);	/* replyTo */
-	len += 8;
 
 	startpos = output_written_lsn;
 	last_written_lsn = output_written_lsn;
@@ -469,8 +467,6 @@ StreamLogicalLog(void)
 			 * rest.
 			 */
 			pos = 1;			/* skip msgtype 'k' */
-			pos += 8;			/* skip messageNumber */
-
 			walEnd = fe_recvint64(&copybuf[pos]);
 			output_written_lsn = Max(walEnd, output_written_lsn);
 

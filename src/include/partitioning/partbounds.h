@@ -107,5 +107,10 @@ extern int partition_range_datum_bsearch(FmgrInfo *partsupfunc,
 							  int nvalues, Datum *values, bool *is_equal);
 extern int partition_hash_bsearch(PartitionBoundInfo boundinfo,
 					   int modulus, int remainder);
+extern PartitionBoundInfo partition_bounds_merge(int partnatts,
+					   FmgrInfo *partsupfunc, Oid *partcollation,
+					   RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+					   JoinType jointype, List **outer_parts,
+					   List **inner_parts);
 
 #endif							/* PARTBOUNDS_H */

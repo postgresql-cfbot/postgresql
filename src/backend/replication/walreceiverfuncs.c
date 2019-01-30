@@ -220,8 +220,7 @@ ShutdownWalRcv(void)
  * of a replication slot to acquire.
  */
 void
-RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
-					 const char *slotname)
+RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr)
 {
 	WalRcvData *walrcv = WalRcv;
 	bool		launch = false;
@@ -242,16 +241,6 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	/* It better be stopped if we try to restart it */
 	Assert(walrcv->walRcvState == WALRCV_STOPPED ||
 		   walrcv->walRcvState == WALRCV_WAITING);
-
-	if (conninfo != NULL)
-		strlcpy((char *) walrcv->conninfo, conninfo, MAXCONNINFO);
-	else
-		walrcv->conninfo[0] = '\0';
-
-	if (slotname != NULL)
-		strlcpy((char *) walrcv->slotname, slotname, NAMEDATALEN);
-	else
-		walrcv->slotname[0] = '\0';
 
 	if (walrcv->walRcvState == WALRCV_STOPPED)
 	{

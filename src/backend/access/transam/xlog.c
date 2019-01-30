@@ -11857,8 +11857,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 									 tli, curFileTLI);
 						}
 						curFileTLI = tli;
-						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
-											 PrimarySlotName);
+						RequestXLogStreaming(tli, ptr);
 						receivedUpto = 0;
 					}
 

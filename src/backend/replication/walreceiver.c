@@ -188,9 +188,7 @@ DisableWalRcvImmediateExit(void)
 void
 WalReceiverMain(void)
 {
-	char		conninfo[MAXCONNINFO];
 	char	   *tmp_conninfo;
-	char		slotname[NAMEDATALEN];
 	XLogRecPtr	startpoint;
 	TimeLineID	startpointTLI;
 	TimeLineID	primaryTLI;
@@ -248,10 +246,6 @@ WalReceiverMain(void)
 	walrcv->pid = MyProcPid;
 	walrcv->walRcvState = WALRCV_STREAMING;
 
-	/* Fetch information required to start streaming */
-	walrcv->ready_to_display = false;
-	strlcpy(conninfo, (char *) walrcv->conninfo, MAXCONNINFO);
-	strlcpy(slotname, (char *) walrcv->slotname, NAMEDATALEN);
 	startpoint = walrcv->receiveStart;
 	startpointTLI = walrcv->receiveStartTLI;
 
@@ -261,6 +255,16 @@ WalReceiverMain(void)
 
 	/* Report the latch to use to awaken this process */
 	walrcv->latch = &MyProc->procLatch;
+
+	/*
+	 * Reset all connection information when the PID is set, which makes
+	 * the information visible at SQL level, still we are not connected
+	 * yet.
+	 */
+	memset(walrcv->conninfo, 0, MAXCONNINFO);
+	memset(walrcv->slotname, 0, NAMEDATALEN);
+	memset(walrcv->sender_host, 0, NI_MAXHOST);
+	walrcv->sender_port = 0;
 
 	SpinLockRelease(&walrcv->mutex);
 
@@ -291,32 +295,36 @@ WalReceiverMain(void)
 	/* Unblock signals (they were blocked when the postmaster forked us) */
 	PG_SETMASK(&UnBlockSig);
 
+	if (PrimaryConnInfo == NULL || PrimaryConnInfo[0] == '\0')
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot connect to the primary server as \"primary_conninfo\" is not defined")));
+
 	/* Establish the connection to the primary for XLOG streaming */
 	EnableWalRcvImmediateExit();
-	wrconn = walrcv_connect(conninfo, false, "walreceiver", &err);
+	wrconn = walrcv_connect(PrimaryConnInfo, false, "walreceiver", &err);
 	if (!wrconn)
 		ereport(ERROR,
 				(errmsg("could not connect to the primary server: %s", err)));
 	DisableWalRcvImmediateExit();
 
 	/*
-	 * Save user-visible connection string.  This clobbers the original
-	 * conninfo, for security. Also save host and port of the sender server
-	 * this walreceiver is connected to.
+	 * Save user-visible connection string.  Also save host and port of the
+	 * sender server this walreceiver is connected to.
 	 */
 	tmp_conninfo = walrcv_get_conninfo(wrconn);
 	walrcv_get_senderinfo(wrconn, &sender_host, &sender_port);
 	SpinLockAcquire(&walrcv->mutex);
-	memset(walrcv->conninfo, 0, MAXCONNINFO);
 	if (tmp_conninfo)
 		strlcpy((char *) walrcv->conninfo, tmp_conninfo, MAXCONNINFO);
 
-	memset(walrcv->sender_host, 0, NI_MAXHOST);
+	if (PrimarySlotName)
+		strlcpy((char *) walrcv->slotname, PrimarySlotName, NAMEDATALEN);
+
 	if (sender_host)
 		strlcpy((char *) walrcv->sender_host, sender_host, NI_MAXHOST);
 
 	walrcv->sender_port = sender_port;
-	walrcv->ready_to_display = true;
 	SpinLockRelease(&walrcv->mutex);
 
 	if (tmp_conninfo)
@@ -387,7 +395,8 @@ WalReceiverMain(void)
 		 */
 		options.logical = false;
 		options.startpoint = startpoint;
-		options.slotname = slotname[0] != '\0' ? slotname : NULL;
+		options.slotname = (PrimarySlotName && PrimarySlotName[0] != '\0') ?
+			PrimarySlotName : NULL;
 		options.proto.physical.startpointTLI = startpointTLI;
 		ThisTimeLineID = startpointTLI;
 		if (walrcv_startstreaming(wrconn, &options))
@@ -776,8 +785,17 @@ WalRcvDie(int code, Datum arg)
 	Assert(walrcv->pid == MyProcPid);
 	walrcv->walRcvState = WALRCV_STOPPED;
 	walrcv->pid = 0;
-	walrcv->ready_to_display = false;
 	walrcv->latch = NULL;
+
+	/*
+	 * Reset all connection information when the PID is reset, which makes
+	 * the shared memory state consistent with the rest, even if this it not
+	 * visible at SQL level.
+	 */
+	memset(walrcv->conninfo, 0, MAXCONNINFO);
+	memset(walrcv->slotname, 0, NAMEDATALEN);
+	memset(walrcv->sender_host, 0, NI_MAXHOST);
+	walrcv->sender_port = 0;
 	SpinLockRelease(&walrcv->mutex);
 
 	/* Terminate the connection gracefully. */
@@ -1374,7 +1392,6 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	Datum	   *values;
 	bool	   *nulls;
 	int			pid;
-	bool		ready_to_display;
 	WalRcvState state;
 	XLogRecPtr	receive_start_lsn;
 	TimeLineID	receive_start_tli;
@@ -1392,7 +1409,6 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	/* Take a lock to ensure value consistency */
 	SpinLockAcquire(&WalRcv->mutex);
 	pid = (int) WalRcv->pid;
-	ready_to_display = WalRcv->ready_to_display;
 	state = WalRcv->walRcvState;
 	receive_start_lsn = WalRcv->receiveStart;
 	receive_start_tli = WalRcv->receiveStartTLI;
@@ -1412,7 +1428,7 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	 * No WAL receiver (or not ready yet), just return a tuple with NULL
 	 * values
 	 */
-	if (pid == 0 || !ready_to_display)
+	if (pid == 0)
 		PG_RETURN_NULL();
 
 	/* determine result type */

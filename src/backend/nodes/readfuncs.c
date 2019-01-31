@@ -612,6 +612,8 @@ _readAggref(void)
 	READ_CHAR_FIELD(aggkind);
 	READ_UINT_FIELD(agglevelsup);
 	READ_ENUM_FIELD(aggsplit, AggSplit);
+	READ_ENUM_FIELD(aggformat, FuncFormat);
+	READ_NODE_FIELD(aggformatopts);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -651,6 +653,8 @@ _readWindowFunc(void)
 	READ_UINT_FIELD(winref);
 	READ_BOOL_FIELD(winstar);
 	READ_BOOL_FIELD(winagg);
+	READ_ENUM_FIELD(winformat, FuncFormat);
+	READ_NODE_FIELD(winformatopts);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -692,6 +696,8 @@ _readFuncExpr(void)
 	READ_OID_FIELD(funccollid);
 	READ_OID_FIELD(inputcollid);
 	READ_NODE_FIELD(args);
+	READ_ENUM_FIELD(funcformat2, FuncFormat);
+	READ_NODE_FIELD(funcformatopts);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -1336,6 +1342,127 @@ _readOnConflictExpr(void)
 	READ_NODE_FIELD(onConflictWhere);
 	READ_INT_FIELD(exclRelIndex);
 	READ_NODE_FIELD(exclRelTlist);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonValueExpr
+ */
+static JsonValueExpr *
+_readJsonValueExpr(void)
+{
+	READ_LOCALS(JsonValueExpr);
+
+	READ_NODE_FIELD(expr);
+	READ_ENUM_FIELD(format.type, JsonFormatType);
+	READ_ENUM_FIELD(format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(format.location);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonCtorOpts
+ */
+static JsonCtorOpts *
+_readJsonCtorOpts(void)
+{
+	READ_LOCALS(JsonCtorOpts);
+	READ_ENUM_FIELD(returning.format.type, JsonFormatType);
+	READ_ENUM_FIELD(returning.format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(returning.format.location);
+	READ_OID_FIELD(returning.typid);
+	READ_INT_FIELD(returning.typmod);
+	READ_BOOL_FIELD(unique);
+	READ_BOOL_FIELD(absent_on_null);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonExpr
+ */
+static JsonExpr *
+_readJsonExpr(void)
+{
+	READ_LOCALS(JsonExpr);
+
+	READ_ENUM_FIELD(op, JsonExprOp);
+	READ_NODE_FIELD(raw_expr);
+	READ_NODE_FIELD(formatted_expr);
+	READ_NODE_FIELD(result_coercion);
+	READ_ENUM_FIELD(format.type, JsonFormatType);
+	READ_ENUM_FIELD(format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(format.location);
+	READ_NODE_FIELD(path_spec);
+	READ_NODE_FIELD(passing.values);
+	READ_NODE_FIELD(passing.names);
+	READ_ENUM_FIELD(returning.format.type, JsonFormatType);
+	READ_ENUM_FIELD(returning.format.encoding, JsonEncoding);
+	READ_LOCATION_FIELD(returning.format.location);
+	READ_OID_FIELD(returning.typid);
+	READ_INT_FIELD(returning.typmod);
+	READ_ENUM_FIELD(on_error.btype, JsonBehaviorType);
+	READ_NODE_FIELD(on_error.default_expr);
+	READ_ENUM_FIELD(on_empty.btype, JsonBehaviorType);
+	READ_NODE_FIELD(on_empty.default_expr);
+	READ_NODE_FIELD(coercions);
+	READ_ENUM_FIELD(wrapper, JsonWrapper);
+	READ_BOOL_FIELD(omit_quotes);
+	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonCoercion
+ */
+static JsonCoercion *
+_readJsonCoercion(void)
+{
+	READ_LOCALS(JsonCoercion);
+
+	READ_NODE_FIELD(expr);
+	READ_BOOL_FIELD(via_populate);
+	READ_BOOL_FIELD(via_io);
+	READ_OID_FIELD(collation);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonItemCoercions
+ */
+static JsonItemCoercions *
+_readJsonItemCoercions(void)
+{
+	READ_LOCALS(JsonItemCoercions);
+
+	READ_NODE_FIELD(null);
+	READ_NODE_FIELD(string);
+	READ_NODE_FIELD(numeric);
+	READ_NODE_FIELD(boolean);
+	READ_NODE_FIELD(date);
+	READ_NODE_FIELD(time);
+	READ_NODE_FIELD(timetz);
+	READ_NODE_FIELD(timestamp);
+	READ_NODE_FIELD(timestamptz);
+	READ_NODE_FIELD(composite);
+
+	READ_DONE();
+}
+
+/*
+ * _readJsonIsPredicateOpts
+ */
+static JsonIsPredicateOpts *
+_readJsonIsPredicateOpts()
+{
+	READ_LOCALS(JsonIsPredicateOpts);
+
+	READ_ENUM_FIELD(value_type, JsonValueType);
+	READ_BOOL_FIELD(unique_keys);
 
 	READ_DONE();
 }
@@ -2797,6 +2924,18 @@ parseNodeString(void)
 		return_value = _readPartitionBoundSpec();
 	else if (MATCH("PARTITIONRANGEDATUM", 19))
 		return_value = _readPartitionRangeDatum();
+	else if (MATCH("JSONVALUEEXPR", 13))
+		return_value = _readJsonValueExpr();
+	else if (MATCH("JSONCTOROPTS", 12))
+		return_value = _readJsonCtorOpts();
+	else if (MATCH("JSONISOPTS", 10))
+		return_value = _readJsonIsPredicateOpts();
+	else if (MATCH("JSONEXPR", 8))
+		return_value = _readJsonExpr();
+	else if (MATCH("JSONCOERCION", 12))
+		return_value = _readJsonCoercion();
+	else if (MATCH("JSONITEMCOERCIONS", 17))
+		return_value = _readJsonItemCoercions();
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);

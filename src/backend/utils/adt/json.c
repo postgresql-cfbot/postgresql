@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/transam.h"
 #include "catalog/pg_type.h"
@@ -66,6 +67,23 @@ typedef enum					/* type categories for datum_to_json */
 	JSONTYPE_OTHER				/* all else */
 } JsonTypeCategory;
 
+/* Context for key uniqueness check */
+typedef struct JsonUniqueCheckContext
+{
+	struct JsonKeyInfo
+	{
+		int			offset;				/* key offset:
+										 *   in result if positive,
+										 *   in skipped_keys if negative */
+		int			length;				/* key length */
+	}		   *keys;					/* key info array */
+	int			nkeys;					/* number of processed keys */
+	int			nallocated;				/* number of allocated keys in array */
+	StringInfo	result;					/* resulting json */
+	StringInfoData skipped_keys;		/* skipped keys with NULL values */
+	MemoryContext mcxt;					/* context for saving skipped keys */
+} JsonUniqueCheckContext;
+
 typedef struct JsonAggState
 {
 	StringInfo	str;
@@ -73,7 +91,22 @@ typedef struct JsonAggState
 	Oid			key_output_func;
 	JsonTypeCategory val_category;
 	Oid			val_output_func;
+	JsonUniqueCheckContext unique_check;
 } JsonAggState;
+
+/* Element of object stack for key uniqueness check */
+typedef struct JsonObjectFields
+{
+	struct JsonObjectFields *parent;
+	HTAB	   *fields;
+} JsonObjectFields;
+
+/* State for key uniqueness check */
+typedef struct JsonUniqueState
+{
+	JsonLexContext *lex;
+	JsonObjectFields *stack;
+} JsonUniqueState;
 
 static inline void json_lex(JsonLexContext *lex);
 static inline void json_lex_string(JsonLexContext *lex);
@@ -106,6 +139,9 @@ static void add_json(Datum val, bool is_null, StringInfo result,
 		 Oid val_type, bool key_scalar);
 static text *catenate_stringinfo_string(StringInfo buffer, const char *addon);
 
+static JsonIterator *JsonIteratorInitFromLex(JsonContainer *jc,
+						JsonLexContext *lex, JsonIterator *parent);
+
 /* the null action object used for pure validation */
 static JsonSemAction nullSemAction =
 {
@@ -127,6 +163,27 @@ lex_peek(JsonLexContext *lex)
 }
 
 /*
+ * lex_peek_value
+ *
+ * get the current look_ahead de-escaped lexeme.
+*/
+static inline char *
+lex_peek_value(JsonLexContext *lex)
+{
+	if (lex->token_type == JSON_TOKEN_STRING)
+		return lex->strval ? pstrdup(lex->strval->data) : NULL;
+	else
+	{
+		int			len = lex->token_terminator - lex->token_start;
+		char	   *tokstr = palloc(len + 1);
+
+		memcpy(tokstr, lex->token_start, len);
+		tokstr[len] = '\0';
+		return tokstr;
+	}
+}
+
+/*
  * lex_accept
  *
  * accept the look_ahead token and move the lexer to the next token if the
@@ -141,22 +198,8 @@ lex_accept(JsonLexContext *lex, JsonTokenType token, char **lexeme)
 	if (lex->token_type == token)
 	{
 		if (lexeme != NULL)
-		{
-			if (lex->token_type == JSON_TOKEN_STRING)
-			{
-				if (lex->strval != NULL)
-					*lexeme = pstrdup(lex->strval->data);
-			}
-			else
-			{
-				int			len = (lex->token_terminator - lex->token_start);
-				char	   *tokstr = palloc(len + 1);
+			*lexeme = lex_peek_value(lex);
 
-				memcpy(tokstr, lex->token_start, len);
-				tokstr[len] = '\0';
-				*lexeme = tokstr;
-			}
-		}
 		json_lex(lex);
 		return true;
 	}
@@ -1506,7 +1549,7 @@ datum_to_json(Datum val, bool is_null, StringInfo result,
 			{
 				char		buf[MAXDATELEN + 1];
 
-				JsonEncodeDateTime(buf, val, DATEOID);
+				JsonEncodeDateTime(buf, val, DATEOID, NULL);
 				appendStringInfo(result, "\"%s\"", buf);
 			}
 			break;
@@ -1514,7 +1557,7 @@ datum_to_json(Datum val, bool is_null, StringInfo result,
 			{
 				char		buf[MAXDATELEN + 1];
 
-				JsonEncodeDateTime(buf, val, TIMESTAMPOID);
+				JsonEncodeDateTime(buf, val, TIMESTAMPOID, NULL);
 				appendStringInfo(result, "\"%s\"", buf);
 			}
 			break;
@@ -1522,7 +1565,7 @@ datum_to_json(Datum val, bool is_null, StringInfo result,
 			{
 				char		buf[MAXDATELEN + 1];
 
-				JsonEncodeDateTime(buf, val, TIMESTAMPTZOID);
+				JsonEncodeDateTime(buf, val, TIMESTAMPTZOID, NULL);
 				appendStringInfo(result, "\"%s\"", buf);
 			}
 			break;
@@ -1550,10 +1593,11 @@ datum_to_json(Datum val, bool is_null, StringInfo result,
 
 /*
  * Encode 'value' of datetime type 'typid' into JSON string in ISO format using
- * optionally preallocated buffer 'buf'.
+ * optionally preallocated buffer 'buf'.  Optional 'tzp' determines time-zone
+ * offset (in seconds) in which we want to show timestamptz.
  */
 char *
-JsonEncodeDateTime(char *buf, Datum value, Oid typid)
+JsonEncodeDateTime(char *buf, Datum value, Oid typid, const int *tzp)
 {
 	if (!buf)
 		buf = palloc(MAXDATELEN + 1);
@@ -1630,11 +1674,30 @@ JsonEncodeDateTime(char *buf, Datum value, Oid typid)
 				const char *tzn = NULL;
 
 				timestamp = DatumGetTimestampTz(value);
+
+				/*
+				 * If time-zone is specified, we apply a time-zone shift,
+				 * convert timestamptz to pg_tm as if it was without time-zone,
+				 * and then use specified time-zone for encoding timestamp
+				 * into a string.
+				 */
+				if (tzp)
+				{
+					tz = *tzp;
+					timestamp -= (TimestampTz) tz * USECS_PER_SEC;
+				}
+
 				/* Same as timestamptz_out(), but forcing DateStyle */
 				if (TIMESTAMP_NOT_FINITE(timestamp))
 					EncodeSpecialTimestamp(timestamp, buf);
-				else if (timestamp2tm(timestamp, &tz, &tm, &fsec, &tzn, NULL) == 0)
+				else if (timestamp2tm(timestamp, tzp ? NULL : &tz, &tm, &fsec,
+									  tzp ? NULL : &tzn, NULL) == 0)
+				{
+					if (tzp)
+						tm.tm_isdst = 1;	/* set time-zone presence flag */
+
 					EncodeDateTime(&tm, fsec, true, tz, tzn, USE_XSD_DATES, buf);
+				}
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
@@ -1938,8 +2001,8 @@ to_json(PG_FUNCTION_ARGS)
  *
  * aggregate input column as a json array value.
  */
-Datum
-json_agg_transfn(PG_FUNCTION_ARGS)
+static Datum
+json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 {
 	MemoryContext aggcontext,
 				oldcontext;
@@ -1979,8 +2042,13 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	else
 	{
 		state = (JsonAggState *) PG_GETARG_POINTER(0);
-		appendStringInfoString(state->str, ", ");
 	}
+
+	if (absent_on_null && PG_ARGISNULL(1))
+		PG_RETURN_POINTER(state);
+
+	if (state->str->len > 1)
+		appendStringInfoString(state->str, ", ");
 
 	/* fast path for NULLs */
 	if (PG_ARGISNULL(1))
@@ -1993,7 +2061,7 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	val = PG_GETARG_DATUM(1);
 
 	/* add some whitespace if structured type and not first item */
-	if (!PG_ARGISNULL(0) &&
+	if (!PG_ARGISNULL(0) && state->str->len > 1 &&
 		(state->val_category == JSONTYPE_ARRAY ||
 		 state->val_category == JSONTYPE_COMPOSITE))
 	{
@@ -2009,6 +2077,25 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	 * pass the JsonAggState pointer through nodeAgg.c's machinations.
 	 */
 	PG_RETURN_POINTER(state);
+}
+
+
+/*
+ * json_agg aggregate function
+ */
+Datum
+json_agg_transfn(PG_FUNCTION_ARGS)
+{
+	return json_agg_transfn_worker(fcinfo, false);
+}
+
+/*
+ * json_agg_strict aggregate function
+ */
+Datum
+json_agg_strict_transfn(PG_FUNCTION_ARGS)
+{
+	return json_agg_transfn_worker(fcinfo, true);
 }
 
 /*
@@ -2034,18 +2121,115 @@ json_agg_finalfn(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(catenate_stringinfo_string(state->str, "]"));
 }
 
+static inline void
+json_unique_check_init(JsonUniqueCheckContext *cxt,
+					   StringInfo result, int nkeys)
+{
+	cxt->mcxt = CurrentMemoryContext;
+	cxt->nkeys = 0;
+	cxt->nallocated = nkeys ? nkeys : 16;
+	cxt->keys = palloc(sizeof(*cxt->keys) * cxt->nallocated);
+	cxt->result = result;
+	cxt->skipped_keys.data = NULL;
+}
+
+static inline void
+json_unique_check_free(JsonUniqueCheckContext *cxt)
+{
+	if (cxt->keys)
+		pfree(cxt->keys);
+
+	if (cxt->skipped_keys.data)
+		pfree(cxt->skipped_keys.data);
+}
+
+/* On-demand initialization of skipped_keys StringInfo structure */
+static inline StringInfo
+json_unique_check_get_skipped_keys(JsonUniqueCheckContext *cxt)
+{
+	StringInfo	out = &cxt->skipped_keys;
+
+	if (!out->data)
+	{
+		MemoryContext oldcxt = MemoryContextSwitchTo(cxt->mcxt);
+		initStringInfo(out);
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	return out;
+}
+
+/*
+ * Save current key offset (key is not yet appended) to the key list, key
+ * length is saved later in json_unique_check_key() when the key is appended.
+ */
+static inline void
+json_unique_check_save_key_offset(JsonUniqueCheckContext *cxt, StringInfo out)
+{
+	if (cxt->nkeys >= cxt->nallocated)
+	{
+		cxt->nallocated *= 2;
+		cxt->keys = repalloc(cxt->keys, sizeof(*cxt->keys) * cxt->nallocated);
+	}
+
+	cxt->keys[cxt->nkeys++].offset = out->len;
+}
+
+/*
+ * Check uniqueness of key already appended to 'out' StringInfo.
+ */
+static inline void
+json_unique_check_key(JsonUniqueCheckContext *cxt, StringInfo out)
+{
+	struct JsonKeyInfo *keys = cxt->keys;
+	int			curr = cxt->nkeys - 1;
+	int			offset = keys[curr].offset;
+	int			length = out->len - offset;
+	char	   *curr_key = &out->data[offset];
+	int			i;
+
+	keys[curr].length = length; /* save current key length */
+
+	if (out == &cxt->skipped_keys)
+		/* invert offset for skipped keys for their recognition */
+		keys[curr].offset = -keys[curr].offset;
+
+	/* check collisions with previous keys */
+	for (i = 0; i < curr; i++)
+	{
+		char	   *prev_key;
+
+		if (cxt->keys[i].length != length)
+			continue;
+
+		offset = cxt->keys[i].offset;
+
+		prev_key = offset > 0
+				? &cxt->result->data[offset]
+				: &cxt->skipped_keys.data[-offset];
+
+		if (!memcmp(curr_key, prev_key, length))
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE),
+					 errmsg("duplicate JSON key %s", curr_key)));
+	}
+}
+
 /*
  * json_object_agg transition function.
  *
  * aggregate two input columns as a single json object value.
  */
-Datum
-json_object_agg_transfn(PG_FUNCTION_ARGS)
+static Datum
+json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
+							   bool absent_on_null, bool unique_keys)
 {
 	MemoryContext aggcontext,
 				oldcontext;
 	JsonAggState *state;
+	StringInfo	out;
 	Datum		arg;
+	bool		skip;
 
 	if (!AggCheckCallContext(fcinfo, &aggcontext))
 	{
@@ -2066,6 +2250,10 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(aggcontext);
 		state = (JsonAggState *) palloc(sizeof(JsonAggState));
 		state->str = makeStringInfo();
+		if (unique_keys)
+			json_unique_check_init(&state->unique_check, state->str, 0);
+		else
+			memset(&state->unique_check, 0, sizeof(state->unique_check));
 		MemoryContextSwitchTo(oldcontext);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
@@ -2093,7 +2281,6 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 	else
 	{
 		state = (JsonAggState *) PG_GETARG_POINTER(0);
-		appendStringInfoString(state->str, ", ");
 	}
 
 	/*
@@ -2109,10 +2296,40 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("field name must not be null")));
 
+	/* Skip null values if absent_on_null */
+	skip = absent_on_null && PG_ARGISNULL(2);
+
+	if (skip)
+	{
+		/* If key uniqueness check is needed we must save skipped keys */
+		if (!unique_keys)
+			PG_RETURN_POINTER(state);
+
+		out = json_unique_check_get_skipped_keys(&state->unique_check);
+	}
+	else
+	{
+		out = state->str;
+
+		if (out->len > 2)
+			appendStringInfoString(out, ", ");
+	}
+
 	arg = PG_GETARG_DATUM(1);
 
-	datum_to_json(arg, false, state->str, state->key_category,
+	if (unique_keys)
+		json_unique_check_save_key_offset(&state->unique_check, out);
+
+	datum_to_json(arg, false, out, state->key_category,
 				  state->key_output_func, true);
+
+	if (unique_keys)
+	{
+		json_unique_check_key(&state->unique_check, out);
+
+		if (skip)
+			PG_RETURN_POINTER(state);
+	}
 
 	appendStringInfoString(state->str, " : ");
 
@@ -2125,6 +2342,26 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 				  state->val_output_func, false);
 
 	PG_RETURN_POINTER(state);
+}
+
+/*
+ * json_object_agg aggregate function
+ */
+Datum
+json_object_agg_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo, false, false);
+}
+
+/*
+ * json_objectagg aggregate function
+ */
+Datum
+json_objectagg_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo,
+										  PG_GETARG_BOOL(3),
+										  PG_GETARG_BOOL(4));
 }
 
 /*
@@ -2143,6 +2380,8 @@ json_object_agg_finalfn(PG_FUNCTION_ARGS)
 	/* NULL result for no rows in, as is standard with aggregates */
 	if (state == NULL)
 		PG_RETURN_NULL();
+
+	json_unique_check_free(&state->unique_check);
 
 	/* Else return state with appropriate object terminator added */
 	PG_RETURN_TEXT_P(catenate_stringinfo_string(state->str, " }"));
@@ -2168,11 +2407,9 @@ catenate_stringinfo_string(StringInfo buffer, const char *addon)
 	return result;
 }
 
-/*
- * SQL function json_build_object(variadic "any")
- */
-Datum
-json_build_object(PG_FUNCTION_ARGS)
+static Datum
+json_build_object_worker(FunctionCallInfo fcinfo, int first_vararg,
+						 bool absent_on_null, bool unique_keys)
 {
 	int			nargs = PG_NARGS();
 	int			i;
@@ -2181,9 +2418,11 @@ json_build_object(PG_FUNCTION_ARGS)
 	Datum	   *args;
 	bool	   *nulls;
 	Oid		   *types;
+	JsonUniqueCheckContext unique_check;
 
 	/* fetch argument values to build the object */
-	nargs = extract_variadic_args(fcinfo, 0, false, &args, &types, &nulls);
+	nargs = extract_variadic_args(fcinfo, first_vararg, false,
+								  &args, &types, &nulls);
 
 	if (nargs < 0)
 		PG_RETURN_NULL();
@@ -2198,19 +2437,53 @@ json_build_object(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(result, '{');
 
+	if (unique_keys)
+		json_unique_check_init(&unique_check, result, nargs / 2);
+
 	for (i = 0; i < nargs; i += 2)
 	{
-		appendStringInfoString(result, sep);
-		sep = ", ";
+		StringInfo	out;
+		bool		skip;
+
+		/* Skip null values if absent_on_null */
+		skip = absent_on_null && nulls[i + 1];
+
+		if (skip)
+		{
+			/* If key uniqueness check is needed we must save skipped keys */
+			if (!unique_keys)
+				continue;
+
+			out = json_unique_check_get_skipped_keys(&unique_check);
+		}
+		else
+		{
+			appendStringInfoString(result, sep);
+			sep = ", ";
+			out = result;
+		}
 
 		/* process key */
 		if (nulls[i])
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("argument %d cannot be null", i + 1),
+					 errmsg("argument %d cannot be null", first_vararg + i + 1),
 					 errhint("Object keys should be text.")));
 
-		add_json(args[i], false, result, types[i], true);
+		if (unique_keys)
+			/* save key offset before key appending */
+			json_unique_check_save_key_offset(&unique_check, out);
+
+		add_json(args[i], false, out, types[i], true);
+
+		if (unique_keys)
+		{
+			/* check key uniqueness after key appending */
+			json_unique_check_key(&unique_check, out);
+
+			if (skip)
+				continue;
+		}
 
 		appendStringInfoString(result, " : ");
 
@@ -2220,7 +2493,29 @@ json_build_object(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(result, '}');
 
+	if (unique_keys)
+		json_unique_check_free(&unique_check);
+
 	PG_RETURN_TEXT_P(cstring_to_text_with_len(result->data, result->len));
+}
+
+/*
+ * SQL function json_build_object(variadic "any")
+ */
+Datum
+json_build_object(PG_FUNCTION_ARGS)
+{
+	return json_build_object_worker(fcinfo, 0, false, false);
+}
+
+/*
+ * SQL function json_build_object_ext(absent_on_null bool, unique bool, variadic "any")
+ */
+Datum
+json_build_object_ext(PG_FUNCTION_ARGS)
+{
+	return json_build_object_worker(fcinfo, 2,
+									PG_GETARG_BOOL(0), PG_GETARG_BOOL(1));
 }
 
 /*
@@ -2232,11 +2527,9 @@ json_build_object_noargs(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text_with_len("{}", 2));
 }
 
-/*
- * SQL function json_build_array(variadic "any")
- */
-Datum
-json_build_array(PG_FUNCTION_ARGS)
+static Datum
+json_build_array_worker(FunctionCallInfo fcinfo, int first_vararg,
+						bool absent_on_null)
 {
 	int			nargs;
 	int			i;
@@ -2247,7 +2540,8 @@ json_build_array(PG_FUNCTION_ARGS)
 	Oid		   *types;
 
 	/* fetch argument values to build the array */
-	nargs = extract_variadic_args(fcinfo, 0, false, &args, &types, &nulls);
+	nargs = extract_variadic_args(fcinfo, first_vararg, false,
+								  &args, &types, &nulls);
 
 	if (nargs < 0)
 		PG_RETURN_NULL();
@@ -2258,6 +2552,9 @@ json_build_array(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < nargs; i++)
 	{
+		if (absent_on_null && nulls[i])
+			continue;
+
 		appendStringInfoString(result, sep);
 		sep = ", ";
 		add_json(args[i], nulls[i], result, types[i], false);
@@ -2266,6 +2563,24 @@ json_build_array(PG_FUNCTION_ARGS)
 	appendStringInfoChar(result, ']');
 
 	PG_RETURN_TEXT_P(cstring_to_text_with_len(result->data, result->len));
+}
+
+/*
+ * SQL function json_build_array(variadic "any")
+ */
+Datum
+json_build_array(PG_FUNCTION_ARGS)
+{
+	return json_build_array_worker(fcinfo, 0, false);
+}
+
+/*
+ * SQL function json_build_array_ext(absent_on_null bool, variadic "any")
+ */
+Datum
+json_build_array_ext(PG_FUNCTION_ARGS)
+{
+	return json_build_array_worker(fcinfo, 1, PG_GETARG_BOOL(0));
 }
 
 /*
@@ -2499,6 +2814,178 @@ escape_json(StringInfo buf, const char *str)
 	appendStringInfoCharMacro(buf, '"');
 }
 
+/* Functions implementing hash table for key uniqueness check */
+static int
+json_unique_hash_match(const void *key1, const void *key2, Size keysize)
+{
+	return strcmp(*(const char **) key1, *(const char **) key2);
+}
+
+static void *
+json_unique_hash_keycopy(void *dest, const void *src, Size keysize)
+{
+	*(const char **) dest = pstrdup(*(const char **) src);
+
+	return dest;
+}
+
+static uint32
+json_unique_hash(const void *key, Size keysize)
+{
+	const char *s = *(const char **) key;
+
+	return DatumGetUInt32(hash_any((const unsigned char *) s, (int) strlen(s)));
+}
+
+/* Semantic actions for key uniqueness check */
+static void
+json_unique_object_start(void *_state)
+{
+	JsonUniqueState *state = _state;
+	JsonObjectFields *obj = palloc(sizeof(*obj));
+	HASHCTL		ctl;
+
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(char *);
+	ctl.entrysize = sizeof(char *);
+	ctl.hcxt = CurrentMemoryContext;
+	ctl.hash = json_unique_hash;
+	ctl.keycopy = json_unique_hash_keycopy;
+	ctl.match = json_unique_hash_match;
+	obj->fields = hash_create("json object hashtable",
+							  32,
+							  &ctl,
+							  HASH_ELEM | HASH_CONTEXT |
+							  HASH_FUNCTION | HASH_COMPARE | HASH_KEYCOPY);
+	obj->parent = state->stack;		/* push object to stack */
+
+	state->stack = obj;
+}
+
+static void
+json_unique_object_end(void *_state)
+{
+	JsonUniqueState *state = _state;
+
+	hash_destroy(state->stack->fields);
+
+	state->stack = state->stack->parent;	/* pop object from stack */
+}
+
+static void
+json_unique_object_field_start(void *_state, char *field, bool isnull)
+{
+	JsonUniqueState *state = _state;
+	bool		found;
+
+	/* find key collision in the current object */
+	(void) hash_search(state->stack->fields, &field, HASH_ENTER, &found);
+
+	if (found)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("duplicate JSON key \"%s\"", field),
+				 report_json_context(state->lex)));
+}
+
+/*
+ * json_is_valid -- check json text validity, its value type and key uniqueness
+ */
+Datum
+json_is_valid(PG_FUNCTION_ARGS)
+{
+	text	   *json = PG_GETARG_TEXT_P(0);
+	text	   *type = PG_GETARG_TEXT_P(1);
+	bool		unique = PG_GETARG_BOOL(2);
+	MemoryContext mcxt = CurrentMemoryContext;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	if (!PG_ARGISNULL(1) &&
+		strncmp("any", VARDATA(type), VARSIZE_ANY_EXHDR(type)))
+	{
+		JsonLexContext *lex;
+		JsonTokenType tok;
+
+		lex = makeJsonLexContext(json, false);
+
+		/* Lex exactly one token from the input and check its type. */
+		PG_TRY();
+		{
+			json_lex(lex);
+		}
+		PG_CATCH();
+		{
+			if (ERRCODE_TO_CATEGORY(geterrcode()) == ERRCODE_DATA_EXCEPTION)
+			{
+				FlushErrorState();
+				MemoryContextSwitchTo(mcxt);
+				PG_RETURN_BOOL(false);	/* invalid json */
+			}
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		tok = lex_peek(lex);
+
+		if (!strncmp("object", VARDATA(type), VARSIZE_ANY_EXHDR(type)))
+		{
+			if (tok != JSON_TOKEN_OBJECT_START)
+				PG_RETURN_BOOL(false);	/* json is not a object */
+		}
+		else if (!strncmp("array", VARDATA(type), VARSIZE_ANY_EXHDR(type)))
+		{
+			if (tok != JSON_TOKEN_ARRAY_START)
+				PG_RETURN_BOOL(false);	/* json is not an array */
+		}
+		else
+		{
+			if (tok == JSON_TOKEN_OBJECT_START ||
+				tok == JSON_TOKEN_ARRAY_START)
+				PG_RETURN_BOOL(false);	/* json is not a scalar */
+		}
+	}
+
+	/* do full parsing pass only for uniqueness check or JSON text validation */
+	if (unique ||
+		get_fn_expr_argtype(fcinfo->flinfo, 0) != JSONOID)
+	{
+		JsonLexContext *lex = makeJsonLexContext(json, unique);
+		JsonSemAction uniqueSemAction = {0};
+		JsonUniqueState state;
+
+		if (unique)
+		{
+			state.lex = lex;
+			state.stack = NULL;
+
+			uniqueSemAction.semstate = &state;
+			uniqueSemAction.object_start = json_unique_object_start;
+			uniqueSemAction.object_field_start = json_unique_object_field_start;
+			uniqueSemAction.object_end = json_unique_object_end;
+		}
+
+		PG_TRY();
+		{
+			pg_parse_json(lex, unique ? &uniqueSemAction : &nullSemAction);
+		}
+		PG_CATCH();
+		{
+			if (ERRCODE_TO_CATEGORY(geterrcode()) == ERRCODE_DATA_EXCEPTION)
+			{
+				FlushErrorState();
+				MemoryContextSwitchTo(mcxt);
+				PG_RETURN_BOOL(false);	/* invalid json or key collision found */
+			}
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+	}
+
+	PG_RETURN_BOOL(true);	/* ok */
+}
+
 /*
  * SQL function json_typeof(json) -> text
  *
@@ -2552,4 +3039,822 @@ json_typeof(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_TEXT_P(cstring_to_text(type));
+}
+
+/*
+ * Initialize a JsonContainer from a json text, its type and size.
+ * 'type' can be JB_FOBJECT, JB_FARRAY, (JB_FARRAY | JB_FSCALAR).
+ * 'size' is a number of elements/pairs in array/object, or -1 if unknown.
+ */
+static void
+jsonInitContainer(JsonContainerData *jc, char *json, int len, int type,
+				  int size)
+{
+	if (size < 0 || size > JB_CMASK)
+		size = JB_CMASK;	/* unknown size */
+
+	jc->data = json;
+	jc->len = len;
+	jc->header = type | size;
+}
+
+/*
+ * Initialize a JsonContainer from a text datum.
+ */
+static void
+jsonInit(JsonContainerData *jc, Datum value)
+{
+	text	   *json = DatumGetTextP(value);
+	JsonLexContext *lex = makeJsonLexContext(json, false);
+	JsonTokenType tok;
+	int			type;
+	int			size = -1;
+
+	/* Lex exactly one token from the input and check its type. */
+	json_lex(lex);
+	tok = lex_peek(lex);
+
+	switch (tok)
+	{
+		case JSON_TOKEN_OBJECT_START:
+			type = JB_FOBJECT;
+			lex_accept(lex, tok, NULL);
+			if (lex_peek(lex) == JSON_TOKEN_OBJECT_END)
+				size = 0;
+			break;
+		case JSON_TOKEN_ARRAY_START:
+			type = JB_FARRAY;
+			lex_accept(lex, tok, NULL);
+			if (lex_peek(lex) == JSON_TOKEN_ARRAY_END)
+				size = 0;
+			break;
+		case JSON_TOKEN_STRING:
+		case JSON_TOKEN_NUMBER:
+		case JSON_TOKEN_TRUE:
+		case JSON_TOKEN_FALSE:
+		case JSON_TOKEN_NULL:
+			type = JB_FARRAY | JB_FSCALAR;
+			size = 1;
+			break;
+		default:
+			elog(ERROR, "unexpected json token: %d", tok);
+			type = jbvNull;
+			break;
+	}
+
+	pfree(lex);
+
+	jsonInitContainer(jc, VARDATA(json), VARSIZE(json) - VARHDRSZ, type, size);
+}
+
+/*
+ * Wrap JSON text into a palloc()'d Json structure.
+ */
+Json *
+JsonCreate(text *json)
+{
+	Json	   *res = palloc0(sizeof(*res));
+
+	jsonInit((JsonContainerData *) &res->root, PointerGetDatum(json));
+
+	return res;
+}
+
+/*
+ * Fill JsonbValue from the current iterator token.
+ * Returns true if recursion into nested object or array is needed (in this case
+ * child iterator is created and put into *pit).
+ */
+static bool
+jsonFillValue(JsonIterator **pit, JsonbValue *res, bool skipNested,
+			  JsontIterState nextState)
+{
+	JsonIterator *it = *pit;
+	JsonLexContext *lex = it->lex;
+	JsonTokenType tok = lex_peek(lex);
+
+	switch (tok)
+	{
+		case JSON_TOKEN_NULL:
+			res->type = jbvNull;
+			break;
+
+		case JSON_TOKEN_TRUE:
+			res->type = jbvBool;
+			res->val.boolean = true;
+			break;
+
+		case JSON_TOKEN_FALSE:
+			res->type = jbvBool;
+			res->val.boolean = false;
+			break;
+
+		case JSON_TOKEN_STRING:
+		{
+			char	   *token = lex_peek_value(lex);
+			res->type = jbvString;
+			res->val.string.val = token;
+			res->val.string.len = strlen(token);
+			break;
+		}
+
+		case JSON_TOKEN_NUMBER:
+		{
+			char	   *token = lex_peek_value(lex);
+			res->type = jbvNumeric;
+			res->val.numeric = DatumGetNumeric(DirectFunctionCall3(
+					numeric_in, CStringGetDatum(token), 0, -1));
+			break;
+		}
+
+		case JSON_TOKEN_OBJECT_START:
+		case JSON_TOKEN_ARRAY_START:
+		{
+			JsonContainerData *cont = palloc(sizeof(*cont));
+			char	   *token_start = lex->token_start;
+			int			len;
+
+			if (skipNested)
+			{
+				/* find the end of a container for its length calculation */
+				if (tok == JSON_TOKEN_OBJECT_START)
+					parse_object(lex, &nullSemAction);
+				else
+					parse_array(lex, &nullSemAction);
+
+				len = lex->token_start - token_start;
+			}
+			else
+				len = lex->input_length - (lex->token_start - lex->input);
+
+			jsonInitContainer(cont,
+							  token_start, len,
+							  tok == JSON_TOKEN_OBJECT_START ?
+									JB_FOBJECT : JB_FARRAY,
+							  -1);
+
+			res->type = jbvBinary;
+			res->val.binary.data = (JsonbContainer *) cont;
+			res->val.binary.len = len;
+
+			if (skipNested)
+				return false;
+
+			/* recurse into container */
+			it->state = nextState;
+			*pit = JsonIteratorInitFromLex(cont, lex, *pit);
+			return true;
+		}
+
+		default:
+			report_parse_error(JSON_PARSE_VALUE, lex);
+	}
+
+	lex_accept(lex, tok, NULL);
+
+	return false;
+}
+
+/*
+ * Free the topmost entry in the stack of JsonIterators.
+ */
+static inline JsonIterator *
+JsonIteratorFreeAndGetParent(JsonIterator *it)
+{
+	JsonIterator *parent = it->parent;
+
+	pfree(it);
+
+	return parent;
+}
+
+/*
+ * Free the entire stack of JsonIterators.
+ */
+void
+JsonIteratorFree(JsonIterator *it)
+{
+	while (it)
+		it = JsonIteratorFreeAndGetParent(it);
+}
+
+/*
+ * Get next JsonbValue while iterating through JsonContainer.
+ *
+ * For more details, see JsonbIteratorNext().
+ */
+JsonbIteratorToken
+JsonIteratorNext(JsonIterator **pit, JsonbValue *val, bool skipNested)
+{
+	JsonIterator *it;
+
+	if (*pit == NULL)
+		return WJB_DONE;
+
+recurse:
+	it = *pit;
+
+	/* parse by recursive descent */
+	switch (it->state)
+	{
+		case JTI_ARRAY_START:
+			val->type = jbvArray;
+			val->val.array.nElems = it->isScalar ? 1 : -1;
+			val->val.array.rawScalar = it->isScalar;
+			val->val.array.elems = NULL;
+			it->state = it->isScalar ? JTI_ARRAY_ELEM_SCALAR : JTI_ARRAY_ELEM;
+			return WJB_BEGIN_ARRAY;
+
+		case JTI_ARRAY_ELEM_SCALAR:
+		{
+			(void) jsonFillValue(pit, val, skipNested, JTI_ARRAY_END);
+			it->state = JTI_ARRAY_END;
+			return WJB_ELEM;
+		}
+
+		case JTI_ARRAY_END:
+			if (!it->parent && lex_peek(it->lex) != JSON_TOKEN_END)
+				report_parse_error(JSON_PARSE_END, it->lex);
+			*pit = JsonIteratorFreeAndGetParent(*pit);
+			return WJB_END_ARRAY;
+
+		case JTI_ARRAY_ELEM:
+			if (lex_accept(it->lex, JSON_TOKEN_ARRAY_END, NULL))
+			{
+				it->state = JTI_ARRAY_END;
+				goto recurse;
+			}
+
+			if (jsonFillValue(pit, val, skipNested, JTI_ARRAY_ELEM_AFTER))
+				goto recurse;
+
+			/* fall through */
+
+		case JTI_ARRAY_ELEM_AFTER:
+			if (!lex_accept(it->lex, JSON_TOKEN_COMMA, NULL))
+			{
+				if (lex_peek(it->lex) != JSON_TOKEN_ARRAY_END)
+					report_parse_error(JSON_PARSE_ARRAY_NEXT, it->lex);
+			}
+
+			if (it->state == JTI_ARRAY_ELEM_AFTER)
+			{
+				it->state = JTI_ARRAY_ELEM;
+				goto recurse;
+			}
+
+			return WJB_ELEM;
+
+		case JTI_OBJECT_START:
+			val->type = jbvObject;
+			val->val.object.nPairs = -1;
+			val->val.object.pairs = NULL;
+			val->val.object.uniquify = false;
+			it->state = JTI_OBJECT_KEY;
+			return WJB_BEGIN_OBJECT;
+
+		case JTI_OBJECT_KEY:
+			if (lex_accept(it->lex, JSON_TOKEN_OBJECT_END, NULL))
+			{
+				if (!it->parent && lex_peek(it->lex) != JSON_TOKEN_END)
+					report_parse_error(JSON_PARSE_END, it->lex);
+				*pit = JsonIteratorFreeAndGetParent(*pit);
+				return WJB_END_OBJECT;
+			}
+
+			if (lex_peek(it->lex) != JSON_TOKEN_STRING)
+				report_parse_error(JSON_PARSE_OBJECT_START, it->lex);
+
+			(void) jsonFillValue(pit, val, true, JTI_OBJECT_VALUE);
+
+			if (!lex_accept(it->lex, JSON_TOKEN_COLON, NULL))
+				report_parse_error(JSON_PARSE_OBJECT_LABEL, it->lex);
+
+			it->state = JTI_OBJECT_VALUE;
+			return WJB_KEY;
+
+		case JTI_OBJECT_VALUE:
+			if (jsonFillValue(pit, val, skipNested, JTI_OBJECT_VALUE_AFTER))
+				goto recurse;
+
+			/* fall through */
+
+		case JTI_OBJECT_VALUE_AFTER:
+			if (!lex_accept(it->lex, JSON_TOKEN_COMMA, NULL))
+			{
+				if (lex_peek(it->lex) != JSON_TOKEN_OBJECT_END)
+					report_parse_error(JSON_PARSE_OBJECT_NEXT, it->lex);
+			}
+
+			if (it->state == JTI_OBJECT_VALUE_AFTER)
+			{
+				it->state = JTI_OBJECT_KEY;
+				goto recurse;
+			}
+
+			it->state = JTI_OBJECT_KEY;
+			return WJB_VALUE;
+
+		default:
+			break;
+	}
+
+	return WJB_DONE;
+}
+
+/* Initialize JsonIterator from json lexer which  onto the first token. */
+static JsonIterator *
+JsonIteratorInitFromLex(JsonContainer *jc, JsonLexContext *lex,
+						JsonIterator *parent)
+{
+	JsonIterator *it = palloc(sizeof(JsonIterator));
+	JsonTokenType tok;
+
+	it->container = jc;
+	it->parent = parent;
+	it->lex = lex;
+
+	tok = lex_peek(it->lex);
+
+	switch (tok)
+	{
+		case JSON_TOKEN_OBJECT_START:
+			it->isScalar = false;
+			it->state = JTI_OBJECT_START;
+			lex_accept(it->lex, tok, NULL);
+			break;
+		case JSON_TOKEN_ARRAY_START:
+			it->isScalar = false;
+			it->state = JTI_ARRAY_START;
+			lex_accept(it->lex, tok, NULL);
+			break;
+		case JSON_TOKEN_STRING:
+		case JSON_TOKEN_NUMBER:
+		case JSON_TOKEN_TRUE:
+		case JSON_TOKEN_FALSE:
+		case JSON_TOKEN_NULL:
+			it->isScalar = true;
+			it->state = JTI_ARRAY_START;
+			break;
+		default:
+			report_parse_error(JSON_PARSE_VALUE, it->lex);
+	}
+
+	return it;
+}
+
+/*
+ * Given a JsonContainer, expand to JsonIterator to iterate over items
+ * fully expanded to in-memory representation for manipulation.
+ *
+ * See JsonbIteratorNext() for notes on memory management.
+ */
+JsonIterator *
+JsonIteratorInit(JsonContainer *jc)
+{
+	JsonLexContext *lex = makeJsonLexContextCstringLen(jc->data, jc->len, true);
+	json_lex(lex);
+	return JsonIteratorInitFromLex(jc, lex, NULL);
+}
+
+/*
+ * Serialize a single JsonbValue into text buffer.
+ */
+static void
+JsonEncodeJsonbValue(StringInfo buf, JsonbValue *jbv)
+{
+	check_stack_depth();
+
+	switch (jbv->type)
+	{
+		case jbvNull:
+			appendBinaryStringInfo(buf, "null", 4);
+			break;
+
+		case jbvBool:
+			if (jbv->val.boolean)
+				appendBinaryStringInfo(buf, "true", 4);
+			else
+				appendBinaryStringInfo(buf, "false", 5);
+			break;
+
+		case jbvNumeric:
+			appendStringInfoString(buf, DatumGetCString(DirectFunctionCall1(
+				numeric_out, NumericGetDatum(jbv->val.numeric))));
+			break;
+
+		case jbvString:
+		{
+			char	   *str = jbv->val.string.len < 0 ? jbv->val.string.val :
+				pnstrdup(jbv->val.string.val, jbv->val.string.len);
+
+			escape_json(buf, str);
+
+			if (jbv->val.string.len >= 0)
+				pfree(str);
+
+			break;
+		}
+
+		case jbvDatetime:
+			{
+				char		dtbuf[MAXDATELEN + 1];
+
+				JsonEncodeDateTime(dtbuf,
+								   jbv->val.datetime.value,
+								   jbv->val.datetime.typid,
+								   &jbv->val.datetime.tz);
+
+				escape_json(buf, dtbuf);
+
+				break;
+			}
+
+		case jbvArray:
+			{
+				int			i;
+
+				if (!jbv->val.array.rawScalar)
+					appendStringInfoChar(buf, '[');
+
+				for (i = 0; i < jbv->val.array.nElems; i++)
+				{
+					if (i > 0)
+						appendBinaryStringInfo(buf, ", ", 2);
+
+					JsonEncodeJsonbValue(buf, &jbv->val.array.elems[i]);
+				}
+
+				if (!jbv->val.array.rawScalar)
+					appendStringInfoChar(buf, ']');
+
+				break;
+			}
+
+		case jbvObject:
+			{
+				int			i;
+
+				appendStringInfoChar(buf, '{');
+
+				for (i = 0; i < jbv->val.object.nPairs; i++)
+				{
+					if (i > 0)
+						appendBinaryStringInfo(buf, ", ", 2);
+
+					JsonEncodeJsonbValue(buf, &jbv->val.object.pairs[i].key);
+					appendBinaryStringInfo(buf, ": ", 2);
+					JsonEncodeJsonbValue(buf, &jbv->val.object.pairs[i].value);
+				}
+
+				appendStringInfoChar(buf, '}');
+				break;
+			}
+
+		case jbvBinary:
+			{
+				JsonContainer *json = (JsonContainer *) jbv->val.binary.data;
+
+				appendBinaryStringInfo(buf, json->data, json->len);
+				break;
+			}
+
+		default:
+			elog(ERROR, "unknown jsonb value type: %d", jbv->type);
+			break;
+	}
+}
+
+/*
+ * Turn an in-memory JsonbValue into a json for on-disk storage.
+ */
+Json *
+JsonbValueToJson(JsonbValue *jbv)
+{
+	StringInfoData buf;
+	Json	   *json = palloc0(sizeof(*json));
+	int			type;
+	int			size;
+
+	if (jbv->type == jbvBinary)
+	{
+		/* simply copy the whole container and its data */
+		JsonContainer *src = (JsonContainer *) jbv->val.binary.data;
+		JsonContainerData *dst = (JsonContainerData *) &json->root;
+
+		*dst = *src;
+		dst->data = memcpy(palloc(src->len), src->data, src->len);
+
+		return json;
+	}
+
+	initStringInfo(&buf);
+
+	JsonEncodeJsonbValue(&buf, jbv);
+
+	switch (jbv->type)
+	{
+		case jbvArray:
+			type = JB_FARRAY;
+			size = jbv->val.array.nElems;
+			break;
+
+		case jbvObject:
+			type = JB_FOBJECT;
+			size = jbv->val.object.nPairs;
+			break;
+
+		default:	/* scalar */
+			type = JB_FARRAY | JB_FSCALAR;
+			size = 1;
+			break;
+	}
+
+	jsonInitContainer((JsonContainerData *) &json->root,
+					  buf.data, buf.len, type, size);
+
+	return json;
+}
+
+/* Context and semantic actions for JsonGetArraySize() */
+typedef struct JsonGetArraySizeState
+{
+	int		level;
+	uint32	size;
+} JsonGetArraySizeState;
+
+static void
+JsonGetArraySize_array_start(void *state)
+{
+	((JsonGetArraySizeState *) state)->level++;
+}
+
+static void
+JsonGetArraySize_array_end(void *state)
+{
+	((JsonGetArraySizeState *) state)->level--;
+}
+
+static void
+JsonGetArraySize_array_element_start(void *state, bool isnull)
+{
+	JsonGetArraySizeState *s = state;
+	if (s->level == 1)
+		s->size++;
+}
+
+/*
+ * Calculate the size of a json array by iterating through its elements.
+ */
+uint32
+JsonGetArraySize(JsonContainer *jc)
+{
+	JsonLexContext *lex = makeJsonLexContextCstringLen(jc->data, jc->len, false);
+	JsonSemAction	sem;
+	JsonGetArraySizeState state;
+
+	state.level = 0;
+	state.size = 0;
+
+	memset(&sem, 0, sizeof(sem));
+	sem.semstate = &state;
+	sem.array_start			= JsonGetArraySize_array_start;
+	sem.array_end 			= JsonGetArraySize_array_end;
+	sem.array_element_end	= JsonGetArraySize_array_element_start;
+
+	json_lex(lex);
+	parse_array(lex, &sem);
+
+	return state.size;
+}
+
+/*
+ * Find last key in a json object by name. Returns palloc()'d copy of the
+ * corresponding value, or NULL if is not found.
+ */
+static inline JsonbValue *
+jsonFindLastKeyInObject(JsonContainer *obj, const JsonbValue *key)
+{
+	JsonbValue *res = NULL;
+	JsonbValue	jbv;
+	JsonIterator *it;
+	JsonbIteratorToken tok;
+
+	Assert(JsonContainerIsObject(obj));
+	Assert(key->type == jbvString);
+
+	it = JsonIteratorInit(obj);
+
+	while ((tok = JsonIteratorNext(&it, &jbv, true)) != WJB_DONE)
+	{
+		if (tok == WJB_KEY && !lengthCompareJsonbStringValue(key, &jbv))
+		{
+			if (!res)
+				res = palloc(sizeof(*res));
+
+			tok = JsonIteratorNext(&it, res, true);
+			Assert(tok == WJB_VALUE);
+		}
+	}
+
+	return res;
+}
+
+/*
+ * Find scalar element in a array.  Returns palloc()'d copy of value or NULL.
+ */
+static JsonbValue *
+jsonFindValueInArray(JsonContainer *array, const JsonbValue *elem)
+{
+	JsonbValue *val = palloc(sizeof(*val));
+	JsonIterator *it;
+	JsonbIteratorToken tok;
+
+	Assert(JsonContainerIsArray(array));
+	Assert(IsAJsonbScalar(elem));
+
+	it = JsonIteratorInit(array);
+
+	while ((tok = JsonIteratorNext(&it, val, true)) != WJB_DONE)
+	{
+		if (tok == WJB_ELEM && val->type == elem->type &&
+			equalsJsonbScalarValue(val, (JsonbValue *) elem))
+		{
+			JsonIteratorFree(it);
+			return val;
+		}
+	}
+
+	pfree(val);
+	return NULL;
+}
+
+/*
+ * Find value in object (i.e. the "value" part of some key/value pair in an
+ * object), or find a matching element if we're looking through an array.
+ * The "flags" argument allows the caller to specify which container types are
+ * of interest.  If we cannot find the value, return NULL.  Otherwise, return
+ * palloc()'d copy of value.
+ *
+ * For more details, see findJsonbValueFromContainer().
+ */
+JsonbValue *
+findJsonValueFromContainer(JsonContainer *jc, uint32 flags, JsonbValue *key)
+{
+	Assert((flags & ~(JB_FARRAY | JB_FOBJECT)) == 0);
+
+	if (!JsonContainerSize(jc))
+		return NULL;
+
+	if ((flags & JB_FARRAY) && JsonContainerIsArray(jc))
+		return jsonFindValueInArray(jc, key);
+
+	if ((flags & JB_FOBJECT) && JsonContainerIsObject(jc))
+		return jsonFindLastKeyInObject(jc, key);
+
+	/* Not found */
+	return NULL;
+}
+
+/*
+ * Get i-th element of a json array.
+ *
+ * Returns palloc()'d copy of the value, or NULL if it does not exist.
+ */
+JsonbValue *
+getIthJsonValueFromContainer(JsonContainer *array, uint32 index)
+{
+	JsonbValue *val = palloc(sizeof(JsonbValue));
+	JsonIterator *it;
+	JsonbIteratorToken tok;
+
+	Assert(JsonContainerIsArray(array));
+
+	it = JsonIteratorInit(array);
+
+	while ((tok = JsonIteratorNext(&it, val, true)) != WJB_DONE)
+	{
+		if (tok == WJB_ELEM)
+		{
+			if (index-- == 0)
+			{
+				JsonIteratorFree(it);
+				return val;
+			}
+		}
+	}
+
+	pfree(val);
+
+	return NULL;
+}
+
+/*
+ * Push json JsonbValue into JsonbParseState.
+ *
+ * Used for converting an in-memory JsonbValue to a json. For more details,
+ * see pushJsonbValue(). This function differs from pushJsonbValue() only by
+ * resetting "uniquify" flag in objects.
+ */
+JsonbValue *
+pushJsonValue(JsonbParseState **pstate, JsonbIteratorToken seq,
+			  JsonbValue *jbval)
+{
+	JsonIterator *it;
+	JsonbValue *res = NULL;
+	JsonbValue	v;
+	JsonbIteratorToken tok;
+
+	if (!jbval || (seq != WJB_ELEM && seq != WJB_VALUE) ||
+		jbval->type != jbvBinary)
+	{
+		/* drop through */
+		res = pushJsonbValueScalar(pstate, seq, jbval);
+
+		/* reset "uniquify" flag of objects */
+		if (seq == WJB_BEGIN_OBJECT)
+			(*pstate)->contVal.val.object.uniquify = false;
+
+		return res;
+	}
+
+	/* unpack the binary and add each piece to the pstate */
+	it = JsonIteratorInit((JsonContainer *) jbval->val.binary.data);
+	while ((tok = JsonIteratorNext(&it, &v, false)) != WJB_DONE)
+	{
+		res = pushJsonbValueScalar(pstate, tok,
+								   tok < WJB_BEGIN_ARRAY ? &v : NULL);
+
+		/* reset "uniquify" flag of objects */
+		if (tok == WJB_BEGIN_OBJECT)
+			(*pstate)->contVal.val.object.uniquify = false;
+	}
+
+	return res;
+}
+
+/*
+ * Extract scalar JsonbValue from a scalar json.
+ */
+JsonbValue *
+JsonExtractScalar(JsonContainer *jbc, JsonbValue *res)
+{
+	JsonIterator *it = JsonIteratorInit(jbc);
+	JsonbIteratorToken tok PG_USED_FOR_ASSERTS_ONLY;
+	JsonbValue	tmp;
+
+	tok = JsonIteratorNext(&it, &tmp, true);
+	Assert(tok == WJB_BEGIN_ARRAY);
+	Assert(tmp.val.array.nElems == 1 && tmp.val.array.rawScalar);
+
+	tok = JsonIteratorNext(&it, res, true);
+	Assert(tok == WJB_ELEM);
+	Assert(IsAJsonbScalar(res));
+
+	tok = JsonIteratorNext(&it, &tmp, true);
+	Assert(tok == WJB_END_ARRAY);
+
+	return res;
+}
+
+/*
+ * Turn a Json into its C-string representation with stripping quotes from
+ * scalar strings.
+ */
+char *
+JsonUnquote(Json *jb)
+{
+	if (JsonContainerIsScalar(&jb->root))
+	{
+		JsonbValue	v;
+
+		JsonExtractScalar(&jb->root, &v);
+
+		if (v.type == jbvString)
+			return pnstrdup(v.val.string.val, v.val.string.len);
+	}
+
+	return pnstrdup(jb->root.data, jb->root.len);
+}
+
+/*
+ * Turn a JsonContainer into its C-string representation.
+ */
+char *
+JsonToCString(StringInfo out, JsonContainer *jc, int estimated_len)
+{
+	if (out)
+	{
+		appendBinaryStringInfo(out, jc->data, jc->len);
+		return out->data;
+	}
+	else
+	{
+		char *str = palloc(jc->len + 1);
+
+		memcpy(str, jc->data, jc->len);
+		str[jc->len] = 0;
+
+		return str;
+	}
 }

@@ -28,6 +28,7 @@
 #include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
+#include "executor/execExpr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1060,6 +1061,16 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 		return query_tree_walker(query,
 								 max_parallel_hazard_walker,
 								 context, 0);
+	}
+
+	/* JsonExpr is parallel-unsafe if subtransactions can be used. */
+	else if (IsA(node, JsonExpr))
+	{
+		JsonExpr  *jsexpr = (JsonExpr *) node;
+
+		if (ExecEvalJsonNeedsSubTransaction(jsexpr))
+			context->max_hazard = PROPARALLEL_UNSAFE;
+			return true;
 	}
 
 	/* Recurse to check arguments */
@@ -2498,6 +2509,8 @@ eval_const_expressions_mutator(Node *node,
 				newexpr->winref = expr->winref;
 				newexpr->winstar = expr->winstar;
 				newexpr->winagg = expr->winagg;
+				newexpr->winformat = expr->winformat;
+				newexpr->winformatopts = copyObject(expr->winformatopts);
 				newexpr->location = expr->location;
 
 				return (Node *) newexpr;
@@ -2544,6 +2557,8 @@ eval_const_expressions_mutator(Node *node,
 				newexpr->funccollid = expr->funccollid;
 				newexpr->inputcollid = expr->inputcollid;
 				newexpr->args = args;
+				newexpr->funcformat2 = expr->funcformat2;
+				newexpr->funcformatopts = copyObject(expr->funcformatopts);
 				newexpr->location = expr->location;
 				return (Node *) newexpr;
 			}

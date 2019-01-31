@@ -31,5 +31,9 @@ extern Relids adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 							   Relids child_relids, Relids top_parent_relids);
 extern AppendRelInfo **find_appinfos_by_relids(PlannerInfo *root,
 						Relids relids, int *nappinfos);
+extern void promote_child_relation(PlannerInfo *root, RelOptInfo *parent,
+					   RelOptInfo *child,
+					   List *translate_from_exprs,
+					   List *translate_to_exprs);
 
 #endif							/* APPENDINFO_H */

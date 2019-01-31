@@ -52,6 +52,7 @@
 
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
+#include "optimizer/clauses.h"
 #include "optimizer/paramassign.h"
 #include "optimizer/placeholder.h"
 #include "rewrite/rewriteManip.h"
@@ -531,6 +532,8 @@ identify_current_nestloop_params(PlannerInfo *root, Relids leftrelids)
 		{
 			root->curOuterParams = list_delete_cell(root->curOuterParams,
 													cell, prev);
+			nlp->paramval = (Var *) replace_translatable_exprs(root,
+													(Node *) nlp->paramval);
 			result = lappend(result, nlp);
 		}
 		else if (IsA(nlp->paramval, PlaceHolderVar) &&
@@ -543,6 +546,8 @@ identify_current_nestloop_params(PlannerInfo *root, Relids leftrelids)
 		{
 			root->curOuterParams = list_delete_cell(root->curOuterParams,
 													cell, prev);
+			nlp->paramval = (Var *) replace_translatable_exprs(root,
+													(Node *) nlp->paramval);
 			result = lappend(result, nlp);
 		}
 		else

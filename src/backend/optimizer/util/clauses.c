@@ -155,6 +155,7 @@ static Query *substitute_actual_srf_parameters(Query *expr,
 static Node *substitute_actual_srf_parameters_mutator(Node *node,
 										 substitute_actual_srf_parameters_context *context);
 static bool tlist_matches_coltypelist(List *tlist, List *coltypelist);
+static Node *replace_translatable_exprs_mutator(Node *node, PlannerInfo *root);
 
 
 /*****************************************************************************
@@ -5300,4 +5301,49 @@ tlist_matches_coltypelist(List *tlist, List *coltypelist)
 		return false;			/* too few tlist items */
 
 	return true;
+}
+
+/*
+ * replace_translatable_exprs
+ *		Append paths with a single subpath are special because its possible
+ *		to disregard the AppendPath and just build the plan using that single
+ *		subpath instead.  Expr translation is required to translate the
+ *		targetlists of nodes above the Append, this function performs that
+ *		translation.
+ *
+ * For now, we really only ever expect to translate from a Var. However, the
+ * Var may get translated into something other than a Var.
+ */
+Node *
+replace_translatable_exprs(PlannerInfo *root, Node *expr)
+{
+	if (root->translate_from_exprs != NIL)
+		return replace_translatable_exprs_mutator(expr, root);
+	return expr;
+}
+
+static Node *
+replace_translatable_exprs_mutator(Node *node, PlannerInfo *root)
+{
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Var))
+	{
+		ListCell *l1;
+		ListCell *l2;
+
+		forboth(l1, root->translate_from_exprs, l2, root->translate_to_exprs)
+		{
+			if (equal(node, lfirst(l1)))
+			{
+				/* XXX do we need to do copyObject? */
+				return (Node *) copyObject(lfirst(l2));
+			}
+		}
+		return node;
+	}
+	return expression_tree_mutator(node,
+								   replace_translatable_exprs_mutator,
+								   (void *) root);
 }

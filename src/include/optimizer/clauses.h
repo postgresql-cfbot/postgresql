@@ -55,5 +55,6 @@ extern void CommuteRowCompareExpr(RowCompareExpr *clause);
 
 extern Query *inline_set_returning_function(PlannerInfo *root,
 							  RangeTblEntry *rte);
+extern Node *replace_translatable_exprs(PlannerInfo *root, Node *expr);
 
 #endif							/* CLAUSES_H */

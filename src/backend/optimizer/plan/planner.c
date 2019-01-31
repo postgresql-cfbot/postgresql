@@ -3930,7 +3930,10 @@ create_degenerate_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 							   0,
 							   false,
 							   NIL,
-							   -1);
+							   -1,
+							   NIL,
+							   NIL,
+								   false);
 	}
 	else
 	{
@@ -6964,7 +6967,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 		 */
 		rel->pathlist = list_make1(create_append_path(root, rel, NIL, NIL,
 													  NULL, 0, false, NIL,
-													  -1));
+													  -1, NIL, NIL, false));
 		rel->partial_pathlist = NIL;
 		set_cheapest(rel);
 		Assert(IS_DUMMY_REL(rel));

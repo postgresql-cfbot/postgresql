@@ -18,6 +18,8 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -726,4 +728,88 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 		appinfos[cnt++] = appinfo;
 	}
 	return appinfos;
+}
+
+/*
+ * promote_child_relation
+ *		Make the required changes to allow a child relation to be used instead
+ *		of an Append node.
+ */
+void
+promote_child_relation(PlannerInfo *root, RelOptInfo *parent,
+	RelOptInfo *child,
+	List *translate_from_exprs,
+	List *translate_to_exprs)
+{
+	Bitmapset  *cur_relids;
+
+	/*
+	 * First we must record the translation expressions in the PlannerInfo.
+	 * These need to be found when the expression translation is being done
+	 * when the final plan is being assembled.
+	 */
+	root->translate_from_exprs = list_concat(root->translate_from_exprs,
+		list_copy(translate_from_exprs));
+
+	root->translate_to_exprs = list_concat(root->translate_to_exprs,
+		list_copy(translate_to_exprs));
+
+	/*
+	 * Record this child as having been promoted.  Some places treat child
+	 * relations in a special way, and this will give them a VIP ticket to
+	 * adulthood, where required.
+	 */
+	root->translated_childrelids =
+		bms_add_members(root->translated_childrelids, child->relids);
+
+	cur_relids = child->relids;
+
+	do
+	{
+		AppendRelInfo **appinfos;
+		int			nappinfos;
+		int			i;
+
+		appinfos = find_appinfos_by_relids(root, cur_relids, &nappinfos);
+
+		/* free any bitmapset we used in the last iteration */
+		if (cur_relids != child->relids)
+			bms_free(cur_relids);
+
+		cur_relids = NULL;
+
+		for (i = 0; i < nappinfos; i++)
+		{
+			AppendRelInfo *appinfo = appinfos[i];
+
+			RelOptInfo *parent = find_base_rel(root, appinfo->parent_relid);
+			RelOptInfo *child = find_base_rel(root, appinfo->child_relid);
+
+			/*
+			 * Some childrel equivalences may not exist due to some eclasses
+			 * having been added since add_child_rel_equivalences was called
+			 * originally.  Calling this again will add child members for any
+			 * newly added eclasses.
+			 */
+			add_child_rel_equivalences(root, appinfo, parent, child);
+
+			cur_relids = bms_add_member(cur_relids, appinfo->parent_relid);
+		}
+
+		pfree(appinfos);
+
+		/*
+		 * There may be multiple levels between the parent and child, so keep
+		 * going until we reach the top-level parent.
+		 */
+	} while (!bms_equal(cur_relids, parent->relids));
+
+	bms_free(cur_relids);
+
+	/*
+	 * Finally, we remove em_is_child markers for child eclass members
+	 * belonging to this child rel.  This is required so we can find eclass
+	 * members for sort PathKeys.
+	 */
+	promote_child_rel_equivalences(root, child->relids);
 }

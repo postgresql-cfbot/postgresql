@@ -617,7 +617,8 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	 * Append the child results together.
 	 */
 	path = (Path *) create_append_path(root, result_rel, pathlist, NIL,
-									   NULL, 0, false, NIL, -1);
+									   NULL, 0, false, NIL, -1,
+									   NIL, NIL, false);
 
 	/*
 	 * For UNION ALL, we just need the Append path.  For UNION, need to add
@@ -673,7 +674,8 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 		ppath = (Path *)
 			create_append_path(root, result_rel, NIL, partial_pathlist,
 							   NULL, parallel_workers, enable_parallel_append,
-							   NIL, -1);
+							   NIL, -1, NIL, NIL, false);
+
 		ppath = (Path *)
 			create_gather_path(root, result_rel, ppath,
 							   result_rel->reltarget, NULL, NULL);
@@ -783,7 +785,8 @@ generate_nonunion_paths(SetOperationStmt *op, PlannerInfo *root,
 	 * Append the child results together.
 	 */
 	path = (Path *) create_append_path(root, result_rel, pathlist, NIL,
-									   NULL, 0, false, NIL, -1);
+									   NULL, 0, false, NIL, -1, NIL, NIL,
+									   false);
 
 	/* Identify the grouping semantics */
 	groupList = generate_setop_grouplist(op, tlist);

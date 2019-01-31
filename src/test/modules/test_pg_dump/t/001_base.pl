@@ -322,6 +322,19 @@ my %tests = (
 		like => { binary_upgrade => 1, },
 	},
 
+	'CREATE ACCESS METHOD regress_test_table_am' => {
+		create_order => 11,
+        create_sql   => 'CREATE ACCESS METHOD regress_table_am TYPE TABLE HANDLER heap_tableam_handler;',
+		regexp => qr/^
+			\QCREATE ACCESS METHOD regress_table_am TYPE TABLE HANDLER heap_tableam_handler;\E
+			\n/xm,
+		like => {
+            %full_runs,
+            schema_only         => 1,
+            section_pre_data    => 1,
+        },
+	},
+
 	'COMMENT ON EXTENSION test_pg_dump' => {
 		regexp => qr/^
 			\QCOMMENT ON EXTENSION test_pg_dump \E
@@ -537,6 +550,32 @@ my %tests = (
 			schema_only      => 1,
 			section_pre_data => 1,
 		},
+	},
+
+	'SET regress_pg_dump_table_am' => {
+		create_order => 12,
+		regexp => qr/^
+			\QSET default_table_access_method = regress_table_am;\E
+			\n/xm,
+		like => {
+            %full_runs,
+            schema_only         => 1,
+            section_pre_data    => 1,
+        },
+	},
+
+	'CREATE TABLE regress_pg_dump_table_am' => {
+		create_order => 13,
+		create_sql =>
+		  'CREATE TABLE regress_pg_dump_table_am (col1 int not null, col2 int) USING regress_table_am;',
+		regexp => qr/^
+			\QCREATE TABLE public.regress_pg_dump_table_added (\E
+			\n\s+\Qcol1 integer NOT NULL,\E
+			\n\s+\Qcol2 integer\E
+			\n\);\n/xm,
+		like => {
+            binary_upgrade => 1,
+        },
 	},);
 
 #########################################

@@ -448,6 +448,19 @@ select 1 where false;
 \df exp
 \pset tuples_only false
 
+-- check conditional tableam display
+
+-- Create a heap2 table am handler with heapam handler
+CREATE ACCESS METHOD heap2 TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE tbl_heap2(f1 int, f2 char(100)) using heap2;
+CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
+\d+ tbl_heap2
+\d+ tbl_heap
+\set HIDE_TABLEAM off
+\d+ tbl_heap2
+\d+ tbl_heap
+\set HIDE_TABLEAM on
+
 -- test numericlocale (as best we can without control of psql's locale)
 
 \pset format aligned

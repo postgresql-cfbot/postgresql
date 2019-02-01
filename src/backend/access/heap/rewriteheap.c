@@ -654,9 +654,6 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	{
 		int options = HEAP_INSERT_SKIP_FSM;
 
-		if (!state->rs_use_wal)
-			options |= HEAP_INSERT_SKIP_WAL;
-
 		/*
 		 * While rewriting the heap for VACUUM FULL / CLUSTER, make sure data
 		 * for the TOAST table are not logically decoded.  The main heap is

@@ -611,8 +611,14 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	/* Ensure rd_smgr is open (could have been closed by relcache flush!) */
 	RelationOpenSmgr(wstate->index);
 
-	/* XLOG stuff */
-	if (wstate->btws_use_wal)
+	/* XLOG stuff
+	 *
+	 * Even if minimal mode, WAL is required here if truncation happened after
+	 * being created in the same transaction. It is not needed otherwise but
+	 * we don't bother identifying the case precisely.
+	 */
+	if (wstate->btws_use_wal ||
+		(blkno == BTREE_METAPAGE && BTPageGetMeta(page)->btm_root == 0))
 	{
 		/* We use the heap NEWPAGE record type for this */
 		log_newpage(&wstate->index->rd_node, MAIN_FORKNUM, blkno, page, true);
@@ -1055,6 +1061,11 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 	 * point to the new root (unless we had no data at all, in which case it's
 	 * set to point to "P_NONE").  This changes the index to the "valid" state
 	 * by filling in a valid magic number in the metapage.
+	 */
+	/*
+	 * If no tuple was inserted, it's possible that we are truncating a
+	 * relation. We need to emit WAL for the metapage in the case. However it
+	 * is not required elsewise,
 	 */
 	metapage = (Page) palloc(BLCKSZ);
 	_bt_initmetapage(metapage, rootblkno, rootlevel);

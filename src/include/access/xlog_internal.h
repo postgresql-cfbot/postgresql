@@ -225,6 +225,7 @@ typedef XLogLongPageHeaderData *XLogLongPageHeader;
 typedef struct xl_parameter_change
 {
 	int			MaxConnections;
+	int			max_wal_senders;
 	int			max_worker_processes;
 	int			max_prepared_xacts;
 	int			max_locks_per_xact;

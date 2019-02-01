@@ -804,20 +804,6 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 					*tobeinserted_p = mallocedval;
 				}
 				break;
-
-			case ECPGt_bytea:
-				{
-					struct ECPGgeneric_varchar *variable =
-					(struct ECPGgeneric_varchar *) (var->value);
-
-					if (!(mallocedval = (char *) ecpg_alloc(variable->len, lineno)))
-						return false;
-
-					memcpy(mallocedval, variable->arr, variable->len);
-					*tobeinserted_p = mallocedval;
-				}
-				break;
-
 			case ECPGt_varchar:
 				{
 					struct ECPGgeneric_varchar *variable =
@@ -1060,30 +1046,6 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 	return true;
 }
 
-static void
-print_param_value(char *value, int len, int is_binary, int lineno, int nth)
-{
-	char *value_s;
-	bool malloced = false;
-
-	if (value == NULL)
-		value_s = "null";
-	else if (! is_binary)
-		value_s = value;
-	else
-	{
-		value_s = ecpg_alloc(ecpg_hex_enc_len(len), lineno);
-		ecpg_hex_encode(value, len, value_s);
-		malloced = true;
-	}
-
-	ecpg_log("ecpg_free_params on line %d: parameter %d = %s\n",
-				lineno, nth, value_s);
-
-	if (malloced)
-		ecpg_free(value_s);
-}
-
 void
 ecpg_free_params(struct statement *stmt, bool print)
 {
@@ -1092,16 +1054,11 @@ ecpg_free_params(struct statement *stmt, bool print)
 	for (n = 0; n < stmt->nparams; n++)
 	{
 		if (print)
-			print_param_value(stmt->paramvalues[n], stmt->paramlengths[n],
-								stmt->paramformats[n], stmt->lineno, n + 1);
+			ecpg_log("ecpg_free_params on line %d: parameter %d = %s\n", stmt->lineno, n + 1, stmt->paramvalues[n] ? stmt->paramvalues[n] : "null");
 		ecpg_free(stmt->paramvalues[n]);
 	}
 	ecpg_free(stmt->paramvalues);
-	ecpg_free(stmt->paramlengths);
-	ecpg_free(stmt->paramformats);
 	stmt->paramvalues = NULL;
-	stmt->paramlengths = NULL;
-	stmt->paramformats = NULL;
 	stmt->nparams = 0;
 }
 
@@ -1168,13 +1125,8 @@ ecpg_build_params(struct statement *stmt)
 	{
 		char	   *tobeinserted;
 		int			counter = 1;
-		bool		binary_format;
-		int			binary_length;
-
 
 		tobeinserted = NULL;
-		binary_length = 0;
-		binary_format = false;
 
 		/*
 		 * A descriptor is a special case since it contains many variables but
@@ -1199,27 +1151,12 @@ ecpg_build_params(struct statement *stmt)
 			{
 				if (desc_item->num == desc_counter)
 				{
-					if (!desc_item->is_binary)
-					{
-						desc_inlist.type = ECPGt_char;
-						desc_inlist.varcharsize = strlen(desc_item->data);
-					}
-					else
-					{
-						struct ECPGgeneric_varchar *variable =
-						(struct ECPGgeneric_varchar *) (desc_item->data);
-
-						binary_length = variable->len;
-						binary_format = true;
-
-						desc_inlist.type = ECPGt_bytea;
-						desc_inlist.varcharsize = binary_length;
-					}
+					desc_inlist.type = ECPGt_char;
 					desc_inlist.value = desc_item->data;
 					desc_inlist.pointer = &(desc_item->data);
+					desc_inlist.varcharsize = strlen(desc_item->data);
 					desc_inlist.arrsize = 1;
 					desc_inlist.offset = 0;
-
 					if (!desc_item->indicator)
 					{
 						desc_inlist.ind_type = ECPGt_NO_INDICATOR;
@@ -1361,15 +1298,6 @@ ecpg_build_params(struct statement *stmt)
 		{
 			if (!ecpg_store_input(stmt->lineno, stmt->force_indicator, var, &tobeinserted, false))
 				return false;
-
-			if (var->type == ECPGt_bytea)
-			{
-				struct ECPGgeneric_varchar *variable =
-				(struct ECPGgeneric_varchar *) (var->value);
-
-				binary_length = variable->len;
-				binary_format = true;
-			}
 		}
 
 		/*
@@ -1423,20 +1351,8 @@ ecpg_build_params(struct statement *stmt)
 		else
 		{
 			char	  **paramvalues;
-			int		   *paramlengths;
-			int		   *paramformats;
 
 			if (!(paramvalues = (char **) ecpg_realloc(stmt->paramvalues, sizeof(char *) * (stmt->nparams + 1), stmt->lineno)))
-			{
-				ecpg_free_params(stmt, false);
-				return false;
-			}
-			if (!(paramlengths = (int *) ecpg_realloc(stmt->paramlengths, sizeof(int) * (stmt->nparams + 1), stmt->lineno)))
-			{
-				ecpg_free_params(stmt, false);
-				return false;
-			}
-			if (!(paramformats = (int *) ecpg_realloc(stmt->paramformats, sizeof(int) * (stmt->nparams + 1), stmt->lineno)))
 			{
 				ecpg_free_params(stmt, false);
 				return false;
@@ -1444,11 +1360,7 @@ ecpg_build_params(struct statement *stmt)
 
 			stmt->nparams++;
 			stmt->paramvalues = paramvalues;
-			stmt->paramlengths = paramlengths;
-			stmt->paramformats = paramformats;
 			stmt->paramvalues[stmt->nparams - 1] = tobeinserted;
-			stmt->paramlengths[stmt->nparams - 1] = binary_length;
-			stmt->paramformats[stmt->nparams - 1] = (binary_format ? 1 : 0);
 
 			/* let's see if this was an old style placeholder */
 			if (stmt->command[position] == '?')
@@ -1521,13 +1433,7 @@ ecpg_execute(struct statement *stmt)
 	ecpg_log("ecpg_execute on line %d: query: %s; with %d parameter(s) on connection %s\n", stmt->lineno, stmt->command, stmt->nparams, stmt->connection->name);
 	if (stmt->statement_type == ECPGst_execute)
 	{
-		stmt->results = PQexecPrepared(stmt->connection->connection,
-									   stmt->name,
-									   stmt->nparams,
-									   (const char *const *) stmt->paramvalues,
-									   (const int *) stmt->paramlengths,
-									   (const int *) stmt->paramformats,
-									   0);
+		stmt->results = PQexecPrepared(stmt->connection->connection, stmt->name, stmt->nparams, (const char *const *) stmt->paramvalues, NULL, NULL, 0);
 		ecpg_log("ecpg_execute on line %d: using PQexecPrepared for \"%s\"\n", stmt->lineno, stmt->command);
 	}
 	else
@@ -1539,12 +1445,7 @@ ecpg_execute(struct statement *stmt)
 		}
 		else
 		{
-			stmt->results = PQexecParams(stmt->connection->connection,
-										 stmt->command, stmt->nparams, NULL,
-										 (const char *const *) stmt->paramvalues,
-										 (const int *) stmt->paramlengths,
-										 (const int *) stmt->paramformats,
-										 0);
+			stmt->results = PQexecParams(stmt->connection->connection, stmt->command, stmt->nparams, NULL, (const char *const *) stmt->paramvalues, NULL, NULL, 0);
 			ecpg_log("ecpg_execute on line %d: using PQexecParams\n", stmt->lineno);
 		}
 	}

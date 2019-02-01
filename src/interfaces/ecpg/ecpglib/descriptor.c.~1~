@@ -659,29 +659,11 @@ ECPGset_desc(int lineno, const char *desc_name, int index,...)
 		{
 			case ECPGd_data:
 				{
-					if (var->type != ECPGt_bytea)
+					if (!ecpg_store_input(lineno, true, var, &tobeinserted, false))
 					{
-						if (!ecpg_store_input(lineno, true, var, &tobeinserted, false))
-						{
-							ecpg_free(var);
-							va_end(args);
-							return false;
-						}
-						desc_item->is_binary = false;
-					}
-					else
-					{
-						struct ECPGgeneric_varchar *variable =
-						(struct ECPGgeneric_varchar *) (var->value);
-
-						if (!(tobeinserted = ecpg_alloc(sizeof(int) + variable->len, lineno)))
-						{
-							ecpg_free(var);
-							va_end(args);
-							return false;
-						}
-						memcpy(tobeinserted, var->value, sizeof(int) + variable->len);
-						desc_item->is_binary = true;
+						ecpg_free(var);
+						va_end(args);
+						return false;
 					}
 
 					ecpg_free(desc_item->data); /* free() takes care of a

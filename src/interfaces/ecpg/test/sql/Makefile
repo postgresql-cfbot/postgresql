@@ -23,7 +23,8 @@ TESTS = array array.c \
         quote quote.c \
         show show.c \
         twophase twophase.c \
-        insupd insupd.c
+        insupd insupd.c \
+	bytea bytea.c
 
 all: $(TESTS)
 

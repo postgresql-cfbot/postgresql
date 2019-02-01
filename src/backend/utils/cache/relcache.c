@@ -72,6 +72,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "partitioning/partbounds.h"
+#include "partitioning/partdesc.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
 #include "storage/lmgr.h"
@@ -283,8 +284,6 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 				  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
-static bool equalPartitionDescs(PartitionKey key, PartitionDesc partdesc1,
-					PartitionDesc partdesc2);
 
 
 /*
@@ -991,60 +990,6 @@ equalRSDesc(RowSecurityDesc *rsdesc1, RowSecurityDesc *rsdesc2)
 		if (!equalPolicy(l, r))
 			return false;
 	}
-
-	return true;
-}
-
-/*
- * equalPartitionDescs
- *		Compare two partition descriptors for logical equality
- */
-static bool
-equalPartitionDescs(PartitionKey key, PartitionDesc partdesc1,
-					PartitionDesc partdesc2)
-{
-	int			i;
-
-	if (partdesc1 != NULL)
-	{
-		if (partdesc2 == NULL)
-			return false;
-		if (partdesc1->nparts != partdesc2->nparts)
-			return false;
-
-		Assert(key != NULL || partdesc1->nparts == 0);
-
-		/*
-		 * Same oids? If the partitioning structure did not change, that is,
-		 * no partitions were added or removed to the relation, the oids array
-		 * should still match element-by-element.
-		 */
-		for (i = 0; i < partdesc1->nparts; i++)
-		{
-			if (partdesc1->oids[i] != partdesc2->oids[i])
-				return false;
-		}
-
-		/*
-		 * Now compare partition bound collections.  The logic to iterate over
-		 * the collections is private to partition.c.
-		 */
-		if (partdesc1->boundinfo != NULL)
-		{
-			if (partdesc2->boundinfo == NULL)
-				return false;
-
-			if (!partition_bounds_equal(key->partnatts, key->parttyplen,
-										key->parttypbyval,
-										partdesc1->boundinfo,
-										partdesc2->boundinfo))
-				return false;
-		}
-		else if (partdesc2->boundinfo != NULL)
-			return false;
-	}
-	else if (partdesc2 != NULL)
-		return false;
 
 	return true;
 }
@@ -2534,6 +2479,26 @@ RelationClearRelation(Relation relation, bool rebuild)
 		{
 			SWAPFIELD(PartitionDesc, rd_partdesc);
 			SWAPFIELD(MemoryContext, rd_pdcxt);
+		}
+		else if (rebuild && newrel->rd_pdcxt != NULL)
+		{
+			/*
+			 * We are rebuilding a partitioned relation with a non-zero
+			 * reference count, so keep the old partition descriptor around,
+			 * in case there's a PartitionDirectory with a pointer to it.
+			 * Attach it to the new rd_pdcxt so that it gets cleaned up
+			 * eventually.  In the case where the reference count is 0, this
+			 * code is not reached, which should be OK because in that case
+			 * there should be no PartitionDirectory with a pointer to the old
+			 * entry.
+			 *
+			 * Note that newrel and relation have already been swapped, so
+			 * the "old" partition descriptor is actually the one hanging off
+			 * of newrel.
+			 */
+			MemoryContextSetParent(newrel->rd_pdcxt, relation->rd_pdcxt);
+			newrel->rd_partdesc = NULL;
+			newrel->rd_pdcxt = NULL;
 		}
 
 #undef SWAPFIELD

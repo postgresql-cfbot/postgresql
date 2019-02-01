@@ -348,6 +348,9 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* Directory of partition descriptors. */
+	PartitionDirectory partition_directory;
 };
 
 

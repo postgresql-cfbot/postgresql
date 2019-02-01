@@ -27,7 +27,6 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/heap.h"
-#include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_statistic_ext.h"
 #include "foreign/fdwapi.h"
@@ -39,6 +38,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/prep.h"
 #include "partitioning/partbounds.h"
+#include "partitioning/partdesc.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
@@ -1904,7 +1904,7 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 
 	Assert(relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 
-	partdesc = RelationGetPartitionDesc(relation);
+	partdesc = PartitionDirectoryLookup(root->partition_directory, relation);
 	partkey = RelationGetPartitionKey(relation);
 	rel->part_scheme = find_partition_scheme(root, relation);
 	Assert(partdesc != NULL && rel->part_scheme != NULL);

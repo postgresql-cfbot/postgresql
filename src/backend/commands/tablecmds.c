@@ -74,6 +74,7 @@
 #include "parser/parse_utilcmd.h"
 #include "parser/parser.h"
 #include "partitioning/partbounds.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
@@ -3651,6 +3652,9 @@ AlterTableGetLockLevel(List *cmds)
 				break;
 
 			case AT_AttachPartition:
+				cmd_lockmode = ShareUpdateExclusiveLock;
+				break;
+
 			case AT_DetachPartition:
 				cmd_lockmode = AccessExclusiveLock;
 				break;

@@ -61,6 +61,9 @@ VACUUM FULL vaccluster;
 VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
+VACUUM (DISABLE_INDEX_CLEANUP) vaccluster;
+VACUUM (DISABLE_INDEX_CLEANUP) vactst; -- DISABLE_INDEX_CLEANUP is ignored
+VACUUM (DISABLE_INDEX_CLEANUP, FREEZE) vaccluster;
 
 -- partitioned table
 CREATE TABLE vacparted (a int, b char) PARTITION BY LIST (a);

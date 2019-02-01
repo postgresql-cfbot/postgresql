@@ -112,10 +112,7 @@
 
 typedef struct LVRelStats
 {
-	/*
-	 * hasindex = true means two-pass strategy; false means one-pass. But we
-	 * always use the one-pass strategy when index vacuum is disabled.
-	 */
+	/* hasindex = true means two-pass strategy; false means one-pass */
 	bool		hasindex;
 	/* Overall statistics about rel */
 	BlockNumber old_rel_pages;	/* previous value of pg_class.relpages */
@@ -170,8 +167,7 @@ static bool should_attempt_truncation(LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
 static BlockNumber count_nondeletable_pages(Relation onerel,
 						 LVRelStats *vacrelstats);
-static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
-							 bool skip_index_vacuum);
+static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
 static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 					   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
@@ -263,12 +259,6 @@ heap_vacuum_rel(Relation onerel, int options, VacuumParams *params,
 	/* Open all indexes of the relation */
 	vac_open_indexes(onerel, RowExclusiveLock, &nindexes, &Irel);
 	vacrelstats->hasindex = (nindexes > 0);
-
-	/* Notify user that DISABLE_INDEX_CLEANUP option is ignored */
-	if (!vacrelstats->hasindex && (options & VACOPT_DISABLE_INDEX_CLEANUP))
-		ereport(NOTICE,
-				(errmsg("DISABLE_INDEX_CLEANUP is ignored because table \"%s\" does not have index",
-						RelationGetRelationName(onerel))));
 
 	/* Do the vacuuming */
 	lazy_scan_heap(onerel, options, vacrelstats, Irel, nindexes, aggressive);
@@ -502,7 +492,6 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	Buffer		vmbuffer = InvalidBuffer;
 	BlockNumber next_unskippable_block;
 	bool		skipping_blocks;
-	bool		skip_index_vacuum;
 	xl_heap_freeze_tuple *frozen;
 	StringInfoData buf;
 	const int	initprog_index[] = {
@@ -540,14 +529,7 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 	vacrelstats->nonempty_pages = 0;
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
 
-	/*
-	 * Skip index vacuum if it's requested for table with indexes. In this
-	 * case, we use the one-pass strategy and don't remove tuple storage.
-	 */
-	skip_index_vacuum =
-		(options & VACOPT_DISABLE_INDEX_CLEANUP) != 0 && vacrelstats->hasindex;
-
-	lazy_space_alloc(vacrelstats, nblocks, skip_index_vacuum);
+	lazy_space_alloc(vacrelstats, nblocks);
 	frozen = palloc(sizeof(xl_heap_freeze_tuple) * MaxHeapTuplesPerPage);
 
 	/* Report that we're scanning the heap, advertising total # of blocks */
@@ -739,8 +721,6 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 				PROGRESS_VACUUM_NUM_INDEX_VACUUMS
 			};
 			int64		hvp_val[2];
-
-			Assert(!skip_index_vacuum);
 
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -1223,23 +1203,12 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		 * If there are no indexes then we can vacuum the page right now
 		 * instead of doing a second scan.
 		 */
-		if ((nindexes == 0 || skip_index_vacuum) &&
+		if (nindexes == 0 &&
 			vacrelstats->num_dead_tuples > 0)
 		{
-			/*
-			 * Remove tuples from heap if the table has no index.  If the table
-			 * has index but index vacuum is disabled, we don't vacuum but forget
-			 * them. The vacrelstats->dead_tuples could have tuples which became
-			 * dead after checked at HOT-pruning time which are handled by
-			 * lazy_vacuum_page() but we don't worry about handling those because
-			 * it's a very rare condition and these would not be a large number.
-			 */
-			if (nindexes == 0)
-			{
-				Assert(!skip_index_vacuum);
-				lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
-				has_dead_tuples = false;
-			}
+			/* Remove tuples from heap */
+			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+			has_dead_tuples = false;
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
@@ -1404,8 +1373,6 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 		};
 		int64		hvp_val[2];
 
-		Assert(!skip_index_vacuum);
-
 		/* Log cleanup info before we touch indexes */
 		vacuum_log_cleanup_info(onerel, vacrelstats);
 
@@ -1444,24 +1411,15 @@ lazy_scan_heap(Relation onerel, int options, LVRelStats *vacrelstats,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 
 	/* Do post-vacuum cleanup and statistics update for each index */
-	if (!skip_index_vacuum)
-		for (i = 0; i < nindexes; i++)
-			lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
+	for (i = 0; i < nindexes; i++)
+		lazy_cleanup_index(Irel[i], indstats[i], vacrelstats);
 
-	/* Make log report that lazy_vacuum_heap would've made */
+	/* If no indexes, make log report that lazy_vacuum_heap would've made */
 	if (vacuumed_pages)
-	{
-		if (skip_index_vacuum)
-			ereport(elevel,
-					(errmsg("\"%s\": marked %.0f row versions as dead in %u pages",
-							RelationGetRelationName(onerel),
-							tups_vacuumed, vacuumed_pages)));
-		else
-			ereport(elevel,
-					(errmsg("\"%s\": removed %.0f row versions in %u pages",
-							RelationGetRelationName(onerel),
-							tups_vacuumed, vacuumed_pages)));
-	}
+		ereport(elevel,
+				(errmsg("\"%s\": removed %.0f row versions in %u pages",
+						RelationGetRelationName(onerel),
+						tups_vacuumed, vacuumed_pages)));
 
 	/*
 	 * This is pretty messy, but we split it up so that we can skip emitting
@@ -2120,15 +2078,14 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
  * See the comments at the head of this file for rationale.
  */
 static void
-lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks,
-				 bool skip_index_vacuum)
+lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 {
 	long		maxtuples;
 	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
 
-	if (vacrelstats->hasindex && !skip_index_vacuum)
+	if (vacrelstats->hasindex)
 	{
 		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
 		maxtuples = Min(maxtuples, INT_MAX);

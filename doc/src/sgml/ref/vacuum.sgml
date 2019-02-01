@@ -31,6 +31,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     VERBOSE
     ANALYZE
     DISABLE_PAGE_SKIPPING
+    DISABLE_INDEX_CLEANUP
     SKIP_LOCKED
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
@@ -161,7 +162,24 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+    <varlistentry>
+    <term><literal>DISABLE_INDEX_CLEANUP</literal></term>
+    <listitem>
+     <para>
+      <command>VACUUM</command> removes dead tuples and prunes HOT-updated
+      tuples chain for live tuples on table. If the table has any dead tuple
+      it removes them from both table and indexes for re-use. With this
+      option <command>VACUUM</command> doesn't completely remove dead tuples
+      and disables removing dead tuples from indexes.  This is suitable for
+      avoiding transaction ID wraparound but not sufficient for avoiding
+      index bloat. This option is ignored if the table doesn't have index.
+      Also, this cannot be used in conjunction with <literal>FULL</literal>
+      option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+    <varlistentry>
     <term><literal>SKIP_LOCKED</literal></term>
     <listitem>
      <para>

@@ -310,6 +310,12 @@ main(int argc, char *argv[])
 			exit(EXIT_FAILURE);
 		}
 	}
+	else if (pset.debug)
+	{
+		fprintf(stderr, _("%s: no session log file, turn off debug print\n"),
+				pset.progname);
+		pset.debug = false;
+	}
 
 	if (!options.no_psqlrc)
 		process_psqlrc(argv[0]);
@@ -440,6 +446,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"no-align", no_argument, NULL, 'A'},
 		{"command", required_argument, NULL, 'c'},
 		{"dbname", required_argument, NULL, 'd'},
+		{"debug", no_argument, NULL, 'g'},
 		{"echo-queries", no_argument, NULL, 'e'},
 		{"echo-errors", no_argument, NULL, 'b'},
 		{"echo-hidden", no_argument, NULL, 'E'},
@@ -480,7 +487,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 
 	memset(options, 0, sizeof *options);
 
-	while ((c = getopt_long(argc, argv, "aAbc:d:eEf:F:h:HlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
+	while ((c = getopt_long(argc, argv, "aAbc:d:eEf:F:gh:HlL:no:p:P:qR:sStT:U:v:VwWxXz?01",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -517,6 +524,9 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				simple_action_list_append(&options->actions,
 										  ACT_FILE,
 										  optarg);
+				break;
+			case 'g':
+				pset.debug = true;
 				break;
 			case 'F':
 				pset.popt.topt.fieldSep.separator = pg_strdup(optarg);

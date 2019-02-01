@@ -123,7 +123,7 @@ usage(unsigned short int pager)
 					  "                           set field separator for unaligned output to zero byte\n"));
 	fprintf(output, _("  -0, --record-separator-zero\n"
 					  "                           set record separator for unaligned output to zero byte\n"));
-
+	fprintf(output, _("  -g, --debug              turn on debug print to session log file\n"));
 	fprintf(output, _("\nConnection options:\n"));
 	/* Display default host */
 	env = getenv("PGHOST");

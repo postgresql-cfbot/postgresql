@@ -433,11 +433,13 @@ unknown_attribute(ParseState *pstate, Node *relref, const char *attname,
 static Node *
 transformIndirection(ParseState *pstate, A_Indirection *ind)
 {
-	Node	   *last_srf = pstate->p_last_srf;
-	Node	   *result = transformExprRecurse(pstate, ind->arg);
-	List	   *subscripts = NIL;
-	int			location = exprLocation(result);
-	ListCell   *i;
+	Node			  *last_srf = pstate->p_last_srf;
+	Node			  *result = transformExprRecurse(pstate, ind->arg);
+	SubscriptRoutines *sbsroutines;
+	SubscriptingRef   *sbsref;
+	List	          *subscripts = NIL;
+	int				  location = exprLocation(result);
+	ListCell		  *i;
 
 	/*
 	 * We have to split any field-selection operations apart from
@@ -465,13 +467,20 @@ transformIndirection(ParseState *pstate, A_Indirection *ind)
 
 			/* process subscripts before this field selection */
 			if (subscripts)
-				result = (Node *) transformArraySubscripts(pstate,
-														   result,
-														   exprType(result),
-														   InvalidOid,
-														   exprTypmod(result),
-														   subscripts,
-														   NULL);
+			{
+				sbsref = transformContainerSubscripts(pstate,
+													  result,
+													  exprType(result),
+													  InvalidOid,
+													  exprTypmod(result),
+													  subscripts,
+													  NULL);
+
+				sbsroutines = getSubscriptingRoutines(sbsref->refcontainertype);
+				sbsref = sbsroutines->prepare(false, sbsref);
+				sbsroutines->validate(false, sbsref, pstate);
+				result = (Node *) sbsref;
+			}
 			subscripts = NIL;
 
 			newresult = ParseFuncOrColumn(pstate,
@@ -488,13 +497,20 @@ transformIndirection(ParseState *pstate, A_Indirection *ind)
 	}
 	/* process trailing subscripts, if any */
 	if (subscripts)
-		result = (Node *) transformArraySubscripts(pstate,
-												   result,
-												   exprType(result),
-												   InvalidOid,
-												   exprTypmod(result),
-												   subscripts,
-												   NULL);
+	{
+		sbsref = transformContainerSubscripts(pstate,
+											  result,
+											  exprType(result),
+											  InvalidOid,
+											  exprTypmod(result),
+											  subscripts,
+											  NULL);
+
+		sbsroutines = getSubscriptingRoutines(sbsref->refcontainertype);
+		sbsref = sbsroutines->prepare(false, sbsref);
+		sbsroutines->validate(false, sbsref, pstate);
+		result = (Node *) sbsref;
+	}
 
 	return result;
 }

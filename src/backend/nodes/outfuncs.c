@@ -1153,14 +1153,16 @@ _outWindowFunc(StringInfo str, const WindowFunc *node)
 }
 
 static void
-_outArrayRef(StringInfo str, const ArrayRef *node)
+_outSubscriptingRef(StringInfo str, const SubscriptingRef *node)
 {
-	WRITE_NODE_TYPE("ARRAYREF");
+	WRITE_NODE_TYPE("SUBSCRIPTINGREF");
 
-	WRITE_OID_FIELD(refarraytype);
+	WRITE_OID_FIELD(refcontainertype);
 	WRITE_OID_FIELD(refelemtype);
+	WRITE_OID_FIELD(refassgntype);
 	WRITE_INT_FIELD(reftypmod);
 	WRITE_OID_FIELD(refcollid);
+	WRITE_OID_FIELD(refnestedfunc);
 	WRITE_NODE_FIELD(refupperindexpr);
 	WRITE_NODE_FIELD(reflowerindexpr);
 	WRITE_NODE_FIELD(refexpr);
@@ -3789,8 +3791,8 @@ outNode(StringInfo str, const void *obj)
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);
 				break;
-			case T_ArrayRef:
-				_outArrayRef(str, obj);
+			case T_SubscriptingRef:
+				_outSubscriptingRef(str, obj);
 				break;
 			case T_FuncExpr:
 				_outFuncExpr(str, obj);

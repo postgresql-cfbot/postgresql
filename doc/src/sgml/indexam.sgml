@@ -135,6 +135,7 @@ typedef struct IndexAmRoutine
     amendscan_function amendscan;
     ammarkpos_function ammarkpos;       /* can be NULL */
     amrestrpos_function amrestrpos;     /* can be NULL */
+    amskip_function amskip;     /* can be NULL */
 
     /* interface functions to support parallel index scans */
     amestimateparallelscan_function amestimateparallelscan;    /* can be NULL */
@@ -662,6 +663,15 @@ amrestrpos (IndexScanDesc scan);
    scan, the ordering of that subset of tuples returned within each
    cooperating backend must match the requested ordering.  The following
    functions may be implemented to support parallel index scans:
+  </para>
+
+  <para>
+<programlisting>
+bool
+amskip (IndexScanDesc scan, ScanDirection direction, int prefix);
+</programlisting>
+  Skip past all tuples where the first 'prefix' columns have the same value as
+  the last tuple returned in the current scan.
   </para>
 
   <para>

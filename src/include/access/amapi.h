@@ -127,6 +127,10 @@ typedef void (*amrescan_function) (IndexScanDesc scan,
 typedef bool (*amgettuple_function) (IndexScanDesc scan,
 									 ScanDirection direction);
 
+/* skip past duplicates in a given prefix */
+typedef bool (*amskip_function) (IndexScanDesc scan,
+								 ScanDirection dir, int prefix);
+
 /* fetch all valid tuples */
 typedef int64 (*amgetbitmap_function) (IndexScanDesc scan,
 									   TIDBitmap *tbm);
@@ -221,6 +225,7 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
+	amskip_function amskip;				/* can be NULL */
 
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */

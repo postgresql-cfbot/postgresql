@@ -33,6 +33,7 @@
  *		index_can_return	- does index support index-only scans?
  *		index_getprocid - get a support procedure OID
  *		index_getprocinfo - get a support procedure's lookup info
+ *		index_skip		- advance past duplicate key values in a scan
  *
  * NOTES
  *		This file contains the index_ routines which used
@@ -790,6 +791,21 @@ index_can_return(Relation indexRelation, int attno)
 		return false;
 
 	return indexRelation->rd_indam->amcanreturn(indexRelation, attno);
+}
+
+/* ----------------
+ *		index_skip
+ *
+ *		Skip past all tuples where the first 'prefix' columns have the
+ *		same value as the last tuple returned in the current scan.
+ * ----------------
+ */
+bool
+index_skip(IndexScanDesc scan, ScanDirection direction, int prefix)
+{
+	SCAN_CHECKS;
+
+	return scan->indexRelation->rd_indam->amskip(scan, direction, prefix);
 }
 
 /* ----------------

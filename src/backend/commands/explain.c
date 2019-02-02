@@ -1297,6 +1297,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			{
 				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
 
+				if (indexonlyscan->distinctPrefix > 0)
+				{
+					if (es->format != EXPLAIN_FORMAT_TEXT)
+						ExplainPropertyInteger("Distinct Prefix", NULL,
+											   indexonlyscan->distinctPrefix,
+											   es);
+				}
+
 				ExplainIndexScanDetails(indexonlyscan->indexid,
 										indexonlyscan->indexorderdir,
 										es);
@@ -1519,6 +1527,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										   planstate, es);
 			break;
 		case T_IndexOnlyScan:
+			if (((IndexOnlyScan *) plan)->distinctPrefix > 0)
+			{
+				ExplainPropertyText("Scan mode", "Skip scan", es);
+			}
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexOnlyScan *) plan)->indexqual)

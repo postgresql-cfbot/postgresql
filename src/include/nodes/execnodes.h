@@ -1390,6 +1390,8 @@ typedef struct IndexScanState
  *		RelationDesc	   index relation descriptor
  *		ScanDesc		   index scan descriptor
  *		VMBuffer		   buffer in use for visibility map testing, if any
+ *		NumDistinctKeys	   number of keys for skip-based DISTINCT
+ *		FirstTupleEmitted  has the first tuple been emitted
  *		ioss_PscanLen	   Size of parallel index-only scan descriptor
  * ----------------
  */
@@ -1408,6 +1410,8 @@ typedef struct IndexOnlyScanState
 	Relation	ioss_RelationDesc;
 	struct IndexScanDescData *ioss_ScanDesc;
 	Buffer		ioss_VMBuffer;
+	int         ioss_NumDistinctKeys;
+	bool		ioss_FirstTupleEmitted;
 	Size		ioss_PscanLen;
 } IndexOnlyScanState;
 

@@ -1221,6 +1221,30 @@ SELECT target FROM tests WHERE subject = 'some-subject' AND success;
    and later will recognize such cases and allow index-only scans to be
    generated, but older versions will not.
   </para>
+
+  <sect2 id="indexes-index-skip-scans">
+    <title>Index Skip Scans</title>
+
+    <indexterm zone="indexes-index-skip-scans">
+      <primary>index</primary>
+      <secondary>index-skip scans</secondary>
+    </indexterm>
+    <indexterm zone="indexes-index-skip-scans">
+      <primary>index-skip scan</primary>
+    </indexterm>
+
+    <para>
+     In case if index scan is used to retrieve the distinct values of a column
+     efficiently, it can be not very efficient, since it requires to scan all
+     the equal values of a key. In such cases planner will consider apply index
+     skip scan approach, which is based on the idea of
+     <ulink url="https://wiki.postgresql.org/wiki/Free_Space_Map_Problems">
+     Loose index scan</ulink>. Rather than scanning all equal values of a key,
+     as soon as a new value is found, it will search for a larger value on the
+     same index page, and if not found, restart the search by looking for a
+     larger value. This is much faster when the index has many equal keys.
+    </para>
+  </sect2>
  </sect1>
 
 

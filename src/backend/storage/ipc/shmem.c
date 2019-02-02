@@ -65,6 +65,10 @@
 
 #include "postgres.h"
 
+#ifdef MPROTECT_BUFFERS
+#include <unistd.h>
+#endif
+
 #include "access/transam.h"
 #include "miscadmin.h"
 #include "storage/lwlock.h"
@@ -197,6 +201,20 @@ ShmemAllocNoError(Size size)
 	SpinLockAcquire(ShmemLock);
 
 	newStart = ShmemSegHdr->freeoffset;
+
+#ifdef MPROTECT_BUFFERS
+	/*
+	 * Align shared buffers start address to system page size because mprotect
+	 * can only work with system page size aligned addresses.
+	 */
+	if (size >= BLCKSZ)
+	{
+		long systemPageSize = sysconf(_SC_PAGESIZE);
+		if (systemPageSize <=1 || (systemPageSize & (systemPageSize-1)))
+			elog(ERROR, "invalid page size %ld", systemPageSize);
+		newStart =  TYPEALIGN(systemPageSize, newStart);
+	}
+#endif
 
 	newFree = newStart + size;
 	if (newFree <= ShmemSegHdr->totalsize)

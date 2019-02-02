@@ -395,7 +395,11 @@ NET STOP postgresql-&majorversion;
      in parallel;  a good place to start is the maximum of the number of
      CPU cores and tablespaces.  This option can dramatically reduce the
      time to upgrade a multi-database server running on a multiprocessor
-     machine.
+     machine. Note that this option isn't passed to the
+     <application>vacuumdb</application> application by default.
+     The system environment variable <literal>VACUUMDB_OPTS</literal> can be
+     used to pass extra options to the <application>vacuumdb</application>
+     application during the script execution.
     </para>
 
     <para>

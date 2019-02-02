@@ -495,15 +495,31 @@ create_script_for_cluster_analyze(char **analyze_script_file_name)
 			ECHO_QUOTE, ECHO_QUOTE);
 	fprintf(script, "echo %sthis script and run:%s\n",
 			ECHO_QUOTE, ECHO_QUOTE);
-	fprintf(script, "echo %s    \"%s/vacuumdb\" %s--all %s%s\n", ECHO_QUOTE,
-			new_cluster.bindir, user_specification.data,
-	/* Did we copy the free space files? */
-			(GET_MAJOR_VERSION(old_cluster.major_version) >= 804) ?
-			"--analyze-only" : "--analyze", ECHO_QUOTE);
+	if (user_opts.jobs <= 1)
+	{
+		fprintf(script, "echo %s    \"%s/vacuumdb\" %s--all %s%s\n", ECHO_QUOTE,
+				new_cluster.bindir, user_specification.data,
+				/* Did we copy the free space files? */
+				(GET_MAJOR_VERSION(old_cluster.major_version) >= 804) ?
+				"--analyze-only" : "--analyze", ECHO_QUOTE);
+	}
+	else
+	{
+		fprintf(script, "echo %s    \"%s/vacuumdb\" %s--jobs %d --all %s%s\n", ECHO_QUOTE,
+				new_cluster.bindir, user_specification.data, user_opts.jobs,
+				/* Did we copy the free space files? */
+				(GET_MAJOR_VERSION(old_cluster.major_version) >= 804) ?
+				"--analyze-only" : "--analyze", ECHO_QUOTE);
+	}
 	fprintf(script, "echo%s\n\n", ECHO_BLANK);
 
-	fprintf(script, "\"%s/vacuumdb\" %s--all --analyze-in-stages\n",
+#ifndef WIN32
+	fprintf(script, "\"%s/vacuumdb\" %s $VACUUMDB_OPTS --all --analyze-in-stages\n",
 			new_cluster.bindir, user_specification.data);
+#else
+	fprintf(script, "\"%s\\vacuumdb.exe\" %s %%VACUUMDB_OPTS%% --all --analyze-in-stages\n",
+			new_cluster.bindir, user_specification.data);
+#endif
 	/* Did we copy the free space files? */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) < 804)
 		fprintf(script, "\"%s/vacuumdb\" %s--all\n", new_cluster.bindir,

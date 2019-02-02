@@ -1,7 +1,7 @@
 /*
  * pg_verify_checksums
  *
- * Verifies page level checksums in an offline cluster
+ * Verifies/enables/disables page level checksums in an offline cluster
  *
  *	Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
@@ -13,15 +13,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "getopt_long.h"
 #include "pg_getopt.h"
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"
-#include "storage/fd.h"
-
 
 static int64 files = 0;
 static int64 blocks = 0;
@@ -31,16 +32,31 @@ static ControlFileData *ControlFile;
 static char *only_relfilenode = NULL;
 static bool verbose = false;
 
+typedef enum
+{
+	PG_ACTION_DISABLE,
+	PG_ACTION_ENABLE,
+	PG_ACTION_VERIFY
+} ChecksumAction;
+
+/* Filename components */
+#define PG_TEMP_FILES_DIR "pgsql_tmp"
+#define PG_TEMP_FILE_PREFIX "pgsql_tmp"
+
+static ChecksumAction action = PG_ACTION_VERIFY;
+
 static const char *progname;
 
 static void
 usage(void)
 {
-	printf(_("%s verifies data checksums in a PostgreSQL database cluster.\n\n"), progname);
+	printf(_("%s enables/disables/verifies data checksums in a PostgreSQL database cluster.\n\n"), progname);
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... [DATADIR]\n"), progname);
 	printf(_("\nOptions:\n"));
 	printf(_(" [-D, --pgdata=]DATADIR  data directory\n"));
+	printf(_("  -A, --action   action to take on the cluster, can be set as\n"));
+	printf(_("                 \"verify\", \"enable\" and \"disable\"\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -r RELFILENODE         check only relation with specified relfilenode\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
@@ -80,6 +96,77 @@ skipfile(const char *fn)
 }
 
 static void
+updateControlFile(char *DataDir, ControlFileData *ControlFile)
+{
+	int			fd;
+	char		buffer[PG_CONTROL_FILE_SIZE];
+	char		ControlFilePath[MAXPGPATH];
+
+	Assert(action == PG_ACTION_ENABLE ||
+		   action == PG_ACTION_DISABLE);
+
+	/*
+	 * For good luck, apply the same static assertions as in backend's
+	 * WriteControlFile().
+	 */
+#if PG_VERSION_NUM >= 100000
+	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_MAX_SAFE_SIZE,
+					 "pg_control is too large for atomic disk writes");
+#endif
+	StaticAssertStmt(sizeof(ControlFileData) <= PG_CONTROL_FILE_SIZE,
+					 "sizeof(ControlFileData) exceeds PG_CONTROL_FILE_SIZE");
+
+	/* Recalculate CRC of control file */
+	INIT_CRC32C(ControlFile->crc);
+	COMP_CRC32C(ControlFile->crc,
+				(char *) ControlFile,
+				offsetof(ControlFileData, crc));
+	FIN_CRC32C(ControlFile->crc);
+
+	/*
+	 * Write out PG_CONTROL_FILE_SIZE bytes into pg_control by zero-padding
+	 * the excess over sizeof(ControlFileData), to avoid premature EOF related
+	 * errors when reading it.
+	 */
+	memset(buffer, 0, PG_CONTROL_FILE_SIZE);
+	memcpy(buffer, ControlFile, sizeof(ControlFileData));
+
+	snprintf(ControlFilePath, sizeof(ControlFilePath), "%s/%s", DataDir, XLOG_CONTROL_FILE);
+
+	fd = open(ControlFilePath, O_WRONLY | O_CREAT | PG_BINARY,
+			  pg_file_create_mode);
+	if (fd < 0)
+	{
+		fprintf(stderr, _("%s: could not open control file: %s\n"),
+				progname, strerror(errno));
+		exit(1);
+	}
+
+	errno = 0;
+	if (write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
+	{
+		/* if write didn't set errno, assume problem is no disk space */
+		if (errno == 0)
+			errno = ENOSPC;
+		fprintf(stderr, _("%s: could not write control file: %s\n"),
+				progname, strerror(errno));
+		exit(1);
+	}
+
+	if (fsync(fd) != 0)
+	{
+		fprintf(stderr, _("%s: fsync error: %s\n"), progname, strerror(errno));
+		exit(1);
+	}
+
+	if (close(fd) < 0)
+	{
+		fprintf(stderr, _("%s: could not close control file: %s\n"), progname, strerror(errno));
+		exit(1);
+	}
+}
+
+static void
 scan_file(const char *fn, BlockNumber segmentno)
 {
 	PGAlignedBlock buf;
@@ -87,7 +174,14 @@ scan_file(const char *fn, BlockNumber segmentno)
 	int			f;
 	BlockNumber blockno;
 
-	f = open(fn, O_RDONLY | PG_BINARY, 0);
+	Assert(action == PG_ACTION_ENABLE ||
+		   action == PG_ACTION_VERIFY);
+
+	if (action == PG_ACTION_VERIFY)
+		f = open(fn, O_RDONLY | PG_BINARY, 0);
+	else
+		f = open(fn, O_RDWR | PG_BINARY, 0);
+
 	if (f < 0)
 	{
 		fprintf(stderr, _("%s: could not open file \"%s\": %s\n"),
@@ -117,18 +211,47 @@ scan_file(const char *fn, BlockNumber segmentno)
 			continue;
 
 		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
-		if (csum != header->pd_checksum)
+		if (action == PG_ACTION_VERIFY)
 		{
-			if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
-				fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X\n"),
-						progname, fn, blockno, csum, header->pd_checksum);
-			badblocks++;
+			if (csum != header->pd_checksum)
+			{
+				if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
+					fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X\n"),
+							progname, fn, blockno, csum, header->pd_checksum);
+				badblocks++;
+			}
+		}
+		else if (action == PG_ACTION_ENABLE)
+		{
+			/* Set checksum in page header */
+			header->pd_checksum = csum;
+
+			/* Seek back to beginning of block */
+			if (lseek(f, -BLCKSZ, SEEK_CUR) < 0)
+			{
+				fprintf(stderr, _("%s: seek failed for block %d in file \"%s\": %s\n"), progname, blockno, fn, strerror(errno));
+				exit(1);
+			}
+
+			/* Write block with checksum */
+			if (write(f, buf.data, BLCKSZ) != BLCKSZ)
+			{
+				fprintf(stderr, "%s: could not update checksum of block %d in file \"%s\": %s\n",
+						progname, blockno, fn, strerror(errno));
+				exit(1);
+			}
 		}
 	}
 
 	if (verbose)
-		fprintf(stderr,
-				_("%s: checksums verified in file \"%s\"\n"), progname, fn);
+	{
+		if (action == PG_ACTION_VERIFY)
+			fprintf(stderr,
+					_("%s: checksums verified in file \"%s\"\n"), progname, fn);
+		if (action == PG_ACTION_ENABLE)
+			fprintf(stderr,
+					_("%s: checksums enabled in file \"%s\"\n"), progname, fn);
+	}
 
 	close(f);
 }
@@ -230,7 +353,10 @@ int
 main(int argc, char *argv[])
 {
 	static struct option long_options[] = {
+		{"verify", no_argument, NULL, 'c'},
 		{"pgdata", required_argument, NULL, 'D'},
+		{"disable", no_argument, NULL, 'd'},
+		{"enable", no_argument, NULL, 'e'},
 		{"verbose", no_argument, NULL, 'v'},
 		{NULL, 0, NULL, 0}
 	};
@@ -258,10 +384,19 @@ main(int argc, char *argv[])
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:r:v", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cD:der:v", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
+			case 'c':
+				action = PG_ACTION_VERIFY;
+				break;
+			case 'd':
+				action = PG_ACTION_DISABLE;
+				break;
+			case 'e':
+				action = PG_ACTION_ENABLE;
+				break;
 			case 'v':
 				verbose = true;
 				break;
@@ -281,6 +416,21 @@ main(int argc, char *argv[])
 				exit(1);
 		}
 	}
+
+	/*
+	 * Don't allow pg_checksums to be run as root, to avoid overwriting the
+	 * ownership of files in the data directory. We need only check for root
+	 * -- any other user won't have sufficient permissions to modify files in
+	 * the data directory.  This does not matter for the "verify" mode, but
+	 * let's be consistent.
+	 */
+#ifndef WIN32
+	if (geteuid() == 0)
+	{
+		fprintf(stderr, _("%s: cannot be executed by \"root\"\n"), progname);
+		exit(1);
+	}
+#endif
 
 	if (DataDir == NULL)
 	{
@@ -308,6 +458,16 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	/* Relfilenode checking only works in verify mode */
+	if (action != PG_ACTION_VERIFY &&
+		only_relfilenode)
+	{
+		fprintf(stderr, _("%s: relfilenode option only possible with verify action\n"), progname);
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+						progname);
+		exit(1);
+	}
+
 	/* Check if cluster is running */
 	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
 	if (!crc_ok)
@@ -319,29 +479,74 @@ main(int argc, char *argv[])
 	if (ControlFile->state != DB_SHUTDOWNED &&
 		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
 	{
-		fprintf(stderr, _("%s: cluster must be shut down to verify checksums\n"), progname);
+		fprintf(stderr, _("%s: cluster must be shut down\n"), progname);
 		exit(1);
 	}
 
-	if (ControlFile->data_checksum_version == 0)
+	if (ControlFile->data_checksum_version == 0 &&
+		action == PG_ACTION_VERIFY)
 	{
 		fprintf(stderr, _("%s: data checksums are not enabled in cluster\n"), progname);
 		exit(1);
 	}
+	if (ControlFile->data_checksum_version == 0 &&
+		action == PG_ACTION_DISABLE)
+	{
+		fprintf(stderr, _("%s: data checksums are already disabled in cluster.\n"), progname);
+		exit(1);
+	}
+	if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION &&
+		action == PG_ACTION_ENABLE)
+	{
+		fprintf(stderr, _("%s: data checksums are already enabled in cluster.\n"), progname);
+		exit(1);
+	}
 
-	/* Scan all files */
+	/*
+	 * When disabling data checksums, only update the control file and call it
+	 * a day.
+	 */
+	if (action == PG_ACTION_DISABLE)
+	{
+		ControlFile->data_checksum_version = 0;
+		updateControlFile(DataDir, ControlFile);
+		fsync_pgdata(DataDir, progname, PG_VERSION_NUM);
+		if (verbose)
+			printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
+		printf(_("Checksums disabled in cluster\n"));
+		return 0;
+	}
+
+	/* Operate on all files */
 	scan_directory(DataDir, "global");
 	scan_directory(DataDir, "base");
 	scan_directory(DataDir, "pg_tblspc");
 
-	printf(_("Checksum scan completed\n"));
-	printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
+	printf(_("Checksum operation completed\n"));
 	printf(_("Files scanned:  %s\n"), psprintf(INT64_FORMAT, files));
 	printf(_("Blocks scanned: %s\n"), psprintf(INT64_FORMAT, blocks));
-	printf(_("Bad checksums:  %s\n"), psprintf(INT64_FORMAT, badblocks));
+	if (action == PG_ACTION_VERIFY)
+	{
+		printf(_("Bad checksums:  %s\n"), psprintf(INT64_FORMAT, badblocks));
+		printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
 
-	if (badblocks > 0)
+		if (badblocks > 0)
 		return 1;
+	}
+
+	/*
+	 * When enabling checksums, wait until the end the operation has completed
+	 * to do the switch.
+	 */
+	if (action == PG_ACTION_ENABLE)
+	{
+		ControlFile->data_checksum_version = PG_DATA_CHECKSUM_VERSION;
+		updateControlFile(DataDir, ControlFile);
+		fsync_pgdata(DataDir, progname, PG_VERSION_NUM);
+		if (verbose)
+			printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
+		printf(_("Checksums enabled in cluster\n"));
+	}
 
 	return 0;
 }

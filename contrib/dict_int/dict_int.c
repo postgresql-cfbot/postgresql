@@ -30,7 +30,7 @@ PG_FUNCTION_INFO_V1(dintdict_lexize);
 Datum
 dintdict_init(PG_FUNCTION_ARGS)
 {
-	List	   *dictoptions = (List *) PG_GETARG_POINTER(0);
+	DictInitData *init_data = (DictInitData *) PG_GETARG_POINTER(0);
 	DictInt    *d;
 	ListCell   *l;
 
@@ -38,7 +38,7 @@ dintdict_init(PG_FUNCTION_ARGS)
 	d->maxlen = 6;
 	d->rejectlong = false;
 
-	foreach(l, dictoptions)
+	foreach(l, init_data->dict_options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(l);
 

@@ -82,7 +82,6 @@
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "nodes/nodeFuncs.h"
-#include "parser/parse_clause.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
@@ -92,6 +91,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/xml.h"
+
 
 /* GUC variables */
 int			xmlbinary;
@@ -188,7 +188,6 @@ typedef struct XmlTableBuilderData
 	xmlXPathCompExprPtr xpathcomp;
 	xmlXPathObjectPtr xpathobj;
 	xmlXPathCompExprPtr *xpathscomp;
-	const char	   *default_ns_name;
 } XmlTableBuilderData;
 #endif
 
@@ -196,8 +195,6 @@ static void XmlTableInitOpaque(struct TableFuncScanState *state, int natts);
 static void XmlTableSetDocument(struct TableFuncScanState *state, Datum value);
 static void XmlTableSetNamespace(struct TableFuncScanState *state, const char *name,
 					 const char *uri);
-static void XmlTableSetDefaultNamespaceName(TableFuncScanState *state,
-					 const char *name);
 static void XmlTableSetRowFilter(struct TableFuncScanState *state, const char *path);
 static void XmlTableSetColumnFilter(struct TableFuncScanState *state,
 						const char *path, int colnum);
@@ -211,60 +208,12 @@ const TableFuncRoutine XmlTableRoutine =
 	XmlTableInitOpaque,
 	XmlTableSetDocument,
 	XmlTableSetNamespace,
-	XmlTableSetDefaultNamespaceName,
 	XmlTableSetRowFilter,
 	XmlTableSetColumnFilter,
 	XmlTableFetchRow,
 	XmlTableGetValue,
 	XmlTableDestroyOpaque
 };
-
-/* XPath default namespace support */
-#ifdef USE_LIBXML
-
-/* XPath parser tokens */
-typedef enum
-{
-	XPATH_TOKEN_NONE,
-	XPATH_TOKEN_NAME,
-	XPATH_TOKEN_STRING,
-	XPATH_TOKEN_NUMBER,
-	XPATH_TOKEN_COLON,
-	XPATH_TOKEN_DCOLON,
-	XPATH_TOKEN_OTHER
-}	XPathTokenType;
-
-/* one XPath expression token */
-typedef struct XPathTokenInfo
-{
-	XPathTokenType ttype;
-	const char	   *start;
-	int			length;
-}	XPathTokenInfo;
-
-/* XPath parser with possibility one push back token */
-typedef struct XPathParserData
-{
-	const char	   *cur;
-	XPathTokenInfo buffer;
-	bool		buffer_is_empty;
-}	XPathParserData;
-
-static void transform_xpath(StringInfo str,
-						const char *xpath,
-						const char *def_namespace_name);
-static const char *next_xpath_token_unbuffered(const char *str,
-						XPathTokenInfo *ti);
-static void init_xpath_parser(XPathParserData *parser, const char *str);
-static void next_xpath_token(XPathParserData *parser, XPathTokenInfo *ti);
-static void push_xpath_token(XPathParserData *parser, XPathTokenInfo *ti);
-static void write_xpath_token(StringInfo str, XPathTokenInfo *ti);
-static void transform_xpath_recurse(StringInfo str,
-						XPathParserData *parser,
-						bool inside_predicate,
-						const char *def_namespace_name);
-
-#endif
 
 #define NO_XML_SUPPORT() \
 	ereport(ERROR, \
@@ -278,6 +227,7 @@ static void transform_xpath_recurse(StringInfo str,
 #define NAMESPACE_XSD "http://www.w3.org/2001/XMLSchema"
 #define NAMESPACE_XSI "http://www.w3.org/2001/XMLSchema-instance"
 #define NAMESPACE_SQLXML "http://standards.iso.org/iso/9075/2003/sqlxml"
+
 
 #ifdef USE_LIBXML
 
@@ -3901,7 +3851,6 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 	int			ndim;
 	Datum	   *ns_names_uris;
 	bool	   *ns_names_uris_nulls;
-	char	   *default_ns_name = NULL;
 	int			ns_count;
 
 	/*
@@ -3912,8 +3861,6 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 	 * first element defining the name, the second one the URI.  Example:
 	 * ARRAY[ARRAY['myns', 'http://example.com'], ARRAY['myns2',
 	 * 'http://example2.com']].
-	 * When the name is empty string, then URI is used as default namespace.
-	 * Example: ARRAY[ARRAY['', 'http://x.y]]
 	 */
 	ndim = namespaces ? ARR_NDIM(namespaces) : 0;
 	if (ndim != 0)
@@ -3953,6 +3900,7 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 				 errmsg("empty XPath expression")));
 
 	string = pg_xmlCharStrndup(datastr, len);
+	xpath_expr = pg_xmlCharStrndup(VARDATA_ANY(xpath_expr_text), xpath_len);
 
 	/*
 	 * In a UTF8 database, skip any xml declaration, which might assert
@@ -3992,12 +3940,8 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 		/* register namespaces, if any */
 		if (ns_count > 0)
 		{
-			List   *names = NIL;
-			char   *default_ns_uri = NULL;
-
 			for (i = 0; i < ns_count; i++)
 			{
-				ResTarget  *rt;
 				char	   *ns_name;
 				char	   *ns_uri;
 
@@ -4006,60 +3950,16 @@ xpath_internal(text *xpath_expr_text, xmltype *data, ArrayType *namespaces,
 					ereport(ERROR,
 							(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
 							 errmsg("neither namespace name nor URI may be null")));
-
 				ns_name = TextDatumGetCString(ns_names_uris[i * 2]);
 				ns_uri = TextDatumGetCString(ns_names_uris[i * 2 + 1]);
-
-				if (*ns_name == '\0')
-				{
-					if (default_ns_uri)
-						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("only one default namespace is allowed")));
-
-					default_ns_uri = ns_uri;
-				}
-
-				/*
-				 * collect ns names in ResTarget format for possible usage
-				 * in getUniqNames function.
-				 */
-				rt = makeNode(ResTarget);
-				rt->name = ns_name;
-				names = lappend(names, (Node *) rt);
-
-				/* register namespace if all proprieties are available */
-				if (*ns_name != '\0' && xmlXPathRegisterNs(xpathctx,
-										   (xmlChar *) ns_name,
-										   (xmlChar *) ns_uri) != 0)
+				if (xmlXPathRegisterNs(xpathctx,
+									   (xmlChar *) ns_name,
+									   (xmlChar *) ns_uri) != 0)
 					ereport(ERROR,	/* is this an internal error??? */
 							(errmsg("could not register XML namespace with name \"%s\" and URI \"%s\"",
 									ns_name, ns_uri)));
 			}
-
-			/* get default namespace name if any */
-			if (default_ns_uri)
-			{
-				default_ns_name = getUniqName(names);
-
-				if (xmlXPathRegisterNs(xpathctx,
-									   (xmlChar *) default_ns_name,
-									   (xmlChar *) default_ns_uri) != 0)
-					ereport(ERROR,	/* is this an internal error??? */
-							(errmsg("could not register XML namespace with name \"%s\" and URI \"%s\"",
-									default_ns_name, default_ns_uri)));
-			}
 		}
-
-		if (default_ns_name)
-		{
-			StringInfoData		str;
-
-			transform_xpath(&str, text_to_cstring(xpath_expr_text), default_ns_name);
-			xpath_expr = pg_xmlCharStrndup(str.data, str.len);
-		}
-		else
-			xpath_expr = pg_xmlCharStrndup(VARDATA_ANY(xpath_expr_text), xpath_len);
 
 		xpathcomp = xmlXPathCompile(xpath_expr);
 		if (xpathcomp == NULL || xmlerrcxt->err_occurred)
@@ -4305,7 +4205,6 @@ XmlTableInitOpaque(TableFuncScanState *state, int natts)
 	xtCxt->magic = XMLTABLE_CONTEXT_MAGIC;
 	xtCxt->natts = natts;
 	xtCxt->xpathscomp = palloc0(sizeof(xmlXPathCompExprPtr) * natts);
-	xtCxt->default_ns_name = NULL;
 
 	xmlerrcxt = pg_xml_init(PG_XML_STRICTNESS_ALL);
 
@@ -4405,33 +4304,17 @@ XmlTableSetNamespace(TableFuncScanState *state, const char *name, const char *ur
 #ifdef USE_LIBXML
 	XmlTableBuilderData *xtCxt;
 
+	if (name == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("DEFAULT namespace is not supported")));
 	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableSetNamespace");
-
-	Assert(name != NULL && uri != NULL);
 
 	if (xmlXPathRegisterNs(xtCxt->xpathcxt,
 						   pg_xmlCharStrndup(name, strlen(name)),
 						   pg_xmlCharStrndup(uri, strlen(uri))))
 		xml_ereport(xtCxt->xmlerrcxt, ERROR, ERRCODE_DATA_EXCEPTION,
 					"could not set XML namespace");
-#else
-	NO_XML_SUPPORT();
-#endif							/* not USE_LIBXML */
-}
-
-/*
- *XmlTableSetDefaultNamespaceName
- *		Add a namespace declaration
- */
-static void
-XmlTableSetDefaultNamespaceName(TableFuncScanState *state, const char *name)
-{
-#ifdef USE_LIBXML
-	XmlTableBuilderData *xtCxt;
-
-	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableSetNamespace");
-
-	xtCxt->default_ns_name = name;
 #else
 	NO_XML_SUPPORT();
 #endif							/* not USE_LIBXML */
@@ -4454,14 +4337,6 @@ XmlTableSetRowFilter(TableFuncScanState *state, const char *path)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("row path filter must not be empty string")));
-
-	if (xtCxt->default_ns_name)
-	{
-		StringInfoData		str;
-
-		transform_xpath(&str, path, xtCxt->default_ns_name);
-		path = str.data;
-	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 
@@ -4493,14 +4368,6 @@ XmlTableSetColumnFilter(TableFuncScanState *state, const char *path, int colnum)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_EXCEPTION),
 				 errmsg("column path filter must not be empty string")));
-
-	if (xtCxt->default_ns_name)
-	{
-		StringInfoData		str;
-
-		transform_xpath(&str, path, xtCxt->default_ns_name);
-		path = str.data;
-	}
 
 	xstr = pg_xmlCharStrndup(path, strlen(path));
 
@@ -4780,357 +4647,3 @@ XmlTableDestroyOpaque(TableFuncScanState *state)
 	NO_XML_SUPPORT();
 #endif							/* not USE_LIBXML */
 }
-
-
-#ifdef USE_LIBXML
-
-/*
- * All PostgreSQL XML related functionality is based on libxml2 library, and
- * XPath support is not an exception. However, libxml2 doesn't support
- * default namespace for XPath expressions.
- *
- * We introduce new unique namespace name, and we add this name to any
- * unqualified node name or attribute name of original xpath expression.
- * This is outer (libxml2) implementation of the default namespaces.
- *
- * This transformation is implemented by a simple single-purpose XPath
- * preprocessor. It doesn't replace libxml2 XPath parser or libxml2 XPath
- * expression evaluation.
- *
- * Unqualified identifiers of XPath expression entered in "xpath" parameter
- * are qualified by name specified "def_namespace_name" parameter. Result
- * is returned as content of StringInfo "str" argument.
- */
-static void
-transform_xpath(StringInfo str, const char *xpath, const char *def_namespace_name)
-{
-	XPathParserData parser;
-
-	Assert(def_namespace_name != NULL);
-
-	initStringInfo(str);
-	init_xpath_parser(&parser, xpath);
-	transform_xpath_recurse(str,
-							&parser,
-							false,
-							def_namespace_name);
-}
-
-/* Any high-bit-set character is OK (might be part of a multibyte char) */
-#define IS_NODENAME_FIRSTCHAR(c)	((c) == '_' || \
-									((c) >= 'A' && (c) <= 'Z') || \
-									((c) >= 'a' && (c) <= 'z') || \
-									(IS_HIGHBIT_SET(c)))
-
-/* XML tag can use char, dash, dot and digit */
-#define IS_NODENAME_CHAR(c)		(IS_NODENAME_FIRSTCHAR(c) || \
-								(c) == '-' || \
-								(c) == '.' || \
-								((c) >= '0' && (c) <= '9'))
-
-#define TOKEN_IS_EMPTY(t)		((t).ttype == XPATH_TOKEN_NONE)
-
-/*
- * Fill XPathTokenInfo by next token data. Returns pointer to
- * first char after detected token.
- */
-const char *
-next_xpath_token_unbuffered(const char *str, XPathTokenInfo *ti)
-{
-	/* skip initial spaces */
-	while (*str == ' ')
-		str++;
-
-	if (*str != '\0')
-	{
-		char		c = *str;
-
-		ti->start = str++;
-
-		/* read number */
-		if (c >= '0' && c <= '9')
-		{
-			while (*str >= '0' && *str <= '9')
-				str++;
-			if (*str == '.')
-			{
-				str++;
-				while (*str >= '0' && *str <= '9')
-					str++;
-			}
-			ti->ttype = XPATH_TOKEN_NUMBER;
-		}
-
-		/* read identifier (name) */
-		else if (IS_NODENAME_FIRSTCHAR(c))
-		{
-			while (IS_NODENAME_CHAR(*str))
-				str++;
-
-			ti->ttype = XPATH_TOKEN_NAME;
-		}
-
-		/* read double quoted string */
-		else if (c == '"')
-		{
-			while (*str != '\0')
-				if (*str++ == '"')
-					break;
-
-			ti->ttype = XPATH_TOKEN_STRING;
-		}
-
-		/* read quoted string */
-		else if (c == '\'')
-		{
-			while (*str != '\0')
-				if (*str++ == '\'')
-					break;
-
-			ti->ttype = XPATH_TOKEN_STRING;
-		}
-
-		/* read colon or double colon */
-		else if (c == ':')
-		{
-			/* look ahead to detect a double-colon */
-			if (*str == ':')
-			{
-				ti->ttype = XPATH_TOKEN_DCOLON;
-				str++;
-			}
-			else
-				ti->ttype = XPATH_TOKEN_COLON;
-		}
-		else
-			/* token is some else */
-			ti->ttype = XPATH_TOKEN_OTHER;
-
-		ti->length = str - ti->start;
-	}
-	else
-		ti->ttype = XPATH_TOKEN_NONE;
-
-	return str;
-}
-
-/*
- * Initialize XPath parser data.
- *		Token buffer is empty on start
- */
-static void
-init_xpath_parser(XPathParserData *parser, const char *str)
-{
-	parser->cur = str;
-	parser->buffer_is_empty = true;
-}
-
-/*
- * Returns one XPath token.
- *		Use buffered token when it is possible
- */
-static void
-next_xpath_token(XPathParserData *parser, XPathTokenInfo *ti)
-{
-	if (!parser->buffer_is_empty)
-	{
-		memcpy(ti, &parser->buffer, sizeof(XPathTokenInfo));
-		parser->buffer_is_empty = true;
-	}
-	else
-		parser->cur = next_xpath_token_unbuffered(parser->cur, ti);
-}
-
-/*
- * Push token to parser's buffer
- */
-static void
-push_xpath_token(XPathParserData *parser, XPathTokenInfo *ti)
-{
-	Assert(parser->buffer_is_empty);
-
-	memcpy(&parser->buffer, ti, sizeof(XPathTokenInfo));
-	parser->buffer_is_empty = false;
-
-	/* token info doesn't hold any data now */
-	ti->ttype = XPATH_TOKEN_NONE;
-}
-
-/*
- * Write original token to output string info
- */
-static void
-write_xpath_token(StringInfo str, XPathTokenInfo *ti)
-{
-	Assert(ti->ttype != XPATH_TOKEN_NONE);
-
-	if (ti->ttype != XPATH_TOKEN_OTHER)
-		appendBinaryStringInfo(str, ti->start, ti->length);
-	else
-		appendStringInfoChar(str, *ti->start);
-
-	/* token info doesn't hold any data now */
-	ti->ttype = XPATH_TOKEN_NONE;
-}
-
-/*
- * transform_xpath_recurse
- *
- * This function iterate over tokens of XPath expressions.
- * It writes def_namespace_name before any unqualified name or unqualified
- * attribute.
- *
- * XPath expression can contains predicates - for this transformation we
- * process predicates as recursive iteration of transform_xpath_recurse.
- * The parameter inside_predicate has true in this case. In this case we
- * searching ']' to ending this function.
- *
- * StringInfo str collects transformed (output) XPath expression Param parser
- * holds parser data.
- */
-static void
-transform_xpath_recurse(StringInfo str,
-						XPathParserData *parser,
-						bool inside_predicate,
-						const char *def_namespace_name)
-{
-	XPathTokenInfo t1,
-				t2;
-	bool		tagname_needs_defnsp;
-	bool		token_is_tagattrib = false;
-
-	/* Guard against stack overflow due to overly complex XPath expressions */
-	check_stack_depth();
-
-	next_xpath_token(parser, &t1);
-
-	while (t1.ttype != XPATH_TOKEN_NONE)
-	{
-		switch (t1.ttype)
-		{
-			case XPATH_TOKEN_NUMBER:
-			case XPATH_TOKEN_STRING:
-			case XPATH_TOKEN_COLON:
-			case XPATH_TOKEN_DCOLON:
-				/* write without any changes */
-				write_xpath_token(str, &t1);
-				/* process fresh token */
-				next_xpath_token(parser, &t1);
-				break;
-
-			case XPATH_TOKEN_NAME:
-				{
-					/*
-					 * Inside predicate ignore keywords (literal operators)
-					 * "and" "or" "div" and "mod".
-					 */
-					if (inside_predicate)
-					{
-						if ((strncmp(t1.start, "and", 3) == 0 && t1.length == 3) ||
-						 (strncmp(t1.start, "or", 2) == 0 && t1.length == 2) ||
-						 (strncmp(t1.start, "div", 3) == 0 && t1.length == 3) ||
-						 (strncmp(t1.start, "mod", 3) == 0 && t1.length == 3))
-						{
-							token_is_tagattrib = false;
-
-							/* keyword */
-							write_xpath_token(str, &t1);
-							/* process fresh token */
-							next_xpath_token(parser, &t1);
-							break;
-						}
-					}
-
-					tagname_needs_defnsp = true;
-
-					next_xpath_token(parser, &t2);
-					if (t2.ttype == XPATH_TOKEN_COLON)
-					{
-						/* t1 is a quilified node name. no need to add default one. */
-						tagname_needs_defnsp = false;
-
-						/* namespace name */
-						write_xpath_token(str, &t1);
-						/* colon */
-						write_xpath_token(str, &t2);
-						/* get node name */
-						next_xpath_token(parser, &t1);
-					}
-					else if (t2.ttype == XPATH_TOKEN_DCOLON)
-					{
-						/* t1 is an axis name. write out as it is */
-						if (strncmp(t1.start, "attribute", 9) == 0 && t1.length == 9)
-							token_is_tagattrib = true;
-
-						/* axis name */
-						write_xpath_token(str, &t1);
-						/* double colon */
-						write_xpath_token(str, &t2);
-
-						/*
-						 * The next token may be qualified tag name, process
-						 * it as a fresh token.
-						 */
-						next_xpath_token(parser, &t1);
-						break;
-					}
-					else if (t2.ttype == XPATH_TOKEN_OTHER)
-					{
-						/* function name doesn't require namespace */
-						if (*t2.start == '(')
-							tagname_needs_defnsp = false;
-						else
-							push_xpath_token(parser, &t2);
-					}
-
-					if (tagname_needs_defnsp && !token_is_tagattrib)
-						appendStringInfo(str, "%s:", def_namespace_name);
-
-					token_is_tagattrib = false;
-
-					/* write maybe-tagname if not consumed yet */
-					if (!TOKEN_IS_EMPTY(t1))
-						write_xpath_token(str, &t1);
-
-					/* output t2 if not consumed yet */
-					if (!TOKEN_IS_EMPTY(t2))
-						write_xpath_token(str, &t2);
-
-					next_xpath_token(parser, &t1);
-				}
-				break;
-
-			case XPATH_TOKEN_OTHER:
-				{
-					char		c = *t1.start;
-
-					write_xpath_token(str, &t1);
-
-					if (c == '[')
-						transform_xpath_recurse(str, parser, true, def_namespace_name);
-					else
-					{
-						if (c == ']' && inside_predicate)
-						{
-							return;
-						}
-						else if (c == '@')
-						{
-							next_xpath_token(parser, &t1);
-							if (t1.ttype == XPATH_TOKEN_NAME)
-								token_is_tagattrib = true;
-
-							push_xpath_token(parser, &t1);
-						}
-					}
-					next_xpath_token(parser, &t1);
-				}
-				break;
-
-			case XPATH_TOKEN_NONE:
-				elog(ERROR, "unexpected end of XPath expression");
-		}
-	}
-}
-
-#endif

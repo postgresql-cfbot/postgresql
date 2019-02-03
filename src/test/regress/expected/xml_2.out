@@ -1106,7 +1106,11 @@ SELECT * FROM XMLTABLE(XMLNAMESPACES(DEFAULT 'http://x.y'),
                       '/rows/row'
                       PASSING '<rows xmlns="http://x.y"><row><a>10</a></row></rows>'
                       COLUMNS a int PATH 'a');
-ERROR:  DEFAULT namespace is not supported
+ a  
+----
+ 10
+(1 row)
+
 -- used in prepare statements
 PREPARE pp AS
 SELECT  xmltable.*
@@ -1473,3 +1477,65 @@ SELECT xmltable.* FROM xmltest2, LATERAL xmltable(('/d/r/' || lower(_path) || 'c
  14
 (4 rows)
 
+-- default namespaces
+CREATE TABLE t1 (id int, doc xml);
+INSERT INTO t1 VALUES (5, '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>');
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES('http://x.y' AS x), '/x:rows/x:row' PASSING t1.doc COLUMNS data int PATH 'x:a[1][@hoge]') AS x;
+ data 
+------
+   50
+(1 row)
+
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'a[1][@hoge]') AS x;
+ data 
+------
+   50
+(1 row)
+
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'child::a[1][attribute::hoge="haha"]') as x;
+ data 
+------
+   50
+(1 row)
+
+-- both string separators are supported
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'a[@hoge="haha"]') AS x;
+ data 
+------
+   50
+(1 row)
+
+SELECT x.* FROM t1, xmltable(XMLNAMESPACES(DEFAULT 'http://x.y'), '/rows/row' PASSING t1.doc COLUMNS data int PATH 'a[@hoge=''haha'']') AS x;
+ data 
+------
+   50
+(1 row)
+
+-- xpath and xpath_exists supports namespaces too
+SELECT xpath('/x:rows/x:row/x:a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['x', 'http://x.y']]);
+                      xpath                       
+--------------------------------------------------
+ {"<a xmlns=\"http://x.y\" hoge=\"haha\">50</a>"}
+(1 row)
+
+SELECT xpath('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y']]);
+                      xpath                       
+--------------------------------------------------
+ {"<a xmlns=\"http://x.y\" hoge=\"haha\">50</a>"}
+(1 row)
+
+SELECT xpath_exists('/x:rows/x:row/x:a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['x', 'http://x.y']]);
+ xpath_exists 
+--------------
+ t
+(1 row)
+
+SELECT xpath_exists('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y']]);
+ xpath_exists 
+--------------
+ t
+(1 row)
+
+-- should fail
+SELECT xpath_exists('/rows/row/a[1][@hoge]', '<rows xmlns="http://x.y"><row><a hoge="haha">50</a></row></rows>', ARRAY[ARRAY['', 'http://x.y'], ARRAY['', 'http://x.z']]);
+ERROR:  only one default namespace is allowed

@@ -1299,6 +1299,7 @@ _copyTableFunc(const TableFunc *from)
 
 	COPY_NODE_FIELD(ns_uris);
 	COPY_NODE_FIELD(ns_names);
+	COPY_STRING_FIELD(default_ns_name);
 	COPY_NODE_FIELD(docexpr);
 	COPY_NODE_FIELD(rowexpr);
 	COPY_NODE_FIELD(colnames);

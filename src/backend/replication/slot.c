@@ -1065,6 +1065,63 @@ ReplicationSlotReserveWal(void)
 }
 
 /*
+ * Returns the list of replication slots restart_lsn of whch are behind
+ * specified LSN. Returs palloc'ed character array stuffed with slot names
+ * delimited by the givein separator.  Returns NULL if no slot matches.  If
+ * pnslots is given, the number of the returned slots is returned there.
+ */
+char *
+ReplicationSlotsEnumerateBehinds(XLogRecPtr target, char *separator, int *pnslots)
+{
+	static StringInfoData retstr;
+	static bool retstr_initialized = false;
+	bool insert_separator = false;
+	int i;
+	int nslots = 0;
+
+	Assert (separator);
+	if (max_replication_slots <= 0)
+		return NULL;
+
+	if (!retstr_initialized)
+	{
+		initStringInfo(&retstr);
+		retstr_initialized = true;
+	}
+	else
+		resetStringInfo(&retstr);
+
+	/* construct name list */
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (i = 0 ; i < max_replication_slots ; i++)
+	{
+		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+		if (s->in_use && s->data.restart_lsn < target)
+		{
+			if (insert_separator)
+				appendStringInfoString(&retstr, separator);
+
+			/*
+			 * slot names consist only with lower-case letters. we don't
+			 * bother quoting.
+			 */
+			appendStringInfoString(&retstr, NameStr(s->data.name));
+			insert_separator = true;
+			nslots++;
+		}
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	/* return the number of slots in the list if requested */
+	if (pnslots)
+		*pnslots = nslots;
+
+	/* return NULL if the result is an empty string */
+	return retstr.data[0] ? retstr.data : NULL;
+}
+
+/*
  * Flush all replication slots to disk.
  *
  * This needn't actually be part of a checkpoint, but it's a convenient

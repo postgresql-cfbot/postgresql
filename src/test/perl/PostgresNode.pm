@@ -672,11 +672,11 @@ sub init_from_backup
 	chmod(0700, $data_path);
 
 	# Base configuration for this node
-	$self->append_conf(
-		'postgresql.conf',
-		qq(
-port = $port
-));
+	$self->append_conf('postgresql.conf', qq(port = $port));
+	$self->append_conf('postgresql.conf',
+					   qq(primary_slot_name = $params{primary_slot_name}))
+	  if (defined $params{primary_slot_name});
+
 	$self->enable_streaming($root_node) if $params{has_streaming};
 	$self->enable_restoring($root_node) if $params{has_restoring};
 	return;

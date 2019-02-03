@@ -199,6 +199,7 @@ extern void ReplicationSlotsComputeRequiredLSN(void);
 extern XLogRecPtr ReplicationSlotsComputeLogicalRestartLSN(void);
 extern bool ReplicationSlotsCountDBSlots(Oid dboid, int *nslots, int *nactive);
 extern void ReplicationSlotsDropDBSlots(Oid dboid);
+extern char *ReplicationSlotsEnumerateBehinds(XLogRecPtr target, char *separator, int *pnslots);
 
 extern void StartupReplicationSlots(void);
 extern void CheckPointReplicationSlots(void);

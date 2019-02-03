@@ -214,15 +214,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     <listitem>
      <para>
       These forms change whether a column is marked to allow null
-      values or to reject null values.
-     </para>
-
-     <para>
-      You can only use <literal>SET NOT NULL</literal> when the column 
-      contains no null values. Full table scan is performed to check 
-      this condition unless there are valid <literal>CHECK</literal> 
-      constraints that prohibit NULL values for specified column.
-      In the latter case table scan is skipped.
+      values or to reject null values.  You can only use <literal>SET
+      NOT NULL</literal> when the column contains no null values.
      </para>
 
      <para>

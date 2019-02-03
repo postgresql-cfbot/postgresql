@@ -175,7 +175,66 @@ static bool partkey_datum_from_expr(PartitionPruneContext *context,
 						Expr *expr, int stateidx,
 						Datum *value, bool *isnull);
 
+/*
+ * partitions_are_ordered
+ *		For the partitioned table given in 'partrel', returns true if the
+ *		partitioned table guarantees that tuples which sort earlier according
+ *		to the partition bound are stored in an earlier partition.  Returns
+ *		false this is not possible, or if we have insufficient means to prove
+ *		it.
+ *
+ * This assumes nothing about the order of tuples inside the actual
+ * partitions.
+ */
+bool
+partitions_are_ordered(PlannerInfo *root, RelOptInfo *partrel)
+{
+	PartitionBoundInfo	boundinfo = partrel->boundinfo;
 
+	Assert(boundinfo != NULL);
+
+	switch (boundinfo->strategy)
+	{
+		/*
+		 * RANGE type partitions guarantee that the partitions can be scanned
+		 * in the order that they're defined in the PartitionDesc to provide
+		 * non-overlapping ranges of tuples.  We must disallow when a DEFAULT
+		 * partition exists as this could contain tuples from either below or
+		 * above the defined range, or contain tuples belonging to gaps in the
+		 * defined range.
+		 */
+		case PARTITION_STRATEGY_RANGE:
+			if (partition_bound_has_default(boundinfo))
+				return false;
+			break;
+
+		/*
+		 * LIST partitions can also guarantee ordering, but we'd need to
+		 * ensure that partitions don't allow interleaved values.  We could
+		 * likely check for this looking at each partition, in order, and
+		 * checking which Datums are accepted.  If we find a Datum in a
+		 * partition that's greater than one previously already seen, then
+		 * values could become out of order and we'd have to disable the
+		 * optimization.  For now, let's just keep it simple and just accept
+		 * LIST partitions without a DEFAULT partition which only accept a
+		 * single Datum per partition.  This is cheap as it does not require
+		 * any per-partition processing.  Maybe we'd like to handle more
+		 * complex cases in the future.
+		 */
+		case PARTITION_STRATEGY_LIST:
+			if (partition_bound_has_default(boundinfo))
+				return false;
+
+			if (boundinfo->ndatums + partition_bound_accepts_nulls(boundinfo) != partrel->nparts)
+				return false;
+			break;
+
+		default:
+			return false;
+	}
+
+	return true;
+}
 /*
  * make_partition_pruneinfo
  *		Builds a PartitionPruneInfo which can be used in the executor to allow

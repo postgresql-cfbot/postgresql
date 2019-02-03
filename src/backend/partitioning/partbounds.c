@@ -1680,6 +1680,8 @@ qsort_partition_hbound_cmp(const void *a, const void *b)
  * qsort_partition_list_value_cmp
  *
  * Compare two list partition bound datums.
+ *
+ * Note: If changing this, see build_partition_pathkeys()
  */
 static int32
 qsort_partition_list_value_cmp(const void *a, const void *b, void *arg)
@@ -1697,6 +1699,8 @@ qsort_partition_list_value_cmp(const void *a, const void *b, void *arg)
  * qsort_partition_rbound_cmp
  *
  * Used when sorting range bounds across all range partitions.
+ *
+ * Note: If changing this, see build_partition_pathkeys()
  */
 static int32
 qsort_partition_rbound_cmp(const void *a, const void *b, void *arg)

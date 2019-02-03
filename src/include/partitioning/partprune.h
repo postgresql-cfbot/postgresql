@@ -72,6 +72,8 @@ typedef struct PartitionPruneContext
 #define PruneCxtStateIdx(partnatts, step_id, keyno) \
 	((partnatts) * (step_id) + (keyno))
 
+extern bool partitions_are_ordered(struct PlannerInfo *root,
+					   struct RelOptInfo *partrel);
 extern PartitionPruneInfo *make_partition_pruneinfo(struct PlannerInfo *root,
 						 struct RelOptInfo *parentrel,
 						 List *subpaths,

@@ -12,6 +12,8 @@ ISOLATION = mxact delayed_startup ondisk_startup concurrent_ddl_dml \
 REGRESS_OPTS = --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf
 ISOLATION_OPTS = --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf
 
+TAP_TESTS = 1
+
 # Disabled because these tests require "wal_level=logical", which
 # typical installcheck users do not have (e.g. buildfarm clients).
 NO_INSTALLCHECK = 1

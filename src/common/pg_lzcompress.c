@@ -680,7 +680,7 @@ pglz_compress(const char *source, int32 slen, char *dest,
  */
 int32
 pglz_decompress(const char *source, int32 slen, char *dest,
-				int32 rawsize)
+				int32 rawsize, bool is_slice)
 {
 	const unsigned char *sp;
 	const unsigned char *srcend;
@@ -703,6 +703,10 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 
 		for (ctrlc = 0; ctrlc < 8 && sp < srcend; ctrlc++)
 		{
+
+			if (dp >= destend)	/* check for buffer overrun */
+				break;		/* do not clobber memory */
+
 			if (ctrl & 1)
 			{
 				/*
@@ -722,19 +726,6 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 					len += *sp++;
 
 				/*
-				 * Check for output buffer overrun, to ensure we don't clobber
-				 * memory in case of corrupt input.  Note: we must advance dp
-				 * here to ensure the error is detected below the loop.  We
-				 * don't simply put the elog inside the loop since that will
-				 * probably interfere with optimization.
-				 */
-				if (dp + len > destend)
-				{
-					dp += len;
-					break;
-				}
-
-				/*
 				 * Now we copy the bytes specified by the tag from OUTPUT to
 				 * OUTPUT. It is dangerous and platform dependent to use
 				 * memcpy() here, because the copied areas could overlap
@@ -744,6 +735,8 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 				{
 					*dp = dp[-off];
 					dp++;
+					if (dp >= destend)	/* check for buffer overrun */
+						break;		/* do not clobber memory */
 				}
 			}
 			else
@@ -752,9 +745,6 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 				 * An unset control bit means LITERAL BYTE. So we just copy
 				 * one from INPUT to OUTPUT.
 				 */
-				if (dp >= destend)	/* check for buffer overrun */
-					break;		/* do not clobber memory */
-
 				*dp++ = *sp++;
 			}
 
@@ -767,12 +757,15 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 
 	/*
 	 * Check we decompressed the right amount.
+	 * If we are slicing, then we won't necessarily
+	 * be at the end of the source or dest buffers
+	 * when we hit a stop, so we don't test then.
 	 */
-	if (dp != destend || sp != srcend)
+	if (!is_slice && (dp != destend || sp != srcend))
 		return -1;
 
 	/*
 	 * That's it.
 	 */
-	return rawsize;
+	return (char*)dp - dest;
 }

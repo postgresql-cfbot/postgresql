@@ -3270,7 +3270,7 @@ ReleasePredicateLocks(bool isCommit)
 	 * transaction to complete before freeing some RAM; correctness of visible
 	 * behavior is not affected.
 	 */
-	MySerializableXact->finishedBefore = ShmemVariableCache->nextXid;
+	MySerializableXact->finishedBefore = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
 
 	/*
 	 * If it's not a commit it's a rollback, and we can clear our locks

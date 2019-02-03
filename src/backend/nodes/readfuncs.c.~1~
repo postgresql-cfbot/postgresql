@@ -1087,7 +1087,6 @@ _readMinMaxExpr(void)
 	READ_OID_FIELD(inputcollid);
 	READ_ENUM_FIELD(op, MinMaxOp);
 	READ_NODE_FIELD(args);
-	READ_NODE_FIELD(variadic_arg);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();

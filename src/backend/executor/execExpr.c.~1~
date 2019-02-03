@@ -1854,17 +1854,12 @@ ExecInitExprRec(Expr *node, ExprState *state,
 		case T_MinMaxExpr:
 			{
 				MinMaxExpr *minmaxexpr = (MinMaxExpr *) node;
-				int			nelems;
+				int			nelems = list_length(minmaxexpr->args);
 				TypeCacheEntry *typentry;
 				FmgrInfo   *finfo;
 				FunctionCallInfo fcinfo;
 				ListCell   *lc;
 				int			off;
-
-				if (minmaxexpr->args)
-					nelems = list_length(minmaxexpr->args);
-				else
-					nelems = 1;
 
 				/* Look up the btree comparison function for the datatype */
 				typentry = lookup_type_cache(minmaxexpr->minmaxtype,
@@ -1902,29 +1897,16 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				scratch.d.minmax.finfo = finfo;
 				scratch.d.minmax.fcinfo_data = fcinfo;
 
-				if (minmaxexpr->args)
+				/* evaluate expressions into minmax->values/nulls */
+				off = 0;
+				foreach(lc, minmaxexpr->args)
 				{
-					scratch.d.minmax.variadic_arg = false;
+					Expr	   *e = (Expr *) lfirst(lc);
 
-					/* evaluate expressions into minmax->values/nulls */
-					off = 0;
-					foreach(lc, minmaxexpr->args)
-					{
-						Expr	   *e = (Expr *) lfirst(lc);
-
-						ExecInitExprRec(e, state,
-										&scratch.d.minmax.values[off],
-										&scratch.d.minmax.nulls[off]);
-						off++;
-					}
-				}
-				else
-				{
-					scratch.d.minmax.variadic_arg = true;
-
-					ExecInitExprRec(minmaxexpr->variadic_arg, state,
-										&scratch.d.minmax.values[0],
-										&scratch.d.minmax.nulls[0]);
+					ExecInitExprRec(e, state,
+									&scratch.d.minmax.values[off],
+									&scratch.d.minmax.nulls[off]);
+					off++;
 				}
 
 				/* and push the final comparison */

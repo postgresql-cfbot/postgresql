@@ -465,9 +465,6 @@ exprTypmod(const Node *expr)
 				int32		typmod;
 				ListCell   *arg;
 
-				if (mexpr->variadic_arg)
-					return exprTypmod((Node *) mexpr->variadic_arg);
-
 				if (exprType((Node *) linitial(mexpr->args)) != minmaxtype)
 					return -1;
 				typmod = exprTypmod((Node *) linitial(mexpr->args));
@@ -2075,15 +2072,7 @@ expression_tree_walker(Node *node,
 		case T_CoalesceExpr:
 			return walker(((CoalesceExpr *) node)->args, context);
 		case T_MinMaxExpr:
-			{
-				MinMaxExpr *mexpr = (MinMaxExpr *) node;
-
-				if (walker(mexpr->args, context))
-					return;
-				if (walker(mexpr->variadic_arg, context))
-					return true;
-			}
-			break;
+			return walker(((MinMaxExpr *) node)->args, context);
 		case T_XmlExpr:
 			{
 				XmlExpr    *xexpr = (XmlExpr *) node;
@@ -2839,7 +2828,6 @@ expression_tree_mutator(Node *node,
 
 				FLATCOPY(newnode, minmaxexpr, MinMaxExpr);
 				MUTATE(newnode->args, minmaxexpr->args, List *);
-				MUTATE(newnode->variadic_arg, minmaxexpr->variadic_arg, Expr *);
 				return (Node *) newnode;
 			}
 			break;
@@ -3359,15 +3347,7 @@ raw_expression_tree_walker(Node *node,
 		case T_CoalesceExpr:
 			return walker(((CoalesceExpr *) node)->args, context);
 		case T_MinMaxExpr:
-			{
-				MinMaxExpr *mexpr = (MinMaxExpr *) node;
-
-				if (walker(mexpr->args, context))
-					return true;
-				if (walker(mexpr->variadic_arg, context))
-					return true;
-			}
-			break;
+			return walker(((MinMaxExpr *) node)->args, context);
 		case T_XmlExpr:
 			{
 				XmlExpr    *xexpr = (XmlExpr *) node;

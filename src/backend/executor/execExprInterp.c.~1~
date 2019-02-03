@@ -2819,53 +2819,6 @@ ExecEvalMinMax(ExprState *state, ExprEvalStep *op)
 	/* default to null result */
 	*op->resnull = true;
 
-	if (op->d.minmax.variadic_arg)
-	{
-		ArrayIterator array_iterator;
-		ArrayType  *arr;
-		Datum	value;
-		bool	isnull;
-
-		if (nulls[0])
-			return;
-
-		arr = DatumGetArrayTypeP(values[0]);
-
-		array_iterator = array_create_iterator(arr, 0, NULL);
-		while (array_iterate(array_iterator, &value, &isnull))
-		{
-			if (isnull)
-				continue;
-
-			if (*op->resnull)
-			{
-				/* first nonnull input */
-				*op->resvalue = value;
-				*op->resnull = false;
-			}
-			else
-			{
-				int			cmpresult;
-
-				/* apply comparison function */
-				fcinfo->arg[0] = *op->resvalue;
-				fcinfo->arg[1] = value;
-
-				fcinfo->isnull = false;
-				cmpresult = DatumGetInt32(FunctionCallInvoke(fcinfo));
-				if (fcinfo->isnull) /* probably should not happen */
-					continue;
-
-				if (cmpresult > 0 && operator == IS_LEAST)
-					*op->resvalue = value;
-				else if (cmpresult < 0 && operator == IS_GREATEST)
-					*op->resvalue = value;
-			}
-		}
-
-		return;
-	}
-
 	for (off = 0; off < op->d.minmax.nelems; off++)
 	{
 		/* ignore NULL inputs */

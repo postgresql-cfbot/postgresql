@@ -459,7 +459,6 @@ typedef struct ExprEvalStep
 			/* workspace for argument values */
 			Datum	   *values;
 			bool	   *nulls;
-			bool		variadic_arg;
 			int			nelems;
 			/* is it GREATEST or LEAST? */
 			MinMaxOp	op;

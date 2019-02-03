@@ -635,7 +635,6 @@ _equalMinMaxExpr(const MinMaxExpr *a, const MinMaxExpr *b)
 	COMPARE_SCALAR_FIELD(inputcollid);
 	COMPARE_SCALAR_FIELD(op);
 	COMPARE_NODE_FIELD(args);
-	COMPARE_NODE_FIELD(variadic_arg);
 	COMPARE_LOCATION_FIELD(location);
 
 	return true;

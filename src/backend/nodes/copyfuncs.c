@@ -1942,6 +1942,7 @@ _copyMinMaxExpr(const MinMaxExpr *from)
 	COPY_SCALAR_FIELD(inputcollid);
 	COPY_SCALAR_FIELD(op);
 	COPY_NODE_FIELD(args);
+	COPY_NODE_FIELD(variadic_arg);
 	COPY_LOCATION_FIELD(location);
 
 	return newnode;

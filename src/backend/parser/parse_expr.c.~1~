@@ -2263,60 +2263,35 @@ transformMinMaxExpr(ParseState *pstate, MinMaxExpr *m)
 	MinMaxExpr *newm = makeNode(MinMaxExpr);
 	List	   *newargs = NIL;
 	List	   *newcoercedargs = NIL;
+	const char *funcname = (m->op == IS_GREATEST) ? "GREATEST" : "LEAST";
+	ListCell   *args;
 
 	newm->op = m->op;
-
-	if (m->args)
+	foreach(args, m->args)
 	{
-		ListCell   *args;
-		const char *funcname = (m->op == IS_GREATEST) ? "GREATEST" : "LEAST";
+		Node	   *e = (Node *) lfirst(args);
+		Node	   *newe;
 
-		foreach(args, m->args)
-		{
-			Node	   *e = (Node *) lfirst(args);
-			Node	   *newe;
-
-			newe = transformExprRecurse(pstate, e);
-			newargs = lappend(newargs, newe);
-		}
-
-		newm->minmaxtype = select_common_type(pstate, newargs, funcname, NULL);
-		/* minmaxcollid and inputcollid will be set by parse_collate.c */
-
-		/* Convert arguments if necessary */
-		foreach(args, newargs)
-		{
-			Node	   *e = (Node *) lfirst(args);
-			Node	   *newe;
-
-			newe = coerce_to_common_type(pstate, e,
-										 newm->minmaxtype,
-										 funcname);
-			newcoercedargs = lappend(newcoercedargs, newe);
-		}
-
-		newm->args = newcoercedargs;
-	}
-	else
-	{
-		Oid		input_type;
-		Oid		element_typeid;
-
-		Assert(m->variadic_arg);
-
-		newm->variadic_arg = transformExprRecurse(pstate, (Node *) m->variadic_arg);
-		input_type = exprType(newm->variadic_arg);
-
-		if (input_type == InvalidOid)
-			elog(ERROR, "cannot to determinate result type");
-
-		element_typeid = get_base_element_type(input_type);
-		if (!OidIsValid(element_typeid))
-			elog(ERROR, "expected a array parameter");
-
-		newm->minmaxtype = element_typeid;
+		newe = transformExprRecurse(pstate, e);
+		newargs = lappend(newargs, newe);
 	}
 
+	newm->minmaxtype = select_common_type(pstate, newargs, funcname, NULL);
+	/* minmaxcollid and inputcollid will be set by parse_collate.c */
+
+	/* Convert arguments if necessary */
+	foreach(args, newargs)
+	{
+		Node	   *e = (Node *) lfirst(args);
+		Node	   *newe;
+
+		newe = coerce_to_common_type(pstate, e,
+									 newm->minmaxtype,
+									 funcname);
+		newcoercedargs = lappend(newcoercedargs, newe);
+	}
+
+	newm->args = newcoercedargs;
 	newm->location = m->location;
 	return (Node *) newm;
 }

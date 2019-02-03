@@ -8447,17 +8447,7 @@ get_rule_expr(Node *node, deparse_context *context,
 						appendStringInfoString(buf, "LEAST(");
 						break;
 				}
-
-				if (minmaxexpr->args)
-				{
-					get_rule_expr((Node *) minmaxexpr->args, context, true);
-				}
-				else
-				{
-					appendStringInfoString(buf, "VARIADIC ");
-					get_rule_expr((Node *) minmaxexpr->variadic_arg, context, true);
-				}
-
+				get_rule_expr((Node *) minmaxexpr->args, context, true);
 				appendStringInfoChar(buf, ')');
 			}
 			break;

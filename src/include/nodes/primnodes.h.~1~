@@ -1091,7 +1091,6 @@ typedef struct MinMaxExpr
 	Oid			inputcollid;	/* OID of collation that function should use */
 	MinMaxOp	op;				/* function to execute */
 	List	   *args;			/* the arguments */
-	Expr	   *variadic_arg;	/* the variadic argument */
 	int			location;		/* token location, or -1 if unknown */
 } MinMaxExpr;
 

@@ -13774,22 +13774,6 @@ func_expr_common_subexpr:
 					v->location = @1;
 					$$ = (Node *)v;
 				}
-			| GREATEST '(' VARIADIC a_expr ')'
-				{
-					MinMaxExpr *v = makeNode(MinMaxExpr);
-					v->variadic_arg = $4;
-					v->op = IS_GREATEST;
-					v->location = @1;
-					$$ = (Node *)v;
-				}
-			| LEAST '(' VARIADIC a_expr ')'
-				{
-					MinMaxExpr *v = makeNode(MinMaxExpr);
-					v->variadic_arg = $4;
-					v->op = IS_LEAST;
-					v->location = @1;
-					$$ = (Node *)v;
-				}
 			| XMLCONCAT '(' expr_list ')'
 				{
 					$$ = makeXmlExpr(IS_XMLCONCAT, NULL, NIL, $3, @1);

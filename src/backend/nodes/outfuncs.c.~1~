@@ -1498,7 +1498,6 @@ _outMinMaxExpr(StringInfo str, const MinMaxExpr *node)
 	WRITE_OID_FIELD(inputcollid);
 	WRITE_ENUM_FIELD(op, MinMaxOp);
 	WRITE_NODE_FIELD(args);
-	WRITE_NODE_FIELD(variadic_arg);
 	WRITE_LOCATION_FIELD(location);
 }
 

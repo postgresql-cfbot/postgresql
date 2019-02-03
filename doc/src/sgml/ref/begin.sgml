@@ -26,6 +26,7 @@ BEGIN [ WORK | TRANSACTION ] [ <replaceable class="parameter">transaction_mode</
 <phrase>where <replaceable class="parameter">transaction_mode</replaceable> is one of:</phrase>
 
     ISOLATION LEVEL { SERIALIZABLE | REPEATABLE READ | READ COMMITTED | READ UNCOMMITTED }
+    ROLLBACK SCOPE TRANSACTION
     READ WRITE | READ ONLY
     [ NOT ] DEFERRABLE
 </synopsis>
@@ -58,8 +59,8 @@ BEGIN [ WORK | TRANSACTION ] [ <replaceable class="parameter">transaction_mode</
   </para>
 
   <para>
-   If the isolation level, read/write mode, or deferrable mode is specified, the new
-   transaction has those characteristics, as if
+   If the isolation level, read/write mode, rollback scope, or deferrable mode
+   is specified, the new transaction has those characteristics, as if
    <xref linkend="sql-set-transaction"/>
    was executed.
   </para>

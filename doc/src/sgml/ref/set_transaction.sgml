@@ -10,6 +10,11 @@
  </indexterm>
 
  <indexterm>
+  <primary>transaction rollback scope</primary>
+  <secondary>setting</secondary>
+ </indexterm>
+
+ <indexterm>
   <primary>read-only transaction</primary>
   <secondary>setting</secondary>
  </indexterm>
@@ -39,6 +44,7 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
 <phrase>where <replaceable class="parameter">transaction_mode</replaceable> is one of:</phrase>
 
     ISOLATION LEVEL { SERIALIZABLE | REPEATABLE READ | READ COMMITTED | READ UNCOMMITTED }
+    ROLLBACK SCOPE TRANSACTION
     READ WRITE | READ ONLY
     [ NOT ] DEFERRABLE
 </synopsis>
@@ -59,7 +65,8 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
 
   <para>
    The available transaction characteristics are the transaction
-   isolation level, the transaction access mode (read/write or
+   isolation level, the rollback scope,
+   the transaction access mode (read/write or
    read-only), and the deferrable mode.
    In addition, a snapshot can be selected, though only for the current
    transaction, not as a session default.
@@ -121,6 +128,16 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
    <command>COPY</command>) of a transaction has been executed.  See
    <xref linkend="mvcc"/> for more information about transaction
    isolation and concurrency control.
+  </para>
+
+  <para>
+   The rollback scope of a transaction determines the range of operations
+   which roll back when an SQL statement fails.  The default value is
+   <literal>TRANSACTION</literal>, which causes the entire transaction or
+   current subtransaction to be rolled back.  The other possible mode is
+   <literal>STATEMENT</literal>, in which only the failed
+   <acronym>SQL</acronym> statement is rolled back, and the transaction
+   is automatically put back in normal mode.
   </para>
 
   <para>

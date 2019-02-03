@@ -35,4 +35,7 @@ extern bool check_role(char **newval, void **extra, GucSource source);
 extern void assign_role(const char *newval, void *extra);
 extern const char *show_role(void);
 
+/* in xact.c */
+extern void assign_XactRollbackScope(int newval, void *extra);
+
 #endif							/* VARIABLE_H */

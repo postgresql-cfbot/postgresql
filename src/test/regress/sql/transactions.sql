@@ -418,6 +418,147 @@ COMMIT;
 DROP FUNCTION create_temp_tab();
 DROP FUNCTION invert(x float8);
 
+-- tests for statement-scope rollback
+select current_user \gset
+CREATE USER regress_transactions_user;
+ALTER USER regress_transactions_user SET transaction_rollback_scope TO statement;
+\c - regress_transactions_user
+SHOW transaction_rollback_scope;
+
+CREATE TABLE xact_rscope (a int);
+
+-- elementary test: three separate insertions in a transaction, an abort in the
+-- middle one.  We expect the other two to succeed.
+BEGIN;
+INSERT INTO xact_rscope VALUES (1);
+INSERT INTO xact_rscope VALUES (0/0);
+INSERT INTO xact_rscope VALUES (2);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+-- DO blocks don't have this behavior
+DO $$
+BEGIN
+	INSERT INTO xact_rscope VALUES (3);
+	INSERT INTO xact_rscope VALUES (4/0);
+	INSERT INTO xact_rscope VALUES (5);
+END; $$;
+SELECT * FROM xact_rscope;
+
+-- implicit transaction blocks don't have this behavior
+INSERT INTO xact_rscope VALUES (6)\; INSERT INTO xact_rscope VALUES (7/0)\; INSERT INTO xact_rscope VALUES (8);
+
+-- test savepoints
+BEGIN;
+INSERT INTO xact_rscope VALUES (9);
+SAVEPOINT xact_svpt;
+INSERT INTO xact_rscope VALUES (10);
+INSERT INTO xact_rscope VALUES (11/0);
+ROLLBACK TO xact_svpt;
+INSERT INTO xact_rscope VALUES (12);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+-- test changing rollback scope to 'transaction' partway through
+TRUNCATE TABLE xact_rscope;
+BEGIN;
+SHOW transaction_rollback_scope;
+INSERT INTO xact_rscope VALUES (1);
+INSERT INTO xact_rscope VALUES (2/0);
+SET LOCAL transaction_rollback_scope TO 'transaction';
+INSERT INTO xact_rscope VALUES (3);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+TRUNCATE TABLE xact_rscope;
+BEGIN;
+INSERT INTO xact_rscope VALUES (1);
+INSERT INTO xact_rscope VALUES (2/0);
+SET LOCAL transaction_rollback_scope TO 'transaction';
+INSERT INTO xact_rscope VALUES (3);
+INSERT INTO xact_rscope VALUES (4/0);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+TRUNCATE TABLE xact_rscope;
+BEGIN;
+INSERT INTO xact_rscope VALUES (1);
+SAVEPOINT foo;
+INSERT INTO xact_rscope VALUES (2/0);
+SET LOCAL transaction_rollback_scope TO 'transaction';
+INSERT INTO xact_rscope VALUES (4/0);
+ROLLBACK TO foo;
+INSERT INTO xact_rscope VALUES (5);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+
+TRUNCATE TABLE xact_rscope;
+BEGIN;
+INSERT INTO xact_rscope VALUES (1);
+SAVEPOINT foo;
+INSERT INTO xact_rscope VALUES (2/0);
+SET LOCAL transaction_rollback_scope TO 'transaction';
+INSERT INTO xact_rscope VALUES (4);
+RELEASE SAVEPOINT foo;
+INSERT INTO xact_rscope VALUES (5);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+-- clean up
+\c - :current_user
+DROP OWNED BY regress_transactions_user;
+DROP USER regress_transactions_user;
+
+-- We allow the GUC to be changed mid-session too
+CREATE TABLE xact_rscope (a int);
+SHOW transaction_rollback_scope;
+BEGIN TRANSACTION ROLLBACK SCOPE STATEMENT;
+SHOW transaction_rollback_scope;
+INSERT INTO xact_rscope VALUES (1);
+INSERT INTO xact_rscope VALUES (2/0);
+INSERT INTO xact_rscope VALUES (3), (4/0);
+INSERT INTO xact_rscope VALUES (5);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+TRUNCATE TABLE xact_rscope;
+SET transaction_rollback_scope TO 'statement';
+BEGIN;
+INSERT INTO xact_rscope VALUES (5);
+INSERT INTO xact_rscope VALUES (6/0);
+COMMIT;
+SELECT * FROM xact_rscope;
+RESET transaction_rollback_scope;
+
+TRUNCATE TABLE xact_rscope;
+BEGIN;
+SHOW transaction_rollback_scope;
+INSERT INTO xact_rscope VALUES (1);
+SET LOCAL transaction_rollback_scope TO 'statement';
+INSERT INTO xact_rscope VALUES (2/0);
+INSERT INTO xact_rscope VALUES (3);
+COMMIT;
+SELECT * FROM xact_rscope;
+SHOW transaction_rollback_scope;
+
+TRUNCATE TABLE xact_rscope;
+BEGIN ROLLBACK SCOPE STATEMENT;
+INSERT INTO xact_rscope VALUES (1);
+SAVEPOINT foo;
+INSERT INTO xact_rscope VALUES (2/0);
+INSERT INTO xact_rscope VALUES (3);
+RELEASE SAVEPOINT foo;
+INSERT INTO xact_rscope VALUES (4);
+SAVEPOINT bar;
+INSERT INTO xact_rscope VALUES (5);
+INSERT INTO xact_rscope VALUES (6/0);
+ROLLBACK TO bar;
+INSERT INTO xact_rscope VALUES (7);
+COMMIT;
+SELECT * FROM xact_rscope;
+
+
 
 -- Test assorted behaviors around the implicit transaction block created
 -- when multiple SQL commands are sent in a single Query message.  These

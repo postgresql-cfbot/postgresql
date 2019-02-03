@@ -427,6 +427,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									SetPGVariable("transaction_isolation",
 												  list_make1(item->arg),
 												  true);
+								if (strcmp(item->defname, "transaction_rollback_scope") == 0)
+									SetPGVariable("transaction_rollback_scope",
+												  list_make1(item->arg),
+												  true);
 								else if (strcmp(item->defname, "transaction_read_only") == 0)
 									SetPGVariable("transaction_read_only",
 												  list_make1(item->arg),

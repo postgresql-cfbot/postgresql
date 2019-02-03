@@ -479,7 +479,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	row explicit_row implicit_row type_list array_expr_list
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
-%type <ival>	sub_type
+%type <ival>	sub_type cte_opts
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
 %type <alias>	alias_clause opt_alias_clause
@@ -11291,6 +11291,8 @@ simple_select:
  *
  * We don't currently support the SEARCH or CYCLE clause.
  *
+ * Postgres-specific options can be inserted after AS.
+ *
  * Recognizing WITH_LA here allows a CTE to be named TIME or ORDINALITY.
  */
 with_clause:
@@ -11322,15 +11324,48 @@ cte_list:
 		| cte_list ',' common_table_expr		{ $$ = lappend($1, $3); }
 		;
 
-common_table_expr:  name opt_name_list AS '(' PreparableStmt ')'
+common_table_expr:  name opt_name_list AS cte_opts '(' PreparableStmt ')'
 			{
 				CommonTableExpr *n = makeNode(CommonTableExpr);
 				n->ctename = $1;
 				n->aliascolnames = $2;
-				n->ctequery = $5;
+				n->ctematerialized = $4;
+				n->ctequery = $6;
 				n->location = @1;
 				$$ = (Node *) n;
 			}
+		;
+
+/*
+ * In general, we could allow arbitrary options for a CTE; for the moment
+ * this piggybacks on EXPLAIN's option productions.  Since only one option
+ * is actually supported, just reduce the list to an enum result immediately.
+ */
+cte_opts: explain_option_list
+			{
+				int			matopt = CTEMaterializeDefault;
+				ListCell   *option;
+				foreach(option, $1)
+				{
+					DefElem   *defel = (DefElem *) lfirst(option);
+
+					if (strcmp(defel->defname, "materialize") == 0)
+					{
+						if (defGetBoolean(defel))
+							matopt = CTEMaterializeAlways;
+						else
+							matopt = CTEMaterializeNever;
+					}
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unrecognized WITH option \"%s\"",
+										defel->defname),
+								 parser_errposition(defel->location)));
+				}
+				$$ = matopt;
+			}
+		| /*EMPTY*/								{ $$ = CTEMaterializeDefault; }
 		;
 
 opt_with_clause:
@@ -16214,6 +16249,7 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	/* create common table expression */
 	cte->ctename = relname;
 	cte->aliascolnames = aliases;
+	cte->ctematerialized = CTEMaterializeDefault;
 	cte->ctequery = query;
 	cte->location = -1;
 

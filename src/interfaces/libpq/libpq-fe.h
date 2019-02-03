@@ -111,7 +111,8 @@ typedef enum
 {
 	PQERRORS_TERSE,				/* single-line error messages */
 	PQERRORS_DEFAULT,			/* recommended style */
-	PQERRORS_VERBOSE			/* all the facts, ma'am */
+	PQERRORS_VERBOSE,			/* all the facts, ma'am */
+	PQERRORS_SQLSTATE			/* single-line SQLSTATE error code */
 } PGVerbosity;
 
 typedef enum

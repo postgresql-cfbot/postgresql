@@ -5957,23 +5957,27 @@ typedef enum
 {
     PQERRORS_TERSE,
     PQERRORS_DEFAULT,
-    PQERRORS_VERBOSE
+    PQERRORS_VERBOSE,
+    PQERRORS_SQLSTATE
 } PGVerbosity;
 
 PGVerbosity PQsetErrorVerbosity(PGconn *conn, PGVerbosity verbosity);
 </synopsis>
 
-      <function>PQsetErrorVerbosity</function> sets the verbosity mode, returning
-      the connection's previous setting.  In <firstterm>TERSE</firstterm> mode,
-      returned messages include severity, primary text, and position only;
-      this will normally fit on a single line.  The default mode produces
-      messages that include the above plus any detail, hint, or context
-      fields (these might span multiple lines).  The <firstterm>VERBOSE</firstterm>
-      mode includes all available fields.  Changing the verbosity does not
-      affect the messages available from already-existing
-      <structname>PGresult</structname> objects, only subsequently-created ones.
-      (But see <function>PQresultVerboseErrorMessage</function> if you
-      want to print a previous error with a different verbosity.)
+      <function>PQsetErrorVerbosity</function> sets the verbosity mode,
+      returning the connection's previous setting.  In
+      <firstterm>SQLSTATE</firstterm> mode, returned messages include
+      severity and <symbol>SQLSTATE</symbol> error code.  In
+      <firstterm>TERSE</firstterm> mode, returned messages include severity,
+      primary text, and position only; this will normally fit on a single
+      line.  The default mode produces messages that include the above plus
+      any detail, hint, or context fields (these might span multiple lines). 
+      The <firstterm>VERBOSE</firstterm> mode includes all available fields. 
+      Changing the verbosity does not affect the messages available from
+      already-existing <structname>PGresult</structname> objects, only
+      subsequently-created ones.  (But see
+      <function>PQresultVerboseErrorMessage</function> if you want to print
+      a previous error with a different verbosity.)
      </para>
     </listitem>
    </varlistentry>

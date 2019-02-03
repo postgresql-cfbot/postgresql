@@ -1088,9 +1088,11 @@ verbosity_hook(const char *newval)
 		pset.verbosity = PQERRORS_TERSE;
 	else if (pg_strcasecmp(newval, "verbose") == 0)
 		pset.verbosity = PQERRORS_VERBOSE;
+	else if (pg_strcasecmp(newval, "sqlstate") == 0)
+		pset.verbosity = PQERRORS_SQLSTATE;
 	else
 	{
-		PsqlVarEnumError("VERBOSITY", newval, "default, terse, verbose");
+		PsqlVarEnumError("VERBOSITY", newval, "default, terse, sqlstate, verbose");
 		return false;
 	}
 

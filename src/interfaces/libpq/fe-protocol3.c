@@ -1017,6 +1017,15 @@ pqBuildErrorMessage3(PQExpBuffer msg, const PGresult *res,
 	val = PQresultErrorField(res, PG_DIAG_SEVERITY);
 	if (val)
 		appendPQExpBuffer(msg, "%s:  ", val);
+	if (verbosity == PQERRORS_SQLSTATE)
+	{
+		val = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+		if (val)
+			appendPQExpBuffer(msg, "%s", val);
+		appendPQExpBufferChar(msg, '\n');
+		return;
+	}
+
 	if (verbosity == PQERRORS_VERBOSE)
 	{
 		val = PQresultErrorField(res, PG_DIAG_SQLSTATE);

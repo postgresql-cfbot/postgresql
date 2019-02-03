@@ -3881,8 +3881,7 @@ bar
         messages from the server. The default is <literal>errors</literal> (meaning
         that context will be shown in error messages, but not in notice or
         warning messages).  This setting has no effect
-        when <varname>VERBOSITY</varname> is set to <literal>sqlstate</literal>
-        or <literal>terse</literal>.
+        when <varname>VERBOSITY</varname> is set to <literal>terse</literal>.
         (See also <command>\errverbose</command>, for use when you want a verbose
         version of the error you just got.)
         </para>
@@ -3936,8 +3935,8 @@ bar
         <listitem>
         <para>
         This variable can be set to the values <literal>default</literal>,
-        <literal>verbose</literal>, <literal>sqlstate</literal> or <literal>terse</literal> 
-        to control the verbosity of error reports.
+        <literal>verbose</literal>, or <literal>terse</literal> to control the verbosity
+        of error reports.
         (See also <command>\errverbose</command>, for use when you want a verbose
         version of the error you just got.)
         </para>

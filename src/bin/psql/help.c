@@ -411,7 +411,7 @@ helpVariables(unsigned short int pager)
 	fprintf(output, _("  USER\n"
 					  "    the currently connected database user\n"));
 	fprintf(output, _("  VERBOSITY\n"
-					  "    controls verbosity of error reports [default, verbose, terse]\n"));
+					  "    controls verbosity of error reports [default, verbose, terse, sqlstate]\n"));
 	fprintf(output, _("  VERSION\n"
 					  "  VERSION_NAME\n"
 					  "  VERSION_NUM\n"

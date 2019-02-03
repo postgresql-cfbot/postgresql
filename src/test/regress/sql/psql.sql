@@ -1016,3 +1016,22 @@ select 1/(15-unique2) from tenk1 order by unique2 limit 19;
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 
 \unset FETCH_COUNT
+
+-- verbosity error setting
+\set VERBOSITY terse
+SELECT 1 UNION;
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'last error message:' :LAST_ERROR_MESSAGE
+
+\set VERBOSITY sqlstate
+SELECT 1 UNION;
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'last error message:' :LAST_ERROR_MESSAGE
+
+\set VERBOSITY default
+SELECT 1 UNION;
+\echo 'error:' :ERROR
+\echo 'error code:' :SQLSTATE
+\echo 'last error message:' :LAST_ERROR_MESSAGE

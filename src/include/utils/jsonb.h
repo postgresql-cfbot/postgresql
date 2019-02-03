@@ -66,8 +66,10 @@ typedef enum
 
 /* Convenience macros */
 #define DatumGetJsonbP(d)	((Jsonb *) PG_DETOAST_DATUM(d))
+#define DatumGetJsonbPCopy(d)	((Jsonb *) PG_DETOAST_DATUM_COPY(d))
 #define JsonbPGetDatum(p)	PointerGetDatum(p)
 #define PG_GETARG_JSONB_P(x)	DatumGetJsonbP(PG_GETARG_DATUM(x))
+#define PG_GETARG_JSONB_P_COPY(x)	DatumGetJsonbPCopy(PG_GETARG_DATUM(x))
 #define PG_RETURN_JSONB_P(x)	PG_RETURN_POINTER(x)
 
 typedef struct JsonbPair JsonbPair;
@@ -236,7 +238,15 @@ enum jbvType
 	jbvArray = 0x10,
 	jbvObject,
 	/* Binary (i.e. struct Jsonb) jbvArray/jbvObject */
-	jbvBinary
+	jbvBinary,
+
+	/*
+	 * Virtual types.
+	 *
+	 * These types are used only for in-memory JSON processing and serialized
+	 * into JSON strings when outputted to json/jsonb.
+	 */
+	jbvDatetime = 0x20,
 };
 
 /*
@@ -277,11 +287,20 @@ struct JsonbValue
 			int			len;
 			JsonbContainer *data;
 		}			binary;		/* Array or object, in on-disk format */
+
+		struct
+		{
+			Datum		value;
+			Oid			typid;
+			int32		typmod;
+			int			tz;
+		}			datetime;
 	}			val;
 };
 
-#define IsAJsonbScalar(jsonbval)	((jsonbval)->type >= jbvNull && \
-									 (jsonbval)->type <= jbvBool)
+#define IsAJsonbScalar(jsonbval)	(((jsonbval)->type >= jbvNull && \
+									  (jsonbval)->type <= jbvBool) || \
+									  (jsonbval)->type == jbvDatetime)
 
 /*
  * Key/value pair within an Object.
@@ -378,6 +397,6 @@ extern char *JsonbToCString(StringInfo out, JsonbContainer *in,
 			   int estimated_len);
 extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 					 int estimated_len);
-
+extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 
 #endif							/* __JSONB_H__ */

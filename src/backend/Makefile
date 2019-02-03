@@ -186,7 +186,7 @@ distprep:
 	$(MAKE) -C replication	repl_gram.c repl_scanner.c syncrep_gram.c syncrep_scanner.c
 	$(MAKE) -C storage/lmgr	lwlocknames.h lwlocknames.c
 	$(MAKE) -C utils	distprep
-	$(MAKE) -C utils/misc	guc-file.c
+	$(MAKE) -C common	guc-file.c
 	$(MAKE) -C utils/sort	qsort_tuple.c
 
 
@@ -307,7 +307,7 @@ maintainer-clean: distclean
 	      replication/syncrep_scanner.c \
 	      storage/lmgr/lwlocknames.c \
 	      storage/lmgr/lwlocknames.h \
-	      utils/misc/guc-file.c \
+	      common/guc-file.c \
 	      utils/sort/qsort_tuple.c
 
 

@@ -48,7 +48,7 @@ OBJS_COMMON = base64.o config_info.o controldata_utils.o exec.o file_perm.o \
 	ip.o keywords.o kwlookup.o link-canary.o md5.o pg_lzcompress.o \
 	pgfnames.o psprintf.o relpath.o \
 	rmtree.o saslprep.o scram-common.o string.o unicode_norm.o \
-	username.o wait_error.o
+	username.o wait_error.o guc-file.o
 
 ifeq ($(with_openssl),yes)
 OBJS_COMMON += sha2_openssl.o
@@ -70,7 +70,7 @@ GEN_KEYWORDLIST_DEPS = $(TOOLSDIR)/gen_keywordlist.pl $(TOOLSDIR)/PerfectHash.pm
 
 all: libpgcommon.a libpgcommon_shlib.a libpgcommon_srv.a
 
-distprep: kwlist_d.h
+distprep: kwlist_d.h guc-file.c
 
 # libpgcommon is needed by some contrib
 install: all installdirs
@@ -130,10 +130,13 @@ kwlist_d.h: $(top_srcdir)/src/include/parser/kwlist.h $(GEN_KEYWORDLIST_DEPS)
 # that you don't get broken parsing code, even in a non-enable-depend build.
 keywords.o keywords_shlib.o keywords_srv.o: kwlist_d.h
 
-# kwlist_d.h is in the distribution tarball, so it is not cleaned here.
+# Note: guc-file.c and kwlist_d.h are not deleted by 'make clean',
+# since we want to ship them in distribution tarballs.
 clean distclean:
 	rm -f libpgcommon.a libpgcommon_shlib.a libpgcommon_srv.a
 	rm -f $(OBJS_FRONTEND) $(OBJS_SHLIB) $(OBJS_SRV)
+	@rm -f lex.yy.c
 
 maintainer-clean: distclean
 	rm -f kwlist_d.h
+	rm -f guc-file.c

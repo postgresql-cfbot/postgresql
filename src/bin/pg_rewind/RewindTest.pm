@@ -39,7 +39,9 @@ use Carp;
 use Config;
 use Exporter 'import';
 use File::Copy;
-use File::Path qw(rmtree);
+use File::Glob ':bsd_glob';
+use File::Path qw(remove_tree make_path);
+use File::Spec::Functions qw(catpath catfile);
 use IPC::Run qw(run);
 use PostgresNode;
 use TestLib;
@@ -248,6 +250,98 @@ sub run_pg_rewind
 				"--no-sync"
 			],
 			'pg_rewind remote');
+	}
+	elsif ($test_mode eq "archive")
+	{
+
+		# Do rewind using a local pgdata as source and
+		# specified directory with target WALs archive.
+		my $wals_archive_dir = catpath(${TestLib::tmp_check}, 'master_wals_archive');
+		my @wal_files = bsd_glob catpath($master_pgdata, 'pg_wal', '0000000*');
+		my $restore_command;
+
+		remove_tree($wals_archive_dir);
+		make_path($wals_archive_dir) or die;
+
+		# Move all old master WAL files to the archive.
+		# Old master should be stopped at this point.
+		foreach my $wal_file (@wal_files)
+		{
+			move($wal_file, "$wals_archive_dir") or die;
+		}
+
+		if ($windows_os)
+		{
+			$restore_command = "copy $wals_archive_dir\\\%f \%p";
+		}
+		else
+		{
+			$restore_command = "cp $wals_archive_dir/\%f \%p";
+		}
+
+		# Stop the new master and be ready to perform the rewind.
+		$node_standby->stop;
+		command_ok(
+			[
+				'pg_rewind',
+				"--debug",
+				"--source-pgdata=$standby_pgdata",
+				"--target-pgdata=$master_pgdata",
+				"--no-sync",
+				"--restore-command=$restore_command"
+			],
+			'pg_rewind archive');
+	}
+	elsif ($test_mode eq "archive_conf")
+	{
+
+		# Do rewind using a local pgdata as source and
+		# specified directory with target WALs archive.
+		my $wals_archive_dir = catpath(${TestLib::tmp_check}, 'master_wals_archive');
+		my @wal_files = bsd_glob catpath($master_pgdata, 'pg_wal', '0000000*');
+		my $master_conf_path = catfile($master_pgdata, 'postgresql.conf');
+		my $restore_command;
+
+		remove_tree($wals_archive_dir);
+		make_path($wals_archive_dir) or die;
+
+		# Move all old master WAL files to the archive.
+		# Old master should be stopped at this point.
+		foreach my $wal_file (@wal_files)
+		{
+			move($wal_file, "$wals_archive_dir") or die;
+		}
+
+		if ($windows_os)
+		{
+			$restore_command = "copy $wals_archive_dir\\\%f \%p";
+		}
+		else
+		{
+			$restore_command = "cp $wals_archive_dir/\%f \%p";
+		}
+
+		# Stop the new master and be ready to perform the rewind.
+		$node_standby->stop;
+
+		print "Using restore_command=$restore_command\n";
+		print "Conf path $master_conf_path\n";
+
+		# Add restore_command to postgresql.conf of target cluster.
+		open(my $conf_fd, ">>", $master_conf_path) or die;
+		print $conf_fd "\nrestore_command='$restore_command'";
+		close $conf_fd;
+
+		command_ok(
+			[
+				'pg_rewind',
+				"--debug",
+				"--source-pgdata=$standby_pgdata",
+				"--target-pgdata=$master_pgdata",
+				"--no-sync",
+				"-r"
+			],
+			'pg_rewind archive_conf');
 	}
 	else
 	{

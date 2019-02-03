@@ -80,7 +80,7 @@ if %DIST%==1 if exist src\backend\parser\scan.c del /q src\backend\parser\scan.c
 if %DIST%==1 if exist src\backend\parser\gram.c del /q src\backend\parser\gram.c
 if %DIST%==1 if exist src\backend\bootstrap\bootscanner.c del /q src\backend\bootstrap\bootscanner.c
 if %DIST%==1 if exist src\backend\bootstrap\bootparse.c del /q src\backend\bootstrap\bootparse.c
-if %DIST%==1 if exist src\backend\utils\misc\guc-file.c del /q src\backend\utils\misc\guc-file.c
+if %DIST%==1 if exist src\common\guc-file.c del /q src\common\guc-file.c
 if %DIST%==1 if exist src\backend\replication\repl_scanner.c del /q src\backend\replication\repl_scanner.c
 if %DIST%==1 if exist src\backend\replication\repl_gram.c del /q src\backend\replication\repl_gram.c
 if %DIST%==1 if exist src\backend\replication\syncrep_scanner.c del /q src\backend\replication\syncrep_scanner.c

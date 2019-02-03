@@ -12,6 +12,7 @@
 #include "postgres_fe.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "pg_rewind.h"
 #include "filemap.h"
@@ -45,13 +46,20 @@ static char xlogfpath[MAXPGPATH];
 typedef struct XLogPageReadPrivate
 {
 	const char *datadir;
+	const char *restoreCommand;
 	int			tliIndex;
+	XLogRecPtr  oldrecptr;
+	TimeLineID  oldtli;
 } XLogPageReadPrivate;
 
 static int SimpleXLogPageRead(XLogReaderState *xlogreader,
 				   XLogRecPtr targetPagePtr,
 				   int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
 				   TimeLineID *pageTLI);
+
+static bool RestoreArchivedWAL(const char *path, const char *xlogfname,
+					off_t expectedSize, const char *restoreCommand,
+					const char *lastRestartPointFname);
 
 /*
  * Read WAL from the datadir/pg_wal, starting from 'startpoint' on timeline
@@ -60,15 +68,19 @@ static int SimpleXLogPageRead(XLogReaderState *xlogreader,
  */
 void
 extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
-			   XLogRecPtr endpoint)
+			   ControlFileData *targetCF, const char *restore_command)
 {
 	XLogRecord *record;
+	XLogRecPtr endpoint = targetCF->checkPoint;
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
 	XLogPageReadPrivate private;
 
 	private.datadir = datadir;
 	private.tliIndex = tliIndex;
+	private.restoreCommand = restore_command;
+	private.oldrecptr = targetCF->checkPointCopy.redo;
+	private.oldtli = targetCF->checkPointCopy.ThisTimeLineID;
 	xlogreader = XLogReaderAllocate(WalSegSz, &SimpleXLogPageRead,
 									&private);
 	if (xlogreader == NULL)
@@ -154,9 +166,9 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex)
  * Find the previous checkpoint preceding given WAL location.
  */
 void
-findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
+findLastCheckpoint(const char *datadir, ControlFileData *targetCF, XLogRecPtr forkptr, int tliIndex,
 				   XLogRecPtr *lastchkptrec, TimeLineID *lastchkpttli,
-				   XLogRecPtr *lastchkptredo)
+				   XLogRecPtr *lastchkptredo, const char *restoreCommand)
 {
 	/* Walk backwards, starting from the given record */
 	XLogRecord *record;
@@ -181,6 +193,9 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 
 	private.datadir = datadir;
 	private.tliIndex = tliIndex;
+	private.restoreCommand = restoreCommand;
+	private.oldrecptr = targetCF->checkPointCopy.redo;
+	private.oldtli = targetCF->checkPointCopy.ThisTimeLineID;
 	xlogreader = XLogReaderAllocate(WalSegSz, &SimpleXLogPageRead,
 									&private);
 	if (xlogreader == NULL)
@@ -291,9 +306,53 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 
 		if (xlogreadfd < 0)
 		{
-			printf(_("could not open file \"%s\": %s\n"), xlogfpath,
+			bool  restore_ok;
+			char  lastRestartPointFname[MAXFNAMELEN];
+			XLogSegNo restartSegNo;
+
+			/*
+			 * If we have no restore_command to execute, then exit.
+			 */
+			if (private->restoreCommand == NULL)
+			{
+				printf(_("could not open file \"%s\": %s\n"), xlogfpath,
 				   strerror(errno));
-			return -1;
+				return -1;
+			}
+
+			XLByteToSeg(private->oldrecptr, restartSegNo, WalSegSz);
+			XLogFileName(lastRestartPointFname, private->oldtli, restartSegNo,
+						 WalSegSz);
+
+			/*
+			 * Since we have restore_command to execute, then try to retreive
+			 * missing WAL file from the archive.
+			 */
+			restore_ok = RestoreArchivedWAL(private->datadir,
+											xlogfname,
+											WalSegSz,
+											private->restoreCommand,
+											lastRestartPointFname);
+
+			if (restore_ok)
+			{
+				xlogreadfd = open(xlogfpath, O_RDONLY | PG_BINARY, 0);
+
+				if (xlogreadfd < 0)
+				{
+					printf(_("could not open restored from archive file \"%s\": %s\n"), xlogfpath,
+							strerror(errno));
+					return -1;
+				}
+				else
+					pg_log(PG_DEBUG, "using restored from archive version of file \"%s\"\n", xlogfpath);
+			}
+			else
+			{
+				printf(_("could not restore file \"%s\" from archive: %s\n"), xlogfname,
+					   strerror(errno));
+				return -1;
+			}
 		}
 	}
 
@@ -408,4 +467,115 @@ extractPageInfo(XLogReaderState *record)
 
 		process_block_change(forknum, rnode, blkno);
 	}
+}
+
+/*
+ * Attempt to retrieve the specified file from off-line archival storage.
+ * If successful return true.
+ *
+ * For fixed-size files, the caller may pass the expected size as an
+ * additional crosscheck on successful recovery. If the file size is not
+ * known, set expectedSize = 0.
+ *
+ * This is a simplified and adapted to frontend version of
+ * RestoreArchivedFile function from transam/xlogarchive.c
+ */
+bool
+RestoreArchivedWAL(const char *path, const char *xlogfname, off_t expectedSize,
+				   const char *restoreCommand, const char *lastRestartPointFname)
+{
+	char		xlogpath[MAXPGPATH];
+	char		xlogRestoreCmd[MAXPGPATH];
+	char	   *dp;
+	char	   *endp;
+	const char *sp;
+	int			rc;
+	struct stat stat_buf;
+
+	snprintf(xlogpath, MAXPGPATH, "%s/" XLOGDIR "/%s", path, xlogfname);
+
+	/*
+	 * Construct the command to be executed.
+	 */
+	dp = xlogRestoreCmd;
+	endp = xlogRestoreCmd + MAXPGPATH - 1;
+	*endp = '\0';
+
+	for (sp = restoreCommand; *sp; sp++)
+	{
+		if (*sp == '%')
+		{
+			switch (sp[1])
+			{
+				case 'p':
+					/* %p: relative path of target file */
+					sp++;
+					StrNCpy(dp, xlogpath, endp - dp);
+					make_native_path(dp);
+					dp += strlen(dp);
+					break;
+				case 'f':
+					/* %f: filename of desired file */
+					sp++;
+					StrNCpy(dp, xlogfname, endp - dp);
+					dp += strlen(dp);
+					break;
+				case 'r':
+					/* %r: filename of last restartpoint */
+					pg_fatal("restore_command with %%r cannot be used during rewind process.\n");
+					break;
+				case '%':
+					/* convert %% to a single % */
+					sp++;
+					if (dp < endp)
+						*dp++ = *sp;
+					break;
+				default:
+					/* otherwise treat the % as not special */
+					if (dp < endp)
+						*dp++ = *sp;
+					break;
+			}
+		}
+		else
+		{
+			if (dp < endp)
+				*dp++ = *sp;
+		}
+	}
+	*dp = '\0';
+
+	/*
+	 * Execute restore_command, which should copy
+	 * the missing WAL file from archival storage.
+	 */
+	rc = system(xlogRestoreCmd);
+
+	if (rc == 0)
+	{
+		/*
+		 * Command apparently succeeded, but let's make sure the file is
+		 * really there now and has the correct size.
+		 */
+		if (stat(xlogpath, &stat_buf) == 0)
+		{
+			if (expectedSize > 0 && stat_buf.st_size != expectedSize)
+			{
+				printf(_("archive file \"%s\" has wrong size: %lu instead of %lu, %s"),
+						xlogfname, (unsigned long) stat_buf.st_size, (unsigned long) expectedSize,
+						strerror(errno));
+			}
+			else
+				return true;
+		}
+		else
+		{
+			/* Stat failed */
+			printf(_("could not stat file \"%s\": %s"),
+					xlogpath,
+					strerror(errno));
+		}
+	}
+
+	return false;
 }

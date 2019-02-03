@@ -63,6 +63,9 @@ extern bool listAllDbs(const char *pattern, bool verbose);
 /* \dt, \di, \ds, \dS, etc. */
 extern bool listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem);
 
+/* \dP[n], \dPi[n], \dPt[n] */
+extern bool listPartitions(const char *pattern, bool verbose, bool show_indexes, bool show_tables, bool show_nested_partitions);
+
 /* \dD */
 extern bool listDomains(const char *pattern, bool verbose, bool showSystem);
 

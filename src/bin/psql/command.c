@@ -782,6 +782,36 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'p':
 				success = permissionsList(pattern);
 				break;
+			case 'P':
+				{
+					bool show_nested_partitions = strchr(cmd, 'n') ? true : false;
+
+					switch (cmd[2])
+					{
+						case 'i':
+							/* show indexes only */
+							success = listPartitions(pattern, show_verbose, true, false, show_nested_partitions);
+							break;
+						case 't':
+							/* show tables only */
+							success = listPartitions(pattern, show_verbose, false, true, show_nested_partitions);
+							break;
+						case '+':
+						case '\0':
+						case 'n':
+							/*
+							 * show relations - when there are not pattern, then it shows
+							 * tables with total relation size, else where it shows tables
+							 * and indexes.
+							 */
+							success = listPartitions(pattern, show_verbose, false, false, show_nested_partitions);
+							break;
+						default:
+							status = PSQL_CMD_UNKNOWN;
+							break;
+					}
+				}
+				break;
 			case 'T':
 				success = describeTypes(pattern, show_verbose, show_system);
 				break;

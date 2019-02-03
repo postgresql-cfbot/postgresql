@@ -37,9 +37,8 @@ PostgreSQL documentation
   <title>Description</title>
   <para>
    <command>pg_verify_checksums</command> verifies data checksums in a
-   <productname>PostgreSQL</productname> cluster.  The server must be shut
-   down cleanly before running <application>pg_verify_checksums</application>.
-   The exit status is zero if there are no checksum errors, otherwise nonzero.
+   <productname>PostgreSQL</productname> cluster.  The exit status is zero if
+   there are no checksum errors, otherwise nonzero.  
   </para>
  </refsect1>
 

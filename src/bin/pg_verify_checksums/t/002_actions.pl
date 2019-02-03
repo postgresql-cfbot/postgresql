@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 45;
+use Test::More tests => 69;
 
 
 # Utility routine to create and check a table with corrupted checksums
@@ -104,10 +104,10 @@ append_to_file "$pgdata/global/pgsql_tmp/1.1", "foo";
 command_ok(['pg_verify_checksums',  '-D', $pgdata],
 		   "succeeds with offline cluster");
 
-# Checks cannot happen with an online cluster
+# Checksums pass on an online cluster
 $node->start;
-command_fails(['pg_verify_checksums',  '-D', $pgdata],
-			  "fails with online cluster");
+command_ok(['pg_verify_checksums',  '-D', $pgdata],
+		   "succeeds with online cluster");
 
 # Check corruption of table on default tablespace.
 check_relation_corruption($node, 'corrupt1', 'pg_default');
@@ -150,6 +150,17 @@ $node->stop;
 # Authorized relation files filled with corrupted data cause the
 # checksum checks to fail.  Make sure to use file names different
 # than the previous ones.
+fail_corrupt($node, "99990");
+fail_corrupt($node, "99990.123");
+fail_corrupt($node, "99990_fsm");
+fail_corrupt($node, "99990_init");
+fail_corrupt($node, "99990_vm");
+fail_corrupt($node, "99990_init.123");
+fail_corrupt($node, "99990_fsm.123");
+fail_corrupt($node, "99990_vm.123");
+
+# Start node again to test online verification correctly finds failures
+$node->start;
 fail_corrupt($node, "99990");
 fail_corrupt($node, "99990.123");
 fail_corrupt($node, "99990_fsm");

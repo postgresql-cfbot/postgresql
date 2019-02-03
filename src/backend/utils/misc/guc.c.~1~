@@ -65,7 +65,6 @@
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
-#include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
@@ -4100,17 +4099,6 @@ static struct config_string ConfigureNamesString[] =
 		&jit_provider,
 		"llvmjit",
 		NULL, NULL, NULL
-	},
-
-	{
-		{"synchronize_slot_names", PGC_SIGHUP, REPLICATION_STANDBY,
-			gettext_noop("Sets the names of replication slots which to synchronize from primary to standby."),
-			gettext_noop("Value of \"*\" means all."),
-			GUC_LIST_INPUT | GUC_LIST_QUOTE
-		},
-		&synchronize_slot_names_string,
-		"",
-		check_synchronize_slot_names, assign_synchronize_slot_names, NULL
 	},
 
 	/* End-of-list marker */

@@ -7539,11 +7539,6 @@
   proname => 'pg_notify', proisstrict => 'f', provolatile => 'v',
   proparallel => 'r', prorettype => 'void', proargtypes => 'text text',
   prosrc => 'pg_notify' },
-{ oid => '3423', descr => 'send a notification event',
-  proname => 'pg_notify', proisstrict => 'f', provolatile => 'v',
-  proparallel => 'r', prorettype => 'void', proargtypes => 'text text text',
-  prosrc => 'pg_notify_3args' },
-
 { oid => '3296',
   descr => 'get the fraction of the asynchronous notification queue currently in use',
   proname => 'pg_notification_queue_usage', provolatile => 'v',

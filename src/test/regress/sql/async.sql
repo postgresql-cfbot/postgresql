@@ -4,6 +4,8 @@
 
 --Should work. Send a valid message via a valid channel name
 SELECT pg_notify('notify_async1','sample message1');
+SELECT pg_notify('notify_async1','sample message1','maybe');
+SELECT pg_notify('notify_async1','sample_message1','never');
 SELECT pg_notify('notify_async1','');
 SELECT pg_notify('notify_async1',NULL);
 
@@ -14,9 +16,14 @@ SELECT pg_notify('notify_async_channel_name_too_long____________________________
 
 --Should work. Valid NOTIFY/LISTEN/UNLISTEN commands
 NOTIFY notify_async2;
+NOTIFY notify_async2, '', 'maybe';
+NOTIFY notify_async2, '', 'never';
 LISTEN notify_async2;
 UNLISTEN notify_async2;
 UNLISTEN *;
+
+--Should fail. Invalid collapse mode
+NOTIFY notify_async2, '', 'foobar';
 
 -- Should return zero while there are no pending notifications.
 -- src/test/isolation/specs/async-notify.spec tests for actual usage.

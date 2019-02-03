@@ -166,6 +166,7 @@ test: temp
 test: domain
 test: rangefuncs
 test: prepare
+test: autoprepare
 test: conversion
 test: truncate
 test: alter_table

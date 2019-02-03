@@ -682,8 +682,9 @@ _bt_pagestate(BTWriteState *wstate, uint32 level)
 	if (level > 0)
 		state->btps_full = (BLCKSZ * (100 - BTREE_NONLEAF_FILLFACTOR) / 100);
 	else
-		state->btps_full = RelationGetTargetPageFreeSpace(wstate->index,
-														  BTREE_DEFAULT_FILLFACTOR);
+		state->btps_full = (BLCKSZ * (100 - BTGetFillFactor(wstate->index))
+							 / 100);
+
 	/* no parent level, yet */
 	state->btps_next = NULL;
 

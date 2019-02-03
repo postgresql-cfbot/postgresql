@@ -19,6 +19,7 @@
 #include "access/hio.h"
 #include "access/htup_details.h"
 #include "access/visibilitymap.h"
+#include "catalog/catalog.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
@@ -339,8 +340,10 @@ RelationGetBufferForTuple(Relation relation, Size len,
 						len, MaxHeapTupleSize)));
 
 	/* Compute desired extra freespace due to fillfactor option */
-	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
-												   HEAP_DEFAULT_FILLFACTOR);
+	if (IsToastRelation(relation))
+		saveFreeSpace = ToastGetTargetPageFreeSpace();
+	else
+		saveFreeSpace = HeapGetTargetPageFreeSpace(relation);
 
 	if (otherBuffer != InvalidBuffer)
 		otherBlock = BufferGetBlockNumber(otherBuffer);

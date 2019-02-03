@@ -274,6 +274,17 @@ typedef struct HashMetaPageData
 
 typedef HashMetaPageData *HashMetaPage;
 
+typedef struct HashRelOptions
+{
+	int32		varlena_header_;  /* varlena header (do not touch directly!) */
+	int			fillfactor;		  /* page fill factor in percent (0..100) */
+}	HashRelOptions;
+
+#define HashGetFillFactor(relation) \
+	((relation)->rd_options ? \
+		((HashRelOptions *) (relation)->rd_options)->fillfactor : \
+		HASH_DEFAULT_FILLFACTOR)
+
 /*
  * Maximum size of a hash index item (it's okay to have only one per page)
  */

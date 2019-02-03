@@ -814,7 +814,7 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 	}
 	else
 	{
-		StdRdOptions *relopts;
+		BTRelOptions *relopts;
 		float8		cleanup_scale_factor;
 		float8		prev_num_heap_tuples;
 
@@ -825,7 +825,7 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 		 * tuples exceeds vacuum_cleanup_index_scale_factor fraction of
 		 * original tuples count.
 		 */
-		relopts = (StdRdOptions *) info->index->rd_options;
+		relopts = (BTRelOptions *) info->index->rd_options;
 		cleanup_scale_factor = (relopts &&
 								relopts->vacuum_cleanup_index_scale_factor >= 0)
 			? relopts->vacuum_cleanup_index_scale_factor

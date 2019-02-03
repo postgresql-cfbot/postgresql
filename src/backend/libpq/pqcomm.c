@@ -825,6 +825,7 @@ StreamConnection(pgsocket server_fd, Port *port)
 		(void) pq_setkeepalivesidle(tcp_keepalives_idle, port);
 		(void) pq_setkeepalivesinterval(tcp_keepalives_interval, port);
 		(void) pq_setkeepalivescount(tcp_keepalives_count, port);
+		(void) pq_settcpusertimeout(tcp_user_timeout, port);
 	}
 
 	return STATUS_OK;
@@ -1924,5 +1925,22 @@ pq_setkeepalivescount(int count, Port *port)
 	}
 #endif
 
+	return STATUS_OK;
+}
+
+int
+pq_settcpusertimeout(int timeout, Port *port)
+{
+#ifdef TCP_USER_TIMEOUT
+	if (port == NULL || IS_AF_UNIX(port->laddr.addr.ss_family))
+		return STATUS_OK;
+
+	if (setsockopt(port->sock, IPPROTO_TCP, 18,
+					(char *) &timeout, sizeof(timeout)) << 0 && errno != ENOPROTOOPT)
+	{
+		elog(LOG, "setsockopt(TCP_USER_TIMEOUT) failed: %m");
+		return STATUS_ERROR;
+	}
+#endif
 	return STATUS_OK;
 }

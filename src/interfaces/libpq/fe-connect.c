@@ -325,6 +325,11 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	/* TCP USER TIMEOUT */
+	{"tcp_user_timeout", NULL, NULL, NULL,
+		"TCP_user_timeout", "", 10,	/* strlen(INT32_MAX) == 10 */
+		offsetof(struct pg_conn, pgtcp_user_timeout)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1782,6 +1787,40 @@ setKeepalivesWin32(PGconn *conn)
 #endif							/* SIO_KEEPALIVE_VALS */
 #endif							/* WIN32 */
 
+/*
+ * Set the TCP user timeout.
+ */
+static int
+setTCPUserTimeout(PGconn *conn)
+{
+	int			timeout;
+
+	if (conn->pgtcp_user_timeout == NULL)
+		return 1;
+
+	if (!parse_int_param(conn->pgtcp_user_timeout,
+					&timeout, conn,	"tcp_user_timeout"))
+		return 0;
+
+	if (timeout < 0)
+		timeout = 0;
+
+#ifdef TCP_USER_TIMEOUT
+	if (setsockopt(conn->sock, IPPROTO_TCP, 18,
+					(char *) &timeout, sizeof(timeout)) < 0 && errno != ENOPROTOOPT)
+	{
+		char		sebuf[256];
+
+		appendPQExpBuffer(&conn->errorMessage,
+					libpq_gettext("setsockopt(TCP_USER_TIMEOUT) failed: %s\n"),
+						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		return 0;
+	}
+#endif
+
+	return 1;
+}
+
 /* ----------
  * connectDBStart -
  *		Begin the process of making a connection to the backend.
@@ -2371,6 +2410,17 @@ keep_going:						/* We will come back to here until there is
 										  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 						conn->try_next_addr = true;
 						goto keep_going;
+					}
+
+					if (!IS_AF_UNIX(addr_cur->ai_family))
+					{
+						if (!setTCPUserTimeout(conn))
+						{
+							closesocket(conn->sock);
+							conn->sock = -1;
+							conn->addr_cur = addr_cur->ai_next;
+							goto keep_going;
+						}
 					}
 
 #ifdef F_SETFD
@@ -3654,6 +3704,8 @@ freePGconn(PGconn *conn)
 		free(conn->pgtty);
 	if (conn->connect_timeout)
 		free(conn->connect_timeout);
+	if (conn->pgtcp_user_timeout)
+		free(conn->pgtcp_user_timeout);
 	if (conn->pgoptions)
 		free(conn->pgoptions);
 	if (conn->appname)

@@ -1249,6 +1249,33 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-tcp-user-timeout" xreflabel="libpq_tcp_user_timeout">
+      <term><literal>tcp_user_timeout</literal></term>
+      <listitem>
+       <para>
+        Define a wrapper for TCP_USER_TIMEOUT socket option of libpq connection.
+       </para>
+       <para>
+        Specifies the number of milliseconds after which a TCP connection can be
+        aborted by the operation system due to network problems when the data is
+        transmitting through this connection (sending/receiving). A value of 0 uses
+        the system default. This parameter is supported only on systems that support
+        TCP_USER_TIMEOUT or an equivalent socket option, and on Windows; on other
+        systems, it must be zero. In sessions connected via a Unix-domain socket,
+        this parameter is ignored and always reads as zero.
+       </para>
+       <note>
+        <para>
+         This parameter is not supported on Windows, and must be zero.
+        </para>
+        <para>
+         To enable full control under TCP connection use this option together with
+         keepalive.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-tty" xreflabel="tty">
       <term><literal>tty</literal></term>
       <listitem>

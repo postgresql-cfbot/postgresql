@@ -924,6 +924,49 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-tcp-user-timeout" xreflabel="tcp_user_timeout">
+      <term><varname>tcp_user_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>tcp_user_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+       <listitem>
+       <para>
+       Define a wrapper for TCP_USER_TIMEOUT socket option of libpq connection.
+       </para>
+       <para>
+       Specifies the number of milliseconds after which a TCP connection can be
+       aborted by the operation system due to network problems when the data is
+       transmitting through this connection (sending/receiving). A value of 0 uses
+       the system default. This parameter is supported only on systems that support
+       TCP_USER_TIMEOUT or an equivalent socket option, and on Windows; on other
+       systems, it must be zero. In sessions connected via a Unix-domain socket,
+       this parameter is ignored and always reads as zero.
+       </para>
+       <note>
+       <para>
+       This parameter is not supported on Windows, and must be zero.
+       </para>
+       <para>
+       To enable full control under TCP connection use this option together with
+       keepalive.
+       </para>
+       </note>
+      </listitem>
+      <listitem>
+       <para>
+        Specify in milliseconds the time to disconnect to the client 
+        when there is no ack packet from the client to the server's data transmission.
+        This parameter is supported on linux version 2.6.37 or later.
+       </para>
+       <note>
+        <para>
+         This parameter is not supported on Windows.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

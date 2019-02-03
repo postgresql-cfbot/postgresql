@@ -75,9 +75,12 @@ extern Oid RangeVarGetAndCheckCreationNamespace(RangeVar *newRelation,
 extern void RangeVarAdjustRelationPersistence(RangeVar *newRelation, Oid nspid);
 extern Oid	RelnameGetRelid(const char *relname);
 extern bool RelationIsVisible(Oid relid);
+extern bool VariableIsVisible(Oid relid);
 
 extern Oid	TypenameGetTypid(const char *typname);
 extern bool TypeIsVisible(Oid typid);
+
+extern bool VariableIsVisible(Oid varid);
 
 extern FuncCandidateList FuncnameGetCandidates(List *names,
 					  int nargs, List *argnames,
@@ -145,6 +148,10 @@ extern void GetTempNamespaceState(Oid *tempNamespaceId,
 extern void SetTempNamespaceState(Oid tempNamespaceId,
 					  Oid tempToastNamespaceId);
 extern void ResetTempTableNamespace(void);
+
+extern List *NamesFromList(List *names);
+extern Oid lookup_variable(const char *nspname, const char *varname, bool missing_ok);
+extern Oid identify_variable(List *names, char **attrname, bool *not_uniq);
 
 extern OverrideSearchPath *GetOverrideSearchPath(MemoryContext context);
 extern OverrideSearchPath *CopyOverrideSearchPath(OverrideSearchPath *path);

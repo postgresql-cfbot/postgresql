@@ -480,6 +480,10 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 			msg = gettext_noop("publication \"%s\" does not exist, skipping");
 			name = strVal((Value *) object);
 			break;
+		case OBJECT_VARIABLE:
+			msg = gettext_noop("schema variable \"%s\" does not exist, skipping");
+			name = NameListToString(castNode(List, object));
+			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", (int) objtype);
 			break;

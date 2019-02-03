@@ -19,6 +19,7 @@
 #include "commands/discard.h"
 #include "commands/prepare.h"
 #include "commands/sequence.h"
+#include "commands/schemavariable.h"
 #include "utils/guc.h"
 #include "utils/portal.h"
 
@@ -48,6 +49,10 @@ DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
 			ResetTempTableNamespace();
 			break;
 
+		case DISCARD_VARIABLES:
+			ResetSchemaVariableCache();
+			break;
+
 		default:
 			elog(ERROR, "unrecognized DISCARD target: %d", stmt->target);
 	}
@@ -75,4 +80,5 @@ DiscardAll(bool isTopLevel)
 	ResetPlanCache();
 	ResetTempTableNamespace();
 	ResetSequenceCaches();
+	ResetSchemaVariableCache();
 }

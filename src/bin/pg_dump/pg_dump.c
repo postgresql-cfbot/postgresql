@@ -259,6 +259,7 @@ static void dumpPolicy(Archive *fout, PolicyInfo *polinfo);
 static void dumpPublication(Archive *fout, PublicationInfo *pubinfo);
 static void dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo);
 static void dumpSubscription(Archive *fout, SubscriptionInfo *subinfo);
+static void dumpVariable(Archive *fout, VariableInfo *varinfo);
 static void dumpDatabase(Archive *AH);
 static void dumpDatabaseConfig(Archive *AH, PQExpBuffer outbuf,
 				   const char *dbname, Oid dboid);
@@ -4154,6 +4155,233 @@ dumpSubscription(Archive *fout, SubscriptionInfo *subinfo)
 	destroyPQExpBuffer(delq);
 	destroyPQExpBuffer(query);
 	free(qsubname);
+}
+
+/*
+ * getVariables
+ *	  get information about variables
+ */
+void
+getVariables(Archive *fout)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer query;
+	PQExpBuffer acl_subquery = createPQExpBuffer();
+	PQExpBuffer racl_subquery = createPQExpBuffer();
+	PQExpBuffer init_acl_subquery = createPQExpBuffer();
+	PQExpBuffer init_racl_subquery = createPQExpBuffer();
+	PGresult   *res;
+	VariableInfo *varinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_varname;
+	int			i_varnamespace;
+	int			i_vartype;
+	int			i_vartypname;
+	int			i_vardefexpr;
+	int			i_rolname;
+	int			i_varacl;
+	int			i_rvaracl;
+	int			i_initvaracl;
+	int			i_initrvaracl;
+	int			i_vareoxaction;
+	int			i_varisnotnull;
+	int			i_varistransact;
+	int			i,
+				ntups;
+
+	if (fout->remoteVersion <= 110000)
+		return;
+
+	acl_subquery = createPQExpBuffer();
+	racl_subquery = createPQExpBuffer();
+	init_acl_subquery = createPQExpBuffer();
+	init_racl_subquery = createPQExpBuffer();
+
+	buildACLQueries(acl_subquery, racl_subquery, init_acl_subquery,
+					init_racl_subquery, "v.varacl", "v.varowner", "'V'",
+					dopt->binary_upgrade);
+
+	query = createPQExpBuffer();
+
+	resetPQExpBuffer(query);
+
+	/* Get the variables in current database. */
+	appendPQExpBuffer(query,
+						  "SELECT v.tableoid, v.oid, v.varname, "
+						  "v.vareoxaction, "
+						  "v.varnamespace, "
+						  "(%s varowner) AS rolname, "
+						  "%s as varacl, "
+						  "%s as rvaracl, "
+						  "%s as initvaracl, "
+						  "%s as initrvaracl, "
+						  "v.vartype, "
+						  "pg_catalog.format_type(v.vartype, v.vartypmod) as vartypname, "
+						  "v.varisnotnull, "
+						  "v.varistransact, "
+						  "pg_catalog.pg_get_expr(v.vardefexpr,0) as vardefexpr "
+						  "FROM pg_variable v "
+						  "LEFT JOIN pg_init_privs pip "
+						  "ON (v.oid = pip.objoid "
+						  "AND pip.classoid = 'pg_variable'::regclass "
+						  "AND pip.objsubid = 0)",
+						  username_subquery,
+						  acl_subquery->data,
+						  racl_subquery->data,
+						  init_acl_subquery->data,
+						  init_racl_subquery->data);
+
+	destroyPQExpBuffer(acl_subquery);
+	destroyPQExpBuffer(racl_subquery);
+	destroyPQExpBuffer(init_acl_subquery);
+	destroyPQExpBuffer(init_racl_subquery);
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_varname = PQfnumber(res, "varname");
+	i_varnamespace = PQfnumber(res, "varnamespace");
+	i_rolname = PQfnumber(res, "rolname");
+	i_vartype = PQfnumber(res, "vartype");
+	i_vartypname = PQfnumber(res, "vartypname");
+	i_vareoxaction = PQfnumber(res, "vareoxaction");
+	i_vardefexpr = PQfnumber(res, "vardefexpr");
+	i_varacl = PQfnumber(res, "varacl");
+	i_rvaracl = PQfnumber(res, "rvaracl");
+	i_initvaracl = PQfnumber(res, "initvaracl");
+	i_initrvaracl = PQfnumber(res, "initrvaracl");
+	i_varisnotnull = PQfnumber(res, "varisnotnull");
+	i_varistransact = PQfnumber(res, "varistransact");
+
+	varinfo = pg_malloc(ntups * sizeof(VariableInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		TypeInfo	   *vtype;
+
+		varinfo[i].dobj.objType = DO_VARIABLE;
+		varinfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		varinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&varinfo[i].dobj);
+		varinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_varname));
+		varinfo[i].dobj.namespace =
+			findNamespace(fout,
+						  atooid(PQgetvalue(res, i, i_varnamespace)));
+
+		varinfo[i].rolname = pg_strdup(PQgetvalue(res, i, i_rolname));
+		varinfo[i].vartype = atooid(PQgetvalue(res, i, i_vartype));
+		varinfo[i].vartypname = pg_strdup(PQgetvalue(res, i, i_vartypname));
+
+		varinfo[i].vareoxaction = pg_strdup(PQgetvalue(res, i, i_vareoxaction));
+
+		varinfo[i].varacl = pg_strdup(PQgetvalue(res, i, i_varacl));
+		varinfo[i].rvaracl = pg_strdup(PQgetvalue(res, i, i_rvaracl));
+		varinfo[i].initvaracl = pg_strdup(PQgetvalue(res, i, i_initvaracl));
+		varinfo[i].initrvaracl = pg_strdup(PQgetvalue(res, i, i_initrvaracl));
+
+		varinfo[i].varisnotnull = *(PQgetvalue(res, i, i_varisnotnull)) == 't';
+		varinfo[i].varistransact = *(PQgetvalue(res, i, i_varistransact)) == 't';
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(varinfo[i].dobj), fout);
+
+		/* Do not try to dump ACL if no ACL exists. */
+		if (PQgetisnull(res, i, i_varacl) && PQgetisnull(res, i, i_rvaracl) &&
+			PQgetisnull(res, i, i_initvaracl) &&
+			PQgetisnull(res, i, i_initrvaracl))
+			varinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;
+
+		if (PQgetisnull(res, i, i_vardefexpr))
+			varinfo[i].vardefexpr = NULL;
+		else
+			varinfo[i].vardefexpr = pg_strdup(PQgetvalue(res, i, i_vardefexpr));
+
+		if (strlen(varinfo[i].rolname) == 0)
+			write_msg(NULL, "WARNING: owner of variable \"%s\" appears to be invalid\n",
+					  varinfo[i].dobj.name);
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(varinfo[i].dobj), fout);
+
+		vtype = findTypeByOid(varinfo[i].vartype);
+		addObjectDependency(&varinfo[i].dobj, vtype->dobj.dumpId);
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpVariable
+ *	  dump the definition of the given variables
+ */
+static void
+dumpVariable(Archive *fout, VariableInfo *varinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+
+	PQExpBuffer delq;
+	PQExpBuffer query;
+	const char	   *varname;
+	const char	   *vartypname;
+	const char	   *vardefexpr;
+	const char	   *vareoxaction;
+	const char	   *vartransact;
+	const char	   *varisnotnull;
+
+	/* Skip if not to be dumped */
+	if (!varinfo->dobj.dump || dopt->dataOnly)
+		return;
+
+	delq = createPQExpBuffer();
+	query = createPQExpBuffer();
+
+	varname = fmtQualifiedDumpable(varinfo);
+	vartypname = varinfo->vartypname;
+	vardefexpr = varinfo->vardefexpr;
+	vareoxaction = varinfo->vareoxaction;
+	vartransact = varinfo->varistransact ? "TRANSACTION " : "";
+	varisnotnull = varinfo->varisnotnull ? " NOT NULL" : "";
+
+	appendPQExpBuffer(delq, "DROP VARIABLE %s;\n",
+					  varname);
+
+	appendPQExpBuffer(query, "CREATE %sVARIABLE %s AS %s%s",
+					  vartransact, varname, vartypname, varisnotnull);
+
+	if (vardefexpr)
+		appendPQExpBuffer(query, " DEFAULT %s",
+						  vardefexpr);
+
+	if (strcmp(vareoxaction, "d") == 0)
+		appendPQExpBuffer(query, " ON COMMIT DROP");
+	else if (strcmp(vareoxaction, "r") == 0)
+		appendPQExpBuffer(query, " ON TRANSACTION END RESET");
+
+	appendPQExpBuffer(query, ";\n");
+
+	ArchiveEntry(fout, varinfo->dobj.catId, varinfo->dobj.dumpId,
+				 varinfo->dobj.name,
+				 varinfo->dobj.namespace->dobj.name,
+				 NULL,
+				 varinfo->rolname,
+				 "VARIABLE", SECTION_PRE_DATA,
+				 query->data, delq->data, NULL,
+				 NULL, 0,
+				 NULL, NULL);
+
+	if (varinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "VARIABLE", varname,
+					NULL, varinfo->rolname,
+					varinfo->dobj.catId, 0, varinfo->dobj.dumpId);
+
+	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
 }
 
 static void
@@ -9772,6 +10000,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (SubscriptionInfo *) dobj);
+			break;
+		case DO_VARIABLE:
+			dumpVariable(fout, (VariableInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -17856,6 +18087,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_OPFAMILY:
 			case DO_COLLATION:
 			case DO_CONVERSION:
+			case DO_VARIABLE:
 			case DO_TABLE:
 			case DO_ATTRDEF:
 			case DO_PROCLANG:

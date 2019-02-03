@@ -3375,7 +3375,7 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 	 * get executed.  Also, utilities aren't rewritten at all (do we still
 	 * need that check?)
 	 */
-	if (event != CMD_SELECT && event != CMD_UTILITY)
+	if (event != CMD_SELECT && event != CMD_UTILITY && event != CMD_PLAN_UTILITY)
 	{
 		int			result_relation;
 		RangeTblEntry *rt_entry;

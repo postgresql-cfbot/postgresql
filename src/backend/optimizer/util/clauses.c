@@ -26,6 +26,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/schemavariable.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "funcapi.h"
@@ -1019,8 +1020,8 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 
 	/*
 	 * We can't pass Params to workers at the moment either, so they are also
-	 * parallel-restricted, unless they are PARAM_EXTERN Params or are
-	 * PARAM_EXEC Params listed in safe_param_ids, meaning they could be
+	 * parallel-restricted, unless they are PARAM_EXTERN or PARAM_VARIABLE Params
+	 * or are PARAM_EXEC Params listed in safe_param_ids, meaning they could be
 	 * either generated within the worker or can be computed in master and
 	 * then their value can be passed to the worker.
 	 */
@@ -1028,7 +1029,8 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind == PARAM_EXTERN)
+		if (param->paramkind == PARAM_EXTERN ||
+			param->paramkind == PARAM_VARIABLE)
 			return false;
 
 		if (param->paramkind != PARAM_EXEC ||
@@ -2330,6 +2332,7 @@ eval_const_expressions(PlannerInfo *root, Node *node)
  *	  value of the Param.
  * 2. Fold stable, as well as immutable, functions to constants.
  * 3. Reduce PlaceHolderVar nodes to their contained expressions.
+ * 4. Current value of schema variable can be used for estimation too.
  *--------------------
  */
 Node *
@@ -2448,6 +2451,30 @@ eval_const_expressions_mutator(Node *node,
 													  typByVal);
 						}
 					}
+				}
+				else if (param->paramkind == PARAM_VARIABLE &&
+						 context->estimate)
+				{
+					int16		typLen;
+					bool		typByVal;
+					Datum		pval;
+					bool		isnull;
+
+					get_typlenbyval(param->paramtype,
+									&typLen, &typByVal);
+
+					pval = GetSchemaVariable(param->paramvarid,
+											 &isnull,
+											 param->paramtype,
+											 true);
+
+					return (Node *) makeConst(param->paramtype,
+											  param->paramtypmod,
+											  param->paramcollid,
+											  (int) typLen,
+											  pval,
+											  isnull,
+											  typByVal);
 				}
 
 				/*
@@ -4779,7 +4806,7 @@ substitute_actual_parameters_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
-	if (IsA(node, Param))
+	if (IsA(node, Param) && ((Param *) node)->paramkind != PARAM_VARIABLE)
 	{
 		Param	   *param = (Param *) node;
 

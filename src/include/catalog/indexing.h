@@ -360,4 +360,10 @@ DECLARE_UNIQUE_INDEX(pg_subscription_subname_index, 6115, on pg_subscription usi
 DECLARE_UNIQUE_INDEX(pg_subscription_rel_srrelid_srsubid_index, 6117, on pg_subscription_rel using btree(srrelid oid_ops, srsubid oid_ops));
 #define SubscriptionRelSrrelidSrsubidIndexId 6117
 
+DECLARE_UNIQUE_INDEX(pg_variable_oid_index, 4288, on pg_variable using btree(oid oid_ops));
+#define VariableObjectIndexId 4288
+
+DECLARE_UNIQUE_INDEX(pg_variable_varname_nsp_index, 4289, on pg_variable using btree(varname name_ops, varnamespace oid_ops));
+#define VariableNameNspIndexId  4289
+
 #endif							/* INDEXING_H */

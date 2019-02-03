@@ -58,6 +58,7 @@ typedef FormData_pg_default_acl *Form_pg_default_acl;
 #define DEFACLOBJ_FUNCTION		'f' /* function */
 #define DEFACLOBJ_TYPE			'T' /* type */
 #define DEFACLOBJ_NAMESPACE		'n' /* namespace */
+#define DEFACLOBJ_VARIABLE		'V' /* variable */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

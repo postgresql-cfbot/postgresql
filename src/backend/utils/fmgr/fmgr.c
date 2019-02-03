@@ -1927,15 +1927,19 @@ get_call_expr_arg_stable(Node *expr, int argnum)
 	arg = (Node *) list_nth(args, argnum);
 
 	/*
-	 * Either a true Const or an external Param will have a value that doesn't
-	 * change during the execution of the query.  In future we might want to
-	 * consider other cases too, e.g. now().
+	 * Either a true Const or an external Param or variable will have a value
+	 * that doesn't change during the execution of the query.  In future
+	 * we might want to consider other cases too, e.g. now().
 	 */
 	if (IsA(arg, Const))
 		return true;
-	if (IsA(arg, Param) &&
-		((Param *) arg)->paramkind == PARAM_EXTERN)
-		return true;
+	if (IsA(arg, Param))
+	{
+		Param *p = (Param *) arg;
+
+		if (p->paramkind == PARAM_EXTERN || p->paramkind == PARAM_VARIABLE)
+			return true;
+	}
 
 	return false;
 }

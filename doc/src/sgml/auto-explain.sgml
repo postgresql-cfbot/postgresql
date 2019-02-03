@@ -171,6 +171,23 @@ LOAD 'auto_explain';
 
    <varlistentry>
     <term>
+     <varname>auto_explain.log_settings</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>auto_explain.log_settings</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      <varname>auto_explain.log_settings</varname> controls whether information
+      about modified configuration options affecting query planning are logged
+      with the execution plan.  Only options modified at the database, user, client
+      or session level are considered modified.  This parameter is off by default.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
      <varname>auto_explain.log_format</varname> (<type>enum</type>)
      <indexterm>
       <primary><varname>auto_explain.log_format</varname> configuration parameter</primary>

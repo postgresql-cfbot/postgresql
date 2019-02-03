@@ -837,3 +837,393 @@ w_i_holds         | f
 s_r_holds         | f
 w_r_holds         | f
 
+-- For the next few tests, We want to test an array longer than
+-- MAX_SAOP_ARRAY_SIZE so that we're not relying on predtest turning the
+-- array op into set of AND/OR quals. We also need test empty arrays since
+-- they are the case that deviates from this being merely a check for the
+-- clause being strict.
+--
+-- We also want to include test cases for non-constant array expressions.
+--
+-- Tests employing (x + x) to verify we don't infer implication or
+-- refutation of "strict_func(x) IS [NOT] NULL" from "x IS [NOT] NULL"
+-- will show *_holds=t even when *_by=f because int4pl never returns
+-- NULL unless an operand is NULL, but we can't assume this is true
+-- of all functions.
+--
+-- ScalarArrayOp implies IS NOT NULL
+select * from test_predtest($$
+select x is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | t
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | t
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+select y is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+select (x + x) is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | t
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select x is not null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | t
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | t
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select y is not null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select (x + x) is not null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | t
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (select array[]::int[])
+select x is not null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | t
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | t
+w_i_holds         | t
+s_r_holds         | t
+w_r_holds         | t
+
+-- ScalarArrayOp refutes IS NULL
+select * from test_predtest($$
+select x is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | t
+weak_refuted_by   | t
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | t
+w_r_holds         | t
+
+select * from test_predtest($$
+select y is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+select (x + x) is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | t
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select x is null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | t
+weak_refuted_by   | t
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | t
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select y is null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select (x + x) is null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | t
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (select array[]::int[])
+select x is null, x = any((select vals from a)::int[])
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | t
+weak_refuted_by   | t
+s_i_holds         | t
+w_i_holds         | t
+s_r_holds         | t
+w_r_holds         | t
+
+-- Strict predicate weakly refutes ScalarArrayOp
+--
+-- We get w_i_holds despite not declaring weak_implied_by, but
+-- a simple case (not tested here) shows why this isn't desired:
+-- "(NULL IS NULL)" is true while "= ANY(ARRAY[])" is false.
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), x is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | t
+s_i_holds         | f
+w_i_holds         | t
+s_r_holds         | f
+w_r_holds         | t
+
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), y is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | t
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), (x + x) is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | t
+s_r_holds         | f
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select x = any((select vals from a)::int[]), x is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | t
+s_i_holds         | f
+w_i_holds         | t
+s_r_holds         | f
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select x = any((select vals from a)::int[]), y is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | f
+w_r_holds         | f
+
+select * from test_predtest($$
+with a(vals) as (
+  select array_agg(i) || null from generate_series(1, 101) t(i)
+)
+select x = any((select vals from a)::int[]), (x + x) is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | f
+s_i_holds         | f
+w_i_holds         | t
+s_r_holds         | f
+w_r_holds         | t
+
+select * from test_predtest($$
+with a(vals) as (select array[]::int[])
+select x = any((select vals from a)::int[]), x is null
+from integers
+$$);
+-[ RECORD 1 ]-----+--
+strong_implied_by | f
+weak_implied_by   | f
+strong_refuted_by | f
+weak_refuted_by   | t
+s_i_holds         | f
+w_i_holds         | f
+s_r_holds         | t
+w_r_holds         | t
+

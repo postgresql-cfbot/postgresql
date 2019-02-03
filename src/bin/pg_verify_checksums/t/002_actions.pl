@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 45;
+use Test::More tests => 46;
 
 
 # Utility routine to create and check a table with corrupted checksums
@@ -103,6 +103,10 @@ append_to_file "$pgdata/global/pgsql_tmp/1.1", "foo";
 # Checksums pass on a newly-created cluster
 command_ok(['pg_verify_checksums',  '-D', $pgdata],
 		   "succeeds with offline cluster");
+
+# Checksums pass with progress-reporting on
+command_ok(['pg_verify_checksums',  '-P',  '-D', $pgdata],
+		   "succeeds with progress reporting");
 
 # Checks cannot happen with an online cluster
 $node->start;

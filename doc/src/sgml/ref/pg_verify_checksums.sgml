@@ -80,6 +80,19 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-P</option></term>
+      <term><option>--progress</option></term>
+      <listitem>
+       <para>
+        Enable progress reporting. Turning this on will deliver an approximate
+        progress report during the checksum verification. Sending the
+        <systemitem>SIGUSR1</systemitem> signal will toggle progress reporting
+        on or off during the verification run (not available on Windows).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
        <term><option>-V</option></term>
        <term><option>--version</option></term>
        <listitem>

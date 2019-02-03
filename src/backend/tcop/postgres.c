@@ -86,6 +86,12 @@
  */
 const char *debug_query_string; /* client-supplied query string */
 
+/*
+ * The top-level portal that the client is immediately working with:
+ * creating, binding, executing, or all at one using simple protocol
+ */
+Portal current_top_portal = NULL;
+
 /* Note: whereToSendOutput is initialized for the bootstrap/standalone case */
 CommandDest whereToSendOutput = DestDebug;
 
@@ -1694,6 +1700,9 @@ exec_bind_message(StringInfo input_message)
 	else
 		portal = CreatePortal(portal_name, false, false);
 
+	Assert(current_top_portal == NULL);
+	current_top_portal = portal;
+
 	/*
 	 * Prepare to copy stuff into the portal's memory context.  We do all this
 	 * copying first, because it could possibly fail (out-of-memory) and we
@@ -1731,6 +1740,9 @@ exec_bind_message(StringInfo input_message)
 	 */
 	if (numParams > 0)
 	{
+		/* GUC value can change, so we remember its state to be consistent */
+		bool need_text_values = log_parameters_on_error;
+
 		params = (ParamListInfo) palloc(offsetof(ParamListInfoData, params) +
 										numParams * sizeof(ParamExternData));
 		/* we have static list of params, so no hooks needed */
@@ -1741,6 +1753,8 @@ exec_bind_message(StringInfo input_message)
 		params->parserSetup = NULL;
 		params->parserSetupArg = NULL;
 		params->numParams = numParams;
+		/* mark as not having text values before we have populated them all */
+		params->hasTextValues = false;
 
 		for (int paramno = 0; paramno < numParams; paramno++)
 		{
@@ -1807,9 +1821,31 @@ exec_bind_message(StringInfo input_message)
 
 				pval = OidInputFunctionCall(typinput, pstring, typioparam, -1);
 
-				/* Free result of encoding conversion, if any */
-				if (pstring && pstring != pbuf.data)
-					pfree(pstring);
+				if (pstring)
+				{
+					if (need_text_values)
+					{
+						if (pstring == pbuf.data)
+						{
+							/*
+							 * Copy textual representation to portal context.
+							 */
+							params->params[paramno].textValue =
+															pstrdup(pstring);
+						}
+						else
+						{
+							/* Reuse the result of encoding conversion for it */
+							params->params[paramno].textValue = pstring;
+						}
+					}
+					else
+					{
+						/* Free result of encoding conversion */
+						if (pstring != pbuf.data)
+							pfree(pstring);
+					}
+				}
 			}
 			else if (pformat == 1)	/* binary mode */
 			{
@@ -1835,6 +1871,22 @@ exec_bind_message(StringInfo input_message)
 							(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
 							 errmsg("incorrect binary data format in bind parameter %d",
 									paramno + 1)));
+
+				/*
+				 * Compute textual representation for further logging. We waste
+				 * some time and memory here, maybe one day we could skip
+				 * certain types like built-in primitives, which are safe to get
+				 * it calculated later in an aborted xact.
+				 */
+				if (!isNull && need_text_values)
+				{
+					Oid			typoutput;
+					bool		typisvarlena;
+
+					getTypeOutputInfo(ptype, &typoutput, &typisvarlena);
+					params->params[paramno].textValue =
+								OidOutputFunctionCall(typoutput, pval);
+				}
 			}
 			else
 			{
@@ -1859,9 +1911,21 @@ exec_bind_message(StringInfo input_message)
 			params->params[paramno].pflags = PARAM_FLAG_CONST;
 			params->params[paramno].ptype = ptype;
 		}
+
+		/*
+		 * now we can safely set it, as we have textValue populated
+		 * for all non-null parameters
+		 */
+		params->hasTextValues = need_text_values;
 	}
 	else
 		params = NULL;
+
+	/*
+	 * Set portal parameters early for them to get logged if an error happens
+	 * on planning stage
+	 */
+	portal->portalParams = params;
 
 	/* Done storing stuff in portal's context */
 	MemoryContextSwitchTo(oldContext);
@@ -1943,6 +2007,7 @@ exec_bind_message(StringInfo input_message)
 	if (save_log_statement_stats)
 		ShowUsage("BIND MESSAGE STATISTICS");
 
+	current_top_portal = NULL;
 	debug_query_string = NULL;
 }
 
@@ -1978,7 +2043,6 @@ exec_execute_message(const char *portal_name, long max_rows)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_CURSOR),
 				 errmsg("portal \"%s\" does not exist", portal_name)));
-
 	/*
 	 * If the original query was a null string, just return
 	 * EmptyQueryResponse.
@@ -2000,26 +2064,30 @@ exec_execute_message(const char *portal_name, long max_rows)
 	 */
 	if (is_xact_command)
 	{
+		portalParams = portal->portalParams;
+
 		sourceText = pstrdup(portal->sourceText);
 		if (portal->prepStmtName)
 			prepStmtName = pstrdup(portal->prepStmtName);
 		else
 			prepStmtName = "<unnamed>";
-
-		/*
-		 * An xact command shouldn't have any parameters, which is a good
-		 * thing because they wouldn't be around after finish_xact_command.
-		 */
-		portalParams = NULL;
 	}
 	else
 	{
+		/*
+		 * We do it for non-xact commands only, as an xact command
+		 * 1) shouldn't have any parameters to log;
+		 * 2) may have the portal dropped early.
+		 */
+		Assert(current_top_portal == NULL);
+		current_top_portal = portal;
+		portalParams = NULL;
+
 		sourceText = portal->sourceText;
 		if (portal->prepStmtName)
 			prepStmtName = portal->prepStmtName;
 		else
 			prepStmtName = "<unnamed>";
-		portalParams = portal->portalParams;
 	}
 
 	/*
@@ -2160,13 +2228,14 @@ exec_execute_message(const char *portal_name, long max_rows)
 							*portal_name ? portal_name : "",
 							sourceText),
 					 errhidestmt(true),
-					 errdetail_params(portalParams)));
+					 errdetail_params(current_top_portal->portalParams)));
 			break;
 	}
 
 	if (save_log_statement_stats)
 		ShowUsage("EXECUTE MESSAGE STATISTICS");
 
+	current_top_portal = NULL;
 	debug_query_string = NULL;
 }
 
@@ -2306,60 +2375,17 @@ errdetail_execute(List *raw_parsetree_list)
 static int
 errdetail_params(ParamListInfo params)
 {
-	/* We mustn't call user-defined I/O functions when in an aborted xact */
-	if (params && params->numParams > 0 && !IsAbortedTransactionBlockState())
+	/* Make sure any trash is generated in MessageContext */
+	MemoryContext oldcontext = MemoryContextSwitchTo(MessageContext);
+	char *params_message = get_portal_bind_parameters(params);
+
+	if (params_message)
 	{
-		StringInfoData param_str;
-		MemoryContext oldcontext;
-
-		/* This code doesn't support dynamic param lists */
-		Assert(params->paramFetch == NULL);
-
-		/* Make sure any trash is generated in MessageContext */
-		oldcontext = MemoryContextSwitchTo(MessageContext);
-
-		initStringInfo(&param_str);
-
-		for (int paramno = 0; paramno < params->numParams; paramno++)
-		{
-			ParamExternData *prm = &params->params[paramno];
-			Oid			typoutput;
-			bool		typisvarlena;
-			char	   *pstring;
-			char	   *p;
-
-			appendStringInfo(&param_str, "%s$%d = ",
-							 paramno > 0 ? ", " : "",
-							 paramno + 1);
-
-			if (prm->isnull || !OidIsValid(prm->ptype))
-			{
-				appendStringInfoString(&param_str, "NULL");
-				continue;
-			}
-
-			getTypeOutputInfo(prm->ptype, &typoutput, &typisvarlena);
-
-			pstring = OidOutputFunctionCall(typoutput, prm->value);
-
-			appendStringInfoCharMacro(&param_str, '\'');
-			for (p = pstring; *p; p++)
-			{
-				if (*p == '\'') /* double single quotes */
-					appendStringInfoCharMacro(&param_str, *p);
-				appendStringInfoCharMacro(&param_str, *p);
-			}
-			appendStringInfoCharMacro(&param_str, '\'');
-
-			pfree(pstring);
-		}
-
-		errdetail("parameters: %s", param_str.data);
-
-		pfree(param_str.data);
-
-		MemoryContextSwitchTo(oldcontext);
+		errdetail("parameters: %s", params_message);
+		pfree(params_message);
 	}
+
+	MemoryContextSwitchTo(oldcontext);
 
 	return 0;
 }
@@ -2676,6 +2702,89 @@ drop_unnamed_stmt(void)
 		unnamed_stmt_psrc = NULL;
 		DropCachedPlan(psrc);
 	}
+}
+
+/*
+ * get_portal_bind_parameters
+ * 		Get the string containing parameters data, is used for logging.
+ *
+ * Can return NULL if there are no parameters in the portal
+ * or the portal is not valid, or the text representations of the parameters are
+ * not available. If returning a non-NULL value, it allocates memory
+ * for the returned string in the current context, and it's the caller's
+ * responsibility to pfree() it if needed.
+ */
+char *
+get_portal_bind_parameters(ParamListInfo params)
+{
+	StringInfoData param_str;
+
+	/* No parameters to format */
+	if (!params || params->numParams == 0)
+		return NULL;
+
+			elog(WARNING, "params->hasTextValues=%d, IsAbortedTransactionBlockState()=%d",
+				           params->hasTextValues && IsAbortedTransactionBlockState());
+	/*
+	 * We either need textual representation of parameters pre-calcualted,
+	 * or call potentially user-defined I/O functions to convert internal
+	 * representation into text, which cannot be done in an aborted xact
+	 */
+	if (!params->hasTextValues && IsAbortedTransactionBlockState())
+		return NULL;
+
+	initStringInfo(&param_str);
+
+	/* This code doesn't support dynamic param lists */
+	Assert(params->paramFetch == NULL);
+
+	for (int paramno = 0; paramno < params->numParams; paramno++)
+	{
+		ParamExternData *prm = &params->params[paramno];
+		char	   *pstring;
+		char	   *p;
+
+		appendStringInfo(&param_str, "%s$%d = ",
+						 paramno > 0 ? ", " : "",
+						 paramno + 1);
+
+		if (prm->isnull)
+		{
+			appendStringInfoString(&param_str, "NULL");
+			continue;
+		}
+
+		if (params->hasTextValues)
+			pstring = prm->textValue;
+		else
+		{
+			Oid			typoutput;
+			bool		typisvarlena;
+
+			if (!OidIsValid(prm->ptype))
+			{
+				appendStringInfoString(&param_str, "UNKNOWN TYPE");
+				continue;
+			}
+
+			getTypeOutputInfo(prm->ptype, &typoutput, &typisvarlena);
+			pstring = OidOutputFunctionCall(typoutput, prm->value);
+		}
+
+		appendStringInfoCharMacro(&param_str, '\'');
+		for (p = pstring; *p; p++)
+		{
+			if (*p == '\'') /* double single quotes */
+				appendStringInfoCharMacro(&param_str, *p);
+			appendStringInfoCharMacro(&param_str, *p);
+		}
+		appendStringInfoCharMacro(&param_str, '\'');
+
+		if (!params->hasTextValues)
+			pfree(pstring);
+	}
+
+	return param_str.data;
 }
 
 
@@ -4031,10 +4140,11 @@ PostgresMain(int argc, char *argv[],
 		EmitErrorReport();
 
 		/*
-		 * Make sure debug_query_string gets reset before we possibly clobber
-		 * the storage it points at.
+		 * Make sure these get reset before we possibly clobber
+		 * the storages they point at.
 		 */
 		debug_query_string = NULL;
+		current_top_portal = NULL;
 
 		/*
 		 * Abort the current transaction in order to recover.

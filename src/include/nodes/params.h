@@ -93,6 +93,7 @@ typedef struct ParamExternData
 	bool		isnull;			/* is it NULL? */
 	uint16		pflags;			/* flag bits, see above */
 	Oid			ptype;			/* parameter's datatype, or 0 */
+	char	   *textValue;		/* textual representation for debug purposes */
 } ParamExternData;
 
 typedef struct ParamListInfoData *ParamListInfo;
@@ -116,6 +117,8 @@ typedef struct ParamListInfoData
 	ParserSetupHook parserSetup;	/* parser setup hook */
 	void	   *parserSetupArg;
 	int			numParams;		/* nominal/maximum # of Params represented */
+	bool		hasTextValues;	/* whether textValue for all non-null
+														params is populated */
 
 	/*
 	 * params[] may be of length zero if paramFetch is supplied; otherwise it

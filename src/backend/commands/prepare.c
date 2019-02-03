@@ -404,6 +404,7 @@ EvaluateParams(PreparedStatement *pstmt, List *params,
 	paramLI->parserSetup = NULL;
 	paramLI->parserSetupArg = NULL;
 	paramLI->numParams = num_params;
+	paramLI->hasTextValues = false;
 
 	i = 0;
 	foreach(l, exprstates)

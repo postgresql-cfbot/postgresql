@@ -2399,6 +2399,7 @@ _SPI_convert_params(int nargs, Oid *argtypes,
 		paramLI->parserSetup = NULL;
 		paramLI->parserSetupArg = NULL;
 		paramLI->numParams = nargs;
+		paramLI->hasTextValues = false;
 
 		for (i = 0; i < nargs; i++)
 		{

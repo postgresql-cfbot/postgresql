@@ -31,6 +31,8 @@
  * set of parameter values.  If dynamic parameter hooks are present, we
  * intentionally do not copy them into the result.  Rather, we forcibly
  * instantiate all available parameter values and copy the datum values.
+ *
+ * We don't copy textual representations here.
  */
 ParamListInfo
 copyParamList(ParamListInfo from)
@@ -53,6 +55,7 @@ copyParamList(ParamListInfo from)
 	retval->parserSetup = NULL;
 	retval->parserSetupArg = NULL;
 	retval->numParams = from->numParams;
+	retval->hasTextValues = false;
 
 	for (i = 0; i < from->numParams; i++)
 	{
@@ -229,6 +232,7 @@ RestoreParamList(char **start_address)
 	paramLI->parserSetup = NULL;
 	paramLI->parserSetupArg = NULL;
 	paramLI->numParams = nparams;
+	paramLI->hasTextValues = false;
 
 	for (i = 0; i < nparams; i++)
 	{

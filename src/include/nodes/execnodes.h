@@ -2287,8 +2287,10 @@ typedef struct LimitState
 	PlanState	ps;				/* its first field is NodeTag */
 	ExprState  *limitOffset;	/* OFFSET parameter, or NULL if none */
 	ExprState  *limitCount;		/* COUNT parameter, or NULL if none */
+	LimitOption  limitOption;		/* limit specification type */
 	int64		offset;			/* current OFFSET value */
 	int64		count;			/* current COUNT, if any */
+	Tuplestorestate *totalTuple;		/* total number of row outer node return */
 	bool		noCount;		/* if true, ignore count */
 	LimitStateCond lstate;		/* state machine status, as above */
 	int64		position;		/* 1-based index of last tuple returned */

@@ -92,7 +92,7 @@ CREATE TABLE student (
 
 
 CREATE TABLE stud_emp (
-	percent 	int4
+	"percent" 	int4
 ) INHERITS (emp, student);
 
 

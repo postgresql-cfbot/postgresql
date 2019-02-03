@@ -2099,12 +2099,22 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	 */
 	if (parse->sortClause)
 	{
-		current_rel = create_ordered_paths(root,
-										   current_rel,
-										   final_target,
-										   final_target_parallel_safe,
-										   have_postponed_srfs ? -1.0 :
-										   limit_tuples);
+
+		/* In PERCENTAGE option there are no bound on the number of output tuples */
+		if (parse->limitOption == PERCENTAGE)
+			current_rel = create_ordered_paths(root,
+											   current_rel,
+											   final_target,
+											   final_target_parallel_safe,
+											   have_postponed_srfs ? -1.0 :
+											   -1.0);
+		else
+			current_rel = create_ordered_paths(root,
+											   current_rel,
+											   final_target,
+											   final_target_parallel_safe,
+											   have_postponed_srfs ? -1.0 :
+											   limit_tuples);
 		/* Fix things up if final_target contains SRFs */
 		if (parse->hasTargetSRFs)
 			adjust_paths_for_srfs(root, current_rel,
@@ -2167,6 +2177,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 			path = (Path *) create_limit_path(root, final_rel, path,
 											  parse->limitOffset,
 											  parse->limitCount,
+											  parse->limitOption,
 											  offset_est, count_est);
 		}
 

@@ -133,7 +133,7 @@ AggregateCreate(const char *aggName,
 	hasInternalArg = false;
 	for (i = 0; i < numArgs; i++)
 	{
-		if (IsPolymorphicType(aggArgTypes[i]))
+		if (IsPolymorphicTypeAny(aggArgTypes[i]))
 			hasPolyArg = true;
 		else if (aggArgTypes[i] == INTERNALOID)
 			hasInternalArg = true;
@@ -143,7 +143,7 @@ AggregateCreate(const char *aggName,
 	 * If transtype is polymorphic, must have polymorphic argument also; else
 	 * we will have no way to deduce the actual transtype.
 	 */
-	if (IsPolymorphicType(aggTransType) && !hasPolyArg)
+	if (IsPolymorphicTypeAny(aggTransType) && !hasPolyArg)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 				 errmsg("cannot determine transition data type"),
@@ -153,7 +153,7 @@ AggregateCreate(const char *aggName,
 	 * Likewise for moving-aggregate transtype, if any
 	 */
 	if (OidIsValid(aggmTransType) &&
-		IsPolymorphicType(aggmTransType) && !hasPolyArg)
+		IsPolymorphicTypeAny(aggmTransType) && !hasPolyArg)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 				 errmsg("cannot determine transition data type"),
@@ -489,7 +489,7 @@ AggregateCreate(const char *aggName,
 	 * that itself violates the rule against polymorphic result with no
 	 * polymorphic input.)
 	 */
-	if (IsPolymorphicType(finaltype) && !hasPolyArg)
+	if (IsPolymorphicTypeAny(finaltype) && !hasPolyArg)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
 				 errmsg("cannot determine result data type"),

@@ -953,7 +953,7 @@ make_scalar_array_op(ParseState *pstate, List *opname,
 	 * enforce_generic_type_consistency may or may not have replaced a
 	 * polymorphic type with a real one.
 	 */
-	if (IsPolymorphicType(declared_arg_types[1]))
+	if (IsPolymorphicTypeAny(declared_arg_types[1]))
 	{
 		/* assume the actual array type is OK */
 		res_atypeId = atypeId;

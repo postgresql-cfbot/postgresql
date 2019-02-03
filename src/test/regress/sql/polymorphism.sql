@@ -814,3 +814,91 @@ select * from dfview;
 
 drop view dfview;
 drop function dfunc(anyelement, anyelement, bool);
+
+create or replace function cttestfunc01(commontype, commontype)
+returns commontype as $$
+begin
+  if $1 > $2 then
+    return $1;
+  else
+    return $2;
+  end if;
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc02(commontype, commontype)
+returns commontypearray as $$
+begin
+  return ARRAY[$1, $2];
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc03(commontypearray)
+returns commontype as $$
+begin
+  return $1[1];
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc04(variadic commontypearray)
+returns commontype as $$
+begin
+  return (select min(v) from unnest($1) g(v));
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc05(variadic commontypearray)
+returns commontypearray as $$
+begin
+  return $1;
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc06(commontypenonarray, commontypenonarray)
+returns commontypearray as $$
+begin
+  return ARRAY[$1, $2];
+end;
+$$ language plpgsql;
+
+create or replace function cttestfunc07(variadic commontypearray)
+returns commontypearray as $$
+  select $1
+$$ language sql;
+
+create or replace function cttestfunc08(commontypenonarray, commontypenonarray)
+returns commontypearray as $$
+select array[$1, $2]
+$$ language sql;
+
+
+select cttestfunc01(10, 20);
+select cttestfunc01(10.1, 20.1);
+select cttestfunc01(10, 20.1);
+
+select cttestfunc02(10, 20);
+select cttestfunc02(10.1, 20.1);
+select cttestfunc02(10, 20.1);
+
+select cttestfunc03(ARRAY[10, 20]);
+select cttestfunc03(ARRAY[10.1, 20.1]);
+select cttestfunc03(ARRAY[10, 20.1]);
+
+select cttestfunc04(10, 20);
+select cttestfunc04(10.1, 20.1);
+select cttestfunc04(10, 20.1);
+
+select cttestfunc05(10, 20);
+select cttestfunc05(10.1, 20.1);
+select cttestfunc05(10, 20.1);
+
+select cttestfunc06(1,1.1);
+
+select cttestfunc07(10, 20);
+select cttestfunc07(10.1, 20.1);
+select cttestfunc07(10, 20.1);
+
+select cttestfunc08(1,1.1);
+
+-- should to fail
+select cttestfunc06(array[10], array[2]);

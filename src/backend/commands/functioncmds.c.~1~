@@ -319,7 +319,6 @@ interpret_function_parameter_list(ParseState *pstate,
 			switch (toid)
 			{
 				case ANYARRAYOID:
-				case COMMONTYPEARRAYOID:
 				case ANYOID:
 					/* okay */
 					break;

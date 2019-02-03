@@ -231,7 +231,7 @@
     <para>
      Five pseudo-types of special interest are <type>anyelement</type>,
      <type>anyarray</type>, <type>anynonarray</type>, <type>anyenum</type>,
-     and <type>anyrange</type>,
+     <type>anyrange</type>, <type>commontype</type> and <type>commontypearray</type>.
      which are collectively called <firstterm>polymorphic types</firstterm>.
      Any function declared using these types is said to be
      a <firstterm>polymorphic function</firstterm>.  A polymorphic function can
@@ -265,6 +265,15 @@
      <type>anyenum</type> is treated exactly the same as <type>anyelement</type>,
      but adds the additional constraint that the actual type must
      be an enum type.
+    </para>
+
+    <para>
+     Second family of polymorphic types are types <type>commontype</type> and
+     <type>commontypearray</type>. These types are similar to types
+     <type>anyelement</type> and <type>anyarray</type>. The arguments declared
+     as <type>anyelement</type> requires same real type of passed values. For
+     <type>commontype</type>'s arguments is selected common type, and later
+     all these arguments are casted to this common type.
     </para>
 
     <para>

@@ -334,7 +334,7 @@ DefineAggregate(ParseState *pstate, List *name, List *args, bool oldstyle, List 
 	transTypeId = typenameTypeId(NULL, transType);
 	transTypeType = get_typtype(transTypeId);
 	if (transTypeType == TYPTYPE_PSEUDO &&
-		!IsPolymorphicType(transTypeId))
+		!IsPolymorphicTypeAny(transTypeId))
 	{
 		if (transTypeId == INTERNALOID && superuser())
 			 /* okay */ ;
@@ -375,7 +375,7 @@ DefineAggregate(ParseState *pstate, List *name, List *args, bool oldstyle, List 
 		mtransTypeId = typenameTypeId(NULL, mtransType);
 		mtransTypeType = get_typtype(mtransTypeId);
 		if (mtransTypeType == TYPTYPE_PSEUDO &&
-			!IsPolymorphicType(mtransTypeId))
+			!IsPolymorphicTypeAny(mtransTypeId))
 		{
 			if (mtransTypeId == INTERNALOID && superuser())
 				 /* okay */ ;

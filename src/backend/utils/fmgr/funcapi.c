@@ -440,10 +440,18 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	bool		have_anyrange_result = false;
 	bool		have_anynonarray = false;
 	bool		have_anyenum = false;
+	bool		have_commontype_result = false;
+	bool		have_commontypearray_result = false;
+	bool		have_commontyperange_result = false;
+	bool		have_commontypenonarray = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			commontype_type = InvalidOid;
+	Oid			commontypearray_type = InvalidOid;
+	Oid			commontyperange_type = InvalidOid;
 	Oid			anycollation = InvalidOid;
+	Oid			ctcollation = InvalidOid;
 	int			i;
 
 	/* See if there are any polymorphic outputs; quick out if not */
@@ -468,12 +476,27 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 			case ANYRANGEOID:
 				have_anyrange_result = true;
 				break;
+			case COMMONTYPEOID:
+				have_commontype_result = true;
+				break;
+			case COMMONTYPEARRAYOID:
+				have_commontypearray_result = true;
+				break;
+			case COMMONTYPENONARRAYOID:
+				have_commontype_result = true;
+				have_commontypenonarray = true;
+				break;
+			case COMMONTYPERANGEOID:
+				have_commontyperange_result = true;
+				break;
 			default:
 				break;
 		}
 	}
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result &&
+		!have_commontype_result && !have_commontypearray_result &&
+		!have_commontyperange_result)
 		return true;
 
 	/*
@@ -501,14 +524,29 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				if (!OidIsValid(anyrange_type))
 					anyrange_type = get_call_expr_argtype(call_expr, i);
 				break;
+			case COMMONTYPEOID:
+			case COMMONTYPENONARRAYOID:
+				if (!OidIsValid(commontype_type))
+					commontype_type = get_call_expr_argtype(call_expr, i);
+				break;
+			case COMMONTYPEARRAYOID:
+				if (!OidIsValid(commontypearray_type))
+					commontypearray_type = get_call_expr_argtype(call_expr, i);
+				break;
+			case COMMONTYPERANGEOID:
+				if (!OidIsValid(commontyperange_type))
+					commontyperange_type = get_call_expr_argtype(call_expr, i);
+				break;
 			default:
 				break;
 		}
 	}
 
 	/* If nothing found, parser messed up */
-	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
+	if ((have_anyelement_result || have_anyarray_result ||
+		have_anyrange_result) &&
+		(!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
+		!OidIsValid(anyrange_type)))
 		return false;
 
 	/* If needed, deduce one polymorphic type from others */
@@ -536,6 +574,31 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 											 anyelement_type,
 											 ANYELEMENTOID);
 
+	if (have_commontypearray_result && !OidIsValid(commontypearray_type))
+		commontypearray_type = resolve_generic_type(COMMONTYPEARRAYOID,
+														commontype_type,
+														COMMONTYPEOID);
+
+	if (have_commontype_result && !OidIsValid(commontype_type))
+	{
+		if (OidIsValid(commontypearray_type))
+			commontype_type = resolve_generic_type(COMMONTYPEOID,
+														commontypearray_type,
+														COMMONTYPEARRAYOID);
+
+		if (OidIsValid(commontyperange_type))
+		{
+			Oid			subtype = resolve_generic_type(COMMONTYPEOID,
+													   commontyperange_type,
+													   COMMONTYPERANGEOID);
+
+			/* check for inconsistent array and range results */
+			if (OidIsValid(commontype_type) && commontype_type != subtype)
+				return false;
+			commontype_type = subtype;
+		}
+	}
+
 	/*
 	 * We can't deduce a range type from other polymorphic inputs, because
 	 * there may be multiple range types for the same subtype.
@@ -543,8 +606,15 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	if (have_anyrange_result && !OidIsValid(anyrange_type))
 		return false;
 
+	if (have_commontyperange_result && !OidIsValid(commontyperange_type))
+		return false;
+
 	/* Enforce ANYNONARRAY if needed */
 	if (have_anynonarray && type_is_array(anyelement_type))
+		return false;
+
+	/* Enforce COMMONTYPENONARRAY if needed */
+	if (have_commontypenonarray && type_is_array(commontype_type))
 		return false;
 
 	/* Enforce ANYENUM if needed */
@@ -562,7 +632,12 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	else if (OidIsValid(anyarray_type))
 		anycollation = get_typcollation(anyarray_type);
 
-	if (OidIsValid(anycollation))
+	if (OidIsValid(commontype_type))
+		ctcollation = get_typcollation(commontype_type);
+	else if (OidIsValid(commontypearray_type))
+		ctcollation = get_typcollation(commontypearray_type);
+
+	if (OidIsValid(anycollation) || OidIsValid(ctcollation))
 	{
 		/*
 		 * The types are collatable, so consider whether to use a nondefault
@@ -573,6 +648,9 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 
 		if (OidIsValid(inputcollation))
 			anycollation = inputcollation;
+
+		if (OidIsValid(inputcollation))
+			ctcollation = inputcollation;
 	}
 
 	/* And finally replace the tuple column types as needed */
@@ -608,6 +686,31 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 								   0);
 				/* no collation should be attached to a range type */
 				break;
+			case COMMONTYPEOID:
+			case COMMONTYPENONARRAYOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   commontype_type,
+								   -1,
+								   0);
+				TupleDescInitEntryCollation(tupdesc, i + 1, ctcollation);
+				break;
+			case COMMONTYPEARRAYOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   commontypearray_type,
+								   -1,
+								   0);
+				TupleDescInitEntryCollation(tupdesc, i + 1, ctcollation);
+				break;
+			case COMMONTYPERANGEOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   commontyperange_type,
+								   -1,
+								   0);
+				/* no collation should be attached to a range type */
+				break;
 			default:
 				break;
 		}
@@ -632,9 +735,15 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 	bool		have_anyelement_result = false;
 	bool		have_anyarray_result = false;
 	bool		have_anyrange_result = false;
+	bool		have_commontype_result = false;
+	bool		have_commontypearray_result = false;
+	bool		have_commontyperange_result = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			commontype_type = InvalidOid;
+	Oid			commontypearray_type = InvalidOid;
+	Oid			commontyperange_type = InvalidOid;
 	int			inargno;
 	int			i;
 
@@ -693,6 +802,52 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 					argtypes[i] = anyrange_type;
 				}
 				break;
+			case COMMONTYPEOID:
+			case COMMONTYPENONARRAYOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_commontype_result = true;
+				else
+				{
+					if (!OidIsValid(commontype_type))
+					{
+						commontype_type = get_call_expr_argtype(call_expr,
+																inargno);
+						if (!OidIsValid(commontype_type))
+							return false;
+					}
+					argtypes[i] = commontype_type;
+				}
+				break;
+			case COMMONTYPEARRAYOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_commontypearray_result = true;
+				else
+				{
+					if (!OidIsValid(commontypearray_type))
+					{
+						commontypearray_type = get_call_expr_argtype(call_expr,
+															  inargno);
+						if (!OidIsValid(commontypearray_type))
+							return false;
+					}
+					argtypes[i] = commontypearray_type;
+				}
+				break;
+			case COMMONTYPERANGEOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_commontyperange_result = true;
+				else
+				{
+					if (!OidIsValid(commontyperange_type))
+					{
+						commontyperange_type = get_call_expr_argtype(call_expr,
+																	  inargno);
+						if (!OidIsValid(commontyperange_type))
+							return false;
+					}
+					argtypes[i] = commontyperange_type;
+				}
+				break;
 			default:
 				break;
 		}
@@ -702,47 +857,94 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 
 	/* Done? */
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result &&
+		!have_commontype_result && !have_commontypearray_result)
 		return true;
 
-	/* If no input polymorphics, parser messed up */
-	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
-		return false;
-
-	/* If needed, deduce one polymorphic type from others */
-	if (have_anyelement_result && !OidIsValid(anyelement_type))
+	if (have_anyelement_result || have_anyarray_result || have_anyrange_result)
 	{
-		if (OidIsValid(anyarray_type))
-			anyelement_type = resolve_generic_type(ANYELEMENTOID,
-												   anyarray_type,
-												   ANYARRAYOID);
-		if (OidIsValid(anyrange_type))
-		{
-			Oid			subtype = resolve_generic_type(ANYELEMENTOID,
-													   anyrange_type,
-													   ANYRANGEOID);
+		/* If no input polymorphics, parser messed up */
+		if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
+			!OidIsValid(anyrange_type))
+			return false;
 
-			/* check for inconsistent array and range results */
-			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
-				return false;
-			anyelement_type = subtype;
+		/* If needed, deduce one polymorphic type from others */
+		if (have_anyelement_result && !OidIsValid(anyelement_type))
+		{
+			if (OidIsValid(anyarray_type))
+				anyelement_type = resolve_generic_type(ANYELEMENTOID,
+													   anyarray_type,
+													   ANYARRAYOID);
+			if (OidIsValid(anyrange_type))
+			{
+				Oid			subtype = resolve_generic_type(ANYELEMENTOID,
+														   anyrange_type,
+														   ANYRANGEOID);
+
+				/* check for inconsistent array and range results */
+				if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+					return false;
+				anyelement_type = subtype;
+			}
 		}
+
+		if (have_anyarray_result && !OidIsValid(anyarray_type))
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyelement_type,
+												 ANYELEMENTOID);
+
+		/*
+		 * We can't deduce a range type from other polymorphic inputs, because
+		 * there may be multiple range types for the same subtype.
+		 */
+		if (have_anyrange_result && !OidIsValid(anyrange_type))
+			return false;
+
+		/* XXX do we need to enforce ANYNONARRAY or ANYENUM here?  I think not */
 	}
 
-	if (have_anyarray_result && !OidIsValid(anyarray_type))
-		anyarray_type = resolve_generic_type(ANYARRAYOID,
-											 anyelement_type,
-											 ANYELEMENTOID);
+	if (have_commontype_result || have_commontypearray_result ||
+		have_commontyperange_result)
+	{
+		/* If no input polymorphics, parser messed up */
+		if (!OidIsValid(commontype_type) && !OidIsValid(commontypearray_type) &&
+			!OidIsValid(commontyperange_type))
+			return false;
 
-	/*
-	 * We can't deduce a range type from other polymorphic inputs, because
-	 * there may be multiple range types for the same subtype.
-	 */
-	if (have_anyrange_result && !OidIsValid(anyrange_type))
-		return false;
+		if (have_commontype_result && !OidIsValid(commontype_type))
+		{
+			if (OidIsValid(commontypearray_type))
+			{
+				commontype_type = resolve_generic_type(COMMONTYPEOID,
+													   commontypearray_type,
+													   COMMONTYPEARRAYOID);
 
-	/* XXX do we need to enforce ANYNONARRAY or ANYENUM here?  I think not */
+				if (OidIsValid(commontyperange_type))
+				{
+					Oid			subtype = resolve_generic_type(COMMONTYPEOID,
+															   anyrange_type,
+															   COMMONTYPERANGEOID);
+
+					/* check for inconsistent array and range results */
+					if (OidIsValid(commontype_type) && commontype_type != subtype)
+						return false;
+					commontype_type = subtype;
+				}
+			}
+		}
+
+		if (have_commontypearray_result || !OidIsValid(commontypearray_type))
+			commontypearray_type = resolve_generic_type(COMMONTYPEARRAYOID,
+														commontype_type,
+														COMMONTYPEOID);
+
+		/*
+		 * We can't deduce a range type from other polymorphic inputs, because
+		 * there may be multiple range types for the same subtype.
+		 */
+		if (have_commontyperange_result && !OidIsValid(commontyperange_type))
+			return false;
+	}
 
 	/* And finally replace the output column types as needed */
 	for (i = 0; i < numargs; i++)
@@ -759,6 +961,16 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 				break;
 			case ANYRANGEOID:
 				argtypes[i] = anyrange_type;
+				break;
+			case COMMONTYPEOID:
+			case COMMONTYPENONARRAYOID:
+				argtypes[i] = commontype_type;
+				break;
+			case COMMONTYPEARRAYOID:
+				argtypes[i] = commontypearray_type;
+				break;
+			case COMMONTYPERANGEOID:
+				argtypes[i] = commontyperange_type;
 				break;
 			default:
 				break;

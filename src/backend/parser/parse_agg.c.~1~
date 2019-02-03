@@ -1859,7 +1859,7 @@ resolve_aggregate_transtype(Oid aggfuncid,
 							int numArguments)
 {
 	/* resolve actual type of transition state, if polymorphic */
-	if (IsPolymorphicTypeAny(aggtranstype))
+	if (IsPolymorphicType(aggtranstype))
 	{
 		/* have to fetch the agg's declared input types... */
 		Oid		   *declaredArgTypes;

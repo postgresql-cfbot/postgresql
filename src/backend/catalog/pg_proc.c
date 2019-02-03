@@ -102,6 +102,10 @@ ProcedureCreate(const char *procedureName,
 	bool		anyrangeOutParam = false;
 	bool		internalInParam = false;
 	bool		internalOutParam = false;
+	bool		commonInParam = false;
+	bool		commonOutParam = false;
+	bool		commonrangeInParam = false;
+	bool		commonrangeOutParam = false;
 	Oid			variadicType = InvalidOid;
 	Acl		   *proacl = NULL;
 	Relation	rel;
@@ -197,6 +201,15 @@ ProcedureCreate(const char *procedureName,
 			case INTERNALOID:
 				internalInParam = true;
 				break;
+			case COMMONTYPEOID:
+			case COMMONTYPEARRAYOID:
+			case COMMONTYPENONARRAYOID:
+				commonInParam = true;
+				break;
+			case COMMONTYPERANGEOID:
+				commonInParam = true;
+				commonrangeInParam = true;
+				break;
 		}
 	}
 
@@ -224,6 +237,15 @@ ProcedureCreate(const char *procedureName,
 				case INTERNALOID:
 					internalOutParam = true;
 					break;
+				case COMMONTYPEOID:
+				case COMMONTYPEARRAYOID:
+				case COMMONTYPENONARRAYOID:
+					commonOutParam = true;
+					break;
+				case COMMONTYPERANGEOID:
+					commonOutParam = true;
+					commonrangeOutParam = true;
+					break;
 			}
 		}
 	}
@@ -235,12 +257,19 @@ ProcedureCreate(const char *procedureName,
 	 * ANYELEMENT).  Also, do not allow return type INTERNAL unless at least
 	 * one input argument is INTERNAL.
 	 */
-	if ((IsPolymorphicType(returnType) || genericOutParam)
+	if ((IsPolymorphicTypeAny(returnType) || genericOutParam)
 		&& !genericInParam)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 				 errmsg("cannot determine result data type"),
 				 errdetail("A function returning a polymorphic type must have at least one polymorphic argument.")));
+
+	if ((IsPolymorphicTypeCommon(returnType) || commonOutParam)
+		&& !commonInParam)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("cannot determine result data type"),
+				 errdetail("A function returning \"commontype\" or \"commontypearray\" must have at least one \"commontype\" or \"commontypearray\" argument.")));
 
 	if ((returnType == ANYRANGEOID || anyrangeOutParam) &&
 		!anyrangeInParam)
@@ -248,6 +277,13 @@ ProcedureCreate(const char *procedureName,
 				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 				 errmsg("cannot determine result data type"),
 				 errdetail("A function returning \"anyrange\" must have at least one \"anyrange\" argument.")));
+
+	if ((returnType == COMMONTYPERANGEOID || commonrangeOutParam) &&
+		!commonrangeInParam)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("cannot determine result data type"),
+				 errdetail("A function returning \"commontyperange\" must have at least one \"commontyperange\" argument.")));
 
 	if ((returnType == INTERNALOID || internalOutParam) && !internalInParam)
 		ereport(ERROR,
@@ -285,6 +321,9 @@ ProcedureCreate(const char *procedureName,
 							break;
 						case ANYARRAYOID:
 							variadicType = ANYELEMENTOID;
+							break;
+						case COMMONTYPEARRAYOID:
+							variadicType = COMMONTYPEOID;
 							break;
 						default:
 							variadicType = get_element_type(allParams[i]);

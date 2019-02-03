@@ -289,6 +289,16 @@ my %pgdump_runs = (
 			"$tempdir/role_parallel",
 		],
 	},
+	rows_per_insert => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/rows_per_insert.sql", '-a',
+			'--rows-per-insert=3',
+			'--table=dump_test.test_table',
+			'postgres',
+		],
+	},
 	schema_only => {
 		dump_cmd => [
 			'pg_dump',                         '--format=plain',
@@ -1285,6 +1295,13 @@ my %tests = (
 			(?:INSERT\ INTO\ dump_test.test_table\ \(col1,\ col2,\ col3,\ col4\)\ VALUES\ \(\d,\ NULL,\ NULL,\ NULL\);\n){9}
 			/xm,
 		like => { column_inserts => 1, },
+	},
+
+	'INSERT INTO test_table' => {
+		regexp => qr/^
+			(?:INSERT\ INTO\ dump_test.test_table\ VALUES\ \(\d,\ NULL,\ NULL,\ NULL\),\ \(\d,\ NULL,\ NULL,\ NULL\),\ \(\d,\ NULL,\ NULL,\ NULL\);\n){3}
+			/xm,
+		like => { rows_per_insert => 1, },
 	},
 
 	'INSERT INTO test_second_table' => {

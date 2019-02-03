@@ -358,7 +358,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
-		{"inserts", no_argument, &dopt.dump_inserts, 1},
+		{"inserts", no_argument, NULL, 8},
 		{"lock-wait-timeout", required_argument, NULL, 2},
 		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
@@ -377,6 +377,7 @@ main(int argc, char **argv)
 		{"no-subscriptions", no_argument, &dopt.no_subscriptions, 1},
 		{"no-sync", no_argument, NULL, 7},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
+		{"rows-per-insert", required_argument, NULL, 9},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -557,6 +558,24 @@ main(int argc, char **argv)
 				dosync = false;
 				break;
 
+			case 8:				/* inserts */
+				/*
+				 * dump_inserts also stores --rows-per-insert, careful not to
+				 * overwrite that.
+				 */
+				if (dopt.dump_inserts == 0)
+					dopt.dump_inserts = DUMP_DEFAULT_ROWS_PER_INSERT;
+				break;
+
+			case 9:			/* rows per insert */
+				dopt.dump_inserts = atoi(optarg);
+				if (dopt.dump_inserts <= 0)
+				{
+					write_msg(NULL, "rows-per-insert must be a positive number\n");
+					exit_nicely(1);
+				}
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -581,8 +600,8 @@ main(int argc, char **argv)
 	}
 
 	/* --column-inserts implies --inserts */
-	if (dopt.column_inserts)
-		dopt.dump_inserts = 1;
+	if (dopt.column_inserts && dopt.dump_inserts == 0)
+		dopt.dump_inserts = DUMP_DEFAULT_ROWS_PER_INSERT;
 
 	/*
 	 * Binary upgrade mode implies dumping sequence data even in schema-only
@@ -607,8 +626,12 @@ main(int argc, char **argv)
 	if (dopt.if_exists && !dopt.outputClean)
 		exit_horribly(NULL, "option --if-exists requires option -c/--clean\n");
 
-	if (dopt.do_nothing && !(dopt.dump_inserts || dopt.column_inserts))
-		exit_horribly(NULL, "option --on-conflict-do-nothing requires option --inserts or --column-inserts\n");
+	/*
+	 * --inserts are already implied above if --column-inserts or
+	 * --rows-per-insert were specified.
+	 */
+	if (dopt.do_nothing && dopt.dump_inserts == 0)
+		exit_horribly(NULL, "option --on-conflict-do-nothing requires option --inserts , --rows-per-insert or --column-inserts\n");
 
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
@@ -977,6 +1000,7 @@ help(const char *progname)
 	printf(_("  --no-unlogged-table-data     do not dump unlogged table data\n"));
 	printf(_("  --on-conflict-do-nothing     add ON CONFLICT DO NOTHING to INSERT commands\n"));
 	printf(_("  --quote-all-identifiers      quote all identifiers, even if not key words\n"));
+	printf(_("  --rows-per-insert=NROWS      number of row per INSERT command\n"));
 	printf(_("  --section=SECTION            dump named section (pre-data, data, or post-data)\n"));
 	printf(_("  --serializable-deferrable    wait until the dump can run without anomalies\n"));
 	printf(_("  --snapshot=SNAPSHOT          use given snapshot for the dump\n"));
@@ -1886,6 +1910,8 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 	int			tuple;
 	int			nfields;
 	int			field;
+	int			rows_per_statement = dopt->dump_inserts;
+	int			rows_this_statement = 0;
 
 	appendPQExpBuffer(q, "DECLARE _pg_dump_cursor CURSOR FOR "
 					  "SELECT * FROM ONLY %s",
@@ -1900,67 +1926,85 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 		res = ExecuteSqlQuery(fout, "FETCH 100 FROM _pg_dump_cursor",
 							  PGRES_TUPLES_OK);
 		nfields = PQnfields(res);
+
+		/*
+		 * First time through, we build as much of the INSERT statement as
+		 * possible in "insertStmt", which we can then just print for each
+		 * line. If the table happens to have zero columns then this will
+		 * be a complete statement, otherwise it will end in "VALUES " and
+		 * be ready to have the row's column values printed.
+		 */
+		if (insertStmt == NULL)
+		{
+			TableInfo  *targettab;
+
+			insertStmt = createPQExpBuffer();
+
+			/*
+			 * When load-via-partition-root is set, get the root table
+			 * name for the partition table, so that we can reload data
+			 * through the root table.
+			 */
+			if (dopt->load_via_partition_root && tbinfo->ispartition)
+				targettab = getRootTableInfo(tbinfo);
+			else
+				targettab = tbinfo;
+
+			appendPQExpBuffer(insertStmt, "INSERT INTO %s ",
+							  fmtQualifiedDumpable(targettab));
+
+			/* corner case for zero-column table */
+			if (nfields == 0)
+			{
+				appendPQExpBufferStr(insertStmt, "DEFAULT VALUES;\n");
+			}
+			else
+			{
+				/* append the list of column names if required */
+				if (dopt->column_inserts)
+				{
+					appendPQExpBufferChar(insertStmt, '(');
+					for (field = 0; field < nfields; field++)
+					{
+						if (field > 0)
+							appendPQExpBufferStr(insertStmt, ", ");
+						appendPQExpBufferStr(insertStmt,
+											 fmtId(PQfname(res, field)));
+					}
+					appendPQExpBufferStr(insertStmt, ") ");
+				}
+
+				if (tbinfo->needs_override)
+					appendPQExpBufferStr(insertStmt, "OVERRIDING SYSTEM VALUE ");
+
+				appendPQExpBufferStr(insertStmt, "VALUES ");
+			}
+		}
+
 		for (tuple = 0; tuple < PQntuples(res); tuple++)
 		{
+			/* Write the INSERT if not in the middle of a multi-row INSERT. */
+			if (rows_this_statement == 0)
+				archputs(insertStmt->data, fout);
+
+
 			/*
-			 * First time through, we build as much of the INSERT statement as
-			 * possible in "insertStmt", which we can then just print for each
-			 * line. If the table happens to have zero columns then this will
-			 * be a complete statement, otherwise it will end in "VALUES(" and
-			 * be ready to have the row's column values appended.
+			 * If it is zero-column table then we've aleady written the
+			 * complete statement, which will mean we've disobeyed
+			 * --rows-per-insert when it's set greater than 1.  We do support
+			 * a way to make this multi-row with:
+			 * SELECT UNION ALL SELECT UNION ALL ... but that's non-standard
+			 * so likely we should avoid it given that using INSERTs is
+			 * mostly only ever needed for cross-database exports.
 			 */
-			if (insertStmt == NULL)
-			{
-				TableInfo  *targettab;
-
-				insertStmt = createPQExpBuffer();
-
-				/*
-				 * When load-via-partition-root is set, get the root table
-				 * name for the partition table, so that we can reload data
-				 * through the root table.
-				 */
-				if (dopt->load_via_partition_root && tbinfo->ispartition)
-					targettab = getRootTableInfo(tbinfo);
-				else
-					targettab = tbinfo;
-
-				appendPQExpBuffer(insertStmt, "INSERT INTO %s ",
-								  fmtQualifiedDumpable(targettab));
-
-				/* corner case for zero-column table */
-				if (nfields == 0)
-				{
-					appendPQExpBufferStr(insertStmt, "DEFAULT VALUES;\n");
-				}
-				else
-				{
-					/* append the list of column names if required */
-					if (dopt->column_inserts)
-					{
-						appendPQExpBufferChar(insertStmt, '(');
-						for (field = 0; field < nfields; field++)
-						{
-							if (field > 0)
-								appendPQExpBufferStr(insertStmt, ", ");
-							appendPQExpBufferStr(insertStmt,
-												 fmtId(PQfname(res, field)));
-						}
-						appendPQExpBufferStr(insertStmt, ") ");
-					}
-
-					if (tbinfo->needs_override)
-						appendPQExpBufferStr(insertStmt, "OVERRIDING SYSTEM VALUE ");
-
-					appendPQExpBufferStr(insertStmt, "VALUES (");
-				}
-			}
-
-			archputs(insertStmt->data, fout);
-
-			/* if it is zero-column table then we're done */
 			if (nfields == 0)
 				continue;
+
+			if (rows_this_statement > 0)
+				archputs(", (", fout);
+			else
+				archputs("(", fout);
+
 
 			for (field = 0; field < nfields; field++)
 			{
@@ -2027,10 +2071,27 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 				}
 			}
 
-			if (!dopt->do_nothing)
-				archputs(");\n", fout);
+			rows_this_statement++;
+
+			/*
+			 * If we've put the target number of rows onto this statement then
+			 * we can terminate it now.
+			 */
+			if (rows_this_statement == rows_per_statement)
+			{
+				/* Reset the row counter */
+				rows_this_statement = 0;
+				if (!dopt->do_nothing)
+					archputs(");\n", fout);
+				else
+					archputs(") ON CONFLICT DO NOTHING;\n", fout);
+			}
 			else
-				archputs(") ON CONFLICT DO NOTHING;\n", fout);
+			{
+				/* Otherwise, get ready for the next row. */
+				archputs(")", fout);
+			}
+
 		}
 
 		if (PQntuples(res) <= 0)
@@ -2039,6 +2100,15 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 			break;
 		}
 		PQclear(res);
+	}
+
+	/* Terminate any statements that didn't make the row count.*/
+	if (rows_this_statement > 0)
+	{
+		if (!dopt->do_nothing)
+			archputs(";\n", fout);
+		else
+			archputs(" ON CONFLICT DO NOTHING;\n", fout);
 	}
 
 	archputs("\n\n", fout);

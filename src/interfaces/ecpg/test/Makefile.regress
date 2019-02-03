@@ -1,19 +1,29 @@
 # This file is included into the Makefiles of subdirectories of ecpg/test/,
 # so the file references have one more level of .. than you might expect.
 
-override CPPFLAGS := -I../../include -I$(top_srcdir)/src/interfaces/ecpg/include \
-	-I$(libpq_srcdir) $(CPPFLAGS)
-override CFLAGS += $(PTHREAD_CFLAGS)
-
-LDFLAGS_INTERNAL += -L../../ecpglib -lecpg -L../../pgtypeslib -lpgtypes $(libpq)
-
-override LIBS += $(PTHREAD_LIBS)
-
+ifdef USE_INSTALLED_ASSETS
+# Standard way to invoke the installed ecpg preprocessor
+ECPG = '$(DESTDIR)$(bindir)/ecpg' --regression -I'$(DESTDIR)$(includedir)' \
+	-I'$(DESTDIR)$(pkgincludedir)/informix/esql'
+# Use installed headers and libs
+override CPPFLAGS := -I'$(DESTDIR)$(includedir)' \
+	-I'$(DESTDIR)$(pkgincludedir)/informix/esql' $(CPPFLAGS)
+LDFLAGS_INTERNAL += -lecpg -lpgtypes $(libpq)
+else
 # Standard way to invoke the ecpg preprocessor
 ECPG = ../../preproc/ecpg --regression -I$(srcdir)/../../include -I$(srcdir)
 
+ECPG_DEP = ../../preproc/ecpg$(X)
+override CPPFLAGS := -I../../include -I$(top_srcdir)/src/interfaces/ecpg/include \
+	-I$(libpq_srcdir) $(CPPFLAGS)
+LDFLAGS_INTERNAL += -L../../ecpglib -lecpg -L../../pgtypeslib -lpgtypes $(libpq)
+endif
+
+override CFLAGS += $(PTHREAD_CFLAGS)
+override LIBS += $(PTHREAD_LIBS)
+
 # Files that most or all ecpg preprocessor test outputs depend on
-ECPG_TEST_DEPENDENCIES = ../../preproc/ecpg$(X) \
+ECPG_TEST_DEPENDENCIES = $(ECPG_DEP) \
 	$(srcdir)/../regression.h \
 	$(srcdir)/../printf_hack.h \
 	$(srcdir)/../../include/sqlca.h \

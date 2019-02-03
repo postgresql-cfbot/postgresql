@@ -142,7 +142,7 @@ include $(srcdir)/regress-python3-mangle.mk
 check: submake-pg-regress
 	$(pg_regress_check) $(REGRESS_OPTS) $(REGRESS)
 
-installcheck: submake-pg-regress
+installcheck:
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 
 

@@ -404,7 +404,7 @@ endif
 # Standard rules to run regression tests including multiple test suites.
 # Runs against an installed postmaster.
 ifndef NO_INSTALLCHECK
-installcheck: submake $(REGRESS_PREP)
+installcheck: $(REGRESS_PREP)
 ifdef REGRESS
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 endif

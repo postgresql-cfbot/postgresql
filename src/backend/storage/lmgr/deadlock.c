@@ -214,7 +214,7 @@ InitDeadLockChecking(void)
  * and (b) we are typically invoked inside a signal handler.
  */
 DeadLockState
-DeadLockCheck(PGPROC *proc)
+DeadLockCheck(PGPROC *proc, bool readonly)
 {
 	int			i,
 				j;
@@ -243,6 +243,16 @@ DeadLockCheck(PGPROC *proc)
 			elog(FATAL, "deadlock seems to have disappeared");
 
 		return DS_HARD_DEADLOCK;	/* cannot find a non-deadlocked state */
+	}
+
+	if (readonly)
+	{
+		if (nWaitOrders > 0)
+			return DS_HARD_DEADLOCK;
+		else if (blocking_autovacuum_proc != NULL)
+			return DS_BLOCKED_BY_AUTOVACUUM;
+		else
+			return DS_NO_DEADLOCK;
 	}
 
 	/* Apply any needed rearrangements of wait queues */

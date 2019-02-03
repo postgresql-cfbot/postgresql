@@ -81,7 +81,6 @@
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
-#include "utils/catcache.h"
 #include "utils/guc_tables.h"
 #include "utils/float.h"
 #include "utils/memutils.h"
@@ -2205,28 +2204,6 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"cache_memory_target", PGC_USERSET, RESOURCES_MEM,
-			gettext_noop("Sets the minimum syscache size to keep."),
-			gettext_noop("Cache is not pruned before exceeding this size."),
-			GUC_UNIT_KB
-		},
-		&cache_memory_target,
-		0, 0, MAX_KILOBYTES,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"cache_prune_min_age", PGC_USERSET, RESOURCES_MEM,
-			gettext_noop("Sets the minimum unused duration of cache entries before removal."),
-			gettext_noop("Cache entries that live unused for longer than this seconds are considered to be removed."),
-			GUC_UNIT_S
-		},
-		&cache_prune_min_age,
-		600, -1, INT_MAX,
-		NULL, NULL, NULL
-	},
-
 	/*
 	 * We use the hopefully-safely-small value of 100kB as the compiled-in
 	 * default for max_stack_depth.  InitializeGUCOptions will increase it if
@@ -3165,16 +3142,6 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&pgstat_track_activity_query_size,
 		1024, 100, 102400,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"track_syscache_usage_interval", PGC_SUSET, STATS_COLLECTOR,
-			gettext_noop("Sets the interval between syscache usage collection, in milliseconds. Zero disables syscache usage tracking."),
-			NULL
-		},
-		&pgstat_track_syscache_usage_interval,
-		0, 0, INT_MAX / 2,
 		NULL, NULL, NULL
 	},
 

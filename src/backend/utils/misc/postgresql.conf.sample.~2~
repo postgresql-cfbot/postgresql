@@ -560,7 +560,6 @@
 #track_io_timing = off
 #track_functions = none			# none, pl, all
 #track_activity_query_size = 1024	# (change requires restart)
-#track_syscache_usage_interval = 0	# zero disables tracking
 #stats_temp_directory = 'pg_stat_tmp'
 
 

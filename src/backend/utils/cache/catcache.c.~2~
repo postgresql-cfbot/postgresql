@@ -22,17 +22,14 @@
 #include "access/tuptoaster.h"
 #include "access/valid.h"
 #include "access/xact.h"
-#include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #ifdef CATCACHE_STATS
 #include "storage/ipc.h"		/* for on_proc_exit */
 #endif
 #include "storage/lmgr.h"
-#include "storage/procarray.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
@@ -91,21 +88,6 @@ static CatCacheHeader *CacheHdr = NULL;
 
 /* Timestamp used for any operation on caches. */
 TimestampTz	catcacheclock = 0;
-
-/* age classes for pruning */
-static double ageclass[SYSCACHE_STATS_NAGECLASSES]
-	= {0.05, 0.1, 1.0, 2.0, 3.0, 0.0};
-
-/* remote commanding facility */
-typedef struct CatcacheStatsParam
-{
-	int	interval;
-} CatcacheStatsParam;
-
-#define NumCatcacheStatsParam (MaxBackends + NUM_AUXPROCTYPES)
-
-static slock_t CatcacheStatsParamLock;
-static CatcacheStatsParam *CatcacheStatsParamArray = NULL;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 					   int nkeys,
@@ -637,7 +619,9 @@ CatCacheInvalidate(CatCache *cache, uint32 hashValue)
 			else
 				CatCacheRemoveCTup(cache, ct);
 			CACHE1_elog(DEBUG2, "CatCacheInvalidate: invalidated");
+#ifdef CATCACHE_STATS
 			cache->cc_invals++;
+#endif
 			/* could be multiple matches, so keep looking! */
 		}
 	}
@@ -713,7 +697,9 @@ ResetCatalogCache(CatCache *cache)
 			}
 			else
 				CatCacheRemoveCTup(cache, ct);
+#ifdef CATCACHE_STATS
 			cache->cc_invals++;
+#endif
 		}
 	}
 }
@@ -920,11 +906,10 @@ CatCacheCleanupOldEntries(CatCache *cp)
 	 * cache_prune_min_age. The index of nremoved_entry is the value of the
 	 * clock-sweep counter, which takes from 0 up to 2.
 	 */
-	int			nentries[SYSCACHE_STATS_NAGECLASSES] = {0, 0, 0, 0, 0, 0};
+	double		ageclass[] = {0.05, 0.1, 1.0, 2.0, 3.0, 0.0};
+	int			nentries[] = {0, 0, 0, 0, 0, 0};
 	int			nremoved_entry[3] = {0, 0, 0};
 	int			j;
-
-	Assert(ageclass[SYSCACHE_STATS_NAGECLASSES - 1] == 0.0);
 #endif
 
 	/* Return immediately if no pruning is wanted */
@@ -938,11 +923,7 @@ CatCacheCleanupOldEntries(CatCache *cp)
 	if (hash_size + cp->cc_tupsize < (Size) cache_memory_target * 1024L)
 		return false;
 	
-	/*
-	 * Search the whole hash for entries to remove. This is a quite time
-	 * consuming task during catcache lookup, but accetable since now we are
-	 * going to expand the hash table.
-	 */
+	/* Search the whole hash for entries to remove */
 	for (i = 0; i < cp->cc_nbuckets; i++)
 	{
 		dlist_mutable_iter iter;
@@ -955,21 +936,21 @@ CatCacheCleanupOldEntries(CatCache *cp)
 
 
 			/*
-			 * Calculate the duration from the time from the last access to
-			 * the "current" time. Since catcacheclock is not advanced within
-			 * a transaction, the entries that are accessed within the current
-			 * transaction always get 0 as the result.
+			 * Calculate the duration from the time of the last access to the
+			 * "current" time. Since catcacheclock is not advanced within a
+			 * transaction, the entries that are accessed within the current
+			 * transaction won't be pruned.
 			 */
 			TimestampDifference(ct->lastaccess, catcacheclock, &entry_age, &us);
 
 #ifdef CATCACHE_STATS
 			/* count catcache entries for each age class */
 			ntotal++;
-
-			j = 0;
-			while (j < SYSCACHE_STATS_NAGECLASSES - 1 &&
-				   entry_age > cache_prune_min_age * ageclass[j])
-				j++;
+			for (j = 0 ;
+				 ageclass[j] != 0.0 &&
+					 entry_age > cache_prune_min_age * ageclass[j] ;
+				 j++);
+			if (ageclass[j] == 0.0) j--;
 			nentries[j]++;
 #endif
 
@@ -1002,17 +983,14 @@ CatCacheCleanupOldEntries(CatCache *cp)
 	}
 
 #ifdef CATCACHE_STATS
-	StaticAssertStmt(SYSCACHE_STATS_NAGECLASSES == 6,
-					 "number of syscache age class must be 6");
 	ereport(DEBUG1,
-			(errmsg ("removed %d/%d, age(-%.0fs:%d, -%.0fs:%d, *-%.0fs:%d, -%.0fs:%d, -%.0fs:%d, rest:%d) naccessed(0:%d, 1:%d, 2:%d)",
+			(errmsg ("removed %d/%d, age(-%.0fs:%d, -%.0fs:%d, *-%.0fs:%d, -%.0fs:%d, -%.0fs:%d) naccessed(0:%d, 1:%d, 2:%d)",
 					 nremoved, ntotal,
 					 ageclass[0] * cache_prune_min_age, nentries[0],
 					 ageclass[1] * cache_prune_min_age, nentries[1],
 					 ageclass[2] * cache_prune_min_age, nentries[2],
 					 ageclass[3] * cache_prune_min_age, nentries[3],
 					 ageclass[4] * cache_prune_min_age, nentries[4],
-					 nentries[5],
 					 nremoved_entry[0], nremoved_entry[1], nremoved_entry[2]),
 			 errhidestmt(true)));
 #endif
@@ -1389,7 +1367,9 @@ SearchCatCacheInternal(CatCache *cache,
 	if (unlikely(cache->cc_tupdesc == NULL))
 		CatalogCacheInitializeCache(cache);
 
+#ifdef CATCACHE_STATS
 	cache->cc_searches++;
+#endif
 
 	/* Initialize local parameter array */
 	arguments[0] = v1;
@@ -1449,7 +1429,9 @@ SearchCatCacheInternal(CatCache *cache,
 			CACHE3_elog(DEBUG2, "SearchCatCache(%s): found in bucket %d",
 						cache->cc_relname, hashIndex);
 
+#ifdef CATCACHE_STATS
 			cache->cc_hits++;
+#endif
 
 			return &ct->tuple;
 		}
@@ -1458,7 +1440,9 @@ SearchCatCacheInternal(CatCache *cache,
 			CACHE3_elog(DEBUG2, "SearchCatCache(%s): found neg entry in bucket %d",
 						cache->cc_relname, hashIndex);
 
+#ifdef CATCACHE_STATS
 			cache->cc_neg_hits++;
+#endif
 
 			return NULL;
 		}
@@ -1586,7 +1570,9 @@ SearchCatCacheMiss(CatCache *cache,
 	CACHE3_elog(DEBUG2, "SearchCatCache(%s): put in bucket %d",
 				cache->cc_relname, hashIndex);
 
+#ifdef CATCACHE_STATS
 	cache->cc_newloads++;
+#endif
 
 	return &ct->tuple;
 }
@@ -1697,7 +1683,9 @@ SearchCatCacheList(CatCache *cache,
 
 	Assert(nkeys > 0 && nkeys < cache->cc_nkeys);
 
+#ifdef CATCACHE_STATS
 	cache->cc_lsearches++;
+#endif
 
 	/* Initialize local parameter array */
 	arguments[0] = v1;
@@ -1754,7 +1742,9 @@ SearchCatCacheList(CatCache *cache,
 		CACHE2_elog(DEBUG2, "SearchCatCacheList(%s): found list",
 					cache->cc_relname);
 
+#ifdef CATCACHE_STATS
 		cache->cc_lhits++;
+#endif
 
 		return cl;
 	}
@@ -2262,166 +2252,3 @@ PrintCatCacheListLeakWarning(CatCList *list)
 		 list->my_cache->cc_relname, list->my_cache->id,
 		 list, list->refcount);
 }
-
-/*
- * CatCacheGetStats - fill in SysCacheStats struct.
- *
- * This is a support routine for SysCacheGetStats, substantially fills in the
- * result. The classification here is based on the same criteria to
- * CatCacheCleanupOldEntries().
- */
-void
-CatCacheGetStats(CatCache *cache, SysCacheStats *stats)
-{
-	int	i, j;
-
-	Assert(ageclass[SYSCACHE_STATS_NAGECLASSES - 1] == 0.0);
-
-	/* fill in the stats struct */
-	stats->size = cache->cc_tupsize + cache->cc_nbuckets * sizeof(dlist_head);
-	stats->ntuples = cache->cc_ntup;
-	stats->nsearches = cache->cc_searches;
-	stats->nhits = cache->cc_hits;
-	stats->nneg_hits = cache->cc_neg_hits;
-
-	/* cache_prune_min_age can be changed on-session, fill it every time */
-	for (i = 0 ; i < SYSCACHE_STATS_NAGECLASSES ; i++)
-		stats->ageclasses[i] = (int) (cache_prune_min_age * ageclass[i]);
-
-	/*
-	 * nth element in nclass_entries stores the number of cache entries that
-	 * have lived unaccessed for corresponding multiple in ageclass of
-	 * cache_prune_min_age.
-	 */
-	memset(stats->nclass_entries, 0, sizeof(int) * SYSCACHE_STATS_NAGECLASSES);
-
-	/* Scan the whole hash */
-	for (i = 0; i < cache->cc_nbuckets; i++)
-	{
-		dlist_mutable_iter iter;
-
-		dlist_foreach_modify(iter, &cache->cc_bucket[i])
-		{
-			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
-			long entry_age;
-			int us;
-
-			/*
-			 * Calculate the duration from the time from the last access to
-			 * the "current" time. Since catcacheclock is not advanced within
-			 * a transaction, the entries that are accessed within the current
-			 * transaction won't be pruned.
-			 */
-			TimestampDifference(ct->lastaccess, catcacheclock, &entry_age, &us);
-
-			j = 0;
-			while (j < SYSCACHE_STATS_NAGECLASSES - 1 &&
-				   entry_age > stats->ageclasses[j])
-				j++;
-
-			stats->nclass_entries[j]++;
-		}
-	}
-}
-
-/* Report shared-memory space needed */
-Size
-CatcacheStatsShmemSize(void)
-{
-	Size size;
-
-	/* The same number of elements with backend status array */
-	size = mul_size(sizeof(CatcacheStatsParam), NumCatcacheStatsParam);
-
-	return size;
-}
-
-/* Initialize the shared parameter array for catcache statistics */
-void
-CatcacheStatsShmemInit(void)
-{
-	Size size;
-	bool found;
-
-	size = CatcacheStatsShmemSize();
-	CatcacheStatsParamArray = (CatcacheStatsParam *)
-		ShmemInitStruct("Backend Catcache Statistics Parameter Array",
-						size, &found);
-
-	if (!found)
-	{
-		/* We're the first, initilize it */
-		MemSet(CatcacheStatsParamArray, 0, size);
-	}
-
-	SpinLockInit(&CatcacheStatsParamLock);
-}
-
-/*
- * SQL callable function to take catcache statistics of another backend
- */
-Datum
-backend_catcache_stats(PG_FUNCTION_ARGS)
-{
-	int	target_pid = PG_GETARG_INT32(0);
-	int interval = PG_GETARG_INT32(1);
-	PGPROC *target_proc;
-
-	if (interval < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("interval must not be a negtive number")));
-
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	target_proc = BackendPidGetProcWithLock(target_pid);
-
-	if (target_proc == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("PID %d is not a PostgreSQL server process",
-						target_pid)));
-
-	/* The same condition to pg_signal_backend() */
-	if ((superuser_arg(target_proc->roleId) && !superuser()) ||
-		(!has_privs_of_role(GetUserId(), target_proc->roleId) &&
-		 !has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID)))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("permission denied")));
-
-	if (target_proc->backendId == InvalidBackendId)
-		ereport(ERROR,
-				(errmsg("invalid backendid")));
-
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	CatcacheStatsParamArray[target_proc->backendId - 1].interval = interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-	LWLockRelease(ProcArrayLock);
-
-	PG_RETURN_VOID();
-}
-
-/* returns catcache stats paramter of this backend */
-int
-GetCatcacheStatsParam(void)
-{
-	int interval;
-
-	Assert(MyBackendId != InvalidBackendId);
-
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	interval = CatcacheStatsParamArray[MyBackendId - 1].interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-
-	return interval;
-}	
-
-/* sets catcache stats paramter of this backend */
-void
-SetCatcacheStatsParam(int interval)
-{
-	Assert(MyBackendId != InvalidBackendId);
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	CatcacheStatsParamArray[MyBackendId - 1].interval = interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-}	

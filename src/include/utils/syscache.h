@@ -112,6 +112,24 @@ enum SysCacheIdentifier
 #define SysCacheSize (USERMAPPINGUSERSERVER + 1)
 };
 
+#define SYSCACHE_STATS_NAGECLASSES 6
+/* Struct for catcache tracking information */
+typedef struct syscachestats
+{
+	Oid		reloid;			/* target relation */
+	Oid		indoid;			/* index */
+	size_t	size;			/* size of the catcache */
+	int		ntuples;		/* number of tuples resides in the catcache */
+	int		nsearches;		/* number of searches */
+	int		nhits;			/* number of cache hits */
+	int		nneg_hits;		/* number of negative cache hits */
+	/* age classes in seconds */
+	int	    ageclasses[SYSCACHE_STATS_NAGECLASSES];
+	/* number of tuples fall into the corresponding age class */
+	int	    nclass_entries[SYSCACHE_STATS_NAGECLASSES];
+} SysCacheStats;
+
+
 extern void InitCatalogCache(void);
 extern void InitCatalogCachePhase2(void);
 
@@ -164,6 +182,7 @@ extern void SysCacheInvalidate(int cacheId, uint32 hashValue);
 extern bool RelationInvalidatesSnapshotsOnly(Oid relid);
 extern bool RelationHasSysCache(Oid relid);
 extern bool RelationSupportsSysCache(Oid relid);
+extern SysCacheStats *SysCacheGetStats(int cacheId);
 
 /*
  * The use of the macros below rather than direct calls to the corresponding

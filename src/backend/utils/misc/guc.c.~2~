@@ -3169,16 +3169,6 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"track_syscache_usage_interval", PGC_SUSET, STATS_COLLECTOR,
-			gettext_noop("Sets the interval between syscache usage collection, in milliseconds. Zero disables syscache usage tracking."),
-			NULL
-		},
-		&pgstat_track_syscache_usage_interval,
-		0, 0, INT_MAX / 2,
-		NULL, NULL, NULL
-	},
-
-	{
 		{"gin_pending_list_limit", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the maximum size of the pending list for GIN index."),
 			NULL,

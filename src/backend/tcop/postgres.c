@@ -3157,6 +3157,12 @@ ProcessInterrupts(void)
 
 	}
 
+	if (IdleSyscacheStatsUpdateTimeoutPending)
+	{
+		IdleSyscacheStatsUpdateTimeoutPending = false;
+		pgstat_write_syscache_stats(true);
+	}
+
 	if (ParallelMessagePending)
 		HandleParallelMessages();
 }
@@ -3733,6 +3739,7 @@ PostgresMain(int argc, char *argv[],
 	sigjmp_buf	local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
 	bool		disable_idle_in_transaction_timeout = false;
+	bool		disable_idle_catcache_update_timeout = false;
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4173,9 +4180,19 @@ PostgresMain(int argc, char *argv[],
 			}
 			else
 			{
+				long timeout;
+
 				ProcessCompletedNotifies();
 				pgstat_report_stat(false);
 
+				timeout = pgstat_write_syscache_stats(false);
+
+				if (timeout > 0)
+				{
+					disable_idle_catcache_update_timeout = true;
+					enable_timeout_after(IDLE_CATCACHE_UPDATE_TIMEOUT,
+										 timeout);
+				}
 				set_ps_display("idle", false);
 				pgstat_report_activity(STATE_IDLE, NULL);
 			}
@@ -4216,6 +4233,12 @@ PostgresMain(int argc, char *argv[],
 		{
 			disable_timeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT, false);
 			disable_idle_in_transaction_timeout = false;
+		}
+
+		if (disable_idle_catcache_update_timeout)
+		{
+			disable_timeout(IDLE_CATCACHE_UPDATE_TIMEOUT, false);
+			disable_idle_catcache_update_timeout = false;
 		}
 
 		/*

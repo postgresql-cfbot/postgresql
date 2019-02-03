@@ -22,17 +22,14 @@
 #include "access/tuptoaster.h"
 #include "access/valid.h"
 #include "access/xact.h"
-#include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
-#include "pgstat.h"
 #ifdef CATCACHE_STATS
 #include "storage/ipc.h"		/* for on_proc_exit */
 #endif
 #include "storage/lmgr.h"
-#include "storage/procarray.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
@@ -95,17 +92,6 @@ TimestampTz	catcacheclock = 0;
 /* age classes for pruning */
 static double ageclass[SYSCACHE_STATS_NAGECLASSES]
 	= {0.05, 0.1, 1.0, 2.0, 3.0, 0.0};
-
-/* remote commanding facility */
-typedef struct CatcacheStatsParam
-{
-	int	interval;
-} CatcacheStatsParam;
-
-#define NumCatcacheStatsParam (MaxBackends + NUM_AUXPROCTYPES)
-
-static slock_t CatcacheStatsParamLock;
-static CatcacheStatsParam *CatcacheStatsParamArray = NULL;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 					   int nkeys,
@@ -2323,105 +2309,3 @@ CatCacheGetStats(CatCache *cache, SysCacheStats *stats)
 		}
 	}
 }
-
-/* Report shared-memory space needed */
-Size
-CatcacheStatsShmemSize(void)
-{
-	Size size;
-
-	/* The same number of elements with backend status array */
-	size = mul_size(sizeof(CatcacheStatsParam), NumCatcacheStatsParam);
-
-	return size;
-}
-
-/* Initialize the shared parameter array for catcache statistics */
-void
-CatcacheStatsShmemInit(void)
-{
-	Size size;
-	bool found;
-
-	size = CatcacheStatsShmemSize();
-	CatcacheStatsParamArray = (CatcacheStatsParam *)
-		ShmemInitStruct("Backend Catcache Statistics Parameter Array",
-						size, &found);
-
-	if (!found)
-	{
-		/* We're the first, initilize it */
-		MemSet(CatcacheStatsParamArray, 0, size);
-	}
-
-	SpinLockInit(&CatcacheStatsParamLock);
-}
-
-/*
- * SQL callable function to take catcache statistics of another backend
- */
-Datum
-backend_catcache_stats(PG_FUNCTION_ARGS)
-{
-	int	target_pid = PG_GETARG_INT32(0);
-	int interval = PG_GETARG_INT32(1);
-	PGPROC *target_proc;
-
-	if (interval < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("interval must not be a negtive number")));
-
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	target_proc = BackendPidGetProcWithLock(target_pid);
-
-	if (target_proc == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("PID %d is not a PostgreSQL server process",
-						target_pid)));
-
-	/* The same condition to pg_signal_backend() */
-	if ((superuser_arg(target_proc->roleId) && !superuser()) ||
-		(!has_privs_of_role(GetUserId(), target_proc->roleId) &&
-		 !has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID)))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("permission denied")));
-
-	if (target_proc->backendId == InvalidBackendId)
-		ereport(ERROR,
-				(errmsg("invalid backendid")));
-
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	CatcacheStatsParamArray[target_proc->backendId - 1].interval = interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-	LWLockRelease(ProcArrayLock);
-
-	PG_RETURN_VOID();
-}
-
-/* returns catcache stats paramter of this backend */
-int
-GetCatcacheStatsParam(void)
-{
-	int interval;
-
-	Assert(MyBackendId != InvalidBackendId);
-
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	interval = CatcacheStatsParamArray[MyBackendId - 1].interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-
-	return interval;
-}	
-
-/* sets catcache stats paramter of this backend */
-void
-SetCatcacheStatsParam(int interval)
-{
-	Assert(MyBackendId != InvalidBackendId);
-	SpinLockAcquire(&CatcacheStatsParamLock);
-	CatcacheStatsParamArray[MyBackendId - 1].interval = interval;
-	SpinLockRelease(&CatcacheStatsParamLock);
-}	

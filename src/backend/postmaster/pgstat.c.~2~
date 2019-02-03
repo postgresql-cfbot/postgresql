@@ -62,7 +62,6 @@
 #include "storage/sinvaladt.h"
 #include "utils/ascii.h"
 #include "utils/guc.h"
-#include "utils/catcache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/rel.h"
@@ -343,7 +342,7 @@ static void pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len);
 static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len);
 static void pgstat_recv_deadlock(PgStat_MsgDeadlock *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
-static void pgstat_remove_syscache_statsfile(void);
+static void pgstat_syscache_remove_statsfile(void);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -2992,10 +2991,7 @@ pgstat_beshutdown_hook(int code, Datum arg)
 
 	/* clear syscache statistics files and temprary settings */
 	if (MyBackendId != InvalidBackendId)
-	{
-		pgstat_remove_syscache_statsfile();
-		SetCatcacheStatsParam(0);
-	}
+		pgstat_syscache_remove_statsfile();
 
 	/*
 	 * Clear my status entry, following the protocol of bumping st_changecount
@@ -6437,7 +6433,7 @@ pgstat_get_syscachestat_filename(bool permanent, bool tempname, int backendid,
 
 /* removes syscache stats files of this backend */
 static void
-pgstat_remove_syscache_statsfile(void)
+pgstat_syscache_remove_statsfile(void)
 {
 	char	fname[MAXPGPATH];
 
@@ -6466,21 +6462,15 @@ pgstat_write_syscache_stats(bool force)
 	FILE	*fpout;
 	char	statfile[MAXPGPATH];
 	char	tmpfile[MAXPGPATH];
-	int		interval = pgstat_track_syscache_usage_interval;
-	int		interval_by_remote = GetCatcacheStatsParam();
-
-	/* remote setting overrides if any */
-	if (interval_by_remote > 0)
-		interval = interval_by_remote;
 
 	/* Return if we don't want it */
-	if (!force && interval <= 0)
+	if (!force && pgstat_track_syscache_usage_interval <= 0)
 	{
 		/* disabled. remove the statistics file if any */
 		if (last_report > 0)
 		{
 			last_report = 0;
-			pgstat_remove_syscache_statsfile();
+			pgstat_syscache_remove_statsfile();
 		}
 		return 0;
 	}
@@ -6490,10 +6480,10 @@ pgstat_write_syscache_stats(bool force)
 	TimestampDifference(last_report, now, &secs, &usecs);
 	elapsed = secs * 1000 + usecs / 1000;
 
-	if (!force && elapsed < interval)
+	if (!force && elapsed < pgstat_track_syscache_usage_interval)
 	{
 		/* not yet the time, inform the remaining time to the caller */
-		return interval - elapsed;
+		return pgstat_track_syscache_usage_interval - elapsed;
 	}
 
 	/* now update the stats */
@@ -6522,7 +6512,7 @@ pgstat_write_syscache_stats(bool force)
 		 * tell caller to wait for the next interval.
 		 */
 		RESUME_INTERRUPTS();
-		return interval;
+		return pgstat_track_syscache_usage_interval;
 	}
 
 	/* write out every catcache stats */

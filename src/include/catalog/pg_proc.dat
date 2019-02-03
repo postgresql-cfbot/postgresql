@@ -9669,6 +9669,15 @@
   proargmodes => '{o,o,o,o,o,o,o,o,o,o,o}',
   proargnames => '{slot_name,plugin,slot_type,datoid,temporary,active,active_pid,xmin,catalog_xmin,restart_lsn,confirmed_flush_lsn}',
   prosrc => 'pg_get_replication_slots' },
+{ oid => '3425',
+  descr => 'syscache statistics',
+  proname => 'pg_get_syscache_stats', prorows => '100', proisstrict => 'f',
+  proretset => 't', provolatile => 'v', prorettype => 'record',
+  proargtypes => 'int4',
+  proallargtypes => '{int4,oid,oid,int8,int8,int8,int8,int8,_int4,timestamptz}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{pid,relid,indid,size,ntup,searches,hits,neg_hits,ageclass,last_update}',
+  prosrc => 'pgstat_get_syscache_stats' },
 { oid => '3786', descr => 'set up a logical replication slot',
   proname => 'pg_create_logical_replication_slot', provolatile => 'v',
   proparallel => 'u', prorettype => 'record', proargtypes => 'name name bool',
@@ -10508,5 +10517,13 @@
   proargmodes => '{i,o,o,o,o}',
   proargnames => '{rootrelid,relid,parentrelid,isleaf,level}',
   prosrc => 'pg_partition_tree' },
+
+# catcache statitics
+{ oid => '3424',
+  descr => 'take backend statistics of another backend',
+  proname => 'pg_backend_catcache_stats', proisstrict => 'f',
+  proretset => 'f', provolatile => 'v', proparallel => 'u',
+  prorettype => 'void', proargtypes => 'int4 int4',
+  prosrc => 'backend_catcache_stats' },
 
 ]

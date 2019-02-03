@@ -129,6 +129,7 @@ static int ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #else
 #define DefaultSSLMode	"disable"
 #endif
+#define DefaultLogMinLevel	"LEVEL1"
 
 /* ----------
  * Definition of the conninfo parameters and their fallback resources.
@@ -324,6 +325,19 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		DefaultTargetSessionAttrs, NULL,
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
+
+	/* libpq trace log options */
+	{"logdir", "PGLOGDIR", NULL, NULL,
+		"Logdir", "", MAXPGPATH - 4,
+	offsetof(struct pg_conn, logdir)},
+
+	{"logsize", "PGLOGSIZE", NULL, NULL,
+		"Logsize", "", 5,
+	offsetof(struct pg_conn, logsize_str)},
+
+	{"logminlevel", "PGLOGMINLEVEL", DefaultLogMinLevel, NULL,
+		"LogMinlevel", "", 7,
+	offsetof(struct pg_conn, logminlevel_str)},
 
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
@@ -1125,6 +1139,26 @@ connectOptions2(PGconn *conn)
 		conn->dbName = strdup(conn->pguser);
 		if (!conn->dbName)
 			goto oom_error;
+	}
+
+	/*
+	 * If both size and directory of trace log was given,
+	 * initialize a trace log.
+	 */
+	if (conn->logsize_str && conn->logsize_str[0] != '\0')
+		conn->logsize = atoi(conn->logsize_str);
+
+	if (conn->logdir != NULL && conn->logsize > 0 && conn->logsize < 2048)
+	{
+		conn->logsize = conn->logsize * 1024 * 1024;
+
+		if(strcmp(conn->logminlevel_str, "level1") == 0)
+			conn->logminlevel = LEVEL1;
+
+		if(strcmp(conn->logminlevel_str, "level2") == 0)
+			conn->logminlevel = LEVEL2;
+
+		initTraceLog(conn);
 	}
 
 	/*
@@ -3716,6 +3750,16 @@ freePGconn(PGconn *conn)
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
 
+	/* clean up libpq trace log structures */
+	if (conn->logsize_str)
+		free(conn->logsize_str);
+	if (conn->logdir)
+		free(conn->logdir);
+	if (conn->logminlevel_str)
+		free(conn->logminlevel_str);
+	if (conn->traceDebug)
+		fclose(conn->traceDebug);
+
 	free(conn);
 
 #ifdef WIN32
@@ -3751,6 +3795,7 @@ sendTerminateConn(PGconn *conn)
 	 */
 	if (conn->sock != PGINVALID_SOCKET && conn->status == CONNECTION_OK)
 	{
+		traceLog_fprintf(conn, LEVEL1, "Send connection terminate message to backend: ");
 		/*
 		 * Try to send "close connection" message to backend. Ignore any
 		 * error.
@@ -4153,6 +4198,8 @@ int
 pqPacketSend(PGconn *conn, char pack_type,
 			 const void *buf, size_t buf_len)
 {
+	traceLog_fprintf(conn, LEVEL1, "Send connection start message to backend: ");
+
 	/* Start the message. */
 	if (pqPutMsgStart(pack_type, true, conn))
 		return STATUS_ERROR;

@@ -879,7 +879,7 @@ pqInternalNotice(const PGNoticeHooks *hooks, const char *fmt,...)
 	res->errMsg = (char *) pqResultAlloc(res, strlen(msgBuf) + 2, false);
 	if (res->errMsg)
 	{
-		sprintf(res->errMsg, "%s\n", msgBuf);
+		sprintf(res->errMsg, "NOTICE: %s\n", msgBuf);
 
 		/*
 		 * Pass to receiver, then free it.
@@ -991,9 +991,8 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 	pgParameterStatus *pstatus;
 	pgParameterStatus *prev;
 
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "pqSaveParameterStatus: '%s' = '%s'\n",
-				name, value);
+	traceLog_fprintf(conn, LEVEL2, "pqSaveParameterStatus: '%s' = '%s'\n",
+						 name, value);
 
 	/*
 	 * Forget any old information about the parameter
@@ -1208,6 +1207,8 @@ fail:
 int
 PQsendQuery(PGconn *conn, const char *query)
 {
+	traceLog_fprintf(conn, LEVEL1, "PQsendQuery start :");
+
 	if (!PQsendQueryStart(conn))
 		return 0;
 
@@ -1218,6 +1219,8 @@ PQsendQuery(PGconn *conn, const char *query)
 						  libpq_gettext("command string is a null pointer\n"));
 		return 0;
 	}
+
+	traceLog_fprintf(conn, LEVEL1, "Query: %s \n",query);
 
 	/* construct the outgoing Query message */
 	if (pqPutMsgStart('Q', false, conn) < 0 ||
@@ -1249,6 +1252,9 @@ PQsendQuery(PGconn *conn, const char *query)
 
 	/* OK, it's launched! */
 	conn->asyncStatus = PGASYNC_BUSY;
+
+	traceLog_fprintf(conn, LEVEL1, "PQsendQuery end :");
+
 	return 1;
 }
 
@@ -1266,6 +1272,8 @@ PQsendQueryParams(PGconn *conn,
 				  const int *paramFormats,
 				  int resultFormat)
 {
+	traceLog_fprintf(conn, LEVEL1, "PQsendQueryParams start :");
+
 	if (!PQsendQueryStart(conn))
 		return 0;
 
@@ -1282,6 +1290,8 @@ PQsendQueryParams(PGconn *conn,
 						  libpq_gettext("number of parameters must be between 0 and 65535\n"));
 		return 0;
 	}
+
+	traceLog_fprintf(conn, LEVEL1, "PQsendQueryParams end :");
 
 	return PQsendQueryGuts(conn,
 						   command,
@@ -1306,6 +1316,8 @@ PQsendPrepare(PGconn *conn,
 			  const char *stmtName, const char *query,
 			  int nParams, const Oid *paramTypes)
 {
+	traceLog_fprintf(conn, LEVEL1, "PQsendPrepare start :");
+
 	if (!PQsendQueryStart(conn))
 		return 0;
 
@@ -1336,6 +1348,8 @@ PQsendPrepare(PGconn *conn,
 						  libpq_gettext("function requires at least protocol version 3.0\n"));
 		return 0;
 	}
+
+	traceLog_fprintf(conn, LEVEL1, "Statement name: %s, Query: %s \n",stmtName, query);
 
 	/* construct the Parse message */
 	if (pqPutMsgStart('P', false, conn) < 0 ||
@@ -1386,6 +1400,9 @@ PQsendPrepare(PGconn *conn,
 
 	/* OK, it's launched! */
 	conn->asyncStatus = PGASYNC_BUSY;
+
+	traceLog_fprintf(conn, LEVEL1, "PQsendPrepare end :");
+
 	return 1;
 
 sendFailed:
@@ -1492,6 +1509,8 @@ PQsendQueryGuts(PGconn *conn,
 {
 	int			i;
 
+	traceLog_fprintf(conn, LEVEL1, "PQsendQueryGuts start :");
+
 	/* This isn't gonna work on a 2.0 server */
 	if (PG_PROTOCOL_MAJOR(conn->pversion) < 3)
 	{
@@ -1507,6 +1526,8 @@ PQsendQueryGuts(PGconn *conn,
 
 	if (command)
 	{
+		traceLog_fprintf(conn, LEVEL1, "Statement name: %s, Command: %s \n",stmtName, command);
+
 		/* construct the Parse message */
 		if (pqPutMsgStart('P', false, conn) < 0 ||
 			pqPuts(stmtName, conn) < 0 ||
@@ -1638,6 +1659,9 @@ PQsendQueryGuts(PGconn *conn,
 
 	/* OK, it's launched! */
 	conn->asyncStatus = PGASYNC_BUSY;
+
+	traceLog_fprintf(conn, LEVEL1, "PQsendQueryGuts end :");
+
 	return 1;
 
 sendFailed:
@@ -1780,6 +1804,8 @@ PQgetResult(PGconn *conn)
 {
 	PGresult   *res;
 
+	traceLog_fprintf(conn, LEVEL1, "PQgetResult start :");
+
 	if (!conn)
 		return NULL;
 
@@ -1820,6 +1846,7 @@ PQgetResult(PGconn *conn)
 
 		/* Parse it. */
 		parseInput(conn);
+
 	}
 
 	/* Return the appropriate thing. */
@@ -1873,6 +1900,8 @@ PQgetResult(PGconn *conn)
 			res->events[i].resultInitialized = true;
 		}
 	}
+
+	traceLog_fprintf(conn, LEVEL1, "PQgetResult end :");
 
 	return res;
 }
@@ -2203,6 +2232,8 @@ PQsendDescribePortal(PGconn *conn, const char *portal)
 static int
 PQsendDescribe(PGconn *conn, char desc_type, const char *desc_target)
 {
+	traceLog_fprintf(conn, LEVEL1, "PQsendDescribe start :");
+
 	/* Treat null desc_target as empty string */
 	if (!desc_target)
 		desc_target = "";
@@ -2217,6 +2248,8 @@ PQsendDescribe(PGconn *conn, char desc_type, const char *desc_target)
 						  libpq_gettext("function requires at least protocol version 3.0\n"));
 		return 0;
 	}
+
+	traceLog_fprintf(conn, LEVEL1, "Describe type: %c, target: %s \n",desc_type, desc_target);
 
 	/* construct the Describe message */
 	if (pqPutMsgStart('D', false, conn) < 0 ||
@@ -2249,6 +2282,9 @@ PQsendDescribe(PGconn *conn, char desc_type, const char *desc_target)
 
 	/* OK, it's launched! */
 	conn->asyncStatus = PGASYNC_BUSY;
+
+	traceLog_fprintf(conn, LEVEL1, "PQsendDescribe end :");
+
 	return 1;
 
 sendFailed:

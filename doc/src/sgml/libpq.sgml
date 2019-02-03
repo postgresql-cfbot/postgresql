@@ -1589,6 +1589,42 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </para>
       </listitem>
     </varlistentry>
+
+     <varlistentry id="libpq-connect-log-dir" xreflabel="logdir">
+      <term><literal>logdir</literal></term>
+      <listitem>
+       <para>
+        Path of directory where log file written. When both <literal>logdir</literal>
+        and <literal>logsize</literal> is set, logging is enabled.
+      </para>
+     </listitem>
+    </varlistentry>
+
+     <varlistentry id="libpq-connect-log-size" xreflabel="logsize">
+      <term><literal>logsize</literal></term>
+      <listitem>
+       <para>
+        Maximum log size. The unit is megabyte. When the log file size exceeds 
+        to <literal>logsize</literal>, the log is output to another file. 
+        When both <literal>logdir</literal> and <literal>logsize</literal> is set, 
+        logging is enabled.
+      </para>
+     </listitem>
+    </varlistentry>
+
+     <varlistentry id="libpq-connect-log-min-level" xreflabel="logminlevel">
+      <term><literal>logminlevel</literal></term>
+      <listitem>
+       <para>
+        Level of the log. <literal>level1</literal> and <literal>level2</literal> 
+        can be set, <literal>level1</literal> is the default. 
+        When this parameter is <literal>level1</literal>,it outputs the time 
+        in the function and connection time. <literal>level2</literal> outputs 
+        information on the protocol being exchanged in addition to 
+        <literal>level1</literal> information.
+      </para>
+     </listitem>
+    </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -7472,6 +7508,36 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       linkend="libpq-connect-target-session-attrs"/> connection parameter.
      </para>
     </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGLOGDIR</envar></primary>
+      </indexterm>
+      <envar>PGLOGDIR</envar> behaves the same as the <xref
+      linkend="libpq-connect-log-dir"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGLOGSIZE</envar></primary>
+      </indexterm>
+      <envar>PGLOGSIZE</envar> behaves the same as the <xref
+      linkend="libpq-connect-log-size"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGLOGMINLEVEL</envar></primary>
+      </indexterm>
+      <envar>PGLOGMINLEVEL</envar> behaves the same as the <xref
+      linkend="libpq-connect-log-min-level"/> connection parameter.
+     </para>
+    </listitem>
    </itemizedlist>
   </para>
 
@@ -8300,6 +8366,38 @@ int PQisthreadsafe();
   </para>
  </sect1>
 
+ <sect1 id="libpq-logging">
+  <title>Logging</title>
+
+  <indexterm zone="libpq-logging">
+   <primary>trace log</primary>
+  </indexterm>
+  <indexterm zone="libpq-logging">
+   <primary>logging</primary>
+  </indexterm>
+
+  <para>
+   Libpq trace log can trace information about SQL queries which issued by 
+   the libpq application. This output help determine whether the couse is 
+   on backend side or application side and solve issues with the libpq Driver 
+   when it use. The log without requiring recompile of the libpq application.
+  </para>
+
+  <para>
+   You can activate this log by setting both <parameter>logdir</parameter> and 
+   <parameter>logsize</parameter> of the connection string, or by setting both 
+   the environment variables <envar>PGLOGDIR</envar> and <envar>PGLOGSIZE</envar>.
+   The log trace file is written in a directory setting by <envar>PGLOGDIR</envar> 
+   or <parameter>logdir</parameter>.
+   Information to be output to the log file can be controlled by setting 
+   <parameter>logminlevel</parameter> or <envar>PGLOGMINLEVEL</envar>.
+   The file name is determined as <filename>libpq-%ProcessID-%Y-%m-%d_%H%M%S.log</filename>.
+   If the setting of the file path by the connection string or the environment variable is 
+   incorrect, the log file is not created in the intended location. 
+   The maximum log file size and log level you set is output to the beginning of the file, 
+   so you can check it.
+  </para>
+ </sect1>
 
  <sect1 id="libpq-build">
   <title>Building <application>libpq</application> Programs</title>

@@ -134,6 +134,16 @@ typedef enum
 	PQPING_NO_ATTEMPT			/* connection not attempted (bad params) */
 } PGPing;
 
+/*
+ * libpq trce log level
+ */
+
+typedef enum
+{
+	LEVEL1,				 /* Time and process (by default) */
+	LEVEL2				 /* Server and Client exchange messages */
+} PGTraceLogLevel;
+
 /* PGconn encapsulates a connection to the backend.
  * The contents of this struct are not supposed to be known to applications.
  */

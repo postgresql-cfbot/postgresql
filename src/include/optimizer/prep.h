@@ -34,7 +34,8 @@ extern Relids get_relids_for_join(Query *query, int joinrelid);
 /*
  * prototypes for preptlist.c
  */
-extern List *preprocess_targetlist(PlannerInfo *root);
+extern List *preprocess_targetlist(PlannerInfo *root,
+							bool inheritance_expanded);
 
 extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
 

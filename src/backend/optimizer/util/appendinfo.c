@@ -18,6 +18,8 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -31,10 +33,10 @@ typedef struct
 	AppendRelInfo **appinfos;
 } adjust_appendrel_attrs_context;
 
-static void make_inh_translation_list(Relation oldrelation,
-						  Relation newrelation,
-						  Index newvarno,
-						  List **translated_vars);
+static void make_inh_translation_list(TupleDesc old_tupdesc,
+						  TupleDesc new_tupdesc,
+						  Oid from_rel, Oid to_rel,
+						  Index newvarno, List **translated_vars);
 static Node *adjust_appendrel_attrs_mutator(Node *node,
 							   adjust_appendrel_attrs_context *context);
 static List *adjust_inherited_tlist(List *tlist,
@@ -46,18 +48,20 @@ static List *adjust_inherited_tlist(List *tlist,
  *	  Build an AppendRelInfo for the parent-child pair
  */
 AppendRelInfo *
-make_append_rel_info(Relation parentrel, Relation childrel,
-					 Index parentRTindex, Index childRTindex)
+make_append_rel_info(RelOptInfo *parent, RangeTblEntry *parentrte,
+					 TupleDesc childdesc, Oid childoid, Oid childtype,
+					 Index childRTindex)
 {
 	AppendRelInfo *appinfo = makeNode(AppendRelInfo);
 
-	appinfo->parent_relid = parentRTindex;
+	appinfo->parent_relid = parent->relid;
 	appinfo->child_relid = childRTindex;
-	appinfo->parent_reltype = parentrel->rd_rel->reltype;
-	appinfo->child_reltype = childrel->rd_rel->reltype;
-	make_inh_translation_list(parentrel, childrel, childRTindex,
-							  &appinfo->translated_vars);
-	appinfo->parent_reloid = RelationGetRelid(parentrel);
+	appinfo->parent_reltype = parent->reltype;
+	appinfo->child_reltype = childtype;
+	make_inh_translation_list(parent->tupdesc, childdesc,
+							  parentrte->relid, childoid,
+							  childRTindex, &appinfo->translated_vars);
+	appinfo->parent_reloid = parentrte->relid;
 
 	return appinfo;
 }
@@ -70,14 +74,11 @@ make_append_rel_info(Relation parentrel, Relation childrel,
  * For paranoia's sake, we match type/collation as well as attribute name.
  */
 static void
-make_inh_translation_list(Relation oldrelation, Relation newrelation,
-						  Index newvarno,
-						  List **translated_vars)
+make_inh_translation_list(TupleDesc old_tupdesc, TupleDesc new_tupdesc,
+						  Oid from_rel, Oid to_rel,
+						  Index newvarno, List **translated_vars)
 {
 	List	   *vars = NIL;
-	TupleDesc	old_tupdesc = RelationGetDescr(oldrelation);
-	TupleDesc	new_tupdesc = RelationGetDescr(newrelation);
-	Oid			new_relid = RelationGetRelid(newrelation);
 	int			oldnatts = old_tupdesc->natts;
 	int			newnatts = new_tupdesc->natts;
 	int			old_attno;
@@ -107,7 +108,7 @@ make_inh_translation_list(Relation oldrelation, Relation newrelation,
 		 * When we are generating the "translation list" for the parent table
 		 * of an inheritance set, no need to search for matches.
 		 */
-		if (oldrelation == newrelation)
+		if (from_rel == to_rel)
 		{
 			vars = lappend(vars, makeVar(newvarno,
 										 (AttrNumber) (old_attno + 1),
@@ -133,10 +134,10 @@ make_inh_translation_list(Relation oldrelation, Relation newrelation,
 		{
 			HeapTuple	newtup;
 
-			newtup = SearchSysCacheAttName(new_relid, attname);
+			newtup = SearchSysCacheAttName(to_rel, attname);
 			if (!newtup)
 				elog(ERROR, "could not find inherited attribute \"%s\" of relation \"%s\"",
-					 attname, RelationGetRelationName(newrelation));
+					 attname, get_rel_name(to_rel));
 			new_attno = ((Form_pg_attribute) GETSTRUCT(newtup))->attnum - 1;
 			ReleaseSysCache(newtup);
 
@@ -146,10 +147,10 @@ make_inh_translation_list(Relation oldrelation, Relation newrelation,
 		/* Found it, check type and collation match */
 		if (atttypid != att->atttypid || atttypmod != att->atttypmod)
 			elog(ERROR, "attribute \"%s\" of relation \"%s\" does not match parent's type",
-				 attname, RelationGetRelationName(newrelation));
+				 attname, get_rel_name(to_rel));
 		if (attcollation != att->attcollation)
 			elog(ERROR, "attribute \"%s\" of relation \"%s\" does not match parent's collation",
-				 attname, RelationGetRelationName(newrelation));
+				 attname, get_rel_name(to_rel));
 
 		vars = lappend(vars, makeVar(newvarno,
 									 (AttrNumber) (new_attno + 1),
@@ -394,8 +395,164 @@ adjust_appendrel_attrs_mutator(Node *node,
 											  context->appinfos);
 		return (Node *) phv;
 	}
+
+	/*
+	 * This is needed, because inheritance_make_rel_from_joinlist needs to
+	 * translate root->join_info_list executing make_rel_from_joinlist for a
+	 * given child.
+	 */
+	if (IsA(node, SpecialJoinInfo))
+	{
+		SpecialJoinInfo *oldinfo = (SpecialJoinInfo *) node;
+		SpecialJoinInfo *newinfo = makeNode(SpecialJoinInfo);
+
+		memcpy(newinfo, oldinfo, sizeof(SpecialJoinInfo));
+		newinfo->min_lefthand = adjust_child_relids(oldinfo->min_lefthand,
+													context->nappinfos,
+													context->appinfos);
+		newinfo->min_righthand = adjust_child_relids(oldinfo->min_righthand,
+													 context->nappinfos,
+													 context->appinfos);
+		newinfo->syn_lefthand = adjust_child_relids(oldinfo->syn_lefthand,
+													context->nappinfos,
+													context->appinfos);
+		newinfo->syn_righthand = adjust_child_relids(oldinfo->syn_righthand,
+													 context->nappinfos,
+													 context->appinfos);
+		newinfo->semi_rhs_exprs =
+			(List *) expression_tree_mutator((Node *)
+											 oldinfo->semi_rhs_exprs,
+											 adjust_appendrel_attrs_mutator,
+											 (void *) context);
+		return (Node *) newinfo;
+	}
+
+	if (IsA(node, EquivalenceClass))
+	{
+		EquivalenceClass *ec = (EquivalenceClass *) node;
+		EquivalenceClass *new_ec = makeNode(EquivalenceClass);
+		AppendRelInfo *appinfo = NULL;
+		RelOptInfo *parent_rel,
+				   *child_rel;
+		ListCell *lc;
+
+		/*
+		 * First memcpy the existing EC to the new EC, which creates shallow
+		 * copies of all the members and then make copies of members that
+		 * we'll change below.
+		 *
+		 * XXX comment in _copyPathKey says it's OK to recycle EC
+		 * pointers, but as long as we do the whole planning for a
+		 * given child using a given root, copying ECs like this
+		 * shouldn't be a problem.  Maybe, the following code could
+		 * be in _copyEquivalenceClass()?
+		 */
+		memcpy(new_ec, ec, sizeof(EquivalenceClass));
+		new_ec->ec_opfamilies = list_copy(ec->ec_opfamilies);
+		new_ec->ec_sources = list_copy(ec->ec_sources);
+		new_ec->ec_derives = list_copy(ec->ec_derives);
+		new_ec->ec_relids = bms_copy(ec->ec_relids);
+		new_ec->ec_members = list_copy(ec->ec_members);
+
+		/*
+		 * No point in searching if parent rel not mentioned in eclass; but we
+		 * can't tell that for sure if parent rel is itself a child.
+		 */
+		for (cnt = 0; cnt < nappinfos; cnt++)
+		{
+			if (bms_is_member(appinfos[cnt]->parent_relid, ec->ec_relids))
+			{
+				appinfo = appinfos[cnt];
+				break;
+			}
+		}
+
+		if (appinfo == NULL)
+			return (Node *) new_ec;
+
+		parent_rel = find_base_rel(context->root, appinfo->parent_relid);
+		child_rel = find_base_rel(context->root, appinfo->child_relid);
+		if (parent_rel->reloptkind != RELOPT_BASEREL)
+			return (Node *) new_ec;
+
+		/*
+		 * Check if this EC contains an expression referencing the parent
+		 * relation, translate it to child, and store it in place of
+		 * the original parent expression.
+		 */
+		foreach(lc, new_ec->ec_members)
+		{
+			EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc);
+
+			if (cur_em->em_is_const)
+				continue;		/* ignore consts here */
+
+			/* Does it reference parent_rel? */
+			if (bms_overlap(cur_em->em_relids, parent_rel->relids))
+			{
+				/* Yes, generate transformed child version */
+				Expr	   *new_expr;
+				Relids		new_relids;
+				Relids		new_nullable_relids;
+
+				new_expr = (Expr *)
+					adjust_appendrel_attrs(context->root,
+										   (Node *) cur_em->em_expr,
+										   1, &appinfo);
+
+				/*
+				 * Transform em_relids to match.  Note we do *not* do
+				 * pull_varnos(child_expr) here, as for example the
+				 * transformation might have substituted a constant, but we
+				 * don't want the child member to be marked as constant.
+				 */
+				new_relids = bms_difference(cur_em->em_relids,
+											parent_rel->relids);
+				new_relids = bms_add_members(new_relids, child_rel->relids);
+
+				/*
+				 * And likewise for nullable_relids.  Note this code assumes
+				 * parent and child relids are singletons.
+				 */
+				new_nullable_relids = cur_em->em_nullable_relids;
+				if (bms_overlap(new_nullable_relids, parent_rel->relids))
+				{
+					new_nullable_relids = bms_difference(new_nullable_relids,
+														 parent_rel->relids);
+					new_nullable_relids = bms_add_members(new_nullable_relids,
+														  child_rel->relids);
+				}
+
+				/*
+				 * The new expression simply replaces the old parent one, and
+				 * em_is_child is set to true so that it's recognized as such
+				 * during child planning.
+				 */
+				lfirst(lc) = add_eq_member(new_ec, new_expr,
+										   new_relids, new_nullable_relids,
+										   false, cur_em->em_datatype);
+
+				/*
+				 * We have found and replaced the parent expression, so done
+				 * with EC.
+				 */
+				break;
+			}
+		}
+
+		/*
+		 * Now fix up EC's relids set.  It's OK to modify EC like this,
+		 * because caller must have made a copy of the original EC.
+		 * For example, see adjust_inherited_target_child_root.
+		 */
+		new_ec->ec_relids = bms_del_members(new_ec->ec_relids,
+											parent_rel->relids);
+		new_ec->ec_relids = bms_add_members(new_ec->ec_relids,
+											child_rel->relids);
+		return (Node *) new_ec;
+	}
+
 	/* Shouldn't need to handle planner auxiliary nodes here */
-	Assert(!IsA(node, SpecialJoinInfo));
 	Assert(!IsA(node, AppendRelInfo));
 	Assert(!IsA(node, PlaceHolderInfo));
 	Assert(!IsA(node, MinMaxAggInfo));

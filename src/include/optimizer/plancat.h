@@ -25,8 +25,8 @@ typedef void (*get_relation_info_hook_type) (PlannerInfo *root,
 extern PGDLLIMPORT get_relation_info_hook_type get_relation_info_hook;
 
 
-extern void get_relation_info(PlannerInfo *root, Oid relationObjectId,
-				  bool inhparent, RelOptInfo *rel);
+extern void get_relation_info(PlannerInfo *root, RangeTblEntry *rte,
+				  RelOptInfo *rel);
 
 extern List *infer_arbiter_indexes(PlannerInfo *root);
 

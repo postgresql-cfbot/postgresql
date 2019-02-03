@@ -326,6 +326,12 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 													  UPPERREL_FINAL, NULL)))
 					add_rtes_to_flat_rtable(rel->subroot, true);
 			}
+			/*
+			 * A NULL rel also means an unplanned subquery rte, so apply
+			 * flatten_unplanned_rtes.
+			 */
+			else
+				flatten_unplanned_rtes(glob, rte);
 		}
 		rti++;
 	}

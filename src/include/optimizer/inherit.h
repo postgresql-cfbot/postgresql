@@ -18,5 +18,6 @@
 
 
 extern void expand_inherited_tables(PlannerInfo *root);
+extern void add_inherited_target_child_roots(PlannerInfo *root);
 
 #endif							/* INHERIT_H */

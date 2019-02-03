@@ -32,9 +32,6 @@
 #include "utils/lsyscache.h"
 
 
-static EquivalenceMember *add_eq_member(EquivalenceClass *ec,
-			  Expr *expr, Relids relids, Relids nullable_relids,
-			  bool is_child, Oid datatype);
 static void generate_base_implied_equalities_const(PlannerInfo *root,
 									   EquivalenceClass *ec);
 static void generate_base_implied_equalities_no_const(PlannerInfo *root,
@@ -540,7 +537,7 @@ canonicalize_ec_expression(Expr *expr, Oid req_type, Oid req_collation)
 /*
  * add_eq_member - build a new EquivalenceMember and add it to an EC
  */
-static EquivalenceMember *
+EquivalenceMember *
 add_eq_member(EquivalenceClass *ec, Expr *expr, Relids relids,
 			  Relids nullable_relids, bool is_child, Oid datatype)
 {

@@ -29,7 +29,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
 #include "optimizer/planmain.h"
-
+#include "optimizer/prep.h"
 
 /*
  * query_planner
@@ -60,6 +60,7 @@ query_planner(PlannerInfo *root, List *tlist,
 	Query	   *parse = root->parse;
 	List	   *joinlist;
 	RelOptInfo *final_rel;
+	Index		rti;
 
 	/*
 	 * Init planner lists to empty.
@@ -260,14 +261,52 @@ query_planner(PlannerInfo *root, List *tlist,
 	extract_restriction_or_clauses(root);
 
 	/*
+	 * Construct the all_baserels Relids set.
+	 */
+	root->all_baserels = NULL;
+	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	{
+		RelOptInfo *brel = root->simple_rel_array[rti];
+
+		/* there may be empty slots corresponding to non-baserel RTEs */
+		if (brel == NULL)
+			continue;
+
+		Assert(brel->relid == rti); /* sanity check on array */
+
+		/* ignore RTEs that are "other rels" */
+		if (brel->reloptkind != RELOPT_BASEREL)
+			continue;
+
+		root->all_baserels = bms_add_member(root->all_baserels, brel->relid);
+	}
+
+	/*
+	 * Expand RT entries that represent inherited or partitioned tables.
+	 * This will perform partition pruning on partitioned tables in the
+	 * original range table and also recursively on any child partitioned
+	 * tables that were added by the expansion of the original parent(s).
+	 * As new entries are added to the range table, various arrays in the
+	 * PlannerInfo will be expanded accordingly.
+	 */
+	expand_inherited_tables(root);
+
+	/*
+	 * Add child subroots needed to use during planning for individual child
+	 * targets
+	 */
+	if (root->inherited_update)
+	{
+		root->inh_target_child_roots = (PlannerInfo **)
+										palloc0(root->simple_rel_array_size *
+												sizeof(PlannerInfo *));
+		add_inherited_target_child_roots(root);
+	}
+
+	/*
 	 * Ready to do the primary planning.
 	 */
 	final_rel = make_one_rel(root, joinlist);
-
-	/* Check that we got at least one usable path */
-	if (!final_rel || !final_rel->cheapest_total_path ||
-		final_rel->cheapest_total_path->param_info != NULL)
-		elog(ERROR, "failed to construct the join relation");
 
 	return final_rel;
 }

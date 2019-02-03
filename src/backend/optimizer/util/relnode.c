@@ -132,6 +132,50 @@ setup_append_rel_array(PlannerInfo *root)
 }
 
 /*
+ * expand_planner_arrays
+ *		Expand the PlannerInfo arrays by add_size members and initialize the
+ *		the	newly added bytes with zero
+ */
+void
+expand_planner_arrays(PlannerInfo *root, int add_size)
+{
+	int		new_size;
+
+	Assert(add_size > 0);
+
+	new_size = root->simple_rel_array_size + add_size;
+
+	/* Expand various arrays and 0-initialize added bytes. */
+	root->simple_rte_array = (RangeTblEntry **)
+							repalloc(root->simple_rte_array,
+									 sizeof(RangeTblEntry *) * new_size);
+	MemSet(root->simple_rte_array + root->simple_rel_array_size,
+		   0, sizeof(RangeTblEntry *) * add_size);
+	root->simple_rel_array = (RelOptInfo **)
+								repalloc(root->simple_rel_array,
+										 sizeof(RelOptInfo *) * new_size);
+	MemSet(root->simple_rel_array + root->simple_rel_array_size,
+		   0, sizeof(RelOptInfo *) * add_size);
+
+	if (root->append_rel_array)
+	{
+		root->append_rel_array = (AppendRelInfo **)
+									repalloc(root->append_rel_array,
+									 sizeof(AppendRelInfo *) * new_size);
+		MemSet(root->append_rel_array + root->simple_rel_array_size,
+			   0, sizeof(AppendRelInfo *) * add_size);
+	}
+	else
+	{
+		root->append_rel_array = (AppendRelInfo **)
+									palloc0(sizeof(AppendRelInfo *) *
+											new_size);
+	}
+
+	root->simple_rel_array_size = new_size;
+}
+
+/*
  * build_simple_rel
  *	  Construct a new RelOptInfo for a base relation or 'other' relation.
  */
@@ -195,6 +239,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->joininfo = NIL;
 	rel->has_eclass_joins = false;
 	rel->consider_partitionwise_join = false;	/* might get changed later */
+	rel->top_parent_relids = NULL;	/* might be changed later */
 	rel->part_scheme = NULL;
 	rel->nparts = 0;
 	rel->boundinfo = NULL;
@@ -203,6 +248,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->partexprs = NULL;
 	rel->nullable_partexprs = NULL;
 	rel->partitioned_child_rels = NIL;
+	rel->inh_root_parent = 0; /* might be changed later */
 
 	/*
 	 * Pass top parent's relids down the inheritance hierarchy. If the parent
@@ -216,16 +262,25 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			rel->top_parent_relids = parent->top_parent_relids;
 		else
 			rel->top_parent_relids = bms_copy(parent->relids);
+
+		/*
+		 * For inheritance child relations, we also set inh_root_parent.
+		 * Note that 'parent' might itself be a child (a sub-partitioned
+		 * partition), in which case we simply use its value of
+		 * inh_root_parent.
+		 */
+		if (parent->rtekind == RTE_RELATION)
+			rel->inh_root_parent = parent->inh_root_parent > 0 ?
+										parent->inh_root_parent :
+										parent->relid;
 	}
-	else
-		rel->top_parent_relids = NULL;
 
 	/* Check type of rtable entry */
 	switch (rte->rtekind)
 	{
 		case RTE_RELATION:
 			/* Table --- retrieve statistics from the system catalogs */
-			get_relation_info(root, rte->relid, rte->inh, rel);
+			get_relation_info(root, rte, rel);
 			break;
 		case RTE_SUBQUERY:
 		case RTE_FUNCTION:
@@ -272,52 +327,6 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	if (rte->securityQuals)
 		root->qual_security_level = Max(root->qual_security_level,
 										list_length(rte->securityQuals));
-
-	/*
-	 * If this rel is an appendrel parent, recurse to build "other rel"
-	 * RelOptInfos for its children.  They are "other rels" because they are
-	 * not in the main join tree, but we will need RelOptInfos to plan access
-	 * to them.
-	 */
-	if (rte->inh)
-	{
-		ListCell   *l;
-		int			nparts = rel->nparts;
-		int			cnt_parts = 0;
-
-		if (nparts > 0)
-			rel->part_rels = (RelOptInfo **)
-				palloc(sizeof(RelOptInfo *) * nparts);
-
-		foreach(l, root->append_rel_list)
-		{
-			AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
-			RelOptInfo *childrel;
-
-			/* append_rel_list contains all append rels; ignore others */
-			if (appinfo->parent_relid != relid)
-				continue;
-
-			childrel = build_simple_rel(root, appinfo->child_relid,
-										rel);
-
-			/* Nothing more to do for an unpartitioned table. */
-			if (!rel->part_scheme)
-				continue;
-
-			/*
-			 * The order of partition OIDs in append_rel_list is the same as
-			 * the order in the PartitionDesc, so the order of part_rels will
-			 * also match the PartitionDesc.  See expand_partitioned_rtentry.
-			 */
-			Assert(cnt_parts < nparts);
-			rel->part_rels[cnt_parts] = childrel;
-			cnt_parts++;
-		}
-
-		/* We should have seen all the child partitions. */
-		Assert(cnt_parts == nparts);
-	}
 
 	return rel;
 }
@@ -1725,6 +1734,9 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		joinrel->partexprs[cnt] = partexpr;
 		joinrel->nullable_partexprs[cnt] = nullable_partexpr;
 	}
+
+	/* Partitions will be added by try_partitionwise_join. */
+	joinrel->live_parts = NULL;
 }
 
 /*

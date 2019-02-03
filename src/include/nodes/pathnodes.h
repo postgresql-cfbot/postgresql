@@ -15,6 +15,7 @@
 #define PATHNODES_H
 
 #include "access/sdir.h"
+#include "access/tupdesc.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "nodes/params.h"
@@ -325,9 +326,6 @@ struct PlannerInfo
 	Index		qual_security_level;	/* minimum security_level for quals */
 	/* Note: qual_security_level is zero if there are no securityQuals */
 
-	InheritanceKind inhTargetKind;	/* indicates if the target relation is an
-									 * inheritance child or partition or a
-									 * partitioned table */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */
 	bool		hasLateralRTEs; /* true if any RTEs are marked LATERAL */
 	bool		hasHavingQual;	/* true if havingQual was non-null */
@@ -348,6 +346,41 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/*
+	 * The following fields are set during query planning portion of an
+	 * inherited UPDATE/DELETE operation.
+	 */
+	bool		inherited_update;	/* UPDATE/DELETE on inheritance parent? */
+
+	/*
+	 * This stores the original version of the query's targetlist that's
+	 * not modified by the planner.
+	 */
+	List	   *unexpanded_tlist;
+
+	/*
+	 * Array containing simple_rel_array_size elements, indexed by rangetable
+	 * index (entry 0 is wasted like simple_rel_array).  Only elements
+	 * corresponding to individual inheritance child target relations are
+	 * non-NULL.  Content of each PlannerInfo is mostly same as the parent
+	 * PlannerInfo, except for few fields such as the parse tree which is
+	 * a translated copy of the parent's parse tree, EC list which contain
+	 * child member expressions, etc.
+	 */
+	struct PlannerInfo **inh_target_child_roots;
+
+	/* List of RT indexes of child target relations. */
+	List	   *inh_target_child_rels;
+
+	/*
+	 * RelOptInfos corresponding to each child target rel.  For leaf children,
+	 * it's the RelOptInfo representing the output of make_rel_from_joinlist()
+	 * called with the parent rel in the original join tree replaced by a
+	 * given leaf child.  For non-leaf children, it's the baserel RelOptInfo
+	 * itself, left as a placeholder.
+	 */
+	List	   *inh_target_child_path_rels;
 };
 
 
@@ -703,11 +736,32 @@ typedef struct RelOptInfo
 	int			nparts;			/* number of partitions */
 	struct PartitionBoundInfoData *boundinfo;	/* Partition bounds */
 	List	   *partition_qual; /* partition constraint */
+	Oid		   *part_oids;		/* partition OIDs */
 	struct RelOptInfo **part_rels;	/* Array of RelOptInfos of partitions,
 									 * stored in the same order of bounds */
+	Bitmapset  *live_parts;		/* Indexes into part_rels of the non-NULL
+								 * RelOptInfos of unpruned partitions; exists
+								 * to avoid having to iterate over the entire
+								 * part_rels array to filter NULL entries. */
 	List	  **partexprs;		/* Non-nullable partition key expressions. */
 	List	  **nullable_partexprs; /* Nullable partition key expressions. */
 	List	   *partitioned_child_rels; /* List of RT indexes. */
+
+	/*
+	 * For inheritance children, this is the RT index of inheritance table
+	 * mentioned in the query from which this relation originated.
+	 * top_parent_relids cannot be used for this, because if the inheritance
+	 * root table is itself under UNION ALL, top_parent_relids contains the
+	 * RT index of UNION ALL parent subquery.
+	 */
+	Index		inh_root_parent;
+
+	/*
+	 * Set only if this is an inheritance parent relation.  This information
+	 * is needed when initializing the planning info for children.
+	 */
+	TupleDesc	tupdesc;		/* A "copy" of the table's tuple desriptor */
+	Oid			reltype;		/* Table's reltype */
 } RelOptInfo;
 
 /*

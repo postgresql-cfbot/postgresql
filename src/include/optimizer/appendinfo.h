@@ -17,9 +17,10 @@
 #include "nodes/pathnodes.h"
 #include "utils/relcache.h"
 
-extern AppendRelInfo *make_append_rel_info(Relation parentrel,
-					 Relation childrel,
-					 Index parentRTindex, Index childRTindex);
+extern AppendRelInfo *make_append_rel_info(RelOptInfo *parent,
+					 RangeTblEntry *parentrte,
+					 TupleDesc childdesc, Oid childoid, Oid childtype,
+					 Index childRTindex);
 extern Node *adjust_appendrel_attrs(PlannerInfo *root, Node *node,
 					   int nappinfos, AppendRelInfo **appinfos);
 extern Node *adjust_appendrel_attrs_multilevel(PlannerInfo *root, Node *node,

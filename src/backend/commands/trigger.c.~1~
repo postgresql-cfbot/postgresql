@@ -206,16 +206,6 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 							RelationGetRelationName(rel)),
 					 errdetail("Tables cannot have INSTEAD OF triggers.")));
 	}
-	else if (rel->rd_rel->relkind == RELKIND_MATVIEW)
-	{
-		/* Materialized views can have only AFTER triggers */
-		if (stmt->timing != TRIGGER_TYPE_AFTER)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a materialized view",
-							RelationGetRelationName(rel)),
-					 errdetail("Materialized views can have only AFTER triggers.")));
-	}
 	else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		/* Partitioned tables can't have INSTEAD OF triggers */
@@ -315,7 +305,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, or materialized view",
+				 errmsg("\"%s\" is not a table or view",
 						RelationGetRelationName(rel))));
 
 	if (!allowSystemTableMods && IsSystemRelation(rel))
@@ -1521,12 +1511,11 @@ RemoveTriggerById(Oid trigOid)
 
 	if (rel->rd_rel->relkind != RELKIND_RELATION &&
 		rel->rd_rel->relkind != RELKIND_VIEW &&
-		rel->rd_rel->relkind != RELKIND_MATVIEW &&
 		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
 		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, or foreign table",
+				 errmsg("\"%s\" is not a table, view, or foreign table",
 						RelationGetRelationName(rel))));
 
 	if (!allowSystemTableMods && IsSystemRelation(rel))
@@ -1628,12 +1617,11 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
 
 	/* only tables and views can have triggers */
 	if (form->relkind != RELKIND_RELATION && form->relkind != RELKIND_VIEW &&
-		form->relkind != RELKIND_MATVIEW &&
 		form->relkind != RELKIND_FOREIGN_TABLE &&
 		form->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, or foreign table",
+				 errmsg("\"%s\" is not a table, view, or foreign table",
 						rv->relname)));
 
 	/* you must own the table to rename one of its triggers */

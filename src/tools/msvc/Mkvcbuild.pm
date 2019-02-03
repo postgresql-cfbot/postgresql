@@ -119,7 +119,7 @@ sub mkvcbuild
 	our @pgcommonallfiles = qw(
 	  base64.c config_info.c controldata_utils.c exec.c file_perm.c ip.c
 	  keywords.c kwlookup.c link-canary.c md5.c
-	  pg_lzcompress.c pgfnames.c psprintf.c relpath.c rmtree.c
+	  zpq_stream.c pg_lzcompress.c pgfnames.c psprintf.c relpath.c rmtree.c
 	  saslprep.c scram-common.c string.c unicode_norm.c username.c
 	  wait_error.c);
 

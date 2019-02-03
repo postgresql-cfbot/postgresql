@@ -2365,81 +2365,37 @@ InitializeLDAPConnection(Port *port, LDAP **ldap)
 		char	   *uris = NULL;
 
 		/*
-		 * If the user provided no hostname, we can ask OpenLDAP to try to
-		 * find one by extracting a domain name from the base DN and then
-		 * using a DSN SRV record for _ldap._tcp.<domain>.  If one or more
-		 * such SRV records have been defined, we can get a hostname and
-		 * port.  The same convention is used by the OpenLDAP command line
-		 * tools.
+		 * We have a space-separated list of hostnames.  Convert it
+		 * to a space-separated list of URIs.
 		 */
-		if (!hostnames || hostnames[0] == '\0')
+		do
 		{
-			char	   *domain;
-			char	   *hostlist;
-			char	   *end;
+			char	   *hostname;
+			size_t		hostname_size;
+			char	   *new_uris;
 
-			/* ou=blah,dc=foo,dc=bar -> foo.bar */
-			if (ldap_dn2domain(port->hba->ldapbasedn, &domain))
-			{
-				ereport(LOG,
-						(errmsg("could not extract domain name from basedn")));
-				return STATUS_ERROR;
-			}
-			/* Look up host:port using DNS SRV for _ldap._tcp.foo.bar */
-			if (ldap_domain2hostlist(domain, &hostlist))
-			{
-				ereport(LOG,
-						(errmsg("could not look up a hostlist for %s",
-								domain)));
-				ldap_memfree(domain);
-				return STATUS_ERROR;
-			}
-			ldap_memfree(domain);
-			/*
-			 * OpenLDAP already ordered by weight and shuffled equal weight
-			 * servers, so we'll just take the first one.  The string is
-			 * of the format "host:port", separated by spaces.
-			 */
-			if ((end = strchr(hostlist, ' ')))
-				*end = '\0';
-			uris = psprintf("%s://%s", scheme, hostlist);
-			ldap_memfree(hostlist);
-		}
-		else
-		{
-			/*
-			 * We have a space-separated list of hostnames.  Convert it
-			 * to a space-separated list of URIs.
-			 */
-			do
-			{
-				char	   *hostname;
-				size_t		hostname_size;
-				char	   *new_uris;
+			/* Find the leading hostname. */
+			hostname_size = strcspn(hostnames, " ");
+			hostname = pnstrdup(hostnames, hostname_size);
 
-				/* Find the leading hostname. */
-				hostname_size = strcspn(hostnames, " ");
-				hostname = pnstrdup(hostnames, hostname_size);
+			/* Append a URI for this hostname. */
+			new_uris = psprintf("%s%s%s://%s:%d",
+								uris ? uris : "",
+								uris ? " " : "",
+								scheme,
+								hostname,
+								port->hba->ldapport);
 
-				/* Append a URI for this hostname. */
-				new_uris = psprintf("%s%s%s://%s:%d",
-									uris ? uris : "",
-									uris ? " " : "",
-									scheme,
-									hostname,
-									port->hba->ldapport);
+			pfree(hostname);
+			if (uris)
+				pfree(uris);
+			uris = new_uris;
 
-				pfree(hostname);
-				if (uris)
-					pfree(uris);
-				uris = new_uris;
-
-				/* Step over this hostname and any spaces. */
-				hostnames += hostname_size;
-				while (*hostnames == ' ')
-					++hostnames;
-			} while (*hostnames);
-		}
+			/* Step over this hostname and any spaces. */
+			hostnames += hostname_size;
+			while (*hostnames == ' ')
+				++hostnames;
+		} while (*hostnames);
 
 		r = ldap_initialize(ldap, uris);
 		pfree(uris);
@@ -2589,23 +2545,12 @@ CheckLDAPAuth(Port *port)
 	int			r;
 	char	   *fulluser;
 
-#ifdef HAVE_LDAP_INITIALIZE
-	/* OpenLDAP allows empty hostname, if we have a basedn. */
-	if ((!port->hba->ldapserver || port->hba->ldapserver[0] == '\0') &&
-		(!port->hba->ldapbasedn || port->hba->ldapbasedn[0] == '\0'))
-	{
-		ereport(LOG,
-				(errmsg("LDAP server not specified, and no ldapbasedn")));
-		return STATUS_ERROR;
-	}
-#else
 	if (!port->hba->ldapserver || port->hba->ldapserver[0] == '\0')
 	{
 		ereport(LOG,
 				(errmsg("LDAP server not specified")));
 		return STATUS_ERROR;
 	}
-#endif
 
 	if (port->hba->ldapport == 0)
 	{

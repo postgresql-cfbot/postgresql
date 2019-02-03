@@ -1672,6 +1672,16 @@ ldap[s]://<replaceable>host</replaceable>[:<replaceable>port</replaceable>]/<rep
    </para>
 
    <para>
+     If <productname>PostgreSQL</productname> was compiled with OpenLDAP as
+     the LDAP client library, the <literal>ldapserver</literal> setting may be
+     omitted.  In that case, the hostname and port are looked up via DNS
+     service records.  The "SRV" records for the service
+     <literal>_ldap._tcp.domain</literal> are requested, where
+     <literal>domain</literal> is extracted from <literal>basedn</literal>.
+     This follows a convention used by OpenLDAP command-line tools.
+   </para>
+
+   <para>
     Here is an example for a simple-bind LDAP configuration:
 <programlisting>
 host ... ldap ldapserver=ldap.example.net ldapprefix="cn=" ldapsuffix=", dc=example, dc=net"
@@ -1713,6 +1723,15 @@ host ... ldap ldapurl="ldap://ldap.example.net/dc=example,dc=net?uid?sub"
     user ID or email address:
 <programlisting>
 host ... ldap ldapserver=ldap.example.net ldapbasedn="dc=example, dc=net" ldapsearchfilter="(|(uid=$username)(mail=$username))"
+</programlisting>
+   </para>
+
+   <para>
+    Here is an example for a search+bind configuration that uses DNS SRV
+    discovery to find the hostname and port for the LDAP service using the
+    domain name <literal>example.net</literal>":
+<programlisting>
+host ... ldap ldapurl="ldap:///ou=people,dc=example,dc=net?cn"
 </programlisting>
    </para>
 

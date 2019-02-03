@@ -497,9 +497,6 @@ if test "$GCC" = yes -a "$ICC" = no; then
   # Disable FP optimizations that cause various errors on gcc 4.5+ or maybe 4.6+
   PGAC_PROG_CC_CFLAGS_OPT([-fexcess-precision=standard])
   PGAC_PROG_CXX_CFLAGS_OPT([-fexcess-precision=standard])
-  # Enable use of the POPCNT instruction
-  PGAC_PROG_CC_CFLAGS_OPT([-mpopcnt])
-  PGAC_PROG_CXX_CFLAGS_OPT([-mpopcnt])
   # Optimization flags for specific files that benefit from vectorization
   PGAC_PROG_CC_VAR_OPT(CFLAGS_VECTOR, [-funroll-loops])
   PGAC_PROG_CC_VAR_OPT(CFLAGS_VECTOR, [-ftree-vectorize])
@@ -1485,12 +1482,6 @@ PGAC_C_BUILTIN_BSWAP16
 PGAC_C_BUILTIN_BSWAP32
 PGAC_C_BUILTIN_BSWAP64
 PGAC_C_BUILTIN_CONSTANT_P
-PGAC_C_BUILTIN_POPCOUNT
-PGAC_C_BUILTIN_POPCOUNTL
-PGAC_C_BUILTIN_CTZ
-PGAC_C_BUILTIN_CTZL
-PGAC_C_BUILTIN_CLZ
-PGAC_C_BUILTIN_CLZL
 PGAC_C_BUILTIN_UNREACHABLE
 PGAC_C_COMPUTED_GOTO
 PGAC_STRUCT_TIMEZONE

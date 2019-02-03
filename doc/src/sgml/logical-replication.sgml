@@ -522,12 +522,8 @@
   </para>
 
   <para>
-   To create a subscription, the user must be a superuser.
-  </para>
-
-  <para>
-   The subscription apply process will run in the local database with the
-   privileges of a superuser.
+   To add tables to a subscription, the user must have ownership rights on the
+   table.
   </para>
 
   <para>

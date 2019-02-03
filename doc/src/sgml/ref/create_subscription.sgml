@@ -24,6 +24,7 @@ PostgreSQL documentation
 CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceable>
     CONNECTION '<replaceable class="parameter">conninfo</replaceable>'
     PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...]
+    [ FOR TABLE <replaceable class="parameter">table_name</replaceable> [, ...]
     [ WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 </synopsis>
  </refsynopsisdiv>
@@ -84,6 +85,16 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     <listitem>
      <para>
       Names of the publications on the publisher to subscribe to.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>FOR TABLE</literal></term>
+    <listitem>
+     <para>
+      Specifies a list of tables to add to the subscription. All tables listed in clause
+      must be present in publication.
      </para>
     </listitem>
    </varlistentry>

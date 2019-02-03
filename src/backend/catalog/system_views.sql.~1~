@@ -906,27 +906,6 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
 		LEFT JOIN pg_database D ON S.datid = D.oid;
 
-CREATE VIEW pg_user_subscriptions AS
-    SELECT
-        S.oid,
-		S.subdbid,
-        S.subname    AS subname,
-        CASE WHEN S.subowner = 0 THEN
-            'public'
-        ELSE
-            A.rolname
-        END AS usename,
-		S.subenabled,
-        CASE WHEN (S.subowner <> 0 AND A.rolname = current_user)
-                    OR (SELECT rolsuper FROM pg_authid WHERE rolname = current_user)
-                    THEN S.subconninfo
-                 ELSE NULL END AS subconninfo,
-		S.subslotname,
-		S.subsynccommit,
-		S.subpublications
-    FROM pg_subscription S
-        LEFT JOIN pg_authid A ON (A.oid = S.subowner);
-
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,
@@ -959,8 +938,7 @@ REVOKE ALL ON pg_replication_origin_status FROM public;
 
 -- All columns of pg_subscription except subconninfo are readable.
 REVOKE ALL ON pg_subscription FROM public;
-GRANT SELECT (tableoid, oid, subdbid, subname,
-	subowner, subenabled, subslotname, subpublications, subsynccommit)
+GRANT SELECT (subdbid, subname, subowner, subenabled, subslotname, subpublications)
     ON pg_subscription TO public;
 
 

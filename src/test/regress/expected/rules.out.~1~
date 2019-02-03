@@ -2243,25 +2243,6 @@ pg_user_mappings| SELECT u.oid AS umid,
    FROM ((pg_user_mapping u
      JOIN pg_foreign_server s ON ((u.umserver = s.oid)))
      LEFT JOIN pg_authid a ON ((a.oid = u.umuser)));
-pg_user_subscriptions| SELECT s.oid,
-    s.subdbid,
-    s.subname,
-        CASE
-            WHEN (s.subowner = (0)::oid) THEN 'public'::name
-            ELSE a.rolname
-        END AS usename,
-    s.subenabled,
-        CASE
-            WHEN (((s.subowner <> (0)::oid) AND (a.rolname = CURRENT_USER)) OR ( SELECT pg_authid.rolsuper
-               FROM pg_authid
-              WHERE (pg_authid.rolname = CURRENT_USER))) THEN s.subconninfo
-            ELSE NULL::text
-        END AS subconninfo,
-    s.subslotname,
-    s.subsynccommit,
-    s.subpublications
-   FROM (pg_subscription s
-     LEFT JOIN pg_authid a ON ((a.oid = s.subowner)));
 pg_views| SELECT n.nspname AS schemaname,
     c.relname AS viewname,
     pg_get_userbyid(c.relowner) AS viewowner,

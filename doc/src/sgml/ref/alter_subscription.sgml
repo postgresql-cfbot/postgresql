@@ -24,6 +24,9 @@ PostgreSQL documentation
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> CONNECTION '<replaceable>conninfo</replaceable>'
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">set_publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUBLICATION [ WITH ( <replaceable class="parameter">refresh_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ADD TABLE <replaceable class="parameter">table_name</replaceable> [, ...]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET TABLE <replaceable class="parameter">table_name</replaceable> [, ...]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DROP TABLE <replaceable class="parameter">table_name</replaceable> [, ...]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DISABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
@@ -44,9 +47,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
   <para>
    You must own the subscription to use <command>ALTER SUBSCRIPTION</command>.
    To alter the owner, you must also be a direct or indirect member of the
-   new owning role. The new owner has to be a superuser.
-   (Currently, all subscription owners must be superusers, so the owner checks
-   will be bypassed in practice.  But this might change in the future.)
+   new owning role.
   </para>
  </refsect1>
 
@@ -133,6 +134,35 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
         </listitem>
        </varlistentry>
       </variablelist>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ADD TABLE <replaceable class="parameter">table_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>ADD TABLE</literal> clauses will add new table in subscription, table must be
+      present in publication.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET TABLE <replaceable class="parameter">table_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>SET TABLE</literal> clause will replace the list of tables in
+      the publication with the specified one.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP TABLE <replaceable class="parameter">table_name</replaceable></literal></term>
+    <listitem>
+     <para>
+       The <literal>DROP TABLE</literal> clauses will remove table from subscription.
      </para>
     </listitem>
    </varlistentry>

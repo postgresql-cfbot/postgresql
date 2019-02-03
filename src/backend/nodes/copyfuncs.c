@@ -4612,7 +4612,7 @@ _copyCreateSubscriptionStmt(const CreateSubscriptionStmt *from)
 	COPY_STRING_FIELD(conninfo);
 	COPY_NODE_FIELD(publication);
 	COPY_NODE_FIELD(options);
-
+	COPY_NODE_FIELD(tables);
 	return newnode;
 }
 
@@ -4625,6 +4625,7 @@ _copyAlterSubscriptionStmt(const AlterSubscriptionStmt *from)
 	COPY_STRING_FIELD(subname);
 	COPY_STRING_FIELD(conninfo);
 	COPY_NODE_FIELD(publication);
+	COPY_NODE_FIELD(tables);
 	COPY_NODE_FIELD(options);
 
 	return newnode;

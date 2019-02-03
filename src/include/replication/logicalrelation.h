@@ -38,5 +38,7 @@ extern void logicalrep_rel_close(LogicalRepRelMapEntry *rel,
 
 extern void logicalrep_typmap_update(LogicalRepTyp *remotetyp);
 extern char *logicalrep_typmap_gettypname(Oid remoteid);
+void logicalrep_relmap_invalidate_cb2(Datum arg, int cacheid,
+								uint32 hashvalue);
 
 #endif							/* LOGICALRELATION_H */

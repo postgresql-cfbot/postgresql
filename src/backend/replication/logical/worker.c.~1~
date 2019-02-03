@@ -1726,9 +1726,6 @@ ApplyWorkerMain(Datum main_arg)
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELMAP,
 								  invalidate_syncing_table_states,
 								  (Datum) 0);
-	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELMAP,
-								  logicalrep_relmap_invalidate_cb2,
-								  (Datum) 0);
 
 	/* Build logical replication streaming options. */
 	options.logical = true;

@@ -204,6 +204,8 @@ typedef WalReceiverConn *(*walrcv_connect_fn) (const char *conninfo, bool logica
 											   const char *appname,
 											   char **err);
 typedef void (*walrcv_check_conninfo_fn) (const char *conninfo);
+typedef void (*walrcv_connstr_check_fn) (const char *connstr);
+typedef void (*walrcv_security_check_fn) (WalReceiverConn *conn);
 typedef char *(*walrcv_get_conninfo_fn) (WalReceiverConn *conn);
 typedef void (*walrcv_get_senderinfo_fn) (WalReceiverConn *conn,
 										  char **sender_host,
@@ -237,6 +239,8 @@ typedef struct WalReceiverFunctionsType
 {
 	walrcv_connect_fn walrcv_connect;
 	walrcv_check_conninfo_fn walrcv_check_conninfo;
+	walrcv_connstr_check_fn walrcv_connstr_check;
+	walrcv_security_check_fn walrcv_security_check;
 	walrcv_get_conninfo_fn walrcv_get_conninfo;
 	walrcv_get_senderinfo_fn walrcv_get_senderinfo;
 	walrcv_identify_system_fn walrcv_identify_system;
@@ -256,6 +260,10 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_connect(conninfo, logical, appname, err)
 #define walrcv_check_conninfo(conninfo) \
 	WalReceiverFunctions->walrcv_check_conninfo(conninfo)
+#define walrcv_connstr_check(connstr) \
+	WalReceiverFunctions->walrcv_connstr_check(connstr)
+#define walrcv_security_check(conn) \
+	WalReceiverFunctions->walrcv_security_check(conn)
 #define walrcv_get_conninfo(conn) \
 	WalReceiverFunctions->walrcv_get_conninfo(conn)
 #define walrcv_get_senderinfo(conn, sender_host, sender_port) \

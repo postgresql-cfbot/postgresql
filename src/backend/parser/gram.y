@@ -395,7 +395,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				execute_param_clause using_clause returning_clause
 				opt_enum_val_list enum_val_list table_func_column_list
 				create_generic_options alter_generic_options
-				relation_expr_list dostmt_opt_list
+				relation_expr_list remote_relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				publication_name_list
@@ -405,6 +405,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
 %type <node>	opt_publication_for_tables publication_for_tables
+%type <node>	opt_subscription_for_tables subscription_for_tables
 %type <value>	publication_name_item
 
 %type <list>	opt_fdw_options fdw_options
@@ -489,6 +490,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	table_ref
 %type <jexpr>	joined_table
 %type <range>	relation_expr
+%type <range>	remote_relation_expr
 %type <range>	relation_expr_opt_alias
 %type <node>	tablesample_clause opt_repeatable_clause
 %type <target>	target_el set_target insert_column_item
@@ -9517,15 +9519,31 @@ AlterPublicationStmt:
  *****************************************************************************/
 
 CreateSubscriptionStmt:
-			CREATE SUBSCRIPTION name CONNECTION Sconst PUBLICATION publication_name_list opt_definition
+			CREATE SUBSCRIPTION name CONNECTION Sconst PUBLICATION publication_name_list opt_subscription_for_tables opt_definition
 				{
 					CreateSubscriptionStmt *n =
 						makeNode(CreateSubscriptionStmt);
 					n->subname = $3;
 					n->conninfo = $5;
 					n->publication = $7;
-					n->options = $8;
+					if ($8 != NULL)
+					{
+						/* FOR TABLE */
+						n->tables = (List *)$8;
+					}
+					n->options = $9;
 					$$ = (Node *)n;
+				}
+		;
+opt_subscription_for_tables:
+			subscription_for_tables					{ $$ = $1; }
+			| /* EMPTY */							{ $$ = NULL; }
+		;
+
+subscription_for_tables:
+			FOR TABLE remote_relation_expr_list
+				{
+					$$ = (Node *) $3;
 				}
 		;
 
@@ -9605,6 +9623,37 @@ AlterSubscriptionStmt:
 					n->subname = $3;
 					n->options = list_make1(makeDefElem("enabled",
 											(Node *)makeInteger(false), @1));
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name ADD_P TABLE remote_relation_expr_list opt_definition
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_ADD_TABLE;
+					n->subname = $3;
+					n->tables = $6;
+					n->options = $7;
+					n->tableAction = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name DROP TABLE remote_relation_expr_list
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_DROP_TABLE;
+					n->subname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name SET TABLE remote_relation_expr_list
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_SET_TABLE;
+					n->subname = $3;
+					n->tables = $6;
+					n->tableAction = DEFELEM_SET;
 					$$ = (Node *)n;
 				}
 		;
@@ -12045,6 +12094,23 @@ relation_expr_list:
 			relation_expr							{ $$ = list_make1($1); }
 			| relation_expr_list ',' relation_expr	{ $$ = lappend($1, $3); }
 		;
+
+remote_relation_expr:
+			qualified_name
+				{
+					/* no inheritance */
+					$$ = $1;
+					$$->inh = false;
+					$$->alias = NULL;
+				}
+		;
+
+
+remote_relation_expr_list:
+			remote_relation_expr                           { $$ = list_make1($1); }
+			| remote_relation_expr_list ',' remote_relation_expr  { $$ = lappend($1, $3); }
+		;
+
 
 
 /*

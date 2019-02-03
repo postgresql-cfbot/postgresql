@@ -33,11 +33,6 @@ SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
 -- fail - name already exists
 CREATE SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false);
 
--- fail - must be superuser
-SET SESSION AUTHORIZATION 'regress_subscription_user2';
-CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION foo WITH (connect = false);
-SET SESSION AUTHORIZATION 'regress_subscription_user';
-
 -- fail - invalid option combinations
 CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false, copy_data = true);
 CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false, enabled = true);

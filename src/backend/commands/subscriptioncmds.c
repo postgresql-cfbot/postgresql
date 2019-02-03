@@ -30,6 +30,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 
+#include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/subscriptioncmds.h"
@@ -322,6 +323,13 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	char		originname[NAMEDATALEN];
 	bool		create_slot;
 	List	   *publications;
+	AclResult	aclresult;
+
+	/* must have CREATE privilege on database */
+	aclresult = pg_database_aclcheck(MyDatabaseId, GetUserId(), ACL_CREATE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_DATABASE,
+					   get_database_name(MyDatabaseId));
 
 	/*
 	 * Parse and check options.
@@ -341,11 +349,6 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	 */
 	if (create_slot)
 		PreventInTransactionBlock(isTopLevel, "CREATE SUBSCRIPTION ... WITH (create_slot = true)");
-
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to create subscriptions"))));
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
@@ -375,6 +378,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 
 	/* Check the connection info string. */
 	walrcv_check_conninfo(conninfo);
+	walrcv_connstr_check(conninfo);
 
 	/* Everything ok, form a new tuple. */
 	memset(values, 0, sizeof(values));
@@ -411,6 +415,13 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	snprintf(originname, sizeof(originname), "pg_%u", subid);
 	replorigin_create(originname);
 
+
+	if (stmt->tables && !connect)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("cannot create subscription with connect = false and FOR TABLE")));
+	}
 	/*
 	 * Connect to remote side to execute requested commands and fetch table
 	 * info.
@@ -423,6 +434,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 		List	   *tables;
 		ListCell   *lc;
 		char		table_state;
+		List *tablesiods = NIL;
 
 		/* Try to connect to the publisher. */
 		wrconn = walrcv_connect(conninfo, true, stmt->subname, &err);
@@ -438,25 +450,59 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 			 */
 			table_state = copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
 
+			walrcv_security_check(wrconn);
 			/*
 			 * Get the table list from publisher and build local table status
 			 * info.
 			 */
 			tables = fetch_table_list(wrconn, publications);
-			foreach(lc, tables)
-			{
-				RangeVar   *rv = (RangeVar *) lfirst(lc);
-				Oid			relid;
+			if (stmt->tables)
+				{
+					foreach(lc, tables)
+					{
+						RangeVar   *rv = (RangeVar *) lfirst(lc);
+						Oid         		relid;
 
-				relid = RangeVarGetRelid(rv, AccessShareLock, false);
+						relid = RangeVarGetRelid(rv, NoLock, true);
+						tablesiods = lappend_oid(tablesiods, relid);
+					}
+					foreach(lc, stmt->tables)
+					{
+						RangeVar   *rv = (RangeVar *) lfirst(lc);
+						Oid                     relid;
 
-				/* Check for supported relkind. */
-				CheckSubscriptionRelkind(get_rel_relkind(relid),
-										 rv->schemaname, rv->relname);
+						relid = RangeVarGetRelid(rv, AccessShareLock, false);
+						if (!pg_class_ownercheck(relid, GetUserId()))
+						aclcheck_error(ACLCHECK_NOT_OWNER,
+							get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+						CheckSubscriptionRelkind(get_rel_relkind(relid),
+												rv->schemaname, rv->relname);
+						if (!list_member_oid(tablesiods, relid))
+							ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+									errmsg("table \"%s.%s\" not preset in publication",
+											get_namespace_name(get_rel_namespace(relid)),
+											get_rel_name(relid))));
+						AddSubscriptionRelState(subid, relid, table_state,
+												InvalidXLogRecPtr);
+					}
+				}
+			else
+				foreach(lc, tables)
+				{
+					RangeVar   *rv = (RangeVar *) lfirst(lc);
+					Oid                     relid;
 
-				AddSubscriptionRelState(subid, relid, table_state,
+					relid = RangeVarGetRelid(rv, AccessShareLock, false);
+					if (!pg_class_ownercheck(relid, GetUserId()))
+						aclcheck_error(ACLCHECK_NOT_OWNER,
+						get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+					CheckSubscriptionRelkind(get_rel_relkind(relid),
+											rv->schemaname, rv->relname);
+					table_state = copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
+					AddSubscriptionRelState(subid, relid, table_state,
 										InvalidXLogRecPtr);
-			}
+				}
 
 			/*
 			 * If requested, create permanent slot for the subscription. We
@@ -501,6 +547,242 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	InvokeObjectPostCreateHook(SubscriptionRelationId, subid, 0);
 
 	return myself;
+}
+
+static void
+AlterSubscription_set_table(Subscription *sub, List *tables, bool copy_data)
+{
+	char	   *err;
+	List	   *pubrel_names;
+	List	   *subrel_states;
+	Oid		   *subrel_local_oids;
+	Oid		   *pubrel_local_oids;
+	Oid		   *stmt_local_oids;
+	ListCell   *lc;
+	int			off;
+
+	/* Load the library providing us libpq calls. */
+	load_file("libpqwalreceiver", false);
+
+	/* Try to connect to the publisher. */
+	wrconn = walrcv_connect(sub->conninfo, true, sub->name, &err);
+	if (!wrconn)
+		ereport(ERROR,
+				(errmsg("could not connect to the publisher: %s", err)));
+
+	/* Get the table list from publisher. */
+	pubrel_names = fetch_table_list(wrconn, sub->publications);
+
+	/* We are done with the remote side, close connection. */
+	walrcv_disconnect(wrconn);
+
+	/* Get local table list. */
+	subrel_states = GetSubscriptionRelations(sub->oid);
+
+	/*
+	 * Build qsorted array of local table oids for faster lookup. This can
+	 * potentially contain all tables in the database so speed of lookup is
+	 * important.
+	 */
+	subrel_local_oids = palloc(list_length(subrel_states) * sizeof(Oid));
+	off = 0;
+	foreach(lc, subrel_states)
+	{
+		SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc);
+
+		subrel_local_oids[off++] = relstate->relid;
+	}
+	qsort(subrel_local_oids, list_length(subrel_states),
+		  sizeof(Oid), oid_cmp);
+
+	stmt_local_oids = palloc(list_length(tables) * sizeof(Oid));
+	off = 0;
+	foreach(lc, tables)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid                     relid;
+
+		relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+		stmt_local_oids[off++] = relid;
+	}
+	qsort(stmt_local_oids, list_length(tables),
+		  sizeof(Oid), oid_cmp);
+
+	pubrel_local_oids = palloc(list_length(pubrel_names) * sizeof(Oid));
+	off = 0;
+	foreach(lc, tables)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid			relid;
+
+		relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+		pubrel_local_oids[off++] = relid;
+	}
+	qsort(pubrel_local_oids, list_length(pubrel_names),
+		sizeof(Oid), oid_cmp);
+
+	/*
+	 * Walk over the remote tables and try to match them to locally known
+	 * tables. If the table is not known locally create a new state for it.
+	 *
+	 * Also builds array of local oids of remote tables for the next step.
+	 */
+
+
+	foreach(lc, tables)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid			relid;
+
+		relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+		/* Check for supported relkind. */
+		CheckSubscriptionRelkind(get_rel_relkind(relid),
+								 rv->schemaname, rv->relname);
+
+		if (!bsearch(&relid, subrel_local_oids,
+					 list_length(subrel_states), sizeof(Oid), oid_cmp) &&
+			bsearch(&relid, pubrel_local_oids,
+					 list_length(pubrel_names), sizeof(Oid), oid_cmp))
+		{
+			AddSubscriptionRelState(sub->oid, relid,
+									copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
+									InvalidXLogRecPtr);
+			ereport(DEBUG1,
+					(errmsg("table \"%s.%s\" added to subscription \"%s\"",
+							rv->schemaname, rv->relname, sub->name)));
+		}
+	}
+
+	/*
+	 * Next remove state for tables we should not care about anymore using the
+	 * data we collected above
+	 */
+
+	for (off = 0; off < list_length(subrel_states); off++)
+	{
+		Oid			relid = subrel_local_oids[off];
+
+		if (!bsearch(&relid, stmt_local_oids,
+					 list_length(tables), sizeof(Oid), oid_cmp))
+		{
+			RemoveSubscriptionRel(sub->oid, relid);
+
+			logicalrep_worker_stop_at_commit(sub->oid, relid);
+
+			ereport(DEBUG1,
+					(errmsg("table \"%s.%s\" removed from subscription \"%s\"",
+							get_namespace_name(get_rel_namespace(relid)),
+							get_rel_name(relid),
+							sub->name)));
+		}
+	}
+}
+
+static void
+AlterSubscription_drop_table(Subscription *sub, List *tables)
+{
+	List	   *subrel_states;
+	Oid		   *subrel_local_oids;
+	ListCell   *lc;
+	int			off;
+
+	Assert(list_length(tables) > 0);
+	subrel_states = GetSubscriptionRelations(sub->oid);
+	subrel_local_oids = palloc(list_length(subrel_states) * sizeof(Oid));
+	off = 0;
+	foreach(lc, subrel_states)
+	{
+		SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc);
+		subrel_local_oids[off++] = relstate->relid;
+	}
+	qsort(subrel_local_oids, list_length(subrel_states),
+		sizeof(Oid), oid_cmp);
+
+	foreach(lc, tables)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid                     relid;
+
+		relid = RangeVarGetRelid(rv, AccessShareLock, false);
+		CheckSubscriptionRelkind(get_rel_relkind(relid),
+						rv->schemaname, rv->relname);
+		if (!bsearch(&relid, subrel_local_oids,
+			list_length(subrel_states), sizeof(Oid), oid_cmp))
+			{
+				ereport(ERROR, (errcode(ERRCODE_UNDEFINED_OBJECT),
+					errmsg("table \"%s.%s\" does not present in subscription",
+					get_namespace_name(get_rel_namespace(relid)),
+					get_rel_name(relid))));
+			}
+		else
+			{
+				RemoveSubscriptionRel(sub->oid, relid);
+				logicalrep_worker_stop_at_commit(sub->oid, relid);
+			}
+
+	}
+}
+
+static void
+AlterSubscription_add_table(Subscription *sub, List *tables, bool copy_data)
+{
+	char       *err;
+	List       *pubrel_names;
+	ListCell   *lc;
+	List       *pubrels = NIL;
+
+	Assert(list_length(tables) > 0);
+
+	/* Load the library providing us libpq calls. */
+	load_file("libpqwalreceiver", false);
+
+	/* Try to connect to the publisher. */
+	wrconn = walrcv_connect(sub->conninfo, true, sub->name, &err);
+	if (!wrconn)
+		ereport(ERROR,
+				(errmsg("could not connect to the publisher: %s", err)));
+
+	/* Get the table list from publisher. */
+	pubrel_names = fetch_table_list(wrconn, sub->publications);
+	/* Get oids of rels in command */
+	foreach(lc, pubrel_names)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid         		relid;
+
+		relid = RangeVarGetRelid(rv, NoLock, true);
+		pubrels = lappend_oid(pubrels, relid);
+	}
+
+	/* We are done with the remote side, close connection. */
+	walrcv_disconnect(wrconn);
+
+	foreach(lc, tables)
+	{
+		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		Oid                     relid;
+		char		table_state;
+
+		relid = RangeVarGetRelid(rv, AccessShareLock, false);
+		if (!pg_class_ownercheck(relid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER,
+			get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+		CheckSubscriptionRelkind(get_rel_relkind(relid),
+								rv->schemaname, rv->relname);
+		if (!list_member_oid(pubrels, relid))
+			ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("table \"%s.%s\" not preset in publication",
+							get_namespace_name(get_rel_namespace(relid)),
+							get_rel_name(relid))));
+		table_state = copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
+		AddSubscriptionRelState(sub->oid, relid,
+						table_state,
+						InvalidXLogRecPtr);
+	}
 }
 
 static void
@@ -568,6 +850,12 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		CheckSubscriptionRelkind(get_rel_relkind(relid),
 								 rv->schemaname, rv->relname);
 
+		/* must be owner */
+		if (!pg_class_ownercheck(relid, GetUserId()))
+			aclcheck_error(ACLCHECK_NOT_OWNER,
+				get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
+
+
 		pubrel_local_oids[off++] = relid;
 
 		if (!bsearch(&relid, subrel_local_oids,
@@ -625,6 +913,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	bool		update_tuple = false;
 	Subscription *sub;
 	Form_pg_subscription form;
+	char	   *err = NULL;
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
@@ -721,10 +1010,31 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 			}
 
 		case ALTER_SUBSCRIPTION_CONNECTION:
-			/* Load the library providing us libpq calls. */
-			load_file("libpqwalreceiver", false);
-			/* Check the connection info string. */
-			walrcv_check_conninfo(stmt->conninfo);
+			{
+				/* Load the library providing us libpq calls. */
+				/* Check the connection info string. */
+				load_file("libpqwalreceiver", false);
+				walrcv_check_conninfo(stmt->conninfo);
+				if (sub->enabled)
+				{
+
+					wrconn = walrcv_connect(stmt->conninfo, true, sub->name, &err);
+					if (!wrconn)
+					ereport(ERROR,
+							(errmsg("could not connect to the publisher: %s", err)));
+					PG_TRY();
+					{
+						walrcv_security_check(wrconn);
+					}
+					PG_CATCH();
+					{
+						/* Close the connection in case of failure. */
+						walrcv_disconnect(wrconn);
+						PG_RE_THROW();
+					}
+					PG_END_TRY();
+				}
+			}
 
 			values[Anum_pg_subscription_subconninfo - 1] =
 				CStringGetTextDatum(stmt->conninfo);
@@ -774,6 +1084,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("ALTER SUBSCRIPTION ... REFRESH is not allowed for disabled subscriptions")));
 
+
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, NULL, NULL, &copy_data,
 										   NULL, NULL);
@@ -782,7 +1093,56 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				break;
 			}
+		case ALTER_SUBSCRIPTION_ADD_TABLE:
+			{
+				bool		copy_data;
 
+				if (!sub->enabled)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("ALTER SUBSCRIPTION ... ADD TABLE is not allowed for disabled subscriptions")));
+
+				parse_subscription_options(stmt->options, NULL, NULL, NULL,
+										   NULL, NULL, NULL, &copy_data,
+										   NULL, NULL);
+
+				AlterSubscription_add_table(sub, stmt->tables, copy_data);
+
+				break;
+			}
+		case ALTER_SUBSCRIPTION_DROP_TABLE:
+			{
+
+				if (!sub->enabled)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("ALTER SUBSCRIPTION ... DROP TABLE is not allowed for disabled subscriptions")));
+
+
+				parse_subscription_options(stmt->options, NULL, NULL, NULL,
+										   NULL, NULL, NULL, NULL,
+										   NULL, NULL);
+
+				AlterSubscription_drop_table(sub, stmt->tables);
+
+				break;
+			}
+		case ALTER_SUBSCRIPTION_SET_TABLE:
+			{
+				bool		copy_data;
+				if (!sub->enabled)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("ALTER SUBSCRIPTION ... DROP TABLE is not allowed for disabled subscriptions")));
+
+				parse_subscription_options(stmt->options, NULL, NULL, NULL,
+										   NULL, NULL, NULL, &copy_data,
+										   NULL, NULL);
+
+				AlterSubscription_set_table(sub, stmt->tables, copy_data);
+
+				break;
+			}
 		default:
 			elog(ERROR, "unrecognized ALTER SUBSCRIPTION kind %d",
 				 stmt->kind);

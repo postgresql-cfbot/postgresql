@@ -2239,6 +2239,7 @@ _equalCreateSubscriptionStmt(const CreateSubscriptionStmt *a,
 	COMPARE_STRING_FIELD(conninfo);
 	COMPARE_NODE_FIELD(publication);
 	COMPARE_NODE_FIELD(options);
+	COMPARE_NODE_FIELD(tables);
 
 	return true;
 }
@@ -2251,6 +2252,7 @@ _equalAlterSubscriptionStmt(const AlterSubscriptionStmt *a,
 	COMPARE_STRING_FIELD(subname);
 	COMPARE_STRING_FIELD(conninfo);
 	COMPARE_NODE_FIELD(publication);
+	COMPARE_NODE_FIELD(tables);
 	COMPARE_NODE_FIELD(options);
 
 	return true;

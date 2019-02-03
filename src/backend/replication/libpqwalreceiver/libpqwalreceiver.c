@@ -52,6 +52,9 @@ static WalReceiverConn *libpqrcv_connect(const char *conninfo,
 				 bool logical, const char *appname,
 				 char **err);
 static void libpqrcv_check_conninfo(const char *conninfo);
+static void libpqrcv_connstr_check(const char *connstr);
+static void libpqrcv_security_check(WalReceiverConn *conn);
+
 static char *libpqrcv_get_conninfo(WalReceiverConn *conn);
 static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 						char **sender_host, int *sender_port);
@@ -83,6 +86,8 @@ static void libpqrcv_disconnect(WalReceiverConn *conn);
 static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	libpqrcv_connect,
 	libpqrcv_check_conninfo,
+	libpqrcv_connstr_check,
+	libpqrcv_security_check,
 	libpqrcv_get_conninfo,
 	libpqrcv_get_senderinfo,
 	libpqrcv_identify_system,
@@ -230,6 +235,54 @@ libpqrcv_check_conninfo(const char *conninfo)
 				 errmsg("invalid connection string syntax: %s", err)));
 
 	PQconninfoFree(opts);
+}
+
+static void
+libpqrcv_security_check(WalReceiverConn *conn)
+{
+	if (!superuser())
+	{
+		if (!PQconnectionUsedPassword(conn->streamConn))
+			ereport(ERROR,
+					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
+					 errmsg("password is required"),
+					 errdetail("Non-superuser cannot connect if the server does not request a password."),
+					 errhint("Target server's authentication method must be changed.")));
+	}
+}
+
+static void
+libpqrcv_connstr_check(const char *connstr)
+{
+	if (!superuser())
+	{
+		PQconninfoOption *options;
+		PQconninfoOption *option;
+		bool		connstr_gives_password = false;
+
+		options = PQconninfoParse(connstr, NULL);
+		if (options)
+		{
+			for (option = options; option->keyword != NULL; option++)
+			{
+				if (strcmp(option->keyword, "password") == 0)
+				{
+					if (option->val != NULL && option->val[0] != '\0')
+					{
+						connstr_gives_password = true;
+						break;
+					}
+				}
+			}
+			PQconninfoFree(options);
+		}
+
+		if (!connstr_gives_password)
+			ereport(ERROR,
+					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
+					 errmsg("password is required"),
+					 errdetail("Non-superusers must provide a password in the connection string.")));
+	}
 }
 
 /*

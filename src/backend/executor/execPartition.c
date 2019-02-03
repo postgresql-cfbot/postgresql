@@ -191,9 +191,6 @@ static void find_matching_subplans_recurse(PartitionPruningData *prunedata,
  * tuple routing for partitioned tables, encapsulates it in
  * PartitionTupleRouting, and returns it.
  *
- * Note that all the relations in the partition tree are locked using the
- * RowExclusiveLock mode upon return from this function.
- *
  * Callers must use the returned PartitionTupleRouting during calls to
  * ExecFindPartition().  The actual ResultRelInfo for a partition is only
  * allocated when the partition is found for the first time.
@@ -207,9 +204,6 @@ ExecSetupPartitionTupleRouting(ModifyTableState *mtstate, Relation rel)
 {
 	PartitionTupleRouting *proute;
 	ModifyTable *node = mtstate ? (ModifyTable *) mtstate->ps.plan : NULL;
-
-	/* Lock all the partitions. */
-	(void) find_all_inheritors(RelationGetRelid(rel), RowExclusiveLock, NULL);
 
 	/*
 	 * Here we attempt to expend as little effort as possible in setting up
@@ -514,7 +508,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 	 * We locked all the partitions in ExecSetupPartitionTupleRouting
 	 * including the leaf partitions.
 	 */
-	partrel = table_open(dispatch->partdesc->oids[partidx], NoLock);
+	partrel = table_open(dispatch->partdesc->oids[partidx], RowExclusiveLock);
 
 	leaf_part_rri = makeNode(ResultRelInfo);
 	InitResultRelInfo(leaf_part_rri,
@@ -983,7 +977,7 @@ ExecInitPartitionDispatchInfo(PartitionTupleRouting *proute, Oid partoid,
 	oldcxt = MemoryContextSwitchTo(proute->memcxt);
 
 	if (partoid != RelationGetRelid(proute->partition_root))
-		rel = table_open(partoid, NoLock);
+		rel = table_open(partoid, RowExclusiveLock);
 	else
 		rel = proute->partition_root;
 	partdesc = RelationGetPartitionDesc(rel);

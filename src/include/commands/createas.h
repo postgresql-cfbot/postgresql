@@ -26,6 +26,8 @@ extern ObjectAddress ExecCreateTableAs(CreateTableAsStmt *stmt, const char *quer
 
 extern int	GetIntoRelEFlags(IntoClause *intoClause);
 
-extern DestReceiver *CreateIntoRelDestReceiver(IntoClause *intoClause);
+extern DestReceiver *CreateIntoRelDestReceiver(void);
+
+extern void DefineIntoRelForDestReceiver(DestReceiver *dest, List *targetList, IntoClause *intoClause);
 
 #endif							/* CREATEAS_H */

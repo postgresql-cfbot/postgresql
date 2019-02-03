@@ -273,6 +273,8 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("prepared statement is not a SELECT")));
 
+		DefineIntoRelForDestReceiver(dest, pstmt->planTree->targetlist, intoClause);
+
 		/* Set appropriate eflags */
 		eflags = GetIntoRelEFlags(intoClause);
 

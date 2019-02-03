@@ -55,16 +55,15 @@ typedef struct
 {
 	DestReceiver pub;			/* publicly-known function pointers */
 	IntoClause *into;			/* target relation specification */
+	ObjectAddress reladdr;		/* address of rel, for intorel_startup */
 	/* These fields are filled by intorel_startup: */
 	Relation	rel;			/* relation to write to */
-	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			hi_options;		/* heap_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
 } DR_intorel;
 
-/* utility functions for CTAS definition creation */
-static ObjectAddress create_ctas_internal(List *attrList, IntoClause *into);
+/* utility function for CTAS definition creation */
 static ObjectAddress create_ctas_nodata(List *tlist, IntoClause *into);
 
 /* DestReceiver routines for collecting data */
@@ -75,16 +74,18 @@ static void intorel_destroy(DestReceiver *self);
 
 
 /*
- * create_ctas_internal
+ * create_ctas_nodata
  *
- * Internal utility used for the creation of the definition of a relation
- * created via CREATE TABLE AS or a materialized view.  Caller needs to
- * provide a list of attributes (ColumnDef nodes).
+ * Create CTAS or materialized view without the data, starting from the
+ * targetlist of the SELECT or view definition.
  */
 static ObjectAddress
-create_ctas_internal(List *attrList, IntoClause *into)
+create_ctas_nodata(List *tlist, IntoClause *into)
 {
-	CreateStmt *create = makeNode(CreateStmt);
+	List	   *attrList;
+	ListCell   *t,
+			   *lc;
+	CreateStmt *create;
 	bool		is_matview;
 	char		relkind;
 	Datum		toast_options;
@@ -94,71 +95,6 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	/* This code supports both CREATE TABLE AS and CREATE MATERIALIZED VIEW */
 	is_matview = (into->viewQuery != NULL);
 	relkind = is_matview ? RELKIND_MATVIEW : RELKIND_RELATION;
-
-	/*
-	 * Create the target relation by faking up a CREATE TABLE parsetree and
-	 * passing it to DefineRelation.
-	 */
-	create->relation = into->rel;
-	create->tableElts = attrList;
-	create->inhRelations = NIL;
-	create->ofTypename = NULL;
-	create->constraints = NIL;
-	create->options = into->options;
-	create->oncommit = into->onCommit;
-	create->tablespacename = into->tableSpaceName;
-	create->if_not_exists = false;
-
-	/*
-	 * Create the relation.  (This will error out if there's an existing view,
-	 * so we don't need more code to complain if "replace" is false.)
-	 */
-	intoRelationAddr = DefineRelation(create, relkind, InvalidOid, NULL, NULL);
-
-	/*
-	 * If necessary, create a TOAST table for the target table.  Note that
-	 * NewRelationCreateToastTable ends with CommandCounterIncrement(), so
-	 * that the TOAST table will be visible for insertion.
-	 */
-	CommandCounterIncrement();
-
-	/* parse and validate reloptions for the toast table */
-	toast_options = transformRelOptions((Datum) 0,
-										create->options,
-										"toast",
-										validnsps,
-										true, false);
-
-	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
-
-	NewRelationCreateToastTable(intoRelationAddr.objectId, toast_options);
-
-	/* Create the "view" part of a materialized view. */
-	if (is_matview)
-	{
-		/* StoreViewQuery scribbles on tree, so make a copy */
-		Query	   *query = (Query *) copyObject(into->viewQuery);
-
-		StoreViewQuery(intoRelationAddr.objectId, query, false);
-		CommandCounterIncrement();
-	}
-
-	return intoRelationAddr;
-}
-
-
-/*
- * create_ctas_nodata
- *
- * Create CTAS or materialized view when WITH NO DATA is used, starting from
- * the targetlist of the SELECT or view definition.
- */
-static ObjectAddress
-create_ctas_nodata(List *tlist, IntoClause *into)
-{
-	List	   *attrList;
-	ListCell   *t,
-			   *lc;
 
 	/*
 	 * Build list of ColumnDefs from non-junk elements of the tlist.  If a
@@ -213,8 +149,56 @@ create_ctas_nodata(List *tlist, IntoClause *into)
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("too many column names were specified")));
 
-	/* Create the relation definition using the ColumnDef list */
-	return create_ctas_internal(attrList, into);
+	/*
+	 * Create the target relation by faking up a CREATE TABLE parsetree and
+	 * passing it to DefineRelation.
+	 */
+	create = makeNode(CreateStmt);
+	create->relation = into->rel;
+	create->tableElts = attrList;
+	create->inhRelations = NIL;
+	create->ofTypename = NULL;
+	create->constraints = NIL;
+	create->options = into->options;
+	create->oncommit = into->onCommit;
+	create->tablespacename = into->tableSpaceName;
+	create->if_not_exists = false;
+
+	/*
+	 * Create the relation.  (This will error out if there's an existing view,
+	 * so we don't need more code to complain if "replace" is false.)
+	 */
+	intoRelationAddr = DefineRelation(create, relkind, InvalidOid, NULL, NULL);
+
+	/*
+	 * If necessary, create a TOAST table for the target table.  Note that
+	 * NewRelationCreateToastTable ends with CommandCounterIncrement(), so
+	 * that the TOAST table will be visible for insertion.
+	 */
+	CommandCounterIncrement();
+
+	/* parse and validate reloptions for the toast table */
+	toast_options = transformRelOptions((Datum) 0,
+										create->options,
+										"toast",
+										validnsps,
+										true, false);
+
+	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
+
+	NewRelationCreateToastTable(intoRelationAddr.objectId, toast_options);
+
+	/* Create the "view" part of a materialized view. */
+	if (is_matview)
+	{
+		/* StoreViewQuery scribbles on tree, so make a copy */
+		Query	   *query = (Query *) copyObject(into->viewQuery);
+
+		StoreViewQuery(intoRelationAddr.objectId, query, false);
+		CommandCounterIncrement();
+	}
+
+	return intoRelationAddr;
 }
 
 
@@ -257,7 +241,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	/*
 	 * Create the tuple receiver object and insert info it will need
 	 */
-	dest = CreateIntoRelDestReceiver(into);
+	dest = CreateIntoRelDestReceiver();
 
 	/*
 	 * The contained Query could be a SELECT, or an EXECUTE utility command.
@@ -278,33 +262,25 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	}
 	Assert(query->commandType == CMD_SELECT);
 
-	/*
-	 * For materialized views, lock down security-restricted operations and
-	 * arrange to make GUC variable changes local to this command.  This is
-	 * not necessary for security, but this keeps the behavior similar to
-	 * REFRESH MATERIALIZED VIEW.  Otherwise, one could create a materialized
-	 * view not possible to refresh.
-	 */
-	if (is_matview)
-	{
-		GetUserIdAndSecContext(&save_userid, &save_sec_context);
-		SetUserIdAndSecContext(save_userid,
-							   save_sec_context | SECURITY_RESTRICTED_OPERATION);
-		save_nestlevel = NewGUCNestLevel();
-	}
+	DefineIntoRelForDestReceiver(dest, query->targetList, into);
 
-	if (into->skipData)
+	if (!into->skipData)
 	{
 		/*
-		 * If WITH NO DATA was specified, do not go through the rewriter,
-		 * planner and executor.  Just define the relation using a code path
-		 * similar to CREATE VIEW.  This avoids dump/restore problems stemming
-		 * from running the planner before all dependencies are set up.
+		 * For materialized views, lock down security-restricted operations and
+		 * arrange to make GUC variable changes local to this command.  This is
+		 * not necessary for security, but this keeps the behavior similar to
+		 * REFRESH MATERIALIZED VIEW.  Otherwise, one could create a materialized
+		 * view not possible to refresh.
 		 */
-		address = create_ctas_nodata(query->targetList, into);
-	}
-	else
-	{
+		if (is_matview)
+		{
+			GetUserIdAndSecContext(&save_userid, &save_sec_context);
+			SetUserIdAndSecContext(save_userid,
+								   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+			save_nestlevel = NewGUCNestLevel();
+		}
+
 		/*
 		 * Parse analysis was done already, but we still have to run the rule
 		 * rewriter.  We do not do AcquireRewriteLocks: we assume the query
@@ -367,18 +343,18 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		FreeQueryDesc(queryDesc);
 
 		PopActiveSnapshot();
+
+		if (is_matview)
+		{
+			/* Roll back any GUC changes */
+			AtEOXact_GUC(false, save_nestlevel);
+
+			/* Restore userid and security context */
+			SetUserIdAndSecContext(save_userid, save_sec_context);
+		}
 	}
 
-	if (is_matview)
-	{
-		/* Roll back any GUC changes */
-		AtEOXact_GUC(false, save_nestlevel);
-
-		/* Restore userid and security context */
-		SetUserIdAndSecContext(save_userid, save_sec_context);
-	}
-
-	return address;
+	return ((DR_intorel *) dest)->reladdr;
 }
 
 /*
@@ -403,12 +379,11 @@ GetIntoRelEFlags(IntoClause *intoClause)
 /*
  * CreateIntoRelDestReceiver -- create a suitable DestReceiver object
  *
- * intoClause will be NULL if called from CreateDestReceiver(), in which
- * case it has to be provided later.  However, it is convenient to allow
- * self->into to be filled in immediately for other callers.
+ * The private fields are initialized later when CreateIntoRelDestReceiver is
+ * called to create the receiving relation.
  */
 DestReceiver *
-CreateIntoRelDestReceiver(IntoClause *intoClause)
+CreateIntoRelDestReceiver(void)
 {
 	DR_intorel *self = (DR_intorel *) palloc0(sizeof(DR_intorel));
 
@@ -417,10 +392,22 @@ CreateIntoRelDestReceiver(IntoClause *intoClause)
 	self->pub.rShutdown = intorel_shutdown;
 	self->pub.rDestroy = intorel_destroy;
 	self->pub.mydest = DestIntoRel;
-	self->into = intoClause;
-	/* other private fields will be set during intorel_startup */
+	/* private fields will be set by DefineIntoRelForDestReceiver */
 
 	return (DestReceiver *) self;
+}
+
+/*
+ * DefineIntoRelForDestReceiver -- create the receveiving relation
+ */
+void
+DefineIntoRelForDestReceiver(DestReceiver *dest, List *targetList, IntoClause *intoClause)
+{
+	DR_intorel *self = (DR_intorel *) dest;
+
+	self->into = intoClause;
+	self->reladdr = create_ctas_nodata(targetList, intoClause);
+	/* other private fields will be set during intorel_startup */
 }
 
 /*
@@ -431,75 +418,19 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 	IntoClause *into = myState->into;
+	ObjectAddress	intoRelationAddr = myState->reladdr;
 	bool		is_matview;
 	char		relkind;
-	List	   *attrList;
-	ObjectAddress intoRelationAddr;
 	Relation	intoRelationDesc;
 	RangeTblEntry *rte;
-	ListCell   *lc;
 	int			attnum;
 
-	Assert(into != NULL);		/* else somebody forgot to set it */
+	Assert(into != NULL);							/* else somebody forgot to set it */
+	Assert(intoRelationAddr.classId != InvalidOid);	/* else somebody forgot to set it */
 
 	/* This code supports both CREATE TABLE AS and CREATE MATERIALIZED VIEW */
 	is_matview = (into->viewQuery != NULL);
 	relkind = is_matview ? RELKIND_MATVIEW : RELKIND_RELATION;
-
-	/*
-	 * Build column definitions using "pre-cooked" type and collation info. If
-	 * a column name list was specified in CREATE TABLE AS, override the
-	 * column names derived from the query.  (Too few column names are OK, too
-	 * many are not.)
-	 */
-	attrList = NIL;
-	lc = list_head(into->colNames);
-	for (attnum = 0; attnum < typeinfo->natts; attnum++)
-	{
-		Form_pg_attribute attribute = TupleDescAttr(typeinfo, attnum);
-		ColumnDef  *col;
-		char	   *colname;
-
-		if (lc)
-		{
-			colname = strVal(lfirst(lc));
-			lc = lnext(lc);
-		}
-		else
-			colname = NameStr(attribute->attname);
-
-		col = makeColumnDef(colname,
-							attribute->atttypid,
-							attribute->atttypmod,
-							attribute->attcollation);
-
-		/*
-		 * It's possible that the column is of a collatable type but the
-		 * collation could not be resolved, so double-check.  (We must check
-		 * this here because DefineRelation would adopt the type's default
-		 * collation rather than complaining.)
-		 */
-		if (!OidIsValid(col->collOid) &&
-			type_is_collatable(col->typeName->typeOid))
-			ereport(ERROR,
-					(errcode(ERRCODE_INDETERMINATE_COLLATION),
-					 errmsg("no collation was derived for column \"%s\" with collatable type %s",
-							col->colname,
-							format_type_be(col->typeName->typeOid)),
-					 errhint("Use the COLLATE clause to set the collation explicitly.")));
-
-		attrList = lappend(attrList, col);
-	}
-
-	if (lc != NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("too many column names were specified")));
-
-	/*
-	 * Actually create the target table
-	 */
-	intoRelationAddr = create_ctas_internal(attrList, into);
 
 	/*
 	 * Finally we can open the target table
@@ -549,7 +480,6 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * Fill private fields of myState for use by later routines
 	 */
 	myState->rel = intoRelationDesc;
-	myState->reladdr = intoRelationAddr;
 	myState->output_cid = GetCurrentCommandId(true);
 
 	/*

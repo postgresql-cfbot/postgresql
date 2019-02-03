@@ -3266,6 +3266,7 @@ SELECT  b.relname,
  matview_col1_idx     | i       | relfilenode has changed
  pg_toast_TABLE       | t       | relfilenode is unchanged
  pg_toast_TABLE_index | i       | relfilenode has changed
+ reindex_before       | r       | relfilenode is unchanged
  table1               | r       | relfilenode is unchanged
  table1_col1_seq      | S       | relfilenode is unchanged
  table1_pkey          | i       | relfilenode has changed
@@ -3274,7 +3275,7 @@ SELECT  b.relname,
  table2_col2_idx      | i       | relfilenode has changed
  table2_pkey          | i       | relfilenode has changed
  view                 | v       | relfilenode is unchanged
-(12 rows)
+(13 rows)
 
 REINDEX SCHEMA schema_to_reindex;
 BEGIN;

@@ -51,6 +51,18 @@ typedef uint32 TimeLineID;
 typedef uint16 RepOriginId;
 
 /*
+ * Snapshot safety information using to control SERIALIAZABLE on standby
+ * servers appears in checkpoints, so we define the types used here.
+ */
+typedef uint64 SnapshotToken;
+typedef enum SnapshotSafety
+{
+	SNAPSHOT_SAFE,
+	SNAPSHOT_UNSAFE,
+	SNAPSHOT_SAFETY_UNKNOWN
+} SnapshotSafety;
+
+/*
  *	Because O_DIRECT bypasses the kernel buffers, and because we never
  *	read those buffers except during crash recovery or if wal_level != minimal,
  *	it is a win to use it in all cases where we sync on each write().  We could

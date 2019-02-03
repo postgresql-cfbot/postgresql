@@ -30,7 +30,6 @@ extern int	max_predicate_locks_per_page;
 /* Number of SLRU buffers to use for predicate locking */
 #define NUM_OLDSERXID_BUFFERS	16
 
-
 /*
  * function prototypes
  */
@@ -73,5 +72,12 @@ extern void PostPrepare_PredicateLocks(TransactionId xid);
 extern void PredicateLockTwoPhaseFinish(TransactionId xid, bool isCommit);
 extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 							   void *recdata, uint32 len);
+
+/* hypothetical snapshot safety support, allowing SERIALIZABLE on standbys */
+extern void GetSnapshotSafetyAfterThisCommit(SnapshotToken *token, SnapshotSafety *safety);
+extern void NotifyHypotheticalSnapshotSafety(SnapshotToken token, SnapshotSafety safety);
+extern void BeginSnapshotSafetyReplay(void);
+extern void SetNewestSnapshotSafety(SnapshotToken token, SnapshotSafety safety);
+extern void CompleteSnapshotSafetyReplay(void);
 
 #endif							/* PREDICATE_H */

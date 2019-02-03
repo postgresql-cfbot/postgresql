@@ -22,6 +22,7 @@
 
 /* We assume libpq-fe.h has already been included. */
 #include "libpq-events.h"
+#include "lib/stringinfo.h"
 
 #include <time.h>
 #ifndef WIN32
@@ -478,9 +479,19 @@ struct pg_conn
 #endif							/* USE_OPENSSL */
 #endif							/* USE_SSL */
 
+	char	   *gssmode;		/* GSS mode (require,prefer,disable) */
 #ifdef ENABLE_GSS
 	gss_ctx_id_t gctx;			/* GSS context */
 	gss_name_t	gtarg_nam;		/* GSS target name */
+
+	/* The following are encryption-only */
+	PQExpBufferData gbuf;		/* GSS encryption buffering */
+	size_t		gcursor;		/* GSS buffering position */
+	PQExpBufferData gwritebuf;	/* GSS nonblocking write buffering */
+	size_t		gwritecurs;		/* GSS write buffer position */
+	bool		try_gss;		/* GSS attempting permitted */
+	bool		gssenc;			/* GSS encryption is usable */
+	gss_cred_id_t gcred;		/* GSS credential temp storage. */
 #endif
 
 #ifdef ENABLE_SSPI
@@ -656,7 +667,7 @@ extern void pqsecure_destroy(void);
 extern PostgresPollingStatusType pqsecure_open_client(PGconn *);
 extern void pqsecure_close(PGconn *);
 extern ssize_t pqsecure_read(PGconn *, void *ptr, size_t len);
-extern ssize_t pqsecure_write(PGconn *, const void *ptr, size_t len);
+extern ssize_t pqsecure_write(PGconn *, void *ptr, size_t len);
 extern ssize_t pqsecure_raw_read(PGconn *, void *ptr, size_t len);
 extern ssize_t pqsecure_raw_write(PGconn *, const void *ptr, size_t len);
 
@@ -747,6 +758,23 @@ extern char *pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len);
 extern int pgtls_verify_peer_name_matches_certificate_guts(PGconn *conn,
 												int *names_examined,
 												char **first_name);
+
+/* === GSSAPI === */
+
+#ifdef ENABLE_GSS
+
+/*
+ * Establish a GSSAPI-encrypted connection.
+ */
+extern PostgresPollingStatusType pqsecure_open_gss(PGconn *conn);
+
+/*
+ * Read and write functions for GSSAPI-encrypted connections, with internal
+ * buffering to handle nonblocking sockets.
+ */
+extern ssize_t pg_GSS_write(PGconn *conn, void *ptr, size_t len);
+extern ssize_t pg_GSS_read(PGconn *conn, void *ptr, size_t len);
+#endif
 
 /* === miscellaneous macros === */
 

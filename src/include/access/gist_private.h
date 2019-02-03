@@ -369,13 +369,33 @@ typedef struct GISTBuildBuffers
 } GISTBuildBuffers;
 
 /*
+ * Buffering is an enum option
+ * gist_option_buffering_numeric_values defines a numeric representation of
+ * option values, and GIST_OPTION_BUFFERING_ENUM_DEF defines enum string values
+ * and maps them to numeric one.
+ */
+typedef enum gist_option_buffering_numeric_values
+{
+	GIST_OPTION_BUFFERING_ON = 0,
+	GIST_OPTION_BUFFERING_OFF = 1,
+	GIST_OPTION_BUFFERING_AUTO = 2,
+}			gist_option_buffering_numeric_values;
+
+#define GIST_OPTION_BUFFERING_ENUM_DEF { 	\
+	{ "on",		GIST_OPTION_BUFFERING_ON },		\
+	{ "off",	GIST_OPTION_BUFFERING_OFF },	\
+	{ "auto",	GIST_OPTION_BUFFERING_AUTO },	\
+	{ (const char *) NULL, 0 }					\
+}
+
+/*
  * Storage type for GiST's reloptions
  */
 typedef struct GiSTOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
-	int			bufferingModeOffset;	/* use buffering build? */
+	int			buffering_mode; /* use buffering build? */
 } GiSTOptions;
 
 /* gist.c */

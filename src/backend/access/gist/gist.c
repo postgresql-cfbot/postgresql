@@ -75,7 +75,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = true;
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
+	amroutine->amcaninclude = true;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = gistbuild;
@@ -1382,8 +1382,8 @@ gistSplit(Relation r,
 						IndexTupleSize(itup[0]), GiSTPageSize,
 						RelationGetRelationName(r))));
 
-	memset(v.spl_lisnull, true, sizeof(bool) * giststate->tupdesc->natts);
-	memset(v.spl_risnull, true, sizeof(bool) * giststate->tupdesc->natts);
+	memset(v.spl_lisnull, true, sizeof(bool) * giststate->truncTupdesc->natts);
+	memset(v.spl_risnull, true, sizeof(bool) * giststate->truncTupdesc->natts);
 	gistSplitByKey(r, page, itup, len, giststate, &v, 0);
 
 	/* form left and right vector */
@@ -1462,8 +1462,19 @@ initGISTstate(Relation index)
 	giststate->scanCxt = scanCxt;
 	giststate->tempCxt = scanCxt;	/* caller must change this if needed */
 	giststate->tupdesc = index->rd_att;
+	/*
+	 * The truncated tupdesc does not contain the INCLUDE attributes.
+	 *
+	 * It is used to form tuples during tuple adjustement and page split.
+	 * B-tree creates shortened tuple descriptor for every truncated tuple,
+	 * because it is doing this less often: it does not have to form
+	 * truncated tuples during page split. Also, B-tree is not adjusting
+	 * tuples on internal pages the way GiST does.
+	 */
+	giststate->truncTupdesc = CreateTupleDescCopyConstr(index->rd_att);
+	giststate->truncTupdesc->natts = IndexRelationGetNumberOfKeyAttributes(index);
 
-	for (i = 0; i < index->rd_att->natts; i++)
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(index); i++)
 	{
 		fmgr_info_copy(&(giststate->consistentFn[i]),
 					   index_getprocinfo(index, i + 1, GIST_CONSISTENT_PROC),
@@ -1529,6 +1540,20 @@ initGISTstate(Relation index)
 			giststate->supportCollation[i] = index->rd_indcollation[i];
 		else
 			giststate->supportCollation[i] = DEFAULT_COLLATION_OID;
+	}
+
+	for (; i < index->rd_att->natts; i++)
+	{
+		giststate->consistentFn[i].fn_oid = InvalidOid;
+		giststate->unionFn[i].fn_oid = InvalidOid;
+		giststate->compressFn[i].fn_oid = InvalidOid;
+		giststate->decompressFn[i].fn_oid = InvalidOid;
+		giststate->penaltyFn[i].fn_oid = InvalidOid;
+		giststate->picksplitFn[i].fn_oid = InvalidOid;
+		giststate->equalFn[i].fn_oid = InvalidOid;
+		giststate->distanceFn[i].fn_oid = InvalidOid;
+		giststate->fetchFn[i].fn_oid = InvalidOid;
+		giststate->supportCollation[i] = InvalidOid;
 	}
 
 	MemoryContextSwitchTo(oldCxt);

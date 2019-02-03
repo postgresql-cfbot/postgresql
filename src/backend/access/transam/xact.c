@@ -1821,6 +1821,9 @@ StartTransaction(void)
 	s->state = TRANS_START;
 	s->transactionId = InvalidTransactionId;	/* until assigned */
 
+	/* Determine if we log statements in this transaction */
+	xact_is_sampled = random() <= log_xact_sample_rate * MAX_RANDOM_VALUE;
+
 	/*
 	 * initialize current transaction state fields
 	 *

@@ -113,6 +113,12 @@ static StringInfoData reply_message;
 static StringInfoData incoming_message;
 
 /*
+ * Copy of current WalReceiverConn connection info (not clobbered)
+ */
+static char current_conninfo[MAXCONNINFO];
+static char current_slotname[NAMEDATALEN];
+
+/*
  * About SIGTERM handling:
  *
  * We can't just exit(1) within SIGTERM signal handler, because the signal
@@ -143,6 +149,7 @@ static void XLogWalRcvFlush(bool dying);
 static void XLogWalRcvSendReply(bool force, bool requestReply);
 static void XLogWalRcvSendHSFeedback(bool immed);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
+static void ProcessWalRcvSigHup(void);
 
 /* Signal handlers */
 static void WalRcvSigHupHandler(SIGNAL_ARGS);
@@ -188,9 +195,7 @@ DisableWalRcvImmediateExit(void)
 void
 WalReceiverMain(void)
 {
-	char		conninfo[MAXCONNINFO];
 	char	   *tmp_conninfo;
-	char		slotname[NAMEDATALEN];
 	XLogRecPtr	startpoint;
 	TimeLineID	startpointTLI;
 	TimeLineID	primaryTLI;
@@ -250,8 +255,8 @@ WalReceiverMain(void)
 
 	/* Fetch information required to start streaming */
 	walrcv->ready_to_display = false;
-	strlcpy(conninfo, (char *) walrcv->conninfo, MAXCONNINFO);
-	strlcpy(slotname, (char *) walrcv->slotname, NAMEDATALEN);
+	strlcpy(current_conninfo, (char *) walrcv->conninfo, MAXCONNINFO);
+	strlcpy(current_slotname, (char *) walrcv->slotname, NAMEDATALEN);
 	startpoint = walrcv->receiveStart;
 	startpointTLI = walrcv->receiveStartTLI;
 
@@ -293,7 +298,7 @@ WalReceiverMain(void)
 
 	/* Establish the connection to the primary for XLOG streaming */
 	EnableWalRcvImmediateExit();
-	wrconn = walrcv_connect(conninfo, false, "walreceiver", &err);
+	wrconn = walrcv_connect(current_conninfo, false, "walreceiver", &err);
 	if (!wrconn)
 		ereport(ERROR,
 				(errmsg("could not connect to the primary server: %s", err)));
@@ -387,7 +392,7 @@ WalReceiverMain(void)
 		 */
 		options.logical = false;
 		options.startpoint = startpoint;
-		options.slotname = slotname[0] != '\0' ? slotname : NULL;
+		options.slotname = current_slotname[0] != '\0' ? current_slotname : NULL;
 		options.proto.physical.startpointTLI = startpointTLI;
 		ThisTimeLineID = startpointTLI;
 		if (walrcv_startstreaming(wrconn, &options))
@@ -436,8 +441,7 @@ WalReceiverMain(void)
 				if (got_SIGHUP)
 				{
 					got_SIGHUP = false;
-					ProcessConfigFile(PGC_SIGHUP);
-					XLogWalRcvSendHSFeedback(true);
+					ProcessWalRcvSigHup();
 				}
 
 				/* See if we can read data immediately */
@@ -1314,6 +1318,35 @@ ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)
 		pfree(sendtime);
 		pfree(receipttime);
 	}
+}
+
+/*
+ * Actual processing SIGHUP signal
+ */
+static void
+ProcessWalRcvSigHup(void)
+{
+	ProcessConfigFile(PGC_SIGHUP);
+
+	/*
+	 * If primary_conninfo has been changed while walreceiver is running,
+	 * shut down walreceiver so that a new walreceiver is started and
+	 * initiates replication with the new connection information.
+	 */
+	if (strcmp(current_conninfo, PrimaryConnInfo) != 0)
+		ereport(FATAL,
+				(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("closing replication connection because primary_conninfo was changed")));
+
+	/*
+	 * And the same for primary_slot_name.
+	 */
+	if (strcmp(current_slotname, PrimarySlotName) != 0)
+		ereport(FATAL,
+				(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("closing replication connection because primary_slot_name was changed")));
+
+	XLogWalRcvSendHSFeedback(true);
 }
 
 /*

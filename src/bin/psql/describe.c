@@ -1479,6 +1479,7 @@ describeOneTableDetails(const char *schemaname,
 		bool		rowsecurity;
 		bool		forcerowsecurity;
 		bool		hasoids;
+		bool		ispartition;
 		Oid			tablespace;
 		char	   *reloptions;
 		char	   *reloftype;
@@ -1501,7 +1502,24 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
-						  "false AS relhasoids, %s, c.reltablespace, "
+						  "false AS relhasoids, c.relispartition, %s, c.reltablespace, "
+						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
+						  "c.relpersistence, c.relreplident\n"
+						  "FROM pg_catalog.pg_class c\n "
+						  "LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)\n"
+						  "WHERE c.oid = '%s';",
+						  (verbose ?
+						   "pg_catalog.array_to_string(c.reloptions || "
+						   "array(select 'toast.' || x from pg_catalog.unnest(tc.reloptions) x), ', ')\n"
+						   : "''"),
+						  oid);
+	}
+	else if (pset.sversion >= 110000)
+	{
+		printfPQExpBuffer(&buf,
+						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
+						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
+						  "c.relhasoids, c.relispartition, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
 						  "c.relpersistence, c.relreplident\n"
 						  "FROM pg_catalog.pg_class c\n "
@@ -1518,7 +1536,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
-						  "c.relhasoids, %s, c.reltablespace, "
+						  "c.relhasoids, false, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
 						  "c.relpersistence, c.relreplident\n"
 						  "FROM pg_catalog.pg_class c\n "
@@ -1535,7 +1553,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
-						  "%s, c.reltablespace, "
+						  "false, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
 						  "c.relpersistence, c.relreplident\n"
 						  "FROM pg_catalog.pg_class c\n "
@@ -1552,7 +1570,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
-						  "%s, c.reltablespace, "
+						  "false, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
 						  "c.relpersistence\n"
 						  "FROM pg_catalog.pg_class c\n "
@@ -1569,7 +1587,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
-						  "%s, c.reltablespace, "
+						  "false, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END\n"
 						  "FROM pg_catalog.pg_class c\n "
 						  "LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)\n"
@@ -1585,7 +1603,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
 						  "c.relhastriggers, false, false, c.relhasoids, "
-						  "%s, c.reltablespace\n"
+						  "false, %s, c.reltablespace\n"
 						  "FROM pg_catalog.pg_class c\n "
 						  "LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)\n"
 						  "WHERE c.oid = '%s';",
@@ -1600,7 +1618,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT relchecks, relkind, relhasindex, relhasrules, "
 						  "reltriggers <> 0, false, false, relhasoids, "
-						  "%s, reltablespace\n"
+						  "false, %s, reltablespace\n"
 						  "FROM pg_catalog.pg_class WHERE oid = '%s';",
 						  (verbose ?
 						   "pg_catalog.array_to_string(reloptions, E', ')" : "''"),
@@ -1611,7 +1629,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT relchecks, relkind, relhasindex, relhasrules, "
 						  "reltriggers <> 0, false, false, relhasoids, "
-						  "'', reltablespace\n"
+						  "false, '', reltablespace\n"
 						  "FROM pg_catalog.pg_class WHERE oid = '%s';",
 						  oid);
 	}
@@ -1620,7 +1638,7 @@ describeOneTableDetails(const char *schemaname,
 		printfPQExpBuffer(&buf,
 						  "SELECT relchecks, relkind, relhasindex, relhasrules, "
 						  "reltriggers <> 0, false, false, relhasoids, "
-						  "'', ''\n"
+						  "false, '', ''\n"
 						  "FROM pg_catalog.pg_class WHERE oid = '%s';",
 						  oid);
 	}
@@ -1645,17 +1663,18 @@ describeOneTableDetails(const char *schemaname,
 	tableinfo.rowsecurity = strcmp(PQgetvalue(res, 0, 5), "t") == 0;
 	tableinfo.forcerowsecurity = strcmp(PQgetvalue(res, 0, 6), "t") == 0;
 	tableinfo.hasoids = strcmp(PQgetvalue(res, 0, 7), "t") == 0;
+	tableinfo.ispartition = strcmp(PQgetvalue(res, 0, 8), "t") == 0;
 	tableinfo.reloptions = (pset.sversion >= 80200) ?
-		pg_strdup(PQgetvalue(res, 0, 8)) : NULL;
+		pg_strdup(PQgetvalue(res, 0, 9)) : NULL;
 	tableinfo.tablespace = (pset.sversion >= 80000) ?
-		atooid(PQgetvalue(res, 0, 9)) : 0;
+		atooid(PQgetvalue(res, 0, 10)) : 0;
 	tableinfo.reloftype = (pset.sversion >= 90000 &&
-						   strcmp(PQgetvalue(res, 0, 10), "") != 0) ?
-		pg_strdup(PQgetvalue(res, 0, 10)) : NULL;
+						   strcmp(PQgetvalue(res, 0, 11), "") != 0) ?
+		pg_strdup(PQgetvalue(res, 0, 11)) : NULL;
 	tableinfo.relpersistence = (pset.sversion >= 90100) ?
-		*(PQgetvalue(res, 0, 11)) : 0;
+		*(PQgetvalue(res, 0, 12)) : 0;
 	tableinfo.relreplident = (pset.sversion >= 90400) ?
-		*(PQgetvalue(res, 0, 12)) : 'd';
+		*(PQgetvalue(res, 0, 13)) : 'd';
 	PQclear(res);
 	res = NULL;
 
@@ -2387,12 +2406,40 @@ describeOneTableDetails(const char *schemaname,
 		if (tableinfo.hastriggers ||
 			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 		{
-			printfPQExpBuffer(&buf,
-							  "SELECT conname,\n"
-							  "  pg_catalog.pg_get_constraintdef(r.oid, true) as condef\n"
-							  "FROM pg_catalog.pg_constraint r\n"
-							  "WHERE r.conrelid = '%s' AND r.contype = 'f' ORDER BY 1;",
-							  oid);
+			if (pset.sversion >= 110000 &&
+				(tableinfo.ispartition || tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
+			{
+				/*
+				 * Note we put the constraints defined in this table first,
+				 * followed by the constraints defined in ancestor partitioned
+				 * tables.
+				 */
+				printfPQExpBuffer(&buf,
+								  "WITH RECURSIVE constraints (oid, parent, conname, conrelid, level) as (\n"
+								  "   SELECT oid, conparentid, conname, conrelid, 0\n"
+								  "     FROM pg_catalog.pg_constraint WHERE contype = 'f' AND conrelid = '%s'\n"
+								  "  UNION\n"
+								  "   SELECT pc.oid, pc.conparentid, pc.conname, pc.conrelid, level+1\n"
+								  "     FROM constraints, pg_constraint pc\n"
+								  "    WHERE pc.oid = constraints.parent\n"
+								  ") SELECT conrelid = '%s' as conislocal, conname,\n"
+								  "         pg_catalog.pg_get_constraintdef(oid, true),\n"
+								  "         conrelid::pg_catalog.regclass\n"
+								  "    FROM constraints\n"
+								  "   WHERE parent = 0\n"
+								  "ORDER BY level DESC, conname;",
+								  oid, oid);
+			}
+			else
+			{
+				printfPQExpBuffer(&buf,
+								  "SELECT true, conname,\n"
+								  "  pg_catalog.pg_get_constraintdef(r.oid, true) as condef\n"
+								  "FROM pg_catalog.pg_constraint r\n"
+								  "WHERE r.conrelid = '%s' AND r.contype = 'f' ORDER BY 1;",
+								  oid);
+			}
+
 			result = PSQLexec(buf.data);
 			if (!result)
 				goto error_return;
@@ -2404,10 +2451,20 @@ describeOneTableDetails(const char *schemaname,
 				printTableAddFooter(&cont, _("Foreign-key constraints:"));
 				for (i = 0; i < tuples; i++)
 				{
-					/* untranslated constraint name and def */
-					printfPQExpBuffer(&buf, "    \"%s\" %s",
-									  PQgetvalue(result, i, 0),
-									  PQgetvalue(result, i, 1));
+					/*
+					 * Print untranslated constraint name and definition.
+					 * Use a "TABLE tab" prefix when the constraint is
+					 * defined in a parent partitioned table.
+					 */
+					if (strcmp(PQgetvalue(result, i, 0), "f") == 0)
+						printfPQExpBuffer(&buf, "    TABLE \"%s\" CONSTRAINT \"%s\" %s",
+										  PQgetvalue(result, i, 3),
+										  PQgetvalue(result, i, 1),
+										  PQgetvalue(result, i, 2));
+					else
+						printfPQExpBuffer(&buf, "    \"%s\" %s",
+										  PQgetvalue(result, i, 1),
+										  PQgetvalue(result, i, 2));
 
 					printTableAddFooter(&cont, buf.data);
 				}
@@ -2415,15 +2472,36 @@ describeOneTableDetails(const char *schemaname,
 			PQclear(result);
 		}
 
-		/* print incoming foreign-key references (none if no triggers) */
-		if (tableinfo.hastriggers)
+		/* print incoming foreign-key references */
+		if (tableinfo.hastriggers ||
+			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 		{
-			printfPQExpBuffer(&buf,
-							  "SELECT conname, conrelid::pg_catalog.regclass,\n"
-							  "  pg_catalog.pg_get_constraintdef(c.oid, true) as condef\n"
-							  "FROM pg_catalog.pg_constraint c\n"
-							  "WHERE c.confrelid = '%s' AND c.contype = 'f' ORDER BY 1;",
-							  oid);
+			if (pset.sversion >= 110000)
+			{
+				printfPQExpBuffer(&buf,
+								  "WITH RECURSIVE constraints (oid, parent, conname, conrelid, confrelid) as (\n"
+								  "   SELECT oid, conparentid, conname, conrelid, confrelid\n"
+								  "     FROM pg_catalog.pg_constraint WHERE contype = 'f' AND confrelid = '%s'\n"
+								  "  UNION\n"
+								  "   SELECT pc.oid, pc.conparentid, pc.conname, pc.conrelid, pc.confrelid\n"
+								  "     FROM constraints, pg_constraint pc\n"
+								  "    WHERE pc.oid = constraints.parent\n"
+								  ") SELECT conname, conrelid::pg_catalog.regclass, pg_catalog.pg_get_constraintdef(oid)\n"
+								  "    FROM constraints\n"
+								  "   WHERE parent = 0\n"
+								  "ORDER BY conname;",
+								  oid);
+			}
+			else
+			{
+				printfPQExpBuffer(&buf,
+								  "SELECT conname, conrelid::pg_catalog.regclass,\n"
+								  "  pg_catalog.pg_get_constraintdef(c.oid, true) as condef\n"
+								  "FROM pg_catalog.pg_constraint c\n"
+								  "WHERE c.confrelid = '%s' AND c.contype = 'f' ORDER BY 1;",
+								  oid);
+			}
+
 			result = PSQLexec(buf.data);
 			if (!result)
 				goto error_return;

@@ -1226,6 +1226,7 @@ addRangeTableEntry(ParseState *pstate,
 	rel = parserOpenTable(pstate, relation, lockmode);
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
+	rte->delaylock = false;
 	rte->rellockmode = lockmode;
 
 	/*
@@ -1304,6 +1305,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->alias = alias;
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
+	rte->delaylock = false;
 	rte->rellockmode = lockmode;
 
 	/*

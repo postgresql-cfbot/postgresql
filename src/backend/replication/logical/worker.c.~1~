@@ -184,7 +184,6 @@ create_estate_for_relation(LogicalRepRelMapEntry *rel)
 	rte->rtekind = RTE_RELATION;
 	rte->relid = RelationGetRelid(rel->localrel);
 	rte->relkind = rel->localrel->rd_rel->relkind;
-	rte->delaylock = false;
 	rte->rellockmode = AccessShareLock;
 	ExecInitRangeTable(estate, list_make1(rte));
 

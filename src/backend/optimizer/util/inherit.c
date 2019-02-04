@@ -365,6 +365,17 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	*childrte_p = childrte;
 	childrte->relid = childOID;
 	childrte->relkind = childrel->rd_rel->relkind;
+
+	/*
+	 * For leaf partitions, we've no need to obtain the lock on the relation
+	 * during query execution until the partition is first required.  This can
+	 * drastically reduce the number of partitions we must lock when many
+	 * partitions are run-time pruned.
+	 */
+	childrte->delaylock = (childOID != parentOID &&
+		parentrte->relkind == RELKIND_PARTITIONED_TABLE &&
+		childrte->relkind != RELKIND_PARTITIONED_TABLE);
+
 	/* A partitioned child will need to be expanded further. */
 	if (childOID != parentOID &&
 		childrte->relkind == RELKIND_PARTITIONED_TABLE)

@@ -1599,7 +1599,6 @@ ApplyRetrieveRule(Query *parsetree,
 	/* Clear fields that should not be set in a subquery RTE */
 	rte->relid = InvalidOid;
 	rte->relkind = 0;
-	rte->delaylock = false;
 	rte->rellockmode = 0;
 	rte->tablesample = NULL;
 	rte->inh = false;			/* must not be set for a subquery */

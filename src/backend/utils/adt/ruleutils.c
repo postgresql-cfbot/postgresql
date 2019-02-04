@@ -1003,6 +1003,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		oldrte->rtekind = RTE_RELATION;
 		oldrte->relid = trigrec->tgrelid;
 		oldrte->relkind = relkind;
+		oldrte->delaylock = false;
 		oldrte->rellockmode = AccessShareLock;
 		oldrte->alias = makeAlias("old", NIL);
 		oldrte->eref = oldrte->alias;
@@ -1014,6 +1015,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		newrte->rtekind = RTE_RELATION;
 		newrte->relid = trigrec->tgrelid;
 		newrte->relkind = relkind;
+		newrte->delaylock = false;
 		newrte->rellockmode = AccessShareLock;
 		newrte->alias = makeAlias("new", NIL);
 		newrte->eref = newrte->alias;
@@ -3210,6 +3212,7 @@ deparse_context_for(const char *aliasname, Oid relid)
 	rte->rtekind = RTE_RELATION;
 	rte->relid = relid;
 	rte->relkind = RELKIND_RELATION;	/* no need for exactness here */
+	rte->delaylock = false;
 	rte->rellockmode = AccessShareLock;
 	rte->alias = makeAlias(aliasname, NIL);
 	rte->eref = rte->alias;

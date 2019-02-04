@@ -1731,6 +1731,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	pkrte->rtekind = RTE_RELATION;
 	pkrte->relid = RelationGetRelid(pk_rel);
 	pkrte->relkind = pk_rel->rd_rel->relkind;
+	pkrte->delaylock = false;
 	pkrte->rellockmode = AccessShareLock;
 	pkrte->requiredPerms = ACL_SELECT;
 
@@ -1738,6 +1739,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	fkrte->rtekind = RTE_RELATION;
 	fkrte->relid = RelationGetRelid(fk_rel);
 	fkrte->relkind = fk_rel->rd_rel->relkind;
+	fkrte->delaylock = false;
 	fkrte->rellockmode = AccessShareLock;
 	fkrte->requiredPerms = ACL_SELECT;
 

@@ -92,6 +92,9 @@ typedef struct PgFdwRelationInfo
 	/* joinclauses contains only JOIN/ON conditions for an outer join */
 	List	   *joinclauses;	/* List of RestrictInfo */
 
+	/* Upper relation information */
+	UpperRelationKind stage;
+
 	/* Grouping information */
 	List	   *grouped_tlist;
 
@@ -175,10 +178,15 @@ extern void deparseAnalyzeSql(StringInfo buf, Relation rel,
 				  List **retrieved_attrs);
 extern void deparseStringLiteral(StringInfo buf, const char *val);
 extern Expr *find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel);
+extern Expr *find_em_expr_for_input_target(PlannerInfo *root,
+							  EquivalenceClass *ec,
+							  PathTarget *target);
 extern List *build_tlist_to_deparse(RelOptInfo *foreignrel);
 extern void deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root,
 						RelOptInfo *foreignrel, List *tlist,
-						List *remote_conds, List *pathkeys, bool is_subquery,
+						List *remote_conds, List *pathkeys,
+						bool has_final_sort, bool has_limit,
+						bool is_subquery,
 						List **retrieved_attrs, List **params_list);
 extern const char *get_jointype_name(JoinType jointype);
 

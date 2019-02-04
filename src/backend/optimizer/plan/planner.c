@@ -1688,6 +1688,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	bool		final_target_parallel_safe;
 	RelOptInfo *current_rel;
 	RelOptInfo *final_rel;
+	FinalPathExtraData extra;
 	ListCell   *lc;
 
 	/* Tweak caller-supplied tuple_fraction if have LIMIT/OFFSET */
@@ -2252,6 +2253,11 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		}
 	}
 
+	extra.limit_needed = limit_needed(parse);
+	extra.limit_tuples = limit_tuples;
+	extra.count_est = count_est;
+	extra.offset_est = offset_est;
+
 	/*
 	 * If there is an FDW that's responsible for all baserels of the query,
 	 * let it consider adding ForeignPaths.
@@ -2260,12 +2266,12 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		final_rel->fdwroutine->GetForeignUpperPaths)
 		final_rel->fdwroutine->GetForeignUpperPaths(root, UPPERREL_FINAL,
 													current_rel, final_rel,
-													NULL);
+													&extra);
 
 	/* Let extensions possibly add some more paths */
 	if (create_upper_paths_hook)
 		(*create_upper_paths_hook) (root, UPPERREL_FINAL,
-									current_rel, final_rel, NULL);
+									current_rel, final_rel, &extra);
 
 	/* Note: currently, we leave it to callers to do set_cheapest() */
 }

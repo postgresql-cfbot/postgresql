@@ -15,17 +15,40 @@
 #include "access/hash.h"
 #include "catalog/pg_type.h"
 #include "common/ip.h"
+#include "lib/hyperloglog.h"
 #include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/inet.h"
+#include "utils/sortsupport.h"
 
+/* A few constants for the width in bits of certain values in inet/cidr
+ * abbreviated keys. */
+#if SIZEOF_DATUM == 8
+#define ABBREV_BITS_INET4_NETMASK_SIZE 6
+#define ABBREV_BITS_INET4_SUBNET 25
+#endif
 
 static int32 network_cmp_internal(inet *a1, inet *a2);
 static bool addressOK(unsigned char *a, int bits, int family);
 static inet *internal_inetpl(inet *ip, int64 addend);
 
+/* sortsupport for inet/cidr */
+typedef struct
+{
+	int64		input_count;	/* number of non-null values seen */
+	bool		estimating;		/* true if estimating cardinality */
+
+	hyperLogLogState abbr_card; /* cardinality estimator */
+}			network_sortsupport_state;
+
+static int	network_cmp_internal(inet *a1, inet *a2);
+static int	network_fast_cmp(Datum x, Datum y, SortSupport ssup);
+static int	network_cmp_abbrev(Datum x, Datum y, SortSupport ssup);
+static bool network_abbrev_abort(int memtupcount, SortSupport ssup);
+static Datum network_abbrev_convert(Datum original, SortSupport ssup);
 
 /*
  * Common INET/CIDR input routine
@@ -387,6 +410,411 @@ network_cmp(PG_FUNCTION_ARGS)
 	inet	   *a2 = PG_GETARG_INET_PP(1);
 
 	PG_RETURN_INT32(network_cmp_internal(a1, a2));
+}
+
+/*
+ *	SortSupport implementation functions.
+ */
+
+/*
+ * SortSupport strategy function. Populates a SortSupport struct with the
+ * information necessary to use comparison by abbreviated keys.
+ */
+Datum
+network_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = network_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	if (ssup->abbreviate)
+	{
+		network_sortsupport_state *uss;
+		MemoryContext oldcontext;
+
+		oldcontext = MemoryContextSwitchTo(ssup->ssup_cxt);
+
+		uss = palloc(sizeof(network_sortsupport_state));
+		uss->input_count = 0;
+		uss->estimating = true;
+		initHyperLogLog(&uss->abbr_card, 10);
+
+		ssup->ssup_extra = uss;
+
+		ssup->comparator = network_cmp_abbrev;
+		ssup->abbrev_converter = network_abbrev_convert;
+		ssup->abbrev_abort = network_abbrev_abort;
+		ssup->abbrev_full_comparator = network_fast_cmp;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * SortSupport authoritative comparison function. Pulls two inet structs from
+ * the heap and runs a standard comparison on them.
+ */
+static int
+network_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	inet	   *arg1 = DatumGetInetPP(x);
+	inet	   *arg2 = DatumGetInetPP(y);
+
+	return network_cmp_internal(arg1, arg2);
+}
+
+/*
+ * SortSupport abbreviated key comparison function. Compares two inet/cidr
+ * values addresses quickly by treating them like integers, and without having
+ * to go to the heap. This works because we've packed them in a form that can
+ * support this comparison in network_abbrev_convert.
+ */
+static int
+network_cmp_abbrev(Datum x, Datum y, SortSupport ssup)
+{
+	if (x > y)
+		return 1;
+	else if (x == y)
+		return 0;
+	else
+		return -1;
+}
+
+/*
+ * Callback for estimating effectiveness of abbreviated key optimization.
+ *
+ * We pay no attention to the cardinality of the non-abbreviated data, because
+ * there is no equality fast-path within authoritative inet comparator.
+ */
+static bool
+network_abbrev_abort(int memtupcount, SortSupport ssup)
+{
+	network_sortsupport_state *uss = ssup->ssup_extra;
+	double		abbr_card;
+
+	if (memtupcount < 10000 || uss->input_count < 10000 || !uss->estimating)
+		return false;
+
+	abbr_card = estimateHyperLogLog(&uss->abbr_card);
+
+	/*
+	 * If we have >100k distinct values, then even if we were sorting many
+	 * billion rows we'd likely still break even, and the penalty of undoing
+	 * that many rows of abbrevs would probably not be worth it. At this point
+	 * we stop counting because we know that we're now fully committed.
+	 */
+	if (abbr_card > 100000.0)
+	{
+#ifdef TRACE_SORT
+		if (trace_sort)
+			elog(LOG,
+				 "network_abbrev: estimation ends at cardinality %f"
+				 " after " INT64_FORMAT " values (%d rows)",
+				 abbr_card, uss->input_count, memtupcount);
+#endif
+		uss->estimating = false;
+		return false;
+	}
+
+	/*
+	 * Target minimum cardinality is 1 per ~2k of non-null inputs. 0.5 row
+	 * fudge factor allows us to abort earlier on genuinely pathological data
+	 * where we've had exactly one abbreviated value in the first 2k
+	 * (non-null) rows.
+	 */
+	if (abbr_card < uss->input_count / 2000.0 + 0.5)
+	{
+#ifdef TRACE_SORT
+		if (trace_sort)
+			elog(LOG,
+				 "network_abbrev: aborting abbreviation at cardinality %f"
+				 " below threshold %f after " INT64_FORMAT " values (%d rows)",
+				 abbr_card, uss->input_count / 2000.0 + 0.5, uss->input_count,
+				 memtupcount);
+#endif
+		return true;
+	}
+
+#ifdef TRACE_SORT
+	if (trace_sort)
+		elog(LOG,
+			 "network_abbrev: cardinality %f after " INT64_FORMAT
+			 " values (%d rows)", abbr_card, uss->input_count, memtupcount);
+#endif
+
+	return false;
+}
+
+/*
+ * SortSupport conversion routine. Converts original inet/cidr representations
+ * to abbreviated keys . The inet/cidr types are pass-by-reference, so is an
+ * optimization so that sorting routines don't have to pull full values from
+ * the heap to compare.
+ *
+ * All inet values have three major components (and take for example the
+ * address 1.2.3.4/24):
+ *
+ *     * A network, or netmasked bits (1.2.3.0).
+ *     * A netmask size (/24).
+ *     * A subnet, or bits outside of the netmask (0.0.0.4).
+ *
+ * cidr values are the same except that with only the first two components --
+ * all their subnet bits *must* be zero (1.2.3.0/24).
+ *
+ * IPv4 and IPv6 are identical in this makeup, with the difference being that
+ * IPv4 addresses have a maximum of 32 bits compared to IPv6's 64 bits, so in
+ * IPv6 each part may be larger.
+ *
+ * inet/cdir types compare using these sorting rules. If inequality is detected
+ * at any step, comparison is done. If any rule is a tie, the algorithm drops
+ * through to the next to break it:
+ *
+ *     1. IPv4 always appears before IPv6.
+ *     2. Just bits in the network are compared.
+ *     3. Netmask size is compared.
+ *     4. All bits are compared (having made it here, we know that both
+ *        netmasked bits and netmask size are equal, so we're in effect only
+ *        comparing subnet bits).
+ *
+ * When generating abbreviated keys for SortSupport, we pack in as much
+ * information as we can while ensuring that when comparing those keys as
+ * integers, the rules above will be respected.
+ *
+ * In most cases, that means just the most significant of the netmasked bits
+ * are retained, but in the case of IPv4 addresses on a 64-bit machine, we can
+ * hold almost all relevant information for comparisons to the degree that we
+ * almost never have to fall back to authoritative comparison. In all cases,
+ * there will be enough data present for the abbreviated keys to perform very
+ * well in all except the very worst of circumstances (and in those, key
+ * abbreviation will probably be aborted as we detect low cardinality).
+ *
+ * IPv4
+ * ----
+ *
+ * 32-bit machine:
+ *
+ * Start with 1 bit for the IP family (IPv4 or IPv6; this bit is present in
+ * every case below) followed by all but 1 of the netmasked bits. If those are
+ * all equal, the system will have to fall back to non-abbreviated comparison.
+ *
+ * +----------+---------------------+
+ * | 1 bit IP |   31 bits network   |     (up to 1 bit
+ * |  family  |     (truncated)     |   network omitted)
+ * +----------+---------------------+
+ *
+ * 64-bit machine:
+ *
+ * The most interesting case: we have space to store all netmasked bits,
+ * followed by the netmask size, followed by 25 bits of the subnet. We lay the
+ * bits out carefully this way so that the entire value can be compared as an
+ * integer while still adhering to the inet/cidr sorting rules stated above.
+ *
+ * 25 bits is more than enough to store most subnets (all but /6 or smaller),
+ * so in the vast majority of cases these keys should hold enough information
+ * to save trips to the heap.
+ *
+ * +----------+-----------------------+--------------+--------------------+
+ * | 1 bit IP |    32 bits network    |    6 bits    |   25 bits subnet   |
+ * |  family  |        (full)         | network size |    (truncated)     |
+ * +----------+-----------------------+--------------+--------------------+
+ *
+ * IPv6
+ * ----
+ *
+ * 32-bit machine:
+ *
+ * +----------+---------------------+
+ * | 1 bit IP |   31 bits network   |    (up to 97 bits
+ * |  family  |     (truncated)     |   network omitted)
+ * +----------+---------------------+
+ *
+ * 64-bit machine:
+ *
+ * +----------+---------------------------------+
+ * | 1 bit IP |         63 bits network         |    (up to 65 bits
+ * |  family  |           (truncated)           |   network omitted)
+ * +----------+---------------------------------+
+ *
+ */
+static Datum
+network_abbrev_convert(Datum original, SortSupport ssup)
+{
+	network_sortsupport_state *uss = ssup->ssup_extra;
+	inet	   *authoritative = DatumGetInetPP(original);
+	Datum		res;
+	Datum		ipaddr_datum,
+				network,
+				subnet,
+				subnet_bitmask;
+	int			datum_subnet_size;
+
+	/*
+	 * If another IP family is ever added, we'll need to redesign the key
+	 * abbreviation strategy.
+	 */
+	Assert(ip_family(authoritative) == PGSQL_AF_INET ||
+		   ip_family(authoritative) == PGSQL_AF_INET6);
+
+	res = (Datum) 0;
+	if (ip_family(authoritative) == PGSQL_AF_INET6)
+	{
+		/* Shift a 1 over to the datum's most significant bit. */
+		res = ((Datum) 1) << (SIZEOF_DATUM * BITS_PER_BYTE - 1);
+	}
+
+	/*
+	 * Create an integer representation of the IP address by taking its first
+	 * 4 or 8 bytes. We take 8 bytes of an IPv6 address on a 64-bit machine
+	 * and 4 bytes on a 32-bit. Always take all 4 bytes of an IPv4 address.
+	 *
+	 * We're consuming an array of char, so make sure to byteswap on little
+	 * endian systems (an inet's IP array emulates big endian in that the
+	 * first byte is always the most significant).
+	 */
+	if (ip_family(authoritative) == PGSQL_AF_INET6)
+	{
+		ipaddr_datum = *((Datum *) ip_addr(authoritative));
+		ipaddr_datum = DatumBigEndianToNative(ipaddr_datum);
+	}
+	else
+	{
+		uint32		ipaddr_datum32 = *((uint32 *) ip_addr(authoritative));
+#ifndef WORDS_BIGENDIAN
+		ipaddr_datum = pg_bswap32(ipaddr_datum32);
+#endif
+	}
+
+	/*
+	 * Number of bits in subnet. e.g. An IPv4 that's /24 is 32 - 24 = 8.
+	 *
+	 * However, only some of the bits may have made it into the fixed sized
+	 * datum, so take the smallest number between bits in the subnet and bits
+	 * in the datum which are not part of the network.
+	 */
+	datum_subnet_size = Min(ip_maxbits(authoritative) - ip_bits(authoritative),
+							SIZEOF_DATUM * BITS_PER_BYTE - ip_bits(authoritative));
+
+	/* we may have ended up with < 0 for a large netmask size */
+	if (datum_subnet_size <= 0)
+	{
+		/* the network occupies the entirety `ipaddr_datum` */
+		network = ipaddr_datum;
+		subnet = (Datum) 0;
+	}
+	else
+	{
+		/*
+		 * This shift creates a power of two like `0010 0000`, and subtracts
+		 * one to create a bitmask for an IP's subnet bits like `0001 1111`.
+		 *
+		 * Note that `datum_subnet_mask` may be == 0, in which case we'll
+		 * generate a 0 bitmask and `subnet` will also come out as 0.
+		 */
+		subnet_bitmask = (((Datum) 1) << datum_subnet_size) - 1;
+
+		/* and likewise, use the mask's complement to get the netmask bits */
+		network = ipaddr_datum & ~subnet_bitmask;
+
+		/* bitwise AND the IP and bitmask to extract just the subnet bits */
+		subnet = ipaddr_datum & subnet_bitmask;
+	}
+
+#if SIZEOF_DATUM == 8
+
+	if (ip_family(authoritative) == PGSQL_AF_INET6)
+	{
+		/*
+		 * IPv6 on a 64-bit machine: keep the most significant 63 netmasked
+		 * bits.
+		 */
+		res |= network >> 1;
+	}
+	else
+	{
+		/*
+		 * IPv4 on a 64-bit machine: keep all 32 netmasked bits, netmask size,
+		 * and most significant 25 subnet bits (see diagram above for more
+		 * detail).
+		 */
+
+		Datum		network_shifted;
+		Datum		netmask_size_and_subnet = 0;
+
+		/*
+		 * an IPv4 netmask size has a maximum value of 32, which takes 6 bits
+		 * to contain (0x20 in hex)
+		 */
+		Datum		netmask_size = (Datum) ip_bits(authoritative);
+
+		Assert(netmask_size <= ip_maxbits(authoritative));
+		netmask_size_and_subnet |= netmask_size << ABBREV_BITS_INET4_SUBNET;
+
+		/*
+		 * if we have more than 25 subnet bits of information, shift it down
+		 * to the available size
+		 */
+		if (datum_subnet_size > ABBREV_BITS_INET4_SUBNET)
+		{
+			subnet >>= datum_subnet_size - ABBREV_BITS_INET4_SUBNET;
+		}
+		netmask_size_and_subnet |= subnet;
+
+		/*
+		 * There's a fair bit of scary bit manipulation in this function. This
+		 * is an extra check that verifies that that nothing outside of the
+		 * least signifiant 31 bits is set.
+		 *
+		 * (PG_UINT32_MAX >> 1) = 2^31 - 1 = 31 bits of 1s
+		 */
+		Assert((netmask_size_and_subnet | (PG_UINT32_MAX >> 1)) == (PG_UINT32_MAX >> 1));
+
+		/*
+		 * Shift left 31 bits: 6 bits netmask size + 25 subnet bits.
+		 *
+		 * And assert the opposite as above: no bits should be set in the
+		 * least significant 31 positions where we store netmask size and
+		 * subnet.
+		 */
+		network_shifted = network << (ABBREV_BITS_INET4_NETMASK_SIZE + ABBREV_BITS_INET4_SUBNET);
+		Assert((network_shifted & ~((Datum) PG_UINT32_MAX >> 1)) == network_shifted);
+
+		res |= network_shifted | netmask_size_and_subnet;
+	}
+
+#else							/* SIZEOF_DATUM != 8 */
+
+	/*
+	 * 32-bit machine: keep the most significant 31 netmasked bits in both
+	 * IPv4 and IPv6.
+	 */
+	res |= network >> 1;
+
+#endif
+
+	uss->input_count += 1;
+
+	/*
+	 * Cardinality estimation. The estimate uses uint32, so on a 64-bit
+	 * machine, XOR the two 32-bit halves together to produce slightly more
+	 * entropy.
+	 */
+	if (uss->estimating)
+	{
+		uint32		tmp;
+
+#if SIZEOF_DATUM == 8
+		tmp = (uint32) res ^ (uint32) ((uint64) res >> 32);
+#else							/* SIZEOF_DATUM != 8 */
+		tmp = (uint32) res;
+#endif
+
+		addHyperLogLog(&uss->abbr_card, DatumGetUInt32(hash_uint32(tmp)));
+	}
+
+	return res;
 }
 
 /*

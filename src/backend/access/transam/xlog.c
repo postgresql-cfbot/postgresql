@@ -5256,6 +5256,7 @@ BootStrapXLOG(void)
 
 	/* Set important parameter values for use when replaying WAL */
 	ControlFile->MaxConnections = MaxConnections;
+	ControlFile->max_wal_senders = max_wal_senders;
 	ControlFile->max_worker_processes = max_worker_processes;
 	ControlFile->max_prepared_xacts = max_prepared_xacts;
 	ControlFile->max_locks_per_xact = max_locks_per_xact;
@@ -6167,6 +6168,9 @@ CheckRequiredParameterValues(void)
 		RecoveryRequiresIntParameter("max_connections",
 									 MaxConnections,
 									 ControlFile->MaxConnections);
+		RecoveryRequiresIntParameter("max_wal_senders",
+									 max_wal_senders,
+									 ControlFile->max_wal_senders);
 		RecoveryRequiresIntParameter("max_worker_processes",
 									 max_worker_processes,
 									 ControlFile->max_worker_processes);
@@ -9459,6 +9463,7 @@ XLogReportParameters(void)
 	if (wal_level != ControlFile->wal_level ||
 		wal_log_hints != ControlFile->wal_log_hints ||
 		MaxConnections != ControlFile->MaxConnections ||
+		max_wal_senders != ControlFile->max_wal_senders ||
 		max_worker_processes != ControlFile->max_worker_processes ||
 		max_prepared_xacts != ControlFile->max_prepared_xacts ||
 		max_locks_per_xact != ControlFile->max_locks_per_xact ||
@@ -9477,6 +9482,7 @@ XLogReportParameters(void)
 			XLogRecPtr	recptr;
 
 			xlrec.MaxConnections = MaxConnections;
+			xlrec.max_wal_senders = max_wal_senders;
 			xlrec.max_worker_processes = max_worker_processes;
 			xlrec.max_prepared_xacts = max_prepared_xacts;
 			xlrec.max_locks_per_xact = max_locks_per_xact;
@@ -9492,6 +9498,7 @@ XLogReportParameters(void)
 		}
 
 		ControlFile->MaxConnections = MaxConnections;
+		ControlFile->max_wal_senders = max_wal_senders;
 		ControlFile->max_worker_processes = max_worker_processes;
 		ControlFile->max_prepared_xacts = max_prepared_xacts;
 		ControlFile->max_locks_per_xact = max_locks_per_xact;
@@ -9895,6 +9902,7 @@ xlog_redo(XLogReaderState *record)
 
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->MaxConnections = xlrec.MaxConnections;
+		ControlFile->max_wal_senders = xlrec.max_wal_senders;
 		ControlFile->max_worker_processes = xlrec.max_worker_processes;
 		ControlFile->max_prepared_xacts = xlrec.max_prepared_xacts;
 		ControlFile->max_locks_per_xact = xlrec.max_locks_per_xact;
@@ -9927,7 +9935,7 @@ xlog_redo(XLogReaderState *record)
 		UpdateControlFile();
 		LWLockRelease(ControlFileLock);
 
-		/* Check to see if any changes to max_connections give problems */
+		/* Check to see if any parameter change gives a problem on recovery */
 		CheckRequiredParameterValues();
 	}
 	else if (info == XLOG_FPW_CHANGE)

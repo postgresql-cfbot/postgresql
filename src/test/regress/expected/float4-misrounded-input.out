@@ -352,7 +352,7 @@ SELECT float4send('55895e-16'::float4);
 SELECT float4send('7038531e-32'::float4);
  float4send 
 ------------
- \x15ae43fd
+ \x15ae43fe
 (1 row)
 
 SELECT float4send('702990899e-20'::float4);
@@ -406,7 +406,7 @@ SELECT float4send('5382571e-37'::float4);
 SELECT float4send('82381273e-35'::float4);
  float4send 
 ------------
- \x128289d1
+ \x128289d0
 (1 row)
 
 SELECT float4send('750486563e-38'::float4);
@@ -874,7 +874,7 @@ select float4send(flt) as ibits,
  \x59be6cea |        6.7e+15 |        6.7e+15 | \x59be6cea | t
  \x5d5ab6c4 |       9.85e+17 |       9.85e+17 | \x5d5ab6c4 | t
  \x2cc4a9bd |     5.5895e-12 |     5.5895e-12 | \x2cc4a9bd | t
- \x15ae43fd |   7.038531e-26 |   7.038531e-26 | \x15ae43fd | t
+ \x15ae43fd |   7.038531e-26 |  7.0385313e-26 | \x15ae43fe | f
  \x2cf757ca |  7.0299088e-12 |  7.0299088e-12 | \x2cf757ca | t
  \x665ba998 |  2.5933168e+23 |  2.5933168e+23 | \x665ba998 | t
  \x743c3324 |  5.9642887e+31 |  5.9642887e+31 | \x743c3324 | t
@@ -905,7 +905,7 @@ select float4send(flt) as ibits,
  \x4f9f24f7 |  5.3399997e+09 |  5.3399997e+09 | \x4f9f24f7 | t
  \x3a8722c3 |   0.0010310042 |   0.0010310042 | \x3a8722c3 | t
  \x5c800041 |   2.882326e+17 |   2.882326e+17 | \x5c800041 | t
- \x15ae43fd |   7.038531e-26 |   7.038531e-26 | \x15ae43fd | t
+ \x15ae43fd |   7.038531e-26 |  7.0385313e-26 | \x15ae43fe | f
  \x5d4cccfb |   9.223404e+17 |   9.223404e+17 | \x5d4cccfb | t
  \x4c800001 |   6.710887e+07 |   6.710887e+07 | \x4c800001 | t
  \x57800ed8 |   2.816025e+14 |   2.816025e+14 | \x57800ed8 | t

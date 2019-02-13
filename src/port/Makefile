@@ -36,7 +36,7 @@ override CPPFLAGS := -I$(top_builddir)/src/port -DFRONTEND $(CPPFLAGS)
 LIBS += $(PTHREAD_LIBS)
 
 OBJS = $(LIBOBJS) $(PG_CRC32C_OBJS) chklocale.o erand48.o inet_net_ntop.o \
-	noblock.o path.o pgcheckdir.o pgmkdirp.o pgsleep.o \
+	noblock.o path.o pg_bitutils.o pgcheckdir.o pgmkdirp.o pgsleep.o \
 	pg_strong_random.o pgstrcasecmp.o pgstrsignal.o pqsignal.o \
 	qsort.o qsort_arg.o quotes.o snprintf.o sprompt.o strerror.o \
 	tar.o thread.o
@@ -72,6 +72,9 @@ thread_shlib.o: CFLAGS+=$(PTHREAD_CFLAGS)
 pg_crc32c_sse42.o: CFLAGS+=$(CFLAGS_SSE42)
 pg_crc32c_sse42_shlib.o: CFLAGS+=$(CFLAGS_SSE42)
 pg_crc32c_sse42_srv.o: CFLAGS+=$(CFLAGS_SSE42)
+
+# pg_bitutils.c needs CFLAGS_POPCNT
+pg_bitutils.o: CFLAGS+=$(CFLAGS_POPCNT)
 
 # all versions of pg_crc32c_armv8.o need CFLAGS_ARMV8_CRC32C
 pg_crc32c_armv8.o: CFLAGS+=$(CFLAGS_ARMV8_CRC32C)

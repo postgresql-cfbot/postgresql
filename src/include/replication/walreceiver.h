@@ -104,8 +104,7 @@ typedef struct
 	TimestampTz latestWalEndTime;
 
 	/*
-	 * connection string; initially set to connect to the primary, and later
-	 * clobbered to hide security-sensitive fields.
+	 * Connection string clobbered to hide security-sensitive fields.
 	 */
 	char		conninfo[MAXCONNINFO];
 
@@ -121,9 +120,6 @@ typedef struct
 	 * primary
 	 */
 	char		slotname[NAMEDATALEN];
-
-	/* set true once conninfo is ready to display (obfuscated pwds etc) */
-	bool		ready_to_display;
 
 	/*
 	 * Latch used by startup process to wake up walreceiver after telling it
@@ -306,8 +302,7 @@ extern void WalRcvShmemInit(void);
 extern void ShutdownWalRcv(void);
 extern bool WalRcvStreaming(void);
 extern bool WalRcvRunning(void);
-extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr,
-					 const char *conninfo, const char *slotname);
+extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr);
 extern XLogRecPtr GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);

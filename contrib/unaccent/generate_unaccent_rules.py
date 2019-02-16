@@ -46,7 +46,8 @@ if sys.version_info[0] <= 2:
     def bytes(source, encoding='ascii', errors='strict'):
         return source.encode(encoding=encoding, errors=errors)
 # END: Python 2/3 compatibility - remove when Python 2 compatibility dropped
-
+else:
+	sys.stdout.reconfigure(encoding='utf-8')
 import re
 import argparse
 import sys

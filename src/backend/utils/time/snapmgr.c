@@ -1502,6 +1502,13 @@ ImportSnapshot(const char *idstr)
 	 */
 	memset(&snapshot, 0, sizeof(snapshot));
 
+	/*
+	 * Do not rely on the fact that SNAPSHOT_MVCC is zero. (The core code
+	 * currently does not use this field of imported snapshot, but let's keep
+	 * things consistent.)
+	 */
+	snapshot.snapshot_type = SNAPSHOT_MVCC;
+
 	parseVxidFromText("vxid:", &filebuf, path, &src_vxid);
 	src_pid = parseIntFromText("pid:", &filebuf, path);
 	/* we abuse parseXidFromText a bit here ... */

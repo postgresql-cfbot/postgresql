@@ -1584,13 +1584,36 @@ inheritance_planner(PlannerInfo *root)
 	 */
 
 	/*
-	 * If we managed to exclude every child rel, return a dummy plan; it
-	 * doesn't even need a ModifyTable node.
+	 * We managed to exclude every child rel, so generate a dummy path
+	 * representing empty set.  Although it's clear that no data will be
+	 * updated or deleted, we will still need to have a ModifyTable node so
+	 * that any statement triggers are executed.
 	 */
 	if (subpaths == NIL)
 	{
-		set_dummy_rel_pathlist(final_rel);
-		return;
+		Path   *dummy_path;
+		List   *tlist;
+
+		tlist = root->processed_tlist = preprocess_targetlist(root);
+		final_rel->reltarget = create_pathtarget(root, tlist);
+
+		/*
+		 * Following information will be needed to make a minimally valid
+		 * ModifyTable.
+		 */
+		dummy_path = (Path *) create_append_path(NULL, final_rel, NIL, NIL,
+												 NULL, 0, false, NIL, -1);
+		resultRelations = list_make1_int(parse->resultRelation);
+		subpaths = list_make1(dummy_path);
+		subroots = list_make1(root);
+		if (parse->returningList)
+			returningLists = list_make1(parse->returningList);
+
+		/*
+		 * At least simple_rte_array must be valid for plan creation to work
+		 * correctly.
+		 */
+		final_rtable = parse->rtable;
 	}
 
 	/*

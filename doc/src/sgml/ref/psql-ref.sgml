@@ -1594,7 +1594,8 @@ testdb=&gt;
         By default, only user-created objects are shown; supply a
         pattern or the <literal>S</literal> modifier to include system objects.
         If <literal>+</literal> is appended to the command name, each object
-        is listed with its associated permissions and description, if any.
+        is listed with its associated permissions, on-disk size and description,
+        if any.
         </para>
         </listitem>
       </varlistentry>

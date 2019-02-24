@@ -4188,6 +4188,26 @@ listSchemas(const char *pattern, bool verbose, bool showSystem)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "n.nspacl");
+		if (pset.sversion >= 80100)
+		{
+			/* As of PostgreSQL 9.3, use LATERAL JOIN */
+			if (pset.sversion >= 93000)
+			{
+				appendPQExpBuffer(&buf, ",\n  schema_size AS \"%s\"",
+							  gettext_noop("Size"));
+			}
+			else
+			{
+				appendPQExpBuffer(&buf,
+							  ",\n  ((SELECT pg_catalog.pg_size_pretty((sum(pg_catalog.pg_total_relation_size(c.oid)))::bigint) FROM pg_catalog.pg_class c\n    JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = n.nspname AND c.relkind IN (%s,%s,%s))) AS \"%s\"",
+							  gettext_noop("Size"),
+							  CppAsString2(RELKIND_RELATION),
+							  CppAsString2(RELKIND_MATVIEW),
+							  CppAsString2(RELKIND_SEQUENCE)
+							  );
+			}
+		}
+
 		appendPQExpBuffer(&buf,
 						  ",\n  pg_catalog.obj_description(n.oid, 'pg_namespace') AS \"%s\"",
 						  gettext_noop("Description"));
@@ -4195,6 +4215,16 @@ listSchemas(const char *pattern, bool verbose, bool showSystem)
 
 	appendPQExpBuffer(&buf,
 					  "\nFROM pg_catalog.pg_namespace n\n");
+	/* As of PostgreSQL 9.3, use LATERAL JOIN */
+	if (pset.sversion >= 93000)
+	{
+		appendPQExpBuffer(&buf,
+						  "  JOIN LATERAL (\n    SELECT pg_catalog.pg_size_pretty(sum(pg_catalog.pg_total_relation_size(c.oid))::bigint) As \"schema_size\"\n    FROM pg_catalog.pg_class c\n      JOIN pg_catalog.pg_namespace s ON s.oid = c.relnamespace\n    WHERE s.nspname = n.nspname AND c.relkind IN (%s,%s,%s)\n  ) l ON true\n",
+							  CppAsString2(RELKIND_RELATION),
+							  CppAsString2(RELKIND_MATVIEW),
+							  CppAsString2(RELKIND_SEQUENCE)
+						  );
+	}
 
 	if (!showSystem && !pattern)
 		appendPQExpBufferStr(&buf,

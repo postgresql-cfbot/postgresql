@@ -26,10 +26,13 @@
 
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#ifdef FRONTEND
+#include "fe_utils/logging.h"
+#endif
 #include "port/pg_crc32c.h"
 
 /*
- * get_controlfile(char *DataDir, const char *progname, bool *crc_ok_p)
+ * get_controlfile(char *DataDir, bool *crc_ok_p)
  *
  * Get controlfile values.  The result is returned as a palloc'd copy of the
  * control file data.
@@ -38,7 +41,7 @@
  * file data is correct.
  */
 ControlFileData *
-get_controlfile(const char *DataDir, const char *progname, bool *crc_ok_p)
+get_controlfile(const char *DataDir, bool *crc_ok_p)
 {
 	ControlFileData *ControlFile;
 	int			fd;
@@ -59,8 +62,8 @@ get_controlfile(const char *DataDir, const char *progname, bool *crc_ok_p)
 						ControlFilePath)));
 #else
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
-				progname, ControlFilePath, strerror(errno));
+		pg_log_fatal("could not open file \"%s\" for reading: %m",
+					 ControlFilePath);
 		exit(EXIT_FAILURE);
 	}
 #endif
@@ -75,8 +78,7 @@ get_controlfile(const char *DataDir, const char *progname, bool *crc_ok_p)
 					 errmsg("could not read file \"%s\": %m", ControlFilePath)));
 #else
 		{
-			fprintf(stderr, _("%s: could not read file \"%s\": %s\n"),
-					progname, ControlFilePath, strerror(errno));
+			pg_log_fatal("could not read file \"%s\": %m", ControlFilePath);
 			exit(EXIT_FAILURE);
 		}
 #endif
@@ -88,8 +90,8 @@ get_controlfile(const char *DataDir, const char *progname, bool *crc_ok_p)
 							ControlFilePath, r, sizeof(ControlFileData))));
 #else
 		{
-			fprintf(stderr, _("%s: could not read file \"%s\": read %d of %zu\n"),
-					progname, ControlFilePath, r, sizeof(ControlFileData));
+			pg_log_fatal("could not read file \"%s\": read %d of %zu",
+						 ControlFilePath, r, sizeof(ControlFileData));
 			exit(EXIT_FAILURE);
 		}
 #endif
@@ -112,10 +114,10 @@ get_controlfile(const char *DataDir, const char *progname, bool *crc_ok_p)
 #ifndef FRONTEND
 		elog(ERROR, _("byte ordering mismatch"));
 #else
-		printf(_("WARNING: possible byte ordering mismatch\n"
-				 "The byte ordering used to store the pg_control file might not match the one\n"
-				 "used by this program.  In that case the results below would be incorrect, and\n"
-				 "the PostgreSQL installation would be incompatible with this data directory.\n"));
+		pg_log_warning("possible byte ordering mismatch\n"
+					   "The byte ordering used to store the pg_control file might not match the one\n"
+					   "used by this program.  In that case the results below would be incorrect, and\n"
+					   "the PostgreSQL installation would be incompatible with this data directory.");
 #endif
 
 	return ControlFile;

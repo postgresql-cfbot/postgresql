@@ -3215,8 +3215,8 @@ foreach my $db (sort keys %create_sql)
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", 'qqq' ],
-	qr/\Qpg_dump: [archiver (db)] connection to database "qqq" failed: FATAL:  database "qqq" does not exist\E/,
-	'pg_dump: [archiver (db)] connection to database "qqq" failed: FATAL:  database "qqq" does not exist'
+	qr/\Qpg_dump: error: connection to database "qqq" failed: FATAL:  database "qqq" does not exist\E/,
+	'pg_dump: error: connection to database "qqq" failed: FATAL:  database "qqq" does not exist'
 );
 
 #########################################
@@ -3224,30 +3224,30 @@ command_fails_like(
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", '--role=regress_dump_test_role' ],
-	qr/\Qpg_dump: [archiver (db)] query failed: ERROR:  permission denied for\E/,
-	'pg_dump: [archiver (db)] query failed: ERROR:  permission denied for');
+	qr/\Qpg_dump: error: query failed: ERROR:  permission denied for\E/,
+	'pg_dump: error: query failed: ERROR:  permission denied for');
 
 #########################################
 # Test dumping a non-existent schema, table, and patterns with --strict-names
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", '-n', 'nonexistant' ],
-	qr/\Qpg_dump: no matching schemas were found\E/,
+	qr/\Qpg_dump: error: no matching schemas were found\E/,
 	'pg_dump: no matching schemas were found');
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", '-t', 'nonexistant' ],
-	qr/\Qpg_dump: no matching tables were found\E/,
+	qr/\Qpg_dump: error: no matching tables were found\E/,
 	'pg_dump: no matching tables were found');
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", '--strict-names', '-n', 'nonexistant*' ],
-	qr/\Qpg_dump: no matching schemas were found for pattern\E/,
+	qr/\Qpg_dump: error: no matching schemas were found for pattern\E/,
 	'pg_dump: no matching schemas were found for pattern');
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", '--strict-names', '-t', 'nonexistant*' ],
-	qr/\Qpg_dump: no matching tables were found for pattern\E/,
+	qr/\Qpg_dump: error: no matching tables were found for pattern\E/,
 	'pg_dump: no matching tables were found for pattern');
 
 #########################################

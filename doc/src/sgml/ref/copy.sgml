@@ -380,6 +380,28 @@ WHERE <replaceable class="parameter">condition</replaceable>
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><literal>on_conflict_log</literal></term>
+    <listitem>
+     <para>
+      Specifies to log error record up to specified amount.
+      Instead write the record to log file and
+      precede to the next record
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>log_file_name</literal></term>
+    <listitem>
+     <para>
+      The path name of the log file.  It must be an absolute
+      path.  Windows users might need to use an <literal>E''</literal> string and
+      double any backslashes used in the path name.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
 

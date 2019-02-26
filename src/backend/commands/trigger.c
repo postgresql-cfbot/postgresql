@@ -510,7 +510,9 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 			 *
 			 * Currently this is enforced by the grammar, so just Assert here.
 			 */
+			/*
 			Assert(!stmt->isconstraint);
+			*/
 
 			if (tt->isNew)
 			{

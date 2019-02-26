@@ -8990,11 +8990,6 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 {
 	CreateTrigStmt *fk_trigger;
 
-	TriggerTransition *del = makeNode(TriggerTransition);
-	del->name = "pg_deleted_transition_table";
-	del->isNew = false;
-	del->isTable = true;
-
 	/*
 	 * Build and execute a CREATE CONSTRAINT TRIGGER statement for the ON
 	 * DELETE action on the referenced table.
@@ -9002,11 +8997,11 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	fk_trigger = makeNode(CreateTrigStmt);
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
 	fk_trigger->relation = NULL;
-	fk_trigger->row = false;
+	fk_trigger->row = true;
 	fk_trigger->timing = TRIGGER_TYPE_AFTER;
 	fk_trigger->events = TRIGGER_TYPE_DELETE;
 	fk_trigger->columns = NIL;
-	fk_trigger->transitionRels = list_make1(del);
+	fk_trigger->transitionRels = NIL;
 	fk_trigger->whenClause = NULL;
 	fk_trigger->isconstraint = true;
 	fk_trigger->constrrel = NULL;

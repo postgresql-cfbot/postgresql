@@ -194,9 +194,10 @@ static int	ri_constraint_cache_valid_count = 0;
 static bool ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 				  HeapTuple old_row,
 				  const RI_ConstraintInfo *riinfo);
-static Datum ri_restrict(TriggerData *trigdata, bool is_no_action);
-static Datum ri_setnull(TriggerData *trigdata);
-static Datum ri_setdefault(TriggerData *trigdata);
+static Datum ri_on_update_restrict(TriggerData *trigdata, bool is_no_action);
+static Datum ri_on_delete_restrict(TriggerData *trigdata, bool is_no_action);
+static Datum ri_on_update_set(TriggerData *trigdata, bool set_null);
+static Datum ri_on_delete_set(TriggerData *trigdata, bool set_null);
 static void quoteOneName(char *buffer, const char *name);
 static void quoteRelationName(char *buffer, Relation rel);
 static void ri_GenerateQual(StringInfo buf,
@@ -603,7 +604,7 @@ RI_FKey_noaction_del(PG_FUNCTION_ARGS)
 	/*
 	 * Share code with RESTRICT/UPDATE cases.
 	 */
-	return ri_restrict((TriggerData *) fcinfo->context, true);
+	return ri_on_delete_restrict((TriggerData *) fcinfo->context, true);
 }
 
 /* ----------
@@ -628,7 +629,7 @@ RI_FKey_restrict_del(PG_FUNCTION_ARGS)
 	/*
 	 * Share code with NO ACTION/UPDATE cases.
 	 */
-	return ri_restrict((TriggerData *) fcinfo->context, false);
+	return ri_on_delete_restrict((TriggerData *) fcinfo->context, false);
 }
 
 /* ----------
@@ -650,7 +651,7 @@ RI_FKey_noaction_upd(PG_FUNCTION_ARGS)
 	/*
 	 * Share code with RESTRICT/DELETE cases.
 	 */
-	return ri_restrict((TriggerData *) fcinfo->context, true);
+	return ri_on_update_restrict((TriggerData *) fcinfo->context, true);
 }
 
 /* ----------
@@ -675,18 +676,249 @@ RI_FKey_restrict_upd(PG_FUNCTION_ARGS)
 	/*
 	 * Share code with NO ACTION/DELETE cases.
 	 */
-	return ri_restrict((TriggerData *) fcinfo->context, false);
+	return ri_on_update_restrict((TriggerData *) fcinfo->context, false);
 }
 
 /* ----------
- * ri_restrict -
+ * ri_on_delete_restrict -
+ *
+ *	Common code for ON DELETE RESTRICT, ON DELETE NO ACTION
+ * ----------
+ */
+static Datum
+ri_on_delete_restrict(TriggerData *trigdata, bool is_no_action)
+{
+	const RI_ConstraintInfo *riinfo;
+	Relation	fk_rel;
+	Relation	pk_rel;
+	SPIPlanPtr	qplan;
+	StringInfoData querybuf;
+	StringInfoData qualbuf;
+	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char		t_attname[MAX_QUOTED_NAME_LEN];
+	char		d_attname[MAX_QUOTED_NAME_LEN];
+	const char *fk_only;
+	Snapshot	test_snapshot = InvalidSnapshot;
+	Snapshot	crosscheck_snapshot = InvalidSnapshot;
+	Oid			save_userid;
+	int			save_sec_context;
+	int			i;
+	int			spi_result;
+	int			save_nestlevel;
+	char		workmembuf[32];
+
+	/*
+	 * Get arguments.
+	 */
+	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
+									trigdata->tg_relation, true);
+
+	/*
+	 * If there are no rows in the transition table, then there is no need
+	 * to do the trigger operation.
+	 */
+	if (tuplestore_tuple_count(trigdata->tg_oldtable) == 0)
+		return PointerGetDatum(NULL);
+
+	/*
+	 * Get the relation descriptors of the FK and PK tables and the old tuple.
+	 *
+	 * fk_rel is opened in RowShareLock mode since that's what our eventual
+	 * SELECT FOR KEY SHARE will get on it.
+	 */
+	fk_rel = heap_open(riinfo->fk_relid, RowShareLock);
+	pk_rel = trigdata->tg_relation;
+
+	switch (riinfo->confmatchtype)
+	{
+			/* ----------
+			 * SQL:2008 15.17 <Execution of referential actions>
+			 *	General rules 9) a) iv):
+			 *		MATCH SIMPLE/FULL
+			 *			... ON DELETE RESTRICT
+			 * ----------
+			 */
+		case FKCONSTR_MATCH_SIMPLE:
+		case FKCONSTR_MATCH_FULL:
+			/*
+			 * This is a delete trigger, so if a PK value was deleted there
+			 * can be no possible replacement PK row
+			 */
+
+			/* ----------
+			 * The query string built is
+			 * SELECT t.fkatt1, [ t.fkatt2 ...]
+			 * FROM <transition_table> d 
+			 * JOIN <fktable> t ON t.fkatt1 = d.fkatt1 [ AND ... ]
+			 * LIMIT 1 FOR KEY SHARE OF t
+			 * ----------
+			 */
+
+			initStringInfo(&querybuf);
+			initStringInfo(&qualbuf);
+
+			fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+				"" : "ONLY ";
+
+			appendStringInfo(&querybuf, "SELECT ");
+			quoteRelationName(fkrelname, fk_rel);
+			appendStringInfo(&qualbuf, " FROM %s%s d JOIN %s t ON ",
+							 fk_only, trigdata->tg_trigger->tgoldtable,
+							 fkrelname);
+			for (i = 0; i < riinfo->nkeys; i++)
+			{
+				if (i > 0)
+				{
+					appendStringInfo(&querybuf, ", ");
+					appendStringInfo(&qualbuf, " AND ");
+				}
+				quoteOneName(t_attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				quoteOneName(d_attname,
+							 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+				appendStringInfo(&querybuf, "d.%s", d_attname);
+				appendStringInfo(&qualbuf,
+								 "t.%s = d.%s", t_attname, d_attname);
+			}
+			appendStringInfoString(&querybuf, qualbuf.data);
+			appendStringInfoString(&querybuf,
+								   " LIMIT 1");
+								   //" LIMIT 1 FOR KEY SHARE OF t");
+
+			/* Switch to proper UID to perform check as */
+			GetUserIdAndSecContext(&save_userid, &save_sec_context);
+			SetUserIdAndSecContext(RelationGetForm(fk_rel)->relowner,
+								   save_sec_context | 
+								   SECURITY_LOCAL_USERID_CHANGE |
+								   SECURITY_NOFORCE_RLS);
+
+			save_nestlevel = NewGUCNestLevel();
+			snprintf(workmembuf, sizeof(workmembuf), "%d", maintenance_work_mem);
+			(void) set_config_option("work_mem", workmembuf,
+									 PGC_USERSET, PGC_S_SESSION,
+									 GUC_ACTION_SAVE, true, 0, false);
+			if (SPI_connect() != SPI_OK_CONNECT)
+				elog(ERROR, "SPI_connect failed");
+			if (SPI_register_trigger_data(trigdata) != SPI_OK_TD_REGISTER)
+				elog(ERROR, "SPI_register_trigger_data failed");
+			qplan = SPI_prepare(querybuf.data, 0, NULL);
+			if (qplan == NULL)
+				elog(ERROR, "SPI_prepare returned %s for %s",
+					 SPI_result_code_string(SPI_result), querybuf.data);
+
+			/*
+			 * In READ COMMITTED mode, we just need to use an up-to-date regular
+			 * snapshot, and we will see all rows that could be interesting. But in
+			 * transaction-snapshot mode, we can't change the transaction snapshot. If
+			 * the caller passes detectNewRows == false then it's okay to do the query
+			 * with the transaction snapshot; otherwise we use a current snapshot, and
+			 * tell the executor to error out if it finds any rows under the current
+			 * snapshot that wouldn't be visible per the transaction snapshot.  Note
+			 * that SPI_execute_snapshot will register the snapshots, so we don't need
+			 * to bother here.
+			 */
+			if (IsolationUsesXactSnapshot())
+			{
+				CommandCounterIncrement();	/* be sure all my own work is visible */
+				test_snapshot = GetLatestSnapshot();
+				crosscheck_snapshot = GetTransactionSnapshot();
+			}
+			else
+			{
+				/* the default SPI behavior is okay */
+				test_snapshot = InvalidSnapshot;
+				crosscheck_snapshot = InvalidSnapshot;
+			}
+
+			/* Finally we can run the query. */
+			spi_result = SPI_execute_snapshot(qplan,
+											  NULL, NULL,
+											  test_snapshot, crosscheck_snapshot,
+											  false, false, 1);
+
+			/* Restore UID and security context */
+			SetUserIdAndSecContext(save_userid, save_sec_context);
+
+			/* Check result */
+			if (spi_result < 0)
+				elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
+
+			if (SPI_processed > 0)
+			{
+				TupleDesc tupdesc = SPI_tuptable->tupdesc;
+				HeapTuple tuple = SPI_tuptable->vals[0];
+				StringInfoData key_names;
+				StringInfoData key_values;
+				int			i;
+				char	   *name,
+						   *val;
+
+				initStringInfo(&key_names);
+				initStringInfo(&key_values);
+				for (i = 1; i <= tupdesc->natts; i++)
+				{
+					if (i > 1)
+					{
+						appendStringInfo(&key_names, ", ");
+						appendStringInfo(&key_values, ", ");
+					}
+					name = SPI_fname(tupdesc, i);
+					val = SPI_getvalue(tuple, tupdesc, i);
+					if (!val)
+						val = "NULL";
+					appendStringInfo(&key_names, "%s", name);
+					appendStringInfo(&key_values, "%s", val);
+				}
+				/* TODO: Fix error message to reflect that this is only
+				   ever a delete */
+				ereport(ERROR,
+						(errcode(ERRCODE_FOREIGN_KEY_VIOLATION),
+						 errmsg("update or delete on table \"%s\" violates foreign key constraint \"%s\" on table \"%s\"",
+								RelationGetRelationName(pk_rel),
+								NameStr(riinfo->conname),
+								RelationGetRelationName(fk_rel)),
+						 errdetail("Key (%s)=(%s) is still referenced from table \"%s\".",
+								   key_names.data, key_values.data,
+								   RelationGetRelationName(fk_rel)),
+						 errtableconstraint(fk_rel, NameStr(riinfo->conname))));
+			}
+
+			if (SPI_finish() != SPI_OK_FINISH)
+				elog(ERROR, "SPI_finish failed");
+			AtEOXact_GUC(true, save_nestlevel);
+
+			heap_close(fk_rel, RowShareLock);
+
+			return PointerGetDatum(NULL);
+
+			/*
+			 * Handle MATCH PARTIAL restrict delete
+			 */
+		case FKCONSTR_MATCH_PARTIAL:
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("MATCH PARTIAL not yet implemented")));
+			return PointerGetDatum(NULL);
+
+		default:
+			elog(ERROR, "unrecognized confmatchtype: %d",
+				 riinfo->confmatchtype);
+			break;
+	}
+
+	/* Never reached */
+	return PointerGetDatum(NULL);
+}
+
+/* ----------
+ * ri_on_update_restrict -
  *
  *	Common code for ON DELETE RESTRICT, ON DELETE NO ACTION,
  *	ON UPDATE RESTRICT, and ON UPDATE NO ACTION.
  * ----------
  */
 static Datum
-ri_restrict(TriggerData *trigdata, bool is_no_action)
+ri_on_update_restrict(TriggerData *trigdata, bool is_no_action)
 {
 	const RI_ConstraintInfo *riinfo;
 	Relation	fk_rel;
@@ -813,7 +1045,7 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 			return PointerGetDatum(NULL);
 
 			/*
-			 * Handle MATCH PARTIAL restrict delete or update.
+			 * Handle MATCH PARTIAL restrict update.
 			 */
 		case FKCONSTR_MATCH_PARTIAL:
 			ereport(ERROR,
@@ -845,10 +1077,20 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 	const RI_ConstraintInfo *riinfo;
 	Relation	fk_rel;
 	Relation	pk_rel;
-	HeapTuple	old_row;
-	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
 	int			i;
+	Snapshot	test_snapshot;
+	Snapshot	crosscheck_snapshot;
+	int			spi_result;
+	Oid			save_userid;
+	int			save_sec_context;
+	StringInfoData querybuf;
+	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char		t_attname[MAX_QUOTED_NAME_LEN];
+	char		d_attname[MAX_QUOTED_NAME_LEN];
+	const char *fk_only;
+	int			save_nestlevel;
+	char		workmembuf[32];
 
 	/*
 	 * Check that this is a valid trigger call on the right time and event.
@@ -862,14 +1104,21 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 									trigdata->tg_relation, true);
 
 	/*
-	 * Get the relation descriptors of the FK and PK tables and the old tuple.
+	 * If there are no rows in the transition table, then there is no need
+	 * to do the trigger operation.
+	 */
+	if (tuplestore_tuple_count(trigdata->tg_oldtable) == 0)
+		return PointerGetDatum(NULL);
+
+	/*
+	 * Get the relation descriptors of the FK and PK tables and the
+	 * transition_table
 	 *
 	 * fk_rel is opened in RowExclusiveLock mode since that's what our
 	 * eventual DELETE will get on it.
 	 */
 	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
 	pk_rel = trigdata->tg_relation;
-	old_row = trigdata->tg_trigtuple;
 
 	switch (riinfo->confmatchtype)
 	{
@@ -882,71 +1131,107 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 			 */
 		case FKCONSTR_MATCH_SIMPLE:
 		case FKCONSTR_MATCH_FULL:
-			if (SPI_connect() != SPI_OK_CONNECT)
-				elog(ERROR, "SPI_connect failed");
-
-			/*
-			 * Fetch or prepare a saved plan for the cascaded delete
+			/* ----------
+			 * The query string built is
+			 *  DELETE FROM [ONLY] <fktable> a
+			 *  USING <transition-table> t
+			 *  WHERE t.fkatt1 = a.fkatt1 [AND ...]
+			 * ----------
 			 */
-			ri_BuildQueryKey(&qkey, riinfo, RI_PLAN_CASCADE_DEL_DODELETE);
-
-			if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
+			initStringInfo(&querybuf);
+			fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+				"" : "ONLY ";
+			quoteRelationName(fkrelname, fk_rel);
+			appendStringInfo(&querybuf,
+							 "DELETE FROM %s%s t USING %s d WHERE ",
+							 fk_only, fkrelname, 
+							 trigdata->tg_trigger->tgoldtable);
+			for (i = 0; i < riinfo->nkeys; i++)
 			{
-				StringInfoData querybuf;
-				char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
-				char		attname[MAX_QUOTED_NAME_LEN];
-				char		paramname[16];
-				const char *querysep;
-				Oid			queryoids[RI_MAX_NUMKEYS];
-				const char *fk_only;
 
-				/* ----------
-				 * The query string built is
-				 *	DELETE FROM [ONLY] <fktable> WHERE $1 = fkatt1 [AND ...]
-				 * The type id's for the $ parameters are those of the
-				 * corresponding PK attributes.
-				 * ----------
-				 */
-				initStringInfo(&querybuf);
-				fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
-					"" : "ONLY ";
-				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "DELETE FROM %s%s",
-								 fk_only, fkrelname);
-				querysep = "WHERE";
-				for (i = 0; i < riinfo->nkeys; i++)
-				{
-					Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
-					Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
+				if (i > 0)
+					appendStringInfo(&querybuf," AND ");
 
-					quoteOneName(attname,
-								 RIAttName(fk_rel, riinfo->fk_attnums[i]));
-					sprintf(paramname, "$%d", i + 1);
-					ri_GenerateQual(&querybuf, querysep,
-									paramname, pk_type,
-									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
-					querysep = "AND";
-					queryoids[i] = pk_type;
-				}
-
-				/* Prepare and save the plan */
-				qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
-									 &qkey, fk_rel, pk_rel, true);
+				quoteOneName(t_attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				quoteOneName(d_attname,
+							 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+				appendStringInfo(&querybuf,
+								 "t.%s = d.%s", t_attname, d_attname);
 			}
 
+			/* Switch to proper UID to perform check as */
+			GetUserIdAndSecContext(&save_userid, &save_sec_context);
+			SetUserIdAndSecContext(RelationGetForm(fk_rel)->relowner,
+								   save_sec_context | SECURITY_LOCAL_USERID_CHANGE |
+								   SECURITY_NOFORCE_RLS);
+
+			save_nestlevel = NewGUCNestLevel();
+			snprintf(workmembuf, sizeof(workmembuf), "%d", maintenance_work_mem);
+			(void) set_config_option("work_mem", workmembuf,
+									 PGC_USERSET, PGC_S_SESSION,
+									 GUC_ACTION_SAVE, true, 0, false);
+			if (SPI_connect() != SPI_OK_CONNECT)
+				elog(ERROR, "SPI_connect failed");
+			if (SPI_register_trigger_data(trigdata) != SPI_OK_TD_REGISTER)
+				elog(ERROR, "SPI_register_trigger_data failed");
+
+			/* Create the plan */
+			qplan = SPI_prepare(querybuf.data, 0, NULL);
+
+			if (qplan == NULL)
+				elog(ERROR, "SPI_prepare returned %s for %s",
+					 SPI_result_code_string(SPI_result), querybuf.data);
+
 			/*
-			 * We have a plan now. Build up the arguments from the key values
-			 * in the deleted PK tuple and delete the referencing rows
+			 * In READ COMMITTED mode, we just need to use an up-to-date regular
+			 * snapshot, and we will see all rows that could be interesting. But in
+			 * transaction-snapshot mode, we can't change the transaction snapshot. If
+			 * the caller passes detectNewRows == false then it's okay to do the query
+			 * with the transaction snapshot; otherwise we use a current snapshot, and
+			 * tell the executor to error out if it finds any rows under the current
+			 * snapshot that wouldn't be visible per the transaction snapshot.  Note
+			 * that SPI_execute_snapshot will register the snapshots, so we don't need
+			 * to bother here.
 			 */
-			ri_PerformCheck(riinfo, &qkey, qplan,
-							fk_rel, pk_rel,
-							old_row, NULL,
-							true,	/* must detect new rows */
-							SPI_OK_DELETE);
+			if (IsolationUsesXactSnapshot())
+			{
+				CommandCounterIncrement();	/* be sure all my own work is visible */
+				test_snapshot = GetLatestSnapshot();
+				crosscheck_snapshot = GetTransactionSnapshot();
+			}
+			else
+			{
+				/* the default SPI behavior is okay */
+				test_snapshot = InvalidSnapshot;
+				crosscheck_snapshot = InvalidSnapshot;
+			}
+
+			/* Finally we can run the query. */
+			spi_result = SPI_execute_snapshot(qplan,
+											  NULL, NULL,
+											  test_snapshot, crosscheck_snapshot,
+											  false, false, 0);
+
+			/* Restore UID and security context */
+			SetUserIdAndSecContext(save_userid, save_sec_context);
+
+			/* Check result */
+			if (spi_result < 0)
+				elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
+
+			if (spi_result != SPI_OK_DELETE)
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("referential integrity query on \"%s\" from constraint \"%s\" on \"%s\" gave unexpected result",
+								RelationGetRelationName(pk_rel),
+								NameStr(riinfo->conname),
+								RelationGetRelationName(fk_rel)),
+						 errhint("This is most likely due to a rule having rewritten the query.")));
 
 			if (SPI_finish() != SPI_OK_FINISH)
 				elog(ERROR, "SPI_finish failed");
+			AtEOXact_GUC(true, save_nestlevel);
 
 			table_close(fk_rel, RowExclusiveLock);
 
@@ -1141,49 +1426,34 @@ RI_FKey_setnull_del(PG_FUNCTION_ARGS)
 	 * Check that this is a valid trigger call on the right time and event.
 	 */
 	ri_CheckTrigger(fcinfo, "RI_FKey_setnull_del", RI_TRIGTYPE_DELETE);
-
 	/*
-	 * Share code with UPDATE case
+	 * Share code with DELETE SET DEFAULT case
 	 */
-	return ri_setnull((TriggerData *) fcinfo->context);
+	return ri_on_delete_set((TriggerData *) fcinfo->context, true); 
 }
 
-/* ----------
- * RI_FKey_setnull_upd -
- *
- *	Set foreign key references to NULL at update event on PK table.
- * ----------
- */
-Datum
-RI_FKey_setnull_upd(PG_FUNCTION_ARGS)
-{
-	/*
-	 * Check that this is a valid trigger call on the right time and event.
-	 */
-	ri_CheckTrigger(fcinfo, "RI_FKey_setnull_upd", RI_TRIGTYPE_UPDATE);
-
-	/*
-	 * Share code with DELETE case
-	 */
-	return ri_setnull((TriggerData *) fcinfo->context);
-}
-
-/* ----------
- * ri_setnull -
- *
- *	Common code for ON DELETE SET NULL and ON UPDATE SET NULL
- * ----------
- */
 static Datum
-ri_setnull(TriggerData *trigdata)
+ri_on_delete_set(TriggerData *trigdata, bool set_null)
 {
 	const RI_ConstraintInfo *riinfo;
 	Relation	fk_rel;
 	Relation	pk_rel;
-	HeapTuple	old_row;
-	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
+	StringInfoData querybuf;
+	StringInfoData qualbuf;
+	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
+	char		t_attname[MAX_QUOTED_NAME_LEN];
+	char		d_attname[MAX_QUOTED_NAME_LEN];
+	const char *fk_only;
+	const char *set_to = set_null ? "NULL" : "DEFAULT";
 	int			i;
+	Oid			save_userid;
+	int			save_sec_context;
+	Snapshot	test_snapshot;
+	Snapshot	crosscheck_snapshot;
+	int			spi_result;
+	int			save_nestlevel;
+	char		workmembuf[32];
 
 	/*
 	 * Get arguments.
@@ -1192,14 +1462,20 @@ ri_setnull(TriggerData *trigdata)
 									trigdata->tg_relation, true);
 
 	/*
+	 * If there are no rows in the transition table, then there is no need
+	 * to do the trigger operation.
+	 */
+	if (tuplestore_tuple_count(trigdata->tg_oldtable) == 0)
+		return PointerGetDatum(NULL);
+
+	/*
 	 * Get the relation descriptors of the FK and PK tables and the old tuple.
 	 *
 	 * fk_rel is opened in RowExclusiveLock mode since that's what our
 	 * eventual UPDATE will get on it.
 	 */
-	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
+	fk_rel = heap_open(riinfo->fk_relid, RowExclusiveLock);
 	pk_rel = trigdata->tg_relation;
-	old_row = trigdata->tg_trigtuple;
 
 	switch (riinfo->confmatchtype)
 	{
@@ -1207,96 +1483,122 @@ ri_setnull(TriggerData *trigdata)
 			 * SQL:2008 15.17 <Execution of referential actions>
 			 *	General rules 9) a) ii):
 			 *		MATCH SIMPLE/FULL
-			 *			... ON DELETE SET NULL
-			 *	General rules 10) a) ii):
-			 *		MATCH SIMPLE/FULL
-			 *			... ON UPDATE SET NULL
+			 *			... ON DELETE SET (NULL|DEFAULT)
 			 * ----------
 			 */
 		case FKCONSTR_MATCH_SIMPLE:
 		case FKCONSTR_MATCH_FULL:
+			/* ----------
+			 * The query string built is
+			 *	UPDATE [ONLY] <fktable> AS t
+			 *  SET fkatt1 = (NULL|DEFAULT) [, ...]
+			 *  FROM <transition-table> AS d 
+			 *  WHERE t.fkatt1 = d.fkatt1 [AND ...]
+			 * ----------
+			 */
+			initStringInfo(&querybuf);
+			initStringInfo(&qualbuf);
+			fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
+				"" : "ONLY ";
+			quoteRelationName(fkrelname, fk_rel);
+			appendStringInfo(&querybuf, "UPDATE %s%s AS t SET ",
+							 fk_only, fkrelname);
+			appendStringInfo(&qualbuf, " FROM %s AS d WHERE ",
+							 trigdata->tg_trigger->tgoldtable);
+			for (i = 0; i < riinfo->nkeys; i++)
+			{
+				if (i > 0)
+				{
+					appendStringInfo(&querybuf, ", ");
+					appendStringInfo(&qualbuf, " AND ");
+				}
+				quoteOneName(t_attname,
+							 RIAttName(fk_rel, riinfo->fk_attnums[i]));
+				quoteOneName(d_attname,
+							 RIAttName(pk_rel, riinfo->pk_attnums[i]));
+				appendStringInfo(&querybuf, "%s = %s",
+								 t_attname, set_to);
+				appendStringInfo(&qualbuf, "t.%s = d.%s",
+								 t_attname, d_attname);
+			}
+			appendStringInfoString(&querybuf, qualbuf.data);
+
+			/* Switch to proper UID to perform check as */
+			GetUserIdAndSecContext(&save_userid, &save_sec_context);
+			SetUserIdAndSecContext(RelationGetForm(fk_rel)->relowner,
+								   save_sec_context | SECURITY_LOCAL_USERID_CHANGE |
+								   SECURITY_NOFORCE_RLS);
+
+			save_nestlevel = NewGUCNestLevel();
+			snprintf(workmembuf, sizeof(workmembuf), "%d", maintenance_work_mem);
+			(void) set_config_option("work_mem", workmembuf,
+									 PGC_USERSET, PGC_S_SESSION,
+									 GUC_ACTION_SAVE, true, 0, false);
 			if (SPI_connect() != SPI_OK_CONNECT)
 				elog(ERROR, "SPI_connect failed");
+			if (SPI_register_trigger_data(trigdata) != SPI_OK_TD_REGISTER)
+				elog(ERROR, "SPI_register_trigger_data failed");
+			qplan = SPI_prepare(querybuf.data, 0, NULL);
+			if (qplan == NULL)
+				elog(ERROR, "SPI_prepare returned %s for %s",
+					 SPI_result_code_string(SPI_result), querybuf.data);
 
 			/*
-			 * Fetch or prepare a saved plan for the set null operation (it's
-			 * the same query for delete and update cases)
+			 * In READ COMMITTED mode, we just need to use an up-to-date regular
+			 * snapshot, and we will see all rows that could be interesting. But in
+			 * transaction-snapshot mode, we can't change the transaction snapshot. If
+			 * the caller passes detectNewRows == false then it's okay to do the query
+			 * with the transaction snapshot; otherwise we use a current snapshot, and
+			 * tell the executor to error out if it finds any rows under the current
+			 * snapshot that wouldn't be visible per the transaction snapshot.  Note
+			 * that SPI_execute_snapshot will register the snapshots, so we don't need
+			 * to bother here.
 			 */
-			ri_BuildQueryKey(&qkey, riinfo, RI_PLAN_SETNULL_DOUPDATE);
-
-			if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
+			if (IsolationUsesXactSnapshot())
 			{
-				StringInfoData querybuf;
-				StringInfoData qualbuf;
-				char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
-				char		attname[MAX_QUOTED_NAME_LEN];
-				char		paramname[16];
-				const char *querysep;
-				const char *qualsep;
-				const char *fk_only;
-				Oid			queryoids[RI_MAX_NUMKEYS];
-
-				/* ----------
-				 * The query string built is
-				 *	UPDATE [ONLY] <fktable> SET fkatt1 = NULL [, ...]
-				 *			WHERE $1 = fkatt1 [AND ...]
-				 * The type id's for the $ parameters are those of the
-				 * corresponding PK attributes.
-				 * ----------
-				 */
-				initStringInfo(&querybuf);
-				initStringInfo(&qualbuf);
-				fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
-					"" : "ONLY ";
-				quoteRelationName(fkrelname, fk_rel);
-				appendStringInfo(&querybuf, "UPDATE %s%s SET",
-								 fk_only, fkrelname);
-				querysep = "";
-				qualsep = "WHERE";
-				for (i = 0; i < riinfo->nkeys; i++)
-				{
-					Oid			pk_type = RIAttType(pk_rel, riinfo->pk_attnums[i]);
-					Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[i]);
-
-					quoteOneName(attname,
-								 RIAttName(fk_rel, riinfo->fk_attnums[i]));
-					appendStringInfo(&querybuf,
-									 "%s %s = NULL",
-									 querysep, attname);
-					sprintf(paramname, "$%d", i + 1);
-					ri_GenerateQual(&qualbuf, qualsep,
-									paramname, pk_type,
-									riinfo->pf_eq_oprs[i],
-									attname, fk_type);
-					querysep = ",";
-					qualsep = "AND";
-					queryoids[i] = pk_type;
-				}
-				appendStringInfoString(&querybuf, qualbuf.data);
-
-				/* Prepare and save the plan */
-				qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
-									 &qkey, fk_rel, pk_rel, true);
+				CommandCounterIncrement();	/* be sure all my own work is visible */
+				test_snapshot = GetLatestSnapshot();
+				crosscheck_snapshot = GetTransactionSnapshot();
+			}
+			else
+			{
+				/* the default SPI behavior is okay */
+				test_snapshot = InvalidSnapshot;
+				crosscheck_snapshot = InvalidSnapshot;
 			}
 
-			/*
-			 * We have a plan now. Run it to update the existing references.
-			 */
-			ri_PerformCheck(riinfo, &qkey, qplan,
-							fk_rel, pk_rel,
-							old_row, NULL,
-							true,	/* must detect new rows */
-							SPI_OK_UPDATE);
+			/* Finally we can run the query. */
+			spi_result = SPI_execute_snapshot(qplan,
+											  NULL, NULL,
+											  test_snapshot, crosscheck_snapshot,
+											  false, false, 1);
+
+			/* Restore UID and security context */
+			SetUserIdAndSecContext(save_userid, save_sec_context);
+
+			/* Check result */
+			if (spi_result < 0)
+				elog(ERROR, "SPI_execute_snapshot returned %s", SPI_result_code_string(spi_result));
+
+			if (spi_result != SPI_OK_UPDATE)
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("referential integrity query on \"%s\" from constraint \"%s\" on \"%s\" gave unexpected result",
+								RelationGetRelationName(pk_rel),
+								NameStr(riinfo->conname),
+								RelationGetRelationName(fk_rel)),
+						 errhint("This is most likely due to a rule having rewritten the query.")));
 
 			if (SPI_finish() != SPI_OK_FINISH)
 				elog(ERROR, "SPI_finish failed");
+			AtEOXact_GUC(true, save_nestlevel);
 
-			table_close(fk_rel, RowExclusiveLock);
+			heap_close(fk_rel, RowExclusiveLock);
 
 			return PointerGetDatum(NULL);
 
 			/*
-			 * Handle MATCH PARTIAL set null delete or update.
+			 * Handle MATCH PARTIAL set null delete
 			 */
 		case FKCONSTR_MATCH_PARTIAL:
 			ereport(ERROR,
@@ -1316,53 +1618,30 @@ ri_setnull(TriggerData *trigdata)
 
 
 /* ----------
- * RI_FKey_setdefault_del -
+ * RI_FKey_setnull_upd -
  *
- *	Set foreign key references to defaults at delete event on PK table.
+ *	Set foreign key references to NULL at update event on PK table.
  * ----------
  */
 Datum
-RI_FKey_setdefault_del(PG_FUNCTION_ARGS)
+RI_FKey_setnull_upd(PG_FUNCTION_ARGS)
 {
 	/*
 	 * Check that this is a valid trigger call on the right time and event.
 	 */
-	ri_CheckTrigger(fcinfo, "RI_FKey_setdefault_del", RI_TRIGTYPE_DELETE);
+	ri_CheckTrigger(fcinfo, "RI_FKey_setnull_upd", RI_TRIGTYPE_UPDATE);
 
-	/*
-	 * Share code with UPDATE case
-	 */
-	return ri_setdefault((TriggerData *) fcinfo->context);
+	return ri_on_update_set((TriggerData *) fcinfo->context, true);
 }
 
 /* ----------
- * RI_FKey_setdefault_upd -
+ * ri_on_update_set -
  *
- *	Set foreign key references to defaults at update event on PK table.
- * ----------
- */
-Datum
-RI_FKey_setdefault_upd(PG_FUNCTION_ARGS)
-{
-	/*
-	 * Check that this is a valid trigger call on the right time and event.
-	 */
-	ri_CheckTrigger(fcinfo, "RI_FKey_setdefault_upd", RI_TRIGTYPE_UPDATE);
-
-	/*
-	 * Share code with DELETE case
-	 */
-	return ri_setdefault((TriggerData *) fcinfo->context);
-}
-
-/* ----------
- * ri_setdefault -
- *
- *	Common code for ON DELETE SET DEFAULT and ON UPDATE SET DEFAULT
+ *	Common code for ON UPDATE SET NULL / ON UPDATE SET DEFAULT
  * ----------
  */
 static Datum
-ri_setdefault(TriggerData *trigdata)
+ri_on_update_set(TriggerData *trigdata, bool set_null)
 {
 	const RI_ConstraintInfo *riinfo;
 	Relation	fk_rel;
@@ -1370,6 +1649,10 @@ ri_setdefault(TriggerData *trigdata)
 	HeapTuple	old_row;
 	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
+	int			i;
+	const char *set_to = set_null ? "NULL" : "DEFAULT";
+	int32 set_type = set_null ? RI_PLAN_SETNULL_DOUPDATE :
+							RI_PLAN_SETDEFAULT_DOUPDATE;
 
 	/*
 	 * Get arguments.
@@ -1391,12 +1674,9 @@ ri_setdefault(TriggerData *trigdata)
 	{
 			/* ----------
 			 * SQL:2008 15.17 <Execution of referential actions>
-			 *	General rules 9) a) iii):
+			 *	General rules 10) a) ii):
 			 *		MATCH SIMPLE/FULL
-			 *			... ON DELETE SET DEFAULT
-			 *	General rules 10) a) iii):
-			 *		MATCH SIMPLE/FULL
-			 *			... ON UPDATE SET DEFAULT
+			 *			... ON UPDATE SET (NULL|DEFAULT)
 			 * ----------
 			 */
 		case FKCONSTR_MATCH_SIMPLE:
@@ -1405,10 +1685,10 @@ ri_setdefault(TriggerData *trigdata)
 				elog(ERROR, "SPI_connect failed");
 
 			/*
-			 * Fetch or prepare a saved plan for the set default operation
-			 * (it's the same query for delete and update cases)
+			 * Fetch or prepare a saved plan for the set null operation (it's
+			 * the same query for delete and update cases)
 			 */
-			ri_BuildQueryKey(&qkey, riinfo, RI_PLAN_SETDEFAULT_DOUPDATE);
+			ri_BuildQueryKey(&qkey, riinfo, set_type);
 
 			if ((qplan = ri_FetchPreparedPlan(&qkey)) == NULL)
 			{
@@ -1419,13 +1699,12 @@ ri_setdefault(TriggerData *trigdata)
 				char		paramname[16];
 				const char *querysep;
 				const char *qualsep;
-				Oid			queryoids[RI_MAX_NUMKEYS];
 				const char *fk_only;
-				int			i;
+				Oid			queryoids[RI_MAX_NUMKEYS];
 
 				/* ----------
 				 * The query string built is
-				 *	UPDATE [ONLY] <fktable> SET fkatt1 = DEFAULT [, ...]
+				 *	UPDATE [ONLY] <fktable> SET fkatt1 = (NULL|DEFULT) [, ...]
 				 *			WHERE $1 = fkatt1 [AND ...]
 				 * The type id's for the $ parameters are those of the
 				 * corresponding PK attributes.
@@ -1433,9 +1712,9 @@ ri_setdefault(TriggerData *trigdata)
 				 */
 				initStringInfo(&querybuf);
 				initStringInfo(&qualbuf);
-				quoteRelationName(fkrelname, fk_rel);
 				fk_only = fk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ?
 					"" : "ONLY ";
+				quoteRelationName(fkrelname, fk_rel);
 				appendStringInfo(&querybuf, "UPDATE %s%s SET",
 								 fk_only, fkrelname);
 				querysep = "";
@@ -1448,8 +1727,8 @@ ri_setdefault(TriggerData *trigdata)
 					quoteOneName(attname,
 								 RIAttName(fk_rel, riinfo->fk_attnums[i]));
 					appendStringInfo(&querybuf,
-									 "%s %s = DEFAULT",
-									 querysep, attname);
+									 "%s %s = %s",
+									 querysep, attname, set_to);
 					sprintf(paramname, "$%d", i + 1);
 					ri_GenerateQual(&qualbuf, qualsep,
 									paramname, pk_type,
@@ -1494,10 +1773,12 @@ ri_setdefault(TriggerData *trigdata)
 			 * of an UPDATE, while SET NULL is certain to result in rows that
 			 * satisfy the FK constraint.)
 			 */
-			return ri_restrict(trigdata, true);
+			if (!set_null)
+				return ri_on_update_restrict(trigdata, true);
+			return PointerGetDatum(NULL);
 
 			/*
-			 * Handle MATCH PARTIAL set default delete or update.
+			 * Handle MATCH PARTIAL set (NULL|DEFAULT) update.
 			 */
 		case FKCONSTR_MATCH_PARTIAL:
 			ereport(ERROR,
@@ -1515,6 +1796,46 @@ ri_setdefault(TriggerData *trigdata)
 	return PointerGetDatum(NULL);
 }
 
+
+/* ----------
+ * RI_FKey_setdefault_del -
+ *
+ *	Set foreign key references to defaults at delete event on PK table.
+ * ----------
+ */
+Datum
+RI_FKey_setdefault_del(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Check that this is a valid trigger call on the right time and event.
+	 */
+	ri_CheckTrigger(fcinfo, "RI_FKey_setdefault_del", RI_TRIGTYPE_DELETE);
+
+	/*
+	 * Share code with DELETE SET NULL case
+	 */
+	return ri_on_delete_set((TriggerData *) fcinfo->context, false); 
+}
+
+/* ----------
+ * RI_FKey_setdefault_upd -
+ *
+ *	Set foreign key references to defaults at update event on PK table.
+ * ----------
+ */
+Datum
+RI_FKey_setdefault_upd(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Check that this is a valid trigger call on the right time and event.
+	 */
+	ri_CheckTrigger(fcinfo, "RI_FKey_setdefault_upd", RI_TRIGTYPE_UPDATE);
+
+	/*
+	 * Share code with DELETE case
+	 */
+	return ri_on_update_set((TriggerData *) fcinfo->context, false);
+}
 
 /* ----------
  * RI_FKey_pk_upd_check_required -
@@ -1535,6 +1856,12 @@ RI_FKey_pk_upd_check_required(Trigger *trigger, Relation pk_rel,
 	const RI_ConstraintInfo *riinfo;
 
 	/*
+	 * Statement level triggers must always fire
+	 */
+	if ((old_row == NULL) && (new_row == NULL))
+		return true;
+
+	/*
 	 * Get arguments.
 	 */
 	riinfo = ri_FetchConstraintInfo(trigger, pk_rel, true);
@@ -1543,7 +1870,6 @@ RI_FKey_pk_upd_check_required(Trigger *trigger, Relation pk_rel,
 	{
 		case FKCONSTR_MATCH_SIMPLE:
 		case FKCONSTR_MATCH_FULL:
-
 			/*
 			 * If any old key value is NULL, the row could not have been
 			 * referenced by an FK row, so no check is needed.
@@ -2113,27 +2439,36 @@ ri_CheckTrigger(FunctionCallInfo fcinfo, const char *funcname, int tgkind)
 	/*
 	 * Check proper event
 	 */
-	if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
-		!TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
-		ereport(ERROR,
-				(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
-				 errmsg("function \"%s\" must be fired AFTER ROW", funcname)));
-
 	switch (tgkind)
 	{
 		case RI_TRIGTYPE_INSERT:
+			if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
+				!TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
+				ereport(ERROR,
+						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+						 errmsg("function \"%s\" must be fired AFTER ROW", funcname)));
 			if (!TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
 				ereport(ERROR,
 						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
 						 errmsg("function \"%s\" must be fired for INSERT", funcname)));
 			break;
 		case RI_TRIGTYPE_UPDATE:
+			if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
+				!TRIGGER_FIRED_FOR_ROW(trigdata->tg_event))
+				ereport(ERROR,
+						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+						 errmsg("function \"%s\" must be fired AFTER ROW", funcname)));
 			if (!TRIGGER_FIRED_BY_UPDATE(trigdata->tg_event))
 				ereport(ERROR,
 						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
 						 errmsg("function \"%s\" must be fired for UPDATE", funcname)));
 			break;
 		case RI_TRIGTYPE_DELETE:
+			if (!TRIGGER_FIRED_AFTER(trigdata->tg_event) ||
+				!TRIGGER_FIRED_FOR_STATEMENT(trigdata->tg_event))
+				ereport(ERROR,
+						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),
+						 errmsg("function \"%s\" must be fired AFTER STATEMENT", funcname)));
 			if (!TRIGGER_FIRED_BY_DELETE(trigdata->tg_event))
 				ereport(ERROR,
 						(errcode(ERRCODE_E_R_I_E_TRIGGER_PROTOCOL_VIOLATED),

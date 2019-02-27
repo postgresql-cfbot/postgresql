@@ -100,7 +100,8 @@ extern LogicalDecodingContext *CreateInitDecodingContext(char *plugin,
 						  XLogPageReadCB read_page,
 						  LogicalOutputPluginWriterPrepareWrite prepare_write,
 						  LogicalOutputPluginWriterWrite do_write,
-						  LogicalOutputPluginWriterUpdateProgress update_progress);
+						  LogicalOutputPluginWriterUpdateProgress update_progress,
+						  ContinueDecodingCB continue_decoding_cb);
 extern LogicalDecodingContext *CreateDecodingContext(
 					  XLogRecPtr start_lsn,
 					  List *output_plugin_options,
@@ -108,7 +109,8 @@ extern LogicalDecodingContext *CreateDecodingContext(
 					  XLogPageReadCB read_page,
 					  LogicalOutputPluginWriterPrepareWrite prepare_write,
 					  LogicalOutputPluginWriterWrite do_write,
-					  LogicalOutputPluginWriterUpdateProgress update_progress);
+					  LogicalOutputPluginWriterUpdateProgress update_progress,
+					  ContinueDecodingCB continue_decoding_cb);
 extern void DecodingContextFindStartpoint(LogicalDecodingContext *ctx);
 extern bool DecodingContextReady(LogicalDecodingContext *ctx);
 extern void FreeDecodingContext(LogicalDecodingContext *ctx);

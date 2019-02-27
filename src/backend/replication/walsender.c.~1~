@@ -258,23 +258,6 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void XLogRead(char *buf, XLogRecPtr startptr, Size count);
 
-/*
- * Return true until either the client or server side have requested that we wind
- * up COPY BOTH mode by sending a CopyDone.
- *
- * If we receive a CopyDone from the client we should avoid sending any further
- * CopyData messages and return to command mode as promptly as possible.
- *
- * While in the middle of sending data to a client we notice a client-initated
- * CopyDone when WalSndWriteData() calls ProcessRepliesIfAny() and it
- * sets streamingDoneSending.
- */
-static
-bool IsStreamingActive(void)
-{
-	return !streamingDoneReceiving && !streamingDoneSending;
-}
-
 
 /* Initialize walsender process before entering the main command loop */
 void
@@ -787,14 +770,6 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	sendTimeLineValidUpto = state->currTLIValidUntil;
 	sendTimeLineNextTLI = state->nextTLI;
 
-	/*
-	* If the client sent CopyDone while we were waiting,
-	* bail out so we can wind up the decoding session.
-	*/
-	if (streamingDoneSending)
-		return -1;
-
-	 /* more than one block available */
 	/* make sure we have enough WAL available */
 	flushptr = WalSndWaitForWal(targetPagePtr + reqLen);
 
@@ -957,7 +932,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
 										logical_read_xlog_page,
 										WalSndPrepareWrite, WalSndWriteData,
-										WalSndUpdateProgress, IsStreamingActive);
+										WalSndUpdateProgress);
 
 		/*
 		 * Signal that we don't need the timeout mechanism. We're just
@@ -1108,8 +1083,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 		CreateDecodingContext(cmd->startpoint, cmd->options, false,
 							  logical_read_xlog_page,
 							  WalSndPrepareWrite, WalSndWriteData,
-							  WalSndUpdateProgress,
-							  IsStreamingActive);
+							  WalSndUpdateProgress);
 
 
 	WalSndSetState(WALSNDSTATE_CATCHUP);
@@ -1212,6 +1186,17 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 
 	CHECK_FOR_INTERRUPTS();
 
+	/* Try to flush pending output to the client */
+	if (pq_flush_if_writable() != 0)
+		WalSndShutdown();
+
+	/* Try taking fast path unless we get too close to walsender timeout. */
+	if (now < TimestampTzPlusMilliseconds(last_reply_timestamp,
+										  wal_sender_timeout / 2) &&
+		!pq_is_send_pending())
+	{
+		return;
+	}
 
 	/* If we have pending write here, go to slow path */
 	for (;;)
@@ -1356,23 +1341,12 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 * It's important to do this check after the recomputation of
 		 * RecentFlushPtr, so we can send all remaining data before shutting
 		 * down.
-		 *
-		 * We'll also exit here if the client sent CopyDone because it wants
-		 * to return to command mode.
-		*/
-
-		if (got_STOPPING || streamingDoneReceiving)
+		 */
+		if (got_STOPPING)
 			break;
 
 		/*
-		 * If we have received CopyDone from the client, sent CopyDone
-		 * ourselves, it's time to exit streaming.
-		 */
-		if (!IsStreamingActive()) {
-			break;
-		}
-
-		/* We only send regular messages to the client for full decoded
+		 * We only send regular messages to the client for full decoded
 		 * transactions, but a synchronous replication and walsender shutdown
 		 * possibly are waiting for a later location. So we send pings
 		 * containing the flush location every now and then.
@@ -2158,14 +2132,7 @@ WalSndCheckTimeOut(void)
 	}
 }
 
-/*
- * Main loop of walsender process that streams the WAL over Copy messages.
- *
- * The send_data callback must enqueue complete CopyData messages to libpq
- * using pq_putmessage_noblock or similar, since the walsender loop may send
- * CopyDone then exit and return to command mode in response to a client
- * CopyDone between calls to send_data.
- */
+/* Main loop of walsender process that streams the WAL over Copy messages. */
 static void
 WalSndLoop(WalSndSendDataCallback send_data)
 {
@@ -2212,15 +2179,10 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		 * some more.  If there is some, we don't bother to call send_data
 		 * again until we've flushed it ... but we'd better assume we are not
 		 * caught up.
-		 *
-		 * If we're trying to finish sending and exit we shouldn't enqueue more
-		 * data to libpq. We need to finish writing out whatever we already
-		 * have in libpq's send buffer to maintain protocol sync so we still
-		 * need to loop until it's flushed.
 		 */
-		if (!pq_is_send_pending() && !streamingDoneSending)
+		if (!pq_is_send_pending())
 			send_data();
-		else if (!streamingDoneSending)
+		else
 			WalSndCaughtUp = false;
 
 		/* Try to flush pending output to the client */
@@ -3454,7 +3416,7 @@ WalSndKeepaliveIfNecessary(void)
 	if (wal_sender_timeout <= 0 || last_reply_timestamp <= 0)
 		return;
 
-	if (waiting_for_ping_response || streamingDoneSending)
+	if (waiting_for_ping_response)
 		return;
 
 	/*

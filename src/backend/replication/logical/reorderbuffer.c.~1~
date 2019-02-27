@@ -1501,9 +1501,7 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		rb->begin(rb, txn);
 
 		iterstate = ReorderBufferIterTXNInit(rb, txn);
-		while ((change = ReorderBufferIterTXNNext(rb, iterstate)) != NULL &&
-			   (rb->continue_decoding_cb == NULL ||
-				rb->continue_decoding_cb()))
+		while ((change = ReorderBufferIterTXNNext(rb, iterstate)) != NULL)
 		{
 			Relation	relation = NULL;
 			Oid			reloid;
@@ -1780,11 +1778,8 @@ ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,
 		ReorderBufferIterTXNFinish(rb, iterstate);
 		iterstate = NULL;
 
-		if (rb->continue_decoding_cb == NULL || rb->continue_decoding_cb())
-		{
-			/* call commit callback */
-			rb->commit(rb, txn, commit_lsn);
-		}
+		/* call commit callback */
+		rb->commit(rb, txn, commit_lsn);
 
 		/* this is just a sanity check against bad output plugin behaviour */
 		if (GetCurrentTransactionIdIfAny() != InvalidTransactionId)

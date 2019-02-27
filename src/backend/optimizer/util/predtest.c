@@ -99,7 +99,7 @@ static bool predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 								   bool weak);
 static Node *extract_not_arg(Node *clause);
 static Node *extract_strong_not_arg(Node *clause);
-static bool clause_is_strict_for(Node *clause, Node *subexpr);
+static bool clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false);
 static bool operator_predicate_proof(Expr *predicate, Node *clause,
 						 bool refute_it, bool weak);
 static bool operator_same_subexprs_proof(Oid pred_op, Oid clause_op,
@@ -816,7 +816,7 @@ predicate_refuted_by_recurse(Node *clause, Node *predicate,
  * This function also implements enforcement of MAX_SAOP_ARRAY_SIZE: if a
  * ScalarArrayOpExpr's array has too many elements, we just classify it as an
  * atom.  (This will result in its being passed as-is to the simple_clause
- * functions, which will fail to prove anything about it.)	Note that we
+ * functions, many of which will fail to prove anything about it.)  Note that we
  * cannot just stop after considering MAX_SAOP_ARRAY_SIZE elements; in general
  * that would result in wrong proofs, rather than failing to prove anything.
  */
@@ -1104,6 +1104,14 @@ arrayexpr_cleanup_fn(PredIterInfo info)
  * (Again, this is a safe conclusion because "foo" must be immutable.)
  * This doesn't work for weak implication, though.
  *
+ * Similarly predicates of the form "foo IS NOT NULL" are strongly implied by
+ * the truthfulness of OR'd ScalarArrayOpExpr's since with non-empty arrays they
+ * are strict and empty arrays results in false which won't prove anything anyway.
+ * They are also implied by AND'd ScalarArrayOpExpr's as long as the array is
+ * known to be NULL or non-empty. However weak implication fails: e.g.,
+ * "NULL IS NOT NULL" is false, but "NULL = ANY(ARRAY[NULL])" is NULL, so
+ * non-falsity does not imply non-falsity.
+ *
  * Finally, if both clauses are binary operator expressions, we may be able
  * to prove something using the system's knowledge about operators; those
  * proof rules are encapsulated in operator_predicate_proof().
@@ -1131,7 +1139,7 @@ predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
 			!ntest->argisrow)
 		{
 			/* strictness of clause for foo implies foo IS NOT NULL */
-			if (clause_is_strict_for(clause, (Node *) ntest->arg))
+			if (clause_is_strict_for(clause, (Node *) ntest->arg, true))
 				return true;
 		}
 		return false;			/* we can't succeed below... */
@@ -1158,10 +1166,16 @@ predicate_implied_by_simple_clause(Expr *predicate, Node *clause,
  * implication case), or is "foo IS NOT NULL".  That works for either strong
  * or weak refutation.
  *
+ * Similarly, predicates of the form "foo IS NULL" are refuted by the
+ * truthfulness of OR'd and AND'd (with known NULL or non-empty arrays)
+ * ScalarArrayOpExpr's. Unlike implication, this also holds for weak refutation
+ * since empty arrays result in false and thus won't prove anything anyway.
+ *
  * A clause "foo IS NULL" refutes a predicate "foo IS NOT NULL" in all cases.
  * If we are considering weak refutation, it also refutes a predicate that
  * is strict for "foo", since then the predicate must yield NULL (and since
- * "foo" appears in the predicate, it's known immutable).
+ * "foo" appears in the predicate, it's known immutable). ScalarArrayOpExpr's
+ * that strongly imply "foo IS NOT NULL" also weakly refute strict predicates.
  *
  * (The main motivation for covering these IS [NOT] NULL cases is to support
  * using IS NULL/IS NOT NULL as partition-defining constraints.)
@@ -1194,7 +1208,7 @@ predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 			return false;
 
 		/* strictness of clause for foo refutes foo IS NULL */
-		if (clause_is_strict_for(clause, (Node *) isnullarg))
+		if (clause_is_strict_for(clause, (Node *) isnullarg, true))
 			return true;
 
 		/* foo IS NOT NULL refutes foo IS NULL */
@@ -1226,7 +1240,7 @@ predicate_refuted_by_simple_clause(Expr *predicate, Node *clause,
 
 		/* foo IS NULL weakly refutes any predicate that is strict for foo */
 		if (weak &&
-			clause_is_strict_for((Node *) predicate, (Node *) isnullarg))
+			clause_is_strict_for((Node *) predicate, (Node *) isnullarg, true))
 			return true;
 
 		return false;			/* we can't succeed below... */
@@ -1293,7 +1307,9 @@ extract_strong_not_arg(Node *clause)
 
 
 /*
- * Can we prove that "clause" returns NULL if "subexpr" does?
+ * Most of this method proves that a clause is strict for a given expression.
+ * That is, it answers the question: Can we prove that "clause" returns NULL if
+ * "subexpr" does?
  *
  * The base case is that clause and subexpr are equal().  (We assume that
  * the caller knows at least one of the input expressions is immutable,
@@ -1301,9 +1317,32 @@ extract_strong_not_arg(Node *clause)
  *
  * We can also report success if the subexpr appears as a subexpression
  * of "clause" in a place where it'd force nullness of the overall result.
+ *
+ * ScalarArrayOpExpr's are a special case. With the exception of empty arrays
+ * we can treat them as any other operator expression and verify strictness of
+ * the operator.
+ *
+ * However an empty array results in either false (for ANY) or true (for ALL).
+ * Because the result is a real boolean (instead of NULL) even when when the
+ * argument is NULL, scalar array ops aren't actually strict.
+ *
+ * We can safely ignore this in the base case for ANY since the predicate proofs
+ * of implication and refutation both only matter when the expression is true;
+ * we are able to prove claims about "IS [NOT] NULL" clauses anyway. The same
+ * holds true if the array itself is NULL since the result is always NULL.
+ *
+ * In constrast the ALL base case requires us to additionally prove the array
+ * is not empty since a TRUE result means the implication or refutation must
+ * hold. We can also prove for known NULL arrays since the result is always
+ * NULL.
+ *
+ * In both cases we have to fallback to requiring fully strict behavior (and
+ * thus be able to prove the array is either non-empty or NULL) as soon as we've
+ * recursed through a strict function (since such a function is free to return
+ * TRUE at any point so long as the argument is NOT NULL).
  */
 static bool
-clause_is_strict_for(Node *clause, Node *subexpr)
+clause_is_strict_for(Node *clause, Node *subexpr, bool allow_false)
 {
 	ListCell   *lc;
 
@@ -1336,7 +1375,7 @@ clause_is_strict_for(Node *clause, Node *subexpr)
 	{
 		foreach(lc, ((OpExpr *) clause)->args)
 		{
-			if (clause_is_strict_for((Node *) lfirst(lc), subexpr))
+			if (clause_is_strict_for((Node *) lfirst(lc), subexpr, false))
 				return true;
 		}
 		return false;
@@ -1346,7 +1385,7 @@ clause_is_strict_for(Node *clause, Node *subexpr)
 	{
 		foreach(lc, ((FuncExpr *) clause)->args)
 		{
-			if (clause_is_strict_for((Node *) lfirst(lc), subexpr))
+			if (clause_is_strict_for((Node *) lfirst(lc), subexpr, false))
 				return true;
 		}
 		return false;
@@ -1362,16 +1401,66 @@ clause_is_strict_for(Node *clause, Node *subexpr)
 	 */
 	if (IsA(clause, CoerceViaIO))
 		return clause_is_strict_for((Node *) ((CoerceViaIO *) clause)->arg,
-									subexpr);
+									subexpr, false);
 	if (IsA(clause, ArrayCoerceExpr))
 		return clause_is_strict_for((Node *) ((ArrayCoerceExpr *) clause)->arg,
-									subexpr);
+									subexpr, false);
 	if (IsA(clause, ConvertRowtypeExpr))
 		return clause_is_strict_for((Node *) ((ConvertRowtypeExpr *) clause)->arg,
-									subexpr);
+									subexpr, false);
 	if (IsA(clause, CoerceToDomain))
 		return clause_is_strict_for((Node *) ((CoerceToDomain *) clause)->arg,
-									subexpr);
+									subexpr, false);
+
+	/*
+	 * Since we limit decomposing ScalarArrayOpExpr nodes into AND/OR quals
+	 * to arrays having at most MAX_SAOP_ARRAY_SIZE items, we need to handle
+	 * large arrays separately (this is also useful for non-constant array
+	 * expressions).
+	 */
+	if (clause && IsA(clause, ScalarArrayOpExpr))
+	{
+		ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+		if (op_strict(saop->opno) &&
+				clause_is_strict_for((Node *) linitial(saop->args), subexpr, false))
+		{
+			if (!allow_false|| !saop->useOr)
+			{
+				Node *arraynode = (Node *) lsecond(saop->args);
+				int nelems = 0;
+
+				if (arraynode && IsA(arraynode, Const))
+				{
+					ArrayType  *arrval;
+					Const *arrayconst = (Const *) arraynode;
+					/*
+					 * Scalar array ops with NULL array constants always result
+					 * in NULL so are strict.
+					 */
+					if (arrayconst->constisnull)
+						return true;
+
+					arrval = DatumGetArrayTypeP(arrayconst->constvalue);
+					nelems = ArrayGetNItems(ARR_NDIM(arrval), ARR_DIMS(arrval));
+				}
+				else if (arraynode && IsA(arraynode, ArrayExpr) &&
+						 !((ArrayExpr *) arraynode)->multidims)
+					nelems = list_length(((ArrayExpr *) arraynode)->elements);
+
+				/*
+				 * Empty AND/OR groups resolve to TRUE or FALSE rather than null,
+				 * so in addition to verifying the operation is otherwise strict,
+				 * we also have to verify we have a non-empty array.
+				 */
+				if (nelems > 0)
+					return true;
+				else
+					return false;
+			}
+			else
+			  return true;
+		}
+	}
 
 	return false;
 }

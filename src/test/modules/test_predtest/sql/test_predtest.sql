@@ -25,6 +25,10 @@ from generate_series(0, 11*11-1) i;
 create function strictf(bool, bool) returns bool
 language plpgsql as $$begin return $1 and not $2; end$$ strict;
 
+-- a simple function make arrays opaque to the optimizer
+create function opaque_array(int[]) returns int[]
+language plpgsql as $$begin return $1; end$$ strict;
+
 -- Basic proof rules for single boolean variables
 
 select * from test_predtest($$
@@ -323,5 +327,270 @@ $$);
 
 select * from test_predtest($$
 select x <= y, x = any(array[1,3,y])
+from integers
+$$);
+
+-- For the next several tests, we want to test an array longer than
+-- MAX_SAOP_ARRAY_SIZE so that we're not relying on predtest turning the
+-- array op into set of AND/OR quals. We also need test empty arrays since
+-- they are the case that deviates from this being merely a check for the
+-- clause being strict.
+--
+-- We also want to include test cases for non-constant array expressions.
+--
+-- Tests employing (x + x) to verify we don't infer implication or
+-- refutation of "strict_func(x) IS [NOT] NULL" from "x IS [NOT] NULL"
+-- will show *_holds=t even when *_by=f because int4pl never returns
+-- NULL unless an operand is NULL, but we can't assume this is true
+-- of all functions.
+--
+-- For tests using constant arrays the planner can inspect (i.e., not hidden
+-- behind an optimization fence like a CTE) we include NULL in our array
+-- for completeness's sake *unless* testing ALL since that would there it
+-- would force the expression to NULL which makes it generally less useful
+-- as a test case.
+--
+-- ScalarArrayOp implies IS NOT NULL
+select * from test_predtest($$
+select x is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, x != all(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select y is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select (x + x) is not null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select y is not null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select (x + x) is not null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, x = any(opaque_array(array[]::int[]))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, x = all(opaque_array(array[]::int[]))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, strictf(true, x = any(opaque_array(array[]::int[])))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is not null, strictf(true, x = all(null::int[]))
+from integers
+$$);
+
+-- ScalarArrayOp refutes IS NULL
+select * from test_predtest($$
+select x is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, x != all(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select y is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select (x + x) is null, x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+])
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select y is null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select (x + x) is null, x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+)
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, x = any(opaque_array(array[]::int[]))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, x = all(opaque_array(array[]::int[]))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, strictf(true, x = any(opaque_array(array[]::int[])))
+from integers
+$$);
+
+select * from test_predtest($$
+select x is null, strictf(true, x = all(null::int[]))
+from integers
+$$);
+
+-- Strict predicate weakly refutes ScalarArrayOp
+--
+-- We get w_i_holds despite not declaring weak_implied_by, but
+-- a simple case (not tested here) shows why this isn't desired:
+-- "(NULL IS NULL)" is true while "= ANY(ARRAY[])" is false.
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), x is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x != all(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101
+]), x is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), y is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(array[
+  1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,
+  29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,
+  54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,
+  79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,null
+]), (x + x) is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+), x is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+), y is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(
+  (select array_agg(i) || null from generate_series(1, 101) t(i))::int[]
+), (x + x) is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = any(opaque_array(array[]::int[])), x is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = all(opaque_array(array[]::int[])), x is null
+from integers
+$$);
+
+select * from test_predtest($$
+select x = all(null::int[]), x is null
 from integers
 $$);

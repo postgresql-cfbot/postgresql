@@ -280,12 +280,22 @@ typedef FormData_pg_type *Form_pg_type;
 #define  TYPCATEGORY_UNKNOWN	'X'
 
 /* Is a type OID a polymorphic pseudotype?	(Beware of multiple evaluation) */
-#define IsPolymorphicType(typid)  \
+#define IsPolymorphicTypeAny(typid)  \
 	((typid) == ANYELEMENTOID || \
 	 (typid) == ANYARRAYOID || \
 	 (typid) == ANYNONARRAYOID || \
 	 (typid) == ANYENUMOID || \
 	 (typid) == ANYRANGEOID)
+
+#define IsPolymorphicTypeCommon(typid)  \
+	((typid) == COMMONTYPEOID || \
+	 (typid) == COMMONTYPEARRAYOID || \
+	 (typid) == COMMONTYPENONARRAYOID || \
+	 (typid) == COMMONTYPERANGEOID)
+
+#define IsPolymorphicType(typid)  \
+	(IsPolymorphicTypeAny(typid) || \
+	 IsPolymorphicTypeCommon(typid))
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

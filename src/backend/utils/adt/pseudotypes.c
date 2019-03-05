@@ -135,6 +135,33 @@ anyarray_send(PG_FUNCTION_ARGS)
 	return array_send(fcinfo);
 }
 
+/*
+ * commontypearray_recv		- binary input routine for pseudo-type COMMONARRAY.
+ *
+ * XXX this could actually be made to work, since the incoming array
+ * data will contain the element type OID.  Need to think through
+ * type-safety issues before allowing it, however.
+ */
+Datum
+commontypearray_recv(PG_FUNCTION_ARGS)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("cannot accept a value of type %s", "commontypearray")));
+
+	PG_RETURN_VOID();			/* keep compiler quiet */
+}
+
+/*
+ * commontypearray_send		- binary output routine for pseudo-type COMMONTYPEARRAY.
+ *
+ * We may as well allow this, since array_send will in fact work.
+ */
+Datum
+commontypearray_send(PG_FUNCTION_ARGS)
+{
+	return array_send(fcinfo);
+}
 
 /*
  * anyenum_in		- input routine for pseudo-type ANYENUM.
@@ -180,6 +207,30 @@ anyrange_in(PG_FUNCTION_ARGS)
  */
 Datum
 anyrange_out(PG_FUNCTION_ARGS)
+{
+	return range_out(fcinfo);
+}
+
+/*
+ * commontyperange_in		- input routine for pseudo-type COMMONTYPERANGE.
+ */
+Datum
+commontyperange_in(PG_FUNCTION_ARGS)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("cannot accept a value of type %s", "commontyperange")));
+
+	PG_RETURN_VOID();			/* keep compiler quiet */
+}
+
+/*
+ * commontyperange_out		- output routine for pseudo-type COMMONTYPERANGE.
+ *
+ * We may as well allow this, since range_out will in fact work.
+ */
+Datum
+commontyperange_out(PG_FUNCTION_ARGS)
 {
 	return range_out(fcinfo);
 }
@@ -418,3 +469,6 @@ PSEUDOTYPE_DUMMY_IO_FUNCS(internal);
 PSEUDOTYPE_DUMMY_IO_FUNCS(opaque);
 PSEUDOTYPE_DUMMY_IO_FUNCS(anyelement);
 PSEUDOTYPE_DUMMY_IO_FUNCS(anynonarray);
+PSEUDOTYPE_DUMMY_IO_FUNCS(commontype);
+PSEUDOTYPE_DUMMY_IO_FUNCS(commontypearray);
+PSEUDOTYPE_DUMMY_IO_FUNCS(commontypenonarray);

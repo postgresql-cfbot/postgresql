@@ -4775,14 +4775,6 @@ SELECT * FROM pg_attribute
    </indexterm>
 
    <indexterm zone="datatype-pseudo">
-    <primary>commontype</primary>
-   </indexterm>
-
-   <indexterm zone="datatype-pseudo">
-    <primary>commontypearray</primary>
-   </indexterm>
-
-   <indexterm zone="datatype-pseudo">
     <primary>void</primary>
    </indexterm>
 
@@ -4889,34 +4881,6 @@ SELECT * FROM pg_attribute
         <entry>Indicates that a function accepts any range data type
         (see <xref linkend="extend-types-polymorphic"/> and
         <xref linkend="rangetypes"/>).</entry>
-       </row>
-
-       <row>
-        <entry><type>commontype</type></entry>
-        <entry>Indicates that a function accepts any data type. Values
-        are converted to real common type.
-        (see <xref linkend="extend-types-polymorphic"/>).</entry>
-       </row>
-
-       <row>
-        <entry><type>commontypearray</type></entry>
-        <entry>Indicates that a function accepts any array data type. The
-        elements of array are converted to common type of these values.
-        (see <xref linkend="extend-types-polymorphic"/>).</entry>
-       </row>
-
-       <row>
-        <entry><type>commontypenonarray</type></entry>
-        <entry>Indicates that a function accepts any non-array data type
-        (see <xref linkend="extend-types-polymorphic"/>).</entry>
-       </row>
-
-       <row>
-        <entry><type>commontyperange</type></entry>
-        <entry>Indicates that a function accepts any range data type
-        (see <xref linkend="extend-types-polymorphic"/> and
-        <xref linkend="rangetypes"/>). The subtype can be used for
-        deduction of common type.</entry>
        </row>
 
        <row>

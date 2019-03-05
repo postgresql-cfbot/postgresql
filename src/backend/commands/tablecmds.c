@@ -7586,7 +7586,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 */
 			old_check_ok = (new_pathtype == old_pathtype &&
 							new_castfunc == old_castfunc &&
-							(!IsPolymorphicType(pfeqop_right) ||
+							(!IsPolymorphicTypeAny(pfeqop_right) ||
 							 new_fktype == old_fktype));
 
 		}

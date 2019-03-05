@@ -767,15 +767,14 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!rte->delaylock && !IsParallelWorker())
+		if (!IsParallelWorker())
 		{
 			/*
-			 * In a normal query, unless the planner set the delaylock flag,
-			 * we should already have the appropriate lock, but verify that
-			 * through an Assert.  Since there's already an Assert inside
-			 * heap_open that insists on holding some lock, it seems
-			 * sufficient to check this only when rellockmode is higher than
-			 * the minimum.
+			 * In a normal query, we should already have the appropriate lock,
+			 * but verify that through an Assert.  Since there's already an
+			 * Assert inside table_open that insists on holding some lock, it
+			 * seems sufficient to check this only when rellockmode is higher
+			 * than the minimum.
 			 */
 			rel = table_open(rte->relid, NoLock);
 			Assert(rte->rellockmode == AccessShareLock ||
@@ -784,10 +783,9 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 		else
 		{
 			/*
-			 * If we are a parallel worker or delaylock is set, we need to
-			 * obtain a lock on the relation.  For parallel workers, this
-			 * ensures sane behavior in case the parent process exits before
-			 * we do.
+			 * If we are a parallel worker, we need to obtain our own local
+			 * lock on the relation.  This ensures sane behavior in case the
+			 * parent process exits before we do.
 			 */
 			rel = table_open(rte->relid, rte->rellockmode);
 		}

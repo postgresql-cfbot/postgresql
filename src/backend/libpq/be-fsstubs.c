@@ -455,7 +455,11 @@ lo_import_internal(text *filename, Oid lobjOid)
 						fnamebuf)));
 
 	inv_close(lobj);
-	CloseTransientFile(fd);
+
+	if (CloseTransientFile(fd))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", fnamebuf)));
 
 	return oid;
 }
@@ -524,7 +528,11 @@ be_lo_export(PG_FUNCTION_ARGS)
 							fnamebuf)));
 	}
 
-	CloseTransientFile(fd);
+	if (CloseTransientFile(fd))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", fnamebuf)));
+
 	inv_close(lobj);
 
 	PG_RETURN_INT32(1);

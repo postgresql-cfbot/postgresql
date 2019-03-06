@@ -916,7 +916,14 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 	}
 	*mapped_address = address;
 	*mapped_size = request_size;
-	CloseTransientFile(fd);
+
+	if (CloseTransientFile(fd))
+	{
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", name)));
+		return false;
+	}
 
 	return true;
 }

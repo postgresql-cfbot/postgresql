@@ -295,6 +295,26 @@ my %pgdump_runs = (
 			"$tempdir/role_parallel",
 		],
 	},
+	rows_per_insert => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/rows_per_insert.sql", '-a',
+			'--rows-per-insert=3',
+			'--table=dump_test.test_table',
+			'postgres',
+		],
+	},
+	rows_per_insert_zero_col => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/rows_per_insert_zero_col.sql", '-a',
+			'--rows-per-insert=3',
+			'--table=dump_test.dump_test.test_fourth_table',
+			'postgres',
+		],
+	},
 	schema_only => {
 		dump_cmd => [
 			'pg_dump',                         '--format=plain',
@@ -1295,6 +1315,13 @@ my %tests = (
 		like => { column_inserts => 1, },
 	},
 
+	'INSERT INTO test_table' => {
+		regexp => qr/^
+			(?:INSERT\ INTO\ dump_test\.test_table\ VALUES\n\t\(\d,\ NULL,\ NULL,\ NULL\),\n\t\(\d,\ NULL,\ NULL,\ NULL\),\n\t\(\d,\ NULL,\ NULL,\ NULL\);\n){3}
+			/xm,
+		like => { rows_per_insert => 1, },
+	},
+
 	'INSERT INTO test_second_table' => {
 		regexp => qr/^
 			(?:INSERT\ INTO\ dump_test\.test_second_table\ \(col1,\ col2\)
@@ -1305,7 +1332,7 @@ my %tests = (
 	'INSERT INTO test_fourth_table' => {
 		regexp =>
 		  qr/^\QINSERT INTO dump_test.test_fourth_table DEFAULT VALUES;\E/m,
-		like => { column_inserts => 1, },
+		like => { column_inserts => 1, rows_per_insert_zero_col => 1 },
 	},
 
 	'INSERT INTO test_fifth_table' => {

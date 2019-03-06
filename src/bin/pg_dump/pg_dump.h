@@ -126,6 +126,12 @@ typedef uint32 DumpComponents;	/* a bitmask of dump object components */
 		DUMP_COMPONENT_DATA |\
 		DUMP_COMPONENT_POLICY)
 
+/*
+ * The default number of rows per INSERT statement when
+ * --inserts is specified without --rows-per-insert
+ */
+#define DUMP_DEFAULT_ROWS_PER_INSERT 1
+
 typedef struct _dumpableObject
 {
 	DumpableObjectType objType;

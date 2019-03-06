@@ -5150,14 +5150,16 @@ listExtensions(const char *pattern)
 					  "FROM pg_catalog.pg_extension e "
 					  "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace "
 					  "LEFT JOIN pg_catalog.pg_description c ON c.objoid = e.oid "
-					  "AND c.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass\n",
+					  "AND c.classoid = 'pg_catalog.pg_extension'::pg_catalog.regclass "
+					  "WHERE (n.nspname !~ 'pg_temp_' "
+					  "       OR n.oid = pg_catalog.pg_my_temp_schema())\n",
 					  gettext_noop("Name"),
 					  gettext_noop("Version"),
 					  gettext_noop("Schema"),
 					  gettext_noop("Description"));
 
 	processSQLNamePattern(pset.db, &buf, pattern,
-						  false, false,
+						  true, false,
 						  NULL, "e.extname", NULL,
 						  NULL);
 
@@ -5203,10 +5205,13 @@ listExtensionContents(const char *pattern)
 	initPQExpBuffer(&buf);
 	printfPQExpBuffer(&buf,
 					  "SELECT e.extname, e.oid\n"
-					  "FROM pg_catalog.pg_extension e\n");
+					  "FROM pg_catalog.pg_extension e "
+					  "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace "
+					  "WHERE (n.nspname !~ 'pg_temp_' "
+					  "       OR n.oid = pg_catalog.pg_my_temp_schema())\n");
 
 	processSQLNamePattern(pset.db, &buf, pattern,
-						  false, false,
+						  true, false,
 						  NULL, "e.extname", NULL,
 						  NULL);
 

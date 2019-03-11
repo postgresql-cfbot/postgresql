@@ -15,6 +15,7 @@
 #define JSONAPI_H
 
 #include "jsonb.h"
+#include "access/htup.h"
 #include "lib/stringinfo.h"
 
 typedef enum
@@ -60,6 +61,8 @@ typedef struct JsonLexContext
 	int			line_number;
 	char	   *line_start;
 	StringInfo	strval;
+	bool		throw_errors;
+	bool		error;
 } JsonLexContext;
 
 typedef void (*json_struct_action) (void *state);
@@ -93,6 +96,56 @@ typedef struct JsonSemAction
 	json_scalar_action scalar;
 } JsonSemAction;
 
+typedef enum
+{
+	JTI_ARRAY_START,
+	JTI_ARRAY_ELEM,
+	JTI_ARRAY_ELEM_SCALAR,
+	JTI_ARRAY_ELEM_AFTER,
+	JTI_ARRAY_END,
+	JTI_OBJECT_START,
+	JTI_OBJECT_KEY,
+	JTI_OBJECT_VALUE,
+	JTI_OBJECT_VALUE_AFTER,
+} JsontIterState;
+
+typedef struct JsonContainerData
+{
+	uint32		header;
+	int			len;
+	char	   *data;
+} JsonContainerData;
+
+typedef const JsonContainerData JsonContainer;
+
+#define JsonTextContainerSize(jc) \
+	(((jc)->header & JB_CMASK) == JB_CMASK && JsonContainerIsArray(jc) \
+	 ? JsonGetArraySize(jc) : (jc)->header & JB_CMASK)
+
+typedef struct Json
+{
+	JsonContainer root;
+} Json;
+
+typedef struct JsonIterator
+{
+	struct JsonIterator	*parent;
+	JsonContainer *container;
+	JsonLexContext *lex;
+	JsontIterState state;
+	bool		isScalar;
+} JsonIterator;
+
+#define DatumGetJsonP(datum) JsonCreate(DatumGetTextP(datum))
+#define DatumGetJsonPCopy(datum) JsonCreate(DatumGetTextPCopy(datum))
+
+#define JsonPGetDatum(json) \
+	PointerGetDatum(cstring_to_text_with_len((json)->root.data, (json)->root.len))
+
+#define PG_GETARG_JSON_P(n)			DatumGetJsonP(PG_GETARG_DATUM(n))
+#define PG_GETARG_JSON_P_COPY(n)	DatumGetJsonPCopy(PG_GETARG_DATUM(n))
+#define PG_RETURN_JSON_P(json)		PG_RETURN_DATUM(JsonPGetDatum(json))
+
 /*
  * parse_json will parse the string in the lex calling the
  * action functions in sem at the appropriate points. It is
@@ -102,7 +155,7 @@ typedef struct JsonSemAction
  * points to. If the action pointers are NULL the parser
  * does nothing and just continues.
  */
-extern void pg_parse_json(JsonLexContext *lex, JsonSemAction *sem);
+extern bool pg_parse_json(JsonLexContext *lex, JsonSemAction *sem);
 
 /*
  * json_count_array_elements performs a fast secondary parse to determine the
@@ -161,6 +214,29 @@ extern Jsonb *transform_jsonb_string_values(Jsonb *jsonb, void *action_state,
 extern text *transform_json_string_values(text *json, void *action_state,
 							 JsonTransformStringValuesAction transform_action);
 
-extern char *JsonEncodeDateTime(char *buf, Datum value, Oid typid);
+extern char *JsonEncodeDateTime(char *buf, Datum value, Oid typid,
+				   const int *tzp);
+
+extern Datum json_populate_type(Datum json_val, Oid json_type,
+								Oid typid, int32 typmod,
+								void **cache, MemoryContext mcxt, bool *isnull);
+
+extern Json *JsonCreate(text *json);
+extern JsonbIteratorToken JsonIteratorNext(JsonIterator **pit, JsonbValue *val,
+				 bool skipNested);
+extern JsonIterator *JsonIteratorInit(JsonContainer *jc);
+extern void JsonIteratorFree(JsonIterator *it);
+extern uint32 JsonGetArraySize(JsonContainer *jc);
+extern Json *JsonbValueToJson(JsonbValue *jbv);
+extern bool JsonExtractScalar(JsonContainer *jbc, JsonbValue *res);
+extern char *JsonUnquote(Json *jb);
+extern char *JsonToCString(StringInfo out, JsonContainer *jc,
+			  int estimated_len);
+extern JsonbValue *pushJsonValue(JsonbParseState **pstate,
+			  JsonbIteratorToken tok, JsonbValue *jbv);
+extern JsonbValue *findJsonValueFromContainer(JsonContainer *jc, uint32 flags,
+						   JsonbValue *key);
+extern JsonbValue *getIthJsonValueFromContainer(JsonContainer *array,
+							 uint32 index);
 
 #endif							/* JSONAPI_H */

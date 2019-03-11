@@ -1128,6 +1128,104 @@ LANGUAGE INTERNAL
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'jsonb_insert';
 
+CREATE OR REPLACE FUNCTION
+  jsonb_path_exists(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                    silent boolean DEFAULT false)
+RETURNS boolean
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_exists';
+
+CREATE OR REPLACE FUNCTION
+  jsonb_path_match(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                   silent boolean DEFAULT false)
+RETURNS boolean
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_match';
+
+CREATE OR REPLACE FUNCTION
+  jsonb_path_query(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                   silent boolean DEFAULT false)
+RETURNS SETOF jsonb
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_query';
+
+CREATE OR REPLACE FUNCTION
+  jsonb_path_query_array(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                         silent boolean DEFAULT false)
+RETURNS jsonb
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_query_array';
+
+CREATE OR REPLACE FUNCTION
+  jsonb_path_query_first(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                         silent boolean DEFAULT false)
+RETURNS jsonb
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_query_first';
+
+CREATE OR REPLACE FUNCTION
+  jsonb_path_query_first_text(target jsonb, path jsonpath, vars jsonb DEFAULT '{}',
+                              silent boolean DEFAULT false)
+RETURNS text
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'jsonb_path_query_first_text';
+
+
+
+CREATE OR REPLACE FUNCTION
+  json_path_exists(target json, path jsonpath, vars json DEFAULT '{}',
+                   silent boolean DEFAULT false)
+RETURNS boolean
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_exists';
+
+CREATE OR REPLACE FUNCTION
+  json_path_match(target json, path jsonpath, vars json DEFAULT '{}',
+                  silent boolean DEFAULT false)
+RETURNS boolean
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_match';
+
+CREATE OR REPLACE FUNCTION
+  json_path_query(target json, path jsonpath, vars json DEFAULT '{}',
+                  silent boolean DEFAULT false)
+RETURNS SETOF json
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_query';
+
+CREATE OR REPLACE FUNCTION
+  json_path_query_array(target json, path jsonpath, vars json DEFAULT '{}',
+                        silent boolean DEFAULT false)
+RETURNS json
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_query_array';
+
+CREATE OR REPLACE FUNCTION
+  json_path_query_first(target json, path jsonpath, vars json DEFAULT '{}',
+                        silent boolean DEFAULT false)
+RETURNS json
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_query_first';
+
+CREATE OR REPLACE FUNCTION
+  json_path_query_first_text(target json, path jsonpath, vars json DEFAULT '{}',
+                             silent boolean DEFAULT false)
+RETURNS text
+LANGUAGE INTERNAL
+STRICT IMMUTABLE PARALLEL SAFE
+AS 'json_path_query_first_text';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

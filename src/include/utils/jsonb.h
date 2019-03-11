@@ -34,6 +34,9 @@ typedef enum
 #define JsonbExistsStrategyNumber		9
 #define JsonbExistsAnyStrategyNumber	10
 #define JsonbExistsAllStrategyNumber	11
+#define JsonbJsonpathExistsStrategyNumber		15
+#define JsonbJsonpathPredicateStrategyNumber	16
+
 
 /*
  * In the standard jsonb_ops GIN opclass for jsonb, we choose to index both
@@ -66,8 +69,10 @@ typedef enum
 
 /* Convenience macros */
 #define DatumGetJsonbP(d)	((Jsonb *) PG_DETOAST_DATUM(d))
+#define DatumGetJsonbPCopy(d)	((Jsonb *) PG_DETOAST_DATUM_COPY(d))
 #define JsonbPGetDatum(p)	PointerGetDatum(p)
 #define PG_GETARG_JSONB_P(x)	DatumGetJsonbP(PG_GETARG_DATUM(x))
+#define PG_GETARG_JSONB_P_COPY(x)	DatumGetJsonbPCopy(PG_GETARG_DATUM(x))
 #define PG_RETURN_JSONB_P(x)	PG_RETURN_POINTER(x)
 
 typedef struct JsonbPair JsonbPair;
@@ -219,10 +224,10 @@ typedef struct
 } Jsonb;
 
 /* convenience macros for accessing the root container in a Jsonb datum */
-#define JB_ROOT_COUNT(jbp_)		(*(uint32 *) VARDATA(jbp_) & JB_CMASK)
-#define JB_ROOT_IS_SCALAR(jbp_) ((*(uint32 *) VARDATA(jbp_) & JB_FSCALAR) != 0)
-#define JB_ROOT_IS_OBJECT(jbp_) ((*(uint32 *) VARDATA(jbp_) & JB_FOBJECT) != 0)
-#define JB_ROOT_IS_ARRAY(jbp_)	((*(uint32 *) VARDATA(jbp_) & JB_FARRAY) != 0)
+#define JB_ROOT_COUNT(jbp_)		JsonContainerSize(&(jbp_)->root)
+#define JB_ROOT_IS_SCALAR(jbp_) JsonContainerIsScalar(&(jbp_)->root)
+#define JB_ROOT_IS_OBJECT(jbp_) JsonContainerIsObject(&(jbp_)->root)
+#define JB_ROOT_IS_ARRAY(jbp_)	JsonContainerIsArray(&(jbp_)->root)
 
 
 enum jbvType
@@ -236,7 +241,7 @@ enum jbvType
 	jbvArray = 0x10,
 	jbvObject,
 	/* Binary (i.e. struct Jsonb) jbvArray/jbvObject */
-	jbvBinary
+	jbvBinary,
 };
 
 /*
@@ -270,6 +275,8 @@ struct JsonbValue
 		{
 			int			nPairs; /* 1 pair, 2 elements */
 			JsonbPair  *pairs;
+			bool		uniquify;	/* Should we sort pairs by key name and
+									 * remove duplicate keys? */
 		}			object;		/* Associative container type */
 
 		struct
@@ -280,8 +287,8 @@ struct JsonbValue
 	}			val;
 };
 
-#define IsAJsonbScalar(jsonbval)	((jsonbval)->type >= jbvNull && \
-									 (jsonbval)->type <= jbvBool)
+#define IsAJsonbScalar(jsonbval)	(((jsonbval)->type >= jbvNull && \
+									  (jsonbval)->type <= jbvBool))
 
 /*
  * Key/value pair within an Object.
@@ -355,6 +362,8 @@ typedef struct JsonbIterator
 /* Support functions */
 extern uint32 getJsonbOffset(const JsonbContainer *jc, int index);
 extern uint32 getJsonbLength(const JsonbContainer *jc, int index);
+extern int lengthCompareJsonbStringValue(const void *a, const void *b);
+extern bool equalsJsonbScalarValue(JsonbValue *a, JsonbValue *b);
 extern int	compareJsonbContainers(JsonbContainer *a, JsonbContainer *b);
 extern JsonbValue *findJsonbValueFromContainer(JsonbContainer *sheader,
 							uint32 flags,
@@ -363,6 +372,8 @@ extern JsonbValue *getIthJsonbValueFromContainer(JsonbContainer *sheader,
 							  uint32 i);
 extern JsonbValue *pushJsonbValue(JsonbParseState **pstate,
 			   JsonbIteratorToken seq, JsonbValue *jbVal);
+extern JsonbValue *pushJsonbValueScalar(JsonbParseState **pstate,
+					 JsonbIteratorToken seq,JsonbValue *scalarVal);
 extern JsonbIterator *JsonbIteratorInit(JsonbContainer *container);
 extern JsonbIteratorToken JsonbIteratorNext(JsonbIterator **it, JsonbValue *val,
 				  bool skipNested);
@@ -378,6 +389,11 @@ extern char *JsonbToCString(StringInfo out, JsonbContainer *in,
 			   int estimated_len);
 extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 					 int estimated_len);
+extern Jsonb *JsonbMakeEmptyArray(void);
+extern Jsonb *JsonbMakeEmptyObject(void);
+extern char *JsonbUnquote(Jsonb *jb);
+extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
+extern const char *JsonbTypeName(JsonbValue *jb);
 
 
 #endif							/* __JSONB_H__ */

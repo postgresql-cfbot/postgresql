@@ -164,56 +164,92 @@ PLyObject_FromJsonbContainer(JsonbContainer *jsonb)
 			}
 			else
 			{
-				/* array in v */
+				/* volatile as it gets used after longjmp */
+				PyObject *volatile elem = NULL;
+
 				result = PyList_New(0);
 				if (!result)
 					return NULL;
 
-				while ((r = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
+				PG_TRY();
 				{
-					if (r == WJB_ELEM)
+					while ((r = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
 					{
-						PyObject   *elem = PLyObject_FromJsonbValue(&v);
+						if (r != WJB_ELEM)
+							continue;
+
+						elem = PLyObject_FromJsonbValue(&v);
 
 						PyList_Append(result, elem);
 						Py_XDECREF(elem);
+						elem = NULL;
 					}
 				}
+				PG_CATCH();
+				{
+					Py_XDECREF(elem);
+					Py_XDECREF(result);
+					PG_RE_THROW();
+				}
+				PG_END_TRY();
 			}
 			break;
 
 		case WJB_BEGIN_OBJECT:
-			result = PyDict_New();
-			if (!result)
-				return NULL;
-
-			while ((r = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
 			{
-				if (r == WJB_KEY)
+				/* volatile as it gets used after longjmp */
+				PyObject *volatile result_v = PyDict_New();
+				PyObject *volatile key = NULL;
+				PyObject *volatile val = NULL;
+
+				if (!result_v)
+					return NULL;
+
+				PG_TRY();
 				{
-					PyObject   *key = PLyString_FromJsonbValue(&v);
-
-					if (!key)
-						return NULL;
-
-					r = JsonbIteratorNext(&it, &v, true);
-
-					if (r == WJB_VALUE)
+					while ((r = JsonbIteratorNext(&it, &v, true)) != WJB_DONE)
 					{
-						PyObject   *value = PLyObject_FromJsonbValue(&v);
+						if (r != WJB_KEY)
+							continue;
 
-						if (!value)
+						key = PLyString_FromJsonbValue(&v);
+						if (!key)
 						{
-							Py_XDECREF(key);
-							return NULL;
+							Py_XDECREF(result_v);
+							result_v = NULL;
+							break;
 						}
 
-						PyDict_SetItem(result, key, value);
-						Py_XDECREF(value);
-					}
+						if (JsonbIteratorNext(&it, &v, true) != WJB_VALUE)
+							elog(ERROR, "unexpected jsonb token: %d", r);
 
-					Py_XDECREF(key);
+						val = PLyObject_FromJsonbValue(&v);
+						if (!val)
+						{
+							Py_XDECREF(key);
+							Py_XDECREF(result_v);
+							result_v = NULL;
+							break;
+						}
+
+						PyDict_SetItem(result_v, key, val);
+
+						Py_XDECREF(val);
+						Py_XDECREF(key);
+						key = NULL;
+						val = NULL;
+					}
 				}
+				PG_CATCH();
+				{
+					Py_XDECREF(result_v);
+					Py_XDECREF(key);
+					Py_XDECREF(val);
+					PG_RE_THROW();
+				}
+				PG_END_TRY();
+
+				result = result_v;
 			}
 			break;
 
@@ -235,19 +271,15 @@ PLyMapping_ToJsonbValue(PyObject *obj, JsonbParseState **jsonb_state)
 {
 	Py_ssize_t	pcount;
 	JsonbValue *out = NULL;
-
-	/* We need it volatile, since we use it after longjmp */
-	volatile PyObject *items_v = NULL;
+	PyObject   *items;
 
 	pcount = PyMapping_Size(obj);
-	items_v = PyMapping_Items(obj);
+	items = PyMapping_Items(obj);
+	Assert (pcount >= 0 && items);
 
 	PG_TRY();
 	{
 		Py_ssize_t	i;
-		PyObject   *items;
-
-		items = (PyObject *) items_v;
 
 		pushJsonbValue(jsonb_state, WJB_BEGIN_OBJECT, NULL);
 
@@ -279,10 +311,12 @@ PLyMapping_ToJsonbValue(PyObject *obj, JsonbParseState **jsonb_state)
 	}
 	PG_CATCH();
 	{
-		Py_DECREF(items_v);
+		Py_DECREF(items);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
+
+	Py_DECREF(items);
 
 	return out;
 }
@@ -298,19 +332,31 @@ PLySequence_ToJsonbValue(PyObject *obj, JsonbParseState **jsonb_state)
 {
 	Py_ssize_t	i;
 	Py_ssize_t	pcount;
+	/* volatile as it gets used after longjmp */
+	PyObject   *volatile value = NULL;
 
 	pcount = PySequence_Size(obj);
 
 	pushJsonbValue(jsonb_state, WJB_BEGIN_ARRAY, NULL);
 
-	for (i = 0; i < pcount; i++)
+	PG_TRY();
 	{
-		PyObject   *value = PySequence_GetItem(obj, i);
+		for (i = 0; i < pcount; i++)
+		{
+			value = PySequence_GetItem(obj, i);
+			Assert(value);
 
-		(void) PLyObject_ToJsonbValue(value, jsonb_state, true);
-
-		Py_XDECREF(value);
+			(void) PLyObject_ToJsonbValue(value, jsonb_state, true);
+			Py_XDECREF(value);
+			value = NULL;
+		}
 	}
+	PG_CATCH();
+	{
+		Py_XDECREF(value);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	return pushJsonbValue(jsonb_state, WJB_END_ARRAY, NULL);
 }

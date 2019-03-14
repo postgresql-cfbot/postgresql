@@ -152,6 +152,42 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
   </para>
 
   <para>
+    Serializable transactions cannot use the <literal>NOT DEFERRABLE</literal>
+    option when run on Hot Standby servers.  <literal>READ ONLY</literal>
+    and <literal>DEFERRABLE</literal> are the default settings for Hot Standby
+    servers, but may also be specified explicitly.  The first statement run in
+    a Serializable transaction on a Hot Standby server may need to wait until a
+    point in the transaction stream where it is not possible to see a transient
+    state that is inconsistent with any serial execution of the transactions on
+    the master server.  This may introduce a pause, but avoids the need to
+    coordinate predicate locking across multiple servers.
+  </para>
+
+  <para>
+    Serializable transactions cannot use the <literal>NOT DEFERRABLE</literal>
+    option when run on Hot Standby servers.  <literal>READ ONLY</literal>
+    and <literal>DEFERRABLE</literal> are the default settings for Hot Standby
+    servers, but may also be specified explicitly.  The first statement run in
+    a Serializable transaction on a Hot Standby server may need to wait until a
+    point in the transaction stream where it is not possible to see a transient
+    state that is inconsistent with any serial execution of the transactions on
+    the master server.  This may introduce a pause, but avoids the need to
+    coordinate predicate locking across multiple servers.
+  </para>
+
+  <para>
+    Serializable transactions cannot use the <literal>NOT DEFERRABLE</literal>
+    option when run on Hot Standby servers.  <literal>READ ONLY</literal>
+    and <literal>DEFERRABLE</literal> are the default settings for Hot Standby
+    servers, but may also be specified explicitly.  The first statement run in
+    a Serializable transaction on a Hot Standby server may need to wait until a
+    point in the transaction stream where it is not possible to see a transient
+    state that is inconsistent with any serial execution of the transactions on
+    the master server.  This may introduce a pause, but avoids the need to
+    coordinate predicate locking across multiple servers.
+  </para>
+
+  <para>
    The <literal>SET TRANSACTION SNAPSHOT</literal> command allows a new
    transaction to run with the same <firstterm>snapshot</firstterm> as an existing
    transaction.  The pre-existing transaction must have exported its snapshot

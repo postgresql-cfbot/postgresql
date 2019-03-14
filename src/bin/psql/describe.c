@@ -2318,6 +2318,8 @@ describeOneTableDetails(const char *schemaname,
 						}
 
 						/* Everything after "USING" is echoed verbatim */
+						// TODO: Show WITHOUT OVERLAPS info here?
+						// It is not really part of the *index*.
 						indexdef = PQgetvalue(result, i, 5);
 						usingpos = strstr(indexdef, " USING ");
 						if (usingpos)

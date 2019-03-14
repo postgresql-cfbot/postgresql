@@ -136,7 +136,7 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 
 	/*
 	 * If an exclusion constraint, the OIDs of the exclusion operators for
-	 * each column of the constraint
+	 * each column of the constraint. Also set for temporal primary keys.
 	 */
 	Oid			conexclop[1];
 

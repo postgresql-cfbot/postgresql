@@ -213,6 +213,7 @@ timestamptz_tbl|f
 timetz_tbl|f
 varchar_tbl|f
 view_base_table|t
+without_overlaps_test|t
 -- restore normal output mode
 \a\t
 --

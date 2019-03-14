@@ -1872,7 +1872,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 
 	index = makeNode(IndexStmt);
 
-	index->unique = (constraint->contype != CONSTR_EXCLUSION);
+	index->unique = (constraint->contype != CONSTR_EXCLUSION && constraint->without_overlaps == NULL);
 	index->primary = (constraint->contype == CONSTR_PRIMARY);
 	if (index->primary)
 	{
@@ -2239,6 +2239,142 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 			iparam->ordering = SORTBY_DEFAULT;
 			iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
 			index->indexParams = lappend(index->indexParams, iparam);
+
+			if (constraint->without_overlaps != NULL)
+			{
+				/*
+				 * We are building the index like for an EXCLUSION constraint,
+				 * so use the equality operator for these elements.
+				 */
+				List *opname = list_make1(makeString("="));
+				index->excludeOpNames = lappend(index->excludeOpNames, opname);
+			}
+		}
+
+		/*
+		 * Anything in without_overlaps should be included,
+		 * but with the overlaps operator (&&) instead of equality.
+		 */
+		if (constraint->without_overlaps != NULL) {
+			// char *without_overlaps_str = nodeToString(constraint->without_overlaps);
+			char *without_overlaps_str = strVal(constraint->without_overlaps);
+			IndexElem *iparam = makeNode(IndexElem);
+
+			/*
+			 * Iterate through the table's columns
+			 * (like just a little bit above).
+			 * If we find one whose name is the same as without_overlaps,
+			 * validate that it's a range type.
+			 *
+			 * Otherwise iterate through the table's non-system PERIODs,
+			 * and if we find one then use its start/end columns
+			 * to construct a range expression.
+			 *
+			 * Otherwise report an error.
+			 */
+			bool		found = false;
+			ColumnDef  *column = NULL;
+			ListCell   *columns;
+			if (cxt->isalter)
+			{
+				// TODO: DRY this up with the non-ALTER case:
+				Relation rel = cxt->rel;
+				/*
+				 * Look up columns on existing table.
+				 */
+				for (int i = 0; i < rel->rd_att->natts; i++)
+				{
+					Form_pg_attribute attr = TupleDescAttr(rel->rd_att, i);
+					const char *attname = NameStr(attr->attname);
+					if (strcmp(attname, without_overlaps_str) == 0)
+					{
+						if (type_is_range(attr->atttypid))
+						{
+							found = true;
+							break;
+						}
+						else
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_DATATYPE_MISMATCH),
+									 errmsg("column \"%s\" named in WITHOUT OVERLAPS is not a range type",
+											without_overlaps_str)));
+						}
+					}
+				}
+			}
+			else
+			{
+				/*
+				 * Look up columns on the being-created table.
+				 */
+				foreach(columns, cxt->columns)
+				{
+					column = castNode(ColumnDef, lfirst(columns));
+					// ereport(NOTICE, (errmsg("range %s vs column %s of type %d", without_overlaps_str, column->colname, column->typeName->typeOid)));
+					if (strcmp(column->colname, without_overlaps_str) == 0)
+					{
+						Oid colTypeOid = typenameTypeId(NULL, column->typeName);
+						if (type_is_range(colTypeOid))
+						{
+							found = true;
+							break;
+						}
+						else
+						{
+							ereport(ERROR,
+									(errcode(ERRCODE_DATATYPE_MISMATCH),
+									 errmsg("column \"%s\" named in WITHOUT OVERLAPS is not a range type",
+											without_overlaps_str)));
+						}
+					}
+				}
+			}
+			if (found)
+			{
+				iparam->name = without_overlaps_str;	// TODO: pstrdup here?
+				iparam->expr = NULL;
+			}
+			else {
+				found = false;
+				/*
+				 * TODO: Search for a non-system PERIOD with the right name.
+				 */
+				if (found)
+				{
+					iparam->name = NULL;
+					/*
+					 * TODO: Build up a parse tree to cast the period to a range.
+					 * See transformExpr (called below and defined in parser/parse_expr.c.
+					 */
+					/*
+					TypeCast *expr = makeNode(TypeCast);
+					expr->arg = constraint->without_overlaps;
+					expr->typeName = "....";		// TODO: need to look up which range type to use
+					expr->location = -1;
+					iparam->expr = transformExpr(..., expr, EXPR_KIND_INDEX_EXPRESSION);
+					*/
+				}
+				else
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_COLUMN),
+							 errmsg("range or PERIOD \"%s\" named in WITHOUT OVERLAPS does not exist",
+									without_overlaps_str)));
+				}
+			}
+
+			iparam->indexcolname = NULL;
+			iparam->collation = NIL;
+			iparam->opclass = NIL;
+			iparam->ordering = SORTBY_DEFAULT;
+			iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
+			index->indexParams = lappend(index->indexParams, iparam);
+
+			List *opname = list_make1(makeString("&&"));
+			index->excludeOpNames = lappend(index->excludeOpNames, opname);
+			index->accessMethod = "gist";
+			constraint->access_method = "gist";
 		}
 	}
 

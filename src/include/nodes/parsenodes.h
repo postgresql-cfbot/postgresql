@@ -2154,6 +2154,9 @@ typedef struct Constraint
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
 
+  /* Fields used for temporal PRIMARY KEY and FOREIGN KEY constraints: */
+  Node    *without_overlaps; /* String node naming PERIOD or range column */
+
 	/* Fields used for constraints that allow a NOT VALID specification */
 	bool		skip_validation;	/* skip validation of existing rows? */
 	bool		initially_valid;	/* mark the new constraint as valid? */

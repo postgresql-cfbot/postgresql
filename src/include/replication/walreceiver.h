@@ -17,6 +17,7 @@
 #include "fmgr.h"
 #include "getaddrinfo.h"		/* for NI_MAXHOST */
 #include "replication/logicalproto.h"
+#include "replication/slot.h"
 #include "replication/walsender.h"
 #include "storage/latch.h"
 #include "storage/spin.h"
@@ -167,6 +168,13 @@ typedef struct
 	}			proto;
 } WalRcvStreamOptions;
 
+/*
+ * Slot information receiver from remote.
+ *
+ * Currently this is same as ReplicationSlotPersistentData
+ */
+#define WalRecvReplicationSlotData ReplicationSlotPersistentData
+
 struct WalReceiverConn;
 typedef struct WalReceiverConn WalReceiverConn;
 
@@ -211,6 +219,7 @@ typedef void (*walrcv_get_senderinfo_fn) (WalReceiverConn *conn,
 typedef char *(*walrcv_identify_system_fn) (WalReceiverConn *conn,
 											TimeLineID *primary_tli,
 											int *server_version);
+typedef List *(*walrcv_list_slots_fn) (WalReceiverConn *conn, int nslots, NameData *slots);
 typedef void (*walrcv_readtimelinehistoryfile_fn) (WalReceiverConn *conn,
 												   TimeLineID tli,
 												   char **filename,
@@ -240,6 +249,7 @@ typedef struct WalReceiverFunctionsType
 	walrcv_get_conninfo_fn walrcv_get_conninfo;
 	walrcv_get_senderinfo_fn walrcv_get_senderinfo;
 	walrcv_identify_system_fn walrcv_identify_system;
+	walrcv_list_slots_fn walrcv_list_slots;
 	walrcv_readtimelinehistoryfile_fn walrcv_readtimelinehistoryfile;
 	walrcv_startstreaming_fn walrcv_startstreaming;
 	walrcv_endstreaming_fn walrcv_endstreaming;
@@ -262,6 +272,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_get_senderinfo(conn, sender_host, sender_port)
 #define walrcv_identify_system(conn, primary_tli, server_version) \
 	WalReceiverFunctions->walrcv_identify_system(conn, primary_tli, server_version)
+#define walrcv_list_slots(conn, nslots, slots) \
+	WalReceiverFunctions->walrcv_list_slots(conn, nslots, slots)
 #define walrcv_readtimelinehistoryfile(conn, tli, filename, content, size) \
 	WalReceiverFunctions->walrcv_readtimelinehistoryfile(conn, tli, filename, content, size)
 #define walrcv_startstreaming(conn, options) \

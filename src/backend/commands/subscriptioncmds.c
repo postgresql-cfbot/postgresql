@@ -598,7 +598,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		{
 			RemoveSubscriptionRel(sub->oid, relid);
 
-			logicalrep_worker_stop_at_commit(sub->oid, relid);
+			logicalrep_worker_stop_at_commit(MyDatabaseId, sub->oid, relid);
 
 			ereport(DEBUG1,
 					(errmsg("table \"%s.%s\" removed from subscription \"%s\"",
@@ -940,7 +940,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	{
 		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
-		logicalrep_worker_stop(w->subid, w->relid);
+		logicalrep_worker_stop(w->dbid, w->subid, w->relid);
 	}
 	list_free(subworkers);
 

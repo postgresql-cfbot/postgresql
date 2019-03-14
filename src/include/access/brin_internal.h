@@ -27,6 +27,9 @@ typedef struct BrinOpcInfo
 	/* Number of columns stored in an index column of this opclass */
 	uint16		oi_nstored;
 
+	/* Regular processing of NULLs in BrinValues? */
+	bool		oi_regular_nulls;
+
 	/* Opaque pointer for the opclass' private use */
 	void	   *oi_opaque;
 
@@ -54,6 +57,13 @@ typedef struct BrinDesc
 
 	/* total number of Datum entries that are stored on-disk for all columns */
 	int			bd_totalstored;
+
+	/* parameters for sizing bloom filter (BRIN bloom opclasses) */
+	double		bd_nDistinctPerRange;
+	double		bd_falsePositiveRange;
+
+	/* parameters for multi-minmax indexes */
+	int			bd_valuesPerRange;
 
 	/* per-column info; bd_tupdesc->natts entries long */
 	BrinOpcInfo *bd_info[FLEXIBLE_ARRAY_MEMBER];

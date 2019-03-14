@@ -996,11 +996,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          serializable transactions.</entry>
         </row>
         <row>
-         <entry><literal>serializable_xact</literal></entry>
-         <entry>Waiting to perform an operation on a serializable transaction
-         in a parallel query.</entry>
-        </row>
-        <row>
          <entry><literal>OldSerXidLock</literal></entry>
          <entry>Waiting to read or record conflicting serializable
          transactions.</entry>

@@ -140,7 +140,7 @@ read_dictionary(DictSyn *d, const char *filename)
 Datum
 dxsyn_init(PG_FUNCTION_ARGS)
 {
-	List	   *dictoptions = (List *) PG_GETARG_POINTER(0);
+	DictInitData *init_data = (DictInitData *) PG_GETARG_POINTER(0);
 	DictSyn    *d;
 	ListCell   *l;
 	char	   *filename = NULL;
@@ -153,7 +153,7 @@ dxsyn_init(PG_FUNCTION_ARGS)
 	d->matchsynonyms = false;
 	d->keepsynonyms = true;
 
-	foreach(l, dictoptions)
+	foreach(l, init_data->dict_options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(l);
 

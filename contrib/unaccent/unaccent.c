@@ -270,12 +270,12 @@ PG_FUNCTION_INFO_V1(unaccent_init);
 Datum
 unaccent_init(PG_FUNCTION_ARGS)
 {
-	List	   *dictoptions = (List *) PG_GETARG_POINTER(0);
+	DictInitData *init_data = (DictInitData *) PG_GETARG_POINTER(0);
 	TrieChar   *rootTrie = NULL;
 	bool		fileloaded = false;
 	ListCell   *l;
 
-	foreach(l, dictoptions)
+	foreach(l, init_data->dict_options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(l);
 

@@ -18,21 +18,23 @@
 #include "tsearch/dicts/regis.h"
 #include "tsearch/ts_public.h"
 
+#define ISPELL_INVALID_INDEX	(0x7FFFF)
+#define ISPELL_INVALID_OFFSET	(0xFFFFFFFF)
+
 /*
  * SPNode and SPNodeData are used to represent prefix tree (Trie) to store
  * a words list.
  */
-struct SPNode;
-
 typedef struct
 {
 	uint32		val:8,
 				isword:1,
 	/* Stores compound flags listed below */
 				compoundflag:4,
-	/* Reference to an entry of the AffixData field */
+	/* Index of an entry of the AffixData field */
 				affix:19;
-	struct SPNode *node;
+	/* Offset to a node of the DictNodes field */
+	uint32		node_offset;
 } SPNodeData;
 
 /*
@@ -86,21 +88,55 @@ typedef struct spell_struct
  */
 typedef struct aff_struct
 {
-	char	   *flag;
 	/* FF_SUFFIX or FF_PREFIX */
-	uint32		type:1,
+	uint16		type:1,
 				flagflags:7,
 				issimple:1,
 				isregis:1,
-				replen:14;
-	char	   *find;
-	char	   *repl;
+				flaglen:2;
+
+	/* 8 bytes could be too mach for repl, find and mask, but who knows */
+	uint8		replen;
+	uint8		findlen;
+	uint8		masklen;
+
+	/*
+	 * fields stores the following data (each ends with \0):
+	 * - repl
+	 * - find
+	 * - mask
+	 * - flag - one character (if FM_CHAR),
+	 *          two characters (if FM_LONG),
+	 *          number, >= 0 and < 65536 (if FM_NUM).
+	 */
+	char		fields[FLEXIBLE_ARRAY_MEMBER];
+} AFFIX;
+
+#define AF_FLAG_MAXSIZE		5		/* strlen(65536) */
+#define AF_REPL_MAXSIZE		255		/* 8 bytes */
+
+#define AFFIXHDRSZ	(offsetof(AFFIX, fields))
+
+#define AffixFieldRepl(af)	((af)->fields)
+#define AffixFieldFind(af)	((af)->fields + (af)->replen + 1)
+#define AffixFieldMask(af)	(AffixFieldFind(af) + (af)->findlen + 1)
+#define AffixFieldFlag(af)	(AffixFieldMask(af) + (af)->masklen + 1)
+#define AffixGetSize(af)	(AFFIXHDRSZ + (af)->replen + 1 + (af)->findlen + 1 \
+							 + (af)->masklen + 1 + strlen(AffixFieldFlag(af)) + 1)
+
+/*
+ * Stores compiled regular expression of affix. AffixReg uses mask field of
+ * AFFIX as a regular expression.
+ */
+typedef struct AffixReg
+{
+	bool		iscompiled;
 	union
 	{
 		regex_t		regex;
 		Regis		regis;
-	}			reg;
-} AFFIX;
+	}			r;
+} AffixReg;
 
 /*
  * affixes use dictionary flags too
@@ -120,14 +156,13 @@ typedef struct aff_struct
  * AffixNode and AffixNodeData are used to represent prefix tree (Trie) to store
  * an affix list.
  */
-struct AffixNode;
-
 typedef struct
 {
-	uint32		val:8,
-				naff:24;
-	AFFIX	  **aff;
-	struct AffixNode *node;
+	uint8		val;
+	uint32		affstart;
+	uint32		affend;
+	/* Offset to a node of the PrefixNodes or SuffixNodes field */
+	uint32		node_offset;
 } AffixNodeData;
 
 typedef struct AffixNode
@@ -139,9 +174,20 @@ typedef struct AffixNode
 
 #define ANHRDSZ		   (offsetof(AffixNode, data))
 
+typedef struct NodeArray
+{
+	char	   *Nodes;
+	uint32		NodesSize;	/* allocated size of Nodes */
+	uint32		NodesEnd;	/* end of data in Nodes */
+} NodeArray;
+
+#define NodeArrayGet(na, of) \
+	(((of) == ISPELL_INVALID_OFFSET) ? NULL : (na)->Nodes + (of))
+
 typedef struct
 {
-	char	   *affix;
+	/* Index of an affix of the Affix field */
+	uint32		affix;
 	int			len;
 	bool		issuffix;
 } CMPDAffix;
@@ -176,30 +222,75 @@ typedef struct CompoundAffixFlag
 
 #define FLAGNUM_MAXSIZE		(1 << 16)
 
-typedef struct
+typedef struct IspellDictData
 {
-	int			maffixes;
-	int			naffixes;
-	AFFIX	   *Affix;
+	FlagMode	flagMode;
+	bool		usecompound;
 
-	AffixNode  *Suffix;
-	AffixNode  *Prefix;
-
-	SPNode	   *Dictionary;
-	/* Array of sets of affixes */
-	char	  **AffixData;
-	int			lenAffixData;
-	int			nAffixData;
 	bool		useFlagAliases;
 
-	CMPDAffix  *CompoundAffix;
+	uint32		nAffixData;
+	uint32		AffixDataStart;
 
-	bool		usecompound;
-	FlagMode	flagMode;
+	uint32		AffixOffsetStart;
+	uint32		AffixStart;
+	uint32		nAffix;
+
+	uint32		DictNodesStart;
+	uint32		PrefixNodesStart;
+	uint32		SuffixNodesStart;
+
+	uint32		CompoundAffixStart;
 
 	/*
-	 * All follow fields are actually needed only for initialization
+	 * data stores:
+	 * - AffixData - array of affix sets
+	 * - Affix - sorted array of affixes
+	 * - DictNodes - prefix tree of a word list
+	 * - PrefixNodes - prefix tree of a prefix list
+	 * - SuffixNodes - prefix tree of a suffix list
+	 * - CompoundAffix - array of compound affixes
 	 */
+	char		data[FLEXIBLE_ARRAY_MEMBER];
+} IspellDictData;
+
+#define IspellDictDataHdrSize	(offsetof(IspellDictData, data))
+
+#define DictAffixDataOffset(d)	((d)->data)
+#define DictAffixData(d)		((d)->data + (d)->AffixDataStart)
+#define DictAffixDataGet(d, i) \
+	(((i) == ISPELL_INVALID_INDEX) ? NULL : \
+	 (AssertMacro(i < (d)->nAffixData), \
+	  DictAffixData(d) + ((uint32 *) DictAffixDataOffset(d))[i]))
+
+#define DictAffixOffset(d)		((d)->data + (d)->AffixOffsetStart)
+#define DictAffix(d)			((d)->data + (d)->AffixStart)
+#define DictAffixGet(d, i) \
+	(((i) == ISPELL_INVALID_INDEX) ? NULL : \
+	 (AssertMacro(i < (d)->nAffix), \
+	  DictAffix(d) + ((uint32 *) DictAffixOffset(d))[i]))
+
+#define DictDictNodes(d)		((d)->data + (d)->DictNodesStart)
+#define DictPrefixNodes(d)		((d)->data + (d)->PrefixNodesStart)
+#define DictSuffixNodes(d)		((d)->data + (d)->SuffixNodesStart)
+#define DictNodeGet(node_start, of) \
+	(((of) == ISPELL_INVALID_OFFSET) ? NULL : (char *) (node_start) + (of))
+
+#define DictCompoundAffix(d)	((d)->data + (d)->CompoundAffixStart)
+
+/*
+ * IspellDictBuild is used to initialize IspellDictData struct.  This is a
+ * temprorary structure which is setup by NIStartBuild() and released by
+ * NIFinishBuild().
+ */
+typedef struct IspellDictBuild
+{
+	MemoryContext buildCxt;		/* temp context for construction */
+
+	IspellDictData *dict;
+	uint32		dict_size;
+
+	/* Temporary data */
 
 	/* Array of Hunspell options in affix file */
 	CompoundAffixFlag *CompoundAffixFlags;
@@ -208,29 +299,73 @@ typedef struct
 	/* allocated length of CompoundAffixFlags array */
 	int			mCompoundAffixFlag;
 
-	/*
-	 * Remaining fields are only used during dictionary construction; they are
-	 * set up by NIStartBuild and cleared by NIFinishBuild.
-	 */
-	MemoryContext buildCxt;		/* temp context for construction */
-
-	/* Temporary array of all words in the dict file */
+	/* Array of all words in the dict file */
 	SPELL	  **Spell;
-	int			nspell;			/* number of valid entries in Spell array */
-	int			mspell;			/* allocated length of Spell array */
+	int			nSpell;			/* number of valid entries in Spell array */
+	int			mSpell;			/* allocated length of Spell array */
 
-	/* These are used to allocate "compact" data without palloc overhead */
-	char	   *firstfree;		/* first free address (always maxaligned) */
-	size_t		avail;			/* free space remaining at firstfree */
+	/* Data for IspellDictData */
+
+	/* Array of all affixes in the aff file */
+	AFFIX	  **Affix;
+	int			nAffix;			/* number of valid entries in Affix array */
+	int			mAffix;			/* allocated length of Affix array */
+	uint32		AffixSize;
+
+	/* Array of sets of affixes */
+	uint32	   *AffixDataOffset;
+	int			nAffixData;		/* number of affix sets */
+	int			mAffixData;		/* allocated number of affix sets */
+	char	   *AffixData;
+	uint32		AffixDataSize;	/* allocated size of AffixData */
+	uint32		AffixDataEnd;	/* end of data in AffixData */
+
+	/* Prefix tree which stores a word list */
+	NodeArray	DictNodes;
+
+	/* Prefix tree which stores a prefix list */
+	NodeArray	PrefixNodes;
+
+	/* Prefix tree which stores a suffix list */
+	NodeArray	SuffixNodes;
+
+	/* Array of compound affixes */
+	CMPDAffix  *CompoundAffix;
+	int			nCompoundAffix;	/* number of entries of CompoundAffix */
+} IspellDictBuild;
+
+#define AffixDataGet(d, i)		((d)->AffixData + (d)->AffixDataOffset[i])
+
+/*
+ * IspellDict is used within NINormalizeWord.
+ */
+typedef struct IspellDict
+{
+	/*
+	 * Pointer to a DSM location of IspellDictData. Should be retreived per
+	 * every dispell_lexize() call.
+	 */
+	IspellDictData *dict;
+	/*
+	 * Array of regular expression of affixes. Each regular expression is
+	 * compiled only on demand.
+	 */
+	AffixReg   *reg;
+	/*
+	 * Memory context for compiling regular expressions.
+	 */
+	MemoryContext dictCtx;
 } IspellDict;
 
 extern TSLexeme *NINormalizeWord(IspellDict *Conf, char *word);
 
-extern void NIStartBuild(IspellDict *Conf);
-extern void NIImportAffixes(IspellDict *Conf, const char *filename);
-extern void NIImportDictionary(IspellDict *Conf, const char *filename);
-extern void NISortDictionary(IspellDict *Conf);
-extern void NISortAffixes(IspellDict *Conf);
-extern void NIFinishBuild(IspellDict *Conf);
+extern void NIStartBuild(IspellDictBuild *ConfBuild);
+extern void NIImportAffixes(IspellDictBuild *ConfBuild, const char *filename);
+extern void NIImportDictionary(IspellDictBuild *ConfBuild,
+							   const char *filename);
+extern void NISortDictionary(IspellDictBuild *ConfBuild);
+extern void NISortAffixes(IspellDictBuild *ConfBuild);
+extern void NICopyData(IspellDictBuild *ConfBuild);
+extern void NIFinishBuild(IspellDictBuild *ConfBuild);
 
 #endif

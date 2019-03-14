@@ -173,18 +173,6 @@ static TimestampTz last_reply_timestamp = 0;
 /* Have we sent a heartbeat message asking for reply, since last reply? */
 static bool waiting_for_ping_response = false;
 
-/* At what point in the WAL can we progress from JOINING state? */
-static XLogRecPtr synchronous_replay_joining_until = 0;
-
-/* The last synchronous replay lease sent to the standby. */
-static TimestampTz synchronous_replay_last_lease = 0;
-
-/* The last synchronous replay lease revocation message's number. */
-static int64 synchronous_replay_revoke_msgno = 0;
-
-/* Is this WALSender listed in synchronous_replay_standby_names? */
-static bool am_potential_synchronous_replay_standby = false;
-
 /*
  * While streaming WAL in Copy mode, streamingDoneSending is set to true
  * after we have sent CopyDone. We should not send any more CopyData messages
@@ -256,7 +244,7 @@ static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
-static int64 WalSndKeepalive(bool requestReply);
+static void WalSndKeepalive(bool requestReply);
 static void WalSndKeepaliveIfNecessary(void);
 static void WalSndCheckTimeOut(void);
 static long WalSndComputeSleeptime(TimestampTz now);
@@ -300,61 +288,6 @@ InitWalSender(void)
 }
 
 /*
- * If we are exiting unexpectedly, we may need to hold up concurrent
- * synchronous_replay commits to make sure any lease that was granted has
- * expired.
- */
-static void
-PrepareUncleanExit(void)
-{
-	if (MyWalSnd->syncReplayState == SYNC_REPLAY_AVAILABLE)
-	{
-		/*
-		 * We've lost contact with the standby, but it may still be alive.  We
-		 * can't let any committing synchronous_replay transactions return
-		 * control until we've stalled for long enough for a zombie standby to
-		 * start raising errors because its lease has expired.  Because our
-		 * WalSnd slot is going away, we need to use the shared
-		 * WalSndCtl->revokingUntil variable.
-		 */
-		elog(LOG,
-			 "contact lost with standby \"%s\", revoking synchronous replay lease by stalling",
-			 application_name);
-
-		LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
-		WalSndCtl->revokingUntil = Max(WalSndCtl->revokingUntil,
-									   synchronous_replay_last_lease);
-		LWLockRelease(SyncRepLock);
-
-		SpinLockAcquire(&MyWalSnd->mutex);
-		MyWalSnd->syncReplayState = SYNC_REPLAY_UNAVAILABLE;
-		SpinLockRelease(&MyWalSnd->mutex);
-	}
-}
-
-/*
- * We are shutting down because we received a goodbye message from the
- * walreceiver.
- */
-static void
-PrepareCleanExit(void)
-{
-	if (MyWalSnd->syncReplayState == SYNC_REPLAY_AVAILABLE)
-	{
-		/*
-		 * The standby is shutting down, so it won't be running any more
-		 * transactions.  It is therefore safe to stop waiting for it without
-		 * any kind of lease revocation protocol.
-		 */
-		elog(LOG, "standby \"%s\" is leaving synchronous replay set", application_name);
-
-		SpinLockAcquire(&MyWalSnd->mutex);
-		MyWalSnd->syncReplayState = SYNC_REPLAY_UNAVAILABLE;
-		SpinLockRelease(&MyWalSnd->mutex);
-	}
-}
-
-/*
  * Clean up after an error.
  *
  * WAL sender processes don't use transactions like regular backends do.
@@ -382,10 +315,7 @@ WalSndErrorCleanup(void)
 	replication_active = false;
 
 	if (got_STOPPING || got_SIGUSR2)
-	{
-		PrepareUncleanExit();
 		proc_exit(0);
-	}
 
 	/* Revert back to startup state */
 	WalSndSetState(WALSNDSTATE_STARTUP);
@@ -397,8 +327,6 @@ WalSndErrorCleanup(void)
 static void
 WalSndShutdown(void)
 {
-	PrepareUncleanExit();
-
 	/*
 	 * Reset whereToSendOutput to prevent ereport from attempting to send any
 	 * more messages to the standby.
@@ -1676,7 +1604,6 @@ ProcessRepliesIfAny(void)
 		if (r < 0)
 		{
 			/* unexpected error or EOF */
-			PrepareUncleanExit();
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("unexpected EOF on standby connection")));
@@ -1693,7 +1620,6 @@ ProcessRepliesIfAny(void)
 		resetStringInfo(&reply_message);
 		if (pq_getmessage(&reply_message, 0))
 		{
-			PrepareUncleanExit();
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("unexpected EOF on standby connection")));
@@ -1743,7 +1669,6 @@ ProcessRepliesIfAny(void)
 				 * 'X' means that the standby is closing down the socket.
 				 */
 			case 'X':
-				PrepareCleanExit();
 				proc_exit(0);
 
 			default:
@@ -1841,12 +1766,10 @@ ProcessStandbyReplyMessage(void)
 				flushLag,
 				applyLag;
 	bool		clearLagTimes;
-	int64		replyTo;
 	TimestampTz now;
 	TimestampTz replyTime;
 
 	static bool fullyAppliedLastTime = false;
-	static TimestampTz fullyAppliedSince = 0;
 
 	/* the caller already consumed the msgtype byte */
 	writePtr = pq_getmsgint64(&reply_message);
@@ -1854,7 +1777,6 @@ ProcessStandbyReplyMessage(void)
 	applyPtr = pq_getmsgint64(&reply_message);
 	replyTime = pq_getmsgint64(&reply_message);
 	replyRequested = pq_getmsgbyte(&reply_message);
-	replyTo = pq_getmsgint64(&reply_message);
 
 	if (log_min_messages <= DEBUG2)
 	{
@@ -1880,17 +1802,17 @@ ProcessStandbyReplyMessage(void)
 	applyLag = LagTrackerRead(SYNC_REP_WAIT_APPLY, applyPtr, now);
 
 	/*
-	 * If the standby reports that it has fully replayed the WAL for at least
-	 * wal_receiver_status_interval, then let's clear the lag times that were
-	 * measured when it last wrote/flushed/applied a WAL record.  This way we
-	 * avoid displaying stale lag data until more WAL traffic arrives.
+	 * If the standby reports that it has fully replayed the WAL in two
+	 * consecutive reply messages, then the second such message must result
+	 * from wal_receiver_status_interval expiring on the standby.  This is a
+	 * convenient time to forget the lag times measured when it last
+	 * wrote/flushed/applied a WAL record, to avoid displaying stale lag data
+	 * until more WAL traffic arrives.
 	 */
 	clearLagTimes = false;
 	if (applyPtr == sentPtr)
 	{
-		if (!fullyAppliedLastTime)
-			fullyAppliedSince = now;
-		else if (now - fullyAppliedSince >= wal_receiver_status_interval * USECS_PER_SEC)
+		if (fullyAppliedLastTime)
 			clearLagTimes = true;
 		fullyAppliedLastTime = true;
 	}
@@ -1906,52 +1828,7 @@ ProcessStandbyReplyMessage(void)
 	 * standby.
 	 */
 	{
-		int			next_sr_state = -1;
 		WalSnd	   *walsnd = MyWalSnd;
-
-		/* Handle synchronous replay state machine. */
-		if (am_potential_synchronous_replay_standby && !am_cascading_walsender)
-		{
-			bool replay_lag_acceptable;
-
-			/* Check if the lag is acceptable (includes -1 for caught up). */
-			if (applyLag < synchronous_replay_max_lag * 1000)
-				replay_lag_acceptable = true;
-			else
-				replay_lag_acceptable = false;
-
-			/* Figure out next if the state needs to change. */
-			switch (walsnd->syncReplayState)
-			{
-			case SYNC_REPLAY_UNAVAILABLE:
-				/* Can we join? */
-				if (replay_lag_acceptable)
-					next_sr_state = SYNC_REPLAY_JOINING;
-				break;
-			case SYNC_REPLAY_JOINING:
-				/* Are we still applying fast enough? */
-				if (replay_lag_acceptable)
-				{
-					/* Have we reached the join point yet? */
-					if (applyPtr >= synchronous_replay_joining_until)
-						next_sr_state = SYNC_REPLAY_AVAILABLE;
-				}
-				else
-					next_sr_state = SYNC_REPLAY_UNAVAILABLE;
-				break;
-			case SYNC_REPLAY_AVAILABLE:
-				/* Are we still applying fast enough? */
-				if (!replay_lag_acceptable)
-					next_sr_state = SYNC_REPLAY_REVOKING;
-				break;
-			case SYNC_REPLAY_REVOKING:
-				/* Has the revocation been acknowledged or timed out? */
-				if (replyTo == synchronous_replay_revoke_msgno ||
-					now >= walsnd->revokingUntil)
-					next_sr_state = SYNC_REPLAY_UNAVAILABLE;
-				break;
-			}
-		}
 
 		SpinLockAcquire(&walsnd->mutex);
 		walsnd->write = writePtr;
@@ -1964,55 +1841,11 @@ ProcessStandbyReplyMessage(void)
 		if (applyLag != -1 || clearLagTimes)
 			walsnd->applyLag = applyLag;
 		walsnd->replyTime = replyTime;
-		if (next_sr_state != -1)
-			walsnd->syncReplayState = next_sr_state;
-		if (next_sr_state == SYNC_REPLAY_REVOKING)
-			walsnd->revokingUntil = synchronous_replay_last_lease;
 		SpinLockRelease(&walsnd->mutex);
-
-		/*
-		 * Post shmem-update actions for synchronous replay state transitions.
-		 */
-		switch (next_sr_state)
-		{
-		case SYNC_REPLAY_JOINING:
-			/*
-			 * Now that we've started waiting for this standby, we need to
-			 * make sure that everything flushed before now has been applied
-			 * before we move to available and issue a lease.
-			 */
-			synchronous_replay_joining_until = GetFlushRecPtr();
-			ereport(LOG,
-					(errmsg("standby \"%s\" joining synchronous replay set...",
-							application_name)));
-			break;
-		case SYNC_REPLAY_AVAILABLE:
-			/* Issue a new lease to the standby. */
-			WalSndKeepalive(false);
-			ereport(LOG,
-					(errmsg("standby \"%s\" is available for synchronous replay",
-							application_name)));
-			break;
-		case SYNC_REPLAY_REVOKING:
-			/* Revoke the standby's lease, and note the message number. */
-			synchronous_replay_revoke_msgno = WalSndKeepalive(true);
-			ereport(LOG,
-					(errmsg("revoking synchronous replay lease for standby \"%s\"...",
-							application_name)));
-			break;
-		case SYNC_REPLAY_UNAVAILABLE:
-			ereport(LOG,
-					(errmsg("standby \"%s\" is no longer available for synchronous replay",
-							application_name)));
-			break;
-		default:
-			/* No change. */
-			break;
-		}
 	}
 
 	if (!am_cascading_walsender)
-		SyncRepReleaseWaiters(MyWalSnd->syncReplayState >= SYNC_REPLAY_JOINING);
+		SyncRepReleaseWaiters();
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.
@@ -2226,52 +2059,33 @@ ProcessStandbyHSFeedbackMessage(void)
  * If wal_sender_timeout is enabled we want to wake up in time to send
  * keepalives and to abort the connection if wal_sender_timeout has been
  * reached.
- *
- * But if syncronous_replay_max_lag is enabled, we override that and send
- * keepalives at a constant rate to replace expiring leases.
  */
 static long
 WalSndComputeSleeptime(TimestampTz now)
 {
 	long		sleeptime = 10000;	/* 10 s */
 
-	if ((wal_sender_timeout > 0 && last_reply_timestamp > 0) ||
-		am_potential_synchronous_replay_standby)
+	if (wal_sender_timeout > 0 && last_reply_timestamp > 0)
 	{
 		TimestampTz wakeup_time;
 		long		sec_to_timeout;
 		int			microsec_to_timeout;
 
-		if (am_potential_synchronous_replay_standby)
-		{
-			/*
-			 * We need to keep replacing leases before they expire.  We'll do
-			 * that halfway through the lease time according to our clock, to
-			 * allow for the standby's clock to be ahead of the primary's by
-			 * 25% of synchronous_replay_lease_time.
-			 */
-			wakeup_time =
-				TimestampTzPlusMilliseconds(last_reply_timestamp,
-											synchronous_replay_lease_time / 2);
-		}
-		else
-		{
-			/*
-			 * At the latest stop sleeping once wal_sender_timeout has been
-			 * reached.
-			 */
-			wakeup_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
-													  wal_sender_timeout);
+		/*
+		 * At the latest stop sleeping once wal_sender_timeout has been
+		 * reached.
+		 */
+		wakeup_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
+												  wal_sender_timeout);
 
-			/*
-			 * If no ping has been sent yet, wakeup when it's time to do so.
-			 * WalSndKeepaliveIfNecessary() wants to send a keepalive once
-			 * half of the timeout passed without a response.
-			 */
-			if (!waiting_for_ping_response)
-				wakeup_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
-														  wal_sender_timeout / 2);
-		}
+		/*
+		 * If no ping has been sent yet, wakeup when it's time to do so.
+		 * WalSndKeepaliveIfNecessary() wants to send a keepalive once half of
+		 * the timeout passed without a response.
+		 */
+		if (!waiting_for_ping_response)
+			wakeup_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
+													  wal_sender_timeout / 2);
 
 		/* Compute relative time until wakeup. */
 		TimestampDifference(now, wakeup_time,
@@ -2295,33 +2109,20 @@ WalSndComputeSleeptime(TimestampTz now)
  * message every standby_message_timeout = wal_sender_timeout/6 = 10s.  We
  * could eliminate that problem by recognizing timeout expiration at
  * wal_sender_timeout/2 after the keepalive.
- *
- * If synchronous replay is configured we override that so that  unresponsive
- * standbys are detected sooner.
  */
 static void
 WalSndCheckTimeOut(void)
 {
 	TimestampTz timeout;
-	int allowed_time;
 
 	/* don't bail out if we're doing something that doesn't require timeouts */
 	if (last_reply_timestamp <= 0)
 		return;
 
-	/*
-	 * If a synchronous replay support is configured, we use
-	 * synchronous_replay_lease_time instead of wal_sender_timeout, to limit
-	 * the time before an unresponsive synchronous replay standby is dropped.
-	 */
-	if (am_potential_synchronous_replay_standby)
-		allowed_time = synchronous_replay_lease_time;
-	else
-		allowed_time = wal_sender_timeout;
-
 	timeout = TimestampTzPlusMilliseconds(last_reply_timestamp,
-										  allowed_time);
-	if (allowed_time > 0 && last_processing >= timeout)
+										  wal_sender_timeout);
+
+	if (wal_sender_timeout > 0 && last_processing >= timeout)
 	{
 		/*
 		 * Since typically expiration of replication timeout means
@@ -2345,9 +2146,6 @@ WalSndLoop(WalSndSendDataCallback send_data)
 	 */
 	last_reply_timestamp = GetCurrentTimestamp();
 	waiting_for_ping_response = false;
-
-	/* Check if we are managing a potential synchronous replay standby. */
-	am_potential_synchronous_replay_standby = SyncReplayPotentialStandby();
 
 	/*
 	 * Loop until we reach the end of this timeline or the client requests to
@@ -2507,7 +2305,6 @@ InitWalSenderSlot(void)
 			walsnd->flushLag = -1;
 			walsnd->applyLag = -1;
 			walsnd->state = WALSNDSTATE_STARTUP;
-			walsnd->syncReplayState = SYNC_REPLAY_UNAVAILABLE;
 			walsnd->latch = &MyProc->procLatch;
 			walsnd->replyTime = 0;
 			SpinLockRelease(&walsnd->mutex);
@@ -3401,27 +3198,6 @@ WalSndGetStateString(WalSndState state)
 	return "UNKNOWN";
 }
 
-/*
- * Return a string constant representing the synchronous replay state. This is
- * used in system views, and should *not* be translated.
- */
-static const char *
-WalSndGetSyncReplayStateString(SyncReplayState state)
-{
-	switch (state)
-	{
-	case SYNC_REPLAY_UNAVAILABLE:
-		return "unavailable";
-	case SYNC_REPLAY_JOINING:
-		return "joining";
-	case SYNC_REPLAY_AVAILABLE:
-		return "available";
-	case SYNC_REPLAY_REVOKING:
-		return "revoking";
-	}
-	return "UNKNOWN";
-}
-
 static Interval *
 offset_to_interval(TimeOffset offset)
 {
@@ -3441,7 +3217,7 @@ offset_to_interval(TimeOffset offset)
 Datum
 pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAL_SENDERS_COLS	13
+#define PG_STAT_GET_WAL_SENDERS_COLS	12
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -3496,7 +3272,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		int			pid;
 		WalSndState state;
 		TimestampTz replyTime;
-		SyncReplayState syncReplayState;
 		Datum		values[PG_STAT_GET_WAL_SENDERS_COLS];
 		bool		nulls[PG_STAT_GET_WAL_SENDERS_COLS];
 
@@ -3509,7 +3284,6 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 		pid = walsnd->pid;
 		sentPtr = walsnd->sentPtr;
 		state = walsnd->state;
-		syncReplayState = walsnd->syncReplayState;
 		write = walsnd->write;
 		flush = walsnd->flush;
 		apply = walsnd->apply;
@@ -3595,13 +3369,10 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
 			else
 				values[10] = CStringGetTextDatum("potential");
 
-			values[11] =
-				CStringGetTextDatum(WalSndGetSyncReplayStateString(syncReplayState));
-
 			if (replyTime == 0)
-				nulls[12] = true;
+				nulls[11] = true;
 			else
-				values[12] = TimestampTzGetDatum(replyTime);
+				values[11] = TimestampTzGetDatum(replyTime);
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -3617,69 +3388,21 @@ pg_stat_get_wal_senders(PG_FUNCTION_ARGS)
   * This function is used to send a keepalive message to standby.
   * If requestReply is set, sets a flag in the message requesting the standby
   * to send a message back to us, for heartbeat purposes.
-  * Return the serial number of the message that was sent.
   */
-static int64
+static void
 WalSndKeepalive(bool requestReply)
 {
-	TimestampTz synchronous_replay_lease;
-	TimestampTz now;
-
-	static int64 message_number = 0;
-
 	elog(DEBUG2, "sending replication keepalive");
-
-	/* Grant a synchronous replay lease if appropriate. */
-	now = GetCurrentTimestamp();
-	if (MyWalSnd->syncReplayState != SYNC_REPLAY_AVAILABLE)
-	{
-		/* No lease granted, and any earlier lease is revoked. */
-		synchronous_replay_lease = 0;
-	}
-	else
-	{
-		/*
-		 * Since this timestamp is being sent to the standby where it will be
-		 * compared against a time generated by the standby's system clock, we
-		 * must consider clock skew.  We use 25% of the lease time as max
-		 * clock skew, and we subtract that from the time we send with the
-		 * following reasoning:
-		 *
-		 * 1.  If the standby's clock is slow (ie behind the primary's) by up
-		 * to that much, then by subtracting this amount will make sure the
-		 * lease doesn't survive past that time according to the primary's
-		 * clock.
-		 *
-		 * 2.  If the standby's clock is fast (ie ahead of the primary's) by
-		 * up to that much, then by subtracting this amount there won't be any
-		 * gaps between leases, since leases are reissued every time 50% of
-		 * the lease time elapses (see WalSndKeepaliveIfNecessary and
-		 * WalSndComputeSleepTime).
-		 */
-		int max_clock_skew = synchronous_replay_lease_time / 4;
-
-		/* Compute and remember the expiry time of the lease we're granting. */
-		synchronous_replay_last_lease =
-			TimestampTzPlusMilliseconds(now, synchronous_replay_lease_time);
-		/* Adjust the version we send for clock skew. */
-		synchronous_replay_lease =
-			TimestampTzPlusMilliseconds(synchronous_replay_last_lease,
-										-max_clock_skew);
-	}
 
 	/* construct the message... */
 	resetStringInfo(&output_message);
 	pq_sendbyte(&output_message, 'k');
-	pq_sendint64(&output_message, ++message_number);
 	pq_sendint64(&output_message, sentPtr);
-	pq_sendint64(&output_message, now);
+	pq_sendint64(&output_message, GetCurrentTimestamp());
 	pq_sendbyte(&output_message, requestReply ? 1 : 0);
-	pq_sendint64(&output_message, synchronous_replay_lease);
 
 	/* ... and send it wrapped in CopyData */
 	pq_putmessage_noblock('d', output_message.data, output_message.len);
-
-	return message_number;
 }
 
 /*
@@ -3694,30 +3417,19 @@ WalSndKeepaliveIfNecessary(void)
 	 * Don't send keepalive messages if timeouts are globally disabled or
 	 * we're doing something not partaking in timeouts.
 	 */
-	if (!am_potential_synchronous_replay_standby)
-	{
-		if (wal_sender_timeout <= 0 || last_reply_timestamp <= 0)
-			return;
-		if (waiting_for_ping_response)
-			return;
-	}
+	if (wal_sender_timeout <= 0 || last_reply_timestamp <= 0)
+		return;
+
+	if (waiting_for_ping_response)
+		return;
 
 	/*
 	 * If half of wal_sender_timeout has lapsed without receiving any reply
 	 * from the standby, send a keep-alive message to the standby requesting
 	 * an immediate reply.
-	 *
-	 * If synchronous replay has been configured, use
-	 * synchronous_replay_lease_time to control keepalive intervals rather
-	 * than wal_sender_timeout, so that we can keep replacing leases at the
-	 * right frequency.
 	 */
-	if (am_potential_synchronous_replay_standby)
-		ping_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
-												synchronous_replay_lease_time / 2);
-	else
-		ping_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
-												wal_sender_timeout / 2);
+	ping_time = TimestampTzPlusMilliseconds(last_reply_timestamp,
+											wal_sender_timeout / 2);
 	if (last_processing >= ping_time)
 	{
 		WalSndKeepalive(true);
@@ -3761,7 +3473,7 @@ LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
 	 */
 	new_write_head = (lag_tracker->write_head + 1) % LAG_TRACKER_BUFFER_SIZE;
 	buffer_full = false;
-	for (i = 0; i < SYNC_REP_WAIT_SYNC_REPLAY; ++i)
+	for (i = 0; i < NUM_SYNC_REP_WAIT_MODE; ++i)
 	{
 		if (new_write_head == lag_tracker->read_heads[i])
 			buffer_full = true;

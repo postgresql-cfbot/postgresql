@@ -84,6 +84,13 @@ typedef struct
 	TimeLineID	receivedTLI;
 
 	/*
+	 * syncReplayLease is the time until which the primary has authorized this
+	 * standby to consider itself available for synchronous_replay mode, or 0
+	 * for not authorized.
+	 */
+	TimestampTz syncReplayLease;
+
+	/*
 	 * latestChunkStart is the starting byte position of the current "batch"
 	 * of received WAL.  It's actually the same as the previous value of
 	 * receivedUpto before the last flush to disk.  Startup process can use
@@ -312,5 +319,7 @@ extern XLogRecPtr GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID 
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);
 extern void WalRcvForceReply(void);
+
+extern bool WalRcvSyncReplayAvailable(void);
 
 #endif							/* _WALRECEIVER_H */

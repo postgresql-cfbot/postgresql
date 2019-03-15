@@ -698,12 +698,23 @@ sub start
 	my $port   = $self->port;
 	my $pgdata = $self->data_dir;
 	my $name   = $self->name;
+
 	BAIL_OUT("node \"$name\" is already running") if defined $self->{_pid};
+
 	print("### Starting node \"$name\"\n");
+
+	# Temporarily unset PGAPPNAME so that the server doesn't inherit
+	# it.  Otherwise this could affect libpqwalreceiver connections in
+	# confusing ways.
+	my $save_pgappname = $ENV{PGAPPNAME};
+	delete $ENV{PGAPPNAME};
+
 	# Note: We set the cluster_name here, not in postgresql.conf (in
 	# sub init) so that it does not get copied to standbys.
 	my $ret = TestLib::system_log('pg_ctl', '-D', $self->data_dir, '-l',
 		$self->logfile, '-o', "--cluster-name=$name", 'start');
+
+	$ENV{PGAPPNAME} = $save_pgappname;
 
 	if ($ret != 0)
 	{
@@ -776,9 +787,17 @@ sub restart
 	my $pgdata  = $self->data_dir;
 	my $logfile = $self->logfile;
 	my $name    = $self->name;
+
 	print "### Restarting node \"$name\"\n";
+
+	my $save_pgappname = $ENV{PGAPPNAME};
+	delete $ENV{PGAPPNAME};
+
 	TestLib::system_or_bail('pg_ctl', '-D', $pgdata, '-l', $logfile,
 		'restart');
+
+	$ENV{PGAPPNAME} = $save_pgappname;
+
 	$self->_update_pid(1);
 	return;
 }
@@ -835,7 +854,7 @@ sub enable_streaming
 	print "### Enabling streaming replication for node \"$name\"\n";
 	$self->append_conf(
 		'postgresql.conf', qq(
-primary_conninfo='$root_connstr application_name=$name'
+primary_conninfo='$root_connstr'
 ));
 	$self->set_standby_mode();
 	return;

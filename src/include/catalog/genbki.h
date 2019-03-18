@@ -27,6 +27,7 @@
 #define BKI_SHARED_RELATION
 #define BKI_ROWTYPE_OID(oid,oidmacro)
 #define BKI_SCHEMA_MACRO
+#define BKI_NO_TOAST
 
 /* Options that may appear after an attribute (on the same line) */
 #define BKI_FORCE_NULL

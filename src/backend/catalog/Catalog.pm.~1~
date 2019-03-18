@@ -126,7 +126,6 @@ sub ParseHeader
 				$catalog{rowtype_oid_macro}  = '';
 			}
 			$catalog{schema_macro} = /BKI_SCHEMA_MACRO/ ? 1 : 0;
-			$catalog{no_toast} = /BKI_NO_TOAST/ ? 1 : 0;
 			$declaring_attributes = 1;
 		}
 		elsif ($is_client_code)

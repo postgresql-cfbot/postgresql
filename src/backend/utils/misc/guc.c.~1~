@@ -496,7 +496,6 @@ char	   *event_source;
 
 bool		row_security;
 bool		check_function_bodies = true;
-bool		force_leakproof;
 
 /*
  * This GUC exists solely for backward compatibility, check its definition for
@@ -1906,24 +1905,6 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Whether to continue running after a failure to sync data files."),
 		},
 		&data_sync_retry,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"suppress_client_messages", PGC_POSTMASTER, ERROR_HANDLING_OPTIONS,
-			gettext_noop("Suppress all client messages."),
-		},
-		&suppress_client_messages,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"force_leakproof", PGC_POSTMASTER, ERROR_HANDLING_OPTIONS,
-			gettext_noop("Force all functions to behave as if leakproof."),
-		},
-		&force_leakproof,
 		false,
 		NULL, NULL, NULL
 	},

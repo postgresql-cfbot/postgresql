@@ -107,6 +107,7 @@ int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
+bool		suppress_client_messages = false;
 
 #ifdef HAVE_SYSLOG
 
@@ -3166,24 +3167,31 @@ send_message_to_frontend(ErrorData *edata)
 
 		/* M field is required per protocol, so always send something */
 		pq_sendbyte(&msgbuf, PG_DIAG_MESSAGE_PRIMARY);
-		if (edata->message)
-			err_sendstring(&msgbuf, edata->message);
+
+		/* skip sending if requested */
+		if (!suppress_client_messages)
+		{
+			if (edata->message)
+				err_sendstring(&msgbuf, edata->message);
+			else
+				err_sendstring(&msgbuf, _("missing error text"));
+
+			if (edata->detail)
+			{
+				pq_sendbyte(&msgbuf, PG_DIAG_MESSAGE_DETAIL);
+				err_sendstring(&msgbuf, edata->detail);
+			}
+
+			/* detail_log is intentionally not used here */
+
+			if (edata->hint)
+			{
+				pq_sendbyte(&msgbuf, PG_DIAG_MESSAGE_HINT);
+				err_sendstring(&msgbuf, edata->hint);
+			}
+		}
 		else
-			err_sendstring(&msgbuf, _("missing error text"));
-
-		if (edata->detail)
-		{
-			pq_sendbyte(&msgbuf, PG_DIAG_MESSAGE_DETAIL);
-			err_sendstring(&msgbuf, edata->detail);
-		}
-
-		/* detail_log is intentionally not used here */
-
-		if (edata->hint)
-		{
-			pq_sendbyte(&msgbuf, PG_DIAG_MESSAGE_HINT);
-			err_sendstring(&msgbuf, edata->hint);
-		}
+			err_sendstring(&msgbuf, _("redacted message text"));
 
 		if (edata->context)
 		{
@@ -3274,10 +3282,16 @@ send_message_to_frontend(ErrorData *edata)
 		if (edata->show_funcname && edata->funcname)
 			appendStringInfo(&buf, "%s: ", edata->funcname);
 
-		if (edata->message)
-			appendStringInfoString(&buf, edata->message);
+		/* skip sending if requested */
+		if (!suppress_client_messages)
+		{
+			if (edata->message)
+				appendStringInfoString(&buf, edata->message);
+			else
+				appendStringInfoString(&buf, _("missing error text"));
+		}
 		else
-			appendStringInfoString(&buf, _("missing error text"));
+			appendStringInfoString(&buf, _("redacted message text"));
 
 		if (edata->cursorpos > 0)
 			appendStringInfo(&buf, _(" at character %d"),

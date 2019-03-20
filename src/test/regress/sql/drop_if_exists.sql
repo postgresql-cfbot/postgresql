@@ -153,6 +153,28 @@ DROP FUNCTION IF EXISTS test_function_exists();
 DROP FUNCTION test_function_exists(int, text, int[]);
 DROP FUNCTION IF EXISTS test_function_exists(int, text, int[]);
 
+-- Ensure we still receive an ambiguous function error when there are
+-- multiple matching functions.
+CREATE FUNCTION test_ambiguous_funcname(int) returns int as $$ select $1; $$ language sql;
+CREATE FUNCTION test_ambiguous_funcname(text) returns text as $$ select $1; $$ language sql;
+DROP FUNCTION IF EXISTS test_ambiguous_funcname;
+
+-- cleanup
+DROP FUNCTION test_ambiguous_funcname(int);
+DROP FUNCTION test_ambiguous_funcname(text);
+
+-- Ensure we get an ambiguous function error for procedures too.
+CREATE PROCEDURE test_ambiguous_procname(int) as $$ begin end; $$ language plpgsql;
+CREATE PROCEDURE test_ambiguous_procname(text) as $$ begin end; $$ language plpgsql;
+DROP PROCEDURE IF EXISTS test_ambiguous_procname;
+
+-- Ensure we get a similar error if we use ROUTINE instead of PROCEDURE.
+DROP ROUTINE IF EXISTS test_ambiguous_procname;
+
+-- cleanup
+DROP FUNCTION test_ambiguous_procname(int);
+DROP FUNCTION test_ambiguous_procname(text);
+
 -- aggregate
 DROP AGGREGATE test_aggregate_exists(*);
 DROP AGGREGATE IF EXISTS test_aggregate_exists(*);

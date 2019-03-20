@@ -138,6 +138,31 @@ DROP FUNCTION test_function_exists(int, text, int[]);
 ERROR:  function test_function_exists(integer, text, integer[]) does not exist
 DROP FUNCTION IF EXISTS test_function_exists(int, text, int[]);
 NOTICE:  function test_function_exists(pg_catalog.int4,text,pg_catalog.int4[]) does not exist, skipping
+-- Ensure we still receive an ambiguous function error when there are
+-- multiple matching functions.
+CREATE FUNCTION test_ambiguous_funcname(int) returns int as $$ select $1; $$ language sql;
+CREATE FUNCTION test_ambiguous_funcname(text) returns text as $$ select $1; $$ language sql;
+DROP FUNCTION IF EXISTS test_ambiguous_funcname;
+ERROR:  function name "test_ambiguous_funcname" is not unique
+HINT:  Specify the argument list to select the function unambiguously.
+-- cleanup
+DROP FUNCTION test_ambiguous_funcname(int);
+DROP FUNCTION test_ambiguous_funcname(text);
+-- Ensure we get an ambiguous function error for procedures too.
+CREATE PROCEDURE test_ambiguous_procname(int) as $$ begin end; $$ language plpgsql;
+CREATE PROCEDURE test_ambiguous_procname(text) as $$ begin end; $$ language plpgsql;
+DROP PROCEDURE IF EXISTS test_ambiguous_procname;
+ERROR:  procedure name "test_ambiguous_procname" is not unique
+HINT:  Specify the argument list to select the procedure unambiguously.
+-- Ensure we get a similar error if we use ROUTINE instead of PROCEDURE.
+DROP ROUTINE IF EXISTS test_ambiguous_procname;
+ERROR:  routine name "test_ambiguous_procname" is not unique
+HINT:  Specify the argument list to select the routine unambiguously.
+-- cleanup
+DROP FUNCTION test_ambiguous_procname(int);
+ERROR:  test_ambiguous_procname(integer) is not a function
+DROP FUNCTION test_ambiguous_procname(text);
+ERROR:  test_ambiguous_procname(text) is not a function
 -- aggregate
 DROP AGGREGATE test_aggregate_exists(*);
 ERROR:  aggregate test_aggregate_exists(*) does not exist

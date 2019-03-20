@@ -77,3 +77,46 @@ SELECT relreplident FROM pg_class WHERE oid = 'test_replica_identity'::regclass;
 
 DROP TABLE test_replica_identity;
 DROP TABLE test_replica_identity_othertable;
+
+----
+-- Make sure it propagates to partitions
+----
+CREATE TABLE test_replica_identity_part (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE test_replica_identity_part1 PARTITION OF test_replica_identity_part
+  FOR VALUES FROM (0) TO (1000) PARTITION BY RANGE (a);
+CREATE TABLE test_replica_identity_part2 PARTITION OF test_replica_identity_part
+  FOR VALUES FROM (1000) TO (2000);
+CREATE TABLE test_replica_identity_part11 PARTITION OF test_replica_identity_part1
+  FOR VALUES FROM (1000) TO (1500);
+ALTER TABLE test_replica_identity_part REPLICA IDENTITY FULL;
+CREATE TABLE test_replica_identity_part3 PARTITION OF test_replica_identity_part
+  FOR VALUES FROM (2000) TO (3000);
+CREATE TABLE test_replica_identity_part4 (LIKE test_replica_identity_part);
+ALTER TABLE test_replica_identity_part ATTACH PARTITION test_replica_identity_part4
+  FOR VALUES FROM (3000) TO (4000);
+\d+ test_replica_identity_part2
+\d+ test_replica_identity_part11
+\d+ test_replica_identity_part
+\d+ test_replica_identity_part3
+\d+ test_replica_identity_part4
+
+ALTER TABLE test_replica_identity_part ALTER a SET NOT NULL;
+CREATE UNIQUE INDEX trip_b_idx ON test_replica_identity_part (a);
+ALTER TABLE test_replica_identity_part REPLICA IDENTITY USING INDEX trip_b_idx;
+\d+ test_replica_identity_part2
+\d+ test_replica_identity_part11
+\d+ test_replica_identity_part
+\d+ test_replica_identity_part3
+\d+ test_replica_identity_part4
+
+
+----
+-- Check behavior with inherited tables
+----
+CREATE TABLE test_replica_identity_inh (a int);
+CREATE TABLE test_replica_identity_cld () INHERITS (test_replica_identity_inh);
+ALTER TABLE test_replica_identity_inh REPLICA IDENTITY FULL;
+CREATE TABLE test_replica_identity_cld2 () INHERITS (test_replica_identity_inh);
+\d+ test_replica_identity_inh
+\d+ test_replica_identity_cld
+\d+ test_replica_identity_cld2

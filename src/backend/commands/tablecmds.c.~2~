@@ -303,7 +303,7 @@ static void truncate_check_activity(Relation rel);
 static void RangeVarCallbackForTruncate(const RangeVar *relation,
 							Oid relId, Oid oldRelId, void *arg);
 static List *MergeAttributes(List *schema, List *supers, char relpersistence,
-				bool is_partition, List **supconstr, char *ri_type);
+				bool is_partition, List **supconstr);
 static bool MergeCheckConstraint(List *constraints, char *name, Node *expr);
 static void MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel);
 static void MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel);
@@ -492,7 +492,6 @@ static void AttachPartitionEnsureIndexes(Relation rel, Relation attachrel);
 static void QueuePartitionConstraintValidation(List **wqueue, Relation scanrel,
 								   List *partConstraint,
 								   bool validate_default);
-static void MatchReplicaIdentity(Relation tgtrel, Relation srcrel);
 static void CloneRowTriggersToPartition(Relation parent, Relation partition);
 static ObjectAddress ATExecDetachPartition(Relation rel, RangeVar *name);
 static ObjectAddress ATExecAttachPartitionIdx(List **wqueue, Relation rel,
@@ -535,7 +534,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	TupleDesc	descriptor;
 	List	   *inheritOids;
 	List	   *old_constraints;
-	char		ri_type;
 	List	   *rawDefaults;
 	List	   *cookedDefaults;
 	Datum		reloptions;
@@ -719,7 +717,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		MergeAttributes(stmt->tableElts, inheritOids,
 						stmt->relation->relpersistence,
 						stmt->partbound != NULL,
-						&old_constraints, &ri_type);
+						&old_constraints);
 
 	/*
 	 * Create a tuple descriptor from the relation schema.  Note that this
@@ -1061,10 +1059,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		 * table, there is no need to verify these new constraints.
 		 */
 		CloneForeignKeyConstraints(parentId, relationId, NULL);
-
-		/* Propagate REPLICA IDENTITY information too */
-		if (ri_type != REPLICA_IDENTITY_DEFAULT)
-			MatchReplicaIdentity(rel, parent);
 
 		table_close(parent, NoLock);
 	}
@@ -1925,8 +1919,6 @@ storage_name(char c)
  * Output arguments:
  * 'supconstr' receives a list of constraints belonging to the parents,
  *		updated as necessary to be valid for the child.
- * 'ri_type' receives the replica identity type of the last parent seen,
- *		or default if none.
  *
  * Return value:
  * Completed schema list.
@@ -1968,15 +1960,11 @@ storage_name(char c)
  *		(4) Otherwise the inherited default is used.
  *		Rule (3) is new in Postgres 7.1; in earlier releases you got a
  *		rather arbitrary choice of which parent default to use.
- *
- *	  It only makes sense to use the returned 'ri_type' when there's a single
- *	  parent, such as in declarative partitioning.
  *----------
  */
 static List *
 MergeAttributes(List *schema, List *supers, char relpersistence,
-				bool is_partition, List **supconstr,
-				char *ri_type)
+				bool is_partition, List **supconstr)
 {
 	ListCell   *entry;
 	List	   *inhSchema = NIL;
@@ -2073,11 +2061,6 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 	}
 
 	/*
-	 * Initialize replica identity to default; parents may change it later
-	 */
-	*ri_type = REPLICA_IDENTITY_DEFAULT;
-
-	/*
 	 * Scan the parents left-to-right, and merge their attributes to form a
 	 * list of inherited attributes (inhSchema).  Also check to see if we need
 	 * to inherit an OID column.
@@ -2157,9 +2140,6 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					 errmsg(!is_partition
 							? "cannot inherit from temporary relation of another session"
 							: "cannot create as partition of temporary relation of another session")));
-
-		/* Indicate replica identity back to caller */
-		*ri_type = relation->rd_rel->relreplident;
 
 		/*
 		 * We should have an UNDER permission flag for this, but for now,
@@ -4004,7 +3984,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_ReplicaIdentity:	/* REPLICA IDENTITY ... */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW);
 			pass = AT_PASS_MISC;
-			/* Recursion occurs during execution phase */
+			/* This command never recurses */
 			/* No command-specific prep needed */
 			break;
 		case AT_EnableTrig:		/* ENABLE TRIGGER variants */
@@ -12973,13 +12953,10 @@ ATExecDropOf(Relation rel, LOCKMODE lockmode)
  *
  * Iff ri_type = REPLICA_IDENTITY_INDEX, indexOid must be the Oid of a suitable
  * index. Otherwise, it should be InvalidOid.
- *
- * 'permissive' means to ignore the case where a partitioned table contains
- * a partition without the index.  If false, raise an error.
  */
 static void
 relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
-							   bool is_internal, bool permissive, LOCKMODE lockmode)
+							   bool is_internal)
 {
 	Relation	pg_index;
 	Relation	pg_class;
@@ -13070,58 +13047,6 @@ relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 	}
 
 	table_close(pg_index, RowExclusiveLock);
-
-	/*
-	 * If there are any partitions, handle them too.
-	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc	pd = RelationGetPartitionDesc(rel);
-
-		for (int i = 0; i < pd->nparts; i++)
-		{
-			Relation	part = table_open(pd->oids[i], lockmode);
-			Oid			idxOid;
-
-			if (ri_type == REPLICA_IDENTITY_INDEX)
-			{
-				/*
-				 * When using an index as identity, and some partition does not
-				 * have the index, we either raise an error (if not in
-				 * "permissive" mode), or ignore the partition; this happens
-				 * when the index hierarchy is being restored by pg_dump.  The
-				 * only thing we can do at this point in that case is hope that
-				 * there will be another command creating the right index soon.
-				 */
-				idxOid = index_get_partition(part, indexOid);
-				if (!OidIsValid(idxOid))
-				{
-					if (permissive)
-					{
-						table_close(part, NoLock);
-						continue;
-					}
-					else
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("replica index does not exist in partition \"%s\"",
-										RelationGetRelationName(part))));
-				}
-
-				LockRelationOid(idxOid, ShareLock);
-			}
-			else
-				idxOid = InvalidOid;
-
-			idxOid = ri_type == REPLICA_IDENTITY_INDEX ?
-				index_get_partition(part, indexOid) : InvalidOid;
-
-			relation_mark_replica_identity(part, ri_type, idxOid, true,
-										   permissive, lockmode);
-
-			table_close(part, NoLock);
-		}
-	}
 }
 
 /*
@@ -13136,20 +13061,17 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 
 	if (stmt->identity_type == REPLICA_IDENTITY_DEFAULT)
 	{
-		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true,
-									   false, lockmode);
+		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true);
 		return;
 	}
 	else if (stmt->identity_type == REPLICA_IDENTITY_FULL)
 	{
-		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true,
-									   false, lockmode);
+		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true);
 		return;
 	}
 	else if (stmt->identity_type == REPLICA_IDENTITY_NOTHING)
 	{
-		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true,
-									   false, lockmode);
+		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true);
 		return;
 	}
 	else if (stmt->identity_type == REPLICA_IDENTITY_INDEX)
@@ -13203,9 +13125,8 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot use partial index \"%s\" as replica identity",
 						RelationGetRelationName(indexRel))));
-	/* And neither are invalid indexes, except on partitioned tables. */
-	if (!indexRel->rd_index->indisvalid &&
-		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+	/* And neither are invalid indexes. */
+	if (!indexRel->rd_index->indisvalid)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot use invalid index \"%s\" as replica identity",
@@ -13238,8 +13159,7 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 	}
 
 	/* This index is suitable for use as a replica identity. Mark it. */
-	relation_mark_replica_identity(rel, stmt->identity_type, indexOid, true,
-								   true, lockmode);
+	relation_mark_replica_identity(rel, stmt->identity_type, indexOid, true);
 
 	index_close(indexRel, NoLock);
 }
@@ -14964,10 +14884,6 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 	/* and triggers */
 	CloneRowTriggersToPartition(rel, attachrel);
 
-	/* Propagate REPLICA IDENTITY information */
-	if (rel->rd_rel->relreplident != REPLICA_IDENTITY_DEFAULT)
-		MatchReplicaIdentity(attachrel, rel);
-
 	/*
 	 * Clone foreign key constraints, and setup for Phase 3 to verify them.
 	 */
@@ -15217,32 +15133,6 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		index_close(attachrelIdxRels[i], AccessShareLock);
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(cxt);
-}
-
-/*
- * Set up partRel's (a partition) replica identity to match parentRel's (its
- * parent).
- */
-static void
-MatchReplicaIdentity(Relation partRel, Relation srcrel)
-{
-	Oid		ri_index;
-
-	if (srcrel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX)
-	{
-		ri_index = index_get_partition(partRel,
-									   RelationGetReplicaIndex(srcrel));
-		if (!OidIsValid(ri_index))
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("replica index does not exist in partition \"%s\"",
-							RelationGetRelationName(partRel))));
-	}
-	else
-		ri_index = InvalidOid;
-
-	relation_mark_replica_identity(partRel, srcrel->rd_rel->relreplident,
-								   ri_index, true, false, AccessExclusiveLock);
 }
 
 /*

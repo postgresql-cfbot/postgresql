@@ -27,6 +27,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
@@ -186,6 +187,17 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_amproc_amprocnum
 		},
 		16
+	},
+	{AttrCompressionRelationId, /* ATTCOMPRESSIONOID */
+		AttrCompressionIndexId,
+		1,
+		{
+			Anum_pg_attr_compression_acoid,
+			0,
+			0,
+			0
+		},
+		8,
 	},
 	{AttributeRelationId,		/* ATTNAME */
 		AttributeRelidNameIndexId,

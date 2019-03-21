@@ -651,6 +651,43 @@ my %tests = (
 		},
 	},
 
+	# compression data in binary upgrade mode
+	'ALTER TABLE test_table_compression ALTER COLUMN ... SET COMPRESSION' => {
+		all_runs  => 1,
+		catch_all => 'ALTER TABLE ... commands',
+		regexp    => qr/^
+			\QCREATE TABLE dump_test.test_table_compression (\E\n
+			\s+\Qcol1 text,\E\n
+			\s+\Qcol2 text,\E\n
+			\s+\Qcol3 text,\E\n
+			\s+\Qcol4 text\E\n
+			\);
+			.*
+			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col1\E\n
+			\QSET COMPRESSION pglz;\E\n
+			.*
+			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col2\E\n
+			\QSET COMPRESSION pglz2;\E\n
+			.*
+			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col3\E\n
+			\QSET COMPRESSION pglz\E\n
+			\QWITH (min_input_size '1000');\E\n
+			.*
+			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col4\E\n
+			\QSET COMPRESSION pglz2\E\n
+			\QWITH (min_input_size '1000');\E\n
+			\QSELECT binary_upgrade_set_next_attr_compression_oid('\E\d+\Q'::pg_catalog.oid);\E\n
+			\QALTER TABLE dump_test.test_table_compression ALTER COLUMN col4\E\n
+			\QSET COMPRESSION pglz2\E\n
+			\QWITH (min_input_size '2000');\E\n
+			/xms,
+		like => { binary_upgrade => 1, },
+	},
+
 	'ALTER TABLE ONLY test_table ALTER COLUMN col1 SET STATISTICS 90' => {
 		create_order => 93,
 		create_sql =>
@@ -1364,6 +1401,17 @@ my %tests = (
 		  'CREATE ACCESS METHOD gist2 TYPE INDEX HANDLER gisthandler;',
 		regexp =>
 		  qr/CREATE ACCESS METHOD gist2 TYPE INDEX HANDLER gisthandler;/m,
+		like => { %full_runs, section_pre_data => 1, },
+	},
+
+	'CREATE ACCESS METHOD pglz2' => {
+		all_runs     => 1,
+		catch_all    => 'CREATE ... commands',
+		create_order => 52,
+		create_sql =>
+		  'CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;',
+		regexp =>
+		  qr/CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;/m,
 		like => { %full_runs, section_pre_data => 1, },
 	},
 
@@ -2412,6 +2460,53 @@ my %tests = (
 		like =>
 			{ %full_runs, %dump_test_schema_runs, section_post_data => 1, },
 		unlike => { exclude_dump_test_schema => 1, },
+	},
+
+	'CREATE TABLE test_table_compression' => {
+		create_order => 55,
+		create_sql   => 'CREATE TABLE dump_test.test_table_compression (
+						   col1 text,
+						   col2 text COMPRESSION pglz2,
+						   col3 text COMPRESSION pglz WITH (min_input_size \'1000\'),
+						   col4 text COMPRESSION pglz2 WITH (min_input_size \'1000\')
+					     );',
+		regexp => qr/^
+			\QCREATE TABLE dump_test.test_table_compression (\E\n
+			\s+\Qcol1 text,\E\n
+			\s+\Qcol2 text COMPRESSION pglz2,\E\n
+			\s+\Qcol3 text COMPRESSION pglz WITH (min_input_size '1000'),\E\n
+			\s+\Qcol4 text COMPRESSION pglz2 WITH (min_input_size '2000')\E\n
+			\);
+			/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			binary_upgrade		     => 1,
+			exclude_dump_test_schema => 1,
+		},
+	},
+
+	'ALTER TABLE test_table_compression' => {
+		create_order => 56,
+		create_sql   => 'ALTER TABLE dump_test.test_table_compression
+						 ALTER COLUMN col4
+						 SET COMPRESSION pglz2
+						 WITH (min_input_size \'2000\')
+						 PRESERVE (pglz2);',
+		regexp => qr/^
+			\QCREATE TABLE dump_test.test_table_compression (\E\n
+			\s+\Qcol1 text,\E\n
+			\s+\Qcol2 text COMPRESSION pglz2,\E\n
+			\s+\Qcol3 text COMPRESSION pglz WITH (min_input_size '1000'),\E\n
+			\s+\Qcol4 text COMPRESSION pglz2 WITH (min_input_size '2000')\E\n
+			\);
+			/xm,
+		like =>
+		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
+		unlike => {
+			binary_upgrade		     => 1,
+			exclude_dump_test_schema => 1,
+		},
 	},
 
 	'CREATE STATISTICS extended_stats_no_options' => {

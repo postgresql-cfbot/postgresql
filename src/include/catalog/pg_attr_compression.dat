@@ -1,0 +1,24 @@
+#----------------------------------------------------------------------
+#
+# pg_attr_compression.dat
+#    Initial contents of the pg_attr_compression system relation.
+#
+# Predefined compression options for builtin compression access methods.
+# It is safe to use Oids that equal to Oids of access methods, since
+# these are just numbers and not system Oids.
+#
+# Note that predefined options should have 0 in acrelid and acattnum.
+#
+# Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_attr_compression.dat
+#
+#----------------------------------------------------------------------
+
+[
+
+{ acoid => '4002', acname => 'pglz' },
+{ acoid => '4011', acname => 'zlib' },
+
+]

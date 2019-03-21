@@ -25,6 +25,8 @@ extern PGDLLIMPORT Oid binary_upgrade_next_toast_pg_class_oid;
 extern PGDLLIMPORT Oid binary_upgrade_next_pg_enum_oid;
 extern PGDLLIMPORT Oid binary_upgrade_next_pg_authid_oid;
 
+extern PGDLLIMPORT Oid binary_upgrade_next_attr_compression_oid;
+
 extern PGDLLIMPORT bool binary_upgrade_record_init_privs;
 
 #endif							/* BINARY_UPGRADE_H */

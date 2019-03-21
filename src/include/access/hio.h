@@ -31,6 +31,8 @@ typedef struct BulkInsertStateData
 {
 	BufferAccessStrategy strategy;	/* our BULKWRITE strategy object */
 	Buffer		current_buf;	/* current insertion target page */
+	HTAB	   *preserved_am_info;	/* hash table with preserved compression
+									 * methods for attributes */
 }			BulkInsertStateData;
 
 

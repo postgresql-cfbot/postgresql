@@ -269,6 +269,8 @@ extern void fillRelOptions(void *rdopts, Size basesize,
 			   relopt_value *options, int numoptions,
 			   bool validate,
 			   const relopt_parse_elt *elems, int nelems);
+extern char *formatRelOptions(List *options);
+extern List *untransformRelOptions(Datum options);
 
 extern bytea *default_reloptions(Datum reloptions, bool validate,
 				   relopt_kind kind);

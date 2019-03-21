@@ -1221,6 +1221,16 @@ WHERE p2.oid = p1.amhandler AND p1.amtype = 's' AND
      OR p2.pronargs != 1
      OR p2.proargtypes[0] != 'internal'::regtype);
 
+-- Check for compression amhandler functions with the wrong signature
+
+SELECT p1.oid, p1.amname, p2.oid, p2.proname
+FROM pg_am AS p1, pg_proc AS p2
+WHERE p2.oid = p1.amhandler AND p1.amtype = 'c' AND
+    (p2.prorettype != 'compression_am_handler'::regtype
+     OR p2.proretset
+     OR p2.pronargs != 1
+     OR p2.proargtypes[0] != 'internal'::regtype);
+
 -- **************** pg_amop ****************
 
 -- Look for illegal values in pg_amop fields

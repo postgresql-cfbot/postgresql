@@ -180,6 +180,70 @@ get_am_type_oid(const char *amname, char amtype, bool missing_ok)
 }
 
 /*
+ * get_am_handler_oid - return access method handler Oid with additional
+ * type checking.
+ *
+ * If noerror is false, throw an error if access method not found or its
+ * type not equal to specified type, or its handler is not valid.
+ *
+ * If amtype is not '\0', an error is raised if the AM found is not of the
+ * given type.
+ */
+regproc
+get_am_handler_oid(Oid amOid, char amtype, bool noerror)
+{
+	HeapTuple	tup;
+	Form_pg_am	amform;
+	regproc		amhandler;
+
+	/* Get handler function OID for the access method */
+	tup = SearchSysCache1(AMOID, ObjectIdGetDatum(amOid));
+	if (!HeapTupleIsValid(tup))
+	{
+		if (noerror)
+			return InvalidOid;
+
+		elog(ERROR, "cache lookup failed for access method %u", amOid);
+	}
+
+	amform = (Form_pg_am) GETSTRUCT(tup);
+	amhandler = amform->amhandler;
+
+	if (amtype != '\0' && amform->amtype != amtype)
+	{
+		if (noerror)
+		{
+			ReleaseSysCache(tup);
+			return InvalidOid;
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("access method \"%s\" is not of type %s",
+						NameStr(amform->amname),
+						get_am_type_string(amtype))));
+	}
+
+	/* Complain if handler OID is invalid */
+	if (!RegProcedureIsValid(amhandler))
+	{
+		if (noerror)
+		{
+			ReleaseSysCache(tup);
+			return InvalidOid;
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("access method \"%s\" does not have a handler",
+						NameStr(amform->amname))));
+	}
+
+	ReleaseSysCache(tup);
+	return amhandler;
+}
+
+/*
  * get_index_am_oid - given an access method name, look up its OID
  *		and verify it corresponds to an index AM.
  */
@@ -187,6 +251,16 @@ Oid
 get_index_am_oid(const char *amname, bool missing_ok)
 {
 	return get_am_type_oid(amname, AMTYPE_INDEX, missing_ok);
+}
+
+/*
+ * get_index_am_oid - given an access method name, look up its OID
+ *		and verify it corresponds to an index AM.
+ */
+Oid
+get_compression_am_oid(const char *amname, bool missing_ok)
+{
+	return get_am_type_oid(amname, AMTYPE_COMPRESSION, missing_ok);
 }
 
 /*
@@ -231,6 +305,8 @@ get_am_type_string(char amtype)
 			return "INDEX";
 		case AMTYPE_TABLE:
 			return "TABLE";
+		case AMTYPE_COMPRESSION:
+			return "COMPRESSION";
 		default:
 			/* shouldn't happen */
 			elog(ERROR, "invalid access method type '%c'", amtype);
@@ -267,6 +343,9 @@ lookup_am_handler_func(List *handler_name, char amtype)
 			break;
 		case AMTYPE_TABLE:
 			expectedType = TABLE_AM_HANDLEROID;
+			break;
+		case AMTYPE_COMPRESSION:
+			expectedType = COMPRESSION_AM_HANDLEROID;
 			break;
 		default:
 			elog(ERROR, "unrecognized access method type \"%c\"", amtype);

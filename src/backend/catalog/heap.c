@@ -691,6 +691,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
 	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
 	values[Anum_pg_attribute_attcollation - 1] = ObjectIdGetDatum(new_attribute->attcollation);
+	values[Anum_pg_attribute_attcompression - 1] = ObjectIdGetDatum(new_attribute->attcompression);
 
 	/* start out with empty permissions and empty options */
 	nulls[Anum_pg_attribute_attacl - 1] = true;
@@ -1652,6 +1653,8 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 
 		/* We don't want to keep stats for it anymore */
 		attStruct->attstattarget = 0;
+
+		attStruct->attcompression = InvalidOid;
 
 		/*
 		 * Change the column name to something that isn't likely to conflict

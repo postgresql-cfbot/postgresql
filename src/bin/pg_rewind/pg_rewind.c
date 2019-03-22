@@ -351,8 +351,11 @@ main(int argc, char **argv)
 
 	progress_report(true);
 
-	pg_log(PG_PROGRESS, "\ncreating backup label and updating control file\n");
+	pg_log(PG_PROGRESS, "\ncreating backup label\n");
 	createBackupLabel(chkptredo, chkpttli, chkptrec);
+
+	pg_log(PG_PROGRESS, "syncing target data directory\n");
+	syncTargetDirectory();
 
 	/*
 	 * Update control file of target. Make it ready to perform archive
@@ -362,6 +365,7 @@ main(int argc, char **argv)
 	 * source server. Like in an online backup, it's important that we recover
 	 * all the WAL that was generated while we copied the files over.
 	 */
+	pg_log(PG_PROGRESS, "updating control file\n");
 	memcpy(&ControlFile_new, &ControlFile_source, sizeof(ControlFileData));
 
 	if (connstr_source)
@@ -377,10 +381,8 @@ main(int argc, char **argv)
 	ControlFile_new.minRecoveryPoint = endrec;
 	ControlFile_new.minRecoveryPointTLI = endtli;
 	ControlFile_new.state = DB_IN_ARCHIVE_RECOVERY;
-	update_controlfile(datadir_target, progname, &ControlFile_new, do_sync);
 
-	pg_log(PG_PROGRESS, "syncing target data directory\n");
-	syncTargetDirectory();
+	update_controlfile(datadir_target, progname, &ControlFile_new, do_sync);
 
 	printf(_("Done!\n"));
 

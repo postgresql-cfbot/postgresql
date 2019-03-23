@@ -4391,6 +4391,10 @@ int SPI_freeplan(SPIPlanPtr <parameter>plan</parameter>)
 <synopsis>
 void SPI_commit(void)
 </synopsis>
+
+<synopsis>
+void SPI_commit_and_chain(void)
+</synopsis>
  </refsynopsisdiv>
 
  <refsect1>
@@ -4406,7 +4410,14 @@ void SPI_commit(void)
   </para>
 
   <para>
-   This function can only be executed if the SPI connection has been set as
+   <function>SPI_commit_and_chain</function> is the same, but a new
+   transaction is immediately started with the same transaction
+   characteristics as the just finished one, like with the SQL command
+   <command>COMMIT AND CHAIN</command>.
+  </para>
+
+  <para>
+   These functions can only be executed if the SPI connection has been set as
    nonatomic in the call to <function>SPI_connect_ext</function>.
   </para>
  </refsect1>
@@ -4431,6 +4442,10 @@ void SPI_commit(void)
 <synopsis>
 void SPI_rollback(void)
 </synopsis>
+
+<synopsis>
+void SPI_rollback_and_chain(void)
+</synopsis>
  </refsynopsisdiv>
 
  <refsect1>
@@ -4444,9 +4459,15 @@ void SPI_rollback(void)
    using <function>SPI_start_transaction</function> before further database
    actions can be executed.
   </para>
+  <para>
+   <function>SPI_rollback_and_chain</function> is the same, but a new
+   transaction is immediately started with the same transaction
+   characteristics as the just finished one, like with the SQL command
+   <command>ROLLBACK AND CHAIN</command>.
+  </para>
 
   <para>
-   This function can only be executed if the SPI connection has been set as
+   These functions can only be executed if the SPI connection has been set as
    nonatomic in the call to <function>SPI_connect_ext</function>.
   </para>
  </refsect1>

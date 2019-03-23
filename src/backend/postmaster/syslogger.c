@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include "common/file_perm.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -1453,6 +1454,7 @@ static void
 update_metainfo_datafile(void)
 {
 	FILE	   *fh;
+	mode_t		oumask;
 
 	if (!(Log_destination & LOG_DESTINATION_STDERR) &&
 		!(Log_destination & LOG_DESTINATION_CSVLOG))
@@ -1465,7 +1467,12 @@ update_metainfo_datafile(void)
 		return;
 	}
 
-	if ((fh = logfile_open(LOG_METAINFO_DATAFILE_TMP, "w", true)) == NULL)
+	/* use the same permissions as the data directory for the new file */
+	oumask = umask(pg_mode_mask);
+	fh = fopen(LOG_METAINFO_DATAFILE_TMP, "w");
+	umask(oumask);
+
+	if (fh == NULL)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),

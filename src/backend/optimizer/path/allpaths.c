@@ -1708,6 +1708,39 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 										required_outer, 0, false,
 										partitioned_rels, -1));
 	}
+
+	/*
+	 * When there is only a single child relation the Append node won't appear
+	 * in the final plan and the single Append subplan will take its place.
+	 * Since above we only consider the cheapest partial path for each child
+	 * relation, we had better create some parallel Append paths with any
+	 * partial paths which have pathkeys, otherwise we might miss out on
+	 * the likes of parallel index scans.
+	 */
+	if (list_length(live_childrels) == 1)
+	{
+		RelOptInfo *childrel = (RelOptInfo *) linitial(live_childrels);
+
+		foreach(l, childrel->partial_pathlist)
+		{
+			Path *path = (Path *) lfirst(l);
+			AppendPath *appendpath;
+
+			/*
+			 * Skip paths with no pathkeys. The cheapest unsorted path was
+			 * considered above.  Also skip actual the cheapest path.
+			 */
+			if (path->pathkeys == NIL ||
+				path == linitial(childrel->partial_pathlist))
+				continue;
+
+			appendpath = create_append_path(root, rel, NIL, list_make1(path),
+											NULL,
+											path->parallel_workers,
+											true, partitioned_rels, -1);
+			add_partial_path(rel, (Path *) appendpath);
+		}
+	}
 }
 
 /*

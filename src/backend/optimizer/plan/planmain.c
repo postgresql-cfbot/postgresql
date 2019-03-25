@@ -47,6 +47,9 @@
  * qp_callback is a function to compute query_pathkeys once it's safe to do so
  * qp_extra is optional extra data to pass to qp_callback
  *
+ * If final_rel_grouped_p is valid, relation containing grouped paths may be
+ * saved to *final_rel_grouped_p.
+ *
  * Note: the PlannerInfo node also includes a query_pathkeys field, which
  * tells query_planner the sort order that is desired in the final output
  * plan.  This value is *not* available at call time, but is computed by
@@ -55,7 +58,8 @@
  */
 RelOptInfo *
 query_planner(PlannerInfo *root, List *tlist,
-			  query_pathkeys_callback qp_callback, void *qp_extra)
+			  query_pathkeys_callback qp_callback, void *qp_extra,
+			  RelOptInfo **final_rel_grouped_p)
 {
 	Query	   *parse = root->parse;
 	List	   *joinlist;
@@ -67,8 +71,9 @@ query_planner(PlannerInfo *root, List *tlist,
 	 * NOTE: append_rel_list was set up by subquery_planner, so do not touch
 	 * here.
 	 */
-	root->join_rel_list = NIL;
-	root->join_rel_hash = NULL;
+	root->join_rel_list = makeNode(RelInfoList);
+	root->grouped_rel_list = makeNode(RelInfoList);
+	root->agg_info_list = makeNode(RelInfoList);
 	root->join_rel_level = NULL;
 	root->join_cur_level = 0;
 	root->canon_pathkeys = NIL;
@@ -77,6 +82,7 @@ query_planner(PlannerInfo *root, List *tlist,
 	root->full_join_clauses = NIL;
 	root->join_info_list = NIL;
 	root->placeholder_list = NIL;
+	root->grouped_var_list = NIL;
 	root->fkey_list = NIL;
 	root->initial_rels = NIL;
 
@@ -260,6 +266,16 @@ query_planner(PlannerInfo *root, List *tlist,
 	extract_restriction_or_clauses(root);
 
 	/*
+	 * If the query result can be grouped, check if any grouping can be
+	 * performed below the top-level join. If so, setup
+	 * root->grouped_var_list.
+	 *
+	 * The base relations should be fully initialized now, so that we have
+	 * enough info to decide whether grouping is possible.
+	 */
+	setup_aggregate_pushdown(root);
+
+	/*
 	 * Ready to do the primary planning.
 	 */
 	final_rel = make_one_rel(root, joinlist);
@@ -268,6 +284,10 @@ query_planner(PlannerInfo *root, List *tlist,
 	if (!final_rel || !final_rel->cheapest_total_path ||
 		final_rel->cheapest_total_path->param_info != NULL)
 		elog(ERROR, "failed to construct the join relation");
+
+	if (final_rel_grouped_p)
+		*final_rel_grouped_p = find_grouped_rel(root, final_rel->relids,
+												NULL);
 
 	return final_rel;
 }

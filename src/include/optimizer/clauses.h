@@ -55,4 +55,6 @@ extern void CommuteOpExpr(OpExpr *clause);
 extern Query *inline_set_returning_function(PlannerInfo *root,
 							  RangeTblEntry *rte);
 
+extern GroupedVarInfo *translate_expression_to_rels(PlannerInfo *root,
+							 GroupedVarInfo *gvi, Index relid);
 #endif							/* CLAUSES_H */

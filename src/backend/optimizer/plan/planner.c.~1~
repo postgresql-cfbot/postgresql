@@ -151,7 +151,6 @@ static double get_number_of_groups(PlannerInfo *root,
 					 List *target_list);
 static RelOptInfo *create_grouping_paths(PlannerInfo *root,
 					  RelOptInfo *input_rel,
-					  RelOptInfo *input_rel_grouped,
 					  PathTarget *target,
 					  bool target_parallel_safe,
 					  const AggClauseCosts *agg_costs,
@@ -165,7 +164,6 @@ static RelOptInfo *make_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 				  Node *havingQual);
 static void create_ordinary_grouping_paths(PlannerInfo *root,
 							   RelOptInfo *input_rel,
-							   RelOptInfo *input_rel_grouped,
 							   RelOptInfo *grouped_rel,
 							   const AggClauseCosts *agg_costs,
 							   grouping_sets_data *gd,
@@ -627,7 +625,6 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	memset(root->upper_rels, 0, sizeof(root->upper_rels));
 	memset(root->upper_targets, 0, sizeof(root->upper_targets));
 	root->processed_tlist = NIL;
-	root->max_sortgroupref = 0;
 	root->grouping_map = NULL;
 	root->minmax_aggs = NIL;
 	root->qual_security_level = 0;
@@ -1818,7 +1815,6 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		List	   *activeWindows = NIL;
 		grouping_sets_data *gset_data = NULL;
 		standard_qp_extra qp_extra;
-		RelOptInfo *current_rel_grouped = NULL;
 
 		/* A recursive query should always have setOperations */
 		Assert(!root->hasRecursion);
@@ -1926,8 +1922,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		 * of the query's sort clause, distinct clause, etc.
 		 */
 		current_rel = query_planner(root, tlist,
-									standard_qp_callback, &qp_extra,
-									&current_rel_grouped);
+									standard_qp_callback, &qp_extra);
 
 		/*
 		 * Convert the query's result tlist into PathTarget format.
@@ -2070,7 +2065,6 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		{
 			current_rel = create_grouping_paths(root,
 												current_rel,
-												current_rel_grouped,
 												grouping_target,
 												grouping_target_parallel_safe,
 												&agg_costs,
@@ -3670,7 +3664,6 @@ get_number_of_groups(PlannerInfo *root,
 static RelOptInfo *
 create_grouping_paths(PlannerInfo *root,
 					  RelOptInfo *input_rel,
-					  RelOptInfo *input_rel_grouped,
 					  PathTarget *target,
 					  bool target_parallel_safe,
 					  const AggClauseCosts *agg_costs,
@@ -3761,8 +3754,7 @@ create_grouping_paths(PlannerInfo *root,
 		else
 			extra.patype = PARTITIONWISE_AGGREGATE_NONE;
 
-		create_ordinary_grouping_paths(root, input_rel, input_rel_grouped,
-									   grouped_rel,
+		create_ordinary_grouping_paths(root, input_rel, grouped_rel,
 									   agg_costs, gd, &extra,
 									   &partially_grouped_rel);
 	}
@@ -3919,7 +3911,6 @@ create_degenerate_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
  */
 static void
 create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
-							   RelOptInfo *input_rel_grouped,
 							   RelOptInfo *grouped_rel,
 							   const AggClauseCosts *agg_costs,
 							   grouping_sets_data *gd,
@@ -3967,23 +3958,13 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	if ((extra->flags & GROUPING_CAN_PARTIAL_AGG) != 0)
 	{
 		bool		force_rel_creation;
-		bool		have_agg_pushdown_paths;
 
 		/*
-		 * Check if the aggregate push-down feature succeeded to generate any
-		 * paths. Dummy relation can appear here because grouped paths are not
-		 * guaranteed to exist for a relation.
+		 * If we're doing partitionwise aggregation at this level, force
+		 * creation of a partially_grouped_rel so we can add partitionwise
+		 * paths to it.
 		 */
-		have_agg_pushdown_paths = input_rel_grouped != NULL &&
-			!IS_DUMMY_REL(input_rel_grouped);
-
-		/*
-		 * If we're doing partitionwise aggregation at this level or if
-		 * aggregate push-down succeeded to create some paths, force creation
-		 * of a partially_grouped_rel so we can add the related paths to it.
-		 */
-		force_rel_creation = patype == PARTITIONWISE_AGGREGATE_PARTIAL ||
-			have_agg_pushdown_paths;
+		force_rel_creation = (patype == PARTITIONWISE_AGGREGATE_PARTIAL);
 
 		partially_grouped_rel =
 			create_partial_grouping_paths(root,
@@ -3992,23 +3973,6 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 										  gd,
 										  extra,
 										  force_rel_creation);
-
-		/*
-		 * No further processing is needed for paths provided by the aggregate
-		 * push-down feature. Simply add them to the partially grouped
-		 * relation.
-		 */
-		if (have_agg_pushdown_paths)
-		{
-			ListCell   *lc;
-
-			foreach(lc, input_rel_grouped->pathlist)
-			{
-				Path	   *path = (Path *) lfirst(lc);
-
-				add_path(partially_grouped_rel, path);
-			}
-		}
 	}
 
 	/* Set out parameter. */
@@ -4033,14 +3997,10 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* Gather any partially grouped partial paths. */
 	if (partially_grouped_rel && partially_grouped_rel->partial_pathlist)
+	{
 		gather_grouping_paths(root, partially_grouped_rel);
-
-	/*
-	 * The non-partial paths can come either from the Gather above or from
-	 * aggregate push-down.
-	 */
-	if (partially_grouped_rel && partially_grouped_rel->pathlist)
 		set_cheapest(partially_grouped_rel);
+	}
 
 	/*
 	 * Estimate number of groups.
@@ -7203,7 +7163,6 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 
 		/* Create grouping paths for this child relation. */
 		create_ordinary_grouping_paths(root, child_input_rel,
-									   NULL,
 									   child_grouped_rel,
 									   agg_costs, gd, &child_extra,
 									   &child_partially_grouped_rel);

@@ -442,7 +442,7 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	subroot->tuple_fraction = 1.0;
 	subroot->limit_tuples = 1.0;
 
-	final_rel = query_planner(subroot, tlist, minmax_qp_callback, NULL);
+	final_rel = query_planner(subroot, tlist, minmax_qp_callback, NULL, NULL);
 
 	/*
 	 * Since we didn't go through subquery_planner() to handle the subquery,

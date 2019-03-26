@@ -680,7 +680,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
-	START STATEMENT STATISTICS STDIN STDOUT STORAGE STRICT_P STRIP_P
+	START STATEMENT STATISTICS STDIN STDOUT STORAGE STORED STRICT_P STRIP_P
 	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
@@ -3496,6 +3496,16 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+			| GENERATED generated_when AS '(' a_expr ')' STORED
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_GENERATED;
+					n->generated_when = $2;
+					n->raw_expr = $5;
+					n->cooked_expr = NULL;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
 			| REFERENCES qualified_name opt_column_list key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3586,6 +3596,7 @@ TableLikeOption:
 				| CONSTRAINTS		{ $$ = CREATE_TABLE_LIKE_CONSTRAINTS; }
 				| DEFAULTS			{ $$ = CREATE_TABLE_LIKE_DEFAULTS; }
 				| IDENTITY_P		{ $$ = CREATE_TABLE_LIKE_IDENTITY; }
+				| GENERATED			{ $$ = CREATE_TABLE_LIKE_GENERATED; }
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
 				| STATISTICS		{ $$ = CREATE_TABLE_LIKE_STATISTICS; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
@@ -15224,6 +15235,7 @@ unreserved_keyword:
 			| STDIN
 			| STDOUT
 			| STORAGE
+			| STORED
 			| STRICT_P
 			| STRIP_P
 			| SUBSCRIPTION

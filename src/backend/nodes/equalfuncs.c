@@ -2564,6 +2564,7 @@ _equalColumnDef(const ColumnDef *a, const ColumnDef *b)
 	COMPARE_NODE_FIELD(cooked_default);
 	COMPARE_SCALAR_FIELD(identity);
 	COMPARE_NODE_FIELD(identitySequence);
+	COMPARE_SCALAR_FIELD(generated);
 	COMPARE_NODE_FIELD(collClause);
 	COMPARE_SCALAR_FIELD(collOid);
 	COMPARE_NODE_FIELD(constraints);
@@ -2663,6 +2664,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_BITMAPSET_FIELD(selectedCols);
 	COMPARE_BITMAPSET_FIELD(insertedCols);
 	COMPARE_BITMAPSET_FIELD(updatedCols);
+	COMPARE_BITMAPSET_FIELD(extraUpdatedCols);
 	COMPARE_NODE_FIELD(securityQuals);
 
 	return true;

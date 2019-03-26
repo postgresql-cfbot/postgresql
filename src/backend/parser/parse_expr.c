@@ -1854,6 +1854,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_COPY_WHERE:
 			err = _("cannot use subquery in COPY FROM WHERE condition");
 			break;
+		case EXPR_KIND_GENERATED_COLUMN:
+			err = _("cannot use subquery in column generation expression");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -3484,6 +3487,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "CALL";
 		case EXPR_KIND_COPY_WHERE:
 			return "WHERE";
+		case EXPR_KIND_GENERATED_COLUMN:
+			return "GENERATED AS";
 
 			/*
 			 * There is intentionally no default: case here, so that the

@@ -70,6 +70,7 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
+#include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
@@ -687,6 +688,7 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 	values[Anum_pg_attribute_atthasdef - 1] = BoolGetDatum(new_attribute->atthasdef);
 	values[Anum_pg_attribute_atthasmissing - 1] = BoolGetDatum(new_attribute->atthasmissing);
 	values[Anum_pg_attribute_attidentity - 1] = CharGetDatum(new_attribute->attidentity);
+	values[Anum_pg_attribute_attgenerated - 1] = CharGetDatum(new_attribute->attgenerated);
 	values[Anum_pg_attribute_attisdropped - 1] = BoolGetDatum(new_attribute->attisdropped);
 	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
 	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
@@ -1653,6 +1655,9 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 		/* We don't want to keep stats for it anymore */
 		attStruct->attstattarget = 0;
 
+		/* Unset this so no one tries to look up the generation expression */
+		attStruct->attgenerated = '\0';
+
 		/*
 		 * Change the column name to something that isn't likely to conflict
 		 */
@@ -2152,6 +2157,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	Relation	attrrel;
 	HeapTuple	atttup;
 	Form_pg_attribute attStruct;
+	char		attgenerated;
 	Oid			attrdefOid;
 	ObjectAddress colobject,
 				defobject;
@@ -2199,6 +2205,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 			 attnum, RelationGetRelid(rel));
 	attStruct = (Form_pg_attribute) GETSTRUCT(atttup);
+	attgenerated = attStruct->attgenerated;
 	if (!attStruct->atthasdef)
 	{
 		Form_pg_attribute defAttStruct;
@@ -2219,7 +2226,7 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		valuesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 		replacesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 
-		if (add_column_mode)
+		if (add_column_mode && !attgenerated)
 		{
 			expr2 = expression_planner(expr2);
 			estate = CreateExecutorState();
@@ -2281,7 +2288,26 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 	/*
 	 * Record dependencies on objects used in the expression, too.
 	 */
-	recordDependencyOnExpr(&defobject, expr, NIL, DEPENDENCY_NORMAL);
+	if (attgenerated)
+	{
+		/*
+		 * Generated column: Dropping anything that the generation expression
+		 * refers to automatically drops the generated column.
+		 */
+		recordDependencyOnSingleRelExpr(&colobject, expr, RelationGetRelid(rel),
+										DEPENDENCY_AUTO,
+										DEPENDENCY_AUTO, false);
+	}
+	else
+	{
+		/*
+		 * Normal default: Dropping anything that the default refers to
+		 * requires CASCADE and drops the default only.
+		 */
+		recordDependencyOnSingleRelExpr(&defobject, expr, RelationGetRelid(rel),
+										DEPENDENCY_NORMAL,
+										DEPENDENCY_NORMAL, false);
+	}
 
 	/*
 	 * Post creation hook for attribute defaults.
@@ -2539,12 +2565,14 @@ AddRelationNewConstraints(Relation rel,
 
 		expr = cookDefault(pstate, colDef->raw_default,
 						   atp->atttypid, atp->atttypmod,
-						   NameStr(atp->attname));
+						   NameStr(atp->attname),
+						   atp->attgenerated);
 
 		/*
 		 * If the expression is just a NULL constant, we do not bother to make
 		 * an explicit pg_attrdef entry, since the default behavior is
-		 * equivalent.
+		 * equivalent.  This applies to column defaults, but not for generation
+		 * expressions.
 		 *
 		 * Note a nonobvious property of this test: if the column is of a
 		 * domain type, what we'll get is not a bare null Const but a
@@ -2553,7 +2581,9 @@ AddRelationNewConstraints(Relation rel,
 		 * override any default that the domain might have.
 		 */
 		if (expr == NULL ||
-			(IsA(expr, Const) &&((Const *) expr)->constisnull))
+			(!colDef->generated &&
+			 IsA(expr, Const) &&
+			 castNode(Const, expr)->constisnull))
 			continue;
 
 		/* If the DEFAULT is volatile we cannot use a missing value */
@@ -2911,6 +2941,46 @@ SetRelationNumChecks(Relation rel, int numchecks)
 }
 
 /*
+ * Check for references to generated columns
+ */
+static bool
+check_nested_generated_walker(Node *node, void *context)
+{
+	ParseState *pstate = context;
+
+	if (node == NULL)
+		return false;
+	else if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+
+		relid = rt_fetch(var->varno, pstate->p_rtable)->relid;
+		attnum = var->varattno;
+
+		if (OidIsValid(relid) && AttributeNumberIsValid(attnum) && get_attgenerated(relid, attnum))
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("cannot use generated column \"%s\" in column generation expression",
+							get_attname(relid, attnum, false)),
+					 errdetail("A generated column cannot reference another generated column."),
+					 parser_errposition(pstate, var->location)));
+
+		return false;
+	}
+	else
+		return expression_tree_walker(node, check_nested_generated_walker,
+									  (void *) context);
+}
+
+static void
+check_nested_generated(ParseState *pstate, Node *node)
+{
+	check_nested_generated_walker(node, pstate);
+}
+
+/*
  * Take a raw default and convert it to a cooked format ready for
  * storage.
  *
@@ -2927,7 +2997,8 @@ cookDefault(ParseState *pstate,
 			Node *raw_default,
 			Oid atttypid,
 			int32 atttypmod,
-			const char *attname)
+			const char *attname,
+			char attgenerated)
 {
 	Node	   *expr;
 
@@ -2936,16 +3007,24 @@ cookDefault(ParseState *pstate,
 	/*
 	 * Transform raw parsetree to executable expression.
 	 */
-	expr = transformExpr(pstate, raw_default, EXPR_KIND_COLUMN_DEFAULT);
+	expr = transformExpr(pstate, raw_default, attgenerated ? EXPR_KIND_GENERATED_COLUMN : EXPR_KIND_COLUMN_DEFAULT);
 
 	/*
 	 * Make sure default expr does not refer to any vars (we need this check
 	 * since the pstate includes the target table).
 	 */
-	if (contain_var_clause(expr))
+	if (!attgenerated && contain_var_clause(expr))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 				 errmsg("cannot use column references in default expression")));
+
+	if (attgenerated)
+		check_nested_generated(pstate, expr);
+
+	if (attgenerated && contain_mutable_functions(expr))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("generation expression is not immutable")));
 
 	/*
 	 * transformExpr() should have already rejected subqueries, aggregates,

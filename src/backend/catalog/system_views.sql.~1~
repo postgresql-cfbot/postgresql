@@ -966,12 +966,9 @@ REVOKE ALL ON pg_replication_origin_status FROM public;
 
 -- All columns of pg_subscription except subconninfo are readable.
 REVOKE ALL ON pg_subscription FROM public;
-GRANT SELECT (tableoid, oid, subdbid, subname, subowner, subenabled,
-	subslotname, subsynccommit, subpublications)
+GRANT SELECT (subdbid, subname, subowner, subenabled, subslotname, subpublications)
     ON pg_subscription TO public;
 
-GRANT SELECT (subconninfo)
-    ON pg_subscription TO pg_subscription_users;
 
 --
 -- We have a few function definitions in here, too.

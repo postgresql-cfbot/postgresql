@@ -26,6 +26,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
@@ -342,10 +343,10 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	if (create_slot)
 		PreventInTransactionBlock(isTopLevel, "CREATE SUBSCRIPTION ... WITH (create_slot = true)");
 
-	if (!superuser())
+	if (!is_member_of_role(GetUserId(), DEFAULT_ROLE_SUBSCRIPTION_USERS))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 (errmsg("must be superuser to create subscriptions"))));
+				 (errmsg("must be member of role \"pg_subscription_users\" to create subscriptions"))));
 
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
@@ -1035,12 +1036,12 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 					   NameStr(form->subname));
 
 	/* New owner must be a superuser */
-	if (!superuser_arg(newOwnerId))
+	if (!is_member_of_role(newOwnerId, DEFAULT_ROLE_SUBSCRIPTION_USERS))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to change owner of subscription \"%s\"",
 						NameStr(form->subname)),
-				 errhint("The owner of a subscription must be a superuser.")));
+				 errhint("The owner of a subscription must be member of role \"pg_subscription_users\".")));
 
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);

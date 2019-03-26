@@ -556,6 +556,10 @@ DROP ROLE doomed_role;
        <literal>pg_read_all_stats</literal> and
        <literal>pg_stat_scan_tables</literal>.</entry>
       </row>
+      <row>
+       <entry>pg_subscription_users</entry>
+       <entry>Allow create/drop subscriptions and be owner of subscription. Read pg_subscription</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -578,6 +582,12 @@ DROP ROLE doomed_role;
   allowing the role to read various useful configuration settings, statistics and
   other system information normally restricted to superusers.
   </para>
+
+  <para>
+  The <literal>pg_subscription_users</literal> role are intended to allow
+  administrators trusted, but non-superuser, which are able to create/drop subscription.
+  </para>
+
 
   <para>
   Care should be taken when granting these roles to ensure they are only used where

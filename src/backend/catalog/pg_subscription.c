@@ -242,11 +242,15 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 						XLogRecPtr sublsn)
 {
 	Relation	rel;
+	Relation	target_rel;
 	HeapTuple	tup;
 	bool		nulls[Natts_pg_subscription_rel];
 	Datum		values[Natts_pg_subscription_rel];
+	AclResult	aclresult;
+	AclMode		aclmask;
 
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
+
 
 	rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
 
@@ -257,6 +261,14 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 	if (HeapTupleIsValid(tup))
 		elog(ERROR, "subscription table %u in subscription %u already exists",
 			 relid, subid);
+
+	/* Check permission on target table. */
+	aclmask = ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE;
+	target_rel = table_open(relid, NoLock);
+	aclresult = pg_class_aclcheck(RelationGetRelid(target_rel), GetUserId(), aclmask);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, get_relkind_objtype(target_rel->rd_rel->relkind),
+			RelationGetRelationName(target_rel));
 
 	/* Form the tuple. */
 	memset(values, 0, sizeof(values));
@@ -278,6 +290,7 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 
 	/* Cleanup. */
 	table_close(rel, NoLock);
+	table_close(target_rel, NoLock);
 }
 
 /*

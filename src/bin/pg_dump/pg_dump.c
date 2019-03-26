@@ -4111,7 +4111,7 @@ getSubscriptions(Archive *fout)
 	if (dopt->no_subscriptions || fout->remoteVersion < 100000)
 		return;
 
-	if (!is_superuser(fout))
+	if (!is_superuser(fout) && fout->remoteVersion < 120000)
 	{
 		int			n;
 

@@ -5,6 +5,8 @@
 CREATE ROLE regress_subscription_user LOGIN SUPERUSER;
 CREATE ROLE regress_subscription_user2;
 CREATE ROLE regress_subscription_user_dummy LOGIN NOSUPERUSER;
+CREATE ROLE regress_subscription_user3 LOGIN NOSUPERUSER;
+GRANT pg_subscription_users to regress_subscription_user3;
 SET SESSION AUTHORIZATION 'regress_subscription_user';
 
 -- fail - no publications
@@ -33,7 +35,7 @@ SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
 -- fail - name already exists
 CREATE SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false);
 
--- fail - must be superuser
+-- fail - must be member of role "pg_subscription_users"
 SET SESSION AUTHORIZATION 'regress_subscription_user2';
 CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION foo WITH (connect = false);
 SET SESSION AUTHORIZATION 'regress_subscription_user';
@@ -53,6 +55,11 @@ CREATE SUBSCRIPTION testsub3 CONNECTION 'dbname=doesnotexist' PUBLICATION testpu
 -- fail
 ALTER SUBSCRIPTION testsub3 ENABLE;
 ALTER SUBSCRIPTION testsub3 REFRESH PUBLICATION;
+-- ok - member of pg_subcription_users
+SET SESSION AUTHORIZATION 'regress_subscription_user3';
+CREATE SUBSCRIPTION testsub4 CONNECTION 'dbname=doesnotexist' PUBLICATION foo WITH (slot_name = NONE, connect = false);
+DROP SUBSCRIPTION testsub4;
+SET SESSION AUTHORIZATION 'regress_subscription_user';
 
 DROP SUBSCRIPTION testsub3;
 
@@ -96,7 +103,7 @@ ALTER SUBSCRIPTION testsub_foo SET (synchronous_commit = foobar);
 -- rename back to keep the rest simple
 ALTER SUBSCRIPTION testsub_foo RENAME TO testsub;
 
--- fail - new owner must be superuser
+-- fail - new owner must be member of role "pg_subscription_users"
 ALTER SUBSCRIPTION testsub OWNER TO regress_subscription_user2;
 ALTER ROLE regress_subscription_user2 SUPERUSER;
 -- now it works
@@ -121,3 +128,5 @@ RESET SESSION AUTHORIZATION;
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;
 DROP ROLE regress_subscription_user_dummy;
+REVOKE pg_subscription_users FROM regress_subscription_user3;
+DROP ROLE regress_subscription_user3;

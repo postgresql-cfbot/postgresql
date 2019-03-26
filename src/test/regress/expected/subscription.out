@@ -4,6 +4,8 @@
 CREATE ROLE regress_subscription_user LOGIN SUPERUSER;
 CREATE ROLE regress_subscription_user2;
 CREATE ROLE regress_subscription_user_dummy LOGIN NOSUPERUSER;
+CREATE ROLE regress_subscription_user3 LOGIN NOSUPERUSER;
+GRANT pg_subscription_users to regress_subscription_user3;
 SET SESSION AUTHORIZATION 'regress_subscription_user';
 -- fail - no publications
 CREATE SUBSCRIPTION testsub CONNECTION 'foo';
@@ -40,10 +42,10 @@ SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
 -- fail - name already exists
 CREATE SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false);
 ERROR:  subscription "testsub" already exists
--- fail - must be superuser
+-- fail - must be member of role "pg_subscription_users"
 SET SESSION AUTHORIZATION 'regress_subscription_user2';
 CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION foo WITH (connect = false);
-ERROR:  must be superuser to create subscriptions
+ERROR:  must be member of role "pg_subscription_users" to create subscriptions
 SET SESSION AUTHORIZATION 'regress_subscription_user';
 -- fail - invalid option combinations
 CREATE SUBSCRIPTION testsub2 CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false, copy_data = true);
@@ -70,6 +72,12 @@ ALTER SUBSCRIPTION testsub3 ENABLE;
 ERROR:  cannot enable subscription that does not have a slot name
 ALTER SUBSCRIPTION testsub3 REFRESH PUBLICATION;
 ERROR:  ALTER SUBSCRIPTION ... REFRESH is not allowed for disabled subscriptions
+-- ok - member of pg_subcription_users
+SET SESSION AUTHORIZATION 'regress_subscription_user3';
+CREATE SUBSCRIPTION testsub4 CONNECTION 'dbname=doesnotexist' PUBLICATION foo WITH (slot_name = NONE, connect = false);
+WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+DROP SUBSCRIPTION testsub4;
+SET SESSION AUTHORIZATION 'regress_subscription_user';
 DROP SUBSCRIPTION testsub3;
 -- fail - invalid connection string
 ALTER SUBSCRIPTION testsub CONNECTION 'foobar';
@@ -134,10 +142,10 @@ HINT:  Available values: local, remote_write, remote_apply, on, off.
 
 -- rename back to keep the rest simple
 ALTER SUBSCRIPTION testsub_foo RENAME TO testsub;
--- fail - new owner must be superuser
+-- fail - new owner must be member of role "pg_subscription_users"
 ALTER SUBSCRIPTION testsub OWNER TO regress_subscription_user2;
 ERROR:  permission denied to change owner of subscription "testsub"
-HINT:  The owner of a subscription must be a superuser.
+HINT:  The owner of a subscription must be member of role "pg_subscription_users".
 ALTER ROLE regress_subscription_user2 SUPERUSER;
 -- now it works
 ALTER SUBSCRIPTION testsub OWNER TO regress_subscription_user2;
@@ -159,3 +167,5 @@ RESET SESSION AUTHORIZATION;
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;
 DROP ROLE regress_subscription_user_dummy;
+REVOKE pg_subscription_users FROM regress_subscription_user3;
+DROP ROLE regress_subscription_user3;

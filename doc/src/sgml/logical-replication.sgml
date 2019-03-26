@@ -201,9 +201,10 @@
 
   <para>
    Subscriptions are dumped by <command>pg_dump</command> if the current user
-   is a superuser.  Otherwise a warning is written and subscriptions are
-   skipped, because non-superusers cannot read all subscription information
-   from the <structname>pg_subscription</structname> catalog.
+   is a superuser or member of role pg_subscription_users, other users should
+   use <literal>no-subscriptions</literal> because non-superusers cannot read
+   all subscription information from the <structname>pg_subscription</structname>
+   catalog.
   </para>
 
   <para>
@@ -522,7 +523,10 @@
   </para>
 
   <para>
-   To create a subscription, the user must be a superuser.
+   To create a subscription, the user must be a superuser or be member of role
+   <literal>pg_subscription_users</literal> and have <literal>INSERT </literal>,
+   <literal>UPDATE</literal>,  <literal>DELETE</literal>, <literal>TRUNCATE</literal>
+   privileges on target table.
   </para>
 
   <para>

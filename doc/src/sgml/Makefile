@@ -57,6 +57,8 @@ GENERATED_SGML = version.sgml \
 
 ALLSGML := $(wildcard $(srcdir)/*.sgml $(srcdir)/ref/*.sgml) $(GENERATED_SGML)
 
+ALL_IMAGES = gin.svg pagelayout.svg
+
 
 ##
 ## Man pages
@@ -125,9 +127,10 @@ endif
 
 html: html-stamp
 
-html-stamp: stylesheet.xsl postgres.sgml $(ALLSGML)
+html-stamp: stylesheet.xsl postgres.sgml $(ALLSGML) $(ALL_IMAGES)
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) $(wordlist 1,2,$^)
+	cp $(ALL_IMAGES) html/
 	cp $(srcdir)/stylesheet.css html/
 	touch $@
 
@@ -136,7 +139,7 @@ htmlhelp: stylesheet-hh.xsl postgres.sgml $(ALLSGML)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(wordlist 1,2,$^)
 
 # single-page HTML
-postgres.html: stylesheet-html-nochunk.xsl postgres.sgml $(ALLSGML)
+postgres.html: stylesheet-html-nochunk.xsl postgres.sgml $(ALLSGML) $(ALL_IMAGES)
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) $(XSLTPROC_HTML_FLAGS) -o $@ $(wordlist 1,2,$^)
 
@@ -160,7 +163,7 @@ postgres.pdf:
 	$(XMLLINT) $(XMLINCLUDE) --noout --valid $(word 2,$^)
 	$(XSLTPROC) $(XMLINCLUDE) $(XSLTPROCFLAGS) --stringparam paper.type USletter -o $@ $(wordlist 1,2,$^)
 
-%.pdf: %.fo
+%.pdf: %.fo $(ALL_IMAGES)
 	$(FOP) -fo $< -pdf $@
 
 
@@ -169,7 +172,7 @@ postgres.pdf:
 ##
 
 epub: postgres.epub
-postgres.epub: postgres.sgml $(ALLSGML)
+postgres.epub: postgres.sgml $(ALLSGML) $(ALL_IMAGES)
 	$(XMLLINT) --noout --valid $<
 	$(DBTOEPUB) -o $@ $<
 
@@ -191,6 +194,20 @@ MAKEINFO = makeinfo
 
 %.info: %.texi
 	$(MAKEINFO) --enable-encoding --no-split --no-validate $< -o $@
+
+
+##
+## Images
+##
+
+DITAA = ditaa
+DOT = dot
+
+%.svg: %.dot
+	$(DOT) -T svg -o $@ $<
+
+%.svg: %.txt
+	$(DITAA) -E -S --svg $< $@
 
 
 ##

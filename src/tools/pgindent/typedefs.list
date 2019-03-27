@@ -796,6 +796,7 @@ FreePageManager
 FreePageSpanLeader
 FromCharDateMode
 FromExpr
+FullTransactionId
 FuncCall
 FuncCallContext
 FuncCandidateList
@@ -2106,6 +2107,7 @@ SeqTableData
 SerCommitSeqNo
 SerializedReindexState
 SerializedSnapshotData
+SerializedTransactionState
 Session
 SessionBackupState
 SetConstraintState

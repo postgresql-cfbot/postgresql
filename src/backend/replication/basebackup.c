@@ -54,6 +54,8 @@ typedef struct
 	bool		sendtblspcmapfile;
 } basebackup_options;
 
+static int	backup_dir_create_mode = 0;
+static int	backup_file_create_mode = 0;
 
 static int64 sendDir(const char *path, int basepathlen, bool sizeonly,
 		List *tablespaces, bool sendtblspclinks);
@@ -650,6 +652,7 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 	bool		o_maxrate = false;
 	bool		o_tablespace_map = false;
 	bool		o_noverify_checksums = false;
+	bool		o_group_mode = false;
 
 	MemSet(opt, 0, sizeof(*opt));
 	foreach(lopt, options)
@@ -737,6 +740,30 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 						 errmsg("duplicate option \"%s\"", defel->defname)));
 			noverify_checksums = true;
 			o_noverify_checksums = true;
+		}
+		else if (strcmp(defel->defname, "group_mode") == 0)
+		{
+			if (o_group_mode)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("duplicate option \"%s\"", defel->defname)));
+
+			if (strcmp(strVal(defel->arg), "none") == 0)
+			{
+				backup_dir_create_mode = PG_DIR_MODE_OWNER;
+				backup_file_create_mode = PG_FILE_MODE_OWNER;
+			}
+			else if (strcmp(strVal(defel->arg), "group") == 0)
+			{
+				backup_dir_create_mode = PG_DIR_MODE_GROUP;
+				backup_file_create_mode = PG_FILE_MODE_GROUP;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("Invalid option for group_mode \"%s\"", defel->defname)));
+
+			o_group_mode = true;
 		}
 		else
 			elog(ERROR, "option \"%s\" not recognized",
@@ -1602,6 +1629,25 @@ _tarWriteHeader(const char *filename, const char *linktarget,
 
 	if (!sizeonly)
 	{
+		/*
+		 * Adjust the mode of the file according to the backup request, ignore
+		 * it for tablespace links.
+		 */
+		if (!linktarget && backup_file_create_mode)
+		{
+			if (S_ISDIR(statbuf->st_mode))
+			{
+				statbuf->st_mode &= ~(pg_dir_create_mode);
+				statbuf->st_mode |= backup_dir_create_mode;
+			}
+			else
+			{
+				statbuf->st_mode &= ~(pg_file_create_mode);
+				statbuf->st_mode |= backup_file_create_mode;
+			}
+
+		}
+
 		rc = tarCreateHeader(h, filename, linktarget, statbuf->st_size,
 							 statbuf->st_mode, statbuf->st_uid, statbuf->st_gid,
 							 statbuf->st_mtime);

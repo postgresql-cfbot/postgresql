@@ -78,6 +78,7 @@ static SQLCmd *make_sqlcmd(void);
 %token K_WAL
 %token K_TABLESPACE_MAP
 %token K_NOVERIFY_CHECKSUMS
+%token K_GROUP_MODE
 %token K_TIMELINE
 %token K_PHYSICAL
 %token K_LOGICAL
@@ -155,7 +156,7 @@ var_name:	IDENT	{ $$ = $1; }
 
 /*
  * BASE_BACKUP [LABEL '<label>'] [PROGRESS] [FAST] [WAL] [NOWAIT]
- * [MAX_RATE %d] [TABLESPACE_MAP] [NOVERIFY_CHECKSUMS]
+ * [MAX_RATE %d] [TABLESPACE_MAP] [NOVERIFY_CHECKSUMS] [GROUP_MODE '<mode>']
  */
 base_backup:
 			K_BASE_BACKUP base_backup_opt_list
@@ -213,6 +214,11 @@ base_backup_opt:
 				{
 				  $$ = makeDefElem("noverify_checksums",
 								   (Node *)makeInteger(true), -1);
+				}
+			| K_GROUP_MODE SCONST
+				{
+				  $$ = makeDefElem("group_mode",
+								   (Node *)makeString($2), -1);
 				}
 			;
 

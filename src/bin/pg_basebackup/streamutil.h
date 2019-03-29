@@ -17,6 +17,16 @@
 #include "access/xlogdefs.h"
 #include "datatype/timestamp.h"
 
+/*
+ * Different ways to specify group access mode
+ */
+typedef enum
+{
+	GROUP_ACCESS_INHERIT = 0,
+	GROUP_ACCESS_PROVIDE,
+	GROUP_ACCESS_NONE
+}			GroupAccessMode;
+
 extern const char *progname;
 extern char *connection_string;
 extern char *dbhost;
@@ -25,6 +35,7 @@ extern char *dbport;
 extern char *dbname;
 extern int	dbgetpassword;
 extern uint32 WalSegSz;
+extern GroupAccessMode group_access_mode;
 
 /* Connection kept global so we can disconnect easily */
 extern PGconn *conn;

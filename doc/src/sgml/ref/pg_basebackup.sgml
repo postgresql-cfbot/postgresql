@@ -535,6 +535,53 @@ PostgreSQL documentation
        </para>
       </listitem>
      </varlistentry>
+     
+     <varlistentry>
+      <term><option>-g <replaceable class="parameter">mode</replaceable></option></term>
+      <term><option>--group-mode=<replaceable class="parameter">mode</replaceable></option></term>
+      <listitem>
+       <para>
+        Controls the group permissions of the file in the backup. This option is ignored
+        on <productname>Windows</productname> as it does not support <acronym>POSIX</acronym>-style
+        group permissions. The following methods are available to control the group permissions:
+
+        <variablelist>
+         <varlistentry>
+          <term><literal>n</literal></term>
+          <term><literal>none</literal></term>
+          <listitem>
+           <para>
+            Don't include group access permissions in the backup.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>i</literal></term>
+          <term><literal>inherit</literal></term>
+          <listitem>
+           <para>
+            Follow the same access permissions of the source instance.
+           </para>
+           <para>
+            This value is the default.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>g</literal></term>
+          <term><literal>group</literal></term>
+          <listitem>
+           <para>
+            Include group access permissions for all the backup files.
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
 
@@ -735,6 +782,7 @@ PostgreSQL documentation
    or an older major version, down to 9.1. However, WAL streaming mode (<literal>-X
    stream</literal>) only works with server version 9.3 and later, and tar format mode
    (<literal>--format=tar</literal>) of the current version only works with server version 9.5
+   or later. (<literal>-g</literal>) of the current version only works with server version 12
    or later.
   </para>
 

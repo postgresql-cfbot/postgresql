@@ -206,24 +206,20 @@ static void
 sepgsql_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 						 SubTransactionId parentSubid, void *arg)
 {
-	ListCell   *cell;
-	ListCell   *prev;
-	ListCell   *next;
-
 	if (event == SUBXACT_EVENT_ABORT_SUB)
 	{
-		prev = NULL;
-		for (cell = list_head(client_label_pending); cell; cell = next)
-		{
-			pending_label *plabel = lfirst(cell);
+		int			pos;
 
-			next = lnext(cell);
+		pos = 0;
+		while (pos < list_length(client_label_pending))
+		{
+			pending_label *plabel = list_nth(client_label_pending, pos);
 
 			if (plabel->subid == mySubid)
 				client_label_pending
-					= list_delete_cell(client_label_pending, cell, prev);
+					= list_delete_nth_cell(client_label_pending, pos);
 			else
-				prev = cell;
+				pos++;
 		}
 	}
 }

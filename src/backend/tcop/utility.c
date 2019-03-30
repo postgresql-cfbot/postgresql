@@ -1074,7 +1074,7 @@ ProcessUtilitySlow(ParseState *pstate,
 						}
 
 						/* Need CCI between commands */
-						if (lnext(l) != NULL)
+						if (lnext(stmts, l) != NULL)
 							CommandCounterIncrement();
 					}
 
@@ -1155,7 +1155,7 @@ ProcessUtilitySlow(ParseState *pstate,
 							}
 
 							/* Need CCI between commands */
-							if (lnext(l) != NULL)
+							if (lnext(stmts, l) != NULL)
 								CommandCounterIncrement();
 						}
 

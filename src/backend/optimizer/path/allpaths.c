@@ -945,7 +945,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	double		parent_size;
 	double	   *parent_attrsizes;
 	int			nattrs;
-	ListCell   *l;
 	Relids		live_children = NULL;
 	bool		did_pruning = false;
 
@@ -1011,9 +1010,11 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	nattrs = rel->max_attr - rel->min_attr + 1;
 	parent_attrsizes = (double *) palloc0(nattrs * sizeof(double));
 
-	foreach(l, root->append_rel_list)
+	/* Can't use foreach here because we may add new AppendRelInfos */
+	for (int pos = 0; pos < list_length(root->append_rel_list); pos++)
 	{
-		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(l);
+		AppendRelInfo *appinfo = list_nth_node(AppendRelInfo,
+											   root->append_rel_list, pos);
 		int			childRTindex;
 		RangeTblEntry *childRTE;
 		RelOptInfo *childrel;
@@ -3076,7 +3077,7 @@ compare_tlist_datatypes(List *tlist, List *colTypes,
 			elog(ERROR, "wrong number of tlist entries");
 		if (exprType((Node *) tle->expr) != lfirst_oid(colType))
 			safetyInfo->unsafeColumns[tle->resno] = true;
-		colType = lnext(colType);
+		colType = lnext(colTypes, colType);
 	}
 	if (colType != NULL)
 		elog(ERROR, "wrong number of tlist entries");
@@ -3649,7 +3650,8 @@ apply_child_basequals(PlannerInfo *root, RelOptInfo *rel,
 			continue;
 		}
 		/* might have gotten an AND clause, if so flatten it */
-		foreach(lc2, make_ands_implicit((Expr *) childqual))
+		childqual = (Node *) make_ands_implicit((Expr *) childqual);
+		foreach(lc2, (List *) childqual)
 		{
 			Node	   *onecq = (Node *) lfirst(lc2);
 			bool		pseudoconstant;
@@ -3758,7 +3760,7 @@ print_restrictclauses(PlannerInfo *root, List *clauses)
 		RestrictInfo *c = lfirst(l);
 
 		print_expr((Node *) c->clause, root->parse->rtable);
-		if (lnext(l))
+		if (lnext(clauses, l))
 			printf(", ");
 	}
 }

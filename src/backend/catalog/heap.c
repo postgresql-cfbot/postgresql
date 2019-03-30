@@ -3055,12 +3055,14 @@ RemoveStatistics(Oid relid, AttrNumber attnum)
 static void
 RelationTruncateIndexes(Relation heapRelation)
 {
-	ListCell   *indlist;
+	List	   *indlist;
+	ListCell   *lc;
 
 	/* Ask the relcache to produce a list of the indexes of the rel */
-	foreach(indlist, RelationGetIndexList(heapRelation))
+	indlist = RelationGetIndexList(heapRelation);
+	foreach(lc, indlist)
 	{
-		Oid			indexId = lfirst_oid(indlist);
+		Oid			indexId = lfirst_oid(lc);
 		Relation	currentIndex;
 		IndexInfo  *indexInfo;
 
@@ -3082,6 +3084,7 @@ RelationTruncateIndexes(Relation heapRelation)
 		/* We're done with this index */
 		index_close(currentIndex, NoLock);
 	}
+	list_free(indlist);
 }
 
 /*
@@ -3338,7 +3341,7 @@ insert_ordered_unique_oid(List *list, Oid datum)
 	prev = list_head(list);
 	for (;;)
 	{
-		ListCell   *curr = lnext(prev);
+		ListCell   *curr = lnext(list, prev);
 
 		if (curr == NULL || datum < lfirst_oid(curr))
 			break;				/* it belongs after 'prev', before 'curr' */

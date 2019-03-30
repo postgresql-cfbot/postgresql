@@ -56,7 +56,6 @@ expand_inherited_tables(PlannerInfo *root)
 {
 	Index		nrtes;
 	Index		rti;
-	ListCell   *rl;
 
 	/*
 	 * expand_inherited_rtentry may add RTEs to parse->rtable. The function is
@@ -64,13 +63,12 @@ expand_inherited_tables(PlannerInfo *root)
 	 * So just scan as far as the original end of the rtable list.
 	 */
 	nrtes = list_length(root->parse->rtable);
-	rl = list_head(root->parse->rtable);
 	for (rti = 1; rti <= nrtes; rti++)
 	{
-		RangeTblEntry *rte = (RangeTblEntry *) lfirst(rl);
+		RangeTblEntry *rte = (RangeTblEntry *) list_nth(root->parse->rtable,
+														rti - 1);
 
 		expand_inherited_rtentry(root, rte, rti);
-		rl = lnext(rl);
 	}
 }
 

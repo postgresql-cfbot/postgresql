@@ -800,12 +800,12 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 void
 generate_base_implied_equalities(PlannerInfo *root)
 {
-	ListCell   *lc;
 	Index		rti;
 
-	foreach(lc, root->eq_classes)
+	/* Can't use foreach here because we might add new ECs intra-loop */
+	for (int pos = 0; pos < list_length(root->eq_classes); pos++)
 	{
-		EquivalenceClass *ec = (EquivalenceClass *) lfirst(lc);
+		EquivalenceClass *ec = list_nth_node(EquivalenceClass, root->eq_classes, pos);
 
 		Assert(ec->ec_merged == NULL);	/* else shouldn't be in list */
 		Assert(!ec->ec_broken); /* not yet anyway... */
@@ -1574,27 +1574,27 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 {
 	bool		found;
 	ListCell   *cell;
-	ListCell   *prev;
-	ListCell   *next;
 
 	/* Outer loop repeats until we find no more deductions */
 	do
 	{
+		int			pos;
+
 		found = false;
 
 		/* Process the LEFT JOIN clauses */
-		prev = NULL;
-		for (cell = list_head(root->left_join_clauses); cell; cell = next)
+		pos = 0;
+		while (pos < list_length(root->left_join_clauses))
 		{
-			RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+			RestrictInfo *rinfo = (RestrictInfo *) list_nth(root->left_join_clauses,
+															pos);
 
-			next = lnext(cell);
 			if (reconsider_outer_join_clause(root, rinfo, true))
 			{
 				found = true;
 				/* remove it from the list */
 				root->left_join_clauses =
-					list_delete_cell(root->left_join_clauses, cell, prev);
+					list_delete_nth_cell(root->left_join_clauses, pos);
 				/* we throw it back anyway (see notes above) */
 				/* but the thrown-back clause has no extra selectivity */
 				rinfo->norm_selec = 2.0;
@@ -1602,22 +1602,22 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				distribute_restrictinfo_to_rels(root, rinfo);
 			}
 			else
-				prev = cell;
+				pos++;
 		}
 
 		/* Process the RIGHT JOIN clauses */
-		prev = NULL;
-		for (cell = list_head(root->right_join_clauses); cell; cell = next)
+		pos = 0;
+		while (pos < list_length(root->right_join_clauses))
 		{
-			RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+			RestrictInfo *rinfo = (RestrictInfo *) list_nth(root->right_join_clauses,
+															pos);
 
-			next = lnext(cell);
 			if (reconsider_outer_join_clause(root, rinfo, false))
 			{
 				found = true;
 				/* remove it from the list */
 				root->right_join_clauses =
-					list_delete_cell(root->right_join_clauses, cell, prev);
+					list_delete_nth_cell(root->right_join_clauses, pos);
 				/* we throw it back anyway (see notes above) */
 				/* but the thrown-back clause has no extra selectivity */
 				rinfo->norm_selec = 2.0;
@@ -1625,22 +1625,22 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				distribute_restrictinfo_to_rels(root, rinfo);
 			}
 			else
-				prev = cell;
+				pos++;
 		}
 
 		/* Process the FULL JOIN clauses */
-		prev = NULL;
-		for (cell = list_head(root->full_join_clauses); cell; cell = next)
+		pos = 0;
+		while (pos < list_length(root->full_join_clauses))
 		{
-			RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+			RestrictInfo *rinfo = (RestrictInfo *) list_nth(root->full_join_clauses,
+															pos);
 
-			next = lnext(cell);
 			if (reconsider_full_join_clause(root, rinfo))
 			{
 				found = true;
 				/* remove it from the list */
 				root->full_join_clauses =
-					list_delete_cell(root->full_join_clauses, cell, prev);
+					list_delete_nth_cell(root->full_join_clauses, pos);
 				/* we throw it back anyway (see notes above) */
 				/* but the thrown-back clause has no extra selectivity */
 				rinfo->norm_selec = 2.0;
@@ -1648,7 +1648,7 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 				distribute_restrictinfo_to_rels(root, rinfo);
 			}
 			else
-				prev = cell;
+				pos++;
 		}
 	} while (found);
 
@@ -2124,7 +2124,7 @@ add_child_rel_equivalences(PlannerInfo *root,
 	foreach(lc1, root->eq_classes)
 	{
 		EquivalenceClass *cur_ec = (EquivalenceClass *) lfirst(lc1);
-		ListCell   *lc2;
+		int			num_members;
 
 		/*
 		 * If this EC contains a volatile expression, then generating child
@@ -2142,9 +2142,15 @@ add_child_rel_equivalences(PlannerInfo *root,
 			!bms_is_subset(parent_rel->relids, cur_ec->ec_relids))
 			continue;
 
-		foreach(lc2, cur_ec->ec_members)
+		/*
+		 * Can't use foreach() here because we may modify the list within
+		 * loop. However, there's no point in scanning newly-added child
+		 * members, so we can stop after the last pre-existing EC member.
+		 */
+		num_members = list_length(cur_ec->ec_members);
+		for (int pos = 0; pos < num_members; pos++)
 		{
-			EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc2);
+			EquivalenceMember *cur_em = (EquivalenceMember *) list_nth(cur_ec->ec_members, pos);
 
 			if (cur_em->em_is_const)
 				continue;		/* ignore consts here */

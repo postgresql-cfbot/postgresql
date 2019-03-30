@@ -1986,13 +1986,13 @@ static List *
 MergeAttributes(List *schema, List *supers, char relpersistence,
 				bool is_partition, List **supconstr)
 {
-	ListCell   *entry;
 	List	   *inhSchema = NIL;
 	List	   *constraints = NIL;
 	bool		have_bogus_defaults = false;
 	int			child_attno;
 	static Node bogus_marker = {0}; /* marks conflicting defaults */
 	List	   *saved_schema = NIL;
+	ListCell   *entry;
 
 	/*
 	 * Check for and reject tables with too many columns. We perform this
@@ -2018,11 +2018,10 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 	 * handle name conflicts for inherited attributes, it seems to make more
 	 * sense to assume such conflicts are errors.
 	 */
-	foreach(entry, schema)
+	for (int coldefpos = 0; coldefpos < list_length(schema); coldefpos++)
 	{
-		ColumnDef  *coldef = lfirst(entry);
-		ListCell   *rest = lnext(entry);
-		ListCell   *prev = entry;
+		ColumnDef  *coldef = list_nth_node(ColumnDef, schema, coldefpos);
+		int			restpos;
 
 		if (!is_partition && coldef->typeName == NULL)
 		{
@@ -2038,11 +2037,10 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							coldef->colname)));
 		}
 
-		while (rest != NULL)
+		restpos = coldefpos + 1;
+		while (restpos < list_length(schema))
 		{
-			ColumnDef  *restdef = lfirst(rest);
-			ListCell   *next = lnext(rest); /* need to save it in case we
-											 * delete it */
+			ColumnDef  *restdef = list_nth_node(ColumnDef, schema, restpos);
 
 			if (strcmp(coldef->colname, restdef->colname) == 0)
 			{
@@ -2056,7 +2054,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					coldef->cooked_default = restdef->cooked_default;
 					coldef->constraints = restdef->constraints;
 					coldef->is_from_type = false;
-					list_delete_cell(schema, rest, prev);
+					schema = list_delete_nth_cell(schema, restpos);
 				}
 				else
 					ereport(ERROR,
@@ -2064,8 +2062,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							 errmsg("column \"%s\" specified more than once",
 									coldef->colname)));
 			}
-			prev = rest;
-			rest = next;
+			else
+				restpos++;
 		}
 	}
 
@@ -4083,9 +4081,9 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode)
 	for (pass = 0; pass < AT_NUM_PASSES; pass++)
 	{
 		/* Go through each table that needs to be processed */
-		foreach(ltab, *wqueue)
+		for (int pos = 0; pos < list_length(*wqueue); pos++)
 		{
-			AlteredTableInfo *tab = (AlteredTableInfo *) lfirst(ltab);
+			AlteredTableInfo *tab = (AlteredTableInfo *) list_nth(*wqueue, pos);
 			List	   *subcmds = tab->subcmds[pass];
 			Relation	rel;
 			ListCell   *lcmd;
@@ -7697,7 +7695,8 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * assess ppeqop or ffeqop, which RI_Initial_Check() does not use.
 			 */
 			old_check_ok = (pfeqop == lfirst_oid(old_pfeqop_item));
-			old_pfeqop_item = lnext(old_pfeqop_item);
+			old_pfeqop_item = lnext(fkconstraint->old_conpfeqop,
+									old_pfeqop_item);
 		}
 		if (old_check_ok)
 		{
@@ -12910,7 +12909,7 @@ relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 	HeapTuple	pg_index_tuple;
 	Form_pg_class pg_class_form;
 	Form_pg_index pg_index_form;
-
+	List	   *indexList;
 	ListCell   *index;
 
 	/*
@@ -12957,7 +12956,8 @@ relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 	 * and set it for any index that should have it now.
 	 */
 	pg_index = table_open(IndexRelationId, RowExclusiveLock);
-	foreach(index, RelationGetIndexList(rel))
+	indexList = RelationGetIndexList(rel);
+	foreach(index, indexList)
 	{
 		Oid			thisIndexOid = lfirst_oid(index);
 		bool		dirty = false;
@@ -13859,34 +13859,26 @@ PreCommit_on_commit_actions(void)
 void
 AtEOXact_on_commit_actions(bool isCommit)
 {
-	ListCell   *cur_item;
-	ListCell   *prev_item;
+	int			pos;
 
-	prev_item = NULL;
-	cur_item = list_head(on_commits);
-
-	while (cur_item != NULL)
+	pos = 0;
+	while (pos < list_length(on_commits))
 	{
-		OnCommitItem *oc = (OnCommitItem *) lfirst(cur_item);
+		OnCommitItem *oc = (OnCommitItem *) list_nth(on_commits, pos);
 
 		if (isCommit ? oc->deleting_subid != InvalidSubTransactionId :
 			oc->creating_subid != InvalidSubTransactionId)
 		{
-			/* cur_item must be removed */
-			on_commits = list_delete_cell(on_commits, cur_item, prev_item);
+			/* this item must be removed */
+			on_commits = list_delete_nth_cell(on_commits, pos);
 			pfree(oc);
-			if (prev_item)
-				cur_item = lnext(prev_item);
-			else
-				cur_item = list_head(on_commits);
 		}
 		else
 		{
-			/* cur_item must be preserved */
+			/* this item must be preserved */
 			oc->creating_subid = InvalidSubTransactionId;
 			oc->deleting_subid = InvalidSubTransactionId;
-			prev_item = cur_item;
-			cur_item = lnext(prev_item);
+			pos++;
 		}
 	}
 }
@@ -13902,35 +13894,27 @@ void
 AtEOSubXact_on_commit_actions(bool isCommit, SubTransactionId mySubid,
 							  SubTransactionId parentSubid)
 {
-	ListCell   *cur_item;
-	ListCell   *prev_item;
+	int			pos;
 
-	prev_item = NULL;
-	cur_item = list_head(on_commits);
-
-	while (cur_item != NULL)
+	pos = 0;
+	while (pos < list_length(on_commits))
 	{
-		OnCommitItem *oc = (OnCommitItem *) lfirst(cur_item);
+		OnCommitItem *oc = (OnCommitItem *) list_nth(on_commits, pos);
 
 		if (!isCommit && oc->creating_subid == mySubid)
 		{
-			/* cur_item must be removed */
-			on_commits = list_delete_cell(on_commits, cur_item, prev_item);
+			/* this item must be removed */
+			on_commits = list_delete_nth_cell(on_commits, pos);
 			pfree(oc);
-			if (prev_item)
-				cur_item = lnext(prev_item);
-			else
-				cur_item = list_head(on_commits);
 		}
 		else
 		{
-			/* cur_item must be preserved */
+			/* this item must be preserved */
 			if (oc->creating_subid == mySubid)
 				oc->creating_subid = parentSubid;
 			if (oc->deleting_subid == mySubid)
 				oc->deleting_subid = isCommit ? parentSubid : InvalidSubTransactionId;
-			prev_item = cur_item;
-			cur_item = lnext(prev_item);
+			pos++;
 		}
 	}
 }

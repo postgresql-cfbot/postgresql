@@ -4747,7 +4747,6 @@ static List *
 roles_has_privs_of(Oid roleid)
 {
 	List	   *roles_list;
-	ListCell   *l;
 	List	   *new_cached_privs_roles;
 	MemoryContext oldctx;
 
@@ -4763,14 +4762,13 @@ roles_has_privs_of(Oid roleid)
 	 * Each element of the list is scanned to see if it adds any indirect
 	 * memberships.  We can use a single list as both the record of
 	 * already-found memberships and the agenda of roles yet to be scanned.
-	 * This is a bit tricky but works because the foreach() macro doesn't
-	 * fetch the next list element until the bottom of the loop.
+	 * This is a bit tricky but works as long as we don't use foreach().
 	 */
 	roles_list = list_make1_oid(roleid);
 
-	foreach(l, roles_list)
+	for (int pos = 0; pos < list_length(roles_list); pos++)
 	{
-		Oid			memberid = lfirst_oid(l);
+		Oid			memberid = list_nth_oid(roles_list, pos);
 		CatCList   *memlist;
 		int			i;
 
@@ -4830,7 +4828,6 @@ static List *
 roles_is_member_of(Oid roleid)
 {
 	List	   *roles_list;
-	ListCell   *l;
 	List	   *new_cached_membership_roles;
 	MemoryContext oldctx;
 
@@ -4846,14 +4843,13 @@ roles_is_member_of(Oid roleid)
 	 * Each element of the list is scanned to see if it adds any indirect
 	 * memberships.  We can use a single list as both the record of
 	 * already-found memberships and the agenda of roles yet to be scanned.
-	 * This is a bit tricky but works because the foreach() macro doesn't
-	 * fetch the next list element until the bottom of the loop.
+	 * This is a bit tricky but works as long as we don't use foreach().
 	 */
 	roles_list = list_make1_oid(roleid);
 
-	foreach(l, roles_list)
+	for (int pos = 0; pos < list_length(roles_list); pos++)
 	{
-		Oid			memberid = lfirst_oid(l);
+		Oid			memberid = list_nth_oid(roles_list, pos);
 		CatCList   *memlist;
 		int			i;
 
@@ -4990,7 +4986,6 @@ is_admin_of_role(Oid member, Oid role)
 {
 	bool		result = false;
 	List	   *roles_list;
-	ListCell   *l;
 
 	if (superuser_arg(member))
 		return true;
@@ -5035,9 +5030,9 @@ is_admin_of_role(Oid member, Oid role)
 	 */
 	roles_list = list_make1_oid(member);
 
-	foreach(l, roles_list)
+	for (int pos = 0; pos < list_length(roles_list); pos++)
 	{
-		Oid			memberid = lfirst_oid(l);
+		Oid			memberid = list_nth_oid(roles_list, pos);
 		CatCList   *memlist;
 		int			i;
 

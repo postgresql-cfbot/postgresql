@@ -5442,11 +5442,12 @@ AfterTriggerSetState(ConstraintsSetStmt *stmt)
 		 * Scan for any possible descendants of the constraints.  We append
 		 * whatever we find to the same list that we're scanning; this has the
 		 * effect that we create new scans for those, too, so if there are
-		 * further descendents, we'll also catch them.
+		 * further descendents, we'll also catch them.  Since we're modifying
+		 * the list within the loop, we can't use foreach().
 		 */
-		foreach(lc, conoidlist)
+		for (int pos = 0; pos < list_length(conoidlist); pos++)
 		{
-			Oid			parent = lfirst_oid(lc);
+			Oid			parent = list_nth_oid(conoidlist, pos);
 			ScanKeyData key;
 			SysScanDesc scan;
 			HeapTuple	tuple;

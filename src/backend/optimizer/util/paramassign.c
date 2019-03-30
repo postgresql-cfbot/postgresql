@@ -509,17 +509,13 @@ List *
 identify_current_nestloop_params(PlannerInfo *root, Relids leftrelids)
 {
 	List	   *result;
-	ListCell   *cell;
-	ListCell   *prev;
-	ListCell   *next;
+	int			pos;
 
 	result = NIL;
-	prev = NULL;
-	for (cell = list_head(root->curOuterParams); cell; cell = next)
+	pos = 0;
+	while (pos < list_length(root->curOuterParams))
 	{
-		NestLoopParam *nlp = (NestLoopParam *) lfirst(cell);
-
-		next = lnext(cell);
+		NestLoopParam *nlp = (NestLoopParam *) list_nth(root->curOuterParams, pos);
 
 		/*
 		 * We are looking for Vars and PHVs that can be supplied by the
@@ -529,8 +525,8 @@ identify_current_nestloop_params(PlannerInfo *root, Relids leftrelids)
 		if (IsA(nlp->paramval, Var) &&
 			bms_is_member(nlp->paramval->varno, leftrelids))
 		{
-			root->curOuterParams = list_delete_cell(root->curOuterParams,
-													cell, prev);
+			root->curOuterParams = list_delete_nth_cell(root->curOuterParams,
+														pos);
 			result = lappend(result, nlp);
 		}
 		else if (IsA(nlp->paramval, PlaceHolderVar) &&
@@ -541,12 +537,12 @@ identify_current_nestloop_params(PlannerInfo *root, Relids leftrelids)
 													 false)->ph_eval_at,
 							   leftrelids))
 		{
-			root->curOuterParams = list_delete_cell(root->curOuterParams,
-													cell, prev);
+			root->curOuterParams = list_delete_nth_cell(root->curOuterParams,
+														pos);
 			result = lappend(result, nlp);
 		}
 		else
-			prev = cell;
+			pos++;
 	}
 	return result;
 }

@@ -1033,6 +1033,7 @@ static void
 buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 {
 	int			maxattrs = tupdesc->natts;
+	List	   *aliaslist;
 	ListCell   *aliaslc;
 	int			numaliases;
 	int			varattno;
@@ -1042,13 +1043,15 @@ buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 
 	if (alias)
 	{
-		aliaslc = list_head(alias->colnames);
-		numaliases = list_length(alias->colnames);
+		aliaslist = alias->colnames;
+		aliaslc = list_head(aliaslist);
+		numaliases = list_length(aliaslist);
 		/* We'll rebuild the alias colname list */
 		alias->colnames = NIL;
 	}
 	else
 	{
+		aliaslist = NIL;
 		aliaslc = NULL;
 		numaliases = 0;
 	}
@@ -1070,7 +1073,7 @@ buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 		{
 			/* Use the next user-supplied alias */
 			attrname = (Value *) lfirst(aliaslc);
-			aliaslc = lnext(aliaslc);
+			aliaslc = lnext(aliaslist, aliaslc);
 			alias->colnames = lappend(alias->colnames, attrname);
 		}
 		else
@@ -2268,7 +2271,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 						*colvars = lappend(*colvars, varnode);
 					}
 
-					aliasp_item = lnext(aliasp_item);
+					aliasp_item = lnext(rte->eref->colnames, aliasp_item);
 				}
 			}
 			break;
@@ -2495,7 +2498,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 							*colnames = lappend(*colnames,
 												makeString(pstrdup("")));
 
-						aliasp_item = lnext(aliasp_item);
+						aliasp_item = lnext(rte->eref->colnames, aliasp_item);
 					}
 
 					if (colvars)
@@ -2577,7 +2580,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 		for (i = 0; i < offset; i++)
 		{
 			if (aliascell)
-				aliascell = lnext(aliascell);
+				aliascell = lnext(eref->colnames, aliascell);
 		}
 	}
 
@@ -2603,7 +2606,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 				}
 			}
 			if (aliascell)
-				aliascell = lnext(aliascell);
+				aliascell = lnext(eref->colnames, aliascell);
 			continue;
 		}
 
@@ -2614,7 +2617,7 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 			if (aliascell)
 			{
 				label = strVal(lfirst(aliascell));
-				aliascell = lnext(aliascell);
+				aliascell = lnext(eref->colnames, aliascell);
 			}
 			else
 			{

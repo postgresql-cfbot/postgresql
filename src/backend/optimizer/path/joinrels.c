@@ -28,10 +28,11 @@
 
 static void make_rels_by_clause_joins(PlannerInfo *root,
 						  RelOptInfo *old_rel,
+						  List *other_rels_list,
 						  ListCell *other_rels);
 static void make_rels_by_clauseless_joins(PlannerInfo *root,
 							  RelOptInfo *old_rel,
-							  ListCell *other_rels);
+							  List *other_rels);
 static bool has_join_restriction(PlannerInfo *root, RelOptInfo *rel);
 static bool has_legal_joinclause(PlannerInfo *root, RelOptInfo *rel);
 static bool restriction_is_constant_false(List *restrictlist,
@@ -105,15 +106,23 @@ join_search_one_level(PlannerInfo *root, int level)
 			 * to each initial rel they don't already include but have a join
 			 * clause or restriction with.
 			 */
+			List	   *other_rels_list;
 			ListCell   *other_rels;
 
 			if (level == 2)		/* consider remaining initial rels */
-				other_rels = lnext(r);
+			{
+				other_rels_list = joinrels[level - 1];
+				other_rels = lnext(other_rels_list, r);
+			}
 			else				/* consider all initial rels */
-				other_rels = list_head(joinrels[1]);
+			{
+				other_rels_list = joinrels[1];
+				other_rels = list_head(other_rels_list);
+			}
 
 			make_rels_by_clause_joins(root,
 									  old_rel,
+									  other_rels_list,
 									  other_rels);
 		}
 		else
@@ -132,7 +141,7 @@ join_search_one_level(PlannerInfo *root, int level)
 			 */
 			make_rels_by_clauseless_joins(root,
 										  old_rel,
-										  list_head(joinrels[1]));
+										  joinrels[1]);
 		}
 	}
 
@@ -158,6 +167,7 @@ join_search_one_level(PlannerInfo *root, int level)
 		foreach(r, joinrels[k])
 		{
 			RelOptInfo *old_rel = (RelOptInfo *) lfirst(r);
+			List	   *other_rels_list;
 			ListCell   *other_rels;
 			ListCell   *r2;
 
@@ -171,11 +181,18 @@ join_search_one_level(PlannerInfo *root, int level)
 				continue;
 
 			if (k == other_level)
-				other_rels = lnext(r);	/* only consider remaining rels */
+			{
+				/* only consider remaining rels */
+				other_rels_list = joinrels[k];
+				other_rels = lnext(other_rels_list, r);
+			}
 			else
-				other_rels = list_head(joinrels[other_level]);
+			{
+				other_rels_list = joinrels[other_level];
+				other_rels = list_head(other_rels_list);
+			}
 
-			for_each_cell(r2, other_rels)
+			for_each_cell(r2, other_rels_list, other_rels)
 			{
 				RelOptInfo *new_rel = (RelOptInfo *) lfirst(r2);
 
@@ -227,7 +244,7 @@ join_search_one_level(PlannerInfo *root, int level)
 
 			make_rels_by_clauseless_joins(root,
 										  old_rel,
-										  list_head(joinrels[1]));
+										  joinrels[1]);
 		}
 
 		/*----------
@@ -269,8 +286,9 @@ join_search_one_level(PlannerInfo *root, int level)
  * automatically ensures that each new joinrel is only added to the list once.
  *
  * 'old_rel' is the relation entry for the relation to be joined
- * 'other_rels': the first cell in a linked list containing the other
+ * 'other_rels_list': a list containing the other
  * rels to be considered for joining
+ * 'other_rels': the first cell to be considered
  *
  * Currently, this is only used with initial rels in other_rels, but it
  * will work for joining to joinrels too.
@@ -278,11 +296,12 @@ join_search_one_level(PlannerInfo *root, int level)
 static void
 make_rels_by_clause_joins(PlannerInfo *root,
 						  RelOptInfo *old_rel,
+						  List *other_rels_list,
 						  ListCell *other_rels)
 {
 	ListCell   *l;
 
-	for_each_cell(l, other_rels)
+	for_each_cell(l, other_rels_list, other_rels)
 	{
 		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 
@@ -303,8 +322,7 @@ make_rels_by_clause_joins(PlannerInfo *root,
  *	  The join rels are returned in root->join_rel_level[join_cur_level].
  *
  * 'old_rel' is the relation entry for the relation to be joined
- * 'other_rels': the first cell of a linked list containing the
- * other rels to be considered for joining
+ * 'other_rels': a list containing the other rels to be considered for joining
  *
  * Currently, this is only used with initial rels in other_rels, but it would
  * work for joining to joinrels too.
@@ -312,11 +330,11 @@ make_rels_by_clause_joins(PlannerInfo *root,
 static void
 make_rels_by_clauseless_joins(PlannerInfo *root,
 							  RelOptInfo *old_rel,
-							  ListCell *other_rels)
+							  List *other_rels)
 {
 	ListCell   *l;
 
-	for_each_cell(l, other_rels)
+	foreach(l, other_rels)
 	{
 		RelOptInfo *other_rel = (RelOptInfo *) lfirst(l);
 

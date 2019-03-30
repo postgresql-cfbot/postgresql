@@ -37,7 +37,7 @@
 typedef struct SeenRelsEntry
 {
 	Oid			rel_id;			/* relation oid */
-	ListCell   *numparents_cell;	/* corresponding list cell */
+	int			list_index;		/* its position in output list(s) */
 } SeenRelsEntry;
 
 /*
@@ -169,7 +169,6 @@ find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 	HASHCTL		ctl;
 	List	   *rels_list,
 			   *rel_numparents;
-	ListCell   *l;
 
 	memset(&ctl, 0, sizeof(ctl));
 	ctl.keysize = sizeof(Oid);
@@ -185,15 +184,15 @@ find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 	 * We build a list starting with the given rel and adding all direct and
 	 * indirect children.  We can use a single list as both the record of
 	 * already-found rels and the agenda of rels yet to be scanned for more
-	 * children.  This is a bit tricky but works because the foreach() macro
-	 * doesn't fetch the next list element until the bottom of the loop.
+	 * children.  This is a bit tricky but works as long as we don't try to
+	 * keep pointers into the list structure; an index is sufficient.
 	 */
 	rels_list = list_make1_oid(parentrelId);
 	rel_numparents = list_make1_int(0);
 
-	foreach(l, rels_list)
+	for (int pos = 0; pos < list_length(rels_list); pos++)
 	{
-		Oid			currentrel = lfirst_oid(l);
+		Oid			currentrel = list_nth_oid(rels_list, pos);
 		List	   *currentchildren;
 		ListCell   *lc;
 
@@ -217,14 +216,18 @@ find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 			if (found)
 			{
 				/* if the rel is already there, bump number-of-parents counter */
-				lfirst_int(hash_entry->numparents_cell)++;
+				ListCell   *numparents_cell;
+
+				numparents_cell = list_nth_cell(rel_numparents,
+												hash_entry->list_index);
+				lfirst_int(numparents_cell)++;
 			}
 			else
 			{
 				/* if it's not there, add it. expect 1 parent, initially. */
+				hash_entry->list_index = list_length(rels_list);
 				rels_list = lappend_oid(rels_list, child_oid);
 				rel_numparents = lappend_int(rel_numparents, 1);
-				hash_entry->numparents_cell = rel_numparents->tail;
 			}
 		}
 	}

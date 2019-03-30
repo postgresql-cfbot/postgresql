@@ -1838,7 +1838,7 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
 	 * For each of the remaining subpaths, add its cost to the array element
 	 * with minimum cost.
 	 */
-	for_each_cell(l, cell)
+	for_each_cell(l, subpaths, cell)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
 		int			i;
@@ -4664,9 +4664,7 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
 		ForeignKeyOptInfo *fkinfo = (ForeignKeyOptInfo *) lfirst(lc);
 		bool		ref_is_outer;
 		List	   *removedlist;
-		ListCell   *cell;
-		ListCell   *prev;
-		ListCell   *next;
+		int			pos;
 
 		/*
 		 * This FK is not relevant unless it connects a baserel on one side of
@@ -4707,14 +4705,13 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
 			worklist = list_copy(worklist);
 
 		removedlist = NIL;
-		prev = NULL;
-		for (cell = list_head(worklist); cell; cell = next)
+		pos = 0;
+		while (pos < list_length(worklist))
 		{
-			RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+			RestrictInfo *rinfo = (RestrictInfo *) list_nth(worklist, pos);
 			bool		remove_it = false;
 			int			i;
 
-			next = lnext(cell);
 			/* Drop this clause if it matches any column of the FK */
 			for (i = 0; i < fkinfo->nkeys; i++)
 			{
@@ -4754,11 +4751,11 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
 			}
 			if (remove_it)
 			{
-				worklist = list_delete_cell(worklist, cell, prev);
+				worklist = list_delete_nth_cell(worklist, pos);
 				removedlist = lappend(removedlist, rinfo);
 			}
 			else
-				prev = cell;
+				pos++;
 		}
 
 		/*

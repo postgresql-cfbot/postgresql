@@ -1013,9 +1013,6 @@ addKey(TrgmNFA *trgmNFA, TrgmState *state, TrgmStateKey *key)
 {
 	regex_arc_t *arcs;
 	TrgmStateKey destKey;
-	ListCell   *cell,
-			   *prev,
-			   *next;
 	int			i,
 				arcsCount;
 
@@ -1030,13 +1027,11 @@ addKey(TrgmNFA *trgmNFA, TrgmState *state, TrgmStateKey *key)
 	 * redundancy.  We can drop either old key(s) or the new key if we find
 	 * redundancy.
 	 */
-	prev = NULL;
-	cell = list_head(state->enterKeys);
-	while (cell)
+	i = 0;
+	while (i < list_length(state->enterKeys))
 	{
-		TrgmStateKey *existingKey = (TrgmStateKey *) lfirst(cell);
+		TrgmStateKey *existingKey = (TrgmStateKey *) list_nth(state->enterKeys, i);
 
-		next = lnext(cell);
 		if (existingKey->nstate == key->nstate)
 		{
 			if (prefixContains(&existingKey->prefix, &key->prefix))
@@ -1050,15 +1045,11 @@ addKey(TrgmNFA *trgmNFA, TrgmState *state, TrgmStateKey *key)
 				 * The new key covers this old key. Remove the old key, it's
 				 * no longer needed once we add this key to the list.
 				 */
-				state->enterKeys = list_delete_cell(state->enterKeys,
-													cell, prev);
+				state->enterKeys = list_delete_nth_cell(state->enterKeys, i);
+				continue;		/* don't advance i */
 			}
-			else
-				prev = cell;
 		}
-		else
-			prev = cell;
-		cell = next;
+		i++;
 	}
 
 	/* No redundancy, so add this key to the state's list */

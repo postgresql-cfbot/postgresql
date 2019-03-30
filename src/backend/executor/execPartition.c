@@ -1208,7 +1208,7 @@ FormPartitionKeyDatum(PartitionDispatch pd,
 			datum = ExecEvalExprSwitchContext((ExprState *) lfirst(partexpr_item),
 											  GetPerTupleExprContext(estate),
 											  &isNull);
-			partexpr_item = lnext(partexpr_item);
+			partexpr_item = lnext(pd->keystate, partexpr_item);
 		}
 		values[i] = datum;
 		isnull[i] = isNull;

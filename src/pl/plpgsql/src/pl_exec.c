@@ -3659,7 +3659,7 @@ exec_stmt_raise(PLpgSQL_execstate *estate, PLpgSQL_stmt_raise *stmt)
 													 paramvalue,
 													 paramtypeid);
 				appendStringInfoString(&ds, extval);
-				current_param = lnext(current_param);
+				current_param = lnext(stmt->params, current_param);
 				exec_eval_cleanup(estate);
 			}
 			else
@@ -4056,11 +4056,13 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	 */
 	if (expr->plan == NULL)
 	{
+		List	   *psources;
 		ListCell   *l;
 
 		exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK, true);
 		stmt->mod_stmt = false;
-		foreach(l, SPI_plan_get_plan_sources(expr->plan))
+		psources = SPI_plan_get_plan_sources(expr->plan);
+		foreach(l, psources)
 		{
 			CachedPlanSource *plansource = (CachedPlanSource *) lfirst(l);
 

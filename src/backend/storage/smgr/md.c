@@ -1526,9 +1526,7 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 		/* Remove any pending requests for the entire database */
 		HASH_SEQ_STATUS hstat;
 		PendingOperationEntry *entry;
-		ListCell   *cell,
-				   *prev,
-				   *next;
+		int			pos;
 
 		/* Remove fsync requests */
 		hash_seq_init(&hstat, pendingOpsTable);
@@ -1547,19 +1545,18 @@ RememberFsyncRequest(RelFileNode rnode, ForkNumber forknum, BlockNumber segno)
 		}
 
 		/* Remove unlink requests */
-		prev = NULL;
-		for (cell = list_head(pendingUnlinks); cell; cell = next)
+		pos = 0;
+		while (pos < list_length(pendingUnlinks))
 		{
-			PendingUnlinkEntry *entry = (PendingUnlinkEntry *) lfirst(cell);
+			PendingUnlinkEntry *entry = (PendingUnlinkEntry *) list_nth(pendingUnlinks, pos);
 
-			next = lnext(cell);
 			if (entry->rnode.dbNode == rnode.dbNode)
 			{
-				pendingUnlinks = list_delete_cell(pendingUnlinks, cell, prev);
+				pendingUnlinks = list_delete_nth_cell(pendingUnlinks, pos);
 				pfree(entry);
 			}
 			else
-				prev = cell;
+				pos++;
 		}
 	}
 	else if (segno == UNLINK_RELATION_REQUEST)

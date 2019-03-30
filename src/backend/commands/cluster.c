@@ -135,10 +135,12 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 
 		if (stmt->indexname == NULL)
 		{
+			List	   *indexList;
 			ListCell   *index;
 
 			/* We need to find the index that has indisclustered set. */
-			foreach(index, RelationGetIndexList(rel))
+			indexList = RelationGetIndexList(rel);
+			foreach(index, indexList)
 			{
 				HeapTuple	idxtuple;
 				Form_pg_index indexForm;
@@ -507,6 +509,7 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	HeapTuple	indexTuple;
 	Form_pg_index indexForm;
 	Relation	pg_index;
+	List	   *indexList;
 	ListCell   *index;
 
 	/* Disallow applying to a partitioned table */
@@ -539,7 +542,8 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	 */
 	pg_index = table_open(IndexRelationId, RowExclusiveLock);
 
-	foreach(index, RelationGetIndexList(rel))
+	indexList = RelationGetIndexList(rel);
+	foreach(index, indexList)
 	{
 		Oid			thisIndexOid = lfirst_oid(index);
 

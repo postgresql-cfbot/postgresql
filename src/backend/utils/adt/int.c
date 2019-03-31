@@ -1501,3 +1501,54 @@ generate_series_int4_support(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(ret);
 }
+
+Datum
+int2dist(PG_FUNCTION_ARGS)
+{
+	int16		a = PG_GETARG_INT16(0);
+	int16		b = PG_GETARG_INT16(1);
+	int16		r;
+	int16		ra;
+
+	if (pg_sub_s16_overflow(a, b, &r) ||
+		r == PG_INT16_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("smallint out of range")));
+
+	ra = Abs(r);
+
+	PG_RETURN_INT16(ra);
+}
+
+static int32
+int44_dist(int32 a, int32 b)
+{
+	int32		r;
+
+	if (pg_sub_s32_overflow(a, b, &r) ||
+		r == PG_INT32_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("integer out of range")));
+
+	return Abs(r);
+}
+
+Datum
+int4dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT32(int44_dist(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
+}
+
+Datum
+int24dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT32(int44_dist(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
+}
+
+Datum
+int42dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT32(int44_dist(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
+}

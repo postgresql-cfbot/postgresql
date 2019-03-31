@@ -22,6 +22,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/pg_amop.h"
+#include "optimizer/paths.h"
 #include "storage/bufmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
@@ -30,7 +31,6 @@
 #include "utils/index_selfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
-
 
 /*
  * SP-GiST handler function: return IndexAmRoutine with access method parameters
@@ -44,7 +44,6 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amstrategies = 0;
 	amroutine->amsupport = SPGISTNProc;
 	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = false;
@@ -78,6 +77,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->ammatchorderby = match_orderbyop_pathkeys;
 
 	PG_RETURN_POINTER(amroutine);
 }

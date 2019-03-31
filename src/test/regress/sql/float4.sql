@@ -87,6 +87,9 @@ UPDATE FLOAT4_TBL
 
 SELECT '' AS five, * FROM FLOAT4_TBL;
 
+SELECT '' AS five, f.f1, f.f1 <-> '1004.3' AS dist FROM FLOAT4_TBL f;
+SELECT '' AS five, f.f1, f.f1 <-> '1004.3'::float8 AS dist FROM FLOAT4_TBL f;
+
 -- test edge-case coercions to integer
 SELECT '32767.4'::float4::int2;
 SELECT '32767.6'::float4::int2;

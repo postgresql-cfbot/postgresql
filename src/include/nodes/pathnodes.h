@@ -818,7 +818,6 @@ struct IndexOptInfo
 	bool		hypothetical;	/* true if index doesn't really exist */
 
 	/* Remaining fields are copied from the index AM's API struct: */
-	bool		amcanorderbyop; /* does AM support order by operator result? */
 	bool		amoptionalkey;	/* can query omit key for the first column? */
 	bool		amsearcharray;	/* can AM handle ScalarArrayOpExpr quals? */
 	bool		amsearchnulls;	/* can AM search for NULL/NOT NULL entries? */
@@ -827,6 +826,12 @@ struct IndexOptInfo
 	bool		amcanparallel;	/* does AM support parallel scan? */
 	/* Rather than include amapi.h here, we declare amcostestimate like this */
 	void		(*amcostestimate) ();	/* AM's cost estimator */
+	/* AM order-by match function */
+	bool		(*ammatchorderby) (struct IndexOptInfo *index,
+								   List *pathkeys,
+								   List *index_clause_columns,
+								   List **orderby_clauses_p,
+								   List **orderby_clause_columns_p);
 };
 
 /*
@@ -1137,7 +1142,7 @@ typedef struct Path
  * An empty list implies a full index scan.
  *
  * 'indexorderbys', if not NIL, is a list of ORDER BY expressions that have
- * been found to be usable as ordering operators for an amcanorderbyop index.
+ * been found to be usable as ordering operators for an ammatchorderby index.
  * The list must match the path's pathkeys, ie, one expression per pathkey
  * in the same order.  These are not RestrictInfos, just bare expressions,
  * since they generally won't yield booleans.  It's guaranteed that each

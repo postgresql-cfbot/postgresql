@@ -89,6 +89,11 @@ SELECT q1 + 42::int2 AS "8plus2", q1 - 42::int2 AS "8minus2", q1 * 42::int2 AS "
 -- int2 op int8
 SELECT 246::int2 + q1 AS "2plus8", 246::int2 - q1 AS "2minus8", 246::int2 * q1 AS "2mul8", 246::int2 / q1 AS "2div8" FROM INT8_TBL;
 
+-- distance
+SELECT '' AS five, q2, q2 <-> int2 '123' AS dist FROM INT8_TBL i;
+SELECT '' AS five, q2, q2 <-> int4 '123' AS dist FROM INT8_TBL i;
+SELECT '' AS five, q2, q2 <-> int8 '123' AS dist FROM INT8_TBL i;
+
 SELECT q2, abs(q2) FROM INT8_TBL;
 SELECT min(q1), min(q2) FROM INT8_TBL;
 SELECT max(q1), max(q2) FROM INT8_TBL;

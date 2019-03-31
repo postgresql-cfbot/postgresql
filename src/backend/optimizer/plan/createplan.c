@@ -4574,7 +4574,11 @@ fix_indexqual_clause(PlannerInfo *root, IndexOptInfo *index, int indexcol,
 	 */
 	clause = replace_nestloop_params(root, clause);
 
-	if (IsA(clause, OpExpr))
+	if (indexcol < 0)
+	{
+		clause = fix_indexqual_operand(clause, index, -indexcol - 1);
+	}
+	else if (IsA(clause, OpExpr))
 	{
 		OpExpr	   *op = (OpExpr *) clause;
 

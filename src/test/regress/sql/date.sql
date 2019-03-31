@@ -346,3 +346,8 @@ select make_date(2013, 13, 1);
 select make_date(2013, 11, -1);
 select make_time(10, 55, 100.1);
 select make_time(24, 0, 2.1);
+
+-- distance operators
+SELECT '' AS "Fifteen", f1 <-> date '2001-02-03' AS "Distance" FROM DATE_TBL;
+SELECT '' AS "Fifteen", f1 <-> timestamp '2001-02-03 01:23:45' AS "Distance" FROM DATE_TBL;
+SELECT '' AS "Fifteen", f1 <-> timestamptz '2001-02-03 01:23:45+03' AS "Distance" FROM DATE_TBL;

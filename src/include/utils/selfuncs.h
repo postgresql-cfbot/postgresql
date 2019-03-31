@@ -192,7 +192,7 @@ extern double estimate_hashagg_tablesize(Path *path,
 
 extern List *get_quals_from_indexclauses(List *indexclauses);
 extern Cost index_other_operands_eval_cost(PlannerInfo *root,
-							   List *indexquals);
+							   List *indexquals, List *indexcolnos);
 extern List *add_predicate_to_index_quals(IndexOptInfo *index,
 							 List *indexQuals);
 extern void genericcostestimate(PlannerInfo *root, IndexPath *path,

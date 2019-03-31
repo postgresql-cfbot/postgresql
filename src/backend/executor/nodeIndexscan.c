@@ -186,10 +186,8 @@ IndexNextWithReorder(IndexScanState *node)
 	 * Only forward scan is supported with reordering.  Note: we can get away
 	 * with just Asserting here because the system will not try to run the
 	 * plan backwards if ExecSupportsBackwardScan() says it won't work.
-	 * Currently, that is guaranteed because no index AMs support both
-	 * amcanorderbyop and amcanbackward; if any ever do,
-	 * ExecSupportsBackwardScan() will need to consider indexorderbys
-	 * explicitly.
+	 * Currently, ExecSupportsBackwardScan() simply returns false for index
+	 * plans with indexorderbys.
 	 */
 	Assert(!ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir));
 	Assert(ScanDirectionIsForward(estate->es_direction));
@@ -1130,7 +1128,7 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
  * 5. NullTest ("indexkey IS NULL/IS NOT NULL").  We just fill in the
  * ScanKey properly.
  *
- * This code is also used to prepare ORDER BY expressions for amcanorderbyop
+ * This code is also used to prepare ORDER BY expressions for ammatchorderby
  * indexes.  The behavior is exactly the same, except that we have to look up
  * the operator differently.  Note that only cases 1 and 2 are currently
  * possible for ORDER BY.
@@ -1617,6 +1615,27 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 								   InvalidStrategy, /* no strategy */
 								   InvalidOid,	/* no strategy subtype */
 								   InvalidOid,	/* no collation */
+								   InvalidOid,	/* no reg proc for this */
+								   (Datum) 0);	/* constant */
+		}
+		else if (IsA(clause, Var))
+		{
+			/* indexkey IS NULL or indexkey IS NOT NULL */
+			Var		   *var = (Var *) clause;
+
+			Assert(isorderby);
+
+			if (var->varno != INDEX_VAR)
+				elog(ERROR, "Var indexqual has wrong key");
+
+			varattno = var->varattno;
+
+			ScanKeyEntryInitialize(this_scan_key,
+								   SK_ORDER_BY | SK_SEARCHNOTNULL,
+								   varattno,	/* attribute number to scan */
+								   InvalidStrategy, /* no strategy */
+								   InvalidOid,	/* no strategy subtype */
+								   var->varcollid,	/* collation FIXME */
 								   InvalidOid,	/* no reg proc for this */
 								   (Datum) 0);	/* constant */
 		}

@@ -78,6 +78,13 @@ extern bool indexcol_is_bool_constant_for_query(IndexOptInfo *index,
 extern bool match_index_to_operand(Node *operand, int indexcol,
 					   IndexOptInfo *index);
 extern void check_index_predicates(PlannerInfo *root, RelOptInfo *rel);
+extern Expr *match_pathkey_to_indexcol(IndexOptInfo *index, PathKey *pathkey,
+									 int *indexcol_p);
+extern Expr *match_orderbyop_pathkey(IndexOptInfo *index, PathKey *pathkey,
+						int *indexcol_p);
+extern bool match_orderbyop_pathkeys(IndexOptInfo *index, List *pathkeys,
+						 List *index_clauses, List **orderby_clauses_p,
+						 List **orderby_clause_columns_p);
 
 /*
  * tidpath.h

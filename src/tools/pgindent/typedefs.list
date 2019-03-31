@@ -181,6 +181,8 @@ BTScanOpaqueData
 BTScanPos
 BTScanPosData
 BTScanPosItem
+BTScanState
+BTScanStateData
 BTShared
 BTSortArrayContext
 BTSpool

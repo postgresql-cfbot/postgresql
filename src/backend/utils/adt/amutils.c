@@ -298,7 +298,7 @@ indexam_property(FunctionCallInfo fcinfo,
 				 * a nonkey column, and null otherwise (meaning we don't
 				 * know).
 				 */
-				if (!iskey || !routine->amcanorderbyop)
+				if (!iskey || !routine->ammatchorderby)
 				{
 					res = false;
 					isnull = false;

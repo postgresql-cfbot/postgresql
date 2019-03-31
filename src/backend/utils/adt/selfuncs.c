@@ -5392,10 +5392,12 @@ get_quals_from_indexclauses(List *indexclauses)
  * index key expression is on the left side of binary clauses.
  */
 Cost
-index_other_operands_eval_cost(PlannerInfo *root, List *indexquals)
+index_other_operands_eval_cost(PlannerInfo *root, List *indexquals,
+							   List *indexcolnos)
 {
 	Cost		qual_arg_cost = 0;
 	ListCell   *lc;
+	ListCell   *indexcolno_lc = indexcolnos ? list_head(indexcolnos) : NULL;
 
 	foreach(lc, indexquals)
 	{
@@ -5409,6 +5411,19 @@ index_other_operands_eval_cost(PlannerInfo *root, List *indexquals)
 		 */
 		if (IsA(clause, RestrictInfo))
 			clause = ((RestrictInfo *) clause)->clause;
+
+		if (indexcolnos)
+		{
+			int			indexcol = lfirst_int(indexcolno_lc);
+
+			if (indexcol < 0)
+			{
+				/* FIXME */
+				continue;
+			}
+
+			indexcolno_lc = lnext(indexcolno_lc);
+		}
 
 		if (IsA(clause, OpExpr))
 		{
@@ -5454,6 +5469,7 @@ genericcostestimate(PlannerInfo *root,
 	IndexOptInfo *index = path->indexinfo;
 	List	   *indexQuals = get_quals_from_indexclauses(path->indexclauses);
 	List	   *indexOrderBys = path->indexorderbys;
+	List	   *indexOrderByCols = path->indexorderbycols;
 	Cost		indexStartupCost;
 	Cost		indexTotalCost;
 	Selectivity indexSelectivity;
@@ -5617,8 +5633,8 @@ genericcostestimate(PlannerInfo *root,
 	 * Detecting that that might be needed seems more expensive than it's
 	 * worth, though, considering all the other inaccuracies here ...
 	 */
-	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals) +
-		index_other_operands_eval_cost(root, indexOrderBys);
+	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals, NIL) +
+		index_other_operands_eval_cost(root, indexOrderBys, indexOrderByCols);
 	qual_op_cost = cpu_operator_cost *
 		(list_length(indexQuals) + list_length(indexOrderBys));
 
@@ -6737,7 +6753,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * Add on index qual eval costs, much as in genericcostestimate.  But we
 	 * can disregard indexorderbys, since GIN doesn't support those.
 	 */
-	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals);
+	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals, NIL);
 	qual_op_cost = cpu_operator_cost * list_length(indexQuals);
 
 	*indexStartupCost += qual_arg_cost;
@@ -6917,7 +6933,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * the index costs.  We can disregard indexorderbys, since BRIN doesn't
 	 * support those.
 	 */
-	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals);
+	qual_arg_cost = index_other_operands_eval_cost(root, indexQuals, NIL);
 
 	/*
 	 * Compute the startup cost as the cost to read the whole revmap

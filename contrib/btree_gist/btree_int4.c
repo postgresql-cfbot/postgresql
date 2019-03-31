@@ -95,20 +95,7 @@ PG_FUNCTION_INFO_V1(int4_dist);
 Datum
 int4_dist(PG_FUNCTION_ARGS)
 {
-	int32		a = PG_GETARG_INT32(0);
-	int32		b = PG_GETARG_INT32(1);
-	int32		r;
-	int32		ra;
-
-	if (pg_sub_s32_overflow(a, b, &r) ||
-		r == PG_INT32_MIN)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("integer out of range")));
-
-	ra = Abs(r);
-
-	PG_RETURN_INT32(ra);
+	return int4dist(fcinfo);
 }
 
 

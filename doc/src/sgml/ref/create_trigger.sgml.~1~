@@ -49,8 +49,8 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
 
   <para>
    <command>CREATE TRIGGER</command> creates a new trigger.  The
-   trigger will be associated with the specified table, view, materialized view,
-   or foreign table and will execute the specified
+   trigger will be associated with the specified table, view, or foreign table
+   and will execute the specified
    function <replaceable class="parameter">function_name</replaceable> when
    certain operations are performed on that table.
   </para>
@@ -93,12 +93,6 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
   </para>
 
   <para>
-   <literal>AFTER</literal> triggers can be specified on materialized views and
-   are fired after every <command>REFRESH MATERIALIZED VIEW CONCURRENTLY</command>
-   on the materialized view.
-  </para>
-
-  <para>
    In addition, triggers may be defined to fire for
    <command>TRUNCATE</command>, though only
    <literal>FOR EACH STATEMENT</literal>.
@@ -106,7 +100,7 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
 
   <para>
    The following table summarizes which types of triggers may be used on
-   tables, views, materialized views, and foreign tables:
+   tables, views, and foreign tables:
   </para>
 
   <informaltable id="supported-trigger-types">
@@ -134,8 +128,8 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
      <row>
       <entry align="center" morerows="1"><literal>AFTER</literal></entry>
       <entry align="center"><command>INSERT</command>/<command>UPDATE</command>/<command>DELETE</command></entry>
-      <entry align="center">Tables, materialized views, and foreign tables</entry>
-      <entry align="center">Tables, views, materialized views, and foreign tables</entry>
+      <entry align="center">Tables and foreign tables</entry>
+      <entry align="center">Tables, views, and foreign tables</entry>
      </row>
      <row>
       <entry align="center"><command>TRUNCATE</command></entry>
@@ -284,8 +278,8 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
     <term><replaceable class="parameter">table_name</replaceable></term>
     <listitem>
      <para>
-      The name (optionally schema-qualified) of the table, view, materialized view,
-      or foreign table the trigger is for.
+      The name (optionally schema-qualified) of the table, view, or foreign
+      table the trigger is for.
      </para>
     </listitem>
    </varlistentry>
@@ -529,17 +523,6 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
   </para>
 
   <para>
-   Triggers on materialized views are fired only when
-   <command>REFRESH MATERIALIZED VIEW</command> is used with the
-   <literal>CONCURRENTLY</literal> option. Such refresh computes
-   a diff between old and new data and executes <command>INSERT</command>,
-   <command>UPDATE</command>, and <command>DELETE</command> queries to
-   update the materialized view to new data.
-   Refresh without this option refreshes all data at once and does not
-   fire any triggers.
-  </para>
-
-  <para>
    Creating a row-level trigger on a partitioned table will cause identical
    triggers to be created in all its existing partitions; and any partitions
    created or attached later will contain an identical trigger, too.
@@ -747,11 +730,6 @@ CREATE TRIGGER paired_items_update
    <command>CREATE CONSTRAINT TRIGGER</command> is a
    <productname>PostgreSQL</productname> extension of the <acronym>SQL</acronym>
    standard.
-  </para>
-
-  <para>
-   The ability to define triggers for materialized views is a PostgreSQL
-   extension of the SQL standard.
   </para>
 
  </refsect1>

@@ -303,6 +303,13 @@ main(int argc, char **argv)
 		exit_nicely(1);
 	}
 
+	/* Complain if neither -f nor -d was specified (this restriction is not valid for TOC) */
+	if (!opts->dbname && !opts->filename && !opts->tocSummary)
+	{
+		fprintf(stderr, _("%s: option -d/--dbname or -f/--file should be specified\n"), progname);
+		exit_nicely(1);
+	}
+
 	/* Should get at most one of -d and -f, else user is confused */
 	if (opts->dbname)
 	{

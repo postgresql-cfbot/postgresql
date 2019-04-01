@@ -50,7 +50,7 @@ command_fails_like(
 );
 
 command_fails_like(
-	[ 'pg_restore', '-s', '-a' ],
+	[ 'pg_restore', '-s', '-a', '-f -' ],
 	qr/\Qpg_restore: options -s\/--schema-only and -a\/--data-only cannot be used together\E/,
 	'pg_restore: options -s/--schema-only and -a/--data-only cannot be used together'
 );
@@ -66,7 +66,7 @@ command_fails_like(
 	'pg_dump: options -c/--clean and -a/--data-only cannot be used together');
 
 command_fails_like(
-	[ 'pg_restore', '-c', '-a' ],
+	[ 'pg_restore', '-c', '-a', '-f -' ],
 	qr/\Qpg_restore: options -c\/--clean and -a\/--data-only cannot be used together\E/,
 	'pg_restore: options -c/--clean and -a/--data-only cannot be used together'
 );
@@ -92,12 +92,12 @@ command_fails_like(
 	'pg_dump: invalid output format');
 
 command_fails_like(
-	[ 'pg_restore', '-j', '-1' ],
+	[ 'pg_restore', '-j', '-1', '-f -' ],
 	qr/\Qpg_restore: invalid number of parallel jobs\E/,
 	'pg_restore: invalid number of parallel jobs');
 
 command_fails_like(
-	[ 'pg_restore', '--single-transaction', '-j3' ],
+	[ 'pg_restore', '--single-transaction', '-j3', '-f -' ],
 	qr/\Qpg_restore: cannot specify both --single-transaction and multiple jobs\E/,
 	'pg_restore: cannot specify both --single-transaction and multiple jobs');
 
@@ -107,12 +107,12 @@ command_fails_like(
 	'pg_dump: compression level must be in range 0..9');
 
 command_fails_like(
-	[ 'pg_restore', '--if-exists' ],
+	[ 'pg_restore', '--if-exists', '-f -' ],
 	qr/\Qpg_restore: option --if-exists requires option -c\/--clean\E/,
 	'pg_restore: option --if-exists requires option -c/--clean');
 
 command_fails_like(
-	[ 'pg_restore', '-F', 'garbage' ],
+	[ 'pg_restore', '-f -', '-F', 'garbage' ],
 	qr/\Qpg_restore: unrecognized archive format "garbage";\E/,
 	'pg_dump: unrecognized archive format');
 
@@ -146,7 +146,7 @@ command_fails_like(
 	'pg_dumpall: option --if-exists requires option -c/--clean');
 
 command_fails_like(
-	[ 'pg_restore', '-C', '-1' ],
+	[ 'pg_restore', '-C', '-1', '-f -' ],
 	qr/\Qpg_restore: options -C\/--create and -1\/--single-transaction cannot be used together\E/,
 	'pg_restore: options -C\/--create and -1\/--single-transaction cannot be used together'
 );

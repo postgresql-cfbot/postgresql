@@ -367,6 +367,8 @@ usage(void)
 	printf(_("  -N, --no-sync          do not wait for changes to be written safely to disk\n"));
 	printf(_("  -P, --progress         show progress information\n"));
 	printf(_("  -S, --slot=SLOTNAME    replication slot to use\n"));
+	printf(_("  -g, --group-mode=inherit|group|none\n"
+			 "							specify required group access mode for basebackup directory\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("      --no-slot          prevent creation of temporary replication slot\n"));
@@ -706,6 +708,12 @@ verify_dir_is_empty_or_create(char *dirname, bool *created, bool *found)
 			/*
 			 * Exists, empty
 			 */
+			if (chmod(dirname, pg_dir_create_mode) != 0)
+			{
+				fprintf(stderr, _("%s: could not change permissions of directory \"%s\": %s\n"),
+						progname, dirname, strerror(errno));
+				exit(1);
+			}
 			if (found)
 				*found = true;
 			return;
@@ -1498,7 +1506,7 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 
 		if (file == NULL)
 		{
-			int			filemode;
+			mode_t		oumask;
 
 			/*
 			 * No current file, so this must be the header for a new file
@@ -1512,9 +1520,6 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 			totaldone += 512;
 
 			current_len_left = read_tar_number(&copybuf[124], 12);
-
-			/* Set permissions on the file */
-			filemode = read_tar_number(&copybuf[100], 8);
 
 			/*
 			 * All files are padded up to 512 bytes
@@ -1560,12 +1565,6 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 							exit(1);
 						}
 					}
-#ifndef WIN32
-					if (chmod(filename, (mode_t) filemode))
-						fprintf(stderr,
-								_("%s: could not set permissions on directory \"%s\": %s\n"),
-								progname, filename, strerror(errno));
-#endif
 				}
 				else if (copybuf[156] == '2')
 				{
@@ -1606,19 +1605,15 @@ ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res, int rownum)
 			/*
 			 * regular file
 			 */
+			oumask = umask(pg_mode_mask);
 			file = fopen(filename, "wb");
+			umask(oumask);
 			if (!file)
 			{
 				fprintf(stderr, _("%s: could not create file \"%s\": %s\n"),
 						progname, filename, strerror(errno));
 				exit(1);
 			}
-
-#ifndef WIN32
-			if (chmod(filename, (mode_t) filemode))
-				fprintf(stderr, _("%s: could not set permissions on file \"%s\": %s\n"),
-						progname, filename, strerror(errno));
-#endif
 
 			if (current_len_left == 0)
 			{
@@ -1861,6 +1856,7 @@ BaseBackup(void)
 	char	   *basebkp;
 	char		escaped_label[MAXPGPATH];
 	char	   *maxrate_clause = NULL;
+	char	   *group_access_mode_clause = NULL;
 	int			i;
 	char		xlogstart[64];
 	char		xlogend[64];
@@ -1936,8 +1932,14 @@ BaseBackup(void)
 			fprintf(stderr, "\n");
 	}
 
+	/* Request server to send the file permissions according to the request */
+	if (group_access_mode == GROUP_ACCESS_NONE)
+		group_access_mode_clause = psprintf("GROUP_MODE '%s'", "none");
+	else if (group_access_mode == GROUP_ACCESS_PROVIDE)
+		group_access_mode_clause = psprintf("GROUP_MODE '%s'", "group");
+
 	basebkp =
-		psprintf("BASE_BACKUP LABEL '%s' %s %s %s %s %s %s %s",
+		psprintf("BASE_BACKUP LABEL '%s' %s %s %s %s %s %s %s %s",
 				 escaped_label,
 				 showprogress ? "PROGRESS" : "",
 				 includewal == FETCH_WAL ? "WAL" : "",
@@ -1945,7 +1947,8 @@ BaseBackup(void)
 				 includewal == NO_WAL ? "" : "NOWAIT",
 				 maxrate_clause ? maxrate_clause : "",
 				 format == 't' ? "TABLESPACE_MAP" : "",
-				 verify_checksums ? "" : "NOVERIFY_CHECKSUMS");
+				 verify_checksums ? "" : "NOVERIFY_CHECKSUMS",
+				 group_access_mode_clause ? group_access_mode_clause : "");
 
 	if (PQsendQuery(conn, basebkp) == 0)
 	{
@@ -2278,6 +2281,7 @@ main(int argc, char **argv)
 		{"status-interval", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"progress", no_argument, NULL, 'P'},
+		{"group-mode", required_argument, NULL, 'g'},
 		{"waldir", required_argument, NULL, 1},
 		{"no-slot", no_argument, NULL, 2},
 		{"no-verify-checksums", no_argument, NULL, 3},
@@ -2307,7 +2311,7 @@ main(int argc, char **argv)
 
 	atexit(cleanup_directories_atexit);
 
-	while ((c = getopt_long(argc, argv, "CD:F:r:RS:T:X:l:nNzZ:d:c:h:p:U:s:wWkvP",
+	while ((c = getopt_long(argc, argv, "CD:F:r:RS:T:X:l:nNzZ:d:c:g:h:p:U:s:wWkvP",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2448,6 +2452,30 @@ main(int argc, char **argv)
 				break;
 			case 'P':
 				showprogress = true;
+				break;
+			case 'g':
+				if (strcmp(optarg, "i") == 0 ||
+					strcmp(optarg, "inherit") == 0)
+				{
+					group_access_mode = GROUP_ACCESS_INHERIT;
+				}
+				else if (strcmp(optarg, "g") == 0 ||
+						 strcmp(optarg, "group") == 0)
+				{
+					group_access_mode = GROUP_ACCESS_PROVIDE;
+				}
+				else if (strcmp(optarg, "n") == 0 ||
+						 strcmp(optarg, "none") == 0)
+				{
+					group_access_mode = GROUP_ACCESS_NONE;
+				}
+				else
+				{
+					fprintf(stderr,
+							_("%s: invalid group-mode option \"%s\", must be \"inherit\", \"group\", or \"none\"\n"),
+							progname, optarg);
+					exit(1);
+				}
 				break;
 			case 3:
 				verify_checksums = false;

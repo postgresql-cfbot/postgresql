@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 106;
+use Test::More tests => 118;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -401,6 +401,86 @@ $node->command_ok(
 	],
 	'pg_basebackup -X stream runs with --no-slot');
 rmtree("$tempdir/backupnoslot");
+
+# The following tests test backup unix file permissions. Windows doesn't support
+# unix file permissions, so skip on Windows.
+SKIP:
+{
+	skip "unix style file permissions are not supported on Windows", 18 if ($windows_os);
+
+	$node->stop;
+
+	# Set umask so test directories and files are created with default permissions
+	umask(0077);
+
+	# Enable no group permissions on PGDATA
+	chmod_recursive("$pgdata", 0700, 0600);
+
+	$node->start;
+	
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", '-g', 'group' ],
+		'pg_basebackup -g group runs');
+
+	# Group access should be enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0750, 0640),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+	
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", '-g', 'inherit' ],
+		'pg_basebackup -g inherit runs');
+
+	# Group access should be not enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0700, 0600),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", '-g', 'group', '-Ft' ],
+		'pg_basebackup -g group in tar mode runs');
+
+	system_or_bail 'tar', '-xvf', "$tempdir/backupP/base.tar";
+
+	# Group access should be enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0750, 0640),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+
+	
+	$node->stop;
+
+	# Set umask so test directories and files are created with group permissions
+	umask(0027);
+
+	# Enable no group permissions on PGDATA
+	chmod_recursive("$pgdata", 0750, 0640);
+
+	$node->start;
+	
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", ],
+		'pg_basebackup default runs');
+
+	# Group access should be enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0750, 0640),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+	
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", '-g', 'none'],
+	'pg_basebackup -g none runs');
+
+	# Group access should be not enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0700, 0600),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+
+	$node->command_ok([ 'pg_basebackup', '-D', "$tempdir/backupP", '-g', 'none', '-Ft' ],
+		'pg_basebackup -g none in tar mode runs');
+
+	system_or_bail 'tar', '-xvf', "$tempdir/backupP/base.tar";
+
+	# Group access should be not enabled on all backup files
+	ok(check_mode_recursive("$tempdir/backupP", 0700, 0600),
+		"check backup dir permissions");
+	rmtree("$tempdir/backupP");
+}
 
 $node->command_fails(
 	[

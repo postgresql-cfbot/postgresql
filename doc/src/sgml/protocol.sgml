@@ -2397,7 +2397,7 @@ The commands accepted in replication mode are:
   </varlistentry>
 
   <varlistentry>
-    <term><literal>BASE_BACKUP</literal> [ <literal>LABEL</literal> <replaceable>'label'</replaceable> ] [ <literal>PROGRESS</literal> ] [ <literal>FAST</literal> ] [ <literal>WAL</literal> ] [ <literal>NOWAIT</literal> ] [ <literal>MAX_RATE</literal> <replaceable>rate</replaceable> ] [ <literal>TABLESPACE_MAP</literal> ] [ <literal>NOVERIFY_CHECKSUMS</literal> ]
+    <term><literal>BASE_BACKUP</literal> [ <literal>LABEL</literal> <replaceable>'label'</replaceable> ] [ <literal>PROGRESS</literal> ] [ <literal>FAST</literal> ] [ <literal>WAL</literal> ] [ <literal>NOWAIT</literal> ] [ <literal>MAX_RATE</literal> <replaceable>rate</replaceable> ] [ <literal>TABLESPACE_MAP</literal> ] [ <literal>NOVERIFY_CHECKSUMS</literal> ] [ <literal>GROUP_MODE</literal> <replaceable>'mode'</replaceable> ]
      <indexterm><primary>BASE_BACKUP</primary></indexterm>
     </term>
     <listitem>
@@ -2504,6 +2504,17 @@ The commands accepted in replication mode are:
           By default, checksums are verified during a base backup if they are
           enabled. Specifying <literal>NOVERIFY_CHECKSUMS</literal> disables
           this verification.
+         </para>
+        </listitem>
+       </varlistentry>
+       
+       <varlistentry>
+        <term><literal>GROUP_MODE</literal> <replaceable>'mode'</replaceable></term>
+        <listitem>
+         <para>
+          By default, the group access permissions will be same as source instance. If <literal>none</literal> is specified,
+          the backup files doesn't contains group access permissions. If <literal>group</literal> is specified, the backup
+          files should contains group access permissions.
          </para>
         </listitem>
        </varlistentry>

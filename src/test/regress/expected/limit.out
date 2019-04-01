@@ -108,6 +108,60 @@ SELECT ''::text AS five, unique1, unique2, stringu1
       |     904 |     793 | UIAAAA
 (5 rows)
 
+--
+-- PERCENT
+-- Check the PERCENT option of limit clause
+--
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 50
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY;
+ two | unique1 | unique2 | stringu1 
+-----+---------+---------+----------
+     |      51 |      76 | ZBAAAA
+     |      52 |     985 | ACAAAA
+     |      53 |     196 | BCAAAA
+     |      54 |     356 | CCAAAA
+     |      55 |     627 | DCAAAA
+     |      56 |      54 | ECAAAA
+     |      57 |     942 | FCAAAA
+     |      58 |     114 | GCAAAA
+     |      59 |     593 | HCAAAA
+     |      60 |     483 | ICAAAA
+(10 rows)
+
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 60 AND unique1 < 63
+		ORDER BY unique1 FETCH FIRST 50 PERCENT ROWS ONLY;
+ two | unique1 | unique2 | stringu1 
+-----+---------+---------+----------
+     |      61 |     560 | JCAAAA
+(1 row)
+
+SELECT ''::text AS three, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 100
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY OFFSET 20;
+ three | unique1 | unique2 | stringu1 
+-------+---------+---------+----------
+       |     121 |     700 | REAAAA
+       |     122 |     519 | SEAAAA
+       |     123 |     777 | TEAAAA
+       |     124 |     503 | UEAAAA
+       |     125 |     849 | VEAAAA
+       |     126 |     330 | WEAAAA
+       |     127 |     511 | XEAAAA
+       |     128 |     721 | YEAAAA
+       |     129 |     696 | ZEAAAA
+(9 rows)
+
+SELECT ''::text AS eleven, unique1, unique2, stringu1
+		FROM onek WHERE unique1 < 50
+		ORDER BY unique1 DESC FETCH FIRST 10  PERCENT ROWS ONLY OFFSET 39;
+ eleven | unique1 | unique2 | stringu1 
+--------+---------+---------+----------
+        |      10 |     520 | KAAAAA
+        |       9 |      49 | JAAAAA
+(2 rows)
+
 -- Test null limit and offset.  The planner would discard a simple null
 -- constant, so to ensure executor is exercised, do this:
 select * from int8_tbl limit (case when random() < 0.5 then null::bigint end);
@@ -285,6 +339,46 @@ fetch all in c4;
  q1 | q2 
 ----+----
 (0 rows)
+
+declare c5 cursor for select * from int8_tbl fetch first 50 percent rows only;
+fetch all in c5;
+        q1        |        q2        
+------------------+------------------
+              123 |              456
+              123 | 4567890123456789
+ 4567890123456789 |              123
+(3 rows)
+
+fetch 1 in c5;
+ q1 | q2 
+----+----
+(0 rows)
+
+fetch backward 1 in c5;
+        q1        | q2  
+------------------+-----
+ 4567890123456789 | 123
+(1 row)
+
+fetch backward all in c5;
+ q1  |        q2        
+-----+------------------
+ 123 | 4567890123456789
+ 123 |              456
+(2 rows)
+
+fetch backward 1 in c5;
+ q1 | q2 
+----+----
+(0 rows)
+
+fetch all in c5;
+        q1        |        q2        
+------------------+------------------
+              123 |              456
+              123 | 4567890123456789
+ 4567890123456789 |              123
+(3 rows)
 
 rollback;
 -- Stress test for variable LIMIT in conjunction with bounded-heap sorting
@@ -502,4 +596,20 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
  45010 | 45010
  45020 | 45020
 (3 rows)
+
+select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
+  from tenk1 group by thousand order by thousand FETCH FIRST 1 PERCENT ROWS ONLY;
+  s1   |  s2   
+-------+-------
+ 45000 | 45000
+ 45010 | 45010
+ 45020 | 45020
+ 45030 | 45030
+ 45040 | 45040
+ 45050 | 45050
+ 45060 | 45060
+ 45070 | 45070
+ 45080 | 45080
+ 45090 | 45090
+(10 rows)
 

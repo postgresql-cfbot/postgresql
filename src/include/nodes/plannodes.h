@@ -953,6 +953,7 @@ typedef struct Limit
 	Plan		plan;
 	Node	   *limitOffset;	/* OFFSET parameter, or NULL if none */
 	Node	   *limitCount;		/* COUNT parameter, or NULL if none */
+	LimitOption	   limitOption;		/* LIMIT in percentage or  exact number */
 } Limit;
 
 

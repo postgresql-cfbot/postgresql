@@ -2201,7 +2201,8 @@ create_minmaxagg_plan(PlannerInfo *root, MinMaxAggPath *best_path)
 
 		plan = (Plan *) make_limit(plan,
 								   subparse->limitOffset,
-								   subparse->limitCount);
+								   subparse->limitCount,
+								   subparse->limitOption);
 
 		/* Must apply correct cost/width data to Limit node */
 		plan->startup_cost = mminfo->path->startup_cost;
@@ -2514,7 +2515,8 @@ create_limit_plan(PlannerInfo *root, LimitPath *best_path, int flags)
 
 	plan = make_limit(subplan,
 					  best_path->limitOffset,
-					  best_path->limitCount);
+					  best_path->limitCount,
+					  best_path->limitOption);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -6399,7 +6401,7 @@ make_lockrows(Plan *lefttree, List *rowMarks, int epqParam)
  *	  Build a Limit plan node
  */
 Limit *
-make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount)
+make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount, LimitOption limitOption)
 {
 	Limit	   *node = makeNode(Limit);
 	Plan	   *plan = &node->plan;
@@ -6411,6 +6413,7 @@ make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount)
 
 	node->limitOffset = limitOffset;
 	node->limitCount = limitCount;
+	node->limitOption = limitOption;
 
 	return node;
 }

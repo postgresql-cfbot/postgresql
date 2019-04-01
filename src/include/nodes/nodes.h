@@ -821,4 +821,16 @@ typedef enum OnConflictAction
 	ONCONFLICT_UPDATE			/* ON CONFLICT ... DO UPDATE */
 } OnConflictAction;
 
+/*
+ * LimitOption -
+ *	  LIMIT option of query
+ *
+ * This is needed in both parsenodes.h and plannodes.h, so put it here...
+ */
+typedef enum LimitOption
+{
+	EXACT_NUMBER,			/* LIMIT in exact number of rows */
+	PERCENTAGE			/* LIMIT in percentage */
+} LimitOption;
+
 #endif							/* NODES_H */

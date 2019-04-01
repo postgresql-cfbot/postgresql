@@ -264,6 +264,7 @@ extern ModifyTablePath *create_modifytable_path(PlannerInfo *root,
 extern LimitPath *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 				  Path *subpath,
 				  Node *limitOffset, Node *limitCount,
+				  LimitOption limitOption,
 				  int64 offset_est, int64 count_est);
 
 extern Path *reparameterize_path(PlannerInfo *root, Path *path,

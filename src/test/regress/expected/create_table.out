@@ -79,7 +79,7 @@ CREATE TABLE student (
 	gpa 		float8
 ) INHERITS (person);
 CREATE TABLE stud_emp (
-	percent 	int4
+	"percent" 	int4
 ) INHERITS (emp, student);
 NOTICE:  merging multiple inherited definitions of column "name"
 NOTICE:  merging multiple inherited definitions of column "age"

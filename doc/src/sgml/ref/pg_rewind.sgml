@@ -48,14 +48,24 @@ PostgreSQL documentation
   </para>
 
   <para>
-   The result is equivalent to replacing the target data directory with the
-   source one. Only changed blocks from relation files are copied;
-   all other files are copied in full, including configuration files. The
-   advantage of <application>pg_rewind</application> over taking a new base backup, or
-   tools like <application>rsync</application>, is that <application>pg_rewind</application> does
-   not require reading through unchanged blocks in the cluster. This makes
+   The result is equivalent to replacing the data-related files in the  target
+   data directory with the source one. Only changed blocks from relation files
+   are copied; all other files relating to control or WAL information are copied
+   in full. The advantage of <application>pg_rewind</application> over taking a new base
+   backup, or tools like <application>rsync</application>, is that <application>pg_rewind</application>
+   does not require reading through unchanged blocks in the cluster. This makes
    it a lot faster when the database is large and only a small
    fraction of blocks differ between the clusters.
+  </para>
+
+  <para>
+    A second advantage is predictability.  <application>pg_rewind</application> is aware of
+    what directories are relevant to restoring replication and which ones are not.
+    The result is that you get something of a guaranteed state at the end.  Log
+    files on the source are unlikely to clobber those on the client.  The
+    <filename>postgresql.conf.auto</filename> is unlikely to be copied over.  Replication
+    slot information is removed (and must be added again), and so forth.  Your
+    system is as it had been before, but the data is synchronized from the master.
   </para>
 
   <para>
@@ -244,7 +254,7 @@ PostgreSQL documentation
 
    <para>
     The basic idea is to copy all file system-level changes from the source
-    cluster to the target cluster:
+    cluster to the target cluster if they implicate the data stored:
    </para>
 
    <procedure>

@@ -21,8 +21,30 @@
 #include "logging.h"
 #include "pg_rewind.h"
 
-static void recurse_dir(const char *datadir, const char *path,
+void recurse_dir(const char *datadir, const char *path,
 			process_file_callback_t callback);
+
+/* List of directories to synchronize:
+ * base data dirs (and ablespaces)
+ * wal/transaction data
+ * and that is it.
+ *
+ * This array is null-terminated to make
+ * it easy to expand
+ */
+
+const char *rewind_dirs[] = {
+    "base",         // Default tablespace
+    "global",       // global tablespace
+    "pg_commit_ts", // In case we need to do PITR before up to sync
+    "pg_logical",   // WAL related and no good reason to exclude
+    "pg_multixact", // WAL related and may need for vacuum-related reasons
+    "pg_tblspc",    // Pther tablespaces
+    "pg_twophase",  // mostly to *clear*
+    "pg_wal",       // WAL
+    "pg_xact",      // Commits of transactions
+    NULL
+};
 
 static void execute_pagemap(datapagemap_t *pagemap, const char *path);
 
@@ -31,18 +53,21 @@ static void execute_pagemap(datapagemap_t *pagemap, const char *path);
  * for each file.
  */
 void
-traverse_datadir(const char *datadir, process_file_callback_t callback)
+traverse_rewinddirs(const char *datadir, process_file_callback_t callback)
 {
-	recurse_dir(datadir, NULL, callback);
+	int i;
+	for(i = 0; rewind_dirs[i] != NULL; i++){
+		recurse_dir(datadir, rewind_dirs[i], callback);
+	}
 }
 
 /*
- * recursive part of traverse_datadir
+ * recursive part of traverse_rewinddirs
  *
  * parentpath is the current subdirectory's path relative to datadir,
  * or NULL at the top level.
  */
-static void
+void
 recurse_dir(const char *datadir, const char *parentpath,
 			process_file_callback_t callback)
 {

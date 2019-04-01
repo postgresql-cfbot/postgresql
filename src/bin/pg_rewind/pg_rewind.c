@@ -57,6 +57,7 @@ bool		debug = false;
 bool		showprogress = false;
 bool		dry_run = false;
 bool		do_sync = true;
+bool		data_only = false;
 
 /* Target history */
 TimeLineHistoryEntry *targetHistory;
@@ -72,6 +73,7 @@ usage(const char *progname)
 	printf(_("      --source-pgdata=DIRECTORY  source data directory to synchronize with\n"));
 	printf(_("      --source-server=CONNSTR    source server to synchronize with\n"));
 	printf(_("  -n, --dry-run                  stop before modifying anything\n"));
+	printf(_("      --data-only                only rewind data files\n"));
 	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"));
 	printf(_("                                 safely to disk\n"));
 	printf(_("  -P, --progress                 write progress messages\n"));
@@ -95,6 +97,7 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
 		{"debug", no_argument, NULL, 3},
+		{"data-only", no_argument, NULL, 4},
 		{NULL, 0, NULL, 0}
 	};
 	int			option_index;
@@ -162,6 +165,9 @@ main(int argc, char **argv)
 				break;
 			case 2:				/* --source-server */
 				connstr_source = pg_strdup(optarg);
+				break;
+			case 4:
+				data_only = true;
 				break;
 		}
 	}
@@ -308,7 +314,10 @@ main(int argc, char **argv)
 	pg_log(PG_PROGRESS, "reading source file list\n");
 	fetchSourceFileList();
 	pg_log(PG_PROGRESS, "reading target file list\n");
-	traverse_datadir(datadir_target, &process_target_file);
+	if(data_only)
+		traverse_rewinddirs(datadir_target, &process_target_file);
+	else
+		recurse_dir(datadir_target, NULL, &process_target_file);
 
 	/*
 	 * Read the target WAL from last checkpoint before the point of fork, to

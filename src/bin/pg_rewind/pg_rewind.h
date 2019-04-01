@@ -25,6 +25,7 @@ extern bool debug;
 extern bool showprogress;
 extern bool dry_run;
 extern int	WalSegSz;
+extern bool data_only;
 
 /* Target history */
 extern TimeLineHistoryEntry *targetHistory;

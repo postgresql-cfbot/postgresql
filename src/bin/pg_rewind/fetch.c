@@ -27,8 +27,12 @@
 void
 fetchSourceFileList(void)
 {
-	if (datadir_source)
-		traverse_datadir(datadir_source, &process_source_file);
+	if (datadir_source){
+		if(data_only)
+			traverse_rewinddirs(datadir_source, &process_source_file);
+		else
+			recurse_dir(datadir_source, NULL, &process_source_file);
+	}
 	else
 		libpqProcessFileList();
 }

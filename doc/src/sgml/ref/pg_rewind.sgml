@@ -67,8 +67,10 @@ PostgreSQL documentation
    ancestor. In the typical failover scenario where the target cluster was
    shut down soon after the divergence, this is not a problem, but if the
    target cluster ran for a long time after the divergence, the old WAL
-   files might no longer be present. In that case, they can be manually
-   copied from the WAL archive to the <filename>pg_wal</filename> directory, or
+   files might no longer be present. In that case, they can be automatically
+   copied by <application>pg_rewind</application> from the WAL archive to the 
+   <filename>pg_wal</filename> directory if either <literal>-r</literal> or
+   <literal>-R</literal> option is specified, or
    fetched on startup by configuring <xref linkend="guc-primary-conninfo"/> or
    <xref linkend="guc-restore-command"/>.  The use of
    <application>pg_rewind</application> is not limited to failover, e.g.  a standby
@@ -196,6 +198,30 @@ PostgreSQL documentation
        <para>
         Enables progress reporting. Turning this on will deliver an approximate
         progress report while copying data from the source cluster.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-r</option></term>
+      <term><option>--use-postgresql-conf</option></term>
+      <listitem>
+       <para>
+        Use restore_command in the <filename>postgresql.conf</filename> to
+        retrieve missing in the target <filename>pg_wal</filename> directory
+        WAL files from the WAL archive.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-R <replaceable class="parameter">restore_command</replaceable></option></term>
+      <term><option>--restore-command=<replaceable class="parameter">restore_command</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the restore_command to use for retrieval of the missing
+        in the target <filename>pg_wal</filename> directory WAL files from
+        the WAL archive.
        </para>
       </listitem>
      </varlistentry>

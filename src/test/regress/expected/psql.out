@@ -4578,3 +4578,72 @@ last error message: division by zero
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 last error code: 22012
 \unset FETCH_COUNT
+-- check printing info about access methods
+\dA gin
+                                    Index access method properties
+ AM  | Ordering | Unique indexes | Multicol indexes | Exclusion constraints | Include non-key columns 
+-----+----------+----------------+------------------+-----------------------+-------------------------
+ gin | no       | no             | yes              | no                    | no
+(1 row)
+
+\dAo brin uuid_minmax_ops
+List operators of family related to access method
+  AM  |  Opfamily Name  |    Operator     
+------+-----------------+-----------------
+ brin | uuid_minmax_ops | < (uuid, uuid)
+ brin | uuid_minmax_ops | <= (uuid, uuid)
+ brin | uuid_minmax_ops | = (uuid, uuid)
+ brin | uuid_minmax_ops | >= (uuid, uuid)
+ brin | uuid_minmax_ops | > (uuid, uuid)
+(5 rows)
+
+\dAo * pg_catalog.jsonb_path_ops
+List operators of family related to access method
+ AM  | Opfamily Name  |     Operator      
+-----+----------------+-------------------
+ gin | jsonb_path_ops | @> (jsonb, jsonb)
+(1 row)
+
+\dAp brin uuid_minmax_ops
+                     List of operator family procedures
+  AM  | Operator family | Left arg type | Right arg type | Support function 
+------+-----------------+---------------+----------------+------------------
+ brin | uuid_minmax_ops | uuid          | uuid           |                1
+ brin | uuid_minmax_ops | uuid          | uuid           |                2
+ brin | uuid_minmax_ops | uuid          | uuid           |                3
+ brin | uuid_minmax_ops | uuid          | uuid           |                4
+(4 rows)
+
+\dAp * pg_catalog.uuid_ops
+                     List of operator family procedures
+  AM   | Operator family | Left arg type | Right arg type | Support function 
+-------+-----------------+---------------+----------------+------------------
+ btree | uuid_ops        | uuid          | uuid           |                1
+ btree | uuid_ops        | uuid          | uuid           |                2
+ hash  | uuid_ops        | uuid          | uuid           |                1
+ hash  | uuid_ops        | uuid          | uuid           |                2
+(4 rows)
+
+\dAc brin pg*.oid*
+             Index access method operator classes
+  AM  | Input type | Storage type | Operator class | Default? 
+------+------------+--------------+----------------+----------
+ brin | oid        |              | oid_minmax_ops | yes
+(1 row)
+
+-- check printing info about indexes
+\dip pg_am_name_index
+                                            Index properties
+   Schema   |       Name       | Access method | Clusterable | Index scan | Bitmap scan | Backward scan 
+------------+------------------+---------------+-------------+------------+-------------+---------------
+ pg_catalog | pg_am_name_index | btree         | yes         | yes        | yes         | yes
+(1 row)
+
+\dicp pg_am_name_index
+                                                Index pg_catalog.pg_am_name_index
+ Column name |  Expr  | Opclass  | ASC | Nulls first | Orderable | Distance orderable | Returnable | Search array | Search nulls 
+-------------+--------+----------+-----+-------------+-----------+--------------------+------------+--------------+--------------
+ amname      | amname | name_ops | yes | no          | yes       | no                 | yes        | yes          | yes
+Table: pg_am
+Access method: btree
+

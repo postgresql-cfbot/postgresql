@@ -224,7 +224,11 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\d[S+]                 list tables, views, and sequences\n"));
 	fprintf(output, _("  \\d[S+]  NAME           describe table, view, sequence, or index\n"));
 	fprintf(output, _("  \\da[S]  [PATTERN]      list aggregates\n"));
-	fprintf(output, _("  \\dA[+]  [PATTERN]      list access methods\n"));
+	fprintf(output, _("  \\dA[+]                 list access methods\n"));
+	fprintf(output, _("  \\dA     NAME           describe properties of access method\n"));
+	fprintf(output, _("  \\dAc[+] [AMPTRN [TYPEPTRN]] list operator classes of index access methods\n"));
+	fprintf(output, _("  \\dAo[+] [AMPTRN [OPFPTRN]] list operators of family related to access method\n"));
+	fprintf(output, _("  \\dAp[+] [AMPTRN [OPFPTRN]] list procedures of operator family related to access method\n"));
 	fprintf(output, _("  \\db[+]  [PATTERN]      list tablespaces\n"));
 	fprintf(output, _("  \\dc[S+] [PATTERN]      list conversions\n"));
 	fprintf(output, _("  \\dC[+]  [PATTERN]      list casts\n"));
@@ -243,6 +247,8 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dFt[+] [PATTERN]      list text search templates\n"));
 	fprintf(output, _("  \\dg[S+] [PATTERN]      list roles\n"));
 	fprintf(output, _("  \\di[S+] [PATTERN]      list indexes\n"));
+	fprintf(output, _("  \\dip[S] [PATTERN]      list indexes with properties\n"));
+	fprintf(output, _("  \\dicp[S][PATTERN]      show index column properties\n"));
 	fprintf(output, _("  \\dl                    list large objects, same as \\lo_list\n"));
 	fprintf(output, _("  \\dL[S+] [PATTERN]      list procedural languages\n"));
 	fprintf(output, _("  \\dm[S+] [PATTERN]      list materialized views\n"));

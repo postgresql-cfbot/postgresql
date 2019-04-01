@@ -719,7 +719,25 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					success = listTables("tvmsE", NULL, show_verbose, show_system);
 				break;
 			case 'A':
-				success = describeAccessMethods(pattern, show_verbose);
+				{
+					char	   *pattern2 = NULL;
+					if (pattern)
+						pattern2 = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, true);
+
+					if (strncmp(cmd, "dAo", 3) == 0)
+						success = listFamilyClassOperators(pattern, pattern2, show_verbose);
+					else if (strncmp(cmd, "dAp", 3) == 0)
+						success = listOperatorFamilyProcedures(pattern, pattern2, show_verbose);
+					else if (strncmp(cmd, "dAc", 3) == 0)
+						success = describeAccessMethodOperatorClasses(pattern, pattern2, show_verbose);
+					else if (pattern)
+						success = describeAccessMethodProperties(pattern);
+					else
+						success = listAccessMethods(show_verbose);
+
+					if (pattern2)
+						free(pattern2);
+				}
 				break;
 			case 'a':
 				success = describeAggregates(pattern, show_verbose, show_system);
@@ -789,6 +807,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'v':
 			case 'm':
 			case 'i':
+				if (strncmp(cmd, "dip", 3) == 0)
+				{
+					success = describeIndexProperties(pattern, show_system);
+					break;
+				}
+				else if (strncmp(cmd, "dicp", 4) == 0)
+				{
+					success = describeIndexColumnProperties(pattern, show_system);
+					break;
+				}
 			case 's':
 			case 'E':
 				success = listTables(&cmd[1], pattern, show_verbose, show_system);

@@ -675,7 +675,7 @@
    search and ordering purposes.)
   </para>
 
-  <table>
+  <table id="catalog-pg-amop-table">
    <title><structname>pg_amop</structname> Columns</title>
 
    <tgroup cols="4">
@@ -818,7 +818,7 @@
    is one row for each support function belonging to an operator family.
   </para>
 
-  <table>
+  <table id="catalog-pg-amproc-table">
    <title><structname>pg_amproc</structname> Columns</title>
 
    <tgroup cols="4">
@@ -4458,7 +4458,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    Operator classes are described at length in <xref linkend="xindex"/>.
   </para>
 
-  <table>
+  <table id="catalog-pg-opclass-table">
    <title><structname>pg_opclass</structname> Columns</title>
 
    <tgroup cols="4">
@@ -4720,7 +4720,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    Operator families are described at length in <xref linkend="xindex"/>.
   </para>
 
-  <table>
+  <table id="catalog-pg-opfamily-table">
    <title><structname>pg_opfamily</structname> Columns</title>
 
    <tgroup cols="4">

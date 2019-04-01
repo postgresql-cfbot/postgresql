@@ -1031,3 +1031,14 @@ select 1/(15-unique2) from tenk1 order by unique2 limit 19;
 \echo 'last error code:' :LAST_ERROR_SQLSTATE
 
 \unset FETCH_COUNT
+
+-- check printing info about access methods
+\dA gin
+\dAo brin uuid_minmax_ops
+\dAo * pg_catalog.jsonb_path_ops
+\dAp brin uuid_minmax_ops
+\dAp * pg_catalog.uuid_ops
+\dAc brin pg*.oid*
+-- check printing info about indexes
+\dip pg_am_name_index
+\dicp pg_am_name_index

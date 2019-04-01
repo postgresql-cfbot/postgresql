@@ -13,7 +13,7 @@
 extern bool describeAggregates(const char *pattern, bool verbose, bool showSystem);
 
 /* \dA */
-extern bool describeAccessMethods(const char *pattern, bool verbose);
+extern bool listAccessMethods(bool verbose);
 
 /* \db */
 extern bool describeTablespaces(const char *pattern, bool verbose);
@@ -110,5 +110,29 @@ bool		describePublications(const char *pattern);
 
 /* \dRs */
 bool		describeSubscriptions(const char *pattern, bool verbose);
+
+/* \dA foo*/
+extern bool describeAccessMethodProperties(const char *pattern);
+
+/* \dAp */
+extern bool listOperatorFamilyProcedures(const char *access_method_pattern,
+										 const char *family_pattern,
+										 bool verbose);
+
+/* \dAo */
+extern bool listFamilyClassOperators(const char *accessMethod_pattern,
+									 const char *family_pattern, bool verbose);
+
+/* \dAc */
+extern bool describeAccessMethodOperatorClasses(const char *access_method_pattern,
+												const char *opclass_pattern,
+												bool verbose);
+
+/* \dip */
+extern bool describeIndexProperties(const char *pattern, bool showSystem);
+
+/* \dicp */
+extern bool describeIndexColumnProperties(const char *indexPattern,
+										  bool showSystem);
 
 #endif							/* DESCRIBE_H */

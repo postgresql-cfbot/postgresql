@@ -145,7 +145,7 @@ add_other_rels_to_query(PlannerInfo *root)
 {
 	int			rti;
 
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 		RangeTblEntry *rte = root->simple_rte_array[rti];
@@ -312,7 +312,7 @@ find_lateral_references(PlannerInfo *root)
 	/*
 	 * Examine all baserels (the rel array has been set up by now).
 	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 
@@ -460,7 +460,7 @@ create_lateral_join_info(PlannerInfo *root)
 	/*
 	 * Examine all baserels (the rel array has been set up by now).
 	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 		Relids		lateral_relids;
@@ -580,7 +580,7 @@ create_lateral_join_info(PlannerInfo *root)
 	 * The outer loop considers each baserel, and propagates its lateral
 	 * dependencies to those baserels that have a lateral dependency on it.
 	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 		Relids		outer_lateral_relids;
@@ -595,7 +595,7 @@ create_lateral_join_info(PlannerInfo *root)
 			continue;
 
 		/* else scan all baserels */
-		for (rti2 = 1; rti2 < root->simple_rel_array_size; rti2++)
+		for (rti2 = 1; rti2 <= root->last_base_relid; rti2++)
 		{
 			RelOptInfo *brel2 = root->simple_rel_array[rti2];
 
@@ -614,7 +614,7 @@ create_lateral_join_info(PlannerInfo *root)
 	 * with the set of relids of rels that reference it laterally (possibly
 	 * indirectly) --- that is, the inverse mapping of lateral_relids.
 	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 		Relids		lateral_relids;

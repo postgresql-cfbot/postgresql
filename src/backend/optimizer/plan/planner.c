@@ -1215,6 +1215,7 @@ inheritance_planner(PlannerInfo *root)
 	List	   *final_rtable = NIL;
 	List	   *final_rowmarks = NIL;
 	int			save_rel_array_size = 0;
+	int			save_last_base_relid = 0;
 	RelOptInfo **save_rel_array = NULL;
 	AppendRelInfo **save_append_rel_array = NULL;
 	List	   *subpaths = NIL;
@@ -1664,6 +1665,8 @@ inheritance_planner(PlannerInfo *root)
 				subroot->simple_rel_array[rti] = brel;
 		}
 		save_rel_array_size = subroot->simple_rel_array_size;
+		save_last_base_relid = Max(save_last_base_relid,
+								   subroot->last_base_relid);
 		save_rel_array = subroot->simple_rel_array;
 		save_append_rel_array = subroot->append_rel_array;
 
@@ -1741,6 +1744,7 @@ inheritance_planner(PlannerInfo *root)
 		 */
 		parse->rtable = final_rtable;
 		root->simple_rel_array_size = save_rel_array_size;
+		root->last_base_relid = save_last_base_relid;
 		root->simple_rel_array = save_rel_array;
 		root->append_rel_array = save_append_rel_array;
 

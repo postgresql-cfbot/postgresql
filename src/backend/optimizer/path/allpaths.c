@@ -157,7 +157,7 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	 * Construct the all_baserels Relids set.
 	 */
 	root->all_baserels = NULL;
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 
@@ -290,7 +290,7 @@ set_base_rel_sizes(PlannerInfo *root)
 {
 	Index		rti;
 
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 		RangeTblEntry *rte;
@@ -333,7 +333,7 @@ set_base_rel_pathlists(PlannerInfo *root)
 {
 	Index		rti;
 
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 
@@ -1994,7 +1994,7 @@ has_multiple_baserels(PlannerInfo *root)
 	int			num_base_rels = 0;
 	Index		rti;
 
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 

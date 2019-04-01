@@ -828,11 +828,11 @@ generate_base_implied_equalities(PlannerInfo *root)
 	 * This is also a handy place to mark base rels (which should all exist by
 	 * now) with flags showing whether they have pending eclass joins.
 	 */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *brel = root->simple_rel_array[rti];
 
-		if (brel == NULL)
+		if (brel == NULL || brel->reloptkind != RELOPT_BASEREL)
 			continue;
 
 		brel->has_eclass_joins = has_relevant_eclass_joinclause(root, brel);

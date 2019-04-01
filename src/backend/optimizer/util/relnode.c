@@ -82,6 +82,9 @@ setup_simple_rel_arrays(PlannerInfo *root)
 	root->simple_rel_array = (RelOptInfo **)
 		palloc0(root->simple_rel_array_size * sizeof(RelOptInfo *));
 
+	/* obviously, there are no RELOPT_BASEREL entries yet */
+	root->last_base_relid = 0;
+
 	/* simple_rte_array is an array equivalent of the rtable list */
 	root->simple_rte_array = (RangeTblEntry **)
 		palloc0(root->simple_rel_array_size * sizeof(RangeTblEntry *));
@@ -347,6 +350,14 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 
 	/* Save the finished struct in the query's simple_rel_array */
 	root->simple_rel_array[relid] = rel;
+
+	/*
+	 * Track the highest index of any BASEREL entry.  This is useful since
+	 * many places scan the simple_rel_array for baserels and don't care about
+	 * otherrels; they can stop before scanning otherrels.
+	 */
+	if (rel->reloptkind == RELOPT_BASEREL)
+		root->last_base_relid = Max(root->last_base_relid, relid);
 
 	return rel;
 }

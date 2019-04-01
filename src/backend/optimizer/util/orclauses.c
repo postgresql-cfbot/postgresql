@@ -78,7 +78,7 @@ extract_restriction_or_clauses(PlannerInfo *root)
 	Index		rti;
 
 	/* Examine each baserel for potential join OR clauses */
-	for (rti = 1; rti < root->simple_rel_array_size; rti++)
+	for (rti = 1; rti <= root->last_base_relid; rti++)
 	{
 		RelOptInfo *rel = root->simple_rel_array[rti];
 		ListCell   *lc;

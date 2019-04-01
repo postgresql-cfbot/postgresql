@@ -201,6 +201,7 @@ struct PlannerInfo
 	 */
 	struct RelOptInfo **simple_rel_array;	/* All 1-rel RelOptInfos */
 	int			simple_rel_array_size;	/* allocated size of array */
+	int			last_base_relid;	/* index of last baserel in array */
 
 	/*
 	 * simple_rte_array is the same length as simple_rel_array and holds

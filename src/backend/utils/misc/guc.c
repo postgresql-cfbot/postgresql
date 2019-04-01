@@ -1175,6 +1175,29 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"wal_init_zero", PGC_SUSET, WAL_SETTINGS,
+			gettext_noop("Zero-fill WAL file."),
+			gettext_noop("This option disables zero-filling a new WAL file, "
+						 "which can be beneficial in some cases, such as on COW "
+						 "filesystems.")
+		},
+		&wal_init_zero,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_recycle", PGC_SUSET, WAL_SETTINGS,
+			gettext_noop("WAL recycling is enabled."),
+			gettext_noop("This option disables WAL recycling, which can be "
+						 "beneficial in some cases, such as on COW filesystems.")
+		},
+		&wal_recycle,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
 			NULL

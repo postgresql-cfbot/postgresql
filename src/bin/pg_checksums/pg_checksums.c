@@ -1,8 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pg_checksums.c
- *	  Checks, enables or disables page level checksums for an offline
- *	  cluster
+ *	  Checks, enables or disables page level checksums for a cluster
  *
  * Copyright (c) 2010-2019, PostgreSQL Global Development Group
  *
@@ -30,13 +29,20 @@
 
 
 static int64 files = 0;
+static int64 skippedfiles = 0;
 static int64 blocks = 0;
 static int64 badblocks = 0;
+static int64 skippedblocks = 0;
 static ControlFileData *ControlFile;
+static XLogRecPtr checkpointLSN;
+static int64 blocks_last_lsn_update = 0;
 
 static char *only_relfilenode = NULL;
 static bool do_sync = true;
 static bool verbose = false;
+static bool online = false;
+
+static char *DataDir = NULL;
 
 typedef enum
 {
@@ -97,6 +103,23 @@ static const char *const skip[] = {
 	NULL,
 };
 
+static void
+update_checkpoint_lsn(void)
+{
+	bool		crc_ok;
+
+	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
+	if (!crc_ok)
+	{
+		fprintf(stderr, _("%s: pg_control CRC value is incorrect\n"), progname);
+		exit(1);
+	}
+
+	/* Update checkpointLSN and blocks_last_lsn_update with the current value */
+	checkpointLSN = ControlFile->checkPoint;
+	blocks_last_lsn_update = blocks;
+}
+
 static bool
 skipfile(const char *fn)
 {
@@ -116,6 +139,10 @@ scan_file(const char *fn, BlockNumber segmentno)
 	PageHeader	header = (PageHeader) buf.data;
 	int			f;
 	BlockNumber blockno;
+	int			block_loc = 0;
+	bool		block_retry = false;
+	bool		all_zeroes;
+	size_t	   *pagebytes;
 	int			flags;
 
 	Assert(mode == PG_MODE_ENABLE ||
@@ -126,6 +153,12 @@ scan_file(const char *fn, BlockNumber segmentno)
 
 	if (f < 0)
 	{
+		if (online && errno == ENOENT)
+		{
+			/* File was removed in the meantime */
+			return;
+		}
+
 		fprintf(stderr, _("%s: could not open file \"%s\": %s\n"),
 				progname, fn, strerror(errno));
 		exit(1);
@@ -136,27 +169,131 @@ scan_file(const char *fn, BlockNumber segmentno)
 	for (blockno = 0;; blockno++)
 	{
 		uint16		csum;
-		int			r = read(f, buf.data, BLCKSZ);
+		int			r = read(f, buf.data + block_loc, BLCKSZ - block_loc);
 
 		if (r == 0)
-			break;
-		if (r != BLCKSZ)
 		{
-			fprintf(stderr, _("%s: could not read block %u in file \"%s\": read %d of %d\n"),
-					progname, blockno, fn, r, BLCKSZ);
-			exit(1);
+			/*
+			 * We had a short read and got an EOF before we could read the
+			 * whole block, so count this as a skipped block.
+			 */
+			if (online && block_loc != 0)
+				skippedblocks++;
+			break;
 		}
+		if (r < 0)
+		{
+			skippedfiles++;
+			fprintf(stderr, _("%s: could not read block %u in file \"%s\": %s\n"),
+					progname, blockno, fn, strerror(errno));
+			return;
+		}
+		if (r < (BLCKSZ - block_loc))
+		{
+			if (online)
+			{
+				/*
+				 * We read only parts of the block, possibly due to a
+				 * concurrent extension of the relation file.  Increment
+				 * block_loc by the amount that we read and try again.
+				 */
+				block_loc += r;
+				continue;
+			}
+			else
+			{
+				skippedfiles++;
+				fprintf(stderr, _("%s: could not read block %u in file \"%s\": read %d of %d\n"),
+						progname, blockno, fn, r, BLCKSZ);
+				return;
+			}
+		}
+
 		blocks++;
 
 		/* New pages have no checksum yet */
 		if (PageIsNew(header))
+		{
+			/* Check for an all-zeroes page */
+			all_zeroes = true;
+			pagebytes = (size_t *) buf.data;
+			for (int i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
+			{
+				if (pagebytes[i] != 0)
+				{
+					all_zeroes = false;
+					break;
+				}
+			}
+			if (!all_zeroes)
+			{
+				fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: pd_upper is zero but block is not all-zero\n"),
+						progname, fn, blockno);
+				badblocks++;
+			}
+			else
+			{
+				skippedblocks++;
+			}
 			continue;
+		}
 
 		csum = pg_checksum_page(buf.data, blockno + segmentno * RELSEG_SIZE);
 		if (mode == PG_MODE_CHECK)
 		{
 			if (csum != header->pd_checksum)
 			{
+				if (online)
+				{
+					/*
+					 * Retry the block on the first failure if online.  If the
+					 * verification is done while the instance is online, it is
+					 * possible that we read the first 4K page of the block just
+					 * before postgres updated the entire block so it ends up
+					 * looking torn to us.  We only need to retry once because the
+					 * LSN should be updated to something we can ignore on the next
+					 * pass.  If the error happens again then it is a true
+					 * validation failure.
+					 */
+					if (!block_retry)
+					{
+						/* Seek to the beginning of the failed block */
+						if (lseek(f, -BLCKSZ, SEEK_CUR) == -1)
+						{
+							skippedfiles++;
+							fprintf(stderr, _("%s: could not lseek in file \"%s\": %m\n"),
+									progname, fn);
+							return;
+						}
+
+						/* Set flag so we know a retry was attempted */
+						block_retry = true;
+
+						/* Reset loop to validate the block again */
+						blockno--;
+						blocks--;
+
+						continue;
+					}
+
+					/*
+					 * The checksum verification failed on retry as well.
+					 * Check if the page has been modified since the last
+					 * checkpoint and skip it in this case.  As a sanity check,
+					 * demand that the upper 32 bits of the LSN are identical
+					 * in order to skip as a guard against a corrupted LSN in
+					 * the pageheader.
+					 */
+					update_checkpoint_lsn();
+					if ((PageGetLSN(buf.data) > checkpointLSN) &&
+					   (PageGetLSN(buf.data) >> 32 == checkpointLSN >> 32))
+					{
+						block_retry = false;
+						skippedblocks++;
+						continue;
+					}
+				}
+
 				if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_VERSION)
 					fprintf(stderr, _("%s: checksum verification failed in file \"%s\", block %u: calculated checksum %X but block contains %X\n"),
 							progname, fn, blockno, csum, header->pd_checksum);
@@ -183,6 +320,9 @@ scan_file(const char *fn, BlockNumber segmentno)
 				exit(1);
 			}
 		}
+
+		block_retry = false;
+		block_loc = 0;
 	}
 
 	if (verbose)
@@ -237,6 +377,12 @@ scan_directory(const char *basedir, const char *subdir)
 		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);
 		if (lstat(fn, &st) < 0)
 		{
+			if (online && errno == ENOENT)
+			{
+				/* File was removed in the meantime */
+				continue;
+			}
+
 			fprintf(stderr, _("%s: could not stat file \"%s\": %s\n"),
 					progname, fn, strerror(errno));
 			exit(1);
@@ -304,7 +450,6 @@ main(int argc, char *argv[])
 		{NULL, 0, NULL, 0}
 	};
 
-	char	   *DataDir = NULL;
 	int			c;
 	int			option_index;
 	bool		crc_ok;
@@ -398,7 +543,7 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	/* Check if cluster is running */
+	/* Check if checksums are enabled */
 	ControlFile = get_controlfile(DataDir, progname, &crc_ok);
 	if (!crc_ok)
 	{
@@ -422,12 +567,10 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	/* Check if cluster is running */
 	if (ControlFile->state != DB_SHUTDOWNED &&
 		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
-	{
-		fprintf(stderr, _("%s: cluster must be shut down\n"), progname);
-		exit(1);
-	}
+		online = true;
 
 	if (ControlFile->data_checksum_version == 0 &&
 		mode == PG_MODE_CHECK)
@@ -450,6 +593,9 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	/* Get checkpoint LSN */
+	checkpointLSN = ControlFile->checkPoint;
+
 	/* Operate on all files if checking or enabling checksums */
 	if (mode == PG_MODE_CHECK || mode == PG_MODE_ENABLE)
 	{
@@ -459,14 +605,30 @@ main(int argc, char *argv[])
 
 		printf(_("Checksum operation completed\n"));
 		printf(_("Files scanned:  %s\n"), psprintf(INT64_FORMAT, files));
+		if (skippedfiles > 0)
+			printf(_("Files skipped: %s\n"), psprintf(INT64_FORMAT, skippedfiles));
 		printf(_("Blocks scanned: %s\n"), psprintf(INT64_FORMAT, blocks));
+		if (skippedblocks > 0)
+			printf(_("Blocks skipped: %s\n"), psprintf(INT64_FORMAT, skippedblocks));
 		if (mode == PG_MODE_CHECK)
 		{
 			printf(_("Bad checksums:  %s\n"), psprintf(INT64_FORMAT, badblocks));
 			printf(_("Data checksum version: %d\n"), ControlFile->data_checksum_version);
 
 			if (badblocks > 0)
+			{
+				if (online)
+				{
+					/*
+					 * Issue a warning about possible false positives due to
+					 * repeatedly read torn pages.
+					 */
+					printf(_("%s ran against an online cluster and found some bad checksums.\n"), progname);
+					printf(_("It could be that those are false positives due concurrently updated blocks,\n"));
+					printf(_("checking the offending files again with the -r option is advised.\n"));
+				}
 				exit(1);
+			}
 		}
 	}
 
@@ -496,6 +658,11 @@ main(int argc, char *argv[])
 		else
 			printf(_("Checksums disabled in cluster\n"));
 	}
+
+	/* skipped blocks or files are considered an error if offline */
+	if (!online)
+		if (skippedblocks > 0 || skippedfiles > 0)
+			return 1;
 
 	return 0;
 }

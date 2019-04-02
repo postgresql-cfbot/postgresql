@@ -2416,7 +2416,6 @@ typedef struct CreateTrigStmt
 	bool		isconstraint;	/* This is a constraint trigger */
 	/* explicitly named transition data */
 	List	   *transitionRels; /* TriggerTransition nodes, or NIL if none */
-	bool		replace;		/* T => replace if already exists */
 	/* The remaining fields are only used for constraint triggers */
 	bool		deferrable;		/* [NOT] DEFERRABLE */
 	bool		initdeferred;	/* INITIALLY {DEFERRED|IMMEDIATE} */

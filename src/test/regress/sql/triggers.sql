@@ -1177,6 +1177,313 @@ drop table self_ref_trigger;
 drop function self_ref_trigger_ins_func();
 drop function self_ref_trigger_del_func();
 
+create table my_table1 (id integer, name text);
+create table my_table2 (id integer);
+create function my_proc1() returns trigger as $$
+begin
+	return null;
+end;$$ language plpgsql;
+
+create function my_updateproc1() returns trigger as $$
+begin
+	        update my_table2 set id=new.id where id=old.id;
+		        return null;
+end;$$ language plpgsql;
+create function my_deleteproc1() returns trigger as $$
+begin
+	        delete from my_table2 where id=old.id;
+		        return null;
+end;$$ language plpgsql;
+
+create function my_insertproc1() returns trigger as $$
+begin
+	        insert into my_table2 values(new.id);
+		        return null;
+end;$$ language plpgsql;
+
+insert into my_table1 values(323, 'Alex');
+insert into my_table1 values(23, 'Teddy');
+insert into my_table1 values(38, 'Bob');
+insert into my_table2 values(323);
+insert into my_table2 values(23);
+insert into my_table2 values(38);
+-- Create regular trigger
+CREATE OR REPLACE TRIGGER my_regular_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_deleteproc1();
+--Expected Result: New trigger with the name my_regular_trigger created.
+
+delete from my_table1 where id=323;
+select * from my_table1;
+select * from my_table2;
+
+CREATE OR REPLACE CONSTRAINT TRIGGER my_constraint_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_deleteproc1();
+--Expected Result: New constraint trigger with the name my_constraint_trigger created.
+
+delete from my_table1 where id=23;
+select * from my_table1;
+select * from my_table2;
+
+CREATE OR REPLACE TRIGGER my_regular_trigger AFTER INSERT ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_insertproc1();
+--Expected Result: Replaces my_regular_trigger definition with new definition having event as INSERT.
+
+insert into my_table1 values(323, 'Alex');
+select * from my_table1;
+select * from my_table2;
+
+
+CREATE OR REPLACE CONSTRAINT TRIGGER my_constraint_trigger AFTER INSERT ON my_table1
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE PROCEDURE my_insertproc1();
+--Expected Result: Replaces my_constraint_trigger definition with new definition having event as INSERT.
+
+insert into my_table1 values(23, 'Teddy');
+select * from my_table1;
+select * from my_table2;
+
+CREATE CONSTRAINT TRIGGER my_regular_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Trigger 'my_regular_trigger' for relation 'my_table1' already exists" should be shown.
+
+CREATE OR REPLACE CONSTRAINT TRIGGER my_regular_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Trigger 'my_regular_trigger' for relation "my_table1" cannot be replaced with constraint trigger." should be shown.
+
+CREATE TRIGGER my_constraint_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Trigger 'my_constraint_trigger' for relation 'my_table' already exists" should be shown.
+
+CREATE OR REPLACE TRIGGER my_constraint_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Constraint trigger 'my_constraint_trigger' for relation "my_table1" cannot be replaced with non-constraint trigger." should be shown.
+
+CREATE TRIGGER my_regular_trigger AFTER DELETE ON my_table1
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Trigger 'my_regular_trigger' for relation 'my_table1' already exists" should be shown.
+
+CREATE CONSTRAINT TRIGGER my_constraint_trigger AFTER DELETE ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+--Expected Result: Error message "Trigger 'my_constraint_trigger' for relation 'my_table' already exists" should be shown.
+
+CREATE OR REPLACE TRIGGER my_trigger2 AFTER UPDATE OF NAME ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_updateproc1();
+
+CREATE OR REPLACE TRIGGER my_trigger2 AFTER DELETE ON my_table1
+EXECUTE PROCEDURE my_proc1();
+
+ALTER TABLE my_table1 DROP COLUMN name;
+DROP FUNCTION my_updateproc1();
+\d my_table1;
+
+CREATE TRIGGER my_trigger1 BEFORE DELETE ON my_table1
+EXECUTE PROCEDURE my_proc1();
+
+CREATE CONSTRAINT TRIGGER my_constraint_trigger2 AFTER INSERT ON my_table1
+FOR EACH ROW
+EXECUTE PROCEDURE my_proc1();
+
+\h CREATE TRIGGER;
+SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgname = 'my_trigger2';
+----Clean up begin --------
+
+drop table my_table1;
+drop table my_table2;
+drop function my_deleteproc1();
+drop function my_insertproc1();
+drop function my_proc1();
+------Clean up end ---------
+
+------------------------------TESTCASE1-6 BEFORE TRIGGER---------------------------------------------------------
+---Check REPLACE against various before triggers
+
+CREATE TABLE my_table1 (id integer);
+
+CREATE VIEW my_view1 AS SELECT id from my_table1;
+
+create function firstproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST1 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function secondproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST2 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function thirdproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST3 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function someproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'Some Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+ --testcase1
+CREATE OR REPLACE TRIGGER sometrig BEFORE INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE firstproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+ --testcase2
+CREATE OR REPLACE TRIGGER sometrig BEFORE INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig BEFORE INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE secondproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+ --testcase3
+DROP TRIGGER sometrig  on my_table1;
+CREATE OR REPLACE TRIGGER sometrig BEFORE INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig BEFORE INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE thirdproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+
+DROP TRIGGER sometrig on my_table1;
+----Clean up begin --------
+drop function firstproc();
+drop function secondproc();
+drop function thirdproc();
+drop function someproc();
+drop view my_view1;
+drop table my_table1;
+------Clean up end ---------
+------------------------------TESTCASE7-12 AFTER TRIGGER---------------------------------------------------------
+---Check REPLACE against various after triggers
+
+CREATE TABLE my_table1 (id integer);
+
+CREATE VIEW my_view1 AS SELECT id from my_table1;
+
+create function firstproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST7 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function secondproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST8 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function thirdproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST9 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function someproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'Some Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+ --testcase7
+CREATE OR REPLACE TRIGGER sometrig AFTER INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE firstproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+ --testcase8
+CREATE OR REPLACE TRIGGER sometrig AFTER INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig AFTER INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE secondproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+ --testcase9
+DROP TRIGGER sometrig  on my_table1;
+CREATE OR REPLACE TRIGGER sometrig AFTER INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig AFTER INSERT ON my_table1 FOR EACH ROW EXECUTE PROCEDURE thirdproc();
+
+insert into my_table1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+
+DROP TRIGGER sometrig on my_table1;
+----Clean up begin --------
+drop function firstproc();
+drop function secondproc();
+drop function thirdproc();
+drop function someproc();
+drop view my_view1;
+drop table my_table1;
+------Clean up end ---------
+
+
+------------------------------TESTCASE13-18 BEFORE TRIGGER---------------------------------------------------------
+---Check REPLACE against various INSTEAD triggers
+
+CREATE TABLE my_table1 (id integer);
+
+CREATE VIEW my_view1 AS SELECT id from my_table1;
+
+create function firstproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST13 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function secondproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST14 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function thirdproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'TEST15 Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+create function someproc() returns trigger as $$
+begin
+	        RAISE NOTICE 'Some Trigger';
+	        RETURN null;
+end;$$ language plpgsql;
+
+--testcase13
+CREATE OR REPLACE TRIGGER sometrig INSTEAD OF INSERT ON my_view1 FOR EACH ROW EXECUTE PROCEDURE firstproc();
+
+insert into my_view1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+
+--testcase14
+CREATE OR REPLACE TRIGGER sometrig INSTEAD OF INSERT ON my_view1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig INSTEAD OF INSERT ON my_view1 FOR EACH ROW EXECUTE PROCEDURE secondproc();
+
+insert into my_view1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+
+--testcase15
+DROP TRIGGER sometrig  on my_table1;
+CREATE OR REPLACE TRIGGER sometrig INSTEAD OF INSERT ON my_view1 FOR EACH ROW EXECUTE PROCEDURE someproc();
+CREATE OR REPLACE TRIGGER sometrig INSTEAD OF INSERT ON my_view1 FOR EACH ROW EXECUTE PROCEDURE thirdproc();
+
+insert into my_view1 (id) values (1);
+select tgname,tgtype,tgenabled,tgisinternal,tgdeferrable,tginitdeferred,tgnargs,tgattr,tgargs,tgqual from pg_trigger where  tgname='sometrig';
+
+----Clean up begin --------
+drop view my_view1;
+drop table my_table1;
+drop function firstproc();
+drop function secondproc();
+drop function thirdproc();
+drop function someproc();
+------Clean up end ---------
 --
 -- Check that statement triggers work correctly even with all children excluded
 --

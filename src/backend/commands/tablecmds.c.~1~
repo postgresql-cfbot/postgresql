@@ -7866,8 +7866,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 									  true, /* islocal */
 									  0,	/* inhcount */
 									  connoinherit,	/* conNoInherit */
-									  false,	/* is_internal */
-									  InvalidOid);
+									  false);	/* is_internal */
 	ObjectAddressSet(address, ConstraintRelationId, constrOid);
 
 	/*
@@ -8250,7 +8249,7 @@ CloneFkReferencing(Relation pg_constraint, Relation parentRel,
 								  NULL,
 								  NULL,
 								  false,
-								  1, false, true, InvalidOid);
+								  1, false, true);
 		subclone = lappend_oid(subclone, constrOid);
 
 		/* Set up partition dependencies for the new constraint */

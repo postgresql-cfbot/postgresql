@@ -1781,8 +1781,7 @@ index_constraint_create(Relation heapRelation,
 								   islocal,
 								   inhcount,
 								   noinherit,
-								   is_internal,
-								   InvalidOid);
+								   is_internal);
 
 	/*
 	 * Register the index as internally dependent on the constraint.

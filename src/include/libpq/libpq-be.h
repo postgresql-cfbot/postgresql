@@ -164,6 +164,8 @@ typedef struct Port
 	int			keepalives_interval;
 	int			keepalives_count;
 
+	char*       compression_algorithms; /* Compression algorithms supported by client */
+
 #if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 
 	/*

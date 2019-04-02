@@ -2121,6 +2121,83 @@ pqBuildStartupPacket3(PGconn *conn, int *packetlen,
 }
 
 /*
+ * Parse boolean value. This code is copied from backend/utils/atd/bool.c
+ * because it is not available at frontend.
+ */
+static bool
+parse_bool(const char *value, bool *result)
+{
+	switch (*value)
+	{
+		case 't':
+		case 'T':
+			if (pg_strcasecmp(value, "true") == 0)
+			{
+				*result = true;
+				return true;
+			}
+			break;
+		case 'f':
+		case 'F':
+			if (pg_strcasecmp(value, "false") == 0)
+			{
+				*result = false;
+				return true;
+			}
+			break;
+		case 'y':
+		case 'Y':
+			if (pg_strcasecmp(value, "yes") == 0)
+			{
+				*result = true;
+				return true;
+			}
+			break;
+		case 'n':
+		case 'N':
+			if (pg_strcasecmp(value, "no") == 0)
+			{
+				*result = false;
+				return true;
+			}
+			break;
+		case 'o':
+		case 'O':
+			/* 'o' is not unique enough */
+			if (pg_strcasecmp(value, "on") == 0)
+			{
+				*result = true;
+				return true;
+			}
+			else if (pg_strcasecmp(value, "off") == 0)
+			{
+				*result = false;
+				return true;
+			}
+			break;
+		case '1':
+			if (value[1] == '\0')
+			{
+				*result = true;
+				return true;
+			}
+			break;
+		case '0':
+			if (value[1] == '\0')
+			{
+				*result = false;
+				return true;
+			}
+			break;
+		default:
+			break;
+	}
+
+	*result = false;		/* suppress compiler warning */
+	return false;
+}
+
+/*
  * Build a startup packet given a filled-in PGconn structure.
  *
  * We need to figure out how much space is needed, then fill it in.
@@ -2166,6 +2243,20 @@ build_startup_packet(const PGconn *conn, char *packet,
 		ADD_STARTUP_OPTION("replication", conn->replication);
 	if (conn->pgoptions && conn->pgoptions[0])
 		ADD_STARTUP_OPTION("options", conn->pgoptions);
+	if (conn->compression && conn->compression[0])
+	{
+		bool enabled;
+		/*
+		 * If compressoin is enabled, then send to the server list of compression algorithms
+		 * supported by client
+		 */
+		if (parse_bool(conn->compression, &enabled))
+		{
+			char compression_algorithms[ZPQ_MAX_ALGORITHMS];
+			zpq_get_supported_algorithms(compression_algorithms);
+			ADD_STARTUP_OPTION("compression", compression_algorithms);
+		}
+	}
 	if (conn->send_appname)
 	{
 		/* Use appname if present, otherwise use fallback */

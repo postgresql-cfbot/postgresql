@@ -1145,18 +1145,6 @@ drop table pktable2, fktable2;
 -- Foreign keys and partitioned tables
 --
 
--- partitioned table in the referenced side are not allowed
-CREATE TABLE fk_partitioned_pk (a int, b int, primary key (a, b))
-  PARTITION BY RANGE (a, b);
--- verify with create table first ...
-CREATE TABLE fk_notpartitioned_fk (a int, b int,
-  FOREIGN KEY (a, b) REFERENCES fk_partitioned_pk);
--- and then with alter table.
-CREATE TABLE fk_notpartitioned_fk_2 (a int, b int);
-ALTER TABLE fk_notpartitioned_fk_2 ADD FOREIGN KEY (a, b)
-  REFERENCES fk_partitioned_pk;
-DROP TABLE fk_partitioned_pk, fk_notpartitioned_fk_2;
-
 -- Creation of a partitioned hierarchy with irregular definitions
 CREATE TABLE fk_notpartitioned_pk (fdrop1 int, a int, fdrop2 int, b int,
   PRIMARY KEY (a, b));
@@ -1443,3 +1431,135 @@ alter table fkpart2.fk_part_1 drop constraint fkey;	-- ok
 alter table fkpart2.fk_part_1_1 drop constraint my_fkey;	-- doesn't exist
 
 drop schema fkpart0, fkpart1, fkpart2 cascade;
+
+-- Test a partitioned table as referenced table.
+-- Verify basic functionality with a regular partition creation and a partition
+-- with a different column layout, as well as partitions
+-- added (created and attached) after creating the foreign key.
+create schema fkpart3;
+set search_path to fkpart3;
+
+create table pk (a int primary key) partition by range (a);
+create table pk1 partition of pk for values from (0) to (1000);
+create table pk2 (b int, a int);
+alter table pk2 drop column b;
+alter table pk2 alter a set not null;
+alter table pk attach partition pk2 for values from (1000) to (2000);
+
+create table fk (a int) partition by range (a);
+create table fk1 partition of fk for values from (0) to (750);
+alter table fk add foreign key (a) references pk;
+create table fk2 (b int, a int) ;
+alter table fk2 drop column b;
+alter table fk attach partition fk2 for values from (750) to (3500);
+
+create table pk3 partition of pk for values from (2000) to (3000);
+create table pk4 (like pk);
+alter table pk attach partition pk4 for values from (3000) to (4000);
+
+create table pk5 (c int, b int, a int not null) partition by range (a);
+alter table pk5 drop column b, drop column c;
+create table pk51 partition of pk5 for values from (4000) to (4500);
+create table pk52 partition of pk5 for values from (4500) to (5000);
+alter table pk attach partition pk5 for values from (4000) to (5000);
+
+create table fk3 partition of fk for values from (3500) to (5000);
+
+-- these should fail: referenced value not present
+insert into fk values (1);
+insert into fk values (1000);
+insert into fk values (2000);
+insert into fk values (3000);
+insert into fk values (4000);
+insert into fk values (4500);
+-- insert into the referenced table, now they should work
+insert into pk values (1), (1000), (2000), (3000), (4000), (4500);
+insert into fk values (1), (1000), (2000), (3000), (4000), (4500);
+
+-- should fail: referencing value present
+delete from pk where a = 1;
+delete from pk where a = 1000;
+delete from pk where a = 2000;
+delete from pk where a = 3000;
+delete from pk where a = 4000;
+delete from pk where a = 4500;
+update pk set a = 2 where a = 1;
+update pk set a = 1002 where a = 1000;
+update pk set a = 2002 where a = 2000;
+update pk set a = 3002 where a = 3000;
+update pk set a = 4002 where a = 4000;
+update pk set a = 4502 where a = 4500;
+-- now they should work
+delete from fk;
+update pk set a = 2 where a = 1;
+delete from pk where a = 2;
+update pk set a = 1002 where a = 1000;
+delete from pk where a = 1002;
+update pk set a = 2002 where a = 2000;
+delete from pk where a = 2002;
+update pk set a = 3002 where a = 3000;
+delete from pk where a = 3002;
+update pk set a = 4002 where a = 4000;
+delete from pk where a = 4002;
+update pk set a = 4502 where a = 4500;
+delete from pk where a = 4502;
+
+create schema fkpart3;
+set search_path to fkpart3;
+-- dropping/detaching partitions is prevented if that would break
+-- a foreign key's existing data
+create table droppk (a int primary key) partition by range (a);
+create table droppk1 partition of droppk for values from (0) to (1000);
+create table droppk_d partition of droppk default;
+create table droppk2 partition of droppk for values from (1000) to (2000)
+  partition by range (a);
+create table droppk21 partition of droppk2 for values from (1000) to (1400);
+create table droppk2_d partition of droppk2 default;
+insert into droppk values (1), (1000), (1500), (2000);
+create table dropfk (a int references droppk);
+insert into dropfk values (1), (1000), (1500), (2000);
+-- these should all fail
+alter table droppk detach partition droppk_d;
+alter table droppk2 detach partition droppk2_d;
+alter table droppk detach partition droppk1;
+alter table droppk detach partition droppk2;
+alter table droppk2 detach partition droppk21;
+drop table droppk_d;
+drop table droppk2_d;
+drop table droppk1;
+drop table droppk2;
+drop table droppk21;
+delete from dropfk;
+-- now they should all work
+drop table droppk_d;
+drop table droppk2_d;
+drop table droppk1;
+alter table droppk2 detach partition droppk21;
+drop table droppk2;
+
+-- Verify that initial constraint creation and cloning behave correctly
+create schema fkpart4;
+set search_path to fkpart4;
+create table pk (a int primary key) partition by list (a);
+create table pk1 partition of pk for values in (1) partition by list (a);
+create table pk11 partition of pk1 for values in (1);
+create table fk (a int) partition by list (a);
+create table fk1 partition of fk for values in (1) partition by list (a);
+create table fk11 partition of fk1 for values in (1);
+alter table fk add foreign key (a) references pk;
+create table pk2 partition of pk for values in (2);
+create table pk3 (a int not null) partition by list (a);
+create table pk31 partition of pk3 for values in (31);
+create table pk32 (b int, a int not null);
+alter table pk32 drop column b;
+alter table pk3 attach partition pk32 for values in (32);
+alter table pk attach partition pk3 for values in (31, 32);
+create table fk2 partition of fk for values in (2);
+create table fk3 (b int, a int);
+alter table fk3 drop column b;
+alter table fk attach partition fk3 for values in (3);
+select pg_describe_object('pg_constraint'::regclass, oid, 0), confrelid::regclass,
+       case when conparentid <> 0 then pg_describe_object('pg_constraint'::regclass, conparentid, 0) else 'TOP' end
+from pg_constraint
+where conrelid in (select relid from pg_partition_tree('fk'))
+order by conrelid::regclass::text, conname;

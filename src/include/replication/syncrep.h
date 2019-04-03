@@ -15,6 +15,7 @@
 
 #include "access/xlogdefs.h"
 #include "utils/guc.h"
+#include "utils/timestamp.h"
 
 #define SyncRepRequested() \
 	(max_wal_senders > 0 && synchronous_commit > SYNCHRONOUS_COMMIT_LOCAL_FLUSH)
@@ -24,8 +25,9 @@
 #define SYNC_REP_WAIT_WRITE		0
 #define SYNC_REP_WAIT_FLUSH		1
 #define SYNC_REP_WAIT_APPLY		2
+#define SYNC_REP_WAIT_SYNC_REPLAY	3
 
-#define NUM_SYNC_REP_WAIT_MODE	3
+#define NUM_SYNC_REP_WAIT_MODE	4
 
 /* syncRepState */
 #define SYNC_REP_NOT_WAITING		0
@@ -35,6 +37,12 @@
 /* syncrep_method of SyncRepConfigData */
 #define SYNC_REP_PRIORITY		0
 #define SYNC_REP_QUORUM		1
+
+/* GUC variables */
+extern int synchronous_replay_max_lag;
+extern int synchronous_replay_lease_time;
+extern bool synchronous_replay;
+extern char *synchronous_replay_standby_names;
 
 /*
  * Struct for the configuration of synchronous replication.
@@ -71,7 +79,7 @@ extern void SyncRepCleanupAtProcExit(void);
 
 /* called by wal sender */
 extern void SyncRepInitConfig(void);
-extern void SyncRepReleaseWaiters(void);
+extern void SyncRepReleaseWaiters(bool walsender_cr_available_or_joining);
 
 /* called by wal sender and user backend */
 extern List *SyncRepGetSyncStandbys(bool *am_sync);
@@ -79,8 +87,12 @@ extern List *SyncRepGetSyncStandbys(bool *am_sync);
 /* called by checkpointer */
 extern void SyncRepUpdateSyncStandbysDefined(void);
 
+/* called by wal sender */
+extern bool SyncReplayPotentialStandby(void);
+
 /* GUC infrastructure */
 extern bool check_synchronous_standby_names(char **newval, void **extra, GucSource source);
+extern bool check_synchronous_replay_standby_names(char **newval, void **extra, GucSource source);
 extern void assign_synchronous_standby_names(const char *newval, void *extra);
 extern void assign_synchronous_commit(int newval, void *extra);
 

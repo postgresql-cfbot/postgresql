@@ -27,6 +27,7 @@
 #include "replication/walreceiver.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
+#include "utils/guc.h"
 #include "utils/timestamp.h"
 
 WalRcvData *WalRcv = NULL;
@@ -375,4 +376,22 @@ GetReplicationTransferLatency(void)
 	ms = ((int) secs * 1000) + (usecs / 1000);
 
 	return ms;
+}
+
+/*
+ * Used by snapmgr to check if this standby has a valid lease, granting it the
+ * right to consider itself available for synchronous replay.
+ */
+bool
+WalRcvSyncReplayAvailable(void)
+{
+	WalRcvData *walrcv = WalRcv;
+	TimestampTz now = GetCurrentTimestamp();
+	bool result;
+
+	SpinLockAcquire(&walrcv->mutex);
+	result = walrcv->syncReplayLease != 0 && now <= walrcv->syncReplayLease;
+	SpinLockRelease(&walrcv->mutex);
+
+	return result;
 }

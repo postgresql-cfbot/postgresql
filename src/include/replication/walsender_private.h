@@ -28,6 +28,14 @@ typedef enum WalSndState
 	WALSNDSTATE_STOPPING
 } WalSndState;
 
+typedef enum SyncReplayState
+{
+	SYNC_REPLAY_UNAVAILABLE = 0,
+	SYNC_REPLAY_JOINING,
+	SYNC_REPLAY_AVAILABLE,
+	SYNC_REPLAY_REVOKING
+} SyncReplayState;
+
 /*
  * Each walsender has a WalSnd struct in shared memory.
  *
@@ -59,6 +67,10 @@ typedef struct WalSnd
 	TimeOffset	writeLag;
 	TimeOffset	flushLag;
 	TimeOffset	applyLag;
+
+	/* Synchronous replay state for this walsender. */
+	SyncReplayState syncReplayState;
+	TimestampTz revokingUntil;
 
 	/* Protects shared variables shown above. */
 	slock_t		mutex;
@@ -105,6 +117,14 @@ typedef struct
 	 * Protected by SyncRepLock.
 	 */
 	bool		sync_standbys_defined;
+
+	/*
+	 * Until when must commits in synchronous replay stall?  This is used to
+	 * wait for synchronous replay leases to expire when a walsender exists
+	 * uncleanly, and we must stall synchronous replay commits until we're
+	 * sure that the remote server's lease has expired.
+	 */
+	TimestampTz	revokingUntil;
 
 	WalSnd		walsnds[FLEXIBLE_ARRAY_MEMBER];
 } WalSndCtlData;

@@ -323,7 +323,6 @@ Section: Class 40 - Transaction Rollback
 40001    E    ERRCODE_T_R_SERIALIZATION_FAILURE                              serialization_failure
 40003    E    ERRCODE_T_R_STATEMENT_COMPLETION_UNKNOWN                       statement_completion_unknown
 40P01    E    ERRCODE_T_R_DEADLOCK_DETECTED                                  deadlock_detected
-40P02    E    ERRCODE_T_R_SYNCHRONOUS_REPLAY_NOT_AVAILABLE                   synchronous_replay_not_available
 
 Section: Class 42 - Syntax Error or Access Rule Violation
 

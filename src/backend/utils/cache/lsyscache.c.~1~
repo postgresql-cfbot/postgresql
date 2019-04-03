@@ -46,9 +46,6 @@
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
-/* GUC to force functions to be treated as leakproof */
-extern bool		force_leakproof;
-
 /* Hook for plugins to get control in get_attavgwidth() */
 get_attavgwidth_hook_type get_attavgwidth_hook = NULL;
 
@@ -1570,13 +1567,6 @@ func_strict(Oid funcid)
 {
 	HeapTuple	tp;
 	bool		result;
-
-	/*
-	 * If client message suppression was requested,
-	 * treat all functions as leakproof
-	 */
-	if (force_leakproof)
-		return true;
 
 	tp = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
 	if (!HeapTupleIsValid(tp))

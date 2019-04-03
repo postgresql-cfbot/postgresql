@@ -356,6 +356,15 @@ static List *upperPendingNotifies = NIL;	/* list of upper-xact lists */
  */
 volatile sig_atomic_t notifyInterruptPending = false;
 
+/*
+ * Inbound recovery exit are initially processed by
+ * HandleRecoveryExitInterrupt(), called from inside a signal handler.
+ * That just sets the recoveryExitInterruptPending flag and sets the process
+ * latch. ProcessRecoveryExitInterrupt() will then be called whenever it's
+ * safe to actually deal with the interrupt.
+ */
+volatile sig_atomic_t recoveryExitInterruptPending = false;
+
 /* True if we've registered an on_shmem_exit cleanup */
 static bool unlistenExitRegistered = false;
 
@@ -1736,6 +1745,50 @@ ProcessNotifyInterrupt(void)
 		ProcessIncomingNotify();
 }
 
+/*
+ * HandleRecoveryExitInterrupt
+ *
+ *		Signal handler portion of interrupt handling. Let the backend know
+ *		that the server has exited the recovery mode.
+ */
+void
+HandleRecoveryExitInterrupt(void)
+{
+	/*
+	 * Note: this is called by a SIGNAL HANDLER. You must be very wary what
+	 * you do here.
+	 */
+
+	/* signal that work needs to be done */
+	recoveryExitInterruptPending = true;
+
+	/* make sure the event is processed in due course */
+	SetLatch(MyLatch);
+}
+
+/*
+ * ProcessRecoveryExitInterrupt
+ *
+ *		This is called just after waiting for a frontend command.  If a
+ *		interrupt arrives (via HandleRecoveryExitInterrupt()) while reading,
+ *		the read will be interrupted via the process's latch, and this routine
+ *		will get called.
+*/
+void
+ProcessRecoveryExitInterrupt(void)
+{
+	recoveryExitInterruptPending = false;
+
+	SetConfigOption("in_recovery",
+					"off",
+					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	/*
+	 * Flush output buffer so that clients receive the ParameterStatus message
+	 * as soon as possible.
+	 */
+	pq_flush();
+}
 
 /*
  * Read all pending notifications from the queue, and deliver appropriate

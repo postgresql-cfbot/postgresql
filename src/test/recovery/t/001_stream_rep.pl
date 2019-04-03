@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 26;
+use Test::More tests => 35;
 
 # Initialize master node
 my $node_master = get_new_node('master');
@@ -116,6 +116,42 @@ test_target_session_attrs($node_master, $node_standby_1, $node_master, "any",
 # Connect to standby1 in "any" mode with standby1,master list.
 test_target_session_attrs($node_standby_1, $node_master, $node_standby_1,
 	"any", 0);
+
+# Connect to standby1 in "prefer-read" mode with master,standby1 list.
+test_target_session_attrs($node_master, $node_standby_1, $node_standby_1, "prefer-read",
+	0);
+
+# Connect to standby1 in "prefer-read" mode with standby1,master list.
+test_target_session_attrs($node_standby_1, $node_master, $node_standby_1,
+	"prefer-read", 0);
+
+# Connect to node_master in "prefer-read" mode with only master list.
+test_target_session_attrs($node_master, $node_master, $node_master,
+	"prefer-read", 0);
+
+# Connect to standby1 in "read-only" mode with master,standby1 list.
+test_target_session_attrs($node_master, $node_standby_1, $node_standby_1,
+	"read-only", 0);
+
+# Connect to standby1 in "read-only" mode with standby1,master list.
+test_target_session_attrs($node_standby_1, $node_master, $node_standby_1,
+	"read-only", 0);
+
+# Connect to master in "primary" mode with standby1,master list.
+test_target_session_attrs($node_standby_1, $node_master, $node_master,
+	"primary", 0);
+
+# Connect to master in "prefer-standby" mode with master,master list.
+test_target_session_attrs($node_master, $node_master, $node_master,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "prefer-standby" mode with master,standby1 list.
+test_target_session_attrs($node_master, $node_standby_1, $node_standby_1,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "standby" mode with master,standby1 list.
+test_target_session_attrs($node_master, $node_standby_1, $node_standby_1,
+	"standby", 0);
 
 note "switching to physical replication slot";
 

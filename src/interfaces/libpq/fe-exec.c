@@ -1059,7 +1059,7 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 	}
 
 	/*
-	 * Special hacks: remember client_encoding and
+	 * Special hacks: remember client_encoding, transaction_read_only and
 	 * standard_conforming_strings, and convert server version to a numeric
 	 * form.  We keep the first two of these in static variables as well, so
 	 * that PQescapeString and PQescapeBytea can behave somewhat sanely (at
@@ -1112,6 +1112,14 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 		}
 		else
 			conn->sversion = 0; /* unknown */
+	}
+	else if (strcmp(name, "transaction_read_only") == 0)
+	{
+		conn->transaction_read_only = (strcmp(value, "on") == 0);
+	}
+	else if (strcmp(name, "in_recovery") == 0)
+	{
+		conn->in_recovery = (strcmp(value, "on") == 0);
 	}
 }
 

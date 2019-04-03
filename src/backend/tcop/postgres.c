@@ -543,6 +543,10 @@ ProcessClientReadInterrupt(bool blocked)
 		/* Process notify interrupts, if any */
 		if (notifyInterruptPending)
 			ProcessNotifyInterrupt();
+
+		/* Process recovery exit interrupts that happened while reading */
+		if (recoveryExitInterruptPending)
+			ProcessRecoveryExitInterrupt();
 	}
 	else if (ProcDiePending)
 	{

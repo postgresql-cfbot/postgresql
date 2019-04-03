@@ -1577,18 +1577,68 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>target_session_attrs</literal></term>
       <listitem>
        <para>
+        The supported options for this parameter are, <literal>any</literal>,
+        <literal>read-write</literal>, <literal>prefer-read</literal>, <literal>read-only</literal>,
+        <literal>primary</literal>, <literal>prefer-standby</literal> and <literal>standby</literal>.
+        The default value of this parameter, <literal>any</literal>, regards
+        all connections as acceptable. If multiple hosts were specified in the
+        connection string, based on the specified value, any remaining servers
+        will be tried before confirming succesful connection or failure.
+       </para>
+
+       <para>
         If this parameter is set to <literal>read-write</literal>, only a
         connection in which read-write transactions are accepted by default
-        is considered acceptable.  The query
-        <literal>SHOW transaction_read_only</literal> will be sent upon any
-        successful connection; if it returns <literal>on</literal>, the connection
-        will be closed.  If multiple hosts were specified in the connection
-        string, any remaining servers will be tried just as if the connection
-        attempt had failed.  The default value of this parameter,
-        <literal>any</literal>, regards all connections as acceptable.
-      </para>
+        is considered acceptable.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>prefer-read</literal>, only a
+        connection in which read-only transactions are accepted by default
+        is preferred. If no such connections can be found, then a connection
+        in which read-write transactions accepted will be considered.
+       </para>
+
+       <para>
+        To find out whether the server supports read-write transactions are not,
+        query <literal>SHOW transaction_read_only</literal> will be sent upon any
+        successful connection if the server is prior to version 12; if it returns
+        <literal>on</literal>, it means server doesn't support read-write transactions.
+        But for server version 12 or greater uses the value of <varname>transaction_read_only</varname>
+        configuration parameter that is reported by the server upon successful connection.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>read-only</literal>, only a connection
+        in which read-only transactions are accepted by default.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>primary</literal>, only a connection in which
+        where the server is not in recovery mode.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>prefer-standby</literal>, only a connection in which
+        where the server is in recovery mode is preferred. If no such connections can be found,
+        then a connection in which server is not in recovery mode will be considered.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>standby</literal>, only a connection in which
+        where the server is in recovery mode.
+       </para>
+
+       <para>
+        To find out whether the server is in recovery mode or not, query <literal>SELECT pg_is_in_recovery()</literal>
+        will be sent upon any successful connection if the server is prior to version 12; if it returns
+        <literal>t</literal>, it means server is in recovery mode. But for server version 12 or greater
+        uses the value of <varname>in_recovery</varname> configuration parameter that is reported by the
+        server upon successful connection.
+       </para>
+
       </listitem>
-    </varlistentry>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -1951,14 +2001,18 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>DateStyle</varname>,
        <varname>IntervalStyle</varname>,
        <varname>TimeZone</varname>,
-       <varname>integer_datetimes</varname>, and
-       <varname>standard_conforming_strings</varname>.
+       <varname>integer_datetimes</varname>,
+       <varname>standard_conforming_strings</varname>,
+       <varname>transaction_read_only</varname> and
+       <varname>in_recovery</varname>.
        (<varname>server_encoding</varname>, <varname>TimeZone</varname>, and
        <varname>integer_datetimes</varname> were not reported by releases before 8.0;
        <varname>standard_conforming_strings</varname> was not reported by releases
        before 8.1;
        <varname>IntervalStyle</varname> was not reported by releases before 8.4;
-       <varname>application_name</varname> was not reported by releases before 9.0.)
+       <varname>application_name</varname> was not reported by releases before 9.0;
+       <varname>transaction_read_only</varname> and <varname>in_recovery</varname>
+       were not reported by release before 12.0.)
        Note that
        <varname>server_version</varname>,
        <varname>server_encoding</varname> and

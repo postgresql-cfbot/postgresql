@@ -363,8 +363,12 @@ struct pg_conn
 	char	   *krbsrvname;		/* Kerberos service name */
 #endif
 
-	/* Type of connection to make.  Possible values: any, read-write. */
+	/*
+	 * Type of connection to make.  Possible values: any, read-write,
+	 * prefer-read, read-only, primary, prefer-standby and standby.
+	 */
 	char	   *target_session_attrs;
+	TargetSessionAttrsType requested_session_type;
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -399,6 +403,14 @@ struct pg_conn
 	pg_conn_host *connhost;		/* details about each named host */
 	char	   *connip;			/* IP address for current network connection */
 
+	/*
+	 * First read-write host index in the connection string.
+	 *
+	 * Initial value is -1, then the index of the first read-write host, -2
+	 * during the second attempt of connection to avoid recursion.
+	 */
+	int			read_write_or_primary_host_index;
+
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
@@ -429,6 +441,8 @@ struct pg_conn
 	pgParameterStatus *pstatus; /* ParameterStatus data */
 	int			client_encoding;	/* encoding id */
 	bool		std_strings;	/* standard_conforming_strings */
+	bool		transaction_read_only;	/* transaction_read_only */
+	bool		in_recovery;	/* in_recovery */
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */

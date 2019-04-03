@@ -42,6 +42,8 @@ typedef enum
 	PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
 	PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK,
 
+	PROCSIG_RECOVERY_EXIT,		/* recovery exit interrupt */
+
 	NUM_PROCSIGNALS				/* Must be last! */
 } ProcSignalReason;
 

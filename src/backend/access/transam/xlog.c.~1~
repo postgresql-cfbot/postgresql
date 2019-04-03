@@ -7707,10 +7707,7 @@ StartupXLOG(void)
 	 * RecoverPreparedTransactions(), see notes for lock_twophase_recover()
 	 */
 	if (standbyState != STANDBY_DISABLED)
-	{
 		ShutdownRecoveryTransactionEnvironment();
-		SendRecoveryExitSignal();
-	}
 
 	/* Shut down xlogreader */
 	if (readFile >= 0)
@@ -7918,12 +7915,6 @@ RecoveryInProgress(void)
 			pg_memory_barrier();
 			InitXLOGAccess();
 		}
-
-		/* Update in_recovery status. */
-		if (LocalRecoveryInProgress)
-			SetConfigOption("in_recovery",
-							"on",
-							PGC_INTERNAL, PGC_S_OVERRIDE);
 
 		/*
 		 * Note: We don't need a memory barrier when we're still in recovery.

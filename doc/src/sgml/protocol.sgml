@@ -1283,14 +1283,18 @@ SELCT 1/0;
     <varname>DateStyle</varname>,
     <varname>IntervalStyle</varname>,
     <varname>TimeZone</varname>,
-    <varname>integer_datetimes</varname>, and
-    <varname>standard_conforming_strings</varname>.
+    <varname>integer_datetimes</varname>,
+    <varname>standard_conforming_strings</varname>,
+    <varname>transaction_read_only</varname> and
+    <varname>in_recovery</varname>.
     (<varname>server_encoding</varname>, <varname>TimeZone</varname>, and
     <varname>integer_datetimes</varname> were not reported by releases before 8.0;
     <varname>standard_conforming_strings</varname> was not reported by releases
     before 8.1;
     <varname>IntervalStyle</varname> was not reported by releases before 8.4;
-    <varname>application_name</varname> was not reported by releases before 9.0.)
+    <varname>application_name</varname> was not reported by releases before 9.0;
+    <varname>transaction_read_only</varname> and <varname>in_recovery</varname>
+    were not reported by releases before 12.0.)
     Note that
     <varname>server_version</varname>,
     <varname>server_encoding</varname> and

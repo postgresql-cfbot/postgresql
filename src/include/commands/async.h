@@ -24,6 +24,7 @@
 
 extern bool Trace_notify;
 extern volatile sig_atomic_t notifyInterruptPending;
+extern volatile sig_atomic_t recoveryExitInterruptPending;
 
 extern Size AsyncShmemSize(void);
 extern void AsyncShmemInit(void);
@@ -53,5 +54,9 @@ extern void HandleNotifyInterrupt(void);
 
 /* process interrupts */
 extern void ProcessNotifyInterrupt(void);
+
+/* recovery exit interrupt handling functions */
+extern void HandleRecoveryExitInterrupt(void);
+extern void ProcessRecoveryExitInterrupt(void);
 
 #endif							/* ASYNC_H */

@@ -578,7 +578,7 @@ static char *recovery_target_xid_string;
 static char *recovery_target_time_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
-static bool in_recovery;
+
 
 /* should be static, but commands/variable.c needs to get at this */
 char	   *role_string;
@@ -1523,7 +1523,7 @@ static struct config_bool ConfigureNamesBool[] =
 		{"transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the current transaction's read-only status."),
 			NULL,
-			GUC_REPORT | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&XactReadOnly,
 		false,
@@ -1744,21 +1744,6 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&hot_standby_feedback,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
-		/*
-		 * Not for general use --- used to indicate whether the instance is
-		 * recovery mode
-		 */
-		{"in_recovery", PGC_INTERNAL, UNGROUPED,
-			gettext_noop("Shows whether the instance is in recovery mode."),
-			NULL,
-			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
-		},
-		&in_recovery,
 		false,
 		NULL, NULL, NULL
 	},

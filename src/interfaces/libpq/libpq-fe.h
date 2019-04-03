@@ -65,9 +65,22 @@ typedef enum
 	CONNECTION_NEEDED,			/* Internal state: connect() needed */
 	CONNECTION_CHECK_WRITABLE,	/* Check if we could make a writable
 								 * connection. */
-	CONNECTION_CONSUME			/* Wait for any pending message and consume
+	CONNECTION_CONSUME,			/* Wait for any pending message and consume
 								 * them. */
+	CONNECTION_CHECK_TARGET,	/* Check if we have a proper target connection */
+	CONNECTION_CHECK_RECOVERY	/* Check whether server is in recovery */
 } ConnStatusType;
+
+typedef enum
+{
+	SESSION_TYPE_ANY = 0,		/* Any session (default) */
+	SESSION_TYPE_READ_WRITE,	/* Read-write session */
+	SESSION_TYPE_PREFER_READ,	/* Prefer read only session */
+	SESSION_TYPE_READ_ONLY,		/* Read only session */
+	SESSION_TYPE_PRIMARY,		/* Primary server */
+	SESSION_TYPE_PREFER_STANDBY,	/* Prefer Standby server */
+	SESSION_TYPE_STANDBY		/* Standby server */
+}			TargetSessionAttrsType;
 
 typedef enum
 {

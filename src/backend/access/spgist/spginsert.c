@@ -22,6 +22,7 @@
 #include "access/tableam.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/generic_xlog.h"
 #include "catalog/index.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -105,26 +106,6 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	SpGistInitBuffer(nullbuffer, SPGIST_LEAF | SPGIST_NULLS);
 	MarkBufferDirty(nullbuffer);
 
-	if (RelationNeedsWAL(index))
-	{
-		XLogRecPtr	recptr;
-
-		XLogBeginInsert();
-
-		/*
-		 * Replay will re-initialize the pages, so don't take full pages
-		 * images.  No other data to log.
-		 */
-		XLogRegisterBuffer(0, metabuffer, REGBUF_WILL_INIT | REGBUF_STANDARD);
-		XLogRegisterBuffer(1, rootbuffer, REGBUF_WILL_INIT | REGBUF_STANDARD);
-		XLogRegisterBuffer(2, nullbuffer, REGBUF_WILL_INIT | REGBUF_STANDARD);
-
-		recptr = XLogInsert(RM_SPGIST_ID, XLOG_SPGIST_CREATE_INDEX);
-
-		PageSetLSN(BufferGetPage(metabuffer), recptr);
-		PageSetLSN(BufferGetPage(rootbuffer), recptr);
-		PageSetLSN(BufferGetPage(nullbuffer), recptr);
-	}
 
 	END_CRIT_SECTION();
 
@@ -150,6 +131,9 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	MemoryContextDelete(buildstate.tmpCtx);
 
 	SpGistUpdateMetaPage(index);
+
+	if (RelationNeedsWAL(index))
+		log_relation(index);
 
 	result = (IndexBuildResult *) palloc0(sizeof(IndexBuildResult));
 	result->heap_tuples = reltuples;

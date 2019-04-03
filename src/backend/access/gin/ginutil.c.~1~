@@ -662,7 +662,7 @@ ginGetStats(Relation index, GinStatsData *stats)
  * Note: nPendingPages and ginVersion are *not* copied over
  */
 void
-ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
+ginUpdateStats(Relation index, const GinStatsData *stats)
 {
 	Buffer		metabuffer;
 	Page		metapage;
@@ -692,7 +692,7 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 
 	MarkBufferDirty(metabuffer);
 
-	if (RelationNeedsWAL(index) && !is_build)
+	if (RelationNeedsWAL(index))
 	{
 		XLogRecPtr	recptr;
 		ginxlogUpdateMeta data;

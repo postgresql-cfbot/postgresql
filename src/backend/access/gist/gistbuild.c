@@ -17,6 +17,7 @@
 #include <math.h>
 
 #include "access/genam.h"
+#include "access/generic_xlog.h"
 #include "access/gist_private.h"
 #include "access/gistxlog.h"
 #include "access/tableam.h"
@@ -181,18 +182,12 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 
 	MarkBufferDirty(buffer);
 
-	if (RelationNeedsWAL(index))
-	{
-		XLogRecPtr	recptr;
-
-		XLogBeginInsert();
-		XLogRegisterBuffer(0, buffer, REGBUF_WILL_INIT);
-
-		recptr = XLogInsert(RM_GIST_ID, XLOG_GIST_CREATE_INDEX);
-		PageSetLSN(page, recptr);
-	}
-	else
-		PageSetLSN(page, gistGetFakeLSN(heap));
+	/*
+	 * Do not write index pages to WAL unitl index build is finished.
+	 * But we still need increasing LSNs on each page, so use FakeLSN,
+	 * even for relations which eventually need WAL.
+	 */
+	PageSetLSN(page, gistGetFakeLSN(heap));
 
 	UnlockReleaseBuffer(buffer);
 
@@ -225,6 +220,15 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	MemoryContextDelete(buildstate.giststate->tempCxt);
 
 	freeGISTstate(buildstate.giststate);
+
+	/*
+	 * Create generic wal records for all pages of relation, if necessary.
+	 * It seems reasonable not to generate WAL, if we recieved interrupt
+	 * signal.
+	 */
+	CHECK_FOR_INTERRUPTS();
+	if (RelationNeedsWAL(index))
+		log_relation(index);
 
 	/*
 	 * Return statistics
@@ -488,7 +492,7 @@ gistBuildCallback(Relation index,
 		 * locked, we call gistdoinsert directly.
 		 */
 		gistdoinsert(index, itup, buildstate->freespace,
-					 buildstate->giststate, buildstate->heaprel);
+					 buildstate->giststate, buildstate->heaprel, true);
 	}
 
 	/* Update tuple count and total size. */
@@ -695,7 +699,7 @@ gistbufferinginserttuples(GISTBuildState *buildstate, Buffer buffer, int level,
 							   InvalidBuffer,
 							   &splitinfo,
 							   false,
-							   buildstate->heaprel);
+							   buildstate->heaprel, true);
 
 	/*
 	 * If this is a root split, update the root path item kept in memory. This

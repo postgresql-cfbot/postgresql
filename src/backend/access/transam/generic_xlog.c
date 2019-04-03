@@ -16,6 +16,7 @@
 #include "access/bufmask.h"
 #include "access/generic_xlog.h"
 #include "access/xlogutils.h"
+#include "catalog/pg_control.h"
 #include "miscadmin.h"
 #include "utils/memutils.h"
 
@@ -541,4 +542,66 @@ generic_mask(char *page, BlockNumber blkno)
 	mask_page_lsn_and_checksum(page);
 
 	mask_unused_space(page);
+}
+
+/*
+ * Function for WAL-logging all pages of a relation.
+ * Caller is responsible for locking the relation exclusively.
+ */
+void
+log_relation(Relation rel)
+{
+	BlockNumber 		blkno = 0;
+	BlockNumber 		nblocks;
+	Buffer				bufpack[XLR_MAX_BLOCK_ID];
+
+	CHECK_FOR_INTERRUPTS();
+
+	/*
+	 * Iterate over all index pages and WAL-logging it. Pages are grouping into
+	 * the packages before adding to a WAL-record. Zero pages are not logged.
+	 */
+	nblocks = RelationGetNumberOfBlocks(rel);
+	while (blkno < nblocks)
+	{
+		XLogRecPtr recptr;
+		int8 nbufs = 0;
+		int8 i;
+
+		/*
+		 * Assemble package of relation blocks. Try to combine the maximum
+		 * possible number of blocks in one record.
+		 */
+		while (nbufs < XLR_MAX_BLOCK_ID && blkno < nblocks)
+		{
+			Buffer buf = ReadBuffer(rel, blkno);
+
+			if (!PageIsNew(BufferGetPage(buf)))
+				bufpack[nbufs++] = buf;
+			else
+				ReleaseBuffer(buf);
+			blkno++;
+		}
+
+		XLogBeginInsert();
+		XLogEnsureRecordSpace(nbufs, 0);
+
+		START_CRIT_SECTION();
+		for (i = 0; i < nbufs; i++)
+		{
+			LockBuffer(bufpack[i], BUFFER_LOCK_EXCLUSIVE);
+			XLogRegisterBuffer(i, bufpack[i], REGBUF_FORCE_IMAGE | REGBUF_STANDARD);
+		}
+
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
+
+		for (i = 0; i < nbufs; i++)
+		{
+			Page page = BufferGetPage(bufpack[i]);
+			PageSetLSN(page, recptr);
+			MarkBufferDirty(bufpack[i]);
+			UnlockReleaseBuffer(bufpack[i]);
+		}
+		END_CRIT_SECTION();
+	}
 }

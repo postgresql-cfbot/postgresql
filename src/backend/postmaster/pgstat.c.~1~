@@ -2959,7 +2959,6 @@ pgstat_bestart(void)
 	/* Also make sure the last byte in each string area is always 0 */
 	beentry->st_clienthostname[NAMEDATALEN - 1] = '\0';
 	beentry->st_appname[NAMEDATALEN - 1] = '\0';
-	beentry->st_temp_namespace_xid = InvalidTransactionId;
 	beentry->st_activity_raw[pgstat_track_activity_query_size - 1] = '\0';
 	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
 	beentry->st_progress_command_target = InvalidOid;
@@ -3241,28 +3240,6 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
 	 */
 	pgstat_increment_changecount_before(beentry);
 	beentry->st_xact_start_timestamp = tstamp;
-	pgstat_increment_changecount_after(beentry);
-}
-
-/*
- * Report the transaction id that created a temporary namespace in this
- * session.
- */
-void
-pgstat_report_temp_namespace_xid(TransactionId xid)
-{
-	volatile PgBackendStatus *beentry = MyBEEntry;
-
-	if (!pgstat_track_activities || !beentry)
-		return;
-
-	/*
-	 * Update my status entry, following the protocol of bumping
-	 * st_changecount before and after.  We use a volatile pointer here to
-	 * ensure the compiler doesn't try to get cute.
-	 */
-	pgstat_increment_changecount_before(beentry);
-	beentry->st_temp_namespace_xid = xid;
 	pgstat_increment_changecount_after(beentry);
 }
 

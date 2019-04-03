@@ -45,6 +45,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_func.h"
+#include "pgstat.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/sinvaladt.h"
@@ -3929,6 +3930,9 @@ InitTempTableNamespace(void)
 									  true);
 		/* Advance command counter to make namespace visible */
 		CommandCounterIncrement();
+
+		/* Indicate that this is the xid that created the namespace */
+		pgstat_report_temp_namespace_xid(GetTopTransactionId());
 	}
 	else
 	{

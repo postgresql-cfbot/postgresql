@@ -494,7 +494,8 @@ CommitTsShmemInit(void)
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
 	SimpleLruInit(CommitTsCtl, "commit_timestamp", CommitTsShmemBuffers(), 0,
 				  CommitTsControlLock, "pg_commit_ts",
-				  LWTRANCHE_COMMITTS_BUFFERS);
+				  LWTRANCHE_COMMITTS_BUFFERS,
+				  SYNC_HANDLER_COMMIT_TS);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",
 									 sizeof(CommitTimestampShared),
@@ -1021,4 +1022,13 @@ commit_ts_redo(XLogReaderState *record)
 	}
 	else
 		elog(PANIC, "commit_ts_redo: unknown op code %u", info);
+}
+
+/*
+ * Entrypoint for sync.c to sync commit_ts files.
+ */
+int
+committssyncfiletag(const FileTag *ftag, char *path)
+{
+	return slrusyncfiletag(CommitTsCtl, ftag, path);
 }

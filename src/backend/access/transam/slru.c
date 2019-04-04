@@ -82,6 +82,18 @@ typedef struct SlruFlushData
 typedef struct SlruFlushData *SlruFlush;
 
 /*
+ * Populate a file tag describing a segment file.  We only use the segment
+ * number, since we can derive everything else we need by having separate
+ * sync handler functions for clog, multixact etc.
+ */
+#define INIT_SLRUFILETAG(a,xx_handler,xx_segno) \
+( \
+	memset(&(a), 0, sizeof(FileTag)), \
+	(a).handler = (xx_handler), \
+	(a).segno = (xx_segno) \
+)
+
+/*
  * Macro to mark a buffer slot "most recently used".  Note multiple evaluation
  * of arguments!
  *
@@ -163,7 +175,8 @@ SimpleLruShmemSize(int nslots, int nlsns)
 
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-			  LWLock *ctllock, const char *subdir, int tranche_id)
+			  LWLock *ctllock, const char *subdir, int tranche_id,
+			  SyncRequestHandler sync_handler)
 {
 	SlruShared	shared;
 	bool		found;
@@ -247,7 +260,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	 * assume caller set PagePrecedes.
 	 */
 	ctl->shared = shared;
-	ctl->do_fsync = true;		/* default behavior */
+	ctl->sync_handler = sync_handler;
 	StrNCpy(ctl->Dir, subdir, sizeof(ctl->Dir));
 }
 
@@ -862,23 +875,31 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruFlush fdata)
 	}
 	pgstat_report_wait_end();
 
-	/*
-	 * If not part of Flush, need to fsync now.  We assume this happens
-	 * infrequently enough that it's not a performance issue.
-	 */
+	/* Queue up a sync request for the checkpointer. */
+	if (ctl->sync_handler != SYNC_HANDLER_NONE)
+	{
+		FileTag		tag;
+
+		INIT_SLRUFILETAG(tag, ctl->sync_handler, segno);
+		if (!RegisterSyncRequest(&tag, SYNC_REQUEST, false))
+		{
+			/* No space to enqueue sync request.  Do it synchronously. */
+			pgstat_report_wait_start(WAIT_EVENT_SLRU_SYNC);
+			if (pg_fsync(fd) < 0)
+			{
+				pgstat_report_wait_end();
+				slru_errcause = SLRU_FSYNC_FAILED;
+				slru_errno = errno;
+				CloseTransientFile(fd);
+				return false;
+			}
+			pgstat_report_wait_end();
+		}
+	}
+
+	/* Close file, unless part of flush request. */
 	if (!fdata)
 	{
-		pgstat_report_wait_start(WAIT_EVENT_SLRU_SYNC);
-		if (ctl->do_fsync && pg_fsync(fd))
-		{
-			pgstat_report_wait_end();
-			slru_errcause = SLRU_FSYNC_FAILED;
-			slru_errno = errno;
-			CloseTransientFile(fd);
-			return false;
-		}
-		pgstat_report_wait_end();
-
 		if (CloseTransientFile(fd))
 		{
 			slru_errcause = SLRU_CLOSE_FAILED;
@@ -1140,21 +1161,11 @@ SimpleLruFlush(SlruCtl ctl, bool allow_redirtied)
 	LWLockRelease(shared->ControlLock);
 
 	/*
-	 * Now fsync and close any files that were open
+	 * Now close any files that were open
 	 */
 	ok = true;
 	for (i = 0; i < fdata.num_files; i++)
 	{
-		pgstat_report_wait_start(WAIT_EVENT_SLRU_FLUSH_SYNC);
-		if (ctl->do_fsync && pg_fsync(fdata.fd[i]))
-		{
-			slru_errcause = SLRU_FSYNC_FAILED;
-			slru_errno = errno;
-			pageno = fdata.segno[i] * SLRU_PAGES_PER_SEGMENT;
-			ok = false;
-		}
-		pgstat_report_wait_end();
-
 		if (CloseTransientFile(fdata.fd[i]))
 		{
 			slru_errcause = SLRU_CLOSE_FAILED;
@@ -1270,6 +1281,7 @@ SlruDeleteSegment(SlruCtl ctl, int segno)
 	int			slotno;
 	char		path[MAXPGPATH];
 	bool		did_write;
+	FileTag		tag;
 
 	/* Clean out any possibly existing references to the segment. */
 	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
@@ -1313,6 +1325,17 @@ restart:
 	snprintf(path, MAXPGPATH, "%s/%04X", ctl->Dir, segno);
 	ereport(DEBUG2,
 			(errmsg("removing file \"%s\"", path)));
+
+	/*
+	 * Tell the checkpointer to forget any sync requests, before we unlink the
+	 * file.
+	 */
+	if (ctl->sync_handler != SYNC_HANDLER_NONE)
+	{
+		INIT_SLRUFILETAG(tag, ctl->sync_handler, segno);
+		RegisterSyncRequest(&tag, SYNC_FORGET_REQUEST, true);
+	}
+
 	unlink(path);
 
 	LWLockRelease(shared->ControlLock);
@@ -1410,4 +1433,32 @@ SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data)
 	FreeDir(cldir);
 
 	return retval;
+}
+
+/*
+ * Individual SLRUs (clog, ...) have to provide a sync.c handler function so
+ * that they can provide the correct "SlruCtl" (otherwise we don't know how to
+ * build the path), but they just forward to this common implementation that
+ * performs the fsync.
+ */
+int
+slrusyncfiletag(SlruCtl ctl, const FileTag *ftag, char *path)
+{
+	int			fd;
+	int			save_errno;
+	int			result;
+
+	SlruFileName(ctl, path, ftag->segno);
+
+	fd = OpenTransientFile(path, O_RDWR | PG_BINARY);
+	if (fd < 0)
+		return -1;
+
+	result = pg_fsync(fd);
+	save_errno = errno;
+
+	CloseTransientFile(fd);
+
+	errno = save_errno;
+	return result;
 }

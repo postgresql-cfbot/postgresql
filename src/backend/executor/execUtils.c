@@ -664,6 +664,10 @@ ExecCreateScanSlotFromOuterPlan(EState *estate,
  *
  *		Detect whether a relation (identified by rangetable index)
  *		is one of the target relations of the query.
+ *
+ * Note: This is currently no longer used in core.  We keep it
+ * around to allow FDWs to use it in order to determine if the foreign
+ * table is the target of an UPDATE/DELETE.
  * ----------------------------------------------------------------
  */
 bool

@@ -161,24 +161,12 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 	if (hasindex)
 	{
+		RangeTblEntry *rte;
 		List	   *indexoidlist;
 		ListCell   *l;
-		LOCKMODE	lmode;
 
+		rte = root->simple_rte_array[varno];
 		indexoidlist = RelationGetIndexList(relation);
-
-		/*
-		 * For each index, we get the same type of lock that the executor will
-		 * need, and do not release it.  This saves a couple of trips to the
-		 * shared lock manager while not creating any real loss of
-		 * concurrency, because no schema changes could be happening on the
-		 * index while we hold lock on the parent rel, and neither lock type
-		 * blocks any other kind of index operation.
-		 */
-		if (rel->relid == root->parse->resultRelation)
-			lmode = RowExclusiveLock;
-		else
-			lmode = AccessShareLock;
 
 		foreach(l, indexoidlist)
 		{
@@ -194,7 +182,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			/*
 			 * Extract info from the relation descriptor for the index.
 			 */
-			indexRelation = index_open(indexoid, lmode);
+			indexRelation = index_open(indexoid, rte->rellockmode);
 			index = indexRelation->rd_index;
 
 			/*
@@ -592,8 +580,8 @@ infer_arbiter_indexes(PlannerInfo *root)
 	OnConflictExpr *onconflict = root->parse->onConflict;
 
 	/* Iteration state */
+	RangeTblEntry *rte;
 	Relation	relation;
-	Oid			relationObjectId;
 	Oid			indexOidFromConstraint = InvalidOid;
 	List	   *indexList;
 	ListCell   *l;
@@ -620,10 +608,9 @@ infer_arbiter_indexes(PlannerInfo *root)
 	 * the rewriter or when expand_inherited_rtentry() added it to the query's
 	 * rangetable.
 	 */
-	relationObjectId = rt_fetch(root->parse->resultRelation,
-								root->parse->rtable)->relid;
+	rte = rt_fetch(root->parse->resultRelation, root->parse->rtable);
 
-	relation = table_open(relationObjectId, NoLock);
+	relation = table_open(rte->relid, NoLock);
 
 	/*
 	 * Build normalized/BMS representation of plain indexed attributes, as
@@ -695,7 +682,8 @@ infer_arbiter_indexes(PlannerInfo *root)
 		 * enforcement needs to occur there anyway when an inference clause is
 		 * omitted.
 		 */
-		idxRel = index_open(indexoid, RowExclusiveLock);
+		Assert(rte->rellockmode >= RowExclusiveLock);
+		idxRel = index_open(indexoid, rte->rellockmode);
 		idxForm = idxRel->rd_index;
 
 		if (!idxForm->indisvalid)

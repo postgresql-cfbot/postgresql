@@ -2719,6 +2719,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 {
 	bytea	   *relopts;
 	AutoVacOpts *av;
+	AutoVacOpts *src;
 
 	Assert(((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_RELATION ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_MATVIEW ||
@@ -2728,8 +2729,13 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 	if (relopts == NULL)
 		return NULL;
 
+	if (((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_TOASTVALUE)
+		src = &(((ToastRelOptions *) relopts)->autovacuum);
+	else
+		src = &(((HeapRelOptions *) relopts)->autovacuum);
+
 	av = palloc(sizeof(AutoVacOpts));
-	memcpy(av, &(((StdRdOptions *) relopts)->autovacuum), sizeof(AutoVacOpts));
+	memcpy(av, src, sizeof(AutoVacOpts));
 	pfree(relopts);
 
 	return av;

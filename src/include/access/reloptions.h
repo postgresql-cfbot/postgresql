@@ -270,9 +270,11 @@ extern void fillRelOptions(void *rdopts, Size basesize,
 			   bool validate,
 			   const relopt_parse_elt *elems, int nelems);
 
-extern bytea *default_reloptions(Datum reloptions, bool validate,
-				   relopt_kind kind);
-extern bytea *heap_reloptions(char relkind, Datum reloptions, bool validate);
+extern bytea *toast_reloptions(Datum reloptions, bool validate);
+extern bytea *partitioned_reloptions(Datum reloptions, bool validate);
+extern bytea *heap_reloptions(Datum reloptions, bool validate);
+extern bytea *relation_reloptions(char relkind, Datum reloptions,
+								  bool validate);
 extern bytea *view_reloptions(Datum reloptions, bool validate);
 extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,
 				 bool validate);

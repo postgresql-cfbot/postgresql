@@ -229,15 +229,11 @@ typedef struct ForeignKeyCacheInfo
 } ForeignKeyCacheInfo;
 
 
+
 /*
- * StdRdOptions
- *		Standard contents of rd_options for heaps and generic indexes.
- *
- * RelationGetFillFactor() and RelationGetTargetPageFreeSpace() can only
- * be applied to relations that use this format or a superset for
- * private options data.
+ * AutoVacOpts
+ *		Auto Vacuum options used both in Heap and Toast relations
  */
- /* autovacuum-related reloptions. */
 typedef struct AutoVacOpts
 {
 	bool		enabled;
@@ -256,50 +252,82 @@ typedef struct AutoVacOpts
 	float8		analyze_scale_factor;
 } AutoVacOpts;
 
-typedef struct StdRdOptions
+/*
+ * HeapRelOptions
+ *		Binary representation of relation options for Heap relations.
+ */
+typedef struct HeapRelOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
-	/* fraction of newly inserted tuples prior to trigger index cleanup */
-	float8		vacuum_cleanup_index_scale_factor;
 	int			toast_tuple_target; /* target for tuple toasting */
-	AutoVacOpts autovacuum;		/* autovacuum-related options */
+	AutoVacOpts autovacuum;	 		/* autovacuum-related options */
 	bool		user_catalog_table; /* use as an additional catalog relation */
 	int			parallel_workers;	/* max number of parallel workers */
-} StdRdOptions;
+} HeapRelOptions;
+
+/*
+ * ToastRelOptions
+ *		Binary representation of relation options for Toast relations.
+ */
+typedef struct ToastRelOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	AutoVacOpts autovacuum;		/* autovacuum-related options */
+} ToastRelOptions;
+
+
+/*
+ * PartitionedRelOptions
+ *		Binary representation of relation options for Partitioned relations.
+ */
+typedef struct PartitionedRelOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	/* No options defined yet */
+} PartitionedRelOptions;
 
 #define HEAP_MIN_FILLFACTOR			10
 #define HEAP_DEFAULT_FILLFACTOR		100
 
+#define TOAST_DEFAULT_FILLFACTOR	100 /* Only default is actually used */
+
+
 /*
  * RelationGetToastTupleTarget
- *		Returns the relation's toast_tuple_target.  Note multiple eval of argument!
+ *		Returns the heap's toast_tuple_target.  Note multiple eval of argument!
  */
-#define RelationGetToastTupleTarget(relation, defaulttarg) \
-	((relation)->rd_options ? \
-	 ((StdRdOptions *) (relation)->rd_options)->toast_tuple_target : (defaulttarg))
+#define RelationGetToastTupleTarget(relation, defaulttarg) 				\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_RELATION ||		\
+				 relation->rd_rel->relkind == RELKIND_MATVIEW),			\
+	 ((relation)->rd_options ? 											\
+	  ((HeapRelOptions *) (relation)->rd_options)->toast_tuple_target : \
+			(defaulttarg)))
 
 /*
- * RelationGetFillFactor
- *		Returns the relation's fillfactor.  Note multiple eval of argument!
+ * HeapGetFillFactor
+ *		Returns the heap's fillfactor.  Note multiple eval of argument!
  */
-#define RelationGetFillFactor(relation, defaultff) \
-	((relation)->rd_options ? \
-	 ((StdRdOptions *) (relation)->rd_options)->fillfactor : (defaultff))
+#define HeapGetFillFactor(relation) 									\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_RELATION ||		\
+				 relation->rd_rel->relkind == RELKIND_MATVIEW),			\
+	 ((relation)->rd_options ? 											\
+	  ((HeapRelOptions *) (relation)->rd_options)->fillfactor : 		\
+									(HEAP_DEFAULT_FILLFACTOR)))
 
 /*
- * RelationGetTargetPageUsage
- *		Returns the relation's desired space usage per page in bytes.
+ * HeapGetTargetPageUsage
+ *		Returns the heap's desired space usage per page in bytes.
  */
-#define RelationGetTargetPageUsage(relation, defaultff) \
-	(BLCKSZ * RelationGetFillFactor(relation, defaultff) / 100)
+#define HeapGetTargetPageUsage(relation) \
+	(BLCKSZ * HeapGetFillFactor(relation) / 100)
 
 /*
- * RelationGetTargetPageFreeSpace
- *		Returns the relation's desired freespace per page in bytes.
+ * HeapGetTargetPageFreeSpace
+ *		Returns the heap's desired freespace per page in bytes.
  */
-#define RelationGetTargetPageFreeSpace(relation, defaultff) \
-	(BLCKSZ * (100 - RelationGetFillFactor(relation, defaultff)) / 100)
+#define HeapGetTargetPageFreeSpace(relation) \
+	(BLCKSZ * (100 - HeapGetFillFactor(relation)) / 100)
 
 /*
  * RelationIsUsedAsCatalogTable
@@ -310,17 +338,27 @@ typedef struct StdRdOptions
 	((relation)->rd_options && \
 	 ((relation)->rd_rel->relkind == RELKIND_RELATION || \
 	  (relation)->rd_rel->relkind == RELKIND_MATVIEW) ? \
-	 ((StdRdOptions *) (relation)->rd_options)->user_catalog_table : false)
+	 ((HeapRelOptions *) (relation)->rd_options)->user_catalog_table : false)
 
 /*
  * RelationGetParallelWorkers
- *		Returns the relation's parallel_workers reloption setting.
+ *		Returns the heap's parallel_workers reloption setting.
  *		Note multiple eval of argument!
  */
-#define RelationGetParallelWorkers(relation, defaultpw) \
-	((relation)->rd_options ? \
-	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
+#define RelationGetParallelWorkers(relation, defaultpw) 				\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_RELATION ||		\
+				 relation->rd_rel->relkind == RELKIND_MATVIEW),			\
+	 ((relation)->rd_options ? 											\
+	  ((HeapRelOptions *) (relation)->rd_options)->parallel_workers : 	\
+			(defaultpw)))
 
+/*
+ * ToastGetTargetPageFreeSpace
+ *		Returns the TOAST relation's desired freespace per page in bytes.
+ *		Always calculated using default fillfactor value.
+ */
+#define ToastGetTargetPageFreeSpace() \
+	(BLCKSZ * (100 - TOAST_DEFAULT_FILLFACTOR) / 100)
 
 /*
  * ViewOptions
@@ -338,9 +376,10 @@ typedef struct ViewOptions
  *		Returns whether the relation is security view, or not.  Note multiple
  *		eval of argument!
  */
-#define RelationIsSecurityView(relation)	\
-	((relation)->rd_options ?				\
-	 ((ViewOptions *) (relation)->rd_options)->security_barrier : false)
+#define RelationIsSecurityView(relation)									\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
+	 ((relation)->rd_options ?												\
+	  ((ViewOptions *) (relation)->rd_options)->security_barrier : false))
 
 /*
  * RelationHasCheckOption
@@ -348,8 +387,9 @@ typedef struct ViewOptions
  *		or the cascaded check option.  Note multiple eval of argument!
  */
 #define RelationHasCheckOption(relation)									\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
 	((relation)->rd_options &&												\
-	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0)
+	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0))
 
 /*
  * RelationHasLocalCheckOption
@@ -357,11 +397,12 @@ typedef struct ViewOptions
  *		option.  Note multiple eval of argument!
  */
 #define RelationHasLocalCheckOption(relation)								\
-	((relation)->rd_options &&												\
-	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0 ?	\
-	 strcmp((char *) (relation)->rd_options +								\
-			((ViewOptions *) (relation)->rd_options)->check_option_offset,	\
-			"local") == 0 : false)
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
+	 ((relation)->rd_options &&												\
+	  ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0 ?	\
+	   strcmp((char *) (relation)->rd_options +								\
+			 ((ViewOptions *) (relation)->rd_options)->check_option_offset,	\
+			 "local") == 0 : false))
 
 /*
  * RelationHasCascadedCheckOption
@@ -369,11 +410,12 @@ typedef struct ViewOptions
  *		option.  Note multiple eval of argument!
  */
 #define RelationHasCascadedCheckOption(relation)							\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
 	((relation)->rd_options &&												\
 	 ((ViewOptions *) (relation)->rd_options)->check_option_offset != 0 ?	\
 	 strcmp((char *) (relation)->rd_options +								\
 			((ViewOptions *) (relation)->rd_options)->check_option_offset,	\
-			"cascaded") == 0 : false)
+			"cascaded") == 0 : false))
 
 
 /*

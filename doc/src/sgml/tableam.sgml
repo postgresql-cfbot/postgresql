@@ -64,7 +64,7 @@
  </para>
 
  <para>
-  Currently the the way an AM actually stores data is fairly
+  Currently the way an AM actually stores data is fairly
   unconstrained. It is e.g. possible to use postgres' shared buffer cache,
   but not required. In case shared buffers are used, it likely makes to
   postgres' standard page layout described in <xref

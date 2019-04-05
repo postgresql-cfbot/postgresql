@@ -1403,51 +1403,6 @@ psql_completion(const char *text, int start, int end)
 		"\\w", "\\watch",
 		"\\z",
 		"\\!", "\\?",
-		"\\describe-access-method",
-		"\\describe-aggregate-function",
-		"\\describe-aggregate",
-		"\\describe-cast",
-		"\\describe-collation",
-		"\\describe-constraint",
-		"\\describe-conversion",
-		"\\describe-default-access-privelege",
-		"\\describe-defined-configuration-setting",
-		"\\describe-domain",
-		"\\describe-event-trigger",
-		"\\describe-extension",
-		"\\describe-foreign-data-wrapper",
-		"\\describe-foreign-server",
-		"\\describe-foreign-table",
-		"\\describe-function",
-		"\\describe-index",
-		"\\describe-materialized-view",
-		"\\describe-namespace",
-		"\\describe-normal-function",
-		"\\describe-operator-class",
-		"\\describe-operator-family",
-		"\\describe-operator",
-		"\\describe-privilege",
-		"\\describe-procedural-language",
-		"\\describe-procedure",
-		"\\describe-replication-publication",
-		"\\describe-replication-subscription",
-		"\\describe-role",
-		"\\describe-rule",
-		"\\describe-schema",
-		"\\describe-sequence",
-		"\\describe-tablespace",
-		"\\describe-table",
-		"\\describe-text-search-configuration",
-		"\\describe-text-search-dictionary",
-		"\\describe-text-search-parser",
-		"\\describe-text-search-templates",
-		"\\describe-trigger-function",
-		"\\describe-trigger",
-		"\\describe-type",
-		"\\describe-user-mapping",
-		"\\describe-view",
-		"\\describe-window-function",
-		"\\describe",
 		NULL
 	};
 
@@ -3537,128 +3492,63 @@ psql_completion(const char *text, int start, int end)
 		if (!recognized_connection_string(prev_wd))
 			COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	}
+	else if (TailMatchesCS("\\da*"))
+		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
+	else if (TailMatchesCS("\\dA*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
+	else if (TailMatchesCS("\\db*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
+	else if (TailMatchesCS("\\dD*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_domains, NULL);
+	else if (TailMatchesCS("\\des*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_servers);
+	else if (TailMatchesCS("\\deu*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_user_mappings);
+	else if (TailMatchesCS("\\dew*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_fdws);
+	else if (TailMatchesCS("\\df*"))
+		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
+
+	else if (TailMatchesCS("\\dFd*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_ts_dictionaries);
+	else if (TailMatchesCS("\\dFp*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_ts_parsers);
+	else if (TailMatchesCS("\\dFt*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_ts_templates);
+	/* must be at end of \dF alternatives: */
+	else if (TailMatchesCS("\\dF*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_ts_configurations);
+
+	else if (TailMatchesCS("\\di*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes, NULL);
+	else if (TailMatchesCS("\\dL*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_languages);
+	else if (TailMatchesCS("\\dn*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schemas);
+	else if (TailMatchesCS("\\dp") || TailMatchesCS("\\z"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_grantables, NULL);
+	else if (TailMatchesCS("\\ds*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_sequences, NULL);
+	else if (TailMatchesCS("\\dt*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+	else if (TailMatchesCS("\\dT*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
+	else if (TailMatchesCS("\\du*") || TailMatchesCS("\\dg*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+	else if (TailMatchesCS("\\dv*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
+	else if (TailMatchesCS("\\dx*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_extensions);
+	else if (TailMatchesCS("\\dm*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
+	else if (TailMatchesCS("\\dE*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_foreign_tables, NULL);
+	else if (TailMatchesCS("\\dy*"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
+
+	/* must be at end of \d alternatives: */
 	else if (TailMatchesCS("\\d*"))
-	{
-		if (TailMatchesCS("\\df*"))
-			COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-		else if (TailMatchesCS("\\da*"))
-			COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
-		else if (TailMatchesCS("\\dA*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
-		else if (TailMatchesCS("\\db*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
-		else if (TailMatchesCS("\\dD*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_domains, NULL);
-		else if (TailMatchesCS("\\deu*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_user_mappings);
-		else if (TailMatchesCS("\\dew*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_fdws);
-		else if (TailMatchesCS("\\dFd*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_ts_dictionaries);
-		else if (TailMatchesCS("\\dFp*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_ts_parsers);
-		else if (TailMatchesCS("\\dFt*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_ts_templates);
-		/* must be at end of \dF alternatives: */
-		else if (TailMatchesCS("\\dF*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_ts_configurations);
-		else if (TailMatchesCS("\\di*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes, NULL);
-		else if (TailMatchesCS("\\dL*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_languages);
-		else if (TailMatchesCS("\\dn*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_schemas);
-		else if (TailMatchesCS("\\dp") || TailMatchesCS("\\z"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_grantables, NULL);
-		else if (TailMatchesCS("\\ds*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_sequences, NULL);
-		else if (TailMatchesCS("\\dt*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
-		else if (TailMatchesCS("\\dT*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
-		else if (TailMatchesCS("\\du*") || TailMatchesCS("\\dg*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_roles);
-		else if (TailMatchesCS("\\dv*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
-		else if (TailMatchesCS("\\dx*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_extensions);
-		else if (TailMatchesCS("\\dm*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
-		else if (TailMatchesCS("\\dE*"))
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_foreign_tables, NULL);
-		else if (TailMatchesCS("\\dy*"))
-			COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
-		else if (TailMatchesCS("\\des*"))
-		{
-			if (TailMatchesCS("\\describe*"))
-			{
-				if (TailMatchesCS("\\describe-access-method*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
-				else if (TailMatchesCS("\\describe-aggregate-function*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-				else if (TailMatchesCS("\\describe-aggregate*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
-				else if (TailMatchesCS("\\describe-domain*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_domains, NULL);
-				else if (TailMatchesCS("\\describe-event-trigger*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
-				else if (TailMatchesCS("\\describe-extension*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_extensions);
-				else if (TailMatchesCS("\\describe-foreign-data-wrapper*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_fdws);
-				else if (TailMatchesCS("\\describe-foreign-server*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_servers);
-				else if (TailMatchesCS("\\describe-foreign-table*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_foreign_tables, NULL);
-				else if (TailMatchesCS("\\describe-function*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-				else if (TailMatchesCS("\\describe-index*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes, NULL);
-				else if (TailMatchesCS("\\describe-materialized-view*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
-				else if (TailMatchesCS("\\describe-namespace*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_schemas);
-				else if (TailMatchesCS("\\describe-normal-function*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-				else if (TailMatchesCS("\\describe-privelege*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_grantables, NULL);
-				else if (TailMatchesCS("\\describe-procedural-language*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_languages);
-				else if (TailMatchesCS("\\describe-procedure*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-				else if (TailMatchesCS("\\describe-role*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_roles);
-				else if (TailMatchesCS("\\describe-tablespace*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
-				else if (TailMatchesCS("\\describe-schema*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_schemas);
-				else if (TailMatchesCS("\\describe-sequence*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_sequences, NULL);
-				else if (TailMatchesCS("\\describe-table*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
-				else if (TailMatchesCS("\\describe-text-search-dictionary*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_ts_dictionaries);
-				else if (TailMatchesCS("\\describe-text-search-parser*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_ts_parsers);
-				else if (TailMatchesCS("\\describe-text-search-template*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_ts_templates);
-				else if (TailMatchesCS("\\describe-type*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
-				else if (TailMatchesCS("\\describe-user-mapping*"))
-					COMPLETE_WITH_QUERY(Query_for_list_of_user_mappings);
-				else if (TailMatchesCS("\\describe-view*"))
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
-				else if (TailMatchesCS("\\describe-window-function*"))
-					COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
-				else
-					COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_relations, NULL);
-			}
-			else /* \\des* must go after \\describe */
-				COMPLETE_WITH_QUERY(Query_for_list_of_servers);
-		}
-		else /* must be at end of \d alternatives: */
-			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_relations, NULL);
-	}
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_relations, NULL);
 
 	else if (TailMatchesCS("\\ef"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_routines, NULL);

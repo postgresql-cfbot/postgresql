@@ -24,7 +24,6 @@ typedef enum _backslashResult
 								 * resulted in an error */
 } backslashResult;
 
-
 extern backslashResult HandleSlashCmds(PsqlScanState scan_state,
 				ConditionalStack cstack,
 				PQExpBuffer query_buf,

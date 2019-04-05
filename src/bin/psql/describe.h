@@ -103,12 +103,21 @@ extern bool listExtensionContents(const char *pattern);
 extern bool listEventTriggers(const char *pattern, bool verbose);
 
 /* \dRp */
-bool		listPublications(const char *pattern);
+extern bool listPublications(const char *pattern);
 
 /* \dRp+ */
-bool		describePublications(const char *pattern);
+extern bool	describePublications(const char *pattern);
 
 /* \dRs */
-bool		describeSubscriptions(const char *pattern, bool verbose);
+extern bool	describeSubscriptions(const char *pattern, bool verbose);
+
+/* \d \describe */
+extern bool describeAnything(const char *pattern, bool show_verbose, bool show_system);
+
+/* \dRp \describe-replication-publication pattern */
+extern bool describeReplicationPublication(const char *pattern, bool show_verbose);
+
+/* \dx \describe-extension */
+extern bool describeExtension(const char *pattern, bool show_verbose);
 
 #endif							/* DESCRIBE_H */

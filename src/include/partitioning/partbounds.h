@@ -75,6 +75,8 @@ typedef struct PartitionBoundInfoData
 #define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 #define partition_bound_has_default(bi) ((bi)->default_index != -1)
 
+struct RelOptInfo;
+
 extern int	get_hash_partition_greatest_modulus(PartitionBoundInfo b);
 extern uint64 compute_partition_hash_value(int partnatts, FmgrInfo *partsupfunc,
 							 Oid *partcollation,
@@ -88,6 +90,7 @@ extern bool partition_bounds_equal(int partnatts, int16 *parttyplen,
 					   PartitionBoundInfo b2);
 extern PartitionBoundInfo partition_bounds_copy(PartitionBoundInfo src,
 					  PartitionKey key);
+extern bool partitions_are_ordered(struct RelOptInfo *partrel);
 extern void check_new_partition_bound(char *relname, Relation parent,
 						  PartitionBoundSpec *spec);
 extern void check_default_partition_contents(Relation parent,

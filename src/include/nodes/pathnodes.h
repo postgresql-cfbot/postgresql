@@ -280,7 +280,13 @@ struct PlannerInfo
 
 	List	   *join_info_list; /* list of SpecialJoinInfos */
 
-	List	   *append_rel_list;	/* list of AppendRelInfos */
+	/*
+	 * list of AppendRelInfos.  For AppendRelInfos belonging to partitions of
+	 * a partitioned table, this list guarantees that partitions that come
+	 * earlier in the partitioned table's PartitionDesc will come earlier in
+	 * this list.
+	 */
+	List	   *append_rel_list;
 
 	List	   *rowMarks;		/* list of PlanRowMarks */
 
@@ -1366,6 +1372,7 @@ typedef struct AppendPath
 
 	/* Index of first partial path in subpaths */
 	int			first_partial_path;
+	double		limit_tuples;	/* hard limit on output tuples, or -1 */
 } AppendPath;
 
 #define IS_DUMMY_APPEND(p) \

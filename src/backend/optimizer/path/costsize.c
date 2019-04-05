@@ -1872,7 +1872,7 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
  *	  Determines and returns the cost of an Append node.
  */
 void
-cost_append(AppendPath *apath)
+cost_append(PlannerInfo *root, AppendPath *apath)
 {
 	ListCell   *l;
 
@@ -1884,27 +1884,80 @@ cost_append(AppendPath *apath)
 
 	if (!apath->path.parallel_aware)
 	{
-		Path	   *subpath = (Path *) linitial(apath->subpaths);
+		List	   *pathkeys = apath->path.pathkeys;
 
-		/*
-		 * Startup cost of non-parallel-aware Append is the startup cost of
-		 * first subpath.
-		 */
-		apath->path.startup_cost = subpath->startup_cost;
-
-		/* Compute rows and costs as sums of subplan rows and costs. */
-		foreach(l, apath->subpaths)
+		if (pathkeys == NIL)
 		{
-			Path	   *subpath = (Path *) lfirst(l);
+			Path	   *subpath = (Path *) linitial(apath->subpaths);
 
-			apath->path.rows += subpath->rows;
-			apath->path.total_cost += subpath->total_cost;
+			/*
+			 * When there are no pathkeys the startup cost of
+			 * non-parallel-aware Append is the startup cost of the first
+			 * subpath.
+			 */
+			apath->path.startup_cost = subpath->startup_cost;
+
+			foreach(l, apath->subpaths)
+			{
+				Path	   *subpath = (Path *) lfirst(l);
+
+				apath->path.rows += subpath->rows;
+				apath->path.total_cost += subpath->total_cost;
+			}
+		}
+		else
+		{
+			/*
+			 * Otherwise we make the Append's startup cost the sum of the
+			 * startup cost of all the subpaths.  It may appear like we should
+			 * just be doing the same as above and take the startup cost of
+			 * just the initial subpath, however, it is possible that when a
+			 * LIMIT clause exists in the query that we could end up favoring
+			 * these ordered Append paths too much.  Imagine a scenario where
+			 * the initial subpath is already ordered and is estimated to
+			 * contain just 10 rows and the 2nd subpath requires a sort and is
+			 * estimated to have 10 million rows, if the query has LIMIT 11
+			 * then we could end up performing an expensive sort for just a
+			 * single row without having considered the startup cost for the
+			 * 2nd subpath.  Such a scenario could end up favoring a MergeJoin
+			 * plan instead of a Hash Join plan.
+			 */
+			foreach(l, apath->subpaths)
+			{
+				Path	   *subpath = (Path *) lfirst(l);
+				Path		sort_path;	/* dummy for result of cost_sort */
+
+				if (!pathkeys_contained_in(pathkeys, subpath->pathkeys))
+				{
+					/*
+					 * We'll need to insert a Sort node, so include cost for
+					 * that.
+					 */
+					cost_sort(&sort_path,
+							  root,
+							  pathkeys,
+							  subpath->total_cost,
+							  subpath->parent->tuples,
+							  subpath->pathtarget->width,
+							  0.0,
+							  work_mem,
+							  apath->limit_tuples);
+
+					subpath = &sort_path;
+				}
+
+				apath->path.rows += subpath->rows;
+				apath->path.startup_cost += subpath->startup_cost;
+				apath->path.total_cost += subpath->total_cost;
+			}
 		}
 	}
 	else						/* parallel-aware */
 	{
 		int			i = 0;
 		double		parallel_divisor = get_parallel_divisor(&apath->path);
+
+		Assert(apath->path.pathkeys == NIL);
 
 		/* Calculate startup cost. */
 		foreach(l, apath->subpaths)

@@ -25,6 +25,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pathnodes.h"
 #include "parser/parse_coerce.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partdesc.h"
@@ -862,6 +863,73 @@ partition_bounds_copy(PartitionBoundInfo src,
 }
 
 /*
+ * partitions_are_ordered
+ *		For the partitioned table given in 'partrel', returns true if the
+ *		partitioned table guarantees that its direct partitions cannot allow
+ *		higher sort order tuples in a partition that comes earlier in the
+ *		PartitionDesc, i.e. if the partitions are scanned in order, then a
+ *		partition coming later in the PartitionDesc will only have tuples >
+ *		than tuples from all the previously scanned partitions.  NULL values,
+ *		if possible, must come in the last partition defined in the
+ *		PartitionDesc.  If out of order, or there are insufficient proofs to
+ *		know the order then we return false.
+ */
+bool
+partitions_are_ordered(RelOptInfo *partrel)
+{
+	PartitionBoundInfo boundinfo = partrel->boundinfo;
+
+	Assert(boundinfo != NULL);
+
+	switch (boundinfo->strategy)
+	{
+		case PARTITION_STRATEGY_RANGE:
+
+			/*
+			 * RANGE type partitions guarantee that the partitions can be
+			 * scanned in the order that they're defined in the PartitionDesc
+			 * to provide non-overlapping ranges of tuples.  We must disallow
+			 * when a DEFAULT partition exists as this could contain tuples
+			 * from either below or above the defined range, or contain tuples
+			 * belonging to gaps in the defined range.
+			 */
+
+			if (partition_bound_has_default(boundinfo))
+				return false;
+			break;
+
+		case PARTITION_STRATEGY_LIST:
+
+			/*
+			 * LIST partitions can also guarantee ordering, but we'd need to
+			 * ensure that partitions don't allow interleaved values.  We
+			 * could likely check for this looping over the PartitionBound's
+			 * indexes array checking that the indexes are in order.  For now,
+			 * let's just keep it simple and just accept LIST partitions
+			 * without a DEFAULT partition which only accept a single Datum
+			 * per partition and a NULL partition that does not accept any
+			 * other values.  Such a NULL partition will come last in the
+			 * PartitionDesc.  This is cheap test to make as it does not
+			 * require any per-partition processing.  Maybe we'd like to
+			 * handle more complex cases in the future.
+			 */
+
+			if (partition_bound_has_default(boundinfo))
+				return false;
+
+			if (boundinfo->ndatums + partition_bound_accepts_nulls(boundinfo)
+				!= partrel->nparts)
+				return false;
+			break;
+
+		default:
+			return false;
+	}
+
+	return true;
+}
+
+/*
  * check_new_partition_bound
  *
  * Checks if the new partition's bound overlaps any of the existing partitions
@@ -1680,6 +1748,8 @@ qsort_partition_hbound_cmp(const void *a, const void *b)
  * qsort_partition_list_value_cmp
  *
  * Compare two list partition bound datums.
+ *
+ * Note: If changing this, see build_partition_pathkeys()
  */
 static int32
 qsort_partition_list_value_cmp(const void *a, const void *b, void *arg)
@@ -1697,6 +1767,8 @@ qsort_partition_list_value_cmp(const void *a, const void *b, void *arg)
  * qsort_partition_rbound_cmp
  *
  * Used when sorting range bounds across all range partitions.
+ *
+ * Note: If changing this, see build_partition_pathkeys()
  */
 static int32
 qsort_partition_rbound_cmp(const void *a, const void *b, void *arg)

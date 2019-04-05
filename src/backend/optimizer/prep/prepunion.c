@@ -616,7 +616,7 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	/*
 	 * Append the child results together.
 	 */
-	path = (Path *) create_append_path(root, result_rel, pathlist, NIL,
+	path = (Path *) create_append_path(root, result_rel, pathlist, NIL, NIL,
 									   NULL, 0, false, NIL, -1);
 
 	/*
@@ -671,7 +671,7 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 		Assert(parallel_workers > 0);
 
 		ppath = (Path *)
-			create_append_path(root, result_rel, NIL, partial_pathlist,
+			create_append_path(root, result_rel, NIL, partial_pathlist, NIL,
 							   NULL, parallel_workers, enable_parallel_append,
 							   NIL, -1);
 		ppath = (Path *)
@@ -782,7 +782,7 @@ generate_nonunion_paths(SetOperationStmt *op, PlannerInfo *root,
 	/*
 	 * Append the child results together.
 	 */
-	path = (Path *) create_append_path(root, result_rel, pathlist, NIL,
+	path = (Path *) create_append_path(root, result_rel, pathlist, NIL, NIL,
 									   NULL, 0, false, NIL, -1);
 
 	/* Identify the grouping semantics */

@@ -24,7 +24,9 @@
 #include "access/table.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_inherits.h"
+#include "optimizer/cost.h"
 #include "parser/parse_type.h"
+#include "partitioning/partprune.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -92,11 +94,16 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
 	while ((inheritsTuple = systable_getnext(scan)) != NULL)
 	{
 		inhrelid = ((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhrelid;
+
+		if (enable_partition_pruning && inhrelid && !partitionChildAccess_hook(inhrelid))
+			continue;
+
 		if (numoids >= maxoids)
 		{
 			maxoids *= 2;
 			oidarr = (Oid *) repalloc(oidarr, maxoids * sizeof(Oid));
 		}
+
 		oidarr[numoids++] = inhrelid;
 	}
 

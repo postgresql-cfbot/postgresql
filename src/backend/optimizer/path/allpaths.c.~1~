@@ -1068,13 +1068,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			add_child_rel_equivalences(root, appinfo, rel, childrel);
 		childrel->has_eclass_joins = rel->has_eclass_joins;
 
-		if (enable_partition_pruning && !partitionChildAccess_hook(childRTE->relid))
-		{
-			/* Implement custom partition pruning filter*/
-			set_dummy_rel_pathlist(childrel);
-			continue;
-		}
-
 		/*
 		 * Note: we could compute appropriate attr_needed data for the child's
 		 * variables, by transforming the parent's attr_needed through the

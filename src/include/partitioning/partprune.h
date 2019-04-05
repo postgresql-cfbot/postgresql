@@ -74,6 +74,12 @@ typedef struct PartitionPruneContext
 #define PruneCxtStateIdx(partnatts, step_id, keyno) \
 	((partnatts) * (step_id) + (keyno))
 
+/* Custom partition child access hook. Provides further partition pruning given
+ * child OID.
+ */
+typedef bool (*partitionChildAccess_hook_type) (Oid childOID);
+PGDLLIMPORT partitionChildAccess_hook_type partitionChildAccess_hook;
+
 extern PartitionPruneInfo *make_partition_pruneinfo(struct PlannerInfo *root,
 						 struct RelOptInfo *parentrel,
 						 List *subpaths,

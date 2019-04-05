@@ -214,6 +214,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Connect-timeout", "", 10,	/* strlen(INT32_MAX) == 10 */
 	offsetof(struct pg_conn, connect_timeout)},
 
+	{"socket_timeout", NULL, NULL, NULL,
+		"Socket-timeout", "", 10,   /* strlen(INT32_MAX) == 10 */
+	offsetof(struct pg_conn, pgsocket_timeout)},
+
 	{"dbname", "PGDATABASE", NULL, NULL,
 		"Database-Name", "", 20,
 	offsetof(struct pg_conn, dbName)},
@@ -269,6 +273,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"keepalives_count", NULL, NULL, NULL,
 		"TCP-Keepalives-Count", "", 10, /* strlen(INT32_MAX) == 10 */
 	offsetof(struct pg_conn, keepalives_count)},
+
+	{"tcp_user_timeout", NULL, NULL, NULL,
+		"TCP-User-Timeout", "", 10,	/* strlen(INT32_MAX) == 10 */
+		offsetof(struct pg_conn, pgtcp_user_timeout)},
 
 	/*
 	 * ssl options are allowed even without client SSL support because the
@@ -419,6 +427,8 @@ static char *passwordFromFile(const char *hostname, const char *port, const char
 				 const char *username, const char *pgpassfile);
 static void pgpassfileWarning(PGconn *conn);
 static void default_threadlock(int acquire);
+static bool parse_int_param(const char *value, int *result, PGconn *conn,
+				 const char *context);
 
 
 /* global variable because fe-auth.c needs to access it */
@@ -1285,6 +1295,24 @@ connectOptions2(PGconn *conn)
 			goto oom_error;
 	}
 
+	if (conn->pgsocket_timeout)
+	{
+		if (!parse_int_param(conn->pgsocket_timeout,
+			&conn->socket_timeout, conn, "socket_timeout"))
+		{
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid integer value for socket_timeout\n"));
+			return false;
+		}
+		/*
+		 * Rounding could cause communication to fail;
+		 * insist on at least two seconds.
+		 */
+		if(conn->socket_timeout > 0 && conn->socket_timeout < 2)
+			conn->socket_timeout = 2;
+	}
+
 	/*
 	 * Validate target_session_attrs option.
 	 */
@@ -1832,6 +1860,40 @@ setKeepalivesWin32(PGconn *conn)
 }
 #endif							/* SIO_KEEPALIVE_VALS */
 #endif							/* WIN32 */
+
+/*
+ * Set the TCP user timeout.
+ */
+static int
+setTCPUserTimeout(PGconn *conn)
+{
+	int			timeout;
+
+	if (conn->pgtcp_user_timeout == NULL)
+		return 1;
+
+	if (!parse_int_param(conn->pgtcp_user_timeout,
+					&timeout, conn,	"tcp_user_timeout"))
+		return 0;
+
+	if (timeout < 0)
+		timeout = 0;
+
+#ifdef TCP_USER_TIMEOUT
+	if (setsockopt(conn->sock, IPPROTO_TCP, TCP_USER_TIMEOUT,
+					(char *) &timeout, sizeof(timeout)) < 0)
+	{
+		char		sebuf[256];
+
+		appendPQExpBuffer(&conn->errorMessage,
+					libpq_gettext("setsockopt(TCP_USER_TIMEOUT) failed: %s\n"),
+						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		return 0;
+	}
+#endif
+
+	return 1;
+}
 
 /* ----------
  * connectDBStart -
@@ -2480,6 +2542,9 @@ keep_going:						/* We will come back to here until there is
 							err = 1;
 #endif							/* SIO_KEEPALIVE_VALS */
 #endif							/* WIN32 */
+
+						if (!setTCPUserTimeout(conn))
+							err = 1;
 
 						if (err)
 						{
@@ -3863,6 +3928,10 @@ freePGconn(PGconn *conn)
 		free(conn->pgtty);
 	if (conn->connect_timeout)
 		free(conn->connect_timeout);
+	if (conn->pgsocket_timeout)
+		free(conn->pgsocket_timeout);
+	if (conn->pgtcp_user_timeout)
+		free(conn->pgtcp_user_timeout);
 	if (conn->pgoptions)
 		free(conn->pgoptions);
 	if (conn->appname)

@@ -169,6 +169,16 @@ typedef struct Port
 	int			keepalives_count;
 
 	/*
+	 * TCP USER TIMEOUT setting.
+	 *
+	 * default values are 0 if AF_UNIX or not yet known; current values are 0
+	 * if AF_UNIX or using the default. Also, -1 in a default value means we
+	 * were unable to find out the default (getsockopt failed).
+	 */
+	int			default_tcp_user_timeout;
+	int			tcp_user_timeout;
+
+	/*
 	 * GSSAPI structures.
 	 */
 #if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
@@ -306,9 +316,11 @@ extern ProtocolVersion FrontendProtocol;
 extern int	pq_getkeepalivesidle(Port *port);
 extern int	pq_getkeepalivesinterval(Port *port);
 extern int	pq_getkeepalivescount(Port *port);
+extern int	pq_gettcpusertimeout(Port *port);
 
 extern int	pq_setkeepalivesidle(int idle, Port *port);
 extern int	pq_setkeepalivesinterval(int interval, Port *port);
 extern int	pq_setkeepalivescount(int count, Port *port);
+extern int	pq_settcpusertimeout(int timeout, Port *port);
 
 #endif							/* LIBPQ_BE_H */

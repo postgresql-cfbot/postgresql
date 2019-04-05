@@ -336,6 +336,9 @@ struct pg_conn
 	char	   *pgtty;			/* tty on which the backend messages is
 								 * displayed (OBSOLETE, NOT USED) */
 	char	   *connect_timeout;	/* connection timeout (numeric string) */
+	char	   *pgsocket_timeout;	/* socket timeout (numeric string) */
+	int			socket_timeout;		/* socket timeout (numeric)*/
+	char	   *pgtcp_user_timeout;	/* tcp user timeout (numeric string) */
 	char	   *client_encoding_initial;	/* encoding to use */
 	char	   *pgoptions;		/* options to start the backend with */
 	char	   *appname;		/* application name */

@@ -1249,6 +1249,44 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-tcp-user-timeout" xreflabel="libpq_tcp_user_timeout">
+      <term><literal>tcp_user_timeout</literal></term>
+      <listitem>
+       <para>
+        Controls the number of milliseconds that transmitted data may
+        remain unacknowledged before a connection is forcibly closed.
+        A value of zero uses the system default. This parameter is
+        ignored for connections made via a Unix-domain socket.
+        It is only supported on systems where TCP_USER_TIMEOUT
+        is available; on other systems, it has no effect.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="socket_timeout" xreflabel="socket_timeout">
+      <term><literal>socket_timeout</literal></term>
+      <listitem>
+       <para>
+        Maximum wait in seconds (write as a decimal integer, e.g. 10) for
+        socket read/write operation before closing the connection. A value
+        of zero (the default) turns this off, which means wait indefinitely.
+        The minimum allowed timeout is 2 seconds, so a value of 1 is
+        interpreted as 2.
+       </para>
+       <note>
+        <para>
+         Although this can be used as a stopgap timeout measure, it is
+         recommended to set a value higher than the other timeout
+         parameters (<literal>statement_timeout</literal>,
+         <literal>TCP_KEEP_ALIVES</literal>,
+         <literal>TCP_USER_TIMEOUT</literal>) because setting a smaller
+         value will make the other configured timeout parameters meaningless
+         and can cause undesirable disconnection.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-tty" xreflabel="tty">
       <term><literal>tty</literal></term>
       <listitem>

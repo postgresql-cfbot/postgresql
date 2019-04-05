@@ -389,45 +389,6 @@ get_mergejoin_opfamilies(Oid opno)
 }
 
 /*
- * has_merge_or_hash_join_opfamilies
- *		TRUE iif 'opno' belongs to any btree or hash opfamily's equality
- *		strategy.
- */
-bool
-has_merge_or_hash_join_opfamilies(Oid opno)
-{
-	bool		result = false;
-	CatCList   *catlist;
-	int			i;
-
-	/*
-	 * Search pg_amop to see if the target operator is registered as the "="
-	 * operator of any btree opfamily.
-	 */
-	catlist = SearchSysCacheList1(AMOPOPID, ObjectIdGetDatum(opno));
-
-	for (i = 0; i < catlist->n_members; i++)
-	{
-		HeapTuple	tuple = &catlist->members[i]->tuple;
-		Form_pg_amop aform = (Form_pg_amop) GETSTRUCT(tuple);
-
-		/* must be btree or hash equality */
-		if ((aform->amopmethod == BTREE_AM_OID &&
-			aform->amopstrategy == BTEqualStrategyNumber) ||
-			(aform->amopmethod == HASH_AM_OID &&
-			aform->amopstrategy == HTEqualStrategyNumber))
-		{
-			result = true;
-			break;
-		}
-	}
-
-	ReleaseSysCacheList(catlist);
-
-	return result;
-}
-
-/*
  * get_compatible_hash_operators
  *		Get the OID(s) of hash equality operator(s) compatible with the given
  *		operator, but operating on its LHS and/or RHS datatype.
@@ -945,35 +906,6 @@ get_atttypetypmodcoll(Oid relid, AttrNumber attnum,
 	*typmod = att_tup->atttypmod;
 	*collid = att_tup->attcollation;
 	ReleaseSysCache(tp);
-}
-
-/*
- * get_attnotnull
- *
- *		Given the relation id and the attribute number,
- *		return the "attnotnull" field from the attribute relation.
- *
- *		Returns false if the attr doesn't exist (or is dropped).
- */
-bool
-get_attnotnull(Oid relid, AttrNumber attnum)
-{
-	HeapTuple	tp;
-
-	tp = SearchSysCache2(ATTNUM,
-						 ObjectIdGetDatum(relid),
-						 Int16GetDatum(attnum));
-	if (HeapTupleIsValid(tp))
-	{
-		Form_pg_attribute att_tup = (Form_pg_attribute) GETSTRUCT(tp);
-		bool		result;
-
-		result = att_tup->attnotnull;
-		ReleaseSysCache(tp);
-		return result;
-	}
-	else
-		return false;
 }
 
 /*				---------- COLLATION CACHE ----------					 */

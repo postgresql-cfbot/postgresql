@@ -44,6 +44,9 @@ extern Relids find_nonnullable_rels(Node *clause);
 extern List *find_nonnullable_vars(Node *clause);
 extern List *find_forced_null_vars(Node *clause);
 extern Var *find_forced_null_var(Node *clause);
+extern bool expressions_are_not_nullable(Query *query, List *exprs,
+							 Node *notnull_proofs);
+extern bool query_outputs_are_not_nullable(Query *query);
 
 extern bool is_pseudo_constant_clause(Node *clause);
 extern bool is_pseudo_constant_clause_relids(Node *clause, Relids relids);

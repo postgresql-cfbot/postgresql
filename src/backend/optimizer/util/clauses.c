@@ -42,6 +42,7 @@
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
+#include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -113,6 +114,8 @@ static bool contain_context_dependent_node_walker(Node *node, int *flags);
 static bool contain_leaked_vars_walker(Node *node, void *context);
 static Relids find_nonnullable_rels_walker(Node *node, bool top_level);
 static List *find_nonnullable_vars_walker(Node *node, bool top_level);
+static void find_innerjoined_rels(Node *jtnode,
+					  Relids *innerjoined_rels, List **usable_quals);
 static bool is_strict_saop(ScalarArrayOpExpr *expr, bool falseOK);
 static Node *eval_const_expressions_mutator(Node *node,
 							   eval_const_expressions_context *context);
@@ -1467,6 +1470,10 @@ contain_leaked_vars_walker(Node *node, void *context)
 								  context);
 }
 
+/*****************************************************************************
+ *		  Nullability analysis
+ *****************************************************************************/
+
 /*
  * find_nonnullable_rels
  *		Determine which base rels are forced nonnullable by given clause.
@@ -1710,7 +1717,7 @@ find_nonnullable_rels_walker(Node *node, bool top_level)
  * but here we assume that the input is a Boolean expression, and wish to
  * see if NULL inputs will provably cause a FALSE-or-NULL result.  We expect
  * the expression to have been AND/OR flattened and converted to implicit-AND
- * format.
+ * format (but the results are still good if it wasn't AND/OR flattened).
  *
  * The result is a palloc'd List, but we have not copied the member Var nodes.
  * Also, we don't bother trying to eliminate duplicate entries.
@@ -2009,6 +2016,393 @@ find_forced_null_var(Node *node)
 		}
 	}
 	return NULL;
+}
+
+/*
+ * expressions_are_not_nullable
+ *		Return TRUE if all 'exprs' are certainly not NULL.
+ *
+ * The reason this takes a Query, and not just a list of expressions, is so
+ * that we can determine which relations are INNER JOINed and make use of the
+ * query's WHERE/ON clauses to help prove that inner joined rel's Vars cannot
+ * be NULL in the absense of a NOT NULL constraint.
+ *
+ * 'query' is the query that the 'exprs' belong to.
+ * 'notnull_proofs' can be passed to assist in proving the non-nullability of
+ * 'exprs'.  These may be used for outer joined Vars or for Vars that allow
+ * NULLs to help determine if each 'exprs' cannot be NULL.  It is the callers
+ * responsibility to ensure 'notnull_proofs' come from the same syntactical
+ * level as 'exprs'.
+ *
+ * In current usage, the passed exprs haven't yet been through any planner
+ * processing.  This means that applying find_nonnullable_vars() on them isn't
+ * really ideal: for lack of const-simplification, we might be unable to prove
+ * not-nullness in some cases where we could have proved it afterwards.
+ * However, we should not get any false positive results.
+ *
+ * Here we can err on the side of conservatism: if we're not sure then it's
+ * okay to return FALSE.
+ */
+bool
+expressions_are_not_nullable(Query *query, List *exprs, Node *notnull_proofs)
+{
+	Relids		innerjoined_rels = NULL;
+	List	   *innerjoined_useful_quals = NIL;
+	bool		computed_innerjoined_rels = false;
+	List	   *nonnullable_vars = NIL;
+	bool		computed_nonnullable_vars = false;
+	List	   *nonnullable_inner_vars = NIL;
+	bool		computed_nonnullable_inner_vars = false;
+	ListCell   *lc;
+
+	foreach(lc, exprs)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+
+		/*
+		 * For the most part we don't try to deal with anything more complex
+		 * than Consts and Vars; but it seems worthwhile to look through
+		 * binary relabelings, since we know those don't introduce nulls.
+		 */
+		while (expr && IsA(expr, RelabelType))
+			expr = ((RelabelType *) expr)->arg;
+
+		if (expr == NULL)		/* paranoia */
+			return false;
+
+		if (IsA(expr, Const))
+		{
+			/* Consts are easy: they're either null or not. */
+			if (((Const *) expr)->constisnull)
+				return false;
+		}
+		else if (IsA(expr, Var))
+		{
+			Var		   *var = (Var *) expr;
+
+			/* Currently, we punt for any nonlocal Vars */
+			if (var->varlevelsup != 0)
+				return false;
+
+			/*
+			 * Since the subquery hasn't yet been through expression
+			 * preprocessing, we must apply flatten_join_alias_vars to the
+			 * given Var, and to any Vars found by find_nonnullable_vars, to
+			 * avoid being fooled by join aliases.  If we get something other
+			 * than a plain Var out of the substitution, punt.
+			 */
+			var = (Var *) flatten_join_alias_vars(query, (Node *) var);
+
+			if (!IsA(var, Var))
+				return false;
+			Assert(var->varlevelsup == 0);
+
+			/*
+			 * We don't bother to compute innerjoined_rels until we've found a
+			 * Var we must analyze.
+			 */
+			if (!computed_innerjoined_rels)
+			{
+				find_innerjoined_rels((Node *) query->jointree,
+									  &innerjoined_rels,
+									  &innerjoined_useful_quals);
+				computed_innerjoined_rels = true;
+			}
+
+			/* Check if the Var is from an INNER JOINed rel */
+			if (bms_is_member(var->varno, innerjoined_rels))
+			{
+				RangeTblEntry *rte = rt_fetch(var->varno, query->rtable);
+
+				/*
+				 * If Var is from a plain relation and its column is marked
+				 * NOT NULL according to the catalogs, it can't produce NULL.
+				 */
+				if (rte->rtekind == RTE_RELATION &&
+					get_attnotnull(rte->relid, var->varattno))
+					continue;	/* cannot produce NULL */
+
+				/*
+				 * Otherwise check for the existance of quals which filter
+				 * out NULL values for this Var.  We may need to compute the
+				 * nonnullable_inner_vars, if not done already.
+				 */
+				if (!computed_nonnullable_inner_vars)
+				{
+					nonnullable_inner_vars =
+						find_nonnullable_vars((Node *) innerjoined_useful_quals);
+					nonnullable_inner_vars = (List *)
+						flatten_join_alias_vars(query,
+											(Node *) nonnullable_inner_vars);
+					/* We don't bother removing any non-Vars from the result */
+					computed_nonnullable_inner_vars = true;
+				}
+
+				if (list_member(nonnullable_inner_vars, var))
+					continue;	/* cannot produce NULL */
+			}
+
+			/*
+			 * Even if that didn't work, we can conclude that the Var is not
+			 * nullable if find_nonnullable_vars can find a "var IS NOT NULL"
+			 * or similarly strict condition among the notnull_proofs.
+			 * Compute the list of Vars having such quals if we didn't
+			 * already.
+			 */
+			if (!computed_nonnullable_vars)
+			{
+				nonnullable_vars = find_nonnullable_vars(notnull_proofs);
+				nonnullable_vars = (List *)
+					flatten_join_alias_vars(query,
+											(Node *) nonnullable_vars);
+				/* We don't bother removing any non-Vars from the result */
+				computed_nonnullable_vars = true;
+			}
+
+			if (!list_member(nonnullable_vars, var))
+				return false;	/* we failed to prove the Var non-null */
+		}
+		else
+		{
+			/* Not a Const or Var; punt */
+			return false;
+		}
+	}
+
+	return true;				/* exprs cannot emit NULLs */
+}
+
+/*
+ * query_outputs_are_not_nullable
+ *		Returns TRUE if the output values of the Query are certainly not NULL.
+ *		All output columns must return non-NULL to answer TRUE.
+ *
+ * The reason this takes a Query, and not just an individual tlist expression,
+ * is so that we can make use of the query's WHERE/ON clauses to prove it does
+ * not return nulls.
+ *
+ * In current usage, the passed sub-Query hasn't yet been through any planner
+ * processing.  This means that applying find_nonnullable_vars() to its WHERE
+ * clauses isn't really ideal: for lack of const-simplification, we might be
+ * unable to prove not-nullness in some cases where we could have proved it
+ * afterwards.  However, we should not get any false positive results.
+ *
+ * Like the other forms of nullability analysis above, we can err on the
+ * side of conservatism: if we're not sure, it's okay to return FALSE.
+ */
+bool
+query_outputs_are_not_nullable(Query *query)
+{
+	Relids		innerjoined_rels = NULL;
+	bool		computed_innerjoined_rels = false;
+	List	   *usable_quals = NIL;
+	List	   *nonnullable_vars = NIL;
+	bool		computed_nonnullable_vars = false;
+	ListCell   *tl;
+
+	/*
+	 * If the query contains set operations, punt.  The set ops themselves
+	 * couldn't introduce nulls that weren't in their inputs, but the tlist
+	 * present in the top-level query is just dummy and won't give us useful
+	 * info.  We could get an answer by recursing to examine each leaf query,
+	 * but for the moment it doesn't seem worth the extra complication.
+	 *
+	 * Note that we needn't consider other top-level operators such as
+	 * DISTINCT, GROUP BY, etc, as those will not introduce nulls either.
+	 */
+	if (query->setOperations)
+		return false;
+
+	/*
+	 * Examine each targetlist entry to prove that it can't produce NULL.
+	 */
+	foreach(tl, query->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(tl);
+		Expr	   *expr = tle->expr;
+
+		/* Resjunk columns can be ignored: they don't produce output values */
+		if (tle->resjunk)
+			continue;
+
+		/*
+		 * For the most part we don't try to deal with anything more complex
+		 * than Consts and Vars; but it seems worthwhile to look through
+		 * binary relabelings, since we know those don't introduce nulls.
+		 */
+		while (expr && IsA(expr, RelabelType))
+			expr = ((RelabelType *) expr)->arg;
+
+		if (expr == NULL)		/* paranoia */
+			return false;
+
+		if (IsA(expr, Const))
+		{
+			/* Consts are easy: they're either null or not. */
+			if (((Const *) expr)->constisnull)
+				return false;
+		}
+		else if (IsA(expr, Var))
+		{
+			Var		   *var = (Var *) expr;
+
+			/* Currently, we punt for any nonlocal Vars */
+			if (var->varlevelsup != 0)
+				return false;
+
+			/*
+			 * Since the subquery hasn't yet been through expression
+			 * preprocessing, we must apply flatten_join_alias_vars to the
+			 * given Var, and to any Vars found by find_nonnullable_vars, to
+			 * avoid being fooled by join aliases.  If we get something other
+			 * than a plain Var out of the substitution, punt.
+			 */
+			var = (Var *) flatten_join_alias_vars(query, (Node *) var);
+
+			if (!IsA(var, Var))
+				return false;
+			Assert(var->varlevelsup == 0);
+
+			/*
+			 * We don't bother to compute innerjoined_rels and usable_quals
+			 * until we've found a Var we must analyze.
+			 */
+			if (!computed_innerjoined_rels)
+			{
+				find_innerjoined_rels((Node *) query->jointree,
+									  &innerjoined_rels, &usable_quals);
+				computed_innerjoined_rels = true;
+			}
+
+			/*
+			 * If Var is from a plain relation, and that relation is not on
+			 * the nullable side of any outer join, and its column is marked
+			 * NOT NULL according to the catalogs, it can't produce NULL.
+			 */
+			if (bms_is_member(var->varno, innerjoined_rels))
+			{
+				RangeTblEntry *rte = rt_fetch(var->varno, query->rtable);
+
+				if (rte->rtekind == RTE_RELATION &&
+					get_attnotnull(rte->relid, var->varattno))
+					continue;	/* cannot produce NULL */
+			}
+
+			/*
+			 * Even if that didn't work, we can conclude that the Var is not
+			 * nullable if find_nonnullable_vars can find a "var IS NOT NULL"
+			 * or similarly strict condition among the usable_quals.  Compute
+			 * the list of Vars having such quals if we didn't already.
+			 */
+			if (!computed_nonnullable_vars)
+			{
+				nonnullable_vars = find_nonnullable_vars((Node *) usable_quals);
+				nonnullable_vars = (List *)
+					flatten_join_alias_vars(query,
+											(Node *) nonnullable_vars);
+				/* We don't bother removing any non-Vars from the result */
+				computed_nonnullable_vars = true;
+			}
+
+			if (!list_member(nonnullable_vars, var))
+				return false;	/* we failed to prove the Var non-null */
+		}
+		else
+		{
+			/* Not a Const or Var; punt */
+			return false;
+		}
+	}
+
+	return true;				/* query cannot emit NULLs */
+}
+
+/*
+ * find_innerjoined_rels
+ *		Traverse jointree to locate non-outerjoined-rels and quals above them
+ *
+ * We fill innerjoined_rels with the relids of all rels that are not below
+ * the nullable side of any outer join (which would cause their Vars to be
+ * possibly NULL regardless of what's in the catalogs).  In the same scan,
+ * we locate all WHERE and JOIN/ON quals that constrain these rels add them to
+ * the usable_quals list (forming a list with implicit-AND semantics).
+ *
+ * Top-level caller must initialize innerjoined_rels/usable_quals to NULL/NIL.
+ */
+static void
+find_innerjoined_rels(Node *jtnode,
+					  Relids *innerjoined_rels, List **usable_quals)
+{
+	if (jtnode == NULL)
+		return;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		int			varno = ((RangeTblRef *) jtnode)->rtindex;
+
+		*innerjoined_rels = bms_add_member(*innerjoined_rels, varno);
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *lc;
+
+		/* All elements of the FROM list are allowable */
+		foreach(lc, f->fromlist)
+			find_innerjoined_rels((Node *) lfirst(lc),
+								  innerjoined_rels, usable_quals);
+		/* ... and its WHERE quals are too */
+		if (f->quals)
+			*usable_quals = lappend(*usable_quals, f->quals);
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+
+		switch (j->jointype)
+		{
+			case JOIN_INNER:
+				/* visit both children */
+				find_innerjoined_rels(j->larg,
+									  innerjoined_rels, usable_quals);
+				find_innerjoined_rels(j->rarg,
+									  innerjoined_rels, usable_quals);
+				/* and grab the ON quals too */
+				if (j->quals)
+					*usable_quals = lappend(*usable_quals, j->quals);
+				break;
+
+			case JOIN_LEFT:
+			case JOIN_SEMI:
+			case JOIN_ANTI:
+
+				/*
+				 * Only the left input is possibly non-nullable; furthermore,
+				 * the quals of this join don't constrain the left input.
+				 * Note: we probably can't see SEMI or ANTI joins at this
+				 * point, but if we do, we can treat them like LEFT joins.
+				 */
+				find_innerjoined_rels(j->larg,
+									  innerjoined_rels, usable_quals);
+				break;
+
+			case JOIN_RIGHT:
+				/* Reverse of the above case */
+				find_innerjoined_rels(j->rarg,
+									  innerjoined_rels, usable_quals);
+				break;
+
+			case JOIN_FULL:
+				/* Neither side is non-nullable, so stop descending */
+				break;
+
+			default:
+				elog(ERROR, "unrecognized join type: %d",
+					 (int) j->jointype);
+		}
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d",
+			 (int) nodeTag(jtnode));
 }
 
 /*

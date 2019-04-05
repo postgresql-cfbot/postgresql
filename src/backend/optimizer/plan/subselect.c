@@ -87,6 +87,9 @@ static bool contain_dml(Node *node);
 static bool contain_dml_walker(Node *node, void *context);
 static void inline_cte(PlannerInfo *root, CommonTableExpr *cte);
 static bool inline_cte_walker(Node *node, inline_cte_walker_context *context);
+static bool is_NOTANY_compatible_with_antijoin(Query *outerquery,
+											   SubLink * sublink,
+											   Node *notnull_proofs);
 static bool simplify_EXISTS_query(PlannerInfo *root, Query *query);
 static Query *convert_EXISTS_to_ANY(PlannerInfo *root, Query *subselect,
 					  Node **testexpr, List **paramIds);
@@ -1109,6 +1112,98 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
 
 
 /*
+ * is_NOTANY_compatible_with_antijoin
+ *		True if the NOT IN sublink can be safely converted into an ANTI JOIN.
+ *		Per SQL spec, NOT IN is not ordinarily equivalent to an anti-join,
+ *		however, if we can prove that all of the expressions on both sides of
+ *		the, would be, join condition are all certainly not NULL and none of
+ *		the join expressions can produce NULLs, then it's safe to convert NOT
+ *		IN to an anti-join.
+ *
+ * To ensure that the join expressions cannot be NULL, we can't just check for
+ * strict operators since these only guarantee NULL on NULL input, we need a
+ * guarantee of NOT NULL on NOT NULL input.  Fortunately we can just insist
+ * that the operator is a member of a btree or hash opfamily.
+ *
+ * 'outerquery' is the parse of the query that the NOT IN is present in.
+ * 'notnull_proofs' are quals from the same syntactical level as the NOT IN.
+ * These will be used to assist in proving the outer query's would be join
+ * expressions cannot be NULL.
+ *
+ * Note:
+ *	This function is quite locked into the NOT IN syntax. Certain assumptions
+ *	are made about the structure of the join conditions:
+ *
+ * 1.	We assume that when more than 1 join condition exists that these are
+ *		AND type conditions, i.e not OR conditions.
+ *
+ * 2.	We assume that each join qual is an OpExpr with 2 arguments and the
+ *		first arguments in each qual is the one that belongs to the outer side
+ *		of the NOT IN clause.
+ */
+static bool
+is_NOTANY_compatible_with_antijoin(Query *outerquery, SubLink *sublink,
+								   Node *notnull_proofs)
+{
+	Node	   *testexpr = sublink->testexpr;
+	List	   *outerexpr;
+	ListCell   *lc;
+
+	/* Extract the outer rel's join condition expressions. */
+
+	/* if it's a single expression */
+	if (IsA(testexpr, OpExpr))
+	{
+		OpExpr *opexpr = (OpExpr *) testexpr;
+
+		Assert(list_length(opexpr->args) == 2);
+
+		/* Reject if op is not part of a btree or hash opfamily */
+		if (!has_merge_or_hash_join_opfamilies(opexpr->opno))
+			return false;
+
+		outerexpr = list_make1(linitial(opexpr->args));
+	}
+
+	/* Extract exprs from multiple expressions ANDed together */
+	else if (IsA(testexpr, BoolExpr))
+	{
+		List	 *list = ((BoolExpr *) testexpr)->args;
+
+		outerexpr = NIL;
+
+		/* Build a list containing the lefthand expr from each OpExpr */
+		foreach(lc, list)
+		{
+			OpExpr *opexpr = (OpExpr *) lfirst(lc);
+
+			Assert(list_length(opexpr->args) == 2);
+
+			/* Reject if op is not part of a btree or hash opfamily */
+			if (!has_merge_or_hash_join_opfamilies(opexpr->opno))
+				return false;
+
+			outerexpr = lappend(outerexpr, linitial(opexpr->args));
+		}
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d",
+					(int) nodeTag(testexpr));
+
+	Assert(outerexpr != NIL);
+
+	/* Check if any outer expressions can be NULL. */
+	if (!expressions_are_not_nullable(outerquery, outerexpr, notnull_proofs))
+		return false;
+
+	/* Now validate the subquery targetlist to ensure no NULL are possible. */
+	if (!query_outputs_are_not_nullable((Query *) sublink->subselect))
+		return false;
+
+	return true; /* supports ANTI JOIN */
+}
+
+/*
  * convert_ANY_sublink_to_join: try to convert an ANY SubLink to a join
  *
  * The caller has found an ANY SubLink at the top level of one of the query's
@@ -1117,11 +1212,22 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
  * If so, form a JoinExpr and return it.  Return NULL if the SubLink cannot
  * be converted to a join.
  *
- * The only non-obvious input parameter is available_rels: this is the set
- * of query rels that can safely be referenced in the sublink expression.
- * (We must restrict this to avoid changing the semantics when a sublink
- * is present in an outer join's ON qual.)  The conversion must fail if
- * the converted qual would reference any but these parent-query relids.
+ * If under_not is true, the caller actually found NOT (ANY SubLink),
+ * so that what we must try to build is an ANTI not SEMI join.  Per SQL spec,
+ * NOT IN is not ordinarily equivalent to an anti-join, so that by default we
+ * have to fail when under_not.  However, if we can prove that all of the
+ * expressions on both sides of the, would be, join condition are all
+ * certainly not NULL and none of the join expressions can produce NULLs, then
+ * it's safe to convert NOT IN to an anti-join.  To assist with nullability
+ * proofs for the join conditions on the outside of the join, we make use of
+ *'notnull_proofs'. It is the caller's responsibility to ensure these proofs
+ * come from the same syntactical level as the NOT IN sublink.
+ *
+ * available_rels is the set of query rels that can safely be referenced
+ * in the sublink expression.  (We must restrict this to avoid changing the
+ * semantics when a sublink is present in an outer join's ON qual.)
+ * The conversion must fail if the converted qual would reference any but
+ * these parent-query relids.
  *
  * On success, the returned JoinExpr has larg = NULL and rarg = the jointree
  * item representing the pulled-up subquery.  The caller must set larg to
@@ -1144,7 +1250,8 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
  */
 JoinExpr *
 convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
-							Relids available_rels)
+							bool under_not, Relids available_rels,
+							Node *notnull_proofs)
 {
 	JoinExpr   *result;
 	Query	   *parse = root->parse;
@@ -1158,6 +1265,11 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	ParseState *pstate;
 
 	Assert(sublink->subLinkType == ANY_SUBLINK);
+
+	/* Check if NOT IN can be converted to an anti-join. */
+	if (under_not &&
+		!is_NOTANY_compatible_with_antijoin(parse, sublink, notnull_proofs))
+		return NULL;
 
 	/*
 	 * The sub-select must not refer to any Vars of the parent query. (Vars of
@@ -1228,7 +1340,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	 * And finally, build the JoinExpr node.
 	 */
 	result = makeNode(JoinExpr);
-	result->jointype = JOIN_SEMI;
+	result->jointype = under_not ? JOIN_ANTI : JOIN_SEMI;
 	result->isNatural = false;
 	result->larg = NULL;		/* caller must fill this in */
 	result->rarg = (Node *) rtr;
@@ -1243,9 +1355,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 /*
  * convert_EXISTS_sublink_to_join: try to convert an EXISTS SubLink to a join
  *
- * The API of this function is identical to convert_ANY_sublink_to_join's,
- * except that we also support the case where the caller has found NOT EXISTS,
- * so we need an additional input parameter "under_not".
+ * The API of this function is identical to convert_ANY_sublink_to_join's.
  */
 JoinExpr *
 convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,

@@ -230,10 +230,7 @@ perform_base_backup(basebackup_options *opt)
 	TimeLineID	endtli;
 	StringInfo	labelfile;
 	StringInfo	tblspc_map_file = NULL;
-	int			datadirpathlen;
 	List	   *tablespaces = NIL;
-
-	datadirpathlen = strlen(DataDir);
 
 	backup_started_in_recovery = RecoveryInProgress();
 
@@ -265,13 +262,9 @@ perform_base_backup(basebackup_options *opt)
 		 * Calculate the relative path of temporary statistics directory in
 		 * order to skip the files which are located in that directory later.
 		 */
-		if (is_absolute_path(pgstat_stat_directory) &&
-			strncmp(pgstat_stat_directory, DataDir, datadirpathlen) == 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory + datadirpathlen + 1);
-		else if (strncmp(pgstat_stat_directory, "./", 2) != 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory);
-		else
-			statrelpath = pgstat_stat_directory;
+
+		Assert(strchr(PG_STAT_TMP_DIR, '/') == NULL);
+		statrelpath = psprintf("./%s", PG_STAT_TMP_DIR);
 
 		/* Add a node for the base directory at the end */
 		ti = palloc0(sizeof(tablespaceinfo));

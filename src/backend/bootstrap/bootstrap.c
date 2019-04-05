@@ -329,6 +329,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case BgWriterProcess:
 				statmsg = pgstat_get_backend_desc(B_BG_WRITER);
 				break;
+			case ArchiverProcess:
+				statmsg = pgstat_get_backend_desc(B_ARCHIVER);
+				break;
 			case CheckpointerProcess:
 				statmsg = pgstat_get_backend_desc(B_CHECKPOINTER);
 				break;
@@ -454,6 +457,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case BgWriterProcess:
 			/* don't set signals, bgwriter has its own agenda */
 			BackgroundWriterMain();
+			proc_exit(1);		/* should never return */
+
+		case ArchiverProcess:
+			/* don't set signals, archiver has its own agenda */
+			PgArchiverMain();
 			proc_exit(1);		/* should never return */
 
 		case CheckpointerProcess:

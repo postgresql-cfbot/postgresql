@@ -2378,13 +2378,8 @@ TextPositionState
 TheLexeme
 TheSubstitute
 TidExpr
-TidExprType
 TidHashKey
-TidOpExpr
 TidPath
-TidRangePath
-TidRangeScan
-TidRangeScanState
 TidScan
 TidScanState
 TimeADT

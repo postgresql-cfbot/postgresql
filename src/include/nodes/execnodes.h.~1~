@@ -1574,28 +1574,6 @@ typedef struct TidScanState
 } TidScanState;
 
 /* ----------------
- *	 TidRangeScanState information
- *
- *		tidexprs			list of TidExpr structs (see nodeTidscan.c)
- *		trss_startBlock		first block to scan
- *		trss_endBlock		last block to scan (inclusive)
- *		trss_startOffset	first offset in first block to scan
- *		trss_endOffset		last offset in last block to scan (inclusive)
- *		trss_inScan			is a scan currently in progress?
- * ----------------
- */
-typedef struct TidRangeScanState
-{
-	ScanState	ss;				/* its first field is NodeTag */
-	List	   *trss_tidexprs;
-	BlockNumber trss_startBlock;
-	BlockNumber trss_endBlock;
-	OffsetNumber trss_startOffset;
-	OffsetNumber trss_endOffset;
-	bool		trss_inScan;
-} TidRangeScanState;
-
-/* ----------------
  *	 SubqueryScanState information
  *
  *		SubqueryScanState is used for scanning a sub-query in the range table.

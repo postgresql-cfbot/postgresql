@@ -2235,6 +2235,12 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 			context.paramids = bms_add_members(context.paramids, scan_params);
 			break;
 
+		case T_TidRangeScan:
+			finalize_primnode((Node *) ((TidRangeScan *) plan)->tidrangequals,
+							  &context);
+			context.paramids = bms_add_members(context.paramids, scan_params);
+			break;
+
 		case T_SubqueryScan:
 			{
 				SubqueryScan *sscan = (SubqueryScan *) plan;

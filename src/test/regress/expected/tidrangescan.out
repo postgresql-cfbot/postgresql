@@ -1,0 +1,238 @@
+-- tests for tidrangescans
+CREATE TABLE tidrangescan(id integer, data text);
+INSERT INTO tidrangescan SELECT i,repeat('x', 100) FROM generate_series(1,1000) AS s(i);
+DELETE FROM tidrangescan WHERE substring(ctid::text from ',(\d+)\)')::integer > 10 OR substring(ctid::text from '\((\d+),')::integer >= 10;;
+VACUUM tidrangescan;
+-- range scans with upper bound
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid < '(1,0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid < '(1,0)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid < '(1,0)';
+  ctid  
+--------
+ (0,1)
+ (0,2)
+ (0,3)
+ (0,4)
+ (0,5)
+ (0,6)
+ (0,7)
+ (0,8)
+ (0,9)
+ (0,10)
+(10 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid <= '(1,5)';
+             QUERY PLAN             
+------------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid <= '(1,5)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid <= '(1,5)';
+  ctid  
+--------
+ (0,1)
+ (0,2)
+ (0,3)
+ (0,4)
+ (0,5)
+ (0,6)
+ (0,7)
+ (0,8)
+ (0,9)
+ (0,10)
+ (1,1)
+ (1,2)
+ (1,3)
+ (1,4)
+ (1,5)
+(15 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid < '(0,0)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid < '(0,0)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid < '(0,0)';
+ ctid 
+------
+(0 rows)
+
+-- range scans with lower bound
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid > '(9,8)';
+            QUERY PLAN             
+-----------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid > '(9,8)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid > '(9,8)';
+  ctid  
+--------
+ (9,9)
+ (9,10)
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE '(9,8)' < ctid;
+            QUERY PLAN             
+-----------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: ('(9,8)'::tid < ctid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE '(9,8)' < ctid;
+  ctid  
+--------
+ (9,9)
+ (9,10)
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid >= '(9,8)';
+             QUERY PLAN             
+------------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid >= '(9,8)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid >= '(9,8)';
+  ctid  
+--------
+ (9,8)
+ (9,9)
+ (9,10)
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid >= '(100,0)';
+              QUERY PLAN              
+--------------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (ctid >= '(100,0)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid >= '(100,0)';
+ ctid 
+------
+(0 rows)
+
+-- range scans with both bounds
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE ctid > '(4,4)' AND '(4,7)' >= ctid;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: ((ctid > '(4,4)'::tid) AND ('(4,7)'::tid >= ctid))
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE ctid > '(4,4)' AND '(4,7)' >= ctid;
+ ctid  
+-------
+ (4,5)
+ (4,6)
+ (4,7)
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)';
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Tid Range Scan on tidrangescan
+   TID Cond: (('(4,7)'::tid >= ctid) AND (ctid > '(4,4)'::tid))
+(2 rows)
+
+SELECT ctid FROM tidrangescan WHERE '(4,7)' >= ctid AND ctid > '(4,4)';
+ ctid  
+-------
+ (4,5)
+ (4,6)
+ (4,7)
+(3 rows)
+
+-- extreme offsets
+SELECT ctid FROM tidrangescan where ctid > '(0,65535)' AND ctid < '(1,0)' LIMIT 1;
+ ctid 
+------
+(0 rows)
+
+SELECT ctid FROM tidrangescan where ctid < '(0,0)' LIMIT 1;
+ ctid 
+------
+(0 rows)
+
+-- empty table
+CREATE TABLE tidrangescan_empty(id integer, data text);
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan_empty WHERE ctid < '(1, 0)';
+              QUERY PLAN              
+--------------------------------------
+ Tid Range Scan on tidrangescan_empty
+   TID Cond: (ctid < '(1,0)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan_empty WHERE ctid < '(1, 0)';
+ ctid 
+------
+(0 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT ctid FROM tidrangescan_empty WHERE ctid > '(9, 0)';
+              QUERY PLAN              
+--------------------------------------
+ Tid Range Scan on tidrangescan_empty
+   TID Cond: (ctid > '(9,0)'::tid)
+(2 rows)
+
+SELECT ctid FROM tidrangescan_empty WHERE ctid > '(9, 0)';
+ ctid 
+------
+(0 rows)
+
+-- cursors
+BEGIN;
+DECLARE c CURSOR FOR SELECT ctid FROM tidrangescan WHERE ctid < '(1,0)';
+FETCH NEXT c;
+ ctid  
+-------
+ (0,1)
+(1 row)
+
+FETCH NEXT c;
+ ctid  
+-------
+ (0,2)
+(1 row)
+
+FETCH PRIOR c;
+ ctid  
+-------
+ (0,1)
+(1 row)
+
+FETCH FIRST c;
+ ctid  
+-------
+ (0,1)
+(1 row)
+
+FETCH LAST c;
+  ctid  
+--------
+ (0,10)
+(1 row)
+
+COMMIT;
+DROP TABLE tidrangescan;
+DROP TABLE tidrangescan_empty;

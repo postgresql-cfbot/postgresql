@@ -22,6 +22,11 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "catalog/pg_operator.h"
+#include "optimizer/tlist.h"
+#include "utils/fmgroids.h"
+#include "nodes/makefuncs.h"
+#include "utils/lsyscache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -195,7 +200,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * way of implementing a full outer join, so override enable_mergejoin if
 	 * it's a full join.
 	 */
-	if (enable_mergejoin || jointype == JOIN_FULL)
+	if (enable_mergejoin || jointype == JOIN_FULL || jointype == JOIN_TEMPORAL_NORMALIZE)
 		extra.mergeclause_list = select_mergejoin_clauses(root,
 														  joinrel,
 														  outerrel,
@@ -937,6 +942,80 @@ sort_inner_and_outer(PlannerInfo *root,
 		Assert(inner_path);
 		jointype = JOIN_INNER;
 	}
+	else if (jointype == JOIN_TEMPORAL_NORMALIZE)
+	{
+		/*
+		 * outer_path is just sort; inner_path is append of (B, ts) projection with (B, te) projection
+		 */
+		List *exprs = NIL; // to collect inner relation's targets
+		FuncExpr *f_split;
+		Var *innervar;
+
+		foreach(l, extra->mergeclause_list)
+		{
+			RestrictInfo       *rinfo = (RestrictInfo *) lfirst(l);
+			Expr               *clause  = (Expr *) rinfo->clause;
+
+			if (IsA(clause, OpExpr))
+			{
+				OpExpr *opexpr = (OpExpr *) clause;
+				if (opexpr->opno == OID_RANGE_EQ_OP)
+				{
+					if (IsA(lsecond(opexpr->args), Var)) {
+
+						// lsecond because it is from the second relation (=inner)
+						innervar = lsecond(opexpr->args);
+
+						f_split = makeFuncExpr(F_RANGE_SPLIT, 23, list_make1(innervar), 0, 0, 0);
+						f_split->funcretset = true;
+
+						/*
+						 * OUTER_VAR cannot be used here, because path creation does not know about it,
+						 * it will be introduced in plan creation.
+						 */
+						innervar = makeVar(2, innervar->varattno, f_split->funcresulttype, -1, 0, 0);
+					}
+				}
+				else
+				{
+					// lsecond because it is from the second relation (=inner)
+					exprs = lappend(exprs, lsecond(opexpr->args));
+				}
+			}
+		}
+
+		RestrictInfo       *rinfo = (RestrictInfo *) linitial(extra->mergeclause_list);
+		OpExpr *opexpr = (OpExpr *) rinfo->clause;
+		lsecond(opexpr->args) = f_split;
+		rinfo->right_em->em_expr = f_split;
+		rinfo->mergeopfamilies = get_mergejoin_opfamilies(opexpr->opno);
+
+		PathTarget *target_split = makeNode(PathTarget);
+		target_split->exprs = lappend(exprs, f_split);
+
+		set_pathtarget_cost_width(root, target_split);
+
+		inner_path = (Path *) create_set_projection_path(root, innerrel, inner_path, target_split);
+		innerrel->reltarget->exprs = inner_path->pathtarget->exprs;//list_make1(innervar);//copyObject(inner_path->pathtarget->exprs);
+		joinrel->reltarget->exprs = list_concat(copyObject(outerrel->reltarget->exprs), innerrel->reltarget->exprs);
+		set_pathtarget_cost_width(root, joinrel->reltarget);
+
+		innerrel->cheapest_total_path = inner_path;
+		innerrel->cheapest_startup_path = inner_path;
+		innerrel->cheapest_parameterized_paths = inner_path;
+		innerrel->pathlist = list_make1(inner_path);
+
+		extra->sjinfo->semi_rhs_exprs = list_make1(f_split);
+		extra->sjinfo->semi_operators = NIL;
+		extra->sjinfo->semi_operators = lappend_oid(extra->sjinfo->semi_operators, 96);
+
+		Assert(inner_path);
+
+		innerrel->cheapest_total_path = inner_path;
+		innerrel->cheapest_startup_path = inner_path;
+		innerrel->cheapest_parameterized_paths = inner_path;
+	}
+
 
 	/*
 	 * If the joinrel is parallel-safe, we may be able to consider a partial
@@ -1027,6 +1106,16 @@ sort_inner_and_outer(PlannerInfo *root,
 		/* Build pathkeys representing output sort order */
 		merge_pathkeys = build_join_pathkeys(root, joinrel, jointype,
 											 outerkeys);
+
+		if (jointype == JOIN_TEMPORAL_NORMALIZE)
+		{
+			inner_path = (Path *) create_sort_path(root, innerrel, inner_path, innerkeys, -1);
+			innerrel->cheapest_total_path = inner_path;
+			innerrel->cheapest_startup_path = inner_path;
+			innerrel->cheapest_parameterized_paths = inner_path;
+			innerrel->pathlist = list_make1(inner_path);
+			Assert(inner_path);
+		}
 
 		/*
 		 * And now we can make the path.
@@ -1360,6 +1449,7 @@ match_unsorted_outer(PlannerInfo *root,
 			break;
 		case JOIN_RIGHT:
 		case JOIN_FULL:
+		case JOIN_TEMPORAL_NORMALIZE:
 			nestjoinOK = false;
 			useallclauses = true;
 			break;
@@ -1685,6 +1775,10 @@ hash_inner_and_outer(PlannerInfo *root,
 	bool		isouterjoin = IS_OUTER_JOIN(jointype);
 	List	   *hashclauses;
 	ListCell   *l;
+
+	/* Hashjoin is not allowed for temporal NORMALIZE */
+	if (jointype == JOIN_TEMPORAL_NORMALIZE)
+		return;
 
 	/*
 	 * We need to build only one hashclauses list for any given pair of outer

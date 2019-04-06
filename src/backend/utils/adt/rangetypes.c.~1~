@@ -41,7 +41,6 @@
 #include "utils/lsyscache.h"
 #include "utils/rangetypes.h"
 #include "utils/timestamp.h"
-#include "funcapi.h"
 
 
 #define RANGE_EMPTY_LITERAL "empty"
@@ -466,79 +465,6 @@ range_upper(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_DATUM(upper.val);
-}
-
-/* split lower/upper bound into two rows of data */
-Datum
-range_split(PG_FUNCTION_ARGS)
-{
-	typedef struct
-	{
-		RangeBound	lower;
-		RangeBound	upper;
-		bool		empty;
-	} RangeSplitFuncContext;
-
-	FuncCallContext *funcctx;
-	MemoryContext oldcontext;
-	RangeSplitFuncContext *fctx;
-
-	/* stuff done only on the first call of the function */
-	if (SRF_IS_FIRSTCALL())
-	{
-		RangeType  		*r1;
-		TypeCacheEntry  *typcache;
-
-		/* create a function context for cross-call persistence */
-		funcctx = SRF_FIRSTCALL_INIT();
-
-		/*
-		 * switch to memory context appropriate for multiple function calls
-		 */
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-
-		r1 = PG_GETARG_RANGE_P(0);
-
-		/* allocate memory for user context */
-		fctx = (RangeSplitFuncContext *) palloc(sizeof(RangeSplitFuncContext));
-
-		/*
-		 * We cannot use range_get_typecache, because it would overwrite
-		 * fcinfo->flinfo->fn_extra
-		 */
-		typcache = lookup_type_cache(RangeTypeGetOid(r1), TYPECACHE_RANGE_INFO);
-		if (typcache->rngelemtype == NULL)
-			elog(ERROR, "type %u is not a range type", RangeTypeGetOid(r1));
-		range_deserialize(typcache, r1, &fctx->lower, &fctx->upper, &fctx->empty);
-
-		funcctx->user_fctx = fctx;
-		MemoryContextSwitchTo(oldcontext);
-	}
-
-	/* stuff done on every call of the function */
-	funcctx = SRF_PERCALL_SETUP();
-	fctx = (RangeSplitFuncContext *) funcctx->user_fctx;
-
-	if (funcctx->call_cntr == 0)
-	{
-		/* Return NULL if there's no finite lower bound */
-		if (fctx->empty || fctx->lower.infinite)
-			SRF_RETURN_NEXT_NULL(funcctx);
-
-		SRF_RETURN_NEXT(funcctx, fctx->lower.val);
-	}
-
-	if (funcctx->call_cntr == 1)
-	{
-		/* Return NULL if there's no finite upper bound */
-		if (fctx->empty || fctx->upper.infinite)
-			SRF_RETURN_NEXT_NULL(funcctx);
-
-		SRF_RETURN_NEXT(funcctx, fctx->upper.val);
-	}
-
-	/* done, after extracting lower and upper bounds */
-	SRF_RETURN_DONE(funcctx);
 }
 
 

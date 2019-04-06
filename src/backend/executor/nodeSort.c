@@ -86,6 +86,12 @@ ExecSort(PlanState *pstate)
 		outerNode = outerPlanState(node);
 		tupDesc = ExecGetResultType(outerNode);
 
+		// XXX PEMOSER Manually fix sort operation of second attribute (former time, now upper(time))
+		// We must fix that in general... this is just a proof of concept brute-force solution!
+		if (plannode->plan.lefttree->type == T_ProjectSet) {
+			plannode->sortOperators[0] = 97; // 97 means "<" for int4, it was "<" for int4range
+		}
+
 		tuplesortstate = tuplesort_begin_heap(tupDesc,
 											  plannode->numCols,
 											  plannode->sortColIdx,

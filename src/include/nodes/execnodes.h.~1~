@@ -1844,17 +1844,6 @@ typedef struct MergeJoinState
 	TupleTableSlot *mj_NullInnerTupleSlot;
 	ExprContext *mj_OuterEContext;
 	ExprContext *mj_InnerEContext;
-
-	/* needed by temporal normalization */
-	bool				 mj_markSet;
-	bool				 mj_isNormalizer;
-	bool				 sameleft;
-	bool				*nullMask;		/* See heap_modify_tuple */
-	bool				*tsteMask;		/* See heap_modify_tuple */
-	Datum				*newValues;		/* tuple values that get updated */
-	Datum				 sweepline;
-	Form_pg_attribute	 datumFormat;	/* Datum format of sweepline, P1, P2 */
-	TupleTableSlot 		*prev;
 } MergeJoinState;
 
 /* ----------------

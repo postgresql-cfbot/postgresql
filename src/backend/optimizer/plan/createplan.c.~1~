@@ -4321,15 +4321,6 @@ create_mergejoin_plan(PlannerInfo *root,
 	/* Costs of sort and material steps are included in path cost already */
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
 
-	/*
-	 * XXX PEMOSER NORMALIZE needs a result node above to properly
-	 * handle target lists, functions and constants
-	 * Maybe we need to refine this like in create_unique_plan:
-	 * "If the top plan node can't do projections..."
-	 */
-	if (best_path->jpath.jointype == JOIN_TEMPORAL_NORMALIZE)
-		join_plan = make_result(tlist, NULL, join_plan);
-
 	return join_plan;
 }
 

@@ -43,6 +43,7 @@ typedef struct
 #define LVAR_ANYEND 0x01
 #define LVAR_INCASE 0x02
 #define LVAR_SUBLEXEME	0x04
+#define LVAR_QUOTEDPART 0x08
 
 typedef struct
 {
@@ -79,8 +80,6 @@ typedef struct
 #define LQUERY_FIRST(x)   ( (lquery_level*)( ((char*)(x))+LQUERY_HDRSIZE ) )
 
 #define LQUERY_HASNOT		0x01
-
-#define ISALNUM(x)	( t_isalpha(x) || t_isdigit(x)	|| ( pg_mblen(x) == 1 && t_iseq((x), '_') ) )
 
 /* full text query */
 
@@ -164,6 +163,8 @@ bool compare_subnode(ltree_level *t, char *q, int len,
 				int (*cmpptr) (const char *, const char *, size_t), bool anyend);
 ltree	   *lca_inner(ltree **a, int len);
 int			ltree_strncasecmp(const char *a, const char *b, size_t s);
+int			bytes_to_escape(const char *start, const int len, const char *to_escape);
+void		copy_level(char *dst, const char *src, int len, int extra_bytes);
 
 /* fmgr macros for ltree objects */
 #define DatumGetLtreeP(X)			((ltree *) PG_DETOAST_DATUM(X))

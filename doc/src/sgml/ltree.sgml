@@ -17,14 +17,37 @@
   <title>Definitions</title>
 
   <para>
-   A <firstterm>label</firstterm> is a sequence of alphanumeric characters
-   and underscores (for example, in C locale the characters
-   <literal>A-Za-z0-9_</literal> are allowed).  Labels must be less than 256 bytes
-   long.
+   A <firstterm>label</firstterm> is a sequence of characters. Labels must be 
+   less than 256 symbols long. Label may contain any character supported by Postgres
+   except <literal>\0</literal>. If label contains spaces, dots, lquery modifiers,
+   they may be <firstterm>escaped</firstterm>. Escaping can be done either by preceeding
+   backslash (<literal>\\</literal>) symbol, or by wrapping the label in whole in double 
+   quotes (<literal>"</literal>). Initial and final unescaped whitespace is stripped.
   </para>
 
   <para>
-   Examples: <literal>42</literal>, <literal>Personal_Services</literal>
+   Examples: <literal>42</literal>, <literal>Personal_Services</literal>, 
+   <literal>"This is a literal"</literal>, <literal>Literal\\ with\\ spaces</literal>.
+  </para>
+
+  <para>
+    During converting text into internal representations, wrapping double quotes 
+    and escaping backslashes are removed. During converting internal
+    representations into text, if the label does not contain any special
+    symbols, it is printed as is. Otherwise, it is wrapped in quotes and, if
+    there are internal quotes, they are escaped with backslash. The list of special 
+    symbols for ltree includes space (<literal> </literal>), backslash and double quote,
+    lquery and ltxtquery also require escaping <literal>|</literal>, <literal>&</literal>, 
+    <literal>!</literal>, <literal>@</literal>, and <literal>*</literal>.
+  </para>
+
+  <para>
+    Examples: <literal>42</literal>, <literal>"\\42"</literal>,
+    <literal>\\4\\2</literal>, <literal> 42 </literal> and <literal> "42"
+    </literal> will have the similar internal representation and, being
+    converted from internal representation, will become <literal>42</literal>.
+    Literal <literal>abc def</literal> will turn into <literal>"abc
+    def"</literal>.
   </para>
 
   <para>
@@ -681,11 +704,13 @@ ltreetest=&gt; SELECT ins_label(path,2,'Space') FROM test WHERE path &lt;@ 'Top.
   <title>Authors</title>
 
   <para>
-   All work was done by Teodor Sigaev (<email>teodor@stack.net</email>) and
+   Initial version was done by Teodor Sigaev (<email>teodor@sigaev.ru</email>) and
    Oleg Bartunov (<email>oleg@sai.msu.su</email>). See
    <ulink url="http://www.sai.msu.su/~megera/postgres/gist/"></ulink> for
    additional information. Authors would like to thank Eugeny Rodichev for
-   helpful discussions. Comments and bug reports are welcome.
+   helpful discussions. Implementation of escaping syntax was done by Dmitry Belyavskiy
+   (<email>beldmit@gmail.com</email>) directed by Teodor Sigaev. 
+   Comments and bug reports are welcome.
   </para>
  </sect2>
 

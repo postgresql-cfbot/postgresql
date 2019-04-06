@@ -1,5 +1,7 @@
 CREATE EXTENSION ltree;
 
+SET standard_conforming_strings=on;
+
 -- Check whether any of our opclasses fail amvalidate
 SELECT amname, opcname
 FROM pg_opclass opc LEFT JOIN pg_am am ON am.oid = opcmethod
@@ -291,3 +293,379 @@ SELECT count(*) FROM _ltreetest WHERE t ~ '23.*{1}.1' ;
 SELECT count(*) FROM _ltreetest WHERE t ~ '23.*.1' ;
 SELECT count(*) FROM _ltreetest WHERE t ~ '23.*.2' ;
 SELECT count(*) FROM _ltreetest WHERE t ? '{23.*.1,23.*.2}' ;
+
+-- Extended syntax, escaping, quoting etc
+-- success
+SELECT E'\\.'::ltree;
+SELECT E'\\ '::ltree;
+SELECT E'\\\\'::ltree;
+SELECT E'\\a'::ltree;
+SELECT E'\\n'::ltree;
+SELECT E'x\\\\'::ltree;
+SELECT E'x\\ '::ltree;
+SELECT E'x\\.'::ltree;
+SELECT E'x\\a'::ltree;
+SELECT E'x\\n'::ltree;
+SELECT 'a b.с d'::ltree;
+SELECT ' e . f '::ltree;
+SELECT ' '::ltree;
+
+SELECT E'\\ g  . h\\ '::ltree;
+SELECT E'\\ g'::ltree;
+SELECT E' h\\ '::ltree;
+SELECT '" g  "." h "'::ltree;
+SELECT '" g  " '::ltree;
+SELECT '" g  "   ." h "  '::ltree;
+
+SELECT nlevel(E'Bottom\\.Test'::ltree);
+SELECT subpath(E'Bottom\\.'::ltree, 0, 1);
+
+SELECT subpath(E'a\\.b', 0, 1);
+SELECT subpath(E'a\\..b', 1, 1);
+SELECT subpath(E'a\\..\\b', 1, 1);
+SELECT subpath(E'a b.с d'::ltree, 1, 1);
+
+SELECT(
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\z\z\z\z\z')::ltree;
+
+SELECT('   ' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\a\b\c\d\e   ')::ltree;
+
+SELECT 'abc\|d'::lquery;
+SELECT 'abc\|d'::ltree ~ 'abc\|d'::lquery;
+SELECT 'abc|d'::ltree ~ 'abc*'::lquery; --true
+SELECT 'abc|d'::ltree ~ 'abc\*'::lquery; --false
+SELECT E'abc|\\.'::ltree ~ 'abc\|*'::lquery; --true
+
+SELECT E'"\\""'::ltree;
+SELECT '\"'::ltree;
+SELECT E'\\"'::ltree;
+SELECT 'a\"b'::ltree;
+SELECT '"ab"'::ltree;
+SELECT '"."'::ltree;
+SELECT E'".\\""'::ltree;
+SELECT(
+'"01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\z\z\z\z\z"')::ltree;
+
+SELECT E'"\\""'::lquery;
+SELECT '\"'::lquery;
+SELECT E'\\"'::lquery;
+SELECT 'a\"b'::lquery;
+SELECT '"ab"'::lquery;
+SELECT '"."'::lquery;
+SELECT E'".\\""'::lquery;
+SELECT(
+'"01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\z\z\z\z\z"')::lquery;
+
+SELECT ' e . f '::lquery;
+SELECT ' e | f '::lquery;
+
+SELECT E'\\ g  . h\\ '::lquery;
+SELECT E'\\ g'::lquery;
+SELECT E' h\\ '::lquery;
+SELECT E'"\\ g"'::lquery;
+SELECT E' "h\\ "'::lquery;
+SELECT '" g  "." h "'::lquery;
+
+SELECT E'\\ g  | h\\ '::lquery;
+SELECT '" g  "|" h "'::lquery;
+
+SELECT '" g  " '::lquery;
+SELECT '" g  "    ." h "  '::lquery;
+SELECT '" g  "    |  " h "   '::lquery;
+
+SELECT('   ' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\a\b\c\d\e   ')::lquery;
+
+SELECT E'"a\\"b"'::lquery;
+SELECT '"a!b"'::lquery;
+SELECT '"a%b"'::lquery;
+SELECT '"a*b"'::lquery;
+SELECT '"a@b"'::lquery;
+SELECT '"a{b"'::lquery;
+SELECT '"a}b"'::lquery;
+SELECT '"a|b"'::lquery;
+
+SELECT E'a\\"b'::lquery;
+SELECT E'a\\!b'::lquery;
+SELECT E'a\\%b'::lquery;
+SELECT E'a\\*b'::lquery;
+SELECT E'a\\@b'::lquery;
+SELECT E'a\\{b'::lquery;
+SELECT E'a\\}b'::lquery;
+SELECT E'a\\|b'::lquery;
+
+SELECT '!"!b"'::lquery;
+SELECT '!"%b"'::lquery;
+SELECT '!"*b"'::lquery;
+SELECT '!"@b"'::lquery;
+SELECT '!"{b"'::lquery;
+SELECT '!"}b"'::lquery;
+
+SELECT E'!\\!b'::lquery;
+SELECT E'!\\%b'::lquery;
+SELECT E'!\\*b'::lquery;
+SELECT E'!\\@b'::lquery;
+SELECT E'!\\{b'::lquery;
+SELECT E'!\\}b'::lquery;
+
+SELECT '"1"'::lquery;
+SELECT '"2.*"'::lquery;
+SELECT '!"1"'::lquery;
+SELECT '!"1|"'::lquery;
+SELECT '4|3|"2"'::lquery;
+SELECT '"1".2'::lquery;
+SELECT '"1.4"|"3"|2'::lquery;
+SELECT '"1"."4"|"3"|"2"'::lquery;
+SELECT '"1"."0"'::lquery;
+SELECT '"1".0'::lquery;
+SELECT '"1".*'::lquery;
+SELECT '4|"3"|2.*'::lquery;
+SELECT '4|"3"|"2.*"'::lquery;
+SELECT '2."*"'::lquery;
+SELECT '"*".1."*"'::lquery;
+SELECT '"*.4"|3|2.*'::lquery;
+SELECT '"*.4"|3|"2.*"'::lquery;
+SELECT '1.*.4|3|2.*{,4}'::lquery;
+SELECT '1.*.4|3|2.*{1,}'::lquery;
+SELECT '1.*.4|3|2.*{1}'::lquery;
+SELECT '"qwerty"%@*.tu'::lquery;
+
+SELECT '1.*.4|3|"2".*{1,4}'::lquery;
+SELECT '1."*".4|3|"2".*{1,4}'::lquery;
+SELECT '\% \@'::lquery;
+SELECT '"\% \@"'::lquery;
+
+SELECT E'\\aa.b.c.d.e'::ltree ~ 'A@.b.c.d.e';
+SELECT E'a\\a.b.c.\\d.e'::ltree ~ 'A*.b.c.d.e';
+SELECT E'a\\a.b.c.\\d.e'::ltree ~ E'A*@.b.c.d.\\e';
+SELECT E'a\\a.b.c.\\d.e'::ltree ~ E'A*@|\\g.b.c.d.e';
+--ltxtquery
+SELECT '!"tree" & aWdf@*'::ltxtquery;
+SELECT '"!tree" & aWdf@*'::ltxtquery;
+SELECT E'tr\\ee'::ltree @ E'\\t\\r\\e\\e'::ltxtquery;
+SELECT E'tr\\ee.awd\\fg'::ltree @ E'tre\\e & a\\Wdf@*'::ltxtquery;
+SELECT 'tree & aw_qw%*'::ltxtquery;
+SELECT 'tree."awdfg"'::ltree @ E'tree & a\\Wdf@*'::ltxtquery;
+SELECT 'tree."awdfg"'::ltree @ E'tree & "a\\Wdf"@*'::ltxtquery;
+SELECT 'tree.awdfg_qwerty'::ltree @ 'tree & aw_qw%*'::ltxtquery;
+SELECT 'tree.awdfg_qwerty'::ltree @ 'tree & "aw_rw"%*'::ltxtquery;
+SELECT 'tree.awdfg_qwerty'::ltree @ E'tree & "aw\\_qw"%*'::ltxtquery;
+SELECT 'tree.awdfg_qwerty'::ltree @ E'tree & aw\\_qw%*'::ltxtquery;
+
+SELECT E'"a\\"b"'::ltxtquery;
+SELECT '"a!b"'::ltxtquery;
+SELECT '"a%b"'::ltxtquery;
+SELECT '"a*b"'::ltxtquery;
+SELECT '"a@b"'::ltxtquery;
+SELECT '"a{b"'::ltxtquery;
+SELECT '"a}b"'::ltxtquery;
+SELECT '"a|b"'::ltxtquery;
+SELECT '"a&b"'::ltxtquery;
+SELECT '"a(b"'::ltxtquery;
+SELECT '"a)b"'::ltxtquery;
+
+SELECT E'a\\"b'::ltxtquery;
+SELECT E'a\\!b'::ltxtquery;
+SELECT E'a\\%b'::ltxtquery;
+SELECT E'a\\*b'::ltxtquery;
+SELECT E'a\\@b'::ltxtquery;
+SELECT E'a\\{b'::ltxtquery;
+SELECT E'a\\}b'::ltxtquery;
+SELECT E'a\\|b'::ltxtquery;
+SELECT E'a\\&b'::ltxtquery;
+SELECT E'a\\(b'::ltxtquery;
+SELECT E'a\\)b'::ltxtquery;
+
+SELECT E'"\\"b"'::ltxtquery;
+SELECT '"!b"'::ltxtquery;
+SELECT '"%b"'::ltxtquery;
+SELECT '"*b"'::ltxtquery;
+SELECT '"@b"'::ltxtquery;
+SELECT '"{b"'::ltxtquery;
+SELECT '"}b"'::ltxtquery;
+SELECT '"|b"'::ltxtquery;
+SELECT '"&b"'::ltxtquery;
+SELECT '"(b"'::ltxtquery;
+SELECT '")b"'::ltxtquery;
+
+SELECT E'\\"b'::ltxtquery;
+SELECT E'\\!b'::ltxtquery;
+SELECT E'\\%b'::ltxtquery;
+SELECT E'\\*b'::ltxtquery;
+SELECT E'\\@b'::ltxtquery;
+SELECT E'\\{b'::ltxtquery;
+SELECT E'\\}b'::ltxtquery;
+SELECT E'\\|b'::ltxtquery;
+SELECT E'\\&b'::ltxtquery;
+SELECT E'\\(b'::ltxtquery;
+SELECT E'\\)b'::ltxtquery;
+
+SELECT E'"a\\""'::ltxtquery;
+SELECT '"a!"'::ltxtquery;
+SELECT '"a%"'::ltxtquery;
+SELECT '"a*"'::ltxtquery;
+SELECT '"a@"'::ltxtquery;
+SELECT '"a{"'::ltxtquery;
+SELECT '"a}"'::ltxtquery;
+SELECT '"a|"'::ltxtquery;
+SELECT '"a&"'::ltxtquery;
+SELECT '"a("'::ltxtquery;
+SELECT '"a)"'::ltxtquery;
+
+SELECT E'a\\"'::ltxtquery;
+SELECT E'a\\!'::ltxtquery;
+SELECT E'a\\%'::ltxtquery;
+SELECT E'a\\*'::ltxtquery;
+SELECT E'a\\@'::ltxtquery;
+SELECT E'a\\{'::ltxtquery;
+SELECT E'a\\}'::ltxtquery;
+SELECT E'a\\|'::ltxtquery;
+SELECT E'a\\&'::ltxtquery;
+SELECT E'a\\('::ltxtquery;
+SELECT E'a\\)'::ltxtquery;
+
+--failures
+SELECT E'\\'::ltree;
+SELECT E'n\\'::ltree;
+SELECT '"'::ltree;
+SELECT '"a'::ltree;
+SELECT '""'::ltree;
+SELECT 'a"b'::ltree;
+SELECT E'\\"ab"'::ltree;
+SELECT '"a"."a'::ltree;
+SELECT '"a."a"'::ltree;
+SELECT '"".a'::ltree;
+SELECT 'a.""'::ltree;
+SELECT '"".""'::ltree;
+SELECT '""'::lquery;
+SELECT '"".""'::lquery;
+SELECT 'a.""'::lquery;
+SELECT ' . '::ltree;
+SELECT ' . '::lquery;
+SELECT ' | '::lquery;
+
+SELECT(
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'z\z\z\z\z\z')::ltree;
+SELECT(
+'"01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\z\z\z\z\z\z"')::ltree;
+
+SELECT '"'::lquery;
+SELECT '"a'::lquery;
+SELECT '"a"."a'::lquery;
+SELECT '"a."a"'::lquery;
+
+SELECT E'\\"ab"'::lquery;
+SELECT 'a"b'::lquery;
+SELECT 'a!b'::lquery;
+SELECT 'a%b'::lquery;
+SELECT 'a*b'::lquery;
+SELECT 'a@b'::lquery;
+SELECT 'a{b'::lquery;
+SELECT 'a}b'::lquery;
+
+SELECT 'a!'::lquery;
+SELECT 'a{'::lquery;
+SELECT 'a}'::lquery;
+
+SELECT '%b'::lquery;
+SELECT '*b'::lquery;
+SELECT '@b'::lquery;
+SELECT '{b'::lquery;
+SELECT '}b'::lquery;
+
+SELECT '!%b'::lquery;
+SELECT '!*b'::lquery;
+SELECT '!@b'::lquery;
+SELECT '!{b'::lquery;
+SELECT '!}b'::lquery;
+
+SELECT '"qwert"y.tu'::lquery;
+SELECT 'q"wert"y"%@*.tu'::lquery;
+
+SELECT(
+'"01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'01234567890123456789012345678901234567890123456789' ||
+'\z\z\z\z\z\z"')::lquery;
+
+SELECT 'a | ""'::ltxtquery;
+SELECT '"" & ""'::ltxtquery;
+SELECT 'a.""'::ltxtquery;
+SELECT '"'::ltxtquery;
+
+SELECT '"""'::ltxtquery;
+SELECT '"a'::ltxtquery;
+SELECT '"a" & "a'::ltxtquery;
+SELECT '"a | "a"'::ltxtquery;
+SELECT '"!tree" & aWdf@*"'::ltxtquery;
+
+SELECT 'a"b'::ltxtquery;
+SELECT 'a!b'::ltxtquery;
+SELECT 'a%b'::ltxtquery;
+SELECT 'a*b'::ltxtquery;
+SELECT 'a@b'::ltxtquery;
+SELECT 'a{b'::ltxtquery;
+SELECT 'a}b'::ltxtquery;
+SELECT 'a|b'::ltxtquery;
+SELECT 'a&b'::ltxtquery;
+SELECT 'a(b'::ltxtquery;
+SELECT 'a)b'::ltxtquery;
+
+SELECT '"b'::ltxtquery;
+SELECT '%b'::ltxtquery;
+SELECT '*b'::ltxtquery;
+SELECT '@b'::ltxtquery;
+SELECT '{b'::ltxtquery;
+SELECT '}b'::ltxtquery;
+SELECT '|b'::ltxtquery;
+SELECT '&b'::ltxtquery;
+SELECT '(b'::ltxtquery;
+SELECT ')b'::ltxtquery;
+
+SELECT 'a"'::ltxtquery;
+SELECT 'a!'::ltxtquery;
+SELECT 'a{'::ltxtquery;
+SELECT 'a}'::ltxtquery;
+SELECT 'a|'::ltxtquery;
+SELECT 'a&'::ltxtquery;
+SELECT 'a('::ltxtquery;
+SELECT 'a)'::ltxtquery;
+

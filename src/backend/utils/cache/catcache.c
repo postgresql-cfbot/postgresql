@@ -60,8 +60,17 @@
 #define CACHE_elog(...)
 #endif
 
+/*
+ * GUC variable to define the minimum age of entries that will be considered
+ * to be evicted in seconds. -1 to disable the feature.
+ */
+int catalog_cache_prune_min_age = 0;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
+
+/* Clock for the last accessed time of a catcache entry. */
+TimestampTz	catcacheclock = 0;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 					   int nkeys,
@@ -850,7 +859,81 @@ InitCatCache(int id,
 	 */
 	MemoryContextSwitchTo(oldcxt);
 
+	/* initialize catcache reference clock if haven't done yet */
+	if (catcacheclock == 0)
+		catcacheclock = GetCurrentTimestamp();
+
 	return cp;
+}
+
+/*
+ * CatCacheCleanupOldEntries - Remove infrequently-used entries
+ *
+ * Catcache entries happen to be left unused for a long time for several
+ * reasons. Remove such entries to prevent catcache from bloating. It is based
+ * on the similar algorithm with buffer eviction. Entries that are accessed
+ * several times in a certain period live longer than those that have had less
+ * access in the same duration.
+ */
+static bool
+CatCacheCleanupOldEntries(CatCache *cp)
+{
+	int	nremoved = 0;
+	int i;
+
+	/* Return immediately if disabled */
+	if (catalog_cache_prune_min_age == 0)
+		return false;
+
+	/* Scan over the whole hash to find entries to remove */
+	for (i = 0 ; i < cp->cc_nbuckets ; i++)
+	{
+		dlist_mutable_iter	iter;
+
+		dlist_foreach_modify(iter, &cp->cc_bucket[i])
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+			long		entry_age;
+			int			us;
+
+			/* Don't remove referenced entries */
+			if (ct->refcount != 0 ||
+				(ct->c_list && ct->c_list->refcount != 0))
+				continue;
+
+			/*
+			 * Calculate the duration from the time from the last access to
+			 * the "current" time. catcacheclock is updated per-statement
+			 * basis and additionaly udpated periodically during a long
+			 * running query.
+			 */
+			TimestampDifference(ct->lastaccess, catcacheclock, &entry_age, &us);
+
+			if (entry_age < catalog_cache_prune_min_age)
+				continue;
+
+			/*
+			 * Entries that are not accessed after the last pruning are
+			 * removed in that seconds, and their lives are prolonged
+			 * according to how many times they are accessed up to three times
+			 * of the duration. We don't try shrink buckets since pruning
+			 * effectively caps catcache expansion in the long term.
+			 */
+			if (ct->naccess > 1)
+				ct->naccess--;
+			else
+			{
+				CatCacheRemoveCTup(cp, ct);
+				nremoved++;
+			}
+		}
+	}
+
+	if (nremoved > 0)
+		elog(DEBUG1, "pruning catalog cache id=%d for %s: removed %d / %d",
+			 cp->id, cp->cc_relname, nremoved, cp->cc_ntup + nremoved);
+
+	return nremoved > 0;
 }
 
 /*
@@ -1263,6 +1346,10 @@ SearchCatCacheInternal(CatCache *cache,
 		 * near the front of the hashbucket's list.)
 		 */
 		dlist_move_head(bucket, &ct->cache_elem);
+		ct->naccess++;
+		ct->naccess &= 3;
+
+		ct->lastaccess = catcacheclock;
 
 		/*
 		 * If it's a positive entry, bump its refcount and return it. If it's
@@ -1888,6 +1975,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	ct->dead = false;
 	ct->negative = negative;
 	ct->hash_value = hashValue;
+	ct->naccess = 0;
+	ct->lastaccess = catcacheclock;
 
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 
@@ -1895,11 +1984,25 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	CacheHdr->ch_ntup++;
 
 	/*
-	 * If the hash table has become too full, enlarge the buckets array. Quite
-	 * arbitrarily, we enlarge when fill factor > 2.
-	 */
-	if (cache->cc_ntup > cache->cc_nbuckets * 2)
-		RehashCatCache(cache);
+	 * If the hash table has become too full, try removing infrequently used
+	 * entries to make a room for the new entry. If failed, enlarge the bucket
+	 * array instead.  Quite arbitrarily, we try this when fill factor > 2.
+ 	 */
+	if (unlikely(cache->cc_ntup > cache->cc_nbuckets * 2))
+	{
+		bool rehash = true;
+
+		if (unlikely(catalog_cache_prune_min_age > 0))
+		{
+			/* increase refcount so that the new entry survives pruning */
+			ct->refcount++;
+			rehash = !CatCacheCleanupOldEntries(cache);
+			ct->refcount--;
+		}
+
+		if (likely(rehash))
+			RehashCatCache(cache);
+	} 
 
 	return ct;
 }

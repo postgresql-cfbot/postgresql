@@ -1067,6 +1067,7 @@ static void
 AtStart_Cache(void)
 {
 	AcceptInvalidationMessages();
+	SetCatCacheClock(GetCurrentStatementStartTimestamp());
 }
 
 /*

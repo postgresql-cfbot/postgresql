@@ -22,6 +22,7 @@
 
 #include "access/htup.h"
 #include "access/skey.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
 
@@ -119,6 +120,8 @@ typedef struct catctup
 	bool		dead;			/* dead but not yet removed? */
 	bool		negative;		/* negative cache entry? */
 	HeapTupleData tuple;		/* tuple management header */
+	int			naccess;		/* # of access to this entry, up to 2  */
+	TimestampTz	lastaccess;		/* timestamp of the last usage */
 
 	/*
 	 * The tuple may also be a member of at most one CatCList.  (If a single
@@ -185,6 +188,18 @@ typedef struct catcacheheader
 	int			ch_ntup;		/* # of tuples in all caches */
 } CatCacheHeader;
 
+/* for guc.c, not PGDLLPMPORT'ed */
+extern int catalog_cache_prune_min_age;
+
+/* source clock for access timestamp of catcache entries */
+extern TimestampTz catcacheclock;
+
+/* SetCatCacheClock - set catcache timestamp source clodk */
+static inline void
+SetCatCacheClock(TimestampTz ts)
+{
+	catcacheclock = ts;
+}
 
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;

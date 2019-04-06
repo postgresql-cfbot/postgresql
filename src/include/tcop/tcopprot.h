@@ -24,6 +24,7 @@
 #include "nodes/plannodes.h"
 #include "storage/procsignal.h"
 #include "utils/guc.h"
+#include "utils/portal.h"
 #include "utils/queryenvironment.h"
 
 
@@ -32,6 +33,8 @@
 
 extern CommandDest whereToSendOutput;
 extern PGDLLIMPORT const char *debug_query_string;
+extern PGDLLIMPORT Portal current_top_portal;
+
 extern int	max_stack_depth;
 extern int	PostAuthDelay;
 
@@ -83,6 +86,7 @@ extern long get_stack_depth_rlimit(void);
 extern void ResetUsage(void);
 extern void ShowUsage(const char *title);
 extern int	check_log_duration(char *msec_str, bool was_logged);
+extern char *get_portal_bind_parameters(ParamListInfo params);
 extern void set_debug_options(int debug_flag,
 				  GucContext context, GucSource source);
 extern bool set_plan_disabling_options(const char *arg,

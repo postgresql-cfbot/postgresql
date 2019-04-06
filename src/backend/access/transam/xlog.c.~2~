@@ -12114,42 +12114,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	return false;				/* not reached */
 }
 
-void
-ProcessStartupSigHup(void)
-{
-	char	   *conninfo = pstrdup(PrimaryConnInfo);
-	char	   *slotname = pstrdup(PrimarySlotName);
-	bool		conninfoChanged;
-	bool		slotnameChanged;
-
-	ProcessConfigFile(PGC_SIGHUP);
-
-	/*
-	 * We need restart XLOG_FROM_STREAM source if replication settings was
-	 * changed
-	 */
-	conninfoChanged = (strcmp(conninfo, PrimaryConnInfo) != 0);
-	slotnameChanged = (strcmp(slotname, PrimarySlotName) != 0);
-
-	if ((conninfoChanged || slotnameChanged) &&
-		currentSource == XLOG_FROM_STREAM
-		&& WalRcvRunning())
-	{
-		if (conninfoChanged && slotnameChanged)
-			ereport(LOG,
-					(errmsg("The WAL receiver is going to be restarted due to change of primary_conninfo and primary_slot_name")));
-		else
-			ereport(LOG,
-					(errmsg("The WAL receiver is going to be restarted due to change of %s",
-							conninfoChanged ? "primary_conninfo" : "primary_slot_name")));
-
-		pendingRestartSource = true;
-	}
-
-	pfree(conninfo);
-	pfree(slotname);
-}
-
 /*
  * Determine what log level should be used to report a corrupt WAL record
  * in the current WAL page, previously read by XLogPageRead().

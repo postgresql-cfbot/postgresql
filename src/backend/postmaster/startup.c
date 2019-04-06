@@ -147,7 +147,7 @@ HandleStartupProcInterrupts(void)
 	if (got_SIGHUP)
 	{
 		got_SIGHUP = false;
-		ProcessConfigFile(PGC_SIGHUP);
+		ProcessStartupSigHup();
 	}
 
 	/*

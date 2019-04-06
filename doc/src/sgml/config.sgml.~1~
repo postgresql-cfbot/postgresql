@@ -3916,13 +3916,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
           <varname>primary_conninfo</varname> string.
          </para>
          <para>
-          This parameter can only be set in the <filename>postgresql.conf</filename>
-          file or on the server command line.
+          This parameter can only be set at server start.
           This setting has no effect if the server is not in standby mode.
-         </para>
-         <para>
-          WAL receiver will be restarted after <varname>primary_conninfo</varname>
-          was changed.
          </para>
         </listitem>
        </varlistentry>
@@ -3938,14 +3933,9 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
           connecting to the sending server via streaming replication to control
           resource removal on the upstream node
           (see <xref linkend="streaming-replication-slots"/>).
-          This parameter can only be set in the <filename>postgresql.conf</filename>
-          file or on the server command line.
+          This parameter can only be set at server start.
           This setting has no effect if <varname>primary_conninfo</varname> is not
-          set or the server is not in standby mode.
-         </para>
-         <para>
-          WAL receiver will be restarted after <varname>primary_slot_name</varname>
-          was changed.
+          set.
          </para>
         </listitem>
        </varlistentry>

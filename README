@@ -9,19 +9,107 @@ that supports an extended subset of the SQL standard, including
 transactions, foreign keys, subqueries, triggers, user-defined types
 and functions.  This distribution also contains C language bindings.
 
+
+
+Download
+========
+
+The latest version of this software, both in source code form and as
+binary packages for many platforms, may be obtained at
+
+	https://www.postgresql.org/download/
+
 PostgreSQL has many language interfaces, many of which are listed here:
 
-	https://www.postgresql.org/download
+	https://www.postgresql.org/download/products/2-drivers-and-interfaces/
 
-See the file INSTALL for instructions on how to build and install
-PostgreSQL.  That file also lists supported operating systems and
-hardware platforms and contains information regarding any other
-software packages that are required to build or run the PostgreSQL
-system.  Copyright and license information can be found in the
-file COPYRIGHT.  A comprehensive documentation set is included in this
-distribution; it can be read as described in the installation
-instructions.
+For more information please visit
 
-The latest version of this software may be obtained at
-https://www.postgresql.org/download/.  For more information look at our
-web site located at https://www.postgresql.org/.
+	https://www.postgresql.org/.
+
+
+Building on UNIX
+================
+
+Detailed instructions for many Unix platforms are available here:
+https://www.postgresql.org/docs/current/static/installation.html
+
+To build PostgreSQL on most Unix variants, the following are required:
+
+GNU make, version 3.8 or newer
+ISO/ANSI C compilar (at least C99-compliant)
+Flex 2.5.31 or later, and Bison 1.875 or later (for building from git)
+Perl 5.8.3 (for building from git)
+
+PostgreSQL has many additional capabilities which can be enabled using
+configure --enable switches but many of those also depend on additional
+libraries.  See the installation instructions for details.
+
+To build PostgreSQL, run the following commands:
+
+./configure
+make
+
+PostgreSQL can then be installed using 'make install', which will
+require being a superuser to install into the default directory.
+The installation location can be changed by passing '--prefix' to
+'configure'.  Run './configure --help' for additional options.
+
+
+Building on Windows
+===================
+
+Detailed instructions for building on Windows is available here:
+
+	https://www.postgresql.org/docs/current/static/install-windows.html
+
+To build PostgreSQL on Windows, either Visual Studio Express 2017
+for Windows Desktop or Microsoft Visual C++ 2005 (or later) should be
+installed.  PostgreSQL can also be built using MinGW or Cygwin using
+the Unix instructions.
+
+There are different requirements for building on a 32-bit or 64-bit
+environment, check the documentation for details.
+
+
+Initializing your Database
+==========================
+
+Once the PostgreSQL software is installed, the first step to having a
+running database is to initialize a PostgreSQL database, using the
+'initdb' command:
+
+initdb -D /path/to/mydatabase
+
+Where '/path/to/mydatabase' is the directory where the database is
+going to be installed. This directory can exist, but must be empty.
+If it does not exist, 'initdb' will create it.
+
+After the database system has been initialized, PostgreSQL can be
+started by using the pg_ctl command:
+
+pg_ctl -D /path/to/mydatabase -l logfile start
+
+Once PostgreSQL is running, you can connect to it using the psql
+command-line client.  A default database called 'postgres' was created
+by 'initdb'.
+
+
+Building the PostgreSQL Documentation
+=====================================
+
+Full documentation for PostgreSQL is available online here:
+
+	https://www.postgresql.org/docs/current/static/index.html
+
+PostgreSQL uses DocBook to build the documentation. Therefore the
+DocBook tools must be installed. In addition, a working Java
+installation is required.
+
+To build PostgreSQL's documentation on Unix, run:
+
+./configure
+make docs
+
+The documentation, once built by 'make docs', will be available in
+various formats in the 'doc/src/sgml' directory.

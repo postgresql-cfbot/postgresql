@@ -545,6 +545,44 @@ extern char *const pgresStatus[];
 
 #endif							/* USE_SSL */
 
+/* Logging message */
+typedef enum CommunicationDirection
+{
+	FROM_BACKEND,
+	FROM_FRONTEND
+} CommunicationDirection;
+
+typedef enum State
+{
+	LOG_COMMAND,
+	LOG_LENGTH,
+	LOG_BODY
+} State;
+
+typedef struct _LoggingMsg
+{
+	State state;
+	int length;
+	char command;
+} LoggingMsg;
+
+/* Organizing frontend message.  */
+typedef enum Type
+{
+	BYTE1,
+	STRING,
+	NCHAR,
+	INT16,
+	INT32
+} Type;
+
+typedef struct _Frontend_Entry
+{
+	Type type;
+	int message_addr;
+	int message_length;
+} Frontend_Entry;
+
 /* ----------------
  * Internal functions of libpq
  * Functions declared here need to be visible across files of libpq,
@@ -655,6 +693,7 @@ extern int pqWaitTimed(int forRead, int forWrite, PGconn *conn,
 			time_t finish_time);
 extern int	pqReadReady(PGconn *conn);
 extern int	pqWriteReady(PGconn *conn);
+extern void	message_state_transaction(int size, PGconn *conn);
 
 /* === in fe-secure.c === */
 

@@ -35,6 +35,7 @@
 
 #ifdef WIN32
 #include "win32.h"
+#include <windows.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
@@ -45,6 +46,7 @@
 #endif
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#include <sys/timeb.h>
 #endif
 
 #include "libpq-fe.h"
@@ -53,12 +55,335 @@
 #include "port/pg_bswap.h"
 #include "pg_config_paths.h"
 
+/* protocol message name */
+static char *command_text_b[] = {
+	/* 0 */ 0,
+	/* 1 */ "ParseComplete",
+	/* 2 */ "BindComplete",
+	/* 3 */ "CloseComplete",
+	/* \x04 - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* @ */ 0,
+	/* A */ "NotificationResponse",
+	/* B */ 0,
+	/* C */ "CommandComplete",
+	/* D */ "DataRow",
+	/* E */ "ErrorResponse",
+	/* F */ 0,
+	/* G */ "CopyInResponse",
+	/* H */ "CopyOutResponse",
+	/* I */ "EmptyQueryResponse",
+	/* J */ 0,
+	/* K */ "BackendKeyData",
+	/* L */ 0,
+	/* M */ 0,
+	/* N */ "NoticeResponse",
+	/* O */ 0,
+	/* P */ 0,
+	/* Q */ 0,
+	/* R */ "Authentication",
+	/* S */ "ParameterStatus",
+	/* T */ "RowDescription",
+	/* U */ 0,
+	/* V */ "FunctionCallResponse",
+	/* W */ "CopyBothResponse",
+	/* X */ 0,
+	/* Y */ 0,
+	/* Z */ "ReadyForQuery",
+	/* \x5b - \x5f*/ 0, 0, 0, 0, 0,
+	/* \x60 - \x6d*/ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* n */ "NoData",
+	/* o */ 0,
+	/* p */ 0,
+	/* q */ 0,
+	/* r */ 0,
+	/* s */ "PortalSuspended",
+	/* t */ "ParameterDescription",
+	/* u */ 0,
+	/* v */ "NegotiateProtocolVersion",
+	/* w */ 0,
+	/* x */ 0,
+	/* y */ 0,
+	/* z */ 0
+};
+#define COMMAND_B_MAX (sizeof(command_text_b) / sizeof(*command_text_b))
+
+static char *command_text_f[] = {
+	/* \0   - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* @ */ 0,
+	/* A */ 0,
+	/* B */ "Bind",
+	/* C */ "Close",
+	/* D */ "Describe",
+	/* E */ "Execute",
+	/* F */ "FunctionCall",
+	/* G */ 0,
+	/* H */ "Flush",
+	/* I */ 0,
+	/* J */ 0,
+	/* K */ 0,
+	/* L */ 0,
+	/* M */ 0,
+	/* N */ 0,
+	/* O */ 0,
+	/* P */ "Parse",
+	/* Q */ "Query",
+	/* R */ 0,
+	/* S */ "Sync",
+	/* T */ 0,
+	/* U */ 0,
+	/* V */ 0,
+	/* W */ 0,
+	/* X */ "Terminate",
+	/* Y */ 0,
+	/* Z */ 0,
+	/* \x5b - \x5f*/ 0, 0, 0, 0, 0,
+	/* ` */ 0,
+	/* a */ 0,
+	/* b */ 0,
+	/* c */ 0,
+	/* d */ 0,
+	/* e */ 0,
+	/* f */ "CopyFail",
+	/* g */ 0,
+	/* h */ 0,
+	/* i */ 0,
+	/* j */ 0,
+	/* k */ 0,
+	/* l */ 0,
+	/* m */ 0,
+	/* n */ 0,
+	/* o */ 0,
+	/* p */ "AuthnenticationResponse",
+	/* q */ 0,
+	/* r */ 0,
+	/* s */ 0,
+	/* t */ 0,
+	/* u */ 0,
+	/* v */ 0,
+	/* w */ 0,
+	/* x */ 0,
+	/* y */ 0,
+	/* z */ 0
+};
+#define COMMAND_F_MAX (sizeof(command_text_f) / sizeof(*command_text_f))
+
+static char *command_text_bf[] = {
+	/* \0   - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x40 - \x4f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x50 - \x5f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* ` */ 0,
+	/* a */ 0,
+	/* b */ 0,
+	/* c */ "CopyDone",
+	/* d */ "CopyData",
+	/* e */ 0,
+	/* f */ 0,
+	/* g */ 0,
+	/* h */ 0,
+	/* i */ 0,
+	/* j */ 0,
+	/* k */ 0,
+	/* l */ 0,
+	/* m */ 0,
+	/* n */ 0,
+	/* o */ 0,
+	/* p */ 0,
+	/* q */ 0,
+	/* r */ 0,
+	/* s */ 0,
+	/* t */ 0,
+	/* u */ 0,
+	/* v */ 0,
+	/* w */ 0,
+	/* x */ 0,
+	/* y */ 0,
+	/* z */ 0
+};
+#define COMMAND_BF_MAX (sizeof(command_text_bf) / sizeof(*command_text_bf))
+
+/*
+ * static state needed by logging output; display
+ * contents of message in one line.
+ */
+LoggingMsg logging_message;
+Frontend_Entry frontend_entry[MAXPGPATH];
+static int		entry;
+
 
 static int	pqPutMsgBytes(const void *buf, size_t len, PGconn *conn);
 static int	pqSendSome(PGconn *conn, int len);
 static int pqSocketCheck(PGconn *conn, int forRead, int forWrite,
 			  time_t end_time);
 static int	pqSocketPoll(int sock, int forRead, int forWrite, time_t end_time);
+static void 	message_Byte1(PGconn *conn, char v, CommunicationDirection direction);
+static void 	message_String(PGconn *conn, const char *v, int length,
+				CommunicationDirection direction);
+static void 	message_nchar(PGconn *conn, const char *v, int length,
+				CommunicationDirection direction);
+static void 	message_Int(PGconn *conn, int v, int length, CommunicationDirection direct);
+static void 	getCurrentTime(char* currenttime);
+#define	TRACELOG_TIME_SIZE	33
+
+/* Get Protocol message text from byte1 identifier */
+static char *
+message_get_command_text(unsigned char c, CommunicationDirection direction)
+{
+	char *text = 0;
+
+	if (c >= 0 && c < COMMAND_BF_MAX)
+	{
+		text = command_text_bf[c];
+		if (text)
+			return text;
+	}
+
+	if (direction == FROM_BACKEND && c >= 0 && c < COMMAND_B_MAX)
+	{
+		text = command_text_b[c];
+		if (text)
+			return text;
+	}
+
+	if (direction == FROM_FRONTEND && c >= 0 && c < COMMAND_F_MAX)
+	{
+		text = command_text_f[c];
+		if (text)
+			return text;
+	}
+
+	return "UnknownCommand";
+}
+
+/* Initializing logging message */
+static void
+initialize_message_log(void) {
+	logging_message.state = LOG_COMMAND;
+	logging_message.length = 0;
+}
+
+/* Output a message the protocol is invalid */
+static void
+message_invalid_protocol(PGconn *conn)
+{
+	fprintf(conn->Pfdebug, ":::Invalid Protocol\n");
+	logging_message.state = LOG_COMMAND;
+}
+
+/*
+ * Check whether message formats is complete. If so,
+ * break the line.
+ */
+void
+message_state_transaction(int size, PGconn *conn)
+{
+	logging_message.length -= size;
+	if (logging_message.length <= 0)
+	{
+		fprintf(conn->Pfdebug, "\n");
+		initialize_message_log();
+	}
+}
+
+/*
+ * Remember messages that frontend sends.
+ */
+static void message_entry(PGconn *conn, Type type, int length)
+{
+	frontend_entry[entry].type  = type;
+	frontend_entry[entry].message_addr  = conn->outMsgEnd - length;
+	frontend_entry[entry].message_length  = length;
+	entry++;
+}
+
+/*
+ * After output frontend message length, output organized frontend message.
+ */
+static void put_frontend_entry(PGconn *conn)
+{
+	int 		i;
+	int 		message_addr;
+	int 		length;
+
+	char 		message;
+	int		result = 0;
+
+	for (i = 0; i < entry; i++)
+	{
+		message_addr = frontend_entry[i].message_addr;
+		length = frontend_entry[i].message_length;
+
+		switch (frontend_entry[i].type)
+		{
+			case BYTE1:
+				memcpy(&message, conn->outBuffer + message_addr, length);
+				message_Byte1(conn, message, FROM_FRONTEND);
+				break;
+
+			case STRING:
+				message_String(conn, conn->outBuffer + message_addr,
+								length, FROM_FRONTEND);
+				break;
+
+			case NCHAR:
+				message_nchar(conn, conn->outBuffer + message_addr,
+								length, FROM_FRONTEND);
+				break;
+
+			case INT16:
+				memcpy(&result, conn->outBuffer + message_addr, length);
+				message_Int(conn, result, 2, FROM_FRONTEND);
+				break;
+
+			case INT32:
+				memcpy(&result, conn->outBuffer + message_addr, length);
+				message_Int(conn, result, 4, FROM_FRONTEND);
+				break;
+		}
+	}
+	entry = 0;
+	initialize_message_log();
+}
+
+/*
+ * getCurrentTime: get current time for trace log output
+ *
+ * currenttime formate is %Y/%m/%d %H:%M:%S.%Milliseconds
+ */
+static void
+getCurrentTime(char* currenttime)
+{
+#ifdef WIN32
+	SYSTEMTIME localTime;
+	TIME_ZONE_INFORMATION TimezoneInfo;
+	GetLocalTime(&localTime);
+
+	GetTimeZoneInformation(&TimezoneInfo);
+	snprintf(currenttime, TRACELOG_TIME_SIZE, "%4d-%02d-%02d %02d:%02d:%02d.%03d %s ",
+				localTime.wYear, localTime.wMonth, localTime.wDay,
+				localTime.wHour, localTime.wMinute, localTime.wSecond,
+				localTime.wMilliseconds, TimezoneInfo.Bias);
+#else
+	struct timeb localTime;
+	struct tm *tm;
+	char timezone[100];
+	ftime(&localTime);
+	tm = localtime(&localTime.time);
+
+	strftime(timezone, sizeof(timezone), "%Z", tm);
+	snprintf(currenttime, TRACELOG_TIME_SIZE, "%4d-%02d-%02d %02d:%02d:%02d.%03d %s ",
+			1900+ tm->tm_year, 1 + tm->tm_mon, tm->tm_mday,
+			tm->tm_hour, tm->tm_min, tm->tm_sec, localTime.millitm, timezone);
+#endif
+}
 
 /*
  * PQlibVersion: return the libpq version number
@@ -99,11 +424,10 @@ pqGetc(char *result, PGconn *conn)
 	*result = conn->inBuffer[conn->inCursor++];
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> %c\n", *result);
+		message_Byte1(conn, *result, FROM_BACKEND);
 
 	return 0;
 }
-
 
 /*
  * pqPutc: write 1 char to the current message
@@ -115,9 +439,39 @@ pqPutc(char c, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> %c\n", c);
+		message_entry(conn, BYTE1, 1);
 
 	return 0;
+}
+
+static void
+message_Byte1(PGconn *conn, char v, CommunicationDirection direction)
+{
+	char *command_text;
+	char *direction_text = direction == FROM_BACKEND ? "<" : ">";
+	char current_time[TRACELOG_TIME_SIZE];
+
+	switch (logging_message.state) {
+		case LOG_COMMAND:
+			command_text = message_get_command_text((unsigned char) v, direction);
+			getCurrentTime(current_time);
+			fprintf(conn->Pfdebug, "%s %s %s ", current_time, direction_text, command_text);
+			logging_message.state = LOG_LENGTH;
+			logging_message.command = v;
+			entry = 0;
+			break;
+
+		case LOG_BODY:
+			fprintf(conn->Pfdebug, "%c ", v);
+			message_state_transaction(sizeof(v), conn);
+			break;
+
+		default:
+			message_invalid_protocol(conn);
+			break;
+	}
+
+	return;
 }
 
 
@@ -153,8 +507,7 @@ pqGets_internal(PQExpBuffer buf, PGconn *conn, bool resetbuffer)
 	conn->inCursor = ++inCursor;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> \"%s\"\n",
-				buf->data);
+		message_String(conn, buf->data, buf->len + 1, FROM_BACKEND);
 
 	return 0;
 }
@@ -182,9 +535,28 @@ pqPuts(const char *s, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> \"%s\"\n", s);
+		message_entry(conn, STRING, strlen(s) + 1);
 
 	return 0;
+}
+
+static void
+message_String(PGconn *conn, const char *v, int length, CommunicationDirection direction)
+{
+	if(length < 0)
+		length = strlen(v) + 1;
+
+	switch (logging_message.state)
+	{
+		case LOG_BODY:
+			fprintf(conn->Pfdebug, "\"%s\" ", v);
+			message_state_transaction(length, conn);
+			break;
+
+		default:
+			message_invalid_protocol(conn);
+			break;
+	}
 }
 
 /*
@@ -203,11 +575,7 @@ pqGetnchar(char *s, size_t len, PGconn *conn)
 	conn->inCursor += len;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		message_nchar(conn, s, len, FROM_BACKEND);
 
 	return 0;
 }
@@ -227,11 +595,7 @@ pqSkipnchar(size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, conn->inBuffer + conn->inCursor, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		message_nchar(conn, conn->inBuffer + conn->inCursor, len, FROM_BACKEND);
 
 	conn->inCursor += len;
 
@@ -249,13 +613,27 @@ pqPutnchar(const char *s, size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "To backend> ");
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		message_entry(conn, NCHAR, len);
 
 	return 0;
+}
+
+static void
+message_nchar(PGconn *conn, const char *v, int length, CommunicationDirection direction)
+{
+	switch (logging_message.state)
+	{
+		case LOG_BODY:
+			fprintf(conn->Pfdebug, "\'");
+			fputnbytes(conn->Pfdebug, v, length);
+			fprintf(conn->Pfdebug, "\' ");
+			message_state_transaction(length, conn);
+			break;
+
+		default:
+			message_invalid_protocol(conn);
+			break;
+	}
 }
 
 /*
@@ -293,7 +671,7 @@ pqGetInt(int *result, size_t bytes, PGconn *conn)
 	}
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend (#%lu)> %d\n", (unsigned long) bytes, *result);
+		message_Int(conn, *result, (unsigned int) bytes, FROM_BACKEND);
 
 	return 0;
 }
@@ -315,11 +693,15 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 			tmp2 = pg_hton16((uint16) value);
 			if (pqPutMsgBytes((const char *) &tmp2, 2, conn))
 				return EOF;
+			if (conn->Pfdebug)
+				message_entry(conn, INT16, 2);
 			break;
 		case 4:
 			tmp4 = pg_hton32((uint32) value);
 			if (pqPutMsgBytes((const char *) &tmp4, 4, conn))
 				return EOF;
+			if (conn->Pfdebug)
+				message_entry(conn, INT32, 4);
 			break;
 		default:
 			pqInternalNotice(&conn->noticeHooks,
@@ -327,11 +709,32 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 							 (unsigned long) bytes);
 			return EOF;
 	}
-
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend (%lu#)> %d\n", (unsigned long) bytes, value);
-
 	return 0;
+}
+
+static void
+message_Int(PGconn *conn, int v, int length, CommunicationDirection direct)
+{
+	char *prefix = length == 4 ? "" : "#";
+
+	switch (logging_message.state)
+	{
+		case LOG_LENGTH:
+			fprintf(conn->Pfdebug, "%d ", v);
+			logging_message.length = v - length;
+			logging_message.state = LOG_BODY;
+			message_state_transaction(0, conn);
+			break;
+
+		case LOG_BODY:
+			fprintf(conn->Pfdebug, "%s%d ", prefix, v);
+			message_state_transaction(length, conn);
+			break;
+
+		default:
+			message_invalid_protocol(conn);
+			break;
+	}
 }
 
 /*
@@ -549,8 +952,7 @@ pqPutMsgStart(char msg_type, bool force_len, PGconn *conn)
 	/* length word, if needed, will be filled in by pqPutMsgEnd */
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg %c\n",
-				msg_type ? msg_type : ' ');
+		message_Byte1(conn, msg_type ? msg_type : ' ', FROM_FRONTEND);
 
 	return 0;
 }
@@ -587,8 +989,12 @@ int
 pqPutMsgEnd(PGconn *conn)
 {
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg complete, length %u\n",
-				conn->outMsgEnd - conn->outCount);
+	{
+		/* Get protocol message length (including first Byte1) */
+		int length = conn->outMsgEnd - conn->outCount;
+		message_Int(conn, length - 1, 4, FROM_FRONTEND);
+		put_frontend_entry(conn);
+	}
 
 	/* Fill in length word if needed */
 	if (conn->outMsgStart >= 0)

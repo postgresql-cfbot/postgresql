@@ -125,6 +125,9 @@ pqParseInput3(PGconn *conn)
 				 */
 				handleSyncLoss(conn, id, msgLength);
 			}
+			/* Terminate a harf-finished logging message */
+			if (conn->Pfdebug)
+				message_state_transaction(msgLength, conn);
 			return;
 		}
 
@@ -158,7 +161,12 @@ pqParseInput3(PGconn *conn)
 		{
 			/* If not IDLE state, just wait ... */
 			if (conn->asyncStatus != PGASYNC_IDLE)
+			{
+				/* Terminate a harf-finished logging message */
+				if (conn->Pfdebug)
+					message_state_transaction(msgLength, conn);
 				return;
+			}
 
 			/*
 			 * Unexpected message in IDLE state; need to recover somehow.

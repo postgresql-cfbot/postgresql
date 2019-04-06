@@ -15,6 +15,7 @@
 #define PARSE_NODE_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/subscripting.h"
 #include "utils/queryenvironment.h"
 #include "utils/relcache.h"
 
@@ -274,15 +275,16 @@ extern void cancel_parser_errposition_callback(ParseCallbackState *pcbstate);
 
 extern Var *make_var(ParseState *pstate, RangeTblEntry *rte, int attrno,
 		 int location);
-extern Oid	transformContainerType(Oid *containerType, int32 *containerTypmod);
+extern void	transformContainerType(Oid *containerType, int32 *containerTypmod);
 
 extern SubscriptingRef *transformContainerSubscripts(ParseState *pstate,
-							 Node *containerBase,
-							 Oid containerType,
-							 Oid elementType,
-							 int32 containerTypMod,
-							 List *indirection,
-							 Node *assignFrom);
+													 Node *containerBase,
+													 Oid containerType,
+													 Oid elementType,
+													 int32 containerTypMod,
+													 List *indirection,
+													 Node *assignFrom);
+extern SubscriptRoutines* getSubscriptingRoutines(Oid containerType);
 extern Const *make_const(ParseState *pstate, Value *value, int location);
 
 #endif							/* PARSE_NODE_H */

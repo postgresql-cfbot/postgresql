@@ -71,7 +71,7 @@ exprType(const Node *expr)
 				const SubscriptingRef *sbsref = (const SubscriptingRef *) expr;
 
 				/* slice and/or store operations yield the container type */
-				if (sbsref->reflowerindexpr || sbsref->refassgnexpr)
+				if (IsAssignment(sbsref) || sbsref->reflowerindexpr)
 					type = sbsref->refcontainertype;
 				else
 					type = sbsref->refelemtype;

@@ -2528,18 +2528,16 @@ ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *sbsref,
 {
 	bool		isAssignment = (sbsref->refassgnexpr != NULL);
 	SubscriptingRefState *sbsrefstate = palloc0(sizeof(SubscriptingRefState));
-	List	   *adjust_jumps = NIL;
-	ListCell   *lc;
-	int			i;
+	List				 *adjust_jumps = NIL;
+	ListCell   			 *lc;
+	int		   			  i;
+	RegProcedure		  typsubshandler = get_typsubsprocs(sbsref->refcontainertype);
 
 	/* Fill constant fields of SubscriptingRefState */
 	sbsrefstate->isassignment = isAssignment;
 	sbsrefstate->refelemtype = sbsref->refelemtype;
 	sbsrefstate->refattrlength = get_typlen(sbsref->refcontainertype);
-	get_typlenbyvalalign(sbsref->refelemtype,
-						 &sbsrefstate->refelemlength,
-						 &sbsrefstate->refelembyval,
-						 &sbsrefstate->refelemalign);
+	sbsrefstate->sbsroutines = (SubscriptRoutines *) OidFunctionCall0(typsubshandler);
 
 	/*
 	 * Evaluate array input.  It's safe to do so into resv/resnull, because we
@@ -2562,19 +2560,6 @@ ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *sbsref,
 		adjust_jumps = lappend_int(adjust_jumps,
 								   state->steps_len - 1);
 	}
-
-	/* Verify subscript list lengths are within limit */
-	if (list_length(sbsref->refupperindexpr) > MAXDIM)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(sbsref->refupperindexpr), MAXDIM)));
-
-	if (list_length(sbsref->reflowerindexpr) > MAXDIM)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(sbsref->reflowerindexpr), MAXDIM)));
 
 	/* Evaluate upper subscripts */
 	i = 0;

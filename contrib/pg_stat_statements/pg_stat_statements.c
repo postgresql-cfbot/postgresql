@@ -2590,6 +2590,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 				JumbleExpr(jstate, (Node *) sbsref->reflowerindexpr);
 				JumbleExpr(jstate, (Node *) sbsref->refexpr);
 				JumbleExpr(jstate, (Node *) sbsref->refassgnexpr);
+				APP_JUMB(sbsref->refnestedfunc);
 			}
 			break;
 		case T_FuncExpr:

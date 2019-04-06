@@ -4804,23 +4804,6 @@ create_distinct_paths(PlannerInfo *root,
 												  path,
 												  list_length(root->distinct_pathkeys),
 												  numDistinctRows));
-
-				/* Also consider a skip scan, if possible. */
-				if (IsA(path, IndexPath) &&
-					path->pathtype == T_IndexOnlyScan &&
-					enable_indexskipscan &&
-					((IndexPath *) path)->indexinfo->amcanskip &&
-					root->distinct_pathkeys != NIL)
-				{
-					int distinctPrefixKeys = list_length(root->distinct_pathkeys);
-
-					add_path(distinct_rel, (Path *)
-							 create_skipscan_unique_path(root,
-														 distinct_rel,
-														 path,
-														 distinctPrefixKeys,
-														 numDistinctRows));
-				}
 			}
 		}
 

@@ -116,6 +116,24 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	}
 
 	/*
+	 * Check if we need to skip to the next key prefix, because we've been
+	 * asked to implement DISTINCT.
+	 */
+	if (node->ioss_SkipPrefixSize > 0 && node->ioss_FirstTupleEmitted)
+	{
+		if (!index_skip(scandesc, direction, node->ioss_SkipPrefixSize))
+		{
+			/* Reached end of index. At this point currPos is invalidated,
+			 * and we need to reset ioss_FirstTupleEmitted, since otherwise
+			 * after going backwards, reaching the end of index, and going
+			 * forward again we apply skip again. It would be incorrect and
+			 * lead to an extra skipped item. */
+			node->ioss_FirstTupleEmitted = false;
+			return ExecClearTuple(slot);
+		}
+	}
+
+	/*
 	 * OK, now that we have what we need, fetch the next tuple.
 	 */
 	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
@@ -252,6 +270,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			PredicateLockPage(scandesc->heapRelation,
 							  ItemPointerGetBlockNumber(tid),
 							  estate->es_snapshot);
+
+		node->ioss_FirstTupleEmitted = true;
 
 		return slot;
 	}
@@ -503,6 +523,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexOnlyScan;
+	indexstate->ioss_SkipPrefixSize = node->skipPrefixSize;
+	indexstate->ioss_FirstTupleEmitted = false;
 
 	/*
 	 * Miscellaneous initialization

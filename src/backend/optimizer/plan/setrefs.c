@@ -146,7 +146,8 @@ static List *set_returning_clause_references(PlannerInfo *root,
 								Plan *topplan,
 								Index resultRelation,
 								int rtoffset);
-
+static bool pull_up_has_schema_variable_walker(Node *node,
+			   PlannerInfo *root);
 
 /*****************************************************************************
  *
@@ -972,6 +973,50 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 }
 
 /*
+ * Search usage of schema variables in subqueries
+ */
+void
+pull_up_has_schema_variable(PlannerInfo *root)
+{
+	Query *query = root->parse;
+
+	if (query->hasSchemaVariable)
+	{
+		root->hasSchemaVariable = true;
+	}
+	else
+	{
+		(void) query_tree_walker(query,
+								 pull_up_has_schema_variable_walker,
+								 (void *) root, 0);
+	}
+}
+
+static bool
+pull_up_has_schema_variable_walker(Node *node, PlannerInfo *root)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query *query = (Query *) node;
+
+		if (query->hasSchemaVariable)
+		{
+			root->hasSchemaVariable = true;
+			return false;
+		}
+
+		/* Recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 pull_up_has_schema_variable_walker,
+								 (void *) root, 0);
+	}
+	return expression_tree_walker(node, pull_up_has_schema_variable_walker,
+								  (void *) root);
+}
+
+/*
  * set_indexonlyscan_references
  *		Do set_plan_references processing on an IndexOnlyScan
  *
@@ -1532,10 +1577,14 @@ fix_expr_common(PlannerInfo *root, Node *node)
 /*
  * fix_param_node
  *		Do set_plan_references processing on a Param
+ *		Collect schema variables list and replace variable oid by
+ *		index to collected list.
  *
  * If it's a PARAM_MULTIEXPR, replace it with the appropriate Param from
  * root->multiexpr_params; otherwise no change is needed.
  * Just for paranoia's sake, we make a copy of the node in either case.
+ *
+ * If it's a PARAM_VARIABLE, then we should to calculate paramid.
  */
 static Node *
 fix_param_node(PlannerInfo *root, Param *p)
@@ -1554,6 +1603,52 @@ fix_param_node(PlannerInfo *root, Param *p)
 			elog(ERROR, "unexpected PARAM_MULTIEXPR ID: %d", p->paramid);
 		return copyObject(list_nth(params, colno - 1));
 	}
+
+	if (p->paramkind == PARAM_VARIABLE)
+	{
+		ListCell   *lc;
+		int			n = 0;
+		bool		found = false;
+
+		/* We will modify object */
+		p = (Param *) copyObject(p);
+
+		/*
+		 * Now, we can actualize list of schema variables, and we can
+		 * complete paramid parameter.
+		 */
+		foreach(lc, root->glob->schemaVariables)
+		{
+			if (lfirst_oid(lc) == p->paramvarid)
+			{
+				p->paramid = n;
+				found = true;
+				break;
+			}
+			n += 1;
+		}
+
+		if (!found)
+		{
+			PlanInvalItem *inval_item = makeNode(PlanInvalItem);
+
+			/* paramid is still schema variable id */
+			inval_item->cacheId = VARIABLEOID;
+			inval_item->hashValue = GetSysCacheHashValue1(VARIABLEOID,
+												ObjectIdGetDatum(p->paramvarid));
+
+			/* Append this variable to global, register dependency */
+			root->glob->invalItems = lappend(root->glob->invalItems,
+																inval_item);
+			root->glob->schemaVariables = lappend_oid(root->glob->schemaVariables,
+																  p->paramvarid);
+
+			p->paramid = n;
+		}
+
+		return (Node *) p;
+	}
+
 	return (Node *) copyObject(p);
 }
 
@@ -1565,7 +1660,9 @@ fix_param_node(PlannerInfo *root, Param *p)
  * replacing PARAM_MULTIEXPR Params, expanding PlaceHolderVars,
  * replacing Aggref nodes that should be replaced by initplan output Params,
  * looking up operator opcode info for OpExpr and related nodes,
- * and adding OIDs from regclass Const nodes into root->glob->relationOids.
+ * adding OIDs from regclass Const nodes into root->glob->relationOids,
+ * and replacing PARAM_VARIABLE paramid, that is oid of schema variable
+ * to offset to array of by query used schema variables.
  */
 static Node *
 fix_scan_expr(PlannerInfo *root, Node *node, int rtoffset)
@@ -1578,7 +1675,8 @@ fix_scan_expr(PlannerInfo *root, Node *node, int rtoffset)
 	if (rtoffset != 0 ||
 		root->multiexpr_params != NIL ||
 		root->glob->lastPHId != 0 ||
-		root->minmax_aggs != NIL)
+		root->minmax_aggs != NIL ||
+		root->hasSchemaVariable)
 	{
 		return fix_scan_expr_mutator(node, &context);
 	}

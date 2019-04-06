@@ -92,6 +92,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(rtable);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(rootResultRelations);
+	COPY_SCALAR_FIELD(resultVariable);
 	COPY_NODE_FIELD(subplans);
 	COPY_BITMAPSET_FIELD(rewindPlanIDs);
 	COPY_NODE_FIELD(rowMarks);
@@ -99,6 +100,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_NODE_FIELD(invalItems);
 	COPY_NODE_FIELD(paramExecTypes);
 	COPY_NODE_FIELD(utilityStmt);
+	COPY_NODE_FIELD(schemaVariables);
 	COPY_LOCATION_FIELD(stmt_location);
 	COPY_LOCATION_FIELD(stmt_len);
 
@@ -1421,6 +1423,7 @@ _copyParam(const Param *from)
 	COPY_SCALAR_FIELD(paramtype);
 	COPY_SCALAR_FIELD(paramtypmod);
 	COPY_SCALAR_FIELD(paramcollid);
+	COPY_SCALAR_FIELD(paramvarid);
 	COPY_LOCATION_FIELD(location);
 
 	return newnode;
@@ -3009,6 +3012,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(canSetTag);
 	COPY_NODE_FIELD(utilityStmt);
 	COPY_SCALAR_FIELD(resultRelation);
+	COPY_SCALAR_FIELD(resultVariable);
 	COPY_SCALAR_FIELD(hasAggs);
 	COPY_SCALAR_FIELD(hasWindowFuncs);
 	COPY_SCALAR_FIELD(hasTargetSRFs);
@@ -3018,6 +3022,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(hasModifyingCTE);
 	COPY_SCALAR_FIELD(hasForUpdate);
 	COPY_SCALAR_FIELD(hasRowSecurity);
+	COPY_SCALAR_FIELD(hasSchemaVariable);
 	COPY_NODE_FIELD(cteList);
 	COPY_NODE_FIELD(rtable);
 	COPY_NODE_FIELD(jointree);
@@ -3123,6 +3128,20 @@ _copySelectStmt(const SelectStmt *from)
 	COPY_SCALAR_FIELD(all);
 	COPY_NODE_FIELD(larg);
 	COPY_NODE_FIELD(rarg);
+
+	return newnode;
+}
+
+static LetStmt *
+_copyLetStmt(const LetStmt *from)
+{
+	LetStmt *newnode = makeNode(LetStmt);
+
+	COPY_NODE_FIELD(target);
+	COPY_NODE_FIELD(selectStmt);
+	COPY_SCALAR_FIELD(to_null);
+	COPY_SCALAR_FIELD(to_default);
+	COPY_LOCATION_FIELD(location);
 
 	return newnode;
 }
@@ -5180,6 +5199,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_SelectStmt:
 			retval = _copySelectStmt(from);
+			break;
+		case T_LetStmt:
+			retval = _copyLetStmt(from);
 			break;
 		case T_SetOperationStmt:
 			retval = _copySetOperationStmt(from);

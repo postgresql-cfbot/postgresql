@@ -124,6 +124,7 @@ extern char get_func_prokind(Oid funcid);
 extern bool get_func_leakproof(Oid funcid);
 extern RegProcedure get_func_support(Oid funcid);
 extern Oid	get_relname_relid(const char *relname, Oid relnamespace);
+extern Oid get_varname_varid(const char *varname, Oid varnamespace);
 extern char *get_rel_name(Oid relid);
 extern Oid	get_rel_namespace(Oid relid);
 extern Oid	get_rel_type_id(Oid relid);

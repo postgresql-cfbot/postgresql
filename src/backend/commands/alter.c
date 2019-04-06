@@ -40,6 +40,7 @@
 #include "catalog/pg_ts_dict.h"
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
+#include "catalog/pg_variable.h"
 #include "commands/alter.h"
 #include "commands/collationcmds.h"
 #include "commands/conversioncmds.h"
@@ -141,6 +142,10 @@ report_namespace_conflict(Oid classId, const char *name, Oid nspOid)
 		case TSConfigRelationId:
 			Assert(OidIsValid(nspOid));
 			msgfmt = gettext_noop("text search configuration \"%s\" already exists in schema \"%s\"");
+			break;
+		case VariableRelationId:
+			Assert(OidIsValid(nspOid));
+			msgfmt = gettext_noop("schema variable \"%s\" already exists in schema \"%s\"");
 			break;
 		default:
 			elog(ERROR, "unsupported object class %u", classId);
@@ -388,6 +393,7 @@ ExecRenameStmt(RenameStmt *stmt)
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_PUBLICATION:
 		case OBJECT_SUBSCRIPTION:
+		case OBJECT_VARIABLE:
 			{
 				ObjectAddress address;
 				Relation	catalog;
@@ -505,6 +511,7 @@ ExecAlterObjectSchemaStmt(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:
+		case OBJECT_VARIABLE:
 			{
 				Relation	catalog;
 				Relation	relation;
@@ -595,6 +602,7 @@ AlterObjectNamespace_oid(Oid classId, Oid objid, Oid nspOid,
 		case OCLASS_TSDICT:
 		case OCLASS_TSTEMPLATE:
 		case OCLASS_TSCONFIG:
+		case OCLASS_VARIABLE:
 			{
 				Relation	catalog;
 
@@ -853,6 +861,7 @@ ExecAlterOwnerStmt(AlterOwnerStmt *stmt)
 		case OBJECT_TABLESPACE:
 		case OBJECT_TSDICTIONARY:
 		case OBJECT_TSCONFIGURATION:
+		case OBJECT_VARIABLE:
 			{
 				Relation	catalog;
 				Relation	relation;

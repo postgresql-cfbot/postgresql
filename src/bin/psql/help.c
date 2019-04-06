@@ -259,6 +259,7 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dT[S+] [PATTERN]      list data types\n"));
 	fprintf(output, _("  \\du[S+] [PATTERN]      list roles\n"));
 	fprintf(output, _("  \\dv[S+] [PATTERN]      list views\n"));
+	fprintf(output, _("  \\dV     [PATTERN]      list variables\n"));
 	fprintf(output, _("  \\dx[+]  [PATTERN]      list extensions\n"));
 	fprintf(output, _("  \\dy     [PATTERN]      list event triggers\n"));
 	fprintf(output, _("  \\l[+]   [PATTERN]      list databases\n"));

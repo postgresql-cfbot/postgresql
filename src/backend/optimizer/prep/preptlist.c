@@ -71,6 +71,7 @@ preprocess_targetlist(PlannerInfo *root)
 {
 	Query	   *parse = root->parse;
 	int			result_relation = parse->resultRelation;
+	int			result_variable = parse->resultVariable;
 	List	   *range_table = parse->rtable;
 	CmdType		command_type = parse->commandType;
 	RangeTblEntry *target_rte = NULL;
@@ -95,6 +96,10 @@ preprocess_targetlist(PlannerInfo *root)
 			elog(ERROR, "result relation must be a regular relation");
 
 		target_relation = table_open(target_rte->relid, NoLock);
+	}
+	else if (result_variable)
+	{
+		Assert(command_type == CMD_PLAN_UTILITY);
 	}
 	else
 		Assert(command_type == CMD_SELECT);

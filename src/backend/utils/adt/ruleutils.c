@@ -40,6 +40,7 @@
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/defrem.h"
 #include "commands/tablespace.h"
 #include "common/keywords.h"
@@ -7462,6 +7463,14 @@ get_parameter(Param *param, deparse_context *context)
 
 		pop_ancestor_plan(dpns, &save_dpns);
 
+		return;
+	}
+
+	/* translate paramvarid to schema variable name */
+	if (param->paramkind == PARAM_VARIABLE)
+	{
+		appendStringInfo(context->buf, "%s",
+							schema_variable_get_name(param->paramvarid));
 		return;
 	}
 

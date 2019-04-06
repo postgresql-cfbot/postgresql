@@ -58,6 +58,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_transform.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
@@ -112,6 +113,7 @@ static void ExecGrant_Largeobject(InternalGrant *grantStmt);
 static void ExecGrant_Namespace(InternalGrant *grantStmt);
 static void ExecGrant_Tablespace(InternalGrant *grantStmt);
 static void ExecGrant_Type(InternalGrant *grantStmt);
+static void ExecGrant_Variable(InternalGrant *grantStmt);
 
 static void SetDefaultACLsInSchemas(InternalDefaultACL *iacls, List *nspnames);
 static void SetDefaultACL(InternalDefaultACL *iacls);
@@ -283,6 +285,9 @@ restrict_and_check_grant(bool is_grant, AclMode avail_goptions, bool all_privs,
 			return ACL_NO_RIGHTS;
 		case OBJECT_TYPE:
 			whole_mask = ACL_ALL_RIGHTS_TYPE;
+			break;
+		case OBJECT_VARIABLE:
+			whole_mask = ACL_ALL_RIGHTS_VARIABLE;
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", objtype);
@@ -507,6 +512,10 @@ ExecuteGrantStmt(GrantStmt *stmt)
 			all_privileges = ACL_ALL_RIGHTS_FOREIGN_SERVER;
 			errormsg = gettext_noop("invalid privilege type %s for foreign server");
 			break;
+		case OBJECT_VARIABLE:
+			all_privileges = ACL_ALL_RIGHTS_VARIABLE;
+			errormsg = gettext_noop("invalid privilege type %s for schema variable");
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) stmt->objtype);
@@ -608,6 +617,9 @@ ExecGrantStmt_oids(InternalGrant *istmt)
 			break;
 		case OBJECT_TABLESPACE:
 			ExecGrant_Tablespace(istmt);
+			break;
+		case OBJECT_VARIABLE:
+			ExecGrant_Variable(istmt);
 			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -768,6 +780,16 @@ objectNamesToOids(ObjectType objtype, List *objnames)
 				objects = lappend_oid(objects, srvid);
 			}
 			break;
+		case OBJECT_VARIABLE:
+			foreach(cell, objnames)
+			{
+				RangeVar   *varvar = (RangeVar *) lfirst(cell);
+				Oid			relOid;
+
+				relOid = lookup_variable(varvar->schemaname, varvar->relname, false);
+				objects = lappend_oid(objects, relOid);
+			}
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) objtype);
@@ -857,6 +879,33 @@ objectsInSchemaToOids(ObjectType objtype, List *nspnames)
 					table_close(rel, AccessShareLock);
 				}
 				break;
+			case OBJECT_VARIABLE:
+				{
+					ScanKeyData key;
+					Relation	rel;
+					TableScanDesc scan;
+					HeapTuple	tuple;
+
+					ScanKeyInit(&key,
+								Anum_pg_variable_varnamespace,
+								BTEqualStrategyNumber, F_OIDEQ,
+								ObjectIdGetDatum(namespaceId));
+
+					rel = heap_open(VariableRelationId, AccessShareLock);
+					scan = table_beginscan_catalog(rel, 1, &key);
+
+					while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+					{
+						Oid		oid = ((Form_pg_proc) GETSTRUCT(tuple))->oid;
+
+						objects = lappend_oid(objects, oid);
+					}
+
+					heap_endscan(scan);
+					heap_close(rel, AccessShareLock);
+				}
+				break;
+
 			default:
 				/* should not happen */
 				elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -1021,6 +1070,10 @@ ExecAlterDefaultPrivilegesStmt(ParseState *pstate, AlterDefaultPrivilegesStmt *s
 		case OBJECT_SCHEMA:
 			all_privileges = ACL_ALL_RIGHTS_SCHEMA;
 			errormsg = gettext_noop("invalid privilege type %s for schema");
+			break;
+		case OBJECT_VARIABLE:
+			all_privileges = ACL_ALL_RIGHTS_VARIABLE;
+			errormsg = gettext_noop("invalid privilege type %s for schema variable");
 			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -1217,6 +1270,12 @@ SetDefaultACL(InternalDefaultACL *iacls)
 			objtype = DEFACLOBJ_NAMESPACE;
 			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
 				this_privileges = ACL_ALL_RIGHTS_SCHEMA;
+			break;
+
+		case OBJECT_VARIABLE:
+			objtype = DEFACLOBJ_VARIABLE;
+			if (iacls->all_privs && this_privileges == ACL_NO_RIGHTS)
+				this_privileges = ACL_ALL_RIGHTS_VARIABLE;
 			break;
 
 		default:
@@ -1448,6 +1507,9 @@ RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid)
 				break;
 			case DEFACLOBJ_NAMESPACE:
 				iacls.objtype = OBJECT_SCHEMA;
+				break;
+			case DEFACLOBJ_VARIABLE:
+				iacls.objtype = OBJECT_VARIABLE;
 				break;
 			default:
 				/* Shouldn't get here */
@@ -3270,6 +3332,129 @@ ExecGrant_Type(InternalGrant *istmt)
 	table_close(relation, RowExclusiveLock);
 }
 
+static void
+ExecGrant_Variable(InternalGrant *istmt)
+{
+	Relation	relation;
+	ListCell   *cell;
+
+	if (istmt->all_privs && istmt->privileges == ACL_NO_RIGHTS)
+		istmt->privileges = ACL_ALL_RIGHTS_VARIABLE;
+
+	relation = heap_open(VariableRelationId, RowExclusiveLock);
+
+	foreach(cell, istmt->objects)
+	{
+		Oid			varId = lfirst_oid(cell);
+		Form_pg_variable pg_variable_tuple;
+		Datum		aclDatum;
+		bool		isNull;
+		AclMode		avail_goptions;
+		AclMode		this_privileges;
+		Acl		   *old_acl;
+		Acl		   *new_acl;
+		Oid			grantorId;
+		Oid			ownerId;
+		HeapTuple	tuple;
+		HeapTuple	newtuple;
+		Datum		values[Natts_pg_variable];
+		bool		nulls[Natts_pg_variable];
+		bool		replaces[Natts_pg_variable];
+		int			noldmembers;
+		int			nnewmembers;
+		Oid		   *oldmembers;
+		Oid		   *newmembers;
+
+		tuple = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varId));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for schema variables %u", varId);
+
+		pg_variable_tuple = (Form_pg_variable) GETSTRUCT(tuple);
+
+		/*
+		 * Get owner ID and working copy of existing ACL. If there's no ACL,
+		 * substitute the proper default.
+		 */
+		ownerId = pg_variable_tuple->varowner;
+		aclDatum = SysCacheGetAttr(VARIABLEOID, tuple, Anum_pg_variable_varacl,
+								   &isNull);
+		if (isNull)
+		{
+			old_acl = acldefault(OBJECT_VARIABLE, ownerId);
+			/* There are no old member roles according to the catalogs */
+			noldmembers = 0;
+			oldmembers = NULL;
+		}
+		else
+		{
+			old_acl = DatumGetAclPCopy(aclDatum);
+			/* Get the roles mentioned in the existing ACL */
+			noldmembers = aclmembers(old_acl, &oldmembers);
+		}
+
+		/* Determine ID to do the grant as, and available grant options */
+		select_best_grantor(GetUserId(), istmt->privileges,
+							old_acl, ownerId,
+							&grantorId, &avail_goptions);
+
+		/*
+		 * Restrict the privileges to what we can actually grant, and emit the
+		 * standards-mandated warning and error messages.
+		 */
+		this_privileges =
+			restrict_and_check_grant(istmt->is_grant, avail_goptions,
+									 istmt->all_privs, istmt->privileges,
+									 varId, grantorId, OBJECT_VARIABLE,
+									 NameStr(pg_variable_tuple->varname),
+									 0, NULL);
+
+		/*
+		 * Generate new ACL.
+		 */
+		new_acl = merge_acl_with_grant(old_acl, istmt->is_grant,
+									   istmt->grant_option, istmt->behavior,
+									   istmt->grantees, this_privileges,
+									   grantorId, ownerId);
+
+		/*
+		 * We need the members of both old and new ACLs so we can correct the
+		 * shared dependency information.
+		 */
+		nnewmembers = aclmembers(new_acl, &newmembers);
+
+		/* finished building new ACL value, now insert it */
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, false, sizeof(nulls));
+		MemSet(replaces, false, sizeof(replaces));
+
+		replaces[Anum_pg_variable_varacl - 1] = true;
+		values[Anum_pg_variable_varacl - 1] = PointerGetDatum(new_acl);
+
+		newtuple = heap_modify_tuple(tuple, RelationGetDescr(relation), values,
+									 nulls, replaces);
+
+		CatalogTupleUpdate(relation, &newtuple->t_self, newtuple);
+
+		/* Update initial privileges for extensions */
+		recordExtensionInitPriv(varId, VariableRelationId, 0, new_acl);
+
+		/* Update the shared dependency ACL info */
+		updateAclDependencies(VariableRelationId, varId, 0,
+							  ownerId,
+							  noldmembers, oldmembers,
+							  nnewmembers, newmembers);
+
+		ReleaseSysCache(tuple);
+
+		pfree(new_acl);
+
+		/* prevent error when processing duplicate objects */
+		CommandCounterIncrement();
+	}
+
+	heap_close(relation, RowExclusiveLock);
+}
+
 
 static AclMode
 string_to_privilege(const char *privname)
@@ -3302,6 +3487,10 @@ string_to_privilege(const char *privname)
 		return ACL_CONNECT;
 	if (strcmp(privname, "rule") == 0)
 		return 0;				/* ignore old RULE privileges */
+	if (strcmp(privname, "read") == 0)
+		return ACL_READ;
+	if (strcmp(privname, "write") == 0)
+		return ACL_WRITE;
 	ereport(ERROR,
 			(errcode(ERRCODE_SYNTAX_ERROR),
 			 errmsg("unrecognized privilege type \"%s\"", privname)));
@@ -3337,6 +3526,10 @@ privilege_to_string(AclMode privilege)
 			return "TEMP";
 		case ACL_CONNECT:
 			return "CONNECT";
+		case ACL_READ:
+			return "READ";
+		case ACL_WRITE:
+			return "WRITE";
 		default:
 			elog(ERROR, "unrecognized privilege: %d", (int) privilege);
 	}
@@ -3460,6 +3653,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_TYPE:
 						msg = gettext_noop("permission denied for type %s");
 						break;
+					case OBJECT_VARIABLE:
+						msg = gettext_noop("permission denied for schema variable %s");
+						break;
 					case OBJECT_VIEW:
 						msg = gettext_noop("permission denied for view %s");
 						break;
@@ -3569,6 +3765,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 					case OBJECT_TYPE:
 						msg = gettext_noop("must be owner of type %s");
+						break;
+					case OBJECT_VARIABLE:
+						msg = gettext_noop("must be owner of schema variable %s");
 						break;
 					case OBJECT_VIEW:
 						msg = gettext_noop("must be owner of view %s");
@@ -3714,6 +3913,8 @@ pg_aclmask(ObjectType objtype, Oid table_oid, AttrNumber attnum, Oid roleid,
 			return ACL_NO_RIGHTS;
 		case OBJECT_TYPE:
 			return pg_type_aclmask(table_oid, roleid, mask, how);
+		case OBJECT_VARIABLE:
+			return pg_variable_aclmask(table_oid, roleid, mask, how);
 		default:
 			elog(ERROR, "unrecognized objtype: %d",
 				 (int) objtype);
@@ -4504,6 +4705,66 @@ pg_type_aclmask(Oid type_oid, Oid roleid, AclMode mask, AclMaskHow how)
 }
 
 /*
+ * Exported routine for examining a user's privileges for a variable.
+ */
+AclMode
+pg_variable_aclmask(Oid var_oid, Oid roleid, AclMode mask, AclMaskHow how)
+{
+	AclMode		result;
+	HeapTuple	tuple;
+	Datum		aclDatum;
+	bool		isNull;
+	Acl		   *acl;
+	Oid			ownerId;
+
+	Form_pg_variable varForm;
+
+	/* Bypass permission checks for superusers */
+	if (superuser_arg(roleid))
+		return mask;
+
+	/*
+	 * Must get the type's tuple from pg_type
+	 */
+	tuple = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(var_oid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("variable with OID %u does not exist",
+						var_oid)));
+	varForm = (Form_pg_variable) GETSTRUCT(tuple);
+
+	/*
+	 * Now get the type's owner and ACL from the tuple
+	 */
+	ownerId = varForm->varowner;
+
+	aclDatum = SysCacheGetAttr(VARIABLEOID, tuple,
+							   Anum_pg_variable_varacl, &isNull);
+	if (isNull)
+	{
+		/* No ACL, so build default ACL */
+		acl = acldefault(OBJECT_VARIABLE, ownerId);
+		aclDatum = (Datum) 0;
+	}
+	else
+	{
+		/* detoast rel's ACL if necessary */
+		acl = DatumGetAclP(aclDatum);
+	}
+
+	result = aclmask(acl, roleid, ownerId, mask, how);
+
+	/* if we have a detoasted copy, free it */
+	if (acl && (Pointer) acl != DatumGetPointer(aclDatum))
+		pfree(acl);
+
+	ReleaseSysCache(tuple);
+
+	return result;
+}
+
+/*
  * Exported routine for checking a user's access privileges to a column
  *
  * Returns ACLCHECK_OK if the user has any of the privileges identified by
@@ -4743,6 +5004,18 @@ AclResult
 pg_type_aclcheck(Oid type_oid, Oid roleid, AclMode mode)
 {
 	if (pg_type_aclmask(type_oid, roleid, mode, ACLMASK_ANY) != 0)
+		return ACLCHECK_OK;
+	else
+		return ACLCHECK_NO_PRIV;
+}
+
+/*
+ * Exported routine for checking a user's access privileges to a variable
+ */
+AclResult
+pg_variable_aclcheck(Oid type_oid, Oid roleid, AclMode mode)
+{
+	if (pg_variable_aclmask(type_oid, roleid, mode, ACLMASK_ANY) != 0)
 		return ACLCHECK_OK;
 	else
 		return ACLCHECK_NO_PRIV;
@@ -5366,6 +5639,33 @@ pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid)
 }
 
 /*
+ * Ownership check for a schema variables (specified by OID).
+ */
+bool
+pg_variable_ownercheck(Oid db_oid, Oid roleid)
+{
+	HeapTuple	tuple;
+	Oid			ownerId;
+
+	/* Superusers bypass all permission checking. */
+	if (superuser_arg(roleid))
+		return true;
+
+	tuple = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(db_oid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_DATABASE),
+				 errmsg("variable with OID %u does not exist", db_oid)));
+
+	ownerId = ((Form_pg_variable) GETSTRUCT(tuple))->varowner;
+
+	ReleaseSysCache(tuple);
+
+	return has_privs_of_role(roleid, ownerId);
+}
+
+
+/*
  * Check whether specified role has CREATEROLE privilege (or is a superuser)
  *
  * Note: roles do not have owners per se; instead we use this test in
@@ -5491,6 +5791,10 @@ get_user_default_acl(ObjectType objtype, Oid ownerId, Oid nsp_oid)
 
 		case OBJECT_SCHEMA:
 			defaclobjtype = DEFACLOBJ_NAMESPACE;
+			break;
+
+		case OBJECT_VARIABLE:
+			defaclobjtype = DEFACLOBJ_VARIABLE;
 			break;
 
 		default:

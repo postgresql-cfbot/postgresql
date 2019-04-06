@@ -204,6 +204,7 @@ _equalParam(const Param *a, const Param *b)
 	COMPARE_SCALAR_FIELD(paramtype);
 	COMPARE_SCALAR_FIELD(paramtypmod);
 	COMPARE_SCALAR_FIELD(paramcollid);
+	COMPARE_SCALAR_FIELD(paramvarid);
 	COMPARE_LOCATION_FIELD(location);
 
 	return true;
@@ -951,6 +952,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(canSetTag);
 	COMPARE_NODE_FIELD(utilityStmt);
 	COMPARE_SCALAR_FIELD(resultRelation);
+	COMPARE_SCALAR_FIELD(resultVariable);
 	COMPARE_SCALAR_FIELD(hasAggs);
 	COMPARE_SCALAR_FIELD(hasWindowFuncs);
 	COMPARE_SCALAR_FIELD(hasTargetSRFs);
@@ -960,6 +962,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(hasModifyingCTE);
 	COMPARE_SCALAR_FIELD(hasForUpdate);
 	COMPARE_SCALAR_FIELD(hasRowSecurity);
+	COMPARE_SCALAR_FIELD(hasSchemaVariable);
 	COMPARE_NODE_FIELD(cteList);
 	COMPARE_NODE_FIELD(rtable);
 	COMPARE_NODE_FIELD(jointree);
@@ -1055,6 +1058,17 @@ _equalSelectStmt(const SelectStmt *a, const SelectStmt *b)
 	COMPARE_SCALAR_FIELD(all);
 	COMPARE_NODE_FIELD(larg);
 	COMPARE_NODE_FIELD(rarg);
+
+	return true;
+}
+
+static bool
+_equalLetStmt(const LetStmt *a, const LetStmt *b)
+{
+	COMPARE_NODE_FIELD(target);
+	COMPARE_NODE_FIELD(selectStmt);
+	COMPARE_SCALAR_FIELD(to_null);
+	COMPARE_SCALAR_FIELD(to_default);
 
 	return true;
 }
@@ -3237,6 +3251,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_SelectStmt:
 			retval = _equalSelectStmt(a, b);
+			break;
+		case T_LetStmt:
+			retval = _equalLetStmt(a, b);
 			break;
 		case T_SetOperationStmt:
 			retval = _equalSetOperationStmt(a, b);

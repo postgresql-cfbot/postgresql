@@ -35,16 +35,6 @@
 
 static void markTargetListOrigin(ParseState *pstate, TargetEntry *tle,
 					 Var *var, int levelsup);
-static Node *transformAssignmentIndirection(ParseState *pstate,
-							   Node *basenode,
-							   const char *targetName,
-							   bool targetIsArray,
-							   Oid targetTypeId,
-							   int32 targetTypMod,
-							   Oid targetCollation,
-							   ListCell *indirection,
-							   Node *rhs,
-							   int location);
 static Node *transformAssignmentSubscripts(ParseState *pstate,
 							  Node *basenode,
 							  const char *targetName,
@@ -673,7 +663,7 @@ updateTargetListEntry(ParseState *pstate,
  * might want to decorate indirection cells with their own location info,
  * in which case the location argument could probably be dropped.)
  */
-static Node *
+Node *
 transformAssignmentIndirection(ParseState *pstate,
 							   Node *basenode,
 							   const char *targetName,

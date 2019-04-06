@@ -25,7 +25,10 @@
 #include "postgres.h"
 
 #include "access/sysattr.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
+#include "commands/schemavariable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -44,6 +47,8 @@
 #include "parser/parse_target.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
@@ -78,6 +83,8 @@ static Query *transformCreateTableAsStmt(ParseState *pstate,
 						   CreateTableAsStmt *stmt);
 static Query *transformCallStmt(ParseState *pstate,
 				  CallStmt *stmt);
+static Query *transformLetStmt(ParseState *pstate,
+				  LetStmt *stmt);
 static void transformLockingClause(ParseState *pstate, Query *qry,
 					   LockingClause *lc, bool pushedDown);
 #ifdef RAW_EXPRESSION_COVERAGE_TEST
@@ -267,6 +274,7 @@ transformStmt(ParseState *pstate, Node *parseTree)
 		case T_InsertStmt:
 		case T_UpdateStmt:
 		case T_DeleteStmt:
+		case T_LetStmt:
 			(void) test_raw_expression_coverage(parseTree, NULL);
 			break;
 		default:
@@ -327,6 +335,11 @@ transformStmt(ParseState *pstate, Node *parseTree)
 									   (CallStmt *) parseTree);
 			break;
 
+		case T_LetStmt:
+			result = transformLetStmt(pstate,
+									  (LetStmt *) parseTree);
+			break;
+
 		default:
 
 			/*
@@ -367,6 +380,7 @@ analyze_requires_snapshot(RawStmt *parseTree)
 		case T_DeleteStmt:
 		case T_UpdateStmt:
 		case T_SelectStmt:
+		case T_LetStmt:
 			result = true;
 			break;
 
@@ -451,6 +465,8 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
 
 	assign_query_collations(pstate, qry);
 
@@ -875,6 +891,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
 
 	assign_query_collations(pstate, qry);
 
@@ -1316,6 +1333,8 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 							   (LockingClause *) lfirst(l), false);
 	}
 
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
+
 	assign_query_collations(pstate, qry);
 
 	/* this must be done after collations, for reliable comparison of exprs */
@@ -1554,8 +1573,232 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
 
 	assign_query_collations(pstate, qry);
+
+	return qry;
+}
+
+/*
+ * transformLetStmt -
+ *	  transform an Let Statement
+ */
+static Query *
+transformLetStmt(ParseState *pstate, LetStmt *stmt)
+{
+	Query	   *qry = makeNode(Query);
+	List	   *exprList = NIL;
+	List	   *exprListCoer = NIL;
+	List	   *indirection = NIL;
+	ListCell   *lc;
+	Query	   *selectQuery;
+	int			i = 0;
+	Oid			varid;
+	ParseExprKind sv_expr_kind;
+	char	   *attrname = NULL;
+	bool		not_unique;
+	bool		is_rowtype;
+	Oid			typid;
+	int32		typmod;
+	Oid			collid;
+	AclResult	aclresult;
+	List	   *names = NULL;
+	int			indirection_start;
+
+	sv_expr_kind = pstate->p_expr_kind;
+	pstate->p_expr_kind = EXPR_KIND_LET;
+
+	/* There can't be any outer WITH to worry about */
+	Assert(pstate->p_ctenamespace == NIL);
+
+	names = NamesFromList(stmt->target);
+
+	varid = identify_variable(names, &attrname, &not_unique);
+	if (not_unique)
+		ereport(ERROR,
+				(errcode(ERRCODE_AMBIGUOUS_PARAMETER),
+				 errmsg("target \"%s\" of LET command is ambiguous",
+						NameListToString(names)),
+				 parser_errposition(pstate, stmt->location)));
+
+	if (!OidIsValid(varid))
+		ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("schema variable \"%s\" doesn't exists",
+								NameListToString(names)),
+						 parser_errposition(pstate, stmt->location)));
+
+
+	qry->resultVariable = varid;
+
+	/* Simple behave, when LET xx = DEFAULT was used */
+	if (stmt->selectStmt == NULL)
+	{
+		if (attrname != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("only complete variable can be set to default"),
+					parser_errposition(pstate, stmt->location)));
+
+		qry->commandType = CMD_UTILITY;
+		qry->utilityStmt = (Node *) stmt;
+
+		return qry;
+	}
+
+	indirection_start = list_length(names) - (attrname ? 1 : 0);
+	indirection = list_copy_tail(stmt->target, indirection_start);
+
+	/* Detect other simple case LET x = NULL */
+	if (indirection == NIL && stmt->to_null)
+	{
+		qry->commandType = CMD_UTILITY;
+		qry->utilityStmt = (Node *) stmt;
+
+		return qry;
+	}
+
+	/* Exec this command as utility */
+	qry->commandType = CMD_PLAN_UTILITY;
+	qry->utilityStmt = (Node *) stmt;
+
+	get_schema_variable_type_typmod_collid(varid, &typid, &typmod, &collid);
+
+	is_rowtype = type_is_rowtype(typid);
+
+	if (attrname && !is_rowtype)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("target variable \"%s\" is not row type",
+						schema_variable_get_name(varid)),
+				parser_errposition(pstate, stmt->location)));
+
+	aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_WRITE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_VARIABLE, NameListToString(names));
+
+	selectQuery = transformStmt(pstate, stmt->selectStmt);
+
+	/* The grammar should have produced a SELECT */
+	if (!IsA(selectQuery, Query) ||
+		selectQuery->commandType != CMD_SELECT)
+		elog(ERROR, "unexpected non-SELECT command in LET ... SELECT");
+
+	/*----------
+	 * Generate an expression list for the LET that selects all the
+	 * non-resjunk columns from the subquery.
+	 *----------
+	 */
+	exprList = NIL;
+	foreach(lc, selectQuery->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->resjunk)
+			continue;
+
+		exprList = lappend(exprList, tle->expr);
+	}
+
+	/*
+	 * Because doesn't support pattern matching, don't allow multicolumn result
+	 */
+	if (list_length(exprList) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("expression is not scalar value"),
+				 parser_errposition(pstate,
+									exprLocation((Node *) exprList))));
+
+	exprListCoer = NIL;
+
+	foreach(lc, exprList)
+	{
+		Node	   *orig_expr = (Node*) lfirst(lc);
+		Oid			exprtypid = exprType((Node *) orig_expr);
+		Param *param = makeNode(Param);
+		Expr	   *expr = NULL;
+
+		param->paramkind = PARAM_VARIABLE;
+		param->paramvarid = varid;
+		param->paramtype = typid;
+		param->paramtypmod = typmod;
+
+		if (indirection != NULL)
+		{
+			bool		targetIsArray;
+			char	    *targetName;
+
+			targetName = attrname != NULL ? attrname : get_schema_variable_name(varid);
+			targetIsArray = OidIsValid(get_element_type(typid));
+
+			pstate->p_hasSchemaVariable = true;
+
+			expr = (Expr *)
+					transformAssignmentIndirection(pstate,
+												(Node *) param,
+												targetName,
+												targetIsArray,
+												typid,
+												typmod,
+												InvalidOid,
+												list_head(indirection),
+												(Node *) orig_expr,
+												stmt->location);
+		}
+		else
+			expr = (Expr *)
+					coerce_to_target_type(pstate,
+											(Node *) orig_expr,
+											exprtypid,
+											typid, typmod,
+											COERCION_ASSIGNMENT,
+											COERCE_IMPLICIT_CAST,
+											stmt->location);
+
+		if (expr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("variable \"%s\" is of type %s,"
+							  " but expression is of type %s",
+						schema_variable_get_name(varid),
+							format_type_be(typid),
+						  format_type_be(exprtypid)),
+				 errhint("You will need to rewrite or cast the expression."),
+				 parser_errposition(pstate, exprLocation((Node *) orig_expr))));
+
+		exprListCoer = lappend(exprListCoer, expr);
+	}
+
+	/*
+	 * Generate query's target list using the computed list of expressions.
+	 * Also, mark all the target columns as needing insert permissions.
+	 */
+	qry->targetList = NIL;
+	foreach(lc, exprListCoer)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		TargetEntry *tle;
+
+		tle = makeTargetEntry(expr,
+							  i + 1,
+							  FigureColname((Node *)expr),
+							  false);
+		qry->targetList = lappend(qry->targetList, tle);
+	}
+
+	/* done building the range table and jointree */
+	qry->rtable = pstate->p_rtable;
+	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
+
+	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
+	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
+
+	assign_query_collations(pstate, qry);
+
+	pstate->p_expr_kind = sv_expr_kind;
 
 	return qry;
 }
@@ -1788,6 +2031,8 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 		transformLockingClause(pstate, qry,
 							   (LockingClause *) lfirst(l), false);
 	}
+
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
 
 	assign_query_collations(pstate, qry);
 
@@ -2270,6 +2515,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSchemaVariable = pstate->p_hasSchemaVariable;
 
 	assign_query_collations(pstate, qry);
 

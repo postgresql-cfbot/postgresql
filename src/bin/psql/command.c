@@ -871,6 +871,9 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 						break;
 				}
 				break;
+			case 'V':			/* Variables */
+				success = listVariables(pattern, show_verbose);
+				break;
 			case 'x':			/* Extensions */
 				if (show_verbose)
 					success = listExtensionContents(pattern);

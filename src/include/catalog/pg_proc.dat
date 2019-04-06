@@ -5912,6 +5912,9 @@
   proname => 'pg_collation_is_visible', procost => '10', provolatile => 's',
   prorettype => 'bool', proargtypes => 'oid',
   prosrc => 'pg_collation_is_visible' },
+{ oid => '4187', descr => 'is schema variable visible in search path?',
+  proname => 'pg_variable_is_visible', procost => '10', provolatile => 's',
+  prorettype => 'bool', proargtypes => 'oid', prosrc => 'pg_variable_is_visible' },
 
 { oid => '2854', descr => 'get OID of current session\'s temp schema, if any',
   proname => 'pg_my_temp_schema', provolatile => 's', proparallel => 'r',

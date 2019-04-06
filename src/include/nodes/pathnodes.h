@@ -146,6 +146,8 @@ typedef struct PlannerGlobal
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
 
 	PartitionDirectory partition_directory; /* partition descriptors */
+
+	List	   *schemaVariables;	/* list of used schema variables */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -346,6 +348,7 @@ struct PlannerInfo
 	bool		hasPseudoConstantQuals; /* true if any RestrictInfo has
 										 * pseudoconstant = true */
 	bool		hasRecursion;	/* true if planning a recursive WITH item */
+	bool		hasSchemaVariable;		/* true if schema variables was used */
 
 	/* These fields are used only when hasRecursion is true: */
 	int			wt_param_id;	/* PARAM_EXEC ID for the work table */

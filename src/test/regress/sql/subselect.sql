@@ -709,3 +709,507 @@ select * from (with x as (select 2 as y) select * from x) ss;
 explain (verbose, costs off)
 with x as (select * from subselect_tbl)
 select * from x for update;
+
+-- test NON IN to ANTI JOIN conversion
+CREATE TABLE s (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into s (u, n, nn, p)
+    select
+    generate_series(1,3) as u,
+	generate_series(1,3) as n,
+	generate_series(1,3) as nn,
+	'foo' as p;
+insert into s values(1000002, 1000002, 1000002, 'foofoo');
+UPDATE s set n = NULL WHERE n = 3;
+analyze s;
+
+CREATE TABLE l (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into l (u, n, nn, p)
+	select
+    generate_series(1,10000 ) as u,
+	generate_series(1,10000 ) as n,
+	generate_series(1,10000 ) as nn,
+	'bar' as p;
+UPDATE l set n = NULL WHERE n = 7;
+
+CREATE UNIQUE INDEX l_u ON l (u);
+CREATE INDEX l_n ON l (n);
+CREATE INDEX l_nn ON l (nn);
+analyze l;
+
+CREATE TABLE s1 (u INTEGER NOT NULL, n INTEGER NULL, n1 INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into s1 (u, n, n1, nn, p)
+    select
+    generate_series(1,3) as u,
+	generate_series(1,3) as n,
+	generate_series(1,3) as n1,
+	generate_series(1,3) as nn,
+	'foo' as p;
+insert into s1 values(1000003, 1000003, 1000003, 1000003, 'foofoo');
+insert into s1 values(1003, 1003, 1003, 1003, 'foofoo');
+UPDATE s1 set n = NULL WHERE n = 3;
+UPDATE s1 set n1 = NULL WHERE n = 2;
+UPDATE s1 set n1 = NULL WHERE n1 = 3;
+analyze s1;
+
+CREATE TABLE empty (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+analyze empty;
+
+-- set work_mem to 64KB so that NOT IN to ANTI JOIN optimization will kick in
+set work_mem = 64;
+
+-- correctness test 1: inner empty, return every thing from outer including NULL
+explain (costs false) select * from s where n not in (select n from empty);
+
+select * from s where n not in (select n from empty);
+
+-- correctness test 2: inner has NULL, return empty result
+explain (costs false) select * from s where n not in (select n from l);
+
+select * from s where n not in (select n from l);
+
+-- correctness test 3: inner non-null, result has no NULL
+explain (costs false) select * from s where n not in (select u from l);
+
+select * from s where n not in (select u from l);
+
+-- correctness test 4: inner has predicate
+explain (costs false) select * from s where n not in (select n from l where u > 7);
+
+select * from s where n not in (select n from l where u > 7);
+
+-- correctness test 5: multi-expression, (2, 2, null, 2, foo) should be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u >= 3);
+
+select * from s1 where (n,n1) not in (select u,nn from l where u >= 3);
+
+-- correctness test 6: multi-expression, (3, null, null, 3, foo) should not be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u > 0);
+
+select * from s1 where (n,n1) not in (select u,nn from l where u > 0);
+
+-- correctness test 6: multi-expression, (3, null, null, 3, foo) should be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u < 0);
+
+select * from s1 where (n,n1) not in (select u,nn from l where u < 0);
+
+-- test using hashed subplan when inner fits in work_mem
+explain (costs false) select * from l where n not in (select n from s);
+
+select * from l where n not in (select n from s);
+
+-- test single expression
+explain (costs false) select * from s where n not in (select n from l);
+
+select * from s where n not in (select n from l);
+
+explain (costs false) select * from s where u not in (select u from l);
+
+select * from s where u not in (select u from l);
+
+explain (costs false) select * from s where 3*n not in (select n from l);
+
+select * from s where 3*n not in (select n from l);
+
+explain (costs false) select * from s where n not in (select 3*n from l);
+
+select * from s where n not in (select 3*n from l);
+
+-- test single expression with predicates
+explain (costs false) select * from s where n not in (select n from l where u > 0);
+
+select * from s where n not in (select n from l where u > 0);
+
+explain (costs false) select * from s where n not in (select n from l where u > 100);
+
+select * from s where n not in (select n from l where u > 100);
+
+-- test multi expression
+explain (costs false) select * from s where (n,u) not in (select n,u from l);
+
+select * from s where (n,u) not in (select n,u from l);
+
+explain (costs false) select * from s where (u, nn) not in (select u, nn from l);
+
+select * from s where (u, nn) not in (select u, nn from l);
+
+explain (costs false) select * from s where (n,u) not in (select u,n from l);
+
+select * from s where (n,u) not in (select u,n from l);
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l);
+
+select * from s where (n,u,nn) not in (select u,n,nn from l);
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1000);
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1000);
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 0);
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 0);
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1);
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1);
+
+-- test multi-table
+explain (costs false) select count(*) from s, l where s.n not in (select n from l);
+
+select count(*) from s, l where s.n not in (select n from l);
+
+explain (costs false) select count(*) from s, l where s.nn not in (select nn from l);
+
+select count(*) from s, l where s.nn not in (select nn from l);
+
+-- test null padded results from outer join
+explain (costs false) select * from s where n not in (select s.nn from l left join s on l.nn = s.nn);
+
+select * from s where n not in (select s.nn from l left join s on l.nn = s.nn);
+
+explain (costs false) select * from s where n not in (select s.nn from s right join l on s.nn = l.nn);
+
+select * from s where n not in (select s.nn from s right join l on s.nn = l.nn);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where l.nn not in (select nn from s);
+
+select count(*) from s right join l on s.nn = l.nn where l.nn not in (select nn from s);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from s);
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from s);
+
+explain (costs false) select count(*) from s right join l on s.nn=l.nn where l.nn not in (select l.nn from l left join s on l.nn = s.nn);
+
+select count(*) from s right join l on s.nn=l.nn where l.nn not in (select l.nn from l left join s on l.nn = s.nn);
+
+explain (costs false) select count(*) from s right join l on s.nn=l.nn where s.nn not in (select s.nn from l left join s on l.nn = s.nn);
+
+select count(*) from s right join l on s.nn=l.nn where s.nn not in (select s.nn from l left join s on l.nn = s.nn);
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s left join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s left join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u left join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s left join s1 on s.u=s1.u left join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s right join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s right join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+
+select * from s join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s full join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s full join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s join s1 on s.u=s1.u full join l on s.u=l.u where s.nn not in (select nn from l);
+
+select count(*) from s join s1 on s.u=s1.u full join l on s.u=l.u where s.nn not in (select nn from l);
+
+explain (costs false) select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn left join s1 on l.nn=s1.nn);
+
+select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn left join s1 on l.nn=s1.nn);
+
+explain (costs false) select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn right join s1 on l.nn=s1.nn);
+
+select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn right join s1 on l.nn=s1.nn);
+
+explain (costs false) select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+
+select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+
+explain (costs false) select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l right join s on l.nn = s.nn);
+
+select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+
+--test reduce outer joins from outer query
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l);
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l) and s.u>0;
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l) and s.u>0;
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn right join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+select count(*) from s right join l on s.nn = l.nn right join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select nn from l);
+
+--test reduce outer joins from subquery
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn);
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where l.u > 9);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where l.u > 9);
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where s.u > 9);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where s.u > 9);
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn right join s1 on l.n = s1.n);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn right join s1 on l.n = s1.n);
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+
+--test reduce outer join on outer and sub-query
+explain (costs false) select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+
+select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+
+select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+
+-- test union all
+explain (costs false) select * from s as t where not exists
+(select 1 from (select n as y from l union all
+				select u as y from s union all
+				select nn as y from s) as v where t.n=v.y or v.y is null) and n is not null;
+
+select * from s as t where not exists
+(select 1 from (select n as y from l union all
+				select u as y from s union all
+				select nn as y from s) as v where t.n=v.y or v.y is null) and n is not null;
+
+explain (costs false) select * from s where n not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+
+select * from s where n not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+
+explain (costs false) select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select nn from l);
+
+select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select nn from l);
+
+explain (costs false) select count(*) from
+(select n as x from s union all select n as x from l) t where t.x not in
+(select nn from empty);
+
+select count(*) from
+(select n as x from s union all select n as x from l) t where t.x not in
+(select nn from empty);
+
+explain (costs false) select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+
+select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+
+-- test multi-levels of NOT IN
+explain (costs false) select * from s where n not in (select n from s where n not in (select n from l));
+
+select * from s where n not in (select n from s where n not in (select n from l));
+
+explain (costs false) select * from s where n not in (select n from s where n not in (select u from l));
+
+select * from s where n not in (select n from s where n not in (select u from l));
+
+explain (costs false) select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+
+select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+
+explain (costs false) select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from s1);
+
+select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from s1);
+
+explain (costs false) select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from l);
+
+select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from l);
+
+explain (costs false) select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n))
+and nn not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+
+select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n))
+and nn not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+
+--test COALESCE
+explain (costs false) select * from s where COALESCE(n, -1) not in (select COALESCE(n, -1) from l);
+
+select * from s where COALESCE(n, -1) not in (select COALESCE(n, -1) from l);
+
+explain (costs false) select * from s where COALESCE(n, NULL, -1) not in (select COALESCE(n, NULL, -1) from l);
+
+select * from s where COALESCE(n, NULL, -1) not in (select COALESCE(n, NULL, -1) from l);
+
+explain (costs false) select * from s where COALESCE(n, NULL, NULL) not in (select COALESCE(n, NULL, NULL) from l);
+
+select * from s where COALESCE(n, NULL, NULL) not in (select COALESCE(n, NULL, NULL) from l);
+
+explain (costs false) select * from s where COALESCE(n, nn) not in (select COALESCE(n, nn) from l);
+
+select * from s where COALESCE(n, nn) not in (select COALESCE(n, nn) from l);
+
+explain (costs false) select * from s where COALESCE(nn, NULL) not in (select COALESCE(nn, NULL) from l);
+
+select * from s where COALESCE(nn, NULL) not in (select COALESCE(nn, NULL) from l);
+
+explain (costs false) select * from s where (COALESCE(n, -1), nn, COALESCE(n, u)) not in (select COALESCE(n, -1), nn, COALESCE(n, u) from l);
+
+select * from s where (COALESCE(n, -1), nn, COALESCE(n, u)) not in (select COALESCE(n, -1), nn, COALESCE(n, u) from l);
+
+-- test miscellaneous outer nullable cases
+
+explain (costs false) select * from s where (n,n) not in (select n,n from l);
+
+select * from s where (n,n) not in (select n,n from l);
+
+explain (costs false) select * from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l);
+
+select * from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l);
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l where u < 0);
+
+select count(*) from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l where u < 0);
+
+explain (costs false) select * from s where (n,n,n) not in (select distinct n,n,n from l where u > 0 limit 3) order by n;
+
+select * from s where (n,n,n) not in (select distinct n,n,n from l where u > 0 limit 3) order by n;
+
+--test outer has strict predicate or inner join
+explain (costs false) select * from s where n not in (select n from l) and n > 0;
+
+select * from s where n not in (select n from l) and n > 0;
+
+explain (costs false) select * from s where n not in (select n from l) and u > 0;
+
+select * from s where n not in (select n from l) and u > 0;
+
+explain (costs false) select * from s where n not in (select n from l) and n is not null;
+
+select * from s where n not in (select n from l) and n is not null;
+
+explain (costs false) select * from s join l on s.n = l.n where s.n not in (select n from l);
+
+select * from s join l on s.n = l.n where s.n not in (select n from l);
+
+explain (costs false) select count(*) from s right join l on s.n = l.n where s.n not in (select n from l);
+
+select count(*) from s right join l on s.n = l.n where s.n not in (select n from l);
+
+explain (costs false) select count(*) from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select n from l);
+
+select count(*) from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select n from l);
+
+explain (costs false) select count(*) from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select n from l);
+
+select count(*) from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select n from l);
+
+--test inner has strict predicate or inner join
+explain (costs false) select * from s where u not in (select n from l where n > 0);
+
+select * from s where u not in (select n from l where n > 0);
+
+explain (costs false) select * from s where u not in (select n from l where u > 0);
+
+select * from s where u not in (select n from l where u > 0);
+
+explain (costs false) select * from s where u not in (select n from l where n is not null);
+
+select * from s where u not in (select n from l where n is not null);
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n=s.n);
+
+select * from s where u not in (select l.n from l join s on l.n=s.n);
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.u=s.u);
+
+select * from s where u not in (select l.n from l join s on l.u=s.u);
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n = s.n);
+
+select * from s where u not in (select l.n from l join s on l.n = s.n);
+
+explain (costs false) select * from s where u not in (select l.n from l right join s on l.n = s.n);
+
+select * from s where u not in (select l.n from l right join s on l.n = s.n);
+
+explain (costs false) select * from s where u not in (select l.n from l right join s on l.n=s.n join s1 on l.n=s1.n);
+
+select * from s where u not in (select l.n from l right join s on l.n=s.n join s1 on l.n=s1.n);
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n=s.n right join s1 on l.n=s1.n);
+
+select * from s where u not in (select l.n from l join s on l.n=s.n right join s1 on l.n=s1.n);
+
+--test both sides have strict predicate or inner join
+explain (costs false) select * from s where n not in (select n from l where n > 0) and n > 0;
+
+select * from s where n not in (select n from l where n > 0) and n > 0;
+
+explain (costs false) select * from s where n not in (select n from l where u > 0) and n > 0;
+
+select * from s where n not in (select n from l where u > 0) and n > 0;
+
+explain (costs false) select * from s where n not in (select n from l where n > 0) and u > 0;
+
+select * from s where n not in (select n from l where n > 0) and u > 0;
+
+explain (costs false) select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l right join s on l.n=s.n join s s1 on l.n=s1.n);
+
+select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l right join s on l.n=s.n join s s1 on l.n=s1.n);
+
+explain (costs false) select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+
+select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+
+explain (costs false) select * from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+
+select * from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+
+-- clean up
+set work_mem = 4000;
+drop table s;
+drop table s1;
+drop table l;
+drop table empty;

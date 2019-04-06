@@ -38,10 +38,12 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
+#include "optimizer/pathnode.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
+#include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -2009,6 +2011,271 @@ find_forced_null_var(Node *node)
 		}
 	}
 	return NULL;
+}
+
+/*
+ * find_innerjoined_rels
+ *		Traverse jointree to locate non-outerjoined-rels and quals above them
+ *
+ * We fill innerjoined_rels with the relids of all rels that are not below
+ * the nullable side of any outer join (which would cause their Vars to be
+ * possibly NULL regardless of what's in the catalogs).  In the same scan,
+ * we locate all WHERE and JOIN/ON quals that constrain these rels add them to
+ * the usable_quals list (forming a list with implicit-AND semantics).
+ *
+ * Top-level caller must initialize innerjoined_rels/usable_quals to NULL/NIL.
+ */
+static void
+find_innerjoined_rels(Node *jtnode,
+					  Relids *innerjoined_rels, List **usable_quals)
+{
+	if (jtnode == NULL)
+		return;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		int			varno = ((RangeTblRef *) jtnode)->rtindex;
+
+		*innerjoined_rels = bms_add_member(*innerjoined_rels, varno);
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *lc;
+
+		/* All elements of the FROM list are allowable */
+		foreach(lc, f->fromlist)
+			find_innerjoined_rels((Node *) lfirst(lc),
+								  innerjoined_rels, usable_quals);
+		/* ... and its WHERE quals are too */
+		if (f->quals)
+			*usable_quals = lappend(*usable_quals, f->quals);
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+
+		switch (j->jointype)
+		{
+			case JOIN_INNER:
+				/* visit both children */
+				find_innerjoined_rels(j->larg,
+									  innerjoined_rels, usable_quals);
+				find_innerjoined_rels(j->rarg,
+									  innerjoined_rels, usable_quals);
+				/* and grab the ON quals too */
+				if (j->quals)
+					*usable_quals = lappend(*usable_quals, j->quals);
+				break;
+
+			case JOIN_LEFT:
+			case JOIN_SEMI:
+			case JOIN_ANTI:
+
+				/*
+				 * Only the left input is possibly non-nullable; furthermore,
+				 * the quals of this join don't constrain the left input.
+				 * Note: we probably can't see SEMI or ANTI joins at this
+				 * point, but if we do, we can treat them like LEFT joins.
+				 */
+				find_innerjoined_rels(j->larg,
+									  innerjoined_rels, usable_quals);
+				break;
+
+			case JOIN_RIGHT:
+				/* Reverse of the above case */
+				find_innerjoined_rels(j->rarg,
+									  innerjoined_rels, usable_quals);
+				break;
+
+			case JOIN_FULL:
+				/* Neither side is non-nullable, so stop descending */
+				break;
+
+			case JOIN_UNIQUE_OUTER:
+			case JOIN_UNIQUE_INNER:
+				/* Don't think we will see JOIN_UNIQUE_OUTER or
+				 * JOIN_UNIQUE_INNER since they are only used internally in
+				 * the planner in a much later phase (in standard_join_search).
+				*/
+				break;
+
+			default:
+				elog(ERROR, "unrecognized join type: %d",
+					 (int) j->jointype);
+		}
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d",
+			 (int) nodeTag(jtnode));
+}
+
+/*
+ * Returns true if the Node passed in is nonnullable. Currently handles Var,
+ * TargetEntry, CoaleseExpr and Const.
+ * TODO: Add more supporting cases.
+ * A Var is nonnullable if:
+ *	It does not appear on the null-padded side of an outer join and it has NOT NULL constraint,
+ * 	Or if it's forced non-null by inner join or other strict predicates.
+ * A CoalesceExpr is nonnullable if it has a non-null argument.
+ */
+bool
+is_node_nonnullable(Node * node, Query *parse)
+{
+	AttrNumber	 attno = InvalidAttrNumber;
+	Oid				 reloid;
+	Var 				*var = NULL;
+
+	/*
+	 * If the query contains set operations, punt.  The set ops themselves
+	 * couldn't introduce nulls that weren't in their inputs, but the tlist
+	 * present in the top-level query is just dummy and won't give us useful
+	 * info.  We could get an answer by recursing to examine each leaf query,
+	 * but for the moment it doesn't seem worth the extra complication.
+	 *
+	 * Note that we needn't consider other top-level operators such as
+	 * DISTINCT, GROUP BY, etc, as those will not introduce nulls either.
+	 */
+	if (parse->setOperations)
+		return false;
+
+	switch (nodeTag(node))
+	{
+		case T_Var:
+		{
+			RangeTblEntry	*rte;
+
+			var = (Var *) node;
+			attno = var->varattno;
+			rte = rt_fetch(var->varno, parse->rtable);
+			reloid = rte->relid;
+			break;
+		}
+		case T_TargetEntry:
+		{
+			TargetEntry	*te = (TargetEntry *)node;
+			switch(nodeTag(te->expr))
+			{
+				case T_Var:
+				{
+					var = (Var *) te->expr;
+					attno = te->resorigcol;
+					reloid = te->resorigtbl;
+					break;
+				}
+				/* recurse into is_node_nonnullable for other types of Node */
+				default:
+					return is_node_nonnullable((Node *)te->expr, parse);
+			}
+			break;
+		}
+		case T_CoalesceExpr:
+		{
+			ListCell   			*arg;
+			CoalesceExpr	*cexpr = (CoalesceExpr *)node;
+
+			/* handle COALESCE Function by looking for non-null argument */
+			foreach(arg, cexpr->args)
+			{
+				Node	*e = lfirst(arg);
+
+				/* recurse into is_node_nonnullable */
+				if (is_node_nonnullable(e, parse))
+				{
+					return true;
+				}
+			}
+			break;
+		}
+		case T_Const:
+		{
+			if(!((Const *) node)->constisnull)
+			{
+				return true;
+			}
+			break;
+		}
+		/*
+		 * TODO: handle more cases to make the nullability test more accurate
+		 * Assume unhandled cases are nullable.
+		 */
+		default:
+			return false;
+	}
+
+	/*
+	 * If we have found a Var, it is non-null if:
+	 * not on NULL-padded side of an outer join and has NOT NULL constraint
+	 * or forced NOT NULL by inner join conditions or by other strict predicates.
+	 */
+	if(var &&
+			reloid != InvalidOid)
+	{
+		Relids		 innerjoined_rels = NULL;
+		List	   		*innerjoined_useful_quals = NIL;
+		List			*nonnullable_innerjoined_vars = NIL;
+
+		find_innerjoined_rels((Node *) parse->jointree,
+							  &innerjoined_rels,
+							  &innerjoined_useful_quals);
+
+		/*
+		 * Check if the Var is from an INNER JOINed rel, it's also guaranteed
+		 * to not be on the null-padded side of an outer join.
+		 */
+		if (bms_is_member(var->varno, innerjoined_rels))
+		{
+			/*
+			 * If Var is from a plain relation and its column is marked
+			 * NOT NULL according to the catalogs, it can't produce NULL.
+			 */
+			if (get_attnotnull(reloid, attno))
+			{
+				return true;
+			}
+
+			/*
+			 * Otherwise check for the existance of strict predicates which filter
+			 * out NULL values for this Var.
+			 */
+			nonnullable_innerjoined_vars =
+				find_nonnullable_vars((Node *) innerjoined_useful_quals);
+
+			if (list_member(nonnullable_innerjoined_vars, var))
+			{
+				return true;
+			}
+		}
+
+		/*
+		 * If we get here it means -
+		 * The var is on null-padded side of an outer-join, since we've already
+		 * tried reduce_outer_joins(), there isn't any strict predicates to turn this
+		 * outer join to inner join, then there will be no strict predicates to force
+		 * this var non-null as well.
+		 */
+	}
+
+	return false;
+}
+
+/*
+ * Returns true if at least one Node in the input list is non-nullable
+ */
+bool
+list_hasnonnullable(List * list, Query *parse)
+{
+	ListCell	*lc;
+	Node	*node;
+
+	foreach(lc, list)
+	{
+		node = lfirst(lc);
+		if(is_node_nonnullable(node, parse))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 /*

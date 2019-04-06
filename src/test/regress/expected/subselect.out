@@ -1342,3 +1342,2208 @@ select * from x for update;
    Output: subselect_tbl.f1, subselect_tbl.f2, subselect_tbl.f3
 (2 rows)
 
+-- test NON IN to ANTI JOIN conversion
+CREATE TABLE s (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into s (u, n, nn, p)
+    select
+    generate_series(1,3) as u,
+	generate_series(1,3) as n,
+	generate_series(1,3) as nn,
+	'foo' as p;
+insert into s values(1000002, 1000002, 1000002, 'foofoo');
+UPDATE s set n = NULL WHERE n = 3;
+analyze s;
+CREATE TABLE l (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into l (u, n, nn, p)
+	select
+    generate_series(1,10000 ) as u,
+	generate_series(1,10000 ) as n,
+	generate_series(1,10000 ) as nn,
+	'bar' as p;
+UPDATE l set n = NULL WHERE n = 7;
+CREATE UNIQUE INDEX l_u ON l (u);
+CREATE INDEX l_n ON l (n);
+CREATE INDEX l_nn ON l (nn);
+analyze l;
+CREATE TABLE s1 (u INTEGER NOT NULL, n INTEGER NULL, n1 INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+insert into s1 (u, n, n1, nn, p)
+    select
+    generate_series(1,3) as u,
+	generate_series(1,3) as n,
+	generate_series(1,3) as n1,
+	generate_series(1,3) as nn,
+	'foo' as p;
+insert into s1 values(1000003, 1000003, 1000003, 1000003, 'foofoo');
+insert into s1 values(1003, 1003, 1003, 1003, 'foofoo');
+UPDATE s1 set n = NULL WHERE n = 3;
+UPDATE s1 set n1 = NULL WHERE n = 2;
+UPDATE s1 set n1 = NULL WHERE n1 = 3;
+analyze s1;
+CREATE TABLE empty (u INTEGER NOT NULL, n INTEGER NULL, nn INTEGER NOT NULL, p VARCHAR(128) NULL);
+analyze empty;
+-- set work_mem to 64KB so that NOT IN to ANTI JOIN optimization will kick in
+set work_mem = 64;
+-- correctness test 1: inner empty, return every thing from outer including NULL
+explain (costs false) select * from s where n not in (select n from empty);
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Seq Scan on empty
+(4 rows)
+
+select * from s where n not in (select n from empty);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(4 rows)
+
+-- correctness test 2: inner has NULL, return empty result
+explain (costs false) select * from s where n not in (select n from l);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(12 rows)
+
+select * from s where n not in (select n from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+-- correctness test 3: inner non-null, result has no NULL
+explain (costs false) select * from s where n not in (select u from l);
+                  QUERY PLAN                   
+-----------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Index Only Scan using l_u on l
+         Index Cond: (u = s.n)
+(7 rows)
+
+select * from s where n not in (select u from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+-- correctness test 4: inner has predicate
+explain (costs false) select * from s where n not in (select n from l where u > 7);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+           Filter: (u > 7)
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         Filter: (u > 7)
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(14 rows)
+
+select * from s where n not in (select n from l where u > 7);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+(3 rows)
+
+-- correctness test 5: multi-expression, (2, 2, null, 2, foo) should be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u >= 3);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: (((s1.n = l.u) AND (s1.n1 = l.nn)) IS NOT FALSE)
+   ->  Seq Scan on s1
+   ->  Materialize
+         ->  Seq Scan on l
+               Filter: (u >= 3)
+(6 rows)
+
+select * from s1 where (n,n1) not in (select u,nn from l where u >= 3);
+    u    |    n    |   n1    |   nn    |   p    
+---------+---------+---------+---------+--------
+       1 |       1 |       1 |       1 | foo
+ 1000003 | 1000003 | 1000003 | 1000003 | foofoo
+       2 |       2 |         |       2 | foo
+(3 rows)
+
+-- correctness test 6: multi-expression, (3, null, null, 3, foo) should not be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u > 0);
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: (((s1.n = l.u) AND (s1.n1 = l.nn)) IS NOT FALSE)
+   ->  Seq Scan on s1
+   ->  Materialize
+         ->  Seq Scan on l
+               Filter: (u > 0)
+(6 rows)
+
+select * from s1 where (n,n1) not in (select u,nn from l where u > 0);
+    u    |    n    |   n1    |   nn    |   p    
+---------+---------+---------+---------+--------
+ 1000003 | 1000003 | 1000003 | 1000003 | foofoo
+(1 row)
+
+-- correctness test 6: multi-expression, (3, null, null, 3, foo) should be in the result
+explain (costs false) select * from s1 where (n,n1) not in (select u,nn from l where u < 0);
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on s1
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Index Scan using l_u on l
+           Index Cond: (u < 0)
+(5 rows)
+
+select * from s1 where (n,n1) not in (select u,nn from l where u < 0);
+    u    |    n    |   n1    |   nn    |   p    
+---------+---------+---------+---------+--------
+       1 |       1 |       1 |       1 | foo
+ 1000003 | 1000003 | 1000003 | 1000003 | foofoo
+    1003 |    1003 |    1003 |    1003 | foofoo
+       2 |       2 |         |       2 | foo
+       3 |         |         |       3 | foo
+(5 rows)
+
+-- test using hashed subplan when inner fits in work_mem
+explain (costs false) select * from l where n not in (select n from s);
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on l
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Seq Scan on s
+(4 rows)
+
+select * from l where n not in (select n from s);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+-- test single expression
+explain (costs false) select * from s where n not in (select n from l);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(12 rows)
+
+select * from s where n not in (select n from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where u not in (select u from l);
+              QUERY PLAN              
+--------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Only Scan using l_u on l
+         Index Cond: (u = s.u)
+(4 rows)
+
+select * from s where u not in (select u from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where 3*n not in (select n from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: (((3 * n) IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: (((3 * s.n) = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = (3 * s.n))
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(12 rows)
+
+select * from s where 3*n not in (select n from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select 3*n from l);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: ((s.n = (3 * l.n)) OR ((3 * l.n) IS NULL))
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Materialize
+         ->  Seq Scan on l
+(8 rows)
+
+select * from s where n not in (select 3*n from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+-- test single expression with predicates
+explain (costs false) select * from s where n not in (select n from l where u > 0);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+           Filter: (u > 0)
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         Filter: (u > 0)
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(14 rows)
+
+select * from s where n not in (select n from l where u > 0);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select n from l where u > 100);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+           Filter: (u > 100)
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         Filter: (u > 100)
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(14 rows)
+
+select * from s where n not in (select n from l where u > 100);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+(3 rows)
+
+-- test multi expression
+explain (costs false) select * from s where (n,u) not in (select n,u from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_u on l
+         Index Cond: (u = s.u)
+         Filter: ((s.n = n) OR (n IS NULL) OR (s.n IS NULL))
+(5 rows)
+
+select * from s where (n,u) not in (select n,u from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (u, nn) not in (select u, nn from l);
+            QUERY PLAN            
+----------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: (s.u = u)
+(5 rows)
+
+select * from s where (u, nn) not in (select u, nn from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (n,u) not in (select u,n from l);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.u = n) OR (n IS NULL))
+         Filter: ((s.n = u) OR (s.n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.u)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(10 rows)
+
+select * from s where (n,u) not in (select u,n from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l);
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: (((s.n = u) OR (s.n IS NULL)) AND ((s.u = n) OR (n IS NULL)))
+(5 rows)
+
+select * from s where (n,u,nn) not in (select u,n,nn from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1000);
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: ((u > 1000) AND ((s.n = u) OR (s.n IS NULL)) AND ((s.u = n) OR (n IS NULL)))
+(5 rows)
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1000);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(4 rows)
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 0);
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: ((u > 0) AND ((s.n = u) OR (s.n IS NULL)) AND ((s.u = n) OR (n IS NULL)))
+(5 rows)
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 0);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1);
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: ((u > 1) AND ((s.n = u) OR (s.n IS NULL)) AND ((s.u = n) OR (n IS NULL)))
+(5 rows)
+
+select * from s where (n,u,nn) not in (select u,n,nn from l where u > 1);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+(2 rows)
+
+-- test multi-table
+explain (costs false) select count(*) from s, l where s.n not in (select n from l);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Nested Loop
+         ->  Nested Loop Anti Join
+               ->  Seq Scan on s
+                     Filter: ((n IS NOT NULL) OR (NOT $0))
+               ->  Bitmap Heap Scan on l l_1
+                     Recheck Cond: ((s.n = n) OR (n IS NULL))
+                     ->  BitmapOr
+                           ->  Bitmap Index Scan on l_n
+                                 Index Cond: (n = s.n)
+                           ->  Bitmap Index Scan on l_n
+                                 Index Cond: (n IS NULL)
+         ->  Seq Scan on l
+(15 rows)
+
+select count(*) from s, l where s.n not in (select n from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s, l where s.nn not in (select nn from l);
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         ->  Nested Loop Anti Join
+               ->  Seq Scan on s
+               ->  Index Only Scan using l_nn on l l_1
+                     Index Cond: (nn = s.nn)
+         ->  Seq Scan on l
+(7 rows)
+
+select count(*) from s, l where s.nn not in (select nn from l);
+ count 
+-------
+ 10000
+(1 row)
+
+-- test null padded results from outer join
+explain (costs false) select * from s where n not in (select s.nn from l left join s on l.nn = s.nn);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: ((s.n = s_1.nn) OR (s_1.nn IS NULL))
+   InitPlan 1 (returns $0)
+     ->  Nested Loop Left Join
+           Join Filter: (l_1.nn = s_2.nn)
+           ->  Seq Scan on l l_1
+           ->  Materialize
+                 ->  Seq Scan on s s_2
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s_1.nn)
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Seq Scan on s s_1
+(15 rows)
+
+select * from s where n not in (select s.nn from l left join s on l.nn = s.nn);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select s.nn from s right join l on s.nn = l.nn);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: ((s.n = s_1.nn) OR (s_1.nn IS NULL))
+   InitPlan 1 (returns $0)
+     ->  Nested Loop Left Join
+           Join Filter: (s_2.nn = l_1.nn)
+           ->  Seq Scan on l l_1
+           ->  Materialize
+                 ->  Seq Scan on s s_2
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s_1.nn)
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Seq Scan on s s_1
+(15 rows)
+
+select * from s where n not in (select s.nn from s right join l on s.nn = l.nn);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where l.nn not in (select nn from s);
+                   QUERY PLAN                   
+------------------------------------------------
+ Aggregate
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s.nn)
+         ->  Seq Scan on l
+               Filter: (NOT (hashed SubPlan 1))
+               SubPlan 1
+                 ->  Seq Scan on s s_1
+         ->  Hash
+               ->  Seq Scan on s
+(9 rows)
+
+select count(*) from s right join l on s.nn = l.nn where l.nn not in (select nn from s);
+ count 
+-------
+  9997
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from s);
+                QUERY PLAN                
+------------------------------------------
+ Aggregate
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s.nn)
+         Filter: (NOT (hashed SubPlan 1))
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Seq Scan on s
+         SubPlan 1
+           ->  Seq Scan on s s_1
+(9 rows)
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from s);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn=l.nn where l.nn not in (select l.nn from l left join s on l.nn = s.nn);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   ->  Nested Loop Left Join
+         Join Filter: (s.nn = l.nn)
+         ->  Hash Anti Join
+               Hash Cond: (l.nn = l_1.nn)
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Hash Left Join
+                           Hash Cond: (l_1.nn = s_1.nn)
+                           ->  Seq Scan on l l_1
+                           ->  Hash
+                                 ->  Seq Scan on s s_1
+         ->  Seq Scan on s
+(13 rows)
+
+select count(*) from s right join l on s.nn=l.nn where l.nn not in (select l.nn from l left join s on l.nn = s.nn);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn=l.nn where s.nn not in (select s.nn from l left join s on l.nn = s.nn);
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Nested Loop Left Join
+           Join Filter: (l_2.nn = s_2.nn)
+           ->  Seq Scan on l l_2
+           ->  Materialize
+                 ->  Seq Scan on s s_2
+   ->  Nested Loop Anti Join
+         Join Filter: ((s.nn = s_1.nn) OR (s_1.nn IS NULL))
+         ->  Hash Left Join
+               Hash Cond: (l.nn = s.nn)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Seq Scan on s
+         ->  Materialize
+               ->  Hash Left Join
+                     Hash Cond: (l_1.nn = s_1.nn)
+                     ->  Seq Scan on l l_1
+                     ->  Hash
+                           ->  Seq Scan on s s_1
+(21 rows)
+
+select count(*) from s right join l on s.nn=l.nn where s.nn not in (select s.nn from l left join s on l.nn = s.nn);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         ->  Nested Loop Left Join
+               Join Filter: (s.u = s1.u)
+               ->  Nested Loop Anti Join
+                     ->  Seq Scan on s
+                     ->  Index Only Scan using l_nn on l l_1
+                           Index Cond: (nn = s.nn)
+               ->  Seq Scan on s1
+         ->  Index Only Scan using l_u on l
+               Index Cond: (u = s.u)
+(11 rows)
+
+select count(*) from s left join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Hash Anti Join
+         Hash Cond: (s.nn = l_1.nn)
+         ->  Hash Left Join
+               Hash Cond: (l.u = s.u)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Hash Right Join
+                           Hash Cond: (s1.u = s.u)
+                           ->  Seq Scan on s1
+                           ->  Hash
+                                 ->  Seq Scan on s
+         ->  Hash
+               ->  Seq Scan on l l_1
+(17 rows)
+
+select count(*) from s left join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s left join s1 on s.u=s1.u left join l on s.u=l.u where s.nn not in (select nn from l);
+                    QUERY PLAN                     
+---------------------------------------------------
+ Aggregate
+   ->  Nested Loop Left Join
+         Join Filter: (s.u = s1.u)
+         ->  Nested Loop Anti Join
+               ->  Seq Scan on s
+               ->  Index Only Scan using l_nn on l
+                     Index Cond: (nn = s.nn)
+         ->  Seq Scan on s1
+(8 rows)
+
+select count(*) from s left join s1 on s.u=s1.u left join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     1
+(1 row)
+
+explain (costs false) select count(*) from s right join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         ->  Nested Loop
+               Join Filter: (s.u = s1.u)
+               ->  Nested Loop Anti Join
+                     ->  Seq Scan on s
+                     ->  Index Only Scan using l_nn on l l_1
+                           Index Cond: (nn = s.nn)
+               ->  Seq Scan on s1
+         ->  Index Only Scan using l_u on l
+               Index Cond: (u = s.u)
+(11 rows)
+
+select count(*) from s right join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Hash Anti Join
+         Hash Cond: (s.nn = l_1.nn)
+         ->  Hash Left Join
+               Hash Cond: (l.u = s.u)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Hash Join
+                           Hash Cond: (s1.u = s.u)
+                           ->  Seq Scan on s1
+                           ->  Hash
+                                 ->  Seq Scan on s
+         ->  Hash
+               ->  Seq Scan on l l_1
+(17 rows)
+
+select * from s join s1 on s.u=s1.u right join l on s.u=l.u where s.nn not in (select nn from l);
+ u | n | nn | p | u | n | n1 | nn | p | u | n | nn | p 
+---+---+----+---+---+---+----+----+---+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from s full join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         ->  Nested Loop Left Join
+               Join Filter: (s.u = s1.u)
+               ->  Nested Loop Anti Join
+                     ->  Seq Scan on s
+                     ->  Index Only Scan using l_nn on l l_1
+                           Index Cond: (nn = s.nn)
+               ->  Seq Scan on s1
+         ->  Index Only Scan using l_u on l
+               Index Cond: (u = s.u)
+(11 rows)
+
+select count(*) from s full join s1 on s.u=s1.u join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s join s1 on s.u=s1.u full join l on s.u=l.u where s.nn not in (select nn from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Hash Anti Join
+         Hash Cond: (s.nn = l_1.nn)
+         ->  Hash Full Join
+               Hash Cond: (l.u = s.u)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Hash Join
+                           Hash Cond: (s1.u = s.u)
+                           ->  Seq Scan on s1
+                           ->  Hash
+                                 ->  Seq Scan on s
+         ->  Hash
+               ->  Seq Scan on l l_1
+(17 rows)
+
+select count(*) from s join s1 on s.u=s1.u full join l on s.u=l.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn left join s1 on l.nn=s1.nn);
+                    QUERY PLAN                     
+---------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Nested Loop Left Join
+         Join Filter: (l.nn = s1.nn)
+         ->  Nested Loop Left Join
+               Join Filter: (l.nn = s_1.nn)
+               ->  Index Only Scan using l_nn on l
+                     Index Cond: (nn = s.nn)
+               ->  Seq Scan on s s_1
+         ->  Seq Scan on s1
+(10 rows)
+
+select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn left join s1 on l.nn=s1.nn);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn right join s1 on l.nn=s1.nn);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           Join Filter: (l.nn = s_1.nn)
+           ->  Nested Loop Left Join
+                 ->  Seq Scan on s1
+                 ->  Index Only Scan using l_nn on l
+                       Index Cond: (nn = s1.nn)
+           ->  Materialize
+                 ->  Seq Scan on s s_1
+(11 rows)
+
+select * from s where s.nn not in (select l.nn from l left join s on l.nn=s.nn right join s1 on l.nn=s1.nn);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Nested Loop Left Join
+         Join Filter: (l.nn = s_1.nn)
+         ->  Index Scan using l_nn on l
+               Index Cond: (nn = s.nn)
+               Filter: (((s.n = n) OR (n IS NULL) OR (s.n IS NULL)) AND (s.u = u))
+         ->  Seq Scan on s s_1
+(8 rows)
+
+select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l right join s on l.nn = s.nn);
+                QUERY PLAN                 
+-------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           ->  Seq Scan on s s_1
+           ->  Index Scan using l_nn on l
+                 Index Cond: (nn = s_1.nn)
+(7 rows)
+
+select * from s where (n,u,nn) not in (select l.n,l.u,l.nn from l left join s on l.nn = s.nn);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+--test reduce outer joins from outer query
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Hash Anti Join
+         Hash Cond: (s.nn = l_1.nn)
+         ->  Hash Left Join
+               Hash Cond: (l.nn = s.nn)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Seq Scan on s
+         ->  Hash
+               ->  Seq Scan on l l_1
+(13 rows)
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l) and s.u>0;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         ->  Nested Loop Anti Join
+               ->  Seq Scan on s
+                     Filter: (u > 0)
+               ->  Index Only Scan using l_nn on l l_1
+                     Index Cond: (nn = s.nn)
+         ->  Index Only Scan using l_nn on l
+               Index Cond: (nn = s.nn)
+(9 rows)
+
+select count(*) from s right join l on s.nn = l.nn where s.nn not in (select nn from l) and s.u>0;
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select nn from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         Join Filter: (s.u = s1.u)
+         ->  Nested Loop
+               ->  Nested Loop Anti Join
+                     ->  Seq Scan on s
+                     ->  Index Only Scan using l_nn on l l_1
+                           Index Cond: (nn = s.nn)
+               ->  Index Only Scan using l_nn on l
+                     Index Cond: (nn = s.nn)
+         ->  Seq Scan on s1
+(11 rows)
+
+select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn right join s1 on s.u = s1.u where s.nn not in (select nn from l);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Nested Loop Anti Join
+         ->  Nested Loop Left Join
+               Join Filter: (s.u = s1.u)
+               Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on s1
+               ->  Materialize
+                     ->  Nested Loop
+                           ->  Seq Scan on s
+                           ->  Index Only Scan using l_nn on l
+                                 Index Cond: (nn = s.nn)
+         ->  Index Only Scan using l_nn on l l_1
+               Index Cond: (nn = s.nn)
+(15 rows)
+
+select count(*) from s right join l on s.nn = l.nn right join s1 on s.u = s1.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select nn from l);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Nested Loop Left Join
+         Join Filter: (s.u = s1.u)
+         ->  Hash Anti Join
+               Hash Cond: (s.nn = l_1.nn)
+               ->  Hash Left Join
+                     Hash Cond: (l.nn = s.nn)
+                     Filter: ((s.nn IS NOT NULL) OR (NOT $0))
+                     ->  Seq Scan on l
+                     ->  Hash
+                           ->  Seq Scan on s
+               ->  Hash
+                     ->  Seq Scan on l l_1
+         ->  Seq Scan on s1
+(16 rows)
+
+select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select nn from l);
+ count 
+-------
+     0
+(1 row)
+
+--test reduce outer joins from subquery
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn);
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           ->  Seq Scan on s s_1
+           ->  Index Only Scan using l_nn on l
+                 Index Cond: (nn = s_1.nn)
+(7 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where l.u > 9);
+                QUERY PLAN                 
+-------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           ->  Seq Scan on s s_1
+           ->  Index Scan using l_nn on l
+                 Index Cond: (nn = s_1.nn)
+                 Filter: (u > 9)
+(8 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where l.u > 9);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(4 rows)
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where s.u > 9);
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           ->  Seq Scan on s s_1
+                 Filter: (u > 9)
+           ->  Index Only Scan using l_nn on l
+                 Index Cond: (nn = s_1.nn)
+(8 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn where s.u > 9);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           Join Filter: (l.n = s1.n)
+           ->  Seq Scan on s1
+           ->  Materialize
+                 ->  Nested Loop
+                       ->  Seq Scan on s s_1
+                       ->  Index Scan using l_nn on l
+                             Index Cond: (nn = s_1.nn)
+(11 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(2 rows)
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn right join s1 on l.n = s1.n);
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           Join Filter: (l.n = s1.n)
+           ->  Seq Scan on s1
+           ->  Materialize
+                 ->  Nested Loop
+                       ->  Seq Scan on s s_1
+                       ->  Index Scan using l_nn on l
+                             Index Cond: (nn = s_1.nn)
+(11 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn right join s1 on l.n = s1.n);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+                   QUERY PLAN                    
+-------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           Join Filter: (l.n = s1.n)
+           ->  Nested Loop Left Join
+                 ->  Seq Scan on s s_1
+                 ->  Index Scan using l_nn on l
+                       Index Cond: (nn = s_1.nn)
+           ->  Materialize
+                 ->  Seq Scan on s1
+(11 rows)
+
+select * from s where nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+--test reduce outer join on outer and sub-query
+explain (costs false) select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+                                    QUERY PLAN                                    
+----------------------------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         Join Filter: (s.u = s1.u)
+         ->  Seq Scan on s1
+         ->  Materialize
+               ->  Nested Loop
+                     ->  Seq Scan on s
+                           Filter: (NOT (hashed SubPlan 1))
+                           SubPlan 1
+                             ->  Nested Loop
+                                   Join Filter: (l_1.n = s1_1.n)
+                                   ->  Seq Scan on s1 s1_1
+                                   ->  Materialize
+                                         ->  Nested Loop
+                                               ->  Seq Scan on s s_1
+                                               ->  Index Scan using l_nn on l l_1
+                                                     Index Cond: (nn = s_1.nn)
+                     ->  Index Only Scan using l_nn on l
+                           Index Cond: (nn = s.nn)
+(19 rows)
+
+select count(*) from s right join l on s.nn = l.nn join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn join s1 on l.n = s1.n);
+ count 
+-------
+     1
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Aggregate
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s.nn)
+         Filter: (NOT (hashed SubPlan 1))
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Hash Right Join
+                     Hash Cond: (s1.u = s.u)
+                     ->  Seq Scan on s1
+                     ->  Hash
+                           ->  Seq Scan on s
+         SubPlan 1
+           ->  Nested Loop Left Join
+                 Join Filter: (l_1.n = s1_1.n)
+                 ->  Nested Loop Left Join
+                       ->  Seq Scan on s s_1
+                       ->  Index Scan using l_nn on l l_1
+                             Index Cond: (nn = s_1.nn)
+                 ->  Materialize
+                       ->  Seq Scan on s1 s1_1
+(20 rows)
+
+select count(*) from s right join l on s.nn = l.nn left join s1 on s.u = s1.u where s.nn not in (select l.nn from l right join s on l.nn = s.nn left join s1 on l.n = s1.n);
+ count 
+-------
+     0
+(1 row)
+
+-- test union all
+explain (costs false) select * from s as t where not exists
+(select 1 from (select n as y from l union all
+				select u as y from s union all
+				select nn as y from s) as v where t.n=v.y or v.y is null) and n is not null;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s t
+         Filter: (n IS NOT NULL)
+   ->  Append
+         ->  Bitmap Heap Scan on l
+               Recheck Cond: ((t.n = n) OR (n IS NULL))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n = t.n)
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n IS NULL)
+         ->  Seq Scan on s
+               Filter: ((t.n = u) OR (u IS NULL))
+         ->  Seq Scan on s s_1
+               Filter: ((t.n = nn) OR (nn IS NULL))
+(15 rows)
+
+select * from s as t where not exists
+(select 1 from (select n as y from l union all
+				select u as y from s union all
+				select nn as y from s) as v where t.n=v.y or v.y is null) and n is not null;
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Result
+           ->  Append
+                 ->  Seq Scan on l l_1
+                 ->  Seq Scan on s s_3
+                 ->  Seq Scan on s s_4
+   ->  Seq Scan on s
+         Filter: ((n IS NOT NULL) OR (NOT $0))
+   ->  Append
+         ->  Bitmap Heap Scan on l
+               Recheck Cond: ((s.n = n) OR (n IS NULL))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n = s.n)
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n IS NULL)
+         ->  Seq Scan on s s_1
+               Filter: ((s.n = u) OR (u IS NULL))
+         ->  Seq Scan on s s_2
+               Filter: ((s.n = nn) OR (nn IS NULL))
+(21 rows)
+
+select * from s where n not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select nn from l);
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Hash Anti Join
+         Hash Cond: (s.n = l_1.nn)
+         ->  Append
+               ->  Seq Scan on s
+                     Filter: ((n IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+                     Filter: ((u IS NOT NULL) OR (NOT $0))
+         ->  Hash
+               ->  Seq Scan on l l_1
+(12 rows)
+
+select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select nn from l);
+ count 
+-------
+     1
+(1 row)
+
+explain (costs false) select count(*) from
+(select n as x from s union all select n as x from l) t where t.x not in
+(select nn from empty);
+                   QUERY PLAN                   
+------------------------------------------------
+ Aggregate
+   ->  Append
+         ->  Seq Scan on s
+               Filter: (NOT (hashed SubPlan 1))
+               SubPlan 1
+                 ->  Seq Scan on empty
+         ->  Seq Scan on l
+               Filter: (NOT (hashed SubPlan 1))
+(8 rows)
+
+select count(*) from
+(select n as x from s union all select n as x from l) t where t.x not in
+(select nn from empty);
+ count 
+-------
+ 10004
+(1 row)
+
+explain (costs false) select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Finalize Aggregate
+   InitPlan 1 (returns $0)
+     ->  Result
+           ->  Append
+                 ->  Seq Scan on l l_2
+                 ->  Seq Scan on s s_3
+                 ->  Seq Scan on s s_4
+   ->  Gather
+         Workers Planned: 2
+         Params Evaluated: $0
+         ->  Partial Aggregate
+               ->  Nested Loop Anti Join
+                     ->  Parallel Append
+                           ->  Parallel Seq Scan on l
+                                 Filter: ((u IS NOT NULL) OR (NOT $0))
+                           ->  Parallel Seq Scan on s
+                                 Filter: ((n IS NOT NULL) OR (NOT $0))
+                     ->  Append
+                           ->  Bitmap Heap Scan on l l_1
+                                 Recheck Cond: ((l.u = n) OR (n IS NULL))
+                                 ->  BitmapOr
+                                       ->  Bitmap Index Scan on l_n
+                                             Index Cond: (n = l.u)
+                                       ->  Bitmap Index Scan on l_n
+                                             Index Cond: (n IS NULL)
+                           ->  Seq Scan on s s_1
+                                 Filter: ((l.u = u) OR (u IS NULL))
+                           ->  Seq Scan on s s_2
+                                 Filter: ((l.u = nn) OR (nn IS NULL))
+(29 rows)
+
+select count(*) from
+(select n as x from s union all select u as x from l) t where t.x not in
+(select n as y from l union all
+ select u as y from s union all
+ select nn as y from s);
+ count 
+-------
+     0
+(1 row)
+
+-- test multi-levels of NOT IN
+explain (costs false) select * from s where n not in (select n from s where n not in (select n from l));
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 3))
+   SubPlan 3
+     ->  Nested Loop Anti Join
+           InitPlan 2 (returns $2)
+             ->  Seq Scan on l
+           ->  Seq Scan on s s_1
+                 Filter: ((n IS NOT NULL) OR (NOT $2))
+           ->  Bitmap Heap Scan on l l_1
+                 Recheck Cond: ((s_1.n = n) OR (n IS NULL))
+                 ->  BitmapOr
+                       ->  Bitmap Index Scan on l_n
+                             Index Cond: (n = s_1.n)
+                       ->  Bitmap Index Scan on l_n
+                             Index Cond: (n IS NULL)
+(15 rows)
+
+select * from s where n not in (select n from s where n not in (select n from l));
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+       1 |       1 |       1 | foo
+       2 |       2 |       2 | foo
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(4 rows)
+
+explain (costs false) select * from s where n not in (select n from s where n not in (select u from l));
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 3))
+   SubPlan 3
+     ->  Nested Loop Anti Join
+           InitPlan 2 (returns $2)
+             ->  Seq Scan on l
+           ->  Seq Scan on s s_1
+                 Filter: ((n IS NOT NULL) OR (NOT $2))
+           ->  Index Only Scan using l_u on l l_1
+                 Index Cond: (u = s_1.n)
+(10 rows)
+
+select * from s where n not in (select n from s where n not in (select u from l));
+ u | n | nn |  p  
+---+---+----+-----
+ 1 | 1 |  1 | foo
+ 2 | 2 |  2 | foo
+(2 rows)
+
+explain (costs false) select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Aggregate
+   ->  Seq Scan on s
+         Filter: (NOT (SubPlan 2))
+         SubPlan 2
+           ->  Result
+                 One-Time Filter: (NOT $2)
+                 InitPlan 1 (returns $2)
+                   ->  Nested Loop Anti Join
+                         ->  Seq Scan on s1
+                               Filter: (n = s.n)
+                         ->  Bitmap Heap Scan on l
+                               Recheck Cond: ((s1.u = n) OR (n IS NULL))
+                               ->  BitmapOr
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n = s1.u)
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n IS NULL)
+                 ->  Seq Scan on s1 s1_1
+(18 rows)
+
+select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from s1);
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Seq Scan on s
+   Filter: ((NOT (hashed SubPlan 1)) AND (NOT (hashed SubPlan 2)) AND (NOT (hashed SubPlan 3)))
+   SubPlan 1
+     ->  Seq Scan on s1
+   SubPlan 2
+     ->  Seq Scan on s1 s1_1
+   SubPlan 3
+     ->  Seq Scan on s1 s1_2
+(8 rows)
+
+select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from s1);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from l);
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+         Filter: ((NOT (hashed SubPlan 1)) AND (NOT (hashed SubPlan 2)))
+         SubPlan 1
+           ->  Seq Scan on s1
+         SubPlan 2
+           ->  Seq Scan on s1 s1_1
+   ->  Index Only Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+(9 rows)
+
+select * from s where n not in (select n from s1) and u not in (select u from s1) and nn not in (select nn from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n))
+and nn not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Aggregate
+   ->  Seq Scan on s
+         Filter: ((NOT (SubPlan 2)) AND (NOT (SubPlan 4)))
+         SubPlan 2
+           ->  Result
+                 One-Time Filter: (NOT $2)
+                 InitPlan 1 (returns $2)
+                   ->  Nested Loop Anti Join
+                         ->  Seq Scan on s1
+                               Filter: (n = s.n)
+                         ->  Bitmap Heap Scan on l
+                               Recheck Cond: ((s1.u = n) OR (n IS NULL))
+                               ->  BitmapOr
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n = s1.u)
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n IS NULL)
+                 ->  Seq Scan on s1 s1_1
+         SubPlan 4
+           ->  Result
+                 One-Time Filter: (NOT $6)
+                 InitPlan 3 (returns $6)
+                   ->  Nested Loop Anti Join
+                         ->  Seq Scan on s1 s1_2
+                               Filter: (n = s.n)
+                         ->  Bitmap Heap Scan on l l_1
+                               Recheck Cond: ((s1_2.u = n) OR (n IS NULL))
+                               ->  BitmapOr
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n = s1_2.u)
+                                     ->  Bitmap Index Scan on l_n
+                                           Index Cond: (n IS NULL)
+                 ->  Seq Scan on s1 s1_3
+(33 rows)
+
+select count(*) from s where u not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n))
+and nn not in
+(select n from s1 where not exists
+ (select 1 from (select n from s1 where u not in (select n from l)) t where t.n = s.n));
+ count 
+-------
+     0
+(1 row)
+
+--test COALESCE
+explain (costs false) select * from s where COALESCE(n, -1) not in (select COALESCE(n, -1) from l);
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Anti Join
+   Hash Cond: (COALESCE(s.n, '-1'::integer) = COALESCE(l.n, '-1'::integer))
+   ->  Seq Scan on s
+   ->  Hash
+         ->  Seq Scan on l
+(5 rows)
+
+select * from s where COALESCE(n, -1) not in (select COALESCE(n, -1) from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where COALESCE(n, NULL, -1) not in (select COALESCE(n, NULL, -1) from l);
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Anti Join
+   Hash Cond: (COALESCE(s.n, '-1'::integer) = COALESCE(l.n, '-1'::integer))
+   ->  Seq Scan on s
+   ->  Hash
+         ->  Seq Scan on l
+(5 rows)
+
+select * from s where COALESCE(n, NULL, -1) not in (select COALESCE(n, NULL, -1) from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where COALESCE(n, NULL, NULL) not in (select COALESCE(n, NULL, NULL) from l);
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: ((COALESCE(s.n) = COALESCE(l.n)) OR (COALESCE(l.n) IS NULL))
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: ((COALESCE(n) IS NOT NULL) OR (NOT $0))
+   ->  Materialize
+         ->  Seq Scan on l
+(8 rows)
+
+select * from s where COALESCE(n, NULL, NULL) not in (select COALESCE(n, NULL, NULL) from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where COALESCE(n, nn) not in (select COALESCE(n, nn) from l);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Hash Anti Join
+   Hash Cond: (COALESCE(s.n, s.nn) = COALESCE(l.n, l.nn))
+   ->  Seq Scan on s
+   ->  Hash
+         ->  Seq Scan on l
+(5 rows)
+
+select * from s where COALESCE(n, nn) not in (select COALESCE(n, nn) from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where COALESCE(nn, NULL) not in (select COALESCE(nn, NULL) from l);
+                   QUERY PLAN                   
+------------------------------------------------
+ Hash Anti Join
+   Hash Cond: (COALESCE(s.nn) = COALESCE(l.nn))
+   ->  Seq Scan on s
+   ->  Hash
+         ->  Seq Scan on l
+(5 rows)
+
+select * from s where COALESCE(nn, NULL) not in (select COALESCE(nn, NULL) from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where (COALESCE(n, -1), nn, COALESCE(n, u)) not in (select COALESCE(n, -1), nn, COALESCE(n, u) from l);
+                                                       QUERY PLAN                                                        
+-------------------------------------------------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Scan using l_nn on l
+         Index Cond: (nn = s.nn)
+         Filter: ((COALESCE(s.n, '-1'::integer) = COALESCE(n, '-1'::integer)) AND (COALESCE(s.n, s.u) = COALESCE(n, u)))
+(5 rows)
+
+select * from s where (COALESCE(n, -1), nn, COALESCE(n, u)) not in (select COALESCE(n, -1), nn, COALESCE(n, u) from l);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(2 rows)
+
+-- test miscellaneous outer nullable cases
+explain (costs false) select * from s where (n,n) not in (select n,n from l);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: (((s.n = l.n) AND (s.n = l.n)) IS NOT FALSE)
+   ->  Seq Scan on s
+   ->  Materialize
+         ->  Seq Scan on l
+(5 rows)
+
+select * from s where (n,n) not in (select n,n from l);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l);
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Nested Loop Anti Join
+   Join Filter: (((s.n = l_1.n) AND (s.u = l_1.u) AND (s.nn = l_1.nn)) IS NOT FALSE)
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s.nn)
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Seq Scan on s
+   ->  Materialize
+         ->  Seq Scan on l l_1
+(9 rows)
+
+select * from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l);
+ u | n | nn | p | u | n | nn | p 
+---+---+----+---+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l where u < 0);
+                 QUERY PLAN                  
+---------------------------------------------
+ Aggregate
+   ->  Hash Left Join
+         Hash Cond: (l.nn = s.nn)
+         Filter: (NOT (hashed SubPlan 1))
+         ->  Seq Scan on l
+         ->  Hash
+               ->  Seq Scan on s
+         SubPlan 1
+           ->  Index Scan using l_u on l l_1
+                 Index Cond: (u < 0)
+(10 rows)
+
+select count(*) from s right join l on s.nn = l.nn where (s.n,s.u,s.nn) not in (select n,u,nn from l where u < 0);
+ count 
+-------
+ 10000
+(1 row)
+
+explain (costs false) select * from s where (n,n,n) not in (select distinct n,n,n from l where u > 0 limit 3) order by n;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Sort
+   Sort Key: s.n
+   ->  Seq Scan on s
+         Filter: (NOT (hashed SubPlan 1))
+         SubPlan 1
+           ->  Limit
+                 ->  Unique
+                       ->  Index Scan using l_n on l
+                             Filter: (u > 0)
+(9 rows)
+
+select * from s where (n,n,n) not in (select distinct n,n,n from l where u > 0 limit 3) order by n;
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+--test outer has strict predicate or inner join
+explain (costs false) select * from s where n not in (select n from l) and n > 0;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+         Filter: (n > 0)
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(10 rows)
+
+select * from s where n not in (select n from l) and n > 0;
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select n from l) and u > 0;
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+   ->  Seq Scan on s
+         Filter: (((n IS NOT NULL) OR (NOT $0)) AND (u > 0))
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(12 rows)
+
+select * from s where n not in (select n from l) and u > 0;
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select n from l) and n is not null;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+         Filter: (n IS NOT NULL)
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(10 rows)
+
+select * from s where n not in (select n from l) and n is not null;
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s join l on s.n = l.n where s.n not in (select n from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Nested Loop
+   ->  Nested Loop Anti Join
+         ->  Seq Scan on s
+         ->  Bitmap Heap Scan on l l_1
+               Recheck Cond: ((s.n = n) OR (n IS NULL))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n = s.n)
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n IS NULL)
+   ->  Index Scan using l_n on l
+         Index Cond: (n = s.n)
+(12 rows)
+
+select * from s join l on s.n = l.n where s.n not in (select n from l);
+ u | n | nn | p | u | n | nn | p 
+---+---+----+---+---+---+----+---
+(0 rows)
+
+explain (costs false) select count(*) from s right join l on s.n = l.n where s.n not in (select n from l);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Nested Loop Anti Join
+         ->  Hash Left Join
+               Hash Cond: (l.n = s.n)
+               Filter: ((s.n IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on l
+               ->  Hash
+                     ->  Seq Scan on s
+         ->  Bitmap Heap Scan on l l_1
+               Recheck Cond: ((s.n = n) OR (n IS NULL))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n = s.n)
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n IS NULL)
+(17 rows)
+
+select count(*) from s right join l on s.n = l.n where s.n not in (select n from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select n from l);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Aggregate
+   ->  Nested Loop
+         Join Filter: (s.u = s1.u)
+         ->  Nested Loop
+               ->  Nested Loop Anti Join
+                     ->  Seq Scan on s
+                     ->  Bitmap Heap Scan on l l_1
+                           Recheck Cond: ((s.n = n) OR (n IS NULL))
+                           ->  BitmapOr
+                                 ->  Bitmap Index Scan on l_n
+                                       Index Cond: (n = s.n)
+                                 ->  Bitmap Index Scan on l_n
+                                       Index Cond: (n IS NULL)
+               ->  Index Only Scan using l_n on l
+                     Index Cond: (n = s.n)
+         ->  Seq Scan on s1
+(16 rows)
+
+select count(*) from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select n from l);
+ count 
+-------
+     0
+(1 row)
+
+explain (costs false) select count(*) from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select n from l);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Aggregate
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_2
+   ->  Nested Loop Anti Join
+         ->  Nested Loop Left Join
+               Join Filter: (s.u = s1.u)
+               Filter: ((s.n IS NOT NULL) OR (NOT $0))
+               ->  Seq Scan on s1
+               ->  Materialize
+                     ->  Nested Loop
+                           ->  Seq Scan on s
+                           ->  Index Only Scan using l_n on l
+                                 Index Cond: (n = s.n)
+         ->  Bitmap Heap Scan on l l_1
+               Recheck Cond: ((s.n = n) OR (n IS NULL))
+               ->  BitmapOr
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n = s.n)
+                     ->  Bitmap Index Scan on l_n
+                           Index Cond: (n IS NULL)
+(20 rows)
+
+select count(*) from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select n from l);
+ count 
+-------
+     0
+(1 row)
+
+--test inner has strict predicate or inner join
+explain (costs false) select * from s where u not in (select n from l where n > 0);
+                 QUERY PLAN                  
+---------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Only Scan using l_n on l
+         Index Cond: ((n = s.u) AND (n > 0))
+(4 rows)
+
+select * from s where u not in (select n from l where n > 0);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where u not in (select n from l where u > 0);
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.u = n) OR (n IS NULL))
+         Filter: (u > 0)
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.u)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(10 rows)
+
+select * from s where u not in (select n from l where u > 0);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where u not in (select n from l where n is not null);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+   ->  Index Only Scan using l_n on l
+         Index Cond: ((n = s.u) AND (n IS NOT NULL))
+(4 rows)
+
+select * from s where u not in (select n from l where n is not null);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n=s.n);
+                  QUERY PLAN                  
+----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           ->  Seq Scan on s s_1
+           ->  Index Only Scan using l_n on l
+                 Index Cond: (n = s_1.n)
+(7 rows)
+
+select * from s where u not in (select l.n from l join s on l.n=s.n);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(2 rows)
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.u=s.u);
+               QUERY PLAN                
+-----------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           ->  Seq Scan on s s_1
+           ->  Index Scan using l_u on l
+                 Index Cond: (u = s_1.u)
+(7 rows)
+
+select * from s where u not in (select l.n from l join s on l.u=s.u);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n = s.n);
+                  QUERY PLAN                  
+----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           ->  Seq Scan on s s_1
+           ->  Index Only Scan using l_n on l
+                 Index Cond: (n = s_1.n)
+(7 rows)
+
+select * from s where u not in (select l.n from l join s on l.n = s.n);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(2 rows)
+
+explain (costs false) select * from s where u not in (select l.n from l right join s on l.n = s.n);
+                  QUERY PLAN                  
+----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           ->  Seq Scan on s s_1
+           ->  Index Only Scan using l_n on l
+                 Index Cond: (n = s_1.n)
+(7 rows)
+
+select * from s where u not in (select l.n from l right join s on l.n = s.n);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where u not in (select l.n from l right join s on l.n=s.n join s1 on l.n=s1.n);
+                  QUERY PLAN                  
+----------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop
+           ->  Nested Loop
+                 Join Filter: (s_1.n = s1.n)
+                 ->  Seq Scan on s1
+                 ->  Materialize
+                       ->  Seq Scan on s s_1
+           ->  Index Only Scan using l_n on l
+                 Index Cond: (n = s_1.n)
+(11 rows)
+
+select * from s where u not in (select l.n from l right join s on l.n=s.n join s1 on l.n=s1.n);
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+       3 |         |       3 | foo
+(2 rows)
+
+explain (costs false) select * from s where u not in (select l.n from l join s on l.n=s.n right join s1 on l.n=s1.n);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Seq Scan on s
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Nested Loop Left Join
+           Join Filter: (l.n = s1.n)
+           ->  Seq Scan on s1
+           ->  Materialize
+                 ->  Nested Loop
+                       ->  Seq Scan on s s_1
+                       ->  Index Only Scan using l_n on l
+                             Index Cond: (n = s_1.n)
+(11 rows)
+
+select * from s where u not in (select l.n from l join s on l.n=s.n right join s1 on l.n=s1.n);
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+--test both sides have strict predicate or inner join
+explain (costs false) select * from s where n not in (select n from l where n > 0) and n > 0;
+                 QUERY PLAN                  
+---------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+         Filter: (n > 0)
+   ->  Index Only Scan using l_n on l
+         Index Cond: ((n = s.n) AND (n > 0))
+(5 rows)
+
+select * from s where n not in (select n from l where n > 0) and n > 0;
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s where n not in (select n from l where u > 0) and n > 0;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop Anti Join
+   ->  Seq Scan on s
+         Filter: (n > 0)
+   ->  Bitmap Heap Scan on l
+         Recheck Cond: ((s.n = n) OR (n IS NULL))
+         Filter: (u > 0)
+         ->  BitmapOr
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n = s.n)
+               ->  Bitmap Index Scan on l_n
+                     Index Cond: (n IS NULL)
+(11 rows)
+
+select * from s where n not in (select n from l where u > 0) and n > 0;
+ u | n | nn | p 
+---+---+----+---
+(0 rows)
+
+explain (costs false) select * from s where n not in (select n from l where n > 0) and u > 0;
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop Anti Join
+   InitPlan 1 (returns $0)
+     ->  Seq Scan on l l_1
+           Filter: (n > 0)
+   ->  Seq Scan on s
+         Filter: (((n IS NOT NULL) OR (NOT $0)) AND (u > 0))
+   ->  Index Only Scan using l_n on l
+         Index Cond: ((n = s.n) AND (n > 0))
+(8 rows)
+
+select * from s where n not in (select n from l where n > 0) and u > 0;
+    u    |    n    |   nn    |   p    
+---------+---------+---------+--------
+ 1000002 | 1000002 | 1000002 | foofoo
+(1 row)
+
+explain (costs false) select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l right join s on l.n=s.n join s s1 on l.n=s1.n);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Nested Loop
+   Join Filter: (s.u = s1.u)
+   ->  Seq Scan on s1
+   ->  Materialize
+         ->  Nested Loop
+               ->  Seq Scan on s
+                     Filter: (NOT (hashed SubPlan 1))
+                     SubPlan 1
+                       ->  Nested Loop
+                             ->  Nested Loop
+                                   Join Filter: (s_1.n = s1_1.n)
+                                   ->  Seq Scan on s s_1
+                                   ->  Materialize
+                                         ->  Seq Scan on s s1_1
+                             ->  Index Only Scan using l_n on l l_1
+                                   Index Cond: (n = s_1.n)
+               ->  Index Scan using l_n on l
+                     Index Cond: (n = s.n)
+(18 rows)
+
+select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l right join s on l.n=s.n join s s1 on l.n=s1.n);
+ u | n | nn | p | u | n | nn | p | u | n | n1 | nn | p 
+---+---+----+---+---+---+----+---+---+---+----+----+---
+(0 rows)
+
+explain (costs false) select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Nested Loop
+   Join Filter: (s.u = s1.u)
+   ->  Seq Scan on s1
+   ->  Materialize
+         ->  Nested Loop
+               ->  Seq Scan on s
+                     Filter: (NOT (hashed SubPlan 1))
+                     SubPlan 1
+                       ->  Nested Loop Left Join
+                             Join Filter: (l_1.n = s1_1.n)
+                             ->  Seq Scan on s s1_1
+                             ->  Materialize
+                                   ->  Nested Loop
+                                         ->  Seq Scan on s s_1
+                                         ->  Index Only Scan using l_n on l l_1
+                                               Index Cond: (n = s_1.n)
+               ->  Index Scan using l_n on l
+                     Index Cond: (n = s.n)
+(18 rows)
+
+select * from s right join l on s.n = l.n join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+ u | n | nn | p | u | n | nn | p | u | n | n1 | nn | p 
+---+---+----+---+---+---+----+---+---+---+----+----+---
+(0 rows)
+
+explain (costs false) select * from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: (s.u = s1.u)
+   Filter: (NOT (hashed SubPlan 1))
+   ->  Seq Scan on s1
+   ->  Materialize
+         ->  Nested Loop
+               ->  Seq Scan on s
+               ->  Index Scan using l_n on l
+                     Index Cond: (n = s.n)
+   SubPlan 1
+     ->  Nested Loop Left Join
+           Join Filter: (l_1.n = s1_1.n)
+           ->  Seq Scan on s s1_1
+           ->  Materialize
+                 ->  Nested Loop
+                       ->  Seq Scan on s s_1
+                       ->  Index Only Scan using l_n on l l_1
+                             Index Cond: (n = s_1.n)
+(18 rows)
+
+select * from s join l on s.n = l.n right join s1 on s.u = s1.u where s.n not in (select l.n from l join s on l.n=s.n right join s s1 on l.n=s1.n);
+ u | n | nn | p | u | n | nn | p | u | n | n1 | nn | p 
+---+---+----+---+---+---+----+---+---+---+----+----+---
+(0 rows)
+
+-- clean up
+set work_mem = 4000;
+drop table s;
+drop table s1;
+drop table l;
+drop table empty;

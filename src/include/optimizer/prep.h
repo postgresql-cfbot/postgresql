@@ -26,7 +26,7 @@ extern void pull_up_sublinks(PlannerInfo *root);
 extern void inline_set_returning_functions(PlannerInfo *root);
 extern void pull_up_subqueries(PlannerInfo *root);
 extern void flatten_simple_union_all(PlannerInfo *root);
-extern void reduce_outer_joins(PlannerInfo *root);
+extern void reduce_outer_joins(Query *parse);
 extern void remove_useless_result_rtes(PlannerInfo *root);
 extern Relids get_relids_in_jointree(Node *jtnode, bool include_joins);
 extern Relids get_relids_for_join(Query *query, int joinrelid);

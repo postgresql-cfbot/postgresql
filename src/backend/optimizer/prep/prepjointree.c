@@ -104,7 +104,7 @@ static Query *pullup_replace_vars_subquery(Query *query,
 static reduce_outer_joins_state *reduce_outer_joins_pass1(Node *jtnode);
 static void reduce_outer_joins_pass2(Node *jtnode,
 						 reduce_outer_joins_state *state,
-						 PlannerInfo *root,
+						 Query *parse,
 						 Relids nonnullable_rels,
 						 List *nonnullable_vars,
 						 List *forced_null_vars);
@@ -256,6 +256,13 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		}
 		/* Build the replacement FromExpr; no quals yet */
 		newf = makeFromExpr(newfromlist, NULL);
+		/*
+		 * Replace parse->jointree with newf now because we might modify join types
+		 * during reduce_outer_joins() in convert_NOT_IN_to_join() which is called
+		 * in pull_up_sublinks_qual_recurse() that's coming up next.
+		 */
+		newf->quals = f->quals;
+		root->parse->jointree = newf;
 		/* Set up a link representing the rebuilt jointree */
 		jtlink = (Node *) newf;
 		/* Now process qual --- all children are available for use */
@@ -388,7 +395,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		/* Is it a convertible ANY or EXISTS clause? */
 		if (sublink->subLinkType == ANY_SUBLINK)
 		{
-			if ((j = convert_ANY_sublink_to_join(root, sublink,
+			if ((j = convert_ANY_sublink_to_join(root, sublink, false, NULL,
 												 available_rels1)) != NULL)
 			{
 				/* Yes; insert the new join node into the join tree */
@@ -414,7 +421,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 				return NULL;
 			}
 			if (available_rels2 != NULL &&
-				(j = convert_ANY_sublink_to_join(root, sublink,
+				(j = convert_ANY_sublink_to_join(root, sublink, false, NULL,
 												 available_rels2)) != NULL)
 			{
 				/* Yes; insert the new join node into the join tree */
@@ -558,6 +565,68 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 															 NULL, NULL);
 					/* Return NULL representing constant TRUE */
 					return NULL;
+				}
+			}
+			else if (sublink->subLinkType == ANY_SUBLINK)
+			{
+				Node *pullout = NULL;
+
+				if ((j = convert_ANY_sublink_to_join(root, sublink, true, &pullout,
+													 available_rels1)) != NULL)
+				{
+					/* Yes; insert the new join node into the join tree */
+					j->larg = *jtlink1;
+					*jtlink1 = (Node *) j;
+					/* Recursively process pulled-up jointree nodes */
+					j->rarg = pull_up_sublinks_jointree_recurse(root,
+																j->rarg,
+																&child_rels);
+
+					/*
+					 * Now recursively process the pulled-up quals.  Any inserted
+					 * joins can get stacked onto either j->larg or j->rarg,
+					 * depending on which rels they reference.
+					 */
+					j->quals = pull_up_sublinks_qual_recurse(root,
+															 j->quals,
+															 &j->larg,
+															 available_rels1,
+															 &j->rarg,
+															 child_rels);
+					/*
+					 * Return pullout predicate (x is NOT NULL) if it's not null,
+					 * otherwise return NULL representing constant TRUE.
+					 */
+					return pullout? pullout : NULL;
+				}
+				if (available_rels2 != NULL &&
+					(j = convert_ANY_sublink_to_join(root, sublink, true, &pullout,
+													 available_rels2)) != NULL)
+				{
+					/* Yes; insert the new join node into the join tree */
+					j->larg = *jtlink2;
+					*jtlink2 = (Node *) j;
+					/* Recursively process pulled-up jointree nodes */
+					j->rarg = pull_up_sublinks_jointree_recurse(root,
+																j->rarg,
+																&child_rels);
+
+					/*
+					 * Now recursively process the pulled-up quals.  Any inserted
+					 * joins can get stacked onto either j->larg or j->rarg,
+					 * depending on which rels they reference.
+					 */
+					j->quals = pull_up_sublinks_qual_recurse(root,
+															 j->quals,
+															 &j->larg,
+															 available_rels2,
+															 &j->rarg,
+															 child_rels);
+					/*
+					 * Return pullout predicate (x is NOT NULL) if it's not null,
+					 * otherwise return NULL representing constant TRUE.
+					 */
+					return pullout? pullout : NULL;
 				}
 			}
 		}
@@ -2377,7 +2446,7 @@ flatten_simple_union_all(PlannerInfo *root)
  * alias-var expansion).
  */
 void
-reduce_outer_joins(PlannerInfo *root)
+reduce_outer_joins(Query *parse)
 {
 	reduce_outer_joins_state *state;
 
@@ -2390,14 +2459,14 @@ reduce_outer_joins(PlannerInfo *root)
 	 * join(s) below each side of each join clause. The second pass examines
 	 * qual clauses and changes join types as it descends the tree.
 	 */
-	state = reduce_outer_joins_pass1((Node *) root->parse->jointree);
+	state = reduce_outer_joins_pass1((Node *) parse->jointree);
 
 	/* planner.c shouldn't have called me if no outer joins */
 	if (state == NULL || !state->contains_outer)
 		elog(ERROR, "so where are the outer joins?");
 
-	reduce_outer_joins_pass2((Node *) root->parse->jointree,
-							 state, root, NULL, NIL, NIL);
+	reduce_outer_joins_pass2((Node *) parse->jointree,
+							 state, parse, NULL, NIL, NIL);
 }
 
 /*
@@ -2480,7 +2549,7 @@ reduce_outer_joins_pass1(Node *jtnode)
 static void
 reduce_outer_joins_pass2(Node *jtnode,
 						 reduce_outer_joins_state *state,
-						 PlannerInfo *root,
+						 Query *parse,
 						 Relids nonnullable_rels,
 						 List *nonnullable_vars,
 						 List *forced_null_vars)
@@ -2520,7 +2589,7 @@ reduce_outer_joins_pass2(Node *jtnode,
 			reduce_outer_joins_state *sub_state = lfirst(s);
 
 			if (sub_state->contains_outer)
-				reduce_outer_joins_pass2(lfirst(l), sub_state, root,
+				reduce_outer_joins_pass2(lfirst(l), sub_state, parse,
 										 pass_nonnullable_rels,
 										 pass_nonnullable_vars,
 										 pass_forced_null_vars);
@@ -2632,7 +2701,7 @@ reduce_outer_joins_pass2(Node *jtnode,
 		/* Apply the jointype change, if any, to both jointree node and RTE */
 		if (rtindex && jointype != j->jointype)
 		{
-			RangeTblEntry *rte = rt_fetch(rtindex, root->parse->rtable);
+			RangeTblEntry *rte = rt_fetch(rtindex, parse->rtable);
 
 			Assert(rte->rtekind == RTE_JOIN);
 			Assert(rte->jointype == j->jointype);
@@ -2717,7 +2786,7 @@ reduce_outer_joins_pass2(Node *jtnode,
 					pass_nonnullable_vars = NIL;
 					pass_forced_null_vars = NIL;
 				}
-				reduce_outer_joins_pass2(j->larg, left_state, root,
+				reduce_outer_joins_pass2(j->larg, left_state, parse,
 										 pass_nonnullable_rels,
 										 pass_nonnullable_vars,
 										 pass_forced_null_vars);
@@ -2739,7 +2808,7 @@ reduce_outer_joins_pass2(Node *jtnode,
 					pass_nonnullable_vars = NIL;
 					pass_forced_null_vars = NIL;
 				}
-				reduce_outer_joins_pass2(j->rarg, right_state, root,
+				reduce_outer_joins_pass2(j->rarg, right_state, parse,
 										 pass_nonnullable_rels,
 										 pass_nonnullable_vars,
 										 pass_forced_null_vars);

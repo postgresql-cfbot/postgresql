@@ -688,27 +688,6 @@ exec_command_crosstabview(PsqlScanState scan_state, bool active_branch)
 }
 
 /*
- * \ddp pattern1 [pattern2]
- * \describe-defined-configuration-setting pattern1 [pattern2]
- */
-static bool
-describe_defined_configuration_setting(PsqlScanState scan_state, const char *pattern)
-{
-	char	   *pattern2 = NULL;
-	bool		success;
-
-	if (pattern)
-		pattern2 = psql_scan_slash_option(scan_state,
-										  OT_NORMAL, NULL, true);
-	success = listDbRoleSettings(pattern, pattern2);
-
-	if (pattern2)
-		free(pattern2);
-
-	return success;
-}
-
-/*
  * \d* commands
  */
 static backslashResult
@@ -735,7 +714,11 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case '\0':
 			case '+':
 			case 'S':
-				success = describeAnything(pattern, show_verbose, show_system);
+				if (pattern)
+					success = describeTableDetails(pattern, show_verbose, show_system);
+				else
+					/* standard listing of interesting things */
+					success = listTables("tvmsE", NULL, show_verbose, show_system);
 				break;
 			case 'A':
 				success = describeAccessMethods(pattern, show_verbose);
@@ -814,7 +797,17 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				break;
 			case 'r':
 				if (cmd[2] == 'd' && cmd[3] == 's')
-					success = describe_defined_configuration_setting(scan_state, pattern);
+				{
+					char	   *pattern2 = NULL;
+
+					if (pattern)
+						pattern2 = psql_scan_slash_option(scan_state,
+														  OT_NORMAL, NULL, true);
+					success = listDbRoleSettings(pattern, pattern2);
+
+					if (pattern2)
+						free(pattern2);
+				}
 				else
 					status = PSQL_CMD_UNKNOWN;
 				break;
@@ -822,7 +815,10 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				switch (cmd[2])
 				{
 					case 'p':
-						success = describeReplicationPublication(pattern, show_verbose);
+						if (show_verbose)
+							success = describePublications(pattern);
+						else
+							success = listPublications(pattern);
 						break;
 					case 's':
 						success = describeSubscriptions(pattern, show_verbose);
@@ -855,10 +851,12 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 						break;
 				}
 				break;
-			case 'e':
-				/* SQL/MED subsystem and longform describe */
+			case 'e':			/* SQL/MED subsystem */
 				switch (cmd[2])
 				{
+					case 's':
+						success = listForeignServers(pattern, show_verbose);
+						break;
 					case 'u':
 						success = listUserMappings(pattern, show_verbose);
 						break;
@@ -868,148 +866,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					case 't':
 						success = listForeignTables(pattern, show_verbose);
 						break;
-					case 's':
-						if (cmd[3] != 'c')
-						{
-							/* no \describe, just \des */
-							success = listForeignServers(pattern, show_verbose);
-							break;
-						}
-						else if (strncmp(cmd, "describe", strlen("describe")) == 0)
-						{
-							char	*command_detail = pg_malloc(1 + strlen(cmd) - strlen("describe"));
-							char	*suffix_pos;
-
-							/* copy everyting after "describe[-]" to the detail string */
-							strcpy(command_detail,
-								   (cmd[strlen("describe")] == '-') ?
-									&cmd[strlen("describe-")] :
-									&cmd[strlen("describe")]);
-
-							/* search for and remove first -verbose found */
-							show_verbose = false;
-							suffix_pos = strstr(command_detail, "-verbose");
-							if  (suffix_pos != NULL)
-							{
-								show_verbose = true;
-								strcpy(suffix_pos, &suffix_pos[strlen("-verbose")]);
-							}
-
-							/* search for and remove first -system found */
-							show_system = false;
-							suffix_pos = strstr(command_detail, "-system");
-							if  (suffix_pos != NULL)
-							{
-								show_system = true;
-								strcpy(suffix_pos, &suffix_pos[strlen("-system")]);
-							}
-
-							/* most common case is \describe + suffixes */
-							if (command_detail[0] == '\0')
-								success = describeAnything(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "access-method") == 0)
-								success = describeAccessMethods(pattern, show_verbose);
-							else if (strcmp(command_detail, "aggregate-function") == 0)
-								success = describeAggregates(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "cast") == 0)
-								success = listCasts(pattern, show_verbose);
-							else if (strcmp(command_detail, "constraint") == 0)
-								success = objectDescription(pattern, show_system);
-							else if (strcmp(command_detail, "conversion") == 0)
-								success = listConversions(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "constraint") == 0)
-								success = listConversions(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "collation") == 0)
-								success = listCollations(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "defined-configuration-setting") == 0)
-								success = describe_defined_configuration_setting(scan_state, pattern);
-							else if (strcmp(command_detail, "default-access-privelege") == 0)
-								success = listDefaultACLs(pattern);
-							else if (strcmp(command_detail, "domain") == 0)
-								success = listDomains(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "extension") == 0)
-								success = describeExtension(pattern, show_verbose);
-							else if (strcmp(command_detail, "event-trigger") == 0)
-								success = listEventTriggers(pattern, show_verbose);
-							else if (strcmp(command_detail, "foreign-data-wrapper") == 0)
-								success = listForeignDataWrappers(pattern, show_verbose);
-							else if (strcmp(command_detail, "foreign-server") == 0)
-								success = listForeignServers(pattern, show_verbose);
-							else if (strcmp(command_detail, "foreign-table") == 0)
-								success = listForeignTables(pattern, show_verbose);
-							else if (strcmp(command_detail, "function") == 0)
-								success = describeFunctions("\0", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "index") == 0)
-								success = listTables("i", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "materialized-view") == 0)
-								success = listTables("m", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "namespace") == 0)
-								success = listSchemas(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "normal-function") == 0)
-								success = describeFunctions("n", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "operator") == 0)
-								success = describeOperators(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "operator-class") == 0)
-								success = objectDescription(pattern, show_system);
-							else if (strcmp(command_detail, "operator-family") == 0)
-								success = objectDescription(pattern, show_system);
-							else if (strcmp(command_detail, "privilege") == 0)
-								success = permissionsList(pattern);
-							else if (strcmp(command_detail, "procedural-language") == 0)
-								success = listLanguages(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "procedure") == 0)
-								success = describeFunctions("p", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "replication-publication") == 0)
-								success = describeReplicationPublication(pattern, show_verbose);
-							else if (strcmp(command_detail, "replication-subscription") == 0)
-								success = describeSubscriptions(pattern, show_verbose);
-							else if (strcmp(command_detail, "role") == 0)
-								success = describeRoles(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "rule") == 0)
-								success = objectDescription(pattern, show_system);
-							else if (strcmp(command_detail, "schema") == 0)
-								success = listSchemas(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "sequence") == 0)
-								success = listTables("s", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "table") == 0)
-								success = listTables("t", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "tablespace") == 0)
-								success = describeTablespaces(pattern, show_verbose);
-							else if (strcmp(command_detail, "text-search-configuration") == 0)
-								success = listTSConfigs(pattern, show_verbose);
-							else if (strcmp(command_detail, "text-search-dictionary") == 0)
-								success = listTSDictionaries(pattern, show_verbose);
-							else if (strcmp(command_detail, "text-search-parser") == 0)
-								success = listTSParsers(pattern, show_verbose);
-							else if (strcmp(command_detail, "text-search-templates") == 0)
-								success = listTSTemplates(pattern, show_verbose);
-							else if (strcmp(command_detail, "trigger") == 0)
-								success = objectDescription(pattern, show_system);
-							else if (strcmp(command_detail, "trigger-function") == 0)
-								success = describeFunctions("t", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "type") == 0)
-								success = describeTypes(pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "user-mapping") == 0)
-								success = listUserMappings(pattern, show_verbose);
-							else if (strcmp(command_detail, "view") == 0)
-								success = listTables("v", pattern, show_verbose, show_system);
-							else if (strcmp(command_detail, "window-function") == 0)
-								success = describeFunctions("w", pattern, show_verbose, show_system);
-							else
-								status = PSQL_CMD_UNKNOWN;
-							free(command_detail);
-							break;
-						}
-						else
-							status = PSQL_CMD_UNKNOWN;
-						break;
 					default:
 						status = PSQL_CMD_UNKNOWN;
 						break;
 				}
 				break;
 			case 'x':			/* Extensions */
-				success = describeExtension(pattern, show_verbose);
+				if (show_verbose)
+					success = listExtensionContents(pattern);
+				else
+					success = listExtensions(pattern);
 				break;
 			case 'y':			/* Event Triggers */
 				success = listEventTriggers(pattern, show_verbose);

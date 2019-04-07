@@ -1,0 +1,38 @@
+--
+--  Test plpgsql_tracer extension
+--
+load 'plpgsql';
+load 'plpgsql_tracer';
+create or replace function fx()
+returns integer
+language plpgsql
+AS $function$
+declare
+  x int = 0;
+  pragma plpgsql_tracer(on);
+  pragma ignore_me;
+begin
+  x := x + 1;
+  x := x + 1;
+  declare
+    pragma plpgsql_tracer(off);
+  begin
+    -- hidden statemt
+    declare pragma plpgsql_tracer; -- ignored, just warning
+    begin
+      x := x + 1;
+    end;
+  end;
+  return x;
+end;
+$function$;
+select fx();
+WARNING:  missing argument of PRAGMA plpgsql_tracer
+NOTICE:  plpgsql_tracer:    7: assignment
+NOTICE:  plpgsql_tracer:    8: assignment
+NOTICE:  plpgsql_tracer:   18: RETURN
+ fx 
+----
+  3
+(1 row)
+

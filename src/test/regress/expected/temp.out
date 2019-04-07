@@ -111,6 +111,10 @@ SELECT * FROM temptest;
 ERROR:  relation "temptest" does not exist
 LINE 1: SELECT * FROM temptest;
                       ^
+-- bug #15631
+CREATE TEMP TABLE temptest (col int GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP;
+\c -
+CREATE TEMP TABLE temptest0 (b varchar);
 -- ON COMMIT is only allowed for TEMP
 CREATE TABLE temptest(col int) ON COMMIT DELETE ROWS;
 ERROR:  ON COMMIT can only be used on temporary tables

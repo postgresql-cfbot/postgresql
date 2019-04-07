@@ -98,6 +98,11 @@ COMMIT;
 
 SELECT * FROM temptest;
 
+-- bug #15631
+CREATE TEMP TABLE temptest (col int GENERATED ALWAYS AS IDENTITY) ON COMMIT DROP;
+\c -
+CREATE TEMP TABLE temptest0 (b varchar);
+
 -- ON COMMIT is only allowed for TEMP
 
 CREATE TABLE temptest(col int) ON COMMIT DELETE ROWS;

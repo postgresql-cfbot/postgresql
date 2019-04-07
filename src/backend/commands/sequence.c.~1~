@@ -1739,13 +1739,6 @@ process_owned_by(Relation seqrel, List *owned_by, bool for_identity)
 		depobject.objectId = RelationGetRelid(seqrel);
 		depobject.objectSubId = 0;
 		recordDependencyOn(&depobject, &refobject, deptype);
-
-		/*
-		 * Make new dependency visible, for instance so that
-		 * PreCommit_on_commit_actions() can see it (see for example bug
-		 * #15631).
-		 */
-		CommandCounterIncrement();
 	}
 
 	/* Done, but hold lock until commit */

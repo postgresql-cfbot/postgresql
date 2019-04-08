@@ -218,3 +218,127 @@ DROP SCHEMA addr_nsp CASCADE;
 
 DROP OWNED BY regress_addr_user;
 DROP USER regress_addr_user;
+
+--
+-- Checks for invalid objects
+--
+-- Keep those checks in the same order as getObjectIdentityParts()
+SELECT * FROM pg_identify_object('pg_class'::regclass, 0, 0); -- no relation
+SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class'::regclass, 100); -- no column for relation
+SELECT * FROM pg_identify_object('pg_proc'::regclass, 0, 0); -- no function
+SELECT * FROM pg_identify_object('pg_type'::regclass, 0, 0); -- no type
+SELECT * FROM pg_identify_object('pg_cast'::regclass, 0, 0); -- no cast
+SELECT * FROM pg_identify_object('pg_collation'::regclass, 0, 0); -- no collation
+SELECT * FROM pg_identify_object('pg_constraint'::regclass, 0, 0); -- no constraint
+SELECT * FROM pg_identify_object('pg_conversion'::regclass, 0, 0); -- no conversion
+SELECT * FROM pg_identify_object('pg_attrdef'::regclass, 0, 0); -- no default attribute
+SELECT * FROM pg_identify_object('pg_language'::regclass, 0, 0); -- no language
+SELECT * FROM pg_identify_object('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+SELECT * FROM pg_identify_object('pg_operator'::regclass, 0, 0); -- no operator
+SELECT * FROM pg_identify_object('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+SELECT * FROM pg_identify_object('pg_opfamily'::regclass, 0, 0); -- no opfamily
+SELECT * FROM pg_identify_object('pg_am'::regclass, 0, 0); -- no access method
+SELECT * FROM pg_identify_object('pg_amop'::regclass, 0, 0); -- no AM operator
+SELECT * FROM pg_identify_object('pg_amproc'::regclass, 0, 0); -- no AM proc
+SELECT * FROM pg_identify_object('pg_rewrite'::regclass, 0, 0); -- no rewrite
+SELECT * FROM pg_identify_object('pg_trigger'::regclass, 0, 0); -- no trigger
+SELECT * FROM pg_identify_object('pg_namespace'::regclass, 0, 0); -- no schema
+SELECT * FROM pg_identify_object('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+SELECT * FROM pg_identify_object('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+SELECT * FROM pg_identify_object('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+SELECT * FROM pg_identify_object('pg_ts_template'::regclass, 0, 0); -- no TS template
+SELECT * FROM pg_identify_object('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+SELECT * FROM pg_identify_object('pg_authid'::regclass, 0, 0); -- no role
+SELECT * FROM pg_identify_object('pg_database'::regclass, 0, 0); -- no database
+SELECT * FROM pg_identify_object('pg_tablespace'::regclass, 0, 0); -- no tablespace
+SELECT * FROM pg_identify_object('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+SELECT * FROM pg_identify_object('pg_foreign_server'::regclass, 0, 0); -- no server
+SELECT * FROM pg_identify_object('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+SELECT * FROM pg_identify_object('pg_default_acl'::regclass, 0, 0); -- no default ACL
+SELECT * FROM pg_identify_object('pg_extension'::regclass, 0, 0); -- no extension
+SELECT * FROM pg_identify_object('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+SELECT * FROM pg_identify_object('pg_policy'::regclass, 0, 0); -- no policy
+SELECT * FROM pg_identify_object('pg_publication'::regclass, 0, 0); -- no publication
+SELECT * FROM pg_identify_object('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+SELECT * FROM pg_identify_object('pg_subscription'::regclass, 0, 0); -- no subscription
+SELECT * FROM pg_identify_object('pg_transform'::regclass, 0, 0); -- no transformation
+-- Keep those checks in the same order as getObjectDescription()
+SELECT pg_describe_object('pg_class'::regclass, 0, 0); -- no relation
+SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, -8); -- no column for relation
+SELECT pg_describe_object('pg_proc'::regclass, 0, 0); -- no function
+SELECT pg_describe_object('pg_type'::regclass, 0, 0); -- no type
+SELECT pg_describe_object('pg_cast'::regclass, 0, 0); -- no cast
+SELECT pg_describe_object('pg_collation'::regclass, 0, 0); -- no collation
+SELECT pg_describe_object('pg_constraint'::regclass, 0, 0); -- no constraint
+SELECT pg_describe_object('pg_conversion'::regclass, 0, 0); -- no conversion
+SELECT pg_describe_object('pg_attrdef'::regclass, 0, 0); -- no default attribute
+SELECT pg_describe_object('pg_language'::regclass, 0, 0); -- no language
+SELECT pg_describe_object('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+SELECT pg_describe_object('pg_operator'::regclass, 0, 0); -- no operator
+SELECT pg_describe_object('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+SELECT pg_describe_object('pg_opfamily'::regclass, 0, 0); -- no opfamily
+SELECT pg_describe_object('pg_am'::regclass, 0, 0); -- no access method
+SELECT pg_describe_object('pg_amop'::regclass, 0, 0); -- no AM operator
+SELECT pg_describe_object('pg_amproc'::regclass, 0, 0); -- no AM proc
+SELECT pg_describe_object('pg_rewrite'::regclass, 0, 0); -- no rewrite
+SELECT pg_describe_object('pg_trigger'::regclass, 0, 0); -- no trigger
+SELECT pg_describe_object('pg_namespace'::regclass, 0, 0); -- no schema
+SELECT pg_describe_object('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+SELECT pg_describe_object('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+SELECT pg_describe_object('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+SELECT pg_describe_object('pg_ts_template'::regclass, 0, 0); -- no TS template
+SELECT pg_describe_object('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+SELECT pg_describe_object('pg_authid'::regclass, 0, 0); -- no role
+SELECT pg_describe_object('pg_database'::regclass, 0, 0); -- no database
+SELECT pg_describe_object('pg_tablespace'::regclass, 0, 0); -- no tablespace
+SELECT pg_describe_object('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+SELECT pg_describe_object('pg_foreign_server'::regclass, 0, 0); -- no server
+SELECT pg_describe_object('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+SELECT pg_describe_object('pg_default_acl'::regclass, 0, 0); -- no default ACL
+SELECT pg_describe_object('pg_extension'::regclass, 0, 0); -- no extension
+SELECT pg_describe_object('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+SELECT pg_describe_object('pg_policy'::regclass, 0, 0); -- no policy
+SELECT pg_describe_object('pg_publication'::regclass, 0, 0); -- no publication
+SELECT pg_describe_object('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+SELECT pg_describe_object('pg_subscription'::regclass, 0, 0); -- no subscription
+SELECT pg_describe_object('pg_transform'::regclass, 0, 0); -- no transformation
+-- Keep those checks in the same order as getObjectTypeDescription()
+SELECT * FROM pg_identify_object_as_address('pg_class'::regclass, 0, 0); -- no relation
+SELECT * FROM pg_identify_object_as_address('pg_class'::regclass, 'pg_class'::regclass, 100); -- no column for relation
+SELECT * FROM pg_identify_object_as_address('pg_proc'::regclass, 0, 0); -- no function
+SELECT * FROM pg_identify_object_as_address('pg_type'::regclass, 0, 0); -- no type
+SELECT * FROM pg_identify_object_as_address('pg_cast'::regclass, 0, 0); -- no cast
+SELECT * FROM pg_identify_object_as_address('pg_collation'::regclass, 0, 0); -- no collation
+SELECT * FROM pg_identify_object_as_address('pg_constraint'::regclass, 0, 0); -- no constraint
+SELECT * FROM pg_identify_object_as_address('pg_conversion'::regclass, 0, 0); -- no conversion
+SELECT * FROM pg_identify_object_as_address('pg_attrdef'::regclass, 0, 0); -- no default attribute
+SELECT * FROM pg_identify_object_as_address('pg_language'::regclass, 0, 0); -- no language
+SELECT * FROM pg_identify_object_as_address('pg_largeobject'::regclass, 0, 0); -- no large object, no error
+SELECT * FROM pg_identify_object_as_address('pg_operator'::regclass, 0, 0); -- no operator
+SELECT * FROM pg_identify_object_as_address('pg_opclass'::regclass, 0, 0); -- no opclass, no need to check for no access method
+SELECT * FROM pg_identify_object_as_address('pg_opfamily'::regclass, 0, 0); -- no opfamily
+SELECT * FROM pg_identify_object_as_address('pg_am'::regclass, 0, 0); -- no access method
+SELECT * FROM pg_identify_object_as_address('pg_amop'::regclass, 0, 0); -- no AM operator
+SELECT * FROM pg_identify_object_as_address('pg_amproc'::regclass, 0, 0); -- no AM proc
+SELECT * FROM pg_identify_object_as_address('pg_rewrite'::regclass, 0, 0); -- no rewrite
+SELECT * FROM pg_identify_object_as_address('pg_trigger'::regclass, 0, 0); -- no trigger
+SELECT * FROM pg_identify_object_as_address('pg_namespace'::regclass, 0, 0); -- no schema
+SELECT * FROM pg_identify_object_as_address('pg_statistic_ext'::regclass, 0, 0); -- no statistics
+SELECT * FROM pg_identify_object_as_address('pg_ts_parser'::regclass, 0, 0); -- no TS parser
+SELECT * FROM pg_identify_object_as_address('pg_ts_dict'::regclass, 0, 0); -- no TS dictionnary
+SELECT * FROM pg_identify_object_as_address('pg_ts_template'::regclass, 0, 0); -- no TS template
+SELECT * FROM pg_identify_object_as_address('pg_ts_config'::regclass, 0, 0); -- no TS configuration
+SELECT * FROM pg_identify_object_as_address('pg_authid'::regclass, 0, 0); -- no role
+SELECT * FROM pg_identify_object_as_address('pg_database'::regclass, 0, 0); -- no database
+SELECT * FROM pg_identify_object_as_address('pg_tablespace'::regclass, 0, 0); -- no tablespace
+SELECT * FROM pg_identify_object_as_address('pg_foreign_data_wrapper'::regclass, 0, 0); -- no FDW
+SELECT * FROM pg_identify_object_as_address('pg_foreign_server'::regclass, 0, 0); -- no server
+SELECT * FROM pg_identify_object_as_address('pg_user_mapping'::regclass, 0, 0); -- no user mapping
+SELECT * FROM pg_identify_object_as_address('pg_default_acl'::regclass, 0, 0); -- no default ACL
+SELECT * FROM pg_identify_object_as_address('pg_extension'::regclass, 0, 0); -- no extension
+SELECT * FROM pg_identify_object_as_address('pg_event_trigger'::regclass, 0, 0); -- no event trigger
+SELECT * FROM pg_identify_object_as_address('pg_policy'::regclass, 0, 0); -- no policy
+SELECT * FROM pg_identify_object_as_address('pg_publication'::regclass, 0, 0); -- no publication
+SELECT * FROM pg_identify_object_as_address('pg_publication_rel'::regclass, 0, 0); -- no publication relation
+SELECT * FROM pg_identify_object_as_address('pg_subscription'::regclass, 0, 0); -- no subscription
+SELECT * FROM pg_identify_object_as_address('pg_transform'::regclass, 0, 0); -- no transformation

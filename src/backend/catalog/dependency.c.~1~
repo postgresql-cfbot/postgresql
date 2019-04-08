@@ -730,8 +730,8 @@ findDependentObjects(const ObjectAddress *object,
 				if (!object_address_present_add_flags(object, objflags,
 													  targetObjects))
 					elog(ERROR, "deletion of owning object %s failed to delete %s",
-						 getObjectDescription(&otherObject, false),
-						 getObjectDescription(object, false));
+						 getObjectDescription(&otherObject),
+						 getObjectDescription(object));
 
 				/* And we're done here. */
 				return;
@@ -777,11 +777,11 @@ findDependentObjects(const ObjectAddress *object,
 				 * the depender fields...
 				 */
 				elog(ERROR, "incorrect use of PIN dependency with %s",
-					 getObjectDescription(object, false));
+					 getObjectDescription(object));
 				break;
 			default:
 				elog(ERROR, "unrecognized dependency type '%c' for %s",
-					 foundDep->deptype, getObjectDescription(object, false));
+					 foundDep->deptype, getObjectDescription(object));
 				break;
 		}
 	}
@@ -799,14 +799,14 @@ findDependentObjects(const ObjectAddress *object,
 		char	   *otherObjDesc;
 
 		if (OidIsValid(partitionObject.classId))
-			otherObjDesc = getObjectDescription(&partitionObject, false);
+			otherObjDesc = getObjectDescription(&partitionObject);
 		else
-			otherObjDesc = getObjectDescription(&owningObject, false);
+			otherObjDesc = getObjectDescription(&owningObject);
 
 		ereport(ERROR,
 				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
 				 errmsg("cannot drop %s because %s requires it",
-						getObjectDescription(object, false), otherObjDesc),
+						getObjectDescription(object), otherObjDesc),
 				 errhint("You can drop %s instead.", otherObjDesc)));
 	}
 
@@ -906,12 +906,12 @@ findDependentObjects(const ObjectAddress *object,
 				ereport(ERROR,
 						(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
 						 errmsg("cannot drop %s because it is required by the database system",
-								getObjectDescription(object, false))));
+								getObjectDescription(object))));
 				subflags = 0;	/* keep compiler quiet */
 				break;
 			default:
 				elog(ERROR, "unrecognized dependency type '%c' for %s",
-					 foundDep->deptype, getObjectDescription(object, false));
+					 foundDep->deptype, getObjectDescription(object));
 				subflags = 0;	/* keep compiler quiet */
 				break;
 		}
@@ -1029,13 +1029,12 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 			!(extra->flags & DEPFLAG_PARTITION))
 		{
 			const ObjectAddress *object = &targetObjects->refs[i];
-			char	   *otherObjDesc = getObjectDescription(&extra->dependee,
-															false);
+			char	   *otherObjDesc = getObjectDescription(&extra->dependee);
 
 			ereport(ERROR,
 					(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
 					 errmsg("cannot drop %s because %s requires it",
-							getObjectDescription(object, false), otherObjDesc),
+							getObjectDescription(object), otherObjDesc),
 					 errhint("You can drop %s instead.", otherObjDesc)));
 		}
 	}
@@ -1083,7 +1082,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 		if (extra->flags & DEPFLAG_SUBOBJECT)
 			continue;
 
-		objDesc = getObjectDescription(obj, false);
+		objDesc = getObjectDescription(obj);
 
 		/*
 		 * If, at any stage of the recursive search, we reached the object via
@@ -1107,8 +1106,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 		}
 		else if (behavior == DROP_RESTRICT)
 		{
-			char	   *otherDesc = getObjectDescription(&extra->dependee,
-														 false);
+			char	   *otherDesc = getObjectDescription(&extra->dependee);
 
 			if (numReportedClient < MAX_REPORTED_DEPS)
 			{
@@ -1166,7 +1164,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 			ereport(ERROR,
 					(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
 					 errmsg("cannot drop %s because other objects depend on it",
-							getObjectDescription(origObject, false)),
+							getObjectDescription(origObject)),
 					 errdetail("%s", clientdetail.data),
 					 errdetail_log("%s", logdetail.data),
 					 errhint("Use DROP ... CASCADE to drop the dependent objects too.")));

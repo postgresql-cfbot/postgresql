@@ -160,7 +160,7 @@ recordDependencyOnCurrentExtension(const ObjectAddress *object,
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("%s is already a member of extension \"%s\"",
-								getObjectDescription(object),
+								getObjectDescription(object, false),
 								get_extension_name(oldext))));
 			}
 		}

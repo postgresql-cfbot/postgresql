@@ -742,7 +742,6 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 			 * consistent with the key we're inserting. Update it if it's not.
 			 */
 			newtup = gistgetadjusted(state.r, idxtuple, itup, giststate);
-			//if (false) // THIS LINE IS INTENTIONALLY BROKEN
 			if (newtup)
 			{
 				/*

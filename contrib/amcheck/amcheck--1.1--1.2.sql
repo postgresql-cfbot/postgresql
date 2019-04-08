@@ -17,3 +17,13 @@ LANGUAGE C STRICT PARALLEL RESTRICTED;
 
 -- Don't want this to be available to public
 REVOKE ALL ON FUNCTION bt_index_parent_check(regclass, boolean, boolean) FROM PUBLIC;
+
+--
+-- gist_index_parent_check()
+--
+CREATE FUNCTION gist_index_parent_check(index regclass)
+RETURNS VOID
+AS 'MODULE_PATHNAME', 'gist_index_parent_check'
+LANGUAGE C STRICT;
+
+REVOKE ALL ON FUNCTION gist_index_parent_check(regclass) FROM PUBLIC;

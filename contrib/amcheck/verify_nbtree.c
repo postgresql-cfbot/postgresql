@@ -21,23 +21,14 @@
  *
  *-------------------------------------------------------------------------
  */
-#include "postgres.h"
+#include "amcheck.h"
 
-#include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/table.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
-#include "catalog/index.h"
-#include "catalog/pg_am.h"
-#include "commands/tablecmds.h"
 #include "lib/bloomfilter.h"
-#include "miscadmin.h"
-#include "storage/lmgr.h"
-#include "utils/memutils.h"
-#include "utils/snapmgr.h"
-
 
 PG_MODULE_MAGIC;
 
@@ -212,23 +203,13 @@ bt_index_parent_check(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
-/*
- * Helper for bt_index_[parent_]check, coordinating the bulk of the work.
- */
-static void
-bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
-						bool rootdescend)
+
+/* Lock aquisition reused accross different am types */
+void
+amcheck_lock_relation(Oid indrelid, Relation *indrel,
+						Relation *heaprel, LOCKMODE	lockmode)
 {
 	Oid			heapid;
-	Relation	indrel;
-	Relation	heaprel;
-	bool		heapkeyspace;
-	LOCKMODE	lockmode;
-
-	if (parentcheck)
-		lockmode = ShareLock;
-	else
-		lockmode = AccessShareLock;
 
 	/*
 	 * We must lock table before index to avoid deadlocks.  However, if the
@@ -240,9 +221,9 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	 */
 	heapid = IndexGetRelation(indrelid, true);
 	if (OidIsValid(heapid))
-		heaprel = table_open(heapid, lockmode);
+		*heaprel = heap_open(heapid, lockmode);
 	else
-		heaprel = NULL;
+		*heaprel = NULL;
 
 	/*
 	 * Open the target index relations separately (like relation_openrv(), but
@@ -256,18 +237,52 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	 * committed or recently dead heap tuples lacking index entries due to
 	 * concurrent activity.)
 	 */
-	indrel = index_open(indrelid, lockmode);
+	*indrel = index_open(indrelid, lockmode);
 
 	/*
 	 * Since we did the IndexGetRelation call above without any lock, it's
 	 * barely possible that a race against an index drop/recreation could have
 	 * netted us the wrong table.
 	 */
-	if (heaprel == NULL || heapid != IndexGetRelation(indrelid, false))
+	if (*heaprel == NULL || heapid != IndexGetRelation(indrelid, false))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
 				 errmsg("could not open parent table of index %s",
-						RelationGetRelationName(indrel))));
+						RelationGetRelationName(*indrel))));
+}
+
+/* Pair for  amcheck_lock_relation() */
+void amcheck_unlock_relation(Oid indrelid, Relation indrel, Relation heaprel, LOCKMODE	lockmode)
+{
+	/*
+	 * Release locks early. That's ok here because nothing in the called
+	 * routines will trigger shared cache invalidations to be sent, so we can
+	 * relax the usual pattern of only releasing locks after commit.
+	 */
+	index_close(indrel, lockmode);
+	if (heaprel)
+		table_close(heaprel, lockmode);
+}
+
+/*
+ * Helper for bt_index_[parent_]check, coordinating the bulk of the work.
+ */
+static void
+bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
+						bool rootdescend)
+{
+	Relation	indrel;
+	Relation	heaprel;
+	LOCKMODE	lockmode;
+	bool 		heapkeyspace;
+
+	if (parentcheck)
+		lockmode = ShareLock;
+	else
+		lockmode = AccessShareLock;
+
+	/* lock table and index with neccesary level */
+	amcheck_lock_relation(indrelid, &indrel, &heaprel, lockmode);
 
 	/* Relation suitable for checking as B-Tree? */
 	btree_index_checkable(indrel);
@@ -277,14 +292,8 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	bt_check_every_level(indrel, heaprel, heapkeyspace, parentcheck,
 						 heapallindexed, rootdescend);
 
-	/*
-	 * Release locks early. That's ok here because nothing in the called
-	 * routines will trigger shared cache invalidations to be sent, so we can
-	 * relax the usual pattern of only releasing locks after commit.
-	 */
-	index_close(indrel, lockmode);
-	if (heaprel)
-		table_close(heaprel, lockmode);
+	/* Unlock index and table */
+	amcheck_unlock_relation(indrelid, indrel, heaprel, lockmode);
 }
 
 /*

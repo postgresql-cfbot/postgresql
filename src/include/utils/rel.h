@@ -198,6 +198,13 @@ typedef struct RelationData
 
 	/* use "struct" here to avoid needing to include pgstat.h: */
 	struct PgStat_TableStatus *pgstat_info; /* statistics collection area */
+
+	/*
+	 * rd_nowalskip is true if this relation is known not to skip WAL.
+	 * Otherwise we need to ask smgr for an entry if rd_walskip is NULL.
+	 */
+	bool				rd_nowalskip;
+	struct RelWalSkip   *rd_walskip;
 } RelationData;
 
 

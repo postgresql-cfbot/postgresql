@@ -654,8 +654,16 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	/* Ensure rd_smgr is open (could have been closed by relcache flush!) */
 	RelationOpenSmgr(wstate->index);
 
-	/* XLOG stuff */
-	if (wstate->btws_use_wal)
+	/* XLOG stuff
+	 *
+	 * Even when wal_level is minimal, WAL is required here if truncation
+	 * happened after being created in the same transaction. This is hacky but
+	 * we cannot use BufferNeedsWAL() stuff for nbtree since it can emit
+	 * atomic WAL records on multiple buffers.
+	 */
+	if (wstate->btws_use_wal ||
+		(RelationNeedsWAL(wstate->index) &&
+		 (blkno == BTREE_METAPAGE && BTPageGetMeta(page)->btm_root == 0)))
 	{
 		/* We use the heap NEWPAGE record type for this */
 		log_newpage(&wstate->index->rd_node, MAIN_FORKNUM, blkno, page, true);

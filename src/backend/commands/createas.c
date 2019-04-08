@@ -558,8 +558,9 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * We can skip WAL-logging the insertions, unless PITR or streaming
 	 * replication is in use. We can skip the FSM in any case.
 	 */
-	myState->ti_options = TABLE_INSERT_SKIP_FSM |
-		(XLogIsNeeded() ? 0 : TABLE_INSERT_SKIP_WAL);
+	if (!XLogIsNeeded())
+		table_relation_register_walskip(intoRelationDesc);
+	myState->ti_options = HEAP_INSERT_SKIP_FSM;
 	myState->bistate = GetBulkInsertState();
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
@@ -604,7 +605,7 @@ intorel_shutdown(DestReceiver *self)
 
 	FreeBulkInsertState(myState->bistate);
 
-	table_finish_bulk_insert(myState->rel, myState->ti_options);
+	/* If we skipped using WAL, we will sync the relation at commit */
 
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);

@@ -88,6 +88,7 @@
 #include "access/heapam_xlog.h"
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
@@ -276,7 +277,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 		map[mapByte] |= (flags << mapOffset);
 		MarkBufferDirty(vmBuf);
 
-		if (RelationNeedsWAL(rel))
+		if (BufferNeedsWAL(rel, heapBuf))
 		{
 			if (XLogRecPtrIsInvalid(recptr))
 			{

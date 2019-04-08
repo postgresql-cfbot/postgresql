@@ -93,6 +93,10 @@ GetTableAmRoutine(Oid amhandler)
 		   (routine->scan_bitmap_next_tuple == NULL));
 	Assert(routine->scan_sample_next_block != NULL);
 	Assert(routine->scan_sample_next_tuple != NULL);
+	Assert((routine->relation_register_walskip == NULL) ==
+		   (routine->relation_invalidate_walskip == NULL) &&
+		   (routine->relation_register_walskip == NULL) ==
+		   (routine->finish_bulk_insert == NULL));
 
 	return routine;
 }

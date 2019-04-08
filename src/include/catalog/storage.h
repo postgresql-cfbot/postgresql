@@ -23,8 +23,14 @@ extern void RelationCreateStorage(RelFileNode rnode, char relpersistence);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileNode rnode, bool atCommit);
 extern void RelationTruncate(Relation rel, BlockNumber nblocks);
-extern void RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
-								ForkNumber forkNum, char relpersistence);
+extern void RelationCopyStorage(Relation srcrel, SMgrRelation dst,
+								ForkNumber forkNum);
+extern bool BufferNeedsWAL(Relation rel, Buffer buf);
+extern bool BlockNeedsWAL(Relation rel, BlockNumber blkno);
+extern void RecordWALSkipping(Relation rel);
+extern void RecordPendingSync(Relation rel, SMgrRelation srel,
+							  ForkNumber forknum);
+extern void RelationInvalidateWALSkip(Relation rel);
 
 /*
  * These functions used to be in storage/smgr/smgr.c, which explains the
@@ -32,8 +38,11 @@ extern void RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
  */
 extern void smgrDoPendingDeletes(bool isCommit);
 extern int	smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr);
-extern void AtSubCommit_smgr(void);
-extern void AtSubAbort_smgr(void);
+extern void smgrFinishBulkInsert(bool isCommit);
+extern void AtSubCommit_smgr(SubTransactionId mySubid,
+							 SubTransactionId parentSubid);
+extern void AtSubAbort_smgr(SubTransactionId mySubid,
+							 SubTransactionId parentSubid);
 extern void PostPrepare_smgr(void);
 
 #endif							/* STORAGE_H */

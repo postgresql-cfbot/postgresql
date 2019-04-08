@@ -612,6 +612,18 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 							   relpersistence,
 							   AccessExclusiveLock);
 
+	/*
+	 * If wal_level is minimal, we skip WAL-logging even for WAL-logging
+	 * relations. The filenode is synced at commit.
+	 */
+	if (!XLogIsNeeded())
+	{
+		/* make_new_heap doesn't lock OIDNewHeap */
+		Relation newheap = table_open(OIDNewHeap, AccessShareLock);
+		table_relation_register_walskip(newheap);
+		table_close(newheap, AccessShareLock);
+	}
+
 	/* Copy the heap data into the new table in the desired order */
 	copy_table_data(OIDNewHeap, tableOid, indexOid, verbose,
 				   &swap_toast_by_content, &frozenXid, &cutoffMulti);
@@ -1354,6 +1366,21 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 
 	/* Zero out possible results from swapped_relation_files */
 	memset(mapped_tables, 0, sizeof(mapped_tables));
+
+	/*
+	 * Unregister useless pending file-sync. table_relation_unregister_sync
+	 * relies on a premise that relation cache has the correct relfilenode and
+	 * related members. After swap_relation_files, the relcache entry for the
+	 * heaps gets inconsistent with pg_class entry so we should do this before
+	 * the call.
+	 */
+	if (!XLogIsNeeded())
+	{
+		Relation oldheap = table_open(OIDOldHeap, AccessShareLock);
+
+		table_relation_invalidate_walskip(oldheap);
+		table_close(oldheap, AccessShareLock);
+	}
 
 	/*
 	 * Swap the contents of the heap relations (including any toast tables).

@@ -2762,9 +2762,13 @@ CopyFrom(CopyState cstate)
 		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
 		 cstate->rel->rd_newRelfilenodeSubid != InvalidSubTransactionId))
 	{
-		ti_options |= TABLE_INSERT_SKIP_FSM;
+		/*
+		 * We can skip WAL-logging the insertions, unless PITR or streaming
+		 * replication is in use. We can skip the FSM in any case.
+		 */
 		if (!XLogIsNeeded())
-			ti_options |= TABLE_INSERT_SKIP_WAL;
+			table_relation_register_walskip(cstate->rel);
+		ti_options |= TABLE_INSERT_SKIP_FSM;
 	}
 
 	/*
@@ -3369,7 +3373,12 @@ CopyFrom(CopyState cstate)
 
 	FreeExecutorState(estate);
 
-	table_finish_bulk_insert(cstate->rel, ti_options);
+	/*
+	 * If we skipped writing WAL, then we will sync the heap at the end of
+	 * the transaction. (We used to do it here, but it was later found out
+	 * that to be safe, we must also avoid WAL-logging any subsequent
+	 * actions on the pages we skipped WAL for). Indexes always use WAL.
+	 */
 
 	return processed;
 }

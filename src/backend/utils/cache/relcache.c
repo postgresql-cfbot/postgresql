@@ -75,6 +75,7 @@
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
+#include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/array.h"
@@ -5644,6 +5645,8 @@ load_relcache_init_file(bool shared)
 		rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
 		MemSet(&rel->pgstat_info, 0, sizeof(rel->pgstat_info));
+		rel->rd_nowalskip = false;
+		rel->rd_walskip = NULL;
 
 		/*
 		 * Recompute lock and physical addressing info.  This is needed in

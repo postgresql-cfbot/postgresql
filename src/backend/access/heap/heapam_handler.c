@@ -58,6 +58,8 @@ static bool SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 					   OffsetNumber tupoffset);
 
 static BlockNumber heapam_scan_get_blocks_done(HeapScanDesc hscan);
+static void heapam_relation_register_walskip(Relation rel);
+static void heapam_relation_invalidate_walskip(Relation rel);
 
 static const TableAmRoutine heapam_methods;
 
@@ -543,14 +545,10 @@ tuple_lock_retry:
 }
 
 static void
-heapam_finish_bulk_insert(Relation relation, int options)
+heapam_finish_bulk_insert(RelFileNode rnode, ForkNumber forkNum)
 {
-	/*
-	 * If we skipped writing WAL, then we need to sync the heap (but not
-	 * indexes since those use WAL anyway / don't go through tableam)
-	 */
-	if (options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(relation);
+	/* Sync the file immedately */
+	smgrimmedsync(smgropen(rnode, InvalidBackendId), forkNum);
 }
 
 
@@ -619,6 +617,12 @@ heapam_relation_copy_data(Relation rel, RelFileNode newrnode)
 	RelationOpenSmgr(rel);
 
 	/*
+	 * Register WAL-skipping for the relation. WAL-logging is skipped and sync
+	 * the file at commit if the AM supports the feature.
+	 */
+	table_relation_register_walskip(rel);
+
+	/*
 	 * Create and copy all forks of the relation, and schedule unlinking of
 	 * old physical files.
 	 *
@@ -628,8 +632,7 @@ heapam_relation_copy_data(Relation rel, RelFileNode newrnode)
 	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
 
 	/* copy main fork */
-	RelationCopyStorage(rel->rd_smgr, dstrel, MAIN_FORKNUM,
-						rel->rd_rel->relpersistence);
+	RelationCopyStorage(rel, dstrel, MAIN_FORKNUM);
 
 	/* copy those extra forks that exist */
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
@@ -647,8 +650,7 @@ heapam_relation_copy_data(Relation rel, RelFileNode newrnode)
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
 				log_smgrcreate(&newrnode, forkNum);
-			RelationCopyStorage(rel->rd_smgr, dstrel, forkNum,
-								rel->rd_rel->relpersistence);
+			RelationCopyStorage(rel, dstrel, forkNum);
 		}
 	}
 
@@ -672,7 +674,6 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	IndexScanDesc indexScan;
 	TableScanDesc tableScan;
 	HeapScanDesc heapScan;
-	bool		use_wal;
 	bool		is_system_catalog;
 	Tuplesortstate *tuplesort;
 	TupleDesc	oldTupDesc = RelationGetDescr(OldHeap);
@@ -686,15 +687,6 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	/* Remember if it's a system catalog */
 	is_system_catalog = IsSystemRelation(OldHeap);
 
-	/*
-	 * We need to log the copied data in WAL iff WAL archiving/streaming is
-	 * enabled AND it's a WAL-logged rel.
-	 */
-	use_wal = XLogIsNeeded() && RelationNeedsWAL(NewHeap);
-
-	/* use_wal off requires smgr_targblock be initially invalid */
-	Assert(RelationGetTargetBlock(NewHeap) == InvalidBlockNumber);
-
 	/* Preallocate values/isnull arrays */
 	natts = newTupDesc->natts;
 	values = (Datum *) palloc(natts * sizeof(Datum));
@@ -702,7 +694,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 	/* Initialize the rewrite operation */
 	rwstate = begin_heap_rewrite(OldHeap, NewHeap, OldestXmin, FreezeXid,
-								 MultiXactCutoff, use_wal);
+								 MultiXactCutoff);
 
 
 	/* Set up sorting if wanted */
@@ -946,6 +938,55 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	/* Clean up */
 	pfree(values);
 	pfree(isnull);
+}
+
+/*
+ *	heapam_relation_register_walskip - register a heap to be WAL-skipped then
+ *									   synced to disk at commit
+ *
+ * This can be used to skip WAL-logging changes on a relation file. This makes
+ * note of the current size of the relation, and ensures that when the
+ * relation is extended, any changes to the new blocks in the heap, in the
+ * same transaction, will not be WAL-logged. Instead, the heap contents are
+ * flushed to disk at commit.
+ *
+ * This does the same for the TOAST heap, if any. Indexes are not affected.
+ */
+static void
+heapam_relation_register_walskip(Relation rel)
+{
+	/* non-WAL-logged tables never need fsync */
+	if (!RelationNeedsWAL(rel))
+		return;
+
+	RecordWALSkipping(rel);
+	if (OidIsValid(rel->rd_rel->reltoastrelid))
+	{
+		Relation	toastrel;
+
+		toastrel = heap_open(rel->rd_rel->reltoastrelid, AccessShareLock);
+		RecordWALSkipping(toastrel);
+		heap_close(toastrel, AccessShareLock);
+	}
+
+	return;
+}
+
+/*
+ *	heapam_relation_invalidate_walskip	- invalidate registered WAL skipping
+ *
+ *  After some file-replacing operations like CLUSTER, the old file no longe
+ *  needs to be synced to disk. This function invalidates the registered
+ *  WAL-skipping on the current relfilenode of the relation.
+ */
+static void
+heapam_relation_invalidate_walskip(Relation rel)
+{
+	/* non-WAL-logged tables never need fsync */
+	if (!RelationNeedsWAL(rel))
+		return;
+
+	RelationInvalidateWALSkip(rel);
 }
 
 static bool
@@ -2531,6 +2572,8 @@ static const TableAmRoutine heapam_methods = {
 	.relation_nontransactional_truncate = heapam_relation_nontransactional_truncate,
 	.relation_copy_data = heapam_relation_copy_data,
 	.relation_copy_for_cluster = heapam_relation_copy_for_cluster,
+	.relation_register_walskip = heapam_relation_register_walskip,
+	.relation_invalidate_walskip = heapam_relation_invalidate_walskip,
 	.relation_vacuum = heap_vacuum_rel,
 	.scan_analyze_next_block = heapam_scan_analyze_next_block,
 	.scan_analyze_next_tuple = heapam_scan_analyze_next_tuple,

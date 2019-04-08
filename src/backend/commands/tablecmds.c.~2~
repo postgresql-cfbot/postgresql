@@ -4727,11 +4727,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 		ti_options = TABLE_INSERT_SKIP_FSM;
 		if (!XLogIsNeeded())
-		{
-			/* Forget old relation's registerd sync */
-			table_relation_invalidate_walskip(oldrel);
-			table_relation_register_walskip(newrel);
-		}
+			ti_options |= TABLE_INSERT_SKIP_WAL;
 	}
 	else
 	{
@@ -5015,7 +5011,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	{
 		FreeBulkInsertState(bistate);
 
-		/* If we skipped writing WAL, then it will be done at commit. */
+		table_finish_bulk_insert(newrel, ti_options);
 
 		table_close(newrel, NoLock);
 	}

@@ -4727,11 +4727,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 		ti_options = TABLE_INSERT_SKIP_FSM;
 		if (!XLogIsNeeded())
-		{
-			/* Forget old relation's registerd sync */
-			table_relation_invalidate_walskip(oldrel);
-			table_relation_register_walskip(newrel);
-		}
+			ti_options |= TABLE_INSERT_SKIP_WAL;
 	}
 	else
 	{
@@ -5015,7 +5011,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	{
 		FreeBulkInsertState(bistate);
 
-		/* If we skipped writing WAL, then it will be done at commit. */
+		table_finish_bulk_insert(newrel, ti_options);
 
 		table_close(newrel, NoLock);
 	}
@@ -12455,7 +12451,8 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
 
 	/* copy main fork */
-	RelationCopyStorage(rel, dstrel, MAIN_FORKNUM);
+	RelationCopyStorage(rel->rd_smgr, dstrel, MAIN_FORKNUM,
+						rel->rd_rel->relpersistence);
 
 	/* copy those extra forks that exist */
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
@@ -12473,7 +12470,8 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
 				log_smgrcreate(&newrnode, forkNum);
-			RelationCopyStorage(rel, dstrel, forkNum);
+			RelationCopyStorage(rel->rd_smgr, dstrel, forkNum,
+								rel->rd_rel->relpersistence);
 		}
 	}
 

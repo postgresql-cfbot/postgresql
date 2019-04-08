@@ -28,6 +28,27 @@
  *	  the POSTGRES heap access method used for all POSTGRES
  *	  relations.
  *
+ * WAL CONSIDERATIONS
+ *	  All heap operations are normally WAL-logged. but there are a few
+ *	  exceptions. Temporary and unlogged relations never need to be
+ *	  WAL-logged, but we can also skip WAL-logging for a table that was
+ *	  created in the same transaction, if we don't need WAL for PITR or WAL
+ *	  archival purposes (i.e. if wal_level=minimal), and we fsync() the file
+ *	  to disk at COMMIT instead.
+ *
+ *	  The same-relation optimization is not employed automatically on all
+ *	  updates to a table that was created in the same transaction, because for
+ *	  a small number of changes, it's cheaper to just create the WAL records
+ *	  than fsync()ing the whole relation at COMMIT. It is only worthwhile for
+ *	  (presumably) large operations like COPY, CLUSTER, or VACUUM FULL. Use
+ *	  table_relation_register_sync() to initiate such an operation; it will
+ *	  cause any subsequent updates to the table to skip WAL-logging, if
+ *	  possible, and cause the heap to be synced to disk at COMMIT.
+ *
+ *	  To make that work, all modifications to heap must use
+ *	  BufferNeedsWAL() to check if WAL-logging is needed in this transaction
+ *	  for the given block.
+ *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -51,6 +72,7 @@
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -72,6 +94,11 @@
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
 					TransactionId xid, CommandId cid, int options);
+static XLogRecPtr log_heap_insert(Relation relation, Buffer buffer,
+				HeapTuple heaptup, int options, bool all_visible_cleared);
+static XLogRecPtr log_heap_delete(Relation relation, Buffer buffer,
+				HeapTuple tp, HeapTuple old_key_tuple, TransactionId new_xmax,
+				bool changingPart, bool all_visible_cleared);
 static XLogRecPtr log_heap_update(Relation reln, Buffer oldbuf,
 				Buffer newbuf, HeapTuple oldtup,
 				HeapTuple newtup, HeapTuple old_key_tup,
@@ -1875,6 +1902,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	TransactionId xid = GetCurrentTransactionId();
 	HeapTuple	heaptup;
 	Buffer		buffer;
+	Page		page;
 	Buffer		vmbuffer = InvalidBuffer;
 	bool		all_visible_cleared = false;
 
@@ -1911,16 +1939,18 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	 */
 	CheckForSerializableConflictIn(relation, NULL, InvalidBuffer);
 
+	page = BufferGetPage(buffer);
+
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
 
 	RelationPutHeapTuple(relation, buffer, heaptup,
 						 (options & HEAP_INSERT_SPECULATIVE) != 0);
 
-	if (PageIsAllVisible(BufferGetPage(buffer)))
+	if (PageIsAllVisible(page))
 	{
 		all_visible_cleared = true;
-		PageClearAllVisible(BufferGetPage(buffer));
+		PageClearAllVisible(page);
 		visibilitymap_clear(relation,
 							ItemPointerGetBlockNumber(&(heaptup->t_self)),
 							vmbuffer, VISIBILITYMAP_VALID_BITS);
@@ -1940,14 +1970,9 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (!(options & HEAP_INSERT_SKIP_WAL) && RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
-		xl_heap_insert xlrec;
-		xl_heap_header xlhdr;
 		XLogRecPtr	recptr;
-		Page		page = BufferGetPage(buffer);
-		uint8		info = XLOG_HEAP_INSERT;
-		int			bufflags = 0;
 
 		/*
 		 * If this is a catalog, we need to transmit combocids to properly
@@ -1956,61 +1981,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		if (RelationIsAccessibleInLogicalDecoding(relation))
 			log_heap_new_cid(relation, heaptup);
 
-		/*
-		 * If this is the single and first tuple on page, we can reinit the
-		 * page instead of restoring the whole thing.  Set flag, and hide
-		 * buffer references from XLogInsert.
-		 */
-		if (ItemPointerGetOffsetNumber(&(heaptup->t_self)) == FirstOffsetNumber &&
-			PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
-		{
-			info |= XLOG_HEAP_INIT_PAGE;
-			bufflags |= REGBUF_WILL_INIT;
-		}
-
-		xlrec.offnum = ItemPointerGetOffsetNumber(&heaptup->t_self);
-		xlrec.flags = 0;
-		if (all_visible_cleared)
-			xlrec.flags |= XLH_INSERT_ALL_VISIBLE_CLEARED;
-		if (options & HEAP_INSERT_SPECULATIVE)
-			xlrec.flags |= XLH_INSERT_IS_SPECULATIVE;
-		Assert(ItemPointerGetBlockNumber(&heaptup->t_self) == BufferGetBlockNumber(buffer));
-
-		/*
-		 * For logical decoding, we need the tuple even if we're doing a full
-		 * page write, so make sure it's included even if we take a full-page
-		 * image. (XXX We could alternatively store a pointer into the FPW).
-		 */
-		if (RelationIsLogicallyLogged(relation) &&
-			!(options & HEAP_INSERT_NO_LOGICAL))
-		{
-			xlrec.flags |= XLH_INSERT_CONTAINS_NEW_TUPLE;
-			bufflags |= REGBUF_KEEP_DATA;
-		}
-
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
-
-		xlhdr.t_infomask2 = heaptup->t_data->t_infomask2;
-		xlhdr.t_infomask = heaptup->t_data->t_infomask;
-		xlhdr.t_hoff = heaptup->t_data->t_hoff;
-
-		/*
-		 * note we mark xlhdr as belonging to buffer; if XLogInsert decides to
-		 * write the whole page to the xlog, we don't need to store
-		 * xl_heap_header in the xlog.
-		 */
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
-		XLogRegisterBufData(0, (char *) &xlhdr, SizeOfHeapHeader);
-		/* PG73FORMAT: write bitmap [+ padding] [+ oid] + data */
-		XLogRegisterBufData(0,
-							(char *) heaptup->t_data + SizeofHeapTupleHeader,
-							heaptup->t_len - SizeofHeapTupleHeader);
-
-		/* filtering by origin on a row level is much more efficient */
-		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
-
-		recptr = XLogInsert(RM_HEAP_ID, info);
+		recptr = log_heap_insert(relation, buffer, heaptup,
+								 options, all_visible_cleared);
 
 		PageSetLSN(page, recptr);
 	}
@@ -2115,7 +2087,6 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	int			ndone;
 	PGAlignedBlock scratch;
 	Page		page;
-	bool		needwal;
 	Size		saveFreeSpace;
 	bool		need_tuple_data = RelationIsLogicallyLogged(relation);
 	bool		need_cids = RelationIsAccessibleInLogicalDecoding(relation);
@@ -2123,7 +2094,6 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	/* currently not needed (thus unsupported) for heap_multi_insert() */
 	AssertArg(!(options & HEAP_INSERT_NO_LOGICAL));
 
-	needwal = !(options & HEAP_INSERT_SKIP_WAL) && RelationNeedsWAL(relation);
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
 
@@ -2172,6 +2142,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		Buffer		vmbuffer = InvalidBuffer;
 		bool		all_visible_cleared = false;
 		int			nthispage;
+		bool		needwal;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -2183,6 +2154,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 										   InvalidBuffer, options, bistate,
 										   &vmbuffer, NULL);
 		page = BufferGetPage(buffer);
+		needwal = BufferNeedsWAL(relation, buffer);
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -2731,60 +2703,17 @@ l1:
 	 * NB: heap_abort_speculative() uses the same xlog record and replay
 	 * routines.
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
-		xl_heap_delete xlrec;
-		xl_heap_header xlhdr;
 		XLogRecPtr	recptr;
 
 		/* For logical decode we need combocids to properly decode the catalog */
 		if (RelationIsAccessibleInLogicalDecoding(relation))
 			log_heap_new_cid(relation, &tp);
 
-		xlrec.flags = 0;
-		if (all_visible_cleared)
-			xlrec.flags |= XLH_DELETE_ALL_VISIBLE_CLEARED;
-		if (changingPart)
-			xlrec.flags |= XLH_DELETE_IS_PARTITION_MOVE;
-		xlrec.infobits_set = compute_infobits(tp.t_data->t_infomask,
-											  tp.t_data->t_infomask2);
-		xlrec.offnum = ItemPointerGetOffsetNumber(&tp.t_self);
-		xlrec.xmax = new_xmax;
 
-		if (old_key_tuple != NULL)
-		{
-			if (relation->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
-				xlrec.flags |= XLH_DELETE_CONTAINS_OLD_TUPLE;
-			else
-				xlrec.flags |= XLH_DELETE_CONTAINS_OLD_KEY;
-		}
-
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapDelete);
-
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
-
-		/*
-		 * Log replica identity of the deleted tuple if there is one
-		 */
-		if (old_key_tuple != NULL)
-		{
-			xlhdr.t_infomask2 = old_key_tuple->t_data->t_infomask2;
-			xlhdr.t_infomask = old_key_tuple->t_data->t_infomask;
-			xlhdr.t_hoff = old_key_tuple->t_data->t_hoff;
-
-			XLogRegisterData((char *) &xlhdr, SizeOfHeapHeader);
-			XLogRegisterData((char *) old_key_tuple->t_data
-							 + SizeofHeapTupleHeader,
-							 old_key_tuple->t_len
-							 - SizeofHeapTupleHeader);
-		}
-
-		/* filtering by origin on a row level is much more efficient */
-		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
-
-		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_DELETE);
-
+		recptr = log_heap_delete(relation, buffer, &tp, old_key_tuple, new_xmax,
+								 changingPart, all_visible_cleared);
 		PageSetLSN(page, recptr);
 	}
 
@@ -2913,6 +2842,8 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 				vmbuffer = InvalidBuffer,
 				vmbuffer_new = InvalidBuffer;
 	bool		need_toast;
+	bool		oldbuf_needs_wal,
+				newbuf_needs_wal;
 	Size		newtupsize,
 				pagefree;
 	bool		have_tuple_lock = false;
@@ -3464,7 +3395,7 @@ l2:
 
 		MarkBufferDirty(buffer);
 
-		if (RelationNeedsWAL(relation))
+		if (BufferNeedsWAL(relation, buffer))
 		{
 			xl_heap_lock xlrec;
 			XLogRecPtr	recptr;
@@ -3678,26 +3609,74 @@ l2:
 		MarkBufferDirty(newbuf);
 	MarkBufferDirty(buffer);
 
-	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	/*
+	 *  XLOG stuff
+	 *
+	 * Emit heap-update log. When wal_level = minimal, we may emit insert or
+	 * delete record according to wal-optimization.
+	 */
+	oldbuf_needs_wal = BufferNeedsWAL(relation, buffer);
+
+	if (newbuf == buffer)
+		newbuf_needs_wal = oldbuf_needs_wal;
+	else
+		newbuf_needs_wal = BufferNeedsWAL(relation, newbuf);
+
+	if (oldbuf_needs_wal || newbuf_needs_wal)
 	{
 		XLogRecPtr	recptr;
 
 		/*
 		 * For logical decoding we need combocids to properly decode the
-		 * catalog.
+		 * catalog. Both oldbuf_needs_wal and newbuf_needs_wal must be true
+		 * when logical decoding is active.
 		 */
 		if (RelationIsAccessibleInLogicalDecoding(relation))
 		{
+			Assert(oldbuf_needs_wal && newbuf_needs_wal);
+
 			log_heap_new_cid(relation, &oldtup);
 			log_heap_new_cid(relation, heaptup);
 		}
 
-		recptr = log_heap_update(relation, buffer,
-								 newbuf, &oldtup, heaptup,
-								 old_key_tuple,
-								 all_visible_cleared,
-								 all_visible_cleared_new);
+		/*
+		 * Insert log record. When we are not running WAL-skipping, always use
+		 * update log. Otherwise use delete or insert log instead when only
+		 * one of the two buffers needs WAL-logging. If this were a
+		 * HOT-update, redoing the WAL record would result in a broken
+		 * hot-chain. However, that never happens because updates complete on
+		 * a single page always use log_update.
+		 *
+		 * Using delete or insert log in place of udpate log leads to
+		 * inconsistent series of WAL records. But note that WAL-skipping
+		 * happens only when we are updating a tuple in a relation that has
+		 * been create in the same transaction. Once commited, the WAL records
+		 * recovers the same state of the relation as the synced state at the
+		 * commit. Or the maybe-broken relation due to a crash before commit
+		 * will be removed in recovery.
+		 */
+		if (oldbuf_needs_wal && newbuf_needs_wal)
+			recptr = log_heap_update(relation, buffer, newbuf,
+									 &oldtup, heaptup,
+									 old_key_tuple,
+									 all_visible_cleared,
+									 all_visible_cleared_new);
+		else if (oldbuf_needs_wal)
+			recptr = log_heap_delete(relation, buffer, &oldtup, old_key_tuple,
+									 xmax_old_tuple, false,
+									 all_visible_cleared);
+		else
+		{
+			/*
+			 * Coming here means that the old tuple is invisible and
+			 * inoperable to another transaction. So xmax_new_tuple is
+			 * expected to be InvalidTransactionId here.
+			 */
+			Assert (xmax_new_tuple == InvalidTransactionId);
+			recptr = log_heap_insert(relation, buffer, newtup,
+									 0, all_visible_cleared_new);
+		}
+
 		if (newbuf != buffer)
 		{
 			PageSetLSN(BufferGetPage(newbuf), recptr);
@@ -4575,7 +4554,7 @@ failed:
 	 * (Also, in a PITR log-shipping or 2PC environment, we have to have XLOG
 	 * entries for everything anyway.)
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, *buffer))
 	{
 		xl_heap_lock xlrec;
 		XLogRecPtr	recptr;
@@ -5327,7 +5306,7 @@ l4:
 		MarkBufferDirty(buf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (BufferNeedsWAL(rel, buf))
 		{
 			xl_heap_lock_updated xlrec;
 			XLogRecPtr	recptr;
@@ -5487,7 +5466,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 	htup->t_ctid = *tid;
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_confirm xlrec;
 		XLogRecPtr	recptr;
@@ -5619,7 +5598,7 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	 * The WAL records generated here match heap_delete().  The same recovery
 	 * routines are used.
 	 */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_delete xlrec;
 		XLogRecPtr	recptr;
@@ -5728,7 +5707,7 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (BufferNeedsWAL(relation, buffer))
 	{
 		xl_heap_inplace xlrec;
 		XLogRecPtr	recptr;
@@ -7138,8 +7117,8 @@ log_heap_clean(Relation reln, Buffer buffer,
 	xl_heap_clean xlrec;
 	XLogRecPtr	recptr;
 
-	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	/* Caller should not call me on non-WAL-logged buffers */
+	Assert(BufferNeedsWAL(reln, buffer));
 
 	xlrec.latestRemovedXid = latestRemovedXid;
 	xlrec.nredirected = nredirected;
@@ -7186,8 +7165,8 @@ log_heap_freeze(Relation reln, Buffer buffer, TransactionId cutoff_xid,
 	xl_heap_freeze_page xlrec;
 	XLogRecPtr	recptr;
 
-	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	/* Caller should not call me on non-WAL-logged buffers */
+	Assert(BufferNeedsWAL(reln, buffer));
 	/* nor when there are no tuples to freeze */
 	Assert(ntuples > 0);
 
@@ -7249,6 +7228,137 @@ log_heap_visible(RelFileNode rnode, Buffer heap_buffer, Buffer vm_buffer,
 }
 
 /*
+ * Perform XLogInsert for a heap-insert operation.  Caller must already
+ * have modified the buffer and marked it dirty.
+ */
+XLogRecPtr
+log_heap_insert(Relation relation, Buffer buffer,
+				HeapTuple heaptup, int options, bool all_visible_cleared)
+{
+	xl_heap_insert xlrec;
+	xl_heap_header xlhdr;
+	uint8		info = XLOG_HEAP_INSERT;
+	int			bufflags = 0;
+	Page		page = BufferGetPage(buffer);
+
+	/*
+	 * If this is the single and first tuple on page, we can reinit the
+	 * page instead of restoring the whole thing.  Set flag, and hide
+	 * buffer references from XLogInsert.
+	 */
+	if (ItemPointerGetOffsetNumber(&(heaptup->t_self)) == FirstOffsetNumber &&
+		PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
+	{
+		info |= XLOG_HEAP_INIT_PAGE;
+		bufflags |= REGBUF_WILL_INIT;
+	}
+
+	xlrec.offnum = ItemPointerGetOffsetNumber(&heaptup->t_self);
+	xlrec.flags = 0;
+	if (all_visible_cleared)
+		xlrec.flags |= XLH_INSERT_ALL_VISIBLE_CLEARED;
+	if (options & HEAP_INSERT_SPECULATIVE)
+		xlrec.flags |= XLH_INSERT_IS_SPECULATIVE;
+	Assert(ItemPointerGetBlockNumber(&heaptup->t_self) == BufferGetBlockNumber(buffer));
+
+	/*
+	 * For logical decoding, we need the tuple even if we're doing a full
+	 * page write, so make sure it's included even if we take a full-page
+	 * image. (XXX We could alternatively store a pointer into the FPW).
+	 */
+	if (RelationIsLogicallyLogged(relation) &&
+		!(options & HEAP_INSERT_NO_LOGICAL))
+	{
+		xlrec.flags |= XLH_INSERT_CONTAINS_NEW_TUPLE;
+		bufflags |= REGBUF_KEEP_DATA;
+	}
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
+
+	xlhdr.t_infomask2 = heaptup->t_data->t_infomask2;
+	xlhdr.t_infomask = heaptup->t_data->t_infomask;
+	xlhdr.t_hoff = heaptup->t_data->t_hoff;
+
+	/*
+	 * note we mark xlhdr as belonging to buffer; if XLogInsert decides to
+	 * write the whole page to the xlog, we don't need to store
+	 * xl_heap_header in the xlog.
+	 */
+	XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
+	XLogRegisterBufData(0, (char *) &xlhdr, SizeOfHeapHeader);
+	/* PG73FORMAT: write bitmap [+ padding] [+ oid] + data */
+	XLogRegisterBufData(0,
+						(char *) heaptup->t_data + SizeofHeapTupleHeader,
+						heaptup->t_len - SizeofHeapTupleHeader);
+
+	/* filtering by origin on a row level is much more efficient */
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+
+	return XLogInsert(RM_HEAP_ID, info);
+}
+
+/*
+ * Perform XLogInsert for a heap-insert operation.  Caller must already
+ * have modified the buffer and marked it dirty.
+ *
+ * NB: heap_abort_speculative() uses the same xlog record and replay
+ * routines.
+ */
+static XLogRecPtr
+log_heap_delete(Relation relation, Buffer buffer,
+				HeapTuple tp, HeapTuple old_key_tuple, TransactionId new_xmax,
+				bool changingPart, bool all_visible_cleared)
+{
+	xl_heap_delete xlrec;
+	xl_heap_header xlhdr;
+
+	xlrec.flags = 0;
+	if (all_visible_cleared)
+		xlrec.flags |= XLH_DELETE_ALL_VISIBLE_CLEARED;
+	if (changingPart)
+		xlrec.flags |= XLH_DELETE_IS_PARTITION_MOVE;
+	xlrec.infobits_set = compute_infobits(tp->t_data->t_infomask,
+										  tp->t_data->t_infomask2);
+	xlrec.offnum = ItemPointerGetOffsetNumber(&tp->t_self);
+	xlrec.xmax = new_xmax;
+
+	if (old_key_tuple != NULL)
+	{
+		if (relation->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
+			xlrec.flags |= XLH_DELETE_CONTAINS_OLD_TUPLE;
+		else
+			xlrec.flags |= XLH_DELETE_CONTAINS_OLD_KEY;
+	}
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, SizeOfHeapDelete);
+
+	XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+
+	/*
+	 * Log replica identity of the deleted tuple if there is one
+	 */
+	if (old_key_tuple != NULL)
+	{
+		xlhdr.t_infomask2 = old_key_tuple->t_data->t_infomask2;
+		xlhdr.t_infomask = old_key_tuple->t_data->t_infomask;
+		xlhdr.t_hoff = old_key_tuple->t_data->t_hoff;
+
+		XLogRegisterData((char *) &xlhdr, SizeOfHeapHeader);
+		XLogRegisterData((char *) old_key_tuple->t_data
+						 + SizeofHeapTupleHeader,
+						 old_key_tuple->t_len
+						 - SizeofHeapTupleHeader);
+	}
+
+	/* filtering by origin on a row level is much more efficient */
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+
+	return XLogInsert(RM_HEAP_ID, XLOG_HEAP_DELETE);
+}
+
+/*
  * Perform XLogInsert for a heap-update operation.  Caller must already
  * have modified the buffer(s) and marked them dirty.
  */
@@ -7271,8 +7381,8 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	bool		init;
 	int			bufflags;
 
-	/* Caller should not call me on a non-WAL-logged relation */
-	Assert(RelationNeedsWAL(reln));
+	/* Caller should not call me unless both buffers need WAL-logging */
+	Assert(BufferNeedsWAL(reln, newbuf) && BufferNeedsWAL(reln, oldbuf));
 
 	XLogBeginInsert();
 
@@ -8876,9 +8986,16 @@ heap2_redo(XLogReaderState *record)
  *	heap_sync		- sync a heap, for use when no WAL has been written
  *
  * This forces the heap contents (including TOAST heap if any) down to disk.
- * If we skipped using WAL, and WAL is otherwise needed, we must force the
- * relation down to disk before it's safe to commit the transaction.  This
- * requires writing out any dirty buffers and then doing a forced fsync.
+ * If we did any changes to the heap bypassing the buffer manager, we must
+ * force the relation down to disk before it's safe to commit the
+ * transaction, because the direct modifications will not be flushed by
+ * the next checkpoint.
+ *
+ * We used to also use this after batch operations like COPY and CLUSTER,
+ * if we skipped using WAL and WAL is otherwise needed, but there were
+ * corner-cases involving other WAL-logged operations to the same
+ * relation, where that was not enough. table_relation_register_sync() should
+ * be used for that purpose instead.
  *
  * Indexes are not touched.  (Currently, index operations associated with
  * the commands that use this are WAL-logged and so do not need fsync.

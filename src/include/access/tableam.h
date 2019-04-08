@@ -103,10 +103,9 @@ typedef struct TM_FailureData
 } TM_FailureData;
 
 /* "options" flag bits for table_insert */
-#define TABLE_INSERT_SKIP_WAL		0x0001
-#define TABLE_INSERT_SKIP_FSM		0x0002
-#define TABLE_INSERT_FROZEN			0x0004
-#define TABLE_INSERT_NO_LOGICAL		0x0008
+#define TABLE_INSERT_SKIP_FSM		0x0001
+#define TABLE_INSERT_FROZEN			0x0002
+#define TABLE_INSERT_NO_LOGICAL		0x0004
 
 /* flag bits fortable_lock_tuple */
 /* Follow tuples whose update is in progress if lock modes don't conflict  */
@@ -389,19 +388,15 @@ typedef struct TableAmRoutine
 
 	/*
 	 * Perform operations necessary to complete insertions made via
-	 * tuple_insert and multi_insert with a BulkInsertState specified. This
-	 * e.g. may e.g. used to flush the relation when inserting with
-	 * TABLE_INSERT_SKIP_WAL specified.
+	 * tuple_insert and multi_insert or page-level copying performed by ALTER
+	 * TABLE rewrite. This is called at commit time if WAL-skipping is
+	 * activated and the caller decided that any finish work is required to
+	 * the file.
 	 *
-	 * Typically callers of tuple_insert and multi_insert will just pass all
-	 * the flags the apply to them, and each AM has to decide which of them
-	 * make sense for it, and then only take actions in finish_bulk_insert
-	 * that make sense for a specific AM.
-	 *
-	 * Optional callback.
+	 * Optional callback. Must be provided when relation_register_walskip is
+	 * provided.
 	 */
-	void		(*finish_bulk_insert) (Relation rel, int options);
-
+	void		(*finish_bulk_insert) (RelFileNode rnode, ForkNumber forkNum);
 
 	/* ------------------------------------------------------------------------
 	 * DDL related functionality.
@@ -453,6 +448,26 @@ typedef struct TableAmRoutine
 											  double *num_tuples,
 											  double *tups_vacuumed,
 											  double *tups_recently_dead);
+
+	/*
+	 * Register WAL-skipping on the current storage of rel. WAL-logging on the
+	 * relation is skipped and the storage will be synced at commit. Returns
+	 * true if successfully registered, and finish_bulk_insert() is called at
+	 * commit.
+	 *
+	 * Optional callback.
+	 */
+	void		(*relation_register_walskip) (Relation rel);
+
+	/*
+	 * Invalidate registered WAL skipping on the current storage of rel. The
+	 * function is called when the storage of the relation is going to be
+	 * out-of-use after commit.
+	 *
+	 * Optional callback. Must be provided when relation_register_walskip is
+	 * provided.
+	 */
+	void		(*relation_invalidate_walskip) (Relation rel);
 
 	/*
 	 * React to VACUUM command on the relation. The VACUUM might be user
@@ -1009,10 +1024,6 @@ table_compute_xid_horizon_for_tuples(Relation rel,
  * behaviour of the AM. Several options might be ignored by AMs not supporting
  * them.
  *
- * If the TABLE_INSERT_SKIP_WAL option is specified, the new tuple will not
- * necessarily logged to WAL, even for a non-temp relation. It is the AMs
- * choice whether this optimization is supported.
- *
  * If the TABLE_INSERT_SKIP_FSM option is specified, AMs are free to not reuse
  * free space in the relation. This can save some cycles when we know the
  * relation is new and doesn't contain useful amounts of free space.  It's
@@ -1034,8 +1045,7 @@ table_compute_xid_horizon_for_tuples(Relation rel,
  *
  *
  * The BulkInsertState object (if any; bistate can be NULL for default
- * behavior) is also just passed through to RelationGetBufferForTuple. If
- * `bistate` is provided, table_finish_bulk_insert() needs to be called.
+ * behavior) is also just passed through to RelationGetBufferForTuple.
  *
  * On return the slot's tts_tid and tts_tableOid are updated to reflect the
  * insertion. But note that any toasting of fields within the slot is NOT
@@ -1231,20 +1241,6 @@ table_lock_tuple(Relation rel, ItemPointer tid, Snapshot snapshot,
 									   flags, tmfd);
 }
 
-/*
- * Perform operations necessary to complete insertions made via
- * tuple_insert and multi_insert with a BulkInsertState specified. This
- * e.g. may e.g. used to flush the relation when inserting with
- * TABLE_INSERT_SKIP_WAL specified.
- */
-static inline void
-table_finish_bulk_insert(Relation rel, int options)
-{
-	/* optional callback */
-	if (rel->rd_tableam && rel->rd_tableam->finish_bulk_insert)
-		rel->rd_tableam->finish_bulk_insert(rel, options);
-}
-
 
 /* ------------------------------------------------------------------------
  * DDL related functionality.
@@ -1326,6 +1322,30 @@ table_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 												   FreezeXid, MultiXactCutoff,
 												   num_tuples, tups_vacuumed,
 												   tups_recently_dead);
+}
+
+/*
+ * Register WAL-skipping to the relation. WAL-logging is skipped for the new
+ * pages after this call and the relation file is going to be synced at
+ * commit.
+ */
+static inline void
+table_relation_register_walskip(Relation rel)
+{
+	if (rel->rd_tableam && rel->rd_tableam->relation_register_walskip)
+		rel->rd_tableam->relation_register_walskip(rel);
+}
+
+/*
+ * Unregister WAL-skipping to the relation. Call this when the relation is
+ * going to be out-of-use after commit. WAL-skipping continues but the
+ * relation won't be synced at commit.
+ */
+static inline void
+table_relation_invalidate_walskip(Relation rel)
+{
+	if (rel->rd_tableam && rel->rd_tableam->relation_invalidate_walskip)
+		rel->rd_tableam->relation_invalidate_walskip(rel);
 }
 
 /*

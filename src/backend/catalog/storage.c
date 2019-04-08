@@ -21,6 +21,7 @@
 
 #include "miscadmin.h"
 
+#include "access/tableam.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -29,9 +30,17 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "storage/freespace.h"
-#include "storage/smgr.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+
+ /* #define STORAGEDEBUG */	/* turns DEBUG elogs on */
+
+#ifdef STORAGEDEBUG
+#define STORAGE_elog(...)				elog(__VA_ARGS__)
+#else
+#define STORAGE_elog(...)
+#endif
 
 /*
  * We keep a list of all relations (represented as RelFileNode values)
@@ -63,6 +72,61 @@ typedef struct PendingRelDelete
 } PendingRelDelete;
 
 static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
+
+/*
+ * We also track relation files (RelFileNode values) that have been created
+ * in the same transaction, and that have been modified without WAL-logging
+ * the action (an optimization possible with wal_level=minimal). When we are
+ * about to skip WAL-logging, a RelWalSkip entry is created, and
+ * 'skip_wal_min_blk' is set to the current size of the relation. Any
+ * operations on blocks < skip_wal_min_blk need to be WAL-logged as usual, but
+ * for operations on higher blocks, WAL-logging is skipped.
+
+ *
+ * NB: after WAL-logging has been skipped for a block, we must not WAL-log
+ * any subsequent actions on the same block either. Replaying the WAL record
+ * of the subsequent action might fail otherwise, as the "before" state of
+ * the block might not match, as the earlier actions were not WAL-logged.
+ * Likewise, after we have WAL-logged an operation for a block, we must
+ * WAL-log any subsequent operations on the same page as well. Replaying
+ * a possible full-page-image from the earlier WAL record would otherwise
+ * revert the page to the old state, even if we sync the relation at end
+ * of transaction.
+ *
+ * If a relation is truncated (without creating a new relfilenode), and we
+ * emit a WAL record of the truncation, we can't skip WAL-logging for any
+ * of the truncated blocks anymore, as replaying the truncation record will
+ * destroy all the data inserted after that. But if we have already decided
+ * to skip WAL-logging changes to a relation, and the relation is truncated,
+ * we don't need to WAL-log the truncation either.
+ *
+ * This mechanism is currently only used by heaps. Indexes are always
+ * WAL-logged. Also, this only applies for wal_level=minimal; with higher
+ * WAL levels we need the WAL for PITR/replication anyway.
+ */
+typedef struct RelWalSkip
+{
+	RelFileNode relnode;			/* relation created in same xact */
+	bool		forks[MAX_FORKNUM + 1];	/* target forknums */
+	BlockNumber skip_wal_min_blk;	/* WAL-logging skipped for blocks >=
+									 * skip_wal_min_blk */
+	BlockNumber wal_log_min_blk; 	/* The minimum blk number that requires
+									 * WAL-logging even if skipped by the
+									 * above*/
+	SubTransactionId create_sxid;	/* subxid where this entry is created */
+	SubTransactionId invalidate_sxid; /* subxid where this entry is
+									   * invalidated */
+	const TableAmRoutine *tableam;	/* Table access routine */
+}	RelWalSkip;
+
+/* Relations that need to be fsync'd at commit */
+static HTAB *walSkipHash = NULL;
+
+static RelWalSkip *getWalSkipEntry(Relation rel, bool create);
+static RelWalSkip *getWalSkipEntryRNode(RelFileNode *node,
+													  bool create);
+static void smgrProcessWALSkipInval(bool isCommit, SubTransactionId mySubid,
+						SubTransactionId parentSubid);
 
 /*
  * RelationCreateStorage
@@ -261,31 +325,59 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 */
 	if (RelationNeedsWAL(rel))
 	{
-		/*
-		 * Make an XLOG entry reporting the file truncation.
-		 */
-		XLogRecPtr	lsn;
-		xl_smgr_truncate xlrec;
+		RelWalSkip *walskip;
 
-		xlrec.blkno = nblocks;
-		xlrec.rnode = rel->rd_node;
-		xlrec.flags = SMGR_TRUNCATE_ALL;
-
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-
-		lsn = XLogInsert(RM_SMGR_ID,
-						 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+		/* get pending sync entry, create if not yet */
+		walskip = getWalSkipEntry(rel, true);
 
 		/*
-		 * Flush, because otherwise the truncation of the main relation might
-		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or visibility map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or visibility map would still
-		 * contain entries for the non-existent heap pages.
+		 * walskip is null here if rel doesn't support WAL-logging skip,
+		 * otherwise check for WAL-skipping status.
 		 */
-		if (fsm || vm)
-			XLogFlush(lsn);
+		if (walskip == NULL ||
+			walskip->skip_wal_min_blk == InvalidBlockNumber ||
+			walskip->skip_wal_min_blk < nblocks)
+		{
+			/*
+			 * If WAL-skipping is enabled, this is the first time truncation
+			 * of this relation in this transaction or truncation that leaves
+			 * pages that need at-commit fsync.  Make an XLOG entry reporting
+			 * the file truncation.
+			 */
+			XLogRecPtr		lsn;
+			xl_smgr_truncate xlrec;
+
+			xlrec.blkno = nblocks;
+			xlrec.rnode = rel->rd_node;
+			xlrec.flags = SMGR_TRUNCATE_ALL;
+
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+
+			lsn = XLogInsert(RM_SMGR_ID,
+							 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+
+			STORAGE_elog(DEBUG2,
+						 "WAL-logged truncation of rel %u/%u/%u to %u blocks",
+						 rel->rd_node.spcNode, rel->rd_node.dbNode,
+						 rel->rd_node.relNode, nblocks);
+			/*
+			 * Flush, because otherwise the truncation of the main relation
+			 * might hit the disk before the WAL record, and the truncation of
+			 * the FSM or visibility map. If we crashed during that window,
+			 * we'd be left with a truncated heap, but the FSM or visibility
+			 * map would still contain entries for the non-existent heap
+			 * pages.
+			 */
+			if (fsm || vm)
+				XLogFlush(lsn);
+
+			if (walskip)
+			{
+				/* no longer skip WAL-logging for the blocks */
+				walskip->wal_log_min_blk = nblocks;
+			}
+		}
 	}
 
 	/* Do the real work */
@@ -296,8 +388,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
  * Copy a fork's data, block by block.
  */
 void
-RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
-					ForkNumber forkNum, char relpersistence)
+RelationCopyStorage(Relation srcrel, SMgrRelation dst, ForkNumber forkNum)
 {
 	PGAlignedBlock buf;
 	Page		page;
@@ -305,6 +396,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	bool		copying_initfork;
 	BlockNumber nblocks;
 	BlockNumber blkno;
+	SMgrRelation src = srcrel->rd_smgr;
+	char 		relpersistence = srcrel->rd_rel->relpersistence;
 
 	page = (Page) buf.data;
 
@@ -316,12 +409,33 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	copying_initfork = relpersistence == RELPERSISTENCE_UNLOGGED &&
 		forkNum == INIT_FORKNUM;
 
-	/*
-	 * We need to log the copied data in WAL iff WAL archiving/streaming is
-	 * enabled AND it's a permanent relation.
-	 */
-	use_wal = XLogIsNeeded() &&
-		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
+	if (relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork)
+	{
+		/*
+		 * We need to log the copied data in WAL iff WAL archiving/streaming
+		 * is enabled AND it's a permanent relation.
+		 */
+		if (XLogIsNeeded())
+			use_wal = true;
+
+		/*
+		 * If the rel is WAL-logged, must fsync before commit.  We use
+		 * heap_sync to ensure that the toast table gets fsync'd too.  (For a
+		 * temp or unlogged rel we don't care since the data will be gone
+		 * after a crash anyway.)
+		 *
+		 * It's obvious that we must do this when not WAL-logging the
+		 * copy. It's less obvious that we have to do it even if we did
+		 * WAL-log the copied pages. The reason is that since we're copying
+		 * outside shared buffers, a CHECKPOINT occurring during the copy has
+		 * no way to flush the previously written data to disk (indeed it
+		 * won't know the new rel even exists).  A crash later on would replay
+		 * WAL from the checkpoint, therefore it wouldn't replay our earlier
+		 * WAL entries. If we do not fsync those pages here, they might still
+		 * not be on disk when the crash occurs.
+		 */
+		RecordPendingSync(srcrel, dst, forkNum);
+	}
 
 	nblocks = smgrnblocks(src, forkNum);
 
@@ -358,24 +472,321 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		 */
 		smgrextend(dst, forkNum, blkno, buf.data, true);
 	}
+}
+
+/*
+ * Do changes to given heap page need to be WAL-logged?
+ *
+ * This takes into account any previous RecordPendingSync() requests.
+ *
+ * Note that it is required to check this before creating any WAL records for
+ * heap pages - it is not merely an optimization! WAL-logging a record, when
+ * we have already skipped a previous WAL record for the same page could lead
+ * to failure at WAL replay, as the "before" state expected by the record
+ * might not match what's on disk. Also, if the heap was truncated earlier, we
+ * must WAL-log any changes to the once-truncated blocks, because replaying
+ * the truncation record will destroy them.
+ */
+bool
+BufferNeedsWAL(Relation rel, Buffer buf)
+{
+	BlockNumber		blkno = InvalidBlockNumber;
+	RelWalSkip *walskip;
+
+	if (!RelationNeedsWAL(rel))
+		return false;
+
+	/* fetch existing pending sync entry */
+	walskip = getWalSkipEntry(rel, false);
 
 	/*
-	 * If the rel is WAL-logged, must fsync before commit.  We use heap_sync
-	 * to ensure that the toast table gets fsync'd too.  (For a temp or
-	 * unlogged rel we don't care since the data will be gone after a crash
-	 * anyway.)
-	 *
-	 * It's obvious that we must do this when not WAL-logging the copy. It's
-	 * less obvious that we have to do it even if we did WAL-log the copied
-	 * pages. The reason is that since we're copying outside shared buffers, a
-	 * CHECKPOINT occurring during the copy has no way to flush the previously
-	 * written data to disk (indeed it won't know the new rel even exists).  A
-	 * crash later on would replay WAL from the checkpoint, therefore it
-	 * wouldn't replay our earlier WAL entries. If we do not fsync those pages
-	 * here, they might still not be on disk when the crash occurs.
+	 * no point in doing further work if we know that we don't skip
+	 * WAL-logging.
 	 */
-	if (relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork)
-		smgrimmedsync(dst, forkNum);
+	if (!walskip)
+	{
+		STORAGE_elog(DEBUG2,
+					 "not skipping WAL-logging for rel %u/%u/%u block %u",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, BufferGetBlockNumber(buf));
+		return true;
+	}
+
+	Assert(BufferIsValid(buf));
+
+	blkno = BufferGetBlockNumber(buf);
+
+	/*
+	 * We don't skip WAL-logging for pages that once done.
+	 */
+	if (walskip->skip_wal_min_blk == InvalidBlockNumber ||
+		walskip->skip_wal_min_blk > blkno)
+	{
+		STORAGE_elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because skip_wal_min_blk is %u",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, blkno, walskip->skip_wal_min_blk);
+		return true;
+	}
+
+	/*
+	 * we don't skip WAL-logging for blocks that have got WAL-logged
+	 * truncation
+	 */
+	if (walskip->wal_log_min_blk != InvalidBlockNumber &&
+		walskip->wal_log_min_blk <= blkno)
+	{
+		STORAGE_elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because wal_log_min_blk is %u",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, blkno, walskip->wal_log_min_blk);
+		return true;
+	}
+
+	STORAGE_elog(DEBUG2, "skipping WAL-logging for rel %u/%u/%u block %u",
+				 rel->rd_node.spcNode, rel->rd_node.dbNode,
+				 rel->rd_node.relNode, blkno);
+
+	return false;
+}
+
+bool
+BlockNeedsWAL(Relation rel, BlockNumber blkno)
+{
+	RelWalSkip *walskip;
+
+	if (!RelationNeedsWAL(rel))
+		return false;
+
+	/* fetch exising pending sync entry */
+	walskip = getWalSkipEntry(rel, false);
+
+	/*
+	 * no point in doing further work if we know that we don't skip
+	 * WAL-logging.
+	 */
+	if (!walskip)
+		return true;
+
+	/*
+	 * We don't skip WAL-logging for pages that once done.
+	 */
+	if (walskip->skip_wal_min_blk == InvalidBlockNumber ||
+		walskip->skip_wal_min_blk > blkno)
+	{
+		STORAGE_elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because skip_wal_min_blk is %u",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, blkno, walskip->skip_wal_min_blk);
+		return true;
+	}
+
+	/*
+	 * we don't skip WAL-logging for blocks that have got WAL-logged
+	 * truncation
+	 */
+	if (walskip->wal_log_min_blk != InvalidBlockNumber &&
+		walskip->wal_log_min_blk <= blkno)
+	{
+		STORAGE_elog(DEBUG2, "not skipping WAL-logging for rel %u/%u/%u block %u, because wal_log_min_blk is %u",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, blkno, walskip->wal_log_min_blk);
+
+		return true;
+	}
+
+	STORAGE_elog(DEBUG2, "skipping WAL-logging for rel %u/%u/%u block %u",
+				 rel->rd_node.spcNode, rel->rd_node.dbNode,
+				 rel->rd_node.relNode, blkno);
+
+	return false;
+}
+
+/*
+ * Remember that the given relation doesn't need WAL-logging for the blocks
+ * after the current block size and for the blocks that are going to be synced
+ * at commit.
+ */
+void
+RecordWALSkipping(Relation rel)
+{
+	RelWalSkip *walskip;
+
+	Assert(RelationNeedsWAL(rel));
+
+	/* get pending sync entry, create if not yet  */
+	walskip = getWalSkipEntry(rel, true);
+
+	if (walskip == NULL)
+		return;
+
+	/*
+	 *  Record only the first registration.
+	 */
+	if (walskip->skip_wal_min_blk != InvalidBlockNumber)
+	{
+		STORAGE_elog(DEBUG2, "WAL skipping for rel %u/%u/%u was already registered at block %u (new %u)",
+					 rel->rd_node.spcNode, rel->rd_node.dbNode,
+					 rel->rd_node.relNode, walskip->skip_wal_min_blk,
+					 RelationGetNumberOfBlocks(rel));
+		return;
+	}
+
+	STORAGE_elog(DEBUG2, "registering new WAL skipping rel %u/%u/%u at block %u",
+				 rel->rd_node.spcNode, rel->rd_node.dbNode,
+				 rel->rd_node.relNode, RelationGetNumberOfBlocks(rel));
+
+	walskip->skip_wal_min_blk = RelationGetNumberOfBlocks(rel);
+}
+
+/*
+ * Record commit-time file sync. This shouldn't be used mixing with
+ * RecordWALSkipping.
+ */
+void
+RecordPendingSync(Relation rel, SMgrRelation targetsrel, ForkNumber forknum)
+{
+	RelWalSkip *walskip;
+
+	Assert(RelationNeedsWAL(rel));
+
+	/* check for support for this feature */
+	if (rel->rd_tableam == NULL ||
+		rel->rd_tableam->relation_register_walskip == NULL)
+		return;
+
+	walskip = getWalSkipEntryRNode(&targetsrel->smgr_rnode.node, true);
+	walskip->forks[forknum] = true;
+	walskip->skip_wal_min_blk = 0;
+	walskip->tableam = rel->rd_tableam;
+
+	STORAGE_elog(DEBUG2,
+				 "registering new pending sync for rel %u/%u/%u at block %u",
+				 walskip->relnode.spcNode, walskip->relnode.dbNode,
+				 walskip->relnode.relNode, 0);
+}
+
+/*
+ * RelationInvalidateWALSkip() -- invalidate WAL-skip entry
+ */
+void
+RelationInvalidateWALSkip(Relation rel)
+{
+	RelWalSkip *walskip;
+
+	/* we know we don't have one */
+	if (rel->rd_nowalskip)
+		return;
+
+	walskip = getWalSkipEntry(rel, false);
+
+	if (!walskip)
+		return;
+
+	/*
+	 * The state is reset at subtransaction commit/abort. No invalidation
+	 * request must not come for the same relation in the same subtransaction.
+	 */
+	Assert(walskip->invalidate_sxid == InvalidSubTransactionId);
+
+	walskip->invalidate_sxid = GetCurrentSubTransactionId();
+
+	STORAGE_elog(DEBUG2,
+				 "WAL skip of rel %u/%u/%u invalidated by sxid %d",
+				 walskip->relnode.spcNode, walskip->relnode.dbNode,
+				 walskip->relnode.relNode, walskip->invalidate_sxid);
+}
+
+/*
+ * getWalSkipEntry: get WAL skip entry.
+ *
+ * Returns WAL skip entry for the relation. The entry tracks WAL-skipping
+ * blocks for the relation.  The WAL-skipped blocks need fsync at commit time.
+ * Creates one if needed when create is true. If rel doesn't support this
+ * feature, returns true even if create is true.
+ */
+static inline RelWalSkip *
+getWalSkipEntry(Relation rel, bool create)
+{
+	RelWalSkip *walskip_entry = NULL;
+
+	if (rel->rd_walskip)
+		return rel->rd_walskip;
+
+	/* we know we don't have pending sync entry */
+	if (!create && rel->rd_nowalskip)
+		return NULL;
+
+	/* check for support for this feature */
+	if (rel->rd_tableam == NULL ||
+		rel->rd_tableam->relation_register_walskip == NULL)
+	{
+		rel->rd_nowalskip = true;
+		return NULL;
+	}
+
+	walskip_entry = getWalSkipEntryRNode(&rel->rd_node, create);
+
+	if (!walskip_entry)
+	{
+		/* prevent further hash lookup */
+		rel->rd_nowalskip = true;
+		return NULL;
+	}
+
+	walskip_entry->forks[MAIN_FORKNUM] = true;
+	walskip_entry->tableam = rel->rd_tableam;
+
+	/* hold shortcut in Relation */
+	rel->rd_nowalskip = false;
+	rel->rd_walskip = walskip_entry;
+
+	return walskip_entry;
+}
+
+/*
+ * getWalSkipEntryRNode: get WAL skip entry by rnode
+ *
+ * Returns a WAL skip entry for the RelFileNode.
+ */
+static RelWalSkip *
+getWalSkipEntryRNode(RelFileNode *rnode, bool create)
+{
+	RelWalSkip *walskip_entry = NULL;
+	bool			found;
+
+	if (!walSkipHash)
+	{
+		/* First time through: initialize the hash table */
+		HASHCTL		ctl;
+
+		if (!create)
+			return NULL;
+
+		MemSet(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(RelFileNode);
+		ctl.entrysize = sizeof(RelWalSkip);
+		ctl.hash = tag_hash;
+		walSkipHash = hash_create("pending relation sync table", 5,
+								   &ctl, HASH_ELEM | HASH_FUNCTION);
+	}
+
+	walskip_entry = (RelWalSkip *)
+		hash_search(walSkipHash, (void *) rnode,
+					create ? HASH_ENTER: HASH_FIND,	&found);
+
+	if (!walskip_entry)
+		return NULL;
+
+	/* new entry created */
+	if (!found)
+	{
+		memset(&walskip_entry->forks, 0, sizeof(walskip_entry->forks));
+		walskip_entry->wal_log_min_blk = InvalidBlockNumber;
+		walskip_entry->skip_wal_min_blk = InvalidBlockNumber;
+		walskip_entry->create_sxid = GetCurrentSubTransactionId();
+		walskip_entry->invalidate_sxid = InvalidSubTransactionId;
+		walskip_entry->tableam = NULL;
+	}
+
+	return walskip_entry;
 }
 
 /*
@@ -507,6 +918,107 @@ smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr)
 }
 
 /*
+ * Finish bulk insert of files.
+ */
+void
+smgrFinishBulkInsert(bool isCommit)
+{
+	if (!walSkipHash)
+		return;
+
+	if (isCommit)
+	{
+		HASH_SEQ_STATUS status;
+		RelWalSkip *walskip;
+
+		hash_seq_init(&status, walSkipHash);
+
+		while ((walskip = hash_seq_search(&status)) != NULL)
+		{
+			/*
+			 * On commit, process valid entreis. Rollback doesn't need sync on
+			 * all changes during the transaction.
+			 */
+			if (walskip->skip_wal_min_blk != InvalidBlockNumber &&
+				walskip->invalidate_sxid == InvalidSubTransactionId)
+			{
+				int f;
+
+				FlushRelationBuffersWithoutRelCache(walskip->relnode, false);
+
+				/*
+				 * We mustn't create an entry when the table AM doesn't
+				 * support WAL-skipping.
+				 */
+				Assert (walskip->tableam->finish_bulk_insert);
+
+				/* flush all requested forks  */
+				for (f = MAIN_FORKNUM ; f <= MAX_FORKNUM ; f++)
+				{
+					if (walskip->forks[f])
+					{
+						walskip->tableam->finish_bulk_insert(walskip->relnode, f);
+						STORAGE_elog(DEBUG2, "finishing bulk insert to rel %u/%u/%u fork %d",
+									 walskip->relnode.spcNode,
+									 walskip->relnode.dbNode,
+									 walskip->relnode.relNode, f);
+					}
+				}
+			}
+		}
+	}
+
+	hash_destroy(walSkipHash);
+	walSkipHash = NULL;
+}
+
+/*
+ * Process pending invalidation of WAL skip happened in the subtransaction
+ */
+void
+smgrProcessWALSkipInval(bool isCommit, SubTransactionId mySubid,
+						SubTransactionId parentSubid)
+{
+	HASH_SEQ_STATUS status;
+	RelWalSkip *walskip;
+
+	if (!walSkipHash)
+		return;
+
+	/* We expect that we don't have walSkipHash in almost all cases */
+	hash_seq_init(&status, walSkipHash);
+
+	while ((walskip = hash_seq_search(&status)) != NULL)
+	{
+		if (walskip->create_sxid == mySubid)
+		{
+			/*
+			 * The entry was created in this subxact. Remove it on abort, or
+			 * on commit after invalidation.
+			 */
+			if (!isCommit || walskip->invalidate_sxid == mySubid)
+				hash_search(walSkipHash, &walskip->relnode,
+							HASH_REMOVE, NULL);
+			/* Treat committing valid entry as creation by the parent. */
+			else if (walskip->invalidate_sxid == InvalidSubTransactionId)
+				walskip->create_sxid = parentSubid;
+		}
+		else if (walskip->invalidate_sxid == mySubid)
+		{
+			/*
+			 * This entry was created elsewhere then invalidated by this
+			 * subxact. Treat commit as invalidation by the parent. Otherwise
+			 * cancel invalidation.
+			 */
+			if (isCommit)
+				walskip->invalidate_sxid = parentSubid;
+			else
+				walskip->invalidate_sxid = InvalidSubTransactionId;
+		}
+	}
+}
+
+/*
  *	PostPrepare_smgr -- Clean up after a successful PREPARE
  *
  * What we have to do here is throw away the in-memory state about pending
@@ -535,7 +1047,7 @@ PostPrepare_smgr(void)
  * Reassign all items in the pending-deletes list to the parent transaction.
  */
 void
-AtSubCommit_smgr(void)
+AtSubCommit_smgr(SubTransactionId mySubid, SubTransactionId parentSubid)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
 	PendingRelDelete *pending;
@@ -545,6 +1057,9 @@ AtSubCommit_smgr(void)
 		if (pending->nestLevel >= nestLevel)
 			pending->nestLevel = nestLevel - 1;
 	}
+
+	/* Remove invalidated WAL skip in this subtransaction */
+	smgrProcessWALSkipInval(true, mySubid, parentSubid);
 }
 
 /*
@@ -555,9 +1070,12 @@ AtSubCommit_smgr(void)
  * subtransaction will not commit.
  */
 void
-AtSubAbort_smgr(void)
+AtSubAbort_smgr(SubTransactionId mySubid, SubTransactionId parentSubid)
 {
 	smgrDoPendingDeletes(false);
+
+	/* Remove invalidated WAL skip in this subtransaction */
+	smgrProcessWALSkipInval(false, mySubid, parentSubid);
 }
 
 void

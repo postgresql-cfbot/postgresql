@@ -2111,6 +2111,9 @@ CommitTransaction(void)
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
+	/* Flush updates to relations that we didn't WAL-logged */
+	smgrFinishBulkInsert(true);
+
 	/*
 	 * Mark serializable transaction as complete for predicate locking
 	 * purposes.  This should be done as late as we can put it and still allow
@@ -2342,6 +2345,9 @@ PrepareTransaction(void)
 
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
+
+	/* Flush updates to relations that we didn't WAL-logged */
+	smgrFinishBulkInsert(true);
 
 	/*
 	 * Mark serializable transaction as complete for predicate locking
@@ -2668,6 +2674,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
+	smgrFinishBulkInsert(false);	/* abandon pending syncs */
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as
@@ -4801,8 +4808,7 @@ CommitSubTransaction(void)
 	AtEOSubXact_RelationCache(true, s->subTransactionId,
 							  s->parent->subTransactionId);
 	AtEOSubXact_Inval(true);
-	AtSubCommit_smgr();
-
+	AtSubCommit_smgr(s->subTransactionId, s->parent->subTransactionId);
 	/*
 	 * The only lock we actually release here is the subtransaction XID lock.
 	 */
@@ -4979,7 +4985,7 @@ AbortSubTransaction(void)
 		ResourceOwnerRelease(s->curTransactionOwner,
 							 RESOURCE_RELEASE_AFTER_LOCKS,
 							 false, false);
-		AtSubAbort_smgr();
+		AtSubAbort_smgr(s->subTransactionId, s->parent->subTransactionId);
 
 		AtEOXact_GUC(false, s->gucNestLevel);
 		AtEOSubXact_SPI(false, s->subTransactionId);

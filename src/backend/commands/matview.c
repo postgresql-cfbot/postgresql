@@ -462,9 +462,10 @@ transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * We can skip WAL-logging the insertions, unless PITR or streaming
 	 * replication is in use. We can skip the FSM in any case.
 	 */
-	myState->ti_options = TABLE_INSERT_SKIP_FSM | TABLE_INSERT_FROZEN;
 	if (!XLogIsNeeded())
-		myState->ti_options |= TABLE_INSERT_SKIP_WAL;
+		table_relation_register_walskip(transientrel);
+	myState->ti_options = TABLE_INSERT_SKIP_FSM | TABLE_INSERT_FROZEN;
+
 	myState->bistate = GetBulkInsertState();
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
@@ -509,7 +510,7 @@ transientrel_shutdown(DestReceiver *self)
 
 	FreeBulkInsertState(myState->bistate);
 
-	table_finish_bulk_insert(myState->transientrel, myState->ti_options);
+	/* If we skipped using WAL, we will sync the relation at commit */
 
 	/* close transientrel, but keep lock until commit */
 	table_close(myState->transientrel, NoLock);

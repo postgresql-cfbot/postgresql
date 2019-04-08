@@ -2799,24 +2799,15 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 	estate->es_output_cid = parentestate->es_output_cid;
 	if (parentestate->es_num_result_relations > 0)
 	{
-		int		numResultRels = parentestate->es_num_result_relations;
-		int		numRootResultRels = parentestate->es_num_root_result_relations;
+		int			numResultRelations = parentestate->es_num_result_relations;
 		ResultRelInfo *resultRelInfos;
 
 		resultRelInfos = (ResultRelInfo *)
-			palloc(numResultRels * sizeof(ResultRelInfo));
+			palloc(numResultRelations * sizeof(ResultRelInfo));
 		memcpy(resultRelInfos, parentestate->es_result_relations,
-			   numResultRels * sizeof(ResultRelInfo));
+			   numResultRelations * sizeof(ResultRelInfo));
 		estate->es_result_relations = resultRelInfos;
-		estate->es_num_result_relations = numResultRels;
-
-		/* Also transfer partitioned root result relations. */
-		resultRelInfos = (ResultRelInfo *)
-			palloc(numRootResultRels * sizeof(ResultRelInfo));
-		memcpy(resultRelInfos, parentestate->es_root_result_relations,
-			   numRootResultRels * sizeof(ResultRelInfo));
-		estate->es_root_result_relations = resultRelInfos;
-		estate->es_num_root_result_relations = numRootResultRels;
+		estate->es_num_result_relations = numResultRelations;
 	}
 	/* es_result_relation_info must NOT be copied */
 	/* es_trig_target_relations must NOT be copied */

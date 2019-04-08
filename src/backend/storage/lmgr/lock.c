@@ -254,6 +254,8 @@ static HTAB *LockMethodLockHash;
 static HTAB *LockMethodProcLockHash;
 static HTAB *LockMethodLocalHash;
 
+/* Initial size of LockMethodLocalHash table */
+#define LOCKMETHODLOCALHASH_INIT_SIZE 16
 
 /* private state for error cleanup */
 static LOCALLOCK *StrongLockInProgress;
@@ -339,6 +341,7 @@ PROCLOCK_PRINT(const char *where, const PROCLOCK *proclockP)
 #endif							/* not LOCK_DEBUG */
 
 
+static void CreateLocalLockHash(void);
 static uint32 proclock_hash(const void *key, Size keysize);
 static void RemoveLocalLock(LOCALLOCK *locallock);
 static PROCLOCK *SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
@@ -431,14 +434,28 @@ InitLocks(void)
 	if (!found)
 		SpinLockInit(&FastPathStrongRelationLocks->mutex);
 
+	CreateLocalLockHash();
+}
+
+/*
+ * CreateLocalLockHash
+ *		Create the LockMethodLocalHash hash table.
+ */
+static void
+CreateLocalLockHash(void)
+{
+	HASHCTL		info;
+
 	/*
 	 * Allocate non-shared hash table for LOCALLOCK structs.  This stores lock
 	 * counts and resource owner information.
 	 *
-	 * The non-shared table could already exist in this process (this occurs
-	 * when the postmaster is recreating shared memory after a backend crash).
-	 * If so, delete and recreate it.  (We could simply leave it, since it
-	 * ought to be empty in the postmaster, but for safety let's zap it.)
+	 * First destroy any old table that may exist.  We might just be
+	 * recreating the table or it could already exist in this process (this
+	 * occurs when the postmaster is recreating shared memory after a backend
+	 * crash).  If so, delete and recreate it.  (We could simply leave it,
+	 * since it ought to be empty in the postmaster, but for safety let's zap
+	 * it.)
 	 */
 	if (LockMethodLocalHash)
 		hash_destroy(LockMethodLocalHash);
@@ -447,11 +464,10 @@ InitLocks(void)
 	info.entrysize = sizeof(LOCALLOCK);
 
 	LockMethodLocalHash = hash_create("LOCALLOCK hash",
-									  16,
+									  LOCKMETHODLOCALHASH_INIT_SIZE,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
 }
-
 
 /*
  * Fetch the lock method table associated with a given lock
@@ -2348,6 +2364,18 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 
 		LWLockRelease(partitionLock);
 	}							/* loop over partitions */
+
+	/*
+	 * The hash_seq_search can become inefficient when the hash table has
+	 * grown significantly larger than the default size due to the backend
+	 * having run queries which obtained large numbers of locks at once. Here
+	 * we'll build a new table at its initial size whenever the table is empty
+	 * and the maximum used bucket is beyond the original table size.
+	 */
+	if (hash_get_num_entries(LockMethodLocalHash) == 0 &&
+		hash_get_max_bucket(LockMethodLocalHash) >
+		LOCKMETHODLOCALHASH_INIT_SIZE)
+		CreateLocalLockHash();
 
 #ifdef LOCK_DEBUG
 	if (*(lockMethodTable->trace_flag))

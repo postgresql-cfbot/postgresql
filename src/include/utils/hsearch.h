@@ -132,6 +132,7 @@ extern void *hash_search_with_hash_value(HTAB *hashp, const void *keyPtr,
 extern bool hash_update_hash_key(HTAB *hashp, void *existingEntry,
 					 const void *newKeyPtr);
 extern long hash_get_num_entries(HTAB *hashp);
+extern uint32 hash_get_max_bucket(HTAB *hashp);
 extern void hash_seq_init(HASH_SEQ_STATUS *status, HTAB *hashp);
 extern void *hash_seq_search(HASH_SEQ_STATUS *status);
 extern void hash_seq_term(HASH_SEQ_STATUS *status);

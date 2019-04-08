@@ -70,7 +70,6 @@ static HeapTuple GetDatabaseTupleByOid(Oid dboid);
 static void PerformAuthentication(Port *port);
 static void CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections);
 static void InitCommunication(void);
-static void ReleaseLWLocks(int code, Datum arg);
 static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
 static void LockTimeoutHandler(void);
@@ -665,7 +664,6 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 */
 		CreateAuxProcessResourceOwner();
 
-		on_shmem_exit(ReleaseLWLocks, 0);
 		StartupXLOG();
 		/* Release (and warn about) any buffer pins leaked in StartupXLOG */
 		ReleaseAuxProcessResources(true);
@@ -1174,23 +1172,6 @@ process_settings(Oid databaseid, Oid roleid)
 
 	UnregisterSnapshot(snapshot);
 	table_close(relsetting, AccessShareLock);
-}
-
-/*
- * There are 2 types of buffer locks on-holding when AtProcExit_Buffers() is
- * invoked in a bootstrap process or a standalone backend:
- *  (1) Exceptions thrown during StartupXLOG()
- *  (2) Exceptions thrown during exception-handling in ShutdownXLOG()
- * So we need this on_shmem_exit callback for single user mode.
- * For processes under postmaster, ShutdownAuxiliaryProcess() will release
- * the lw-locks and ShutdownXLOG() is not registered as a callback, so there
- * is no such issue. Also, please note this callback should be registered in
- * the order after AtProcExit_buffers() and before ShutdownXLOG().
- */
-static void
-ReleaseLWLocks(int code, Datum arg)
-{
-	LWLockReleaseAll();
 }
 
 /*

@@ -1356,32 +1356,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry>
-    <term><literal>compress_tuple_target</literal> (<type>integer</type>)</term>
-    <listitem>
-     <para>
-      The compress_tuple_target parameter specifies the minimum tuple length
-      required before we try to compress columns marked as Extended or Main
-      and applies only to new tuples - there is no effect on existing rows.
-      By default this parameter is set to allow at least 4 tuples per block,
-      which with the default blocksize will be 2040 bytes. Valid values are
-      between 128 bytes and (blocksize - header), by default 8160 bytes.
-      If the specified value is greater than
-      <literal>toast_tuple_target</literal>, then we will use the current
-      setting of <literal>toast_tuple_target</literal> for
-      <literal>compress_tuple_target</literal>. Note that the default setting
-      is often close to optimal. If the value is set too low then the
-      <acronym>TOAST</acronym> may get invoked too often. If the
-      compressibility of the field values is not good, then compression and
-      decompression can add significant computation overhead without
-      corresponding savings in storage consumption.
-     </para>
-     <para>
-      This parameter cannot be set for TOAST tables.
-     </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
     <term><literal>parallel_workers</literal> (<type>integer</type>)</term>
     <listitem>
      <para>

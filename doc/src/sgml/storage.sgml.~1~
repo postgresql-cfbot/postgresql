@@ -434,17 +434,14 @@ bytes regardless of the actual size of the represented value.
 <para>
 The <acronym>TOAST</acronym> management code is triggered only
 when a row value to be stored in a table is wider than
-<symbol>TOAST_TUPLE_THRESHOLD</symbol> bytes (normally 2 kB) or the
-table-level <symbol>COMPRESS_TUPLE_TARGET</symbol> option.  The
-<acronym>TOAST</acronym> code will first in-line compress field values
-greater than <symbol>COMPRESS_TUPLE_TARGET</symbol>. If the compressed row
-value is still greater than <symbol>TOAST_TUPLE_TARGET</symbol> then the
-<acronym>TOAST</acronym> code will move the field values out-of-line until
-the row value is shorter than <symbol>TOAST_TUPLE_TARGET</symbol> bytes (also
-normally 2 kB, adjustable) or no more gains can be had.  During an UPDATE
+<symbol>TOAST_TUPLE_THRESHOLD</symbol> bytes (normally 2 kB).
+The <acronym>TOAST</acronym> code will compress and/or move
+field values out-of-line until the row value is shorter than
+<symbol>TOAST_TUPLE_TARGET</symbol> bytes (also normally 2 kB, adjustable)
+or no more gains can be had.  During an UPDATE
 operation, values of unchanged fields are normally preserved as-is; so an
-UPDATE of a row with out-of-line values incurs no <acronym>TOAST</acronym>
-costs if none of the out-of-line values change.
+UPDATE of a row with out-of-line values incurs no <acronym>TOAST</acronym> costs if
+none of the out-of-line values change.
 </para>
 
 <para>
@@ -496,17 +493,7 @@ with <link linkend="sql-altertable"><command>ALTER TABLE ... SET STORAGE</comman
 
 <para>
 <symbol>TOAST_TUPLE_TARGET</symbol> can be adjusted for each table using
-<link linkend="sql-altertable"><command>ALTER TABLE ... SET (toast_tuple_target = N)</command></link>.
-</para>
-
-<para>
-<symbol>COMPRESS_TUPLE_TARGET</symbol> can be adjusted for each table using
-<link linkend="sql-altertable"><command>ALTER TABLE ... SET
-(compress_tuple_target = N)</command></link>. If
-<symbol>COMPRESS_TUPLE_TARGET</symbol> is not set explicitly for a table or if
-it is greater than <symbol>TOAST_TUPLE_TARGET</symbol> then
-<symbol>TOAST_TUPLE_TARGET</symbol> value is used to decide when to do
-compression.
+<link linkend="sql-altertable"><command>ALTER TABLE ... SET (toast_tuple_target = N)</command></link>
 </para>
 
 <para>

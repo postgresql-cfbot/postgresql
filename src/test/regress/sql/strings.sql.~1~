@@ -388,36 +388,7 @@ INSERT INTO toasttest values (repeat('1234567890',300));
 SELECT pg_relation_size(reltoastrelid) = 0 AS is_empty
   FROM pg_class where relname = 'toasttest';
 
--- Test tuple compression with compress_tuple_target
-CREATE TABLE compresstest250 (a int, b text)
-  WITH (compress_tuple_target = 250);
-CREATE TABLE compresstest2040 (a int, b text)
-  WITH (compress_tuple_target = 2040);
--- tuple should not get compressed nor toasted
-INSERT INTO compresstest250 VALUES (1, repeat('1234567890',20));
--- tuple should get compressed but not toasted
-INSERT INTO compresstest250 VALUES (2, repeat('1234567890',30));
--- tuple should not get compressed nor toasted
-INSERT INTO compresstest2040 VALUES (1, repeat('1234567890',20));
--- tuple should not get compressed nor toasted
-INSERT INTO compresstest2040 VALUES (2, repeat('1234567890',30));
-SELECT a, pg_column_size(b) < 250 FROM compresstest250 ORDER BY a;
-SELECT a, pg_column_size(b) < 250 FROM compresstest2040 ORDER BY a;
--- expect 0 blocks in toast relation
-SELECT pg_relation_size(reltoastrelid) = 0 AS data_size
-  FROM pg_class WHERE relname = 'compresstest250';
-SELECT pg_relation_size(reltoastrelid) = 0 AS data_size
-  FROM pg_class WHERE relname = 'compresstest2040';
--- tuple should get compressed and toasted
-INSERT INTO compresstest250 SELECT 3, string_agg('', md5(random()::text))
-  FROM generate_series(1,300);
-SELECT a, pg_column_size(b) < 250 FROM compresstest250 ORDER by a;
--- expect > 0 blocks in toast relation
-SELECT pg_relation_size(reltoastrelid) = 0 AS data_size
-  FROM pg_class WHERE relname = 'compresstest250';
-
 DROP TABLE toasttest;
-DROP TABLE compresstest250, compresstest2040;
 
 --
 -- test substr with toasted bytea values

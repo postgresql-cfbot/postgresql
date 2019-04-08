@@ -636,10 +636,28 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	Size		len;
 	OffsetNumber newoff;
 	HeapTuple	heaptup;
+	int			toast_tuple_threshold;
+	int			compress_tuple_threshold;
+
+	/*
+	 * Compute the compressibility threshold, which is the minimum between
+	 * toast_tuple_target and compress_tuple_target for a relation.
+	 */
+	toast_tuple_threshold = RelationGetToastTupleTarget(state->rs_new_rel,
+									TOAST_TUPLE_TARGET);
+	compress_tuple_threshold = RelationGetCompressTupleTarget(state->rs_new_rel,
+									COMPRESS_TUPLE_TARGET);
+	compress_tuple_threshold = Min(compress_tuple_threshold,
+								   toast_tuple_threshold);
 
 	/*
 	 * If the new tuple is too big for storage or contains already toasted
 	 * out-of-line attributes from some other relation, invoke the toaster.
+	 *
+	 * The toaster is invoked only if the tuple length is greater than the
+	 * compression limit.  Note that compress_tuple_threshold must be less
+	 * than or equal to toast_tuple_threshold, so it's enough to only test
+	 * for compress_tuple_threshold.
 	 *
 	 * Note: below this point, heaptup is the data we actually intend to store
 	 * into the relation; tup is the caller's original untoasted data.
@@ -650,7 +668,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		Assert(!HeapTupleHasExternal(tup));
 		heaptup = tup;
 	}
-	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
+	else if (HeapTupleHasExternal(tup) ||
+			 tup->t_len > compress_tuple_threshold)
 	{
 		int options = HEAP_INSERT_SKIP_FSM;
 

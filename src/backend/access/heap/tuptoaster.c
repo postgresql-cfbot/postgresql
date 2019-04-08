@@ -549,6 +549,7 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	bool		has_nulls = false;
 
 	Size		maxDataLen;
+	Size		maxCompressLen;
 	Size		hoff;
 
 	char		toast_action[MaxHeapAttributeNumber];
@@ -732,11 +733,18 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	maxDataLen = RelationGetToastTupleTarget(rel, TOAST_TUPLE_TARGET) - hoff;
 
 	/*
+	 * Get the limit at which we should apply compression. This will be same as
+	 * maxDataLen unless overridden by the user explicitly.
+	 */
+	maxCompressLen = RelationGetCompressTupleTarget(rel, COMPRESS_TUPLE_TARGET) - hoff;
+	maxCompressLen = Min(maxCompressLen, maxDataLen);
+
+	/*
 	 * Look for attributes with attstorage 'x' to compress.  Also find large
 	 * attributes with attstorage 'x' or 'e', and store them external.
 	 */
 	while (heap_compute_data_size(tupleDesc,
-								  toast_values, toast_isnull) > maxDataLen)
+								  toast_values, toast_isnull) > maxCompressLen)
 	{
 		int			biggest_attno = -1;
 		int32		biggest_size = MAXALIGN(TOAST_POINTER_SIZE);
@@ -881,7 +889,7 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	 * compression
 	 */
 	while (heap_compute_data_size(tupleDesc,
-								  toast_values, toast_isnull) > maxDataLen)
+								  toast_values, toast_isnull) > maxCompressLen)
 	{
 		int			biggest_attno = -1;
 		int32		biggest_size = MAXALIGN(TOAST_POINTER_SIZE);

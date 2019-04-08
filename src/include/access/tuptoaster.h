@@ -33,10 +33,19 @@
 				  / (tuplesPerPage))
 
 /*
- * These symbols control toaster activation.  If a tuple is larger than
- * TOAST_TUPLE_THRESHOLD, we will try to toast it down to no more than
- * TOAST_TUPLE_TARGET bytes through compressing compressible fields and
- * moving EXTENDED and EXTERNAL data out-of-line.
+ * These symbols control toaster and compression activation.  If a tuple
+ * is larger than COMPRESS_TUPLE_TARGET, we will try to compress it first
+ * if its column is marked as MAIN or EXTENDED.  If the compressed row is
+ * still greater than TOAST_TUPLE_TARGET, then we will try to toast it
+ * down to TOAST_TUPLE_TARGET bytes through compressing compressible
+ * fields and moving EXTENDED and EXTERNAL data out-of-line.
+ *
+ * By default, COMPRESS_TUPLE_TARGET and TOAST_TUPLE_TARGET have the same
+ * threshold values, meaning that compression will only be tried when toasting
+ * a tuple.  It is possible to tune that behavior using the relation option
+ * COMPRESS_TUPLE_TARGET.  If COMPRESS_TUPLE_TARGET is higher than
+ * TOAST_TUPLE_TARGET, then only TOAST_TUPLE_TARGET is used to decide if a
+ * tuple is toasted and compressed.
  *
  * The numbers need not be the same, though they currently are.  It doesn't
  * make sense for TARGET to exceed THRESHOLD, but it could be useful to make
@@ -55,6 +64,8 @@
 #define TOAST_TUPLE_THRESHOLD	MaximumBytesPerTuple(TOAST_TUPLES_PER_PAGE)
 
 #define TOAST_TUPLE_TARGET		TOAST_TUPLE_THRESHOLD
+
+#define COMPRESS_TUPLE_TARGET	TOAST_TUPLE_THRESHOLD
 
 /*
  * The code will also consider moving MAIN data out-of-line, but only as a

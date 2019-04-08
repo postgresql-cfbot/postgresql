@@ -263,7 +263,6 @@ typedef struct StdRdOptions
 	/* fraction of newly inserted tuples prior to trigger index cleanup */
 	float8		vacuum_cleanup_index_scale_factor;
 	int			toast_tuple_target; /* target for tuple toasting */
-	int			compress_tuple_target; /* target for tuple compression */
 	AutoVacOpts autovacuum;		/* autovacuum-related options */
 	bool		user_catalog_table; /* use as an additional catalog relation */
 	int			parallel_workers;	/* max number of parallel workers */
@@ -280,14 +279,6 @@ typedef struct StdRdOptions
 #define RelationGetToastTupleTarget(relation, defaulttarg) \
 	((relation)->rd_options ? \
 	 ((StdRdOptions *) (relation)->rd_options)->toast_tuple_target : (defaulttarg))
-
-/*
- * RelationGetCompressTupleTarget
- *		Returns the relation's compress_tuple_target.  Note multiple eval of argument!
- */
-#define RelationGetCompressTupleTarget(relation, defaulttarg) \
-	((relation)->rd_options ? \
-	 ((StdRdOptions *) (relation)->rd_options)->compress_tuple_target : (defaulttarg))
 
 /*
  * RelationGetFillFactor

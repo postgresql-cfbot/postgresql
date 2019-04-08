@@ -302,15 +302,6 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
-			"compress_tuple_target",
-			"Sets the target tuple length at which columns will be compressed",
-			RELOPT_KIND_HEAP,
-			ShareUpdateExclusiveLock
-		},
-		COMPRESS_TUPLE_TARGET, 128, TOAST_TUPLE_TARGET_MAIN
-	},
-	{
-		{
 			"pages_per_range",
 			"Number of pages that each page range covers in a BRIN index",
 			RELOPT_KIND_BRIN,
@@ -1395,8 +1386,6 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},
 		{"toast_tuple_target", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, toast_tuple_target)},
-		{"compress_tuple_target", RELOPT_TYPE_INT,
-		offsetof(StdRdOptions, compress_tuple_target)},
 		{"autovacuum_vacuum_cost_delay", RELOPT_TYPE_REAL,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_delay)},
 		{"autovacuum_vacuum_scale_factor", RELOPT_TYPE_REAL,

@@ -267,6 +267,8 @@ typedef struct StdRdOptions
 	bool		user_catalog_table; /* use as an additional catalog relation */
 	int			parallel_workers;	/* max number of parallel workers */
 	bool		vacuum_index_cleanup;	/* enables index vacuuming and cleanup */
+	bool		vacuum_truncate_enabled;	/* enables vacuum to truncate
+											 * a relation */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10

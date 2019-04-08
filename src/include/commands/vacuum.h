@@ -182,6 +182,11 @@ typedef struct VacuumParams
 									 * to use default */
 	VacOptTernaryValue index_cleanup;	/* Do index vacuum and cleanup,
 										* default value depends on reloptions */
+	/*
+	 * The number of parallel vacuum workers. -1 by default for no workers
+	 * and 0 for choosing based on the number of indexes.
+	 */
+	int			nworkers;
 } VacuumParams;
 
 /* GUC parameters */

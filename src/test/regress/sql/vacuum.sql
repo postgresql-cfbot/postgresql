@@ -62,6 +62,12 @@ VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
+-- PARALLEL option
+VACUUM (PARALLEL) vaccluster;
+VACUUM (PARALLEL 2) vaccluster;
+VACUUM (PARALLEL 0) vaccluster; -- error
+VACUUM (PARALLEL 2, INDEX_CLEANUP FALSE) vaccluster;
+
 -- INDEX_CLEANUP option
 CREATE TABLE no_index_cleanup (i INT PRIMARY KEY) WITH (vacuum_index_cleanup = false);
 VACUUM (INDEX_CLEANUP FALSE) vaccluster;

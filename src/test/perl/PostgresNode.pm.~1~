@@ -527,9 +527,6 @@ Create a hot backup with B<pg_basebackup> in subdirectory B<backup_name> of
 B<< $node->backup_dir >>, including the WAL. WAL files
 fetched at the end of the backup, not streamed.
 
-The keyword parameter replication_slot => 'myslot' can be used for the B<-S>
-argument to B<pg_basebackup>.
-
 You'll have to configure a suitable B<max_wal_senders> on the
 target server since it isn't done by default.
 
@@ -537,17 +534,14 @@ target server since it isn't done by default.
 
 sub backup
 {
-	my ($self, $backup_name, %params) = @_;
+	my ($self, $backup_name) = @_;
 	my $backup_path = $self->backup_dir . '/' . $backup_name;
 	my $port        = $self->port;
 	my $name        = $self->name;
 
-	my @cmd = ("pg_basebackup", "-D", $backup_path, "-p", $port, "--no-sync");
-	push @cmd, '-S', $params{replication_slot}
-	  if defined $params{replication_slot};
-
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
-	TestLib::system_or_bail(@cmd);
+	TestLib::system_or_bail('pg_basebackup', '-D', $backup_path, '-p', $port,
+		'--no-sync');
 	print "# Backup finished\n";
 	return;
 }

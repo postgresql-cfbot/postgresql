@@ -41,6 +41,7 @@ static TupleTableSlot *			/* return: a tuple or NULL */
 ExecLimit(PlanState *pstate)
 {
 	LimitState *node = castNode(LimitState, pstate);
+	ExprContext *econtext = node->ps.ps_ExprContext;
 	ScanDirection direction;
 	TupleTableSlot *slot;
 	PlanState  *outerPlan;
@@ -126,12 +127,16 @@ ExecLimit(PlanState *pstate)
 			{
 				/*
 				 * Forwards scan, so check for stepping off end of window. If
-				 * we are at the end of the window, return NULL without
-				 * advancing the subplan or the position variable; but change
-				 * the state machine state to record having done so.
+				 * we are at the end of the window, the behavior depends whether
+				 * ONLY or WITH TIES was specified.  In case of ONLY, we return
+				 * NULL without advancing the subplan or the position variable;
+				 * but change the state machine state to record having done so.
+				 * In the WITH TIES mode, we need to advance the subplan until
+				 * we find the first row with different ORDER BY pathkeys.
 				 */
 				if (!node->noCount &&
-					node->position - node->offset >= node->count)
+					node->position - node->offset >= node->count &&
+					node->limitOption == EXACT_NUMBER)
 				{
 					node->lstate = LIMIT_WINDOWEND;
 
@@ -144,18 +149,69 @@ ExecLimit(PlanState *pstate)
 
 					return NULL;
 				}
-
-				/*
-				 * Get next tuple from subplan, if any.
-				 */
-				slot = ExecProcNode(outerPlan);
-				if (TupIsNull(slot))
+				else if (!node->noCount &&
+						 node->position - node->offset >= node->count &&
+						 node->limitOption == WITH_TIES)
 				{
-					node->lstate = LIMIT_SUBPLANEOF;
-					return NULL;
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+					/*
+					 * Test if the new tuple and the last tuple match.
+					 * If so we return the tuple.
+					 */
+					econtext->ecxt_innertuple = slot;
+					econtext->ecxt_outertuple = node->last_slot;
+					if (ExecQualAndReset(node->eqfunction, econtext))
+					{
+						node->subSlot = slot;
+						node->position++;
+					}
+					else
+					{
+						node->lstate = LIMIT_WINDOWEND;
+
+						/*
+						 * If we know we won't need to back up, we can release
+						 * resources at this point.
+						 */
+						if (!(node->ps.state->es_top_eflags & EXEC_FLAG_BACKWARD))
+							(void) ExecShutdownNode(outerPlan);
+
+						return NULL;
+					}
+
 				}
-				node->subSlot = slot;
-				node->position++;
+				else
+				{
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+
+					/*
+					 * Tuple at limit is needed for comparation in subsequent execution
+					 * to detect ties.
+					 */
+					if (node->limitOption == WITH_TIES &&
+						node->position - node->offset == node->count - 1)
+					{
+						ExecCopySlot(node->last_slot, slot);
+					}
+					node->subSlot = slot;
+					node->position++;
+				}
 			}
 			else
 			{
@@ -321,7 +377,7 @@ recompute_limits(LimitState *node)
 static int64
 compute_tuples_needed(LimitState *node)
 {
-	if (node->noCount)
+	if ((node->noCount) || (node->limitOption != EXACT_NUMBER))
 		return -1;
 	/* Note: if this overflows, we'll return a negative value, which is OK */
 	return node->count + node->offset;
@@ -374,6 +430,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 										   (PlanState *) limitstate);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
 										  (PlanState *) limitstate);
+	limitstate->limitOption = node->limitOption;
 
 	/*
 	 * Initialize result type.
@@ -389,6 +446,26 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * node appropriately
 	 */
 	limitstate->ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Initialize the equality evaluation, to detect ties.
+	 */
+	if (node->limitOption == WITH_TIES)
+	{
+		TupleDesc	desc;
+		const TupleTableSlotOps *ops;
+
+		desc = ExecGetResultType(outerPlanState(limitstate));
+		ops = ExecGetResultSlotOps(outerPlanState(limitstate), NULL);
+
+		limitstate->last_slot = ExecInitExtraTupleSlot(estate, desc, ops);
+		limitstate->eqfunction = execTuplesMatchPrepare(desc,
+								   node->uniqNumCols,
+								   node->uniqColIdx,
+								   node->uniqOperators,
+								   node->uniqCollations,
+								   &limitstate->ps);
+	}
 
 	return limitstate;
 }

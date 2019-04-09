@@ -779,34 +779,10 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 	{
 		Expr	   *clause = (Expr *) lfirst(lc);
 		int			i;
-		List	   *partconstr = rel->partition_qual;
 
 		/* Look through RestrictInfo, if any */
 		if (IsA(clause, RestrictInfo))
 			clause = ((RestrictInfo *) clause)->clause;
-
-		/*
-		 * If this clause can be proved false for this partition,
-		 * given its partition constraint, we can ignore it,
-		 * that is not try to pass it to the pruning code.
-		 * We should do that especially to avoid pruning code
-		 * wrongly failing to prune the default partition.
-		 */
-		if (partconstr)
-		{
-			partconstr = (List *)
-				expression_planner((Expr *) partconstr);
-			if (rel->relid != 1)
-				ChangeVarNodes((Node *) partconstr, 1,
-							   rel->relid, 0);
-			if (predicate_refuted_by(partconstr,
-									 list_make1(clause),
-									 false))
-			{
-				*contradictory = true;
-				return NIL;
-			}
-		}
 
 		/* Constant-false-or-null is contradictory */
 		if (IsA(clause, Const) &&
@@ -870,12 +846,31 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 						 * an arg.  To indicate that to the pruning code, we
 						 * must construct a dummy PartitionPruneStepCombine
 						 * whose source_stepids is set to an empty List.
+						 * However, if we can prove using constraint exclusion
+						 * that the clause refutes the table's partition
+						 * constraint (if it's sub-partitioned), we need not
+						 * bother with that.  That is, we effectively ignore
+						 * this OR arm.
 						 */
+						List	   *partconstr = rel->partition_qual;
 						PartitionPruneStep *orstep;
 
 						/* Just ignore this argument. */
 						if (arg_contradictory)
 							continue;
+
+						if (partconstr)
+						{
+							partconstr = (List *)
+								expression_planner((Expr *) partconstr);
+							if (rel->relid != 1)
+								ChangeVarNodes((Node *) partconstr, 1,
+											   rel->relid, 0);
+							if (predicate_refuted_by(partconstr,
+													 list_make1(arg),
+													 false))
+								continue;
+						}
 
 						orstep = gen_prune_step_combine(context, NIL,
 														PARTPRUNE_COMBINE_UNION);

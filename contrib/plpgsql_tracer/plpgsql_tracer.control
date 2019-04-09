@@ -1,0 +1,5 @@
+# plpgsql_tracer extension
+comment = 'tracing functionality for plpgsql'
+default_version = '1.0'
+module_pathname = '$libdir/plpgsql_tracer'
+relocatable = true

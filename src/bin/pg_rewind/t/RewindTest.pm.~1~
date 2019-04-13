@@ -152,11 +152,11 @@ sub start_master
 
 sub create_standby
 {
-	my ($extra_name, %params) = @_;
+	my $extra_name = shift;
 
 	$node_standby =
 	  get_new_node('standby' . ($extra_name ? "_${extra_name}" : ''));
-	$node_master->backup('my_backup', %params);
+	$node_master->backup('my_backup');
 	$node_standby->init_from_backup($node_master, 'my_backup');
 	my $connstr_master = $node_master->connstr();
 

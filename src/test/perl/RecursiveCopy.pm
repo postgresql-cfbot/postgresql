@@ -97,13 +97,18 @@ sub _copypath_recurse
 	# invoke the filter and skip all further operation if it returns false
 	return 1 unless &$filterfn($curr_path);
 
-	# Check for symlink -- needed only on source dir
-	# (note: this will fall through quietly if file is already gone)
-	croak "Cannot operate on symlink \"$srcpath\"" if -l $srcpath;
-
 	# Abort if destination path already exists.  Should we allow directories
 	# to exist already?
 	croak "Destination path \"$destpath\" already exists" if -e $destpath;
+
+	# If this source path is a link, simply symlink it to destination with
+	# the same name and we're done.
+	if (-l $srcpath)
+	{
+		my $dst = readlink($srcpath);
+		symlink($dst, $destpath);
+		return 1;
+	}
 
 	# If this source path is a file, simply copy it to destination with the
 	# same name and we're done.

@@ -38,6 +38,7 @@
 #include "postgres.h"
 
 #include "access/heapam.h"
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -47,6 +48,7 @@
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
+#include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "rewrite/rewriteHandler.h"
@@ -544,6 +546,10 @@ ExecInsert(ModifyTableState *mtstate,
 									 NULL,
 									 specToken);
 
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 			/* insert index entries for tuple */
 			recheckIndexes = ExecInsertIndexTuples(slot, estate, true,
 												   &specConflict,
@@ -581,6 +587,10 @@ ExecInsert(ModifyTableState *mtstate,
 			table_insert(resultRelationDesc, slot,
 						 estate->es_output_cid,
 						 0, NULL);
+
+			/* Make note that we've wrote on non-temprary relation */
+			if (RelationNeedsWAL(resultRelationDesc))
+				MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -768,6 +778,10 @@ ldelete:;
 							  &tmfd,
 							  changingPart);
 
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case TM_SelfModified:
@@ -931,6 +945,10 @@ ldelete:;
 	/* Tell caller that the delete actually happened. */
 	if (tupleDeleted)
 		*tupleDeleted = true;
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(resultRelationDesc))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	/*
 	 * If this delete is the result of a partition key update that moved the
@@ -1309,6 +1327,10 @@ lreplace:;
 							  true /* wait for commit */ ,
 							  &tmfd, &lockmode, &update_indexes);
 
+		/* Make note that we've wrote on non-temprary relation */
+		if (RelationNeedsWAL(resultRelationDesc))
+			MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
+
 		switch (result)
 		{
 			case TM_SelfModified:
@@ -1440,6 +1462,10 @@ lreplace:;
 		if (resultRelInfo->ri_NumIndices > 0 && update_indexes)
 			recheckIndexes = ExecInsertIndexTuples(slot, estate, false, NULL, NIL);
 	}
+
+	/* Make note that we've wrote on non-temprary relation */
+	if (RelationNeedsWAL(resultRelationDesc))
+		MyXactFlags |= XACT_FLAGS_WROTENONTEMPREL;
 
 	if (canSetTag)
 		(estate->es_processed)++;
@@ -2363,6 +2389,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify != NULL)
 		{
 			List	   *fdw_private = (List *) list_nth(node->fdwPrivLists, i);
+			Oid			relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+			/* Remember the transaction modifies data on a foreign server*/
+			RegisterFdwXactByRelId(relid, true);
 
 			resultRelInfo->ri_FdwRoutine->BeginForeignModify(mtstate,
 															 resultRelInfo,

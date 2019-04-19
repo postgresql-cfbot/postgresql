@@ -21895,6 +21895,95 @@ SELECT (pg_stat_file('filename')).modification;
 
   </sect2>
 
+  <sect2 id="functions-foreign-transaction">
+   <title>Foreign Transaction Management Functions</title>
+
+   <indexterm>
+    <primary>pg_resolve_foreign_xact</primary>
+   </indexterm>
+   <indexterm>
+    <primary>pg_remove_foreign_xact</primary>
+   </indexterm>
+
+   <para>
+    <xref linkend="functions-fdw-transaction-control-table"/> shows the functions
+    available for foreign transaction management.
+    These functions cannot be executed during recovery. Use of these function
+    is restricted to superusers.
+   </para>
+
+   <table id="functions-fdw-transaction-control-table">
+    <title>Foreign Transaction Management Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <literal><function>pg_resolve_foreign_xact(<parameter>transaction</parameter> <type>xid</type>, <parameter>userid</parameter> <type>oid</type>, <parameter>userid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>bool</type></entry>
+       <entry>
+        Resolve a foreign transaction. This function searches for foreign
+        transaction matching the arguments and resolves it. Once the foreign
+        transaction is resolved successfully, this function removes the
+        corresponding entry from <xref linkend="view-pg-foreign-xacts"/>.
+        This function won't resolve a foreign transaction which is being
+        processed.
+       </entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_remove_foreign_xact(<parameter>transaction</parameter> <type>xid</type>, <parameter>serverid</parameter> <type>oid</type>, <parameter>userid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>void</type></entry>
+       <entry>
+        This function works the same as <function>pg_resolve_foreign_xact</function>
+        except that this removes the foreign transcation entry without resolution.
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+   The function shown in <xref linkend="functions-fdwxact-resolver-control-table"/>
+   control the foreign transaction resolvers.
+   </para>
+
+   <table id="functions-fdwxact-resolver-control-table">
+    <title>Foreign Transaction Resolver Control Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row>
+       <entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <literal><function>pg_stop_fdwxact_resolver(<parameter>dbid</parameter> <type>oid</type>)</function></literal>
+       </entry>
+       <entry><type>bool</type></entry>
+       <entry>
+        Stop the foreign transaction resolver running on the given database.
+        This function is useful for stopping a resolver process on the database
+        that you want to drop.
+       </entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+    <function>pg_stop_fdwxact_resolver</function> is useful to be used before
+    dropping the database to that the foreign transaction resolver is connecting.
+   </para>
+
+  </sect2>
   </sect1>
 
   <sect1 id="functions-trigger">

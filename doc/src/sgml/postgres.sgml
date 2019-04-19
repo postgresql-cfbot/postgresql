@@ -163,6 +163,7 @@
   &wal;
   &logical-replication;
   &jit;
+  &distributed-transaction;
   &regress;
 
  </part>

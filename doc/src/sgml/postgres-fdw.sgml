@@ -436,6 +436,43 @@
    </para>
 
   </sect3>
+
+  <sect3>
+   <title>Transaction Management Options</title>
+
+   <para>
+    By default, if the transaction involves with multiple remote server,
+    each transaction on remote server is committed or aborted independently.
+    Some of transactions may fail to commit on remote server while other
+    transactions commit successfully. This may be overridden using
+    following option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>two_phase_commit</literal></term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> allows
+       to use two-phase-commit when transaction commits. This option can
+       only be specified for foreign servers, not per-table.
+       The default is <literal>false</literal>.
+      </para>
+
+      <para>
+       If this option is enabled, <filename>postgres_fdw</filename> prepares
+       transaction on remote server and <productname>PostgreSQL</productname>
+       keeps track of the distributed transaction.
+       <xref linkend="guc-max-prepared-foreign-transactions"/> must be set more
+       than 1 on local server and <xref linkend="guc-max-prepared-transactions"/>
+       must set to more than 1 on remote server.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
+  </sect3>
  </sect2>
 
  <sect2>
@@ -464,6 +501,14 @@
   </para>
 
   <para>
+   <filename>postgrs_fdw</filename> uses two-phase commit protocol during
+   transaction commits or aborts when the atomic commit of distributed
+   transaction (see <xref linkend="atomic-commit"/>) is required. So the remote
+   server should set <xref linkend="guc-max-prepared-transactions"/> more
+   than one so that it can prepare the remote transaction.
+  </para>
+
+  <para>
    The remote transaction uses <literal>SERIALIZABLE</literal>
    isolation level when the local transaction has <literal>SERIALIZABLE</literal>
    isolation level; otherwise it uses <literal>REPEATABLE READ</literal>
@@ -478,6 +523,7 @@
    COMMITTED</literal> local transaction.  A future
    <productname>PostgreSQL</productname> release might modify these rules.
   </para>
+
  </sect2>
 
  <sect2>

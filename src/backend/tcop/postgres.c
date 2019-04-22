@@ -182,7 +182,6 @@ static int	ReadCommand(StringInfo inBuf);
 static void forbidden_in_wal_sender(char firstchar);
 static List *pg_rewrite_query(Query *query);
 static bool check_log_statement(List *stmt_list);
-static int	errdetail_execute(List *raw_parsetree_list);
 static int	errdetail_params(ParamListInfo params);
 static int	errdetail_abort(void);
 static int	errdetail_recovery_conflict(void);
@@ -1041,8 +1040,7 @@ exec_simple_query(const char *query_string)
 	{
 		ereport(LOG,
 				(errmsg("statement: %s", query_string),
-				 errhidestmt(true),
-				 errdetail_execute(parsetree_list)));
+				 errhidestmt(true)));
 		was_logged = true;
 	}
 
@@ -1292,8 +1290,7 @@ exec_simple_query(const char *query_string)
 			ereport(LOG,
 					(errmsg("duration: %s ms  statement: %s",
 							msec_str, query_string),
-					 errhidestmt(true),
-					 errdetail_execute(parsetree_list)));
+					 errhidestmt(true)));
 			break;
 	}
 
@@ -1326,6 +1323,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	bool		is_named;
 	bool		save_log_statement_stats = log_statement_stats;
 	char		msec_str[32];
+	bool		was_logged = false;
 
 	/*
 	 * Report query to various monitoring facilities.
@@ -1338,11 +1336,6 @@ exec_parse_message(const char *query_string,	/* string to execute */
 
 	if (save_log_statement_stats)
 		ResetUsage();
-
-	ereport(DEBUG2,
-			(errmsg("parse %s: %s",
-					*stmt_name ? stmt_name : "<unnamed>",
-					query_string)));
 
 	/*
 	 * Start up a transaction command so we can run parse analysis etc. (Note
@@ -1403,6 +1396,14 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	{
 		Query	   *query;
 		bool		snapshot_set = false;
+
+		if (check_log_statement(parsetree_list)) {
+			ereport( LOG, // else log as DEBUG2 ?
+				(errmsg("parse %s: %s",
+						*stmt_name ? stmt_name : "<unnamed>",
+						query_string)));
+			was_logged = true;
+		}
 
 		raw_parse_tree = linitial_node(RawStmt, parsetree_list);
 
@@ -1544,7 +1545,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, false))
+	switch (check_log_duration(msec_str, was_logged))
 	{
 		case 1:
 			ereport(LOG,
@@ -1920,12 +1921,11 @@ exec_bind_message(StringInfo input_message)
 			break;
 		case 2:
 			ereport(LOG,
-					(errmsg("duration: %s ms  bind %s%s%s: %s",
+					(errmsg("duration: %s ms  bind %s%s%s",
 							msec_str,
 							*stmt_name ? stmt_name : "<unnamed>",
 							*portal_name ? "/" : "",
-							*portal_name ? portal_name : "",
-							psrc->query_string),
+							*portal_name ? portal_name : ""),
 					 errhidestmt(true),
 					 errdetail_params(params)));
 			break;
@@ -2053,14 +2053,13 @@ exec_execute_message(const char *portal_name, long max_rows)
 	if (check_log_statement(portal->stmts))
 	{
 		ereport(LOG,
-				(errmsg("%s %s%s%s: %s",
+				(errmsg("%s %s%s%s",
 						execute_is_fetch ?
 						_("execute fetch from") :
 						_("execute"),
 						prepStmtName,
 						*portal_name ? "/" : "",
-						*portal_name ? portal_name : "",
-						sourceText),
+						*portal_name ? portal_name : ""),
 				 errhidestmt(true),
 				 errdetail_params(portalParams)));
 		was_logged = true;
@@ -2141,15 +2140,14 @@ exec_execute_message(const char *portal_name, long max_rows)
 			break;
 		case 2:
 			ereport(LOG,
-					(errmsg("duration: %s ms  %s %s%s%s: %s",
+					(errmsg("duration: %s ms  %s %s%s%s",
 							msec_str,
 							execute_is_fetch ?
 							_("execute fetch from") :
 							_("execute"),
 							prepStmtName,
 							*portal_name ? "/" : "",
-							*portal_name ? portal_name : "",
-							sourceText),
+							*portal_name ? portal_name : ""),
 					 errhidestmt(true),
 					 errdetail_params(portalParams)));
 			break;
@@ -2253,38 +2251,6 @@ check_log_duration(char *msec_str, bool was_logged)
 				return 2;
 			else
 				return 1;
-		}
-	}
-
-	return 0;
-}
-
-/*
- * errdetail_execute
- *
- * Add an errdetail() line showing the query referenced by an EXECUTE, if any.
- * The argument is the raw parsetree list.
- */
-static int
-errdetail_execute(List *raw_parsetree_list)
-{
-	ListCell   *parsetree_item;
-
-	foreach(parsetree_item, raw_parsetree_list)
-	{
-		RawStmt    *parsetree = lfirst_node(RawStmt, parsetree_item);
-
-		if (IsA(parsetree->stmt, ExecuteStmt))
-		{
-			ExecuteStmt *stmt = (ExecuteStmt *) parsetree->stmt;
-			PreparedStatement *pstmt;
-
-			pstmt = FetchPreparedStatement(stmt->name, false);
-			if (pstmt)
-			{
-				errdetail("prepare: %s", pstmt->plansource->query_string);
-				return 0;
-			}
 		}
 	}
 

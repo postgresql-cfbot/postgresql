@@ -1246,14 +1246,10 @@ get_relation_constraints(PlannerInfo *root,
 	 * Append partition predicates, if any.
 	 *
 	 * For selects, partition pruning uses the parent table's partition bound
-	 * descriptor, so there's no need to include the partition constraint for
-	 * this case.  However, if the partition is referenced directly in the
-	 * query then no partition pruning will occur, so we'll include it in that
-	 * case.
+	 * descriptor, instead of constraint exclusion which is driven by the
+	 * individual partition's partition constraint.
 	 */
-	if ((root->parse->commandType != CMD_SELECT && enable_partition_pruning) ||
-		(root->parse->commandType == CMD_SELECT &&
-		 rel->reloptkind == RELOPT_BASEREL))
+	if (enable_partition_pruning && root->parse->commandType != CMD_SELECT)
 	{
 		List	   *pcqual = RelationGetPartitionQual(relation);
 

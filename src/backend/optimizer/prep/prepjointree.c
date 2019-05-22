@@ -780,6 +780,7 @@ pull_up_subqueries_recurse(PlannerInfo *root, Node *jtnode,
 		switch (j->jointype)
 		{
 			case JOIN_INNER:
+			case JOIN_TEMPORAL_NORMALIZE:
 				j->larg = pull_up_subqueries_recurse(root, j->larg,
 													 lowest_outer_join,
 													 lowest_nulling_outer_join,

@@ -3060,7 +3060,7 @@
   oprrest => 'scalargesel', oprjoin => 'scalargejoinsel' },
 
 # generic range type operators
-{ oid => '3882', descr => 'equal',
+{ oid => '3882', descr => 'equal', oid_symbol => 'OID_RANGE_EQ_OP',
   oprname => '=', oprcanmerge => 't', oprcanhash => 't', oprleft => 'anyrange',
   oprright => 'anyrange', oprresult => 'bool', oprcom => '=(anyrange,anyrange)',
   oprnegate => '<>(anyrange,anyrange)', oprcode => 'range_eq',

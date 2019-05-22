@@ -1996,7 +1996,6 @@ typedef struct RestrictInfo
 
 	/* valid if clause is hashjoinable, else InvalidOid: */
 	Oid			hashjoinoperator;	/* copy of clause operator */
-	bool        temp_normalizer;
 
 	/* cache space for hashclause processing; -1 if not yet set */
 	Selectivity left_bucketsize;	/* avg bucketsize of left side */

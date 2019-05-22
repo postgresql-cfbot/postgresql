@@ -61,7 +61,7 @@ static void extractRemainingColumns(List *common_colnames,
 						List **res_colnames, List **res_colvars);
 static Node *transformJoinUsingClause(ParseState *pstate,
 						 RangeTblEntry *leftRTE, RangeTblEntry *rightRTE,
-						 List *leftVars, List *rightVars);
+						 List *leftVars, List *rightVars, List *normalizeVars);
 static Node *transformJoinOnClause(ParseState *pstate, JoinExpr *j,
 					  List *namespace);
 static RangeTblEntry *getRTEForSpecialRelationTypes(ParseState *pstate,
@@ -299,7 +299,7 @@ extractRemainingColumns(List *common_colnames,
 static Node *
 transformJoinUsingClause(ParseState *pstate,
 						 RangeTblEntry *leftRTE, RangeTblEntry *rightRTE,
-						 List *leftVars, List *rightVars)
+						 List *leftVars, List *rightVars, List *normalizeVars)
 {
 	Node	   *result;
 	List	   *andargs = NIL;
@@ -330,6 +330,17 @@ transformJoinUsingClause(ParseState *pstate,
 							 -1);
 
 		/* Prepare to combine into an AND clause, if multiple join columns */
+		andargs = lappend(andargs, e);
+	}
+
+	/* Temporal NORMALIZE appends an expression to compare temporal bounds */
+	if (normalizeVars)
+	{
+		A_Expr *e;
+		e = makeSimpleA_Expr(AEXPR_OP, "=",
+							 (Node *) copyObject(linitial(normalizeVars)),
+							 (Node *) copyObject(lsecond(normalizeVars)),
+							 -1);
 		andargs = lappend(andargs, e);
 	}
 
@@ -1193,6 +1204,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		int			sv_namespace_length;
 		RangeTblEntry *rte;
 		int			k;
+		int         isNormalize = (j->jointype == JOIN_TEMPORAL_NORMALIZE);
 
 		/*
 		 * Recursively process the left subtree, then the right.  We must do
@@ -1303,7 +1315,8 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		res_colnames = NIL;
 		res_colvars = NIL;
 
-		if (j->usingClause)
+		/* NORMALIZE supports empty using clauses */
+		if (j->usingClause || (isNormalize && j->usingClause == NIL))
 		{
 			/*
 			 * JOIN/USING (or NATURAL JOIN, as transformed above). Transform
@@ -1313,6 +1326,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 			List	   *ucols = j->usingClause;
 			List	   *l_usingvars = NIL;
 			List	   *r_usingvars = NIL;
+			List       *normalize_vars = NIL;
 			ListCell   *ucol;
 
 			Assert(j->quals == NULL);	/* shouldn't have ON() too */
@@ -1398,11 +1412,90 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 														 r_colvar));
 			}
 
+			/* Only for temporal NORMALIZE */
+			if (isNormalize)
+			{
+				int         ndx = 0;
+				ListCell   *col;
+				Var        *l_boundvar;
+				Var        *r_boundvar;
+
+				int         l_bound_index = -1;
+				int         r_bound_index = -1;
+				char       *l_bound;
+				char       *r_bound;
+				ListCell *lboundcol = linitial(((ColumnRef *)linitial(j->temporalBounds))->fields);
+				ListCell *rboundcol = linitial(((ColumnRef *)lsecond(j->temporalBounds))->fields);
+
+				l_bound = strVal(lboundcol);
+				r_bound = strVal(rboundcol);
+
+				/* Find the first bound in left input */
+				foreach(col, l_colnames)
+				{
+					char       *l_colname = strVal(lfirst(col));
+
+					if (strcmp(l_colname, l_bound) == 0)
+					{
+						if (l_bound_index >= 0)
+							ereport(ERROR,
+									(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+											 errmsg("temporal bound name \"%s\" appears more than once in left table",
+													l_bound)));
+						l_bound_index = ndx;
+					}
+					ndx++;
+				}
+
+				if (l_bound_index < 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_COLUMN),
+									 errmsg("column \"%s\" specified in normalizer's WITH clause does not exist in left table",
+											l_bound)));
+
+				/* Find the second bound in right input */
+				ndx = 0;
+				foreach(col, r_colnames)
+				{
+					char       *r_colname = strVal(lfirst(col));
+
+					if (strcmp(r_colname, r_bound) == 0)
+					{
+						if (r_bound_index >= 0)
+							ereport(ERROR,
+									(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+											 errmsg("temporal bound name \"%s\" appears more than once in right table",
+													l_bound)));
+						r_bound_index = ndx;
+					}
+					ndx++;
+				}
+
+				if (r_bound_index < 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_COLUMN),
+									 errmsg("column \"%s\" specified in normalizer's WITH clause does not exist in right table",
+											r_bound)));
+
+				l_boundvar = list_nth(l_colvars, l_bound_index);
+				normalize_vars = lappend(normalize_vars, l_boundvar);
+				r_boundvar = list_nth(r_colvars, r_bound_index);
+				normalize_vars = lappend(normalize_vars, r_boundvar);
+
+				res_colnames = lappend(res_colnames, lboundcol);
+				res_colvars = lappend(res_colvars,
+									  buildMergedJoinVar(pstate,
+														 j->jointype,
+														 l_boundvar,
+														 r_boundvar));
+			}
+
 			j->quals = transformJoinUsingClause(pstate,
 												l_rte,
 												r_rte,
 												l_usingvars,
-												r_usingvars);
+												r_usingvars,
+												normalize_vars);
 		}
 		else if (j->quals)
 		{
@@ -1418,13 +1511,21 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		extractRemainingColumns(res_colnames,
 								l_colnames, l_colvars,
 								&l_colnames, &l_colvars);
-		extractRemainingColumns(res_colnames,
-								r_colnames, r_colvars,
-								&r_colnames, &r_colvars);
+
+		//Temporal normalizers expose only outer relation's columns...
+		if (!isNormalize)
+			extractRemainingColumns(res_colnames,
+									r_colnames, r_colvars,
+									&r_colnames, &r_colvars);
+
 		res_colnames = list_concat(res_colnames, l_colnames);
 		res_colvars = list_concat(res_colvars, l_colvars);
-		res_colnames = list_concat(res_colnames, r_colnames);
-		res_colvars = list_concat(res_colvars, r_colvars);
+
+		if (!isNormalize)
+		{
+			res_colnames = list_concat(res_colnames, r_colnames);
+			res_colvars = list_concat(res_colvars, r_colvars);
+		}
 
 		/*
 		 * Check alias (AS clause), if any.
@@ -1567,6 +1668,7 @@ buildMergedJoinVar(ParseState *pstate, JoinType jointype,
 	switch (jointype)
 	{
 		case JOIN_INNER:
+		case JOIN_TEMPORAL_NORMALIZE:
 
 			/*
 			 * We can use either var; prefer non-coerced one if available.

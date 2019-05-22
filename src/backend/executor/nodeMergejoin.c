@@ -99,6 +99,106 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
+// XXX TEMPORAL NORMALIZE PEMOSER ----------------------------
+// !!! THis is just for prototyping, delete asap...
+
+#include "catalog/pg_operator.h"
+#include "nodes/nodeFuncs.h"
+#include "utils/fmgroids.h"
+#include "utils/rangetypes.h"
+#include "utils/typcache.h"
+#include "access/htup_details.h"                /* for heap_getattr */
+#include "nodes/print.h"                        /* for print_slot */
+#include "utils/datum.h"                        /* for datumCopy */
+
+
+
+#define TEMPORAL_DEBUG
+/*
+ * #define TEMPORAL_DEBUG
+ * XXX PEMOSER Maybe we should use execdebug.h stuff here?
+ */
+#ifdef TEMPORAL_DEBUG
+static char*
+datumToString(Oid typeinfo, Datum attr)
+{
+	Oid         typoutput;
+	bool        typisvarlena;
+	getTypeOutputInfo(typeinfo, &typoutput, &typisvarlena);
+	return OidOutputFunctionCall(typoutput, attr);
+}
+
+#define TPGdebug(...)                   { printf(__VA_ARGS__); printf("\n"); fflush(stdout); }
+#define TPGdebugDatum(attr, typeinfo)   TPGdebug("%s = %s %ld\n", #attr, datumToString(typeinfo, attr), attr)
+#define TPGdebugSlot(slot)              { printf("Printing Slot '%s'\n", #slot); print_slot(slot); fflush(stdout); }
+
+#else
+#define datumToString(typeinfo, attr)
+#define TPGdebug(...)
+#define TPGdebugDatum(attr, typeinfo)
+#define TPGdebugSlot(slot)
+#endif
+
+TypeCacheEntry *testmytypcache;
+#define setSweepline(datum) \
+	node->sweepline = datumCopy(datum, node->datumFormat->attbyval, node->datumFormat->attlen)
+
+#define freeSweepline() \
+	if (! node->datumFormat->attbyval) pfree(DatumGetPointer(node->sweepline))
+
+ /*
+  * slotGetAttrNotNull
+  *      Same as slot_getattr, but throws an error if NULL is returned.
+  */
+static Datum
+slotGetAttrNotNull(TupleTableSlot *slot, int attnum)
+{
+	bool isNull;
+	Datum result;
+
+	result = slot_getattr(slot, attnum, &isNull);
+
+	if(isNull)
+		ereport(ERROR,
+				(errcode(ERRCODE_NOT_NULL_VIOLATION),
+				 errmsg("Attribute \"%s\" at position %d is null. Temporal " \
+						"adjustment not possible.",
+				 NameStr(TupleDescAttr(slot->tts_tupleDescriptor, attnum - 1)->attname),
+				 attnum)));
+
+	return result;
+}
+
+/*
+ * heapGetAttrNotNull
+ *      Same as heap_getattr, but throws an error if NULL is returned.
+ */
+static Datum
+heapGetAttrNotNull(TupleTableSlot *slot, int attnum)
+{
+	bool isNull;
+	Datum result;
+	HeapTuple tuple;
+
+	tuple = ExecFetchSlotHeapTuple(slot, true, NULL);
+	result = heap_getattr(tuple,
+						  attnum,
+						  slot->tts_tupleDescriptor,
+						  &isNull);
+	if(isNull)
+		ereport(ERROR,
+				(errcode(ERRCODE_NOT_NULL_VIOLATION),
+				 errmsg("Attribute \"%s\" at position %d is null. Temporal " \
+						"adjustment not possible.",
+						NameStr(TupleDescAttr(slot->tts_tupleDescriptor,
+								attnum - 1)->attname),
+						attnum)));
+
+	return result;
+}
+
+// XXX TEMPORAL NORMALIZE PEMOSER END ------------------------
+
 
 /*
  * States of the ExecMergeJoin state machine
@@ -138,6 +238,10 @@ typedef struct MergeJoinClauseData
 	 * stored here.
 	 */
 	SortSupportData ssup;
+
+	/* needed for Temporal Normalization */
+	bool             isnormalize;
+	TypeCacheEntry  *range_typcache;
 }			MergeJoinClauseData;
 
 /* Result type for MJEvalOuterValues and MJEvalInnerValues */
@@ -151,6 +255,59 @@ typedef enum
 
 #define MarkInnerTuple(innerTupleSlot, mergestate) \
 	ExecCopySlot((mergestate)->mj_MarkedTupleSlot, (innerTupleSlot))
+
+/*
+ * temporalAdjustmentStoreTuple
+ *      While we store result tuples, we must add the newly calculated temporal
+ *      boundaries as two scalar fields or create a single range-typed field
+ *      with the two given boundaries.
+ */
+static void
+temporalAdjustmentStoreTuple(MergeJoinState *mergestate,
+							 TupleTableSlot* slotToModify,
+							 TupleTableSlot* slotToStoreIn,
+							 Datum ts,
+							 Datum te,
+							 TypeCacheEntry *typcache)
+{
+	MemoryContext	oldContext;
+	HeapTuple		t;
+	RangeBound  	lower;
+	RangeBound  	upper;
+	bool        	empty = false;
+	HeapTuple       tuple;
+
+	/*
+	 * This should ideally be done with RangeBound types on the right-hand-side
+	 * created during range_split execution. Otherwise, we loose information about
+	 * inclusive/exclusive bounds and infinity. We would need to implement btree
+	 * operators for RangeBounds.
+	 */
+	lower.val = ts;
+	lower.lower = true;
+	lower.infinite = false;
+	lower.inclusive = true;
+
+	upper.val = te;
+	upper.lower = false;
+	upper.infinite = false;
+	upper.inclusive = false;
+
+	mergestate->newValues[0] = (Datum) make_range(typcache, &lower, &upper, empty);
+
+	oldContext = MemoryContextSwitchTo(mergestate->js.ps.ps_ResultTupleSlot->tts_mcxt);
+	tuple = ExecFetchSlotHeapTuple(slotToModify, true, NULL);
+	t = heap_modify_tuple(tuple,
+						  slotToModify->tts_tupleDescriptor,
+						  mergestate->newValues,
+						  mergestate->nullMask,
+						  mergestate->tsteMask);
+	MemoryContextSwitchTo(oldContext);
+	ExecForceStoreHeapTuple(t, slotToStoreIn);
+
+	TPGdebug("Storing tuple:");
+	TPGdebugSlot(slotToStoreIn);
+}
 
 
 /*
@@ -201,6 +358,8 @@ MJExamineQuals(List *mergeclauses,
 		Oid			op_righttype;
 		Oid			sortfunc;
 
+		pprint(qual);
+
 		if (!IsA(qual, OpExpr))
 			elog(ERROR, "mergejoin clause is not an OpExpr");
 
@@ -221,12 +380,31 @@ MJExamineQuals(List *mergeclauses,
 			elog(ERROR, "unsupported mergejoin strategy %d", opstrategy);
 		clause->ssup.ssup_nulls_first = nulls_first;
 
+		if (qual->opno == OID_RANGE_EQ_OP) {
+			Oid rngtypid;
+
+			// XXX PEMOSER Change opfamily and opfunc
+			qual->opfuncid = F_RANGE_CONTAINS; //<<--- opfuncid can be 0 during planning
+			qual->opno = OID_RANGE_CONTAINS_ELEM_OP; //OID_RANGE_CONTAINS_OP;
+			clause->isnormalize = true;
+
+			// Attention: cannot merge using non-equality operator 3890 <--- OID_RANGE_CONTAINS_OP
+			opfamily = 4103; //range_inclusion_ops from pg_opfamily.h
+
+			rngtypid = exprType((Node*)clause->lexpr->expr);
+			clause->range_typcache = lookup_type_cache(rngtypid, TYPECACHE_RANGE_INFO);
+			testmytypcache = clause->range_typcache;
+		} else {
+			clause->isnormalize = false;
+		}
+
+
 		/* Extract the operator's declared left/right datatypes */
 		get_op_opfamily_properties(qual->opno, opfamily, false,
 								   &op_strategy,
 								   &op_lefttype,
 								   &op_righttype);
-		if (op_strategy != BTEqualStrategyNumber)	/* should not happen */
+		if (op_strategy != BTEqualStrategyNumber && !clause->isnormalize)   /* should not happen */
 			elog(ERROR, "cannot merge using non-equality operator %u",
 				 qual->opno);
 
@@ -249,7 +427,7 @@ MJExamineQuals(List *mergeclauses,
 			/* The sort support function can provide a comparator */
 			OidFunctionCall1(sortfunc, PointerGetDatum(&clause->ssup));
 		}
-		if (clause->ssup.comparator == NULL)
+		if (clause->ssup.comparator == NULL && !clause->isnormalize)
 		{
 			/* support not available, get comparison func */
 			sortfunc = get_opfamily_proc(opfamily,
@@ -267,6 +445,77 @@ MJExamineQuals(List *mergeclauses,
 	}
 
 	return clauses;
+}
+
+static Datum
+getLower(Datum range, TypeCacheEntry *typcache)
+{
+	RangeBound  lower;
+	RangeBound  upper;
+	bool        empty;
+
+	range_deserialize(typcache, DatumGetRangeTypeP(range), &lower, &upper, &empty);
+
+	// XXX This is just a prototype function, we do not check for emptiness nor infinity yet...
+	// We will use RangeBounds in the future directly...
+	return lower.val;
+}
+
+static Datum
+getUpper(Datum range, TypeCacheEntry *typcache)
+{
+	RangeBound  lower;
+	RangeBound  upper;
+	bool        empty;
+
+	range_deserialize(typcache, DatumGetRangeTypeP(range), &lower, &upper, &empty);
+
+	// XXX This is just a prototype function, we do not check for emptiness nor infinity yet...
+	// We will use RangeBounds in the future directly...
+	return upper.val;
+}
+
+/*
+ * Return 0 if point is inside range, <0 if the point is right-of the second, or
+ * >0 if the point is left-of the range.
+ *
+ * This should ideally be done with RangeBound types on the right-hand-side
+ * created during range_split execution. Otherwise, we loose information about
+ * inclusive/exclusive bounds and infinity.
+ */
+static int
+ApplyNormalizeMatch(Datum ldatum, bool lisnull, Datum rdatum, bool risnull,
+					SortSupport ssup, TypeCacheEntry *typcache)
+{
+	RangeBound  lower;
+	RangeBound  upper;
+	bool        empty;
+	int32       result;
+
+	/* can't handle reverse sort order; should be prevented by optimizer */
+	Assert(!ssup->ssup_reverse);
+	Assert(!lisnull || !risnull);
+
+	if (lisnull)
+		return ssup->ssup_nulls_first ? -1 : 1;
+	if (risnull)
+		return ssup->ssup_nulls_first ? 1 : -1;
+
+	range_deserialize(typcache, DatumGetRangeTypeP(ldatum), &lower, &upper, &empty);
+
+	result = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											 typcache->rng_collation,
+											 lower.val, rdatum));
+	if (result == 1)
+		return 1;
+
+	result = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											 typcache->rng_collation,
+											 upper.val, rdatum));
+	if (result == 1)
+		return 0;
+
+	return -1;
 }
 
 /*
@@ -418,9 +667,19 @@ MJCompare(MergeJoinState *mergestate)
 			continue;
 		}
 
-		result = ApplySortComparator(clause->ldatum, clause->lisnull,
-									 clause->rdatum, clause->risnull,
-									 &clause->ssup);
+		if (clause->isnormalize)
+		{
+			result = ApplyNormalizeMatch(clause->ldatum, clause->lisnull,
+										 clause->rdatum, clause->risnull,
+										 &clause->ssup, clause->range_typcache);
+		}
+		else
+		{
+			result = ApplySortComparator(clause->ldatum, clause->lisnull,
+										 clause->rdatum, clause->risnull,
+										 &clause->ssup);
+		}
+
 
 		if (result != 0)
 			break;
@@ -611,6 +870,7 @@ ExecMergeJoin(PlanState *pstate)
 	ExprContext *econtext;
 	bool		doFillOuter;
 	bool		doFillInner;
+	TupleTableSlot *out = NULL;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -655,6 +915,13 @@ ExecMergeJoin(PlanState *pstate)
 
 				outerTupleSlot = ExecProcNode(outerPlan);
 				node->mj_OuterTupleSlot = outerTupleSlot;
+
+				/* XXX normalize (first call) */
+				if (node->mj_isNormalizer)
+				{
+					node->sameleft = true;
+					ExecCopySlot(node->prev, outerTupleSlot);
+				}
 
 				/* Compute join values and check for unmatchability */
 				switch (MJEvalOuterValues(node))
@@ -703,6 +970,18 @@ ExecMergeJoin(PlanState *pstate)
 
 				innerTupleSlot = ExecProcNode(innerPlan);
 				node->mj_InnerTupleSlot = innerTupleSlot;
+
+				/*
+				 * P1 is made of the lower or upper bounds of the valid time column,
+				 * hence it must have the same type as the range (return element type)
+				 * of lower(T) or upper(T).
+				 */
+				if (node->mj_isNormalizer)
+				{
+					node->datumFormat = TupleDescAttr(innerTupleSlot->tts_tupleDescriptor, 0);
+					setSweepline(getLower(slotGetAttrNotNull(outerTupleSlot, 1), testmytypcache));
+					TPGdebugDatum(node->sweepline, node->datumFormat->atttypid);
+				}
 
 				/* Compute join values and check for unmatchability */
 				switch (MJEvalInnerValues(node, innerTupleSlot))
@@ -789,6 +1068,10 @@ ExecMergeJoin(PlanState *pstate)
 				innerTupleSlot = node->mj_InnerTupleSlot;
 				econtext->ecxt_innertuple = innerTupleSlot;
 
+				TPGdebugSlot(outerTupleSlot);
+				TPGdebugSlot(node->prev);
+				TPGdebug("sameleft = %d", node->sameleft);
+
 				qualResult = (joinqual == NULL ||
 							  ExecQual(joinqual, econtext));
 				MJ_DEBUG_QUAL(joinqual, qualResult);
@@ -819,13 +1102,56 @@ ExecMergeJoin(PlanState *pstate)
 
 					if (qualResult)
 					{
+						TupleTableSlot *out;
+						bool            isNull;
+						Datum           currP1;
+
 						/*
 						 * qualification succeeded.  now form the desired
 						 * projection tuple and return the slot containing it.
 						 */
 						MJ_printf("ExecMergeJoin: returning tuple\n");
 
-						return ExecProject(node->js.ps.ps_ProjInfo);
+						out = ExecProject(node->js.ps.ps_ProjInfo);
+
+						if (!node->mj_isNormalizer)
+							return out;
+
+						if (node->sameleft)
+						{
+							currP1 = slot_getattr(innerTupleSlot, 1, &isNull);
+							TPGdebugDatum(currP1, node->datumFormat->atttypid);
+							if (node->sweepline < currP1)
+							{
+								temporalAdjustmentStoreTuple(node, outerTupleSlot, out, node->sweepline, currP1, testmytypcache);
+								freeSweepline();
+								setSweepline(currP1);
+
+								TPGdebugDatum(node->sweepline, node->datumFormat->atttypid);
+								TPGdebugSlot(out);
+
+								return out;
+							}
+
+							ExecCopySlot(node->prev, outerTupleSlot);
+							node->mj_JoinState = EXEC_MJ_NEXTINNER;
+						}
+						else /* not node->sameleft */
+						{
+							Datum prevTe = getUpper(heapGetAttrNotNull(node->prev, 1), testmytypcache);
+
+							if (node->sweepline < prevTe)
+								temporalAdjustmentStoreTuple(node, node->prev, out, node->sweepline, prevTe, testmytypcache);
+
+							ExecCopySlot(node->prev, outerTupleSlot);
+							freeSweepline();
+							setSweepline(getLower(slotGetAttrNotNull(outerTupleSlot, 1), testmytypcache));
+							TPGdebugDatum(node->sweepline, node->datumFormat->atttypid);
+							node->sameleft = true;
+							node->mj_JoinState = EXEC_MJ_NEXTINNER;
+							TPGdebugSlot(out);
+							return out;
+						}
 					}
 					else
 						InstrCountFiltered2(node, 1);
@@ -844,6 +1170,9 @@ ExecMergeJoin(PlanState *pstate)
 				 */
 			case EXEC_MJ_NEXTINNER:
 				MJ_printf("ExecMergeJoin: EXEC_MJ_NEXTINNER\n");
+
+				if (node->mj_isNormalizer)
+					node->sameleft = true;
 
 				if (doFillInner && !node->mj_MatchedInner)
 				{
@@ -947,6 +1276,9 @@ ExecMergeJoin(PlanState *pstate)
 			case EXEC_MJ_NEXTOUTER:
 				MJ_printf("ExecMergeJoin: EXEC_MJ_NEXTOUTER\n");
 
+				if (node->mj_isNormalizer)
+					node->sameleft = false;
+
 				if (doFillOuter && !node->mj_MatchedOuter)
 				{
 					/*
@@ -961,6 +1293,11 @@ ExecMergeJoin(PlanState *pstate)
 					if (result)
 						return result;
 				}
+
+				// FIXME PEMOSER Only for normalizer...
+				TupleTableSlot *out = NULL;
+				if (node->mj_isNormalizer && !TupIsNull(innerTupleSlot))
+					out = ExecProject(node->js.ps.ps_ProjInfo);
 
 				/*
 				 * now we get the next outer tuple, if any
@@ -994,6 +1331,19 @@ ExecMergeJoin(PlanState *pstate)
 							node->mj_JoinState = EXEC_MJ_ENDOUTER;
 							break;
 						}
+
+						if (node->mj_isNormalizer && !TupIsNull(node->prev) && !TupIsNull(innerTupleSlot))
+						{
+							MJ_printf("finalize normalizer!!!\n");
+							Datum prevTe = getUpper(heapGetAttrNotNull(node->prev, 1), testmytypcache);
+							TPGdebugDatum(prevTe, node->datumFormat->atttypid);
+							TPGdebugDatum(node->sweepline, node->datumFormat->atttypid);
+							MJ_debugtup(node->prev);
+							temporalAdjustmentStoreTuple(node, node->prev, out, node->sweepline, prevTe, testmytypcache);
+							node->mj_JoinState = EXEC_MJ_ENDOUTER;
+							return out;
+						}
+
 						/* Otherwise we're done. */
 						return NULL;
 				}
@@ -1048,7 +1398,7 @@ ExecMergeJoin(PlanState *pstate)
 				compareResult = MJCompare(node);
 				MJ_DEBUG_COMPARE(compareResult);
 
-				if (compareResult == 0)
+				if (compareResult == 0 || (node->mj_isNormalizer && node->mj_markSet))
 				{
 					/*
 					 * the merge clause matched so now we restore the inner
@@ -1085,7 +1435,10 @@ ExecMergeJoin(PlanState *pstate)
 						/* we need not do MJEvalInnerValues again */
 					}
 
-					node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+					if (node->mj_isNormalizer)
+						node->mj_JoinState = EXEC_MJ_SKIP_TEST;
+					else
+						node->mj_JoinState = EXEC_MJ_JOINTUPLES;
 				}
 				else
 				{
@@ -1190,6 +1543,7 @@ ExecMergeJoin(PlanState *pstate)
 					MarkInnerTuple(node->mj_InnerTupleSlot, node);
 
 					node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+					node->mj_markSet = true;
 				}
 				else if (compareResult < 0)
 					node->mj_JoinState = EXEC_MJ_SKIPOUTER_ADVANCE;
@@ -1338,6 +1692,9 @@ ExecMergeJoin(PlanState *pstate)
 			case EXEC_MJ_ENDOUTER:
 				MJ_printf("ExecMergeJoin: EXEC_MJ_ENDOUTER\n");
 
+				if (node->mj_isNormalizer)
+					return NULL;
+
 				Assert(doFillInner);
 
 				if (!node->mj_MatchedInner)
@@ -1439,6 +1796,9 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	TupleDesc	outerDesc,
 				innerDesc;
 	const TupleTableSlotOps *innerOps;
+	const TupleTableSlotOps *prevOps;
+	int         numCols = list_length(node->join.plan.targetlist);
+
 
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
@@ -1532,12 +1892,16 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 		ExecInitQual(node->join.joinqual, (PlanState *) mergestate);
 	/* mergeclauses are handled below */
 
+	prevOps = ExecGetResultSlotOps(outerPlanState(mergestate), NULL);
+	mergestate->prev = ExecInitExtraTupleSlot(estate, outerDesc, prevOps);
+
 	/*
 	 * detect whether we need only consider the first matching inner tuple
 	 */
 	mergestate->js.single_match = (node->join.inner_unique ||
 								   node->join.jointype == JOIN_SEMI);
 
+	mergestate->mj_isNormalizer = false;
 	/* set up null tuples for outer joins, if needed */
 	switch (node->join.jointype)
 	{
@@ -1586,6 +1950,20 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("FULL JOIN is only supported with merge-joinable join conditions")));
+			break;
+		case JOIN_TEMPORAL_NORMALIZE:
+			mergestate->mj_FillOuter = false;
+			mergestate->mj_FillInner = false;
+			mergestate->mj_isNormalizer = true;
+
+			/* Init buffer values for heap_modify_tuple */
+			mergestate->newValues = palloc0(sizeof(Datum) * numCols);
+			mergestate->nullMask = palloc0(sizeof(bool) * numCols);
+			mergestate->tsteMask = palloc0(sizeof(bool) * numCols);
+
+			/* Not right??? -> Always the last in the list, since we add it during planning phase
+			 * XXX PEMOSER We need to find the correct position of "period" and set that here */
+			mergestate->tsteMask[/*numCols - 1*/0] = true;
 			break;
 		default:
 			elog(ERROR, "unrecognized join type: %d",

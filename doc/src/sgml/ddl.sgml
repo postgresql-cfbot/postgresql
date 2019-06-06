@@ -3450,8 +3450,9 @@ VALUES ('Albany', NULL, NULL, 'NY');
     </listitem>
    </itemizedlist>
 
-   These deficiencies will probably be fixed in some future release,
-   but in the meantime considerable care is needed in deciding whether
+   Some functionality not implemented for inheritance hierarchies is
+   implemented for declarative partitioning.
+   Considerable care is needed in deciding whether partitioning with legacy
    inheritance is useful for your application.
   </para>
 
@@ -4674,6 +4675,76 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    </itemizedlist>
    </para>
   </sect2>
+  
+  <sect2 id="ddl-partitioning-declarative-best-practices">
+   <title>Declarative Partitioning Best Practices</title>
+
+   <para>
+    The choice of how to partition a table should be considered carefully as
+    the performance of query planning and execution can be negatively affected
+    by poorly made design decisions.
+   </para>
+
+   <para>
+    One of the most critical design decisions will be the column or columns
+    which you partition your data by.  Often the best choice will be to
+    partition by the column or set of columns which most commonly appear in
+    <literal>WHERE</literal> clauses of queries being executed on the
+    partitioned table.  <literal>WHERE</literal> clause items that match and
+    are compatible with the partition key can be used to prune away unneeded
+    partitions.  However, you may be forced into making other decisions by
+    requirements for the <literal>PRIMARY KEY</literal> or a
+    <literal>UNIQUE</literal> constraint.
+   </para>
+
+   <para>
+    Choosing the number of partitions to divide the table into is also a
+    critical decision to make.  Not having enough partitions may mean that
+    indexes remain too large and that data locality remains poor which could
+    result in poor cache hit ratios.  However, dividing the table into too
+    many partitions can also cause issues.  Too many partitions can mean
+    slower query planning times and higher memory consumption during both
+    query planning and execution.  It's also important to consider what
+    changes may occur in the future when choosing how to partition your table.
+    For example, if you choose to have one partition per customer and you
+    currently have a small number of large customers, what will the
+    implications be if in several years you obtain a large number of small
+    customers.  In this case, it may be better to choose to partition by
+    <literal>HASH</literal> and choose a reasonable amount of partitions
+    rather than trying to partition by <literal>LIST</literal> and hoping that
+    the number of customers does not increase significantly over time.
+   </para>
+
+   <para>
+    It is also important to consider the overhead of partitioning during
+    query planning and execution.  The query planner is generally able to
+    handle partition hierarchies up a few thousand partitions fairly well,
+    providing that the vast majority of them can be pruned during query
+    planning.  Planning times become much slower and memory consumption
+    becomes higher when more partitions remain after partition pruning.
+    This is particularly true for the <command>UPDATE</command> and
+    <command>DELETE</command> commands.  Also, even if most queries are
+    able to prune a high number of partitions during query planning, it still
+    may be undesirable to have a large number of partitions as each partition
+    also will obtain a relation cache entry in each session which uses the
+    partition, and if each session touches a large number of partitions over a
+    period of time then the memory consumption for these cache entries may
+    become significant.
+   </para>
+
+   <para>
+    With data warehouse type workloads it can make sense to use a larger
+    number of partitions than with an OLTP type workload.  Generally, in data
+    warehouses, query planning time is less of a concern as the majority of
+    processing time is generally spent during query execution.  With either of
+    these two types of workload, it is important to make the right decisions
+    early as re-partitioning large quantities of data can be painstakingly
+    slow.  When performance is critical, performing workload simulations to
+    assist in making the correct decisions can be beneficial.  Never assume
+    that more partitions are better than fewer partitions and vice-versa.
+   </para>
+  </sect2>
+
  </sect1>
 
  <sect1 id="ddl-foreign-data">

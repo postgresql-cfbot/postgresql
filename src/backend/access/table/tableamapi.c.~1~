@@ -21,7 +21,6 @@
 #include "utils/fmgroids.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
-#include "miscadmin.h"
 
 
 /*
@@ -123,7 +122,7 @@ check_default_table_access_method(char **newval, void **extra, GucSource source)
 	 * If we aren't inside a transaction, we cannot do database access so
 	 * cannot verify the name.  Must accept the value on faith.
 	 */
-	if (IsTransactionState() && MyDatabaseId != InvalidOid)
+	if (IsTransactionState())
 	{
 		if (!OidIsValid(get_table_am_oid(*newval, true)))
 		{

@@ -275,11 +275,14 @@ CREATE VIEW aliased_view_3 AS
 CREATE VIEW aliased_view_4 AS
   select * from temp_view_test.tt1
     where exists (select 1 from tt1 where temp_view_test.tt1.y1 = tt1.f1);
+CREATE VIEW aliased_view_5 AS
+  select same.f1 from (select same.f1 from (select f1 from tt1) same) same;
 
 \d+ aliased_view_1
 \d+ aliased_view_2
 \d+ aliased_view_3
 \d+ aliased_view_4
+\d+ aliased_view_5
 
 ALTER TABLE tx1 RENAME TO a1;
 

@@ -377,6 +377,8 @@ CREATE VIEW aliased_view_3 AS
 CREATE VIEW aliased_view_4 AS
   select * from temp_view_test.tt1
     where exists (select 1 from tt1 where temp_view_test.tt1.y1 = tt1.f1);
+CREATE VIEW aliased_view_5 AS
+  select same.f1 from (select same.f1 from (select f1 from tt1) same) same;
 \d+ aliased_view_1
                     View "testviewschm2.aliased_view_1"
  Column |  Type   | Collation | Nullable | Default | Storage  | Description 
@@ -440,6 +442,17 @@ View definition:
   WHERE (EXISTS ( SELECT 1
            FROM tt1 tt1_1
           WHERE tt1.y1 = tt1_1.f1));
+
+\d+ aliased_view_5
+                    View "testviewschm2.aliased_view_5"
+ Column |  Type   | Collation | Nullable | Default | Storage | Description 
+--------+---------+-----------+----------+---------+---------+-------------
+ f1     | integer |           |          |         | plain   | 
+View definition:
+ SELECT same.f1
+   FROM ( SELECT same_1.f1
+           FROM ( SELECT tt1.f1
+                   FROM tt1) same_1) same;
 
 ALTER TABLE tx1 RENAME TO a1;
 \d+ aliased_view_1
@@ -1718,7 +1731,7 @@ select pg_get_ruledef(oid, true) from pg_rewrite
 
 -- clean up all the random objects we made above
 DROP SCHEMA temp_view_test CASCADE;
-NOTICE:  drop cascades to 27 other objects
+NOTICE:  drop cascades to 28 other objects
 DETAIL:  drop cascades to table temp_view_test.base_table
 drop cascades to view v2_temp
 drop cascades to view v4_temp
@@ -1746,6 +1759,7 @@ drop cascades to view aliased_view_1
 drop cascades to view aliased_view_2
 drop cascades to view aliased_view_3
 drop cascades to view aliased_view_4
+drop cascades to view aliased_view_5
 DROP SCHEMA testviewschm2 CASCADE;
 NOTICE:  drop cascades to 62 other objects
 DETAIL:  drop cascades to table t1

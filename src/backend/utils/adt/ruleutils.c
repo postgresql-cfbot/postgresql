@@ -10310,7 +10310,7 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		if (j->alias != NULL)
 		{
 			appendStringInfo(buf, " %s",
-							 quote_identifier(j->alias->aliasname));
+							 quote_identifier(get_rtable_name(j->rtindex, context)));
 			get_column_alias_list(colinfo, context);
 		}
 	}

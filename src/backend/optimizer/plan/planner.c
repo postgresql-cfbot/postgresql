@@ -3551,6 +3551,10 @@ reorder_grouping_sets(List *groupingsets, List *sortclause)
 				{
 					previous = lappend_int(previous, ref);
 					new_elems = list_delete_int(new_elems, ref);
+
+					/* finished with this grouping set */
+					if (list_length(new_elems) == 0)
+						break;
 				}
 				else
 				{

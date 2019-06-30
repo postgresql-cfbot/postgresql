@@ -266,6 +266,12 @@ select array(select row(v.a,s1.*) from (select two,four, count(*) from onek grou
 select sum(ten) from onek group by two, rollup(four::text) order by 1;
 select sum(ten) from onek group by rollup(four::text), two order by 1;
 
+-- Grouping sets reorder
+explain (costs off, verbose)
+select * from gstest1 group by grouping sets((a,b,v),(v)) order by v,b,a;
+
+select * from gstest1 group by grouping sets((a,b,v),(v)) order by v,b,a;
+
 -- hashing support
 
 set enable_hashagg = true;

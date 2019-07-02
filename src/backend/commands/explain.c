@@ -155,8 +155,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt, const char *queryString,
 	{
 		DefElem    *opt = (DefElem *) lfirst(lc);
 
-		if (strcmp(opt->defname, "analyze") == 0)
-			es->analyze = defGetBoolean(opt);
+		if (strcmp(opt->defname, "exec") == 0)
+			es->exec = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "verbose") == 0)
 			es->verbose = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "costs") == 0)
@@ -202,22 +202,22 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt, const char *queryString,
 					 parser_errposition(pstate, opt->location)));
 	}
 
-	if (es->buffers && !es->analyze)
+	if (es->buffers && !es->exec)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option BUFFERS requires ANALYZE")));
+				 errmsg("EXPLAIN option BUFFERS requires EXEC")));
 
 	/* if the timing was not set explicitly, set default value */
-	es->timing = (timing_set) ? es->timing : es->analyze;
+	es->timing = (timing_set) ? es->timing : es->exec;
 
-	/* check that timing is used with EXPLAIN ANALYZE */
-	if (es->timing && !es->analyze)
+	/* check that timing is used with EXPLAIN EXEC */
+	if (es->timing && !es->exec)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option TIMING requires ANALYZE")));
+				 errmsg("EXPLAIN option TIMING requires EXEC")));
 
 	/* if the summary was not set explicitly, set default value */
-	es->summary = (summary_set) ? es->summary : es->analyze;
+	es->summary = (summary_set) ? es->summary : es->exec;
 
 	/*
 	 * Parse analysis was done already, but we still have to run the rule
@@ -475,9 +475,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
-	if (es->analyze && es->timing)
+	if (es->exec && es->timing)
 		instrument_option |= INSTRUMENT_TIMER;
-	else if (es->analyze)
+	else if (es->exec)
 		instrument_option |= INSTRUMENT_ROWS;
 
 	if (es->buffers)
@@ -512,7 +512,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 								dest, params, queryEnv, instrument_option);
 
 	/* Select execution options */
-	if (es->analyze)
+	if (es->exec)
 		eflags = 0;				/* default run-to-completion flags */
 	else
 		eflags = EXEC_FLAG_EXPLAIN_ONLY;
@@ -523,7 +523,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExecutorStart(queryDesc, eflags);
 
 	/* Execute the plan for statistics if asked for */
-	if (es->analyze)
+	if (es->exec)
 	{
 		ScanDirection dir;
 
@@ -556,7 +556,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	}
 
 	/* Print info about runtime of triggers */
-	if (es->analyze)
+	if (es->exec)
 		ExplainPrintTriggers(es, queryDesc);
 
 	/*
@@ -581,7 +581,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	PopActiveSnapshot();
 
 	/* We need a CCI just in case query expanded to multiple plans */
-	if (es->analyze)
+	if (es->exec)
 		CommandCounterIncrement();
 
 	totaltime += elapsed_time(&starttime);
@@ -592,7 +592,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 * user can set SUMMARY OFF to not have the timing information included in
 	 * the output).  By default, ANALYZE sets SUMMARY to true.
 	 */
-	if (es->summary && es->analyze)
+	if (es->summary && es->exec)
 		ExplainPropertyFloat("Execution Time", "ms", 1000.0 * totaltime, 3,
 							 es);
 
@@ -834,7 +834,7 @@ ExplainPrintJIT(ExplainState *es, int jit_flags,
 						 "Expressions", jit_flags & PGJIT_EXPR ? "true" : "false",
 						 "Deforming", jit_flags & PGJIT_DEFORM ? "true" : "false");
 
-		if (es->analyze && es->timing)
+		if (es->exec && es->timing)
 		{
 			appendStringInfoSpaces(es->str, es->indent * 2);
 			appendStringInfo(es->str,
@@ -860,7 +860,7 @@ ExplainPrintJIT(ExplainState *es, int jit_flags,
 		ExplainPropertyBool("Deforming", jit_flags & PGJIT_DEFORM, es);
 		ExplainCloseGroup("Options", "Options", true, es);
 
-		if (es->analyze && es->timing)
+		if (es->exec && es->timing)
 		{
 			ExplainOpenGroup("Timing", "Timing", true, es);
 
@@ -1505,7 +1505,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (planstate->instrument)
 		InstrEndLoop(planstate->instrument);
 
-	if (es->analyze &&
+	if (es->exec &&
 		planstate->instrument && planstate->instrument->nloops > 0)
 	{
 		double		nloops = planstate->instrument->nloops;
@@ -1537,7 +1537,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 		}
 	}
-	else if (es->analyze)
+	else if (es->exec)
 	{
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 			appendStringInfoString(es->str, " (never executed)");
@@ -1606,7 +1606,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
-			if (es->analyze)
+			if (es->exec)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
 			break;
@@ -1624,7 +1624,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
-			if (es->analyze)
+			if (es->exec)
 				show_tidbitmap_info((BitmapHeapScanState *) planstate, es);
 			break;
 		case T_SampleScan:
@@ -1658,7 +1658,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				if (gather->initParam)
 					show_eval_params(gather->initParam, es);
 
-				if (es->analyze)
+				if (es->exec)
 				{
 					int			nworkers;
 
@@ -1704,7 +1704,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				if (gm->initParam)
 					show_eval_params(gm->initParam, es);
 
-				if (es->analyze)
+				if (es->exec)
 				{
 					int			nworkers;
 
@@ -1869,7 +1869,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		show_buffer_usage(es, &planstate->instrument->bufusage);
 
 	/* Show worker detail */
-	if (es->analyze && es->verbose && planstate->worker_instrument)
+	if (es->exec && es->verbose && planstate->worker_instrument)
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
 		bool		opened_group = false;
@@ -2531,12 +2531,12 @@ show_tablesample(TableSampleClause *tsc, PlanState *planstate,
 }
 
 /*
- * If it's EXPLAIN ANALYZE, show tuplesort stats for a sort node
+ * If it's EXPLAIN (EXEC), show tuplesort stats for a sort node
  */
 static void
 show_sort_info(SortState *sortstate, ExplainState *es)
 {
-	if (!es->analyze)
+	if (!es->exec)
 		return;
 
 	if (sortstate->sort_Done && sortstate->tuplesortstate != NULL)
@@ -2716,7 +2716,7 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 }
 
 /*
- * If it's EXPLAIN ANALYZE, show exact/lossy pages for a BitmapHeapScan node
+ * If it's EXPLAIN (EXEC), show exact/lossy pages for a BitmapHeapScan node
  */
 static void
 show_tidbitmap_info(BitmapHeapScanState *planstate, ExplainState *es)
@@ -2744,7 +2744,7 @@ show_tidbitmap_info(BitmapHeapScanState *planstate, ExplainState *es)
 }
 
 /*
- * If it's EXPLAIN ANALYZE, show instrumentation information for a plan node
+ * If it's EXPLAIN (EXEC), show instrumentation information for a plan node
  *
  * "which" identifies which instrumentation counter to print
  */
@@ -2755,7 +2755,7 @@ show_instrumentation_count(const char *qlabel, int which,
 	double		nfiltered;
 	double		nloops;
 
-	if (!es->analyze || !planstate->instrument)
+	if (!es->exec || !planstate->instrument)
 		return;
 
 	if (which == 2)
@@ -3283,8 +3283,8 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			show_instrumentation_count("Rows Removed by Conflict Filter", 1, &mtstate->ps, es);
 		}
 
-		/* EXPLAIN ANALYZE display of actual outcome for each tuple proposed */
-		if (es->analyze && mtstate->ps.instrument)
+		/* EXPLAIN (EXEC) display of actual outcome for each tuple proposed */
+		if (es->exec && mtstate->ps.instrument)
 		{
 			double		total;
 			double		insert_path;

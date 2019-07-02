@@ -52,7 +52,7 @@
  * mean that the plan can't queue any AFTER triggers; just that the caller
  * is responsible for there being a trigger context for them to be queued in.
  */
-#define EXEC_FLAG_EXPLAIN_ONLY	0x0001	/* EXPLAIN, no ANALYZE */
+#define EXEC_FLAG_EXPLAIN_ONLY	0x0001	/* EXPLAIN, no EXEC */
 #define EXEC_FLAG_REWIND		0x0002	/* need efficient rescan */
 #define EXEC_FLAG_BACKWARD		0x0004	/* need backward scan */
 #define EXEC_FLAG_MARK			0x0008	/* need mark/restore */

@@ -273,11 +273,11 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 									 e->pcxt);
 			break;
 		case T_HashState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecHashEstimate((HashState *) planstate, e->pcxt);
 			break;
 		case T_SortState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecSortEstimate((SortState *) planstate, e->pcxt);
 			break;
 
@@ -486,11 +486,11 @@ ExecParallelInitializeDSM(PlanState *planstate,
 										  d->pcxt);
 			break;
 		case T_HashState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecHashInitializeDSM((HashState *) planstate, d->pcxt);
 			break;
 		case T_SortState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecSortInitializeDSM((SortState *) planstate, d->pcxt);
 			break;
 
@@ -1294,11 +1294,11 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 											 pwcxt);
 			break;
 		case T_HashState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecHashInitializeWorker((HashState *) planstate, pwcxt);
 			break;
 		case T_SortState:
-			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			/* even when not parallel-aware, for EXPLAIN EXEC */
 			ExecSortInitializeWorker((SortState *) planstate, pwcxt);
 			break;
 

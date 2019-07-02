@@ -661,7 +661,7 @@ fileBeginForeignScan(ForeignScanState *node, int eflags)
 	FileFdwExecutionState *festate;
 
 	/*
-	 * Do nothing in EXPLAIN (no ANALYZE) case.  node->fdw_state stays NULL.
+	 * Do nothing in EXPLAIN (no EXEC) case.  node->fdw_state stays NULL.
 	 */
 	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
 		return;

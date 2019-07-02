@@ -7,7 +7,7 @@ begin;
 set local min_parallel_table_scan_size = 0;
 set local parallel_setup_cost = 0;
 
--- Extract bucket and batch counts from an explain analyze plan.  In
+-- Extract bucket and batch counts from an explain (exec) plan.  In
 -- general we can't make assertions about how many batches (or
 -- buckets) will be required because it can vary, but we can in some
 -- special cases and we can check for growth.
@@ -42,7 +42,7 @@ declare
   hash_node json;
 begin
   for whole_plan in
-    execute 'explain (analyze, format ''json'') ' || query
+    execute 'explain (exec, format ''json'') ' || query
   loop
     hash_node := find_hash(json_extract_path(whole_plan, '0', 'Plan'));
     original := hash_node->>'Original Hash Batches';
@@ -280,7 +280,7 @@ rollback to settings;
 
 -- A couple of other hash join tests unrelated to work_mem management.
 
--- Check that EXPLAIN ANALYZE has data even if the leader doesn't participate
+-- Check that EXPLAIN (EXEC) has data even if the leader doesn't participate
 savepoint settings;
 set local max_parallel_workers_per_gather = 2;
 set local work_mem = '4MB';

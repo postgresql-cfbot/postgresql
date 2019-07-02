@@ -4537,7 +4537,7 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
        performed here for parameter values which are known during the
        initialization phase of execution.  Partitions which are pruned
        during this stage will not show up in the query's
-       <command>EXPLAIN</command> or <command>EXPLAIN EXEC</command>.
+       <command>EXPLAIN</command> or <command>EXPLAIN ANALYZE</command>.
        It is possible to determine the number of partitions which were
        removed during this phase by observing the
        <quote>Subplans Removed</quote> property in the
@@ -4557,7 +4557,7 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
        execution parameters being used by partition pruning changes.
        Determining if partitions were pruned during this phase requires
        careful inspection of the <literal>loops</literal> property in
-       the <command>EXPLAIN EXEC</command> output.  Subplans
+       the <command>EXPLAIN ANALYZE</command> output.  Subplans
        corresponding to different partitions may have different values
        for it depending on how many times each of them was pruned during
        execution.  Some may be shown as <literal>(never executed)</literal>

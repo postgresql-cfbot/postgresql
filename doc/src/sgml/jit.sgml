@@ -145,7 +145,7 @@
    <acronym>JIT</acronym> is used or not.  As an example, here is a query that
    is not using <acronym>JIT</acronym>:
 <screen>
-=# EXPLAIN ANALYZE SELECT SUM(relpages) FROM pg_class;
+=# EXPLAIN EXEC SELECT SUM(relpages) FROM pg_class;
                                                  QUERY PLAN
 -------------------------------------------------------------------------------------------------------------
  Aggregate  (cost=16.27..16.29 rows=1 width=8) (actual time=0.303..0.303 rows=1 loops=1)
@@ -161,7 +161,7 @@
 <screen>
 =# SET jit_above_cost = 10;
 SET
-=# EXPLAIN ANALYZE SELECT SUM(relpages) FROM pg_class;
+=# EXPLAIN EXEC SELECT SUM(relpages) FROM pg_class;
                                                  QUERY PLAN
 -------------------------------------------------------------------------------------------------------------
  Aggregate  (cost=16.27..16.29 rows=1 width=8) (actual time=6.049..6.049 rows=1 loops=1)

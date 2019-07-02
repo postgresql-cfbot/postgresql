@@ -2191,7 +2191,7 @@ typedef struct GatherMergeState
 } GatherMergeState;
 
 /* ----------------
- *	 Values displayed by EXPLAIN EXEC
+ *	 Values displayed by EXPLAIN ANALYZE
  * ----------------
  */
 typedef struct HashInstrumentation

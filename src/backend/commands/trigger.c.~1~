@@ -2365,7 +2365,7 @@ FindTriggerIncompatibleWithInheritance(TriggerDesc *trigdesc)
  *		trigdata: trigger descriptor.
  *		tgindx: trigger's index in finfo and instr arrays.
  *		finfo: array of cached trigger function call information.
- *		instr: optional array of EXPLAIN EXEC instrumentation state.
+ *		instr: optional array of EXPLAIN ANALYZE instrumentation state.
  *		per_tuple_context: memory context to execute the function in.
  *
  * Returns the tuple (or NULL) as returned by the function.
@@ -2406,7 +2406,7 @@ ExecCallTriggerFunc(TriggerData *trigdata,
 	Assert(finfo->fn_oid == trigdata->tg_trigger->tgfoid);
 
 	/*
-	 * If doing EXPLAIN EXEC, start charging time to this trigger.
+	 * If doing EXPLAIN ANALYZE, start charging time to this trigger.
 	 */
 	if (instr)
 		InstrStartNode(instr + tgindx);
@@ -2455,7 +2455,7 @@ ExecCallTriggerFunc(TriggerData *trigdata,
 						fcinfo->flinfo->fn_oid)));
 
 	/*
-	 * If doing EXPLAIN EXEC, stop charging time to this trigger, and count
+	 * If doing EXPLAIN ANALYZE, stop charging time to this trigger, and count
 	 * one "tuple returned" (really the number of firings).
 	 */
 	if (instr)
@@ -4172,7 +4172,7 @@ afterTriggerDeleteHeadEventChunk(AfterTriggersQueryData *qs)
  *	rel: open relation for event.
  *	trigdesc: working copy of rel's trigger info.
  *	finfo: array of fmgr lookup cache entries (one per trigger in trigdesc).
- *	instr: array of EXPLAIN EXEC instrumentation nodes (one per trigger),
+ *	instr: array of EXPLAIN ANALYZE instrumentation nodes (one per trigger),
  *		or NULL if no instrumentation is wanted.
  *	per_tuple_context: memory context to call trigger function in.
  *	trig_tuple_slot1: scratch slot for tg_trigtuple (foreign tables only)
@@ -4217,7 +4217,7 @@ AfterTriggerExecute(EState *estate,
 		elog(ERROR, "could not find trigger %u", tgoid);
 
 	/*
-	 * If doing EXPLAIN EXEC, start charging time to this trigger. We want
+	 * If doing EXPLAIN ANALYZE, start charging time to this trigger. We want
 	 * to include time spent re-fetching tuples in the trigger cost.
 	 */
 	if (instr)
@@ -4364,7 +4364,7 @@ AfterTriggerExecute(EState *estate,
 		ExecClearTuple(LocTriggerData.tg_newslot);
 
 	/*
-	 * If doing EXPLAIN EXEC, stop charging time to this trigger, and count
+	 * If doing EXPLAIN ANALYZE, stop charging time to this trigger, and count
 	 * one "tuple returned" (really the number of firings).
 	 */
 	if (instr)

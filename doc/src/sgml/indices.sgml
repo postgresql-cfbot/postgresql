@@ -1498,7 +1498,7 @@ CREATE INDEX test1c_content_y_index ON test1c (content COLLATE "y");
      possibilities: Either the system is right and using the index is
      indeed not appropriate, or the cost estimates of the query plans
      are not reflecting reality.  So you should time your query with
-     and without indexes.  The <command>EXPLAIN ANALYZE</command>
+     and without indexes.  The <command>EXPLAIN EXEC</command>
      command can be useful here.
     </para>
    </listitem>

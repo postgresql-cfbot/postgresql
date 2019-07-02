@@ -532,7 +532,7 @@ select count(*) from bmscantest where a>1;
 -- test accumulation of stats for parallel nodes
 reset enable_seqscan;
 alter table tenk2 set (parallel_workers = 0);
-explain (exec, timing off, summary off, costs off)
+explain (analyze, timing off, summary off, costs off)
    select count(*) from tenk1, tenk2 where tenk1.hundred > 1
         and tenk2.thousand=0;
                                 QUERY PLAN                                
@@ -558,7 +558,7 @@ $$
 declare ln text;
 begin
     for ln in
-        explain (exec, timing off, summary off, costs off)
+        explain (analyze, timing off, summary off, costs off)
           select * from
           (select ten from tenk1 where ten < 100 order by ten) ss
           right join (values (1),(2),(3)) v(x) on true
@@ -1033,7 +1033,7 @@ explain (costs off)
 -- to increase the parallel query test coverage
 SAVEPOINT settings;
 SET LOCAL force_parallel_mode = 1;
-EXPLAIN (exec, timing off, summary off, costs off) SELECT * FROM tenk1;
+EXPLAIN (analyze, timing off, summary off, costs off) SELECT * FROM tenk1;
                          QUERY PLAN                          
 -------------------------------------------------------------
  Gather (actual rows=10000 loops=1)

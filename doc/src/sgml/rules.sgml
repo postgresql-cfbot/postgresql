@@ -1030,7 +1030,7 @@ SELECT count(*) FROM words WHERE word = 'caterpiler';
 (1 row)
 </programlisting>
 
-    With <command>EXPLAIN ANALYZE</command>, we see:
+    With <command>EXPLAIN EXEC</command>, we see:
 
 <programlisting>
  Aggregate  (cost=21763.99..21764.00 rows=1 width=0) (actual time=188.180..188.181 rows=1 loops=1)

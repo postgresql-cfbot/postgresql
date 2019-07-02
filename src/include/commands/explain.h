@@ -30,8 +30,8 @@ typedef struct ExplainState
 	StringInfo	str;			/* output buffer */
 	/* options */
 	bool		verbose;		/* be verbose */
-	bool		analyze;		/* print actual times */
 	bool		costs;			/* print estimated costs */
+	bool		exec;			/* actually execute the query, measure it */
 	bool		buffers;		/* print buffer usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */

@@ -533,25 +533,25 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2;
     which shows that the planner thinks that sorting <literal>onek</literal> by
     index-scanning is about 12% more expensive than sequential-scan-and-sort.
     Of course, the next question is whether it's right about that.
-    We can investigate that using <command>EXPLAIN ANALYZE</command>, as discussed
+    We can investigate that using <command>EXPLAIN EXEC</command>, as discussed
     below.
    </para>
 
   </sect2>
 
-  <sect2 id="using-explain-analyze">
-   <title><command>EXPLAIN ANALYZE</command></title>
+  <sect2 id="using-explain-exec">
+   <title><command>EXPLAIN EXEC</command></title>
 
    <para>
     It is possible to check the accuracy of the planner's estimates
-    by using <command>EXPLAIN</command>'s <literal>ANALYZE</literal> option.  With this
+    by using <command>EXPLAIN</command>'s <literal>EXEC</literal> option.  With this
     option, <command>EXPLAIN</command> actually executes the query, and then displays
     the true row counts and true run time accumulated within each plan node,
     along with the same estimates that a plain <command>EXPLAIN</command>
     shows.  For example, we might get a result like this:
 
 <screen>
-EXPLAIN ANALYZE SELECT *
+EXPLAIN EXEC SELECT *
 FROM tenk1 t1, tenk2 t2
 WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
 
@@ -590,12 +590,12 @@ WHERE t1.unique1 &lt; 10 AND t1.unique2 = t2.unique2;
    </para>
 
    <para>
-    In some cases <command>EXPLAIN ANALYZE</command> shows additional execution
+    In some cases <command>EXPLAIN EXEC</command> shows additional execution
     statistics beyond the plan node execution times and row counts.
     For example, Sort and Hash nodes provide extra information:
 
 <screen>
-EXPLAIN ANALYZE SELECT *
+EXPLAIN EXEC SELECT *
 FROM tenk1 t1, tenk2 t2
 WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2 ORDER BY t1.fivethous;
 
@@ -630,7 +630,7 @@ WHERE t1.unique1 &lt; 100 AND t1.unique2 = t2.unique2 ORDER BY t1.fivethous;
     filter condition:
 
 <screen>
-EXPLAIN ANALYZE SELECT * FROM tenk1 WHERE ten &lt; 7;
+EXPLAIN EXEC SELECT * FROM tenk1 WHERE ten &lt; 7;
 
                                                QUERY PLAN
 ---------------------------------------------------------------------------------------------------------
@@ -653,7 +653,7 @@ EXPLAIN ANALYZE SELECT * FROM tenk1 WHERE ten &lt; 7;
     specific point:
 
 <screen>
-EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
+EXPLAIN EXEC SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
 
                                               QUERY PLAN
 ------------------------------------------------------------------------------------------------------
@@ -672,7 +672,7 @@ EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
 <screen>
 SET enable_seqscan TO off;
 
-EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
+EXPLAIN EXEC SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
 
                                                         QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------
@@ -695,7 +695,7 @@ EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
     <literal>ANALYZE</literal> to get even more run time statistics:
 
 <screen>
-EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000;
+EXPLAIN (EXEC, BUFFERS) SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000;
 
                                                            QUERY PLAN
 ---------------------------------------------------------------------------------------------------------------------------------
@@ -719,7 +719,7 @@ EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique
    </para>
 
    <para>
-    Keep in mind that because <command>EXPLAIN ANALYZE</command> actually
+    Keep in mind that because <command>EXPLAIN EXEC</command> actually
     runs the query, any side-effects will happen as usual, even though
     whatever results the query might output are discarded in favor of
     printing the <command>EXPLAIN</command> data.  If you want to analyze a
@@ -729,7 +729,7 @@ EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique
 <screen>
 BEGIN;
 
-EXPLAIN ANALYZE UPDATE tenk1 SET hundred = hundred + 1 WHERE unique1 &lt; 100;
+EXPLAIN EXEC UPDATE tenk1 SET hundred = hundred + 1 WHERE unique1 &lt; 100;
 
                                                            QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------------
@@ -795,13 +795,13 @@ EXPLAIN UPDATE parent SET f2 = f2 + 1 WHERE f1 = 101;
 
    <para>
     The <literal>Planning time</literal> shown by <command>EXPLAIN
-    ANALYZE</command> is the time it took to generate the query plan from the
+    EXEC</command> is the time it took to generate the query plan from the
     parsed query and optimize it. It does not include parsing or rewriting.
    </para>
 
    <para>
     The <literal>Execution time</literal> shown by <command>EXPLAIN
-    ANALYZE</command> includes executor start-up and shut-down time, as well
+    EXEC</command> includes executor start-up and shut-down time, as well
     as the time to run any triggers that are fired, but it does not include
     parsing, rewriting, or planning time.
     Time spent executing <literal>BEFORE</literal> triggers, if any, is included in
@@ -812,7 +812,7 @@ EXPLAIN UPDATE parent SET f2 = f2 + 1 WHERE f1 = 101;
     (either <literal>BEFORE</literal> or <literal>AFTER</literal>) is also shown separately.
     Note that deferred constraint triggers will not be executed
     until end of transaction and are thus not considered at all by
-    <command>EXPLAIN ANALYZE</command>.
+    <command>EXPLAIN EXEC</command>.
    </para>
 
   </sect2>
@@ -822,11 +822,11 @@ EXPLAIN UPDATE parent SET f2 = f2 + 1 WHERE f1 = 101;
 
    <para>
     There are two significant ways in which run times measured by
-    <command>EXPLAIN ANALYZE</command> can deviate from normal execution of
+    <command>EXPLAIN EXEC</command> can deviate from normal execution of
     the same query.  First, since no output rows are delivered to the client,
     network transmission costs and I/O conversion costs are not included.
     Second, the measurement overhead added by <command>EXPLAIN
-    ANALYZE</command> can be significant, especially on machines with slow
+    EXEC</command> can be significant, especially on machines with slow
     <function>gettimeofday()</function> operating-system calls. You can use the
     <xref linkend="pgtesttiming"/> tool to measure the overhead of timing
     on your system.
@@ -853,7 +853,7 @@ EXPLAIN UPDATE parent SET f2 = f2 + 1 WHERE f1 = 101;
     effect.  For example, in the <literal>LIMIT</literal> query we used before,
 
 <screen>
-EXPLAIN ANALYZE SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000 LIMIT 2;
+EXPLAIN EXEC SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000 LIMIT 2;
 
                                                           QUERY PLAN
 -------------------------------------------------------------------------------------------------------------------------------
@@ -883,7 +883,7 @@ EXPLAIN ANALYZE SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000
     of one child, with results like those mentioned for <literal>LIMIT</literal>.
     Also, if the outer (first) child contains rows with duplicate key values,
     the inner (second) child is backed up and rescanned for the portion of its
-    rows matching that key value.  <command>EXPLAIN ANALYZE</command> counts these
+    rows matching that key value.  <command>EXPLAIN EXEC</command> counts these
     repeated emissions of the same inner rows as if they were real additional
     rows.  When there are many outer duplicates, the reported actual row count
     for the inner child plan node can be significantly larger than the number

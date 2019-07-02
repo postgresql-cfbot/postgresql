@@ -6441,7 +6441,7 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         <command>UPDATE</command>, <command>DELETE</command>, <command>TRUNCATE</command>,
         and <command>COPY FROM</command>.
         <command>PREPARE</command>, <command>EXECUTE</command>, and
-        <command>EXPLAIN ANALYZE</command> statements are also logged if their
+        <command>EXPLAIN EXEC</command> statements are also logged if their
         contained command is of an appropriate type.  For clients using
         extended query protocol, logging occurs when an Execute message
         is received, and values of the Bind parameters are included

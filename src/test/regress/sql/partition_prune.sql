@@ -327,7 +327,7 @@ create table ab_a3_b2 partition of ab_a3 for values in (2);
 create table ab_a3_b3 partition of ab_a3 for values in (3);
 
 -- Disallow index only scans as concurrent transactions may stop visibility
--- bits being set causing "Heap Fetches" to be unstable in the EXPLAIN ANALYZE
+-- bits being set causing "Heap Fetches" to be unstable in the EXPLAIN (EXEC)
 -- output.
 set enable_indexonlyscan = off;
 
@@ -342,8 +342,8 @@ execute ab_q1 (1, 8, 3);
 execute ab_q1 (1, 8, 3);
 execute ab_q1 (1, 8, 3);
 
-explain (analyze, costs off, summary off, timing off) execute ab_q1 (2, 2, 3);
-explain (analyze, costs off, summary off, timing off) execute ab_q1 (1, 2, 3);
+explain (exec, costs off, summary off, timing off) execute ab_q1 (2, 2, 3);
+explain (exec, costs off, summary off, timing off) execute ab_q1 (1, 2, 3);
 
 deallocate ab_q1;
 
@@ -359,8 +359,8 @@ execute ab_q1 (1, 8);
 execute ab_q1 (1, 8);
 execute ab_q1 (1, 8);
 
-explain (analyze, costs off, summary off, timing off) execute ab_q1 (2, 2);
-explain (analyze, costs off, summary off, timing off) execute ab_q1 (2, 4);
+explain (exec, costs off, summary off, timing off) execute ab_q1 (2, 2);
+explain (exec, costs off, summary off, timing off) execute ab_q1 (2, 4);
 
 -- Ensure a mix of PARAM_EXTERN and PARAM_EXEC Params work together at
 -- different levels of partitioning.
@@ -373,7 +373,7 @@ execute ab_q2 (1, 8);
 execute ab_q2 (1, 8);
 execute ab_q2 (1, 8);
 
-explain (analyze, costs off, summary off, timing off) execute ab_q2 (2, 2);
+explain (exec, costs off, summary off, timing off) execute ab_q2 (2, 2);
 
 -- As above, but swap the PARAM_EXEC Param to the first partition level
 prepare ab_q3 (int, int) as
@@ -385,7 +385,7 @@ execute ab_q3 (1, 8);
 execute ab_q3 (1, 8);
 execute ab_q3 (1, 8);
 
-explain (analyze, costs off, summary off, timing off) execute ab_q3 (2, 2);
+explain (exec, costs off, summary off, timing off) execute ab_q3 (2, 2);
 
 -- Test a backwards Append scan
 create table list_part (a int) partition by list (a);
@@ -416,13 +416,13 @@ begin;
 create function list_part_fn(int) returns int as $$ begin return $1; end;$$ language plpgsql stable;
 
 -- Ensure pruning works using a stable function containing no Vars
-explain (analyze, costs off, summary off, timing off) select * from list_part where a = list_part_fn(1);
+explain (exec, costs off, summary off, timing off) select * from list_part where a = list_part_fn(1);
 
 -- Ensure pruning does not take place when the function has a Var parameter
-explain (analyze, costs off, summary off, timing off) select * from list_part where a = list_part_fn(a);
+explain (exec, costs off, summary off, timing off) select * from list_part where a = list_part_fn(a);
 
 -- Ensure pruning does not take place when the expression contains a Var.
-explain (analyze, costs off, summary off, timing off) select * from list_part where a = list_part_fn(1) + a;
+explain (exec, costs off, summary off, timing off) select * from list_part where a = list_part_fn(1) + a;
 
 rollback;
 
@@ -440,7 +440,7 @@ declare
     ln text;
 begin
     for ln in
-        execute format('explain (analyze, costs off, summary off, timing off) %s',
+        execute format('explain (exec, costs off, summary off, timing off) %s',
             $1)
     loop
         if ln like '%Parallel%' then
@@ -537,15 +537,15 @@ reset min_parallel_table_scan_size;
 reset max_parallel_workers_per_gather;
 
 -- Test run-time partition pruning with an initplan
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from ab where a = (select max(a) from lprt_a) and b = (select max(a)-1 from lprt_a);
 
 -- Test run-time partition pruning with UNION ALL parents
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from (select * from ab where a = 1 union all select * from ab) ab where b = (select 1);
 
 -- A case containing a UNION ALL with a non-partitioned child.
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from (select * from ab where a = 1 union all (values(10,5)) union all select * from ab) ab where b = (select 1);
 
 -- Another UNION ALL test, but containing a mix of exec init and exec run-time pruning.
@@ -566,7 +566,7 @@ union all
 ) ab where a = $1 and b = (select -10);
 
 -- Ensure the xy_1 subplan is not pruned.
-explain (analyze, costs off, summary off, timing off) execute ab_q6(1);
+explain (exec, costs off, summary off, timing off) execute ab_q6(1);
 
 -- Ensure we see just the xy_1 row.
 execute ab_q6(100);
@@ -584,14 +584,14 @@ deallocate ab_q6;
 
 -- UPDATE on a partition subtree has been seen to have problems.
 insert into ab values (1,2);
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 update ab_a1 set b = 3 from ab where ab.a = 1 and ab.a = ab_a1.a;
 table ab;
 
 -- Test UPDATE where source relation has run-time pruning enabled
 truncate ab;
 insert into ab values (1, 1), (1, 2), (1, 3), (2, 1);
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 update ab_a1 set b = 3 from ab_a2 where ab_a2.b = (select 1);
 select tableoid::regclass, * from ab;
 
@@ -622,10 +622,10 @@ insert into tprt values (10), (20), (501), (502), (505), (1001), (4500);
 set enable_hashjoin = off;
 set enable_mergejoin = off;
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 join tprt on tbl1.col1 > tprt.col1;
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 join tprt on tbl1.col1 = tprt.col1;
 
 select tbl1.col1, tprt.col1 from tbl1
@@ -638,10 +638,10 @@ order by tbl1.col1, tprt.col1;
 
 -- Multiple partitions
 insert into tbl1 values (1001), (1010), (1011);
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
 
 select tbl1.col1, tprt.col1 from tbl1
@@ -655,7 +655,7 @@ order by tbl1.col1, tprt.col1;
 -- Last partition
 delete from tbl1;
 insert into tbl1 values (4400);
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 join tprt on tbl1.col1 < tprt.col1;
 
 select tbl1.col1, tprt.col1 from tbl1
@@ -665,7 +665,7 @@ order by tbl1.col1, tprt.col1;
 -- No matching partition
 delete from tbl1;
 insert into tbl1 values (10000);
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from tbl1 join tprt on tbl1.col1 = tprt.col1;
 
 select tbl1.col1, tprt.col1 from tbl1
@@ -696,7 +696,7 @@ execute part_abc_q1 (1, 2, 3);
 execute part_abc_q1 (1, 2, 3);
 
 -- Single partition should be scanned.
-explain (analyze, costs off, summary off, timing off) execute part_abc_q1 (1, 2, 3);
+explain (exec, costs off, summary off, timing off) execute part_abc_q1 (1, 2, 3);
 
 deallocate part_abc_q1;
 
@@ -722,13 +722,13 @@ execute q1 (1,2);
 execute q1 (1,2);
 execute q1 (1,2);
 
-explain (analyze, costs off, summary off, timing off)  execute q1 (1,1);
+explain (exec, costs off, summary off, timing off)  execute q1 (1,1);
 
-explain (analyze, costs off, summary off, timing off)  execute q1 (2,2);
+explain (exec, costs off, summary off, timing off)  execute q1 (2,2);
 
 -- Try with no matching partitions. One subplan should remain in this case,
 -- but it shouldn't be executed.
-explain (analyze, costs off, summary off, timing off)  execute q1 (0,0);
+explain (exec, costs off, summary off, timing off)  execute q1 (0,0);
 
 deallocate q1;
 
@@ -742,14 +742,14 @@ execute q1 (1,2,3,4);
 execute q1 (1,2,3,4);
 
 -- Both partitions allowed by IN clause, but one disallowed by <> clause
-explain (analyze, costs off, summary off, timing off)  execute q1 (1,2,2,0);
+explain (exec, costs off, summary off, timing off)  execute q1 (1,2,2,0);
 
 -- Both partitions allowed by IN clause, then both excluded again by <> clauses.
 -- One subplan will remain in this case, but it should not be executed.
-explain (analyze, costs off, summary off, timing off)  execute q1 (1,2,2,1);
+explain (exec, costs off, summary off, timing off)  execute q1 (1,2,2,1);
 
 -- Ensure Params that evaluate to NULL properly prune away all partitions
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from listp where a = (select null::int);
 
 drop table listp;
@@ -837,10 +837,10 @@ create table boolp (a bool) partition by list (a);
 create table boolp_t partition of boolp for values in('t');
 create table boolp_f partition of boolp for values in('f');
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from boolp where a = (select value from boolvalues where value);
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from boolp where a = (select value from boolvalues where not value);
 
 drop table boolp;
@@ -868,18 +868,18 @@ execute mt_q1(0);
 execute mt_q1(0);
 execute mt_q1(0);
 
-explain (analyze, costs off, summary off, timing off) execute mt_q1(15);
+explain (exec, costs off, summary off, timing off) execute mt_q1(15);
 execute mt_q1(15);
-explain (analyze, costs off, summary off, timing off) execute mt_q1(25);
+explain (exec, costs off, summary off, timing off) execute mt_q1(25);
 execute mt_q1(25);
 -- Ensure MergeAppend behaves correctly when no subplans match
-explain (analyze, costs off, summary off, timing off) execute mt_q1(35);
+explain (exec, costs off, summary off, timing off) execute mt_q1(35);
 execute mt_q1(35);
 
 deallocate mt_q1;
 
 -- ensure initplan params properly prune partitions
-explain (analyze, costs off, summary off, timing off) select * from ma_test where a >= (select min(b) from ma_test_p2) order by b;
+explain (exec, costs off, summary off, timing off) select * from ma_test where a >= (select min(b) from ma_test_p2) order by b;
 
 reset enable_seqscan;
 reset enable_sort;
@@ -1062,7 +1062,7 @@ create table listp1 partition of listp for values in(1);
 create table listp2 partition of listp for values in(2) partition by list(b);
 create table listp2_10 partition of listp2 for values in (10);
 
-explain (analyze, costs off, summary off, timing off)
+explain (exec, costs off, summary off, timing off)
 select * from listp where a = (select 2) and b <> 10;
 
 --

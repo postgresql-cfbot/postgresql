@@ -147,14 +147,14 @@ INSERT INTO t1 SELECT i/100, i/500
 ANALYZE t1;
 
 -- the number of matching rows will be drastically underestimated:
-EXPLAIN ANALYZE SELECT * FROM t1 WHERE (a = 1) AND (b = 0);
+EXPLAIN EXEC SELECT * FROM t1 WHERE (a = 1) AND (b = 0);
 
 CREATE STATISTICS s1 (dependencies) ON a, b FROM t1;
 
 ANALYZE t1;
 
 -- now the row count estimate is more accurate:
-EXPLAIN ANALYZE SELECT * FROM t1 WHERE (a = 1) AND (b = 0);
+EXPLAIN EXEC SELECT * FROM t1 WHERE (a = 1) AND (b = 0);
 </programlisting>
 
    Without functional-dependency statistics, the planner would assume
@@ -183,10 +183,10 @@ CREATE STATISTICS s2 (mcv) ON a, b FROM t2;
 ANALYZE t2;
 
 -- valid combination (found in MCV)
-EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 1);
+EXPLAIN EXEC SELECT * FROM t2 WHERE (a = 1) AND (b = 1);
 
 -- invalid combination (not found in MCV)
-EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 2);
+EXPLAIN EXEC SELECT * FROM t2 WHERE (a = 1) AND (b = 2);
 </programlisting>
 
    The MCV list gives the planner more detailed information about the

@@ -390,7 +390,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
  *
  *		This routine must be called after the last ExecutorRun call.
  *		It performs cleanup such as firing AFTER triggers.  It is
- *		separate from ExecutorEnd because EXPLAIN ANALYZE needs to
+ *		separate from ExecutorEnd because EXPLAIN EXEC needs to
  *		include these actions in the total runtime.
  *
  *		We provide a function hook variable that lets loadable plugins
@@ -1365,7 +1365,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
  * on other relations, which will be processed in the context of the outer
  * query.  For efficiency's sake, we want to have a ResultRelInfo for those
  * triggers too; that can avoid repeated re-opening of the relation.  (It
- * also provides a way for EXPLAIN ANALYZE to report the runtimes of such
+ * also provides a way for EXPLAIN EXEC to report the runtimes of such
  * triggers.)  So we make additional ResultRelInfo's as needed, and save them
  * in es_trig_target_relations.
  */

@@ -32,11 +32,12 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <replaceable class="parameter">statement</replaceable>
-EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">statement</replaceable>
+Legacy syntax:
+EXPLAIN [ { ANALYZE | ANALYSE } ] [ VERBOSE ] <replaceable class="parameter">statement</replaceable>
 
 <phrase>where <replaceable class="parameter">option</replaceable> can be one of:</phrase>
 
-    ANALYZE [ <replaceable class="parameter">boolean</replaceable> ]
+    EXEC [ <replaceable class="parameter">boolean</replaceable> ]
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
     COSTS [ <replaceable class="parameter">boolean</replaceable> ]
     SETTINGS [ <replaceable class="parameter">boolean</replaceable> ]
@@ -76,7 +77,7 @@ EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">statement</replac
   </para>
 
   <para>
-   The <literal>ANALYZE</literal> option causes the statement to be actually
+   The <literal>EXEC</literal> option causes the statement to be actually
    executed, not only planned.  Then actual run time statistics are added to
    the display, including the total elapsed time expended within each plan
    node (in milliseconds) and the total number of rows it actually returned.
@@ -87,18 +88,18 @@ EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">statement</replac
   <important>
    <para>
     Keep in mind that the statement is actually executed when
-    the <literal>ANALYZE</literal> option is used.  Although
+    the <literal>EXEC</literal> option is used.  Although
     <command>EXPLAIN</command> will discard any output that a
     <command>SELECT</command> would return, other side effects of the
     statement will happen as usual.  If you wish to use
-    <command>EXPLAIN ANALYZE</command> on an
+    <command>EXPLAIN (EXEC)</command> on an
     <command>INSERT</command>, <command>UPDATE</command>,
     <command>DELETE</command>, <command>CREATE TABLE AS</command>,
     or <command>EXECUTE</command> statement
     without letting the command affect your data, use this approach:
 <programlisting>
 BEGIN;
-EXPLAIN ANALYZE ...;
+EXPLAIN (EXEC) ...;
 ROLLBACK;
 </programlisting>
    </para>
@@ -118,7 +119,7 @@ ROLLBACK;
 
   <variablelist>
    <varlistentry>
-    <term><literal>ANALYZE</literal></term>
+    <term><literal>EXEC</literal></term>
     <listitem>
      <para>
       Carry out the command and show actual run times and other statistics.
@@ -186,7 +187,7 @@ ROLLBACK;
       The number of blocks shown for an
       upper-level node includes those used by all its child nodes.  In text
       format, only non-zero values are printed.  This parameter may only be
-      used when <literal>ANALYZE</literal> is also enabled.  It defaults to
+      used when <literal>EXEC</literal> is also enabled.  It defaults to
       <literal>FALSE</literal>.
      </para>
     </listitem>
@@ -203,7 +204,7 @@ ROLLBACK;
       not exact times, are needed.  Run time of the entire statement is
       always measured, even when node-level timing is turned off with this
       option.
-      This parameter may only be used when <literal>ANALYZE</literal> is also
+      This parameter may only be used when <literal>EXEC</literal> is also
       enabled.  It defaults to <literal>TRUE</literal>.
      </para>
     </listitem>
@@ -215,7 +216,7 @@ ROLLBACK;
      <para>
       Include summary information (e.g., totaled timing information) after the
       query plan.  Summary information is included by default when
-      <literal>ANALYZE</literal> is used but otherwise is not included by
+      <literal>EXEC</literal> is used but otherwise is not included by
       default, but can be enabled using this option.  Planning time in
       <command>EXPLAIN EXECUTE</command> includes the time required to fetch
       the plan from the cache and the time required for re-planning, if
@@ -295,8 +296,8 @@ ROLLBACK;
   <para>
    In order to measure the run-time cost of each node in the execution
    plan, the current implementation of <command>EXPLAIN
-   ANALYZE</command> adds profiling overhead to query execution.
-   As a result, running <command>EXPLAIN ANALYZE</command>
+   (EXEC)</command> adds profiling overhead to query execution.
+   As a result, running <command>EXPLAIN (EXEC)</command>
    on a query can sometimes take significantly longer than executing
    the query normally. The amount of overhead depends on the nature of
    the query, as well as the platform being used.  The worst case occurs
@@ -423,7 +424,7 @@ PREPARE query(int, int) AS SELECT sum(bar) FROM test
     WHERE id &gt; $1 AND id &lt; $2
     GROUP BY foo;
 
-EXPLAIN ANALYZE EXECUTE query(100, 200);
+EXPLAIN (EXEC) EXECUTE query(100, 200);
 
                                                        QUERY PLAN                                                       
 ------------------------------------------------------------------------------------------------------------------------

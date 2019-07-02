@@ -937,7 +937,7 @@ IterateDirectModify(ForeignScanState *node);
      Whether the query has the clause or not, the query's reported row count
      must be incremented by the FDW itself.  When the query doesn't have the
      clause, the FDW must also increment the row count for the
-     <structname>ForeignScanState</structname> node in the <command>EXPLAIN ANALYZE</command>
+     <structname>ForeignScanState</structname> node in the <command>EXPLAIN EXEC</command>
      case.
     </para>
 
@@ -1123,7 +1123,7 @@ ExplainForeignScan(ForeignScanState *node,
      The flag fields in <literal>es</literal> can be used to determine what to
      print, and the state of the <structname>ForeignScanState</structname> node
      can be inspected to provide run-time statistics in the <command>EXPLAIN
-     ANALYZE</command> case.
+     EXEC</command> case.
     </para>
 
     <para>
@@ -1148,7 +1148,7 @@ ExplainForeignModify(ModifyTableState *mtstate,
      The flag fields in <literal>es</literal> can be used to determine what to
      print, and the state of the <structname>ModifyTableState</structname> node
      can be inspected to provide run-time statistics in the <command>EXPLAIN
-     ANALYZE</command> case.  The first four arguments are the same as for
+     EXEC</command> case.  The first four arguments are the same as for
      <function>BeginForeignModify</function>.
     </para>
 
@@ -1172,7 +1172,7 @@ ExplainDirectModify(ForeignScanState *node,
      The flag fields in <literal>es</literal> can be used to determine what to
      print, and the state of the <structname>ForeignScanState</structname> node
      can be inspected to provide run-time statistics in the <command>EXPLAIN
-     ANALYZE</command> case.
+     EXEC</command> case.
     </para>
 
     <para>

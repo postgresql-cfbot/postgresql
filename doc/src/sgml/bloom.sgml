@@ -129,7 +129,7 @@ CREATE INDEX
   <para>
    A sequential scan over this large table takes a long time:
 <programlisting>
-=# EXPLAIN ANALYZE SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
+=# EXPLAIN EXEC SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
                                                  QUERY PLAN
 ------------------------------------------------------------------------------------------------------------
  Seq Scan on tbloom  (cost=0.00..213694.08 rows=1 width=24) (actual time=1445.438..1445.438 rows=0 loops=1)
@@ -145,7 +145,7 @@ CREATE INDEX
    So the planner will usually select an index scan if possible.
    With a btree index, we get results like this:
 <programlisting>
-=# EXPLAIN ANALYZE SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
+=# EXPLAIN EXEC SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
                                                            QUERY PLAN
 --------------------------------------------------------------------------------------------------------------------------------
  Index Only Scan using btreeidx on tbloom  (cost=0.56..298311.96 rows=1 width=24) (actual time=445.709..445.709 rows=0 loops=1)
@@ -160,7 +160,7 @@ CREATE INDEX
   <para>
    Bloom is better than btree in handling this type of search:
 <programlisting>
-=# EXPLAIN ANALYZE SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
+=# EXPLAIN EXEC SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
                                                         QUERY PLAN
 ---------------------------------------------------------------------------------------------------------------------------
  Bitmap Heap Scan on tbloom  (cost=178435.39..178439.41 rows=1 width=24) (actual time=76.698..76.698 rows=0 loops=1)
@@ -187,7 +187,7 @@ CREATE INDEX
    A better strategy for btree is to create a separate index on each column.
    Then the planner will choose something like this:
 <programlisting>
-=# EXPLAIN ANALYZE SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
+=# EXPLAIN EXEC SELECT * FROM tbloom WHERE i2 = 898732 AND i5 = 123451;
                                                           QUERY PLAN
 ------------------------------------------------------------------------------------------------------------------------------
  Bitmap Heap Scan on tbloom  (cost=9.29..13.30 rows=1 width=24) (actual time=0.148..0.148 rows=0 loops=1)

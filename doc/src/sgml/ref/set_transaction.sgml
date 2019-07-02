@@ -133,7 +133,7 @@ SET SESSION CHARACTERISTICS AS TRANSACTION <replaceable class="parameter">transa
    <literal>CREATE</literal>, <literal>ALTER</literal>, and
    <literal>DROP</literal> commands; <literal>COMMENT</literal>,
    <literal>GRANT</literal>, <literal>REVOKE</literal>,
-   <literal>TRUNCATE</literal>; and <literal>EXPLAIN ANALYZE</literal>
+   <literal>TRUNCATE</literal>; and <literal>EXPLAIN EXEC</literal>
    and <literal>EXECUTE</literal> if the command they would execute is
    among those listed.  This is a high-level notion of read-only that
    does not prevent all writes to disk.

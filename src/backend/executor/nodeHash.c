@@ -193,7 +193,7 @@ MultiExecPrivateHash(HashState *node)
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
 		ExecHashIncreaseNumBuckets(hashtable);
 
-	/* Account for the buckets in spaceUsed (reported in EXPLAIN ANALYZE) */
+	/* Account for the buckets in spaceUsed (reported in EXPLAIN EXEC) */
 	hashtable->spaceUsed += hashtable->nbuckets * sizeof(HashJoinTuple);
 	if (hashtable->spaceUsed > hashtable->spacePeak)
 		hashtable->spacePeak = hashtable->spaceUsed;

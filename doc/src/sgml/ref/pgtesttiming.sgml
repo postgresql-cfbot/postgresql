@@ -30,7 +30,7 @@
   <application>pg_test_timing</application> is a tool to measure the timing overhead
   on your system and confirm that the system time never moves backwards.
   Systems that are slow to collect timing data can give less accurate
-  <command>EXPLAIN ANALYZE</command> results.
+  <command>EXPLAIN EXEC</command> results.
  </para>
  </refsect1>
 
@@ -120,7 +120,7 @@ Histogram of timing durations:
 
   <para>
    When the query executor is running a statement using
-   <command>EXPLAIN ANALYZE</command>, individual operations are timed as well
+   <command>EXPLAIN EXEC</command>, individual operations are timed as well
    as showing a summary.  The overhead of your system can be checked by
    counting rows with the <application>psql</application> program:
 
@@ -128,13 +128,13 @@ Histogram of timing durations:
 CREATE TABLE t AS SELECT * FROM generate_series(1,100000);
 \timing
 SELECT COUNT(*) FROM t;
-EXPLAIN ANALYZE SELECT COUNT(*) FROM t;
+EXPLAIN EXEC SELECT COUNT(*) FROM t;
 </screen>
   </para>
 
   <para>
    The i7-860 system measured runs the count query in 9.8 ms while
-   the <command>EXPLAIN ANALYZE</command> version takes 16.6 ms, each
+   the <command>EXPLAIN EXEC</command> version takes 16.6 ms, each
    processing just over 100,000 rows.  That 6.8 ms difference means the timing
    overhead per row is 68 ns, about twice what pg_test_timing estimated it
    would be.  Even that relatively small amount of overhead is making the fully
@@ -169,12 +169,12 @@ Histogram of timing durations:
   </para>
 
   <para>
-   In this configuration, the sample <command>EXPLAIN ANALYZE</command> above
+   In this configuration, the sample <command>EXPLAIN EXEC</command> above
    takes 115.9 ms.  That's 1061 ns of timing overhead, again a small multiple
    of what's measured directly by this utility.  That much timing overhead
    means the actual query itself is only taking a tiny fraction of the
    accounted for time, most of it is being consumed in overhead instead.  In
-   this configuration, any <command>EXPLAIN ANALYZE</command> totals involving
+   this configuration, any <command>EXPLAIN EXEC</command> totals involving
    many timed operations would be inflated significantly by timing overhead.
   </para>
 

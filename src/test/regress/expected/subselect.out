@@ -1120,8 +1120,8 @@ drop function tattle(x int, y int);
 --
 -- Test that LIMIT can be pushed to SORT through a subquery that just projects
 -- columns.  We check for that having happened by looking to see if EXPLAIN
--- ANALYZE shows that a top-N sort was used.  We must suppress or filter away
--- all the non-invariant parts of the EXPLAIN ANALYZE output.
+-- (EXEC) shows that a top-N sort was used.  We must suppress or filter away
+-- all the non-invariant parts of the EXPLAIN (EXEC) output.
 --
 create table sq_limit (pk int primary key, c1 int, c2 int);
 insert into sq_limit values
@@ -1138,7 +1138,7 @@ $$
 declare ln text;
 begin
     for ln in
-        explain (analyze, summary off, timing off, costs off)
+        explain (exec, summary off, timing off, costs off)
         select * from (select pk,c2 from sq_limit order by c1,pk) as x limit 3
     loop
         ln := regexp_replace(ln, 'Memory: \S*',  'Memory: xxx');

@@ -1536,7 +1536,7 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 		/*
 		 * LDAP can operate in two modes: either with a direct bind, using
 		 * ldapprefix and ldapsuffix, or using a search+bind, using
-		 * ldapbasedn, ldapbinddn, ldapbindpasswd and one of
+		 * ldapbasedn, ldapbinddn, ldapbindpasswd/ldapbindpasswdfile and one of
 		 * ldapsearchattribute or ldapsearchfilter.  Disallow mixing these
 		 * parameters.
 		 */
@@ -1545,15 +1545,16 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 			if (parsedline->ldapbasedn ||
 				parsedline->ldapbinddn ||
 				parsedline->ldapbindpasswd ||
+				parsedline->ldapbindpasswdfile ||
 				parsedline->ldapsearchattribute ||
 				parsedline->ldapsearchfilter)
 			{
 				ereport(elevel,
 						(errcode(ERRCODE_CONFIG_FILE_ERROR),
-						 errmsg("cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix"),
+						 errmsg("cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapbindpasswdfile, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix"),
 						 errcontext("line %d of configuration file \"%s\"",
 									line_num, HbaFileName)));
-				*err_msg = "cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix";
+				*err_msg = "cannot use ldapbasedn, ldapbinddn, ldapbindpasswd, ldapbindpasswdfile, ldapsearchattribute, ldapsearchfilter, or ldapurl together with ldapprefix";
 				return NULL;
 			}
 		}
@@ -1855,6 +1856,11 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 	{
 		REQUIRE_AUTH_OPTION(uaLDAP, "ldapbindpasswd", "ldap");
 		hbaline->ldapbindpasswd = pstrdup(val);
+	}
+	else if (strcmp(name, "ldapbindpasswdfile") == 0)
+	{
+		REQUIRE_AUTH_OPTION(uaLDAP, "ldapbindpasswdfile", "ldap");
+		hbaline->ldapbindpasswdfile = pstrdup(val);
 	}
 	else if (strcmp(name, "ldapsearchattribute") == 0)
 	{
@@ -2275,12 +2281,12 @@ load_hba(void)
 /*
  * This macro specifies the maximum number of authentication options
  * that are possible with any given authentication method that is supported.
- * Currently LDAP supports 11, and there are 3 that are not dependent on
+ * Currently LDAP supports 12, and there are 3 that are not dependent on
  * the auth method here.  It may not actually be possible to set all of them
  * at the same time, but we'll set the macro value high enough to be
  * conservative and avoid warnings from static analysis tools.
  */
-#define MAX_HBA_OPTIONS 14
+#define MAX_HBA_OPTIONS 15
 
 /*
  * Create a text array listing the options specified in the HBA line.
@@ -2351,6 +2357,11 @@ gethba_options(HbaLine *hba)
 			options[noptions++] =
 				CStringGetTextDatum(psprintf("ldapbindpasswd=%s",
 											 hba->ldapbindpasswd));
+
+		if (hba->ldapbindpasswdfile)
+			options[noptions++] =
+				CStringGetTextDatum(psprintf("ldapbindpasswdfile=%s",
+											 hba->ldapbindpasswdfile));
 
 		if (hba->ldapsearchattribute)
 			options[noptions++] =

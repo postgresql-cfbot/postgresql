@@ -6,7 +6,7 @@ use Test::More;
 
 if ($ENV{with_ldap} eq 'yes')
 {
-	plan tests => 22;
+	plan tests => 27;
 }
 else
 {
@@ -63,6 +63,7 @@ my $ldap_basedn   = 'dc=example,dc=net';
 my $ldap_rootdn   = 'cn=Manager,dc=example,dc=net';
 my $ldap_rootpw   = 'secret';
 my $ldap_pwfile   = "${TestLib::tmp_check}/ldappassword";
+my $ldap_bpwfile  = "${TestLib::tmp_check}/ldappassword.bad";
 
 note "setting up slapd";
 
@@ -119,6 +120,8 @@ END
 
 append_to_file($ldap_pwfile, $ldap_rootpw);
 chmod 0600, $ldap_pwfile or die;
+
+append_to_file($ldap_bpwfile, "this-is-a-bad-password");
 
 $ENV{'LDAPURI'}    = $ldap_url;
 $ENV{'LDAPBINDDN'} = $ldap_rootdn;
@@ -310,3 +313,45 @@ $node->restart;
 
 $ENV{"PGPASSWORD"} = 'secret1';
 test_access($node, 'test1', 2, 'bad combination of LDAPS and StartTLS');
+
+note "Non-anonymous bind";
+
+# bad ldapbindpasswd fails (note "x" prepended to password)
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapbinddn="$ldap_rootdn" ldapbindpasswd="x$ldap_rootpw" ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+$node->restart;
+
+test_access($node, 'test1', 2, 'bad ldapbindpasswd fails');
+
+# good ldapbindpasswd succeeds
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapbinddn="$ldap_rootdn" ldapbindpasswd="$ldap_rootpw" ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+$node->restart;
+
+test_access($node, 'test1', 0, 'good ldapbindpasswd succeeds');
+
+# bad ldapbindpasswdfile path fails (note "x" prepended to path)
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapbinddn="$ldap_rootdn" ldapbindpasswdfile="x$ldap_pwfile" ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+$node->restart;
+
+test_access($node, 'test1', 2, 'bad ldapbindpasswdpath path fails');
+
+# bad ldapbindpasswdfile contents fails
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapbinddn="$ldap_rootdn" ldapbindpasswdfile="$ldap_bpwfile" ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+$node->restart;
+
+test_access($node, 'test1', 2, 'bad ldapbindpasswdfile contents fails');
+
+# good ldapbindpasswdfile succeeds
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapbinddn="$ldap_rootdn" ldapbindpasswdfile="$ldap_pwfile" ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+$node->restart;
+
+test_access($node, 'test1', 0, 'good ldapbindpasswdfile succeeds');

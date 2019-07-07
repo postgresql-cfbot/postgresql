@@ -1525,6 +1525,9 @@ omicron         bryanh                  guest1
     performed over the subtree at <replaceable>ldapbasedn</replaceable>, and will try to
     do an exact match of the attribute specified in
     <replaceable>ldapsearchattribute</replaceable>.
+    As an alternative to <replaceable>ldapbindpasswd</replaceable>, the
+    password may be stored in a separate file specified with
+    <replaceable>ldapbindpasswdfile</replaceable>.
     Once the user has been found in
     this search, the server disconnects and re-binds to the directory as
     this user, using the password specified by the client, to verify that the
@@ -1640,6 +1643,16 @@ omicron         bryanh                  guest1
        <para>
         Password for user to bind to the directory with to perform the search
         when doing search+bind authentication.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>ldapbindpasswdfile</literal></term>
+      <listitem>
+       <para>
+        File containing the password for user to bind to the directory with to
+        perform the search when doing search+bind authentication, as an
+        alternative to <literal>ldapbindpasswd</literal>.
        </para>
       </listitem>
       </varlistentry>

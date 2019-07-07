@@ -89,6 +89,7 @@ typedef struct HbaLine
 	int			ldapport;
 	char	   *ldapbinddn;
 	char	   *ldapbindpasswd;
+	char	   *ldapbindpasswdfile;
 	char	   *ldapsearchattribute;
 	char	   *ldapsearchfilter;
 	char	   *ldapbasedn;

@@ -35,6 +35,7 @@
 #include "miscadmin.h"
 #include "port/pg_bswap.h"
 #include "replication/walsender.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
@@ -2564,6 +2565,45 @@ FormatSearchFilter(const char *pattern, const char *user_name)
 }
 
 /*
+ * Read the entire contents of the password file into output.  Don't trim any
+ * trailing newline character, because that is the convention established by
+ * the ldapsearch -y commandline tool.
+ */
+static int
+read_ldapbindpasswdfile(const char *path, StringInfo output)
+{
+	int			fd;
+	char		buffer[80];
+	ssize_t		size;
+
+	fd = OpenTransientFile(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	for (;;)
+	{
+		size = read(fd, buffer, sizeof(buffer));
+		if (size < 0)
+		{
+			int		save_errno = errno;
+
+			CloseTransientFile(fd);
+			errno = save_errno;
+
+			return -1;
+		}
+		else if (size == 0)
+			break;
+		appendBinaryStringInfo(output, buffer, size);
+	}
+
+	if (CloseTransientFile(fd) < 0)
+		return -1;
+
+	return 0;
+}
+
+/*
  * Perform LDAP authentication
  */
 static int
@@ -2638,6 +2678,8 @@ CheckLDAPAuth(Port *port)
 		char	   *dn;
 		char	   *c;
 		int			count;
+		const char *bind_passwd;
+		StringInfoData bind_passwd_buffer = {0};
 
 		/*
 		 * Disallow any characters that we would otherwise need to escape,
@@ -2664,10 +2706,35 @@ CheckLDAPAuth(Port *port)
 		/*
 		 * Bind with a pre-defined username/password (if available) for
 		 * searching. If none is specified, this turns into an anonymous bind.
+		 * If the password was specified in a separate file, read it.
 		 */
+		if (port->hba->ldapbindpasswdfile)
+		{
+			initStringInfo(&bind_passwd_buffer);
+			if (read_ldapbindpasswdfile(port->hba->ldapbindpasswdfile,
+										&bind_passwd_buffer))
+			{
+				ereport(LOG,
+						(errmsg("could not read ldapbindpasswd from \"%s\": %m",
+								port->hba->ldapbindpasswdfile)));
+				ldap_unbind(ldap);
+				pfree(passwd);
+				return STATUS_ERROR;
+			}
+			bind_passwd = bind_passwd_buffer.data;
+		}
+		else if (port->hba->ldapbindpasswd)
+			bind_passwd = port->hba->ldapbindpasswd;
+		else
+			bind_passwd = "";
+
 		r = ldap_simple_bind_s(ldap,
 							   port->hba->ldapbinddn ? port->hba->ldapbinddn : "",
-							   port->hba->ldapbindpasswd ? port->hba->ldapbindpasswd : "");
+							   bind_passwd);
+
+		if (bind_passwd_buffer.data)
+			pfree(bind_passwd_buffer.data);
+
 		if (r != LDAP_SUCCESS)
 		{
 			ereport(LOG,

@@ -4124,7 +4124,7 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&SSLCipherSuites,
-#ifdef USE_OPENSSL
+#ifdef USE_SSL
 		"HIGH:MEDIUM:+3DES:!aNULL",
 #else
 		"none",

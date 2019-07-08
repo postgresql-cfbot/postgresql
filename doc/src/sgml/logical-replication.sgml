@@ -232,10 +232,14 @@
   </para>
 
   <para>
-   Columns of a table are also matched by name.  A different order of columns
-   in the target table is allowed, but the column types have to match.  The
-   target table can have additional columns not provided by the published
-   table.  Those will be filled with their default values.
+   Columns of a table are also matched by name.  The order of columns 
+   in the subscriber table does not need to match that of the publisher.
+   Similarly, the data type of the columns do not need to match, as long as 
+   the data can be correctly converted to the target type; for example, you 
+   can publish from a integer column and subscribe from a bigint column. The 
+   target table can also have additional columns not provided by the published 
+   table; any such columns will be filled with the default value as specified 
+   in the schema definition of the subscriber's table. 
   </para>
 
   <sect2 id="logical-replication-subscription-slot">

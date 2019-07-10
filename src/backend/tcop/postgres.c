@@ -1075,6 +1075,7 @@ exec_simple_query(const char *query_string)
 		Portal		portal;
 		DestReceiver *receiver;
 		int16		format;
+		MemoryContext plancontext = NULL;
 
 		/*
 		 * Get the command name for use in status display (it also becomes the
@@ -1132,16 +1133,32 @@ exec_simple_query(const char *query_string)
 		/*
 		 * OK to analyze, rewrite, and plan this query.
 		 *
-		 * Switch to appropriate context for constructing querytrees (again,
-		 * these must outlive the execution context).
+		 * Switch to appropriate context for constructing query and plan trees
+		 * (again, these must outlive the execution context).  Normally, it's
+		 * MessageContext, but if there are more queries to plan, we use a
+		 * temporary child context that will be reset after executing this
+		 * query.  We avoid that overhead of setting up a separate context
+		 * for the common case of having just a single query.
 		 */
-		oldcontext = MemoryContextSwitchTo(MessageContext);
+		if (lnext(parsetree_item) != NULL)
+		{
+			plancontext = AllocSetContextCreate(MessageContext,
+												"statement planning context",
+												ALLOCSET_DEFAULT_SIZES);
+			oldcontext = MemoryContextSwitchTo(plancontext);
+		}
+		else
+			oldcontext = MemoryContextSwitchTo(MessageContext);
 
 		querytree_list = pg_analyze_and_rewrite(parsetree, query_string,
 												NULL, 0, NULL);
 
 		plantree_list = pg_plan_queries(querytree_list,
 										CURSOR_OPT_PARALLEL_OK, NULL);
+
+		/* Switch to MessageContext for creating the portal. */
+		if (plancontext)
+			MemoryContextSwitchTo(MessageContext);
 
 		/* Done with the snapshot used for parsing/planning */
 		if (snapshot_set)
@@ -1263,6 +1280,10 @@ exec_simple_query(const char *query_string)
 		 * aborted by error will not send an EndCommand report at all.)
 		 */
 		EndCommand(completionTag, dest);
+
+		/* Delete the planning context if one was created. */
+		if (plancontext)
+			MemoryContextDelete(plancontext);
 	}							/* end loop over parsetrees */
 
 	/*

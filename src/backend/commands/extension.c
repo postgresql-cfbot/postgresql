@@ -719,9 +719,23 @@ execute_sql_string(const char *sql)
 		RawStmt    *parsetree = lfirst_node(RawStmt, lc1);
 		List	   *stmt_list;
 		ListCell   *lc2;
+		MemoryContext oldcontext = CurrentMemoryContext,
+					  plancontext = NULL;
 
 		/* Be sure parser can see any DDL done so far */
 		CommandCounterIncrement();
+
+		/*
+		 * If there are more queries to run, use a temporary child context
+		 * that will be reset after executing this query.
+		 */
+		if (lnext(lc1) != NULL)
+		{
+			plancontext = AllocSetContextCreate(CurrentMemoryContext,
+												"statement planning context",
+												ALLOCSET_DEFAULT_SIZES);
+			MemoryContextSwitchTo(plancontext);
+		}
 
 		stmt_list = pg_analyze_and_rewrite(parsetree,
 										   sql,
@@ -729,6 +743,10 @@ execute_sql_string(const char *sql)
 										   0,
 										   NULL);
 		stmt_list = pg_plan_queries(stmt_list, CURSOR_OPT_PARALLEL_OK, NULL);
+
+		/* Switch context for execution. */
+		if (plancontext)
+			MemoryContextSwitchTo(oldcontext);
 
 		foreach(lc2, stmt_list)
 		{
@@ -772,6 +790,13 @@ execute_sql_string(const char *sql)
 
 			PopActiveSnapshot();
 		}
+
+		/*
+		 * Delete the planning context unless this is the last statement, in
+		 * which case, deleting the parent context will get the job done.
+		 */
+		if (plancontext)
+			MemoryContextDelete(plancontext);
 	}
 
 	/* Be sure to advance the command counter after the last script command */

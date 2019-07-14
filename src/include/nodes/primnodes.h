@@ -403,19 +403,25 @@ typedef struct SubscriptingRef
 	Expr		xpr;
 	Oid			refcontainertype;	/* type of the container proper */
 	Oid			refelemtype;	/* type of the container elements */
+	Oid			refassgntype;		/* type of assignment expr that is required */
 	int32		reftypmod;		/* typmod of the container (and elements too) */
 	Oid			refcollid;		/* OID of collation, or InvalidOid if none */
+	Oid			refnestedfunc;		/* OID of type-specific function to handle nested assignment */
 	List	   *refupperindexpr;	/* expressions that evaluate to upper
 									 * container indexes */
 	List	   *reflowerindexpr;	/* expressions that evaluate to lower
 									 * container indexes, or NIL for single
 									 * container element */
+	List       *refindexprslice;    /* whether or not related indexpr from
+									 * reflowerindexpr is a slice */
 	Expr	   *refexpr;		/* the expression that evaluates to a
 								 * container value */
 
 	Expr	   *refassgnexpr;	/* expression for the source value, or NULL if
 								 * fetch */
 } SubscriptingRef;
+
+#define IsAssignment(expr) ( ((SubscriptingRef*) expr)->refassgnexpr != NULL )
 
 /*
  * CoercionContext - distinguishes the allowed set of type casts

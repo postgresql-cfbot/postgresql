@@ -7915,17 +7915,18 @@ get_rule_expr(Node *node, deparse_context *context,
 				if (need_parens)
 					appendStringInfoChar(buf, ')');
 
-				/*
-				 * If there's a refassgnexpr, we want to print the node in the
-				 * format "container[subscripts] := refassgnexpr".  This is
-				 * not legal SQL, so decompilation of INSERT or UPDATE
-				 * statements should always use processIndirection as part of
-				 * the statement-level syntax.  We should only see this when
-				 * EXPLAIN tries to print the targetlist of a plan resulting
-				 * from such a statement.
-				 */
-				if (sbsref->refassgnexpr)
+				if (IsAssignment(sbsref))
 				{
+					/*
+					 * If there's a refassgnexpr, we want to print the node in the
+					 * format "container[subscripts] := refassgnexpr". This is not
+					 * legal SQL, so decompilation of INSERT or UPDATE statements
+					 * should always use processIndirection as part of the
+					 * statement-level syntax.  We should only see this when
+					 * EXPLAIN tries to print the targetlist of a plan resulting
+					 * from such a statement.
+					 */
+
 					Node	   *refassgnexpr;
 
 					/*

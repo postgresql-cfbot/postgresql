@@ -17,6 +17,8 @@
  */
 #include "postgres.h"
 
+#include <unistd.h>
+
 #include "access/transam.h"
 #include "access/xlogrecord.h"
 #include "access/xlog_internal.h"
@@ -26,6 +28,7 @@
 #include "replication/origin.h"
 
 #ifndef FRONTEND
+#include "pgstat.h"
 #include "utils/memutils.h"
 #endif
 
@@ -35,10 +38,10 @@ static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
 							XLogRecPtr recptr);
+static void XLogReaderInvalReadState(XLogReaderState *state);
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void report_invalid_record(XLogReaderState *state, const char *fmt,...) pg_attribute_printf(2, 3);
-
 static void ResetDecoder(XLogReaderState *state);
 
 /* size of the buffer allocated for error message. */
@@ -94,7 +97,9 @@ XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
 		return NULL;
 	}
 
-	state->wal_segment_size = wal_segment_size;
+	/* Initialize segment pointer. */
+	XLogSegmentInit(&state->seg, wal_segment_size);
+
 	state->read_page = pagereadfunc;
 	/* system_identifier initialized to zeroes above */
 	state->private_data = private_data;
@@ -488,8 +493,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 		(record->xl_info & ~XLR_INFO_MASK) == XLOG_SWITCH)
 	{
 		/* Pretend it extends to end of segment */
-		state->EndRecPtr += state->wal_segment_size - 1;
-		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->wal_segment_size);
+		state->EndRecPtr += state->seg.size - 1;
+		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->seg.size);
 	}
 
 	if (DecodeXLogRecord(state, record, errormsg))
@@ -531,12 +536,12 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 
 	Assert((pageptr % XLOG_BLCKSZ) == 0);
 
-	XLByteToSeg(pageptr, targetSegNo, state->wal_segment_size);
-	targetPageOff = XLogSegmentOffset(pageptr, state->wal_segment_size);
+	XLByteToSeg(pageptr, targetSegNo, state->seg.size);
+	targetPageOff = XLogSegmentOffset(pageptr, state->seg.size);
 
 	/* check whether we have all the requested data already */
-	if (targetSegNo == state->readSegNo && targetPageOff == state->readOff &&
-		reqLen <= state->readLen)
+	if (targetSegNo == state->seg.num &&
+		targetPageOff == state->seg.off && reqLen <= state->readLen)
 		return state->readLen;
 
 	/*
@@ -551,13 +556,13 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 * record is.  This is so that we can check the additional identification
 	 * info that is present in the first page's "long" header.
 	 */
-	if (targetSegNo != state->readSegNo && targetPageOff != 0)
+	if (targetSegNo != state->seg.num && targetPageOff != 0)
 	{
 		XLogRecPtr	targetSegmentPtr = pageptr - targetPageOff;
 
 		readLen = state->read_page(state, targetSegmentPtr, XLOG_BLCKSZ,
 								   state->currRecPtr,
-								   state->readBuf, &state->readPageTLI);
+								   state->readBuf);
 		if (readLen < 0)
 			goto err;
 
@@ -575,7 +580,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 */
 	readLen = state->read_page(state, pageptr, Max(reqLen, SizeOfXLogShortPHD),
 							   state->currRecPtr,
-							   state->readBuf, &state->readPageTLI);
+							   state->readBuf);
 	if (readLen < 0)
 		goto err;
 
@@ -594,7 +599,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	{
 		readLen = state->read_page(state, pageptr, XLogPageHeaderSize(hdr),
 								   state->currRecPtr,
-								   state->readBuf, &state->readPageTLI);
+								   state->readBuf);
 		if (readLen < 0)
 			goto err;
 	}
@@ -606,8 +611,8 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		goto err;
 
 	/* update read state information */
-	state->readSegNo = targetSegNo;
-	state->readOff = targetPageOff;
+	state->seg.num = targetSegNo;
+	state->seg.off = targetPageOff;
 	state->readLen = readLen;
 
 	return readLen;
@@ -620,11 +625,11 @@ err:
 /*
  * Invalidate the xlogreader's read state to force a re-read.
  */
-void
+static void
 XLogReaderInvalReadState(XLogReaderState *state)
 {
-	state->readSegNo = 0;
-	state->readOff = 0;
+	state->seg.num = 0;
+	state->seg.off = 0;
 	state->readLen = 0;
 }
 
@@ -743,16 +748,16 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 
 	Assert((recptr % XLOG_BLCKSZ) == 0);
 
-	XLByteToSeg(recptr, segno, state->wal_segment_size);
-	offset = XLogSegmentOffset(recptr, state->wal_segment_size);
+	XLByteToSeg(recptr, segno, state->seg.size);
+	offset = XLogSegmentOffset(recptr, state->seg.size);
 
-	XLogSegNoOffsetToRecPtr(segno, offset, state->wal_segment_size, recaddr);
+	XLogSegNoOffsetToRecPtr(segno, offset, state->seg.size, recaddr);
 
 	if (hdr->xlp_magic != XLOG_PAGE_MAGIC)
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->seg.tli, segno, state->seg.size);
 
 		report_invalid_record(state,
 							  "invalid magic number %04X in log segment %s, offset %u",
@@ -766,7 +771,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->seg.tli, segno, state->seg.size);
 
 		report_invalid_record(state,
 							  "invalid info bits %04X in log segment %s, offset %u",
@@ -789,7 +794,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 								  (unsigned long long) state->system_identifier);
 			return false;
 		}
-		else if (longhdr->xlp_seg_size != state->wal_segment_size)
+		else if (longhdr->xlp_seg_size != state->seg.size)
 		{
 			report_invalid_record(state,
 								  "WAL file is from different database system: incorrect segment size in page header");
@@ -806,7 +811,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->seg.tli, segno, state->seg.size);
 
 		/* hmm, first page of file doesn't have a long header? */
 		report_invalid_record(state,
@@ -826,7 +831,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	{
 		char		fname[MAXFNAMELEN];
 
-		XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+		XLogFileName(fname, state->seg.tli, segno, state->seg.size);
 
 		report_invalid_record(state,
 							  "unexpected pageaddr %X/%X in log segment %s, offset %u",
@@ -851,7 +856,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 		{
 			char		fname[MAXFNAMELEN];
 
-			XLogFileName(fname, state->readPageTLI, segno, state->wal_segment_size);
+			XLogFileName(fname, state->seg.tli, segno, state->seg.size);
 
 			report_invalid_record(state,
 								  "out-of-sequence timeline ID %u (after %u) in log segment %s, offset %u",
@@ -995,6 +1000,144 @@ out:
 
 #endif							/* FRONTEND */
 
+/*
+ * Initialize the passed segment pointer.
+ */
+void
+XLogSegmentInit(XLogSegment *seg, int size)
+{
+	seg->file = -1;
+	seg->num = 0;
+	seg->off = 0;
+	seg->tli = 0;
+	seg->dir = NULL;
+	seg->size = size;
+	seg->last_req = 0;
+}
+
+/*
+ * Read 'count' bytes from WAL into 'buf', starting at location 'startptr'. If
+ * tli is passed, get the data from timeline *tli. 'pos' is the current
+ * position in the XLOG file and openSegment is a callback that opens the next
+ * segment for reading.
+ *
+ * Returns true if the call succeeded, false if it failed. Caller should check
+ * errno in the case of failure. seg->last_req might also be useful for error
+ * messages.
+ *
+ * XXX probably this should be improved to suck data directly from the
+ * WAL buffers when possible.
+ */
+bool
+XLogRead(char *buf, XLogRecPtr startptr, Size count,
+		 TimeLineID *tli, XLogSegment *seg, XLogOpenSegment openSegment)
+{
+	char	   *p;
+	XLogRecPtr	recptr;
+	Size		nbytes;
+
+	p = buf;
+	recptr = startptr;
+	nbytes = count;
+
+	while (nbytes > 0)
+	{
+		int			readbytes;
+
+		seg->off = XLogSegmentOffset(recptr, seg->size);
+
+		if (seg->file < 0 ||
+			!XLByteInSeg(recptr, seg->num, seg->size) ||
+			(tli != NULL && *tli != seg->tli))
+		{
+			XLogSegNo	nextSegNo;
+
+			/* Switch to another logfile segment */
+			if (seg->file >= 0)
+				close(seg->file);
+
+			XLByteToSeg(recptr, nextSegNo, seg->size);
+
+			/* Open the next segment in the caller's way. */
+			openSegment(nextSegNo, tli, seg);
+
+			/*
+			 * If the function is called by the XLOG reader, the reader will
+			 * eventually set both "num" and "off". However we need to care
+			 * about them too because the function can also be used directly,
+			 * see walsender.c.
+			 */
+			seg->num = nextSegNo;
+			seg->off = 0;
+		}
+
+		/* How many bytes are within this segment? */
+		if (nbytes > (seg->size - seg->off))
+			seg->last_req = seg->size - seg->off;
+		else
+			seg->last_req = nbytes;
+
+#ifndef FRONTEND
+		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+#endif
+
+		/*
+		 * Failure to read the data does not necessarily imply non-zero errno.
+		 * Set it to zero so that caller can distinguish the failure that does
+		 * not affect errno.
+		 */
+		errno = 0;
+
+		readbytes = pg_pread(seg->file, p, seg->last_req, seg->off);
+
+#ifndef FRONTEND
+		pgstat_report_wait_end();
+#endif
+
+		if (readbytes <= 0)
+			return false;
+
+		/* Update state for read */
+		recptr += readbytes;
+		nbytes -= readbytes;
+		p += readbytes;
+
+		/*
+		 * If the function is called by the XLOG reader, the reader will
+		 * eventually set this field. However we need to care about it too
+		 * because the function can also be used directly (see walsender.c).
+		 */
+		seg->off += readbytes;
+	}
+
+	return true;
+}
+
+#ifndef FRONTEND
+/*
+ * Backend-specific code to handle errors encountered by XLogRead().
+ */
+void
+XLogReadProcessError(XLogSegment *seg)
+{
+	if (errno != 0)
+	{
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read from log segment %s, offset %u, length %zu: %m",
+						XLogFileNameP(seg->tli, seg->num), seg->off,
+						(Size) seg->last_req)));
+	}
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("could not read from log segment %s, offset %u: length %zu",
+						XLogFileNameP(seg->tli, seg->num), seg->off,
+						(Size) seg->last_req)));
+	}
+}
+#endif
 
 /* ----------------------------------------
  * Functions for decoding the data and block references in a record.

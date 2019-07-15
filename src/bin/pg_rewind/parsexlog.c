@@ -47,10 +47,10 @@ typedef struct XLogPageReadPrivate
 	int			tliIndex;
 } XLogPageReadPrivate;
 
+
 static int	SimpleXLogPageRead(XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
-							   int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
-							   TimeLineID *pageTLI);
+							   int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 
 /*
  * Read WAL from the datadir/pg_wal, starting from 'startpoint' on timeline
@@ -238,8 +238,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 /* XLogreader callback function, to read a WAL page */
 static int
 SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
-				   int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
-				   TimeLineID *pageTLI)
+				   int reqLen, XLogRecPtr targetRecPtr, char *readBuf)
 {
 	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
 	uint32		targetPageOff;
@@ -322,7 +321,7 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 
 	Assert(targetSegNo == xlogreadsegno);
 
-	*pageTLI = targetHistory[private->tliIndex].tli;
+	xlogreader->seg.tli = targetHistory[private->tliIndex].tli;
 	return XLOG_BLCKSZ;
 }
 

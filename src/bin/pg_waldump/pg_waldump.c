@@ -14,7 +14,6 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
@@ -296,126 +295,43 @@ identify_target_directory(XLogDumpPrivate *private, char *directory,
 		fatal_error("could not find any WAL file");
 }
 
-/*
- * Read count bytes from a segment file in the specified directory, for the
- * given timeline, containing the specified record pointer; store the data in
- * the passed buffer.
- */
 static void
-XLogDumpXLogRead(const char *directory, TimeLineID timeline_id,
-				 XLogRecPtr startptr, char *buf, Size count)
+XLogDumpOpenSegment(XLogSegNo nextSegNo, TimeLineID *tli, XLogSegment *seg)
 {
-	char	   *p;
-	XLogRecPtr	recptr;
-	Size		nbytes;
+	char		fname[MAXPGPATH];
+	int			tries;
 
-	static int	sendFile = -1;
-	static XLogSegNo sendSegNo = 0;
-	static uint32 sendOff = 0;
+	XLogFileName(fname, *tli, nextSegNo, seg->size);
 
-	p = buf;
-	recptr = startptr;
-	nbytes = count;
-
-	while (nbytes > 0)
+	/*
+	 * In follow mode there is a short period of time after the server has
+	 * written the end of the previous file before the new file is available.
+	 * So we loop for 5 seconds looking for the file to appear before giving
+	 * up.
+	 */
+	for (tries = 0; tries < 10; tries++)
 	{
-		uint32		startoff;
-		int			segbytes;
-		int			readbytes;
-
-		startoff = XLogSegmentOffset(recptr, WalSegSz);
-
-		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, WalSegSz))
+		seg->file = open_file_in_directory(seg->dir, fname);
+		if (seg->file >= 0)
+			break;
+		if (errno == ENOENT)
 		{
-			char		fname[MAXFNAMELEN];
-			int			tries;
-
-			/* Switch to another logfile segment */
-			if (sendFile >= 0)
-				close(sendFile);
-
-			XLByteToSeg(recptr, sendSegNo, WalSegSz);
-
-			XLogFileName(fname, timeline_id, sendSegNo, WalSegSz);
-
-			/*
-			 * In follow mode there is a short period of time after the server
-			 * has written the end of the previous file before the new file is
-			 * available. So we loop for 5 seconds looking for the file to
-			 * appear before giving up.
-			 */
-			for (tries = 0; tries < 10; tries++)
-			{
-				sendFile = open_file_in_directory(directory, fname);
-				if (sendFile >= 0)
-					break;
-				if (errno == ENOENT)
-				{
-					int			save_errno = errno;
-
-					/* File not there yet, try again */
-					pg_usleep(500 * 1000);
-
-					errno = save_errno;
-					continue;
-				}
-				/* Any other error, fall through and fail */
-				break;
-			}
-
-			if (sendFile < 0)
-				fatal_error("could not find file \"%s\": %s",
-							fname, strerror(errno));
-			sendOff = 0;
-		}
-
-		/* Need to seek in the file? */
-		if (sendOff != startoff)
-		{
-			if (lseek(sendFile, (off_t) startoff, SEEK_SET) < 0)
-			{
-				int			err = errno;
-				char		fname[MAXPGPATH];
-
-				XLogFileName(fname, timeline_id, sendSegNo, WalSegSz);
-
-				fatal_error("could not seek in log file %s to offset %u: %s",
-							fname, startoff, strerror(err));
-			}
-			sendOff = startoff;
-		}
-
-		/* How many bytes are within this segment? */
-		if (nbytes > (WalSegSz - startoff))
-			segbytes = WalSegSz - startoff;
-		else
-			segbytes = nbytes;
-
-		readbytes = read(sendFile, p, segbytes);
-		if (readbytes <= 0)
-		{
-			int			err = errno;
-			char		fname[MAXPGPATH];
 			int			save_errno = errno;
 
-			XLogFileName(fname, timeline_id, sendSegNo, WalSegSz);
+			/* File not there yet, try again */
+			pg_usleep(500 * 1000);
+
 			errno = save_errno;
-
-			if (readbytes < 0)
-				fatal_error("could not read from log file %s, offset %u, length %d: %s",
-							fname, sendOff, segbytes, strerror(err));
-			else if (readbytes == 0)
-				fatal_error("could not read from log file %s, offset %u: read %d of %zu",
-							fname, sendOff, readbytes, (Size) segbytes);
+			continue;
 		}
-
-		/* Update state for read */
-		recptr += readbytes;
-
-		sendOff += readbytes;
-		nbytes -= readbytes;
-		p += readbytes;
+		/* Any other error, fall through and fail */
+		break;
 	}
+
+	if (seg->file < 0)
+		fatal_error("could not find file \"%s\": %s",
+					fname, strerror(errno));
+	seg->tli = *tli;
 }
 
 /*
@@ -423,7 +339,7 @@ XLogDumpXLogRead(const char *directory, TimeLineID timeline_id,
  */
 static int
 XLogDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-				 XLogRecPtr targetPtr, char *readBuff, TimeLineID *curFileTLI)
+				 XLogRecPtr targetPtr, char *readBuff)
 {
 	XLogDumpPrivate *private = state->private_data;
 	int			count = XLOG_BLCKSZ;
@@ -441,8 +357,24 @@ XLogDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		}
 	}
 
-	XLogDumpXLogRead(private->inpath, private->timeline, targetPagePtr,
-					 readBuff, count);
+	if (!XLogRead(readBuff, targetPagePtr, count, &private->timeline,
+				  &state->seg, XLogDumpOpenSegment))
+	{
+		XLogSegment *seg = &state->seg;
+		int			err = errno;
+		char		fname[MAXPGPATH];
+		int			save_errno = errno;
+
+		XLogFileName(fname, seg->tli, seg->num, seg->size);
+		errno = save_errno;
+
+		if (errno != 0)
+			fatal_error("could not read from log file %s, offset %u, length %zu: %s",
+						fname, seg->off, (Size) seg->last_req, strerror(err));
+		else
+			fatal_error("could not read from log file %s, offset %u: length: %zu",
+						fname, seg->off, (Size) seg->last_req);
+	}
 
 	return count;
 }
@@ -1104,6 +1036,9 @@ main(int argc, char **argv)
 										  &private);
 	if (!xlogreader_state)
 		fatal_error("out of memory");
+
+	/* Finalize the segment pointer. */
+	xlogreader_state->seg.dir = private.inpath;
 
 	/* first find a valid recptr to start from */
 	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);

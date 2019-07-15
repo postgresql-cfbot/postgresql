@@ -128,16 +128,7 @@ bool		log_replication_commands = false;
  */
 bool		wake_wal_senders = false;
 
-/*
- * These variables are used similarly to openLogFile/SegNo/Off,
- * but for walsender to read the XLOG.
- */
-static int	sendFile = -1;
-static XLogSegNo sendSegNo = 0;
-static uint32 sendOff = 0;
-
-/* Timeline ID of the currently open file */
-static TimeLineID curFileTimeLine = 0;
+static XLogSegment *sendSeg = NULL;
 
 /*
  * These variables keep track of the state of the timeline we're currently
@@ -256,7 +247,8 @@ static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
-static void XLogRead(char *buf, XLogRecPtr startptr, Size count);
+static void WalSndOpenSegment(XLogSegNo nextSegNo, TimeLineID *tli,
+							  XLogSegment *seg);
 
 
 /* Initialize walsender process before entering the main command loop */
@@ -285,6 +277,10 @@ InitWalSender(void)
 
 	/* Initialize empty timestamp buffer for lag tracking. */
 	lag_tracker = MemoryContextAllocZero(TopMemoryContext, sizeof(LagTracker));
+
+	/* Make sure we can remember the current read position in XLOG. */
+	sendSeg = (XLogSegment *) MemoryContextAlloc(TopMemoryContext, sizeof(XLogSegment));
+	XLogSegmentInit(sendSeg, wal_segment_size);
 }
 
 /*
@@ -301,10 +297,10 @@ WalSndErrorCleanup(void)
 	ConditionVariableCancelSleep();
 	pgstat_report_wait_end();
 
-	if (sendFile >= 0)
+	if (sendSeg->file >= 0)
 	{
-		close(sendFile);
-		sendFile = -1;
+		close(sendSeg->file);
+		sendSeg->file = -1;
 	}
 
 	if (MyReplicationSlot != NULL)
@@ -763,7 +759,7 @@ StartReplication(StartReplicationCmd *cmd)
  */
 static int
 logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-					   XLogRecPtr targetRecPtr, char *cur_page, TimeLineID *pageTLI)
+					   XLogRecPtr targetRecPtr, char *cur_page)
 {
 	XLogRecPtr	flushptr;
 	int			count;
@@ -787,7 +783,9 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 		count = flushptr - targetPagePtr;	/* part of the page available */
 
 	/* now actually read the data, we know it's there */
-	XLogRead(cur_page, targetPagePtr, XLOG_BLCKSZ);
+	if (!XLogRead(cur_page, targetPagePtr, XLOG_BLCKSZ, NULL, sendSeg,
+				  WalSndOpenSegment))
+		XLogReadProcessError(sendSeg);
 
 	return count;
 }
@@ -2353,186 +2351,72 @@ WalSndKill(int code, Datum arg)
 }
 
 /*
- * Read 'count' bytes from WAL into 'buf', starting at location 'startptr'
- *
- * XXX probably this should be improved to suck data directly from the
- * WAL buffers when possible.
- *
- * Will open, and keep open, one WAL segment stored in the global file
- * descriptor sendFile. This means if XLogRead is used once, there will
- * always be one descriptor left open until the process ends, but never
- * more than one.
+ * Callback for XLogRead() to open the next segment.
  */
-static void
-XLogRead(char *buf, XLogRecPtr startptr, Size count)
+void
+WalSndOpenSegment(XLogSegNo nextSegNo, TimeLineID *tli, XLogSegment *seg)
 {
-	char	   *p;
-	XLogRecPtr	recptr;
-	Size		nbytes;
-	XLogSegNo	segno;
+	char		path[MAXPGPATH];
 
-retry:
-	p = buf;
-	recptr = startptr;
-	nbytes = count;
+	/*
+	 * The timeline is determined below, caller should not do anything about
+	 * it.
+	 */
+	Assert(tli == NULL);
 
-	while (nbytes > 0)
+	/*-------
+	 * When reading from a historic timeline, and there is a timeline switch
+	 * within this segment, read from the WAL segment belonging to the new
+	 * timeline.
+	 *
+	 * For example, imagine that this server is currently on timeline 5, and
+	 * we're streaming timeline 4. The switch from timeline 4 to 5 happened at
+	 * 0/13002088. In pg_wal, we have these files:
+	 *
+	 * ...
+	 * 000000040000000000000012
+	 * 000000040000000000000013
+	 * 000000050000000000000013
+	 * 000000050000000000000014
+	 * ...
+	 *
+	 * In this situation, when requested to send the WAL from segment 0x13, on
+	 * timeline 4, we read the WAL from file 000000050000000000000013. Archive
+	 * recovery prefers files from newer timelines, so if the segment was
+	 * restored from the archive on this server, the file belonging to the old
+	 * timeline, 000000040000000000000013, might not exist. Their contents are
+	 * equal up to the switchpoint, because at a timeline switch, the used
+	 * portion of the old segment is copied to the new file.  -------
+	 */
+	seg->tli = sendTimeLine;
+	if (sendTimeLineIsHistoric)
 	{
-		uint32		startoff;
-		int			segbytes;
-		int			readbytes;
+		XLogSegNo	endSegNo;
 
-		startoff = XLogSegmentOffset(recptr, wal_segment_size);
-
-		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, wal_segment_size))
-		{
-			char		path[MAXPGPATH];
-
-			/* Switch to another logfile segment */
-			if (sendFile >= 0)
-				close(sendFile);
-
-			XLByteToSeg(recptr, sendSegNo, wal_segment_size);
-
-			/*-------
-			 * When reading from a historic timeline, and there is a timeline
-			 * switch within this segment, read from the WAL segment belonging
-			 * to the new timeline.
-			 *
-			 * For example, imagine that this server is currently on timeline
-			 * 5, and we're streaming timeline 4. The switch from timeline 4
-			 * to 5 happened at 0/13002088. In pg_wal, we have these files:
-			 *
-			 * ...
-			 * 000000040000000000000012
-			 * 000000040000000000000013
-			 * 000000050000000000000013
-			 * 000000050000000000000014
-			 * ...
-			 *
-			 * In this situation, when requested to send the WAL from
-			 * segment 0x13, on timeline 4, we read the WAL from file
-			 * 000000050000000000000013. Archive recovery prefers files from
-			 * newer timelines, so if the segment was restored from the
-			 * archive on this server, the file belonging to the old timeline,
-			 * 000000040000000000000013, might not exist. Their contents are
-			 * equal up to the switchpoint, because at a timeline switch, the
-			 * used portion of the old segment is copied to the new file.
-			 *-------
-			 */
-			curFileTimeLine = sendTimeLine;
-			if (sendTimeLineIsHistoric)
-			{
-				XLogSegNo	endSegNo;
-
-				XLByteToSeg(sendTimeLineValidUpto, endSegNo, wal_segment_size);
-				if (sendSegNo == endSegNo)
-					curFileTimeLine = sendTimeLineNextTLI;
-			}
-
-			XLogFilePath(path, curFileTimeLine, sendSegNo, wal_segment_size);
-
-			sendFile = BasicOpenFile(path, O_RDONLY | PG_BINARY);
-			if (sendFile < 0)
-			{
-				/*
-				 * If the file is not found, assume it's because the standby
-				 * asked for a too old WAL segment that has already been
-				 * removed or recycled.
-				 */
-				if (errno == ENOENT)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("requested WAL segment %s has already been removed",
-									XLogFileNameP(curFileTimeLine, sendSegNo))));
-				else
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not open file \"%s\": %m",
-									path)));
-			}
-			sendOff = 0;
-		}
-
-		/* Need to seek in the file? */
-		if (sendOff != startoff)
-		{
-			if (lseek(sendFile, (off_t) startoff, SEEK_SET) < 0)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not seek in log segment %s to offset %u: %m",
-								XLogFileNameP(curFileTimeLine, sendSegNo),
-								startoff)));
-			sendOff = startoff;
-		}
-
-		/* How many bytes are within this segment? */
-		if (nbytes > (wal_segment_size - startoff))
-			segbytes = wal_segment_size - startoff;
-		else
-			segbytes = nbytes;
-
-		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
-		readbytes = read(sendFile, p, segbytes);
-		pgstat_report_wait_end();
-		if (readbytes < 0)
-		{
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from log segment %s, offset %u, length %zu: %m",
-							XLogFileNameP(curFileTimeLine, sendSegNo),
-							sendOff, (Size) segbytes)));
-		}
-		else if (readbytes == 0)
-		{
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read from log segment %s, offset %u: read %d of %zu",
-							XLogFileNameP(curFileTimeLine, sendSegNo),
-							sendOff, readbytes, (Size) segbytes)));
-		}
-
-		/* Update state for read */
-		recptr += readbytes;
-
-		sendOff += readbytes;
-		nbytes -= readbytes;
-		p += readbytes;
+		XLByteToSeg(sendTimeLineValidUpto, endSegNo, seg->size);
+		if (seg->num == endSegNo)
+			seg->tli = sendTimeLineNextTLI;
 	}
 
-	/*
-	 * After reading into the buffer, check that what we read was valid. We do
-	 * this after reading, because even though the segment was present when we
-	 * opened it, it might get recycled or removed while we read it. The
-	 * read() succeeds in that case, but the data we tried to read might
-	 * already have been overwritten with new WAL records.
-	 */
-	XLByteToSeg(startptr, segno, wal_segment_size);
-	CheckXLogRemoved(segno, ThisTimeLineID);
+	XLogFilePath(path, seg->tli, nextSegNo, seg->size);
+	seg->file = BasicOpenFile(path, O_RDONLY | PG_BINARY);
 
-	/*
-	 * During recovery, the currently-open WAL file might be replaced with the
-	 * file of the same name retrieved from archive. So we always need to
-	 * check what we read was valid after reading into the buffer. If it's
-	 * invalid, we try to open and read the file again.
-	 */
-	if (am_cascading_walsender)
+	if (seg->file < 0)
 	{
-		WalSnd	   *walsnd = MyWalSnd;
-		bool		reload;
-
-		SpinLockAcquire(&walsnd->mutex);
-		reload = walsnd->needreload;
-		walsnd->needreload = false;
-		SpinLockRelease(&walsnd->mutex);
-
-		if (reload && sendFile >= 0)
-		{
-			close(sendFile);
-			sendFile = -1;
-
-			goto retry;
-		}
+		/*
+		 * If the file is not found, assume it's because the standby asked for
+		 * a too old WAL segment that has already been removed or recycled.
+		 */
+		if (errno == ENOENT)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("requested WAL segment %s has already been removed",
+							XLogFileNameP(seg->tli, seg->num))));
+		else
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not open file \"%s\": %m",
+							path)));
 	}
 }
 
@@ -2553,6 +2437,7 @@ XLogSendPhysical(void)
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
 	Size		nbytes;
+	XLogSegNo	segno;
 
 	/* If requested switch the WAL sender to the stopping state. */
 	if (got_STOPPING)
@@ -2695,9 +2580,9 @@ XLogSendPhysical(void)
 	if (sendTimeLineIsHistoric && sendTimeLineValidUpto <= sentPtr)
 	{
 		/* close the current file. */
-		if (sendFile >= 0)
-			close(sendFile);
-		sendFile = -1;
+		if (sendSeg->file >= 0)
+			close(sendSeg->file);
+		sendSeg->file = -1;
 
 		/* Send CopyDone */
 		pq_putmessage_noblock('c', NULL, 0);
@@ -2768,7 +2653,49 @@ XLogSendPhysical(void)
 	 * calls.
 	 */
 	enlargeStringInfo(&output_message, nbytes);
-	XLogRead(&output_message.data[output_message.len], startptr, nbytes);
+
+retry:
+	if (!XLogRead(&output_message.data[output_message.len], startptr, nbytes,
+				  NULL,			/* WalSndOpenSegment will determine TLI */
+				  sendSeg,
+				  WalSndOpenSegment))
+		XLogReadProcessError(sendSeg);
+
+	/*
+	 * After reading into the buffer, check that what we read was valid. We do
+	 * this after reading, because even though the segment was present when we
+	 * opened it, it might get recycled or removed while we read it. The
+	 * read() succeeds in that case, but the data we tried to read might
+	 * already have been overwritten with new WAL records.
+	 */
+	XLByteToSeg(startptr, segno, wal_segment_size);
+	CheckXLogRemoved(segno, ThisTimeLineID);
+
+	/*
+	 * During recovery, the currently-open WAL file might be replaced with the
+	 * file of the same name retrieved from archive. So we always need to
+	 * check what we read was valid after reading into the buffer. If it's
+	 * invalid, we try to open and read the file again.
+	 */
+	if (am_cascading_walsender)
+	{
+		WalSnd	   *walsnd = MyWalSnd;
+		bool		reload;
+
+		SpinLockAcquire(&walsnd->mutex);
+		reload = walsnd->needreload;
+		walsnd->needreload = false;
+		SpinLockRelease(&walsnd->mutex);
+
+		if (reload && sendSeg->file >= 0)
+		{
+			close(sendSeg->file);
+			sendSeg->file = -1;
+
+			goto retry;
+		}
+	}
+
 	output_message.len += nbytes;
 	output_message.data[output_message.len] = '\0';
 

@@ -27,6 +27,21 @@
 
 #include "access/xlogrecord.h"
 
+/*
+ * Position in XLOG file while reading it.
+ */
+typedef struct XLogSegment
+{
+	int			file;			/* segment file descriptor */
+	XLogSegNo	num;			/* segment number */
+	uint32		off;			/* offset in the segment */
+	TimeLineID	tli;			/* timeline ID of the currently open file */
+
+	char	   *dir;			/* directory (only needed by frontends) */
+	int			size;			/* segment size */
+	int			last_req;		/* the amount of data requested last time */
+} XLogSegment;
+
 typedef struct XLogReaderState XLogReaderState;
 
 /* Function type definition for the read_page callback */
@@ -34,8 +49,7 @@ typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
 							   int reqLen,
 							   XLogRecPtr targetRecPtr,
-							   char *readBuf,
-							   TimeLineID *pageTLI);
+							   char *readBuf);
 
 typedef struct
 {
@@ -74,11 +88,6 @@ struct XLogReaderState
 	 */
 
 	/*
-	 * Segment size of the to-be-parsed data (mandatory).
-	 */
-	int			wal_segment_size;
-
-	/*
 	 * Data input callback (mandatory).
 	 *
 	 * This callback shall read at least reqLen valid bytes of the xlog page
@@ -95,9 +104,8 @@ struct XLogReaderState
 	 * actual WAL record it's interested in.  In that case, targetRecPtr can
 	 * be used to determine which timeline to read the page from.
 	 *
-	 * The callback shall set *pageTLI to the TLI of the file the page was
-	 * read from.  It is currently used only for error reporting purposes, to
-	 * reconstruct the name of the WAL file where an error occurred.
+	 * The callback shall set ->seg.tli to the TLI of the file the page was
+	 * read from.
 	 */
 	XLogPageReadCB read_page;
 
@@ -152,10 +160,8 @@ struct XLogReaderState
 	char	   *readBuf;
 	uint32		readLen;
 
-	/* last read segment, segment offset, TLI for data currently in readBuf */
-	XLogSegNo	readSegNo;
-	uint32		readOff;
-	TimeLineID	readPageTLI;
+	/* last read XLOG position for data currently in readBuf */
+	XLogSegment seg;
 
 	/*
 	 * beginning of prior page read, and its TLI.  Doesn't necessarily
@@ -212,12 +218,29 @@ extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 										 XLogRecPtr recptr, char *phdr);
 
-/* Invalidate read state */
-extern void XLogReaderInvalReadState(XLogReaderState *state);
-
 #ifdef FRONTEND
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 #endif							/* FRONTEND */
+
+/*
+ * Callback to open the specified XLOG segment nextSegNo in timeline *tli for
+ * reading, and assign the descriptor to ->file. BasicOpenFile() is the
+ * preferred way to open the segment file in backend code, whereas open(2)
+ * should be used in frontend.
+ *
+ * If NULL is passed for tli, the callback must determine the timeline
+ * itself. In any case it's supposed to eventually set ->tli.
+ */
+typedef void (*XLogOpenSegment) (XLogSegNo nextSegNo, TimeLineID *tli,
+								 XLogSegment *seg);
+
+extern void XLogSegmentInit(XLogSegment *seg, int size);
+extern bool XLogRead(char *buf, XLogRecPtr startptr, Size count,
+					 TimeLineID *tli, XLogSegment *seg,
+					 XLogOpenSegment openSegment);
+#ifndef FRONTEND
+void		XLogReadProcessError(XLogSegment *seg);
+#endif
 
 /* Functions for decoding an XLogRecord */
 

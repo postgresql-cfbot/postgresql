@@ -217,6 +217,15 @@ typedef struct TableAmRoutine
 								bool allow_sync, bool allow_pagemode);
 
 	/*
+	 * Set the range of a scan.
+	 *
+	 * Optional callback: A table AM can implement this to enable TID range
+	 * scans.
+	 */
+	void		(*scan_setlimits) (TableScanDesc scan,
+								   BlockNumber startBlk, BlockNumber numBlks);
+
+	/*
 	 * Return next tuple from `scan`, store in slot.
 	 */
 	bool		(*scan_getnextslot) (TableScanDesc scan,
@@ -841,6 +850,17 @@ table_rescan(TableScanDesc scan,
 			 struct ScanKeyData *key)
 {
 	scan->rs_rd->rd_tableam->scan_rescan(scan, key, false, false, false, false);
+}
+
+/*
+ * Set the range of a scan.
+ */
+static inline void
+table_scan_setlimits(TableScanDesc scan,
+					 BlockNumber startBlk, BlockNumber numBlks)
+{
+	Assert(scan->rs_rd->rd_tableam->scan_setlimits != NULL);
+	scan->rs_rd->rd_tableam->scan_setlimits(scan, startBlk, numBlks);
 }
 
 /*

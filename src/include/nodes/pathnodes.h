@@ -703,6 +703,7 @@ typedef struct RelOptInfo
 	List	   *joininfo;		/* RestrictInfo structures for join clauses
 								 * involving this rel */
 	bool		has_eclass_joins;	/* T means joininfo is incomplete */
+	bool		has_scan_setlimits; /* Rel's table AM has scan_setlimits */
 
 	/* used by partitionwise joins: */
 	bool		consider_partitionwise_join;	/* consider partitionwise join
@@ -1284,6 +1285,18 @@ typedef struct TidPath
 	Path		path;
 	List	   *tidquals;		/* qual(s) involving CTID = something */
 } TidPath;
+
+/*
+ * TidRangePath represents a scan by a continguous range of TIDs
+ *
+ * tidrangequals is an implicitly AND'ed list of qual expressions of the form
+ * "CTID relop pseudoconstant", where relop is one of >,>=,<,<=.
+ */
+typedef struct TidRangePath
+{
+	Path		path;
+	List	   *tidrangequals;
+} TidRangePath;
 
 /*
  * SubqueryScanPath represents a scan of an unflattened subquery-in-FROM

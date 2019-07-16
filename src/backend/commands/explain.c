@@ -1009,6 +1009,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 		case T_IndexOnlyScan:
 		case T_BitmapHeapScan:
 		case T_TidScan:
+		case T_TidRangeScan:
 		case T_SubqueryScan:
 		case T_FunctionScan:
 		case T_TableFuncScan:
@@ -1154,6 +1155,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_TidScan:
 			pname = sname = "Tid Scan";
+			break;
+		case T_TidRangeScan:
+			pname = sname = "Tid Range Scan";
 			break;
 		case T_SubqueryScan:
 			pname = sname = "Subquery Scan";
@@ -1346,6 +1350,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_SampleScan:
 		case T_BitmapHeapScan:
 		case T_TidScan:
+		case T_TidRangeScan:
 		case T_SubqueryScan:
 		case T_FunctionScan:
 		case T_TableFuncScan:
@@ -1760,6 +1765,23 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 				if (list_length(tidquals) > 1)
 					tidquals = list_make1(make_orclause(tidquals));
+				show_scan_qual(tidquals, "TID Cond", planstate, ancestors, es);
+				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
+				if (plan->qual)
+					show_instrumentation_count("Rows Removed by Filter", 1,
+											   planstate, es);
+			}
+			break;
+		case T_TidRangeScan:
+			{
+				/*
+				 * The tidrangequals list has AND semantics, so be sure to
+				 * show it as an AND condition.
+				 */
+				List	   *tidquals = ((TidRangeScan *) plan)->tidrangequals;
+
+				if (list_length(tidquals) > 1)
+					tidquals = list_make1(make_andclause(tidquals));
 				show_scan_qual(tidquals, "TID Cond", planstate, ancestors, es);
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)
@@ -3054,6 +3076,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 		case T_IndexOnlyScan:
 		case T_BitmapHeapScan:
 		case T_TidScan:
+		case T_TidRangeScan:
 		case T_ForeignScan:
 		case T_CustomScan:
 		case T_ModifyTable:

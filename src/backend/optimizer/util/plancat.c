@@ -444,6 +444,9 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	/* Collect info about relation's foreign keys, if relevant */
 	get_relation_foreign_keys(root, rel, relation, inhparent);
 
+	/* Collect info about functions implemented by the rel's table AM. */
+	rel->has_scan_setlimits = relation->rd_tableam && relation->rd_tableam->scan_bitmap_next_block != NULL;
+
 	/*
 	 * Collect info about relation's partitioning scheme, if any. Only
 	 * inheritance parents may be partitioned.

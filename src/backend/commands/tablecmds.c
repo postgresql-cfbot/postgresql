@@ -24,6 +24,7 @@
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/tupconvert.h"
+#include "access/undodiscard.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -12621,7 +12622,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 {
 	SMgrRelation dstrel;
 
-	dstrel = smgropen(newrnode, rel->rd_backend);
+	dstrel = smgropen(SMGR_MD, newrnode, rel->rd_backend);
 	RelationOpenSmgr(rel);
 
 	/*
@@ -14546,6 +14547,10 @@ PreCommit_on_commit_actions(void)
 				break;
 			case ONCOMMIT_DROP:
 				oids_to_drop = lappend_oid(oids_to_drop, oc->relid);
+				break;
+			case ONCOMMIT_TEMP_DISCARD:
+				/* Discard temp table undo logs for temp tables. */
+				TempUndoDiscard(oc->relid);
 				break;
 		}
 	}

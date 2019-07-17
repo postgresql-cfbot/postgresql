@@ -58,6 +58,13 @@
      </row>
 
      <row>
+      <entry><structfield>smgrid</structfield></entry>
+      <entry><type>smallint</type></entry>
+      <entry></entry>
+      <entry>Block storage manager ID.  0 for regular relation data.</entry>
+     </row>
+
+     <row>
       <entry><structfield>relfilenode</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal>pg_class.relfilenode</literal></entry>

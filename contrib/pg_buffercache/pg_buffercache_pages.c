@@ -16,7 +16,7 @@
 
 
 #define NUM_BUFFERCACHE_PAGES_MIN_ELEM	8
-#define NUM_BUFFERCACHE_PAGES_ELEM	9
+#define NUM_BUFFERCACHE_PAGES_ELEM	10
 
 PG_MODULE_MAGIC;
 
@@ -25,6 +25,7 @@ PG_MODULE_MAGIC;
  */
 typedef struct
 {
+	SmgrId		smgrid;
 	uint32		bufferid;
 	Oid			relfilenode;
 	Oid			reltablespace;
@@ -116,10 +117,12 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 						   BOOLOID, -1, 0);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 8, "usage_count",
 						   INT2OID, -1, 0);
-
-		if (expected_tupledesc->natts == NUM_BUFFERCACHE_PAGES_ELEM)
+		if (expected_tupledesc->natts >= 9)
 			TupleDescInitEntry(tupledesc, (AttrNumber) 9, "pinning_backends",
 							   INT4OID, -1, 0);
+		if (expected_tupledesc->natts >= 10)
+			TupleDescInitEntry(tupledesc, (AttrNumber) 10, "smgrid",
+							   INT2OID, -1, 0);
 
 		fctx->tupdesc = BlessTupleDesc(tupledesc);
 
@@ -153,6 +156,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			buf_state = LockBufHdr(bufHdr);
 
 			fctx->record[i].bufferid = BufferDescriptorGetBuffer(bufHdr);
+			fctx->record[i].smgrid = bufHdr->tag.smgrid;
 			fctx->record[i].relfilenode = bufHdr->tag.rnode.relNode;
 			fctx->record[i].reltablespace = bufHdr->tag.rnode.spcNode;
 			fctx->record[i].reldatabase = bufHdr->tag.rnode.dbNode;
@@ -206,6 +210,8 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			nulls[7] = true;
 			/* unused for v1.0 callers, but the array is always long enough */
 			nulls[8] = true;
+			/* unused for < v1.4 callers, but the array is always long enough */
+			nulls[9] = true;
 		}
 		else
 		{
@@ -226,6 +232,9 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			/* unused for v1.0 callers, but the array is always long enough */
 			values[8] = Int32GetDatum(fctx->record[i].pinning_backends);
 			nulls[8] = false;
+			/* unused for < v1.4 callers, but the array is always long enough */
+			values[9] = Int16GetDatum(fctx->record[i].smgrid);
+			nulls[9] = false;
 		}
 
 		/* Build and return the tuple. */

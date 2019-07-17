@@ -524,6 +524,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	const RmgrDescData *desc = &RmgrDescTable[XLogRecGetRmid(record)];
 	uint32		rec_len;
 	uint32		fpi_len;
+	SmgrId		smgrid;
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blk;
@@ -556,16 +557,19 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
 
-			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
+			XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+							   &blk);
 			if (forknum != MAIN_FORKNUM)
-				printf(", blkref #%u: rel %u/%u/%u fork %s blk %u",
+				printf(", blkref #%u: smgr %d rel %u/%u/%u fork %s blk %u",
 					   block_id,
+					   smgrid,
 					   rnode.spcNode, rnode.dbNode, rnode.relNode,
 					   forkNames[forknum],
 					   blk);
 			else
-				printf(", blkref #%u: rel %u/%u/%u blk %u",
+				printf(", blkref #%u: smgr %d rel %u/%u/%u blk %u",
 					   block_id,
+					   smgrid,
 					   rnode.spcNode, rnode.dbNode, rnode.relNode,
 					   blk);
 			if (XLogRecHasBlockImage(record, block_id))
@@ -587,9 +591,11 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
 
-			XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
-			printf("\tblkref #%u: rel %u/%u/%u fork %s blk %u",
+			XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+							   &blk);
+			printf("\tblkref #%u: smgr %d rel %u/%u/%u fork %s blk %u",
 				   block_id,
+				   smgrid,
 				   rnode.spcNode, rnode.dbNode, rnode.relNode,
 				   forkNames[forknum],
 				   blk);

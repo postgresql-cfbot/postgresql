@@ -193,7 +193,7 @@ gistRedoDeleteRecord(XLogReaderState *record)
 	{
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 
 		ResolveRecoveryConflictWithSnapshot(xldata->latestRemovedXid, rnode);
 	}
@@ -278,7 +278,7 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 		BlockNumber blkno;
 		IndexTuple *tuples;
 
-		XLogRecGetBlockTag(record, i + 1, NULL, NULL, &blkno);
+		XLogRecGetBlockTag(record, i + 1, NULL, NULL, NULL, &blkno);
 		if (blkno == GIST_ROOT_BLKNO)
 		{
 			Assert(i == 0);
@@ -313,7 +313,7 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 			{
 				BlockNumber nextblkno;
 
-				XLogRecGetBlockTag(record, i + 2, NULL, NULL, &nextblkno);
+				XLogRecGetBlockTag(record, i + 2, NULL, NULL, NULL, &nextblkno);
 				GistPageGetOpaque(page)->rightlink = nextblkno;
 			}
 			else

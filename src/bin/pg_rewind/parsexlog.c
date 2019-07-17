@@ -28,7 +28,7 @@
  * RmgrNames is an array of resource manager names, to make error messages
  * a bit nicer.
  */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,undo,undo_status,undo_desc) \
   name,
 
 static const char *RmgrNames[RM_MAX_ID + 1] = {
@@ -394,8 +394,14 @@ extractPageInfo(XLogReaderState *record)
 		RelFileNode rnode;
 		ForkNumber	forknum;
 		BlockNumber blkno;
+		SmgrId		smgrid;
 
-		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		if (!XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+								&blkno))
+			continue;
+
+		/* TODO: How should we handle other smgr IDs? */
+		if (smgrid != SMGR_MD)
 			continue;
 
 		/* We only care about the main fork; others are copied in toto */

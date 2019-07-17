@@ -427,7 +427,8 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 		MarkBufferDirty(buf);
 
 		if (use_wal)
-			log_newpage(&rel->rd_node,
+			log_newpage(SMGR_MD,
+						&rel->rd_node,
 						forkNum,
 						blkno,
 						BufferGetPage(buf),
@@ -1021,7 +1022,8 @@ _hash_alloc_buckets(Relation rel, BlockNumber firstblock, uint32 nblocks)
 	ovflopaque->hasho_page_id = HASHO_PAGE_ID;
 
 	if (RelationNeedsWAL(rel))
-		log_newpage(&rel->rd_node,
+		log_newpage(SMGR_MD,
+					&rel->rd_node,
 					MAIN_FORKNUM,
 					lastblock,
 					zerobuf.data,

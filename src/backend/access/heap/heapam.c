@@ -7725,7 +7725,7 @@ heap_xlog_clean(XLogReaderState *record)
 	BlockNumber blkno;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &blkno);
 
 	/*
 	 * We're about to remove tuples. In Hot Standby mode, ensure that there's
@@ -7820,7 +7820,7 @@ heap_xlog_visible(XLogReaderState *record)
 	BlockNumber blkno;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 1, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 1, NULL, &rnode, NULL, &blkno);
 
 	/*
 	 * If there are any Hot Standby transactions running that have an xmin
@@ -7968,7 +7968,7 @@ heap_xlog_freeze_page(XLogReaderState *record)
 
 		TransactionIdRetreat(latestRemovedXid);
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 		ResolveRecoveryConflictWithSnapshot(latestRemovedXid, rnode);
 	}
 
@@ -8040,7 +8040,7 @@ heap_xlog_delete(XLogReaderState *record)
 	RelFileNode target_node;
 	ItemPointerData target_tid;
 
-	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, NULL, &target_node, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
@@ -8121,7 +8121,7 @@ heap_xlog_insert(XLogReaderState *record)
 	ItemPointerData target_tid;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, NULL, &target_node, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
@@ -8243,7 +8243,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 */
 	xlrec = (xl_heap_multi_insert *) XLogRecGetData(record);
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &blkno);
 
 	/*
 	 * The visibility map may need to be fixed even if the heap page is
@@ -8389,8 +8389,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	oldtup.t_data = NULL;
 	oldtup.t_len = 0;
 
-	XLogRecGetBlockTag(record, 0, &rnode, NULL, &newblk);
-	if (XLogRecGetBlockTag(record, 1, NULL, NULL, &oldblk))
+	XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &newblk);
+	if (XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &oldblk))
 	{
 		/* HOT updates are never done across pages */
 		Assert(!hot_update);
@@ -8685,7 +8685,7 @@ heap_xlog_lock(XLogReaderState *record)
 		BlockNumber block;
 		Relation	reln;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, &block);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &block);
 		reln = CreateFakeRelcacheEntry(rnode);
 
 		visibilitymap_pin(reln, block, &vmbuffer);
@@ -8758,7 +8758,7 @@ heap_xlog_lock_updated(XLogReaderState *record)
 		BlockNumber block;
 		Relation	reln;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, &block);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, &block);
 		reln = CreateFakeRelcacheEntry(rnode);
 
 		visibilitymap_pin(reln, block, &vmbuffer);

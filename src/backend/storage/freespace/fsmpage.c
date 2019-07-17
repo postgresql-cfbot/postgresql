@@ -268,11 +268,12 @@ restart:
 			 *
 			 * Fix the corruption and restart.
 			 */
+			SmgrId		smgrid;
 			RelFileNode rnode;
 			ForkNumber	forknum;
 			BlockNumber blknum;
 
-			BufferGetTag(buf, &rnode, &forknum, &blknum);
+			BufferGetTag(buf, &smgrid, &rnode, &forknum, &blknum);
 			elog(DEBUG1, "fixing corrupt FSM block %u, relation %u/%u/%u",
 				 blknum, rnode.spcNode, rnode.dbNode, rnode.relNode);
 

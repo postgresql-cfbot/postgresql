@@ -25,6 +25,7 @@
 #include "access/session.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
+#include "access/undolog.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -561,6 +562,7 @@ BaseInit(void)
 	InitSync();
 	smgrinit();
 	InitBufferPoolAccess();
+	UndoLogInit();
 }
 
 
@@ -1081,6 +1083,20 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	/* close the transaction we started above */
 	if (!bootstrap)
 		CommitTransactionCommand();
+}
+
+/*
+ * Check whether the dbid exist or not.
+ */
+bool
+dbid_exists(Oid dboid)
+{
+	bool		result = false;
+
+	Assert(IsTransactionState());
+	result = (GetDatabaseTupleByOid(dboid) != NULL);
+
+	return result;
 }
 
 /*

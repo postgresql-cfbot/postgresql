@@ -1047,6 +1047,7 @@ DecodeXLogRecord(XLogReaderState *state, XLogRecord *record, char **errormsg)
 	uint32		remaining;
 	uint32		datatotal;
 	RelFileNode *rnode = NULL;
+	SmgrId		smgrid = -1;
 	uint8		block_id;
 
 	ResetDecoder(state);
@@ -1220,8 +1221,10 @@ DecodeXLogRecord(XLogReaderState *state, XLogRecord *record, char **errormsg)
 			}
 			if (!(fork_flags & BKPBLOCK_SAME_REL))
 			{
+				COPY_HEADER_FIELD(&blk->smgrid, sizeof(SmgrId));
 				COPY_HEADER_FIELD(&blk->rnode, sizeof(RelFileNode));
 				rnode = &blk->rnode;
+				smgrid = blk->smgrid;
 			}
 			else
 			{
@@ -1233,6 +1236,7 @@ DecodeXLogRecord(XLogReaderState *state, XLogRecord *record, char **errormsg)
 					goto err;
 				}
 
+				blk->smgrid = smgrid;
 				blk->rnode = *rnode;
 			}
 			COPY_HEADER_FIELD(&blk->blkno, sizeof(BlockNumber));
@@ -1340,12 +1344,13 @@ err:
 /*
  * Returns information about the block that a block reference refers to.
  *
- * If the WAL record contains a block reference with the given ID, *rnode,
- * *forknum, and *blknum are filled in (if not NULL), and returns true.
+ * If the WAL record contains a block reference with the given ID, *smgrid,
+ * *rnode, *forknum and *blknum are filled in (if not NULL), and returns true.
  * Otherwise returns false.
  */
 bool
 XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
+				   SmgrId *smgrid,
 				   RelFileNode *rnode, ForkNumber *forknum, BlockNumber *blknum)
 {
 	DecodedBkpBlock *bkpb;
@@ -1354,6 +1359,8 @@ XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
 		return false;
 
 	bkpb = &record->blocks[block_id];
+	if (smgrid)
+		*smgrid = bkpb->smgrid;
 	if (rnode)
 		*rnode = bkpb->rnode;
 	if (forknum)

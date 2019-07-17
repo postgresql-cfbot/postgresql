@@ -217,7 +217,7 @@ brin_xlog_revmap_extend(XLogReaderState *record)
 
 	xlrec = (xl_brin_revmap_extend *) XLogRecGetData(record);
 
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &targetBlk);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &targetBlk);
 	Assert(xlrec->targetBlk == targetBlk);
 
 	/* Update the metapage */

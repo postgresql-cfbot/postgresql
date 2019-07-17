@@ -216,9 +216,9 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 	BlockNumber rightsib;
 	BlockNumber rnext;
 
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &leftsib);
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &rightsib);
-	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, &rnext))
+	XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &leftsib);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &rightsib);
+	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, NULL, &rnext))
 		rnext = P_NONE;
 
 	/*
@@ -524,7 +524,7 @@ btree_xlog_delete(XLogReaderState *record)
 	{
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 
 		ResolveRecoveryConflictWithSnapshot(xlrec->latestRemovedXid, rnode);
 	}

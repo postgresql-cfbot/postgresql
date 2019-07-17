@@ -52,6 +52,7 @@ typedef LockInfoData *LockInfo;
 
 typedef struct RelationData
 {
+	SmgrId		rd_smgrid;		/* relation storage manager */
 	RelFileNode rd_node;		/* relation physical identifier */
 	/* use "struct" here to avoid needing to include smgr.h: */
 	struct SMgrRelationData *rd_smgr;	/* cached file handle, or NULL */
@@ -471,7 +472,10 @@ typedef struct ViewOptions
 #define RelationOpenSmgr(relation) \
 	do { \
 		if ((relation)->rd_smgr == NULL) \
-			smgrsetowner(&((relation)->rd_smgr), smgropen((relation)->rd_node, (relation)->rd_backend)); \
+			smgrsetowner(&((relation)->rd_smgr), \
+						 smgropen((relation)->rd_smgrid, \
+								  (relation)->rd_node, \
+								  (relation)->rd_backend)); \
 	} while (0)
 
 /*

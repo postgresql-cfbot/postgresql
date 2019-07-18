@@ -6165,9 +6165,6 @@ pgstat_recv_resetsinglecounter(PgStat_MsgResetsinglecounter *msg, int len)
 	if (!dbentry)
 		return;
 
-	/* Set the reset timestamp for the whole database */
-	dbentry->stat_reset_timestamp = GetCurrentTimestamp();
-
 	/* Remove object if it exists, ignore it if not */
 	if (msg->m_resettype == RESET_TABLE)
 		(void) hash_search(dbentry->tables, (void *) &(msg->m_objectid),

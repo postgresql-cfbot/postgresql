@@ -787,8 +787,8 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 	/* Assert we didn't do this already */
 	Assert(query->queryId == UINT64CONST(0));
 
-	/* Safety check... */
-	if (!pgss || !pgss_hash)
+	/* Safety check...and check if pgss is enabled */
+	if (!pgss || !pgss_hash || !pgss_enabled())
 		return;
 
 	/*

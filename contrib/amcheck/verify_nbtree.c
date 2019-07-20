@@ -377,11 +377,20 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 
 	if (state->heapallindexed)
 	{
+		int64		total_pages;
 		int64		total_elems;
 		uint64		seed;
 
-		/* Size Bloom filter based on estimated number of tuples in index */
-		total_elems = (int64) state->rel->rd_rel->reltuples;
+		/*
+		 * Size Bloom filter based on estimated number of tuples in index,
+		 * while conservatively assuming that each block must contain at least
+		 * 50 non-pivot tuples.  (Non-leaf pages cannot contain non-pivot
+		 * tuples, but it shouldn't matter; leaf pages are almost never less
+		 * than 98% of the total unless the index is very small.)
+		 */
+		total_pages = (int64) RelationGetNumberOfBlocks(rel);
+		total_elems = Max(total_pages * 50,
+						  (int64) state->rel->rd_rel->reltuples);
 		/* Random seed relies on backend srandom() call to avoid repetition */
 		seed = random();
 		/* Create Bloom filter to fingerprint index */
@@ -425,8 +434,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 		}
 		else
 		{
-			int64		total_pages;
-
 			/*
 			 * Extra readonly downlink check.
 			 *
@@ -437,7 +444,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 			 * splits and page deletions, though.  This is taken care of in
 			 * bt_downlink_missing_check().
 			 */
-			total_pages = (int64) state->rel->rd_rel->relpages;
 			state->downlinkfilter = bloom_create(total_pages, work_mem, seed);
 		}
 	}

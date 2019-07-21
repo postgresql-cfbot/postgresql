@@ -6635,7 +6635,7 @@ ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE 
 	table_close(attrelation, RowExclusiveLock);
 
 	/* drop the internal sequence */
-	seqid = getOwnedSequence(RelationGetRelid(rel), attnum);
+	seqid = getIdentitySequence(RelationGetRelid(rel), attnum, false);
 	deleteDependencyRecordsForClass(RelationRelationId, seqid,
 									RelationRelationId, DEPENDENCY_INTERNAL);
 	CommandCounterIncrement();

@@ -707,8 +707,8 @@ sequenceIsOwned(Oid seqId, char deptype, Oid *tableId, int32 *colId)
  * Collect a list of OIDs of all sequences owned by the specified relation,
  * and column if specified.
  */
-List *
-getOwnedSequences(Oid relid, AttrNumber attnum)
+static List *
+getOwnedSequences_internal(Oid relid, AttrNumber attnum, char deptype)
 {
 	List	   *result = NIL;
 	Relation	depRel;
@@ -750,7 +750,8 @@ getOwnedSequences(Oid relid, AttrNumber attnum)
 			(deprec->deptype == DEPENDENCY_AUTO || deprec->deptype == DEPENDENCY_INTERNAL) &&
 			get_rel_relkind(deprec->objid) == RELKIND_SEQUENCE)
 		{
-			result = lappend_oid(result, deprec->objid);
+			if (!deptype || deprec->deptype == deptype)
+				result = lappend_oid(result, deprec->objid);
 		}
 	}
 
@@ -761,18 +762,29 @@ getOwnedSequences(Oid relid, AttrNumber attnum)
 	return result;
 }
 
+List *
+getOwnedSequences(Oid relid, AttrNumber attnum)
+{
+	return getOwnedSequences_internal(relid, attnum, 0);
+}
+
 /*
- * Get owned sequence, error if not exactly one.
+ * Get owned identity sequence, error if not exactly one.
  */
 Oid
-getOwnedSequence(Oid relid, AttrNumber attnum)
+getIdentitySequence(Oid relid, AttrNumber attnum, bool missing_ok)
 {
-	List	   *seqlist = getOwnedSequences(relid, attnum);
+	List	   *seqlist = getOwnedSequences_internal(relid, attnum, DEPENDENCY_INTERNAL);
 
 	if (list_length(seqlist) > 1)
 		elog(ERROR, "more than one owned sequence found");
 	else if (list_length(seqlist) < 1)
-		elog(ERROR, "no owned sequence found");
+	{
+		if (missing_ok)
+			return InvalidOid;
+		else
+			elog(ERROR, "no owned sequence found");
+	}
 
 	return linitial_oid(seqlist);
 }

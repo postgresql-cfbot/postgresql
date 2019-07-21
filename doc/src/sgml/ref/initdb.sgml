@@ -136,6 +136,15 @@ PostgreSQL documentation
         replication connections.
        </para>
 
+       <note>
+        <para>
+         Running initdb without arguments on platforms lacking
+         <literal>peer</literal> or Unix-domain socket connections will exit
+         with an error.  On such environments, you need to either provide a
+         password or choose a different authentication method.
+        </para>
+       </note>
+
        <para>
         Do not use <literal>trust</literal> unless you trust all local users on your
         system.  <literal>trust</literal> is the default for ease of installation.

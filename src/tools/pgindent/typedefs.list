@@ -1119,12 +1119,16 @@ JsValue
 JsonAggState
 JsonBaseObjectInfo
 JsonHashEntry
+JsonItem
+JsonItemStack
+JsonItemStackEntry
 JsonIterateStringValuesAction
 JsonLexContext
 JsonLikeRegexContext
 JsonParseContext
 JsonPath
 JsonPathBool
+JsonPathEncodingContext
 JsonPathExecContext
 JsonPathExecResult
 JsonPathGinAddPathItemFunc
@@ -1140,7 +1144,11 @@ JsonPathKeyword
 JsonPathParseItem
 JsonPathParseResult
 JsonPathPredicateCallback
+<<<<<<< HEAD
 JsonPathString
+=======
+JsonPathUserFuncContext
+>>>>>>> 19911df... Extract common code from jsonb_path_*() functions
 JsonSemAction
 JsonTokenType
 JsonTransformStringValuesAction

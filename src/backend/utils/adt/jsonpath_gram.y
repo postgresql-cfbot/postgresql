@@ -88,18 +88,20 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 	int					integer;
 }
 
-%token	<str>		TO_P NULL_P TRUE_P FALSE_P IS_P UNKNOWN_P EXISTS_P
+%token	<str>		TO_P NULL_P TRUE_P FALSE_P IS_P UNKNOWN_P EXISTS_P PG_P
 %token	<str>		IDENT_P STRING_P NUMERIC_P INT_P VARIABLE_P
 %token	<str>		OR_P AND_P NOT_P
 %token	<str>		LESS_P LESSEQUAL_P EQUAL_P NOTEQUAL_P GREATEREQUAL_P GREATER_P
 %token	<str>		ANY_P STRICT_P LAX_P LAST_P STARTS_P WITH_P LIKE_REGEX_P FLAG_P
 %token	<str>		ABS_P SIZE_P TYPE_P FLOOR_P DOUBLE_P CEILING_P KEYVALUE_P
+%token	<str>		DATETIME_P
 
 %type	<result>	result
 
 %type	<value>		scalar_value path_primary expr array_accessor
 					any_path accessor_op key predicate delimited_predicate
 					index_elem starts_with_initial expr_or_predicate
+					datetime_template opt_datetime_template
 
 %type	<elems>		accessor_expr
 
@@ -107,7 +109,7 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 
 %type	<optype>	comp_op method
 
-%type	<boolean>	mode
+%type	<boolean>	mode pg_opt
 
 %type	<str>		key_name
 
@@ -125,10 +127,11 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 %%
 
 result:
-	mode expr_or_predicate			{
+	pg_opt mode expr_or_predicate	{
 										*result = palloc(sizeof(JsonPathParseResult));
-										(*result)->expr = $2;
-										(*result)->lax = $1;
+										(*result)->expr = $3;
+										(*result)->lax = $2;
+										(*result)->ext = $1;
 									}
 	| /* EMPTY */					{ *result = NULL; }
 	;
@@ -136,6 +139,11 @@ result:
 expr_or_predicate:
 	expr							{ $$ = $1; }
 	| predicate						{ $$ = $1; }
+	;
+
+pg_opt:
+	PG_P							{ $$ = true; }
+	| /* EMPTY */					{ $$ = false; }
 	;
 
 mode:
@@ -247,7 +255,18 @@ accessor_op:
 	| array_accessor				{ $$ = $1; }
 	| '.' any_path					{ $$ = $2; }
 	| '.' method '(' ')'			{ $$ = makeItemType($2); }
+	| '.' DATETIME_P '(' opt_datetime_template ')'
+									{ $$ = makeItemUnary(jpiDatetime, $4); }
 	| '?' '(' predicate ')'			{ $$ = makeItemUnary(jpiFilter, $3); }
+	;
+
+datetime_template:
+	STRING_P						{ $$ = makeItemString(&$1); }
+	;
+
+opt_datetime_template:
+	datetime_template				{ $$ = $1; }
+	| /* EMPTY */					{ $$ = NULL; }
 	;
 
 key:
@@ -272,12 +291,14 @@ key_name:
 	| FLOOR_P
 	| DOUBLE_P
 	| CEILING_P
+	| DATETIME_P
 	| KEYVALUE_P
 	| LAST_P
 	| STARTS_P
 	| WITH_P
 	| LIKE_REGEX_P
 	| FLAG_P
+	| PG_P
 	;
 
 method:

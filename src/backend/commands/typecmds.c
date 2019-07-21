@@ -3174,7 +3174,8 @@ domainAddConstraint(Oid domainOid, Oid domainNamespace, Oid baseTypeOid,
 							  true, /* is local */
 							  0,	/* inhcount */
 							  false,	/* connoinherit */
-							  false);	/* is_internal */
+							  false,	/* is_internal */
+							  InvalidOid);
 	if (constrAddr)
 		ObjectAddressSet(*constrAddr, ConstraintRelationId, ccoid);
 

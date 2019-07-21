@@ -76,10 +76,11 @@ CreateConstraintEntry(const char *constraintName,
 					  bool conIsLocal,
 					  int conInhCount,
 					  bool conNoInherit,
-					  bool is_internal)
+					  bool is_internal,
+					  Oid existing_constraint_oid)
 {
 	Relation	conDesc;
-	Oid			conOid;
+	Oid			conOid = InvalidOid;
 	HeapTuple	tup;
 	bool		nulls[Natts_pg_constraint];
 	Datum		values[Natts_pg_constraint];
@@ -92,7 +93,11 @@ CreateConstraintEntry(const char *constraintName,
 	NameData	cname;
 	int			i;
 	ObjectAddress conobject;
-
+	SysScanDesc conscan;
+	ScanKeyData skey[2];
+	HeapTuple	tuple;
+	bool		replaces[Natts_pg_constraint];
+	Form_pg_constraint constrForm;
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
 	Assert(constraintName);
@@ -164,9 +169,11 @@ CreateConstraintEntry(const char *constraintName,
 		values[i] = (Datum) NULL;
 	}
 
-	conOid = GetNewOidWithIndex(conDesc, ConstraintOidIndexId,
-								Anum_pg_constraint_oid);
-	values[Anum_pg_constraint_oid - 1] = ObjectIdGetDatum(conOid);
+	if(!existing_constraint_oid){
+		conOid = GetNewOidWithIndex(conDesc, ConstraintOidIndexId,
+									Anum_pg_constraint_oid);
+		values[Anum_pg_constraint_oid - 1] = ObjectIdGetDatum(conOid);
+	}
 	values[Anum_pg_constraint_conname - 1] = NameGetDatum(&cname);
 	values[Anum_pg_constraint_connamespace - 1] = ObjectIdGetDatum(constraintNamespace);
 	values[Anum_pg_constraint_contype - 1] = CharGetDatum(constraintType);
@@ -220,9 +227,44 @@ CreateConstraintEntry(const char *constraintName,
 	else
 		nulls[Anum_pg_constraint_conbin - 1] = true;
 
-	tup = heap_form_tuple(RelationGetDescr(conDesc), values, nulls);
+	if (OidIsValid(existing_constraint_oid)){
+		ScanKeyInit(&skey[0],
+					Anum_pg_constraint_oid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(existing_constraint_oid));
 
-	CatalogTupleInsert(conDesc, tup);
+		conscan = systable_beginscan(conDesc,
+									 ConstraintOidIndexId,
+									 true,
+									 NULL,
+									 1,
+									 skey);
+
+		tuple = systable_getnext(conscan);
+		Assert (HeapTupleIsValid(tuple));
+		constrForm = (Form_pg_constraint) GETSTRUCT(tuple);
+		conOid = constrForm->oid;
+		Assert(conOid == existing_constraint_oid);
+
+		memset(replaces, true, sizeof(replaces));
+		replaces[Anum_pg_constraint_oid - 1] = false; /* skip updating Oid data */
+		replaces[Anum_pg_constraint_conname - 1] = false;
+		replaces[Anum_pg_constraint_confrelid - 1] = false;
+
+		/* Modify the existing constraint entry */
+		tup = heap_modify_tuple(tuple, RelationGetDescr(conDesc), values, nulls, replaces);
+		CatalogTupleUpdate(conDesc, &tuple->t_self, tup);
+		heap_freetuple(tup);
+
+		/* Remove all old dependencies before registering new ones */
+		deleteDependencyRecordsFor(ConstraintRelationId, conOid, true);
+
+		systable_endscan(conscan);
+	}else{
+		tup = heap_form_tuple(RelationGetDescr(conDesc), values, nulls);
+		CatalogTupleInsert(conDesc, tup);
+		heap_freetuple(tup);
+	}
 
 	conobject.classId = ConstraintRelationId;
 	conobject.objectId = conOid;

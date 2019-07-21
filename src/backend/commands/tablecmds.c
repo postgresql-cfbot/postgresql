@@ -8081,7 +8081,8 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 									  conislocal,	/* islocal */
 									  coninhcount,	/* inhcount */
 									  connoinherit, /* conNoInherit */
-									  false);	/* is_internal */
+									  false, /* is_internal */
+									  InvalidOid);
 
 	ObjectAddressSet(address, ConstraintRelationId, constrOid);
 
@@ -8351,7 +8352,8 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 									  false,
 									  1,
 									  false,
-									  false);
+									  false,
+									  InvalidOid);
 
 			/*
 			 * Give this constraint partition-type dependencies on the parent
@@ -8748,7 +8750,8 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 								  false,	/* islocal */
 								  1,	/* inhcount */
 								  false,	/* conNoInherit */
-								  true);
+								  true,
+								  InvalidOid);
 
 		/* Set up partition dependencies for the new constraint */
 		ObjectAddressSet(address, ConstraintRelationId, constrOid);

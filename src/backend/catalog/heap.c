@@ -2399,7 +2399,8 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  is_local, /* conislocal */
 							  inhcount, /* coninhcount */
 							  is_no_inherit,	/* connoinherit */
-							  is_internal); /* internally constructed? */
+							  is_internal, /* internally constructed? */
+							  InvalidOid);							  
 
 	pfree(ccbin);
 

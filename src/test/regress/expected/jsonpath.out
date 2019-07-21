@@ -21,6 +21,24 @@ select 'lax $'::jsonpath;
  $
 (1 row)
 
+select 'pg $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
+select 'pg strict $'::jsonpath;
+  jsonpath   
+-------------
+ pg strict $
+(1 row)
+
+select 'pg lax $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
 select '$.a'::jsonpath;
  jsonpath 
 ----------
@@ -88,51 +106,56 @@ select '$[*][0].a.b'::jsonpath;
 (1 row)
 
 select '$.a.**.b'::jsonpath;
-   jsonpath   
---------------
- $."a".**."b"
-(1 row)
-
-select '$.a.**{2}.b'::jsonpath;
+ERROR:  jsonpath contains extended operators that were not enabled
+LINE 1: select '$.a.**.b'::jsonpath;
+               ^
+HINT:  use "pg" modifier at the start of jsonpath string to enable extensions
+select 'pg $.a.**.b'::jsonpath;
     jsonpath     
 -----------------
- $."a".**{2}."b"
+ pg $."a".**."b"
 (1 row)
 
-select '$.a.**{2 to 2}.b'::jsonpath;
-    jsonpath     
------------------
- $."a".**{2}."b"
-(1 row)
-
-select '$.a.**{2 to 5}.b'::jsonpath;
-       jsonpath       
-----------------------
- $."a".**{2 to 5}."b"
-(1 row)
-
-select '$.a.**{0 to 5}.b'::jsonpath;
-       jsonpath       
-----------------------
- $."a".**{0 to 5}."b"
-(1 row)
-
-select '$.a.**{5 to last}.b'::jsonpath;
-        jsonpath         
--------------------------
- $."a".**{5 to last}."b"
-(1 row)
-
-select '$.a.**{last}.b'::jsonpath;
+select 'pg $.a.**{2}.b'::jsonpath;
       jsonpath      
 --------------------
- $."a".**{last}."b"
+ pg $."a".**{2}."b"
 (1 row)
 
-select '$.a.**{last to 5}.b'::jsonpath;
+select 'pg $.a.**{2 to 2}.b'::jsonpath;
+      jsonpath      
+--------------------
+ pg $."a".**{2}."b"
+(1 row)
+
+select 'pg $.a.**{2 to 5}.b'::jsonpath;
         jsonpath         
 -------------------------
- $."a".**{last to 5}."b"
+ pg $."a".**{2 to 5}."b"
+(1 row)
+
+select 'pg $.a.**{0 to 5}.b'::jsonpath;
+        jsonpath         
+-------------------------
+ pg $."a".**{0 to 5}."b"
+(1 row)
+
+select 'pg $.a.**{5 to last}.b'::jsonpath;
+          jsonpath          
+----------------------------
+ pg $."a".**{5 to last}."b"
+(1 row)
+
+select 'pg $.a.**{last}.b'::jsonpath;
+       jsonpath        
+-----------------------
+ pg $."a".**{last}."b"
+(1 row)
+
+select 'pg $.a.**{last to 5}.b'::jsonpath;
+          jsonpath          
+----------------------------
+ pg $."a".**{last to 5}."b"
 (1 row)
 
 select '$+1'::jsonpath;
@@ -190,6 +213,10 @@ select '''\x50\u0067\u{53}\u{051}\u{00004C}'''::jsonpath;
 (1 row)
 
 select '$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar'::jsonpath;
+ERROR:  syntax error, unexpected $undefined, expecting $end at or near "\" of jsonpath input
+LINE 1: select '$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar'::json...
+               ^
+select '$."foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar"'::jsonpath;
       jsonpath       
 ---------------------
  $."fooPgSQL\t\"bar"
@@ -399,6 +426,18 @@ select '$.keyvalue().key'::jsonpath;
       jsonpath      
 --------------------
  $.keyvalue()."key"
+(1 row)
+
+select '$.datetime()'::jsonpath;
+   jsonpath   
+--------------
+ $.datetime()
+(1 row)
+
+select '$.datetime("datetime template")'::jsonpath;
+            jsonpath             
+---------------------------------
+ $.datetime("datetime template")
 (1 row)
 
 select '$ ? (@ starts with "abc")'::jsonpath;
@@ -817,8 +856,16 @@ select '0'::jsonpath;
 (1 row)
 
 select '00'::jsonpath;
-ERROR:  syntax error, unexpected IDENT_P at end of jsonpath input
+ERROR:  syntax error, unexpected INT_P, expecting $end at or near "0" of jsonpath input
 LINE 1: select '00'::jsonpath;
+               ^
+select '$.00'::jsonpath;
+ERROR:  syntax error, unexpected INT_P at or near "0" of jsonpath input
+LINE 1: select '$.00'::jsonpath;
+               ^
+select '$.0a'::jsonpath;
+ERROR:  syntax error, unexpected INT_P at or near "0" of jsonpath input
+LINE 1: select '$.0a'::jsonpath;
                ^
 select '0.0'::jsonpath;
  jsonpath 

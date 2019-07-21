@@ -6123,6 +6123,30 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
         <entry>microsecond (000000-999999)</entry>
        </row>
        <row>
+        <entry><literal>FF1</literal></entry>
+        <entry>decisecond (0-9)</entry>
+       </row>
+       <row>
+        <entry><literal>FF2</literal></entry>
+        <entry>centisecond (00-99)</entry>
+       </row>
+       <row>
+        <entry><literal>FF3</literal></entry>
+        <entry>millisecond (000-999)</entry>
+       </row>
+       <row>
+        <entry><literal>FF4</literal></entry>
+        <entry>tenth of a millisecond (0000-9999)</entry>
+       </row>
+       <row>
+        <entry><literal>FF5</literal></entry>
+        <entry>hundredth of a millisecond (00000-99999)</entry>
+       </row>
+       <row>
+        <entry><literal>FF6</literal></entry>
+        <entry>microsecond (000000-999999)</entry>
+       </row>
+       <row>
         <entry><literal>SSSS</literal></entry>
         <entry>seconds past midnight (0-86399)</entry>
        </row>
@@ -11722,16 +11746,6 @@ table2-mapping
   <itemizedlist>
    <listitem>
     <para>
-     <literal>.datetime()</literal> item method is not implemented yet
-     mainly because immutable <type>jsonpath</type> functions and operators
-     cannot reference session timezone, which is used in some datetime
-     operations.  Datetime support will be added to <type>jsonpath</type>
-     in future versions of <productname>PostgreSQL</productname>.
-    </para>
-   </listitem>
-
-   <listitem>
-    <para>
      A path expression can be a Boolean predicate, although the SQL/JSON
      standard allows predicates only in filters.  This is necessary for
      implementation of the <literal>@@</literal> operator. For example,
@@ -11821,6 +11835,22 @@ table2-mapping
 
    </sect3>
 
+   <sect3 id="pg-extensions">
+    <title>Extensions</title>
+    <para>
+     <productname>PostgreSQL</productname> has some extensions to the SQL/JSON
+     Path standard.  These syntax extensions that can enabled by the specifying
+     additional <literal>pg</literal> modifier before the
+     <literal>strict</literal>/<literal>lax</literal> flags.
+     For example, recursive wildcard member accessor is enabled by
+     <literal>pg</literal> modifier:
+<programlisting>
+'pg strict $.track.** ? (@ == 73)'
+'pg $.track.** ? (@ == 73)'
+</programlisting>
+    </para>
+   </sect3>
+   
    <sect3 id="functions-sqljson-path-operators">
    <title>SQL/JSON Path Operators and Methods</title>
 
@@ -11936,6 +11966,20 @@ table2-mapping
         <entry><literal>0.3</literal></entry>
        </row>
        <row>
+        <entry><literal>datetime()</literal></entry>
+        <entry>Datetime value converted from a string</entry>
+        <entry><literal>["2015-8-1", "2015-08-12"]</literal></entry>
+        <entry><literal>$[*] ? (@.datetime() &lt; "2015-08-2". datetime())</literal></entry>
+        <entry><literal>2015-8-1</literal></entry>
+       </row>
+       <row>
+        <entry><literal>datetime(<replaceable>template</replaceable>)</literal></entry>
+        <entry>Datetime value converted from a string with a specified template</entry>
+        <entry><literal>["12:30", "18:40"]</literal></entry>
+        <entry><literal>$[*].datetime("HH24:MI")</literal></entry>
+        <entry><literal>"12:30:00", "18:40:00"</literal></entry>
+       </row>
+       <row>
         <entry><literal>keyvalue()</literal></entry>
         <entry>
           Sequence of object's key-value pairs represented as array of objects
@@ -11951,6 +11995,27 @@ table2-mapping
       </tbody>
      </tgroup>
     </table>
+
+    <note>
+     <para>
+      Result type of <literal>datetime()</literal> and
+      <literal>datetime(<replaceable>template</replaceable>)</literal>
+      methods is determined dynamically between <literal>date</literal>,
+      <literal>timetz</literal>, <literal>time</literal>,
+      <literal>timestamptz</literal> and <literal>timestamp</literal>.
+     </para>
+     <para>
+      <literal>datetime()</literal> method sequentially tries ISO formats for
+      <literal>date</literal>, <literal>timetz</literal>,
+      <literal>time</literal> <literal>timestamptz</literal> and
+      <literal>timestamp</literal>.  It stops on first matching format and
+      corresponding datatype.
+     </para>
+     <para>
+      <literal>datetime(<replaceable>template</replaceable>)</literal> method
+      determines result type by template string.
+     </para>
+    </note>
 
     <table id="functions-sqljson-filter-ex-table">
      <title><type>jsonpath</type> Filter Expression Elements</title>
@@ -12094,6 +12159,23 @@ table2-mapping
       </tbody>
      </tgroup>
     </table>
+
+    <note>
+     <para>
+      When different datetime values are compared, automatic cast is applied.
+      <literal>date</literal> may be cast to <literal>timestamp</literal>,
+      <literal>date</literal> <literal>timestamp</literal> to <literal>timestamptz</literal>,
+      <literal>time</literal> to <literal>timetz</literal>.
+     </para>
+     <para>
+      For <literal>datetime()</literal> method result type is determined by
+      matching ISO format.
+     </para>
+     <para>
+      For <literal>datetime(<replaceable>template</replaceable>)</literal>
+      method result type is determined by template string.
+     </para>
+    </note>
    </sect3>
 
   </sect2>
@@ -12327,7 +12409,7 @@ table2-mapping
    <para>
     The <literal>@?</literal> and <literal>@@</literal> operators suppress
     the following errors: lacking object field or array element, unexpected
-    JSON item type, and numeric errors.
+    JSON item type, datetime and numeric errors.
     This behavior might be helpful while searching over JSON document
     collections of varying structure.
    </para>
@@ -12597,16 +12679,31 @@ table2-mapping
    <primary>jsonb_path_exists</primary>
   </indexterm>
   <indexterm>
+   <primary>jsonb_path_exists_tz</primary>
+  </indexterm>
+  <indexterm>
    <primary>jsonb_path_match</primary>
+  </indexterm>
+  <indexterm>
+   <primary>jsonb_path_match_tz</primary>
   </indexterm>
   <indexterm>
    <primary>jsonb_path_query</primary>
   </indexterm>
   <indexterm>
+   <primary>jsonb_path_query_tz</primary>
+  </indexterm>
+  <indexterm>
    <primary>jsonb_path_query_array</primary>
   </indexterm>
   <indexterm>
+   <primary>jsonb_path_query_array_tz</primary>
+  </indexterm>
+  <indexterm>
    <primary>jsonb_path_query_first</primary>
+  </indexterm>
+  <indexterm>
+   <primary>jsonb_path_query_first_tz</primary>
   </indexterm>
 
   <table id="functions-json-processing-table">
@@ -12947,6 +13044,9 @@ table2-mapping
          <para><literal>
            jsonb_path_exists(target jsonb, path jsonpath [, vars jsonb, silent bool])
          </literal></para>
+         <para><literal>
+           jsonb_path_exists_tz(target jsonb, path jsonpath [, vars jsonb, silent bool])
+         </literal></para>
         </entry>
         <entry><type>boolean</type></entry>
         <entry>
@@ -12966,6 +13066,9 @@ table2-mapping
         <entry>
          <para><literal>
            jsonb_path_match(target jsonb, path jsonpath [, vars jsonb, silent bool])
+         </literal></para>
+         <para><literal>
+           jsonb_path_match_tz(target jsonb, path jsonpath [, vars jsonb, silent bool])
          </literal></para>
         </entry>
         <entry><type>boolean</type></entry>
@@ -12988,6 +13091,9 @@ table2-mapping
         <entry>
          <para><literal>
            jsonb_path_query(target jsonb, path jsonpath [, vars jsonb, silent bool])
+         </literal></para>
+         <para><literal>
+           jsonb_path_query_tz(target jsonb, path jsonpath [, vars jsonb, silent bool])
          </literal></para>
         </entry>
         <entry><type>setof jsonb</type></entry>
@@ -13017,6 +13123,9 @@ table2-mapping
          <para><literal>
            jsonb_path_query_array(target jsonb, path jsonpath [, vars jsonb, silent bool])
          </literal></para>
+         <para><literal>
+           jsonb_path_query_array_tz(target jsonb, path jsonpath [, vars jsonb, silent bool])
+         </literal></para>
         </entry>
         <entry><type>jsonb</type></entry>
         <entry>
@@ -13036,6 +13145,9 @@ table2-mapping
         <entry>
          <para><literal>
            jsonb_path_query_first(target jsonb, path jsonpath [, vars jsonb, silent bool])
+         </literal></para>
+         <para><literal>
+           jsonb_path_query_first_tz(target jsonb, path jsonpath [, vars jsonb, silent bool])
          </literal></para>
         </entry>
         <entry><type>jsonb</type></entry>
@@ -13179,11 +13291,8 @@ table2-mapping
 
   <note>
    <para>
-    The <literal>jsonb_path_exists</literal>, <literal>jsonb_path_match</literal>,
-    <literal>jsonb_path_query</literal>, <literal>jsonb_path_query_array</literal> and
-    <literal>jsonb_path_query_first</literal>
-    functions have optional <literal>vars</literal> and <literal>silent</literal>
-    arguments.
+    The <literal>jsonb_path_*</literal> functions have optional
+    <literal>vars</literal> and <literal>silent</literal> arguments.
    </para>
    <para>
     If the <literal>vars</literal> argument is specified, it provides an
@@ -13194,6 +13303,24 @@ table2-mapping
     If the <literal>silent</literal> argument is specified and has the
     <literal>true</literal> value, these functions suppress the same errors
     as the <literal>@?</literal> and <literal>@@</literal> operators.
+   </para>
+  </note>
+
+  <note>
+   <para>
+    Some of <literal>jsonb_path_*</literal> functions have
+    a <literal>_tz</literal> suffix.
+   </para>
+   <para>
+    Functions with <literal>_tz</literal> suffix support all SQL/JSON path
+    features including timezone dependent datetime casts.  Timezones are
+    not immutable, therefore these functions are qualified as stable and
+    can't be used in expression indexes (<xref linkend="indexes-expressional"/>).
+   </para>
+   <para>
+    Functions without <literal>_tz</literal> suffix are lacking of timezone
+    dependent datetime casts.  Thanks to that these functions are qualified
+    as immutable and can be used in expression indexes.
    </para>
   </note>
 

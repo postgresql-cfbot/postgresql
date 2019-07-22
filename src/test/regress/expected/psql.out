@@ -4748,3 +4748,160 @@ drop schema testpart;
 set search_path to default;
 set role to default;
 drop role regress_partitioning_role;
+-- check printing info about access methods
+\dA
+List of access methods
+  Name  | Type  
+--------+-------
+ brin   | Index
+ btree  | Index
+ gin    | Index
+ gist   | Index
+ hash   | Index
+ heap   | Table
+ heap2  | Table
+ spgist | Index
+(8 rows)
+
+\dA *
+List of access methods
+  Name  | Type  
+--------+-------
+ brin   | Index
+ btree  | Index
+ gin    | Index
+ gist   | Index
+ hash   | Index
+ heap   | Table
+ heap2  | Table
+ spgist | Index
+(8 rows)
+
+\dA h*
+List of access methods
+ Name  | Type  
+-------+-------
+ hash  | Index
+ heap  | Table
+ heap2 | Table
+(3 rows)
+
+\dA foo
+Did not find any AM named "foo".
+\dA+
+                                                                 Index access method properties
+   AM   | Ordering | Unique indexes | Multicol indexes | Exclusion constraints | Include non-key columns |   Handler   |              Description               
+--------+----------+----------------+------------------+-----------------------+-------------------------+-------------+----------------------------------------
+ brin   | no       | no             | yes              | no                    | no                      | brinhandler | block range index (BRIN) access method
+ btree  | yes      | yes            | yes              | yes                   | yes                     | bthandler   | b-tree index access method
+ gin    | no       | no             | yes              | no                    | no                      | ginhandler  | GIN index access method
+ gist   | no       | no             | yes              | yes                   | yes                     | gisthandler | GiST index access method
+ hash   | no       | no             | no               | yes                   | no                      | hashhandler | hash index access method
+ spgist | no       | no             | no               | yes                   | no                      | spghandler  | SP-GiST index access method
+(6 rows)
+
+             Table access method properties
+ Name  |       Handler        |       Description        
+-------+----------------------+--------------------------
+ heap  | heap_tableam_handler | heap table access method
+ heap2 | heap_tableam_handler | 
+(2 rows)
+
+\dA+ *
+                                                                 Index access method properties
+   AM   | Ordering | Unique indexes | Multicol indexes | Exclusion constraints | Include non-key columns |   Handler   |              Description               
+--------+----------+----------------+------------------+-----------------------+-------------------------+-------------+----------------------------------------
+ brin   | no       | no             | yes              | no                    | no                      | brinhandler | block range index (BRIN) access method
+ btree  | yes      | yes            | yes              | yes                   | yes                     | bthandler   | b-tree index access method
+ gin    | no       | no             | yes              | no                    | no                      | ginhandler  | GIN index access method
+ gist   | no       | no             | yes              | yes                   | yes                     | gisthandler | GiST index access method
+ hash   | no       | no             | no               | yes                   | no                      | hashhandler | hash index access method
+ spgist | no       | no             | no               | yes                   | no                      | spghandler  | SP-GiST index access method
+(6 rows)
+
+             Table access method properties
+ Name  |       Handler        |       Description        
+-------+----------------------+--------------------------
+ heap  | heap_tableam_handler | heap table access method
+ heap2 | heap_tableam_handler | 
+(2 rows)
+
+\dA+ h*
+                                                         Index access method properties
+  AM  | Ordering | Unique indexes | Multicol indexes | Exclusion constraints | Include non-key columns |   Handler   |       Description        
+------+----------+----------------+------------------+-----------------------+-------------------------+-------------+--------------------------
+ hash | no       | no             | no               | yes                   | no                      | hashhandler | hash index access method
+(1 row)
+
+             Table access method properties
+ Name  |       Handler        |       Description        
+-------+----------------------+--------------------------
+ heap  | heap_tableam_handler | heap table access method
+ heap2 | heap_tableam_handler | 
+(2 rows)
+
+\dA+ foo
+Did not find any AM named "foo".
+\dAo brin uuid_minmax_ops
+List operators of family related to access method
+  AM  |  Opfamily Name  |    Operator     
+------+-----------------+-----------------
+ brin | uuid_minmax_ops | < (uuid, uuid)
+ brin | uuid_minmax_ops | <= (uuid, uuid)
+ brin | uuid_minmax_ops | = (uuid, uuid)
+ brin | uuid_minmax_ops | >= (uuid, uuid)
+ brin | uuid_minmax_ops | > (uuid, uuid)
+(5 rows)
+
+\dAo * pg_catalog.jsonb_path_ops
+List operators of family related to access method
+ AM  | Opfamily Name  |       Operator       
+-----+----------------+----------------------
+ gin | jsonb_path_ops | @> (jsonb, jsonb)
+ gin | jsonb_path_ops | @? (jsonb, jsonpath)
+ gin | jsonb_path_ops | @@ (jsonb, jsonpath)
+(3 rows)
+
+\dAp brin uuid_minmax_ops
+                     List of operator family procedures
+  AM  | Operator family | Left arg type | Right arg type | Support function 
+------+-----------------+---------------+----------------+------------------
+ brin | uuid_minmax_ops | uuid          | uuid           |                1
+ brin | uuid_minmax_ops | uuid          | uuid           |                2
+ brin | uuid_minmax_ops | uuid          | uuid           |                3
+ brin | uuid_minmax_ops | uuid          | uuid           |                4
+(4 rows)
+
+\dAp * pg_catalog.uuid_ops
+                     List of operator family procedures
+  AM   | Operator family | Left arg type | Right arg type | Support function 
+-------+-----------------+---------------+----------------+------------------
+ btree | uuid_ops        | uuid          | uuid           |                1
+ btree | uuid_ops        | uuid          | uuid           |                2
+ hash  | uuid_ops        | uuid          | uuid           |                1
+ hash  | uuid_ops        | uuid          | uuid           |                2
+(4 rows)
+
+\dAc brin pg*.oid*
+             Index access method operator classes
+  AM  | Input type | Storage type | Operator class | Default? 
+------+------------+--------------+----------------+----------
+ brin | oid        |              | oid_minmax_ops | yes
+(1 row)
+
+-- check printing info about indexes
+\dip pg_am_name_index
+                                            Index properties
+   Schema   |       Name       | Access method | Clusterable | Index scan | Bitmap scan | Backward scan 
+------------+------------------+---------------+-------------+------------+-------------+---------------
+ pg_catalog | pg_am_name_index | btree         | yes         | yes        | yes         | yes
+(1 row)
+
+\dicp pg_am_name_index
+                                                Index pg_catalog.pg_am_name_index
+ Column name |  Expr  | Opclass  | ASC | Nulls first | Orderable | Distance orderable | Returnable | Search array | Search nulls 
+-------------+--------+----------+-----+-------------+-----------+--------------------+------------+--------------+--------------
+ amname      | amname | name_ops | yes | no          | yes       | no                 | yes        | yes          | yes
+Table: pg_am
+Access method: btree
+

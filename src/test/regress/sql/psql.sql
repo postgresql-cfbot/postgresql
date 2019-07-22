@@ -1131,3 +1131,21 @@ set search_path to default;
 
 set role to default;
 drop role regress_partitioning_role;
+
+-- check printing info about access methods
+\dA
+\dA *
+\dA h*
+\dA foo
+\dA+
+\dA+ *
+\dA+ h*
+\dA+ foo
+\dAo brin uuid_minmax_ops
+\dAo * pg_catalog.jsonb_path_ops
+\dAp brin uuid_minmax_ops
+\dAp * pg_catalog.uuid_ops
+\dAc brin pg*.oid*
+-- check printing info about indexes
+\dip pg_am_name_index
+\dicp pg_am_name_index

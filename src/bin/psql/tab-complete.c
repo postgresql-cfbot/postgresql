@@ -495,6 +495,13 @@ static const SchemaQuery Query_for_list_of_partitioned_relations = {
 	.result = "pg_catalog.quote_ident(c.relname)",
 };
 
+static const SchemaQuery Query_for_list_of_operator_families = {
+	.catname = "pg_catalog.pg_opfamily c",
+	.viscondition = "pg_catalog.pg_opfamily_is_visible(c.oid)",
+	.namespace = "c.opfnamespace",
+	.result = "pg_catalog.quote_ident(c.opfname)",
+};
+
 /* Relations supporting INSERT, UPDATE or DELETE */
 static const SchemaQuery Query_for_list_of_updatables = {
 	.catname = "pg_catalog.pg_class c",
@@ -1417,10 +1424,12 @@ psql_completion(const char *text, int start, int end)
 		"\\a",
 		"\\connect", "\\conninfo", "\\C", "\\cd", "\\copy",
 		"\\copyright", "\\crosstabview",
-		"\\d", "\\da", "\\dA", "\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
+		"\\d", "\\da", "\\dA", "\\dAp", "\\dAo", "\\dAp", "\\dAc",
+		"\\db", "\\dc", "\\dC", "\\dd", "\\ddp", "\\dD",
 		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
-		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
-		"\\dm", "\\dn", "\\do", "\\dO", "\\dp", "\\dP", "\\dPi", "\\dPt",
+		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dicp", "\\dip",
+		"\\dl", "\\dL", "\\dm", "\\dn", "\\do", "\\dO",
+		"\\dp", "\\dP", "\\dPi", "\\dPt",
 		"\\drds", "\\dRs", "\\dRp", "\\ds", "\\dS",
 		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dy",
 		"\\e", "\\echo", "\\ef", "\\elif", "\\else", "\\encoding",
@@ -3590,6 +3599,12 @@ psql_completion(const char *text, int start, int end)
 	}
 	else if (TailMatchesCS("\\da*"))
 		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_aggregates, NULL);
+	else if (TailMatchesCS("\\dAp*", MatchAny))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_operator_families, NULL);
+	else if (TailMatchesCS("\\dAo*", MatchAny))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_operator_families, NULL);
+	else if (TailMatchesCS("\\dAc*", MatchAny))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
 	else if (TailMatchesCS("\\dA*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (TailMatchesCS("\\db*"))

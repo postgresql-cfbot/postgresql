@@ -113,6 +113,10 @@ typedef struct
 } CreateSchemaStmtContext;
 
 
+static void generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
+									 Oid seqtypid, List *seqoptions,
+									 bool for_identity,
+									 char **snamespace_p, char **sname_p);
 static void transformColumnDefinition(CreateStmtContext *cxt,
 									  ColumnDef *column);
 static void transformTableConstraint(CreateStmtContext *cxt,
@@ -337,6 +341,38 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 }
 
 /*
+ * transformIdentityColumnSerialOptions
+ *		Generate CREATE SEQUENCE and ALTER SEQUENCE ... OWNED BY statements
+ *		to create the sequence for an identity column.
+ *
+ * This is used during ALTER TABLE ADD IDENTITY.  We don't need to separate
+ * the execution of the two commands, because the column already exists and
+ * doesn't need its default expression set.  So just pass them back as a
+ * single List.
+ */
+List *
+transformIdentityColumnSerialOptions(Relation rel,
+									 char *colName, Oid colTypeOid,
+									 List *seqoptions)
+{
+	CreateStmtContext cxt;
+	ColumnDef  *column = makeNode(ColumnDef);
+
+	/* Set up just enough of cxt for generateSerialExtraStmts() */
+	memset(&cxt, 0, sizeof(cxt));
+	cxt.stmtType = "ALTER TABLE";
+	cxt.rel = rel;
+
+	/* Need a mostly-dummy ColumnDef, too */
+	column->colname = colName;
+
+	generateSerialExtraStmts(&cxt, column, colTypeOid, seqoptions, true,
+							 NULL, NULL);
+
+	return list_concat(cxt.blist, cxt.alist);
+}
+
+/*
  * generateSerialExtraStmts
  *		Generate CREATE SEQUENCE and ALTER SEQUENCE ... OWNED BY statements
  *		to create the sequence for a serial or identity column.
@@ -350,7 +386,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 						 Oid seqtypid, List *seqoptions, bool for_identity,
 						 char **snamespace_p, char **sname_p)
 {
-	ListCell   *option;
+	char	   *relname;
 	DefElem    *nameEl = NULL;
 	Oid			snamespaceid;
 	char	   *snamespace;
@@ -358,6 +394,14 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	CreateSeqStmt *seqstmt;
 	AlterSeqStmt *altseqstmt;
 	List	   *attnamelist;
+	ListCell   *option;
+
+	/*
+	 * Get name of relation.  Note: this function mustn't access cxt->relation
+	 * when cxt->rel is set, because transformIdentityColumnSerialOptions()
+	 * only provides the latter.
+	 */
+	relname = cxt->rel ? RelationGetRelationName(cxt->rel) : cxt->relation->relname;
 
 	/*
 	 * Determine namespace and name to use for the sequence.
@@ -415,7 +459,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 			RangeVarAdjustRelationPersistence(cxt->relation, snamespaceid);
 		}
 		snamespace = get_namespace_name(snamespaceid);
-		sname = ChooseRelationName(cxt->relation->relname,
+		sname = ChooseRelationName(relname,
 								   column->colname,
 								   "seq",
 								   snamespaceid,
@@ -425,7 +469,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	ereport(DEBUG1,
 			(errmsg("%s will create implicit sequence \"%s\" for serial column \"%s.%s\"",
 					cxt->stmtType, sname,
-					cxt->relation->relname, column->colname)));
+					relname, column->colname)));
 
 	/*
 	 * Build a CREATE SEQUENCE command to create the sequence object, and add
@@ -478,7 +522,7 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	altseqstmt = makeNode(AlterSeqStmt);
 	altseqstmt->sequence = makeRangeVar(snamespace, sname, -1);
 	attnamelist = list_make3(makeString(snamespace),
-							 makeString(cxt->relation->relname),
+							 makeString(relname),
 							 makeString(column->colname));
 	altseqstmt->options = list_make1(makeDefElem("owned_by",
 												 (Node *) attnamelist, -1));
@@ -3077,8 +3121,14 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 
 	/*
 	 * The only subtypes that currently require parse transformation handling
-	 * are ADD COLUMN, ADD CONSTRAINT and SET DATA TYPE.  These largely re-use
-	 * code from CREATE TABLE.
+	 * are ADD COLUMN, ADD CONSTRAINT, SET DATA TYPE, and ATTACH/DETACH
+	 * PARTITION.  These largely re-use code from CREATE TABLE.
+	 *
+	 * NOW HEAR THIS: you can NOT put code here that examines the current
+	 * properties of the target table or anything associated with it.  Such
+	 * code will do the wrong thing if any preceding ALTER TABLE subcommand
+	 * changes the property in question.  Wait till runtime to look at the
+	 * table.
 	 */
 	foreach(lcmd, stmt->cmds)
 	{
@@ -3155,6 +3205,14 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					/*
 					 * For identity column, create ALTER SEQUENCE command to
 					 * change the data type of the sequence.
+					 *
+					 * XXX This is a direct violation of the advice given
+					 * above to not look at the table's properties yet.  It
+					 * accidentally works (at least for most cases) because of
+					 * the ordering of operations in ALTER TABLE --- note in
+					 * particular that we must add the new command to blist
+					 * not alist.  But we ought to move this to be done at
+					 * execution.
 					 */
 					attnum = get_attnum(relid, cmd->name);
 
@@ -3177,90 +3235,6 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 						cxt.blist = lappend(cxt.blist, altseqstmt);
 					}
 
-					newcmds = lappend(newcmds, cmd);
-					break;
-				}
-
-			case AT_AddIdentity:
-				{
-					Constraint *def = castNode(Constraint, cmd->def);
-					ColumnDef  *newdef = makeNode(ColumnDef);
-					AttrNumber	attnum;
-
-					newdef->colname = cmd->name;
-					newdef->identity = def->generated_when;
-					cmd->def = (Node *) newdef;
-
-					attnum = get_attnum(relid, cmd->name);
-
-					/*
-					 * if attribute not found, something will error about it
-					 * later
-					 */
-					if (attnum != InvalidAttrNumber)
-						generateSerialExtraStmts(&cxt, newdef,
-												 get_atttype(relid, attnum),
-												 def->options, true,
-												 NULL, NULL);
-
-					newcmds = lappend(newcmds, cmd);
-					break;
-				}
-
-			case AT_SetIdentity:
-				{
-					/*
-					 * Create an ALTER SEQUENCE statement for the internal
-					 * sequence of the identity column.
-					 */
-					ListCell   *lc;
-					List	   *newseqopts = NIL;
-					List	   *newdef = NIL;
-					List	   *seqlist;
-					AttrNumber	attnum;
-
-					/*
-					 * Split options into those handled by ALTER SEQUENCE and
-					 * those for ALTER TABLE proper.
-					 */
-					foreach(lc, castNode(List, cmd->def))
-					{
-						DefElem    *def = lfirst_node(DefElem, lc);
-
-						if (strcmp(def->defname, "generated") == 0)
-							newdef = lappend(newdef, def);
-						else
-							newseqopts = lappend(newseqopts, def);
-					}
-
-					attnum = get_attnum(relid, cmd->name);
-
-					if (attnum)
-					{
-						seqlist = getOwnedSequences(relid, attnum);
-						if (seqlist)
-						{
-							AlterSeqStmt *seqstmt;
-							Oid			seq_relid;
-
-							seqstmt = makeNode(AlterSeqStmt);
-							seq_relid = linitial_oid(seqlist);
-							seqstmt->sequence = makeRangeVar(get_namespace_name(get_rel_namespace(seq_relid)),
-															 get_rel_name(seq_relid), -1);
-							seqstmt->options = newseqopts;
-							seqstmt->for_identity = true;
-							seqstmt->missing_ok = false;
-
-							cxt.alist = lappend(cxt.alist, seqstmt);
-						}
-					}
-
-					/*
-					 * If column was not found or was not an identity column,
-					 * we just let the ALTER TABLE command error out later.
-					 */
-
-					cmd->def = (Node *) newdef;
 					newcmds = lappend(newcmds, cmd);
 					break;
 				}

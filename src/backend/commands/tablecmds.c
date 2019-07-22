@@ -86,6 +86,7 @@
 #include "storage/lock.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
+#include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -340,12 +341,15 @@ static void validateForeignKeyConstraint(char *conname,
 										 Relation rel, Relation pkrel,
 										 Oid pkindOid, Oid constraintOid);
 static void ATController(AlterTableStmt *parsetree,
-						 Relation rel, List *cmds, bool recurse, LOCKMODE lockmode);
+						 Relation rel, List *cmds, bool recurse, LOCKMODE lockmode,
+						 ProcessUtilityForAlterTableContext *pcontext);
 static void ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 					  bool recurse, bool recursing, LOCKMODE lockmode);
-static void ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode);
+static void ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
+							  ProcessUtilityForAlterTableContext *pcontext);
 static void ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
-					  AlterTableCmd *cmd, LOCKMODE lockmode);
+					  AlterTableCmd *cmd, LOCKMODE lockmode,
+					  ProcessUtilityForAlterTableContext *pcontext);
 static void ATRewriteTables(AlterTableStmt *parsetree,
 							List **wqueue, LOCKMODE lockmode);
 static void ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode);
@@ -383,9 +387,11 @@ static bool ConstraintImpliedByRelConstraint(Relation scanrel,
 static ObjectAddress ATExecColumnDefault(Relation rel, const char *colName,
 										 Node *newDefault, LOCKMODE lockmode);
 static ObjectAddress ATExecAddIdentity(Relation rel, const char *colName,
-									   Node *def, LOCKMODE lockmode);
+									   Node *def, LOCKMODE lockmode,
+									   ProcessUtilityForAlterTableContext *pcontext);
 static ObjectAddress ATExecSetIdentity(Relation rel, const char *colName,
-									   Node *def, LOCKMODE lockmode);
+									   Node *def, LOCKMODE lockmode,
+									   ProcessUtilityForAlterTableContext *pcontext);
 static ObjectAddress ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
 static void ATPrepSetStatistics(Relation rel, const char *colName, int16 colNum,
 								Node *newValue, LOCKMODE lockmode);
@@ -3493,7 +3499,8 @@ AlterTableLookupRelation(AlterTableStmt *stmt, LOCKMODE lockmode)
  * rather than reassess it at lower levels.
  */
 void
-AlterTable(Oid relid, LOCKMODE lockmode, AlterTableStmt *stmt)
+AlterTable(Oid relid, LOCKMODE lockmode, AlterTableStmt *stmt,
+		   ProcessUtilityForAlterTableContext *pcontext)
 {
 	Relation	rel;
 
@@ -3502,7 +3509,8 @@ AlterTable(Oid relid, LOCKMODE lockmode, AlterTableStmt *stmt)
 
 	CheckTableNotInUse(rel, "ALTER TABLE");
 
-	ATController(stmt, rel, stmt->cmds, stmt->relation->inh, lockmode);
+	ATController(stmt, rel, stmt->cmds, stmt->relation->inh, lockmode,
+				 pcontext);
 }
 
 /*
@@ -3515,6 +3523,9 @@ AlterTable(Oid relid, LOCKMODE lockmode, AlterTableStmt *stmt)
  * is unsafe to use this entry point for alterations that could break
  * existing query plans.  On the assumption it's not used for such, we
  * don't have to reject pending AFTER triggers, either.
+ *
+ * This also doesn't support subcommands that need to recursively call
+ * ProcessUtility, so no pcontext argument is needed.
  */
 void
 AlterTableInternal(Oid relid, List *cmds, bool recurse)
@@ -3526,7 +3537,7 @@ AlterTableInternal(Oid relid, List *cmds, bool recurse)
 
 	EventTriggerAlterTableRelid(relid);
 
-	ATController(NULL, rel, cmds, recurse, lockmode);
+	ATController(NULL, rel, cmds, recurse, lockmode, NULL);
 }
 
 /*
@@ -3824,7 +3835,8 @@ AlterTableGetLockLevel(List *cmds)
  */
 static void
 ATController(AlterTableStmt *parsetree,
-			 Relation rel, List *cmds, bool recurse, LOCKMODE lockmode)
+			 Relation rel, List *cmds, bool recurse, LOCKMODE lockmode,
+			 ProcessUtilityForAlterTableContext *pcontext)
 {
 	List	   *wqueue = NIL;
 	ListCell   *lcmd;
@@ -3841,7 +3853,7 @@ ATController(AlterTableStmt *parsetree,
 	relation_close(rel, NoLock);
 
 	/* Phase 2: update system catalogs */
-	ATRewriteCatalogs(&wqueue, lockmode);
+	ATRewriteCatalogs(&wqueue, lockmode, pcontext);
 
 	/* Phase 3: scan/rewrite tables as needed */
 	ATRewriteTables(parsetree, &wqueue, lockmode);
@@ -3910,7 +3922,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			break;
 		case AT_AddIdentity:
 			ATSimplePermissions(rel, ATT_TABLE | ATT_VIEW | ATT_FOREIGN_TABLE);
-			pass = AT_PASS_ADD_CONSTR;
+			pass = AT_PASS_COL_ATTRS;
 			break;
 		case AT_DropIdentity:
 			ATSimplePermissions(rel, ATT_TABLE | ATT_VIEW | ATT_FOREIGN_TABLE);
@@ -4148,7 +4160,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
  * conflicts).
  */
 static void
-ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode)
+ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
+				  ProcessUtilityForAlterTableContext *pcontext)
 {
 	int			pass;
 	ListCell   *ltab;
@@ -4179,9 +4192,12 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode)
 			rel = relation_open(tab->relid, NoLock);
 
 			foreach(lcmd, subcmds)
+			{
 				ATExecCmd(wqueue, tab, rel,
 						  castNode(AlterTableCmd, lfirst(lcmd)),
-						  lockmode);
+						  lockmode,
+						  pcontext);
+			}
 
 			/*
 			 * After the ALTER TYPE pass, do cleanup work (this is not done in
@@ -4218,7 +4234,8 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode)
  */
 static void
 ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
-		  AlterTableCmd *cmd, LOCKMODE lockmode)
+		  AlterTableCmd *cmd, LOCKMODE lockmode,
+		  ProcessUtilityForAlterTableContext *pcontext)
 {
 	ObjectAddress address = InvalidObjectAddress;
 
@@ -4239,10 +4256,12 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			address = ATExecColumnDefault(rel, cmd->name, cmd->def, lockmode);
 			break;
 		case AT_AddIdentity:
-			address = ATExecAddIdentity(rel, cmd->name, cmd->def, lockmode);
+			address = ATExecAddIdentity(rel, cmd->name, cmd->def, lockmode,
+										pcontext);
 			break;
 		case AT_SetIdentity:
-			address = ATExecSetIdentity(rel, cmd->name, cmd->def, lockmode);
+			address = ATExecSetIdentity(rel, cmd->name, cmd->def, lockmode,
+										pcontext);
 			break;
 		case AT_DropIdentity:
 			address = ATExecDropIdentity(rel, cmd->name, cmd->missing_ok, lockmode);
@@ -6424,14 +6443,17 @@ ATExecColumnDefault(Relation rel, const char *colName,
  */
 static ObjectAddress
 ATExecAddIdentity(Relation rel, const char *colName,
-				  Node *def, LOCKMODE lockmode)
+				  Node *def, LOCKMODE lockmode,
+				  ProcessUtilityForAlterTableContext *pcontext)
 {
+	Constraint *condef = castNode(Constraint, def);
 	Relation	attrelation;
 	HeapTuple	tuple;
 	Form_pg_attribute attTup;
 	AttrNumber	attnum;
+	List	   *seqcmds;
+	ListCell   *lc;
 	ObjectAddress address;
-	ColumnDef  *cdef = castNode(ColumnDef, def);
 
 	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
 
@@ -6474,8 +6496,21 @@ ATExecAddIdentity(Relation rel, const char *colName,
 				 errmsg("column \"%s\" of relation \"%s\" already has a default value",
 						colName, RelationGetRelationName(rel))));
 
-	attTup->attidentity = cdef->identity;
+	/* Update column's attidentity state */
+	attTup->attidentity = condef->generated_when;
 	CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
+
+	/* Create the required supporting sequence */
+	seqcmds = transformIdentityColumnSerialOptions(rel,
+												   NameStr(attTup->attname),
+												   attTup->atttypid,
+												   condef->options);
+	foreach(lc, seqcmds)
+	{
+		Node	   *stmt = lfirst(lc);
+
+		ProcessUtilityForAlterTable(stmt, pcontext);
+	}
 
 	InvokeObjectPostAlterHook(RelationRelationId,
 							  RelationGetRelid(rel),
@@ -6495,17 +6530,21 @@ ATExecAddIdentity(Relation rel, const char *colName,
  * Return the address of the affected column.
  */
 static ObjectAddress
-ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmode)
+ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmode,
+				  ProcessUtilityForAlterTableContext *pcontext)
 {
+	List	   *options = castNode(List, def);
 	ListCell   *option;
 	DefElem    *generatedEl = NULL;
+	List	   *seqoptions = NIL;
 	HeapTuple	tuple;
 	Form_pg_attribute attTup;
 	AttrNumber	attnum;
 	Relation	attrelation;
 	ObjectAddress address;
 
-	foreach(option, castNode(List, def))
+	/* Examine options */
+	foreach(option, options)
 	{
 		DefElem    *defel = lfirst_node(DefElem, option);
 
@@ -6518,14 +6557,15 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 			generatedEl = defel;
 		}
 		else
-			elog(ERROR, "option \"%s\" not recognized",
-				 defel->defname);
+		{
+			/* Assume it is an option for ALTER SEQUENCE */
+			seqoptions = lappend(seqoptions, defel);
+		}
 	}
 
 	/*
-	 * Even if there is nothing to change here, we run all the checks.  There
-	 * will be a subsequent ALTER SEQUENCE that relies on everything being
-	 * there.
+	 * Even if there is nothing to change, verify that target column is valid
+	 * for the command.
 	 */
 
 	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
@@ -6551,6 +6591,7 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 				 errmsg("column \"%s\" of relation \"%s\" is not an identity column",
 						colName, RelationGetRelationName(rel))));
 
+	/* Apply attidentity change if given */
 	if (generatedEl)
 	{
 		attTup->attidentity = defGetInt32(generatedEl);
@@ -6558,12 +6599,34 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 
 		InvokeObjectPostAlterHook(RelationRelationId,
 								  RelationGetRelid(rel),
-								  attTup->attnum);
+								  attnum);
 		ObjectAddressSubSet(address, RelationRelationId,
 							RelationGetRelid(rel), attnum);
 	}
 	else
 		address = InvalidObjectAddress;
+
+	/* Apply sequence options if given */
+	if (seqoptions)
+	{
+		List	   *seqlist = getOwnedSequences(RelationGetRelid(rel), attnum);
+		ListCell   *seqcell;
+
+		foreach(seqcell, seqlist)
+		{
+			Oid			seq_relid = lfirst_oid(seqcell);
+			AlterSeqStmt *seqstmt;
+
+			seqstmt = makeNode(AlterSeqStmt);
+			seqstmt->sequence = makeRangeVar(get_namespace_name(get_rel_namespace(seq_relid)),
+											 get_rel_name(seq_relid), -1);
+			seqstmt->options = seqoptions;
+			seqstmt->for_identity = true;
+			seqstmt->missing_ok = false;
+
+			ProcessUtilityForAlterTable((Node *) seqstmt, pcontext);
+		}
+	}
 
 	heap_freetuple(tuple);
 	table_close(attrelation, RowExclusiveLock);

@@ -1075,7 +1075,7 @@ ProcessUtilitySlow(ParseState *pstate,
 										   queryString,
 										   PROCESS_UTILITY_SUBCOMMAND,
 										   params,
-										   NULL,
+										   queryEnv,
 										   None_Receiver,
 										   NULL);
 						}
@@ -1097,8 +1097,6 @@ ProcessUtilitySlow(ParseState *pstate,
 				{
 					AlterTableStmt *atstmt = (AlterTableStmt *) parsetree;
 					Oid			relid;
-					List	   *stmts;
-					ListCell   *l;
 					LOCKMODE	lockmode;
 
 					/*
@@ -1112,9 +1110,20 @@ ProcessUtilitySlow(ParseState *pstate,
 
 					if (OidIsValid(relid))
 					{
+						List	   *stmts;
+						ProcessUtilityForAlterTableContext pcontext;
+						ListCell   *l;
+
 						/* Run parse analysis ... */
 						stmts = transformAlterTableStmt(relid, atstmt,
 														queryString);
+
+						/* ... set up info for possible recursion ... */
+						pcontext.pstmt = pstmt;
+						pcontext.queryString = queryString;
+						pcontext.params = params;
+						pcontext.queryEnv = queryEnv;
+						pcontext.relid = relid;
 
 						/* ... ensure we have an event trigger context ... */
 						EventTriggerAlterTableStart(parsetree);
@@ -1129,36 +1138,21 @@ ProcessUtilitySlow(ParseState *pstate,
 							{
 								/* Do the table alteration proper */
 								AlterTable(relid, lockmode,
-										   (AlterTableStmt *) stmt);
+										   (AlterTableStmt *) stmt,
+										   &pcontext);
 							}
 							else
 							{
 								/*
-								 * Recurse for anything else.  If we need to
-								 * do so, "close" the current complex-command
-								 * set, and start a new one at the bottom;
-								 * this is needed to ensure the ordering of
-								 * queued commands is consistent with the way
-								 * they are executed here.
+								 * Recurse for anything else.  We get here if
+								 * transformAlterTableStmt() tacked extra
+								 * commands onto its output, but it's also
+								 * possible for AlterTable() to generate extra
+								 * commands on-the-fly, in which case it will
+								 * call ProcessUtilityForAlterTable directly.
 								 */
-								PlannedStmt *wrapper;
-
-								EventTriggerAlterTableEnd();
-								wrapper = makeNode(PlannedStmt);
-								wrapper->commandType = CMD_UTILITY;
-								wrapper->canSetTag = false;
-								wrapper->utilityStmt = stmt;
-								wrapper->stmt_location = pstmt->stmt_location;
-								wrapper->stmt_len = pstmt->stmt_len;
-								ProcessUtility(wrapper,
-											   queryString,
-											   PROCESS_UTILITY_SUBCOMMAND,
-											   params,
-											   NULL,
-											   None_Receiver,
-											   NULL);
-								EventTriggerAlterTableStart(parsetree);
-								EventTriggerAlterTableRelid(relid);
+								ProcessUtilityForAlterTable(stmt,
+															&pcontext);
 							}
 
 							/* Need CCI between commands */
@@ -1722,6 +1716,42 @@ ProcessUtilitySlow(ParseState *pstate,
 
 	if (needCleanup)
 		EventTriggerEndCompleteQuery();
+}
+
+/*
+ * ProcessUtilityForAlterTable
+ *		Recursively process an arbitrary utility command as a subcommand
+ *		of ALTER TABLE.
+ */
+void
+ProcessUtilityForAlterTable(Node *stmt,
+							ProcessUtilityForAlterTableContext *pcontext)
+{
+	PlannedStmt *wrapper = makeNode(PlannedStmt);
+
+	/*
+	 * When recursing, "close" the current complex-command set, and start a
+	 * new one afterwards; this is needed to ensure the ordering of queued
+	 * commands is consistent with the way they are executed here.
+	 */
+	EventTriggerAlterTableEnd();
+
+	wrapper->commandType = CMD_UTILITY;
+	wrapper->canSetTag = false;
+	wrapper->utilityStmt = stmt;
+	wrapper->stmt_location = pcontext->pstmt->stmt_location;
+	wrapper->stmt_len = pcontext->pstmt->stmt_len;
+
+	ProcessUtility(wrapper,
+				   pcontext->queryString,
+				   PROCESS_UTILITY_SUBCOMMAND,
+				   pcontext->params,
+				   pcontext->queryEnv,
+				   None_Receiver,
+				   NULL);
+
+	EventTriggerAlterTableStart(pcontext->pstmt->utilityStmt);
+	EventTriggerAlterTableRelid(pcontext->relid);
 }
 
 /*

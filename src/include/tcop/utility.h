@@ -25,6 +25,16 @@ typedef enum
 	PROCESS_UTILITY_SUBCOMMAND	/* a portion of a query */
 } ProcessUtilityContext;
 
+typedef struct ProcessUtilityForAlterTableContext
+{
+	/* Info that has to be passed through an ALTER TABLE */
+	PlannedStmt *pstmt;
+	const char *queryString;
+	ParamListInfo params;
+	QueryEnvironment *queryEnv;
+	Oid			relid;
+} ProcessUtilityForAlterTableContext;
+
 /* Hook for plugins to get control in ProcessUtility() */
 typedef void (*ProcessUtility_hook_type) (PlannedStmt *pstmt,
 										  const char *queryString, ProcessUtilityContext context,
@@ -41,6 +51,9 @@ extern void standard_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 									ProcessUtilityContext context, ParamListInfo params,
 									QueryEnvironment *queryEnv,
 									DestReceiver *dest, char *completionTag);
+
+extern void ProcessUtilityForAlterTable(Node *stmt,
+										ProcessUtilityForAlterTableContext *pcontext);
 
 extern bool UtilityReturnsTuples(Node *parsetree);
 

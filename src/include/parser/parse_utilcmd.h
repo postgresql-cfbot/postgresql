@@ -27,6 +27,9 @@ extern void transformRuleStmt(RuleStmt *stmt, const char *queryString,
 extern List *transformCreateSchemaStmt(CreateSchemaStmt *stmt);
 extern PartitionBoundSpec *transformPartitionBound(ParseState *pstate, Relation parent,
 												   PartitionBoundSpec *spec);
+extern List *transformIdentityColumnSerialOptions(Relation rel,
+												  char *colName, Oid colTypeOid,
+												  List *seqoptions);
 extern IndexStmt *generateClonedIndexStmt(RangeVar *heapRel,
 										  Relation source_idx,
 										  const AttrNumber *attmap, int attmap_length,

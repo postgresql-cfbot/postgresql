@@ -129,6 +129,17 @@ Partitioned index "testschema.part_a_idx"
  a      | integer | yes  | a
 btree, for table "testschema.part"
 Tablespace: "regress_tblspace"
+Number of partitions: 2 (Use \d+ to list them.)
+
+\d+ testschema.part_a_idx
+           Partitioned index "testschema.part_a_idx"
+ Column |  Type   | Key? | Definition | Storage | Stats target 
+--------+---------+------+------------+---------+--------------
+ a      | integer | yes  | a          | plain   | 
+btree, for table "testschema.part"
+Tablespace: "regress_tblspace"
+Partitions: testschema.part1_a_idx,
+            testschema.part2_a_idx
 
 -- partitioned rels cannot specify the default tablespace.  These fail:
 CREATE TABLE testschema.dflt (a int PRIMARY KEY) PARTITION BY LIST (a) TABLESPACE pg_default;
@@ -344,6 +355,7 @@ Partitioned index "testschema.test_index1"
 --------+--------+------+------------
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index2
 Partitioned index "testschema.test_index2"
@@ -352,6 +364,7 @@ Partitioned index "testschema.test_index2"
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index3
 Partitioned index "testschema.test_index3"
@@ -359,6 +372,7 @@ Partitioned index "testschema.test_index3"
 --------+--------+------+------------
  id     | bigint | yes  | id
 primary key, btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index4
 Partitioned index "testschema.test_index4"
@@ -367,6 +381,7 @@ Partitioned index "testschema.test_index4"
  id     | bigint | yes  | id
 unique, btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 -- use a custom tablespace for default_tablespace
 SET default_tablespace TO regress_tblspace;
@@ -378,6 +393,7 @@ Partitioned index "testschema.test_index1"
 --------+--------+------+------------
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index2
 Partitioned index "testschema.test_index2"
@@ -386,6 +402,7 @@ Partitioned index "testschema.test_index2"
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index3
 Partitioned index "testschema.test_index3"
@@ -393,6 +410,7 @@ Partitioned index "testschema.test_index3"
 --------+--------+------+------------
  id     | bigint | yes  | id
 primary key, btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index4
 Partitioned index "testschema.test_index4"
@@ -401,6 +419,7 @@ Partitioned index "testschema.test_index4"
  id     | bigint | yes  | id
 unique, btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 SELECT * FROM testschema.test_default_tab_p;
  id | val 
@@ -416,6 +435,7 @@ Partitioned index "testschema.test_index1"
 --------+---------+------+------------
  val    | integer | yes  | val
 btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index2
 Partitioned index "testschema.test_index2"
@@ -424,6 +444,7 @@ Partitioned index "testschema.test_index2"
  val    | integer | yes  | val
 btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index3
 Partitioned index "testschema.test_index3"
@@ -431,6 +452,7 @@ Partitioned index "testschema.test_index3"
 --------+--------+------+------------
  id     | bigint | yes  | id
 primary key, btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index4
 Partitioned index "testschema.test_index4"
@@ -439,6 +461,7 @@ Partitioned index "testschema.test_index4"
  id     | bigint | yes  | id
 unique, btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 SELECT * FROM testschema.test_default_tab_p;
  id | val 
@@ -456,6 +479,7 @@ Partitioned index "testschema.test_index1"
 --------+---------+------+------------
  val    | integer | yes  | val
 btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index2
 Partitioned index "testschema.test_index2"
@@ -464,6 +488,7 @@ Partitioned index "testschema.test_index2"
  val    | integer | yes  | val
 btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index3
 Partitioned index "testschema.test_index3"
@@ -471,6 +496,7 @@ Partitioned index "testschema.test_index3"
 --------+--------+------+------------
  id     | bigint | yes  | id
 primary key, btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index4
 Partitioned index "testschema.test_index4"
@@ -479,6 +505,7 @@ Partitioned index "testschema.test_index4"
  id     | bigint | yes  | id
 unique, btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 -- tablespace should not change even if there is an index rewrite
 ALTER TABLE testschema.test_default_tab_p ALTER val TYPE bigint;
@@ -488,6 +515,7 @@ Partitioned index "testschema.test_index1"
 --------+--------+------+------------
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index2
 Partitioned index "testschema.test_index2"
@@ -496,6 +524,7 @@ Partitioned index "testschema.test_index2"
  val    | bigint | yes  | val
 btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index3
 Partitioned index "testschema.test_index3"
@@ -503,6 +532,7 @@ Partitioned index "testschema.test_index3"
 --------+--------+------+------------
  id     | bigint | yes  | id
 primary key, btree, for table "testschema.test_default_tab_p"
+Number of partitions: 1 (Use \d+ to list them.)
 
 \d testschema.test_index4
 Partitioned index "testschema.test_index4"
@@ -511,6 +541,7 @@ Partitioned index "testschema.test_index4"
  id     | bigint | yes  | id
 unique, btree, for table "testschema.test_default_tab_p"
 Tablespace: "regress_tblspace"
+Number of partitions: 1 (Use \d+ to list them.)
 
 DROP TABLE testschema.test_default_tab_p;
 -- check that default_tablespace affects index additions in ALTER TABLE

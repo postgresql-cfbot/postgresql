@@ -1131,3 +1131,6 @@ set search_path to default;
 
 set role to default;
 drop role regress_partitioning_role;
+
+-- slash dee on toast table:
+\d pg_toast.pg_toast_2619

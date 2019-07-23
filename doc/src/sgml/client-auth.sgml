@@ -1428,15 +1428,18 @@ omicron         bryanh                  guest1
     therefore only appropriate for closed networks where each client
     machine is under tight control and where the database and system
     administrators operate in close contact. In other words, you must
-    trust the machine running the ident server.
-    Heed the warning:
-    <blockquote>
-     <attribution>RFC 1413</attribution>
-     <para>
-      The Identification Protocol is not intended as an authorization
-      or access control protocol.
-     </para>
-    </blockquote>
+    trust the machine running the ident server. RFC 1413 explicitly
+    warns about using ident authentication for authorization or access
+    control:
+    <warning>
+     <blockquote>
+      <attribution>RFC 1413</attribution>
+      <para>
+       The Identification Protocol is not intended as an authorization
+       or access control protocol.
+      </para>
+     </blockquote>
+    </warning>
    </para>
 
    <para>

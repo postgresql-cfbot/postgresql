@@ -252,6 +252,41 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 			 cluster->pgopts ? cluster->pgopts : "", socket_string);
 
 	/*
+	 * If encryption key needs to be sent, run a separate process now and let
+	 * it send the password to the postmaster.  We cannot send the key later
+	 * in the current process because the exec_prog call below blocks until
+	 * the postmaster succeeds or fails to start (and it will definitely fail
+	 * if it receives no key).
+	 */
+	if (encryption_setup_done)
+	{
+#ifndef WIN32
+		pid_t sender;
+
+		sender = fork();
+		if (sender == 0)
+		{
+			char	port_str[6];
+
+			snprintf(port_str, sizeof(port_str), "%d", cluster->port);
+
+			/* in child process */
+			send_key_to_postmaster(cluster->sockdir, port_str,
+								   encryption_key);
+			exit(EXIT_SUCCESS);
+		}
+		else if (sender < 0)
+		{
+			pg_fatal("could not create key sender process");
+			exit(EXIT_FAILURE);
+		}
+#else
+		/* TODO  */
+		#error "W32 not implemented yet"
+#endif
+	}
+
+	/*
 	 * Don't throw an error right away, let connecting throw the error because
 	 * it might supply a reason for the failure.
 	 */
@@ -260,7 +295,7 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 							  (strcmp(SERVER_LOG_FILE,
 									  SERVER_START_LOG_FILE) != 0) ?
 							  SERVER_LOG_FILE : NULL,
-							  report_and_exit_on_error, false,
+							  report_and_exit_on_error, false, NULL,
 							  "%s", cmd);
 
 	/* Did it fail and we are just testing if the server could be started? */
@@ -336,7 +371,7 @@ stop_postmaster(bool in_atexit)
 	else
 		return;					/* no cluster running */
 
-	exec_prog(SERVER_STOP_LOG_FILE, NULL, !in_atexit, !in_atexit,
+	exec_prog(SERVER_STOP_LOG_FILE, NULL, !in_atexit, !in_atexit, NULL,
 			  "\"%s/pg_ctl\" -w -D \"%s\" -o \"%s\" %s stop",
 			  cluster->bindir, cluster->pgconfig,
 			  cluster->pgopts ? cluster->pgopts : "",

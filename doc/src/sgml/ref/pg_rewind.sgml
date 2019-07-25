@@ -140,6 +140,17 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-K</option></term>
+      <term><option>--encryption-key-command=<replaceable class="parameter">command</replaceable></option></term>
+      <listitem>
+       <para>
+        If the cluster is encrypted, run this command to retrieve the
+        encryption key. See <xref linkend="encryption"/> for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--source-pgdata=<replaceable class="parameter">directory</replaceable></option></term>
       <listitem>
        <para>

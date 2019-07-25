@@ -1,0 +1,84 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+-- Write something near the end of the first buffer, but leave some trailing
+-- space.
+SELECT buffile_seek(0, 8184);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('abcd');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+-- Leave the 2nd buffer empty, as well as a few leading bytes. Thus we should
+-- get a hole that spans the whole 2nd buffer as well as a few adjacent bytes
+-- on each side.
+SELECT buffile_seek(0, 2 * 8192 + 4);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('efgh');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+-- Check the initial part of the hole, which crosses the boundary of the 1st
+-- and the 2nd buffer.
+SELECT buffile_seek(0, 8184);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(16);
+            buffile_read            
+------------------------------------
+ \x61626364000000000000000000000000
+(1 row)
+
+-- Check the trailing part of the whole, which crosses the boundary of the 2nd
+-- and the 3rd buffer.
+SELECT buffile_seek(0, 2 * 8192 - 8);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(16);
+            buffile_read            
+------------------------------------
+ \x00000000000000000000000065666768
+(1 row)
+
+-- Check that the hole contains nothing but zeroes.
+SELECT buffile_seek(0, 8192 - 4);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT btrim(buffile_read(8192 + 8), '\x00');
+ btrim 
+-------
+ \x
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

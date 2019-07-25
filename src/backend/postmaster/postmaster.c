@@ -117,6 +117,7 @@
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -402,11 +403,13 @@ static void PostmasterStateMachine(void);
 static void BackendInitialize(Port *port);
 static void BackendRun(Port *port) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
-static int	ServerLoop(void);
+static int	ServerLoop(bool receive_encryption_key);
+static void ServerLoopCheckTimeouts(void);
 static int	BackendStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool secure_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
+static void processEncryptionKey(void *pkt);
 static int	initMasks(fd_set *rmask);
 static void report_fork_failure_to_client(Port *port, int errnum);
 static CAC_state canAcceptConnections(void);
@@ -1364,6 +1367,41 @@ PostmasterMain(int argc, char *argv[])
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
 
 	/*
+	 * If encryption key is needed and we don't have it yet, call ServerLoop()
+	 * in a restricted mode which allows a client application to send us the
+	 * key. Regular client connections are not allowed yet.
+	 */
+	if (data_encrypted && !encryption_setup_done)
+	{
+		char	sample[ENCRYPTION_SAMPLE_SIZE];
+
+		status = ServerLoop(true);
+
+		/* No other return code should be seen here. */
+		Assert(status == STATUS_OK);
+
+		/* ServerLoop() shouldn't have exited otherwise. */
+		Assert(encryption_key_shmem->initialized);
+
+		/*
+		 * Take a local copy of the key so that we don't have to receive it
+		 * again if restarting after a crash.
+		 */
+		memcpy(encryption_key, encryption_key_shmem, ENCRYPTION_KEY_LENGTH);
+
+		/* Finalize the setup. */
+		setup_encryption();
+
+		/* Verify the key. */
+		sample_encryption(sample);
+		if (memcmp(encryption_verification, sample, ENCRYPTION_SAMPLE_SIZE))
+			ereport(FATAL,
+					(errmsg("invalid encryption key"),
+					 errdetail("The passed encryption key does not match"
+							   " database encryption key.")));
+	}
+
+	/*
 	 * We're ready to rock and roll...
 	 */
 	StartupPID = StartupDataBase();
@@ -1374,7 +1412,7 @@ PostmasterMain(int argc, char *argv[])
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
 
-	status = ServerLoop();
+	status = ServerLoop(false);
 
 	/*
 	 * ServerLoop probably shouldn't ever return, but if it does, close down.
@@ -1611,20 +1649,39 @@ DetermineSleepTime(struct timeval *timeout)
 	}
 }
 
+static time_t		last_lockfile_recheck_time, last_touch_time;
+
+/*
+ * The maximum amount of time postmaster can wait for encryption key if the
+ * cluster is encrypted. It should be shorter than the time pg_ctl waits for
+ * postgres to start (60 seconds) and should not be too long so that failure
+ * to specify encryption key command is recognized soon.
+ */
+#define	MAX_WAIT_FOR_KEY_SECS	20
+
+/* When should waiting for encryption key end. */
+static TimestampTz	wait_for_keys_until = 0;
+
 /*
  * Main idle loop of postmaster
+ *
+ * If receive_encryption_key is true, only launch backend(s) to receive
+ * cluster encryption key and stop as soon as the key is in shared memory.
  *
  * NB: Needs to be called with signals blocked
  */
 static int
-ServerLoop(void)
+ServerLoop(bool receive_encryption_key)
 {
 	fd_set		readmask;
 	int			nSockets;
-	time_t		last_lockfile_recheck_time,
-				last_touch_time;
 
 	last_lockfile_recheck_time = last_touch_time = time(NULL);
+
+	/* Compute wait_for_keys_until if needed and not done yet. */
+	if (receive_encryption_key && wait_for_keys_until == 0)
+		wait_for_keys_until = PgStartTime +
+			MAX_WAIT_FOR_KEY_SECS * USECS_PER_SEC;
 
 	nSockets = initMasks(&readmask);
 
@@ -1632,7 +1689,6 @@ ServerLoop(void)
 	{
 		fd_set		rmask;
 		int			selres;
-		time_t		now;
 
 		/*
 		 * Wait for a connection request to arrive.
@@ -1662,6 +1718,27 @@ ServerLoop(void)
 
 			/* Needs to run with blocked signals! */
 			DetermineSleepTime(&timeout);
+
+			/*
+			 * If waiting for the encryption key, make sure
+			 * MAX_WAIT_FOR_KEY_SECS is not exceeded.
+			 */
+			if (receive_encryption_key)
+			{
+				TimestampTz	timeout_tz, timeout_end;;
+
+				timeout_tz = timeout.tv_sec * USECS_PER_SEC +
+					timeout.tv_usec;
+				timeout_end = GetCurrentTimestamp() + timeout_tz;
+
+				if (timeout_end > wait_for_keys_until)
+				{
+					timeout_tz -= (timeout_end - wait_for_keys_until);
+
+					timeout.tv_sec = timeout_tz / USECS_PER_SEC;
+					timeout.tv_usec = timeout_tz % USECS_PER_SEC;
+				}
+			}
 
 			PG_SETMASK(&UnBlockSig);
 
@@ -1712,6 +1789,33 @@ ServerLoop(void)
 					}
 				}
 			}
+		}
+
+		/*
+		 * If only waiting for the encryption key, it's too early to launch
+		 * the other processes.
+		 */
+		if (receive_encryption_key)
+		{
+			/* The regular checks should take place though. */
+			ServerLoopCheckTimeouts();
+
+			/* Done if the key has been delivered. */
+			if (encryption_key_shmem->initialized)
+				return STATUS_OK;
+
+			/*
+			 * Do not wait for the key forever. One problem we solve here is
+			 * that pg_ctl (or custom script that starts postgres) does not
+			 * have to check whether the cluster is encrypted. If DBA forgets
+			 * to pass the encryption key command, he'll simply see the
+			 * startup to fail and the appropriate message to appear in the
+			 * server log.
+			 */
+			if (GetCurrentTimestamp() >= wait_for_keys_until)
+				ereport(FATAL, (errmsg("Encryption key not received.")));
+
+			continue;
 		}
 
 		/* If we have lost the log collector, try to start a new one */
@@ -1797,58 +1901,68 @@ ServerLoop(void)
 		 * us sleep at most that long; except for SIGKILL timeout which has
 		 * special-case logic there.
 		 */
-		now = time(NULL);
+		ServerLoopCheckTimeouts();
+	}
+}
 
-		/*
-		 * If we already sent SIGQUIT to children and they are slow to shut
-		 * down, it's time to send them SIGKILL.  This doesn't happen
-		 * normally, but under certain conditions backends can get stuck while
-		 * shutting down.  This is a last measure to get them unwedged.
-		 *
-		 * Note we also do this during recovery from a process crash.
-		 */
-		if ((Shutdown >= ImmediateShutdown || (FatalError && !SendStop)) &&
-			AbortStartTime != 0 &&
-			(now - AbortStartTime) >= SIGKILL_CHILDREN_AFTER_SECS)
-		{
-			/* We were gentle with them before. Not anymore */
-			TerminateChildren(SIGKILL);
-			/* reset flag so we don't SIGKILL again */
-			AbortStartTime = 0;
-		}
+/*
+ * Subroutine of ServerLoop() that checks if various timeouts elapsed, and if
+ * so, takes the appropriate action.
+ */
+static void
+ServerLoopCheckTimeouts(void)
+{
+	time_t		now = time(NULL);
 
-		/*
-		 * Once a minute, verify that postmaster.pid hasn't been removed or
-		 * overwritten.  If it has, we force a shutdown.  This avoids having
-		 * postmasters and child processes hanging around after their database
-		 * is gone, and maybe causing problems if a new database cluster is
-		 * created in the same place.  It also provides some protection
-		 * against a DBA foolishly removing postmaster.pid and manually
-		 * starting a new postmaster.  Data corruption is likely to ensue from
-		 * that anyway, but we can minimize the damage by aborting ASAP.
-		 */
-		if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
-		{
-			if (!RecheckDataDirLockFile())
-			{
-				ereport(LOG,
-						(errmsg("performing immediate shutdown because data directory lock file is invalid")));
-				kill(MyProcPid, SIGQUIT);
-			}
-			last_lockfile_recheck_time = now;
-		}
+	/*
+	 * If we already sent SIGQUIT to children and they are slow to shut down,
+	 * it's time to send them SIGKILL.  This doesn't happen normally, but
+	 * under certain conditions backends can get stuck while shutting down.
+	 * This is a last measure to get them unwedged.
+	 *
+	 * Note we also do this during recovery from a process crash.
+	 */
+	if ((Shutdown >= ImmediateShutdown || (FatalError && !SendStop)) &&
+		AbortStartTime != 0 &&
+		(now - AbortStartTime) >= SIGKILL_CHILDREN_AFTER_SECS)
+	{
+		/* We were gentle with them before. Not anymore */
+		TerminateChildren(SIGKILL);
+		/* reset flag so we don't SIGKILL again */
+		AbortStartTime = 0;
+	}
 
-		/*
-		 * Touch Unix socket and lock files every 58 minutes, to ensure that
-		 * they are not removed by overzealous /tmp-cleaning tasks.  We assume
-		 * no one runs cleaners with cutoff times of less than an hour ...
-		 */
-		if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
+	/*
+	 * Once a minute, verify that postmaster.pid hasn't been removed or
+	 * overwritten.  If it has, we force a shutdown.  This avoids having
+	 * postmasters and child processes hanging around after their database is
+	 * gone, and maybe causing problems if a new database cluster is created
+	 * in the same place.  It also provides some protection against a DBA
+	 * foolishly removing postmaster.pid and manually starting a new
+	 * postmaster.  Data corruption is likely to ensue from that anyway, but
+	 * we can minimize the damage by aborting ASAP.
+	 */
+	if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
+	{
+		if (!RecheckDataDirLockFile())
 		{
-			TouchSocketFiles();
-			TouchSocketLockFiles();
-			last_touch_time = now;
+			ereport(LOG,
+					(errmsg("performing immediate shutdown because data directory lock file is invalid")));
+			kill(MyProcPid, SIGQUIT);
 		}
+		last_lockfile_recheck_time = now;
+	}
+
+	/*
+	 * Touch Unix socket and lock files every 58 minutes, to ensure that they
+	 * are not removed by overzealous /tmp-cleaning tasks.  We assume no one
+	 * runs cleaners with cutoff times of less than an hour ...
+	 */
+	if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
+	{
+		TouchSocketFiles();
+		TouchSocketLockFiles();
+		last_touch_time = now;
 	}
 }
 
@@ -1976,6 +2090,13 @@ ProcessStartupPacket(Port *port, bool secure_done)
 	if (proto == CANCEL_REQUEST_CODE)
 	{
 		processCancelRequest(port, buf);
+		/* Not really an error, but we don't want to proceed further */
+		return STATUS_ERROR;
+	}
+
+	if (proto == ENCRYPTION_KEY_MSG_CODE && data_encrypted)
+	{
+		processEncryptionKey(buf);
 		/* Not really an error, but we don't want to proceed further */
 		return STATUS_ERROR;
 	}
@@ -2384,6 +2505,77 @@ processCancelRequest(Port *port, void *pkt)
 }
 
 /*
+ * Process a message from backend that contains the encryption key.
+ *
+ * Currently there's no guarantee that only a single backend tries to deliver
+ * the key, but it's not worth trying to synchronize the access. If multiple
+ * callers try to process the same message, nothing should get broken. If some
+ * caller is delivering a wrong key (e.g. due to misconfiguration of another
+ * cluster), it does not help if it waits until processing of the correct key
+ * is finished.
+ *
+ * If the key gets messed up, the worst case is that the server fails to start
+ * up. (No data corruption is expected.)
+ *
+ * Client should not expect any response to this request: failure on client
+ * side indicates either broken connection, wrong key, bug in
+ * send_key_to_postmaster() or repeated call of the client - nothing to be
+ * handled easily by client code. Most of these failures need attention of the
+ * DBA.
+ */
+void
+processEncryptionKey(void *pkt)
+{
+	EncryptionKeyMsg	*msg = (EncryptionKeyMsg *) pkt;
+
+	/* Backend to receive the key should not be launched otherwise. */
+	Assert(data_encrypted);
+
+	/*
+	 * The checks below would fire in this case too, but this error message is
+	 * clearer for the case like this.
+	 */
+	if (pmState != PM_INIT)
+	{
+		ereport(COMMERROR,
+				(errmsg("encryption key can only be setup during startup"),
+				 errhint("Check if the cluster is encrypted.")));
+		return;
+	}
+
+	/*
+	 * Someone else already initialized the key. This is not fatal but seems
+	 * to indicate misconfiguration which DBA should be aware of. Check also
+	 * encryption_setup_done because shared memory could have been reset. As
+	 * postmaster has a local copy of the key, the new key should not be used,
+	 * but it'd be inconsistent if we didn't complain in this special case.
+	 */
+	if (encryption_key_shmem->initialized || encryption_setup_done)
+	{
+		ereport(COMMERROR,
+				(errmsg("received encryption key more than once")));
+		return;
+	}
+
+	if (msg->version != 1)
+	{
+		ereport(COMMERROR,
+				(errmsg("unexpected version of encryption key message %d",
+					msg->version)));
+		return;
+	}
+
+	memcpy(encryption_key_shmem->data, msg->data, ENCRYPTION_KEY_LENGTH);
+	/*
+	 * XXX Is memory barrier needed here to make sure that the copying is
+	 * done?
+	 */
+	encryption_key_shmem->initialized = true;
+
+	ereport(DEBUG1, (errmsg_internal("encryption key received")));
+}
+
+/*
  * canAcceptConnections --- check to see if database state allows connections.
  */
 static CAC_state
@@ -2408,7 +2600,8 @@ canAcceptConnections(void)
 		else if (Shutdown > NoShutdown)
 			return CAC_SHUTDOWN;	/* shutdown is pending */
 		else if (!FatalError &&
-				 (pmState == PM_STARTUP ||
+				 ((data_encrypted && pmState == PM_INIT) ||
+				  pmState == PM_STARTUP ||
 				  pmState == PM_RECOVERY))
 			return CAC_STARTUP; /* normal startup */
 		else if (!FatalError &&
@@ -2751,6 +2944,16 @@ pmdie(SIGNAL_ARGS)
 				pmState = (pmState == PM_RUN) ?
 					PM_WAIT_BACKUP : PM_WAIT_READONLY;
 			}
+			else if (pmState == PM_INIT && data_encrypted &&
+					 !encryption_setup_done)
+			{
+				/*
+				 * Only backends to receive encryption key may be active now,
+				 * and these should not be involved in any transactions.
+				 */
+				SignalSomeChildren(SIGTERM, BACKEND_TYPE_NORMAL);
+				pmState = PM_WAIT_BACKENDS;
+			}
 
 			/*
 			 * Now wait for online backup mode to end and backends to exit. If
@@ -2816,6 +3019,16 @@ pmdie(SIGNAL_ARGS)
 				/* and the walwriter too */
 				if (WalWriterPID != 0)
 					signal_child(WalWriterPID, SIGTERM);
+				pmState = PM_WAIT_BACKENDS;
+			}
+			else if (pmState == PM_INIT && data_encrypted &&
+					 !encryption_setup_done)
+			{
+				/*
+				 * Only backends to receive encryption key may be active now,
+				 * and these should not be involved in any transactions.
+				 */
+				SignalSomeChildren(SIGTERM, BACKEND_TYPE_NORMAL);
 				pmState = PM_WAIT_BACKENDS;
 			}
 

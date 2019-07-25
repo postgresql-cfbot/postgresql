@@ -48,6 +48,7 @@
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_default_acl_d.h"
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
@@ -280,7 +281,7 @@ static void binary_upgrade_set_type_oids_by_type_oid(Archive *fout,
 													 bool force_array_type);
 static bool binary_upgrade_set_type_oids_by_rel_oid(Archive *fout,
 													PQExpBuffer upgrade_buffer, Oid pg_rel_oid);
-static void binary_upgrade_set_pg_class_oids(Archive *fout,
+static void binary_upgrade_set_pg_class_oids_and_relfilenodes(Archive *fout,
 											 PQExpBuffer upgrade_buffer,
 											 Oid pg_class_oid, bool is_index);
 static void binary_upgrade_extension_member(PQExpBuffer upgrade_buffer,
@@ -2630,6 +2631,7 @@ dumpDatabase(Archive *fout)
 	PQExpBuffer dbQry = createPQExpBuffer();
 	PQExpBuffer delQry = createPQExpBuffer();
 	PQExpBuffer creaQry = createPQExpBuffer();
+	PQExpBuffer setDBIdQry = createPQExpBuffer();
 	PQExpBuffer labelq = createPQExpBuffer();
 	PGconn	   *conn = GetConnection(fout);
 	PGresult   *res;
@@ -2798,6 +2800,37 @@ dumpDatabase(Archive *fout)
 	tablespace = PQgetvalue(res, 0, i_tablespace);
 
 	qdatname = pg_strdup(fmtId(datname));
+
+	/*
+	 * Make sure that pg_upgrade does not change database OID. Don't care
+	 * about "postgres" database, backend will assign it fixed OID
+	 * anyway. ("template1" has fixed OID too but the value 1 should not
+	 * collide with any other OID so backend pays no attention to it.)
+	 */
+	if (dopt->binary_upgrade && dbCatId.oid != PostgresDbOid)
+	{
+		appendPQExpBufferStr(setDBIdQry, "\n-- For binary upgrade, must preserve pg_database oid\n");
+		appendPQExpBuffer(setDBIdQry,
+						  "SELECT pg_catalog.binary_upgrade_set_next_pg_database_oid('%u'::pg_catalog.oid);\n",
+						  dbCatId.oid);
+
+		/*
+		 * Need a separate entry, otherwise the command will be run in the
+		 * same transaction as the CREATE DATABASE command, which is not
+		 * allowed.
+		 */
+		ArchiveEntry(fout,
+					 dbCatId,		/* catalog ID */
+					 dbDumpId,		/* dump ID */
+					 ARCHIVE_OPTS(.tag = datname,
+								  .owner = dba,
+								  .description = "SET_DB_OID",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = setDBIdQry->data,
+								  .dropStmt = NULL));
+
+		destroyPQExpBuffer(setDBIdQry);
+	}
 
 	/*
 	 * Prepare the CREATE DATABASE command.  We must specify encoding, locale,
@@ -4399,36 +4432,57 @@ binary_upgrade_set_type_oids_by_rel_oid(Archive *fout,
 	return toast_set;
 }
 
+/*
+ * The function handles both oid and relfilenode since they are related to one
+ * another. It'd be inefficient if we ran two similar queries for each
+ * relation instead of just one.
+ */
 static void
-binary_upgrade_set_pg_class_oids(Archive *fout,
-								 PQExpBuffer upgrade_buffer, Oid pg_class_oid,
-								 bool is_index)
+binary_upgrade_set_pg_class_oids_and_relfilenodes(Archive *fout,
+												  PQExpBuffer upgrade_buffer,
+												  Oid pg_class_oid,
+												  bool is_index)
 {
 	PQExpBuffer upgrade_query = createPQExpBuffer();
 	PGresult   *upgrade_res;
+	Oid			pg_class_relfilenode;
 	Oid			pg_class_reltoastrelid;
+	Oid			pg_class_relfilenode_toast;
 	Oid			pg_index_indexrelid;
+	Oid			pg_class_relfilenode_toast_idx;
 
 	appendPQExpBuffer(upgrade_query,
-					  "SELECT c.reltoastrelid, i.indexrelid "
+					  "SELECT c.relfilenode, c.reltoastrelid, ct.relfilenode AS relfilenode_toast, i.indexrelid, cti.relfilenode AS relfilenode_toast_index "
 					  "FROM pg_catalog.pg_class c LEFT JOIN "
 					  "pg_catalog.pg_index i ON (c.reltoastrelid = i.indrelid AND i.indisvalid) "
+					  "LEFT JOIN pg_catalog.pg_class ct ON (c.reltoastrelid = ct.oid) "
+					  "LEFT JOIN pg_catalog.pg_class AS cti ON (i.indexrelid = cti.oid) "
 					  "WHERE c.oid = '%u'::pg_catalog.oid;",
 					  pg_class_oid);
 
 	upgrade_res = ExecuteSqlQueryForSingleRow(fout, upgrade_query->data);
 
+	pg_class_relfilenode = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "relfilenode")));
 	pg_class_reltoastrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "reltoastrelid")));
+	pg_class_relfilenode_toast = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "relfilenode_toast")));
 	pg_index_indexrelid = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "indexrelid")));
+	pg_class_relfilenode_toast_idx = atooid(PQgetvalue(upgrade_res, 0, PQfnumber(upgrade_res, "relfilenode_toast_index")));
 
 	appendPQExpBufferStr(upgrade_buffer,
-						 "\n-- For binary upgrade, must preserve pg_class oids\n");
+						 "\n-- For binary upgrade, must preserve pg_class oids and relfilenodes\n");
 
 	if (!is_index)
 	{
 		appendPQExpBuffer(upgrade_buffer,
 						  "SELECT pg_catalog.binary_upgrade_set_next_heap_pg_class_oid('%u'::pg_catalog.oid);\n",
 						  pg_class_oid);
+
+		/* Not every relation has storage. */
+		if (OidIsValid(pg_class_relfilenode))
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT pg_catalog.binary_upgrade_set_next_heap_pg_class_relfilenode('%u'::pg_catalog.oid);\n",
+							  pg_class_relfilenode);
+
 		/* only tables have toast tables, not indexes */
 		if (OidIsValid(pg_class_reltoastrelid))
 		{
@@ -4444,17 +4498,28 @@ binary_upgrade_set_pg_class_oids(Archive *fout,
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT pg_catalog.binary_upgrade_set_next_toast_pg_class_oid('%u'::pg_catalog.oid);\n",
 							  pg_class_reltoastrelid);
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT pg_catalog.binary_upgrade_set_next_toast_pg_class_relfilenode('%u'::pg_catalog.oid);\n",
+							  pg_class_relfilenode_toast);
 
 			/* every toast table has an index */
 			appendPQExpBuffer(upgrade_buffer,
 							  "SELECT pg_catalog.binary_upgrade_set_next_index_pg_class_oid('%u'::pg_catalog.oid);\n",
 							  pg_index_indexrelid);
+			appendPQExpBuffer(upgrade_buffer,
+							  "SELECT pg_catalog.binary_upgrade_set_next_index_pg_class_relfilenode('%u'::pg_catalog.oid);\n",
+							  pg_class_relfilenode_toast_idx);
 		}
 	}
 	else
+	{
 		appendPQExpBuffer(upgrade_buffer,
 						  "SELECT pg_catalog.binary_upgrade_set_next_index_pg_class_oid('%u'::pg_catalog.oid);\n",
 						  pg_class_oid);
+		appendPQExpBuffer(upgrade_buffer,
+						  "SELECT pg_catalog.binary_upgrade_set_next_index_pg_class_relfilenode('%u'::pg_catalog.oid);\n",
+						  pg_class_relfilenode);
+	}
 
 	appendPQExpBufferChar(upgrade_buffer, '\n');
 
@@ -11014,7 +11079,7 @@ dumpCompositeType(Archive *fout, TypeInfo *tyinfo)
 		binary_upgrade_set_type_oids_by_type_oid(fout, q,
 												 tyinfo->dobj.catId.oid,
 												 false);
-		binary_upgrade_set_pg_class_oids(fout, q, tyinfo->typrelid, false);
+		binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, q, tyinfo->typrelid, false);
 	}
 
 	qtypname = pg_strdup(fmtId(tyinfo->dobj.name));
@@ -15513,7 +15578,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		appendPQExpBuffer(delq, "DROP VIEW %s;\n", qualrelname);
 
 		if (dopt->binary_upgrade)
-			binary_upgrade_set_pg_class_oids(fout, q,
+			binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, q,
 											 tbinfo->dobj.catId.oid, false);
 
 		appendPQExpBuffer(q, "CREATE VIEW %s", qualrelname);
@@ -15589,7 +15654,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		appendPQExpBuffer(delq, "DROP %s %s;\n", reltypename, qualrelname);
 
 		if (dopt->binary_upgrade)
-			binary_upgrade_set_pg_class_oids(fout, q,
+			binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, q,
 											 tbinfo->dobj.catId.oid, false);
 
 		appendPQExpBuffer(q, "CREATE %s%s %s",
@@ -16343,7 +16408,7 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 		int			nstatvals;
 
 		if (dopt->binary_upgrade)
-			binary_upgrade_set_pg_class_oids(fout, q,
+			binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, q,
 											 indxinfo->dobj.catId.oid, true);
 
 		/* Plain secondary index */
@@ -16565,7 +16630,7 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 				  coninfo->dobj.name);
 
 		if (dopt->binary_upgrade)
-			binary_upgrade_set_pg_class_oids(fout, q,
+			binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, q,
 											 indxinfo->dobj.catId.oid, true);
 
 		appendPQExpBuffer(q, "ALTER TABLE ONLY %s\n",
@@ -16977,11 +17042,12 @@ dumpSequence(Archive *fout, TableInfo *tbinfo)
 
 	if (dopt->binary_upgrade)
 	{
-		binary_upgrade_set_pg_class_oids(fout, query,
+		binary_upgrade_set_pg_class_oids_and_relfilenodes(fout, query,
 										 tbinfo->dobj.catId.oid, false);
 		binary_upgrade_set_type_oids_by_rel_oid(fout, query,
 												tbinfo->dobj.catId.oid);
 	}
+
 
 	if (tbinfo->is_identity_sequence)
 	{

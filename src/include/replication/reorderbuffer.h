@@ -387,10 +387,6 @@ struct ReorderBuffer
 	MemoryContext tup_context;
 
 	XLogRecPtr	current_restart_decoding_lsn;
-
-	/* buffer for disk<->memory conversions */
-	char	   *outbuf;
-	Size		outbufsize;
 };
 
 

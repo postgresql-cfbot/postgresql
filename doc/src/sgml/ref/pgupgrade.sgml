@@ -120,6 +120,37 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>-K</option></term>
+      <term><option>--encryption-key-command=<replaceable class="parameter">command</replaceable></option></term>
+      <listitem>
+       <para>
+        If the clusters are encrypted, run this command to retrieve the
+        encryption key. This is the same command that was passed to
+        <xref linkend="app-initdb"/> for cluster creation. For the upgrade to
+        be successful, both old and new clusters must use the same key.
+        Therefore, unless the command contains the <literal>%D</literal>
+        string, it does not matter which cluster the command comes from.
+       </para>
+
+       <note>
+         <para>
+           If you are using <xref linkend="app-pg-keytool"/> to derive the
+           encryption key (see <xref linkend="app-initdb-data-encr-cmd"/>),
+           make sure the <option>-D</option> points to
+           the <emphasis>old</emphasis> cluster. If it pointed to the new
+           one then the new cluster would derive a different key from the same
+           password and thus <xref linkend="pgupgrade"/> would fail to start
+           the new cluster.
+         </para>
+       </note>
+
+       <para>
+         See <xref linkend="encryption"/> for details on the command.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-k</option></term>
       <term><option>--link</option></term>
       <listitem><para>use hard links instead of copying files to the new

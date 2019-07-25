@@ -20,6 +20,7 @@
 #include "executor/instrument.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
@@ -207,9 +208,13 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	{
 		SMgrRelation oreln;
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+		bool	lsn_is_fake = false;
 
 		/* Find smgr relation for buffer */
 		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+
+		if (data_encrypted)
+			lsn_is_fake = EnforceLSNUpdateForEncryption((char *) localpage);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
@@ -219,6 +224,9 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
+
+		if (lsn_is_fake)
+			RestoreInvalidLSN(localpage);
 
 		/* Mark not-dirty now in case we error out below */
 		buf_state &= ~BM_DIRTY;

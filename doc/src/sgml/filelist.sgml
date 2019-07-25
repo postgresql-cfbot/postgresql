@@ -48,6 +48,7 @@
 <!ENTITY wal           SYSTEM "wal.sgml">
 <!ENTITY logical-replication    SYSTEM "logical-replication.sgml">
 <!ENTITY jit    SYSTEM "jit.sgml">
+<!ENTITY encryption    SYSTEM "encryption.sgml">
 
 <!-- programmer's guide -->
 <!ENTITY bgworker   SYSTEM "bgworker.sgml">

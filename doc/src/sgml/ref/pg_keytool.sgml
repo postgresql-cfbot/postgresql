@@ -1,0 +1,121 @@
+<!--
+doc/src/sgml/ref/pg_keytool.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="app-pg-keytool">
+ <indexterm zone="app-pg-keytool">
+  <primary>pg_keysetup</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle><application>pg_keytool</application></refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo>Application</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>pg_keytool</refname>
+  <refpurpose>produce cluster encryption key, possibly deriving it from a
+  passphrase</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+  <cmdsynopsis>
+   <command>pg_keysetup</command>
+   <arg rep="repeat"><replaceable class="parameter">option</replaceable></arg>
+  </cmdsynopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+  <para>
+   <application>pg_keytool</application> reads encryption key or password from
+   the standard input. If it received password, it runs <firstterm>key
+   derivation function</firstterm> on it in order to derive the key. The
+   encryption key is written either to the standard output or sent to via
+   frontend/backend protocol to postmaster process which is being started up.
+  </para>
+
+  <para>
+    One common use case is that <application>pg_keytool</application> is used
+    within encryption key command, see the examples in
+    <xref linkend="encryption"/>. In this case it sends the key to the
+    standard output.
+  </para>
+
+  <para>
+    The other use case is that <productname>PostgreSQL</productname> is
+    started other way than using <xref linkend="app-pg-ctl"/>, typically
+    via <firstterm>systemd</firstterm> or a custom script. In this
+    case <application>pg_keytool</application> can be used to send the key to
+    specified TCP/IP port or to an Unix socket, on which the server
+    listens. This is the same port or socket to which applications will
+    eventually connect, but when the encrypted cluster starts up, it only
+    accepts the key.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Options</title>
+
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><option>-D <replaceable>directory</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the directory where the database cluster is
+        stored. Different directory generally means that a different key will
+        be derived from the same password.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-h <replaceable class="parameter">hostname</replaceable></option></term>
+       <term><option>--host=<replaceable class="parameter">hostname</replaceable></option></term>
+       <listitem>
+         <para>
+           Specifies the host name of the machine on which the server is
+           listening. If the value begins with a slash, it is used as the
+           directory for the Unix-domain socket.
+         </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-p <replaceable class="parameter">port</replaceable></option></term>
+       <listitem>
+         <para>
+           Specifies the TCP port or the local Unix-domain socket file
+           extension on which the server is listening for
+           connections. Defaults to the value of the <envar>PGPORT</envar>
+           environment variable or, if not set, to the port specified at
+           compile time, usually 5432.
+         </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-s</option></term>
+       <listitem>
+         <para>
+           Send the key to <productname>PostgreSQL</productname> server rather
+           than to standard output.
+         </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-w</option></term>
+       <listitem>
+         <para>
+           Expect password on standard input rather than encryption key.
+         </para>
+       </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+ </refsect1>
+</refentry>

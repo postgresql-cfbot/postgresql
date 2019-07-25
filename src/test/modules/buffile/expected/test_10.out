@@ -1,0 +1,76 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+-- Write some data at the end of the buffer.
+SELECT buffile_seek(0, 8188);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('abcd');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+SELECT buffile_seek(0, 8189);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+-- Enforce flush with the write position not at the end of the buffer. This is
+-- special by not moving curOffset to the next buffer.
+SELECT buffile_read(1);
+ buffile_read 
+--------------
+ \x62
+(1 row)
+
+-- Therefore the next writes should eventually affect the original data. (Here
+-- we also test going directly from read to write and vice versa.)
+SELECT buffile_write('x');
+ buffile_write 
+---------------
+             1
+(1 row)
+
+SELECT buffile_read(1);
+ buffile_read 
+--------------
+ \x64
+(1 row)
+
+-- Start a new buffer, i.e. force flushing of the previous one.
+SELECT buffile_write('z');
+ buffile_write 
+---------------
+             1
+(1 row)
+
+-- Check that the 'x' and 'y' letters are in the first buffer, not in the
+-- 2nd. (We read enough data to find any non-zero bytes in the 2nd buffer.)
+SELECT buffile_seek(0, 8188);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(4 + 8192);
+ buffile_read 
+--------------
+ \x616278647a
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

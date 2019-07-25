@@ -40,6 +40,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/condition_variable.h"
+#include "storage/encryption.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
@@ -58,6 +59,7 @@ uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
 
 static void CheckerModeMain(void);
 static void BootstrapModeMain(void);
+static int bootstrap_getc(void);
 static void bootstrap_signals(void);
 static void ShutdownAuxiliaryProcess(int code, Datum arg);
 static Form_pg_attribute AllocateAttribute(void);
@@ -226,7 +228,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:FkKr:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -252,6 +254,22 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);
 				break;
+#ifdef	USE_ENCRYPTION
+			case 'K':
+				/*
+				 * When auxiliary process (bootstrap) starts, the control file
+				 * does not exist yet, so command line option needs to be used
+				 * to indicate that the encryption is enabled.
+				 *
+				 * Postmaster should not pass this option. Instead, it just
+				 * sets data_encrypted according to the control file and child
+				 * processes inherit that.
+				 */
+				Assert(!IsUnderPostmaster);
+				data_encrypted = true;
+
+				break;
+#endif							/* USE_ENCRYPTION */
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
@@ -372,6 +390,24 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* Initialize MaxBackends (if under postmaster, was done already) */
 	if (!IsUnderPostmaster)
 		InitializeMaxBackends();
+
+	/*
+	 * If data_encryption is set because of command line option, do the setup
+	 * now. (If set by postmaster, postmaster should have performed the
+	 * setup.)
+	 *
+	 * This should only be useful for the bootstrap process. Anyone else
+	 * detects the encryption via ReadControlFile().
+	 */
+	if (data_encrypted && MyAuxProcType == BootstrapProcess)
+	{
+		Assert(!IsUnderPostmaster);
+
+		/* Read the key from stdin. */
+		read_encryption_key(bootstrap_getc);
+
+		setup_encryption();
+	}
 
 	BaseInit();
 
@@ -549,6 +585,16 @@ BootstrapModeMain(void)
  *						misc functions
  * ----------------------------------------------------------------
  */
+
+/*
+ * Read a single character from stdin. This is a callback for
+ * read_encryption_key().
+ */
+static int
+bootstrap_getc(void)
+{
+	return getc(stdin);
+}
 
 /*
  * Set up signal handling for a bootstrap process

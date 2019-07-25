@@ -20,9 +20,9 @@ include $(top_builddir)/src/Makefile.global
 # but let's not pull that in on platforms where we don't need it.
 ifeq ($(PORTNAME), win32)
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
-LDFLAGS_INTERNAL += $(libpq_pgport)
 SUBMAKE_LIBPQ := submake-libpq
 endif
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
 OBJS=	pg_ctl.o $(WIN32RES)
 

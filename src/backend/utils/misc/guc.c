@@ -70,8 +70,10 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/buffile.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
+#include "storage/encryption.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -172,6 +174,7 @@ static void assign_session_replication_role(int newval, void *extra);
 static bool check_temp_buffers(int *newval, void **extra, GucSource source);
 static bool check_bonjour(bool *newval, void **extra, GucSource source);
 static bool check_ssl(bool *newval, void **extra, GucSource source);
+static bool check_full_page_writes(bool *newval, void **extra, GucSource source);
 static bool check_stage_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_canonical_path(char **newval, void **extra, GucSource source);
@@ -187,6 +190,8 @@ static const char *show_tcp_keepalives_idle(void);
 static const char *show_tcp_keepalives_interval(void);
 static const char *show_tcp_keepalives_count(void);
 static const char *show_tcp_user_timeout(void);
+static bool check_buffile_max_filesize(int *newval, void **extra, GucSource source);
+static void assign_buffile_max_filesize(int newval, void *extra);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
 static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
@@ -1172,7 +1177,7 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&fullPageWrites,
 		true,
-		NULL, NULL, NULL
+		check_full_page_writes, NULL, NULL
 	},
 
 	{
@@ -1831,6 +1836,17 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&data_checksums,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"data_encryption", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether data encryption is turned on for this cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&data_encrypted,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3194,6 +3210,18 @@ static struct config_int ConfigureNamesInt[] =
 		&tcp_user_timeout,
 		0, 0, INT_MAX,
 		NULL, assign_tcp_user_timeout, show_tcp_user_timeout
+	},
+
+	{
+		/* Not for general use */
+		{"buffile_max_filesize", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Maximum size of BufFile segment."),
+			gettext_noop("This makes testing of some corner cases easier, especially when read or write crosses segment boundary."),
+			GUC_NOT_IN_SAMPLE | GUC_UNIT_BYTE
+		},
+		&buffile_max_filesize,
+		MAX_PHYSICAL_FILESIZE, BLCKSZ, MAX_PHYSICAL_FILESIZE,
+		check_buffile_max_filesize, assign_buffile_max_filesize, NULL
 	},
 
 	/* End-of-list marker */
@@ -11093,6 +11121,19 @@ check_ssl(bool *newval, void **extra, GucSource source)
 }
 
 static bool
+check_full_page_writes(bool *newval, void **extra, GucSource source)
+{
+	if (!(*newval) && data_encrypted)
+	{
+		GUC_check_errdetail("Cannot disable parameter when the cluster is encrypted.");
+
+		return false;
+	}
+
+	return true;
+}
+
+static bool
 check_stage_log_stats(bool *newval, void **extra, GucSource source)
 {
 	if (*newval && log_statement_stats)
@@ -11272,6 +11313,23 @@ show_tcp_user_timeout(void)
 
 	snprintf(nbuf, sizeof(nbuf), "%d", pq_gettcpusertimeout(MyProcPort));
 	return nbuf;
+}
+
+static bool
+check_buffile_max_filesize(int *newval, void **extra, GucSource source)
+{
+	if (*newval % BLCKSZ != 0)
+	{
+		GUC_check_errdetail("The value must be whole multiple of BLCKSZ.");
+		return false;
+	}
+	return true;
+}
+
+static void
+assign_buffile_max_filesize(int newval, void *extra)
+{
+	buffile_seg_blocks = BUFFILE_SEG_BLOCKS(newval);
 }
 
 static bool

@@ -245,8 +245,9 @@ su - postgres
     <listitem>
      <para>
       You need <productname>OpenSSL</productname>, if you want to support
-      encrypted client connections.  <productname>OpenSSL</productname> is
-      also required for random number generation on platforms that do not
+      on-disk data encryption or encrypted client
+      connections.  <productname>OpenSSL</productname> is also required for
+      random number generation on platforms that do not
       have <filename>/dev/urandom</filename> (except Windows).  The minimum
       version required is 0.9.8.
      </para>
@@ -835,10 +836,11 @@ su - postgres
        </term>
        <listitem>
         <para>
-         Build with support for <acronym>SSL</acronym> (encrypted)
-         connections. This requires the <productname>OpenSSL</productname>
-         package to be installed.  <filename>configure</filename> will check
-         for the required header files and libraries to make sure that
+         Build with support for on-disk data encryption
+         or <acronym>SSL</acronym> (encrypted) connections. This requires
+         the <productname>OpenSSL</productname> package to be
+         installed.  <filename>configure</filename> will check for the
+         required header files and libraries to make sure that
          your <productname>OpenSSL</productname> installation is sufficient
          before proceeding.
         </para>

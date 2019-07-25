@@ -1,0 +1,34 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+SELECT buffile_write('abcd');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+-- Seek beyond EOF not followed by write.
+SELECT buffile_seek(0, 5);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+-- Nothing should be fetched.
+SELECT buffile_read(8);
+ buffile_read 
+--------------
+ \x
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

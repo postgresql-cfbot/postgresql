@@ -19,6 +19,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
+#include "storage/encryption.h"
 
 
 /* Sync methods */
@@ -186,10 +187,19 @@ extern PGDLLIMPORT int wal_level;
  * Normally, we don't WAL-log hint bit updates, but if checksums are enabled,
  * we have to protect them against torn page writes.  When you only set
  * individual bits on a page, it's still consistent no matter what combination
- * of the bits make it to disk, but the checksum wouldn't match.  Also WAL-log
- * them if forced by wal_log_hints=on.
+ * of the bits make it to disk, but the checksum wouldn't match.
+ *
+ * Regardless checksums, if encryption is enabled, hint bit change followed by
+ * a torn page write can result in such a situation that decryption produces
+ * page whose contents (following the hint bit) is garbage. This is because
+ * the block cipher we use propagates changes in the lower addresses of plain
+ * data to higher addresses of the cipher data. We need full-page image also
+ * to recover from this state.
+ *
+ * Also WAL-log the hint bits if forced by wal_log_hints=on.
  */
-#define XLogHintBitIsNeeded() (DataChecksumsEnabled() || wal_log_hints)
+#define XLogHintBitIsNeeded() (DataChecksumsEnabled() || data_encrypted || \
+							   wal_log_hints)
 
 /* Do we need to WAL-log information required only for Hot Standby and logical replication? */
 #define XLogStandbyInfoActive() (wal_level >= WAL_LEVEL_REPLICA)

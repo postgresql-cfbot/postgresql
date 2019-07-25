@@ -74,11 +74,17 @@ get_bin_version(ClusterInfo *cluster)
  * If the command fails, an error message is optionally written to the specified
  * log_file, and the program optionally exits.
  *
+ * If encryption_key is passed, popen() is used and the key is sent to stdin
+ * of the command.
+ *
  * The code requires it be called first from the primary thread on Windows.
+ *
+ * TODO Consolidate the use of popen() with Windows. Or use only popen()?
  */
 bool
 exec_prog(const char *log_file, const char *opt_log_file,
-		  bool report_error, bool exit_on_error, const char *fmt,...)
+		  bool report_error, bool exit_on_error, unsigned char *encryption_key,
+		  const char *fmt,...)
 {
 	int			result = 0;
 	int			written;
@@ -170,7 +176,27 @@ exec_prog(const char *log_file, const char *opt_log_file,
 	/* see comment above */
 	if (mainThreadId == GetCurrentThreadId())
 #endif
-		result = system(cmd);
+	{
+		if (!encryption_key)
+			result = system(cmd);
+		else
+		{
+			FILE	*fp;
+			int	i;
+
+			fp = popen(cmd, "w");
+			if (fp == NULL)
+				pg_fatal("Failed to execute \"%s\"\n", cmd);
+
+			/* Send the key. */
+			for (i = 0; i < ENCRYPTION_KEY_LENGTH; i++)
+				fprintf(fp, "%.2x", encryption_key[i]);
+			fputc('\n', fp);
+
+			if (pclose(fp))
+				pg_fatal("\"%s\" returned non-zero code\n", cmd);
+		}
+	}
 
 	if (result != 0 && report_error)
 	{

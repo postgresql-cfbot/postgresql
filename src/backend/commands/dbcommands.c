@@ -92,6 +92,7 @@ static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
 
+Oid	binary_upgrade_next_pg_database_oid = InvalidOid;
 
 /*
  * CREATE DATABASE
@@ -534,11 +535,34 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 */
 	pg_database_rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	do
+	/* The "postgres" database has fixed OID. */
+	if (strcmp(dbname, "postgres") == 0)
 	{
-		dboid = GetNewOidWithIndex(pg_database_rel, DatabaseOidIndexId,
-								   Anum_pg_database_oid);
-	} while (check_db_file_conflict(dboid));
+		dboid = PostgresDbOid;
+
+		if (check_db_file_conflict(dboid))
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_DATABASE),
+					 errmsg("database \"%s\" already exists", dbname)));
+	}
+	else if (IsBinaryUpgrade)
+	{
+		if (!OidIsValid(binary_upgrade_next_pg_database_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("pg_database OID value not set when in binary upgrade mode")));
+
+		dboid = binary_upgrade_next_pg_database_oid;
+		binary_upgrade_next_pg_database_oid = InvalidOid;
+	}
+	else
+	{
+		do
+		{
+			dboid = GetNewOidWithIndex(pg_database_rel, DatabaseOidIndexId,
+									   Anum_pg_database_oid);
+		} while (check_db_file_conflict(dboid));
+	}
 
 	/*
 	 * Insert a new tuple into pg_database.  This establishes our ownership of
@@ -630,6 +654,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			Oid			dsttablespace;
 			char	   *srcpath;
 			char	   *dstpath;
+			RelFileNode src_node = {srctablespace, src_dboid, InvalidOid};
+			RelFileNode dst_node;
 			struct stat st;
 
 			/* No need to copy global tablespace */
@@ -651,6 +677,10 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			else
 				dsttablespace = srctablespace;
 
+			dst_node.spcNode = dsttablespace;
+			dst_node.dbNode = dboid;
+			dst_node.relNode= InvalidOid;
+
 			dstpath = GetDatabasePath(dboid, dsttablespace);
 
 			/*
@@ -658,7 +688,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			 *
 			 * We don't need to copy subdirectories
 			 */
-			copydir(srcpath, dstpath, false);
+			copydir(srcpath, dstpath, &src_node, &dst_node);
 
 			/* Record the filesystem change in XLOG */
 			{
@@ -1293,10 +1323,13 @@ movedb(const char *dbname, const char *tblspcname)
 	PG_ENSURE_ERROR_CLEANUP(movedb_failure_callback,
 							PointerGetDatum(&fparms));
 	{
+		RelFileNode src_node = {src_tblspcoid, db_id, InvalidOid};
+		RelFileNode dst_node = {dst_tblspcoid, db_id, InvalidOid};
+
 		/*
 		 * Copy files from the old tablespace to the new one
 		 */
-		copydir(src_dbpath, dst_dbpath, false);
+		copydir(src_dbpath, dst_dbpath, &src_node, &dst_node);
 
 		/*
 		 * Record the filesystem change in XLOG
@@ -2130,6 +2163,8 @@ dbase_redo(XLogReaderState *record)
 		char	   *src_path;
 		char	   *dst_path;
 		struct stat st;
+		RelFileNode src_node = {xlrec->src_tablespace_id, xlrec->src_db_id, InvalidOid};
+		RelFileNode dst_node = {xlrec->tablespace_id, xlrec->db_id, InvalidOid};
 
 		src_path = GetDatabasePath(xlrec->src_db_id, xlrec->src_tablespace_id);
 		dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
@@ -2159,7 +2194,7 @@ dbase_redo(XLogReaderState *record)
 		 *
 		 * We don't need to copy subdirectories
 		 */
-		copydir(src_path, dst_path, false);
+		copydir(src_path, dst_path, &src_node, &dst_node);
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{

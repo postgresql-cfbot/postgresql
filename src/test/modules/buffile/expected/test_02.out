@@ -1,0 +1,48 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+SELECT buffile_seek(0, 8189);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+-- Initialize the last 3 positions of the first buffer and the initial 3
+-- positions of the 2nd buffer.
+SELECT buffile_write('abcdef');
+ buffile_write 
+---------------
+             6
+(1 row)
+
+SELECT buffile_seek(0, 0);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+-- Read the first buffer.
+SELECT length(buffile_read(8192));
+ length 
+--------
+   8192
+(1 row)
+
+-- Only 3 bytes of the 2nd buffer should be fetched.
+SELECT length(buffile_read(8192));
+ length 
+--------
+      3
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

@@ -1,0 +1,95 @@
+<!-- doc/src/sgml/encryption.sgml -->
+
+<chapter id="encryption">
+ <title>Transparent Cluster Encryption</title>
+
+ <para>
+  Cluster encryption can be used if <acronym>DBA</acronym> cannot or does not
+  want to rely on the filesystem in terms of data confidentiality. If this
+  feature is enabled, <productname>PostgreSQL</productname> encrypts data
+  (both relations and write-ahead-log) when writing it to disk, and decrypts
+  when reading it. The encryption is transparent, so applications see no
+  difference between encrypted and unencrypted cluster.
+ </para>
+
+ <para>
+  To create encrypted cluster, use the <option>-K</option> option to pass the
+  <xref linkend="app-initdb"/> utility path to the command that will retrieve
+  the encryption key. For example:
+<screen>
+<prompt>$</prompt> <userinput>initdb -D /usr/local/pgsql/data -K /usr/local/pgsql/fetch_key_cmd</userinput>
+</screen>
+  Here <filename>/usr/local/pgsql/fetch_key_cmd</filename> is an executable
+  file that writes the encryption key to its standard output and returns
+  zero. The simplest command looks like:
+
+<programlisting>
+echo &lt;your key&gt;
+</programlisting>
+ </para>
+
+ <para>
+   The encryption key is expected in hexadecimal format, two characters
+   (hexadecimal digits) per
+   byte. Since <productname>PostgreSQL</productname> currently uses key
+   of length 32 bytes (256 bits), the expected length of the key string
+   is 64 characters. For example:
+   <computeroutput>
+     882fb7c12e80280fd664c69d2d636913e86c381ba487c82f77653c0fac8ffc69
+   </computeroutput>
+ </para>
+
+ <para>
+   If the DBA wants to enter password, he can use
+   <xref linkend="app-pg-keytool"/> utility to derive ecryption key from
+   it. For example, if the <option>-K</option> option looks like in the
+   following example, the DBA will be asked for password interactively:
+
+<screen>
+<prompt>$</prompt> <userinput>initdb -K 'read -sp "Cluster encryption password: " PGENCRPWD; echo $PGENCRPWD
+| pg_keytool -D %D -w' -D data
+</userinput>
+</screen>
+
+ </para>
+
+ <para>
+   As long as the application is aware of the data directory, you can
+   put <literal>%D</literal> into the command and the application will replace
+   it with the actual directory path.
+ </para>
+
+ <para>
+   Likewise, the same command can be passed to <xref linkend="app-pg-ctl"/> in
+   order to start the cluster:
+
+<screen>
+<prompt>$</prompt> <userinput>pg_ctl -K 'read -sp "Cluster encryption password: " PGENCRPWD; echo $PGENCRPWD
+| pg_keytool -D %D -w' -D data start
+</userinput>
+</screen>
+ </para>
+
+ <para>
+  If encryption is enabled, <xref linkend="guc-full-page-writes"/> must be
+  turned on, otherwise the server refuses to start. This is because the
+  encryption introduces dependencies between data within a page, and thus
+  server crash during disk write can result in more serious damage of the page
+  than it would do without encryption. The whole page needs to be retrieved
+  from WAL in such a case to ensure reliable recovery.
+ </para>
+
+ <para>
+  Once the <productname>PostgreSQL</productname> server is running, client
+  applications should recognize no difference from an unencrypted cluster,
+  except that <xref linkend="guc-data-encryption"/> variable is set.
+ </para>
+
+ <para>
+  Since WAL is encrypted, any replication solution based on log shipping
+  (<xref linkend="warm-standby"/>) assume that all standby servers are
+  encrypted using the same key as their primary server. On the other hand,
+  <xref linkend="logical-replication"/> allows replication between encrypted
+  and unencrypted clusters, or between clusters encrypted with different keys.
+ </para>
+</chapter>

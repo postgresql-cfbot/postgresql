@@ -4004,12 +4004,6 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_RELATION_MAP_WRITE:
 			event_name = "RelationMapWrite";
 			break;
-		case WAIT_EVENT_REORDER_BUFFER_READ:
-			event_name = "ReorderBufferRead";
-			break;
-		case WAIT_EVENT_REORDER_BUFFER_WRITE:
-			event_name = "ReorderBufferWrite";
-			break;
 		case WAIT_EVENT_REORDER_LOGICAL_MAPPING_READ:
 			event_name = "ReorderLogicalMappingRead";
 			break;

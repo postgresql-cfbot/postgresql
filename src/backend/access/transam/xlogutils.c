@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/encryption.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -656,9 +657,11 @@ static void
 XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		 Size count)
 {
-	char	   *p;
 	XLogRecPtr	recptr;
 	Size		nbytes;
+	char	   *decrypt_p;
+	uint32		decryptOff;
+	char	   *p;
 
 	/* state maintained across calls */
 	static int	sendFile = -1;
@@ -668,9 +671,24 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 
 	Assert(segsize == wal_segment_size);
 
+	/*
+	 * TODO Currently the function is only called with startptr at page
+	 * boundary. walsender.c:XLogRead() is more generic but it's a bit
+	 * different, so decryption also needs to be adopted in a little different
+	 * way (i.e. the decryption cannot be merged here mechanically). Manual
+	 * merge is not worth the effort right now because a separate patch to
+	 * consolidate XLogRead() functions is in the queue
+	 * (https://commitfest.postgresql.org/23/2098/). Let's implement the
+	 * decryption in a generic way when that patch is committed.
+	 */
+	Assert(startptr % XLOG_BLCKSZ == 0);
+
 	p = buf;
 	recptr = startptr;
 	nbytes = count;
+
+	decrypt_p = p;
+	decryptOff = XLogSegmentOffset(recptr, segsize);
 
 	while (nbytes > 0)
 	{
@@ -678,7 +696,21 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		int			segbytes;
 		int			readbytes;
 
-		startoff = XLogSegmentOffset(recptr, segsize);
+		if (recptr == startptr)
+			startoff = decryptOff;
+		else
+		{
+			startoff = XLogSegmentOffset(recptr, segsize);
+			if (startoff == 0)
+			{
+				/*
+				 * If segment boundary was reached, decryptOff should have
+				 * caught up, so we can (and should) sync it with startoff.
+				 */
+				Assert(decryptOff == segsize);
+				decryptOff = startoff;
+			}
+		}
 
 		/* Do we need to switch to a different xlog segment? */
 		if (sendFile < 0 || !XLByteInSeg(recptr, sendSegNo, segsize) ||
@@ -758,7 +790,29 @@ XLogRead(char *buf, int segsize, TimeLineID tli, XLogRecPtr startptr,
 		sendOff += readbytes;
 		nbytes -= readbytes;
 		p += readbytes;
+
+		/* Decrypt completed blocks */
+		if (data_encrypted)
+		{
+			while (decrypt_p + XLOG_BLCKSZ <= p)
+			{
+				char		tweak[TWEAK_SIZE];
+
+				XLogEncryptionTweak(tweak, tli, sendSegNo, decryptOff);
+				decrypt_block(decrypt_p, decrypt_p, XLOG_BLCKSZ, tweak,
+							  true);
+
+				decrypt_p += XLOG_BLCKSZ;
+				decryptOff += XLOG_BLCKSZ;
+			}
+		}
 	}
+
+	/*
+	 * TODO Currently the function is only called with count==XLOG_BLCKSZ. See
+	 * the comment on consolidation of XLogRead() above.
+	 */
+	Assert(decrypt_p == p);
 }
 
 /*

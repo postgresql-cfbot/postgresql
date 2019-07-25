@@ -1,0 +1,27 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+-- Read from an empty file.
+SELECT buffile_seek(0, 8);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(16);
+ buffile_read 
+--------------
+ \x
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

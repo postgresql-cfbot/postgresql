@@ -80,4 +80,18 @@ CATALOG(pg_database,1262,DatabaseRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID
  */
 typedef FormData_pg_database *Form_pg_database;
 
+/*
+ * The "postgres" database has reserved pg_database(oid) because initially
+ * it's below FirstNormalObjectId, and thus pg_upgrade cannot guarantee that
+ * the same OID will be assigned in the new cluster (unlike TemplateDbOid,
+ * which has always OID=1). Since database OID is used to construct encryption
+ * initialization vector (tweak), different OID would break data decryption in
+ * the new cluster.
+ *
+ * The easiest way to avoid collision with any system OID is to use the
+ * maximum system OID. initdb won't reach this value and GetNewObjectId() will
+ * always skip that.
+ */
+#define PostgresDbOid	(FirstNormalObjectId - 1)
+
 #endif							/* PG_DATABASE_H */

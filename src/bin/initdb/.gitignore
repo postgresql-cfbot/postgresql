@@ -1,5 +1,6 @@
 /encnames.c
 /localtime.c
+/encryption.c
 
 /initdb
 

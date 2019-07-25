@@ -10,7 +10,10 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include "fe_utils/encryption.h"
 #include "libpq-fe.h"
+#include "storage/relfilenode.h"
+#include "storage/encryption.h"
 
 /* Use port in the private/dynamic port number range */
 #define DEF_PGUPORT			50432
@@ -227,6 +230,8 @@ typedef struct
 	bool		date_is_int;
 	bool		float8_pass_by_value;
 	bool		data_checksum_version;
+	bool		data_encrypted;
+	uint8		encryption_verification[ENCRYPTION_SAMPLE_SIZE];
 } ControlData;
 
 /*
@@ -367,7 +372,9 @@ void		generate_old_dump(void);
 #define EXEC_PSQL_ARGS "--echo-queries --set ON_ERROR_STOP=on --no-psqlrc --dbname=template1"
 
 bool		exec_prog(const char *log_file, const char *opt_log_file,
-					  bool report_error, bool exit_on_error, const char *fmt,...) pg_attribute_printf(5, 6);
+					  bool report_error, bool exit_on_error,
+					  unsigned char *encryption_key, const char *fmt,...)
+	pg_attribute_printf(6, 7);
 void		verify_directories(void);
 bool		pid_lock_file_exists(const char *datadir);
 

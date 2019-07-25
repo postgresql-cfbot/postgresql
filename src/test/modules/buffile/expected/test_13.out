@@ -1,0 +1,86 @@
+-- Use transaction block so that the file does not closed automatically at
+-- command boundary.
+BEGIN;
+SELECT buffile_open_transient('trans1', true, false);
+ buffile_open_transient 
+------------------------
+ 
+(1 row)
+
+SELECT buffile_write('01234567');
+ buffile_write 
+---------------
+             8
+(1 row)
+
+SELECT buffile_close_transient();
+ buffile_close_transient 
+-------------------------
+ 
+(1 row)
+
+-- Open for reading.
+SELECT buffile_open_transient('trans1', false, false);
+ buffile_open_transient 
+------------------------
+ 
+(1 row)
+
+SELECT length(buffile_read(65536));
+ length 
+--------
+      8
+(1 row)
+
+SELECT buffile_close_transient();
+ buffile_close_transient 
+-------------------------
+ 
+(1 row)
+
+-- Open for writing in append mode.
+SELECT buffile_open_transient('trans1', true, true);
+ buffile_open_transient 
+------------------------
+ 
+(1 row)
+
+-- Add BLCKSZ bytes, so that buffer boundary is crossed.
+SELECT buffile_write(repeat('x', 8192));
+ buffile_write 
+---------------
+          8192
+(1 row)
+
+SELECT buffile_close_transient();
+ buffile_close_transient 
+-------------------------
+ 
+(1 row)
+
+-- Open for reading and verify the valid part.
+SELECT buffile_open_transient('trans1', false, false);
+ buffile_open_transient 
+------------------------
+ 
+(1 row)
+
+SELECT length(buffile_read(65536));
+ length 
+--------
+   8200
+(1 row)
+
+SELECT buffile_close_transient();
+ buffile_close_transient 
+-------------------------
+ 
+(1 row)
+
+SELECT buffile_delete_file('trans1');
+ buffile_delete_file 
+---------------------
+ 
+(1 row)
+
+COMMIT;

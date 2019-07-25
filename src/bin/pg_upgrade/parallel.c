@@ -79,7 +79,7 @@ parallel_exec_prog(const char *log_file, const char *opt_log_file,
 
 	if (user_opts.jobs <= 1)
 		/* exit_on_error must be true to allow jobs */
-		exec_prog(log_file, opt_log_file, true, true, "%s", cmd);
+		exec_prog(log_file, opt_log_file, true, true, NULL, "%s", cmd);
 	else
 	{
 		/* parallel */
@@ -122,7 +122,8 @@ parallel_exec_prog(const char *log_file, const char *opt_log_file,
 		child = fork();
 		if (child == 0)
 			/* use _exit to skip atexit() functions */
-			_exit(!exec_prog(log_file, opt_log_file, true, true, "%s", cmd));
+			_exit(!exec_prog(log_file, opt_log_file, true, true, NULL, "%s",
+							 cmd));
 		else if (child < 0)
 			/* fork failed */
 			pg_fatal("could not create worker process: %s\n", strerror(errno));
@@ -160,7 +161,7 @@ win32_exec_prog(exec_thread_arg *args)
 {
 	int			ret;
 
-	ret = !exec_prog(args->log_file, args->opt_log_file, true, true, "%s", args->cmd);
+	ret = !exec_prog(args->log_file, args->opt_log_file, true, true, NULL, "%s", args->cmd);
 
 	/* terminates thread */
 	return ret;

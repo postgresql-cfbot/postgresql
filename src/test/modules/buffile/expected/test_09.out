@@ -1,0 +1,39 @@
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+-- Write data across buffer boundary and try to read it.
+SELECT buffile_seek(0, 8190);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('abcd');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+SELECT buffile_seek(0, 8190);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(8);
+ buffile_read 
+--------------
+ \x61626364
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

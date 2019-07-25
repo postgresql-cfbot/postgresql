@@ -1,0 +1,61 @@
+-- This is the first test, so make sure the test extension is there.
+CREATE EXTENSION IF NOT EXISTS buffile;
+BEGIN;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+SELECT buffile_seek(0, 1);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('abc');
+ buffile_write 
+---------------
+             3
+(1 row)
+
+SELECT buffile_seek(0, 0);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+-- Check that the trailing zeroes are not fetched.
+SELECT buffile_read(16);
+ buffile_read 
+--------------
+ \x00616263
+(1 row)
+
+-- Adjust the number of useful bytes.
+SELECT buffile_write('abc');
+ buffile_write 
+---------------
+             3
+(1 row)
+
+-- ... and check again.
+SELECT buffile_seek(0, 0);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(16);
+   buffile_read   
+------------------
+ \x00616263616263
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

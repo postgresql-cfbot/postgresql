@@ -172,6 +172,13 @@
 #endif
 
 /*
+ * OpenSSL is currently the only implementation of encryption we use.
+ */
+#ifdef USE_OPENSSL
+#define USE_ENCRYPTION
+#endif
+
+/*
  * This is the default directory in which AF_UNIX socket files are
  * placed.  Caution: changing this risks breaking your existing client
  * applications, which are likely to continue to look in the old

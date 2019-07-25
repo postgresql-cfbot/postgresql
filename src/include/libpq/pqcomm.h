@@ -23,6 +23,8 @@
 #endif
 #include <netinet/in.h>
 
+#include "storage/encryption.h"
+
 #ifdef HAVE_STRUCT_SOCKADDR_STORAGE
 
 #ifndef HAVE_STRUCT_SOCKADDR_STORAGE_SS_FAMILY
@@ -204,5 +206,27 @@ typedef struct CancelRequestPacket
  */
 #define NEGOTIATE_SSL_CODE PG_PROTOCOL(1234,5679)
 #define NEGOTIATE_GSS_CODE PG_PROTOCOL(1234,5680)
+
+/* Client can also send cluster encryption key to the postmaster. */
+#define ENCRYPTION_KEY_MSG_CODE PG_PROTOCOL(1234,5681)
+
+/*
+ * Message containing the encryption key, received by postmaster during
+ * startup.
+ *
+ * TODO Consider adding extension identifier and key_length field so that
+ * postmaster can also receove extension-specific keys. Extension that needs a
+ * key would call a function from _PG_init() that tells postmaster where to
+ * store the key and how long the key is. (Should also postgres in standalone
+ * mode accept keys for extensions?)
+ */
+typedef struct EncryptionKeyMsg
+{
+	/* Note this integer field is stored in network byte order! */
+	MsgType		encryptionKeyCode;	/* code to identify a key message */
+
+	unsigned char	version;	/* message format version. */
+	char	data[ENCRYPTION_KEY_LENGTH];	/* the key itself. */
+} EncryptionKeyMsg;
 
 #endif							/* PQCOMM_H */

@@ -27,8 +27,10 @@
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/restricted_token.h"
+#include "fe_utils/encryption.h"
 #include "getopt_long.h"
 #include "storage/bufpage.h"
+#include "storage/encryption.h"
 
 static void usage(const char *progname);
 
@@ -75,6 +77,10 @@ usage(const char *progname)
 	printf(_("  -D, --target-pgdata=DIRECTORY  existing data directory to modify\n"));
 	printf(_("      --source-pgdata=DIRECTORY  source data directory to synchronize with\n"));
 	printf(_("      --source-server=CONNSTR    source server to synchronize with\n"));
+#ifdef	USE_ENCRYPTION
+	printf(_("  -K, --encryption-key-command=COMMAND\n"
+			 "                                 command that returns encryption key\n"));
+#endif							/* USE_ENCRYPTION */
 	printf(_("  -n, --dry-run                  stop before modifying anything\n"));
 	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"
 			 "                                 safely to disk\n"));
@@ -99,6 +105,9 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
 		{"debug", no_argument, NULL, 3},
+#ifdef	USE_ENCRYPTION
+		{"encryption-key-command", required_argument, NULL, 'K'},
+#endif							/* USE_ENCRYPTION */
 		{NULL, 0, NULL, 0}
 	};
 	int			option_index;
@@ -134,7 +143,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:nNP", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "D:K:nNP", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -169,6 +178,12 @@ main(int argc, char **argv)
 			case 2:				/* --source-server */
 				connstr_source = pg_strdup(optarg);
 				break;
+#ifdef	USE_ENCRYPTION
+			case 4:				/* --encryption-key-command */
+			case 'K':
+				encryption_key_command = strdup(optarg);
+				break;
+#endif							/* USE_ENCRYPTION */
 		}
 	}
 
@@ -246,6 +261,28 @@ main(int argc, char **argv)
 	pg_free(buffer);
 
 	sanityChecks();
+
+	/*
+	 * Setup encryption if it's obvious that we'll have to deal with encrypted
+	 * XLOG.
+	 */
+	if (ControlFile_target.data_cipher > PG_CIPHER_NONE)
+	{
+		if (encryption_key_command == NULL)
+		{
+			pg_log_error("-K option must be passed for encrypted cluster");
+			exit(EXIT_FAILURE);
+		}
+
+		/*
+		 * It should not matter whether we pass the source or target data
+		 * directory. It should have been checked earlier that both clusters
+		 * are encrypted using the same key.
+		 */
+		run_encryption_key_command(encryption_key, datadir_source);
+		setup_encryption();
+		data_encrypted = true;
+	}
 
 	/*
 	 * If both clusters are already on the same timeline, there's nothing to
@@ -446,6 +483,24 @@ sanityChecks(void)
 		ControlFile_source.state != DB_SHUTDOWNED &&
 		ControlFile_source.state != DB_SHUTDOWNED_IN_RECOVERY)
 		pg_fatal("source data directory must be shut down cleanly");
+
+	/*
+	 * Since slave receives XLOG stream encrypted by master, handling
+	 * differently encrypted clusters is not the typical use case for
+	 * pg_rewind. Yet we should check the encryption.
+	 */
+	if (ControlFile_source.data_cipher > PG_CIPHER_NONE ||
+		ControlFile_target.data_cipher > PG_CIPHER_NONE)
+	{
+		if (ControlFile_source.data_cipher !=
+			ControlFile_target.data_cipher)
+			pg_fatal("source and target server must be both unencrypted or both encrypted\n");
+
+		if (memcmp(ControlFile_source.encryption_verification,
+				   ControlFile_target.encryption_verification,
+				   ENCRYPTION_SAMPLE_SIZE))
+			pg_fatal("both source and target server must use the same encryption key");
+	}
 }
 
 /*

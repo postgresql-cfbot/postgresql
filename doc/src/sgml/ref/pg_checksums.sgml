@@ -106,7 +106,18 @@ PostgreSQL documentation
       <listitem>
        <para>
         Only validate checksums in the relation with filenode
-        <replaceable>filenode</replaceable>. 
+        <replaceable>filenode</replaceable>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-K</option></term>
+      <term><option>--encryption-key-command=<replaceable class="parameter">command</replaceable></option></term>
+      <listitem>
+       <para>
+        If the cluster is encrypted, run this command to retrieve the
+        encryption key. See <xref linkend="encryption"/> for details.
        </para>
       </listitem>
      </varlistentry>

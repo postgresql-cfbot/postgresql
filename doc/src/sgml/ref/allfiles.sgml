@@ -206,6 +206,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY pgDump             SYSTEM "pg_dump.sgml">
 <!ENTITY pgDumpall          SYSTEM "pg_dumpall.sgml">
 <!ENTITY pgIsready          SYSTEM "pg_isready.sgml">
+<!ENTITY pgKeytool          SYSTEM "pg_keytool.sgml">
 <!ENTITY pgReceivewal       SYSTEM "pg_receivewal.sgml">
 <!ENTITY pgRecvlogical      SYSTEM "pg_recvlogical.sgml">
 <!ENTITY pgResetwal         SYSTEM "pg_resetwal.sgml">

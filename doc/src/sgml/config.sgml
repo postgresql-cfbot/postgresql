@@ -9004,6 +9004,20 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-data-encryption" xreflabel="data_encryption">
+      <term><varname>data_encryption</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>data_encryption</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports whether data encryption is enabled for this cluster.
+        See <xref linkend="encryption"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-data-directory-mode" xreflabel="data_directory_mode">
       <term><varname>data_directory_mode</varname> (<type>integer</type>)
       <indexterm>

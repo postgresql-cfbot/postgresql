@@ -19,6 +19,7 @@
 #include "access/xlogdefs.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
+#include "storage/encryption.h"
 
 
 /* Version identifier for this pg_control format */
@@ -227,6 +228,16 @@ typedef struct ControlFileData
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/*
+	 * Cipher used to encrypt data. Zero if unencrypted.
+	 *
+	 * The data type is actually CipherKind, but we don't want to include
+	 * encryption.h just because of this field.
+	 */
+	uint8		data_cipher;
+	/* Sample value for encryption key verification */
+	uint8		encryption_verification[ENCRYPTION_SAMPLE_SIZE];
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

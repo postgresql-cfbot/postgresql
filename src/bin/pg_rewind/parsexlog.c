@@ -320,6 +320,15 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 		return -1;
 	}
 
+	if (data_encrypted)
+	{
+		char		tweak[TWEAK_SIZE];
+
+		XLogEncryptionTweak(tweak, targetHistory[private->tliIndex].tli,
+							xlogreadsegno, targetPageOff);
+		decrypt_block(readBuf, readBuf, XLOG_BLCKSZ, tweak, true);
+	}
+
 	Assert(targetSegNo == xlogreadsegno);
 
 	*pageTLI = targetHistory[private->tliIndex].tli;

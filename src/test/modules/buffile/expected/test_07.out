@@ -1,0 +1,41 @@
+BEGIN;
+-- Use a small segment, not to waste disk space and time.
+SET buffile_max_filesize TO 8192;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+-- Write data at component file boundary and try to read it.
+SELECT buffile_seek(0, 8192);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('abcd');
+ buffile_write 
+---------------
+             4
+(1 row)
+
+SELECT buffile_seek(0, 8192);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(8);
+ buffile_read 
+--------------
+ \x61626364
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

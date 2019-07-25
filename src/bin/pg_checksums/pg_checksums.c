@@ -20,15 +20,18 @@
 #include <unistd.h>
 
 #include "access/xlog_internal.h"
+#include "catalog/pg_tablespace_d.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/logging.h"
+#include "fe_utils/encryption.h"
 #include "getopt_long.h"
 #include "pg_getopt.h"
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"
+#include "storage/encryption.h"
 
 
 static int64 files = 0;
@@ -80,6 +83,10 @@ usage(void)
 	printf(_("  -c, --check              check data checksums (default)\n"));
 	printf(_("  -d, --disable            disable data checksums\n"));
 	printf(_("  -e, --enable             enable data checksums\n"));
+#ifdef	USE_ENCRYPTION
+	printf(_("  -K, --encryption-key-command=COMMAND\n"
+			 "                           command that returns encryption key\n"));
+#endif							/* USE_ENCRYPTION */
 	printf(_("  -f, --filenode=FILENODE  check only relation with specified filenode\n"));
 	printf(_("  -N, --no-sync            do not wait for changes to be written safely to disk\n"));
 	printf(_("  -P, --progress           show progress information\n"));
@@ -167,7 +174,8 @@ skipfile(const char *fn)
 }
 
 static void
-scan_file(const char *fn, BlockNumber segmentno)
+scan_file(const char *fn, Oid relnode, BlockNumber segmentno,
+		  ForkNumber forkno, Oid tbspace, Oid db)
 {
 	PGAlignedBlock buf;
 	PageHeader	header = (PageHeader) buf.data;
@@ -193,6 +201,7 @@ scan_file(const char *fn, BlockNumber segmentno)
 	{
 		uint16		csum;
 		int			r = read(f, buf.data, BLCKSZ);
+		char		tweak[TWEAK_SIZE];
 
 		if (r == 0)
 			break;
@@ -203,6 +212,18 @@ scan_file(const char *fn, BlockNumber segmentno)
 			exit(1);
 		}
 		blocks++;
+
+		if (data_encrypted)
+		{
+			RelFileNode node;
+
+			node.spcNode = tbspace;
+			node.dbNode = db;
+			node.relNode = relnode;
+
+			mdtweak(tweak, &node, forkno, blockno);
+			decrypt_block(buf.data, buf.data, BLCKSZ, tweak, false);
+		}
 
 		/* New pages have no checksum yet */
 		if (PageIsNew(header))
@@ -231,6 +252,9 @@ scan_file(const char *fn, BlockNumber segmentno)
 				pg_log_error("seek failed for block %u in file \"%s\": %m", blockno, fn);
 				exit(1);
 			}
+
+			if (data_encrypted)
+				encrypt_block(buf.data, buf.data, BLCKSZ, tweak, false);
 
 			/* Write block with checksum */
 			if (write(f, buf.data, BLCKSZ) != BLCKSZ)
@@ -262,9 +286,13 @@ scan_file(const char *fn, BlockNumber segmentno)
  * all the items which have checksums is computed and returned back
  * to the caller without operating on the files.  This is used to compile
  * the total size of the data directory for progress reports.
+ *
+ * If db is a valid pointer, *db contains database OID. If it's NULL, the
+ * database OID needs to be recognized, possibly by recursive call.
  */
 static int64
-scan_directory(const char *basedir, const char *subdir, bool sizeonly)
+scan_directory(const char *basedir, const char *subdir, bool sizeonly,
+			   Oid tbspace, Oid *db)
 {
 	int64		dirsize = 0;
 	char		path[MAXPGPATH];
@@ -282,6 +310,9 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 	{
 		char		fn[MAXPGPATH];
 		struct stat st;
+		bool		tbsp_identified = false;
+		Oid			database;
+		bool		db_identified = false;
 
 		if (strcmp(de->d_name, ".") == 0 ||
 			strcmp(de->d_name, "..") == 0)
@@ -305,12 +336,58 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 			pg_log_error("could not stat file \"%s\": %m", fn);
 			exit(1);
 		}
+
+		if (tbspace != InvalidOid && db == NULL)
+		{
+			/*
+			 * If tablespace is passed by caller or identified by upper call
+			 * of this function, and if caller could not identify the database
+			 * OID, try to do it now.
+			 */
+			if (strcmp(de->d_name, TABLESPACE_VERSION_DIRECTORY) == 0)
+			{
+				/*
+				 * Major-version-specific tablespace subdirectory needs no
+				 * special attention, we'll recurse into it below.
+				 */
+			}
+			else
+			{
+				errno = 0;
+				database = strtol(de->d_name, NULL, 10);
+				if (errno != 0 || database == InvalidOid)
+				{
+					fprintf(stderr, _("%s: invalid database oid \"%s\"\n"),
+							progname, de->d_name);
+					exit(1);
+				}
+				db_identified = true;
+			}
+		}
+		else if (tbspace == InvalidOid)
+		{
+			/*
+			 * This entry should be a direct subdirectory of pg_tblspc, so the
+			 * name is supposedly tablespace oid.
+			 */
+			errno = 0;
+			tbspace = strtol(de->d_name, NULL, 10);
+			if (errno != 0 || tbspace == InvalidOid)
+			{
+				fprintf(stderr, _("%s: invalid tablespace oid \"%s\"\n"),
+						progname, de->d_name);
+				exit(1);
+			}
+			tbsp_identified = true;
+		}
+
 		if (S_ISREG(st.st_mode))
 		{
 			char		fnonly[MAXPGPATH];
 			char	   *forkpath,
 					   *segmentpath;
 			BlockNumber segmentno = 0;
+			ForkNumber	forkno;
 
 			if (skipfile(de->d_name))
 				continue;
@@ -337,10 +414,16 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 
 			forkpath = strchr(fnonly, '_');
 			if (forkpath != NULL)
+			{
 				*forkpath++ = '\0';
 
+				forkno = forkname_to_number(forkpath);
+			}
+			else
+				forkno = MAIN_FORKNUM;
+
 			if (only_filenode && strcmp(only_filenode, fnonly) != 0)
-				/* filenode not to be included */
+				/* Relfilenode not to be included */
 				continue;
 
 			dirsize += st.st_size;
@@ -350,14 +433,31 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 			 * the items in the data folder.
 			 */
 			if (!sizeonly)
-				scan_file(fn, segmentno);
+			{
+				Oid			relnode = atoi(fnonly);
+
+				scan_file(fn, relnode, segmentno, forkno, tbspace, *db);
+			}
 		}
 #ifndef WIN32
 		else if (S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
 #else
 		else if (S_ISDIR(st.st_mode) || pgwin32_is_junction(fn))
 #endif
-			dirsize += scan_directory(path, de->d_name, sizeonly);
+
+			/*
+			 * If database OID is not passed by caller, use the one we
+			 * identified ourselves.
+			 */
+			dirsize = scan_directory(path, de->d_name, sizeonly, tbspace,
+									 db_identified ? &database : db);
+
+		/*
+		 * If tablespace is not passed by caller, forget what we found out so
+		 * that next directory entry is examined in the same way.
+		 */
+		if (tbsp_identified)
+			tbspace = InvalidOid;
 	}
 	closedir(dir);
 	return dirsize;
@@ -371,6 +471,9 @@ main(int argc, char *argv[])
 		{"pgdata", required_argument, NULL, 'D'},
 		{"disable", no_argument, NULL, 'd'},
 		{"enable", no_argument, NULL, 'e'},
+#ifdef	USE_ENCRYPTION
+		{"encryption-key-command", required_argument, NULL, 'K'},
+#endif							/* USE_ENCRYPTION */
 		{"filenode", required_argument, NULL, 'f'},
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
@@ -401,7 +504,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "cD:deNPf:v", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cD:deNK:Pf:v", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -422,6 +525,12 @@ main(int argc, char *argv[])
 				}
 				only_filenode = pstrdup(optarg);
 				break;
+#ifdef	USE_ENCRYPTION
+			case 'K':
+				encryption_key_command = pg_strdup(optarg);
+				data_encrypted = true;
+				break;
+#endif							/* USE_ENCRYPTION */
 			case 'N':
 				do_sync = false;
 				break;
@@ -483,6 +592,24 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (ControlFile->data_cipher > PG_CIPHER_NONE)
+	{
+		if (encryption_key_command == NULL)
+		{
+#ifdef USE_ENCRYPTION
+			fprintf(stderr, _("%s: please specify command to retrieve encryption key\n"),
+					progname);
+#else
+			fprintf(stderr, _("%s: compile postgres with --with-openssl to use encryption\n"),
+					progname);
+#endif							/* USE_ENCRYPTION */
+			exit(1);
+		}
+
+		run_encryption_key_command(encryption_key, DataDir);
+		setup_encryption();
+	}
+
 	if (ControlFile->pg_control_version != PG_CONTROL_VERSION)
 	{
 		pg_log_error("cluster is not compatible with this version of pg_checksums");
@@ -533,6 +660,8 @@ main(int argc, char *argv[])
 	/* Operate on all files if checking or enabling checksums */
 	if (mode == PG_MODE_CHECK || mode == PG_MODE_ENABLE)
 	{
+		Oid			db_shared = 0;
+
 		/*
 		 * If progress status information is requested, we need to scan the
 		 * directory tree twice: once to know how much total data needs to be
@@ -540,14 +669,19 @@ main(int argc, char *argv[])
 		 */
 		if (showprogress)
 		{
-			total_size = scan_directory(DataDir, "global", true);
-			total_size += scan_directory(DataDir, "base", true);
-			total_size += scan_directory(DataDir, "pg_tblspc", true);
+			total_size = scan_directory(DataDir, "global", true,
+										GLOBALTABLESPACE_OID, &db_shared);
+			total_size += scan_directory(DataDir, "base", true,
+										 DEFAULTTABLESPACE_OID, NULL);
+			total_size += scan_directory(DataDir, "pg_tblspc", true,
+										 InvalidOid, NULL);
 		}
 
-		(void) scan_directory(DataDir, "global", false);
-		(void) scan_directory(DataDir, "base", false);
-		(void) scan_directory(DataDir, "pg_tblspc", false);
+		(void) scan_directory(DataDir, "global", false, GLOBALTABLESPACE_OID,
+							  &db_shared);
+		(void) scan_directory(DataDir, "base", false, DEFAULTTABLESPACE_OID,
+							  NULL);
+		(void) scan_directory(DataDir, "pg_tblspc", false, InvalidOid, NULL);
 
 		if (showprogress)
 		{

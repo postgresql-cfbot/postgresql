@@ -1,0 +1,43 @@
+-- This test shows that the if first component file (segment) stays empty,
+-- read stops prematurely even if it starts within that segment, although it'd
+-- otherwise receive some data from the following one.
+BEGIN;
+-- Neither disk space nor time needs to be wasted.
+SET buffile_max_filesize TO 8192;
+SELECT buffile_create();
+ buffile_create 
+----------------
+ 
+(1 row)
+
+SELECT buffile_seek(0, 8192);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_write('a');
+ buffile_write 
+---------------
+             1
+(1 row)
+
+SELECT buffile_seek(0, 8191);
+ buffile_seek 
+--------------
+            0
+(1 row)
+
+SELECT buffile_read(2);
+ buffile_read 
+--------------
+ \x
+(1 row)
+
+SELECT buffile_close();
+ buffile_close 
+---------------
+ 
+(1 row)
+
+COMMIT;

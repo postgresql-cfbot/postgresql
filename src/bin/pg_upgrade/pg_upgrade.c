@@ -15,12 +15,14 @@
  *	oids are the same between old and new clusters.  This is important
  *	because toast oids are stored as toast pointers in user tables.
  *
- *	While pg_class.oid and pg_class.relfilenode are initially the same
- *	in a cluster, they can diverge due to CLUSTER, REINDEX, or VACUUM
- *	FULL.  In the new cluster, pg_class.oid and pg_class.relfilenode will
- *	be the same and will match the old pg_class.oid value.  Because of
- *	this, old/new pg_class.relfilenode values will not match if CLUSTER,
- *	REINDEX, or VACUUM FULL have been performed in the old cluster.
+ *	While pg_class.oid and pg_class.relfilenode are initially the same in a
+ *	cluster, they can diverge due to CLUSTER, REINDEX, or VACUUM FULL.  We
+ *	control assignments of pg_class.relfilenode because relfilenode is used to
+ *	derive initialization vector for data encryption. If relfilenode changed
+ *	during upgrade, we'd be unable to decrypt the data in the new cluster.
+ *
+ *	pg_database.oid and pg_tablespace.oid are also preserved because they
+ *	participate in the encryption initialization vector.
  *
  *	We control all assignments of pg_type.oid because these oids are stored
  *	in user composite type values.
@@ -71,6 +73,12 @@ char	   *output_files[] = {
 	NULL
 };
 
+/*
+ * Declare these locally so we don't have to link storage/file/encryption.c
+ * here.
+ */
+bool		encryption_setup_done = false;
+unsigned char encryption_key[ENCRYPTION_KEY_LENGTH];
 
 int
 main(int argc, char **argv)
@@ -91,6 +99,20 @@ main(int argc, char **argv)
 
 	adjust_data_dir(&old_cluster);
 	adjust_data_dir(&new_cluster);
+
+	/*
+	 * The encryption key is needed to start the clusters.
+	 */
+	if (encryption_key_command)
+	{
+		/*
+		 * Both clusters should have the same KDF parameters, so we can pass
+		 * pgdata of any one.
+		 */
+		run_encryption_key_command(encryption_key, old_cluster.pgdata);
+
+		encryption_setup_done = true;
+	}
 
 	setup(argv[0], &live_check);
 
@@ -137,6 +159,16 @@ main(int argc, char **argv)
 
 	copy_xact_xlog_xid();
 
+	if (encryption_setup_done)
+	{
+		/*
+		 * Copy KDF file so that the old cluster encryption password works for
+		 * the new cluster.
+		 */
+		read_kdf_file(old_cluster.pgdata);
+		write_kdf_file(new_cluster.pgdata);
+	}
+
 	/* New now using xids of the old system */
 
 	/* -- NEW -- */
@@ -168,13 +200,15 @@ main(int argc, char **argv)
 	 */
 	prep_status("Setting next OID for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  encryption_setup_done ? encryption_key : NULL,
 			  "\"%s/pg_resetwal\" -o %u \"%s\"",
-			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtoid,
+			  new_cluster.bindir,
+			  old_cluster.controldata.chkpnt_nxtoid,
 			  new_cluster.pgdata);
 	check_ok();
 
 	prep_status("Sync data directory to disk");
-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, NULL,
 			  "\"%s/initdb\" --sync-only \"%s\"", new_cluster.bindir,
 			  new_cluster.pgdata);
 	check_ok();
@@ -268,7 +302,7 @@ prepare_new_cluster(void)
 	 * --analyze so autovacuum doesn't update statistics later
 	 */
 	prep_status("Analyzing all rows in the new cluster");
-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, NULL,
 			  "\"%s/vacuumdb\" %s --all --analyze %s",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  log_opts.verbose ? "--verbose" : "");
@@ -281,7 +315,7 @@ prepare_new_cluster(void)
 	 * counter later.
 	 */
 	prep_status("Freezing all rows in the new cluster");
-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, NULL,
 			  "\"%s/vacuumdb\" %s --all --freeze %s",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  log_opts.verbose ? "--verbose" : "");
@@ -302,7 +336,7 @@ prepare_new_globals(void)
 	 */
 	prep_status("Restoring global objects in the new cluster");
 
-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, NULL,
 			  "\"%s/psql\" " EXEC_PSQL_ARGS " %s -f \"%s\"",
 			  new_cluster.bindir, cluster_conn_opts(&new_cluster),
 			  GLOBALS_DUMP_FILE);
@@ -349,6 +383,7 @@ create_new_objects(void)
 				  NULL,
 				  true,
 				  true,
+				  NULL,
 				  "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
 				  "--dbname postgres \"%s\"",
 				  new_cluster.bindir,
@@ -446,7 +481,7 @@ copy_subdir_files(const char *old_subdir, const char *new_subdir)
 
 	prep_status("Copying old %s to new server", old_subdir);
 
-	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, NULL,
 #ifndef WIN32
 			  "cp -Rf \"%s\" \"%s\"",
 #else
@@ -473,15 +508,20 @@ copy_xact_xlog_xid(void)
 	/* set the next transaction id and epoch of the new cluster */
 	prep_status("Setting next transaction ID and epoch for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  encryption_setup_done ? encryption_key : NULL,
 			  "\"%s/pg_resetwal\" -f -x %u \"%s\"",
-			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtxid,
+			  new_cluster.bindir,
+			  old_cluster.controldata.chkpnt_nxtxid,
 			  new_cluster.pgdata);
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  encryption_setup_done ? encryption_key : NULL,
 			  "\"%s/pg_resetwal\" -f -e %u \"%s\"",
-			  new_cluster.bindir, old_cluster.controldata.chkpnt_nxtepoch,
+			  new_cluster.bindir,
+			  old_cluster.controldata.chkpnt_nxtepoch,
 			  new_cluster.pgdata);
 	/* must reset commit timestamp limits also */
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  encryption_setup_done ? encryption_key : NULL,
 			  "\"%s/pg_resetwal\" -f -c %u,%u \"%s\"",
 			  new_cluster.bindir,
 			  old_cluster.controldata.chkpnt_nxtxid,
@@ -508,6 +548,7 @@ copy_xact_xlog_xid(void)
 		 * counters here and the oldest multi present on system.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+				  encryption_setup_done ? encryption_key : NULL,
 				  "\"%s/pg_resetwal\" -O %u -m %u,%u \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmxoff,
@@ -536,6 +577,7 @@ copy_xact_xlog_xid(void)
 		 * next=MaxMultiXactId, but multixact.c can cope with that just fine.
 		 */
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+				  encryption_setup_done ? encryption_key : NULL,
 				  "\"%s/pg_resetwal\" -m %u,%u \"%s\"",
 				  new_cluster.bindir,
 				  old_cluster.controldata.chkpnt_nxtmulti + 1,
@@ -547,6 +589,7 @@ copy_xact_xlog_xid(void)
 	/* now reset the wal archives in the new cluster */
 	prep_status("Resetting WAL archives");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  encryption_setup_done ? encryption_key : NULL,
 	/* use timeline 1 to match controldata and no WAL history file */
 			  "\"%s/pg_resetwal\" -l 00000001%s \"%s\"", new_cluster.bindir,
 			  old_cluster.controldata.nextxlogfile + 8,

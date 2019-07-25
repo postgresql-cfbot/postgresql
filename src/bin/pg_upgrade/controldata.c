@@ -485,6 +485,33 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			cluster->controldata.data_checksum_version = str2uint(p);
 			got_data_checksum_version = true;
 		}
+		else if ((p = strstr(bufin, "encryption fingerprint")) != NULL)
+		{
+			int			i;
+
+			p = strchr(p, ':');
+
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			cluster->controldata.data_encrypted = true;
+
+			/* Skip the colon and any whitespace after it */
+			p = strchr(p, ':');
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+			p = strpbrk(p, "01234567890ABCDEF");
+			if (p == NULL || strlen(p) <= 1)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			/* Make sure it looks like a valid finerprint */
+			if (strspn(p, "0123456789ABCDEF") != 32)
+				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+
+			for (i = 0; i < ENCRYPTION_SAMPLE_SIZE; i++)
+				sscanf(p + 2 * i, "%2hhx",
+					   cluster->controldata.encryption_verification + i);
+		}
 	}
 
 	pclose(output);
@@ -669,6 +696,18 @@ check_control_data(ControlData *oldctrl,
 		pg_fatal("old cluster uses data checksums but the new one does not\n");
 	else if (oldctrl->data_checksum_version != newctrl->data_checksum_version)
 		pg_fatal("old and new cluster pg_controldata checksum versions do not match\n");
+
+	if (oldctrl->data_encrypted && !newctrl->data_encrypted)
+		pg_fatal("old cluster is encrypted, but the new one is not\n");
+	else if (!oldctrl->data_encrypted && newctrl->data_encrypted)
+		pg_fatal("old cluster is not encrypted, but the new one is\n");
+	else if (oldctrl->data_encrypted)
+	{
+		if (memcmp(oldctrl->encryption_verification,
+				   newctrl->encryption_verification,
+				   ENCRYPTION_SAMPLE_SIZE) != 0)
+			pg_fatal("encryption of the new cluster is not compatible with encryption of the old one\n");
+	}
 }
 
 

@@ -13,7 +13,9 @@
 #ifndef COPYDIR_H
 #define COPYDIR_H
 
-extern void copydir(char *fromdir, char *todir, bool recurse);
-extern void copy_file(char *fromfile, char *tofile);
+#include "storage/relfilenode.h"
+
+extern void copydir(char *fromdir, char *todir, RelFileNode *fromNode, RelFileNode *toNode);
+extern void copy_file(char *fromfile, char *tofile, RelFileNode *fromNode, RelFileNode *toNode, ForkNumber fromForkNum, ForkNumber toForkNum, int segment);
 
 #endif							/* COPYDIR_H */

@@ -209,6 +209,17 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry id="app-initdb-data-encr-cmd" xreflabel="data encryption">
+      <term><option>-K</option></term>
+      <term><option>--encryption-key-command=<replaceable class="parameter">command</replaceable></option></term>
+      <listitem>
+       <para>
+        Encrypt the cluster data using a key retrieved from the command
+        specified here. See <xref linkend="encryption"/> for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="app-initdb-data-checksums" xreflabel="data checksums">
       <term><option>-k</option></term>
       <term><option>--data-checksums</option></term>

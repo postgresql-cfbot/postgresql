@@ -1,0 +1,11 @@
+This extension was written to check if changes introduced due to cluster
+encryption do not break buffile.c.
+
+Caution: To make the test cheaper, it was decided to adjust the segment sizeq,
+see
+
+#define MAX_PHYSICAL_FILESIZE	(4 * BLCKSZ)
+
+in buffile.c. BLCKSZ is 8192 (the default). All the tests rely on this
+value. So if you haven't compiled Postgres with this value, the tests will
+create 1 GB files and they will fail.

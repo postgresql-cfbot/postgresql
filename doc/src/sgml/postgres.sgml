@@ -163,6 +163,7 @@
   &wal;
   &logical-replication;
   &jit;
+  &encryption;
   &regress;
 
  </part>

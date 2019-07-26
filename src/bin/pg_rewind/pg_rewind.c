@@ -29,6 +29,7 @@
 #include "common/restricted_token.h"
 #include "getopt_long.h"
 #include "storage/bufpage.h"
+#include "backup_common.h"
 
 static void usage(const char *progname);
 
@@ -40,6 +41,7 @@ static void digestControlFile(ControlFileData *ControlFile, char *source,
 static void syncTargetDirectory(void);
 static void sanityChecks(void);
 static void findCommonAncestorTimeline(XLogRecPtr *recptr, int *tliIndex);
+static void ensureCleanShutdown(const char *argv0);
 
 static ControlFileData ControlFile_target;
 static ControlFileData ControlFile_source;
@@ -75,6 +77,8 @@ usage(const char *progname)
 	printf(_("  -D, --target-pgdata=DIRECTORY  existing data directory to modify\n"));
 	printf(_("      --source-pgdata=DIRECTORY  source data directory to synchronize with\n"));
 	printf(_("      --source-server=CONNSTR    source server to synchronize with\n"));
+	printf(_("  -R, --write-recovery-conf      write configuration for replication\n"));
+	printf(_("  -e, --ensure-clean-shutdown    run single-mode postgres if needed to make sure target is clean shutdown\n"));
 	printf(_("  -n, --dry-run                  stop before modifying anything\n"));
 	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"
 			 "                                 safely to disk\n"));
@@ -92,8 +96,10 @@ main(int argc, char **argv)
 	static struct option long_options[] = {
 		{"help", no_argument, NULL, '?'},
 		{"target-pgdata", required_argument, NULL, 'D'},
+		{"write-recovery-conf", no_argument, NULL, 'R'},
 		{"source-pgdata", required_argument, NULL, 1},
 		{"source-server", required_argument, NULL, 2},
+		{"ensure-clean-shutdown", no_argument, NULL, 'e'},
 		{"version", no_argument, NULL, 'V'},
 		{"dry-run", no_argument, NULL, 'n'},
 		{"no-sync", no_argument, NULL, 'N'},
@@ -110,6 +116,7 @@ main(int argc, char **argv)
 	XLogRecPtr	chkptredo;
 	size_t		size;
 	char	   *buffer;
+	bool		ensure_clean_shutdown = false;
 	bool		rewind_needed;
 	XLogRecPtr	endrec;
 	TimeLineID	endtli;
@@ -134,13 +141,17 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:nNP", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "D:nNPRe", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
 			case '?':
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
+
+			case 'e':
+				ensure_clean_shutdown = true;
+				break;
 
 			case 'P':
 				showprogress = true;
@@ -152,6 +163,10 @@ main(int argc, char **argv)
 
 			case 'N':
 				do_sync = false;
+				break;
+
+			case 'R':
+				writerecoveryconf = true;
 				break;
 
 			case 3:
@@ -231,7 +246,10 @@ main(int argc, char **argv)
 
 	/* Connect to remote server */
 	if (connstr_source)
+	{
 		libpqConnect(connstr_source);
+		atexit(disconnect_atexit);
+	}
 
 	/*
 	 * Ok, we have all the options and we're ready to start. Read in all the
@@ -240,6 +258,22 @@ main(int argc, char **argv)
 	buffer = slurpFile(datadir_target, "global/pg_control", &size);
 	digestControlFile(&ControlFile_target, buffer, size);
 	pg_free(buffer);
+
+	/*
+	 * If the target instance was not cleanly shut down, run a single-user
+	 * postgres session really quickly and reload the control file to get the
+	 * new state.
+	 */
+	if (ensure_clean_shutdown &&
+		ControlFile_target.state != DB_SHUTDOWNED &&
+		ControlFile_target.state != DB_SHUTDOWNED_IN_RECOVERY)
+	{
+		ensureCleanShutdown(argv[0]);
+
+		buffer = slurpFile(datadir_target, "global/pg_control", &size);
+		digestControlFile(&ControlFile_target, buffer, size);
+		pg_free(buffer);
+	}
 
 	buffer = fetchFile("global/pg_control", &size);
 	digestControlFile(&ControlFile_source, buffer, size);
@@ -297,6 +331,11 @@ main(int argc, char **argv)
 	if (!rewind_needed)
 	{
 		pg_log_info("no rewind required");
+		if (writerecoveryconf && connstr_source)
+		{
+			GenerateRecoveryConf();
+			WriteRecoveryConf(datadir_target);
+		}
 		exit(0);
 	}
 
@@ -393,6 +432,12 @@ main(int argc, char **argv)
 	if (showprogress)
 		pg_log_info("syncing target data directory");
 	syncTargetDirectory();
+
+	if (writerecoveryconf && connstr_source)
+	{
+		GenerateRecoveryConf();
+		WriteRecoveryConf(datadir_target);
+	}
 
 	pg_log_info("Done!");
 
@@ -747,4 +792,48 @@ syncTargetDirectory(void)
 		return;
 
 	fsync_pgdata(datadir_target, PG_VERSION_NUM);
+}
+
+/*
+ * Ensure clean shutdown of target instance by launching single-user mode
+ * postgres to do crash recovery.
+ */
+static void
+ensureCleanShutdown(const char *argv0)
+{
+	int		ret;
+#define MAXCMDLEN (2 * MAXPGPATH)
+	char	exec_path[MAXPGPATH];
+	char	cmd[MAXCMDLEN];
+
+	/* locate postgres binary */
+	if ((ret = find_other_exec(argv0, "postgres",
+							   PG_BACKEND_VERSIONSTR,
+							   exec_path)) < 0)
+	{
+		char        full_path[MAXPGPATH];
+
+		if (find_my_exec(argv0, full_path) < 0)
+			strlcpy(full_path, progname, sizeof(full_path));
+
+		if (ret == -1)
+			pg_fatal("The program \"postgres\" is needed by %s but was \n"
+					 "not found in the same directory as \"%s\".\n"
+					 "Check your installation.\n", progname, full_path);
+		else
+			pg_fatal("The program \"postgres\" was found by \"%s\"\n"
+					 "but was not the same version as %s.\n"
+					 "Check your installation.\n", full_path, progname);
+	}
+
+	/* only skip processing after ensuring presence of postgres */
+	if (dry_run)
+		return;
+
+	/* finally run postgres single-user mode */
+	snprintf(cmd, MAXCMDLEN, "\"%s\" --single -D \"%s\" template1 < %s",
+			 exec_path, datadir_target, DEVNULL);
+
+	if (system(cmd) != 0)
+		pg_fatal("postgres single-user mode of target instance failed for command: %s\n", cmd);
 }

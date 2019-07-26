@@ -21,7 +21,7 @@ include $(top_builddir)/src/Makefile.global
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
-OBJS=receivelog.o streamutil.o walmethods.o $(WIN32RES)
+OBJS=receivelog.o streamutil.o walmethods.o backup_common.o $(WIN32RES)
 
 all: pg_basebackup pg_receivewal pg_recvlogical
 

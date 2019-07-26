@@ -15,19 +15,22 @@ subdir = src/bin/pg_rewind
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-override CPPFLAGS := -I$(libpq_srcdir) -DFRONTEND $(CPPFLAGS)
-LDFLAGS_INTERNAL += $(libpq_pgport)
+override CPPFLAGS := -I$(libpq_srcdir) -DFRONTEND -I$(top_srcdir)/src/bin/pg_basebackup $(CPPFLAGS)
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
 OBJS	= pg_rewind.o parsexlog.o xlogreader.o datapagemap.o timeline.o \
-	fetch.o file_ops.o copy_fetch.o libpq_fetch.o filemap.o \
+	fetch.o file_ops.o copy_fetch.o libpq_fetch.o filemap.o backup_common.o \
 	$(WIN32RES)
 
-EXTRA_CLEAN = xlogreader.c
+EXTRA_CLEAN = xlogreader.c backup_common.c
 
 all: pg_rewind
 
 pg_rewind: $(OBJS) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+
+backup_common.c: % : $(top_srcdir)/src/bin/pg_basebackup/%
+	rm -f $@ && $(LN_S) $< .
 
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 	rm -f $@ && $(LN_S) $< .
@@ -42,7 +45,7 @@ uninstall:
 	rm -f '$(DESTDIR)$(bindir)/pg_rewind$(X)'
 
 clean distclean maintainer-clean:
-	rm -f pg_rewind$(X) $(OBJS) xlogreader.c
+	rm -f pg_rewind$(X) $(OBJS) xlogreader.c backup_common.c
 	rm -rf tmp_check
 
 check:

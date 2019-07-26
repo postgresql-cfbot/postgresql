@@ -375,7 +375,9 @@ sub mkvcbuild
 
 	my $pgrewind = AddSimpleFrontend('pg_rewind', 1);
 	$pgrewind->{name} = 'pg_rewind';
+	$pgrewind->AddIncludeDir('src/bin/pg_basebackup');
 	$pgrewind->AddFile('src/backend/access/transam/xlogreader.c');
+	$pgrewind->AddFile('src/bin/pg_basebackup/backup_common.c');
 	$pgrewind->AddLibrary('ws2_32.lib');
 	$pgrewind->AddDefine('FRONTEND');
 

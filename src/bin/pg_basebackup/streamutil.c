@@ -53,7 +53,6 @@ char	   *dbname = NULL;
 int			dbgetpassword = 0;	/* 0=auto, -1=never, 1=always */
 static bool have_password = false;
 static char password[100];
-PGconn	   *conn = NULL;
 
 /*
  * Connect to the server. Returns a valid PGconn pointer if connected,

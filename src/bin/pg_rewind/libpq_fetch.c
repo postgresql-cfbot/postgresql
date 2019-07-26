@@ -25,7 +25,7 @@
 #include "fe_utils/connect.h"
 #include "port/pg_bswap.h"
 
-static PGconn *conn = NULL;
+extern PGconn *conn;
 
 /*
  * Files are fetched max CHUNKSIZE bytes at a time.

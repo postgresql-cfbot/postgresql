@@ -166,6 +166,34 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-R</option></term>
+      <term><option>--write-recovery-conf</option></term>
+      <listitem>
+       <para>
+        Create <filename>standby.signal</filename> and append connection settings
+        to <filename>postgresql.auto.conf</filename> in the output directory.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-e</option></term>
+      <term><option>--ensure-clean-shutdown</option></term>
+      <listitem>
+       <para>
+        Make sure target is clean shutdown before running
+        <application>pg_rewind</application>. With this option specified,
+        <application>pg_rewind</application> will launch a single mode
+        postgres instance if needed to ensure the target has completed crash
+        recovery and make sure pg_control is in clean shutdown state.
+        Clean shutdown state is a prerequisite of
+        <application>pg_rewind</application>. Without this option, users need
+        to do this manually.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-n</option></term>
       <term><option>--dry-run</option></term>
       <listitem>

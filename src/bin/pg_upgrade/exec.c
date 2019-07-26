@@ -34,8 +34,10 @@ get_bin_version(ClusterInfo *cluster)
 	char		cmd[MAXPGPATH],
 				cmd_output[MAX_STRING];
 	FILE	   *output;
+	int			matches;
 	int			v1 = 0,
-				v2 = 0;
+				v2 = 0,
+				v3 = 0;
 
 	snprintf(cmd, sizeof(cmd), "\"%s/pg_ctl\" --version", cluster->bindir);
 
@@ -46,17 +48,23 @@ get_bin_version(ClusterInfo *cluster)
 
 	pclose(output);
 
-	if (sscanf(cmd_output, "%*s %*s %d.%d", &v1, &v2) < 1)
+	matches = sscanf(cmd_output, "%*s %*s %d.%d.%d", &v1, &v2, &v3);
+	if (matches < 1)
 		pg_fatal("could not get pg_ctl version output from %s\n", cmd);
 
-	if (v1 < 10)
+	if (matches == 3)
 	{
 		/* old style, e.g. 9.6.1 */
-		cluster->bin_version = v1 * 10000 + v2 * 100;
+		cluster->bin_version = v1 * 10000 + v2 * 100 + v3;
+	}
+	else if (matches == 2)
+	{
+		/* new style, e.g. 10.1 */
+		cluster->bin_version = v1 * 10000 + v2;
 	}
 	else
 	{
-		/* new style, e.g. 10.1 */
+		/* new style pre-release, e.g. 12devel */
 		cluster->bin_version = v1 * 10000;
 	}
 }
@@ -376,6 +384,7 @@ check_bin_dir(ClusterInfo *cluster)
 					  cluster->bindir);
 
 	validate_exec(cluster->bindir, "postgres");
+	validate_exec(cluster->bindir, "pg_controldata");
 	validate_exec(cluster->bindir, "pg_ctl");
 
 	/*
@@ -390,12 +399,20 @@ check_bin_dir(ClusterInfo *cluster)
 		validate_exec(cluster->bindir, "pg_resetxlog");
 	else
 		validate_exec(cluster->bindir, "pg_resetwal");
+
 	if (cluster == &new_cluster)
 	{
-		/* these are only needed in the new cluster */
-		validate_exec(cluster->bindir, "psql");
+		/*
+		 * These binaries are only needed for the target version. pg_dump and
+		 * pg_dumpall are used to dump the old cluster, but must be of the
+		 * target version.
+		 */
+		validate_exec(cluster->bindir, "initdb");
 		validate_exec(cluster->bindir, "pg_dump");
 		validate_exec(cluster->bindir, "pg_dumpall");
+		validate_exec(cluster->bindir, "pg_restore");
+		validate_exec(cluster->bindir, "psql");
+		validate_exec(cluster->bindir, "vacuumdb");
 	}
 }
 

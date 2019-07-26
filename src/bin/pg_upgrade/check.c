@@ -283,6 +283,8 @@ check_cluster_versions(void)
 	if (GET_MAJOR_VERSION(new_cluster.major_version) !=
 		GET_MAJOR_VERSION(new_cluster.bin_version))
 		pg_fatal("New cluster data and binary directories are from different major versions.\n");
+	if (new_cluster.bin_version != PG_VERSION_NUM)
+		pg_fatal("New cluster binaries and upgrade utility are from different versions.\n");
 
 	check_ok();
 }

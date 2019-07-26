@@ -212,6 +212,21 @@ setup(char *argv0, bool *live_check)
 	 */
 	check_pghost_envvar();
 
+	/*
+	 * In case the user hasn't specified the directory for the new binaries
+	 * with -B, default to using the path of the currently executed pg_upgrade
+	 * binary.
+	 */
+	if (!new_cluster.bindir)
+	{
+		if (find_my_exec(argv0, exec_path) < 0)
+			pg_fatal("%s: could not find own program executable\n", argv0);
+		/* Trim off program name and keep just path */
+		*last_dir_separator(exec_path) = '\0';
+		canonicalize_path(exec_path);
+		new_cluster.bindir = pg_strdup(exec_path);
+	}
+
 	verify_directories();
 
 	/* no postmasters should be running, except for a live check */
@@ -247,15 +262,6 @@ setup(char *argv0, bool *live_check)
 			pg_fatal("There seems to be a postmaster servicing the new cluster.\n"
 					 "Please shutdown that postmaster and try again.\n");
 	}
-
-	/* get path to pg_upgrade executable */
-	if (find_my_exec(argv0, exec_path) < 0)
-		pg_fatal("%s: could not find own program executable\n", argv0);
-
-	/* Trim off program name and keep just path */
-	*last_dir_separator(exec_path) = '\0';
-	canonicalize_path(exec_path);
-	os_info.exec_path = pg_strdup(exec_path);
 }
 
 

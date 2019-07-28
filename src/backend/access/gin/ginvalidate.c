@@ -108,40 +108,47 @@ ginvalidate(Oid opclassoid)
 		{
 			case GIN_COMPARE_PROC:
 				ok = check_amproc_signature(procform->amproc, INT4OID, false,
-											2, 2, opckeytype, opckeytype);
+											2, 3, opckeytype, opckeytype,
+											INTERNALOID);
 				break;
 			case GIN_EXTRACTVALUE_PROC:
 				/* Some opclasses omit nullFlags */
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
-											2, 3, opcintype, INTERNALOID,
-											INTERNALOID);
+											2, 4, opcintype, INTERNALOID,
+											INTERNALOID, INTERNALOID);
 				break;
 			case GIN_EXTRACTQUERY_PROC:
 				/* Some opclasses omit nullFlags and searchMode */
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
-											5, 7, opcintype, INTERNALOID,
+											5, 8, opcintype, INTERNALOID,
 											INT2OID, INTERNALOID, INTERNALOID,
-											INTERNALOID, INTERNALOID);
+											INTERNALOID, INTERNALOID,
+											INTERNALOID);
 				break;
 			case GIN_CONSISTENT_PROC:
 				/* Some opclasses omit queryKeys and nullFlags */
 				ok = check_amproc_signature(procform->amproc, BOOLOID, false,
-											6, 8, INTERNALOID, INT2OID,
+											6, 9, INTERNALOID, INT2OID,
+											opcintype, INT4OID,
+											INTERNALOID, INTERNALOID,
+											INTERNALOID, INTERNALOID,
+											INTERNALOID);
+				break;
+			case GIN_COMPARE_PARTIAL_PROC:
+				ok = check_amproc_signature(procform->amproc, INT4OID, false,
+											4, 5, opckeytype, opckeytype,
+											INT2OID, INTERNALOID, INTERNALOID);
+				break;
+			case GIN_TRICONSISTENT_PROC:
+				ok = check_amproc_signature(procform->amproc, CHAROID, false,
+											7, 8, INTERNALOID, INT2OID,
 											opcintype, INT4OID,
 											INTERNALOID, INTERNALOID,
 											INTERNALOID, INTERNALOID);
 				break;
-			case GIN_COMPARE_PARTIAL_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, false,
-											4, 4, opckeytype, opckeytype,
-											INT2OID, INTERNALOID);
-				break;
-			case GIN_TRICONSISTENT_PROC:
-				ok = check_amproc_signature(procform->amproc, CHAROID, false,
-											7, 7, INTERNALOID, INT2OID,
-											opcintype, INT4OID,
-											INTERNALOID, INTERNALOID,
-											INTERNALOID);
+			case GIN_OPCLASSOPTIONS_PROC:
+				ok = check_amproc_signature(procform->amproc, INTERNALOID,
+											false, 2, 2, INTERNALOID, BOOLOID);
 				break;
 			default:
 				ereport(INFO,
@@ -238,7 +245,8 @@ ginvalidate(Oid opclassoid)
 		if (opclassgroup &&
 			(opclassgroup->functionset & (((uint64) 1) << i)) != 0)
 			continue;			/* got it */
-		if (i == GIN_COMPARE_PROC || i == GIN_COMPARE_PARTIAL_PROC)
+		if (i == GIN_COMPARE_PROC || i == GIN_COMPARE_PARTIAL_PROC ||
+			i == GIN_OPCLASSOPTIONS_PROC)
 			continue;			/* optional method */
 		if (i == GIN_CONSISTENT_PROC || i == GIN_TRICONSISTENT_PROC)
 			continue;			/* don't need both, see check below loop */

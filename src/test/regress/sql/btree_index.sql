@@ -121,6 +121,10 @@ create index btree_idx_err on btree_test(a) with (vacuum_cleanup_index_scale_fac
 alter index btree_idx1 set (vacuum_cleanup_index_scale_factor = 70.0);
 select reloptions from pg_class WHERE oid = 'btree_idx1'::regclass;
 
+-- Test unsupported btree opclass parameters
+create index on btree_tall_tbl (id int4_ops(foo=1));
+create index on btree_tall_tbl (id default(foo=1));
+
 --
 -- Test for multilevel page deletion
 --

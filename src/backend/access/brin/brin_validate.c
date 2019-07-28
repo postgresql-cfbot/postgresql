@@ -93,18 +93,22 @@ brinvalidate(Oid opclassoid)
 				break;
 			case BRIN_PROCNUM_ADDVALUE:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
-											4, 4, INTERNALOID, INTERNALOID,
-											INTERNALOID, INTERNALOID);
+											4, 5, INTERNALOID, INTERNALOID,
+											INTERNALOID, INTERNALOID, INTERNALOID);
 				break;
 			case BRIN_PROCNUM_CONSISTENT:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
-											3, 3, INTERNALOID, INTERNALOID,
-											INTERNALOID);
+											3, 5, INTERNALOID, INTERNALOID,
+											INTERNALOID, INT4OID, INTERNALOID);
 				break;
 			case BRIN_PROCNUM_UNION:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
-											3, 3, INTERNALOID, INTERNALOID,
-											INTERNALOID);
+											3, 4, INTERNALOID, INTERNALOID,
+											INTERNALOID, INTERNALOID);
+				break;
+			case BRIN_OPCLASSOPT_PROC:
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
+											2, 2, INTERNALOID, BOOLOID);
 				break;
 			default:
 				/* Complain if it's not a valid optional proc number */

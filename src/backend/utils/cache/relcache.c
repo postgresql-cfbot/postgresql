@@ -5146,6 +5146,105 @@ GetRelationPublicationActions(Relation relation)
 }
 
 /*
+ * RelationGetIndexOpclassOptions -- get opclass-specific options for the index
+ */
+Datum *
+RelationGetRawOpclassOptions(Oid indexrelid, int16 natts)
+{
+	Datum	   *options = NULL;
+	int16		attnum;
+
+	for (attnum = 1; attnum <= natts; attnum++)
+	{
+		HeapTuple	tuple;
+		Datum		attopts;
+		bool		isnull;
+
+		tuple = SearchSysCache2(ATTNUM, ObjectIdGetDatum(indexrelid),
+								Int16GetDatum(attnum));
+
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+				 attnum, indexrelid);
+
+		attopts = SysCacheGetAttr(ATTNAME, tuple, Anum_pg_attribute_attoptions,
+								  &isnull);
+
+		if (!isnull)
+		{
+			if (!options)
+				options = palloc0(sizeof(Datum) * natts);
+
+			options[attnum - 1] = datumCopy(attopts, false, -1);	/* text */
+		}
+
+		ReleaseSysCache(tuple);
+	}
+
+	return options;
+}
+
+/*
+ * RelationGetOpclassOptions -- get parsed opclass-specific options for an index
+ */
+bytea **
+RelationGetParsedOpclassOptions(Relation relation)
+{
+	MemoryContext oldcxt;
+	bytea	  **opts;
+	Datum	   *rawopts;
+	int			natts = RelationGetNumberOfAttributes(relation);
+	int			i;
+
+	/* Try to copy cached options. */
+	if (relation->rd_opcoptions)
+	{
+		opts = palloc(sizeof(*opts) * natts);
+
+		for (i = 0; i < natts; i++)
+		{
+			bytea	   *opt = relation->rd_opcoptions[i];
+
+			opts[i] = !opt ? NULL : (bytea *)
+				DatumGetPointer(datumCopy(PointerGetDatum(opt), false, -1));
+		}
+
+		return opts;
+	}
+
+	/* Get and parse opclass options. */
+	opts = palloc0(sizeof(*opts) * natts);
+
+	rawopts = RelationGetRawOpclassOptions(RelationGetRelid(relation), natts);
+
+	for (i = 0; i < natts; i++)
+	{
+		Datum		options = rawopts ? rawopts[i] : (Datum) 0;
+
+		opts[i] = index_opclass_options(relation, i + 1, options, false);
+
+		if (options != (Datum) 0)
+			pfree(DatumGetPointer(options));
+	}
+
+	if (rawopts)
+		pfree(rawopts);
+
+	/* Copy parsed options to the cache. */
+	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+
+	relation->rd_opcoptions = palloc(sizeof(*opts) * natts);
+
+	for (i = 0; i < natts; i++)
+		relation->rd_opcoptions[i] = !opts[i] ? NULL : (bytea *)
+			DatumGetPointer(datumCopy(PointerGetDatum(opts[i]), false, -1));
+
+	MemoryContextSwitchTo(oldcxt);
+
+	return opts;
+}
+
+/*
  * Routines to support ereport() reports of relation-related errors
  *
  * These could have been put into elog.c, but it seems like a module layering

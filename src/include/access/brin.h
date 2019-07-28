@@ -23,6 +23,9 @@ typedef struct BrinOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	BlockNumber pagesPerRange;
 	bool		autosummarize;
+	double		nDistinctPerRange;	/* number of distinct values per range */
+	double		falsePositiveRate;	/* false positive for bloom filter */
+	int			valuesPerRange;		/* number of values per range */
 } BrinOptions;
 
 
@@ -37,6 +40,7 @@ typedef struct BrinStatsData
 
 
 #define BRIN_DEFAULT_PAGES_PER_RANGE	128
+
 #define BrinGetPagesPerRange(relation) \
 	((relation)->rd_options ? \
 	 ((BrinOptions *) (relation)->rd_options)->pagesPerRange : \
@@ -45,7 +49,6 @@ typedef struct BrinStatsData
 	((relation)->rd_options ? \
 	 ((BrinOptions *) (relation)->rd_options)->autosummarize : \
 	  false)
-
 
 extern void brinGetStats(Relation index, BrinStatsData *stats);
 

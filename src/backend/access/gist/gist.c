@@ -98,6 +98,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amopclassoptions = gistopclassoptions;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -1507,6 +1508,7 @@ initGISTstate(Relation index)
 	giststate->scanCxt = scanCxt;
 	giststate->tempCxt = scanCxt;	/* caller must change this if needed */
 	giststate->leafTupdesc = index->rd_att;
+	giststate->opclassoptions = RelationGetParsedOpclassOptions(index);
 
 	/*
 	 * The truncated tupdesc for non-leaf index tuples, which doesn't contain

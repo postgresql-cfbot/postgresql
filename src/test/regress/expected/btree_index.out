@@ -244,6 +244,11 @@ select reloptions from pg_class WHERE oid = 'btree_idx1'::regclass;
  {vacuum_cleanup_index_scale_factor=70.0}
 (1 row)
 
+-- Test unsupported btree opclass parameters
+create index on btree_tall_tbl (id int4_ops(foo=1));
+ERROR:  access method "btree" does not support opclass options 
+create index on btree_tall_tbl (id default(foo=1));
+ERROR:  access method "btree" does not support opclass options 
 --
 -- Test for multilevel page deletion
 --

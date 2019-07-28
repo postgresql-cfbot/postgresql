@@ -27,6 +27,9 @@ typedef struct BrinOpcInfo
 	/* Number of columns stored in an index column of this opclass */
 	uint16		oi_nstored;
 
+	/* Regular processing of NULLs in BrinValues? */
+	bool		oi_regular_nulls;
+
 	/* Opaque pointer for the opclass' private use */
 	void	   *oi_opaque;
 
@@ -55,6 +58,13 @@ typedef struct BrinDesc
 	/* total number of Datum entries that are stored on-disk for all columns */
 	int			bd_totalstored;
 
+	/* parameters for sizing bloom filter (BRIN bloom opclasses) */
+	double		bd_nDistinctPerRange;
+	double		bd_falsePositiveRange;
+
+	/* parameters for multi-minmax indexes */
+	int			bd_valuesPerRange;
+
 	/* per-column info; bd_tupdesc->natts entries long */
 	BrinOpcInfo *bd_info[FLEXIBLE_ARRAY_MEMBER];
 } BrinDesc;
@@ -68,6 +78,7 @@ typedef struct BrinDesc
 #define BRIN_PROCNUM_ADDVALUE		2
 #define BRIN_PROCNUM_CONSISTENT		3
 #define BRIN_PROCNUM_UNION			4
+#define BRIN_OPCLASSOPT_PROC		5	/* optional */
 #define BRIN_MANDATORY_NPROCS		4
 /* procedure numbers up to 10 are reserved for BRIN future expansion */
 #define BRIN_FIRST_OPTIONAL_PROCNUM 11
@@ -103,6 +114,8 @@ extern IndexBulkDeleteResult *brinbulkdelete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *brinvacuumcleanup(IndexVacuumInfo *info,
 												IndexBulkDeleteResult *stats);
 extern bytea *brinoptions(Datum reloptions, bool validate);
+extern bytea *brinopclassoptions(Relation index, AttrNumber colno,
+								 Datum attoptions, bool validate);
 
 /* brin_validate.c */
 extern bool brinvalidate(Oid opclassoid);

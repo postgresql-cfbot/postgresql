@@ -134,6 +134,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/rel.h"
+#include "utils/relcache.h"
 #include "utils/selfuncs.h"
 #include "utils/snapmgr.h"
 #include "utils/spccache.h"
@@ -6310,7 +6311,7 @@ gincost_pattern(IndexOptInfo *index, int indexcol,
 	else
 		collation = DEFAULT_COLLATION_OID;
 
-	OidFunctionCall7Coll(extractProcOid,
+	OidFunctionCall8Coll(extractProcOid,
 						 collation,
 						 query,
 						 PointerGetDatum(&nentries),
@@ -6318,7 +6319,8 @@ gincost_pattern(IndexOptInfo *index, int indexcol,
 						 PointerGetDatum(&partial_matches),
 						 PointerGetDatum(&extra_data),
 						 PointerGetDatum(&nullFlags),
-						 PointerGetDatum(&searchMode));
+						 PointerGetDatum(&searchMode),
+						 PointerGetDatum(index->opclassoptions[indexcol]));
 
 	if (nentries <= 0 && searchMode == GIN_SEARCH_MODE_DEFAULT)
 	{

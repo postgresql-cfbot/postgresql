@@ -103,6 +103,12 @@ typedef void (*amcostestimate_function) (struct PlannerInfo *root,
 typedef bytea *(*amoptions_function) (Datum reloptions,
 									  bool validate);
 
+/* parse column opclass-specific options */
+typedef bytea *(*amopclassoptions_function) (Relation index,
+											 AttrNumber colno,
+											 Datum attoptions,
+											 bool validate);
+
 /* report AM, index, or index column property */
 typedef bool (*amproperty_function) (Oid index_oid, int attno,
 									 IndexAMProperty prop, const char *propname,
@@ -215,6 +221,7 @@ typedef struct IndexAmRoutine
 	amcanreturn_function amcanreturn;	/* can be NULL */
 	amcostestimate_function amcostestimate;
 	amoptions_function amoptions;
+	amopclassoptions_function amopclassoptions;
 	amproperty_function amproperty; /* can be NULL */
 	ambuildphasename_function ambuildphasename; /* can be NULL */
 	amvalidate_function amvalidate;

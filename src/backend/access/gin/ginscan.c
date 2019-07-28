@@ -156,6 +156,7 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 	key->strategy = strategy;
 	key->searchMode = searchMode;
 	key->attnum = attnum;
+	key->opclassOptions = ginstate->opclassOptions[attnum - 1];
 
 	ItemPointerSetMin(&key->curItem);
 	key->curItemMatches = false;
@@ -310,7 +311,7 @@ ginNewScanKey(IndexScanDesc scan)
 
 		/* OK to call the extractQueryFn */
 		queryValues = (Datum *)
-			DatumGetPointer(FunctionCall7Coll(&so->ginstate.extractQueryFn[skey->sk_attno - 1],
+			DatumGetPointer(FunctionCall8Coll(&so->ginstate.extractQueryFn[skey->sk_attno - 1],
 											  so->ginstate.supportCollation[skey->sk_attno - 1],
 											  skey->sk_argument,
 											  PointerGetDatum(&nQueryValues),
@@ -318,7 +319,8 @@ ginNewScanKey(IndexScanDesc scan)
 											  PointerGetDatum(&partial_matches),
 											  PointerGetDatum(&extra_data),
 											  PointerGetDatum(&nullFlags),
-											  PointerGetDatum(&searchMode)));
+											  PointerGetDatum(&searchMode),
+											  PointerGetDatum(so->ginstate.opclassOptions[skey->sk_attno - 1])));
 
 		/*
 		 * If bogus searchMode is returned, treat as GIN_SEARCH_MODE_ALL; note

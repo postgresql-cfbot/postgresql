@@ -180,6 +180,11 @@ extern FmgrInfo *index_getprocinfo(Relation irel, AttrNumber attnum,
 extern void index_store_float8_orderby_distances(IndexScanDesc scan,
 												 Oid *orderByTypes, double *distances,
 												 bool recheckOrderBy);
+extern bytea *index_opclass_options(Relation relation, AttrNumber attnum,
+					  Datum attoptions, bool validate);
+extern bytea *index_opclass_options_generic(Relation relation,
+							  AttrNumber attnum, uint16 procnum,
+							  Datum attoptions, bool validate);
 
 /*
  * index access method support routines (in genam.c)

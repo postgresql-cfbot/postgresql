@@ -546,6 +546,11 @@
        index-only scans (optional)</entry>
        <entry>9</entry>
       </row>
+      <row>
+       <entry><function>options</function></entry>
+       <entry>parse opclass-specific options (optional)</entry>
+       <entry>10</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -659,6 +664,13 @@
         (optional if support function 4 is present)
        </entry>
        <entry>6</entry>
+      </row>
+      <row>
+       <entry><function>options</function></entry>
+       <entry>
+        parse opclass-specific options (optional)
+       </entry>
+       <entry>7</entry>
       </row>
      </tbody>
     </tgroup>

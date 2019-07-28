@@ -792,6 +792,7 @@ DefineIndex(Oid relationId,
 	indexInfo->ii_ExclusionOps = NULL;
 	indexInfo->ii_ExclusionProcs = NULL;
 	indexInfo->ii_ExclusionStrats = NULL;
+	indexInfo->ii_OpclassOptions = NULL;	/* for now */
 	indexInfo->ii_Unique = stmt->unique;
 	/* In a concurrent build, mark it not-ready-for-inserts */
 	indexInfo->ii_ReadyForInserts = !stmt->concurrent;
@@ -1530,7 +1531,7 @@ CheckPredicate(Expr *predicate)
 
 /*
  * Compute per-index-column information, including indexed column numbers
- * or index expressions, opclasses, and indoptions. Note, all output vectors
+ * or index expressions, opclasses and their options. Note, all output vectors
  * should be allocated for all columns, including "including" ones.
  */
 static void
@@ -1829,6 +1830,20 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("access method \"%s\" does not support NULLS FIRST/LAST options",
 								accessMethodName)));
+		}
+
+		/* Set up the per-column opclass options (attoptions field). */
+		if (attribute->opclassopts)
+		{
+			Assert(attn < nkeycols);
+
+			if (!indexInfo->ii_OpclassOptions)
+				indexInfo->ii_OpclassOptions =
+					palloc0(sizeof(Datum) * indexInfo->ii_NumIndexAttrs);
+
+			indexInfo->ii_OpclassOptions[attn] =
+				transformRelOptions((Datum) 0, attribute->opclassopts,
+									NULL, NULL, false, false);
 		}
 
 		attn++;

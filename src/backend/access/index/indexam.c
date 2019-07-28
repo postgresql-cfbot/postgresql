@@ -51,11 +51,14 @@
 #include "access/xlog.h"
 #include "catalog/index.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 
 /* ----------------------------------------------------------------
@@ -904,4 +907,82 @@ index_store_float8_orderby_distances(IndexScanDesc scan, Oid *orderByTypes,
 			scan->xs_orderbynulls[i] = true;
 		}
 	}
+}
+
+/* ----------------
+ *      index_opclass_options
+ *
+ *      Parse opclass-specific options for index column.
+ * ----------------
+ */
+bytea *
+index_opclass_options(Relation relation, AttrNumber attnum, Datum attoptions,
+					  bool validate)
+{
+	amopclassoptions_function amopclassoptions =
+		relation->rd_indam->amopclassoptions;
+
+	if (!amopclassoptions)
+	{
+		if (validate && PointerIsValid(DatumGetPointer(attoptions)))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("access method \"%s\" does not support opclass options ",
+							get_am_name(relation->rd_rel->relam))));
+
+		return NULL;
+	}
+
+	return amopclassoptions(relation, attnum, attoptions, validate);
+}
+
+/* ----------------
+ *      index_opclass_options_generic
+ *
+ *      Parse opclass options for index column using the specified support
+ *      function 'procnum' of column's opclass.
+ * ----------------
+ */
+bytea *
+index_opclass_options_generic(Relation indrel, AttrNumber attnum,
+							  uint16 procnum, Datum attoptions, bool validate)
+{
+	Oid			procid = index_getprocid(indrel, attnum, procnum);
+	FmgrInfo   *procinfo;
+
+	if (!OidIsValid(procid))
+	{
+		StringInfoData opclassname;
+		Oid			opclass;
+		Datum		indclassDatum;
+		oidvector  *indclass;
+		bool		isnull;
+
+		if (!DatumGetPointer(attoptions))
+			return NULL;	/* ok, no options, no procedure */
+
+		/*
+		 * Report an error if the opclass's options-parsing procedure does not
+		 * exist but the opclass options are specified.
+		 */
+		indclassDatum = SysCacheGetAttr(INDEXRELID, indrel->rd_indextuple,
+										Anum_pg_index_indclass, &isnull);
+		Assert(!isnull);
+		indclass = (oidvector *) DatumGetPointer(indclassDatum);
+		opclass = indclass->values[attnum - 1];
+
+		initStringInfo(&opclassname);
+		get_opclass_name(opclass, InvalidOid, &opclassname);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("operator class \"%s\" has no options",
+						opclassname.data)));
+	}
+
+	procinfo = index_getprocinfo(indrel, attnum, procnum);
+
+	return (bytea *) DatumGetPointer(FunctionCall2(procinfo,
+												   attoptions,
+												   BoolGetDatum(validate)));
 }

@@ -201,10 +201,11 @@ gistMakeUnionItVec(GISTSTATE *giststate, IndexTuple *itvec, int len,
 			}
 
 			/* Make union and store in attr array */
-			attr[i] = FunctionCall2Coll(&giststate->unionFn[i],
+			attr[i] = FunctionCall3Coll(&giststate->unionFn[i],
 										giststate->supportCollation[i],
 										PointerGetDatum(evec),
-										PointerGetDatum(&attrsize));
+										PointerGetDatum(&attrsize),
+										PointerGetDatum(giststate->opclassoptions[i]));
 
 			isnull[i] = false;
 		}
@@ -270,10 +271,11 @@ gistMakeUnionKey(GISTSTATE *giststate, int attno,
 		}
 
 		*dstisnull = false;
-		*dst = FunctionCall2Coll(&giststate->unionFn[attno],
+		*dst = FunctionCall3Coll(&giststate->unionFn[attno],
 								 giststate->supportCollation[attno],
 								 PointerGetDatum(evec),
-								 PointerGetDatum(&dstsize));
+								 PointerGetDatum(&dstsize),
+								 PointerGetDatum(giststate->opclassoptions[attno]));
 	}
 }
 
@@ -282,10 +284,11 @@ gistKeyIsEQ(GISTSTATE *giststate, int attno, Datum a, Datum b)
 {
 	bool		result;
 
-	FunctionCall3Coll(&giststate->equalFn[attno],
+	FunctionCall4Coll(&giststate->equalFn[attno],
 					  giststate->supportCollation[attno],
 					  a, b,
-					  PointerGetDatum(&result));
+					  PointerGetDatum(&result),
+					  PointerGetDatum(giststate->opclassoptions[attno]));
 	return result;
 }
 
@@ -559,9 +562,10 @@ gistdentryinit(GISTSTATE *giststate, int nkey, GISTENTRY *e,
 			return;
 
 		dep = (GISTENTRY *)
-			DatumGetPointer(FunctionCall1Coll(&giststate->decompressFn[nkey],
+			DatumGetPointer(FunctionCall2Coll(&giststate->decompressFn[nkey],
 											  giststate->supportCollation[nkey],
-											  PointerGetDatum(e)));
+											  PointerGetDatum(e),
+											  PointerGetDatum(giststate->opclassoptions[nkey])));
 		/* decompressFn may just return the given pointer */
 		if (dep != e)
 			gistentryinit(*e, dep->key, dep->rel, dep->page, dep->offset,
@@ -596,9 +600,10 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 			/* there may not be a compress function in opclass */
 			if (OidIsValid(giststate->compressFn[i].fn_oid))
 				cep = (GISTENTRY *)
-					DatumGetPointer(FunctionCall1Coll(&giststate->compressFn[i],
+					DatumGetPointer(FunctionCall2Coll(&giststate->compressFn[i],
 													  giststate->supportCollation[i],
-													  PointerGetDatum(&centry)));
+													  PointerGetDatum(&centry),
+													  PointerGetDatum(giststate->opclassoptions[i])));
 			else
 				cep = &centry;
 			compatt[i] = cep->key;
@@ -643,9 +648,10 @@ gistFetchAtt(GISTSTATE *giststate, int nkey, Datum k, Relation r)
 	gistentryinit(fentry, k, r, NULL, (OffsetNumber) 0, false);
 
 	fep = (GISTENTRY *)
-		DatumGetPointer(FunctionCall1Coll(&giststate->fetchFn[nkey],
+		DatumGetPointer(FunctionCall2Coll(&giststate->fetchFn[nkey],
 										  giststate->supportCollation[nkey],
-										  PointerGetDatum(&fentry)));
+										  PointerGetDatum(&fentry),
+										  PointerGetDatum(giststate->opclassoptions[nkey])));
 
 	/* fetchFn set 'key', return it to the caller */
 	return fep->key;
@@ -722,11 +728,12 @@ gistpenalty(GISTSTATE *giststate, int attno,
 	if (giststate->penaltyFn[attno].fn_strict == false ||
 		(isNullOrig == false && isNullAdd == false))
 	{
-		FunctionCall3Coll(&giststate->penaltyFn[attno],
+		FunctionCall4Coll(&giststate->penaltyFn[attno],
 						  giststate->supportCollation[attno],
 						  PointerGetDatum(orig),
 						  PointerGetDatum(add),
-						  PointerGetDatum(&penalty));
+						  PointerGetDatum(&penalty),
+						  PointerGetDatum(giststate->opclassoptions[attno]));
 		/* disallow negative or NaN penalty */
 		if (isnan(penalty) || penalty < 0.0)
 			penalty = 0.0;
@@ -932,6 +939,15 @@ gistoptions(Datum reloptions, bool validate)
 
 	return (bytea *) rdopts;
 }
+
+bytea *
+gistopclassoptions(Relation index, AttrNumber attnum, Datum attoptions,
+				   bool validate)
+{
+	return index_opclass_options_generic(index, attnum, GIST_OPCLASSOPT_PROC,
+										 attoptions, validate);
+}
+
 
 /*
  *	gistproperty() -- Check boolean properties of indexes.

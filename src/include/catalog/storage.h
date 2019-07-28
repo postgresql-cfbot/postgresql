@@ -30,7 +30,7 @@ extern void RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
  * These functions used to be in storage/smgr/smgr.c, which explains the
  * naming
  */
-extern void smgrDoPendingDeletes(bool isCommit);
+extern void smgrDoPendingOperations(bool isCommit);
 extern int	smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr);
 extern void AtSubCommit_smgr(void);
 extern void AtSubAbort_smgr(void);

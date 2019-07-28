@@ -2660,7 +2660,7 @@ static void
 RelationFlushRelation(Relation relation)
 {
 	if (relation->rd_createSubid != InvalidSubTransactionId ||
-		relation->rd_newRelfilenodeSubid != InvalidSubTransactionId)
+		relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
 	{
 		/*
 		 * New relcache entries are always rebuilt, not flushed; else we'd
@@ -2800,7 +2800,7 @@ RelationCacheInvalidate(void)
 		 * pending invalidations.
 		 */
 		if (relation->rd_createSubid != InvalidSubTransactionId ||
-			relation->rd_newRelfilenodeSubid != InvalidSubTransactionId)
+			relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
 			continue;
 
 		relcacheInvalsReceived++;
@@ -3057,6 +3057,7 @@ AtEOXact_cleanup(Relation relation, bool isCommit)
 	 * Likewise, reset the hint about the relfilenode being new.
 	 */
 	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 }
 
 /*
@@ -3148,7 +3149,7 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 	}
 
 	/*
-	 * Likewise, update or drop any new-relfilenode-in-subtransaction hint.
+	 * Likewise, update or drop any new-relfilenode-in-subtransaction hints.
 	 */
 	if (relation->rd_newRelfilenodeSubid == mySubid)
 	{
@@ -3156,6 +3157,15 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 			relation->rd_newRelfilenodeSubid = parentSubid;
 		else
 			relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	}
+
+
+	if (relation->rd_firstRelfilenodeSubid == mySubid)
+	{
+		if (isCommit)
+			relation->rd_firstRelfilenodeSubid = parentSubid;
+		else
+			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 	}
 }
 

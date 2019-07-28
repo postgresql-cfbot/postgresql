@@ -407,22 +407,6 @@ typedef struct TableAmRoutine
 							   uint8 flags,
 							   TM_FailureData *tmfd);
 
-	/*
-	 * Perform operations necessary to complete insertions made via
-	 * tuple_insert and multi_insert with a BulkInsertState specified. This
-	 * may for example be used to flush the relation, when the
-	 * TABLE_INSERT_SKIP_WAL option was used.
-	 *
-	 * Typically callers of tuple_insert and multi_insert will just pass all
-	 * the flags that apply to them, and each AM has to decide which of them
-	 * make sense for it, and then only take actions in finish_bulk_insert for
-	 * those flags, and ignore others.
-	 *
-	 * Optional callback.
-	 */
-	void		(*finish_bulk_insert) (Relation rel, int options);
-
-
 	/* ------------------------------------------------------------------------
 	 * DDL related functionality.
 	 * ------------------------------------------------------------------------
@@ -1087,10 +1071,6 @@ table_compute_xid_horizon_for_tuples(Relation rel,
  * The options bitmask allows the caller to specify options that may change the
  * behaviour of the AM. The AM will ignore options that it does not support.
  *
- * If the TABLE_INSERT_SKIP_WAL option is specified, the new tuple doesn't
- * need to be logged to WAL, even for a non-temp relation. It is the AMs
- * choice whether this optimization is supported.
- *
  * If the TABLE_INSERT_SKIP_FSM option is specified, AMs are free to not reuse
  * free space in the relation. This can save some cycles when we know the
  * relation is new and doesn't contain useful amounts of free space.
@@ -1112,8 +1092,7 @@ table_compute_xid_horizon_for_tuples(Relation rel,
  * heap's TOAST table, too, if the tuple requires any out-of-line data.
  *
  * The BulkInsertState object (if any; bistate can be NULL for default
- * behavior) is also just passed through to RelationGetBufferForTuple. If
- * `bistate` is provided, table_finish_bulk_insert() needs to be called.
+ * behavior) is also just passed through to RelationGetBufferForTuple.
  *
  * On return the slot's tts_tid and tts_tableOid are updated to reflect the
  * insertion. But note that any toasting of fields within the slot is NOT
@@ -1248,6 +1227,8 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  * update was done.  However, any TOAST changes in the new tuple's
  * data are not reflected into *newtup.
  *
+ * See table_insert about skipping WAL-logging feature.
+ *
  * In the failure cases, the routine fills *tmfd with the tuple's t_ctid,
  * t_xmax, and, if possible, t_cmax.  See comments for struct TM_FailureData
  * for additional info.
@@ -1307,21 +1288,6 @@ table_tuple_lock(Relation rel, ItemPointer tid, Snapshot snapshot,
 									   cid, mode, wait_policy,
 									   flags, tmfd);
 }
-
-/*
- * Perform operations necessary to complete insertions made via
- * tuple_insert and multi_insert with a BulkInsertState specified. This
- * e.g. may e.g. used to flush the relation when inserting with
- * TABLE_INSERT_SKIP_WAL specified.
- */
-static inline void
-table_finish_bulk_insert(Relation rel, int options)
-{
-	/* optional callback */
-	if (rel->rd_tableam && rel->rd_tableam->finish_bulk_insert)
-		rel->rd_tableam->finish_bulk_insert(rel, options);
-}
-
 
 /* ------------------------------------------------------------------------
  * DDL related functionality.

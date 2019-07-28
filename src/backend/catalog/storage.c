@@ -53,16 +53,17 @@
  * but I'm being paranoid.
  */
 
-typedef struct PendingRelDelete
+typedef struct PendingRelOps
 {
 	RelFileNode relnode;		/* relation that may need to be deleted */
 	BackendId	backend;		/* InvalidBackendId if not a temp rel */
-	bool		atCommit;		/* T=delete at commit; F=delete at abort */
+	bool		atCommit;		/* T=work at commit; F=work at abort */
+	bool		dosync;			/* T=work is sync; F=work is delete */
 	int			nestLevel;		/* xact nesting level of request */
-	struct PendingRelDelete *next;	/* linked-list link */
-} PendingRelDelete;
+	struct PendingRelOps *next;	/* linked-list link */
+} PendingRelOps;
 
-static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
+static PendingRelOps *pendingDeletes = NULL; /* head of linked list */
 
 /*
  * RelationCreateStorage
@@ -78,7 +79,7 @@ static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
 SMgrRelation
 RelationCreateStorage(RelFileNode rnode, char relpersistence)
 {
-	PendingRelDelete *pending;
+	PendingRelOps *pending;
 	SMgrRelation srel;
 	BackendId	backend;
 	bool		needs_wal;
@@ -109,14 +110,33 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 		log_smgrcreate(&srel->smgr_rnode.node, MAIN_FORKNUM);
 
 	/* Add the relation to the list of stuff to delete at abort */
-	pending = (PendingRelDelete *)
-		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
+	pending = (PendingRelOps *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelOps));
 	pending->relnode = rnode;
 	pending->backend = backend;
 	pending->atCommit = false;	/* delete if abort */
+	pending->dosync = false;
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
+
+	/*
+	 * We are going to skip WAL-logging for storage of persistent relations
+	 * created in the current transaction when wal_level = minimal. The
+	 * relation needs to be synced at commit.
+	 */
+	if (relpersistence == RELPERSISTENCE_PERMANENT && !XLogIsNeeded())
+	{
+		pending = (PendingRelOps *)
+			MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelOps));
+		pending->relnode = rnode;
+		pending->backend = backend;
+		pending->atCommit = true;
+		pending->dosync = true;
+		pending->nestLevel = GetCurrentTransactionNestLevel();
+		pending->next = pendingDeletes;
+		pendingDeletes = pending;
+	}
 
 	return srel;
 }
@@ -147,14 +167,15 @@ log_smgrcreate(const RelFileNode *rnode, ForkNumber forkNum)
 void
 RelationDropStorage(Relation rel)
 {
-	PendingRelDelete *pending;
+	PendingRelOps *pending;
 
 	/* Add the relation to the list of stuff to delete at commit */
-	pending = (PendingRelDelete *)
-		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
+	pending = (PendingRelOps *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelOps));
 	pending->relnode = rel->rd_node;
 	pending->backend = rel->rd_backend;
 	pending->atCommit = true;	/* delete if commit */
+	pending->dosync = false;
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
@@ -164,9 +185,9 @@ RelationDropStorage(Relation rel)
 	 * present in the pending-delete list twice, once with atCommit true and
 	 * once with atCommit false.  Hence, it will be physically deleted at end
 	 * of xact in either case (and the other entry will be ignored by
-	 * smgrDoPendingDeletes, so no error will occur).  We could instead remove
-	 * the existing list entry and delete the physical file immediately, but
-	 * for now I'll keep the logic simple.
+	 * smgrDoPendingOperations, so no error will occur).  We could instead
+	 * remove the existing list entry and delete the physical file
+	 * immediately, but for now I'll keep the logic simple.
 	 */
 
 	RelationCloseSmgr(rel);
@@ -192,9 +213,9 @@ RelationDropStorage(Relation rel)
 void
 RelationPreserveStorage(RelFileNode rnode, bool atCommit)
 {
-	PendingRelDelete *pending;
-	PendingRelDelete *prev;
-	PendingRelDelete *next;
+	PendingRelOps *pending;
+	PendingRelOps *prev;
+	PendingRelOps *next;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -385,7 +406,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 }
 
 /*
- *	smgrDoPendingDeletes() -- Take care of relation deletes at end of xact.
+ *	smgrDoPendingOperations() -- Take care of relation deletes and syncs at
+ *		end of xact.
  *
  * This also runs when aborting a subxact; we want to clean up a failed
  * subxact immediately.
@@ -396,12 +418,12 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
  * already recovered the physical storage.
  */
 void
-smgrDoPendingDeletes(bool isCommit)
+smgrDoPendingOperations(bool isCommit)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
-	PendingRelDelete *pending;
-	PendingRelDelete *prev;
-	PendingRelDelete *next;
+	PendingRelOps *pending;
+	PendingRelOps *prev;
+	PendingRelOps *next;
 	int			nrels = 0,
 				i = 0,
 				maxrels = 0;
@@ -428,21 +450,34 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				srel = smgropen(pending->relnode, pending->backend);
-
-				/* allocate the initial array, or extend it, if needed */
-				if (maxrels == 0)
+				if (pending->dosync)
 				{
-					maxrels = 8;
-					srels = palloc(sizeof(SMgrRelation) * maxrels);
+					/* Perform pending sync of WAL-skipped relation */
+					FlushRelationBuffersWithoutRelcache(pending->relnode,
+														false);
+					srel = smgropen(pending->relnode, pending->backend);
+					smgrimmedsync(srel, MAIN_FORKNUM);
+					smgrclose(srel);
 				}
-				else if (maxrels <= nrels)
+				else
 				{
-					maxrels *= 2;
-					srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
-				}
+					/* Collect pending deletions */
+					srel = smgropen(pending->relnode, pending->backend);
 
-				srels[nrels++] = srel;
+					/* allocate the initial array, or extend it, if needed */
+					if (maxrels == 0)
+					{
+						maxrels = 8;
+						srels = palloc(sizeof(SMgrRelation) * maxrels);
+					}
+					else if (maxrels <= nrels)
+					{
+						maxrels *= 2;
+						srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+					}
+
+					srels[nrels++] = srel;
+				}
 			}
 			/* must explicitly free the list entry */
 			pfree(pending);
@@ -484,13 +519,14 @@ smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr)
 	int			nestLevel = GetCurrentTransactionNestLevel();
 	int			nrels;
 	RelFileNode *rptr;
-	PendingRelDelete *pending;
+	PendingRelOps *pending;
 
 	nrels = 0;
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
+		/* Pending syncs are excluded */
 		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->backend == InvalidBackendId)
+			&& pending->backend == InvalidBackendId && !pending->dosync)
 			nrels++;
 	}
 	if (nrels == 0)
@@ -502,8 +538,9 @@ smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr)
 	*ptr = rptr;
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
+		/* Pending syncs are excluded */
 		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->backend == InvalidBackendId)
+			&& pending->backend == InvalidBackendId && !pending->dosync)
 		{
 			*rptr = pending->relnode;
 			rptr++;
@@ -522,8 +559,8 @@ smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr)
 void
 PostPrepare_smgr(void)
 {
-	PendingRelDelete *pending;
-	PendingRelDelete *next;
+	PendingRelOps *pending;
+	PendingRelOps *next;
 
 	for (pending = pendingDeletes; pending != NULL; pending = next)
 	{
@@ -544,7 +581,7 @@ void
 AtSubCommit_smgr(void)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
-	PendingRelDelete *pending;
+	PendingRelOps *pending;
 
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
@@ -563,7 +600,7 @@ AtSubCommit_smgr(void)
 void
 AtSubAbort_smgr(void)
 {
-	smgrDoPendingDeletes(false);
+	smgrDoPendingOperations(false);
 }
 
 void

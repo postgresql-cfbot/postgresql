@@ -163,7 +163,7 @@ createdb "regression$dbname1" || createdb_status=$?
 createdb "regression$dbname2" || createdb_status=$?
 createdb "regression$dbname3" || createdb_status=$?
 
-if "$MAKE" -C "$oldsrc" installcheck-parallel; then
+if "$MAKE" -C "$oldsrc" installcheck-parallel DESTDIR="$temp_install"; then
 	oldpgversion=`psql -X -A -t -d regression -c "SHOW server_version_num"`
 
 	# before dumping, get rid of objects not existing in later versions

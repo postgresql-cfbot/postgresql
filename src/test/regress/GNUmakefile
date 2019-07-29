@@ -34,10 +34,16 @@ EXTRADEFS = '-DHOST_TUPLE="$(host_tuple)"' \
 
 # Build regression test driver
 
+ifndef USE_INSTALLED_ASSETS
 all: pg_regress$(X)
+endif
 
 pg_regress$(X): pg_regress.o pg_regress_main.o $(WIN32RES) | submake-libpgport
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+
+.PHONY: all-installcheck
+all-installcheck:
+	USE_INSTALLED_ASSETS=1 $(MAKE) all
 
 # dependencies ensure that path changes propagate
 pg_regress.o: pg_regress.c $(top_builddir)/src/port/pg_config_paths.h
@@ -134,16 +140,16 @@ check: all tablespace-setup
 check-tests: all tablespace-setup | temp-install
 	$(pg_regress_check) $(REGRESS_OPTS) $(MAXCONNOPT) $(TESTS) $(EXTRA_TESTS)
 
-installcheck: all tablespace-setup
+installcheck: all-installcheck tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/serial_schedule $(EXTRA_TESTS)
 
-installcheck-parallel: all tablespace-setup
+installcheck-parallel: all-installcheck tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
-installcheck-tests: all tablespace-setup
+installcheck-tests: all-installcheck tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(TESTS) $(EXTRA_TESTS)
 
-standbycheck: all
+standbycheck: all-installcheck
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/standby_schedule --use-existing
 
 # old interfaces follow...
@@ -152,7 +158,7 @@ runcheck: check
 runtest: installcheck
 runtest-parallel: installcheck-parallel
 
-bigtest: all tablespace-setup
+bigtest: all-installcheck tablespace-setup
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/serial_schedule numeric_big
 
 bigcheck: all tablespace-setup | temp-install

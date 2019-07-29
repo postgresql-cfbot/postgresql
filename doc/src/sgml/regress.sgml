@@ -111,7 +111,12 @@ make installcheck-parallel
    default port number, unless directed otherwise by <envar>PGHOST</envar> and
    <envar>PGPORT</envar> environment variables.  The tests will be run in a
    database named <literal>regression</literal>; any existing database by this name
-   will be dropped.
+   will be dropped.  The tests in the installcheck mode will use the executables,
+   libraries, and headers, which are already present in the installation tree,
+   not their copies in the source tree (if any).  This mode is suitable for
+   testing distribution packages of PostgreSQL installed on user systems as
+   it allows to check the installation in its entirety without rebuilding
+   any parts of it.
   </para>
 
   <para>

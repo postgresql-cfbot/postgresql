@@ -90,7 +90,7 @@ pl_unreserved_kwlist_d.h: pl_unreserved_kwlist.h $(GEN_KEYWORDLIST_DEPS)
 check: submake
 	$(pg_regress_check) $(REGRESS_OPTS) $(REGRESS)
 
-installcheck: submake
+installcheck:
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(REGRESS)
 
 .PHONY: submake

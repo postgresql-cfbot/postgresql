@@ -114,12 +114,10 @@ check_permissions(void)
 				 (errmsg("must be superuser or replication role to use replication slots"))));
 }
 
-int
-logical_read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-							 int reqLen, XLogRecPtr targetRecPtr, char *cur_page, TimeLineID *pageTLI)
+void
+logical_read_local_xlog_page(LogicalDecodingContext *ctx)
 {
-	return read_local_xlog_page(state, targetPagePtr, reqLen,
-								targetRecPtr, cur_page, pageTLI);
+	read_local_xlog_page(ctx->reader);
 }
 
 /*
@@ -289,7 +287,10 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 			XLogRecord *record;
 			char	   *errm = NULL;
 
-			record = XLogReadRecord(ctx->reader, startptr, &errm);
+			while (XLogReadRecord(ctx->reader, startptr, &record, &errm) ==
+				   XLREAD_NEED_DATA)
+				ctx->read_page(ctx);
+
 			if (errm)
 				elog(ERROR, "%s", errm);
 

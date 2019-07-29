@@ -421,11 +421,13 @@ XLogDumpXLogRead(const char *directory, TimeLineID timeline_id,
 /*
  * XLogReader read_page callback
  */
-static int
-XLogDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-				 XLogRecPtr targetPtr, char *readBuff, TimeLineID *curFileTLI)
+static void
+XLogDumpReadPage(XLogReaderState *state, void *priv)
 {
-	XLogDumpPrivate *private = state->private_data;
+	XLogRecPtr	targetPagePtr = state->loadPagePtr;
+	int			reqLen		  = state->loadLen;
+	char	   *readBuff	  = state->readBuf;
+	XLogDumpPrivate *private  = (XLogDumpPrivate *) priv;
 	int			count = XLOG_BLCKSZ;
 
 	if (private->endptr != InvalidXLogRecPtr)
@@ -437,14 +439,16 @@ XLogDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		else
 		{
 			private->endptr_reached = true;
-			return -1;
+			state->readLen = -1;
+			return;
 		}
 	}
 
 	XLogDumpXLogRead(private->inpath, private->timeline, targetPagePtr,
 					 readBuff, count);
 
-	return count;
+	state->readLen = count;
+	return;
 }
 
 /*
@@ -1100,13 +1104,13 @@ main(int argc, char **argv)
 	/* done with argument parsing, do the actual work */
 
 	/* we have everything we need, start reading */
-	xlogreader_state = XLogReaderAllocate(WalSegSz, XLogDumpReadPage,
-										  &private);
+	xlogreader_state = XLogReaderAllocate(WalSegSz);
 	if (!xlogreader_state)
 		fatal_error("out of memory");
 
 	/* first find a valid recptr to start from */
-	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
+	first_record = XLogFindNextRecord(xlogreader_state, private.startptr,
+									  &XLogDumpReadPage, (void*) &private);
 
 	if (first_record == InvalidXLogRecPtr)
 		fatal_error("could not find a valid record after %X/%X",
@@ -1130,7 +1134,11 @@ main(int argc, char **argv)
 	for (;;)
 	{
 		/* try to read the next record */
-		record = XLogReadRecord(xlogreader_state, first_record, &errormsg);
+		while (XLogReadRecord(xlogreader_state,
+							  first_record, &record, &errormsg) ==
+			   XLREAD_NEED_DATA)
+			XLogDumpReadPage(xlogreader_state, (void *) &private);
+
 		if (!record)
 		{
 			if (!config.follow || private.endptr_reached)

@@ -30,14 +30,97 @@
 #include "utils/memutils.h"
 #endif
 
+/*
+ * Use computed-goto-based state dispatch when computed gotos are available.
+ * But use a separate symbol so that it's easy to adjust locally in this file
+ * for development and testing.
+ */
+#ifdef HAVE_COMPUTED_GOTO
+#define XLR_USE_COMPUTED_GOTO
+#endif							/* HAVE_COMPUTED_GOTO */
+
+/*
+ * The state machine functions relies on static local variables. They cannot
+ * be reentered after non-local exit using ereport/elog for consistency. The
+ * assertion macros protect the functions from reenter after non-local exit.
+ */
+#ifdef USE_ASSERT_CHECKING
+#define XLR_REENT_PROTECT_ENTER() \
+	do { Assert(!__xlr_running); __xlr_running = true; } while (0)
+#define XLR_REENT_PROTECT_LEAVE()\
+	do { __xlr_running = false; } while (0)
+#else
+#define XLR_REENT_PROTECT_ENTER()
+#define XLR_REENT_PROTECT_LEAVE()
+#endif
+
+/*
+ * Macros for state dispatch.
+ *
+ * XLR_SWITCH - prologue code for state machine including switch itself.
+ * XLR_CASE - labels the implementation of named state.
+ * XLR_LEAVE - leave the function and return here at the next call.
+ * XLR_RETURN - return from the function and set state to initial state.
+ * XLR_END - just hides the closing brace if not in use.
+ */
+#if defined(XLR_USE_COMPUTED_GOTO)
+#define XLR_SWITCH(name)										\
+	static bool __xlr_running PG_USED_FOR_ASSERTS_ONLY = false; \
+	static void *__xlr_init_state = &&name;								\
+	static void *__xlr_state = &&name;									\
+	do {																\
+		XLR_REENT_PROTECT_ENTER();										\
+		goto *__xlr_state;												\
+		XLR_CASE(name);													\
+	} while (0)
+#define XLR_CASE(name)		name:
+#define XLR_LEAVE(name, code)											\
+	do {																\
+		__xlr_state = (&&name);											\
+		XLR_REENT_PROTECT_LEAVE();										\
+		return (code);													\
+		XLR_CASE(name);													\
+	} while (0)
+#define XLR_RETURN(code)										\
+	do {														\
+		__xlr_state = __xlr_init_state;							\
+		XLR_REENT_PROTECT_LEAVE();								\
+		return (code);											\
+	} while (0)
+#define XLR_SWITCH_END()
+#else							/* !XLR_USE_COMPUTED_GOTO */
+#define XLR_SWITCH(name)												\
+	static bool __xlr_running = false PG_USED_FOR_ASSERTS_ONLY;			\
+	static int __xlr_init_state = name;									\
+	static int __xlr_state = name;										\
+	XLR_REENT_PROTECT_ENTER();											\
+	switch (__xlr_state) {												\
+	XLR_CASE(name)
+#define XLR_CASE(name)		case name:
+#define XLR_LEAVE(name, code)											\
+	do {																\
+		__xlr_state = (name);											\
+		XLR_REENT_PROTECT_LEAVE();										\
+		return (code);													\
+		XLR_CASE(name);													\
+	} while (0)
+#define XLR_RETURN(code)						\
+	do {										\
+		__xlr_state = __xlr_init_state;									\
+		XLR_REENT_PROTECT_LEAVE();										\
+		return (code);													\
+	} while (0)
+#define XLR_SWITCH_END()	}
+#endif							/* XLR_USE_COMPUTED_GOTO */
+
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
 
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 								  XLogRecPtr PrevRecPtr, XLogRecord *record, bool randAccess);
 static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
 							XLogRecPtr recptr);
-static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
-							 int reqLen);
+static bool XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr,
+						 int reqLen);
 static void report_invalid_record(XLogReaderState *state, const char *fmt,...) pg_attribute_printf(2, 3);
 
 static void ResetDecoder(XLogReaderState *state);
@@ -67,8 +150,7 @@ report_invalid_record(XLogReaderState *state, const char *fmt,...)
  * Returns NULL if the xlogreader couldn't be allocated.
  */
 XLogReaderState *
-XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
-				   void *private_data)
+XLogReaderAllocate(int wal_segment_size)
 {
 	XLogReaderState *state;
 
@@ -96,11 +178,7 @@ XLogReaderAllocate(int wal_segment_size, XLogPageReadCB pagereadfunc,
 	}
 
 	state->wal_segment_size = wal_segment_size;
-	state->read_page = pagereadfunc;
-	/* system_identifier initialized to zeroes above */
-	state->private_data = private_data;
-	/* ReadRecPtr and EndRecPtr initialized to zeroes above */
-	/* readSegNo, readOff, readLen, readPageTLI initialized to zeroes above */
+	/* All members are initialized to zeroes above */
 	state->errormsg_buf = palloc_extended(MAX_ERRORMSG_LEN + 1,
 										  MCXT_ALLOC_NO_OOM);
 	if (!state->errormsg_buf)
@@ -200,31 +278,57 @@ allocate_recordbuf(XLogReaderState *state, uint32 reclength)
 /*
  * Attempt to read an XLOG record.
  *
- * If RecPtr is valid, try to read a record at that position.  Otherwise
- * try to read a record just after the last one previously read.
+ * This function runs a state machine and may need to call several times until
+ * a record is read.
  *
- * If the read_page callback fails to read the requested data, NULL is
- * returned.  The callback is expected to have reported the error; errormsg
- * is set to NULL.
+ * At the initial state, if called with valid pRecPtr, try to read a record at
+ * that position.  If invalid pRecPtr is given try to read a record just after
+ * the last one previously read.
  *
- * If the reading fails for some other reason, NULL is also returned, and
- * *errormsg is set to a string with details of the failure.
+ * When a record is successfully read, returns XLREAD_SUCCESS with result
+ * record being stored in *record then the state machine is reset to initial
+ * state.
+ *
+ * Returns XLREAD_NEED_DATA if needs more data fed.  In that case loadPagePtr
+ * and loadLen in state is set to inform the required WAL data. The caller
+ * shall read in the requested data into readBuf and set readLen and
+ * readPageTLI to the length of the data actually read and the TLI for the
+ * data read in respectively. In case of failure the caller shall call the
+ * function setting readLen to -1 and storing error message in errormsg_buf to
+ * inform error.
+ *
+ * If the reading fails for some reasons including caller-side error mentioned
+ * above, returns XLREAD_FAIL with *record being set to NULL. *errormsg is set
+ * to a string with details of the failure. The state machine is reset to
+ * initial state.
  *
  * The returned pointer (or *errormsg) points to an internal buffer that's
  * valid until the next call to XLogReadRecord.
+ *
+ * Note: This function is not reentrant. The state is maintained internally in
+ * the function. DO NOT non-local exit (ereport) from inside of this function.
  */
-XLogRecord *
-XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
+XLogReadRecordResult
+XLogReadRecord(XLogReaderState *state, XLogRecPtr pRecPtr,
+			   XLogRecord **record, char **errormsg)
 {
-	XLogRecord *record;
-	XLogRecPtr	targetPagePtr;
-	bool		randAccess;
-	uint32		len,
-				total_len;
-	uint32		targetRecOff;
-	uint32		pageHeaderSize;
-	bool		gotheader;
-	int			readOff;
+	/*
+	 * This function is a state machine that can exit and reenter at any place
+	 * marked as XLR_LEAVE. All internal state needs to be preserved through
+	 * multiple calls.
+	 */
+	static XLogRecPtr	targetPagePtr;
+	static bool			randAccess;
+	static uint32		len,
+						total_len;
+	static uint32		targetRecOff;
+	static uint32		pageHeaderSize;
+	static bool			gotheader;
+	static XLogRecPtr	RecPtr;
+
+	XLR_SWITCH(XLREAD_STATE_INIT);
+
+	RecPtr = pRecPtr;
 
 	/*
 	 * randAccess indicates whether to verify the previous-record pointer of
@@ -276,15 +380,15 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	 * byte to cover the whole record header, or at least the part of it that
 	 * fits on the same page.
 	 */
-	readOff = ReadPageInternal(state,
-							   targetPagePtr,
-							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
-	if (readOff < 0)
+	while (XLogNeedData(state, targetPagePtr,
+						Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ)))
+		XLR_LEAVE(XLREAD_STATE_PAGE, XLREAD_NEED_DATA);
+
+	if (state->readLen < 0)
 		goto err;
 
 	/*
-	 * ReadPageInternal always returns at least the page header, so we can
-	 * examine it now.
+	 * We have loaded at least the page header, so we can examine it now.
 	 */
 	pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) state->readBuf);
 	if (targetRecOff == 0)
@@ -310,8 +414,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 		goto err;
 	}
 
-	/* ReadPageInternal has verified the page header */
-	Assert(pageHeaderSize <= readOff);
+	/* XLogNeedData has verified the page header */
+	Assert(pageHeaderSize <= state->readLen);
 
 	/*
 	 * Read the record length.
@@ -322,8 +426,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	 * cannot access any other fields until we've verified that we got the
 	 * whole header.
 	 */
-	record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
-	total_len = record->xl_tot_len;
+	*record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
+	total_len = (*record)->xl_tot_len;
 
 	/*
 	 * If the whole record header is on this page, validate it immediately.
@@ -335,7 +439,7 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	 */
 	if (targetRecOff <= XLOG_BLCKSZ - SizeOfXLogRecord)
 	{
-		if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr, record,
+		if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr, *record,
 								   randAccess))
 			goto err;
 		gotheader = true;
@@ -358,10 +462,10 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	if (total_len > len)
 	{
 		/* Need to reassemble record */
-		char	   *contdata;
-		XLogPageHeader pageHeader;
-		char	   *buffer;
-		uint32		gotlen;
+		static char	   *contdata;
+		static XLogPageHeader pageHeader;
+		static char	   *buffer;
+		static uint32	gotlen;
 
 		/*
 		 * Enlarge readRecordBuf as needed.
@@ -388,14 +492,15 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 			targetPagePtr += XLOG_BLCKSZ;
 
 			/* Wait for the next page to become available */
-			readOff = ReadPageInternal(state, targetPagePtr,
-									   Min(total_len - gotlen + SizeOfXLogShortPHD,
-										   XLOG_BLCKSZ));
+			while (XLogNeedData(state, targetPagePtr,
+								Min(total_len - gotlen + SizeOfXLogShortPHD,
+									XLOG_BLCKSZ)))
+				XLR_LEAVE(XLREAD_STATE_CONTPAGE, XLREAD_NEED_DATA);
 
-			if (readOff < 0)
+			if (state->readLen < 0)
 				goto err;
 
-			Assert(SizeOfXLogShortPHD <= readOff);
+			Assert(SizeOfXLogShortPHD <= state->readLen);
 
 			/* Check that the continuation on next page looks valid */
 			pageHeader = (XLogPageHeader) state->readBuf;
@@ -424,20 +529,24 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 			/* Append the continuation from this page to the buffer */
 			pageHeaderSize = XLogPageHeaderSize(pageHeader);
 
-			if (readOff < pageHeaderSize)
-				readOff = ReadPageInternal(state, targetPagePtr,
-										   pageHeaderSize);
+			if (state->readLen < pageHeaderSize)
+			{
+				while (XLogNeedData(state, targetPagePtr, pageHeaderSize))
+					XLR_LEAVE(XLREAD_STATE_CONTPAGE_HEADER, XLREAD_NEED_DATA);
+			}
 
-			Assert(pageHeaderSize <= readOff);
+			Assert(pageHeaderSize <= state->readLen);
 
 			contdata = (char *) state->readBuf + pageHeaderSize;
 			len = XLOG_BLCKSZ - pageHeaderSize;
 			if (pageHeader->xlp_rem_len < len)
 				len = pageHeader->xlp_rem_len;
 
-			if (readOff < pageHeaderSize + len)
-				readOff = ReadPageInternal(state, targetPagePtr,
-										   pageHeaderSize + len);
+			if (state->readLen < pageHeaderSize + len)
+			{
+				if (XLogNeedData(state, targetPagePtr, pageHeaderSize + len))
+					XLR_LEAVE(XLREAD_STATE_CONTRECORD, XLREAD_NEED_DATA);
+			}
 
 			memcpy(buffer, (char *) contdata, len);
 			buffer += len;
@@ -446,9 +555,9 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 			/* If we just reassembled the record header, validate it. */
 			if (!gotheader)
 			{
-				record = (XLogRecord *) state->readRecordBuf;
+				*record = (XLogRecord *) state->readRecordBuf;
 				if (!ValidXLogRecordHeader(state, RecPtr, state->ReadRecPtr,
-										   record, randAccess))
+										   *record, randAccess))
 					goto err;
 				gotheader = true;
 			}
@@ -456,8 +565,8 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 
 		Assert(gotheader);
 
-		record = (XLogRecord *) state->readRecordBuf;
-		if (!ValidXLogRecord(state, record, RecPtr))
+		*record = (XLogRecord *) state->readRecordBuf;
+		if (!ValidXLogRecord(state, *record, RecPtr))
 			goto err;
 
 		pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) state->readBuf);
@@ -468,13 +577,15 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	else
 	{
 		/* Wait for the record data to become available */
-		readOff = ReadPageInternal(state, targetPagePtr,
-								   Min(targetRecOff + total_len, XLOG_BLCKSZ));
-		if (readOff < 0)
+		while (XLogNeedData(state, targetPagePtr,
+							Min(targetRecOff + total_len, XLOG_BLCKSZ)))
+			XLR_LEAVE(XLREAD_STATE_RECORD, XLREAD_NEED_DATA);
+
+		if (state->readLen < 0)
 			goto err;
 
 		/* Record does not cross a page boundary */
-		if (!ValidXLogRecord(state, record, RecPtr))
+		if (!ValidXLogRecord(state, *record, RecPtr))
 			goto err;
 
 		state->EndRecPtr = RecPtr + MAXALIGN(total_len);
@@ -482,21 +593,24 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 		state->ReadRecPtr = RecPtr;
 	}
 
+	XLR_SWITCH_END();
+
 	/*
 	 * Special processing if it's an XLOG SWITCH record
 	 */
-	if (record->xl_rmid == RM_XLOG_ID &&
-		(record->xl_info & ~XLR_INFO_MASK) == XLOG_SWITCH)
+	if ((*record)->xl_rmid == RM_XLOG_ID &&
+		((*record)->xl_info & ~XLR_INFO_MASK) == XLOG_SWITCH)
 	{
 		/* Pretend it extends to end of segment */
 		state->EndRecPtr += state->wal_segment_size - 1;
 		state->EndRecPtr -= XLogSegmentOffset(state->EndRecPtr, state->wal_segment_size);
 	}
 
-	if (DecodeXLogRecord(state, record, errormsg))
-		return record;
-	else
-		return NULL;
+	if (DecodeXLogRecord(state, *record, errormsg))
+		XLR_RETURN(XLREAD_SUCCESS);
+
+	*record = NULL;
+	XLR_RETURN(XLREAD_FAIL);
 
 err:
 
@@ -509,43 +623,53 @@ err:
 	if (state->errormsg_buf[0] != '\0')
 		*errormsg = state->errormsg_buf;
 
-	return NULL;
+	*record = NULL;
+	XLR_RETURN(XLREAD_FAIL);
 }
 
 /*
- * Read a single xlog page including at least [pageptr, reqLen] of valid data
- * via the read_page() callback.
+ * Checks that an xlog page loaded in state->readBuf is including at least
+ * [pageptr, reqLen] and the page is valid.
  *
- * Returns -1 if the required page cannot be read for some reason; errormsg_buf
- * is set in that case (unless the error occurs in the read_page callback).
+ * Returns false if the required data is fully loaded. state->readLen is set to
+ * -1 when the loaded data is found to be invalid.
  *
- * We fetch the page from a reader-local cache if we know we have the required
- * data and if there hasn't been any error since caching the data.
+ * Otherwise, returns true and requests data using state->loadPagePtr and
+ * state->loadLen. The caller should load the region to state->readBuf and
+ * call this function again.
+ *
+ * Note: This function is not reentrant. The state is maintained internally in
+ * the function. DO NOT ereport(ERROR)-out from inside of this function.
  */
-static int
-ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
+static bool
+XLogNeedData(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 {
-	int			readLen;
-	uint32		targetPageOff;
-	XLogSegNo	targetSegNo;
-	XLogPageHeader hdr;
+	/*
+	 * This function is a state machine that can exit and reenter at any place
+	 * marked as XLR_LEAVE. All internal state is preserved through multiple
+	 * calls.
+	 */
+	static uint32		targetPageOff;
+	static XLogSegNo	targetSegNo;
+	static XLogPageHeader hdr;
 
-	Assert((pageptr % XLOG_BLCKSZ) == 0);
+	XLR_SWITCH (XLND_STATE_INIT);
 
 	XLByteToSeg(pageptr, targetSegNo, state->wal_segment_size);
 	targetPageOff = XLogSegmentOffset(pageptr, state->wal_segment_size);
+	Assert((pageptr % XLOG_BLCKSZ) == 0);
 
 	/* check whether we have all the requested data already */
 	if (targetSegNo == state->readSegNo && targetPageOff == state->readOff &&
 		reqLen <= state->readLen)
-		return state->readLen;
+		XLR_RETURN(false);
 
 	/*
 	 * Data is not in our buffer.
 	 *
 	 * Every time we actually read the page, even if we looked at parts of it
-	 * before, we need to do verification as the read_page callback might now
-	 * be rereading data from a different source.
+	 * before, we need to do verification as the caller might now be rereading
+	 * data from a different source.
 	 *
 	 * Whenever switching to a new WAL segment, we read the first page of the
 	 * file and validate its header, even if that's not where the target
@@ -554,18 +678,17 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 */
 	if (targetSegNo != state->readSegNo && targetPageOff != 0)
 	{
-		XLogRecPtr	targetSegmentPtr = pageptr - targetPageOff;
+		state->loadPagePtr = pageptr - targetPageOff;
+		state->loadLen = XLOG_BLCKSZ;
+		XLR_LEAVE(XLND_STATE_SEGHEADER, true);
 
-		readLen = state->read_page(state, targetSegmentPtr, XLOG_BLCKSZ,
-								   state->currRecPtr,
-								   state->readBuf, &state->readPageTLI);
-		if (readLen < 0)
+		if (state->readLen < 0)
 			goto err;
 
 		/* we can be sure to have enough WAL available, we scrolled back */
-		Assert(readLen == XLOG_BLCKSZ);
+		Assert(state->readLen == XLOG_BLCKSZ);
 
-		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
+		if (!XLogReaderValidatePageHeader(state, state->loadPagePtr,
 										  state->readBuf))
 			goto err;
 	}
@@ -574,48 +697,53 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 * First, read the requested data length, but at least a short page header
 	 * so that we can validate it.
 	 */
-	readLen = state->read_page(state, pageptr, Max(reqLen, SizeOfXLogShortPHD),
-							   state->currRecPtr,
-							   state->readBuf, &state->readPageTLI);
-	if (readLen < 0)
+	state->loadPagePtr = pageptr;
+	state->loadLen = Max(reqLen, SizeOfXLogShortPHD);
+	XLR_LEAVE(XLND_STATE_PAGEHEADER, true);
+
+	if (state->readLen < 0)
 		goto err;
 
-	Assert(readLen <= XLOG_BLCKSZ);
+	Assert(state->readLen <= XLOG_BLCKSZ);
 
 	/* Do we have enough data to check the header length? */
-	if (readLen <= SizeOfXLogShortPHD)
+	if (state->readLen <= SizeOfXLogShortPHD)
 		goto err;
 
-	Assert(readLen >= reqLen);
+	Assert(state->readLen >= state->loadLen);
 
 	hdr = (XLogPageHeader) state->readBuf;
 
 	/* still not enough */
-	if (readLen < XLogPageHeaderSize(hdr))
+	if (state->readLen < XLogPageHeaderSize(hdr))
 	{
-		readLen = state->read_page(state, pageptr, XLogPageHeaderSize(hdr),
-								   state->currRecPtr,
-								   state->readBuf, &state->readPageTLI);
-		if (readLen < 0)
+		state->loadPagePtr = pageptr;
+		state->loadLen = XLogPageHeaderSize(hdr);
+		XLR_LEAVE(XLND_STATE_PAGELONGHEADER, true);
+
+		if (state->readLen < 0)
 			goto err;
 	}
+
+	XLR_SWITCH_END();
 
 	/*
 	 * Now that we know we have the full header, validate it.
 	 */
-	if (!XLogReaderValidatePageHeader(state, pageptr, (char *) hdr))
-		goto err;
+	if (!XLogReaderValidatePageHeader(state, pageptr, (char *) state->readBuf))
+			goto err;
 
 	/* update read state information */
 	state->readSegNo = targetSegNo;
 	state->readOff = targetPageOff;
-	state->readLen = readLen;
 
-	return readLen;
+	XLR_RETURN(false);
 
 err:
 	XLogReaderInvalReadState(state);
-	return -1;
+	state->readLen = -1;
+
+	XLR_RETURN(false);
 }
 
 /*
@@ -884,12 +1012,15 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
  * debugging purposes.
  */
 XLogRecPtr
-XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
+XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr,
+				   XLogFindNextRecordCB read_page, void *private)
 {
 	XLogReaderState saved_state = *state;
 	XLogRecPtr	tmpRecPtr;
 	XLogRecPtr	found = InvalidXLogRecPtr;
 	XLogPageHeader header;
+	XLogRecord *record;
+	XLogReadRecordResult result;
 	char	   *errormsg;
 
 	Assert(!XLogRecPtrIsInvalid(RecPtr));
@@ -904,7 +1035,6 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		XLogRecPtr	targetPagePtr;
 		int			targetRecOff;
 		uint32		pageHeaderSize;
-		int			readLen;
 
 		/*
 		 * Compute targetRecOff. It should typically be equal or greater than
@@ -912,7 +1042,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		 * that, except when caller has explicitly specified the offset that
 		 * falls somewhere there or when we are skipping multi-page
 		 * continuation record. It doesn't matter though because
-		 * ReadPageInternal() is prepared to handle that and will read at
+		 * CheckPage() is prepared to handle that and will read at
 		 * least short page-header worth of data
 		 */
 		targetRecOff = tmpRecPtr % XLOG_BLCKSZ;
@@ -921,8 +1051,10 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		targetPagePtr = tmpRecPtr - targetRecOff;
 
 		/* Read the page containing the record */
-		readLen = ReadPageInternal(state, targetPagePtr, targetRecOff);
-		if (readLen < 0)
+		while(XLogNeedData(state, targetPagePtr, targetRecOff))
+			read_page(state, private);
+
+		if (state->readLen < 0)
 			goto err;
 
 		header = (XLogPageHeader) state->readBuf;
@@ -930,8 +1062,10 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		pageHeaderSize = XLogPageHeaderSize(header);
 
 		/* make sure we have enough data for the page header */
-		readLen = ReadPageInternal(state, targetPagePtr, pageHeaderSize);
-		if (readLen < 0)
+		while (XLogNeedData(state, targetPagePtr, pageHeaderSize))
+			read_page(state, private);
+
+		if (state->readLen < 0)
 			goto err;
 
 		/* skip over potential continuation data */
@@ -971,8 +1105,15 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 	 * because either we're at the first record after the beginning of a page
 	 * or we just jumped over the remaining data of a continuation.
 	 */
-	while (XLogReadRecord(state, tmpRecPtr, &errormsg) != NULL)
+	while ((result = XLogReadRecord(state, tmpRecPtr, &record, &errormsg)) !=
+		   XLREAD_FAIL)
 	{
+		if (result == XLREAD_NEED_DATA)
+		{
+			read_page(state, private);
+			continue;
+		}
+
 		/* continue after the record */
 		tmpRecPtr = InvalidXLogRecPtr;
 

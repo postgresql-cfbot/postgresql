@@ -907,11 +907,13 @@ XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wa
  * exists for normal backends, so we have to do a check/sleep/repeat style of
  * loop for now.
  */
-int
-read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page,
-					 TimeLineID *pageTLI)
+void
+read_local_xlog_page(XLogReaderState *state)
 {
+	XLogRecPtr	targetPagePtr = state->loadPagePtr;
+	int			reqLen		  = state->loadLen;
+	char	   *cur_page	  = state->readBuf;
+	TimeLineID *pageTLI		  = &state->readPageTLI;
 	XLogRecPtr	read_upto,
 				loc;
 	int			count;
@@ -1009,7 +1011,8 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	else if (targetPagePtr + reqLen > read_upto)
 	{
 		/* not enough data there */
-		return -1;
+		state->readLen = -1;
+		return;
 	}
 	else
 	{
@@ -1026,5 +1029,6 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 			 XLOG_BLCKSZ);
 
 	/* number of valid bytes in the buffer */
-	return count;
+	state->readLen = count;
+	return;
 }

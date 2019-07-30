@@ -386,6 +386,7 @@ typedef struct _statsExtInfo
 {
 	DumpableObject dobj;
 	char	   *rolname;		/* name of owner, or empty string */
+	int			stattarget;		/* statistics target */
 } StatsExtInfo;
 
 typedef struct _ruleInfo

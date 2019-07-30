@@ -3493,6 +3493,18 @@ _copyCreateStatsStmt(const CreateStatsStmt *from)
 	return newnode;
 }
 
+static AlterStatsStmt *
+_copyAlterStatsStmt(const AlterStatsStmt *from)
+{
+	AlterStatsStmt *newnode = makeNode(AlterStatsStmt);
+
+	COPY_NODE_FIELD(defnames);
+	COPY_SCALAR_FIELD(stxstattarget);
+	COPY_SCALAR_FIELD(missing_ok);
+
+	return newnode;
+}
+
 static CreateFunctionStmt *
 _copyCreateFunctionStmt(const CreateFunctionStmt *from)
 {
@@ -5206,6 +5218,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_CreateStatsStmt:
 			retval = _copyCreateStatsStmt(from);
+			break;
+		case T_AlterStatsStmt:
+			retval = _copyAlterStatsStmt(from);
 			break;
 		case T_CreateFunctionStmt:
 			retval = _copyCreateFunctionStmt(from);

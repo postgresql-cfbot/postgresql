@@ -1,0 +1,254 @@
+-- create a table to use as a basis for views and materialized views in various combinations
+CREATE TABLE mv_base_a (i int, j int);
+INSERT INTO mv_base_a VALUES
+  (1,10),
+  (2,20),
+  (3,30),
+  (4,40),
+  (5,50);
+CREATE TABLE mv_base_b (i int, k int);
+INSERT INTO mv_base_b VALUES
+  (1,101),
+  (2,102),
+  (3,103),
+  (4,104);
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_1 AS SELECT i,j,k FROM mv_base_a a INNER JOIN mv_base_b b USING(i);
+SELECT * FROM mv_ivm_1 ORDER BY 1,2,3;
+ i | j  |  k  
+---+----+-----
+ 1 | 10 | 101
+ 2 | 20 | 102
+ 3 | 30 | 103
+ 4 | 40 | 104
+(4 rows)
+
+-- immediaite maintenance
+BEGIN;
+INSERT INTO mv_base_b VALUES(5,105);
+SELECT * FROM mv_ivm_1 ORDER BY 1,2,3;
+ i | j  |  k  
+---+----+-----
+ 1 | 10 | 101
+ 2 | 20 | 102
+ 3 | 30 | 103
+ 4 | 40 | 104
+ 5 | 50 | 105
+(5 rows)
+
+UPDATE mv_base_a SET j = 0 WHERE i = 1;
+SELECT * FROM mv_ivm_1 ORDER BY 1,2,3;
+ i | j  |  k  
+---+----+-----
+ 1 |  0 | 101
+ 2 | 20 | 102
+ 3 | 30 | 103
+ 4 | 40 | 104
+ 5 | 50 | 105
+(5 rows)
+
+DELETE FROM mv_base_b WHERE (i,k) = (5,105);
+SELECT * FROM mv_ivm_1 ORDER BY 1,2,3;
+ i | j  |  k  
+---+----+-----
+ 1 |  0 | 101
+ 2 | 20 | 102
+ 3 | 30 | 103
+ 4 | 40 | 104
+(4 rows)
+
+ROLLBACK;
+SELECT * FROM mv_ivm_1 ORDER BY 1,2,3;
+ i | j  |  k  
+---+----+-----
+ 1 | 10 | 101
+ 2 | 20 | 102
+ 3 | 30 | 103
+ 4 | 40 | 104
+(4 rows)
+
+-- result of materliazied view have DISTINCT clause or the duplicate result.
+BEGIN;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_duplicate AS SELECT j FROM mv_base_a;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_distinct AS SELECT DISTINCT j FROM mv_base_a;
+INSERT INTO mv_base_a VALUES(6,20);
+SELECT * FROM mv_ivm_duplicate ORDER BY 1;
+ j  
+----
+ 10
+ 20
+ 20
+ 30
+ 40
+ 50
+(6 rows)
+
+SELECT * FROM mv_ivm_distinct ORDER BY 1;
+ j  
+----
+ 10
+ 20
+ 30
+ 40
+ 50
+(5 rows)
+
+DELETE FROM mv_base_a WHERE (i,j) = (2,20);
+SELECT * FROM mv_ivm_duplicate ORDER BY 1;
+ j  
+----
+ 10
+ 20
+ 30
+ 40
+ 50
+(5 rows)
+
+SELECT * FROM mv_ivm_distinct ORDER BY 1;
+ j  
+----
+ 10
+ 20
+ 30
+ 40
+ 50
+(5 rows)
+
+ROLLBACK;
+-- support SUM(), COUNT() and AVG() aggregation function
+BEGIN;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_agg AS SELECT i, SUM(j), COUNT(i),AVG(j)  FROM mv_base_a GROUP BY i;
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3,4;
+ i | sum | count |         avg         
+---+-----+-------+---------------------
+ 1 |  10 |     1 | 10.0000000000000000
+ 2 |  20 |     1 | 20.0000000000000000
+ 3 |  30 |     1 | 30.0000000000000000
+ 4 |  40 |     1 | 40.0000000000000000
+ 5 |  50 |     1 | 50.0000000000000000
+(5 rows)
+
+INSERT INTO mv_base_a VALUES(2,100);
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3,4;
+ i | sum | count |         avg         
+---+-----+-------+---------------------
+ 1 |  10 |     1 | 10.0000000000000000
+ 2 | 120 |     2 | 60.0000000000000000
+ 3 |  30 |     1 | 30.0000000000000000
+ 4 |  40 |     1 | 40.0000000000000000
+ 5 |  50 |     1 | 50.0000000000000000
+(5 rows)
+
+UPDATE mv_base_a SET j = 200 WHERE (i,j) = (2,100);
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3,4;
+ i | sum | count |         avg          
+---+-----+-------+----------------------
+ 1 |  10 |     1 |  10.0000000000000000
+ 2 | 220 |     2 | 110.0000000000000000
+ 3 |  30 |     1 |  30.0000000000000000
+ 4 |  40 |     1 |  40.0000000000000000
+ 5 |  50 |     1 |  50.0000000000000000
+(5 rows)
+
+DELETE FROM mv_base_a WHERE (i,j) = (2,200);
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3,4;
+ i | sum | count |         avg         
+---+-----+-------+---------------------
+ 1 |  10 |     1 | 10.0000000000000000
+ 2 |  20 |     1 | 20.0000000000000000
+ 3 |  30 |     1 | 30.0000000000000000
+ 4 |  40 |     1 | 40.0000000000000000
+ 5 |  50 |     1 | 50.0000000000000000
+(5 rows)
+
+ROLLBACK;
+-- support COUNT(*) aggregation function
+BEGIN;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_agg AS SELECT i, SUM(j),COUNT(*)  FROM mv_base_a GROUP BY i;
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3;
+ i | sum | count 
+---+-----+-------
+ 1 |  10 |     1
+ 2 |  20 |     1
+ 3 |  30 |     1
+ 4 |  40 |     1
+ 5 |  50 |     1
+(5 rows)
+
+INSERT INTO mv_base_a VALUES(2,100);
+SELECT * FROM mv_ivm_agg ORDER BY 1,2,3;
+ i | sum | count 
+---+-----+-------
+ 1 |  10 |     1
+ 2 | 120 |     2
+ 3 |  30 |     1
+ 4 |  40 |     1
+ 5 |  50 |     1
+(5 rows)
+
+ROLLBACK;
+-- support having only aggregation function without GROUP clause
+BEGIN;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_group AS SELECT SUM(j)FROM mv_base_a;
+SELECT * FROM mv_ivm_group ORDER BY 1;
+ sum 
+-----
+ 150
+(1 row)
+
+INSERT INTO mv_base_a VALUES(6,20);
+SELECT * FROM mv_ivm_group ORDER BY 1;
+ sum 
+-----
+ 170
+(1 row)
+
+ROLLBACK;
+-- unsupport aggregation function except for SUM(),COUNT(),AVG()
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_min AS SELECT i, MIN(j)  FROM mv_base_a GROUP BY i;
+ERROR:  aggregate function min is not supported
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_max AS SELECT i, MAX(j)  FROM mv_base_a GROUP BY i;
+ERROR:  aggregate function max is not supported
+-- known issues: When use AVG() function and values is indivisible, result of AVG() is incorrect.
+BEGIN;
+CREATE INCREMENTAL MATERIALIZED VIEW mv_ivm_avg_bug AS SELECT i, SUM(j), COUNT(j), AVG(j) FROM mv_base_A GROUP BY i;
+SELECT * FROM mv_ivm_avg_bug ORDER BY 1,2,3;
+ i | sum | count |         avg         
+---+-----+-------+---------------------
+ 1 |  10 |     1 | 10.0000000000000000
+ 2 |  20 |     1 | 20.0000000000000000
+ 3 |  30 |     1 | 30.0000000000000000
+ 4 |  40 |     1 | 40.0000000000000000
+ 5 |  50 |     1 | 50.0000000000000000
+(5 rows)
+
+INSERT INTO mv_base_a VALUES
+  (1,0),
+  (1,0),
+  (2,30),
+  (2,30);
+SELECT * FROM mv_ivm_avg_bug ORDER BY 1,2,3;
+ i | sum | count |          avg           
+---+-----+-------+------------------------
+ 1 |  10 |     3 | 3.33333333333333333333
+ 2 |  80 |     3 |    26.6666666666666667
+ 3 |  30 |     1 |    30.0000000000000000
+ 4 |  40 |     1 |    40.0000000000000000
+ 5 |  50 |     1 |    50.0000000000000000
+(5 rows)
+
+DELETE FROM mv_base_a WHERE (i,j) = (1,0);
+DELETE FROM mv_base_a WHERE (i,j) = (2,30);
+SELECT * FROM mv_ivm_avg_bug ORDER BY 1,2,3;
+ i | sum | count |          avg           
+---+-----+-------+------------------------
+ 1 |  10 |     1 | 9.99999999999999999999
+ 2 |  20 |     1 |    20.0000000000000001
+ 3 |  30 |     1 |    30.0000000000000000
+ 4 |  40 |     1 |    40.0000000000000000
+ 5 |  50 |     1 |    50.0000000000000000
+(5 rows)
+
+ROLLBACK;
+DROP TABLE mv_base_b CASCADE;
+NOTICE:  drop cascades to materialized view mv_ivm_1
+DROP TABLE mv_base_a CASCADE;

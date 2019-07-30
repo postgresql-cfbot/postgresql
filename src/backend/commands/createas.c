@@ -51,6 +51,16 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
+#include "catalog/pg_trigger.h"
+#include "catalog/pg_type.h"
+#include "commands/trigger.h"
+#include "parser/parser.h"
+#include "parser/parsetree.h"
+#include "parser/parse_func.h"
+#include "nodes/print.h"
+#include "optimizer/optimizer.h"
+#include "commands/defrem.h"
+
 
 typedef struct
 {
@@ -74,6 +84,8 @@ static bool intorel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void intorel_shutdown(DestReceiver *self);
 static void intorel_destroy(DestReceiver *self);
 
+static void CreateIvmTrigger(Oid relOid, Oid viewOid, char *matviewname, int16 type);
+static void CreateIvmTriggersOnBaseTables(Query *qry, Node *jtnode, Oid matviewOid, char* matviewname);
 
 /*
  * create_ctas_internal
@@ -109,6 +121,8 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	create->oncommit = into->onCommit;
 	create->tablespacename = into->tableSpaceName;
 	create->if_not_exists = false;
+	/* Using Materialized view only */
+	create->ivm = into->ivm;
 	create->accessMethod = into->accessMethod;
 
 	/*
@@ -239,6 +253,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
+	Query	   *copied_query;
 
 	if (stmt->if_not_exists)
 	{
@@ -319,7 +334,100 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		 * and is executed repeatedly.  (See also the same hack in EXPLAIN and
 		 * PREPARE.)
 		 */
-		rewritten = QueryRewrite(copyObject(query));
+
+		copied_query = copyObject(query);
+		if (is_matview && into->ivm)
+		{
+			TargetEntry *tle;
+			Node *node;
+			ParseState *pstate = make_parsestate(NULL);
+			FuncCall *fn;
+
+			/* group keys must be in targetlist */
+			if (copied_query->groupClause)
+			{
+				ListCell *lc;
+				foreach(lc, copied_query->groupClause)
+				{
+					SortGroupClause *scl = (SortGroupClause *) lfirst(lc);
+					TargetEntry *tle = get_sortgroupclause_tle(scl, copied_query->targetList);
+
+					if (tle->resjunk)
+						elog(ERROR, "GROUP BY expression must appear in select list for incremental materialized views");
+				}
+			}
+			else if (!copied_query->hasAggs)
+				copied_query->groupClause = transformDistinctClause(NULL, &copied_query->targetList, copied_query->sortClause, false);
+
+			if (copied_query->hasAggs)
+			{
+				ListCell *lc;
+				List *agg_counts = NIL;
+				AttrNumber next_resno = list_length(copied_query->targetList) + 1;
+				Const	*dmy_arg = makeConst(INT4OID,
+											 -1,
+											 InvalidOid,
+											 sizeof(int32),
+											 Int32GetDatum(1),
+											 false,
+											 true); /* pass by value */
+
+				foreach(lc, copied_query->targetList)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(lc);
+					TargetEntry *tle_count;
+
+
+					if (IsA(tle->expr, Aggref))
+					{
+						Aggref *aggref = (Aggref *) tle->expr;
+						const char *aggname = get_func_name(aggref->aggfnoid);
+
+						/* XXX: need some generalization */
+						if (strcmp(aggname, "sum") !=0
+							&& strcmp(aggname, "count") != 0
+							&& strcmp(aggname, "avg") != 0
+						)
+							elog(ERROR, "aggregate function %s is not supported", aggname);
+
+						/* For aggregate functions except to count, add count func with the same arg parameters. */
+						if (strcmp(aggname, "count") != 0)
+						{
+							fn = makeFuncCall(list_make1(makeString("count")), NIL, -1);
+
+							/* Make a Func with a dummy arg, and then override this by the original agg's args. */
+							node = ParseFuncOrColumn(pstate, fn->funcname, list_make1(dmy_arg), NULL, fn, false, -1);
+							((Aggref *)node)->args = aggref->args;
+
+							tle_count = makeTargetEntry((Expr *) node,
+														next_resno,
+														pstrdup(makeObjectName("__ivm_count",tle->resname, "_")),
+														false);
+							agg_counts = lappend(agg_counts, tle_count);
+							next_resno++;
+						}
+
+					}
+				}
+				copied_query->targetList = list_concat(copied_query->targetList, agg_counts);
+
+			}
+
+			/* Add count(*) for counting algorithm */
+			fn = makeFuncCall(list_make1(makeString("count")), NIL, -1);
+			fn->agg_star = true;
+
+			node = ParseFuncOrColumn(pstate, fn->funcname, NIL, NULL, fn, false, -1);
+
+			tle = makeTargetEntry((Expr *) node,
+								  	list_length(copied_query->targetList) + 1,
+								  	pstrdup("__ivm_count__"),
+								  	false);
+			copied_query->targetList = lappend(copied_query->targetList, tle);
+			copied_query->hasAggs = true;
+		}
+
+		rewritten = QueryRewrite(copied_query);
 
 		/* SELECT should never rewrite to more or less than one SELECT query */
 		if (list_length(rewritten) != 1)
@@ -378,9 +486,63 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 
 		/* Restore userid and security context */
 		SetUserIdAndSecContext(save_userid, save_sec_context);
+
+
+		if (into->ivm)
+		{
+			char	   *matviewname;
+			Oid matviewOid = address.objectId;
+			Relation matviewRel = table_open(matviewOid, NoLock);
+			matviewname = quote_qualified_identifier(get_namespace_name(RelationGetNamespace(matviewRel)),
+													 RelationGetRelationName(matviewRel));
+			copied_query = copyObject(query);
+			AcquireRewriteLocks(copied_query, true, false);
+
+			CreateIvmTriggersOnBaseTables(copied_query, (Node *)copied_query->jointree, matviewOid, matviewname);
+
+			table_close(matviewRel, NoLock);
+		}
 	}
 
 	return address;
+}
+
+static void CreateIvmTriggersOnBaseTables(Query *qry, Node *jtnode, Oid matviewOid, char* matviewname)
+{
+
+	if (jtnode == NULL)
+		return;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		int			rti = ((RangeTblRef *) jtnode)->rtindex;
+		RangeTblEntry *rte = rt_fetch(rti, qry->rtable);
+
+		if (rte->rtekind == RTE_RELATION)
+		{
+			CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_INSERT);
+			CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_DELETE);
+			CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_UPDATE);
+		}
+		else
+			elog(ERROR, "unsupported RTE kind: %d", (int) rte->rtekind);
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *l;
+
+		foreach(l, f->fromlist)
+			CreateIvmTriggersOnBaseTables(qry, lfirst(l), matviewOid, matviewname);
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+
+		CreateIvmTriggersOnBaseTables(qry, j->larg, matviewOid, matviewname);
+		CreateIvmTriggersOnBaseTables(qry, j->rarg, matviewOid, matviewname);
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d", (int) nodeTag(jtnode));
 }
 
 /*
@@ -548,6 +710,11 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 		SetMatViewPopulatedState(intoRelationDesc, true);
 
 	/*
+	 * Mark relisivm field, if it's a matview and into->ivm is true.
+	 */
+	if (is_matview && into->ivm)
+		SetMatViewIVMState(intoRelationDesc, true);
+	/*
 	 * Fill private fields of myState for use by later routines
 	 */
 	myState->rel = intoRelationDesc;
@@ -618,4 +785,75 @@ static void
 intorel_destroy(DestReceiver *self)
 {
 	pfree(self);
+}
+
+static void
+CreateIvmTrigger(Oid relOid, Oid viewOid, char *matviewname, int16 type)
+{
+	CreateTrigStmt *ivm_trigger;
+	List *transitionRels = NIL;
+	ObjectAddress address, refaddr;
+
+	refaddr.classId = RelationRelationId;
+	refaddr.objectId = viewOid;
+	refaddr.objectSubId = 0;
+
+
+	ivm_trigger = makeNode(CreateTrigStmt);
+	ivm_trigger->relation = NULL;
+	ivm_trigger->row = false;
+	ivm_trigger->timing = TRIGGER_TYPE_AFTER;
+
+	ivm_trigger->events = type;
+
+	switch (type)
+	{
+		case TRIGGER_TYPE_INSERT:
+			ivm_trigger->trigname = "IVM_trigger_ins";
+			break;
+		case TRIGGER_TYPE_DELETE:
+			ivm_trigger->trigname = "IVM_trigger_del";
+			break;
+		case TRIGGER_TYPE_UPDATE:
+			ivm_trigger->trigname = "IVM_trigger_upd";
+			break;
+	}
+
+	if (type == TRIGGER_TYPE_INSERT || type == TRIGGER_TYPE_UPDATE)
+	{
+		TriggerTransition *n = makeNode(TriggerTransition);
+		n->name = "ivm_newtable";
+		n->isNew = true;
+		n->isTable = true;
+
+		transitionRels = lappend(transitionRels, n);
+	}
+	if (type == TRIGGER_TYPE_DELETE || type == TRIGGER_TYPE_UPDATE)
+	{
+		TriggerTransition *n = makeNode(TriggerTransition);
+		n->name = "ivm_oldtable";
+		n->isNew = false;
+		n->isTable = true;
+
+		transitionRels = lappend(transitionRels, n);
+	}
+
+	ivm_trigger->funcname = SystemFuncName("IVM_immediate_maintenance");
+
+	ivm_trigger->columns = NIL;
+	ivm_trigger->transitionRels = transitionRels;
+	ivm_trigger->whenClause = NULL;
+	ivm_trigger->isconstraint = false;
+	ivm_trigger->deferrable = false;
+	ivm_trigger->initdeferred = false;
+	ivm_trigger->constrrel = NULL;
+	ivm_trigger->args = list_make1(makeString(matviewname));
+
+	address = CreateTrigger(ivm_trigger, NULL, relOid, InvalidOid, InvalidOid,
+						 InvalidOid, InvalidOid, InvalidOid, NULL, true, false);
+
+	recordDependencyOn(&address, &refaddr, DEPENDENCY_AUTO);
+
+	/* Make changes-so-far visible */
+	CommandCounterIncrement();
 }

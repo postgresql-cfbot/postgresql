@@ -2413,9 +2413,14 @@ PGresult *PQexec(PGconn *conn, const char *command);
     for more details about how the server handles multi-query strings.)
     Note however that the returned
     <structname>PGresult</structname> structure describes only the result
-    of the last command executed from the string.  Should one of the
-    commands fail, processing of the string stops with it and the returned
-    <structname>PGresult</structname> describes the error condition.
+    of the last command executed from the string.
+    If the strings contains <command>COPY</command> commands, the result of the
+    first of those is returned and further results should be fetched with
+    <function>PQgetResult</function>.
+    If the string contains only empty commands, an empty result is returned.
+    Otherwise, the result of the last non-empty command is returned.
+    Should one of the commands fail, processing of the string stops with it and
+    the returned <structname>PGresult</structname> describes the error condition.
    </para>
 
    <para>

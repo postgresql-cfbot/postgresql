@@ -73,6 +73,7 @@ extern int	pq_getbyte(void);
 extern int	pq_peekbyte(void);
 extern int	pq_getbyte_if_available(unsigned char *c);
 extern int	pq_putbytes(const char *s, size_t len);
+extern void pq_check_client_connection(void);
 
 /*
  * prototypes for functions in be-secure.c
@@ -110,6 +111,7 @@ extern ssize_t secure_open_gssapi(Port *port);
 extern char *SSLCipherSuites;
 extern char *SSLECDHCurve;
 extern bool SSLPreferServerCiphers;
+extern int client_connection_check_interval;
 extern int	ssl_min_protocol_version;
 extern int	ssl_max_protocol_version;
 

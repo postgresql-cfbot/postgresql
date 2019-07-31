@@ -3043,6 +3043,8 @@ ProcessInterrupts(void)
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("terminating connection due to administrator command")));
 	}
+	if (CheckClientConnectionPending)
+		pq_check_client_connection();
 	if (ClientConnectionLost)
 	{
 		QueryCancelPending = false; /* lost connection trumps QueryCancel */
@@ -4221,6 +4223,9 @@ PostgresMain(int argc, char *argv[],
 		 */
 		CHECK_FOR_INTERRUPTS();
 		DoingCommandRead = false;
+		if (client_connection_check_interval)
+			enable_timeout_after(SKIP_CLIENT_CHECK_TIMEOUT,
+								 client_connection_check_interval);
 
 		/*
 		 * (5) turn off the idle-in-transaction timeout

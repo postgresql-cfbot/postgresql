@@ -35,6 +35,7 @@
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_tablespace.h"
 #include "libpq/auth.h"
+#include "libpq/libpq.h"
 #include "libpq/libpq-be.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -74,6 +75,7 @@ static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
 static void LockTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
+static void ClientCheckTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
 static void process_settings(Oid databaseid, Oid roleid);
@@ -633,6 +635,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		RegisterTimeout(LOCK_TIMEOUT, LockTimeoutHandler);
 		RegisterTimeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
 						IdleInTransactionSessionTimeoutHandler);
+		RegisterTimeout(SKIP_CLIENT_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
 	}
 
 	/*
@@ -1241,6 +1244,16 @@ IdleInTransactionSessionTimeoutHandler(void)
 	IdleInTransactionSessionTimeoutPending = true;
 	InterruptPending = true;
 	SetLatch(MyLatch);
+}
+
+static void
+ClientCheckTimeoutHandler(void)
+{
+	CheckClientConnectionPending = true;
+	InterruptPending = true;
+	if (client_connection_check_interval > 0)
+		enable_timeout_after(SKIP_CLIENT_CHECK_TIMEOUT,
+							 client_connection_check_interval);
 }
 
 /*

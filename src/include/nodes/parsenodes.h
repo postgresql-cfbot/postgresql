@@ -2162,13 +2162,18 @@ typedef struct Constraint
 	/* Fields used for FOREIGN KEY constraints: */
 	RangeVar   *pktable;		/* Primary key table */
 	List	   *fk_attrs;		/* Attributes of foreign key */
+	Node	   *fk_period;		/* String node naming Period or range column */
 	List	   *pk_attrs;		/* Corresponding attrs in PK table */
+	Node	   *pk_period;		/* String node naming Period or range column */
 	char		fk_matchtype;	/* FULL, PARTIAL, SIMPLE */
 	char		fk_upd_action;	/* ON UPDATE action */
 	char		fk_del_action;	/* ON DELETE action */
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */
+
+  /* Fields used for temporal PRIMARY KEY and FOREIGN KEY constraints: */
+	Node	   *without_overlaps; /* String node naming PERIOD or range column */
 
 	/* Fields used for constraints that allow a NOT VALID specification */
 	bool		skip_validation;	/* skip validation of existing rows? */

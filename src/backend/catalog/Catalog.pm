@@ -237,6 +237,7 @@ sub ParseData
 	# Scan the input file.
 	while (<$ifd>)
 	{
+    next if /^#/;
 		my $hash_ref;
 
 		if (/{/)

@@ -19,6 +19,7 @@ test: uuid
 test: enum
 test: money
 test: rangetypes
+test: without_overlaps
 test: pg_lsn
 test: regproc
 test: strings

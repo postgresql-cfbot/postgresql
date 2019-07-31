@@ -4956,8 +4956,9 @@ restart:
  * RelationGetExclusionInfo -- get info about index's exclusion constraint
  *
  * This should be called only for an index that is known to have an
- * associated exclusion constraint.  It returns arrays (palloc'd in caller's
- * context) of the exclusion operator OIDs, their underlying functions'
+ * associated exclusion constraint or temporal primary key.
+ * It returns arrays (palloc'd in caller's * context)
+ * of the exclusion operator OIDs, their underlying functions'
  * OIDs, and their strategy numbers in the index's opclasses.  We cache
  * all this information since it requires a fair amount of work to get.
  */
@@ -5023,7 +5024,12 @@ RelationGetExclusionInfo(Relation indexRelation,
 		int			nelem;
 
 		/* We want the exclusion constraint owning the index */
-		if (conform->contype != CONSTRAINT_EXCLUSION ||
+		/*
+		 * TODO: Is this too permissive?
+		 * Maybe it needs to be (!= CONSTRAINT_PRIMARY || !has_excl_operators)
+		 */
+		if ((conform->contype != CONSTRAINT_EXCLUSION &&
+					conform->contype != CONSTRAINT_PRIMARY) ||
 			conform->conindid != RelationGetRelid(indexRelation))
 			continue;
 

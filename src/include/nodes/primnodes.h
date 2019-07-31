@@ -643,6 +643,8 @@ typedef struct SubLink
 	List	   *operName;		/* originally specified operator name */
 	Node	   *subselect;		/* subselect as Query* or raw parsetree */
 	int			location;		/* token location, or -1 if unknown */
+	Node	   *subroot;		/* PlannerInfo for the subquery */
+	Node	   *subplan;		/* best Plan for the subquery */
 } SubLink;
 
 /*

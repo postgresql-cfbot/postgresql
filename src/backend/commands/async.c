@@ -89,11 +89,9 @@
  *	  Inbound-notify processing consists of reading all of the notifications
  *	  that have arrived since scanning last time. We read every notification
  *	  until we reach either a notification from an uncommitted transaction or
- *	  the head pointer's position. Then we check if we were the laziest
- *	  backend: if our pointer is set to the same position as the global tail
- *	  pointer is set, then we move the global tail pointer ahead to where the
- *	  second-laziest backend is (in general, we take the MIN of the current
- *	  head position and all active backends' new tail pointers). Whenever we
+ *	  the head pointer's position. Then we check if we can advance the global
+ *	  tail pointer to a new page, if so we take the MIN of the current
+ *	  head position and all active backends' new tail pointers. Whenever we
  *	  move the global tail pointer we also truncate now-unused pages (i.e.,
  *	  delete files in pg_notify/ that are no longer used).
  *
@@ -1504,11 +1502,13 @@ SignalBackends(void)
 	int			count;
 	int			i;
 	int32		pid;
+	int			notify_all = false;
 
 	/*
 	 * Identify all backends that are listening and not already up-to-date. We
 	 * don't want to send signals while holding the AsyncQueueLock, so we just
-	 * build a list of target PIDs.
+	 * build a list of target PIDs. If we haven't moved to a new page there is
+	 * no point notifying backends of other databases.
 	 *
 	 * XXX in principle these pallocs could fail, which would be bad. Maybe
 	 * preallocate the arrays?	But in practice this is only run in trivial
@@ -1517,6 +1517,7 @@ SignalBackends(void)
 	pids = (int32 *) palloc(MaxBackends * sizeof(int32));
 	ids = (BackendId *) palloc(MaxBackends * sizeof(BackendId));
 	count = 0;
+	notify_all = QUEUE_POS_PAGE(QUEUE_HEAD) != QUEUE_POS_PAGE(QUEUE_TAIL);
 
 	LWLockAcquire(AsyncQueueLock, LW_EXCLUSIVE);
 	for (i = 1; i <= MaxBackends; i++)
@@ -1525,6 +1526,9 @@ SignalBackends(void)
 		if (pid != InvalidPid && pid != MyProcPid)
 		{
 			QueuePosition pos = QUEUE_BACKEND_POS(i);
+
+			if (!notify_all && QUEUE_BACKEND_DBOID(i) != MyDatabaseId)
+				continue;
 
 			if (!QUEUE_POS_EQUAL(pos, QUEUE_HEAD))
 			{
@@ -1732,7 +1736,6 @@ asyncQueueReadAllNotifications(void)
 	QueuePosition oldpos;
 	QueuePosition head;
 	Snapshot	snapshot;
-	bool		advanceTail;
 
 	/* page_buffer must be adequately aligned, so use a union */
 	union
@@ -1854,12 +1857,10 @@ asyncQueueReadAllNotifications(void)
 		/* Update shared state */
 		LWLockAcquire(AsyncQueueLock, LW_SHARED);
 		QUEUE_BACKEND_POS(MyBackendId) = pos;
-		advanceTail = QUEUE_POS_EQUAL(oldpos, QUEUE_TAIL);
 		LWLockRelease(AsyncQueueLock);
 
-		/* If we were the laziest backend, try to advance the tail pointer */
-		if (advanceTail)
-			asyncQueueAdvanceTail();
+		/* Check if tail can be advanced */
+		asyncQueueAdvanceTail();
 
 		PG_RE_THROW();
 	}
@@ -1868,12 +1869,10 @@ asyncQueueReadAllNotifications(void)
 	/* Update shared state */
 	LWLockAcquire(AsyncQueueLock, LW_SHARED);
 	QUEUE_BACKEND_POS(MyBackendId) = pos;
-	advanceTail = QUEUE_POS_EQUAL(oldpos, QUEUE_TAIL);
 	LWLockRelease(AsyncQueueLock);
 
-	/* If we were the laziest backend, try to advance the tail pointer */
-	if (advanceTail)
-		asyncQueueAdvanceTail();
+	/* Check if tail can be advanced */
+	asyncQueueAdvanceTail();
 
 	/* Done with snapshot */
 	UnregisterSnapshot(snapshot);
@@ -1993,12 +1992,24 @@ asyncQueueAdvanceTail(void)
 	int			newtailpage;
 	int			boundary;
 
+	/*
+	 * Advancing the tail is expensive (it takes an exclusive lock which
+	 * can block committing backends) so don't bother if we can't advance
+	 * at least a page.
+	 */
+	if (QUEUE_POS_PAGE(QUEUE_TAIL) == QUEUE_POS_PAGE(QUEUE_HEAD))
+		return;
+
 	LWLockAcquire(AsyncQueueLock, LW_EXCLUSIVE);
 	min = QUEUE_HEAD;
 	for (i = 1; i <= MaxBackends; i++)
 	{
 		if (QUEUE_BACKEND_PID(i) != InvalidPid)
+		{
 			min = QUEUE_POS_MIN(min, QUEUE_BACKEND_POS(i));
+			if (QUEUE_POS_EQUAL(min, QUEUE_TAIL))
+				break;
+		}
 	}
 	oldtailpage = QUEUE_POS_PAGE(QUEUE_TAIL);
 	QUEUE_TAIL = min;

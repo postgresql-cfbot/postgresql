@@ -6,6 +6,7 @@
 #include "btree_gist.h"
 #include "btree_utils_num.h"
 #include "common/int.h"
+#include "utils/builtins.h"
 #include "utils/cash.h"
 
 typedef struct
@@ -95,20 +96,7 @@ PG_FUNCTION_INFO_V1(cash_dist);
 Datum
 cash_dist(PG_FUNCTION_ARGS)
 {
-	Cash		a = PG_GETARG_CASH(0);
-	Cash		b = PG_GETARG_CASH(1);
-	Cash		r;
-	Cash		ra;
-
-	if (pg_sub_s64_overflow(a, b, &r) ||
-		r == PG_INT64_MIN)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("money out of range")));
-
-	ra = Abs(r);
-
-	PG_RETURN_CASH(ra);
+	return cash_distance(fcinfo);
 }
 
 /**************************************************

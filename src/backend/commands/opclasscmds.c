@@ -1097,7 +1097,7 @@ assignOperTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
 		 */
 		IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
 
-		if (!amroutine->amcanorderbyop)
+		if (!amroutine->ammatchorderby)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("access method \"%s\" does not support ordering operators",

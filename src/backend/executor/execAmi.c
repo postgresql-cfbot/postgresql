@@ -535,9 +535,15 @@ ExecSupportsBackwardScan(Plan *node)
 			return false;
 
 		case T_IndexScan:
+			/* Backward ORDER BY operator scans are not supported. */
+			if (((IndexScan *) node)->indexorderby)
+				return false;
 			return IndexSupportsBackwardScan(((IndexScan *) node)->indexid);
 
 		case T_IndexOnlyScan:
+			/* Backward ORDER BY operator scans are not supported. */
+			if (((IndexOnlyScan *) node)->indexorderby)
+				return false;
 			return IndexSupportsBackwardScan(((IndexOnlyScan *) node)->indexid);
 
 		case T_SubqueryScan:

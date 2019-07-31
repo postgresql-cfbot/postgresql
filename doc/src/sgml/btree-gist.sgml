@@ -96,6 +96,19 @@ INSERT 0 1
  </sect2>
 
  <sect2>
+  <title>Upgrade notes for version 1.6</title>
+
+  <para>
+   In version 1.6 <literal>btree_gist</literal> switched to using in-core
+   distance operators, and its own implementations were removed.  References to
+   these operators in <literal>btree_gist</literal> opclasses will be updated
+   automatically during the extension upgrade, but if the user has created
+   objects referencing these operators or functions, then these objects must be
+   dropped manually before updating the extension.
+  </para>
+ </sect2>
+
+ <sect2>
   <title>Authors</title>
 
   <para>

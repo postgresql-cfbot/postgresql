@@ -818,7 +818,7 @@ WHERE pp.oid = ap.amproc AND po.oid = o.oprcode AND o.oid = ao.amopopr AND
     ao.amoprighttype = ap.amprocrighttype AND
     ap.amprocnum = 1 AND
     (pp.provolatile != po.provolatile OR
-     pp.proleakproof != po.proleakproof)
+     (NOT pp.proleakproof AND po.proleakproof))
 ORDER BY 1;
 
 

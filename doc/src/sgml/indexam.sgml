@@ -100,6 +100,11 @@ typedef struct IndexAmRoutine
     bool        amcanorder;
     /* does AM support ORDER BY result of an operator on indexed column? */
     bool        amcanorderbyop;
+    /* 
+     * Does AM support only the one ORDER BY operator on first indexed column? 
+     * amcanorderbyop is implied.
+     */
+    bool        amorderbyopfirstcol;
     /* does AM support backward scanning? */
     bool        amcanbackward;
     /* does AM support UNIQUE indexes? */
@@ -803,7 +808,9 @@ amparallelrescan (IndexScanDesc scan);
        an order satisfying <literal>ORDER BY</literal> <replaceable>index_key</replaceable>
        <replaceable>operator</replaceable> <replaceable>constant</replaceable>.  Scan modifiers
        of that form can be passed to <function>amrescan</function> as described
-       previously.
+       previously.  If the access method support only the one ORDER BY operator
+       on the first indexed column, then it should set
+       <structfield>amorderbyopfirstcol</structfield> to true.
       </para>
      </listitem>
     </itemizedlist>

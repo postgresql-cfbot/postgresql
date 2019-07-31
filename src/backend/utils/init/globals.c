@@ -130,9 +130,15 @@ int			max_parallel_maintenance_workers = 2;
  */
 int			NBuffers = 1000;
 int			MaxConnections = 90;
+int			SessionPoolSize = 0;
+int			IdlePoolWorkerTimeout = 0;
+int			ConnectionProxiesNumber = 1;
+int			SessionSchedule = SESSION_SCHED_ROUND_ROBIN;
+
 int			max_worker_processes = 8;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
+int			MaxSessions = 1000;
 
 int			VacuumCostPageHit = 1;	/* GUC parameters for vacuum */
 int			VacuumCostPageMiss = 10;
@@ -148,3 +154,4 @@ int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
 
 double		vacuum_cleanup_index_scale_factor;
+bool        RestartPoolerOnReload = false;

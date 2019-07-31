@@ -30,6 +30,7 @@
 #include "parser/parse_expr.h"
 #include "parser/parse_type.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/proc.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
@@ -457,6 +458,7 @@ StorePreparedStatement(const char *stmt_name,
 											  stmt_name,
 											  HASH_ENTER,
 											  &found);
+	MyProc->is_tainted = true;
 
 	/* Shouldn't get a duplicate entry */
 	if (found)

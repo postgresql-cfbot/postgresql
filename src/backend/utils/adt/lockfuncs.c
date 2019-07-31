@@ -18,6 +18,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/predicate_internals.h"
+#include "storage/proc.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 
@@ -658,6 +659,7 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 static void
 PreventAdvisoryLocksInParallelMode(void)
 {
+	MyProc->is_tainted = true;
 	if (IsInParallelMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),

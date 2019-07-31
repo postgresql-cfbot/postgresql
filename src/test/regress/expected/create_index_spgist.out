@@ -50,6 +50,102 @@ SELECT count(*) FROM quad_point_tbl WHERE box '(200,200,1000,1000)' @> p;
   1057
 (1 row)
 
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,399),1.41>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,399),1.42>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,401),1.41>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,401),1.42>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,399),1.41>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,399),1.42>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,401),1.41>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,401),1.42>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(333,399),0.99>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(333,399),1.01>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(333,401),0.99>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(333,401),1.01>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,400),0.99>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(332,400),1.01>';
+ count 
+-------
+  1000
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,400),0.99>';
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM quad_point_tbl WHERE p <@ circle '<(334,400),1.01>';
+ count 
+-------
+  1000
+(1 row)
+
 SELECT count(*) FROM quad_point_tbl WHERE p << '(5000, 4000)';
  count 
 -------

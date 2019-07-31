@@ -38,7 +38,7 @@
 struct PlannerInfo;				/* avoid including pathnodes.h here */
 struct IndexOptInfo;
 struct SpecialJoinInfo;
-
+struct _FuncCandidateList;
 
 /*
  * The Simplify request allows the support function to perform plan-time
@@ -238,5 +238,27 @@ typedef struct SupportRequestIndexCondition
 	bool		lossy;			/* set to false if index condition is an exact
 								 * equivalent of the function call */
 } SupportRequestIndexCondition;
+
+/*
+ * PostgreSQL function's parameters are described by list of their types.
+ * For some specific functions this technique is not practical (require
+ * lot of overloaded functions), and better is using some algoritm. This
+ * node is used for functions that returns "any" type or has some "any"
+ * parameter.
+ *
+ * Support function is required for functions that returns "any" type.
+ * For "any" parameters it is optional, but it can increase a execution,
+ * because type detection (using exprType()) can be processed in parse
+ * time.
+ */
+typedef struct SupportRequestArgTypes
+{
+	NodeTag		type;
+
+	int			nargs;
+	Oid		   *typeids;
+	Oid			rettype;
+	struct _FuncCandidateList *candidate;
+} SupportRequestArgTypes;
 
 #endif							/* SUPPORTNODES_H */

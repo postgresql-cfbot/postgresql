@@ -22,6 +22,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/supportnodes.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_coerce.h"
@@ -923,6 +924,36 @@ func_match_argtypes(int nargs,
 		 current_candidate = next_candidate)
 	{
 		next_candidate = current_candidate->next;
+
+		if (OidIsValid(current_candidate->support_func))
+		{
+			SupportRequestArgTypes		req;
+			SupportRequestArgTypes	   *result;
+
+			req.type = T_SupportRequestArgTypes;
+			req.candidate = current_candidate;
+			req.nargs = nargs;
+			req.typeids = input_typeids;
+
+			result = (SupportRequestArgTypes *)
+				DatumGetPointer(OidFunctionCall1(current_candidate->support_func,
+												 PointerGetDatum(&req)));
+
+			/*
+			 * Support function should not to support this request. Then
+			 * do nothing. Support function can detect failure, and returns
+			 * null as candidate. Then eliminate this candidate from list.
+			 */
+			if (result == &req)
+			{
+				if (result->candidate)
+					current_candidate = result->candidate;
+				else
+					/* skip this candidate */
+					continue;
+			}
+		}
+
 		if (can_coerce_type(nargs, input_typeids, current_candidate->args,
 							COERCION_IMPLICIT))
 		{
@@ -1585,6 +1616,7 @@ func_get_detail(List *funcname,
 
 		*funcid = best_candidate->oid;
 		*nvargs = best_candidate->nvargs;
+		*rettype = best_candidate->rettype;
 		*true_typeids = best_candidate->args;
 
 		/*
@@ -1613,7 +1645,6 @@ func_get_detail(List *funcname,
 			elog(ERROR, "cache lookup failed for function %u",
 				 best_candidate->oid);
 		pform = (Form_pg_proc) GETSTRUCT(ftup);
-		*rettype = pform->prorettype;
 		*retset = pform->proretset;
 		*vatype = pform->provariadic;
 		/* fetch default args if caller wants 'em */

@@ -1084,6 +1084,8 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 				   effective_nargs * sizeof(Oid));
 		newResult->pathpos = pathpos;
 		newResult->oid = procform->oid;
+		newResult->support_func = InvalidOid;
+		newResult->rettype = procform->prorettype;
 		newResult->nargs = effective_nargs;
 		newResult->argnumbers = argnumbers;
 		if (argnumbers)
@@ -1100,6 +1102,7 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 			/* Simple positional case, just copy proargtypes as-is */
 			memcpy(newResult->args, procform->proargtypes.values,
 				   pronargs * sizeof(Oid));
+
 		}
 		if (variadic)
 		{
@@ -1113,6 +1116,25 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 		else
 			newResult->nvargs = 0;
 		newResult->ndargs = use_defaults ? pronargs - nargs : 0;
+
+		/*
+		 * When there are support function, we should to detect, if
+		 * there is any "any" argument, and if there is, then we should
+		 * to set support_tp_func_oid field.
+		 */
+		if (OidIsValid(procform->prosupport))
+		{
+			int			i;
+
+			for (i = 0; i < pronargs; i++)
+			{
+				if (newResult->args[i] == ANYOID)
+				{
+					newResult->support_func = procform->prosupport;
+					break;
+				}
+			}
+		}
 
 		/*
 		 * Does it have the same arguments as something we already accepted?
@@ -1701,6 +1723,8 @@ OpernameGetCandidates(List *names, char oprkind, bool missing_schema_ok)
 
 		newResult->pathpos = pathpos;
 		newResult->oid = operform->oid;
+		newResult->support_func = InvalidOid;
+		newResult->rettype = operform->oprresult;
 		newResult->nargs = 2;
 		newResult->nvargs = 0;
 		newResult->ndargs = 0;

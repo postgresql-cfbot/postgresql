@@ -3346,6 +3346,15 @@
   proname => 'repeat', prorettype => 'text', proargtypes => 'text int4',
   prosrc => 'repeat' },
 
+{ oid => '6107', descr => 'choose a value from list',
+  proname => 'decode', provariadic => 'any', proisstrict => 'f',
+  prosupport => 'decode_support', prorettype => 'any', proargtypes => 'any',
+  prosrc => 'decode',
+  proallargtypes => '{any}', proargmodes => '{v}'},
+{ oid => '6108', descr => 'parser support for decode',
+  proname => 'decode_support', prorettype => 'internal',
+  proargtypes => 'internal', prosrc => 'decode_support' },
+
 { oid => '1623', descr => 'convert SQL99 regexp pattern to POSIX style',
   proname => 'similar_escape', proisstrict => 'f', prorettype => 'text',
   proargtypes => 'text text', prosrc => 'similar_escape' },

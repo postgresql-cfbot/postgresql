@@ -15,9 +15,16 @@
  */
 #include "postgres.h"
 
+#include "nodes/nodes.h"
+#include "nodes/supportnodes.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_type.h"
 #include "common/int.h"
+#include "parser/parse_coerce.h"
+#include "parser/parse_oper.h"
 #include "utils/builtins.h"
 #include "utils/formatting.h"
+#include "utils/lsyscache.h"
 #include "mb/pg_wchar.h"
 
 
@@ -1065,4 +1072,338 @@ repeat(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_TEXT_P(result);
+}
+
+typedef struct decode_fmgr_cache
+{
+	Oid			typid;
+	FmgrInfo	eqop_finfo;
+} decode_fmgr_cache;
+
+/*
+ * Decode function
+ */
+Datum
+decode(PG_FUNCTION_ARGS)
+{
+	decode_fmgr_cache *fmgr_cache;
+	Oid		search_oid;
+	Oid		result_oid;
+	Oid		rettype;
+	Oid		collation;
+	int			i;
+	int			result_narg;
+	int			nargs = PG_NARGS();
+	bool		expr_isnull;
+
+	if (nargs < 3)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("too few function arguments"),
+				 errhint("The decode function requires at least 3 arguments")));
+
+	search_oid = get_fn_expr_argtype(fcinfo->flinfo, 1);
+	result_oid = get_fn_expr_argtype(fcinfo->flinfo, 2);
+	collation = PG_GET_COLLATION();
+
+	if (fcinfo->flinfo->fn_extra == NULL)
+	{
+		MemoryContext		oldcxt;
+		Oid			eqop;
+
+		get_sort_group_operators(search_oid, false, true, false, NULL, &eqop, NULL, NULL);
+
+		oldcxt = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
+
+		fmgr_cache = palloc(sizeof(decode_fmgr_cache));
+		fmgr_cache->typid = search_oid;
+		fmgr_info(get_opcode(eqop), &fmgr_cache->eqop_finfo);
+
+		MemoryContextSwitchTo(oldcxt);
+
+		fcinfo->flinfo->fn_extra = fmgr_cache;
+	}
+	else
+		fmgr_cache = fcinfo->flinfo->fn_extra;
+
+	/* recheck of fmgr_cache validity, should not be */
+	if (fmgr_cache->typid != search_oid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("search expression has unexpected type"),
+				 errhint("The decode expects \"%s\" type",
+							format_type_be(search_oid))));
+
+	/* recheck rerttype, should not be */
+	rettype = get_fn_expr_rettype(fcinfo->flinfo);
+	if (rettype != result_oid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("result expression has unexpected type"),
+				 errhint("The decode expects \"%s\" type",
+							format_type_be(result_oid))));
+
+	result_narg = nargs % 2 ? -1 : nargs - 1;
+	expr_isnull = PG_ARGISNULL(0);
+
+	for (i = 1; i < nargs; i += 2)
+	{
+		if (expr_isnull)
+		{
+			if (PG_ARGISNULL(i) && i + 1 < nargs)
+			{
+				result_narg = i + 1;
+				break;
+			}
+		}
+		else
+		{
+			if (!PG_ARGISNULL(i) && i + 1 < nargs)
+			{
+				Datum		result;
+
+				/* recheck type */
+				if (get_fn_expr_argtype(fcinfo->flinfo, i) != search_oid)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("search expression has unexpected type"),
+							 errhint("The decode expects \"%s\" type",
+										format_type_be(search_oid))));
+
+				result = FunctionCall2Coll(&fmgr_cache->eqop_finfo,
+										   collation,
+										   PG_GETARG_DATUM(0),
+										   PG_GETARG_DATUM(i));
+
+				if (DatumGetBool(result))
+				{
+					result_narg = i + 1;
+					break;
+				}
+			}
+		}
+	}
+
+	if (result_narg >= 0 && !PG_ARGISNULL(result_narg))
+	{
+		if (get_fn_expr_argtype(fcinfo->flinfo, result_narg) != result_oid)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("result expression has unexpected type"),
+					 errhint("The decode expects \"%s\" type",
+								format_type_be(result_oid))));
+
+		PG_RETURN_DATUM(PG_GETARG_DATUM(result_narg));
+	}
+	else
+		PG_RETURN_NULL();
+}
+
+/*
+ * select_common_type_from_vector()
+ *		Determine the common supertype of vector of Oids.
+ *
+ * Similar to select_common_type() but simplified for polymorphics
+ * type processing. When there are no supertype, then returns InvalidOid,
+ * when noerror is true, or raise exception when noerror is false.
+ */
+static Oid
+select_common_type_from_vector(int nargs, Oid *typeids, bool noerror)
+{
+	int	i = 0;
+	Oid			ptype;
+	TYPCATEGORY pcategory;
+	bool		pispreferred;
+
+	Assert(nargs > 0);
+	ptype = typeids[0];
+
+	/* fast leave when all types are same */
+	if (ptype != UNKNOWNOID)
+	{
+		for (i = 1; i < nargs; i++)
+		{
+			if (ptype != typeids[i])
+				break;
+		}
+
+		if (i == nargs)
+			return ptype;
+	}
+
+	/*
+	 * Nope, so set up for the full algorithm.  Note that at this point, lc
+	 * points to the first list item with type different from pexpr's; we need
+	 * not re-examine any items the previous loop advanced over.
+	 */
+	ptype = getBaseType(ptype);
+	get_type_category_preferred(ptype, &pcategory, &pispreferred);
+
+	for (; i < nargs; i++)
+	{
+		Oid			ntype = getBaseType(typeids[i]);
+
+		/* move on to next one if no new information... */
+		if (ntype != UNKNOWNOID && ntype != ptype)
+		{
+			TYPCATEGORY ncategory;
+			bool		nispreferred;
+
+			get_type_category_preferred(ntype, &ncategory, &nispreferred);
+
+			if (ptype == UNKNOWNOID)
+			{
+				/* so far, only unknowns so take anything... */
+				ptype = ntype;
+				pcategory = ncategory;
+				pispreferred = nispreferred;
+			}
+			else if (ncategory != pcategory)
+			{
+				if (noerror)
+					return InvalidOid;
+
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("types %s and %s cannot be matched",
+								format_type_be(ptype),
+								format_type_be(ntype))));
+			}
+			else if (!pispreferred &&
+					 can_coerce_type(1, &ptype, &ntype, COERCION_IMPLICIT) &&
+					 !can_coerce_type(1, &ntype, &ptype, COERCION_IMPLICIT))
+			{
+				/*
+				 * take new type if can coerce to it implicitly but not the
+				 * other way; but if we have a preferred type, stay on it.
+				 */
+				ptype = ntype;
+				pcategory = ncategory;
+				pispreferred = nispreferred;
+			}
+		}
+	}
+
+	/*
+	 * Be consistent with select_common_type()
+	 */
+	if (ptype == UNKNOWNOID)
+		ptype = TEXTOID;
+
+	return ptype;
+}
+
+/*
+ * Support function for decode function
+ *
+ * It converts VARIADIC "any" to real types, and set real expected type.
+ */
+Datum
+decode_support(PG_FUNCTION_ARGS)
+{
+	Node *rawreq = (Node *) PG_GETARG_POINTER(0);
+	Node *ret = NULL;
+
+	if (IsA(rawreq, SupportRequestArgTypes))
+	{
+		SupportRequestArgTypes *fd = (SupportRequestArgTypes *) rawreq;
+		FuncCandidateList candidate = fd->candidate;
+
+		if (candidate->nargs >= 3 && !candidate->argnumbers && fd->nargs == candidate->nargs)
+		{
+			FuncCandidateList newc;
+			Oid		search_oid;
+			Oid		result_oid;
+			Oid		search_typids[FUNC_MAX_ARGS];
+			Oid		result_typids[FUNC_MAX_ARGS];
+			int		search_nargs = 0;
+			int		result_nargs = 0;
+			int		i;
+
+			newc = palloc(offsetof(struct _FuncCandidateList, args) +
+							candidate->nargs * sizeof(Oid));
+
+			/*
+			 * Oracle should not to find most common types for numeric types, because
+			 * type number is generic and widely used as integer type too. Using same
+			 * setup is too simple for Postgres - using numeric instead int can has
+			 * negative performance impact.
+			 *
+			 * When type is not TEXT, then the most common type is used.
+			 */
+			search_oid = fd->typeids[1] != UNKNOWNOID ? fd->typeids[1] : TEXTOID;
+			result_oid = fd->typeids[2] != UNKNOWNOID ? fd->typeids[2] : TEXTOID;
+
+			if (search_oid != TEXTOID || result_oid != TEXTOID)
+			{
+				for (i = 0; i < fd->nargs; i++)
+				{
+					if (i == 0)
+						search_typids[search_nargs++] = fd->typeids[i];
+					else if (i % 2) /* even position */
+					{
+						if (i + 1 < fd->nargs)
+							search_typids[search_nargs++] = fd->typeids[i];
+						else
+							result_typids[result_nargs++] = fd->typeids[i];
+					}
+					else /* odd position */
+						result_typids[result_nargs++] = fd->typeids[i];
+				}
+
+				if (search_oid != TEXTOID)
+				{
+					search_oid = select_common_type_from_vector(search_nargs,
+																search_typids,
+																true);
+
+					if (!OidIsValid(search_oid)) /* should not to be */
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("cannot to detect common type for search expression")));
+				}
+
+				if (result_oid != TEXTOID)
+				{
+					result_oid = select_common_type_from_vector(result_nargs,
+																result_typids,
+																true);
+
+					if (!OidIsValid(result_oid)) /* should not to be */
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("cannot to detect common type for result expression")));
+				}
+			}
+
+			memcpy(newc, candidate, sizeof(struct _FuncCandidateList));
+
+			newc->rettype = result_oid;
+
+			/* expression is casted to search */
+			newc->args[0] = search_oid;
+
+			for (i = 1; i < candidate->nargs; i += 2)
+			{
+				/* is pair or alone default? */
+				if (i + 1 < candidate->nargs)
+				{
+					newc->args[i] = search_oid;
+					newc->args[i+1] = result_oid;
+				}
+				else
+					newc->args[i] = result_oid;
+			}
+
+			candidate = newc;
+		}
+		else
+			candidate = NULL;
+
+		fd->candidate = candidate;
+
+		ret = (Node *) fd;
+	}
+
+	PG_RETURN_POINTER(ret);
 }

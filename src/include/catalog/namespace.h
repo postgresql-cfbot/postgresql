@@ -30,6 +30,8 @@ typedef struct _FuncCandidateList
 	struct _FuncCandidateList *next;
 	int			pathpos;		/* for internal use of namespace lookup */
 	Oid			oid;			/* the function or operator's OID */
+	Oid			support_func;	/* oid of support function if exists */
+	Oid			rettype;		/* return type set by support function */
 	int			nargs;			/* number of arg types returned */
 	int			nvargs;			/* number of args to become variadic array */
 	int			ndargs;			/* number of defaulted args */

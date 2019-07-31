@@ -113,3 +113,33 @@ SELECT to_regrole('foo.bar');
 SELECT to_regnamespace('Nonexistent');
 SELECT to_regnamespace('"Nonexistent"');
 SELECT to_regnamespace('foo.bar');
+
+/* If objects exist, and user don't have USAGE privilege, return NULL with no error. */
+
+CREATE USER test_usr;
+CREATE SCHEMA test_schema;
+REVOKE ALL ON SCHEMA test_schema FROM test_usr;
+
+CREATE OPERATOR  test_schema.+ (
+	leftarg = int8,
+	rightarg = int8,
+	procedure = int8pl
+);
+CREATE OR REPLACE FUNCTION test_schema.test_func(int)
+RETURNS INTEGER AS
+	'SELECT 1;'
+LANGUAGE sql;
+CREATE TABLE test_schema.test_tbl(id int);
+CREATE TYPE test_schema.test_type AS (a1 int,a2 int);
+
+SET SESSION AUTHORIZATION test_usr;
+SELECT to_regoper('test_schema.+');
+SELECT to_regoperator('test_schema.+(int8,int8)');
+SELECT to_regproc('test_schema.test_func');
+SELECT to_regprocedure('test_schema.test_func(int)');
+SELECT to_regclass('test_schema.test_tbl');
+SELECT to_regtype('test_schema.test_type');
+RESET SESSION AUTHORIZATION;
+
+DROP SCHEMA test_schema CASCADE;
+DROP ROLE test_usr;

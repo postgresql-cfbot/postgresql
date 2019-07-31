@@ -395,3 +395,63 @@ SELECT to_regnamespace('"Nonexistent"');
 
 SELECT to_regnamespace('foo.bar');
 ERROR:  invalid name syntax
+/* If objects exist, and user don't have USAGE privilege, return NULL with no error. */
+CREATE USER test_usr;
+CREATE SCHEMA test_schema;
+REVOKE ALL ON SCHEMA test_schema FROM test_usr;
+CREATE OPERATOR  test_schema.+ (
+	leftarg = int8,
+	rightarg = int8,
+	procedure = int8pl
+);
+CREATE OR REPLACE FUNCTION test_schema.test_func(int)
+RETURNS INTEGER AS
+	'SELECT 1;'
+LANGUAGE sql;
+CREATE TABLE test_schema.test_tbl(id int);
+CREATE TYPE test_schema.test_type AS (a1 int,a2 int);
+SET SESSION AUTHORIZATION test_usr;
+SELECT to_regoper('test_schema.+');
+ to_regoper 
+------------
+ 
+(1 row)
+
+SELECT to_regoperator('test_schema.+(int8,int8)');
+ to_regoperator 
+----------------
+ 
+(1 row)
+
+SELECT to_regproc('test_schema.test_func');
+ to_regproc 
+------------
+ 
+(1 row)
+
+SELECT to_regprocedure('test_schema.test_func(int)');
+ to_regprocedure 
+-----------------
+ 
+(1 row)
+
+SELECT to_regclass('test_schema.test_tbl');
+ to_regclass 
+-------------
+ 
+(1 row)
+
+SELECT to_regtype('test_schema.test_type');
+ to_regtype 
+------------
+ 
+(1 row)
+
+RESET SESSION AUTHORIZATION;
+DROP SCHEMA test_schema CASCADE;
+NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to operator test_schema.+(bigint,bigint)
+drop cascades to function test_schema.test_func(integer)
+drop cascades to table test_schema.test_tbl
+drop cascades to type test_schema.test_type
+DROP ROLE test_usr;

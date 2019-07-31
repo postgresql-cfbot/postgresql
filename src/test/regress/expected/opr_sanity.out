@@ -168,9 +168,105 @@ WHERE p1.oid < p2.oid AND
      p1.proretset != p2.proretset OR
      p1.provolatile != p2.provolatile OR
      p1.pronargs != p2.pronargs);
- oid | proname | oid | proname 
------+---------+-----+---------
-(0 rows)
+ oid  |        proname        | oid  |         proname         
+------+-----------------------+------+-------------------------
+ 8019 | daterange_agg_finalfn | 8028 | numrangebb_agg_finalfn
+ 8019 | daterange_agg_finalfn | 8037 | daterangebb_agg_finalfn
+ 8019 | daterange_agg_finalfn | 8034 | tstzrangebb_agg_finalfn
+ 8019 | daterange_agg_finalfn | 8031 | tsrangebb_agg_finalfn
+ 8019 | daterange_agg_finalfn | 8025 | int8rangebb_agg_finalfn
+ 8019 | daterange_agg_finalfn | 8022 | int4rangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8028 | numrangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8037 | daterangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8034 | tstzrangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8031 | tsrangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8025 | int8rangebb_agg_finalfn
+ 8016 | tstzrange_agg_finalfn | 8022 | int4rangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8028 | numrangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8037 | daterangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8034 | tstzrangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8031 | tsrangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8025 | int8rangebb_agg_finalfn
+ 8013 | tsrange_agg_finalfn   | 8022 | int4rangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8028 | numrangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8037 | daterangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8034 | tstzrangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8031 | tsrangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8025 | int8rangebb_agg_finalfn
+ 8010 | numrange_agg_finalfn  | 8022 | int4rangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8028 | numrangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8037 | daterangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8034 | tstzrangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8031 | tsrangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8025 | int8rangebb_agg_finalfn
+ 8007 | int8range_agg_finalfn | 8022 | int4rangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8028 | numrangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8037 | daterangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8034 | tstzrangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8031 | tsrangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8025 | int8rangebb_agg_finalfn
+ 8004 | int4range_agg_finalfn | 8022 | int4rangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8028 | numrangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8037 | daterangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8034 | tstzrangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8031 | tsrangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8025 | int8rangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8022 | int4rangebb_agg_finalfn
+ 8001 | range_agg_finalfn     | 8019 | daterange_agg_finalfn
+ 8001 | range_agg_finalfn     | 8016 | tstzrange_agg_finalfn
+ 8001 | range_agg_finalfn     | 8013 | tsrange_agg_finalfn
+ 8001 | range_agg_finalfn     | 8010 | numrange_agg_finalfn
+ 8001 | range_agg_finalfn     | 8007 | int8range_agg_finalfn
+ 8001 | range_agg_finalfn     | 8004 | int4range_agg_finalfn
+ 8003 | int4range_agg_transfn | 8036 | daterangebb_agg_transfn
+ 8003 | int4range_agg_transfn | 8027 | numrangebb_agg_transfn
+ 8003 | int4range_agg_transfn | 8030 | tsrangebb_agg_transfn
+ 8003 | int4range_agg_transfn | 8021 | int4rangebb_agg_transfn
+ 8003 | int4range_agg_transfn | 8024 | int8rangebb_agg_transfn
+ 8003 | int4range_agg_transfn | 8033 | tstzrangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8036 | daterangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8027 | numrangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8030 | tsrangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8021 | int4rangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8024 | int8rangebb_agg_transfn
+ 8018 | daterange_agg_transfn | 8033 | tstzrangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8036 | daterangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8027 | numrangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8030 | tsrangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8021 | int4rangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8024 | int8rangebb_agg_transfn
+ 8015 | tstzrange_agg_transfn | 8033 | tstzrangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8036 | daterangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8027 | numrangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8030 | tsrangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8021 | int4rangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8024 | int8rangebb_agg_transfn
+ 8006 | int8range_agg_transfn | 8033 | tstzrangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8036 | daterangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8027 | numrangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8030 | tsrangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8021 | int4rangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8024 | int8rangebb_agg_transfn
+ 8012 | tsrange_agg_transfn   | 8033 | tstzrangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8036 | daterangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8027 | numrangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8030 | tsrangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8003 | int4range_agg_transfn
+ 8000 | range_agg_transfn     | 8021 | int4rangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8018 | daterange_agg_transfn
+ 8000 | range_agg_transfn     | 8015 | tstzrange_agg_transfn
+ 8000 | range_agg_transfn     | 8024 | int8rangebb_agg_transfn
+ 8000 | range_agg_transfn     | 8006 | int8range_agg_transfn
+ 8000 | range_agg_transfn     | 8012 | tsrange_agg_transfn
+ 8000 | range_agg_transfn     | 8009 | numrange_agg_transfn
+ 8000 | range_agg_transfn     | 8033 | tstzrangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8036 | daterangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8027 | numrangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8030 | tsrangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8021 | int4rangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8024 | int8rangebb_agg_transfn
+ 8009 | numrange_agg_transfn  | 8033 | tstzrangebb_agg_transfn
+(96 rows)
 
 -- Look for uses of different type OIDs in the argument/result type fields
 -- for different aliases of the same built-in function.
@@ -196,7 +292,28 @@ ORDER BY 1, 2;
 ------------+------------
          25 |       1043
        1114 |       1184
-(2 rows)
+       3831 |       3905
+       3831 |       3907
+       3831 |       3909
+       3831 |       3911
+       3831 |       3913
+       3831 |       3927
+       3905 |       3907
+       3905 |       3909
+       3905 |       3911
+       3905 |       3913
+       3905 |       3927
+       3907 |       3909
+       3907 |       3911
+       3907 |       3913
+       3907 |       3927
+       3909 |       3911
+       3909 |       3913
+       3909 |       3927
+       3911 |       3913
+       3911 |       3927
+       3913 |       3927
+(23 rows)
 
 SELECT DISTINCT p1.proargtypes[0], p2.proargtypes[0]
 FROM pg_proc AS p1, pg_proc AS p2
@@ -231,7 +348,28 @@ ORDER BY 1, 2;
           23 |          28
         1114 |        1184
         1560 |        1562
-(3 rows)
+        3831 |        3904
+        3831 |        3906
+        3831 |        3908
+        3831 |        3910
+        3831 |        3912
+        3831 |        3926
+        3904 |        3906
+        3904 |        3908
+        3904 |        3910
+        3904 |        3912
+        3904 |        3926
+        3906 |        3908
+        3906 |        3910
+        3906 |        3912
+        3906 |        3926
+        3908 |        3910
+        3908 |        3912
+        3908 |        3926
+        3910 |        3912
+        3910 |        3926
+        3912 |        3926
+(24 rows)
 
 SELECT DISTINCT p1.proargtypes[2], p2.proargtypes[2]
 FROM pg_proc AS p1, pg_proc AS p2
@@ -1717,10 +1855,58 @@ WHERE p1.oid < p2.oid AND p1.proname = p2.proname AND
     p1.prokind = 'a' AND p2.prokind = 'a' AND
     array_dims(p1.proargtypes) != array_dims(p2.proargtypes)
 ORDER BY 1;
-     oid      |   oid   
---------------+---------
- count("any") | count()
-(1 row)
+             oid              |                 oid                  
+------------------------------+--------------------------------------
+ count("any")                 | count()
+ range_agg(anyrange)          | range_agg(daterange,boolean,boolean)
+ range_agg(anyrange)          | range_agg(tstzrange,boolean,boolean)
+ range_agg(anyrange)          | range_agg(tsrange,boolean,boolean)
+ range_agg(anyrange)          | range_agg(numrange,boolean,boolean)
+ range_agg(anyrange)          | range_agg(int8range,boolean,boolean)
+ range_agg(anyrange)          | range_agg(int4range,boolean,boolean)
+ range_agg(anyrange)          | range_agg(daterange,boolean)
+ range_agg(anyrange)          | range_agg(tstzrange,boolean)
+ range_agg(anyrange)          | range_agg(tsrange,boolean)
+ range_agg(anyrange)          | range_agg(numrange,boolean)
+ range_agg(anyrange)          | range_agg(int8range,boolean)
+ range_agg(anyrange)          | range_agg(int4range,boolean)
+ range_agg(int4range,boolean) | range_agg(daterange,boolean,boolean)
+ range_agg(int4range,boolean) | range_agg(tstzrange,boolean,boolean)
+ range_agg(int4range,boolean) | range_agg(tsrange,boolean,boolean)
+ range_agg(int4range,boolean) | range_agg(numrange,boolean,boolean)
+ range_agg(int4range,boolean) | range_agg(int8range,boolean,boolean)
+ range_agg(int4range,boolean) | range_agg(int4range,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(daterange,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(tstzrange,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(tsrange,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(numrange,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(int8range,boolean,boolean)
+ range_agg(int8range,boolean) | range_agg(int4range,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(daterange,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(tstzrange,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(tsrange,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(numrange,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(int8range,boolean,boolean)
+ range_agg(numrange,boolean)  | range_agg(int4range,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(daterange,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(tstzrange,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(tsrange,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(numrange,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(int8range,boolean,boolean)
+ range_agg(tsrange,boolean)   | range_agg(int4range,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(daterange,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(tstzrange,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(tsrange,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(numrange,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(int8range,boolean,boolean)
+ range_agg(tstzrange,boolean) | range_agg(int4range,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(daterange,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(tstzrange,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(tsrange,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(numrange,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(int8range,boolean,boolean)
+ range_agg(daterange,boolean) | range_agg(int4range,boolean,boolean)
+(49 rows)
 
 -- For the same reason, built-in aggregates with default arguments are no good.
 SELECT oid, proname

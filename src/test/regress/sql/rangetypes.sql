@@ -507,3 +507,192 @@ create function inoutparam_fail(inout i anyelement, out r anyrange)
 --should fail
 create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+--
+-- range_agg function
+--
+create table reservations ( room_id integer not null, booked_during daterange );
+insert into reservations values
+-- 1: has a meets and a gap
+(1, daterange('2018-07-01', '2018-07-07')),
+(1, daterange('2018-07-07', '2018-07-14')),
+(1, daterange('2018-07-20', '2018-07-22')),
+-- 2: just a single row
+(2, daterange('2018-07-01', '2018-07-03')),
+-- 3: one null range
+(3, NULL),
+-- 4: two null ranges
+(4, NULL),
+(4, NULL),
+-- 5: a null range and a non-null range
+(5, NULL),
+(5, daterange('2018-07-01', '2018-07-03')),
+-- 6: has overlap
+(6, daterange('2018-07-01', '2018-07-07')),
+(6, daterange('2018-07-05', '2018-07-10')),
+-- 7: two ranges that meet: no gap or overlap
+(7, daterange('2018-07-01', '2018-07-07')),
+(7, daterange('2018-07-07', '2018-07-14'))
+;
+
+-- range_agg with 1 arg:
+
+-- Forbidding gaps and overlaps:
+SELECT  room_id, range_agg(booked_during)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id
+ORDER BY room_id;
+
+SELECT  room_id, range_agg(booked_during)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id
+ORDER BY room_id;
+
+SELECT  room_id, range_agg(booked_during)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id
+ORDER BY room_id;
+
+-- Obeying discrete base types:
+SELECT	range_agg(r)
+FROM		(VALUES
+  (int4range( 0,  9, '[]')),
+  (int4range(10, 19, '[]'))
+) t(r);
+
+-- range_agg with 2 args:
+
+-- Forbidding gaps (and overlaps):
+SELECT  room_id, range_agg(booked_during, false)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- Permitting gaps (but forbidding overlaps):
+SELECT  room_id, range_agg(booked_during, true)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- range_agg with 3 args:
+
+-- Forbidding gaps and overlaps:
+SELECT  room_id, range_agg(booked_during, false, false)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false, false)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false, false)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- Forbidding gaps but permitting overlaps
+SELECT  room_id, range_agg(booked_during, false, true)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false, true)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, false, true)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- Permitting gaps but forbidding overlaps
+SELECT  room_id, range_agg(booked_during, true, false)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true, false)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true, false)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- Permitting gaps and overlaps:
+SELECT  room_id, range_agg(booked_during, true, true)
+FROM    reservations
+WHERE   room_id = 1
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true, true)
+FROM    reservations
+WHERE   room_id = 6
+GROUP BY room_id;
+
+SELECT  room_id, range_agg(booked_during, true, true)
+FROM    reservations
+WHERE   room_id NOT IN (1, 6)
+GROUP BY room_id;
+
+-- Obeying discrete base types:
+SELECT	range_agg(r, false, false)
+FROM		(VALUES
+  (int4range( 0,  5, '[]')),
+  (int4range( 7,  9, '[]'))
+) t(r);
+
+SELECT	range_agg(r, false, false)
+FROM		(VALUES
+  (int4range( 0,  5, '[]')),
+  (int4range( 5,  9, '[]'))
+) t(r);
+
+SELECT	range_agg(r, true, true)
+FROM		(VALUES
+  (int4range( 0,  9, '[]')),
+  (int4range(10, 15, '[]')),
+  (int4range(20, 26, '[]')),
+  (int4range(26, 29, '[]'))
+) t(r);
+
+-- It combines with UNNEST
+-- to implement the temporal database "coalesce" function
+-- (see Snodgrass 6.5.2):
+SELECT  room_id, t2.booked_during
+FROM    (
+          SELECT  room_id, range_agg(booked_during, true, true) AS booked_during
+          FROM    reservations
+          GROUP BY room_id
+        ) AS t1,
+        UNNEST(t1.booked_during) AS t2(booked_during)
+ORDER BY room_id, booked_during
+;

@@ -172,6 +172,7 @@ quad_poly_tbl|t
 radix_text_tbl|t
 ramp|f
 real_city|f
+reservations|f
 road|t
 shighway|t
 slow_emp4000|f

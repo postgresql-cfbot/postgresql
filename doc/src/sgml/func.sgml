@@ -14531,6 +14531,11 @@ NULL baz</literallayout>(3 rows)</entry>
    <function>lower_inf</function>, and <function>upper_inf</function>
    functions all return false for an empty range.
   </para>
+
+  <para>
+   See also <xref linkend="functions-aggregate"/> about the aggregate
+   function <function>range_agg</function> for use with ranges.
+  </para>
   </sect1>
 
  <sect1 id="functions-aggregate">
@@ -14843,6 +14848,76 @@ NULL baz</literallayout>(3 rows)</entry>
        minimum value of <replaceable
        class="parameter">expression</replaceable> across all input
        values
+      </entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>range_agg</primary>
+       </indexterm>
+       <function>
+         range_agg(<replaceable class="parameter">expression</replaceable>)
+       </function>
+      </entry>
+      <entry>
+       any range type
+      </entry>
+      <entry>
+       same as argument type
+      </entry>
+      <entry>No</entry>
+      <entry>input ranges merged into a single range, or an error if there are any gaps or overlaps</entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>range_agg</primary>
+       </indexterm>
+       <function>
+         range_agg(<replaceable class="parameter">expression</replaceable>,
+          <replaceable>permit_gaps</replaceable>)
+       </function>
+      </entry>
+      <entry>
+       (any range type, <type>boolean</type>)
+      </entry>
+      <entry>
+       array of the same range type as argument type
+      </entry>
+      <entry>No</entry>
+      <entry>
+       input ranges merged into a list of non-touching ranges,
+       with gaps permitted, rejected, or yielding a NULL result
+       as the second argument is true, false, or NULL respectively
+      </entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>range_agg</primary>
+       </indexterm>
+       <function>
+         range_agg(<replaceable class="parameter">expression</replaceable>,
+          <replaceable>permit_gaps</replaceable>,
+          <replaceable>permit_overlaps</replaceable>)
+       </function>
+      </entry>
+      <entry>
+       (any range type, <type>boolean</type>, <type>boolean</type>)
+      </entry>
+      <entry>
+       array of the same range type as argument type
+      </entry>
+      <entry>No</entry>
+      <entry>
+       input ranges merged into a list of non-touching ranges,
+       with gaps permitted, rejected, or yielding a NULL result
+       as the second argument is true, false, or NULL respectively,
+       and overlaps permitted, rejected, or yielding a NULL result
+       as the third argument is true, false, or NULL respectively
       </entry>
      </row>
 

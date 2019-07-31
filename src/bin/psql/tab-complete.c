@@ -3737,7 +3737,7 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatchesCS("\\set", MatchAny))
 	{
 		if (TailMatchesCS("AUTOCOMMIT|ON_ERROR_STOP|QUIET|"
-						  "SINGLELINE|SINGLESTEP"))
+						  "SINGLELINE|SINGLESTEP|SORT_BY_SIZE"))
 			COMPLETE_WITH_CS("on", "off");
 		else if (TailMatchesCS("COMP_KEYWORD_CASE"))
 			COMPLETE_WITH_CS("lower", "upper",

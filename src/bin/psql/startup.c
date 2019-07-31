@@ -884,6 +884,12 @@ singlestep_hook(const char *newval)
 	return ParseVariableBool(newval, "SINGLESTEP", &pset.singlestep);
 }
 
+static bool
+sort_by_size_hook(const char *newval)
+{
+	return ParseVariableBool(newval, "SORT_BY_SIZE", &pset.sort_by_size);
+}
+
 static char *
 fetch_count_substitute_hook(char *newval)
 {
@@ -1184,6 +1190,9 @@ EstablishVariableSpace(void)
 	SetVariableHooks(pset.vars, "SINGLESTEP",
 					 bool_substitute_hook,
 					 singlestep_hook);
+	SetVariableHooks(pset.vars, "SORT_BY_SIZE",
+					 bool_substitute_hook,
+					 sort_by_size_hook);
 	SetVariableHooks(pset.vars, "FETCH_COUNT",
 					 fetch_count_substitute_hook,
 					 fetch_count_hook);

@@ -223,6 +223,7 @@ describeTablespaces(const char *pattern, bool verbose)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
+	const char *sizefunc = NULL;
 
 	if (pset.sversion < 80000)
 	{
@@ -265,9 +266,12 @@ describeTablespaces(const char *pattern, bool verbose)
 						  gettext_noop("Options"));
 
 	if (verbose && pset.sversion >= 90200)
+	{
 		appendPQExpBuffer(&buf,
 						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_size(oid)) AS \"%s\"",
 						  gettext_noop("Size"));
+		sizefunc = "pg_catalog.pg_tablespace_size(oid)";
+	}
 
 	if (verbose && pset.sversion >= 80200)
 		appendPQExpBuffer(&buf,
@@ -281,7 +285,10 @@ describeTablespaces(const char *pattern, bool verbose)
 						  NULL, "spcname", NULL,
 						  NULL);
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	if (pset.sort_by_size && sizefunc)
+		appendPQExpBuffer(&buf, "ORDER BY %s DESC, 1;", sizefunc);
+	else
+		appendPQExpBufferStr(&buf, "ORDER BY 1;");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
@@ -863,6 +870,7 @@ listAllDbs(const char *pattern, bool verbose)
 	PGresult   *res;
 	PQExpBufferData buf;
 	printQueryOpt myopt = pset.popt;
+	const char *sizefunc = NULL;
 
 	initPQExpBuffer(&buf);
 
@@ -882,12 +890,15 @@ listAllDbs(const char *pattern, bool verbose)
 	appendPQExpBufferStr(&buf, "       ");
 	printACLColumn(&buf, "d.datacl");
 	if (verbose && pset.sversion >= 80200)
+	{
 		appendPQExpBuffer(&buf,
 						  ",\n       CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')\n"
 						  "            THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname))\n"
 						  "            ELSE 'No Access'\n"
 						  "       END as \"%s\"",
 						  gettext_noop("Size"));
+		sizefunc = "pg_catalog.pg_database_size(d.datname)";
+	}
 	if (verbose && pset.sversion >= 80000)
 		appendPQExpBuffer(&buf,
 						  ",\n       t.spcname as \"%s\"",
@@ -906,7 +917,10 @@ listAllDbs(const char *pattern, bool verbose)
 		processSQLNamePattern(pset.db, &buf, pattern, false, false,
 							  NULL, "d.datname", NULL, NULL);
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1;");
+	if (pset.sort_by_size && sizefunc)
+		appendPQExpBuffer(&buf, "ORDER BY %s DESC, 1;", sizefunc);
+	else
+		appendPQExpBufferStr(&buf, "ORDER BY 1;");
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
 	if (!res)
@@ -3660,6 +3674,7 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 	bool		showMatViews = strchr(tabtypes, 'm') != NULL;
 	bool		showSeq = strchr(tabtypes, 's') != NULL;
 	bool		showForeign = strchr(tabtypes, 'E') != NULL;
+	const char *sizefunc = NULL;
 
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -3743,13 +3758,19 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 		 * size of a table, including FSM, VM and TOAST tables.
 		 */
 		if (pset.sversion >= 90000)
+		{
 			appendPQExpBuffer(&buf,
 							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as \"%s\"",
 							  gettext_noop("Size"));
+			sizefunc = "pg_catalog.pg_table_size(c.oid)";
+		}
 		else if (pset.sversion >= 80100)
+		{
 			appendPQExpBuffer(&buf,
 							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_relation_size(c.oid)) as \"%s\"",
 							  gettext_noop("Size"));
+			sizefunc = "pg_catalog.pg_relation_size(c.oid)";
+		}
 
 		appendPQExpBuffer(&buf,
 						  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
@@ -3802,7 +3823,10 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 						  "n.nspname", "c.relname", NULL,
 						  "pg_catalog.pg_table_is_visible(c.oid)");
 
-	appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+	if (pset.sort_by_size && sizefunc)
+		appendPQExpBuffer(&buf, "ORDER BY %s DESC, 1, 2;", sizefunc);
+	else
+		appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);
@@ -3978,6 +4002,7 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 								 "                           JOIN d ON i.inhparent = d.oid)\n"
 								 "                SELECT pg_catalog.pg_size_pretty(sum(pg_catalog.pg_table_size("
 								 "d.oid))) AS tps,\n"
+								 "                       sum(pg_catalog.pg_table_size(d.oid)) AS rps,\n"
 								 "                       pg_catalog.pg_size_pretty(sum("
 								 "\n             CASE WHEN d.level = 1"
 								 " THEN pg_catalog.pg_table_size(d.oid) ELSE 0 END)) AS dps\n"
@@ -3993,6 +4018,7 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 								 " ELSE 0 END)) AS dps"
 								 ",\n                     pg_catalog.pg_size_pretty(sum("
 								 "pg_catalog.pg_table_size(ppt.relid))) AS tps"
+								 ",\n                     sum(pg_catalog.pg_table_size(ppt.relid)) AS rps"
 								 "\n              FROM pg_catalog.pg_partition_tree(c.oid) ppt) s");
 		}
 	}
@@ -4025,9 +4051,14 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 						  "n.nspname", "c.relname", NULL,
 						  "pg_catalog.pg_table_is_visible(c.oid)");
 
-	appendPQExpBuffer(&buf, "ORDER BY \"Schema\", %s%s\"Name\";",
-					  mixed_output ? "\"Type\" DESC, " : "",
-					  showNested || pattern ? "\"Parent name\" NULLS FIRST, " : "");
+	if (pset.sort_by_size && verbose)
+		appendPQExpBuffer(&buf, "ORDER BY %s%srps DESC",
+						  mixed_output ? "\"Type\" DESC, " : "",
+						  showNested || pattern ? "\"Parent name\" NULLS FIRST, " : "");
+	else
+		appendPQExpBuffer(&buf, "ORDER BY \"Schema\", %s%s\"Name\";",
+						  mixed_output ? "\"Type\" DESC, " : "",
+						  showNested || pattern ? "\"Parent name\" NULLS FIRST, " : "");
 
 	res = PSQLexec(buf.data);
 	termPQExpBuffer(&buf);

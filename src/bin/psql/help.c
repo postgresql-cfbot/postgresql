@@ -342,7 +342,7 @@ helpVariables(unsigned short int pager)
 	 * Windows builds currently print one more line than non-Windows builds.
 	 * Using the larger number is fine.
 	 */
-	output = PageOutput(158, pager ? &(pset.popt.topt) : NULL);
+	output = PageOutput(160, pager ? &(pset.popt.topt) : NULL);
 
 	fprintf(output, _("List of specially treated variables\n\n"));
 
@@ -411,6 +411,8 @@ helpVariables(unsigned short int pager)
 					  "    if set, end of line terminates SQL commands (same as -S option)\n"));
 	fprintf(output, _("  SINGLESTEP\n"
 					  "    single-step mode (same as -s option)\n"));
+	fprintf(output, _("  SORT_BY_SIZE\n"
+					  "    if set, verbose outputs are sorted by size\n"));
 	fprintf(output, _("  SQLSTATE\n"
 					  "    SQLSTATE of last query, or \"00000\" if no error\n"));
 	fprintf(output, _("  USER\n"

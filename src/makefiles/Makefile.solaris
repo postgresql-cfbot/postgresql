@@ -4,9 +4,19 @@ AROPT = crs
 
 ifeq ($(with_gnu_ld), yes)
 export_dynamic = -Wl,-E
+ifeq ($(dir $(bindir)),$(dir $(libdir)))
+rpath = -Wl,-rpath,'$(subst $(dir $(libdir)),$$ORIGIN/../,$(rpathdir))'
+ld_library_path_var =
+else
 rpath = -Wl,-rpath,'$(rpathdir)'
+endif
+else
+ifeq ($(dir $(bindir)),$(dir $(libdir)))
+rpath = -Wl,-R'$(subst $(dir $(libdir)),$$ORIGIN/../,$(rpathdir))'
+ld_library_path_var =
 else
 rpath = -Wl,-R'$(rpathdir)'
+endif
 endif
 
 DLSUFFIX = .so

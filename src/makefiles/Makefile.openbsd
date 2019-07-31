@@ -1,7 +1,12 @@
 AROPT = cr
 
 export_dynamic = -Wl,-E
+ifeq ($(dir $(bindir)),$(dir $(libdir)))
+rpath = -Wl,-R'$(subst $(dir $(libdir)),$$ORIGIN/../,$(rpathdir))',-z,origin
+ld_library_path_var =
+else
 rpath = -Wl,-R'$(rpathdir)'
+endif
 
 DLSUFFIX = .so
 

@@ -422,7 +422,7 @@ ld_library_path_var = LD_LIBRARY_PATH
 # nothing.
 with_temp_install = \
 	PATH="$(abs_top_builddir)/tmp_install$(bindir):$$PATH" \
-	$(call add_to_path,$(strip $(ld_library_path_var)),$(abs_top_builddir)/tmp_install$(libdir)) \
+	$(if $(strip $(ld_library_path_var)),$(call add_to_path,$(strip $(ld_library_path_var)),$(abs_top_builddir)/tmp_install$(libdir))) \
 	$(with_temp_install_extra)
 
 ifeq ($(enable_tap_tests),yes)

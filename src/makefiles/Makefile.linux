@@ -3,7 +3,12 @@ AROPT = crs
 export_dynamic = -Wl,-E
 # Use --enable-new-dtags to generate DT_RUNPATH instead of DT_RPATH.
 # This allows LD_LIBRARY_PATH to still work when needed.
+ifeq ($(dir $(bindir)),$(dir $(libdir)))
+rpath = -Wl,-rpath,'$(subst $(dir $(libdir)),$$ORIGIN/../,$(rpathdir))',--enable-new-dtags
+ld_library_path_var =
+else
 rpath = -Wl,-rpath,'$(rpathdir)',--enable-new-dtags
+endif
 
 DLSUFFIX = .so
 

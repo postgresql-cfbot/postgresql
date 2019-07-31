@@ -294,6 +294,7 @@ TransactionIdSetPageStatus(TransactionId xid, int nsubxids,
 	 * on the same page.  Check those conditions, too.
 	 */
 	if (all_xact_same_page && xid == MyPgXact->xid &&
+		nsubxids > 0 &&
 		nsubxids <= THRESHOLD_SUBTRANS_CLOG_OPT &&
 		nsubxids == MyPgXact->nxids &&
 		memcmp(subxids, MyProc->subxids.xids,

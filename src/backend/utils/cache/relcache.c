@@ -5879,10 +5879,14 @@ write_relcache_init_file(bool shared)
 static void
 write_item(const void *data, Size len, FILE *fp)
 {
+	Assert(data || len == 0);
 	if (fwrite(&len, 1, sizeof(len), fp) != sizeof(len))
 		elog(FATAL, "could not write init file");
-	if (fwrite(data, 1, len, fp) != len)
-		elog(FATAL, "could not write init file");
+	if (data)
+	{
+		if (fwrite(data, 1, len, fp) != len)
+			elog(FATAL, "could not write init file");
+	}
 }
 
 /*

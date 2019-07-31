@@ -1520,6 +1520,8 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
 static bool
 TransactionIdInArray(TransactionId xid, TransactionId *xip, Size num)
 {
+	if (!xip)
+		return false;
 	return bsearch(&xid, xip, num,
 				   sizeof(TransactionId), xidComparator) != NULL;
 }

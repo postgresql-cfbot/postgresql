@@ -231,6 +231,10 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 {
 	bool		fsm;
 	bool		vm;
+	ForkNumber	forks[MAX_FORKNUM];
+	BlockNumber	blocks[MAX_FORKNUM];
+	BlockNumber	first_removed_nblocks = InvalidBlockNumber;
+	int		nforks = 0;
 
 	/* Open it at the smgr level if not already done */
 	RelationOpenSmgr(rel);
@@ -242,15 +246,33 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	rel->rd_smgr->smgr_fsm_nblocks = InvalidBlockNumber;
 	rel->rd_smgr->smgr_vm_nblocks = InvalidBlockNumber;
 
-	/* Truncate the FSM first if it exists */
+	/* Mark the dirty FSM page and return a block number. */
 	fsm = smgrexists(rel->rd_smgr, FSM_FORKNUM);
 	if (fsm)
-		FreeSpaceMapTruncateRel(rel, nblocks);
+	{
+		blocks[nforks] = MarkFreeSpaceMapTruncateRel(rel, nblocks);
+		if (BlockNumberIsValid(blocks[nforks]))
+		{
+			first_removed_nblocks = nblocks;
+			forks[nforks] = FSM_FORKNUM;
+			nforks++;
+		}
+	}
 
-	/* Truncate the visibility map too if it exists. */
+	/*
+	 * Truncate only the tail bits of VM and return the block number
+	 * for actual truncation later in smgrtruncate.
+	 */
 	vm = smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
 	if (vm)
-		visibilitymap_truncate(rel, nblocks);
+	{
+		blocks[nforks] = visibilitymap_truncate_prepare(rel, nblocks);
+		if (BlockNumberIsValid(blocks[nforks]))
+		{
+			forks[nforks] = VISIBILITYMAP_FORKNUM;
+			nforks++;
+		}
+	}
 
 	/*
 	 * We WAL-log the truncation before actually truncating, which means
@@ -290,8 +312,20 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			XLogFlush(lsn);
 	}
 
-	/* Do the real work */
-	smgrtruncate(rel->rd_smgr, MAIN_FORKNUM, nblocks);
+	/* Mark the MAIN fork */
+	forks[nforks] = MAIN_FORKNUM;
+	blocks[nforks] = nblocks;
+	nforks++;
+
+	/* Truncate relation forks simultaneously */
+	smgrtruncate(rel->rd_smgr, forks, nforks, blocks);
+
+	/*
+	 * Update upper-level FSM pages to account for the truncation.
+	 * This is important because the just-truncated pages were likely
+	 * marked as all-free, and would be preferentially selected.
+	 */
+	FreeSpaceMapVacuumRange(rel, first_removed_nblocks, InvalidBlockNumber);
 }
 
 /*
@@ -588,6 +622,13 @@ smgr_redo(XLogReaderState *record)
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) XLogRecGetData(record);
 		SMgrRelation reln;
 		Relation	rel;
+		ForkNumber	forks[MAX_FORKNUM];
+		BlockNumber	blocks[MAX_FORKNUM];
+		BlockNumber	first_removed_nblocks = InvalidBlockNumber;
+		int		nforks = 0;
+		bool		fsm_fork = false;
+		bool		main_fork = false;
+		bool		vm_fork = false;
 
 		reln = smgropen(xlrec->rnode, InvalidBackendId);
 
@@ -616,23 +657,58 @@ smgr_redo(XLogReaderState *record)
 		 */
 		XLogFlush(lsn);
 
+		/*
+		 * To speedup recovery, we mark the about-to-be-truncated blocks of
+		 * relation forks first, then truncate those simultaneously later.
+		 */
 		if ((xlrec->flags & SMGR_TRUNCATE_HEAP) != 0)
 		{
-			smgrtruncate(reln, MAIN_FORKNUM, xlrec->blkno);
-
-			/* Also tell xlogutils.c about it */
-			XLogTruncateRelation(xlrec->rnode, MAIN_FORKNUM, xlrec->blkno);
+			forks[nforks] = MAIN_FORKNUM;
+			blocks[nforks] = xlrec->blkno;
+			nforks++;
+			main_fork = true;
 		}
 
-		/* Truncate FSM and VM too */
 		rel = CreateFakeRelcacheEntry(xlrec->rnode);
 
 		if ((xlrec->flags & SMGR_TRUNCATE_FSM) != 0 &&
 			smgrexists(reln, FSM_FORKNUM))
-			FreeSpaceMapTruncateRel(rel, xlrec->blkno);
+		{
+			blocks[nforks] = MarkFreeSpaceMapTruncateRel(rel, xlrec->blkno);
+			if (BlockNumberIsValid(blocks[nforks]))
+			{
+				first_removed_nblocks = xlrec->blkno;
+				forks[nforks] = FSM_FORKNUM;
+				nforks++;
+				fsm_fork = true;
+			}
+		}
 		if ((xlrec->flags & SMGR_TRUNCATE_VM) != 0 &&
 			smgrexists(reln, VISIBILITYMAP_FORKNUM))
-			visibilitymap_truncate(rel, xlrec->blkno);
+		{
+			blocks[nforks] = visibilitymap_truncate_prepare(rel, xlrec->blkno);
+			if (BlockNumberIsValid(blocks[nforks]))
+			{
+				forks[nforks] = VISIBILITYMAP_FORKNUM;
+				nforks++;
+				vm_fork = true;
+			}
+		}
+
+		/* Truncate relation forks simultaneously */
+		if (main_fork || fsm_fork || vm_fork)
+			smgrtruncate(reln, forks, nforks, blocks);
+
+		/* Also tell xlogutils.c about it */
+		if (main_fork)
+			XLogTruncateRelation(xlrec->rnode, MAIN_FORKNUM, xlrec->blkno);
+
+		/*
+		 * Update upper-level FSM pages to account for the truncation.
+		 * This is important because the just-truncated pages were likely
+		 * marked as all-free, and would be preferentially selected.
+		 */
+		FreeSpaceMapVacuumRange(rel, first_removed_nblocks, InvalidBlockNumber);
 
 		FreeFakeRelcacheEntry(rel);
 	}

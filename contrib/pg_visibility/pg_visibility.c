@@ -383,6 +383,8 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	Relation	rel;
+	ForkNumber	fork;
+	BlockNumber	block;
 
 	rel = relation_open(relid, AccessExclusiveLock);
 
@@ -392,7 +394,11 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	RelationOpenSmgr(rel);
 	rel->rd_smgr->smgr_vm_nblocks = InvalidBlockNumber;
 
-	visibilitymap_truncate(rel, 0);
+	block = visibilitymap_truncate_prepare(rel, 0);
+	if (BlockNumberIsValid(block))
+		fork = VISIBILITYMAP_FORKNUM;
+
+	smgrtruncate(rel->rd_smgr, &fork, 1, &block);
 
 	if (RelationNeedsWAL(rel))
 	{

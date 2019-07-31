@@ -473,29 +473,30 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 }
 
 /*
- *	smgrdounlinkfork() -- Immediately unlink one fork of a relation.
+ *	smgrdounlinkfork() -- Immediately unlink each fork of a relation.
  *
- *		The specified fork of the relation is removed from the store.  This
- *		should not be used during transactional operations, since it can't be
- *		undone.
+ *		Each fork of the relation is removed from the store.  This should
+ *		not be used during transactional operations, since it can't be undone.
  *
  *		If isRedo is true, it is okay for the underlying file to be gone
  *		already.
  */
 void
-smgrdounlinkfork(SMgrRelation reln, ForkNumber forknum, bool isRedo)
+smgrdounlinkfork(SMgrRelation reln, ForkNumber *forknum, int nforks, bool isRedo)
 {
 	RelFileNodeBackend rnode = reln->smgr_rnode;
 	int			which = reln->smgr_which;
+	int			i;
 
-	/* Close the fork at smgr level */
-	smgrsw[which].smgr_close(reln, forknum);
+	/* Close each fork at smgr level */
+	for (i = 0; i < nforks; i++)
+		smgrsw[which].smgr_close(reln, forknum[i]);
 
 	/*
-	 * Get rid of any remaining buffers for the fork.  bufmgr will just drop
+	 * Get rid of any remaining buffers for each fork. bufmgr will just drop
 	 * them without bothering to write the contents.
 	 */
-	DropRelFileNodeBuffers(rnode, forknum, 0);
+	DropRelFileNodeBuffers(rnode, forknum, nforks, 0);
 
 	/*
 	 * It'd be nice to tell the stats collector to forget it immediately, too.
@@ -521,7 +522,8 @@ smgrdounlinkfork(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 	 * ERROR, because we've already decided to commit or abort the current
 	 * xact.
 	 */
-	smgrsw[which].smgr_unlink(rnode, forknum, isRedo);
+	for (i = 0; i < nforks; i++)
+		smgrsw[which].smgr_unlink(rnode, forknum[i], isRedo);
 }
 
 /*
@@ -618,13 +620,15 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
  * The truncation is done immediately, so this can't be rolled back.
  */
 void
-smgrtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
+smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nblocks)
 {
+	int		i;
+
 	/*
 	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
 	 * just drop them without bothering to write the contents.
 	 */
-	DropRelFileNodeBuffers(reln->smgr_rnode, forknum, nblocks);
+	DropRelFileNodeBuffers(reln->smgr_rnode, forknum, nforks, nblocks);
 
 	/*
 	 * Send a shared-inval message to force other backends to close any smgr
@@ -638,10 +642,23 @@ smgrtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 */
 	CacheInvalidateSmgr(reln->smgr_rnode);
 
-	/*
-	 * Do the truncation.
-	 */
-	smgrsw[reln->smgr_which].smgr_truncate(reln, forknum, nblocks);
+	/* Do the truncation */
+	for (i = 0; i < nforks; i++)
+	{
+		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
+
+		/*
+		 * We might as well update the local smgr_fsm_nblocks and smgr_vm_nblocks
+		 * setting. smgrtruncate sent an smgr cache inval message, which will
+		 * cause other backends to invalidate their copy of smgr_fsm_nblocks and
+		 * smgr_vm_nblocks, and these ones too at the next command boundary. But
+		 * this ensures these aren't outright wrong until then.
+		 */
+		if (forknum[i] == FSM_FORKNUM)
+			reln->smgr_fsm_nblocks = nblocks[i];
+		if (forknum[i] == VISIBILITYMAP_FORKNUM)
+			reln->smgr_vm_nblocks = nblocks[i];
+	}
 }
 
 /*

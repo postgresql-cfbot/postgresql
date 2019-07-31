@@ -2900,8 +2900,8 @@ BufferGetLSNAtomic(Buffer buffer)
 /* ---------------------------------------------------------------------
  *		DropRelFileNodeBuffers
  *
- *		This function removes from the buffer pool all the pages of the
- *		specified relation fork that have block numbers >= firstDelBlock.
+ *		This function simultaneously removes from the buffer pool all the
+ *		pages of the relation forks that have block numbers >= firstDelBlock.
  *		(In particular, with firstDelBlock = 0, all pages are removed.)
  *		Dirty pages are simply dropped, without bothering to write them
  *		out first.  Therefore, this is NOT rollback-able, and so should be
@@ -2924,23 +2924,36 @@ BufferGetLSNAtomic(Buffer buffer)
  * --------------------------------------------------------------------
  */
 void
-DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber forkNum,
-					   BlockNumber firstDelBlock)
+DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+					   int nforks, BlockNumber *firstDelBlock)
 {
-	int			i;
+	BlockNumber minBlock = InvalidBlockNumber;
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	if (RelFileNodeBackendIsTemp(rnode))
 	{
 		if (rnode.backend == MyBackendId)
-			DropRelFileNodeLocalBuffers(rnode.node, forkNum, firstDelBlock);
+		{
+			for (int i = 0; i < nforks; i++)
+				DropRelFileNodeLocalBuffers(rnode.node, forkNum[i],
+											firstDelBlock[i]);
+		}
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	/* Get the lower bound of target block number we're interested in */
+	for (int i = 0; i < nforks; i++)
+	{
+		if (!BlockNumberIsValid(minBlock) ||
+			minBlock > firstDelBlock[i])
+			minBlock = firstDelBlock[i];
+	}
+
+	for (int i = 0; i < NBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
+		int		j = 0;
 
 		/*
 		 * We can make this a tad faster by prechecking the buffer tag before
@@ -2961,12 +2974,23 @@ DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber forkNum,
 		if (!RelFileNodeEquals(bufHdr->tag.rnode, rnode.node))
 			continue;
 
+		/* Check with the lower bound block number and skip the loop */
+		if (bufHdr->tag.blockNum < minBlock)
+			continue; /* skip checking the buffer pool scan */
+
 		buf_state = LockBufHdr(bufHdr);
-		if (RelFileNodeEquals(bufHdr->tag.rnode, rnode.node) &&
-			bufHdr->tag.forkNum == forkNum &&
-			bufHdr->tag.blockNum >= firstDelBlock)
-			InvalidateBuffer(bufHdr);	/* releases spinlock */
-		else
+
+		for (j = 0; j < nforks; j++)
+		{
+			if (RelFileNodeEquals(bufHdr->tag.rnode, rnode.node) &&
+				bufHdr->tag.forkNum == forkNum[j] &&
+				bufHdr->tag.blockNum >= firstDelBlock[j])
+			{
+				InvalidateBuffer(bufHdr); /* releases spinlock */
+				break;
+			}
+		}
+		if (j >= nforks)
 			UnlockBufHdr(bufHdr, buf_state);
 	}
 }

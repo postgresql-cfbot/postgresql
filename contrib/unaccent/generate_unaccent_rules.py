@@ -45,7 +45,9 @@ if sys.version_info[0] <= 2:
     # Python 2 and 3 compatible bytes call
     def bytes(source, encoding='ascii', errors='strict'):
         return source.encode(encoding=encoding, errors=errors)
+else:
 # END: Python 2/3 compatibility - remove when Python 2 compatibility dropped
+    sys.stdout = codecs.getwriter('utf8')(sys.stdout.buffer)
 
 import re
 import argparse
@@ -233,7 +235,8 @@ def main(args):
     charactersSet = set()
 
     # read file UnicodeData.txt
-    unicodeDataFile = open(args.unicodeDataFilePath, 'r')
+    unicodeDataFile = codecs.open(
+        args.unicodeDataFilePath, mode='r', encoding='UTF-8')
 
     # read everything we need into memory
     for line in unicodeDataFile:

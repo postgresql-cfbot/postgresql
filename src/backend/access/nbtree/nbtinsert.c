@@ -1568,10 +1568,11 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 		if (sopaque->btpo_prev != origpagenumber)
 		{
 			memset(rightpage, 0, BufferGetPageSize(rbuf));
-			elog(ERROR, "right sibling's left-link doesn't match: "
-				 "block %u links to %u instead of expected %u in index \"%s\"",
-				 oopaque->btpo_next, sopaque->btpo_prev, origpagenumber,
-				 RelationGetRelationName(rel));
+			ereport(ERROR, (errcode(ERRCODE_INDEX_CORRUPTED),
+					errmsg("right sibling's left-link doesn't match: "
+					 "block %u links to %u instead of expected %u in index \"%s\"",
+					 oopaque->btpo_next, sopaque->btpo_prev, origpagenumber,
+					 RelationGetRelationName(rel))));
 		}
 
 		/*
@@ -1827,8 +1828,10 @@ _bt_insert_parent(Relation rel,
 		_bt_relbuf(rel, rbuf);
 
 		if (pbuf == InvalidBuffer)
-			elog(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
-				 RelationGetRelationName(rel), bknum, rbknum);
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg(ERROR, "failed to re-find parent key in index \"%s\" for split pages %u/%u",
+					 RelationGetRelationName(rel), bknum, rbknum)));
 
 		/* Recursively update the parent */
 		_bt_insertonpg(rel, NULL, pbuf, buf, stack->bts_parent,

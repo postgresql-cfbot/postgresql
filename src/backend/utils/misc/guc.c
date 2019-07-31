@@ -514,6 +514,7 @@ int			log_temp_files = -1;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 int			trace_recovery_messages = LOG;
+char	   *backtrace_function;
 
 int			temp_file_limit = -1;
 
@@ -4209,6 +4210,17 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&jit_provider,
 		"llvmjit",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"backtrace_function", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Log backtrace for errors in this function."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&backtrace_function,
+		"",
 		NULL, NULL, NULL
 	},
 

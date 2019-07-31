@@ -112,7 +112,7 @@ extern int	CountDBConnections(Oid databaseid);
 extern void CancelDBBackends(Oid databaseid, ProcSignalReason sigmode, bool conflictPending);
 extern int	CountUserBackends(Oid roleid);
 extern bool CountOtherDBBackends(Oid databaseId,
-								 int *nbackends, int *nprepared);
+								 int *nbackends, int *nprepared, bool force_terminate);
 
 extern void XidCacheRemoveRunningXids(TransactionId xid,
 									  int nxids, const TransactionId *xids,

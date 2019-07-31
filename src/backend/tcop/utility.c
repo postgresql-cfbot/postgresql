@@ -601,7 +601,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 				/* no event triggers for global objects */
 				PreventInTransactionBlock(isTopLevel, "DROP DATABASE");
-				dropdb(stmt->dbname, stmt->missing_ok);
+				dropdb(stmt->dbname, stmt->missing_ok, stmt->force);
 			}
 			break;
 

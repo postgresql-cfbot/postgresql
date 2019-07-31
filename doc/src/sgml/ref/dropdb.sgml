@@ -87,6 +87,20 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-f</option></term>
+      <term><option>--force</option></term>
+      <listitem>
+       <para>
+        Force termination of connected backends before removing the database.
+       </para>
+       <para>
+        This will add the <literal>FORCE</literal> option to the <literal>DROP
+        DATABASE</literal> command sent to the server.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
        <term><option>-V</option></term>
        <term><option>--version</option></term>
        <listitem>

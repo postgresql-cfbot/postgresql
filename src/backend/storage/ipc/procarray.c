@@ -2907,7 +2907,8 @@ CountUserBackends(Oid roleid)
  * indefinitely.
  */
 bool
-CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
+CountOtherDBBackends(Oid databaseId,
+					 int *nbackends, int *nprepared, bool force_terminate)
 {
 	ProcArrayStruct *arrayP = procArray;
 
@@ -2949,6 +2950,18 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 				if ((pgxact->vacuumFlags & PROC_IS_AUTOVACUUM) &&
 					nautovacs < MAXAUTOVACPIDS)
 					autovac_pids[nautovacs++] = proc->pid;
+				else
+				{
+					if (force_terminate)
+					{
+						/* try to terminate backend */
+#ifdef HAVE_SETSID
+							kill(-(proc->pid), SIGTERM);
+#else
+							kill(proc->pid, SIGTERM);
+#endif
+					}
+				}
 			}
 		}
 

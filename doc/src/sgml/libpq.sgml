@@ -5688,6 +5688,7 @@ PGContextVisibility PQsetErrorContextVisibility(PGconn *conn, PGContextVisibilit
     <listitem>
      <para>
       Enables  tracing of the client/server communication to a debugging file stream.
+      (Details of tracing contents appear in <xref linkend="protocol-message-formats"/>).
 <synopsis>
 void PQtrace(PGconn *conn, FILE *stream);
 </synopsis>

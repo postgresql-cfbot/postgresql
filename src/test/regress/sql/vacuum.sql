@@ -75,6 +75,13 @@ VACUUM FULL vactst;
 
 VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
+-- PARALLEL option
+VACUUM (PARALLEL) vaccluster;
+VACUUM (PARALLEL 2) vaccluster;
+VACUUM (PARALLEL 0) vaccluster; -- error
+VACUUM (PARALLEL 2, INDEX_CLEANUP FALSE) vaccluster;
+VACUUM (PARALLEL 2, FULL TRUE) vaccluster; -- error, cannot use both PARALLEL and FULL
+
 -- INDEX_CLEANUP option
 CREATE TABLE no_index_cleanup (i INT PRIMARY KEY, t TEXT);
 -- Use uncompressed data stored in toast.

@@ -24,6 +24,8 @@
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
 #include "storage/lockdefs.h"
+#include "storage/shm_toc.h"
+#include "storage/dsm.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
@@ -193,6 +195,7 @@ extern Size SyncScanShmemSize(void);
 struct VacuumParams;
 extern void heap_vacuum_rel(Relation onerel,
 							struct VacuumParams *params, BufferAccessStrategy bstrategy);
+extern void heap_parallel_vacuum_main(dsm_segment *seg, shm_toc *toc);
 
 /* in heap/heapam_visibility.c */
 extern bool HeapTupleSatisfiesVisibility(HeapTuple stup, Snapshot snapshot,

@@ -16,6 +16,7 @@
 #include "nodes/pg_list.h"
 #include "partitioning/partdefs.h"
 #include "utils/relcache.h"
+struct RelOptInfo;				/* avoid including pathnodes.h here */
 
 
 /*
@@ -109,5 +110,11 @@ extern int	partition_range_datum_bsearch(FmgrInfo *partsupfunc,
 										  int nvalues, Datum *values, bool *is_equal);
 extern int	partition_hash_bsearch(PartitionBoundInfo boundinfo,
 								   int modulus, int remainder);
+extern PartitionBoundInfo partition_bounds_merge(int partnatts,
+					   int16 *parttyplen, bool *parttypbyval,
+					   FmgrInfo *partsupfunc, Oid *partcollation,
+					   struct RelOptInfo *outer_rel, struct RelOptInfo *inner_rel,
+					   JoinType jointype,
+					   List **outer_parts, List **inner_parts);
 
 #endif							/* PARTBOUNDS_H */

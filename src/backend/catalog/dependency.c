@@ -205,8 +205,6 @@ static bool find_expr_references_walker(Node *node,
 										find_expr_references_context *context);
 static void eliminate_duplicate_dependencies(ObjectAddresses *addrs);
 static int	object_address_comparator(const void *a, const void *b);
-static void add_object_address(ObjectClass oclass, Oid objectId, int32 subId,
-							   ObjectAddresses *addrs);
 static void add_exact_object_address_extra(const ObjectAddress *object,
 										   const ObjectAddressExtra *extra,
 										   ObjectAddresses *addrs);
@@ -1600,10 +1598,16 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 	/* Remove any duplicates */
 	eliminate_duplicate_dependencies(context.addrs);
 
-	/* And record 'em */
-	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
-							   behavior);
+	/*
+	 * And record 'em. If we know we only have a single dependency then
+	 * avoid the extra cost of setting up a multi insert.
+	 */
+	if (context.addrs->numrefs == 1)
+		recordDependencyOn(depender, &context.addrs->refs[0], behavior);
+	else
+		recordMultipleDependencies(depender,
+								   context.addrs->refs, context.addrs->numrefs,
+								   behavior);
 
 	free_object_addresses(context.addrs);
 }
@@ -1707,10 +1711,16 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 		free_object_addresses(self_addrs);
 	}
 
-	/* Record the external dependencies */
-	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
-							   behavior);
+	/*
+	 * Record the external dependencies. If we only have a single dependency
+	 * then avoid the extra cost of setting up a multi insert.
+	 */
+	if (context.addrs->numrefs == 1)
+		recordDependencyOn(depender, &context.addrs->refs[0], behavior);
+	else
+		recordMultipleDependencies(depender,
+								   context.addrs->refs, context.addrs->numrefs,
+								   behavior);
 
 	free_object_addresses(context.addrs);
 }
@@ -2403,7 +2413,7 @@ new_object_addresses(void)
  * It is convenient to specify the class by ObjectClass rather than directly
  * by catalog OID.
  */
-static void
+void
 add_object_address(ObjectClass oclass, Oid objectId, int32 subId,
 				   ObjectAddresses *addrs)
 {
@@ -2651,9 +2661,13 @@ record_object_address_dependencies(const ObjectAddress *depender,
 								   DependencyType behavior)
 {
 	eliminate_duplicate_dependencies(referenced);
-	recordMultipleDependencies(depender,
-							   referenced->refs, referenced->numrefs,
-							   behavior);
+
+	if (referenced->numrefs == 1)
+		recordDependencyOn(depender, &referenced->refs[0], behavior);
+	else
+		recordMultipleDependencies(depender,
+								   referenced->refs, referenced->numrefs,
+								   behavior);
 }
 
 /*
@@ -2671,6 +2685,18 @@ sort_object_addresses(ObjectAddresses *addrs)
 		qsort((void *) addrs->refs, addrs->numrefs,
 			  sizeof(ObjectAddress),
 			  object_address_comparator);
+}
+
+void
+reset_object_addresses(ObjectAddresses *addrs)
+{
+	if (addrs->numrefs == 0)
+		return;
+
+	memset(addrs->refs, 0, addrs->maxrefs * sizeof(ObjectAddress));
+	if (addrs->extras)
+		memset(addrs->extras, 0, addrs->maxrefs * sizeof(ObjectAddressExtra));
+	addrs->numrefs = 0;
 }
 
 /*

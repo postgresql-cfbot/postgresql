@@ -66,7 +66,6 @@
 #include "utils/fmgroids.h"
 #include "utils/syscache.h"
 
-
 typedef enum
 {
 	LOCAL_OBJECT,
@@ -800,10 +799,15 @@ copyTemplateDependencies(Oid templateDbId, Oid newDbId)
 	ScanKeyData key[1];
 	SysScanDesc scan;
 	HeapTuple	tup;
+	HeapTuple	newtuple;
+	int			ntuples;
 	CatalogIndexState indstate;
 	Datum		values[Natts_pg_shdepend];
 	bool		nulls[Natts_pg_shdepend];
 	bool		replace[Natts_pg_shdepend];
+	/* TODO figure out a sensible value for the amount of slots */
+#define	DEPEND_TUPLE_BUF 32
+	TupleTableSlot *slot[DEPEND_TUPLE_BUF];
 
 	sdepRel = table_open(SharedDependRelationId, RowExclusiveLock);
 	sdepDesc = RelationGetDescr(sdepRel);
@@ -834,15 +838,25 @@ copyTemplateDependencies(Oid templateDbId, Oid newDbId)
 	 * copy the ownership dependency of the template database itself; this is
 	 * what we want.
 	 */
+	ntuples = 0;
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
-		HeapTuple	newtup;
+		slot[ntuples] = MakeSingleTupleTableSlot(RelationGetDescr(sdepRel),
+									&TTSOpsHeapTuple);
+		newtuple = heap_modify_tuple(tup, sdepDesc, values, nulls, replace);
+		ExecStoreHeapTuple(heap_copytuple(newtuple), slot[ntuples], false);
+		ntuples++;
 
-		newtup = heap_modify_tuple(tup, sdepDesc, values, nulls, replace);
-		CatalogTupleInsertWithInfo(sdepRel, newtup, indstate);
-
-		heap_freetuple(newtup);
+		if (ntuples == DEPEND_TUPLE_BUF)
+		{
+			CatalogMultiInsertWithInfo(sdepRel, slot, ntuples, indstate);
+			ntuples = 0;
+		}
 	}
+
+	/* Insert any tuples left in the buffer */
+	if (ntuples)
+		CatalogMultiInsertWithInfo(sdepRel, slot, ntuples, indstate);
 
 	systable_endscan(scan);
 

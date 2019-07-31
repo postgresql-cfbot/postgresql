@@ -974,7 +974,8 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r),
 								 buf->origptr, change);
 	}
-	Assert(data == tupledata + tuplelen);
+	Assert(xlrec->flags & XLH_INSERT_CONTAINS_NEW_TUPLE &&
+		   data == tupledata + tuplelen);
 }
 
 /*

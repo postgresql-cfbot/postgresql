@@ -633,7 +633,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ERROR_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN
 	EXTENSION EXTERNAL EXTRACT
 
@@ -3053,6 +3053,10 @@ copy_opt_item:
 			| ENCODING Sconst
 				{
 					$$ = makeDefElem("encoding", (Node *)makeString($2), @1);
+				}
+			| ERROR_P SignedIconst
+				{
+					$$ = makeDefElem("error_limit", (Node *)makeInteger($2), @1);
 				}
 		;
 
@@ -15094,6 +15098,7 @@ unreserved_keyword:
 			| ENCODING
 			| ENCRYPTED
 			| ENUM_P
+			| ERROR_P
 			| ESCAPE
 			| EVENT
 			| EXCLUDE

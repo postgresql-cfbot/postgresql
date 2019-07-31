@@ -44,6 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
     FORCE_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
+    ERROR '<replaceable class="parameter">limit_number</replaceable>'
 </synopsis>
  </refsynopsisdiv>
 
@@ -352,6 +353,23 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       omitted, the current client encoding is used. See the Notes below
       for more details.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ERROR</literal></term>
+    <listitem>
+     <para>
+      Specifies to return error record up to <replaceable
+      class="parameter">limit_number</replaceable> number.
+      specifying it to -1 returns all error record.
+     </para>
+
+     <para>
+      Currently, only unique or exclusion constraint violation
+      and same record formatting error is ignored.
+     </para>
+
     </listitem>
    </varlistentry>
 

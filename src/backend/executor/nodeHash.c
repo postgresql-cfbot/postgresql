@@ -43,7 +43,7 @@
 #include "utils/syscache.h"
 
 
-static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
+static void ExecHashIncreaseNumBatches(HashJoinTable hashtable, uint32 hashvalue, uint32 hashTupleSize);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBuckets(HashJoinTable hashtable);
@@ -494,6 +494,8 @@ ExecHashTableCreate(HashState *state, List *hashOperators, List *hashCollations,
 	hashtable->nbatch_original = nbatch;
 	hashtable->nbatch_outstart = nbatch;
 	hashtable->growEnabled = true;
+	hashtable->growRemainOldBatch = true;
+	hashtable->splittableSize = 0;
 	hashtable->totalTuples = 0;
 	hashtable->partialTuples = 0;
 	hashtable->skewTuples = 0;
@@ -882,7 +884,7 @@ ExecHashTableDestroy(HashJoinTable hashtable)
  *		current memory consumption
  */
 static void
-ExecHashIncreaseNumBatches(HashJoinTable hashtable)
+ExecHashIncreaseNumBatches(HashJoinTable hashtable, uint32 hashvalue, uint32 hashTupleSize)
 {
 	int			oldnbatch = hashtable->nbatch;
 	int			curbatch = hashtable->curbatch;
@@ -892,9 +894,29 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	long		nfreed;
 	HashMemoryChunk oldchunks;
 
-	/* do nothing if we've decided to shut off growth */
+	/* 
+	 * If we've shut off the growth, check whether the new tuple could benefit
+	 * from the split. When splittable_size reaches the spaceAllowed, re-enable
+	 * growEnabled flag and do the real split further.
+	 */
 	if (!hashtable->growEnabled)
-		return;
+	{
+		int			bucketno;
+		int			batchno;
+		hashtable->nbatch *= 2;
+		ExecHashGetBucketAndBatch(hashtable, hashvalue, &bucketno, &batchno);
+		hashtable->nbatch = oldnbatch;
+		if ((hashtable->growRemainOldBatch) && (batchno != curbatch)
+				|| (!hashtable->growRemainOldBatch) && (batchno == curbatch))
+			hashtable->splittableSize += hashTupleSize;
+		if (hashtable->splittableSize >= hashtable->spaceAllowed )
+		{
+			hashtable->growEnabled = true;
+			hashtable->splittableSize = 0;
+		}
+		else
+			return ;
+	}
 
 	/* safety check to avoid overflow */
 	if (oldnbatch > Min(INT_MAX / 2, MaxAllocSize / (sizeof(void *) * 2)))
@@ -1040,6 +1062,7 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	if (nfreed == 0 || nfreed == ninmemory)
 	{
 		hashtable->growEnabled = false;
+		hashtable->growRemainOldBatch = (nfreed == 0) ? true : false;
 #ifdef HJDEBUG
 		printf("Hashjoin %p: disabling further increase of nbatch\n",
 			   hashtable);
@@ -1656,7 +1679,7 @@ ExecHashTableInsert(HashJoinTable hashtable,
 		if (hashtable->spaceUsed +
 			hashtable->nbuckets_optimal * sizeof(HashJoinTuple)
 			> hashtable->spaceAllowed)
-			ExecHashIncreaseNumBatches(hashtable);
+			ExecHashIncreaseNumBatches(hashtable, hashvalue, (uint32)hashTupleSize);
 	}
 	else
 	{
@@ -2435,7 +2458,7 @@ ExecHashSkewTableInsert(HashJoinTable hashtable,
 
 	/* Check we are not over the total spaceAllowed, either */
 	if (hashtable->spaceUsed > hashtable->spaceAllowed)
-		ExecHashIncreaseNumBatches(hashtable);
+		ExecHashIncreaseNumBatches(hashtable, hashvalue, (uint32)hashTupleSize);
 
 	if (shouldFree)
 		heap_free_minimal_tuple(tuple);

@@ -23,6 +23,7 @@
  *-------------------------------------------------------------------------
  */
 
+#include "common/string.h"
 #include "fe_utils/psqlscan_int.h"
 
 /* context information for reporting errors in expressions */
@@ -205,7 +206,7 @@ notnull			[Nn][Oo][Tt][Nn][Uu][Ll][Ll]
 					return MAXINT_PLUS_ONE_CONST;
 				}
 {digit}+		{
-					if (!strtoint64(yytext, true, &yylval->ival))
+					if (!pg_scanint8(yytext, true, &yylval->ival))
 						expr_yyerror_more(yyscanner, "bigint constant overflow",
 										  strdup(yytext));
 					return INTEGER_CONST;

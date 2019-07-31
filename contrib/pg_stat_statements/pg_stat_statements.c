@@ -79,6 +79,7 @@
 #include "utils/builtins.h"
 #include "utils/hashutils.h"
 #include "utils/memutils.h"
+#include "common/string.h"
 
 PG_MODULE_MAGIC;
 

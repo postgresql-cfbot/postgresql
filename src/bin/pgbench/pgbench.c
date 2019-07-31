@@ -34,6 +34,7 @@
 #include "postgres_fe.h"
 #include "common/int.h"
 #include "common/logging.h"
+#include "common/string.h"
 #include "fe_utils/conditional.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
@@ -670,7 +671,7 @@ is_an_int(const char *str)
 {
 	const char *ptr = str;
 
-	/* skip leading spaces; cast is consistent with strtoint64 */
+	/* skip leading spaces; cast is consistent with pg_scanint8 */
 	while (*ptr && isspace((unsigned char) *ptr))
 		ptr++;
 
@@ -688,90 +689,6 @@ is_an_int(const char *str)
 
 	/* must have reached end of string */
 	return *ptr == '\0';
-}
-
-
-/*
- * strtoint64 -- convert a string to 64-bit integer
- *
- * This function is a slightly modified version of scanint8() from
- * src/backend/utils/adt/int8.c.
- *
- * The function returns whether the conversion worked, and if so
- * "*result" is set to the result.
- *
- * If not errorOK, an error message is also printed out on errors.
- */
-bool
-strtoint64(const char *str, bool errorOK, int64 *result)
-{
-	const char *ptr = str;
-	int64		tmp = 0;
-	bool		neg = false;
-
-	/*
-	 * Do our own scan, rather than relying on sscanf which might be broken
-	 * for long long.
-	 *
-	 * As INT64_MIN can't be stored as a positive 64 bit integer, accumulate
-	 * value as a negative number.
-	 */
-
-	/* skip leading spaces */
-	while (*ptr && isspace((unsigned char) *ptr))
-		ptr++;
-
-	/* handle sign */
-	if (*ptr == '-')
-	{
-		ptr++;
-		neg = true;
-	}
-	else if (*ptr == '+')
-		ptr++;
-
-	/* require at least one digit */
-	if (unlikely(!isdigit((unsigned char) *ptr)))
-		goto invalid_syntax;
-
-	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
-	{
-		int8		digit = (*ptr++ - '0');
-
-		if (unlikely(pg_mul_s64_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
-	}
-
-	/* allow trailing whitespace, but not other trailing chars */
-	while (*ptr != '\0' && isspace((unsigned char) *ptr))
-		ptr++;
-
-	if (unlikely(*ptr != '\0'))
-		goto invalid_syntax;
-
-	if (!neg)
-	{
-		if (unlikely(tmp == PG_INT64_MIN))
-			goto out_of_range;
-		tmp = -tmp;
-	}
-
-	*result = tmp;
-	return true;
-
-out_of_range:
-	if (!errorOK)
-		fprintf(stderr,
-				"value \"%s\" is out of range for type bigint\n", str);
-	return false;
-
-invalid_syntax:
-	if (!errorOK)
-		fprintf(stderr,
-				"invalid input syntax for type bigint: \"%s\"\n", str);
-	return false;
 }
 
 /* convert string to double, detecting overflows/underflows */
@@ -1325,7 +1242,7 @@ makeVariableValue(Variable *var)
 		/* if it looks like an int, it must be an int without overflow */
 		int64		iv;
 
-		if (!strtoint64(var->svalue, false, &iv))
+		if (!pg_scanint8(var->svalue, false, &iv))
 			return false;
 
 		setIntValue(&var->value, iv);
@@ -5057,18 +4974,15 @@ set_random_seed(const char *seed)
 	else
 	{
 		/* parse unsigned-int seed value */
-		unsigned long ulseed;
-		char		garbage;
-
-		/* Don't try to use UINT64_FORMAT here; it might not work for sscanf */
-		if (sscanf(seed, "%lu%c", &ulseed, &garbage) != 1)
+		char		*garbage;
+		iseed = pg_strtouint64(seed, &garbage, 10);
+		if (*garbage != '\0')
 		{
 			fprintf(stderr,
 					"unrecognized random seed option \"%s\": expecting an unsigned integer, \"time\" or \"rand\"\n",
 					seed);
 			return false;
 		}
-		iseed = (uint64) ulseed;
 	}
 
 	if (seed != NULL)

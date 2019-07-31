@@ -21,6 +21,7 @@
 #include "catalog/heap.h"
 #include "catalog/pg_type.h"
 #include "commands/trigger.h"
+#include "common/string.h"
 #include "executor/executor.h"
 #include "executor/spi_priv.h"
 #include "miscadmin.h"

@@ -34,6 +34,7 @@
 
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "common/string.h"
 #include "nodes/extensible.h"
 #include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"

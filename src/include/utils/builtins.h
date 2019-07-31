@@ -50,7 +50,6 @@ extern void pg_ltoa(int32 l, char *a);
 extern void pg_lltoa(int64 ll, char *a);
 extern char *pg_ltostr_zeropad(char *str, int32 value, int32 minwidth);
 extern char *pg_ltostr(char *str, int32 value);
-extern uint64 pg_strtouint64(const char *str, char **endptr, int base);
 
 /* oid.c */
 extern oidvector *buildoidvector(const Oid *oids, int n);

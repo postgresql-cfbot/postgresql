@@ -12,6 +12,7 @@
  */
 #include "postgres.h"
 
+#include "common/string.h"
 #include "catalog/pg_publication.h"
 
 #include "replication/logical.h"
@@ -20,7 +21,6 @@
 #include "replication/pgoutput.h"
 
 #include "utils/inval.h"
-#include "utils/int8.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -111,7 +111,7 @@ parse_output_parameters(List *options, uint32 *protocol_version,
 						 errmsg("conflicting or redundant options")));
 			protocol_version_given = true;
 
-			if (!scanint8(strVal(defel->arg), true, &parsed))
+			if (!pg_scanint8(strVal(defel->arg), true, &parsed))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("invalid proto_version")));

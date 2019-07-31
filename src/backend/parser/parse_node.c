@@ -25,10 +25,10 @@
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
-#include "utils/int8.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "utils/varbit.h"
+#include "common/string.h"
 
 
 static void pcb_error_callback(void *arg);
@@ -496,7 +496,7 @@ make_const(ParseState *pstate, Value *value, int location)
 
 		case T_Float:
 			/* could be an oversize integer as well as a float ... */
-			if (scanint8(strVal(value), true, &val64))
+			if (pg_scanint8(strVal(value), true, &val64))
 			{
 				/*
 				 * It might actually fit in int32. Probably only INT_MIN can

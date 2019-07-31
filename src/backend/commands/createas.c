@@ -330,7 +330,8 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		Assert(query->commandType == CMD_SELECT);
 
 		/* plan the query */
-		plan = pg_plan_query(query, CURSOR_OPT_PARALLEL_OK, params);
+		plan = pg_plan_query(query, queryString, CURSOR_OPT_PARALLEL_OK,
+							 params);
 
 		/*
 		 * Use a snapshot with an updated command ID to ensure this query sees

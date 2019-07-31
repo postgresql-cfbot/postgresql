@@ -651,7 +651,11 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 * This is handled by calling RecoveryInProgress and ignoring the
 		 * result.
 		 */
-		(void) RecoveryInProgress();
+		if (RecoveryInProgress())
+			SetConfigOption("in_recovery",
+							"on",
+							PGC_INTERNAL, PGC_S_OVERRIDE);
+
 	}
 	else
 	{

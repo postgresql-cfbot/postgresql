@@ -83,6 +83,13 @@ static int	toast_open_indexes(Relation toastrel,
 static void toast_close_indexes(Relation *toastidxs, int num_indexes,
 								LOCKMODE lock);
 static void init_toast_snapshot(Snapshot toast_snapshot);
+static FetchDatumIterator create_fetch_datum_iterator(struct varlena *attr);
+static bool free_fetch_datum_iterator(FetchDatumIterator iter);
+static void fetch_datum_iterate(FetchDatumIterator iter);
+static void init_toast_buffer(ToastBuffer *buf, int size, bool compressed);
+static bool free_toast_buffer(ToastBuffer *buf);
+static void pglz_decompress_iterate(ToastBuffer *source, ToastBuffer *dest,
+									DetoastIterator iter);
 
 
 /* ----------
@@ -343,6 +350,115 @@ heap_tuple_untoast_attr_slice(struct varlena *attr,
 		pfree(preslice);
 
 	return result;
+}
+
+
+/* ----------
+ * create_detoast_iterator -
+ *
+ * Initialize detoast iterator.
+ * ----------
+ */
+DetoastIterator create_detoast_iterator(struct varlena *attr) {
+	struct varatt_external toast_pointer;
+	DetoastIterator iterator = NULL;
+	if (VARATT_IS_EXTERNAL_ONDISK(attr))
+	{
+		/*
+		 * This is an externally stored datum --- create fetch datum iterator
+		 */
+		iterator = (DetoastIterator) palloc0(sizeof(DetoastIteratorData));
+		iterator->fetch_datum_iterator = create_fetch_datum_iterator(attr);
+		VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
+		if (VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer))
+		{
+			/* If it's compressed, prepare buffer for raw data */
+			iterator->buf = (ToastBuffer *) palloc0(sizeof(ToastBuffer));
+			init_toast_buffer(iterator->buf, toast_pointer.va_rawsize, false);
+			iterator->ctrlc = 8;
+			iterator->compressed = true;
+		}
+		else
+		{
+			iterator->buf = iterator->fetch_datum_iterator->buf;
+			iterator->ctrlc = 8;
+			iterator->compressed = false;
+		}
+	}
+	else if (VARATT_IS_EXTERNAL_INDIRECT(attr))
+	{
+		/*
+		 * This is an indirect pointer --- dereference it
+		 */
+		struct varatt_indirect redirect;
+
+		VARATT_EXTERNAL_GET_POINTER(redirect, attr);
+		attr = (struct varlena *) redirect.pointer;
+
+		/* nested indirect Datums aren't allowed */
+		Assert(!VARATT_IS_EXTERNAL_INDIRECT(attr));
+
+		/* recurse in case value is still extended in some other way */
+		iterator = create_detoast_iterator(attr);
+
+	}
+	else if (VARATT_IS_COMPRESSED(attr))
+	{
+		/*
+		 * This is a compressed value inside of the main tuple
+		 * Skip the iterator and just decompress the whole thing.
+		 */
+		return NULL;
+	}
+
+	return iterator;
+}
+
+
+/* ----------
+ * free_detoast_iterator -
+ *
+ * Free the memory space occupied by the de-Toast iterator.
+ * ----------
+ */
+bool free_detoast_iterator(DetoastIterator iter) {
+	if (iter == NULL)
+	{
+		return false;
+	}
+	if (iter->buf != iter->fetch_datum_iterator->buf)
+	{
+		free_toast_buffer(iter->buf);
+	}
+	free_fetch_datum_iterator(iter->fetch_datum_iterator);
+	pfree(iter);
+	return true;
+}
+
+
+/* ----------
+ * detoast_iterate -
+ *
+ * Iterate through the toasted value referenced by iterator.
+ *
+ * As long as there is another slice in compression or external storage,
+ * detoast it into toast buffer in iterator.
+ * ----------
+ */
+extern void detoast_iterate(DetoastIterator iter)
+{
+	FetchDatumIterator fetch_iter = iter->fetch_datum_iterator;
+
+	Assert(iter != NULL && !iter->done);
+
+	fetch_datum_iterate(fetch_iter);
+
+	if (iter->compressed)
+		pglz_decompress_iterate(fetch_iter->buf, iter->buf, iter);
+
+	if (iter->buf->limit == iter->buf->capacity) {
+		iter->done = true;
+	}
 }
 
 
@@ -2408,4 +2524,335 @@ init_toast_snapshot(Snapshot toast_snapshot)
 		elog(ERROR, "no known snapshots");
 
 	InitToastSnapshot(*toast_snapshot, snapshot->lsn, snapshot->whenTaken);
+}
+
+
+/* ----------
+ * create_fetch_datum_iterator -
+ *
+ * Initialize fetch datum iterator.
+ * ----------
+ */
+static FetchDatumIterator
+create_fetch_datum_iterator(struct varlena *attr) {
+	int			validIndex;
+	FetchDatumIterator iterator;
+
+	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
+		elog(ERROR, "create_fetch_datum_itearator shouldn't be called for non-ondisk datums");
+
+	iterator = (FetchDatumIterator) palloc0(sizeof(FetchDatumIteratorData));
+
+	/* Must copy to access aligned fields */
+	VARATT_EXTERNAL_GET_POINTER(iterator->toast_pointer, attr);
+
+	iterator->ressize = iterator->toast_pointer.va_extsize;
+	iterator->numchunks = ((iterator->ressize - 1) / TOAST_MAX_CHUNK_SIZE) + 1;
+
+	/*
+	 * Open the toast relation and its indexes
+	 */
+	iterator->toastrel = table_open(iterator->toast_pointer.va_toastrelid, AccessShareLock);
+
+	/* Look for the valid index of the toast relation */
+	validIndex = toast_open_indexes(iterator->toastrel,
+									AccessShareLock,
+									&iterator->toastidxs,
+									&iterator->num_indexes);
+
+	/*
+	 * Setup a scan key to fetch from the index by va_valueid
+	 */
+	ScanKeyInit(&iterator->toastkey,
+				(AttrNumber) 1,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(iterator->toast_pointer.va_valueid));
+
+	/*
+	 * Read the chunks by index
+	 *
+	 * Note that because the index is actually on (valueid, chunkidx) we will
+	 * see the chunks in chunkidx order, even though we didn't explicitly ask
+	 * for it.
+	 */
+
+	init_toast_snapshot(&iterator->SnapshotToast);
+	iterator->toastscan = systable_beginscan_ordered(iterator->toastrel, iterator->toastidxs[validIndex],
+										   &iterator->SnapshotToast, 1, &iterator->toastkey);
+
+	iterator->buf = (ToastBuffer *) palloc0(sizeof(ToastBuffer));
+	init_toast_buffer(iterator->buf, iterator->ressize + VARHDRSZ, VARATT_EXTERNAL_IS_COMPRESSED(iterator->toast_pointer));
+
+	iterator->nextidx = 0;
+	iterator->done = false;
+
+	return iterator;
+}
+
+static bool
+free_fetch_datum_iterator(FetchDatumIterator iter)
+{
+	if (iter == NULL)
+	{
+		return false;
+	}
+
+	if (!iter->done)
+	{
+		systable_endscan_ordered(iter->toastscan);
+		toast_close_indexes(iter->toastidxs, iter->num_indexes, AccessShareLock);
+		table_close(iter->toastrel, AccessShareLock);
+	}
+	free_toast_buffer(iter->buf);
+	pfree(iter);
+	return true;
+}
+
+/* ----------
+ * fetch_datum_iterate -
+ *
+ * Iterate through the toasted value referenced by iterator.
+ *
+ * As long as there is another chunk data in compression or external storage,
+ * fetch it into buffer in iterator.
+ * ----------
+ */
+static void
+fetch_datum_iterate(FetchDatumIterator iter) {
+	HeapTuple	ttup;
+	TupleDesc	toasttupDesc;
+	int32		residx;
+	Pointer		chunk;
+	bool		isnull;
+	char		*chunkdata;
+	int32		chunksize;
+
+	Assert(iter != NULL && !iter->done);
+
+	ttup = systable_getnext_ordered(iter->toastscan, ForwardScanDirection);
+	if (ttup == NULL)
+	{
+		/*
+		 * Final checks that we successfully fetched the datum
+		 */
+		if (iter->nextidx != iter->numchunks)
+			elog(ERROR, "missing chunk number %d for toast value %u in %s",
+				 iter->nextidx,
+				 iter->toast_pointer.va_valueid,
+				 RelationGetRelationName(iter->toastrel));
+
+		/*
+		 * End scan and close relations
+		 */
+		systable_endscan_ordered(iter->toastscan);
+		toast_close_indexes(iter->toastidxs, iter->num_indexes, AccessShareLock);
+		table_close(iter->toastrel, AccessShareLock);
+
+		iter->done = true;
+		return;
+	}
+
+	/*
+	 * Have a chunk, extract the sequence number and the data
+	 */
+	toasttupDesc = iter->toastrel->rd_att;
+	residx = DatumGetInt32(fastgetattr(ttup, 2, toasttupDesc, &isnull));
+	Assert(!isnull);
+	chunk = DatumGetPointer(fastgetattr(ttup, 3, toasttupDesc, &isnull));
+	Assert(!isnull);
+	if (!VARATT_IS_EXTENDED(chunk))
+	{
+		chunksize = VARSIZE(chunk) - VARHDRSZ;
+		chunkdata = VARDATA(chunk);
+	}
+	else if (VARATT_IS_SHORT(chunk))
+	{
+		/* could happen due to heap_form_tuple doing its thing */
+		chunksize = VARSIZE_SHORT(chunk) - VARHDRSZ_SHORT;
+		chunkdata = VARDATA_SHORT(chunk);
+	}
+	else
+	{
+		/* should never happen */
+		elog(ERROR, "found toasted toast chunk for toast value %u in %s",
+			 iter->toast_pointer.va_valueid,
+			 RelationGetRelationName(iter->toastrel));
+		chunksize = 0;		/* keep compiler quiet */
+		chunkdata = NULL;
+	}
+
+	/*
+	 * Some checks on the data we've found
+	 */
+	if (residx != iter->nextidx)
+		elog(ERROR, "unexpected chunk number %d (expected %d) for toast value %u in %s",
+			 residx, iter->nextidx,
+			 iter->toast_pointer.va_valueid,
+			 RelationGetRelationName(iter->toastrel));
+	if (residx < iter->numchunks - 1)
+	{
+		if (chunksize != TOAST_MAX_CHUNK_SIZE)
+			elog(ERROR, "unexpected chunk size %d (expected %d) in chunk %d of %d for toast value %u in %s",
+				 chunksize, (int) TOAST_MAX_CHUNK_SIZE,
+				 residx, iter->numchunks,
+				 iter->toast_pointer.va_valueid,
+				 RelationGetRelationName(iter->toastrel));
+	}
+	else if (residx == iter->numchunks - 1)
+	{
+		if ((residx * TOAST_MAX_CHUNK_SIZE + chunksize) != iter->ressize)
+			elog(ERROR, "unexpected chunk size %d (expected %d) in final chunk %d for toast value %u in %s",
+				 chunksize,
+				 (int) (iter->ressize - residx * TOAST_MAX_CHUNK_SIZE),
+				 residx,
+				 iter->toast_pointer.va_valueid,
+				 RelationGetRelationName(iter->toastrel));
+	}
+	else
+		elog(ERROR, "unexpected chunk number %d (out of range %d..%d) for toast value %u in %s",
+			 residx,
+			 0, iter->numchunks - 1,
+			 iter->toast_pointer.va_valueid,
+			 RelationGetRelationName(iter->toastrel));
+
+	/*
+	 * Copy the data into proper place in our iterator buffer
+	 */
+	memcpy(iter->buf->limit, chunkdata, chunksize);
+	iter->buf->limit += chunksize;
+
+	iter->nextidx++;
+}
+
+
+static void
+init_toast_buffer(ToastBuffer *buf, int32 size, bool compressed) {
+	buf->buf = (const char *) palloc0(size);
+	if (compressed) {
+		SET_VARSIZE_COMPRESSED(buf->buf, size);
+		buf->position = VARDATA_4B_C(buf->buf);
+	}
+	else
+	{
+		SET_VARSIZE(buf->buf, size);
+		buf->position = VARDATA_4B(buf->buf);
+	}
+	buf->limit = VARDATA(buf->buf);
+	buf->capacity = buf->buf + size;
+	buf->buf_size = size;
+}
+
+
+static bool
+free_toast_buffer(ToastBuffer *buf)
+{
+	if (buf == NULL)
+	{
+		return false;
+	}
+
+	pfree((void *)buf->buf);
+	pfree(buf);
+
+	return true;
+}
+
+
+/* ----------
+ * pglz_decompress_iterate -
+ *
+ *		Decompresses source into dest until the source is exhausted.
+ * ----------
+ */
+static void
+pglz_decompress_iterate(ToastBuffer *source, ToastBuffer *dest, DetoastIterator iter)
+{
+	const unsigned char *sp;
+	const unsigned char *srcend;
+	unsigned char *dp;
+	unsigned char *destend;
+
+	sp = (const unsigned char *) source->position;
+	/*
+	 * Provides a four-byte buffer to prevent sp from reading unallocated bytes.
+	 */
+	srcend = (const unsigned char *)
+		(source->limit == source->capacity ? source->limit : (source->limit - 4));
+	dp = (unsigned char *) dest->limit;
+	destend = (unsigned char *) dest->capacity;
+
+	while (sp < srcend && dp < destend)
+	{
+		/*
+		 * Read one control byte and process the next 8 items (or as many as
+		 * remain in the compressed input).
+		 */
+		unsigned char ctrl;
+		int			ctrlc;
+		if (iter->ctrlc < 8) {
+			ctrl = iter->ctrl;
+			ctrlc = iter->ctrlc;
+		}
+		else
+		{
+			ctrl = *sp++;
+			ctrlc = 0;
+		}
+
+
+		for (; ctrlc < 8 && sp < srcend && dp < destend; ctrlc++)
+		{
+
+			if (ctrl & 1)
+			{
+				/*
+				 * Otherwise it contains the match length minus 3 and the
+				 * upper 4 bits of the offset. The next following byte
+				 * contains the lower 8 bits of the offset. If the length is
+				 * coded as 18, another extension tag byte tells how much
+				 * longer the match really was (0-255).
+				 */
+				int32		len;
+				int32		off;
+
+				len = (sp[0] & 0x0f) + 3;
+				off = ((sp[0] & 0xf0) << 4) | sp[1];
+				sp += 2;
+				if (len == 18)
+					len += *sp++;
+
+				/*
+				 * Now we copy the bytes specified by the tag from OUTPUT to
+				 * OUTPUT. It is dangerous and platform dependent to use
+				 * memcpy() here, because the copied areas could overlap
+				 * extremely!
+				 */
+				len = Min(len, destend - dp);
+				while (len--)
+				{
+					*dp = dp[-off];
+					dp++;
+				}
+			}
+			else
+			{
+				/*
+				 * An unset control bit means LITERAL BYTE. So we just copy
+				 * one from INPUT to OUTPUT.
+				 */
+				*dp++ = *sp++;
+			}
+
+			/*
+			 * Advance the control bit
+			 */
+			ctrl >>= 1;
+		}
+
+		iter->ctrlc = ctrlc;
+		iter->ctrl = ctrl;
+	}
+
+	source->position = (char *) sp;
+	dest->limit = (char *) dp;
 }

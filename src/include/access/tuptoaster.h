@@ -17,6 +17,96 @@
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
 
+#ifndef FRONTEND
+#include "access/genam.h"
+
+/*
+ * TOAST buffer is a producer consumer buffer.
+ *
+ *    +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *    |  |  |  |  |  |  |  |  |  |  |  |  |  |
+ *    +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *    ^           ^           ^              ^
+ *   buf      position      limit         capacity
+ *
+ * buf: point to the start of buffer.
+ * position: point to the next char to be consume.
+ * limit: point to the next char to be produce.
+ * capacity: point to the end of buffer.
+ *
+ * Constrains that need to be satisfied:
+ * buf <= position <= limit <= capacity
+ */
+typedef struct ToastBuffer
+{
+	const char	*buf;
+	const char	*position;
+	char		*limit;
+	const char	*capacity;
+	int32		buf_size;
+} ToastBuffer;
+
+
+typedef struct FetchDatumIteratorData
+{
+	ToastBuffer	*buf;
+	Relation	toastrel;
+	Relation	*toastidxs;
+	SysScanDesc	toastscan;
+	ScanKeyData	toastkey;
+	SnapshotData			SnapshotToast;
+	struct varatt_external	toast_pointer;
+	int32		ressize;
+	int32		nextidx;
+	int32		numchunks;
+	int			num_indexes;
+	bool		done;
+}				FetchDatumIteratorData;
+
+typedef struct FetchDatumIteratorData *FetchDatumIterator;
+
+typedef struct DetoastIteratorData
+{
+	ToastBuffer 		*buf;
+	FetchDatumIterator	fetch_datum_iterator;
+	unsigned char		ctrl;
+	int					ctrlc;
+	bool				compressed;		/* toast value is compressed? */
+	bool				done;
+}			DetoastIteratorData;
+
+typedef struct DetoastIteratorData *DetoastIterator;
+
+/* ----------
+ * create_detoast_iterator -
+ *
+ * Initialize detoast iterator.
+ * ----------
+ */
+extern DetoastIterator create_detoast_iterator(struct varlena *attr);
+
+/* ----------
+ * free_detoast_iterator -
+ *
+ * Free the memory space occupied by the de-Toast iterator.
+ * ----------
+ */
+extern bool free_detoast_iterator(DetoastIterator iter);
+
+/* ----------
+ * detoast_iterate -
+ *
+ * Iterate through the toasted value referenced by iterator.
+ *
+ * As long as there is another slice in compression or external storage,
+ * detoast it into toast buffer in iterator.
+ * ----------
+ */
+extern void detoast_iterate(DetoastIterator iter);
+
+#endif
+
+
 /*
  * This enables de-toasting of index entries.  Needed until VACUUM is
  * smart enough to rebuild indexes from scratch.

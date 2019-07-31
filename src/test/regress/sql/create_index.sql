@@ -26,6 +26,8 @@ CREATE INDEX tenk1_hundred ON tenk1 USING btree(hundred int4_ops);
 
 CREATE INDEX tenk1_thous_tenthous ON tenk1 (thousand, tenthous);
 
+CREATE INDEX tenk1_four ON tenk1 (four);
+
 CREATE INDEX tenk2_unique1 ON tenk2 USING btree(unique1 int4_ops);
 
 CREATE INDEX tenk2_unique2 ON tenk2 USING btree(unique2 int4_ops);

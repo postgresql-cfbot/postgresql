@@ -1787,6 +1787,7 @@ _readIndexScan(void)
 	READ_NODE_FIELD(indexorderbyorig);
 	READ_NODE_FIELD(indexorderbyops);
 	READ_ENUM_FIELD(indexorderdir, ScanDirection);
+	READ_INT_FIELD(indexskipprefixsize);
 
 	READ_DONE();
 }
@@ -1806,6 +1807,7 @@ _readIndexOnlyScan(void)
 	READ_NODE_FIELD(indexorderby);
 	READ_NODE_FIELD(indextlist);
 	READ_ENUM_FIELD(indexorderdir, ScanDirection);
+	READ_INT_FIELD(indexskipprefixsize);
 
 	READ_DONE();
 }

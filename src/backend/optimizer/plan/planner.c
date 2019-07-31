@@ -3621,12 +3621,21 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 	if (parse->distinctClause &&
 		grouping_is_sortable(parse->distinctClause))
+	{
+		root->uniq_distinct_pathkeys =
+			make_pathkeys_for_distinctclauses(root,
+											  parse->distinctClause,
+											  tlist, false);
 		root->distinct_pathkeys =
-			make_pathkeys_for_sortclauses(root,
-										  parse->distinctClause,
-										  tlist);
+			make_pathkeys_for_distinctclauses(root,
+											  parse->distinctClause,
+											  tlist, true);
+	}
 	else
+	{
 		root->distinct_pathkeys = NIL;
+		root->uniq_distinct_pathkeys = NIL;
+	}
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,
@@ -4813,6 +4822,70 @@ create_distinct_paths(PlannerInfo *root,
 												  path,
 												  list_length(root->distinct_pathkeys),
 												  numDistinctRows));
+
+				/* Consider index skip scan as well */
+				if (enable_indexskipscan &&
+					IsA(path, IndexPath) &&
+					((IndexPath *) path)->indexinfo->amcanskip &&
+					(path->pathtype == T_IndexOnlyScan ||
+					 path->pathtype == T_IndexScan) &&
+					root->distinct_pathkeys != NIL)
+				{
+					ListCell   		*lc;
+					IndexOptInfo 	*index = NULL;
+					bool 			different_columns_order = false,
+									not_empty_qual = false;
+					int 			i = 0;
+
+					index = ((IndexPath *) path)->indexinfo;
+
+					/*
+					 * The order of columns in the index should be the same, as for
+					 * unique distincs pathkeys, otherwise we cannot use _bt_search
+					 * in the skip implementation - this can lead to a missing
+					 * records.
+					 */
+					foreach(lc, root->uniq_distinct_pathkeys)
+					{
+						PathKey *pathKey = lfirst_node(PathKey, lc);
+						EquivalenceMember *em =
+							lfirst_node(EquivalenceMember,
+										list_head(pathKey->pk_eclass->ec_members));
+						Var *var = (Var *) em->em_expr;
+
+						Assert(i < index->ncolumns);
+
+						if (index->indexkeys[i] != var->varattno)
+						{
+							different_columns_order = true;
+							break;
+						}
+
+						i++;
+					}
+
+					/*
+					 * XXX: In case of index scan quals evaluation happens after
+					 * ExecScanFetch, which means skip results could be fitered out
+					 */
+					if (path->pathtype == T_IndexScan &&
+						parse->jointree != NULL &&
+						parse->jointree->quals != NULL &&
+						((List *)parse->jointree->quals)->length != 0)
+							not_empty_qual = true;
+
+					if (!different_columns_order &&	!not_empty_qual)
+					{
+						int distinctPrefixKeys =
+							list_length(root->uniq_distinct_pathkeys);
+						add_path(distinct_rel, (Path *)
+								 create_skipscan_unique_path(root,
+															 distinct_rel,
+															 path,
+															 distinctPrefixKeys,
+															 numDistinctRows));
+					}
+				}
 			}
 		}
 

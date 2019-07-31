@@ -505,6 +505,7 @@ minmax_qp_callback(PlannerInfo *root, void *extra)
 	root->group_pathkeys = NIL;
 	root->window_pathkeys = NIL;
 	root->distinct_pathkeys = NIL;
+	root->uniq_distinct_pathkeys = NIL;
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,

@@ -73,3 +73,166 @@ SELECT 1 IS NOT DISTINCT FROM 2 as "no";
 SELECT 2 IS NOT DISTINCT FROM 2 as "yes";
 SELECT 2 IS NOT DISTINCT FROM null as "no";
 SELECT null IS NOT DISTINCT FROM null as "yes";
+
+-- index only skip scan
+SELECT DISTINCT four FROM tenk1;
+SELECT DISTINCT four FROM tenk1 WHERE four = 1;
+SELECT DISTINCT four FROM tenk1 ORDER BY four DESC;
+
+CREATE TABLE distinct_a (a int, b int, c int);
+INSERT INTO distinct_a (
+    SELECT five, hundred, 10 FROM
+    generate_series(1, 5) five,
+    generate_series(1, 10000) hundred
+);
+CREATE INDEX ON distinct_a (a, b);
+ANALYZE a;
+
+-- test index skip scan with a condition on a non unique field
+SELECT DISTINCT ON (a) a, b FROM distinct_a WHERE b = 2;
+
+-- test index skip scan backwards
+SELECT DISTINCT ON (a) a, b FROM distinct_a ORDER BY a DESC, b DESC;
+
+-- test opposite scan/index directions inside a cursor
+-- forward/backward
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b FROM distinct_a ORDER BY a, b;
+
+FETCH FROM c;
+FETCH BACKWARD FROM c;
+
+FETCH 6 FROM c;
+FETCH BACKWARD 6 FROM c;
+
+FETCH 6 FROM c;
+FETCH BACKWARD 6 FROM c;
+
+END;
+
+-- backward/forward
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b FROM distinct_a ORDER BY a DESC, b DESC;
+
+FETCH FROM c;
+FETCH BACKWARD FROM c;
+
+FETCH 6 FROM c;
+FETCH BACKWARD 6 FROM c;
+
+FETCH 6 FROM c;
+FETCH BACKWARD 6 FROM c;
+
+END;
+
+DROP TABLE distinct_a;
+
+-- test missing values and skipping from the end
+CREATE TABLE distinct_abc(a int, b int, c int);
+CREATE INDEX ON distinct_abc(a, b, c);
+INSERT INTO distinct_abc
+	VALUES (1, 1, 1),
+		   (1, 1, 2),
+		   (1, 2, 2),
+		   (1, 2, 3),
+		   (2, 2, 1),
+		   (2, 2, 3),
+		   (3, 1, 1),
+		   (3, 1, 2),
+		   (3, 2, 2),
+		   (3, 2, 3);
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2;
+
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2;
+
+FETCH ALL FROM c;
+FETCH BACKWARD ALL FROM c;
+
+END;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2
+ORDER BY a DESC, b DESC;
+
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2
+ORDER BY a DESC, b DESC;
+
+FETCH ALL FROM c;
+FETCH BACKWARD ALL FROM c;
+
+END;
+
+DROP TABLE distinct_abc;
+
+-- index skip scan
+SELECT DISTINCT ON (four) four, ten
+FROM tenk1 ORDER BY four;
+SELECT DISTINCT ON (four) four, ten
+FROM tenk1 WHERE four = 1 ORDER BY four;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (four) four, ten
+FROM tenk1 ORDER BY four;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (four) four, ten
+FROM tenk1 WHERE four = 1 ORDER BY four;
+
+-- check colums order
+SELECT DISTINCT four FROM tenk1 WHERE ten = 2;
+
+CREATE INDEX tenk1_four_ten on tenk1 (four, ten);
+
+SELECT DISTINCT four FROM tenk1 WHERE ten = 2;
+SELECT DISTINCT on (four, ten) four, ten FROM tenk1 WHERE four = 0;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT four FROM tenk1 WHERE ten = 2;
+
+-- test uniq_distinct_pathkeys
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT on (four, ten) four, ten FROM tenk1 WHERE four = 0;
+
+DROP INDEX tenk1_four_ten;
+
+CREATE INDEX tenk1_ten_four on tenk1 (ten, four);
+
+SELECT DISTINCT four FROM tenk1 WHERE ten = 2;
+SELECT DISTINCT on (four, ten) four, ten FROM tenk1 WHERE ten = 2;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT four FROM tenk1 WHERE ten = 2;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT on (four, ten) four, ten FROM tenk1 WHERE ten = 2;
+
+DROP INDEX tenk1_ten_four;
+
+-- check projection case
+SELECT DISTINCT four, four FROM tenk1 WHERE ten = 2;
+SELECT DISTINCT four, 1 FROM tenk1 WHERE ten = 2;
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT four FROM tenk1;
+
+-- test cursor forward/backward movements
+BEGIN;
+DECLARE c SCROLL CURSOR FOR SELECT DISTINCT four FROM tenk1;
+
+FETCH FROM c;
+FETCH BACKWARD FROM c;
+
+FETCH 5 FROM c;
+FETCH BACKWARD 5 FROM c;
+
+FETCH 5 FROM c;
+FETCH BACKWARD 5 FROM c;
+
+END;

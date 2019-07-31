@@ -85,6 +85,7 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	IndexScan *indexscan = (IndexScan *) node->ss.ps.plan;
 
 	/*
 	 * extract necessary information from index scan node
@@ -92,7 +93,7 @@ IndexNext(IndexScanState *node)
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir))
+	if (ScanDirectionIsBackward(indexscan->indexorderdir))
 	{
 		if (ScanDirectionIsForward(direction))
 			direction = BackwardScanDirection;
@@ -116,6 +117,7 @@ IndexNext(IndexScanState *node)
 								   node->iss_NumOrderByKeys);
 
 		node->iss_ScanDesc = scandesc;
+		node->iss_ScanDesc->xs_want_itup = true;
 
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
@@ -125,6 +127,42 @@ IndexNext(IndexScanState *node)
 			index_rescan(scandesc,
 						 node->iss_ScanKeys, node->iss_NumScanKeys,
 						 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+	}
+
+	/*
+	 * Check if we need to skip to the next key prefix, because we've been
+	 * asked to implement DISTINCT.
+	 */
+	if (node->ioss_SkipPrefixSize > 0)
+	{
+		bool startscan = false;
+
+		/*
+		 * If advancing direction is different from index direction, we must
+		 * skip right away, but _bt_skip requires a starting point.
+		 */
+		if (direction * indexscan->indexorderdir < 0 &&
+			!node->ioss_FirstTupleEmitted)
+		{
+			if (index_getnext_slot(scandesc, direction, slot))
+			{
+				node->ioss_FirstTupleEmitted = true;
+				startscan = true;
+			}
+		}
+
+		if (node->ioss_FirstTupleEmitted &&
+			!index_skip(scandesc, direction, indexscan->indexorderdir,
+						startscan, node->ioss_SkipPrefixSize))
+		{
+			/* Reached end of index. At this point currPos is invalidated,
+			 * and we need to reset ioss_FirstTupleEmitted, since otherwise
+			 * after going backwards, reaching the end of index, and going
+			 * forward again we apply skip again. It would be incorrect and
+			 * lead to an extra skipped item. */
+			node->ioss_FirstTupleEmitted = false;
+			return ExecClearTuple(slot);
+		}
 	}
 
 	/*
@@ -149,6 +187,7 @@ IndexNext(IndexScanState *node)
 			}
 		}
 
+		node->ioss_FirstTupleEmitted = true;
 		return slot;
 	}
 
@@ -906,6 +945,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexScan;
+	indexstate->ioss_SkipPrefixSize = node->indexskipprefixsize;
+	indexstate->ioss_FirstTupleEmitted = false;
 
 	/*
 	 * Miscellaneous initialization

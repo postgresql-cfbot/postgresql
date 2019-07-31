@@ -3432,6 +3432,9 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'partColsUpdated' is true if any partitioning columns are being updated,
  *		either from the target relation or a descendent partitioned table.
  * 'resultRelations' is an integer list of actual RT indexes of target rel(s)
+ * 'partitioned_rels' is an integer list of RT indexes of non-leaf tables in
+ *		the partition tree, if this is an UPDATE/DELETE to a partitioned table.
+ *		Otherwise NIL.
  * 'subpaths' is a list of Path(s) producing source data (one per rel)
  * 'subroots' is a list of PlannerInfo structs (one per rel)
  * 'withCheckOptionLists' is a list of WCO lists (one per rel)
@@ -3445,8 +3448,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						CmdType operation, bool canSetTag,
 						Index nominalRelation, Index rootRelation,
 						bool partColsUpdated,
-						List *resultRelations, List *subpaths,
-						List *subroots,
+						List *resultRelations, List *partitioned_rels,
+						List *subpaths, List *subroots,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
 						int epqParam)
@@ -3514,6 +3517,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->rootRelation = rootRelation;
 	pathnode->partColsUpdated = partColsUpdated;
 	pathnode->resultRelations = resultRelations;
+	pathnode->partitioned_rels = list_copy(partitioned_rels);
 	pathnode->subpaths = subpaths;
 	pathnode->subroots = subroots;
 	pathnode->withCheckOptionLists = withCheckOptionLists;

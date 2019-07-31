@@ -66,6 +66,9 @@ main(int argc, char *argv[])
 	 * the backend/postmaster crashes with a fatal signal or exception.
 	 */
 #if defined(WIN32) && defined(HAVE_MINIDUMP_TYPE)
+	/* In case of general protection fault, don't show GUI popup box */
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+
 	pgwin32_install_crashdump_handler();
 #endif
 
@@ -265,9 +268,6 @@ startup_hacks(const char *progname)
 						 progname, err);
 			exit(1);
 		}
-
-		/* In case of general protection fault, don't show GUI popup box */
-		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
 #if defined(_M_AMD64) && _MSC_VER == 1800
 

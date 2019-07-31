@@ -147,7 +147,22 @@ my @options = (
 	[
 		'invalid init step',
 		'-i -I dta',
-		[ qr{unrecognized initialization step}, qr{allowed steps are} ]
+		[ qr{unrecognized initialization step}, qr{allowed step characters are} ]
+	],
+	[
+		'invalid init step begin/begin',
+		'-i -I ((',
+		[ qr{nested transactions are not supported} ]
+	],
+	[
+		'invalid init step end',
+		'-i -I )',
+		[ qr{does not have a matching BEGIN} ]
+	],
+	[
+		'invalid init step begin',
+		'-i -I (dt',
+		[ qr{does not have a matching COMMIT} ]
 	],
 	[
 		'bad random seed',

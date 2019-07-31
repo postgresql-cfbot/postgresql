@@ -100,7 +100,7 @@ pgbench(
 
 # Again, with all possible options
 pgbench(
-	'--initialize --init-steps=dtpvg --scale=1 --unlogged-tables --fillfactor=98 --foreign-keys --quiet --tablespace=pg_default --index-tablespace=pg_default',
+	'--initialize --init-steps=dtpv(g) --scale=1 --unlogged-tables --fillfactor=98 --foreign-keys --quiet --tablespace=pg_default --index-tablespace=pg_default',
 	0,
 	[qr{^$}i],
 	[
@@ -116,14 +116,14 @@ pgbench(
 
 # Test interaction of --init-steps with legacy step-selection options
 pgbench(
-	'--initialize --init-steps=dtpvgvv --no-vacuum --foreign-keys --unlogged-tables',
+	'--initialize --init-steps=dtpv(G)vv --no-vacuum --foreign-keys --unlogged-tables',
 	0,
 	[qr{^$}],
 	[
 		qr{dropping old tables},
 		qr{creating tables},
 		qr{creating primary keys},
-		qr{.* of .* tuples \(.*\) done},
+		qr{generating data server side},
 		qr{creating foreign keys},
 		qr{(?!vacuuming)}, # no vacuum
 		qr{done in \d+\.\d\d s }

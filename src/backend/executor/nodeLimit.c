@@ -21,6 +21,8 @@
 
 #include "postgres.h"
 
+#include <math.h>
+
 #include "executor/executor.h"
 #include "executor/nodeLimit.h"
 #include "miscadmin.h"
@@ -52,6 +54,7 @@ ExecLimit(PlanState *pstate)
 	 */
 	direction = node->ps.state->es_direction;
 	outerPlan = outerPlanState(node);
+	slot = node->subSlot;
 
 	/*
 	 * The main logic is a simple state machine.
@@ -81,7 +84,15 @@ ExecLimit(PlanState *pstate)
 			/*
 			 * Check for empty window; if so, treat like empty subplan.
 			 */
-			if (node->count <= 0 && !node->noCount)
+			if (node->limitOption == PERCENTAGE)
+			{
+				if (node->percent == 0.0)
+				{
+					node->lstate = LIMIT_EMPTY;
+					return NULL;
+				}
+			}
+			else if (node->count <= 0 && !node->noCount)
 			{
 				node->lstate = LIMIT_EMPTY;
 				return NULL;
@@ -102,9 +113,30 @@ ExecLimit(PlanState *pstate)
 					node->lstate = LIMIT_EMPTY;
 					return NULL;
 				}
+
+				/*
+				 * Count the number of rows to return in exact number so far
+				 */
+				if (node->limitOption == PERCENTAGE)
+				{
+					node->perExactCount = ceil(node->percent * node->position / 100.0);
+
+					if (node->perExactCount == node->perExactCount + 1)
+						node->perExactCount++;
+				}
 				node->subSlot = slot;
 				if (++node->position > node->offset)
 					break;
+			}
+
+			/*
+			 * We may needed this tuple in backward scan so put it into
+			 * tuplestore.
+			 */
+			if (node->limitOption == PERCENTAGE)
+			{
+				tuplestore_puttupleslot(node->tupleStore, slot);
+				tuplestore_advance(node->tupleStore, true);
 			}
 
 			/*
@@ -124,6 +156,106 @@ ExecLimit(PlanState *pstate)
 		case LIMIT_INWINDOW:
 			if (ScanDirectionIsForward(direction))
 			{
+				/*
+				 * In case of coming back from backward scan the tuple is
+				 * already in tuple store.
+				 */
+				if (node->limitOption == PERCENTAGE && node->backwardPosition > 0)
+				{
+					if (tuplestore_gettupleslot_heaptuple(node->tupleStore, true, true, slot))
+					{
+						node->subSlot = slot;
+						node->position++;
+						node->backwardPosition--;
+						return slot;
+					}
+					else
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+				}
+
+				/*
+				 * In PERCENTAGE case no need of executing outerPlan multiple
+				 * times.
+				 */
+				if (node->limitOption == PERCENTAGE && node->reachEnd)
+				{
+					node->lstate = LIMIT_WINDOWEND;
+
+					/*
+					 * If we know we won't need to back up, we can release
+					 * resources at this point.
+					 */
+					if (!(node->ps.state->es_top_eflags & EXEC_FLAG_BACKWARD))
+						(void) ExecShutdownNode(outerPlan);
+
+					return NULL;
+				}
+
+				/*
+				 * Return the tuple up to the number of exact count in OFFSET
+				 * clause without percentage value consideration.
+				 */
+				if (node->perExactCount > 0)
+				{
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						node->reachEnd = true;
+						return NULL;
+					}
+					tuplestore_puttupleslot(node->tupleStore, slot);
+					tuplestore_advance(node->tupleStore, true);
+					node->subSlot = slot;
+					node->position++;
+					node->perExactCount--;
+					return slot;
+				}
+
+				/*
+				 * When in percentage mode, we need to see if we can get any
+				 * additional rows from the subplan (enough to increase the
+				 * node->count value).
+				 */
+				if (node->limitOption == PERCENTAGE)
+				{
+					/* loop until the node->count increments */
+					while (node->position - node->offset >= node->count)
+					{
+						int64		cnt;
+
+						slot = ExecProcNode(outerPlan);
+						if (TupIsNull(slot))
+						{
+							node->reachEnd = true;
+							node->lstate = LIMIT_SUBPLANEOF;
+
+							/*
+							 * The only operation from here is backward scan
+							 * but there's no API to refetch the tuple at the
+							 * current position. We have to move one tuple
+							 * backward, and then we will scan forward for it
+							 * for the first tuple and precede as usual
+							 * for the rest
+							 */
+							tuplestore_advance(node->tupleStore, false);
+							return NULL;
+						}
+
+						tuplestore_puttupleslot(node->tupleStore, slot);
+
+						cnt = tuplestore_tuple_count(node->tupleStore) + node->offset;
+
+						node->count = ceil(node->percent * cnt / 100.0);
+					}
+				}
+
 				/*
 				 * Forwards scan, so check for stepping off end of window. If
 				 * we are at the end of the window, return NULL without
@@ -145,17 +277,31 @@ ExecLimit(PlanState *pstate)
 					return NULL;
 				}
 
-				/*
-				 * Get next tuple from subplan, if any.
-				 */
-				slot = ExecProcNode(outerPlan);
-				if (TupIsNull(slot))
+				if (node->limitOption == PERCENTAGE)
 				{
-					node->lstate = LIMIT_SUBPLANEOF;
-					return NULL;
+					while (node->position - node->offset < node->count)
+					{
+						if (tuplestore_gettupleslot_heaptuple(node->tupleStore, true, true, slot))
+						{
+							node->subSlot = slot;
+							node->position++;
+						}
+					}
 				}
-				node->subSlot = slot;
-				node->position++;
+				else if (node->limitOption == EXACT_NUMBER)
+				{
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+					node->subSlot = slot;
+					node->position++;
+				}
 			}
 			else
 			{
@@ -168,15 +314,29 @@ ExecLimit(PlanState *pstate)
 					node->lstate = LIMIT_WINDOWSTART;
 					return NULL;
 				}
-
-				/*
-				 * Get previous tuple from subplan; there should be one!
-				 */
-				slot = ExecProcNode(outerPlan);
-				if (TupIsNull(slot))
-					elog(ERROR, "LIMIT subplan failed to run backwards");
-				node->subSlot = slot;
-				node->position--;
+				/* In PERCENTAGE case the result is already in tuplestore */
+				if (node->limitOption == PERCENTAGE)
+				{
+					if (tuplestore_gettupleslot_heaptuple(node->tupleStore, false, true, slot))
+					{
+						node->subSlot = slot;
+						node->position--;
+						node->backwardPosition++;
+					}
+					else
+						elog(ERROR, "LIMIT subplan failed to run backwards");
+				}
+				else if (node->limitOption == EXACT_NUMBER)
+				{
+					/*
+					 * Get previous tuple from subplan; there should be one!
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+						elog(ERROR, "LIMIT subplan failed to run backwards");
+					node->subSlot = slot;
+					node->position--;
+				}
 			}
 			break;
 
@@ -185,15 +345,32 @@ ExecLimit(PlanState *pstate)
 				return NULL;
 
 			/*
-			 * Backing up from subplan EOF, so re-fetch previous tuple; there
-			 * should be one!  Note previous tuple must be in window.
+			 * Scan forward for the first tuple
 			 */
-			slot = ExecProcNode(outerPlan);
-			if (TupIsNull(slot))
-				elog(ERROR, "LIMIT subplan failed to run backwards");
-			node->subSlot = slot;
-			node->lstate = LIMIT_INWINDOW;
-			/* position does not change 'cause we didn't advance it before */
+			if (node->limitOption == PERCENTAGE)
+			{
+				if (tuplestore_gettupleslot_heaptuple(node->tupleStore, true, true, slot))
+				{
+					node->subSlot = slot;
+					node->lstate = LIMIT_INWINDOW;
+				}
+				else
+					elog(ERROR, "LIMIT subplan failed to run backwards");
+			}
+			else if (node->limitOption == EXACT_NUMBER)
+			{
+				/*
+				 * Backing up from subplan EOF, so re-fetch previous tuple;
+				 * there should be one!  Note previous tuple must be in
+				 * window.
+				 */
+				slot = ExecProcNode(outerPlan);
+				if (TupIsNull(slot))
+					elog(ERROR, "LIMIT subplan failed to run backwards");
+				node->subSlot = slot;
+				node->lstate = LIMIT_INWINDOW;
+				/* position does not change 'cause we didn't advance it before */
+			}
 			break;
 
 		case LIMIT_WINDOWEND:
@@ -283,12 +460,28 @@ recompute_limits(LimitState *node)
 		}
 		else
 		{
-			node->count = DatumGetInt64(val);
-			if (node->count < 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_ROW_COUNT_IN_LIMIT_CLAUSE),
-						 errmsg("LIMIT must not be negative")));
-			node->noCount = false;
+			if (node->limitOption == PERCENTAGE)
+			{
+				/*
+				 * We expect to return at least one row (unless there are no
+				 * rows in the subplan), and we'll update this count later as
+				 * we go.
+				 */
+				node->count = 0;
+				node->percent = DatumGetFloat8(val);
+				if (node->percent < 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE),
+							 errmsg("PERCENT must not be negative")));
+			}
+			else
+			{
+				node->count = DatumGetInt64(val);
+				if (node->count < 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_ROW_COUNT_IN_LIMIT_CLAUSE),
+							 errmsg("LIMIT must not be negative")));
+			}
 		}
 	}
 	else
@@ -301,6 +494,9 @@ recompute_limits(LimitState *node)
 	/* Reset position to start-of-scan */
 	node->position = 0;
 	node->subSlot = NULL;
+	node->reachEnd = false;
+	node->backwardPosition = 0;
+	node->perExactCount = 0;
 
 	/* Set state-machine state */
 	node->lstate = LIMIT_RESCAN;
@@ -309,9 +505,11 @@ recompute_limits(LimitState *node)
 	 * Notify child node about limit.  Note: think not to "optimize" by
 	 * skipping ExecSetTupleBound if compute_tuples_needed returns < 0.  We
 	 * must update the child node anyway, in case this is a rescan and the
-	 * previous time we got a different result.
+	 * previous time we got a different result. In PERCENTAGE option there are
+	 * no bound on the number of output tuples
 	 */
-	ExecSetTupleBound(compute_tuples_needed(node), outerPlanState(node));
+	if (node->limitOption != PERCENTAGE)
+		ExecSetTupleBound(compute_tuples_needed(node), outerPlanState(node));
 }
 
 /*
@@ -374,6 +572,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 										   (PlanState *) limitstate);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
 										  (PlanState *) limitstate);
+	limitstate->limitOption = node->limitOption;
 
 	/*
 	 * Initialize result type.
@@ -390,6 +589,9 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 */
 	limitstate->ps.ps_ProjInfo = NULL;
 
+	if (node->limitOption == PERCENTAGE)
+		limitstate->tupleStore = tuplestore_begin_heap(true, false, work_mem);
+
 	return limitstate;
 }
 
@@ -405,6 +607,8 @@ ExecEndLimit(LimitState *node)
 {
 	ExecFreeExprContext(&node->ps);
 	ExecEndNode(outerPlanState(node));
+	if (node->tupleStore != NULL)
+		tuplestore_end(node->tupleStore);
 }
 
 
@@ -424,4 +628,6 @@ ExecReScanLimit(LimitState *node)
 	 */
 	if (node->ps.lefttree->chgParam == NULL)
 		ExecReScan(node->ps.lefttree);
+	if (node->tupleStore != NULL)
+		tuplestore_rescan(node->tupleStore);
 }

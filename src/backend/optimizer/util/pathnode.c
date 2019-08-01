@@ -3546,6 +3546,7 @@ LimitPath *
 create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 				  Path *subpath,
 				  Node *limitOffset, Node *limitCount,
+				  LimitOption limitOption,
 				  int64 offset_est, int64 count_est)
 {
 	LimitPath  *pathnode = makeNode(LimitPath);
@@ -3567,6 +3568,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->subpath = subpath;
 	pathnode->limitOffset = limitOffset;
 	pathnode->limitCount = limitCount;
+	pathnode->limitOption = limitOption;
 
 	/*
 	 * Adjust the output rows count and costs according to the offset/limit.
@@ -3574,7 +3576,8 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	adjust_limit_rows_costs(&pathnode->path.rows,
 							&pathnode->path.startup_cost,
 							&pathnode->path.total_cost,
-							offset_est, count_est);
+							offset_est, count_est,
+							limitOption);
 
 	return pathnode;
 }
@@ -3600,7 +3603,8 @@ adjust_limit_rows_costs(double *rows,	/* in/out parameter */
 						Cost *startup_cost, /* in/out parameter */
 						Cost *total_cost,	/* in/out parameter */
 						int64 offset_est,
-						int64 count_est)
+						int64 count_est,
+						LimitOption limitOption)
 {
 	double		input_rows = *rows;
 	Cost		input_startup_cost = *startup_cost;
@@ -3633,6 +3637,19 @@ adjust_limit_rows_costs(double *rows,	/* in/out parameter */
 			count_rows = (double) count_est;
 		else
 			count_rows = clamp_row_est(input_rows * 0.10);
+		if (limitOption == PERCENTAGE)
+		{
+			double		per_count = DatumGetFloat8(count_est);
+
+			count_rows = clamp_row_est((input_rows * per_count) / 100);
+			if (rows > 0)
+			{
+				*startup_cost = count_rows *
+					input_total_cost / input_rows;
+				*total_cost = input_total_cost +
+					(count_rows * 0.1);
+			}
+		}
 		if (count_rows > *rows)
 			count_rows = *rows;
 		if (input_rows > 0)

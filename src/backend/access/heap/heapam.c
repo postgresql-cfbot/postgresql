@@ -36,6 +36,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
+#include "access/heaptoast.h"
 #include "access/hio.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
@@ -43,7 +44,6 @@
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/transam.h"
-#include "access/tuptoaster.h"
 #include "access/valid.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
@@ -2814,7 +2814,7 @@ l1:
 		Assert(!HeapTupleHasExternal(&tp));
 	}
 	else if (HeapTupleHasExternal(&tp))
-		toast_delete(relation, &tp, false);
+		toast_delete(relation, &tp, false, 0);
 
 	/*
 	 * Mark tuple for invalidation from system caches at next command
@@ -5568,7 +5568,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
  * confirmation records.
  */
 void
-heap_abort_speculative(Relation relation, ItemPointer tid)
+heap_abort_speculative(Relation relation, ItemPointer tid, uint32 specToken)
 {
 	TransactionId xid = GetCurrentTransactionId();
 	ItemId		lp;
@@ -5677,7 +5677,7 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	if (HeapTupleHasExternal(&tp))
 	{
 		Assert(!IsToastRelation(relation));
-		toast_delete(relation, &tp, true);
+		toast_delete(relation, &tp, true, specToken);
 	}
 
 	/*

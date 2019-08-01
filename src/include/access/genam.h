@@ -21,8 +21,9 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
-/* We don't want this file to depend on execnodes.h. */
+/* We don't want this file to depend on execnodes.h or tuptable.h. */
 struct IndexInfo;
+struct TupleTableSlot;
 
 /*
  * Struct for statistics returned by ambuild
@@ -212,6 +213,8 @@ extern SysScanDesc systable_beginscan_ordered(Relation heapRelation,
 											  int nkeys, ScanKey key);
 extern HeapTuple systable_getnext_ordered(SysScanDesc sysscan,
 										  ScanDirection direction);
+extern struct TupleTableSlot *systable_getnextslot_ordered(SysScanDesc sysscan,
+														   ScanDirection direction);
 extern void systable_endscan_ordered(SysScanDesc sysscan);
 
 #endif							/* GENAM_H */

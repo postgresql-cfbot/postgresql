@@ -193,8 +193,12 @@ int64		random_seed = -1;
  * end of configurable parameters
  *********************************************************************/
 
-#define nbranches	1			/* Makes little sense to change this.  Change
-								 * -s instead */
+/*
+ * It makes little sense to change "nbranches", use -s instead.
+ *
+ * Nevertheless, "ntellers" and "naccounts" must be divisible by "nbranches".
+ */
+#define nbranches	1
 #define ntellers	10
 #define naccounts	100000
 
@@ -566,6 +570,61 @@ static const BuiltinScript builtin_script[] =
 		"<builtin: select only>",
 		"\\set aid random(1, " CppAsString2(naccounts) " * :scale)\n"
 		"SELECT abalance FROM pgbench_accounts WHERE aid = :aid;\n"
+	},
+	{
+		/*---
+		 * Standard conforming TPC-B benchmark script as defined in
+		 * "TPC BENCHMARK (tm) B Standard Specification Revision 2.0"
+		 * from 7 June 1994, see http://www.tpc.org/tpcb/spec/tpcb_current.pdf
+		 *
+		 * The transaction profile is defined Section 1.2.
+		 *
+		 * Transaction inputs are defined in Section 5.3:
+		 *
+		 * - The account branch has a 85% probability of being in the same
+		 *   branch as the teller.
+		 * - The delta amount is in [-999999, 999999].
+		 *
+		 * By application of very explicit Section 1.3.2, the final account
+		 * balance is actually extracted by the driver with \gset.
+		 *
+		 * DISCLAIMER: only the transaction script is expected to conform to the
+		 * specification. Other parts (types capabilities, initialization,
+		 * performance data collection, database configuration, checks on final
+		 * values, ...) may or may not conform to the requirements of the
+		 * benchmark depending on the actual benchmark run.
+		 */
+		"standard-tpcb",
+		"<builtin: standard TPC-B>",
+		/* choose teller and compute its branch */
+		"\\set tid random(1, " CppAsString2(ntellers) " * :scale)\n"
+		"\\set btid 1 + (:tid - 1) / (" CppAsString2(ntellers) " / " CppAsString2(nbranches) ")\n"
+		/* choose account branch: 85% same as teller unless there is only one branch */
+		"\\if random(0, 99) < 85 or :scale * " CppAsString2(nbranches)" = 1\n"
+		"\\set bid :btid\n"
+		"\\else\n"
+		"\\set bid random(1, " CppAsString2(nbranches) " * :scale - 1)\n"
+		"\\set bid :bid + case when :bid >= :btid then 1 else 0 end\n"
+		"\\endif\n"
+		/* choose account within branch */
+		"\\set lid random(1, " CppAsString2(naccounts) "/" CppAsString2(nbranches) ")\n"
+		"\\set aid (:bid - 1) * " CppAsString2(naccounts) "/" CppAsString2(nbranches) " + :lid\n"
+		"\\set delta random(-999999, 999999)\n"
+		/* it should probably be combined, but that currently breaks -M prepared */
+		"BEGIN;\n"
+		"INSERT INTO pgbench_history (tid, bid, aid, delta, mtime)\n"
+		"  VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);\n"
+		"UPDATE pgbench_accounts\n"
+		"  SET abalance = abalance + :delta\n"
+		"  WHERE aid = :aid\n"
+		"  RETURNING abalance\\gset\n"
+		"UPDATE pgbench_tellers\n"
+		"  SET tbalance = tbalance + :delta\n"
+		"  WHERE tid = :tid;\n"
+		"UPDATE pgbench_branches\n"
+		"  SET bbalance = bbalance + :delta\n"
+		"  WHERE bid = :bid;\n"
+		"END;\n"
 	}
 };
 
@@ -3617,6 +3676,11 @@ initCreateTables(PGconn *con)
 	 * would completely break comparability of pgbench results with prior
 	 * versions. Since pgbench has never pretended to be fully TPC-B compliant
 	 * anyway, we stick with the historical behavior.
+	 *
+	 * Note 2: also according to spec, balances must hold 10 decimal digits
+	 * plus sign.  The 4-bytes "int" type used below does not conform.  Given
+	 * the default settings and the random walk (aka Drunkard's Walk) theorem,
+	 * some balances may overflow on long runs.
 	 */
 	struct ddlinfo
 	{

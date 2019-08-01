@@ -173,6 +173,22 @@ pgbench(
 	],
 	'pgbench select only');
 
+pgbench(
+	'-t 10 -c 3 -M prepared -b st -r',
+	0,
+	[
+		qr{builtin: standard TPC-B},
+		qr{clients: 3\b},
+		qr{threads: 1\b},
+		qr{processed: 30/30},
+		qr{mode: prepared},
+		qr{\\if random\(0, 99\) < 85}
+	],
+	[
+		qr{vacuum}
+	],
+	'pgbench standard tpc-b');
+
 # check if threads are supported
 my $nthreads = 2;
 

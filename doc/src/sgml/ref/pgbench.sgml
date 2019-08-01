@@ -347,7 +347,8 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         An optional integer weight after <literal>@</literal> allows to adjust the
         probability of drawing the script.  If not specified, it is set to 1.
         Available built-in scripts are: <literal>tpcb-like</literal>,
-        <literal>simple-update</literal> and <literal>select-only</literal>.
+        <literal>simple-update</literal>, <literal>select-only</literal> and
+        <literal>standard-tpcb</literal>.
         Unambiguous prefixes of built-in names are accepted.
         With special name <literal>list</literal>, show the list of built-in scripts
         and exit immediately.
@@ -878,6 +879,25 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
    If you select the <literal>select-only</literal> built-in (also <option>-S</option>),
    only the <command>SELECT</command> is issued.
   </para>
+
+  <para>
+   If you select the <literal>standard-tpcb</literal> built-in, the SQL commands are similar
+   to <literal>tpcb-like</literal>, but the <literal>delta</literal> amount is 6 digits,
+   the account branch has a 85% probability of being in the same branch as the teller (unless
+   there is only one branch in which case it is always the same), and the final account
+   balance is actually extracted by the script.
+  </para>
+
+  <note>
+   <para>
+    Disclaimer: with <literal>standard-tpcb</literal>, only the transaction script
+    is expected to conform to the "TPC Benchmark(tm) B revision 2.0" specification.
+    Other parts of the benchmark, such as type capabilities, initialization,
+    performance data collection, checks on final values, database configuration,
+    test duration... may or may not conform to the standard depending on the actual
+    run.
+   </para>
+  </note>
  </refsect2>
 
  <refsect2>

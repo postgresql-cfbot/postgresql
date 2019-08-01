@@ -45,6 +45,7 @@ makeParamList(int numParams)
 	retval->parserSetup = NULL;
 	retval->parserSetupArg = NULL;
 	retval->numParams = numParams;
+	retval->hasTextValues = false;
 
 	return retval;
 }
@@ -58,6 +59,10 @@ makeParamList(int numParams)
  * set of parameter values.  If dynamic parameter hooks are present, we
  * intentionally do not copy them into the result.  Rather, we forcibly
  * instantiate all available parameter values and copy the datum values.
+ *
+ * Since this function is never used for copying parameters into a top portal,
+ * we don't copy textual representations. Neither we set the hasTextValues
+ * flag, so noone will access them.
  */
 ParamListInfo
 copyParamList(ParamListInfo from)

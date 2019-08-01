@@ -42,7 +42,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-
 static void
 exit_nicely(PGconn *conn)
 {
@@ -116,9 +115,9 @@ main(int argc, char **argv)
 	const char *conninfo;
 	PGconn	   *conn;
 	PGresult   *res;
-	const char *paramValues[1];
-	int			paramLengths[1];
-	int			paramFormats[1];
+	const char *paramValues[2];
+	int			paramLengths[2];
+	int			paramFormats[2];
 	uint32_t	binaryIntVal;
 
 	/*
@@ -223,6 +222,52 @@ main(int argc, char **argv)
 	show_binary_results(res);
 
 	PQclear(res);
+
+	/*
+	 * In the third example we transmit parameters in different forms, make
+	 * a statement fail and check how logging parameters on error works.
+	 */
+	/* Set always-secure search path, so malicious users can't take control. */
+
+	res = PQexec(conn, "SET log_parameters_on_error = on");
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		fprintf(stderr, "SET failed: %s", PQerrorMessage(conn));
+		PQclear(res);
+		exit_nicely(conn);
+	}
+	PQclear(res);
+
+	paramValues[0] = (char *) &binaryIntVal;
+	paramLengths[0] = sizeof(binaryIntVal);
+	paramFormats[0] = 1;		/* binary */
+	paramValues[1] = "2";
+	paramLengths[1] = strlen(paramValues[1]) + 1;
+	paramFormats[1] = 0;		/* text */
+	res = PQexecParams(conn,
+					   /*
+						* always divide by zero,
+						* but deduce it only when executing
+						*/
+					   "SELECT 1 / (random() / 2)::int + $1::int + $2::int",
+					   2,		/* two params */
+					   NULL,	/* let the backend deduce param type */
+					   paramValues,
+					   paramLengths,
+					   paramFormats,
+					   1);		/* ask for binary results */
+
+	if (PQresultStatus(res) != PGRES_FATAL_ERROR)
+	{
+		fprintf(stderr, "SELECT succeeded but was supposed to fail");
+		PQclear(res);
+		exit_nicely(conn);
+	}
+	PQclear(res);
+	printf("Division by zero expected, got an error message from server: %s"
+				"Please make sure it has been logged "
+					"with bind parameters in server log\n",
+		   PQerrorMessage(conn));
 
 	/* close the connection to the database and cleanup */
 	PQfinish(conn);

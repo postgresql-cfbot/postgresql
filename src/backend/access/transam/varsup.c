@@ -33,6 +33,8 @@
 /* pointer to "variable cache" in shared memory (set up by shmem.c) */
 VariableCache ShmemVariableCache = NULL;
 
+int JJ_xid=0;
+
 
 /*
  * Allocate the next FullTransactionId for a new transaction or
@@ -172,6 +174,11 @@ GetNewTransactionId(bool isSubXact)
 	 *
 	 * Extend pg_subtrans and pg_commit_ts too.
 	 */
+	{
+	int		incr;
+	for (incr=0; incr <=JJ_xid; incr++)
+	{
+	xid = ShmemVariableCache->nextXid;
 	ExtendCLOG(xid);
 	ExtendCommitTs(xid);
 	ExtendSUBTRANS(xid);
@@ -183,6 +190,13 @@ GetNewTransactionId(bool isSubXact)
 	 * assign more XIDs until there is CLOG space for them.
 	 */
 	FullTransactionIdAdvance(&ShmemVariableCache->nextFullXid);
+
+	/* If JJ_xid opposes xidStopLimit, the latter wins */
+	if (TransactionIdFollowsOrEquals(ShmemVariableCache->nextXid,
+									 ShmemVariableCache->xidStopLimit))
+		break;
+	}
+	}
 
 	/*
 	 * We must store the new XID into the shared ProcArray before releasing
@@ -352,9 +366,7 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 	 * We'll refuse to continue assigning XIDs in interactive mode once we get
 	 * within 1M transactions of data loss.  This leaves lots of room for the
 	 * DBA to fool around fixing things in a standalone backend, while not
-	 * being significant compared to total XID space. (Note that since
-	 * vacuuming requires one transaction per table cleaned, we had better be
-	 * sure there's lots of XIDs left...)
+	 * being significant compared to total XID space.
 	 */
 	xidStopLimit = xidWrapLimit - 1000000;
 	if (xidStopLimit < FirstNormalTransactionId)

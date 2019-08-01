@@ -42,6 +42,7 @@
 #include "pgstat.h"
 #include "pg_trace.h"
 #include "storage/proc.h"
+#include "utils/fmgrprotos.h"
 
 /*
  * Defines for CLOG page sizes.  A page is the same BLCKSZ as is used
@@ -916,6 +917,22 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
 	/* Check to see if there's any files that could be removed */
 	if (!SlruScanDirectory(ClogCtl, SlruScanDirCbReportPresence, &cutoffPage))
 		return;					/* nothing to remove */
+
+#if 0
+	/* FIXME Move sleep duration into a GUC? */
+	if (LWLockConditionalAcquire(TruncSleepLock, LW_EXCLUSIVE))
+	{
+		elog(LOG, "TruncSleepLock taken: sleeping (%d for %u)",
+			 cutoffPage, oldestXact);
+		DirectFunctionCall1(pg_sleep, Float8GetDatum(10.0));
+		/* TODO increase time, attach debugger and check caller vars */
+		LWLockRelease(TruncSleepLock);
+		elog(LOG, "TruncSleepLock done: proceeding");
+	}
+	else
+		elog(LOG, "TruncSleepLock unavailable: proceeding (%d for %u)",
+			 cutoffPage, oldestXact);
+#endif
 
 	/*
 	 * Advance oldestClogXid before truncating clog, so concurrent xact status

@@ -148,7 +148,8 @@ static void standard_qp_callback(PlannerInfo *root, void *extra);
 static double get_number_of_groups(PlannerInfo *root,
 								   double path_rows,
 								   grouping_sets_data *gd,
-								   List *target_list);
+								   List *target_list,
+								   bool is_partial);
 static RelOptInfo *create_grouping_paths(PlannerInfo *root,
 										 RelOptInfo *input_rel,
 										 PathTarget *target,
@@ -176,7 +177,8 @@ static void consider_groupingsets_paths(PlannerInfo *root,
 										bool can_hash,
 										grouping_sets_data *gd,
 										const AggClauseCosts *agg_costs,
-										double dNumGroups);
+										double dNumGroups,
+										AggSplit aggsplit);
 static RelOptInfo *create_window_paths(PlannerInfo *root,
 									   RelOptInfo *input_rel,
 									   PathTarget *input_target,
@@ -3670,6 +3672,7 @@ standard_qp_callback(PlannerInfo *root, void *extra)
  * path_rows: number of output rows from scan/join step
  * gd: grouping sets data including list of grouping sets and their clauses
  * target_list: target list containing group clause references
+ * is_partial: whether the grouping is in partial aggregate
  *
  * If doing grouping sets, we also annotate the gsets data with the estimates
  * for each set and each individual rollup list, with a view to later
@@ -3679,7 +3682,8 @@ static double
 get_number_of_groups(PlannerInfo *root,
 					 double path_rows,
 					 grouping_sets_data *gd,
-					 List *target_list)
+					 List *target_list,
+					 bool is_partial)
 {
 	Query	   *parse = root->parse;
 	double		dNumGroups;
@@ -3688,7 +3692,15 @@ get_number_of_groups(PlannerInfo *root,
 	{
 		List	   *groupExprs;
 
-		if (parse->groupingSets)
+		/*
+		 * Grouping sets
+		 *
+		 * If we are doing partial aggregation for grouping sets, we are
+		 * supposed to estimate number of groups based on all the columns in
+		 * parse->groupClause.  Otherwise, we can add up the estimates for
+		 * each grouping set.
+		 */
+		if (parse->groupingSets && !is_partial)
 		{
 			/* Add up the estimates for each grouping set */
 			ListCell   *lc;
@@ -3751,7 +3763,7 @@ get_number_of_groups(PlannerInfo *root,
 		}
 		else
 		{
-			/* Plain GROUP BY */
+			/* Plain GROUP BY, or grouping is in partial aggregate */
 			groupExprs = get_sortgrouplist_exprs(parse->groupClause,
 												 target_list);
 
@@ -4144,7 +4156,8 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	dNumGroups = get_number_of_groups(root,
 									  cheapest_path->rows,
 									  gd,
-									  extra->targetList);
+									  extra->targetList,
+									  false);
 
 	/* Build final grouping paths */
 	add_paths_to_grouping_rel(root, input_rel, grouped_rel,
@@ -4189,7 +4202,8 @@ consider_groupingsets_paths(PlannerInfo *root,
 							bool can_hash,
 							grouping_sets_data *gd,
 							const AggClauseCosts *agg_costs,
-							double dNumGroups)
+							double dNumGroups,
+							AggSplit aggsplit)
 {
 	Query	   *parse = root->parse;
 
@@ -4351,6 +4365,7 @@ consider_groupingsets_paths(PlannerInfo *root,
 										  path,
 										  (List *) parse->havingQual,
 										  strat,
+										  aggsplit,
 										  new_rollups,
 										  agg_costs,
 										  dNumGroups));
@@ -4508,6 +4523,7 @@ consider_groupingsets_paths(PlannerInfo *root,
 											  path,
 											  (List *) parse->havingQual,
 											  AGG_MIXED,
+											  aggsplit,
 											  rollups,
 											  agg_costs,
 											  dNumGroups));
@@ -4524,6 +4540,7 @@ consider_groupingsets_paths(PlannerInfo *root,
 										  path,
 										  (List *) parse->havingQual,
 										  AGG_SORTED,
+										  aggsplit,
 										  gd->rollups,
 										  agg_costs,
 										  dNumGroups));
@@ -5198,7 +5215,15 @@ make_partial_grouping_target(PlannerInfo *root,
 	foreach(lc, grouping_target->exprs)
 	{
 		Expr	   *expr = (Expr *) lfirst(lc);
-		Index		sgref = get_pathtarget_sortgroupref(grouping_target, i);
+		Index		sgref = get_pathtarget_sortgroupref(grouping_target, i++);
+
+		/*
+		 * GroupingFunc does not need to be evaluated in Partial Aggregate,
+		 * since Partial Aggregate will not handle multiple grouping sets at
+		 * once.
+		 */
+		if (IsA(expr, GroupingFunc))
+			continue;
 
 		if (sgref && parse->groupClause &&
 			get_sortgroupref_clause_noerr(sgref, parse->groupClause) != NULL)
@@ -5217,8 +5242,6 @@ make_partial_grouping_target(PlannerInfo *root,
 			 */
 			non_group_cols = lappend(non_group_cols, expr);
 		}
-
-		i++;
 	}
 
 	/*
@@ -6412,7 +6435,7 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 				{
 					consider_groupingsets_paths(root, grouped_rel,
 												path, true, can_hash,
-												gd, agg_costs, dNumGroups);
+												gd, agg_costs, dNumGroups, AGGSPLIT_SIMPLE);
 				}
 				else if (parse->hasAggs)
 				{
@@ -6479,7 +6502,14 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 													 -1.0);
 				}
 
-				if (parse->hasAggs)
+				/*
+				 * parallel grouping sets
+				 */
+				if (parse->groupingSets)
+					consider_groupingsets_paths(root, grouped_rel,
+												path, true, can_hash,
+												gd, agg_final_costs, dNumGroups, AGGSPLIT_FINAL_DESERIAL);
+				else if (parse->hasAggs)
 					add_path(grouped_rel, (Path *)
 							 create_agg_path(root,
 											 grouped_rel,
@@ -6514,7 +6544,7 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 			 */
 			consider_groupingsets_paths(root, grouped_rel,
 										cheapest_path, false, true,
-										gd, agg_costs, dNumGroups);
+										gd, agg_costs, dNumGroups, AGGSPLIT_SIMPLE);
 		}
 		else
 		{
@@ -6562,17 +6592,27 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 														  dNumGroups);
 
 			if (hashaggtablesize < work_mem * 1024L)
-				add_path(grouped_rel, (Path *)
-						 create_agg_path(root,
-										 grouped_rel,
-										 path,
-										 grouped_rel->reltarget,
-										 AGG_HASHED,
-										 AGGSPLIT_FINAL_DESERIAL,
-										 parse->groupClause,
-										 havingQual,
-										 agg_final_costs,
-										 dNumGroups));
+			{
+				/*
+				 * parallel grouping sets
+				 */
+				if (parse->groupingSets)
+					consider_groupingsets_paths(root, grouped_rel,
+												path, false, true,
+												gd, agg_final_costs, dNumGroups, AGGSPLIT_FINAL_DESERIAL);
+				else
+					add_path(grouped_rel, (Path *)
+							 create_agg_path(root,
+											 grouped_rel,
+											 path,
+											 grouped_rel->reltarget,
+											 AGG_HASHED,
+											 AGGSPLIT_FINAL_DESERIAL,
+											 parse->groupClause,
+											 havingQual,
+											 agg_final_costs,
+											 dNumGroups));
+			}
 		}
 	}
 
@@ -6712,13 +6752,15 @@ create_partial_grouping_paths(PlannerInfo *root,
 			get_number_of_groups(root,
 								 cheapest_total_path->rows,
 								 gd,
-								 extra->targetList);
+								 extra->targetList,
+								 true);
 	if (cheapest_partial_path != NULL)
 		dNumPartialPartialGroups =
 			get_number_of_groups(root,
 								 cheapest_partial_path->rows,
 								 gd,
-								 extra->targetList);
+								 extra->targetList,
+								 true);
 
 	if (can_sort && cheapest_total_path != NULL)
 	{
@@ -6740,11 +6782,28 @@ create_partial_grouping_paths(PlannerInfo *root,
 			{
 				/* Sort the cheapest partial path, if it isn't already */
 				if (!is_sorted)
+				{
+					List *pathkeys;
+
+					/*
+					 * If we are performing Partial Aggregate for grouping
+					 * sets, we need to sort by all the columns in
+					 * parse->groupClause.
+					 */
+					if (parse->groupingSets)
+						pathkeys =
+							make_pathkeys_for_sortclauses(root,
+														  parse->groupClause,
+														  root->processed_tlist);
+					else
+						pathkeys = root->group_pathkeys;
+
 					path = (Path *) create_sort_path(root,
 													 partially_grouped_rel,
 													 path,
-													 root->group_pathkeys,
+													 pathkeys,
 													 -1.0);
+				}
 
 				if (parse->hasAggs)
 					add_path(partially_grouped_rel, (Path *)
@@ -6784,11 +6843,28 @@ create_partial_grouping_paths(PlannerInfo *root,
 			{
 				/* Sort the cheapest partial path, if it isn't already */
 				if (!is_sorted)
+				{
+					List *pathkeys;
+
+					/*
+					 * If we are performing Partial Aggregate for grouping
+					 * sets, we need to sort by all the columns in
+					 * parse->groupClause.
+					 */
+					if (parse->groupingSets)
+						pathkeys =
+							make_pathkeys_for_sortclauses(root,
+														  parse->groupClause,
+														  root->processed_tlist);
+					else
+						pathkeys = root->group_pathkeys;
+
 					path = (Path *) create_sort_path(root,
 													 partially_grouped_rel,
 													 path,
-													 root->group_pathkeys,
+													 pathkeys,
 													 -1.0);
+				}
 
 				if (parse->hasAggs)
 					add_partial_path(partially_grouped_rel, (Path *)
@@ -6956,11 +7032,6 @@ can_partial_agg(PlannerInfo *root, const AggClauseCosts *agg_costs)
 		 * We don't know how to do parallel aggregation unless we have either
 		 * some aggregates or a grouping clause.
 		 */
-		return false;
-	}
-	else if (parse->groupingSets)
-	{
-		/* We don't know how to do grouping sets in parallel. */
 		return false;
 	}
 	else if (agg_costs->hasNonPartial || agg_costs->hasNonSerial)

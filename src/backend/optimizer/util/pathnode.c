@@ -2990,6 +2990,7 @@ create_groupingsets_path(PlannerInfo *root,
 						 Path *subpath,
 						 List *having_qual,
 						 AggStrategy aggstrategy,
+						 AggSplit aggsplit,
 						 List *rollups,
 						 const AggClauseCosts *agg_costs,
 						 double numGroups)
@@ -3035,6 +3036,7 @@ create_groupingsets_path(PlannerInfo *root,
 		pathnode->path.pathkeys = NIL;
 
 	pathnode->aggstrategy = aggstrategy;
+	pathnode->aggsplit = aggsplit;
 	pathnode->rollups = rollups;
 	pathnode->qual = having_qual;
 

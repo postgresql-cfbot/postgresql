@@ -1698,6 +1698,7 @@ typedef struct GroupingSetsPath
 	Path		path;
 	Path	   *subpath;		/* path representing input source */
 	AggStrategy aggstrategy;	/* basic strategy */
+	AggSplit	aggsplit;		/* agg-splitting mode, see nodes.h */
 	List	   *rollups;		/* list of RollupData */
 	List	   *qual;			/* quals (HAVING quals), if any */
 } GroupingSetsPath;

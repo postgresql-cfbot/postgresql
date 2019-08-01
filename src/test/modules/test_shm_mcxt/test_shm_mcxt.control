@@ -1,0 +1,4 @@
+comment = 'Test code for shared memory context'
+default_version = '1.0'
+module_pathname = '$libdir/test_shm_mcxt'
+relocatable = true

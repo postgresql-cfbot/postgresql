@@ -1,0 +1,25 @@
+test_shm_mcxt is an example of how to use ShmContext and its facility. It 
+is not intended to do anything useful on its own; rather, it is a
+demonstration of how these facilities can be used, and a unit test of
+those facilities.
+
+This extension allows a backend to put a list of number into the shared
+memory and another backend to get the list. To use this extension, you need
+to add shared_preload_libraries = 'test_shm_mcxt'.
+
+XXX: maybe need more test case
+
+Functions
+=========
+
+set_shared_list(i int)
+  RETURNS void
+
+This function sets positve integer into shared list and if a negative integer
+is specified, delete the corresponding positive integer.
+ 
+
+get_shared_list()
+  RETURNS SETOF integer
+
+This function retunrs intergers registerd to the shared list.

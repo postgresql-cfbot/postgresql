@@ -360,11 +360,9 @@ DecodeHeap2Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	ReorderBufferProcessXid(ctx->reorder, xid, buf->origptr);
 
 	/*
-	 * If we don't have snapshot or we are just fast-forwarding, there is no
-	 * point in decoding changes.
+	 * If we don't have snapshot, we have no reason to decode changes.
 	 */
-	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
-		ctx->fast_forward)
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT)
 		return;
 
 	switch (info)
@@ -379,6 +377,13 @@ DecodeHeap2Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 				xl_heap_new_cid *xlrec;
 
 				xlrec = (xl_heap_new_cid *) XLogRecGetData(buf->record);
+
+				/*
+				 * Note that we process this even when fast-forwarding since
+				 * this record does not imply invalidation, so if we skip
+				 * this we would calculate an incorrect snapshot that might
+				 * eventually be used by other processes.
+				 */
 				SnapBuildProcessNewCid(builder, xid, buf->origptr, xlrec);
 
 				break;

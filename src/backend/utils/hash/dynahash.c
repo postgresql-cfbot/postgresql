@@ -1352,6 +1352,15 @@ hash_get_num_entries(HTAB *hashp)
 }
 
 /*
+ * hash_get_max_bucket -- get the maximum used bucket in a hashtable
+ */
+uint32
+hash_get_max_bucket(HTAB *hashp)
+{
+	return hashp->hctl->max_bucket;
+}
+
+/*
  * hash_seq_init/_search/_term
  *			Sequentially search through hash table and return
  *			all the elements one by one, return NULL when no more.

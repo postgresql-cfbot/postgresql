@@ -254,6 +254,14 @@ static HTAB *LockMethodLockHash;
 static HTAB *LockMethodProcLockHash;
 static HTAB *LockMethodLocalHash;
 
+/* Initial size of the LockMethodLocalHash table */
+#define LOCKMETHODLOCALHASH_INIT_SIZE 16
+
+/*
+ * If we see that the LockMethodLocalHash table is this many times bigger than
+ * it needs to be, then we'll shrink it down to LOCKMETHODLOCALHASH_INIT_SIZE.
+ */
+#define LOCKMETHODLOCALHASH_SHRINK_MULTIPLIER 4.0
 
 /* private state for error cleanup */
 static LOCALLOCK *StrongLockInProgress;
@@ -339,6 +347,8 @@ PROCLOCK_PRINT(const char *where, const PROCLOCK *proclockP)
 #endif							/* not LOCK_DEBUG */
 
 
+static void InitLocalLockHash(void);
+static inline void TryShrinkLocalLockHash(void);
 static uint32 proclock_hash(const void *key, Size keysize);
 static void RemoveLocalLock(LOCALLOCK *locallock);
 static PROCLOCK *SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
@@ -431,14 +441,26 @@ InitLocks(void)
 	if (!found)
 		SpinLockInit(&FastPathStrongRelationLocks->mutex);
 
+	InitLocalLockHash();
+}
+
+/*
+ * InitLocalLockHash
+ *		Initialize the LockMethodLocalHash hash table.
+ */
+static void
+InitLocalLockHash(void)
+{
+	HASHCTL		info;
+
 	/*
 	 * Allocate non-shared hash table for LOCALLOCK structs.  This stores lock
 	 * counts and resource owner information.
 	 *
-	 * The non-shared table could already exist in this process (this occurs
-	 * when the postmaster is recreating shared memory after a backend crash).
-	 * If so, delete and recreate it.  (We could simply leave it, since it
-	 * ought to be empty in the postmaster, but for safety let's zap it.)
+	 * First destroy any old table that may exist.  We might just be
+	 * recreating the table or it could already exist in this process (this
+	 * occurs when the postmaster is recreating shared memory after a backend
+	 * crash).  In either case, delete and recreate it.
 	 */
 	if (LockMethodLocalHash)
 		hash_destroy(LockMethodLocalHash);
@@ -447,11 +469,65 @@ InitLocks(void)
 	info.entrysize = sizeof(LOCALLOCK);
 
 	LockMethodLocalHash = hash_create("LOCALLOCK hash",
-									  16,
+									  LOCKMETHODLOCALHASH_INIT_SIZE,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
 }
 
+/*
+ * TryShrinkLocalLockHash
+ *		Rebuild LockMethodLocalHash with its initial size if it has grown
+ *		significantly larger than the average locks that recent xacts have
+ *		been obtaining.
+ *
+ * 'numLocksHeld' is the number of locks that was held during this xact.
+ */
+static inline void
+TryShrinkLocalLockHash(long numLocksHeld)
+{
+	/*
+	 * Start the running average at something above zero so we don't rebuild
+	 * the lock table until we've gotten a more meaningful running average.
+	 * Twice the LOCKMETHODLOCALHASH_INIT_SIZE should do the trick.
+	 */
+	static float running_avg_locks = LOCKMETHODLOCALHASH_INIT_SIZE * 2.0;
+
+	/*
+	 * Only consider shrinking if there's actually zero locks in the table.
+	 * (Session level locks will remain after COMMIT)
+	 */
+	if (hash_get_num_entries(LockMethodLocalHash) == 0)
+	{
+		uint32		max_bucket;
+		float		threshold;
+
+		/*
+		 * Calculate an approximate running average of the number of locks.
+		 * Here the constant 10.0 controls the "reaction rate" of the average.
+		 * Higher values will have it react more slowly, lower values will
+		 * cause it to react more quickly to changes in the number of locks.
+		 */
+		running_avg_locks -= running_avg_locks / 10.0;
+		running_avg_locks += numLocksHeld / 10.0;
+
+		max_bucket = hash_get_max_bucket(LockMethodLocalHash);
+
+		/*
+		 * Don't shrink unless the table is N times larger than its initial
+		 * size, and N times larger than the running_avg_locks counter.  This
+		 * ensure we don't shrink it unless the table is at least N times
+		 * bigger than it needs to be.
+		 */
+		threshold = Max(LOCKMETHODLOCALHASH_INIT_SIZE *
+						LOCKMETHODLOCALHASH_SHRINK_MULTIPLIER,
+						running_avg_locks *
+						LOCKMETHODLOCALHASH_SHRINK_MULTIPLIER);
+
+		/* Rebuild the table if the max_bucket is beyond the threshold */
+		if (max_bucket > threshold)
+			InitLocalLockHash();
+	}
+}
 
 /*
  * Fetch the lock method table associated with a given lock
@@ -2095,6 +2171,7 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	LOCALLOCK  *locallock;
 	LOCK	   *lock;
 	PROCLOCK   *proclock;
+	long		numLocksHeld;
 	int			partition;
 	bool		have_fast_path_lwlock = false;
 
@@ -2114,9 +2191,15 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 	 * ends.
 	 */
 	if (lockmethodid == DEFAULT_LOCKMETHOD)
+	{
 		VirtualXactLockTableCleanup();
 
+		/* Record the number of locks currently held */
+		numLocksHeld = hash_get_num_entries(LockMethodLocalHash);
+	}
+
 	numLockModes = lockMethodTable->numLockModes;
+
 
 	/*
 	 * First we run through the locallock table and get rid of unwanted
@@ -2348,6 +2431,14 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 
 		LWLockRelease(partitionLock);
 	}							/* loop over partitions */
+
+	/*
+	 * The hash_seq_search can become inefficient when the hash table has
+	 * grown significantly larger than the default size due to the backend
+	 * having obtained a large number of locks.  Consider shrinking it.
+	 */
+	if (lockmethodid == DEFAULT_LOCKMETHOD)
+		TryShrinkLocalLockHash(numLocksHeld);
 
 #ifdef LOCK_DEBUG
 	if (*(lockMethodTable->trace_flag))

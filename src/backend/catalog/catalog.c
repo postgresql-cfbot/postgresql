@@ -59,7 +59,7 @@
  *		We treat toast tables of user relations as "system relations" for
  *		protection purposes, e.g. you can't change their schemas without
  *		special permissions.  Therefore, most uses of this function are
- *		checking whether allow_system_table_mods restrictions apply.
+ *		checking whether allow_system_table_ddl restrictions apply.
  *		For other purposes, consider whether you shouldn't be using
  *		IsCatalogRelation instead.
  *

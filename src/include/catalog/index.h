@@ -68,7 +68,7 @@ extern Oid	index_create(Relation heapRelation,
 						 Datum reloptions,
 						 bits16 flags,
 						 bits16 constr_flags,
-						 bool allow_system_table_mods,
+						 bool allow_system_table_ddl,
 						 bool is_internal,
 						 Oid *constraintId);
 
@@ -99,7 +99,7 @@ extern ObjectAddress index_constraint_create(Relation heapRelation,
 											 const char *constraintName,
 											 char constraintType,
 											 bits16 constr_flags,
-											 bool allow_system_table_mods,
+											 bool allow_system_table_ddl,
 											 bool is_internal);
 
 extern void index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode);

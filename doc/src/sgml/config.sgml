@@ -9288,17 +9288,19 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
     </para>
 
     <variablelist>
-     <varlistentry id="guc-allow-system-table-mods" xreflabel="allow_system_table_mods">
-      <term><varname>allow_system_table_mods</varname> (<type>boolean</type>)
+     <varlistentry id="guc-allow-system-table-ddl" xreflabel="allow_system_table_ddl">
+      <term><varname>allow_system_table_ddl</varname> (<type>boolean</type>)
       <indexterm>
-        <primary><varname>allow_system_table_mods</varname> configuration parameter</primary>
+        <primary><varname>allow_system_table_ddl</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        Allows modification of the structure of system tables.
-        This is used by <command>initdb</command>.
-        This parameter can only be set at server start.
+        Allows DDL commands on system tables.  This is otherwise not allowed
+        even for superusers.  This is used by <command>initdb</command>.
+        Inconsiderate use of this setting can cause irretrievable data loss or
+        seriously corrupt the database system.  Only superusers can change
+        this setting.
        </para>
       </listitem>
      </varlistentry>
@@ -9831,7 +9833,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
        </row>
        <row>
         <entry><option>-O</option></entry>
-        <entry><literal>allow_system_table_mods = on</literal></entry>
+        <entry><literal>allow_system_table_ddl = on</literal></entry>
        </row>
        <row>
         <entry><option>-p <replaceable>x</replaceable></option></entry>

@@ -303,7 +303,7 @@ heap_create(const char *relname,
 			char relpersistence,
 			bool shared_relation,
 			bool mapped_relation,
-			bool allow_system_table_mods,
+			bool allow_system_table_ddl,
 			TransactionId *relfrozenxid,
 			MultiXactId *relminmxid)
 {
@@ -319,10 +319,10 @@ heap_create(const char *relname,
 	 * paths including pg_catalog are too confusing for now.
 	 *
 	 * But allow creating indexes on relations in pg_catalog even if
-	 * allow_system_table_mods = off, upper layers already guarantee it's on a
+	 * allow_system_table_ddl = off, upper layers already guarantee it's on a
 	 * user defined relation, not a system one.
 	 */
-	if (!allow_system_table_mods &&
+	if (!allow_system_table_ddl &&
 		((IsCatalogNamespace(relnamespace) && relkind != RELKIND_INDEX) ||
 		 IsToastNamespace(relnamespace)) &&
 		IsNormalProcessingMode())
@@ -1052,7 +1052,7 @@ AddNewRelationType(const char *typeName,
  *	reloptions: reloptions in Datum form, or (Datum) 0 if none
  *	use_user_acl: true if should look for user-defined default permissions;
  *		if false, relacl is always set NULL
- *	allow_system_table_mods: true to allow creation in system namespaces
+ *	allow_system_table_ddl: true to allow creation in system namespaces
  *	is_internal: is this a system-generated catalog?
  *
  * Output parameters:
@@ -1079,7 +1079,7 @@ heap_create_with_catalog(const char *relname,
 						 OnCommitAction oncommit,
 						 Datum reloptions,
 						 bool use_user_acl,
-						 bool allow_system_table_mods,
+						 bool allow_system_table_ddl,
 						 bool is_internal,
 						 Oid relrewrite,
 						 ObjectAddress *typaddress)
@@ -1104,11 +1104,11 @@ heap_create_with_catalog(const char *relname,
 
 	/*
 	 * Validate proposed tupdesc for the desired relkind.  If
-	 * allow_system_table_mods is on, allow ANYARRAY to be used; this is a
+	 * allow_system_table_ddl is on, allow ANYARRAY to be used; this is a
 	 * hack to allow creating pg_statistic and cloning it during VACUUM FULL.
 	 */
 	CheckAttributeNamesTypes(tupdesc, relkind,
-							 allow_system_table_mods ? CHKATYPE_ANYARRAY : 0);
+							 allow_system_table_ddl ? CHKATYPE_ANYARRAY : 0);
 
 	/*
 	 * This would fail later on anyway, if the relation already exists.  But
@@ -1225,7 +1225,7 @@ heap_create_with_catalog(const char *relname,
 							   relpersistence,
 							   shared_relation,
 							   mapped_relation,
-							   allow_system_table_mods,
+							   allow_system_table_ddl,
 							   &relfrozenxid,
 							   &relminmxid);
 

@@ -30,6 +30,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_sequence.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage_xlog.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
@@ -133,12 +134,6 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	bool		pgs_nulls[Natts_pg_sequence];
 	int			i;
 
-	/* Unlogged sequences are not implemented -- not clear if useful. */
-	if (seq->sequence->relpersistence == RELPERSISTENCE_UNLOGGED)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("unlogged sequences are not supported")));
-
 	/*
 	 * If if_not_exists was given and a relation with the same name already
 	 * exists, bail out. (Note: we needn't check this when not if_not_exists,
@@ -227,6 +222,43 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	/* process OWNED BY if given */
 	if (owned_by)
 		process_owned_by(rel, owned_by, seq->for_identity);
+
+	/*
+	 * create init fork for unlogged sequences
+	 *
+	 * The logic follows that of RelationCreateStorage() and
+	 * RelationCopyStorage().
+	 */
+	if (seq->sequence->relpersistence == RELPERSISTENCE_UNLOGGED)
+	{
+		SMgrRelation srel;
+		PGAlignedBlock buf;
+		Page		page = (Page) buf.data;
+
+		FlushRelationBuffers(rel);
+
+		srel = smgropen(rel->rd_node, InvalidBackendId);
+		smgrcreate(srel, INIT_FORKNUM, false);
+		log_smgrcreate(&rel->rd_node, INIT_FORKNUM);
+
+		Assert(smgrnblocks(srel, MAIN_FORKNUM) == 1);
+
+		smgrread(srel, MAIN_FORKNUM, 0, buf.data);
+
+		if (!PageIsVerified(page, 0))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("invalid page in block %u of relation %s",
+							0,
+							relpathbackend(srel->smgr_rnode.node,
+										   srel->smgr_rnode.backend,
+										   MAIN_FORKNUM))));
+
+		log_newpage(&srel->smgr_rnode.node, INIT_FORKNUM, 0, page, false);
+		PageSetChecksumInplace(page, 0);
+		smgrextend(srel, INIT_FORKNUM, 0, buf.data, false);
+		smgrclose(srel);
+	}
 
 	table_close(rel, NoLock);
 

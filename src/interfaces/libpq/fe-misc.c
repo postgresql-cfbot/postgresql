@@ -1020,6 +1020,32 @@ pqFlush(PGconn *conn)
 int
 pqWait(int forRead, int forWrite, PGconn *conn)
 {
+	int result;
+
+	if (conn->socket_timeout > 0)
+	{
+		time_t		finish_time;
+
+		finish_time = time(NULL) + conn->socket_timeout;
+		result = pqSocketCheck(conn, forRead, forWrite, finish_time);
+
+		if (result < 0)
+			return EOF;
+
+		if (result == 0)
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+					libpq_gettext("timeout expired\n"));
+			conn->status = CONNECTION_BAD;
+			pqsecure_close(conn);
+			closesocket(conn->sock);
+			conn->sock = PGINVALID_SOCKET;
+			return EOF;
+		}
+
+		return 0;
+	}
+
 	return pqWaitTimed(forRead, forWrite, conn, (time_t) -1);
 }
 

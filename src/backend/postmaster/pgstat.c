@@ -2934,6 +2934,9 @@ pgstat_bestart(void)
 			case StartupProcess:
 				lbeentry.st_backendType = B_STARTUP;
 				break;
+			case BaseBackupProcess:
+				lbeentry.st_backendType = B_BASE_BACKUP;
+				break;
 			case BgWriterProcess:
 				lbeentry.st_backendType = B_BG_WRITER;
 				break;
@@ -4288,6 +4291,9 @@ pgstat_get_backend_desc(BackendType backendType)
 			break;
 		case B_BG_WORKER:
 			backendDesc = "background worker";
+			break;
+		case B_BASE_BACKUP:
+			backendDesc = "base backup";
 			break;
 		case B_BG_WRITER:
 			backendDesc = "background writer";

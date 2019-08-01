@@ -36,6 +36,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
+#include "replication/basebackup_client.h"
 #include "replication/walreceiver.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
@@ -326,6 +327,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case StartupProcess:
 				statmsg = pgstat_get_backend_desc(B_STARTUP);
 				break;
+			case BaseBackupProcess:
+				statmsg = pgstat_get_backend_desc(B_BASE_BACKUP);
+				break;
 			case BgWriterProcess:
 				statmsg = pgstat_get_backend_desc(B_BG_WRITER);
 				break;
@@ -449,6 +453,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case StartupProcess:
 			/* don't set signals, startup process has its own agenda */
 			StartupProcessMain();
+			proc_exit(1);		/* should never return */
+
+		case BaseBackupProcess:
+			/* don't set signals, basebackup has its own agenda */
+			BaseBackupMain();
 			proc_exit(1);		/* should never return */
 
 		case BgWriterProcess:

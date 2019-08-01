@@ -906,7 +906,6 @@ static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpti, bool report);
 static bool rescanLatestTimeLine(void);
 static void WriteControlFile(void);
-static void ReadControlFile(void);
 static char *str_time(pg_time_t tnow);
 static bool CheckForStandbyTrigger(void);
 
@@ -4573,7 +4572,7 @@ WriteControlFile(void)
 						XLOG_CONTROL_FILE)));
 }
 
-static void
+void
 ReadControlFile(void)
 {
 	pg_crc32c	crc;
@@ -6225,13 +6224,11 @@ StartupXLOG(void)
 	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	/*
-	 * Verify XLOG status looks valid.
+	 * Check that contents look valid.
 	 */
-	if (ControlFile->state < DB_SHUTDOWNED ||
-		ControlFile->state > DB_IN_PRODUCTION ||
-		!XRecOffIsValid(ControlFile->checkPoint))
+	if (!XRecOffIsValid(ControlFile->checkPoint))
 		ereport(FATAL,
-				(errmsg("control file contains invalid data")));
+				(errmsg("control file contains invalid checkpoint location")));
 
 	if (ControlFile->state == DB_SHUTDOWNED)
 	{
@@ -6264,6 +6261,9 @@ StartupXLOG(void)
 		ereport(LOG,
 				(errmsg("database system was interrupted; last known up at %s",
 						str_time(ControlFile->time))));
+	else
+		ereport(FATAL,
+				(errmsg("control file contains invalid database cluster state")));
 
 	/* This is just to allow attaching to startup process with a debugger */
 #ifdef XLOG_REPLAY_DELAY

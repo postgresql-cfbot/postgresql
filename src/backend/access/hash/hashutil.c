@@ -289,7 +289,28 @@ _hash_checkpage(Relation rel, Buffer buf, int flags)
 bytea *
 hashoptions(Datum reloptions, bool validate)
 {
-	return default_reloptions(reloptions, validate, RELOPT_KIND_HASH);
+	relopt_value *options;
+	HashRelOptions *rdopts;
+	int			numoptions;
+	static const relopt_parse_elt tab[] = {
+		{"fillfactor", RELOPT_TYPE_INT, offsetof(HashRelOptions, fillfactor)},
+	};
+
+	options = parseRelOptions(reloptions, validate, RELOPT_KIND_HASH,
+							  &numoptions);
+
+	/* if none set, we're done */
+	if (numoptions == 0)
+		return NULL;
+
+	rdopts = allocateReloptStruct(sizeof(HashRelOptions), options, numoptions);
+
+	fillRelOptions((void *) rdopts, sizeof(HashRelOptions), options, numoptions,
+				   validate, tab, lengthof(tab));
+
+	pfree(options);
+
+	return (bytea *) rdopts;
 }
 
 /*

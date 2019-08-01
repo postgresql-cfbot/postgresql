@@ -31,6 +31,7 @@
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
@@ -1758,7 +1759,10 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	if (params->index_cleanup == VACOPT_TERNARY_DEFAULT)
 	{
 		if (onerel->rd_options == NULL ||
-			((StdRdOptions *) onerel->rd_options)->vacuum_index_cleanup)
+			(!IsToastRelation(onerel) &&
+			 ((HeapRelOptions *) onerel->rd_options)->vacuum_index_cleanup) ||
+			(IsToastRelation(onerel) &&
+			 ((ToastRelOptions *) onerel->rd_options)->vacuum_index_cleanup))
 			params->index_cleanup = VACOPT_TERNARY_ENABLED;
 		else
 			params->index_cleanup = VACOPT_TERNARY_DISABLED;
@@ -1768,7 +1772,10 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	if (params->truncate == VACOPT_TERNARY_DEFAULT)
 	{
 		if (onerel->rd_options == NULL ||
-			((StdRdOptions *) onerel->rd_options)->vacuum_truncate)
+			(!IsToastRelation(onerel) &&
+			 ((HeapRelOptions *) onerel->rd_options)->vacuum_truncate) ||
+			(IsToastRelation(onerel) &&
+			 ((ToastRelOptions *) onerel->rd_options)->vacuum_truncate))
 			params->truncate = VACOPT_TERNARY_ENABLED;
 		else
 			params->truncate = VACOPT_TERNARY_DISABLED;

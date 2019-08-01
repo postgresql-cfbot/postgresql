@@ -542,13 +542,22 @@ target server since it isn't done by default.
 
 sub backup
 {
-	my ($self, $backup_name) = @_;
+	my ($self, $backup_name, %params) = @_;
 	my $backup_path = $self->backup_dir . '/' . $backup_name;
 	my $name        = $self->name;
+	my @rest = ();
+
+	if (defined $params{tablespace_mappings})
+	{
+		my @ts_mappings = split(/,/, $params{tablespace_mappings});
+		foreach my $elem (@ts_mappings) {
+			push(@rest, '--tablespace-mapping='.$elem);
+		}
+	}
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	TestLib::system_or_bail('pg_basebackup', '-D', $backup_path, '-h',
-		$self->host, '-p', $self->port, '--no-sync');
+		$self->host, '-p', $self->port, '--no-sync', @rest);
 	print "# Backup finished\n";
 	return;
 }

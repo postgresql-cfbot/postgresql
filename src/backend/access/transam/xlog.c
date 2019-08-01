@@ -40,6 +40,7 @@
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
 #include "commands/tablespace.h"
+#include "commands/dbcommands.h"
 #include "common/controldata_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -7857,6 +7858,9 @@ CheckRecoveryConsistency(void)
 		 * references to uninitialized pages.
 		 */
 		XLogCheckInvalidPages();
+
+		/* Check whether some missing directories are unexpected. */
+		CheckMissingDirs4DbaseRedo();
 
 		reachedConsistency = true;
 		ereport(LOG,

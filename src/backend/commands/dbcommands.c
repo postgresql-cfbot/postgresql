@@ -45,6 +45,7 @@
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
 #include "commands/tablespace.h"
+#include "common/file_perm.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -92,6 +93,68 @@ static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
 
+static void log_missing_directory(char *dir);
+static void forget_missing_directory(char *dir);
+
+/*
+ * During XLOG replay, we may see either src directory or dst directory
+ * is missing during copying directory when creating database in dbase_redo()
+ * if the related tablespace was later dropped but we do re-redoing in
+ * recovery after abnormal shutdown. We do simply ignore copying in
+ * dbase_redo() but log those directories in memory and then sanity check
+ * the potential bug or bad user behaviors.
+ *
+ * We use List for simplicity since this should be ok for most cases - the
+ * list should be not long in usual case.
+ */
+static List *missing_dirs_dbase_redo = NIL;
+
+void
+CheckMissingDirs4DbaseRedo()
+{
+	ListCell *lc;
+
+	if (missing_dirs_dbase_redo == NIL)
+		return;
+
+	foreach(lc, missing_dirs_dbase_redo)
+	{
+		char *dir_entry = (char *) lfirst(lc);
+
+		elog(LOG, "Directory \"%s\" was missing during directory copying "
+			 "when replaying 'database create'", dir_entry);
+	}
+
+	elog(PANIC, "WAL replay was wrong due to previous missing directories");
+}
+
+static void
+log_missing_directory(char *dir)
+{
+	elog(DEBUG2, "Logging missing directory for dbase_redo(): \"%s\"", dir);
+	missing_dirs_dbase_redo = lappend(missing_dirs_dbase_redo, pstrdup(dir));
+}
+
+static void
+forget_missing_directory(char *dir)
+{
+	ListCell *prev, *lc;
+
+	prev = NULL;
+	foreach(lc, missing_dirs_dbase_redo)
+	{
+		char *dir_entry = (char *) lfirst(lc);
+
+		if (strcmp(dir_entry, dir) == 0)
+		{
+			missing_dirs_dbase_redo = list_delete_cell(missing_dirs_dbase_redo, lc, prev);
+			elog(DEBUG2, "forgetting missing directory for dbase_redo(): \"%s\"", dir);
+			return;
+		}
+
+		prev = lc;
+	}
+}
 
 /*
  * CREATE DATABASE
@@ -2129,7 +2192,9 @@ dbase_redo(XLogReaderState *record)
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) XLogRecGetData(record);
 		char	   *src_path;
 		char	   *dst_path;
+		char	   *parent_path;
 		struct stat st;
+		bool	    do_copydir = true;
 
 		src_path = GetDatabasePath(xlrec->src_db_id, xlrec->src_tablespace_id);
 		dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
@@ -2147,6 +2212,43 @@ dbase_redo(XLogReaderState *record)
 						(errmsg("some useless files may be left behind in old database directory \"%s\"",
 								dst_path)));
 		}
+		else
+		{
+			/*
+			 * It is possible that the tablespace was previously dropped, but
+			 * we are re-redoing database create with that tablespace after
+			 * an abnormal shutdown (e.g. immediate shutdown). In that case,
+			 * the directory are missing, we simply skip the copydir step.
+			 */
+			parent_path = pstrdup(dst_path);
+			get_parent_directory(parent_path);
+			if (!(stat(parent_path, &st) == 0 && S_ISDIR(st.st_mode)))
+			{
+				do_copydir = false;
+				log_missing_directory(dst_path);
+				ereport(WARNING,
+						(errmsg("Skip creating database directory \"%s\". "
+								"The dest tablespace may have been removed "
+								"before abnormal shutdown. If the removal "
+								"is illegal after later checking we will panic.",
+								parent_path)));
+			}
+			pfree(parent_path);
+		}
+
+		/* src directory is possibly missing during redo also. */
+		if (!(stat(src_path, &st) == 0 && S_ISDIR(st.st_mode)))
+		{
+			do_copydir = false;
+			log_missing_directory(src_path);
+			ereport(WARNING,
+					(errmsg("Skip creating database directory based on "
+							"\"%s\". The src tablespace may have been "
+							"removed before abnormal shutdown. If the removal "
+							"is illegal after later checking we will panic.",
+							src_path)));
+
+		}
 
 		/*
 		 * Force dirty buffers out to disk, to ensure source database is
@@ -2159,7 +2261,8 @@ dbase_redo(XLogReaderState *record)
 		 *
 		 * We don't need to copy subdirectories
 		 */
-		copydir(src_path, dst_path, false);
+		if (do_copydir)
+			copydir(src_path, dst_path, false);
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
@@ -2201,6 +2304,8 @@ dbase_redo(XLogReaderState *record)
 			ereport(WARNING,
 					(errmsg("some useless files may be left behind in old database directory \"%s\"",
 							dst_path)));
+
+		forget_missing_directory(dst_path);
 
 		if (InHotStandby)
 		{

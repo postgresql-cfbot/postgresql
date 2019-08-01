@@ -187,6 +187,13 @@ typedef struct CopyStateData
 
 	TransitionCaptureState *transition_capture;
 
+	/* For use by file_fdw's parallel scans. */
+	uint64		current_offset;
+	uint64		start_offset;	/* start of current chunk */
+	uint64		last_offset;	/* one past the current chunk */
+	uint64		parallel_step_size;
+	pg_atomic_uint64 *next_parallel_step_offset;
+
 	/*
 	 * These variables are used to reduce overhead in textual COPY FROM.
 	 *
@@ -304,6 +311,7 @@ if (1) \
 { \
 	if (raw_buf_ptr + (extralen) >= copy_buf_len && !hit_eof) \
 	{ \
+		CONSUME_BYTES(prev_raw_ptr - raw_buf_ptr); \
 		raw_buf_ptr = prev_raw_ptr; /* undo fetch */ \
 		need_data = true; \
 		continue; \
@@ -317,7 +325,10 @@ if (1) \
 	if (raw_buf_ptr + (extralen) >= copy_buf_len && hit_eof) \
 	{ \
 		if (extralen) \
+		{ \
+			CONSUME_BYTES(copy_buf_len - raw_buf_ptr); \
 			raw_buf_ptr = copy_buf_len; /* consume the partial character */ \
+		} \
 		/* backslash just before EOF, treat as data char */ \
 		result = true; \
 		break; \
@@ -340,10 +351,15 @@ if (1) \
 	} \
 } else ((void) 0)
 
+/* Update the offset of the byte within the file. */
+#define CONSUME_BYTES(n) \
+	cstate->current_offset += (n)
+
 /* Undo any read-ahead and jump out of the block. */
 #define NO_END_OF_COPY_GOTO \
 if (1) \
 { \
+	CONSUME_BYTES((prev_raw_ptr + 1) - raw_buf_ptr); \
 	raw_buf_ptr = prev_raw_ptr + 1; \
 	goto not_end_of_copy; \
 } else ((void) 0)
@@ -378,6 +394,7 @@ static void CopyAttributeOutCSV(CopyState cstate, char *string,
 static List *CopyGetAttnums(TupleDesc tupDesc, Relation rel,
 							List *attnamelist);
 static char *limit_printout_length(const char *str);
+static void ParallelCopyStep(CopyState cstate);
 
 /* Low-level communications functions */
 static void SendCopyBegin(CopyState cstate);
@@ -3375,6 +3392,68 @@ CopyFrom(CopyState cstate)
 }
 
 /*
+ * Enable parallel scan while copying from a file.  Currently used only by
+ * file_fdw.
+ */
+void
+EnableParallelCopy(CopyState cstate,
+				   uint64 parallel_step_size,
+				   pg_atomic_uint64 *next_parallel_step_offset)
+{
+	cstate->start_offset = 0;
+	cstate->last_offset = 0;
+	cstate->current_offset = 0;
+	cstate->parallel_step_size = parallel_step_size;
+	cstate->next_parallel_step_offset = next_parallel_step_offset;
+}
+
+/*
+ * Find a new chunk of data to read.
+ */
+void
+ParallelCopyStep(CopyState cstate)
+{
+	for (;;)
+	{
+		/* Take the next available chunk using the shared cursor. */
+		cstate->start_offset = cstate->current_offset =
+			pg_atomic_fetch_add_u64(cstate->next_parallel_step_offset,
+									cstate->parallel_step_size);
+		cstate->last_offset = cstate->start_offset +
+			cstate->parallel_step_size;
+		cstate->raw_buf_index = cstate->raw_buf_len = 0;
+
+		/* Seek to that position in the file. */
+		if (fseek(cstate->copy_file, cstate->start_offset, SEEK_SET) < 0)
+			elog(ERROR, "cannot seek within file: %m");
+
+		/*
+		 * Except for the very first page, we need to discard the first line we
+		 * find.  That's because it could be a partial line.  Whichever process
+		 * is working on the previous chunk will handle it.
+		 */
+		if (cstate->start_offset > 0)
+		{
+			cstate->cur_lineno++;
+			CopyReadLine(cstate);
+
+			/*
+			 * If the tail of the discarded line was bigger than one chunk,
+			 * then we need to find a new chunk.  In other words, if
+			 * several processes find themselves at different places in the
+			 * middle of the same very long line, only the one that started
+			 * on the same chunk as the *end* of the line gets to process the
+			 * rest of that chunk.  Everyone else has to go around and find a
+			 * new chunk.
+			 */
+			if (cstate->current_offset > cstate->last_offset)
+				continue;
+		}
+		break;
+	}
+}
+
+/*
  * Setup to read tuples from a file for COPY FROM.
  *
  * 'rel': Used as a template for the tuples
@@ -3642,8 +3721,19 @@ NextCopyFromRawFields(CopyState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->binary);
 
+	/*
+	 * If parallel copy, make sure we have a chunk.  Note that we are
+	 * responsible for reading a line that begins exactly on the first byte of
+	 * the next chunk, too, because the owner of the next chunk will skip it
+	 * (it can't tell if that's a whole line or a partial line).
+	 */
+	if (cstate->next_parallel_step_offset &&
+		(cstate->current_offset > cstate->last_offset || cstate->last_offset == 0))
+		ParallelCopyStep(cstate);
+
 	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->header_line)
+	if (cstate->start_offset == 0 &&
+		cstate->cur_lineno == 0 && cstate->header_line)
 	{
 		cstate->cur_lineno++;
 		if (CopyReadLine(cstate))
@@ -4075,6 +4165,7 @@ CopyReadLineText(CopyState cstate)
 		/* OK to fetch a character */
 		prev_raw_ptr = raw_buf_ptr;
 		c = copy_raw_buf[raw_buf_ptr++];
+		CONSUME_BYTES(1);
 
 		if (cstate->csv_mode)
 		{
@@ -4138,6 +4229,7 @@ CopyReadLineText(CopyState cstate)
 				if (c == '\n')
 				{
 					raw_buf_ptr++;	/* eat newline */
+					CONSUME_BYTES(1);
 					cstate->eol_type = EOL_CRNL;	/* in case not set yet */
 				}
 				else
@@ -4212,6 +4304,7 @@ CopyReadLineText(CopyState cstate)
 			if (c2 == '.')
 			{
 				raw_buf_ptr++;	/* consume the '.' */
+				CONSUME_BYTES(1);
 
 				/*
 				 * Note: if we loop back for more data here, it does not
@@ -4224,6 +4317,7 @@ CopyReadLineText(CopyState cstate)
 					IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(0);
 					/* if hit_eof, c2 will become '\0' */
 					c2 = copy_raw_buf[raw_buf_ptr++];
+					CONSUME_BYTES(1);
 
 					if (c2 == '\n')
 					{
@@ -4249,6 +4343,7 @@ CopyReadLineText(CopyState cstate)
 				IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(0);
 				/* if hit_eof, c2 will become '\0' */
 				c2 = copy_raw_buf[raw_buf_ptr++];
+				CONSUME_BYTES(1);
 
 				if (c2 != '\r' && c2 != '\n')
 				{
@@ -4295,6 +4390,7 @@ CopyReadLineText(CopyState cstate)
 				 * so we don't increment in those cases.
 				 */
 				raw_buf_ptr++;
+				CONSUME_BYTES(1);
 		}
 
 		/*
@@ -4327,6 +4423,7 @@ not_end_of_copy:
 			IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(mblen - 1);
 			IF_NEED_REFILL_AND_EOF_BREAK(mblen - 1);
 			raw_buf_ptr += mblen - 1;
+			CONSUME_BYTES(mblen - 1);
 		}
 		first_char_in_line = false;
 	}							/* end of outer loop */

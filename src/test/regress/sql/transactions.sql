@@ -489,8 +489,8 @@ DROP TABLE abc;
 
 create temp table i_table (f1 int);
 
--- psql will show only the last result in a multi-statement Query
-SELECT 1\; SELECT 2\; SELECT 3;
+-- psql will show all results of a multi-statement Query
+SELECT 1 AS one\; SELECT 2 AS two\; SELECT 3 AS three;
 
 -- this implicitly commits:
 insert into i_table values(1)\; select * from i_table;
@@ -508,9 +508,9 @@ rollback;  -- we are not in a transaction at this point
 
 -- begin converts implicit transaction into a regular one that
 -- can extend past the end of the Query
-select 1\; begin\; insert into i_table values(5);
+select 1 AS one\; begin\; insert into i_table values(5);
 commit;
-select 1\; begin\; insert into i_table values(6);
+select 1 AS one\; begin\; insert into i_table values(6);
 rollback;
 
 -- commit in implicit-transaction state commits but issues a warning.
@@ -523,17 +523,17 @@ select * from i_table;
 rollback;  -- we are not in a transaction at this point
 
 -- implicit transaction block is still a transaction block, for e.g. VACUUM
-SELECT 1\; VACUUM;
-SELECT 1\; COMMIT\; VACUUM;
+SELECT 1 AS one\; VACUUM;
+SELECT 2 AS two\; COMMIT\; VACUUM;
 
 -- we disallow savepoint-related commands in implicit-transaction state
-SELECT 1\; SAVEPOINT sp;
-SELECT 1\; COMMIT\; SAVEPOINT sp;
-ROLLBACK TO SAVEPOINT sp\; SELECT 2;
-SELECT 2\; RELEASE SAVEPOINT sp\; SELECT 3;
+SELECT 3 AS three\; SAVEPOINT sp;
+SELECT 4 AS four\; COMMIT\; SAVEPOINT sp;
+ROLLBACK TO SAVEPOINT sp\; SELECT 5 AS five;
+SELECT 6 AS six\; RELEASE SAVEPOINT sp\; SELECT 7 AS seven;
 
 -- but this is OK, because the BEGIN converts it to a regular xact
-SELECT 1\; BEGIN\; SAVEPOINT sp\; ROLLBACK TO SAVEPOINT sp\; COMMIT;
+SELECT 8\; BEGIN\; SAVEPOINT sp\; ROLLBACK TO SAVEPOINT sp\; COMMIT;
 
 
 -- Test for successful cleanup of an aborted transaction at session exit.

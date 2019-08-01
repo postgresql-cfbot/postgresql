@@ -2472,12 +2472,20 @@ InitBufferPoolBackend(void)
 }
 
 /*
- * During backend exit, ensure that we released all shared-buffer locks and
- * assert that we have no remaining pins.
+ * During backend exit, we release all shared-buffer locks before
+ * AbortBufferIO() and assert that we have no remaining pins.
  */
 static void
 AtProcExit_Buffers(int code, Datum arg)
 {
+	/*
+	 * AtProcExit_Buffers() could be called in a cascade exception when
+	 * the previous callback re-acquired some lw-lock again.
+	 * Here we make sure that every time AbortBufferIO() is called the
+	 * lw-locks have been already released.
+	 */
+	LWLockReleaseAll();
+
 	AbortBufferIO();
 	UnlockBuffers();
 

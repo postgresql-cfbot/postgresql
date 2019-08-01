@@ -2164,9 +2164,10 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			if (valid)
 			{
 				hscan->rs_vistuples[ntup++] = offnum;
-				PredicateLockTuple(scan->rs_rd, &loctup, snapshot);
+				PredicateLockTID(scan->rs_rd, &loctup.t_self, snapshot,
+								 HeapTupleHeaderGetXmin(loctup.t_data));
 			}
-			CheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
+			HeapCheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
 											buffer, snapshot);
 		}
 	}
@@ -2354,7 +2355,7 @@ heapam_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 
 			/* in pagemode, heapgetpage did this for us */
 			if (!pagemode)
-				CheckForSerializableConflictOut(visible, scan->rs_rd, tuple,
+				HeapCheckForSerializableConflictOut(visible, scan->rs_rd, tuple,
 												hscan->rs_cbuf, scan->rs_snapshot);
 
 			/* Try next tuple from same page. */

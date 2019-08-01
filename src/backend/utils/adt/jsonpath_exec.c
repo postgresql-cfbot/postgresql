@@ -583,7 +583,7 @@ executeItemOptUnwrapTarget(JsonPathExecContext *cxt, JsonPathItem *jsp,
 				key.val.string.val = jspGetString(jsp, &key.val.string.len);
 
 				v = findJsonbValueFromContainer(jb->val.binary.data,
-												JB_FOBJECT, &key);
+												JB_FOBJECT, &key, NULL);
 
 				if (v != NULL)
 				{
@@ -715,7 +715,7 @@ executeItemOptUnwrapTarget(JsonPathExecContext *cxt, JsonPathItem *jsp,
 						else
 						{
 							v = getIthJsonbValueFromContainer(jb->val.binary.data,
-															  (uint32) index);
+															  (uint32) index, NULL);
 
 							if (v == NULL)
 								continue;
@@ -1933,7 +1933,7 @@ getJsonPathVariable(JsonPathExecContext *cxt, JsonPathItem *variable,
 	tmp.val.string.val = varName;
 	tmp.val.string.len = varNameLength;
 
-	v = findJsonbValueFromContainer(&vars->root, JB_FOBJECT, &tmp);
+	v = findJsonbValueFromContainer(&vars->root, JB_FOBJECT, &tmp, NULL);
 
 	if (v)
 	{

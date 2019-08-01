@@ -79,6 +79,9 @@ static Node *pull_up_simple_union_all(PlannerInfo *root, Node *jtnode,
 static void pull_up_union_leaf_queries(Node *setOp, PlannerInfo *root,
 									   int parentRTindex, Query *setOpQuery,
 									   int childRToffset);
+static void transform_const_function_to_result(PlannerInfo *root, Node *jtnode,
+									 RangeTblEntry *rte,
+									 JoinExpr *lowest_nulling_outer_join);
 static void make_setop_translation_list(Query *query, Index newvarno,
 										List **translated_vars);
 static bool is_simple_subquery(Query *subquery, RangeTblEntry *rte,
@@ -753,6 +756,18 @@ pull_up_subqueries_recurse(PlannerInfo *root, Node *jtnode,
 			containing_appendrel == NULL &&
 			is_simple_values(root, rte))
 			return pull_up_simple_values(root, jtnode, rte);
+
+		/*
+		 * Or is it an immutable function that evaluated to a single Const?
+		 */
+		if (rte->rtekind == RTE_FUNCTION)
+		{
+			rte->functions = (List *)
+				eval_const_expressions(root, (Node *) rte->functions);
+			transform_const_function_to_result(root, jtnode, rte,
+											   lowest_nulling_outer_join);
+			return jtnode;
+		}
 
 		/* Otherwise, do nothing at this node. */
 	}
@@ -1781,6 +1796,78 @@ is_simple_union_all_recurse(Node *setOp, Query *setOpQuery, List *colTypes)
 			 (int) nodeTag(setOp));
 		return false;			/* keep compiler quiet */
 	}
+}
+
+/*
+ * If the function of this RTE_FUNCTION entry evaluated to a single Const
+ * after eval_const_expressions, transform it to RTE_RESULT.
+ */
+static void
+transform_const_function_to_result(PlannerInfo *root, Node *jtnode,
+								   RangeTblEntry *rte,
+								   JoinExpr *lowest_nulling_outer_join)
+{
+	ListCell *lc;
+	pullup_replace_vars_context rvcontext;
+	RangeTblFunction *rtf = (RangeTblFunction *) linitial(rte->functions);
+	Query *parse = root->parse;
+
+	if (!IsA(rtf->funcexpr, Const))
+		return;
+
+	/* Fail if the RTE has ORDINALITY - we don't implement that here. */
+	if (rte->funcordinality)
+		return;
+
+	/* Fail if RTE isn't a single, simple Const expr */
+	if (list_length(rte->functions) != 1)
+		return;
+
+	rvcontext.targetlist = list_make1(makeTargetEntry((Expr *) rtf->funcexpr,
+		1 /* resno */, NULL /* resname */, false /* resjunk */));
+	rvcontext.root = root;
+	rvcontext.target_rte = rte;
+
+	/*
+	 * Since this function was reduced to Const, it can't really have lateral
+	 * references, even if it's marked as LATERAL. This means we don't need
+	 * to fill relids.
+	 */
+	rvcontext.relids = NULL;
+
+	rvcontext.outer_hasSubLinks = &parse->hasSubLinks;
+	rvcontext.varno = ((RangeTblRef *) jtnode)->rtindex;
+
+	/*
+	 * If this RTE is on a nullable side of an outer join, we have to insert
+	 * PHVs around our Consts so that they go to null when needed.
+	 */
+	rvcontext.need_phvs = lowest_nulling_outer_join != NULL;
+
+	rvcontext.wrap_non_vars = false;
+	rvcontext.rv_cache = palloc0((list_length(rvcontext.targetlist) + 1)
+								 * sizeof(Node *));
+
+	parse->targetList = (List *)
+			pullup_replace_vars((Node *) parse->targetList, &rvcontext);
+	parse->returningList = (List *)
+			pullup_replace_vars((Node *) parse->returningList, &rvcontext);
+	replace_vars_in_jointree((Node *) parse->jointree, &rvcontext, NULL);
+
+	foreach(lc, parse->rtable)
+	{
+		RangeTblEntry *otherrte = (RangeTblEntry *) lfirst(lc);
+
+		if (otherrte->rtekind == RTE_JOIN)
+			otherrte->joinaliasvars = (List *)
+				pullup_replace_vars((Node *) otherrte->joinaliasvars,
+									&rvcontext);
+	}
+
+	rte->rtekind = RTE_RESULT;
+	rte->functions = NIL;
+
+	return;
 }
 
 /*

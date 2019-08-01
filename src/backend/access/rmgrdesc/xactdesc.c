@@ -209,6 +209,41 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 	}
 }
 
+/*
+ * ParsePrepareRecord
+ */
+void
+ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *parsed)
+{
+	char	   *bufptr;
+
+	bufptr = (char *) xlrec + MAXALIGN(sizeof(xl_xact_prepare));
+
+	parsed->origin_lsn = xlrec->origin_lsn;
+	parsed->origin_timestamp = xlrec->origin_timestamp;
+	parsed->twophase_xid = xlrec->xid;
+	parsed->dbId = xlrec->database;
+	parsed->nsubxacts = xlrec->nsubxacts;
+	parsed->nrels = xlrec->ncommitrels;
+	parsed->nabortrels = xlrec->nabortrels;
+	parsed->nmsgs = xlrec->ninvalmsgs;
+
+	strncpy(parsed->twophase_gid, bufptr, xlrec->gidlen);
+	bufptr += MAXALIGN(xlrec->gidlen);
+
+	parsed->subxacts = (TransactionId *) bufptr;
+	bufptr += MAXALIGN(xlrec->nsubxacts * sizeof(TransactionId));
+
+	parsed->xnodes = (RelFileNode *) bufptr;
+	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileNode));
+
+	parsed->abortnodes = (RelFileNode *) bufptr;
+	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileNode));
+
+	parsed->msgs = (SharedInvalidationMessage *) bufptr;
+	bufptr += MAXALIGN(xlrec->ninvalmsgs * sizeof(SharedInvalidationMessage));
+}
+
 static void
 xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId origin_id)
 {
@@ -294,6 +329,17 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec)
 }
 
 static void
+xact_desc_prepare(StringInfo buf, uint8 info, xl_xact_prepare *xlrec)
+{
+	xl_xact_parsed_prepare parsed;
+
+	ParsePrepareRecord(info, xlrec, &parsed);
+
+	appendStringInfo(buf, "gid %s: ", parsed.twophase_gid);
+	appendStringInfoString(buf, timestamptz_to_str(parsed.xact_time));
+}
+
+static void
 xact_desc_assignment(StringInfo buf, xl_xact_assignment *xlrec)
 {
 	int			i;
@@ -322,6 +368,12 @@ xact_desc(StringInfo buf, XLogReaderState *record)
 		xl_xact_abort *xlrec = (xl_xact_abort *) rec;
 
 		xact_desc_abort(buf, XLogRecGetInfo(record), xlrec);
+	}
+	else if (info == XLOG_XACT_PREPARE)
+	{
+		xl_xact_prepare *xlrec = (xl_xact_prepare *) rec;
+
+		xact_desc_prepare(buf, XLogRecGetInfo(record), xlrec);
 	}
 	else if (info == XLOG_XACT_ASSIGNMENT)
 	{

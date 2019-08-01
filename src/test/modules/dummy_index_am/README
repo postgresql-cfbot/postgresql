@@ -1,0 +1,45 @@
+Dummy index AM
+==============
+
+Dummy index, an index module for testing am-related internal calls that can't be
+properly tested inside production indexes, but better to be tested inside actual
+access method module.
+
+Guidelines:
+1. Keep this index as simple as as possible. It should not do any real indexing
+(unless you need it for your tests), if you need it make it as simple as
+possible;
+2. Keep all code related to feature you test inside id[name_of_a_feature].c
+file. dummy_index.c file should contain code that is needed for everyone, and
+make calls to feature-related code;
+3. Code related to your feature tests should be enabled and disabled by GUC
+variables. Create as many boolean GUC variables as you need and set them on so
+your test will know when it is time to do test output. Thus output from
+different features tests are not interfered;
+4. Add section to this README file that describes the general idea of what your
+tests do.
+
+Reloptions tests
+================
+
+Some relotions testing are done in regression tests. There we can check if new
+option value properly reaches pg_class, minimum/maximum checks, etc. But we
+can't check if option value successfully reached index internal code when we are
+dealing with production indexes. But  we can do it here in Dummy index.
+Here we check that values of reloptions properly reaches am-internals, and that
+all reloption-related code works as expected. Several GUC variables are defined
+to control test's output. do_test_reloptions turns on and off any
+reloptions-related output. You will also get some test output in the case when
+no relation options is set at all. do_test_reloption_int,
+do_test_reloption_real, do_test_reloption_bool and do_test_reloption_string
+allows to enable test output for int, real, boolean and string options.
+do_test_reloption_string2 enables test output for another string option. We need
+second string option, because a) string reloption implementation is a bit
+tricky, and it is better to check that second value works as well; b) better to
+check both cases: string option with validation function and without one, so we
+need two string options.
+
+
+Authors
+=======
+Nikolay Shaplov <dhyan@nataraj.su> (Dummy index core, reloptions tests)

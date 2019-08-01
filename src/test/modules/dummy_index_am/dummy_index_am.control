@@ -1,0 +1,5 @@
+# dummy_index extension
+comment = 'dummmy_index_am access method that does nothin and is used for test purposes'
+default_version = '1.0'
+module_pathname = '$libdir/dummy_index_am'
+relocatable = true

@@ -744,6 +744,8 @@ pg_analyze_and_rewrite_params(RawStmt *parsetree,
 	if (post_parse_analyze_hook)
 		(*post_parse_analyze_hook) (pstate, query);
 
+	pg_atomic_write_u64(&MyProc->queryId, query->queryId);
+
 	free_parsestate(pstate);
 
 	if (log_parser_stats)
@@ -4050,6 +4052,12 @@ PostgresMain(int argc, char *argv[],
 		debug_query_string = NULL;
 
 		/*
+		 * Also reset the queryId, as any new error encountered before a
+		 * specific query is executed isn't linked to the last saved value
+		 */
+		pg_atomic_write_u64(&MyProc->queryId, 0);
+
+		/*
 		 * Abort the current transaction in order to recover.
 		 */
 		AbortCurrentTransaction();
@@ -4127,6 +4135,12 @@ PostgresMain(int argc, char *argv[],
 		 * errors encountered in "idle" state don't provoke skip.
 		 */
 		doing_extended_query_message = false;
+
+		/*
+		 * Also reset the queryId, so any error encountered before a specific
+		 * query is executed won't display the last saved value
+		 */
+		pg_atomic_write_u64(&MyProc->queryId, 0);
 
 		/*
 		 * Release storage left over from prior query cycle, and create a new

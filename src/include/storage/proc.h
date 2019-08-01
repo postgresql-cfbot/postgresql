@@ -173,6 +173,7 @@ struct PGPROC
 	 */
 	TransactionId procArrayGroupMemberXid;
 
+	pg_atomic_uint64	queryId;	/* current queryid if any */
 	uint32		wait_event_info;	/* proc's wait information */
 
 	/* Support for group transaction status update. */

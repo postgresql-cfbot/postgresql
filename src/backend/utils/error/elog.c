@@ -2594,6 +2594,20 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				else
 					appendStringInfoString(buf, unpack_sql_state(edata->sqlerrcode));
 				break;
+			case 'Q':
+				if (MyProc != NULL)
+				{
+					if (padding != 0)
+						appendStringInfo(buf, "%*ld", padding,
+								pg_atomic_read_u64(&MyProc->queryId));
+					else
+						appendStringInfo(buf, "%ld",
+								pg_atomic_read_u64(&MyProc->queryId));
+				}
+				else if (padding != 0)
+					appendStringInfoSpaces(buf,
+										   padding > 0 ? padding : -padding);
+				break;
 			default:
 				/* format error - ignore it */
 				break;

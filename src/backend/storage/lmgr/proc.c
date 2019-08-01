@@ -284,6 +284,7 @@ InitProcGlobal(void)
 		 */
 		pg_atomic_init_u32(&(procs[i].procArrayGroupNext), INVALID_PGPROCNO);
 		pg_atomic_init_u32(&(procs[i].clogGroupNext), INVALID_PGPROCNO);
+		pg_atomic_init_u64(&(procs[i].queryId), 0);
 	}
 
 	/*

@@ -24,6 +24,7 @@
 #include "executor/executor.h"
 #include "executor/spi_priv.h"
 #include "miscadmin.h"
+#include "storage/proc.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
@@ -1941,6 +1942,7 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 	List	   *plancache_list;
 	ListCell   *list_item;
 	ErrorContextCallback spierrcontext;
+	uint64		old_queryId = pg_atomic_read_u64(&MyProc->queryId);
 
 	/*
 	 * Setup error traceback support for ereport()
@@ -1996,6 +1998,8 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 											   plan->nargs,
 											   _SPI_current->queryEnv);
 		}
+
+		pg_atomic_write_u64(&MyProc->queryId, old_queryId);
 
 		/* Finish filling in the CachedPlanSource */
 		CompleteCachedPlan(plansource,
@@ -2108,6 +2112,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 	int			res = 0;
 	bool		pushed_active_snap = false;
 	ErrorContextCallback spierrcontext;
+	uint64		old_queryId = pg_atomic_read_u64(&MyProc->queryId);
 	CachedPlan *cplan = NULL;
 	ListCell   *lc1;
 
@@ -2196,6 +2201,8 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 												   plan->nargs,
 												   _SPI_current->queryEnv);
 			}
+
+			pg_atomic_write_u64(&MyProc->queryId, old_queryId);
 
 			/* Finish filling in the CachedPlanSource */
 			CompleteCachedPlan(plansource,
@@ -2366,6 +2373,8 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 				}
 			}
 
+			pg_atomic_write_u64(&MyProc->queryId, old_queryId);
+
 			/*
 			 * The last canSetTag query sets the status values returned to the
 			 * caller.  Be careful to free any tuptables not returned, to
@@ -2469,6 +2478,7 @@ static int
 _SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount)
 {
 	int			operation = queryDesc->operation;
+	uint64		old_queryId = pg_atomic_read_u64(&MyProc->queryId);
 	int			eflags;
 	int			res;
 
@@ -2533,6 +2543,8 @@ _SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount)
 	ExecutorEnd(queryDesc);
 	/* FreeQueryDesc is done by the caller */
 
+	pg_atomic_write_u64(&MyProc->queryId, old_queryId);
+
 #ifdef SPI_EXECUTOR_STATS
 	if (ShowExecutorStats)
 		ShowUsage("SPI EXECUTOR STATS");
@@ -2580,6 +2592,7 @@ _SPI_cursor_operation(Portal portal, FetchDirection direction, long count,
 					  DestReceiver *dest)
 {
 	uint64		nfetched;
+	uint64		old_queryId = pg_atomic_read_u64(&MyProc->queryId);
 
 	/* Check that the portal is valid */
 	if (!PortalIsValid(portal))
@@ -2613,6 +2626,8 @@ _SPI_cursor_operation(Portal portal, FetchDirection direction, long count,
 
 	if (dest->mydest == DestSPI && _SPI_checktuples())
 		elog(ERROR, "consistency check on SPI tuple count failed");
+
+	pg_atomic_write_u64(&MyProc->queryId, old_queryId);
 
 	/* Put the result into place for access by caller */
 	SPI_processed = _SPI_current->processed;

@@ -44,6 +44,7 @@
 #include "parser/parse_target.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "storage/proc.h"
 #include "utils/rel.h"
 
 
@@ -118,6 +119,8 @@ parse_analyze(RawStmt *parseTree, const char *sourceText,
 	if (post_parse_analyze_hook)
 		(*post_parse_analyze_hook) (pstate, query);
 
+	pg_atomic_write_u64(&MyProc->queryId, query->queryId);
+
 	free_parsestate(pstate);
 
 	return query;
@@ -150,6 +153,8 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 
 	if (post_parse_analyze_hook)
 		(*post_parse_analyze_hook) (pstate, query);
+
+	pg_atomic_write_u64(&MyProc->queryId, query->queryId);
 
 	free_parsestate(pstate);
 

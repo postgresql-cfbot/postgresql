@@ -6354,6 +6354,11 @@ local0.*    /var/log/postgresql
              <entry>no</entry>
             </row>
             <row>
+             <entry><literal>%Q</literal></entry>
+             <entry>queryid: identifier of session's current query, if any</entry>
+             <entry>yes</entry>
+            </row>
+            <row>
              <entry><literal>%%</literal></entry>
              <entry>Literal <literal>%</literal></entry>
              <entry>no</entry>

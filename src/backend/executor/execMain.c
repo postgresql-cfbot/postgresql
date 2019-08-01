@@ -143,6 +143,8 @@ static void EvalPlanQualStart(EPQState *epqstate, EState *parentestate,
 void
 ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
+	pg_atomic_write_u64(&MyProc->queryId, queryDesc->plannedstmt->queryId);
+
 	if (ExecutorStart_hook)
 		(*ExecutorStart_hook) (queryDesc, eflags);
 	else
@@ -303,6 +305,8 @@ ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count,
 			bool execute_once)
 {
+	pg_atomic_write_u64(&MyProc->queryId, queryDesc->plannedstmt->queryId);
+
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
 	else
@@ -402,6 +406,8 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 void
 ExecutorFinish(QueryDesc *queryDesc)
 {
+	pg_atomic_write_u64(&MyProc->queryId, queryDesc->plannedstmt->queryId);
+
 	if (ExecutorFinish_hook)
 		(*ExecutorFinish_hook) (queryDesc);
 	else
@@ -462,6 +468,8 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 void
 ExecutorEnd(QueryDesc *queryDesc)
 {
+	pg_atomic_write_u64(&MyProc->queryId, queryDesc->plannedstmt->queryId);
+
 	if (ExecutorEnd_hook)
 		(*ExecutorEnd_hook) (queryDesc);
 	else
@@ -540,6 +548,8 @@ ExecutorRewind(QueryDesc *queryDesc)
 
 	/* It's probably not sensible to rescan updating queries */
 	Assert(queryDesc->operation == CMD_SELECT);
+
+	pg_atomic_write_u64(&MyProc->queryId, queryDesc->plannedstmt->queryId);
 
 	/*
 	 * Switch into per-query memory context

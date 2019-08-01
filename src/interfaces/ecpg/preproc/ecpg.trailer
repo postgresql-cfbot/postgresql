@@ -1812,7 +1812,6 @@ ecpg_sconst:
 			$$[strlen($1)+3]='\0';
 			free($1);
 		}
-		| UCONST	{ $$ = $1; }
 		| DOLCONST	{ $$ = $1; }
 		;
 
@@ -1820,7 +1819,6 @@ ecpg_xconst:	XCONST		{ $$ = make_name(); } ;
 
 ecpg_ident:	IDENT		{ $$ = make_name(); }
 		| CSTRING	{ $$ = make3_str(mm_strdup("\""), $1, mm_strdup("\"")); }
-		| UIDENT	{ $$ = $1; }
 		;
 
 quoted_ident_stringvar: name

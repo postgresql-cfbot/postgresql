@@ -60,6 +60,7 @@
 #include "parser/gramparse.h"
 #include "parser/parser.h"
 #include "parser/parse_expr.h"
+#include "parser/scansup.h"
 #include "storage/lmgr.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
@@ -188,6 +189,9 @@ static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
+static char * str_udeescape(char *str, int str_pos, char *esc_str, int esc_pos, core_yyscan_t yyscanner);
+static bool check_uescapechar(unsigned char escape);
+static bool check_unicode_value(pg_wchar c, char *loc, core_yyscan_t yyscanner);
 
 %}
 
@@ -528,6 +532,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <ival>	Iconst SignedIconst
 %type <str>		Sconst comment_text notify_payload
+%type <str>		Ident
 %type <str>		RoleId opt_boolean_or_string
 %type <list>	var_list
 %type <str>		ColId ColLabel var_name type_function_name param_name
@@ -599,7 +604,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  * DOT_DOT is unused in the core SQL grammar, and so will always provoke
  * parse errors.  It is needed by PL/pgSQL.
  */
-%token <str>	IDENT FCONST SCONST BCONST XCONST Op
+%token <str>	IDENT UIDENT FCONST SCONST UCONST BCONST XCONST Op
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
@@ -689,7 +694,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
-	UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
+	UESCAPE UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN UNLISTEN UNLOGGED
 	UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
@@ -718,6 +723,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 
 /* Precedence: lowest to highest */
+%nonassoc	UIDENT			/* UESCAPE must be higher than UIDENT */
+%nonassoc	UESCAPE
 %nonassoc	SET				/* see relation_expr_opt_alias */
 %left		UNION EXCEPT
 %left		INTERSECT
@@ -1048,7 +1055,7 @@ AlterOptRoleElem:
 				{
 					$$ = makeDefElem("rolemembers", (Node *)$2, @1);
 				}
-			| IDENT
+			| Ident
 				{
 					/*
 					 * We handle identifiers that aren't parser keywords with
@@ -1602,14 +1609,14 @@ opt_boolean_or_string:
  * - an integer or floating point number
  * - a time interval per SQL99
  * ColId gives reduce/reduce errors against ConstInterval and LOCAL,
- * so use IDENT (meaning we reject anything that is a key word).
+ * so use Ident (meaning we reject anything that is a key word).
  */
 zone_value:
 			Sconst
 				{
 					$$ = makeStringConst($1, @1);
 				}
-			| IDENT
+			| Ident
 				{
 					$$ = makeStringConst($1, @1);
 				}
@@ -3871,7 +3878,7 @@ PartitionSpec: PARTITION BY part_strategy '(' part_params ')'
 				}
 		;
 
-part_strategy:	IDENT					{ $$ = $1; }
+part_strategy:	Ident					{ $$ = $1; }
 				| unreserved_keyword	{ $$ = pstrdup($1); }
 		;
 
@@ -5262,7 +5269,7 @@ RowSecurityOptionalToRole:
 		;
 
 RowSecurityDefaultPermissive:
-			AS IDENT
+			AS Ident
 				{
 					if (strcmp($2, "permissive") == 0)
 						$$ = true;
@@ -5831,11 +5838,11 @@ old_aggr_list: old_aggr_elem						{ $$ = list_make1($1); }
 		;
 
 /*
- * Must use IDENT here to avoid reduce/reduce conflicts; fortunately none of
+ * Must use Ident here to avoid reduce/reduce conflicts; fortunately none of
  * the item names needed in old aggregate definitions are likely to become
  * SQL keywords.
  */
-old_aggr_elem:  IDENT '=' def_arg
+old_aggr_elem:  Ident '=' def_arg
 				{
 					$$ = makeDefElem($1, (Node *)$3, @1);
 				}
@@ -10113,7 +10120,7 @@ createdb_opt_item:
 /*
  * Ideally we'd use ColId here, but that causes shift/reduce conflicts against
  * the ALTER DATABASE SET/RESET syntaxes.  Instead call out specific keywords
- * we need, and allow IDENT so that database option names don't have to be
+ * we need, and allow Ident so that database option names don't have to be
  * parser keywords unless they are already keywords for other reasons.
  *
  * XXX this coding technique is fragile since if someone makes a formerly
@@ -10122,7 +10129,7 @@ createdb_opt_item:
  * exercising every such option, at least at the syntax level.
  */
 createdb_opt_name:
-			IDENT							{ $$ = $1; }
+			Ident							{ $$ = $1; }
 			| CONNECTION LIMIT				{ $$ = pstrdup("connection_limit"); }
 			| ENCODING						{ $$ = pstrdup($1); }
 			| LOCATION						{ $$ = pstrdup($1); }
@@ -12424,7 +12431,7 @@ xmltable_column_option_list:
 		;
 
 xmltable_column_option_el:
-			IDENT b_expr
+			Ident b_expr
 				{ $$ = makeDefElem($1, $2, @1); }
 			| DEFAULT b_expr
 				{ $$ = makeDefElem("default", $2, @1); }
@@ -14412,7 +14419,7 @@ extract_list:
  * - thomas 2001-04-12
  */
 extract_arg:
-			IDENT									{ $$ = $1; }
+			Ident									{ $$ = $1; }
 			| YEAR_P								{ $$ = "year"; }
 			| MONTH_P								{ $$ = "month"; }
 			| DAY_P									{ $$ = "day"; }
@@ -14655,7 +14662,7 @@ target_el:	a_expr AS ColLabel
 			 * as an infix expression, which we accomplish by assigning
 			 * IDENT a precedence higher than POSTFIXOP.
 			 */
-			| a_expr IDENT
+			| a_expr Ident
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $2;
@@ -14874,11 +14881,51 @@ AexprConst: Iconst
 		;
 
 Iconst:		ICONST									{ $$ = $1; };
-Sconst:		SCONST									{ $$ = $1; };
+Sconst:		SCONST
+				{
+					$$ = $1;
+				}
+			| UCONST
+				{
+					$$ = str_udeescape($1, @1, "\\", 0, yyscanner);
+				}
+			| UCONST UESCAPE SCONST
+				{
+					$$ = str_udeescape($1, @1, $3, @3, yyscanner);
+				}
+		;
 
 SignedIconst: Iconst								{ $$ = $1; }
 			| '+' Iconst							{ $$ = + $2; }
 			| '-' Iconst							{ $$ = - $2; }
+		;
+
+Ident:		IDENT
+				{
+					$$ = $1;
+				}
+			| UIDENT
+				{
+					char 	   *ident;
+					int			identlen;
+
+					ident = str_udeescape($1, @1, "\\", 0, yyscanner);
+					identlen = strlen(ident);
+					if (identlen >= NAMEDATALEN)
+						truncate_identifier(ident, identlen, true);
+					$$ = ident;
+				}
+			| UIDENT UESCAPE SCONST
+				{
+					char 	   *ident;
+					int			identlen;
+
+					ident = str_udeescape($1, @1, $3, @3, yyscanner);
+					identlen = strlen(ident);
+					if (identlen >= NAMEDATALEN)
+						truncate_identifier(ident, identlen, true);
+					$$ = ident;
+				}
 		;
 
 /* Role specifications */
@@ -14971,21 +15018,21 @@ role_list:	RoleSpec
 
 /* Column identifier --- names that can be column, table, etc names.
  */
-ColId:		IDENT									{ $$ = $1; }
+ColId:		Ident									{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 		;
 
 /* Type/function identifier --- names that can be type or function names.
  */
-type_function_name:	IDENT							{ $$ = $1; }
+type_function_name:	Ident							{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
 		;
 
 /* Any not-fully-reserved word --- these names can be, eg, role names.
  */
-NonReservedWord:	IDENT							{ $$ = $1; }
+NonReservedWord:	Ident							{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
@@ -14994,7 +15041,7 @@ NonReservedWord:	IDENT							{ $$ = $1; }
 /* Column label --- allowed labels in "AS" clauses.
  * This presently includes *all* Postgres keywords.
  */
-ColLabel:	IDENT									{ $$ = $1; }
+ColLabel:	Ident									{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
@@ -15282,6 +15329,7 @@ unreserved_keyword:
 			| TRUSTED
 			| TYPE_P
 			| TYPES_P
+			| UESCAPE
 			| UNBOUNDED
 			| UNCOMMITTED
 			| UNENCRYPTED
@@ -16350,4 +16398,203 @@ void
 parser_init(base_yy_extra_type *yyext)
 {
 	yyext->parsetree = NIL;		/* in case grammar forgets to set it */
+}
+
+/* handle unicode escapes */
+static char *
+str_udeescape(char *str, int str_pos,
+			  char *esc_str, int esc_pos,
+			  core_yyscan_t yyscanner)
+{
+	char	   *new,
+			   *in,
+			   *out;
+	int			str_length,
+				esc_length;
+	pg_wchar	pair_first = 0;
+	unsigned char escape;
+
+	esc_length = strlen(esc_str);
+	escape = esc_str[0];
+
+	str_length = strlen(str);
+
+	if (esc_length != 1 ||
+		!check_uescapechar(escape))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid Unicode escape character \"%s\"", esc_str),
+				 parser_errposition(esc_pos + 1))); /* 1 for the quote */
+
+	/*
+	 * This relies on the subtle assumption that a UTF-8 expansion cannot be
+	 * longer than its escaped representation.
+	 */
+	new = palloc(str_length + 1);
+
+	in = str;
+	out = new;
+	while (*in)
+	{
+		if (in[0] == escape)
+		{
+			if (in[1] == escape)
+			{
+				if (pair_first)
+					goto invalid_pair;
+				*out++ = escape;
+				in += 2;
+			}
+			else if (isxdigit((unsigned char) in[1]) &&
+					 isxdigit((unsigned char) in[2]) &&
+					 isxdigit((unsigned char) in[3]) &&
+					 isxdigit((unsigned char) in[4]))
+			{
+				pg_wchar	unicode;
+
+				unicode = (hexval(in[1]) << 12) +
+					(hexval(in[2]) << 8) +
+					(hexval(in[3]) << 4) +
+					hexval(in[4]);
+				if (!check_unicode_value(unicode, in, yyscanner))
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("Unicode escape values cannot be used for code point values above 007F when the server encoding is not UTF8"),
+							 parser_errposition(str_pos + (in - str) + 3))); /* 3 for U&" */
+				}
+
+				if (pair_first)
+				{
+					if (is_utf16_surrogate_second(unicode))
+					{
+						unicode = surrogate_pair_to_codepoint(pair_first, unicode);
+						pair_first = 0;
+					}
+					else
+						goto invalid_pair;
+				}
+				else if (is_utf16_surrogate_second(unicode))
+					goto invalid_pair;
+
+				if (is_utf16_surrogate_first(unicode))
+					pair_first = unicode;
+				else
+				{
+					unicode_to_utf8(unicode, (unsigned char *) out);
+					out += pg_mblen(out);
+				}
+				in += 5;
+			}
+			else if (in[1] == '+' &&
+					 isxdigit((unsigned char) in[2]) &&
+					 isxdigit((unsigned char) in[3]) &&
+					 isxdigit((unsigned char) in[4]) &&
+					 isxdigit((unsigned char) in[5]) &&
+					 isxdigit((unsigned char) in[6]) &&
+					 isxdigit((unsigned char) in[7]))
+			{
+				pg_wchar	unicode;
+
+				unicode = (hexval(in[2]) << 20) +
+					(hexval(in[3]) << 16) +
+					(hexval(in[4]) << 12) +
+					(hexval(in[5]) << 8) +
+					(hexval(in[6]) << 4) +
+					hexval(in[7]);
+				if (!check_unicode_value(unicode, in, yyscanner))
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("Unicode escape values cannot be used for code point values above 007F when the server encoding is not UTF8"),
+							 parser_errposition(str_pos + (in - str) + 3))); /* 3 for U&" */
+				}
+				if (pair_first)
+				{
+					if (is_utf16_surrogate_second(unicode))
+					{
+						unicode = surrogate_pair_to_codepoint(pair_first, unicode);
+						pair_first = 0;
+					}
+					else
+						goto invalid_pair;
+				}
+				else if (is_utf16_surrogate_second(unicode))
+					goto invalid_pair;
+
+				if (is_utf16_surrogate_first(unicode))
+					pair_first = unicode;
+				else
+				{
+					unicode_to_utf8(unicode, (unsigned char *) out);
+					out += pg_mblen(out);
+				}
+				in += 8;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid Unicode escape value"),
+						 parser_errposition(str_pos + (in - str) + 3))); /* 3 for U&" */
+		}
+		else
+		{
+			if (pair_first)
+				goto invalid_pair;
+
+			*out++ = *in++;
+		}
+	}
+
+	/* unfinished surrogate pair? */
+	if (pair_first)
+		goto invalid_pair;
+
+	*out = '\0';
+
+	/*
+	 * We could skip pg_verifymbstr if we didn't process any non-7-bit-ASCII
+	 * codes; but it's probably not worth the trouble, since this isn't likely
+	 * to be a performance-critical path.
+	 */
+	pg_verifymbstr(new, out - new, false);
+	return new;
+
+invalid_pair:
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("invalid Unicode surrogate pair"),
+			 parser_errposition(str_pos + (in - str) + 3))); /* 3 for U&" */
+
+}
+
+/* is 'escape' acceptable as Unicode escape character (UESCAPE syntax) ? */
+static bool
+check_uescapechar(unsigned char escape)
+{
+	if (isxdigit(escape)
+		|| escape == '+'
+		|| escape == '\''
+		|| escape == '"'
+		|| scanner_isspace(escape))
+	{
+		return false;
+	}
+	else
+		return true;
+}
+
+/* XXX this not covered in tests as far as I know, so check error position in caller */
+static bool
+check_unicode_value(pg_wchar c, char *loc, core_yyscan_t yyscanner)
+{
+	if (GetDatabaseEncoding() == PG_UTF8)
+		return true;
+
+	if (c > 0x7F)
+	{
+		return false;
+	}
+	else
+		return true;
 }

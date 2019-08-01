@@ -29,6 +29,13 @@ SELECT U&'wrong: \061';
 SELECT U&'wrong: \+0061';
 SELECT U&'wrong: +0061' UESCAPE '+';
 
+-- handling of Unicode surrogate pairs
+SELECT U&'\d83d\de04\d83d\dc36' as correct_in_utf8;
+SELECT U&'\d83d\d83d'; -- 2 high surrogates in a row
+SELECT U&'\de04\d83d'; -- surrogates in wrong order
+SELECT U&'\d83dX'; -- orphan high surrogate
+SELECT U&'\de04X'; -- orphan low surrogate
+
 SET standard_conforming_strings TO off;
 
 SELECT U&'d\0061t\+000061' AS U&"d\0061t\+000061";

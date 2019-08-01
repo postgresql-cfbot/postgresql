@@ -414,6 +414,15 @@ Moscow	moskva | moscow
 \.
 \set ECHO all
 
+-- Test inlining of immutable constant functions --
+-- to_tsquery(text) is not immutable, so it won't be inlined
+-- to_tsquery(regconfig, text) is an immutable function.
+-- That allows to get rid of using function scan and join at all.
+explain (costs off)
+select * from test_tsquery, to_tsquery('new') q where txtsample @@ q;
+explain (costs off)
+select * from test_tsquery, to_tsquery('english', 'new') q where txtsample @@ q;
+
 ALTER TABLE test_tsquery ADD COLUMN keyword tsquery;
 UPDATE test_tsquery SET keyword = to_tsquery('english', txtkeyword);
 ALTER TABLE test_tsquery ADD COLUMN sample tsquery;

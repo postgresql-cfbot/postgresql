@@ -1071,7 +1071,8 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 		expr = flatten_join_alias_vars(root->parse, expr);
 
 	/*
-	 * Simplify constant expressions.
+	 * Simplify constant expressions. For function RTEs, this was already done
+	 * by pullup_simple_subqueries.
 	 *
 	 * Note: an essential effect of this is to convert named-argument function
 	 * calls to positional notation and insert the current actual values of
@@ -1085,7 +1086,8 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 	 * careful to maintain AND/OR flatness --- that is, do not generate a tree
 	 * with AND directly under AND, nor OR directly under OR.
 	 */
-	expr = eval_const_expressions(root, expr);
+	if (kind != EXPRKIND_RTFUNC && kind != EXPRKIND_RTFUNC_LATERAL)
+		expr = eval_const_expressions(root, expr);
 
 	/*
 	 * If it's a qual or havingQual, canonicalize it.

@@ -66,6 +66,9 @@ extern bool listTables(const char *tabtypes, const char *pattern, bool verbose, 
 /* \dP */
 extern bool listPartitionedTables(const char *reltypes, const char *pattern, bool verbose);
 
+/* \dV */
+extern bool listVariables(const char *pattern, bool varbose);
+
 /* \dD */
 extern bool listDomains(const char *pattern, bool verbose, bool showSystem);
 

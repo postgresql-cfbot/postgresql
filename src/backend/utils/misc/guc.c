@@ -82,6 +82,7 @@
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/catcache.h"
 #include "utils/guc_tables.h"
 #include "utils/float.h"
 #include "utils/memutils.h"
@@ -2249,6 +2250,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&maintenance_work_mem,
 		65536, 1024, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"catalog_cache_prune_min_age", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("System catalog cache entries that live unused for longer than this seconds are considered for removal."),
+			gettext_noop("The value of -1 turns off pruning."),
+			GUC_UNIT_S
+		},
+		&catalog_cache_prune_min_age,
+		300, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

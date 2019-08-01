@@ -1958,14 +1958,14 @@ do_autovacuum(void)
 										  ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(AutovacMemCxt);
 
+	/* Start a transaction so our commands have one to play into. */
+	StartTransactionCommand();
+
 	/*
 	 * may be NULL if we couldn't find an entry (only happens if we are
 	 * forcing a vacuum for anti-wrap purposes).
 	 */
 	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
-
-	/* Start a transaction so our commands have one to play into. */
-	StartTransactionCommand();
 
 	/*
 	 * Clean up any dead statistics collector entries for this DB. We always
@@ -2749,12 +2749,10 @@ get_pgstat_tabentry_relid(Oid relid, bool isshared, PgStat_StatDBEntry *shared,
 	if (isshared)
 	{
 		if (PointerIsValid(shared))
-			tabentry = hash_search(shared->tables, &relid,
-								   HASH_FIND, NULL);
+			tabentry = pgstat_fetch_stat_tabentry_extended(shared, relid);
 	}
 	else if (PointerIsValid(dbentry))
-		tabentry = hash_search(dbentry->tables, &relid,
-							   HASH_FIND, NULL);
+		tabentry = pgstat_fetch_stat_tabentry_extended(dbentry, relid);
 
 	return tabentry;
 }

@@ -440,10 +440,18 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	bool		have_anyrange_result = false;
 	bool		have_anynonarray = false;
 	bool		have_anyenum = false;
+	bool		have_anycompatible_result = false;
+	bool		have_anycompatible_array_result = false;
+	bool		have_anycompatible_range_result = false;
+	bool		have_anycompatible_nonarray = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			anycompatible_type = InvalidOid;
+	Oid			anycompatible_array_type = InvalidOid;
+	Oid			anycompatible_range_type = InvalidOid;
 	Oid			anycollation = InvalidOid;
+	Oid			ctcollation = InvalidOid;
 	int			i;
 
 	/* See if there are any polymorphic outputs; quick out if not */
@@ -468,12 +476,27 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 			case ANYRANGEOID:
 				have_anyrange_result = true;
 				break;
+			case ANYCOMPATIBLEOID:
+				have_anycompatible_result = true;
+				break;
+			case ANYCOMPATIBLEARRAYOID:
+				have_anycompatible_array_result = true;
+				break;
+			case ANYCOMPATIBLENONARRAYOID:
+				have_anycompatible_result = true;
+				have_anycompatible_nonarray = true;
+				break;
+			case ANYCOMPATIBLERANGEOID:
+				have_anycompatible_range_result = true;
+				break;
 			default:
 				break;
 		}
 	}
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result &&
+		!have_anycompatible_result && !have_anycompatible_array_result &&
+		!have_anycompatible_range_result)
 		return true;
 
 	/*
@@ -501,14 +524,29 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				if (!OidIsValid(anyrange_type))
 					anyrange_type = get_call_expr_argtype(call_expr, i);
 				break;
+			case ANYCOMPATIBLEOID:
+			case ANYCOMPATIBLENONARRAYOID:
+				if (!OidIsValid(anycompatible_type))
+					anycompatible_type = get_call_expr_argtype(call_expr, i);
+				break;
+			case ANYCOMPATIBLEARRAYOID:
+				if (!OidIsValid(anycompatible_array_type))
+					anycompatible_array_type = get_call_expr_argtype(call_expr, i);
+				break;
+			case ANYCOMPATIBLERANGEOID:
+				if (!OidIsValid(anycompatible_range_type))
+					anycompatible_range_type = get_call_expr_argtype(call_expr, i);
+				break;
 			default:
 				break;
 		}
 	}
 
 	/* If nothing found, parser messed up */
-	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
+	if ((have_anyelement_result || have_anyarray_result ||
+		 have_anyrange_result) &&
+		(!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
+		 !OidIsValid(anyrange_type)))
 		return false;
 
 	/* If needed, deduce one polymorphic type from others */
@@ -536,6 +574,31 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 											 anyelement_type,
 											 ANYELEMENTOID);
 
+	if (have_anycompatible_array_result && !OidIsValid(anycompatible_array_type))
+		anycompatible_array_type = resolve_generic_type(ANYCOMPATIBLEARRAYOID,
+													anycompatible_type,
+													ANYCOMPATIBLEOID);
+
+	if (have_anycompatible_result && !OidIsValid(anycompatible_type))
+	{
+		if (OidIsValid(anycompatible_array_type))
+			anycompatible_type = resolve_generic_type(ANYCOMPATIBLEOID,
+												   anycompatible_array_type,
+												   ANYCOMPATIBLEARRAYOID);
+
+		if (OidIsValid(anycompatible_range_type))
+		{
+			Oid			subtype = resolve_generic_type(ANYCOMPATIBLEOID,
+													   anycompatible_range_type,
+													   ANYCOMPATIBLERANGEOID);
+
+			/* check for inconsistent array and range results */
+			if (OidIsValid(anycompatible_type) && anycompatible_type != subtype)
+				return false;
+			anycompatible_type = subtype;
+		}
+	}
+
 	/*
 	 * We can't deduce a range type from other polymorphic inputs, because
 	 * there may be multiple range types for the same subtype.
@@ -543,8 +606,15 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	if (have_anyrange_result && !OidIsValid(anyrange_type))
 		return false;
 
+	if (have_anycompatible_range_result && !OidIsValid(anycompatible_range_type))
+		return false;
+
 	/* Enforce ANYNONARRAY if needed */
 	if (have_anynonarray && type_is_array(anyelement_type))
+		return false;
+
+	/* Enforce COMMONTYPENONARRAY if needed */
+	if (have_anycompatible_nonarray && type_is_array(anycompatible_type))
 		return false;
 
 	/* Enforce ANYENUM if needed */
@@ -562,7 +632,12 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	else if (OidIsValid(anyarray_type))
 		anycollation = get_typcollation(anyarray_type);
 
-	if (OidIsValid(anycollation))
+	if (OidIsValid(anycompatible_type))
+		ctcollation = get_typcollation(anycompatible_type);
+	else if (OidIsValid(anycompatible_array_type))
+		ctcollation = get_typcollation(anycompatible_array_type);
+
+	if (OidIsValid(anycollation) || OidIsValid(ctcollation))
 	{
 		/*
 		 * The types are collatable, so consider whether to use a nondefault
@@ -573,6 +648,9 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 
 		if (OidIsValid(inputcollation))
 			anycollation = inputcollation;
+
+		if (OidIsValid(inputcollation))
+			ctcollation = inputcollation;
 	}
 
 	/* And finally replace the tuple column types as needed */
@@ -608,6 +686,31 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 								   0);
 				/* no collation should be attached to a range type */
 				break;
+			case ANYCOMPATIBLEOID:
+			case ANYCOMPATIBLENONARRAYOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   anycompatible_type,
+								   -1,
+								   0);
+				TupleDescInitEntryCollation(tupdesc, i + 1, ctcollation);
+				break;
+			case ANYCOMPATIBLEARRAYOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   anycompatible_array_type,
+								   -1,
+								   0);
+				TupleDescInitEntryCollation(tupdesc, i + 1, ctcollation);
+				break;
+			case ANYCOMPATIBLERANGEOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   anycompatible_range_type,
+								   -1,
+								   0);
+				/* no collation should be attached to a range type */
+				break;
 			default:
 				break;
 		}
@@ -632,9 +735,15 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 	bool		have_anyelement_result = false;
 	bool		have_anyarray_result = false;
 	bool		have_anyrange_result = false;
+	bool		have_anycompatible_result = false;
+	bool		have_anycompatible_array_result = false;
+	bool		have_anycompatible_range_result = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			anycompatible_type = InvalidOid;
+	Oid			anycompatible_array_type = InvalidOid;
+	Oid			anycompatible_range_type = InvalidOid;
 	int			inargno;
 	int			i;
 
@@ -693,6 +802,52 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 					argtypes[i] = anyrange_type;
 				}
 				break;
+			case ANYCOMPATIBLEOID:
+			case ANYCOMPATIBLENONARRAYOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_anycompatible_result = true;
+				else
+				{
+					if (!OidIsValid(anycompatible_type))
+					{
+						anycompatible_type = get_call_expr_argtype(call_expr,
+																inargno);
+						if (!OidIsValid(anycompatible_type))
+							return false;
+					}
+					argtypes[i] = anycompatible_type;
+				}
+				break;
+			case ANYCOMPATIBLEARRAYOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_anycompatible_array_result = true;
+				else
+				{
+					if (!OidIsValid(anycompatible_array_type))
+					{
+						anycompatible_array_type = get_call_expr_argtype(call_expr,
+																	 inargno);
+						if (!OidIsValid(anycompatible_array_type))
+							return false;
+					}
+					argtypes[i] = anycompatible_array_type;
+				}
+				break;
+			case ANYCOMPATIBLERANGEOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_anycompatible_range_result = true;
+				else
+				{
+					if (!OidIsValid(anycompatible_range_type))
+					{
+						anycompatible_range_type = get_call_expr_argtype(call_expr,
+																	 inargno);
+						if (!OidIsValid(anycompatible_range_type))
+							return false;
+					}
+					argtypes[i] = anycompatible_range_type;
+				}
+				break;
 			default:
 				break;
 		}
@@ -702,47 +857,94 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 
 	/* Done? */
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result &&
+		!have_anycompatible_result && !have_anycompatible_array_result)
 		return true;
 
-	/* If no input polymorphics, parser messed up */
-	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
-		return false;
-
-	/* If needed, deduce one polymorphic type from others */
-	if (have_anyelement_result && !OidIsValid(anyelement_type))
+	if (have_anyelement_result || have_anyarray_result || have_anyrange_result)
 	{
-		if (OidIsValid(anyarray_type))
-			anyelement_type = resolve_generic_type(ANYELEMENTOID,
-												   anyarray_type,
-												   ANYARRAYOID);
-		if (OidIsValid(anyrange_type))
-		{
-			Oid			subtype = resolve_generic_type(ANYELEMENTOID,
-													   anyrange_type,
-													   ANYRANGEOID);
+		/* If no input polymorphics, parser messed up */
+		if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
+			!OidIsValid(anyrange_type))
+			return false;
 
-			/* check for inconsistent array and range results */
-			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
-				return false;
-			anyelement_type = subtype;
+		/* If needed, deduce one polymorphic type from others */
+		if (have_anyelement_result && !OidIsValid(anyelement_type))
+		{
+			if (OidIsValid(anyarray_type))
+				anyelement_type = resolve_generic_type(ANYELEMENTOID,
+													   anyarray_type,
+													   ANYARRAYOID);
+			if (OidIsValid(anyrange_type))
+			{
+				Oid			subtype = resolve_generic_type(ANYELEMENTOID,
+														   anyrange_type,
+														   ANYRANGEOID);
+
+				/* check for inconsistent array and range results */
+				if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+					return false;
+				anyelement_type = subtype;
+			}
 		}
+
+		if (have_anyarray_result && !OidIsValid(anyarray_type))
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyelement_type,
+												 ANYELEMENTOID);
+
+		/*
+		 * We can't deduce a range type from other polymorphic inputs, because
+		 * there may be multiple range types for the same subtype.
+		 */
+		if (have_anyrange_result && !OidIsValid(anyrange_type))
+			return false;
+
+		/* XXX do we need to enforce ANYNONARRAY or ANYENUM here?  I think not */
 	}
 
-	if (have_anyarray_result && !OidIsValid(anyarray_type))
-		anyarray_type = resolve_generic_type(ANYARRAYOID,
-											 anyelement_type,
-											 ANYELEMENTOID);
+	if (have_anycompatible_result || have_anycompatible_array_result ||
+		have_anycompatible_range_result)
+	{
+		/* If no input polymorphics, parser messed up */
+		if (!OidIsValid(anycompatible_type) && !OidIsValid(anycompatible_array_type) &&
+			!OidIsValid(anycompatible_range_type))
+			return false;
 
-	/*
-	 * We can't deduce a range type from other polymorphic inputs, because
-	 * there may be multiple range types for the same subtype.
-	 */
-	if (have_anyrange_result && !OidIsValid(anyrange_type))
-		return false;
+		if (have_anycompatible_result && !OidIsValid(anycompatible_type))
+		{
+			if (OidIsValid(anycompatible_array_type))
+			{
+				anycompatible_type = resolve_generic_type(ANYCOMPATIBLEOID,
+													   anycompatible_array_type,
+													   ANYCOMPATIBLEARRAYOID);
 
-	/* XXX do we need to enforce ANYNONARRAY or ANYENUM here?  I think not */
+				if (OidIsValid(anycompatible_range_type))
+				{
+					Oid			subtype = resolve_generic_type(ANYCOMPATIBLEOID,
+															   anyrange_type,
+															   ANYCOMPATIBLERANGEOID);
+
+					/* check for inconsistent array and range results */
+					if (OidIsValid(anycompatible_type) && anycompatible_type != subtype)
+						return false;
+					anycompatible_type = subtype;
+				}
+			}
+		}
+
+		if (have_anycompatible_array_result || !OidIsValid(anycompatible_array_type))
+			anycompatible_array_type = resolve_generic_type(ANYCOMPATIBLEARRAYOID,
+														anycompatible_type,
+														ANYCOMPATIBLEOID);
+
+		/*
+		 * We can't deduce a range type from other polymorphic inputs, because
+		 * there may be multiple range types for the same subtype.
+		 */
+		if (have_anycompatible_range_result && !OidIsValid(anycompatible_range_type))
+			return false;
+	}
 
 	/* And finally replace the output column types as needed */
 	for (i = 0; i < numargs; i++)
@@ -759,6 +961,16 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 				break;
 			case ANYRANGEOID:
 				argtypes[i] = anyrange_type;
+				break;
+			case ANYCOMPATIBLEOID:
+			case ANYCOMPATIBLENONARRAYOID:
+				argtypes[i] = anycompatible_type;
+				break;
+			case ANYCOMPATIBLEARRAYOID:
+				argtypes[i] = anycompatible_array_type;
+				break;
+			case ANYCOMPATIBLERANGEOID:
+				argtypes[i] = anycompatible_range_type;
 				break;
 			default:
 				break;

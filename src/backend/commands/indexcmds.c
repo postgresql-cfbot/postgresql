@@ -260,7 +260,7 @@ CheckIndexCompatible(Oid oldId,
 	irel = index_open(oldId, AccessShareLock);	/* caller probably has a lock */
 	for (i = 0; i < old_natts; i++)
 	{
-		if (IsPolymorphicType(get_opclass_input_type(classObjectId[i])) &&
+		if (IsPolymorphicTypeAny(get_opclass_input_type(classObjectId[i])) &&
 			TupleDescAttr(irel->rd_att, i)->atttypid != typeObjectId[i])
 		{
 			ret = false;
@@ -288,7 +288,7 @@ CheckIndexCompatible(Oid oldId,
 							right;
 
 				op_input_types(indexInfo->ii_ExclusionOps[i], &left, &right);
-				if ((IsPolymorphicType(left) || IsPolymorphicType(right)) &&
+				if ((IsPolymorphicTypeAny(left) || IsPolymorphicTypeAny(right)) &&
 					TupleDescAttr(irel->rd_att, i)->atttypid != typeObjectId[i])
 				{
 					ret = false;

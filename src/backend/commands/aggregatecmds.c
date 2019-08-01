@@ -339,7 +339,7 @@ DefineAggregate(ParseState *pstate,
 	transTypeId = typenameTypeId(NULL, transType);
 	transTypeType = get_typtype(transTypeId);
 	if (transTypeType == TYPTYPE_PSEUDO &&
-		!IsPolymorphicType(transTypeId))
+		!IsPolymorphicTypeAny(transTypeId))
 	{
 		if (transTypeId == INTERNALOID && superuser())
 			 /* okay */ ;
@@ -380,7 +380,7 @@ DefineAggregate(ParseState *pstate,
 		mtransTypeId = typenameTypeId(NULL, mtransType);
 		mtransTypeType = get_typtype(mtransTypeId);
 		if (mtransTypeType == TYPTYPE_PSEUDO &&
-			!IsPolymorphicType(mtransTypeId))
+			!IsPolymorphicTypeAny(mtransTypeId))
 		{
 			if (mtransTypeId == INTERNALOID && superuser())
 				 /* okay */ ;

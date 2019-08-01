@@ -5943,6 +5943,7 @@ threadRun(void *arg)
 	int			nstate = thread->nstate;
 	int			remains = nstate;	/* number of remaining clients */
 	socket_set *sockets = alloc_socket_set(nstate);
+	int			aborted = 0;
 	int			i;
 
 	/* for reporting progress: */
@@ -6172,6 +6173,10 @@ threadRun(void *arg)
 			 */
 			if (st->state == CSTATE_FINISHED || st->state == CSTATE_ABORTED)
 				remains--;
+
+			/* count aborted clients */
+			if (st->state == CSTATE_ABORTED)
+				aborted++;
 		}
 
 		/* progress report is made by thread 0 for all threads */
@@ -6195,7 +6200,10 @@ threadRun(void *arg)
 
 				/*
 				 * Ensure that the next report is in the future, in case
-				 * pgbench/postgres got stuck somewhere.
+				 * pgbench/postgres got stuck somewhere. This may skip
+				 * some progress reports if the thread does not get enough
+				 * cpu time. In such case, probably the whole bench should
+				 * be ignored.
 				 */
 				do
 				{
@@ -6206,6 +6214,52 @@ threadRun(void *arg)
 	}
 
 done:
+	/*
+	 * Under -R, comply with -T and -P even if there is nothing to do,
+	 * (unless all clients aborted) and ensure that one report is printed.
+	 * This special behavior allows tap tests to check that a run lasts
+	 * as expected and that some progress is shown, even on very slow hosts.
+	 */
+	if (duration && throttle_delay && aborted < nstate && thread->tid == 0)
+	{
+		int64		thread_end = thread_start + (int64) duration * 1000000;
+		instr_time	now_time;
+		int64		now;
+
+		INSTR_TIME_SET_CURRENT(now_time);
+		now = INSTR_TIME_GET_MICROSEC(now_time);
+
+		while (now < thread_end)
+		{
+			if (progress && next_report <= thread_end)
+			{
+				pg_usleep(next_report - now);
+				INSTR_TIME_SET_CURRENT(now_time);
+				now = INSTR_TIME_GET_MICROSEC(now_time);
+				printProgressReport(thread, thread_start, now, &last, &last_report);
+
+				/* schedule next report */
+				do
+				{
+					next_report += (int64) progress * 1000000;
+				} while (now >= next_report);
+			}
+			else
+			{
+				pg_usleep(thread_end - now);
+				INSTR_TIME_SET_CURRENT(now_time);
+				now = INSTR_TIME_GET_MICROSEC(now_time);
+			}
+		}
+
+		/*
+		 * Print a closing progress report if none were printed
+		 * and at least one was expected.
+		 */
+		if (progress && progress <= duration && last_report == thread_start)
+			printProgressReport(thread, thread_start, now, &last, &last_report);
+	}
+
 	INSTR_TIME_SET_CURRENT(start);
 	disconnect_all(state, nstate);
 	INSTR_TIME_SET_CURRENT(end);

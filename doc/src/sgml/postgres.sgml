@@ -252,6 +252,7 @@
   &geqo;
   &tableam;
   &indexam;
+  &compression-am;
   &generic-wal;
   &btree;
   &gist;

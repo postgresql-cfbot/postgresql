@@ -26,6 +26,7 @@
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
+#include "utils/hsearch.h"
 
 
 /* "options" flag bits for heap_insert */
@@ -130,7 +131,7 @@ extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 extern void heap_get_latest_tid(TableScanDesc scan, ItemPointer tid);
 extern void setLastTid(const ItemPointer tid);
 
-extern BulkInsertState GetBulkInsertState(void);
+extern BulkInsertState GetBulkInsertState(HTAB *);
 extern void FreeBulkInsertState(BulkInsertState);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 

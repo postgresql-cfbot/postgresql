@@ -54,6 +54,7 @@ typedef FormData_pg_am *Form_pg_am;
  */
 #define AMTYPE_INDEX					'i' /* index access method */
 #define AMTYPE_TABLE					't' /* table access method */
+#define AMTYPE_COMPRESSION				'c' /* compression access method */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

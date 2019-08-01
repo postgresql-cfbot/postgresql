@@ -31,6 +31,7 @@ typedef struct EventTriggerData
 #define AT_REWRITE_ALTER_PERSISTENCE	0x01
 #define AT_REWRITE_DEFAULT_VAL			0x02
 #define AT_REWRITE_COLUMN_REWRITE		0x04
+#define AT_REWRITE_ALTER_COMPRESSION	0x08
 
 /*
  * EventTriggerData is the node type that is passed as fmgr "context" info

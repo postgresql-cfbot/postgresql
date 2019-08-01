@@ -808,6 +808,7 @@ ER_flatten_into(ExpandedObjectHeader *eohptr,
 					(char *) tuphdr + erh->hoff,
 					erh->data_len,
 					&tuphdr->t_infomask,
+					&tuphdr->t_infomask2,
 					(erh->hasnull ? tuphdr->t_bits : NULL));
 }
 

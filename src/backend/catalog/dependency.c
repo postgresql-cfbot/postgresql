@@ -25,6 +25,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
+#include "catalog/pg_attr_compression.h"
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
@@ -181,7 +182,8 @@ static const Oid object_classes[] = {
 	PublicationRelationId,		/* OCLASS_PUBLICATION */
 	PublicationRelRelationId,	/* OCLASS_PUBLICATION_REL */
 	SubscriptionRelationId,		/* OCLASS_SUBSCRIPTION */
-	TransformRelationId			/* OCLASS_TRANSFORM */
+	TransformRelationId,		/* OCLASS_TRANSFORM */
+	AttrCompressionRelationId	/* OCLASS_ATTR_COMPRESSION */
 };
 
 
@@ -1506,6 +1508,10 @@ doDeletion(const ObjectAddress *object, int flags)
 			DropTransformById(object->objectId);
 			break;
 
+		case OCLASS_ATTR_COMPRESSION:
+			RemoveAttributeCompression(object->objectId);
+			break;
+
 			/*
 			 * These global object types are not supported here.
 			 */
@@ -2816,6 +2822,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
+
+		case AttrCompressionRelationId:
+			return OCLASS_ATTR_COMPRESSION;
 	}
 
 	/* shouldn't get here */

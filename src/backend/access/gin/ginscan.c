@@ -140,8 +140,12 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 	uint32		nUserQueryValues = nQueryValues;
 	uint32		i;
 
-	/* Non-default search modes add one "hidden" entry to each key */
-	if (searchMode != GIN_SEARCH_MODE_DEFAULT)
+	/*
+	 * Non-default search modes add one "hidden" entry to each key, unless ALL
+	 * key with no entries as those only need to call triConsistentFn
+	 */
+	if (searchMode != GIN_SEARCH_MODE_DEFAULT &&
+		!(searchMode == GIN_SEARCH_MODE_ALL && (nQueryValues <= 0)))
 		nQueryValues++;
 	key->nentries = nQueryValues;
 	key->nuserentries = nUserQueryValues;
@@ -265,6 +269,7 @@ ginNewScanKey(IndexScanDesc scan)
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	int			i;
 	bool		hasNullQuery = false;
+	bool		hasSearchAllMode = false;
 	MemoryContext oldCtx;
 
 	/*
@@ -286,6 +291,7 @@ ginNewScanKey(IndexScanDesc scan)
 		palloc(so->allocentries * sizeof(GinScanEntry));
 
 	so->isVoidRes = false;
+	so->forcedRecheck = false;
 
 	for (i = 0; i < scan->numberOfKeys; i++)
 	{
@@ -371,6 +377,18 @@ ginNewScanKey(IndexScanDesc scan)
 					   skey->sk_argument, nQueryValues,
 					   queryValues, categories,
 					   partial_matches, extra_data);
+
+		if (searchMode == GIN_SEARCH_MODE_ALL && nQueryValues <= 0)
+		{
+			/*
+			 * Don't emit ALL key with no entries, check only whether
+			 * unconditional recheck is needed.
+			 */
+			GinScanKey	key = &so->keys[--so->nkeys];
+
+			hasSearchAllMode = true;
+			so->forcedRecheck |= key->triConsistentFn(key) != GIN_TRUE;
+		}
 	}
 
 	/*
@@ -384,6 +402,13 @@ ginNewScanKey(IndexScanDesc scan)
 					   InvalidStrategy, GIN_SEARCH_MODE_EVERYTHING,
 					   (Datum) 0, 0,
 					   NULL, NULL, NULL, NULL);
+
+		/*
+		 * XXX Need to use ALL mode instead of EVERYTHING to skip NULLs if ALL
+		 * mode has been seen.
+		 */
+		if (hasSearchAllMode)
+			so->keys[so->nkeys - 1].scanEntry[0]->searchMode = GIN_SEARCH_MODE_ALL;
 	}
 
 	/*

@@ -6326,6 +6326,16 @@ gincost_pattern(IndexOptInfo *index, int indexcol,
 		return false;
 	}
 
+	if (nentries <= 0 && searchMode == GIN_SEARCH_MODE_ALL)
+	{
+		/*
+		 * GIN does not emit scan entries for empty GIN_SEARCH_MODE_ALL keys,
+		 * and it can avoid full index scan if there are entries from other
+		 * keys, so we can skip setting of 'haveFullScan' flag.
+		 */
+		return true;
+	}
+
 	for (i = 0; i < nentries; i++)
 	{
 		/*
@@ -6709,7 +6719,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		return;
 	}
 
-	if (counts.haveFullScan || indexQuals == NIL)
+	if (counts.haveFullScan || indexQuals == NIL || counts.searchEntries <= 0)
 	{
 		/*
 		 * Full index scan will be required.  We treat this as if every key in

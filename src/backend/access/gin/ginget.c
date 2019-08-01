@@ -1814,7 +1814,7 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 		 * consistent functions.
 		 */
 		oldCtx = MemoryContextSwitchTo(so->tempCtx);
-		recheck = false;
+		recheck = so->forcedRecheck;
 		match = true;
 
 		for (i = 0; i < so->nkeys; i++)
@@ -1888,9 +1888,14 @@ gingetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	{
 		CHECK_FOR_INTERRUPTS();
 
+		/* Get next item ... */
 		if (!scanGetItem(scan, iptr, &iptr, &recheck))
 			break;
 
+		/* ... apply forced recheck if required ... */
+		recheck |= so->forcedRecheck;
+
+		/* ... and transfer it into bitmap */
 		if (ItemPointerIsLossyPage(&iptr))
 			tbm_add_page(tbm, ItemPointerGetBlockNumber(&iptr));
 		else

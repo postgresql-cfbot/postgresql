@@ -3221,9 +3221,6 @@ index_set_state_flags(Oid indexId, IndexStateFlagsAction action)
 	HeapTuple	indexTuple;
 	Form_pg_index indexForm;
 
-	/* Assert that current xact hasn't done any transactional updates */
-	Assert(GetTopTransactionIdIfAny() == InvalidTransactionId);
-
 	/* Open pg_index and fetch a writable copy of the index's tuple */
 	pg_index = table_open(IndexRelationId, RowExclusiveLock);
 
@@ -3243,12 +3240,13 @@ index_set_state_flags(Oid indexId, IndexStateFlagsAction action)
 			Assert(!indexForm->indisvalid);
 			indexForm->indisready = true;
 			break;
-		case INDEX_CREATE_SET_VALID:
+		case INDEX_CREATE_SET_VALID_INDCHECKXMIN:
 			/* Set indisvalid during a CREATE INDEX CONCURRENTLY sequence */
 			Assert(indexForm->indislive);
 			Assert(indexForm->indisready);
 			Assert(!indexForm->indisvalid);
 			indexForm->indisvalid = true;
+			indexForm->indcheckxmin = true;
 			break;
 		case INDEX_DROP_CLEAR_VALID:
 
@@ -3282,9 +3280,10 @@ index_set_state_flags(Oid indexId, IndexStateFlagsAction action)
 			break;
 	}
 
-	/* ... and write it back in-place */
-	heap_inplace_update(pg_index, indexTuple);
+	/* ... and update the heap tuple now */
+	CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
 
+	heap_freetuple(indexTuple);
 	table_close(pg_index, RowExclusiveLock);
 }
 

@@ -62,6 +62,15 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	MemoryContext	mi_context;	/* Memory context for multi insert */
+	int				tup_len;	/* accurate or average tuple length. */
+	/* Below are buffered slots and related information. */
+	TupleTableSlot	*buffered_slots[MAX_MULTI_INSERT_TUPLES];
+	int				buffered_slots_num;	/* How many buffered slots for multi insert */
+	int				buffered_slots_size;	/* Total tuple size for multi insert */
+	/* Below are variables for sampling (to calculte avg.tup_len if needed). */
+	int				sampled_tuples_num; /* -1 means no sampling is needed. */
+	uint64			sampled_tuples_size; /* Total tuple size of samples. */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -441,6 +450,8 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	RangeTblEntry *rte;
 	ListCell   *lc;
 	int			attnum;
+	int			tup_len;
+	bool		use_sampling;
 
 	Assert(into != NULL);		/* else somebody forgot to set it */
 
@@ -456,11 +467,21 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	attrList = NIL;
 	lc = list_head(into->colNames);
+	tup_len = 0;
+	use_sampling = false;
 	for (attnum = 0; attnum < typeinfo->natts; attnum++)
 	{
 		Form_pg_attribute attribute = TupleDescAttr(typeinfo, attnum);
 		ColumnDef  *col;
 		char	   *colname;
+
+		if (attribute->attlen > 0)
+		{
+			if (!use_sampling)
+				tup_len += attribute->attlen;
+		}
+		else
+			use_sampling = true; /* Update tup_len via sampling. */
 
 		if (lc)
 		{
@@ -561,9 +582,57 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	myState->ti_options = TABLE_INSERT_SKIP_FSM |
 		(XLogIsNeeded() ? 0 : TABLE_INSERT_SKIP_WAL);
 	myState->bistate = GetBulkInsertState();
+	memset(myState->buffered_slots, 0, sizeof(TupleTableSlot *) * MAX_MULTI_INSERT_TUPLES);
+	myState->buffered_slots_num = 0;
+	myState->buffered_slots_size = 0;
+	myState->tup_len = use_sampling ? 0 : tup_len;
+	myState->sampled_tuples_num = use_sampling ? 0 : -1;
+	myState->sampled_tuples_size = 0;
+
+	/*
+	 * Create a temporary memory context so that we can reset once per
+	 * multi insert.
+	 */
+	myState->mi_context = AllocSetContextCreate(CurrentMemoryContext,
+												"intorel_multi_insert",
+												ALLOCSET_DEFAULT_SIZES);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);
+}
+
+/*
+ * If the tuple length, which is obtained either through sampling on tuples with
+ * variable length attribute(s), or through calculating for tuples with
+ * accurate length attributes, is larger than or equal to this value, we do
+ * not use multi insert since memory copy overhead could decrease the
+ * benefit of multi insert.
+ */
+#define MAX_TUP_LEN_FOR_MULTI_INSERT	1600
+
+/* How many first tuples are sampled to calculte average tuple length? */
+#define MAX_MULTI_INSERT_SAMPLES		1000
+
+static void
+intorel_flush_multi_insert(DR_intorel *myState)
+{
+	MemoryContext oldcontext;
+	int i;
+
+	oldcontext = MemoryContextSwitchTo(myState->mi_context);
+
+	table_multi_insert(myState->rel, myState->buffered_slots,
+					   myState->buffered_slots_num, myState->output_cid,
+					   myState->ti_options, myState->bistate);
+
+	MemoryContextReset(myState->mi_context);
+	MemoryContextSwitchTo(oldcontext);
+
+	for (i = 0; i < myState->buffered_slots_num; i++)
+		ExecClearTuple(myState->buffered_slots[i]);
+
+	myState->buffered_slots_num = 0;
+	myState->buffered_slots_size = 0;
 }
 
 /*
@@ -573,6 +642,8 @@ static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
+	TupleTableSlot *batchslot;
+	HeapTuple tuple;
 
 	/*
 	 * Note that the input slot might not be of the type of the target
@@ -583,11 +654,72 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 	 * tuple's xmin), but since we don't do that here...
 	 */
 
-	table_tuple_insert(myState->rel,
-					   slot,
-					   myState->output_cid,
-					   myState->ti_options,
-					   myState->bistate);
+	/*
+	 * If the accurate/average tuple length is large, do single insert.
+	 * We do not call ExecFetchSlotHeapTuple() for the input slot to get
+	 * accurate tuple length here since sometimes it is wasteful to call
+	 * it again in table_tuple_insert(), e.g. VirtualTupleTableSlot
+	 */
+	if (myState->tup_len >= MAX_TUP_LEN_FOR_MULTI_INSERT)
+	{
+		table_tuple_insert(myState->rel,
+						   slot,
+						   myState->output_cid,
+						   myState->ti_options,
+						   myState->bistate);
+		return true;
+	}
+
+	/* Copy the slot to batchslot lists and materialize them. */
+	if (myState->buffered_slots[myState->buffered_slots_num] == NULL)
+	{
+		batchslot = table_slot_create(myState->rel, NULL);
+		myState->buffered_slots[myState->buffered_slots_num] = batchslot;
+	}
+	else
+		batchslot = myState->buffered_slots[myState->buffered_slots_num];
+
+	ExecCopySlot(batchslot, slot);
+	/*
+	 * In theory we do not need materalize here but if both input slot and
+	 * dst slot are BufferHeapTupleTableSlot, there might be hot code in
+	 * ResourceOwnerForgetBuffer() and ResourceOwnerRememberBuffer()
+	 * since we do them in batch. We could easily work around this by doing
+	 * materialize in advance. This is harmless since later when calling
+	 * table_multi_insert(), we need materialize also.
+	 */
+	ExecMaterializeSlot(batchslot);
+	myState->buffered_slots_num++;
+
+	if (myState->sampled_tuples_num < 0 ||
+		myState->sampled_tuples_num == MAX_MULTI_INSERT_SAMPLES)
+		myState->buffered_slots_size += myState->tup_len;
+	else
+	{
+		/*
+		 * Sampling to get the rough average tuple length for later use.
+		 * We do not use plan width since that is inaccurate sometimes.
+		 */
+		tuple = ExecFetchSlotHeapTuple(batchslot, true, NULL);
+
+		myState->buffered_slots_size += tuple->t_len;
+		myState->sampled_tuples_size += tuple->t_len;
+		myState->sampled_tuples_num++;
+
+		/*
+		 * Just finished sampling. Let's update myState->tup_len and
+		 * flush the tuples since in next call we possibly do single insert.
+		 */
+		if(myState->sampled_tuples_num == MAX_MULTI_INSERT_SAMPLES)
+		{
+			myState->tup_len = myState->sampled_tuples_size / myState->sampled_tuples_num;
+			intorel_flush_multi_insert(myState);
+		}
+	}
+
+	if (myState->buffered_slots_num == MAX_MULTI_INSERT_TUPLES ||
+		myState->buffered_slots_size >= 65535)
+		intorel_flush_multi_insert(myState);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -601,10 +733,21 @@ static void
 intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
+	int i;
+
+	if (myState->buffered_slots_num != 0)
+		intorel_flush_multi_insert(myState);
+
+	for (i = 0; i < MAX_MULTI_INSERT_TUPLES && myState->buffered_slots[i] != NULL; i++)
+		ExecDropSingleTupleTableSlot(myState->buffered_slots[i]);
 
 	FreeBulkInsertState(myState->bistate);
 
 	table_finish_bulk_insert(myState->rel, myState->ti_options);
+
+	if (myState->mi_context)
+		MemoryContextDelete(myState->mi_context);
+	myState->mi_context = NULL;
 
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);

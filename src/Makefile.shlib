@@ -368,12 +368,18 @@ $(stlib): $(shlib)
 # Else we just use --export-all-symbols.
 ifeq (,$(SHLIB_EXPORTS))
 $(shlib): $(OBJS) | $(SHLIB_PREREQS)
-	$(CC) $(CFLAGS)  -shared -static-libgcc -o $@  $(OBJS) $(LDFLAGS) $(LDFLAGS_SL) $(SHLIB_LINK) $(LIBS) -Wl,--export-all-symbols -Wl,--out-implib=$(stlib)
+	rm -f $(stlib)
+	$(LINK.static) $(stlib) $(OBJS)
+	$(RANLIB) $(stlib)
+	$(CC) $(CFLAGS)  -shared -static-libgcc -o $@  $(OBJS) $(LDFLAGS) $(LDFLAGS_SL) $(SHLIB_LINK) $(LIBS) -Wl,--export-all-symbols -Wl,--out-implib=lib$(NAME).dll.a
 else
 DLL_DEFFILE = lib$(NAME)dll.def
 
 $(shlib): $(OBJS) $(DLL_DEFFILE) | $(SHLIB_PREREQS)
-	$(CC) $(CFLAGS)  -shared -static-libgcc -o $@  $(OBJS) $(DLL_DEFFILE) $(LDFLAGS) $(LDFLAGS_SL) $(SHLIB_LINK) $(LIBS) -Wl,--out-implib=$(stlib)
+	rm -f $(stlib)
+	$(LINK.static) $(stlib) $(OBJS)
+	$(RANLIB) $(stlib)
+	$(CC) $(CFLAGS)  -shared -static-libgcc -o $@  $(OBJS) $(DLL_DEFFILE) $(LDFLAGS) $(LDFLAGS_SL) $(SHLIB_LINK) $(LIBS) -Wl,--out-implib=lib$(NAME).dll.a
 endif
 
 endif # PORTNAME == cygwin
@@ -467,6 +473,7 @@ endif # not cygwin
 endif # not aix
 ifneq (,$(findstring $(PORTNAME),win32 cygwin))
 	$(INSTALL_SHLIB) $< '$(DESTDIR)$(bindir)/$(shlib)'
+	$(INSTALL_DATA) $< '$(DESTDIR)$(libdir)/lib$(NAME).dll.a'
 endif
 else # no soname
 	$(INSTALL_SHLIB) $< '$(DESTDIR)$(pkglibdir)/$(shlib)'

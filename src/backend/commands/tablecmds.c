@@ -6363,7 +6363,7 @@ NotNullImpliedByRelConstraints(Relation rel, Form_pg_attribute attr)
 
 	if (ConstraintImpliedByRelConstraint(rel, list_make1(nnulltest), NIL))
 	{
-		ereport(DEBUG1,
+		ereport(NOTICE,
 				(errmsg("existing constraints on column \"%s\".\"%s\" are sufficient to prove that it does not contain nulls",
 						RelationGetRelationName(rel), NameStr(attr->attname))));
 		return true;
@@ -15369,11 +15369,11 @@ QueuePartitionConstraintValidation(List **wqueue, Relation scanrel,
 	if (PartConstraintImpliedByRelConstraint(scanrel, partConstraint))
 	{
 		if (!validate_default)
-			ereport(INFO,
+			ereport(NOTICE,
 					(errmsg("partition constraint for table \"%s\" is implied by existing constraints",
 							RelationGetRelationName(scanrel))));
 		else
-			ereport(INFO,
+			ereport(NOTICE,
 					(errmsg("updated partition constraint for default partition \"%s\" is implied by existing constraints",
 							RelationGetRelationName(scanrel))));
 		return;

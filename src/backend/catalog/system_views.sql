@@ -194,7 +194,10 @@ CREATE VIEW pg_stats WITH (security_barrier) AS
         stainherit AS inherited,
         stanullfrac AS null_frac,
         stawidth AS avg_width,
-        stadistinct AS n_distinct,
+        CASE
+            WHEN stadistinct >= 0 THEN stadistinct
+            ELSE -1 * stadistinct * pg_stat_get_live_tuples(c.oid)
+        END AS n_distinct,
         CASE
             WHEN stakind1 = 1 THEN stavalues1
             WHEN stakind2 = 1 THEN stavalues2

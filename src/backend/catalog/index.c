@@ -1832,6 +1832,7 @@ index_constraint_create(Relation heapRelation,
 								   islocal,
 								   inhcount,
 								   noinherit,
+								   false,	/* contemporal */
 								   is_internal);
 
 	/*

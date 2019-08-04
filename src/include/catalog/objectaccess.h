@@ -45,7 +45,8 @@ typedef enum ObjectAccessType
 	OAT_DROP,
 	OAT_POST_ALTER,
 	OAT_NAMESPACE_SEARCH,
-	OAT_FUNCTION_EXECUTE
+	OAT_FUNCTION_EXECUTE,
+	OAT_TRUNCATE
 } ObjectAccessType;
 
 /*
@@ -131,6 +132,7 @@ extern void RunObjectPostCreateHook(Oid classId, Oid objectId, int subId,
 									bool is_internal);
 extern void RunObjectDropHook(Oid classId, Oid objectId, int subId,
 							  int dropflags);
+extern void RunObjectTruncateHook(Oid objectId);
 extern void RunObjectPostAlterHook(Oid classId, Oid objectId, int subId,
 								   Oid auxiliaryId, bool is_internal);
 extern bool RunNamespaceSearchHook(Oid objectId, bool ereport_on_violation);
@@ -158,6 +160,12 @@ extern void RunFunctionExecuteHook(Oid objectId);
 		if (object_access_hook)										\
 			RunObjectDropHook((classId),(objectId),(subId),			\
 							  (dropflags));							\
+	} while(0)
+
+#define InvokeObjectTruncateHook(objectId)							\
+	do {															\
+		if (object_access_hook)										\
+			RunObjectTruncateHook(objectId);						\
 	} while(0)
 
 #define InvokeObjectPostAlterHook(classId,objectId,subId)			\

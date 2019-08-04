@@ -13,6 +13,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_class.h"
 
 /*
  * Hook on object accesses.  This is intended as infrastructure for security
@@ -62,6 +63,22 @@ RunObjectDropHook(Oid classId, Oid objectId, int subId,
 	(*object_access_hook) (OAT_DROP,
 						   classId, objectId, subId,
 						   (void *) &drop_arg);
+}
+
+/*
+ * RunObjectTruncateHook
+ *
+ * It is the entrypoint of a TRUNCATE event
+ */
+void
+RunObjectTruncateHook(Oid objectId)
+{
+	/* caller should check, but just in case... */
+	Assert(object_access_hook != NULL);
+
+	(*object_access_hook) (OAT_TRUNCATE,
+						   RelationRelationId, objectId, 0,
+						   NULL);
 }
 
 /*

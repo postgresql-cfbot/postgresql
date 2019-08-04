@@ -51,6 +51,36 @@ static ParamListInfo EvaluateParams(PreparedStatement *pstmt, List *params,
 static Datum build_regtype_array(Oid *param_types, int num_params);
 
 /*
+ * cleanUpQuery - Cleanup queries after they have been rewritten.
+ *
+ * This nulls all the joinaliasvars and colnames in RTEs of kind RTE_JOIN
+ * in CMD_SELECT queries after the Query has been analyzed and rewritten.
+ * For some join-heavy queries this results in a 70% memory usage reduction.
+ */
+static void cleanQuery(Query* q) {
+	ListCell* lc2;
+	if( q->commandType == CMD_SELECT ) {
+		foreach(lc2, q->rtable) {
+			RangeTblEntry* rte = (RangeTblEntry*)lfirst(lc2);
+			if( rte->rtekind == RTE_JOIN ) {
+				ListCell* lc3;
+				foreach(lc3, rte->joinaliasvars) {
+					lc3->data.ptr_value = NULL;
+				}
+				if( rte->eref ) {
+					foreach(lc3, rte->eref->colnames) {
+						lc3->data.ptr_value = NULL;
+					}
+				}
+			}
+			if( rte->rtekind == RTE_SUBQUERY ) {
+				cleanQuery(rte->subquery);
+			}
+		}
+	}
+}
+
+/*
  * Implements the 'PREPARE' utility statement.
  */
 void
@@ -64,6 +94,7 @@ PrepareQuery(PrepareStmt *stmt, const char *queryString,
 	Query	   *query;
 	List	   *query_list;
 	int			i;
+	ListCell*   lc;
 
 	/*
 	 * Disallow empty-string statement name (conflicts with protocol-level
@@ -99,7 +130,6 @@ PrepareQuery(PrepareStmt *stmt, const char *queryString,
 	if (nargs)
 	{
 		ParseState *pstate;
-		ListCell   *l;
 
 		/*
 		 * typenameTypeId wants a ParseState to carry the source query string.
@@ -111,9 +141,9 @@ PrepareQuery(PrepareStmt *stmt, const char *queryString,
 		argtypes = (Oid *) palloc(nargs * sizeof(Oid));
 		i = 0;
 
-		foreach(l, stmt->argtypes)
+		foreach(lc, stmt->argtypes)
 		{
-			TypeName   *tn = lfirst(l);
+			TypeName   *tn = lfirst(lc);
 			Oid			toid = typenameTypeId(pstate, tn);
 
 			argtypes[i++] = toid;
@@ -162,6 +192,11 @@ PrepareQuery(PrepareStmt *stmt, const char *queryString,
 
 	/* Rewrite the query. The result could be 0, 1, or many queries. */
 	query_list = QueryRewrite(query);
+
+	/* Clearing joinaliasvars from join rte's now */
+	foreach(lc, query_list) {
+		cleanQuery((Query*)lfirst(lc));
+	}
 
 	/* Finish filling in the CachedPlanSource */
 	CompleteCachedPlan(plansource,

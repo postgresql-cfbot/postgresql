@@ -510,6 +510,7 @@ int			log_min_error_statement = ERROR;
 int			log_min_messages = WARNING;
 int			client_min_messages = NOTICE;
 int			log_min_duration_statement = -1;
+int			log_min_duration_sample = -1;
 int			log_temp_files = -1;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
@@ -2705,11 +2706,23 @@ static struct config_int ConfigureNamesInt[] =
 		{"log_min_duration_statement", PGC_SUSET, LOGGING_WHEN,
 			gettext_noop("Sets the minimum execution time above which "
 						 "statements will be logged."),
-			gettext_noop("Zero prints all queries, subject to log_statement_sample_rate. "
-						 "-1 turns this feature off."),
+			gettext_noop("Zero prints all queries, -1 turns this feature off."),
 			GUC_UNIT_MS
 		},
 		&log_min_duration_statement,
+		-1, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"log_min_duration_sample", PGC_SUSET, LOGGING_WHEN,
+			gettext_noop("Sets the minimum execution time above which "
+						 "statements will be sampled for logging."),
+			gettext_noop("Zero samples all queries, subject to log_statement_sample_rate. "
+						 "-1 turns this feature off."),
+			GUC_UNIT_MS
+		},
+		&log_min_duration_sample,
 		-1, -1, INT_MAX,
 		NULL, NULL, NULL
 	},

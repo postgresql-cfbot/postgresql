@@ -2213,7 +2213,8 @@ check_log_statement(List *stmt_list)
 /*
  * check_log_duration
  *		Determine whether current command's duration should be logged.
- *		If log_statement_sample_rate < 1.0, log only a sample.
+ *		If log_statement_sample_rate < 1.0, log only a sample of queries
+ *		between log_min_duration_sample and log_min_duration_statement.
  *		We also check if this statement in this transaction must be logged
  *		(regardless of its duration).
  *
@@ -2231,12 +2232,14 @@ check_log_statement(List *stmt_list)
 int
 check_log_duration(char *msec_str, bool was_logged)
 {
-	if (log_duration || log_min_duration_statement >= 0 || xact_is_sampled)
+	if (log_duration || log_min_duration_statement >= 0 ||
+		log_min_duration_sample || xact_is_sampled)
 	{
 		long		secs;
 		int			usecs;
 		int			msecs;
 		bool		exceeded;
+		bool		exceeded_sample;
 		bool		in_sample;
 
 		TimestampDifference(GetCurrentStatementStartTimestamp(),
@@ -2255,17 +2258,25 @@ check_log_duration(char *msec_str, bool was_logged)
 					  secs * 1000 + msecs >= log_min_duration_statement)));
 
 		/*
+		 * Use the same odd-looking test for log_min_duration_sample.
+		 */
+		exceeded_sample = (log_min_duration_sample == 0 ||
+					(log_min_duration_sample > 0 &&
+					 (secs > log_min_duration_sample / 1000 ||
+					  secs * 1000 + msecs >= log_min_duration_sample)));
+
+		/*
 		 * Do not log if log_statement_sample_rate = 0. Log a sample if
 		 * log_statement_sample_rate <= 1 and avoid unnecessary random() call
 		 * if log_statement_sample_rate = 1.  But don't compute any of this
 		 * unless needed.
 		 */
-		in_sample = exceeded &&
+		in_sample = exceeded_sample &&
 			log_statement_sample_rate != 0 &&
 			(log_statement_sample_rate == 1 ||
 			 random() <= log_statement_sample_rate * MAX_RANDOM_VALUE);
 
-		if ((exceeded && in_sample) || log_duration || xact_is_sampled)
+		if ((exceeded || in_sample) || log_duration || xact_is_sampled)
 		{
 			snprintf(msec_str, 32, "%ld.%03d",
 					 secs * 1000 + msecs, usecs % 1000);

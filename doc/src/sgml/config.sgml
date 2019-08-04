@@ -5850,14 +5850,55 @@ local0.*    /var/log/postgresql
         <para>
          Causes the duration of each completed statement to be logged
          if the statement ran for at least the specified number of
-         milliseconds, modulated by <varname>log_statement_sample_rate</varname>.
-         Setting this to zero prints all statement durations.
+         milliseconds. Setting this to zero prints all statement durations.
          <literal>-1</literal> (the default) disables logging statements due to
          exceeding duration threshold; for example, if you set it to
          <literal>250ms</literal>, then all SQL statements that run 250ms or
          longer will be logged. Enabling this parameter can be helpful in
          tracking down unoptimized queries in your applications.
          Only superusers can change this setting.
+        </para>
+
+        <para>
+         For clients using extended query protocol, durations of the Parse,
+         Bind, and Execute steps are logged independently.
+        </para>
+
+       <note>
+        <para>
+         When using this option together with
+         <xref linkend="guc-log-statement"/>,
+         the text of statements that are logged because of
+         <varname>log_statement</varname> will not be repeated in the
+         duration log message.
+         If you are not using <application>syslog</application>, it is recommended
+         that you log the PID or session ID using
+         <xref linkend="guc-log-line-prefix"/>
+         so that you can link the statement message to the later
+         duration message using the process ID or session ID.
+        </para>
+       </note>
+       </listitem>
+      </varlistentry>
+
+     <varlistentry id="guc-log-min-duration-sample" xreflabel="log_min_duration_sample">
+      <term><varname>log_min_duration_sample</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>log_min_duration_sample</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+       <listitem>
+        <para>
+         Causes the duration of each completed statement to be logged
+         if the statement ran for at least the specified number of
+         milliseconds, modulated by <varname>log_statement_sample_rate</varname>.
+         Setting this to zero samples all statement durations.
+         <literal>-1</literal> (the default) disables sampling of statements;
+         for example, if you set it to <literal>250ms</literal>, then all
+         SQL statements that run 250ms or longer will be sampled for
+         logging. Statements with duration exceeding
+         <varname>log_min_duration_statement</varname> are not subject to
+         sampling and are logged every time.
         </para>
 
         <para>

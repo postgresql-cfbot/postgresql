@@ -18,6 +18,7 @@
 #include <termios.h>
 #endif
 
+#include "common/string.h"
 
 /*
  * simple_prompt
@@ -144,11 +145,8 @@ simple_prompt(const char *prompt, char *destination, size_t destlen, bool echo)
 		} while (buflen > 0 && buf[buflen - 1] != '\n');
 	}
 
-	/* strip trailing newline, including \r in case we're on Windows */
-	while (length > 0 &&
-		   (destination[length - 1] == '\n' ||
-			destination[length - 1] == '\r'))
-		destination[--length] = '\0';
+	/* strip trailing newline and carriage return */
+	(void) pg_strip_crlf(destination);
 
 	if (!echo)
 	{

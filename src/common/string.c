@@ -90,3 +90,25 @@ pg_clean_ascii(char *str)
 			*p = '?';
 	}
 }
+
+
+/*
+ * pg_clean_crlf -- Remove any trailing newline and carriage return
+ *
+ * Removes any trailing newline and carriage return characters (\r on
+ * Windows), zero-terminating it.
+ *
+ * The passed in string must be zero-terminated, and this function returns
+ * the new length of the string.
+ */
+int
+pg_strip_crlf(char *str)
+{
+	int len = strlen(str);
+
+	while (len > 0 && (str[len - 1] == '\n' ||
+					   str[len - 1] == '\r'))
+		str[--len] = '\0';
+
+	return len;
+}

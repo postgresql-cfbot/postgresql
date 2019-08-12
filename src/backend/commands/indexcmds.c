@@ -1037,7 +1037,8 @@ DefineIndex(Oid relationId,
 			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
 										 nparts);
 
-			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
+			if (nparts > 0)
+				memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
 
 			parentDesc = RelationGetDescr(rel);
 			opfamOids = palloc(sizeof(Oid) * numberOfKeyAttributes);

@@ -1797,7 +1797,6 @@ _bt_insert_parent(Relation rel,
 			stack = &fakestack;
 			stack->bts_blkno = BufferGetBlockNumber(pbuf);
 			stack->bts_offset = InvalidOffsetNumber;
-			stack->bts_btentry = InvalidBlockNumber;
 			stack->bts_parent = NULL;
 			_bt_relbuf(rel, pbuf);
 		}
@@ -1819,8 +1818,7 @@ _bt_insert_parent(Relation rel,
 		 * new downlink will be inserted at the correct offset. Even buf's
 		 * parent may have changed.
 		 */
-		stack->bts_btentry = bknum;
-		pbuf = _bt_getstackbuf(rel, stack);
+		pbuf = _bt_getstackbuf(rel, stack, bknum);
 
 		/*
 		 * Now we can unlock the right child. The left child will be unlocked
@@ -1901,13 +1899,31 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 }
 
 /*
- *	_bt_getstackbuf() -- Walk back up the tree one step, and find the item
- *						 we last looked at in the parent.
+ *	_bt_getstackbuf() -- Walk back up the tree one step, and find the pivot
+ *						 tuple whose downlink points to child page.
  *
- *		This is possible because we save the downlink from the parent item,
- *		which is enough to uniquely identify it.  Insertions into the parent
- *		level could cause the item to move right; deletions could cause it
- *		to move left, but not left of the page we previously found it in.
+ *		Caller passes child's block number, which is enough to uniquely
+ *		identify it using a linear search that matches it to a downlink in
+ *		parent.  Details of the parent are taken from stack for parent
+ *		level, which was stashed during initial descent.
+ *
+ *		The details of the parent page/downlink from stack are inherently
+ *		approximate, though child's downlink can typically be relocated very
+ *		quickly.  Insertions into the parent level could cause the pivot
+ *		tuple to move right; deletions could cause it to move left, but not
+ *		left of the page we previously found it on.
+ *
+ *		Note also that it's even possible that located pivot tuple is not
+ *		even _bt_compare()-equal to the pivot tuple whose downlink was
+ *		originally followed.  For example, caller may have had to move right
+ *		or step right earlier, and will now require a downlink to a child
+ *		page that is actually a sibling of the page encountered when
+ *		downlink was followed during descent.
+ *
+ *		Caller should have a lock on child's buffer, too, since caller's
+ *		stack might otherwise go stale immediately. (Page deletion caller
+ *		can get away with a lock on leaf level page when locating topparent
+ *		downlink, though.)
  *
  *		Adjusts bts_blkno & bts_offset if changed.
  *
@@ -1915,7 +1931,7 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
  *		(should not happen).
  */
 Buffer
-_bt_getstackbuf(Relation rel, BTStack stack)
+_bt_getstackbuf(Relation rel, BTStack stack, BlockNumber child)
 {
 	BlockNumber blkno;
 	OffsetNumber start;
@@ -1977,7 +1993,7 @@ _bt_getstackbuf(Relation rel, BTStack stack)
 				itemid = PageGetItemId(page, offnum);
 				item = (IndexTuple) PageGetItem(page, itemid);
 
-				if (BTreeInnerTupleGetDownLink(item) == stack->bts_btentry)
+				if (BTreeInnerTupleGetDownLink(item) == child)
 				{
 					/* Return accurate pointer to where link is now */
 					stack->bts_blkno = blkno;
@@ -1993,7 +2009,7 @@ _bt_getstackbuf(Relation rel, BTStack stack)
 				itemid = PageGetItemId(page, offnum);
 				item = (IndexTuple) PageGetItem(page, itemid);
 
-				if (BTreeInnerTupleGetDownLink(item) == stack->bts_btentry)
+				if (BTreeInnerTupleGetDownLink(item) == child)
 				{
 					/* Return accurate pointer to where link is now */
 					stack->bts_blkno = blkno;

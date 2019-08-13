@@ -403,20 +403,15 @@ typedef struct BTMetaPageData
 #define BT_WRITE		BUFFER_LOCK_EXCLUSIVE
 
 /*
- *	BTStackData -- As we descend a tree, we push the (location, downlink)
- *	pairs from internal pages onto a private stack.  If we split a
- *	leaf, we use this stack to walk back up the tree and insert data
- *	into parent pages (and possibly to split them, too).  Lehman and
- *	Yao's update algorithm guarantees that under no circumstances can
- *	our private stack give us an irredeemably bad picture up the tree.
- *	Again, see the paper for details.
+ * BTStackData -- As we descend a tree, we push the location of pivot
+ * tuples whose downlinks are followed from internal pages onto a private
+ * stack.  If we split a leaf, we use this stack to walk back up the tree
+ * and insert data into parent pages (and possibly to split them, too).
  */
-
 typedef struct BTStackData
 {
 	BlockNumber bts_blkno;
 	OffsetNumber bts_offset;
-	BlockNumber bts_btentry;
 	struct BTStackData *bts_parent;
 } BTStackData;
 
@@ -731,7 +726,7 @@ extern void _bt_parallel_advance_array_keys(IndexScanDesc scan);
  */
 extern bool _bt_doinsert(Relation rel, IndexTuple itup,
 						 IndexUniqueCheck checkUnique, Relation heapRel);
-extern Buffer _bt_getstackbuf(Relation rel, BTStack stack);
+extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, BlockNumber child);
 extern void _bt_finish_split(Relation rel, Buffer bbuf, BTStack stack);
 
 /*

@@ -14,6 +14,7 @@
 #ifndef XACT_H
 #define XACT_H
 
+#include "access/undolog.h"
 #include "access/transam.h"
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
@@ -130,6 +131,14 @@ typedef enum
 typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 								 SubTransactionId parentSubid, void *arg);
 
+/*
+ * Transaction's undo related info.
+ */
+typedef struct XactUndoInfo
+{
+	/* Transaction's header undo record pointer in last undo log. */
+	UndoRecPtr		prevlog_xact_start[UndoLogCategories];
+} XactUndoInfo;
 
 /* ----------------
  *		transaction-related XLOG entries
@@ -363,6 +372,7 @@ extern FullTransactionId GetTopFullTransactionId(void);
 extern FullTransactionId GetTopFullTransactionIdIfAny(void);
 extern FullTransactionId GetCurrentFullTransactionId(void);
 extern FullTransactionId GetCurrentFullTransactionIdIfAny(void);
+extern XactUndoInfo* GetTopTransactionUndoInfo(void);
 extern void MarkCurrentTransactionIdLoggedIfAny(void);
 extern bool SubTransactionIsActive(SubTransactionId subxid);
 extern CommandId GetCurrentCommandId(bool used);
@@ -427,6 +437,16 @@ extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
 									 int xactflags, TransactionId twophase_xid,
 									 const char *twophase_gid);
 extern void xact_redo(XLogReaderState *record);
+
+/* functions to allow undo execution */
+extern void SetCurrentUndoLocation(UndoRecPtr urec_ptr,
+						UndoLogCategory category);
+extern void ResetUndoActionsInfo(void);
+extern bool NeedToPerformUndoActions(void);
+extern void ReleaseResourcesAndProcessUndo(void);
+extern bool ProcessUndoRequestForEachLogCat(FullTransactionId fxid, Oid dbid,
+				UndoRecPtr *end_urec_ptr, UndoRecPtr *start_urec_ptr,
+				bool *undoRequestResgistered, bool isSubTrans);
 
 /* xactdesc.c */
 extern void xact_desc(StringInfo buf, XLogReaderState *record);

@@ -36,6 +36,7 @@ volatile sig_atomic_t ConfigReloadPending = false;
 volatile uint32 InterruptHoldoffCount = 0;
 volatile uint32 QueryCancelHoldoffCount = 0;
 volatile uint32 CritSectionCount = 0;
+volatile uint32 SemiCritSectionCount = 0;
 
 int			MyProcPid;
 pg_time_t	MyStartTime;
@@ -130,7 +131,7 @@ int			max_parallel_maintenance_workers = 2;
  */
 int			NBuffers = 1000;
 int			MaxConnections = 90;
-int			max_worker_processes = 8;
+int			max_worker_processes = 12;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
 

@@ -63,6 +63,9 @@ typedef struct SMgrRelationData
 	 */
 	int			smgr_which;		/* storage manager selector */
 
+	/* For implementations to use for extra data. */
+	void	   *private_data;
+
 	/*
 	 * for md.c; per-fork arrays of the number of open segments
 	 * (md_num_open_segs) and the segments themselves (md_seg_fds).
@@ -95,7 +98,7 @@ extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum, char *buffer, bool skipFsync);
 extern void smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum);
-extern void smgrread(SMgrRelation reln, ForkNumber forknum,
+extern bool smgrread(SMgrRelation reln, ForkNumber forknum,
 					 BlockNumber blocknum, char *buffer);
 extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
 					  BlockNumber blocknum, char *buffer, bool skipFsync);

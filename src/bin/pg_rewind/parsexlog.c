@@ -28,7 +28,7 @@
  * RmgrNames is an array of resource manager names, to make error messages
  * a bit nicer.
  */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,undo,undo_status,undo_desc) \
   name,
 
 static const char *RmgrNames[RM_MAX_ID + 1] = {
@@ -357,6 +357,10 @@ extractPageInfo(XLogReaderState *record)
 		 * exist in the target data dir, and copy them in toto from the source
 		 * system. No need to do anything special here.
 		 */
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_PRECREATE)
+	{
+		/* We can safely ignore these because ... TODO */
 	}
 	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_CREATE)
 	{

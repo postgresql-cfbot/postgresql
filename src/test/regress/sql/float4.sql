@@ -345,3 +345,7 @@ select float4send(flt) as ibits,
 
 -- clean up, lest opr_sanity complain
 drop type xfloat4 cascade;
+
+-- Add test case for float4() type fonversion function
+select float4(1234567890123456789012345678901234567890::float8);
+select float4(0.0000000000000000000000000000000000000000000001::float8);

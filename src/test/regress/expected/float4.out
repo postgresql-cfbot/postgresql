@@ -939,3 +939,8 @@ drop cascades to cast from xfloat4 to real
 drop cascades to cast from real to xfloat4
 drop cascades to cast from xfloat4 to integer
 drop cascades to cast from integer to xfloat4
+-- Add test case for float4() type fonversion function
+select float4(1234567890123456789012345678901234567890::float8);
+ERROR:  value out of range: overflow
+select float4(0.0000000000000000000000000000000000000000000001::float8);
+ERROR:  value out of range: underflow

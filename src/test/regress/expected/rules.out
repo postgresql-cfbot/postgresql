@@ -2222,7 +2222,10 @@ pg_stats| SELECT n.nspname AS schemaname,
     s.stainherit AS inherited,
     s.stanullfrac AS null_frac,
     s.stawidth AS avg_width,
-    s.stadistinct AS n_distinct,
+        CASE
+            WHEN (s.stadistinct >= (0)::double precision) THEN (s.stadistinct)::double precision
+            ELSE ((('-1'::integer)::double precision * s.stadistinct) * (pg_stat_get_live_tuples(c.oid))::double precision)
+        END AS n_distinct,
         CASE
             WHEN (s.stakind1 = 1) THEN s.stavalues1
             WHEN (s.stakind2 = 1) THEN s.stavalues2

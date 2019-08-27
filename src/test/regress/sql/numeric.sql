@@ -839,6 +839,8 @@ INSERT INTO num_input_test(n1) VALUES ('555.50');
 INSERT INTO num_input_test(n1) VALUES ('-555.50');
 INSERT INTO num_input_test(n1) VALUES ('NaN ');
 INSERT INTO num_input_test(n1) VALUES ('        nan');
+INSERT INTO num_input_test(n1) values('99999999999999999999999999.998');
+INSERT INTO num_input_test(n1) values('99999999999999999999999999.997');
 
 -- bad inputs
 INSERT INTO num_input_test(n1) VALUES ('     ');
@@ -850,7 +852,7 @@ INSERT INTO num_input_test(n1) VALUES ('5. 0   ');
 INSERT INTO num_input_test(n1) VALUES ('');
 INSERT INTO num_input_test(n1) VALUES (' N aN ');
 
-SELECT * FROM num_input_test;
+SELECT * FROM num_input_test ORDER BY n1 DESC;
 
 --
 -- Test some corner cases for multiplication

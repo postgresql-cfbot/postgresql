@@ -18334,6 +18334,10 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
    </indexterm>
 
    <indexterm>
+    <primary>pg_get_databasebyid</primary>
+   </indexterm>
+
+   <indexterm>
     <primary>pg_get_viewdef</primary>
    </indexterm>
 
@@ -18512,6 +18516,11 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
        <entry><literal><function>pg_get_userbyid(<parameter>role_oid</parameter>)</function></literal></entry>
        <entry><type>name</type></entry>
        <entry>get role name with given OID</entry>
+      </row>
+      <row>
+       <entry><literal><function>pg_get_databasebyid(<parameter>db_oid</parameter>)</function></literal></entry>
+       <entry><type>name</type></entry>
+       <entry>get database name with given OID</entry>
       </row>
       <row>
        <entry><literal><function>pg_get_viewdef(<parameter>view_name</parameter>)</function></literal></entry>
@@ -18703,8 +18712,9 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
   </para>
 
   <para>
-   <function>pg_get_userbyid</function> extracts a role's name given
-   its OID.
+   <function>pg_get_userbyid</function> and
+   <function>pg_get_databasebyid</function> extracts respectively a
+   role's and database's name given its OID.
   </para>
 
   <para>

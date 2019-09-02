@@ -31,6 +31,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_depend.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_opclass.h"
@@ -2470,6 +2471,41 @@ pg_get_userbyid(PG_FUNCTION_ARGS)
 	}
 	else
 		sprintf(NameStr(*result), "unknown (OID=%u)", roleid);
+
+	PG_RETURN_NAME(result);
+}
+
+/* ----------
+ * get_databasebyid			- Get a database name by oid and
+ *				  fallback to 'unknown (OID=n)'
+ * ----------
+ */
+Datum
+pg_get_databasebyid(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	Name		result;
+	HeapTuple	dbtup;
+	Form_pg_database dbrec;
+
+	/*
+	 * Allocate space for the result
+	 */
+	result = (Name) palloc(NAMEDATALEN);
+	memset(NameStr(*result), 0, NAMEDATALEN);
+
+	/*
+	 * Get the pg_database entry and print the result
+	 */
+	dbtup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(dbid));
+	if (HeapTupleIsValid(dbtup))
+	{
+		dbrec = (Form_pg_database) GETSTRUCT(dbtup);
+		StrNCpy(NameStr(*result), NameStr(dbrec->datname), NAMEDATALEN);
+		ReleaseSysCache(dbtup);
+	}
+	else
+		sprintf(NameStr(*result), "unknown (OID=%u)", dbid);
 
 	PG_RETURN_NAME(result);
 }

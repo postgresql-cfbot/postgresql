@@ -1,9 +1,108 @@
-# TestLib, low-level routines and actions regression tests.
-#
-# This module contains a set of routines dedicated to environment setup for
-# a PostgreSQL regression test run and includes some low-level routines
-# aimed at controlling command execution, logging and test functions. This
-# module should never depend on any other PostgreSQL regression test modules.
+
+=pod
+
+=head1 NAME
+
+TestLib - module containing routines for environment setup, low-level routines
+for command execution, logging and test functions
+
+=head1 SYNOPSIS
+
+  use TestLib;
+
+  # Checks if all the tests passed or not
+  all_tests_passing()
+
+  # Creates a temporary directory
+  tempdir(prefix)
+
+  # Creates a temporary directory outside the build tree for the
+  # Unix-domain socket
+  tempdir_short()
+
+  # Returns the real directory for a virtual path directory under msys
+  real_dir(dir)
+
+  # Runs the command which is passed as an argument
+  system_log()
+
+  # Runs the command which is passed as an argument. On failure abandons
+  # all other tests
+  system_or_bail()
+
+  # Runs the command which is passed as an argument.
+  run_log()
+
+  # Returns the output after running a command
+  run_command(dir)
+
+  # Generate a string made of the given range of ASCII characters
+  generate_ascii_string(from_char, to_char)
+
+  # Read the contents of the directory
+  slurp_dir(dir)
+
+  # Read the contents of the file
+  slurp_file(filename)
+
+  # Appends a string at the end of a given file
+  append_to_file(filename, str)
+
+  # Check that all file/dir modes in a directory match the expected values
+  check_mode_recursive(dir, expected_dir_mode, expected_file_mode,
+                       ignore_list)
+
+  # Change mode recursively on a directory
+  chmod_recursive(dir, dir_mode, file_mode)
+
+  # Check presence of a given regexp within pg_config.h
+  check_pg_config(regexp)
+
+  # Test function to check that the command runs successfully
+  command_ok(cmd, test_name)
+
+  # Test function to check that the command fails
+  command_fails(cmd, test_name)
+
+  # Test function to check that the command exit code matches the
+  # expected exit code
+  command_exit_is(cmd, expected, test_name)
+
+  # Test function to check that the command supports --help option
+  program_help_ok(cmd)
+
+  # Test function to check that the command supports --version option
+  program_version_ok(cmd)
+
+  # Test function to check that a command with invalid option returns
+  # non-zero exit code and error message
+  program_options_handling_ok(cmd)
+
+  # Test function to check that the command runs successfully and the
+  # output matches the given regular expression
+  command_like(cmd, expected_stdout, test_name)
+
+  #TODO
+  command_like_safe(cmd, expected_stdout, test_name)
+
+  # Test function to check that the command fails and the error message
+  # matches the given regular expression
+  command_fails_like(cmd, expected_stderr, test_name)
+
+  # Test function to run a command and check its status and outputs
+  command_checks_all(cmd, expected_ret, out, err, test_name)
+
+
+=head1 DESCRIPTION
+
+Testlib module contains a set of routines dedicated to environment setup for
+a PostgreSQL regression test run and includes some low-level routines
+aimed at controlling command execution, logging and test functions. This
+module should never depend on any other PostgreSQL regression test modules.
+
+The IPC::Run module is required.
+
+=cut
 
 package TestLib;
 
@@ -22,7 +121,8 @@ use File::Temp ();
 use IPC::Run;
 use SimpleTee;
 
-# specify a recent enough version of Test::More to support the done_testing() function
+# specify a recent enough version of Test::More to support the
+# done_testing() function
 use Test::More 0.87;
 
 our @EXPORT = qw(
@@ -135,6 +235,19 @@ END
 	$File::Temp::KEEP_ALL = 1 unless all_tests_passing();
 }
 
+
+=pod
+
+=head1 METHODS
+
+=over
+
+=item all_tests_passing()
+
+Returns 1 if all the tests pass. Otherwise returns 0
+
+=cut
+
 sub all_tests_passing
 {
 	my $fail_count = 0;
@@ -145,9 +258,18 @@ sub all_tests_passing
 	return 1;
 }
 
-#
-# Helper functions
-#
+=pod
+
+=item tempdir(prefix)
+
+Creates a temporary directory with name prefix_XXXX if prefix argument is
+passed. Otherwise a temporary directory with name tmp_test_XXXX is created.
+XXXX represents four random characters. The emporary directory is created
+inside the folder represented by $tmp_check and it is deleted at the end of
+the tests.
+
+=cut
+
 sub tempdir
 {
 	my ($prefix) = @_;
@@ -158,17 +280,32 @@ sub tempdir
 		CLEANUP => 1);
 }
 
+
+=pod
+
+=item tempdir_short()
+
+Use a separate temp dir outside the build tree for the
+Unix-domain socket, to avoid file name length issues.
+
+=cut
+
 sub tempdir_short
 {
 
-	# Use a separate temp dir outside the build tree for the
-	# Unix-domain socket, to avoid file name length issues.
 	return File::Temp::tempdir(CLEANUP => 1);
 }
 
-# Translate a Perl file name to a host file name.  Currently, this is a no-op
-# except for the case of Perl=msys and host=mingw32.  The subject need not
-# exist, but its parent directory must exist.
+=pod
+
+=item perl2host()
+
+Translate a Perl file name to a host file name.  Currently, this is a no-op
+except for the case of Perl=msys and host=mingw32.  The subject need not
+exist, but its parent directory must exist.
+
+=cut
+
 sub perl2host
 {
 	my ($subject) = @_;
@@ -193,11 +330,29 @@ sub perl2host
 	return $dir . $leaf;
 }
 
+=pod
+
+=item system_log()
+
+Runs the command which is passed as argument to the function and returns 0 if
+successful. Otherwise returns non-zero value.
+
+=cut
+
 sub system_log
 {
 	print("# Running: " . join(" ", @_) . "\n");
 	return system(@_);
 }
+
+=pod
+
+=item system_or_bail()
+
+Runs the command which is passed as argument to the function. On failure it
+abandons further tests and exits the program.
+
+=cut
 
 sub system_or_bail
 {
@@ -208,11 +363,27 @@ sub system_or_bail
 	return;
 }
 
+=pod
+
+=item run_log()
+
+Runs the command which is passed as argument to the function
+
+=cut
+
 sub run_log
 {
 	print("# Running: " . join(" ", @{ $_[0] }) . "\n");
 	return IPC::Run::run(@_);
 }
+
+=pod
+
+=item run_command(cmd)
+
+Returns the output after running the command
+
+=cut
 
 sub run_command
 {
@@ -224,7 +395,14 @@ sub run_command
 	return ($stdout, $stderr);
 }
 
-# Generate a string made of the given range of ASCII characters
+=pod
+
+=item generate_ascii_string(from_char, to_char)
+
+Generate a string made of the given range of ASCII characters
+
+=cut
+
 sub generate_ascii_string
 {
 	my ($from_char, $to_char) = @_;
@@ -237,6 +415,20 @@ sub generate_ascii_string
 	return $res;
 }
 
+=pod
+
+=item slurp_dir(dir)
+
+Opens the directory provided as an argument to the function.
+
+If the opendir function returns false, the error message is printed to STDERR
+and comes out of the program.
+
+If the directory is opened successfully, the readdir returns the next
+directory entry for a directory opened by opendir.
+
+=cut
+
 sub slurp_dir
 {
 	my ($dir) = @_;
@@ -246,6 +438,21 @@ sub slurp_dir
 	closedir $dh;
 	return @direntries;
 }
+
+=pod
+
+=item slurp_file(filename)
+
+Opens the file provided as an argument to the function in read mode (as
+indicated by <).
+
+If the open function returns 0, the error message is printed to STDERR and
+comes out of the program.
+
+If the file is opened successfully, the contents are read using the filehandle
+and the file is closed.
+
+=cut
 
 sub slurp_file
 {
@@ -259,6 +466,15 @@ sub slurp_file
 	return $contents;
 }
 
+=pod
+
+=item append_to_file(filename, str)
+
+Append a string at the end of a given file
+
+=cut
+
+
 sub append_to_file
 {
 	my ($filename, $str) = @_;
@@ -269,8 +485,17 @@ sub append_to_file
 	return;
 }
 
-# Check that all file/dir modes in a directory match the expected values,
-# ignoring the mode of any specified files.
+
+=pod
+
+=item check_mode_recursive(dir, expected_dir_mode, expected_file_mode,
+                           ignore_list)
+
+Check that all file/dir modes in a directory match the expected values,
+ignoring the mode of any specified files.
+
+=cut
+
 sub check_mode_recursive
 {
 	my ($dir, $expected_dir_mode, $expected_file_mode, $ignore_list) = @_;
@@ -353,7 +578,14 @@ sub check_mode_recursive
 	return $result;
 }
 
-# Change mode recursively on a directory
+=pod
+
+item chmod_recursive(dir, dir_mode, file_mode)
+
+Change mode recursively on a directory
+
+=cut
+
 sub chmod_recursive
 {
 	my ($dir, $dir_mode, $file_mode) = @_;
@@ -377,9 +609,17 @@ sub chmod_recursive
 	return;
 }
 
-# Check presence of a given regexp within pg_config.h for the installation
-# where tests are running, returning a match status result depending on
-# that.
+
+=pod
+
+=item check_pg_config(regexp)
+
+Check presence of a given regexp within pg_config.h for the installation
+where tests are running, returning a match status result depending on
+that.
+
+=cut
+
 sub check_pg_config
 {
 	my ($regexp) = @_;
@@ -395,9 +635,15 @@ sub check_pg_config
 	return $match;
 }
 
-#
-# Test functions
-#
+
+=pod
+
+=item command_ok(cmd, test_name)
+
+Test function to check that the command runs successfully
+
+=cut
+
 sub command_ok
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -407,6 +653,14 @@ sub command_ok
 	return;
 }
 
+=pod
+
+=item command_fails(cmd, test_name)
+
+Test function to check that the command fails
+
+=cut
+
 sub command_fails
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -415,6 +669,14 @@ sub command_fails
 	ok(!$result, $test_name);
 	return;
 }
+
+=pod
+
+=item command_exit_is(cmd, expected, test_name)
+
+Test function to check that the command exit code matches with the expected exit code.
+
+=cut
 
 sub command_exit_is
 {
@@ -439,6 +701,14 @@ sub command_exit_is
 	return;
 }
 
+=pod
+
+=item program_help_ok(cmd)
+
+Test function to check that the command supports --help option.
+
+=cut
+
 sub program_help_ok
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -452,6 +722,14 @@ sub program_help_ok
 	is($stderr, '', "$cmd --help nothing to stderr");
 	return;
 }
+
+=pod
+
+=item program_version_ok(cmd)
+
+Test function to check that the command supports --version option.
+
+=cut
 
 sub program_version_ok
 {
@@ -467,6 +745,15 @@ sub program_version_ok
 	return;
 }
 
+=pod
+
+=item program_options_handling_ok(cmd)
+
+Test function to check that a command with invalid option returns non-zero
+exit code and error message.
+
+=cut
+
 sub program_options_handling_ok
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -481,6 +768,15 @@ sub program_options_handling_ok
 	return;
 }
 
+=pod
+
+=item command_like(cmd, expected_stdout, test_name)
+
+Test function to check that the command runs successfully and the output
+matches the given regular expression.
+
+=cut
+
 sub command_like
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -493,6 +789,14 @@ sub command_like
 	like($stdout, $expected_stdout, "$test_name: matches");
 	return;
 }
+
+=pod
+
+=item command_like_safe(cmd, expected_stdout, test_name)
+
+TODO
+
+=cut
 
 sub command_like_safe
 {
@@ -515,6 +819,15 @@ sub command_like_safe
 	return;
 }
 
+=pod
+
+=item command_fails_like(cmd, expected_stderr, test_name)
+
+Test function to check that the command fails and the error message matches
+the given regular expression.
+
+=cut
+
 sub command_fails_like
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -527,13 +840,26 @@ sub command_fails_like
 	return;
 }
 
-# Run a command and check its status and outputs.
-# The 5 arguments are:
-# - cmd: ref to list for command, options and arguments to run
-# - ret: expected exit status
-# - out: ref to list of re to be checked against stdout (all must match)
-# - err: ref to list of re to be checked against stderr (all must match)
-# - test_name: name of test
+
+=pod
+
+=item command_checks_all(cmd, expected_ret, out, err, test_name)
+
+Run a command and check its status and outputs.
+The 5 arguments are:
+
+- cmd: ref to list for command, options and arguments to run
+
+- ret: expected exit status
+
+- out: ref to list of re to be checked against stdout (all must match)
+
+- err: ref to list of re to be checked against stderr (all must match)
+
+- test_name: name of test
+
+=cut
+
 sub command_checks_all
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -569,5 +895,12 @@ sub command_checks_all
 
 	return;
 }
+
+=pod
+
+=back
+
+=cut
+
 
 1;

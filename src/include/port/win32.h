@@ -56,3 +56,11 @@
 #else
 #define PGDLLEXPORT
 #endif
+
+
+/*
+ * On Windows, there is no good standard location for AF_UNIX sockets, and
+ * many builds of Windows don't support them yet, so don't create one by
+ * default.
+ */
+#undef DEFAULT_PGSOCKET_DIR

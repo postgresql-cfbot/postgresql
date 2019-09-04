@@ -83,9 +83,10 @@ our @EXPORT = qw(
   command_checks_all
 
   $windows_os
+  $use_unix_sockets
 );
 
-our ($windows_os, $tmp_check, $log_path, $test_logfile);
+our ($windows_os, $use_unix_sockets, $tmp_check, $log_path, $test_logfile);
 
 BEGIN
 {
@@ -112,6 +113,11 @@ BEGIN
 
 	# Must be set early
 	$windows_os = $Config{osname} eq 'MSWin32' || $Config{osname} eq 'msys';
+
+	# Specifies whether to use Unix sockets for test setups.  On
+	# Windows we don't use them by default since it's not universally
+	# supported, but it can be overridden if desired.
+	$use_unix_sockets = (!$windows_os || $ENV{PG_TEST_USE_UNIX_SOCKETS} ne '');
 }
 
 =pod

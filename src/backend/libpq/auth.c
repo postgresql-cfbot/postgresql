@@ -1999,7 +1999,11 @@ auth_peer(hbaPort *port)
 	}
 
 	errno = 0;					/* clear errno before call */
+#ifndef WIN32
 	pw = getpwuid(uid);
+#else
+	pw = NULL;
+#endif
 	if (!pw)
 	{
 		int			save_errno = errno;
@@ -2011,7 +2015,9 @@ auth_peer(hbaPort *port)
 		return STATUS_ERROR;
 	}
 
+#ifndef WIN32
 	strlcpy(ident_user, pw->pw_name, IDENT_USERNAME_MAX + 1);
+#endif
 
 	return check_usermap(port->hba->usermap, port->user_name, ident_user, false);
 }

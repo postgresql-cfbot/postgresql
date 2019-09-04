@@ -3939,7 +3939,7 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&Unix_socket_directories,
-#ifdef HAVE_UNIX_SOCKETS
+#if defined(HAVE_UNIX_SOCKETS) && defined(DEFAULT_PGSOCKET_DIR)
 		DEFAULT_PGSOCKET_DIR,
 #else
 		"",

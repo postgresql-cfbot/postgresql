@@ -102,11 +102,10 @@ static char *logfilename;
 static FILE *logfile;
 static char *difffilename;
 static const char *sockdir;
-#ifdef HAVE_UNIX_SOCKETS
+static bool use_unix_sockets;
 static const char *temp_sockdir;
 static char sockself[MAXPGPATH];
 static char socklock[MAXPGPATH];
-#endif
 
 static _resultmap *resultmap = NULL;
 
@@ -2121,9 +2120,16 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 	atexit(stop_postmaster);
 
 #ifndef HAVE_UNIX_SOCKETS
-	/* no unix domain sockets available, so change default */
-	hostname = "localhost";
+	use_unix_sockets = false;
+#elif defined(WIN32)
+	use_unix_sockets = getenv("PG_TEST_USE_UNIX_SOCKETS") ? true : false;
+#else
+	use_unix_sockets = true;
 #endif
+
+	if (!use_unix_sockets)
+		/* no unix domain sockets available, so change default */
+		hostname = "localhost";
 
 	/*
 	 * We call the initialization function here because that way we can set

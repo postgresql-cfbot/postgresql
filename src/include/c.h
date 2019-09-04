@@ -1277,6 +1277,17 @@ extern unsigned long long strtoull(const char *str, char **endptr, int base);
 #define NON_EXEC_STATIC static
 #endif
 
+#ifdef HAVE_STRUCT_SOCKADDR_UN
+#define HAVE_UNIX_SOCKETS 1
+#elif defined(WIN32)
+struct sockaddr_un
+{
+	unsigned short sun_family;
+	char sun_path[108];
+};
+#define HAVE_UNIX_SOCKETS 1
+#endif
+
 /* /port compatibility functions */
 #include "port.h"
 

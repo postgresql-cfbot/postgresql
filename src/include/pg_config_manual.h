@@ -110,13 +110,6 @@
 #define ALIGNOF_BUFFER	32
 
 /*
- * Disable UNIX sockets for certain operating systems.
- */
-#if defined(WIN32)
-#undef HAVE_UNIX_SOCKETS
-#endif
-
-/*
  * Define this if your operating system supports link()
  */
 #if !defined(WIN32) && !defined(__CYGWIN__)

@@ -164,7 +164,11 @@ main(int argc, char **argv)
 			else if (def->val)
 				pghost_str = def->val;
 			else
+#ifdef DEFAULT_PGSOCKET_DIR
 				pghost_str = DEFAULT_PGSOCKET_DIR;
+#else
+				pghost_str = "";
+#endif
 		}
 		else if (strcmp(def->keyword, "hostaddr") == 0)
 		{

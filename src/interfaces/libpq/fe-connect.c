@@ -1058,16 +1058,14 @@ connectOptions2(PGconn *conn)
 		else if (ch->host != NULL && ch->host[0] != '\0')
 		{
 			ch->type = CHT_HOST_NAME;
-#ifdef HAVE_UNIX_SOCKETS
 			if (is_absolute_path(ch->host))
 				ch->type = CHT_UNIX_SOCKET;
-#endif
 		}
 		else
 		{
 			if (ch->host)
 				free(ch->host);
-#ifdef HAVE_UNIX_SOCKETS
+#if defined(HAVE_UNIX_SOCKETS) && defined(DEFAULT_PGSOCKET_DIR)
 			ch->host = strdup(DEFAULT_PGSOCKET_DIR);
 			ch->type = CHT_UNIX_SOCKET;
 #else
@@ -1569,7 +1567,6 @@ connectFailureMessage(PGconn *conn, int errorno)
 {
 	char		sebuf[PG_STRERROR_R_BUFLEN];
 
-#ifdef HAVE_UNIX_SOCKETS
 	if (IS_AF_UNIX(conn->raddr.addr.ss_family))
 	{
 		char		service[NI_MAXHOST];
@@ -1586,7 +1583,6 @@ connectFailureMessage(PGconn *conn, int errorno)
 						  service);
 	}
 	else
-#endif							/* HAVE_UNIX_SOCKETS */
 	{
 		char		host_addr[NI_MAXHOST];
 		const char *displayed_host;
@@ -2676,8 +2672,6 @@ keep_going:						/* We will come back to here until there is
 				char	   *startpacket;
 				int			packetlen;
 
-#ifdef HAVE_UNIX_SOCKETS
-
 				/*
 				 * Implement requirepeer check, if requested and it's a
 				 * Unix-domain socket.
@@ -2686,8 +2680,10 @@ keep_going:						/* We will come back to here until there is
 					IS_AF_UNIX(conn->raddr.addr.ss_family))
 				{
 					char		pwdbuf[BUFSIZ];
+#ifndef WIN32
 					struct passwd pass_buf;
 					struct passwd *pass;
+#endif
 					int			passerr;
 					uid_t		uid;
 					gid_t		gid;
@@ -2709,6 +2705,7 @@ keep_going:						/* We will come back to here until there is
 						goto error_return;
 					}
 
+#ifndef WIN32
 					passerr = pqGetpwuid(uid, &pass_buf, pwdbuf, sizeof(pwdbuf), &pass);
 					if (pass == NULL)
 					{
@@ -2731,8 +2728,8 @@ keep_going:						/* We will come back to here until there is
 										  conn->requirepeer, pass->pw_name);
 						goto error_return;
 					}
+#endif							/* WIN32 */
 				}
-#endif							/* HAVE_UNIX_SOCKETS */
 
 				if (IS_AF_UNIX(conn->raddr.addr.ss_family))
 				{
@@ -6856,6 +6853,7 @@ passwordFromFile(const char *hostname, const char *port, const char *dbname,
 	/* 'localhost' matches pghost of '' or the default socket directory */
 	if (hostname == NULL || hostname[0] == '\0')
 		hostname = DefaultHost;
+#ifdef DEFAULT_PGSOCKET_DIR
 	else if (is_absolute_path(hostname))
 
 		/*
@@ -6864,6 +6862,7 @@ passwordFromFile(const char *hostname, const char *port, const char *dbname,
 		 */
 		if (strcmp(hostname, DEFAULT_PGSOCKET_DIR) == 0)
 			hostname = DefaultHost;
+#endif
 
 	if (port == NULL || port[0] == '\0')
 		port = DEF_PGPORT_STR;

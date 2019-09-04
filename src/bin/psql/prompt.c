@@ -12,11 +12,6 @@
 #include <win32.h>
 #endif
 
-#ifdef HAVE_UNIX_SOCKETS
-#include <unistd.h>
-#include <netdb.h>
-#endif
-
 #include "common.h"
 #include "input.h"
 #include "prompt.h"
@@ -139,18 +134,18 @@ get_prompt(promptStatus_t status, ConditionalStack cstack)
 							if (*p == 'm')
 								buf[strcspn(buf, ".")] = '\0';
 						}
-#ifdef HAVE_UNIX_SOCKETS
 						/* UNIX socket */
 						else
 						{
 							if (!host
+#ifdef DEFAULT_PGSOCKET_DIR
 								|| strcmp(host, DEFAULT_PGSOCKET_DIR) == 0
+#endif
 								|| *p == 'm')
 								strlcpy(buf, "[local]", sizeof(buf));
 							else
 								snprintf(buf, sizeof(buf), "[local:%s]", host);
 						}
-#endif
 					}
 					break;
 					/* DB server port number */

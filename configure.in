@@ -1693,6 +1693,7 @@ AC_REPLACE_FUNCS(m4_normalize([
 	dlopen
 	fls
 	getopt
+	getpeereid
 	getrusage
 	inet_aton
 	mkdtemp
@@ -1723,15 +1724,11 @@ esac
 case $host_os in
 
         # Windows uses a specialised env handler
-        # and doesn't need a replacement getpeereid because it doesn't use
-        # Unix sockets.
         mingw*)
                 AC_DEFINE(HAVE_UNSETENV, 1, [Define to 1 because replacement version used.])
-                AC_DEFINE(HAVE_GETPEEREID, 1, [Define to 1 because function not required.])
-                ac_cv_func_unsetenv=yes
-                ac_cv_func_getpeereid=yes;;
+                ac_cv_func_unsetenv=yes;;
         *)
-                AC_REPLACE_FUNCS([unsetenv getpeereid])
+                AC_REPLACE_FUNCS([unsetenv])
 		;;
 esac
 

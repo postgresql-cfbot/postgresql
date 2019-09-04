@@ -233,9 +233,6 @@ static char backend_exec[MAXPGPATH];
 static char **replace_token(char **lines,
 							const char *token, const char *replacement);
 
-#ifndef HAVE_UNIX_SOCKETS
-static char **filter_lines_with_token(char **lines, const char *token);
-#endif
 static char **readfile(const char *path);
 static void writefile(char *path, char **lines);
 static FILE *popen_check(const char *command, const char *mode);
@@ -432,36 +429,6 @@ replace_token(char **lines, const char *token, const char *replacement)
 
 	return result;
 }
-
-/*
- * make a copy of lines without any that contain the token
- *
- * a sort of poor man's grep -v
- */
-#ifndef HAVE_UNIX_SOCKETS
-static char **
-filter_lines_with_token(char **lines, const char *token)
-{
-	int			numlines = 1;
-	int			i,
-				src,
-				dst;
-	char	  **result;
-
-	for (i = 0; lines[i]; i++)
-		numlines++;
-
-	result = (char **) pg_malloc(numlines * sizeof(char *));
-
-	for (src = 0, dst = 0; src < numlines; src++)
-	{
-		if (lines[src] == NULL || strstr(lines[src], token) == NULL)
-			result[dst++] = lines[src];
-	}
-
-	return result;
-}
-#endif
 
 /*
  * get the lines from a text file
@@ -1072,9 +1039,69 @@ setup_config(void)
 	char		repltok[MAXPGPATH];
 	char		path[MAXPGPATH];
 	char	   *autoconflines[3];
+	bool		unix_sockets_work = false;
+	bool		ipv6_works = false;
 
 	fputs(_("creating configuration files ... "), stdout);
 	fflush(stdout);
+
+#ifdef WIN32
+	{
+		/* need to call WSAStartup before calling socket or getaddrinfo */
+		int			err = 0;
+		WSADATA		wsaData;
+
+		err = WSAStartup(MAKEWORD(2, 2), &wsaData);
+		if (err != 0)
+		{
+			pg_log_error("WSAStartup failed: %d", err);
+			exit(1);
+		}
+	}
+#endif
+
+#ifdef HAVE_UNIX_SOCKETS
+	/*
+	 * Probe to see whether Unix-domain sockets are working.
+	 */
+	{
+		pgsocket    tmpsock;
+
+		tmpsock = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (tmpsock != PGINVALID_SOCKET)
+		{
+			unix_sockets_work = true;
+			closesocket(tmpsock);
+		}
+	}
+#endif
+
+#ifdef HAVE_IPV6
+	/*
+	 * Probe to see if there is really any platform support for IPv6, and
+	 * comment out the relevant pg_hba line if not.  This avoids runtime
+	 * warnings if getaddrinfo doesn't actually cope with IPv6.  Particularly
+	 * useful on Windows, where executables built on a machine with IPv6 may
+	 * have to run on a machine without.
+	 */
+	{
+		struct addrinfo *gai_result;
+		struct addrinfo hints;
+
+		/* for best results, this code should match parse_hba_line() */
+		hints.ai_flags = AI_NUMERICHOST;
+		hints.ai_family = AF_UNSPEC;
+		hints.ai_socktype = 0;
+		hints.ai_protocol = 0;
+		hints.ai_addrlen = 0;
+		hints.ai_canonname = NULL;
+		hints.ai_addr = NULL;
+		hints.ai_next = NULL;
+
+		if (getaddrinfo("::1", NULL, &hints, &gai_result) == 0)
+			ipv6_works = true;
+	}
+#endif							/* !HAVE_IPV6 */
 
 	/* postgresql.conf */
 
@@ -1091,9 +1118,12 @@ setup_config(void)
 				 n_buffers * (BLCKSZ / 1024));
 	conflines = replace_token(conflines, "#shared_buffers = 32MB", repltok);
 
-#ifdef HAVE_UNIX_SOCKETS
-	snprintf(repltok, sizeof(repltok), "#unix_socket_directories = '%s'",
-			 DEFAULT_PGSOCKET_DIR);
+#if defined(HAVE_UNIX_SOCKETS) && defined(DEFAULT_PGSOCKET_DIR)
+	if (unix_sockets_work)
+		snprintf(repltok, sizeof(repltok), "#unix_socket_directories = '%s'",
+				 DEFAULT_PGSOCKET_DIR);
+	else
+		snprintf(repltok, sizeof(repltok), "unix_socket_directories = ''");
 #else
 	snprintf(repltok, sizeof(repltok), "#unix_socket_directories = ''");
 #endif
@@ -1256,63 +1286,25 @@ setup_config(void)
 
 	conflines = readfile(hba_file);
 
-#ifndef HAVE_UNIX_SOCKETS
-	conflines = filter_lines_with_token(conflines, "@remove-line-for-nolocal@");
-#else
-	conflines = replace_token(conflines, "@remove-line-for-nolocal@", "");
-#endif
-
-#ifdef HAVE_IPV6
-
-	/*
-	 * Probe to see if there is really any platform support for IPv6, and
-	 * comment out the relevant pg_hba line if not.  This avoids runtime
-	 * warnings if getaddrinfo doesn't actually cope with IPv6.  Particularly
-	 * useful on Windows, where executables built on a machine with IPv6 may
-	 * have to run on a machine without.
-	 */
+	if (!unix_sockets_work)
 	{
-		struct addrinfo *gai_result;
-		struct addrinfo hints;
-		int			err = 0;
-
-#ifdef WIN32
-		/* need to call WSAStartup before calling getaddrinfo */
-		WSADATA		wsaData;
-
-		err = WSAStartup(MAKEWORD(2, 2), &wsaData);
-#endif
-
-		/* for best results, this code should match parse_hba_line() */
-		hints.ai_flags = AI_NUMERICHOST;
-		hints.ai_family = AF_UNSPEC;
-		hints.ai_socktype = 0;
-		hints.ai_protocol = 0;
-		hints.ai_addrlen = 0;
-		hints.ai_canonname = NULL;
-		hints.ai_addr = NULL;
-		hints.ai_next = NULL;
-
-		if (err != 0 ||
-			getaddrinfo("::1", NULL, &hints, &gai_result) != 0)
-		{
-			conflines = replace_token(conflines,
-									  "host    all             all             ::1",
-									  "#host    all             all             ::1");
-			conflines = replace_token(conflines,
-									  "host    replication     all             ::1",
-									  "#host    replication     all             ::1");
-		}
+		conflines = replace_token(conflines,
+								  "local   all",
+								  "#local   all");
+		conflines = replace_token(conflines,
+								  "local   replication",
+								  "#local   replication");
 	}
-#else							/* !HAVE_IPV6 */
-	/* If we didn't compile IPV6 support at all, always comment it out */
-	conflines = replace_token(conflines,
-							  "host    all             all             ::1",
-							  "#host    all             all             ::1");
-	conflines = replace_token(conflines,
-							  "host    replication     all             ::1",
-							  "#host    replication     all             ::1");
-#endif							/* HAVE_IPV6 */
+
+	if (!ipv6_works)
+	{
+		conflines = replace_token(conflines,
+								  "host    all             all             ::1",
+								  "#host    all             all             ::1");
+		conflines = replace_token(conflines,
+								  "host    replication     all             ::1",
+								  "#host    replication     all             ::1");
+	}
 
 	/* Replace default authentication methods */
 	conflines = replace_token(conflines,

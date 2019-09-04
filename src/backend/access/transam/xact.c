@@ -2413,8 +2413,8 @@ PrepareTransaction(void)
 	 * Reserve the GID for this transaction. This could fail if the requested
 	 * GID is invalid or already in use.
 	 */
-	gxact = MarkAsPreparing(xid, prepareGID, prepared_at,
-							GetUserId(), MyDatabaseId);
+	gxact = MarkAsPreparing(GetCurrentFullTransactionId(), prepareGID,
+							prepared_at, GetUserId(), MyDatabaseId);
 	prepareGID = NULL;
 
 	/*

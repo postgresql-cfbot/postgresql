@@ -107,6 +107,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+#include "utils/xid8.h"
 
 
 /*
@@ -163,7 +164,7 @@ typedef struct GlobalTransactionData
 	 */
 	XLogRecPtr	prepare_start_lsn;	/* XLOG offset of prepare record start */
 	XLogRecPtr	prepare_end_lsn;	/* XLOG offset of prepare record end */
-	TransactionId xid;			/* The GXACT id */
+	FullTransactionId full_xid; /* The GXACT full xid */
 
 	Oid			owner;			/* ID of user that executed the xact */
 	BackendId	locking_backend;	/* backend currently working on the xact */
@@ -224,7 +225,7 @@ static void XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len);
 static char *ProcessTwoPhaseBuffer(TransactionId xid,
 								   XLogRecPtr prepare_start_lsn,
 								   bool fromdisk, bool setParent, bool setNextXid);
-static void MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid,
+static void MarkAsPreparingGuts(GlobalTransaction gxact, FullTransactionId full_xid,
 								const char *gid, TimestampTz prepared_at, Oid owner,
 								Oid databaseid);
 static void RemoveTwoPhaseFile(TransactionId xid, bool giveWarning);
@@ -370,7 +371,7 @@ PostPrepare_Twophase(void)
  *		Reserve the GID for the given transaction.
  */
 GlobalTransaction
-MarkAsPreparing(TransactionId xid, const char *gid,
+MarkAsPreparing(FullTransactionId full_xid, const char *gid,
 				TimestampTz prepared_at, Oid owner, Oid databaseid)
 {
 	GlobalTransaction gxact;
@@ -421,7 +422,7 @@ MarkAsPreparing(TransactionId xid, const char *gid,
 	gxact = TwoPhaseState->freeGXacts;
 	TwoPhaseState->freeGXacts = gxact->next;
 
-	MarkAsPreparingGuts(gxact, xid, gid, prepared_at, owner, databaseid);
+	MarkAsPreparingGuts(gxact, full_xid, gid, prepared_at, owner, databaseid);
 
 	gxact->ondisk = false;
 
@@ -444,7 +445,7 @@ MarkAsPreparing(TransactionId xid, const char *gid,
  * Note: This function should be called with appropriate locks held.
  */
 static void
-MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
+MarkAsPreparingGuts(GlobalTransaction gxact, FullTransactionId full_xid, const char *gid,
 					TimestampTz prepared_at, Oid owner, Oid databaseid)
 {
 	PGPROC	   *proc;
@@ -463,8 +464,8 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	SHMQueueElemInit(&(proc->links));
 	proc->waitStatus = STATUS_OK;
 	/* We set up the gxact's VXID as InvalidBackendId/XID */
-	proc->lxid = (LocalTransactionId) xid;
-	pgxact->xid = xid;
+	proc->lxid = (LocalTransactionId) XidFromFullTransactionId(full_xid);
+	pgxact->xid = XidFromFullTransactionId(full_xid);
 	pgxact->xmin = InvalidTransactionId;
 	pgxact->delayChkpt = false;
 	pgxact->vacuumFlags = 0;
@@ -485,7 +486,7 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	pgxact->nxids = 0;
 
 	gxact->prepared_at = prepared_at;
-	gxact->xid = xid;
+	gxact->full_xid = full_xid;
 	gxact->owner = owner;
 	gxact->locking_backend = MyBackendId;
 	gxact->valid = false;
@@ -737,7 +738,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		/* this had better match pg_prepared_xacts view in system_views.sql */
 		tupdesc = CreateTemplateTupleDesc(5);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "transaction",
-						   XIDOID, -1, 0);
+						   XID8OID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "gid",
 						   TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "prepared",
@@ -769,7 +770,6 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 	{
 		GlobalTransaction gxact = &status->array[status->currIdx++];
 		PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-		PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 		Datum		values[5];
 		bool		nulls[5];
 		HeapTuple	tuple;
@@ -784,7 +784,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		MemSet(values, 0, sizeof(values));
 		MemSet(nulls, 0, sizeof(nulls));
 
-		values[0] = TransactionIdGetDatum(pgxact->xid);
+		values[0] = FullTransactionIdGetDatum(gxact->full_xid);
 		values[1] = CStringGetTextDatum(gxact->gid);
 		values[2] = TimestampTzGetDatum(gxact->prepared_at);
 		values[3] = ObjectIdGetDatum(gxact->owner);
@@ -915,7 +915,7 @@ typedef struct TwoPhaseFileHeader
 {
 	uint32		magic;			/* format identifier */
 	uint32		total_len;		/* actual file length */
-	TransactionId xid;			/* original transaction XID */
+	FullTransactionId full_xid; /* original full transaction XID */
 	Oid			database;		/* OID of database it was in */
 	TimestampTz prepared_at;	/* time of preparation */
 	Oid			owner;			/* user running the transaction */
@@ -1004,8 +1004,6 @@ void
 StartPrepare(GlobalTransaction gxact)
 {
 	PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-	PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
-	TransactionId xid = pgxact->xid;
 	TwoPhaseFileHeader hdr;
 	TransactionId *children;
 	RelFileNode *commitrels;
@@ -1028,7 +1026,7 @@ StartPrepare(GlobalTransaction gxact)
 	/* Create header */
 	hdr.magic = TWOPHASE_MAGIC;
 	hdr.total_len = 0;			/* EndPrepare will fill this in */
-	hdr.xid = xid;
+	hdr.full_xid = gxact->full_xid;
 	hdr.database = proc->databaseId;
 	hdr.prepared_at = gxact->prepared_at;
 	hdr.owner = gxact->owner;
@@ -1346,7 +1344,7 @@ ParsePrepareRecord(uint8 info, char *xlrec, xl_xact_parsed_prepare *parsed)
 
 	parsed->origin_lsn = hdr->origin_lsn;
 	parsed->origin_timestamp = hdr->origin_timestamp;
-	parsed->twophase_xid = hdr->xid;
+	parsed->twophase_xid = XidFromFullTransactionId(hdr->full_xid);
 	parsed->dbId = hdr->database;
 	parsed->nsubxacts = hdr->nsubxacts;
 	parsed->nrels = hdr->ncommitrels;
@@ -1442,7 +1440,7 @@ StandbyTransactionIdIsPrepared(TransactionId xid)
 
 	/* Check header also */
 	hdr = (TwoPhaseFileHeader *) buf;
-	result = TransactionIdEquals(hdr->xid, xid);
+	result = TransactionIdEquals(XidFromFullTransactionId(hdr->full_xid), xid);
 	pfree(buf);
 
 	return result;
@@ -1493,7 +1491,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	 * Disassemble the header area
 	 */
 	hdr = (TwoPhaseFileHeader *) buf;
-	Assert(TransactionIdEquals(hdr->xid, xid));
+	Assert(TransactionIdEquals(XidFromFullTransactionId(hdr->full_xid), xid));
 	bufptr = buf + MAXALIGN(sizeof(TwoPhaseFileHeader));
 	bufptr += MAXALIGN(hdr->gidlen);
 	children = (TransactionId *) bufptr;
@@ -1791,7 +1789,8 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 			int			len;
 
 			XlogReadTwoPhaseData(gxact->prepare_start_lsn, &buf, &len);
-			RecreateTwoPhaseFile(gxact->xid, buf, len);
+			RecreateTwoPhaseFile(XidFromFullTransactionId(gxact->full_xid),
+								 buf, len);
 			gxact->ondisk = true;
 			gxact->prepare_start_lsn = InvalidXLogRecPtr;
 			gxact->prepare_end_lsn = InvalidXLogRecPtr;
@@ -1911,7 +1910,7 @@ PrescanPreparedTransactions(TransactionId **xids_p, int *nxids_p)
 
 		Assert(gxact->inredo);
 
-		xid = gxact->xid;
+		xid = XidFromFullTransactionId(gxact->full_xid);
 
 		buf = ProcessTwoPhaseBuffer(xid,
 									gxact->prepare_start_lsn,
@@ -1986,7 +1985,7 @@ StandbyRecoverPreparedTransactions(void)
 
 		Assert(gxact->inredo);
 
-		xid = gxact->xid;
+		xid = XidFromFullTransactionId(gxact->full_xid);
 
 		buf = ProcessTwoPhaseBuffer(xid,
 									gxact->prepare_start_lsn,
@@ -2029,7 +2028,7 @@ RecoverPreparedTransactions(void)
 		TransactionId *subxids;
 		const char *gid;
 
-		xid = gxact->xid;
+		xid = XidFromFullTransactionId(gxact->full_xid);
 
 		/*
 		 * Reconstruct subtrans state for the transaction --- needed because
@@ -2050,7 +2049,7 @@ RecoverPreparedTransactions(void)
 				(errmsg("recovering prepared transaction %u from shared memory", xid)));
 
 		hdr = (TwoPhaseFileHeader *) buf;
-		Assert(TransactionIdEquals(hdr->xid, xid));
+		Assert(FullTransactionIdEquals(hdr->full_xid, gxact->full_xid));
 		bufptr = buf + MAXALIGN(sizeof(TwoPhaseFileHeader));
 		gid = (const char *) bufptr;
 		bufptr += MAXALIGN(hdr->gidlen);
@@ -2064,7 +2063,7 @@ RecoverPreparedTransactions(void)
 		 * Recreate its GXACT and dummy PGPROC. But, check whether it was
 		 * added in redo and already has a shmem entry for it.
 		 */
-		MarkAsPreparingGuts(gxact, xid, gid,
+		MarkAsPreparingGuts(gxact, gxact->full_xid, gid,
 							hdr->prepared_at,
 							hdr->owner, hdr->database);
 
@@ -2185,7 +2184,7 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 
 	/* Deconstruct header */
 	hdr = (TwoPhaseFileHeader *) buf;
-	if (!TransactionIdEquals(hdr->xid, xid))
+	if (!TransactionIdEquals(XidFromFullTransactionId(hdr->full_xid), xid))
 	{
 		if (fromdisk)
 			ereport(ERROR,
@@ -2426,7 +2425,7 @@ PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 	gxact->prepared_at = hdr->prepared_at;
 	gxact->prepare_start_lsn = start_lsn;
 	gxact->prepare_end_lsn = end_lsn;
-	gxact->xid = hdr->xid;
+	gxact->full_xid = hdr->full_xid;
 	gxact->owner = hdr->owner;
 	gxact->locking_backend = InvalidBackendId;
 	gxact->valid = false;
@@ -2445,7 +2444,8 @@ PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 						   false /* backward */ , false /* WAL */ );
 	}
 
-	elog(DEBUG2, "added 2PC data in shared memory for transaction %u", gxact->xid);
+	elog(DEBUG2, "added 2PC data in shared memory for transaction %u",
+		 XidFromFullTransactionId(gxact->full_xid));
 }
 
 /*
@@ -2471,7 +2471,7 @@ PrepareRedoRemove(TransactionId xid, bool giveWarning)
 	{
 		gxact = TwoPhaseState->prepXacts[i];
 
-		if (gxact->xid == xid)
+		if (XidFromFullTransactionId(gxact->full_xid) == xid)
 		{
 			Assert(gxact->inredo);
 			found = true;

@@ -90,6 +90,7 @@ ErrorContextCallback *error_context_stack = NULL;
 sigjmp_buf *PG_exception_stack = NULL;
 
 extern bool redirection_done;
+extern bool snprintf_do_redact;
 
 /*
  * Hook for intercepting messages before they are sent to the server log.
@@ -105,6 +106,9 @@ int			Log_error_verbosity = PGERROR_VERBOSE;
 char	   *Log_line_prefix = NULL; /* format for extra log line info */
 int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
+bool		redact_messages = false;
+int			redact_destination = LOG_DESTINATION_STDERR;
+char	   *redact_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
 
@@ -480,14 +484,24 @@ errfinish(int dummy,...)
 	/* Now free up subsidiary data attached to stack entry, and release it */
 	if (edata->message)
 		pfree(edata->message);
+	if (edata->message_r)
+		pfree(edata->message_r);
 	if (edata->detail)
 		pfree(edata->detail);
+	if (edata->detail_r)
+		pfree(edata->detail_r);
 	if (edata->detail_log)
 		pfree(edata->detail_log);
+	if (edata->detail_log_r)
+		pfree(edata->detail_log_r);
 	if (edata->hint)
 		pfree(edata->hint);
+	if (edata->hint_r)
+		pfree(edata->hint_r);
 	if (edata->context)
 		pfree(edata->context);
+	if (edata->context_r)
+		pfree(edata->context_r);
 	if (edata->schema_name)
 		pfree(edata->schema_name);
 	if (edata->table_name)
@@ -700,7 +714,7 @@ errcode_for_socket_access(void)
  * to the edata field because the buffer might be considerably larger than
  * really necessary.
  */
-#define EVALUATE_MESSAGE(domain, targetfield, appendval, translateit)	\
+#define EVALUATE_MESSAGE_INTERNAL(domain, targetfield, appendval, translateit, redact) \
 	{ \
 		StringInfoData	buf; \
 		/* Internationalize the error format string */ \
@@ -718,7 +732,9 @@ errcode_for_socket_access(void)
 			int			needed; \
 			errno = edata->saved_errno; \
 			va_start(args, fmt); \
+			snprintf_do_redact = redact; \
 			needed = appendStringInfoVA(&buf, fmt, args); \
+			snprintf_do_redact = false; \
 			va_end(args); \
 			if (needed == 0) \
 				break; \
@@ -731,12 +747,21 @@ errcode_for_socket_access(void)
 		pfree(buf.data); \
 	}
 
+#define EVALUATE_MESSAGE(domain, targetfield, appendval, translateit) \
+	{ \
+		EVALUATE_MESSAGE_INTERNAL(domain, targetfield, \
+								  appendval, translateit, false); \
+		if (redact_messages) \
+			EVALUATE_MESSAGE_INTERNAL(domain, CppConcat(targetfield,_r), \
+									  appendval, translateit, true); \
+	}
+
 /*
  * Same as above, except for pluralized error messages.  The calling routine
  * must be declared like "const char *fmt_singular, const char *fmt_plural,
  * unsigned long n, ...".  Translation is assumed always wanted.
  */
-#define EVALUATE_MESSAGE_PLURAL(domain, targetfield, appendval)  \
+#define EVALUATE_MESSAGE_PLURAL_INTERNAL(domain, targetfield, appendval, redact)	\
 	{ \
 		const char	   *fmt; \
 		StringInfoData	buf; \
@@ -757,7 +782,9 @@ errcode_for_socket_access(void)
 			int			needed; \
 			errno = edata->saved_errno; \
 			va_start(args, n); \
+			snprintf_do_redact = redact; \
 			needed = appendStringInfoVA(&buf, fmt, args); \
+			snprintf_do_redact = false; \
 			va_end(args); \
 			if (needed == 0) \
 				break; \
@@ -768,6 +795,15 @@ errcode_for_socket_access(void)
 			pfree(edata->targetfield); \
 		edata->targetfield = pstrdup(buf.data); \
 		pfree(buf.data); \
+	}
+
+#define EVALUATE_MESSAGE_PLURAL(domain, targetfield, appendval) \
+	{ \
+		EVALUATE_MESSAGE_PLURAL_INTERNAL(domain, targetfield, \
+										 appendval, false); \
+		if (redact_messages) \
+			EVALUATE_MESSAGE_PLURAL_INTERNAL(domain, CppConcat(targetfield,_r), \
+											 appendval, true); \
 	}
 
 
@@ -1501,14 +1537,24 @@ CopyErrorData(void)
 	/* Make copies of separately-allocated fields */
 	if (newedata->message)
 		newedata->message = pstrdup(newedata->message);
+	if (newedata->message_r)
+		newedata->message_r = pstrdup(newedata->message_r);
 	if (newedata->detail)
 		newedata->detail = pstrdup(newedata->detail);
+	if (newedata->detail_r)
+		newedata->detail_r = pstrdup(newedata->detail_r);
 	if (newedata->detail_log)
 		newedata->detail_log = pstrdup(newedata->detail_log);
+	if (newedata->detail_log_r)
+		newedata->detail_log_r = pstrdup(newedata->detail_log_r);
 	if (newedata->hint)
 		newedata->hint = pstrdup(newedata->hint);
+	if (newedata->hint_r)
+		newedata->hint_r = pstrdup(newedata->hint_r);
 	if (newedata->context)
 		newedata->context = pstrdup(newedata->context);
+	if (newedata->context_r)
+		newedata->context_r = pstrdup(newedata->context_r);
 	if (newedata->schema_name)
 		newedata->schema_name = pstrdup(newedata->schema_name);
 	if (newedata->table_name)
@@ -1539,14 +1585,24 @@ FreeErrorData(ErrorData *edata)
 {
 	if (edata->message)
 		pfree(edata->message);
+	if (edata->message_r)
+		pfree(edata->message_r);
 	if (edata->detail)
 		pfree(edata->detail);
+	if (edata->detail_r)
+		pfree(edata->detail_r);
 	if (edata->detail_log)
 		pfree(edata->detail_log);
+	if (edata->detail_log_r)
+		pfree(edata->detail_log_r);
 	if (edata->hint)
 		pfree(edata->hint);
+	if (edata->hint_r)
+		pfree(edata->hint_r);
 	if (edata->context)
 		pfree(edata->context);
+	if (edata->context_r)
+		pfree(edata->context_r);
 	if (edata->schema_name)
 		pfree(edata->schema_name);
 	if (edata->table_name)
@@ -1614,14 +1670,24 @@ ThrowErrorData(ErrorData *edata)
 		newedata->sqlerrcode = edata->sqlerrcode;
 	if (edata->message)
 		newedata->message = pstrdup(edata->message);
+	if (edata->message_r)
+		newedata->message_r = pstrdup(edata->message_r);
 	if (edata->detail)
 		newedata->detail = pstrdup(edata->detail);
+	if (edata->detail_r)
+		newedata->detail_r = pstrdup(edata->detail_r);
 	if (edata->detail_log)
 		newedata->detail_log = pstrdup(edata->detail_log);
+	if (edata->detail_log_r)
+		newedata->detail_log_r = pstrdup(edata->detail_log_r);
 	if (edata->hint)
 		newedata->hint = pstrdup(edata->hint);
+	if (edata->hint_r)
+		newedata->hint_r = pstrdup(edata->hint_r);
 	if (edata->context)
 		newedata->context = pstrdup(edata->context);
+	if (edata->context_r)
+		newedata->context = pstrdup(edata->context_r);
 	/* assume message_id is not available */
 	if (edata->schema_name)
 		newedata->schema_name = pstrdup(edata->schema_name);
@@ -1681,14 +1747,24 @@ ReThrowError(ErrorData *edata)
 	/* Make copies of separately-allocated fields */
 	if (newedata->message)
 		newedata->message = pstrdup(newedata->message);
+	if (newedata->message_r)
+		newedata->message_r = pstrdup(newedata->message_r);
 	if (newedata->detail)
 		newedata->detail = pstrdup(newedata->detail);
+	if (newedata->detail_r)
+		newedata->detail_r = pstrdup(newedata->detail_r);
 	if (newedata->detail_log)
 		newedata->detail_log = pstrdup(newedata->detail_log);
+	if (newedata->detail_log_r)
+		newedata->detail_log_r = pstrdup(newedata->detail_log_r);
 	if (newedata->hint)
 		newedata->hint = pstrdup(newedata->hint);
+	if (newedata->hint_r)
+		newedata->hint_r = pstrdup(newedata->hint_r);
 	if (newedata->context)
 		newedata->context = pstrdup(newedata->context);
+	if (newedata->context_r)
+		newedata->context_r = pstrdup(newedata->context_r);
 	if (newedata->schema_name)
 		newedata->schema_name = pstrdup(newedata->schema_name);
 	if (newedata->table_name)
@@ -2843,19 +2919,12 @@ unpack_sql_state(int sql_state)
 	return buf;
 }
 
-
-/*
- * Write error report to server's log
- */
-static void
-send_message_to_server_log(ErrorData *edata)
+static StringInfoData
+build_log_message(ErrorData *edata, bool redact)
 {
 	StringInfoData buf;
 
 	initStringInfo(&buf);
-
-	saved_timeval_set = false;
-	formatted_log_time[0] = '\0';
 
 	log_line_prefix(&buf, edata);
 	appendStringInfo(&buf, "%s:  ", _(error_severity(edata->elevel)));
@@ -2864,7 +2933,12 @@ send_message_to_server_log(ErrorData *edata)
 		appendStringInfo(&buf, "%s: ", unpack_sql_state(edata->sqlerrcode));
 
 	if (edata->message)
-		append_with_tabs(&buf, edata->message);
+	{
+		if (redact)
+			append_with_tabs(&buf, edata->message_r);
+		else
+			append_with_tabs(&buf, edata->message);
+	}
 	else
 		append_with_tabs(&buf, _("missing error text"));
 
@@ -2883,24 +2957,33 @@ send_message_to_server_log(ErrorData *edata)
 		{
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("DETAIL:  "));
-			append_with_tabs(&buf, edata->detail_log);
+			if (redact)
+				append_with_tabs(&buf, edata->detail_log_r);
+			else
+				append_with_tabs(&buf, edata->detail_log);
 			appendStringInfoChar(&buf, '\n');
 		}
 		else if (edata->detail)
 		{
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("DETAIL:  "));
-			append_with_tabs(&buf, edata->detail);
+			if (redact)
+				append_with_tabs(&buf, edata->detail_r);
+			else
+				append_with_tabs(&buf, edata->detail);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (edata->hint)
 		{
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("HINT:  "));
-			append_with_tabs(&buf, edata->hint);
+			if (redact)
+				append_with_tabs(&buf, edata->hint_r);
+			else
+				append_with_tabs(&buf, edata->hint);
 			appendStringInfoChar(&buf, '\n');
 		}
-		if (edata->internalquery)
+		if (edata->internalquery && !redact)
 		{
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("QUERY:  "));
@@ -2911,7 +2994,10 @@ send_message_to_server_log(ErrorData *edata)
 		{
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("CONTEXT:  "));
-			append_with_tabs(&buf, edata->context);
+			if (redact)
+				append_with_tabs(&buf, edata->context_r);
+			else
+				append_with_tabs(&buf, edata->context);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (Log_error_verbosity >= PGERROR_VERBOSE)
@@ -2938,7 +3024,7 @@ send_message_to_server_log(ErrorData *edata)
 	 */
 	if (is_log_level_output(edata->elevel, log_min_error_statement) &&
 		debug_query_string != NULL &&
-		!edata->hide_stmt)
+		!edata->hide_stmt && !redact)
 	{
 		log_line_prefix(&buf, edata);
 		appendStringInfoString(&buf, _("STATEMENT:  "));
@@ -2946,11 +3032,34 @@ send_message_to_server_log(ErrorData *edata)
 		appendStringInfoChar(&buf, '\n');
 	}
 
+	return buf;
+}
+
+/*
+ * Write error report to server's log
+ */
+static void
+send_message_to_server_log(ErrorData *edata)
+{
+	StringInfoData buf_plain;
+	StringInfoData buf_redacted;
+
+	buf_plain = build_log_message(edata, false);
+	if (redact_messages)
+		buf_redacted = build_log_message(edata, true);
+
+	saved_timeval_set = false;
+	formatted_log_time[0] = '\0';
+
 #ifdef HAVE_SYSLOG
 	/* Write to syslog, if enabled */
 	if (Log_destination & LOG_DESTINATION_SYSLOG)
 	{
 		int			syslog_level;
+		StringInfo	buf = &buf_plain;
+
+		if (redact_messages && (redact_destination & LOG_DESTINATION_SYSLOG))
+			buf = &buf_redacted;
 
 		switch (edata->elevel)
 		{
@@ -2982,7 +3091,7 @@ send_message_to_server_log(ErrorData *edata)
 				break;
 		}
 
-		write_syslog(syslog_level, buf.data);
+		write_syslog(syslog_level, buf->data);
 	}
 #endif							/* HAVE_SYSLOG */
 
@@ -2990,20 +3099,30 @@ send_message_to_server_log(ErrorData *edata)
 	/* Write to eventlog, if enabled */
 	if (Log_destination & LOG_DESTINATION_EVENTLOG)
 	{
-		write_eventlog(edata->elevel, buf.data, buf.len);
+		StringInfo buf = &buf_plain;
+
+		if (redact_messages && (redact_destination & LOG_DESTINATION_EVENTLOG))
+			buf = &buf_redacted;
+
+		write_eventlog(edata->elevel, buf->data, buf->len);
 	}
 #endif							/* WIN32 */
 
 	/* Write to stderr, if enabled */
 	if ((Log_destination & LOG_DESTINATION_STDERR) || whereToSendOutput == DestDebug)
 	{
+		StringInfo buf = &buf_plain;
+
+		if (redact_messages && (redact_destination & LOG_DESTINATION_STDERR))
+			buf = &buf_redacted;
+
 		/*
 		 * Use the chunking protocol if we know the syslogger should be
 		 * catching stderr output, and we are not ourselves the syslogger.
 		 * Otherwise, just do a vanilla write to stderr.
 		 */
 		if (redirection_done && !am_syslogger)
-			write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
+			write_pipe_chunks(buf->data, buf->len, LOG_DESTINATION_STDERR);
 #ifdef WIN32
 
 		/*
@@ -3014,26 +3133,32 @@ send_message_to_server_log(ErrorData *edata)
 		 * because that's really a pipe to the syslogger process.
 		 */
 		else if (pgwin32_is_service())
-			write_eventlog(edata->elevel, buf.data, buf.len);
+			write_eventlog(edata->elevel, buf->data, buf->len);
 #endif
 		else
-			write_console(buf.data, buf.len);
+			write_console(buf->data, buf->len);
 	}
 
 	/* If in the syslogger process, try to write messages direct to file */
+	//TODO: figure out whether we need to redact here
 	if (am_syslogger)
-		write_syslogger_file(buf.data, buf.len, LOG_DESTINATION_STDERR);
+		write_syslogger_file(buf_plain.data, buf_plain.len, LOG_DESTINATION_STDERR);
 
 	/* Write to CSV log if enabled */
 	if (Log_destination & LOG_DESTINATION_CSVLOG)
 	{
+		StringInfo buf = &buf_plain;
+
+		if (redact_messages && (redact_destination & LOG_DESTINATION_CSVLOG))
+			buf = &buf_redacted;
+
 		if (redirection_done || am_syslogger)
 		{
 			/*
 			 * send CSV data if it's safe to do so (syslogger doesn't need the
 			 * pipe). First get back the space in the message buffer.
 			 */
-			pfree(buf.data);
+			pfree(buf->data);
 			write_csvlog(edata);
 		}
 		else
@@ -3044,13 +3169,15 @@ send_message_to_server_log(ErrorData *edata)
 			 */
 			if (!(Log_destination & LOG_DESTINATION_STDERR) &&
 				whereToSendOutput != DestDebug)
-				write_console(buf.data, buf.len);
-			pfree(buf.data);
+				write_console(buf->data, buf->len);
+			pfree(buf->data);
 		}
 	}
 	else
 	{
-		pfree(buf.data);
+		pfree(buf_plain.data);
+		if (redact_messages)
+			pfree(buf_redacted.data);
 	}
 }
 

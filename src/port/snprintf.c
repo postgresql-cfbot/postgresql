@@ -158,9 +158,11 @@ typedef union
 	char	   *cptr;
 } PrintfArgValue;
 
+bool snprintf_do_redact = false;
 
 static void flushbuffer(PrintfTarget *target);
 static void dopr(PrintfTarget *target, const char *format, va_list args);
+static char *redact_str(char *str, char *buf);
 
 
 /*
@@ -395,6 +397,7 @@ dopr(PrintfTarget *target, const char *format, va_list args)
 	long long	numvalue;
 	double		fvalue;
 	char	   *strvalue;
+	char		redact_buf[NAMEDATALEN];
 	PrintfArgValue argvalues[PG_NL_ARGMAX + 1];
 
 	/*
@@ -439,6 +442,8 @@ dopr(PrintfTarget *target, const char *format, va_list args)
 		{
 			format++;
 			strvalue = va_arg(args, char *);
+			if (snprintf_do_redact)
+				strvalue = redact_str(strvalue, redact_buf);
 			Assert(strvalue != NULL);
 			dostr(strvalue, strlen(strvalue), target);
 			if (target->failed)
@@ -670,6 +675,10 @@ nextch2:
 					strvalue = argvalues[fmtpos].cptr;
 				else
 					strvalue = va_arg(args, char *);
+
+				if (snprintf_do_redact)
+					strvalue = redact_str(strvalue, redact_buf);
+
 				/* Whine if someone tries to print a NULL string */
 				Assert(strvalue != NULL);
 				fmtstr(strvalue, leftjust, fieldwidth, precision, pointflag,
@@ -1512,4 +1521,11 @@ trailing_pad(int padlen, PrintfTarget *target)
 {
 	if (padlen < 0)
 		dopr_outchmulti(' ', -padlen, target);
+}
+
+static char *
+redact_str(char *str, char *buf)
+{
+	strncpy(buf, "******", NAMEDATALEN-1);
+	return buf;
 }

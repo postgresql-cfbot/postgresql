@@ -155,6 +155,7 @@ static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 
 static bool check_log_destination(char **newval, void **extra, GucSource source);
 static void assign_log_destination(const char *newval, void *extra);
+static void assign_redact_destination(const char *newval, void *extra);
 
 static bool check_wal_consistency_checking(char **newval, void **extra,
 										   GucSource source);
@@ -1214,6 +1215,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"redact_messages", PGC_USERSET, LOGGING_WHAT,
+			gettext_noop("Enables message redaction."),
+			NULL
+		},
+		&redact_messages,
+		false,
+		NULL, NULL, NULL
+	},
 	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
@@ -3856,6 +3866,18 @@ static struct config_string ConfigureNamesString[] =
 		&Log_destination_string,
 		"stderr",
 		check_log_destination, assign_log_destination, NULL
+	},
+	{
+		{"redact_destination", PGC_USERSET, LOGGING_WHERE,
+			gettext_noop("Sets which log destinations are redacted."),
+			gettext_noop("Valid values are combinations of \"stderr\", "
+						 "\"syslog\", \"csvlog\", and \"eventlog\", "
+						 "depending on the platform."),
+			GUC_LIST_INPUT
+		},
+		&redact_destination_string,
+		"stderr",
+		check_log_destination, assign_redact_destination, NULL
 	},
 	{
 		{"log_directory", PGC_SIGHUP, LOGGING_WHERE,
@@ -11003,6 +11025,12 @@ static void
 assign_log_destination(const char *newval, void *extra)
 {
 	Log_destination = *((int *) extra);
+}
+
+static void
+assign_redact_destination(const char *newval, void *extra)
+{
+	redact_destination = *((int *) extra);
 }
 
 static void

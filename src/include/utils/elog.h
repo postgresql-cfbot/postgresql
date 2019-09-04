@@ -358,10 +358,15 @@ typedef struct ErrorData
 	const char *context_domain; /* message domain for context message */
 	int			sqlerrcode;		/* encoded ERRSTATE */
 	char	   *message;		/* primary error message (translated) */
+	char	   *message_r;		/* primary error message (redacted also) */
 	char	   *detail;			/* detail error message */
+	char	   *detail_r;		/* detail error message (redacted) */
 	char	   *detail_log;		/* detail error message for server log only */
+	char	   *detail_log_r;	/* detail error for server log only (redacted) */
 	char	   *hint;			/* hint message */
+	char	   *hint_r;			/* hint message (redacted) */
 	char	   *context;		/* context message */
+	char	   *context_r;		/* context message (redacted) */
 	const char *message_id;		/* primary message's id (original string) */
 	char	   *schema_name;	/* name of schema */
 	char	   *table_name;		/* name of table */
@@ -405,6 +410,9 @@ extern int	Log_error_verbosity;
 extern char *Log_line_prefix;
 extern int	Log_destination;
 extern char *Log_destination_string;
+extern bool redact_messages;
+extern int redact_destination;
+extern char *redact_destination_string;
 extern bool syslog_sequence_numbers;
 extern bool syslog_split_messages;
 

@@ -71,7 +71,7 @@
 
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
-									 TransactionId xid, CommandId cid, int options);
+		TransactionId xid, CommandId cid, int options, BulkInsertState bistate);
 static XLogRecPtr log_heap_update(Relation reln, Buffer oldbuf,
 								  Buffer newbuf, HeapTuple oldtup,
 								  HeapTuple newtup, HeapTuple old_key_tuple,
@@ -1812,13 +1812,14 @@ UpdateXmaxHintBits(HeapTupleHeader tuple, Buffer buffer, TransactionId xid)
  * GetBulkInsertState - prepare status object for a bulk insert
  */
 BulkInsertState
-GetBulkInsertState(void)
+GetBulkInsertState(HTAB *preserved_am_info)
 {
 	BulkInsertState bistate;
 
 	bistate = (BulkInsertState) palloc(sizeof(BulkInsertStateData));
 	bistate->strategy = GetAccessStrategy(BAS_BULKWRITE);
 	bistate->current_buf = InvalidBuffer;
+	bistate->preserved_am_info = preserved_am_info;
 	return bistate;
 }
 
@@ -1880,7 +1881,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	 * Note: below this point, heaptup is the data we actually intend to store
 	 * into the relation; tup is the caller's original untoasted data.
 	 */
-	heaptup = heap_prepare_insert(relation, tup, xid, cid, options);
+	heaptup = heap_prepare_insert(relation, tup, xid, cid, options, bistate);
 
 	/*
 	 * Find buffer to insert this tuple into.  If the page is all visible,
@@ -2047,7 +2048,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
  */
 static HeapTuple
 heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
-					CommandId cid, int options)
+					CommandId cid, int options, BulkInsertState bistate)
 {
 	/*
 	 * Parallel operations are required to be strictly read-only in a parallel
@@ -2084,8 +2085,12 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 		Assert(!HeapTupleHasExternal(tup));
 		return tup;
 	}
-	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
-		return toast_insert_or_update(relation, tup, NULL, options);
+	else if (HeapTupleHasExternal(tup)
+			 || RelationGetDescr(relation)->tdflags & TD_ATTR_CUSTOM_COMPRESSED
+			 || HeapTupleHasCustomCompressed(tup)
+			 || tup->t_len > TOAST_TUPLE_THRESHOLD)
+		return toast_insert_or_update(relation, tup, NULL, options,
+									  bistate ? bistate->preserved_am_info : NULL);
 	else
 		return tup;
 }
@@ -2133,7 +2138,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		slots[i]->tts_tableOid = RelationGetRelid(relation);
 		tuple->t_tableOid = slots[i]->tts_tableOid;
 		heaptuples[i] = heap_prepare_insert(relation, tuple, xid, cid,
-											options);
+											options, bistate);
 	}
 
 	/*
@@ -3402,6 +3407,8 @@ l2:
 	else
 		need_toast = (HeapTupleHasExternal(&oldtup) ||
 					  HeapTupleHasExternal(newtup) ||
+					  RelationGetDescr(relation)->tdflags & TD_ATTR_CUSTOM_COMPRESSED ||
+					  HeapTupleHasCustomCompressed(newtup) ||
 					  newtup->t_len > TOAST_TUPLE_THRESHOLD);
 
 	pagefree = PageGetHeapFreeSpace(page);
@@ -3504,7 +3511,7 @@ l2:
 		if (need_toast)
 		{
 			/* Note we always use WAL and FSM during updates */
-			heaptup = toast_insert_or_update(relation, newtup, &oldtup, 0);
+			heaptup = toast_insert_or_update(relation, newtup, &oldtup, 0, NULL);
 			newtupsize = MAXALIGN(heaptup->t_len);
 		}
 		else

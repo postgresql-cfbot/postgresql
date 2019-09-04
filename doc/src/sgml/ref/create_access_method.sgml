@@ -61,7 +61,7 @@ CREATE ACCESS METHOD <replaceable class="parameter">name</replaceable>
     <listitem>
      <para>
       This clause specifies the type of access method to define.
-      Only <literal>TABLE</literal> and <literal>INDEX</literal>
+      <literal>TABLE</literal>, <literal>INDEX</literal> and <literal>COMPRESSION</literal>
       are supported at present.
      </para>
     </listitem>
@@ -77,12 +77,15 @@ CREATE ACCESS METHOD <replaceable class="parameter">name</replaceable>
       declared to take a single argument of type <type>internal</type>,
       and its return type depends on the type of access method;
       for <literal>TABLE</literal> access methods, it must
-      be <type>table_am_handler</type> and for <literal>INDEX</literal>
-      access methods, it must be <type>index_am_handler</type>.
+      be <type>table_am_handler</type>, for <literal>INDEX</literal>
+      access methods, it must be <type>index_am_handler</type> and
+      for <literal>COMPRESSION</literal> access methods, it must be
+      <type>compression_am_handler</type>.
       The C-level API that the handler function must implement varies
       depending on the type of access method. The table access method API
-      is described in <xref linkend="tableam"/> and the index access method
-      API is described in <xref linkend="indexam"/>.
+      is described in <xref linkend="tableam"/>, the index access method
+      API is described in <xref linkend="indexam"/> an the compression access
+      method API is described in <xref linkend="compression-am"/>.
      </para>
     </listitem>
    </varlistentry>

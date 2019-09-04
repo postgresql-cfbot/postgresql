@@ -560,7 +560,7 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->ti_options = TABLE_INSERT_SKIP_FSM |
 		(XLogIsNeeded() ? 0 : TABLE_INSERT_SKIP_WAL);
-	myState->bistate = GetBulkInsertState();
+	myState->bistate = GetBulkInsertState(NULL);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);

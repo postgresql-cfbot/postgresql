@@ -2353,7 +2353,7 @@ CopyMultiInsertBufferInit(ResultRelInfo *rri)
 	buffer = (CopyMultiInsertBuffer *) palloc(sizeof(CopyMultiInsertBuffer));
 	memset(buffer->slots, 0, sizeof(TupleTableSlot *) * MAX_BUFFERED_TUPLES);
 	buffer->resultRelInfo = rri;
-	buffer->bistate = GetBulkInsertState();
+	buffer->bistate = GetBulkInsertState(NULL);
 	buffer->nused = 0;
 
 	return buffer;
@@ -2978,7 +2978,7 @@ CopyFrom(CopyState cstate)
 	{
 		singleslot = table_slot_create(resultRelInfo->ri_RelationDesc,
 									   &estate->es_tupleTable);
-		bistate = GetBulkInsertState();
+		bistate = GetBulkInsertState(NULL);
 	}
 
 	has_before_insert_row_trig = (resultRelInfo->ri_TrigDesc &&

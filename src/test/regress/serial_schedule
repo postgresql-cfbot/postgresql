@@ -79,6 +79,7 @@ test: drop_if_exists
 test: updatable_views
 test: roleattributes
 test: create_am
+test: create_cm
 test: hash_func
 test: errors
 test: sanity_check

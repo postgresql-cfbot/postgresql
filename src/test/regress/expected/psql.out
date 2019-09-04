@@ -2779,34 +2779,34 @@ CREATE ACCESS METHOD heap_psql TYPE TABLE HANDLER heap_tableam_handler;
 CREATE TABLE tbl_heap_psql(f1 int, f2 char(100)) using heap_psql;
 CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                          Table "public.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                            Table "public.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                          Table "public.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap_psql
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                            Table "public.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap
 
 \set HIDE_TABLEAM on

@@ -915,6 +915,12 @@ fi
 AC_SUBST(with_uuid)
 AC_SUBST(UUID_EXTRA_OBJS)
 
+#
+# LZ4
+#
+PGAC_ARG_BOOL(with, lz4, yes,
+              [do not build with LZ4 support])
+AC_SUBST(with_lz4)
 
 #
 # XML
@@ -1262,6 +1268,14 @@ elif test "$with_uuid" = ossp ; then
 fi
 AC_SUBST(UUID_LIBS)
 
+# for lz4 compression support
+if test "$with_lz4" = yes ; then
+  AC_CHECK_LIB(lz4, LZ4_sizeofState,
+    [COMPRESSION_LIBS=" -llz4"],
+    [AC_MSG_ERROR([library 'lz4' is required for LZ4 compression support])])
+  AC_DEFINE([HAVE_LZ4], 1, [Define to 1 to build with LZ4 support])
+fi
+LIBS="$LIBS$COMPRESSION_LIBS"
 
 ##
 ## Header files
@@ -1439,6 +1453,11 @@ elif test "$with_uuid" = ossp ; then
       [AC_EGREP_HEADER([uuid_export], uuid.h, [],
         [AC_MSG_ERROR([header file <uuid.h> does not match OSSP UUID library])])],
       [AC_MSG_ERROR([header file <ossp/uuid.h> or <uuid.h> is required for OSSP UUID])])])
+fi
+
+# for lz4 compression support
+if test "$with_lz4" = yes ; then
+  AC_CHECK_HEADER(lz4.h, [], [AC_MSG_ERROR([header file <lz4.h> is required for LZ4 support])])
 fi
 
 if test "$PORTNAME" = "win32" ; then

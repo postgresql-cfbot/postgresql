@@ -50,7 +50,20 @@
 typedef struct toast_compress_header
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
-	int32		rawsize;
+	/*
+	 * The length cannot be more than 1GB due to general toast limitations
+	 * we have the 2 high bits to encode aditional information.
+	 *
+	 * We use the last (highest) bit to mark this toast as the "new
+	 * compression format" as the new pg_compress has it's own header
+	 * which and the original pglz format is not distiguishable in any
+	 * way from the format used by pg_compress. Thanks to this information
+	 * the toast_decompress_datum can pick to either directly use
+	 * pglz_decompress directly when dealing with data writen by older
+	 * versions of postgres or let pg_decompress to autodetect format.
+	 */
+	int32		rawsize:31;
+	uint32		cformat:1;
 } toast_compress_header;
 
 /*
@@ -59,10 +72,13 @@ typedef struct toast_compress_header
  */
 #define TOAST_COMPRESS_HDRSZ		((int32) sizeof(toast_compress_header))
 #define TOAST_COMPRESS_RAWSIZE(ptr) (((toast_compress_header *) (ptr))->rawsize)
+#define TOAST_COMPRESS_CFORMAT(ptr) (((toast_compress_header *) (ptr))->cformat)
 #define TOAST_COMPRESS_RAWDATA(ptr) \
 	(((char *) (ptr)) + TOAST_COMPRESS_HDRSZ)
 #define TOAST_COMPRESS_SET_RAWSIZE(ptr, len) \
 	(((toast_compress_header *) (ptr))->rawsize = (len))
+#define TOAST_COMPRESS_SET_CFORMAT(ptr, fmt) \
+	(((toast_compress_header *) (ptr))->cformat = (fmt))
 
 static void toast_delete_datum(Relation rel, Datum value, bool is_speculative);
 static Datum toast_save_datum(Relation rel, Datum value,
@@ -383,7 +399,7 @@ toast_raw_datum_size(Datum value)
 	else if (VARATT_IS_COMPRESSED(attr))
 	{
 		/* here, va_rawsize is just the payload size */
-		result = VARRAWSIZE_4B_C(attr) + VARHDRSZ;
+		result = TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ;
 	}
 	else if (VARATT_IS_SHORT(attr))
 	{
@@ -1361,6 +1377,7 @@ toast_compress_datum(Datum value)
 {
 	struct varlena *tmp;
 	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+	int32		buffer_capacity;
 	int32		len;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
@@ -1374,11 +1391,11 @@ toast_compress_datum(Datum value)
 		valsize > PGLZ_strategy_default->max_input_size)
 		return PointerGetDatum(NULL);
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
+	buffer_capacity = pg_compress_bound(valsize);
+	tmp = (struct varlena *) palloc(buffer_capacity + TOAST_COMPRESS_HDRSZ);
 
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
+	 * We recheck the actual size even if pg_compress() reports success,
 	 * because it might be satisfied with having saved as little as one byte
 	 * in the compressed data --- which could turn into a net loss once you
 	 * consider header and alignment padding.  Worst case, the compressed
@@ -1387,14 +1404,17 @@ toast_compress_datum(Datum value)
 	 * only one header byte and no padding if the value is short enough.  So
 	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
+	len = pg_compress(VARDATA_ANY(DatumGetPointer(value)),
+					  valsize,
+					  TOAST_COMPRESS_RAWDATA(tmp),
+					  buffer_capacity,
+					  PGLZ_strategy_default);
+
 	if (len >= 0 &&
 		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
 	{
 		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
+		TOAST_COMPRESS_SET_CFORMAT(tmp, 1);
 		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
 		/* successful compression */
 		return PointerGetDatum(tmp);
@@ -1518,7 +1538,7 @@ toast_save_datum(Relation rel, Datum value,
 		data_p = VARDATA(dval);
 		data_todo = VARSIZE(dval) - VARHDRSZ;
 		/* rawsize in a compressed datum is just the size of the payload */
-		toast_pointer.va_rawsize = VARRAWSIZE_4B_C(dval) + VARHDRSZ;
+		toast_pointer.va_rawsize = TOAST_COMPRESS_RAWSIZE(dval) + VARHDRSZ;
 		toast_pointer.va_extsize = data_todo;
 		/* Assert that the numbers look like it's compressed */
 		Assert(VARATT_EXTERNAL_IS_COMPRESSED(toast_pointer));
@@ -2275,18 +2295,40 @@ static struct varlena *
 toast_decompress_datum(struct varlena *attr)
 {
 	struct varlena *result;
+	uint32			compression_format;
+	int32			raw_size;
 
 	Assert(VARATT_IS_COMPRESSED(attr));
 
-	result = (struct varlena *)
-		palloc(TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
-	SET_VARSIZE(result, TOAST_COMPRESS_RAWSIZE(attr) + VARHDRSZ);
+	raw_size = TOAST_COMPRESS_RAWSIZE(attr);
 
-	if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-						VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
-						VARDATA(result),
-						TOAST_COMPRESS_RAWSIZE(attr), true) < 0)
-		elog(ERROR, "compressed data is corrupted");
+	compression_format = TOAST_COMPRESS_CFORMAT(attr);
+
+	result = (struct varlena *) palloc(raw_size + VARHDRSZ);
+	SET_VARSIZE(result, raw_size + VARHDRSZ);
+
+	/*
+	 * Support for legacy compressed TOAST format which is always using pglz.
+	 */
+	switch (compression_format)
+	{
+		case 0:
+			if (pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
+								VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
+								VARDATA(result),
+								raw_size, true) < 0)
+				elog(ERROR, "compressed data is corrupted");
+			break;
+		case 1:
+			if (pg_decompress(TOAST_COMPRESS_RAWDATA(attr),
+							  VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
+							  VARDATA(result),
+							  raw_size, true) < 0)
+				elog(ERROR, "compressed data is corrupted");
+			break;
+		default:
+			pg_unreachable();
+	}
 
 	return result;
 }
@@ -2309,10 +2351,10 @@ toast_decompress_datum_slice(struct varlena *attr, int32 slicelength)
 
 	result = (struct varlena *) palloc(slicelength + VARHDRSZ);
 
-	rawsize = pglz_decompress(TOAST_COMPRESS_RAWDATA(attr),
-							  VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
-							  VARDATA(result),
-							  slicelength, false);
+	rawsize = pg_decompress(TOAST_COMPRESS_RAWDATA(attr),
+							VARSIZE(attr) - TOAST_COMPRESS_HDRSZ,
+							VARDATA(result),
+							slicelength, false);
 	if (rawsize < 0)
 		elog(ERROR, "compressed data is corrupted");
 

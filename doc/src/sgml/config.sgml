@@ -1806,6 +1806,42 @@ include_dir 'conf.d'
      <title>Disk</title>
 
      <variablelist>
+
+     <varlistentry id="guc-compression-algorithm" xreflabel="compression_algorithm">
+      <term><varname>compression_algorithm</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>compression_algorithm</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Which compression algorithm to use for compressing
+        <acronym>TOAST</acronym> data and when
+        <xref linkend="guc-wal-compression"/> is turned on also for
+        <acronym>WAL</acronym>.
+        Possible values are:
+       </para>
+       <itemizedlist>
+        <listitem>
+        <para>
+         <literal>pglz</literal> (the internal PostgreSQL LZ family compression algorithm)
+        </para>
+        </listitem>
+        <listitem>
+        <para>
+         <literal>lz4</literal> (the LZ4 compression algorithm)
+        </para>
+        </listitem>
+       </itemizedlist>
+       <para>
+        Not all of these choices are available on all platforms.
+        The default is the pglz algorithm which is the one used by PostgrSQL
+        version 12 and earlier.
+        Only superusers can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-temp-file-limit" xreflabel="temp_file_limit">
       <term><varname>temp_file_limit</varname> (<type>integer</type>)
       <indexterm>
@@ -2741,6 +2777,8 @@ include_dir 'conf.d'
         <xref linkend="guc-full-page-writes"/> is on or during a base backup.
         A compressed page image will be decompressed during WAL replay.
         The default value is <literal>off</literal>.
+        The compression used is the one specified by
+        <xref linkend="guc-compression-algorithm"/>
         Only superusers can change this setting.
        </para>
 

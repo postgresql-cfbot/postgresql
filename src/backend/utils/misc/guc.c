@@ -42,6 +42,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "commands/trigger.h"
+#include "common/pg_lzcompress.h"
 #include "common/string.h"
 #include "funcapi.h"
 #include "jit/jit.h"
@@ -466,6 +467,14 @@ static struct config_enum_entry shared_memory_options[] = {
 #endif
 #ifdef WIN32
 	{"windows", SHMEM_TYPE_WINDOWS, false},
+#endif
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry compression_algorithm_options[] = {
+	{"pglz", COMPRESS_ALGO_PGLZ, false},
+#ifdef HAVE_LZ4
+	{"lz4", COMPRESS_ALGO_LZ4, false},
 #endif
 	{NULL, 0, false}
 };
@@ -4527,13 +4536,25 @@ static struct config_enum ConfigureNamesEnum[] =
 
 	{
 		{"ssl_max_protocol_version", PGC_SIGHUP, CONN_AUTH_SSL,
-			gettext_noop("Sets the maximum SSL/TLS protocol version to use."),
+			gettext_noop("Chooses the compression algorithm for TOAST and WAL."),
 			NULL,
 			GUC_SUPERUSER_ONLY
 		},
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"compression_algorithm", PGC_SIGHUP, RESOURCES_DISK,
+			gettext_noop("Sets the maximum SSL/TLS protocol version to use."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&compression_algorithm,
+		COMPRESS_ALGO_PGLZ,
+		compression_algorithm_options,
 		NULL, NULL, NULL
 	},
 

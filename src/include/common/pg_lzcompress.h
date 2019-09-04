@@ -10,15 +10,35 @@
 #ifndef _PG_LZCOMPRESS_H_
 #define _PG_LZCOMPRESS_H_
 
+#ifdef HAVE_LZ4
+#include "lz4.h"
 
-/* ----------
- * PGLZ_MAX_OUTPUT -
- *
- *		Macro to compute the buffer size required by pglz_compress().
- *		We allow 4 bytes for overrun before detecting compression failure.
- * ----------
+#define SIZEOF_PG_COMPRESS_HEADER	1
+/*
+ * Macro version of pg_compress_bound, less precise, usable in places where
+ * we need compile time size information.
+ * We add +1 compared to what algorithms need because that's the size of
+ * pg_compress header.
  */
-#define PGLZ_MAX_OUTPUT(_dlen)			((_dlen) + 4)
+#define PGLZ_MAX_OUTPUT(_dlen)	(Max((_dlen) + 4, LZ4_COMPRESSBOUND(_dlen)) + \
+								 SIZEOF_PG_COMPRESS_HEADER)
+#else
+#define PGLZ_MAX_OUTPUT(_dlen)	((_dlen) + 4 + SIZEOF_PG_COMPRESS_HEADER)
+#endif
+
+/*
+ * PGLZCompressionAlgo
+ *
+ * Which algorithm to use for TOAST and WAL compression.
+ *
+ * COMPRESS_ALGO_PGLZ - use the builtin pglz algorithm
+ * COMPRESS_ALGO_LZ4 - use the LZ4 library
+ */
+typedef enum
+{
+	COMPRESS_ALGO_PGLZ = 0,
+	COMPRESS_ALGO_LZ4
+}	PGLZCompressAlgo;
 
 
 /* ----------
@@ -78,14 +98,25 @@ typedef struct PGLZ_Strategy
 extern const PGLZ_Strategy *const PGLZ_strategy_default;
 extern const PGLZ_Strategy *const PGLZ_strategy_always;
 
+/*
+ * Compression algorithm.
+ */
+
+extern int	compression_algorithm;
 
 /* ----------
  * Global function declarations
  * ----------
  */
-extern int32 pglz_compress(const char *source, int32 slen, char *dest,
-						   const PGLZ_Strategy *strategy);
 extern int32 pglz_decompress(const char *source, int32 slen, char *dest,
-							 int32 rawsize, bool check_complete);
+				int32 rawsize, bool check_complete);
+extern int32 lz4_decompress(const char *source, int32 slen, char *dest,
+				int32 rawsize, bool check_complete);
+extern int32 pg_compress(const char *source, int32 slen, char *dest, int32 capacity,
+			const PGLZ_Strategy *strategy);
+extern int32 pg_decompress(const char *source, int32 slen, char *dest,
+			  int32 rawsize, bool check_complete);
+
+extern int32 pg_compress_bound(int32 slen);
 
 #endif							/* _PG_LZCOMPRESS_H_ */

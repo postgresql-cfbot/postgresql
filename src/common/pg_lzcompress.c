@@ -187,6 +187,7 @@
 
 #include "common/pg_lzcompress.h"
 
+int compression_algorithm = COMPRESS_ALGO_PGLZ;
 
 /* ----------
  * Local definitions
@@ -505,8 +506,8 @@ pglz_find_match(int16 *hstart, const char *input, const char *end,
  *		bytes written in buffer dest, or -1 if compression fails.
  * ----------
  */
-int32
-pglz_compress(const char *source, int32 slen, char *dest,
+static int32
+pglz_compress(const char *source, int32 slen, char *dest, int32 capacity,
 			  const PGLZ_Strategy *strategy)
 {
 	unsigned char *bp = (unsigned char *) dest;
@@ -770,4 +771,133 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 	 * That's it.
 	 */
 	return (char *) dp - dest;
+}
+
+#ifdef HAVE_LZ4
+#include "utils/elog.h"
+
+static int32
+lz4_compress(const char *source, int32 slen, char *dest, int32 capacity,
+			 const PGLZ_Strategy *strategy)
+{
+	int	ret;
+
+	ret = LZ4_compress_default(source, dest, slen, capacity);
+
+	/*
+	 * In case of compression error, return -1 which callers should take
+	 * as incompressible data.
+	 */
+	if (ret	== 0)
+		return -1;
+
+	return ret;
+}
+
+int32
+lz4_decompress(const char *source, int32 slen, char *dest,
+			   int32 rawsize, bool check_complete)
+{
+	int	ret;
+
+	if (check_complete)
+	{
+		ret = LZ4_decompress_safe(source, dest, slen, rawsize);
+
+		/*
+		 * Check we decompressed the right amount.
+		 */
+		if (ret != rawsize)
+			return -1;
+	}
+	else
+		ret = LZ4_decompress_safe_partial(source, dest, slen, rawsize,
+										  rawsize);
+
+	return ret;
+}
+#endif
+
+/*
+ * Compress using configured algorithm
+ */
+int32
+pg_compress(const char *source, int32 slen, char *dest, int32 capacity,
+			const PGLZ_Strategy *strategy)
+{
+	int32	ret;
+
+	switch (compression_algorithm)
+	{
+		case COMPRESS_ALGO_PGLZ:
+			dest[0] = COMPRESS_ALGO_PGLZ;
+			ret = pglz_compress(source, slen, &dest[1], capacity - 1,
+								strategy);
+			break;
+#ifdef HAVE_LZ4
+		case COMPRESS_ALGO_LZ4:
+			dest[0] = COMPRESS_ALGO_LZ4;
+			ret = lz4_compress(source, slen, &dest[1], capacity - 1,
+							   strategy);
+			break;
+#endif
+		default:
+			pg_unreachable();
+	}
+
+	if (ret >= 0)
+		return ret + 1;
+
+	return ret;
+}
+
+/*
+ * Decompress data compressed with one of the supported algorithms.
+ */
+int32
+pg_decompress(const char *source, int32 slen, char *dest,
+			  int32 rawsize, bool check_complete)
+{
+	switch (source[0])
+	{
+		case COMPRESS_ALGO_PGLZ:
+			return pglz_decompress(&source[1], slen - 1, dest, rawsize,
+								   check_complete);
+#ifdef HAVE_LZ4
+		case COMPRESS_ALGO_LZ4:
+			return lz4_decompress(&source[1], slen - 1, dest, rawsize,
+								  check_complete);
+#endif
+		default:
+			Assert(false); /* XXX: Can't elog here. */
+	}
+
+	pg_unreachable();
+}
+
+/*
+ * Compute the buffer size required by pg_compress for a configured algorithm
+ * including our header size.
+ */
+int32
+pg_compress_bound(int32 slen)
+{
+	switch (compression_algorithm)
+	{
+		case COMPRESS_ALGO_PGLZ:
+			/*
+			 * For pglz we allow 4 bytes for overrun before detecting
+			 * compression failure.
+			 */
+			return slen + 4 + SIZEOF_PG_COMPRESS_HEADER;
+#ifdef HAVE_LZ4
+		case COMPRESS_ALGO_LZ4:
+			/* LZ4 provides direct interface for calculating needed space. */
+			return LZ4_compressBound(slen) + SIZEOF_PG_COMPRESS_HEADER;
+#endif
+		default:
+			pg_unreachable();
+	}
+
+	pg_unreachable();
 }

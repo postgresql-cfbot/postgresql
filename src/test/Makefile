@@ -32,12 +32,18 @@ ifneq (,$(filter ssl,$(PG_TEST_EXTRA)))
 SUBDIRS += ssl
 endif
 endif
+ifeq ($(with_lz4),yes)
+ifneq (,$(filter toast,$(PG_TEST_EXTRA)))
+SUBDIRS += toast
+endif
+endif
 
 # We don't build or execute these by default, but we do want "make
 # clean" etc to recurse into them.  (We must filter out those that we
 # have conditionally included into SUBDIRS above, else there will be
 # make confusion.)
-ALWAYS_SUBDIRS = $(filter-out $(SUBDIRS),examples kerberos ldap locale thread ssl)
+ALWAYS_SUBDIRS = $(filter-out $(SUBDIRS),examples kerberos ldap locale thread \
+				 ssl toast)
 
 # We want to recurse to all subdirs for all standard targets, except that
 # installcheck and install should not recurse into the subdirectory "modules".

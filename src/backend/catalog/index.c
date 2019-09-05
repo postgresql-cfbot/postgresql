@@ -3564,7 +3564,7 @@ reindex_relation(Oid relid, int flags, int options)
 	 * relcache to get this with a sequential scan if ignoring system
 	 * indexes.)
 	 */
-	indexIds = RelationGetIndexList(rel);
+	indexIds = RelationGetIndexListFiltered(rel, options);
 
 	PG_TRY();
 	{

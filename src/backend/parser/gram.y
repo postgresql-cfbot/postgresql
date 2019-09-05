@@ -510,6 +510,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <ival>	reindex_target_type reindex_target_multitable
 %type <ival>	reindex_option_list reindex_option_elem
+%type <ival>	reindex_filter reindex_filter_elem
 
 %type <node>	copy_generic_opt_arg copy_generic_opt_arg_list_item
 %type <defelt>	copy_generic_opt_elem
@@ -8387,7 +8388,14 @@ reindex_option_list:
 		;
 reindex_option_elem:
 			VERBOSE	{ $$ = REINDEXOPT_VERBOSE; }
+			| reindex_filter	{ $$ = $1; }
 		;
+reindex_filter:
+			FILTER '=' reindex_filter_elem { $$ = $3; }
+		;
+reindex_filter_elem:
+				COLLATION	{ $$ = REINDEXOPT_COLLATION; }
+				;
 
 /*****************************************************************************
  *

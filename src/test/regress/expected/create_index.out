@@ -1936,6 +1936,17 @@ CREATE TABLE reindex_verbose(id integer primary key);
 \set VERBOSITY terse \\ -- suppress machine-dependent details
 REINDEX (VERBOSE) TABLE reindex_verbose;
 INFO:  index "reindex_verbose_pkey" was reindexed
+REINDEX (VERBOSE, FILTER = COLLATION) TABLE reindex_verbose;
+NOTICE:  table "reindex_verbose" has no indexes to reindex
+-- One column, not depending on a collation
+CREATE INDEX ON reindex_verbose ((id)::text text_pattern_ops);
+ERROR:  syntax error at or near "::" at character 38
+-- Two columns, none depending on a collation
+CREATE INDEX ON reindex_verbose (id, (id::text) text_pattern_ops);
+-- Three columns, one depending on a collation
+CREATE INDEX ON reindex_verbose ((id::text), id, (id::text) text_pattern_ops);
+REINDEX (VERBOSE, FILTER = COLLATION) TABLE reindex_verbose;
+INFO:  index "reindex_verbose_id_id1_id2_idx" was reindexed
 \set VERBOSITY default
 DROP TABLE reindex_verbose;
 --

@@ -53,6 +53,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_opfamily.h"
 #include "catalog/pg_partitioned_table.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
@@ -4438,6 +4439,96 @@ RelationGetIndexList(Relation relation)
 
 	/* Don't leak the old list, if there is one */
 	list_free(oldlist);
+
+	return result;
+}
+
+/*
+ * RelationGetIndexListFiltered -- get a filtered list of indexes on this relation
+ *
+ * Calls RelationGetIndexList and filters out the result.
+ */
+List *
+RelationGetIndexListFiltered(Relation relation, int options)
+{
+	List	   *result,
+			   *full_list;
+	ListCell   *lc;
+
+	full_list = RelationGetIndexList(relation);
+
+	/* Quick exit if no filtering was asked of if the list is empty. */
+	if ((options & REINDEXOPT_ALL_FILTERS) == 0 || full_list == NIL)
+		return full_list;
+
+	result = NIL;
+	foreach(lc, full_list)
+	{
+		Oid			indexOid = lfirst_oid(lc);
+		Relation	index;
+		int			i,
+					numAtts;
+		bool		keepit = false;
+
+		index = index_open(indexOid, AccessShareLock);
+		numAtts = index->rd_index->indnatts;
+		index_close(index, AccessShareLock);
+
+		for (i = 0; i < numAtts; i++)
+		{
+			/*
+			 * If at least one column doesn't match the asked filter, we have
+			 * to keep the whole index.
+			 */
+			if (keepit)
+				break;
+
+			/*
+			 * The caller wants to discard indexes that doesn't depend on a
+			 * collation
+			 */
+			if (options & REINDEXOPT_COLLATION)
+			{
+				char		typcategory;
+				bool		typispreferred,
+							res;
+				Oid			opclass,
+							opfamily = InvalidOid,
+							opcintype = InvalidOid;
+
+				opclass = get_index_column_opclass(indexOid, i + 1);
+
+				res = get_opclass_opfamily_and_input_type(opclass, &opfamily,
+														  &opcintype);
+
+				if (!res)
+				{
+					keepit = true;
+					break;
+				}
+
+				/*
+				 * text_pattern_ops and varchar_pattern_ops doesn't depend on
+				 * a collation order.
+				 */
+				if (opfamily == TEXT_PATTERN_BTREE_FAM_OID ||
+					opfamily == BPCHAR_PATTERN_BTREE_FAM_OID)
+					continue;
+
+				get_type_category_preferred(opcintype, &typcategory,
+											&typispreferred);
+
+				if (typcategory == TYPCATEGORY_STRING)
+				{
+					keepit = true;
+					break;
+				}
+			}
+		}
+
+		if (keepit)
+			result = lappend_int(result, indexOid);
+	}
 
 	return result;
 }

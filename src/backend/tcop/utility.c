@@ -784,6 +784,9 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 				switch (stmt->kind)
 				{
 					case REINDEX_OBJECT_INDEX:
+						if ((stmt->options & REINDEXOPT_ALL_FILTERS) != 0)
+							elog(ERROR, "FILTER clause is not compatible with REINDEX INDEX");
+
 						ReindexIndex(stmt->relation, stmt->options, stmt->concurrent);
 						break;
 					case REINDEX_OBJECT_TABLE:

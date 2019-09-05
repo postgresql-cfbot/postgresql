@@ -3301,6 +3301,10 @@ typedef struct ConstraintsSetStmt
 
 /* Reindex options */
 #define REINDEXOPT_VERBOSE 1 << 0	/* print progress info */
+#define REINDEXOPT_COLLATION 1 << 1	/* only reindex collation-dependent
+									 * indexes */
+
+#define REINDEXOPT_ALL_FILTERS (REINDEXOPT_COLLATION)
 
 typedef enum ReindexObjectType
 {

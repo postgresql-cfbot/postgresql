@@ -2769,7 +2769,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 				heapRelation = table_open(relationOid, ShareUpdateExclusiveLock);
 
 				/* Add all the valid indexes of relation to list */
-				foreach(lc, RelationGetIndexList(heapRelation))
+				foreach(lc, RelationGetIndexListFiltered(heapRelation, options))
 				{
 					Oid			cellOid = lfirst_oid(lc);
 					Relation	indexRelation = index_open(cellOid,
@@ -2815,7 +2815,8 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 
 					MemoryContextSwitchTo(oldcontext);
 
-					foreach(lc2, RelationGetIndexList(toastRelation))
+					foreach(lc2, RelationGetIndexListFiltered(toastRelation,
+															  options))
 					{
 						Oid			cellOid = lfirst_oid(lc2);
 						Relation	indexRelation = index_open(cellOid,

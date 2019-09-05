@@ -744,6 +744,14 @@ explain (costs off)
 CREATE TABLE reindex_verbose(id integer primary key);
 \set VERBOSITY terse \\ -- suppress machine-dependent details
 REINDEX (VERBOSE) TABLE reindex_verbose;
+REINDEX (VERBOSE, FILTER = COLLATION) TABLE reindex_verbose;
+-- One column, not depending on a collation
+CREATE INDEX ON reindex_verbose ((id)::text text_pattern_ops);
+-- Two columns, none depending on a collation
+CREATE INDEX ON reindex_verbose (id, (id::text) text_pattern_ops);
+-- Three columns, one depending on a collation
+CREATE INDEX ON reindex_verbose ((id::text), id, (id::text) text_pattern_ops);
+REINDEX (VERBOSE, FILTER = COLLATION) TABLE reindex_verbose;
 \set VERBOSITY default
 DROP TABLE reindex_verbose;
 

@@ -92,10 +92,6 @@ static volatile sig_atomic_t ready_to_stop = false;
  * Local function forward declarations
  * ----------
  */
-#ifdef EXEC_BACKEND
-static pid_t pgarch_forkexec(void);
-#endif
-
 NON_EXEC_STATIC void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void pgarch_exit(SIGNAL_ARGS);
 static void ArchSigHupHandler(SIGNAL_ARGS);
@@ -115,7 +111,7 @@ static void pgarch_archiveDone(char *xlog);
  */
 
 /*
- * pgarch_start
+ * PrepPgArchiverFork
  *
  *	Called from postmaster at startup or after an existing archiver
  *	died.  Attempt to fire up a fresh archiver process.
@@ -124,17 +120,17 @@ static void pgarch_archiveDone(char *xlog);
  *
  *	Note: if fail, we will be called again from the postmaster main loop.
  */
-int
-pgarch_start(void)
+void
+PrepPgArchiverFork(ForkProcData *pgarch_fork)
 {
+	int				ac = 0;
 	time_t		curtime;
-	pid_t		pgArchPid;
 
 	/*
 	 * Do nothing if no archiver needed
 	 */
 	if (!XLogArchivingActive())
-		return 0;
+		return;
 
 	/*
 	 * Do nothing if too soon since last archiver start.  This is a safety
@@ -145,42 +141,20 @@ pgarch_start(void)
 	curtime = time(NULL);
 	if ((unsigned int) (curtime - last_pgarch_start_time) <
 		(unsigned int) PGARCH_RESTART_INTERVAL)
-		return 0;
+		return;
 	last_pgarch_start_time = curtime;
 
+	pgarch_fork->av[ac++] = pstrdup("postgres");
+
 #ifdef EXEC_BACKEND
-	switch ((pgArchPid = pgarch_forkexec()))
-#else
-	switch ((pgArchPid = fork_process()))
+	pgarch_fork->av[ac++] = pstrdup("--forkarch");
+	pgarch_fork->av[ac++] = NULL;			/* filled in by postmaster_forkexec */
 #endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork archiver: %m")));
-			return 0;
+	pgarch_fork->ac = ac;
 
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgArchiverMain(0, NULL);
-			break;
-#endif
-
-		default:
-			return (int) pgArchPid;
-	}
-
-	/* shouldn't get here */
-	return 0;
+	Assert(pgarch_fork->ac < lengthof(*pgarch_fork->av));
+	pgarch_fork->child_main = PgArchiverMain;
+	pgarch_fork->type_desc = pstrdup("archiver");
 }
 
 /* ------------------------------------------------------------
@@ -189,42 +163,19 @@ pgarch_start(void)
  */
 
 
-#ifdef EXEC_BACKEND
-
-/*
- * pgarch_forkexec() -
- *
- * Format up the arglist for, then fork and exec, archive process
- */
-static pid_t
-pgarch_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-
-	av[ac++] = "--forkarch";
-
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-#endif							/* EXEC_BACKEND */
-
-
 /*
  * PgArchiverMain
  *
  *	The argc/argv parameters are valid only in EXEC_BACKEND case.  However,
  *	since we don't use 'em, it hardly matters...
  */
-NON_EXEC_STATIC void
-PgArchiverMain(int argc, char *argv[])
+void
+PgArchiverMain(pg_attribute_unused() int argc, pg_attribute_unused() char *arg[])
 {
+	/* Drop our connection to postmaster's shared memory, as well */
+	dsm_detach_all();
+	PGSharedMemoryDetach();
+
 	/*
 	 * Ignore all signals usually bound to some action in the postmaster,
 	 * except for SIGHUP, SIGTERM, SIGUSR1, SIGUSR2, and SIGQUIT.

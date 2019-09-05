@@ -13,6 +13,41 @@
 #ifndef _POSTMASTER_H
 #define _POSTMASTER_H
 
+#include "lib/ilist.h"
+
+/*
+ * List of active backends (or child processes anyway; we don't actually
+ * know whether a given child has become a backend or is still in the
+ * authorization phase).  This is used mainly to keep track of how many
+ * children we have and send them appropriate signals when necessary.
+ *
+ * "Special" children such as the startup, bgwriter and autovacuum launcher
+ * tasks are not in this list.  Autovacuum worker and walsender are in it.
+ * Also, "dead_end" children are in it: these are children launched just for
+ * the purpose of sending a friendly rejection message to a would-be client.
+ * We must track them because they are attached to shared memory, but we know
+ * they will never become live backends.  dead_end children are not assigned a
+ * PMChildSlot.
+ *
+ * Background workers are in this list, too.
+ */
+typedef struct bkend
+{
+	pid_t		pid;			/* process id of backend */
+	int32		cancel_key;		/* cancel key for cancels for this backend */
+	int			child_slot;		/* PMChildSlot for this backend, if any */
+
+	/*
+	 * Flavor of backend or auxiliary process.  Note that BACKEND_TYPE_WALSND
+	 * backends initially announce themselves as BACKEND_TYPE_NORMAL, so if
+	 * bkend_type is normal, you should check for a recent transition.
+	 */
+	int			bkend_type;
+	bool		dead_end;		/* is it going to send an error and quit? */
+	bool		bgworker_notify;	/* gets bgworker start/stop notifications */
+	dlist_node	elem;			/* list link in BackendList */
+} Backend;
+
 /* GUC options */
 extern bool EnableSSL;
 extern int	ReservedBackends;
@@ -54,13 +89,17 @@ extern int	MaxLivePostmasterChildren(void);
 
 extern bool PostmasterMarkPIDForWorkerNotify(int);
 
+extern bool RandomCancelKey(int32 *cancel_key);
+
 #ifdef EXEC_BACKEND
-extern pid_t postmaster_forkexec(int argc, char *argv[]);
 extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 
 extern Size ShmemBackendArraySize(void);
 extern void ShmemBackendArrayAllocation(void);
+extern void ShmemBackendArrayAdd(Backend *bn);
 #endif
+
+extern PGDLLIMPORT dlist_head BackendList;
 
 /*
  * Note: MAX_BACKENDS is limited to 2^18-1 because that's the width reserved
@@ -73,5 +112,18 @@ extern void ShmemBackendArrayAllocation(void);
  * relevant GUC check hooks and in RegisterBackgroundWorker().
  */
 #define MAX_BACKENDS	0x3FFFF
+
+/*
+ * Possible types of a backend. Beyond being the possible bkend_type values in
+ * struct bkend, these are OR-able request flag bits for SignalSomeChildren()
+ * and CountChildren().
+ */
+#define BACKEND_TYPE_NORMAL		0x0001	/* normal backend */
+#define BACKEND_TYPE_AUTOVAC	0x0002	/* autovacuum worker process */
+#define BACKEND_TYPE_WALSND		0x0004	/* walsender process */
+#define BACKEND_TYPE_BGWORKER	0x0008	/* bgworker process */
+#define BACKEND_TYPE_ALL		0x000F	/* OR of all the above */
+
+#define BACKEND_TYPE_WORKER		(BACKEND_TYPE_AUTOVAC | BACKEND_TYPE_BGWORKER)
 
 #endif							/* _POSTMASTER_H */

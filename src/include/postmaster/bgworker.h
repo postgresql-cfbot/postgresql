@@ -41,6 +41,8 @@
 #ifndef BGWORKER_H
 #define BGWORKER_H
 
+#include "postmaster/fork_process.h"
+
 /*---------------------------------------------------------------------
  * External module API.
  *---------------------------------------------------------------------
@@ -157,5 +159,7 @@ extern void BackgroundWorkerInitializeConnectionByOid(Oid dboid, Oid useroid, ui
 /* Block/unblock signals in a background worker process */
 extern void BackgroundWorkerBlockSignals(void);
 extern void BackgroundWorkerUnblockSignals(void);
+
+extern int PrepBgWorkerFork(ForkProcData *bgworker_fork);
 
 #endif							/* BGWORKER_H */

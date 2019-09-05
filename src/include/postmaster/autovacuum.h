@@ -15,6 +15,7 @@
 #define AUTOVACUUM_H
 
 #include "storage/block.h"
+#include "postmaster/fork_process.h"
 
 /*
  * Other processes can request specific work from autovacuum, identified by
@@ -45,6 +46,10 @@ extern int	AutovacuumLauncherPid;
 
 extern int	Log_autovacuum_min_duration;
 
+/* autovacuum identification */
+extern bool am_autovacuum_launcher;
+extern bool am_autovacuum_worker;
+
 /* Status inquiry functions */
 extern bool AutoVacuumingActive(void);
 extern bool IsAutoVacuumLauncherProcess(void);
@@ -58,6 +63,8 @@ extern void autovac_init(void);
 extern int	StartAutoVacLauncher(void);
 extern int	StartAutoVacWorker(void);
 
+extern void PrepAutoVacProcessFork(ForkProcData *autovac_fork);
+
 /* called from postmaster when a worker could not be forked */
 extern void AutoVacWorkerFailed(void);
 
@@ -67,8 +74,6 @@ extern void AutoVacuumUpdateDelay(void);
 #ifdef EXEC_BACKEND
 extern void AutoVacLauncherMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern void AutoVacWorkerMain(int argc, char *argv[]) pg_attribute_noreturn();
-extern void AutovacuumWorkerIAm(void);
-extern void AutovacuumLauncherIAm(void);
 #endif
 
 extern bool AutoVacuumRequestWork(AutoVacuumWorkItemType type,

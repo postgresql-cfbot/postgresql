@@ -15,7 +15,7 @@
 #define BOOTSTRAP_H
 
 #include "nodes/execnodes.h"
-
+#include "postmaster/fork_process.h"
 
 /*
  * MAXATTR is the maximum number of attributes in a relation supported

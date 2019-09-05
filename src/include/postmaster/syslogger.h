@@ -14,6 +14,7 @@
 
 #include <limits.h>				/* for PIPE_BUF */
 
+#include "postmaster/fork_process.h"
 
 /*
  * Primitive protocol structure for writing to syslogger pipe(s).  The idea
@@ -82,6 +83,8 @@ extern HANDLE syslogPipe[2];
 extern int	SysLogger_Start(void);
 
 extern void write_syslogger_file(const char *buffer, int count, int dest);
+
+extern void PrepSysLoggerFork(ForkProcData *logger_fork);
 
 #ifdef EXEC_BACKEND
 extern void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();

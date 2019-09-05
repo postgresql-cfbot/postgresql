@@ -10,7 +10,7 @@ SHLIB_LINK_INTERNAL = $(libpq)
 EXTENSION = postgres_fdw
 DATA = postgres_fdw--1.0.sql
 
-REGRESS = postgres_fdw
+REGRESSCHECK = postgres_fdw
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
@@ -23,3 +23,8 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+check:
+	$(pg_regress_check) \
+	    --temp-config $(top_srcdir)/contrib/postgres_fdw/fdwxact.conf \
+	    $(REGRESSCHECK)

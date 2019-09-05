@@ -1,0 +1,158 @@
+<!-- doc/src/sgml/distributed-transaction.sgml -->
+
+<chapter id="distributed-transaction">
+ <title>Distributed Transaction</title>
+
+ <para>
+  A distributed transaction is a transaction in which two or more network hosts
+  are involved. <productname>PostgreSQL</productname>'s global Transaction
+  manager supports distributed transactions that access foreign servers using
+  Foreign Data Wrappers. The global transaction manager is responsible for
+  managing transactions on foreign servers.
+ </para>
+
+ <sect1 id="atomic-commit">
+  <title>Atomic Commit</title>
+
+  <para>
+   Atomic commit of distributed transaction is an operation that applies a set
+   of changes as a single operation globally. This guarantees all-or-nothing
+   results for the changes on all remote hosts involved in.
+   <productname>PostgreSQL</productname> provides a way to perform read-write
+   transactions with foreign resources using foreign data wrappers.
+   Using the <productname>PostgreSQL</productname>'s atomic commit ensures that
+   all changes on foreign servers end in either commit or rollback using the
+   transaction callback routines
+   (see <xref linkend="fdw-callbacks-transaction-managements"/>).
+  </para>
+
+  <sect2>
+   <title>Atomic Commit Using Two-phase Commit Protocol</title>
+
+   <para>
+    To achieve commit among all foreign servers automatially,
+    <productname>PostgreSQL</productname> employs two-phase commit protocol,
+    which is a type of atomic commitment protocol (ACP).
+    A <productname>PostgreSQL</productname> server that received SQL is called
+    <firstterm>coordinator node</firstterm> who is responsible for coordinating
+    all the partipanting transactions. Using two-phase commit protocol, the commit
+    sequence of distributed transaction performs with the following steps.
+    <orderedlist>
+     <listitem>
+      <para>
+       Prepare all transactions on foreign servers.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Commit locally.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Resolve all prepared transaction on foreign servers.
+      </para>
+     </listitem>
+    </orderedlist>
+
+   </para>
+
+   <para>
+    At the first step, <productname>PostgreSQL</productname> distributed
+    transaction manager prepares all transaction on the foreign servers if
+    two-phase commit is required. Two-phase commit is required when the
+    transaction modifies data on two or more servers including the local server
+    itself and <xref linkend="guc-foreign-twophase-commit"/>is
+    <literal>required</literal> or <literal>prefer</literal>. If all preparations
+    on foreign servers got successful go to the next step. Any failure happens
+    in this step <productname>PostgreSQL</productname> changes to rollback, then
+    rollback all transactions on both local and foreign servers.
+   </para>
+
+   <para>
+    At the local commit step, <productname>PostgreSQL</productname> commit the
+    transaction locally. Any failure happens in this step
+    <productname>PostgreSQL</productname> changes rollback, then rollback all
+    transactions on both local and foreign servers.
+   </para>
+
+   <para>
+    At the final step, prepared transactions are resolved by a foreign transaction
+    resolver process.
+   </para>
+  </sect2>
+
+  <sect2 id="atomic-commit-transaction-resolution">
+   <title>Foreign Transaction Resolver Processes</title>
+
+   <para>
+    Foreign transaction resolver processes are auxiliary processes that is
+    responsible for foreign transaction resolution. They commit or rollback all
+    prepared transaction on foreign servers if the coordinator received agreement
+    messages from all foreign servers during the first step.
+   </para>
+
+   <para>
+    One foreign transaction resolver is responsible for transaction resolutions
+    on one database of the coordinator side. On failure during resolution, they
+    retries to resolve at an interval of
+    <varname>foreign_transaction_resolution_interval</varname> time.
+   </para>
+
+   <note>
+    <para>
+     During a foreign transaction resolver process connecting to the database,
+     database cannot be dropped. So to drop the database, you can call
+     <function>pg_stop_foreign_xact_resovler</function> function before dropping
+     the database.
+    </para>
+   </note>
+  </sect2>
+
+  <sect2 id="atomic-commit-in-doubt-transaction">
+   <title>Manual Resolution of In-Doubt Transactions</title>
+
+   <para>
+    The atomic commit mechanism ensures that all foreign servers either commit
+    or rollback using two-phase commit protocol. However, distributed transactions
+    become <firstterm>in-doubt</firstterm> in three cases: where the foreign
+    server crashed or lost the connectibility to it during preparing foreign
+    transaction, where the coordinator node crashed during either preparing or
+    resolving distributed transaction and where user canceled the query. You can
+    check in-doubt transaction in <xref linkend="pg-stat-foreign-xact-view"/>
+    view. These foreign transactions need to be resolved by using
+    <function>pg_resolve_foriegn_xact</function> function.
+    <productname>PostgreSQL</productname> doesn't have facilities to automatially
+    resolve in-doubt transactions. These behavior might change in a future release.
+   </para>
+  </sect2>
+
+  <sect2 id="atomic-commit-monitoring">
+   <title>Monitoring</title>
+   <para>
+    The monitoring information about foreign transaction resolvers is visible in
+    <link linkend="pg-stat-foreign-xact-view"><literal>pg_stat_foreign_xact</literal></link>
+    view. This view contains one row for every foreign transaction resolver worker.
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Configuration Settings</title>
+
+   <para>
+    Atomic commit requires several configuration options to be set.
+   </para>
+
+   <para>
+    On the coordinator side, <xref linkend="guc-max-prepared-foreign-transactions"/> and
+    <xref linkend="guc-max-foreign-transaction-resolvers"/> must be non-zero value.
+    Additionally the <varname>max_worker_processes</varname> may need to be adjusted to
+    accommodate for foreign transaction resolver workers, at least
+    (<varname>max_foreign_transaction_resolvers</varname> + <literal>1</literal>).
+    Note that some extensions and parallel queries also take worker slots from
+    <varname>max_worker_processes</varname>.
+   </para>
+
+  </sect2>
+ </sect1>
+</chapter>

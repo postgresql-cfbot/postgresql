@@ -4122,6 +4122,14 @@ cast(-44 as bit(12))           <lineannotation>111111010100</lineannotation>
    </para>
 
    <para>
+    According to the SQL standard, omitting <literal>ESCAPE</literal>
+    means there is no escape character (rather than defaulting to a
+    backslash), and a zero-length <literal>ESCAPE</literal> value is
+    disallowed.  <productname>PostgreSQL</productname>'s behavior in
+    this regard is therefore slightly nonstandard.
+   </para>
+
+   <para>
     The key word <token>ILIKE</token> can be used instead of
     <token>LIKE</token> to make the match case-insensitive according
     to the active locale.  This is not in the <acronym>SQL</acronym> standard but is a
@@ -4256,9 +4264,27 @@ cast(-44 as bit(12))           <lineannotation>111111010100</lineannotation>
    </para>
 
    <para>
-    As with <function>LIKE</function>, a backslash disables the special meaning
-    of any of these metacharacters; or a different escape character can
-    be specified with <literal>ESCAPE</literal>.
+    As with <function>LIKE</function>, a backslash disables the special
+    meaning of any of these metacharacters.  A different escape character
+    can be specified with <literal>ESCAPE</literal>, or the escape
+    capability can be disabled by writing <literal>ESCAPE ''</literal>.
+   </para>
+
+   <para>
+    According to the SQL standard, omitting <literal>ESCAPE</literal>
+    means there is no escape character (rather than defaulting to a
+    backslash), and a zero-length <literal>ESCAPE</literal> value is
+    disallowed.  <productname>PostgreSQL</productname>'s behavior in
+    this regard is therefore slightly nonstandard.
+   </para>
+
+   <para>
+    Another nonstandard extension is that following the escape character
+    with a letter or digit provides access to the same escape sequences
+    defined for POSIX regular expressions, below (see
+    <xref linkend="posix-character-entry-escapes-table"/>,
+    <xref linkend="posix-class-shorthand-escapes-table"/>, and
+    <xref linkend="posix-constraint-escapes-table"/>).
    </para>
 
    <para>

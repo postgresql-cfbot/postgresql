@@ -475,6 +475,44 @@ SHOW transaction_read_only;
 SHOW transaction_deferrable;
 ROLLBACK;
 
+-- transaction chaining should not be used outside a transaction block
+COMMIT AND CHAIN;  -- error
+ROLLBACK AND CHAIN;  -- error
+
+-- transaction chaining in an implicit transaction block should also not be used
+SET TRANSACTION READ WRITE\; COMMIT AND CHAIN;  -- error
+SHOW transaction_read_only;
+
+SET TRANSACTION READ WRITE\; ROLLBACK AND CHAIN;  -- error
+SHOW transaction_read_only;
+
+-- a few more tests for implicit transaction chaining
+SET default_transaction_read_only = off;
+
+-- COMMIT/ROLLBACK ~ COMMIT/ROLLBACK AND CHAIN
+INSERT INTO abc VALUES (7)\; COMMIT\; INSERT INTO abc VALUES (8)\; COMMIT AND CHAIN;  -- 7 ok, 8 fail
+INSERT INTO abc VALUES (9)\; ROLLBACK\; INSERT INTO abc VALUES (10)\; ROLLBACK AND CHAIN;  -- 9 fail, 10 fail
+
+-- COMMIT/ROLLBACK AND CHAIN ~ COMMIT/ROLLBACK
+INSERT INTO abc VALUES (11)\; COMMIT AND CHAIN\; INSERT INTO abc VALUES (12)\; COMMIT;  -- 11 fail, 12 fail
+INSERT INTO abc VALUES (13)\; ROLLBACK AND CHAIN\; INSERT INTO abc VALUES (14)\; ROLLBACK;  -- 13 fail, 14 fail
+
+-- START TRANSACTION ~ COMMIT/ROLLBACK AND CHAIN
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (15)\; COMMIT AND CHAIN;  -- 15 ok
+SHOW transaction_isolation;  -- transaction is active at this point
+COMMIT;
+
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (16)\; ROLLBACK AND CHAIN;  -- 16 fail
+SHOW transaction_isolation;  -- transaction is active at this point
+ROLLBACK;
+
+-- START TRANSACTION ~ COMMIT/ROLLBACK ~ COMMIT/ROLLBACK AND CHAIN
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (17)\; COMMIT\; INSERT INTO abc VALUES (18)\; COMMIT AND CHAIN;  -- 17 ok, 18 fail
+SHOW transaction_isolation;  -- out of transaction block
+
+START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (19)\; ROLLBACK\; INSERT INTO abc VALUES (20)\; ROLLBACK AND CHAIN;  -- 19 fail, 20 fail
+SHOW transaction_isolation;  -- out of transaction block
+
 SELECT * FROM abc ORDER BY 1;
 
 RESET default_transaction_read_only;

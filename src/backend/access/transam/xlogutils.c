@@ -544,6 +544,8 @@ typedef FakeRelCacheEntryData *FakeRelCacheEntry;
  * fields related to physical storage, like rd_rel, are initialized, so the
  * fake entry is only usable in low-level operations like ReadBuffer().
  *
+ * This is also used for syncing WAL-skipped files.
+ *
  * Caller must free the returned entry with FreeFakeRelcacheEntry().
  */
 Relation
@@ -552,18 +554,19 @@ CreateFakeRelcacheEntry(RelFileNode rnode)
 	FakeRelCacheEntry fakeentry;
 	Relation	rel;
 
-	Assert(InRecovery);
-
 	/* Allocate the Relation struct and all related space in one block. */
 	fakeentry = palloc0(sizeof(FakeRelCacheEntryData));
 	rel = (Relation) fakeentry;
 
 	rel->rd_rel = &fakeentry->pgc;
 	rel->rd_node = rnode;
-	/* We will never be working with temp rels during recovery */
+	/*
+	 * We will never be working with temp rels during recovery or syncing
+	 * WAL-skpped files.
+	 */
 	rel->rd_backend = InvalidBackendId;
 
-	/* It must be a permanent table if we're in recovery. */
+	/* It must be a permanent table here */
 	rel->rd_rel->relpersistence = RELPERSISTENCE_PERMANENT;
 
 	/* We don't know the name of the relation; use relfilenode instead */

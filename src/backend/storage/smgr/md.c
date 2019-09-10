@@ -995,6 +995,36 @@ ForgetDatabaseSyncRequests(Oid dbid)
 }
 
 /*
+ * SyncRelationFiles -- sync files of all given relations
+ *
+ * This function is assumed to be called only when skipping WAL-logging and
+ * emits no xlog records.
+ */
+void
+SyncRelationFiles(RelFileNode *syncrels, int nsyncrels)
+{
+	int			i;
+
+	for (i = 0; i < nsyncrels; i++)
+	{
+		SMgrRelation srel;
+		ForkNumber	fork;
+
+		/* sync all existing forks of the relation */
+		FlushRelationBuffersWithoutRelcache(syncrels[i], false);
+		srel = smgropen(syncrels[i], InvalidBackendId);
+
+		for (fork = 0; fork <= MAX_FORKNUM; fork++)
+		{
+			if (smgrexists(srel, fork))
+				smgrimmedsync(srel, fork);
+		}
+
+		smgrclose(srel);
+	}
+}
+
+/*
  * DropRelationFiles -- drop files of all given relations
  */
 void

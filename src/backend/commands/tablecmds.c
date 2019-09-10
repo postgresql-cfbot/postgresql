@@ -4761,9 +4761,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 
 	/*
 	 * Prepare a BulkInsertState and options for table_tuple_insert. Because
-	 * we're building a new heap, we can skip WAL-logging and fsync it to disk
-	 * at the end instead (unless WAL-logging is required for archiving or
-	 * streaming replication). The FSM is empty too, so don't bother using it.
+	 * we're building a new heap, the underlying table AM can skip WAL-logging
+	 * and smgr will sync the relation to disk at the end of the current
+	 * transaction instead. The FSM is empty too, so don't bother using it.
 	 */
 	if (newrel)
 	{
@@ -4771,8 +4771,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		bistate = GetBulkInsertState();
 
 		ti_options = TABLE_INSERT_SKIP_FSM;
-		if (!XLogIsNeeded())
-			ti_options |= TABLE_INSERT_SKIP_WAL;
 	}
 	else
 	{
@@ -5056,8 +5054,6 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	if (newrel)
 	{
 		FreeBulkInsertState(bistate);
-
-		table_finish_bulk_insert(newrel, ti_options);
 
 		table_close(newrel, NoLock);
 	}

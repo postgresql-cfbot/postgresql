@@ -1832,6 +1832,27 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-effective-io-block-size" xreflabel="effective_io_block_size">
+      <term><varname>effective_io_block_size</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>effective_io_block_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the expected maximum size of a file for which <function>fsync</function> returns in the minimum required duration. It is approximately the size of a track or sylinder for magnetic disks.
+        The value is specified in kilobytes and the default is <literal>64</literal> kilobytes.
+       </para>
+       <para>
+        When <xref linkend="guc-wal-level"/> is <literal>minimal</literal>,
+        WAL-logging is skipped for tables created in-trasaction.  If a table
+        is smaller than that size at commit, it is WAL-logged instead of
+        issueing <function>fsync</function> on it.
+
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

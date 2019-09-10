@@ -2534,9 +2534,6 @@ CopyMultiInsertBufferCleanup(CopyMultiInsertInfo *miinfo,
 	for (i = 0; i < MAX_BUFFERED_TUPLES && buffer->slots[i] != NULL; i++)
 		ExecDropSingleTupleTableSlot(buffer->slots[i]);
 
-	table_finish_bulk_insert(buffer->resultRelInfo->ri_RelationDesc,
-							 miinfo->ti_options);
-
 	pfree(buffer);
 }
 
@@ -2725,28 +2722,9 @@ CopyFrom(CopyState cstate)
 	 * If it does commit, we'll have done the table_finish_bulk_insert() at
 	 * the bottom of this routine first.
 	 *
-	 * As mentioned in comments in utils/rel.h, the in-same-transaction test
-	 * is not always set correctly, since in rare cases rd_newRelfilenodeSubid
-	 * can be cleared before the end of the transaction. The exact case is
-	 * when a relation sets a new relfilenode twice in same transaction, yet
-	 * the second one fails in an aborted subtransaction, e.g.
-	 *
-	 * BEGIN;
-	 * TRUNCATE t;
-	 * SAVEPOINT save;
-	 * TRUNCATE t;
-	 * ROLLBACK TO save;
-	 * COPY ...
-	 *
-	 * Also, if the target file is new-in-transaction, we assume that checking
-	 * FSM for free space is a waste of time, even if we must use WAL because
-	 * of archiving.  This could possibly be wrong, but it's unlikely.
-	 *
-	 * The comments for table_tuple_insert and RelationGetBufferForTuple
-	 * specify that skipping WAL logging is only safe if we ensure that our
-	 * tuples do not go into pages containing tuples from any other
-	 * transactions --- but this must be the case if we have a new table or
-	 * new relfilenode, so we need no additional work to enforce that.
+	 * If the target file is new-in-transaction, we assume that checking FSM
+	 * for free space is a waste of time, even if we must use WAL because of
+	 * archiving.  This could possibly be wrong, but it's unlikely.
 	 *
 	 * We currently don't support this optimization if the COPY target is a
 	 * partitioned table as we currently only lazily initialize partition
@@ -2762,15 +2740,14 @@ CopyFrom(CopyState cstate)
 	 * are not supported as per the description above.
 	 *----------
 	 */
-	/* createSubid is creation check, newRelfilenodeSubid is truncation check */
+	/*
+	 * createSubid is creation check, firstRelfilenodeSubid is truncation and
+	 * cluster check. Partitioned table doesn't have storage.
+	 */
 	if (RELKIND_HAS_STORAGE(cstate->rel->rd_rel->relkind) &&
 		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
-		 cstate->rel->rd_newRelfilenodeSubid != InvalidSubTransactionId))
-	{
+		 cstate->rel->rd_firstRelfilenodeSubid != InvalidSubTransactionId))
 		ti_options |= TABLE_INSERT_SKIP_FSM;
-		if (!XLogIsNeeded())
-			ti_options |= TABLE_INSERT_SKIP_WAL;
-	}
 
 	/*
 	 * Optimize if new relfilenode was created in this subxact or one of its

@@ -2107,6 +2107,13 @@ CommitTransaction(void)
 	 */
 	PreCommit_on_commit_actions();
 
+	/*
+	 * Synchronize files that are created and not WAL-logged during this
+	 * transaction. This must happen before emitting commit record so that we
+	 * don't see committed-but-broken files after a crash.
+	 */
+	smgrDoPendingSyncs(true, false);
+
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
@@ -2338,6 +2345,14 @@ PrepareTransaction(void)
 	 * cursors, to avoid dangling-reference problems)
 	 */
 	PreCommit_on_commit_actions();
+
+	/*
+	 * Sync all WAL-skipped files now. Some of them may be deleted at
+	 * transaction end but we don't bother store that information in PREPARE
+	 * record or two-phase files. Like commit, we should sync WAL-skipped
+	 * files before emitting PREPARE record. See CommitTransaction().
+	 */
+	smgrDoPendingSyncs(true, true);
 
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
@@ -2657,6 +2672,7 @@ AbortTransaction(void)
 	 */
 	AfterTriggerEndXact(false); /* 'false' means it's abort */
 	AtAbort_Portals();
+	smgrDoPendingSyncs(false, false);
 	AtEOXact_LargeObject(false);
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
@@ -4965,6 +4981,7 @@ AbortSubTransaction(void)
 						   s->parent->curTransactionOwner);
 		AtEOSubXact_LargeObject(false, s->subTransactionId,
 								s->parent->subTransactionId);
+		smgrDoPendingSyncs(false, false);
 		AtSubAbort_Notify();
 
 		/* Advertise the fact that we aborted in pg_xact. */

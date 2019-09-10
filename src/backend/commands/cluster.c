@@ -1034,12 +1034,36 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 
 	if (OidIsValid(relfilenode1) && OidIsValid(relfilenode2))
 	{
+		Relation rel1;
+		Relation rel2;
+
 		/*
 		 * Normal non-mapped relations: swap relfilenodes, reltablespaces,
 		 * relpersistence
 		 */
 		Assert(!target_is_pg_class);
 
+		/* Update creation subid hints of relcache */
+		rel1 = relation_open(r1, ExclusiveLock);
+		rel2 = relation_open(r2, ExclusiveLock);
+
+		/*
+		 * New relation's relfilenode is created in the current transaction
+		 * and used as old ralation's new relfilenode. So its
+		 * newRelfilenodeSubid as new relation's createSubid. We don't fix
+		 * rel2 since it would be deleted soon.
+		 */
+		Assert(rel2->rd_createSubid != InvalidSubTransactionId);
+		rel1->rd_newRelfilenodeSubid = rel2->rd_createSubid;
+
+		/* record the first relfilenode change in the current transaction */
+		if (rel1->rd_firstRelfilenodeSubid == InvalidSubTransactionId)
+			rel1->rd_firstRelfilenodeSubid = GetCurrentSubTransactionId();
+
+		relation_close(rel1, ExclusiveLock);
+		relation_close(rel2, ExclusiveLock);
+
+		/* swap relfilenodes, reltablespaces, relpersistence */
 		swaptemp = relform1->relfilenode;
 		relform1->relfilenode = relform2->relfilenode;
 		relform2->relfilenode = swaptemp;

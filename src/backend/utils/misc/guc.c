@@ -36,6 +36,7 @@
 #include "access/xlog_internal.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/storage.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "commands/user.h"
@@ -2772,6 +2773,18 @@ static struct config_int ConfigureNamesInt[] =
 #endif
 		0, MAX_IO_CONCURRENCY,
 		check_effective_io_concurrency, assign_effective_io_concurrency, NULL
+	},
+
+	{
+		{"effective_io_block_size", PGC_USERSET, RESOURCES_DISK,
+			gettext_noop("Size of file that can be fsync'ed in the minimum required duration."),
+			gettext_noop("For rotating magnetic disks, it is around the size of a track or sylinder."),
+			GUC_UNIT_KB
+		},
+		&effective_io_block_size,
+		64,
+		0, MAX_KILOBYTES,
+		NULL, NULL, NULL
 	},
 
 	{

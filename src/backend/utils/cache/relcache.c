@@ -1096,6 +1096,7 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	relation->rd_isnailed = false;
 	relation->rd_createSubid = InvalidSubTransactionId;
 	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 	switch (relation->rd_rel->relpersistence)
 	{
 		case RELPERSISTENCE_UNLOGGED:
@@ -1829,6 +1830,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_isnailed = true;
 	relation->rd_createSubid = InvalidSubTransactionId;
 	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 	relation->rd_backend = InvalidBackendId;
 	relation->rd_islocaltemp = false;
 
@@ -2094,7 +2096,7 @@ RelationClose(Relation relation)
 #ifdef RELCACHE_FORCE_RELEASE
 	if (RelationHasReferenceCountZero(relation) &&
 		relation->rd_createSubid == InvalidSubTransactionId &&
-		relation->rd_newRelfilenodeSubid == InvalidSubTransactionId)
+		relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)
 		RelationClearRelation(relation, false);
 #endif
 }
@@ -2510,8 +2512,8 @@ RelationClearRelation(Relation relation, bool rebuild)
 		 * problem.
 		 *
 		 * When rebuilding an open relcache entry, we must preserve ref count,
-		 * rd_createSubid/rd_newRelfilenodeSubid, and rd_toastoid state.  Also
-		 * attempt to preserve the pg_class entry (rd_rel), tupledesc,
+		 * rd_createSubid/rd_new/firstRelfilenodeSubid, and rd_toastoid state.
+		 * Also attempt to preserve the pg_class entry (rd_rel), tupledesc,
 		 * rewrite-rule, partition key, and partition descriptor substructures
 		 * in place, because various places assume that these structures won't
 		 * move while they are working with an open relcache entry.  (Note:
@@ -2600,6 +2602,7 @@ RelationClearRelation(Relation relation, bool rebuild)
 		/* creation sub-XIDs must be preserved */
 		SWAPFIELD(SubTransactionId, rd_createSubid);
 		SWAPFIELD(SubTransactionId, rd_newRelfilenodeSubid);
+		SWAPFIELD(SubTransactionId, rd_firstRelfilenodeSubid);
 		/* un-swap rd_rel pointers, swap contents instead */
 		SWAPFIELD(Form_pg_class, rd_rel);
 		/* ... but actually, we don't have to update newrel->rd_rel */
@@ -2667,7 +2670,7 @@ static void
 RelationFlushRelation(Relation relation)
 {
 	if (relation->rd_createSubid != InvalidSubTransactionId ||
-		relation->rd_newRelfilenodeSubid != InvalidSubTransactionId)
+		relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
 	{
 		/*
 		 * New relcache entries are always rebuilt, not flushed; else we'd
@@ -2807,7 +2810,7 @@ RelationCacheInvalidate(void)
 		 * pending invalidations.
 		 */
 		if (relation->rd_createSubid != InvalidSubTransactionId ||
-			relation->rd_newRelfilenodeSubid != InvalidSubTransactionId)
+			relation->rd_firstRelfilenodeSubid != InvalidSubTransactionId)
 			continue;
 
 		relcacheInvalsReceived++;
@@ -3064,6 +3067,7 @@ AtEOXact_cleanup(Relation relation, bool isCommit)
 	 * Likewise, reset the hint about the relfilenode being new.
 	 */
 	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 }
 
 /*
@@ -3155,7 +3159,7 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 	}
 
 	/*
-	 * Likewise, update or drop any new-relfilenode-in-subtransaction hint.
+	 * Likewise, update or drop any new-relfilenode-in-subtransaction hints.
 	 */
 	if (relation->rd_newRelfilenodeSubid == mySubid)
 	{
@@ -3163,6 +3167,14 @@ AtEOSubXact_cleanup(Relation relation, bool isCommit,
 			relation->rd_newRelfilenodeSubid = parentSubid;
 		else
 			relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	}
+
+	if (relation->rd_firstRelfilenodeSubid == mySubid)
+	{
+		if (isCommit)
+			relation->rd_firstRelfilenodeSubid = parentSubid;
+		else
+			relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 	}
 }
 
@@ -3253,6 +3265,7 @@ RelationBuildLocalRelation(const char *relname,
 	/* it's being created in this transaction */
 	rel->rd_createSubid = GetCurrentSubTransactionId();
 	rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+	rel->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 
 	/*
 	 * create a new tuple descriptor from the one passed in.  We do this
@@ -3556,6 +3569,8 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 * operations on the rel in the same transaction.
 	 */
 	relation->rd_newRelfilenodeSubid = GetCurrentSubTransactionId();
+	if (relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)
+		relation->rd_firstRelfilenodeSubid = relation->rd_newRelfilenodeSubid;
 
 	/* Flag relation as needing eoxact cleanup (to remove the hint) */
 	EOXactListAdd(relation);
@@ -5592,6 +5607,7 @@ load_relcache_init_file(bool shared)
 		rel->rd_fkeylist = NIL;
 		rel->rd_createSubid = InvalidSubTransactionId;
 		rel->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+		rel->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
 		MemSet(&rel->pgstat_info, 0, sizeof(rel->pgstat_info));
 

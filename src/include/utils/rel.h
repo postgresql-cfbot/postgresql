@@ -75,10 +75,17 @@ typedef struct RelationData
 	 * transaction, with one of them occurring in a subsequently aborted
 	 * subtransaction, e.g. BEGIN; TRUNCATE t; SAVEPOINT save; TRUNCATE t;
 	 * ROLLBACK TO save; -- rd_newRelfilenodeSubid is now forgotten
+	 * rd_firstRelfilenodeSubid is the ID of the first subtransaction the
+	 * relfilenode change has took place in the current transaction. Unlike
+	 * newRelfilenodeSubid, this won't be accidentially forgotten. A valid OID
+	 * means that the currently active relfilenode is transaction-local and we
+	 * sync the relation at commit instead of WAL-logging.
 	 */
 	SubTransactionId rd_createSubid;	/* rel was created in current xact */
 	SubTransactionId rd_newRelfilenodeSubid;	/* new relfilenode assigned in
 												 * current xact */
+	SubTransactionId rd_firstRelfilenodeSubid;	/* new relfilenode assigned
+												 * first in current xact */
 
 	Form_pg_class rd_rel;		/* RELATION tuple */
 	TupleDesc	rd_att;			/* tuple descriptor */
@@ -514,9 +521,15 @@ typedef struct ViewOptions
 /*
  * RelationNeedsWAL
  *		True if relation needs WAL.
+ *
+ * Returns false if wal_level = minimal and this relation is created or
+ * truncated in the current transaction.
  */
-#define RelationNeedsWAL(relation) \
-	((relation)->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT)
+#define RelationNeedsWAL(relation)										\
+	((relation)->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT &&	\
+	 (XLogIsNeeded() ||													\
+	  (relation->rd_createSubid == InvalidSubTransactionId &&			\
+	   relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)))
 
 /*
  * RelationUsesLocalBuffers

@@ -19,6 +19,16 @@
 #include "storage/smgr.h"
 #include "utils/relcache.h"
 
+/* enum for operation type of PendingDelete entries */
+typedef enum PendingOpType
+{
+	PENDING_DELETE,
+	PENDING_SYNC
+} PendingOpType;
+
+/* GUC variables */
+extern int	effective_io_block_size; /* threshold for WAL-skipping */
+
 extern SMgrRelation RelationCreateStorage(RelFileNode rnode, char relpersistence);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileNode rnode, bool atCommit);
@@ -31,7 +41,9 @@ extern void RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
  * naming
  */
 extern void smgrDoPendingDeletes(bool isCommit);
+extern void smgrDoPendingSyncs(bool isCommit, bool sync_all);
 extern int	smgrGetPendingDeletes(bool forCommit, RelFileNode **ptr);
+extern int	smgrGetPendingSyncs(bool forCommit, RelFileNode **ptr);
 extern void AtSubCommit_smgr(void);
 extern void AtSubAbort_smgr(void);
 extern void PostPrepare_smgr(void);

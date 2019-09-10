@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
+DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP | VARIABLES }
 </synopsis>
  </refsynopsisdiv>
 
@@ -71,6 +71,17 @@ DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
     <listitem>
      <para>
       Drops all temporary tables created in the current session.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>VARIABLES</literal></term>
+    <listitem>
+     <para>
+      Resets the value of all schema variables. When variables
+      will be used later, then will be initialized again to
+      NULL or default value.
      </para>
     </listitem>
    </varlistentry>

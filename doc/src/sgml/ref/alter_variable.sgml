@@ -1,0 +1,170 @@
+<!--
+doc/src/sgml/ref/alter_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-altervariable">
+ <indexterm zone="sql-altervariable">
+  <primary>ALTER VARIABLE</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>ALTER VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER VARIABLE</refname>
+  <refpurpose>
+   change the definition of a variable
+  </refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER VARIABLE <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable class="parameter">new_owner</replaceable> | CURRENT_USER | SESSION_USER }
+ALTER VARIABLE <replaceable class="parameter">name</replaceable> RENAME TO <replaceable class="parameter">new_name</replaceable>
+ALTER VARIABLE <replaceable class="parameter">name</replaceable> SET SCHEMA <replaceable class="parameter">new_schema</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>ALTER VARIABLE</command> changes the definition of an existing variable.
+   There are several subforms:
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>OWNER</literal></term>
+    <listitem>
+     <para>
+      This form changes the owner of the variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>RENAME</literal></term>
+    <listitem>
+     <para>
+      This form changes the name of the variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET SCHEMA</literal></term>
+    <listitem>
+     <para>
+      This form moves the variable into another schema.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+  </para>
+
+  <para>
+   You must own the variable to use <command>ALTER VARIABLE</command>.
+   To change the schema of a variable, you must also have
+   <literal>CREATE</literal> privilege on the new schema.
+   To alter the owner, you must also be a direct or indirect member of the new
+   owning role, and that role must have <literal>CREATE</literal> privilege on
+   the variable's schema.  (These restrictions enforce that altering the owner
+   doesn't do anything you couldn't do by dropping and recreating the variable.
+   However, a superuser can alter ownership of any type anyway.)
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><replaceable class="parameter">name</replaceable></term>
+      <listitem>
+       <para>
+        The name (possibly schema-qualified) of an existing variable to
+        alter.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="parameter">new_name</replaceable></term>
+      <listitem>
+       <para>
+        The new name for the variable.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="parameter">new_owner</replaceable></term>
+      <listitem>
+       <para>
+        The user name of the new owner of the variable.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="parameter">new_schema</replaceable></term>
+      <listitem>
+       <para>
+        The new schema for the variable.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To rename a variable:
+<programlisting>
+ALTER VARIABLE foo RENAME TO boo;
+</programlisting>
+  </para>
+
+  <para>
+   To change the owner of the variable <literal>boo</literal>
+   to <literal>joe</literal>:
+<programlisting>
+ALTER VARIABLE boo OWNER TO joe;
+</programlisting>
+  </para>
+
+  <para>
+   To change the schema of the variable <literal>boo</literal>
+   to <literal>private</literal>:
+<programlisting>
+ALTER VARIABLE boo SET SCHEMA private;
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   This comman is a PostgreSQL extension.
+  </para>
+ </refsect1>
+
+ <refsect1 id="sql-altervariable-see-also">
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createvariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

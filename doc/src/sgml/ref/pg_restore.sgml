@@ -104,6 +104,17 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>-A <replaceable class="parameter">schema_variable</replaceable></option></term>
+      <term><option>--variable=<replaceable class="parameter">schema_variable</replaceable></option></term>
+      <listitem>
+       <para>
+        Restore named schema variable only.  Multiple schema variables may be specified with
+        multiple <option>-A</option> switches.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-c</option></term>
       <term><option>--clean</option></term>
       <listitem>

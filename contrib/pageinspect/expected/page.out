@@ -82,6 +82,103 @@ SELECT * FROM fsm_page_contents(get_raw_page('test1', 'fsm', 0));
  
 (1 row)
 
+-- If we freeze the only tuple on test1, the infomask should
+-- always be the same in all test runs.
+VACUUM FREEZE test1;
+SELECT t_infomask, t_infomask2, flags
+FROM heap_page_items(get_raw_page('test1', 0)),
+     LATERAL heap_infomask_flags(t_infomask, t_infomask2, true) m(flags);
+ t_infomask | t_infomask2 |                flags                 
+------------+-------------+--------------------------------------
+       2816 |           2 | {HEAP_XMAX_INVALID,HEAP_XMIN_FROZEN}
+(1 row)
+
+SELECT t_infomask, t_infomask2, flags
+FROM heap_page_items(get_raw_page('test1', 0)),
+     LATERAL heap_infomask_flags(t_infomask, t_infomask2, false) m(flags);
+ t_infomask | t_infomask2 |                           flags                           
+------------+-------------+-----------------------------------------------------------
+       2816 |           2 | {HEAP_XMAX_INVALID,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID}
+(1 row)
+
+SELECT heap_infomask_flags(2816, 0); -- show raw flags by default
+                    heap_infomask_flags                    
+-----------------------------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID}
+(1 row)
+
+SELECT heap_infomask_flags(2816, 0, true);
+         heap_infomask_flags          
+--------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_FROZEN}
+(1 row)
+
+SELECT heap_infomask_flags(2816, 1, true);
+         heap_infomask_flags          
+--------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_FROZEN}
+(1 row)
+
+SELECT heap_infomask_flags(2816, 1, false);
+                    heap_infomask_flags                    
+-----------------------------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID}
+(1 row)
+
+SELECT heap_infomask_flags(2816, x'FFFF'::integer, true);
+                                   heap_infomask_flags                                   
+-----------------------------------------------------------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_FROZEN,HEAP_KEYS_UPDATED,HEAP_HOT_UPDATED,HEAP_ONLY_TUPLE}
+(1 row)
+
+SELECT heap_infomask_flags(2816, x'FFFF'::integer, false);
+                                             heap_infomask_flags                                              
+--------------------------------------------------------------------------------------------------------------
+ {HEAP_XMAX_INVALID,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID,HEAP_KEYS_UPDATED,HEAP_HOT_UPDATED,HEAP_ONLY_TUPLE}
+(1 row)
+
+SELECT heap_infomask_flags(x'1080'::integer, 0, true); -- test for HEAP_LOCKED_UPGRADED
+  heap_infomask_flags   
+------------------------
+ {HEAP_LOCKED_UPGRADED}
+(1 row)
+
+SELECT heap_infomask_flags(x'1080'::integer, 0, false);
+           heap_infomask_flags            
+------------------------------------------
+ {HEAP_XMAX_LOCK_ONLY,HEAP_XMAX_IS_MULTI}
+(1 row)
+
+SELECT heap_infomask_flags(x'FFFF'::integer, x'FFFF'::integer, false);
+                                                                                                                                                           heap_infomask_flags                                                                                                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {HEAP_HASNULL,HEAP_HASVARWIDTH,HEAP_HASEXTERNAL,HEAP_HASOID_OLD,HEAP_COMBOCID,HEAP_XMAX_COMMITTED,HEAP_XMAX_INVALID,HEAP_UPDATED,HEAP_XMAX_EXCL_LOCK,HEAP_XMAX_KEYSHR_LOCK,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID,HEAP_MOVED_IN,HEAP_MOVED_OFF,HEAP_XMAX_LOCK_ONLY,HEAP_XMAX_IS_MULTI,HEAP_KEYS_UPDATED,HEAP_HOT_UPDATED,HEAP_ONLY_TUPLE}
+(1 row)
+
+SELECT heap_infomask_flags(x'FFFF'::integer, x'FFFF'::integer, true);
+                                                                                                                            heap_infomask_flags                                                                                                                             
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {HEAP_HASNULL,HEAP_HASVARWIDTH,HEAP_HASEXTERNAL,HEAP_HASOID_OLD,HEAP_COMBOCID,HEAP_XMAX_COMMITTED,HEAP_XMAX_INVALID,HEAP_UPDATED,HEAP_XMAX_SHR_LOCK,HEAP_XMIN_FROZEN,HEAP_MOVED,HEAP_XMAX_LOCK_ONLY,HEAP_XMAX_IS_MULTI,HEAP_KEYS_UPDATED,HEAP_HOT_UPDATED,HEAP_ONLY_TUPLE}
+(1 row)
+
+SELECT heap_infomask_flags(0, 0, true);
+ heap_infomask_flags 
+---------------------
+ {}
+(1 row)
+
+SELECT heap_infomask_flags(0, 0, false);
+ heap_infomask_flags 
+---------------------
+ {}
+(1 row)
+
+SELECT heap_infomask_flags(-1, -1, false);
+                                                                                                                                                           heap_infomask_flags                                                                                                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {HEAP_HASNULL,HEAP_HASVARWIDTH,HEAP_HASEXTERNAL,HEAP_HASOID_OLD,HEAP_COMBOCID,HEAP_XMAX_COMMITTED,HEAP_XMAX_INVALID,HEAP_UPDATED,HEAP_XMAX_EXCL_LOCK,HEAP_XMAX_KEYSHR_LOCK,HEAP_XMIN_COMMITTED,HEAP_XMIN_INVALID,HEAP_MOVED_IN,HEAP_MOVED_OFF,HEAP_XMAX_LOCK_ONLY,HEAP_XMAX_IS_MULTI,HEAP_KEYS_UPDATED,HEAP_HOT_UPDATED,HEAP_ONLY_TUPLE}
+(1 row)
+
 DROP TABLE test1;
 -- check that using any of these functions with a partitioned table or index
 -- would fail

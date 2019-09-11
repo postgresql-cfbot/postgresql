@@ -31,6 +31,32 @@ SELECT tuple_data_split('test1'::regclass, t_data, t_infomask, t_infomask2, t_bi
 
 SELECT * FROM fsm_page_contents(get_raw_page('test1', 'fsm', 0));
 
+-- If we freeze the only tuple on test1, the infomask should
+-- always be the same in all test runs.
+VACUUM FREEZE test1;
+
+SELECT t_infomask, t_infomask2, flags
+FROM heap_page_items(get_raw_page('test1', 0)),
+     LATERAL heap_infomask_flags(t_infomask, t_infomask2, true) m(flags);
+
+SELECT t_infomask, t_infomask2, flags
+FROM heap_page_items(get_raw_page('test1', 0)),
+     LATERAL heap_infomask_flags(t_infomask, t_infomask2, false) m(flags);
+
+SELECT heap_infomask_flags(2816, 0); -- show raw flags by default
+SELECT heap_infomask_flags(2816, 0, true);
+SELECT heap_infomask_flags(2816, 1, true);
+SELECT heap_infomask_flags(2816, 1, false);
+SELECT heap_infomask_flags(2816, x'FFFF'::integer, true);
+SELECT heap_infomask_flags(2816, x'FFFF'::integer, false);
+SELECT heap_infomask_flags(x'1080'::integer, 0, true); -- test for HEAP_LOCKED_UPGRADED
+SELECT heap_infomask_flags(x'1080'::integer, 0, false);
+SELECT heap_infomask_flags(x'FFFF'::integer, x'FFFF'::integer, false);
+SELECT heap_infomask_flags(x'FFFF'::integer, x'FFFF'::integer, true);
+SELECT heap_infomask_flags(0, 0, true);
+SELECT heap_infomask_flags(0, 0, false);
+SELECT heap_infomask_flags(-1, -1, false);
+
 DROP TABLE test1;
 
 -- check that using any of these functions with a partitioned table or index

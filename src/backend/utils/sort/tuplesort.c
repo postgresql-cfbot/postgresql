@@ -1185,7 +1185,9 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 void
 tuplesort_set_bound(Tuplesortstate *state, int64 bound)
 {
-	/* Assert we're called before loading any tuples */
+	/*
+	 * Assert we're still in memory quicksort mode and haven't transitioned to
+	 * heap or tape mode. */
 	Assert(state->status == TSS_INITIAL);
 	Assert(state->memtupcount == 0);
 	Assert(!state->bounded);

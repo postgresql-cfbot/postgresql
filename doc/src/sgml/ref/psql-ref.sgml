@@ -3974,6 +3974,17 @@ bar
       </varlistentry>
 
       <varlistentry>
+        <term><varname>SORT_BY_SIZE</varname></term>
+        <listitem>
+        <para>
+        Sorts <literal>\d[bimtv]+</literal> and <literal>\l+</literal>
+        outputs by decreasing size (when size is displayed). When size
+        is not displayed, then output is sorted by name.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
        <term><varname>SQLSTATE</varname></term>
        <listitem>
         <para>

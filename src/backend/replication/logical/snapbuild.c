@@ -773,6 +773,13 @@ SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
 	CommandId	cid;
 
 	/*
+	 * In rare cases, it is possible that we're seeing a subtransaction
+	 * for the first time.  Record it in that case.
+	 */
+	if (xlrec->top_xid != xid)
+		ReorderBufferAssignChild(builder->reorder, xlrec->top_xid, xid, lsn);
+
+	/*
 	 * we only log new_cid's if a catalog tuple was modified, so mark the
 	 * transaction as containing catalog modifications
 	 */

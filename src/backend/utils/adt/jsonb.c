@@ -1873,9 +1873,7 @@ jsonb_object_agg_finalfn(PG_FUNCTION_ARGS)
 bool
 JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res)
 {
-	JsonbIterator *it;
-	JsonbIteratorToken tok PG_USED_FOR_ASSERTS_ONLY;
-	JsonbValue	tmp;
+	JsonbValue	*scalar PG_USED_FOR_ASSERTS_ONLY;
 
 	if (!JsonContainerIsArray(jbc) || !JsonContainerIsScalar(jbc))
 	{
@@ -1884,25 +1882,8 @@ JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res)
 		return false;
 	}
 
-	/*
-	 * A root scalar is stored as an array of one element, so we get the array
-	 * and then its first (and only) member.
-	 */
-	it = JsonbIteratorInit(jbc);
-
-	tok = JsonbIteratorNext(&it, &tmp, true);
-	Assert(tok == WJB_BEGIN_ARRAY);
-	Assert(tmp.val.array.nElems == 1 && tmp.val.array.rawScalar);
-
-	tok = JsonbIteratorNext(&it, res, true);
-	Assert(tok == WJB_ELEM);
-	Assert(IsAJsonbScalar(res));
-
-	tok = JsonbIteratorNext(&it, &tmp, true);
-	Assert(tok == WJB_END_ARRAY);
-
-	tok = JsonbIteratorNext(&it, &tmp, true);
-	Assert(tok == WJB_DONE);
+	scalar = getIthJsonbValueFromContainer(jbc, 0, res);
+	Assert(scalar);
 
 	return true;
 }

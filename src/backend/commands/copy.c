@@ -3003,6 +3003,13 @@ CopyFrom(CopyState cstate)
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
+	/* on input just throw the header line away */
+	if ( cstate->header_line)
+	{
+		cstate->cur_lineno++;
+		(void) CopyReadLine(cstate);
+	}
+
 	for (;;)
 	{
 		TupleTableSlot *myslot;
@@ -3640,14 +3647,6 @@ NextCopyFromRawFields(CopyState cstate, char ***fields, int *nfields)
 
 	/* only available for text or csv input */
 	Assert(!cstate->binary);
-
-	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->header_line)
-	{
-		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
-	}
 
 	cstate->cur_lineno++;
 

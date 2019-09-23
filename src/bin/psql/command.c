@@ -722,7 +722,35 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					success = listTables("tvmsE", NULL, show_verbose, show_system);
 				break;
 			case 'A':
-				success = describeAccessMethods(pattern, show_verbose);
+				{
+					char	   *pattern2 = NULL;
+
+					if (pattern)
+						pattern2 = psql_scan_slash_option(scan_state, OT_NORMAL, NULL, true);
+
+					switch (cmd[2])
+					{
+						case '\0':
+						case '+':
+							success = describeAccessMethods(pattern, show_verbose);
+							break;
+						case 'o':
+							success = listFamilyClassOperators(pattern, pattern2, show_verbose);
+							break;
+						case 'p':
+							success = listOperatorFamilyProcedures(pattern, pattern2, show_verbose);
+							break;
+						case 'c':
+							success = describeAccessMethodOperatorClasses(pattern, pattern2, show_verbose);
+							break;
+						default:
+							status = PSQL_CMD_UNKNOWN;
+							break;
+					}
+
+					if (pattern2)
+						free(pattern2);
+				}
 				break;
 			case 'a':
 				success = describeAggregates(pattern, show_verbose, show_system);

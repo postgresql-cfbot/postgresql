@@ -1,0 +1,77 @@
+-- Tests for relation options
+CREATE EXTENSION dummy_index_am;
+CREATE TABLE dummy_test_tab (i int4);
+-- Test with default values.
+CREATE INDEX dummy_test_idx ON dummy_test_tab
+  USING dummy_index_am (i);
+SELECT unnest(reloptions) FROM pg_class WHERE relname = 'dummy_test_idx';
+ unnest 
+--------
+(0 rows)
+
+DROP INDEX dummy_test_idx;
+-- Test with full set of options.
+CREATE INDEX dummy_test_idx ON dummy_test_tab
+  USING dummy_index_am (i) WITH (
+  option_bool = false,
+  option_int = 5,
+  option_real = 3.1,
+  option_string_val = NULL,
+  option_string_null = 'val');
+NOTICE:  new option value for string parameter null
+NOTICE:  new option value for string parameter val
+SELECT unnest(reloptions) FROM pg_class WHERE relname = 'dummy_test_idx';
+         unnest         
+------------------------
+ option_bool=false
+ option_int=5
+ option_real=3.1
+ option_string_val=null
+ option_string_null=val
+(5 rows)
+
+-- ALTER INDEX .. SET
+ALTER INDEX dummy_test_idx SET (option_int = 10);
+NOTICE:  new option value for string parameter null
+NOTICE:  new option value for string parameter val
+ALTER INDEX dummy_test_idx SET (option_bool = true);
+NOTICE:  new option value for string parameter null
+NOTICE:  new option value for string parameter val
+ALTER INDEX dummy_test_idx SET (option_real = 3.2);
+NOTICE:  new option value for string parameter null
+NOTICE:  new option value for string parameter val
+ALTER INDEX dummy_test_idx SET (option_string_val = 'val2');
+NOTICE:  new option value for string parameter val
+NOTICE:  new option value for string parameter val2
+ALTER INDEX dummy_test_idx SET (option_string_null = NULL);
+NOTICE:  new option value for string parameter val2
+NOTICE:  new option value for string parameter null
+SELECT unnest(reloptions) FROM pg_class WHERE relname = 'dummy_test_idx';
+         unnest          
+-------------------------
+ option_int=10
+ option_bool=true
+ option_real=3.2
+ option_string_val=val2
+ option_string_null=null
+(5 rows)
+
+-- ALTER INDEX .. RESET
+ALTER INDEX dummy_test_idx RESET (option_int);
+NOTICE:  new option value for string parameter val2
+NOTICE:  new option value for string parameter null
+ALTER INDEX dummy_test_idx RESET (option_bool);
+NOTICE:  new option value for string parameter val2
+NOTICE:  new option value for string parameter null
+ALTER INDEX dummy_test_idx RESET (option_real);
+NOTICE:  new option value for string parameter val2
+NOTICE:  new option value for string parameter null
+ALTER INDEX dummy_test_idx RESET (option_string_val);
+NOTICE:  new option value for string parameter null
+ALTER INDEX dummy_test_idx RESET (option_string_null);
+SELECT unnest(reloptions) FROM pg_class WHERE relname = 'dummy_test_idx';
+ unnest 
+--------
+(0 rows)
+
+DROP INDEX dummy_test_idx;

@@ -39,7 +39,7 @@ PG_FUNCTION_INFO_V1(blhandler);
 static relopt_kind bl_relopt_kind;
 
 /* parse table for fillRelOptions */
-static relopt_parse_elt bl_relopt_tab[INDEX_MAX_KEYS + 1];
+static relopt_parse_elt bl_relopt_tab[1];
 
 static int32 myRand(void);
 static void mySrand(uint32 seed);
@@ -52,9 +52,6 @@ static void mySrand(uint32 seed);
 void
 _PG_init(void)
 {
-	int			i;
-	char		buf[16];
-
 	bl_relopt_kind = add_reloption_kind();
 
 	/* Option for length of signature */
@@ -64,19 +61,6 @@ _PG_init(void)
 	bl_relopt_tab[0].optname = "length";
 	bl_relopt_tab[0].opttype = RELOPT_TYPE_INT;
 	bl_relopt_tab[0].offset = offsetof(BloomOptions, bloomLength);
-
-	/* Number of bits for each possible index column: col1, col2, ... */
-	for (i = 0; i < INDEX_MAX_KEYS; i++)
-	{
-		snprintf(buf, sizeof(buf), "col%d", i + 1);
-		add_int_reloption(bl_relopt_kind, buf,
-						  "Number of bits generated for each index column",
-						  DEFAULT_BLOOM_BITS, 1, MAX_BLOOM_BITS);
-		bl_relopt_tab[i + 1].optname = MemoryContextStrdup(TopMemoryContext,
-														   buf);
-		bl_relopt_tab[i + 1].opttype = RELOPT_TYPE_INT;
-		bl_relopt_tab[i + 1].offset = offsetof(BloomOptions, bitSize[0]) + sizeof(int) * i;
-	}
 }
 
 /*
@@ -86,13 +70,10 @@ static BloomOptions *
 makeDefaultBloomOptions(void)
 {
 	BloomOptions *opts;
-	int			i;
 
 	opts = (BloomOptions *) palloc0(sizeof(BloomOptions));
 	/* Convert DEFAULT_BLOOM_LENGTH from # of bits to # of words */
 	opts->bloomLength = (DEFAULT_BLOOM_LENGTH + SIGNWORDBITS - 1) / SIGNWORDBITS;
-	for (i = 0; i < INDEX_MAX_KEYS; i++)
-		opts->bitSize[i] = DEFAULT_BLOOM_BITS;
 	SET_VARSIZE(opts, sizeof(BloomOptions));
 	return opts;
 }
@@ -131,6 +112,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = blcostestimate;
 	amroutine->amoptions = bloptions;
+	amroutine->amattoptions = blattoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = blvalidate;
@@ -417,6 +399,7 @@ void
 BloomFillMetapage(Relation index, Page metaPage)
 {
 	BloomOptions *opts;
+	BloomAttOptions **attopts;
 	BloomMetaPageData *metadata;
 
 	/*
@@ -426,6 +409,11 @@ BloomFillMetapage(Relation index, Page metaPage)
 	opts = (BloomOptions *) index->rd_options;
 	if (!opts)
 		opts = makeDefaultBloomOptions();
+
+	attopts = (BloomAttOptions **) RelationGetIndexAttOptions(index, false);
+
+	for (int i = 0; i < RelationGetNumberOfAttributes(index); i++)
+		opts->bitSize[i] = attopts[i]->bitSize;
 
 	/*
 	 * Initialize contents of meta page, including a copy of the options,
@@ -489,4 +477,19 @@ bloptions(Datum reloptions, bool validate)
 	rdopts->bloomLength = (rdopts->bloomLength + SIGNWORDBITS - 1) / SIGNWORDBITS;
 
 	return (bytea *) rdopts;
+}
+
+/*
+ * Parse per-attribute reloptions for bloom index, producing a BloomOptions struct.
+ */
+void
+blattoptions(local_relopts *relopts, int attno)
+{
+	BloomAttOptions *attopts = NULL;
+
+	init_local_reloptions(relopts, attopts, sizeof(*attopts));
+	add_local_int_reloption(relopts, "bits",
+							"Number of bits generated for index column",
+							DEFAULT_BLOOM_BITS, 1, MAX_BLOOM_BITS,
+							&attopts->bitSize);
 }

@@ -105,6 +105,9 @@ blvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				ok = true;
+				break;
 			case BLOOM_HASH_PROC:
 				ok = check_amproc_signature(procform->amproc, INT4OID, false,
 											1, 1, opckeytype);

@@ -6,7 +6,7 @@ CREATE TABLE tst (
 );
 
 INSERT INTO tst SELECT i%10, substr(md5(i::text), 1, 1) FROM generate_series(1,2000) i;
-CREATE INDEX bloomidx ON tst USING bloom (i, t) WITH (col1 = 3);
+CREATE INDEX bloomidx ON tst USING bloom (i DEFAULT (bits = 3), t);
 
 SET enable_seqscan=on;
 SET enable_bitmapscan=off;
@@ -58,7 +58,7 @@ CREATE UNLOGGED TABLE tstu (
 );
 
 INSERT INTO tstu SELECT i%10, substr(md5(i::text), 1, 1) FROM generate_series(1,2000) i;
-CREATE INDEX bloomidxu ON tstu USING bloom (i, t) WITH (col2 = 4);
+CREATE INDEX bloomidxu ON tstu USING bloom (i, t DEFAULT (bits = 4));
 
 SET enable_seqscan=off;
 SET enable_bitmapscan=on;
@@ -86,9 +86,10 @@ ORDER BY 1;
 -- relation options
 --
 DROP INDEX bloomidx;
-CREATE INDEX bloomidx ON tst USING bloom (i, t) WITH (length=7, col1=4);
+CREATE INDEX bloomidx ON tst USING bloom (i  DEFAULT (bits=4), t) WITH (length=7);
 SELECT reloptions FROM pg_class WHERE oid = 'bloomidx'::regclass;
+SELECT attnum, attoptions FROM pg_attribute WHERE attrelid = 'bloomidx'::regclass ORDER BY 1;
 -- check for min and max values
 \set VERBOSITY terse
 CREATE INDEX bloomidx2 ON tst USING bloom (i, t) WITH (length=0);
-CREATE INDEX bloomidx2 ON tst USING bloom (i, t) WITH (col1=0);
+CREATE INDEX bloomidx2 ON tst USING bloom (i DEFAULT (bits=0), t);

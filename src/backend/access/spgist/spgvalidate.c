@@ -105,6 +105,9 @@ spgvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				ok = true;
+				break;
 			case SPGIST_CONFIG_PROC:
 				ok = check_amproc_signature(procform->amproc, VOIDOID, true,
 											2, 2, INTERNALOID, INTERNALOID);

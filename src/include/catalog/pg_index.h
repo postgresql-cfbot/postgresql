@@ -49,7 +49,6 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 #ifdef CATALOG_VARLEN
 	oidvector	indcollation;	/* collation identifiers */
 	oidvector	indclass;		/* opclass identifiers */
-	int2vector	indoption;		/* per-column flags (AM-specific meanings) */
 	pg_node_tree indexprs;		/* expression trees for index attributes that
 								 * are not simple column references; one for
 								 * each zero entry in indkey[] */
@@ -68,12 +67,10 @@ typedef FormData_pg_index *Form_pg_index;
 #ifdef EXPOSE_TO_CLIENT_CODE
 
 /*
- * Index AMs that support ordered scans must support these two indoption
- * bits.  Otherwise, the content of the per-column indoption fields is
- * open for future definition.
+ * Index AMs that support ordered scans must support these two reloptions.
  */
-#define INDOPTION_DESC			0x0001	/* values are in reverse order */
-#define INDOPTION_NULLS_FIRST	0x0002	/* NULLs are first instead of last */
+#define INDOPTION_DESC			"desc"			/* values are in reverse order */
+#define INDOPTION_NULLS_FIRST	"nulls_first"	/* NULLs are first instead of last */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

@@ -117,6 +117,13 @@ typedef enum IndexUniqueCheck
 	UNIQUE_CHECK_EXISTING		/* Check if existing tuple is unique */
 } IndexUniqueCheck;
 
+/* Common attribute options for ordered indexes */
+typedef struct OrderedAttOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	bool		desc;			/* DESCending ordering */
+	bool		nulls_first;	/* NULLS FIRST/LAST */
+} OrderedAttOptions;
 
 /* Nullable "ORDER BY col op const" distance */
 typedef struct IndexOrderByDistance
@@ -188,6 +195,9 @@ extern void index_store_float8_orderby_distances(IndexScanDesc scan,
 												 Oid *orderByTypes,
 												 IndexOrderByDistance *distances,
 												 bool recheckOrderBy);
+extern bytea *index_opclass_options(Relation relation, AttrNumber attnum,
+									Datum attoptions, bool validate);
+
 
 /*
  * index access method support routines (in genam.c)

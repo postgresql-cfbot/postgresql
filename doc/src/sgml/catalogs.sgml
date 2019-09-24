@@ -3916,17 +3916,6 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
-      <entry><structfield>indoption</structfield></entry>
-      <entry><type>int2vector</type></entry>
-      <entry></entry>
-      <entry>
-       This is an array of <structfield>indnkeyatts</structfield> values that
-       store per-column flag bits.  The meaning of the bits is defined by
-       the index's access method.
-      </entry>
-     </row>
-
-     <row>
       <entry><structfield>indexprs</structfield></entry>
       <entry><type>pg_node_tree</type></entry>
       <entry></entry>

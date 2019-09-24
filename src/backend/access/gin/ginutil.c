@@ -63,6 +63,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = gincostestimate;
 	amroutine->amoptions = ginoptions;
+	amroutine->amattoptions = NULL;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = ginvalidate;

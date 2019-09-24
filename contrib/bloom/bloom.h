@@ -16,6 +16,7 @@
 #include "access/amapi.h"
 #include "access/generic_xlog.h"
 #include "access/itup.h"
+#include "access/reloptions.h"
 #include "access/xlog.h"
 #include "nodes/pathnodes.h"
 #include "fmgr.h"
@@ -104,6 +105,13 @@ typedef struct BloomOptions
 	int			bitSize[INDEX_MAX_KEYS];	/* # of bits generated for each
 											 * index key */
 } BloomOptions;
+
+/* Bloom attribute options */
+typedef struct BloomAttOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	int			bitSize;		/* # of bits generated for this index key */
+} BloomAttOptions;
 
 /*
  * FreeBlockNumberArray - array of block numbers sized so that metadata fill
@@ -206,6 +214,8 @@ extern IndexBulkDeleteResult *blbulkdelete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *blvacuumcleanup(IndexVacuumInfo *info,
 											  IndexBulkDeleteResult *stats);
 extern bytea *bloptions(Datum reloptions, bool validate);
+extern void blattoptions(local_relopts *relopts, int attno);
+
 extern void blcostestimate(PlannerInfo *root, IndexPath *path,
 						   double loop_count, Cost *indexStartupCost,
 						   Cost *indexTotalCost, Selectivity *indexSelectivity,

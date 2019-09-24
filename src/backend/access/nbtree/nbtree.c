@@ -20,6 +20,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/xlog.h"
 #include "commands/progress.h"
@@ -133,6 +134,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = btcanreturn;
 	amroutine->amcostestimate = btcostestimate;
 	amroutine->amoptions = btoptions;
+	amroutine->amattoptions = ordered_index_attoptions;
 	amroutine->amproperty = btproperty;
 	amroutine->ambuildphasename = btbuildphasename;
 	amroutine->amvalidate = btvalidate;

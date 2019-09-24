@@ -67,4 +67,6 @@ CATALOG(pg_amproc,2603,AccessMethodProcedureRelationId)
  */
 typedef FormData_pg_amproc *Form_pg_amproc;
 
+#define OPCLASS_OPTIONS_PROC	0	/* amprocnum for opclass options */
+
 #endif							/* PG_AMPROC_H */

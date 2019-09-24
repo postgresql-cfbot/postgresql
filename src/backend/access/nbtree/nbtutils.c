@@ -46,7 +46,7 @@ static int	_bt_compare_array_elements(const void *a, const void *b, void *arg);
 static bool _bt_compare_scankey_args(IndexScanDesc scan, ScanKey op,
 									 ScanKey leftarg, ScanKey rightarg,
 									 bool *result);
-static bool _bt_fix_scankey_strategy(ScanKey skey, int16 *indoption);
+static bool _bt_fix_scankey_strategy(ScanKey skey, bytea **attoptions);
 static void _bt_mark_scankey_required(ScanKey skey);
 static bool _bt_check_rowcompare(ScanKey skey,
 								 IndexTuple tuple, int tupnatts, TupleDesc tupdesc,
@@ -54,6 +54,9 @@ static bool _bt_check_rowcompare(ScanKey skey,
 static int	_bt_keep_natts(Relation rel, IndexTuple lastleft,
 						   IndexTuple firstright, BTScanInsert itup_key);
 
+#define _bt_scankey_ordering_flags(ordopts) \
+	((ordopts->desc ? SK_BT_DESC : 0) | \
+	 (ordopts->nulls_first ? SK_BT_NULLS_FIRST : 0))
 
 /*
  * _bt_mkscankey
@@ -88,13 +91,13 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	ScanKey		skey;
 	TupleDesc	itupdesc;
 	int			indnkeyatts;
-	int16	   *indoption;
+	bytea	  **attoptions;
 	int			tupnatts;
 	int			i;
 
 	itupdesc = RelationGetDescr(rel);
 	indnkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
-	indoption = rel->rd_indoption;
+	attoptions = RelationGetIndexAttOptions(rel, false);
 	tupnatts = itup ? BTreeTupleGetNAtts(itup, rel) : 0;
 
 	Assert(tupnatts <= IndexRelationGetNumberOfAttributes(rel));
@@ -117,6 +120,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	for (i = 0; i < indnkeyatts; i++)
 	{
 		FmgrInfo   *procinfo;
+		OrderedAttOptions *ordopts = (OrderedAttOptions *) attoptions[i];
 		Datum		arg;
 		bool		null;
 		int			flags;
@@ -139,7 +143,9 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 			arg = (Datum) 0;
 			null = true;
 		}
-		flags = (null ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);
+
+		flags = (null ? SK_ISNULL : 0) | _bt_scankey_ordering_flags(ordopts);
+
 		ScanKeyEntryInitializeWithInfo(&skey[i],
 									   flags,
 									   (AttrNumber) (i + 1),
@@ -192,7 +198,7 @@ _bt_preprocess_array_keys(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	int			numberOfKeys = scan->numberOfKeys;
-	int16	   *indoption = scan->indexRelation->rd_indoption;
+	bytea	  **attopts = RelationGetIndexAttOptions(scan->indexRelation, false);
 	int			numArrayKeys;
 	ScanKey		cur;
 	int			i;
@@ -335,7 +341,7 @@ _bt_preprocess_array_keys(IndexScanDesc scan)
 		 * successive primitive indexscans produce data in index order.
 		 */
 		num_elems = _bt_sort_array_elements(scan, cur,
-											(indoption[cur->sk_attno - 1] & INDOPTION_DESC) != 0,
+											((OrderedAttOptions *) attopts[cur->sk_attno - 1])->desc,
 											elem_values, num_nonnulls);
 
 		/*
@@ -745,7 +751,7 @@ _bt_preprocess_keys(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	int			numberOfKeys = scan->numberOfKeys;
-	int16	   *indoption = scan->indexRelation->rd_indoption;
+	bytea	  **attoptions = RelationGetIndexAttOptions(scan->indexRelation, false);
 	int			new_numberOfKeys;
 	int			numberOfEqualCols;
 	ScanKey		inkeys;
@@ -782,7 +788,7 @@ _bt_preprocess_keys(IndexScanDesc scan)
 	if (numberOfKeys == 1)
 	{
 		/* Apply indoption to scankey (might change sk_strategy!) */
-		if (!_bt_fix_scankey_strategy(cur, indoption))
+		if (!_bt_fix_scankey_strategy(cur, attoptions))
 			so->qual_ok = false;
 		memcpy(outkeys, cur, sizeof(ScanKeyData));
 		so->numberOfKeys = 1;
@@ -817,7 +823,7 @@ _bt_preprocess_keys(IndexScanDesc scan)
 		if (i < numberOfKeys)
 		{
 			/* Apply indoption to scankey (might change sk_strategy!) */
-			if (!_bt_fix_scankey_strategy(cur, indoption))
+			if (!_bt_fix_scankey_strategy(cur, attoptions))
 			{
 				/* NULL can't be matched, so give up */
 				so->qual_ok = false;
@@ -1195,11 +1201,10 @@ _bt_compare_scankey_args(IndexScanDesc scan, ScanKey op,
  * not going to change while the scankey survives.
  */
 static bool
-_bt_fix_scankey_strategy(ScanKey skey, int16 *indoption)
+_bt_fix_scankey_strategy(ScanKey skey, bytea **attopts)
 {
-	int			addflags;
-
-	addflags = indoption[skey->sk_attno - 1] << SK_BT_INDOPTION_SHIFT;
+	OrderedAttOptions *ordopts = (OrderedAttOptions *) attopts[skey->sk_attno - 1];
+	int			addflags = _bt_scankey_ordering_flags(ordopts);
 
 	/*
 	 * We treat all btree operators as strict (even if they're not so marked
@@ -1268,7 +1273,10 @@ _bt_fix_scankey_strategy(ScanKey skey, int16 *indoption)
 		for (;;)
 		{
 			Assert(subkey->sk_flags & SK_ROW_MEMBER);
-			addflags = indoption[subkey->sk_attno - 1] << SK_BT_INDOPTION_SHIFT;
+
+			ordopts = (OrderedAttOptions *) attopts[subkey->sk_attno - 1];
+			addflags = _bt_scankey_ordering_flags(ordopts);
+
 			if ((addflags & SK_BT_DESC) && !(subkey->sk_flags & SK_BT_DESC))
 				subkey->sk_strategy = BTCommuteStrategyNumber(subkey->sk_strategy);
 			subkey->sk_flags |= addflags;

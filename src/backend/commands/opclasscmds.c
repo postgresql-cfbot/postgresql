@@ -523,11 +523,11 @@ DefineOpClass(CreateOpClassStmt *stmt)
 				addFamilyMember(&operators, member, false);
 				break;
 			case OPCLASS_ITEM_FUNCTION:
-				if (item->number <= 0 || item->number > maxProcNumber)
+				if (item->number < 0 || item->number > maxProcNumber)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("invalid function number %d,"
-									" must be between 1 and %d",
+									" must be between 0 and %d",
 									item->number, maxProcNumber)));
 				funcOid = LookupFuncWithArgs(OBJECT_FUNCTION, item->name, false);
 #ifdef NOT_USED
@@ -537,7 +537,6 @@ DefineOpClass(CreateOpClassStmt *stmt)
 					aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FUNCTION,
 								   get_func_name(funcOid));
 #endif
-
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
 				member->object = funcOid;
@@ -902,11 +901,11 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				addFamilyMember(&operators, member, false);
 				break;
 			case OPCLASS_ITEM_FUNCTION:
-				if (item->number <= 0 || item->number > maxProcNumber)
+				if (item->number < 0 || item->number > maxProcNumber)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("invalid function number %d,"
-									" must be between 1 and %d",
+									" must be between 0 and %d",
 									item->number, maxProcNumber)));
 				funcOid = LookupFuncWithArgs(OBJECT_FUNCTION, item->name, false);
 #ifdef NOT_USED
@@ -1141,6 +1140,36 @@ assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
 		elog(ERROR, "cache lookup failed for function %u", member->object);
 	procform = (Form_pg_proc) GETSTRUCT(proctup);
 
+	/* Check the signature of the opclass options parsing function */
+	if (member->number == OPCLASS_OPTIONS_PROC)
+	{
+		if (OidIsValid(typeoid))
+		{
+			if ((OidIsValid(member->lefttype) && member->lefttype != typeoid) ||
+				(OidIsValid(member->righttype) && member->righttype != typeoid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("associated data types for opclass options "
+								"parsing functions must match opclass input type")));
+		}
+		else
+		{
+			if (member->lefttype != member->righttype)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("left and right associated data types for "
+								"opclass options parsing functions must match")));
+		}
+
+		if (procform->prorettype != VOIDOID ||
+			procform->pronargs != 1 ||
+			procform->proargtypes.values[0] != INTERNALOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("invalid opclass options parsing function"),
+					 errhint("opclass options parsing function must have signature '%s'",
+							 "(internal) RETURNS void")));
+	}
 	/*
 	 * btree comparison procs must be 2-arg procs returning int4.  btree
 	 * sortsupport procs must take internal and return void.  btree in_range
@@ -1148,7 +1177,7 @@ assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
 	 * a 1-arg proc returning int4, while proc 2 must be a 2-arg proc
 	 * returning int8.  Otherwise we don't know.
 	 */
-	if (amoid == BTREE_AM_OID)
+	else if (amoid == BTREE_AM_OID)
 	{
 		if (member->number == BTORDER_PROC)
 		{

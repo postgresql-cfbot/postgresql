@@ -111,6 +111,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = brincostestimate;
 	amroutine->amoptions = brinoptions;
+	amroutine->amattoptions = NULL;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = brinvalidate;

@@ -1523,7 +1523,6 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 		AttrNumber	attnum = idxrec->indkey.values[keyno];
 		Form_pg_attribute attr = TupleDescAttr(RelationGetDescr(source_idx),
 											   keyno);
-		int16		opt = source_idx->rd_indoption[keyno];
 
 		iparam = makeNode(IndexElem);
 
@@ -1577,31 +1576,11 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 
 		/* Add the operator class name, if non-default */
 		iparam->opclass = get_opclass(indclass->values[keyno], keycoltype);
+		iparam->opclassopts =
+			untransformRelOptions(get_attoptions(source_relid, keyno + 1));
 
 		iparam->ordering = SORTBY_DEFAULT;
 		iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
-
-		/* Adjust options if necessary */
-		if (source_idx->rd_indam->amcanorder)
-		{
-			/*
-			 * If it supports sort ordering, copy DESC and NULLS opts. Don't
-			 * set non-default settings unnecessarily, though, so as to
-			 * improve the chance of recognizing equivalence to constraint
-			 * indexes.
-			 */
-			if (opt & INDOPTION_DESC)
-			{
-				iparam->ordering = SORTBY_DESC;
-				if ((opt & INDOPTION_NULLS_FIRST) == 0)
-					iparam->nulls_ordering = SORTBY_NULLS_LAST;
-			}
-			else
-			{
-				if (opt & INDOPTION_NULLS_FIRST)
-					iparam->nulls_ordering = SORTBY_NULLS_FIRST;
-			}
-		}
 
 		index->indexParams = lappend(index->indexParams, iparam);
 	}
@@ -2153,10 +2132,13 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 				 * semantics as you'd get from a normally-created constraint;
 				 * and there's also the dump/reload problem mentioned above.
 				 */
+				Datum		attoptions =
+					get_attoptions(RelationGetRelid(index_rel), i + 1);
+
 				defopclass = GetDefaultOpClass(attform->atttypid,
 											   index_rel->rd_rel->relam);
 				if (indclass->values[i] != defopclass ||
-					index_rel->rd_indoption[i] != 0)
+					attoptions != (Datum) 0)
 					ereport(ERROR,
 							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 							 errmsg("index \"%s\" column number %d does not have default sorting behavior", index_name, i + 1),
@@ -2335,6 +2317,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 			iparam->indexcolname = NULL;
 			iparam->collation = NIL;
 			iparam->opclass = NIL;
+			iparam->opclassopts = NIL;
 			iparam->ordering = SORTBY_DEFAULT;
 			iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
 			index->indexParams = lappend(index->indexParams, iparam);
@@ -2448,6 +2431,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		iparam->indexcolname = NULL;
 		iparam->collation = NIL;
 		iparam->opclass = NIL;
+		iparam->opclassopts = NIL;
 		index->indexIncludingParams = lappend(index->indexIncludingParams, iparam);
 	}
 

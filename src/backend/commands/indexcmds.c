@@ -73,7 +73,6 @@ static void ComputeIndexAttrs(IndexInfo *indexInfo,
 							  Oid *typeOidP,
 							  Oid *collationOidP,
 							  Oid *classOidP,
-							  int16 *colOptionP,
 							  List *attList,
 							  List *exclusionOpNames,
 							  Oid relId,
@@ -90,6 +89,7 @@ static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 static bool ReindexRelationConcurrently(Oid relationOid, int options);
 static void ReindexPartitionedIndex(Relation parentIdx);
 static void update_relispartition(Oid relationId, bool newval);
+static bool CompareOpclassOptions(Datum *opts1, Datum *opts2, int natts);
 
 /*
  * callback argument type for RangeVarCallbackForReindexIndex()
@@ -154,7 +154,6 @@ CheckIndexCompatible(Oid oldId,
 	Form_pg_am	accessMethodForm;
 	IndexAmRoutine *amRoutine;
 	bool		amcanorder;
-	int16	   *coloptions;
 	IndexInfo  *indexInfo;
 	int			numberOfAttributes;
 	int			old_natts;
@@ -207,11 +206,9 @@ CheckIndexCompatible(Oid oldId,
 	typeObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
 	collationObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
 	classObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
-	coloptions = (int16 *) palloc(numberOfAttributes * sizeof(int16));
 	ComputeIndexAttrs(indexInfo,
 					  typeObjectId, collationObjectId, classObjectId,
-					  coloptions, attributeList,
-					  exclusionOpNames, relationId,
+					  attributeList, exclusionOpNames, relationId,
 					  accessMethodName, accessMethodId,
 					  amcanorder, isconstraint);
 
@@ -268,6 +265,18 @@ CheckIndexCompatible(Oid oldId,
 		}
 	}
 
+	/* Any change in opclass options break compatibility. */
+	if (ret)
+	{
+		Datum	   *opclassOptions = RelationGetIndexRawAttOptions(irel);
+
+		ret = CompareOpclassOptions(opclassOptions,
+									indexInfo->ii_OpclassOptions, old_natts);
+
+		if (opclassOptions)
+			pfree(opclassOptions);
+	}
+
 	/* Any change in exclusion operator selections breaks compatibility. */
 	if (ret && indexInfo->ii_ExclusionOps != NULL)
 	{
@@ -302,6 +311,42 @@ CheckIndexCompatible(Oid oldId,
 	return ret;
 }
 
+/*
+ * CompareOpclassOptions
+ *
+ * Compare per-column opclass options which are represented by arrays of text[]
+ * datums.  Both elements of arrays and array themselves can be NULL.
+ */
+static bool
+CompareOpclassOptions(Datum *opts1, Datum *opts2, int natts)
+{
+	int			i;
+
+	if (!opts1 && !opts2)
+		return true;
+
+	for (i = 0; i < natts; i++)
+	{
+		Datum		opt1 = opts1 ? opts1[i] : (Datum) 0;
+		Datum		opt2 = opts2 ? opts2[i] : (Datum) 0;
+
+		if (opt1 == (Datum) 0)
+		{
+			if (opt2 == (Datum) 0)
+				continue;
+			else
+				return false;
+		}
+		else if (opt2 == (Datum) 0)
+			return false;
+
+		/* Compare non-NULL text[] datums. */
+		if (!DatumGetBool(DirectFunctionCall2(array_eq, opt1, opt2)))
+			return false;
+	}
+
+	return true;
+}
 
 /*
  * WaitForOlderSnapshots
@@ -455,7 +500,6 @@ DefineIndex(Oid relationId,
 	amoptions_function amoptions;
 	bool		partitioned;
 	Datum		reloptions;
-	int16	   *coloptions;
 	IndexInfo  *indexInfo;
 	bits16		flags;
 	bits16		constr_flags;
@@ -785,11 +829,9 @@ DefineIndex(Oid relationId,
 	typeObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
 	collationObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
 	classObjectId = (Oid *) palloc(numberOfAttributes * sizeof(Oid));
-	coloptions = (int16 *) palloc(numberOfAttributes * sizeof(int16));
 	ComputeIndexAttrs(indexInfo,
 					  typeObjectId, collationObjectId, classObjectId,
-					  coloptions, allIndexParams,
-					  stmt->excludeOpNames, relationId,
+					  allIndexParams, stmt->excludeOpNames, relationId,
 					  accessMethodName, accessMethodId,
 					  amcanorder, stmt->isconstraint);
 
@@ -987,7 +1029,7 @@ DefineIndex(Oid relationId,
 					 stmt->oldNode, indexInfo, indexColNames,
 					 accessMethodId, tablespaceId,
 					 collationObjectId, classObjectId,
-					 coloptions, reloptions,
+					 reloptions,
 					 flags, constr_flags,
 					 allowSystemTableMods, !check_rights,
 					 &createdConstraintId);
@@ -1509,7 +1551,7 @@ CheckPredicate(Expr *predicate)
 
 /*
  * Compute per-index-column information, including indexed column numbers
- * or index expressions, opclasses, and indoptions. Note, all output vectors
+ * or index expressions, opclasses and their options. Note, all output vectors
  * should be allocated for all columns, including "including" ones.
  */
 static void
@@ -1517,7 +1559,6 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 				  Oid *typeOidP,
 				  Oid *collationOidP,
 				  Oid *classOidP,
-				  int16 *colOptionP,
 				  List *attList,	/* list of IndexElem's */
 				  List *exclusionOpNames,
 				  Oid relId,
@@ -1665,7 +1706,6 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 						 errmsg("including column does not support NULLS FIRST/LAST options")));
 
 			classOidP[attn] = InvalidOid;
-			colOptionP[attn] = 0;
 			collationOidP[attn] = InvalidOid;
 			attn++;
 
@@ -1780,22 +1820,7 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 		 * zero for any un-ordered index, while ordered indexes have DESC and
 		 * NULLS FIRST/LAST options.
 		 */
-		colOptionP[attn] = 0;
-		if (amcanorder)
-		{
-			/* default ordering is ASC */
-			if (attribute->ordering == SORTBY_DESC)
-				colOptionP[attn] |= INDOPTION_DESC;
-			/* default null ordering is LAST for ASC, FIRST for DESC */
-			if (attribute->nulls_ordering == SORTBY_NULLS_DEFAULT)
-			{
-				if (attribute->ordering == SORTBY_DESC)
-					colOptionP[attn] |= INDOPTION_NULLS_FIRST;
-			}
-			else if (attribute->nulls_ordering == SORTBY_NULLS_FIRST)
-				colOptionP[attn] |= INDOPTION_NULLS_FIRST;
-		}
-		else
+		if (!amcanorder)
 		{
 			/* index AM does not support ordering */
 			if (attribute->ordering != SORTBY_DEFAULT)
@@ -1808,6 +1833,39 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("access method \"%s\" does not support NULLS FIRST/LAST options",
 								accessMethodName)));
+		}
+
+		if (attribute->ordering == SORTBY_DESC)
+		{
+			attribute->opclassopts =
+				lappend(attribute->opclassopts,
+						makeDefElem(INDOPTION_DESC, NULL, -1));
+
+			if (attribute->nulls_ordering == SORTBY_NULLS_LAST)
+				attribute->opclassopts =
+					lappend(attribute->opclassopts,
+							makeDefElem(INDOPTION_NULLS_FIRST,
+										(Node *) makeString("false"), -1));
+		}
+		else if (attribute->nulls_ordering == SORTBY_NULLS_FIRST)
+		{
+			attribute->opclassopts =
+				lappend(attribute->opclassopts,
+						makeDefElem(INDOPTION_NULLS_FIRST, NULL, -1));
+		}
+
+		/* Set up the per-column opclass options (attoptions field). */
+		if (attribute->opclassopts)
+		{
+			Assert(attn < nkeycols);
+
+			if (!indexInfo->ii_OpclassOptions)
+				indexInfo->ii_OpclassOptions =
+					palloc0(sizeof(Datum) * indexInfo->ii_NumIndexAttrs);
+
+			indexInfo->ii_OpclassOptions[attn] =
+				transformRelOptions((Datum) 0, attribute->opclassopts,
+									NULL, NULL, false, false);
 		}
 
 		attn++;

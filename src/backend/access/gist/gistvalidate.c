@@ -106,6 +106,9 @@ gistvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				ok = true;
+				break;
 			case GIST_CONSISTENT_PROC:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, false,
 											5, 5, INTERNALOID, opcintype,

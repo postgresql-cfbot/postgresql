@@ -279,6 +279,9 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->amcostestimate = amroutine->amcostestimate;
 			Assert(info->amcostestimate != NULL);
 
+			/* Fetch index opclass options */
+			info->opclassoptions = RelationGetIndexAttOptions(indexRelation, true);
+
 			/*
 			 * Fetch the ordering information for the index, if any.
 			 */
@@ -296,10 +299,12 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 				for (i = 0; i < nkeycolumns; i++)
 				{
-					int16		opt = indexRelation->rd_indoption[i];
+					OrderedAttOptions *opt = (OrderedAttOptions *) info->opclassoptions[i];
 
-					info->reverse_sort[i] = (opt & INDOPTION_DESC) != 0;
-					info->nulls_first[i] = (opt & INDOPTION_NULLS_FIRST) != 0;
+					Assert(opt);
+
+					info->reverse_sort[i] = opt->desc;
+					info->nulls_first[i] = opt->nulls_first;
 				}
 			}
 			else if (amroutine->amcanorder)
@@ -324,14 +329,16 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 				for (i = 0; i < nkeycolumns; i++)
 				{
-					int16		opt = indexRelation->rd_indoption[i];
+					OrderedAttOptions *opt = (OrderedAttOptions *) info->opclassoptions[i];
 					Oid			ltopr;
 					Oid			btopfamily;
 					Oid			btopcintype;
 					int16		btstrategy;
 
-					info->reverse_sort[i] = (opt & INDOPTION_DESC) != 0;
-					info->nulls_first[i] = (opt & INDOPTION_NULLS_FIRST) != 0;
+					Assert(opt);
+
+					info->reverse_sort[i] = opt->desc;
+					info->nulls_first[i] = opt->nulls_first;
 
 					ltopr = get_opfamily_member(info->opfamily[i],
 												info->opcintype[i],

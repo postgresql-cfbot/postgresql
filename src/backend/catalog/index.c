@@ -26,6 +26,7 @@
 #include "access/amapi.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
+#include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
@@ -106,13 +107,13 @@ static TupleDesc ConstructTupleDescriptor(Relation heapRelation,
 										  Oid *classObjectId);
 static void InitializeAttributeOids(Relation indexRelation,
 									int numatts, Oid indexoid);
-static void AppendAttributeTuples(Relation indexRelation, int numatts);
+static void AppendAttributeTuples(Relation indexRelation, int numatts,
+								  Datum *attopts);
 static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								Oid parentIndexId,
 								IndexInfo *indexInfo,
 								Oid *collationOids,
 								Oid *classOids,
-								int16 *coloptions,
 								bool primary,
 								bool isexclusion,
 								bool immediate,
@@ -486,7 +487,7 @@ InitializeAttributeOids(Relation indexRelation,
  * ----------------------------------------------------------------
  */
 static void
-AppendAttributeTuples(Relation indexRelation, int numatts)
+AppendAttributeTuples(Relation indexRelation, int numatts, Datum *attopts)
 {
 	Relation	pg_attribute;
 	CatalogIndexState indstate;
@@ -508,10 +509,11 @@ AppendAttributeTuples(Relation indexRelation, int numatts)
 	for (i = 0; i < numatts; i++)
 	{
 		Form_pg_attribute attr = TupleDescAttr(indexTupDesc, i);
+		Datum		attoptions = attopts ? attopts[i] : (Datum) 0;
 
 		Assert(attr->attnum == i + 1);
 
-		InsertPgAttributeTuple(pg_attribute, attr, indstate);
+		InsertPgAttributeTuple(pg_attribute, attr, attoptions, indstate);
 	}
 
 	CatalogCloseIndexes(indstate);
@@ -532,7 +534,6 @@ UpdateIndexRelation(Oid indexoid,
 					IndexInfo *indexInfo,
 					Oid *collationOids,
 					Oid *classOids,
-					int16 *coloptions,
 					bool primary,
 					bool isexclusion,
 					bool immediate,
@@ -542,7 +543,6 @@ UpdateIndexRelation(Oid indexoid,
 	int2vector *indkey;
 	oidvector  *indcollation;
 	oidvector  *indclass;
-	int2vector *indoption;
 	Datum		exprsDatum;
 	Datum		predDatum;
 	Datum		values[Natts_pg_index];
@@ -552,7 +552,7 @@ UpdateIndexRelation(Oid indexoid,
 	int			i;
 
 	/*
-	 * Copy the index key, opclass, and indoption info into arrays (should we
+	 * Copy the index key and opclass info into arrays (should we
 	 * make the caller pass them like this to start with?)
 	 */
 	indkey = buildint2vector(NULL, indexInfo->ii_NumIndexAttrs);
@@ -560,7 +560,6 @@ UpdateIndexRelation(Oid indexoid,
 		indkey->values[i] = indexInfo->ii_IndexAttrNumbers[i];
 	indcollation = buildoidvector(collationOids, indexInfo->ii_NumIndexKeyAttrs);
 	indclass = buildoidvector(classOids, indexInfo->ii_NumIndexKeyAttrs);
-	indoption = buildint2vector(coloptions, indexInfo->ii_NumIndexKeyAttrs);
 
 	/*
 	 * Convert the index expressions (if any) to a text datum
@@ -591,6 +590,7 @@ UpdateIndexRelation(Oid indexoid,
 	else
 		predDatum = (Datum) 0;
 
+
 	/*
 	 * open the system catalog index relation
 	 */
@@ -618,7 +618,6 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
 	values[Anum_pg_index_indclass - 1] = PointerGetDatum(indclass);
-	values[Anum_pg_index_indoption - 1] = PointerGetDatum(indoption);
 	values[Anum_pg_index_indexprs - 1] = exprsDatum;
 	if (exprsDatum == (Datum) 0)
 		nulls[Anum_pg_index_indexprs - 1] = true;
@@ -661,7 +660,6 @@ UpdateIndexRelation(Oid indexoid,
  * tableSpaceId: OID of tablespace to use
  * collationObjectId: array of collation OIDs, one per index column
  * classObjectId: array of index opclass OIDs, one per index column
- * coloptions: array of per-index-column indoption settings
  * reloptions: AM-specific options
  * flags: bitmask that can include any combination of these bits:
  *		INDEX_CREATE_IS_PRIMARY
@@ -701,7 +699,6 @@ index_create(Relation heapRelation,
 			 Oid tableSpaceId,
 			 Oid *collationObjectId,
 			 Oid *classObjectId,
-			 int16 *coloptions,
 			 Datum reloptions,
 			 bits16 flags,
 			 bits16 constr_flags,
@@ -978,7 +975,8 @@ index_create(Relation heapRelation,
 	/*
 	 * append ATTRIBUTE tuples for the index
 	 */
-	AppendAttributeTuples(indexRelation, indexInfo->ii_NumIndexAttrs);
+	AppendAttributeTuples(indexRelation, indexInfo->ii_NumIndexAttrs,
+						  indexInfo->ii_OpclassOptions);
 
 	/* ----------------
 	 *	  update pg_index
@@ -990,7 +988,7 @@ index_create(Relation heapRelation,
 	 */
 	UpdateIndexRelation(indexRelationId, heapRelationId, parentIndexRelid,
 						indexInfo,
-						collationObjectId, classObjectId, coloptions,
+						collationObjectId, classObjectId,
 						isprimary, is_exclusion,
 						(constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) == 0,
 						!concurrent && !invalid,
@@ -1191,6 +1189,13 @@ index_create(Relation heapRelation,
 
 	indexRelation->rd_index->indnkeyatts = indexInfo->ii_NumIndexKeyAttrs;
 
+	/* Validate opclass-specific options */
+	if (indexInfo->ii_OpclassOptions)
+		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
+			(void) index_opclass_options(indexRelation, i + 1,
+										 indexInfo->ii_OpclassOptions[i],
+										 true);
+
 	/*
 	 * If this is bootstrap (initdb) time, then we don't actually fill in the
 	 * index yet.  We'll be creating more indexes and classes later, so we
@@ -1248,10 +1253,8 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 	HeapTuple	indexTuple,
 				classTuple;
 	Datum		indclassDatum,
-				colOptionDatum,
 				optionDatum;
 	oidvector  *indclass;
-	int2vector *indcoloptions;
 	bool		isnull;
 	List	   *indexColNames = NIL;
 	List	   *indexExprs = NIL;
@@ -1279,11 +1282,6 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 									Anum_pg_index_indclass, &isnull);
 	Assert(!isnull);
 	indclass = (oidvector *) DatumGetPointer(indclassDatum);
-
-	colOptionDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
-									 Anum_pg_index_indoption, &isnull);
-	Assert(!isnull);
-	indcoloptions = (int2vector *) DatumGetPointer(colOptionDatum);
 
 	/* Fetch options of index if any */
 	classTuple = SearchSysCache1(RELOID, oldIndexId);
@@ -1372,7 +1370,6 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 							  indexRelation->rd_rel->reltablespace,
 							  indexRelation->rd_indcollation,
 							  indclass->values,
-							  indcoloptions->values,
 							  optionDatum,
 							  INDEX_CREATE_SKIP_BUILD | INDEX_CREATE_CONCURRENT,
 							  0,
@@ -2310,6 +2307,8 @@ BuildIndexInfo(Relation index)
 								 &ii->ii_ExclusionProcs,
 								 &ii->ii_ExclusionStrats);
 	}
+
+	ii->ii_OpclassOptions = RelationGetIndexRawAttOptions(index);
 
 	return ii;
 }

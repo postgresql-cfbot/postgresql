@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> ] ON [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ USING <replaceable class="parameter">method</replaceable> ]
-    ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ] [, ...] )
+    ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] { <replaceable class="parameter">opclass</replaceable> | DEFAULT } [ ( <replaceable class="parameter">opclass_parameter</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] ) ] [ ASC | DESC ] [ NULLS { FIRST | LAST } ] [, ...] )
     [ INCLUDE ( <replaceable class="parameter">column_name</replaceable> [, ...] ) ]
     [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] ) ]
     [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
@@ -279,6 +279,15 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
      </varlistentry>
 
      <varlistentry>
+      <term><replaceable class="parameter">opclass_parameter</replaceable></term>
+      <listitem>
+       <para>
+        The name of an operator class parameter. See below for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><literal>ASC</literal></term>
       <listitem>
        <para>
@@ -514,6 +523,48 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
     </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><literal>n_distinct_per_range</literal></term>
+    <listitem>
+    <para>
+     Defines the estimated number of distinct non-null values in the block
+     range, used by <acronym>BRIN</acronym> bloom indexes for sizing of the
+     Bloom filter. It behaves similarly to <literal>n_distinct</literal> option
+     for <xref linkend="sql-altertable"/>. When set to a positive value,
+     each block range is assumed to contain this number of distinct non-null
+     values. When set to a negative value, which must be greater than or
+     equal to -1, the number of distinct non-null is assumed linear with
+     the maximum possible number of tuples in the block range (about 290
+     rows per block). The default values is <literal>-0.1</literal>, and
+     the minimum number of distinct non-null values is <literal>128</literal>.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>false_positive_rate</literal></term>
+    <listitem>
+    <para>
+     Defines the desired false positive rate used by <acronym>BRIN</acronym>
+     bloom indexes for sizing of the Bloom filter. The values must be be
+     greater than 0.0 and smaller than 1.0. The default values is 0.01,
+     which is 1% false positive rate.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>values_per_range</literal></term>
+    <listitem>
+    <para>
+     Defines the maximum number of values stored by <acronym>BRIN</acronym>
+     minmax indexes to summarize a block range. Each value may represent
+     eiter a point, or boundary of an interval. Values must be be between
+     16 and 256, and the default value is 64.
+    </para>
+    </listitem>
+   </varlistentry>
    </variablelist>
   </refsect2>
 
@@ -646,8 +697,9 @@ Indexes:
   </para>
 
   <para>
-   An <firstterm>operator class</firstterm> can be specified for each
-   column of an index. The operator class identifies the operators to be
+   An <firstterm>operator class</firstterm> with its optional parameters 
+   can be specified for each column of an index.
+   The operator class identifies the operators to be
    used by the index for that column. For example, a B-tree index on
    four-byte integers would use the <literal>int4_ops</literal> class;
    this operator class includes comparison functions for four-byte

@@ -672,13 +672,12 @@ typedef BTScanOpaqueData *BTScanOpaque;
 /*
  * We use some private sk_flags bits in preprocessed scan keys.  We're allowed
  * to use bits 16-31 (see skey.h).  The uppermost bits are copied from the
- * index's indoption[] array entry for the index attribute.
+ * index's attoptions for the index attribute.
  */
-#define SK_BT_REQFWD	0x00010000	/* required to continue forward scan */
-#define SK_BT_REQBKWD	0x00020000	/* required to continue backward scan */
-#define SK_BT_INDOPTION_SHIFT  24	/* must clear the above bits */
-#define SK_BT_DESC			(INDOPTION_DESC << SK_BT_INDOPTION_SHIFT)
-#define SK_BT_NULLS_FIRST	(INDOPTION_NULLS_FIRST << SK_BT_INDOPTION_SHIFT)
+#define SK_BT_REQFWD		0x00010000	/* required to continue forward scan */
+#define SK_BT_REQBKWD		0x00020000	/* required to continue backward scan */
+#define SK_BT_DESC			0x00040000
+#define SK_BT_NULLS_FIRST	0x00080000
 
 /*
  * Constant definition for progress reporting.  Phase numbers must match

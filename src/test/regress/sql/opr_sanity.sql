@@ -1304,7 +1304,7 @@ WHERE p1.amopopr = p2.oid AND p2.oprcode = p3.oid AND
 SELECT p1.amprocfamily, p1.amprocnum
 FROM pg_amproc as p1
 WHERE p1.amprocfamily = 0 OR p1.amproclefttype = 0 OR p1.amprocrighttype = 0
-    OR p1.amprocnum < 1 OR p1.amproc = 0;
+    OR p1.amprocnum < 0 OR p1.amproc = 0;
 
 -- Support routines that are primary members of opfamilies must be immutable
 -- (else it suggests that the index ordering isn't fixed).  But cross-type
@@ -1339,8 +1339,7 @@ SELECT p1.indexrelid, p1.indrelid
 FROM pg_index as p1
 WHERE array_lower(indkey, 1) != 0 OR array_upper(indkey, 1) != indnatts-1 OR
     array_lower(indclass, 1) != 0 OR array_upper(indclass, 1) != indnatts-1 OR
-    array_lower(indcollation, 1) != 0 OR array_upper(indcollation, 1) != indnatts-1 OR
-    array_lower(indoption, 1) != 0 OR array_upper(indoption, 1) != indnatts-1;
+    array_lower(indcollation, 1) != 0 OR array_upper(indcollation, 1) != indnatts-1;
 
 -- Check that opclasses and collations match the underlying columns.
 -- (As written, this test ignores expression indexes.)

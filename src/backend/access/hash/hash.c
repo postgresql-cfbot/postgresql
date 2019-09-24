@@ -84,6 +84,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = hashcostestimate;
 	amroutine->amoptions = hashoptions;
+	amroutine->amattoptions = NULL;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = hashvalidate;

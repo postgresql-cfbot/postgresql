@@ -87,6 +87,9 @@ brinvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				ok = true;
+				break;
 			case BRIN_PROCNUM_OPCINFO:
 				ok = check_amproc_signature(procform->amproc, INTERNALOID, true,
 											1, 1, INTERNALOID);
@@ -98,8 +101,8 @@ brinvalidate(Oid opclassoid)
 				break;
 			case BRIN_PROCNUM_CONSISTENT:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
-											3, 3, INTERNALOID, INTERNALOID,
-											INTERNALOID);
+											3, 4, INTERNALOID, INTERNALOID,
+											INTERNALOID, INT4OID);
 				break;
 			case BRIN_PROCNUM_UNION:
 				ok = check_amproc_signature(procform->amproc, BOOLOID, true,

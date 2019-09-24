@@ -105,6 +105,8 @@ hashvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				break;
 			case HASHSTANDARD_PROC:
 			case HASHEXTENDED_PROC:
 				if (!check_hash_func_signature(procform->amproc, procform->amprocnum,

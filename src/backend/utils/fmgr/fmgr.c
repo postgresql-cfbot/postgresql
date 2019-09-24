@@ -18,9 +18,11 @@
 #include "access/detoast.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_type.h"
 #include "executor/functions.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "pgstat.h"
 #include "utils/acl.h"
@@ -1965,6 +1967,32 @@ get_fn_expr_variadic(FmgrInfo *flinfo)
 		return ((FuncExpr *) expr)->funcvariadic;
 	else
 		return false;
+}
+
+void
+set_fn_opclass_options(FmgrInfo *flinfo, bytea *options)
+{
+	flinfo->fn_expr = (Node *) makeConst(BYTEAOID, -1, InvalidOid, -1,
+										 PointerGetDatum(options),
+										 options == NULL, false);
+}
+
+bytea *
+get_fn_opclass_options(FmgrInfo *flinfo)
+{
+	if (flinfo && flinfo->fn_expr && IsA(flinfo->fn_expr, Const))
+	{
+		Const	   *expr = (Const *) flinfo->fn_expr;
+
+		if (expr->consttype == BYTEAOID)
+			return expr->constisnull ? NULL : DatumGetByteaP(expr->constvalue);
+	}
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("opclass options info is absent in function call context")));
+
+	return NULL;
 }
 
 /*-------------------------------------------------------------------------

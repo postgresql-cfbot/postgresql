@@ -15,9 +15,11 @@
 
 #include "access/amapi.h"
 #include "access/htup_details.h"
+#include "access/reloptions.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 
@@ -114,14 +116,11 @@ lookup_prop_name(const char *name)
  * otherwise sets *res to the boolean value to return.
  */
 static bool
-test_indoption(HeapTuple tuple, int attno, bool guard,
-			   int16 iopt_mask, int16 iopt_expect,
-			   bool *res)
+test_indoption(Oid indexrelid, int attno, bool guard,
+			   int offset, bool expect, bool *res)
 {
-	Datum		datum;
-	bool		isnull;
-	int2vector *indoption;
-	int16		indoption_val;
+	OrderedAttOptions *ordopts;
+	Datum		relopts;
 
 	if (!guard)
 	{
@@ -129,14 +128,14 @@ test_indoption(HeapTuple tuple, int attno, bool guard,
 		return true;
 	}
 
-	datum = SysCacheGetAttr(INDEXRELID, tuple,
-							Anum_pg_index_indoption, &isnull);
-	Assert(!isnull);
+	relopts = get_attoptions(indexrelid, attno);
+	ordopts = get_ordered_attoptions(relopts);
 
-	indoption = ((int2vector *) DatumGetPointer(datum));
-	indoption_val = indoption->values[attno - 1];
+	*res = *((bool *)((char *) ordopts + offset)) == expect;
 
-	*res = (indoption_val & iopt_mask) == iopt_expect;
+	pfree(ordopts);
+	if (relopts != (Datum) 0)
+		pfree(DatumGetPointer(relopts));
 
 	return true;
 }
@@ -249,29 +248,33 @@ indexam_property(FunctionCallInfo fcinfo,
 		{
 			case AMPROP_ASC:
 				if (iskey &&
-					test_indoption(tuple, attno, routine->amcanorder,
-								   INDOPTION_DESC, 0, &res))
+					test_indoption(index_oid, attno, routine->amcanorder,
+								   offsetof(OrderedAttOptions, desc), false,
+								   &res))
 					isnull = false;
 				break;
 
 			case AMPROP_DESC:
 				if (iskey &&
-					test_indoption(tuple, attno, routine->amcanorder,
-								   INDOPTION_DESC, INDOPTION_DESC, &res))
+					test_indoption(index_oid, attno, routine->amcanorder,
+								   offsetof(OrderedAttOptions, desc), true,
+								   &res))
 					isnull = false;
 				break;
 
 			case AMPROP_NULLS_FIRST:
 				if (iskey &&
-					test_indoption(tuple, attno, routine->amcanorder,
-								   INDOPTION_NULLS_FIRST, INDOPTION_NULLS_FIRST, &res))
+					test_indoption(index_oid, attno, routine->amcanorder,
+								   offsetof(OrderedAttOptions, nulls_first),
+								   true, &res))
 					isnull = false;
 				break;
 
 			case AMPROP_NULLS_LAST:
 				if (iskey &&
-					test_indoption(tuple, attno, routine->amcanorder,
-								   INDOPTION_NULLS_FIRST, 0, &res))
+					test_indoption(index_oid, attno, routine->amcanorder,
+								   offsetof(OrderedAttOptions, nulls_first),
+								   false, &res))
 					isnull = false;
 				break;
 

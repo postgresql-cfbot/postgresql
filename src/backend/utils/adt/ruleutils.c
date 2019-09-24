@@ -22,6 +22,7 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
+#include "access/reloptions.h"
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/dependency.h"
@@ -469,6 +470,7 @@ static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
 static char *flatten_reloptions(Oid relid);
+static int get_reloptions(StringInfo buf, Datum reloptions, bool skip_ord_opts);
 
 #define only_marker(rte)  ((rte)->inh ? "" : "ONLY ")
 
@@ -1193,11 +1195,9 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	int			keyno;
 	Datum		indcollDatum;
 	Datum		indclassDatum;
-	Datum		indoptionDatum;
 	bool		isnull;
 	oidvector  *indcollation;
 	oidvector  *indclass;
-	int2vector *indoption;
 	StringInfoData buf;
 	char	   *str;
 	char	   *sep;
@@ -1217,7 +1217,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 	indrelid = idxrec->indrelid;
 	Assert(indexrelid == idxrec->indexrelid);
 
-	/* Must get indcollation, indclass, and indoption the hard way */
+	/* Must get indcollation and indclass the hard way */
 	indcollDatum = SysCacheGetAttr(INDEXRELID, ht_idx,
 								   Anum_pg_index_indcollation, &isnull);
 	Assert(!isnull);
@@ -1227,11 +1227,6 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 									Anum_pg_index_indclass, &isnull);
 	Assert(!isnull);
 	indclass = (oidvector *) DatumGetPointer(indclassDatum);
-
-	indoptionDatum = SysCacheGetAttr(INDEXRELID, ht_idx,
-									 Anum_pg_index_indoption, &isnull);
-	Assert(!isnull);
-	indoption = (int2vector *) DatumGetPointer(indoptionDatum);
 
 	/*
 	 * Fetch the pg_class tuple of the index relation
@@ -1369,8 +1364,9 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 		if (!attrsOnly && keyno < idxrec->indnkeyatts &&
 			(!colno || colno == keyno + 1))
 		{
-			int16		opt = indoption->values[keyno];
 			Oid			indcoll = indcollation->values[keyno];
+			Datum		attoptions = get_attoptions(indexrelid, keyno + 1);
+			bool		has_options = attoptions != (Datum) 0;
 
 			/* Add collation, if not default for column */
 			if (OidIsValid(indcoll) && indcoll != keycolcollation)
@@ -1378,22 +1374,35 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 								 generate_collation_name((indcoll)));
 
 			/* Add the operator class name, if not default */
-			get_opclass_name(indclass->values[keyno], keycoltype, &buf);
+			get_opclass_name(indclass->values[keyno],
+							 has_options ? InvalidOid : keycoltype, &buf);
+
+			if (has_options)	/* FIXME default opclass */
+			{
+				appendStringInfoString(&buf, " (");
+				if (get_reloptions(&buf, attoptions, amroutine->amcanorder) > 0)
+					appendStringInfoChar(&buf, ')');
+				else
+					buf.len -= 2;
+			}
 
 			/* Add options if relevant */
-			if (amroutine->amcanorder)
+			if (amroutine->amcanorder && has_options)
 			{
+				OrderedAttOptions *ordopts =
+					get_ordered_attoptions(attoptions);
+
 				/* if it supports sort ordering, report DESC and NULLS opts */
-				if (opt & INDOPTION_DESC)
+				if (ordopts->desc)
 				{
 					appendStringInfoString(&buf, " DESC");
 					/* NULLS FIRST is the default in this case */
-					if (!(opt & INDOPTION_NULLS_FIRST))
+					if (!ordopts->nulls_first)
 						appendStringInfoString(&buf, " NULLS LAST");
 				}
 				else
 				{
-					if (opt & INDOPTION_NULLS_FIRST)
+					if (ordopts->nulls_first)
 						appendStringInfoString(&buf, " NULLS FIRST");
 				}
 			}
@@ -10506,6 +10515,23 @@ get_opclass_name(Oid opclass, Oid actual_datatype,
 }
 
 /*
+ * generate_opclass_name
+ *		Compute the name to display for a opclass specified by OID
+ *
+ * The result includes all necessary quoting and schema-prefixing.
+ */
+char *
+generate_opclass_name(Oid opclass)
+{
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+	get_opclass_name(opclass, InvalidOid, &buf);
+
+	return &buf.data[1];	/* get_opclass_name() prepends space */
+}
+
+/*
  * processIndirection - take care of array and subfield assignment
  *
  * We strip any top-level FieldStore or assignment SubscriptingRef nodes that
@@ -11183,6 +11209,73 @@ string_to_text(char *str)
 }
 
 /*
+ * Generate a C string representing a relation options from text[] datum.
+ */
+static int
+get_reloptions(StringInfo buf, Datum reloptions, bool skip_ord_opts)
+{
+	Datum	   *options;
+	int			noptions;
+	int			i;
+	int			j;
+
+	deconstruct_array(DatumGetArrayTypeP(reloptions),
+					  TEXTOID, -1, false, 'i',
+					  &options, NULL, &noptions);
+
+	for (i = j = 0; i < noptions; i++)
+	{
+		char	   *option = TextDatumGetCString(options[i]);
+		char	   *name;
+		char	   *separator;
+		char	   *value;
+
+		/*
+		 * Each array element should have the form name=value.  If the "="
+		 * is missing for some reason, treat it like an empty value.
+		 */
+		name = option;
+		separator = strchr(option, '=');
+		if (separator)
+		{
+			*separator = '\0';
+			value = separator + 1;
+		}
+		else
+			value = "";
+
+		if (skip_ord_opts &&
+			(!strcmp(name, INDOPTION_DESC) ||
+			 !strcmp(name, INDOPTION_NULLS_FIRST)))
+		{
+			pfree(option);
+			continue;
+		}
+
+		if (j++ > 0)
+			appendStringInfoString(buf, ", ");
+		appendStringInfo(buf, "%s=", quote_identifier(name));
+
+		/*
+		 * In general we need to quote the value; but to avoid unnecessary
+		 * clutter, do not quote if it is an identifier that would not
+		 * need quoting.  (We could also allow numbers, but that is a bit
+		 * trickier than it looks --- for example, are leading zeroes
+		 * significant?  We don't want to assume very much here about what
+		 * custom reloptions might mean.)
+		 */
+		if (quote_identifier(value) == value)
+			appendStringInfoString(buf, value);
+		else
+			simple_quote_literal(buf, value);
+
+		pfree(option);
+	}
+
+	return j;
+}
+
+/*
  * Generate a C string representing a relation's reloptions, or NULL if none.
  */
 static char *
@@ -11202,56 +11295,9 @@ flatten_reloptions(Oid relid)
 	if (!isnull)
 	{
 		StringInfoData buf;
-		Datum	   *options;
-		int			noptions;
-		int			i;
 
 		initStringInfo(&buf);
-
-		deconstruct_array(DatumGetArrayTypeP(reloptions),
-						  TEXTOID, -1, false, 'i',
-						  &options, NULL, &noptions);
-
-		for (i = 0; i < noptions; i++)
-		{
-			char	   *option = TextDatumGetCString(options[i]);
-			char	   *name;
-			char	   *separator;
-			char	   *value;
-
-			/*
-			 * Each array element should have the form name=value.  If the "="
-			 * is missing for some reason, treat it like an empty value.
-			 */
-			name = option;
-			separator = strchr(option, '=');
-			if (separator)
-			{
-				*separator = '\0';
-				value = separator + 1;
-			}
-			else
-				value = "";
-
-			if (i > 0)
-				appendStringInfoString(&buf, ", ");
-			appendStringInfo(&buf, "%s=", quote_identifier(name));
-
-			/*
-			 * In general we need to quote the value; but to avoid unnecessary
-			 * clutter, do not quote if it is an identifier that would not
-			 * need quoting.  (We could also allow numbers, but that is a bit
-			 * trickier than it looks --- for example, are leading zeroes
-			 * significant?  We don't want to assume very much here about what
-			 * custom reloptions might mean.)
-			 */
-			if (quote_identifier(value) == value)
-				appendStringInfoString(&buf, value);
-			else
-				simple_quote_literal(&buf, value);
-
-			pfree(option);
-		}
+		get_reloptions(&buf, reloptions, false);
 
 		result = buf.data;
 	}

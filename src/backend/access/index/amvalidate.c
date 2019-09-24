@@ -102,7 +102,7 @@ identify_opfamily_groups(CatCList *oprlist, CatCList *proclist)
 			/* Procedure belongs to current group; include it and advance */
 
 			/* Ignore function numbers outside supported range */
-			if (procform->amprocnum > 0 && procform->amprocnum < 64)
+			if (procform->amprocnum >= 0 && procform->amprocnum < 64)
 				thisgroup->functionset |= ((uint64) 1) << procform->amprocnum;
 
 			if (ip < proclist->n_members)

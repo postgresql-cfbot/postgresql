@@ -37,6 +37,7 @@ typedef enum relopt_type
 /* kinds supported by reloptions */
 typedef enum relopt_kind
 {
+	RELOPT_KIND_LOCAL = 0,
 	RELOPT_KIND_HEAP = (1 << 0),
 	RELOPT_KIND_TOAST = (1 << 1),
 	RELOPT_KIND_BTREE = (1 << 2),
@@ -109,6 +110,9 @@ typedef struct relopt_real
 
 /* validation routines for strings */
 typedef void (*validate_string_relopt) (const char *value);
+typedef Size (*fill_string_relopt) (const char *value, void *ptr);
+
+typedef void (*relopts_validator)(void *parsed_options, relopt_value *vals, int nvals);
 
 typedef struct relopt_string
 {
@@ -116,6 +120,7 @@ typedef struct relopt_string
 	int			default_len;
 	bool		default_isnull;
 	validate_string_relopt validate_cb;
+	fill_string_relopt fill_cb;
 	char	   *default_val;
 } relopt_string;
 
@@ -127,6 +132,13 @@ typedef struct
 	int			offset;			/* offset of field in result struct */
 } relopt_parse_elt;
 
+typedef struct local_relopts
+{
+	List	   *options;
+	List	   *validators;
+	void	   *base;
+	Size		base_size;
+} local_relopts;
 
 /*
  * These macros exist for the convenience of amoptions writers (but consider
@@ -255,6 +267,26 @@ extern void add_real_reloption(bits32 kinds, const char *name, const char *desc,
 extern void add_string_reloption(bits32 kinds, const char *name, const char *desc,
 								 const char *default_val, validate_string_relopt validator);
 
+extern void init_local_reloptions(local_relopts *opts, void *base, Size base_size);
+extern void extend_local_reloptions(local_relopts *opts, void *base, Size base_size);
+extern void register_reloptions_validator(local_relopts *opts,
+										  relopts_validator validator);
+extern void add_local_bool_reloption(local_relopts *opts, const char *name,
+									 const char *desc, bool default_val,
+									 bool *pval);
+extern void add_local_int_reloption(local_relopts *opts, const char *name,
+									const char *desc, int default_val,
+									int min_val, int max_val, int *pval);
+extern void add_local_real_reloption(local_relopts *opts, const char *name,
+									 const char *desc, double default_val,
+									 double min_val, double max_val,
+									 double *pval);
+extern void add_local_string_reloption(local_relopts *opts, const char *name,
+									   const char *desc,
+									   const char *default_val,
+									   validate_string_relopt validator,
+									   fill_string_relopt filler, int *poffset);
+
 extern Datum transformRelOptions(Datum oldOptions, List *defList,
 								 const char *namspace, char *validnsps[],
 								 bool acceptOidsOff, bool isReset);
@@ -263,12 +295,16 @@ extern bytea *extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 								amoptions_function amoptions);
 extern relopt_value *parseRelOptions(Datum options, bool validate,
 									 relopt_kind kind, int *numrelopts);
+extern relopt_value *parseLocalRelOptions(local_relopts *relopts, Datum options,
+										  bool validate);
 extern void *allocateReloptStruct(Size base, relopt_value *options,
 								  int numoptions);
 extern void fillRelOptions(void *rdopts, Size basesize,
 						   relopt_value *options, int numoptions,
 						   bool validate,
 						   const relopt_parse_elt *elems, int nelems);
+extern void *parseAndFillLocalRelOptions(local_relopts *relopts, Datum options,
+										 bool validate);
 
 extern bytea *default_reloptions(Datum reloptions, bool validate,
 								 relopt_kind kind);
@@ -279,5 +315,8 @@ extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,
 extern bytea *attribute_reloptions(Datum reloptions, bool validate);
 extern bytea *tablespace_reloptions(Datum reloptions, bool validate);
 extern LOCKMODE AlterTableGetRelOptionsLockLevel(List *defList);
+
+extern void ordered_index_attoptions(local_relopts *relopts, int attno);
+extern OrderedAttOptions *get_ordered_attoptions(Datum attoptions);
 
 #endif							/* RELOPTIONS_H */

@@ -87,6 +87,9 @@ btvalidate(Oid opclassoid)
 		/* Check procedure numbers and function signatures */
 		switch (procform->amprocnum)
 		{
+			case OPCLASS_OPTIONS_PROC:
+				ok = true;
+				break;
 			case BTORDER_PROC:
 				ok = check_amproc_signature(procform->amproc, INT4OID, true,
 											2, 2, procform->amproclefttype,

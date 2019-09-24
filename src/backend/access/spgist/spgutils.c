@@ -66,6 +66,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amcanreturn = spgcanreturn;
 	amroutine->amcostestimate = spgcostestimate;
 	amroutine->amoptions = spgoptions;
+	amroutine->amattoptions = NULL;
 	amroutine->amproperty = spgproperty;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = spgvalidate;

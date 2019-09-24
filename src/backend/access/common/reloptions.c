@@ -445,6 +445,7 @@ static relopt_string stringRelOpts[] =
 		4,
 		false,
 		gistValidateBufferingOption,
+		NULL,
 		"auto"
 	},
 	{
@@ -457,6 +458,7 @@ static relopt_string stringRelOpts[] =
 		0,
 		true,
 		validateWithCheckOption,
+		NULL,
 		NULL
 	},
 	/* list terminator */
@@ -615,6 +617,50 @@ add_reloption(relopt_gen *newoption)
 	need_initialization = true;
 }
 
+typedef struct local_relopt
+{
+	relopt_gen *option;
+	int			offset;
+} local_relopt;
+
+void
+init_local_reloptions(local_relopts *opts, void *base, Size base_size)
+{
+	opts->options = NIL;
+	opts->validators = NIL;
+	opts->base = base;
+	opts->base_size = base_size;
+}
+
+void
+extend_local_reloptions(local_relopts *opts, void *base, Size base_size)
+{
+	Assert(opts->base_size < base_size);
+	opts->base = base;
+	opts->base_size = base_size;
+}
+
+void
+register_reloptions_validator(local_relopts *opts, relopts_validator validator)
+{
+	opts->validators = lappend(opts->validators, validator);
+}
+
+/*
+ * add_local_reloption
+ *		Add an already-created custom reloption to the local list.
+ */
+static void
+add_local_reloption(local_relopts *relopts, relopt_gen *newoption, void *pval)
+{
+	local_relopt *opt = palloc(sizeof(*opt));
+
+	opt->option = newoption;
+	opt->offset = (char *) pval - (char *) relopts->base;
+
+	relopts->options = lappend(relopts->options, opt);
+}
+
 /*
  * allocate_reloption
  *		Allocate a new reloption and initialize the type-agnostic fields
@@ -627,7 +673,10 @@ allocate_reloption(bits32 kinds, int type, const char *name, const char *desc)
 	size_t		size;
 	relopt_gen *newoption;
 
-	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+	if (kinds != RELOPT_KIND_LOCAL)
+		oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+	else
+		oldcxt = NULL;
 
 	switch (type)
 	{
@@ -659,7 +708,25 @@ allocate_reloption(bits32 kinds, int type, const char *name, const char *desc)
 	newoption->namelen = strlen(name);
 	newoption->type = type;
 
-	MemoryContextSwitchTo(oldcxt);
+	if (oldcxt != NULL)
+		MemoryContextSwitchTo(oldcxt);
+
+	return newoption;
+}
+
+/*
+ * init_bool_reloption
+ *		Allocate and initialize a new boolean reloption
+ */
+static relopt_bool *
+init_bool_reloption(bits32 kinds, const char *name, const char *desc,
+					bool default_val)
+{
+	relopt_bool *newoption;
+
+	newoption = (relopt_bool *) allocate_reloption(kinds, RELOPT_TYPE_BOOL,
+												   name, desc);
+	newoption->default_val = default_val;
 
 	return newoption;
 }
@@ -671,13 +738,43 @@ allocate_reloption(bits32 kinds, int type, const char *name, const char *desc)
 void
 add_bool_reloption(bits32 kinds, const char *name, const char *desc, bool default_val)
 {
-	relopt_bool *newoption;
-
-	newoption = (relopt_bool *) allocate_reloption(kinds, RELOPT_TYPE_BOOL,
-												   name, desc);
-	newoption->default_val = default_val;
+	relopt_bool *newoption = init_bool_reloption(kinds, name, desc, default_val);
 
 	add_reloption((relopt_gen *) newoption);
+}
+
+/*
+ * add_local_bool_reloption
+ *		Add a new boolean local reloption
+ */
+void
+add_local_bool_reloption(local_relopts *relopts, const char *name,
+						 const char *desc, bool default_val, bool *pval)
+{
+	relopt_bool *newoption = init_bool_reloption(RELOPT_KIND_LOCAL, name, desc,
+												 default_val);
+
+	add_local_reloption(relopts, (relopt_gen *) newoption, pval);
+}
+
+
+/*
+ * init_real_reloption
+ *		Allocate and initialize a new integer reloption
+ */
+static relopt_int *
+init_int_reloption(bits32 kinds, const char *name, const char *desc,
+				   int default_val, int min_val, int max_val)
+{
+	relopt_int *newoption;
+
+	newoption = (relopt_int *) allocate_reloption(kinds, RELOPT_TYPE_INT,
+												  name, desc);
+	newoption->default_val = default_val;
+	newoption->min = min_val;
+	newoption->max = max_val;
+
+	return newoption;
 }
 
 /*
@@ -688,15 +785,44 @@ void
 add_int_reloption(bits32 kinds, const char *name, const char *desc, int default_val,
 				  int min_val, int max_val)
 {
-	relopt_int *newoption;
+	relopt_int *newoption = init_int_reloption(kinds, name, desc, default_val,
+											   min_val, max_val);
 
-	newoption = (relopt_int *) allocate_reloption(kinds, RELOPT_TYPE_INT,
-												  name, desc);
+	add_reloption((relopt_gen *) newoption);
+}
+
+/*
+ * add_local_int_reloption
+ *		Add a new local integer reloption
+ */
+void
+add_local_int_reloption(local_relopts *relopts, const char *name,
+						const char *desc, int default_val, int min_val,
+						int max_val, int *pval)
+{
+	relopt_int *newoption = init_int_reloption(RELOPT_KIND_LOCAL, name, desc,
+											   default_val, min_val, max_val);
+
+	add_local_reloption(relopts, (relopt_gen *) newoption, pval);
+}
+
+/*
+ * init_real_reloption
+ *		Allocate and initialize a new real reloption
+ */
+static relopt_real *
+init_real_reloption(bits32 kinds, const char *name, const char *desc,
+					double default_val, double min_val, double max_val)
+{
+	relopt_real *newoption;
+
+	newoption = (relopt_real *) allocate_reloption(kinds, RELOPT_TYPE_REAL,
+												   name, desc);
 	newoption->default_val = default_val;
 	newoption->min = min_val;
 	newoption->max = max_val;
 
-	add_reloption((relopt_gen *) newoption);
+	return newoption;
 }
 
 /*
@@ -707,15 +833,63 @@ void
 add_real_reloption(bits32 kinds, const char *name, const char *desc, double default_val,
 				   double min_val, double max_val)
 {
-	relopt_real *newoption;
-
-	newoption = (relopt_real *) allocate_reloption(kinds, RELOPT_TYPE_REAL,
-												   name, desc);
-	newoption->default_val = default_val;
-	newoption->min = min_val;
-	newoption->max = max_val;
+	relopt_real *newoption = init_real_reloption(kinds, name, desc, default_val,
+												 min_val, max_val);
 
 	add_reloption((relopt_gen *) newoption);
+}
+
+/*
+ * add_local_real_reloption
+ *		Add a new local float reloption
+ */
+void
+add_local_real_reloption(local_relopts *relopts, const char *name, const char *desc,
+						 double default_val, double min_val, double max_val,
+						 double *pval)
+{
+	relopt_real *newoption = init_real_reloption(RELOPT_KIND_LOCAL, name, desc,
+												 default_val, min_val, max_val);
+
+	add_local_reloption(relopts, (relopt_gen *) newoption, pval);
+}
+
+/*
+ * init_string_reloption
+ *		Allocate and initialize a new string reloption
+ */
+static relopt_string *
+init_string_reloption(bits32 kinds, const char *name, const char *desc,
+					  const char *default_val, validate_string_relopt validator,
+					  fill_string_relopt filler)
+{
+	relopt_string *newoption;
+
+	/* make sure the validator/default combination is sane */
+	if (validator)
+		(validator) (default_val);
+
+	newoption = (relopt_string *) allocate_reloption(kinds, RELOPT_TYPE_STRING,
+													 name, desc);
+	newoption->validate_cb = validator;
+	newoption->fill_cb = filler;
+	if (default_val)
+	{
+		if (kinds == RELOPT_KIND_LOCAL)
+			newoption->default_val = strdup(default_val);
+		else
+			newoption->default_val = MemoryContextStrdup(TopMemoryContext, default_val);
+		newoption->default_len = strlen(default_val);
+		newoption->default_isnull = false;
+	}
+	else
+	{
+		newoption->default_val = "";
+		newoption->default_len = 0;
+		newoption->default_isnull = true;
+	}
+
+	return newoption;
 }
 
 /*
@@ -731,30 +905,27 @@ void
 add_string_reloption(bits32 kinds, const char *name, const char *desc, const char *default_val,
 					 validate_string_relopt validator)
 {
-	relopt_string *newoption;
-
-	/* make sure the validator/default combination is sane */
-	if (validator)
-		(validator) (default_val);
-
-	newoption = (relopt_string *) allocate_reloption(kinds, RELOPT_TYPE_STRING,
-													 name, desc);
-	newoption->validate_cb = validator;
-	if (default_val)
-	{
-		newoption->default_val = MemoryContextStrdup(TopMemoryContext,
-													 default_val);
-		newoption->default_len = strlen(default_val);
-		newoption->default_isnull = false;
-	}
-	else
-	{
-		newoption->default_val = "";
-		newoption->default_len = 0;
-		newoption->default_isnull = true;
-	}
+	relopt_string *newoption = init_string_reloption(kinds, name, desc,
+													 default_val, validator, NULL);
 
 	add_reloption((relopt_gen *) newoption);
+}
+
+/*
+ * add_local_string_reloption
+ *		Add a new local string reloption
+ */
+void
+add_local_string_reloption(local_relopts *relopts, const char *name,
+						   const char *desc, const char *default_val,
+						   validate_string_relopt validator,
+						   fill_string_relopt filler, int *poffset)
+{
+	relopt_string *newoption = init_string_reloption(RELOPT_KIND_LOCAL, name,
+													 desc, default_val,
+													 validator, filler);
+
+	add_local_reloption(relopts, (relopt_gen *) newoption, poffset);
 }
 
 /*
@@ -1051,6 +1222,60 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 	return options;
 }
 
+static void
+parseRelOptionsInternal(Datum options, bool validate,
+						relopt_value *reloptions, int numoptions)
+{
+	ArrayType  *array = DatumGetArrayTypeP(options);
+	Datum	   *optiondatums;
+	int			noptions;
+	int			i;
+
+	deconstruct_array(array, TEXTOID, -1, false, 'i',
+					  &optiondatums, NULL, &noptions);
+
+	for (i = 0; i < noptions; i++)
+	{
+		char	   *text_str = VARDATA(optiondatums[i]);
+		int			text_len = VARSIZE(optiondatums[i]) - VARHDRSZ;
+		int			j;
+
+		/* Search for a match in reloptions */
+		for (j = 0; j < numoptions; j++)
+		{
+			int			kw_len = reloptions[j].gen->namelen;
+
+			if (text_len > kw_len && text_str[kw_len] == '=' &&
+				strncmp(text_str, reloptions[j].gen->name, kw_len) == 0)
+			{
+				parse_one_reloption(&reloptions[j], text_str, text_len,
+									validate);
+				break;
+			}
+		}
+
+		if (j >= numoptions && validate)
+		{
+			char	   *s;
+			char	   *p;
+
+			s = TextDatumGetCString(optiondatums[i]);
+			p = strchr(s, '=');
+			if (p)
+				*p = '\0';
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unrecognized parameter \"%s\"", s)));
+		}
+	}
+
+	/* It's worth avoiding memory leaks in this function */
+	pfree(optiondatums);
+
+	if (((void *) array) != DatumGetPointer(options))
+		pfree(array);
+}
+
 /*
  * Interpret reloptions that are given in text-array format.
  *
@@ -1105,57 +1330,74 @@ parseRelOptions(Datum options, bool validate, relopt_kind kind,
 
 	/* Done if no options */
 	if (PointerIsValid(DatumGetPointer(options)))
-	{
-		ArrayType  *array = DatumGetArrayTypeP(options);
-		Datum	   *optiondatums;
-		int			noptions;
-
-		deconstruct_array(array, TEXTOID, -1, false, 'i',
-						  &optiondatums, NULL, &noptions);
-
-		for (i = 0; i < noptions; i++)
-		{
-			char	   *text_str = VARDATA(optiondatums[i]);
-			int			text_len = VARSIZE(optiondatums[i]) - VARHDRSZ;
-			int			j;
-
-			/* Search for a match in reloptions */
-			for (j = 0; j < numoptions; j++)
-			{
-				int			kw_len = reloptions[j].gen->namelen;
-
-				if (text_len > kw_len && text_str[kw_len] == '=' &&
-					strncmp(text_str, reloptions[j].gen->name, kw_len) == 0)
-				{
-					parse_one_reloption(&reloptions[j], text_str, text_len,
-										validate);
-					break;
-				}
-			}
-
-			if (j >= numoptions && validate)
-			{
-				char	   *s;
-				char	   *p;
-
-				s = TextDatumGetCString(optiondatums[i]);
-				p = strchr(s, '=');
-				if (p)
-					*p = '\0';
-				ereport(ERROR,
-						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("unrecognized parameter \"%s\"", s)));
-			}
-		}
-
-		/* It's worth avoiding memory leaks in this function */
-		pfree(optiondatums);
-		if (((void *) array) != DatumGetPointer(options))
-			pfree(array);
-	}
+		parseRelOptionsInternal(options, validate, reloptions, numoptions);
 
 	*numrelopts = numoptions;
 	return reloptions;
+}
+
+/* Parse local unregistered options. */
+relopt_value *
+parseLocalRelOptions(local_relopts *relopts, Datum options, bool validate)
+{
+	int			nopts = list_length(relopts->options);
+	relopt_value *values = palloc(sizeof(*values) * nopts);
+	ListCell   *lc;
+	int			i = 0;
+
+	foreach(lc, relopts->options)
+	{
+		local_relopt *opt = lfirst(lc);
+
+		values[i].gen = opt->option;
+		values[i].isset = false;
+
+		i++;
+	}
+
+	if (options != (Datum) 0)
+		parseRelOptionsInternal(options, validate, values, nopts);
+
+	return values;
+}
+
+/*
+ * Parse local options, allocate a bytea struct that's of the specified
+ * 'base_size' plus any extra space that's needed for string variables,
+ * fill its option's fields located at the given offsets and return it.
+ */
+void *
+parseAndFillLocalRelOptions(local_relopts *relopts, Datum options, bool validate)
+{
+	int			noptions = list_length(relopts->options);
+	relopt_parse_elt *elems = palloc(sizeof(*elems) * noptions);
+	relopt_value *vals;
+	void	   *opts;
+	int			i = 0;
+	ListCell   *lc;
+
+	foreach(lc, relopts->options)
+	{
+		local_relopt *opt = lfirst(lc);
+
+		elems[i].optname = opt->option->name;
+		elems[i].opttype = opt->option->type;
+		elems[i].offset = opt->offset;
+
+		i++;
+	}
+
+	vals = parseLocalRelOptions(relopts, options, validate);
+	opts = allocateReloptStruct(relopts->base_size, vals, noptions);
+	fillRelOptions(opts, relopts->base_size, vals, noptions, validate, elems, noptions);
+
+	foreach(lc, relopts->validators)
+		((relopts_validator) lfirst(lc))(opts, vals, noptions);
+
+	if (elems)
+		pfree(elems);
+
+	return opts;
 }
 
 /*
@@ -1271,8 +1513,24 @@ allocateReloptStruct(Size base, relopt_value *options, int numoptions)
 	int			i;
 
 	for (i = 0; i < numoptions; i++)
-		if (options[i].gen->type == RELOPT_TYPE_STRING)
-			size += GET_STRING_RELOPTION_LEN(options[i]) + 1;
+	{
+		relopt_value *optval = &options[i];
+
+		if (optval->gen->type == RELOPT_TYPE_STRING)
+		{
+			relopt_string *optstr = (relopt_string *) optval->gen;
+
+			if (optstr->fill_cb)
+			{
+				const char *val = optval->isset ? optval->values.string_val :
+					optstr->default_isnull ? NULL : optstr->default_val;
+
+				size += optstr->fill_cb(val, NULL);
+			}
+			else
+				size += GET_STRING_RELOPTION_LEN(*optval) + 1;
+		}
+	}
 
 	return palloc0(size);
 }
@@ -1336,7 +1594,21 @@ fillRelOptions(void *rdopts, Size basesize,
 						else
 							string_val = NULL;
 
-						if (string_val == NULL)
+						if (optstring->fill_cb)
+						{
+							Size		size =
+								optstring->fill_cb(string_val,
+												   (char *) rdopts + offset);
+
+							if (size)
+							{
+								*(int *) itempos = offset;
+								offset += size;
+							}
+							else
+								*(int *) itempos = 0;
+						}
+						else if (string_val == NULL)
 							*(int *) itempos = 0;
 						else
 						{
@@ -1615,4 +1887,41 @@ AlterTableGetRelOptionsLockLevel(List *defList)
 	}
 
 	return lockmode;
+}
+
+static void
+ordattoptions_validator(void *parsed_options, relopt_value *vals, int nvals)
+{
+	OrderedAttOptions *ordopts = parsed_options;
+
+	for (int i = 0; i < nvals; i++)
+		if (!strcmp(vals[i].gen->name, "nulls_first") &&
+			!vals[i].isset)
+			ordopts->nulls_first = ordopts->desc;
+}
+
+void
+ordered_index_attoptions(local_relopts *relopts, int attno)
+{
+	OrderedAttOptions *attopts = NULL;
+
+	init_local_reloptions(relopts, attopts, sizeof(*attopts));
+	add_local_bool_reloption(relopts, INDOPTION_DESC,
+							 "Descending ordering",
+							 false, &attopts->desc);
+	add_local_bool_reloption(relopts, INDOPTION_NULLS_FIRST,
+							 "NULLs sorted first",
+							 false, &attopts->nulls_first);
+	register_reloptions_validator(relopts, ordattoptions_validator);
+}
+
+OrderedAttOptions *
+get_ordered_attoptions(Datum attoptions)
+{
+	local_relopts relopts;
+
+	ordered_index_attoptions(&relopts, 0);
+
+	return (OrderedAttOptions *)
+		parseAndFillLocalRelOptions(&relopts, attoptions, false);
 }

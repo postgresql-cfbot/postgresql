@@ -25,6 +25,8 @@ struct IndexPath;
 /* Likewise, this file shouldn't depend on execnodes.h. */
 struct IndexInfo;
 
+struct local_relopts;
+
 
 /*
  * Properties for amproperty API.  This list covers properties known to the
@@ -102,6 +104,10 @@ typedef void (*amcostestimate_function) (struct PlannerInfo *root,
 /* parse index reloptions */
 typedef bytea *(*amoptions_function) (Datum reloptions,
 									  bool validate);
+
+/* initialize per-attribute reloptions */
+typedef void (*amattoptions_function) (struct local_relopts *options,
+									   int attno);
 
 /* report AM, index, or index column property */
 typedef bool (*amproperty_function) (Oid index_oid, int attno,
@@ -215,6 +221,7 @@ typedef struct IndexAmRoutine
 	amcanreturn_function amcanreturn;	/* can be NULL */
 	amcostestimate_function amcostestimate;
 	amoptions_function amoptions;
+	amattoptions_function amattoptions; /* can be NULL */
 	amproperty_function amproperty; /* can be NULL */
 	ambuildphasename_function ambuildphasename; /* can be NULL */
 	amvalidate_function amvalidate;

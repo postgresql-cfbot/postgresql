@@ -41,14 +41,8 @@ static int	xlogreadfd = -1;
 static XLogSegNo xlogreadsegno = -1;
 static char xlogfpath[MAXPGPATH];
 
-typedef struct XLogPageReadPrivate
-{
-	int			tliIndex;
-} XLogPageReadPrivate;
-
-static int	SimpleXLogPageRead(XLogReaderState *xlogreader,
-							   XLogRecPtr targetPagePtr,
-							   int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
+static bool SimpleXLogPageRead(XLogReaderState *xlogreader,
+							   const char *datadir, int *tliIndex);
 
 /*
  * Read WAL from the datadir/pg_wal, starting from 'startpoint' on timeline
@@ -62,23 +56,27 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
-	XLogPageReadPrivate private;
 
-	private.tliIndex = tliIndex;
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, &SimpleXLogPageRead,
-									&private);
+	xlogreader = XLogReaderAllocate(WalSegSz, datadir);
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
+	xlogreader->readBuf = pg_malloc(XLOG_BLCKSZ);
 
 	do
 	{
-		record = XLogReadRecord(xlogreader, startpoint, &errormsg);
+		while (XLogReadRecord(xlogreader, startpoint, &record, &errormsg) ==
+			   XLREAD_NEED_DATA)
+		{
+			if (!SimpleXLogPageRead(xlogreader, datadir, &tliIndex))
+				break;
+		}
 
 		if (record == NULL)
 		{
-			XLogRecPtr	errptr;
+			XLogRecPtr	errptr = xlogreader->EndRecPtr;
 
-			errptr = startpoint ? startpoint : xlogreader->EndRecPtr;
+			if (startpoint)
+				errptr = startpoint;
 
 			if (errormsg)
 				pg_fatal("could not read WAL record at %X/%X: %s",
@@ -95,6 +93,7 @@ extractPageMap(const char *datadir, XLogRecPtr startpoint, int tliIndex,
 
 	} while (xlogreader->ReadRecPtr != endpoint);
 
+	pg_free(xlogreader->readBuf);
 	XLogReaderFree(xlogreader);
 	if (xlogreadfd != -1)
 	{
@@ -113,16 +112,19 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex)
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
-	XLogPageReadPrivate private;
 	XLogRecPtr	endptr;
 
-	private.tliIndex = tliIndex;
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, &SimpleXLogPageRead,
-									&private);
+	xlogreader = XLogReaderAllocate(WalSegSz, datadir);
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
+	xlogreader->readBuf = pg_malloc(XLOG_BLCKSZ);
 
-	record = XLogReadRecord(xlogreader, ptr, &errormsg);
+	while (XLogReadRecord(xlogreader, ptr, &record, &errormsg) ==
+		   XLREAD_NEED_DATA)
+	{
+		if (!SimpleXLogPageRead(xlogreader, datadir, &tliIndex))
+			break;
+	}
 	if (record == NULL)
 	{
 		if (errormsg)
@@ -134,6 +136,7 @@ readOneRecord(const char *datadir, XLogRecPtr ptr, int tliIndex)
 	}
 	endptr = xlogreader->EndRecPtr;
 
+	pg_free(xlogreader->readBuf);
 	XLogReaderFree(xlogreader);
 	if (xlogreadfd != -1)
 	{
@@ -157,7 +160,6 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 	XLogRecPtr	searchptr;
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
-	XLogPageReadPrivate private;
 
 	/*
 	 * The given fork pointer points to the end of the last common record,
@@ -173,18 +175,22 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 			forkptr += SizeOfXLogShortPHD;
 	}
 
-	private.tliIndex = tliIndex;
-	xlogreader = XLogReaderAllocate(WalSegSz, datadir, &SimpleXLogPageRead,
-									&private);
+	xlogreader = XLogReaderAllocate(WalSegSz, datadir);
 	if (xlogreader == NULL)
 		pg_fatal("out of memory");
+	xlogreader->readBuf = pg_malloc(XLOG_BLCKSZ);
 
 	searchptr = forkptr;
 	for (;;)
 	{
 		uint8		info;
 
-		record = XLogReadRecord(xlogreader, searchptr, &errormsg);
+		while (XLogReadRecord(xlogreader, searchptr, &record, &errormsg) ==
+			   XLREAD_NEED_DATA)
+		{
+			if (!SimpleXLogPageRead(xlogreader, datadir, &tliIndex))
+				break;
+		}
 
 		if (record == NULL)
 		{
@@ -221,6 +227,7 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 		searchptr = record->xl_prev;
 	}
 
+	pg_free(xlogreader->readBuf);
 	XLogReaderFree(xlogreader);
 	if (xlogreadfd != -1)
 	{
@@ -230,11 +237,12 @@ findLastCheckpoint(const char *datadir, XLogRecPtr forkptr, int tliIndex,
 }
 
 /* XLogReader callback function, to read a WAL page */
-static int
-SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
-				   int reqLen, XLogRecPtr targetRecPtr, char *readBuf)
+static bool
+SimpleXLogPageRead(XLogReaderState *xlogreader, const char *datadir,
+				   int *tliIndex)
 {
-	XLogPageReadPrivate *private = (XLogPageReadPrivate *) xlogreader->private_data;
+	XLogRecPtr	targetPagePtr = xlogreader->readPagePtr;
+	char	   *readBuf		  = xlogreader->readBuf;
 	uint32		targetPageOff;
 	XLogRecPtr	targetSegEnd;
 	XLogSegNo	targetSegNo;
@@ -267,14 +275,14 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 		 * be done both forward and backward, consider also switching timeline
 		 * accordingly.
 		 */
-		while (private->tliIndex < targetNentries - 1 &&
-			   targetHistory[private->tliIndex].end < targetSegEnd)
-			private->tliIndex++;
-		while (private->tliIndex > 0 &&
-			   targetHistory[private->tliIndex].begin >= targetSegEnd)
-			private->tliIndex--;
+		while (*tliIndex < targetNentries - 1 &&
+			   targetHistory[*tliIndex].end < targetSegEnd)
+			(*tliIndex)++;
+		while (*tliIndex > 0 &&
+			   targetHistory[*tliIndex].begin >= targetSegEnd)
+			(*tliIndex)--;
 
-		XLogFileName(xlogfname, targetHistory[private->tliIndex].tli,
+		XLogFileName(xlogfname, targetHistory[*tliIndex].tli,
 					 xlogreadsegno, WalSegSz);
 
 		snprintf(xlogfpath, MAXPGPATH, "%s/" XLOGDIR "/%s",
@@ -285,7 +293,8 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 		if (xlogreadfd < 0)
 		{
 			pg_log_error("could not open file \"%s\": %m", xlogfpath);
-			return -1;
+			xlogreader->readLen = -1;
+			return false;
 		}
 	}
 
@@ -298,7 +307,8 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 	if (lseek(xlogreadfd, (off_t) targetPageOff, SEEK_SET) < 0)
 	{
 		pg_log_error("could not seek in file \"%s\": %m", xlogfpath);
-		return -1;
+		xlogreader->readLen = -1;
+		return false;
 	}
 
 
@@ -311,13 +321,15 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 			pg_log_error("could not read file \"%s\": read %d of %zu",
 						 xlogfpath, r, (Size) XLOG_BLCKSZ);
 
-		return -1;
+		xlogreader->readLen = -1;
+		return false;
 	}
 
 	Assert(targetSegNo == xlogreadsegno);
 
-	xlogreader->seg.ws_tli = targetHistory[private->tliIndex].tli;
-	return XLOG_BLCKSZ;
+	xlogreader->seg.ws_tli = targetHistory[*tliIndex].tli;
+	xlogreader->readLen = XLOG_BLCKSZ;
+	return true;
 }
 
 /*

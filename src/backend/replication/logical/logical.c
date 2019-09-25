@@ -124,7 +124,7 @@ StartupDecodingContext(List *output_plugin_options,
 					   TransactionId xmin_horizon,
 					   bool need_full_snapshot,
 					   bool fast_forward,
-					   XLogPageReadCB read_page,
+					   LogicalDecodingXLogReadPageCB read_page,
 					   LogicalOutputPluginWriterPrepareWrite prepare_write,
 					   LogicalOutputPluginWriterWrite do_write,
 					   LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -173,11 +173,13 @@ StartupDecodingContext(List *output_plugin_options,
 
 	ctx->slot = slot;
 
-	ctx->reader = XLogReaderAllocate(wal_segment_size, NULL, read_page, ctx);
+	ctx->reader = XLogReaderAllocate(wal_segment_size, NULL);
 	if (!ctx->reader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
+	ctx->reader->readBuf = palloc(XLOG_BLCKSZ);
+	ctx->read_page = read_page;
 
 	ctx->reorder = ReorderBufferAllocate();
 	ctx->snapshot_builder =
@@ -232,7 +234,7 @@ CreateInitDecodingContext(char *plugin,
 						  List *output_plugin_options,
 						  bool need_full_snapshot,
 						  XLogRecPtr restart_lsn,
-						  XLogPageReadCB read_page,
+						  LogicalDecodingXLogReadPageCB read_page,
 						  LogicalOutputPluginWriterPrepareWrite prepare_write,
 						  LogicalOutputPluginWriterWrite do_write,
 						  LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -374,7 +376,7 @@ LogicalDecodingContext *
 CreateDecodingContext(XLogRecPtr start_lsn,
 					  List *output_plugin_options,
 					  bool fast_forward,
-					  XLogPageReadCB read_page,
+					  LogicalDecodingXLogReadPageCB read_page,
 					  LogicalOutputPluginWriterPrepareWrite prepare_write,
 					  LogicalOutputPluginWriterWrite do_write,
 					  LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -482,7 +484,13 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 		char	   *err = NULL;
 
 		/* the read_page callback waits for new WAL */
-		record = XLogReadRecord(ctx->reader, startptr, &err);
+		while (XLogReadRecord(ctx->reader, startptr, &record, &err) ==
+			   XLREAD_NEED_DATA)
+		{
+			if (!ctx->read_page(ctx))
+				break;
+		}
+
 		if (err)
 			elog(ERROR, "%s", err);
 		if (!record)
@@ -516,6 +524,7 @@ FreeDecodingContext(LogicalDecodingContext *ctx)
 
 	ReorderBufferFree(ctx->reorder);
 	FreeSnapshotBuilder(ctx->snapshot_builder);
+	pfree(ctx->reader->readBuf);
 	XLogReaderFree(ctx->reader);
 	MemoryContextDelete(ctx->context);
 }

@@ -30,6 +30,10 @@ typedef void (*LogicalOutputPluginWriterUpdateProgress) (struct LogicalDecodingC
 														 TransactionId xid
 );
 
+typedef struct LogicalDecodingContext LogicalDecodingContext;
+
+typedef bool (*LogicalDecodingXLogReadPageCB)(LogicalDecodingContext *ctx);
+
 typedef struct LogicalDecodingContext
 {
 	/* memory context this is all allocated in */
@@ -40,6 +44,7 @@ typedef struct LogicalDecodingContext
 
 	/* infrastructure pieces for decoding */
 	XLogReaderState *reader;
+	LogicalDecodingXLogReadPageCB read_page;
 	struct ReorderBuffer *reorder;
 	struct SnapBuild *snapshot_builder;
 
@@ -96,14 +101,14 @@ extern LogicalDecodingContext *CreateInitDecodingContext(char *plugin,
 														 List *output_plugin_options,
 														 bool need_full_snapshot,
 														 XLogRecPtr restart_lsn,
-														 XLogPageReadCB read_page,
+														 LogicalDecodingXLogReadPageCB read_page,
 														 LogicalOutputPluginWriterPrepareWrite prepare_write,
 														 LogicalOutputPluginWriterWrite do_write,
 														 LogicalOutputPluginWriterUpdateProgress update_progress);
 extern LogicalDecodingContext *CreateDecodingContext(XLogRecPtr start_lsn,
 													 List *output_plugin_options,
 													 bool fast_forward,
-													 XLogPageReadCB read_page,
+													 LogicalDecodingXLogReadPageCB read_page,
 													 LogicalOutputPluginWriterPrepareWrite prepare_write,
 													 LogicalOutputPluginWriterWrite do_write,
 													 LogicalOutputPluginWriterUpdateProgress update_progress);

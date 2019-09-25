@@ -88,6 +88,8 @@ Oid			binary_upgrade_next_array_pg_type_oid = InvalidOid;
 
 static void makeRangeConstructors(const char *name, Oid namespace,
 								  Oid rangeOid, Oid subtype);
+static void makeMultirangeConstructors(const char *name, Oid namespace,
+									   Oid multirangeOid, Oid rangeArrayOid);
 static Oid	findTypeInputFunction(List *procname, Oid typeOid);
 static Oid	findTypeOutputFunction(List *procname, Oid typeOid);
 static Oid	findTypeReceiveFunction(List *procname, Oid typeOid);
@@ -811,7 +813,8 @@ DefineDomain(CreateDomainStmt *stmt)
 		typtype != TYPTYPE_COMPOSITE &&
 		typtype != TYPTYPE_DOMAIN &&
 		typtype != TYPTYPE_ENUM &&
-		typtype != TYPTYPE_RANGE)
+		typtype != TYPTYPE_RANGE &&
+		typtype != TYPTYPE_MULTIRANGE)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
 				 errmsg("\"%s\" is not a valid base type for a domain",
@@ -1353,8 +1356,12 @@ DefineRange(CreateRangeStmt *stmt)
 	char	   *typeName;
 	Oid			typeNamespace;
 	Oid			typoid;
+	Oid			mltrngtypoid;
 	char	   *rangeArrayName;
+	char	   *multirangeTypeName;
+	char	   *multirangeArrayName;
 	Oid			rangeArrayOid;
+	Oid			multirangeArrayOid;
 	Oid			rangeSubtype = InvalidOid;
 	List	   *rangeSubOpclassName = NIL;
 	List	   *rangeCollationName = NIL;
@@ -1371,6 +1378,7 @@ DefineRange(CreateRangeStmt *stmt)
 	AclResult	aclresult;
 	ListCell   *lc;
 	ObjectAddress address;
+	ObjectAddress mltrngaddress;
 
 	/* Convert list of names to a name and namespace */
 	typeNamespace = QualifiedNameGetCreationNamespace(stmt->typeName,
@@ -1522,6 +1530,9 @@ DefineRange(CreateRangeStmt *stmt)
 	/* Allocate OID for array type */
 	rangeArrayOid = AssignTypeArrayOid();
 
+	/* Allocate OID for multirange array type */
+	multirangeArrayOid = AssignTypeArrayOid();
+
 	/* Create the pg_type entry */
 	address =
 		TypeCreate(InvalidOid,	/* no predetermined type OID */
@@ -1557,9 +1568,47 @@ DefineRange(CreateRangeStmt *stmt)
 				   InvalidOid); /* type's collation (ranges never have one) */
 	Assert(typoid == address.objectId);
 
+	/* Create the multirange that goes with it */
+
+	multirangeTypeName = makeMultirangeTypeName(typeName, typeNamespace);
+
+	mltrngaddress =
+		TypeCreate(InvalidOid,	/* no predetermined type OID */
+				   multirangeTypeName,	/* type name */
+				   typeNamespace,	/* namespace */
+				   InvalidOid,	/* relation oid (n/a here) */
+				   0,			/* relation kind (ditto) */
+				   GetUserId(), /* owner's ID */
+				   -1,			/* internal size (always varlena) */
+				   TYPTYPE_MULTIRANGE,	/* type-type (multirange type) */
+				   TYPCATEGORY_MULTIRANGE,	/* type-category (multirange type) */
+				   false,		/* multirange types are never preferred */
+				   DEFAULT_TYPDELIM,	/* array element delimiter */
+				   F_MULTIRANGE_IN, /* input procedure */
+				   F_MULTIRANGE_OUT,	/* output procedure */
+				   F_MULTIRANGE_RECV,	/* receive procedure */
+				   F_MULTIRANGE_SEND,	/* send procedure */
+				   InvalidOid,	/* typmodin procedure - none */
+				   InvalidOid,	/* typmodout procedure - none */
+				   F_MULTIRANGE_TYPANALYZE, /* analyze procedure */
+				   InvalidOid,	/* element type ID - none */
+				   false,		/* this is not an array type */
+				   multirangeArrayOid,	/* array type we are about to create */
+				   InvalidOid,	/* base type ID (only for domains) */
+				   NULL,		/* never a default type value */
+				   NULL,		/* no binary form available either */
+				   false,		/* never passed by value */
+				   alignment,	/* alignment */
+				   'x',			/* TOAST strategy (always extended) */
+				   -1,			/* typMod (Domains only) */
+				   0,			/* Array dimensions of typbasetype */
+				   false,		/* Type NOT NULL */
+				   InvalidOid); /* type's collation (ranges never have one) */
+	mltrngtypoid = mltrngaddress.objectId;
+
 	/* Create the entry in pg_range */
 	RangeCreate(typoid, rangeSubtype, rangeCollation, rangeSubOpclass,
-				rangeCanonical, rangeSubtypeDiff);
+				rangeCanonical, rangeSubtypeDiff, mltrngtypoid);
 
 	/*
 	 * Create the array type that goes with it.
@@ -1600,8 +1649,49 @@ DefineRange(CreateRangeStmt *stmt)
 
 	pfree(rangeArrayName);
 
+	/* Create the multirange's array type */
+
+	multirangeArrayName = makeArrayTypeName(multirangeTypeName, typeNamespace);
+
+	TypeCreate(multirangeArrayOid,	/* force assignment of this type OID */
+			   multirangeArrayName, /* type name */
+			   typeNamespace,	/* namespace */
+			   InvalidOid,		/* relation oid (n/a here) */
+			   0,				/* relation kind (ditto) */
+			   GetUserId(),		/* owner's ID */
+			   -1,				/* internal size (always varlena) */
+			   TYPTYPE_BASE,	/* type-type (base type) */
+			   TYPCATEGORY_ARRAY,	/* type-category (array) */
+			   false,			/* array types are never preferred */
+			   DEFAULT_TYPDELIM,	/* array element delimiter */
+			   F_ARRAY_IN,		/* input procedure */
+			   F_ARRAY_OUT,		/* output procedure */
+			   F_ARRAY_RECV,	/* receive procedure */
+			   F_ARRAY_SEND,	/* send procedure */
+			   InvalidOid,		/* typmodin procedure - none */
+			   InvalidOid,		/* typmodout procedure - none */
+			   F_ARRAY_TYPANALYZE,	/* analyze procedure */
+			   mltrngtypoid,	/* element type ID */
+			   true,			/* yes this is an array type */
+			   InvalidOid,		/* no further array type */
+			   InvalidOid,		/* base type ID */
+			   NULL,			/* never a default type value */
+			   NULL,			/* binary default isn't sent either */
+			   false,			/* never passed by value */
+			   alignment,		/* alignment - same as range's */
+			   'x',				/* ARRAY is always toastable */
+			   -1,				/* typMod (Domains only) */
+			   0,				/* Array dimensions of typbasetype */
+			   false,			/* Type NOT NULL */
+			   InvalidOid);		/* typcollation */
+
 	/* And create the constructor functions for this range type */
 	makeRangeConstructors(typeName, typeNamespace, typoid, rangeSubtype);
+	makeMultirangeConstructors(multirangeTypeName, typeNamespace,
+							   mltrngtypoid, rangeArrayOid);
+
+	pfree(multirangeTypeName);
+	pfree(multirangeArrayName);
 
 	return address;
 }
@@ -1679,6 +1769,83 @@ makeRangeConstructors(const char *name, Oid namespace,
 	}
 }
 
+/*
+ * We make a separate multirange constructor for each range type
+ * so its name can include the base type, like range constructors do.
+ * If we had an anyrangearray polymorphic type we could use it here,
+ * but since each type has its own constructor name there's no need.
+ */
+static void
+makeMultirangeConstructors(const char *name, Oid namespace,
+						   Oid multirangeOid, Oid rangeArrayOid)
+{
+	static const char *const prosrc[2] = {"multirange_constructor0",
+	"multirange_constructor1"};
+	static const int pronargs[2] = {0, 1};
+
+	Oid			constructorArgTypes[0];
+	ObjectAddress myself,
+				referenced;
+	int			i;
+
+	constructorArgTypes[0] = rangeArrayOid;
+
+	Datum		allParamTypes[1] = {ObjectIdGetDatum(rangeArrayOid)};
+	ArrayType  *allParameterTypes = construct_array(allParamTypes, 1, OIDOID,
+													sizeof(Oid), true, 'i');
+	Datum		constructorAllParamTypes[2] = {PointerGetDatum(NULL), PointerGetDatum(allParameterTypes)};
+
+	Datum		paramModes[1] = {CharGetDatum(FUNC_PARAM_VARIADIC)};
+	ArrayType  *parameterModes = construct_array(paramModes, 1, CHAROID,
+												 1, true, 'c');
+	Datum		constructorParamModes[2] = {PointerGetDatum(NULL), PointerGetDatum(parameterModes)};
+
+	referenced.classId = TypeRelationId;
+	referenced.objectId = multirangeOid;
+	referenced.objectSubId = 0;
+
+	for (i = 0; i < lengthof(prosrc); i++)
+	{
+		oidvector  *constructorArgTypesVector;
+
+		constructorArgTypesVector = buildoidvector(constructorArgTypes,
+												   pronargs[i]);
+
+		myself = ProcedureCreate(name,	/* name: same as multirange type */
+								 namespace, /* namespace */
+								 false, /* replace */
+								 false, /* returns set */
+								 multirangeOid, /* return type */
+								 BOOTSTRAP_SUPERUSERID, /* proowner */
+								 INTERNALlanguageId,	/* language */
+								 F_FMGR_INTERNAL_VALIDATOR, /* language validator */
+								 prosrc[i], /* prosrc */
+								 NULL,	/* probin */
+								 PROKIND_FUNCTION,
+								 false, /* security_definer */
+								 false, /* leakproof */
+								 false, /* isStrict */
+								 PROVOLATILE_IMMUTABLE, /* volatility */
+								 PROPARALLEL_SAFE,	/* parallel safety */
+								 constructorArgTypesVector, /* parameterTypes */
+								 constructorAllParamTypes[i],	/* allParameterTypes */
+								 constructorParamModes[i],	/* parameterModes */
+								 PointerGetDatum(NULL), /* parameterNames */
+								 NIL,	/* parameterDefaults */
+								 PointerGetDatum(NULL), /* trftypes */
+								 PointerGetDatum(NULL), /* proconfig */
+								 InvalidOid,	/* prosupport */
+								 1.0,	/* procost */
+								 0.0);	/* prorows */
+
+		/*
+		 * Make the constructors internally-dependent on the multirange type
+		 * so that they go away silently when the type is dropped.  Note that
+		 * pg_dump depends on this choice to avoid dumping the constructors.
+		 */
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
+	}
+}
 
 /*
  * Find suitable I/O functions for a type.

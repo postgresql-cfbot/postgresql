@@ -1586,7 +1586,7 @@ selectDumpableType(TypeInfo *tyinfo, Archive *fout)
 	}
 
 	/* skip auto-generated array types */
-	if (tyinfo->isArray)
+	if (tyinfo->isArray || tyinfo->isMultirange)
 	{
 		tyinfo->dobj.objType = DO_DUMMY_TYPE;
 
@@ -4925,6 +4925,11 @@ getTypes(Archive *fout, int *numTypes)
 			tyinfo[i].isArray = true;
 		else
 			tyinfo[i].isArray = false;
+
+		if (tyinfo[i].typtype == 'm')
+			tyinfo[i].isMultirange = true;
+		else
+			tyinfo[i].isMultirange = false;
 
 		/* Decide whether we want to dump it */
 		selectDumpableType(&tyinfo[i], fout);

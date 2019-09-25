@@ -259,6 +259,7 @@ typedef FormData_pg_type *Form_pg_type;
 #define  TYPTYPE_COMPOSITE	'c' /* composite (e.g., table's rowtype) */
 #define  TYPTYPE_DOMAIN		'd' /* domain over another type */
 #define  TYPTYPE_ENUM		'e' /* enumerated type */
+#define  TYPTYPE_MULTIRANGE	'm' /* multirange type */
 #define  TYPTYPE_PSEUDO		'p' /* pseudo-type */
 #define  TYPTYPE_RANGE		'r' /* range type */
 
@@ -270,6 +271,7 @@ typedef FormData_pg_type *Form_pg_type;
 #define  TYPCATEGORY_ENUM		'E'
 #define  TYPCATEGORY_GEOMETRIC	'G'
 #define  TYPCATEGORY_NETWORK	'I' /* think INET */
+#define  TYPCATEGORY_MULTIRANGE	'M'
 #define  TYPCATEGORY_NUMERIC	'N'
 #define  TYPCATEGORY_PSEUDOTYPE 'P'
 #define  TYPCATEGORY_RANGE		'R'
@@ -285,7 +287,8 @@ typedef FormData_pg_type *Form_pg_type;
 	 (typid) == ANYARRAYOID || \
 	 (typid) == ANYNONARRAYOID || \
 	 (typid) == ANYENUMOID || \
-	 (typid) == ANYRANGEOID)
+	 (typid) == ANYRANGEOID || \
+	 (typid) == ANYMULTIRANGEOID)
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 
@@ -343,5 +346,8 @@ extern char *makeArrayTypeName(const char *typeName, Oid typeNamespace);
 
 extern bool moveArrayTypeName(Oid typeOid, const char *typeName,
 							  Oid typeNamespace);
+
+extern char *makeMultirangeTypeName(const char *rangeTypeName,
+									Oid typeNamespace);
 
 #endif							/* PG_TYPE_H */

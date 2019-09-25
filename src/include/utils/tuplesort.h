@@ -25,6 +25,7 @@
 #include "executor/tuptable.h"
 #include "storage/dsm.h"
 #include "utils/relcache.h"
+#include "utils/sortsupport.h"
 
 
 /*
@@ -206,6 +207,11 @@ extern Tuplesortstate *tuplesort_begin_index_hash(Relation heapRel,
 												  uint32 high_mask,
 												  uint32 low_mask,
 												  uint32 max_buckets,
+												  int workMem, SortCoordinate coordinate,
+												  bool randomAccess);
+extern Tuplesortstate *tuplesort_begin_index_gist(Relation heapRel,
+												  Relation indexRel,
+												  SortSupport ssup,
 												  int workMem, SortCoordinate coordinate,
 												  bool randomAccess);
 extern Tuplesortstate *tuplesort_begin_datum(Oid datumType,

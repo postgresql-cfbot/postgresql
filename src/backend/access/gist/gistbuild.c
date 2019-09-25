@@ -28,6 +28,8 @@
 #include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/regproc.h"
+#include "utils/tuplesort.h"
 
 /* Step of index tuples for check whether to switch to buffering build mode */
 #define BUFFERING_MODE_SWITCH_CHECK_STEP 256
@@ -53,6 +55,15 @@ typedef enum
 	GIST_BUFFERING_ACTIVE		/* in buffering build mode */
 } GistBufferingMode;
 
+/*
+ * Status record for spooling/sorting phase.
+ */
+typedef struct
+{
+	Tuplesortstate *sortstate;	/* state data for tuplesort.c */
+	Relation	index;
+} GSpool;
+
 /* Working state for gistbuild and its callback */
 typedef struct
 {
@@ -74,6 +85,7 @@ typedef struct
 	HTAB	   *parentMap;
 
 	GistBufferingMode bufferingMode;
+	GSpool *spool;
 } GISTBuildState;
 
 /* prototypes for private functions */
@@ -107,6 +119,174 @@ static void gistMemorizeParent(GISTBuildState *buildstate, BlockNumber child,
 static void gistMemorizeAllDownlinks(GISTBuildState *buildstate, Buffer parent);
 static BlockNumber gistGetParent(GISTBuildState *buildstate, BlockNumber child);
 
+static GSpool *gist_spoolinit(Relation heap, Relation index, SortSupport ssup);
+static void gist_spool(GSpool *gspool, ItemPointer self, Datum *values, bool *isnull);
+static void gist_indexsortbuild(GISTBuildState *state);
+static void gist_indexsortbuild_flush(Relation rel, Page page, BlockNumber blockno, bool isNew);
+
+/*
+ * create and initialize a spool structure to sort tuples
+ */
+static GSpool *
+gist_spoolinit(Relation heap, Relation index, SortSupport ssup)
+{
+	GSpool	   *gspool = (GSpool *) palloc0(sizeof(GSpool));
+
+	gspool->index = index;
+
+	/*
+	 * We size the sort area as maintenance_work_mem rather than work_mem to
+	 * speed index creation.  This should be OK since a single backend can't
+	 * run multiple index creations in parallel.
+	 */
+	gspool->sortstate = tuplesort_begin_index_gist(heap,
+												   index,
+												   ssup,
+												   maintenance_work_mem,
+												   NULL,
+												   false);
+
+	return gspool;
+}
+
+/*
+ * Flush page contents to actual page at blockno
+ * We have expected block number, because GiST build relies on that pages
+ * will be allocated in continous segments. This simplifies allocation
+ * logic.
+ */
+static void
+gist_indexsortbuild_flush(Relation rel, Page page, BlockNumber blockno, bool isNew)
+{
+	OffsetNumber i,
+				maxoff;
+	Page newpage;
+
+	Buffer buffer = ReadBuffer(rel, isNew ? P_NEW : blockno);
+	GISTInitBuffer(buffer, GistPageIsLeaf(page) ? F_LEAF : 0);
+	/* If the page is new - check that it was allocated correctly */
+	Assert(BufferGetBlockNumber(buffer) == blockno);
+
+	LockBuffer(buffer, GIST_EXCLUSIVE);
+	newpage = BufferGetPage(buffer);
+
+	maxoff = PageGetMaxOffsetNumber(page);
+	for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
+	{
+		ItemId itemid = PageGetItemId(page, i);
+		IndexTuple tuple = (IndexTuple) PageGetItem(page, itemid);
+		gistfillbuffer(newpage,	&tuple,
+						1, InvalidOffsetNumber);
+	}
+	MarkBufferDirty(buffer);
+	UnlockReleaseBuffer(buffer);
+}
+
+/*
+ * given a spool loaded by successive calls to _h_spool,
+ * create an entire index.
+ */
+static void
+gist_indexsortbuild(GISTBuildState *state)
+{
+	GSpool *gspool = state->spool;
+	/*
+	 * Build constructs GiST by levels. Level is always allocated
+	 * sequentially from level_start until level_end.
+	 */
+	BlockNumber level_start = GIST_ROOT_BLKNO + 1;
+	BlockNumber level_end = level_start;
+	BlockNumber prev_level_start;
+	IndexTuple	itup;
+	/*
+	 * We keep one page in memory for the special case
+	 * When layer will have only on page - we will place it
+	 * to ROOT_BLOCK_NO
+	 */
+	Page page = palloc(BLCKSZ);
+	gistinitpage(page, F_LEAF);
+
+	tuplesort_performsort(gspool->sortstate);
+
+	/* Create a first layer of leaf pages */
+	while ((itup = tuplesort_getindextuple(gspool->sortstate, true)) != NULL)
+	{
+		if (PageGetFreeSpace(page) >= IndexTupleSize(itup) + sizeof(ItemIdData) + state->freespace)
+		{
+			gistfillbuffer(page, &itup, 1, InvalidOffsetNumber);
+		}
+		else
+		{
+			gist_indexsortbuild_flush(state->indexrel, page, level_end, true);
+			level_end++;
+			gistinitpage(page, F_LEAF);
+			gistfillbuffer(page, &itup, 1, InvalidOffsetNumber);
+		}
+	}
+
+	/* Construct internal levels */
+	do
+	{
+		/* If previous level had only one page - that page is a root */
+		if (level_start == level_end)
+		{
+			gist_indexsortbuild_flush(state->indexrel, page, GIST_ROOT_BLKNO,
+										false);
+			return;
+		}
+
+		gist_indexsortbuild_flush(state->indexrel, page, level_end, true);
+		level_end++;
+		gistinitpage(page, 0);
+		
+		prev_level_start = level_start;
+		level_start = level_end;
+
+		for (BlockNumber i = prev_level_start; i < level_start; i++)
+		{
+			/* For each page on previous level we form one tuple */
+			Buffer lower_buffer = ReadBuffer(state->indexrel, i);
+			Page lower_page;
+			IndexTuple union_tuple;
+			MemoryContext oldCtx = MemoryContextSwitchTo(state->giststate->tempCxt);
+			int vect_len;
+			LockBuffer(lower_buffer, GIST_SHARE);
+			lower_page = BufferGetPage(lower_buffer);
+
+			IndexTuple *itvec = gistextractpage(lower_page, &vect_len);
+			union_tuple = gistunion(state->indexrel, itvec, vect_len,
+									state->giststate);
+			ItemPointerSetBlockNumber(&(union_tuple->t_tid), i);
+
+			if (PageGetFreeSpace(page) >= IndexTupleSize(union_tuple) + sizeof(ItemIdData) + state->freespace)
+			{
+				gistfillbuffer(page, &union_tuple, 1, InvalidOffsetNumber);
+			}
+			else
+			{
+				gist_indexsortbuild_flush(state->indexrel, page, level_end, true);
+				level_end++;
+				gistinitpage(page, 0);
+				gistfillbuffer(page, &union_tuple, 1, InvalidOffsetNumber);
+			}
+
+			UnlockReleaseBuffer(lower_buffer);
+			MemoryContextSwitchTo(oldCtx);
+			MemoryContextReset(state->giststate->tempCxt);
+		}
+	} while (true);
+}
+
+/*
+ * spool an index entry into the sort file.
+ */
+static void
+gist_spool(GSpool *gspool, ItemPointer self, Datum *values, bool *isnull)
+{
+	tuplesort_putindextuplevalues(gspool->sortstate, gspool->index,
+								  self, values, isnull);
+}
+
 /*
  * Main entry point to GiST index build. Initially calls insert over and over,
  * but switches to more efficient buffering build algorithm after a certain
@@ -121,10 +301,14 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	Buffer		buffer;
 	Page		page;
 	MemoryContext oldcxt = CurrentMemoryContext;
-	int			fillfactor;
+	int			fillfactor, i;
+	Oid			SortSupportFnOids[INDEX_MAX_KEYS];
+	bool		hasallsortsupports = true;
+	int			keyscount = IndexRelationGetNumberOfKeyAttributes(index);
 
 	buildstate.indexrel = index;
 	buildstate.heaprel = heap;
+	buildstate.spool = NULL;
 	if (index->rd_options)
 	{
 		/* Get buffering mode from the options string */
@@ -151,6 +335,24 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	}
 	/* Calculate target amount of free space to leave on pages */
 	buildstate.freespace = BLCKSZ * (100 - fillfactor) / 100;
+
+	for (i = 0; i < keyscount; i++)
+	{
+		SortSupportFnOids[i] = index_getprocid(index, i + 1, GIST_SORTSUPPORT_PROC);
+		if (!OidIsValid(SortSupportFnOids[i]))
+		{
+			hasallsortsupports = false;
+			break;
+		}
+	}
+	if (hasallsortsupports)
+	{
+			SortSupport sort = palloc0(sizeof(SortSupportData) * keyscount);
+			for (i = 0; i < keyscount; i++)
+				OidFunctionCall1(SortSupportFnOids[i], PointerGetDatum(sort + i));
+			buildstate.bufferingMode = GIST_BUFFERING_DISABLED;
+			buildstate.spool = gist_spoolinit(heap, index, sort);
+	}
 
 	/*
 	 * We expect to be called exactly once for any index relation. If that's
@@ -206,6 +408,12 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		elog(DEBUG1, "all tuples processed, emptying buffers");
 		gistEmptyAllBuffers(&buildstate);
 		gistFreeBuildBuffers(buildstate.gfbb);
+	}
+
+	if (buildstate.spool)
+	{
+		gist_indexsortbuild(&buildstate);
+		tuplesort_end(buildstate.spool->sortstate);
 	}
 
 	/* okay, all heap tuples are indexed */
@@ -468,14 +676,20 @@ gistBuildCallback(Relation index,
 	GISTBuildState *buildstate = (GISTBuildState *) state;
 	IndexTuple	itup;
 	MemoryContext oldCtx;
+	Datum compressed_values[INDEX_MAX_KEYS];
 
 	oldCtx = MemoryContextSwitchTo(buildstate->giststate->tempCxt);
 
 	/* form an index tuple and point it at the heap tuple */
-	itup = gistFormTuple(buildstate->giststate, index, values, isnull, true);
+	itup = gistCompressValuesAndFormTuple(buildstate->giststate, index, values, isnull, true, compressed_values);
 	itup->t_tid = htup->t_self;
 
-	if (buildstate->bufferingMode == GIST_BUFFERING_ACTIVE)
+	if (buildstate->spool)
+	{
+		if (tupleIsAlive)
+			gist_spool(buildstate->spool, (ItemPointer)itup, compressed_values, isnull);
+	}
+	else if (buildstate->bufferingMode == GIST_BUFFERING_ACTIVE)
 	{
 		/* We have buffers, so use them. */
 		gistBufferingBuildInsert(buildstate, itup);

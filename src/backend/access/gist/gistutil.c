@@ -174,6 +174,7 @@ gistMakeUnionItVec(GISTSTATE *giststate, IndexTuple *itvec, int len,
 
 			datum = index_getattr(itvec[j], i + 1, giststate->leafTupdesc,
 								  &IsNull);
+
 			if (IsNull)
 				continue;
 
@@ -576,6 +577,13 @@ gistFormTuple(GISTSTATE *giststate, Relation r,
 			  Datum attdata[], bool isnull[], bool isleaf)
 {
 	Datum		compatt[INDEX_MAX_KEYS];
+	return gistCompressValuesAndFormTuple(giststate, r, attdata, isnull, isleaf, compatt);
+}
+
+IndexTuple
+gistCompressValuesAndFormTuple(GISTSTATE *giststate, Relation r,
+			  Datum attdata[], bool isnull[], bool isleaf, Datum compatt[])
+{
 	int			i;
 	IndexTuple	res;
 
@@ -746,14 +754,10 @@ gistpenalty(GISTSTATE *giststate, int attno,
  * Initialize a new index page
  */
 void
-GISTInitBuffer(Buffer b, uint32 f)
+gistinitpage(Page page, uint32 f)
 {
-	GISTPageOpaque opaque;
-	Page		page;
-	Size		pageSize;
-
-	pageSize = BufferGetPageSize(b);
-	page = BufferGetPage(b);
+	GISTPageOpaque	opaque;
+	Size			pageSize = BLCKSZ;
 	PageInit(page, pageSize, sizeof(GISTPageOpaqueData));
 
 	opaque = GistPageGetOpaque(page);
@@ -762,6 +766,18 @@ GISTInitBuffer(Buffer b, uint32 f)
 	opaque->rightlink = InvalidBlockNumber;
 	opaque->flags = f;
 	opaque->gist_page_id = GIST_PAGE_ID;
+}
+
+/*
+ * Initialize a new index buffer
+ */
+void
+GISTInitBuffer(Buffer b, uint32 f)
+{
+	Page		page;
+
+	page = BufferGetPage(b);
+	gistinitpage(page, f);
 }
 
 /*

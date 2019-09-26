@@ -3422,7 +3422,7 @@ foreach my $db (sort keys %create_sql)
 
 command_fails_like(
 	[ 'pg_dump', '-p', "$port", 'qqq' ],
-	qr/\Qpg_dump: error: connection to database "qqq" failed: FATAL:  database "qqq" does not exist\E/,
+	qr/\Qpg_dump: error: could not connect to database "qqq": FATAL:  database "qqq" does not exist\E/,
 	'connecting to a non-existent database');
 
 #########################################

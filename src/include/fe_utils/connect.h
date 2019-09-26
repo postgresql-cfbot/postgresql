@@ -13,6 +13,8 @@
 #ifndef CONNECT_H
 #define CONNECT_H
 
+#include "libpq-fe.h"
+
 /*
  * This SQL statement installs an always-secure search path, so malicious
  * users can't take control.  CREATE of an unqualified name will fail, because
@@ -24,5 +26,13 @@
  */
 #define ALWAYS_SECURE_SEARCH_PATH_SQL \
 	"SELECT pg_catalog.set_config('search_path', '', false);"
+
+extern PGconn * connect_with_password_prompt(const char *hostname,
+							 const char *port,
+							 const char *username,
+							 const char *dbname,
+							 const char *progname,
+							 char *saved_password,
+							 bool enable_prompt);
 
 #endif							/* CONNECT_H */

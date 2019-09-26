@@ -47,6 +47,8 @@ struct options
 	const char *progname;
 };
 
+const char *progname;
+
 /* function prototypes */
 static void help(const char *progname);
 void		get_opts(int, char **, struct options *);
@@ -83,7 +85,6 @@ get_opts(int argc, char **argv, struct options *my_opts)
 	};
 
 	int			c;
-	const char *progname;
 	int			optindex;
 
 	pg_logging_init(argv[0]);
@@ -294,65 +295,20 @@ PGconn *
 sql_conn(struct options *my_opts)
 {
 	PGconn	   *conn;
-	bool		have_password = false;
-	char		password[100];
-	bool		new_pass;
 	PGresult   *res;
 
-	/*
-	 * Start the connection.  Loop until we have a password if requested by
-	 * backend.
-	 */
-	do
+	/* grab a connection, with password prompting */
+	conn = connect_with_password_prompt(my_opts->hostname,
+										my_opts->port,
+										my_opts->username,
+										my_opts->dbname,
+										my_opts->progname,
+										NULL,
+										true);
+	if (conn == NULL)
 	{
-#define PARAMS_ARRAY_SIZE	7
-
-		const char *keywords[PARAMS_ARRAY_SIZE];
-		const char *values[PARAMS_ARRAY_SIZE];
-
-		keywords[0] = "host";
-		values[0] = my_opts->hostname;
-		keywords[1] = "port";
-		values[1] = my_opts->port;
-		keywords[2] = "user";
-		values[2] = my_opts->username;
-		keywords[3] = "password";
-		values[3] = have_password ? password : NULL;
-		keywords[4] = "dbname";
-		values[4] = my_opts->dbname;
-		keywords[5] = "fallback_application_name";
-		values[5] = my_opts->progname;
-		keywords[6] = NULL;
-		values[6] = NULL;
-
-		new_pass = false;
-		conn = PQconnectdbParams(keywords, values, true);
-
-		if (!conn)
-		{
-			pg_log_error("could not connect to database %s",
-						 my_opts->dbname);
-			exit(1);
-		}
-
-		if (PQstatus(conn) == CONNECTION_BAD &&
-			PQconnectionNeedsPassword(conn) &&
-			!have_password)
-		{
-			PQfinish(conn);
-			simple_prompt("Password: ", password, sizeof(password), false);
-			have_password = true;
-			new_pass = true;
-		}
-	} while (new_pass);
-
-	/* check to see that the backend connection was successfully made */
-	if (PQstatus(conn) == CONNECTION_BAD)
-	{
-		pg_log_error("could not connect to database %s: %s",
-					 my_opts->dbname, PQerrorMessage(conn));
-		PQfinish(conn);
-		exit(1);
+		/* an error has been generated */
+		exit(-1);
 	}
 
 	res = PQexec(conn, ALWAYS_SECURE_SEARCH_PATH_SQL);

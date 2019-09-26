@@ -9,7 +9,7 @@ OBJS	= oid2name.o $(WIN32RES)
 TAP_TESTS = 1
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
-PG_LIBS_INTERNAL = $(libpq_pgport)
+PG_LIBS_INTERNAL = $(libpq_pgport) -L$(top_builddir)/src/fe_utils -lpgfeutils
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

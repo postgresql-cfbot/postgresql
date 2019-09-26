@@ -35,6 +35,7 @@
 #include "common/int.h"
 #include "common/logging.h"
 #include "fe_utils/conditional.h"
+#include "fe_utils/connect.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
 #include "portability/instr_time.h"
@@ -1151,67 +1152,15 @@ static PGconn *
 doConnect(void)
 {
 	PGconn	   *conn;
-	bool		new_pass;
-	static bool have_password = false;
-	static char password[100];
 
-	/*
-	 * Start the connection.  Loop until we have a password if requested by
-	 * backend.
-	 */
-	do
-	{
-#define PARAMS_ARRAY_SIZE	7
-
-		const char *keywords[PARAMS_ARRAY_SIZE];
-		const char *values[PARAMS_ARRAY_SIZE];
-
-		keywords[0] = "host";
-		values[0] = pghost;
-		keywords[1] = "port";
-		values[1] = pgport;
-		keywords[2] = "user";
-		values[2] = login;
-		keywords[3] = "password";
-		values[3] = have_password ? password : NULL;
-		keywords[4] = "dbname";
-		values[4] = dbName;
-		keywords[5] = "fallback_application_name";
-		values[5] = progname;
-		keywords[6] = NULL;
-		values[6] = NULL;
-
-		new_pass = false;
-
-		conn = PQconnectdbParams(keywords, values, true);
-
-		if (!conn)
-		{
-			fprintf(stderr, "connection to database \"%s\" failed\n",
-					dbName);
-			return NULL;
-		}
-
-		if (PQstatus(conn) == CONNECTION_BAD &&
-			PQconnectionNeedsPassword(conn) &&
-			!have_password)
-		{
-			PQfinish(conn);
-			simple_prompt("Password: ", password, sizeof(password), false);
-			have_password = true;
-			new_pass = true;
-		}
-	} while (new_pass);
-
-	/* check to see that the backend connection was successfully made */
-	if (PQstatus(conn) == CONNECTION_BAD)
-	{
-		fprintf(stderr, "connection to database \"%s\" failed:\n%s",
-				dbName, PQerrorMessage(conn));
-		PQfinish(conn);
-		return NULL;
-	}
-
+	/* Connect to database, with optional password prompting */
+	conn = connect_with_password_prompt(pghost,
+										pgport,
+										login,
+										dbName,
+										progname,
+										NULL,
+										true);
 	return conn;
 }
 

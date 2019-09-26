@@ -50,6 +50,8 @@ struct _param
 	long		transaction_limit;
 };
 
+const char *progname;
+
 static int	vacuumlo(const char *database, const struct _param *param);
 static void usage(const char *progname);
 
@@ -68,7 +70,6 @@ vacuumlo(const char *database, const struct _param *param)
 	long		matched;
 	long		deleted;
 	int			i;
-	bool		new_pass;
 	bool		success = true;
 	static bool have_password = false;
 	static char password[100];
@@ -80,58 +81,17 @@ vacuumlo(const char *database, const struct _param *param)
 		have_password = true;
 	}
 
-	/*
-	 * Start the connection.  Loop until we have a password if requested by
-	 * backend.
-	 */
-	do
+	/* grab a connection, depending on password prompting */
+	conn = connect_with_password_prompt(param->pg_host,
+										param->pg_port,
+										param->pg_user,
+										database,
+										progname,
+										password,
+										param->pg_prompt != TRI_NO);
+	if (conn == NULL)
 	{
-#define PARAMS_ARRAY_SIZE	   7
-
-		const char *keywords[PARAMS_ARRAY_SIZE];
-		const char *values[PARAMS_ARRAY_SIZE];
-
-		keywords[0] = "host";
-		values[0] = param->pg_host;
-		keywords[1] = "port";
-		values[1] = param->pg_port;
-		keywords[2] = "user";
-		values[2] = param->pg_user;
-		keywords[3] = "password";
-		values[3] = have_password ? password : NULL;
-		keywords[4] = "dbname";
-		values[4] = database;
-		keywords[5] = "fallback_application_name";
-		values[5] = param->progname;
-		keywords[6] = NULL;
-		values[6] = NULL;
-
-		new_pass = false;
-		conn = PQconnectdbParams(keywords, values, true);
-		if (!conn)
-		{
-			pg_log_error("connection to database \"%s\" failed", database);
-			return -1;
-		}
-
-		if (PQstatus(conn) == CONNECTION_BAD &&
-			PQconnectionNeedsPassword(conn) &&
-			!have_password &&
-			param->pg_prompt != TRI_NO)
-		{
-			PQfinish(conn);
-			simple_prompt("Password: ", password, sizeof(password), false);
-			have_password = true;
-			new_pass = true;
-		}
-	} while (new_pass);
-
-	/* check to see that the backend connection was successfully made */
-	if (PQstatus(conn) == CONNECTION_BAD)
-	{
-		pg_log_error("connection to database \"%s\" failed: %s",
-					 database, PQerrorMessage(conn));
-		PQfinish(conn);
+		/* an error has been generated */
 		return -1;
 	}
 
@@ -462,7 +422,6 @@ main(int argc, char **argv)
 	struct _param param;
 	int			c;
 	int			port;
-	const char *progname;
 	int			optindex;
 
 	pg_logging_init(argv[0]);

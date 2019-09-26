@@ -78,7 +78,7 @@ pgbench(
 	1,
 	[qr{^$}],
 	[
-		qr{connection to database "no-such-database" failed},
+		qr{could not connect to database "no-such-database"},
 		qr{FATAL:  database "no-such-database" does not exist}
 	],
 	'no such database');

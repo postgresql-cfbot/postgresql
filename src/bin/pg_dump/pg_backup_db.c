@@ -245,7 +245,6 @@ ConnectDatabase(Archive *AHX,
 	ArchiveHandle *AH = (ArchiveHandle *) AHX;
 	char	   *password;
 	char		passbuf[100];
-	bool		new_pass;
 
 	if (AH->connection)
 		fatal("already connected to a database");
@@ -259,53 +258,18 @@ ConnectDatabase(Archive *AHX,
 	}
 	AH->promptPassword = prompt_password;
 
-	/*
-	 * Start the connection.  Loop until we have a password if requested by
-	 * backend.
-	 */
-	do
+	AH->connection = connect_with_password_prompt(pghost,
+												  pgport,
+												  username,
+												  dbname,
+												  progname,
+												  password,
+												  prompt_password != TRI_NO);
+	if (AH->connection == NULL)
 	{
-		const char *keywords[7];
-		const char *values[7];
-
-		keywords[0] = "host";
-		values[0] = pghost;
-		keywords[1] = "port";
-		values[1] = pgport;
-		keywords[2] = "user";
-		values[2] = username;
-		keywords[3] = "password";
-		values[3] = password;
-		keywords[4] = "dbname";
-		values[4] = dbname;
-		keywords[5] = "fallback_application_name";
-		values[5] = progname;
-		keywords[6] = NULL;
-		values[6] = NULL;
-
-		new_pass = false;
-		AH->connection = PQconnectdbParams(keywords, values, true);
-
-		if (!AH->connection)
-			fatal("could not connect to database");
-
-		if (PQstatus(AH->connection) == CONNECTION_BAD &&
-			PQconnectionNeedsPassword(AH->connection) &&
-			password == NULL &&
-			prompt_password != TRI_NO)
-		{
-			PQfinish(AH->connection);
-			simple_prompt("Password: ", passbuf, sizeof(passbuf), false);
-			password = passbuf;
-			new_pass = true;
-		}
-	} while (new_pass);
-
-	/* check to see that the backend connection was successfully made */
-	if (PQstatus(AH->connection) == CONNECTION_BAD)
-		fatal("connection to database \"%s\" failed: %s",
-			  PQdb(AH->connection) ? PQdb(AH->connection) : "",
-			  PQerrorMessage(AH->connection));
+		/* an error has been generated */
+		exit_nicely(1);
+	}
 
 	/* Start strict; later phases may override this. */
 	PQclear(ExecuteSqlQueryForSingleRow((Archive *) AH,

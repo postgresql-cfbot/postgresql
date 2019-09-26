@@ -74,7 +74,6 @@ connectDatabase(const char *dbname, const char *pghost,
 				bool echo, bool fail_ok, bool allow_password_reuse)
 {
 	PGconn	   *conn;
-	bool		new_pass;
 	static bool have_password = false;
 	static char password[100];
 
@@ -87,64 +86,19 @@ connectDatabase(const char *dbname, const char *pghost,
 		have_password = true;
 	}
 
-	/*
-	 * Start the connection.  Loop until we have a password if requested by
-	 * backend.
-	 */
-	do
+	/* grab a connection, with password prompting */
+	conn = connect_with_password_prompt(pghost,
+										pgport,
+										pguser,
+										dbname,
+										progname,
+										password,
+										prompt_password != TRI_NO);
+	if (conn == NULL)
 	{
-		const char *keywords[7];
-		const char *values[7];
-
-		keywords[0] = "host";
-		values[0] = pghost;
-		keywords[1] = "port";
-		values[1] = pgport;
-		keywords[2] = "user";
-		values[2] = pguser;
-		keywords[3] = "password";
-		values[3] = have_password ? password : NULL;
-		keywords[4] = "dbname";
-		values[4] = dbname;
-		keywords[5] = "fallback_application_name";
-		values[5] = progname;
-		keywords[6] = NULL;
-		values[6] = NULL;
-
-		new_pass = false;
-		conn = PQconnectdbParams(keywords, values, true);
-
-		if (!conn)
-		{
-			pg_log_error("could not connect to database %s: out of memory",
-						 dbname);
-			exit(1);
-		}
-
-		/*
-		 * No luck?  Trying asking (again) for a password.
-		 */
-		if (PQstatus(conn) == CONNECTION_BAD &&
-			PQconnectionNeedsPassword(conn) &&
-			prompt_password != TRI_NO)
-		{
-			PQfinish(conn);
-			simple_prompt("Password: ", password, sizeof(password), false);
-			have_password = true;
-			new_pass = true;
-		}
-	} while (new_pass);
-
-	/* check to see that the backend connection was successfully made */
-	if (PQstatus(conn) == CONNECTION_BAD)
-	{
+		/* an error has been generated */
 		if (fail_ok)
-		{
-			PQfinish(conn);
 			return NULL;
-		}
-		pg_log_error("could not connect to database %s: %s",
-					 dbname, PQerrorMessage(conn));
 		exit(1);
 	}
 

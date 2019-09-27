@@ -1,7 +1,7 @@
 use strict;
 use warnings;
 use TestLib;
-use Test::More tests => 6;
+use Test::More tests => 12;
 
 use FindBin;
 use lib $FindBin::RealBin;
@@ -70,5 +70,7 @@ template1
 # Run the test in both modes.
 run_test('local');
 run_test('remote');
+run_test('archive');
+run_test('archive_conf');
 
 exit(0);

@@ -129,6 +129,8 @@ static char *lc_monetary = NULL;
 static char *lc_numeric = NULL;
 static char *lc_time = NULL;
 static char *lc_messages = NULL;
+static char collation_provider[] = {COLLPROVIDER_LIBC, '\0'};
+static char *icu_locale = NULL;
 static const char *default_text_search_config = NULL;
 static char *username = NULL;
 static bool pwprompt = false;
@@ -1412,10 +1414,13 @@ bootstrap_template1(void)
 							  encodingid_to_string(encodingid));
 
 	bki_lines = replace_token(bki_lines, "LC_COLLATE",
-							  escape_quotes_bki(lc_collate));
+							  escape_quotes_bki(collation_provider[0] == COLLPROVIDER_ICU ? icu_locale : lc_collate));
 
 	bki_lines = replace_token(bki_lines, "LC_CTYPE",
-							  escape_quotes_bki(lc_ctype));
+							  escape_quotes_bki(collation_provider[0] == COLLPROVIDER_ICU ? icu_locale : lc_ctype));
+
+	bki_lines = replace_token(bki_lines, "COLLPROVIDER",
+							  collation_provider);
 
 	/* Also ensure backend isn't confused by this environment var: */
 	unsetenv("PGCLIENTENCODING");
@@ -1708,6 +1713,12 @@ static void
 setup_collation(FILE *cmdfd)
 {
 	/*
+	 * Set version of the default collation.
+	 */
+	PG_CMD_PRINTF("UPDATE pg_collation SET collversion = pg_collation_actual_version(oid) WHERE oid = %d;\n\n",
+				  DEFAULT_COLLATION_OID);
+
+	/*
 	 * Add an SQL-standard name.  We don't want to pin this, so it doesn't go
 	 * in pg_collation.h.  But add it before reading system collations, so
 	 * that it wins if libc defines a locale named ucs_basic.
@@ -1995,8 +2006,6 @@ make_template0(FILE *cmdfd)
 {
 	const char *const *line;
 	static const char *const template0_setup[] = {
-		"CREATE DATABASE template0 IS_TEMPLATE = true ALLOW_CONNECTIONS = false;\n\n",
-
 		/*
 		 * We use the OID of template0 to determine datlastsysoid
 		 */
@@ -2020,6 +2029,9 @@ make_template0(FILE *cmdfd)
 		"VACUUM pg_database;\n\n",
 		NULL
 	};
+
+	PG_CMD_PRINTF("CREATE DATABASE template0 IS_TEMPLATE = true ALLOW_CONNECTIONS = false COLLATION_PROVIDER = %s;\n\n",
+				  collation_provider[0] == COLLPROVIDER_ICU ? "icu" : "libc");
 
 	for (line = template0_setup; *line; line++)
 		PG_CMD_PUTS(*line);
@@ -2293,13 +2305,14 @@ setlocales(void)
 			lc_monetary = locale;
 		if (!lc_messages)
 			lc_messages = locale;
+		if (!icu_locale)
+			icu_locale = locale;
 	}
 
 	/*
 	 * canonicalize locale names, and obtain any missing values from our
 	 * current environment
 	 */
-
 	check_locale_name(LC_CTYPE, lc_ctype, &canonname);
 	lc_ctype = canonname;
 	check_locale_name(LC_COLLATE, lc_collate, &canonname);
@@ -2318,6 +2331,18 @@ setlocales(void)
 	check_locale_name(LC_CTYPE, lc_messages, &canonname);
 	lc_messages = canonname;
 #endif
+
+	/*
+	 * If ICU is selected but no ICU locale has been given, take the
+	 * lc_collate locale and chop off any encoding suffix.  This should give
+	 * the user a configuration that resembles their operating system's locale
+	 * setup.
+	 */
+	if (collation_provider[0] == COLLPROVIDER_ICU && !icu_locale)
+	{
+		icu_locale = pg_strdup(lc_collate);
+		icu_locale[strcspn(icu_locale, ".")] = '\0';
+	}
 }
 
 /*
@@ -2333,9 +2358,12 @@ usage(const char *progname)
 	printf(_("  -A, --auth=METHOD         default authentication method for local connections\n"));
 	printf(_("      --auth-host=METHOD    default authentication method for local TCP/IP connections\n"));
 	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
+	printf(_("      --collation-provider={libc|icu}\n"
+			 "                            set default collation provider for new databases\n"));
 	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
+	printf(_("      --icu-locale          set ICU locale for new databases\n"));
 	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
 			 "      --lc-monetary=, --lc-numeric=, --lc-time=LOCALE\n"
@@ -2510,7 +2538,8 @@ setup_locale_encoding(void)
 		strcmp(lc_ctype, lc_time) == 0 &&
 		strcmp(lc_ctype, lc_numeric) == 0 &&
 		strcmp(lc_ctype, lc_monetary) == 0 &&
-		strcmp(lc_ctype, lc_messages) == 0)
+		strcmp(lc_ctype, lc_messages) == 0 &&
+		(!icu_locale || strcmp(lc_ctype, icu_locale) == 0))
 		printf(_("The database cluster will be initialized with locale \"%s\".\n"), lc_ctype);
 	else
 	{
@@ -2527,9 +2556,13 @@ setup_locale_encoding(void)
 			   lc_monetary,
 			   lc_numeric,
 			   lc_time);
+		if (icu_locale)
+			printf(_("  ICU:      %s\n"), icu_locale);
 	}
 
-	if (!encoding)
+	if (!encoding && collation_provider[0] == COLLPROVIDER_ICU)
+		encodingid = PG_UTF8;
+	else if (!encoding)
 	{
 		int			ctype_enc;
 
@@ -3029,6 +3062,8 @@ main(int argc, char *argv[])
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
+		{"collation-provider", required_argument, NULL, 13},
+		{"icu-locale", required_argument, NULL, 14},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3166,6 +3201,20 @@ main(int argc, char *argv[])
 				break;
 			case 'g':
 				SetDataDirectoryCreatePerm(PG_DIR_MODE_GROUP);
+				break;
+			case 13:
+				if (strcmp(optarg, "icu") == 0)
+					collation_provider[0] = COLLPROVIDER_ICU;
+				else if (strcmp(optarg, "libc") == 0)
+					collation_provider[0] = COLLPROVIDER_LIBC;
+				else
+				{
+					pg_log_error("unrecognized collation provider: %s", optarg);
+					exit(1);
+				}
+				break;
+			case 14:
+				icu_locale = pg_strdup(optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

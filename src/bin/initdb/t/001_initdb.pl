@@ -8,7 +8,7 @@ use Fcntl ':mode';
 use File::stat qw{lstat};
 use PostgresNode;
 use TestLib;
-use Test::More tests => 22;
+use Test::More tests => 24;
 
 my $tempdir = TestLib::tempdir;
 my $xlogdir = "$tempdir/pgxlog";
@@ -89,3 +89,19 @@ SKIP:
 	ok(check_mode_recursive($datadir_group, 0750, 0640),
 		'check PGDATA permissions');
 }
+
+# Collation provider tests
+
+if ($ENV{with_icu} eq 'yes')
+{
+	command_ok(['initdb', '--no-sync', '--collation-provider=icu', "$tempdir/data2"],
+			   'collation provider ICU');
+}
+else
+{
+	command_fails(['initdb', '--no-sync', '--collation-provider=icu', "$tempdir/data2"],
+				  'collation provider ICU fails since no ICU support');
+}
+
+command_fails(['initdb', '--no-sync', '--collation-provider=xyz', "$tempdir/dataX"],
+			  'fails for invalid collation provider');

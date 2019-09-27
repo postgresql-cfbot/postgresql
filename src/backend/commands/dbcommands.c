@@ -35,6 +35,7 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_subscription.h"
@@ -86,7 +87,8 @@ static bool get_db_info(const char *name, LOCKMODE lockmode,
 						int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP,
 						Oid *dbLastSysOidP, TransactionId *dbFrozenXidP,
 						MultiXactId *dbMinMultiP,
-						Oid *dbTablespace, char **dbCollate, char **dbCtype);
+						Oid *dbTablespace, char **dbCollate, char **dbCtype,
+						char *dbCollProvider);
 static bool have_createdb_privilege(void);
 static void remove_dbtablespaces(Oid db_id);
 static bool check_db_file_conflict(Oid db_id);
@@ -106,6 +108,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	int			src_encoding;
 	char	   *src_collate;
 	char	   *src_ctype;
+	char		src_collprovider;
 	bool		src_istemplate;
 	bool		src_allowconn;
 	Oid			src_lastsysoid;
@@ -127,6 +130,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	DefElem    *dlocale = NULL;
 	DefElem    *dcollate = NULL;
 	DefElem    *dctype = NULL;
+	DefElem	   *dcollprovider = NULL;
 	DefElem    *distemplate = NULL;
 	DefElem    *dallowconnections = NULL;
 	DefElem    *dconnlimit = NULL;
@@ -135,6 +139,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	const char *dbtemplate = NULL;
 	char	   *dbcollate = NULL;
 	char	   *dbctype = NULL;
+	char		dbcollprovider = '\0';
 	char	   *canonname;
 	int			encoding = -1;
 	bool		dbistemplate = false;
@@ -211,6 +216,15 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 						 errmsg("conflicting or redundant options"),
 						 parser_errposition(pstate, defel->location)));
 			dctype = defel;
+		}
+		else if (strcmp(defel->defname, "collation_provider") == 0)
+		{
+			if (dcollprovider)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+			dcollprovider = defel;
 		}
 		else if (strcmp(defel->defname, "is_template") == 0)
 		{
@@ -301,6 +315,23 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		dbcollate = defGetString(dcollate);
 	if (dctype && dctype->arg)
 		dbctype = defGetString(dctype);
+	if (dcollprovider && dcollprovider->arg)
+	{
+		char	   *collproviderstr = defGetString(dcollprovider);
+
+#ifdef USE_ICU
+		if (pg_strcasecmp(collproviderstr, "icu") == 0)
+			dbcollprovider = COLLPROVIDER_ICU;
+		else
+#endif
+		if (pg_strcasecmp(collproviderstr, "libc") == 0)
+			dbcollprovider = COLLPROVIDER_LIBC;
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("unrecognized collation provider: %s",
+							collproviderstr)));
+	}
 	if (distemplate && distemplate->arg)
 		dbistemplate = defGetBoolean(distemplate);
 	if (dallowconnections && dallowconnections->arg)
@@ -350,7 +381,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					 &src_dboid, &src_owner, &src_encoding,
 					 &src_istemplate, &src_allowconn, &src_lastsysoid,
 					 &src_frozenxid, &src_minmxid, &src_deftablespace,
-					 &src_collate, &src_ctype))
+					 &src_collate, &src_ctype, &src_collprovider))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("template database \"%s\" does not exist",
@@ -376,6 +407,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		dbcollate = src_collate;
 	if (dbctype == NULL)
 		dbctype = src_ctype;
+	if (dbcollprovider == '\0')
+		dbcollprovider = src_collprovider;
 
 	/* Some encodings are client only */
 	if (!PG_VALID_BE_ENCODING(encoding))
@@ -383,6 +416,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid server encoding %d", encoding)));
 
+	if (dbcollprovider == COLLPROVIDER_LIBC)
+	{
 	/* Check that the chosen locales are valid, and get canonical spellings */
 	if (!check_locale(LC_COLLATE, dbcollate, &canonname))
 		ereport(ERROR,
@@ -396,6 +431,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	dbctype = canonname;
 
 	check_encoding_locale_matches(encoding, dbcollate, dbctype);
+	}
 
 	/*
 	 * Check that the new encoding and locale settings match the source
@@ -559,6 +595,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		DirectFunctionCall1(namein, CStringGetDatum(dbcollate));
 	new_record[Anum_pg_database_datctype - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(dbctype));
+	new_record[Anum_pg_database_datcollprovider - 1] = CharGetDatum(dbcollprovider);
 	new_record[Anum_pg_database_datistemplate - 1] = BoolGetDatum(dbistemplate);
 	new_record[Anum_pg_database_datallowconn - 1] = BoolGetDatum(dballowconnections);
 	new_record[Anum_pg_database_datconnlimit - 1] = Int32GetDatum(dbconnlimit);
@@ -832,7 +869,7 @@ dropdb(const char *dbname, bool missing_ok)
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL,
-					 &db_istemplate, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+					 &db_istemplate, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 	{
 		if (!missing_ok)
 		{
@@ -1023,7 +1060,7 @@ RenameDatabase(const char *oldname, const char *newname)
 	rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(oldname, AccessExclusiveLock, &db_id, NULL, NULL,
-					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+					 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("database \"%s\" does not exist", oldname)));
@@ -1136,7 +1173,7 @@ movedb(const char *dbname, const char *tblspcname)
 	pgdbrel = table_open(DatabaseRelationId, RowExclusiveLock);
 
 	if (!get_db_info(dbname, AccessExclusiveLock, &db_id, NULL, NULL,
-					 NULL, NULL, NULL, NULL, NULL, &src_tblspcoid, NULL, NULL))
+					 NULL, NULL, NULL, NULL, NULL, &src_tblspcoid, NULL, NULL, NULL))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_DATABASE),
 				 errmsg("database \"%s\" does not exist", dbname)));
@@ -1768,7 +1805,8 @@ get_db_info(const char *name, LOCKMODE lockmode,
 			int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP,
 			Oid *dbLastSysOidP, TransactionId *dbFrozenXidP,
 			MultiXactId *dbMinMultiP,
-			Oid *dbTablespace, char **dbCollate, char **dbCtype)
+			Oid *dbTablespace, char **dbCollate, char **dbCtype,
+			char *dbCollProvider)
 {
 	bool		result = false;
 	Relation	relation;
@@ -1865,6 +1903,8 @@ get_db_info(const char *name, LOCKMODE lockmode,
 					*dbCollate = pstrdup(NameStr(dbform->datcollate));
 				if (dbCtype)
 					*dbCtype = pstrdup(NameStr(dbform->datctype));
+				if (dbCollProvider)
+					*dbCollProvider = dbform->datcollprovider;
 				ReleaseSysCache(tuple);
 				result = true;
 				break;

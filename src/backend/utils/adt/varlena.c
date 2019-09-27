@@ -1156,8 +1156,13 @@ text_position_setup(text *t1, text *t2, Oid collid, TextPositionState *state)
 
 	check_collation_set(collid);
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (mylocale && !mylocale->deterministic)
 		ereport(ERROR,
@@ -1499,6 +1504,8 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 
 		if (collid != DEFAULT_COLLATION_OID)
 			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
 
 		/*
 		 * memcmp() can't tell us which of two unequal strings sorts first,
@@ -1720,7 +1727,7 @@ texteq(PG_FUNCTION_ARGS)
 	check_collation_set(collid);
 
 	if (lc_collate_is_c(collid) ||
-		collid == DEFAULT_COLLATION_OID ||
+		(collid == DEFAULT_COLLATION_OID && global_locale.deterministic) ||
 		pg_newlocale_from_collation(collid)->deterministic)
 	{
 		Datum		arg1 = PG_GETARG_DATUM(0);
@@ -1774,7 +1781,7 @@ textne(PG_FUNCTION_ARGS)
 	check_collation_set(collid);
 
 	if (lc_collate_is_c(collid) ||
-		collid == DEFAULT_COLLATION_OID ||
+		(collid == DEFAULT_COLLATION_OID && global_locale.deterministic) ||
 		pg_newlocale_from_collation(collid)->deterministic)
 	{
 		Datum		arg1 = PG_GETARG_DATUM(0);
@@ -1886,8 +1893,13 @@ text_starts_with(PG_FUNCTION_ARGS)
 
 	check_collation_set(collid);
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (mylocale && !mylocale->deterministic)
 		ereport(ERROR,
@@ -2002,6 +2014,8 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 		 */
 		if (collid != DEFAULT_COLLATION_OID)
 			locale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			locale = &global_locale;
 
 		/*
 		 * There is a further exception on Windows.  When the database

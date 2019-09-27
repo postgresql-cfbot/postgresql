@@ -46,6 +46,9 @@ CATALOG(pg_database,1262,DatabaseRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID
 	/* LC_CTYPE setting */
 	NameData	datctype;
 
+	/* see pg_collation.collprovider */
+	char		datcollprovider;
+
 	/* allowed as CREATE DATABASE template? */
 	bool		datistemplate;
 

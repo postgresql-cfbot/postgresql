@@ -966,6 +966,8 @@ like_fixed_prefix(Const *patt_const, bool case_insensitive, Oid collation,
 			}
 			locale = pg_newlocale_from_collation(collation);
 		}
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			locale = &global_locale;
 	}
 
 	if (typeid != BYTEAOID)

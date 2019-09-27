@@ -166,6 +166,18 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--collation-provider={<literal>libc</literal>|<literal>icu</literal>}</option></term>
+      <listitem>
+       <para>
+        This option sets the collation provider for databases created in the
+        new cluster.  It can be overridden in the <command>CREATE
+        DATABASE</command> command when new databases are subsequently
+        created.  The default is <literal>libc</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-D <replaceable class="parameter">directory</replaceable></option></term>
       <term><option>--pgdata=<replaceable class="parameter">directory</replaceable></option></term>
       <listitem>
@@ -205,6 +217,17 @@ PostgreSQL documentation
         files created by <command>initdb</command>.  This option is ignored
         on <productname>Windows</productname> as it does not support
         <acronym>POSIX</acronym>-style group permissions.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--icu-locale=<replaceable>locale</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the ICU locale if the ICU collation provider is used.  If
+        this is not specified, the value from the <option>--locale</option>
+        option is used.
        </para>
       </listitem>
      </varlistentry>

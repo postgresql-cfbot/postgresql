@@ -2638,6 +2638,7 @@ dumpDatabase(Archive *fout)
 				i_datname,
 				i_dba,
 				i_encoding,
+				i_datcollprovider,
 				i_collate,
 				i_ctype,
 				i_frozenxid,
@@ -2652,6 +2653,7 @@ dumpDatabase(Archive *fout)
 	const char *datname,
 			   *dba,
 			   *encoding,
+			   *datcollprovider,
 			   *collate,
 			   *ctype,
 			   *datacl,
@@ -2680,6 +2682,7 @@ dumpDatabase(Archive *fout)
 		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, datname, "
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
+						  "datcollprovider, "
 						  "datcollate, datctype, datfrozenxid, datminmxid, "
 						  "(SELECT array_agg(acl ORDER BY row_n) FROM "
 						  "  (SELECT acl, row_n FROM "
@@ -2772,6 +2775,7 @@ dumpDatabase(Archive *fout)
 	i_datname = PQfnumber(res, "datname");
 	i_dba = PQfnumber(res, "dba");
 	i_encoding = PQfnumber(res, "encoding");
+	i_datcollprovider = PQfnumber(res, "datcollprovider");
 	i_collate = PQfnumber(res, "datcollate");
 	i_ctype = PQfnumber(res, "datctype");
 	i_frozenxid = PQfnumber(res, "datfrozenxid");
@@ -2787,6 +2791,7 @@ dumpDatabase(Archive *fout)
 	datname = PQgetvalue(res, 0, i_datname);
 	dba = PQgetvalue(res, 0, i_dba);
 	encoding = PQgetvalue(res, 0, i_encoding);
+	datcollprovider = PQgetvalue(res, 0, i_datcollprovider);
 	collate = PQgetvalue(res, 0, i_collate);
 	ctype = PQgetvalue(res, 0, i_ctype);
 	frozenxid = atooid(PQgetvalue(res, 0, i_frozenxid));
@@ -2811,6 +2816,17 @@ dumpDatabase(Archive *fout)
 	{
 		appendPQExpBufferStr(creaQry, " ENCODING = ");
 		appendStringLiteralAH(creaQry, encoding, fout);
+	}
+	if (strlen(datcollprovider) > 0)
+	{
+		appendPQExpBufferStr(creaQry, " COLLATION_PROVIDER = ");
+		if (datcollprovider[0] == 'c')
+			appendPQExpBufferStr(creaQry, "libc");
+		else if (datcollprovider[0] == 'i')
+			appendPQExpBufferStr(creaQry, "icu");
+		else
+			fatal("unrecognized collation provider: %s",
+				  datcollprovider);
 	}
 	if (strlen(collate) > 0 && strcmp(collate, ctype) == 0)
 	{

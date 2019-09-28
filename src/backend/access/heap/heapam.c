@@ -1303,6 +1303,17 @@ heap_getnext(TableScanDesc sscan, ScanDirection direction)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg_internal("only heap AM is supported")));
 
+	/*
+	 * We don't expect direct calls to heap_getnext with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(scan->rs_base.rs_rd) ||
+		  RelationIsUsedAsCatalogTable(scan->rs_base.rs_rd))))
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+			 errmsg("improper heap_getnext call")));
+
 	/* Note: no locking manipulations needed */
 
 	HEAPDEBUG_1;				/* heap_getnext( info ) */
@@ -1422,6 +1433,16 @@ heap_fetch(Relation relation,
 	bool		valid;
 
 	/*
+	 * We don't expect direct calls to heap_fetch with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+			 errmsg("improper heap_fetch call")));
+
+	/*
 	 * Fetch and pin the appropriate page of the relation.
 	 */
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
@@ -1534,6 +1555,16 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	bool		at_chain_start;
 	bool		valid;
 	bool		skip;
+
+	/*
+	 * We don't expect direct calls to heap_hot_search_buffer with
+	 * valid CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+			 errmsg("improper heap_hot_search_buffer call")));
 
 	/* If this is not the first call, previous call returned a (live!) tuple */
 	if (all_dead)
@@ -1681,6 +1712,16 @@ heap_get_latest_tid(TableScanDesc sscan,
 	 * in the table.
 	 */
 	Assert(ItemPointerIsValid(tid));
+
+	/*
+	 * We don't expect direct calls to heap_get_latest_tid with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+			 errmsg("improper heap_get_latest_tid call")));
 
 	/*
 	 * Loop to chase down t_ctid links.  At top of loop, ctid is the tuple we
@@ -5480,6 +5521,16 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 	OffsetNumber offnum;
 	ItemId		lp = NULL;
 	HeapTupleHeader htup;
+
+	/*
+	 * We don't expect direct calls to heap_hot_search with
+	 * valid CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+			 errmsg("improper heap_hot_search call")));
 
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);

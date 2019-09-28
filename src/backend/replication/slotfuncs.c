@@ -147,6 +147,13 @@ create_logical_replication_slot(char *name, char *plugin,
 									logical_read_local_xlog_page, NULL, NULL,
 									NULL);
 
+	/*
+	 * Make sure streaming is disabled here - we may have the methods,
+	 * but we don't have anywhere to send the data yet.
+	 */
+	ctx->streaming = false;
+
+
 	/* build initial snapshot, might take a while */
 	DecodingContextFindStartpoint(ctx);
 

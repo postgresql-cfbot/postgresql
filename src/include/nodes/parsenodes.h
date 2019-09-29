@@ -3314,6 +3314,7 @@ typedef struct ConstraintsSetStmt
 /* Reindex options */
 #define REINDEXOPT_VERBOSE (1 << 0)	/* print progress info */
 #define REINDEXOPT_REPORT_PROGRESS (1 << 1)	/* report pgstat progress */
+#define REINDEXOPT_NOWAIT (1 << 2)	/* error if relation cannot be locked */
 
 typedef enum ReindexObjectType
 {
@@ -3333,6 +3334,7 @@ typedef struct ReindexStmt
 	const char *name;			/* name of database to reindex */
 	int			options;		/* Reindex options flags */
 	bool		concurrent;		/* reindex concurrently? */
+	char	   *tablespacename;
 } ReindexStmt;
 
 /* ----------------------

@@ -778,20 +778,36 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 					PreventInTransactionBlock(isTopLevel,
 											  "REINDEX CONCURRENTLY");
 
+				if (stmt->options & REINDEXOPT_NOWAIT && stmt->tablespacename == NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							errmsg("incompatible NOWAIT option"),
+							errdetail("You can only use NOWAIT with SET TABLESPACE.")));
+
 				/* we choose to allow this during "read only" transactions */
 				PreventCommandDuringRecovery("REINDEX");
 				/* forbidden in parallel mode due to CommandIsReadOnly */
 				switch (stmt->kind)
 				{
 					case REINDEX_OBJECT_INDEX:
-						ReindexIndex(stmt->relation, stmt->options, stmt->concurrent);
+						ReindexIndex(stmt->relation, stmt->tablespacename, stmt->options, stmt->concurrent);
 						break;
 					case REINDEX_OBJECT_TABLE:
-						ReindexTable(stmt->relation, stmt->options, stmt->concurrent);
+						ReindexTable(stmt->relation, stmt->tablespacename, stmt->options, stmt->concurrent);
 						break;
 					case REINDEX_OBJECT_SCHEMA:
 					case REINDEX_OBJECT_SYSTEM:
 					case REINDEX_OBJECT_DATABASE:
+
+						/*
+						 * We cannot move system relations to a new tablespace and
+						 * the entire schema/database very likely will has one,
+						 * so simply reject such cases.
+						 */
+						if (stmt->tablespacename)
+							ereport(ERROR,
+								(errmsg("incompatible SET TABLESPACE option"),
+								errdetail("You can only use SET TABLESPACE with REINDEX { INDEX | TABLE }.")));
 
 						/*
 						 * This cannot run inside a user transaction block; if
@@ -803,7 +819,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 												  (stmt->kind == REINDEX_OBJECT_SCHEMA) ? "REINDEX SCHEMA" :
 												  (stmt->kind == REINDEX_OBJECT_SYSTEM) ? "REINDEX SYSTEM" :
 												  "REINDEX DATABASE");
-						ReindexMultipleTables(stmt->name, stmt->kind, stmt->options, stmt->concurrent);
+						ReindexMultipleTables(stmt->name, stmt->kind, stmt->tablespacename, stmt->options, stmt->concurrent);
 						break;
 					default:
 						elog(ERROR, "unrecognized object type: %d",

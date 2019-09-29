@@ -20,6 +20,48 @@ ERROR:  unrecognized parameter "some_nonexistent_parameter"
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost = 2.0); -- fail
 ERROR:  RESET must not include values for parameters
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost, effective_io_concurrency); -- ok
+-- create table to test REINDEX with TABLESPACE change
+CREATE TABLE regress_tblspace_test_tbl (num1 bigint, num2 double precision, num3 double precision);
+INSERT INTO regress_tblspace_test_tbl (num1, num2, num3)
+  SELECT round(random()*100), random(), random()*42
+  FROM generate_series(1, 20000) s(i);
+CREATE INDEX regress_tblspace_test_tbl_idx ON regress_tblspace_test_tbl (num1);
+-- check REINDEX with TABLESPACE change
+REINDEX INDEX regress_tblspace_test_tbl_idx SET TABLESPACE regress_tblspace; -- ok
+REINDEX TABLE regress_tblspace_test_tbl SET TABLESPACE regress_tblspace; -- ok
+REINDEX TABLE pg_authid NOWAIT; -- fail
+ERROR:  incompatible NOWAIT option
+DETAIL:  You can only use NOWAIT with SET TABLESPACE.
+REINDEX TABLE pg_authid SET TABLESPACE regress_tblspace; -- fail
+ERROR:  cannot move system relation "pg_authid_rolname_index"
+REINDEX SCHEMA pg_catalog SET TABLESPACE regress_tblspace; -- fail
+ERROR:  incompatible SET TABLESPACE option
+DETAIL:  You can only use SET TABLESPACE with REINDEX { INDEX | TABLE }.
+REINDEX DATABASE postgres SET TABLESPACE regress_tblspace; -- fail
+ERROR:  incompatible SET TABLESPACE option
+DETAIL:  You can only use SET TABLESPACE with REINDEX { INDEX | TABLE }.
+REINDEX SYSTEM postgres SET TABLESPACE regress_tblspace; -- fail
+ERROR:  incompatible SET TABLESPACE option
+DETAIL:  You can only use SET TABLESPACE with REINDEX { INDEX | TABLE }.
+-- check that all relations moved to new tablespace
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace')
+AND relname IN ('regress_tblspace_test_tbl_idx');
+            relname            
+-------------------------------
+ regress_tblspace_test_tbl_idx
+(1 row)
+
+-- move back to pg_default tablespace
+REINDEX TABLE CONCURRENTLY regress_tblspace_test_tbl SET TABLESPACE pg_default NOWAIT; -- ok
+-- check that all relations moved back to pg_default
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace')
+AND relname IN ('regress_tblspace_test_tbl_idx');
+ relname 
+---------
+(0 rows)
+
 -- create a schema we can use
 CREATE SCHEMA testschema;
 -- try a table
@@ -736,6 +778,8 @@ ALTER TABLE ALL IN TABLESPACE regress_tblspace_renamed SET TABLESPACE pg_default
 NOTICE:  no matching relations in tablespace "regress_tblspace_renamed" found
 -- Should succeed
 DROP TABLESPACE regress_tblspace_renamed;
+DROP INDEX regress_tblspace_test_tbl_idx;
+DROP TABLE regress_tblspace_test_tbl;
 DROP SCHEMA testschema CASCADE;
 NOTICE:  drop cascades to 6 other objects
 DETAIL:  drop cascades to table testschema.foo

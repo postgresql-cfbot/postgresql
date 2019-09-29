@@ -52,6 +52,8 @@ extern void AlterRelationNamespaceInternal(Relation classRel, Oid relOid,
 
 extern void CheckTableNotInUse(Relation rel, const char *stmt);
 
+extern void check_relation_is_movable(Relation rel, Oid tablespaceOid);
+
 extern void ExecuteTruncate(TruncateStmt *stmt);
 extern void ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 								DropBehavior behavior, bool restart_seqs);

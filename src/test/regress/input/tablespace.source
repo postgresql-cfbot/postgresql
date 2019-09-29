@@ -17,6 +17,35 @@ ALTER TABLESPACE regress_tblspace SET (some_nonexistent_parameter = true);  -- f
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost = 2.0); -- fail
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost, effective_io_concurrency); -- ok
 
+-- create table to test REINDEX with TABLESPACE change
+CREATE TABLE regress_tblspace_test_tbl (num1 bigint, num2 double precision, num3 double precision);
+INSERT INTO regress_tblspace_test_tbl (num1, num2, num3)
+  SELECT round(random()*100), random(), random()*42
+  FROM generate_series(1, 20000) s(i);
+CREATE INDEX regress_tblspace_test_tbl_idx ON regress_tblspace_test_tbl (num1);
+
+-- check REINDEX with TABLESPACE change
+REINDEX INDEX regress_tblspace_test_tbl_idx SET TABLESPACE regress_tblspace; -- ok
+REINDEX TABLE regress_tblspace_test_tbl SET TABLESPACE regress_tblspace; -- ok
+REINDEX TABLE pg_authid NOWAIT; -- fail
+REINDEX TABLE pg_authid SET TABLESPACE regress_tblspace; -- fail
+REINDEX SCHEMA pg_catalog SET TABLESPACE regress_tblspace; -- fail
+REINDEX DATABASE postgres SET TABLESPACE regress_tblspace; -- fail
+REINDEX SYSTEM postgres SET TABLESPACE regress_tblspace; -- fail
+
+-- check that all relations moved to new tablespace
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace')
+AND relname IN ('regress_tblspace_test_tbl_idx');
+
+-- move back to pg_default tablespace
+REINDEX TABLE CONCURRENTLY regress_tblspace_test_tbl SET TABLESPACE pg_default NOWAIT; -- ok
+
+-- check that all relations moved back to pg_default
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace')
+AND relname IN ('regress_tblspace_test_tbl_idx');
+
 -- create a schema we can use
 CREATE SCHEMA testschema;
 
@@ -278,6 +307,9 @@ ALTER TABLE ALL IN TABLESPACE regress_tblspace_renamed SET TABLESPACE pg_default
 
 -- Should succeed
 DROP TABLESPACE regress_tblspace_renamed;
+
+DROP INDEX regress_tblspace_test_tbl_idx;
+DROP TABLE regress_tblspace_test_tbl;
 
 DROP SCHEMA testschema CASCADE;
 

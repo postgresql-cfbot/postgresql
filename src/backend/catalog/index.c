@@ -1239,7 +1239,8 @@ index_create(Relation heapRelation,
  * on.  This is called during concurrent reindex processing.
  */
 Oid
-index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char *newName)
+index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
+							   Oid tablespaceOid, const char *newName)
 {
 	Relation	indexRelation;
 	IndexInfo  *oldInfo,
@@ -1369,7 +1370,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 							  newInfo,
 							  indexColNames,
 							  indexRelation->rd_rel->relam,
-							  indexRelation->rd_rel->reltablespace,
+							  tablespaceOid ? tablespaceOid : indexRelation->rd_rel->reltablespace,
 							  indexRelation->rd_indcollation,
 							  indclass->values,
 							  indcoloptions->values,
@@ -3342,16 +3343,22 @@ IndexGetRelation(Oid indexId, bool missing_ok)
  * reindex_index - This routine is used to recreate a single index
  */
 void
-reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
+reindex_index(Oid indexId, Oid tablespaceOid, bool skip_constraint_checks, char persistence,
 			  int options)
 {
 	Relation	iRel,
-				heapRelation;
-	Oid			heapId;
+				heapRelation,
+				pg_class;
+	Oid			heapId,
+				newIndexRelfilenodeOid = InvalidOid;
 	IndexInfo  *indexInfo;
 	volatile bool skipped_constraint = false;
 	PGRUsage	ru0;
 	bool		progress = (options & REINDEXOPT_REPORT_PROGRESS) != 0;
+	RelFileNode newrnode;
+	SMgrRelation  dstrel;
+	HeapTuple	  tuple;
+	Form_pg_class rd_rel;
 
 	pg_rusage_init(&ru0);
 
@@ -3390,11 +3397,15 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 		elog(ERROR, "unsupported relation kind for index \"%s\"",
 			 RelationGetRelationName(iRel));
 
-	/*
-	 * Don't allow reindex on temp tables of other backends ... their local
-	 * buffer manager is not going to cope.
-	 */
-	if (RELATION_IS_OTHER_TEMP(iRel))
+	if (OidIsValid(tablespaceOid))
+		/* Check that relocation is possible during reindex. */
+		check_relation_is_movable(iRel, tablespaceOid);
+	else if (RELATION_IS_OTHER_TEMP(iRel))
+		/*
+		 * Don't allow reindex on temp tables of other backends ... their local
+		 * buffer manager is not going to cope. Check only if TABLESPACE is not
+		 * passed, since the same validation exists in the check_relation_is_movable.
+		 */
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot reindex temporary tables of other sessions")));
@@ -3404,6 +3415,68 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	 * don't want to reindex underneath an open indexscan.
 	 */
 	CheckTableNotInUse(iRel, "REINDEX INDEX");
+
+	if (OidIsValid(tablespaceOid))
+	{
+		pg_class = heap_open(RelationRelationId, RowExclusiveLock);
+
+		tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(indexId));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", indexId);
+		rd_rel = (Form_pg_class) GETSTRUCT(tuple);
+
+		/* Use binary-upgrade override for pg_class.oid/relfilenode? */
+		if (IsBinaryUpgrade)
+		{
+			if (!OidIsValid(binary_upgrade_next_index_pg_class_oid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("pg_class index OID value not set when in binary upgrade mode")));
+
+			newIndexRelfilenodeOid = binary_upgrade_next_index_pg_class_oid;
+			binary_upgrade_next_index_pg_class_oid = InvalidOid;
+		}
+		else
+		{
+			newIndexRelfilenodeOid =
+				GetNewRelFileNode(tablespaceOid, pg_class, heapRelation->rd_rel->relpersistence);
+		}
+
+		/* Open old and new relation */
+		newrnode = iRel->rd_node;
+		newrnode.relNode = newIndexRelfilenodeOid;
+		newrnode.spcNode = tablespaceOid;
+		dstrel = smgropen(newrnode, iRel->rd_backend);
+
+		RelationOpenSmgr(iRel);
+
+		/*
+		 * Create and copy all forks of the relation, and schedule unlinking of
+		 * old physical files.
+		 *
+		 * NOTE: any conflict in relfilenode value will be caught in
+		 * RelationCreateStorage().
+		 */
+		RelationCreateStorage(newrnode, iRel->rd_rel->relpersistence);
+
+		/* Drop old relation, and close new one */
+		RelationDropStorage(iRel);
+		smgrclose(dstrel);
+
+		/* Update the pg_class row */
+		rd_rel->reltablespace = tablespaceOid;
+		rd_rel->relfilenode = newIndexRelfilenodeOid;
+		CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
+
+		InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(iRel), 0);
+
+		heap_freetuple(tuple);
+
+		heap_close(pg_class, RowExclusiveLock);
+
+		/* Make the updated catalog row versions visible */
+		CommandCounterIncrement();
+	}
 
 	/*
 	 * All predicate locks on the index are about to be made invalid. Promote
@@ -3577,7 +3650,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, int options)
+reindex_relation(Oid relid, Oid tablespaceOid, int flags, int options)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3651,7 +3724,7 @@ reindex_relation(Oid relid, int flags, int options)
 		{
 			Oid			indexOid = lfirst_oid(indexId);
 
-			reindex_index(indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
+			reindex_index(indexOid, tablespaceOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
 						  persistence, options);
 
 			CommandCounterIncrement();
@@ -3686,7 +3759,7 @@ reindex_relation(Oid relid, int flags, int options)
 	 * still hold the lock on the master table.
 	 */
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
-		result |= reindex_relation(toast_relid, flags, options);
+		result |= reindex_relation(toast_relid, tablespaceOid, flags, options);
 
 	return result;
 }

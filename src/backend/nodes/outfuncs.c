@@ -559,6 +559,7 @@ _outIndexScan(StringInfo str, const IndexScan *node)
 	WRITE_NODE_FIELD(indexorderbyorig);
 	WRITE_NODE_FIELD(indexorderbyops);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
 }
 
 static void
@@ -573,6 +574,7 @@ _outIndexOnlyScan(StringInfo str, const IndexOnlyScan *node)
 	WRITE_NODE_FIELD(indexorderby);
 	WRITE_NODE_FIELD(indextlist);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
 }
 
 static void
@@ -2213,6 +2215,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(group_pathkeys);
 	WRITE_NODE_FIELD(window_pathkeys);
 	WRITE_NODE_FIELD(distinct_pathkeys);
+	WRITE_NODE_FIELD(uniq_distinct_pathkeys);
 	WRITE_NODE_FIELD(sort_pathkeys);
 	WRITE_NODE_FIELD(processed_tlist);
 	WRITE_NODE_FIELD(minmax_aggs);

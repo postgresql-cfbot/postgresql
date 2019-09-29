@@ -490,6 +490,7 @@ _copyIndexScan(const IndexScan *from)
 	COPY_NODE_FIELD(indexorderbyorig);
 	COPY_NODE_FIELD(indexorderbyops);
 	COPY_SCALAR_FIELD(indexorderdir);
+	COPY_SCALAR_FIELD(indexskipprefixsize);
 
 	return newnode;
 }
@@ -515,6 +516,7 @@ _copyIndexOnlyScan(const IndexOnlyScan *from)
 	COPY_NODE_FIELD(indexorderby);
 	COPY_NODE_FIELD(indextlist);
 	COPY_SCALAR_FIELD(indexorderdir);
+	COPY_SCALAR_FIELD(indexskipprefixsize);
 
 	return newnode;
 }

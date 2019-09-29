@@ -209,6 +209,10 @@ extern List *build_join_pathkeys(PlannerInfo *root,
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 										   List *sortclauses,
 										   List *tlist);
+extern List *make_pathkeys_for_distinctclauses(PlannerInfo *root,
+											   List *sortclauses,
+											   List *tlist,
+											   bool checkRedundant);
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);
 extern void update_mergeclause_eclasses(PlannerInfo *root,

@@ -29,6 +29,7 @@
 #include "utils/lsyscache.h"
 
 
+static bool pathkey_is_unique(PathKey *new_pathkey, List *pathkeys);
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
 static bool matches_boolean_partition_clause(RestrictInfo *rinfo,
 											 RelOptInfo *partrel,
@@ -97,6 +98,30 @@ make_canonical_pathkey(PlannerInfo *root,
 }
 
 /*
+ * pathkey_is_unique
+ *	   Part of pathkey_is_redundant, that is reponsible for the case, when the
+ *	   new pathkey's equivalence class is the same as that of any existing
+ *	   member of the pathkey list.
+ */
+static bool
+pathkey_is_unique(PathKey *new_pathkey, List *pathkeys)
+{
+	EquivalenceClass *new_ec = new_pathkey->pk_eclass;
+	ListCell   *lc;
+
+	/* If same EC already used in list, then redundant */
+	foreach(lc, pathkeys)
+	{
+		PathKey    *old_pathkey = (PathKey *) lfirst(lc);
+
+		if (new_ec == old_pathkey->pk_eclass)
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * pathkey_is_redundant
  *	   Is a pathkey redundant with one already in the given list?
  *
@@ -135,22 +160,12 @@ static bool
 pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys)
 {
 	EquivalenceClass *new_ec = new_pathkey->pk_eclass;
-	ListCell   *lc;
 
 	/* Check for EC containing a constant --- unconditionally redundant */
 	if (EC_MUST_BE_REDUNDANT(new_ec))
 		return true;
 
-	/* If same EC already used in list, then redundant */
-	foreach(lc, pathkeys)
-	{
-		PathKey    *old_pathkey = (PathKey *) lfirst(lc);
-
-		if (new_ec == old_pathkey->pk_eclass)
-			return true;
-	}
-
-	return false;
+	return pathkey_is_unique(new_pathkey, pathkeys);
 }
 
 /*
@@ -1097,6 +1112,53 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
 	}
 	return pathkeys;
 }
+
+/*
+ * make_pathkeys_for_distinctclauses
+ *		Generate a pathkeys list for distinct clauses, that represents the sort
+ *		order specified by a list of SortGroupClauses. Similar to
+ *		make_pathkeys_for_sortclauses, but allows to specify if we need to
+ *		check the full redundancy, or just uniqueness.
+ */
+List *
+make_pathkeys_for_distinctclauses(PlannerInfo *root,
+								  List *distinctclauses,
+								  List *tlist, bool checkRedundant)
+{
+	List	   *pathkeys = NIL;
+	ListCell   *l;
+
+	foreach(l, distinctclauses)
+	{
+		SortGroupClause *sortcl = (SortGroupClause *) lfirst(l);
+		Expr	   *sortkey;
+		PathKey    *pathkey;
+
+		sortkey = (Expr *) get_sortgroupclause_expr(sortcl, tlist);
+		Assert(OidIsValid(sortcl->sortop));
+		pathkey = make_pathkey_from_sortop(root,
+										   sortkey,
+										   root->nullable_baserels,
+										   sortcl->sortop,
+										   sortcl->nulls_first,
+										   sortcl->tleSortGroupRef,
+										   true);
+
+		/* Canonical form eliminates redundant ordering keys */
+		if (checkRedundant)
+		{
+			if (!pathkey_is_redundant(pathkey, pathkeys))
+				pathkeys = lappend(pathkeys, pathkey);
+		}
+		else
+		{
+			if (!pathkey_is_unique(pathkey, pathkeys))
+				pathkeys = lappend(pathkeys, pathkey);
+		}
+	}
+	return pathkeys;
+}
+
 
 /****************************************************************************
  *		PATHKEYS AND MERGECLAUSES

@@ -128,6 +128,8 @@ to_regproc(PG_FUNCTION_ARGS)
 	 * entries in the current search path.
 	 */
 	names = stringToQualifiedNameList(pro_name);
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 	clist = FuncnameGetCandidates(names, -1, NIL, false, false, true);
 
 	if (clist == NULL || clist->next != NULL)
@@ -301,6 +303,8 @@ to_regprocedure(PG_FUNCTION_ARGS)
 	 * given argument types.    (There will not be more than one match.)
 	 */
 	parseNameAndArgTypes(pro_name, false, &names, &nargs, argtypes);
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 
 	clist = FuncnameGetCandidates(names, nargs, NIL, false, false, true);
 
@@ -546,6 +550,8 @@ to_regoper(PG_FUNCTION_ARGS)
 	 * entries in the current search path.
 	 */
 	names = stringToQualifiedNameList(opr_name);
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 	clist = OpernameGetCandidates(names, '\0', true);
 
 	if (clist == NULL || clist->next != NULL)
@@ -736,6 +742,8 @@ to_regoperator(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_TOO_MANY_ARGUMENTS),
 				 errmsg("too many arguments"),
 				 errhint("Provide two argument types for operator.")));
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 
 	result = OpernameGetOprid(names, argtypes[0], argtypes[1]);
 
@@ -948,13 +956,15 @@ to_regclass(PG_FUNCTION_ARGS)
 {
 	char	   *class_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	Oid			result;
-	List	   *names;
+	List		*names;
 
 	/*
 	 * Parse the name into components and see if it matches any pg_class
 	 * entries in the current search path.
 	 */
 	names = stringToQualifiedNameList(class_name);
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 
 	/* We might not even have permissions on this relation; don't lock it. */
 	result = RangeVarGetRelid(makeRangeVarFromNameList(names), NoLock, true);
@@ -1104,10 +1114,14 @@ to_regtype(PG_FUNCTION_ARGS)
 	char	   *typ_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	Oid			result;
 	int32		typmod;
+	List	   *names;
 
 	/*
 	 * Invoke the full parser to deal with special cases such as array syntax.
 	 */
+	names = stringToQualifiedNameList(typ_name);
+	if (!CheckNamespaceAccessNoError(names))
+		PG_RETURN_NULL();
 	parseTypeString(typ_name, &result, &typmod, true);
 
 	if (OidIsValid(result))

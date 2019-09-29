@@ -664,6 +664,38 @@ RangeVarAdjustRelationPersistence(RangeVar *newRelation, Oid nspid)
 }
 
 /*
+ * CheckNamespaceAccessNoError
+ * 		Returns true if the namespace in given qualified-name can be accessable
+ * 		by the current user. If no namespace is given in names, just returns
+ * 		true.
+ */
+bool
+CheckNamespaceAccessNoError(List *names)
+{
+	char *namespacename;
+	char *objectname;
+	Oid namespaceId;
+	AclResult	aclresult;
+
+	/* deconstruct the name list */
+	DeconstructQualifiedName(names, &namespacename, &objectname);
+
+	if (namespacename)
+	{
+		namespaceId = get_namespace_oid(namespacename, true);
+		if (!OidIsValid(namespaceId))
+			/* Namespace is invalid */
+			return false;
+		aclresult = pg_namespace_aclcheck(namespaceId, GetUserId(), ACL_USAGE);
+		if (aclresult != ACLCHECK_OK)
+			/* Namespace ACL is not ok */
+			return false;
+	}
+
+	return true;
+}
+
+/*
  * RelnameGetRelid
  *		Try to resolve an unqualified relation name.
  *		Returns OID if relation found in search path, else InvalidOid.

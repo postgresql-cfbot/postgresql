@@ -6319,10 +6319,24 @@ gincost_pattern(IndexOptInfo *index, int indexcol,
 						 PointerGetDatum(&nullFlags),
 						 PointerGetDatum(&searchMode));
 
-	if (nentries <= 0 && searchMode == GIN_SEARCH_MODE_DEFAULT)
+	/* Special cases for queries that contain no keys */
+	if (nentries <= 0)
 	{
-		/* No match is possible */
-		return false;
+		if (searchMode == GIN_SEARCH_MODE_DEFAULT)
+		{
+			/* In default mode, no keys means an unsatisfiable query */
+			return false;
+		}
+		else if (searchMode == GIN_SEARCH_MODE_ALL)
+		{
+			/*
+			 * ginNewScanKey() does not emit scankeys for a key-less ALL
+			 * query.  Instead it will emit an EVERYTHING key, but only if
+			 * there are no other regular keys.  We don't know that yet, so
+			 * postpone setting the haveFullScan flag.
+			 */
+			return true;
+		}
 	}
 
 	for (i = 0; i < nentries; i++)
@@ -6483,6 +6497,10 @@ gincost_scalararrayopexpr(PlannerInfo *root,
 		{
 			/* We ignore array elements that are unsatisfiable patterns */
 			numPossible++;
+
+			/* If no regular scan keys, assume an EVERYTHING scan is needed */
+			if (elemcounts.searchEntries == 0)
+				elemcounts.haveFullScan = true;
 
 			if (elemcounts.haveFullScan)
 			{
@@ -6707,6 +6725,10 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		*indexSelectivity = 0;
 		return;
 	}
+
+	/* If no regular scan keys, assume an EVERYTHING scan is needed */
+	if (counts.searchEntries == 0)
+		counts.haveFullScan = true;
 
 	if (counts.haveFullScan || indexQuals == NIL)
 	{

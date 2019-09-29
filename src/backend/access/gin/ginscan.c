@@ -286,6 +286,7 @@ ginNewScanKey(IndexScanDesc scan)
 		palloc(so->allocentries * sizeof(GinScanEntry));
 
 	so->isVoidRes = false;
+	so->forcedRecheck = false;
 
 	for (i = 0; i < scan->numberOfKeys; i++)
 	{
@@ -333,16 +334,28 @@ ginNewScanKey(IndexScanDesc scan)
 		if (searchMode != GIN_SEARCH_MODE_DEFAULT)
 			hasNullQuery = true;
 
-		/*
-		 * In default mode, no keys means an unsatisfiable query.
-		 */
+		/* Special cases for queries that contain no keys */
 		if (queryValues == NULL || nQueryValues <= 0)
 		{
 			if (searchMode == GIN_SEARCH_MODE_DEFAULT)
 			{
+				/* In default mode, no keys means an unsatisfiable query */
 				so->isVoidRes = true;
 				break;
 			}
+			else if (searchMode == GIN_SEARCH_MODE_ALL)
+			{
+				/*
+				 * The query probably matches all non-null items, but rather
+				 * than scanning the index in ALL mode, we use forced rechecks
+				 * to verify matches of this scankey.  This wins if there are
+				 * any non-ALL scankeys; otherwise we end up adding an
+				 * EVERYTHING scankey below.
+				 */
+				so->forcedRecheck = true;
+				continue;
+			}
+
 			nQueryValues = 0;	/* ensure sane value */
 		}
 

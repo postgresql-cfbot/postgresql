@@ -1,7 +1,7 @@
 --
 -- Test GIN indexes.
 --
--- There are other tests to test different GIN opclassed. This is for testing
+-- There are other tests to test different GIN opclasses. This is for testing
 -- GIN itself.
 
 -- Create and populate a test table with a GIN index.
@@ -34,3 +34,16 @@ insert into gin_test_tbl select array[1, 3, g] from generate_series(1, 1000) g;
 
 delete from gin_test_tbl where i @> array[2];
 vacuum gin_test_tbl;
+
+-- Test optimization of empty queries
+create temp table t_gin_test_tbl(i int4[], j int4[]);
+create index on t_gin_test_tbl using gin (i, j);
+insert into t_gin_test_tbl select array[100,g], array[200,g]
+from generate_series(1, 10) g;
+insert into t_gin_test_tbl values(array[0,0], null);
+set enable_seqscan = off;
+explain (costs off)
+select * from t_gin_test_tbl where array[0] <@ i;
+select * from t_gin_test_tbl where array[0] <@ i;
+select * from t_gin_test_tbl where array[0] <@ i and '{}'::int4[] <@ j;
+reset enable_seqscan;

@@ -359,6 +359,7 @@ typedef struct GinScanOpaqueData
 	MemoryContext keyCtx;		/* used to hold key and entry data */
 
 	bool		isVoidRes;		/* true if query is unsatisfiable */
+	bool		forcedRecheck;	/* must recheck all returned tuples */
 } GinScanOpaqueData;
 
 typedef GinScanOpaqueData *GinScanOpaque;

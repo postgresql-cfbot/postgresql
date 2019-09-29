@@ -1,7 +1,8 @@
 /*-------------------------------------------------------------------------
  *
  * amvalidate.h
- *	  Support routines for index access methods' amvalidate functions.
+ *	  Support routines for index access methods' amvalidate and
+ *	  amcheckmembers functions.
  *
  * Copyright (c) 2016-2019, PostgreSQL Global Development Group
  *
@@ -31,6 +32,8 @@ extern bool check_amproc_signature(Oid funcid, Oid restype, bool exact,
 								   int minargs, int maxargs,...);
 extern bool check_amop_signature(Oid opno, Oid restype,
 								 Oid lefttype, Oid righttype);
+extern Oid	opclass_for_family_datatype(Oid amoid, Oid opfamilyoid,
+										Oid datatypeoid);
 extern bool opfamily_can_sort_type(Oid opfamilyoid, Oid datatypeoid);
 
 #endif							/* AMVALIDATE_H */

@@ -27,7 +27,6 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
-#include "catalog/opfam_internal.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
@@ -62,12 +61,10 @@ static void AlterOpFamilyDrop(AlterOpFamilyStmt *stmt,
 static void processTypesSpec(List *args, Oid *lefttype, Oid *righttype);
 static void assignOperTypes(OpFamilyMember *member, Oid amoid, Oid typeoid);
 static void assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid);
-static void addFamilyMember(List **list, OpFamilyMember *member, bool isProc);
-static void storeOperators(List *opfamilyname, Oid amoid,
-						   Oid opfamilyoid, Oid opclassoid,
+static void addFamilyMember(List **list, OpFamilyMember *member);
+static void storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 						   List *operators, bool isAdd);
-static void storeProcedures(List *opfamilyname, Oid amoid,
-							Oid opfamilyoid, Oid opclassoid,
+static void storeProcedures(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 							List *procedures, bool isAdd);
 static void dropOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 						  List *operators);
@@ -516,11 +513,12 @@ DefineOpClass(CreateOpClassStmt *stmt)
 
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = false;
 				member->object = operOid;
 				member->number = item->number;
 				member->sortfamily = sortfamilyOid;
 				assignOperTypes(member, amoid, typeoid);
-				addFamilyMember(&operators, member, false);
+				addFamilyMember(&operators, member);
 				break;
 			case OPCLASS_ITEM_FUNCTION:
 				if (item->number <= 0 || item->number > maxProcNumber)
@@ -540,6 +538,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = true;
 				member->object = funcOid;
 				member->number = item->number;
 
@@ -549,7 +548,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 									 &member->lefttype, &member->righttype);
 
 				assignProcTypes(member, amoid, typeoid);
-				addFamilyMember(&procedures, member, true);
+				addFamilyMember(&procedures, member);
 				break;
 			case OPCLASS_ITEM_STORAGETYPE:
 				if (OidIsValid(storageoid))
@@ -662,13 +661,45 @@ DefineOpClass(CreateOpClassStmt *stmt)
 	heap_freetuple(tup);
 
 	/*
+	 * Now that we have the opclass OID, set up default dependency info for
+	 * the pg_amop and pg_amproc entries.  Historically, CREATE OPERATOR CLASS
+	 * has created hard dependencies on the opclass, so that's what we use.
+	 */
+	foreach(l, operators)
+	{
+		OpFamilyMember *op = (OpFamilyMember *) lfirst(l);
+
+		op->ref_is_hard = true;
+		op->ref_is_family = false;
+		op->refobjid = opclassoid;
+	}
+	foreach(l, procedures)
+	{
+		OpFamilyMember *proc = (OpFamilyMember *) lfirst(l);
+
+		proc->ref_is_hard = true;
+		proc->ref_is_family = false;
+		proc->refobjid = opclassoid;
+	}
+
+	/*
+	 * Let the index AM editorialize on the dependency choices.  It could also
+	 * do further validation on the operators and functions, if it likes.
+	 */
+	if (amroutine->amcheckmembers)
+		amroutine->amcheckmembers(opfamilyoid,
+								  opclassoid,
+								  operators,
+								  procedures);
+
+	/*
 	 * Now add tuples to pg_amop and pg_amproc tying in the operators and
 	 * functions.  Dependencies on them are inserted, too.
 	 */
 	storeOperators(stmt->opfamilyname, amoid, opfamilyoid,
-				   opclassoid, operators, false);
+				   operators, false);
 	storeProcedures(stmt->opfamilyname, amoid, opfamilyoid,
-					opclassoid, procedures, false);
+					procedures, false);
 
 	/* let event triggers know what happened */
 	EventTriggerCollectCreateOpClass(stmt, opclassoid, operators, procedures);
@@ -837,6 +868,7 @@ static void
 AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				 int maxOpNumber, int maxProcNumber, List *items)
 {
+	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(amoid, false);
 	List	   *operators;		/* OpFamilyMember list for operators */
 	List	   *procedures;		/* OpFamilyMember list for support procs */
 	ListCell   *l;
@@ -895,11 +927,17 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = false;
 				member->object = operOid;
 				member->number = item->number;
 				member->sortfamily = sortfamilyOid;
+				/* We can set up dependency fields immediately */
+				/* Historically, ALTER ADD has created soft dependencies */
+				member->ref_is_hard = false;
+				member->ref_is_family = true;
+				member->refobjid = opfamilyoid;
 				assignOperTypes(member, amoid, InvalidOid);
-				addFamilyMember(&operators, member, false);
+				addFamilyMember(&operators, member);
 				break;
 			case OPCLASS_ITEM_FUNCTION:
 				if (item->number <= 0 || item->number > maxProcNumber)
@@ -919,8 +957,14 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = true;
 				member->object = funcOid;
 				member->number = item->number;
+				/* We can set up dependency fields immediately */
+				/* Historically, ALTER ADD has created soft dependencies */
+				member->ref_is_hard = false;
+				member->ref_is_family = true;
+				member->refobjid = opfamilyoid;
 
 				/* allow overriding of the function's actual arg types */
 				if (item->class_args)
@@ -928,7 +972,7 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 									 &member->lefttype, &member->righttype);
 
 				assignProcTypes(member, amoid, InvalidOid);
-				addFamilyMember(&procedures, member, true);
+				addFamilyMember(&procedures, member);
 				break;
 			case OPCLASS_ITEM_STORAGETYPE:
 				ereport(ERROR,
@@ -942,13 +986,23 @@ AlterOpFamilyAdd(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 	}
 
 	/*
+	 * Let the index AM editorialize on the dependency choices.  It could also
+	 * do further validation on the operators and functions, if it likes.
+	 */
+	if (amroutine->amcheckmembers)
+		amroutine->amcheckmembers(opfamilyoid,
+								  InvalidOid,	/* no specific opclass */
+								  operators,
+								  procedures);
+
+	/*
 	 * Add tuples to pg_amop and pg_amproc tying in the operators and
 	 * functions.  Dependencies on them are inserted, too.
 	 */
 	storeOperators(stmt->opfamilyname, amoid, opfamilyoid,
-				   InvalidOid, operators, true);
+				   operators, true);
 	storeProcedures(stmt->opfamilyname, amoid, opfamilyoid,
-					InvalidOid, procedures, true);
+					procedures, true);
 
 	/* make information available to event triggers */
 	EventTriggerCollectAlterOpFam(stmt, opfamilyoid,
@@ -991,10 +1045,11 @@ AlterOpFamilyDrop(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				processTypesSpec(item->class_args, &lefttype, &righttype);
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = false;
 				member->number = item->number;
 				member->lefttype = lefttype;
 				member->righttype = righttype;
-				addFamilyMember(&operators, member, false);
+				addFamilyMember(&operators, member);
 				break;
 			case OPCLASS_ITEM_FUNCTION:
 				if (item->number <= 0 || item->number > maxProcNumber)
@@ -1006,10 +1061,11 @@ AlterOpFamilyDrop(AlterOpFamilyStmt *stmt, Oid amoid, Oid opfamilyoid,
 				processTypesSpec(item->class_args, &lefttype, &righttype);
 				/* Save the info */
 				member = (OpFamilyMember *) palloc0(sizeof(OpFamilyMember));
+				member->is_func = true;
 				member->number = item->number;
 				member->lefttype = lefttype;
 				member->righttype = righttype;
-				addFamilyMember(&procedures, member, true);
+				addFamilyMember(&procedures, member);
 				break;
 			case OPCLASS_ITEM_STORAGETYPE:
 				/* grammar prevents this from appearing */
@@ -1264,7 +1320,7 @@ assignProcTypes(OpFamilyMember *member, Oid amoid, Oid typeoid)
  * duplicated strategy or proc number.
  */
 static void
-addFamilyMember(List **list, OpFamilyMember *member, bool isProc)
+addFamilyMember(List **list, OpFamilyMember *member)
 {
 	ListCell   *l;
 
@@ -1276,7 +1332,7 @@ addFamilyMember(List **list, OpFamilyMember *member, bool isProc)
 			old->lefttype == member->lefttype &&
 			old->righttype == member->righttype)
 		{
-			if (isProc)
+			if (member->is_func)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("function number %d for (%s,%s) appears more than once",
@@ -1298,13 +1354,10 @@ addFamilyMember(List **list, OpFamilyMember *member, bool isProc)
 /*
  * Dump the operators to pg_amop
  *
- * We also make dependency entries in pg_depend for the opfamily entries.
- * If opclassoid is valid then make an INTERNAL dependency on that opclass,
- * else make an AUTO dependency on the opfamily.
+ * We also make dependency entries in pg_depend for the pg_amop entries.
  */
 static void
-storeOperators(List *opfamilyname, Oid amoid,
-			   Oid opfamilyoid, Oid opclassoid,
+storeOperators(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 			   List *operators, bool isAdd)
 {
 	Relation	rel;
@@ -1374,28 +1427,17 @@ storeOperators(List *opfamilyname, Oid amoid,
 		referenced.objectId = op->object;
 		referenced.objectSubId = 0;
 
-		if (OidIsValid(opclassoid))
-		{
-			/* if contained in an opclass, use a NORMAL dep on operator */
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		/* see comments in amapi.h about dependency strength */
+		recordDependencyOn(&myself, &referenced,
+						   op->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 
-			/* ... and an INTERNAL dep on the opclass */
-			referenced.classId = OperatorClassRelationId;
-			referenced.objectId = opclassoid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
-		}
-		else
-		{
-			/* if "loose" in the opfamily, use a AUTO dep on operator */
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+		referenced.classId = op->ref_is_family ? OperatorFamilyRelationId :
+			OperatorClassRelationId;
+		referenced.objectId = op->refobjid;
+		referenced.objectSubId = 0;
 
-			/* ... and an AUTO dep on the opfamily */
-			referenced.classId = OperatorFamilyRelationId;
-			referenced.objectId = opfamilyoid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
-		}
+		recordDependencyOn(&myself, &referenced,
+						   op->ref_is_hard ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 
 		/* A search operator also needs a dep on the referenced opfamily */
 		if (OidIsValid(op->sortfamily))
@@ -1403,8 +1445,11 @@ storeOperators(List *opfamilyname, Oid amoid,
 			referenced.classId = OperatorFamilyRelationId;
 			referenced.objectId = op->sortfamily;
 			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+			recordDependencyOn(&myself, &referenced,
+							   op->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 		}
+
 		/* Post create hook of this access method operator */
 		InvokeObjectPostCreateHook(AccessMethodOperatorRelationId,
 								   entryoid, 0);
@@ -1416,13 +1461,10 @@ storeOperators(List *opfamilyname, Oid amoid,
 /*
  * Dump the procedures (support routines) to pg_amproc
  *
- * We also make dependency entries in pg_depend for the opfamily entries.
- * If opclassoid is valid then make an INTERNAL dependency on that opclass,
- * else make an AUTO dependency on the opfamily.
+ * We also make dependency entries in pg_depend for the pg_amproc entries.
  */
 static void
-storeProcedures(List *opfamilyname, Oid amoid,
-				Oid opfamilyoid, Oid opclassoid,
+storeProcedures(List *opfamilyname, Oid amoid, Oid opfamilyoid,
 				List *procedures, bool isAdd)
 {
 	Relation	rel;
@@ -1486,28 +1528,18 @@ storeProcedures(List *opfamilyname, Oid amoid,
 		referenced.objectId = proc->object;
 		referenced.objectSubId = 0;
 
-		if (OidIsValid(opclassoid))
-		{
-			/* if contained in an opclass, use a NORMAL dep on procedure */
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		/* see comments in amapi.h about dependency strength */
+		recordDependencyOn(&myself, &referenced,
+						   proc->ref_is_hard ? DEPENDENCY_NORMAL : DEPENDENCY_AUTO);
 
-			/* ... and an INTERNAL dep on the opclass */
-			referenced.classId = OperatorClassRelationId;
-			referenced.objectId = opclassoid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
-		}
-		else
-		{
-			/* if "loose" in the opfamily, use a AUTO dep on procedure */
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+		referenced.classId = proc->ref_is_family ? OperatorFamilyRelationId :
+			OperatorClassRelationId;
+		referenced.objectId = proc->refobjid;
+		referenced.objectSubId = 0;
 
-			/* ... and an AUTO dep on the opfamily */
-			referenced.classId = OperatorFamilyRelationId;
-			referenced.objectId = opfamilyoid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
-		}
+		recordDependencyOn(&myself, &referenced,
+						   proc->ref_is_hard ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
+
 		/* Post create hook of access method procedure */
 		InvokeObjectPostCreateHook(AccessMethodProcedureRelationId,
 								   entryoid, 0);

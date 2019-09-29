@@ -388,6 +388,10 @@ extern ItemPointer ginVacuumItemPointers(GinVacuumState *gvs,
 
 /* ginvalidate.c */
 extern bool ginvalidate(Oid opclassoid);
+extern void gincheckmembers(Oid opfamilyoid,
+							Oid opclassoid,
+							List *operators,
+							List *functions);
 
 /* ginbulk.c */
 typedef struct GinEntryAccumulator

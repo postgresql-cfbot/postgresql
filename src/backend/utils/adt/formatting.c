@@ -97,6 +97,7 @@
 #include "utils/memutils.h"
 #include "utils/numeric.h"
 #include "utils/pg_locale.h"
+#include "common/unicode_norm.h"
 
 /* ----------
  * Convenience macros for error handling
@@ -220,11 +221,11 @@ typedef struct
  */
 static const char *const months_full[] = {
 	"January", "February", "March", "April", "May", "June", "July",
-	"August", "September", "October", "November", "December", NULL
+	"August", "September", "October", "November", "December"
 };
 
 static const char *const days_short[] = {
-	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", NULL
+	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
 };
 
 /* ----------
@@ -256,8 +257,8 @@ static const char *const days_short[] = {
  * matches for BC have an odd index.  So the boolean value for BC is given by
  * taking the array index of the match, modulo 2.
  */
-static const char *const adbc_strings[] = {ad_STR, bc_STR, AD_STR, BC_STR, NULL};
-static const char *const adbc_strings_long[] = {a_d_STR, b_c_STR, A_D_STR, B_C_STR, NULL};
+static const char *const adbc_strings[] = {ad_STR, bc_STR, AD_STR, BC_STR};
+static const char *const adbc_strings_long[] = {a_d_STR, b_c_STR, A_D_STR, B_C_STR};
 
 /* ----------
  * AM / PM
@@ -283,8 +284,8 @@ static const char *const adbc_strings_long[] = {a_d_STR, b_c_STR, A_D_STR, B_C_S
  * matches for PM have an odd index.  So the boolean value for PM is given by
  * taking the array index of the match, modulo 2.
  */
-static const char *const ampm_strings[] = {am_STR, pm_STR, AM_STR, PM_STR, NULL};
-static const char *const ampm_strings_long[] = {a_m_STR, p_m_STR, A_M_STR, P_M_STR, NULL};
+static const char *const ampm_strings[] = {am_STR, pm_STR, AM_STR, PM_STR};
+static const char *const ampm_strings_long[] = {a_m_STR, p_m_STR, A_M_STR, P_M_STR};
 
 /* ----------
  * Months in roman-numeral
@@ -293,10 +294,10 @@ static const char *const ampm_strings_long[] = {a_m_STR, p_m_STR, A_M_STR, P_M_S
  * ----------
  */
 static const char *const rm_months_upper[] =
-{"XII", "XI", "X", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II", "I", NULL};
+{"XII", "XI", "X", "IX", "VIII", "VII", "VI", "V", "IV", "III", "II", "I"};
 
 static const char *const rm_months_lower[] =
-{"xii", "xi", "x", "ix", "viii", "vii", "vi", "v", "iv", "iii", "ii", "i", NULL};
+{"xii", "xi", "x", "ix", "viii", "vii", "vi", "v", "iv", "iii", "ii", "i"};
 
 /* ----------
  * Roman numbers
@@ -1068,10 +1069,11 @@ static int	from_char_parse_int_len(int *dest, char **src, const int len,
 									FormatNode *node, bool *have_error);
 static int	from_char_parse_int(int *dest, char **src, FormatNode *node,
 								bool *have_error);
-static int	seq_search(char *name, const char *const *array, int type, int max, int *len);
+static int	seq_search_sqlascii(char *name, const char *const *array, int type, int max, int *len, int dim);
+static int	seq_search_localized(char *name, char **array, int max, int *len, int dim);
 static int	from_char_seq_search(int *dest, char **src,
-								 const char *const *array, int type, int max,
-								 FormatNode *node, bool *have_error);
+								 const char *const *array, char **localized_array, int type, int max,
+								 FormatNode *node, bool *have_error, int dim);
 static void do_to_timestamp(text *date_txt, text *fmt, bool std,
 							struct pg_tm *tm, fsec_t *fsec, int *fprec,
 							uint32 *flags, bool *have_error);
@@ -2454,17 +2456,18 @@ from_char_parse_int(int *dest, char **src, FormatNode *node, bool *have_error)
 }
 
 /* ----------
- * Sequential search with to upper/lower conversion
+ * Sequential search with to upper/lower conversion for SQL_ASCII array input
  * ----------
  */
 static int
-seq_search(char *name, const char *const *array, int type, int max, int *len)
+seq_search_sqlascii(char *name, const char *const *array, int type, int max, int *len, int dim)
 {
 	const char *p;
 	const char *const *a;
 	char	   *n;
 	int			last,
 				i;
+	int			index;
 
 	*len = 0;
 
@@ -2477,7 +2480,7 @@ seq_search(char *name, const char *const *array, int type, int max, int *len)
 	else if (type == ALL_LOWER)
 		*name = pg_tolower((unsigned char) *name);
 
-	for (last = 0, a = array; *a != NULL; a++)
+	for (last = 0, a = array, index = 0; index < dim; a++, index++)
 	{
 		/* compare first chars */
 		if (*name != **a)
@@ -2489,13 +2492,13 @@ seq_search(char *name, const char *const *array, int type, int max, int *len)
 			if (max && i == max)
 			{
 				*len = i;
-				return a - array;
+				return index;
 			}
 			/* full size */
 			if (*p == '\0')
 			{
 				*len = i;
-				return a - array;
+				return index;
 			}
 			/* Not found in array 'a' */
 			if (*n == '\0')
@@ -2525,6 +2528,84 @@ seq_search(char *name, const char *const *array, int type, int max, int *len)
 	return -1;
 }
 
+/* ----------
+ * Sequential search with initcap conversion for localized array input
+ * ----------
+ */
+static int
+seq_search_localized(char *name, char **array, int max, int *len, int dim)
+{
+	char 	  **a;
+	char 	   *initcap_element;
+	char 	   *initcap_name;
+	char 	   *norm_name;
+	int			index;
+	int 		mb_max;
+	int         name_len;
+	int			encoding;
+	int         norm_len;
+	int         element_len;
+
+	*len = 0;
+
+	if (!*name)
+		return -1;
+
+	encoding = GetDatabaseEncoding();
+	mb_max = max * pg_encoding_max_length(encoding);
+	name_len = strlen(name);
+	name_len = name_len < mb_max ? name_len : mb_max;
+	norm_name = name;
+	norm_len = name_len;
+
+	/* Normalize and initcap name */
+	if (mb_max > max && encoding == PG_UTF8)
+	{
+		pg_wchar   *wchar_name;
+		pg_wchar   *norm_wname;
+		size_t      name_wlen;
+		size_t      norm_wlen;
+
+		wchar_name = (pg_wchar *) palloc((name_len + 1) * sizeof(pg_wchar));
+		name_wlen = pg_mb2wchar_with_len(name, wchar_name, name_len);
+		norm_wname = unicode_normalize_kc(wchar_name);
+		pfree(wchar_name);
+		norm_wlen = pg_wchar_strlen(norm_wname);
+		if (name_wlen > norm_wlen)
+		{
+			norm_name = (char *) palloc((norm_wlen + 1) * sizeof(pg_wchar));
+			norm_len = pg_wchar2mb_with_len(norm_wname, norm_name, norm_wlen);
+		}
+		pfree(norm_wname);
+	}
+	initcap_name = str_initcap(norm_name, norm_len, DEFAULT_COLLATION_OID);
+	if (name_len != norm_len)
+		pfree(norm_name);
+
+	for (a = array, index = 0; index < dim; a++, index++)
+	{
+		/* Initcap element, assume it is normalized */
+		element_len = strlen(*a);
+		initcap_element = str_initcap(*a, element_len, DEFAULT_COLLATION_OID);
+
+#ifdef DEBUG_TO_FROM_CHAR
+		elog(DEBUG_elog_output, "Name: 0x%x, Normalized: 0x%x, Element: 0x%x",
+			 (unsigned char)*name, (unsigned char)*initcap_name, (unsigned char)*initcap_element);
+#endif
+		if (strncmp(initcap_name, initcap_element, element_len) == 0)
+		{
+			*len = element_len + name_len - norm_len;
+			pfree(initcap_element);
+			pfree(initcap_name);
+			return index;
+		}
+		pfree(initcap_element);
+	}
+
+	pfree(initcap_name);
+	return -1;
+}
+
 /*
  * Perform a sequential search in 'array' for text matching the first 'max'
  * characters of the source string.
@@ -2537,16 +2618,20 @@ seq_search(char *name, const char *const *array, int type, int max, int *len)
  * otherwise set '*have_error' and return -1.
  */
 static int
-from_char_seq_search(int *dest, char **src, const char *const *array, int type,
-					 int max, FormatNode *node, bool *have_error)
+from_char_seq_search(int *dest, char **src, const char *const *array, char **localized_array,
+					 int type, int max, FormatNode *node, bool *have_error, int dim)
 {
 	int			len;
 
-	*dest = seq_search(*src, array, type, max, &len);
+	if (localized_array == NULL)
+		*dest = seq_search_sqlascii(*src, array, type, max, &len, dim);
+	else
+		*dest = seq_search_localized(*src, localized_array, max, &len, dim);
 	if (len <= 0)
 	{
 		char		copy[DCH_MAX_ITEM_SIZ + 1];
 
+		/* We use byte length, localized names encoding is ignored */
 		Assert(max <= DCH_MAX_ITEM_SIZ);
 		strlcpy(copy, *src, max + 1);
 
@@ -3174,12 +3259,16 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 	int			len,
 				value;
 	bool		fx_mode = std;
+	char	  **localized_names;
 
 	/* number of extra skipped characters (more than given in format string) */
 	int			extra_skip = 0;
+	/* cache localized days and months */
+	cache_locale_time();
 
 	for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++)
 	{
+		localized_names = NULL;
 		/*
 		 * Ignore spaces at the beginning of the string and before fields when
 		 * not in FX (fixed width) mode.
@@ -3278,8 +3367,9 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_P_M:
 			case DCH_a_m:
 			case DCH_p_m:
-				from_char_seq_search(&value, &s, ampm_strings_long,
-									 ALL_UPPER, n->key->len, n, have_error);
+				from_char_seq_search(&value, &s, ampm_strings_long, localized_names,
+									 ALL_UPPER, n->key->len, n, have_error,
+									 lengthof(ampm_strings_long));
 				CHECK_ERROR;
 				from_char_set_int(&out->pm, value % 2, n, have_error);
 				CHECK_ERROR;
@@ -3289,8 +3379,9 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_PM:
 			case DCH_am:
 			case DCH_pm:
-				from_char_seq_search(&value, &s, ampm_strings,
-									 ALL_UPPER, n->key->len, n, have_error);
+				from_char_seq_search(&value, &s, ampm_strings, localized_names,
+									 ALL_UPPER, n->key->len, n, have_error,
+									 lengthof(ampm_strings));
 				CHECK_ERROR;
 				from_char_set_int(&out->pm, value % 2, n, have_error);
 				CHECK_ERROR;
@@ -3402,8 +3493,9 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_B_C:
 			case DCH_a_d:
 			case DCH_b_c:
-				from_char_seq_search(&value, &s, adbc_strings_long,
-									 ALL_UPPER, n->key->len, n, have_error);
+				from_char_seq_search(&value, &s, adbc_strings_long, localized_names,
+									 ALL_UPPER, n->key->len, n, have_error,
+									 lengthof(adbc_strings_long));
 				CHECK_ERROR;
 				from_char_set_int(&out->bc, value % 2, n, have_error);
 				CHECK_ERROR;
@@ -3412,8 +3504,9 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_BC:
 			case DCH_ad:
 			case DCH_bc:
-				from_char_seq_search(&value, &s, adbc_strings,
-									 ALL_UPPER, n->key->len, n, have_error);
+				from_char_seq_search(&value, &s, adbc_strings, localized_names,
+									 ALL_UPPER, n->key->len, n, have_error,
+									 lengthof(adbc_strings));
 				CHECK_ERROR;
 				from_char_set_int(&out->bc, value % 2, n, have_error);
 				CHECK_ERROR;
@@ -3421,8 +3514,11 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_MONTH:
 			case DCH_Month:
 			case DCH_month:
-				from_char_seq_search(&value, &s, months_full, ONE_UPPER,
-									 MAX_MONTH_LEN, n, have_error);
+				if (S_TM(n->suffix))
+					localized_names = localized_full_months;
+				from_char_seq_search(&value, &s, months_full, localized_names,
+									 ONE_UPPER, MAX_MONTH_LEN, n, have_error,
+									 lengthof(months_full));
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, value + 1, n, have_error);
 				CHECK_ERROR;
@@ -3430,8 +3526,11 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_MON:
 			case DCH_Mon:
 			case DCH_mon:
-				from_char_seq_search(&value, &s, months, ONE_UPPER,
-									 MAX_MON_LEN, n, have_error);
+				if (S_TM(n->suffix))
+					localized_names = localized_abbrev_months;
+				from_char_seq_search(&value, &s, months, localized_names,
+									 ONE_UPPER, MAX_MON_LEN, n, have_error,
+									 lengthof(months_full));
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, value + 1, n, have_error);
 				CHECK_ERROR;
@@ -3444,8 +3543,11 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_DAY:
 			case DCH_Day:
 			case DCH_day:
-				from_char_seq_search(&value, &s, days, ONE_UPPER,
-									 MAX_DAY_LEN, n, have_error);
+				if (S_TM(n->suffix))
+					localized_names = localized_full_days;
+				from_char_seq_search(&value, &s, days, localized_names,
+									 ONE_UPPER, MAX_DAY_LEN, n, have_error,
+									 lengthof(days_short));
 				CHECK_ERROR;
 				from_char_set_int(&out->d, value, n, have_error);
 				CHECK_ERROR;
@@ -3454,8 +3556,11 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 			case DCH_DY:
 			case DCH_Dy:
 			case DCH_dy:
-				from_char_seq_search(&value, &s, days, ONE_UPPER,
-									 MAX_DY_LEN, n, have_error);
+				if (S_TM(n->suffix))
+					localized_names = localized_abbrev_days;
+				from_char_seq_search(&value, &s, days_short, localized_names,
+									 ONE_UPPER, MAX_DY_LEN, n, have_error,
+									 lengthof(days_short));
 				CHECK_ERROR;
 				from_char_set_int(&out->d, value, n, have_error);
 				CHECK_ERROR;
@@ -3571,16 +3676,18 @@ DCH_from_char(FormatNode *node, char *in, TmFromChar *out, bool std,
 				SKIP_THth(s, n->suffix);
 				break;
 			case DCH_RM:
-				from_char_seq_search(&value, &s, rm_months_upper,
-									 ALL_UPPER, MAX_RM_LEN, n, have_error);
+				from_char_seq_search(&value, &s, rm_months_upper, localized_names,
+									 ALL_UPPER, MAX_RM_LEN, n, have_error,
+									 lengthof(rm_months_upper));
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, MONTHS_PER_YEAR - value,
 								  n, have_error);
 				CHECK_ERROR;
 				break;
 			case DCH_rm:
-				from_char_seq_search(&value, &s, rm_months_lower,
-									 ALL_LOWER, MAX_RM_LEN, n, have_error);
+				from_char_seq_search(&value, &s, rm_months_lower, localized_names,
+									 ALL_LOWER, MAX_RM_LEN, n, have_error,
+									 lengthof(rm_months_lower));
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, MONTHS_PER_YEAR - value,
 								  n, have_error);
@@ -4356,8 +4463,8 @@ do_to_timestamp(text *date_txt, text *fmt, bool std,
 		}
 
 #ifdef DEBUG_TO_FROM_CHAR
-		/* dump_node(format, fmt_len); */
-		/* dump_index(DCH_keywords, DCH_index); */
+		dump_node(format, fmt_len);
+		dump_index(DCH_keywords, DCH_index);
 #endif
 
 		DCH_from_char(format, date_str, &tmfc, std, have_error);

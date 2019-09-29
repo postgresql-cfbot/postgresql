@@ -461,6 +461,24 @@ SELECT to_char(date '2010-04-01', 'DD TMMON YYYY' COLLATE "tr_TR");
  01 NİS 2010
 (1 row)
 
+-- to_date
+SET DateStyle='ISO, YMD';
+SET TimeZone='UTC';
+SELECT to_timestamp('01 ŞUB 2010', 'DD TMMON YYYY'); -- normalized \u015E
+      to_timestamp      
+------------------------
+ 2010-02-01 00:00:00+00
+(1 row)
+
+SELECT to_timestamp('01 ŞUB 2010', 'DD TMMON YYYY'); -- not normalized \u0053+\u0327
+      to_timestamp      
+------------------------
+ 2010-02-01 00:00:00+00
+(1 row)
+
+SELECT to_timestamp('1234567890ab 2010', 'TMMONTH YYYY'); -- fail
+ERROR:  invalid value "123456789" for "MONTH"
+DETAIL:  The given value did not match any of the allowed values for this field.
 -- backwards parsing
 CREATE VIEW collview1 AS SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'bbc';
 CREATE VIEW collview2 AS SELECT a, b FROM collate_test1 ORDER BY b COLLATE "C";

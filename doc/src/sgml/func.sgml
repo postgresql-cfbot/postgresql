@@ -6578,8 +6578,17 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
      <listitem>
       <para>
        <literal>TM</literal> does not include trailing blanks.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
        <function>to_timestamp</function> and <function>to_date</function> ignore
-       the <literal>TM</literal> modifier.
+       the case when receiving names as an input.  For example, either
+       <literal>to_timestamp('2000-JUN', 'YYYY-MON')</literal> or
+       <literal>to_timestamp('2000-Jun', 'YYYY-MON')</literal> or
+       <literal>to_timestamp('2000-JUN', 'YYYY-mon')</literal> work and return
+       the same output
       </para>
      </listitem>
 

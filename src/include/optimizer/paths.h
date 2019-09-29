@@ -140,6 +140,10 @@ extern List *generate_join_implied_equalities(PlannerInfo *root,
 											  Relids join_relids,
 											  Relids outer_relids,
 											  RelOptInfo *inner_rel);
+extern List *generate_join_implied_equalities_for_all(PlannerInfo *root,
+													  Relids join_relids,
+													  Relids outer_relids,
+													  Relids inner_relids);
 extern List *generate_join_implied_equalities_for_ecs(PlannerInfo *root,
 													  List *eclasses,
 													  Relids join_relids,

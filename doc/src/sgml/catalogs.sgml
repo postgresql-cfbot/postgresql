@@ -9975,6 +9975,43 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </entry>
      </row>
 
+     <row>
+      <entry><structfield>wal_status</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+
+      <entry>Availability of WAL records claimed by this
+      slot. <literal>streaming</literal>, <literal>keeping</literal>,
+      <literal>losing</literal> or <literal>lost</literal>.
+      <literal>streaming</literal> means that the claimed records are
+      available within max_wal_size. <literal>keeping</literal> means
+      max_wal_size is exceeded but still held by replication slots or
+      wal_keep_segments.
+      <literal>losing</literal> means that some of them are on the verge of
+      removal but the using session may go furether.
+      <literal>lost</literal> means that some of them are definitely lost and
+      the session that used this slot cannot continue replication. This state
+      also implies the using session has been stopped.
+
+      The last two states are seen only when
+      <xref linkend="guc-max-slot-wal-keep-size"/> is
+      non-negative. If <structfield>restart_lsn</structfield> is NULL, this
+      field is null.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structfield>remain</structfield></entry>
+      <entry><type>bigint</type></entry>
+      <entry></entry>
+      <entry>The amount in bytes WAL location (LSN) can advance that bytes
+        until this slot may lose required WAL
+        records. If <structfield>restart_lsn</structfield> is null
+        or <structfield>wal_status</structfield> is <literal>losing</literal>
+        or <literal>lost</literal>, this field is null.
+      </entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

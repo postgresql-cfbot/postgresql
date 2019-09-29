@@ -221,7 +221,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 11
+#define PG_GET_REPLICATION_SLOTS_COLS 13
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -276,6 +276,8 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		Oid			database;
 		NameData	slot_name;
 		NameData	plugin;
+		char	   *walstate;
+		int64		remaining_bytes;
 		int			i;
 
 		if (!slot->in_use)
@@ -340,6 +342,19 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 
 		if (confirmed_flush_lsn != InvalidXLogRecPtr)
 			values[i++] = LSNGetDatum(confirmed_flush_lsn);
+		else
+			nulls[i++] = true;
+
+		walstate =
+			GetLsnAvailability(restart_lsn, active_pid, &remaining_bytes);
+
+		if (walstate)
+			values[i++] = CStringGetTextDatum(walstate);
+		else
+			nulls[i++] = true;
+
+		if (remaining_bytes >= 0)
+			values[i++] = Int64GetDatum(remaining_bytes);
 		else
 			nulls[i++] = true;
 

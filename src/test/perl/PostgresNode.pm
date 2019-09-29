@@ -698,6 +698,10 @@ port = $port
 		$self->append_conf('postgresql.conf',
 			"unix_socket_directories = '$host'");
 	}
+	$self->append_conf('postgresql.conf',
+					   qq(primary_slot_name = $params{primary_slot_name}))
+	  if (defined $params{primary_slot_name});
+
 	$self->enable_streaming($root_node) if $params{has_streaming};
 	$self->enable_restoring($root_node) if $params{has_restoring};
 	return;

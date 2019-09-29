@@ -38,7 +38,8 @@ typedef struct ParallelExecutorInfo
 
 extern ParallelExecutorInfo *ExecInitParallelPlan(PlanState *planstate,
 												  EState *estate, Bitmapset *sendParam, int nworkers,
-												  int64 tuples_needed);
+												  int64 tuples_needed,
+												  uint64 queryId);
 extern void ExecParallelCreateReaders(ParallelExecutorInfo *pei);
 extern void ExecParallelFinish(ParallelExecutorInfo *pei);
 extern void ExecParallelCleanup(ParallelExecutorInfo *pei);

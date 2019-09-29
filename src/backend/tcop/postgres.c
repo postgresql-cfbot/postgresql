@@ -695,6 +695,8 @@ pg_analyze_and_rewrite(RawStmt *parsetree, const char *query_string,
 	query = parse_analyze(parsetree, query_string, paramTypes, numParams,
 						  queryEnv);
 
+	pgstat_report_queryid(query->queryId);
+
 	if (log_parser_stats)
 		ShowUsage("PARSE ANALYSIS STATISTICS");
 
@@ -745,6 +747,8 @@ pg_analyze_and_rewrite_params(RawStmt *parsetree,
 		(*post_parse_analyze_hook) (pstate, query);
 
 	free_parsestate(pstate);
+
+	pgstat_report_queryid(query->queryId);
 
 	if (log_parser_stats)
 		ShowUsage("PARSE ANALYSIS STATISTICS");
@@ -1076,6 +1080,8 @@ exec_simple_query(const char *query_string)
 		Portal		portal;
 		DestReceiver *receiver;
 		int16		format;
+
+		pgstat_report_queryid(0);
 
 		/*
 		 * Get the command name for use in status display (it also becomes the

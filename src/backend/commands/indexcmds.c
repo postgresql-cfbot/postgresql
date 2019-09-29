@@ -989,7 +989,7 @@ DefineIndex(Oid relationId,
 					 collationObjectId, classObjectId,
 					 coloptions, reloptions,
 					 flags, constr_flags,
-					 allowSystemTableMods, !check_rights,
+					 allowSystemTableDDL, !check_rights,
 					 &createdConstraintId);
 
 	ObjectAddressSet(address, RelationRelationId, indexRelationId);

@@ -56,7 +56,7 @@ extern Relation heap_create(const char *relname,
 							char relpersistence,
 							bool shared_relation,
 							bool mapped_relation,
-							bool allow_system_table_mods,
+							bool allow_system_table_ddl,
 							TransactionId *relfrozenxid,
 							MultiXactId *relminmxid);
 
@@ -77,7 +77,7 @@ extern Oid	heap_create_with_catalog(const char *relname,
 									 OnCommitAction oncommit,
 									 Datum reloptions,
 									 bool use_user_acl,
-									 bool allow_system_table_mods,
+									 bool allow_system_table_ddl,
 									 bool is_internal,
 									 Oid relrewrite,
 									 ObjectAddress *typaddress);

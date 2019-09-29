@@ -682,7 +682,7 @@ UpdateIndexRelation(Oid indexoid,
  *			create a partitioned index (table must be partitioned)
  * constr_flags: flags passed to index_constraint_create
  *		(only if INDEX_CREATE_ADD_CONSTRAINT is set)
- * allow_system_table_mods: allow table to be a system catalog
+ * allow_system_table_ddl: allow table to be a system catalog
  * is_internal: if true, post creation hook for new index
  * constraintId: if not NULL, receives OID of created constraint
  *
@@ -705,7 +705,7 @@ index_create(Relation heapRelation,
 			 Datum reloptions,
 			 bits16 flags,
 			 bits16 constr_flags,
-			 bool allow_system_table_mods,
+			 bool allow_system_table_ddl,
 			 bool is_internal,
 			 Oid *constraintId)
 {
@@ -755,7 +755,7 @@ index_create(Relation heapRelation,
 	if (indexInfo->ii_NumIndexAttrs < 1)
 		elog(ERROR, "must index at least one column");
 
-	if (!allow_system_table_mods &&
+	if (!allow_system_table_ddl &&
 		IsSystemRelation(heapRelation) &&
 		IsNormalProcessingMode())
 		ereport(ERROR,
@@ -931,7 +931,7 @@ index_create(Relation heapRelation,
 								relpersistence,
 								shared_relation,
 								mapped_relation,
-								allow_system_table_mods,
+								allow_system_table_ddl,
 								&relfrozenxid,
 								&relminmxid);
 
@@ -1056,7 +1056,7 @@ index_create(Relation heapRelation,
 												indexRelationName,
 												constraintType,
 												constr_flags,
-												allow_system_table_mods,
+												allow_system_table_ddl,
 												is_internal);
 			if (constraintId)
 				*constraintId = localaddr.objectId;
@@ -1775,7 +1775,7 @@ index_concurrently_set_dead(Oid heapId, Oid indexId)
  *		INDEX_CONSTR_CREATE_UPDATE_INDEX: update the pg_index row
  *		INDEX_CONSTR_CREATE_REMOVE_OLD_DEPS: remove existing dependencies
  *			of index on table's columns
- * allow_system_table_mods: allow table to be a system catalog
+ * allow_system_table_ddl: allow table to be a system catalog
  * is_internal: index is constructed due to internal process
  */
 ObjectAddress
@@ -1786,7 +1786,7 @@ index_constraint_create(Relation heapRelation,
 						const char *constraintName,
 						char constraintType,
 						bits16 constr_flags,
-						bool allow_system_table_mods,
+						bool allow_system_table_ddl,
 						bool is_internal)
 {
 	Oid			namespaceId = RelationGetNamespace(heapRelation);
@@ -1808,7 +1808,7 @@ index_constraint_create(Relation heapRelation,
 	Assert(!IsBootstrapProcessingMode());
 
 	/* enforce system-table restriction */
-	if (!allow_system_table_mods &&
+	if (!allow_system_table_ddl &&
 		IsSystemRelation(heapRelation) &&
 		IsNormalProcessingMode())
 		ereport(ERROR,

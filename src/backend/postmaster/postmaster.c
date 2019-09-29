@@ -745,7 +745,7 @@ PostmasterMain(int argc, char *argv[])
 				break;
 
 			case 'O':
-				SetConfigOption("allow_system_table_mods", "true", PGC_POSTMASTER, PGC_S_ARGV);
+				SetConfigOption("allow_system_table_ddl", "true", PGC_POSTMASTER, PGC_S_ARGV);
 				break;
 
 			case 'o':

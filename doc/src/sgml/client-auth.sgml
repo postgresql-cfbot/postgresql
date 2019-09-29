@@ -54,6 +54,35 @@
   database user names and OS user names.
  </para>
 
+ <sect1 id="auth-cluster-owner">
+  <title>Cluster Owner Authentication</title>
+
+  <para>
+   When connecting over the Unix-domain socket, if the client user is the same
+   as the user that runs the database server (which is also the same as the
+   owner of the data directory), then access is immediately granted without
+   further checking.  This allows a database cluster owner to connect to
+   their own database server without being subject to the rest of client
+   authentication (described in the rest of this chapter).
+  </para>
+
+  <para>
+   This mechanism is only available on operating systems providing the
+   <function>getpeereid()</function> function, the
+   <symbol>SO_PEERCRED</symbol> socket parameter, or similar mechanisms.
+   Currently that includes <systemitem class="osname">Linux</systemitem>, most
+   flavors of <systemitem class="osname">BSD</systemitem> including
+   <systemitem class="osname">macOS</systemitem>, and <systemitem
+   class="osname">Solaris</systemitem>.  If it is not available, then cluster
+   owner connections are subject to the normal client authentication.
+  </para>
+
+  <para>
+   This mechanism can be disabled using the configuration parameter <xref
+   linkend="guc-cluster-owner-bypass-auth"/>.
+  </para>
+ </sect1>
+
  <sect1 id="auth-pg-hba-conf">
   <title>The <filename>pg_hba.conf</filename> File</title>
 

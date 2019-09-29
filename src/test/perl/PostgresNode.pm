@@ -447,6 +447,7 @@ sub init
 	print $conf "log_statement = all\n";
 	print $conf "log_replication_commands = on\n";
 	print $conf "wal_retrieve_retry_interval = '500ms'\n";
+	print $conf "cluster_owner_bypass_auth = off\n";  # to enable testing hba etc.
 
 	# If a setting tends to affect whether tests pass or fail, print it after
 	# TEMP_CONFIG.  Otherwise, print it before TEMP_CONFIG, thereby permitting

@@ -1952,6 +1952,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"cluster_owner_bypass_auth", PGC_SIGHUP, CONN_AUTH_AUTH,
+			gettext_noop("Whether cluster owner connecting over Unix-domain socket bypasses authentication."),
+		},
+		&cluster_owner_bypass_auth,
+		true,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

@@ -234,14 +234,28 @@ extern int	pclose_check(FILE *stream);
 extern int	pgrename(const char *from, const char *to);
 extern int	pgunlink(const char *path);
 
+#ifdef WIN32
+extern int	pgrename_temp(const char *from, const char *to);
+#endif
+
 /* Include this first so later includes don't see these defines */
 #ifdef _MSC_VER
 #include <io.h>
 #endif
 
+#ifdef WIN32
+#define rename_temp(from, to)	pgrename_temp(from, to)
+#else
+#define rename_temp(from, to)	pgrename(from, to)
+#endif
+
 #define rename(from, to)		pgrename(from, to)
 #define unlink(path)			pgunlink(path)
-#endif							/* defined(WIN32) || defined(__CYGWIN__) */
+#else							/* defined(WIN32) || defined(__CYGWIN__) */
+
+#define rename_temp(from, to)	rename(from, to)
+
+#endif
 
 /*
  *	Win32 also doesn't have symlinks, but we can emulate them with

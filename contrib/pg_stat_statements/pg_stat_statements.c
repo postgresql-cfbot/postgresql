@@ -1022,7 +1022,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		/* parse command tag to retrieve the number of affected rows. */
 		if (completionTag &&
 			strncmp(completionTag, "COPY ", 5) == 0)
-			rows = pg_strtouint64(completionTag + 5, NULL, 10);
+			rows = pg_strtouint64_check(completionTag + 5);
 		else
 			rows = 0;
 

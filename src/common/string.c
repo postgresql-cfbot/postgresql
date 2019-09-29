@@ -21,6 +21,7 @@
 #include "postgres_fe.h"
 #endif
 
+#include "common/int.h"
 #include "common/string.h"
 
 
@@ -57,6 +58,348 @@ strtoint(const char *pg_restrict str, char **pg_restrict endptr, int base)
 	return (int) val;
 }
 
+
+/*
+ * pg_strtoint16
+ *
+ * Convert input string to a signed 16-bit integer.  Allows any number of
+ * leading or trailing whitespace characters.
+ *
+ * NB: Accumulate input as a negative number, to deal with two's complement
+ * representation of the most negative number, which can't be represented as a
+ * positive number.
+ *
+ * The function returns immediately if the conversion failed with a status
+ * value to let the caller handle the error.  On success, the result is
+ * stored in "*result".
+ */
+pg_strtoint_status
+pg_strtoint16(const char *s, int16 *result)
+{
+	const char *ptr = s;
+	int16		tmp = 0;
+	bool		neg = false;
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '-')
+	{
+		ptr++;
+		neg = true;
+	}
+	else if (*ptr == '+')
+		ptr++;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		int8		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_s16_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace, but not other trailing chars */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	if (!neg)
+	{
+		/* could fail if input is most negative number */
+		if (unlikely(tmp == PG_INT16_MIN))
+			return PG_STRTOINT_RANGE_ERROR;
+		tmp = -tmp;
+	}
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
+
+/*
+ * pg_strtoint32
+ *
+ * Same as previously, for 32-bit signed integer.
+ */
+pg_strtoint_status
+pg_strtoint32(const char *s, int32 *result)
+{
+	const char *ptr = s;
+	int32		tmp = 0;
+	bool		neg = false;
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '-')
+	{
+		ptr++;
+		neg = true;
+	}
+	else if (*ptr == '+')
+		ptr++;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		int8		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_s32_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace, but not other trailing chars */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	if (!neg)
+	{
+		/* could fail if input is most negative number */
+		if (unlikely(tmp == PG_INT32_MIN))
+			return PG_STRTOINT_RANGE_ERROR;
+		tmp = -tmp;
+	}
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
+
+/*
+ * pg_strtoint64
+ *
+ * Same as previously, for 64-bit signed integer.
+ */
+pg_strtoint_status
+pg_strtoint64(const char *str, int64 *result)
+{
+	const char *ptr = str;
+	int64		tmp = 0;
+	bool		neg = false;
+
+	/*
+	 * Do our own scan, rather than relying on sscanf which might be broken
+	 * for long long.
+	 *
+	 * As INT64_MIN can't be stored as a positive 64 bit integer, accumulate
+	 * value as a negative number.
+	 */
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '-')
+	{
+		ptr++;
+		neg = true;
+	}
+	else if (*ptr == '+')
+		ptr++;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		int64		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_s64_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace, but not other trailing chars */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	if (!neg)
+	{
+		if (unlikely(tmp == PG_INT64_MIN))
+			return PG_STRTOINT_RANGE_ERROR;
+		tmp = -tmp;
+	}
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
+
+/*
+ * pg_strtouint16
+ *
+ * Convert input string to an unsigned 16-bit integer.  Allows any number of
+ * leading or trailing whitespace characters.
+ *
+ * The function returns immediately if the conversion failed with a status
+ * value to let the caller handle the error.  On success, the result is
+ * stored in "*result".
+ */
+pg_strtoint_status
+pg_strtouint16(const char *str, uint16 *result)
+{
+	const char *ptr = str;
+	uint16		tmp = 0;
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '+')
+		ptr++;
+	else if (unlikely(*ptr == '-'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		uint8		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_u16_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_add_u16_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* but not other trailing chars */
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
+
+/*
+ * pg_strtouint32
+ *
+ * Same as previously, for 32-bit unsigned integer.
+ */
+pg_strtoint_status
+pg_strtouint32(const char *str, uint32 *result)
+{
+	const char *ptr = str;
+	uint32		tmp = 0;
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '+')
+		ptr++;
+	else if (unlikely(*ptr == '-'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		uint8		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_u32_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_add_u32_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* but not other trailing chars */
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
+
+/*
+ * pg_strtouint64
+ *
+ * Same as previously, for 64-bit unsigned integer.
+ */
+pg_strtoint_status
+pg_strtouint64(const char *str, uint64 *result)
+{
+	const char *ptr = str;
+	uint64		tmp = 0;
+
+	/* skip leading spaces */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '+')
+		ptr++;
+	else if (unlikely(*ptr == '-'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* require at least one digit */
+	if (unlikely(!isdigit((unsigned char) *ptr)))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	/* process digits, we know that we have one ahead per the last check */
+	do
+	{
+		uint64		digit = (*ptr++ - '0');
+
+		if (unlikely(pg_mul_u64_overflow(tmp, 10, &tmp)) ||
+			unlikely(pg_add_u64_overflow(tmp, digit, &tmp)))
+			return PG_STRTOINT_RANGE_ERROR;
+	}
+	while (isdigit((unsigned char) *ptr));
+
+	/* allow trailing whitespace */
+	while (isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* but not other trailing chars */
+	if (unlikely(*ptr != '\0'))
+		return PG_STRTOINT_SYNTAX_ERROR;
+
+	*result = tmp;
+	return PG_STRTOINT_OK;
+}
 
 /*
  * pg_clean_ascii -- Replace any non-ASCII chars with a '?' char

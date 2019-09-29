@@ -15,6 +15,7 @@
 #define BUILTINS_H
 
 #include "fmgr.h"
+#include "common/string.h"
 #include "nodes/nodes.h"
 #include "utils/fmgrprotos.h"
 
@@ -43,14 +44,85 @@ extern int	namestrcmp(Name name, const char *str);
 
 /* numutils.c */
 extern int32 pg_atoi(const char *s, int size, int c);
-extern int16 pg_strtoint16(const char *s);
-extern int32 pg_strtoint32(const char *s);
 extern void pg_itoa(int16 i, char *a);
 extern void pg_ltoa(int32 l, char *a);
 extern void pg_lltoa(int64 ll, char *a);
 extern char *pg_ltostr_zeropad(char *str, int32 value, int32 minwidth);
 extern char *pg_ltostr(char *str, int32 value);
-extern uint64 pg_strtouint64(const char *str, char **endptr, int base);
+extern void pg_strtoint_error(pg_strtoint_status status,
+							  const char *input,
+							  const char *type) pg_attribute_noreturn();
+
+/*
+ * Set of routines to convert an input string to a signed or unsigned
+ * 16-bit, 32-bit or 64-bit integer.  Those routines throw ereport()
+ * upon bad input format or overflow.
+ */
+static inline int16
+pg_strtoint16_check(const char *s)
+{
+	int16		result;
+	pg_strtoint_status status = pg_strtoint16(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "int16");
+	return result;
+}
+
+static inline int32
+pg_strtoint32_check(const char *s)
+{
+	int32		result;
+	pg_strtoint_status status = pg_strtoint32(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "int32");
+	return result;
+}
+
+static inline int64
+pg_strtoint64_check(const char *s)
+{
+	int64		result;
+	pg_strtoint_status status = pg_strtoint64(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "int64");
+	return result;
+}
+
+static inline uint16
+pg_strtouint16_check(const char *s)
+{
+	uint16		result;
+	pg_strtoint_status status = pg_strtouint16(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "uint16");
+	return result;
+}
+
+static inline uint32
+pg_strtouint32_check(const char *s)
+{
+	uint32		result;
+	pg_strtoint_status status = pg_strtouint32(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "uint32");
+	return result;
+}
+
+static inline uint64
+pg_strtouint64_check(const char *s)
+{
+	uint64		result;
+	pg_strtoint_status status = pg_strtouint64(s, &result);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, s, "uint64");
+	return result;
+}
 
 /* oid.c */
 extern oidvector *buildoidvector(const Oid *oids, int n);

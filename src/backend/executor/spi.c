@@ -2338,8 +2338,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 					CreateTableAsStmt *ctastmt = (CreateTableAsStmt *) stmt->utilityStmt;
 
 					if (strncmp(completionTag, "SELECT ", 7) == 0)
-						_SPI_current->processed =
-							pg_strtouint64(completionTag + 7, NULL, 10);
+						_SPI_current->processed = pg_strtouint64_check(completionTag + 7);
 					else
 					{
 						/*
@@ -2361,8 +2360,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 				else if (IsA(stmt->utilityStmt, CopyStmt))
 				{
 					Assert(strncmp(completionTag, "COPY ", 5) == 0);
-					_SPI_current->processed = pg_strtouint64(completionTag + 5,
-															 NULL, 10);
+					_SPI_current->processed = pg_strtouint64_check(completionTag + 5);
 				}
 			}
 

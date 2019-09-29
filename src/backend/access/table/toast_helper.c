@@ -17,6 +17,7 @@
 #include "access/detoast.h"
 #include "access/table.h"
 #include "access/toast_helper.h"
+#include "access/tableam.h"
 #include "access/toast_internals.h"
 
 /*
@@ -135,9 +136,9 @@ toast_tuple_init(ToastTupleContext *ttc)
 			{
 				ttc->ttc_attr[i].tai_oldexternal = new_value;
 				if (att->attstorage == 'p')
-					new_value = heap_tuple_untoast_attr(new_value);
+					new_value = detoast_attr(new_value);
 				else
-					new_value = heap_tuple_fetch_attr(new_value);
+					new_value = detoast_external_attr(new_value);
 				ttc->ttc_values[i] = PointerGetDatum(new_value);
 				ttc->ttc_attr[i].tai_colflags |= TOASTCOL_NEEDS_FREE;
 				ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
@@ -247,26 +248,49 @@ toast_tuple_try_compression(ToastTupleContext *ttc, int attribute)
  * Move an attribute to external storage.
  */
 void
-toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options)
+toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options,
+						int max_chunk_size)
 {
 	Datum	   *value = &ttc->ttc_values[attribute];
 	Datum		old_value = *value;
 	ToastAttrInfo *attr = &ttc->ttc_attr[attribute];
 
-	attr->tai_colflags |= TOASTCOL_IGNORE;
-	*value = toast_save_datum(ttc->ttc_rel, old_value, attr->tai_oldexternal,
-							  options);
+	/* Initialize for TOAST table access, if not yet done. */
+	if (ttc->ttc_toastrel == NULL)
+	{
+		ttc->ttc_toastrel =
+			table_open(ttc->ttc_rel->rd_rel->reltoastrelid, RowExclusiveLock);
+		ttc->ttc_validtoastidx = toast_open_indexes(ttc->ttc_toastrel,
+													RowExclusiveLock,
+													&ttc->ttc_toastidxs,
+													&ttc->ttc_ntoastidxs);
+	}
+	if (ttc->ttc_toastslot == NULL)
+		ttc->ttc_toastslot = table_slot_create(ttc->ttc_toastrel, NULL);
+
+	/* Do the real work. */
+	*value = toast_save_datum(ttc->ttc_toastrel, ttc->ttc_toastslot,
+							  ttc->ttc_ntoastidxs, ttc->ttc_toastidxs,
+							  ttc->ttc_validtoastidx,
+							  ttc->ttc_rel->rd_toastoid,
+							  old_value, attr->tai_oldexternal,
+							  options, max_chunk_size);
+
+	/* Update bookkeeping information. */
 	if ((attr->tai_colflags & TOASTCOL_NEEDS_FREE) != 0)
 		pfree(DatumGetPointer(old_value));
-	attr->tai_colflags |= TOASTCOL_NEEDS_FREE;
+	attr->tai_colflags |= (TOASTCOL_NEEDS_FREE | TOASTCOL_IGNORE);
 	ttc->ttc_flags |= (TOAST_NEEDS_CHANGE | TOAST_NEEDS_FREE);
 }
 
 /*
  * Perform appropriate cleanup after one tuple has been subjected to TOAST.
+ *
+ * Pass cleanup_toastrel as true to destroy and clear ttc_toastrel and
+ * ttc_toastslot, or false if caller will do it.
  */
 void
-toast_tuple_cleanup(ToastTupleContext *ttc)
+toast_tuple_cleanup(ToastTupleContext *ttc, bool cleanup_toastrel)
 {
 	TupleDesc	tupleDesc = ttc->ttc_rel->rd_att;
 	int			numAttrs = tupleDesc->natts;
@@ -294,13 +318,45 @@ toast_tuple_cleanup(ToastTupleContext *ttc)
 	{
 		int			i;
 
+		/* Initialize for TOAST table access, if not yet done. */
+		if (ttc->ttc_toastrel == NULL)
+		{
+			ttc->ttc_toastrel =
+				table_open(ttc->ttc_rel->rd_rel->reltoastrelid,
+						   RowExclusiveLock);
+			ttc->ttc_validtoastidx = toast_open_indexes(ttc->ttc_toastrel,
+														RowExclusiveLock,
+														&ttc->ttc_toastidxs,
+														&ttc->ttc_ntoastidxs);
+		}
+
+		/* Delete those attributes which require it. */
 		for (i = 0; i < numAttrs; i++)
 		{
 			ToastAttrInfo *attr = &ttc->ttc_attr[i];
 
 			if ((attr->tai_colflags & TOASTCOL_NEEDS_DELETE_OLD) != 0)
-				toast_delete_datum(ttc->ttc_rel, ttc->ttc_oldvalues[i], false);
+				toast_delete_datum(ttc->ttc_toastrel, ttc->ttc_ntoastidxs,
+								   ttc->ttc_toastidxs, ttc->ttc_validtoastidx,
+								   ttc->ttc_oldvalues[i], false, 0);
 		}
+	}
+
+	/*
+	 * Close toast table and indexes and drop slot, if previously done and
+	 * if caller requests it.
+	 */
+	if (cleanup_toastrel && ttc->ttc_toastrel != NULL)
+	{
+		if (ttc->ttc_toastslot != NULL)
+		{
+			ExecDropSingleTupleTableSlot(ttc->ttc_toastslot);
+			ttc->ttc_toastslot = NULL;
+		}
+		toast_close_indexes(ttc->ttc_toastidxs, ttc->ttc_ntoastidxs,
+							RowExclusiveLock);
+		table_close(ttc->ttc_toastrel, RowExclusiveLock);
+		ttc->ttc_toastrel = NULL;
 	}
 }
 
@@ -310,22 +366,43 @@ toast_tuple_cleanup(ToastTupleContext *ttc)
  */
 void
 toast_delete_external(Relation rel, Datum *values, bool *isnull,
-					  bool is_speculative)
+					  bool is_speculative, uint32 specToken)
 {
 	TupleDesc	tupleDesc = rel->rd_att;
 	int			numAttrs = tupleDesc->natts;
 	int			i;
+	Relation    toastrel = NULL;
+	Relation   *toastidxs;
+	int         num_indexes;
+	int         validIndex;
 
 	for (i = 0; i < numAttrs; i++)
 	{
-		if (TupleDescAttr(tupleDesc, i)->attlen == -1)
-		{
-			Datum		value = values[i];
+		Datum	value;
 
-			if (isnull[i])
-				continue;
-			else if (VARATT_IS_EXTERNAL_ONDISK(PointerGetDatum(value)))
-				toast_delete_datum(rel, value, is_speculative);
+		if (isnull[i] || TupleDescAttr(tupleDesc, i)->attlen != -1)
+			continue;
+
+		value = values[i];
+		if (!VARATT_IS_EXTERNAL_ONDISK(PointerGetDatum(value)))
+			continue;
+
+		/* Initialize for TOAST table access, if not yet done. */
+		if (toastrel == NULL)
+		{
+			toastrel = table_open(rel->rd_rel->reltoastrelid,
+								  RowExclusiveLock);
+			validIndex = toast_open_indexes(toastrel, RowExclusiveLock,
+											&toastidxs, &num_indexes);
 		}
+
+		toast_delete_datum(toastrel, num_indexes, toastidxs, validIndex,
+						   value, is_speculative, specToken);
+	}
+
+	if (toastrel != NULL)
+	{
+		toast_close_indexes(toastidxs, num_indexes, RowExclusiveLock);
+		table_close(toastrel, RowExclusiveLock);
 	}
 }

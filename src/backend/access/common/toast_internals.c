@@ -15,9 +15,8 @@
 
 #include "access/detoast.h"
 #include "access/genam.h"
-#include "access/heapam.h"
-#include "access/heaptoast.h"
 #include "access/table.h"
+#include "access/tableam.h"
 #include "access/toast_internals.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -100,22 +99,21 @@ toast_compress_datum(Datum value)
  *	Save one single datum into the secondary relation and return
  *	a Datum reference for it.
  *
- * rel: the main relation we're working with (not the toast rel!)
+ * toastrel: the TOAST relation we're working with (not the main rel!)
+ * toastslot: a slot corresponding to 'toastrel'
+ * num_indexes, toastidxs, validIndex: as returned by toast_open_indexes
+ * toastoid: the toast OID that should be inserted into the new TOAST pointer
  * value: datum to be pushed to toast storage
  * oldexternal: if not NULL, toast pointer previously representing the datum
- * options: options to be passed to heap_insert() for toast rows
+ * options: options to be passed to table_tuple_insert() for toast rows
  * ----------
  */
 Datum
-toast_save_datum(Relation rel, Datum value,
-				 struct varlena *oldexternal, int options)
+toast_save_datum(Relation toastrel, TupleTableSlot *toastslot,
+				 int num_indexes, Relation *toastidxs, int validIndex,
+				 Oid toastoid, Datum value, struct varlena *oldexternal,
+				 int options, int max_chunk_size)
 {
-	Relation	toastrel;
-	Relation   *toastidxs;
-	HeapTuple	toasttup;
-	TupleDesc	toasttupDesc;
-	Datum		t_values[3];
-	bool		t_isnull[3];
 	CommandId	mycid = GetCurrentCommandId(true);
 	struct varlena *result;
 	struct varatt_external toast_pointer;
@@ -123,7 +121,7 @@ toast_save_datum(Relation rel, Datum value,
 	{
 		struct varlena hdr;
 		/* this is to make the union big enough for a chunk: */
-		char		data[TOAST_MAX_CHUNK_SIZE + VARHDRSZ];
+		char		data[BLCKSZ + VARHDRSZ];
 		/* ensure union is aligned well enough: */
 		int32		align_it;
 	}			chunk_data;
@@ -132,24 +130,9 @@ toast_save_datum(Relation rel, Datum value,
 	char	   *data_p;
 	int32		data_todo;
 	Pointer		dval = DatumGetPointer(value);
-	int			num_indexes;
-	int			validIndex;
 
 	Assert(!VARATT_IS_EXTERNAL(value));
-
-	/*
-	 * Open the toast relation and its indexes.  We can use the index to check
-	 * uniqueness of the OID we assign to the toasted item, even though it has
-	 * additional columns besides OID.
-	 */
-	toastrel = table_open(rel->rd_rel->reltoastrelid, RowExclusiveLock);
-	toasttupDesc = toastrel->rd_att;
-
-	/* Open all the toast indexes and look for the valid one */
-	validIndex = toast_open_indexes(toastrel,
-									RowExclusiveLock,
-									&toastidxs,
-									&num_indexes);
+	Assert(max_chunk_size <= BLCKSZ);
 
 	/*
 	 * Get the data pointer and length, and compute va_rawsize and va_extsize.
@@ -189,11 +172,11 @@ toast_save_datum(Relation rel, Datum value,
 	 *
 	 * Normally this is the actual OID of the target toast table, but during
 	 * table-rewriting operations such as CLUSTER, we have to insert the OID
-	 * of the table's real permanent toast table instead.  rd_toastoid is set
+	 * of the table's real permanent toast table instead.  toastoid is set
 	 * if we have to substitute such an OID.
 	 */
-	if (OidIsValid(rel->rd_toastoid))
-		toast_pointer.va_toastrelid = rel->rd_toastoid;
+	if (OidIsValid(toastoid))
+		toast_pointer.va_toastrelid = toastoid;
 	else
 		toast_pointer.va_toastrelid = RelationGetRelid(toastrel);
 
@@ -209,7 +192,7 @@ toast_save_datum(Relation rel, Datum value,
 	 * options have been changed), we have to pick a value ID that doesn't
 	 * conflict with either new or existing toast value OIDs.
 	 */
-	if (!OidIsValid(rel->rd_toastoid))
+	if (!OidIsValid(toastoid))
 	{
 		/* normal case: just choose an unused OID */
 		toast_pointer.va_valueid =
@@ -228,7 +211,7 @@ toast_save_datum(Relation rel, Datum value,
 			Assert(VARATT_IS_EXTERNAL_ONDISK(oldexternal));
 			/* Must copy to access aligned fields */
 			VARATT_EXTERNAL_GET_POINTER(old_toast_pointer, oldexternal);
-			if (old_toast_pointer.va_toastrelid == rel->rd_toastoid)
+			if (old_toast_pointer.va_toastrelid == toastoid)
 			{
 				/* This value came from the old toast table; reuse its OID */
 				toast_pointer.va_valueid = old_toast_pointer.va_valueid;
@@ -270,19 +253,10 @@ toast_save_datum(Relation rel, Datum value,
 					GetNewOidWithIndex(toastrel,
 									   RelationGetRelid(toastidxs[validIndex]),
 									   (AttrNumber) 1);
-			} while (toastid_valueid_exists(rel->rd_toastoid,
+			} while (toastid_valueid_exists(toastoid,
 											toast_pointer.va_valueid));
 		}
 	}
-
-	/*
-	 * Initialize constant parts of the tuple data
-	 */
-	t_values[0] = ObjectIdGetDatum(toast_pointer.va_valueid);
-	t_values[2] = PointerGetDatum(&chunk_data);
-	t_isnull[0] = false;
-	t_isnull[1] = false;
-	t_isnull[2] = false;
 
 	/*
 	 * Split up the item into chunks
@@ -296,17 +270,22 @@ toast_save_datum(Relation rel, Datum value,
 		/*
 		 * Calculate the size of this chunk
 		 */
-		chunk_size = Min(TOAST_MAX_CHUNK_SIZE, data_todo);
+		chunk_size = Min(max_chunk_size, data_todo);
 
 		/*
 		 * Build a tuple and store it
 		 */
-		t_values[1] = Int32GetDatum(chunk_seq++);
+		toastslot->tts_values[0] = ObjectIdGetDatum(toast_pointer.va_valueid);
+		toastslot->tts_values[1] = Int32GetDatum(chunk_seq++);
 		SET_VARSIZE(&chunk_data, chunk_size + VARHDRSZ);
 		memcpy(VARDATA(&chunk_data), data_p, chunk_size);
-		toasttup = heap_form_tuple(toasttupDesc, t_values, t_isnull);
+		toastslot->tts_values[2] = PointerGetDatum(&chunk_data);
+		toastslot->tts_isnull[0] = false;
+		toastslot->tts_isnull[1] = false;
+		toastslot->tts_isnull[2] = false;
+		ExecStoreVirtualTuple(toastslot);
 
-		heap_insert(toastrel, toasttup, mycid, options, NULL);
+		table_tuple_insert(toastrel, toastslot, mycid, options, NULL);
 
 		/*
 		 * Create the index entry.  We cheat a little here by not using
@@ -323,8 +302,9 @@ toast_save_datum(Relation rel, Datum value,
 		{
 			/* Only index relations marked as ready can be updated */
 			if (toastidxs[i]->rd_index->indisready)
-				index_insert(toastidxs[i], t_values, t_isnull,
-							 &(toasttup->t_self),
+				index_insert(toastidxs[i], toastslot->tts_values,
+							 toastslot->tts_isnull,
+							 &(toastslot->tts_tid),
 							 toastrel,
 							 toastidxs[i]->rd_index->indisunique ?
 							 UNIQUE_CHECK_YES : UNIQUE_CHECK_NO,
@@ -332,9 +312,9 @@ toast_save_datum(Relation rel, Datum value,
 		}
 
 		/*
-		 * Free memory
+		 * Clear slot
 		 */
-		heap_freetuple(toasttup);
+		ExecClearTuple(toastslot);
 
 		/*
 		 * Move on to next chunk
@@ -342,12 +322,6 @@ toast_save_datum(Relation rel, Datum value,
 		data_todo -= chunk_size;
 		data_p += chunk_size;
 	}
-
-	/*
-	 * Done - close toast relation and its indexes
-	 */
-	toast_close_indexes(toastidxs, num_indexes, RowExclusiveLock);
-	table_close(toastrel, RowExclusiveLock);
 
 	/*
 	 * Create the TOAST pointer value that we'll return
@@ -366,35 +340,24 @@ toast_save_datum(Relation rel, Datum value,
  * ----------
  */
 void
-toast_delete_datum(Relation rel, Datum value, bool is_speculative)
+toast_delete_datum(Relation toastrel, int num_indexes, Relation *toastidxs,
+				   int validIndex, Datum value, bool is_speculative,
+				   uint32 specToken)
 {
 	struct varlena *attr = (struct varlena *) DatumGetPointer(value);
 	struct varatt_external toast_pointer;
-	Relation	toastrel;
-	Relation   *toastidxs;
 	ScanKeyData toastkey;
 	SysScanDesc toastscan;
-	HeapTuple	toasttup;
-	int			num_indexes;
-	int			validIndex;
+	TupleTableSlot *slot;
 	SnapshotData SnapshotToast;
 
-	if (!VARATT_IS_EXTERNAL_ONDISK(attr))
-		return;
+	Assert(VARATT_IS_EXTERNAL_ONDISK(attr));
 
 	/* Must copy to access aligned fields */
 	VARATT_EXTERNAL_GET_POINTER(toast_pointer, attr);
 
-	/*
-	 * Open the toast relation and its indexes
-	 */
-	toastrel = table_open(toast_pointer.va_toastrelid, RowExclusiveLock);
-
-	/* Fetch valid relation used for process */
-	validIndex = toast_open_indexes(toastrel,
-									RowExclusiveLock,
-									&toastidxs,
-									&num_indexes);
+	/* Check that caller gave us the correct TOAST relation. */
+	Assert(toast_pointer.va_toastrelid == RelationGetRelid(toastrel));
 
 	/*
 	 * Setup a scan key to find chunks with matching va_valueid
@@ -412,23 +375,19 @@ toast_delete_datum(Relation rel, Datum value, bool is_speculative)
 	init_toast_snapshot(&SnapshotToast);
 	toastscan = systable_beginscan_ordered(toastrel, toastidxs[validIndex],
 										   &SnapshotToast, 1, &toastkey);
-	while ((toasttup = systable_getnext_ordered(toastscan, ForwardScanDirection)) != NULL)
+	while ((slot = systable_getnextslot_ordered(toastscan, ForwardScanDirection)) != NULL)
 	{
 		/*
 		 * Have a chunk, delete it
 		 */
 		if (is_speculative)
-			heap_abort_speculative(toastrel, &toasttup->t_self);
+			table_tuple_complete_speculative(toastrel, slot, specToken, false);
 		else
-			simple_heap_delete(toastrel, &toasttup->t_self);
+			simple_table_tuple_delete(toastrel, &slot->tts_tid, &SnapshotToast);
 	}
 
-	/*
-	 * End scan and close relations
-	 */
+	/* End scan */
 	systable_endscan_ordered(toastscan);
-	toast_close_indexes(toastidxs, num_indexes, RowExclusiveLock);
-	table_close(toastrel, RowExclusiveLock);
 }
 
 /* ----------

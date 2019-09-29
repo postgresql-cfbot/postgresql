@@ -643,6 +643,26 @@ systable_getnext_ordered(SysScanDesc sysscan, ScanDirection direction)
 }
 
 /*
+ * systable_getnextslot_ordered
+ *
+ * Return a slot containing the next tuple from an ordered catalog scan,
+ * or NULL if there are no more tuples.
+ */
+TupleTableSlot *
+systable_getnextslot_ordered(SysScanDesc sysscan, ScanDirection direction)
+{
+	Assert(sysscan->irel);
+	if (!index_getnext_slot(sysscan->iscan, direction, sysscan->slot))
+		return NULL;
+
+	/* See notes in systable_getnext */
+	if (sysscan->iscan->xs_recheck)
+		elog(ERROR, "system catalog scans with lossy index conditions are not implemented");
+
+	return sysscan->slot;
+}
+
+/*
  * systable_endscan_ordered --- close scan, release resources
  */
 void

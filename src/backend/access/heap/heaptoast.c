@@ -12,11 +12,11 @@
  *
  *
  * INTERFACE ROUTINES
- *		toast_insert_or_update -
+ *		heap_toast_insert_or_update -
  *			Try to make a given tuple fit into one page by compressing
  *			or moving off attributes
  *
- *		toast_delete -
+ *		heap_toast_delete -
  *			Reclaim toast storage when a tuple is deleted
  *
  *-------------------------------------------------------------------------
@@ -32,13 +32,14 @@
 
 
 /* ----------
- * toast_delete -
+ * heap_toast_delete -
  *
  *	Cascaded delete toast-entries on DELETE
  * ----------
  */
 void
-toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
+heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative,
+				  uint32 specToken)
 {
 	TupleDesc	tupleDesc;
 	Datum		toast_values[MaxHeapAttributeNumber];
@@ -68,12 +69,13 @@ toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
 	heap_deform_tuple(oldtup, tupleDesc, toast_values, toast_isnull);
 
 	/* Do the real work. */
-	toast_delete_external(rel, toast_values, toast_isnull, is_speculative);
+	toast_delete_external(rel, toast_values, toast_isnull, is_speculative,
+						  specToken);
 }
 
 
 /* ----------
- * toast_insert_or_update -
+ * heap_toast_insert_or_update -
  *
  *	Delete no-longer-used toast-entries and create new ones to
  *	make the new tuple fit on INSERT or UPDATE
@@ -91,8 +93,8 @@ toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
  * ----------
  */
 HeapTuple
-toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
-					   int options)
+heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
+							int options)
 {
 	HeapTuple	result_tuple;
 	TupleDesc	tupleDesc;
@@ -151,6 +153,8 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		ttc.ttc_oldvalues = toast_oldvalues;
 		ttc.ttc_oldisnull = toast_oldisnull;
 	}
+	ttc.ttc_toastrel = NULL;
+	ttc.ttc_toastslot = NULL;
 	ttc.ttc_attr = toast_attr;
 	toast_tuple_init(&ttc);
 
@@ -207,7 +211,8 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		 */
 		if (toast_attr[biggest_attno].tai_size > maxDataLen &&
 			rel->rd_rel->reltoastrelid != InvalidOid)
-			toast_tuple_externalize(&ttc, biggest_attno, options);
+			toast_tuple_externalize(&ttc, biggest_attno, options,
+									TOAST_MAX_CHUNK_SIZE);
 	}
 
 	/*
@@ -224,7 +229,8 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		biggest_attno = toast_tuple_find_biggest_attribute(&ttc, false, false);
 		if (biggest_attno < 0)
 			break;
-		toast_tuple_externalize(&ttc, biggest_attno, options);
+		toast_tuple_externalize(&ttc, biggest_attno, options,
+								TOAST_MAX_CHUNK_SIZE);
 	}
 
 	/*
@@ -260,7 +266,8 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		if (biggest_attno < 0)
 			break;
 
-		toast_tuple_externalize(&ttc, biggest_attno, options);
+		toast_tuple_externalize(&ttc, biggest_attno, options,
+								TOAST_MAX_CHUNK_SIZE);
 	}
 
 	/*
@@ -323,7 +330,7 @@ toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	else
 		result_tuple = newtup;
 
-	toast_tuple_cleanup(&ttc);
+	toast_tuple_cleanup(&ttc, true);
 
 	return result_tuple;
 }
@@ -369,7 +376,7 @@ toast_flatten_tuple(HeapTuple tup, TupleDesc tupleDesc)
 			new_value = (struct varlena *) DatumGetPointer(toast_values[i]);
 			if (VARATT_IS_EXTERNAL(new_value))
 			{
-				new_value = heap_tuple_fetch_attr(new_value);
+				new_value = detoast_external_attr(new_value);
 				toast_values[i] = PointerGetDatum(new_value);
 				toast_free[i] = true;
 			}
@@ -484,7 +491,7 @@ toast_flatten_tuple_to_datum(HeapTupleHeader tup,
 			if (VARATT_IS_EXTERNAL(new_value) ||
 				VARATT_IS_COMPRESSED(new_value))
 			{
-				new_value = heap_tuple_untoast_attr(new_value);
+				new_value = detoast_attr(new_value);
 				toast_values[i] = PointerGetDatum(new_value);
 				toast_free[i] = true;
 			}
@@ -494,7 +501,8 @@ toast_flatten_tuple_to_datum(HeapTupleHeader tup,
 	/*
 	 * Calculate the new size of the tuple.
 	 *
-	 * This should match the reconstruction code in toast_insert_or_update.
+	 * This should match the reconstruction code in
+	 * heap_toast_insert_or_update.
 	 */
 	new_header_len = SizeofHeapTupleHeader;
 	if (has_nulls)
@@ -583,7 +591,7 @@ toast_build_flattened_tuple(TupleDesc tupleDesc,
 			new_value = (struct varlena *) DatumGetPointer(new_values[i]);
 			if (VARATT_IS_EXTERNAL(new_value))
 			{
-				new_value = heap_tuple_fetch_attr(new_value);
+				new_value = detoast_external_attr(new_value);
 				new_values[i] = PointerGetDatum(new_value);
 				freeable_values[num_to_free++] = (Pointer) new_value;
 			}

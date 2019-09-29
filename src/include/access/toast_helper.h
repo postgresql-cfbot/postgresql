@@ -14,6 +14,7 @@
 #ifndef TOAST_HELPER_H
 #define TOAST_HELPER_H
 
+#include "executor/tuptable.h"
 #include "utils/rel.h"
 
 /*
@@ -50,6 +51,17 @@ typedef struct
 	bool	   *ttc_isnull;		/* null flags for the tuple columns */
 	Datum	   *ttc_oldvalues;	/* values from previous tuple */
 	bool	   *ttc_oldisnull;	/* null flags from previous tuple */
+
+	/*
+	 * Before calling toast_tuple_init, the caller should either initialize
+	 * all of these fields or else set ttc_toastrel and ttc_toastslot to NULL.
+	 * In the latter case, all of the fields will be initialized as required.
+	 */
+	Relation	ttc_toastrel;	/* the toast table for the relation */
+	TupleTableSlot *ttc_toastslot;	/* a slot for the toast table */
+	int			ttc_ntoastidxs; /* # of toast indexes for toast table */
+	Relation   *ttc_toastidxs;	/* array of those toast indexes */
+	int			ttc_validtoastidx;	/* the valid toast index */
 
 	/*
 	 * Before calling toast_tuple_init, the caller should set tts_attr to
@@ -106,10 +118,10 @@ extern int	toast_tuple_find_biggest_attribute(ToastTupleContext *ttc,
 											   bool check_main);
 extern void toast_tuple_try_compression(ToastTupleContext *ttc, int attribute);
 extern void toast_tuple_externalize(ToastTupleContext *ttc, int attribute,
-									int options);
-extern void toast_tuple_cleanup(ToastTupleContext *ttc);
+									int options, int max_chunk_size);
+extern void toast_tuple_cleanup(ToastTupleContext *ttc, bool cleanup_toastrel);
 
 extern void toast_delete_external(Relation rel, Datum *values, bool *isnull,
-								  bool is_speculative);
+								  bool is_speculative, uint32 specToken);
 
 #endif

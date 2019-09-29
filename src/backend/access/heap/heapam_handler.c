@@ -28,6 +28,7 @@
 #include "access/rewriteheap.h"
 #include "access/tableam.h"
 #include "access/tsmapi.h"
+#include "access/heaptoast.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/index.h"
@@ -292,7 +293,7 @@ heapam_tuple_complete_speculative(Relation relation, TupleTableSlot *slot,
 	if (succeeded)
 		heap_finish_speculative(relation, &slot->tts_tid);
 	else
-		heap_abort_speculative(relation, &slot->tts_tid);
+		heap_abort_speculative(relation, &slot->tts_tid, specToken);
 
 	if (shouldFree)
 		pfree(tuple);
@@ -2041,6 +2042,15 @@ heapam_relation_needs_toast_table(Relation rel)
 	return (tuple_length > TOAST_TUPLE_THRESHOLD);
 }
 
+/*
+ * TOAST tables for heap relations are just heap relations.
+ */
+static Oid
+heapam_relation_toast_am(Relation rel)
+{
+	return rel->rd_rel->relam;
+}
+
 
 /* ------------------------------------------------------------------------
  * Planner related callbacks for the heap AM
@@ -2539,6 +2549,8 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_size = table_block_relation_size,
 	.relation_needs_toast_table = heapam_relation_needs_toast_table,
+	.relation_toast_am = heapam_relation_toast_am,
+	.toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE,
 
 	.relation_estimate_size = heapam_estimate_rel_size,
 

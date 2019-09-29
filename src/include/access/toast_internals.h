@@ -16,6 +16,8 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
+struct TupleTableSlot;
+
 /*
  *	The information at the start of the compressed toast data.
  */
@@ -39,9 +41,16 @@ typedef struct toast_compress_header
 extern Datum toast_compress_datum(Datum value);
 extern Oid	toast_get_valid_index(Oid toastoid, LOCKMODE lock);
 
-extern void toast_delete_datum(Relation rel, Datum value, bool is_speculative);
-extern Datum toast_save_datum(Relation rel, Datum value,
-							  struct varlena *oldexternal, int options);
+extern void toast_delete_datum(Relation toastrel, int num_indexes,
+							   Relation *toastidxs, int validIndex,
+							   Datum value, bool is_speculative,
+							   uint32 specToken);
+extern Datum toast_save_datum(Relation toastrel,
+							  struct TupleTableSlot *toastslot,
+							  int num_indexes, Relation *toastidxs,
+							  int validIndex, Oid toastoid,
+							  Datum value, struct varlena *oldexternal,
+							  int options, int max_chunk_size);
 
 extern int	toast_open_indexes(Relation toastrel,
 							   LOCKMODE lock,

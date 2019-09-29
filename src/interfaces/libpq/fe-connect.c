@@ -224,6 +224,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Connect-timeout", "", 10,	/* strlen(INT32_MAX) == 10 */
 	offsetof(struct pg_conn, connect_timeout)},
 
+	{"socket_timeout", NULL, NULL, NULL,
+		"Socket-timeout", "", 10,   /* strlen(INT32_MAX) == 10 */
+	offsetof(struct pg_conn, pgsocket_timeout)},
+
 	{"dbname", "PGDATABASE", NULL, NULL,
 		"Database-Name", "", 20,
 	offsetof(struct pg_conn, dbName)},
@@ -433,6 +437,8 @@ static char *passwordFromFile(const char *hostname, const char *port, const char
 							  const char *username, const char *pgpassfile);
 static void pgpassfileWarning(PGconn *conn);
 static void default_threadlock(int acquire);
+static bool parse_int_param(const char *value, int *result, PGconn *conn,
+				 const char *context);
 
 
 /* global variable because fe-auth.c needs to access it */
@@ -1320,6 +1326,24 @@ connectOptions2(PGconn *conn)
 		conn->client_encoding_initial = strdup(pg_encoding_to_char(pg_get_encoding_from_locale(NULL, true)));
 		if (!conn->client_encoding_initial)
 			goto oom_error;
+	}
+
+	if (conn->pgsocket_timeout)
+	{
+		if (!parse_int_param(conn->pgsocket_timeout,
+			&conn->socket_timeout, conn, "socket_timeout"))
+		{
+			conn->status = CONNECTION_BAD;
+			printfPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid integer value for socket_timeout\n"));
+			return false;
+		}
+		/*
+		 * Rounding could cause communication to fail;
+		 * insist on at least two seconds.
+		 */
+		if(conn->socket_timeout > 0 && conn->socket_timeout < 2)
+			conn->socket_timeout = 2;
 	}
 
 	/*
@@ -3917,6 +3941,8 @@ freePGconn(PGconn *conn)
 		free(conn->pgtty);
 	if (conn->connect_timeout)
 		free(conn->connect_timeout);
+	if (conn->pgsocket_timeout)
+		free(conn->pgsocket_timeout);
 	if (conn->pgtcp_user_timeout)
 		free(conn->pgtcp_user_timeout);
 	if (conn->pgoptions)

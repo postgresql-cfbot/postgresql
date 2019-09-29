@@ -22,6 +22,7 @@
 #include "lib/stringinfo.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/supportnodes.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_coerce.h"
@@ -111,6 +112,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	bool		retset;
 	int			nvargs;
 	Oid			vatype;
+	Oid			support_func;
 	FuncDetailCode fdresult;
 	char		aggkind = 0;
 	ParseCallbackState pcbstate;
@@ -265,7 +267,8 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							   !func_variadic, true,
 							   &funcid, &rettype, &retset,
 							   &nvargs, &vatype,
-							   &declared_arg_types, &argdefaults);
+							   &declared_arg_types, &argdefaults,
+							   &support_func);
 
 	cancel_parser_errposition_callback(&pcbstate);
 
@@ -665,6 +668,31 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 
 	/* perform the necessary typecasting of arguments */
 	make_fn_arguments(pstate, fargs, actual_arg_types, declared_arg_types);
+
+	/*
+	 * When rettype is ANYOID we can call support function SupportRequestRettype if
+	 * it is available to get real type.
+	 */
+	if (rettype == ANYOID && OidIsValid(support_func))
+	{
+		SupportRequestRettype		req;
+		SupportRequestRettype	   *result;
+
+		req.type = T_SupportRequestRettype;
+		req.funcname = funcname;
+		req.fargs = fargs;
+		req.actual_arg_types = actual_arg_types;
+		req.declared_arg_types = declared_arg_types;
+		req.nargs = nargsplusdefs;
+
+		result = (SupportRequestRettype *)
+					DatumGetPointer(OidFunctionCall1(support_func,
+													 PointerGetDatum(&req)));
+
+		/* use result when it is valid */
+		if (result == &req)
+			rettype = result->rettype;
+	}
 
 	/*
 	 * If the function isn't actually variadic, forget any VARIADIC decoration
@@ -1392,7 +1420,8 @@ func_get_detail(List *funcname,
 				int *nvargs,	/* return value */
 				Oid *vatype,	/* return value */
 				Oid **true_typeids, /* return value */
-				List **argdefaults) /* optional return value */
+				List **argdefaults, /* optional return value */
+				Oid *support_func) /* return value */
 {
 	FuncCandidateList raw_candidates;
 	FuncCandidateList best_candidate;
@@ -1407,6 +1436,7 @@ func_get_detail(List *funcname,
 	*nvargs = 0;
 	*vatype = InvalidOid;
 	*true_typeids = NULL;
+	*support_func = InvalidOid;
 	if (argdefaults)
 		*argdefaults = NIL;
 
@@ -1519,6 +1549,7 @@ func_get_detail(List *funcname,
 					*nvargs = 0;
 					*vatype = InvalidOid;
 					*true_typeids = argtypes;
+					*support_func = InvalidOid;
 					return FUNCDETAIL_COERCION;
 				}
 			}
@@ -1616,6 +1647,7 @@ func_get_detail(List *funcname,
 		*rettype = pform->prorettype;
 		*retset = pform->proretset;
 		*vatype = pform->provariadic;
+		*support_func = pform->prosupport;
 		/* fetch default args if caller wants 'em */
 		if (argdefaults && best_candidate->ndargs > 0)
 		{

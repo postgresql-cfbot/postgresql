@@ -69,11 +69,11 @@ endif
 ifeq ($(PORTNAME), cygwin)
 
 postgres: $(OBJS)
-	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@
+	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.dll.a $(LIBS) -o $@
 
-# libpostgres.a is actually built in the preceding rule, but we need this to
+# libpostgres.dll.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
-libpostgres.a: postgres
+libpostgres.dll.a: postgres
 	touch $@
 
 endif # cygwin
@@ -82,11 +82,11 @@ ifeq ($(PORTNAME), win32)
 LIBS += -lsecur32
 
 postgres: $(OBJS) $(WIN32RES)
-	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@$(X)
+	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.dll.a $(LIBS) -o $@$(X)
 
-# libpostgres.a is actually built in the preceding rule, but we need this to
+# libpostgres.dll.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
-libpostgres.a: postgres
+libpostgres.dll.a: postgres
 	touch $@
 
 endif # win32
@@ -195,12 +195,12 @@ distprep:
 install: all installdirs install-bin
 ifeq ($(PORTNAME), cygwin)
 ifeq ($(MAKE_DLL), true)
-	$(INSTALL_DATA) libpostgres.a '$(DESTDIR)$(libdir)/libpostgres.a'
+	$(INSTALL_DATA) libpostgres.dll.a '$(DESTDIR)$(libdir)/libpostgres.dll.a'
 endif
 endif
 ifeq ($(PORTNAME), win32)
 ifeq ($(MAKE_DLL), true)
-	$(INSTALL_DATA) libpostgres.a '$(DESTDIR)$(libdir)/libpostgres.a'
+	$(INSTALL_DATA) libpostgres.dll.a '$(DESTDIR)$(libdir)/libpostgres.dll.a'
 endif
 endif
 	$(MAKE) -C catalog install-data
@@ -260,12 +260,12 @@ ifeq ($(MAKE_EXPORTS), true)
 endif
 ifeq ($(PORTNAME), cygwin)
 ifeq ($(MAKE_DLL), true)
-	rm -f '$(DESTDIR)$(libdir)/libpostgres.a'
+	rm -f '$(DESTDIR)$(libdir)/libpostgres.dll.a'
 endif
 endif
 ifeq ($(PORTNAME), win32)
 ifeq ($(MAKE_DLL), true)
-	rm -f '$(DESTDIR)$(libdir)/libpostgres.a'
+	rm -f '$(DESTDIR)$(libdir)/libpostgres.dll.a'
 endif
 endif
 	$(MAKE) -C catalog uninstall-data
@@ -284,10 +284,10 @@ endif
 clean:
 	rm -f $(LOCALOBJS) postgres$(X) $(POSTGRES_IMP)
 ifeq ($(PORTNAME), cygwin)
-	rm -f postgres.dll libpostgres.a
+	rm -f postgres.dll libpostgres.dll.a
 endif
 ifeq ($(PORTNAME), win32)
-	rm -f postgres.dll libpostgres.a $(WIN32RES)
+	rm -f postgres.dll libpostgres.dll.a $(WIN32RES)
 endif
 
 distclean: clean

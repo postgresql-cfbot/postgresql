@@ -12,8 +12,7 @@ authentication/
   Tests for authentication
 
 examples/
-  Demonstration programs for libpq that double as regression tests via
-  "make check"
+  Demonstration programs for libpq that double as regression tests
 
 isolation/
   Tests for concurrent behavior at the SQL level

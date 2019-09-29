@@ -406,7 +406,7 @@ EvaluateParams(PreparedStatement *pstmt, List *params,
 		prm->value = ExecEvalExprSwitchContext(n,
 											   GetPerTupleExprContext(estate),
 											   &prm->isnull);
-
+		prm->textValue = NULL;
 		i++;
 	}
 

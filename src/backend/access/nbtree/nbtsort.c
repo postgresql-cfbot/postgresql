@@ -679,6 +679,7 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 				   true);
 	}
 
+	PageEncryptInplace(page, MAIN_FORKNUM, blkno);
 	PageSetChecksumInplace(page, blkno);
 
 	/*

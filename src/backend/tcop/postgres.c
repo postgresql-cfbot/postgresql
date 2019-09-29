@@ -63,6 +63,7 @@
 #include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/kmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -3857,6 +3858,13 @@ PostgresMain(int argc, char *argv[],
 
 	/* Early initialization */
 	BaseInit();
+
+	/*
+	 * Initialize kmgr for cluster encryption. Since kmgr needs to attach to
+	 * shared memory the initialization must be called after BaseInit().
+	 */
+	if (!IsUnderPostmaster)
+		InitializeKmgr();
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the

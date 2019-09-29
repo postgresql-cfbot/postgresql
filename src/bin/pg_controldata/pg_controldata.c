@@ -26,6 +26,7 @@
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/logging.h"
+#include "storage/encryption.h"
 #include "pg_getopt.h"
 #include "getopt_long.h"
 
@@ -84,6 +85,21 @@ wal_level_str(WalLevel wal_level)
 	return _("unrecognized wal_level");
 }
 
+static const char *
+encryption_cipher_str(int val)
+{
+	switch (val)
+	{
+		case TDE_ENCRYPTION_OFF:
+			return "off";
+		case TDE_ENCRYPTION_AES_128:
+			return "aes-128";
+		case TDE_ENCRYPTION_AES_256:
+			return "aes-256";
+	}
+
+	return _("unrecognized encryption cipher");
+}
 
 int
 main(int argc, char *argv[])
@@ -336,5 +352,7 @@ main(int argc, char *argv[])
 		   ControlFile->data_checksum_version);
 	printf(_("Mock authentication nonce:            %s\n"),
 		   mock_auth_nonce_str);
+	printf(_("Data encryption cipher:               %s\n"),
+		   encryption_cipher_str(ControlFile->data_encryption_cipher));
 	return 0;
 }

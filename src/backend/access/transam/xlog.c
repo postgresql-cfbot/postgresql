@@ -55,8 +55,10 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
@@ -77,6 +79,7 @@
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
+extern uint32 bootstrap_data_encryption_cipher;
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -4783,6 +4786,10 @@ ReadControlFile(void)
 	/* Make the initdb settings visible as GUC variables, too */
 	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",
 					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	SetConfigOption("data_encryption_cipher",
+					EncryptionCipherString(GetDataEncryptionCipher()),
+					PGC_INTERNAL, PGC_S_OVERRIDE);
 }
 
 /*
@@ -4823,6 +4830,13 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+int
+GetDataEncryptionCipher(void)
+{
+	Assert(ControlFile != NULL);
+	return ControlFile->data_encryption_cipher;
 }
 
 /*
@@ -5254,6 +5268,7 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+	ControlFile->data_encryption_cipher = bootstrap_data_encryption_cipher;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -5264,6 +5279,7 @@ BootStrapXLOG(void)
 	BootStrapCommitTs();
 	BootStrapSUBTRANS();
 	BootStrapMultiXact();
+	BootStrapKmgr(bootstrap_data_encryption_cipher);
 
 	pfree(buffer);
 

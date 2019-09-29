@@ -71,7 +71,9 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/dsm_impl.h"
+#include "storage/kmgr.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -454,6 +456,13 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{"TLSv1.1", PG_TLS1_1_VERSION, false},
 	{"TLSv1.2", PG_TLS1_2_VERSION, false},
 	{"TLSv1.3", PG_TLS1_3_VERSION, false},
+	{NULL, 0, false}
+};
+
+const struct config_enum_entry data_encryption_cipher_options[] = {
+	{"off",		TDE_ENCRYPTION_OFF, false},
+	{"aes-128", TDE_ENCRYPTION_AES_128, false},
+	{"aes-256", TDE_ENCRYPTION_AES_256, false},
 	{NULL, 0, false}
 };
 
@@ -4108,7 +4117,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4151,6 +4160,16 @@ static struct config_string ConfigureNamesString[] =
 			NULL
 		},
 		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"cluster_passphrase_command", PGC_POSTMASTER, ENCRYPTION,
+			gettext_noop("Command to obtain passphrases for database encryption."),
+			NULL
+		},
+		&cluster_passphrase_command,
 		"",
 		NULL, NULL, NULL
 	},
@@ -4534,6 +4553,19 @@ static struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"data_encryption_cipher", PGC_INTERNAL, PRESET_OPTIONS,
+		 gettext_noop("Specify encryption algorithms to use."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE,
+		 GUC_SUPERUSER_ONLY
+		},
+		&data_encryption_cipher,
+		TDE_ENCRYPTION_AES_128,
+		data_encryption_cipher_options,
 		NULL, NULL, NULL
 	},
 

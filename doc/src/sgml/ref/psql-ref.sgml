@@ -3684,6 +3684,12 @@ bar
         fail after having already displayed some rows.
         </para>
 
+        <note>
+        <para>
+        This feature does not work properly with combined queries.
+        </para>
+        </note>
+
         <tip>
         <para>
         Although you can use any output format with this feature,

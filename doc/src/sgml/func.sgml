@@ -20343,6 +20343,13 @@ SELECT set_config('log_statement_stats', 'off', false);
       </row>
       <row>
        <entry>
+        <literal><function>pg_current_wal_lsn(<parameter>with_tli</parameter> <type>boolean</type>)</function></literal>
+        </entry>
+       <entry><type>setof record</type></entry>
+       <entry>Get current write-ahead log write location and timeline f</entry>
+      </row>
+      <row>
+       <entry>
         <literal><function>pg_start_backup(<parameter>label</parameter> <type>text</type> <optional>, <parameter>fast</parameter> <type>boolean</type> <optional>, <parameter>exclusive</parameter> <type>boolean</type> </optional></optional>)</function></literal>
         </entry>
        <entry><type>pg_lsn</type></entry>
@@ -20489,7 +20496,15 @@ postgres=# select pg_start_backup('label_goes_here');
 
    <para>
     <function>pg_current_wal_lsn</function> displays the current write-ahead log write
-    location in the same format used by the above functions.  Similarly,
+    location in the same format used by the above functions.
+    There is an optional parameter of type <type>boolean</type>.  If <literal>true</literal>,
+    the result includes the current timeline as second parameter. Do not set this
+    parameter, even to <literal>false</literal>, if you only need the current write-ahead
+    log write location as the result would include a useless <literal>NULL</literal>
+    second field.
+   </para>
+
+   <para>Similarly,
     <function>pg_current_wal_insert_lsn</function> displays the current write-ahead log
     insertion location and <function>pg_current_wal_flush_lsn</function> displays the
     current write-ahead log flush location. The insertion location is the <quote>logical</quote>
@@ -20592,6 +20607,21 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
       </row>
       <row>
        <entry>
+        <literal><function>pg_last_wal_receive_lsn(<parameter>with_tli</parameter> <type>boolean</type>)</function></literal>
+        </entry>
+       <entry><type>pg_lsn</type></entry>
+       <entry>Get last write-ahead log location received and synced to disk by
+        streaming replication and optionally its timeline.
+        While streaming replication is in progress
+        this will increase monotonically. If recovery has completed this will
+        remain static at
+        the value of the last WAL record received and synced to disk during
+        recovery. If streaming replication is disabled, or if it has not yet
+        started, the function returns NULL.
+       </entry>
+      </row>
+      <row>
+       <entry>
         <literal><function>pg_last_wal_replay_lsn()</function></literal>
         </entry>
        <entry><type>pg_lsn</type></entry>
@@ -20622,6 +20652,15 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
      </tbody>
     </tgroup>
    </table>
+
+   <para>
+    <function>pg_last_wal_receive_lsn</function> has an optional parameter of type
+    <type>boolean</type>.  If <literal>true</literal>,
+    the result includes the current timeline as second parameter. Do not set this
+    parameter, even to <literal>false</literal>, if you only need the last write-ahead
+    log location received as the result would include a useless <literal>NULL</literal>
+    second field.
+   </para>
 
    <indexterm>
     <primary>pg_is_wal_replay_paused</primary>

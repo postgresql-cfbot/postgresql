@@ -361,6 +361,78 @@ pg_current_wal_lsn(PG_FUNCTION_ARGS)
 }
 
 /*
+ * pg_current_wal_lsn_tl: report the current WAL write location (same format
+ * as pg_start_backup etc) and optionally the timeline.
+ *
+ * When the first parameter (variable 'with_tli') is true, returns the current
+ * timeline as second field. If false, second field is null.
+ *
+ * Note: this version is only called if the second parameter is set. It is
+ * 		 overloaded as pg_current_wal_lsn in SQL.
+ */
+Datum
+pg_current_wal_lsn_tl(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	Datum		values[2];
+	bool		nulls[2];
+
+	XLogRecPtr	current_recptr;
+	bool		with_tli = PG_GETARG_BOOL(0);
+
+	if (RecoveryInProgress())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("recovery is in progress"),
+				 errhint("WAL control functions cannot be executed during recovery.")));
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	current_recptr = GetXLogWriteRecPtr();
+
+	values[0] = LSNGetDatum(current_recptr);
+	if (!with_tli)
+		nulls[1] = 1;
+	else
+		values[1] = Int32GetDatum(ThisTimeLineID);
+
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+}
+
+/*
  * Report the current WAL insert location (same format as pg_start_backup etc)
  *
  * This function is mostly for debugging purposes.
@@ -419,6 +491,79 @@ pg_last_wal_receive_lsn(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_LSN(recptr);
+}
+
+/*
+ * pg_last_wal_receive_lsn_tl: report the last WAL receive location (same format
+ * as pg_start_backup etc) and optionally its timeline.
+ *
+ * When the first parameter (variable 'with_tli') is true, returns the current
+ * timeline as second field. If false, the second field is null.
+ *
+ * Note: this version is only called if the second parameter is set. It is
+ * 		 overloaded as pg_last_wal_receive_lsn in SQL.
+ */
+Datum
+pg_last_wal_receive_lsn_tl(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	Datum		values[2];
+	bool		nulls[2];
+
+	XLogRecPtr	recptr;
+	TimeLineID	lastReceivedTL;
+	bool		with_tli = PG_GETARG_BOOL(0);
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	recptr = GetWalRcvWriteRecPtr(NULL, &lastReceivedTL);
+
+	if (recptr == 0) {
+		nulls[0] = 1;
+		nulls[1] = 1;
+	}
+	else {
+		values[0] = LSNGetDatum(recptr);
+		if (!with_tli || !lastReceivedTL)
+			nulls[1] = 1;
+		else
+			values[1] = Int32GetDatum(lastReceivedTL);
+	}
+
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }
 
 /*

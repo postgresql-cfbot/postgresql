@@ -123,6 +123,8 @@ static SimpleStringList table_exclude_patterns = {NULL, NULL};
 static SimpleOidList table_exclude_oids = {NULL, NULL};
 static SimpleStringList tabledata_exclude_patterns = {NULL, NULL};
 static SimpleOidList tabledata_exclude_oids = {NULL, NULL};
+static SimpleStringList foreign_servers_include_patterns = {NULL, NULL};
+static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 
 
 char		g_opaque_type[10];	/* name for the opaque type */
@@ -159,6 +161,9 @@ static void expand_schema_name_patterns(Archive *fout,
 										SimpleStringList *patterns,
 										SimpleOidList *oids,
 										bool strict_names);
+static void expand_foreign_server_name_patterns(Archive *fout,
+										SimpleStringList *patterns,
+										SimpleOidList *oids);
 static void expand_table_name_patterns(Archive *fout,
 									   SimpleStringList *patterns,
 									   SimpleOidList *oids,
@@ -391,6 +396,7 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 7},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
+		{"include-foreign-data", required_argument, NULL, 11},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -607,6 +613,15 @@ main(int argc, char **argv)
 				dopt.dump_inserts = (int) rowsPerInsert;
 				break;
 
+			case 11:				/* include foreign data */
+				if (strcmp(optarg, "") == 0)
+				{
+					pg_log_error("empty string is not a valid pattern in --include-foreign-data");
+					exit_nicely(1);
+				}
+				simple_string_list_append(&foreign_servers_include_patterns, optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -645,6 +660,12 @@ main(int argc, char **argv)
 	if (dopt.dataOnly && dopt.schemaOnly)
 	{
 		pg_log_error("options -s/--schema-only and -a/--data-only cannot be used together");
+		exit_nicely(1);
+	}
+
+	if (dopt.schemaOnly && foreign_servers_include_patterns.head != NULL)
+	{
+		pg_log_error("options -s/--schema-only and --include-foreign-data cannot be used together");
 		exit_nicely(1);
 	}
 
@@ -814,6 +835,9 @@ main(int argc, char **argv)
 	expand_table_name_patterns(fout, &tabledata_exclude_patterns,
 							   &tabledata_exclude_oids,
 							   false);
+
+	expand_foreign_server_name_patterns(fout, &foreign_servers_include_patterns,
+										&foreign_servers_include_oids);
 
 	/* non-matching exclusion patterns aren't an error */
 
@@ -1038,6 +1062,9 @@ help(const char *progname)
 	printf(_("  --use-set-session-authorization\n"
 			 "                               use SET SESSION AUTHORIZATION commands instead of\n"
 			 "                               ALTER OWNER commands to set ownership\n"));
+	printf(_("  --include-foreign-data=SERVER\n"
+			 "                               include data of foreign tables with the named\n"
+			 "                               foreign servers in dump\n"));
 
 	printf(_("\nConnection options:\n"));
 	printf(_("  -d, --dbname=DBNAME      database to dump\n"));
@@ -1323,6 +1350,53 @@ expand_schema_name_patterns(Archive *fout,
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 		if (strict_names && PQntuples(res) == 0)
 			fatal("no matching schemas were found for pattern \"%s\"", cell->val);
+
+		for (i = 0; i < PQntuples(res); i++)
+		{
+			simple_oid_list_append(oids, atooid(PQgetvalue(res, i, 0)));
+		}
+
+		PQclear(res);
+		resetPQExpBuffer(query);
+	}
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * Find the OIDs of all foreign servers matching the given list of patterns,
+ * and append them to the given OID list.
+ */
+static void
+expand_foreign_server_name_patterns(Archive *fout,
+							SimpleStringList *patterns,
+							SimpleOidList *oids)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	SimpleStringListCell *cell;
+	int			i;
+
+	if (patterns->head == NULL)
+		return;					/* nothing to do */
+
+	query = createPQExpBuffer();
+
+	/*
+	 * The loop below runs multiple SELECTs might sometimes result in
+	 * duplicate entries in the OID list, but we don't care.
+	 */
+
+	for (cell = patterns->head; cell; cell = cell->next)
+	{
+		appendPQExpBuffer(query,
+						  "SELECT oid FROM pg_catalog.pg_foreign_server s\n");
+		processSQLNamePattern(GetConnection(fout), query, cell->val, false,
+							  false, NULL, "s.srvname", NULL, NULL);
+
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+		if (PQntuples(res) == 0)
+			fatal("no matching foreign servers were found for pattern \"%s\"", cell->val);
 
 		for (i = 0; i < PQntuples(res); i++)
 		{
@@ -1812,7 +1886,7 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 	 */
 	column_list = fmtCopyColumnList(tbinfo, clistBuf);
 
-	if (tdinfo->filtercond)
+	if (tdinfo->filtercond || tbinfo->relkind == RELKIND_FOREIGN_TABLE)
 	{
 		/* Note: this syntax is only supported in 8.2 and up */
 		appendPQExpBufferStr(q, "COPY (SELECT ");
@@ -1824,9 +1898,11 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 		}
 		else
 			appendPQExpBufferStr(q, "* ");
-		appendPQExpBuffer(q, "FROM %s %s) TO stdout;",
-						  fmtQualifiedDumpable(tbinfo),
-						  tdinfo->filtercond);
+
+		appendPQExpBuffer(q, "FROM %s", fmtQualifiedDumpable(tbinfo));
+		if (tdinfo->filtercond)
+			appendPQExpBuffer(q, " %s", tdinfo->filtercond);
+		appendPQExpBuffer(q, ") TO stdout;");
 	}
 	else
 	{
@@ -2342,8 +2418,11 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	/* Skip VIEWs (no data to dump) */
 	if (tbinfo->relkind == RELKIND_VIEW)
 		return;
-	/* Skip FOREIGN TABLEs (no data to dump) */
-	if (tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+	/* Skip FOREIGN TABLEs (no data to dump) if not requested explicitly */
+	if (tbinfo->relkind == RELKIND_FOREIGN_TABLE &&
+		(foreign_servers_include_oids.head == NULL ||
+		!simple_oid_list_member(&foreign_servers_include_oids,
+								tbinfo->foreign_server_oid)))
 		return;
 	/* Skip partitioned tables (data in partitions) */
 	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
@@ -6650,6 +6729,26 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].partkeydef = pg_strdup(PQgetvalue(res, i, i_partkeydef));
 		tblinfo[i].ispartition = (strcmp(PQgetvalue(res, i, i_ispartition), "t") == 0);
 		tblinfo[i].partbound = pg_strdup(PQgetvalue(res, i, i_partbound));
+
+		if (tblinfo[i].relkind == RELKIND_FOREIGN_TABLE)
+		{
+			PQExpBuffer query_server = createPQExpBuffer();
+			PGresult   *res_server;
+
+			/* retrieve the oid of the foreign server*/
+			appendPQExpBuffer(query_server,
+							  "SELECT fs.oid "
+							  "FROM pg_catalog.pg_foreign_table ft "
+							  "JOIN pg_catalog.pg_foreign_server fs "
+							  "ON (fs.oid = ft.ftserver) "
+							  "WHERE ft.ftrelid = '%u'",
+							  tblinfo[i].dobj.catId.oid);
+
+			res_server = ExecuteSqlQueryForSingleRow(fout, query_server->data);
+			tblinfo[i].foreign_server_oid = atooid(PQgetvalue(res_server, 0, 0));
+			PQclear(res_server);
+			destroyPQExpBuffer(query_server);
+		}
 
 		/*
 		 * Read-lock target tables to make sure they aren't DROPPED or altered

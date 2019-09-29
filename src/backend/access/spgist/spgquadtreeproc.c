@@ -112,6 +112,75 @@ getQuadrantArea(BOX *bbox, Point *centroid, int quadrant)
 	return result;
 }
 
+static int
+spg_quad_inner_consistent_box_helper(ScanKey sk, Point *centroid)
+{
+	/*
+	 * For this operator, the query is a box not a point.  We
+	 * cheat to the extent of assuming that DatumGetPointP won't
+	 * do anything that would be bad for a pointer-to-box.
+	 */
+	BOX *boxQuery = DatumGetBoxP(sk->sk_argument);
+	Point p;
+	int r = 0;
+
+	if (DatumGetBool(DirectFunctionCall2(box_contain_pt, PointerGetDatum(boxQuery), PointerGetDatum(centroid))))
+	{
+		/* centroid is in box, so all quadrants are OK */
+		return (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);
+	}
+
+	/* identify quadrant(s) containing all corners of box */
+	p = boxQuery->low;
+	r |= 1 << getQuadrant(centroid, &p);
+	p.y = boxQuery->high.y;
+	r |= 1 << getQuadrant(centroid, &p);
+	p = boxQuery->high;
+	r |= 1 << getQuadrant(centroid, &p);
+	p.x = boxQuery->low.x;
+	r |= 1 << getQuadrant(centroid, &p);
+
+	return r;
+}
+
+static int
+spg_quad_inner_consistent_circle_helper(ScanKey sk, Point *centroid)
+{
+	/*
+	 * Evaluate distances between the query center point and the quadrants.
+	 * The distance between a set and a point is the minimal possible distance
+	 * between any set point and the point. There are three possible cases: the
+	 * point belongs to the quandrand, the point projection is on the quadrant
+	 * edge, the point projections is on the quadrant vertex.
+	 */
+	CIRCLE *circleQuery = DatumGetCircleP(sk->sk_argument);
+	int r = 0;
+
+	const Point cp = {
+		.x = float8_mi(centroid->x, circleQuery->center.x),
+		.y = float8_mi(centroid->y, circleQuery->center.y)
+	};
+
+	const float8 x_p0 = (0. > cp.x ? 0. : cp.x);
+	const float8 y_p0 = (0. > cp.y ? 0. : cp.y);
+	const float8 x_n0 = (0. < cp.x ? 0. : cp.x);
+	const float8 y_n0 = (0. < cp.y ? 0. : cp.y);
+
+	const float8 d[4] = {
+		HYPOT(x_p0, y_p0),
+		HYPOT(x_p0, y_n0),
+		HYPOT(x_n0, y_n0),
+		HYPOT(x_n0, y_p0)
+	};
+
+	for (int i = 0; i < 4; i++) {
+		if (d[i] <= circleQuery->radius)
+			r |= (1 << (i + 1));
+	}
+
+	return r;
+}
+
 Datum
 spg_quad_choose(PG_FUNCTION_ARGS)
 {
@@ -300,10 +369,10 @@ spg_quad_inner_consistent(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < in->nkeys; i++)
 	{
-		Point	   *query = DatumGetPointP(in->scankeys[i].sk_argument);
-		BOX		   *boxQuery;
+		const ScanKey sk = in->scankeys + i;
+		Point	   *query = DatumGetPointP(sk->sk_argument);
 
-		switch (in->scankeys[i].sk_strategy)
+		switch (sk->sk_strategy)
 		{
 			case RTLeftStrategyNumber:
 				if (SPTEST(point_right, centroid, query))
@@ -326,40 +395,20 @@ spg_quad_inner_consistent(PG_FUNCTION_ARGS)
 				break;
 			case RTContainedByStrategyNumber:
 
-				/*
-				 * For this operator, the query is a box not a point.  We
-				 * cheat to the extent of assuming that DatumGetPointP won't
-				 * do anything that would be bad for a pointer-to-box.
-				 */
-				boxQuery = DatumGetBoxP(in->scankeys[i].sk_argument);
-
-				if (DatumGetBool(DirectFunctionCall2(box_contain_pt,
-													 PointerGetDatum(boxQuery),
-													 PointerGetDatum(centroid))))
-				{
-					/* centroid is in box, so all quadrants are OK */
-				}
-				else
-				{
-					/* identify quadrant(s) containing all corners of box */
-					Point		p;
-					int			r = 0;
-
-					p = boxQuery->low;
-					r |= 1 << getQuadrant(centroid, &p);
-					p.y = boxQuery->high.y;
-					r |= 1 << getQuadrant(centroid, &p);
-					p = boxQuery->high;
-					r |= 1 << getQuadrant(centroid, &p);
-					p.x = boxQuery->low.x;
-					r |= 1 << getQuadrant(centroid, &p);
-
-					which &= r;
+				switch (sk->sk_subtype) {
+				case BOXOID:
+					which &= spg_quad_inner_consistent_box_helper(sk, centroid);
+					break;
+				case CIRCLEOID:
+					which &= spg_quad_inner_consistent_circle_helper(sk, centroid);
+					break;
+				default:
+					elog(ERROR, "unrecognized right type OID: %d", sk->sk_subtype);
+					break;
 				}
 				break;
 			default:
-				elog(ERROR, "unrecognized strategy number: %d",
-					 in->scankeys[i].sk_strategy);
+				elog(ERROR, "unrecognized strategy number: %d", sk->sk_strategy);
 				break;
 		}
 
@@ -421,9 +470,10 @@ spg_quad_leaf_consistent(PG_FUNCTION_ARGS)
 	res = true;
 	for (i = 0; i < in->nkeys; i++)
 	{
-		Point	   *query = DatumGetPointP(in->scankeys[i].sk_argument);
+		const ScanKey sk = in->scankeys + i;
+		Point	   *query = DatumGetPointP(sk->sk_argument);
 
-		switch (in->scankeys[i].sk_strategy)
+		switch (sk->sk_strategy)
 		{
 			case RTLeftStrategyNumber:
 				res = SPTEST(point_left, datum, query);
@@ -442,16 +492,25 @@ spg_quad_leaf_consistent(PG_FUNCTION_ARGS)
 				break;
 			case RTContainedByStrategyNumber:
 
-				/*
-				 * For this operator, the query is a box not a point.  We
-				 * cheat to the extent of assuming that DatumGetPointP won't
-				 * do anything that would be bad for a pointer-to-box.
-				 */
-				res = SPTEST(box_contain_pt, query, datum);
+				switch (sk->sk_subtype) {
+				case BOXOID:
+					/*
+					 * For this operator, the query is a box not a point.  We
+					 * cheat to the extent of assuming that DatumGetPointP won't
+					 * do anything that would be bad for a pointer-to-box.
+					 */
+					res = SPTEST(box_contain_pt, query, datum);
+					break;
+				case CIRCLEOID:
+					res = SPTEST(circle_contain_pt, query, datum);
+					break;
+				default:
+					elog(ERROR, "unrecognized right type OID: %d", sk->sk_subtype);
+					break;
+				}
 				break;
 			default:
-				elog(ERROR, "unrecognized strategy number: %d",
-					 in->scankeys[i].sk_strategy);
+				elog(ERROR, "unrecognized strategy number: %d", sk->sk_strategy);
 				break;
 		}
 

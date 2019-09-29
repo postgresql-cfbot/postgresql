@@ -1795,48 +1795,6 @@
       <row>
        <entry>
         <indexterm>
-         <primary>convert</primary>
-        </indexterm>
-        <literal><function>convert(<parameter>string</parameter> <type>bytea</type>,
-        <parameter>src_encoding</parameter> <type>name</type>,
-        <parameter>dest_encoding</parameter> <type>name</type>)</function></literal>
-       </entry>
-       <entry><type>bytea</type></entry>
-       <entry>
-        Convert string to <parameter>dest_encoding</parameter>.  The
-        original encoding is specified by
-        <parameter>src_encoding</parameter>. The
-        <parameter>string</parameter> must be valid in this encoding.
-        Conversions can be defined by <command>CREATE CONVERSION</command>.
-        Also there are some predefined conversions. See <xref
-        linkend="conversion-names"/> for available conversions.
-       </entry>
-       <entry><literal>convert('text_in_utf8', 'UTF8', 'LATIN1')</literal></entry>
-       <entry><literal>text_in_utf8</literal> represented in Latin-1
-       encoding (ISO 8859-1)</entry>
-      </row>
-
-      <row>
-       <entry>
-        <indexterm>
-         <primary>convert_from</primary>
-        </indexterm>
-        <literal><function>convert_from(<parameter>string</parameter> <type>bytea</type>,
-        <parameter>src_encoding</parameter> <type>name</type>)</function></literal>
-       </entry>
-       <entry><type>text</type></entry>
-       <entry>
-        Convert string to the database encoding.  The original encoding
-        is specified by <parameter>src_encoding</parameter>. The
-        <parameter>string</parameter> must be valid in this encoding.
-       </entry>
-       <entry><literal>convert_from('text_in_utf8', 'UTF8')</literal></entry>
-       <entry><literal>text_in_utf8</literal> represented in the current database encoding</entry>
-      </row>
-
-      <row>
-       <entry>
-        <indexterm>
          <primary>convert_to</primary>
         </indexterm>
         <literal><function>convert_to(<parameter>string</parameter> <type>text</type>,
@@ -1844,7 +1802,8 @@
        </entry>
        <entry><type>bytea</type></entry>
        <entry>
-        Convert string to <parameter>dest_encoding</parameter>.
+        Convert string to <parameter>dest_encoding</parameter>.  See <xref
+        linkend="conversion-names"/> for available conversions.
        </entry>
        <entry><literal>convert_to('some text', 'UTF8')</literal></entry>
        <entry><literal>some text</literal> represented in the UTF8 encoding</entry>
@@ -1855,36 +1814,21 @@
         <indexterm>
          <primary>decode</primary>
         </indexterm>
+        <indexterm>
+          <primary>base64 encoding</primary>
+        </indexterm>
         <literal><function>decode(<parameter>string</parameter> <type>text</type>,
         <parameter>format</parameter> <type>text</type>)</function></literal>
        </entry>
        <entry><type>bytea</type></entry>
        <entry>
         Decode binary data from textual representation in <parameter>string</parameter>.
-        Options for <parameter>format</parameter> are same as in <function>encode</function>.
+        <link linkend="encoding-options">Options
+        for <parameter>format</parameter></link> are same as
+        in <function>encode</function>.
        </entry>
        <entry><literal>decode('MTIzAAE=', 'base64')</literal></entry>
        <entry><literal>\x3132330001</literal></entry>
-      </row>
-
-      <row>
-       <entry>
-        <indexterm>
-         <primary>encode</primary>
-        </indexterm>
-        <literal><function>encode(<parameter>data</parameter> <type>bytea</type>,
-        <parameter>format</parameter> <type>text</type>)</function></literal>
-       </entry>
-       <entry><type>text</type></entry>
-       <entry>
-        Encode binary data into a textual representation.  Supported
-        formats are: <literal>base64</literal>, <literal>hex</literal>, <literal>escape</literal>.
-        <literal>escape</literal> converts zero bytes and high-bit-set bytes to
-        octal sequences (<literal>\</literal><replaceable>nnn</replaceable>) and
-        doubles backslashes.
-       </entry>
-       <entry><literal>encode('123\000\001', 'base64')</literal></entry>
-       <entry><literal>MTIzAAE=</literal></entry>
       </row>
 
       <row>
@@ -1951,19 +1895,6 @@
         Number of characters in <parameter>string</parameter>
        </entry>
        <entry><literal>length('jose')</literal></entry>
-       <entry><literal>4</literal></entry>
-      </row>
-
-      <row>
-       <entry><literal><function>length(<parameter>string</parameter> <type>bytea</type>,
-        <parameter>encoding</parameter> <type>name</type> )</function></literal></entry>
-       <entry><type>int</type></entry>
-       <entry>
-        Number of characters in <parameter>string</parameter> in the given
-        <parameter>encoding</parameter>. The <parameter>string</parameter>
-        must be valid in this encoding.
-       </entry>
-       <entry><literal>length('jose', 'UTF8')</literal></entry>
        <entry><literal>4</literal></entry>
       </row>
 
@@ -2130,18 +2061,6 @@
        </entry>
        <entry><literal>quote_nullable(NULL)</literal></entry>
        <entry><literal>NULL</literal></entry>
-      </row>
-
-      <row>
-       <entry><literal><function>quote_nullable(<parameter>value</parameter> <type>anyelement</type>)</function></literal></entry>
-       <entry><type>text</type></entry>
-       <entry>
-        Coerce the given value to text and then quote it as a literal;
-        or, if the argument is null, return <literal>NULL</literal>.
-        Embedded single-quotes and backslashes are properly doubled.
-       </entry>
-       <entry><literal>quote_nullable(42.5)</literal></entry>
-       <entry><literal>'42.5'</literal></entry>
       </row>
 
       <row>
@@ -2417,22 +2336,6 @@
       <row>
        <entry>
         <indexterm>
-         <primary>to_hex</primary>
-        </indexterm>
-        <literal><function>to_hex(<parameter>number</parameter> <type>int</type>
-        or <type>bigint</type>)</function></literal>
-       </entry>
-       <entry><type>text</type></entry>
-       <entry>Convert <parameter>number</parameter> to its equivalent hexadecimal
-        representation
-       </entry>
-       <entry><literal>to_hex(2147483647)</literal></entry>
-       <entry><literal>7fffffff</literal></entry>
-      </row>
-
-      <row>
-       <entry>
-        <indexterm>
          <primary>translate</primary>
         </indexterm>
         <literal><function>translate(<parameter>string</parameter> <type>text</type>,
@@ -2466,6 +2369,89 @@
     If the variadic array argument is NULL, <function>concat</function>
     and <function>concat_ws</function> return NULL, but
     <function>format</function> treats a NULL as a zero-element array.
+   </para>
+
+   <indexterm>
+     <primary>encode</primary>
+   </indexterm>
+   <indexterm>
+     <primary>decode</primary>
+   </indexterm>
+   <indexterm>
+     <primary>base64 encoding</primary>
+   </indexterm>
+   <indexterm>
+    <primary>hex encoding</primary>
+   </indexterm>
+   <indexterm>
+    <primary>escape encoding</primary>
+   </indexterm>
+
+   <para id="encoding-options">
+     The <function>encode</function> and <function>decode</function> functions
+     support the following encodings:
+
+     <variablelist>
+       <varlistentry id="base64-encoding">
+         <term>base64</term>
+         <listitem>
+           <para>
+             The <literal>base64</literal> encoding is that
+             of <ulink url="https://tools.ietf.org/html/rfc2045#section-6.8">RFC
+             2045 Section 6.8</ulink>.  As per the RFC, encoded lines are
+             broken at 76 characters.  However instead of the MIME CRLF
+             end-of-line marker, only a newline is used for end-of-line.
+           </para>
+           <para>
+             The <function>decode</function> function ignores carriage-return,
+             newline, space, and tab characters.  Otherwise, an error is
+             raised when <function>decode</function> is supplied invalid
+             base64 data &mdash; including when trailing padding is incorrect.
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry id="escape-encoding">
+         <term>escape</term>
+         <listitem>
+           <para>
+             The <literal>escape</literal> encoding converts zero bytes and
+             high-bit-set bytes to octal sequences
+             (<literal>\</literal><replaceable>nnn</replaceable>) and doubles
+             backslashes.  Encoding always produces 4 characters for each
+             high-bit-set input byte.
+           </para>
+           <para>
+             The <function>decode</function> function accepts fewer than three
+             octal digits after a <literal>\</literal> character.  An error is
+             raised when <function>decode</function> is supplied a
+             single <literal>\</literal> not followed by an octal digit.
+           </para>
+         </listitem>
+       </varlistentry>
+
+       <varlistentry id="hex-encoding">
+         <term>hex</term>
+         <listitem>
+           <para>
+             The <literal>hex</literal> encoding represents each 4 bits of
+             data as a single hexadecimal digit, <literal>0</literal>
+             through <literal>f</literal>.  Encoding outputs
+             the <literal>a</literal>-<literal>f</literal> hex digits in lower
+             case.  Because the smallest unit of data is 8 bits there are
+             always an even number of characters returned
+             by <function>encode</function>.
+           </para>
+           <para>
+             The <function>decode</function> function
+             accepts <literal>a</literal>-<literal>f</literal> characters in
+             either upper or lower case.  An error is raised
+             when <function>decode</function> is supplied invalid hex data
+             &mdash; including when given an odd number of characters.
+           </para>
+         </listitem>
+       </varlistentry>
+     </variablelist>
    </para>
 
    <para>
@@ -3466,7 +3452,8 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
 
    <para>
     This section describes functions and operators for examining and
-    manipulating values of type <type>bytea</type>.
+    manipulating values of type <type>bytea</type>, and a few functions
+    which produce strings from other binary inputs.
    </para>
 
    <para>
@@ -3629,47 +3616,81 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
         Remove the longest string containing only bytes appearing in
         <parameter>bytes</parameter> from the start and end of
         <parameter>string</parameter>
-      </entry>
+       </entry>
       <entry><literal>btrim('\000trim\001'::bytea, '\000\001'::bytea)</literal></entry>
       <entry><literal>trim</literal></entry>
      </row>
 
-     <row>
-      <entry>
+      <row>
+       <entry>
         <indexterm>
-         <primary>decode</primary>
+         <primary>convert</primary>
         </indexterm>
-       <literal><function>decode(<parameter>string</parameter> <type>text</type>,
-       <parameter>format</parameter> <type>text</type>)</function></literal>
-      </entry>
-      <entry><type>bytea</type></entry>
-      <entry>
-       Decode binary data from textual representation in <parameter>string</parameter>.
-       Options for <parameter>format</parameter> are same as in <function>encode</function>.
-      </entry>
-      <entry><literal>decode('123\000456', 'escape')</literal></entry>
-      <entry><literal>123\000456</literal></entry>
-     </row>
+        <literal><function>convert(<parameter>string</parameter> <type>bytea</type>,
+        <parameter>src_encoding</parameter> <type>name</type>,
+        <parameter>dest_encoding</parameter> <type>name</type>)</function></literal>
+       </entry>
+       <entry><type>bytea</type></entry>
+       <entry>
+        Convert string from <parameter>src_encoding</parameter>
+        to <parameter>dest_encoding</parameter>, or raise an error.  See
+        <xref linkend="conversion-names"/> for the predefined conversions.
+        The <parameter>string</parameter> must be valid
+        in <parameter>src_encoding</parameter>.  New conversions may be
+        defined with <command>CREATE CONVERSION</command>.
+       </entry>
+       <entry><literal>convert('text_in_utf8', 'UTF8', 'LATIN1')</literal></entry>
+       <entry><literal>text_in_utf8</literal> represented in Latin-1
+       encoding (ISO 8859-1)</entry>
+      </row>
 
-     <row>
-      <entry>
+      <row>
+       <entry>
+        <indexterm>
+         <primary>convert_from</primary>
+        </indexterm>
+        <literal><function>convert_from(<parameter>string</parameter> <type>bytea</type>,
+        <parameter>src_encoding</parameter> <type>name</type>)</function></literal>
+       </entry>
+       <entry><type>text</type></entry>
+       <entry>
+        Convert string to the database encoding.  The original encoding
+        is specified by <parameter>src_encoding</parameter>. The
+        <parameter>string</parameter> must be valid in this encoding.  See
+        <xref linkend="conversion-names"/> for available conversions.
+       </entry>
+       <entry><literal>convert_from('text_in_utf8', 'UTF8')</literal></entry>
+       <entry><literal>text_in_utf8</literal> represented in the current database encoding</entry>
+      </row>
+
+      <row>
+       <entry>
         <indexterm>
          <primary>encode</primary>
         </indexterm>
-       <literal><function>encode(<parameter>data</parameter> <type>bytea</type>,
-       <parameter>format</parameter> <type>text</type>)</function></literal>
-      </entry>
-      <entry><type>text</type></entry>
-      <entry>
-       Encode binary data into a textual representation.  Supported
-       formats are: <literal>base64</literal>, <literal>hex</literal>, <literal>escape</literal>.
-       <literal>escape</literal> converts zero bytes and high-bit-set bytes to
-       octal sequences (<literal>\</literal><replaceable>nnn</replaceable>) and
-       doubles backslashes.
-      </entry>
-      <entry><literal>encode('123\000456'::bytea, 'escape')</literal></entry>
-      <entry><literal>123\000456</literal></entry>
-     </row>
+        <indexterm>
+         <primary>base64 encoding</primary>
+        </indexterm>
+        <indexterm>
+         <primary>hex encoding</primary>
+        </indexterm>
+        <indexterm>
+         <primary>escape encoding</primary>
+        </indexterm>
+        <literal><function>encode(<parameter>data</parameter> <type>bytea</type>,
+        <parameter>format</parameter> <type>text</type>)</function></literal>
+       </entry>
+       <entry><type>text</type></entry>
+       <entry>
+        Encode binary data into a textual representation.  Supported
+        formats are:
+        <link linkend="base64-encoding"><literal>base64</literal></link>,
+        <link linkend="escape-encoding"><literal>escape</literal></link>,
+        <link linkend="hex-encoding"><literal>hex</literal></link>.
+       </entry>
+       <entry><literal>encode('123\000\001', 'base64')</literal></entry>
+       <entry><literal>MTIzAAE=</literal></entry>
+      </row>
 
       <row>
        <entry>
@@ -3701,45 +3722,70 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
        <entry><literal>109</literal></entry>
       </row>
 
-     <row>
-      <entry>
-       <indexterm>
-        <primary>length</primary>
-       </indexterm>
-       <literal><function>length(<parameter>string</parameter>)</function></literal>
-      </entry>
-      <entry><type>int</type></entry>
-      <entry>
-       Length of binary string
-       <indexterm>
-        <primary>binary string</primary>
-        <secondary>length</secondary>
-       </indexterm>
-       <indexterm>
-        <primary>length</primary>
-        <secondary sortas="binary string">of a binary string</secondary>
-        <see>binary strings, length</see>
-       </indexterm>
-      </entry>
-      <entry><literal>length('jo\000se'::bytea)</literal></entry>
-      <entry><literal>5</literal></entry>
-     </row>
+      <row>
+       <entry>
+        <indexterm>
+         <primary>length</primary>
+        </indexterm>
+        <literal><function>length(<parameter>string</parameter>)</function></literal>
+       </entry>
+       <entry><type>int</type></entry>
+       <entry>
+        Length of binary string
+        <indexterm>
+         <primary>binary string</primary>
+         <secondary>length</secondary>
+        </indexterm>
+        <indexterm>
+         <primary>length</primary>
+         <secondary sortas="binary string">of a binary string</secondary>
+         <see>binary strings, length</see>
+        </indexterm>
+       </entry>
+       <entry><literal>length('jo\000se'::bytea)</literal></entry>
+       <entry><literal>5</literal></entry>
+      </row>
 
-     <row>
-      <entry>
-       <indexterm>
-        <primary>md5</primary>
-       </indexterm>
-       <literal><function>md5(<parameter>string</parameter>)</function></literal>
-      </entry>
-      <entry><type>text</type></entry>
-      <entry>
-       Calculates the MD5 hash of <parameter>string</parameter>,
-       returning the result in hexadecimal
-      </entry>
-      <entry><literal>md5('Th\000omas'::bytea)</literal></entry>
-      <entry><literal>8ab2d3c9689aaf18&#x200B;b4958c334c82d8b1</literal></entry>
-     </row>
+      <row>
+       <entry><literal><function>length(<parameter>string</parameter> <type>bytea</type>,
+        <parameter>encoding</parameter> <type>name</type> )</function></literal></entry>
+       <entry><type>int</type></entry>
+       <entry>
+        Number of characters in <parameter>string</parameter> in the given
+        <parameter>encoding</parameter>. The <parameter>string</parameter>
+        must be valid in this encoding.
+       </entry>
+       <entry><literal>length('jose', 'UTF8')</literal></entry>
+       <entry><literal>4</literal></entry>
+      </row>
+
+      <row>
+       <entry>
+        <indexterm>
+         <primary>md5</primary>
+        </indexterm>
+        <literal><function>md5(<parameter>string</parameter>)</function></literal>
+       </entry>
+       <entry><type>text</type></entry>
+       <entry>
+        Calculates the MD5 hash of <parameter>string</parameter>,
+        returning the result in hexadecimal
+       </entry>
+       <entry><literal>md5('Th\000omas'::bytea)</literal></entry>
+       <entry><literal>8ab2d3c9689aaf18&#x200B;b4958c334c82d8b1</literal></entry>
+      </row>
+
+      <row>
+       <entry><literal><function>quote_nullable(<parameter>value</parameter> <type>anyelement</type>)</function></literal></entry>
+       <entry><type>text</type></entry>
+       <entry>
+        Coerce the given value to text and then quote it as a literal;
+        or, if the argument is null, return <literal>NULL</literal>.
+        Embedded single-quotes and backslashes are properly doubled.
+       </entry>
+       <entry><literal>quote_nullable(42.5)</literal></entry>
+       <entry><literal>'42.5'</literal></entry>
+      </row>
 
       <row>
        <entry>
@@ -3831,6 +3877,22 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
        </entry>
        <entry><literal>sha512('abc')</literal></entry>
        <entry><literal>\xddaf35a193617abacc417349ae204131&#x200B;12e6fa4e89a97ea20a9eeee64b55d39a&#x200B;2192992a274fc1a836ba3c23a3feebbd&#x200B;454d4423643ce80e2a9ac94fa54ca49f</literal></entry>
+      </row>
+
+      <row>
+       <entry>
+        <indexterm>
+         <primary>to_hex</primary>
+        </indexterm>
+        <literal><function>to_hex(<parameter>number</parameter> <type>int</type>
+        or <type>bigint</type>)</function></literal>
+       </entry>
+       <entry><type>text</type></entry>
+       <entry>Convert <parameter>number</parameter> to its equivalent hexadecimal
+        representation
+       </entry>
+       <entry><literal>to_hex(2147483647)</literal></entry>
+       <entry><literal>7fffffff</literal></entry>
       </row>
     </tbody>
    </tgroup>

@@ -61,17 +61,18 @@ static void usage(const char *progname);
 static int
 vacuumlo(const char *database, const struct _param *param)
 {
-	PGconn	   *conn;
-	PGresult   *res,
-			   *res2;
+	PGconn		*conn;
+	PGresult	*res,
+			*res2;
 	char		buf[BUFSIZE];
+	long		to_delete = 0;
 	long		matched;
 	long		deleted;
-	int			i;
+	int		i;
 	bool		new_pass;
 	bool		success = true;
-	static bool have_password = false;
-	static char password[100];
+	static bool	have_password = false;
+	static char	password[100];
 
 	/* Note: password can be carried over from a previous call */
 	if (param->pg_prompt == TRI_YES && !have_password)
@@ -169,6 +170,7 @@ vacuumlo(const char *database, const struct _param *param)
 		PQfinish(conn);
 		return -1;
 	}
+	to_delete = strtol(PQcmdTuples(res), NULL, 10);
 	PQclear(res);
 
 	/*
@@ -217,9 +219,10 @@ vacuumlo(const char *database, const struct _param *param)
 
 	for (i = 0; i < PQntuples(res); i++)
 	{
-		char	   *schema,
-				   *table,
-				   *field;
+		char	*schema,
+			*table,
+			*field;
+		long	excluded;
 
 		schema = PQgetvalue(res, i, 0);
 		table = PQgetvalue(res, i, 1);
@@ -263,13 +266,18 @@ vacuumlo(const char *database, const struct _param *param)
 			PQfreemem(field);
 			return -1;
 		}
+		excluded = strtol(PQcmdTuples(res2), NULL, 10);
 		PQclear(res2);
+		to_delete -= excluded;
 
 		PQfreemem(schema);
 		PQfreemem(table);
 		PQfreemem(field);
 	}
 	PQclear(res);
+
+	if (param->verbose)
+		fprintf(stdout, "%ld large objects will be removed\n", to_delete);
 
 	/*
 	 * Now, those entries remaining in vacuum_l are orphans.  Delete 'em.
@@ -333,7 +341,8 @@ vacuumlo(const char *database, const struct _param *param)
 
 			if (param->verbose)
 			{
-				fprintf(stdout, "\rRemoving lo %6u   ", lo);
+				fprintf(stdout, "\rRemoving lo %6u\t(%3.f%%)", lo,
+						((float) deleted / (float) to_delete) * 100);
 				fflush(stdout);
 			}
 

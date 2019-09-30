@@ -682,6 +682,9 @@
 
 #dynamic_library_path = '$libdir'
 
+#trusted_extensions_dba = '^pl'		# exts installable by database owner
+#trusted_extensions_anyone = '^$'	# exts installable by anyone
+
 
 #------------------------------------------------------------------------------
 # LOCK MANAGEMENT

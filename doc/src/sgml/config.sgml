@@ -8447,6 +8447,78 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-trusted-extensions-dba" xreflabel="trusted_extensions_dba">
+      <term><varname>trusted_extensions_dba</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>trusted_extensions_dba</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter is a regular expression that matches the names of
+        trustable extensions that database owners are allowed to install
+        into their databases
+        (that is, run <xref linkend="sql-createextension"/> on; the
+        extension's files must already be present in the installation).
+        See <xref linkend="extend-extensions"/> for more information.
+        Regular expressions are explained in
+        <xref linkend="posix-syntax-details"/>.
+       </para>
+
+       <para>
+        The default value for this parameter is
+        <literal>'^pl'</literal>, which matches any extension whose name
+        begins with <literal>pl</literal>.  This allows database owners to
+        install trusted procedural languages, which was the hard-wired
+        behavior in older <productname>PostgreSQL</productname> versions.
+       </para>
+
+       <para>
+        This parameter can be changed at run time by superusers, but a
+        setting done that way will only persist until the end of the
+        client connection, so this method should be reserved for
+        development purposes. The recommended way to set this parameter
+        is in the <filename>postgresql.conf</filename> configuration
+        file.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-trusted-extensions-anyone" xreflabel="trusted_extensions_anyone">
+      <term><varname>trusted_extensions_anyone</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>trusted_extensions_anyone</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter is a regular expression that matches the names of
+        trustable extensions that any SQL user is allowed to install
+        (that is, run <xref linkend="sql-createextension"/> on; the
+        extension's files must already be present in the installation).
+        See <xref linkend="extend-extensions"/> for more information.
+        Regular expressions are explained in
+        <xref linkend="posix-syntax-details"/>.
+       </para>
+
+       <para>
+        The default value for this parameter is
+        <literal>'^$'</literal>, which matches no extension names, thus
+        forbidding unprivileged users from installing any extensions that
+        require superuser privileges to install.
+       </para>
+
+       <para>
+        This parameter can be changed at run time by superusers, but a
+        setting done that way will only persist until the end of the
+        client connection, so this method should be reserved for
+        development purposes. The recommended way to set this parameter
+        is in the <filename>postgresql.conf</filename> configuration
+        file.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-gin-fuzzy-search-limit" xreflabel="gin_fuzzy_search_limit">
       <term><varname>gin_fuzzy_search_limit</varname> (<type>integer</type>)
       <indexterm>

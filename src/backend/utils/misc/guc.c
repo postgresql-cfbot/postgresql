@@ -36,7 +36,9 @@
 #include "access/xlog_internal.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "commands/async.h"
+#include "commands/extension.h"
 #include "commands/prepare.h"
 #include "commands/user.h"
 #include "commands/vacuum.h"
@@ -65,6 +67,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
+#include "regex/regex.h"
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
@@ -175,6 +178,7 @@ static bool check_ssl(bool *newval, void **extra, GucSource source);
 static bool check_stage_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_canonical_path(char **newval, void **extra, GucSource source);
+static bool check_regular_expression(char **newval, void **extra, GucSource source);
 static bool check_timezone_abbreviations(char **newval, void **extra, GucSource source);
 static void assign_timezone_abbreviations(const char *newval, void *extra);
 static void pg_timezone_abbrev_initialize(void);
@@ -4175,6 +4179,26 @@ static struct config_string ConfigureNamesString[] =
 		&cluster_name,
 		"",
 		check_cluster_name, NULL, NULL
+	},
+
+	{
+		{"trusted_extensions_dba", PGC_SUSET, CLIENT_CONN_OTHER,
+			gettext_noop("Selects which trustable extensions may be installed by database owners."),
+			NULL
+		},
+		&trusted_extensions_dba,
+		"^pl",
+		check_regular_expression, NULL, NULL
+	},
+
+	{
+		{"trusted_extensions_anyone", PGC_SUSET, CLIENT_CONN_OTHER,
+			gettext_noop("Selects which trustable extensions may be installed by anyone."),
+			NULL
+		},
+		&trusted_extensions_anyone,
+		"^$",
+		check_regular_expression, NULL, NULL
 	},
 
 	{
@@ -11111,6 +11135,37 @@ check_canonical_path(char **newval, void **extra, GucSource source)
 	 */
 	if (*newval)
 		canonicalize_path(*newval);
+	return true;
+}
+
+/* Check that the GUC's value is a valid regular expression. */
+static bool
+check_regular_expression(char **newval, void **extra, GucSource source)
+{
+	int			r;
+	pg_wchar   *wstr;
+	int			wlen;
+	regex_t		re;
+
+	if (!*newval)
+		return false;
+
+	/* The regex library wants to deal in wchars not chars */
+	wstr = palloc((strlen(*newval) + 1) * sizeof(pg_wchar));
+	wlen = pg_mb2wchar_with_len(*newval, wstr, strlen(*newval));
+
+	r = pg_regcomp(&re, wstr, wlen, REG_ADVANCED, C_COLLATION_OID);
+	if (r)
+	{
+		char		errstr[100];
+
+		pg_regerror(r, &re, errstr, sizeof(errstr));
+		GUC_check_errdetail("invalid regular expression: %s", errstr);
+		pfree(wstr);
+		return false;
+	}
+	pg_regfree(&re);
+	pfree(wstr);
 	return true;
 }
 

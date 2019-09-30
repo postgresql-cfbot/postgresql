@@ -1654,13 +1654,20 @@ pgwin32_ServiceMain(DWORD argc, LPTSTR *argv)
 	if (do_wait)
 	{
 		write_eventlog(EVENTLOG_INFORMATION_TYPE, _("Waiting for server startup...\n"));
-		if (wait_for_postmaster(postmasterPID, true) != POSTMASTER_READY)
+		switch (wait_for_postmaster(postmasterPID, true))
 		{
-			write_eventlog(EVENTLOG_ERROR_TYPE, _("Timed out waiting for server startup\n"));
-			pgwin32_SetServiceStatus(SERVICE_STOPPED);
-			return;
+			case POSTMASTER_READY:
+				write_eventlog(EVENTLOG_INFORMATION_TYPE, _("Server started and accepting connections\n"));
+				break;
+			case POSTMASTER_STILL_STARTING:
+				write_eventlog(EVENTLOG_ERROR_TYPE, _("Timed out waiting for server startup\n"));
+				pgwin32_SetServiceStatus(SERVICE_START_PENDING);
+				return;
+			case POSTMASTER_FAILED:
+				write_eventlog(EVENTLOG_ERROR_TYPE, _("could not start server\n"));
+				pgwin32_SetServiceStatus(SERVICE_STOPPED);
+				return;
 		}
-		write_eventlog(EVENTLOG_INFORMATION_TYPE, _("Server started and accepting connections\n"));
 	}
 
 	pgwin32_SetServiceStatus(SERVICE_RUNNING);

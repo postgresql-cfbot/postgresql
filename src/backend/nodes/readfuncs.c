@@ -637,6 +637,50 @@ _readGroupingFunc(void)
 }
 
 /*
+ * _readGroupingSetId
+ */
+static GroupingSetId *
+_readGroupingSetId(void)
+{
+	READ_LOCALS_NO_FIELDS(GroupingSetId);
+
+	READ_DONE();
+}
+
+/*
+ * _readRollupData
+ */
+static RollupData *
+_readRollupData(void)
+{
+	READ_LOCALS(RollupData);
+
+	READ_NODE_FIELD(groupClause);
+	READ_NODE_FIELD(gsets);
+	READ_NODE_FIELD(gsets_data);
+	READ_FLOAT_FIELD(numGroups);
+	READ_BOOL_FIELD(hashable);
+	READ_BOOL_FIELD(is_hashed);
+
+	READ_DONE();
+}
+
+/*
+ * _readGroupingSetData
+ */
+static GroupingSetData *
+_readGroupingSetData(void)
+{
+	READ_LOCALS(GroupingSetData);
+
+	READ_NODE_FIELD(set);
+	READ_INT_FIELD(grpsetId);
+	READ_FLOAT_FIELD(numGroups);
+
+	READ_DONE();
+}
+
+/*
  * _readWindowFunc
  */
 static WindowFunc *
@@ -2171,7 +2215,7 @@ _readAgg(void)
 	READ_OID_ARRAY(grpCollations, local_node->numCols);
 	READ_LONG_FIELD(numGroups);
 	READ_BITMAPSET_FIELD(aggParams);
-	READ_NODE_FIELD(groupingSets);
+	READ_NODE_FIELD(rollup);
 	READ_NODE_FIELD(chain);
 
 	READ_DONE();
@@ -2607,6 +2651,12 @@ parseNodeString(void)
 		return_value = _readAggref();
 	else if (MATCH("GROUPINGFUNC", 12))
 		return_value = _readGroupingFunc();
+	else if (MATCH("GROUPINGSETID", 13))
+		return_value = _readGroupingSetId();
+	else if (MATCH("ROLLUP", 6))
+		return_value = _readRollupData();
+	else if (MATCH("GSDATA", 6))
+		return_value = _readGroupingSetData();
 	else if (MATCH("WINDOWFUNC", 10))
 		return_value = _readWindowFunc();
 	else if (MATCH("SUBSCRIPTINGREF", 15))

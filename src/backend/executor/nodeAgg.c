@@ -226,6 +226,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pathnodes.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
@@ -276,6 +277,7 @@ static void build_hash_table(AggState *aggstate);
 static TupleHashEntryData *lookup_hash_entry(AggState *aggstate);
 static void lookup_hash_entries(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_direct(AggState *aggstate);
+static void agg_dispatch_input_tuples(AggState *aggstate);
 static void agg_fill_hash_table(AggState *aggstate);
 static TupleTableSlot *agg_retrieve_hash_table(AggState *aggstate);
 static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
@@ -314,9 +316,6 @@ select_current_set(AggState *aggstate, int setno, bool is_hash)
 /*
  * Switch to phase "newphase", which must either be 0 or 1 (to reset) or
  * current_phase + 1. Juggle the tuplesorts accordingly.
- *
- * Phase 0 is for hashing, which we currently handle last in the AGG_MIXED
- * case, so when entering phase 0, all we need to do is drop open sorts.
  */
 static void
 initialize_phase(AggState *aggstate, int newphase)
@@ -333,6 +332,12 @@ initialize_phase(AggState *aggstate, int newphase)
 		aggstate->sort_in = NULL;
 	}
 
+	if (aggstate->store_in)
+	{
+		tuplestore_end(aggstate->store_in);
+		aggstate->store_in = NULL;	
+	}
+
 	if (newphase <= 1)
 	{
 		/*
@@ -346,21 +351,36 @@ initialize_phase(AggState *aggstate, int newphase)
 	}
 	else
 	{
-		/*
-		 * The old output tuplesort becomes the new input one, and this is the
-		 * right time to actually sort it.
+		/* 
+		 * When combining partial grouping sets aggregate results, we use
+		 * the sort_in or store_in which contains the dispatched tuples as
+		 * the input. Otherwise, use the the sort_out of previous phase.
 		 */
-		aggstate->sort_in = aggstate->sort_out;
+		if (DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
+		{
+			aggstate->sort_in = aggstate->phases[newphase].sort_in;
+			aggstate->store_in = aggstate->phases[newphase].store_in;
+		}
+		else
+		{
+			aggstate->sort_in = aggstate->sort_out;
+			aggstate->store_in = NULL;
+		}
+
 		aggstate->sort_out = NULL;
-		Assert(aggstate->sort_in);
-		tuplesort_performsort(aggstate->sort_in);
+		Assert(aggstate->sort_in || aggstate->store_in);
+
+		/* This is the right time to actually sort it. */
+		if (aggstate->sort_in)
+			tuplesort_performsort(aggstate->sort_in);
 	}
 
 	/*
 	 * If this isn't the last phase, we need to sort appropriately for the
 	 * next phase in sequence.
 	 */
-	if (newphase > 0 && newphase < aggstate->numphases - 1)
+	if (aggstate->aggsplit != AGGSPLIT_FINAL_DESERIAL &&
+		newphase > 0 && newphase < aggstate->numphases - 1)
 	{
 		Sort	   *sortnode = aggstate->phases[newphase + 1].sortnode;
 		PlanState  *outerNode = outerPlanState(aggstate);
@@ -399,6 +419,15 @@ fetch_input_tuple(AggState *aggstate)
 		CHECK_FOR_INTERRUPTS();
 		if (!tuplesort_gettupleslot(aggstate->sort_in, true, false,
 									aggstate->sort_slot, NULL))
+			return NULL;
+		slot = aggstate->sort_slot;
+	}
+	else if (aggstate->store_in)
+	{
+		/* make sure we check for interrupts in either path through here */
+		CHECK_FOR_INTERRUPTS();
+		if (!tuplestore_gettupleslot(aggstate->store_in, true, false,
+									 aggstate->sort_slot))
 			return NULL;
 		slot = aggstate->sort_slot;
 	}
@@ -1528,6 +1557,22 @@ lookup_hash_entries(AggState *aggstate)
 	AggStatePerGroup *pergroup = aggstate->hash_pergroup;
 	int			setno;
 
+	if (aggstate->grpsetid_filter)
+	{
+		bool dummynull;
+		int grpsetid = ExecEvalExprSwitchContext(aggstate->grpsetid_filter,
+											   aggstate->tmpcontext,
+											   &dummynull);
+		GrpSetMapping *mapping = &aggstate->grpSetMappings[grpsetid];
+
+		if (!mapping)
+			return;
+
+		select_current_set(aggstate, mapping->index, true);
+		pergroup[mapping->index] = lookup_hash_entry(aggstate)->additional;
+		return;
+	}
+
 	for (setno = 0; setno < numHashes; setno++)
 	{
 		select_current_set(aggstate, setno, true);
@@ -1570,6 +1615,9 @@ ExecAgg(PlanState *pstate)
 				break;
 			case AGG_PLAIN:
 			case AGG_SORTED:
+				if (node->grpsetid_filter && !node->input_dispatched)
+					agg_dispatch_input_tuples(node);
+
 				result = agg_retrieve_direct(node);
 				break;
 		}
@@ -1681,10 +1729,20 @@ agg_retrieve_direct(AggState *aggstate)
 			else if (aggstate->aggstrategy == AGG_MIXED)
 			{
 				/*
-				 * Mixed mode; we've output all the grouped stuff and have
-				 * full hashtables, so switch to outputting those.
+				 * Mixed mode; For non-combine case, we've output all the
+				 * grouped stuff and have full hashtables, so switch to
+				 * outputting those. For combine case, phase one does not
+				 * do this, we need to do our own grouping stuff.
 				 */
 				initialize_phase(aggstate, 0);
+
+				if (DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
+				{
+					/* use the store_in which contians the dispatched tuples */
+					aggstate->store_in = aggstate->phase->store_in;
+					agg_fill_hash_table(aggstate);
+				}
+
 				aggstate->table_filled = true;
 				ResetTupleHashIterator(aggstate->perhash[0].hashtable,
 									   &aggstate->perhash[0].hashiter);
@@ -1839,7 +1897,8 @@ agg_retrieve_direct(AggState *aggstate)
 					 * hashtables as well in advance_aggregates.
 					 */
 					if (aggstate->aggstrategy == AGG_MIXED &&
-						aggstate->current_phase == 1)
+						aggstate->current_phase == 1 &&
+						!aggstate->grpsetid_filter)
 					{
 						lookup_hash_entries(aggstate);
 					}
@@ -1919,6 +1978,122 @@ agg_retrieve_direct(AggState *aggstate)
 
 	/* No more groups */
 	return NULL;
+}
+
+/*
+ * ExecAgg for parallel grouping sets:
+ *
+ * When combining the partial groupingsets aggregate results from workers,
+ * the input is mixed with tuples from different grouping sets. To avoid
+ * unnecessary working, the tuples will be pre-dispatched to according
+ * phases directly.
+ *
+ * This function must be called in phase one which is a AGG_SORTED or
+ * AGG_PLAIN.
+ */
+static void
+agg_dispatch_input_tuples(AggState *aggstate)
+{
+	int	grpsetid;
+	int phase;
+	bool isNull;
+	PlanState *saved_sort;
+	ExprContext *tmpcontext = aggstate->tmpcontext;
+	GrpSetMapping *mapping;
+	TupleTableSlot *outerslot;
+	AggStatePerPhase perphase;
+
+	/* prepare tuplestore or tuplesort for each phase */
+	for (phase = 0; phase < aggstate->numphases; phase++)
+	{
+		perphase = &aggstate->phases[phase];
+
+		if (!perphase->aggnode)
+			continue;
+
+		if (perphase->aggstrategy == AGG_SORTED)
+		{
+			PlanState *outerNode = outerPlanState(aggstate);
+			TupleDesc tupDesc = ExecGetResultType(outerNode);
+			Sort *sortnode = (Sort *) outerNode->plan;
+
+			Assert(perphase->aggstrategy == AGG_SORTED);
+
+			perphase->sort_in = tuplesort_begin_heap(tupDesc,
+													 sortnode->numCols,
+													 sortnode->sortColIdx,
+													 sortnode->sortOperators,
+													 sortnode->collations,
+													 sortnode->nullsFirst,
+													 work_mem,
+													 NULL, false);
+		}
+		else
+			perphase->store_in = tuplestore_begin_heap(false, false, work_mem);
+	}
+
+	/* 
+	 * If phase one is AGG_SORTED, we cannot perform the sort node beneath it
+	 * directly because it comes from different grouping sets, we need to
+	 * dispatch the tuples first and then do the sort.
+	 *
+	 * To do this, we replace the outerPlan of current AGG node with the child
+	 * node of sort node.
+	 *
+	 * This is unnecessary to AGG_PLAIN.
+	 */
+	if (aggstate->phase->aggstrategy == AGG_SORTED)
+	{
+		saved_sort = outerPlanState(aggstate);
+		outerPlanState(aggstate) = outerPlanState(outerPlanState(aggstate));
+	}
+
+	for (;;)
+	{
+		outerslot = fetch_input_tuple(aggstate);
+		if (TupIsNull(outerslot))
+			break;
+
+		/* set up for advance_aggregates */
+		tmpcontext->ecxt_outertuple = outerslot;
+		grpsetid = ExecEvalExprSwitchContext(aggstate->grpsetid_filter,
+											 tmpcontext,
+											 &isNull);
+
+		/* put the slot to according phase with grouping set id */
+		mapping = &aggstate->grpSetMappings[grpsetid];
+		if (!mapping->is_hashed)
+		{
+			perphase = &aggstate->phases[mapping->index];
+
+			if (perphase->aggstrategy == AGG_SORTED)
+				tuplesort_puttupleslot(perphase->sort_in, outerslot);
+			else
+				tuplestore_puttupleslot(perphase->store_in, outerslot);
+		}
+		else
+			tuplestore_puttupleslot(aggstate->phases[0].store_in, outerslot);
+
+		ResetExprContext(aggstate->tmpcontext);
+	}
+
+	/* Restore the outer plan and perform the sorting here. */
+	if (aggstate->phase->aggstrategy == AGG_SORTED)
+	{
+		outerPlanState(aggstate) = saved_sort;
+		tuplesort_performsort(aggstate->phase->sort_in);
+	}
+
+	/*
+	 * Reinitialize the phase one to use the store_in
+	 * or sort_in which contains the dispatched tuples.
+	 */
+	aggstate->sort_in = aggstate->phase->sort_in; 
+	aggstate->store_in = aggstate->phase->store_in; 
+	select_current_set(aggstate, 0, false);
+
+	/* mark the input dispatched */
+	aggstate->input_dispatched = true;
 }
 
 /*
@@ -2147,6 +2322,7 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->grp_firstTuple = NULL;
 	aggstate->sort_in = NULL;
 	aggstate->sort_out = NULL;
+	aggstate->input_dispatched = false;
 
 	/*
 	 * phases[0] always exists, but is dummy in sorted/plain mode
@@ -2159,16 +2335,16 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 * determines the size of some allocations.  Also calculate the number of
 	 * phases, since all hashed/mixed nodes contribute to only a single phase.
 	 */
-	if (node->groupingSets)
+	if (node->rollup)
 	{
-		numGroupingSets = list_length(node->groupingSets);
+		numGroupingSets = list_length(node->rollup->gsets);
 
 		foreach(l, node->chain)
 		{
 			Agg		   *agg = lfirst(l);
 
 			numGroupingSets = Max(numGroupingSets,
-								  list_length(agg->groupingSets));
+								  list_length(agg->rollup->gsets));
 
 			/*
 			 * additional AGG_HASHED aggs become part of phase 0, but all
@@ -2186,6 +2362,15 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
 	aggstate->aggcontexts = (ExprContext **)
 		palloc0(sizeof(ExprContext *) * numGroupingSets);
+
+	/* 
+	 * When combining the partial groupingsets aggregate results, we
+	 * need a grpsetid mapping to find according perhash or perphase
+	 * data.
+	 */
+	if (DO_AGGSPLIT_COMBINE(node->aggsplit) && node->rollup)
+		aggstate->grpSetMappings = (GrpSetMapping *)
+			palloc0(sizeof(GrpSetMapping) * (numPhases + numHashes));
 
 	/*
 	 * Create expression contexts.  We need three or more, one for
@@ -2244,8 +2429,13 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	/*
 	 * If there are more than two phases (including a potential dummy phase
 	 * 0), input will be resorted using tuplesort. Need a slot for that.
+	 *
+	 * Or we are combining the partial groupingsets aggregate results, input
+	 * belong to AGG_HASHED rollup will use a tuplestore. Need a slot for that.
 	 */
-	if (numPhases > 2)
+	if (numPhases > 2 ||
+		(DO_AGGSPLIT_COMBINE(node->aggsplit) &&
+		 node->aggstrategy == AGG_MIXED))
 	{
 		aggstate->sort_slot = ExecInitExtraTupleSlot(estate, scanDesc,
 													 &TTSOpsMinimalTuple);
@@ -2290,6 +2480,14 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	 */
 	aggstate->ss.ps.qual =
 		ExecInitQual(node->plan.qual, (PlanState *) aggstate);
+
+	/*
+	 * Initialize grouping set id expression to identify which
+	 * grouping set the input tuple belongs to when combining
+	 * partial groupingsets aggregate result.
+	 */
+	aggstate->grpsetid_filter = ExecInitExpr((Expr *) node->grpSetIdFilter,
+											 (PlanState *)aggstate);
 
 	/*
 	 * We should now have found all Aggrefs in the targetlist and quals.
@@ -2349,6 +2547,21 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 			/* but the actual Agg node representing this hash is saved here */
 			perhash->aggnode = aggnode;
 
+			if (aggnode->rollup)
+			{
+				GroupingSetData *gs =
+					linitial_node(GroupingSetData, aggnode->rollup->gsets_data);
+
+				perhash->grpsetid = gs->grpsetId;
+
+				/* add a mapping when combining */
+				if (DO_AGGSPLIT_COMBINE(aggnode->aggsplit))
+				{
+					aggstate->grpSetMappings[perhash->grpsetid].is_hashed = true;
+					aggstate->grpSetMappings[perhash->grpsetid].index = i;
+				}
+			}
+
 			phasedata->gset_lengths[i] = perhash->numCols = aggnode->numCols;
 
 			for (j = 0; j < aggnode->numCols; ++j)
@@ -2364,18 +2577,21 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 			AggStatePerPhase phasedata = &aggstate->phases[++phase];
 			int			num_sets;
 
-			phasedata->numsets = num_sets = list_length(aggnode->groupingSets);
+			phasedata->numsets = num_sets = aggnode->rollup ?
+										list_length(aggnode->rollup->gsets) : 0;
 
 			if (num_sets)
 			{
 				phasedata->gset_lengths = palloc(num_sets * sizeof(int));
 				phasedata->grouped_cols = palloc(num_sets * sizeof(Bitmapset *));
+				phasedata->grpsetids = palloc(num_sets * sizeof(int));
 
 				i = 0;
-				foreach(l, aggnode->groupingSets)
+				foreach(l, aggnode->rollup->gsets_data)
 				{
-					int			current_length = list_length(lfirst(l));
 					Bitmapset  *cols = NULL;
+					GroupingSetData *gs = lfirst_node(GroupingSetData, l);
+					int	current_length = list_length(gs->set);
 
 					/* planner forces this to be correct */
 					for (j = 0; j < current_length; ++j)
@@ -2383,12 +2599,19 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 
 					phasedata->grouped_cols[i] = cols;
 					phasedata->gset_lengths[i] = current_length;
-
+					phasedata->grpsetids[i] = gs->grpsetId;
 					++i;
 				}
 
 				all_grouped_cols = bms_add_members(all_grouped_cols,
 												   phasedata->grouped_cols[0]);
+
+				/* add a mapping when combining */
+				if (DO_AGGSPLIT_COMBINE(node->aggsplit))
+				{
+					aggstate->grpSetMappings[phasedata->grpsetids[0]].is_hashed = false;
+					aggstate->grpSetMappings[phasedata->grpsetids[0]].index = phase;
+				}
 			}
 			else
 			{
@@ -2872,23 +3095,50 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		if (!phase->aggnode)
 			continue;
 
-		if (aggstate->aggstrategy == AGG_MIXED && phaseidx == 1)
+		if (aggstate->aggstrategy == AGG_MIXED &&
+			phaseidx == 1)
 		{
-			/*
-			 * Phase one, and only phase one, in a mixed agg performs both
-			 * sorting and aggregation.
-			 */
-			dohash = true;
-			dosort = true;
+			if (!DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
+			{
+				/*
+				 * Phase one, and only phase one, in a mixed agg performs both
+				 * sorting and aggregation.
+				 */
+				dohash = true;
+				dosort = true;
+			}
+			else
+			{
+				/*
+				 * When combining partial groupingsets aggregate results, input
+				 * is dispatched according to the grouping set id, we cannot
+				 * perform both sorting and hashing aggregation in one phase,
+				 * just perform the sorting aggregation.
+				 */	
+				dohash = false;
+				dosort = true;
+			}
 		}
 		else if (aggstate->aggstrategy == AGG_MIXED && phaseidx == 0)
 		{
-			/*
-			 * No need to compute a transition function for an AGG_MIXED phase
-			 * 0 - the contents of the hashtables will have been computed
-			 * during phase 1.
-			 */
-			continue;
+			if (!DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
+			{
+				/*
+				 * No need to compute a transition function for an AGG_MIXED phase
+				 * 0 - the contents of the hashtables will have been computed
+				 * during phase 1.
+				 */
+				continue;
+			}
+			else
+			{
+				/*
+				 * When combining partial groupingsets aggregate results, phase
+				 * 0 need to do its own hashing aggregate.
+				 */
+				dohash = true;
+				dosort = false;
+			}
 		}
 		else if (phase->aggstrategy == AGG_PLAIN ||
 				 phase->aggstrategy == AGG_SORTED)
@@ -3441,6 +3691,7 @@ ExecReScanAgg(AggState *node)
 	int			setno;
 
 	node->agg_done = false;
+	node->input_dispatched = false;
 
 	if (node->aggstrategy == AGG_HASHED)
 	{

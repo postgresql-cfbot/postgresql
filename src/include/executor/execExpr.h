@@ -216,6 +216,7 @@ typedef enum ExprEvalOp
 	EEOP_XMLEXPR,
 	EEOP_AGGREF,
 	EEOP_GROUPING_FUNC,
+	EEOP_GROUPING_SET_ID,
 	EEOP_WINDOW_FUNC,
 	EEOP_SUBPLAN,
 	EEOP_ALTERNATIVE_SUBPLAN,
@@ -226,6 +227,7 @@ typedef enum ExprEvalOp
 	EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
 	EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 	EEOP_AGG_INIT_TRANS,
+	EEOP_AGG_PERHASH_NULL_CHECK,
 	EEOP_AGG_STRICT_TRANS_CHECK,
 	EEOP_AGG_PLAIN_TRANS_BYVAL,
 	EEOP_AGG_PLAIN_TRANS,
@@ -573,6 +575,12 @@ typedef struct ExprEvalStep
 			List	   *clauses;	/* integer list of column numbers */
 		}			grouping_func;
 
+		/* for EEOP_GROUPING_SET_ID */
+		struct
+		{
+			AggState   *parent; /* parent Agg */
+		}			grouping_set_id;
+
 		/* for EEOP_WINDOW_FUNC */
 		struct
 		{
@@ -633,6 +641,17 @@ typedef struct ExprEvalStep
 			int			setoff;
 			int			jumpnull;
 		}			agg_init_trans;
+
+		/* for EEOP_AGG_PERHASH_NULL_CHECK */
+		struct
+		{
+			AggState   *aggstate;
+			AggStatePerTrans pertrans;
+			int			setno;
+			int			transno;
+			int			setoff;
+			int			jumpnull;
+		}			agg_perhash_null_check;
 
 		/* for EEOP_AGG_STRICT_TRANS_CHECK */
 		struct

@@ -728,6 +728,22 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 					plan->qual = (List *)
 						convert_combining_aggrefs((Node *) plan->qual,
 												  NULL);
+
+					/*
+					 * If this node is combining partial-groupingsets-aggregation,
+					 * we must add reference to the GroupingSetsId expression in
+					 * the targetlist of child plan node.
+					 */
+					if (agg->rollup)
+					{
+						GroupingSetId	*expr = makeNode(GroupingSetId);
+						indexed_tlist	*subplan_itlist = build_tlist_index(plan->lefttree->targetlist);
+
+						agg->grpSetIdFilter = fix_upper_expr(root, (Node *)expr,
+															 subplan_itlist,
+															 OUTER_VAR,
+															 rtoffset);
+					}
 				}
 
 				set_upper_references(root, plan, rtoffset);

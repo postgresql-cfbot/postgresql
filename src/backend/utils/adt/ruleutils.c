@@ -7874,6 +7874,12 @@ get_rule_expr(Node *node, deparse_context *context,
 			}
 			break;
 
+		case T_GroupingSetId:
+			{
+				appendStringInfoString(buf, "GROUPINGSETID()");
+			}
+			break;
+
 		case T_WindowFunc:
 			get_windowfunc_expr((WindowFunc *) node, context);
 			break;

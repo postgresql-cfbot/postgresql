@@ -20,6 +20,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
+#include "nodes/pathnodes.h"
 
 
 /* ----------------------------------------------------------------
@@ -811,8 +812,9 @@ typedef struct Agg
 	long		numGroups;		/* estimated number of groups in input */
 	Bitmapset  *aggParams;		/* IDs of Params used in Aggref inputs */
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
-	List	   *groupingSets;	/* grouping sets to use */
+	RollupData *rollup;			/* grouping sets to use */
 	List	   *chain;			/* chained Agg/Sort nodes */
+	Node	   *grpSetIdFilter;
 } Agg;
 
 /* ----------------

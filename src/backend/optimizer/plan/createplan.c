@@ -1639,7 +1639,7 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 								 groupColIdx,
 								 groupOperators,
 								 groupCollations,
-								 NIL,
+								 NULL,
 								 NIL,
 								 best_path->path.rows,
 								 subplan);
@@ -2091,7 +2091,7 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 					extract_grouping_ops(best_path->groupClause),
 					extract_grouping_collations(best_path->groupClause,
 												subplan->targetlist),
-					NIL,
+					NULL,
 					NIL,
 					best_path->numGroups,
 					subplan);
@@ -2247,12 +2247,12 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 			agg_plan = (Plan *) make_agg(NIL,
 										 NIL,
 										 strat,
-										 AGGSPLIT_SIMPLE,
+										 best_path->aggsplit,
 										 list_length((List *) linitial(rollup->gsets)),
 										 new_grpColIdx,
 										 extract_grouping_ops(rollup->groupClause),
 										 extract_grouping_collations(rollup->groupClause, subplan->targetlist),
-										 rollup->gsets,
+										 rollup,
 										 NIL,
 										 rollup->numGroups,
 										 sort_plan);
@@ -2285,12 +2285,12 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 		plan = make_agg(build_path_tlist(root, &best_path->path),
 						best_path->qual,
 						best_path->aggstrategy,
-						AGGSPLIT_SIMPLE,
+						best_path->aggsplit,
 						numGroupCols,
 						top_grpColIdx,
 						extract_grouping_ops(rollup->groupClause),
 						extract_grouping_collations(rollup->groupClause, subplan->targetlist),
-						rollup->gsets,
+						rollup,
 						chain,
 						rollup->numGroups,
 						subplan);
@@ -6189,7 +6189,7 @@ Agg *
 make_agg(List *tlist, List *qual,
 		 AggStrategy aggstrategy, AggSplit aggsplit,
 		 int numGroupCols, AttrNumber *grpColIdx, Oid *grpOperators, Oid *grpCollations,
-		 List *groupingSets, List *chain,
+		 RollupData *rollup, List *chain,
 		 double dNumGroups, Plan *lefttree)
 {
 	Agg		   *node = makeNode(Agg);
@@ -6207,7 +6207,7 @@ make_agg(List *tlist, List *qual,
 	node->grpCollations = grpCollations;
 	node->numGroups = numGroups;
 	node->aggParams = NULL;		/* SS_finalize_plan() will fill this */
-	node->groupingSets = groupingSets;
+	node->rollup= rollup;
 	node->chain = chain;
 
 	plan->qual = qual;

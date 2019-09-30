@@ -62,6 +62,7 @@
 #include "pg_backup_db.h"
 #include "pg_backup_utils.h"
 #include "pg_dump.h"
+#include "fe_utils/option.h"
 #include "fe_utils/connect.h"
 #include "fe_utils/string_utils.h"
 
@@ -430,6 +431,10 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "abBcCd:E:f:F:h:j:n:N:Op:RsS:t:T:U:vwWxZ:",
 							long_options, &optindex)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'a':			/* Dump data only */
@@ -473,7 +478,14 @@ main(int argc, char **argv)
 				break;
 
 			case 'j':			/* number of dump jobs */
-				numWorkers = atoi(optarg);
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
+				{
+					pg_log_error("invalid job count: %s", parse_error);
+					exit_nicely(1);
+				}
+				numWorkers = parsed;
 				break;
 
 			case 'n':			/* include schema(s) */
@@ -536,12 +548,13 @@ main(int argc, char **argv)
 				break;
 
 			case 'Z':			/* Compression Level */
-				compressLevel = atoi(optarg);
-				if (compressLevel < 0 || compressLevel > 9)
+				s = pg_strtoint64_range(optarg, &parsed, 0, 9, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("compression level must be in range 0..9");
+					pg_log_error("invalid compression level: %s", parse_error);
 					exit_nicely(1);
 				}
+				compressLevel = parsed;
 				break;
 
 			case 0:
@@ -574,12 +587,13 @@ main(int argc, char **argv)
 
 			case 8:
 				have_extra_float_digits = true;
-				extra_float_digits = atoi(optarg);
-				if (extra_float_digits < -15 || extra_float_digits > 3)
+				s = pg_strtoint64_range(optarg, &parsed, -15, 3, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("extra_float_digits must be in range -15..3");
+					pg_log_error("invalid extra_float_digits: %s", parse_error);
 					exit_nicely(1);
 				}
+				extra_float_digits = parsed;
 				break;
 
 			case 9:				/* inserts */

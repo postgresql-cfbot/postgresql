@@ -32,6 +32,7 @@
 #include "common/logging.h"
 #include "common/string.h"
 #include "fe_utils/recovery_gen.h"
+#include "fe_utils/option.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
@@ -2073,6 +2074,10 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "CD:F:r:RS:T:X:l:nNzZ:d:c:h:p:U:s:wWkvP",
 							long_options, &option_index)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'C':
@@ -2157,12 +2162,13 @@ main(int argc, char **argv)
 #endif
 				break;
 			case 'Z':
-				compresslevel = atoi(optarg);
-				if (compresslevel < 0 || compresslevel > 9)
+				s = pg_strtoint64_range(optarg, &parsed, 0, 9, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid compression level \"%s\"", optarg);
+					pg_log_error("invalid compression level: %s", parse_error);
 					exit(1);
 				}
+				compresslevel = parsed;
 				break;
 			case 'c':
 				if (pg_strcasecmp(optarg, "fast") == 0)
@@ -2195,12 +2201,14 @@ main(int argc, char **argv)
 				dbgetpassword = 1;
 				break;
 			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX / 1000, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid status interval \"%s\"", optarg);
+					pg_log_error("invalid status interval: %s", parse_error);
 					exit(1);
 				}
+				standby_message_timeout = parsed * 1000;
 				break;
 			case 'v':
 				verbose++;

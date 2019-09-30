@@ -26,6 +26,7 @@
 #include "common/file_perm.h"
 #include "common/fe_memutils.h"
 #include "common/logging.h"
+#include "fe_utils/option.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
 #include "libpq/pqsignal.h"
@@ -705,6 +706,10 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "E:f:F:nvd:h:p:U:wWI:o:P:s:S:",
 							long_options, &option_index)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 /* general options */
@@ -712,12 +717,14 @@ main(int argc, char **argv)
 				outfile = pg_strdup(optarg);
 				break;
 			case 'F':
-				fsync_interval = atoi(optarg) * 1000;
-				if (fsync_interval < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX / 1000, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid fsync interval \"%s\"", optarg);
+					pg_log_error("invalid fsync interval: %s", parse_error);
 					exit(1);
 				}
+				fsync_interval = parsed * 1000;
 				break;
 			case 'n':
 				noloop = 1;
@@ -733,11 +740,14 @@ main(int argc, char **argv)
 				dbhost = pg_strdup(optarg);
 				break;
 			case 'p':
-				if (atoi(optarg) <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, (1 << 16) - 1, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid port number \"%s\"", optarg);
+					pg_log_error("invalid port number: %s", parse_error);
 					exit(1);
 				}
+				/* validated conversion above, but using the string */
 				dbport = pg_strdup(optarg);
 				break;
 			case 'U':
@@ -790,12 +800,14 @@ main(int argc, char **argv)
 				plugin = pg_strdup(optarg);
 				break;
 			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX / 1000, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid status interval \"%s\"", optarg);
+					pg_log_error("invalid status interval: %s", parse_error);
 					exit(1);
 				}
+				standby_message_timeout = parsed * 1000;
 				break;
 			case 'S':
 				replication_slot = pg_strdup(optarg);

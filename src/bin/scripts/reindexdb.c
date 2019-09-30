@@ -15,6 +15,7 @@
 #include "common.h"
 #include "common/logging.h"
 #include "fe_utils/connect.h"
+#include "fe_utils/option.h"
 #include "fe_utils/simple_list.h"
 #include "fe_utils/string_utils.h"
 #include "scripts_parallel.h"
@@ -105,6 +106,10 @@ main(int argc, char *argv[])
 	/* process command-line options */
 	while ((c = getopt_long(argc, argv, "h:p:U:wWeqS:d:ast:i:j:v", long_options, &optindex)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'h':
@@ -147,12 +152,14 @@ main(int argc, char *argv[])
 				simple_string_list_append(&indexes, optarg);
 				break;
 			case 'j':
-				concurrentCons = atoi(optarg);
-				if (concurrentCons <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("number of parallel jobs must be at least 1");
+					pg_log_error("invalid number of parallel jobs: %s", parse_error);
 					exit(1);
 				}
+				concurrentCons = parsed;
 				break;
 			case 'v':
 				verbose = true;

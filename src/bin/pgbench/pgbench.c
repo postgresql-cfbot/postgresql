@@ -35,6 +35,7 @@
 #include "common/int.h"
 #include "common/logging.h"
 #include "fe_utils/conditional.h"
+#include "fe_utils/option.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
 #include "portability/instr_time.h"
@@ -5201,6 +5202,9 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "iI:h:nvp:dqb:SNc:j:Crs:t:T:U:lf:D:F:M:P:R:L:", long_options, &optindex)) != -1)
 	{
 		char	   *script;
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
 
 		switch (c)
 		{
@@ -5232,13 +5236,15 @@ main(int argc, char **argv)
 				break;
 			case 'c':
 				benchmarking_option_set = true;
-				nclients = atoi(optarg);
-				if (nclients <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid number of clients: \"%s\"\n",
-							optarg);
+					fprintf(stderr, "invalid number of clients: %s\n",
+							parse_error);
 					exit(1);
 				}
+				nclients = parsed;
 #ifdef HAVE_GETRLIMIT
 #ifdef RLIMIT_NOFILE			/* most platforms use RLIMIT_NOFILE */
 				if (getrlimit(RLIMIT_NOFILE, &rlim) == -1)
@@ -5260,13 +5266,15 @@ main(int argc, char **argv)
 				break;
 			case 'j':			/* jobs */
 				benchmarking_option_set = true;
-				nthreads = atoi(optarg);
-				if (nthreads <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid number of threads: \"%s\"\n",
-							optarg);
+					fprintf(stderr, "invalid number of threads: %s\n",
+							parse_error);
 					exit(1);
 				}
+				nthreads = parsed;
 #ifndef ENABLE_THREAD_SAFETY
 				if (nthreads != 1)
 				{
@@ -5285,31 +5293,37 @@ main(int argc, char **argv)
 				break;
 			case 's':
 				scale_given = true;
-				scale = atoi(optarg);
-				if (scale <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid scaling factor: \"%s\"\n", optarg);
+					fprintf(stderr, "invalid scaling factor: %s\n", parse_error);
 					exit(1);
 				}
+				scale = parsed;
 				break;
 			case 't':
 				benchmarking_option_set = true;
-				nxacts = atoi(optarg);
-				if (nxacts <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid number of transactions: \"%s\"\n",
-							optarg);
+					fprintf(stderr, "invalid number of transactions: %s\n",
+							parse_error);
 					exit(1);
 				}
+				nxacts = parsed;
 				break;
 			case 'T':
 				benchmarking_option_set = true;
-				duration = atoi(optarg);
-				if (duration <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
 					fprintf(stderr, "invalid duration: \"%s\"\n", optarg);
 					exit(1);
 				}
+				duration = parsed;
 				break;
 			case 'U':
 				login = pg_strdup(optarg);
@@ -5368,12 +5382,14 @@ main(int argc, char **argv)
 				break;
 			case 'F':
 				initialization_option_set = true;
-				fillfactor = atoi(optarg);
-				if (fillfactor < 10 || fillfactor > 100)
+				s = pg_strtoint64_range(optarg, &parsed,
+										10, 100, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid fillfactor: \"%s\"\n", optarg);
+					fprintf(stderr, "invalid fillfactor: %s\n", parse_error);
 					exit(1);
 				}
+				fillfactor = parsed;
 				break;
 			case 'M':
 				benchmarking_option_set = true;
@@ -5389,13 +5405,15 @@ main(int argc, char **argv)
 				break;
 			case 'P':
 				benchmarking_option_set = true;
-				progress = atoi(optarg);
-				if (progress <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid thread progress delay: \"%s\"\n",
-							optarg);
+					fprintf(stderr, "invalid thread progress delay: %s\n",
+							parse_error);
 					exit(1);
 				}
+				progress = parsed;
 				break;
 			case 'R':
 				{
@@ -5450,13 +5468,15 @@ main(int argc, char **argv)
 				break;
 			case 5:				/* aggregate-interval */
 				benchmarking_option_set = true;
-				agg_interval = atoi(optarg);
-				if (agg_interval <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "invalid number of seconds for aggregation: \"%s\"\n",
-							optarg);
+					fprintf(stderr, "invalid number of seconds for aggregation: %s\n",
+							parse_error);
 					exit(1);
 				}
+				agg_interval = parsed;
 				break;
 			case 6:				/* progress-timestamp */
 				progress_timestamp = true;

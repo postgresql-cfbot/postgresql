@@ -28,6 +28,7 @@
 #include "common/file_perm.h"
 #include "common/logging.h"
 #include "common/string.h"
+#include "fe_utils/option.h"
 #include "getopt_long.h"
 #include "utils/pidfile.h"
 
@@ -2332,6 +2333,10 @@ main(int argc, char **argv)
 		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:sS:t:U:wW",
 								long_options, &option_index)) != -1)
 		{
+			pg_strtoint_status s;
+			int64		parsed;
+			char	   *parse_error;
+
 			switch (c)
 			{
 				case 'D':
@@ -2395,7 +2400,14 @@ main(int argc, char **argv)
 #endif
 					break;
 				case 't':
-					wait_seconds = atoi(optarg);
+					s = pg_strtoint64_range(optarg, &parsed,
+											1, INT_MAX, &parse_error);
+					if (s != PG_STRTOINT_OK)
+					{
+						write_stderr(_("invalid timeout: %s\n"), parse_error);
+						exit(1);
+					}
+					wait_seconds = parsed;
 					wait_seconds_arg = true;
 					break;
 				case 'U':

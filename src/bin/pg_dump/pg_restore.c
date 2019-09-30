@@ -45,6 +45,7 @@
 #include <termios.h>
 #endif
 
+#include "fe_utils/option.h"
 #include "getopt_long.h"
 
 #include "dumputils.h"
@@ -153,6 +154,10 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "acCd:ef:F:h:I:j:lL:n:N:Op:P:RsS:t:T:U:vwWx1",
 							cmdopts, NULL)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'a':			/* Dump data only */
@@ -183,7 +188,14 @@ main(int argc, char **argv)
 				break;
 
 			case 'j':			/* number of restore jobs */
-				numWorkers = atoi(optarg);
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
+				{
+					pg_log_error("invalid job count: %s", parse_error);
+					exit_nicely(1);
+				}
+				numWorkers = parsed;
 				break;
 
 			case 'l':			/* Dump the TOC summary */

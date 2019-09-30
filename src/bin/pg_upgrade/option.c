@@ -14,6 +14,7 @@
 #include <io.h>
 #endif
 
+#include "fe_utils/option.h"
 #include "getopt_long.h"
 #include "common/string.h"
 #include "utils/pidfile.h"
@@ -106,6 +107,10 @@ parseCommandLine(int argc, char *argv[])
 	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:ko:O:p:P:rs:U:v",
 								 long_options, &optindex)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (option)
 		{
 			case 'b':
@@ -129,7 +134,14 @@ parseCommandLine(int argc, char *argv[])
 				break;
 
 			case 'j':
-				user_opts.jobs = atoi(optarg);
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
+				{
+					pg_fatal("invalid job count: %s\n", parse_error);
+					exit(1);
+				}
+				user_opts.jobs = parsed;
 				break;
 
 			case 'k':
@@ -168,19 +180,25 @@ parseCommandLine(int argc, char *argv[])
 				 * supported on all old/new versions (added in PG 9.2).
 				 */
 			case 'p':
-				if ((old_cluster.port = atoi(optarg)) <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, (1 << 16) - 1, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_fatal("invalid old port number\n");
+					pg_fatal("invalid old port number: %s\n", parse_error);
 					exit(1);
 				}
+				old_cluster.port = parsed;
 				break;
 
 			case 'P':
-				if ((new_cluster.port = atoi(optarg)) <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, (1 << 16) - 1, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_fatal("invalid new port number\n");
+					pg_fatal("invalid new port number: %s\n", parse_error);
 					exit(1);
 				}
+				new_cluster.port = parsed;
 				break;
 
 			case 'r':

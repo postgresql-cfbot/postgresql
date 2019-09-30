@@ -6,6 +6,8 @@ PGAPPICON = win32
 PROGRAM = pg_standby
 OBJS	= pg_standby.o $(WIN32RES)
 
+PG_LDFLAGS += -L$(top_builddir)/src/fe_utils -lpgfeutils
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

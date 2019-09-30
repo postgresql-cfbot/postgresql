@@ -21,6 +21,7 @@
 
 #include "common/file_perm.h"
 #include "common/logging.h"
+#include "fe_utils/option.h"
 #include "libpq-fe.h"
 #include "access/xlog_internal.h"
 #include "getopt_long.h"
@@ -492,7 +493,6 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 5},
 		{NULL, 0, NULL, 0}
 	};
-
 	int			c;
 	int			option_index;
 	char	   *db_name;
@@ -521,6 +521,10 @@ main(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, "D:d:E:h:p:U:s:S:nwWvZ:",
 							long_options, &option_index)) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'D':
@@ -533,11 +537,14 @@ main(int argc, char **argv)
 				dbhost = pg_strdup(optarg);
 				break;
 			case 'p':
-				if (atoi(optarg) <= 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										1, (1 << 16) - 1, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid port number \"%s\"", optarg);
+					pg_log_error("invalid port number: %s", parse_error);
 					exit(1);
 				}
+				/* validated conversion above, but using the string */
 				dbport = pg_strdup(optarg);
 				break;
 			case 'U':
@@ -550,12 +557,14 @@ main(int argc, char **argv)
 				dbgetpassword = 1;
 				break;
 			case 's':
-				standby_message_timeout = atoi(optarg) * 1000;
-				if (standby_message_timeout < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX / 1000, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid status interval \"%s\"", optarg);
+					pg_log_error("invalid status interval: %s", parse_error);
 					exit(1);
 				}
+				standby_message_timeout = parsed * 1000;
 				break;
 			case 'S':
 				replication_slot = pg_strdup(optarg);
@@ -575,12 +584,13 @@ main(int argc, char **argv)
 				verbose++;
 				break;
 			case 'Z':
-				compresslevel = atoi(optarg);
-				if (compresslevel < 0 || compresslevel > 9)
+				s = pg_strtoint64_range(optarg, &parsed, 0, 9, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					pg_log_error("invalid compression level \"%s\"", optarg);
+					pg_log_error("invalid compression level: %s", parse_error);
 					exit(1);
 				}
+				compresslevel = parsed;
 				break;
 /* action */
 			case 1:

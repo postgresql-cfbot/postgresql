@@ -33,6 +33,7 @@
 #include "pg_getopt.h"
 
 #include "access/xlog_internal.h"
+#include "fe_utils/option.h"
 
 const char *progname;
 
@@ -678,6 +679,10 @@ main(int argc, char **argv)
 
 	while ((c = getopt(argc, argv, "cdk:lr:s:t:w:")) != -1)
 	{
+		pg_strtoint_status s;
+		int64		parsed;
+		char	   *parse_error;
+
 		switch (c)
 		{
 			case 'c':			/* Use copy */
@@ -687,12 +692,15 @@ main(int argc, char **argv)
 				debug = true;
 				break;
 			case 'k':			/* keepfiles */
-				keepfiles = atoi(optarg);
-				if (keepfiles < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "%s: -k keepfiles must be >= 0\n", progname);
+					fprintf(stderr, "%s: -k keepfiles %s\n",
+							progname, parse_error);
 					exit(2);
 				}
+				keepfiles = parsed;
 				break;
 			case 'l':			/* Use link */
 
@@ -706,31 +714,39 @@ main(int argc, char **argv)
 #endif
 				break;
 			case 'r':			/* Retries */
-				maxretries = atoi(optarg);
-				if (maxretries < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "%s: -r maxretries must be >= 0\n", progname);
+					fprintf(stderr, "%s: -r maxretries %s\n",
+							progname, parse_error);
 					exit(2);
 				}
+				maxretries = parsed;
 				break;
 			case 's':			/* Sleep time */
-				sleeptime = atoi(optarg);
-				if (sleeptime <= 0 || sleeptime > 60)
+				s = pg_strtoint64_range(optarg, &parsed, 1, 60, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "%s: -s sleeptime incorrectly set\n", progname);
+					fprintf(stderr, "%s: -s sleeptime %s\n",
+							progname, parse_error);
 					exit(2);
 				}
+				sleeptime = parsed;
 				break;
 			case 't':			/* Trigger file */
 				triggerPath = pg_strdup(optarg);
 				break;
 			case 'w':			/* Max wait time */
-				maxwaittime = atoi(optarg);
-				if (maxwaittime < 0)
+				s = pg_strtoint64_range(optarg, &parsed,
+										0, INT_MAX, &parse_error);
+				if (s != PG_STRTOINT_OK)
 				{
-					fprintf(stderr, "%s: -w maxwaittime incorrectly set\n", progname);
+					fprintf(stderr, "%s: -w maxwaittime %s\n",
+							progname, parse_error);
 					exit(2);
 				}
+				maxwaittime = parsed;
 				break;
 			default:
 				fprintf(stderr, "Try \"%s --help\" for more information.\n", progname);

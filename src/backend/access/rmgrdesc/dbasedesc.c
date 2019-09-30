@@ -23,21 +23,25 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	char	   *dbpath1, *dbpath2;
 
 	if (info == XLOG_DBASE_CREATE)
 	{
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) rec;
 
-		appendStringInfo(buf, "copy dir %u/%u to %u/%u",
-						 xlrec->src_tablespace_id, xlrec->src_db_id,
-						 xlrec->tablespace_id, xlrec->db_id);
+		dbpath1 = GetDatabasePath(xlrec->src_db_id,  xlrec->src_tablespace_id);
+		dbpath2 = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		appendStringInfo(buf, "copy dir %s to %s", dbpath1, dbpath2);
+		pfree(dbpath2);
+		pfree(dbpath1);
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
 		xl_dbase_drop_rec *xlrec = (xl_dbase_drop_rec *) rec;
 
-		appendStringInfo(buf, "dir %u/%u",
-						 xlrec->tablespace_id, xlrec->db_id);
+		dbpath1 = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		appendStringInfo(buf, "dir %s", dbpath1);
+		pfree(dbpath1);
 	}
 }
 

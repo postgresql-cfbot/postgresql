@@ -22,6 +22,7 @@ use warnings;
 use Carp;
 use File::Basename;
 use File::Copy;
+use TestLib;
 
 =pod
 
@@ -97,13 +98,37 @@ sub _copypath_recurse
 	# invoke the filter and skip all further operation if it returns false
 	return 1 unless &$filterfn($curr_path);
 
-	# Check for symlink -- needed only on source dir
-	# (note: this will fall through quietly if file is already gone)
-	croak "Cannot operate on symlink \"$srcpath\"" if -l $srcpath;
-
 	# Abort if destination path already exists.  Should we allow directories
 	# to exist already?
 	croak "Destination path \"$destpath\" already exists" if -e $destpath;
+
+	# Check for symlink -- needed only on source dir
+	# (note: this will fall through quietly if file is already gone)
+	if (-l $srcpath)
+	{
+		croak "Cannot operate on symlink \"$srcpath\""
+		  if ($srcpath !~ /\/(pg_tblspc\/[0-9]+)$/);
+
+		# We have mapped tablespaces. Copy them individually
+		my $linkname = $1;
+		my $tmpdir = TestLib::tempdir;
+		my $dstrealdir = TestLib::perl2host($tmpdir);
+		my $srcrealdir = readlink($srcpath);
+
+		opendir(my $dh, $srcrealdir);
+		while (readdir $dh)
+		{
+			next if (/^\.\.?$/);
+			my $spath = "$srcrealdir/$_";
+			my $dpath = "$dstrealdir/$_";
+
+			copypath($spath, $dpath);
+		}
+		closedir $dh;
+
+		symlink $dstrealdir, $destpath;
+		return 1;
+	}
 
 	# If this source path is a file, simply copy it to destination with the
 	# same name and we're done.

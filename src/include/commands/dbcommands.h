@@ -19,6 +19,8 @@
 #include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
 
+extern void CheckMissingDirs4DbaseRedo(void);
+
 extern Oid	createdb(ParseState *pstate, const CreatedbStmt *stmt);
 extern void dropdb(const char *dbname, bool missing_ok);
 extern ObjectAddress RenameDatabase(const char *oldname, const char *newname);

@@ -546,13 +546,22 @@ target server since it isn't done by default.
 
 sub backup
 {
-	my ($self, $backup_name) = @_;
+	my ($self, $backup_name, %params) = @_;
 	my $backup_path = $self->backup_dir . '/' . $backup_name;
 	my $name        = $self->name;
+	my @rest = ();
+
+	if (defined $params{tablespace_mappings})
+	{
+		my @ts_mappings = split(/,/, $params{tablespace_mappings});
+		foreach my $elem (@ts_mappings) {
+			push(@rest, '--tablespace-mapping='.$elem);
+		}
+	}
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	TestLib::system_or_bail('pg_basebackup', '-D', $backup_path, '-h',
-		$self->host, '-p', $self->port, '--no-sync');
+		$self->host, '-p', $self->port, '--no-sync', @rest);
 	print "# Backup finished\n";
 	return;
 }
@@ -1550,9 +1559,21 @@ sub poll_query_until
 
 	$expected = 't' unless defined($expected);    # default value
 
+	$self->poll_query_until_params(
+		$dbname, $query,
+		expected => $expected, timeout => 180);
+}
+
+sub poll_query_until_params
+{
+	my ($self, $dbname, $query, %params) = @_;
+
+	$params{expected} = 't' unless defined($params{expected});
+	$params{timeout} = 180 unless defined($params{timeout});
+
 	my $cmd = [ 'psql', '-XAt', '-c', $query, '-d', $self->connstr($dbname) ];
 	my ($stdout, $stderr);
-	my $max_attempts = 180 * 10;
+	my $max_attempts = $params{timeout} * 10;
 	my $attempts     = 0;
 
 	while ($attempts < $max_attempts)
@@ -1562,7 +1583,7 @@ sub poll_query_until
 		chomp($stdout);
 		$stdout =~ s/\r//g if $TestLib::windows_os;
 
-		if ($stdout eq $expected)
+		if ($stdout eq $params{expected})
 		{
 			return 1;
 		}
@@ -1580,7 +1601,7 @@ sub poll_query_until
 	diag qq(poll_query_until timed out executing this query:
 $query
 expecting this output:
-$expected
+$params{expected}
 last actual query output:
 $stdout
 with stderr:

@@ -273,7 +273,7 @@ ginHeapTupleBulkInsert(GinBuildState *buildstate, OffsetNumber attnum,
 }
 
 static void
-ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
+ginBuildCallback(Relation index, ItemPointer tid, Datum *values,
 				 bool *isnull, bool tupleIsAlive, void *state)
 {
 	GinBuildState *buildstate = (GinBuildState *) state;
@@ -285,7 +285,7 @@ ginBuildCallback(Relation index, HeapTuple htup, Datum *values,
 	for (i = 0; i < buildstate->ginstate.origTupdesc->natts; i++)
 		ginHeapTupleBulkInsert(buildstate, (OffsetNumber) (i + 1),
 							   values[i], isnull[i],
-							   &htup->t_self);
+							   tid);
 
 	/* If we've maxed out our available memory, dump everything to the index */
 	if (buildstate->accum.allocatedMemory >= (Size) maintenance_work_mem * 1024L)

@@ -110,6 +110,14 @@ COPY x from stdin WHERE a > 60003;
 60005	26	36	46	56
 \.
 
+COPY x from stdin ERROR 5;
+70001	22	32
+70002	23	33	43	53	54
+70003	24	34	44
+70004	25	35	45	55
+70005	26	36	46	56
+\.
+
 COPY x from stdin WHERE f > 60003;
 
 COPY x from stdin WHERE a = max(x.b);

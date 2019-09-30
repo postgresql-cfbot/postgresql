@@ -622,14 +622,14 @@ SELECT LEAST(} . join(', ', (':i') x 256) . q{)}
 		[qr{unexpected function name}], q{\set i noSuchFunction()}
 	],
 	[
-		'set invalid variable name', 2,
+		'set invalid variable name', 1,
 		[qr{invalid variable name}], q{\set . 1}
 	],
 	[ 'set division by zero', 2, [qr{division by zero}], q{\set i 1/0} ],
 	[
 		'set undefined variable',
 		2,
-		[qr{undefined variable "nosuchvariable"}],
+		[qr{no value for variable "nosuchvariable"}],
 		q{\set i :nosuchvariable}
 	],
 	[ 'set unexpected char', 1, [qr{unexpected character .;.}], q{\set i ;} ],

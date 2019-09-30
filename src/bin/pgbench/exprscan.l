@@ -207,19 +207,19 @@ notnull			[Nn][Oo][Tt][Nn][Uu][Ll][Ll]
 {digit}+		{
 					if (!strtoint64(yytext, true, &yylval->ival))
 						expr_yyerror_more(yyscanner, "bigint constant overflow",
-										  strdup(yytext));
+										  pg_strdup(yytext));
 					return INTEGER_CONST;
 				}
 {digit}+(\.{digit}*)?([eE][-+]?{digit}+)?	{
 					if (!strtodouble(yytext, true, &yylval->dval))
 						expr_yyerror_more(yyscanner, "double constant overflow",
-										  strdup(yytext));
+										  pg_strdup(yytext));
 					return DOUBLE_CONST;
 				}
 \.{digit}+([eE][-+]?{digit}+)?	{
 					if (!strtodouble(yytext, true, &yylval->dval))
 						expr_yyerror_more(yyscanner, "double constant overflow",
-										  strdup(yytext));
+										  pg_strdup(yytext));
 					return DOUBLE_CONST;
 				}
 {alpha}{alnum}*	{

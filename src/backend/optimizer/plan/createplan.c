@@ -289,7 +289,8 @@ static ModifyTable *make_modifytable(PlannerInfo *root,
 									 bool partColsUpdated,
 									 List *resultRelations, List *subplans, List *subroots,
 									 List *withCheckOptionLists, List *returningLists,
-									 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
+									 List *rowMarks, OnConflictExpr *onconflict, int epqParam,
+									 PartitionPruneInfo *partpruneinfos);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 											 GatherMergePath *best_path);
 
@@ -1237,6 +1238,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 				make_partition_pruneinfo(root, rel,
 										 best_path->subpaths,
 										 best_path->partitioned_rels,
+										 NIL,
 										 prunequal);
 	}
 
@@ -1402,6 +1404,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 			partpruneinfo = make_partition_pruneinfo(root, rel,
 													 best_path->subpaths,
 													 best_path->partitioned_rels,
+													 NIL,
 													 prunequal);
 	}
 
@@ -2581,6 +2584,7 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 	List	   *subplans = NIL;
 	ListCell   *subpaths,
 			   *subroots;
+	PartitionPruneInfo *partpruneinfos = NULL;
 
 	/* Build the plan for each input path */
 	forboth(subpaths, best_path->subpaths,
@@ -2609,6 +2613,30 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 		subplans = lappend(subplans, subplan);
 	}
 
+	if (enable_partition_pruning &&
+		best_path->partitioned_rels != NIL &&
+		!IS_DUMMY_MODIFYTABLE(best_path))
+	{
+		RelOptInfo *rel = best_path->path.parent;
+		List	   *prunequal = NIL;
+
+		prunequal = extract_actual_clauses(rel->baserestrictinfo, false);
+
+		/*
+		 * If any quals exist, then these may be useful to allow us to perform
+		 * further partition pruning during execution.  We'll generate a
+		 * PartitionPruneInfo for each partitioned rel to store these quals
+		 * and allow translation of partition indexes into subpath indexes.
+		 */
+		if (prunequal != NIL)
+			partpruneinfos = make_partition_pruneinfo(root,
+													  best_path->path.parent,
+													  best_path->subpaths,
+													  best_path->partitioned_rels,
+													  best_path->resultRelations,
+													  prunequal);
+	}
+
 	plan = make_modifytable(root,
 							best_path->operation,
 							best_path->canSetTag,
@@ -2622,7 +2650,8 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 							best_path->returningLists,
 							best_path->rowMarks,
 							best_path->onconflict,
-							best_path->epqParam);
+							best_path->epqParam,
+							partpruneinfos);
 
 	copy_generic_path_info(&plan->plan, &best_path->path);
 
@@ -6616,7 +6645,8 @@ make_modifytable(PlannerInfo *root,
 				 bool partColsUpdated,
 				 List *resultRelations, List *subplans, List *subroots,
 				 List *withCheckOptionLists, List *returningLists,
-				 List *rowMarks, OnConflictExpr *onconflict, int epqParam)
+				 List *rowMarks, OnConflictExpr *onconflict, int epqParam,
+				 PartitionPruneInfo *partpruneinfos)
 {
 	ModifyTable *node = makeNode(ModifyTable);
 	List	   *fdw_private_list;
@@ -6677,6 +6707,7 @@ make_modifytable(PlannerInfo *root,
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;
 	node->epqParam = epqParam;
+	node->part_prune_info = partpruneinfos;
 
 	/*
 	 * For each result relation that is a foreign table, allow the FDW to

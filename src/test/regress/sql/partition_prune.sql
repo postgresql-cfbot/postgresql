@@ -912,6 +912,36 @@ explain (analyze, costs off, summary off, timing off) select * from ma_test wher
 reset enable_seqscan;
 reset enable_sort;
 
+--
+-- Test run-time pruning of ModifyTable subnodes
+--
+
+-- Ensure only ma_test_p3 is scanned.
+explain (analyze, costs off, summary off, timing off) delete from ma_test where a = (select 29);
+
+-- Ensure no partitions are scanned.
+explain (analyze, costs off, summary off, timing off) delete from ma_test where a = (select 30);
+
+-- Ensure partition pruning works with an update of the partition key.
+explain (analyze, costs off, summary off, timing off) update ma_test set a = 29 where a = (select 1);
+
+-- Verify the above command
+select tableoid::regclass,a from ma_test where a = 29;
+
+truncate ma_test;
+
+prepare mt_q1 (int) as
+delete from ma_test where a > $1;
+
+set plan_cache_mode = force_generic_plan;
+
+explain (analyze, costs off, summary off, timing off) execute mt_q1(15);
+explain (analyze, costs off, summary off, timing off) execute mt_q1(25);
+-- Ensure ModifyTable behaves correctly when no subplans match exec params
+explain (analyze, costs off, summary off, timing off) execute mt_q1(35);
+
+reset plan_cache_mode;
+
 drop table ma_test;
 
 reset enable_indexonlyscan;

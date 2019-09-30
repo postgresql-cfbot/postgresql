@@ -1380,6 +1380,10 @@ typedef struct AppendPath
 #define IS_DUMMY_APPEND(p) \
 	(IsA((p), AppendPath) && ((AppendPath *) (p))->subpaths == NIL)
 
+#define IS_DUMMY_MODIFYTABLE(p) \
+	(list_length((p)->subpaths) == 1 && \
+		IS_DUMMY_APPEND(linitial((p)->subpaths)))
+
 /*
  * A relation that's been proven empty will have one path that is dummy
  * (but might have projection paths on top).  For historical reasons,
@@ -1775,6 +1779,8 @@ typedef struct ModifyTablePath
 	Index		rootRelation;	/* Root RT index, if target is partitioned */
 	bool		partColsUpdated;	/* some part key in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
+	/* RT indexes of non-leaf tables in a partition tree */
+	List	   *partitioned_rels;
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */

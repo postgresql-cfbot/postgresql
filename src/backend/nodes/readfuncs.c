@@ -1616,6 +1616,7 @@ _readModifyTable(void)
 	READ_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	READ_NODE_FIELD(rowMarks);
 	READ_INT_FIELD(epqParam);
+	READ_NODE_FIELD(part_prune_info);
 	READ_ENUM_FIELD(onConflictAction, OnConflictAction);
 	READ_NODE_FIELD(arbiterIndexes);
 	READ_NODE_FIELD(onConflictSet);

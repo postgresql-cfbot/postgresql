@@ -53,6 +53,7 @@ use File::stat qw(stat);
 use File::Temp ();
 use IPC::Run;
 use SimpleTee;
+use Expect;
 
 # specify a recent enough version of Test::More to support the
 # done_testing() function
@@ -81,6 +82,7 @@ our @EXPORT = qw(
   command_like_safe
   command_fails_like
   command_checks_all
+  icommand_checks
 
   $windows_os
 );
@@ -792,6 +794,8 @@ Arguments:
 
 =item C<ret>: Expected exit code
 
+=item C<in>: Stdin for command
+
 =item C<out>: Expected stdout from command
 
 =item C<err>: Expected stderr from command
@@ -806,12 +810,13 @@ sub command_checks_all
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($cmd, $expected_ret, $out, $err, $test_name) = @_;
+	my ($cmd, $expected_ret, $in, $out, $err, $test_name) = @_;
+	$in = '' if not defined $in;
 
 	# run command
 	my ($stdout, $stderr);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
-	IPC::Run::run($cmd, '>', \$stdout, '2>', \$stderr);
+	IPC::Run::run($cmd, '<', \$in, '>', \$stdout, '2>', \$stderr);
 
 	# See http://perldoc.perl.org/perlvar.html#%24CHILD_ERROR
 	my $ret = $?;
@@ -834,6 +839,80 @@ sub command_checks_all
 	{
 		like($stderr, $re, "$test_name stderr /$re/");
 	}
+
+	return;
+}
+
+=pod
+
+=item icommand_checks(cmd, ret, timeout, init, inout, name)
+
+Run a command and check its status and outputs.
+Arguments:
+
+=over
+
+=item C<cmd> ref to list for command, options and arguments to run
+
+=item C<ret> expected exit status
+
+=item C<timeout> for interactions
+
+=item C<init> initial output before interacting
+
+=item C<inout> [ [ input, list of output checks ], ... ]
+
+=item C<name> of the test
+
+=back
+
+=cut
+
+sub icommand_checks
+{
+	local $Test::Builder::Level = $Test::Builder::Level + 1;
+
+	my ($cmd, $expected_ret, $timeout, $init, $inout, $name) = @_;
+
+	my $ps = Expect->spawn(@$cmd);
+	ok(defined $ps, "$name command spawn: @$cmd");
+	return unless defined $ps;
+
+	$ps->slave->stty(qw(raw));
+	my $n = 0;
+	for my $test (@$inout)
+	{
+		my ($in, @out) = @$test;
+		$n++;
+		$ps->send($in);
+		for my $o (@out)
+		{
+			my $ok = $ps->expect($timeout, '-re', $o);
+			# check header on first output
+			if (defined $init)
+			{
+				# beware of race conditions...
+				ok($ps->before =~ $init,
+				   "$name header matches /$init/");
+				undef $init;
+			}
+			ok($ok, "$n: $name output matches /$o/");
+			if (not $ok)
+			{
+				print STDERR "last input: ###$in###\n";
+				print STDERR "before: ###" . $ps->before . "###\n" if $ps->before;
+				print STDERR "match: ###" . $ps->match . "###\n" if $ps->match;
+				print STDERR "after: ###" . $ps->after . "###\n" if $ps->after;
+				print STDERR "error: ###" . $ps->error . "###\n" if $ps->error;
+			}
+		}
+	}
+	$ps->soft_close();
+
+	# check status
+	my $ret = $ps->exitstatus;
+	ok($ret == $expected_ret,
+	   "$name status (got $ret vs expected $expected_ret)");
 
 	return;
 }

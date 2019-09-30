@@ -50,7 +50,7 @@ sub pgbench
 
 	push @cmd, @args;
 
-	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
+	$node->command_checks_all(\@cmd, $stat, '', $out, $err, $name);
 
 	# cleanup?
 	#unlink @filenames or die "cannot unlink files (@filenames): $!";

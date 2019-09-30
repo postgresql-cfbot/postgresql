@@ -62,6 +62,7 @@ sub check_relation_corruption
 			'--filenode',   $relfilenode_corrupted
 		],
 		1,
+		'',
 		[qr/Bad checksums:.*1/],
 		[qr/checksum verification failed/],
 		"fails with corrupted data for single relfilenode on tablespace $tablespace"
@@ -71,6 +72,7 @@ sub check_relation_corruption
 	$node->command_checks_all(
 		[ 'pg_checksums', '--check', '-D', $pgdata ],
 		1,
+		'',
 		[qr/Bad checksums:.*1/],
 		[qr/checksum verification failed/],
 		"fails with corrupted data on tablespace $tablespace");
@@ -203,6 +205,7 @@ sub fail_corrupt
 	$node->command_checks_all(
 		[ 'pg_checksums', '--check', '-D', $pgdata ],
 		1,
+		'',
 		[qr/^$/],
 		[qr/could not read block 0 in file.*$file\":/],
 		"fails for corrupted data in $file");

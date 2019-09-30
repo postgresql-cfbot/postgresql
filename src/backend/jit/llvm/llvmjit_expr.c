@@ -2094,12 +2094,14 @@ llvm_compile_expr(ExprState *state)
 					LLVMValueRef v_allpergroupsp;
 
 					LLVMValueRef v_pergroupp;
+					LLVMValueRef v_pergroup_allaggs;
 
 					LLVMValueRef v_setoff,
 								v_transno;
 
 					LLVMValueRef v_notransvalue;
 
+					LLVMBasicBlockRef b_check_notransvalue;
 					LLVMBasicBlockRef b_init;
 
 					aggstate = op->d.agg_init_trans.aggstate;
@@ -2121,11 +2123,22 @@ llvm_compile_expr(ExprState *state)
 										  "aggstate.all_pergroups");
 					v_setoff = l_int32_const(op->d.agg_init_trans.setoff);
 					v_transno = l_int32_const(op->d.agg_init_trans.transno);
-					v_pergroupp =
-						LLVMBuildGEP(b,
-									 l_load_gep1(b, v_allpergroupsp, v_setoff, ""),
-									 &v_transno, 1, "");
+					v_pergroup_allaggs = l_load_gep1(b, v_allpergroupsp, v_setoff, "");
 
+					b_check_notransvalue = l_bb_before_v(
+						opblocks[i + 1], "op.%d.check_notransvalue", i);
+
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b, LLVMIntEQ,
+												  LLVMBuildPtrToInt(b, v_pergroup_allaggs,
+																	TypeSizeT, ""),
+												  l_sizet_const(0), ""),
+									opblocks[i + 1],
+									b_check_notransvalue);
+
+					LLVMPositionBuilderAtEnd(b, b_check_notransvalue);
+
+					v_pergroupp = LLVMBuildGEP(b, v_pergroup_allaggs, &v_transno, 1, "");
 					v_notransvalue =
 						l_load_struct_gep(b, v_pergroupp,
 										  FIELDNO_AGGSTATEPERGROUPDATA_NOTRANSVALUE,
@@ -2192,6 +2205,9 @@ llvm_compile_expr(ExprState *state)
 
 					LLVMValueRef v_transnull;
 					LLVMValueRef v_pergroupp;
+					LLVMValueRef v_pergroup_allaggs;
+
+					LLVMBasicBlockRef b_check_transnull;
 
 					int			jumpnull = op->d.agg_strict_trans_check.jumpnull;
 
@@ -2211,11 +2227,22 @@ llvm_compile_expr(ExprState *state)
 						l_int32_const(op->d.agg_strict_trans_check.setoff);
 					v_transno =
 						l_int32_const(op->d.agg_strict_trans_check.transno);
-					v_pergroupp =
-						LLVMBuildGEP(b,
-									 l_load_gep1(b, v_allpergroupsp, v_setoff, ""),
-									 &v_transno, 1, "");
+					v_pergroup_allaggs = l_load_gep1(b, v_allpergroupsp, v_setoff, "");
 
+					b_check_transnull = l_bb_before_v(opblocks[i + 1],
+													  "op.%d.check_transnull", i);
+
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b, LLVMIntEQ,
+												  LLVMBuildPtrToInt(b, v_pergroup_allaggs,
+																	TypeSizeT, ""),
+												  l_sizet_const(0), ""),
+									opblocks[jumpnull],
+									b_check_transnull);
+
+					LLVMPositionBuilderAtEnd(b, b_check_transnull);
+
+					v_pergroupp = LLVMBuildGEP(b, v_pergroup_allaggs, &v_transno, 1, "");
 					v_transnull =
 						l_load_struct_gep(b, v_pergroupp,
 										  FIELDNO_AGGSTATEPERGROUPDATA_TRANSVALUEISNULL,
@@ -2257,11 +2284,14 @@ llvm_compile_expr(ExprState *state)
 					LLVMValueRef v_pertransp;
 
 					LLVMValueRef v_pergroupp;
+					LLVMValueRef v_pergroup_allaggs;
 
 					LLVMValueRef v_retval;
 
 					LLVMValueRef v_tmpcontext;
 					LLVMValueRef v_oldcontext;
+
+					LLVMBasicBlockRef b_advance_transval;
 
 					aggstate = op->d.agg_trans.aggstate;
 					pertrans = op->d.agg_trans.pertrans;
@@ -2284,10 +2314,22 @@ llvm_compile_expr(ExprState *state)
 										  "aggstate.all_pergroups");
 					v_setoff = l_int32_const(op->d.agg_trans.setoff);
 					v_transno = l_int32_const(op->d.agg_trans.transno);
-					v_pergroupp =
-						LLVMBuildGEP(b,
-									 l_load_gep1(b, v_allpergroupsp, v_setoff, ""),
-									 &v_transno, 1, "");
+					v_pergroup_allaggs = l_load_gep1(b, v_allpergroupsp, v_setoff, "");
+
+					b_advance_transval = l_bb_before_v(opblocks[i + 1],
+													   "op.%d.advance_transval", i);
+
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b, LLVMIntEQ,
+												  LLVMBuildPtrToInt(b, v_pergroup_allaggs,
+																	TypeSizeT, ""),
+												  l_sizet_const(0), ""),
+									opblocks[i + 1],
+									b_advance_transval);
+
+					LLVMPositionBuilderAtEnd(b, b_advance_transval);
+
+					v_pergroupp = LLVMBuildGEP(b, v_pergroup_allaggs, &v_transno, 1, "");
 
 					v_fcinfo = l_ptr_const(fcinfo,
 										   l_ptr(StructFunctionCallInfoData));

@@ -1715,6 +1715,23 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-hashagg-mem-overflow" xreflabel="hashagg_mem_overflow">
+      <term><varname>hashagg_mem_overflow</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>hashagg_mem_overflow</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+         If hash aggregation exceeds <varname>work_mem</varname> at query
+         execution time, and <varname>hashagg_mem_overflow</varname> is set
+         to <literal>on</literal>, continue consuming more memory rather than
+         performing disk-based hash aggregation. The default
+         is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>
@@ -4363,6 +4380,24 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        <para>
         Enables or disables the query planner's use of hashed
         aggregation plan types. The default is <literal>on</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-enable-hashagg-spill" xreflabel="enable_hashagg_spill">
+      <term><varname>enable_hashagg_spill</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_hashagg_spill</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's use of hashed aggregation plan
+        types when the memory usage is expected to
+        exceed <varname>work_mem</varname>. This only affects the planner
+        choice; actual behavior at execution time is dictated by
+        <xref linkend="guc-hashagg-mem-overflow"/>. The default
+        is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>

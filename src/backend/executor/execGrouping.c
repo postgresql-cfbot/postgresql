@@ -25,7 +25,6 @@
 #include "utils/hashutils.h"
 #include "utils/memutils.h"
 
-static uint32 TupleHashTableHash(struct tuplehash_hash *tb, const MinimalTuple tuple);
 static int	TupleHashTableMatch(struct tuplehash_hash *tb, const MinimalTuple tuple1, const MinimalTuple tuple2);
 
 /*
@@ -300,6 +299,28 @@ TupleHashEntry
 LookupTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 					 bool *isnew)
 {
+	MemoryContext	oldContext;
+	uint32			hash;
+
+	/* Need to run the hash functions in short-lived context */
+	oldContext = MemoryContextSwitchTo(hashtable->tempcxt);
+
+	/* set up data needed by hash and match functions */
+	hashtable->inputslot = slot;
+	hashtable->in_hash_funcs = hashtable->tab_hash_funcs;
+	hashtable->cur_eq_func = hashtable->tab_eq_func;
+
+	hash = TupleHashTableHash(hashtable->hashtab, NULL);
+
+	MemoryContextSwitchTo(oldContext);
+
+	return LookupTupleHashEntryHash(hashtable, slot, isnew, hash);
+}
+
+TupleHashEntry
+LookupTupleHashEntryHash(TupleHashTable hashtable, TupleTableSlot *slot,
+						 bool *isnew, uint32 hash)
+{
 	TupleHashEntryData *entry;
 	MemoryContext oldContext;
 	bool		found;
@@ -317,7 +338,7 @@ LookupTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 
 	if (isnew)
 	{
-		entry = tuplehash_insert(hashtable->hashtab, key, &found);
+		entry = tuplehash_insert_hash(hashtable->hashtab, key, hash, &found);
 
 		if (found)
 		{
@@ -337,7 +358,7 @@ LookupTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 	}
 	else
 	{
-		entry = tuplehash_lookup(hashtable->hashtab, key);
+		entry = tuplehash_lookup_hash(hashtable->hashtab, key, hash);
 	}
 
 	MemoryContextSwitchTo(oldContext);
@@ -382,17 +403,12 @@ FindTupleHashEntry(TupleHashTable hashtable, TupleTableSlot *slot,
 /*
  * Compute the hash value for a tuple
  *
- * The passed-in key is a pointer to TupleHashEntryData.  In an actual hash
- * table entry, the firstTuple field points to a tuple (in MinimalTuple
- * format).  LookupTupleHashEntry sets up a dummy TupleHashEntryData with a
- * NULL firstTuple field --- that cues us to look at the inputslot instead.
- * This convention avoids the need to materialize virtual input tuples unless
- * they actually need to get copied into the table.
+ * If tuple is NULL, use the input slot instead.
  *
  * Also, the caller must select an appropriate memory context for running
  * the hash functions. (dynahash.c doesn't change CurrentMemoryContext.)
  */
-static uint32
+uint32
 TupleHashTableHash(struct tuplehash_hash *tb, const MinimalTuple tuple)
 {
 	TupleHashTable hashtable = (TupleHashTable) tb->private_data;
@@ -413,9 +429,6 @@ TupleHashTableHash(struct tuplehash_hash *tb, const MinimalTuple tuple)
 	{
 		/*
 		 * Process a tuple already stored in the table.
-		 *
-		 * (this case never actually occurs due to the way simplehash.h is
-		 * used, as the hash-value is stored in the entries)
 		 */
 		slot = hashtable->tableslot;
 		ExecStoreMinimalTuple(tuple, slot, false);

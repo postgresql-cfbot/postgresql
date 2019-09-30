@@ -82,6 +82,7 @@
  *		sort node debugging defines
  * ----------------
  */
+#define EXEC_SORTDEBUG
 #ifdef EXEC_SORTDEBUG
 #define SO_nodeDisplay(l)				nodeDisplay(l)
 #define SO_printf(s)					printf(s)
@@ -96,14 +97,15 @@
  *		merge join debugging defines
  * ----------------
  */
+#define EXEC_MERGEJOINDEBUG
 #ifdef EXEC_MERGEJOINDEBUG
 
 #define MJ_nodeDisplay(l)				nodeDisplay(l)
-#define MJ_printf(s)					printf(s)
-#define MJ1_printf(s, p)				printf(s, p)
-#define MJ2_printf(s, p1, p2)			printf(s, p1, p2)
-#define MJ_debugtup(slot)				debugtup(slot, NULL)
-#define MJ_dump(state)					ExecMergeTupleDump(state)
+#define MJ_printf(s)					printf(s); fflush(stdout)
+#define MJ1_printf(s, p)				printf(s, p); fflush(stdout)
+#define MJ2_printf(s, p1, p2)			printf(s, p1, p2); fflush(stdout)
+#define MJ_debugtup(slot)				debugtup(slot, NULL); fflush(stdout)
+#define MJ_dump(state)					ExecMergeTupleDump(state); fflush(stdout)
 #define MJ_DEBUG_COMPARE(res) \
   MJ1_printf("  MJCompare() returns %d\n", (res))
 #define MJ_DEBUG_QUAL(clause, res) \

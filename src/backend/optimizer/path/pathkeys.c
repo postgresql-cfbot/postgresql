@@ -1030,7 +1030,12 @@ build_join_pathkeys(PlannerInfo *root,
 					JoinType jointype,
 					List *outer_pathkeys)
 {
-	if (jointype == JOIN_FULL || jointype == JOIN_RIGHT)
+	/*
+	 * TEMPORAL NORMALIZE: To improve this, we would need to remove only
+	 * temporal range types from the path key list, not all
+	 */
+	if (jointype == JOIN_FULL || jointype == JOIN_RIGHT
+			|| jointype == JOIN_TEMPORAL_NORMALIZE)
 		return NIL;
 
 	/*

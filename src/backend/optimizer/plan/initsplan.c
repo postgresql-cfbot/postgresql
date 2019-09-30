@@ -33,6 +33,7 @@
 #include "parser/analyze.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "catalog/pg_operator.h"
 
 
 /* These parameters are set by GUC */
@@ -870,6 +871,7 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 		switch (j->jointype)
 		{
 			case JOIN_INNER:
+			case JOIN_TEMPORAL_NORMALIZE:
 				leftjoinlist = deconstruct_recurse(root, j->larg,
 												   below_outer_join,
 												   &leftids, &left_inners,
@@ -991,7 +993,7 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 										*inner_join_rels,
 										j->jointype,
 										my_quals);
-			if (j->jointype == JOIN_SEMI)
+			if (j->jointype == JOIN_SEMI || j->jointype == JOIN_TEMPORAL_NORMALIZE)
 				ojscope = NULL;
 			else
 				ojscope = bms_union(sjinfo->min_lefthand,
@@ -1410,7 +1412,8 @@ compute_semijoin_info(SpecialJoinInfo *sjinfo, List *clause)
 	sjinfo->semi_rhs_exprs = NIL;
 
 	/* Nothing more to do if it's not a semijoin */
-	if (sjinfo->jointype != JOIN_SEMI)
+	if (sjinfo->jointype != JOIN_SEMI
+			&& sjinfo->jointype != JOIN_TEMPORAL_NORMALIZE)
 		return;
 
 	/*
@@ -2593,6 +2596,10 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 
 	opno = ((OpExpr *) clause)->opno;
 	leftarg = linitial(((OpExpr *) clause)->args);
+
+	// XXX PEMOSER Hardcoded NORMALIZE detection... change this. Read the note below...
+	if (opno == OID_RANGE_EQ_OP)
+		restrictinfo->temp_normalizer = true;
 
 	if (op_mergejoinable(opno, exprType(leftarg)) &&
 		!contain_volatile_functions((Node *) clause))
